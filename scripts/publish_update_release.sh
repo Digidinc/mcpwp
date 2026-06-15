@@ -123,7 +123,7 @@ if [[ "$VERIFY_ONLY" -eq 0 ]]; then
 	# Upload to Cloudflare R2 — CF Worker (spai-updates) serves mumega.com/mcp-updates/*
 	# from the mumcp-updates bucket, not from the nginx alias.
 	# --remote targets production R2; without it wrangler writes to local miniflare.
-	WORKER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/spai-updates-worker"
+	WORKER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/mcpwp-updates-worker"
 	if [[ ! -d "$WORKER_DIR" ]]; then
 		echo "ERROR: worker dir not found ($WORKER_DIR) — R2 not updated, live manifest stays stale" >&2
 		exit 1
