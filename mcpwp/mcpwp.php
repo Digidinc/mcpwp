@@ -218,6 +218,7 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-workflows.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-feedback.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-encryption.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-encryption-migration.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-integration-manager.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-design-references.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-event-store.php';
@@ -345,6 +346,11 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 			error_log( 'MCPWP migration error (plugins_loaded): ' . $e->getMessage() );
 		}
 	}
+
+	// Encryption key migration: re-encrypt provider blobs from AUTH_SALT-derived
+	// key → dedicated MCPWP key (non-destructive, idempotent, runs once).
+	// Registered here (class already required above); fires on plugins_loaded prio 20.
+	Mcpwp_Encryption_Migration::register();
 
 	// Check if database needs updating
 	$installed_db_version = get_option( 'mcpwp_db_version', '0' );

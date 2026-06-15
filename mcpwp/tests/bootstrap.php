@@ -312,8 +312,12 @@ function get_option($name, $default = false)
     return array_key_exists($name, $GLOBALS['mcpwp_test_options']) ? $GLOBALS['mcpwp_test_options'][ $name ] : $default;
 }
 
-function update_option($name, $value)
+function update_option($name, $value, $autoload = null)
 {
+    // Allow tests to simulate DB write failures for specific option names.
+    if (! empty($GLOBALS['mcpwp_test_update_option_fail'][ $name ])) {
+        return false;
+    }
     $GLOBALS['mcpwp_test_options'][ $name ] = $value;
     return true;
 }
@@ -871,6 +875,43 @@ class Mcpwp_Test_Fs_Stub
     }
 }
 
+// ── Admin / AJAX stubs for auth trait bypass tests ───────────────────────
+
+$GLOBALS['mcpwp_test_is_admin']             = false;
+$GLOBALS['mcpwp_test_doing_ajax']           = false;
+$GLOBALS['mcpwp_test_ajax_referer_valid']   = false;
+$GLOBALS['mcpwp_test_post_action']          = '';
+
+if (! function_exists('is_admin')) {
+    function is_admin()
+    {
+        return (bool) $GLOBALS['mcpwp_test_is_admin'];
+    }
+}
+
+// Note: DOING_AJAX is a PHP constant. Tests that need the bypass path to be
+// reached must define DOING_AJAX = true before the first call. Tests that run
+// WITHOUT the bypass active (the common case) rely on DOING_AJAX being undefined
+// (the condition `defined('DOING_AJAX') && DOING_AJAX` evaluates to false).
+
+if (! function_exists('check_ajax_referer')) {
+    /**
+     * Stub: returns truthy/falsy based on $GLOBALS['mcpwp_test_ajax_referer_valid'].
+     * Never calls wp_die() in tests.
+     */
+    function check_ajax_referer($action, $query_arg = false, $die = true)
+    {
+        return (bool) $GLOBALS['mcpwp_test_ajax_referer_valid'];
+    }
+}
+
+if (! function_exists('sodium_memzero') && ! extension_loaded('sodium')) {
+    function sodium_memzero(&$var)
+    {
+        $var = str_repeat("\0", strlen($var));
+    }
+}
+
 require_once dirname(__DIR__) . '/includes/traits/trait-mcpwp-api-auth.php';
 require_once dirname(__DIR__) . '/includes/traits/trait-mcpwp-sanitization.php';
 require_once dirname(__DIR__) . '/includes/traits/trait-mcpwp-logging.php';
@@ -920,3 +961,7 @@ require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-signals.php';
 require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-oauth.php';
 require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-site-settings.php';
 require_once dirname(__DIR__) . '/includes/class-mcpwp-oauth-well-known.php';
+// Encryption + migration classes.
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-encryption.php';
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-integration-manager.php';
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-encryption-migration.php';

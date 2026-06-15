@@ -46,12 +46,11 @@ trait Mcpwp_Api_Auth {
 	 */
 	public function verify_api_key( $request ) {
 		// Bypass for internal server-side requests (Chat tab tool execution).
-		// Only works when called from within WordPress admin context by an admin user.
-		if ( apply_filters( 'mcpwp_bypass_api_key_check', false )
-			&& is_admin()
-			&& current_user_can( 'activate_plugins' )
-			&& defined( 'DOING_AJAX' ) && DOING_AJAX
-		) {
+		// Requires: admin context + activate_plugins cap + AJAX request +
+		// a valid nonce tied to a known admin action (prevents filter-hook abuse).
+		// The open apply_filters() bypass was removed: any code that added a filter
+		// returning true could silently skip API-key auth for all requests.
+		if ( $this->is_trusted_admin_ajax_request() ) {
 			return true;
 		}
 
@@ -1465,6 +1464,54 @@ trait Mcpwp_Api_Auth {
 	protected function looks_like_password_hash( $value ) {
 		$value = (string) $value;
 		return '' !== $value && '$' === substr( $value, 0, 1 );
+	}
+
+	/**
+	 * Check whether the current request is a trusted internal admin AJAX call.
+	 *
+	 * Replaces the former apply_filters('mcpwp_bypass_api_key_check') open bypass.
+	 * All conditions must pass simultaneously:
+	 *
+	 *   1. is_admin() — request is served from the WP admin context.
+	 *   2. activate_plugins capability — caller is a site admin.
+	 *   3. DOING_AJAX constant — request went through wp-admin/admin-ajax.php.
+	 *   4. $_POST['action'] is in the allowlist of known MCPWP admin AJAX actions.
+	 *   5. check_ajax_referer() verifies the mcpwp_admin_chat nonce for the action.
+	 *
+	 * The GET ?api_key= query-param path is intentionally NOT touched here —
+	 * that path is required for MCP clients (Claude Desktop, ChatGPT connectors)
+	 * that cannot set custom request headers. See get_api_key_from_request()
+	 * line ~431 for the exact location. Any product decision to restrict or
+	 * remove that path belongs to Hadi/Kasra-core, not this security gate.
+	 *
+	 * @return bool True when all conditions are satisfied.
+	 */
+	protected function is_trusted_admin_ajax_request() {
+		if ( ! is_admin() ) {
+			return false;
+		}
+		if ( ! current_user_can( 'activate_plugins' ) ) {
+			return false;
+		}
+		if ( ! defined( 'DOING_AJAX' ) || ! DOING_AJAX ) {
+			return false;
+		}
+
+		// Only bypass for known MCPWP admin actions — never a wildcard.
+		$allowed_actions = array(
+			'mcpwp_admin_chat',
+			'mcpwp_chat_tool_call',
+		);
+
+		// phpcs:ignore WordPress.Security.NonceVerification.Missing
+		$action = isset( $_POST['action'] ) ? sanitize_key( wp_unslash( $_POST['action'] ) ) : '';
+		if ( ! in_array( $action, $allowed_actions, true ) ) {
+			return false;
+		}
+
+		// Verify the nonce — die()s on failure (WP behaviour).
+		// The nonce is generated server-side and sent to the admin JS bundle.
+		return (bool) check_ajax_referer( 'mcpwp_admin_chat', 'nonce', false );
 	}
 
 	/**
