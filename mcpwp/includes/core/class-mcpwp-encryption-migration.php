@@ -55,16 +55,21 @@ class Mcpwp_Encryption_Migration {
 	 * Idempotent — safe to call on every boot; exits immediately when already done.
 	 */
 	public static function maybe_run() {
+		// Always wire the persistent failure notice, independent of migrated flag.
+		// Failures stored in FAILURES_OPTION must surface on every admin page load
+		// until the admin re-enters the affected provider keys and the option is cleared.
+		add_action( 'admin_notices', array( __CLASS__, 'render_failure_notice' ) );
+
 		if ( get_option( self::MIGRATED_FLAG ) ) {
 			return;
 		}
 
 		if ( ! Mcpwp_Encryption::is_available() ) {
-			// Sodium unavailable — cannot migrate. Record failures for all stored
-			// providers so the admin notice fires, then mark done so we don't
-			// loop forever on sites that will never have sodium.
+			// Sodium unavailable — cannot migrate yet. Do NOT set MIGRATED_FLAG:
+			// the condition is recoverable (admin installs php-sodium), and burning
+			// the flag here would prevent migration from running after the extension
+			// is installed. Surface the notice via admin_notices (already wired above).
 			self::record_sodium_unavailable_notice();
-			update_option( self::MIGRATED_FLAG, '1' );
 			return;
 		}
 
@@ -94,8 +99,9 @@ class Mcpwp_Encryption_Migration {
 			return;
 		}
 
-		$new_data   = array();
-		$failures   = array();
+		$new_data        = array();
+		$failures        = array();
+		$any_re_encrypted = false; // True when at least one blob was re-encrypted.
 
 		foreach ( $data as $provider => $record ) {
 			$new_data[ $provider ] = $record; // default: keep as-is
@@ -135,28 +141,35 @@ class Mcpwp_Encryption_Migration {
 			}
 
 			$new_data[ $provider ]['key_encrypted'] = $new_encrypted;
+			$any_re_encrypted = true;
 		}
 
-		// Atomic write: update or bail without marking done.
-		$written = update_option( Mcpwp_Integration_Manager::OPTION_NAME, $new_data );
+		// Atomic write — only needed when at least one blob was re-encrypted.
+		if ( $any_re_encrypted ) {
+			$written = update_option( Mcpwp_Integration_Manager::OPTION_NAME, $new_data );
 
-		if ( false === $written && ! empty( $data ) ) {
-			// update_option returns false also when value hasn't changed (no-op).
-			// Re-check: if new_data === original data (all failures, nothing changed)
-			// that is a legitimate no-op. We still mark done so the admin notice fires.
-			// If data genuinely changed but write failed, written === false is a real
-			// failure — but WordPress update_option returns false on both "no change"
-			// AND "db error". We cannot distinguish reliably, so we proceed and mark
-			// done. The admin notice for $failures will surface the re-entry request.
+			if ( false === $written ) {
+				// update_option can return false for two distinct reasons:
+				//   (a) DB write error — the new blobs were NOT persisted.
+				//   (b) The value was identical to what was already stored (no-op).
+				// Case (b) cannot occur here because $any_re_encrypted is true, meaning
+				// $new_data !== $data. Therefore false here is always a DB error.
+				// Do NOT set MIGRATED_FLAG — retry on next boot so data is never lost.
+				if ( defined( 'WP_DEBUG_LOG' ) && WP_DEBUG_LOG ) {
+					// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+					error_log( 'MCPWP encryption migration: integration option write failed — will retry on next boot.' );
+				}
+				return;
+			}
 		}
 
-		// Record any failures for the admin notice.
+		// Record any decrypt/re-encrypt failures persistently so admin notice
+		// fires on every subsequent admin page load, not just this request.
 		if ( ! empty( $failures ) ) {
 			update_option( self::FAILURES_OPTION, $failures );
-			add_action( 'admin_notices', array( __CLASS__, 'render_failure_notice' ) );
 		}
 
-		// Migration complete (or as complete as possible given failures).
+		// Mark done only after the write succeeded (or when nothing needed writing).
 		update_option( self::MIGRATED_FLAG, '1' );
 	}
 

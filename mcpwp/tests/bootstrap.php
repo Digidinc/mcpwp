@@ -312,8 +312,12 @@ function get_option($name, $default = false)
     return array_key_exists($name, $GLOBALS['mcpwp_test_options']) ? $GLOBALS['mcpwp_test_options'][ $name ] : $default;
 }
 
-function update_option($name, $value)
+function update_option($name, $value, $autoload = null)
 {
+    // Allow tests to simulate DB write failures for specific option names.
+    if (! empty($GLOBALS['mcpwp_test_update_option_fail'][ $name ])) {
+        return false;
+    }
     $GLOBALS['mcpwp_test_options'][ $name ] = $value;
     return true;
 }

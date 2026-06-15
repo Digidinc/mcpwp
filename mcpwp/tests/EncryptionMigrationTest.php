@@ -11,13 +11,16 @@ use PHPUnit\Framework\TestCase;
  *   (c) Idempotent: second run is skipped entirely.
  *   (d) get_key() preference: constant > option > generates-and-persists.
  *   (e) Pro-gate bypass: is_trusted_admin_ajax_request() conditions.
+ *   (f) Write-failure safety: integration option write fail → no MIGRATED_FLAG set.
+ *   (g) Write-failure safety: encryption key option write fail → encrypt() returns false.
  */
 final class EncryptionMigrationTest extends TestCase
 {
     protected function setUp(): void
     {
-        $GLOBALS['mcpwp_test_options']    = array();
-        $GLOBALS['mcpwp_test_transients'] = array();
+        $GLOBALS['mcpwp_test_options']              = array();
+        $GLOBALS['mcpwp_test_transients']           = array();
+        $GLOBALS['mcpwp_test_update_option_fail']   = array();
         // Reset the encryption singleton so each test gets a fresh key.
         $this->resetEncryptionSingleton();
     }
@@ -282,6 +285,81 @@ final class EncryptionMigrationTest extends TestCase
         // No NEW key must have been generated (option must still be the known key).
         $stored = get_option('mcpwp_encryption_key', '');
         $this->assertSame(base64_encode($known_key), $stored, 'Option must not be overwritten');
+    }
+
+    // ── (f) Write-failure: integration option write → MIGRATED_FLAG NOT set ──
+
+    /**
+     * If the DB write of re-encrypted blobs fails, MIGRATED_FLAG must NOT be set
+     * so the migration retries on next boot. The original blobs must remain intact.
+     */
+    public function test_integration_option_write_failure_does_not_set_migrated_flag(): void
+    {
+        if (! Mcpwp_Encryption::is_available()) {
+            $this->markTestSkipped('sodium extension not available');
+        }
+
+        $plaintext = 'sk-test-write-fail';
+        $blob      = $this->makeOldKeyBlob($plaintext);
+
+        update_option(Mcpwp_Integration_Manager::OPTION_NAME, array(
+            'openai' => array(
+                'key_encrypted' => $blob,
+                'configured_at' => '2026-01-01 00:00:00',
+                'last_tested'   => null,
+                'test_status'   => null,
+            ),
+        ));
+
+        // Simulate DB write failure for the integrations option.
+        $GLOBALS['mcpwp_test_update_option_fail'][ Mcpwp_Integration_Manager::OPTION_NAME ] = true;
+
+        Mcpwp_Encryption_Migration::run();
+
+        // MIGRATED_FLAG must NOT be set — migration must retry on next boot.
+        $this->assertFalse(
+            get_option(Mcpwp_Encryption_Migration::MIGRATED_FLAG),
+            'MIGRATED_FLAG must not be set when integration option write fails'
+        );
+
+        // Original blob must still be intact (write was blocked by our stub).
+        $data = get_option(Mcpwp_Integration_Manager::OPTION_NAME, array());
+        $this->assertSame(
+            $blob,
+            $data['openai']['key_encrypted'],
+            'Original blob must be preserved when write fails'
+        );
+    }
+
+    // ── (g) Write-failure: encryption key option → encrypt() returns false ───
+
+    /**
+     * If persisting the newly generated encryption key fails (DB error),
+     * encrypt() must return false rather than producing ciphertext encrypted
+     * with an unpersisted ephemeral key that will be lost after the request.
+     */
+    public function test_encrypt_returns_false_when_key_persistence_fails(): void
+    {
+        if (! Mcpwp_Encryption::is_available()) {
+            $this->markTestSkipped('sodium extension not available');
+        }
+
+        if (defined('MCPWP_ENCRYPTION_KEY')) {
+            $this->markTestSkipped('MCPWP_ENCRYPTION_KEY constant defined — generation path not reached');
+        }
+
+        // No stored key, no constant → get_key() will try to generate + persist.
+        // Simulate the option write failing AND the readback returning empty.
+        $GLOBALS['mcpwp_test_update_option_fail']['mcpwp_encryption_key'] = true;
+        // Do NOT pre-populate mcpwp_encryption_key so the readback also returns ''.
+
+        $enc    = Mcpwp_Encryption::get_instance();
+        $result = $enc->encrypt('should-fail');
+
+        $this->assertFalse(
+            $result,
+            'encrypt() must return false when key cannot be persisted, not silently produce unrecoverable ciphertext'
+        );
     }
 
     // ── (e) Pro-gate: is_trusted_admin_ajax_request() ───────────────────────

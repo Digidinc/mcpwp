@@ -67,7 +67,13 @@ class Mcpwp_Encryption {
 			return false;
 		}
 
-		$key   = $this->get_key();
+		$key = $this->get_key();
+		// get_key() returns '' when key persistence failed (DB write error).
+		// Fail closed rather than encrypt with an unrecoverable ephemeral key.
+		if ( SODIUM_CRYPTO_SECRETBOX_KEYBYTES !== strlen( $key ) ) {
+			return false;
+		}
+
 		$nonce = random_bytes( SODIUM_CRYPTO_SECRETBOX_NONCEBYTES );
 
 		try {
@@ -161,9 +167,29 @@ class Mcpwp_Encryption {
 		}
 
 		// 3. Generate and persist. Non-autoloaded so it doesn't bloat every page load.
-		$raw = random_bytes( SODIUM_CRYPTO_SECRETBOX_KEYBYTES );
+		$raw     = random_bytes( SODIUM_CRYPTO_SECRETBOX_KEYBYTES );
 		// phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_encode
-		update_option( 'mcpwp_encryption_key', base64_encode( $raw ), false );
+		$encoded = base64_encode( $raw );
+		$written = update_option( 'mcpwp_encryption_key', $encoded, false );
+
+		if ( ! $written ) {
+			// update_option returns false on "no change" OR "db error".
+			// Since this is a freshly-generated random key it cannot already be stored,
+			// so false here always means a DB write failure.
+			// Read back to confirm — if it's there, a concurrent request already wrote it.
+			$readback = get_option( 'mcpwp_encryption_key', '' );
+			if ( '' === $readback ) {
+				// Write failed and nothing is stored — do NOT cache or return this key.
+				// encrypt() will receive null and return false, which callers handle.
+				return ''; // Signals failure; encrypt() checks strlen.
+			}
+			// Another request persisted a key concurrently — use that one for consistency.
+			// phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_decode
+			$raw = base64_decode( $readback, true );
+			if ( false === $raw || SODIUM_CRYPTO_SECRETBOX_KEYBYTES !== strlen( $raw ) ) {
+				return ''; // Corrupt concurrent write — fail closed.
+			}
+		}
 
 		$this->key = $raw;
 		return $this->key;
