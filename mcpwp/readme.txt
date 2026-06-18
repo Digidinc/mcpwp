@@ -5,7 +5,7 @@ Tags: ai, claude, mcp, elementor, api
 Requires at least: 6.1
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 3.2.4
+Stable tag: 3.2.5
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -137,6 +137,15 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 4. Integrations and Chat — connected services plus safety-first agent workflow
 
 == Changelog ==
+
+= 3.2.5 =
+* fix: deduplicate Elementor element IDs on save to prevent CSS bleed across pages (#565)
+* fix: MCP internal tool dispatch no longer double-counts rate limit, fixing concurrency errors (#566)
+* fix: custom CSS set_custom_css warns on HTML-escaped operators, returns compact response, clarifies verification semantics (#567)
+
+= 3.2.4 =
+* Security: Encryption key is now stored in a dedicated WordPress option (mcpwp_encryption_key) instead of being derived from AUTH_SALT. AUTH_SALT rotation no longer silently corrupts stored provider credentials. A one-time non-destructive migration re-encrypts existing blobs on first load.
+* Security: Admin AJAX pro-gate bypass is now restricted to verified admin users with activate_plugins capability, confirmed nonce, and an explicit action allowlist.
 
 = 3.2.3 =
 * Improved: screenshots now save to the media library and return a URL by default — inline base64 (500KB+) overflowed AI-client contexts. Pass `inline=true` for raw base64.

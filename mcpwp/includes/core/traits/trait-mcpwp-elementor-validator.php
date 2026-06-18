@@ -167,6 +167,7 @@ trait Mcpwp_Elementor_Validator_Trait {
 		$fixes             = array();
 		$errors            = array();
 		$changed           = false;
+		$seen_ids          = array();
 		$registered        = $this->get_registered_widgets();
 		$registered_lookup = array_flip( $registered );
 
@@ -178,7 +179,7 @@ trait Mcpwp_Elementor_Validator_Trait {
 		 * @param string $parent_type Parent elType for nesting validation.
 		 */
 		$walk = function ( &$el, $path = '', $parent_type = '' ) use (
-			&$walk, &$warnings, &$fixes, &$errors, &$changed,
+			&$walk, &$warnings, &$fixes, &$errors, &$changed, &$seen_ids,
 			$registered, $registered_lookup
 		) {
 			$el_type     = isset( $el['elType'] ) ? $el['elType'] : '';
@@ -190,6 +191,19 @@ trait Mcpwp_Elementor_Validator_Trait {
 				$fixes[]  = "{$path}: auto-generated missing ID";
 				$changed  = true;
 			}
+
+			// --- 1b. Deduplicate IDs ---
+			if ( isset( $seen_ids[ $el['id'] ] ) ) {
+				$old_id   = $el['id'];
+				$el['id'] = $this->generate_element_id();
+				// Ensure the new ID is also unique.
+				while ( isset( $seen_ids[ $el['id'] ] ) ) {
+					$el['id'] = $this->generate_element_id();
+				}
+				$fixes[]  = "{$path}: reassigned duplicate ID '{$old_id}' → '{$el['id']}'";
+				$changed  = true;
+			}
+			$seen_ids[ $el['id'] ] = true;
 
 			// --- 2. Validate elType ---
 			if ( '' === $el_type ) {

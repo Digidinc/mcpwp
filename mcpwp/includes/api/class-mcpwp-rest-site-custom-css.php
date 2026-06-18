@@ -91,9 +91,31 @@ class Mcpwp_REST_Site_Custom_Css extends Mcpwp_REST_API {
 		$new_css = $request->get_param( 'css' );
 		$mode    = $request->get_param( 'mode' ) ?: 'append';
 
+		// Detect HTML-escaped operators that make CSS selectors invalid.
+		$escaped_warnings = array();
+		if ( false !== strpos( $new_css, '&gt;' ) ) {
+			$escaped_warnings[] = 'CSS contains HTML-escaped ">" (&gt;) — child combinators will not work. Replace &gt; with > in selector strings.';
+		}
+		if ( false !== strpos( $new_css, '&lt;' ) ) {
+			$escaped_warnings[] = 'CSS contains HTML-escaped "<" (&lt;) — this is not valid in CSS selectors.';
+		}
+		if ( false !== strpos( $new_css, '&amp;' ) ) {
+			$escaped_warnings[] = 'CSS contains HTML-escaped "&" (&amp;) — replace with & in CSS.';
+		}
+
 		if ( 'append' === $mode ) {
 			$existing = wp_get_custom_css();
-			$css      = $existing . "\n\n" . $new_css;
+			// Also scan existing CSS for escaped operators in append mode.
+			if ( false !== strpos( $existing, '&gt;' ) ) {
+				$escaped_warnings[] = 'Existing CSS contains HTML-escaped ">" (&gt;) — existing child combinators may not work.';
+			}
+			if ( false !== strpos( $existing, '&lt;' ) ) {
+				$escaped_warnings[] = 'Existing CSS contains HTML-escaped "<" (&lt;) — existing CSS has invalid selectors.';
+			}
+			if ( false !== strpos( $existing, '&amp;' ) ) {
+				$escaped_warnings[] = 'Existing CSS contains HTML-escaped "&" (&amp;) — existing CSS may have invalid selectors.';
+			}
+			$css = $existing . "\n\n" . $new_css;
 		} else {
 			$css = $new_css;
 		}
@@ -108,11 +130,29 @@ class Mcpwp_REST_Site_Custom_Css extends Mcpwp_REST_API {
 			);
 		}
 
-		$response = array(
-			'css'    => $css,
-			'length' => strlen( $css ),
-			'mode'   => $mode,
-		);
+		$css_preview = strlen( $css ) > 120 ? substr( $css, 0, 120 ) . '…' : $css;
+		if ( 'replace' === $mode ) {
+			$response = array(
+				'length'  => strlen( $css ),
+				'hash'    => md5( $css ),
+				'preview' => $css_preview,
+				'mode'    => $mode,
+				'note'    => 'Full CSS not returned (use GET /custom-css to read). Hash confirms save.',
+			);
+		} else {
+			$response = array(
+				'length'          => strlen( $css ),
+				'appended_length' => strlen( $new_css ),
+				'hash'            => md5( $css ),
+				'preview'         => $css_preview,
+				'mode'            => $mode,
+				'note'            => 'Full CSS not returned (use GET /custom-css to read). Hash confirms save.',
+			);
+		}
+
+		if ( ! empty( $escaped_warnings ) ) {
+			$response['selector_warnings'] = $escaped_warnings;
+		}
 
 		// Check for themes with known custom CSS systems that may override Customizer CSS.
 		$theme = wp_get_theme();
@@ -172,6 +212,7 @@ class Mcpwp_REST_Site_Custom_Css extends Mcpwp_REST_API {
 			$snippet                         = substr( trim( $css ), 0, 50 );
 			$verification['snippet_found']   = ! empty( $snippet ) && false !== strpos( $body, $snippet );
 			$verification['verified']        = $verification['style_tag_found'] && $verification['snippet_found'];
+			$verification['verified_means']  = 'snippet_found confirms the CSS text appears in the rendered page; it does NOT verify the rule wins in cascade over Elementor inline styles or later-loaded theme CSS.';
 
 			if ( ! $verification['verified'] && $css_callback_hooked ) {
 				$verification['warning'] = __( 'CSS was saved but could not be confirmed in the rendered page. It may be overridden by theme or caching.', 'mcpwp' );
