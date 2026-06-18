@@ -5,7 +5,7 @@ Tags: ai, claude, mcp, elementor, api
 Requires at least: 6.1
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 3.2.9
+Stable tag: 3.3.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -137,6 +137,14 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 4. Integrations and Chat — connected services plus safety-first agent workflow
 
 == Changelog ==
+
+= 3.3.0 =
+* feat: render-truth across all validators — every MCPWP validator now reports validation_basis and validation_note so agents know whether issues were verified against rendered HTML or stored data (#569)
+* feat: validate_structured_data fetches live rendered page for published posts; renders JSON-LD injected by SEO plugins (Yoast/AIOSEO/@graph); suppresses false "no_structured_data" when plugin handles schema (#569)
+* feat: validate_internal_links now walks Elementor widget data (_elementor_data) alongside post_content — links in buttons, icon-boxes, and text-editor widgets are validated for broken targets, self-links, and non-canonical URLs; anchor-quality checks skip Elementor button links (#569)
+* fix: apply_internal_link duplicate-check now includes Elementor data — prevents false "duplicate link" skips on Elementor pages where post_content is empty (#569)
+* feat: audit_seo_site exposes validation_basis per URL and a site-level validation_note counting how many URLs were render-verified (#569)
+* feat: validate_blocks response includes validation_basis: stored_block_data + note that dynamic/server-side blocks may render differently (#569)
 
 = 3.2.9 =
 * new: validate_seo_readiness now fetches the actual rendered <head> for published pages and reconciles issues against ground truth — false "missing meta description" and "noindex" issues caused by SEO plugin template rendering are suppressed (#569)

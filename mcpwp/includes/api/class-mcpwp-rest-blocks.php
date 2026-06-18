@@ -934,6 +934,8 @@ class Mcpwp_REST_Blocks extends Mcpwp_REST_API {
 			'warning_count'     => $warning_count,
 			'approval_required' => $error_count > 0,
 			'issues'            => $issues,
+			'validation_basis'  => 'stored_block_data',
+			'validation_note'   => 'Validates the serialized block markup for structural correctness, disallowed block types, and unsafe HTML. Does not check rendered output — block plugins with server-side rendering or dynamic blocks may produce different HTML than what appears here.',
 		);
 	}
 

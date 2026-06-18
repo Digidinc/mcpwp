@@ -628,15 +628,16 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 			}
 
 			$urls[] = array(
-				'id'           => (int) $post_id,
-				'title'        => get_the_title( $post_id ),
-				'type'         => $post ? $post->post_type : '',
-				'status'       => $post ? $post->post_status : '',
-				'url'          => get_permalink( $post_id ),
-				'score'        => $score,
-				'status_label' => $this->seo_audit_status_label( $counts ),
-				'counts'       => $counts,
-				'top_issues'   => array_slice( $combined_issues, 0, 8 ),
+				'id'               => (int) $post_id,
+				'title'            => get_the_title( $post_id ),
+				'type'             => $post ? $post->post_type : '',
+				'status'           => $post ? $post->post_status : '',
+				'url'              => get_permalink( $post_id ),
+				'score'            => $score,
+				'status_label'     => $this->seo_audit_status_label( $counts ),
+				'counts'           => $counts,
+				'top_issues'       => array_slice( $combined_issues, 0, 8 ),
+				'validation_basis' => $readiness['validation_basis'] ?? 'stored_meta',
 			);
 		}
 
@@ -655,6 +656,8 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 			}
 		);
 
+		$rendered_count = count( array_filter( $urls, static function ( $u ) { return 'rendered_html' === ( $u['validation_basis'] ?? '' ); } ) );
+
 		$payload = array(
 			'summary' => array(
 				'status'        => $total_errors > 0 ? 'fail' : ( $total_warnings > 0 ? 'warn' : 'pass' ),
@@ -665,6 +668,11 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 				'error_count'   => $total_errors,
 				'warning_count' => $total_warnings,
 				'info_count'    => $total_info,
+			),
+			'validation_note'  => sprintf(
+				'Readiness issues for %d of %d published URLs were verified against rendered <head> (validation_basis: rendered_html). Structured-data issues and draft/private URLs use stored meta only.',
+				$rendered_count,
+				count( $urls )
 			),
 			'category_counts' => $category_counts,
 			'top_issue_codes' => array_slice( $top_issue_codes, 0, 12 ),
@@ -797,8 +805,48 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 		$schema_types    = array_values( array_unique( array_filter( $schema_types ) ) );
 		$recommendations = $this->recommend_schema_types_for_post( $post, $content, $schema_types );
 
-		if ( empty( $json_ld_items ) && empty( $microdata_items ) ) {
-			$issues[] = $this->make_structured_data_issue( 'no_structured_data', 'info', __( 'No structured data was detected in the post content.', 'mcpwp' ), __( 'Add schema only when it accurately describes visible content or can be handled by the active SEO plugin.', 'mcpwp' ) );
+		// Render-truth pass for structured data: SEO plugins (Yoast, AIOSEO, RankMath) inject
+		// JSON-LD via <head> template rendering, not via post_content. Fetch the rendered page
+		// for published posts so we can surface plugin-generated schema and suppress false
+		// "no_structured_data" issues when a plugin is handling schema automatically.
+		$rendered_html           = null;
+		$rendered_jsonld         = array();
+		$rendered_jsonld_types   = array();
+		$structured_data_basis   = 'stored_post_content';
+
+		if ( 'publish' === $post->post_status ) {
+			$rendered_html = $this->fetch_rendered_html_body( (string) get_permalink( $post ) );
+			if ( null !== $rendered_html ) {
+				$structured_data_basis = 'rendered_html';
+				$rendered_jsonld       = $this->extract_json_ld_from_rendered_html( $rendered_html );
+				foreach ( $rendered_jsonld as $item ) {
+					foreach ( $this->flatten_schema_entities( $item ) as $entity ) {
+						$t = $this->normalize_schema_type( $entity['@type'] ?? '' );
+						if ( '' !== $t ) {
+							$rendered_jsonld_types[] = $t;
+						}
+					}
+				}
+				$rendered_jsonld_types = array_values( array_unique( $rendered_jsonld_types ) );
+			}
+		}
+
+		// Suppress false "no_structured_data" when the rendered page has JSON-LD from a plugin.
+		if ( ! empty( $rendered_jsonld ) ) {
+			$issues = array_filter(
+				$issues,
+				static function ( $issue ) {
+					return 'no_structured_data' !== ( $issue['code'] ?? '' );
+				}
+			);
+			$issues = array_values( $issues );
+		} elseif ( empty( $json_ld_items ) && empty( $microdata_items ) ) {
+			$issues[] = $this->make_structured_data_issue(
+				'no_structured_data',
+				'info',
+				__( 'No structured data was detected in the post content or the rendered page.', 'mcpwp' ),
+				__( 'Add schema only when it accurately describes visible content or can be handled by the active SEO plugin.', 'mcpwp' )
+			);
 		}
 
 		if ( ! empty( $recommendations ) ) {
@@ -809,25 +857,32 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 
 		return $this->success_response(
 			array(
-				'post'            => array(
+				'post'                   => array(
 					'id'     => $post_id,
 					'title'  => get_the_title( $post ),
 					'type'   => $post->post_type,
 					'status' => $post->post_status,
 					'url'    => get_permalink( $post ),
 				),
-				'summary'         => $summary,
-				'inventory'       => array(
-					'json_ld_count'    => count( $json_ld_items ),
-					'microdata_count'  => count( $microdata_items ),
-					'schema_org_hints' => substr_count( strtolower( $content ), 'schema.org' ),
-					'types'            => $schema_types,
+				'summary'                => $summary,
+				'inventory'              => array(
+					'json_ld_count'        => count( $json_ld_items ),
+					'microdata_count'      => count( $microdata_items ),
+					'schema_org_hints'     => substr_count( strtolower( $content ), 'schema.org' ),
+					'types'                => $schema_types,
+					'rendered_jsonld_count' => count( $rendered_jsonld ),
+					'rendered_types'       => $rendered_jsonld_types,
 				),
-				'json_ld'         => $this->summarize_json_ld_items( $json_ld_items ),
-				'microdata'       => $microdata_items,
-				'issues'          => $issues,
-				'recommendations' => $recommendations,
-				'workflow'        => array(
+				'json_ld'                => $this->summarize_json_ld_items( $json_ld_items ),
+				'rendered_jsonld'        => $rendered_jsonld,
+				'microdata'              => $microdata_items,
+				'issues'                 => $issues,
+				'recommendations'        => $recommendations,
+				'validation_basis'       => $structured_data_basis,
+				'validation_note'        => 'rendered_html' === $structured_data_basis
+					? 'Structured data verified against the live rendered page. rendered_jsonld contains schema injected by SEO plugins in <head>.'
+					: 'Structured data read from stored post_content only (page is not published or rendered fetch failed). SEO plugin-generated schema will appear in rendered_jsonld after publishing.',
+				'workflow'               => array(
 					'read'  => 'Use before publishing or when auditing AI/search citation readiness.',
 					'fix'   => 'Add or correct schema only through approved SEO plugin fields or visible-content-backed markup.',
 					'guard' => 'This endpoint is read-only and does not inject structured data.',
@@ -1937,6 +1992,81 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 		return false !== stripos( $content, 'application/ld+json' )
 			|| false !== stripos( $content, 'itemscope' )
 			|| false !== stripos( $content, 'schema.org' );
+	}
+
+	/**
+	 * Fetch the full HTML body of a public URL for structured-data extraction.
+	 *
+	 * Separate from fetch_rendered_head_seo() because JSON-LD may appear in <body> on some
+	 * themes. Returns null on failure so callers always fall back gracefully.
+	 *
+	 * @param string $url Public URL.
+	 * @return string|null Raw HTML or null on failure.
+	 */
+	protected function fetch_rendered_html_body( $url ) {
+		if ( '' === trim( $url ) ) {
+			return null;
+		}
+
+		$response = wp_remote_get(
+			$url,
+			array(
+				'timeout'   => 6,
+				'sslverify' => false,
+				'headers'   => array( 'User-Agent' => 'MCPWP-SEO-Validator/1.0 (+https://mcpwp.net/)' ),
+			)
+		);
+
+		if ( is_wp_error( $response ) || 200 !== (int) wp_remote_retrieve_response_code( $response ) ) {
+			return null;
+		}
+
+		$html = wp_remote_retrieve_body( $response );
+		return '' !== $html ? $html : null;
+	}
+
+	/**
+	 * Extract all JSON-LD script blocks from a rendered HTML string.
+	 *
+	 * Returns an array of decoded PHP arrays (one per <script type="application/ld+json">).
+	 * Blocks that cannot be JSON-decoded are silently skipped.
+	 *
+	 * @param string $html Full HTML of the rendered page.
+	 * @return array[] Decoded JSON-LD objects.
+	 */
+	protected function extract_json_ld_from_rendered_html( $html ) {
+		$items = array();
+		if ( '' === $html ) {
+			return $items;
+		}
+
+		preg_match_all(
+			'/<script\s[^>]*type=["\']application\/ld\+json["\'][^>]*>(.*?)<\/script>/is',
+			$html,
+			$matches
+		);
+
+		foreach ( $matches[1] as $raw ) {
+			$raw = trim( $raw );
+			if ( '' === $raw ) {
+				continue;
+			}
+			$decoded = json_decode( $raw, true );
+			if ( is_array( $decoded ) ) {
+				// Handle @graph wrapper (common in Yoast/AIOSEO output).
+				if ( isset( $decoded['@graph'] ) && is_array( $decoded['@graph'] ) ) {
+					foreach ( $decoded['@graph'] as $entity ) {
+						if ( is_array( $entity ) ) {
+							$items[] = $entity;
+						}
+					}
+				} else {
+					$items[] = $decoded;
+				}
+			}
+		}
+
+		return $items;
 	}
 
 	/**

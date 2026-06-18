@@ -472,7 +472,12 @@ class Mcpwp_REST_Content_Graph extends Mcpwp_REST_API {
 			}
 
 			$seen_targets = array();
-			$links        = $this->extract_raw_anchor_links( $source->post_content );
+
+			// Merge post_content <a> links with Elementor widget links so Elementor-only
+			// pages (where post_content is empty) are fully covered.
+			$content_links  = $this->extract_raw_anchor_links( $source->post_content );
+			$elementor_links = $this->extract_raw_links_from_elementor( $source_id );
+			$links           = array_merge( $content_links, $elementor_links );
 
 			foreach ( $links as $link ) {
 				$resolved = $this->resolve_internal_link_for_validation( $link['href'], $url_to_id );
@@ -480,13 +485,18 @@ class Mcpwp_REST_Content_Graph extends Mcpwp_REST_API {
 					continue;
 				}
 
-				$target_id = (int) $resolved['target_id'];
-				$target    = $target_id ? get_post( $target_id ) : null;
+				$target_id   = (int) $resolved['target_id'];
+				$target      = $target_id ? get_post( $target_id ) : null;
+				$is_elementor = 'elementor' === ( $link['source'] ?? '' );
 
-				if ( '' === trim( $link['anchor'] ) ) {
-					$issues[] = $this->make_internal_link_issue( 'empty_anchor', 'warning', $source_id, $target_id, $link, __( 'Use descriptive anchor text for internal links.', 'mcpwp' ) );
-				} elseif ( $this->is_weak_internal_link_anchor( $link['anchor'] ) ) {
-					$issues[] = $this->make_internal_link_issue( 'weak_anchor', 'warning', $source_id, $target_id, $link, __( 'Replace generic anchor text with a descriptive phrase.', 'mcpwp' ) );
+				// Anchor-quality checks apply to post_content links only; Elementor button
+				// "anchors" are button labels, not traditional hyperlink anchor text.
+				if ( ! $is_elementor ) {
+					if ( '' === trim( $link['anchor'] ) ) {
+						$issues[] = $this->make_internal_link_issue( 'empty_anchor', 'warning', $source_id, $target_id, $link, __( 'Use descriptive anchor text for internal links.', 'mcpwp' ) );
+					} elseif ( $this->is_weak_internal_link_anchor( $link['anchor'] ) ) {
+						$issues[] = $this->make_internal_link_issue( 'weak_anchor', 'warning', $source_id, $target_id, $link, __( 'Replace generic anchor text with a descriptive phrase.', 'mcpwp' ) );
+					}
 				}
 
 				if ( ! $target ) {
@@ -533,7 +543,9 @@ class Mcpwp_REST_Content_Graph extends Mcpwp_REST_API {
 					'warning_count' => $warning_count,
 					'node_count'    => count( $nodes_by_id ),
 				),
-				'issues'  => $issues,
+				'issues'           => $issues,
+				'validation_basis' => 'stored_content_and_elementor_data',
+				'validation_note'  => 'Links verified against stored post_content and Elementor widget data (_elementor_data). Rendered-HTML link crawl (catching JS-rendered or theme-injected links) is not performed — reachability issues caused by JS rendering or server-side redirects will not appear here.',
 				'workflow' => array(
 					'read'  => 'Use before publishing or applying internal link suggestions.',
 					'fix'   => 'Use approval-first Gutenberg edits to fix accepted issues.',
@@ -1361,6 +1373,95 @@ class Mcpwp_REST_Content_Graph extends Mcpwp_REST_API {
 			// Recurse into child elements.
 			if ( ! empty( $element['elements'] ) && is_array( $element['elements'] ) ) {
 				$this->collect_elementor_link_hrefs( $element['elements'], $hrefs );
+			}
+		}
+	}
+
+	/**
+	 * Extract links from Elementor widget data in {href, anchor, source} format
+	 * compatible with the validate_internal_links loop.
+	 *
+	 * anchor is best-effort: widget button_text / text for URL-only links, actual anchor
+	 * text for HTML-content widgets. source is always 'elementor' so the validator can
+	 * skip pure-anchor-quality checks (empty/weak anchor) that don't apply to buttons.
+	 *
+	 * @param int $post_id Post ID.
+	 * @return array[] Array of {href, anchor, source} records.
+	 */
+	protected function extract_raw_links_from_elementor( $post_id ) {
+		$raw = get_post_meta( $post_id, '_elementor_data', true );
+		if ( empty( $raw ) || ! is_string( $raw ) ) {
+			return array();
+		}
+		$data = json_decode( $raw, true );
+		if ( ! is_array( $data ) ) {
+			return array();
+		}
+
+		$links = array();
+		$this->collect_elementor_raw_links( $data, $links );
+
+		// Deduplicate by href.
+		$seen  = array();
+		$dedup = array();
+		foreach ( $links as $link ) {
+			$key = strtolower( trim( $link['href'] ) );
+			if ( '' !== $key && ! isset( $seen[ $key ] ) ) {
+				$seen[ $key ] = true;
+				$dedup[]       = $link;
+			}
+		}
+		return $dedup;
+	}
+
+	/**
+	 * Recursively collect {href, anchor, source} records from Elementor elements.
+	 *
+	 * @param array $elements Elementor elements array.
+	 * @param array $links    Accumulator passed by reference.
+	 */
+	protected function collect_elementor_raw_links( $elements, &$links ) {
+		if ( ! is_array( $elements ) ) {
+			return;
+		}
+
+		foreach ( $elements as $element ) {
+			if ( ! is_array( $element ) ) {
+				continue;
+			}
+
+			$settings = isset( $element['settings'] ) && is_array( $element['settings'] ) ? $element['settings'] : array();
+
+			// URL-typed settings: link.url, url.url. Anchor = button text or title where available.
+			foreach ( array( 'link', 'url' ) as $url_key ) {
+				if ( ! empty( $settings[ $url_key ]['url'] ) && is_string( $settings[ $url_key ]['url'] ) ) {
+					$anchor  = trim( wp_strip_all_tags( (string) ( $settings['text'] ?? $settings['button_text'] ?? $settings['title'] ?? '' ) ) );
+					$links[] = array(
+						'href'   => $settings[ $url_key ]['url'],
+						'anchor' => $anchor,
+						'source' => 'elementor',
+					);
+				}
+			}
+
+			// HTML-content settings: parse <a> tags to get real hrefs + anchors.
+			foreach ( array( 'editor', 'html', 'content', 'inner_text' ) as $field ) {
+				if ( ! empty( $settings[ $field ] ) && is_string( $settings[ $field ] ) ) {
+					if ( preg_match_all( '/<a\s[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)<\/a>/is', $settings[ $field ], $matches, PREG_SET_ORDER ) ) {
+						foreach ( $matches as $m ) {
+							$links[] = array(
+								'href'   => trim( html_entity_decode( $m[1], ENT_QUOTES, 'UTF-8' ) ),
+								'anchor' => trim( wp_strip_all_tags( $m[2] ) ),
+								'source' => 'elementor',
+							);
+						}
+					}
+				}
+			}
+
+			// Recurse into child elements.
+			if ( ! empty( $element['elements'] ) && is_array( $element['elements'] ) ) {
+				$this->collect_elementor_raw_links( $element['elements'], $links );
 			}
 		}
 	}
