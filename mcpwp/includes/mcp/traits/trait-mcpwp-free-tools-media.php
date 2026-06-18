@@ -41,7 +41,7 @@ trait Mcpwp_Free_Tools_Media_Trait {
 
 		$tools[] = $this->define_tool(
 			'wp_upload_media_from_url',
-			'Upload a media file from a URL into the WordPress media library.',
+			'Upload a single media file from a URL into the WordPress media library. For bulk migrations (5+ images), use wp_bulk_upload_media instead — it avoids hitting the burst rate limit.',
 			array(
 				'url' => array(
 					'type'        => 'string',
@@ -59,6 +59,23 @@ trait Mcpwp_Free_Tools_Media_Trait {
 				'alt' => array(
 					'type'        => 'string',
 					'description' => 'Alt text for images',
+				),
+			)
+		);
+
+		$tools[] = $this->define_tool(
+			'wp_bulk_upload_media',
+			'Import up to 20 media files from URLs in a single request. Use this for content migrations instead of looping wp_upload_media_from_url — it counts as one request against the rate limit, not one per image. Pass "urls" for simple imports or "items" for title/alt metadata per file. Returns uploaded[] and failed[] arrays.',
+			array(
+				'urls'  => array(
+					'type'        => 'array',
+					'description' => 'Simple list of publicly accessible image/file URLs to import. Use "items" instead if you need per-file title or alt text.',
+					'items'       => array( 'type' => 'string' ),
+				),
+				'items' => array(
+					'type'        => 'array',
+					'description' => 'Structured list for importing with metadata. Each item: {url (required), title, alt, filename}.',
+					'items'       => array( 'type' => 'object' ),
 				),
 			)
 		);

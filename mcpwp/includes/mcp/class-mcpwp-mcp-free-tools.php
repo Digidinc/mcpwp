@@ -147,7 +147,7 @@ class Mcpwp_MCP_Free_Tools extends Mcpwp_MCP_Tool_Registry {
 			'wp_list_media'              => 'media',
 			'wp_upload_media'            => 'media',
 			'wp_upload_media_from_url'   => 'media',
-			'wp_upload_media_b64'        => 'media',
+			'wp_bulk_upload_media'       => 'media',
 			'wp_upload_media_b64'        => 'media',
 			'wp_update_media'            => 'media',
 			'wp_delete_media'            => 'media',
@@ -663,6 +663,10 @@ class Mcpwp_MCP_Free_Tools extends Mcpwp_MCP_Tool_Registry {
 			'wp_upload_media_from_url' => array(
 				'method' => 'POST',
 				'route'  => '/media/from-url',
+			),
+			'wp_bulk_upload_media'     => array(
+				'method' => 'POST',
+				'route'  => '/media/bulk',
 			),
 			'wp_upload_media_b64'      => array(
 				'method' => 'POST',

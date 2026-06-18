@@ -5,7 +5,7 @@ Tags: ai, claude, mcp, elementor, api
 Requires at least: 6.1
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 3.2.6
+Stable tag: 3.2.7
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -137,6 +137,10 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 4. Integrations and Chat — connected services plus safety-first agent workflow
 
 == Changelog ==
+
+= 3.2.7 =
+* new: wp_bulk_upload_media tool — import up to 20 images from URLs in one request; use instead of looping wp_upload_media_from_url for migrations (#566)
+* fix: wp_upload_media_from_url description now advises using bulk tool for 5+ images to stay under burst rate limit (#566)
 
 = 3.2.6 =
 * fix: REST Pro gate now enforces real license check — no more stub bypass (#564)
