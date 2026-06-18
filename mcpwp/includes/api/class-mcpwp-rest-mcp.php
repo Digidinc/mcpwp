@@ -999,9 +999,6 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			$internal_request->set_header( 'X-API-Key', $api_key );
 		}
 
-		// Mark as internal sub-request so rate limiting is not double-counted.
-		$internal_request->set_header( 'X-SPAI-Batch-Sub-Request', '1' );
-
 		// Capture before-state for audit log (no-op for non-write tools).
 		$audit_all_cats = $this->get_all_tool_categories();
 		$audit_category = isset( $audit_all_cats[ $tool_name ] ) ? $audit_all_cats[ $tool_name ] : 'site';
@@ -1010,10 +1007,19 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			? Mcpwp_Action_Log::begin( $tool_name, $arguments, $audit_key_id, $audit_category )
 			: null;
 
+		// Mark as internal sub-request via a PHP static property so rate limiting
+		// is not double-counted.  Using a static flag (not an HTTP header) prevents
+		// external callers from forging this bypass.
+		if ( class_exists( 'Mcpwp_REST_Batch' ) ) {
+			Mcpwp_REST_Batch::$is_batch_sub_request = true;
+		}
 		// Dispatch internally
 		$response = rest_do_request( $internal_request );
-		$data     = $response->get_data();
-		$status   = $response->get_status();
+		if ( class_exists( 'Mcpwp_REST_Batch' ) ) {
+			Mcpwp_REST_Batch::$is_batch_sub_request = false;
+		}
+		$data   = $response->get_data();
+		$status = $response->get_status();
 
 		// Check for errors — detect all error shapes.
 		$is_error = $status >= 400;

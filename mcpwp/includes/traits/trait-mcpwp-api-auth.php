@@ -55,7 +55,10 @@ trait Mcpwp_Api_Auth {
 		}
 
 		// Skip rate limiting for batch sub-requests (already counted on the outer request).
-		if ( $request->get_header( 'X-SPAI-Batch-Sub-Request' ) ) {
+		// Use a PHP static property — not an HTTP header — so external callers cannot
+		// forge this bypass.  The flag is set/cleared by Mcpwp_REST_Batch::execute_operation()
+		// and by Mcpwp_REST_MCP around its own internal sub-request dispatch.
+		if ( class_exists( 'Mcpwp_REST_Batch' ) && Mcpwp_REST_Batch::$is_batch_sub_request ) {
 			return $this->verify_api_key_auth_only( $request );
 		}
 

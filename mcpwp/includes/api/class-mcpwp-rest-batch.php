@@ -31,6 +31,17 @@ class Mcpwp_REST_Batch extends Mcpwp_REST_API {
 	const MAX_OPERATIONS = 25;
 
 	/**
+	 * PHP-internal flag set while a batch sub-request is being dispatched.
+	 *
+	 * The auth/rate-limit layer reads this property instead of checking an
+	 * HTTP header, which any external caller could forge.  It is reset to
+	 * false immediately after each sub-request returns.
+	 *
+	 * @var bool
+	 */
+	public static $is_batch_sub_request = false;
+
+	/**
 	 * Register routes.
 	 */
 	public function register_routes() {
@@ -201,17 +212,18 @@ class Mcpwp_REST_Batch extends Mcpwp_REST_API {
 			$internal_request->set_query_params( $body );
 		}
 
-		// Copy authentication and mark as batch sub-request (skips rate limiting).
+		// Copy authentication.
 		if ( $api_key ) {
 			$internal_request->set_header( 'X-API-Key', $api_key );
 		}
-		// X-SPAI-* kept for backward-compat; remove in a future major.
-		$internal_request->set_header( 'X-SPAI-Batch-Sub-Request', '1' );
-		// X-MCPWP-* alias (new canonical name).
-		$internal_request->set_header( 'X-MCPWP-Batch-Sub-Request', '1' );
 
-		// Execute the request
-		$response = rest_do_request( $internal_request );
+		// Mark as batch sub-request via a PHP static property so that the
+		// auth/rate-limit layer can skip rate counting for sub-requests.
+		// A static property cannot be forged by an external HTTP caller,
+		// unlike an HTTP header.
+		self::$is_batch_sub_request = true;
+		$response                   = rest_do_request( $internal_request );
+		self::$is_batch_sub_request = false;
 
 		// Extract response data
 		$status = $response->get_status();
