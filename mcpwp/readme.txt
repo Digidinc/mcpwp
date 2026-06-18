@@ -5,7 +5,7 @@ Tags: ai, claude, mcp, elementor, api
 Requires at least: 6.1
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 3.2.8
+Stable tag: 3.2.9
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -137,6 +137,12 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 4. Integrations and Chat — connected services plus safety-first agent workflow
 
 == Changelog ==
+
+= 3.2.9 =
+* new: validate_seo_readiness now fetches the actual rendered <head> for published pages and reconciles issues against ground truth — false "missing meta description" and "noindex" issues caused by SEO plugin template rendering are suppressed (#569)
+* new: rendered_head field in readiness response returns actual title, description, canonical, robots, og:title, og:description from the live page (#569)
+* new: validation_basis field ("rendered_html" vs "stored_meta") and validation_note explain whether issues were verified against rendered output or stored meta (#569)
+* new: rendered_noindex_detected issue fires when <meta name="robots"> in live <head> contains noindex even when stored meta doesn't (#569)
 
 = 3.2.8 =
 * fix: SEO readiness meta-description check now detects AIOSEO's excerpt fallback — pages with no stored per-post description no longer incorrectly warn "missing meta description" when AIOSEO renders one from the excerpt (#569)
