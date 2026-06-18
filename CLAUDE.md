@@ -77,6 +77,24 @@ Privacy & Terms: 118
 | Worker (legacy) | `spai-updates` (deployed-only; serves mumega.com routes) |
 | R2 bucket | `mumcp-updates` (manifest pinned 2.8.56 — two-person rule to bump) |
 
+### Distribution Builds
+
+Three variants, one command:
+
+```bash
+bash scripts/build-all.sh
+```
+
+| Zip | Pro? | License | Use for |
+|-----|------|---------|---------|
+| `mcpwp-X.Y.Z.zip` | No | — | WordPress.org submission |
+| `mcpwp-agency-X.Y.Z.zip` | Always on | None needed | Agency/client installs |
+| `mcpwp-freemius-X.Y.Z.zip` | Via key | Freemius | Paid users |
+
+Agency build injects `MCPWP_PRO=true` at build time — no wp-config.php changes, no license prompt. Includes self-update channel (`updates.mcpwp.net`).
+
+Download latest agency build: `https://updates.mcpwp.net/mcpwp-agency-3.2.7.zip`
+
 ### Release a New Version
 
 ```bash
@@ -85,16 +103,18 @@ Privacy & Terms: 118
 #    - readme.txt: Stable tag + changelog entry
 #    - version.json: version + changelog
 
-# 2. Build and publish canonical release artifacts (mumega.com static + R2)
+# 2. Build all three distribution zips
+bash scripts/build-all.sh
+
+# 3. Upload agency zip to R2 (makes it downloadable)
+npx wrangler r2 object put mumcp-updates/mcpwp-agency-X.Y.Z.zip \
+  --file mcpwp/scripts/mcpwp-agency-X.Y.Z.zip --remote
+
+# 4. Publish canonical release artifacts (mumega.com static + R2)
 bash scripts/publish_update_release.sh --build
 
-# 3. Commit & push
+# 5. Commit & push
 git add -A && git commit -m "Bump version to X.Y.Z" && git push origin main
-
-# 4. Update target sites via MCP if needed
-# Prefer static-manifest discovery from mumega.com.
-# If you use mcpwp_update_info, it must exactly match the static manifest.
-# Do not leave stale mcpwp_update_info on sites after update.
 ```
 
 ### How the Updater Works
@@ -448,8 +468,13 @@ When changing plugin code, bump version in **3 files**:
 2. `readme.txt` — `Stable tag:` AND add changelog entry under `== Changelog ==`
 3. `version.json` — `version` field AND prepend changelog HTML fragment
 
-Then deploy:
+Current version: **3.2.7**
+
+Then build and deploy:
 ```bash
+bash scripts/build-all.sh                                    # all three zips
+npx wrangler r2 object put mumcp-updates/mcpwp-agency-X.Y.Z.zip \
+  --file mcpwp/scripts/mcpwp-agency-X.Y.Z.zip --remote      # agency download
 FREEMIUS_BEARER_TOKEN=... bash scripts/release_freemius.sh --version X.Y.Z --skip-bump
 bash scripts/publish_update_release.sh --build
 ```
