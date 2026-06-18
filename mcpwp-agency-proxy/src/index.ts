@@ -83,15 +83,6 @@ app.get('/dashboard', async (c) => {
   return c.html(DASHBOARD_HTML);
 });
 
-/**
- * Resolve agency ID from a custom hostname (white-label domain routing).
- * Returns null if the hostname is not registered.
- */
-async function resolveAgencyFromHostname(hostname: string, env: Env): Promise<string | null> {
-  if (!hostname) return null;
-  return env.AGENCY_KV.get(`agency:hostname:${hostname.toLowerCase()}`);
-}
-
 // Auth middleware factory
 const requireAgencyToken: AppMiddleware = async (c, next) => {
   const auth = c.req.header('Authorization') ?? '';
@@ -338,58 +329,6 @@ app.post('/api/sites', requireApiToken, async (c) => {
 app.delete('/api/sites/:siteId', requireApiToken, async (c) => {
   const removed = await removeSite(c.get('agencyId'), c.req.param('siteId'), c.env);
   return removed ? c.json({ status: 'removed' }) : c.json({ error: 'Site not found' }, 404);
-});
-
-// Register a custom hostname → agency mapping (white-label custom domains).
-// Agency sets up: CNAME ai.agencyname.com → proxy.mcpwp.net
-// Then calls POST /api/hostname with { hostname: "ai.agencyname.com" }
-// The proxy reads the Host header on /mcp requests and resolves the agency.
-app.post('/api/hostname', requireApiToken, async (c) => {
-  const badRequest = assertJsonPost(c); // T94
-  if (badRequest) return badRequest;
-
-  let body: { hostname?: string; action?: string };
-  try {
-    body = await c.req.json();
-  } catch {
-    return c.json({ error: 'Invalid JSON body' }, 400);
-  }
-
-  const { hostname, action } = body;
-  if (!hostname || typeof hostname !== 'string') {
-    return c.json({ error: 'hostname is required' }, 400);
-  }
-
-  // Validate hostname format.
-  if (!/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(hostname)) {
-    return c.json({ error: 'Invalid hostname format' }, 400);
-  }
-
-  const agencyId = c.get('agencyId');
-  const kvKey = `agency:hostname:${hostname.toLowerCase()}`;
-
-  if (action === 'remove') {
-    await c.env.AGENCY_KV.delete(kvKey);
-    return c.json({ status: 'removed', hostname });
-  }
-
-  // Prevent hostname takeover: refuse if already owned by a different agency.
-  const existing = await c.env.AGENCY_KV.get(kvKey);
-  if (existing && existing !== agencyId) {
-    return c.json({ error: 'Hostname already registered by another agency' }, 409);
-  }
-
-  await c.env.AGENCY_KV.put(kvKey, agencyId);
-  return c.json({ status: 'registered', hostname, agency_id: agencyId }, 201);
-});
-
-// List custom hostnames for this agency.
-app.get('/api/hostname', requireApiToken, async (c) => {
-  const agencyId = c.get('agencyId');
-  // KV does not support prefix-filtered list by value; return stored list from account metadata.
-  const accountRaw = await c.env.AGENCY_KV.get(`agency:account:${agencyId}`);
-  const account = accountRaw ? (JSON.parse(accountRaw) as { hostnames?: string[] }) : {};
-  return c.json({ hostnames: account.hostnames ?? [] });
 });
 
 export default { fetch: app.fetch };

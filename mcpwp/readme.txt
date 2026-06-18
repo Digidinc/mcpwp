@@ -5,7 +5,7 @@ Tags: ai, claude, mcp, elementor, api
 Requires at least: 6.1
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 3.2.5
+Stable tag: 3.2.6
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -137,6 +137,11 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 4. Integrations and Chat — connected services plus safety-first agent workflow
 
 == Changelog ==
+
+= 3.2.6 =
+* fix: REST Pro gate now enforces real license check — no more stub bypass (#564)
+* fix: remove dead hostname routing from agency proxy (latent Host-spoof surface) (#547)
+* fix: wp_rate_limit_status now shows real usage for API-key-authenticated requests (#533)
 
 = 3.2.5 =
 * fix: deduplicate Elementor element IDs on save to prevent CSS bleed across pages (#565)

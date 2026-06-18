@@ -852,6 +852,14 @@ class Mcpwp_REST_Integrations extends Mcpwp_REST_API {
 	 * @return true|WP_Error
 	 */
 	private function require_pro() {
+		if ( class_exists( 'Mcpwp_License' ) && ! Mcpwp_License::get_instance()->is_pro() ) {
+			return $this->error_response(
+				'pro_required',
+				__( 'This feature requires MCPWP Pro. Upgrade at https://mcpwp.net/pricing/', 'mcpwp' ),
+				403,
+				array( 'upgrade_url' => 'https://mcpwp.net/pricing/' )
+			);
+		}
 		return true;
 	}
 

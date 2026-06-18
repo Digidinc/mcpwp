@@ -412,7 +412,20 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 
 		$limiter  = Mcpwp_Rate_Limiter::get_instance();
 		$settings = $limiter->get_settings();
-		$usage    = $limiter->get_usage();
+
+		// Use the same identifier the rate limiter used when processing this request.
+		$api_key     = $this->get_api_key_from_request( $request );
+		$matched_key = null;
+		if ( $api_key && ! $this->looks_like_oauth_access_token( $api_key ) ) {
+			$matched_key = $this->find_scoped_api_key( $api_key );
+			if ( ! $matched_key ) {
+				$matched_key = $this->find_legacy_spai_key( $api_key );
+			}
+		}
+		$rate_identifier = ( $matched_key && ! empty( $matched_key['id'] ) )
+			? 'key:' . sanitize_key( $matched_key['id'] )
+			: null;
+		$usage = $limiter->get_usage( $rate_identifier );
 
 		return $this->success_response(
 			array(
