@@ -5,7 +5,7 @@ Tags: ai, claude, mcp, elementor, api
 Requires at least: 6.1
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 3.2.7
+Stable tag: 3.2.8
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -137,6 +137,11 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 4. Integrations and Chat — connected services plus safety-first agent workflow
 
 == Changelog ==
+
+= 3.2.8 =
+* fix: SEO readiness meta-description check now detects AIOSEO's excerpt fallback — pages with no stored per-post description no longer incorrectly warn "missing meta description" when AIOSEO renders one from the excerpt (#569)
+* fix: meta-description validation skips length check when value is an unrendered template string (Yoast/AIOSEO template tags); meta_description_source field added to readiness response (#569)
+* fix: apply_internal_link now checks Elementor widget data for existing links before inserting — prevents duplicate-link approval requests on Elementor pages where post_content is empty (#569)
 
 = 3.2.7 =
 * new: wp_bulk_upload_media tool — import up to 20 images from URLs in one request; use instead of looping wp_upload_media_from_url for migrations (#566)

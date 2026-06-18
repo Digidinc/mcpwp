@@ -347,8 +347,9 @@ class Mcpwp_REST_Content_Graph extends Mcpwp_REST_API {
 		$url_to_id = array(
 			$this->normalize_internal_graph_url( $target_url ) => $target_id,
 		);
-		$existing_links = $this->extract_internal_links_from_content( $source->post_content, $url_to_id );
-		if ( ! empty( $existing_links ) ) {
+		$existing_links          = $this->extract_internal_links_from_content( $source->post_content, $url_to_id );
+		$existing_elementor_links = $this->extract_elementor_links_from_postmeta( $source_id, $url_to_id );
+		if ( ! empty( $existing_links ) || ! empty( $existing_elementor_links ) ) {
 			return $this->error_response( 'duplicate_internal_link', 'Source post already links to this target.', 409 );
 		}
 
@@ -622,11 +623,24 @@ class Mcpwp_REST_Content_Graph extends Mcpwp_REST_API {
 			$from_id = (int) $post->ID;
 			$links   = $this->extract_internal_links_from_content( $post->post_content, $url_to_id );
 
+			// Also extract links embedded in Elementor widget settings (buttons, text editors, HTML widgets, etc.)
+			// post_content is empty/minimal for Elementor pages, so <a> regex alone misses all rendered links.
+			$elementor_links = $this->extract_elementor_links_from_postmeta( $from_id, $url_to_id );
+			$links           = array_merge( $links, $elementor_links );
+
+			$linked_to = array();
+
 			foreach ( $links as $link ) {
 				$to_id = $link['target_id'];
 				if ( $from_id === $to_id || ! isset( $nodes_by_id[ $to_id ] ) ) {
 					continue;
 				}
+
+				// Deduplicate edges per source→target pair so Elementor + post_content don't double-count.
+				if ( isset( $linked_to[ $to_id ] ) ) {
+					continue;
+				}
+				$linked_to[ $to_id ] = true;
 
 				$edges[] = array(
 					'from'   => $from_id,
@@ -1256,6 +1270,99 @@ class Mcpwp_REST_Content_Graph extends Mcpwp_REST_API {
 		$query = isset( $parts['query'] ) ? '?' . $parts['query'] : '';
 
 		return strtolower( $path . $query );
+	}
+
+	/**
+	 * Extract internal links from Elementor widget JSON stored in _elementor_data post meta.
+	 *
+	 * Elementor pages store content in post meta, not post_content, so the standard
+	 * <a> regex extracts nothing. This method walks the JSON tree and reads link URLs
+	 * from widget settings (buttons, text editors, HTML widgets, icon boxes, images).
+	 *
+	 * @param int   $post_id   Post ID.
+	 * @param array $url_to_id Normalized URL to post ID map.
+	 * @return array Link records compatible with extract_internal_links_from_content().
+	 */
+	protected function extract_elementor_links_from_postmeta( $post_id, $url_to_id ) {
+		$raw = get_post_meta( $post_id, '_elementor_data', true );
+		if ( empty( $raw ) || ! is_string( $raw ) ) {
+			return array();
+		}
+
+		$data = json_decode( $raw, true );
+		if ( ! is_array( $data ) ) {
+			return array();
+		}
+
+		$hrefs = array();
+		$this->collect_elementor_link_hrefs( $data, $hrefs );
+
+		$links = array();
+		foreach ( array_unique( $hrefs ) as $href ) {
+			$href = trim( html_entity_decode( $href, ENT_QUOTES, 'UTF-8' ) );
+			if ( '' === $href ) {
+				continue;
+			}
+			$link = $this->resolve_internal_graph_link( $href, '', $url_to_id );
+			if ( $link ) {
+				$links[] = $link;
+			}
+		}
+
+		return $links;
+	}
+
+	/**
+	 * Recursively collect link hrefs from an Elementor elements tree.
+	 *
+	 * Covers the most common link-bearing widget settings:
+	 *   - settings.link.url   (button, icon-box, image, image-box, call-to-action, flip-box)
+	 *   - settings.url.url    (icon widget)
+	 *   - settings.editor     (text-editor: HTML content with <a> tags)
+	 *   - settings.html       (html widget: raw HTML with <a> tags)
+	 *   - settings.content    (some rich-text widgets)
+	 *
+	 * @param array $elements Elementor elements array.
+	 * @param array $hrefs    Accumulator passed by reference.
+	 */
+	protected function collect_elementor_link_hrefs( $elements, &$hrefs ) {
+		if ( ! is_array( $elements ) ) {
+			return;
+		}
+
+		foreach ( $elements as $element ) {
+			if ( ! is_array( $element ) ) {
+				continue;
+			}
+
+			$settings = isset( $element['settings'] ) && is_array( $element['settings'] ) ? $element['settings'] : array();
+
+			// button, icon-box, image, image-box, call-to-action, flip-box — link object.
+			if ( ! empty( $settings['link']['url'] ) && is_string( $settings['link']['url'] ) ) {
+				$hrefs[] = $settings['link']['url'];
+			}
+
+			// icon widget — url object.
+			if ( ! empty( $settings['url']['url'] ) && is_string( $settings['url']['url'] ) ) {
+				$hrefs[] = $settings['url']['url'];
+			}
+
+			// text-editor, html, rich-text content — parse HTML for <a href>.
+			foreach ( array( 'editor', 'html', 'content', 'inner_text' ) as $field ) {
+				if ( ! empty( $settings[ $field ] ) && is_string( $settings[ $field ] ) ) {
+					if ( preg_match_all( '/<a\s[^>]*href=["\']([^"\']+)["\'][^>]*>/i', $settings[ $field ], $matches ) ) {
+						foreach ( $matches[1] as $href ) {
+							$hrefs[] = $href;
+						}
+					}
+				}
+			}
+
+			// Recurse into child elements.
+			if ( ! empty( $element['elements'] ) && is_array( $element['elements'] ) ) {
+				$this->collect_elementor_link_hrefs( $element['elements'], $hrefs );
+			}
+		}
 	}
 
 }

@@ -376,7 +376,13 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 	 */
 	public function validate_seo_readiness( $request ) {
 		$post_id = absint( $request->get_param( 'id' ) );
-		$post    = get_post( $post_id );
+
+		// Bust object cache so a freshly-written SEO meta is not read as stale.
+		// Relevant when a persistent cache (Redis/Memcached) or AIOSEO's own cache
+		// has not yet propagated the value written by wp_set_seo.
+		clean_post_cache( $post_id );
+
+		$post = get_post( $post_id );
 
 		if ( ! $post ) {
 			return $this->error_response( 'not_found', 'Post not found.', 404 );
@@ -425,10 +431,16 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 			$issues[] = $this->make_seo_readiness_issue( 'multiple_h1', 'warning', __( 'Multiple H1 headings found.', 'mcpwp' ), __( 'Use one primary H1 and demote secondary headings.', 'mcpwp' ) );
 		}
 
-		$meta_description = $this->get_seo_meta_description( $post_id );
+		$seo_meta         = $this->resolve_seo_meta_description( $post_id );
+		$meta_description = $seo_meta['value'];
 		if ( '' === $meta_description ) {
-			$issues[] = $this->make_seo_readiness_issue( 'missing_meta_description', 'warning', __( 'Meta description is missing.', 'mcpwp' ), __( 'Add a concise meta description through the active SEO plugin or supported post meta.', 'mcpwp' ) );
-		} elseif ( strlen( $meta_description ) < 50 || strlen( $meta_description ) > 170 ) {
+			// When AIOSEO/Yoast computes a fallback from excerpt, the stored meta may be empty.
+			// Only flag as missing when no SEO plugin would produce a rendered description.
+			if ( 'aioseo_excerpt_fallback' !== $seo_meta['source'] ) {
+				$issues[] = $this->make_seo_readiness_issue( 'missing_meta_description', 'warning', __( 'Meta description is missing.', 'mcpwp' ), __( 'Add a concise meta description through the active SEO plugin or supported post meta.', 'mcpwp' ) );
+			}
+		} elseif ( ! $seo_meta['is_template'] && ( strlen( $meta_description ) < 50 || strlen( $meta_description ) > 170 ) ) {
+			// Skip length check on template strings — the rendered length may differ from the stored template.
 			$issues[] = $this->make_seo_readiness_issue( 'meta_description_length', 'warning', __( 'Meta description length is outside the recommended range.', 'mcpwp' ), __( 'Aim for roughly 50-170 characters that summarize the page accurately.', 'mcpwp' ) );
 		}
 
@@ -494,13 +506,19 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 				'summary' => $summary,
 				'issues'  => $issues,
 				'checks'  => array(
-					'word_count'         => str_word_count( $text_content ),
-					'heading_count'      => count( $headings ),
-					'h1_count'           => $h1_count,
-					'meta_description'   => $meta_description,
-					'canonical_url'      => $canonical,
-					'robots_txt_checked' => '' !== $robots_txt,
-					'sitemap_hint'       => $this->site_has_sitemap_hint(),
+					'word_count'               => str_word_count( $text_content ),
+					'heading_count'            => count( $headings ),
+					'h1_count'                 => $h1_count,
+					'meta_description'         => $meta_description,
+					'meta_description_source'  => $seo_meta['source'],
+					'meta_description_note'    => $seo_meta['is_template']
+						? 'Stored value contains template tags — rendered output may differ. Use wp_get_seo or check rendered <head> for the final description.'
+						: ( 'aioseo_excerpt_fallback' === $seo_meta['source']
+							? 'No per-post description stored; AIOSEO will render the post excerpt in <head>.'
+							: '' ),
+					'canonical_url'            => $canonical,
+					'robots_txt_checked'       => '' !== $robots_txt,
+					'sitemap_hint'             => $this->site_has_sitemap_hint(),
 				),
 				'workflow' => array(
 					'read'  => 'Use before publishing or after major agent edits.',
@@ -1680,25 +1698,106 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 
 
 	/**
-	 * Get supported SEO meta description value.
+	 * Get supported SEO meta description value (simple string, backward-compatible).
 	 *
 	 * @param int $post_id Post ID.
 	 * @return string Description.
 	 */
 	protected function get_seo_meta_description( $post_id ) {
-		$keys = array(
-			'_yoast_wpseo_metadesc',
-			'rank_math_description',
-			'_aioseo_description',
-			'_seopress_titles_desc',
-			'mcpwp_meta_description',
+		return $this->resolve_seo_meta_description( $post_id )['value'];
+	}
+
+	/**
+	 * Resolve SEO meta description with source tracking.
+	 *
+	 * Returns an array with:
+	 *   value       — the description string (may be empty)
+	 *   source      — where the value came from (e.g. 'aioseo_stored', 'yoast_stored', 'none')
+	 *   is_template — true when the stored value contains SEO plugin template tags (e.g. #post_excerpt)
+	 *
+	 * Handles the AIOSEO case where no per-post description is stored but AIOSEO renders a
+	 * computed excerpt fallback in <head> — validators should not flag that as "missing".
+	 *
+	 * @param int $post_id Post ID.
+	 * @return array{value: string, source: string, is_template: bool}
+	 */
+	protected function resolve_seo_meta_description( $post_id ) {
+		$template_pattern = '/#[a-z_]+/';
+
+		// AIOSEO — check for computed excerpt fallback when no per-post value is stored.
+		if ( defined( 'AIOSEO_VERSION' ) ) {
+			$raw = trim( (string) get_post_meta( $post_id, '_aioseo_description', true ) );
+			if ( '' !== $raw ) {
+				$is_template = (bool) preg_match( $template_pattern, $raw );
+				// Attempt to render AIOSEO template tags via their public API.
+				if ( $is_template && function_exists( 'aioseo' ) ) {
+					$rendered = $this->try_render_aioseo_description( $post_id, $raw );
+					if ( '' !== $rendered ) {
+						return array( 'value' => $rendered, 'source' => 'aioseo_rendered', 'is_template' => false );
+					}
+				}
+				return array( 'value' => $raw, 'source' => 'aioseo_stored', 'is_template' => $is_template );
+			}
+			// No per-post description stored. AIOSEO falls back to excerpt in <head>.
+			$post = get_post( $post_id );
+			if ( $post ) {
+				$excerpt = get_the_excerpt( $post );
+				if ( '' !== trim( $excerpt ) ) {
+					return array(
+						'value'       => wp_trim_words( wp_strip_all_tags( $excerpt ), 35 ),
+						'source'      => 'aioseo_excerpt_fallback',
+						'is_template' => false,
+					);
+				}
+			}
+			return array( 'value' => '', 'source' => 'aioseo_none', 'is_template' => false );
+		}
+
+		$meta_map = array(
+			'_yoast_wpseo_metadesc'  => 'yoast',
+			'rank_math_description'  => 'rankmath',
+			'_seopress_titles_desc'  => 'seopress',
+			'mcpwp_meta_description' => 'mcpwp',
 		);
 
-		foreach ( $keys as $key ) {
+		foreach ( $meta_map as $key => $source ) {
 			$value = trim( (string) get_post_meta( $post_id, $key, true ) );
 			if ( '' !== $value ) {
-				return $value;
+				$is_template = (bool) preg_match( $template_pattern, $value );
+				return array( 'value' => $value, 'source' => $source . '_stored', 'is_template' => $is_template );
 			}
+		}
+
+		return array( 'value' => '', 'source' => 'none', 'is_template' => false );
+	}
+
+	/**
+	 * Attempt to render AIOSEO template tags via AIOSEO's own tag API.
+	 *
+	 * Tries known AIOSEO API paths across versions (4.x tags service).
+	 * Returns empty string on any failure so callers always fall back gracefully.
+	 *
+	 * @param int    $post_id  Post ID.
+	 * @param string $template Raw template string containing #tag placeholders.
+	 * @return string Rendered description, or empty string on failure.
+	 */
+	protected function try_render_aioseo_description( $post_id, $template ) {
+		if ( ! function_exists( 'aioseo' ) ) {
+			return '';
+		}
+
+		try {
+			$aioseo = aioseo();
+			// AIOSEO 4.x: tags()->replaceTags( $template, $post )
+			if ( isset( $aioseo->tags ) && method_exists( $aioseo->tags, 'replaceTags' ) ) {
+				$post     = get_post( $post_id );
+				$rendered = (string) $aioseo->tags->replaceTags( $template, $post );
+				if ( '' !== trim( $rendered ) && $rendered !== $template ) {
+					return trim( $rendered );
+				}
+			}
+		} catch ( \Exception $e ) {
+			// Silently fall through — AIOSEO internals changed.
 		}
 
 		return '';
