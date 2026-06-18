@@ -150,6 +150,9 @@ class Mcpwp_MCP_Pro_Tools extends Mcpwp_MCP_Tool_Registry {
 			'wc_get_customer'                    => 'woocommerce',
 			'wc_analytics'                       => 'woocommerce',
 
+			// Cache
+			'wp_flush_cache'                     => 'site',
+
 			// Widgets & Sidebars
 			'wp_list_sidebars'                   => 'site',
 			'wp_get_sidebar'                     => 'site',
@@ -326,6 +329,27 @@ class Mcpwp_MCP_Pro_Tools extends Mcpwp_MCP_Tool_Registry {
 			$this->get_learnpress_pro_tools(),
 			$this->get_tp_events_pro_tools(),
 			$this->get_multisite_pro_tools(),
+			$this->get_cache_pro_tools(),
+		);
+	}
+
+	/**
+	 * Cache flush tool.
+	 *
+	 * @return array
+	 */
+	private function get_cache_pro_tools() {
+		return array(
+			$this->define_tool(
+				'wp_flush_cache',
+				'Flush the WordPress page cache after editing content. Call after bulk edits to ensure the public site serves fresh content. Triggers wp_cache_flush() plus known plugin-specific cache APIs (W3TC, WP Super Cache, LiteSpeed, WP Rocket, Cache Enabler).',
+				array(
+					'url' => array(
+						'type'        => 'string',
+						'description' => 'Optional URL to purge. Omit to flush the entire site cache.',
+					),
+				)
+			),
 		);
 	}
 
@@ -818,6 +842,12 @@ class Mcpwp_MCP_Pro_Tools extends Mcpwp_MCP_Tool_Registry {
 			'wp_network_stats'           => array(
 				'method' => 'GET',
 				'route'  => '/network/stats',
+			),
+
+			// Cache
+			'wp_flush_cache'             => array(
+				'method' => 'POST',
+				'route'  => '/cache-flush',
 			),
 		);
 	}

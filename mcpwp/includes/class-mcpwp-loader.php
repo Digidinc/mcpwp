@@ -247,6 +247,7 @@ class Mcpwp_Loader {
 		( new Mcpwp_REST_Site_Updates() )->register_routes();
 		( new Mcpwp_REST_Site_Library() )->register_routes();
 		( new Mcpwp_REST_Site_Network() )->register_routes();
+		( new Mcpwp_REST_Site_Cache() )->register_routes();
 
 		// Content graph and internal links
 		$content_graph_controller = new Mcpwp_REST_Content_Graph();
