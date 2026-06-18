@@ -1172,7 +1172,12 @@ trait Mcpwp_Elementor_Writer_Trait {
 			return $debug;
 		}
 
-		return array(
+		$all_warnings = array_merge(
+			isset( $debug['validation_warnings'] ) ? $debug['validation_warnings'] : array(),
+			isset( $debug['validation_fixes'] ) ? $debug['validation_fixes'] : array()
+		);
+
+		$result = array(
 			'success'       => true,
 			'page_id'       => (int) $page_id,
 			'element_id'    => $new_element['id'],
@@ -1180,6 +1185,11 @@ trait Mcpwp_Elementor_Writer_Trait {
 			'section_count' => count( $elements ),
 			'debug'         => $debug,
 		);
+		if ( ! empty( $all_warnings ) ) {
+			$result['warnings'] = $all_warnings;
+		}
+
+		return $result;
 	}
 
 	/**
@@ -1236,7 +1246,12 @@ trait Mcpwp_Elementor_Writer_Trait {
 			return $debug;
 		}
 
-		return array(
+		$all_warnings = array_merge(
+			isset( $debug['validation_warnings'] ) ? $debug['validation_warnings'] : array(),
+			isset( $debug['validation_fixes'] ) ? $debug['validation_fixes'] : array()
+		);
+
+		$result = array(
 			'success'       => true,
 			'page_id'       => (int) $page_id,
 			'removed_id'    => $element_id,
@@ -1244,6 +1259,11 @@ trait Mcpwp_Elementor_Writer_Trait {
 			'section_count' => count( $elements ),
 			'debug'         => $debug,
 		);
+		if ( ! empty( $all_warnings ) ) {
+			$result['warnings'] = $all_warnings;
+		}
+
+		return $result;
 	}
 
 	/**
@@ -1337,7 +1357,12 @@ trait Mcpwp_Elementor_Writer_Trait {
 			return $debug;
 		}
 
-		return array(
+		$all_warnings = array_merge(
+			isset( $debug['validation_warnings'] ) ? $debug['validation_warnings'] : array(),
+			isset( $debug['validation_fixes'] ) ? $debug['validation_fixes'] : array()
+		);
+
+		$result = array(
 			'success'       => true,
 			'page_id'       => (int) $page_id,
 			'replaced_id'   => $element_id,
@@ -1345,6 +1370,11 @@ trait Mcpwp_Elementor_Writer_Trait {
 			'section_count' => count( $elements ),
 			'debug'         => $debug,
 		);
+		if ( ! empty( $all_warnings ) ) {
+			$result['warnings'] = $all_warnings;
+		}
+
+		return $result;
 	}
 
 	/**
@@ -1550,13 +1580,23 @@ trait Mcpwp_Elementor_Writer_Trait {
 			return $debug;
 		}
 
-		return array(
+		$all_warnings = array_merge(
+			isset( $debug['validation_warnings'] ) ? $debug['validation_warnings'] : array(),
+			isset( $debug['validation_fixes'] ) ? $debug['validation_fixes'] : array()
+		);
+
+		$result = array(
 			'success'       => true,
 			'page_id'       => (int) $page_id,
 			'operations'    => $results,
 			'section_count' => count( $elements ),
 			'debug'         => $debug,
 		);
+		if ( ! empty( $all_warnings ) ) {
+			$result['warnings'] = $all_warnings;
+		}
+
+		return $result;
 	}
 
 	/**
