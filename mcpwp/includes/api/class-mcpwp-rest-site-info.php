@@ -559,15 +559,60 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 			$quick_reference[] = array( 'tool' => 'wp_set_elementor', 'use' => 'Update Elementor page builder data' );
 		}
 
+		// 8. Suggested first tools — context-aware ordered list for agents on first connection.
+		$suggested_first_tools = array(
+			array(
+				'tool'   => 'wp_site_info',
+				'reason' => 'Get layout mode, active plugins, and capabilities',
+			),
+			array(
+				'tool'   => 'wp_get_signals',
+				'reason' => 'Check site health before making changes',
+			),
+		);
+
+		if ( ! empty( $capabilities['elementor'] ) ) {
+			$suggested_first_tools[] = array(
+				'tool'   => 'wp_list_pages',
+				'reason' => 'See existing pages before creating new ones',
+			);
+			$suggested_first_tools[] = array(
+				'tool'   => 'wp_elementor_status',
+				'reason' => 'Confirm layout mode (classic vs flexbox) before building',
+			);
+		} else {
+			$suggested_first_tools[] = array(
+				'tool'   => 'wp_list_pages',
+				'reason' => 'See existing pages',
+			);
+			$suggested_first_tools[] = array(
+				'tool'   => 'wp_list_block_types',
+				'reason' => 'Discover available Gutenberg blocks',
+			);
+		}
+
+		$suggested_first_tools[] = array(
+			'tool'   => 'wp_get_site_context',
+			'reason' => 'Read the site brief and design rules',
+		);
+		$suggested_first_tools[] = array(
+			'tool'   => 'wp_list_posts',
+			'reason' => 'Review recent content before editing',
+		);
+
+		$quick_start = 'Start with wp_site_info, then wp_get_signals, then review existing content before making any changes.';
+
 		$data = array(
-			'site_identity'       => $identity,
-			'content_inventory'   => $inventory,
-			'active_integrations' => $integrations,
-			'available_tools'     => $tools_by_category,
-			'site_context'        => $context_section,
-			'recommended_actions' => $actions,
-			'quick_reference'     => $quick_reference,
-			'pro_active'          => $is_pro,
+			'site_identity'         => $identity,
+			'content_inventory'     => $inventory,
+			'active_integrations'   => $integrations,
+			'available_tools'       => $tools_by_category,
+			'site_context'          => $context_section,
+			'recommended_actions'   => $actions,
+			'quick_reference'       => $quick_reference,
+			'suggested_first_tools' => $suggested_first_tools,
+			'quick_start'           => $quick_start,
+			'pro_active'            => $is_pro,
 		);
 
 		return $this->success_response( $data );
