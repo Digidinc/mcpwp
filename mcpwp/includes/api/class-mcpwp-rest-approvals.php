@@ -119,6 +119,11 @@ class Mcpwp_REST_Approvals extends Mcpwp_REST_API {
 	 * @return WP_REST_Response|WP_Error Response.
 	 */
 	public function approve_approval( $request ) {
+		$self_approval_check = $this->check_self_approval( $request->get_param( 'id' ) );
+		if ( is_wp_error( $self_approval_check ) ) {
+			return $self_approval_check;
+		}
+
 		return $this->approval_transition_response( $request, 'approve_request', 'approve_approval' );
 	}
 
@@ -139,6 +144,11 @@ class Mcpwp_REST_Approvals extends Mcpwp_REST_API {
 	 * @return WP_REST_Response|WP_Error Response.
 	 */
 	public function apply_approval( $request ) {
+		$self_approval_check = $this->check_self_approval( $request->get_param( 'id' ) );
+		if ( is_wp_error( $self_approval_check ) ) {
+			return $self_approval_check;
+		}
+
 		$result = Mcpwp_Approvals::apply_request( $request->get_param( 'id' ) );
 		if ( is_wp_error( $result ) ) {
 			return $result;
@@ -162,6 +172,55 @@ class Mcpwp_REST_Approvals extends Mcpwp_REST_API {
 
 		$this->log_activity( 'rollback_approval', $request, array( 'approval_id' => $result['id'] ) );
 		return $this->success_response( $result );
+	}
+
+	/**
+	 * Block self-approval: the same API key that created a staging push request
+	 * cannot approve or apply it.  Only enforced when the approval record carries
+	 * a 'requested_by_key_id' field (set by the staging push creation path).
+	 * Non-staging approvals (post_content_update) do not carry this field and
+	 * therefore pass through without restriction.
+	 *
+	 * @param string $approval_id Approval request ID.
+	 * @return true|WP_Error True when allowed; WP_Error when same key tries to self-approve.
+	 */
+	private function check_self_approval( $approval_id ) {
+		$key_record = $this->get_current_api_key_record();
+
+		// No key record means we are in an admin-AJAX trusted context — no restriction.
+		if ( ! $key_record || empty( $key_record['id'] ) ) {
+			return true;
+		}
+
+		$current_key_id = (string) $key_record['id'];
+
+		// Fetch the raw stored record (not public_record — we need the internal field).
+		$all_items = get_option( Mcpwp_Approvals::OPTION_NAME, array() );
+		if ( ! is_array( $all_items ) ) {
+			return true;
+		}
+
+		$approval_id = sanitize_key( (string) $approval_id );
+		if ( empty( $all_items[ $approval_id ] ) ) {
+			return true; // Not found — let apply_request / approve_request return the 404.
+		}
+
+		$record = $all_items[ $approval_id ];
+
+		// Only enforce when the record carries a requester identity.
+		if ( empty( $record['requested_by_key_id'] ) ) {
+			return true;
+		}
+
+		if ( $current_key_id === (string) $record['requested_by_key_id'] ) {
+			return new WP_Error(
+				'self_approval_forbidden',
+				'The same API key that created this staging push request cannot approve or apply it. Use a different admin key or approve via WordPress admin.',
+				array( 'status' => 403 )
+			);
+		}
+
+		return true;
 	}
 
 	/**
