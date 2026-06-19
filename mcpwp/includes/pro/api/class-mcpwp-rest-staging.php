@@ -294,42 +294,48 @@ class Mcpwp_REST_Staging extends Mcpwp_REST_API {
 		$id  = $this->generate_approval_id();
 		$now = gmdate( 'c' );
 
+		// Capture the requesting key's identity so the approve/apply path can
+		// enforce separation of duties (same key cannot both request and approve).
+		$key_record   = $this->get_current_api_key_record();
+		$requester_id = ( $key_record && ! empty( $key_record['id'] ) ) ? (string) $key_record['id'] : '';
+
 		$record = array(
-			'id'             => $id,
-			'status'         => 'pending',
-			'action'         => 'staging_push',
-			'title'          => 'Push staging to live',
-			'note'           => sanitize_textarea_field( $reason ),
-			'tool'           => 'wp_push_to_live',
-			'resource'       => array(
+			'id'                      => $id,
+			'status'                  => 'pending',
+			'action'                  => 'staging_push',
+			'title'                   => 'Push staging to live',
+			'note'                    => sanitize_textarea_field( $reason ),
+			'tool'                    => 'wp_push_to_live',
+			'requested_by_key_id'     => $requester_id,
+			'resource'                => array(
 				'type'   => 'staging',
 				'source' => $source,
 				'dest'   => $destination,
 			),
-			'diff'           => array(
+			'diff'                    => array(
 				'type'    => 'staging_push',
 				'changed' => true,
 				'note'    => $description,
 			),
-			'payload'        => array(
+			'payload'                 => array(
 				'source'        => $source,
 				'destination'   => $destination,
 				'include_db'    => $include_db,
 				'include_files' => $include_files,
 				'reason'        => sanitize_text_field( $reason ),
 			),
-			'rollback'       => array(
+			'rollback'                => array(
 				'note' => 'Rollback requires a separate staging→live push reverting to a known-good backup.',
 			),
-			'metadata'       => array(
+			'metadata'                => array(
 				'before' => $before_snapshot,
 			),
-			'created_at'     => $now,
-			'updated_at'     => $now,
-			'approved_at'    => null,
-			'applied_at'     => null,
-			'rejected_at'    => null,
-			'rolled_back_at' => null,
+			'created_at'              => $now,
+			'updated_at'              => $now,
+			'approved_at'             => null,
+			'applied_at'              => null,
+			'rejected_at'             => null,
+			'rolled_back_at'          => null,
 		);
 
 		// Persist into the shared approvals store.

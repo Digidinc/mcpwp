@@ -513,6 +513,27 @@ class Mcpwp_Approvals {
 			return $validation;
 		}
 
+		// Re-assert destination is not production using fresh env list.
+		// Defence-in-depth: guards against env reclassification between approval
+		// creation and apply time.  Primary protection is the approval gate itself.
+		$dest_env = null;
+		foreach ( $environments as $env ) {
+			if ( isset( $env['id'] ) && $env['id'] === $destination ) {
+				$dest_env = $env;
+				break;
+			}
+		}
+		if ( null === $dest_env ) {
+			return new WP_Error( 'env_not_found', 'Destination environment no longer exists.', array( 'status' => 400 ) );
+		}
+		if ( isset( $dest_env['type'] ) && 'production' === $dest_env['type'] ) {
+			return new WP_Error(
+				'direct_production_push_blocked',
+				'Cannot apply a direct production push at apply time. The destination environment is classified as production by the host API.',
+				array( 'status' => 403 )
+			);
+		}
+
 		$result = $staging->push(
 			$source,
 			$destination,

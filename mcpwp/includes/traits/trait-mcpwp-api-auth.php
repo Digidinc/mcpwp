@@ -795,6 +795,9 @@ trait Mcpwp_Api_Auth {
 			'/mcpwp/v1/webhooks',
 			'/mcpwp/v1/api-keys',
 			'/mcpwp/v1/elementor/custom-code',
+			// Staging routes: pushing environments (especially →live) is irreversible
+			// without a host-level backup, so all staging endpoints require admin scope.
+			'/mcpwp/v1/staging',
 		);
 
 		foreach ( $admin_routes as $admin_route ) {
@@ -891,6 +894,12 @@ trait Mcpwp_Api_Auth {
 			'wp_list_api_keys',
 			'wp_update_rate_limit',
 			'wp_reset_rate_limit',
+			// Staging tools require admin scope — staging→live push is a destructive,
+			// irreversible operation that must not be accessible to write-scoped keys.
+			'wp_get_staging_info',
+			'wp_push_to_staging',
+			'wp_push_to_live',
+			'wp_get_staging_status',
 		);
 
 		if ( in_array( $tool_name, $admin_tools, true ) ) {
