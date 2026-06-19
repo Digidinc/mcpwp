@@ -738,8 +738,9 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 		$response = wp_remote_get(
 			$url,
 			array(
-				'timeout'   => 15,
-				'sslverify' => ! ( defined( 'WP_DEBUG' ) && WP_DEBUG ),
+				'timeout'     => 15,
+				'sslverify'   => ! ( defined( 'WP_DEBUG' ) && WP_DEBUG ),
+				'redirection' => 0,
 			)
 		);
 
