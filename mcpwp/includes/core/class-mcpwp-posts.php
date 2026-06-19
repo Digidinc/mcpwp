@@ -262,6 +262,25 @@ class Mcpwp_Posts {
 			);
 		}
 
+		// Snapshot fields that might change for before/after diff.
+		$before = array(
+			'title'  => $post->post_title,
+			'status' => $post->post_status,
+			'slug'   => $post->post_name,
+		);
+		if ( isset( $data['excerpt'] ) ) {
+			$before['excerpt'] = $post->post_excerpt;
+		}
+		if ( isset( $data['content'] ) ) {
+			$before['content_chars'] = mb_strlen( $post->post_content );
+		}
+		if ( isset( $data['categories'] ) ) {
+			$before['categories'] = wp_list_pluck( wp_get_post_categories( $post_id, array( 'fields' => 'all' ) ), 'name' );
+		}
+		if ( isset( $data['tags'] ) ) {
+			$before['tags'] = wp_list_pluck( wp_get_post_tags( $post_id ), 'slug' );
+		}
+
 		$post_data = array( 'ID' => $post_id );
 
 		if ( isset( $data['title'] ) ) {
@@ -315,7 +334,58 @@ class Mcpwp_Posts {
 			}
 		}
 
-		return $this->get_post( $post_id );
+		$post_result = $this->get_post( $post_id );
+
+		// Build before/after change summary.
+		if ( is_array( $post_result ) ) {
+			$after = array(
+				'title'  => $post_result['title'],
+				'status' => $post_result['status'],
+				'slug'   => $post_result['slug'],
+			);
+			if ( isset( $before['excerpt'] ) ) {
+				$after['excerpt'] = $post_result['excerpt'];
+			}
+			if ( isset( $before['content_chars'] ) ) {
+				$updated          = get_post( $post_id );
+				$after['content_chars'] = mb_strlen( $updated->post_content );
+			}
+			if ( isset( $before['categories'] ) ) {
+				$after['categories'] = wp_list_pluck( wp_get_post_categories( $post_id, array( 'fields' => 'all' ) ), 'name' );
+			}
+			if ( isset( $before['tags'] ) ) {
+				$after['tags'] = wp_list_pluck( wp_get_post_tags( $post_id ), 'slug' );
+			}
+
+			$changes   = array();
+			$unchanged = array();
+			foreach ( $before as $field => $old_val ) {
+				$new_val = isset( $after[ $field ] ) ? $after[ $field ] : null;
+				if ( is_array( $old_val ) ) {
+					$a = (array) $old_val;
+					$b = (array) $new_val;
+					sort( $a );
+					sort( $b );
+					$changed = $a !== $b;
+				} else {
+					$changed = $new_val !== $old_val;
+				}
+				if ( $changed ) {
+					$changes[] = array(
+						'field'  => $field,
+						'before' => $old_val,
+						'after'  => $new_val,
+					);
+				} else {
+					$unchanged[] = $field;
+				}
+			}
+
+			$post_result['changes']   = $changes;
+			$post_result['unchanged'] = $unchanged;
+		}
+
+		return $post_result;
 	}
 
 	/**

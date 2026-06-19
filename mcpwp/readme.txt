@@ -5,7 +5,7 @@ Tags: ai, claude, mcp, elementor, api
 Requires at least: 6.1
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 3.3.4
+Stable tag: 3.3.5
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -137,6 +137,11 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 4. Integrations and Chat — connected services plus safety-first agent workflow
 
 == Changelog ==
+
+= 3.3.5 =
+* feat: before/after change summary on wp_update_page and wp_update_post — response now includes changes[] (field, before, after) and unchanged[] so agents know exactly what shifted without a follow-up fetch
+* feat: structural_changes on wp_set_elementor — sections_before/after and widgets_before/after in every save response
+* fix(security): sslverify=false in Elementor CSS-prime loopback request fixed to respect WP_DEBUG
 
 = 3.3.4 =
 * fix(security): SSRF redirect bypass in wp_get_rendered_copy fetcher — redirection=0 was missing from the get_rendered_copy wp_remote_get call; redirect chains could bypass the same-host allowlist

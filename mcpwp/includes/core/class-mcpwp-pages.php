@@ -158,6 +158,19 @@ class Mcpwp_Pages {
 			);
 		}
 
+		// Snapshot fields that might change for before/after diff.
+		$before = array(
+			'title'      => $page->post_title,
+			'status'     => $page->post_status,
+			'slug'       => $page->post_name,
+			'parent'     => (int) $page->post_parent,
+			'menu_order' => (int) $page->menu_order,
+			'template'   => get_post_meta( $page_id, '_wp_page_template', true ) ?: 'default',
+		);
+		if ( isset( $data['content'] ) ) {
+			$before['content_chars'] = mb_strlen( $page->post_content );
+		}
+
 		$page_data = array( 'ID' => $page_id );
 
 		if ( isset( $data['title'] ) ) {
@@ -235,6 +248,40 @@ class Mcpwp_Pages {
 					$stored_slug
 				);
 			}
+		}
+
+		// Build before/after change summary.
+		if ( is_array( $page_result ) ) {
+			$after = array(
+				'title'      => $page_result['title'],
+				'status'     => $page_result['status'],
+				'slug'       => $page_result['slug'],
+				'parent'     => (int) $page_result['parent'],
+				'menu_order' => (int) $page_result['menu_order'],
+				'template'   => $page_result['template'],
+			);
+			if ( isset( $before['content_chars'] ) ) {
+				$updated_post         = get_post( $page_id );
+				$after['content_chars'] = mb_strlen( $updated_post->post_content );
+			}
+
+			$changes   = array();
+			$unchanged = array();
+			foreach ( $before as $field => $old_val ) {
+				$new_val = isset( $after[ $field ] ) ? $after[ $field ] : null;
+				if ( $new_val !== $old_val ) {
+					$changes[] = array(
+						'field'  => $field,
+						'before' => $old_val,
+						'after'  => $new_val,
+					);
+				} else {
+					$unchanged[] = $field;
+				}
+			}
+
+			$page_result['changes']   = $changes;
+			$page_result['unchanged'] = $unchanged;
 		}
 
 		return $page_result;

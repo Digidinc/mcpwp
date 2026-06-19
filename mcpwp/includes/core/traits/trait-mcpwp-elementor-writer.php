@@ -226,6 +226,12 @@ trait Mcpwp_Elementor_Writer_Trait {
 			return $result;
 		}
 
+		// Capture current structure for before/after diff.
+		$existing_raw      = get_post_meta( $page_id, '_elementor_data', true );
+		$existing_decoded  = $existing_raw ? json_decode( $existing_raw, true ) : null;
+		$sections_before   = is_array( $existing_decoded ) ? count( $existing_decoded ) : 0;
+		$widgets_before    = is_array( $existing_decoded ) ? $this->count_elementor_widgets( $existing_decoded ) : 0;
+
 		$save_debug    = array();
 		$elementor_ok  = class_exists( '\Elementor\Plugin' );
 
@@ -449,7 +455,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 						add_query_arg( 'mcpwp_prime_css', wp_rand(), $permalink ),
 						array(
 							'timeout'   => 15,
-							'sslverify' => false,
+							'sslverify' => ! ( defined( 'WP_DEBUG' ) && WP_DEBUG ),
 							'blocking'  => false,
 						)
 					);
@@ -510,6 +516,8 @@ trait Mcpwp_Elementor_Writer_Trait {
 			$all_warnings = array_merge( $all_warnings, $save_debug['rtl_warnings'] );
 		}
 
+		$widgets_after = $this->count_elementor_widgets( $post_validation_decoded );
+
 		$result = array(
 			'success'            => true,
 			'page_id'            => (int) $page_id,
@@ -517,6 +525,13 @@ trait Mcpwp_Elementor_Writer_Trait {
 			'sections_saved'     => $save_debug['sections_saved'],
 			'sections_submitted' => $save_debug['sections_submitted'],
 			'save_method'        => $save_method,
+			'structural_changes' => array(
+				'sections_before' => $sections_before,
+				'sections_after'  => $save_debug['sections_saved'],
+				'widgets_before'  => $widgets_before,
+				'widgets_after'   => $widgets_after,
+				'was_empty'       => 0 === $sections_before,
+			),
 			'preview_url'        => add_query_arg( 'elementor-preview', $page_id, get_permalink( $page_id ) ),
 			'css_regenerated'    => ! empty( $save_debug['css_regenerated'] ),
 			'debug'              => $save_debug,
@@ -1088,7 +1103,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 						add_query_arg( 'mcpwp_prime_css', wp_rand(), $permalink ),
 						array(
 							'timeout'   => 15,
-							'sslverify' => false,
+							'sslverify' => ! ( defined( 'WP_DEBUG' ) && WP_DEBUG ),
 							'blocking'  => false,
 						)
 					);
@@ -1717,5 +1732,24 @@ trait Mcpwp_Elementor_Writer_Trait {
 			}
 		}
 		return true;
+	}
+
+	/**
+	 * Recursively count widget elements in an Elementor element tree.
+	 *
+	 * @param array $elements Element tree.
+	 * @return int Widget count.
+	 */
+	private function count_elementor_widgets( array $elements ) {
+		$count = 0;
+		foreach ( $elements as $element ) {
+			if ( isset( $element['elType'] ) && 'widget' === $element['elType'] ) {
+				++$count;
+			}
+			if ( ! empty( $element['elements'] ) && is_array( $element['elements'] ) ) {
+				$count += $this->count_elementor_widgets( $element['elements'] );
+			}
+		}
+		return $count;
 	}
 }
