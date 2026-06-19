@@ -880,6 +880,26 @@ trait Mcpwp_Free_Tools_Site_Trait {
 		);
 
 		$tools[] = $this->define_tool(
+			'wp_get_rendered_copy',
+			'Return the structured visible text of a live page — headings, paragraphs, button labels, list items, link text, and image alt text — extracted from the rendered HTML, not from post_content. This is the ground-truth answer to "what does the live page actually say?" and reflects Elementor, Gutenberg, and SEO plugin output. Use before auditing copy, validating content, or comparing what is stored vs what visitors see.',
+			array(
+				'id'             => array(
+					'type'        => 'number',
+					'description' => 'Post or page ID. Either id or url is required.',
+				),
+				'url'            => array(
+					'type'        => 'string',
+					'description' => 'URL to fetch (same-host only). Either id or url is required.',
+				),
+				'include_chrome' => array(
+					'type'        => 'boolean',
+					'description' => 'Include nav/header/footer text (default false — body content only)',
+					'default'     => false,
+				),
+			)
+		);
+
+		$tools[] = $this->define_tool(
 			'wp_list_menus',
 			'List all navigation menus (including unassigned ones) with id, name, slug, and item count',
 			array()

@@ -5,7 +5,7 @@ Tags: ai, claude, mcp, elementor, api
 Requires at least: 6.1
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 3.3.1
+Stable tag: 3.3.2
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -137,6 +137,10 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 4. Integrations and Chat — connected services plus safety-first agent workflow
 
 == Changelog ==
+
+= 3.3.2 =
+* feat: wp_get_rendered_copy MCP tool — returns structured visible text (headings, paragraphs, button labels, list items, link text, image alts) from the live rendered page; ground-truth answer to "what does the page actually say?" (#569)
+* fix(security): sslverify=false in wp_get_rendered_html fixed — TLS enforced in production, relaxed only when WP_DEBUG is true
 
 = 3.3.1 =
 * feat: wp_flush_cache MCP tool flushes WordPress page cache after bulk edits; supports W3 Total Cache, WP Super Cache, LiteSpeed, WP Rocket, Cache Enabler, Breeze, and Cloudflare (#568)

@@ -95,6 +95,7 @@ class Mcpwp_MCP_Free_Tools extends Mcpwp_MCP_Tool_Registry {
 			'wp_delete_custom_css'       => 'site',
 			'wp_get_css_length'          => 'site',
 			'wp_get_rendered_html'       => 'site',
+			'wp_get_rendered_copy'       => 'site',
 			'wp_list_menus'              => 'site',
 			'wp_list_menu_locations'     => 'site',
 			'wp_setup_menu'              => 'site',
@@ -505,6 +506,10 @@ class Mcpwp_MCP_Free_Tools extends Mcpwp_MCP_Tool_Registry {
 			'wp_get_rendered_html' => array(
 				'method' => 'GET',
 				'route'  => '/rendered-html',
+			),
+			'wp_get_rendered_copy' => array(
+				'method' => 'GET',
+				'route'  => '/rendered-copy',
 			),
 			'wp_list_menus'          => array(
 				'method' => 'GET',

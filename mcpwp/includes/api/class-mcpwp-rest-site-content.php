@@ -168,6 +168,32 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 				),
 			)
 		);
+		register_rest_route(
+			$this->namespace,
+			'/rendered-copy',
+			array(
+				array(
+					'methods'             => WP_REST_Server::READABLE,
+					'callback'            => array( $this, 'get_rendered_copy' ),
+					'permission_callback' => array( $this, 'check_permission' ),
+					'args'                => array(
+						'id'              => array(
+							'description' => __( 'Post or page ID.', 'mcpwp' ),
+							'type'        => 'integer',
+						),
+						'url'             => array(
+							'description' => __( 'URL to fetch (same-host only).', 'mcpwp' ),
+							'type'        => 'string',
+						),
+						'include_chrome'  => array(
+							'description' => __( 'Include nav/header/footer text (default false).', 'mcpwp' ),
+							'type'        => 'boolean',
+							'default'     => false,
+						),
+					),
+				),
+			)
+		);
 	}
 
 	public function search_content( $request ) {
@@ -574,7 +600,7 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			$url,
 			array(
 				'timeout'   => 15,
-				'sslverify' => false,
+				'sslverify' => ! ( defined( 'WP_DEBUG' ) && WP_DEBUG ),
 			)
 		);
 
@@ -659,6 +685,211 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 		}
 
 		return $result;
+	}
+
+	/**
+	 * GET /rendered-copy — return structured visible text from a live page.
+	 *
+	 * Returns headings, paragraphs, button labels, list items, link text, and
+	 * image alt text extracted from the rendered HTML body — NOT post_content.
+	 * This is the ground-truth answer to "what does the live page actually say?"
+	 *
+	 * @param WP_REST_Request $request Incoming request.
+	 * @return WP_REST_Response
+	 */
+	public function get_rendered_copy( $request ) {
+		$this->log_activity( 'get_rendered_copy', $request );
+
+		$post_id        = $request->get_param( 'id' );
+		$url            = $request->get_param( 'url' );
+		$include_chrome = (bool) $request->get_param( 'include_chrome' );
+
+		// Resolve URL from post ID.
+		if ( $post_id ) {
+			$post = get_post( absint( $post_id ) );
+			if ( ! $post ) {
+				return $this->error_response( 'not_found', __( 'Post not found.', 'mcpwp' ), 404 );
+			}
+			if ( 'publish' === $post->post_status ) {
+				$url = get_permalink( $post_id );
+			} else {
+				// Draft — use preview URL so agents can audit before publish.
+				$url = get_preview_post_link( $post_id );
+			}
+		}
+
+		if ( empty( $url ) ) {
+			return $this->error_response( 'missing_param', __( 'Either id or url is required.', 'mcpwp' ), 400 );
+		}
+
+		// SSRF guard: same-host only.
+		$site_host    = wp_parse_url( home_url(), PHP_URL_HOST );
+		$request_host = wp_parse_url( $url, PHP_URL_HOST );
+		if ( ! $request_host || strtolower( $request_host ) !== strtolower( $site_host ) ) {
+			return $this->error_response(
+				'ssrf_blocked',
+				sprintf( __( 'Only same-host URLs allowed. Expected: %s', 'mcpwp' ), $site_host ),
+				403
+			);
+		}
+
+		$response = wp_remote_get(
+			$url,
+			array(
+				'timeout'   => 15,
+				'sslverify' => ! ( defined( 'WP_DEBUG' ) && WP_DEBUG ),
+			)
+		);
+
+		if ( is_wp_error( $response ) ) {
+			return $this->error_response( 'fetch_failed', $response->get_error_message(), 502 );
+		}
+
+		$status_code = wp_remote_retrieve_response_code( $response );
+		$html        = wp_remote_retrieve_body( $response );
+
+		if ( 200 !== (int) $status_code || '' === $html ) {
+			return $this->error_response(
+				'fetch_error',
+				sprintf( __( 'Page returned HTTP %d.', 'mcpwp' ), $status_code ),
+				502
+			);
+		}
+
+		$sections = $this->parse_visible_text( $html, $include_chrome );
+		$all_text = implode( ' ', array_column( $sections, 'text' ) );
+
+		return $this->success_response(
+			array(
+				'post_id'          => $post_id ? absint( $post_id ) : null,
+				'url'              => $url,
+				'sections'         => $sections,
+				'all_text'         => $all_text,
+				'word_count'       => str_word_count( $all_text ),
+				'section_count'    => count( $sections ),
+				'include_chrome'   => $include_chrome,
+				'validation_basis' => 'rendered_html',
+				'validation_note'  => 'Text extracted from live rendered page — reflects what visitors actually see, including SEO plugin injections and Elementor/Gutenberg output.',
+			)
+		);
+	}
+
+	/**
+	 * Parse visible text from HTML into structured sections.
+	 *
+	 * @param string $html           Full page HTML.
+	 * @param bool   $include_chrome Whether to include nav/header/footer text.
+	 * @return array<int,array> Sections with type, text, and optional metadata.
+	 */
+	private function parse_visible_text( $html, $include_chrome = false ) {
+		$doc  = new DOMDocument();
+		$prev = libxml_use_internal_errors( true );
+		$doc->loadHTML( '<?xml encoding="utf-8" ?>' . $html, LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD );
+		libxml_use_internal_errors( $prev );
+
+		$xpath = new DOMXPath( $doc );
+
+		// Remove non-visible elements.
+		$remove_tags = array( 'head', 'script', 'style', 'noscript', 'svg', 'iframe' );
+		if ( ! $include_chrome ) {
+			$remove_tags = array_merge( $remove_tags, array( 'nav', 'header', 'footer' ) );
+		}
+		foreach ( $remove_tags as $tag ) {
+			$nodes = $xpath->query( '//' . $tag );
+			if ( $nodes ) {
+				foreach ( iterator_to_array( $nodes ) as $node ) {
+					if ( $node->parentNode ) {
+						$node->parentNode->removeChild( $node );
+					}
+				}
+			}
+		}
+
+		$sections = array();
+
+		// Helper: trim and collapse whitespace.
+		$clean = static function ( $text ) {
+			return trim( preg_replace( '/\s+/', ' ', $text ) );
+		};
+
+		// Walk in document order: headings, paragraphs, buttons, links, list items, image alts.
+		$expr  = '//h1|//h2|//h3|//h4|//h5|//h6|//p|//button|//li|//img[@alt]';
+		$nodes = $xpath->query( $expr );
+
+		// Also collect <a> tags (link text) but only those not already inside a button.
+		$link_nodes = $xpath->query( '//a[not(ancestor::button)]' );
+
+		if ( $nodes ) {
+			foreach ( $nodes as $node ) {
+				$tag  = strtolower( $node->nodeName );
+				$text = $clean( $node->textContent );
+
+				if ( '' === $text && 'img' !== $tag ) {
+					continue;
+				}
+
+				if ( in_array( $tag, array( 'h1', 'h2', 'h3', 'h4', 'h5', 'h6' ), true ) ) {
+					$sections[] = array(
+						'type'  => 'heading',
+						'level' => (int) substr( $tag, 1 ),
+						'tag'   => $tag,
+						'text'  => $text,
+					);
+				} elseif ( 'p' === $tag ) {
+					if ( $text !== '' ) {
+						$sections[] = array(
+							'type' => 'paragraph',
+							'text' => $text,
+						);
+					}
+				} elseif ( 'button' === $tag ) {
+					if ( $text !== '' ) {
+						$sections[] = array(
+							'type' => 'button',
+							'text' => $text,
+						);
+					}
+				} elseif ( 'li' === $tag ) {
+					// Skip list items that are just containers (have nested block els).
+					$child_text = $clean( $node->textContent );
+					if ( $child_text !== '' ) {
+						$sections[] = array(
+							'type' => 'list_item',
+							'text' => $child_text,
+						);
+					}
+				} elseif ( 'img' === $tag ) {
+					$alt = $clean( (string) $node->getAttribute( 'alt' ) );
+					if ( $alt !== '' ) {
+						$sections[] = array(
+							'type' => 'image_alt',
+							'text' => $alt,
+							'src'  => $clean( (string) $node->getAttribute( 'src' ) ),
+						);
+					}
+				}
+			}
+		}
+
+		// Append anchor link text (deduplicated against button text already collected).
+		$seen_link_texts = array();
+		if ( $link_nodes ) {
+			foreach ( $link_nodes as $a ) {
+				$text = $clean( $a->textContent );
+				$href = $clean( (string) $a->getAttribute( 'href' ) );
+				if ( '' === $text || isset( $seen_link_texts[ $text ] ) ) {
+					continue;
+				}
+				$seen_link_texts[ $text ] = true;
+				$sections[]               = array(
+					'type' => 'link',
+					'text' => $text,
+					'href' => $href,
+				);
+			}
+		}
+
+		return $sections;
 	}
 
 }
