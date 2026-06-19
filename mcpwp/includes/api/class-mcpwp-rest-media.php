@@ -45,7 +45,11 @@ class Mcpwp_REST_Media extends Mcpwp_REST_API {
 						$this->get_pagination_args(),
 						array(
 							'mime_type' => array(
-								'description' => __( 'Filter by mime type.', 'mcpwp' ),
+								'description' => __( 'Filter by mime type (e.g., "image", "image/png", "video").', 'mcpwp' ),
+								'type'        => 'string',
+							),
+							'search'    => array(
+								'description' => __( 'Search media by title or filename.', 'mcpwp' ),
 								'type'        => 'string',
 							),
 						)
@@ -225,6 +229,7 @@ class Mcpwp_REST_Media extends Mcpwp_REST_API {
 			'posts_per_page' => $request->get_param( 'per_page' ) ?: 20,
 			'paged'          => $request->get_param( 'page' ) ?: 1,
 			'mime_type'      => $request->get_param( 'mime_type' ),
+			'search'         => $request->get_param( 'search' ),
 		);
 
 		$result = $this->media->list_media( $args );

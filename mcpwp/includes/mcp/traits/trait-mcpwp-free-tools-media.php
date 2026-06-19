@@ -102,6 +102,10 @@ trait Mcpwp_Free_Tools_Media_Trait {
 					'type'        => 'string',
 					'description' => 'Alt text',
 				),
+				'mime_type' => array(
+					'type'        => 'string',
+					'description' => 'MIME type (e.g. image/png, image/svg+xml). Inferred from filename when omitted.',
+				),
 			)
 		);
 

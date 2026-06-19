@@ -409,6 +409,11 @@ class Mcpwp_Media {
 			$args['post_mime_type'] = sanitize_mime_type( $args['mime_type'] );
 		}
 
+		// Search by title/alt
+		if ( ! empty( $args['search'] ) ) {
+			$args['s'] = sanitize_text_field( $args['search'] );
+		}
+
 		$query = new WP_Query( $args );
 		$media = array();
 

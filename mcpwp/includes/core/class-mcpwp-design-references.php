@@ -334,7 +334,7 @@ class Mcpwp_Design_References {
 
 		return new WP_Error(
 			'missing_image',
-			__( 'Provide media_id, image_url, or image_base64 to create a design reference.', 'mcpwp' ),
+			__( 'Provide media_id, image_url, or image_base64 to create a design reference. Retry tip: if image_url or image_base64 upload fails, upload the image first with wp_upload_media_from_url or wp_upload_media_b64, then call this again with the returned media_id.', 'mcpwp' ),
 			array( 'status' => 400 )
 		);
 	}

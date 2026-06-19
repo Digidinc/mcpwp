@@ -5,7 +5,7 @@ Tags: ai, claude, mcp, elementor, api
 Requires at least: 6.1
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 3.3.5
+Stable tag: 3.3.6
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -137,6 +137,12 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 4. Integrations and Chat — connected services plus safety-first agent workflow
 
 == Changelog ==
+
+= 3.3.6 =
+* fix(#575): wp_upload_media_b64 tool schema now exposes mime_type param (REST already accepted it; MCP tools/list was missing it)
+* fix(#576): wp_update_menu_item tool description and error messages now include actionable hints — get menu_id from wp_list_menus, item_id from wp_list_menu_items; errors name the missing ID and the tool to call
+* feat(#577): wp_list_media gains search param (filter by title/filename); tool description updated to guide image-reuse workflow (check before uploading)
+* fix(#578): wp_upload_design_reference tool description and core missing_image error now include retry guidance — if image_url/image_base64 fails, upload separately then pass media_id
 
 = 3.3.5 =
 * feat: before/after change summary on wp_update_page and wp_update_post — response now includes changes[] (field, before, after) and unchanged[] so agents know exactly what shifted without a follow-up fetch

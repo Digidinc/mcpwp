@@ -760,7 +760,11 @@ class Mcpwp_REST_Menus extends Mcpwp_REST_API {
 		if ( ! $menu ) {
 			return $this->error_response(
 				'menu_not_found',
-				__( 'Menu not found.', 'mcpwp' ),
+				sprintf(
+					/* translators: %d: menu ID */
+					__( 'Menu %d not found. Call wp_list_menus to get valid menu IDs.', 'mcpwp' ),
+					$menu_id
+				),
 				404
 			);
 		}
@@ -769,7 +773,11 @@ class Mcpwp_REST_Menus extends Mcpwp_REST_API {
 		if ( ! $existing || 'nav_menu_item' !== $existing->post_type ) {
 			return $this->error_response(
 				'item_not_found',
-				__( 'Menu item not found.', 'mcpwp' ),
+				sprintf(
+					/* translators: %d: item ID */
+					__( 'Menu item %d not found. Call wp_list_menu_items with the menu_id to get valid item IDs.', 'mcpwp' ),
+					$item_id
+				),
 				404
 			);
 		}

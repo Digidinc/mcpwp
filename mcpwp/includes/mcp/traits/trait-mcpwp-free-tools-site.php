@@ -91,7 +91,7 @@ trait Mcpwp_Free_Tools_Site_Trait {
 
 		$tools[] = $this->define_tool(
 			'wp_upload_design_reference',
-			'Create a reusable design reference from an uploaded image, external image URL, or existing media library image. Use this when a human shares a screenshot or design image that should guide future page creation.',
+			'Create a reusable design reference from an image (external URL, Base64, or existing media library attachment). Use when a human shares a screenshot or design that should guide future page creation. Retry strategy: if image_url or image_base64 fails, upload the image first with wp_upload_media_from_url or wp_upload_media_b64, then retry with the returned media_id — the media_id path never fails due to image transfer errors.',
 			array(
 				'title' => array(
 					'type'        => 'string',
@@ -99,15 +99,15 @@ trait Mcpwp_Free_Tools_Site_Trait {
 				),
 				'media_id' => array(
 					'type'        => 'number',
-					'description' => 'Existing image attachment ID to use instead of uploading a new file.',
+					'description' => 'Existing media library attachment ID. Use this as the fallback if image_url or image_base64 upload fails — upload the image separately first, then pass the resulting ID here.',
 				),
 				'image_url' => array(
 					'type'        => 'string',
-					'description' => 'External image URL to import into the media library.',
+					'description' => 'External image URL to import. If this fails, upload via wp_upload_media_from_url and use media_id instead.',
 				),
 				'image_base64' => array(
 					'type'        => 'string',
-					'description' => 'Base64-encoded image data.',
+					'description' => 'Base64-encoded image data. If this fails, upload via wp_upload_media_b64 and use media_id instead.',
 				),
 				'filename' => array(
 					'type'        => 'string',
@@ -1008,16 +1008,16 @@ trait Mcpwp_Free_Tools_Site_Trait {
 
 		$tools[] = $this->define_tool(
 			'wp_update_menu_item',
-			'Update an existing menu item: rename its title, change URL, move to different parent, or reposition',
+			'Update an existing menu item: rename its title, change URL, move to different parent, or reposition. Get menu_id from wp_list_menus; get item_id from wp_list_menu_items. If menu_id is unknown, use wp_update_menu_item_auto (item_id only).',
 			array(
 				'menu_id'   => array(
 					'type'        => 'number',
-					'description' => 'Menu ID',
+					'description' => 'Menu ID — get from wp_list_menus',
 					'required'    => true,
 				),
 				'item_id'   => array(
 					'type'        => 'number',
-					'description' => 'Menu item ID to update',
+					'description' => 'Menu item ID — get from wp_list_menu_items. If menu_id is unknown, use wp_update_menu_item_auto instead.',
 					'required'    => true,
 				),
 				'title'     => array(
@@ -1185,7 +1185,7 @@ trait Mcpwp_Free_Tools_Site_Trait {
 
 		$tools[] = $this->define_tool(
 			'wp_list_media',
-			'List media library items with URLs, titles, and MIME types. Supports pagination and filtering.',
+			'List media library items with IDs, URLs, titles, alt text, and MIME types. Before uploading an image, search here first — reuse existing media IDs to avoid duplicates. Filter by mime_type "image" to get only images. Use returned IDs with wp_set_elementor, wp_set_featured_image, or wp_upload_design_reference.',
 			array(
 				'per_page'  => array(
 					'type'        => 'number',
@@ -1200,6 +1200,10 @@ trait Mcpwp_Free_Tools_Site_Trait {
 				'mime_type' => array(
 					'type'        => 'string',
 					'description' => "Filter by MIME type (e.g., 'image', 'image/png', 'video')",
+				),
+				'search'    => array(
+					'type'        => 'string',
+					'description' => 'Search media by title or filename',
 				),
 			)
 		);
