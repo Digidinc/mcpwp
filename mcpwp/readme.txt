@@ -5,7 +5,7 @@ Tags: ai, claude, mcp, elementor, api
 Requires at least: 6.1
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 3.3.8
+Stable tag: 3.3.9
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -137,6 +137,10 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 4. Integrations and Chat — connected services plus safety-first agent workflow
 
 == Changelog ==
+
+= 3.3.9 =
+* fix(ux): staging tools (wp_get_staging_info etc.) now appear in tools/list on all plans — non-Pro calls return a clear upgrade prompt instead of silently being absent
+* fix(ux): MCP server instructions include a Pro-features-not-active section when site is unlicensed, listing staging/SEO/WooCommerce as gated features with upgrade URL
 
 = 3.3.8 =
 * feat(staging): Pro staging feature — WP Engine, Kinsta, Pressable adapters + Generic WP-CLI fallback

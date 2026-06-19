@@ -23,7 +23,7 @@ trait Mcpwp_Pro_Tools_Staging_Trait {
 	 *
 	 * @return array
 	 */
-	private function get_staging_pro_tools(): array {
+	public function get_staging_pro_tools(): array {
 		$tools = array();
 
 		$tools[] = $this->define_tool(

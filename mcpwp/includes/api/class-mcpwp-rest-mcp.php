@@ -148,6 +148,10 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		$tools = $this->free_registry->get_tools();
 		if ( $this->is_pro_active() ) {
 			$tools = array_merge( $tools, $this->pro_registry->get_tools() );
+		} else {
+			// Staging discovery tools always appear in tools/list so agents can see they exist.
+			// Execution is gated at call time — non-Pro calls return the upgrade path (line ~1128).
+			$tools = array_merge( $tools, $this->pro_registry->get_staging_pro_tools() );
 		}
 		foreach ( Mcpwp_Integration::resolve_all() as $integration ) {
 			$tools = array_merge( $tools, $integration->get_tools() );
@@ -1627,6 +1631,20 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			$lines[] = '';
 			$lines[] = '- Products are a custom post type. Use WooCommerce-specific tools when available.';
 			$lines[] = '- Product pages may use Elementor templates or Gutenberg blocks depending on the theme.';
+			$lines[] = '';
+		}
+
+		// --- Pro notice (when not licensed) ---
+		if ( ! $this->is_pro_active() ) {
+			$lines[] = '## Pro Features (Not Active)';
+			$lines[] = '';
+			$lines[] = 'This site runs MCPWP Free. The following tools appear in the tool list but will return an upgrade prompt when called:';
+			$lines[] = '- **Staging** — `wp_get_staging_info`, `wp_push_to_staging`, `wp_push_to_live`, `wp_get_staging_status` (WP Engine / Kinsta / Pressable environment management)';
+			$lines[] = '- **Advanced SEO** — `wp_get_seo`, `wp_set_seo`, `wp_analyze_seo`, `wp_bulk_seo`';
+			$lines[] = '- **WooCommerce** — product/order/analytics tools';
+			$lines[] = '- **Theme Builder** — `wp_get_theme_conditions`, `wp_set_theme_conditions`';
+			$lines[] = '';
+			$lines[] = 'Upgrade at https://mcpwp.net/pricing/ or via WP Admin > MCPWP.';
 			$lines[] = '';
 		}
 
