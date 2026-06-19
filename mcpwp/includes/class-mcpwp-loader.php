@@ -239,6 +239,7 @@ class Mcpwp_Loader {
 	 */
 	public function register_rest_routes() {
 		// Site surfaces (split from the former monolithic Mcpwp_REST_Site — G1).
+		( new Mcpwp_REST_OpenAPI() )->register_routes();
 		( new Mcpwp_REST_Site_Info() )->register_routes();
 		( new Mcpwp_REST_Site_Settings() )->register_routes();
 		( new Mcpwp_REST_Site_Content() )->register_routes();

@@ -292,7 +292,16 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 		};
 
 		// If a package_url is provided, install directly from that URL.
+		// Not available on WordPress.org builds — updates come via the WP.org update channel.
 		if ( ! empty( $package_url ) ) {
+			if ( defined( 'MCPWP_WPORG_BUILD' ) && MCPWP_WPORG_BUILD ) {
+				return $this->error_response(
+					'not_supported',
+					__( 'Direct package installs are not supported on WordPress.org builds. Update via the WordPress dashboard.', 'mcpwp' ),
+					400
+				);
+			}
+
 			// Inject into transient so WP_Upgrader finds it.
 			$update_plugins = get_site_transient( 'update_plugins' );
 			if ( ! is_object( $update_plugins ) ) {

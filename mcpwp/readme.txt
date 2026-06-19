@@ -5,7 +5,7 @@ Tags: ai, claude, mcp, elementor, api
 Requires at least: 6.1
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 3.3.9
+Stable tag: 3.4.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -64,20 +64,20 @@ The WordPress.org package is the free core: API keys, scoped access, activity lo
 
 = MCP Server Setup =
 
-Add to your `~/.claude.json`:
+Add to your MCP client config (Claude Desktop, Cursor, Windsurf):
 
 `{
   "mcpServers": {
     "mcpwp": {
-      "command": "node",
-      "args": ["/path/to/mcp-server/dist/index.js"],
-      "env": {
-        "WP_URL": "https://yoursite.com",
-        "WP_API_KEY": "mcpwp_your_api_key_here"
+      "url": "https://yoursite.com/wp-json/mcpwp/v1/mcp",
+      "headers": {
+        "X-API-Key": "mcpwp_your_api_key_here"
       }
     }
   }
 }`
+
+For ChatGPT GPT Actions, use the public OpenAPI schema at `https://yoursite.com/wp-json/mcpwp/v1/openapi.json`.
 
 == Frequently Asked Questions ==
 
@@ -91,7 +91,7 @@ Yes. All requests require a unique API key. Keys are hashed using WordPress pass
 
 = Does it work with any AI? =
 
-MCPWP works with any AI assistant that supports the MCP protocol. Currently, this includes Claude Code and Claude Desktop. More integrations are planned.
+MCPWP works with any MCP-compatible client: Claude Code, Claude Desktop, Cursor, Windsurf, and others. For ChatGPT, use the built-in OpenAPI schema (`/openapi.json`) to connect via GPT Actions.
 
 = Do I need coding skills? =
 
@@ -137,6 +137,9 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 4. Integrations and Chat — connected services plus safety-first agent workflow
 
 == Changelog ==
+
+= 3.4.0 =
+* feat: GET /openapi.json — generates OpenAPI 3.0 schema from free-tools registry; enables ChatGPT GPT Actions + any OpenAPI consumer
 
 = 3.3.9 =
 * fix(ux): staging tools (wp_get_staging_info etc.) now appear in tools/list on all plans — non-Pro calls return a clear upgrade prompt instead of silently being absent
@@ -533,6 +536,15 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 * Fix SQL escaping in activity log for WordPress.org scanner.
 
 == Upgrade Notice ==
+
+= 3.4.0 =
+Adds OpenAPI 3.0 schema endpoint (`/openapi.json`) for ChatGPT GPT Actions and any OpenAPI consumer. No key required to read the schema.
+
+= 3.3.9 =
+Staging tools now appear in tools/list on all plans with a clear upgrade prompt. MCP server instructions now surface Pro-gated features when unlicensed.
+
+= 3.3.8 =
+Adds staging environment management for WP Engine, Kinsta, and Pressable. Push-to-live always gates through the approval system.
 
 = 2.8.31 =
 Improves Freemius update checks and removes WP-CLI host warnings during activation and update refreshes.
