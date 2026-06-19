@@ -5,7 +5,7 @@
 > **Project board (MCPWP — tenant-scoped, NOT the org board):** https://github.com/orgs/Mumega-com/projects/2
 > **Quick queue:** `gh issue list --repo Mumega-com/mcpwp --label "status:ready" --state open`
 
-**Current version:** v3.3.6 in repo. **Update channel live at `updates.mcpwp.net`** — canonical channel serves agency + freemius builds. Legacy `spai-updates` Worker stays live for un-migrated 2.8.56 `site-pilot-ai/` sites.
+**Current version:** v3.3.8 in repo. **Update channel live at `updates.mcpwp.net`** — canonical channel serves agency + freemius builds. Legacy `spai-updates` Worker stays live for un-migrated 2.8.56 `site-pilot-ai/` sites.
 **Last updated:** 2026-06-19
 
 ---
@@ -381,6 +381,11 @@ Marketplace before a working snapshot = death.
 | T125 | — | medium | Update `mcpwp:tools` skill — stale at 239 tools, missing custom tool registry, missing new endpoints |
 
 ---
+
+## Shipped (v3.3.7–v3.3.8)
+
+- **v3.3.7:** feat(T50): MCP `resources/list` returns 6 real site resources (site-info, site-context, pages, posts, design-references, elementor-status); `resources/read` proxies to internal `mcpwp/v1` REST endpoints with API key forwarding; feat(T51): MCP `prompts/list` returns 5 named templates (audit-seo, build-page, refresh-content, onboard, design-match); `prompts/get` fills arguments and returns `messages[]`; both declared in `initialize` capabilities
+- **v3.3.8:** feat(staging/Pro): staging push/pull feature — WP Engine, Kinsta, Pressable native REST API adapters + Generic WP-CLI fallback; 4 MCP tools (`wp_get_staging_info`, `wp_push_to_staging`, `wp_push_to_live`, `wp_get_staging_status`); REST endpoints `GET /staging`, `POST /staging/push`, `GET /staging/status/{id}`; push-to-live gates via approval request (same-key self-approval blocked; admin scope required); env type re-verified at apply time
 
 ## Shipped (v3.3.4–v3.3.6)
 

@@ -3,7 +3,7 @@
 > Control WordPress with AI through a powerful REST API
 
 **Base URL:** `https://your-site.com/wp-json/mcpwp/v1`
-**Version:** 1.1.8
+**Version:** 3.3.8
 
 ## Table of Contents
 
@@ -86,30 +86,34 @@ curl -X POST "https://your-site.com/wp-json/mcpwp/v1/mcp" \
 ```
 
 **Supported Methods:**
-- `initialize` - Initialize MCP session
-- `tools/list` - List all available tools (90+ tools, varies by license)
+- `initialize` - Initialize MCP session (declares `tools`, `resources`, `prompts` capabilities)
+- `tools/list` - List all available tools (varies by license tier)
 - `tools/call` - Execute a tool
-- `resources/list` - List available resources
-- `resources/read` - Read a resource
+- `resources/list` - List 6 site resources (site-info, context, pages, posts, design-references, elementor-status)
+- `resources/read` - Proxy-read any `mcpwp/v1` resource URI with API key forwarding
+- `prompts/list` - List 5 named prompt templates (audit-seo, build-page, refresh-content, onboard, design-match)
+- `prompts/get` - Get filled prompt with interpolated arguments, returns `messages[]`
+- `ping` - Health check
 - Batch requests - Execute up to 10 requests in parallel
 
 ### Tool Categories
 
-Every tool includes an `annotations.category` field. Tools are organized into 11 categories:
+Every tool includes an `annotations.category` field. Tools are organized into 12 categories:
 
-| Category | Description | Example Tools |
-|----------|-------------|---------------|
-| `content` | Posts, pages, drafts, search, clone | `wp_list_posts`, `wp_create_page`, `wp_search` |
-| `media` | Upload, list, manage media files | `wp_upload_media`, `wp_list_media` |
-| `elementor` | Elementor page builder data | `wp_get_elementor`, `wp_set_elementor` |
-| `seo` | SEO meta, analysis (Pro) | `wp_get_seo`, `wp_set_seo` |
-| `forms` | Form plugins integration (Pro) | `wp_list_forms`, `wp_get_form_submissions` |
-| `gutenberg` | Block editor content | `wp_get_blocks`, `wp_set_blocks` |
-| `taxonomy` | Categories, tags, terms | `wp_create_term`, `wp_list_categories` |
-| `site` | Site info, plugins, themes, health | `wp_site_info`, `wp_list_plugins` |
-| `webhooks` | Webhook management | `wp_list_webhooks`, `wp_create_webhook` |
-| `admin` | API keys, rate limits, feedback | `wp_get_rate_limit_status`, `wp_submit_feedback` |
-| `ai` | AI-powered tools (stock photos, TTS) | `wp_search_stock_photos`, `wp_generate_tts` |
+| Category | Tier | Description | Example Tools |
+|----------|------|-------------|---------------|
+| `content` | Free | Posts, pages, drafts, search, clone | `wp_list_posts`, `wp_create_page`, `wp_search` |
+| `media` | Free | Upload, list, manage media files | `wp_upload_media`, `wp_list_media` |
+| `elementor` | Free | Elementor page builder data | `wp_get_elementor`, `wp_set_elementor` |
+| `seo` | Pro | SEO meta, audit, autofix | `wp_seo_audit_site`, `wp_validate_seo_readiness` |
+| `forms` | Pro | Form plugins integration | `wp_list_forms`, `wp_get_form_submissions` |
+| `gutenberg` | Free | Block editor content | `wp_get_blocks`, `wp_set_blocks` |
+| `taxonomy` | Free | Categories, tags, terms | `wp_create_term`, `wp_list_categories` |
+| `site` | Free | Site info, plugins, themes, health | `wp_site_info`, `wp_list_plugins` |
+| `webhooks` | Free | Webhook management | `wp_list_webhooks`, `wp_create_webhook` |
+| `admin` | Free | API keys, rate limits, feedback | `wp_get_rate_limit_status`, `wp_submit_feedback` |
+| `ai` | Pro | AI-powered tools (stock photos, TTS, image gen) | `wp_search_stock_photos`, `wp_generate_image` |
+| `staging` | Pro | Push/pull between staging and live environments | `wp_get_staging_info`, `wp_push_to_staging`, `wp_push_to_live` |
 
 ### Category Filtering
 
@@ -3372,6 +3376,66 @@ When `provider` is omitted, the plugin auto-selects the first configured provide
 | Text (excerpts) | OpenAI > Gemini | GPT-4o / Gemini 2.5 Flash |
 | Text-to-speech | ElevenLabs only | ElevenLabs v1 |
 | Stock photos | Pexels only | Pexels API |
+
+---
+
+### Staging (Pro)
+
+Push and pull between staging and live environments. Requires Pro. Configure provider API keys under **WP Admin → MCPWP → Integrations**.
+
+**Supported hosts:**
+
+| Host | Method | Integration key |
+|------|--------|-----------------|
+| WP Engine | REST API (`/v1/installs/{id}/copy`) | `wpengine_staging` (fields: `install_id`, `api_token`) |
+| Kinsta | REST API (`/v2/sites/{id}/environments` PUT) | `kinsta_staging` (fields: `site_id`, `api_key`) |
+| Pressable | REST API (`/v1/sites/{id}/clone`) | `pressable_staging` (fields: `site_id`, `api_token`) |
+| Any host | WP-CLI over SSH (fallback) | No config needed — requires `shell_exec` + WP-CLI |
+
+**REST Endpoints:**
+
+| Endpoint | Method | Scope | Purpose |
+|----------|--------|-------|---------|
+| `/staging` | GET | admin | Detect host, list environments |
+| `/staging/push` | POST | admin | Push between envs — destination=live creates approval request |
+| `/staging/status/{id}` | GET | admin | Check async operation status |
+
+**MCP Tools:**
+
+| Tool | Destructive | Purpose |
+|------|-------------|---------|
+| `wp_get_staging_info` | No | Detect host, list environments with IDs and types |
+| `wp_push_to_staging` | No | Copy live → staging immediately |
+| `wp_push_to_live` | Yes | Create approval request for staging → live (never pushes directly) |
+| `wp_get_staging_status` | No | Poll async push status by operation ID |
+
+**Security model:**
+- All staging endpoints require `admin` scope — write-scoped keys are rejected
+- `wp_push_to_live` always creates an approval request; the push only executes after `wp_apply_approval`
+- The API key that created the push request cannot approve its own request (403 self-approval block)
+- Env IDs are validated against the host's live environment list before and at apply time
+
+**Example — push to staging:**
+
+```bash
+curl -s -X POST https://your-site.com/wp-json/mcpwp/v1/staging/push \
+  -H "X-API-Key: mcpwp_your_admin_key" \
+  -H "Content-Type: application/json" \
+  -d '{"source":"production","destination":"staging","include_db":true,"include_files":true}'
+```
+
+**Example — push to live (returns approval request):**
+
+```bash
+curl -s -X POST https://your-site.com/wp-json/mcpwp/v1/staging/push \
+  -H "X-API-Key: mcpwp_your_admin_key" \
+  -H "Content-Type: application/json" \
+  -d '{"source":"staging","destination":"production","include_db":true,"include_files":true,"reason":"Homepage redesign ready"}'
+# Returns: {"status":"pending_approval","approval_id":"apr_stg_..."}
+# Then approve via a DIFFERENT admin key:
+# curl -X POST .../approvals/apr_stg_.../approve -H "X-API-Key: mcpwp_other_admin_key"
+# curl -X POST .../approvals/apr_stg_.../apply  -H "X-API-Key: mcpwp_other_admin_key"
+```
 
 ---
 

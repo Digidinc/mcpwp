@@ -409,10 +409,21 @@ All endpoints require `X-API-Key` header. Namespace: `mcpwp/v1`.
 | `/workflows/{name}` | GET | Workflow definition |
 | `/agent-playbooks` | GET | Agent playbook contracts |
 
+### Staging (Pro)
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/staging` | GET | Detect host, list staging environments |
+| `/staging/push` | POST | Push between environments — destination=live creates approval request (admin scope required) |
+| `/staging/status/{id}` | GET | Check async push operation status (WP Engine / Kinsta) |
+
+Supported hosts: WP Engine (REST API), Kinsta (REST API), Pressable (REST API), Generic (WP-CLI fallback).
+Configure provider keys under WP Admin > Integrations: `wpengine_staging`, `kinsta_staging`, `pressable_staging`.
+Push to live always gates through the approval system — same key cannot approve its own request.
+
 ### MCP
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
-| `/mcp` | POST | MCP tool dispatch (all tools via JSON-RPC) |
+| `/mcp` | POST | MCP tool dispatch (all tools via JSON-RPC) — methods: `initialize`, `tools/list`, `tools/call`, `resources/list`, `resources/read`, `prompts/list`, `prompts/get`, `ping` |
 
 ## Elementor Data Format
 
