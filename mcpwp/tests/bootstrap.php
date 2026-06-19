@@ -941,6 +941,7 @@ require_once dirname(__DIR__) . '/includes/mcp/traits/trait-mcpwp-pro-tools-elem
 require_once dirname(__DIR__) . '/includes/mcp/traits/trait-mcpwp-pro-tools-menus.php';
 require_once dirname(__DIR__) . '/includes/mcp/traits/trait-mcpwp-pro-tools-commerce.php';
 require_once dirname(__DIR__) . '/includes/mcp/traits/trait-mcpwp-pro-tools-network.php';
+require_once dirname(__DIR__) . '/includes/mcp/traits/trait-mcpwp-pro-tools-staging.php';
 require_once dirname(__DIR__) . '/includes/mcp/class-mcpwp-mcp-pro-tools.php';
 require_once dirname(__DIR__) . '/includes/mcp/class-mcpwp-integration.php';
 require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-mcp.php';
