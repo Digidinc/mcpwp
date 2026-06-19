@@ -470,7 +470,7 @@ When changing plugin code, bump version in **3 files**:
 2. `readme.txt` — `Stable tag:` AND add changelog entry under `== Changelog ==`
 3. `version.json` — `version` field AND prepend changelog HTML fragment
 
-Current version: **3.3.6**
+Current version: **3.3.7**
 
 Then build and deploy:
 ```bash

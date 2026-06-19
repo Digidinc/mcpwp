@@ -597,6 +597,12 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			case 'resources/read':
 				return $this->handle_resources_read( $id, $params );
 
+			case 'prompts/list':
+				return $this->handle_prompts_list( $id );
+
+			case 'prompts/get':
+				return $this->handle_prompts_get( $id, $params );
+
 			case 'ping':
 				return $this->handle_ping( $id );
 
@@ -605,7 +611,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 					$id,
 					-32601,
 					'Method not found: ' . $method,
-					array( 'hint' => 'Supported MCP methods: initialize, tools/list, tools/call, resources/list, resources/read, ping. Check the method name for typos.' )
+					array( 'hint' => 'Supported MCP methods: initialize, tools/list, tools/call, resources/list, resources/read, prompts/list, prompts/get, ping. Check the method name for typos.' )
 				);
 		}
 	}
@@ -646,9 +652,12 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			'protocolVersion' => $this->protocol_version,
 			'serverInfo'      => $server_info,
 			'capabilities'    => array(
-				'tools'     => (object) array(), // Empty object indicates tools are supported
+				'tools'     => (object) array(),
 				'resources' => array(
 					'subscribe'   => false,
+					'listChanged' => false,
+				),
+				'prompts'   => array(
 					'listChanged' => false,
 				),
 			),
@@ -760,21 +769,67 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	/**
 	 * Handle resources/list method.
 	 *
+	 * Exposes key site data as MCP resources so clients can read context without
+	 * burning a tool-call slot.
+	 *
 	 * @param mixed $id Request ID.
 	 * @return array JSON-RPC response.
 	 */
 	private function handle_resources_list( $id ) {
+		$site_url = get_site_url();
+
+		$resources = array(
+			array(
+				'uri'         => $site_url . '/wp-json/mcpwp/v1/site-info',
+				'name'        => 'Site Info',
+				'description' => 'WordPress site title, URL, active plugins, Elementor mode, and MCP capabilities. Read this before any content work.',
+				'mimeType'    => 'application/json',
+			),
+			array(
+				'uri'         => $site_url . '/wp-json/mcpwp/v1/site-context',
+				'name'        => 'Site Context',
+				'description' => 'Brand context and style guide set by the site owner. Read before writing or designing content.',
+				'mimeType'    => 'text/plain',
+			),
+			array(
+				'uri'         => $site_url . '/wp-json/mcpwp/v1/pages?per_page=50',
+				'name'        => 'Pages',
+				'description' => 'All published pages with IDs, slugs, and titles. Use to find page IDs before editing.',
+				'mimeType'    => 'application/json',
+			),
+			array(
+				'uri'         => $site_url . '/wp-json/mcpwp/v1/posts?per_page=50',
+				'name'        => 'Recent Posts',
+				'description' => 'Most recent 50 posts with IDs, slugs, titles, and categories.',
+				'mimeType'    => 'application/json',
+			),
+			array(
+				'uri'         => $site_url . '/wp-json/mcpwp/v1/design-references',
+				'name'        => 'Design References',
+				'description' => 'Stored design references (screenshots, approved designs) that should guide visual page creation.',
+				'mimeType'    => 'application/json',
+			),
+			array(
+				'uri'         => $site_url . '/wp-json/mcpwp/v1/elementor/status',
+				'name'        => 'Elementor Status',
+				'description' => 'Elementor version and layout mode (section or container/flexbox). Always read before writing Elementor data.',
+				'mimeType'    => 'application/json',
+			),
+		);
+
 		return array(
 			'jsonrpc' => '2.0',
 			'id'      => $id,
 			'result'  => array(
-				'resources' => array(),
+				'resources' => $resources,
 			),
 		);
 	}
 
 	/**
 	 * Handle resources/read method.
+	 *
+	 * Proxies to the internal REST API and returns the response as a text blob.
 	 *
 	 * @param mixed $id     Request ID.
 	 * @param array $params Request parameters.
@@ -787,7 +842,248 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			return $this->jsonrpc_error( $id, -32602, 'Missing resource URI' );
 		}
 
-		return $this->jsonrpc_error( $id, -32002, 'Resource not found', array( 'uri' => $uri ) );
+		$site_url = get_site_url();
+		$rest_base = $site_url . '/wp-json/mcpwp/v1/';
+
+		// Only proxy internal mcpwp/v1 REST endpoints.
+		if ( 0 !== strpos( $uri, $rest_base ) ) {
+			return $this->jsonrpc_error(
+				$id,
+				-32002,
+				'Resource not found',
+				array(
+					'uri'  => $uri,
+					'hint' => 'Only mcpwp/v1 resources are readable. Call resources/list to see available URIs.',
+				)
+			);
+		}
+
+		$internal_path = '/' . ltrim( str_replace( $site_url, '', $uri ), '/' );
+
+		$sub_request = new WP_REST_Request( 'GET', $internal_path );
+
+		// Carry the API key auth from the outer request.
+		$current_request_headers = function_exists( 'apache_request_headers' ) ? apache_request_headers() : array();
+		$api_key = '';
+		foreach ( $current_request_headers as $header => $value ) {
+			if ( 'x-api-key' === strtolower( $header ) ) {
+				$api_key = $value;
+				break;
+			}
+		}
+		if ( $api_key ) {
+			$sub_request->add_header( 'X-API-Key', $api_key );
+		}
+
+		// Parse query string from URI.
+		$query_string = parse_url( $uri, PHP_URL_QUERY );
+		if ( $query_string ) {
+			parse_str( $query_string, $query_params );
+			foreach ( $query_params as $key => $value ) {
+				$sub_request->set_param( sanitize_key( $key ), sanitize_text_field( $value ) );
+			}
+			$sub_request->set_route( strtok( $internal_path, '?' ) );
+		}
+
+		$response = rest_do_request( $sub_request );
+		$data     = rest_get_server()->response_to_data( $response, false );
+
+		return array(
+			'jsonrpc' => '2.0',
+			'id'      => $id,
+			'result'  => array(
+				'contents' => array(
+					array(
+						'uri'      => $uri,
+						'mimeType' => 'application/json',
+						'text'     => wp_json_encode( $data ),
+					),
+				),
+			),
+		);
+	}
+
+	/**
+	 * Handle prompts/list method.
+	 *
+	 * @param mixed $id Request ID.
+	 * @return array JSON-RPC response.
+	 */
+	private function handle_prompts_list( $id ) {
+		$prompts = array(
+			array(
+				'name'        => 'audit-seo',
+				'description' => 'Run a full SEO audit of the site and return a prioritized list of issues with fix suggestions.',
+				'arguments'   => array(),
+			),
+			array(
+				'name'        => 'build-page',
+				'description' => 'Build a new WordPress page from a brief. Provide a title and optional description of the page goal.',
+				'arguments'   => array(
+					array(
+						'name'        => 'title',
+						'description' => 'Page title',
+						'required'    => true,
+					),
+					array(
+						'name'        => 'brief',
+						'description' => 'What the page should accomplish (e.g., "landing page for our email marketing service")',
+						'required'    => false,
+					),
+					array(
+						'name'        => 'style',
+						'description' => 'Visual style (e.g., minimal, premium, editorial)',
+						'required'    => false,
+					),
+				),
+			),
+			array(
+				'name'        => 'refresh-content',
+				'description' => 'Review the site for stale content — posts older than 12 months, missing meta descriptions, thin copy — and produce a prioritized refresh plan.',
+				'arguments'   => array(),
+			),
+			array(
+				'name'        => 'onboard',
+				'description' => 'Get a complete orientation of this WordPress site — content inventory, active integrations, current signals, and recommended first actions.',
+				'arguments'   => array(),
+			),
+			array(
+				'name'        => 'design-match',
+				'description' => 'Rebuild an existing page so it matches a design reference from the library. Provide the page ID and reference ID.',
+				'arguments'   => array(
+					array(
+						'name'        => 'page_id',
+						'description' => 'WordPress page ID to rebuild',
+						'required'    => true,
+					),
+					array(
+						'name'        => 'reference_id',
+						'description' => 'Design reference ID from wp_list_design_references',
+						'required'    => true,
+					),
+				),
+			),
+		);
+
+		return array(
+			'jsonrpc' => '2.0',
+			'id'      => $id,
+			'result'  => array(
+				'prompts' => $prompts,
+			),
+		);
+	}
+
+	/**
+	 * Handle prompts/get method.
+	 *
+	 * Returns a filled-in prompt template for the given name and arguments.
+	 *
+	 * @param mixed $id     Request ID.
+	 * @param array $params Request parameters.
+	 * @return array JSON-RPC response.
+	 */
+	private function handle_prompts_get( $id, $params ) {
+		$name      = isset( $params['name'] ) ? (string) $params['name'] : '';
+		$arguments = isset( $params['arguments'] ) ? (array) $params['arguments'] : array();
+
+		if ( '' === $name ) {
+			return $this->jsonrpc_error( $id, -32602, 'Missing prompt name' );
+		}
+
+		$site_title = get_bloginfo( 'name' );
+		$site_url   = get_site_url();
+
+		switch ( $name ) {
+			case 'audit-seo':
+				$text = "You are an SEO specialist working on the WordPress site \"{$site_title}\" ({$site_url}).\n\n"
+					. "1. Call wp_seo_audit_site to run a full site-level SEO audit.\n"
+					. "2. Call wp_get_seo_issues to retrieve any previously stored issues.\n"
+					. "3. For the top 5 pages by traffic, call wp_validate_seo_readiness to check live <head> content.\n"
+					. "4. Return a prioritized issue list: P0 (broken/missing), P1 (major improvements), P2 (nice-to-have).\n"
+					. "5. For each P0 and P1 issue, include the specific tool call needed to fix it.";
+				break;
+
+			case 'build-page':
+				$title = isset( $arguments['title'] ) ? sanitize_text_field( $arguments['title'] ) : 'New Page';
+				$brief = isset( $arguments['brief'] ) ? sanitize_textarea_field( $arguments['brief'] ) : '';
+				$style = isset( $arguments['style'] ) ? sanitize_text_field( $arguments['style'] ) : '';
+
+				$text = "You are a WordPress page builder working on \"{$site_title}\" ({$site_url}).\n\n"
+					. "Goal: Build a page titled \"{$title}\"."
+					. ( $brief ? " Brief: {$brief}" : '' )
+					. ( $style ? " Desired style: {$style}." : '' ) . "\n\n"
+					. "Steps:\n"
+					. "1. Call wp_site_info to confirm the Elementor layout mode (section vs container).\n"
+					. "2. Call wp_get_site_context to read the brand style guide.\n"
+					. "3. Call wp_list_design_references to find any relevant design references.\n"
+					. "4. Call wp_create_page with status 'draft' to create the page.\n"
+					. "5. Build the Elementor data matching the brand context and design references.\n"
+					. "6. Call wp_set_elementor to save the page layout.\n"
+					. "7. Report the page ID and preview URL. Do not publish until reviewed.";
+				break;
+
+			case 'refresh-content':
+				$text = "You are a content strategist working on \"{$site_title}\" ({$site_url}).\n\n"
+					. "1. Call wp_get_signals to find stale content, thin posts, and missing featured images.\n"
+					. "2. Call wp_list_posts with per_page=50 to get recent posts.\n"
+					. "3. For posts older than 12 months, flag them for refresh.\n"
+					. "4. Call wp_seo_audit_site to identify posts with missing meta descriptions or poor readability.\n"
+					. "5. Return a refresh plan: which posts to update, what to add, in priority order.\n"
+					. "6. Do not edit any content until the plan is confirmed.";
+				break;
+
+			case 'onboard':
+				$text = "You are connecting to the WordPress site \"{$site_title}\" ({$site_url}) for the first time.\n\n"
+					. "1. Call wp_onboard to get a complete site briefing (content inventory, integrations, suggested tools).\n"
+					. "2. Call wp_get_signals to check the current site health score.\n"
+					. "3. Summarize: what's on the site, what integrations are active, and the top 3 actions you'd recommend.\n"
+					. "4. Ask the site owner what they'd like to work on.";
+				break;
+
+			case 'design-match':
+				$page_id   = isset( $arguments['page_id'] ) ? absint( $arguments['page_id'] ) : 0;
+				$ref_id    = isset( $arguments['reference_id'] ) ? sanitize_key( $arguments['reference_id'] ) : '';
+
+				if ( ! $page_id || ! $ref_id ) {
+					return $this->jsonrpc_error( $id, -32602, 'design-match requires page_id and reference_id arguments' );
+				}
+
+				$text = "You are rebuilding a WordPress page to match a design reference on \"{$site_title}\".\n\n"
+					. "Page ID: {$page_id}. Design reference: {$ref_id}.\n\n"
+					. "1. Call wp_get_elementor({$page_id}) to read the current layout.\n"
+					. "2. Call wp_get_design_reference('{$ref_id}') to read the reference image and notes.\n"
+					. "3. Call wp_get_site_context to read the brand style guide.\n"
+					. "4. Rebuild the Elementor data to match the reference's section structure, typography, and color palette.\n"
+					. "5. Call wp_set_elementor to save. Include structural_changes in your report.\n"
+					. "6. Do not publish — return the page ID for review.";
+				break;
+
+			default:
+				return $this->jsonrpc_error(
+					$id,
+					-32002,
+					"Prompt \"{$name}\" not found",
+					array( 'hint' => 'Call prompts/list to see available prompt names.' )
+				);
+		}
+
+		return array(
+			'jsonrpc' => '2.0',
+			'id'      => $id,
+			'result'  => array(
+				'description' => ucfirst( str_replace( '-', ' ', $name ) ) . ' prompt for ' . $site_title,
+				'messages'    => array(
+					array(
+						'role'    => 'user',
+						'content' => array(
+							'type' => 'text',
+							'text' => $text,
+						),
+					),
+				),
+			),
+		);
 	}
 
 	/**

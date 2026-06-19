@@ -5,7 +5,7 @@
 > **Project board (MCPWP — tenant-scoped, NOT the org board):** https://github.com/orgs/Mumega-com/projects/2
 > **Quick queue:** `gh issue list --repo Mumega-com/mcpwp --label "status:ready" --state open`
 
-**Current version:** v3.3.3 in repo. **Update channel live at `updates.mcpwp.net`** — canonical channel serves agency + freemius builds. Legacy `spai-updates` Worker stays live for un-migrated 2.8.56 `site-pilot-ai/` sites.
+**Current version:** v3.3.6 in repo. **Update channel live at `updates.mcpwp.net`** — canonical channel serves agency + freemius builds. Legacy `spai-updates` Worker stays live for un-migrated 2.8.56 `site-pilot-ai/` sites.
 **Last updated:** 2026-06-19
 
 ---
@@ -381,6 +381,12 @@ Marketplace before a working snapshot = death.
 | T125 | — | medium | Update `mcpwp:tools` skill — stale at 239 tools, missing custom tool registry, missing new endpoints |
 
 ---
+
+## Shipped (v3.3.4–v3.3.6)
+
+- **v3.3.4:** fix(security): SSRF redirect bypass in `wp_get_rendered_copy` fetcher — `redirection=0` was missing from the loopback `wp_remote_get` call; redirect chains could bypass the same-host allowlist (closes #575 precursor)
+- **v3.3.5:** feat: before/after change summaries on mutation tools — `wp_update_page` and `wp_update_post` responses now include `changes[]` (field, before, after) and `unchanged[]`; `wp_set_elementor` includes `structural_changes` (sections/widgets before+after); fix(security): `sslverify=false` in Elementor CSS-prime loopback fixed to respect `WP_DEBUG`
+- **v3.3.6:** fix(#575): `wp_upload_media_b64` MCP schema now exposes `mime_type` param (REST already accepted it); fix(#576): `wp_update_menu_item` tool description and error messages include actionable ID-lookup hints (`wp_list_menus` / `wp_list_menu_items`); feat(#577): `wp_list_media` gains `search` param (filter by title/filename) + image-reuse workflow guidance in tool description; fix(#578): `wp_upload_design_reference` tool description and core `missing_image` error include retry guidance (upload separately → `media_id`)
 
 ## Shipped (v3.3.0–v3.3.3)
 
