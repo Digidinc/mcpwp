@@ -5,7 +5,7 @@ Tags: ai, claude, mcp, elementor, api
 Requires at least: 6.1
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 3.3.0
+Stable tag: 3.3.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -137,6 +137,12 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 4. Integrations and Chat — connected services plus safety-first agent workflow
 
 == Changelog ==
+
+= 3.3.1 =
+* feat: wp_flush_cache MCP tool flushes WordPress page cache after bulk edits; supports W3 Total Cache, WP Super Cache, LiteSpeed, WP Rocket, Cache Enabler, Breeze, and Cloudflare (#568)
+* feat: Elementor write tools (add_section, remove_section, replace_section, patch_elementor) now surface validation_warnings in response — matches existing set_elementor convention (#571)
+* fix(security): batch sub-request rate-limit bypass replaced — X-SPAI-Batch-Sub-Request HTTP header (externally spoofable) replaced with Mcpwp_REST_Batch::$is_batch_sub_request static property (#573)
+* feat: /onboard response includes suggested_first_tools context-aware list (Elementor vs Gutenberg path) and quick_start guidance string (#574)
 
 = 3.3.0 =
 * feat: render-truth across all validators — every MCPWP validator now reports validation_basis and validation_note so agents know whether issues were verified against rendered HTML or stored data (#569)
