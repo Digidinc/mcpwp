@@ -5,7 +5,7 @@ Tags: ai, claude, mcp, elementor, api
 Requires at least: 6.1
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 3.3.2
+Stable tag: 3.3.3
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -137,6 +137,10 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 4. Integrations and Chat — connected services plus safety-first agent workflow
 
 == Changelog ==
+
+= 3.3.3 =
+* feat: mutation tool schema docs — wp_create_page/wp_update_page now document parent, template, menu_order; wp_create_post/wp_update_post now document categories and tags; all descriptions clarify Elementor vs Gutenberg usage (#569)
+* fix(security): SSRF redirect bypass — wp_get_rendered_copy, wp_get_rendered_html, and SEO validator fetchers now pass redirection=0 to prevent redirect chains from bypassing the same-host allowlist
 
 = 3.3.2 =
 * feat: wp_get_rendered_copy MCP tool — returns structured visible text (headings, paragraphs, button labels, list items, link text, image alts) from the live rendered page; ground-truth answer to "what does the page actually say?" (#569)

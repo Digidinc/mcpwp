@@ -67,7 +67,7 @@ trait Mcpwp_Free_Tools_Content_Trait {
 
 		$tools[] = $this->define_tool(
 			'wp_create_post',
-			'Create a new post. Supports custom post types: use post_type=wp_block for reusable blocks, post_type=elementor_snippet for Elementor Custom Code (requires Elementor Pro).',
+			'Create a new blog post. Defaults to draft — confirm before publishing. Supports custom post types: post_type=wp_block creates a reusable block/synced pattern, post_type=elementor_snippet creates Elementor Custom Code (requires Elementor Pro). To assign categories or tags, use wp_list_categories / wp_list_tags first to get their IDs.',
 			array(
 				'title'              => array(
 					'type'        => 'string',
@@ -76,31 +76,41 @@ trait Mcpwp_Free_Tools_Content_Trait {
 				),
 				'content'            => array(
 					'type'        => 'string',
-					'description' => 'Post content (HTML or Gutenberg block markup)',
+					'description' => 'Post body (HTML or Gutenberg block markup). Omit for Elementor posts — set content via wp_set_elementor after creation.',
 					'default'     => '',
 				),
 				'status'             => array(
 					'type'        => 'string',
-					'description' => 'Post status (publish, draft, pending, private)',
+					'description' => 'Publication status: "draft" (default, no public URL until published), "publish" (immediately live), "pending" (queued for review), "private" (admin-only visible)',
 					'default'     => 'draft',
 				),
 				'post_type'          => array(
 					'type'        => 'string',
-					'description' => 'Post type (default: post). Use wp_block for reusable blocks, elementor_snippet for Elementor Custom Code.',
+					'description' => 'Post type. Default "post". Use "wp_block" for reusable blocks/synced patterns, "elementor_snippet" for Elementor Custom Code injection.',
 					'default'     => 'post',
 				),
 				'excerpt'            => array(
 					'type'        => 'string',
-					'description' => 'Post excerpt',
+					'description' => 'Short summary shown in archives and feeds. Also used as the SEO meta description fallback when no per-post description is set (AIOSEO/Yoast behavior).',
 					'default'     => '',
 				),
 				'slug'               => array(
 					'type'        => 'string',
-					'description' => 'Post URL slug (e.g. "my-post")',
+					'description' => 'URL path segment (e.g. "summer-recipes"). WordPress auto-generates from title if omitted. Must be lowercase, hyphens only.',
+				),
+				'categories'         => array(
+					'type'        => 'array',
+					'description' => 'Array of category IDs to assign (e.g. [3, 7]). Get IDs from wp_list_categories. Replaces the post\'s entire category list.',
+					'items'       => array( 'type' => 'integer' ),
+				),
+				'tags'               => array(
+					'type'        => 'array',
+					'description' => 'Array of tag slugs or names to assign (e.g. ["recipes", "summer"]). Creates tags that don\'t yet exist. Replaces the post\'s entire tag list.',
+					'items'       => array( 'type' => 'string' ),
 				),
 				'elementor_location' => array(
 					'type'        => 'string',
-					'description' => 'For elementor_snippet only: injection location (head, body_start, body_end). Default: head.',
+					'description' => 'For elementor_snippet posts only: where the code injects — "head" (default, before </head>), "body_start" (after <body>), "body_end" (before </body>).',
 					'default'     => 'head',
 				),
 			)
@@ -108,32 +118,42 @@ trait Mcpwp_Free_Tools_Content_Trait {
 
 		$tools[] = $this->define_tool(
 			'wp_update_post',
-			'Update an existing blog post: title, content, status, categories, tags, excerpt, or featured image.',
+			'Update an existing blog post. Only fields you include are changed — omitted fields are untouched. To change categories or tags, pass the full desired list (replaces current). To set the featured image, use wp_set_featured_image instead.',
 			array(
-				'id'      => array(
+				'id'         => array(
 					'type'        => 'number',
-					'description' => 'Post ID',
+					'description' => 'Post ID (required)',
 					'required'    => true,
 				),
-				'title'   => array(
+				'title'      => array(
 					'type'        => 'string',
 					'description' => 'Post title',
 				),
-				'content' => array(
+				'content'    => array(
 					'type'        => 'string',
-					'description' => 'Post content (HTML)',
+					'description' => 'Post body (HTML). For Elementor posts, use wp_set_elementor / wp_edit_widget instead — post_content is empty on Elementor pages.',
 				),
-				'status'  => array(
+				'status'     => array(
 					'type'        => 'string',
-					'description' => 'Post status (publish, draft, pending, private)',
+					'description' => 'Publication status: "publish" (make live), "draft" (unpublish), "pending", "private"',
 				),
-				'excerpt' => array(
+				'excerpt'    => array(
 					'type'        => 'string',
-					'description' => 'Post excerpt',
+					'description' => 'Short summary for archives and feeds. Acts as SEO meta description fallback in most SEO plugins.',
 				),
-				'slug'    => array(
+				'slug'       => array(
 					'type'        => 'string',
-					'description' => 'Post URL slug (e.g. "my-post")',
+					'description' => 'URL path segment. Changing this breaks existing links unless you have redirect plugins.',
+				),
+				'categories' => array(
+					'type'        => 'array',
+					'description' => 'Array of category IDs. Replaces all current categories. Get IDs from wp_list_categories.',
+					'items'       => array( 'type' => 'integer' ),
+				),
+				'tags'       => array(
+					'type'        => 'array',
+					'description' => 'Array of tag slugs or names. Replaces all current tags. Creates tags that don\'t exist.',
+					'items'       => array( 'type' => 'string' ),
 				),
 			)
 		);
@@ -200,54 +220,78 @@ trait Mcpwp_Free_Tools_Content_Trait {
 
 		$tools[] = $this->define_tool(
 			'wp_create_page',
-			'Create a new WordPress page. Defaults to draft status — confirm before publishing.',
+			'Create a new WordPress page. Defaults to draft — confirm before publishing. For Elementor pages, create first then set layout via wp_set_elementor. To use a full-width Elementor layout, set template to "elementor_header_footer" (no header/footer) or "elementor_canvas" (completely blank).',
 			array(
-				'title'   => array(
+				'title'      => array(
 					'type'        => 'string',
-					'description' => 'Page title',
+					'description' => 'Page title (shown in browser tab and admin list)',
 					'required'    => true,
 				),
-				'content' => array(
+				'content'    => array(
 					'type'        => 'string',
-					'description' => 'Page content (HTML)',
+					'description' => 'Page body (HTML or Gutenberg block markup). Omit for Elementor pages — set layout via wp_set_elementor after creation.',
 					'default'     => '',
 				),
-				'status'  => array(
+				'status'     => array(
 					'type'        => 'string',
-					'description' => 'Page status (publish, draft, pending, private)',
+					'description' => 'Publication status: "draft" (default, not publicly visible), "publish" (immediately live), "pending", "private"',
 					'default'     => 'draft',
 				),
-				'slug'    => array(
+				'slug'       => array(
 					'type'        => 'string',
-					'description' => 'Page URL slug (e.g. "about-us")',
+					'description' => 'URL path segment (e.g. "about-us" → yoursite.com/about-us/). Auto-generated from title if omitted.',
+				),
+				'parent'     => array(
+					'type'        => 'integer',
+					'description' => 'Parent page ID for hierarchical pages (e.g. "Services" is parent of "Web Design"). Creates nested URLs: /services/web-design/. Use 0 or omit for top-level.',
+				),
+				'template'   => array(
+					'type'        => 'string',
+					'description' => 'Page template slug. "default" = theme default. "elementor_header_footer" = Elementor full-width (keeps header/footer). "elementor_canvas" = completely blank canvas. Use wp_list_page_templates to see all available templates.',
+				),
+				'menu_order' => array(
+					'type'        => 'integer',
+					'description' => 'Sort order among sibling pages (lower = first). Used by some themes and menus. Default 0.',
 				),
 			)
 		);
 
 		$tools[] = $this->define_tool(
 			'wp_update_page',
-			'Update an existing WordPress page: title, content, status, parent, or template.',
+			'Update an existing WordPress page. Only fields you include are changed — omitted fields are untouched. For Elementor layout changes use wp_edit_widget / wp_add_section / wp_set_elementor instead — post_content is empty on Elementor pages.',
 			array(
-				'id'      => array(
+				'id'         => array(
 					'type'        => 'number',
-					'description' => 'Page ID',
+					'description' => 'Page ID (required)',
 					'required'    => true,
 				),
-				'title'   => array(
+				'title'      => array(
 					'type'        => 'string',
 					'description' => 'Page title',
 				),
-				'content' => array(
+				'content'    => array(
 					'type'        => 'string',
-					'description' => 'Page content (HTML)',
+					'description' => 'Page body (HTML or Gutenberg). For Elementor pages, use wp_set_elementor / wp_edit_widget instead.',
 				),
-				'status'  => array(
+				'status'     => array(
 					'type'        => 'string',
-					'description' => 'Page status (publish, draft, pending, private)',
+					'description' => 'Publication status: "publish" (make live), "draft" (unpublish), "pending", "private"',
 				),
-				'slug'    => array(
+				'slug'       => array(
 					'type'        => 'string',
-					'description' => 'Page URL slug (e.g. "about-us")',
+					'description' => 'URL path segment. Changing this breaks existing links unless a redirect plugin is active.',
+				),
+				'parent'     => array(
+					'type'        => 'integer',
+					'description' => 'Parent page ID for nested hierarchy. Use 0 to move to top level.',
+				),
+				'template'   => array(
+					'type'        => 'string',
+					'description' => 'Page template slug. Common values: "default", "elementor_header_footer", "elementor_canvas". Use wp_list_page_templates to see all available templates.',
+				),
+				'menu_order' => array(
+					'type'        => 'integer',
+					'description' => 'Sort order among sibling pages. Lower numbers appear first.',
 				),
 			)
 		);

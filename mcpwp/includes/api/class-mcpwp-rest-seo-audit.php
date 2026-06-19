@@ -2011,9 +2011,10 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 		$response = wp_remote_get(
 			$url,
 			array(
-				'timeout'   => 6,
-				'sslverify' => ! ( defined( 'WP_DEBUG' ) && WP_DEBUG ),
-				'headers'   => array( 'User-Agent' => 'MCPWP-SEO-Validator/1.0 (+https://mcpwp.net/)' ),
+				'timeout'     => 6,
+				'sslverify'   => ! ( defined( 'WP_DEBUG' ) && WP_DEBUG ),
+				'redirection' => 0,
+				'headers'     => array( 'User-Agent' => 'MCPWP-SEO-Validator/1.0 (+https://mcpwp.net/)' ),
 			)
 		);
 
@@ -2095,9 +2096,10 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 		$response = wp_remote_get(
 			$url,
 			array(
-				'timeout'   => 6,
-				'sslverify' => ! ( defined( 'WP_DEBUG' ) && WP_DEBUG ),
-				'headers'   => array( 'User-Agent' => 'MCPWP-SEO-Validator/1.0 (+https://mcpwp.net/)' ),
+				'timeout'     => 6,
+				'sslverify'   => ! ( defined( 'WP_DEBUG' ) && WP_DEBUG ),
+				'redirection' => 0,
+				'headers'     => array( 'User-Agent' => 'MCPWP-SEO-Validator/1.0 (+https://mcpwp.net/)' ),
 			)
 		);
 

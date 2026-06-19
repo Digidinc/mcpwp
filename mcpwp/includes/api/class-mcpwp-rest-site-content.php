@@ -595,12 +595,14 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			);
 		}
 
-		// Fetch the page.
+		// Fetch the page. redirection=0 prevents a redirect to a private/loopback IP
+		// from bypassing the same-host SSRF guard we checked above.
 		$response = wp_remote_get(
 			$url,
 			array(
-				'timeout'   => 15,
-				'sslverify' => ! ( defined( 'WP_DEBUG' ) && WP_DEBUG ),
+				'timeout'     => 15,
+				'sslverify'   => ! ( defined( 'WP_DEBUG' ) && WP_DEBUG ),
+				'redirection' => 0,
 			)
 		);
 
