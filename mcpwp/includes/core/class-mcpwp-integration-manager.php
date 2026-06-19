@@ -141,6 +141,63 @@ class Mcpwp_Integration_Manager {
 				),
 			),
 		),
+		'wpengine_staging' => array(
+			'name'        => 'WP Engine Staging',
+			'url'         => 'https://developers.wpengine.com/',
+			'key_prefix'  => '',
+			'tier'        => 'pro',
+			'description' => 'Enables staging push/pull via the WP Engine Installs API. Only needed on WP Engine hosted sites.',
+			'fields'      => array(
+				'install_id' => array(
+					'label'       => 'Install ID',
+					'type'        => 'text',
+					'placeholder' => 'e.g. abc123def456',
+				),
+				'api_token'  => array(
+					'label'       => 'API Token (Base64 user:pass)',
+					'type'        => 'password',
+					'placeholder' => 'Base64-encoded username:password',
+				),
+			),
+		),
+		'kinsta_staging' => array(
+			'name'        => 'Kinsta Staging',
+			'url'         => 'https://api-docs.kinsta.com/',
+			'key_prefix'  => '',
+			'tier'        => 'pro',
+			'description' => 'Enables staging push/pull via the Kinsta Environments API. Only needed on Kinsta hosted sites.',
+			'fields'      => array(
+				'site_id' => array(
+					'label'       => 'Site ID',
+					'type'        => 'text',
+					'placeholder' => 'Kinsta site UUID',
+				),
+				'api_key' => array(
+					'label'       => 'API Key',
+					'type'        => 'password',
+					'placeholder' => 'Kinsta API key',
+				),
+			),
+		),
+		'pressable_staging' => array(
+			'name'        => 'Pressable Staging',
+			'url'         => 'https://my.pressable.com/documentation/api/v1',
+			'key_prefix'  => '',
+			'tier'        => 'pro',
+			'description' => 'Enables staging push/pull via the Pressable Site API. Only needed on Pressable hosted sites.',
+			'fields'      => array(
+				'site_id'   => array(
+					'label'       => 'Site ID',
+					'type'        => 'text',
+					'placeholder' => 'Pressable numeric site ID',
+				),
+				'api_token' => array(
+					'label'       => 'OAuth2 Bearer Token',
+					'type'        => 'password',
+					'placeholder' => 'Pressable OAuth2 access token',
+				),
+			),
+		),
 	);
 
 	/**

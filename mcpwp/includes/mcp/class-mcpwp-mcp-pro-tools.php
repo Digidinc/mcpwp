@@ -24,6 +24,7 @@ class Mcpwp_MCP_Pro_Tools extends Mcpwp_MCP_Tool_Registry {
 	use Mcpwp_Pro_Tools_Menus_Trait;
 	use Mcpwp_Pro_Tools_Commerce_Trait;
 	use Mcpwp_Pro_Tools_Network_Trait;
+	use Mcpwp_Pro_Tools_Staging_Trait;
 
 	/**
 	 * Get destructive tool names for pro tier.
@@ -35,6 +36,7 @@ class Mcpwp_MCP_Pro_Tools extends Mcpwp_MCP_Tool_Registry {
 			'wp_delete_widget',
 			'wc_delete_product',
 			'wp_delete_course_category',
+			'wp_push_to_live',
 		);
 	}
 
@@ -195,6 +197,12 @@ class Mcpwp_MCP_Pro_Tools extends Mcpwp_MCP_Tool_Registry {
 			'wp_network_sites'                   => 'multisite',
 			'wp_network_switch'                  => 'multisite',
 			'wp_network_stats'                   => 'multisite',
+
+			// Staging
+			'wp_get_staging_info'                => 'staging',
+			'wp_push_to_staging'                 => 'staging',
+			'wp_push_to_live'                    => 'staging',
+			'wp_get_staging_status'              => 'staging',
 		);
 	}
 
@@ -330,6 +338,7 @@ class Mcpwp_MCP_Pro_Tools extends Mcpwp_MCP_Tool_Registry {
 			$this->get_tp_events_pro_tools(),
 			$this->get_multisite_pro_tools(),
 			$this->get_cache_pro_tools(),
+			$this->get_staging_pro_tools(),
 		);
 	}
 
@@ -848,6 +857,24 @@ class Mcpwp_MCP_Pro_Tools extends Mcpwp_MCP_Tool_Registry {
 			'wp_flush_cache'             => array(
 				'method' => 'POST',
 				'route'  => '/cache-flush',
+			),
+
+			// Staging
+			'wp_get_staging_info'        => array(
+				'method' => 'GET',
+				'route'  => '/staging',
+			),
+			'wp_push_to_staging'         => array(
+				'method' => 'POST',
+				'route'  => '/staging/push',
+			),
+			'wp_push_to_live'            => array(
+				'method' => 'POST',
+				'route'  => '/staging/push',
+			),
+			'wp_get_staging_status'      => array(
+				'method' => 'GET',
+				'route'  => '/staging/status/{operation_id}',
 			),
 		);
 	}

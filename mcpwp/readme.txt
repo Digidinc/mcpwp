@@ -5,7 +5,7 @@ Tags: ai, claude, mcp, elementor, api
 Requires at least: 6.1
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 3.3.7
+Stable tag: 3.3.8
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -137,6 +137,14 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 4. Integrations and Chat — connected services plus safety-first agent workflow
 
 == Changelog ==
+
+= 3.3.8 =
+* feat(staging): Pro staging feature — WP Engine, Kinsta, Pressable adapters + Generic WP-CLI fallback
+* feat(staging): REST endpoints GET /staging, POST /staging/push, GET /staging/status/{id}
+* feat(staging): 4 MCP tools: wp_get_staging_info, wp_push_to_staging, wp_push_to_live, wp_get_staging_status
+* feat(staging): push-to-live gates via approval request; actual push fires only after wp_apply_approval
+* feat(staging): three integration providers added to Integration Manager (wpengine_staging, kinsta_staging, pressable_staging)
+* security: SSRF mitigated — all host API calls use redirection=0; env IDs validated against adapter list_environments() before use; shell exec uses allowlisted binary path + escapeshellarg()
 
 = 3.3.7 =
 * feat(T50): MCP resources/list returns 6 real site resources (site-info, site-context, pages, posts, design-references, elementor-status); resources/read proxies to internal mcpwp/v1 REST endpoints with API key forwarding

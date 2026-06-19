@@ -337,6 +337,11 @@ class Mcpwp_Approvals {
 	 * @return true|WP_Error True on success.
 	 */
 	private static function apply_payload( $request, $field ) {
+		// Staging push apply path.
+		if ( 'staging_push' === $request['action'] ) {
+			return self::apply_staging_push( $request, $field );
+		}
+
 		if ( 'post_content_update' !== $request['action'] || empty( $request['resource']['id'] ) ) {
 			return new WP_Error( 'unsupported_approval_action', __( 'Approval action is not supported yet.', 'mcpwp' ), array( 'status' => 400 ) );
 		}
@@ -445,5 +450,90 @@ class Mcpwp_Approvals {
 		}
 
 		return 'apr_' . bin2hex( random_bytes( 12 ) );
+	}
+
+	/**
+	 * Execute a staging push after it has been approved.
+	 *
+	 * Delegates to Mcpwp_Staging::push() using the payload stored in the
+	 * approval record.  Only called from apply_payload() when action === 'staging_push'.
+	 *
+	 * @param array  $request Approval record.
+	 * @param string $field   'payload' for apply, 'rollback' for rollback.
+	 * @return true|WP_Error
+	 */
+	private static function apply_staging_push( $request, $field ) {
+		// Rollback of a staging push is not automatically reversible — the push
+		// has already overwritten the live environment.  We can inform the user
+		// but cannot undo it programmatically without a backup.
+		if ( 'rollback' === $field ) {
+			return new WP_Error(
+				'staging_push_rollback_unavailable',
+				__(
+					'Staging push rollback is not available automatically. Restore from a host-level backup or push a known-good staging build to live again.',
+					'mcpwp'
+				),
+				array( 'status' => 400 )
+			);
+		}
+
+		if ( ! class_exists( 'Mcpwp_Staging' ) ) {
+			return new WP_Error(
+				'staging_class_unavailable',
+				__( 'Staging module is not available. Ensure the Pro module is active.', 'mcpwp' ),
+				array( 'status' => 500 )
+			);
+		}
+
+		$payload = isset( $request['payload'] ) && is_array( $request['payload'] ) ? $request['payload'] : array();
+
+		$source      = isset( $payload['source'] ) ? (string) $payload['source'] : '';
+		$destination = isset( $payload['destination'] ) ? (string) $payload['destination'] : '';
+		$include_db    = isset( $payload['include_db'] ) ? (bool) $payload['include_db'] : true;
+		$include_files = isset( $payload['include_files'] ) ? (bool) $payload['include_files'] : true;
+
+		if ( '' === $source || '' === $destination ) {
+			return new WP_Error(
+				'staging_push_missing_params',
+				__( 'Staging push approval is missing source or destination environment ID.', 'mcpwp' ),
+				array( 'status' => 400 )
+			);
+		}
+
+		$staging = new Mcpwp_Staging();
+
+		// Re-validate env IDs against the live environment list before executing.
+		$environments = $staging->list_environments();
+		if ( is_wp_error( $environments ) ) {
+			return $environments;
+		}
+
+		$validation = $staging->validate_env_ids( $environments, $source, $destination );
+		if ( is_wp_error( $validation ) ) {
+			return $validation;
+		}
+
+		$result = $staging->push(
+			$source,
+			$destination,
+			array(
+				'include_db'    => $include_db,
+				'include_files' => $include_files,
+			)
+		);
+
+		if ( is_wp_error( $result ) ) {
+			return $result;
+		}
+
+		if ( isset( $result['success'] ) && ! $result['success'] ) {
+			return new WP_Error(
+				'staging_push_failed',
+				isset( $result['message'] ) ? $result['message'] : __( 'Staging push failed.', 'mcpwp' ),
+				array( 'status' => 502 )
+			);
+		}
+
+		return true;
 	}
 }

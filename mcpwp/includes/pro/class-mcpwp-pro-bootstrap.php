@@ -47,6 +47,7 @@ class Mcpwp_Pro_Bootstrap {
 		require_once MCPWP_PLUGIN_DIR . 'includes/pro/core/class-mcpwp-google-indexing.php';
 		require_once MCPWP_PLUGIN_DIR . 'includes/pro/core/class-mcpwp-learnpress.php';
 		require_once MCPWP_PLUGIN_DIR . 'includes/pro/core/class-mcpwp-events.php';
+		require_once MCPWP_PLUGIN_DIR . 'includes/pro/core/class-mcpwp-staging.php';
 
 		// REST controllers.
 		require_once MCPWP_PLUGIN_DIR . 'includes/pro/api/class-mcpwp-rest-elementor-pro.php';
@@ -62,6 +63,7 @@ class Mcpwp_Pro_Bootstrap {
 		require_once MCPWP_PLUGIN_DIR . 'includes/pro/api/class-mcpwp-rest-google-indexing.php';
 		require_once MCPWP_PLUGIN_DIR . 'includes/pro/api/class-mcpwp-rest-learnpress.php';
 		require_once MCPWP_PLUGIN_DIR . 'includes/pro/api/class-mcpwp-rest-events.php';
+		require_once MCPWP_PLUGIN_DIR . 'includes/pro/api/class-mcpwp-rest-staging.php';
 
 		$elementor_pro = new Mcpwp_Elementor_Pro();
 		$seo           = new Mcpwp_SEO();
@@ -76,6 +78,7 @@ class Mcpwp_Pro_Bootstrap {
 		$google_indexing = new Mcpwp_Google_Indexing();
 		$learnpress      = new Mcpwp_LearnPress();
 		$events          = new Mcpwp_Events();
+		$staging         = new Mcpwp_Staging();
 
 		( new Mcpwp_REST_Elementor_Pro( $elementor_pro ) )->register_routes();
 		( new Mcpwp_REST_SEO( $seo ) )->register_routes();
@@ -98,6 +101,8 @@ class Mcpwp_Pro_Bootstrap {
 		if ( post_type_exists( 'tp_event' ) ) {
 			( new Mcpwp_REST_Events( $events ) )->register_routes();
 		}
+
+		( new Mcpwp_REST_Staging( $staging ) )->register_routes();
 	}
 
 	/**
