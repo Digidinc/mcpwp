@@ -301,7 +301,15 @@ Create keys via **WP Admin → MCPWP → Setup**, or `wp_create_api_key(label, r
 
 ### Shipped
 
-**v3.0.1** (current)
+**v3.3.3** (current)
+- [x] `wp_get_rendered_copy` (Free) — structured visible text from live rendered page: headings, paragraphs, button labels, list items, link text, image alts; ground truth for copy audits
+- [x] `wp_flush_cache` (Pro) — flush WP page cache: W3TC, WP Super Cache, LiteSpeed, WP Rocket, Cache Enabler, Breeze, Cloudflare; optional per-URL or site-wide
+- [x] All validators return `validation_basis` + `validation_note`; `validate_seo_readiness` fetches live `<head>`; `validate_internal_links` walks `_elementor_data`; `validate_structured_data` parses Yoast/AIOSEO `@graph`
+- [x] Security: batch sub-request bypass closed; `sslverify` defaults to `!(WP_DEBUG)`; SSRF redirect bypass closed via `redirection=0`
+- [x] `/onboard` returns `suggested_first_tools` (context-aware) and `quick_start` string
+- [x] Tool docs: `wp_create_page`/`wp_update_page` document `parent`, `template`, `menu_order`; `wp_create_post`/`wp_update_post` document `categories` and `tags`
+
+**v3.0.1**
 - [x] Signals fatal fix — `compute_seo_issues()` 502 on every compute resolved; time-budgeted compute with `partial`/`skipped_types` reporting
 - [x] `GET /signals` lazy-computes on first read — fixes empty feed on low-traffic hosts
 - [x] Freemius single source of truth — removed legacy local trial and parallel entitlement paths; canonical `get_license_info()` accessor

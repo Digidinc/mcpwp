@@ -8,7 +8,7 @@ Issue: #418 | Branch: docs/418-connect-matrix | Date: 2026-06-11
 
 ## Handshake Evidence (rig: wp-dev, http://127.0.0.1:8086)
 
-Plugin: mcpwp 3.0.1, active. Key source: `/mnt/HC_Volume_104325311/projects/sitepilotai/wp-rig/.mcpwp-dev-key`
+Plugin: mcpwp 3.0.1, active (captured at 3.0.1; current release is 3.3.3 — tool count is higher). Key source: `/mnt/HC_Volume_104325311/projects/sitepilotai/wp-rig/.mcpwp-dev-key`
 
 ### Step 1 — initialize
 

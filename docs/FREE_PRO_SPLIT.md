@@ -38,6 +38,8 @@ Available on all installs. Gated only by API key scope.
 
 **Analytics:** wp_analytics, wp_fetch
 
+**Content inspection:** wp_get_rendered_copy (v3.3.3 — structured visible text from live rendered page; ground truth for copy audits)
+
 ## Pro Tools (class-mcpwp-mcp-pro-tools.php)
 
 Require active Freemius license. Loaded only when `mcpwp_license()->is_pro()` is true.
@@ -59,6 +61,8 @@ Require active Freemius license. Loaded only when `mcpwp_license()->is_pro()` is
 **Translation:** wp_get_translations, wp_create_translation, wp_set_language, wp_languages
 
 **Figma:** wp_figma_status, wp_get_figma_file, wp_get_figma_node
+
+**Cache:** wp_flush_cache (v3.3.3 — flushes WP page cache: W3TC, WP Super Cache, LiteSpeed, WP Rocket, Cache Enabler, Breeze, Cloudflare; optional `url` param for per-URL flush, omit for site-wide)
 
 ## WP.org Build Constraints
 

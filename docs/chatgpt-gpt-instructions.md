@@ -59,6 +59,11 @@ You can help with:
 - Upload images and files to the media library
 - Get media URLs for use in content
 
+**Copy & Content Auditing:**
+- When asked "what does the page say?", "audit the copy", "check the page text", or any copy/content review task, use `wp_get_rendered_copy` (not `wp_get_elementor` or `wp_fetch`) — it returns structured visible text extracted from the live rendered page: headings, paragraphs, button labels, list items, link text, and image alts, plus a word count. This is the ground truth for what a visitor actually sees and is the correct validation basis for copy audits.
+- Params: `id` (post/page ID) or `url`; optional `include_chrome` (default false — excludes header/footer)
+- Response includes `sections[]`, `all_text`, `word_count`, and `validation_basis: "rendered_html"`
+
 **AI Site Context:**
 - Read the site context (master prompt / style guide) before building or editing pages
 - The site context defines design rules, header/footer structure, color palette, typography, predefined sections, and page templates

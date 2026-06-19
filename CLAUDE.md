@@ -93,7 +93,7 @@ bash scripts/build-all.sh
 
 Agency build injects `MCPWP_PRO=true` at build time — no wp-config.php changes, no license prompt. Includes self-update channel (`updates.mcpwp.net`).
 
-Download latest agency build: `https://updates.mcpwp.net/mcpwp-agency-3.2.7.zip`
+Download latest agency build: `https://updates.mcpwp.net/mcpwp-agency-3.3.3.zip`
 
 ### Release a New Version
 
@@ -258,8 +258,10 @@ All endpoints require `X-API-Key` header. Namespace: `mcpwp/v1`.
 | `/rate-limit` | GET | Rate limit status |
 | `/rate-limit/reset` | POST | Reset rate limit |
 | `/analytics` | GET | Usage analytics |
+| `/rendered-copy` | GET | Structured visible text from live rendered page (headings, paragraphs, buttons, alts) |
 | `/screenshot` | POST | Generate page screenshot |
 | `/batch` | POST | Batch multiple requests in one call |
+| `/cache-flush` | POST | Flush WP page cache (W3TC, WP Super Cache, LiteSpeed, WP Rocket, Cloudflare, etc.) — Pro |
 | `/feedback` | POST | Submit feedback |
 | `/update` | GET/POST | Check/trigger plugin self-update |
 

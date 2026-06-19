@@ -1,7 +1,7 @@
 # MCPWP Product Roadmap
 
-Updated: 2026-06-07  
-Current version: 2.8.44 (main) / 2.8.45 (analytics PR pending)
+Updated: 2026-06-19  
+Current version: 3.3.3
 
 ## Strategic Direction
 

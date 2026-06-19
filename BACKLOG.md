@@ -5,8 +5,8 @@
 > **Project board (MCPWP — tenant-scoped, NOT the org board):** https://github.com/orgs/Mumega-com/projects/2
 > **Quick queue:** `gh issue list --repo Mumega-com/mcpwp --label "status:ready" --state open`
 
-**Current version:** v3.0.1 in repo. **Update channel PINNED at 2.8.56** — ~10 customer sites + our 2 dogfood sites run 2.8.56 under folder `site-pilot-ai/`. NEVER serve v3 to them across the slug change (see #503/#505). v3 GTM unblocks via the #505 bridge release.
-**Last updated:** 2026-06-11
+**Current version:** v3.3.3 in repo. **Update channel live at `updates.mcpwp.net`** — canonical channel serves agency + freemius builds. Legacy `spai-updates` Worker stays live for un-migrated 2.8.56 `site-pilot-ai/` sites.
+**Last updated:** 2026-06-19
 
 ---
 
@@ -381,6 +381,13 @@ Marketplace before a working snapshot = death.
 | T125 | — | medium | Update `mcpwp:tools` skill — stale at 239 tools, missing custom tool registry, missing new endpoints |
 
 ---
+
+## Shipped (v3.3.0–v3.3.3)
+
+- **v3.3.0:** Validator improvements — all validators (`validate_seo_readiness`, `validate_structured_data`, `validate_internal_links`, `validate_blocks`, `audit_seo_site`) now return `validation_basis` + `validation_note`; `validate_seo_readiness` fetches live `<head>` for published pages; `validate_structured_data` parses JSON-LD including Yoast/AIOSEO `@graph`; `validate_internal_links` walks `_elementor_data` alongside `post_content`; security: batch sub-request bypass closed (static property replaces `X-SPAI-Batch-Sub-Request` header); `sslverify=false` → `!(WP_DEBUG)`; SSRF redirect bypass closed (`redirection=0` on all same-host-guarded `wp_remote_get` calls) — ✅ #568, #569, #571 closed
+- **v3.3.1:** `/onboard` now returns `suggested_first_tools` (context-aware) and `quick_start` string — ✅ #573 closed
+- **v3.3.2:** `wp_create_page`/`wp_update_page` document `parent`, `template`, `menu_order`; `wp_create_post`/`wp_update_post` document `categories` (array of IDs) and `tags` (array of slugs)
+- **v3.3.3:** `GET /rendered-copy` → `wp_get_rendered_copy` (Free) — structured visible text from live rendered page (headings, paragraphs, button labels, list items, link text, image alts); `POST /cache-flush` → `wp_flush_cache` (Pro) — flushes W3TC, WP Super Cache, LiteSpeed, WP Rocket, Cache Enabler, Breeze, Cloudflare — ✅ #574 closed
 
 ## Shipped (v2.8.45–v2.8.55)
 
