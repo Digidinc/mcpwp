@@ -651,6 +651,11 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 			'pro_license',
 			'trial_started',
 			'migrated_from',
+			// Update-control options steer the self-updater (manifest + package
+			// source). Writing mcpwp_update_info / mcpwp_version_url through the
+			// options API is a write-scope→RCE / SSRF path — block both here.
+			'update_info',
+			'version_url',
 		);
 	}
 

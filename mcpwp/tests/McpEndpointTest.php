@@ -36,7 +36,7 @@ final class McpEndpointTest extends TestCase {
 		$this->assertArrayHasKey( 'resources', $data['result']['capabilities'] );
 	}
 
-	public function test_resources_list_returns_empty_list(): void {
+	public function test_resources_list_returns_curated_resources(): void {
 		$controller = new Mcpwp_REST_MCP();
 		$request    = new WP_REST_Request(
 			'POST',
@@ -51,10 +51,23 @@ final class McpEndpointTest extends TestCase {
 			)
 		);
 
-		$response = $controller->handle_mcp( $request );
-		$data     = $response->get_data();
+		$response  = $controller->handle_mcp( $request );
+		$data      = $response->get_data();
+		$resources = $data['result']['resources'];
 
-		$this->assertSame( array(), $data['result']['resources'] );
+		// resources/list exposes a curated, non-empty set of MCP resources.
+		$this->assertIsArray( $resources );
+		$this->assertNotEmpty( $resources );
+
+		$names = array_column( $resources, 'name' );
+		$this->assertContains( 'Site Info', $names );
+		$this->assertContains( 'Elementor Status', $names );
+
+		foreach ( $resources as $resource ) {
+			$this->assertArrayHasKey( 'uri', $resource );
+			$this->assertArrayHasKey( 'name', $resource );
+			$this->assertArrayHasKey( 'mimeType', $resource );
+		}
 	}
 
 	public function test_tools_list_includes_annotations_hints(): void {
