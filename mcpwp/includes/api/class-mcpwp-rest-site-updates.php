@@ -266,6 +266,15 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 
 		$this->log_activity( 'trigger_update', $request );
 
+		// Defense-in-depth: when the request authenticated with a scoped API key,
+		// require the admin scope. The REST admin-route gate already enforces this,
+		// but the inner check guards against callers on the shared bot user whose
+		// WP capability is always present regardless of the key's granted scope.
+		$key_record = $this->get_current_api_key_record();
+		if ( is_array( $key_record ) && ! $this->key_has_scope( $key_record, 'admin' ) ) {
+			return $this->error_response( 'insufficient_scope', __( 'Admin scope is required to update the plugin.', 'mcpwp' ), 403 );
+		}
+
 		if ( ! $this->can_manage_api_keys() ) {
 			return $this->error_response(
 				'forbidden',
@@ -307,6 +316,13 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 			if ( ! is_object( $update_plugins ) ) {
 				$update_plugins = new stdClass();
 				$update_plugins->response = array();
+			}
+
+			// Hard-restrict caller-supplied package URLs to HTTPS + trusted hosts.
+			// This blocks a write-scope→RCE path where an untrusted zip could be
+			// installed and the plugin reactivated from it.
+			if ( ! Mcpwp_Security::is_trusted_package_url( $package_url ) ) {
+				return $this->error_response( 'untrusted_package', __( 'The package_url host is not in the trusted update allowlist.', 'mcpwp' ), 400 );
 			}
 
 			$inject              = new stdClass();

@@ -86,6 +86,45 @@ class Mcpwp_Security {
 	}
 
 	/**
+	 * Check whether a URL uses the HTTPS scheme.
+	 *
+	 * @param string $url URL to check.
+	 * @return bool True when the URL scheme is https.
+	 */
+	public static function is_https_url( $url ) {
+		return 'https' === strtolower( (string) wp_parse_url( $url, PHP_URL_SCHEME ) );
+	}
+
+	/**
+	 * Check whether a URL is a trusted plugin-update package source.
+	 *
+	 * Requires HTTPS and a host on the trusted allowlist. Used to hard-restrict
+	 * caller-supplied package_url values on the self-update endpoint so a
+	 * write-scoped key cannot point the updater at an attacker-controlled zip.
+	 *
+	 * @param string $url Package URL to validate.
+	 * @return bool True when the URL is HTTPS and its host is allowlisted.
+	 */
+	public static function is_trusted_package_url( $url ) {
+		if ( ! self::is_https_url( $url ) ) {
+			return false;
+		}
+
+		$host = strtolower( (string) wp_parse_url( $url, PHP_URL_HOST ) );
+		if ( '' === $host ) {
+			return false;
+		}
+
+		$allowed = apply_filters(
+			'mcpwp_trusted_package_hosts',
+			array( 'updates.mcpwp.net', 'mumega.com' )
+		);
+		$allowed = array_map( 'strtolower', (array) $allowed );
+
+		return in_array( $host, $allowed, true );
+	}
+
+	/**
 	 * Check if an IP address is public (not private/reserved/loopback).
 	 *
 	 * @param string $ip IP address to check.

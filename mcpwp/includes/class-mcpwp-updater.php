@@ -103,6 +103,13 @@ class Mcpwp_Updater {
 			return false;
 		}
 
+		// Reject any manifest whose package would be fetched over plain HTTP.
+		// Applies to both the option manifest and the remote manifest so a
+		// downgraded/injected download_url cannot be installed.
+		if ( ! Mcpwp_Security::is_https_url( $data['download_url'] ) ) {
+			return false;
+		}
+
 		$data['_source'] = $source;
 
 		return (object) $data;
@@ -138,6 +145,13 @@ class Mcpwp_Updater {
 		$url = get_option( 'mcpwp_version_url', $this->version_url );
 		if ( empty( $url ) ) {
 			$url = $this->version_url;
+		}
+
+		// Never fetch a manifest over plain HTTP. Custom (even private/LAN)
+		// update servers keep working as long as they are HTTPS — the host is
+		// intentionally not allowlisted here so legitimate custom servers work.
+		if ( ! Mcpwp_Security::is_https_url( $url ) ) {
+			return false;
 		}
 
 		$response = wp_remote_get(
