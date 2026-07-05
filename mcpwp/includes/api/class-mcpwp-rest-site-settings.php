@@ -656,6 +656,18 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 			// options API is a write-scope→RCE / SSRF path — block both here.
 			'update_info',
 			'version_url',
+			// Secret-bearing internal stores. No scope (including admin) should be
+			// able to read or write these through the generic /option API — the
+			// dedicated /plugin-settings and /integrations routes are the only
+			// intended surface (XCUT-003, APIMCP-002/015):
+			//   mcpwp_settings      → holds oauth_client_secret_hash / github_token
+			//   mcpwp_integrations  → encrypted provider blobs
+			//   mcpwp_encryption_key→ sodium key that decrypts the blobs above
+			// Full option names used as substrings (not bare 'settings'/'integrations')
+			// to avoid over-blocking astra-settings / generate_settings / *_settings.
+			'mcpwp_settings',
+			'integrations',
+			'encryption',
 		);
 	}
 

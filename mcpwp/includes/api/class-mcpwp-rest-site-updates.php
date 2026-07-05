@@ -182,15 +182,20 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 		if ( empty( $version_url ) ) {
 			$version_url = 'https://mumega.com/mcp-updates/version.json';
 		}
-		$remote_response = wp_remote_get(
-			$version_url,
-			array(
-				'timeout' => 10,
-				'headers' => array(
-					'Accept' => 'application/json',
-				),
+		// Never fetch a version manifest over plain HTTP — mirrors the guard already
+		// applied in Mcpwp_Updater::get_remote_manifest() (class-mcpwp-updater.php:153).
+		// A non-HTTPS mcpwp_version_url is an SSRF/downgrade vector for the updater.
+		$remote_response = Mcpwp_Security::is_https_url( $version_url )
+			? wp_remote_get(
+				$version_url,
+				array(
+					'timeout' => 10,
+					'headers' => array(
+						'Accept' => 'application/json',
+					),
+				)
 			)
-		);
+			: new WP_Error( 'insecure_version_url', __( 'mcpwp_version_url must be HTTPS.', 'mcpwp' ) );
 		if ( ! is_wp_error( $remote_response ) && 200 === wp_remote_retrieve_response_code( $remote_response ) ) {
 			$remote_body = json_decode( wp_remote_retrieve_body( $remote_response ), true );
 			if ( is_array( $remote_body ) && ! empty( $remote_body['version'] ) ) {
