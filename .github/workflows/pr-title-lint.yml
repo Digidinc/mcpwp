@@ -1,36 +1,29 @@
 name: Lint PR Title
 
+# Enforce Conventional Commit PR titles so release-please gets clean SemVer
+# input (the squash-merge commit is the PR title). Validated inline from the
+# event payload — no GitHub API call — so it works regardless of the org's
+# default GITHUB_TOKEN permissions.
+
 on:
-  pull_request_target:
+  pull_request:
     types: [opened, edited, synchronize, reopened]
 
-permissions:
-  pull-requests: read
+permissions: {}
 
 jobs:
   main:
     runs-on: ubuntu-latest
     steps:
-      - uses: amannn/action-semantic-pull-request@v5
+      - name: PR title must be a Conventional Commit
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          types: |
-            feat
-            fix
-            perf
-            revert
-            docs
-            style
-            refactor
-            test
-            build
-            ci
-            chore
-          requireScope: false
-          subjectPattern: ^(?![A-Z]).+$
-          subjectPatternError: >
-            The subject "{subject}" in PR title "{title}" must not start with an
-            uppercase character.
-          wip: true
-          validateSingleCommit: false
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          echo "PR title: $TITLE"
+          # type(optional-scope)(optional !): lowercase-starting summary
+          if printf '%s' "$TITLE" | grep -qE '^(feat|fix|perf|revert|docs|style|refactor|test|build|ci|chore)(\([a-z0-9._/-]+\))?!?: [^A-Z].+'; then
+            echo "::notice::Valid Conventional Commit title."
+          else
+            echo "::error::PR title must be a Conventional Commit, e.g. 'fix(scope): lowercase summary'. Allowed types: feat, fix, perf, revert, docs, style, refactor, test, build, ci, chore. The summary must not start with an uppercase letter."
+            exit 1
+          fi

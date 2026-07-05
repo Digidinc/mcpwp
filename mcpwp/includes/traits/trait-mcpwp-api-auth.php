@@ -802,6 +802,10 @@ trait Mcpwp_Api_Auth {
 			// (mcpwp_update_info / mcpwp_version_url) that steer the updater.
 			// Prefix also matches /options, which is already admin-gated above — harmless.
 			'/mcpwp/v1/option',
+			// /plugin-settings exposes the GitHub token / OAuth client-secret hash and
+			// other mcpwp_settings internals; a write-scoped key could overwrite OAuth
+			// config (secret takeover). Require admin scope for both GET and PUT (APIMCP-014).
+			'/mcpwp/v1/plugin-settings',
 			// Staging routes: pushing environments (especially →live) is irreversible
 			// without a host-level backup, so all staging endpoints require admin scope.
 			'/mcpwp/v1/staging',
@@ -905,6 +909,9 @@ trait Mcpwp_Api_Auth {
 			// a code-execution surface that must never be reachable by a
 			// write-scoped key. Defense-in-depth alongside the REST admin gate.
 			'wp_trigger_update',
+			// Plugin settings hold the GitHub token / OAuth client-secret hash and
+			// other secret-bearing config; write access must require admin scope (APIMCP-014).
+			'wp_update_plugin_settings',
 			// Staging tools require admin scope — staging→live push is a destructive,
 			// irreversible operation that must not be accessible to write-scoped keys.
 			'wp_get_staging_info',
