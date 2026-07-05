@@ -1,4 +1,4 @@
-name: Mumega MCP CI
+name: MCPWP CI
 
 on:
   pull_request:

@@ -1,0 +1,85 @@
+name: Release Please
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  brand-release-title:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - run: |
+          gh release edit "${{ needs.release-please.outputs.tag_name }}" \
+            --title "MCPWP ${{ needs.release-please.outputs.tag_name }}"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  build-and-attach-plugin-zips:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Build all distribution zips
+        run: bash mcpwp/scripts/build-all.sh
+      - name: Attach zips to the release
+        run: |
+          gh release upload "${{ needs.release-please.outputs.tag_name }}" \
+            mcpwp/scripts/mcpwp-*.zip --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  sync-wporg-changelog:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Sync WP.org changelog surfaces
+        run: node scripts/sync-wporg-changelog.mjs --version "${{ needs.release-please.outputs.version }}"
+      - name: Commit synced files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add mcpwp/readme.txt version.json
+          if git diff --cached --quiet; then
+            echo "nothing to commit"
+          else
+            git commit -m "chore: sync WP.org changelog for ${{ needs.release-please.outputs.tag_name }}"
+            git push origin main
+          fi

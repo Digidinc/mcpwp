@@ -5,31 +5,212 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — feat/505-bridge
+## [Unreleased]
+
+## [3.4.1]
+
+### Security
+- require admin scope for plugin self-update and update-control options; restrict update package URLs to HTTPS + trusted hosts (fixes write-scope→RCE chain)
+
+## [3.4.0]
 
 ### Added
-- `Mcpwp_Migrate`: idempotent one-time option migration that copies all known
-  `spai_*` options to their `mcpwp_*` equivalents on `plugins_loaded` and on
-  activation.  Non-destructive (originals kept), non-overwriting (skips existing
-  `mcpwp_*` values), guarded by `mcpwp_migrated_from_spai` flag.  Includes
-  encryption sanity-check for `spai_integrations` blob with admin-visible warning
-  if `AUTH_SALT` changed (provider keys must be re-entered).
-- `find_legacy_spai_key()` in `Mcpwp_Api_Auth` trait: dual-prefix API key auth
-  that accepts keys stored under `spai_api_keys` / `spai_api_key` so existing AI
-  connections continue to work through the slug-rename cutover without re-keying.
-  Uses the same `wp_check_password()` / `hash_equals()` path as the existing key
-  lookup — no timing difference.
-- `docs/BRIDGE-505-DESIGN.md`: slug-handover option analysis (Option A/B/C) with
-  recommendation for architect + mumcp-warden review.
+- GET /openapi.json — generates OpenAPI 3.0 schema from free-tools registry; enables ChatGPT GPT Actions + any OpenAPI consumer
+
+## [3.3.9]
+
+### Fixed
+- staging tools (wp_get_staging_info etc.) now appear in tools/list on all plans — non-Pro calls return a clear upgrade prompt instead of silently being absent
+- MCP server instructions include a Pro-features-not-active section when site is unlicensed, listing staging/SEO/WooCommerce as gated features with upgrade URL
+
+## [3.3.8]
+
+### Added
+- Pro staging feature — WP Engine, Kinsta, Pressable adapters + Generic WP-CLI fallback
+- REST endpoints GET /staging, POST /staging/push, GET /staging/status/{id}
+- 4 MCP tools: wp_get_staging_info, wp_push_to_staging, wp_push_to_live, wp_get_staging_status
+- push-to-live gates via approval request; actual push fires only after wp_apply_approval
+- three integration providers added to Integration Manager (wpengine_staging, kinsta_staging, pressable_staging)
+
+### Security
+- SSRF mitigated — all host API calls use redirection=0; env IDs validated against adapter list_environments() before use; shell exec uses allowlisted binary path + escapeshellarg()
+
+## [3.3.7]
+
+### Added
+- MCP resources/list returns 6 real site resources (site-info, site-context, pages, posts, design-references, elementor-status); resources/read proxies to internal mcpwp/v1 REST endpoints with API key forwarding
+- MCP prompts/list returns 5 named prompt templates (audit-seo, build-page, refresh-content, onboard, design-match); prompts/get fills in arguments and returns messages[] array; both declared in initialize capabilities
+
+## [3.3.6]
+
+### Added
+- wp_list_media gains search param (filter by title/filename); tool description updated to guide image-reuse workflow (check before uploading)
+
+### Fixed
+- wp_upload_media_b64 tool schema now exposes mime_type param (REST already accepted it; MCP tools/list was missing it)
+- wp_update_menu_item tool description and error messages now include actionable hints — get menu_id from wp_list_menus, item_id from wp_list_menu_items; errors name the missing ID and the tool to call
+- wp_upload_design_reference tool description and core missing_image error now include retry guidance — if image_url/image_base64 fails, upload separately then pass media_id
+
+## [3.3.5]
+
+### Added
+- before/after change summary on wp_update_page and wp_update_post — response now includes changes[] (field, before, after) and unchanged[] so agents know exactly what shifted without a follow-up fetch
+- structural_changes on wp_set_elementor — sections_before/after and widgets_before/after in every save response
+
+### Security
+- sslverify=false in Elementor CSS-prime loopback request fixed to respect WP_DEBUG
+
+## [3.3.4]
+
+### Security
+- SSRF redirect bypass in wp_get_rendered_copy fetcher — redirection=0 was missing from the get_rendered_copy wp_remote_get call; redirect chains could bypass the same-host allowlist
+
+## [3.3.3]
+
+### Added
+- mutation tool schema docs — wp_create_page/wp_update_page now document parent, template, menu_order; wp_create_post/wp_update_post now document categories and tags; all descriptions clarify Elementor vs Gutenberg usage (#569)
+
+### Security
+- SSRF redirect bypass — wp_get_rendered_copy, wp_get_rendered_html, and SEO validator fetchers now pass redirection=0 to prevent redirect chains from bypassing the same-host allowlist
+
+## [3.3.2]
+
+### Added
+- wp_get_rendered_copy MCP tool — returns structured visible text (headings, paragraphs, button labels, list items, link text, image alts) from the live rendered page; ground-truth answer to "what does the page actually say?" (#569)
+
+### Security
+- sslverify=false in wp_get_rendered_html fixed — TLS enforced in production, relaxed only when WP_DEBUG is true
+
+## [3.3.1]
+
+### Added
+- wp_flush_cache MCP tool flushes WordPress page cache after bulk edits; supports W3 Total Cache, WP Super Cache, LiteSpeed, WP Rocket, Cache Enabler, Breeze, and Cloudflare (#568)
+- Elementor write tools (add_section, remove_section, replace_section, patch_elementor) now surface validation_warnings in response — matches existing set_elementor convention (#571)
+- /onboard response includes suggested_first_tools context-aware list (Elementor vs Gutenberg path) and quick_start guidance string (#574)
+
+### Security
+- batch sub-request rate-limit bypass replaced — X-SPAI-Batch-Sub-Request HTTP header (externally spoofable) replaced with Mcpwp_REST_Batch::$is_batch_sub_request static property (#573)
+
+## [3.3.0]
+
+### Added
+- render-truth across all validators — every MCPWP validator now reports validation_basis and validation_note so agents know whether issues were verified against rendered HTML or stored data (#569)
+- validate_structured_data fetches live rendered page for published posts; renders JSON-LD injected by SEO plugins (Yoast/AIOSEO/@graph); suppresses false "no_structured_data" when plugin handles schema (#569)
+- validate_internal_links now walks Elementor widget data (_elementor_data) alongside post_content — links in buttons, icon-boxes, and text-editor widgets are validated for broken targets, self-links, and non-canonical URLs; anchor-quality checks skip Elementor button links (#569)
+- audit_seo_site exposes validation_basis per URL and a site-level validation_note counting how many URLs were render-verified (#569)
+- validate_blocks response includes validation_basis: stored_block_data + note that dynamic/server-side blocks may render differently (#569)
+
+### Fixed
+- apply_internal_link duplicate-check now includes Elementor data — prevents false "duplicate link" skips on Elementor pages where post_content is empty (#569)
+
+## [3.2.9]
+
+### Added
+- validate_seo_readiness now fetches the actual rendered <head> for published pages and reconciles issues against ground truth — false "missing meta description" and "noindex" issues caused by SEO plugin template rendering are suppressed (#569)
+- rendered_head field in readiness response returns actual title, description, canonical, robots, og:title, og:description from the live page (#569)
+- validation_basis field ("rendered_html" vs "stored_meta") and validation_note explain whether issues were verified against rendered output or stored meta (#569)
+- rendered_noindex_detected issue fires when <meta name="robots"> in live <head> contains noindex even when stored meta doesn't (#569)
+
+## [3.2.8]
+
+### Fixed
+- SEO readiness meta-description check now detects AIOSEO's excerpt fallback — pages with no stored per-post description no longer incorrectly warn "missing meta description" when AIOSEO renders one from the excerpt (#569)
+- meta-description validation skips length check when value is an unrendered template string (Yoast/AIOSEO template tags); meta_description_source field added to readiness response (#569)
+- apply_internal_link now checks Elementor widget data for existing links before inserting — prevents duplicate-link approval requests on Elementor pages where post_content is empty (#569)
+
+## [3.2.7]
+
+### Added
+- wp_bulk_upload_media tool — import up to 20 images from URLs in one request; use instead of looping wp_upload_media_from_url for migrations (#566)
+
+### Fixed
+- wp_upload_media_from_url description now advises using bulk tool for 5+ images to stay under burst rate limit (#566)
+
+## [3.2.6]
+
+### Fixed
+- REST Pro gate now enforces real license check — no more stub bypass (#564)
+- remove dead hostname routing from agency proxy (latent Host-spoof surface) (#547)
+- wp_rate_limit_status now shows real usage for API-key-authenticated requests (#533)
+
+## [3.2.5]
+
+### Fixed
+- deduplicate Elementor element IDs on save to prevent CSS bleed across pages (#565)
+- MCP internal tool dispatch no longer double-counts rate limit, fixing concurrency errors (#566)
+- custom CSS set_custom_css warns on HTML-escaped operators, returns compact response, clarifies verification semantics (#567)
+
+## [3.2.4]
+
+### Security
+- Encryption key is now stored in a dedicated WordPress option (mcpwp_encryption_key) instead of being derived from AUTH_SALT. AUTH_SALT rotation no longer silently corrupts stored provider credentials. A one-time non-destructive migration re-encrypts existing blobs on first load.
+- Admin AJAX pro-gate bypass is now restricted to verified admin users with activate_plugins capability, confirmed nonce, and an explicit action allowlist.
+
+## [3.2.3]
+
+### Changed
+- screenshots now save to the media library and return a URL by default — inline base64 (500KB+) overflowed AI-client contexts. Pass `inline=true` for raw base64.
+- `wp_get_elementor` no longer duplicates the page data as a raw JSON string (`elementor_json`) — payload halved on large pages. Pass `include_raw=true` if you need the raw string.
+
+## [3.2.2]
+
+### Added
+- Calling a Pro tool on a Free install now returns a clear upgrade-path error (JSON-RPC -32004 `pro_required` with plan and pricing link) instead of "unknown tool".
+
+### Changed
+- `/introspect` is compact by default (tool name + summary, ~80% smaller) so AI clients no longer overflow their context; pass `?full=true` for the legacy payload with full schemas.
+
+### Fixed
+- `/option` now refuses to overwrite an array/object option with a plain string (decodes valid JSON; `force_type_change=true` to override) — prevents accidental destruction of structured options such as Elementor theme-builder conditions.
+- numeric values in API responses are returned as JSON numbers (analytics counts, Elementor `page_id`) for typed clients.
+
+## [3.2.1]
+
+### Changed
+- Internal rebrand cleanup (spai→mcpwp) — cron label, code comments, and admin JS object renamed. Webhook deliveries now also emit `X-MCPWP-Signature`, `X-MCPWP-Event`, and `X-MCPWP-Webhook-ID` headers alongside the existing `X-SPAI-*` headers (both sets sent; `X-SPAI-*` retained for backward-compat). MCP tools/list response now also includes an `x_mcpwp` envelope key alongside `x_spai`. Bridge migration of legacy sites is unchanged.
+
+## [3.2.0]
+
+### Added
+- Minimal OAuth 2.1 authorization server — MCP clients (Claude Desktop, ChatGPT) can now authenticate via browser sign-in instead of API keys. Adds RFC 9728 protected-resource metadata, RFC 8414 authorization-server metadata, PKCE S256 authorize endpoint, and token exchange (authorization_code + refresh_token). X-API-Key authentication is unchanged and unaffected. Requires `oauth_enabled` setting + allow-listed redirect URIs to activate.
+
+### Fixed
+- `wp_recall` tool PHP 8.x compatibility (#534).
+
+## [3.1.0]
+
+### Added
+- Seamless migration bridge — sites upgrading from the earlier `site-pilot-ai` build carry over all content, API keys, OAuth access tokens, plugin settings, and licensing entitlement automatically. Existing API keys keep authenticating during and after the change; migration is idempotent and non-destructive (original data is left intact for rollback).
+- Dual-prefix authentication — legacy keys and OAuth tokens continue to work alongside new `mcpwp_` credentials, with original scopes preserved.
+- `Mcpwp_Migrate`: idempotent one-time option migration that copies all known `spai_*` options to their `mcpwp_*` equivalents on `plugins_loaded` and on activation. Non-destructive (originals kept), non-overwriting (skips existing `mcpwp_*` values), guarded by `mcpwp_migrated_from_spai` flag. Includes encryption sanity-check for `spai_integrations` blob with admin-visible warning if `AUTH_SALT` changed (provider keys must be re-entered).
+- `find_legacy_spai_key()` in `Mcpwp_Api_Auth` trait: dual-prefix API key auth that accepts keys stored under `spai_api_keys` / `spai_api_key` so existing AI connections continue to work through the slug-rename cutover without re-keying. Uses the same `wp_check_password()` / `hash_equals()` path as the existing key lookup — no timing difference.
+- `docs/BRIDGE-505-DESIGN.md`: slug-handover option analysis (Option A/B/C) with recommendation for architect + mumcp-warden review.
 - `BridgeMigrateTest.php` / `BridgeAuthTest.php`: phpunit coverage for both.
 
-### Version note
-This branch does NOT bump `mcpwp.php`, `readme.txt`, or `version.json`.  The
-bridge ships as part of the v3.0.x lineage.  Version story: the data migration
-and dual-key auth are included in whatever v3.x release ships to the fleet; the
-slug handover itself is gated on architect + warden review per the design note.
+### Changed
+- WordPress.org Plugin Check clean (0 errors) — the WordPress.org build makes no third-party network calls and ships under GPL-2.0.
+- per-site cutover runbook and verified MCP client connect matrix added.
 
----
+## [3.0.1]
+
+### Fixed
+- signals fatal on every compute — `compute_seo_issues()` was calling the private `get_issues()` method and filtering on severity `critical` (which the store never writes). Now uses the public `list_issues(status=open, severity=error)`.
+- `GET /signals` now lazily computes on first read — closes the permanently-empty feed on hosts where WP-Cron never fires (the mcpwp.net symptom). Response includes `last_computed`, `partial`, and `skipped_types`.
+- `compute_pending_updates()` no longer calls `wp_update_plugins()` (remote requests to wordpress.org per plugin) on web requests — reads cached transient instead; network refresh is cron-only.
+- Elementor broken-page checker fetches IDs only, then reads `_elementor_data` blobs one at a time — prevents large memory spikes.
+
+### Changed
+- `compute()` accepts a time budget; over-budget signal types are skipped with their stored values preserved and reported via `mcpwp_signals_meta` (`last_computed`, `skipped_types`, `partial`).
+- Freemius is now the single source of truth for entitlement — removed legacy Lemon Squeezy store and self-started 14-day local trial that could independently grant Pro. New canonical `get_license_info()` accessor guarantees `plan` and `is_pro` never contradict.
+- split four monolithic classes (REST Site 4531 lines, free/pro tool files, Admin 3491 lines, Elementor Basic 3299 lines) into focused per-surface controllers and trait groups — no behavior change.
+
+### Security
+- gateway tool-registration contract enforced — unknown tools rejected at `tools/call`, escalation vectors closed.
+
+## [3.0.0]
+
+### Changed
+- Rebrand: the plugin is now **MCPWP** throughout — folder, main file, class names, function/option prefixes, constants, text domain, and REST namespace (`mcpwp/v1`). A clean reinstall is recommended; settings and API keys are re-created fresh.
 
 ## [2.8.31] - 2026-05-20
 
@@ -420,13 +601,3 @@ slug handover itself is gated on architect + warden review per the design note.
 - Output escaping
 - Secure API key generation
 - Rate limiting ready architecture
-
-## [Unreleased]
-
-### Planned
-- Pro add-on with full Elementor integration
-- SEO module (Yoast, RankMath, AIOSEO, SEOPress)
-- Forms module (CF7, WPForms, Gravity Forms, Ninja Forms)
-- Landing page builder
-- Template management
-- Agency tier with multi-site support

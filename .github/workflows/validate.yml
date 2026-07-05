@@ -1,4 +1,4 @@
-name: Validate Mumega MCP
+name: Validate MCPWP
 
 on:
   pull_request:
