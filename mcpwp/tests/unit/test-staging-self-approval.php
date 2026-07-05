@@ -20,6 +20,9 @@ use PHPUnit\Framework\TestCase;
 // other tests needed them before this feature.
 require_once dirname( __DIR__, 2 ) . '/includes/core/class-mcpwp-approvals.php';
 require_once dirname( __DIR__, 2 ) . '/includes/api/class-mcpwp-rest-approvals.php';
+// Needed to toggle the batch/MCP sub-request flag that routes auth through
+// verify_api_key_auth_only() — the batch/MCP sub-request auth path.
+require_once dirname( __DIR__, 2 ) . '/includes/api/class-mcpwp-rest-batch.php';
 
 // ── Bootstrap stubs needed only in this test file ────────────────────────
 
@@ -64,6 +67,14 @@ final class StagingSelfApprovalTest extends TestCase {
 		$GLOBALS['mcpwp_test_transients']   = array();
 		$GLOBALS['mcpwp_test_current_user'] = 2;
 		$GLOBALS['_mcpwp_test_posts']       = array();
+	}
+
+	protected function tearDown(): void {
+		// PHPUnit does not reset static properties between tests; clear the flag
+		// so a mid-test failure cannot leak the batch context into later tests.
+		if ( class_exists( 'Mcpwp_REST_Batch' ) ) {
+			Mcpwp_REST_Batch::$is_batch_sub_request = false;
+		}
 	}
 
 	// ─────────────────────────────────────────────────────────────────────
@@ -294,5 +305,93 @@ final class StagingSelfApprovalTest extends TestCase {
 			$error_code,
 			'Admin-AJAX context (null key record) must not trigger self-approval block.'
 		);
+	}
+
+	// ─────────────────────────────────────────────────────────────────────
+	// 7. verify_api_key_auth_only() (batch/MCP sub-request path) populates
+	//    current_api_key_record.  Pre-fix this record stayed null, silently
+	//    disabling the self-approval block.
+	// ─────────────────────────────────────────────────────────────────────
+
+	public function test_auth_only_path_populates_current_key_record(): void {
+		$controller = new Mcpwp_REST_Approvals_Testable();
+		$created    = $controller->create_scoped_api_key( 'admin key', array( 'admin' ) );
+
+		$request = new WP_REST_Request(
+			'POST',
+			'/mcpwp/v1/approvals/apr_probe/approve',
+			array(),
+			array( 'X-API-Key' => $created['key'] )
+		);
+
+		Mcpwp_REST_Batch::$is_batch_sub_request = true;
+		$auth = $controller->verify_api_key( $request ); // routes to verify_api_key_auth_only().
+		Mcpwp_REST_Batch::$is_batch_sub_request = false;
+
+		$this->assertTrue( $auth );
+
+		$record = $controller->get_current_api_key_record();
+		$this->assertIsArray( $record, 'auth-only path must populate the key record' );
+		$this->assertSame( $created['id'], $record['id'] );
+	}
+
+	// ─────────────────────────────────────────────────────────────────────
+	// 8. Same key self-approves through the auth-only (batch/MCP) path →
+	//    blocked end-to-end.  This is the true regression guard for
+	//    the batch/MCP path: pre-fix the record was null so the block no-oped.
+	// ─────────────────────────────────────────────────────────────────────
+
+	public function test_self_approval_blocked_through_auth_only_path(): void {
+		$controller = new Mcpwp_REST_Approvals_Testable();
+		$created    = $controller->create_scoped_api_key( 'admin key', array( 'admin' ) );
+		$apr_id     = $this->insert_staging_approval( $created['id'] );
+
+		$request = new WP_REST_Request(
+			'POST',
+			'/mcpwp/v1/approvals/' . $apr_id . '/approve',
+			array( 'id' => $apr_id ),
+			array( 'X-API-Key' => $created['key'] )
+		);
+
+		Mcpwp_REST_Batch::$is_batch_sub_request = true;
+		$controller->verify_api_key( $request );
+		Mcpwp_REST_Batch::$is_batch_sub_request = false;
+
+		$result = $controller->approve_approval( $request );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'self_approval_forbidden', $result->get_error_code() );
+		$this->assertSame( 403, $result->get_error_data()['status'] );
+	}
+
+	// ─────────────────────────────────────────────────────────────────────
+	// 9. create_post_content_request() now stamps requested_by_key_id from
+	//    $args so content approvals are covered by the self-approval block
+	//, not just staging pushes.
+	// ─────────────────────────────────────────────────────────────────────
+
+	public function test_content_approval_stores_requested_by_key_id(): void {
+		$GLOBALS['_mcpwp_test_posts'][7] = (object) array(
+			'ID'           => 7,
+			'post_title'   => 'Sample',
+			'post_content' => 'old body',
+			'post_status'  => 'publish',
+			'post_type'    => 'page',
+		);
+
+		$public = Mcpwp_Approvals::create_post_content_request(
+			7,
+			'new body',
+			array(
+				'tool'                => 'wp_set_blocks',
+				'requested_by_key_id' => 'key-abc',
+			)
+		);
+
+		$this->assertNotInstanceOf( WP_Error::class, $public );
+
+		$items = get_option( Mcpwp_Approvals::OPTION_NAME, array() );
+		$this->assertArrayHasKey( $public['id'], $items );
+		$this->assertSame( 'key-abc', $items[ $public['id'] ]['requested_by_key_id'] );
 	}
 }

@@ -271,10 +271,11 @@ class Mcpwp_REST_Blocks extends Mcpwp_REST_API {
 				$post_id,
 				$content,
 				array(
-					'title'    => sprintf( 'Update Gutenberg blocks for #%d', (int) $post_id ),
-					'note'     => $approval_note,
-					'tool'     => 'wp_set_blocks',
-					'metadata' => array(
+					'title'               => sprintf( 'Update Gutenberg blocks for #%d', (int) $post_id ),
+					'note'                => $approval_note,
+					'tool'                => 'wp_set_blocks',
+					'requested_by_key_id' => $this->current_requester_key_id(),
+					'metadata'            => array(
 						'safety' => $safety_report,
 					),
 				)
@@ -606,10 +607,11 @@ class Mcpwp_REST_Blocks extends Mcpwp_REST_API {
 				$post_id,
 				$patched_content,
 				array(
-					'title'    => sprintf( 'Patch Gutenberg section for #%d', (int) $post_id ),
-					'note'     => $approval_note,
-					'tool'     => 'wp_patch_block_section',
-					'metadata' => array(
+					'title'               => sprintf( 'Patch Gutenberg section for #%d', (int) $post_id ),
+					'note'                => $approval_note,
+					'tool'                => 'wp_patch_block_section',
+					'requested_by_key_id' => $this->current_requester_key_id(),
+					'metadata'            => array(
 						'selector' => $selector,
 						'path'     => $path,
 						'safety'   => $safety_report,

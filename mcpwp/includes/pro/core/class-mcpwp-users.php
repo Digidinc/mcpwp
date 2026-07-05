@@ -132,7 +132,14 @@ class Mcpwp_Users {
 		// Set additional meta.
 		if ( ! empty( $data['meta'] ) && is_array( $data['meta'] ) ) {
 			foreach ( $data['meta'] as $key => $value ) {
-				update_user_meta( $user_id, sanitize_key( $key ), $value );
+				$meta_key = sanitize_key( $key );
+				// Never let API-supplied meta write privilege-defining keys
+				// (capabilities / user level / session tokens) — that is a role
+				// escalation vector.
+				if ( self::is_protected_user_meta_key( $meta_key ) ) {
+					continue;
+				}
+				update_user_meta( $user_id, $meta_key, $value );
 			}
 		}
 
@@ -226,11 +233,34 @@ class Mcpwp_Users {
 		// Update additional meta.
 		if ( ! empty( $data['meta'] ) && is_array( $data['meta'] ) ) {
 			foreach ( $data['meta'] as $key => $value ) {
-				update_user_meta( $user_id, sanitize_key( $key ), $value );
+				$meta_key = sanitize_key( $key );
+				// Same privilege-escalation guard as create_user().
+				if ( self::is_protected_user_meta_key( $meta_key ) ) {
+					continue;
+				}
+				update_user_meta( $user_id, $meta_key, $value );
 			}
 		}
 
 		return $this->get_user( $user_id );
+	}
+
+	/**
+	 * Whether a user-meta key is privilege-defining and must never be writable
+	 * from API-supplied data.
+	 *
+	 * Blocks capabilities / user-level keys — including multisite-prefixed
+	 * variants such as wp_2_capabilities and wp_2_user_level — and the session
+	 * token store, closing the meta.wp_capabilities role-escalation vector.
+	 *
+	 * @param string $meta_key Already-sanitized (sanitize_key) meta key.
+	 * @return bool True when the key is protected and must be skipped.
+	 */
+	protected static function is_protected_user_meta_key( $meta_key ) {
+		if ( 'session_tokens' === $meta_key ) {
+			return true;
+		}
+		return (bool) preg_match( '/(^|_)(capabilities|user_level)$/', (string) $meta_key );
 	}
 
 	/**

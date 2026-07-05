@@ -378,6 +378,11 @@ trait Mcpwp_Api_Auth {
 			);
 		}
 
+		// Persist the matched key so downstream identity/role checks (self-approval,
+		// per-key tool-category enforcement) see the real requester even on
+		// batch/MCP sub-requests.
+		$this->current_api_key_record = $matched_key;
+
 		if ( ! $this->set_api_user_context() ) {
 			return new WP_Error(
 				'api_user_missing',
@@ -773,20 +778,46 @@ trait Mcpwp_Api_Auth {
 	 * @return string Scope name: read|write|admin.
 	 */
 	protected function get_required_scope_for_request( $request ) {
-		$route  = method_exists( $request, 'get_route' ) ? (string) $request->get_route() : '';
-		$method = method_exists( $request, 'get_method' ) ? strtoupper( (string) $request->get_method() ) : 'GET';
+		$route    = method_exists( $request, 'get_route' ) ? (string) $request->get_route() : '';
+		$method   = method_exists( $request, 'get_method' ) ? strtoupper( (string) $request->get_method() ) : 'GET';
+		$is_write = ! in_array( $method, array( 'GET', 'HEAD', 'OPTIONS' ), true );
 
+		// MCP JSON-RPC dispatch resolves scope from the tool payload.
 		if ( 0 === strpos( $route, '/mcpwp/v1/mcp' ) ) {
 			return $this->get_required_scope_for_mcp_request( $request );
 		}
 
-		if ( 0 === strpos( $route, '/mcpwp/v1/rate-limit' ) ) {
-			if ( in_array( $method, array( 'GET', 'HEAD', 'OPTIONS' ), true ) ) {
-				return 'read';
-			}
+		// Approval state transitions (approve/reject/apply/rollback) require admin
+		// scope so a plain write key cannot approve/apply its own pending request.
+		// Listing/reading approvals stays read; creating one (via the
+		// blocks/content-graph/staging controllers) stays at the write default.
+		if ( preg_match( '#^/mcpwp/v1/approvals/[^/]+/(approve|reject|apply|rollback)(/|$)#', $route ) ) {
 			return 'admin';
 		}
 
+		// Deploying a stored site blueprint replays a full page/menu/option set onto
+		// the live site — a destructive, high-blast-radius op. Require admin; saving,
+		// listing, and extracting blueprints stay at their read/write defaults.
+		if ( preg_match( '#^/mcpwp/v1/site-blueprints/[^/]+/deploy(/|$)#', $route ) ) {
+			return 'admin';
+		}
+
+		// Integrations: reading, writing, deleting, or probing a stored provider
+		// secret requires admin scope. Discovery (status/providers/
+		// stock-photos) stays read; content-generation stays at the write default.
+		if ( $this->route_matches( $route, '/mcpwp/v1/integrations' ) ) {
+			if (
+				$this->route_matches( $route, '/mcpwp/v1/integrations/configure' )
+				|| $this->route_matches( $route, '/mcpwp/v1/integrations/remove' )
+				|| $this->route_matches( $route, '/mcpwp/v1/integrations/test' )
+				|| preg_match( '#^/mcpwp/v1/integrations/providers/[^/]+/(key|test)(/|$)#', $route )
+			) {
+				return 'admin';
+			}
+			return $is_write ? 'write' : 'read';
+		}
+
+		// Blanket-admin routes: every method (including GET) requires admin scope.
 		$admin_routes = array(
 			'/mcpwp/v1/settings',
 			'/mcpwp/v1/options',
@@ -795,16 +826,19 @@ trait Mcpwp_Api_Auth {
 			'/mcpwp/v1/webhooks',
 			'/mcpwp/v1/api-keys',
 			'/mcpwp/v1/elementor/custom-code',
+			// User management can create/modify accounts (privilege-escalation
+			// surface) and exposes account PII (emails, roles, capabilities);
+			// restrict the whole surface to admin scope.
+			'/mcpwp/v1/users',
 			// Plugin self-update is a code-execution surface: it can install an
 			// arbitrary package and reactivate the plugin. Restrict to admin scope.
 			'/mcpwp/v1/update',
 			// Singular /option write can set update-control options
 			// (mcpwp_update_info / mcpwp_version_url) that steer the updater.
-			// Prefix also matches /options, which is already admin-gated above — harmless.
 			'/mcpwp/v1/option',
 			// /plugin-settings exposes the GitHub token / OAuth client-secret hash and
 			// other mcpwp_settings internals; a write-scoped key could overwrite OAuth
-			// config (secret takeover). Require admin scope for both GET and PUT (APIMCP-014).
+			// config (secret takeover). Require admin scope for both GET and PUT.
 			'/mcpwp/v1/plugin-settings',
 			// Staging routes: pushing environments (especially →live) is irreversible
 			// without a host-level backup, so all staging endpoints require admin scope.
@@ -812,16 +846,56 @@ trait Mcpwp_Api_Auth {
 		);
 
 		foreach ( $admin_routes as $admin_route ) {
-			if ( 0 === strpos( $route, $admin_route ) ) {
+			if ( $this->route_matches( $route, $admin_route ) ) {
 				return 'admin';
 			}
 		}
 
-		if ( in_array( $method, array( 'GET', 'HEAD', 'OPTIONS' ), true ) ) {
-			return 'read';
+		// Admin-on-write routes: mutating methods require admin scope; GET/HEAD/
+		// OPTIONS stay readable. Used where reads are safe to expose but writes are
+		// a high-blast-radius or secret-bearing surface.
+		$admin_write_routes = array(
+			// Rate-limit reset is an admin control (was an inline special case).
+			'/mcpwp/v1/rate-limit',
+			// Site-wide custom CSS is a persistent injection/defacement vector.
+			// Standalone controller.
+			'/mcpwp/v1/custom-css',
+			// Theme customizer surface: /theme/mods overwrites all customizer state,
+			// /theme/custom-css injects site-wide CSS. Boundary match
+			// on /theme covers both mutating sub-routes; /theme/global-styles GET and
+			// other GETs stay readable. Distinct from /themes (plural) below.
+			'/mcpwp/v1/theme',
+			// Pro theme reconfiguration: /themes/settings, /themes/astra/colors,
+			// /themes/astra/typography are EDITABLE global-presentation writes; the
+			// many GET discovery routes under /themes stay read.
+			'/mcpwp/v1/themes',
+			// Action-log rollback reverts an arbitrary historical mutation; the log
+			// GET/export routes stay read.
+			'/mcpwp/v1/action-log',
+		);
+
+		foreach ( $admin_write_routes as $admin_write_route ) {
+			if ( $this->route_matches( $route, $admin_write_route ) ) {
+				return $is_write ? 'admin' : 'read';
+			}
 		}
 
-		return 'write';
+		// Default: GET/HEAD/OPTIONS → read, everything else → write.
+		return $is_write ? 'write' : 'read';
+	}
+
+	/**
+	 * Boundary-aware route prefix match.
+	 *
+	 * Matches only when $route equals $prefix or continues with a path separator,
+	 * so '/mcpwp/v1/content' no longer over-matches '/mcpwp/v1/content-graph'.
+	 *
+	 * @param string $route  Full request route (with namespace).
+	 * @param string $prefix Route prefix to test.
+	 * @return bool True when $route is $prefix or a sub-path of it.
+	 */
+	protected function route_matches( $route, $prefix ) {
+		return $route === $prefix || 0 === strpos( $route, $prefix . '/' );
 	}
 
 	/**
@@ -910,7 +984,7 @@ trait Mcpwp_Api_Auth {
 			// write-scoped key. Defense-in-depth alongside the REST admin gate.
 			'wp_trigger_update',
 			// Plugin settings hold the GitHub token / OAuth client-secret hash and
-			// other secret-bearing config; write access must require admin scope (APIMCP-014).
+			// other secret-bearing config; write access must require admin scope.
 			'wp_update_plugin_settings',
 			// Staging tools require admin scope — staging→live push is a destructive,
 			// irreversible operation that must not be accessible to write-scoped keys.
@@ -918,6 +992,34 @@ trait Mcpwp_Api_Auth {
 			'wp_push_to_staging',
 			'wp_push_to_live',
 			'wp_get_staging_status',
+			// Approval state transitions require admin scope so a plain write key
+			// cannot approve/apply/reject/rollback a change — including its own
+			// pending request. List/get stay read (not listed here).
+			'wp_approve_request',
+			'wp_reject_request',
+			'wp_apply_approval',
+			'wp_rollback_approval',
+			// Integration credential management writes/removes/probes encrypted
+			// third-party provider secrets (OpenAI/Gemini/ElevenLabs/…) — admin
+			// only. Status/discovery stay read (not listed here).
+			'wp_configure_integration',
+			'wp_remove_integration',
+			'wp_test_integration',
+			// Site-wide custom CSS is a persistent injection surface; writing or
+			// deleting it requires admin scope.
+			'wp_set_custom_css',
+			'wp_delete_custom_css',
+			// Deploying a stored site blueprint replays a full page/menu/option set
+			// onto the live site — a destructive op. The write-verb regex does not
+			// match "deploy", so name it explicitly to mirror the REST deploy gate.
+			'wp_deploy_site_blueprint',
+			// Singular option get/update and plugin-settings read reach the same
+			// update-control / secret-bearing options already admin-gated at the
+			// REST layer (/option, /plugin-settings) — keep the tool table in sync
+			// with those routes.
+			'wp_get_option',
+			'wp_update_option',
+			'wp_get_plugin_settings',
 		);
 
 		if ( in_array( $tool_name, $admin_tools, true ) ) {
