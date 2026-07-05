@@ -175,11 +175,11 @@ class Mcpwp_REST_Approvals extends Mcpwp_REST_API {
 	}
 
 	/**
-	 * Block self-approval: the same API key that created a staging push request
-	 * cannot approve or apply it.  Only enforced when the approval record carries
-	 * a 'requested_by_key_id' field (set by the staging push creation path).
-	 * Non-staging approvals (post_content_update) do not carry this field and
-	 * therefore pass through without restriction.
+	 * Block self-approval: the same API key that created an approval request
+	 * cannot approve or apply it.  Enforced whenever the record carries a
+	 * 'requested_by_key_id' field — now set by the staging-push path AND by every
+	 * approval created through an API key (post_content_update included).
+	 * A genuine admin-AJAX context has no key record and is intentionally exempt.
 	 *
 	 * @param string $approval_id Approval request ID.
 	 * @return true|WP_Error True when allowed; WP_Error when same key tries to self-approve.
@@ -215,7 +215,7 @@ class Mcpwp_REST_Approvals extends Mcpwp_REST_API {
 		if ( $current_key_id === (string) $record['requested_by_key_id'] ) {
 			return new WP_Error(
 				'self_approval_forbidden',
-				'The same API key that created this staging push request cannot approve or apply it. Use a different admin key or approve via WordPress admin.',
+				__( 'The same API key that created this request cannot approve or apply it. Use a different admin key or approve via WordPress admin.', 'mcpwp' ),
 				array( 'status' => 403 )
 			);
 		}

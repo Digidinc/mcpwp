@@ -379,15 +379,16 @@ class Mcpwp_REST_Content_Graph extends Mcpwp_REST_API {
 				$source_id,
 				$patched_content,
 				array(
-					'title'    => sprintf( 'Add internal link from #%d to #%d', (int) $source_id, (int) $target_id ),
-					'note'     => $approval_note,
-					'tool'     => 'wp_apply_internal_link',
-					'metadata' => array(
-						'source_id' => $source_id,
-						'target_id' => $target_id,
+					'title'               => sprintf( 'Add internal link from #%d to #%d', (int) $source_id, (int) $target_id ),
+					'note'                => $approval_note,
+					'tool'                => 'wp_apply_internal_link',
+					'requested_by_key_id' => $this->current_requester_key_id(),
+					'metadata'            => array(
+						'source_id'  => $source_id,
+						'target_id'  => $target_id,
 						'target_url' => $target_url,
-						'anchor'    => $anchor,
-						'placement' => 'append_related_paragraph',
+						'anchor'     => $anchor,
+						'placement'  => 'append_related_paragraph',
 					),
 				)
 			);

@@ -70,6 +70,10 @@ class Mcpwp_Approvals {
 				'before_hash'    => hash( 'sha256', $before_content ),
 			),
 			'metadata'    => isset( $args['metadata'] ) && is_array( $args['metadata'] ) ? $args['metadata'] : array(),
+			// Requester identity for separation-of-duties: the same API key that
+			// creates an approval cannot later approve/apply it.
+			// Mirrors the field the staging-push path already stores.
+			'requested_by_key_id' => isset( $args['requested_by_key_id'] ) ? sanitize_text_field( (string) $args['requested_by_key_id'] ) : '',
 			'created_at'  => $now,
 			'updated_at'  => $now,
 			'approved_at' => null,

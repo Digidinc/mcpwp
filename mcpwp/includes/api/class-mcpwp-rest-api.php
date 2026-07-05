@@ -41,6 +41,20 @@ abstract class Mcpwp_REST_API {
 	}
 
 	/**
+	 * Current requester's API key id, or '' when none (admin-AJAX / cookie context).
+	 *
+	 * Used to stamp approval requests with their creator so the same key cannot
+	 * later approve or apply its own request. Populated on direct,
+	 * batch, and MCP sub-request paths.
+	 *
+	 * @return string Key id used to stamp approval requests for self-approval checks.
+	 */
+	protected function current_requester_key_id() {
+		$key_record = $this->get_current_api_key_record();
+		return ( is_array( $key_record ) && ! empty( $key_record['id'] ) ) ? (string) $key_record['id'] : '';
+	}
+
+	/**
 	 * Prepare success response.
 	 *
 	 * @param mixed $data Response data.
