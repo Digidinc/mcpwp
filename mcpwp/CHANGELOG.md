@@ -5,6 +5,14 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.4.2](https://github.com/Mumega-com/mcpwp/compare/v3.4.1...v3.4.2) (2026-07-05)
+
+
+### Bug Fixes
+
+* **security:** block secret option stores from /option and admin-gate /plugin-settings ([094e472](https://github.com/Mumega-com/mcpwp/commit/094e472e3fe3f0bf7467869d4ad1e4b2d11d9178))
+* **security:** block secret option stores from /option and admin-gate /plugin-settings ([3b30a37](https://github.com/Mumega-com/mcpwp/commit/3b30a37960769cb6c2ba31c94d215314758ea107))
+
 ## [Unreleased]
 
 ## [3.4.1]
