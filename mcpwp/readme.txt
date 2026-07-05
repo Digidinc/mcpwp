@@ -5,7 +5,9 @@ Tags: ai, claude, mcp, elementor, api
 Requires at least: 6.1
 Tested up to: 7.0
 Requires PHP: 7.4
+<!-- x-release-please-start-version -->
 Stable tag: 3.4.1
+<!-- x-release-please-end -->
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -539,6 +541,9 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 * Fix SQL escaping in activity log for WordPress.org scanner.
 
 == Upgrade Notice ==
+
+= 3.4.1 =
+Security fix: plugin self-update and update-control options now require admin scope; update package URLs are restricted to HTTPS + trusted hosts (closes a write-scope-to-RCE chain).
 
 = 3.4.0 =
 Adds OpenAPI 3.0 schema endpoint (`/openapi.json`) for ChatGPT GPT Actions and any OpenAPI consumer. No key required to read the schema.

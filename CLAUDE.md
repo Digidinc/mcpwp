@@ -82,7 +82,7 @@ Privacy & Terms: 118
 Three variants, one command:
 
 ```bash
-bash scripts/build-all.sh
+bash mcpwp/scripts/build-all.sh
 ```
 
 | Zip | Pro? | License | Use for |
@@ -104,7 +104,7 @@ Download latest agency build: `https://updates.mcpwp.net/mcpwp-agency-3.3.3.zip`
 #    - version.json: version + changelog
 
 # 2. Build all three distribution zips
-bash scripts/build-all.sh
+bash mcpwp/scripts/build-all.sh
 
 # 3. Upload agency zip to R2 (makes it downloadable)
 npx wrangler r2 object put mumcp-updates/mcpwp-agency-X.Y.Z.zip \
@@ -481,11 +481,11 @@ When changing plugin code, bump version in **3 files**:
 2. `readme.txt` — `Stable tag:` AND add changelog entry under `== Changelog ==`
 3. `version.json` — `version` field AND prepend changelog HTML fragment
 
-Current version: **3.3.7**
+Current version: **3.4.1** <!-- maintained by release-please; source of truth is mcpwp/VERSION -->
 
 Then build and deploy:
 ```bash
-bash scripts/build-all.sh                                    # all three zips
+bash mcpwp/scripts/build-all.sh                                    # all three zips
 npx wrangler r2 object put mumcp-updates/mcpwp-agency-X.Y.Z.zip \
   --file mcpwp/scripts/mcpwp-agency-X.Y.Z.zip --remote      # agency download
 FREEMIUS_BEARER_TOKEN=... bash scripts/release_freemius.sh --version X.Y.Z --skip-bump
