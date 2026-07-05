@@ -57,3 +57,6 @@ mcpwp/tests/.phpunit.result.cache
 mcp-server/*.mcpb
 .claude/worktrees/
 site-pilot-ai/
+
+# graphify knowledge graph output (regenerated locally; hook rewrites graph.json per commit)
+graphify-out/
