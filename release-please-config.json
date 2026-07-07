@@ -16,18 +16,6 @@
         { "type": "generic", "path": "mcpwp/readme.txt" },
         { "type": "json", "path": "version.json", "jsonpath": "$.version" }
       ]
-    },
-    "mcp-server": {
-      "release-type": "node",
-      "component": "mcp-server",
-      "include-component-in-tag": true,
-      "tag-separator": "-"
-    },
-    "mcpwp-agency-proxy": {
-      "release-type": "node",
-      "component": "mcpwp-agency-proxy",
-      "include-component-in-tag": true,
-      "tag-separator": "-"
     }
   }
 }
