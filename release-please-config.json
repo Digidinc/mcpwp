@@ -11,7 +11,6 @@
       "changelog-path": "mcpwp/CHANGELOG.md",
       "include-v-in-tag": true,
       "exclude-paths": ["mcp-server", "mcpwp-agency-proxy"],
-      "pull-request-title-pattern": "chore: release MCPWP ${version}",
       "extra-files": [
         { "type": "generic", "path": "mcpwp/mcpwp.php" },
         { "type": "generic", "path": "mcpwp/readme.txt" },
