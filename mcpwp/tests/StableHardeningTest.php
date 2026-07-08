@@ -49,9 +49,9 @@ final class StableHardeningTest extends TestCase {
 
 		$this->assertArrayHasKey( 'error', $data, 'Pro tool on Free must error.' );
 		$this->assertSame( -32004, $data['error']['code'], 'Pro-required uses a dedicated JSON-RPC code, not unknown-tool -32602.' );
-		$this->assertStringContainsString( 'MCPWP Pro', $data['error']['message'] );
+		$this->assertStringContainsString( 'mumcp Pro', $data['error']['message'] );
 		$this->assertSame( 'pro', $data['error']['data']['plan_required'] );
-		$this->assertStringContainsString( 'mcpwp.net/pricing', $data['error']['data']['upgrade_url'] );
+		$this->assertStringContainsString( 'mumcp.com/pricing', $data['error']['data']['upgrade_url'] );
 	}
 
 	public function test_unknown_tool_still_returns_unknown_not_upsell(): void {
