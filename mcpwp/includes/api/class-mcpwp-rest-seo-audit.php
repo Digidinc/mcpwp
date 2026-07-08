@@ -15,6 +15,31 @@ if ( ! defined( 'ABSPATH' ) ) {
 class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 
 	/**
+	 * True while a bulk site audit loop is running. Suppresses per-post live
+	 * HTTP render fetches and reuses a single pre-built content graph so the
+	 * whole-site audit stays fast and cannot exhaust PHP time / FPM workers.
+	 *
+	 * @var bool
+	 */
+	private $bulk_audit_mode = false;
+
+	/**
+	 * Content graph built once per bulk audit run and shared across all audited
+	 * posts (the graph is identical for a fixed post-type set).
+	 *
+	 * @var array|null
+	 */
+	private $bulk_audit_graph = null;
+
+	/**
+	 * Lazily-instantiated content-quality controller used to run the
+	 * content-quality validator, which lives on a sibling class.
+	 *
+	 * @var Mcpwp_REST_Content_Quality|null
+	 */
+	private $content_quality_delegate = null;
+
+	/**
 	 * Constructor.
 	 */
 	public function __construct() {
@@ -450,11 +475,16 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 			}
 		}
 
-		$graph_post_types = array_values( array_unique( array( 'page', 'post', $post->post_type ) ) );
-		// Limit to 100 posts — we only need this node's outbound/orphan status.
-		// 500 caused memory/timeout on large sites, producing a malformed JSON-RPC response.
-		$graph = $this->build_content_graph_data( $graph_post_types, 100, 'publish' !== $post->post_status );
-		$node  = null;
+		if ( $this->bulk_audit_mode && null !== $this->bulk_audit_graph ) {
+			// Reuse the graph built once for the whole bulk audit run.
+			$graph = $this->bulk_audit_graph;
+		} else {
+			$graph_post_types = array_values( array_unique( array( 'page', 'post', $post->post_type ) ) );
+			// Limit to 100 posts — we only need this node's outbound/orphan status.
+			// 500 caused memory/timeout on large sites, producing a malformed JSON-RPC response.
+			$graph = $this->build_content_graph_data( $graph_post_types, 100, 'publish' !== $post->post_status );
+		}
+		$node = null;
 		foreach ( $graph['nodes'] as $candidate ) {
 			if ( (int) $candidate['id'] === $post_id ) {
 				$node = $candidate;
@@ -497,7 +527,7 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 		// stored-meta/rendered divergence (SEO plugin template tags, excerpt fallbacks, etc.)
 		$rendered_head    = null;
 		$validation_basis = 'stored_meta';
-		if ( 'publish' === $post->post_status ) {
+		if ( 'publish' === $post->post_status && ! $this->bulk_audit_mode ) {
 			$rendered_head = $this->fetch_rendered_head_seo( (string) get_permalink( $post ) );
 			if ( null !== $rendered_head ) {
 				$validation_basis = 'rendered_html';
@@ -586,6 +616,13 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 		$critical_urls    = 0;
 		$needs_review     = 0;
 
+		// Build the content link-graph ONCE for the whole run. It is identical
+		// across audited posts for a fixed post-type set, so rebuilding it per
+		// post (as the single-post readiness endpoint does) is pure waste.
+		$graph_post_types       = array_values( array_unique( array_merge( array( 'page', 'post' ), $post_types ) ) );
+		$this->bulk_audit_graph = $this->build_content_graph_data( $graph_post_types, 100, $include_drafts );
+		$this->bulk_audit_mode  = true;
+
 		foreach ( $posts as $post_id ) {
 			$readiness       = $this->run_post_validator( 'validate_seo_readiness', $post_id, '/seo/readiness/' );
 			$structured_data = $this->run_post_validator( 'validate_structured_data', $post_id, '/seo/structured-data/' );
@@ -641,6 +678,11 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 			);
 		}
 
+		// Clear bulk context so a later single-post validator call on this same
+		// instance restores full (render-truth) behavior.
+		$this->bulk_audit_mode  = false;
+		$this->bulk_audit_graph = null;
+
 		usort(
 			$urls,
 			static function ( $a, $b ) {
@@ -656,8 +698,6 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 			}
 		);
 
-		$rendered_count = count( array_filter( $urls, static function ( $u ) { return 'rendered_html' === ( $u['validation_basis'] ?? '' ); } ) );
-
 		$payload = array(
 			'summary' => array(
 				'status'        => $total_errors > 0 ? 'fail' : ( $total_warnings > 0 ? 'warn' : 'pass' ),
@@ -669,11 +709,7 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 				'warning_count' => $total_warnings,
 				'info_count'    => $total_info,
 			),
-			'validation_note'  => sprintf(
-				'Readiness issues for %d of %d published URLs were verified against rendered <head> (validation_basis: rendered_html). Structured-data issues and draft/private URLs use stored meta only.',
-				$rendered_count,
-				count( $urls )
-			),
+			'validation_note'  => 'Bulk audit uses stored post meta for speed and does not fetch live pages. For live rendered-<head> verification of a specific URL, run the per-page readiness check (/seo/readiness/{id}).',
 			'category_counts' => $category_counts,
 			'top_issue_codes' => array_slice( $top_issue_codes, 0, 12 ),
 			'urls'            => $urls,
@@ -814,7 +850,7 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 		$rendered_jsonld_types   = array();
 		$structured_data_basis   = 'stored_post_content';
 
-		if ( 'publish' === $post->post_status ) {
+		if ( 'publish' === $post->post_status && ! $this->bulk_audit_mode ) {
 			$rendered_html = $this->fetch_rendered_html_body( (string) get_permalink( $post ) );
 			if ( null !== $rendered_html ) {
 				$structured_data_basis = 'rendered_html';
@@ -1195,13 +1231,44 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 		$request = new WP_REST_Request( 'GET', '/mcpwp/v1' . $route_prefix . $post_id );
 		$request->set_param( 'id', $post_id );
 
-		$response = $this->$method( $request );
+		// Resolve the target: most validators live on this class, but some (e.g.
+		// content-quality) live on a sibling controller. Guarding with is_callable
+		// means a missing validator degrades to "no issues" instead of raising a
+		// fatal undefined-method error that would abort the entire audit request.
+		$target = is_callable( array( $this, $method ) ) ? $this : $this->resolve_validator_delegate( $method );
+		if ( null === $target || ! is_callable( array( $target, $method ) ) ) {
+			return array( 'issues' => array() );
+		}
+
+		$response = $target->$method( $request );
 		if ( is_wp_error( $response ) ) {
 			return array( 'issues' => array() );
 		}
 
 		$data = $response->get_data();
 		return is_array( $data ) ? $data : array( 'issues' => array() );
+	}
+
+	/**
+	 * Resolve a validator that is not defined on this controller to the sibling
+	 * controller that owns it. Instances are built once and cached. Returns null
+	 * when no delegate is known for the given method.
+	 *
+	 * @param string $method Validator method name.
+	 * @return object|null Controller instance that implements $method, or null.
+	 */
+	protected function resolve_validator_delegate( $method ) {
+		if ( 'audit_content_quality' === $method ) {
+			if ( null === $this->content_quality_delegate && class_exists( 'Mcpwp_REST_Content_Quality' ) ) {
+				// Pass false so we do not re-register the content-quality REST
+				// route (it is already registered at bootstrap); we only need
+				// the instance to call its validator method.
+				$this->content_quality_delegate = new Mcpwp_REST_Content_Quality( false );
+			}
+			return $this->content_quality_delegate;
+		}
+
+		return null;
 	}
 
 	/**
