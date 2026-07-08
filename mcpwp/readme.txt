@@ -140,6 +140,10 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 
 == Changelog ==
 
+= 3.4.4 =
+* fix: **seo:** stop /seo/audit fatal and per-post self-fetch storm
+* fix: **seo:** stop /seo/audit fatal and per-post self-fetch storm
+
 = 3.4.1 =
 * security: require admin scope for plugin self-update and update-control options; restrict update package URLs to HTTPS + trusted hosts (fixes write-scope→RCE chain)
 
