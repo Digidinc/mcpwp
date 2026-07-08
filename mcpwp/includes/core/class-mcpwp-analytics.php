@@ -2,7 +2,7 @@
 /**
  * Analytics gateway — sends anonymous usage events to PostHog.
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -116,7 +116,7 @@ class Mcpwp_Analytics {
 			// Analytics must never affect tool execution.
 			if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
 				// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
-				error_log( 'MCPWP Analytics: capture failed — ' . $e->getMessage() );
+				error_log( 'mumcp Analytics: capture failed — ' . $e->getMessage() );
 			}
 		}
 	}

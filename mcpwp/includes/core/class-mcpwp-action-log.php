@@ -2,7 +2,7 @@
 /**
  * Immutable action audit log for MCP tool calls.
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {

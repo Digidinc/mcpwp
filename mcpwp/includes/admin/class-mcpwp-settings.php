@@ -2,7 +2,7 @@
 /**
  * Settings functionality
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -399,13 +399,13 @@ class Mcpwp_Settings {
 
 		add_settings_field(
 			'wl_hide_branding',
-			__( 'Hide MCPWP Branding', 'mumcp' ),
+			__( 'Hide mumcp Branding', 'mumcp' ),
 			array( $this, 'render_white_label_hide_branding_field' ),
 			'mcpwp_settings',
 			'mcpwp_white_label_section',
 			array(
 				'key'         => 'hide_mcpwp_branding',
-				'description' => __( 'Remove "MCPWP" labels from admin pages and chat widget.', 'mumcp' ),
+				'description' => __( 'Remove "mumcp" labels from admin pages and chat widget.', 'mumcp' ),
 			)
 		);
 
@@ -979,11 +979,11 @@ class Mcpwp_Settings {
 				value="1"
 				<?php checked( $enabled ); ?>
 			/>
-			<?php esc_html_e( 'Share anonymous tool-usage data to help improve MCPWP', 'mumcp' ); ?>
+			<?php esc_html_e( 'Share anonymous tool-usage data to help improve mumcp', 'mumcp' ); ?>
 		</label>
 		<p class="description">
 			<?php esc_html_e( 'Sends MCP tool names, success/failure status, and execution time to PostHog. No WordPress content or personal data is ever collected.', 'mumcp' ); ?>
-			<a href="https://mcpwp.net/privacy" target="_blank" rel="noopener noreferrer"><?php esc_html_e( 'Privacy policy', 'mumcp' ); ?></a>
+			<a href="https://mumcp.com/privacy" target="_blank" rel="noopener noreferrer"><?php esc_html_e( 'Privacy policy', 'mumcp' ); ?></a>
 		</p>
 		<?php if ( $uuid ) : ?>
 		<p class="description" style="margin-top:8px;">

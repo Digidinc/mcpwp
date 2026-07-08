@@ -4,7 +4,7 @@
  *
  * Allows multiple REST API operations in a single request for efficiency.
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {

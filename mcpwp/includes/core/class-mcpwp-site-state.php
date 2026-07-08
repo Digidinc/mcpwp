@@ -2,7 +2,7 @@
 /**
  * Coherent site-state snapshot for agents and the Control Room.
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -76,7 +76,7 @@ class Mcpwp_Site_State {
 			'url'           => get_site_url(),
 			'admin_url'     => admin_url(),
 			'wp_version'    => get_bloginfo( 'version' ),
-			'plugin_name'   => 'MCPWP',
+			'plugin_name'   => 'mumcp',
 			'plugin_version' => defined( 'MCPWP_VERSION' ) ? MCPWP_VERSION : '',
 		);
 	}

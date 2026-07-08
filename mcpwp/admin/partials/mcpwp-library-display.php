@@ -7,7 +7,7 @@
  *   $library_filters        — array  active filter values
  *   $library_filter_options — array  available filter options (classes, styles)
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -56,7 +56,7 @@ $unlinked_archetype_count = count(
 		<div class="mcpwp-card">
 			<h2><?php esc_html_e( 'Operating Sequence', 'mumcp' ); ?></h2>
 			<p class="description">
-				<?php esc_html_e( 'This is the operator loop MCPWP is designed around. New models and humans should follow this path instead of building pages from scratch every time.', 'mumcp' ); ?>
+				<?php esc_html_e( 'This is the operator loop mumcp is designed around. New models and humans should follow this path instead of building pages from scratch every time.', 'mumcp' ); ?>
 			</p>
 			<div class="mcpwp-workflow-sequence">
 				<div class="mcpwp-workflow-step">
@@ -93,7 +93,7 @@ $unlinked_archetype_count = count(
 				<?php esc_html_e( 'Structured Design Library', 'mumcp' ); ?>
 			</h2>
 			<p class="description">
-				<?php esc_html_e( 'This is the reusable system your models should build against. MCPWP stores reusable page structures and sections as Elementor templates, then adds archetype and part metadata on top so they stay editable in Elementor and reusable via MCP.', 'mumcp' ); ?>
+				<?php esc_html_e( 'This is the reusable system your models should build against. mumcp stores reusable page structures and sections as Elementor templates, then adds archetype and part metadata on top so they stay editable in Elementor and reusable via MCP.', 'mumcp' ); ?>
 			</p>
 
 			<div class="mcpwp-library-summary">
@@ -706,7 +706,7 @@ $unlinked_archetype_count = count(
 		<div class="mcpwp-card">
 			<h2><?php esc_html_e( 'Promote Existing Template', 'mumcp' ); ?></h2>
 			<p class="description">
-				<?php esc_html_e( 'Use this when you already have an Elementor template and want MCPWP to classify it as a canonical archetype or reusable part without duplicating the template.', 'mumcp' ); ?>
+				<?php esc_html_e( 'Use this when you already have an Elementor template and want mumcp to classify it as a canonical archetype or reusable part without duplicating the template.', 'mumcp' ); ?>
 			</p>
 
 			<div class="mcpwp-library-actions">

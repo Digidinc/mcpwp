@@ -1,6 +1,6 @@
 === mumcp ===
 Contributors: mumega
-Donate link: https://mcpwp.net/
+Donate link: https://mumcp.com/
 Tags: ai, claude, mcp, elementor, api
 Requires at least: 6.1
 Tested up to: 7.0
@@ -17,7 +17,7 @@ Model Context Protocol (MCP) for WordPress, by Mumega. Safe AI-assisted posts, p
 
 mumcp connects your WordPress site to AI assistants like Claude using the Model Context Protocol (MCP). It gives approved AI clients a scoped, auditable way to read site context and help manage core WordPress content through natural language.
 
-The WordPress.org package is the free core: API keys, scoped access, activity logging, posts, pages, media, drafts, menus, site context, and basic Elementor operations when Elementor is installed. Advanced features (staging workflows, SEO automation, WooCommerce tooling, AI provider integrations) are available separately — see [mcpwp.net/pricing](https://mcpwp.net/pricing).
+The WordPress.org package is the free core: API keys, scoped access, activity logging, posts, pages, media, drafts, menus, site context, and basic Elementor operations when Elementor is installed. Advanced features (staging workflows, SEO automation, WooCommerce tooling, AI provider integrations) are available separately — see [mcpwp.net/pricing](https://mumcp.com/pricing).
 
 = Key Features =
 
@@ -222,8 +222,8 @@ Used as a fallback for generating website screenshot thumbnails when no Cloudfla
 When a user submits feedback via the wp_submit_feedback tool, the feedback is relayed to a central endpoint so plugin developers receive bug reports. This can be disabled by defining `MCPWP_DISABLE_FEEDBACK_RELAY` as true.
 * Data sent: Feedback text, site URL, site name, plugin version
 * When: Only when the wp_submit_feedback MCP tool is explicitly called
-* Endpoint: https://mcpwp.net/wp-json/mcpwp/v1/feedback/relay
-* Privacy Policy: https://mcpwp.net/privacy
+* Endpoint: https://mumcp.com/wp-json/mcpwp/v1/feedback/relay
+* Privacy Policy: https://mumcp.com/privacy
 
 = GitHub API (optional) =
 If configured in settings, feedback can be automatically posted as GitHub issues.
@@ -300,6 +300,6 @@ Powers the built-in Chat assistant when no OpenAI key is configured.
 
 == Support ==
 
-* Documentation: [mumcp docs](https://mcpwp.net/docs/)
+* Documentation: [mumcp docs](https://mumcp.com/docs/)
 * Support Forum: [wordpress.org/support/plugin/mcpwp](https://wordpress.org/support/plugin/mcpwp)
 * GitHub: [github.com/Mumega-com/mcp-for-wp](https://github.com/Mumega-com/mcp-for-wp)

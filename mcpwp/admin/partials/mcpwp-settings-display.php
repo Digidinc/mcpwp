@@ -8,7 +8,7 @@
  *   $llms_url             — string  public llms.txt URL
  *   $llms_preview         — string  llms.txt content preview
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -42,7 +42,7 @@ $license_label = ucwords( str_replace( '_', ' ', $license_plan ) );
 				<?php
 				printf(
 					/* translators: %s: active plan name */
-					esc_html__( 'MCPWP connects your WordPress site to AI assistants via the Model Context Protocol (MCP). Current plan: %s.', 'mumcp' ),
+					esc_html__( 'mumcp connects your WordPress site to AI assistants via the Model Context Protocol (MCP). Current plan: %s.', 'mumcp' ),
 					esc_html( $license_label )
 				);
 				?>
@@ -205,7 +205,7 @@ $license_label = ucwords( str_replace( '_', ' ', $license_plan ) );
 
 		<div class="mcpwp-settings-card">
 			<h2><?php esc_html_e( 'Chat Model', 'mumcp' ); ?></h2>
-			<p class="description"><?php esc_html_e( 'Select the AI model used by the MCPWP Chat tab. Auto picks OpenAI if a key is configured, then Gemini, then the free Workers AI fallback.', 'mumcp' ); ?></p>
+			<p class="description"><?php esc_html_e( 'Select the AI model used by the mumcp Chat tab. Auto picks OpenAI if a key is configured, then Gemini, then the free Workers AI fallback.', 'mumcp' ); ?></p>
 			<form method="post" action="options.php">
 				<?php settings_fields( 'mcpwp_chat_group' ); ?>
 				<?php $model = get_option( 'mcpwp_chat_model', 'auto' ); ?>

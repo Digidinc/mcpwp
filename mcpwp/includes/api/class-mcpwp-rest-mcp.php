@@ -5,7 +5,7 @@
  * Implements a native MCP endpoint for direct Claude Desktop connection.
  * Receives JSON-RPC 2.0 requests and translates them to internal REST API calls.
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -271,7 +271,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			? $core->get_site_info()
 			: array(
 				'plugin'       => array(
-					'name'    => 'MCPWP',
+					'name'    => 'mumcp',
 					'version' => defined( 'MCPWP_VERSION' ) ? MCPWP_VERSION : null,
 				),
 				'capabilities' => array(),
@@ -315,7 +315,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 
 		return array(
 			'plugin'                => $site_info['plugin'] ?? array(
-				'name'    => 'MCPWP',
+				'name'    => 'mumcp',
 				'version' => defined( 'MCPWP_VERSION' ) ? MCPWP_VERSION : null,
 			),
 			'site'                  => array(
@@ -329,7 +329,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			'detected_integrations' => $this->get_detected_integrations(),
 			'auth'                  => array(
 				'header' => 'X-API-Key',
-				'note'   => 'Send your MCPWP API key in the X-API-Key header for REST + MCP requests.',
+				'note'   => 'Send your mumcp API key in the X-API-Key header for REST + MCP requests.',
 			),
 			'endpoints'             => array(
 				'rest_base' => rest_url( 'mcpwp/v1/' ),
@@ -1134,14 +1134,14 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				return $this->jsonrpc_error(
 					$id,
 					-32004,
-					sprintf( 'Tool "%s" is part of MCPWP Pro, which is not active on this site.', $tool_name ),
+					sprintf( 'Tool "%s" is part of mumcp Pro, which is not active on this site.', $tool_name ),
 					array(
 						'hint'          => sprintf(
-							'"%s" requires an MCPWP Pro license (AI integrations, advanced SEO, WooCommerce and theme-builder tools). Plans start at $59/year — see https://mcpwp.net/pricing/ or upgrade in WP Admin > MCPWP. Free tools keep working without a license.',
+							'"%s" requires an mumcp Pro license (AI integrations, advanced SEO, WooCommerce and theme-builder tools). Plans start at $59/year — see https://mumcp.com/pricing/ or upgrade in WP Admin > mumcp. Free tools keep working without a license.',
 							$tool_name
 						),
 						'plan_required' => 'pro',
-						'upgrade_url'   => 'https://mcpwp.net/pricing/',
+						'upgrade_url'   => 'https://mumcp.com/pricing/',
 					)
 				);
 			}
@@ -1277,7 +1277,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 
 		// Build internal REST request.
 		// Custom tools (mcpwp_register_tools) store 'rest_path' as the full WP REST route.
-		// Built-in tools store a relative path that is prefixed with the MCPWP namespace.
+		// Built-in tools store a relative path that is prefixed with the mumcp namespace.
 		$full_route = isset( $mapping['rest_path'] )
 			? $mapping['rest_path']
 			: '/mcpwp/v1' . $route;
@@ -1542,9 +1542,9 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		$lines = array();
 
 		// --- Plugin overview ---
-		$lines[] = '# MCPWP — MCP Server Instructions';
+		$lines[] = '# mumcp — MCP Server Instructions';
 		$lines[] = '';
-		$lines[] = 'You are connected to **' . $site_name . '**' . ( $site_url ? ' (' . $site_url . ')' : '' ) . ' via MCPWP, a WordPress management plugin that exposes content, design, SEO, and admin tools through MCP.';
+		$lines[] = 'You are connected to **' . $site_name . '**' . ( $site_url ? ' (' . $site_url . ')' : '' ) . ' via mumcp, a WordPress management plugin that exposes content, design, SEO, and admin tools through MCP.';
 		$lines[] = '';
 
 		// --- Best practices ---
@@ -1638,13 +1638,13 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		if ( ! $this->is_pro_active() ) {
 			$lines[] = '## Pro Features (Not Active)';
 			$lines[] = '';
-			$lines[] = 'This site runs MCPWP Free. The following tools appear in the tool list but will return an upgrade prompt when called:';
+			$lines[] = 'This site runs mumcp Free. The following tools appear in the tool list but will return an upgrade prompt when called:';
 			$lines[] = '- **Staging** — `wp_get_staging_info`, `wp_push_to_staging`, `wp_push_to_live`, `wp_get_staging_status` (WP Engine / Kinsta / Pressable environment management)';
 			$lines[] = '- **Advanced SEO** — `wp_get_seo`, `wp_set_seo`, `wp_analyze_seo`, `wp_bulk_seo`';
 			$lines[] = '- **WooCommerce** — product/order/analytics tools';
 			$lines[] = '- **Theme Builder** — `wp_get_theme_conditions`, `wp_set_theme_conditions`';
 			$lines[] = '';
-			$lines[] = 'Upgrade at https://mcpwp.net/pricing/ or via WP Admin > MCPWP.';
+			$lines[] = 'Upgrade at https://mumcp.com/pricing/ or via WP Admin > mumcp.';
 			$lines[] = '';
 		}
 

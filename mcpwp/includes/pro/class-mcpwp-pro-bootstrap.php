@@ -4,7 +4,7 @@
  *
  * Loads additional endpoints/features for licensed paid plans and trials.
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {

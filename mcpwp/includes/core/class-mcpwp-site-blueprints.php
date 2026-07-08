@@ -2,7 +2,7 @@
 /**
  * Site Blueprint Library — multi-page site structure definitions.
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {

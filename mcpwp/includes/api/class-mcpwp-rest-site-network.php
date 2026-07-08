@@ -4,7 +4,7 @@
  *
  * Carved from the original Mcpwp_REST_Site (G1 split). Behavior-identical.
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -204,7 +204,7 @@ class Mcpwp_REST_Site_Network extends Mcpwp_REST_API {
 				'has_api_key'  => $has_key,
 				'hint'         => $has_key
 					? 'Connect to the MCP endpoint above with the site\'s API key.'
-					: 'This site needs an API key. Generate one from WP Admin > MCPWP.',
+					: 'This site needs an API key. Generate one from WP Admin > mumcp.',
 			)
 		);
 	}

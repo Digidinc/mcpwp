@@ -4,7 +4,7 @@
  *
  * GPT-Image-1-Mini image generation, GPT-4o vision analysis, and text generation.
  *
- * @package MCPWP
+ * @package mumcp
  * @since   1.1.0
  */
 

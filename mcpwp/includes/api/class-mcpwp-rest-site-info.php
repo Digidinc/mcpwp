@@ -4,7 +4,7 @@
  *
  * Carved from the original Mcpwp_REST_Site (G1 split). Behavior-identical.
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -252,7 +252,7 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 			return $this->success_response(
 				array(
 					'plugin'  => array(
-						'name'    => 'MCPWP',
+						'name'    => 'mumcp',
 						'version' => defined( 'MCPWP_VERSION' ) ? MCPWP_VERSION : null,
 					),
 					'message' => 'MCP controller not available.',
@@ -265,7 +265,7 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 			return $this->success_response(
 				array(
 					'plugin'  => array(
-						'name'    => 'MCPWP',
+						'name'    => 'mumcp',
 						'version' => defined( 'MCPWP_VERSION' ) ? MCPWP_VERSION : null,
 					),
 					'message' => 'Introspection is not supported in this version.',
@@ -333,7 +333,7 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 			'wp_version'  => $site_info['wp_version'] ?? $GLOBALS['wp_version'],
 			'theme'       => $site_info['theme'] ?? array(),
 			'plugin'      => $site_info['plugin'] ?? array(
-				'name'    => 'MCPWP',
+				'name'    => 'mumcp',
 				'version' => defined( 'MCPWP_VERSION' ) ? MCPWP_VERSION : null,
 			),
 		);

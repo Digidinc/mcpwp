@@ -12,7 +12,7 @@
  *
  * @wordpress-plugin
  * Plugin Name:       mumcp
- * Plugin URI:        https://mcpwp.net/
+ * Plugin URI:        https://mumcp.com/
  * Description:       mumcp — Model Context Protocol for WordPress, by Mumega. Connect your site to AI assistants like Claude: posts, pages, media, menus, and Elementor through natural language.
  * x-release-please-start-version
  * Version:           3.4.3
@@ -133,7 +133,7 @@ if ( ! function_exists( 'mcpwp_php_version_notice' ) ) {
 			<?php
 			printf(
 				/* translators: 1: Required PHP version 2: Current PHP version */
-				esc_html__( 'MCPWP requires PHP %1$s or higher. You are running PHP %2$s.', 'mumcp' ),
+				esc_html__( 'mumcp requires PHP %1$s or higher. You are running PHP %2$s.', 'mumcp' ),
 				esc_html( MCPWP_MIN_PHP_VERSION ),
 				esc_html( PHP_VERSION )
 			);
@@ -156,7 +156,7 @@ if ( ! function_exists( 'mcpwp_wp_version_notice' ) ) {
 			<?php
 			printf(
 				/* translators: 1: Required WP version 2: Current WP version */
-				esc_html__( 'MCPWP requires WordPress %1$s or higher. You are running WordPress %2$s.', 'mumcp' ),
+				esc_html__( 'mumcp requires WordPress %1$s or higher. You are running WordPress %2$s.', 'mumcp' ),
 				esc_html( MCPWP_MIN_WP_VERSION ),
 				esc_html( $wp_version )
 			);
@@ -342,18 +342,18 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	} catch ( \Throwable $e ) {
 		if ( defined( 'WP_DEBUG_LOG' ) && WP_DEBUG_LOG ) {
 			// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
-			error_log( 'MCPWP migration error (plugins_loaded): ' . $e->getMessage() );
+			error_log( 'mumcp migration error (plugins_loaded): ' . $e->getMessage() );
 		}
 		// Log-and-continue — never fatal the site.
 	} catch ( \Exception $e ) {
 		if ( defined( 'WP_DEBUG_LOG' ) && WP_DEBUG_LOG ) {
 			// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
-			error_log( 'MCPWP migration error (plugins_loaded): ' . $e->getMessage() );
+			error_log( 'mumcp migration error (plugins_loaded): ' . $e->getMessage() );
 		}
 	}
 
 	// Encryption key migration: re-encrypt provider blobs from AUTH_SALT-derived
-	// key → dedicated MCPWP key (non-destructive, idempotent, runs once).
+	// key → dedicated mumcp key (non-destructive, idempotent, runs once).
 	// Registered here (class already required above); fires on plugins_loaded prio 20.
 	Mcpwp_Encryption_Migration::register();
 
@@ -427,12 +427,12 @@ if ( ! function_exists( 'mcpwp_activate' ) ) {
 			} catch ( \Throwable $e ) {
 				if ( defined( 'WP_DEBUG_LOG' ) && WP_DEBUG_LOG ) {
 					// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
-					error_log( 'MCPWP migration error (activate, blog ' . $blog_id . '): ' . $e->getMessage() );
+					error_log( 'mumcp migration error (activate, blog ' . $blog_id . '): ' . $e->getMessage() );
 				}
 			} catch ( \Exception $e ) {
 				if ( defined( 'WP_DEBUG_LOG' ) && WP_DEBUG_LOG ) {
 					// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
-					error_log( 'MCPWP migration error (activate, blog ' . $blog_id . '): ' . $e->getMessage() );
+					error_log( 'mumcp migration error (activate, blog ' . $blog_id . '): ' . $e->getMessage() );
 				}
 			}
 			restore_current_blog();
@@ -444,12 +444,12 @@ if ( ! function_exists( 'mcpwp_activate' ) ) {
 		} catch ( \Throwable $e ) {
 			if ( defined( 'WP_DEBUG_LOG' ) && WP_DEBUG_LOG ) {
 				// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
-				error_log( 'MCPWP migration error (activate): ' . $e->getMessage() );
+				error_log( 'mumcp migration error (activate): ' . $e->getMessage() );
 			}
 		} catch ( \Exception $e ) {
 			if ( defined( 'WP_DEBUG_LOG' ) && WP_DEBUG_LOG ) {
 				// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
-				error_log( 'MCPWP migration error (activate): ' . $e->getMessage() );
+				error_log( 'mumcp migration error (activate): ' . $e->getMessage() );
 			}
 		}
 	}
@@ -457,7 +457,7 @@ if ( ! function_exists( 'mcpwp_activate' ) ) {
 }
 
 /**
- * Provision MCPWP tables/options when a new site is created in a multisite network.
+ * Provision mumcp tables/options when a new site is created in a multisite network.
  *
  * @param WP_Site $new_site New site object.
  */
@@ -467,7 +467,7 @@ if ( ! function_exists( 'mcpwp_on_new_site' ) ) {
 		require_once ABSPATH . 'wp-admin/includes/plugin.php';
 	}
 
-	// Only run if MCPWP is network-activated.
+	// Only run if mumcp is network-activated.
 	if ( ! is_plugin_active_for_network( plugin_basename( __FILE__ ) ) ) {
 		return;
 	}

@@ -4,7 +4,7 @@
  *
  * Carved verbatim from Mcpwp_Admin (G3 split). Mixed back via trait — same class, same $this.
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -32,7 +32,7 @@ trait Mcpwp_Admin_Chat_Trait {
 			'Site: ' . get_bloginfo( 'name' ),
 			'URL: ' . home_url(),
 			'Description: ' . get_bloginfo( 'description' ),
-			'Plugin: MCPWP v' . MCPWP_VERSION,
+			'Plugin: mumcp v' . MCPWP_VERSION,
 		);
 		$site_character = get_option( 'mcpwp_site_context', '' );
 		if ( ! empty( $site_character ) ) {
@@ -61,7 +61,7 @@ trait Mcpwp_Admin_Chat_Trait {
 		}
 		$site_context = implode( "\n", $parts );
 
-		$system = "You are MCPWP, an AI assistant embedded in a WordPress site. Help the user manage their site.\n\n"
+		$system = "You are mumcp, an AI assistant embedded in a WordPress site. Help the user manage their site.\n\n"
 			. "When the user asks you to DO something (build, edit, create, delete, update), respond with a JSON tool call:\n"
 			. "{\"tool\": \"tool_name\", \"arguments\": {\"key\": \"value\"}}\n\n"
 			. "Available tools: wp_build_page, wp_edit_widget, wp_edit_section, wp_add_section, wp_create_page, wp_update_page, "

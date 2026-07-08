@@ -2,7 +2,7 @@
 /**
  * REST endpoints for proactive site signals.
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {

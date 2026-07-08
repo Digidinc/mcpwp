@@ -2,7 +2,7 @@
 /**
  * Plugin Loader
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -162,7 +162,7 @@ class Mcpwp_Loader {
 		if ( ! isset( $schedules['mcpwp_every_five_minutes'] ) ) {
 			$schedules['mcpwp_every_five_minutes'] = array(
 				'interval' => 5 * MINUTE_IN_SECONDS,
-				'display'  => __( 'Every 5 Minutes (MCPWP)', 'mumcp' ),
+				'display'  => __( 'Every 5 Minutes (mumcp)', 'mumcp' ),
 			);
 		}
 
@@ -357,7 +357,7 @@ class Mcpwp_Loader {
 	}
 
 	/**
-	 * Add MCPWP rate-limit headers to REST responses.
+	 * Add mumcp rate-limit headers to REST responses.
 	 *
 	 * @param WP_HTTP_Response $response Result to send to the client.
 	 * @param WP_REST_Server   $server   Server instance.

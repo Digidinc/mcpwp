@@ -2,7 +2,7 @@
 /**
  * SEO Audit REST Controller
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -2014,7 +2014,7 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 				'timeout'     => 6,
 				'sslverify'   => ! ( defined( 'WP_DEBUG' ) && WP_DEBUG ),
 				'redirection' => 0,
-				'headers'     => array( 'User-Agent' => 'MCPWP-SEO-Validator/1.0 (+https://mcpwp.net/)' ),
+				'headers'     => array( 'User-Agent' => 'MCPWP-SEO-Validator/1.0 (+https://mumcp.com/)' ),
 			)
 		);
 
@@ -2099,7 +2099,7 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 				'timeout'     => 6,
 				'sslverify'   => ! ( defined( 'WP_DEBUG' ) && WP_DEBUG ),
 				'redirection' => 0,
-				'headers'     => array( 'User-Agent' => 'MCPWP-SEO-Validator/1.0 (+https://mcpwp.net/)' ),
+				'headers'     => array( 'User-Agent' => 'MCPWP-SEO-Validator/1.0 (+https://mumcp.com/)' ),
 			)
 		);
 

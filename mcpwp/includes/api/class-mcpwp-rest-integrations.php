@@ -4,7 +4,7 @@
  *
  * Handles REST API endpoints for third-party AI integrations.
  *
- * @package MCPWP
+ * @package mumcp
  * @since   1.1.0
  */
 
@@ -855,9 +855,9 @@ class Mcpwp_REST_Integrations extends Mcpwp_REST_API {
 		if ( class_exists( 'Mcpwp_License' ) && ! Mcpwp_License::get_instance()->is_pro() ) {
 			return $this->error_response(
 				'pro_required',
-				__( 'This feature requires MCPWP Pro. Upgrade at https://mcpwp.net/pricing/', 'mumcp' ),
+				__( 'This feature requires mumcp Pro. Upgrade at https://mumcp.com/pricing/', 'mumcp' ),
 				403,
-				array( 'upgrade_url' => 'https://mcpwp.net/pricing/' )
+				array( 'upgrade_url' => 'https://mumcp.com/pricing/' )
 			);
 		}
 		return true;
@@ -882,7 +882,7 @@ class Mcpwp_REST_Integrations extends Mcpwp_REST_API {
 				'provider_not_configured',
 				sprintf(
 					/* translators: %s: Provider name */
-					__( '%s API key not configured. Go to MCPWP > Integrations to add it.', 'mumcp' ),
+					__( '%s API key not configured. Go to mumcp > Integrations to add it.', 'mumcp' ),
 					$name
 				),
 				400
@@ -909,7 +909,7 @@ class Mcpwp_REST_Integrations extends Mcpwp_REST_API {
 					'provider_not_configured',
 					sprintf(
 						/* translators: %s: Provider name */
-						__( '%s API key not configured. Go to MCPWP > Integrations to add it.', 'mumcp' ),
+						__( '%s API key not configured. Go to mumcp > Integrations to add it.', 'mumcp' ),
 						$requested
 					),
 					400
@@ -924,7 +924,7 @@ class Mcpwp_REST_Integrations extends Mcpwp_REST_API {
 				'no_provider_available',
 				sprintf(
 					/* translators: %s: Capability name */
-					__( 'No AI provider configured for %s. Go to MCPWP > Integrations to add one.', 'mumcp' ),
+					__( 'No AI provider configured for %s. Go to mumcp > Integrations to add one.', 'mumcp' ),
 					$capability
 				),
 				400

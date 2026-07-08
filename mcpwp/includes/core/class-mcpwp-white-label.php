@@ -1,8 +1,8 @@
 <?php
 /**
- * White-label branding for MCPWP — agency name, logo, colors, chat widget.
+ * White-label branding for mumcp — agency name, logo, colors, chat widget.
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {

@@ -2,7 +2,7 @@
 /**
  * MCP Tools admin page template.
  *
- * @package MCPWP
+ * @package mumcp
  * @since   1.1.2
  *
  * @var array $disabled_categories Currently disabled category slugs.

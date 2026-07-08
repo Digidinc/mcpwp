@@ -3,10 +3,10 @@
  * Encryption for third-party API keys
  *
  * Uses libsodium (PHP 7.2+) for reversible encryption of external service
- * API keys. Unlike our own MCPWP keys which are one-way hashed, third-party
+ * API keys. Unlike our own mumcp keys which are one-way hashed, third-party
  * keys need to be decrypted for outgoing API calls.
  *
- * @package MCPWP
+ * @package mumcp
  * @since   1.1.0
  */
 

@@ -2,7 +2,7 @@
 /**
  * Approval-safe SEO autofix planning.
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {

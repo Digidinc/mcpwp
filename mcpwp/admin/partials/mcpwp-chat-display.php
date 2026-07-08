@@ -2,7 +2,7 @@
 /**
  * Chat tab — AI assistant built into WP Admin.
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -30,10 +30,10 @@ $model_label = $model_labels[ $chat_model ] ?? 'Workers AI';
 		<span class="mcpwp-logo">
 			<span class="dashicons dashicons-format-chat"></span>
 		</span>
-		<?php esc_html_e( 'MCPWP Chat', 'mumcp' ); ?>
+		<?php esc_html_e( 'mumcp Chat', 'mumcp' ); ?>
 		<span class="mcpwp-chat-model-badge"><?php echo esc_html( $model_label ); ?></span>
 	</h1>
-	<p class="description mcpwp-page-intro"><?php esc_html_e( 'Ask your site for help, then keep meaningful changes inside the MCPWP approval and audit loop.', 'mumcp' ); ?></p>
+	<p class="description mcpwp-page-intro"><?php esc_html_e( 'Ask your site for help, then keep meaningful changes inside the mumcp approval and audit loop.', 'mumcp' ); ?></p>
 
 	<?php if ( ! $has_openai && ! $has_gemini ) : ?>
 	<div class="mcpwp-chat-safety" style="background:#fffbeb;border-bottom:1px solid #f6c90e;color:#92400e;">
@@ -62,7 +62,7 @@ $model_label = $model_labels[ $chat_model ] ?? 'Workers AI';
 		</div>
 		<div id="mcpwp-chat-messages" class="mcpwp-chat-messages">
 			<div class="mcpwp-chat-msg mcpwp-chat-assistant">
-				<strong class="mcpwp-chat-brand">MCPWP</strong>
+				<strong class="mcpwp-chat-brand">mumcp</strong>
 				<p class="mcpwp-chat-intro">
 					<?php
 					printf(
@@ -94,7 +94,7 @@ $model_label = $model_labels[ $chat_model ] ?? 'Workers AI';
 		<?php
 		printf(
 			/* translators: %s: model name */
-			esc_html__( 'Powered by %s. Site operations remain auditable through WordPress and MCPWP activity logs.', 'mumcp' ),
+			esc_html__( 'Powered by %s. Site operations remain auditable through WordPress and mumcp activity logs.', 'mumcp' ),
 			esc_html( $model_label )
 		);
 		?>

@@ -4,7 +4,7 @@
  *
  * Stores and retrieves encrypted API keys for third-party AI providers.
  *
- * @package MCPWP
+ * @package mumcp
  * @since   1.1.0
  */
 
@@ -63,7 +63,7 @@ class Mcpwp_Integration_Manager {
 		),
 		'screenshot' => array(
 			'name'        => 'Screenshot Worker',
-			'url'         => 'https://mcpwp.net/docs/screenshot-worker/',
+			'url'         => 'https://mumcp.com/docs/screenshot-worker/',
 			'key_prefix'  => '',
 			'tier'        => 'free',
 			'description' => 'Cloudflare Browser Rendering for high-quality headless Chromium screenshots. Without this, screenshots use WordPress mshots (lower quality, delayed).',
@@ -99,7 +99,7 @@ class Mcpwp_Integration_Manager {
 			'url'         => 'https://developers.figma.com/docs/figma-mcp-server/',
 			'key_prefix'  => '',
 			'tier'        => 'pro',
-			'description' => 'Read Figma design context into MCPWP so models can inspect approved frames and then turn them into archetypes, parts, and site briefs. Supports either a personal access token or a Figma OAuth app.',
+			'description' => 'Read Figma design context into mumcp so models can inspect approved frames and then turn them into archetypes, parts, and site briefs. Supports either a personal access token or a Figma OAuth app.',
 			'fields'      => array(
 				'personal_access_token' => array(
 					'label'       => 'Personal Access Token',
@@ -127,7 +127,7 @@ class Mcpwp_Integration_Manager {
 			'name'        => 'PostHog',
 			'url'         => 'https://us.posthog.com/settings/project-details',
 			'tier'        => 'free',
-			'description' => 'Product analytics for the MCPWP admin interface. Tracks key admin actions (API key copy, connection test, upgrade clicks) to help understand plugin adoption.',
+			'description' => 'Product analytics for the mumcp admin interface. Tracks key admin actions (API key copy, connection test, upgrade clicks) to help understand plugin adoption.',
 			'fields'      => array(
 				'token' => array(
 					'label'       => 'Project API Key',

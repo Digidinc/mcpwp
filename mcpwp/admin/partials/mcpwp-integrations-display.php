@@ -2,7 +2,7 @@
 /**
  * Integrations admin page template.
  *
- * @package MCPWP
+ * @package mumcp
  * @since   1.1.0
  *
  * @var array $providers Provider status data from Mcpwp_Integration_Manager.
@@ -114,7 +114,7 @@ $figma_oauth_message = isset( $_GET['message'] ) ? sanitize_text_field( wp_unsla
 						<?php if ( $unlock_desc ) : ?>
 							<?php echo esc_html( $unlock_desc ); ?><br />
 						<?php endif; ?>
-						<a href="<?php echo esc_url( 'https://mcpwp.net/pricing/' ); ?>" target="_blank" rel="noopener">
+						<a href="<?php echo esc_url( 'https://mumcp.com/pricing/' ); ?>" target="_blank" rel="noopener">
 							<?php esc_html_e( 'Upgrade to Pro &rarr;', 'mumcp' ); ?>
 						</a>
 					</p>

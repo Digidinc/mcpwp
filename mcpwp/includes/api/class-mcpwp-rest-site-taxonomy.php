@@ -4,7 +4,7 @@
  *
  * Carved from the original Mcpwp_REST_Site (G1 split). Behavior-identical.
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {

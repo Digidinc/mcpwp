@@ -2,7 +2,7 @@
 /**
  * Webhooks Manager
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -590,7 +590,7 @@ class Mcpwp_Webhooks {
 
 		$payload = array(
 			'test'    => true,
-			'message' => __( 'This is a test webhook delivery from MCPWP.', 'mumcp' ),
+			'message' => __( 'This is a test webhook delivery from mumcp.', 'mumcp' ),
 		);
 
 		$body = wp_json_encode( $payload );

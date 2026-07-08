@@ -48,7 +48,7 @@
  * 3.1.0 P0). See class-mcpwp-license.php bridge_local_license_is_valid() and
  * bridge_trial_is_active() for the exact validity checks used.
  *
- * @package MCPWP
+ * @package mumcp
  * @since   3.0.0 (unreleased bridge)
  */
 
@@ -418,7 +418,7 @@ class Mcpwp_Migrate {
 					$log['encryption_warning_detail'] = 'mcpwp_integrations blob copied from spai_integrations '
 						. 'but Mcpwp_Encryption::decrypt() returned false.  Provider keys (OpenAI, Gemini, '
 						. 'ElevenLabs, Pexels, Figma, PostHog, etc.) must be re-entered in '
-						. 'WP Admin > MCPWP > Integrations.';
+						. 'WP Admin > mumcp > Integrations.';
 				}
 			} elseif ( is_array( $blob ) ) {
 				// spai_integrations was a plain array (unencrypted, older 2.8.x builds).
@@ -504,10 +504,10 @@ class Mcpwp_Migrate {
 
 		$tables = implode( ', ', array_map( 'esc_html', $failed ) );
 		printf(
-			'<div class="notice notice-error"><p><strong>MCPWP migration incomplete:</strong> '
+			'<div class="notice notice-error"><p><strong>mumcp migration incomplete:</strong> '
 			. 'The following database tables could not be migrated from site-pilot-ai and will be retried on the next page load: %s. '
-			. 'Check the migration log under WP Admin &gt; MCPWP &gt; Settings for details. '
-			. 'If the error persists, re-activate the MCPWP plugin.</p></div>',
+			. 'Check the migration log under WP Admin &gt; mumcp &gt; Settings for details. '
+			. 'If the error persists, re-activate the mumcp plugin.</p></div>',
 			esc_html( $tables )
 		);
 	}

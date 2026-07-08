@@ -5,7 +5,7 @@
  * Static widget schemas for AI models to query at runtime.
  * Covers common free and pro widgets with settings keys, types, defaults, and examples.
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {

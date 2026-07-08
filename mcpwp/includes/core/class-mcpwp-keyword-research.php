@@ -5,7 +5,7 @@
  * AnswerThePublic-style keyword expansion using Google Suggest autocomplete.
  * Keyless — no API key required.
  *
- * @package MCPWP
+ * @package mumcp
  * @since   2.8.51
  */
 

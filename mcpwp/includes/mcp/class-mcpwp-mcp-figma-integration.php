@@ -2,7 +2,7 @@
 /**
  * Figma MCP Integration
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {

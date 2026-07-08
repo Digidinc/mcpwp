@@ -2,7 +2,7 @@
 /**
  * API Authentication Trait
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -79,7 +79,7 @@ trait Mcpwp_Api_Auth {
 				__( 'API key is required.', 'mumcp' ),
 				array(
 					'status' => 401,
-					'hint'   => 'Include your API key in the X-API-Key header or Authorization: Bearer header. Generate keys in WP Admin > MCPWP > Settings, or call wp_create_api_key if you have admin access.',
+					'hint'   => 'Include your API key in the X-API-Key header or Authorization: Bearer header. Generate keys in WP Admin > mumcp > Settings, or call wp_create_api_key if you have admin access.',
 				)
 			);
 		}
@@ -122,10 +122,10 @@ trait Mcpwp_Api_Auth {
 			if ( ! $has_configured_keys ) {
 				return new WP_Error(
 					'api_not_configured',
-					__( 'API key not configured. Please visit the MCPWP settings.', 'mumcp' ),
+					__( 'API key not configured. Please visit the mumcp settings.', 'mumcp' ),
 					array(
 						'status' => 500,
-						'hint'   => 'No API keys have been configured yet. The site admin needs to visit WP Admin > MCPWP > Settings to generate an API key.',
+						'hint'   => 'No API keys have been configured yet. The site admin needs to visit WP Admin > mumcp > Settings to generate an API key.',
 					)
 				);
 			}
@@ -137,7 +137,7 @@ trait Mcpwp_Api_Auth {
 				__( 'Invalid API key.', 'mumcp' ),
 				array(
 					'status' => 401,
-					'hint'   => 'The provided API key is not valid. Check for typos or whitespace. Keys start with "mcpwp_". Generate a new key in WP Admin > MCPWP > Settings.',
+					'hint'   => 'The provided API key is not valid. Check for typos or whitespace. Keys start with "mcpwp_". Generate a new key in WP Admin > mumcp > Settings.',
 				)
 			);
 		}
@@ -184,10 +184,10 @@ trait Mcpwp_Api_Auth {
 		if ( ! $this->set_api_user_context() ) {
 			return new WP_Error(
 				'api_user_missing',
-				__( 'API user context is not configured. Re-activate MCPWP to provision the service account.', 'mumcp' ),
+				__( 'API user context is not configured. Re-activate mumcp to provision the service account.', 'mumcp' ),
 				array(
 					'status' => 500,
-					'hint'   => 'The plugin\'s internal service account is missing. Deactivate and reactivate the MCPWP plugin in WP Admin > Plugins to reprovision it.',
+					'hint'   => 'The plugin\'s internal service account is missing. Deactivate and reactivate the mumcp plugin in WP Admin > Plugins to reprovision it.',
 				)
 			);
 		}
@@ -537,7 +537,7 @@ trait Mcpwp_Api_Auth {
 		if ( ! $this->set_api_user_context() ) {
 			return new WP_Error(
 				'api_user_missing',
-				__( 'API user context is not configured. Re-activate MCPWP to provision the service account.', 'mumcp' ),
+				__( 'API user context is not configured. Re-activate mumcp to provision the service account.', 'mumcp' ),
 				array( 'status' => 500 )
 			);
 		}
@@ -1607,7 +1607,7 @@ trait Mcpwp_Api_Auth {
 	 *   1. is_admin() — request is served from the WP admin context.
 	 *   2. activate_plugins capability — caller is a site admin.
 	 *   3. DOING_AJAX constant — request went through wp-admin/admin-ajax.php.
-	 *   4. $_POST['action'] is in the allowlist of known MCPWP admin AJAX actions.
+	 *   4. $_POST['action'] is in the allowlist of known mumcp admin AJAX actions.
 	 *   5. check_ajax_referer() verifies the mcpwp_admin_chat nonce for the action.
 	 *
 	 * The GET ?api_key= query-param path is intentionally NOT touched here —
@@ -1629,7 +1629,7 @@ trait Mcpwp_Api_Auth {
 			return false;
 		}
 
-		// Only bypass for known MCPWP admin actions — never a wildcard.
+		// Only bypass for known mumcp admin actions — never a wildcard.
 		$allowed_actions = array(
 			'mcpwp_admin_chat',
 			'mcpwp_chat_tool_call',

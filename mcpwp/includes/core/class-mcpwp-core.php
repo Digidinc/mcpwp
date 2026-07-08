@@ -2,7 +2,7 @@
 /**
  * Core functionality
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -45,7 +45,7 @@ class Mcpwp_Core {
 			'text_direction' => ( function_exists( 'is_rtl' ) && is_rtl() ) ? 'rtl' : 'ltr',
 			'capabilities' => $this->get_capabilities(),
 			'plugin'       => array(
-				'name'    => 'MCPWP',
+				'name'    => 'mumcp',
 				'version' => MCPWP_VERSION,
 			),
 		);

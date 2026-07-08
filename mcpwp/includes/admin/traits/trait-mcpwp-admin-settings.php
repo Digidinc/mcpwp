@@ -4,7 +4,7 @@
  *
  * Carved verbatim from Mcpwp_Admin (G3 split). Mixed back via trait — same class, same $this.
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {

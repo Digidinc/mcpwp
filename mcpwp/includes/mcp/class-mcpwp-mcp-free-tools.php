@@ -4,7 +4,7 @@
  *
  * Contains all free (always available) MCP tool definitions and route mappings.
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {

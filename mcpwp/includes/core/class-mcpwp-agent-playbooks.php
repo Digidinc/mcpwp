@@ -2,7 +2,7 @@
 /**
  * Deterministic agent playbook contracts.
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {

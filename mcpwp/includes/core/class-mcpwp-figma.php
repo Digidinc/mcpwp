@@ -2,7 +2,7 @@
 /**
  * Figma Design Context Client
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -360,7 +360,7 @@ class Mcpwp_Figma {
 	private function get_config() {
 		$config = $this->manager->get_provider_config( 'figma' );
 		if ( ! is_array( $config ) ) {
-			return new WP_Error( 'figma_not_configured', __( 'Figma is not configured. Add a personal token or OAuth app in MCPWP → Integrations.', 'mumcp' ) );
+			return new WP_Error( 'figma_not_configured', __( 'Figma is not configured. Add a personal token or OAuth app in mumcp → Integrations.', 'mumcp' ) );
 		}
 
 		return $config;
@@ -403,7 +403,7 @@ class Mcpwp_Figma {
 			return (string) $refreshed['access_token'];
 		}
 
-		return new WP_Error( 'figma_not_configured', __( 'Figma is not configured. Add a personal token or complete the OAuth connection in MCPWP → Integrations.', 'mumcp' ) );
+		return new WP_Error( 'figma_not_configured', __( 'Figma is not configured. Add a personal token or complete the OAuth connection in mumcp → Integrations.', 'mumcp' ) );
 	}
 
 	/**

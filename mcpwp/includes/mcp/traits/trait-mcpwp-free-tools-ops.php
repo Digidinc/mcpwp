@@ -4,7 +4,7 @@
  *
  * Carved verbatim from Mcpwp_MCP_Free_Tools::get_tools() (G2 split). Behavior-identical.
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -24,7 +24,7 @@ trait Mcpwp_Free_Tools_Ops_Trait {
 		// API Keys
 		$tools[] = $this->define_tool(
 			'wp_list_api_keys',
-			'List all MCPWP API keys with scopes and metadata. Does not return secret values.',
+			'List all mumcp API keys with scopes and metadata. Does not return secret values.',
 			array(
 				'include_revoked' => array(
 					'type'        => 'boolean',
@@ -135,13 +135,13 @@ trait Mcpwp_Free_Tools_Ops_Trait {
 		// Plugin Settings
 		$tools[] = $this->define_tool(
 			'wp_get_plugin_settings',
-			'Get MCPWP plugin settings. Returns: activity logging config, CORS allowed origins, OAuth settings, alert thresholds, GitHub integration status. Secrets are redacted. Use wp_update_plugin_settings to change values.',
+			'Get mumcp plugin settings. Returns: activity logging config, CORS allowed origins, OAuth settings, alert thresholds, GitHub integration status. Secrets are redacted. Use wp_update_plugin_settings to change values.',
 			array()
 		);
 
 		$tools[] = $this->define_tool(
 			'wp_update_plugin_settings',
-			'Update MCPWP plugin settings. Pass only the keys you want to change. Allowed keys: enable_logging (bool), log_retention_days (1-365), log_store_response_data (bool), allowed_origins (comma-separated URLs), oauth_enabled (bool), oauth_client_id, oauth_client_secret, oauth_token_ttl (60-86400 seconds), alerts_enabled (bool), alerts_window_minutes (1-60), alerts_cooldown_minutes (1-1440), alerts_5xx_threshold (1-10000), alerts_auth_threshold (1-10000), github_token, github_repo (owner/repo).',
+			'Update mumcp plugin settings. Pass only the keys you want to change. Allowed keys: enable_logging (bool), log_retention_days (1-365), log_store_response_data (bool), allowed_origins (comma-separated URLs), oauth_enabled (bool), oauth_client_id, oauth_client_secret, oauth_token_ttl (60-86400 seconds), alerts_enabled (bool), alerts_window_minutes (1-60), alerts_cooldown_minutes (1-1440), alerts_5xx_threshold (1-10000), alerts_auth_threshold (1-10000), github_token, github_repo (owner/repo).',
 			array(
 				'enable_logging' => array(
 					'type'        => 'boolean',
@@ -224,13 +224,13 @@ trait Mcpwp_Free_Tools_Ops_Trait {
 		// Plugin Updates
 		$tools[] = $this->define_tool(
 			'wp_check_update',
-			'Check if a newer version of MCPWP is available. Returns current version, latest version, and download URL.',
+			'Check if a newer version of mumcp is available. Returns current version, latest version, and download URL.',
 			array()
 		);
 
 		$tools[] = $this->define_tool(
 			'wp_trigger_update',
-			'Download and install the latest version of MCPWP. The plugin will be upgraded in place. Requires administrator privileges.',
+			'Download and install the latest version of mumcp. The plugin will be upgraded in place. Requires administrator privileges.',
 			array()
 		);
 
@@ -319,7 +319,7 @@ trait Mcpwp_Free_Tools_Ops_Trait {
 
 		$tools[] = $this->define_tool(
 			'wp_list_mcp_events',
-			'List recent normalized MCPWP events emitted by approvals, SEO audits, and other agent workflows',
+			'List recent normalized mumcp events emitted by approvals, SEO audits, and other agent workflows',
 			array(
 				'type'  => array(
 					'type'        => 'string',

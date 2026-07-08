@@ -47,7 +47,7 @@
  *   open_world  (bool)            — hint: calls external services (default false)
  *   param_remap (array)           — map MCP param names to REST param names if they differ
  *
- * @package MCPWP
+ * @package mumcp
  * @since   2.8.49
  */
 
@@ -98,7 +98,7 @@ class Mcpwp_Custom_Tool_Registry extends Mcpwp_MCP_Tool_Registry {
 	 * Whether a rest_path is a safe target for a registered tool.
 	 *
 	 * Registered tools may only point at their own / namespaced REST routes —
-	 * never at WordPress core routes or MCPWP's own privileged surfaces, and
+	 * never at WordPress core routes or mumcp's own privileged surfaces, and
 	 * never at an absolute URL. This is the gate that stops a registration from
 	 * proxying a privileged endpoint as the API-agent user (SSRF / escalation).
 	 *
@@ -127,7 +127,7 @@ class Mcpwp_Custom_Tool_Registry extends Mcpwp_MCP_Tool_Registry {
 				return false;
 			}
 		}
-		// Deny MCPWP privileged surfaces (key/license/update/settings management).
+		// Deny mumcp privileged surfaces (key/license/update/settings management).
 		if ( preg_match( '#^/mcpwp/v[0-9]+/(api-keys|oauth|update|settings|options|option|integrations|rate-limit|favicon)\b#i', $path ) ) {
 			return false;
 		}

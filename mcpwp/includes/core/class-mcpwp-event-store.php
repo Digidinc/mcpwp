@@ -2,7 +2,7 @@
 /**
  * AI-first event store and dispatcher.
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -56,7 +56,7 @@ class Mcpwp_Event_Store {
 		);
 
 		/**
-		 * Filter a normalized MCPWP event before storage and dispatch.
+		 * Filter a normalized mumcp event before storage and dispatch.
 		 *
 		 * @param array  $event Event record.
 		 * @param string $type  Event type.
@@ -69,7 +69,7 @@ class Mcpwp_Event_Store {
 		self::store( $event );
 
 		/**
-		 * Fires for every normalized MCPWP event.
+		 * Fires for every normalized mumcp event.
 		 *
 		 * @param array $event Event record.
 		 */

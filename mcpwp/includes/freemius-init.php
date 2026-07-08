@@ -2,7 +2,7 @@
 /**
  * Freemius SDK Integration
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -211,7 +211,7 @@ function mcpwp_fs_uninstall_cleanup() {
 }
 
 /**
- * Cleanup a single site's MCPWP data.
+ * Cleanup a single site's mumcp data.
  */
 function mcpwp_fs_uninstall_cleanup_site() {
 	// Clean up options.

@@ -5,7 +5,7 @@
  * Enhances WP_Error responses with actionable hints and guide references
  * to help AI models learn from errors and self-correct.
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -129,15 +129,15 @@ class Mcpwp_Error_Hints {
 		return array(
 			// Auth errors.
 			'missing_api_key'     => array(
-				'hint'  => 'Include your API key in the X-API-Key header or Authorization: Bearer header. Generate keys in WP Admin > MCPWP > Settings, or call wp_create_api_key if you have admin access.',
+				'hint'  => 'Include your API key in the X-API-Key header or Authorization: Bearer header. Generate keys in WP Admin > mumcp > Settings, or call wp_create_api_key if you have admin access.',
 				'guide' => '',
 			),
 			'invalid_api_key'     => array(
-				'hint'  => 'The provided API key is not valid. Check for typos or whitespace. Keys start with "mcpwp_". Generate a new key in WP Admin > MCPWP > Settings.',
+				'hint'  => 'The provided API key is not valid. Check for typos or whitespace. Keys start with "mcpwp_". Generate a new key in WP Admin > mumcp > Settings.',
 				'guide' => '',
 			),
 			'api_not_configured'  => array(
-				'hint'  => 'No API keys have been configured yet. The site admin needs to visit WP Admin > MCPWP > Settings to generate an API key.',
+				'hint'  => 'No API keys have been configured yet. The site admin needs to visit WP Admin > mumcp > Settings to generate an API key.',
 				'guide' => '',
 			),
 			'insufficient_scope'  => array(
@@ -145,7 +145,7 @@ class Mcpwp_Error_Hints {
 				'guide' => '',
 			),
 			'api_user_missing'    => array(
-				'hint'  => 'The plugin\'s internal service account is missing. Deactivate and reactivate the MCPWP plugin in WP Admin > Plugins to reprovision it.',
+				'hint'  => 'The plugin\'s internal service account is missing. Deactivate and reactivate the mumcp plugin in WP Admin > Plugins to reprovision it.',
 				'guide' => '',
 			),
 			'permission_denied'   => array(
@@ -155,7 +155,7 @@ class Mcpwp_Error_Hints {
 
 			// Rate limit errors.
 			'rate_limit_exceeded' => array(
-				'hint'  => 'Rate limit exceeded. Wait for the Retry-After period indicated in the response headers. To increase limits, the site admin can adjust settings in WP Admin > MCPWP > Settings, or create a key with custom rate_limits.',
+				'hint'  => 'Rate limit exceeded. Wait for the Retry-After period indicated in the response headers. To increase limits, the site admin can adjust settings in WP Admin > mumcp > Settings, or create a key with custom rate_limits.',
 				'guide' => '',
 			),
 

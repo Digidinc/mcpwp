@@ -6,7 +6,7 @@
  * Allows site owners to enable/disable entire tool categories
  * to reduce noise in the AI model's context.
  *
- * @package MCPWP
+ * @package mumcp
  * @since   1.1.2
  */
 
@@ -117,7 +117,7 @@ class Mcpwp_Tools_Admin {
 	 *
 	 * The canonical 'mcpwp-admin' handle and its localized data (including
 	 * PostHog config and toolsNonce) are already enqueued by
-	 * Mcpwp_Admin::enqueue_scripts() for all MCPWP admin pages.
+	 * Mcpwp_Admin::enqueue_scripts() for all mumcp admin pages.
 	 * This method is intentionally a no-op — kept to avoid removing a hook
 	 * that may be registered by the loader; it simply returns early.
 	 *

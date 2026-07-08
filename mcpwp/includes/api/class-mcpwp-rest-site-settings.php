@@ -4,7 +4,7 @@
  *
  * Carved from the original Mcpwp_REST_Site (G1 split). Behavior-identical.
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -600,7 +600,7 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 			// Theme settings (hyphenated keys that don't match prefix rules).
 			'astra-settings',
 			'generate_settings',
-			// MCPWP.
+			// mumcp.
 			'mcpwp_site_context',
 			'mcpwp_site_context_updated',
 			// Elementor.

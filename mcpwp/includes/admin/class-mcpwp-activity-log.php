@@ -2,7 +2,7 @@
 /**
  * Activity Log admin page
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -22,14 +22,14 @@ class Mcpwp_Activity_Log_Page {
 		$log_id = isset( $_GET['log_id'] ) ? absint( wp_unslash( $_GET['log_id'] ) ) : 0;
 
 		echo '<div class="wrap">';
-		echo '<h1>' . esc_html__( 'MCPWP Activity Log', 'mumcp' ) . '</h1>';
+		echo '<h1>' . esc_html__( 'mumcp Activity Log', 'mumcp' ) . '</h1>';
 
 		$settings = get_option( 'mcpwp_settings', array() );
 		$enabled  = ! empty( $settings['enable_logging'] );
 
 		if ( ! $enabled ) {
 			echo '<div class="notice notice-warning"><p>' .
-				esc_html__( 'Activity logging is currently disabled. Enable it in MCPWP settings to capture new entries.', 'mumcp' ) .
+				esc_html__( 'Activity logging is currently disabled. Enable it in mumcp settings to capture new entries.', 'mumcp' ) .
 				'</p></div>';
 		}
 

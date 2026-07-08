@@ -34,7 +34,7 @@ trait Mcpwp_Pro_Tools_Staging_Trait {
 
 		$tools[] = $this->define_tool(
 			'wp_push_to_staging',
-			'Copy the live (production) environment to staging. Safe and non-destructive — overwrites the staging environment only. Requires the staging integration to be configured in MCPWP > Integrations. On hosts with async APIs (Kinsta) the response includes an operation_id to poll with wp_get_staging_status.',
+			'Copy the live (production) environment to staging. Safe and non-destructive — overwrites the staging environment only. Requires the staging integration to be configured in mumcp > Integrations. On hosts with async APIs (Kinsta) the response includes an operation_id to poll with wp_get_staging_status.',
 			array(
 				'source'        => array(
 					'type'        => 'string',

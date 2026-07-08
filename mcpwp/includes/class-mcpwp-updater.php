@@ -5,7 +5,7 @@
  * Merges the optional site override (`mcpwp_update_info`) with the
  * worker-served manifest and prefers the newer valid release.
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -339,7 +339,7 @@ class Mcpwp_Updater {
 		}
 
 		$info                = new stdClass();
-		$info->name          = isset( $remote->name ) ? $remote->name : 'MCPWP';
+		$info->name          = isset( $remote->name ) ? $remote->name : 'mumcp';
 		$info->slug          = $this->plugin_slug;
 		$info->version       = $remote->version;
 		$info->author        = isset( $remote->author ) ? sprintf( '<a href="%s">%s</a>', esc_url( isset( $remote->author_homepage ) ? $remote->author_homepage : '' ), esc_html( $remote->author ) ) : '';

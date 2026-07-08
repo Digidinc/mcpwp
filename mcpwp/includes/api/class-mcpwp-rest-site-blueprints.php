@@ -2,7 +2,7 @@
 /**
  * REST endpoints for site blueprint library.
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {

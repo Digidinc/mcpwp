@@ -28,7 +28,7 @@
  *  - No token/secret material written to any log or query-string persistence.
  *  - All endpoints gated on oauth_enabled setting.
  *
- * @package MCPWP
+ * @package mumcp
  * @since   3.2.0
  */
 

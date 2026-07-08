@@ -2,7 +2,7 @@
 /**
  * Figma REST API Controller
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {

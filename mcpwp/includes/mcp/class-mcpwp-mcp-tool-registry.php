@@ -5,7 +5,7 @@
  * Abstract base class for MCP tool registries.
  * Provides common functionality for defining tools and their annotations.
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {

@@ -2,7 +2,7 @@
 /**
  * REST controller for approval requests.
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {

@@ -2,7 +2,7 @@
 /**
  * Content REST Controller (generic post types)
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {

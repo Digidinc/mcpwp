@@ -2,7 +2,7 @@
 /**
  * Proactive site signal feed — computes and stores actionable signals for AI consumption.
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {

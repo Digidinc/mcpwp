@@ -2,7 +2,7 @@
 /**
  * Approval, diff, apply, and rollback store.
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {

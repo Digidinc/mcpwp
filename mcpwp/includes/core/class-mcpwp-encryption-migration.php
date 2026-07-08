@@ -16,7 +16,7 @@
  *   - If the process is interrupted mid-run (e.g. a fatal on write-back),
  *     the option is not set and the migration re-runs on next boot (idempotent).
  *
- * @package MCPWP
+ * @package mumcp
  * @since   3.2.4
  */
 
@@ -157,7 +157,7 @@ class Mcpwp_Encryption_Migration {
 				// Do NOT set MIGRATED_FLAG — retry on next boot so data is never lost.
 				if ( defined( 'WP_DEBUG_LOG' ) && WP_DEBUG_LOG ) {
 					// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
-					error_log( 'MCPWP encryption migration: integration option write failed — will retry on next boot.' );
+					error_log( 'mumcp encryption migration: integration option write failed — will retry on next boot.' );
 				}
 				return;
 			}
@@ -185,10 +185,10 @@ class Mcpwp_Encryption_Migration {
 		$list = implode( ', ', array_map( 'esc_html', $failures ) );
 		printf(
 			'<div class="notice notice-warning"><p><strong>%s</strong> %s <code>%s</code>. %s</p></div>',
-			esc_html__( 'MCPWP encryption migration:', 'mumcp' ),
+			esc_html__( 'mumcp encryption migration:', 'mumcp' ),
 			esc_html__( 'Could not automatically re-encrypt the API keys for:', 'mumcp' ),
 			esc_html( $list ),
-			esc_html__( 'Please re-enter the API keys for these providers in MCPWP > Integrations. Your existing configuration is preserved and unchanged.', 'mumcp' )
+			esc_html__( 'Please re-enter the API keys for these providers in mumcp > Integrations. Your existing configuration is preserved and unchanged.', 'mumcp' )
 		);
 	}
 
@@ -202,7 +202,7 @@ class Mcpwp_Encryption_Migration {
 		add_action( 'admin_notices', function () {
 			printf(
 				'<div class="notice notice-error"><p><strong>%s</strong> %s</p></div>',
-				esc_html__( 'MCPWP:', 'mumcp' ),
+				esc_html__( 'mumcp:', 'mumcp' ),
 				esc_html__( 'The PHP sodium extension is required for provider key encryption but is not available. Please install php-sodium and re-activate the plugin.', 'mumcp' )
 			);
 		} );

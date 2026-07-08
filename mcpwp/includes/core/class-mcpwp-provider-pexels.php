@@ -4,7 +4,7 @@
  *
  * Stock photo search and download via Pexels API.
  *
- * @package MCPWP
+ * @package mumcp
  * @since   1.1.0
  */
 

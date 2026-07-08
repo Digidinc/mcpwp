@@ -2,7 +2,7 @@
 /**
  * Integration Base Class
  *
- * Third-party plugins extend this to register with MCPWP.
+ * Third-party plugins extend this to register with mumcp.
  * Provides MCP tool definitions, REST route registration, and
  * capability declarations in a single class.
  *
@@ -16,7 +16,7 @@
  *         return $integrations;
  *     } );
  *
- * @package MCPWP
+ * @package mumcp
  * @since   1.0.58
  */
 
@@ -124,7 +124,7 @@ abstract class Mcpwp_Integration extends Mcpwp_MCP_Tool_Registry {
 		}
 
 		/**
-		 * Filter to register third-party integrations with MCPWP.
+		 * Filter to register third-party integrations with mumcp.
 		 *
 		 * @since 1.0.58
 		 *

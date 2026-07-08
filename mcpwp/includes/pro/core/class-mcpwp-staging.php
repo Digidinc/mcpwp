@@ -557,7 +557,7 @@ class Mcpwp_Staging_Adapter_Generic implements Mcpwp_Staging_Adapter_Interface {
 			return array(
 				'success'      => false,
 				'operation_id' => null,
-				'message'      => 'shell_exec is disabled on this server. Generic (WP-CLI) staging push is not available. Configure a supported host integration (WP Engine, Kinsta, or Pressable) via MCPWP > Integrations.',
+				'message'      => 'shell_exec is disabled on this server. Generic (WP-CLI) staging push is not available. Configure a supported host integration (WP Engine, Kinsta, or Pressable) via mumcp > Integrations.',
 			);
 		}
 
@@ -662,7 +662,7 @@ class Mcpwp_Staging {
 				if ( ! $config || empty( $config['install_id'] ) || empty( $config['api_token'] ) ) {
 					return new WP_Error(
 						'staging_not_configured',
-						'WP Engine staging integration is not configured. Add install_id and api_token via MCPWP > Integrations > WP Engine Staging.',
+						'WP Engine staging integration is not configured. Add install_id and api_token via mumcp > Integrations > WP Engine Staging.',
 						array( 'status' => 400 )
 					);
 				}
@@ -673,7 +673,7 @@ class Mcpwp_Staging {
 				if ( ! $config || empty( $config['site_id'] ) || empty( $config['api_key'] ) ) {
 					return new WP_Error(
 						'staging_not_configured',
-						'Kinsta staging integration is not configured. Add site_id and api_key via MCPWP > Integrations > Kinsta Staging.',
+						'Kinsta staging integration is not configured. Add site_id and api_key via mumcp > Integrations > Kinsta Staging.',
 						array( 'status' => 400 )
 					);
 				}
@@ -684,7 +684,7 @@ class Mcpwp_Staging {
 				if ( ! $config || empty( $config['site_id'] ) || empty( $config['api_token'] ) ) {
 					return new WP_Error(
 						'staging_not_configured',
-						'Pressable staging integration is not configured. Add site_id and api_token via MCPWP > Integrations > Pressable Staging.',
+						'Pressable staging integration is not configured. Add site_id and api_token via mumcp > Integrations > Pressable Staging.',
 						array( 'status' => 400 )
 					);
 				}

@@ -1,13 +1,13 @@
 <?php
 /**
- * Setup page template — first thing users see after installing MCPWP.
+ * Setup page template — first thing users see after installing mumcp.
  *
  * Variables available from render_setup_page():
  *   $new_key        — string|null  plaintext key just generated (or from first-activation transient)
  *   $new_scoped_key — array|null   newly created scoped key payload
  *   $scoped_keys    — array        list of all scoped API keys
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -74,7 +74,7 @@ $last_activity_time = ! empty( $recent_activity[0]['created_at'] ) ? $recent_act
 		<span class="mcpwp-logo">
 			<span class="dashicons dashicons-shield"></span>
 		</span>
-		<?php esc_html_e( 'MCPWP', 'mumcp' ); ?>
+		<?php esc_html_e( 'mumcp', 'mumcp' ); ?>
 		<span class="mcpwp-version">v<?php echo esc_html( MCPWP_VERSION ); ?></span>
 	</h1>
 
@@ -85,7 +85,7 @@ $last_activity_time = ! empty( $recent_activity[0]['created_at'] ) ? $recent_act
 			<span class="dashicons dashicons-yes-alt"></span>
 		</div>
 		<div class="mcpwp-welcome-content">
-			<h2><?php esc_html_e( 'MCPWP is ready!', 'mumcp' ); ?></h2>
+			<h2><?php esc_html_e( 'mumcp is ready!', 'mumcp' ); ?></h2>
 			<p><?php esc_html_e( 'Your API key has been generated. Copy it now and use it to connect Claude Desktop, Claude Code, or ChatGPT to your WordPress site.', 'mumcp' ); ?></p>
 			<div class="mcpwp-api-key-wrapper mcpwp-api-key-wrapper--highlight">
 				<input
@@ -124,7 +124,7 @@ $last_activity_time = ! empty( $recent_activity[0]['created_at'] ) ? $recent_act
 				?>
 			</strong>
 			&mdash;
-			<a href="https://mcpwp.net/pricing/" target="_blank"><?php esc_html_e( 'Manage pricing and license', 'mumcp' ); ?></a>
+			<a href="https://mumcp.com/pricing/" target="_blank"><?php esc_html_e( 'Manage pricing and license', 'mumcp' ); ?></a>
 		</div>
 	</div>
 
@@ -566,7 +566,7 @@ $last_activity_time = ! empty( $recent_activity[0]['created_at'] ) ? $recent_act
 				<p class="description" style="margin-top:8px;">
 					<?php esc_html_e( 'Update channel:', 'mumcp' ); ?>
 					<code><?php echo esc_html( $update_channel['manifest_url'] ); ?></code>
-					<br /><span class="description"><?php esc_html_e( 'This is the URL MCPWP checks for new versions. It should point to the mumega.com manifest.', 'mumcp' ); ?></span>
+					<br /><span class="description"><?php esc_html_e( 'This is the URL mumcp checks for new versions. It should point to the mumega.com manifest.', 'mumcp' ); ?></span>
 				</p>
 			</div>
 			<?php endif; // ! MCPWP_WPORG_BUILD ?>
@@ -608,11 +608,11 @@ $last_activity_time = ! empty( $recent_activity[0]['created_at'] ) ? $recent_act
 					<span class="description"><?php esc_html_e( 'Rate limits, site context, logging, and more.', 'mumcp' ); ?></span>
 				</li>
 				<li>
-					<a href="https://mcpwp.net/docs/" target="_blank" rel="noopener noreferrer" class="button">
+					<a href="https://mumcp.com/docs/" target="_blank" rel="noopener noreferrer" class="button">
 						<span class="dashicons dashicons-book"></span>
 						<?php esc_html_e( 'Documentation', 'mumcp' ); ?>
 					</a>
-					<span class="description"><?php esc_html_e( 'Full API reference and MCPWP guides.', 'mumcp' ); ?></span>
+					<span class="description"><?php esc_html_e( 'Full API reference and mumcp guides.', 'mumcp' ); ?></span>
 				</li>
 			</ul>
 		</div>

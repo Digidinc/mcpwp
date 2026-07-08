@@ -7,7 +7,7 @@
  *
  * Route: GET /wp-json/mcpwp/v1/openapi.json  (public — no API key required)
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -152,9 +152,9 @@ class Mcpwp_REST_OpenAPI extends Mcpwp_REST_API {
 		$schema = array(
 			'openapi' => '3.0.0',
 			'info'    => array(
-				'title'       => get_bloginfo( 'name' ) . ' — MCPWP',
+				'title'       => get_bloginfo( 'name' ) . ' — mumcp',
 				'version'     => MCPWP_VERSION,
-				'description' => 'WordPress site management API powered by MCPWP. Authenticate with X-API-Key header.',
+				'description' => 'WordPress site management API powered by mumcp. Authenticate with X-API-Key header.',
 			),
 			'servers' => array(
 				array( 'url' => $server_url ),

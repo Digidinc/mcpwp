@@ -22,7 +22,7 @@
  * (endpoint URLs, supported algorithms, resource identifier).  They are always
  * returned without authentication.
  *
- * @package MCPWP
+ * @package mumcp
  * @since   3.2.0
  */
 
@@ -51,7 +51,7 @@ class Mcpwp_OAuth_Well_Known {
 	}
 
 	/**
-	 * Inject WWW-Authenticate header on 401 responses for MCPWP routes.
+	 * Inject WWW-Authenticate header on 401 responses for mumcp routes.
 	 *
 	 * Only fires when OAuth is enabled; leaves existing X-API-Key auth path
 	 * completely unaffected (that path still returns 401, just without the

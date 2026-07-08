@@ -3,9 +3,9 @@
  * MCP AI Integration
  *
  * Extends Mcpwp_Integration to register AI-powered MCP tools
- * (image generation, vision, TTS, stock photos) with MCPWP.
+ * (image generation, vision, TTS, stock photos) with mumcp.
  *
- * @package MCPWP
+ * @package mumcp
  * @since   1.1.0
  */
 

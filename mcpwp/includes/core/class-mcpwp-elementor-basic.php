@@ -2,7 +2,7 @@
 /**
  * Basic Elementor handler (FREE tier)
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {

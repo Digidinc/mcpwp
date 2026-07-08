@@ -2,7 +2,7 @@
 /**
  * Plugin Activator
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -81,7 +81,7 @@ class Mcpwp_Activator {
 	 */
 	private static function create_api_role_and_user() {
 		// Add Role — principle of least privilege: no manage_options or edit_theme_options.
-		add_role( 'mcpwp_api_agent', 'MCPWP API Agent', array(
+		add_role( 'mcpwp_api_agent', 'mumcp API Agent', array(
 			'read'               => true,
 			'edit_posts'         => true,
 			'edit_pages'         => true,
@@ -95,7 +95,7 @@ class Mcpwp_Activator {
 			'delete_others_pages' => true,
 			'upload_files'       => true,
 			'list_users'         => true,
-			// Custom MCPWP capabilities (NOT admin-level).
+			// Custom mumcp capabilities (NOT admin-level).
 			'mcpwp_manage_settings' => true,
 			'mcpwp_manage_webhooks' => true,
 		) );
@@ -118,8 +118,8 @@ class Mcpwp_Activator {
 				'user_login'   => 'mcpwp_bot',
 				'user_pass'    => wp_generate_password( 64 ),
 				'role'         => 'mcpwp_api_agent',
-				'display_name' => 'MCPWP',
-				'description'  => 'Service account for MCPWP API',
+				'display_name' => 'mumcp',
+				'description'  => 'Service account for mumcp API',
 			) );
 		}
 	}

@@ -1,6 +1,6 @@
 <?php
 /**
- * License management for MCPWP.
+ * License management for mumcp.
  *
  * Freemius is the single source of truth for entitlement in the production
  * build, with two developer/distribution overrides:
@@ -30,7 +30,7 @@
  * auditable — it replicates only the subset of Spai_License logic that
  * determines is_pro(), not the full plan hierarchy.
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -346,7 +346,7 @@ class Mcpwp_License {
 	 * @return string
 	 */
 	public function get_upgrade_url() {
-		return 'https://mcpwp.net/pricing/';
+		return 'https://mumcp.com/pricing/';
 	}
 
 	/**
@@ -355,7 +355,7 @@ class Mcpwp_License {
 	 * @return string
 	 */
 	public function get_account_url() {
-		return 'https://mcpwp.net/account/';
+		return 'https://mumcp.com/account/';
 	}
 
 	/**

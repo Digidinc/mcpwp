@@ -2,7 +2,7 @@
 /**
  * Admin functionality
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -70,10 +70,10 @@ class Mcpwp_Admin {
 
 	public function add_admin_menu() {
 		// Top-level menu + default submenu (Setup) share the same slug so
-		// clicking "MCPWP" always lands on the Setup page.
+		// clicking "mumcp" always lands on the Setup page.
 		add_menu_page(
-			__( 'MCPWP', 'mumcp' ),
-			__( 'MCPWP', 'mumcp' ),
+			__( 'mumcp', 'mumcp' ),
+			__( 'mumcp', 'mumcp' ),
 			'activate_plugins',
 			self::PAGE_SLUG,
 			array( $this, 'render_setup_page' ),
@@ -164,7 +164,7 @@ class Mcpwp_Admin {
 	}
 
 	/**
-	 * Get the current MCPWP admin page slug.
+	 * Get the current mumcp admin page slug.
 	 *
 	 * @return string
 	 */
@@ -174,7 +174,7 @@ class Mcpwp_Admin {
 	}
 
 	/**
-	 * Determine whether the current admin request is an MCPWP screen.
+	 * Determine whether the current admin request is an mumcp screen.
 	 *
 	 * @return bool
 	 */
@@ -218,7 +218,7 @@ class Mcpwp_Admin {
 	/**
 	 * Enqueue admin scripts.
 	 *
-	 * Fires on ALL MCPWP admin pages under one canonical handle ('mcpwp-admin').
+	 * Fires on ALL mumcp admin pages under one canonical handle ('mcpwp-admin').
 	 * All PHP→JS data is passed via wp_localize_script — no inline <script> blocks.
 	 *
 	 * @param string $hook Current admin page.
@@ -241,7 +241,7 @@ class Mcpwp_Admin {
 		$posthog_host  = $posthog['host'];
 
 		// Integrations nonce only needed on the Integrations page, but generating
-		// it on every MCPWP page is harmless and keeps one unified data object.
+		// it on every mumcp page is harmless and keeps one unified data object.
 		wp_localize_script(
 			'mcpwp-admin',
 			'mcpwpAdmin',
@@ -374,8 +374,8 @@ class Mcpwp_Admin {
 	 */
 	public function add_network_admin_menu() {
 		add_menu_page(
-			__( 'MCPWP — Network', 'mumcp' ),
-			__( 'MCPWP', 'mumcp' ),
+			__( 'mumcp — Network', 'mumcp' ),
+			__( 'mumcp', 'mumcp' ),
 			'manage_network_plugins',
 			'mcpwp-network',
 			array( $this, 'render_network_admin_page' ),
@@ -415,7 +415,7 @@ class Mcpwp_Admin {
 			'mcpwp_network_setup_done',
 			sprintf(
 				/* translators: %d: number of sites */
-				__( 'MCPWP activated on %d site(s).', 'mumcp' ),
+				__( 'mumcp activated on %d site(s).', 'mumcp' ),
 				$count
 			),
 			'updated'
@@ -472,7 +472,7 @@ class Mcpwp_Admin {
 		settings_errors( 'mcpwp_network_messages' );
 		?>
 		<div class="wrap">
-			<h1><?php esc_html_e( 'MCPWP — Network Overview', 'mumcp' ); ?></h1>
+			<h1><?php esc_html_e( 'mumcp — Network Overview', 'mumcp' ); ?></h1>
 
 			<form method="post">
 				<?php wp_nonce_field( 'mcpwp_network_setup_all', 'mcpwp_network_nonce' ); ?>

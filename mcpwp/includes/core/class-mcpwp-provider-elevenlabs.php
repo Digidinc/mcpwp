@@ -4,7 +4,7 @@
  *
  * Text-to-speech audio generation.
  *
- * @package MCPWP
+ * @package mumcp
  * @since   1.1.0
  */
 

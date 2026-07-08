@@ -6,7 +6,7 @@
  * Flushes WordPress object cache + known page-cache plugins so agents can
  * purge stale content after bulk edits.
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {

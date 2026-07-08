@@ -355,7 +355,7 @@ class Mcpwp_REST_Staging extends Mcpwp_REST_API {
 					'resource'           => $record['resource'],
 					'risk_level'         => 'high',
 					'approval_state'     => 'pending',
-					'recommended_action' => 'Review and approve the staging→live push in MCPWP > Control Room.',
+					'recommended_action' => 'Review and approve the staging→live push in mumcp > Control Room.',
 				)
 			);
 		}

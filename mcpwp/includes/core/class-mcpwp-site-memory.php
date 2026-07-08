@@ -2,7 +2,7 @@
 /**
  * Structured site memory — persists AI decisions across sessions.
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {

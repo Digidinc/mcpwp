@@ -4,7 +4,7 @@
  *
  * Handles the admin UI for managing third-party AI provider integrations.
  *
- * @package MCPWP
+ * @package mumcp
  * @since   1.1.0
  */
 
@@ -56,7 +56,7 @@ class Mcpwp_Integrations_Admin {
 	 * Enqueue admin assets for integrations page.
 	 *
 	 * The canonical 'mcpwp-admin' handle and its localized data are already
-	 * enqueued by Mcpwp_Admin::enqueue_scripts() for all MCPWP admin pages.
+	 * enqueued by Mcpwp_Admin::enqueue_scripts() for all mumcp admin pages.
 	 * This method is intentionally a no-op — kept to avoid removing a hook
 	 * that may be registered by the loader; it simply returns early.
 	 *

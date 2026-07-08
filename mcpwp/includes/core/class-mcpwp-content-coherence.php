@@ -2,7 +2,7 @@
 /**
  * Content coherence scoring and recommendations.
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {

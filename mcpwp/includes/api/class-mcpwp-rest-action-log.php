@@ -2,7 +2,7 @@
 /**
  * REST endpoints for the AI action audit log.
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {

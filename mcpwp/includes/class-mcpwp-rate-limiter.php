@@ -2,7 +2,7 @@
 /**
  * Rate Limiter
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -162,7 +162,7 @@ class Mcpwp_Rate_Limiter {
 					'remaining'        => 0,
 					'reset'            => $burst_data['reset'],
 					'hint'             => sprintf(
-						'Burst rate limit exceeded (%d/%ds). Wait %d seconds before retrying. To increase limits, the site admin can adjust settings in WP Admin > MCPWP > Settings, or create a key with custom rate_limits.',
+						'Burst rate limit exceeded (%d/%ds). Wait %d seconds before retrying. To increase limits, the site admin can adjust settings in WP Admin > mumcp > Settings, or create a key with custom rate_limits.',
 						$burst_limit,
 						$burst_window,
 						$retry_after

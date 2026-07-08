@@ -5,7 +5,7 @@
  * Variables available from render_control_room_page():
  *   $control_room - array summarized approval, SEO, and activity data.
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {

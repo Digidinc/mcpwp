@@ -2,7 +2,7 @@
 /**
  * Public AI presence helpers.
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -130,7 +130,7 @@ class Mcpwp_AI_Presence {
 		} else {
 			$lines[] = '';
 			$lines[] = '## Site Character';
-			$lines[] = 'No explicit AI site context is configured yet. Use the MCPWP settings to define the brand voice, design system, target audience, and recurring page patterns.';
+			$lines[] = 'No explicit AI site context is configured yet. Use the mumcp settings to define the brand voice, design system, target audience, and recurring page patterns.';
 		}
 
 		$lines[] = '';

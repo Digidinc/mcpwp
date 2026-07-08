@@ -5,7 +5,7 @@
  * Provides endpoints for Gutenberg block editor operations:
  * get/set parsed blocks, list block types, and list block patterns.
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {

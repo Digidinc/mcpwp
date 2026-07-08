@@ -2,7 +2,7 @@
 /**
  * Feedback Core
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -261,7 +261,7 @@ class Mcpwp_Feedback {
 			array(
 				'headers' => array(
 					'Content-Type' => 'application/json',
-					'User-Agent'   => 'MCPWP/' . ( defined( 'MCPWP_VERSION' ) ? MCPWP_VERSION : '0' ),
+					'User-Agent'   => 'mumcp/' . ( defined( 'MCPWP_VERSION' ) ? MCPWP_VERSION : '0' ),
 				),
 				'body'    => wp_json_encode( $payload ),
 				'timeout' => 10,
@@ -315,7 +315,7 @@ class Mcpwp_Feedback {
 					'Authorization' => "Bearer {$token}",
 					'Accept'        => 'application/vnd.github+json',
 					'Content-Type'  => 'application/json',
-					'User-Agent'    => 'MCPWP/' . MCPWP_VERSION,
+					'User-Agent'    => 'mumcp/' . MCPWP_VERSION,
 				),
 				'body'    => wp_json_encode( array(
 					'title'  => "[{$type}] {$title}",
@@ -376,7 +376,7 @@ class Mcpwp_Feedback {
 			}
 		}
 
-		$body .= "\n---\n*Submitted via MCPWP feedback system*";
+		$body .= "\n---\n*Submitted via mumcp feedback system*";
 
 		return $body;
 	}

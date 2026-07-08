@@ -4,7 +4,7 @@
  *
  * Sends webhook alerts when error rates spike.
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {

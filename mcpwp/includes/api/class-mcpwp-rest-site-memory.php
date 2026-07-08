@@ -2,7 +2,7 @@
 /**
  * REST endpoints for structured site memory.
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {

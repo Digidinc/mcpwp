@@ -2,7 +2,7 @@
 /**
  * Pro module directory.
  *
- * @package MCPWP
+ * @package mumcp
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
