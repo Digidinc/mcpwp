@@ -187,7 +187,7 @@ class Mcpwp_Encryption_Migration {
 			'<div class="notice notice-warning"><p><strong>%s</strong> %s <code>%s</code>. %s</p></div>',
 			esc_html__( 'MCPWP encryption migration:', 'mumcp' ),
 			esc_html__( 'Could not automatically re-encrypt the API keys for:', 'mumcp' ),
-			$list,
+			esc_html( $list ),
 			esc_html__( 'Please re-enter the API keys for these providers in MCPWP > Integrations. Your existing configuration is preserved and unchanged.', 'mumcp' )
 		);
 	}

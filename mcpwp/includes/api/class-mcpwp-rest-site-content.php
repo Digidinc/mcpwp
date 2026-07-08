@@ -730,6 +730,7 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 		if ( ! $request_host || strtolower( $request_host ) !== strtolower( $site_host ) ) {
 			return $this->error_response(
 				'ssrf_blocked',
+				/* translators: %s: expected hostname of this site */
 				sprintf( __( 'Only same-host URLs allowed. Expected: %s', 'mumcp' ), $site_host ),
 				403
 			);
@@ -754,6 +755,7 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 		if ( 200 !== (int) $status_code || '' === $html ) {
 			return $this->error_response(
 				'fetch_error',
+				/* translators: %d: HTTP status code returned by the page */
 				sprintf( __( 'Page returned HTTP %d.', 'mumcp' ), $status_code ),
 				502
 			);

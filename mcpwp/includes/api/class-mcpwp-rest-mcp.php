@@ -880,7 +880,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		}
 
 		// Parse query string from URI.
-		$query_string = parse_url( $uri, PHP_URL_QUERY );
+		$query_string = wp_parse_url( $uri, PHP_URL_QUERY );
 		if ( $query_string ) {
 			parse_str( $query_string, $query_params );
 			foreach ( $query_params as $key => $value ) {
