@@ -222,7 +222,7 @@ Used as a fallback for generating website screenshot thumbnails when no Cloudfla
 When a user submits feedback via the wp_submit_feedback tool, the feedback is relayed to a central endpoint so plugin developers receive bug reports. This can be disabled by defining `MCPWP_DISABLE_FEEDBACK_RELAY` as true.
 * Data sent: Feedback text, site URL, site name, plugin version
 * When: Only when the wp_submit_feedback MCP tool is explicitly called
-* Endpoint: https://mumcp.com/wp-json/mcpwp/v1/feedback/relay
+* Endpoint: https://mcpwp.net/wp-json/mcpwp/v1/feedback/relay
 * Privacy Policy: https://mumcp.com/privacy
 
 = GitHub API (optional) =
