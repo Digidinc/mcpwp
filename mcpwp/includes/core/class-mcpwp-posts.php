@@ -49,7 +49,7 @@ class Mcpwp_Posts {
 		if ( in_array( $type, $this->blocked_post_types, true ) ) {
 			return new WP_Error(
 				'invalid_post_type',
-				__( 'Invalid or unsupported post type.', 'mcpwp' ),
+				__( 'Invalid or unsupported post type.', 'mumcp' ),
 				array(
 					'status' => 400,
 					'hint'   => sprintf(
@@ -69,7 +69,7 @@ class Mcpwp_Posts {
 			if ( ! post_type_exists( $type ) || ! get_post_type_object( $type )->public ) {
 				return new WP_Error(
 					'invalid_post_type',
-					__( 'Invalid or unsupported post type.', 'mcpwp' ),
+					__( 'Invalid or unsupported post type.', 'mumcp' ),
 					array(
 						'status' => 400,
 						'hint'   => sprintf(
@@ -152,7 +152,7 @@ class Mcpwp_Posts {
 		if ( ! $post || 'page' === $post->post_type || is_wp_error( $this->validate_post_type( $post->post_type ) ) ) {
 			return new WP_Error(
 				'not_found',
-				__( 'Post not found.', 'mcpwp' ),
+				__( 'Post not found.', 'mumcp' ),
 				array(
 					'status' => 404,
 					'hint'   => sprintf(
@@ -251,7 +251,7 @@ class Mcpwp_Posts {
 		if ( ! $post || 'page' === $post->post_type || is_wp_error( $this->validate_post_type( $post->post_type ) ) ) {
 			return new WP_Error(
 				'not_found',
-				__( 'Post not found.', 'mcpwp' ),
+				__( 'Post not found.', 'mumcp' ),
 				array(
 					'status' => 404,
 					'hint'   => sprintf(
@@ -401,7 +401,7 @@ class Mcpwp_Posts {
 		if ( ! $post || 'page' === $post->post_type || is_wp_error( $this->validate_post_type( $post->post_type ) ) ) {
 			return new WP_Error(
 				'not_found',
-				__( 'Post not found.', 'mcpwp' ),
+				__( 'Post not found.', 'mumcp' ),
 				array(
 					'status' => 404,
 					'hint'   => sprintf(
@@ -417,7 +417,7 @@ class Mcpwp_Posts {
 		if ( ! $result ) {
 			return new WP_Error(
 				'delete_failed',
-				__( 'Failed to delete post.', 'mcpwp' ),
+				__( 'Failed to delete post.', 'mumcp' ),
 				array( 'status' => 500 )
 			);
 		}
@@ -425,8 +425,8 @@ class Mcpwp_Posts {
 		return array(
 			'success' => true,
 			'message' => $force
-				? __( 'Post permanently deleted.', 'mcpwp' )
-				: __( 'Post moved to trash.', 'mcpwp' ),
+				? __( 'Post permanently deleted.', 'mumcp' )
+				: __( 'Post moved to trash.', 'mumcp' ),
 			'post_id' => $post_id,
 		);
 	}

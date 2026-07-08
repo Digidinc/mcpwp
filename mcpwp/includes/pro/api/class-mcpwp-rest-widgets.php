@@ -240,7 +240,7 @@ class Mcpwp_REST_Widgets extends Mcpwp_REST_API {
 		if ( empty( $widget_type ) ) {
 			return $this->error_response(
 				'missing_type',
-				__( 'Widget type is required.', 'mcpwp' ),
+				__( 'Widget type is required.', 'mumcp' ),
 				400
 			);
 		}
@@ -278,7 +278,7 @@ class Mcpwp_REST_Widgets extends Mcpwp_REST_API {
 		if ( ! is_array( $settings ) || empty( $settings ) ) {
 			return $this->error_response(
 				'missing_settings',
-				__( 'Settings are required.', 'mcpwp' ),
+				__( 'Settings are required.', 'mumcp' ),
 				400
 			);
 		}
@@ -331,7 +331,7 @@ class Mcpwp_REST_Widgets extends Mcpwp_REST_API {
 		if ( empty( $sidebar_id ) ) {
 			return $this->error_response(
 				'missing_sidebar',
-				__( 'Target sidebar is required.', 'mcpwp' ),
+				__( 'Target sidebar is required.', 'mumcp' ),
 				400
 			);
 		}
@@ -363,7 +363,7 @@ class Mcpwp_REST_Widgets extends Mcpwp_REST_API {
 		if ( ! is_array( $widget_ids ) || empty( $widget_ids ) ) {
 			return $this->error_response(
 				'missing_widgets',
-				__( 'Widget IDs array is required.', 'mcpwp' ),
+				__( 'Widget IDs array is required.', 'mumcp' ),
 				400
 			);
 		}

@@ -58,12 +58,12 @@ class Mcpwp_REST_Menus extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'menu_id'  => array(
-							'description' => __( 'Menu ID to assign.', 'mcpwp' ),
+							'description' => __( 'Menu ID to assign.', 'mumcp' ),
 							'type'        => 'integer',
 							'required'    => true,
 						),
 						'location' => array(
-							'description' => __( 'Theme menu location key (e.g., menu-1).', 'mcpwp' ),
+							'description' => __( 'Theme menu location key (e.g., menu-1).', 'mumcp' ),
 							'type'        => 'string',
 							'required'    => true,
 						),
@@ -96,22 +96,22 @@ class Mcpwp_REST_Menus extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'name'      => array(
-							'description' => __( 'Menu name.', 'mcpwp' ),
+							'description' => __( 'Menu name.', 'mumcp' ),
 							'type'        => 'string',
 							'required'    => true,
 						),
 						'location'  => array(
-							'description' => __( 'Theme menu location key to assign.', 'mcpwp' ),
+							'description' => __( 'Theme menu location key to assign.', 'mumcp' ),
 							'type'        => 'string',
 						),
 						'page_ids'  => array(
-							'description' => __( 'Page IDs to add as menu items.', 'mcpwp' ),
+							'description' => __( 'Page IDs to add as menu items.', 'mumcp' ),
 							'type'        => 'array',
 							'items'       => array( 'type' => 'integer' ),
 							'default'     => array(),
 						),
 						'overwrite' => array(
-							'description' => __( 'If true, creates a new menu even if one with same name exists.', 'mcpwp' ),
+							'description' => __( 'If true, creates a new menu even if one with same name exists.', 'mumcp' ),
 							'type'        => 'boolean',
 							'default'     => false,
 						),
@@ -136,50 +136,50 @@ class Mcpwp_REST_Menus extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'type'        => array(
-							'description' => __( 'Item type: custom, post_type, or taxonomy.', 'mcpwp' ),
+							'description' => __( 'Item type: custom, post_type, or taxonomy.', 'mumcp' ),
 							'type'        => 'string',
 							'enum'        => array( 'custom', 'post_type', 'taxonomy' ),
 							'default'     => 'custom',
 						),
 						'title'       => array(
-							'description' => __( 'Menu item label.', 'mcpwp' ),
+							'description' => __( 'Menu item label.', 'mumcp' ),
 							'type'        => 'string',
 							'required'    => true,
 						),
 						'url'         => array(
-							'description' => __( 'URL for custom links.', 'mcpwp' ),
+							'description' => __( 'URL for custom links.', 'mumcp' ),
 							'type'        => 'string',
 						),
 						'object'      => array(
-							'description' => __( 'Object type: page, post, product, category, etc.', 'mcpwp' ),
+							'description' => __( 'Object type: page, post, product, category, etc.', 'mumcp' ),
 							'type'        => 'string',
 						),
 						'object_id'   => array(
-							'description' => __( 'Object ID for post_type or taxonomy items.', 'mcpwp' ),
+							'description' => __( 'Object ID for post_type or taxonomy items.', 'mumcp' ),
 							'type'        => 'integer',
 						),
 						'parent_id'   => array(
-							'description' => __( 'Parent menu item ID (for sub-menus).', 'mcpwp' ),
+							'description' => __( 'Parent menu item ID (for sub-menus).', 'mumcp' ),
 							'type'        => 'integer',
 							'default'     => 0,
 						),
 						'position'    => array(
-							'description' => __( 'Menu order position.', 'mcpwp' ),
+							'description' => __( 'Menu order position.', 'mumcp' ),
 							'type'        => 'integer',
 						),
 						'classes'     => array(
-							'description' => __( 'CSS classes for this item.', 'mcpwp' ),
+							'description' => __( 'CSS classes for this item.', 'mumcp' ),
 							'type'        => 'array',
 							'items'       => array( 'type' => 'string' ),
 							'default'     => array(),
 						),
 						'target'      => array(
-							'description' => __( 'Link target: _blank or _self.', 'mcpwp' ),
+							'description' => __( 'Link target: _blank or _self.', 'mumcp' ),
 							'type'        => 'string',
 							'enum'        => array( '_blank', '_self' ),
 						),
 						'description' => array(
-							'description' => __( 'Item description or tooltip.', 'mcpwp' ),
+							'description' => __( 'Item description or tooltip.', 'mumcp' ),
 							'type'        => 'string',
 						),
 					),
@@ -198,33 +198,33 @@ class Mcpwp_REST_Menus extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'title'       => array(
-							'description' => __( 'Menu item label.', 'mcpwp' ),
+							'description' => __( 'Menu item label.', 'mumcp' ),
 							'type'        => 'string',
 						),
 						'url'         => array(
-							'description' => __( 'URL (for custom links).', 'mcpwp' ),
+							'description' => __( 'URL (for custom links).', 'mumcp' ),
 							'type'        => 'string',
 						),
 						'parent_id'   => array(
-							'description' => __( 'Parent menu item ID.', 'mcpwp' ),
+							'description' => __( 'Parent menu item ID.', 'mumcp' ),
 							'type'        => 'integer',
 						),
 						'position'    => array(
-							'description' => __( 'Menu order position.', 'mcpwp' ),
+							'description' => __( 'Menu order position.', 'mumcp' ),
 							'type'        => 'integer',
 						),
 						'classes'     => array(
-							'description' => __( 'CSS classes.', 'mcpwp' ),
+							'description' => __( 'CSS classes.', 'mumcp' ),
 							'type'        => 'array',
 							'items'       => array( 'type' => 'string' ),
 						),
 						'target'      => array(
-							'description' => __( 'Link target: _blank or _self.', 'mcpwp' ),
+							'description' => __( 'Link target: _blank or _self.', 'mumcp' ),
 							'type'        => 'string',
 							'enum'        => array( '_blank', '_self' ),
 						),
 						'description' => array(
-							'description' => __( 'Item description or tooltip.', 'mcpwp' ),
+							'description' => __( 'Item description or tooltip.', 'mumcp' ),
 							'type'        => 'string',
 						),
 					),
@@ -248,33 +248,33 @@ class Mcpwp_REST_Menus extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'title'       => array(
-							'description' => __( 'Menu item label.', 'mcpwp' ),
+							'description' => __( 'Menu item label.', 'mumcp' ),
 							'type'        => 'string',
 						),
 						'url'         => array(
-							'description' => __( 'URL (for custom links).', 'mcpwp' ),
+							'description' => __( 'URL (for custom links).', 'mumcp' ),
 							'type'        => 'string',
 						),
 						'parent_id'   => array(
-							'description' => __( 'Parent menu item ID.', 'mcpwp' ),
+							'description' => __( 'Parent menu item ID.', 'mumcp' ),
 							'type'        => 'integer',
 						),
 						'position'    => array(
-							'description' => __( 'Menu order position.', 'mcpwp' ),
+							'description' => __( 'Menu order position.', 'mumcp' ),
 							'type'        => 'integer',
 						),
 						'classes'     => array(
-							'description' => __( 'CSS classes.', 'mcpwp' ),
+							'description' => __( 'CSS classes.', 'mumcp' ),
 							'type'        => 'array',
 							'items'       => array( 'type' => 'string' ),
 						),
 						'target'      => array(
-							'description' => __( 'Link target: _blank or _self.', 'mcpwp' ),
+							'description' => __( 'Link target: _blank or _self.', 'mumcp' ),
 							'type'        => 'string',
 							'enum'        => array( '_blank', '_self' ),
 						),
 						'description' => array(
-							'description' => __( 'Item description or tooltip.', 'mcpwp' ),
+							'description' => __( 'Item description or tooltip.', 'mumcp' ),
 							'type'        => 'string',
 						),
 					),
@@ -298,7 +298,7 @@ class Mcpwp_REST_Menus extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'items' => array(
-							'description' => __( 'Array of {id, position, parent_id} objects.', 'mcpwp' ),
+							'description' => __( 'Array of {id, position, parent_id} objects.', 'mumcp' ),
 							'type'        => 'array',
 							'required'    => true,
 							'items'       => array( 'type' => 'object' ),
@@ -348,7 +348,7 @@ class Mcpwp_REST_Menus extends Mcpwp_REST_API {
 		if ( ! $menu ) {
 			return $this->error_response(
 				'menu_not_found',
-				__( 'Menu not found.', 'mcpwp' ),
+				__( 'Menu not found.', 'mumcp' ),
 				404
 			);
 		}
@@ -367,7 +367,7 @@ class Mcpwp_REST_Menus extends Mcpwp_REST_API {
 		if ( ! $result ) {
 			return $this->error_response(
 				'delete_failed',
-				__( 'Failed to delete menu.', 'mcpwp' ),
+				__( 'Failed to delete menu.', 'mumcp' ),
 				500
 			);
 		}
@@ -396,7 +396,7 @@ class Mcpwp_REST_Menus extends Mcpwp_REST_API {
 		if ( '' === $location ) {
 			return $this->error_response(
 				'missing_location',
-				__( 'Location key is required.', 'mcpwp' ),
+				__( 'Location key is required.', 'mumcp' ),
 				400
 			);
 		}
@@ -405,7 +405,7 @@ class Mcpwp_REST_Menus extends Mcpwp_REST_API {
 		if ( ! $menu ) {
 			return $this->error_response(
 				'menu_not_found',
-				__( 'Menu not found.', 'mcpwp' ),
+				__( 'Menu not found.', 'mumcp' ),
 				404
 			);
 		}
@@ -415,7 +415,7 @@ class Mcpwp_REST_Menus extends Mcpwp_REST_API {
 			$available = array_keys( $registered );
 			return $this->error_response(
 				'invalid_location',
-				__( 'Unknown theme menu location.', 'mcpwp' ),
+				__( 'Unknown theme menu location.', 'mumcp' ),
 				400,
 				array( 'available_locations' => $available )
 			);
@@ -488,7 +488,7 @@ class Mcpwp_REST_Menus extends Mcpwp_REST_API {
 		if ( '' === $name ) {
 			return $this->error_response(
 				'missing_name',
-				__( 'Menu name is required.', 'mcpwp' ),
+				__( 'Menu name is required.', 'mumcp' ),
 				400
 			);
 		}
@@ -600,7 +600,7 @@ class Mcpwp_REST_Menus extends Mcpwp_REST_API {
 		if ( ! $menu ) {
 			return $this->error_response(
 				'menu_not_found',
-				__( 'Menu not found.', 'mcpwp' ),
+				__( 'Menu not found.', 'mumcp' ),
 				404
 			);
 		}
@@ -610,7 +610,7 @@ class Mcpwp_REST_Menus extends Mcpwp_REST_API {
 		if ( false === $items ) {
 			return $this->error_response(
 				'menu_items_error',
-				__( 'Could not retrieve menu items.', 'mcpwp' ),
+				__( 'Could not retrieve menu items.', 'mumcp' ),
 				500
 			);
 		}
@@ -646,7 +646,7 @@ class Mcpwp_REST_Menus extends Mcpwp_REST_API {
 		if ( ! $menu ) {
 			return $this->error_response(
 				'menu_not_found',
-				__( 'Menu not found.', 'mcpwp' ),
+				__( 'Menu not found.', 'mumcp' ),
 				404
 			);
 		}
@@ -665,7 +665,7 @@ class Mcpwp_REST_Menus extends Mcpwp_REST_API {
 		if ( '' === $title ) {
 			return $this->error_response(
 				'missing_title',
-				__( 'Menu item title is required.', 'mcpwp' ),
+				__( 'Menu item title is required.', 'mumcp' ),
 				400
 			);
 		}
@@ -693,7 +693,7 @@ class Mcpwp_REST_Menus extends Mcpwp_REST_API {
 			if ( '' === $url ) {
 				return $this->error_response(
 					'missing_url',
-					__( 'URL is required for custom link items.', 'mcpwp' ),
+					__( 'URL is required for custom link items.', 'mumcp' ),
 					400
 				);
 			}
@@ -703,7 +703,7 @@ class Mcpwp_REST_Menus extends Mcpwp_REST_API {
 			if ( '' === $object || $object_id <= 0 ) {
 				return $this->error_response(
 					'missing_object',
-					__( 'Object and object_id are required for post_type items.', 'mcpwp' ),
+					__( 'Object and object_id are required for post_type items.', 'mumcp' ),
 					400
 				);
 			}
@@ -714,7 +714,7 @@ class Mcpwp_REST_Menus extends Mcpwp_REST_API {
 			if ( '' === $object || $object_id <= 0 ) {
 				return $this->error_response(
 					'missing_object',
-					__( 'Object and object_id are required for taxonomy items.', 'mcpwp' ),
+					__( 'Object and object_id are required for taxonomy items.', 'mumcp' ),
 					400
 				);
 			}
@@ -762,7 +762,7 @@ class Mcpwp_REST_Menus extends Mcpwp_REST_API {
 				'menu_not_found',
 				sprintf(
 					/* translators: %d: menu ID */
-					__( 'Menu %d not found. Call wp_list_menus to get valid menu IDs.', 'mcpwp' ),
+					__( 'Menu %d not found. Call wp_list_menus to get valid menu IDs.', 'mumcp' ),
 					$menu_id
 				),
 				404
@@ -775,7 +775,7 @@ class Mcpwp_REST_Menus extends Mcpwp_REST_API {
 				'item_not_found',
 				sprintf(
 					/* translators: %d: item ID */
-					__( 'Menu item %d not found. Call wp_list_menu_items with the menu_id to get valid item IDs.', 'mcpwp' ),
+					__( 'Menu item %d not found. Call wp_list_menu_items with the menu_id to get valid item IDs.', 'mumcp' ),
 					$item_id
 				),
 				404
@@ -868,7 +868,7 @@ class Mcpwp_REST_Menus extends Mcpwp_REST_API {
 		if ( ! $existing || 'nav_menu_item' !== $existing->post_type ) {
 			return $this->error_response(
 				'item_not_found',
-				__( 'Menu item not found.', 'mcpwp' ),
+				__( 'Menu item not found.', 'mumcp' ),
 				404
 			);
 		}
@@ -878,7 +878,7 @@ class Mcpwp_REST_Menus extends Mcpwp_REST_API {
 		if ( ! $deleted ) {
 			return $this->error_response(
 				'delete_failed',
-				__( 'Failed to delete menu item.', 'mcpwp' ),
+				__( 'Failed to delete menu item.', 'mumcp' ),
 				500
 			);
 		}
@@ -906,7 +906,7 @@ class Mcpwp_REST_Menus extends Mcpwp_REST_API {
 		if ( ! $menu ) {
 			return $this->error_response(
 				'menu_not_found',
-				__( 'Menu not found.', 'mcpwp' ),
+				__( 'Menu not found.', 'mumcp' ),
 				404
 			);
 		}
@@ -916,7 +916,7 @@ class Mcpwp_REST_Menus extends Mcpwp_REST_API {
 		if ( empty( $items ) ) {
 			return $this->error_response(
 				'missing_items',
-				__( 'Items array is required.', 'mcpwp' ),
+				__( 'Items array is required.', 'mumcp' ),
 				400
 			);
 		}
@@ -986,7 +986,7 @@ class Mcpwp_REST_Menus extends Mcpwp_REST_API {
 		if ( ! $existing || 'nav_menu_item' !== $existing->post_type ) {
 			return new WP_Error(
 				'item_not_found',
-				__( 'Menu item not found.', 'mcpwp' ),
+				__( 'Menu item not found.', 'mumcp' ),
 				array( 'status' => 404 )
 			);
 		}
@@ -995,7 +995,7 @@ class Mcpwp_REST_Menus extends Mcpwp_REST_API {
 		if ( is_wp_error( $menus ) || empty( $menus ) ) {
 			return new WP_Error(
 				'menu_not_found',
-				__( 'Could not determine which menu this item belongs to.', 'mcpwp' ),
+				__( 'Could not determine which menu this item belongs to.', 'mumcp' ),
 				array( 'status' => 404 )
 			);
 		}

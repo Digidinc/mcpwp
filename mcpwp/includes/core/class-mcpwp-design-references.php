@@ -129,7 +129,7 @@ class Mcpwp_Design_References {
 		$items = $this->load_references();
 
 		if ( empty( $items[ $id ] ) ) {
-			return new WP_Error( 'not_found', __( 'Design reference not found.', 'mcpwp' ), array( 'status' => 404 ) );
+			return new WP_Error( 'not_found', __( 'Design reference not found.', 'mumcp' ), array( 'status' => 404 ) );
 		}
 
 		return $items[ $id ];
@@ -196,7 +196,7 @@ class Mcpwp_Design_References {
 		$items = $this->load_references();
 
 		if ( empty( $items[ $id ] ) ) {
-			return new WP_Error( 'not_found', __( 'Design reference not found.', 'mcpwp' ), array( 'status' => 404 ) );
+			return new WP_Error( 'not_found', __( 'Design reference not found.', 'mumcp' ), array( 'status' => 404 ) );
 		}
 
 		$item = $items[ $id ];
@@ -312,7 +312,7 @@ class Mcpwp_Design_References {
 		if ( ! empty( $data['image_base64'] ) ) {
 			$filename = isset( $data['filename'] ) ? sanitize_file_name( (string) $data['filename'] ) : '';
 			if ( '' === $filename ) {
-				return new WP_Error( 'missing_filename', __( 'filename is required when uploading image_base64.', 'mcpwp' ), array( 'status' => 400 ) );
+				return new WP_Error( 'missing_filename', __( 'filename is required when uploading image_base64.', 'mumcp' ), array( 'status' => 400 ) );
 			}
 
 			$result = $this->media->upload_from_base64(
@@ -334,7 +334,7 @@ class Mcpwp_Design_References {
 
 		return new WP_Error(
 			'missing_image',
-			__( 'Provide media_id, image_url, or image_base64 to create a design reference. Retry tip: if image_url or image_base64 upload fails, upload the image first with wp_upload_media_from_url or wp_upload_media_b64, then call this again with the returned media_id.', 'mcpwp' ),
+			__( 'Provide media_id, image_url, or image_base64 to create a design reference. Retry tip: if image_url or image_base64 upload fails, upload the image first with wp_upload_media_from_url or wp_upload_media_b64, then call this again with the returned media_id.', 'mumcp' ),
 			array( 'status' => 400 )
 		);
 	}
@@ -349,12 +349,12 @@ class Mcpwp_Design_References {
 	private function get_attachment_payload( $attachment_id, $source_type ) {
 		$attachment = get_post( $attachment_id );
 		if ( ! $attachment || 'attachment' !== $attachment->post_type ) {
-			return new WP_Error( 'invalid_media', __( 'media_id must reference an existing attachment.', 'mcpwp' ), array( 'status' => 400 ) );
+			return new WP_Error( 'invalid_media', __( 'media_id must reference an existing attachment.', 'mumcp' ), array( 'status' => 400 ) );
 		}
 
 		$mime = get_post_mime_type( $attachment_id );
 		if ( 0 !== strpos( (string) $mime, 'image/' ) ) {
-			return new WP_Error( 'invalid_media_type', __( 'Design references currently require an image attachment.', 'mcpwp' ), array( 'status' => 400 ) );
+			return new WP_Error( 'invalid_media_type', __( 'Design references currently require an image attachment.', 'mumcp' ), array( 'status' => 400 ) );
 		}
 
 		$metadata = wp_get_attachment_metadata( $attachment_id );

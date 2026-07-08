@@ -55,7 +55,7 @@ class Mcpwp_REST_Batch extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'operations' => array(
-							'description' => __( 'Array of operations to execute.', 'mcpwp' ),
+							'description' => __( 'Array of operations to execute.', 'mumcp' ),
 							'type'        => 'array',
 							'required'    => true,
 							'items'       => array(
@@ -99,7 +99,7 @@ class Mcpwp_REST_Batch extends Mcpwp_REST_API {
 		if ( ! is_array( $operations ) || empty( $operations ) ) {
 			return $this->error_response(
 				'invalid_operations',
-				__( 'Operations must be a non-empty array.', 'mcpwp' ),
+				__( 'Operations must be a non-empty array.', 'mumcp' ),
 				400
 			);
 		}
@@ -110,7 +110,7 @@ class Mcpwp_REST_Batch extends Mcpwp_REST_API {
 				'batch_too_large',
 				sprintf(
 					/* translators: %d: maximum number of operations */
-					__( 'Batch contains too many operations. Maximum %d allowed.', 'mcpwp' ),
+					__( 'Batch contains too many operations. Maximum %d allowed.', 'mumcp' ),
 					self::MAX_OPERATIONS
 				),
 				400
@@ -152,7 +152,7 @@ class Mcpwp_REST_Batch extends Mcpwp_REST_API {
 				'status' => 400,
 				'data'   => array(
 					'code'    => 'invalid_operation',
-					'message' => __( 'Operation must be an object.', 'mcpwp' ),
+					'message' => __( 'Operation must be an object.', 'mumcp' ),
 				),
 			);
 		}
@@ -168,7 +168,7 @@ class Mcpwp_REST_Batch extends Mcpwp_REST_API {
 				'status' => 400,
 				'data'   => array(
 					'code'    => 'invalid_method',
-					'message' => __( 'Method must be GET, POST, PUT, or DELETE.', 'mcpwp' ),
+					'message' => __( 'Method must be GET, POST, PUT, or DELETE.', 'mumcp' ),
 				),
 			);
 		}
@@ -180,7 +180,7 @@ class Mcpwp_REST_Batch extends Mcpwp_REST_API {
 				'status' => 400,
 				'data'   => array(
 					'code'    => 'invalid_path',
-					'message' => __( 'Path must be a non-empty string.', 'mcpwp' ),
+					'message' => __( 'Path must be a non-empty string.', 'mumcp' ),
 				),
 			);
 		}

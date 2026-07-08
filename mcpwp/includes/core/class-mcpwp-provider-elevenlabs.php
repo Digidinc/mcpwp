@@ -183,7 +183,7 @@ class Mcpwp_Provider_ElevenLabs {
 
 		return array(
 			'success' => true,
-			'message' => __( 'ElevenLabs API connection successful.', 'mcpwp' ),
+			'message' => __( 'ElevenLabs API connection successful.', 'mumcp' ),
 		);
 	}
 }

@@ -515,7 +515,7 @@ class Mcpwp_REST_Site_Manager extends Mcpwp_REST_API {
 		$mods = $request->get_param( 'mods' );
 
 		if ( empty( $mods ) || ! is_array( $mods ) ) {
-			return $this->error_response( 'invalid_data', __( 'Mods object is required.', 'mcpwp' ), 400 );
+			return $this->error_response( 'invalid_data', __( 'Mods object is required.', 'mumcp' ), 400 );
 		}
 
 		$updated = $this->manager->update_theme_mods( $mods );

@@ -192,12 +192,12 @@ class Mcpwp_Webhooks {
 
 		// Validate required fields
 		if ( empty( $data['name'] ) || empty( $data['url'] ) || empty( $data['events'] ) ) {
-			return new WP_Error( 'missing_required', __( 'Name, URL, and events are required.', 'mcpwp' ) );
+			return new WP_Error( 'missing_required', __( 'Name, URL, and events are required.', 'mumcp' ) );
 		}
 
 		// Validate URL format.
 		if ( ! filter_var( $data['url'], FILTER_VALIDATE_URL ) ) {
-			return new WP_Error( 'invalid_url', __( 'Invalid webhook URL.', 'mcpwp' ) );
+			return new WP_Error( 'invalid_url', __( 'Invalid webhook URL.', 'mumcp' ) );
 		}
 
 		// SSRF protection: block internal/private URLs.
@@ -215,7 +215,7 @@ class Mcpwp_Webhooks {
 			return new WP_Error(
 				'invalid_events',
 				/* translators: %s: comma-separated list of invalid event names */
-				sprintf( __( 'Invalid events: %s', 'mcpwp' ), implode( ', ', $invalid_events ) )
+				sprintf( __( 'Invalid events: %s', 'mumcp' ), implode( ', ', $invalid_events ) )
 			);
 		}
 
@@ -235,7 +235,7 @@ class Mcpwp_Webhooks {
 		);
 
 		if ( false === $result ) {
-			return new WP_Error( 'db_error', __( 'Failed to register webhook.', 'mcpwp' ) );
+			return new WP_Error( 'db_error', __( 'Failed to register webhook.', 'mumcp' ) );
 		}
 
 		return $wpdb->insert_id;
@@ -323,7 +323,7 @@ class Mcpwp_Webhooks {
 
 		$webhook = $this->get( $id );
 		if ( ! $webhook ) {
-			return new WP_Error( 'not_found', __( 'Webhook not found.', 'mcpwp' ) );
+			return new WP_Error( 'not_found', __( 'Webhook not found.', 'mumcp' ) );
 		}
 
 		$update = array();
@@ -336,7 +336,7 @@ class Mcpwp_Webhooks {
 
 		if ( isset( $data['url'] ) ) {
 			if ( ! filter_var( $data['url'], FILTER_VALIDATE_URL ) ) {
-				return new WP_Error( 'invalid_url', __( 'Invalid webhook URL.', 'mcpwp' ) );
+				return new WP_Error( 'invalid_url', __( 'Invalid webhook URL.', 'mumcp' ) );
 			}
 			// SSRF protection.
 			if ( class_exists( 'Mcpwp_Security' ) ) {
@@ -356,7 +356,7 @@ class Mcpwp_Webhooks {
 				return new WP_Error(
 					'invalid_events',
 					/* translators: %s: comma-separated list of invalid event names */
-					sprintf( __( 'Invalid events: %s', 'mcpwp' ), implode( ', ', $invalid_events ) )
+					sprintf( __( 'Invalid events: %s', 'mumcp' ), implode( ', ', $invalid_events ) )
 				);
 			}
 			$update['events'] = wp_json_encode( $events );
@@ -374,7 +374,7 @@ class Mcpwp_Webhooks {
 		}
 
 		if ( empty( $update ) ) {
-			return new WP_Error( 'no_changes', __( 'No valid fields to update.', 'mcpwp' ) );
+			return new WP_Error( 'no_changes', __( 'No valid fields to update.', 'mumcp' ) );
 		}
 
 		$result = $wpdb->update( $this->table, $update, array( 'id' => $id ), $format, array( '%d' ) );
@@ -393,7 +393,7 @@ class Mcpwp_Webhooks {
 
 		$webhook = $this->get( $id );
 		if ( ! $webhook ) {
-			return new WP_Error( 'not_found', __( 'Webhook not found.', 'mcpwp' ) );
+			return new WP_Error( 'not_found', __( 'Webhook not found.', 'mumcp' ) );
 		}
 
 		$result = $wpdb->delete( $this->table, array( 'id' => $id ), array( '%d' ) );
@@ -577,7 +577,7 @@ class Mcpwp_Webhooks {
 	public function test( $id ) {
 		$webhook = $this->get( $id );
 		if ( ! $webhook ) {
-			return new WP_Error( 'not_found', __( 'Webhook not found.', 'mcpwp' ) );
+			return new WP_Error( 'not_found', __( 'Webhook not found.', 'mumcp' ) );
 		}
 
 		// Re-validate URL at send time to defend against DNS changes and unsafe updates.
@@ -590,7 +590,7 @@ class Mcpwp_Webhooks {
 
 		$payload = array(
 			'test'    => true,
-			'message' => __( 'This is a test webhook delivery from MCPWP.', 'mcpwp' ),
+			'message' => __( 'This is a test webhook delivery from MCPWP.', 'mumcp' ),
 		);
 
 		$body = wp_json_encode( $payload );

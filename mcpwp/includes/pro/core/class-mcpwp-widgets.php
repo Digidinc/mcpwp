@@ -53,7 +53,7 @@ class Mcpwp_Widgets {
 		global $wp_registered_sidebars;
 
 		if ( ! isset( $wp_registered_sidebars[ $sidebar_id ] ) ) {
-			return new WP_Error( 'not_found', __( 'Sidebar not found.', 'mcpwp' ) );
+			return new WP_Error( 'not_found', __( 'Sidebar not found.', 'mumcp' ) );
 		}
 
 		$sidebar = $wp_registered_sidebars[ $sidebar_id ];
@@ -106,14 +106,14 @@ class Mcpwp_Widgets {
 		global $wp_registered_widgets;
 
 		if ( ! isset( $wp_registered_widgets[ $widget_id ] ) ) {
-			return new WP_Error( 'not_found', __( 'Widget not found.', 'mcpwp' ) );
+			return new WP_Error( 'not_found', __( 'Widget not found.', 'mumcp' ) );
 		}
 
 		$widget = $wp_registered_widgets[ $widget_id ];
 		$parsed = $this->parse_widget_id( $widget_id );
 
 		if ( ! $parsed ) {
-			return new WP_Error( 'invalid_widget', __( 'Invalid widget ID format.', 'mcpwp' ) );
+			return new WP_Error( 'invalid_widget', __( 'Invalid widget ID format.', 'mumcp' ) );
 		}
 
 		$settings = $this->get_widget_settings( $parsed['type'], $parsed['number'] );
@@ -166,7 +166,7 @@ class Mcpwp_Widgets {
 
 		// Validate sidebar exists.
 		if ( ! isset( $wp_registered_sidebars[ $sidebar_id ] ) ) {
-			return new WP_Error( 'invalid_sidebar', __( 'Sidebar not found.', 'mcpwp' ) );
+			return new WP_Error( 'invalid_sidebar', __( 'Sidebar not found.', 'mumcp' ) );
 		}
 
 		// Validate widget type exists.
@@ -179,7 +179,7 @@ class Mcpwp_Widgets {
 		}
 
 		if ( ! $widget_class ) {
-			return new WP_Error( 'invalid_widget_type', __( 'Widget type not found.', 'mcpwp' ) );
+			return new WP_Error( 'invalid_widget_type', __( 'Widget type not found.', 'mumcp' ) );
 		}
 
 		// Get next widget number.
@@ -222,13 +222,13 @@ class Mcpwp_Widgets {
 		$parsed = $this->parse_widget_id( $widget_id );
 
 		if ( ! $parsed ) {
-			return new WP_Error( 'invalid_widget', __( 'Invalid widget ID format.', 'mcpwp' ) );
+			return new WP_Error( 'invalid_widget', __( 'Invalid widget ID format.', 'mumcp' ) );
 		}
 
 		$all_settings = get_option( 'widget_' . $parsed['type'], array() );
 
 		if ( ! isset( $all_settings[ $parsed['number'] ] ) ) {
-			return new WP_Error( 'not_found', __( 'Widget not found.', 'mcpwp' ) );
+			return new WP_Error( 'not_found', __( 'Widget not found.', 'mumcp' ) );
 		}
 
 		// Merge existing settings with new settings.
@@ -253,7 +253,7 @@ class Mcpwp_Widgets {
 		$parsed = $this->parse_widget_id( $widget_id );
 
 		if ( ! $parsed ) {
-			return new WP_Error( 'invalid_widget', __( 'Invalid widget ID format.', 'mcpwp' ) );
+			return new WP_Error( 'invalid_widget', __( 'Invalid widget ID format.', 'mumcp' ) );
 		}
 
 		// Remove from sidebar.
@@ -295,7 +295,7 @@ class Mcpwp_Widgets {
 
 		// Validate sidebar exists.
 		if ( ! isset( $wp_registered_sidebars[ $sidebar_id ] ) ) {
-			return new WP_Error( 'invalid_sidebar', __( 'Sidebar not found.', 'mcpwp' ) );
+			return new WP_Error( 'invalid_sidebar', __( 'Sidebar not found.', 'mumcp' ) );
 		}
 
 		// Validate widget exists.
@@ -345,7 +345,7 @@ class Mcpwp_Widgets {
 
 		// Validate sidebar exists.
 		if ( ! isset( $wp_registered_sidebars[ $sidebar_id ] ) ) {
-			return new WP_Error( 'invalid_sidebar', __( 'Sidebar not found.', 'mcpwp' ) );
+			return new WP_Error( 'invalid_sidebar', __( 'Sidebar not found.', 'mumcp' ) );
 		}
 
 		$sidebars_widgets = get_option( 'sidebars_widgets', array() );
@@ -358,7 +358,7 @@ class Mcpwp_Widgets {
 				return new WP_Error(
 					'invalid_widget',
 					/* translators: %s: widget ID */
-					sprintf( __( 'Widget %s is not in this sidebar.', 'mcpwp' ), $widget_id )
+					sprintf( __( 'Widget %s is not in this sidebar.', 'mumcp' ), $widget_id )
 				);
 			}
 		}

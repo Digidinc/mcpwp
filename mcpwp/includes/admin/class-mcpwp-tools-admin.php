@@ -34,58 +34,58 @@ class Mcpwp_Tools_Admin {
 	public static function get_category_meta() {
 		return array(
 			'content'    => array(
-				'name'        => __( 'Content', 'mcpwp' ),
-				'description' => __( 'Posts, pages, drafts, search, clone, bulk create', 'mcpwp' ),
+				'name'        => __( 'Content', 'mumcp' ),
+				'description' => __( 'Posts, pages, drafts, search, clone, bulk create', 'mumcp' ),
 				'icon'        => 'dashicons-admin-post',
 			),
 			'media'      => array(
-				'name'        => __( 'Media', 'mcpwp' ),
-				'description' => __( 'Upload files, import from URL, media library, screenshots', 'mcpwp' ),
+				'name'        => __( 'Media', 'mumcp' ),
+				'description' => __( 'Upload files, import from URL, media library, screenshots', 'mumcp' ),
 				'icon'        => 'dashicons-admin-media',
 			),
 			'elementor'  => array(
-				'name'        => __( 'Elementor', 'mcpwp' ),
-				'description' => __( 'Get/set page data, templates, globals, widgets, CSS', 'mcpwp' ),
+				'name'        => __( 'Elementor', 'mumcp' ),
+				'description' => __( 'Get/set page data, templates, globals, widgets, CSS', 'mumcp' ),
 				'icon'        => 'dashicons-editor-kitchensink',
 			),
 			'seo'        => array(
-				'name'        => __( 'SEO', 'mcpwp' ),
-				'description' => __( 'Meta titles, descriptions, analysis, noindex', 'mcpwp' ),
+				'name'        => __( 'SEO', 'mumcp' ),
+				'description' => __( 'Meta titles, descriptions, analysis, noindex', 'mumcp' ),
 				'icon'        => 'dashicons-search',
 			),
 			'forms'      => array(
-				'name'        => __( 'Forms', 'mcpwp' ),
-				'description' => __( 'List forms, view entries, plugin detection', 'mcpwp' ),
+				'name'        => __( 'Forms', 'mumcp' ),
+				'description' => __( 'List forms, view entries, plugin detection', 'mumcp' ),
 				'icon'        => 'dashicons-feedback',
 			),
 			'gutenberg'  => array(
-				'name'        => __( 'Gutenberg', 'mcpwp' ),
-				'description' => __( 'Block editor data, block types, patterns', 'mcpwp' ),
+				'name'        => __( 'Gutenberg', 'mumcp' ),
+				'description' => __( 'Block editor data, block types, patterns', 'mumcp' ),
 				'icon'        => 'dashicons-block-default',
 			),
 			'taxonomy'   => array(
-				'name'        => __( 'Taxonomy', 'mcpwp' ),
-				'description' => __( 'Categories, tags, custom taxonomy terms', 'mcpwp' ),
+				'name'        => __( 'Taxonomy', 'mumcp' ),
+				'description' => __( 'Categories, tags, custom taxonomy terms', 'mumcp' ),
 				'icon'        => 'dashicons-tag',
 			),
 			'site'       => array(
-				'name'        => __( 'Site', 'mcpwp' ),
-				'description' => __( 'Site info, plugins, theme, menus, options, health', 'mcpwp' ),
+				'name'        => __( 'Site', 'mumcp' ),
+				'description' => __( 'Site info, plugins, theme, menus, options, health', 'mumcp' ),
 				'icon'        => 'dashicons-admin-site-alt3',
 			),
 			'webhooks'   => array(
-				'name'        => __( 'Webhooks', 'mcpwp' ),
-				'description' => __( 'Create, update, delete, test webhook subscriptions', 'mcpwp' ),
+				'name'        => __( 'Webhooks', 'mumcp' ),
+				'description' => __( 'Create, update, delete, test webhook subscriptions', 'mumcp' ),
 				'icon'        => 'dashicons-rest-api',
 			),
 			'admin'      => array(
-				'name'        => __( 'Admin', 'mcpwp' ),
-				'description' => __( 'API keys, rate limits, feedback', 'mcpwp' ),
+				'name'        => __( 'Admin', 'mumcp' ),
+				'description' => __( 'API keys, rate limits, feedback', 'mumcp' ),
 				'icon'        => 'dashicons-admin-tools',
 			),
 			'ai'         => array(
-				'name'        => __( 'AI', 'mcpwp' ),
-				'description' => __( 'Stock photos, image generation, alt text, TTS', 'mcpwp' ),
+				'name'        => __( 'AI', 'mumcp' ),
+				'description' => __( 'Stock photos, image generation, alt text, TTS', 'mumcp' ),
 				'icon'        => 'dashicons-lightbulb',
 			),
 		);
@@ -96,7 +96,7 @@ class Mcpwp_Tools_Admin {
 	 */
 	public function render() {
 		if ( ! current_user_can( 'activate_plugins' ) ) {
-			wp_die( esc_html__( 'You do not have permission to access this page.', 'mcpwp' ) );
+			wp_die( esc_html__( 'You do not have permission to access this page.', 'mumcp' ) );
 		}
 
 		$disabled_categories = get_option( 'mcpwp_disabled_tool_categories', array() );
@@ -168,13 +168,13 @@ class Mcpwp_Tools_Admin {
 		$enabled  = isset( $_POST['enabled'] ) ? sanitize_text_field( wp_unslash( $_POST['enabled'] ) ) : '1';
 
 		if ( empty( $category ) ) {
-			wp_send_json_error( array( 'message' => __( 'Category is required.', 'mcpwp' ) ) );
+			wp_send_json_error( array( 'message' => __( 'Category is required.', 'mumcp' ) ) );
 		}
 
 		// Validate category slug.
 		$valid_categories = array_keys( self::get_category_meta() );
 		if ( ! in_array( $category, $valid_categories, true ) ) {
-			wp_send_json_error( array( 'message' => __( 'Invalid category.', 'mcpwp' ) ) );
+			wp_send_json_error( array( 'message' => __( 'Invalid category.', 'mumcp' ) ) );
 		}
 
 		$disabled = get_option( 'mcpwp_disabled_tool_categories', array() );
@@ -198,12 +198,12 @@ class Mcpwp_Tools_Admin {
 			'message'  => '1' === $enabled
 				? sprintf(
 					/* translators: %s: category name */
-					__( '%s tools enabled.', 'mcpwp' ),
+					__( '%s tools enabled.', 'mumcp' ),
 					$category
 				)
 				: sprintf(
 					/* translators: %s: category name */
-					__( '%s tools disabled.', 'mcpwp' ),
+					__( '%s tools disabled.', 'mumcp' ),
 					$category
 				),
 			'disabled' => $disabled,

@@ -73,7 +73,7 @@ class Mcpwp_Pages {
 		if ( ! $page || 'page' !== $page->post_type ) {
 			return new WP_Error(
 				'not_found',
-				__( 'Page not found.', 'mcpwp' ),
+				__( 'Page not found.', 'mumcp' ),
 				array( 'status' => 404 )
 			);
 		}
@@ -153,7 +153,7 @@ class Mcpwp_Pages {
 		if ( ! $page || 'page' !== $page->post_type ) {
 			return new WP_Error(
 				'not_found',
-				__( 'Page not found.', 'mcpwp' ),
+				__( 'Page not found.', 'mumcp' ),
 				array( 'status' => 404 )
 			);
 		}
@@ -243,7 +243,7 @@ class Mcpwp_Pages {
 			if ( $stored_slug !== $requested_slug ) {
 				$page_result['slug_warning'] = sprintf(
 					/* translators: 1: requested slug, 2: actual stored slug */
-					__( 'Requested slug "%1$s" was not stored — WordPress rewrote it to "%2$s" due to a collision with another post. To force the slug, permanently delete any trashed or auto-draft posts that hold "%1$s" and then re-save.', 'mcpwp' ),
+					__( 'Requested slug "%1$s" was not stored — WordPress rewrote it to "%2$s" due to a collision with another post. To force the slug, permanently delete any trashed or auto-draft posts that hold "%1$s" and then re-save.', 'mumcp' ),
 					$requested_slug,
 					$stored_slug
 				);
@@ -300,7 +300,7 @@ class Mcpwp_Pages {
 		if ( ! $page || 'page' !== $page->post_type ) {
 			return new WP_Error(
 				'not_found',
-				__( 'Page not found.', 'mcpwp' ),
+				__( 'Page not found.', 'mumcp' ),
 				array( 'status' => 404 )
 			);
 		}
@@ -314,7 +314,7 @@ class Mcpwp_Pages {
 		if ( ! $result ) {
 			return new WP_Error(
 				'delete_failed',
-				__( 'Failed to delete page.', 'mcpwp' ),
+				__( 'Failed to delete page.', 'mumcp' ),
 				array( 'status' => 500 )
 			);
 		}

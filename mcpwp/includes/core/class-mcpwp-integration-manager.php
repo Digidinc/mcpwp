@@ -418,7 +418,7 @@ class Mcpwp_Integration_Manager {
 		if ( false === $key ) {
 			return array(
 				'success' => false,
-				'message' => __( 'No API key configured for this provider.', 'mcpwp' ),
+				'message' => __( 'No API key configured for this provider.', 'mumcp' ),
 			);
 		}
 
@@ -426,7 +426,7 @@ class Mcpwp_Integration_Manager {
 		if ( ! $provider_instance ) {
 			return array(
 				'success' => false,
-				'message' => __( 'Unknown provider.', 'mcpwp' ),
+				'message' => __( 'Unknown provider.', 'mumcp' ),
 			);
 		}
 
@@ -453,7 +453,7 @@ class Mcpwp_Integration_Manager {
 		if ( ! $config || empty( $config['url'] ) ) {
 			return array(
 				'success' => false,
-				'message' => __( 'Screenshot worker URL not configured.', 'mcpwp' ),
+				'message' => __( 'Screenshot worker URL not configured.', 'mumcp' ),
 			);
 		}
 
@@ -485,7 +485,7 @@ class Mcpwp_Integration_Manager {
 			$body = json_decode( wp_remote_retrieve_body( $response ), true );
 			if ( 200 === $code && ! empty( $body['success'] ) ) {
 				$result['success'] = true;
-				$result['message'] = __( 'Screenshot worker is responding correctly.', 'mcpwp' );
+				$result['message'] = __( 'Screenshot worker is responding correctly.', 'mumcp' );
 			} else {
 				$result['message'] = isset( $body['error'] ) ? $body['error'] : sprintf( 'Worker returned HTTP %d', $code );
 			}
@@ -511,7 +511,7 @@ class Mcpwp_Integration_Manager {
 		if ( ! class_exists( 'Mcpwp_Google_Indexing' ) ) {
 			return array(
 				'success' => false,
-				'message' => __( 'Google Indexing API requires a configured service account.', 'mcpwp' ),
+				'message' => __( 'Google Indexing API requires a configured service account.', 'mumcp' ),
 			);
 		}
 
@@ -538,7 +538,7 @@ class Mcpwp_Integration_Manager {
 		if ( ! class_exists( 'Mcpwp_Figma' ) ) {
 			return array(
 				'success' => false,
-				'message' => __( 'Figma support is not available in this build.', 'mcpwp' ),
+				'message' => __( 'Figma support is not available in this build.', 'mumcp' ),
 			);
 		}
 

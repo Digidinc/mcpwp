@@ -157,7 +157,7 @@ class Mcpwp_REST_Theme_Builder extends Mcpwp_REST_API {
 		if ( ! $this->theme_builder->is_available() ) {
 			return $this->error_response(
 				'not_available',
-				__( 'Elementor Pro Theme Builder is not available.', 'mcpwp' ),
+				__( 'Elementor Pro Theme Builder is not available.', 'mumcp' ),
 				400
 			);
 		}
@@ -195,7 +195,7 @@ class Mcpwp_REST_Theme_Builder extends Mcpwp_REST_API {
 		if ( ! $this->theme_builder->is_available() ) {
 			return $this->error_response(
 				'not_available',
-				__( 'Elementor Pro Theme Builder is not available.', 'mcpwp' ),
+				__( 'Elementor Pro Theme Builder is not available.', 'mumcp' ),
 				400
 			);
 		}
@@ -265,7 +265,7 @@ class Mcpwp_REST_Theme_Builder extends Mcpwp_REST_API {
 		if ( ! is_array( $conditions ) ) {
 			return $this->error_response(
 				'invalid_conditions',
-				__( 'Conditions must be an array.', 'mcpwp' ),
+				__( 'Conditions must be an array.', 'mumcp' ),
 				400
 			);
 		}

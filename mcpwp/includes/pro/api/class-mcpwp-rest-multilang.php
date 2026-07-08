@@ -57,7 +57,7 @@ class Mcpwp_REST_Multilang extends Mcpwp_REST_API {
 					'language' => array(
 						'required'    => true,
 						'type'        => 'string',
-						'description' => __( 'Language code to set.', 'mcpwp' ),
+						'description' => __( 'Language code to set.', 'mumcp' ),
 					),
 				),
 			)
@@ -112,25 +112,25 @@ class Mcpwp_REST_Multilang extends Mcpwp_REST_API {
 			'language' => array(
 				'required'    => true,
 				'type'        => 'string',
-				'description' => __( 'Target language code.', 'mcpwp' ),
+				'description' => __( 'Target language code.', 'mumcp' ),
 			),
 			'title'    => array(
 				'type'        => 'string',
-				'description' => __( 'Translated title.', 'mcpwp' ),
+				'description' => __( 'Translated title.', 'mumcp' ),
 			),
 			'content'  => array(
 				'type'        => 'string',
-				'description' => __( 'Translated content.', 'mcpwp' ),
+				'description' => __( 'Translated content.', 'mumcp' ),
 			),
 			'excerpt'  => array(
 				'type'        => 'string',
-				'description' => __( 'Translated excerpt.', 'mcpwp' ),
+				'description' => __( 'Translated excerpt.', 'mumcp' ),
 			),
 			'status'   => array(
 				'type'        => 'string',
 				'default'     => 'draft',
 				'enum'        => array( 'draft', 'publish', 'pending', 'private' ),
-				'description' => __( 'Post status for translation.', 'mcpwp' ),
+				'description' => __( 'Post status for translation.', 'mumcp' ),
 			),
 		);
 	}
@@ -146,7 +146,7 @@ class Mcpwp_REST_Multilang extends Mcpwp_REST_API {
 				'active'    => false,
 				'plugin'    => null,
 				'languages' => array(),
-				'message'   => __( 'No multilingual plugin detected.', 'mcpwp' ),
+				'message'   => __( 'No multilingual plugin detected.', 'mumcp' ),
 			) );
 		}
 
@@ -163,7 +163,7 @@ class Mcpwp_REST_Multilang extends Mcpwp_REST_API {
 		if ( ! $this->handler->is_active() ) {
 			return new WP_Error(
 				'no_multilang',
-				__( 'No multilingual plugin is active.', 'mcpwp' ),
+				__( 'No multilingual plugin is active.', 'mumcp' ),
 				array( 'status' => 400 )
 			);
 		}
@@ -175,7 +175,7 @@ class Mcpwp_REST_Multilang extends Mcpwp_REST_API {
 		if ( ! in_array( $language, $languages, true ) ) {
 			return new WP_Error(
 				'invalid_language',
-				__( 'Invalid language code.', 'mcpwp' ),
+				__( 'Invalid language code.', 'mumcp' ),
 				array( 'status' => 400 )
 			);
 		}
@@ -186,7 +186,7 @@ class Mcpwp_REST_Multilang extends Mcpwp_REST_API {
 			'success'          => true,
 			'current_language' => $language,
 			/* translators: %s: language code (e.g. en, fr, de) */
-			'message'          => sprintf( __( 'Language set to %s.', 'mcpwp' ), $language ),
+			'message'          => sprintf( __( 'Language set to %s.', 'mumcp' ), $language ),
 		) );
 	}
 
@@ -204,7 +204,7 @@ class Mcpwp_REST_Multilang extends Mcpwp_REST_API {
 		if ( ! $post ) {
 			return new WP_Error(
 				'not_found',
-				__( 'Post not found.', 'mcpwp' ),
+				__( 'Post not found.', 'mumcp' ),
 				array( 'status' => 404 )
 			);
 		}
@@ -215,7 +215,7 @@ class Mcpwp_REST_Multilang extends Mcpwp_REST_API {
 				'active'       => false,
 				'plugin'       => null,
 				'translations' => array(),
-				'message'      => __( 'No multilingual plugin detected.', 'mcpwp' ),
+				'message'      => __( 'No multilingual plugin detected.', 'mumcp' ),
 			) );
 		}
 
@@ -247,7 +247,7 @@ class Mcpwp_REST_Multilang extends Mcpwp_REST_API {
 		if ( ! $post ) {
 			return new WP_Error(
 				'not_found',
-				__( 'Post not found.', 'mcpwp' ),
+				__( 'Post not found.', 'mumcp' ),
 				array( 'status' => 404 )
 			);
 		}
@@ -255,7 +255,7 @@ class Mcpwp_REST_Multilang extends Mcpwp_REST_API {
 		if ( ! $this->handler->is_active() ) {
 			return new WP_Error(
 				'no_multilang',
-				__( 'No multilingual plugin is active.', 'mcpwp' ),
+				__( 'No multilingual plugin is active.', 'mumcp' ),
 				array( 'status' => 400 )
 			);
 		}

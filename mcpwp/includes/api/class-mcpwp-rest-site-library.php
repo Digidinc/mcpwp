@@ -39,23 +39,23 @@ class Mcpwp_REST_Site_Library extends Mcpwp_REST_API {
 						$this->get_pagination_args(),
 						array(
 							'query' => array(
-								'description' => __( 'Optional text query.', 'mcpwp' ),
+								'description' => __( 'Optional text query.', 'mumcp' ),
 								'type'        => 'string',
 							),
 							'page_intent' => array(
-								'description' => __( 'Optional page intent filter.', 'mcpwp' ),
+								'description' => __( 'Optional page intent filter.', 'mumcp' ),
 								'type'        => 'string',
 							),
 							'archetype_class' => array(
-								'description' => __( 'Optional archetype class filter.', 'mcpwp' ),
+								'description' => __( 'Optional archetype class filter.', 'mumcp' ),
 								'type'        => 'string',
 							),
 							'style' => array(
-								'description' => __( 'Optional style filter.', 'mcpwp' ),
+								'description' => __( 'Optional style filter.', 'mumcp' ),
 								'type'        => 'string',
 							),
 							'source_type' => array(
-								'description' => __( 'Optional source type filter.', 'mcpwp' ),
+								'description' => __( 'Optional source type filter.', 'mumcp' ),
 								'type'        => 'string',
 							),
 						)

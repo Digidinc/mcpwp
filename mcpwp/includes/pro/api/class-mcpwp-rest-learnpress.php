@@ -219,27 +219,27 @@ class Mcpwp_REST_LearnPress extends Mcpwp_REST_API {
 				'default'     => 50,
 				'minimum'     => 1,
 				'maximum'     => 100,
-				'description' => __( 'Items per page.', 'mcpwp' ),
+				'description' => __( 'Items per page.', 'mumcp' ),
 			),
 			'page'     => array(
 				'type'        => 'integer',
 				'default'     => 1,
 				'minimum'     => 1,
-				'description' => __( 'Page number.', 'mcpwp' ),
+				'description' => __( 'Page number.', 'mumcp' ),
 			),
 			'status'   => array(
 				'type'        => 'string',
 				'default'     => 'publish',
 				'enum'        => array( 'publish', 'draft', 'pending', 'private', 'any' ),
-				'description' => __( 'Course status.', 'mcpwp' ),
+				'description' => __( 'Course status.', 'mumcp' ),
 			),
 			'search'   => array(
 				'type'        => 'string',
-				'description' => __( 'Search term.', 'mcpwp' ),
+				'description' => __( 'Search term.', 'mumcp' ),
 			),
 			'category' => array(
 				'type'        => 'string',
-				'description' => __( 'Category slug or ID.', 'mcpwp' ),
+				'description' => __( 'Category slug or ID.', 'mumcp' ),
 			),
 		);
 	}
@@ -256,21 +256,21 @@ class Mcpwp_REST_LearnPress extends Mcpwp_REST_API {
 				'default'     => 50,
 				'minimum'     => 1,
 				'maximum'     => 100,
-				'description' => __( 'Items per page.', 'mcpwp' ),
+				'description' => __( 'Items per page.', 'mumcp' ),
 			),
 			'page'      => array(
 				'type'        => 'integer',
 				'default'     => 1,
 				'minimum'     => 1,
-				'description' => __( 'Page number.', 'mcpwp' ),
+				'description' => __( 'Page number.', 'mumcp' ),
 			),
 			'course_id' => array(
 				'type'        => 'integer',
-				'description' => __( 'Filter by course ID.', 'mcpwp' ),
+				'description' => __( 'Filter by course ID.', 'mumcp' ),
 			),
 			'search'    => array(
 				'type'        => 'string',
-				'description' => __( 'Search term.', 'mcpwp' ),
+				'description' => __( 'Search term.', 'mumcp' ),
 			),
 		);
 	}
@@ -287,21 +287,21 @@ class Mcpwp_REST_LearnPress extends Mcpwp_REST_API {
 				'default'     => 50,
 				'minimum'     => 1,
 				'maximum'     => 100,
-				'description' => __( 'Items per page.', 'mcpwp' ),
+				'description' => __( 'Items per page.', 'mumcp' ),
 			),
 			'page'      => array(
 				'type'        => 'integer',
 				'default'     => 1,
 				'minimum'     => 1,
-				'description' => __( 'Page number.', 'mcpwp' ),
+				'description' => __( 'Page number.', 'mumcp' ),
 			),
 			'course_id' => array(
 				'type'        => 'integer',
-				'description' => __( 'Filter by course ID.', 'mcpwp' ),
+				'description' => __( 'Filter by course ID.', 'mumcp' ),
 			),
 			'search'    => array(
 				'type'        => 'string',
-				'description' => __( 'Search term.', 'mcpwp' ),
+				'description' => __( 'Search term.', 'mumcp' ),
 			),
 		);
 	}

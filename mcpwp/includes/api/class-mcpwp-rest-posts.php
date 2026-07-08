@@ -53,24 +53,24 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 						$this->get_pagination_args(),
 						array(
 							'status'   => array(
-								'description' => __( 'Post status filter.', 'mcpwp' ),
+								'description' => __( 'Post status filter.', 'mumcp' ),
 								'type'        => 'string',
 								'default'     => 'publish',
 							),
 							'category' => array(
-								'description' => __( 'Category ID filter.', 'mcpwp' ),
+								'description' => __( 'Category ID filter.', 'mumcp' ),
 								'type'        => 'integer',
 							),
 							'search'   => array(
-								'description' => __( 'Search term.', 'mcpwp' ),
+								'description' => __( 'Search term.', 'mumcp' ),
 								'type'        => 'string',
 							),
 							'ids'      => array(
-								'description' => __( 'Comma-separated post IDs to fetch.', 'mcpwp' ),
+								'description' => __( 'Comma-separated post IDs to fetch.', 'mumcp' ),
 								'type'        => 'string',
 							),
 							'fields'   => array(
-								'description' => __( 'Comma-separated field names to return (e.g. id,title,word_count,content).', 'mcpwp' ),
+								'description' => __( 'Comma-separated field names to return (e.g. id,title,word_count,content).', 'mumcp' ),
 								'type'        => 'string',
 							),
 						)
@@ -106,7 +106,7 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'force' => array(
-							'description' => __( 'Force permanent deletion.', 'mcpwp' ),
+							'description' => __( 'Force permanent deletion.', 'mumcp' ),
 							'type'        => 'boolean',
 							'default'     => false,
 						),
@@ -126,7 +126,7 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'posts' => array(
-							'description' => __( 'Array of post objects to create.', 'mcpwp' ),
+							'description' => __( 'Array of post objects to create.', 'mumcp' ),
 							'type'        => 'array',
 							'required'    => true,
 						),
@@ -138,7 +138,7 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'posts' => array(
-							'description' => __( 'Array of post objects to update. Each must have id.', 'mcpwp' ),
+							'description' => __( 'Array of post objects to update. Each must have id.', 'mumcp' ),
 							'type'        => 'array',
 							'required'    => true,
 						),
@@ -158,7 +158,7 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'media_id' => array(
-							'description' => __( 'Media attachment ID. Use 0 to remove featured image.', 'mcpwp' ),
+							'description' => __( 'Media attachment ID. Use 0 to remove featured image.', 'mumcp' ),
 							'type'        => 'integer',
 							'required'    => true,
 						),
@@ -178,7 +178,7 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'type' => array(
-							'description' => __( 'Post type filter.', 'mcpwp' ),
+							'description' => __( 'Post type filter.', 'mumcp' ),
 							'type'        => 'string',
 							'enum'        => array( 'post', 'page', 'all' ),
 							'default'     => 'all',
@@ -199,13 +199,13 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'type'  => array(
-							'description' => __( 'Post type filter.', 'mcpwp' ),
+							'description' => __( 'Post type filter.', 'mumcp' ),
 							'type'        => 'string',
 							'enum'        => array( 'post', 'page', 'all' ),
 							'default'     => 'all',
 						),
 						'force' => array(
-							'description' => __( 'Permanently delete.', 'mcpwp' ),
+							'description' => __( 'Permanently delete.', 'mumcp' ),
 							'type'        => 'boolean',
 							'default'     => false,
 						),
@@ -323,11 +323,11 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 		$posts_data = $request->get_param( 'posts' );
 
 		if ( ! is_array( $posts_data ) || empty( $posts_data ) ) {
-			return $this->error_response( 'invalid_posts', __( 'Posts must be a non-empty array.', 'mcpwp' ), 400 );
+			return $this->error_response( 'invalid_posts', __( 'Posts must be a non-empty array.', 'mumcp' ), 400 );
 		}
 
 		if ( count( $posts_data ) > 50 ) {
-			return $this->error_response( 'too_many_posts', __( 'Maximum 50 posts per batch.', 'mcpwp' ), 400 );
+			return $this->error_response( 'too_many_posts', __( 'Maximum 50 posts per batch.', 'mumcp' ), 400 );
 		}
 
 		$created = array();
@@ -337,7 +337,7 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 			if ( empty( $post_item['title'] ) ) {
 				$errors[] = array(
 					'index'   => $index,
-					'message' => __( 'Title is required.', 'mcpwp' ),
+					'message' => __( 'Title is required.', 'mumcp' ),
 				);
 				continue;
 			}
@@ -377,11 +377,11 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 		$posts_data = $request->get_param( 'posts' );
 
 		if ( ! is_array( $posts_data ) || empty( $posts_data ) ) {
-			return $this->error_response( 'invalid_posts', __( 'Posts must be a non-empty array.', 'mcpwp' ), 400 );
+			return $this->error_response( 'invalid_posts', __( 'Posts must be a non-empty array.', 'mumcp' ), 400 );
 		}
 
 		if ( count( $posts_data ) > 50 ) {
-			return $this->error_response( 'too_many_posts', __( 'Maximum 50 posts per batch.', 'mcpwp' ), 400 );
+			return $this->error_response( 'too_many_posts', __( 'Maximum 50 posts per batch.', 'mumcp' ), 400 );
 		}
 
 		$updated = array();
@@ -391,7 +391,7 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 			if ( empty( $post_item['id'] ) ) {
 				$errors[] = array(
 					'index'   => $index,
-					'message' => __( 'id is required for each post.', 'mcpwp' ),
+					'message' => __( 'id is required for each post.', 'mumcp' ),
 				);
 				continue;
 			}
@@ -438,7 +438,7 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 		if ( ! $post || ! in_array( $post->post_type, array( 'post', 'page' ), true ) ) {
 			return $this->error_response(
 				'not_found',
-				__( 'Post not found.', 'mcpwp' ),
+				__( 'Post not found.', 'mumcp' ),
 				404,
 				array( 'id' => $post_id )
 			);
@@ -450,7 +450,7 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 				array(
 					'success' => true,
 					'post_id' => $post_id,
-					'message' => __( 'Featured image removed.', 'mcpwp' ),
+					'message' => __( 'Featured image removed.', 'mumcp' ),
 				)
 			);
 		}
@@ -459,7 +459,7 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 		if ( ! $attachment || 'attachment' !== $attachment->post_type ) {
 			return $this->error_response(
 				'invalid_media',
-				__( 'Invalid media ID.', 'mcpwp' ),
+				__( 'Invalid media ID.', 'mumcp' ),
 				400
 			);
 		}

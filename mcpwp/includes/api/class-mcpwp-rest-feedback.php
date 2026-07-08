@@ -28,34 +28,34 @@ class Mcpwp_REST_Feedback extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'type'        => array(
-							'description' => __( 'Feedback type.', 'mcpwp' ),
+							'description' => __( 'Feedback type.', 'mumcp' ),
 							'type'        => 'string',
 							'required'    => true,
 							'enum'        => array( 'bug_report', 'feature_request', 'feedback' ),
 						),
 						'title'       => array(
-							'description' => __( 'Short summary.', 'mcpwp' ),
+							'description' => __( 'Short summary.', 'mumcp' ),
 							'type'        => 'string',
 							'required'    => true,
 						),
 						'description' => array(
-							'description' => __( 'Detailed description.', 'mcpwp' ),
+							'description' => __( 'Detailed description.', 'mumcp' ),
 							'type'        => 'string',
 							'required'    => true,
 						),
 						'agent'       => array(
-							'description' => __( 'AI model or agent name.', 'mcpwp' ),
+							'description' => __( 'AI model or agent name.', 'mumcp' ),
 							'type'        => 'string',
 							'default'     => '',
 						),
 						'priority'    => array(
-							'description' => __( 'Priority level.', 'mcpwp' ),
+							'description' => __( 'Priority level.', 'mumcp' ),
 							'type'        => 'string',
 							'enum'        => array( 'low', 'medium', 'high', 'critical' ),
 							'default'     => 'medium',
 						),
 						'meta'        => array(
-							'description' => __( 'Extra context as JSON object.', 'mcpwp' ),
+							'description' => __( 'Extra context as JSON object.', 'mumcp' ),
 							'type'        => 'object',
 							'default'     => array(),
 						),
@@ -67,18 +67,18 @@ class Mcpwp_REST_Feedback extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'type'   => array(
-							'description' => __( 'Filter by feedback type.', 'mcpwp' ),
+							'description' => __( 'Filter by feedback type.', 'mumcp' ),
 							'type'        => 'string',
 							'enum'        => array( 'bug_report', 'feature_request', 'feedback' ),
 						),
 						'status' => array(
-							'description' => __( 'Filter by status.', 'mcpwp' ),
+							'description' => __( 'Filter by status.', 'mumcp' ),
 							'type'        => 'string',
 							'enum'        => array( 'open', 'acknowledged', 'resolved', 'closed', 'all' ),
 							'default'     => 'open',
 						),
 						'limit'  => array(
-							'description' => __( 'Maximum results.', 'mcpwp' ),
+							'description' => __( 'Maximum results.', 'mumcp' ),
 							'type'        => 'integer',
 							'default'     => 20,
 							'minimum'     => 1,
@@ -186,7 +186,7 @@ class Mcpwp_REST_Feedback extends Mcpwp_REST_API {
 		if ( $count >= 10 ) {
 			return new WP_Error(
 				'rate_limited',
-				__( 'Too many feedback submissions. Please try again later.', 'mcpwp' ),
+				__( 'Too many feedback submissions. Please try again later.', 'mumcp' ),
 				array( 'status' => 429 )
 			);
 		}

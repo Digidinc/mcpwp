@@ -71,7 +71,7 @@ class Mcpwp_Site_Manager {
 		$menu = wp_get_nav_menu_object( $menu_id );
 
 		if ( ! $menu ) {
-			return new WP_Error( 'not_found', __( 'Menu not found.', 'mcpwp' ) );
+			return new WP_Error( 'not_found', __( 'Menu not found.', 'mumcp' ) );
 		}
 
 		$items = wp_get_nav_menu_items( $menu->term_id );
@@ -99,7 +99,7 @@ class Mcpwp_Site_Manager {
 		$name = isset( $data['name'] ) ? sanitize_text_field( $data['name'] ) : '';
 
 		if ( empty( $name ) ) {
-			return new WP_Error( 'missing_name', __( 'Menu name is required.', 'mcpwp' ) );
+			return new WP_Error( 'missing_name', __( 'Menu name is required.', 'mumcp' ) );
 		}
 
 		$menu_id = wp_create_nav_menu( $name );
@@ -136,7 +136,7 @@ class Mcpwp_Site_Manager {
 		$menu = wp_get_nav_menu_object( $menu_id );
 
 		if ( ! $menu ) {
-			return new WP_Error( 'not_found', __( 'Menu not found.', 'mcpwp' ) );
+			return new WP_Error( 'not_found', __( 'Menu not found.', 'mumcp' ) );
 		}
 
 		// Update name if provided.
@@ -178,13 +178,13 @@ class Mcpwp_Site_Manager {
 		$menu = wp_get_nav_menu_object( $menu_id );
 
 		if ( ! $menu ) {
-			return new WP_Error( 'not_found', __( 'Menu not found.', 'mcpwp' ) );
+			return new WP_Error( 'not_found', __( 'Menu not found.', 'mumcp' ) );
 		}
 
 		$result = wp_delete_nav_menu( $menu_id );
 
 		if ( ! $result ) {
-			return new WP_Error( 'delete_failed', __( 'Failed to delete menu.', 'mcpwp' ) );
+			return new WP_Error( 'delete_failed', __( 'Failed to delete menu.', 'mumcp' ) );
 		}
 
 		return true;
@@ -201,7 +201,7 @@ class Mcpwp_Site_Manager {
 		$menu = wp_get_nav_menu_object( $menu_id );
 
 		if ( ! $menu ) {
-			return new WP_Error( 'not_found', __( 'Menu not found.', 'mcpwp' ) );
+			return new WP_Error( 'not_found', __( 'Menu not found.', 'mumcp' ) );
 		}
 
 		$item_data = array(
@@ -303,7 +303,7 @@ class Mcpwp_Site_Manager {
 		$result = wp_delete_post( $item_id, true );
 
 		if ( ! $result ) {
-			return new WP_Error( 'delete_failed', __( 'Failed to delete menu item.', 'mcpwp' ) );
+			return new WP_Error( 'delete_failed', __( 'Failed to delete menu item.', 'mumcp' ) );
 		}
 
 		return true;
@@ -480,7 +480,7 @@ class Mcpwp_Site_Manager {
 	 */
 	public function get_global_styles() {
 		if ( ! function_exists( 'wp_get_global_styles' ) ) {
-			return new WP_Error( 'not_supported', __( 'Global styles require WordPress 5.9+ and a block theme.', 'mcpwp' ) );
+			return new WP_Error( 'not_supported', __( 'Global styles require WordPress 5.9+ and a block theme.', 'mumcp' ) );
 		}
 
 		return array(
@@ -525,7 +525,7 @@ class Mcpwp_Site_Manager {
 		$templates = wp_get_theme()->get_page_templates();
 
 		$result = array(
-			'default' => __( 'Default Template', 'mcpwp' ),
+			'default' => __( 'Default Template', 'mumcp' ),
 		);
 
 		foreach ( $templates as $file => $name ) {
@@ -534,8 +534,8 @@ class Mcpwp_Site_Manager {
 
 		// Add Elementor templates if active.
 		if ( did_action( 'elementor/loaded' ) ) {
-			$result['elementor_header_footer'] = __( 'Elementor Full Width', 'mcpwp' );
-			$result['elementor_canvas'] = __( 'Elementor Canvas', 'mcpwp' );
+			$result['elementor_header_footer'] = __( 'Elementor Full Width', 'mumcp' );
+			$result['elementor_canvas'] = __( 'Elementor Canvas', 'mumcp' );
 		}
 
 		return $result;
@@ -552,13 +552,13 @@ class Mcpwp_Site_Manager {
 		$page = get_post( $page_id );
 
 		if ( ! $page || 'page' !== $page->post_type ) {
-			return new WP_Error( 'not_found', __( 'Page not found.', 'mcpwp' ) );
+			return new WP_Error( 'not_found', __( 'Page not found.', 'mumcp' ) );
 		}
 
 		// Validate template.
 		$valid_templates = array_keys( $this->get_page_templates() );
 		if ( ! in_array( $template, $valid_templates, true ) && 'default' !== $template && '' !== $template ) {
-			return new WP_Error( 'invalid_template', __( 'Invalid template.', 'mcpwp' ) );
+			return new WP_Error( 'invalid_template', __( 'Invalid template.', 'mumcp' ) );
 		}
 
 		// Set template (empty string or 'default' means default template).
@@ -578,7 +578,7 @@ class Mcpwp_Site_Manager {
 		$page = get_post( $page_id );
 
 		if ( ! $page || 'page' !== $page->post_type ) {
-			return new WP_Error( 'not_found', __( 'Page not found.', 'mcpwp' ) );
+			return new WP_Error( 'not_found', __( 'Page not found.', 'mumcp' ) );
 		}
 
 		$template = get_post_meta( $page_id, '_wp_page_template', true );

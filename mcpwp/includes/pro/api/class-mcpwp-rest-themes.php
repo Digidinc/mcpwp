@@ -208,7 +208,7 @@ class Mcpwp_REST_Themes extends Mcpwp_REST_API {
 		if ( empty( $settings ) ) {
 			return $this->error_response(
 				'missing_settings',
-				__( 'Settings data is required.', 'mcpwp' ),
+				__( 'Settings data is required.', 'mumcp' ),
 				400
 			);
 		}
@@ -238,7 +238,7 @@ class Mcpwp_REST_Themes extends Mcpwp_REST_API {
 			return $this->error_response(
 				'category_not_found',
 				/* translators: %s: category name */
-				sprintf( __( 'Settings category "%s" not found.', 'mcpwp' ), $category ),
+				sprintf( __( 'Settings category "%s" not found.', 'mumcp' ), $category ),
 				404
 			);
 		}
@@ -266,7 +266,7 @@ class Mcpwp_REST_Themes extends Mcpwp_REST_API {
 		if ( 'astra' !== $theme_info['slug'] ) {
 			return new WP_Error(
 				'not_astra',
-				__( 'This endpoint requires Astra theme to be active.', 'mcpwp' )
+				__( 'This endpoint requires Astra theme to be active.', 'mumcp' )
 			);
 		}
 
@@ -309,7 +309,7 @@ class Mcpwp_REST_Themes extends Mcpwp_REST_API {
 		if ( empty( $colors ) ) {
 			return $this->error_response(
 				'missing_colors',
-				__( 'Color data is required.', 'mcpwp' ),
+				__( 'Color data is required.', 'mumcp' ),
 				400
 			);
 		}
@@ -376,7 +376,7 @@ class Mcpwp_REST_Themes extends Mcpwp_REST_API {
 		if ( empty( $typography ) ) {
 			return $this->error_response(
 				'missing_typography',
-				__( 'Typography data is required.', 'mcpwp' ),
+				__( 'Typography data is required.', 'mumcp' ),
 				400
 			);
 		}

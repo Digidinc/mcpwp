@@ -1,4 +1,4 @@
-=== MCPWP ===
+=== mumcp ===
 Contributors: mumega
 Donate link: https://mcpwp.net/
 Tags: ai, claude, mcp, elementor, api
@@ -11,13 +11,15 @@ Stable tag: 3.4.3
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
-Connect WordPress to Claude and other MCP clients for safe AI-assisted posts, pages, media, drafts, and Elementor basics.
+mumcp — Model Context Protocol for WordPress, by Mumega. Safe AI-assisted posts, pages, media, drafts, menus, and Elementor basics.
 
 == Description ==
 
-MCPWP connects your WordPress site to AI assistants like Claude using the Model Context Protocol (MCP). It gives approved AI clients a scoped, auditable way to read site context and help manage core WordPress content through natural language.
+**mumcp — Model Context Protocol for WordPress, by Mumega.**
 
-The WordPress.org package is the free core: API keys, scoped access, activity logging, posts, pages, media, drafts, menus, site context, and basic Elementor operations when Elementor is installed.
+mumcp connects your WordPress site to AI assistants like Claude using the Model Context Protocol (MCP). It gives approved AI clients a scoped, auditable way to read site context and help manage core WordPress content through natural language.
+
+The WordPress.org package is the free core: API keys, scoped access, activity logging, posts, pages, media, drafts, menus, site context, and basic Elementor operations when Elementor is installed. Advanced features (staging workflows, SEO automation, WooCommerce tooling, AI provider integrations) are available separately — see [mcpwp.net/pricing](https://mcpwp.net/pricing).
 
 = Key Features =
 
@@ -34,7 +36,7 @@ The WordPress.org package is the free core: API keys, scoped access, activity lo
 = How It Works =
 
 1. Install and activate the plugin
-2. Copy your API key from MCPWP in the admin menu
+2. Copy your API key from mumcp in the admin menu
 3. Configure your MCP server with the API key
 4. Review enabled tool categories and scopes
 5. Start creating drafts and managing WordPress content with natural language
@@ -52,9 +54,9 @@ The WordPress.org package is the free core: API keys, scoped access, activity lo
 = From WordPress Admin =
 
 1. Go to Plugins → Add New
-2. Search for "MCPWP"
+2. Search for "mumcp"
 3. Click Install Now, then Activate
-4. Go to MCPWP in the admin menu to get your API key
+4. Go to mumcp in the admin menu to get your API key
 
 = Manual Installation =
 
@@ -62,7 +64,7 @@ The WordPress.org package is the free core: API keys, scoped access, activity lo
 2. Go to Plugins → Add New → Upload Plugin
 3. Select the ZIP file and click Install Now
 4. Activate the plugin
-5. Go to MCPWP in the admin menu to get your API key
+5. Go to mumcp in the admin menu to get your API key
 
 = MCP Server Setup =
 
@@ -85,7 +87,7 @@ For ChatGPT GPT Actions, use the public OpenAPI schema at `https://yoursite.com/
 
 = What is MCP? =
 
-Model Context Protocol (MCP) is an open protocol that enables AI assistants like Claude to interact with external tools and services. MCPWP exposes your WordPress site as an MCP-compatible tool.
+Model Context Protocol (MCP) is an open protocol that enables AI assistants like Claude to interact with external tools and services. mumcp exposes your WordPress site as an MCP-compatible tool.
 
 = Is this secure? =
 
@@ -93,7 +95,7 @@ Yes. All requests require a unique API key. Keys are hashed using WordPress pass
 
 = Does it work with any AI? =
 
-MCPWP works with any MCP-compatible client: Claude Code, Claude Desktop, Cursor, Windsurf, and others. For ChatGPT, use the built-in OpenAPI schema (`/openapi.json`) to connect via GPT Actions.
+mumcp works with any MCP-compatible client: Claude Code, Claude Desktop, Cursor, Windsurf, and others. For ChatGPT, use the built-in OpenAPI schema (`/openapi.json`) to connect via GPT Actions.
 
 = Do I need coding skills? =
 
@@ -105,11 +107,11 @@ Basic Elementor page read/write support is included when Elementor is installed.
 
 = Who is this for? =
 
-MCPWP is best for site owners, developers, agencies, and content teams that want AI assistants to help operate WordPress while keeping API keys, scopes, and activity logs under site-owner control.
+mumcp is best for site owners, developers, agencies, and content teams that want AI assistants to help operate WordPress while keeping API keys, scopes, and activity logs under site-owner control.
 
 = Does it support Elementor 4? =
 
-Yes. MCPWP includes fallback handling for Elementor page data saves.
+Yes. mumcp includes fallback handling for Elementor page data saves.
 
 = Can I use this on multiple sites? =
 
@@ -117,7 +119,7 @@ Each site needs its own plugin installation and API key.
 
 == Privacy ==
 
-MCPWP can send anonymous usage data from your WordPress server to PostHog when the "Share anonymous tool-usage data" setting is enabled in WP Admin > MCPWP > Settings.
+mumcp can send anonymous usage data from your WordPress server to PostHog when the "Share anonymous tool-usage data" setting is enabled in WP Admin > mumcp > Settings.
 
 **What is collected:** Names of MCP tools called, whether each call succeeded or failed, execution duration, plugin version, WordPress version, and PHP major/minor version.
 
@@ -127,9 +129,9 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 
 **Where data is sent:** PostHog, Inc. (posthog.com). Your server's outbound IP address is transmitted as part of the HTTP request to PostHog.
 
-**Default state:** Disabled for free tier (requires opt-in). Enabled by default for paid subscribers (can be disabled at any time).
+**Default state:** Disabled. Analytics only runs if you explicitly enable the setting (opt-in).
 
-**How to opt out:** Uncheck "Share anonymous tool-usage data" under WP Admin > MCPWP > Settings.
+**How to opt out:** Uncheck "Share anonymous tool-usage data" under WP Admin > mumcp > Settings.
 
 == Screenshots ==
 
@@ -139,6 +141,12 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 4. Integrations and Chat — connected services plus safety-first agent workflow
 
 == Changelog ==
+
+= 3.4.3 =
+* security: harden REST/MCP scope matrix and self-approval gate
+
+= 3.4.2 =
+* security: block secret option stores from /option endpoint; admin-gate /plugin-settings
 
 = 3.4.1 =
 * security: require admin scope for plugin self-update and update-control options; restrict update package URLs to HTTPS + trusted hosts (fixes write-scope→RCE chain)
@@ -542,6 +550,9 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 
 == Upgrade Notice ==
 
+= 3.4.3 =
+Security hardening: REST/MCP scope matrix tightened and self-approval gate enforced.
+
 = 3.4.1 =
 Security fix: plugin self-update and update-control options now require admin scope; update package URLs are restricted to HTTPS + trusted hosts (closes a write-scope-to-RCE chain).
 
@@ -638,7 +649,7 @@ This plugin is provided "as is" without warranty of any kind, express or implied
 
 == Privacy Policy ==
 
-MCPWP stores API keys, settings, and activity logs locally in WordPress. The plugin does not transmit site content to external services unless you configure an optional integration or ask an AI client connected to your site to send that data.
+mumcp stores API keys, settings, and activity logs locally in WordPress. The plugin does not transmit site content to external services unless you configure an optional integration or ask an AI client connected to your site to send that data.
 
 == Third Party Services ==
 
@@ -733,6 +744,6 @@ Powers the built-in Chat assistant when no OpenAI key is configured.
 
 == Support ==
 
-* Documentation: [MCPWP docs](https://mcpwp.net/docs/)
+* Documentation: [mumcp docs](https://mcpwp.net/docs/)
 * Support Forum: [wordpress.org/support/plugin/mcpwp](https://wordpress.org/support/plugin/mcpwp)
 * GitHub: [github.com/Mumega-com/mcp-for-wp](https://github.com/Mumega-com/mcp-for-wp)

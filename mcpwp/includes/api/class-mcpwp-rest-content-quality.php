@@ -36,7 +36,7 @@ class Mcpwp_REST_Content_Quality extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'id' => array(
-							'description'       => __( 'Post or page ID to audit.', 'mcpwp' ),
+							'description'       => __( 'Post or page ID to audit.', 'mumcp' ),
 							'type'              => 'integer',
 							'required'          => true,
 							'sanitize_callback' => 'absint',
@@ -76,31 +76,31 @@ class Mcpwp_REST_Content_Quality extends Mcpwp_REST_API {
 		$issues           = array();
 
 		if ( $word_count < 180 ) {
-			$issues[] = $this->make_content_quality_issue( 'low_answer_depth', 'warning', __( 'Content may not have enough depth to answer the topic.', 'mcpwp' ), __( 'Add clear, useful detail that satisfies the page intent before publishing.', 'mcpwp' ) );
+			$issues[] = $this->make_content_quality_issue( 'low_answer_depth', 'warning', __( 'Content may not have enough depth to answer the topic.', 'mumcp' ), __( 'Add clear, useful detail that satisfies the page intent before publishing.', 'mumcp' ) );
 		}
 
 		if ( ! $this->has_summary_intro( $text ) ) {
-			$issues[] = $this->make_content_quality_issue( 'missing_summary_intro', 'info', __( 'The page does not appear to open with a concise summary.', 'mcpwp' ), __( 'Add a short intro that states who the page is for and what it answers.', 'mcpwp' ) );
+			$issues[] = $this->make_content_quality_issue( 'missing_summary_intro', 'info', __( 'The page does not appear to open with a concise summary.', 'mumcp' ), __( 'Add a short intro that states who the page is for and what it answers.', 'mumcp' ) );
 		}
 
 		if ( 0 === $question_count ) {
-			$issues[] = $this->make_content_quality_issue( 'no_question_coverage', 'info', __( 'No explicit question coverage was detected.', 'mcpwp' ), __( 'Add question-style headings or FAQ content only when it matches real user intent.', 'mcpwp' ) );
+			$issues[] = $this->make_content_quality_issue( 'no_question_coverage', 'info', __( 'No explicit question coverage was detected.', 'mumcp' ), __( 'Add question-style headings or FAQ content only when it matches real user intent.', 'mumcp' ) );
 		}
 
 		if ( count( $entity_names ) < 3 ) {
-			$issues[] = $this->make_content_quality_issue( 'low_entity_coverage', 'info', __( 'Few entity-like names were detected.', 'mcpwp' ), __( 'Mention relevant products, people, organizations, places, standards, tools, or concepts naturally where useful.', 'mcpwp' ) );
+			$issues[] = $this->make_content_quality_issue( 'low_entity_coverage', 'info', __( 'Few entity-like names were detected.', 'mumcp' ), __( 'Mention relevant products, people, organizations, places, standards, tools, or concepts naturally where useful.', 'mumcp' ) );
 		}
 
 		if ( null !== $freshness_days && $freshness_days > 365 ) {
-			$issues[] = $this->make_content_quality_issue( 'stale_content', 'warning', __( 'Content has not been updated in over a year.', 'mcpwp' ), __( 'Review facts, screenshots, product names, and links before relying on this page.', 'mcpwp' ), array( 'freshness_days' => $freshness_days ) );
+			$issues[] = $this->make_content_quality_issue( 'stale_content', 'warning', __( 'Content has not been updated in over a year.', 'mumcp' ), __( 'Review facts, screenshots, product names, and links before relying on this page.', 'mumcp' ), array( 'freshness_days' => $freshness_days ) );
 		}
 
 		if ( 0 === count( $trust_signals ) ) {
-			$issues[] = $this->make_content_quality_issue( 'missing_trust_signals', 'info', __( 'No obvious trust signals were detected.', 'mcpwp' ), __( 'Add visible author, date, source, policy, contact, proof, or process details where appropriate.', 'mcpwp' ) );
+			$issues[] = $this->make_content_quality_issue( 'missing_trust_signals', 'info', __( 'No obvious trust signals were detected.', 'mumcp' ), __( 'Add visible author, date, source, policy, contact, proof, or process details where appropriate.', 'mumcp' ) );
 		}
 
 		if ( 0 === $external_links ) {
-			$issues[] = $this->make_content_quality_issue( 'no_reference_hints', 'info', __( 'No external reference links were detected.', 'mcpwp' ), __( 'Use references only when they help users verify claims; do not invent citations.', 'mcpwp' ) );
+			$issues[] = $this->make_content_quality_issue( 'no_reference_hints', 'info', __( 'No external reference links were detected.', 'mumcp' ), __( 'Use references only when they help users verify claims; do not invent citations.', 'mumcp' ) );
 		}
 
 		$score   = $this->calculate_content_quality_score( $word_count, $question_count, count( $entity_names ), count( $trust_signals ), $external_links, $freshness_days );

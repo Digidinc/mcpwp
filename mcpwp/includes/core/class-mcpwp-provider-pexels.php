@@ -195,7 +195,7 @@ class Mcpwp_Provider_Pexels {
 
 		return array(
 			'success' => true,
-			'message' => __( 'Pexels API connection successful.', 'mcpwp' ),
+			'message' => __( 'Pexels API connection successful.', 'mumcp' ),
 		);
 	}
 

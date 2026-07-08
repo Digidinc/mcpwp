@@ -28,11 +28,11 @@ class Mcpwp_REST_Approvals extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'status' => array(
-							'description' => __( 'Optional approval status filter.', 'mcpwp' ),
+							'description' => __( 'Optional approval status filter.', 'mumcp' ),
 							'type'        => 'string',
 						),
 						'limit'  => array(
-							'description'       => __( 'Maximum approvals to return.', 'mcpwp' ),
+							'description'       => __( 'Maximum approvals to return.', 'mumcp' ),
 							'type'              => 'integer',
 							'default'           => 50,
 							'minimum'           => 1,
@@ -67,7 +67,7 @@ class Mcpwp_REST_Approvals extends Mcpwp_REST_API {
 						'permission_callback' => array( $this, 'check_permission' ),
 						'args'                => array(
 							'note' => array(
-								'description' => __( 'Optional human review note.', 'mcpwp' ),
+								'description' => __( 'Optional human review note.', 'mumcp' ),
 								'type'        => 'string',
 							),
 						),
@@ -215,7 +215,7 @@ class Mcpwp_REST_Approvals extends Mcpwp_REST_API {
 		if ( $current_key_id === (string) $record['requested_by_key_id'] ) {
 			return new WP_Error(
 				'self_approval_forbidden',
-				__( 'The same API key that created this request cannot approve or apply it. Use a different admin key or approve via WordPress admin.', 'mcpwp' ),
+				__( 'The same API key that created this request cannot approve or apply it. Use a different admin key or approve via WordPress admin.', 'mumcp' ),
 				array( 'status' => 403 )
 			);
 		}

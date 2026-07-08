@@ -36,7 +36,7 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'id' => array(
-							'description'       => __( 'Post or page ID to validate.', 'mcpwp' ),
+							'description'       => __( 'Post or page ID to validate.', 'mumcp' ),
 							'type'              => 'integer',
 							'required'          => true,
 							'sanitize_callback' => 'absint',
@@ -57,12 +57,12 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'post_types' => array(
-							'description' => __( 'Comma-separated post types to include.', 'mcpwp' ),
+							'description' => __( 'Comma-separated post types to include.', 'mumcp' ),
 							'type'        => 'string',
 							'default'     => 'page,post',
 						),
 						'limit' => array(
-							'description'       => __( 'Maximum number of URLs to audit.', 'mcpwp' ),
+							'description'       => __( 'Maximum number of URLs to audit.', 'mumcp' ),
 							'type'              => 'integer',
 							'default'           => 25,
 							'minimum'           => 1,
@@ -70,13 +70,13 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 							'sanitize_callback' => 'absint',
 						),
 						'include_drafts' => array(
-							'description'       => __( 'Include draft/private content.', 'mcpwp' ),
+							'description'       => __( 'Include draft/private content.', 'mumcp' ),
 							'type'              => 'boolean',
 							'default'           => false,
 							'sanitize_callback' => 'rest_sanitize_boolean',
 						),
 						'store' => array(
-							'description'       => __( 'Store this audit run and normalized issue records.', 'mcpwp' ),
+							'description'       => __( 'Store this audit run and normalized issue records.', 'mumcp' ),
 							'type'              => 'boolean',
 							'default'           => false,
 							'sanitize_callback' => 'rest_sanitize_boolean',
@@ -97,32 +97,32 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'status' => array(
-							'description'       => __( 'Issue status filter: open or resolved.', 'mcpwp' ),
+							'description'       => __( 'Issue status filter: open or resolved.', 'mumcp' ),
 							'type'              => 'string',
 							'sanitize_callback' => 'sanitize_key',
 						),
 						'severity' => array(
-							'description'       => __( 'Severity filter: error, warning, or info.', 'mcpwp' ),
+							'description'       => __( 'Severity filter: error, warning, or info.', 'mumcp' ),
 							'type'              => 'string',
 							'sanitize_callback' => 'sanitize_key',
 						),
 						'category' => array(
-							'description'       => __( 'Issue category filter.', 'mcpwp' ),
+							'description'       => __( 'Issue category filter.', 'mumcp' ),
 							'type'              => 'string',
 							'sanitize_callback' => 'sanitize_key',
 						),
 						'post_id' => array(
-							'description'       => __( 'Post ID filter.', 'mcpwp' ),
+							'description'       => __( 'Post ID filter.', 'mumcp' ),
 							'type'              => 'integer',
 							'sanitize_callback' => 'absint',
 						),
 						'run_id' => array(
-							'description'       => __( 'Audit run ID filter.', 'mcpwp' ),
+							'description'       => __( 'Audit run ID filter.', 'mumcp' ),
 							'type'              => 'string',
 							'sanitize_callback' => 'sanitize_key',
 						),
 						'limit' => array(
-							'description'       => __( 'Maximum issues to return.', 'mcpwp' ),
+							'description'       => __( 'Maximum issues to return.', 'mumcp' ),
 							'type'              => 'integer',
 							'default'           => 50,
 							'minimum'           => 1,
@@ -145,32 +145,32 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'severity' => array(
-							'description'       => __( 'Severity filter: error, warning, or info.', 'mcpwp' ),
+							'description'       => __( 'Severity filter: error, warning, or info.', 'mumcp' ),
 							'type'              => 'string',
 							'sanitize_callback' => 'sanitize_key',
 						),
 						'category' => array(
-							'description'       => __( 'Issue category filter.', 'mcpwp' ),
+							'description'       => __( 'Issue category filter.', 'mumcp' ),
 							'type'              => 'string',
 							'sanitize_callback' => 'sanitize_key',
 						),
 						'post_id' => array(
-							'description'       => __( 'Post ID filter.', 'mcpwp' ),
+							'description'       => __( 'Post ID filter.', 'mumcp' ),
 							'type'              => 'integer',
 							'sanitize_callback' => 'absint',
 						),
 						'run_id' => array(
-							'description'       => __( 'Audit run ID filter.', 'mcpwp' ),
+							'description'       => __( 'Audit run ID filter.', 'mumcp' ),
 							'type'              => 'string',
 							'sanitize_callback' => 'sanitize_key',
 						),
 						'issue_id' => array(
-							'description'       => __( 'Specific stored issue ID.', 'mcpwp' ),
+							'description'       => __( 'Specific stored issue ID.', 'mumcp' ),
 							'type'              => 'string',
 							'sanitize_callback' => 'sanitize_key',
 						),
 						'limit' => array(
-							'description'       => __( 'Maximum issues to inspect.', 'mcpwp' ),
+							'description'       => __( 'Maximum issues to inspect.', 'mumcp' ),
 							'type'              => 'integer',
 							'default'           => 50,
 							'minimum'           => 1,
@@ -193,13 +193,13 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'provider' => array(
-							'description'       => __( 'Provider slug such as google_search_console, bing_webmaster, or manual.', 'mcpwp' ),
+							'description'       => __( 'Provider slug such as google_search_console, bing_webmaster, or manual.', 'mumcp' ),
 							'type'              => 'string',
 							'default'           => 'manual',
 							'sanitize_callback' => 'sanitize_key',
 						),
 						'source' => array(
-							'description'       => __( 'Optional source label for the export or import.', 'mcpwp' ),
+							'description'       => __( 'Optional source label for the export or import.', 'mumcp' ),
 							'type'              => 'string',
 							'sanitize_callback' => 'sanitize_text_field',
 						),
@@ -219,22 +219,22 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'provider' => array(
-							'description'       => __( 'Provider filter.', 'mcpwp' ),
+							'description'       => __( 'Provider filter.', 'mumcp' ),
 							'type'              => 'string',
 							'sanitize_callback' => 'sanitize_key',
 						),
 						'url' => array(
-							'description'       => __( 'Exact URL filter.', 'mcpwp' ),
+							'description'       => __( 'Exact URL filter.', 'mumcp' ),
 							'type'              => 'string',
 							'sanitize_callback' => 'esc_url_raw',
 						),
 						'query' => array(
-							'description'       => __( 'Search query contains filter.', 'mcpwp' ),
+							'description'       => __( 'Search query contains filter.', 'mumcp' ),
 							'type'              => 'string',
 							'sanitize_callback' => 'sanitize_text_field',
 						),
 						'days' => array(
-							'description'       => __( 'Lookback window in days.', 'mcpwp' ),
+							'description'       => __( 'Lookback window in days.', 'mumcp' ),
 							'type'              => 'integer',
 							'default'           => 90,
 							'minimum'           => 1,
@@ -242,7 +242,7 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 							'sanitize_callback' => 'absint',
 						),
 						'limit' => array(
-							'description'       => __( 'Maximum grouped rows to return.', 'mcpwp' ),
+							'description'       => __( 'Maximum grouped rows to return.', 'mumcp' ),
 							'type'              => 'integer',
 							'default'           => 20,
 							'minimum'           => 1,
@@ -265,13 +265,13 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'status' => array(
-							'description'       => __( 'Product status filter: publish, draft, private, or any.', 'mcpwp' ),
+							'description'       => __( 'Product status filter: publish, draft, private, or any.', 'mumcp' ),
 							'type'              => 'string',
 							'default'           => 'publish',
 							'sanitize_callback' => 'sanitize_key',
 						),
 						'limit' => array(
-							'description'       => __( 'Maximum products to inspect.', 'mcpwp' ),
+							'description'       => __( 'Maximum products to inspect.', 'mumcp' ),
 							'type'              => 'integer',
 							'default'           => 25,
 							'minimum'           => 1,
@@ -294,7 +294,7 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'id' => array(
-							'description'       => __( 'Post or page ID to validate.', 'mcpwp' ),
+							'description'       => __( 'Post or page ID to validate.', 'mumcp' ),
 							'type'              => 'integer',
 							'required'          => true,
 							'sanitize_callback' => 'absint',
@@ -315,7 +315,7 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'id' => array(
-							'description'       => __( 'Post or page ID to audit.', 'mcpwp' ),
+							'description'       => __( 'Post or page ID to audit.', 'mumcp' ),
 							'type'              => 'integer',
 							'required'          => true,
 							'sanitize_callback' => 'absint',
@@ -336,26 +336,26 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'seed' => array(
-							'description'       => __( 'Seed keyword phrase to expand.', 'mcpwp' ),
+							'description'       => __( 'Seed keyword phrase to expand.', 'mumcp' ),
 							'type'              => 'string',
 							'required'          => true,
 							'minLength'         => 1,
 							'sanitize_callback' => 'sanitize_text_field',
 						),
 						'hl'   => array(
-							'description'       => __( 'Language code for Google Suggest, e.g. en.', 'mcpwp' ),
+							'description'       => __( 'Language code for Google Suggest, e.g. en.', 'mumcp' ),
 							'type'              => 'string',
 							'default'           => 'en',
 							'sanitize_callback' => 'sanitize_key',
 						),
 						'gl'   => array(
-							'description'       => __( 'Country code for Google Suggest, e.g. us.', 'mcpwp' ),
+							'description'       => __( 'Country code for Google Suggest, e.g. us.', 'mumcp' ),
 							'type'              => 'string',
 							'default'           => 'us',
 							'sanitize_callback' => 'sanitize_key',
 						),
 						'max'  => array(
-							'description'       => __( 'Overall cap on returned suggestion items, 1-500. Defaults to 100.', 'mcpwp' ),
+							'description'       => __( 'Overall cap on returned suggestion items, 1-500. Defaults to 100.', 'mumcp' ),
 							'type'              => 'integer',
 							'default'           => 100,
 							'minimum'           => 1,
@@ -399,17 +399,17 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 		$last_level   = 0;
 
 		if ( '' === $title ) {
-			$issues[] = $this->make_seo_readiness_issue( 'missing_title', 'error', __( 'Post title is missing.', 'mcpwp' ), __( 'Add a clear, descriptive title.', 'mcpwp' ) );
+			$issues[] = $this->make_seo_readiness_issue( 'missing_title', 'error', __( 'Post title is missing.', 'mumcp' ), __( 'Add a clear, descriptive title.', 'mumcp' ) );
 		} elseif ( strlen( $title ) < 10 ) {
-			$issues[] = $this->make_seo_readiness_issue( 'short_title', 'warning', __( 'Post title is very short.', 'mcpwp' ), __( 'Use a descriptive title that sets search intent clearly.', 'mcpwp' ) );
+			$issues[] = $this->make_seo_readiness_issue( 'short_title', 'warning', __( 'Post title is very short.', 'mumcp' ), __( 'Use a descriptive title that sets search intent clearly.', 'mumcp' ) );
 		}
 
 		if ( '' === trim( (string) $post->post_name ) ) {
-			$issues[] = $this->make_seo_readiness_issue( 'missing_slug', 'error', __( 'Slug is missing.', 'mcpwp' ), __( 'Set a readable URL slug before publishing.', 'mcpwp' ) );
+			$issues[] = $this->make_seo_readiness_issue( 'missing_slug', 'error', __( 'Slug is missing.', 'mumcp' ), __( 'Set a readable URL slug before publishing.', 'mumcp' ) );
 		}
 
 		if ( str_word_count( $text_content ) < 80 ) {
-			$issues[] = $this->make_seo_readiness_issue( 'thin_content', 'warning', __( 'Content is thin.', 'mcpwp' ), __( 'Add enough useful copy to answer the page intent.', 'mcpwp' ) );
+			$issues[] = $this->make_seo_readiness_issue( 'thin_content', 'warning', __( 'Content is thin.', 'mumcp' ), __( 'Add enough useful copy to answer the page intent.', 'mumcp' ) );
 		}
 
 		foreach ( $headings as $heading ) {
@@ -418,7 +418,7 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 			}
 
 			if ( $last_level > 0 && (int) $heading['level'] > $last_level + 1 ) {
-				$issues[] = $this->make_seo_readiness_issue( 'heading_order_skip', 'warning', __( 'Heading levels skip in the page outline.', 'mcpwp' ), __( 'Use a logical heading hierarchy without jumping levels.', 'mcpwp' ) );
+				$issues[] = $this->make_seo_readiness_issue( 'heading_order_skip', 'warning', __( 'Heading levels skip in the page outline.', 'mumcp' ), __( 'Use a logical heading hierarchy without jumping levels.', 'mumcp' ) );
 				break;
 			}
 
@@ -426,9 +426,9 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 		}
 
 		if ( 0 === $h1_count ) {
-			$issues[] = $this->make_seo_readiness_issue( 'missing_h1', 'warning', __( 'No H1 heading found in the content.', 'mcpwp' ), __( 'Add one visible H1 or confirm the theme renders the post title as H1.', 'mcpwp' ) );
+			$issues[] = $this->make_seo_readiness_issue( 'missing_h1', 'warning', __( 'No H1 heading found in the content.', 'mumcp' ), __( 'Add one visible H1 or confirm the theme renders the post title as H1.', 'mumcp' ) );
 		} elseif ( $h1_count > 1 ) {
-			$issues[] = $this->make_seo_readiness_issue( 'multiple_h1', 'warning', __( 'Multiple H1 headings found.', 'mcpwp' ), __( 'Use one primary H1 and demote secondary headings.', 'mcpwp' ) );
+			$issues[] = $this->make_seo_readiness_issue( 'multiple_h1', 'warning', __( 'Multiple H1 headings found.', 'mumcp' ), __( 'Use one primary H1 and demote secondary headings.', 'mumcp' ) );
 		}
 
 		$seo_meta         = $this->resolve_seo_meta_description( $post_id );
@@ -437,16 +437,16 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 			// When AIOSEO/Yoast computes a fallback from excerpt, the stored meta may be empty.
 			// Only flag as missing when no SEO plugin would produce a rendered description.
 			if ( 'aioseo_excerpt_fallback' !== $seo_meta['source'] ) {
-				$issues[] = $this->make_seo_readiness_issue( 'missing_meta_description', 'warning', __( 'Meta description is missing.', 'mcpwp' ), __( 'Add a concise meta description through the active SEO plugin or supported post meta.', 'mcpwp' ) );
+				$issues[] = $this->make_seo_readiness_issue( 'missing_meta_description', 'warning', __( 'Meta description is missing.', 'mumcp' ), __( 'Add a concise meta description through the active SEO plugin or supported post meta.', 'mumcp' ) );
 			}
 		} elseif ( ! $seo_meta['is_template'] && ( strlen( $meta_description ) < 50 || strlen( $meta_description ) > 170 ) ) {
 			// Skip length check on template strings — the rendered length may differ from the stored template.
-			$issues[] = $this->make_seo_readiness_issue( 'meta_description_length', 'warning', __( 'Meta description length is outside the recommended range.', 'mcpwp' ), __( 'Aim for roughly 50-170 characters that summarize the page accurately.', 'mcpwp' ) );
+			$issues[] = $this->make_seo_readiness_issue( 'meta_description_length', 'warning', __( 'Meta description length is outside the recommended range.', 'mumcp' ), __( 'Aim for roughly 50-170 characters that summarize the page accurately.', 'mumcp' ) );
 		}
 
 		foreach ( $this->extract_image_ids_from_content( $content ) as $image_id ) {
 			if ( '' === trim( (string) get_post_meta( $image_id, '_wp_attachment_image_alt', true ) ) ) {
-				$issues[] = $this->make_seo_readiness_issue( 'missing_image_alt', 'warning', __( 'An image is missing alt text.', 'mcpwp' ), __( 'Add descriptive alt text or mark decorative images intentionally.', 'mcpwp' ), array( 'attachment_id' => $image_id ) );
+				$issues[] = $this->make_seo_readiness_issue( 'missing_image_alt', 'warning', __( 'An image is missing alt text.', 'mumcp' ), __( 'Add descriptive alt text or mark decorative images intentionally.', 'mumcp' ), array( 'attachment_id' => $image_id ) );
 			}
 		}
 
@@ -463,33 +463,33 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 		}
 
 		if ( $node && 0 === (int) $node['outbound_count'] ) {
-			$issues[] = $this->make_seo_readiness_issue( 'no_internal_outbound_links', 'warning', __( 'No internal outbound links found.', 'mcpwp' ), __( 'Add relevant internal links from the content graph where useful.', 'mcpwp' ) );
+			$issues[] = $this->make_seo_readiness_issue( 'no_internal_outbound_links', 'warning', __( 'No internal outbound links found.', 'mumcp' ), __( 'Add relevant internal links from the content graph where useful.', 'mumcp' ) );
 		}
 
 		if ( $node && 'publish' === $post->post_status && 'none' !== $node['orphan_severity'] ) {
-			$issues[] = $this->make_seo_readiness_issue( 'orphan_content', 'warning', __( 'Published content appears orphaned in the graph.', 'mcpwp' ), __( 'Link to this page from a relevant hub, menu, archive, or related page.', 'mcpwp' ), array( 'orphan_severity' => $node['orphan_severity'] ) );
+			$issues[] = $this->make_seo_readiness_issue( 'orphan_content', 'warning', __( 'Published content appears orphaned in the graph.', 'mumcp' ), __( 'Link to this page from a relevant hub, menu, archive, or related page.', 'mumcp' ), array( 'orphan_severity' => $node['orphan_severity'] ) );
 		}
 
 		if ( $this->is_post_noindex( $post_id ) ) {
-			$issues[] = $this->make_seo_readiness_issue( 'noindex_enabled', 'error', __( 'Post appears to be marked noindex.', 'mcpwp' ), __( 'Remove noindex before publishing content intended for search.', 'mcpwp' ) );
+			$issues[] = $this->make_seo_readiness_issue( 'noindex_enabled', 'error', __( 'Post appears to be marked noindex.', 'mumcp' ), __( 'Remove noindex before publishing content intended for search.', 'mumcp' ) );
 		}
 
 		$canonical = $this->get_seo_canonical_url( $post_id );
 		if ( '' !== $canonical && $this->normalize_internal_graph_url( $canonical ) !== $this->normalize_internal_graph_url( get_permalink( $post ) ) ) {
-			$issues[] = $this->make_seo_readiness_issue( 'canonical_override', 'warning', __( 'Canonical URL points somewhere other than this permalink.', 'mcpwp' ), __( 'Confirm this canonical is intentional before publishing.', 'mcpwp' ), array( 'canonical_url' => $canonical ) );
+			$issues[] = $this->make_seo_readiness_issue( 'canonical_override', 'warning', __( 'Canonical URL points somewhere other than this permalink.', 'mumcp' ), __( 'Confirm this canonical is intentional before publishing.', 'mumcp' ), array( 'canonical_url' => $canonical ) );
 		}
 
 		$robots_txt = $this->get_robots_txt();
 		if ( false !== stripos( $robots_txt, 'Disallow: /' ) ) {
-			$issues[] = $this->make_seo_readiness_issue( 'robots_disallow_root', 'error', __( 'robots.txt appears to disallow the whole site.', 'mcpwp' ), __( 'Review robots.txt before publishing search-facing content.', 'mcpwp' ) );
+			$issues[] = $this->make_seo_readiness_issue( 'robots_disallow_root', 'error', __( 'robots.txt appears to disallow the whole site.', 'mumcp' ), __( 'Review robots.txt before publishing search-facing content.', 'mumcp' ) );
 		}
 
 		if ( ! $this->site_has_sitemap_hint() ) {
-			$issues[] = $this->make_seo_readiness_issue( 'sitemap_not_detected', 'info', __( 'Sitemap endpoint was not detected locally.', 'mcpwp' ), __( 'Confirm XML sitemaps are enabled in WordPress or your SEO plugin.', 'mcpwp' ) );
+			$issues[] = $this->make_seo_readiness_issue( 'sitemap_not_detected', 'info', __( 'Sitemap endpoint was not detected locally.', 'mumcp' ), __( 'Confirm XML sitemaps are enabled in WordPress or your SEO plugin.', 'mumcp' ) );
 		}
 
 		if ( ! $this->content_has_schema_hint( $content ) ) {
-			$issues[] = $this->make_seo_readiness_issue( 'schema_hint_missing', 'info', __( 'No structured-data hint found in content.', 'mcpwp' ), __( 'Consider schema only when it accurately matches visible content.', 'mcpwp' ) );
+			$issues[] = $this->make_seo_readiness_issue( 'schema_hint_missing', 'info', __( 'No structured-data hint found in content.', 'mumcp' ), __( 'Consider schema only when it accurately matches visible content.', 'mumcp' ) );
 		}
 
 		// Render-truth pass: for published pages fetch the actual rendered <head> and
@@ -766,8 +766,8 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 				$issues[] = $this->make_structured_data_issue(
 					'invalid_json_ld',
 					'error',
-					__( 'A JSON-LD block could not be parsed.', 'mcpwp' ),
-					__( 'Fix the JSON syntax or remove the invalid structured data block.', 'mcpwp' ),
+					__( 'A JSON-LD block could not be parsed.', 'mumcp' ),
+					__( 'Fix the JSON syntax or remove the invalid structured data block.', 'mumcp' ),
 					array(
 						'format' => 'json-ld',
 						'index'  => $index,
@@ -784,11 +784,11 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 				}
 
 				if ( empty( $entity['@context'] ) ) {
-					$issues[] = $this->make_structured_data_issue( 'missing_context', 'warning', __( 'JSON-LD entity is missing @context.', 'mcpwp' ), __( 'Use a schema.org @context for valid JSON-LD.', 'mcpwp' ), array( 'index' => $index ) );
+					$issues[] = $this->make_structured_data_issue( 'missing_context', 'warning', __( 'JSON-LD entity is missing @context.', 'mumcp' ), __( 'Use a schema.org @context for valid JSON-LD.', 'mumcp' ), array( 'index' => $index ) );
 				}
 
 				if ( '' === $type ) {
-					$issues[] = $this->make_structured_data_issue( 'missing_type', 'warning', __( 'JSON-LD entity is missing @type.', 'mcpwp' ), __( 'Add a concrete schema type that matches the visible content.', 'mcpwp' ), array( 'index' => $index ) );
+					$issues[] = $this->make_structured_data_issue( 'missing_type', 'warning', __( 'JSON-LD entity is missing @type.', 'mumcp' ), __( 'Add a concrete schema type that matches the visible content.', 'mumcp' ), array( 'index' => $index ) );
 				}
 
 				$issues = array_merge( $issues, $this->validate_schema_entity_shape( $entity, $type, $post ) );
@@ -844,13 +844,13 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 			$issues[] = $this->make_structured_data_issue(
 				'no_structured_data',
 				'info',
-				__( 'No structured data was detected in the post content or the rendered page.', 'mcpwp' ),
-				__( 'Add schema only when it accurately describes visible content or can be handled by the active SEO plugin.', 'mcpwp' )
+				__( 'No structured data was detected in the post content or the rendered page.', 'mumcp' ),
+				__( 'Add schema only when it accurately describes visible content or can be handled by the active SEO plugin.', 'mumcp' )
 			);
 		}
 
 		if ( ! empty( $recommendations ) ) {
-			$issues[] = $this->make_structured_data_issue( 'schema_recommendation_available', 'info', __( 'Page-appropriate schema recommendations are available.', 'mcpwp' ), __( 'Review the recommendations and add schema through an SEO plugin or approved block-native workflow only when supported by visible content.', 'mcpwp' ) );
+			$issues[] = $this->make_structured_data_issue( 'schema_recommendation_available', 'info', __( 'Page-appropriate schema recommendations are available.', 'mumcp' ), __( 'Review the recommendations and add schema through an SEO plugin or approved block-native workflow only when supported by visible content.', 'mumcp' ) );
 		}
 
 		$summary = $this->summarize_structured_data_issues( $issues );
@@ -920,7 +920,7 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 			$issues        = array_merge( $issues, $this->validate_media_seo_item( $featured_item ) );
 			$seen_ids[]    = (int) $featured_id;
 		} elseif ( in_array( $post->post_type, array( 'post', 'page' ), true ) ) {
-			$issues[] = $this->make_media_seo_issue( 'missing_featured_image', 'info', __( 'No featured image is set.', 'mcpwp' ), __( 'Set a featured image when the content needs social/search previews.', 'mcpwp' ) );
+			$issues[] = $this->make_media_seo_issue( 'missing_featured_image', 'info', __( 'No featured image is set.', 'mumcp' ), __( 'Set a featured image when the content needs social/search previews.', 'mumcp' ) );
 		}
 
 		foreach ( $content_media as $content_item ) {
@@ -931,14 +931,14 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 
 			if ( $attachment_id > 0 ) {
 				if ( in_array( $attachment_id, $seen_ids, true ) ) {
-					$issues[] = $this->make_media_seo_issue( 'duplicate_image_use', 'info', __( 'An image is reused on this page.', 'mcpwp' ), __( 'Confirm repeated image use is intentional and not a duplicated block.', 'mcpwp' ), array( 'attachment_id' => $attachment_id ) );
+					$issues[] = $this->make_media_seo_issue( 'duplicate_image_use', 'info', __( 'An image is reused on this page.', 'mumcp' ), __( 'Confirm repeated image use is intentional and not a duplicated block.', 'mumcp' ), array( 'attachment_id' => $attachment_id ) );
 				}
 				$seen_ids[] = $attachment_id;
 			}
 		}
 
 		if ( empty( $media_items ) ) {
-			$issues[] = $this->make_media_seo_issue( 'no_images_found', 'info', __( 'No images were found in the post content.', 'mcpwp' ), __( 'No action is required unless the page needs visual search, social, or conversion media.', 'mcpwp' ) );
+			$issues[] = $this->make_media_seo_issue( 'no_images_found', 'info', __( 'No images were found in the post content.', 'mumcp' ), __( 'No action is required unless the page needs visual search, social, or conversion media.', 'mumcp' ) );
 		}
 
 		$summary = $this->summarize_media_seo_issues( $issues );
@@ -1117,7 +1117,7 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 		$seed = sanitize_text_field( (string) $request->get_param( 'seed' ) );
 
 		if ( '' === $seed ) {
-			return $this->error_response( 'empty_seed', __( 'Seed phrase must not be empty.', 'mcpwp' ), 400 );
+			return $this->error_response( 'empty_seed', __( 'Seed phrase must not be empty.', 'mumcp' ), 400 );
 		}
 
 		$this->log_activity( 'keyword_research', $request, array( 'seed' => $seed ) );
@@ -1484,23 +1484,23 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 
 		if ( in_array( $type, array( 'article', 'blogposting', 'newsarticle' ), true ) ) {
 			if ( empty( $entity['headline'] ) && empty( $entity['name'] ) ) {
-				$issues[] = $this->make_structured_data_issue( 'article_missing_headline', 'warning', __( 'Article schema is missing headline/name.', 'mcpwp' ), __( 'Use the visible post title as the schema headline.', 'mcpwp' ), array( 'schema_type' => $type ) );
+				$issues[] = $this->make_structured_data_issue( 'article_missing_headline', 'warning', __( 'Article schema is missing headline/name.', 'mumcp' ), __( 'Use the visible post title as the schema headline.', 'mumcp' ), array( 'schema_type' => $type ) );
 			}
 			if ( empty( $entity['datePublished'] ) ) {
-				$issues[] = $this->make_structured_data_issue( 'article_missing_date_published', 'warning', __( 'Article schema is missing datePublished.', 'mcpwp' ), __( 'Include the published date when Article schema is used.', 'mcpwp' ), array( 'schema_type' => $type ) );
+				$issues[] = $this->make_structured_data_issue( 'article_missing_date_published', 'warning', __( 'Article schema is missing datePublished.', 'mumcp' ), __( 'Include the published date when Article schema is used.', 'mumcp' ), array( 'schema_type' => $type ) );
 			}
 		}
 
 		if ( 'faqpage' === $type && empty( $entity['mainEntity'] ) ) {
-			$issues[] = $this->make_structured_data_issue( 'faq_missing_questions', 'warning', __( 'FAQPage schema is missing questions.', 'mcpwp' ), __( 'Only use FAQPage schema when the visible content contains matching questions and answers.', 'mcpwp' ), array( 'schema_type' => $type ) );
+			$issues[] = $this->make_structured_data_issue( 'faq_missing_questions', 'warning', __( 'FAQPage schema is missing questions.', 'mumcp' ), __( 'Only use FAQPage schema when the visible content contains matching questions and answers.', 'mumcp' ), array( 'schema_type' => $type ) );
 		}
 
 		if ( 'product' === $type && 'product' !== $post->post_type ) {
-			$issues[] = $this->make_structured_data_issue( 'product_schema_on_non_product', 'warning', __( 'Product schema appears on non-product content.', 'mcpwp' ), __( 'Use Product schema only for visible product detail pages.', 'mcpwp' ), array( 'schema_type' => $type ) );
+			$issues[] = $this->make_structured_data_issue( 'product_schema_on_non_product', 'warning', __( 'Product schema appears on non-product content.', 'mumcp' ), __( 'Use Product schema only for visible product detail pages.', 'mumcp' ), array( 'schema_type' => $type ) );
 		}
 
 		if ( in_array( $type, array( 'webpage', 'article', 'blogposting', 'newsarticle' ), true ) && empty( $entity['url'] ) && empty( $entity['mainEntityOfPage'] ) ) {
-			$issues[] = $this->make_structured_data_issue( 'schema_missing_url', 'info', __( 'Schema entity does not include URL/mainEntityOfPage.', 'mcpwp' ), __( 'Connect schema to the canonical page URL where supported.', 'mcpwp' ), array( 'schema_type' => $type ) );
+			$issues[] = $this->make_structured_data_issue( 'schema_missing_url', 'info', __( 'Schema entity does not include URL/mainEntityOfPage.', 'mumcp' ), __( 'Connect schema to the canonical page URL where supported.', 'mumcp' ), array( 'schema_type' => $type ) );
 		}
 
 		return $issues;
@@ -1743,27 +1743,27 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 		$issues = array();
 
 		if ( 'content_image' === $item['role'] && '' === trim( (string) $item['alt'] ) ) {
-			$issues[] = $this->make_media_seo_issue( 'missing_image_alt', 'warning', __( 'A content image is missing alt text.', 'mcpwp' ), __( 'Add useful alt text, or mark the image decorative in an approved workflow.', 'mcpwp' ), array( 'attachment_id' => $item['attachment_id'], 'url' => $item['url'] ) );
+			$issues[] = $this->make_media_seo_issue( 'missing_image_alt', 'warning', __( 'A content image is missing alt text.', 'mumcp' ), __( 'Add useful alt text, or mark the image decorative in an approved workflow.', 'mumcp' ), array( 'attachment_id' => $item['attachment_id'], 'url' => $item['url'] ) );
 		}
 
 		if ( 'featured_image' === $item['role'] && '' === trim( (string) $item['alt'] ) ) {
-			$issues[] = $this->make_media_seo_issue( 'featured_image_missing_alt', 'warning', __( 'The featured image is missing alt text.', 'mcpwp' ), __( 'Add alt text if the featured image conveys meaning.', 'mcpwp' ), array( 'attachment_id' => $item['attachment_id'] ) );
+			$issues[] = $this->make_media_seo_issue( 'featured_image_missing_alt', 'warning', __( 'The featured image is missing alt text.', 'mumcp' ), __( 'Add alt text if the featured image conveys meaning.', 'mumcp' ), array( 'attachment_id' => $item['attachment_id'] ) );
 		}
 
 		if ( '' !== $item['filename'] && preg_match( '/^(image|img|photo|screenshot|untitled|dsc)[-_]?\d*\./i', $item['filename'] ) ) {
-			$issues[] = $this->make_media_seo_issue( 'weak_image_filename', 'info', __( 'An image filename is generic.', 'mcpwp' ), __( 'Use descriptive filenames before upload when practical; do not rename live media blindly.', 'mcpwp' ), array( 'attachment_id' => $item['attachment_id'], 'filename' => $item['filename'] ) );
+			$issues[] = $this->make_media_seo_issue( 'weak_image_filename', 'info', __( 'An image filename is generic.', 'mumcp' ), __( 'Use descriptive filenames before upload when practical; do not rename live media blindly.', 'mumcp' ), array( 'attachment_id' => $item['attachment_id'], 'filename' => $item['filename'] ) );
 		}
 
 		if ( $item['filesize'] > 0 && $item['filesize'] > 512000 ) {
-			$issues[] = $this->make_media_seo_issue( 'large_image_file', 'warning', __( 'An image file is large.', 'mcpwp' ), __( 'Compress or replace oversized images to improve page experience.', 'mcpwp' ), array( 'attachment_id' => $item['attachment_id'], 'filesize' => $item['filesize'] ) );
+			$issues[] = $this->make_media_seo_issue( 'large_image_file', 'warning', __( 'An image file is large.', 'mumcp' ), __( 'Compress or replace oversized images to improve page experience.', 'mumcp' ), array( 'attachment_id' => $item['attachment_id'], 'filesize' => $item['filesize'] ) );
 		}
 
 		if ( 'content_image' === $item['role'] && ( 0 === (int) $item['width'] || 0 === (int) $item['height'] ) ) {
-			$issues[] = $this->make_media_seo_issue( 'missing_image_dimensions', 'info', __( 'A content image is missing explicit dimensions.', 'mcpwp' ), __( 'Use WordPress image blocks or markup that preserves width and height to reduce layout shift.', 'mcpwp' ), array( 'attachment_id' => $item['attachment_id'], 'url' => $item['url'] ) );
+			$issues[] = $this->make_media_seo_issue( 'missing_image_dimensions', 'info', __( 'A content image is missing explicit dimensions.', 'mumcp' ), __( 'Use WordPress image blocks or markup that preserves width and height to reduce layout shift.', 'mumcp' ), array( 'attachment_id' => $item['attachment_id'], 'url' => $item['url'] ) );
 		}
 
 		if ( 'content_image' === $item['role'] && '' === $item['loading'] ) {
-			$issues[] = $this->make_media_seo_issue( 'missing_lazy_loading_hint', 'info', __( 'A content image has no loading attribute in markup.', 'mcpwp' ), __( 'Confirm WordPress or the theme adds lazy loading, especially for below-the-fold images.', 'mcpwp' ), array( 'attachment_id' => $item['attachment_id'], 'url' => $item['url'] ) );
+			$issues[] = $this->make_media_seo_issue( 'missing_lazy_loading_hint', 'info', __( 'A content image has no loading attribute in markup.', 'mumcp' ), __( 'Confirm WordPress or the theme adds lazy loading, especially for below-the-fold images.', 'mumcp' ), array( 'attachment_id' => $item['attachment_id'], 'url' => $item['url'] ) );
 		}
 
 		return $issues;
@@ -2257,8 +2257,8 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 			$filtered[] = $this->make_seo_readiness_issue(
 				'rendered_noindex_detected',
 				'error',
-				__( 'Rendered <head> contains noindex — SEO plugin is blocking this page from search.', 'mcpwp' ),
-				__( 'Remove noindex from your SEO plugin settings for this page before publishing.', 'mcpwp' ),
+				__( 'Rendered <head> contains noindex — SEO plugin is blocking this page from search.', 'mumcp' ),
+				__( 'Remove noindex from your SEO plugin settings for this page before publishing.', 'mumcp' ),
 				array( 'rendered_robots' => $rendered_robots )
 			);
 		}

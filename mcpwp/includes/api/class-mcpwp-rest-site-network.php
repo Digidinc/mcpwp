@@ -30,7 +30,7 @@ class Mcpwp_REST_Site_Network extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'topic' => array(
-							'description' => __( 'Guide topic slug. Omit to list all available topics.', 'mcpwp' ),
+							'description' => __( 'Guide topic slug. Omit to list all available topics.', 'mumcp' ),
 							'type'        => 'string',
 						),
 					),
@@ -47,7 +47,7 @@ class Mcpwp_REST_Site_Network extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'topic' => array(
-							'description' => __( 'Guide topic slug.', 'mcpwp' ),
+							'description' => __( 'Guide topic slug.', 'mumcp' ),
 							'type'        => 'string',
 							'required'    => true,
 						),
@@ -65,7 +65,7 @@ class Mcpwp_REST_Site_Network extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'name' => array(
-							'description' => __( 'Workflow name.', 'mcpwp' ),
+							'description' => __( 'Workflow name.', 'mumcp' ),
 							'type'        => 'string',
 							'required'    => true,
 						),
@@ -84,14 +84,14 @@ class Mcpwp_REST_Site_Network extends Mcpwp_REST_API {
 						'permission_callback' => array( $this, 'check_permission' ),
 						'args'                => array(
 							'per_page' => array(
-								'description' => __( 'Results per page.', 'mcpwp' ),
+								'description' => __( 'Results per page.', 'mumcp' ),
 								'type'        => 'integer',
 								'default'     => 50,
 								'minimum'     => 1,
 								'maximum'     => 200,
 							),
 							'search'   => array(
-								'description' => __( 'Search term.', 'mcpwp' ),
+								'description' => __( 'Search term.', 'mumcp' ),
 								'type'        => 'string',
 							),
 						),
@@ -108,7 +108,7 @@ class Mcpwp_REST_Site_Network extends Mcpwp_REST_API {
 						'permission_callback' => array( $this, 'check_permission' ),
 						'args'                => array(
 							'blog_id' => array(
-								'description' => __( 'Blog ID to switch to.', 'mcpwp' ),
+								'description' => __( 'Blog ID to switch to.', 'mumcp' ),
 								'type'        => 'integer',
 								'required'    => true,
 							),

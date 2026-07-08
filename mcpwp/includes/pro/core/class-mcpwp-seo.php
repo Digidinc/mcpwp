@@ -115,13 +115,13 @@ class Mcpwp_SEO {
 		$post = get_post( $post_id );
 
 		if ( ! $post ) {
-			return new WP_Error( 'not_found', __( 'Post not found.', 'mcpwp' ) );
+			return new WP_Error( 'not_found', __( 'Post not found.', 'mumcp' ) );
 		}
 
 		$plugin = $plugin ?: $this->get_active_plugin();
 
 		if ( ! $plugin ) {
-			return new WP_Error( 'no_seo_plugin', __( 'No SEO plugin is active.', 'mcpwp' ) );
+			return new WP_Error( 'no_seo_plugin', __( 'No SEO plugin is active.', 'mumcp' ) );
 		}
 
 		$method = 'get_' . $plugin . '_data';
@@ -129,7 +129,7 @@ class Mcpwp_SEO {
 			return $this->$method( $post_id );
 		}
 
-		return new WP_Error( 'unsupported_plugin', __( 'SEO plugin not supported.', 'mcpwp' ) );
+		return new WP_Error( 'unsupported_plugin', __( 'SEO plugin not supported.', 'mumcp' ) );
 	}
 
 	/**
@@ -144,13 +144,13 @@ class Mcpwp_SEO {
 		$post = get_post( $post_id );
 
 		if ( ! $post ) {
-			return new WP_Error( 'not_found', __( 'Post not found.', 'mcpwp' ) );
+			return new WP_Error( 'not_found', __( 'Post not found.', 'mumcp' ) );
 		}
 
 		$plugin = $plugin ?: $this->get_active_plugin();
 
 		if ( ! $plugin ) {
-			return new WP_Error( 'no_seo_plugin', __( 'No SEO plugin is active.', 'mcpwp' ) );
+			return new WP_Error( 'no_seo_plugin', __( 'No SEO plugin is active.', 'mumcp' ) );
 		}
 
 		$method = 'set_' . $plugin . '_data';
@@ -158,7 +158,7 @@ class Mcpwp_SEO {
 			return $this->$method( $post_id, $data );
 		}
 
-		return new WP_Error( 'unsupported_plugin', __( 'SEO plugin not supported.', 'mcpwp' ) );
+		return new WP_Error( 'unsupported_plugin', __( 'SEO plugin not supported.', 'mumcp' ) );
 	}
 
 	/**
@@ -590,7 +590,7 @@ class Mcpwp_SEO {
 		$post = get_post( $post_id );
 
 		if ( ! $post ) {
-			return new WP_Error( 'not_found', __( 'Post not found.', 'mcpwp' ) );
+			return new WP_Error( 'not_found', __( 'Post not found.', 'mumcp' ) );
 		}
 
 		$seo_data = $this->get_post_seo( $post_id );
@@ -606,36 +606,36 @@ class Mcpwp_SEO {
 		$title = ! empty( $seo_data['title'] ) ? $seo_data['title'] : $post->post_title;
 		$title_len = strlen( $title );
 		if ( $title_len < 30 ) {
-			$analysis['warnings'][] = __( 'SEO title is too short (under 30 characters).', 'mcpwp' );
+			$analysis['warnings'][] = __( 'SEO title is too short (under 30 characters).', 'mumcp' );
 		} elseif ( $title_len > 60 ) {
-			$analysis['warnings'][] = __( 'SEO title is too long (over 60 characters).', 'mcpwp' );
+			$analysis['warnings'][] = __( 'SEO title is too long (over 60 characters).', 'mumcp' );
 		}
 
 		// Check meta description.
 		$desc = $seo_data['description'] ?? '';
 		if ( empty( $desc ) ) {
-			$analysis['issues'][] = __( 'Missing meta description.', 'mcpwp' );
+			$analysis['issues'][] = __( 'Missing meta description.', 'mumcp' );
 		} else {
 			$desc_len = strlen( $desc );
 			if ( $desc_len < 120 ) {
-				$analysis['warnings'][] = __( 'Meta description is too short (under 120 characters).', 'mcpwp' );
+				$analysis['warnings'][] = __( 'Meta description is too short (under 120 characters).', 'mumcp' );
 			} elseif ( $desc_len > 160 ) {
-				$analysis['warnings'][] = __( 'Meta description is too long (over 160 characters).', 'mcpwp' );
+				$analysis['warnings'][] = __( 'Meta description is too long (over 160 characters).', 'mumcp' );
 			}
 		}
 
 		// Check focus keyword.
 		$keyword = $seo_data['focus_keyword'] ?? '';
 		if ( empty( $keyword ) ) {
-			$analysis['suggestions'][] = __( 'Consider adding a focus keyword.', 'mcpwp' );
+			$analysis['suggestions'][] = __( 'Consider adding a focus keyword.', 'mumcp' );
 		} else {
 			// Check if keyword is in title.
 			if ( stripos( $title, $keyword ) === false ) {
-				$analysis['warnings'][] = __( 'Focus keyword not found in SEO title.', 'mcpwp' );
+				$analysis['warnings'][] = __( 'Focus keyword not found in SEO title.', 'mumcp' );
 			}
 			// Check if keyword is in description.
 			if ( ! empty( $desc ) && stripos( $desc, $keyword ) === false ) {
-				$analysis['suggestions'][] = __( 'Consider adding focus keyword to meta description.', 'mcpwp' );
+				$analysis['suggestions'][] = __( 'Consider adding focus keyword to meta description.', 'mumcp' );
 			}
 		}
 
@@ -644,7 +644,7 @@ class Mcpwp_SEO {
 		if ( $content_len < 300 ) {
 			$analysis['warnings'][] = sprintf(
 				/* translators: %d: word count */
-				__( 'Content is short (%d words). Consider expanding to at least 300 words.', 'mcpwp' ),
+				__( 'Content is short (%d words). Consider expanding to at least 300 words.', 'mumcp' ),
 				$content_len
 			);
 		}

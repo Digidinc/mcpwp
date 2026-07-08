@@ -117,14 +117,14 @@ abstract class Mcpwp_REST_API {
 	protected function get_pagination_args() {
 		return array(
 			'per_page' => array(
-				'description' => __( 'Maximum number of items per page.', 'mcpwp' ),
+				'description' => __( 'Maximum number of items per page.', 'mumcp' ),
 				'type'        => 'integer',
 				'default'     => 10,
 				'minimum'     => 1,
 				'maximum'     => 100,
 			),
 			'page'     => array(
-				'description' => __( 'Current page number.', 'mcpwp' ),
+				'description' => __( 'Current page number.', 'mumcp' ),
 				'type'        => 'integer',
 				'default'     => 1,
 				'minimum'     => 1,
@@ -140,23 +140,23 @@ abstract class Mcpwp_REST_API {
 	protected function get_post_args() {
 		return array(
 			'title'   => array(
-				'description' => __( 'Post title.', 'mcpwp' ),
+				'description' => __( 'Post title.', 'mumcp' ),
 				'type'        => 'string',
 				'required'    => true,
 			),
 			'content' => array(
-				'description' => __( 'Post content.', 'mcpwp' ),
+				'description' => __( 'Post content.', 'mumcp' ),
 				'type'        => 'string',
 				'default'     => '',
 			),
 			'status'  => array(
-				'description' => __( 'Post status.', 'mcpwp' ),
+				'description' => __( 'Post status.', 'mumcp' ),
 				'type'        => 'string',
 				'enum'        => array( 'publish', 'draft', 'pending', 'private' ),
 				'default'     => 'draft',
 			),
 			'excerpt' => array(
-				'description' => __( 'Post excerpt.', 'mcpwp' ),
+				'description' => __( 'Post excerpt.', 'mumcp' ),
 				'type'        => 'string',
 				'default'     => '',
 			),

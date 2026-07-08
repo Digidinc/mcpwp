@@ -45,11 +45,11 @@ class Mcpwp_REST_Media extends Mcpwp_REST_API {
 						$this->get_pagination_args(),
 						array(
 							'mime_type' => array(
-								'description' => __( 'Filter by mime type (e.g., "image", "image/png", "video").', 'mcpwp' ),
+								'description' => __( 'Filter by mime type (e.g., "image", "image/png", "video").', 'mumcp' ),
 								'type'        => 'string',
 							),
 							'search'    => array(
-								'description' => __( 'Search media by title or filename.', 'mcpwp' ),
+								'description' => __( 'Search media by title or filename.', 'mumcp' ),
 								'type'        => 'string',
 							),
 						)
@@ -61,11 +61,11 @@ class Mcpwp_REST_Media extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'title' => array(
-							'description' => __( 'Media title.', 'mcpwp' ),
+							'description' => __( 'Media title.', 'mumcp' ),
 							'type'        => 'string',
 						),
 						'alt'   => array(
-							'description' => __( 'Alt text.', 'mcpwp' ),
+							'description' => __( 'Alt text.', 'mumcp' ),
 							'type'        => 'string',
 						),
 					),
@@ -84,21 +84,21 @@ class Mcpwp_REST_Media extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'url'      => array(
-							'description' => __( 'External URL.', 'mcpwp' ),
+							'description' => __( 'External URL.', 'mumcp' ),
 							'type'        => 'string',
 							'required'    => true,
 							'format'      => 'uri',
 						),
 						'title'    => array(
-							'description' => __( 'Media title.', 'mcpwp' ),
+							'description' => __( 'Media title.', 'mumcp' ),
 							'type'        => 'string',
 						),
 						'alt'      => array(
-							'description' => __( 'Alt text.', 'mcpwp' ),
+							'description' => __( 'Alt text.', 'mumcp' ),
 							'type'        => 'string',
 						),
 						'filename' => array(
-							'description' => __( 'Custom filename.', 'mcpwp' ),
+							'description' => __( 'Custom filename.', 'mumcp' ),
 							'type'        => 'string',
 						),
 					),
@@ -117,14 +117,14 @@ class Mcpwp_REST_Media extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'urls'  => array(
-							'description' => __( 'Array of URLs to upload.', 'mcpwp' ),
+							'description' => __( 'Array of URLs to upload.', 'mumcp' ),
 							'type'        => 'array',
 							'items'       => array(
 								'type' => 'string',
 							),
 						),
 						'items' => array(
-							'description' => __( 'Array of items with url, title, alt.', 'mcpwp' ),
+							'description' => __( 'Array of items with url, title, alt.', 'mumcp' ),
 							'type'        => 'array',
 							'items'       => array(
 								'type' => 'object',
@@ -146,25 +146,25 @@ class Mcpwp_REST_Media extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'data'     => array(
-							'description' => __( 'Base64-encoded file content. Optionally prefixed with data URI (e.g., data:image/png;base64,...).', 'mcpwp' ),
+							'description' => __( 'Base64-encoded file content. Optionally prefixed with data URI (e.g., data:image/png;base64,...).', 'mumcp' ),
 							'type'        => 'string',
 							'required'    => true,
 						),
 						'filename' => array(
-							'description' => __( 'Filename with extension (e.g., logo.png).', 'mcpwp' ),
+							'description' => __( 'Filename with extension (e.g., logo.png).', 'mumcp' ),
 							'type'        => 'string',
 							'required'    => true,
 						),
 						'title'     => array(
-							'description' => __( 'Media title.', 'mcpwp' ),
+							'description' => __( 'Media title.', 'mumcp' ),
 							'type'        => 'string',
 						),
 						'alt'       => array(
-							'description' => __( 'Alt text.', 'mcpwp' ),
+							'description' => __( 'Alt text.', 'mumcp' ),
 							'type'        => 'string',
 						),
 						'mime_type' => array(
-							'description' => __( 'MIME type (e.g. image/png, image/svg+xml). Inferred from filename when omitted.', 'mcpwp' ),
+							'description' => __( 'MIME type (e.g. image/png, image/svg+xml). Inferred from filename when omitted.', 'mumcp' ),
 							'type'        => 'string',
 						),
 					),
@@ -183,19 +183,19 @@ class Mcpwp_REST_Media extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'alt'         => array(
-							'description' => __( 'Image alt text.', 'mcpwp' ),
+							'description' => __( 'Image alt text.', 'mumcp' ),
 							'type'        => 'string',
 						),
 						'title'       => array(
-							'description' => __( 'Attachment title.', 'mcpwp' ),
+							'description' => __( 'Attachment title.', 'mumcp' ),
 							'type'        => 'string',
 						),
 						'caption'     => array(
-							'description' => __( 'Attachment caption (short description).', 'mcpwp' ),
+							'description' => __( 'Attachment caption (short description).', 'mumcp' ),
 							'type'        => 'string',
 						),
 						'description' => array(
-							'description' => __( 'Attachment description (long description).', 'mcpwp' ),
+							'description' => __( 'Attachment description (long description).', 'mumcp' ),
 							'type'        => 'string',
 						),
 					),
@@ -206,7 +206,7 @@ class Mcpwp_REST_Media extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'force' => array(
-							'description' => __( 'Permanently delete instead of trashing.', 'mcpwp' ),
+							'description' => __( 'Permanently delete instead of trashing.', 'mumcp' ),
 							'type'        => 'boolean',
 							'default'     => false,
 						),
@@ -251,7 +251,7 @@ class Mcpwp_REST_Media extends Mcpwp_REST_API {
 		if ( empty( $files['file'] ) ) {
 			return $this->error_response(
 				'no_file',
-				__( 'No file uploaded. Send file as multipart/form-data with "file" field.', 'mcpwp' ),
+				__( 'No file uploaded. Send file as multipart/form-data with "file" field.', 'mumcp' ),
 				400
 			);
 		}
@@ -284,7 +284,7 @@ class Mcpwp_REST_Media extends Mcpwp_REST_API {
 		if ( empty( $url ) ) {
 			return $this->error_response(
 				'missing_url',
-				__( 'URL is required.', 'mcpwp' ),
+				__( 'URL is required.', 'mumcp' ),
 				400
 			);
 		}
@@ -344,7 +344,7 @@ class Mcpwp_REST_Media extends Mcpwp_REST_API {
 		if ( empty( $to_upload ) ) {
 			return $this->error_response(
 				'missing_urls',
-				__( 'Provide either "urls" array or "items" array with url properties.', 'mcpwp' ),
+				__( 'Provide either "urls" array or "items" array with url properties.', 'mumcp' ),
 				400
 			);
 		}
@@ -355,7 +355,7 @@ class Mcpwp_REST_Media extends Mcpwp_REST_API {
 			return $this->error_response(
 				'too_many_files',
 				/* translators: %d: maximum number of files */
-				sprintf( __( 'Maximum %d files per request.', 'mcpwp' ), $max_uploads ),
+				sprintf( __( 'Maximum %d files per request.', 'mumcp' ), $max_uploads ),
 				400
 			);
 		}
@@ -410,7 +410,7 @@ class Mcpwp_REST_Media extends Mcpwp_REST_API {
 		if ( empty( $data ) || empty( $filename ) ) {
 			return $this->error_response(
 				'missing_params',
-				__( 'Both "data" (Base64 string) and "filename" are required.', 'mcpwp' ),
+				__( 'Both "data" (Base64 string) and "filename" are required.', 'mumcp' ),
 				400
 			);
 		}
@@ -453,7 +453,7 @@ class Mcpwp_REST_Media extends Mcpwp_REST_API {
 		);
 
 		if ( empty( $args ) ) {
-			return $this->error_response( 'no_fields', __( 'Provide at least one field to update: alt, title, caption, or description.', 'mcpwp' ), 400 );
+			return $this->error_response( 'no_fields', __( 'Provide at least one field to update: alt, title, caption, or description.', 'mumcp' ), 400 );
 		}
 
 		$result = $this->media->update_media( $attachment_id, $args );

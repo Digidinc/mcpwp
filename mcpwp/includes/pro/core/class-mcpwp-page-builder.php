@@ -60,11 +60,11 @@ class Mcpwp_Page_Builder {
 	 */
 	public function build( $title, $sections, $status = 'draft' ) {
 		if ( empty( $title ) ) {
-			return new WP_Error( 'missing_title', __( 'Page title is required.', 'mcpwp' ) );
+			return new WP_Error( 'missing_title', __( 'Page title is required.', 'mumcp' ) );
 		}
 
 		if ( empty( $sections ) || ! is_array( $sections ) ) {
-			return new WP_Error( 'missing_sections', __( 'At least one section is required.', 'mcpwp' ) );
+			return new WP_Error( 'missing_sections', __( 'At least one section is required.', 'mumcp' ) );
 		}
 
 		// Detect layout mode.
@@ -96,7 +96,7 @@ class Mcpwp_Page_Builder {
 		}
 
 		if ( empty( $elements ) ) {
-			return new WP_Error( 'no_valid_sections', __( 'No valid sections to build.', 'mcpwp' ) );
+			return new WP_Error( 'no_valid_sections', __( 'No valid sections to build.', 'mumcp' ) );
 		}
 
 		// Create the page.

@@ -100,7 +100,7 @@ class Mcpwp_REST_WooCommerce extends Mcpwp_REST_API {
 						'force' => array(
 							'type'        => 'boolean',
 							'default'     => false,
-							'description' => __( 'Permanently delete the product.', 'mcpwp' ),
+							'description' => __( 'Permanently delete the product.', 'mumcp' ),
 						),
 					),
 				),
@@ -218,16 +218,16 @@ class Mcpwp_REST_WooCommerce extends Mcpwp_REST_API {
 					'args'                => array(
 						'status' => array(
 							'type'        => 'string',
-							'description' => __( 'Order status.', 'mcpwp' ),
+							'description' => __( 'Order status.', 'mumcp' ),
 						),
 						'note' => array(
 							'type'        => 'string',
-							'description' => __( 'Order note to add.', 'mcpwp' ),
+							'description' => __( 'Order note to add.', 'mumcp' ),
 						),
 						'note_customer' => array(
 							'type'        => 'boolean',
 							'default'     => false,
-							'description' => __( 'Send note to customer.', 'mcpwp' ),
+							'description' => __( 'Send note to customer.', 'mumcp' ),
 						),
 					),
 				),
@@ -295,57 +295,57 @@ class Mcpwp_REST_WooCommerce extends Mcpwp_REST_API {
 				'default'     => 50,
 				'minimum'     => 1,
 				'maximum'     => 100,
-				'description' => __( 'Items per page.', 'mcpwp' ),
+				'description' => __( 'Items per page.', 'mumcp' ),
 			),
 			'page'         => array(
 				'type'        => 'integer',
 				'default'     => 1,
 				'minimum'     => 1,
-				'description' => __( 'Page number.', 'mcpwp' ),
+				'description' => __( 'Page number.', 'mumcp' ),
 			),
 			'status'       => array(
 				'type'        => 'string',
 				'default'     => 'publish',
 				'enum'        => array( 'publish', 'draft', 'pending', 'private', 'any' ),
-				'description' => __( 'Product status.', 'mcpwp' ),
+				'description' => __( 'Product status.', 'mumcp' ),
 			),
 			'type'         => array(
 				'type'        => 'string',
 				'enum'        => array( 'simple', 'variable', 'grouped', 'external' ),
-				'description' => __( 'Product type.', 'mcpwp' ),
+				'description' => __( 'Product type.', 'mumcp' ),
 			),
 			'category'     => array(
 				'type'        => 'string',
-				'description' => __( 'Category slug.', 'mcpwp' ),
+				'description' => __( 'Category slug.', 'mumcp' ),
 			),
 			'tag'          => array(
 				'type'        => 'string',
-				'description' => __( 'Tag slug.', 'mcpwp' ),
+				'description' => __( 'Tag slug.', 'mumcp' ),
 			),
 			'search'       => array(
 				'type'        => 'string',
-				'description' => __( 'Search term.', 'mcpwp' ),
+				'description' => __( 'Search term.', 'mumcp' ),
 			),
 			'sku'          => array(
 				'type'        => 'string',
-				'description' => __( 'Exact SKU match.', 'mcpwp' ),
+				'description' => __( 'Exact SKU match.', 'mumcp' ),
 			),
 			'stock_status' => array(
 				'type'        => 'string',
 				'enum'        => array( 'instock', 'outofstock', 'onbackorder' ),
-				'description' => __( 'Stock status.', 'mcpwp' ),
+				'description' => __( 'Stock status.', 'mumcp' ),
 			),
 			'orderby'      => array(
 				'type'        => 'string',
 				'default'     => 'date',
 				'enum'        => array( 'date', 'title', 'price', 'popularity', 'rating' ),
-				'description' => __( 'Order by field.', 'mcpwp' ),
+				'description' => __( 'Order by field.', 'mumcp' ),
 			),
 			'order'        => array(
 				'type'        => 'string',
 				'default'     => 'DESC',
 				'enum'        => array( 'ASC', 'DESC' ),
-				'description' => __( 'Sort order.', 'mcpwp' ),
+				'description' => __( 'Sort order.', 'mumcp' ),
 			),
 		);
 	}
@@ -360,82 +360,82 @@ class Mcpwp_REST_WooCommerce extends Mcpwp_REST_API {
 			'name'              => array(
 				'type'        => 'string',
 				'required'    => true,
-				'description' => __( 'Product name.', 'mcpwp' ),
+				'description' => __( 'Product name.', 'mumcp' ),
 			),
 			'type'              => array(
 				'type'        => 'string',
 				'default'     => 'simple',
 				'enum'        => array( 'simple', 'variable', 'grouped', 'external' ),
-				'description' => __( 'Product type.', 'mcpwp' ),
+				'description' => __( 'Product type.', 'mumcp' ),
 			),
 			'status'            => array(
 				'type'        => 'string',
 				'default'     => 'publish',
 				'enum'        => array( 'publish', 'draft', 'pending', 'private' ),
-				'description' => __( 'Product status.', 'mcpwp' ),
+				'description' => __( 'Product status.', 'mumcp' ),
 			),
 			'description'       => array(
 				'type'        => 'string',
-				'description' => __( 'Product description.', 'mcpwp' ),
+				'description' => __( 'Product description.', 'mumcp' ),
 			),
 			'short_description' => array(
 				'type'        => 'string',
-				'description' => __( 'Short description.', 'mcpwp' ),
+				'description' => __( 'Short description.', 'mumcp' ),
 			),
 			'sku'               => array(
 				'type'        => 'string',
-				'description' => __( 'Product SKU.', 'mcpwp' ),
+				'description' => __( 'Product SKU.', 'mumcp' ),
 			),
 			'regular_price'     => array(
 				'type'        => 'string',
-				'description' => __( 'Regular price.', 'mcpwp' ),
+				'description' => __( 'Regular price.', 'mumcp' ),
 			),
 			'sale_price'        => array(
 				'type'        => 'string',
-				'description' => __( 'Sale price.', 'mcpwp' ),
+				'description' => __( 'Sale price.', 'mumcp' ),
 			),
 			'manage_stock'      => array(
 				'type'        => 'boolean',
 				'default'     => false,
-				'description' => __( 'Manage stock.', 'mcpwp' ),
+				'description' => __( 'Manage stock.', 'mumcp' ),
 			),
 			'stock_quantity'    => array(
 				'type'        => 'integer',
-				'description' => __( 'Stock quantity.', 'mcpwp' ),
+				'description' => __( 'Stock quantity.', 'mumcp' ),
 			),
 			'stock_status'      => array(
 				'type'        => 'string',
 				'enum'        => array( 'instock', 'outofstock', 'onbackorder' ),
-				'description' => __( 'Stock status.', 'mcpwp' ),
+				'description' => __( 'Stock status.', 'mumcp' ),
 			),
 			'categories'        => array(
 				'type'        => 'array',
 				'items'       => array( 'type' => 'string' ),
-				'description' => __( 'Category names or IDs.', 'mcpwp' ),
+				'description' => __( 'Category names or IDs.', 'mumcp' ),
 			),
 			'tags'              => array(
 				'type'        => 'array',
 				'items'       => array( 'type' => 'string' ),
-				'description' => __( 'Tag names or IDs.', 'mcpwp' ),
+				'description' => __( 'Tag names or IDs.', 'mumcp' ),
 			),
 			'image_id'          => array(
 				'type'        => 'integer',
-				'description' => __( 'Main image attachment ID.', 'mcpwp' ),
+				'description' => __( 'Main image attachment ID.', 'mumcp' ),
 			),
 			'gallery_image_ids' => array(
 				'type'        => 'array',
 				'items'       => array( 'type' => 'integer' ),
-				'description' => __( 'Gallery image attachment IDs.', 'mcpwp' ),
+				'description' => __( 'Gallery image attachment IDs.', 'mumcp' ),
 			),
 			'virtual'           => array(
 				'type'        => 'boolean',
 				'default'     => false,
-				'description' => __( 'Virtual product.', 'mcpwp' ),
+				'description' => __( 'Virtual product.', 'mumcp' ),
 			),
 			'downloadable'      => array(
 				'type'        => 'boolean',
 				'default'     => false,
-				'description' => __( 'Downloadable product.', 'mcpwp' ),
+				'description' => __( 'Downloadable product.', 'mumcp' ),
 			),
 		);
 	}
@@ -452,32 +452,32 @@ class Mcpwp_REST_WooCommerce extends Mcpwp_REST_API {
 				'default'     => 50,
 				'minimum'     => 1,
 				'maximum'     => 100,
-				'description' => __( 'Items per page.', 'mcpwp' ),
+				'description' => __( 'Items per page.', 'mumcp' ),
 			),
 			'page'     => array(
 				'type'        => 'integer',
 				'default'     => 1,
 				'minimum'     => 1,
-				'description' => __( 'Page number.', 'mcpwp' ),
+				'description' => __( 'Page number.', 'mumcp' ),
 			),
 			'status'   => array(
 				'type'        => 'string',
 				'default'     => 'any',
-				'description' => __( 'Order status.', 'mcpwp' ),
+				'description' => __( 'Order status.', 'mumcp' ),
 			),
 			'customer' => array(
 				'type'        => 'integer',
-				'description' => __( 'Customer ID.', 'mcpwp' ),
+				'description' => __( 'Customer ID.', 'mumcp' ),
 			),
 			'after'    => array(
 				'type'        => 'string',
 				'format'      => 'date-time',
-				'description' => __( 'Orders after date (ISO 8601).', 'mcpwp' ),
+				'description' => __( 'Orders after date (ISO 8601).', 'mumcp' ),
 			),
 			'before'   => array(
 				'type'        => 'string',
 				'format'      => 'date-time',
-				'description' => __( 'Orders before date (ISO 8601).', 'mcpwp' ),
+				'description' => __( 'Orders before date (ISO 8601).', 'mumcp' ),
 			),
 		);
 	}
@@ -494,29 +494,29 @@ class Mcpwp_REST_WooCommerce extends Mcpwp_REST_API {
 				'default'     => 50,
 				'minimum'     => 1,
 				'maximum'     => 100,
-				'description' => __( 'Items per page.', 'mcpwp' ),
+				'description' => __( 'Items per page.', 'mumcp' ),
 			),
 			'page'     => array(
 				'type'        => 'integer',
 				'default'     => 1,
 				'minimum'     => 1,
-				'description' => __( 'Page number.', 'mcpwp' ),
+				'description' => __( 'Page number.', 'mumcp' ),
 			),
 			'search'   => array(
 				'type'        => 'string',
-				'description' => __( 'Search term.', 'mcpwp' ),
+				'description' => __( 'Search term.', 'mumcp' ),
 			),
 			'orderby'  => array(
 				'type'        => 'string',
 				'default'     => 'registered',
 				'enum'        => array( 'registered', 'display_name', 'user_login', 'user_email' ),
-				'description' => __( 'Order by field.', 'mcpwp' ),
+				'description' => __( 'Order by field.', 'mumcp' ),
 			),
 			'order'    => array(
 				'type'        => 'string',
 				'default'     => 'DESC',
 				'enum'        => array( 'ASC', 'DESC' ),
-				'description' => __( 'Sort order.', 'mcpwp' ),
+				'description' => __( 'Sort order.', 'mumcp' ),
 			),
 		);
 	}
@@ -530,23 +530,23 @@ class Mcpwp_REST_WooCommerce extends Mcpwp_REST_API {
 		return array(
 			'name'        => array(
 				'type'        => 'string',
-				'description' => __( 'Category name.', 'mcpwp' ),
+				'description' => __( 'Category name.', 'mumcp' ),
 			),
 			'slug'        => array(
 				'type'        => 'string',
-				'description' => __( 'Category slug.', 'mcpwp' ),
+				'description' => __( 'Category slug.', 'mumcp' ),
 			),
 			'description' => array(
 				'type'        => 'string',
-				'description' => __( 'Category description.', 'mcpwp' ),
+				'description' => __( 'Category description.', 'mumcp' ),
 			),
 			'parent'      => array(
 				'type'        => 'integer',
-				'description' => __( 'Parent category ID.', 'mcpwp' ),
+				'description' => __( 'Parent category ID.', 'mumcp' ),
 			),
 			'image_id'    => array(
 				'type'        => 'integer',
-				'description' => __( 'Category thumbnail image attachment ID.', 'mcpwp' ),
+				'description' => __( 'Category thumbnail image attachment ID.', 'mumcp' ),
 			),
 		);
 	}
@@ -562,17 +562,17 @@ class Mcpwp_REST_WooCommerce extends Mcpwp_REST_API {
 				'type'        => 'string',
 				'default'     => 'month',
 				'enum'        => array( 'day', 'week', 'month', 'year' ),
-				'description' => __( 'Time period.', 'mcpwp' ),
+				'description' => __( 'Time period.', 'mumcp' ),
 			),
 			'date_min' => array(
 				'type'        => 'string',
 				'format'      => 'date-time',
-				'description' => __( 'Start date (ISO 8601).', 'mcpwp' ),
+				'description' => __( 'Start date (ISO 8601).', 'mumcp' ),
 			),
 			'date_max' => array(
 				'type'        => 'string',
 				'format'      => 'date-time',
-				'description' => __( 'End date (ISO 8601).', 'mcpwp' ),
+				'description' => __( 'End date (ISO 8601).', 'mumcp' ),
 			),
 		);
 	}
@@ -839,7 +839,7 @@ class Mcpwp_REST_WooCommerce extends Mcpwp_REST_API {
 		$index = $this->find_product_archetype_index( $items, $id );
 
 		if ( -1 === $index ) {
-			return new WP_Error( 'not_found', __( 'Product archetype not found.', 'mcpwp' ), array( 'status' => 404 ) );
+			return new WP_Error( 'not_found', __( 'Product archetype not found.', 'mumcp' ), array( 'status' => 404 ) );
 		}
 
 		$current = $items[ $index ];
@@ -890,7 +890,7 @@ class Mcpwp_REST_WooCommerce extends Mcpwp_REST_API {
 		}
 
 		if ( empty( $payload['name'] ) ) {
-			return new WP_Error( 'missing_name', __( 'Applying a product archetype to a new product requires a name.', 'mcpwp' ), array( 'status' => 400 ) );
+			return new WP_Error( 'missing_name', __( 'Applying a product archetype to a new product requires a name.', 'mumcp' ), array( 'status' => 400 ) );
 		}
 
 		if ( empty( $payload['status'] ) ) {
@@ -1055,7 +1055,7 @@ class Mcpwp_REST_WooCommerce extends Mcpwp_REST_API {
 		$index = $this->find_product_archetype_index( $items, $id );
 
 		if ( -1 === $index ) {
-			return new WP_Error( 'not_found', __( 'Product archetype not found.', 'mcpwp' ), array( 'status' => 404 ) );
+			return new WP_Error( 'not_found', __( 'Product archetype not found.', 'mumcp' ), array( 'status' => 404 ) );
 		}
 
 		return $items[ $index ];
@@ -1088,7 +1088,7 @@ class Mcpwp_REST_WooCommerce extends Mcpwp_REST_API {
 	private function normalize_product_archetype_payload( $data, $partial = false ) {
 		$name = isset( $data['name'] ) ? sanitize_text_field( (string) $data['name'] ) : '';
 		if ( ! $partial && '' === $name ) {
-			return new WP_Error( 'missing_name', __( 'Archetype name is required.', 'mcpwp' ), array( 'status' => 400 ) );
+			return new WP_Error( 'missing_name', __( 'Archetype name is required.', 'mumcp' ), array( 'status' => 400 ) );
 		}
 
 		$product_type = isset( $data['product_type'] ) ? sanitize_key( (string) $data['product_type'] ) : 'simple';

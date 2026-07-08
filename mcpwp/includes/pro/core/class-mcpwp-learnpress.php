@@ -100,12 +100,12 @@ class Mcpwp_LearnPress {
 	 */
 	public function get_course( $id ) {
 		if ( ! $this->is_active() ) {
-			return new WP_Error( 'lp_not_active', __( 'LearnPress is not active.', 'mcpwp' ), array( 'status' => 400 ) );
+			return new WP_Error( 'lp_not_active', __( 'LearnPress is not active.', 'mumcp' ), array( 'status' => 400 ) );
 		}
 
 		$post = get_post( $id );
 		if ( ! $post || 'lp_course' !== $post->post_type ) {
-			return new WP_Error( 'not_found', __( 'Course not found.', 'mcpwp' ), array( 'status' => 404 ) );
+			return new WP_Error( 'not_found', __( 'Course not found.', 'mumcp' ), array( 'status' => 404 ) );
 		}
 
 		return $this->format_course( $post, true );
@@ -119,7 +119,7 @@ class Mcpwp_LearnPress {
 	 */
 	public function create_course( $data ) {
 		if ( ! $this->is_active() ) {
-			return new WP_Error( 'lp_not_active', __( 'LearnPress is not active.', 'mcpwp' ), array( 'status' => 400 ) );
+			return new WP_Error( 'lp_not_active', __( 'LearnPress is not active.', 'mumcp' ), array( 'status' => 400 ) );
 		}
 
 		$post_data = array(
@@ -161,12 +161,12 @@ class Mcpwp_LearnPress {
 	 */
 	public function update_course( $id, $data ) {
 		if ( ! $this->is_active() ) {
-			return new WP_Error( 'lp_not_active', __( 'LearnPress is not active.', 'mcpwp' ), array( 'status' => 400 ) );
+			return new WP_Error( 'lp_not_active', __( 'LearnPress is not active.', 'mumcp' ), array( 'status' => 400 ) );
 		}
 
 		$post = get_post( $id );
 		if ( ! $post || 'lp_course' !== $post->post_type ) {
-			return new WP_Error( 'not_found', __( 'Course not found.', 'mcpwp' ), array( 'status' => 404 ) );
+			return new WP_Error( 'not_found', __( 'Course not found.', 'mumcp' ), array( 'status' => 404 ) );
 		}
 
 		$post_data = array( 'ID' => $id );
@@ -213,12 +213,12 @@ class Mcpwp_LearnPress {
 		global $wpdb;
 
 		if ( ! $this->is_active() ) {
-			return new WP_Error( 'lp_not_active', __( 'LearnPress is not active.', 'mcpwp' ), array( 'status' => 400 ) );
+			return new WP_Error( 'lp_not_active', __( 'LearnPress is not active.', 'mumcp' ), array( 'status' => 400 ) );
 		}
 
 		$post = get_post( $course_id );
 		if ( ! $post || 'lp_course' !== $post->post_type ) {
-			return new WP_Error( 'not_found', __( 'Course not found.', 'mcpwp' ), array( 'status' => 404 ) );
+			return new WP_Error( 'not_found', __( 'Course not found.', 'mumcp' ), array( 'status' => 404 ) );
 		}
 
 		$sections_table = $wpdb->prefix . 'learnpress_sections';
@@ -278,12 +278,12 @@ class Mcpwp_LearnPress {
 		global $wpdb;
 
 		if ( ! $this->is_active() ) {
-			return new WP_Error( 'lp_not_active', __( 'LearnPress is not active.', 'mcpwp' ), array( 'status' => 400 ) );
+			return new WP_Error( 'lp_not_active', __( 'LearnPress is not active.', 'mumcp' ), array( 'status' => 400 ) );
 		}
 
 		$post = get_post( $course_id );
 		if ( ! $post || 'lp_course' !== $post->post_type ) {
-			return new WP_Error( 'not_found', __( 'Course not found.', 'mcpwp' ), array( 'status' => 404 ) );
+			return new WP_Error( 'not_found', __( 'Course not found.', 'mumcp' ), array( 'status' => 404 ) );
 		}
 
 		$sections_table = $wpdb->prefix . 'learnpress_sections';
@@ -420,7 +420,7 @@ class Mcpwp_LearnPress {
 	 */
 	public function create_lesson( $data ) {
 		if ( ! $this->is_active() ) {
-			return new WP_Error( 'lp_not_active', __( 'LearnPress is not active.', 'mcpwp' ), array( 'status' => 400 ) );
+			return new WP_Error( 'lp_not_active', __( 'LearnPress is not active.', 'mumcp' ), array( 'status' => 400 ) );
 		}
 
 		$post_data = array(
@@ -460,12 +460,12 @@ class Mcpwp_LearnPress {
 	 */
 	public function update_lesson( $id, $data ) {
 		if ( ! $this->is_active() ) {
-			return new WP_Error( 'lp_not_active', __( 'LearnPress is not active.', 'mcpwp' ), array( 'status' => 400 ) );
+			return new WP_Error( 'lp_not_active', __( 'LearnPress is not active.', 'mumcp' ), array( 'status' => 400 ) );
 		}
 
 		$post = get_post( $id );
 		if ( ! $post || 'lp_lesson' !== $post->post_type ) {
-			return new WP_Error( 'not_found', __( 'Lesson not found.', 'mcpwp' ), array( 'status' => 404 ) );
+			return new WP_Error( 'not_found', __( 'Lesson not found.', 'mumcp' ), array( 'status' => 404 ) );
 		}
 
 		$post_data = array( 'ID' => $id );
@@ -571,7 +571,7 @@ class Mcpwp_LearnPress {
 	 */
 	public function create_quiz( $data ) {
 		if ( ! $this->is_active() ) {
-			return new WP_Error( 'lp_not_active', __( 'LearnPress is not active.', 'mcpwp' ), array( 'status' => 400 ) );
+			return new WP_Error( 'lp_not_active', __( 'LearnPress is not active.', 'mumcp' ), array( 'status' => 400 ) );
 		}
 
 		$post_data = array(
@@ -604,12 +604,12 @@ class Mcpwp_LearnPress {
 	 */
 	public function update_quiz( $id, $data ) {
 		if ( ! $this->is_active() ) {
-			return new WP_Error( 'lp_not_active', __( 'LearnPress is not active.', 'mcpwp' ), array( 'status' => 400 ) );
+			return new WP_Error( 'lp_not_active', __( 'LearnPress is not active.', 'mumcp' ), array( 'status' => 400 ) );
 		}
 
 		$post = get_post( $id );
 		if ( ! $post || 'lp_quiz' !== $post->post_type ) {
-			return new WP_Error( 'not_found', __( 'Quiz not found.', 'mcpwp' ), array( 'status' => 404 ) );
+			return new WP_Error( 'not_found', __( 'Quiz not found.', 'mumcp' ), array( 'status' => 404 ) );
 		}
 
 		$post_data = array( 'ID' => $id );
@@ -647,12 +647,12 @@ class Mcpwp_LearnPress {
 		global $wpdb;
 
 		if ( ! $this->is_active() ) {
-			return new WP_Error( 'lp_not_active', __( 'LearnPress is not active.', 'mcpwp' ), array( 'status' => 400 ) );
+			return new WP_Error( 'lp_not_active', __( 'LearnPress is not active.', 'mumcp' ), array( 'status' => 400 ) );
 		}
 
 		$post = get_post( $quiz_id );
 		if ( ! $post || 'lp_quiz' !== $post->post_type ) {
-			return new WP_Error( 'not_found', __( 'Quiz not found.', 'mcpwp' ), array( 'status' => 404 ) );
+			return new WP_Error( 'not_found', __( 'Quiz not found.', 'mumcp' ), array( 'status' => 404 ) );
 		}
 
 		$table = $wpdb->prefix . 'learnpress_quiz_questions';
@@ -729,7 +729,7 @@ class Mcpwp_LearnPress {
 	 */
 	public function create_course_category( $data ) {
 		if ( ! $this->is_active() ) {
-			return new WP_Error( 'lp_not_active', __( 'LearnPress is not active.', 'mcpwp' ), array( 'status' => 400 ) );
+			return new WP_Error( 'lp_not_active', __( 'LearnPress is not active.', 'mumcp' ), array( 'status' => 400 ) );
 		}
 
 		$term_args = array();
@@ -775,12 +775,12 @@ class Mcpwp_LearnPress {
 	 */
 	public function update_course_category( $id, $data ) {
 		if ( ! $this->is_active() ) {
-			return new WP_Error( 'lp_not_active', __( 'LearnPress is not active.', 'mcpwp' ), array( 'status' => 400 ) );
+			return new WP_Error( 'lp_not_active', __( 'LearnPress is not active.', 'mumcp' ), array( 'status' => 400 ) );
 		}
 
 		$term = get_term( $id, 'course_category' );
 		if ( ! $term || is_wp_error( $term ) ) {
-			return new WP_Error( 'not_found', __( 'Category not found.', 'mcpwp' ), array( 'status' => 404 ) );
+			return new WP_Error( 'not_found', __( 'Category not found.', 'mumcp' ), array( 'status' => 404 ) );
 		}
 
 		$term_args = array();
@@ -827,12 +827,12 @@ class Mcpwp_LearnPress {
 	 */
 	public function delete_course_category( $id ) {
 		if ( ! $this->is_active() ) {
-			return new WP_Error( 'lp_not_active', __( 'LearnPress is not active.', 'mcpwp' ), array( 'status' => 400 ) );
+			return new WP_Error( 'lp_not_active', __( 'LearnPress is not active.', 'mumcp' ), array( 'status' => 400 ) );
 		}
 
 		$term = get_term( $id, 'course_category' );
 		if ( ! $term || is_wp_error( $term ) ) {
-			return new WP_Error( 'not_found', __( 'Category not found.', 'mcpwp' ), array( 'status' => 404 ) );
+			return new WP_Error( 'not_found', __( 'Category not found.', 'mumcp' ), array( 'status' => 404 ) );
 		}
 
 		$result = wp_delete_term( $id, 'course_category' );
@@ -857,7 +857,7 @@ class Mcpwp_LearnPress {
 		global $wpdb;
 
 		if ( ! $this->is_active() ) {
-			return new WP_Error( 'lp_not_active', __( 'LearnPress is not active.', 'mcpwp' ), array( 'status' => 400 ) );
+			return new WP_Error( 'lp_not_active', __( 'LearnPress is not active.', 'mumcp' ), array( 'status' => 400 ) );
 		}
 
 		$course_counts = wp_count_posts( 'lp_course' );

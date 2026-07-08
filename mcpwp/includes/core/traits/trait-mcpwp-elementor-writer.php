@@ -25,7 +25,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 		if ( ! $this->is_active() ) {
 			return new WP_Error(
 				'elementor_not_active',
-				__( 'Elementor is not installed or active.', 'mcpwp' ),
+				__( 'Elementor is not installed or active.', 'mumcp' ),
 				array(
 					'status' => 400,
 					'hint'   => 'Elementor is not installed or active on this site. Use wp_introspect to check available page builders. For content editing without Elementor, use wp_update_page with HTML content, or wp_set_blocks for Gutenberg.',
@@ -60,7 +60,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 			if ( false === $raw_decoded ) {
 				return new WP_Error(
 					'invalid_base64',
-					__( 'Invalid base64 encoding in elementor_data_base64.', 'mcpwp' ),
+					__( 'Invalid base64 encoding in elementor_data_base64.', 'mumcp' ),
 					array(
 						'status' => 400,
 						'hint'   => 'The elementor_data_base64 value is not valid base64. Encode your JSON string with base64_encode() or btoa() before sending.',
@@ -71,7 +71,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 			if ( null === $decoded && json_last_error() !== JSON_ERROR_NONE ) {
 				return new WP_Error(
 					'invalid_json',
-					__( 'Base64-decoded data is not valid JSON.', 'mcpwp' ),
+					__( 'Base64-decoded data is not valid JSON.', 'mumcp' ),
 					array(
 						'status'          => 400,
 						'decoded_length'  => strlen( $raw_decoded ),
@@ -83,7 +83,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 			if ( ! is_array( $decoded ) ) {
 				return new WP_Error(
 					'invalid_structure',
-					__( 'Elementor data must decode to an array.', 'mcpwp' ),
+					__( 'Elementor data must decode to an array.', 'mumcp' ),
 					array(
 						'status' => 400,
 						'hint'   => $structure_hint,
@@ -98,7 +98,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 				if ( ! $this->is_valid_elementor_structure( $data['elementor_data'] ) ) {
 					return new WP_Error(
 						'invalid_structure',
-						__( 'Elementor data must be an array of element objects.', 'mcpwp' ),
+						__( 'Elementor data must be an array of element objects.', 'mumcp' ),
 						array(
 							'status' => 400,
 							'hint'   => $structure_hint,
@@ -113,7 +113,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 				if ( null === $decoded ) {
 					return new WP_Error(
 						'invalid_json',
-						__( 'Invalid Elementor JSON data.', 'mcpwp' ),
+						__( 'Invalid Elementor JSON data.', 'mumcp' ),
 						array(
 							'status' => 400,
 							'hint'   => 'The provided string is not valid JSON even after recovery attempts (stripslashes, double-encoding unwrap). Error: ' . json_last_error_msg() . '. Consider using elementor_data_base64 to avoid quoting issues — base64-encode your JSON before sending.',
@@ -124,7 +124,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 				if ( ! is_array( $decoded ) ) {
 					return new WP_Error(
 						'invalid_structure',
-						__( 'Elementor data must decode to an array.', 'mcpwp' ),
+						__( 'Elementor data must decode to an array.', 'mumcp' ),
 						array(
 							'status' => 400,
 							'hint'   => $structure_hint,
@@ -141,7 +141,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 			if ( null === $decoded ) {
 				return new WP_Error(
 					'invalid_json',
-					__( 'Invalid Elementor JSON data.', 'mcpwp' ),
+					__( 'Invalid Elementor JSON data.', 'mumcp' ),
 					array(
 						'status' => 400,
 						'hint'   => 'The provided string is not valid JSON even after recovery attempts. Error: ' . json_last_error_msg() . '. Consider using elementor_data_base64 to avoid quoting issues.',
@@ -152,7 +152,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 			if ( ! is_array( $decoded ) ) {
 				return new WP_Error(
 					'invalid_structure',
-					__( 'Elementor data must decode to an array.', 'mcpwp' ),
+					__( 'Elementor data must decode to an array.', 'mumcp' ),
 					array(
 						'status' => 400,
 						'hint'   => $structure_hint,
@@ -175,7 +175,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 		if ( empty( $elementor_json ) ) {
 			return new WP_Error(
 				'no_data',
-				__( 'No Elementor data provided.', 'mcpwp' ),
+				__( 'No Elementor data provided.', 'mumcp' ),
 				array( 'status' => 400 )
 			);
 		}
@@ -211,7 +211,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 				'success'  => true,
 				'dry_run'  => true,
 				'page_id'  => (int) $page_id,
-				'message'  => __( 'Validation complete — no changes saved.', 'mcpwp' ),
+				'message'  => __( 'Validation complete — no changes saved.', 'mumcp' ),
 			);
 
 			if ( ! empty( $all_warnings ) ) {
@@ -293,7 +293,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 		if ( ! is_array( $post_validation_decoded ) ) {
 			return new WP_Error(
 				'validation_corrupted',
-				__( 'Elementor data was corrupted during validation. Please retry with elementor_data_base64.', 'mcpwp' ),
+				__( 'Elementor data was corrupted during validation. Please retry with elementor_data_base64.', 'mumcp' ),
 				array( 'status' => 500, 'sections_submitted' => $input_count )
 			);
 		}
@@ -303,7 +303,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 					'validation_data_loss',
 					sprintf(
 						/* translators: 1: submitted section count, 2: section count after validation */
-						__( 'Validation changed section count from %1$d to %2$d. Aborting to prevent data loss.', 'mcpwp' ),
+						__( 'Validation changed section count from %1$d to %2$d. Aborting to prevent data loss.', 'mumcp' ),
 						$input_count,
 						$post_validation_count
 					),
@@ -395,7 +395,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 					'meta_write_truncated',
 					sprintf(
 						/* translators: 1: submitted section count, 2: stored section count */
-						__( 'Data truncated during save: %1$d sections submitted but only %2$d stored. Try using elementor_data_base64 for large payloads.', 'mcpwp' ),
+						__( 'Data truncated during save: %1$d sections submitted but only %2$d stored. Try using elementor_data_base64 for large payloads.', 'mumcp' ),
 						$input_count,
 						$stored_count
 					),
@@ -521,7 +521,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 		$result = array(
 			'success'            => true,
 			'page_id'            => (int) $page_id,
-			'message'            => __( 'Elementor data updated.', 'mcpwp' ),
+			'message'            => __( 'Elementor data updated.', 'mumcp' ),
 			'sections_saved'     => $save_debug['sections_saved'],
 			'sections_submitted' => $save_debug['sections_submitted'],
 			'save_method'        => $save_method,
@@ -556,7 +556,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 		if ( ! $this->is_active() ) {
 			return new WP_Error(
 				'elementor_not_active',
-				__( 'Elementor is not installed or active.', 'mcpwp' ),
+				__( 'Elementor is not installed or active.', 'mumcp' ),
 				array( 'status' => 400 )
 			);
 		}
@@ -564,7 +564,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 		// Create page
 		$page_data = array(
 			'post_type'    => 'page',
-			'post_title'   => isset( $data['title'] ) ? sanitize_text_field( $data['title'] ) : __( 'New Page', 'mcpwp' ),
+			'post_title'   => isset( $data['title'] ) ? sanitize_text_field( $data['title'] ) : __( 'New Page', 'mumcp' ),
 			'post_status'  => isset( $data['status'] ) ? sanitize_key( $data['status'] ) : 'draft',
 			'post_content' => '',
 		);
@@ -640,7 +640,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 		if ( ! $this->is_active() ) {
 			return new WP_Error(
 				'elementor_not_active',
-				__( 'Elementor is not installed or active.', 'mcpwp' ),
+				__( 'Elementor is not installed or active.', 'mumcp' ),
 				array( 'status' => 400 )
 			);
 		}
@@ -654,7 +654,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 		if ( empty( $elementor_data ) ) {
 			return new WP_Error(
 				'no_elementor_data',
-				__( 'This page has no Elementor data.', 'mcpwp' ),
+				__( 'This page has no Elementor data.', 'mumcp' ),
 				array( 'status' => 404 )
 			);
 		}
@@ -663,7 +663,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 		if ( ! is_array( $elements ) ) {
 			return new WP_Error(
 				'invalid_elementor_data',
-				__( 'Elementor data is not valid JSON.', 'mcpwp' ),
+				__( 'Elementor data is not valid JSON.', 'mumcp' ),
 				array( 'status' => 500 )
 			);
 		}
@@ -692,7 +692,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 		} else {
 			return new WP_Error(
 				'no_selector',
-				__( 'Provide element_id, section_index, or find criteria to locate the target element.', 'mcpwp' ),
+				__( 'Provide element_id, section_index, or find criteria to locate the target element.', 'mumcp' ),
 				array( 'status' => 400 )
 			);
 		}
@@ -700,7 +700,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 		if ( null === $found ) {
 			return new WP_Error(
 				'element_not_found',
-				__( 'No matching element found in the Elementor tree.', 'mcpwp' ),
+				__( 'No matching element found in the Elementor tree.', 'mumcp' ),
 				array( 'status' => 404 )
 			);
 		}
@@ -733,7 +733,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 		if ( empty( $changes ) ) {
 			return new WP_Error(
 				'no_changes',
-				__( 'No settings or delete_settings provided — nothing to change.', 'mcpwp' ),
+				__( 'No settings or delete_settings provided — nothing to change.', 'mumcp' ),
 				array( 'status' => 400 )
 			);
 		}
@@ -806,7 +806,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 		if ( ! $this->is_active() ) {
 			return new WP_Error(
 				'elementor_not_active',
-				__( 'Elementor is not installed or active.', 'mcpwp' ),
+				__( 'Elementor is not installed or active.', 'mumcp' ),
 				array( 'status' => 400 )
 			);
 		}
@@ -819,7 +819,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 		if ( empty( $widget_id ) ) {
 			return new WP_Error(
 				'missing_widget_id',
-				__( 'widget_id is required.', 'mcpwp' ),
+				__( 'widget_id is required.', 'mumcp' ),
 				array( 'status' => 400 )
 			);
 		}
@@ -827,7 +827,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 		if ( empty( $settings ) && empty( $delete_settings ) ) {
 			return new WP_Error(
 				'no_changes',
-				__( 'No settings or delete_settings provided.', 'mcpwp' ),
+				__( 'No settings or delete_settings provided.', 'mumcp' ),
 				array( 'status' => 400 )
 			);
 		}
@@ -836,7 +836,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 		if ( empty( $elementor_data ) ) {
 			return new WP_Error(
 				'no_elementor_data',
-				__( 'This page has no Elementor data.', 'mcpwp' ),
+				__( 'This page has no Elementor data.', 'mumcp' ),
 				array( 'status' => 404 )
 			);
 		}
@@ -845,7 +845,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 		if ( ! is_array( $elements ) ) {
 			return new WP_Error(
 				'invalid_elementor_data',
-				__( 'Elementor data is not valid JSON.', 'mcpwp' ),
+				__( 'Elementor data is not valid JSON.', 'mumcp' ),
 				array( 'status' => 500 )
 			);
 		}
@@ -859,7 +859,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 				'widget_not_found',
 				sprintf(
 					/* translators: %s: widget ID */
-					__( 'No element with ID "%s" found in the Elementor tree.', 'mcpwp' ),
+					__( 'No element with ID "%s" found in the Elementor tree.', 'mumcp' ),
 					$widget_id
 				),
 				array( 'status' => 404 )
@@ -873,7 +873,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 				'not_a_widget',
 				sprintf(
 					/* translators: 1: element ID, 2: actual elType */
-					__( 'Element "%1$s" is a %2$s, not a widget. Use wp_edit_section for non-widget elements.', 'mcpwp' ),
+					__( 'Element "%1$s" is a %2$s, not a widget. Use wp_edit_section for non-widget elements.', 'mumcp' ),
 					$widget_id,
 					$el_type
 				),

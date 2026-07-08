@@ -14,8 +14,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 SOURCE_SLUG="mcpwp"
-WPORG_SLUG="mcpwp"
+# wp.org public slug is mumcp (wp.org rejected the mcpwp name — wp mark).
+# Internal mcpwp_* prefixes/namespaces stay; only folder, main file, display
+# name, and text domain carry the public slug.
+WPORG_SLUG="mumcp"
 PLUGIN_MAIN="$SOURCE_SLUG.php"
+WPORG_MAIN="$WPORG_SLUG.php"
 
 # Parse version from plugin header if not supplied
 VERSION=""
@@ -59,9 +63,14 @@ rm -f  "$DEST/includes/freemius-init.php"
 # ── Remove Pro modules from the free WP.org package ─────────────
 rm -rf "$DEST/includes/pro"
 
+# ── Rename main plugin file to match the wp.org slug ────────────
+if [[ "$PLUGIN_MAIN" != "$WPORG_MAIN" ]]; then
+    mv "$DEST/$PLUGIN_MAIN" "$DEST/$WPORG_MAIN"
+fi
+
 # ── Inject MCPWP_WPORG_BUILD constant for WP.org compliance ─────
 echo "    Injecting MCPWP_WPORG_BUILD constant..."
-python3 - "$DEST/$PLUGIN_MAIN" <<'PY'
+python3 - "$DEST/$WPORG_MAIN" <<'PY'
 from pathlib import Path
 import sys
 
@@ -128,6 +137,27 @@ if grep -q "includes/class-mcpwp-updater.php" "$ZIP_MANIFEST"; then
     exit 1
 else
     echo "    [OK] No legacy updater"
+fi
+
+if ! grep -q "^$WPORG_SLUG/$WPORG_MAIN\$" "$ZIP_MANIFEST"; then
+    echo "    [FAIL] Main file $WPORG_SLUG/$WPORG_MAIN missing from zip!"
+    exit 1
+else
+    echo "    [OK] Main file is $WPORG_SLUG/$WPORG_MAIN"
+fi
+
+if unzip -p "$OUTPUT_ZIP" "$WPORG_SLUG/$WPORG_MAIN" | grep -q "Text Domain:       mcpwp"; then
+    echo "    [FAIL] Text domain still 'mcpwp' in plugin header!"
+    exit 1
+else
+    echo "    [OK] Text domain matches wp.org slug"
+fi
+
+if ! unzip -p "$OUTPUT_ZIP" "$WPORG_SLUG/$WPORG_MAIN" | grep -q "MCPWP_WPORG_BUILD"; then
+    echo "    [FAIL] MCPWP_WPORG_BUILD constant not injected!"
+    exit 1
+else
+    echo "    [OK] MCPWP_WPORG_BUILD free-lock injected"
 fi
 
 FILE_COUNT=$(unzip -l "$OUTPUT_ZIP" | tail -1 | awk '{print $2}')

@@ -49,7 +49,7 @@ trait Mcpwp_Elementor_Reader_Trait {
 		if ( ! $this->is_active() ) {
 			return new WP_Error(
 				'elementor_not_active',
-				__( 'Elementor is not installed or active.', 'mcpwp' ),
+				__( 'Elementor is not installed or active.', 'mumcp' ),
 				array(
 					'status' => 400,
 					'hint'   => 'Elementor is not installed or active on this site. Use wp_introspect to check available page builders. For content editing without Elementor, use wp_update_page with HTML content, or wp_set_blocks for Gutenberg.',
@@ -136,7 +136,7 @@ trait Mcpwp_Elementor_Reader_Trait {
 		if ( ! $this->is_active() ) {
 			return new WP_Error(
 				'elementor_not_active',
-				__( 'Elementor is not installed or active.', 'mcpwp' ),
+				__( 'Elementor is not installed or active.', 'mumcp' ),
 				array( 'status' => 400 )
 			);
 		}
@@ -503,7 +503,7 @@ trait Mcpwp_Elementor_Reader_Trait {
 		if ( ! $this->is_active() ) {
 			return new WP_Error(
 				'elementor_not_active',
-				__( 'Elementor is not installed or active.', 'mcpwp' ),
+				__( 'Elementor is not installed or active.', 'mumcp' ),
 				array( 'status' => 400 )
 			);
 		}
@@ -511,7 +511,7 @@ trait Mcpwp_Elementor_Reader_Trait {
 		if ( ! class_exists( '\Elementor\Plugin' ) || empty( \Elementor\Plugin::$instance->widgets_manager ) ) {
 			return new WP_Error(
 				'elementor_not_loaded',
-				__( 'Elementor widget manager not available.', 'mcpwp' ),
+				__( 'Elementor widget manager not available.', 'mumcp' ),
 				array( 'status' => 500 )
 			);
 		}
@@ -548,10 +548,10 @@ trait Mcpwp_Elementor_Reader_Trait {
 			if ( ! isset( $types[ $widget_type ] ) ) {
 				$suggestion = $this->find_closest_widget( $widget_type, array_keys( $types ) );
 				/* translators: %s: Elementor widget type */
-				$msg        = sprintf( __( "Unknown widget type '%s'.", 'mcpwp' ), $widget_type );
+				$msg        = sprintf( __( "Unknown widget type '%s'.", 'mumcp' ), $widget_type );
 				if ( $suggestion ) {
 					/* translators: %s: suggested Elementor widget type */
-					$msg .= sprintf( __( " Did you mean '%s'?", 'mcpwp' ), $suggestion );
+					$msg .= sprintf( __( " Did you mean '%s'?", 'mumcp' ), $suggestion );
 				}
 				return new WP_Error(
 				'unknown_widget',
@@ -687,7 +687,7 @@ trait Mcpwp_Elementor_Reader_Trait {
 		if ( ! $this->is_active() ) {
 			return new WP_Error(
 				'elementor_not_active',
-				__( 'Elementor is not installed or active.', 'mcpwp' ),
+				__( 'Elementor is not installed or active.', 'mumcp' ),
 				array( 'status' => 400 )
 			);
 		}
@@ -700,7 +700,7 @@ trait Mcpwp_Elementor_Reader_Trait {
 		if ( ! class_exists( '\Elementor\Plugin' ) ) {
 			return new WP_Error(
 				'elementor_not_loaded',
-				__( 'Elementor plugin class not available.', 'mcpwp' ),
+				__( 'Elementor plugin class not available.', 'mumcp' ),
 				array( 'status' => 500 )
 			);
 		}
@@ -710,7 +710,7 @@ trait Mcpwp_Elementor_Reader_Trait {
 		if ( empty( $elementor_data_raw ) ) {
 			return new WP_Error(
 				'no_elementor_data',
-				__( 'This page has no Elementor data.', 'mcpwp' ),
+				__( 'This page has no Elementor data.', 'mumcp' ),
 				array( 'status' => 404 )
 			);
 		}
@@ -743,7 +743,7 @@ trait Mcpwp_Elementor_Reader_Trait {
 				'text'        => $fallback_text ? mb_substr( $fallback_text, 0, 500 ) : '',
 				'stats'       => $stats,
 				'preview_url' => $preview_url,
-				'message'     => __( 'Elementor returned empty HTML. Text extracted from raw data instead. The page may need to be saved in the Elementor editor first.', 'mcpwp' ),
+				'message'     => __( 'Elementor returned empty HTML. Text extracted from raw data instead. The page may need to be saved in the Elementor editor first.', 'mumcp' ),
 			);
 
 			return $response;

@@ -399,13 +399,13 @@ class Mcpwp_Elementor_Pro {
 	 */
 	public function get_template( $template_id ) {
 		if ( ! $this->is_elementor_active() ) {
-			return new WP_Error( 'elementor_inactive', __( 'Elementor is not active.', 'mcpwp' ) );
+			return new WP_Error( 'elementor_inactive', __( 'Elementor is not active.', 'mumcp' ) );
 		}
 
 		$template = get_post( $template_id );
 
 		if ( ! $template || 'elementor_library' !== $template->post_type ) {
-			return new WP_Error( 'not_found', __( 'Template not found.', 'mcpwp' ) );
+			return new WP_Error( 'not_found', __( 'Template not found.', 'mumcp' ) );
 		}
 
 		return $this->format_template( $template, true );
@@ -424,7 +424,7 @@ class Mcpwp_Elementor_Pro {
 		}
 
 		if ( empty( $part['is_part'] ) ) {
-			return new WP_Error( 'not_part', __( 'Template is not marked as a reusable part.', 'mcpwp' ) );
+			return new WP_Error( 'not_part', __( 'Template is not marked as a reusable part.', 'mumcp' ) );
 		}
 
 		return $part;
@@ -443,7 +443,7 @@ class Mcpwp_Elementor_Pro {
 		}
 
 		if ( empty( $archetype['is_archetype'] ) ) {
-			return new WP_Error( 'not_archetype', __( 'Template is not marked as an archetype.', 'mcpwp' ) );
+			return new WP_Error( 'not_archetype', __( 'Template is not marked as an archetype.', 'mumcp' ) );
 		}
 
 		return $archetype;
@@ -503,10 +503,10 @@ class Mcpwp_Elementor_Pro {
 	 */
 	public function create_template( $data ) {
 		if ( ! $this->is_elementor_active() ) {
-			return new WP_Error( 'elementor_inactive', __( 'Elementor is not active.', 'mcpwp' ) );
+			return new WP_Error( 'elementor_inactive', __( 'Elementor is not active.', 'mumcp' ) );
 		}
 
-		$title = ! empty( $data['title'] ) ? sanitize_text_field( $data['title'] ) : __( 'Untitled Template', 'mcpwp' );
+		$title = ! empty( $data['title'] ) ? sanitize_text_field( $data['title'] ) : __( 'Untitled Template', 'mumcp' );
 		$type  = ! empty( $data['type'] ) ? sanitize_text_field( $data['type'] ) : 'page';
 
 		// Valid template types.
@@ -556,7 +556,7 @@ class Mcpwp_Elementor_Pro {
 		$template = get_post( $template_id );
 
 		if ( ! $template || 'elementor_library' !== $template->post_type ) {
-			return new WP_Error( 'not_found', __( 'Template not found.', 'mcpwp' ) );
+			return new WP_Error( 'not_found', __( 'Template not found.', 'mumcp' ) );
 		}
 
 		// Update title if provided.
@@ -689,7 +689,7 @@ class Mcpwp_Elementor_Pro {
 		}
 
 		if ( ! is_array( $elements ) || empty( $elements ) ) {
-			return new WP_Error( 'empty_part', __( 'Reusable part has no Elementor elements.', 'mcpwp' ) );
+			return new WP_Error( 'empty_part', __( 'Reusable part has no Elementor elements.', 'mumcp' ) );
 		}
 
 		$basic   = $this->get_basic_handler();
@@ -899,13 +899,13 @@ class Mcpwp_Elementor_Pro {
 		$template = get_post( $template_id );
 
 		if ( ! $template || 'elementor_library' !== $template->post_type ) {
-			return new WP_Error( 'not_found', __( 'Template not found.', 'mcpwp' ) );
+			return new WP_Error( 'not_found', __( 'Template not found.', 'mumcp' ) );
 		}
 
 		$result = wp_delete_post( $template_id, $force );
 
 		if ( ! $result ) {
-			return new WP_Error( 'delete_failed', __( 'Failed to delete template.', 'mcpwp' ) );
+			return new WP_Error( 'delete_failed', __( 'Failed to delete template.', 'mumcp' ) );
 		}
 
 		return true;
@@ -922,7 +922,7 @@ class Mcpwp_Elementor_Pro {
 		$source = get_post( $source_id );
 
 		if ( ! $source ) {
-			return new WP_Error( 'not_found', __( 'Source page not found.', 'mcpwp' ) );
+			return new WP_Error( 'not_found', __( 'Source page not found.', 'mumcp' ) );
 		}
 
 		$title  = ! empty( $args['title'] ) ? sanitize_text_field( $args['title'] ) : $source->post_title . ' (Copy)';
@@ -987,10 +987,10 @@ class Mcpwp_Elementor_Pro {
 	 */
 	public function create_landing_page( $data ) {
 		if ( ! $this->is_elementor_active() ) {
-			return new WP_Error( 'elementor_inactive', __( 'Elementor is not active.', 'mcpwp' ) );
+			return new WP_Error( 'elementor_inactive', __( 'Elementor is not active.', 'mumcp' ) );
 		}
 
-		$title = ! empty( $data['title'] ) ? sanitize_text_field( $data['title'] ) : __( 'Landing Page', 'mcpwp' );
+		$title = ! empty( $data['title'] ) ? sanitize_text_field( $data['title'] ) : __( 'Landing Page', 'mumcp' );
 
 		// Create the page.
 		$page_data = array(
@@ -1109,14 +1109,14 @@ class Mcpwp_Elementor_Pro {
 		$template = get_post( $template_id );
 
 		if ( ! $template || 'elementor_library' !== $template->post_type ) {
-			return new WP_Error( 'not_found', __( 'Template not found.', 'mcpwp' ) );
+			return new WP_Error( 'not_found', __( 'Template not found.', 'mumcp' ) );
 		}
 
 		// Get template data.
 		$template_data = get_post_meta( $template_id, '_elementor_data', true );
 
 		if ( empty( $template_data ) ) {
-			return new WP_Error( 'empty_template', __( 'Template has no content.', 'mcpwp' ) );
+			return new WP_Error( 'empty_template', __( 'Template has no content.', 'mumcp' ) );
 		}
 
 		// Set required meta for frontend rendering.
@@ -1150,7 +1150,7 @@ class Mcpwp_Elementor_Pro {
 	 */
 	public function get_globals() {
 		if ( ! $this->is_elementor_pro_active() ) {
-			return new WP_Error( 'pro_required', __( 'Elementor Pro is required for global settings.', 'mcpwp' ) );
+			return new WP_Error( 'pro_required', __( 'Elementor Pro is required for global settings.', 'mumcp' ) );
 		}
 
 		$globals = array(

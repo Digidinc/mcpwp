@@ -46,13 +46,13 @@ class Mcpwp_REST_Google_Indexing extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'urls'   => array(
-							'description' => __( 'Array of URLs to submit for indexing.', 'mcpwp' ),
+							'description' => __( 'Array of URLs to submit for indexing.', 'mumcp' ),
 							'type'        => 'array',
 							'required'    => true,
 							'items'       => array( 'type' => 'string' ),
 						),
 						'action' => array(
-							'description' => __( 'Indexing action: URL_UPDATED or URL_DELETED.', 'mcpwp' ),
+							'description' => __( 'Indexing action: URL_UPDATED or URL_DELETED.', 'mumcp' ),
 							'type'        => 'string',
 							'enum'        => array( 'URL_UPDATED', 'URL_DELETED' ),
 							'default'     => 'URL_UPDATED',
@@ -73,7 +73,7 @@ class Mcpwp_REST_Google_Indexing extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'url' => array(
-							'description' => __( 'URL to check indexing status for.', 'mcpwp' ),
+							'description' => __( 'URL to check indexing status for.', 'mumcp' ),
 							'type'        => 'string',
 							'required'    => true,
 						),

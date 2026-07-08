@@ -227,7 +227,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 				'permission_callback' => array( $this, 'check_permission' ),
 				'args'                => array(
 					'widget' => array(
-						'description' => __( 'Widget type name to get full controls schema.', 'mcpwp' ),
+						'description' => __( 'Widget type name to get full controls schema.', 'mumcp' ),
 						'type'        => 'string',
 					),
 				),
@@ -266,12 +266,12 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 							$this->get_pagination_args(),
 							array(
 								'status' => array(
-									'description' => __( 'Filter by post status: publish, draft, or any.', 'mcpwp' ),
+									'description' => __( 'Filter by post status: publish, draft, or any.', 'mumcp' ),
 									'type'        => 'string',
 									'default'     => 'any',
 								),
 								'search' => array(
-									'description' => __( 'Search by snippet title/content.', 'mcpwp' ),
+									'description' => __( 'Search by snippet title/content.', 'mumcp' ),
 									'type'        => 'string',
 								),
 							)
@@ -439,7 +439,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 					'dry_run'  => true,
 					'valid'    => true,
 					'payload'  => $this->redact_custom_code_payload( $prepared ),
-					'message'  => __( 'Custom Code payload is valid. Nothing was saved because dry_run=true.', 'mcpwp' ),
+					'message'  => __( 'Custom Code payload is valid. Nothing was saved because dry_run=true.', 'mumcp' ),
 				)
 			);
 		}
@@ -519,7 +519,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 					'valid'   => true,
 					'id'      => (int) $post->ID,
 					'payload' => $this->redact_custom_code_payload( $prepared ),
-					'message' => __( 'Custom Code update payload is valid. Nothing was saved because dry_run=true.', 'mcpwp' ),
+					'message' => __( 'Custom Code update payload is valid. Nothing was saved because dry_run=true.', 'mumcp' ),
 				)
 			);
 		}
@@ -589,7 +589,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 
 		if ( ! $post || $this->custom_code_cpt !== $post->post_type ) {
 			$this->log_activity( 'sanitize_elementor_custom_code', $request, null, 404 );
-			return $this->error_response( 'not_found', __( 'Custom Code snippet not found.', 'mcpwp' ), 404 );
+			return $this->error_response( 'not_found', __( 'Custom Code snippet not found.', 'mumcp' ), 404 );
 		}
 
 		$meta    = get_post_meta( $id );
@@ -646,7 +646,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 
 		if ( ! $post || $this->custom_code_cpt !== $post->post_type ) {
 			$this->log_activity( 'set_elementor_custom_code_status', $request, null, 404 );
-			return $this->error_response( 'not_found', __( 'Custom Code snippet not found.', 'mcpwp' ), 404 );
+			return $this->error_response( 'not_found', __( 'Custom Code snippet not found.', 'mumcp' ), 404 );
 		}
 
 		$status = $this->validate_post_status( $status, array( 'publish', 'draft' ) );
@@ -683,35 +683,35 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	private function get_custom_code_write_args( $creating ) {
 		return array(
 			'title'      => array(
-				'description' => __( 'Snippet title.', 'mcpwp' ),
+				'description' => __( 'Snippet title.', 'mumcp' ),
 				'type'        => 'string',
 				'required'    => (bool) $creating,
 			),
 			'code'       => array(
-				'description' => __( 'Raw HTML, CSS, or JavaScript code. PHP is not supported by Elementor Custom Code.', 'mcpwp' ),
+				'description' => __( 'Raw HTML, CSS, or JavaScript code. PHP is not supported by Elementor Custom Code.', 'mumcp' ),
 				'type'        => 'string',
 				'required'    => (bool) $creating,
 			),
 			'content'    => array(
-				'description' => __( 'Alias for code, for compatibility with generic post tools.', 'mcpwp' ),
+				'description' => __( 'Alias for code, for compatibility with generic post tools.', 'mumcp' ),
 				'type'        => 'string',
 			),
 			'location'   => array(
-				'description' => __( 'Injection location: head, body_start, or body_end.', 'mcpwp' ),
+				'description' => __( 'Injection location: head, body_start, or body_end.', 'mumcp' ),
 				'type'        => 'string',
 				'default'     => 'head',
 			),
 			'status'     => array(
-				'description' => __( 'Post status: draft or publish.', 'mcpwp' ),
+				'description' => __( 'Post status: draft or publish.', 'mumcp' ),
 				'type'        => 'string',
 				'default'     => 'draft',
 			),
 			'conditions' => array(
-				'description' => __( 'Elementor display conditions. Default is include/general (entire site). Example: [{"type":"include","name":"general"}].', 'mcpwp' ),
+				'description' => __( 'Elementor display conditions. Default is include/general (entire site). Example: [{"type":"include","name":"general"}].', 'mumcp' ),
 				'type'        => 'array',
 			),
 			'dry_run'    => array(
-				'description' => __( 'Validate and normalize without saving.', 'mcpwp' ),
+				'description' => __( 'Validate and normalize without saving.', 'mumcp' ),
 				'type'        => 'boolean',
 				'default'     => false,
 			),
@@ -729,7 +729,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		if ( function_exists( 'post_type_exists' ) && ! post_type_exists( $this->custom_code_cpt ) ) {
 			return $this->error_response(
 				'elementor_custom_code_unavailable',
-				__( 'Elementor Pro Custom Code is unavailable because the elementor_snippet post type is not registered.', 'mcpwp' ),
+				__( 'Elementor Pro Custom Code is unavailable because the elementor_snippet post type is not registered.', 'mumcp' ),
 				400
 			);
 		}
@@ -747,7 +747,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		}
 
 		if ( $creating && empty( $payload['title'] ) ) {
-			return $this->error_response( 'missing_title', __( 'Custom Code title is required.', 'mcpwp' ), 400 );
+			return $this->error_response( 'missing_title', __( 'Custom Code title is required.', 'mumcp' ), 400 );
 		}
 
 		$raw_code = $request->get_param( 'code' );
@@ -762,7 +762,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		}
 
 		if ( $creating && ( ! array_key_exists( 'code', $payload ) || '' === trim( $payload['code'] ) ) ) {
-			return $this->error_response( 'missing_code', __( 'Custom Code raw code is required.', 'mcpwp' ), 400 );
+			return $this->error_response( 'missing_code', __( 'Custom Code raw code is required.', 'mumcp' ), 400 );
 		}
 
 		if ( null !== $request->get_param( 'location' ) ) {
@@ -780,7 +780,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		$conditions = $request->get_param( 'conditions' );
 		if ( null !== $conditions ) {
 			if ( ! is_array( $conditions ) ) {
-				return $this->error_response( 'invalid_conditions', __( 'conditions must be an array.', 'mcpwp' ), 400 );
+				return $this->error_response( 'invalid_conditions', __( 'conditions must be an array.', 'mumcp' ), 400 );
 			}
 			$payload['conditions'] = $this->normalize_custom_code_conditions( $conditions );
 		} elseif ( $creating ) {
@@ -938,7 +938,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		$post = get_post( $id );
 
 		if ( ! $post || $this->custom_code_cpt !== $post->post_type ) {
-			return $this->error_response( 'not_found', __( 'Custom Code snippet not found.', 'mcpwp' ), 404 );
+			return $this->error_response( 'not_found', __( 'Custom Code snippet not found.', 'mumcp' ), 404 );
 		}
 
 		return $post;
@@ -1247,7 +1247,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		$page_id     = absint( $request->get_param( 'page_id' ) );
 
 		if ( ! $page_id ) {
-			return $this->error_response( 'missing_page_id', __( 'Page ID is required.', 'mcpwp' ), 400 );
+			return $this->error_response( 'missing_page_id', __( 'Page ID is required.', 'mumcp' ), 400 );
 		}
 
 		$result = $this->elementor_pro->apply_template_to_page( $page_id, $template_id );
@@ -1392,7 +1392,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		$page_id      = absint( $request->get_param( 'page_id' ) );
 
 		if ( ! $page_id ) {
-			return $this->error_response( 'missing_page_id', __( 'Page ID is required.', 'mcpwp' ), 400 );
+			return $this->error_response( 'missing_page_id', __( 'Page ID is required.', 'mumcp' ), 400 );
 		}
 
 		$result = $this->elementor_pro->apply_archetype_to_page( $archetype_id, $page_id );
@@ -1539,7 +1539,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		$element_id = $request->get_param( 'element_id' );
 
 		if ( ! $page_id || ! $element_id ) {
-			return $this->error_response( 'missing_params', __( 'page_id and element_id are required.', 'mcpwp' ), 400 );
+			return $this->error_response( 'missing_params', __( 'page_id and element_id are required.', 'mumcp' ), 400 );
 		}
 
 		$data = array(
@@ -1607,7 +1607,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		$position = (string) ( $request->get_param( 'position' ) ?: 'end' );
 
 		if ( ! $page_id ) {
-			return $this->error_response( 'missing_page_id', __( 'Page ID is required.', 'mcpwp' ), 400 );
+			return $this->error_response( 'missing_page_id', __( 'Page ID is required.', 'mumcp' ), 400 );
 		}
 
 		if ( 'insert' === $mode ) {
@@ -1646,7 +1646,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		$source_id = absint( $request->get_param( 'source_id' ) );
 
 		if ( ! $source_id ) {
-			return $this->error_response( 'missing_source_id', __( 'Source ID is required.', 'mcpwp' ), 400 );
+			return $this->error_response( 'missing_source_id', __( 'Source ID is required.', 'mumcp' ), 400 );
 		}
 
 		$args = array(
@@ -1751,7 +1751,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		$this->log_activity( 'set_elementor_globals', $request );
 
 		if ( ! class_exists( '\Elementor\Plugin' ) ) {
-			return $this->error_response( 'elementor_not_active', __( 'Elementor is not active.', 'mcpwp' ), 400 );
+			return $this->error_response( 'elementor_not_active', __( 'Elementor is not active.', 'mumcp' ), 400 );
 		}
 
 		$params = $request->get_json_params();
@@ -1760,13 +1760,13 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		}
 
 		if ( empty( $params ) || ! is_array( $params ) ) {
-			return $this->error_response( 'missing_params', __( 'Globals data is required.', 'mcpwp' ), 400 );
+			return $this->error_response( 'missing_params', __( 'Globals data is required.', 'mumcp' ), 400 );
 		}
 
 		// Get the active kit
 		$kit = \Elementor\Plugin::$instance->kits_manager->get_active_kit();
 		if ( ! $kit || ! $kit->get_id() ) {
-			return $this->error_response( 'no_kit', __( 'No active Elementor kit found.', 'mcpwp' ), 500 );
+			return $this->error_response( 'no_kit', __( 'No active Elementor kit found.', 'mumcp' ), 500 );
 		}
 
 		$kit_id       = $kit->get_id();
@@ -1803,7 +1803,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		$response = array(
 			'kit_id'   => $kit_id,
 			'settings' => $updated,
-			'message'  => __( 'Elementor globals updated.', 'mcpwp' ),
+			'message'  => __( 'Elementor globals updated.', 'mumcp' ),
 		);
 		if ( ! empty( $warnings ) ) {
 			$response['warnings'] = $warnings;

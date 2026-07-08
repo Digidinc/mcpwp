@@ -36,12 +36,12 @@ class Mcpwp_REST_Site_Custom_Css extends Mcpwp_REST_API {
 						'permission_callback' => array( $this, 'check_permission' ),
 						'args'                => array(
 							'css'  => array(
-								'description' => __( 'CSS code to set or append.', 'mcpwp' ),
+								'description' => __( 'CSS code to set or append.', 'mumcp' ),
 								'type'        => 'string',
 								'required'    => true,
 							),
 							'mode' => array(
-								'description' => __( 'How to apply: "replace" overwrites all CSS, "append" adds to existing.', 'mcpwp' ),
+								'description' => __( 'How to apply: "replace" overwrites all CSS, "append" adds to existing.', 'mumcp' ),
 								'type'        => 'string',
 								'default'     => 'append',
 								'enum'        => array( 'replace', 'append' ),
@@ -84,7 +84,7 @@ class Mcpwp_REST_Site_Custom_Css extends Mcpwp_REST_API {
 
 	public function set_custom_css( $request ) {
 		if ( defined( 'MCPWP_WPORG_BUILD' ) ) {
-			return $this->error_response( 'not_available', __( 'This endpoint is not available in this build.', 'mcpwp' ), 403 );
+			return $this->error_response( 'not_available', __( 'This endpoint is not available in this build.', 'mumcp' ), 403 );
 		}
 		$this->log_activity( 'set_custom_css', $request );
 
@@ -166,13 +166,13 @@ class Mcpwp_REST_Site_Custom_Css extends Mcpwp_REST_API {
 			$response['thim_custom_css_synced'] = true;
 			$theme_warning = sprintf(
 				/* translators: %s: theme name */
-				__( "Theme '%s' uses its own CSS system (thim_custom_css). CSS has been dual-written to both WordPress Customizer and Eduma's custom CSS option.", 'mcpwp' ),
+				__( "Theme '%s' uses its own CSS system (thim_custom_css). CSS has been dual-written to both WordPress Customizer and Eduma's custom CSS option.", 'mumcp' ),
 				$theme_name
 			);
 		} elseif ( false !== stripos( $theme_name, 'flavor' ) ) {
 			$theme_warning = sprintf(
 				/* translators: %s: theme name */
-				__( "Theme '%s' may use its own CSS system. CSS saved via WordPress Customizer but may not render. Check theme settings.", 'mcpwp' ),
+				__( "Theme '%s' may use its own CSS system. CSS saved via WordPress Customizer but may not render. Check theme settings.", 'mumcp' ),
 				$theme_name
 			);
 		}
@@ -189,7 +189,7 @@ class Mcpwp_REST_Site_Custom_Css extends Mcpwp_REST_API {
 		if ( ! $css_callback_hooked ) {
 			$response['warning'] = __(
 				'CSS saved but may not render on this theme. The active theme does not have the wp_custom_css_cb callback hooked to wp_head, which means WordPress Additional CSS will not be output. Consider using Elementor Custom CSS or a code snippets plugin as an alternative.',
-				'mcpwp'
+				'mumcp'
 			);
 		}
 
@@ -215,11 +215,11 @@ class Mcpwp_REST_Site_Custom_Css extends Mcpwp_REST_API {
 			$verification['verified_means']  = 'snippet_found confirms the CSS text appears in the rendered page; it does NOT verify the rule wins in cascade over Elementor inline styles or later-loaded theme CSS.';
 
 			if ( ! $verification['verified'] && $css_callback_hooked ) {
-				$verification['warning'] = __( 'CSS was saved but could not be confirmed in the rendered page. It may be overridden by theme or caching.', 'mcpwp' );
+				$verification['warning'] = __( 'CSS was saved but could not be confirmed in the rendered page. It may be overridden by theme or caching.', 'mumcp' );
 			} elseif ( ! $verification['verified'] && ! $css_callback_hooked ) {
 				$verification['warning'] = __(
 					'CSS saved but may not render on this theme. The active theme may not support WordPress Additional CSS (wp_custom_css_cb is not hooked). Consider using Elementor Custom CSS or a code snippets plugin as an alternative.',
-					'mcpwp'
+					'mumcp'
 				);
 			}
 		}
@@ -263,7 +263,7 @@ class Mcpwp_REST_Site_Custom_Css extends Mcpwp_REST_API {
 
 	public function delete_custom_css( $request ) {
 		if ( defined( 'MCPWP_WPORG_BUILD' ) ) {
-			return $this->error_response( 'not_available', __( 'This endpoint is not available in this build.', 'mcpwp' ), 403 );
+			return $this->error_response( 'not_available', __( 'This endpoint is not available in this build.', 'mumcp' ), 403 );
 		}
 		$this->log_activity( 'delete_custom_css', $request );
 
@@ -282,7 +282,7 @@ class Mcpwp_REST_Site_Custom_Css extends Mcpwp_REST_API {
 			array(
 				'deleted'         => true,
 				'previous_length' => $previous_length,
-				'message'         => __( 'All custom CSS has been removed.', 'mcpwp' ),
+				'message'         => __( 'All custom CSS has been removed.', 'mumcp' ),
 			)
 		);
 	}

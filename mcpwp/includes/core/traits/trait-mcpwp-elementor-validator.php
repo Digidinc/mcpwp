@@ -30,7 +30,7 @@ trait Mcpwp_Elementor_Validator_Trait {
 			);
 			return new WP_Error(
 				'not_found',
-				__( 'Post not found or unsupported type.', 'mcpwp' ),
+				__( 'Post not found or unsupported type.', 'mumcp' ),
 				array(
 					'status' => 404,
 					'hint'   => $hint,

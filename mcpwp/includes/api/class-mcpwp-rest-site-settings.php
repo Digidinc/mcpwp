@@ -78,7 +78,7 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'key' => array(
-							'description' => __( 'Option key to retrieve.', 'mcpwp' ),
+							'description' => __( 'Option key to retrieve.', 'mumcp' ),
 							'type'        => 'string',
 							'required'    => true,
 						),
@@ -90,12 +90,12 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'key'   => array(
-							'description' => __( 'Option key to update.', 'mcpwp' ),
+							'description' => __( 'Option key to update.', 'mumcp' ),
 							'type'        => 'string',
 							'required'    => true,
 						),
 						'value' => array(
-							'description' => __( 'Option value to set.', 'mcpwp' ),
+							'description' => __( 'Option value to set.', 'mumcp' ),
 							'required'    => true,
 						),
 					),
@@ -159,7 +159,7 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 		if ( empty( $params ) ) {
 			return $this->error_response(
 				'missing_settings',
-				__( 'Settings data is required.', 'mcpwp' ),
+				__( 'Settings data is required.', 'mumcp' ),
 				400
 			);
 		}
@@ -201,7 +201,7 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 		if ( empty( $updated ) ) {
 			return $this->error_response(
 				'no_valid_settings',
-				__( 'No valid settings provided to update.', 'mcpwp' ),
+				__( 'No valid settings provided to update.', 'mumcp' ),
 				400
 			);
 		}
@@ -247,7 +247,7 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 		if ( empty( $params ) ) {
 			return $this->error_response(
 				'missing_settings',
-				__( 'Settings data is required.', 'mcpwp' ),
+				__( 'Settings data is required.', 'mumcp' ),
 				400
 			);
 		}
@@ -366,7 +366,7 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 		if ( empty( $params ) ) {
 			return $this->error_response(
 				'missing_options',
-				__( 'Options data is required.', 'mcpwp' ),
+				__( 'Options data is required.', 'mumcp' ),
 				400
 			);
 		}
@@ -428,7 +428,7 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 		if ( empty( $updated ) ) {
 			return $this->error_response(
 				'no_valid_options',
-				__( 'No valid options provided to update.', 'mcpwp' ),
+				__( 'No valid options provided to update.', 'mumcp' ),
 				400
 			);
 		}
@@ -450,7 +450,7 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 			return $this->error_response(
 				'forbidden_option',
 				/* translators: %s: option key */
-				sprintf( __( 'Option "%s" is not accessible via API. Allowed: core WP options and prefixes: elementor_*, wpseo_*, rank_math_*, astra_*, theme_mods_*, widget_*, woocommerce_*, mcpwp_*. Sensitive keys (passwords, tokens, secrets) are always blocked.', 'mcpwp' ), $key ),
+				sprintf( __( 'Option "%s" is not accessible via API. Allowed: core WP options and prefixes: elementor_*, wpseo_*, rank_math_*, astra_*, theme_mods_*, widget_*, woocommerce_*, mcpwp_*. Sensitive keys (passwords, tokens, secrets) are always blocked.', 'mumcp' ), $key ),
 				403
 			);
 		}
@@ -475,7 +475,7 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 			return $this->error_response(
 				'forbidden_option',
 				/* translators: %s: option key */
-				sprintf( __( 'Option "%s" is not accessible via API. Allowed: core WP options and prefixes: elementor_*, wpseo_*, rank_math_*, astra_*, theme_mods_*, widget_*, woocommerce_*, mcpwp_*. Sensitive keys (passwords, tokens, secrets) are always blocked.', 'mcpwp' ), $key ),
+				sprintf( __( 'Option "%s" is not accessible via API. Allowed: core WP options and prefixes: elementor_*, wpseo_*, rank_math_*, astra_*, theme_mods_*, widget_*, woocommerce_*, mcpwp_*. Sensitive keys (passwords, tokens, secrets) are always blocked.', 'mumcp' ), $key ),
 				403
 			);
 		}
@@ -496,7 +496,7 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 				return $this->error_response(
 					'option_type_mismatch',
 					/* translators: %s: option key */
-					sprintf( __( 'Option "%s" currently holds an array/object; refusing to overwrite it with a plain string. Send the value as a JSON object/array, or pass force_type_change=true to override.', 'mcpwp' ), $key ),
+					sprintf( __( 'Option "%s" currently holds an array/object; refusing to overwrite it with a plain string. Send the value as a JSON object/array, or pass force_type_change=true to override.', 'mumcp' ), $key ),
 					409
 				);
 			}
@@ -506,7 +506,7 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 		if ( 'admin_email' === $key ) {
 			$value = sanitize_email( $value );
 			if ( ! is_email( $value ) ) {
-				return $this->error_response( 'invalid_email', __( 'Invalid email address.', 'mcpwp' ), 400 );
+				return $this->error_response( 'invalid_email', __( 'Invalid email address.', 'mumcp' ), 400 );
 			}
 		} elseif ( in_array( $key, array( 'posts_per_page', 'posts_per_rss', 'page_on_front', 'page_for_posts', 'default_category', 'thumbnail_size_w', 'thumbnail_size_h', 'medium_size_w', 'medium_size_h', 'large_size_w', 'large_size_h', 'site_icon' ), true ) ) {
 			$value = absint( $value );
@@ -723,7 +723,7 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 			if ( ! $attachment || 'attachment' !== $attachment->post_type ) {
 				return $this->error_response(
 					'invalid_attachment',
-					__( 'Invalid media ID.', 'mcpwp' ),
+					__( 'Invalid media ID.', 'mumcp' ),
 					400
 				);
 			}
@@ -732,7 +732,7 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 			if ( ! wp_attachment_is_image( $attachment_id ) ) {
 				return $this->error_response(
 					'not_image',
-					__( 'Attachment must be an image.', 'mcpwp' ),
+					__( 'Attachment must be an image.', 'mumcp' ),
 					400
 				);
 			}
@@ -785,7 +785,7 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 				'tmp_name' => $tmp,
 			);
 
-			$attachment_id = media_handle_sideload( $file_array, 0, __( 'Site Icon', 'mcpwp' ) );
+			$attachment_id = media_handle_sideload( $file_array, 0, __( 'Site Icon', 'mumcp' ) );
 
 			if ( is_wp_error( $attachment_id ) ) {
 				wp_delete_file( $tmp );
@@ -810,7 +810,7 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 
 		return $this->error_response(
 			'missing_param',
-			__( 'Provide either "id" (media ID) or "url" (image URL).', 'mcpwp' ),
+			__( 'Provide either "id" (media ID) or "url" (image URL).', 'mumcp' ),
 			400
 		);
 	}
@@ -824,7 +824,7 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 			return $this->success_response(
 				array(
 					'deleted' => false,
-					'message' => __( 'No favicon was set.', 'mcpwp' ),
+					'message' => __( 'No favicon was set.', 'mumcp' ),
 				)
 			);
 		}

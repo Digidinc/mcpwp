@@ -389,7 +389,7 @@ class Mcpwp_Updater {
 			$links[] = sprintf(
 				'<a href="%s">%s</a>',
 				esc_url( wp_nonce_url( admin_url( 'update-core.php?force-check=1' ), 'force-check' ) ),
-				esc_html__( 'Check for updates', 'mcpwp' )
+				esc_html__( 'Check for updates', 'mumcp' )
 			);
 		}
 		return $links;

@@ -108,7 +108,7 @@ class Mcpwp_Google_Indexing {
 		if ( false === $private_key ) {
 			return new WP_Error(
 				'invalid_private_key',
-				__( 'Failed to parse the service account private key.', 'mcpwp' ),
+				__( 'Failed to parse the service account private key.', 'mumcp' ),
 				array( 'status' => 500 )
 			);
 		}
@@ -119,7 +119,7 @@ class Mcpwp_Google_Indexing {
 		if ( ! $success ) {
 			return new WP_Error(
 				'signing_failed',
-				__( 'Failed to sign the JWT.', 'mcpwp' ),
+				__( 'Failed to sign the JWT.', 'mumcp' ),
 				array( 'status' => 500 )
 			);
 		}
@@ -154,7 +154,7 @@ class Mcpwp_Google_Indexing {
 		if ( ! $sa ) {
 			return new WP_Error(
 				'no_service_account',
-				__( 'Google Indexing API service account not configured. Add it via MCPWP > Integrations.', 'mcpwp' ),
+				__( 'Google Indexing API service account not configured. Add it via MCPWP > Integrations.', 'mumcp' ),
 				array( 'status' => 400 )
 			);
 		}
@@ -183,7 +183,7 @@ class Mcpwp_Google_Indexing {
 				'token_request_failed',
 				sprintf(
 					/* translators: %s: error message */
-					__( 'Failed to get access token: %s', 'mcpwp' ),
+					__( 'Failed to get access token: %s', 'mumcp' ),
 					$response->get_error_message()
 				),
 				array( 'status' => 502 )
@@ -202,7 +202,7 @@ class Mcpwp_Google_Indexing {
 				'token_error',
 				sprintf(
 					/* translators: %s: error message */
-					__( 'Google OAuth2 error: %s', 'mcpwp' ),
+					__( 'Google OAuth2 error: %s', 'mumcp' ),
 					$error_msg
 				),
 				array( 'status' => 502 )
@@ -226,7 +226,7 @@ class Mcpwp_Google_Indexing {
 		if ( empty( $urls ) || ! is_array( $urls ) ) {
 			return new WP_Error(
 				'no_urls',
-				__( 'No URLs provided.', 'mcpwp' ),
+				__( 'No URLs provided.', 'mumcp' ),
 				array( 'status' => 400 )
 			);
 		}
@@ -237,7 +237,7 @@ class Mcpwp_Google_Indexing {
 				'invalid_action',
 				sprintf(
 					/* translators: %s: valid actions */
-					__( 'Invalid action. Must be one of: %s', 'mcpwp' ),
+					__( 'Invalid action. Must be one of: %s', 'mumcp' ),
 					implode( ', ', $valid_actions )
 				),
 				array( 'status' => 400 )
@@ -248,7 +248,7 @@ class Mcpwp_Google_Indexing {
 		if ( count( $urls ) > 200 ) {
 			return new WP_Error(
 				'too_many_urls',
-				__( 'Maximum 200 URLs per request (Google Indexing API daily quota).', 'mcpwp' ),
+				__( 'Maximum 200 URLs per request (Google Indexing API daily quota).', 'mumcp' ),
 				array( 'status' => 400 )
 			);
 		}
@@ -334,7 +334,7 @@ class Mcpwp_Google_Indexing {
 		if ( empty( $url ) ) {
 			return new WP_Error(
 				'no_url',
-				__( 'No URL provided.', 'mcpwp' ),
+				__( 'No URL provided.', 'mumcp' ),
 				array( 'status' => 400 )
 			);
 		}
@@ -413,7 +413,7 @@ class Mcpwp_Google_Indexing {
 
 		return array(
 			'success' => true,
-			'message' => __( 'Successfully authenticated with Google Indexing API.', 'mcpwp' ),
+			'message' => __( 'Successfully authenticated with Google Indexing API.', 'mumcp' ),
 		);
 	}
 }

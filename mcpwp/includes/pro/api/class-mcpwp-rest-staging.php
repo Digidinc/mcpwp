@@ -65,29 +65,29 @@ class Mcpwp_REST_Staging extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'source'        => array(
-							'description'       => __( 'Source environment ID.', 'mcpwp' ),
+							'description'       => __( 'Source environment ID.', 'mumcp' ),
 							'type'              => 'string',
 							'required'          => true,
 							'sanitize_callback' => 'sanitize_text_field',
 						),
 						'destination'   => array(
-							'description'       => __( 'Destination environment ID.', 'mcpwp' ),
+							'description'       => __( 'Destination environment ID.', 'mumcp' ),
 							'type'              => 'string',
 							'required'          => true,
 							'sanitize_callback' => 'sanitize_text_field',
 						),
 						'include_db'    => array(
-							'description' => __( 'Include database in push.', 'mcpwp' ),
+							'description' => __( 'Include database in push.', 'mumcp' ),
 							'type'        => 'boolean',
 							'default'     => true,
 						),
 						'include_files' => array(
-							'description' => __( 'Include files in push.', 'mcpwp' ),
+							'description' => __( 'Include files in push.', 'mumcp' ),
 							'type'        => 'boolean',
 							'default'     => true,
 						),
 						'reason'        => array(
-							'description'       => __( 'Reason for this push (required when destination is live/production).', 'mcpwp' ),
+							'description'       => __( 'Reason for this push (required when destination is live/production).', 'mumcp' ),
 							'type'              => 'string',
 							'default'           => '',
 							'sanitize_callback' => 'sanitize_textarea_field',
@@ -108,7 +108,7 @@ class Mcpwp_REST_Staging extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'id' => array(
-							'description' => __( 'Operation ID returned by the push endpoint.', 'mcpwp' ),
+							'description' => __( 'Operation ID returned by the push endpoint.', 'mumcp' ),
 							'type'        => 'string',
 							'required'    => true,
 						),

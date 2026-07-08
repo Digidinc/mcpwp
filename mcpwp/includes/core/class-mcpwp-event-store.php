@@ -126,27 +126,27 @@ class Mcpwp_Event_Store {
 		return array(
 			'approval.created' => array(
 				'hook'        => 'mcpwp_approval_created',
-				'description' => __( 'An approval request was created.', 'mcpwp' ),
+				'description' => __( 'An approval request was created.', 'mumcp' ),
 			),
 			'approval.approved' => array(
 				'hook'        => 'mcpwp_approval_approved',
-				'description' => __( 'An approval request was approved.', 'mcpwp' ),
+				'description' => __( 'An approval request was approved.', 'mumcp' ),
 			),
 			'approval.rejected' => array(
 				'hook'        => 'mcpwp_approval_rejected',
-				'description' => __( 'An approval request was rejected.', 'mcpwp' ),
+				'description' => __( 'An approval request was rejected.', 'mumcp' ),
 			),
 			'approval.applied' => array(
 				'hook'        => 'mcpwp_approval_applied',
-				'description' => __( 'An approved change was applied.', 'mcpwp' ),
+				'description' => __( 'An approved change was applied.', 'mumcp' ),
 			),
 			'approval.rolled_back' => array(
 				'hook'        => 'mcpwp_approval_rolled_back',
-				'description' => __( 'An applied change was rolled back.', 'mcpwp' ),
+				'description' => __( 'An applied change was rolled back.', 'mumcp' ),
 			),
 			'seo.audit_completed' => array(
 				'hook'        => 'mcpwp_seo_audit_completed',
-				'description' => __( 'A stored SEO audit completed.', 'mcpwp' ),
+				'description' => __( 'A stored SEO audit completed.', 'mumcp' ),
 			),
 		);
 	}

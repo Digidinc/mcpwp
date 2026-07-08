@@ -86,23 +86,23 @@ class Mcpwp_REST_Events extends Mcpwp_REST_API {
 				'default'     => 50,
 				'minimum'     => 1,
 				'maximum'     => 100,
-				'description' => __( 'Items per page.', 'mcpwp' ),
+				'description' => __( 'Items per page.', 'mumcp' ),
 			),
 			'page'     => array(
 				'type'        => 'integer',
 				'default'     => 1,
 				'minimum'     => 1,
-				'description' => __( 'Page number.', 'mcpwp' ),
+				'description' => __( 'Page number.', 'mumcp' ),
 			),
 			'status'   => array(
 				'type'        => 'string',
 				'default'     => 'publish',
 				'enum'        => array( 'publish', 'draft', 'pending', 'private', 'any' ),
-				'description' => __( 'Event status.', 'mcpwp' ),
+				'description' => __( 'Event status.', 'mumcp' ),
 			),
 			'search'   => array(
 				'type'        => 'string',
-				'description' => __( 'Search term.', 'mcpwp' ),
+				'description' => __( 'Search term.', 'mumcp' ),
 			),
 		);
 	}

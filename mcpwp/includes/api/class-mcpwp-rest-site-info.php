@@ -74,15 +74,15 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'scope' => array(
-							'description' => __( 'Optional context scope such as page or product.', 'mcpwp' ),
+							'description' => __( 'Optional context scope such as page or product.', 'mumcp' ),
 							'type'        => 'string',
 						),
 						'archetype_class' => array(
-							'description' => __( 'Optional archetype class for inherited context lookup.', 'mcpwp' ),
+							'description' => __( 'Optional archetype class for inherited context lookup.', 'mumcp' ),
 							'type'        => 'string',
 						),
 						'style' => array(
-							'description' => __( 'Optional archetype style for inherited context lookup.', 'mcpwp' ),
+							'description' => __( 'Optional archetype style for inherited context lookup.', 'mumcp' ),
 							'type'        => 'string',
 						),
 					),
@@ -93,7 +93,7 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'context' => array(
-							'description' => __( 'Site context markdown text (AI brief, style guide, rules).', 'mcpwp' ),
+							'description' => __( 'Site context markdown text (AI brief, style guide, rules).', 'mumcp' ),
 							'type'        => 'string',
 							'required'    => true,
 						),
@@ -111,7 +111,7 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'graph_limit' => array(
-							'description'       => __( 'Maximum content records to inspect for graph health.', 'mcpwp' ),
+							'description'       => __( 'Maximum content records to inspect for graph health.', 'mumcp' ),
 							'type'              => 'integer',
 							'default'           => 100,
 							'minimum'           => 1,
@@ -119,7 +119,7 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 							'sanitize_callback' => 'absint',
 						),
 						'event_limit' => array(
-							'description'       => __( 'Maximum recent events to include.', 'mcpwp' ),
+							'description'       => __( 'Maximum recent events to include.', 'mumcp' ),
 							'type'              => 'integer',
 							'default'           => 20,
 							'minimum'           => 1,
@@ -127,13 +127,13 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 							'sanitize_callback' => 'absint',
 						),
 						'include_drafts' => array(
-							'description'       => __( 'Include draft/private content in graph health.', 'mcpwp' ),
+							'description'       => __( 'Include draft/private content in graph health.', 'mumcp' ),
 							'type'              => 'boolean',
 							'default'           => false,
 							'sanitize_callback' => 'rest_sanitize_boolean',
 						),
 						'include_plugins' => array(
-							'description'       => __( 'Include active plugin file names in capability output.', 'mcpwp' ),
+							'description'       => __( 'Include active plugin file names in capability output.', 'mumcp' ),
 							'type'              => 'boolean',
 							'default'           => false,
 							'sanitize_callback' => 'rest_sanitize_boolean',
@@ -163,7 +163,7 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'name' => array(
-							'description'       => __( 'Optional playbook name.', 'mcpwp' ),
+							'description'       => __( 'Optional playbook name.', 'mumcp' ),
 							'type'              => 'string',
 							'sanitize_callback' => 'sanitize_key',
 						),
@@ -225,7 +225,7 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'days' => array(
-							'description' => __( 'Number of days.', 'mcpwp' ),
+							'description' => __( 'Number of days.', 'mumcp' ),
 							'type'        => 'integer',
 							'default'     => 30,
 							'minimum'     => 1,
@@ -989,7 +989,7 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 		return $this->success_response(
 			array(
 				'success'   => true,
-				'message'   => __( 'Permalink rewrite rules flushed.', 'mcpwp' ),
+				'message'   => __( 'Permalink rewrite rules flushed.', 'mumcp' ),
 				'structure' => get_option( 'permalink_structure' ),
 			)
 		);

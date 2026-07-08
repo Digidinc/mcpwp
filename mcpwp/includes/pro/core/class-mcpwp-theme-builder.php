@@ -150,13 +150,13 @@ class Mcpwp_Theme_Builder {
 	 */
 	public function get_template( $template_id ) {
 		if ( ! $this->is_available() ) {
-			return new WP_Error( 'not_available', __( 'Elementor Pro Theme Builder is not available.', 'mcpwp' ) );
+			return new WP_Error( 'not_available', __( 'Elementor Pro Theme Builder is not available.', 'mumcp' ) );
 		}
 
 		$template = get_post( $template_id );
 
 		if ( ! $template || 'elementor_library' !== $template->post_type ) {
-			return new WP_Error( 'not_found', __( 'Template not found.', 'mcpwp' ) );
+			return new WP_Error( 'not_found', __( 'Template not found.', 'mumcp' ) );
 		}
 
 		$data = $this->format_template( $template );
@@ -252,13 +252,13 @@ class Mcpwp_Theme_Builder {
 	 */
 	public function set_template_conditions( $template_id, $conditions ) {
 		if ( ! $this->is_available() ) {
-			return new WP_Error( 'not_available', __( 'Elementor Pro Theme Builder is not available.', 'mcpwp' ) );
+			return new WP_Error( 'not_available', __( 'Elementor Pro Theme Builder is not available.', 'mumcp' ) );
 		}
 
 		$document = \Elementor\Plugin::instance()->documents->get( $template_id );
 
 		if ( ! $document ) {
-			return new WP_Error( 'not_found', __( 'Template not found.', 'mcpwp' ) );
+			return new WP_Error( 'not_found', __( 'Template not found.', 'mumcp' ) );
 		}
 
 		// Validate and format conditions.
@@ -389,7 +389,7 @@ class Mcpwp_Theme_Builder {
 				'invalid_scope',
 				sprintf(
 					/* translators: 1: provided scope 2: valid scopes */
-					__( 'Invalid scope "%1$s". Valid scopes: %2$s', 'mcpwp' ),
+					__( 'Invalid scope "%1$s". Valid scopes: %2$s', 'mumcp' ),
 					$scope,
 					implode( ', ', $valid_scopes )
 				)
@@ -422,7 +422,7 @@ class Mcpwp_Theme_Builder {
 	 */
 	public function create_theme_template( $data ) {
 		if ( ! $this->is_available() ) {
-			return new WP_Error( 'not_available', __( 'Elementor Pro Theme Builder is not available.', 'mcpwp' ) );
+			return new WP_Error( 'not_available', __( 'Elementor Pro Theme Builder is not available.', 'mumcp' ) );
 		}
 
 		$dry_run = ! empty( $data['dry_run'] );
@@ -431,14 +431,14 @@ class Mcpwp_Theme_Builder {
 		$scope   = ! empty( $data['scope'] ) ? sanitize_text_field( $data['scope'] ) : 'entire_site';
 
 		if ( empty( $title ) ) {
-			return new WP_Error( 'missing_title', __( 'Template title is required.', 'mcpwp' ) );
+			return new WP_Error( 'missing_title', __( 'Template title is required.', 'mumcp' ) );
 		}
 
 		$valid_types = array( 'header', 'footer', 'single', 'archive' );
 			if ( ! in_array( $type, $valid_types, true ) ) {
 				return new WP_Error( 'invalid_type', sprintf(
 					/* translators: %s: comma-separated list of valid template types */
-					__( 'Invalid template type. Must be one of: %s', 'mcpwp' ),
+					__( 'Invalid template type. Must be one of: %s', 'mumcp' ),
 					implode( ', ', $valid_types )
 				) );
 		}
@@ -451,7 +451,7 @@ class Mcpwp_Theme_Builder {
 				'title'    => $title,
 				'type'     => $type,
 				'scope'    => $scope,
-				'message'  => __( 'Validation passed — no template created.', 'mcpwp' ),
+				'message'  => __( 'Validation passed — no template created.', 'mumcp' ),
 			);
 			if ( ! empty( $data['elementor_data'] ) ) {
 				$elements = $data['elementor_data'];
@@ -635,12 +635,12 @@ class Mcpwp_Theme_Builder {
 	public function get_available_conditions() {
 		return array(
 			'scopes' => array(
-				'entire_site' => __( 'Entire Site', 'mcpwp' ),
-				'singular'    => __( 'Singular', 'mcpwp' ),
-				'archive'     => __( 'Archive', 'mcpwp' ),
-				'specific'    => __( 'Specific Pages/Posts', 'mcpwp' ),
-				'front_page'  => __( 'Front Page', 'mcpwp' ),
-				'404'         => __( '404 Page', 'mcpwp' ),
+				'entire_site' => __( 'Entire Site', 'mumcp' ),
+				'singular'    => __( 'Singular', 'mumcp' ),
+				'archive'     => __( 'Archive', 'mumcp' ),
+				'specific'    => __( 'Specific Pages/Posts', 'mumcp' ),
+				'front_page'  => __( 'Front Page', 'mumcp' ),
+				'404'         => __( '404 Page', 'mumcp' ),
 			),
 			'post_types' => get_post_types( array( 'public' => true ), 'objects' ),
 			'taxonomies' => get_taxonomies( array( 'public' => true ), 'objects' ),

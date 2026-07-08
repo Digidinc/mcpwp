@@ -119,30 +119,30 @@ class Mcpwp_Forms {
 		switch ( $plugin ) {
 			case 'cf7':
 				if ( ! $this->is_cf7_active() ) {
-					return new WP_Error( 'plugin_inactive', __( 'Contact Form 7 is not active.', 'mcpwp' ) );
+					return new WP_Error( 'plugin_inactive', __( 'Contact Form 7 is not active.', 'mumcp' ) );
 				}
 				return $this->get_cf7_forms( $args );
 
 			case 'wpforms':
 				if ( ! $this->is_wpforms_active() ) {
-					return new WP_Error( 'plugin_inactive', __( 'WPForms is not active.', 'mcpwp' ) );
+					return new WP_Error( 'plugin_inactive', __( 'WPForms is not active.', 'mumcp' ) );
 				}
 				return $this->get_wpforms_forms( $args );
 
 			case 'gravityforms':
 				if ( ! $this->is_gravityforms_active() ) {
-					return new WP_Error( 'plugin_inactive', __( 'Gravity Forms is not active.', 'mcpwp' ) );
+					return new WP_Error( 'plugin_inactive', __( 'Gravity Forms is not active.', 'mumcp' ) );
 				}
 				return $this->get_gravityforms_forms( $args );
 
 			case 'ninjaforms':
 				if ( ! $this->is_ninjaforms_active() ) {
-					return new WP_Error( 'plugin_inactive', __( 'Ninja Forms is not active.', 'mcpwp' ) );
+					return new WP_Error( 'plugin_inactive', __( 'Ninja Forms is not active.', 'mumcp' ) );
 				}
 				return $this->get_ninjaforms_forms( $args );
 
 			default:
-				return new WP_Error( 'invalid_plugin', __( 'Invalid forms plugin.', 'mcpwp' ) );
+				return new WP_Error( 'invalid_plugin', __( 'Invalid forms plugin.', 'mumcp' ) );
 		}
 	}
 
@@ -168,7 +168,7 @@ class Mcpwp_Forms {
 				return $this->get_ninjaforms_form( $form_id );
 
 			default:
-				return new WP_Error( 'invalid_plugin', __( 'Invalid forms plugin.', 'mcpwp' ) );
+				return new WP_Error( 'invalid_plugin', __( 'Invalid forms plugin.', 'mumcp' ) );
 		}
 	}
 
@@ -195,7 +195,7 @@ class Mcpwp_Forms {
 				return $this->get_ninjaforms_entries( $form_id, $args );
 
 			default:
-				return new WP_Error( 'invalid_plugin', __( 'Invalid forms plugin.', 'mcpwp' ) );
+				return new WP_Error( 'invalid_plugin', __( 'Invalid forms plugin.', 'mumcp' ) );
 		}
 	}
 
@@ -239,13 +239,13 @@ class Mcpwp_Forms {
 	 */
 	private function get_cf7_form( $form_id ) {
 		if ( ! $this->is_cf7_active() ) {
-			return new WP_Error( 'plugin_inactive', __( 'Contact Form 7 is not active.', 'mcpwp' ) );
+			return new WP_Error( 'plugin_inactive', __( 'Contact Form 7 is not active.', 'mumcp' ) );
 		}
 
 		$form = WPCF7_ContactForm::get_instance( $form_id );
 
 		if ( ! $form ) {
-			return new WP_Error( 'not_found', __( 'Form not found.', 'mcpwp' ) );
+			return new WP_Error( 'not_found', __( 'Form not found.', 'mumcp' ) );
 		}
 
 		$properties = $form->get_properties();
@@ -274,7 +274,7 @@ class Mcpwp_Forms {
 		// CF7 doesn't store entries by default - requires Flamingo plugin.
 		if ( ! class_exists( 'Flamingo_Inbound_Message' ) ) {
 			return array(
-				'notice'  => __( 'Contact Form 7 requires the Flamingo plugin to store and retrieve form entries.', 'mcpwp' ),
+				'notice'  => __( 'Contact Form 7 requires the Flamingo plugin to store and retrieve form entries.', 'mumcp' ),
 				'entries' => array(),
 			);
 		}
@@ -347,13 +347,13 @@ class Mcpwp_Forms {
 	 */
 	private function get_wpforms_form( $form_id ) {
 		if ( ! $this->is_wpforms_active() ) {
-			return new WP_Error( 'plugin_inactive', __( 'WPForms is not active.', 'mcpwp' ) );
+			return new WP_Error( 'plugin_inactive', __( 'WPForms is not active.', 'mumcp' ) );
 		}
 
 		$form = wpforms()->form->get( $form_id );
 
 		if ( ! $form ) {
-			return new WP_Error( 'not_found', __( 'Form not found.', 'mcpwp' ) );
+			return new WP_Error( 'not_found', __( 'Form not found.', 'mumcp' ) );
 		}
 
 		$form_data = wpforms_decode( $form->post_content );
@@ -378,13 +378,13 @@ class Mcpwp_Forms {
 	 */
 	private function get_wpforms_entries( $form_id, $args = array() ) {
 		if ( ! $this->is_wpforms_active() ) {
-			return new WP_Error( 'plugin_inactive', __( 'WPForms is not active.', 'mcpwp' ) );
+			return new WP_Error( 'plugin_inactive', __( 'WPForms is not active.', 'mumcp' ) );
 		}
 
 		// WPForms Lite doesn't have entry storage.
 		if ( ! function_exists( 'wpforms' ) || ! method_exists( wpforms()->entry, 'get_entries' ) ) {
 			return array(
-				'notice'  => __( 'WPForms Lite does not store entries. Upgrade to Pro for entry management.', 'mcpwp' ),
+				'notice'  => __( 'WPForms Lite does not store entries. Upgrade to Pro for entry management.', 'mumcp' ),
 				'entries' => array(),
 			);
 		}
@@ -456,13 +456,13 @@ class Mcpwp_Forms {
 	 */
 	private function get_gravityforms_form( $form_id ) {
 		if ( ! $this->is_gravityforms_active() || ! class_exists( 'GFAPI' ) ) {
-			return new WP_Error( 'plugin_inactive', __( 'Gravity Forms is not active.', 'mcpwp' ) );
+			return new WP_Error( 'plugin_inactive', __( 'Gravity Forms is not active.', 'mumcp' ) );
 		}
 
 		$form = GFAPI::get_form( $form_id );
 
 		if ( ! $form ) {
-			return new WP_Error( 'not_found', __( 'Form not found.', 'mcpwp' ) );
+			return new WP_Error( 'not_found', __( 'Form not found.', 'mumcp' ) );
 		}
 
 		return array(
@@ -487,7 +487,7 @@ class Mcpwp_Forms {
 	 */
 	private function get_gravityforms_entries( $form_id, $args = array() ) {
 		if ( ! $this->is_gravityforms_active() || ! class_exists( 'GFAPI' ) ) {
-			return new WP_Error( 'plugin_inactive', __( 'Gravity Forms is not active.', 'mcpwp' ) );
+			return new WP_Error( 'plugin_inactive', __( 'Gravity Forms is not active.', 'mumcp' ) );
 		}
 
 		$search_criteria = array();
@@ -562,13 +562,13 @@ class Mcpwp_Forms {
 	 */
 	private function get_ninjaforms_form( $form_id ) {
 		if ( ! $this->is_ninjaforms_active() ) {
-			return new WP_Error( 'plugin_inactive', __( 'Ninja Forms is not active.', 'mcpwp' ) );
+			return new WP_Error( 'plugin_inactive', __( 'Ninja Forms is not active.', 'mumcp' ) );
 		}
 
 		$form = Ninja_Forms()->form( $form_id )->get();
 
 		if ( ! $form->get_id() ) {
-			return new WP_Error( 'not_found', __( 'Form not found.', 'mcpwp' ) );
+			return new WP_Error( 'not_found', __( 'Form not found.', 'mumcp' ) );
 		}
 
 		$fields = Ninja_Forms()->form( $form_id )->get_fields();
@@ -602,7 +602,7 @@ class Mcpwp_Forms {
 	 */
 	private function get_ninjaforms_entries( $form_id, $args = array() ) {
 		if ( ! $this->is_ninjaforms_active() ) {
-			return new WP_Error( 'plugin_inactive', __( 'Ninja Forms is not active.', 'mcpwp' ) );
+			return new WP_Error( 'plugin_inactive', __( 'Ninja Forms is not active.', 'mumcp' ) );
 		}
 
 		$subs = Ninja_Forms()->form( $form_id )->get_subs();

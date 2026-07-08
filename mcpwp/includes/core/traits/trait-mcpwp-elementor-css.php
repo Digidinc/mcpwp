@@ -76,7 +76,7 @@ trait Mcpwp_Elementor_Css_Trait {
 		if ( ! $this->is_active() ) {
 			return new WP_Error(
 				'elementor_not_active',
-				__( 'Elementor is not installed or active.', 'mcpwp' ),
+				__( 'Elementor is not installed or active.', 'mumcp' ),
 				array( 'status' => 400 )
 			);
 		}
@@ -84,7 +84,7 @@ trait Mcpwp_Elementor_Css_Trait {
 		if ( ! class_exists( '\Elementor\Plugin' ) ) {
 			return new WP_Error(
 				'elementor_not_loaded',
-				__( 'Elementor plugin class not available.', 'mcpwp' ),
+				__( 'Elementor plugin class not available.', 'mumcp' ),
 				array( 'status' => 500 )
 			);
 		}
@@ -100,7 +100,7 @@ trait Mcpwp_Elementor_Css_Trait {
 			if ( ! $page ) {
 				return new WP_Error(
 					'not_found',
-					__( 'Page not found.', 'mcpwp' ),
+					__( 'Page not found.', 'mumcp' ),
 					array( 'status' => 404 )
 				);
 			}
@@ -171,7 +171,7 @@ trait Mcpwp_Elementor_Css_Trait {
 			if ( 'css_regenerated' === $method ) {
 				$result['regenerated'] = array( $page_id );
 				$result['skipped']     = array();
-				$result['message']     = __( 'CSS regenerated for page.', 'mcpwp' );
+				$result['message']     = __( 'CSS regenerated for page.', 'mumcp' );
 			} else {
 				$result['regenerated'] = array();
 				$reason = ! $has_elementor_data ? 'no_elementor_data' : 'document_not_found';
@@ -181,7 +181,7 @@ trait Mcpwp_Elementor_Css_Trait {
 						'reason'  => $reason,
 					),
 				);
-				$result['message'] = __( 'Elementor cache cleared (document not found, CSS will regenerate on next page load).', 'mcpwp' );
+				$result['message'] = __( 'Elementor cache cleared (document not found, CSS will regenerate on next page load).', 'mumcp' );
 			}
 
 			return $result;
@@ -321,7 +321,7 @@ trait Mcpwp_Elementor_Css_Trait {
 			'failed'                 => $failed,
 			'message'                => sprintf(
 				/* translators: 1: regenerated count 2: total found 3: skipped count 4: failed count 5: global kit status */
-				__( 'CSS regenerated for %1$d of %2$d Elementor pages (%3$d skipped, %4$d failed). Global kit CSS: %5$s. Cache cleared.', 'mcpwp' ),
+				__( 'CSS regenerated for %1$d of %2$d Elementor pages (%3$d skipped, %4$d failed). Global kit CSS: %5$s. Cache cleared.', 'mumcp' ),
 				count( $regenerated ),
 				count( $elementor_posts ),
 				count( $skipped ),

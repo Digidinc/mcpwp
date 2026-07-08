@@ -55,26 +55,26 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'enabled'             => array(
-							'description' => __( 'Enable or disable rate limiting.', 'mcpwp' ),
+							'description' => __( 'Enable or disable rate limiting.', 'mumcp' ),
 							'type'        => 'boolean',
 						),
 						'requests_per_minute' => array(
-							'description' => __( 'Requests allowed per minute.', 'mcpwp' ),
+							'description' => __( 'Requests allowed per minute.', 'mumcp' ),
 							'type'        => 'integer',
 							'minimum'     => 1,
 						),
 						'requests_per_hour'   => array(
-							'description' => __( 'Requests allowed per hour.', 'mcpwp' ),
+							'description' => __( 'Requests allowed per hour.', 'mumcp' ),
 							'type'        => 'integer',
 							'minimum'     => 1,
 						),
 						'burst_limit'         => array(
-							'description' => __( 'Requests allowed in short burst window.', 'mcpwp' ),
+							'description' => __( 'Requests allowed in short burst window.', 'mumcp' ),
 							'type'        => 'integer',
 							'minimum'     => 1,
 						),
 						'whitelist'           => array(
-							'description' => __( 'Identifiers to bypass rate limiting.', 'mcpwp' ),
+							'description' => __( 'Identifiers to bypass rate limiting.', 'mumcp' ),
 							'type'        => 'array',
 							'items'       => array(
 								'type' => 'string',
@@ -94,7 +94,7 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'identifier' => array(
-							'description' => __( 'Rate-limit identifier to reset (for example: key:<id> or IP).', 'mcpwp' ),
+							'description' => __( 'Rate-limit identifier to reset (for example: key:<id> or IP).', 'mumcp' ),
 							'type'        => 'string',
 							'required'    => true,
 						),
@@ -112,7 +112,7 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'include_revoked' => array(
-							'description' => __( 'Include revoked keys.', 'mcpwp' ),
+							'description' => __( 'Include revoked keys.', 'mumcp' ),
 							'type'        => 'boolean',
 							'default'     => false,
 						),
@@ -124,11 +124,11 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'label'  => array(
-							'description' => __( 'Key label.', 'mcpwp' ),
+							'description' => __( 'Key label.', 'mumcp' ),
 							'type'        => 'string',
 						),
 						'scopes' => array(
-							'description' => __( 'Scopes for key. Allowed: read, write, admin. Defaults to read-only when omitted.', 'mcpwp' ),
+							'description' => __( 'Scopes for key. Allowed: read, write, admin. Defaults to read-only when omitted.', 'mumcp' ),
 							'type'        => 'array',
 							'items'       => array(
 								'type' => 'string',
@@ -155,7 +155,7 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 
 	public function check_update( $request ) {
 		if ( defined( 'MCPWP_WPORG_BUILD' ) ) {
-			return $this->error_response( 'not_available', __( 'Update check is not available in the WordPress.org build.', 'mcpwp' ), 404 );
+			return $this->error_response( 'not_available', __( 'Update check is not available in the WordPress.org build.', 'mumcp' ), 404 );
 		}
 
 		$this->log_activity( 'check_update', $request );
@@ -195,7 +195,7 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 					),
 				)
 			)
-			: new WP_Error( 'insecure_version_url', __( 'mcpwp_version_url must be HTTPS.', 'mcpwp' ) );
+			: new WP_Error( 'insecure_version_url', __( 'mcpwp_version_url must be HTTPS.', 'mumcp' ) );
 		if ( ! is_wp_error( $remote_response ) && 200 === wp_remote_retrieve_response_code( $remote_response ) ) {
 			$remote_body = json_decode( wp_remote_retrieve_body( $remote_response ), true );
 			if ( is_array( $remote_body ) && ! empty( $remote_body['version'] ) ) {
@@ -266,7 +266,7 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 
 	public function trigger_update( $request ) {
 		if ( defined( 'MCPWP_WPORG_BUILD' ) ) {
-			return $this->error_response( 'not_available', __( 'Plugin self-update is not available in the WordPress.org build.', 'mcpwp' ), 404 );
+			return $this->error_response( 'not_available', __( 'Plugin self-update is not available in the WordPress.org build.', 'mumcp' ), 404 );
 		}
 
 		$this->log_activity( 'trigger_update', $request );
@@ -277,13 +277,13 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 		// WP capability is always present regardless of the key's granted scope.
 		$key_record = $this->get_current_api_key_record();
 		if ( is_array( $key_record ) && ! $this->key_has_scope( $key_record, 'admin' ) ) {
-			return $this->error_response( 'insufficient_scope', __( 'Admin scope is required to update the plugin.', 'mcpwp' ), 403 );
+			return $this->error_response( 'insufficient_scope', __( 'Admin scope is required to update the plugin.', 'mumcp' ), 403 );
 		}
 
 		if ( ! $this->can_manage_api_keys() ) {
 			return $this->error_response(
 				'forbidden',
-				__( 'You do not have permission to update the plugin.', 'mcpwp' ),
+				__( 'You do not have permission to update the plugin.', 'mumcp' ),
 				403
 			);
 		}
@@ -311,7 +311,7 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 			if ( defined( 'MCPWP_WPORG_BUILD' ) && MCPWP_WPORG_BUILD ) {
 				return $this->error_response(
 					'not_supported',
-					__( 'Direct package installs are not supported on WordPress.org builds. Update via the WordPress dashboard.', 'mcpwp' ),
+					__( 'Direct package installs are not supported on WordPress.org builds. Update via the WordPress dashboard.', 'mumcp' ),
 					400
 				);
 			}
@@ -327,7 +327,7 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 			// This blocks a write-scope→RCE path where an untrusted zip could be
 			// installed and the plugin reactivated from it.
 			if ( ! Mcpwp_Security::is_trusted_package_url( $package_url ) ) {
-				return $this->error_response( 'untrusted_package', __( 'The package_url host is not in the trusted update allowlist.', 'mcpwp' ), 400 );
+				return $this->error_response( 'untrusted_package', __( 'The package_url host is not in the trusted update allowlist.', 'mumcp' ), 400 );
 			}
 
 			$inject              = new stdClass();
@@ -346,7 +346,7 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 			}
 
 			if ( true !== $result ) {
-				return $this->error_response( 'update_failed', __( 'Plugin update failed.', 'mcpwp' ), 500 );
+				return $this->error_response( 'update_failed', __( 'Plugin update failed.', 'mumcp' ), 500 );
 			}
 
 			if ( ! is_plugin_active( $plugin_file ) ) {
@@ -359,7 +359,7 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 				array(
 					'updated'     => true,
 					'source'      => 'package_url',
-					'message'     => __( 'Plugin updated from provided URL.', 'mcpwp' ),
+					'message'     => __( 'Plugin updated from provided URL.', 'mumcp' ),
 				)
 			);
 		}
@@ -378,7 +378,7 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 			return $this->success_response(
 				array(
 					'updated' => false,
-					'message' => __( 'No update available.', 'mcpwp' ),
+					'message' => __( 'No update available.', 'mumcp' ),
 					'version' => defined( 'MCPWP_VERSION' ) ? MCPWP_VERSION : null,
 				)
 			);
@@ -388,7 +388,7 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 		if ( empty( $plugin_update->package ) ) {
 			return $this->error_response(
 				'no_package',
-				__( 'Update package URL is not available.', 'mcpwp' ),
+				__( 'Update package URL is not available.', 'mumcp' ),
 				400
 			);
 		}
@@ -407,7 +407,7 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 		if ( true !== $result ) {
 			return $this->error_response(
 				'update_failed',
-				__( 'Plugin update failed.', 'mcpwp' ),
+				__( 'Plugin update failed.', 'mumcp' ),
 				500
 			);
 		}
@@ -423,7 +423,7 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 			array(
 				'updated'     => true,
 				'new_version' => is_object( $plugin_update ) ? $plugin_update->new_version : null,
-				'message'     => __( 'Plugin updated successfully.', 'mcpwp' ),
+				'message'     => __( 'Plugin updated successfully.', 'mumcp' ),
 			)
 		);
 	}
@@ -435,7 +435,7 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 			return $this->success_response(
 				array(
 					'enabled' => false,
-					'message' => __( 'Rate limiting is not available.', 'mcpwp' ),
+					'message' => __( 'Rate limiting is not available.', 'mumcp' ),
 				)
 			);
 		}
@@ -476,7 +476,7 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 		if ( ! $this->can_manage_api_keys() ) {
 			return $this->error_response(
 				'forbidden',
-				__( 'You do not have permission to manage rate limiting.', 'mcpwp' ),
+				__( 'You do not have permission to manage rate limiting.', 'mumcp' ),
 				403
 			);
 		}
@@ -484,7 +484,7 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 		if ( ! class_exists( 'Mcpwp_Rate_Limiter' ) ) {
 			return $this->error_response(
 				'rate_limiter_unavailable',
-				__( 'Rate limiting is not available.', 'mcpwp' ),
+				__( 'Rate limiting is not available.', 'mumcp' ),
 				500
 			);
 		}
@@ -505,7 +505,7 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 		if ( empty( $settings ) ) {
 			return $this->error_response(
 				'missing_settings',
-				__( 'No rate-limit settings provided.', 'mcpwp' ),
+				__( 'No rate-limit settings provided.', 'mumcp' ),
 				400
 			);
 		}
@@ -516,7 +516,7 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 		if ( ! $updated ) {
 			return $this->error_response(
 				'update_failed',
-				__( 'Failed to update rate-limit settings.', 'mcpwp' ),
+				__( 'Failed to update rate-limit settings.', 'mumcp' ),
 				500
 			);
 		}
@@ -535,7 +535,7 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 		if ( ! $this->can_manage_api_keys() ) {
 			return $this->error_response(
 				'forbidden',
-				__( 'You do not have permission to reset rate limits.', 'mcpwp' ),
+				__( 'You do not have permission to reset rate limits.', 'mumcp' ),
 				403
 			);
 		}
@@ -543,7 +543,7 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 		if ( ! class_exists( 'Mcpwp_Rate_Limiter' ) ) {
 			return $this->error_response(
 				'rate_limiter_unavailable',
-				__( 'Rate limiting is not available.', 'mcpwp' ),
+				__( 'Rate limiting is not available.', 'mumcp' ),
 				500
 			);
 		}
@@ -552,7 +552,7 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 		if ( '' === $identifier ) {
 			return $this->error_response(
 				'missing_identifier',
-				__( 'Identifier is required.', 'mcpwp' ),
+				__( 'Identifier is required.', 'mumcp' ),
 				400
 			);
 		}
@@ -573,7 +573,7 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 		if ( ! $this->can_manage_api_keys() ) {
 			return $this->error_response(
 				'forbidden',
-				__( 'You do not have permission to manage API keys.', 'mcpwp' ),
+				__( 'You do not have permission to manage API keys.', 'mumcp' ),
 				403
 			);
 		}
@@ -595,7 +595,7 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 		if ( ! $this->can_manage_api_keys() ) {
 			return $this->error_response(
 				'forbidden',
-				__( 'You do not have permission to manage API keys.', 'mcpwp' ),
+				__( 'You do not have permission to manage API keys.', 'mumcp' ),
 				403
 			);
 		}
@@ -627,7 +627,7 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 		if ( ! $this->can_manage_api_keys() ) {
 			return $this->error_response(
 				'forbidden',
-				__( 'You do not have permission to manage API keys.', 'mcpwp' ),
+				__( 'You do not have permission to manage API keys.', 'mumcp' ),
 				403
 			);
 		}
@@ -638,7 +638,7 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 		if ( ! $revoked ) {
 			return $this->error_response(
 				'not_found',
-				__( 'API key not found or already revoked.', 'mcpwp' ),
+				__( 'API key not found or already revoked.', 'mumcp' ),
 				404
 			);
 		}

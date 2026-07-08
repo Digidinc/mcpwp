@@ -1069,7 +1069,7 @@ class Mcpwp_REST_Blocks extends Mcpwp_REST_API {
 				return $path;
 			}
 
-			return new WP_Error( 'section_not_found', __( 'No block exists at the requested path.', 'mcpwp' ), array( 'status' => 404 ) );
+			return new WP_Error( 'section_not_found', __( 'No block exists at the requested path.', 'mumcp' ), array( 'status' => 404 ) );
 		}
 
 		if ( isset( $selector['anchor'] ) && '' !== trim( (string) $selector['anchor'] ) ) {
@@ -1078,7 +1078,7 @@ class Mcpwp_REST_Blocks extends Mcpwp_REST_API {
 				return $path;
 			}
 
-			return new WP_Error( 'section_not_found', __( 'No block section matched the requested anchor.', 'mcpwp' ), array( 'status' => 404 ) );
+			return new WP_Error( 'section_not_found', __( 'No block section matched the requested anchor.', 'mumcp' ), array( 'status' => 404 ) );
 		}
 
 		if ( isset( $selector['heading'] ) && '' !== trim( (string) $selector['heading'] ) ) {
@@ -1087,10 +1087,10 @@ class Mcpwp_REST_Blocks extends Mcpwp_REST_API {
 				return $path;
 			}
 
-			return new WP_Error( 'section_not_found', __( 'No block section matched the requested heading.', 'mcpwp' ), array( 'status' => 404 ) );
+			return new WP_Error( 'section_not_found', __( 'No block section matched the requested heading.', 'mumcp' ), array( 'status' => 404 ) );
 		}
 
-		return new WP_Error( 'invalid_selector', __( 'Selector must include path, anchor, or heading.', 'mcpwp' ), array( 'status' => 400 ) );
+		return new WP_Error( 'invalid_selector', __( 'Selector must include path, anchor, or heading.', 'mumcp' ), array( 'status' => 400 ) );
 	}
 
 	/**

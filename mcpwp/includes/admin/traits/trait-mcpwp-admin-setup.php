@@ -18,7 +18,7 @@ trait Mcpwp_Admin_Setup_Trait {
 	 */
 	public function render_setup_page() {
 		if ( ! current_user_can( 'activate_plugins' ) ) {
-			wp_die( esc_html__( 'You do not have permission to access this page.', 'mcpwp' ) );
+			wp_die( esc_html__( 'You do not have permission to access this page.', 'mumcp' ) );
 		}
 
 		// Handle API key actions.
@@ -29,7 +29,7 @@ trait Mcpwp_Admin_Setup_Trait {
 			add_settings_error(
 				'mcpwp_messages',
 				'mcpwp_key_regenerated',
-				__( 'API key has been regenerated. Copy it now — it will not be shown again.', 'mcpwp' ),
+				__( 'API key has been regenerated. Copy it now — it will not be shown again.', 'mumcp' ),
 				'updated'
 			);
 		}
@@ -56,7 +56,7 @@ trait Mcpwp_Admin_Setup_Trait {
 				'mcpwp_scoped_key_created',
 				sprintf(
 					/* translators: %s: role label */
-					__( 'API key created (role: %s). Copy it now — it will not be shown again.', 'mcpwp' ),
+					__( 'API key created (role: %s). Copy it now — it will not be shown again.', 'mumcp' ),
 					$role_label
 				),
 				'updated'
@@ -73,14 +73,14 @@ trait Mcpwp_Admin_Setup_Trait {
 					add_settings_error(
 						'mcpwp_messages',
 						'mcpwp_scoped_key_revoked',
-						__( 'Scoped API key revoked.', 'mcpwp' ),
+						__( 'Scoped API key revoked.', 'mumcp' ),
 						'updated'
 					);
 				} else {
 					add_settings_error(
 						'mcpwp_messages',
 						'mcpwp_scoped_key_revoke_failed',
-						__( 'Unable to revoke key (it may already be revoked).', 'mcpwp' ),
+						__( 'Unable to revoke key (it may already be revoked).', 'mumcp' ),
 						'error'
 					);
 				}
@@ -104,7 +104,7 @@ trait Mcpwp_Admin_Setup_Trait {
 			add_settings_error(
 				'mcpwp_messages',
 				'mcpwp_update_checked',
-				__( 'Update check complete.', 'mcpwp' ),
+				__( 'Update check complete.', 'mumcp' ),
 				'updated'
 			);
 		}
@@ -221,12 +221,12 @@ trait Mcpwp_Admin_Setup_Trait {
 				}
 			}
 		} else {
-			$warning = __( 'The update manifest could not be reached from this site. Manual download is still available below.', 'mcpwp' );
+			$warning = __( 'The update manifest could not be reached from this site. Manual download is still available below.', 'mumcp' );
 		}
 
 		if ( $option_version && $remote_version && version_compare( $option_version, $remote_version, '!=' ) ) {
 			$source  = 'mixed';
-			$warning = __( 'A site-level update override is present and does not match the remote manifest. Clear stale override data if updates look wrong.', 'mcpwp' );
+			$warning = __( 'A site-level update override is present and does not match the remote manifest. Clear stale override data if updates look wrong.', 'mumcp' );
 		} elseif ( $option_version ) {
 			$source = 'option';
 		}
@@ -241,9 +241,9 @@ trait Mcpwp_Admin_Setup_Trait {
 			'update_available' => ( $remote_version && version_compare( $remote_version, $current_version, '>' ) ),
 			'warning'          => $warning,
 			'manual_steps'     => array(
-				__( 'Download the latest ZIP from the canonical package URL.', 'mcpwp' ),
-				__( 'In WordPress admin, go to Plugins -> Add Plugin -> Upload Plugin.', 'mcpwp' ),
-				__( 'Upload the ZIP and replace the installed version.', 'mcpwp' ),
+				__( 'Download the latest ZIP from the canonical package URL.', 'mumcp' ),
+				__( 'In WordPress admin, go to Plugins -> Add Plugin -> Upload Plugin.', 'mumcp' ),
+				__( 'Upload the ZIP and replace the installed version.', 'mumcp' ),
 			),
 		);
 	}
@@ -264,39 +264,39 @@ trait Mcpwp_Admin_Setup_Trait {
 
 		$steps = array(
 			array(
-				'title'       => __( 'Define site character', 'mcpwp' ),
-				'description' => __( 'Save the brand voice, audience, and page rules in Settings.', 'mcpwp' ),
+				'title'       => __( 'Define site character', 'mumcp' ),
+				'description' => __( 'Save the brand voice, audience, and page rules in Settings.', 'mumcp' ),
 				'done'        => $has_site_profile,
 				'url'         => admin_url( 'admin.php?page=' . self::SETTINGS_PAGE_SLUG ),
-				'cta'         => __( 'Open Settings', 'mcpwp' ),
+				'cta'         => __( 'Open Settings', 'mumcp' ),
 			),
 			array(
-				'title'       => __( 'Create an AI key', 'mcpwp' ),
-				'description' => __( 'Generate or copy an API key so models can connect to the site.', 'mcpwp' ),
+				'title'       => __( 'Create an AI key', 'mumcp' ),
+				'description' => __( 'Generate or copy an API key so models can connect to the site.', 'mumcp' ),
 				'done'        => $has_api_key,
 				'url'         => admin_url( 'admin.php?page=' . self::PAGE_SLUG ),
-				'cta'         => __( 'Manage Keys', 'mcpwp' ),
+				'cta'         => __( 'Manage Keys', 'mumcp' ),
 			),
 			array(
-				'title'       => __( 'Store a design reference', 'mcpwp' ),
-				'description' => __( 'Turn one approved screenshot or mockup into reusable design memory.', 'mcpwp' ),
+				'title'       => __( 'Store a design reference', 'mumcp' ),
+				'description' => __( 'Turn one approved screenshot or mockup into reusable design memory.', 'mumcp' ),
 				'done'        => $has_references,
 				'url'         => admin_url( 'admin.php?page=' . self::LIBRARY_PAGE_SLUG ),
-				'cta'         => __( 'Open Library', 'mcpwp' ),
+				'cta'         => __( 'Open Library', 'mumcp' ),
 			),
 			array(
-				'title'       => __( 'Create an archetype', 'mcpwp' ),
-				'description' => __( 'Save at least one page or product structure so models stop starting from zero.', 'mcpwp' ),
+				'title'       => __( 'Create an archetype', 'mumcp' ),
+				'description' => __( 'Save at least one page or product structure so models stop starting from zero.', 'mumcp' ),
 				'done'        => $has_archetypes,
 				'url'         => admin_url( 'admin.php?page=' . self::LIBRARY_PAGE_SLUG ),
-				'cta'         => __( 'Review Archetypes', 'mcpwp' ),
+				'cta'         => __( 'Review Archetypes', 'mumcp' ),
 			),
 			array(
-				'title'       => __( 'Build reusable parts', 'mcpwp' ),
-				'description' => __( 'Keep heroes, proof blocks, FAQs, and CTAs in the parts library for future pages.', 'mcpwp' ),
+				'title'       => __( 'Build reusable parts', 'mumcp' ),
+				'description' => __( 'Keep heroes, proof blocks, FAQs, and CTAs in the parts library for future pages.', 'mumcp' ),
 				'done'        => $has_parts,
 				'url'         => admin_url( 'admin.php?page=' . self::LIBRARY_PAGE_SLUG ),
-				'cta'         => __( 'Review Parts', 'mcpwp' ),
+				'cta'         => __( 'Review Parts', 'mumcp' ),
 			),
 		);
 

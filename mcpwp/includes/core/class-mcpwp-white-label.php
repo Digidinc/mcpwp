@@ -164,7 +164,7 @@ class Mcpwp_White_Label {
 		if ( $s['hide_mcpwp_branding'] && ! empty( $s['agency_name'] ) ) {
 			return sprintf(
 				/* translators: %s: agency name */
-				esc_html__( 'Powered by %s', 'mcpwp' ),
+				esc_html__( 'Powered by %s', 'mumcp' ),
 				esc_html( $s['agency_name'] )
 			);
 		}
@@ -193,7 +193,7 @@ class Mcpwp_White_Label {
 		$greeting = ! empty( $atts['greeting'] ) ? sanitize_text_field( $atts['greeting'] ) : $s['chat_greeting'];
 		$position = in_array( $atts['position'], array( 'bottom-right', 'bottom-left', 'inline' ), true ) ? $atts['position'] : 'bottom-right';
 		$color    = esc_attr( $s['primary_color'] );
-		$name     = self::is_enabled() ? esc_html( $s['agency_name'] ) : esc_html__( 'AI Assistant', 'mcpwp' );
+		$name     = self::is_enabled() ? esc_html( $s['agency_name'] ) : esc_html__( 'AI Assistant', 'mumcp' );
 		$chat_url = admin_url( 'admin.php?page=mcpwp-chat' );
 
 		$logo_html = '';
@@ -268,7 +268,7 @@ if ( ! class_exists( 'Mcpwp_Elementor_Chat_Widget' ) && class_exists( '\Elemento
 		}
 
 		public function get_title(): string {
-			return esc_html__( 'AI Chat Widget', 'mcpwp' );
+			return esc_html__( 'AI Chat Widget', 'mumcp' );
 		}
 
 		public function get_icon(): string {
@@ -283,7 +283,7 @@ if ( ! class_exists( 'Mcpwp_Elementor_Chat_Widget' ) && class_exists( '\Elemento
 			$this->start_controls_section(
 				'content_section',
 				array(
-					'label' => esc_html__( 'Chat Settings', 'mcpwp' ),
+					'label' => esc_html__( 'Chat Settings', 'mumcp' ),
 					'tab'   => \Elementor\Controls_Manager::TAB_CONTENT,
 				)
 			);
@@ -291,23 +291,23 @@ if ( ! class_exists( 'Mcpwp_Elementor_Chat_Widget' ) && class_exists( '\Elemento
 			$this->add_control(
 				'greeting',
 				array(
-					'label'       => esc_html__( 'Greeting', 'mcpwp' ),
+					'label'       => esc_html__( 'Greeting', 'mumcp' ),
 					'type'        => \Elementor\Controls_Manager::TEXT,
-					'default'     => esc_html__( 'Hi! How can I help?', 'mcpwp' ),
-					'placeholder' => esc_html__( 'Hi! How can I help?', 'mcpwp' ),
+					'default'     => esc_html__( 'Hi! How can I help?', 'mumcp' ),
+					'placeholder' => esc_html__( 'Hi! How can I help?', 'mumcp' ),
 				)
 			);
 
 			$this->add_control(
 				'position',
 				array(
-					'label'   => esc_html__( 'Position', 'mcpwp' ),
+					'label'   => esc_html__( 'Position', 'mumcp' ),
 					'type'    => \Elementor\Controls_Manager::SELECT,
 					'default' => 'bottom-right',
 					'options' => array(
-						'bottom-right' => esc_html__( 'Bottom Right', 'mcpwp' ),
-						'bottom-left'  => esc_html__( 'Bottom Left', 'mcpwp' ),
-						'inline'       => esc_html__( 'Inline', 'mcpwp' ),
+						'bottom-right' => esc_html__( 'Bottom Right', 'mumcp' ),
+						'bottom-left'  => esc_html__( 'Bottom Left', 'mumcp' ),
+						'inline'       => esc_html__( 'Inline', 'mumcp' ),
 					),
 				)
 			);

@@ -1,19 +1,19 @@
 <?php
 /**
- * MCPWP
+ * mumcp
  *
- * Connect WordPress to AI assistants via the Model Context Protocol (MCP).
+ * mumcp — Model Context Protocol for WordPress, by Mumega.
  * Expose your WordPress site's functionality to AI assistants like Claude.
  *
- * @package           MCPWP
+ * @package           Mumcp
  * @author            Mumega
  * @copyright         2026 Mumega
  * @license           GPL-2.0-or-later
  *
  * @wordpress-plugin
- * Plugin Name:       MCPWP
+ * Plugin Name:       mumcp
  * Plugin URI:        https://mcpwp.net/
- * Description:       Connect WordPress to AI assistants via the Model Context Protocol (MCP). Manage posts, pages, media, and Elementor through natural language.
+ * Description:       mumcp — Model Context Protocol for WordPress, by Mumega. Connect your site to AI assistants like Claude: posts, pages, media, menus, and Elementor through natural language.
  * x-release-please-start-version
  * Version:           3.4.3
  * x-release-please-end
@@ -21,7 +21,7 @@
  * Requires PHP:      7.4
  * Author:            Mumega
  * Author URI:        https://mumega.com/
- * Text Domain:       mcpwp
+ * Text Domain:       mumcp
  * Domain Path:       /languages
  * License:           GPL v2 or later
  * License URI:       https://www.gnu.org/licenses/gpl-2.0.html
@@ -133,7 +133,7 @@ if ( ! function_exists( 'mcpwp_php_version_notice' ) ) {
 			<?php
 			printf(
 				/* translators: 1: Required PHP version 2: Current PHP version */
-				esc_html__( 'MCPWP requires PHP %1$s or higher. You are running PHP %2$s.', 'mcpwp' ),
+				esc_html__( 'MCPWP requires PHP %1$s or higher. You are running PHP %2$s.', 'mumcp' ),
 				esc_html( MCPWP_MIN_PHP_VERSION ),
 				esc_html( PHP_VERSION )
 			);
@@ -156,7 +156,7 @@ if ( ! function_exists( 'mcpwp_wp_version_notice' ) ) {
 			<?php
 			printf(
 				/* translators: 1: Required WP version 2: Current WP version */
-				esc_html__( 'MCPWP requires WordPress %1$s or higher. You are running WordPress %2$s.', 'mcpwp' ),
+				esc_html__( 'MCPWP requires WordPress %1$s or higher. You are running WordPress %2$s.', 'mumcp' ),
 				esc_html( MCPWP_MIN_WP_VERSION ),
 				esc_html( $wp_version )
 			);

@@ -67,7 +67,7 @@ class Mcpwp_Users {
 		$user = get_user_by( 'ID', $user_id );
 
 		if ( ! $user ) {
-			return new WP_Error( 'not_found', __( 'User not found.', 'mcpwp' ) );
+			return new WP_Error( 'not_found', __( 'User not found.', 'mumcp' ) );
 		}
 
 		return $this->format_user( $user, true );
@@ -82,21 +82,21 @@ class Mcpwp_Users {
 	public function create_user( $data ) {
 		// Validate required fields.
 		if ( empty( $data['username'] ) ) {
-			return new WP_Error( 'missing_username', __( 'Username is required.', 'mcpwp' ) );
+			return new WP_Error( 'missing_username', __( 'Username is required.', 'mumcp' ) );
 		}
 
 		if ( empty( $data['email'] ) ) {
-			return new WP_Error( 'missing_email', __( 'Email is required.', 'mcpwp' ) );
+			return new WP_Error( 'missing_email', __( 'Email is required.', 'mumcp' ) );
 		}
 
 		// Check if username exists.
 		if ( username_exists( $data['username'] ) ) {
-			return new WP_Error( 'username_exists', __( 'Username already exists.', 'mcpwp' ) );
+			return new WP_Error( 'username_exists', __( 'Username already exists.', 'mumcp' ) );
 		}
 
 		// Check if email exists.
 		if ( email_exists( $data['email'] ) ) {
-			return new WP_Error( 'email_exists', __( 'Email already exists.', 'mcpwp' ) );
+			return new WP_Error( 'email_exists', __( 'Email already exists.', 'mumcp' ) );
 		}
 
 		$userdata = array(
@@ -120,7 +120,7 @@ class Mcpwp_Users {
 
 		// Prevent creating administrators via API unless current user is admin.
 		if ( 'administrator' === $userdata['role'] && ! current_user_can( 'create_users' ) ) {
-			return new WP_Error( 'cannot_create_admin', __( 'Cannot create administrator users.', 'mcpwp' ) );
+			return new WP_Error( 'cannot_create_admin', __( 'Cannot create administrator users.', 'mumcp' ) );
 		}
 
 		$user_id = wp_insert_user( $userdata );
@@ -162,12 +162,12 @@ class Mcpwp_Users {
 		$user = get_user_by( 'ID', $user_id );
 
 		if ( ! $user ) {
-			return new WP_Error( 'not_found', __( 'User not found.', 'mcpwp' ) );
+			return new WP_Error( 'not_found', __( 'User not found.', 'mumcp' ) );
 		}
 
 		// Prevent modifying users with higher privileges.
 		if ( ! $this->can_modify_user( $user ) ) {
-			return new WP_Error( 'cannot_modify', __( 'Cannot modify this user.', 'mcpwp' ) );
+			return new WP_Error( 'cannot_modify', __( 'Cannot modify this user.', 'mumcp' ) );
 		}
 
 		$userdata = array( 'ID' => $user_id );
@@ -177,7 +177,7 @@ class Mcpwp_Users {
 			// Check if email exists for another user.
 			$existing = email_exists( $email );
 			if ( $existing && $existing !== $user_id ) {
-				return new WP_Error( 'email_exists', __( 'Email already exists.', 'mcpwp' ) );
+				return new WP_Error( 'email_exists', __( 'Email already exists.', 'mumcp' ) );
 			}
 			$userdata['user_email'] = $email;
 		}
@@ -218,7 +218,7 @@ class Mcpwp_Users {
 			if ( in_array( $new_role, $valid_roles, true ) ) {
 				// Prevent promoting to admin.
 				if ( 'administrator' === $new_role && ! current_user_can( 'promote_users' ) ) {
-					return new WP_Error( 'cannot_promote_admin', __( 'Cannot promote to administrator.', 'mcpwp' ) );
+					return new WP_Error( 'cannot_promote_admin', __( 'Cannot promote to administrator.', 'mumcp' ) );
 				}
 				$userdata['role'] = $new_role;
 			}
@@ -274,17 +274,17 @@ class Mcpwp_Users {
 		$user = get_user_by( 'ID', $user_id );
 
 		if ( ! $user ) {
-			return new WP_Error( 'not_found', __( 'User not found.', 'mcpwp' ) );
+			return new WP_Error( 'not_found', __( 'User not found.', 'mumcp' ) );
 		}
 
 		// Prevent deleting self.
 		if ( get_current_user_id() === $user_id ) {
-			return new WP_Error( 'cannot_delete_self', __( 'Cannot delete yourself.', 'mcpwp' ) );
+			return new WP_Error( 'cannot_delete_self', __( 'Cannot delete yourself.', 'mumcp' ) );
 		}
 
 		// Prevent deleting users with higher privileges.
 		if ( ! $this->can_modify_user( $user ) ) {
-			return new WP_Error( 'cannot_delete', __( 'Cannot delete this user.', 'mcpwp' ) );
+			return new WP_Error( 'cannot_delete', __( 'Cannot delete this user.', 'mumcp' ) );
 		}
 
 		if ( ! function_exists( 'wp_delete_user' ) ) {
@@ -294,7 +294,7 @@ class Mcpwp_Users {
 		$result = wp_delete_user( $user_id, $reassign );
 
 		if ( ! $result ) {
-			return new WP_Error( 'delete_failed', __( 'Failed to delete user.', 'mcpwp' ) );
+			return new WP_Error( 'delete_failed', __( 'Failed to delete user.', 'mumcp' ) );
 		}
 
 		return true;
@@ -331,7 +331,7 @@ class Mcpwp_Users {
 		$user = get_user_by( 'ID', $user_id );
 
 		if ( ! $user ) {
-			return new WP_Error( 'not_found', __( 'User not found.', 'mcpwp' ) );
+			return new WP_Error( 'not_found', __( 'User not found.', 'mumcp' ) );
 		}
 
 		return array(

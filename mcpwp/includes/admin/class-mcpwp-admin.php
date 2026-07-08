@@ -72,8 +72,8 @@ class Mcpwp_Admin {
 		// Top-level menu + default submenu (Setup) share the same slug so
 		// clicking "MCPWP" always lands on the Setup page.
 		add_menu_page(
-			__( 'MCPWP', 'mcpwp' ),
-			__( 'MCPWP', 'mcpwp' ),
+			__( 'MCPWP', 'mumcp' ),
+			__( 'MCPWP', 'mumcp' ),
 			'activate_plugins',
 			self::PAGE_SLUG,
 			array( $this, 'render_setup_page' ),
@@ -84,8 +84,8 @@ class Mcpwp_Admin {
 		// Setup — same slug as parent so it becomes the first visible item.
 		add_submenu_page(
 			self::PAGE_SLUG,
-			__( 'Setup', 'mcpwp' ),
-			__( 'Setup', 'mcpwp' ),
+			__( 'Setup', 'mumcp' ),
+			__( 'Setup', 'mumcp' ),
 			'activate_plugins',
 			self::PAGE_SLUG,
 			array( $this, 'render_setup_page' )
@@ -94,8 +94,8 @@ class Mcpwp_Admin {
 		// Control Room - human supervision for agent work.
 		add_submenu_page(
 			self::PAGE_SLUG,
-			__( 'Control Room', 'mcpwp' ),
-			__( 'Control Room', 'mcpwp' ),
+			__( 'Control Room', 'mumcp' ),
+			__( 'Control Room', 'mumcp' ),
 			'activate_plugins',
 			self::CONTROL_ROOM_PAGE_SLUG,
 			array( $this, 'render_control_room_page' )
@@ -104,8 +104,8 @@ class Mcpwp_Admin {
 		// Chat — AI assistant.
 		add_submenu_page(
 			self::PAGE_SLUG,
-			__( 'Chat', 'mcpwp' ),
-			__( 'Chat', 'mcpwp' ),
+			__( 'Chat', 'mumcp' ),
+			__( 'Chat', 'mumcp' ),
 			'edit_posts',
 			'mcpwp-chat',
 			array( $this, 'render_chat_page' )
@@ -114,8 +114,8 @@ class Mcpwp_Admin {
 		// Library.
 		add_submenu_page(
 			self::PAGE_SLUG,
-			__( 'Library', 'mcpwp' ),
-			__( 'Library', 'mcpwp' ),
+			__( 'Library', 'mumcp' ),
+			__( 'Library', 'mumcp' ),
 			'activate_plugins',
 			self::LIBRARY_PAGE_SLUG,
 			array( $this, 'render_library_page' )
@@ -124,8 +124,8 @@ class Mcpwp_Admin {
 		// Integrations (already exists).
 		add_submenu_page(
 			self::PAGE_SLUG,
-			__( 'Integrations', 'mcpwp' ),
-			__( 'Integrations', 'mcpwp' ),
+			__( 'Integrations', 'mumcp' ),
+			__( 'Integrations', 'mumcp' ),
 			'activate_plugins',
 			Mcpwp_Integrations_Admin::PAGE_SLUG,
 			array( new Mcpwp_Integrations_Admin(), 'render' )
@@ -134,8 +134,8 @@ class Mcpwp_Admin {
 		// Tools (renamed from "MCP Tools").
 		add_submenu_page(
 			self::PAGE_SLUG,
-			__( 'Tools', 'mcpwp' ),
-			__( 'Tools', 'mcpwp' ),
+			__( 'Tools', 'mumcp' ),
+			__( 'Tools', 'mumcp' ),
 			'activate_plugins',
 			Mcpwp_Tools_Admin::PAGE_SLUG,
 			array( new Mcpwp_Tools_Admin(), 'render' )
@@ -144,8 +144,8 @@ class Mcpwp_Admin {
 		// Settings.
 		add_submenu_page(
 			self::PAGE_SLUG,
-			__( 'Settings', 'mcpwp' ),
-			__( 'Settings', 'mcpwp' ),
+			__( 'Settings', 'mumcp' ),
+			__( 'Settings', 'mumcp' ),
 			'activate_plugins',
 			self::SETTINGS_PAGE_SLUG,
 			array( $this, 'render_settings_page' )
@@ -154,8 +154,8 @@ class Mcpwp_Admin {
 		// Activity Log.
 		add_submenu_page(
 			self::PAGE_SLUG,
-			__( 'Activity Log', 'mcpwp' ),
-			__( 'Activity Log', 'mcpwp' ),
+			__( 'Activity Log', 'mumcp' ),
+			__( 'Activity Log', 'mumcp' ),
 			'activate_plugins',
 			self::ACTIVITY_LOG_PAGE_SLUG,
 			array( $this, 'render_activity_log_page' )
@@ -258,7 +258,7 @@ class Mcpwp_Admin {
 				'catLabels'            => self::get_all_tool_category_labels(),
 				'chatGreeting'         => sprintf(
 					/* translators: %s: site name */
-					__( 'Hi! I can help you manage %s. Try: "Build a services page" or "List all pages" or "Add a testimonials section to the homepage."', 'mcpwp' ),
+					__( 'Hi! I can help you manage %s. Try: "Build a services page" or "List all pages" or "Add a testimonials section to the homepage."', 'mumcp' ),
 					get_bloginfo( 'name' )
 				),
 				'streamOk'             => ( function () {
@@ -268,26 +268,26 @@ class Mcpwp_Admin {
 					return ( $has_openai && in_array( $chat_model, array( 'openai', 'auto' ), true ) );
 				} )(),
 				'strings'              => array(
-					'copied'             => __( 'Copied!', 'mcpwp' ),
-					'copyFailed'         => __( 'Copy failed', 'mcpwp' ),
-					'confirm'            => __( 'Are you sure you want to regenerate the API key? The old key will stop working immediately.', 'mcpwp' ),
-					'testing'            => __( 'Testing...', 'mcpwp' ),
-					'connected'          => __( 'Connected!', 'mcpwp' ),
-					'testFailed'         => __( 'Connection failed', 'mcpwp' ),
-					'saving'             => __( 'Saving...', 'mcpwp' ),
-					'saved'              => __( 'Saved!', 'mcpwp' ),
-					'saveFailed'         => __( 'Save failed', 'mcpwp' ),
-					'removing'           => __( 'Removing...', 'mcpwp' ),
-					'removed'            => __( 'Removed!', 'mcpwp' ),
-					'requestFailed'      => __( 'Request failed', 'mcpwp' ),
-					'confirmRemove'      => __( 'Are you sure you want to remove this API key?', 'mcpwp' ),
-					'fillOneField'       => __( 'Please fill in at least one field.', 'mcpwp' ),
-					'enterApiKey'        => __( 'Please enter an API key.', 'mcpwp' ),
-					'revokeKey'          => __( 'Revoke this key?', 'mcpwp' ),
-					'clearHistory'       => __( 'Clear all chat history?', 'mcpwp' ),
-					'yesProceed'         => __( 'Yes, proceed', 'mcpwp' ),
-					'cancel'             => __( 'Cancel', 'mcpwp' ),
-					'allCategoriesLabel' => __( 'All categories (unrestricted)', 'mcpwp' ),
+					'copied'             => __( 'Copied!', 'mumcp' ),
+					'copyFailed'         => __( 'Copy failed', 'mumcp' ),
+					'confirm'            => __( 'Are you sure you want to regenerate the API key? The old key will stop working immediately.', 'mumcp' ),
+					'testing'            => __( 'Testing...', 'mumcp' ),
+					'connected'          => __( 'Connected!', 'mumcp' ),
+					'testFailed'         => __( 'Connection failed', 'mumcp' ),
+					'saving'             => __( 'Saving...', 'mumcp' ),
+					'saved'              => __( 'Saved!', 'mumcp' ),
+					'saveFailed'         => __( 'Save failed', 'mumcp' ),
+					'removing'           => __( 'Removing...', 'mumcp' ),
+					'removed'            => __( 'Removed!', 'mumcp' ),
+					'requestFailed'      => __( 'Request failed', 'mumcp' ),
+					'confirmRemove'      => __( 'Are you sure you want to remove this API key?', 'mumcp' ),
+					'fillOneField'       => __( 'Please fill in at least one field.', 'mumcp' ),
+					'enterApiKey'        => __( 'Please enter an API key.', 'mumcp' ),
+					'revokeKey'          => __( 'Revoke this key?', 'mumcp' ),
+					'clearHistory'       => __( 'Clear all chat history?', 'mumcp' ),
+					'yesProceed'         => __( 'Yes, proceed', 'mumcp' ),
+					'cancel'             => __( 'Cancel', 'mumcp' ),
+					'allCategoriesLabel' => __( 'All categories (unrestricted)', 'mumcp' ),
 				),
 			)
 		);
@@ -312,7 +312,7 @@ class Mcpwp_Admin {
 		$stored_key = get_option( 'mcpwp_api_key' );
 		if ( empty( $stored_key ) ) {
 			wp_send_json_error( array(
-				'message' => __( 'No API key configured. Please generate one on the Setup tab.', 'mcpwp' ),
+				'message' => __( 'No API key configured. Please generate one on the Setup tab.', 'mumcp' ),
 			) );
 		}
 
@@ -361,7 +361,7 @@ class Mcpwp_Admin {
 		$settings_link = sprintf(
 			'<a href="%s">%s</a>',
 			admin_url( 'admin.php?page=' . self::PAGE_SLUG ),
-			__( 'Settings', 'mcpwp' )
+			__( 'Settings', 'mumcp' )
 		);
 
 		array_unshift( $links, $settings_link );
@@ -374,8 +374,8 @@ class Mcpwp_Admin {
 	 */
 	public function add_network_admin_menu() {
 		add_menu_page(
-			__( 'MCPWP — Network', 'mcpwp' ),
-			__( 'MCPWP', 'mcpwp' ),
+			__( 'MCPWP — Network', 'mumcp' ),
+			__( 'MCPWP', 'mumcp' ),
 			'manage_network_plugins',
 			'mcpwp-network',
 			array( $this, 'render_network_admin_page' ),
@@ -415,7 +415,7 @@ class Mcpwp_Admin {
 			'mcpwp_network_setup_done',
 			sprintf(
 				/* translators: %d: number of sites */
-				__( 'MCPWP activated on %d site(s).', 'mcpwp' ),
+				__( 'MCPWP activated on %d site(s).', 'mumcp' ),
 				$count
 			),
 			'updated'
@@ -427,7 +427,7 @@ class Mcpwp_Admin {
 	 */
 	public function render_network_admin_page() {
 		if ( ! current_user_can( 'manage_network_plugins' ) ) {
-			wp_die( esc_html__( 'You do not have permission to access this page.', 'mcpwp' ) );
+			wp_die( esc_html__( 'You do not have permission to access this page.', 'mumcp' ) );
 		}
 
 		$this->handle_network_setup_all();
@@ -472,28 +472,28 @@ class Mcpwp_Admin {
 		settings_errors( 'mcpwp_network_messages' );
 		?>
 		<div class="wrap">
-			<h1><?php esc_html_e( 'MCPWP — Network Overview', 'mcpwp' ); ?></h1>
+			<h1><?php esc_html_e( 'MCPWP — Network Overview', 'mumcp' ); ?></h1>
 
 			<form method="post">
 				<?php wp_nonce_field( 'mcpwp_network_setup_all', 'mcpwp_network_nonce' ); ?>
 				<p>
 					<input type="submit" name="mcpwp_network_setup_all" class="button button-primary"
-						value="<?php esc_attr_e( 'Setup All Sites', 'mcpwp' ); ?>"
-						onclick="return confirm('<?php echo esc_js( __( 'Run activation (tables, options, bot user) on every site in the network?', 'mcpwp' ) ); ?>');" />
-					<span class="description"><?php esc_html_e( 'Runs activation on every site to ensure tables, options, and the bot user are provisioned.', 'mcpwp' ); ?></span>
+						value="<?php esc_attr_e( 'Setup All Sites', 'mumcp' ); ?>"
+						onclick="return confirm('<?php echo esc_js( __( 'Run activation (tables, options, bot user) on every site in the network?', 'mumcp' ) ); ?>');" />
+					<span class="description"><?php esc_html_e( 'Runs activation on every site to ensure tables, options, and the bot user are provisioned.', 'mumcp' ); ?></span>
 				</p>
 			</form>
 
 			<table class="widefat striped" style="margin-top:20px;">
 				<thead>
 					<tr>
-						<th><?php esc_html_e( 'ID', 'mcpwp' ); ?></th>
-						<th><?php esc_html_e( 'Site', 'mcpwp' ); ?></th>
-						<th><?php esc_html_e( 'URL', 'mcpwp' ); ?></th>
-						<th><?php esc_html_e( 'Version', 'mcpwp' ); ?></th>
-						<th><?php esc_html_e( 'API Key', 'mcpwp' ); ?></th>
-						<th><?php esc_html_e( 'Active Keys', 'mcpwp' ); ?></th>
-						<th><?php esc_html_e( 'Tools', 'mcpwp' ); ?></th>
+						<th><?php esc_html_e( 'ID', 'mumcp' ); ?></th>
+						<th><?php esc_html_e( 'Site', 'mumcp' ); ?></th>
+						<th><?php esc_html_e( 'URL', 'mumcp' ); ?></th>
+						<th><?php esc_html_e( 'Version', 'mumcp' ); ?></th>
+						<th><?php esc_html_e( 'API Key', 'mumcp' ); ?></th>
+						<th><?php esc_html_e( 'Active Keys', 'mumcp' ); ?></th>
+						<th><?php esc_html_e( 'Tools', 'mumcp' ); ?></th>
 					</tr>
 				</thead>
 				<tbody>
@@ -506,7 +506,7 @@ class Mcpwp_Admin {
 							<?php if ( $s['version'] ) : ?>
 								<?php echo esc_html( $s['version'] ); ?>
 							<?php else : ?>
-								<span style="color:#b32d2e;"><?php esc_html_e( 'Not activated', 'mcpwp' ); ?></span>
+								<span style="color:#b32d2e;"><?php esc_html_e( 'Not activated', 'mumcp' ); ?></span>
 							<?php endif; ?>
 						</td>
 						<td>
@@ -539,7 +539,7 @@ class Mcpwp_Admin {
 
 		// Elementor
 		$display['elementor'] = array(
-			'label'  => __( 'Elementor', 'mcpwp' ),
+			'label'  => __( 'Elementor', 'mumcp' ),
 			'active' => $capabilities['elementor'],
 			'pro'    => $capabilities['elementor_pro'],
 		);
@@ -557,7 +557,7 @@ class Mcpwp_Admin {
 			$seo_name = 'SEOPress';
 		}
 		$display['seo'] = array(
-			'label'  => __( 'SEO Plugin', 'mcpwp' ),
+			'label'  => __( 'SEO Plugin', 'mumcp' ),
 			'active' => $seo_active,
 			'name'   => $seo_name,
 		);
@@ -578,14 +578,14 @@ class Mcpwp_Admin {
 			$forms[] = 'Ninja Forms';
 		}
 		$display['forms'] = array(
-			'label'  => __( 'Form Plugins', 'mcpwp' ),
+			'label'  => __( 'Form Plugins', 'mumcp' ),
 			'active' => $forms_active,
 			'names'  => $forms,
 		);
 
 		// WooCommerce
 		$display['woocommerce'] = array(
-			'label'  => __( 'WooCommerce', 'mcpwp' ),
+			'label'  => __( 'WooCommerce', 'mumcp' ),
 			'active' => $capabilities['woocommerce'],
 		);
 
@@ -599,12 +599,12 @@ class Mcpwp_Admin {
 	 */
 	private function get_woocommerce_archetype_controller() {
 		if ( ! class_exists( 'Mcpwp_REST_WooCommerce' ) || ! class_exists( 'Mcpwp_WooCommerce' ) ) {
-			return new WP_Error( 'missing_woocommerce_controller', __( 'WooCommerce archetype tools are not available.', 'mcpwp' ) );
+			return new WP_Error( 'missing_woocommerce_controller', __( 'WooCommerce archetype tools are not available.', 'mumcp' ) );
 		}
 
 		$handler = new Mcpwp_WooCommerce();
 		if ( ! $handler->is_active() ) {
-			return new WP_Error( 'wc_not_active', __( 'WooCommerce is not active on this site.', 'mcpwp' ) );
+			return new WP_Error( 'wc_not_active', __( 'WooCommerce is not active on this site.', 'mumcp' ) );
 		}
 
 		return new Mcpwp_REST_WooCommerce( $handler );

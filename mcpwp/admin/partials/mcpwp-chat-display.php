@@ -30,17 +30,17 @@ $model_label = $model_labels[ $chat_model ] ?? 'Workers AI';
 		<span class="mcpwp-logo">
 			<span class="dashicons dashicons-format-chat"></span>
 		</span>
-		<?php esc_html_e( 'MCPWP Chat', 'mcpwp' ); ?>
+		<?php esc_html_e( 'MCPWP Chat', 'mumcp' ); ?>
 		<span class="mcpwp-chat-model-badge"><?php echo esc_html( $model_label ); ?></span>
 	</h1>
-	<p class="description mcpwp-page-intro"><?php esc_html_e( 'Ask your site for help, then keep meaningful changes inside the MCPWP approval and audit loop.', 'mcpwp' ); ?></p>
+	<p class="description mcpwp-page-intro"><?php esc_html_e( 'Ask your site for help, then keep meaningful changes inside the MCPWP approval and audit loop.', 'mumcp' ); ?></p>
 
 	<?php if ( ! $has_openai && ! $has_gemini ) : ?>
 	<div class="mcpwp-chat-safety" style="background:#fffbeb;border-bottom:1px solid #f6c90e;color:#92400e;">
 		<span class="dashicons dashicons-info-outline"></span>
 		<?php
 		/* translators: %s: URL of the integrations settings page */
-		$connect_text = __( 'For the best results, <a href="%s">connect OpenAI or Gemini</a>.', 'mcpwp' );
+		$connect_text = __( 'For the best results, <a href="%s">connect OpenAI or Gemini</a>.', 'mumcp' );
 		printf(
 			wp_kses( $connect_text, array( 'a' => array( 'href' => array() ) ) ),
 			esc_url( admin_url( 'admin.php?page=' . Mcpwp_Integrations_Admin::PAGE_SLUG ) )
@@ -53,11 +53,11 @@ $model_label = $model_labels[ $chat_model ] ?? 'Workers AI';
 		<div class="mcpwp-chat-toolbar">
 			<div class="mcpwp-chat-safety">
 				<span class="dashicons dashicons-shield"></span>
-				<?php esc_html_e( 'Safety mode: review agent work in Control Room before applying high-impact changes.', 'mcpwp' ); ?>
+				<?php esc_html_e( 'Safety mode: review agent work in Control Room before applying high-impact changes.', 'mumcp' ); ?>
 			</div>
 			<button type="button" id="mcpwp-chat-clear" class="button button-link mcpwp-chat-clear-btn">
 				<span class="dashicons dashicons-trash"></span>
-				<?php esc_html_e( 'Clear history', 'mcpwp' ); ?>
+				<?php esc_html_e( 'Clear history', 'mumcp' ); ?>
 			</button>
 		</div>
 		<div id="mcpwp-chat-messages" class="mcpwp-chat-messages">
@@ -67,7 +67,7 @@ $model_label = $model_labels[ $chat_model ] ?? 'Workers AI';
 					<?php
 					printf(
 						/* translators: %s: site name */
-						esc_html__( 'Hi! I can help you manage %s. Try: "Build a services page" or "List all pages" or "Add a testimonials section to the homepage."', 'mcpwp' ),
+						esc_html__( 'Hi! I can help you manage %s. Try: "Build a services page" or "List all pages" or "Add a testimonials section to the homepage."', 'mumcp' ),
 						esc_html( $site_name )
 					);
 					?>
@@ -79,14 +79,14 @@ $model_label = $model_labels[ $chat_model ] ?? 'Workers AI';
 		<div id="mcpwp-confirm-bar" class="mcpwp-confirm-bar" style="display:none;">
 			<span class="dashicons dashicons-warning"></span>
 			<span id="mcpwp-confirm-text"></span>
-			<button type="button" id="mcpwp-confirm-yes" class="button button-primary button-small"><?php esc_html_e( 'Yes, proceed', 'mcpwp' ); ?></button>
-			<button type="button" id="mcpwp-confirm-no" class="button button-small"><?php esc_html_e( 'Cancel', 'mcpwp' ); ?></button>
+			<button type="button" id="mcpwp-confirm-yes" class="button button-primary button-small"><?php esc_html_e( 'Yes, proceed', 'mumcp' ); ?></button>
+			<button type="button" id="mcpwp-confirm-no" class="button button-small"><?php esc_html_e( 'Cancel', 'mumcp' ); ?></button>
 		</div>
 
 		<div class="mcpwp-chat-composer">
-			<input type="text" id="mcpwp-chat-input" placeholder="<?php esc_attr_e( 'Try: \'Build a services page\' or \'List recent drafts\'...', 'mcpwp' ); ?>" />
+			<input type="text" id="mcpwp-chat-input" placeholder="<?php esc_attr_e( 'Try: \'Build a services page\' or \'List recent drafts\'...', 'mumcp' ); ?>" />
 			<button type="button" id="mcpwp-chat-send" class="button button-primary">
-				<?php esc_html_e( 'Send', 'mcpwp' ); ?>
+				<?php esc_html_e( 'Send', 'mumcp' ); ?>
 			</button>
 		</div>
 	</div>
@@ -94,11 +94,11 @@ $model_label = $model_labels[ $chat_model ] ?? 'Workers AI';
 		<?php
 		printf(
 			/* translators: %s: model name */
-			esc_html__( 'Powered by %s. Site operations remain auditable through WordPress and MCPWP activity logs.', 'mcpwp' ),
+			esc_html__( 'Powered by %s. Site operations remain auditable through WordPress and MCPWP activity logs.', 'mumcp' ),
 			esc_html( $model_label )
 		);
 		?>
-		<a href="<?php echo esc_url( admin_url( 'admin.php?page=mcpwp-settings' ) ); ?>"><?php esc_html_e( 'Change model', 'mcpwp' ); ?></a>
+		<a href="<?php echo esc_url( admin_url( 'admin.php?page=mcpwp-settings' ) ); ?>"><?php esc_html_e( 'Change model', 'mumcp' ); ?></a>
 	</p>
 </div>
 
