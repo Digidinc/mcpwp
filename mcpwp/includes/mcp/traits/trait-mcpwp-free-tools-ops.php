@@ -214,6 +214,13 @@ trait Mcpwp_Free_Tools_Ops_Trait {
 	 */
 	private function get_plugin_updates_tools() {
 		$tools = array();
+
+		// Self-update tools are not available in the WP.org build — updates
+		// come exclusively through the WordPress.org update channel.
+		if ( defined( 'MCPWP_WPORG_BUILD' ) ) {
+			return $tools;
+		}
+
 		// Plugin Updates
 		$tools[] = $this->define_tool(
 			'wp_check_update',

@@ -260,9 +260,10 @@ class Mcpwp_MCP_Free_Tools extends Mcpwp_MCP_Tool_Registry {
 			'wp_extract_site_blueprint'  => 'site',
 		);
 
-		// Remove custom CSS tool categories in WP.org build.
+		// Remove custom CSS and self-update tool categories in WP.org build.
 		if ( defined( 'MCPWP_WPORG_BUILD' ) ) {
 			unset( $categories['wp_get_custom_css'], $categories['wp_set_custom_css'], $categories['wp_delete_custom_css'], $categories['wp_get_css_length'] );
+			unset( $categories['wp_check_update'], $categories['wp_trigger_update'] );
 		}
 
 		return $categories;
@@ -1045,9 +1046,10 @@ class Mcpwp_MCP_Free_Tools extends Mcpwp_MCP_Tool_Registry {
 			),
 		);
 
-		// Remove custom CSS tools in WP.org build.
+		// Remove custom CSS and self-update tools in WP.org build.
 		if ( defined( 'MCPWP_WPORG_BUILD' ) ) {
 			unset( $map['wp_get_custom_css'], $map['wp_set_custom_css'], $map['wp_delete_custom_css'], $map['wp_get_css_length'] );
+			unset( $map['wp_check_update'], $map['wp_trigger_update'] );
 		}
 
 		return $map;
