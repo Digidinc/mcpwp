@@ -16,9 +16,15 @@ class Mcpwp_REST_Content_Quality extends Mcpwp_REST_API {
 
 	/**
 	 * Constructor.
+	 *
+	 * @param bool $register_routes Whether to register REST routes. Pass false
+	 *                              to obtain an instance for method reuse without
+	 *                              re-registering the already-bootstrapped route.
 	 */
-	public function __construct() {
-		$this->register_routes();
+	public function __construct( $register_routes = true ) {
+		if ( $register_routes ) {
+			$this->register_routes();
+		}
 	}
 
 	/**
