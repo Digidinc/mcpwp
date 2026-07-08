@@ -48,7 +48,7 @@ A: No unconsented traffic.
 A: The WP.org build contains no updater: `class-mcpwp-updater.php` is excluded from the zip, the `/update` REST route is not registered, and the `wp_check_update` / `wp_trigger_update` MCP tools are not defined when `MCPWP_WPORG_BUILD` is set (constant is injected into the main file at build time). Updates flow only through WordPress.org.
 
 **Q: Paid/Pro upsell?**
-A: The zip ships free code only (`includes/pro/` and Freemius are stripped; `MCPWP_WPORG_BUILD` hard-forces `is_pro() === false`). A few MCP tool names for Pro features remain listed in `tools/list` and return a clear "requires Pro" error with a link to mcpwp.net/pricing — informational upsell, no crippled functionality, consistent with directory guidelines. The readme description links the pricing page once.
+A: The zip ships free code only (`includes/pro/` and Freemius are stripped; `MCPWP_WPORG_BUILD` hard-forces `is_pro() === false`). A few MCP tool names for Pro features remain listed in `tools/list` and return a clear "requires Pro" error with a link to mumcp.com/pricing — informational upsell, no crippled functionality, consistent with directory guidelines. The readme description links the pricing page (mumcp.com/pricing) once.
 
 **Q: `wp_redirect()` warnings in the OAuth controller?**
 A: Intentional. The OAuth 2.0 authorization endpoint must redirect back to the client's registered `redirect_uri` (external host by design). URIs are validated against the client registration (exact-match allowlist + PKCE) before redirecting, which is the OAuth-correct equivalent of `allowed_redirect_hosts`. `wp_safe_redirect()` would break every external MCP client.
@@ -62,7 +62,7 @@ A: Only WARNINGs remain (variable-prefix conventions in admin partials, nonce sn
 ## Post-approval follow-ups
 
 - Add the wp.org SVN checkout + deploy step to `docs/RELEASE_CHECKLIST.md` (release-please flow on `main`; cherry-pick shared fixes main→wporg only).
-- Point the readme `Donate link` / pricing copy at final domain if the mumcp domain decision lands (readme links can change in any update).
+- DONE 2026-07-08: public domain is mumcp.com (landing worker `mumcp-landing`); all marketing links moved off mcpwp.net.
 - Consider a GitHub Action for SVN deploy (e.g. 10up/action-wordpress-plugin-deploy) once the slug is live.
 
 ## Branch discipline
