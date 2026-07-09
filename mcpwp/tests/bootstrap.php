@@ -592,6 +592,60 @@ function post_type_supports($post_type, $feature)
     return in_array((string) $post_type, array( 'post', 'page' ), true);
 }
 
+if (! defined('OBJECT')) {
+    define('OBJECT', 'OBJECT');
+}
+
+if (! function_exists('get_post_status_object')) {
+    function get_post_status_object($status)
+    {
+        // Stock WP: only `publish` is public.
+        $public = array( 'publish' => true );
+        $known  = array( 'publish', 'draft', 'pending', 'private', 'future', 'trash' );
+        if (! in_array((string) $status, $known, true)) {
+            return null; // Unknown/unregistered status.
+        }
+        return (object) array(
+            'name'   => (string) $status,
+            'public' => ! empty($public[ (string) $status ]),
+        );
+    }
+}
+
+if (! function_exists('url_to_postid')) {
+    // Mirror WP: resolve the plain-permalink query vars (?p=ID / ?page_id=ID)
+    // regardless of post status; pretty draft slugs fall through to path lookup.
+    function url_to_postid($url)
+    {
+        $query = (string) parse_url((string) $url, PHP_URL_QUERY);
+        if ('' !== $query) {
+            parse_str($query, $args);
+            foreach (array( 'p', 'page_id' ) as $var) {
+                if (! empty($args[ $var ])) {
+                    return (int) $args[ $var ];
+                }
+            }
+        }
+        return 0;
+    }
+}
+
+if (! function_exists('get_page_by_path')) {
+    function get_page_by_path($path, $output = OBJECT, $post_type = 'page')
+    {
+        $types = (array) $post_type;
+        $name  = basename(trim((string) $path, '/'));
+        foreach ($GLOBALS['_mcpwp_test_posts'] as $post) {
+            if ('publish' === $post->post_status
+                && $post->post_name === $name
+                && in_array($post->post_type, $types, true)) {
+                return $post;
+            }
+        }
+        return null;
+    }
+}
+
 // ── Cron / plugin-update stubs (drive via globals) ───────────────────────
 
 $GLOBALS['mcpwp_test_doing_cron']            = false;
