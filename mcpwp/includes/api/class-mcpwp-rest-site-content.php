@@ -196,6 +196,44 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 		);
 	}
 
+	/**
+	 * Whether a post status is publicly viewable.
+	 *
+	 * Only statuses whose registered status object carries the `public` flag
+	 * count as public — on a stock WordPress install that is exactly the
+	 * built-in `publish` status. Draft, pending, private, future, trash and
+	 * every internal status return false. Unknown or unregistered status
+	 * strings also return false, so ambiguous input is treated as non-public.
+	 *
+	 * @param string $status Post status slug.
+	 * @return bool True when the status is publicly viewable.
+	 */
+	private function is_public_status( $status ) {
+		$status_obj = get_post_status_object( (string) $status );
+		return $status_obj && ! empty( $status_obj->public );
+	}
+
+	/**
+	 * Whether the current caller may access non-public content.
+	 *
+	 * Non-public content (draft, pending, private, etc.) is limited to keys
+	 * carrying write scope or higher (write or admin). A read-only key — or a
+	 * request with no matched key record — is treated as unprivileged and sees
+	 * published content only. Trusted in-dashboard admin-AJAX callers (admin
+	 * capability plus a valid nonce) are also allowed, matching the plugin's
+	 * other privileged read gates.
+	 *
+	 * @return bool True when the caller may access non-public content.
+	 */
+	private function requester_can_see_non_public() {
+		$key_record = $this->get_current_api_key_record();
+		if ( $key_record && $this->key_has_scope( $key_record, 'write' ) ) {
+			return true;
+		}
+
+		return $this->is_trusted_admin_ajax_request();
+	}
+
 	public function search_content( $request ) {
 		$this->log_activity( 'search_content', $request );
 
@@ -226,8 +264,27 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			$type = 'any';
 		}
 
-		$status = sanitize_key( (string) $request->get_param( 'status' ) );
+		// Coerce an array-valued status param (e.g. status[]=draft) to empty so it
+		// falls through to the published default instead of raising an
+		// "Array to string conversion" warning and being treated as an unknown
+		// status. Ambiguous input still resolves toward public content.
+		$status_param = $request->get_param( 'status' );
+		$status       = is_array( $status_param ) ? '' : sanitize_key( (string) $status_param );
 		if ( '' === $status ) {
+			$status = 'publish';
+		}
+
+		// Non-public statuses (draft, private, pending, or the "any" catch-all)
+		// are only searchable by a key with write scope or higher. For an
+		// unprivileged key we clamp the query down to published content and
+		// report the downgrade, so a read-only key can never enumerate the
+		// titles, slugs, URLs or excerpts of unpublished content — while still
+		// getting useful public results instead of an error.
+		$status_downgraded = false;
+		if ( ( 'any' === $status || ! $this->is_public_status( $status ) ) && ! $this->requester_can_see_non_public() ) {
+			if ( 'publish' !== $status ) {
+				$status_downgraded = true;
+			}
 			$status = 'publish';
 		}
 
@@ -255,20 +312,25 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			}
 		}
 
-		return $this->success_response(
-			array(
-				'query'      => $query,
-				'type'       => $type,
-				'status'     => $status,
-				'items'      => $items,
-				'pagination' => array(
-					'page'        => $page,
-					'per_page'    => $per_page,
-					'total'       => (int) $search_query->found_posts,
-					'total_pages' => (int) $search_query->max_num_pages,
-				),
-			)
+		$response = array(
+			'query'      => $query,
+			'type'       => $type,
+			'status'     => $status,
+			'items'      => $items,
+			'pagination' => array(
+				'page'        => $page,
+				'per_page'    => $per_page,
+				'total'       => (int) $search_query->found_posts,
+				'total_pages' => (int) $search_query->max_num_pages,
+			),
 		);
+
+		if ( $status_downgraded ) {
+			$response['status_downgraded'] = true;
+			$response['note']              = __( 'The requested status filter includes non-public content, which requires a key with write scope or higher. Results were limited to published content.', 'mcpwp' );
+		}
+
+		return $this->success_response( $response );
 	}
 
 	public function fetch_content( $request ) {
@@ -301,6 +363,20 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 		}
 
 		if ( ! $post instanceof WP_Post ) {
+			return $this->error_response(
+				'not_found',
+				__( 'Content not found.', 'mcpwp' ),
+				404
+			);
+		}
+
+		// A non-public post (draft, pending, private, etc.) may only be fetched
+		// by a key with write scope or higher. For any other caller we return
+		// the same 404 as a genuinely missing post, so the response never
+		// discloses that the unpublished post exists. This one guard covers both
+		// the numeric ?id vector and the ?url resolver vector, because both
+		// resolve into $post above.
+		if ( ! $this->is_public_status( $post->post_status ) && ! $this->requester_can_see_non_public() ) {
 			return $this->error_response(
 				'not_found',
 				__( 'Content not found.', 'mcpwp' ),
@@ -389,7 +465,16 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			return (int) $post->ID;
 		}
 
-		// Also check private, draft, and pending posts (admin API key has full access).
+		// A URL only resolves to a non-public post (draft, pending, private) for
+		// a key with write scope or higher. For everyone else we stop here, so an
+		// unpublished slug resolves to nothing — the same "not found" outcome as a
+		// slug that does not exist. fetch_content() enforces the same rule as the
+		// authoritative check (and also covers the numeric ?id vector); this is
+		// defense in depth.
+		if ( ! $this->requester_can_see_non_public() ) {
+			return 0;
+		}
+
 		$non_public_statuses = array( 'private', 'draft', 'pending' );
 		foreach ( $non_public_statuses as $status ) {
 			$found = get_posts(
