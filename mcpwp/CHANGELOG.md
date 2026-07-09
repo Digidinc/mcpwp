@@ -5,6 +5,14 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.4.5](https://github.com/Mumega-com/mcpwp/compare/v3.4.4...v3.4.5) (2026-07-09)
+
+
+### Bug Fixes
+
+* **security:** require admin scope to bypass content-approval gate ([172fd28](https://github.com/Mumega-com/mcpwp/commit/172fd2803cfa0fa48c7907e4b8c6e2c08cb01f4b))
+* **security:** require admin scope to bypass content-approval gate ([b27591b](https://github.com/Mumega-com/mcpwp/commit/b27591bb83de625eea5f916b834140dc7a34eb81))
+
 ## [3.4.4](https://github.com/Mumega-com/mcpwp/compare/v3.4.3...v3.4.4) (2026-07-08)
 
 
