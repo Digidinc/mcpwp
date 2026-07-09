@@ -370,6 +370,18 @@ class Mcpwp_REST_Content_Graph extends Mcpwp_REST_API {
 			: rest_sanitize_boolean( $request->get_param( 'approval_required' ) );
 		$approval_note = (string) $request->get_param( 'approval_note' );
 
+		// Approval-gate floor (admin-only bypass): an explicit approval_required=false is
+		// honored for an admin-scoped API key or the trusted admin-AJAX context. A plain
+		// write/read key or OAuth token is silently forced through approval. A null key
+		// record is NOT treated as trusted (OAuth leaves it null); only the explicit
+		// admin-scope is_trusted_admin_ajax_request() predicate (admin cap + nonce) is exempt.
+		if ( false === $approval_required ) {
+			$requester_key = $this->get_current_api_key_record();
+			if ( ! ( ( $requester_key && $this->key_has_scope( $requester_key, 'admin' ) ) || $this->is_trusted_admin_ajax_request() ) ) {
+				$approval_required = true;
+			}
+		}
+
 		if ( $approval_required ) {
 			if ( ! class_exists( 'Mcpwp_Approvals' ) ) {
 				return $this->error_response( 'approvals_unavailable', 'Approval pipeline is not available.', 500 );
