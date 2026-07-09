@@ -5,6 +5,13 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.4.6](https://github.com/Mumega-com/mcpwp/compare/v3.4.5...v3.4.6) (2026-07-09)
+
+
+### Bug Fixes
+
+* **security:** restrict non-public content reads to write-scoped keys ([#601](https://github.com/Mumega-com/mcpwp/issues/601)) ([ea27690](https://github.com/Mumega-com/mcpwp/commit/ea2769065bb8c1430ac9f78de1490087abb737bd))
+
 ## [3.4.5](https://github.com/Mumega-com/mcpwp/compare/v3.4.4...v3.4.5) (2026-07-09)
 
 
