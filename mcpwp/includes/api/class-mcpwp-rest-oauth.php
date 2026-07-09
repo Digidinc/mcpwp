@@ -86,6 +86,118 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 				),
 			)
 		);
+
+		register_rest_route(
+			$this->namespace,
+			'/oauth/register',
+			array(
+				array(
+					'methods'             => WP_REST_Server::CREATABLE,
+					'callback'            => array( $this, 'handle_register' ),
+					'permission_callback' => '__return_true',
+				),
+			)
+		);
+	}
+
+	// -------------------------------------------------------------------------
+	// POST /oauth/register — Dynamic Client Registration
+	// -------------------------------------------------------------------------
+
+	/**
+	 * Register an OAuth client dynamically.
+	 *
+	 * MCP clients such as ChatGPT can discover this URL from authorization-server
+	 * metadata and obtain a client_id without the site owner manually pre-filling
+	 * OAuth connector settings.
+	 *
+	 * @param WP_REST_Request $request Request object.
+	 * @return WP_REST_Response
+	 */
+	public function handle_register( $request ) {
+		if ( ! $this->is_oauth_enabled() ) {
+			return $this->oauth_error_response( 'server_error', 'OAuth is not enabled on this site.', 501 );
+		}
+
+		$rate_limit_check = $this->check_rate_limit( 'oauth-register:' . $this->get_client_ip() );
+		if ( is_wp_error( $rate_limit_check ) ) {
+			return $rate_limit_check;
+		}
+
+		$params = $request->get_json_params();
+		if ( ! is_array( $params ) ) {
+			$params = $request->get_params();
+		}
+
+		$redirect_uris = $this->sanitize_registration_redirect_uris( $params['redirect_uris'] ?? array() );
+		if ( empty( $redirect_uris ) ) {
+			return $this->oauth_error_response( 'invalid_client_metadata', 'redirect_uris must contain at least one valid HTTPS redirect URI.', 400 );
+		}
+
+		$response_types = isset( $params['response_types'] ) && is_array( $params['response_types'] )
+			? array_values( array_unique( array_map( 'sanitize_key', $params['response_types'] ) ) )
+			: array( 'code' );
+		if ( array_diff( $response_types, array( 'code' ) ) ) {
+			return $this->oauth_error_response( 'invalid_client_metadata', 'Only response_type code is supported.', 400 );
+		}
+
+		$grant_types = isset( $params['grant_types'] ) && is_array( $params['grant_types'] )
+			? array_values( array_unique( array_map( 'sanitize_key', $params['grant_types'] ) ) )
+			: array( 'authorization_code', 'refresh_token' );
+		$supported_grants = array( 'authorization_code', 'refresh_token' );
+		if ( array_diff( $grant_types, $supported_grants ) ) {
+			return $this->oauth_error_response( 'invalid_client_metadata', 'Only authorization_code and refresh_token grants are supported for dynamic clients.', 400 );
+		}
+
+		$token_auth_method = isset( $params['token_endpoint_auth_method'] )
+			? sanitize_key( (string) $params['token_endpoint_auth_method'] )
+			: 'none';
+		if ( ! in_array( $token_auth_method, array( 'none', 'client_secret_post', 'client_secret_basic' ), true ) ) {
+			return $this->oauth_error_response( 'invalid_client_metadata', 'Unsupported token_endpoint_auth_method.', 400 );
+		}
+
+		$client_id     = 'mcpwp_dcr_' . bin2hex( random_bytes( 16 ) );
+		$client_secret = 'none' !== $token_auth_method ? 'mcpwp_cs_' . bin2hex( random_bytes( 24 ) ) : '';
+		$now           = time();
+		$client_name   = sanitize_text_field( (string) ( $params['client_name'] ?? 'OAuth Client' ) );
+
+		$clients = $this->get_dynamic_oauth_clients();
+		$clients[ $client_id ] = array(
+			'client_id'                  => $client_id,
+			'client_name'                => $client_name,
+			'redirect_uris'              => $redirect_uris,
+			'grant_types'                => $grant_types,
+			'response_types'             => array( 'code' ),
+			'token_endpoint_auth_method' => $token_auth_method,
+			'client_secret_hash'         => '' !== $client_secret ? wp_hash_password( $client_secret ) : '',
+			'created_at'                 => $now,
+			'updated_at'                 => $now,
+		);
+		update_option( 'mcpwp_oauth_clients', $clients, false );
+
+		$body = array(
+			'client_id'                  => $client_id,
+			'client_id_issued_at'        => $now,
+			'client_name'                => $client_name,
+			'redirect_uris'              => $redirect_uris,
+			'grant_types'                => $grant_types,
+			'response_types'             => array( 'code' ),
+			'token_endpoint_auth_method' => $token_auth_method,
+		);
+
+		if ( ! empty( $params['scope'] ) ) {
+			$body['scope'] = sanitize_text_field( (string) $params['scope'] );
+		}
+
+		if ( '' !== $client_secret ) {
+			$body['client_secret']            = $client_secret;
+			$body['client_secret_expires_at'] = 0;
+		}
+
+		$response = new WP_REST_Response( $body, 201 );
+		$response->header( 'Cache-Control', 'no-store' );
+		$response->header( 'Pragma', 'no-cache' );
+		return $response;
 	}
 
 	// -------------------------------------------------------------------------
@@ -112,9 +224,11 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 			return $this->wpe_to_response( $validate_err );
 		}
 
-		// Require logged-in WP user.
+		// Require logged-in WP user. Send them back to the FRONT-CHANNEL
+		// authorize URL after login — the REST route would see them as
+		// logged-out again (core strips cookie auth without an X-WP-Nonce).
 		if ( ! function_exists( 'is_user_logged_in' ) || ! is_user_logged_in() ) {
-			$callback_url = add_query_arg( $params, rest_url( $this->namespace . '/oauth/authorize' ) );
+			$callback_url = add_query_arg( $params, Mcpwp_OAuth_Well_Known::get_front_channel_authorize_url() );
 			$login_url    = wp_login_url( $callback_url );
 			wp_redirect( $login_url );
 			exit;
@@ -269,6 +383,11 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 		$client_id     = sanitize_key( (string) $request->get_param( 'client_id' ) );
 		// P0-C: client_secret is OPTIONAL — never required. Read it but don't error on absence.
 		$client_secret = (string) $request->get_param( 'client_secret' );
+		$basic_auth    = $this->extract_basic_auth_client_credentials();
+		if ( ! empty( $basic_auth['client_id'] ) || ! empty( $basic_auth['client_secret'] ) ) {
+			$client_id     = sanitize_key( (string) $basic_auth['client_id'] );
+			$client_secret = (string) $basic_auth['client_secret'];
+		}
 
 		if ( empty( $code ) ) {
 			return $this->oauth_error_response( 'invalid_request', 'code is required.', 400 );
@@ -317,7 +436,6 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 		// - If client_secret is provided: verify against configured secret (confidential client).
 		// - If only client_id (no secret): verify client_id matches configured id (public client).
 		// - If neither: skip client validation — public client presenting only PKCE (allowed by OAuth 2.1).
-		$oauth_settings = $this->get_oauth_settings();
 		if ( ! empty( $client_secret ) ) {
 			// Confidential client path — secret must verify.
 			if ( ! $this->verify_oauth_client_credentials( $client_id, $client_secret ) ) {
@@ -325,7 +443,7 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 			}
 		} elseif ( ! empty( $client_id ) ) {
 			// Public client path — validate client_id only (no secret check).
-			if ( ! hash_equals( $oauth_settings['oauth_client_id'], sanitize_key( $client_id ) ) ) {
+			if ( ! $this->is_registered_oauth_client_id( $client_id ) ) {
 				return $this->oauth_error_response( 'invalid_client', 'Invalid client_id.', 401 );
 			}
 		}
@@ -344,6 +462,7 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 		$scopes         = $this->clamp_scope_array_to_user_id( $scopes, $stored_user_id );
 
 		// Issue token via existing backend.
+		$oauth_settings = $this->get_oauth_settings();
 		$ttl            = (int) $oauth_settings['oauth_token_ttl'];
 		$token_response = $this->issue_oauth_access_token_with_user( $scopes, $ttl, $stored_user_id );
 
@@ -427,6 +546,11 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 
 		$client_id     = sanitize_key( (string) $request->get_param( 'client_id' ) );
 		$client_secret = (string) $request->get_param( 'client_secret' );
+		$basic_auth    = $this->extract_basic_auth_client_credentials();
+		if ( ! empty( $basic_auth['client_id'] ) || ! empty( $basic_auth['client_secret'] ) ) {
+			$client_id     = sanitize_key( (string) $basic_auth['client_id'] );
+			$client_secret = (string) $basic_auth['client_secret'];
+		}
 
 		if ( empty( $client_id ) ) {
 			return $this->oauth_error_response( 'invalid_request', 'client_id is required for client_credentials grant.', 400 );
@@ -438,6 +562,10 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 
 		if ( ! $this->verify_oauth_client_credentials( $client_id, $client_secret ) ) {
 			return $this->oauth_error_response( 'invalid_client', 'Invalid client credentials.', 401 );
+		}
+
+		if ( ! $this->oauth_client_allows_grant( $client_id, 'client_credentials' ) ) {
+			return $this->oauth_error_response( 'unauthorized_client', 'This client is not allowed to use client_credentials.', 400 );
 		}
 
 		$scope_string   = (string) $request->get_param( 'scope' );
@@ -485,10 +613,8 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 			return new WP_Error( 'invalid_request', 'response_type must be "code".', array( 'status' => 400 ) );
 		}
 
-		$oauth_settings = $this->get_oauth_settings();
-
-		// Validate client_id (constant-time).
-		if ( empty( $params['client_id'] ) || ! hash_equals( $oauth_settings['oauth_client_id'], $params['client_id'] ) ) {
+		// Validate client_id (configured static client or DCR-issued client).
+		if ( empty( $params['client_id'] ) || ! $this->is_registered_oauth_client_id( $params['client_id'] ) ) {
 			return new WP_Error( 'invalid_client', 'Unknown or missing client_id.', array( 'status' => 400 ) );
 		}
 
@@ -496,7 +622,7 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 		if ( empty( $params['redirect_uri'] ) ) {
 			return new WP_Error( 'invalid_request', 'redirect_uri is required.', array( 'status' => 400 ) );
 		}
-		if ( ! $this->is_redirect_uri_allowed( $params['redirect_uri'] ) ) {
+		if ( ! $this->is_redirect_uri_allowed( $params['redirect_uri'], $params['client_id'] ) ) {
 			return new WP_Error( 'invalid_request', 'redirect_uri is not on the allow-list.', array( 'status' => 400 ) );
 		}
 
@@ -536,7 +662,7 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 			$user_login   = esc_html( $current_user->user_login );
 		}
 
-		$post_url = esc_url( rest_url( $this->namespace . '/oauth/authorize' ) );
+		$post_url = esc_url( Mcpwp_OAuth_Well_Known::get_front_channel_authorize_url() );
 
 		$hidden_fields = '';
 		foreach ( $params as $key => $value ) {
@@ -706,6 +832,45 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 	// -------------------------------------------------------------------------
 
 	/**
+	 * Extract OAuth client credentials from an HTTP Basic Authorization header.
+	 *
+	 * @return array{client_id:string,client_secret:string}
+	 */
+	private function extract_basic_auth_client_credentials() {
+		$username = isset( $_SERVER['PHP_AUTH_USER'] ) ? (string) wp_unslash( $_SERVER['PHP_AUTH_USER'] ) : '';
+		$password = isset( $_SERVER['PHP_AUTH_PW'] ) ? (string) wp_unslash( $_SERVER['PHP_AUTH_PW'] ) : '';
+		if ( '' !== $username || '' !== $password ) {
+			return array(
+				'client_id'     => rawurldecode( $username ),
+				'client_secret' => rawurldecode( $password ),
+			);
+		}
+
+		$header = '';
+		foreach ( array( 'HTTP_AUTHORIZATION', 'REDIRECT_HTTP_AUTHORIZATION' ) as $key ) {
+			if ( ! empty( $_SERVER[ $key ] ) ) {
+				$header = (string) wp_unslash( $_SERVER[ $key ] );
+				break;
+			}
+		}
+
+		if ( ! preg_match( '/^Basic\\s+(.+)$/i', trim( $header ), $matches ) ) {
+			return array( 'client_id' => '', 'client_secret' => '' );
+		}
+
+		$decoded = base64_decode( $matches[1], true );
+		if ( false === $decoded || false === strpos( $decoded, ':' ) ) {
+			return array( 'client_id' => '', 'client_secret' => '' );
+		}
+
+		list( $client_id, $client_secret ) = explode( ':', $decoded, 2 );
+		return array(
+			'client_id'     => rawurldecode( $client_id ),
+			'client_secret' => rawurldecode( $client_secret ),
+		);
+	}
+
+	/**
 	 * Compute a PKCE S256 code challenge from a verifier.
 	 *
 	 * base64url( SHA256( code_verifier ) ) — no padding.
@@ -727,8 +892,8 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 	 * @param string $redirect_uri URI to check.
 	 * @return bool True when on the allow-list.
 	 */
-	public function is_redirect_uri_allowed( $redirect_uri ) {
-		$allowed = $this->get_allowed_redirect_uris();
+	public function is_redirect_uri_allowed( $redirect_uri, $client_id = '' ) {
+		$allowed = $this->get_allowed_redirect_uris( $client_id );
 		foreach ( $allowed as $allowed_uri ) {
 			if ( hash_equals( $allowed_uri, $redirect_uri ) ) {
 				return true;
@@ -747,7 +912,15 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 	 *
 	 * @return string[]
 	 */
-	public function get_allowed_redirect_uris() {
+	public function get_allowed_redirect_uris( $client_id = '' ) {
+		$client_id = sanitize_key( (string) $client_id );
+		if ( '' !== $client_id ) {
+			$client = $this->get_dynamic_oauth_client( $client_id );
+			if ( $client && ! empty( $client['redirect_uris'] ) && is_array( $client['redirect_uris'] ) ) {
+				return array_values( array_filter( array_map( 'esc_url_raw', array_map( 'trim', $client['redirect_uris'] ) ) ) );
+			}
+		}
+
 		$settings = get_option( 'mcpwp_settings', array() );
 		$raw      = isset( $settings['oauth_redirect_uris'] ) ? $settings['oauth_redirect_uris'] : array();
 
@@ -760,6 +933,146 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 		}
 
 		return array_values( array_filter( array_map( 'esc_url_raw', array_map( 'trim', $raw ) ) ) );
+	}
+
+	/**
+	 * Validate and normalize redirect_uris from dynamic client registration.
+	 *
+	 * @param mixed $raw Raw redirect_uris value.
+	 * @return string[]
+	 */
+	private function sanitize_registration_redirect_uris( $raw ) {
+		if ( is_string( $raw ) ) {
+			$raw = array( $raw );
+		}
+		if ( ! is_array( $raw ) ) {
+			return array();
+		}
+
+		$uris = array();
+		foreach ( array_slice( $raw, 0, 10 ) as $uri ) {
+			$uri = esc_url_raw( trim( (string) $uri ) );
+			if ( '' === $uri ) {
+				continue;
+			}
+
+			$parts = wp_parse_url( $uri );
+			if ( empty( $parts['scheme'] ) || empty( $parts['host'] ) ) {
+				continue;
+			}
+
+			$scheme = strtolower( (string) $parts['scheme'] );
+			$host   = strtolower( (string) $parts['host'] );
+			$is_loopback = in_array( $host, array( 'localhost', '127.0.0.1', '::1' ), true );
+			if ( 'https' !== $scheme && ! ( 'http' === $scheme && $is_loopback ) ) {
+				continue;
+			}
+
+			if ( isset( $parts['fragment'] ) ) {
+				continue;
+			}
+
+			$uris[] = $uri;
+		}
+
+		return array_values( array_unique( $uris ) );
+	}
+
+	/**
+	 * Get all dynamically registered OAuth clients.
+	 *
+	 * @return array
+	 */
+	private function get_dynamic_oauth_clients() {
+		$clients = get_option( 'mcpwp_oauth_clients', array() );
+		return is_array( $clients ) ? $clients : array();
+	}
+
+	/**
+	 * Get one dynamically registered OAuth client.
+	 *
+	 * @param string $client_id Client ID.
+	 * @return array|null
+	 */
+	private function get_dynamic_oauth_client( $client_id ) {
+		$client_id = sanitize_key( (string) $client_id );
+		$clients   = $this->get_dynamic_oauth_clients();
+		return isset( $clients[ $client_id ] ) && is_array( $clients[ $client_id ] ) ? $clients[ $client_id ] : null;
+	}
+
+	/**
+	 * Check whether a client_id is either the configured static client or a DCR client.
+	 *
+	 * @param string $client_id Client ID.
+	 * @return bool
+	 */
+	private function is_registered_oauth_client_id( $client_id ) {
+		$client_id      = sanitize_key( (string) $client_id );
+		$oauth_settings = $this->get_oauth_settings();
+
+		if ( '' !== $client_id && hash_equals( $oauth_settings['oauth_client_id'], $client_id ) ) {
+			return true;
+		}
+
+		return null !== $this->get_dynamic_oauth_client( $client_id );
+	}
+
+	/**
+	 * Check whether a client may use a grant type.
+	 *
+	 * Static clients keep existing behavior. Dynamic clients are limited to the
+	 * grant_types accepted during registration.
+	 *
+	 * @param string $client_id  Client ID.
+	 * @param string $grant_type Grant type.
+	 * @return bool
+	 */
+	private function oauth_client_allows_grant( $client_id, $grant_type ) {
+		$client_id      = sanitize_key( (string) $client_id );
+		$oauth_settings = $this->get_oauth_settings();
+
+		if ( '' !== $client_id && hash_equals( $oauth_settings['oauth_client_id'], $client_id ) ) {
+			return true;
+		}
+
+		$client = $this->get_dynamic_oauth_client( $client_id );
+		if ( ! $client ) {
+			return false;
+		}
+
+		$grant_types = isset( $client['grant_types'] ) && is_array( $client['grant_types'] )
+			? array_map( 'sanitize_key', $client['grant_types'] )
+			: array();
+
+		return in_array( sanitize_key( (string) $grant_type ), $grant_types, true );
+	}
+
+	/**
+	 * Verify static or dynamically registered confidential client credentials.
+	 *
+	 * @param string $client_id     Client ID.
+	 * @param string $client_secret Client secret.
+	 * @return bool
+	 */
+	protected function verify_oauth_client_credentials( $client_id, $client_secret ) {
+		$client_id      = sanitize_key( (string) $client_id );
+		$oauth_settings = $this->get_oauth_settings();
+
+		if (
+			! empty( $oauth_settings['oauth_enabled'] )
+			&& '' !== $client_id
+			&& hash_equals( $oauth_settings['oauth_client_id'], $client_id )
+			&& ! empty( $oauth_settings['oauth_client_secret_hash'] )
+		) {
+			return wp_check_password( (string) $client_secret, $oauth_settings['oauth_client_secret_hash'] );
+		}
+
+		$client = $this->get_dynamic_oauth_client( $client_id );
+		if ( ! $client || empty( $client['client_secret_hash'] ) ) {
+			return false;
+		}
+
+		return wp_check_password( (string) $client_secret, (string) $client['client_secret_hash'] );
 	}
 
 	/**
@@ -880,6 +1193,49 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 			),
 			$status
 		);
+	}
+
+	// -------------------------------------------------------------------------
+	// Front-channel authorize (served outside /wp-json)
+	// -------------------------------------------------------------------------
+
+	/**
+	 * Serve GET/POST /mcpwp-oauth/authorize from the do_parse_request interceptor.
+	 *
+	 * Browsers cannot complete the consent flow on the REST route: WordPress
+	 * core treats cookie-authenticated REST requests without an X-WP-Nonce as
+	 * logged-out (rest_cookie_check_errors → wp_set_current_user(0)), which
+	 * bounces the user to wp-login indefinitely. This wrapper reuses the exact
+	 * same handlers on a front-end request where cookie auth works normally.
+	 *
+	 * Called by Mcpwp_OAuth_Well_Known::maybe_serve_well_known(); never returns.
+	 */
+	public static function serve_front_channel_authorize() {
+		$method = isset( $_SERVER['REQUEST_METHOD'] ) ? strtoupper( sanitize_text_field( wp_unslash( $_SERVER['REQUEST_METHOD'] ) ) ) : 'GET';
+
+		$request = new WP_REST_Request( $method, '/mcpwp/v1/oauth/authorize' );
+		// phpcs:disable WordPress.Security.NonceVerification -- OAuth front-channel entry
+		// point; the consent POST carries its own CSRF nonce, verified in
+		// handle_authorize_post(). Parameters are sanitized in extract_authorize_params().
+		$request->set_query_params( wp_unslash( $_GET ) );
+		if ( 'POST' === $method ) {
+			$request->set_body_params( wp_unslash( $_POST ) );
+		}
+		// phpcs:enable WordPress.Security.NonceVerification
+
+		$controller = new self();
+		$response   = 'POST' === $method
+			? $controller->handle_authorize_post( $request )
+			: $controller->handle_authorize_get( $request );
+
+		// Success paths redirect + exit inside the handlers; a returned value is
+		// always an OAuth error object — emit it as JSON.
+		if ( $response instanceof WP_REST_Response ) {
+			status_header( $response->get_status() );
+			header( 'Content-Type: application/json; charset=utf-8' );
+			echo wp_json_encode( $response->get_data() );
+		}
+		exit;
 	}
 
 	/**

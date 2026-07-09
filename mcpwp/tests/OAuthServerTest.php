@@ -177,6 +177,7 @@ final class OAuthServerTest extends TestCase {
 		$GLOBALS['_mcpwp_test_redirected_to']  = null;
 		$GLOBALS['_mcpwp_test_valid_nonces']   = array();
 		$GLOBALS['mcpwp_test_user_caps']       = array();
+		unset( $_SERVER['HTTP_AUTHORIZATION'], $_SERVER['REDIRECT_HTTP_AUTHORIZATION'], $_SERVER['PHP_AUTH_USER'], $_SERVER['PHP_AUTH_PW'] );
 
 		// Enable OAuth with a known client ID and redirect URI.
 		update_option( 'mcpwp_settings', array(
@@ -250,7 +251,7 @@ final class OAuthServerTest extends TestCase {
 		$origin = Mcpwp_OAuth_Well_Known::get_site_origin();
 		$metadata = array(
 			'resource'              => $origin,
-			'authorization_servers' => array( $origin . '/.well-known/oauth-authorization-server' ),
+			'authorization_servers' => array( $origin ),
 			'scopes_supported'      => array( 'read', 'write', 'admin' ),
 			'bearer_methods_supported' => array( 'header' ),
 		);
@@ -267,37 +268,166 @@ final class OAuthServerTest extends TestCase {
 
 	public function test_authorization_server_metadata_required_fields(): void {
 		$origin    = Mcpwp_OAuth_Well_Known::get_site_origin();
-		$rest_base = rest_url( 'mcpwp/v1' );
+		$rest_base = Mcpwp_OAuth_Well_Known::get_rest_endpoint_base( $origin );
 
-		$metadata = array(
-			'issuer'                                => $origin,
-			'authorization_endpoint'                => $rest_base . '/oauth/authorize',
-			'token_endpoint'                        => $rest_base . '/oauth/token',
-			'response_types_supported'              => array( 'code' ),
-			'grant_types_supported'                 => array( 'authorization_code', 'refresh_token' ),
-			'code_challenge_methods_supported'      => array( 'S256' ),
-			'token_endpoint_auth_methods_supported' => array( 'none', 'client_secret_post' ),
+			$metadata = array(
+				'issuer'                                => $origin,
+				'authorization_endpoint'                => $rest_base . '/oauth/authorize',
+				'token_endpoint'                        => $rest_base . '/oauth/token',
+				'registration_endpoint'                 => $rest_base . '/oauth/register',
+				'response_types_supported'              => array( 'code' ),
+				'grant_types_supported'                 => array( 'authorization_code', 'refresh_token' ),
+				'code_challenge_methods_supported'      => array( 'S256' ),
+			'token_endpoint_auth_methods_supported' => array( 'none', 'client_secret_post', 'client_secret_basic' ),
 			'scopes_supported'                      => array( 'read', 'write', 'admin' ),
 		);
 
 		// RFC 8414 required fields.
-		$this->assertArrayHasKey( 'issuer', $metadata );
-		$this->assertArrayHasKey( 'authorization_endpoint', $metadata );
-		$this->assertArrayHasKey( 'token_endpoint', $metadata );
-		$this->assertArrayHasKey( 'response_types_supported', $metadata );
+			$this->assertArrayHasKey( 'issuer', $metadata );
+			$this->assertArrayHasKey( 'authorization_endpoint', $metadata );
+			$this->assertArrayHasKey( 'token_endpoint', $metadata );
+			$this->assertArrayHasKey( 'registration_endpoint', $metadata );
+			$this->assertArrayHasKey( 'response_types_supported', $metadata );
 
 		// MCP-required extensions.
 		$this->assertContains( 'S256', $metadata['code_challenge_methods_supported'] );
 		$this->assertNotContains( 'plain', $metadata['code_challenge_methods_supported'] );
 		$this->assertContains( 'authorization_code', $metadata['grant_types_supported'] );
+		$this->assertContains( 'client_secret_basic', $metadata['token_endpoint_auth_methods_supported'] );
 
 		// Endpoints must use the correct site origin.
-		$this->assertStringStartsWith( $origin, $metadata['issuer'] );
-		$this->assertStringContainsString( '/oauth/authorize', $metadata['authorization_endpoint'] );
-		$this->assertStringContainsString( '/oauth/token', $metadata['token_endpoint'] );
-	}
+			$this->assertStringStartsWith( $origin, $metadata['issuer'] );
+			$this->assertStringStartsWith( $origin, $metadata['authorization_endpoint'] );
+			$this->assertStringStartsWith( $origin, $metadata['token_endpoint'] );
+			$this->assertStringStartsWith( $origin, $metadata['registration_endpoint'] );
+			$this->assertStringContainsString( '/oauth/authorize', $metadata['authorization_endpoint'] );
+			$this->assertStringContainsString( '/oauth/token', $metadata['token_endpoint'] );
+			$this->assertStringContainsString( '/oauth/register', $metadata['registration_endpoint'] );
+		}
 
-	// ── Authorize parameter validation ────────────────────────────────────
+		public function test_authorization_server_rest_endpoints_use_public_issuer_origin(): void {
+			$rest_base = Mcpwp_OAuth_Well_Known::normalize_rest_base_url(
+				'http://internal.example.test/wp-json/mcpwp/v1',
+				'https://public.example.com'
+			);
+
+			$this->assertSame( 'https://public.example.com/wp-json/mcpwp/v1', $rest_base );
+		}
+
+		public function test_authorization_server_rest_endpoint_path_preserves_subdirectory(): void {
+			$rest_base = Mcpwp_OAuth_Well_Known::normalize_rest_base_url(
+				'http://internal.example.test/wordpress/wp-json/mcpwp/v1',
+				'https://public.example.com'
+			);
+
+			$this->assertSame( 'https://public.example.com/wordpress/wp-json/mcpwp/v1', $rest_base );
+		}
+
+		public function test_claude_dynamic_client_registration_payload_succeeds(): void {
+			$ctrl    = $this->controller();
+			$request = $this->make_request( 'POST', '/mcpwp/v1/oauth/register', array(
+				'client_name'                => 'claudeai',
+				'redirect_uris'              => array( 'https://claude.ai/api/mcp/auth_callback' ),
+				'grant_types'                => array( 'authorization_code', 'refresh_token' ),
+				'response_types'             => array( 'code' ),
+				'token_endpoint_auth_method' => 'none',
+				'scope'                      => 'claudeai',
+			) );
+
+			$response = $ctrl->handle_register( $request );
+
+			$this->assertSame( 201, $response->get_status() );
+			$data = $response->get_data();
+			$this->assertStringStartsWith( 'mcpwp_dcr_', $data['client_id'] );
+			$this->assertSame( array( 'https://claude.ai/api/mcp/auth_callback' ), $data['redirect_uris'] );
+			$this->assertSame( 'none', $data['token_endpoint_auth_method'] );
+			$this->assertSame( 'claudeai', $data['scope'] );
+		}
+
+		public function test_dynamic_client_registration_supports_client_secret_basic(): void {
+			$ctrl    = $this->controller();
+			$request = $this->make_request( 'POST', '/mcpwp/v1/oauth/register', array(
+				'client_name'                => 'Claude Desktop',
+				'redirect_uris'              => array( 'https://claude.ai/api/mcp/auth_callback' ),
+				'grant_types'                => array( 'authorization_code', 'refresh_token' ),
+				'response_types'             => array( 'code' ),
+				'token_endpoint_auth_method' => 'client_secret_basic',
+			) );
+
+			$response = $ctrl->handle_register( $request );
+
+			$this->assertSame( 201, $response->get_status() );
+			$data = $response->get_data();
+			$this->assertSame( 'client_secret_basic', $data['token_endpoint_auth_method'] );
+			$this->assertArrayHasKey( 'client_secret', $data );
+			$this->assertArrayHasKey( 'client_secret_expires_at', $data );
+			$this->assertSame( 0, $data['client_secret_expires_at'] );
+		}
+
+		// ── Dynamic Client Registration ───────────────────────────────────────
+
+		public function test_dynamic_client_registration_returns_client_id_and_stores_redirect_uri(): void {
+			$ctrl    = $this->controller();
+			$request = $this->make_request( 'POST', '/mcpwp/v1/oauth/register', array(
+				'client_name'                => 'ChatGPT',
+				'redirect_uris'              => array( 'https://chatgpt.com/aip/test/oauth/callback' ),
+				'grant_types'                => array( 'authorization_code', 'refresh_token' ),
+				'response_types'             => array( 'code' ),
+				'token_endpoint_auth_method' => 'none',
+			) );
+
+			$response = $ctrl->handle_register( $request );
+
+			$this->assertSame( 201, $response->get_status() );
+			$data = $response->get_data();
+			$this->assertArrayHasKey( 'client_id', $data );
+			$this->assertStringStartsWith( 'mcpwp_dcr_', $data['client_id'] );
+			$this->assertSame( array( 'https://chatgpt.com/aip/test/oauth/callback' ), $data['redirect_uris'] );
+
+			$clients = get_option( 'mcpwp_oauth_clients', array() );
+			$this->assertArrayHasKey( $data['client_id'], $clients );
+			$this->assertTrue(
+				$ctrl->is_redirect_uri_allowed( 'https://chatgpt.com/aip/test/oauth/callback', $data['client_id'] ),
+				'DCR client redirect URI must be accepted for that client_id'
+			);
+		}
+
+		public function test_dynamic_client_authorize_params_pass_validation(): void {
+			$ctrl = $this->controller();
+			update_option( 'mcpwp_oauth_clients', array(
+				'mcpwp_dcr_testclient' => array(
+					'client_id'                  => 'mcpwp_dcr_testclient',
+					'client_name'                => 'ChatGPT',
+					'redirect_uris'              => array( 'https://chatgpt.com/aip/test/oauth/callback' ),
+					'grant_types'                => array( 'authorization_code', 'refresh_token' ),
+					'response_types'             => array( 'code' ),
+					'token_endpoint_auth_method' => 'none',
+					'client_secret_hash'         => '',
+					'created_at'                 => time(),
+					'updated_at'                 => time(),
+				),
+			) );
+
+			$params = $this->base_authorize_params();
+			$params['client_id']    = 'mcpwp_dcr_testclient';
+			$params['redirect_uri'] = 'https://chatgpt.com/aip/test/oauth/callback';
+
+			$this->assertTrue( $ctrl->validate_authorize_params( $params ) );
+		}
+
+		public function test_dynamic_client_registration_rejects_insecure_redirect_uri(): void {
+			$ctrl    = $this->controller();
+			$request = $this->make_request( 'POST', '/mcpwp/v1/oauth/register', array(
+				'redirect_uris' => array( 'http://evil.example.com/callback' ),
+			) );
+
+			$response = $ctrl->handle_register( $request );
+
+			$this->assertSame( 400, $response->get_status() );
+			$this->assertSame( 'invalid_client_metadata', $response->get_data()['error'] );
+		}
+
+		// ── Authorize parameter validation ────────────────────────────────────
 
 	public function test_valid_params_pass_validation(): void {
 		$ctrl   = $this->controller();
@@ -709,9 +839,9 @@ final class OAuthServerTest extends TestCase {
 	 * P0-C: A public client with NO client_id AND no client_secret must also
 	 * succeed — fully anonymous public PKCE exchange.
 	 */
-	public function test_public_client_no_client_id_no_secret_succeeds(): void {
-		$ctrl = $this->controller();
-		$seed = $this->seed_auth_code();
+		public function test_public_client_no_client_id_no_secret_succeeds(): void {
+			$ctrl = $this->controller();
+			$seed = $this->seed_auth_code();
 
 		$request = $this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
 			'grant_type'    => 'authorization_code',
@@ -724,9 +854,84 @@ final class OAuthServerTest extends TestCase {
 		$response = $ctrl->handle_token( $request );
 
 		$this->assertSame( 200, $response->get_status(), 'Fully anonymous PKCE exchange must succeed' );
-		$data = $response->get_data();
-		$this->assertArrayHasKey( 'access_token', $data );
-	}
+			$data = $response->get_data();
+			$this->assertArrayHasKey( 'access_token', $data );
+		}
+
+		public function test_dynamic_public_client_token_exchange_succeeds(): void {
+			update_option( 'mcpwp_oauth_clients', array(
+				'mcpwp_dcr_testclient' => array(
+					'client_id'                  => 'mcpwp_dcr_testclient',
+					'client_name'                => 'ChatGPT',
+					'redirect_uris'              => array( 'https://chatgpt.com/aip/test/oauth/callback' ),
+					'grant_types'                => array( 'authorization_code', 'refresh_token' ),
+					'response_types'             => array( 'code' ),
+					'token_endpoint_auth_method' => 'none',
+					'client_secret_hash'         => '',
+					'created_at'                 => time(),
+					'updated_at'                 => time(),
+				),
+			) );
+
+			$ctrl = $this->controller();
+			$seed = $this->seed_auth_code( array(
+				'client_id'    => 'mcpwp_dcr_testclient',
+				'redirect_uri' => 'https://chatgpt.com/aip/test/oauth/callback',
+			) );
+
+			$request = $this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
+				'grant_type'    => 'authorization_code',
+				'code'          => $seed['code'],
+				'redirect_uri'  => 'https://chatgpt.com/aip/test/oauth/callback',
+				'code_verifier' => $seed['verifier'],
+				'client_id'     => 'mcpwp_dcr_testclient',
+			) );
+
+			$response = $ctrl->handle_token( $request );
+
+			$this->assertSame( 200, $response->get_status(), 'DCR public client with valid PKCE must succeed' );
+			$data = $response->get_data();
+			$this->assertArrayHasKey( 'access_token', $data );
+			$this->assertStringStartsWith( 'mcpwp_at_', $data['access_token'] );
+		}
+
+		public function test_dynamic_basic_client_token_exchange_succeeds(): void {
+			$client_secret = 'mcpwp_cs_testsecret';
+			update_option( 'mcpwp_oauth_clients', array(
+				'mcpwp_dcr_basicclient' => array(
+					'client_id'                  => 'mcpwp_dcr_basicclient',
+					'client_name'                => 'Claude Desktop',
+					'redirect_uris'              => array( 'https://claude.ai/api/mcp/auth_callback' ),
+					'grant_types'                => array( 'authorization_code', 'refresh_token' ),
+					'response_types'             => array( 'code' ),
+					'token_endpoint_auth_method' => 'client_secret_basic',
+					'client_secret_hash'         => wp_hash_password( $client_secret ),
+					'created_at'                 => time(),
+					'updated_at'                 => time(),
+				),
+			) );
+
+			$ctrl = $this->controller();
+			$seed = $this->seed_auth_code( array(
+				'client_id'    => 'mcpwp_dcr_basicclient',
+				'redirect_uri' => 'https://claude.ai/api/mcp/auth_callback',
+			) );
+
+			$_SERVER['HTTP_AUTHORIZATION'] = 'Basic ' . base64_encode( 'mcpwp_dcr_basicclient:' . $client_secret );
+			$request = $this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
+				'grant_type'    => 'authorization_code',
+				'code'          => $seed['code'],
+				'redirect_uri'  => 'https://claude.ai/api/mcp/auth_callback',
+				'code_verifier' => $seed['verifier'],
+			) );
+
+			$response = $ctrl->handle_token( $request );
+
+			$this->assertSame( 200, $response->get_status(), 'DCR client_secret_basic token exchange must succeed' );
+			$data = $response->get_data();
+			$this->assertArrayHasKey( 'access_token', $data );
+			$this->assertStringStartsWith( 'mcpwp_at_', $data['access_token'] );
+		}
 
 	/**
 	 * P0-C: A confidential client with a WRONG secret must still fail.
@@ -1217,5 +1422,32 @@ final class OAuthServerTest extends TestCase {
 
 		// Confirm the error is NOT about a missing client_secret parameter.
 		$this->assertNotSame( 'rest_missing_callback_param', $data['error'] ?? '' );
+	}
+
+	// -------------------------------------------------------------------------
+	// Front-channel authorize endpoint (outside /wp-json)
+	// -------------------------------------------------------------------------
+
+	public function test_front_channel_authorize_path_honors_home_path(): void {
+		$this->assertSame(
+			'/mcpwp-oauth/authorize',
+			Mcpwp_OAuth_Well_Known::build_front_channel_authorize_path( 'https://example.com/' )
+		);
+
+		// Subdirectory install keeps its path prefix.
+		$this->assertSame(
+			'/blog/mcpwp-oauth/authorize',
+			Mcpwp_OAuth_Well_Known::build_front_channel_authorize_path( 'https://example.com/blog/' )
+		);
+	}
+
+	public function test_front_channel_authorize_url_is_on_site_origin_not_rest(): void {
+		$url = Mcpwp_OAuth_Well_Known::get_front_channel_authorize_url( 'https://example.com' );
+
+		// The whole point of the front-channel endpoint: it must NOT live under
+		// /wp-json, where core's REST cookie/nonce rules log the browser out and
+		// trap the user in a wp-login redirect loop.
+		$this->assertStringNotContainsString( '/wp-json/', $url );
+		$this->assertSame( 'https://example.com/mcpwp-oauth/authorize', $url );
 	}
 }

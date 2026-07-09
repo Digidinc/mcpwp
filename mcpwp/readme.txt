@@ -66,11 +66,18 @@ The WordPress.org package is the free core: API keys, scoped access, activity lo
 
 = MCP Server Setup =
 
-Add to your MCP client config (Claude Desktop, Cursor, Windsurf):
+**Claude Desktop** (Settings → Connectors → Add custom connector) — paste your MCP URL with the API key:
+
+`https://yoursite.com/wp-json/mcpwp/v1/mcp?api_key=mcpwp_your_api_key_here`
+
+Or enable OAuth in the plugin settings and paste the plain MCP URL — Claude will open your WordPress login to authorize, no key needed. (Claude Desktop's claude_desktop_config.json only supports command-based servers; if you prefer the config file, route through `npx mcp-remote https://yoursite.com/wp-json/mcpwp/v1/mcp --header "X-API-Key:mcpwp_your_api_key_here"`.)
+
+**Claude Code, Cursor, Windsurf** — add to the client's MCP config:
 
 `{
   "mcpServers": {
     "mcpwp": {
+      "type": "http",
       "url": "https://yoursite.com/wp-json/mcpwp/v1/mcp",
       "headers": {
         "X-API-Key": "mcpwp_your_api_key_here"
@@ -78,6 +85,8 @@ Add to your MCP client config (Claude Desktop, Cursor, Windsurf):
     }
   }
 }`
+
+The Setup page in wp-admin shows these snippets pre-filled with your site URL and key, per client.
 
 For ChatGPT GPT Actions, use the public OpenAPI schema at `https://yoursite.com/wp-json/mcpwp/v1/openapi.json`.
 

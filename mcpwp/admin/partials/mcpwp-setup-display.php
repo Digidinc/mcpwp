@@ -391,6 +391,7 @@ $last_activity_time = ! empty( $recent_activity[0]['created_at'] ) ? $recent_act
 					<pre class="mcpwp-code-block" id="mcpwp-claude-code-cfg">{
   "mcpServers": {
     "mcpwp-<?php echo esc_html( $site_slug ); ?>": {
+      "type": "http",
       "url": "<?php echo esc_url( $mcp_url ); ?>",
       "headers": {
         "X-API-Key": "<?php echo $is_hidden ? 'YOUR_API_KEY' : esc_attr( $display_key ); ?>"
@@ -417,15 +418,29 @@ $last_activity_time = ! empty( $recent_activity[0]['created_at'] ) ? $recent_act
 						<?php esc_html_e( 'Copy URL', 'mcpwp' ); ?>
 					</button>
 				</div>
-				<p><?php esc_html_e( 'Or add to claude_desktop_config.json:', 'mcpwp' ); ?></p>
+				<p>
+					<?php esc_html_e( 'Prefer signing in instead of pasting a key? Enable OAuth under Settings, then add the plain MCP URL as the connector — Claude will open your WordPress login to authorize:', 'mcpwp' ); ?>
+				</p>
+				<div class="mcpwp-code-wrapper">
+					<pre class="mcpwp-code-block" id="mcpwp-claude-desktop-oauth-url"><?php echo esc_url( $mcp_url ); ?></pre>
+					<button type="button" class="button mcpwp-copy-code-btn" data-target="mcpwp-claude-desktop-oauth-url">
+						<span class="dashicons dashicons-clipboard"></span>
+						<?php esc_html_e( 'Copy URL', 'mcpwp' ); ?>
+					</button>
+				</div>
+				<p><?php esc_html_e( 'Or add to claude_desktop_config.json (Claude Desktop config supports only command-based servers, so the URL goes through the mcp-remote bridge):', 'mcpwp' ); ?></p>
 				<div class="mcpwp-code-wrapper">
 					<pre class="mcpwp-code-block" id="mcpwp-claude-desktop-cfg">{
   "mcpServers": {
     "mcpwp-<?php echo esc_html( $site_slug ); ?>": {
-      "url": "<?php echo esc_url( $mcp_url ); ?>",
-      "headers": {
-        "X-API-Key": "<?php echo $is_hidden ? 'YOUR_API_KEY' : esc_attr( $display_key ); ?>"
-      }
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote",
+        "<?php echo esc_url( $mcp_url ); ?>",
+        "--header",
+        "X-API-Key:<?php echo $is_hidden ? 'YOUR_API_KEY' : esc_attr( $display_key ); ?>"
+      ]
     }
   }
 }</pre>

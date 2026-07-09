@@ -129,7 +129,58 @@ class Mcpwp_OAuth_Well_Known {
 			exit;
 		}
 
+		if ( self::get_front_channel_authorize_path() === untrailingslashit( $path_only )
+			&& class_exists( 'Mcpwp_REST_OAuth' ) ) {
+			Mcpwp_REST_OAuth::serve_front_channel_authorize();
+			exit;
+		}
+
 		return $do_parse;
+	}
+
+	// -------------------------------------------------------------------------
+	// Front-channel authorize URL
+	// -------------------------------------------------------------------------
+
+	/**
+	 * Path of the front-channel authorization endpoint (no origin).
+	 *
+	 * The authorization endpoint must live OUTSIDE /wp-json: WordPress core
+	 * treats cookie-authenticated REST requests without an X-WP-Nonce as
+	 * logged-out (rest_cookie_check_errors), so a browser opening a REST
+	 * authorize URL is bounced to wp-login in an endless loop. Front-end
+	 * requests have no such nonce requirement, so the consent screen is served
+	 * from this path via the same do_parse_request interceptor as the
+	 * .well-known documents.
+	 *
+	 * @return string Path beginning with '/', honoring subdirectory installs.
+	 */
+	public static function get_front_channel_authorize_path() {
+		$home = function_exists( 'home_url' ) ? home_url( '/' ) : '/';
+		return self::build_front_channel_authorize_path( $home );
+	}
+
+	/**
+	 * Build the front-channel authorize path from a home URL (pure, testable).
+	 *
+	 * @param string $home_url Site home URL (may include a subdirectory path).
+	 * @return string Path beginning with '/'.
+	 */
+	public static function build_front_channel_authorize_path( $home_url ) {
+		$parts     = wp_parse_url( (string) $home_url );
+		$home_path = isset( $parts['path'] ) ? (string) $parts['path'] : '/';
+		return rtrim( $home_path, '/' ) . '/mcpwp-oauth/authorize';
+	}
+
+	/**
+	 * Absolute URL of the front-channel authorization endpoint.
+	 *
+	 * @param string $origin Optional public issuer origin (defaults to site origin).
+	 * @return string
+	 */
+	public static function get_front_channel_authorize_url( $origin = '' ) {
+		$origin = '' !== $origin ? $origin : self::get_site_origin();
+		return $origin . self::get_front_channel_authorize_path();
 	}
 
 	// -------------------------------------------------------------------------
@@ -151,7 +202,7 @@ class Mcpwp_OAuth_Well_Known {
 
 		$body = array(
 			'resource'              => $origin,
-			'authorization_servers' => array( $origin . '/.well-known/oauth-authorization-server' ),
+			'authorization_servers' => array( $origin ),
 			'scopes_supported'      => array( 'read', 'write', 'admin' ),
 			'bearer_methods_supported' => array( 'header' ),
 		);
@@ -179,17 +230,18 @@ class Mcpwp_OAuth_Well_Known {
 	 *   - scopes_supported
 	 */
 	private static function serve_authorization_server_metadata() {
-		$origin           = self::get_site_origin();
-		$rest_base        = rest_url( 'mcpwp/v1' );
+		$origin    = self::get_site_origin();
+		$rest_base = self::get_rest_endpoint_base( $origin );
 
 		$body = array(
 			'issuer'                                 => $origin,
-			'authorization_endpoint'                 => $rest_base . '/oauth/authorize',
+			'authorization_endpoint'                 => self::get_front_channel_authorize_url(),
 			'token_endpoint'                         => $rest_base . '/oauth/token',
+			'registration_endpoint'                  => $rest_base . '/oauth/register',
 			'response_types_supported'               => array( 'code' ),
 			'grant_types_supported'                  => array( 'authorization_code', 'refresh_token' ),
 			'code_challenge_methods_supported'       => array( 'S256' ),
-			'token_endpoint_auth_methods_supported'  => array( 'none', 'client_secret_post' ),
+			'token_endpoint_auth_methods_supported'  => array( 'none', 'client_secret_post', 'client_secret_basic' ),
 			'scopes_supported'                       => array( 'read', 'write', 'admin' ),
 		);
 
@@ -199,6 +251,37 @@ class Mcpwp_OAuth_Well_Known {
 	// -------------------------------------------------------------------------
 	// Helpers
 	// -------------------------------------------------------------------------
+
+	/**
+	 * Get the MCPWP REST endpoint base on the same public origin as the issuer.
+	 *
+	 * WordPress may generate rest_url() with an internal http scheme behind SSL
+	 * proxies. OAuth clients such as Claude reject those discovered endpoints, so
+	 * preserve the REST path while replacing scheme/host/port with the issuer.
+	 *
+	 * @param string $origin Public issuer origin.
+	 * @return string REST base URL without trailing slash.
+	 */
+	public static function get_rest_endpoint_base( $origin = '' ) {
+		$origin = '' !== $origin ? $origin : self::get_site_origin();
+		return self::normalize_rest_base_url( rest_url( 'mcpwp/v1' ), $origin );
+	}
+
+	/**
+	 * Normalize a REST base URL onto a public issuer origin.
+	 *
+	 * @param string $rest_base REST base URL from WordPress.
+	 * @param string $origin    Public issuer origin.
+	 * @return string REST base URL using the issuer origin.
+	 */
+	public static function normalize_rest_base_url( $rest_base, $origin ) {
+		$origin    = rtrim( (string) $origin, '/' );
+		$rest_base = trim( (string) $rest_base );
+		$parts     = wp_parse_url( $rest_base );
+		$path      = isset( $parts['path'] ) ? '/' . ltrim( (string) $parts['path'], '/' ) : '/wp-json/mcpwp/v1';
+
+		return $origin . rtrim( $path, '/' );
+	}
 
 	/**
 	 * Emit a JSON body with proper headers and no output buffering.
@@ -257,6 +340,10 @@ class Mcpwp_OAuth_Well_Known {
 		$host = isset( $parsed['host'] ) ? $parsed['host'] : '';
 		$port = isset( $parsed['port'] ) ? (int) $parsed['port'] : null;
 
+		if ( 'https' !== $proto && ! self::is_loopback_host( $host ) ) {
+			$proto = 'https';
+		}
+
 		$origin = $proto . '://' . $host;
 
 		// Only append non-standard ports.
@@ -265,5 +352,16 @@ class Mcpwp_OAuth_Well_Known {
 		}
 
 		return rtrim( $origin, '/' );
+	}
+
+	/**
+	 * Check whether a host is local loopback.
+	 *
+	 * @param string $host Hostname.
+	 * @return bool
+	 */
+	private static function is_loopback_host( $host ) {
+		$host = strtolower( trim( (string) $host, '[]' ) );
+		return in_array( $host, array( 'localhost', '127.0.0.1', '::1' ), true );
 	}
 }
