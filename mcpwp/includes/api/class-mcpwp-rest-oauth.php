@@ -41,6 +41,24 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 
+	/**
+	 * Maximum dynamically-registered OAuth clients retained in wp_options.
+	 * Bounds the unauthenticated DCR endpoint against option bloat / DoS.
+	 */
+	const DCR_CLIENT_MAX = 100;
+
+	/**
+	 * Seconds a dynamic client is kept before it is eligible for GC pruning.
+	 * 30 days — long enough for legitimate reconnects, short enough to shed
+	 * abandoned registrations.
+	 */
+	const DCR_CLIENT_TTL = 2592000;
+
+	/**
+	 * Maximum stored length of a dynamic client's client_name.
+	 */
+	const DCR_CLIENT_NAME_MAX = 120;
+
 	// -------------------------------------------------------------------------
 	// Route registration
 	// -------------------------------------------------------------------------
@@ -119,7 +137,11 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 			return $this->oauth_error_response( 'server_error', 'OAuth is not enabled on this site.', 501 );
 		}
 
-		$rate_limit_check = $this->check_rate_limit( 'oauth-register:' . $this->get_client_ip() );
+		// Key the DCR throttle off REMOTE_ADDR, not forwarded IP headers: this
+		// endpoint is unauthenticated, and get_client_ip() trusts spoofable
+		// CF/X-Forwarded-For headers, letting an attacker mint unlimited
+		// rate-limit buckets. Only trust proxy headers behind an explicit opt-in.
+		$rate_limit_check = $this->check_rate_limit( 'oauth-register:' . $this->get_oauth_register_ip() );
 		if ( is_wp_error( $rate_limit_check ) ) {
 			return $rate_limit_check;
 		}
@@ -159,9 +181,14 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 		$client_id     = 'mcpwp_dcr_' . bin2hex( random_bytes( 16 ) );
 		$client_secret = 'none' !== $token_auth_method ? 'mcpwp_cs_' . bin2hex( random_bytes( 24 ) ) : '';
 		$now           = time();
-		$client_name   = sanitize_text_field( (string) ( $params['client_name'] ?? 'OAuth Client' ) );
+		// Cap client_name so a single registration cannot bloat the option.
+		$client_name   = substr( sanitize_text_field( (string) ( $params['client_name'] ?? 'OAuth Client' ) ), 0, self::DCR_CLIENT_NAME_MAX );
 
-		$clients = $this->get_dynamic_oauth_clients();
+		// Bound the stored client set: prune expired entries, then evict the
+		// oldest if still at capacity. mcpwp_oauth_clients is read on every
+		// authorize/token/register call, so it must not grow without limit —
+		// an unauthenticated attacker would otherwise DoS the option.
+		$clients = $this->prune_dynamic_oauth_clients( $this->get_dynamic_oauth_clients(), $now );
 		$clients[ $client_id ] = array(
 			'client_id'                  => $client_id,
 			'client_name'                => $client_name,
@@ -673,7 +700,15 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 			);
 		}
 
+		// Security headers for the consent page. It carries a live per-user CSRF
+		// nonce and grants an admin-scoped token on Approve, so it must never be
+		// frameable (clickjacking → token theft) or cached (nonce/username leak).
 		header( 'Content-Type: text/html; charset=utf-8' );
+		header( 'X-Frame-Options: DENY' );
+		header( "Content-Security-Policy: frame-ancestors 'none'" );
+		header( 'Cache-Control: no-store, private' );
+		header( 'Pragma: no-cache' );
+		header( 'Referrer-Policy: no-referrer' );
 		// phpcs:disable WordPress.Security.EscapeOutput.OutputNotEscaped
 		echo '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
 		   . '<meta name="viewport" content="width=device-width,initial-scale=1">'
@@ -986,6 +1021,65 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 	private function get_dynamic_oauth_clients() {
 		$clients = get_option( 'mcpwp_oauth_clients', array() );
 		return is_array( $clients ) ? $clients : array();
+	}
+
+	/**
+	 * Prune the dynamic client set to keep the option bounded.
+	 *
+	 * Drops clients untouched for longer than DCR_CLIENT_TTL, then, if still at
+	 * or above DCR_CLIENT_MAX, evicts the oldest by created_at until one free
+	 * slot remains for the incoming registration.
+	 *
+	 * @param array $clients Existing clients keyed by client_id.
+	 * @param int   $now     Current unix time.
+	 * @return array Pruned clients.
+	 */
+	private function prune_dynamic_oauth_clients( $clients, $now ) {
+		if ( empty( $clients ) ) {
+			return $clients;
+		}
+
+		// TTL prune (a DCR client unused for the TTL window is abandoned).
+		foreach ( $clients as $id => $client ) {
+			$seen = isset( $client['updated_at'] ) ? (int) $client['updated_at'] : ( isset( $client['created_at'] ) ? (int) $client['created_at'] : 0 );
+			if ( $seen > 0 && ( $now - $seen ) > self::DCR_CLIENT_TTL ) {
+				unset( $clients[ $id ] );
+			}
+		}
+
+		// Capacity prune — evict oldest first, leaving room for one new client.
+		if ( count( $clients ) >= self::DCR_CLIENT_MAX ) {
+			uasort(
+				$clients,
+				static function ( $a, $b ) {
+					return ( isset( $a['created_at'] ) ? (int) $a['created_at'] : 0 ) <=> ( isset( $b['created_at'] ) ? (int) $b['created_at'] : 0 );
+				}
+			);
+			while ( count( $clients ) >= self::DCR_CLIENT_MAX ) {
+				array_shift( $clients );
+			}
+		}
+
+		return $clients;
+	}
+
+	/**
+	 * Client IP used to throttle unauthenticated DCR.
+	 *
+	 * Deliberately does NOT use get_client_ip(): that trusts CF/X-Forwarded-For
+	 * headers, which are spoofable on an unauthenticated endpoint and would let
+	 * an attacker rotate the header to mint unlimited throttle buckets. Forwarded
+	 * headers are honored only behind the explicit MCPWP_TRUST_PROXY_HEADERS
+	 * opt-in (same gate used by the OAuth issuer origin).
+	 *
+	 * @return string
+	 */
+	private function get_oauth_register_ip() {
+		if ( defined( 'MCPWP_TRUST_PROXY_HEADERS' ) && MCPWP_TRUST_PROXY_HEADERS ) {
+			return $this->get_client_ip();
+		}
+		$remote = isset( $_SERVER['REMOTE_ADDR'] ) ? sanitize_text_field( wp_unslash( $_SERVER['REMOTE_ADDR'] ) ) : '';
+		return filter_var( $remote, FILTER_VALIDATE_IP ) ? $remote : 'unknown';
 	}
 
 	/**

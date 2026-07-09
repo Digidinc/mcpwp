@@ -344,6 +344,47 @@ final class OAuthServerTest extends TestCase {
 			$this->assertSame( 'claudeai', $data['scope'] );
 		}
 
+		public function test_dcr_client_name_is_length_capped(): void {
+			$ctrl    = $this->controller();
+			$request = $this->make_request( 'POST', '/mcpwp/v1/oauth/register', array(
+				'client_name'   => str_repeat( 'A', 5000 ),
+				'redirect_uris' => array( 'https://claude.ai/api/mcp/auth_callback' ),
+			) );
+
+			$response = $ctrl->handle_register( $request );
+			$data     = $response->get_data();
+
+			$this->assertSame( 201, $response->get_status() );
+			$this->assertLessThanOrEqual(
+				Mcpwp_REST_OAuth::DCR_CLIENT_NAME_MAX,
+				strlen( $data['client_name'] ),
+				'client_name must be truncated to bound option size'
+			);
+		}
+
+		public function test_dcr_client_store_is_capacity_bounded(): void {
+			update_option( 'mcpwp_oauth_clients', array() );
+			$ctrl = $this->controller();
+
+			// Register comfortably more than the cap; the stored set must never
+			// exceed DCR_CLIENT_MAX — otherwise an unauthenticated attacker can
+			// grow the option without limit.
+			for ( $i = 0; $i < Mcpwp_REST_OAuth::DCR_CLIENT_MAX + 25; $i++ ) {
+				$request = $this->make_request( 'POST', '/mcpwp/v1/oauth/register', array(
+					'client_name'   => 'c' . $i,
+					'redirect_uris' => array( 'https://claude.ai/api/mcp/auth_callback' ),
+				) );
+				$ctrl->handle_register( $request );
+			}
+
+			$stored = get_option( 'mcpwp_oauth_clients', array() );
+			$this->assertLessThanOrEqual(
+				Mcpwp_REST_OAuth::DCR_CLIENT_MAX,
+				count( $stored ),
+				'mcpwp_oauth_clients must stay bounded under registration flood'
+			);
+		}
+
 		public function test_dynamic_client_registration_supports_client_secret_basic(): void {
 			$ctrl    = $this->controller();
 			$request = $this->make_request( 'POST', '/mcpwp/v1/oauth/register', array(

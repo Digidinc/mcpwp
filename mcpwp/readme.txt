@@ -66,11 +66,15 @@ The WordPress.org package is the free core: API keys, scoped access, activity lo
 
 = MCP Server Setup =
 
-**Claude Desktop** (Settings → Connectors → Add custom connector) — paste your MCP URL with the API key:
+**Claude Desktop** (Settings → Connectors → Add custom connector) — enable OAuth in the plugin settings and paste the plain MCP URL; Claude opens your WordPress login to authorize, so no key is stored in the client:
 
-`https://yoursite.com/wp-json/mcpwp/v1/mcp?api_key=mcpwp_your_api_key_here`
+`https://yoursite.com/wp-json/mcpwp/v1/mcp`
 
-Or enable OAuth in the plugin settings and paste the plain MCP URL — Claude will open your WordPress login to authorize, no key needed. (Claude Desktop's claude_desktop_config.json only supports command-based servers; if you prefer the config file, route through `npx mcp-remote https://yoursite.com/wp-json/mcpwp/v1/mcp --header "X-API-Key:mcpwp_your_api_key_here"`.)
+Prefer an API key? Claude Desktop's claude_desktop_config.json only supports command-based servers, so route the key through the mcp-remote bridge, which sends it as a header:
+
+`npx mcp-remote https://yoursite.com/wp-json/mcpwp/v1/mcp --header "X-API-Key:mcpwp_your_api_key_here"`
+
+(A `?api_key=...` query string on the connector URL also works but writes the key into server/proxy access logs — prefer OAuth or the header method above.)
 
 **Claude Code, Cursor, Windsurf** — add to the client's MCP config:
 
