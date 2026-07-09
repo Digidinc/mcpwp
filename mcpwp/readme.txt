@@ -140,6 +140,10 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 
 == Changelog ==
 
+= 3.4.5 =
+* fix: **security:** require admin scope to bypass content-approval gate
+* fix: **security:** require admin scope to bypass content-approval gate
+
 = 3.4.4 =
 * fix: **seo:** stop /seo/audit fatal and per-post self-fetch storm
 * fix: **seo:** stop /seo/audit fatal and per-post self-fetch storm
