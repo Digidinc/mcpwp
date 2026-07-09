@@ -48,6 +48,12 @@ class Mcpwp_REST_Blocks extends Mcpwp_REST_API {
 							'required'          => true,
 							'sanitize_callback' => 'absint',
 						),
+						'approval_required' => array(
+							'description'       => __( 'Create an approval request instead of saving immediately. Defaults to true. Bypassing (false) requires an admin-scoped API key.', 'mcpwp' ),
+							'type'              => 'boolean',
+							'default'           => true,
+							'sanitize_callback' => 'rest_sanitize_boolean',
+						),
 					),
 				),
 			)
@@ -221,8 +227,22 @@ class Mcpwp_REST_Blocks extends Mcpwp_REST_API {
 		$blocks  = $request->get_param( 'blocks' );
 		$content = $request->get_param( 'content' );
 		$allow_restricted_blocks = rest_sanitize_boolean( $request->get_param( 'allow_restricted_blocks' ) );
-		$approval_required       = rest_sanitize_boolean( $request->get_param( 'approval_required' ) );
+		$approval_required       = null === $request->get_param( 'approval_required' )
+			? true
+			: rest_sanitize_boolean( $request->get_param( 'approval_required' ) );
 		$approval_note           = (string) $request->get_param( 'approval_note' );
+
+		// Approval-gate floor (admin-only bypass): an explicit approval_required=false is
+		// honored for an admin-scoped API key or the trusted admin-AJAX context. A plain
+		// write/read key or OAuth token is silently forced through approval. A null key
+		// record is NOT treated as trusted (OAuth leaves it null); only the explicit
+		// admin-scope is_trusted_admin_ajax_request() predicate (admin cap + nonce) is exempt.
+		if ( false === $approval_required ) {
+			$requester_key = $this->get_current_api_key_record();
+			if ( ! ( ( $requester_key && $this->key_has_scope( $requester_key, 'admin' ) ) || $this->is_trusted_admin_ajax_request() ) ) {
+				$approval_required = true;
+			}
+		}
 
 		if ( ! empty( $blocks ) && is_array( $blocks ) ) {
 			// Serialize blocks array to HTML content.
@@ -597,6 +617,18 @@ class Mcpwp_REST_Blocks extends Mcpwp_REST_API {
 			? true
 			: rest_sanitize_boolean( $request->get_param( 'approval_required' ) );
 		$approval_note     = (string) $request->get_param( 'approval_note' );
+
+		// Approval-gate floor (admin-only bypass): an explicit approval_required=false is
+		// honored for an admin-scoped API key or the trusted admin-AJAX context. A plain
+		// write/read key or OAuth token is silently forced through approval. A null key
+		// record is NOT treated as trusted (OAuth leaves it null); only the explicit
+		// admin-scope is_trusted_admin_ajax_request() predicate (admin cap + nonce) is exempt.
+		if ( false === $approval_required ) {
+			$requester_key = $this->get_current_api_key_record();
+			if ( ! ( ( $requester_key && $this->key_has_scope( $requester_key, 'admin' ) ) || $this->is_trusted_admin_ajax_request() ) ) {
+				$approval_required = true;
+			}
+		}
 
 		if ( $approval_required ) {
 			if ( ! class_exists( 'Mcpwp_Approvals' ) ) {

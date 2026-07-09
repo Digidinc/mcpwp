@@ -36,7 +36,7 @@ trait Mcpwp_Free_Tools_Blocks_Trait {
 
 		$tools[] = $this->define_tool(
 			'wp_set_blocks',
-			'Set Gutenberg blocks for a post or page. Provide either a blocks array (serialized automatically) or raw block content string. Blocks use WordPress block grammar and are safety-validated by default.',
+			'Set Gutenberg blocks for a post or page. Provide either a blocks array (serialized automatically) or raw block content string. Blocks use WordPress block grammar and are safety-validated by default. An approval request is created by DEFAULT; bypassing it (approval_required=false) requires an admin-scoped API key — write/read keys are silently routed through approval.',
 			array(
 				'id' => array(
 					'type'        => 'number',
@@ -57,7 +57,7 @@ trait Mcpwp_Free_Tools_Blocks_Trait {
 				),
 				'approval_required' => array(
 					'type'        => 'boolean',
-					'description' => 'Create an approval request instead of saving immediately. Use for production edits that need human review.',
+					'description' => 'Defaults to true (an approval request is created). Set false only for admin-scoped keys needing an immediate save; write/read keys sending false are silently gated.',
 				),
 				'approval_note' => array(
 					'type'        => 'string',

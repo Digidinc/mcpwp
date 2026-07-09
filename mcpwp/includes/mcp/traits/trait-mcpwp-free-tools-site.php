@@ -550,7 +550,7 @@ trait Mcpwp_Free_Tools_Site_Trait {
 
 		$tools[] = $this->define_tool(
 			'wp_apply_internal_link',
-			'Apply an accepted internal link suggestion using an existing graph target. Creates an approval request by default and appends a native Gutenberg Related paragraph.',
+			'Apply an accepted internal link suggestion using an existing graph target. Creates an approval request by DEFAULT and appends a native Gutenberg Related paragraph. Bypassing approval (approval_required=false) requires an admin-scoped API key — write/read keys are silently routed through approval.',
 			array(
 				'source_id' => array(
 					'type'        => 'number',
@@ -568,7 +568,7 @@ trait Mcpwp_Free_Tools_Site_Trait {
 				),
 				'approval_required' => array(
 					'type'        => 'boolean',
-					'description' => 'Defaults to true. Set false only for explicitly approved immediate saves.',
+					'description' => 'Defaults to true (an approval request is created). Set false only for admin-scoped keys needing an immediate save; write/read keys sending false are silently gated.',
 				),
 				'approval_note' => array(
 					'type'        => 'string',
