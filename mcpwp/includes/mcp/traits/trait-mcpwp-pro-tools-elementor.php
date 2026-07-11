@@ -446,7 +446,7 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 
 		$pro_tools[] = $this->define_tool(
 			'wp_set_elementor_globals',
-			'Set Elementor global settings. Merges with existing kit page_settings. Accepts any valid Elementor Kit setting key — common ones listed below, but any kit setting works.',
+			'Set Elementor global settings: global colors, fonts, typography, kit-level custom CSS, and layout defaults. Only the documented keys below are written; any other key is ignored and reported in the response "ignored" list. Each provided key replaces its current value.',
 			array(
 				'system_colors' => array(
 					'type'        => 'array',
