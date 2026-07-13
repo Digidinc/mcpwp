@@ -94,104 +94,6 @@ class Mcpwp_Media {
 	}
 
 	/**
-	 * Upload media from URL.
-	 *
-	 * @param string $url  External URL.
-	 * @param array  $args Additional arguments.
-	 * @return array|WP_Error Attachment data or error.
-	 */
-	public function upload_from_url( $url, $args = array() ) {
-		if ( ! function_exists( 'wp_handle_upload' ) ) {
-			require_once ABSPATH . 'wp-admin/includes/file.php';
-		}
-		if ( ! function_exists( 'wp_generate_attachment_metadata' ) ) {
-			require_once ABSPATH . 'wp-admin/includes/image.php';
-		}
-		if ( ! function_exists( 'media_sideload_image' ) ) {
-			require_once ABSPATH . 'wp-admin/includes/media.php';
-		}
-
-		// Validate URL
-		$url = esc_url_raw( $url );
-		if ( empty( $url ) ) {
-			return new WP_Error(
-				'invalid_url',
-				__( 'Invalid URL provided.', 'mumega-mcp' ),
-				array(
-					'status' => 400,
-					'hint'   => 'Provide a fully qualified URL starting with http:// or https://. The URL must point to a publicly accessible file.',
-				)
-			);
-		}
-
-		// SSRF protection: block internal/private URLs.
-		if ( class_exists( 'Mcpwp_Security' ) ) {
-			$ssrf_check = Mcpwp_Security::validate_external_url( $url );
-			if ( is_wp_error( $ssrf_check ) ) {
-				return $ssrf_check;
-			}
-		}
-
-		// Download the file
-		$tmp = download_url( $url );
-
-		if ( is_wp_error( $tmp ) ) {
-			return new WP_Error(
-				'download_error',
-				$tmp->get_error_message(),
-				array(
-					'status' => 400,
-					'hint'   => 'Failed to download the file from the URL. Check that the URL is publicly accessible and returns a valid file. Supported formats: jpg, png, gif, webp, svg, pdf.',
-				)
-			);
-		}
-
-		// Get file info
-		$file_array = array(
-			'name'     => isset( $args['filename'] ) ? sanitize_file_name( $args['filename'] ) : basename( wp_parse_url( $url, PHP_URL_PATH ) ),
-			'tmp_name' => $tmp,
-		);
-
-		// If no extension, try to detect
-		if ( ! pathinfo( $file_array['name'], PATHINFO_EXTENSION ) ) {
-			$mime = mime_content_type( $tmp );
-			$ext = $this->mime_to_extension( $mime );
-			if ( $ext ) {
-				$file_array['name'] .= '.' . $ext;
-			}
-		}
-
-		// Upload
-		$attachment_id = media_handle_sideload( $file_array, 0, isset( $args['title'] ) ? sanitize_text_field( $args['title'] ) : '' );
-
-		// Clean up temp file
-		if ( file_exists( $tmp ) ) {
-			wp_delete_file( $tmp );
-		}
-
-		if ( is_wp_error( $attachment_id ) ) {
-			return $attachment_id;
-		}
-
-		// Set alt text
-		if ( ! empty( $args['alt'] ) ) {
-			update_post_meta( $attachment_id, '_wp_attachment_image_alt', sanitize_text_field( $args['alt'] ) );
-		}
-
-		// Set caption
-		if ( ! empty( $args['caption'] ) ) {
-			wp_update_post(
-				array(
-					'ID'           => $attachment_id,
-					'post_excerpt' => sanitize_textarea_field( $args['caption'] ),
-				)
-			);
-		}
-
-		return $this->format_attachment( $attachment_id );
-	}
-
-	/**
 	 * Upload media from Base64 encoded string.
 	 *
 	 * Bypasses multipart/form-data which can trigger ModSecurity on shared hosts.
@@ -238,7 +140,7 @@ class Mcpwp_Media {
 				__( 'File exceeds maximum size of 10MB.', 'mumega-mcp' ),
 				array(
 					'status' => 400,
-					'hint'   => 'The decoded file exceeds the 10MB limit. Use a smaller file, or upload via URL with wp_upload_media_from_url if the server supports larger files.',
+					'hint'   => 'The decoded file exceeds the 10MB limit. Use a smaller local file.',
 				)
 			);
 		}
@@ -295,14 +197,14 @@ class Mcpwp_Media {
 
 		// Block SVG uploads — SVGs can contain <script> tags (stored XSS).
 		// WordPress does not ship an SVG sanitizer; block at the API layer.
-		if ( 'image/svg+xml' === $mime['type'] || str_ends_with( strtolower( $filename ), '.svg' ) ) {
+		if ( 'image/svg+xml' === $mime['type'] || '.svg' === substr( strtolower( $filename ), -4 ) ) {
 			wp_delete_file( $tmp_file );
 			return new WP_Error(
 				'svg_not_allowed',
 				__( 'SVG uploads are blocked (SVGs can contain <script> tags — stored XSS risk). Use PNG or WebP instead. To allow SVGs, install an SVG sanitizer plugin (e.g. "Safe SVG") and upload via the WordPress media library directly.', 'mumega-mcp' ),
 				array(
 					'status'      => 400,
-					'hint'        => 'Convert the SVG to PNG/WebP for API upload. Inline SVG code can be embedded directly in HTML widgets without uploading.',
+					'hint'        => 'Convert the SVG to PNG or WebP before uploading.',
 					'alternatives' => array( 'png', 'webp', 'jpg' ),
 				)
 			);

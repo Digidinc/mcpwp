@@ -16,11 +16,8 @@
 *.zip
 *.sh
 .distignore
-/freemius
-/includes/freemius-init.php
 CLAUDE_DESKTOP_SETUP.md
 MCP_IMPLEMENTATION.md
 CHANGELOG.md
 /assets/*.png
 /assets/*.svg
-/includes/class-mcpwp-updater.php

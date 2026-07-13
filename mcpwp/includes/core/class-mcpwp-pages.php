@@ -158,19 +158,6 @@ class Mcpwp_Pages {
 			);
 		}
 
-		// Snapshot fields that might change for before/after diff.
-		$before = array(
-			'title'      => $page->post_title,
-			'status'     => $page->post_status,
-			'slug'       => $page->post_name,
-			'parent'     => (int) $page->post_parent,
-			'menu_order' => (int) $page->menu_order,
-			'template'   => get_post_meta( $page_id, '_wp_page_template', true ) ?: 'default',
-		);
-		if ( isset( $data['content'] ) ) {
-			$before['content_chars'] = mb_strlen( $page->post_content );
-		}
-
 		$page_data = array( 'ID' => $page_id );
 
 		if ( isset( $data['title'] ) ) {
@@ -250,76 +237,7 @@ class Mcpwp_Pages {
 			}
 		}
 
-		// Build before/after change summary.
-		if ( is_array( $page_result ) ) {
-			$after = array(
-				'title'      => $page_result['title'],
-				'status'     => $page_result['status'],
-				'slug'       => $page_result['slug'],
-				'parent'     => (int) $page_result['parent'],
-				'menu_order' => (int) $page_result['menu_order'],
-				'template'   => $page_result['template'],
-			);
-			if ( isset( $before['content_chars'] ) ) {
-				$updated_post         = get_post( $page_id );
-				$after['content_chars'] = mb_strlen( $updated_post->post_content );
-			}
-
-			$changes   = array();
-			$unchanged = array();
-			foreach ( $before as $field => $old_val ) {
-				$new_val = isset( $after[ $field ] ) ? $after[ $field ] : null;
-				if ( $new_val !== $old_val ) {
-					$changes[] = array(
-						'field'  => $field,
-						'before' => $old_val,
-						'after'  => $new_val,
-					);
-				} else {
-					$unchanged[] = $field;
-				}
-			}
-
-			$page_result['changes']   = $changes;
-			$page_result['unchanged'] = $unchanged;
-		}
-
 		return $page_result;
-	}
-
-	/**
-	 * Delete a page.
-	 *
-	 * @param int  $page_id Page ID.
-	 * @param bool $force   Force permanent deletion (bypass trash).
-	 * @return bool|WP_Error True on success or error.
-	 */
-	public function delete_page( $page_id, $force = false ) {
-		$page = get_post( absint( $page_id ) );
-
-		if ( ! $page || 'page' !== $page->post_type ) {
-			return new WP_Error(
-				'not_found',
-				__( 'Page not found.', 'mumega-mcp' ),
-				array( 'status' => 404 )
-			);
-		}
-
-		if ( $force ) {
-			$result = wp_delete_post( $page_id, true );
-		} else {
-			$result = wp_trash_post( $page_id );
-		}
-
-		if ( ! $result ) {
-			return new WP_Error(
-				'delete_failed',
-				__( 'Failed to delete page.', 'mumega-mcp' ),
-				array( 'status' => 500 )
-			);
-		}
-
-		return true;
 	}
 
 	/**
@@ -349,7 +267,6 @@ class Mcpwp_Pages {
 				'name' => get_the_author_meta( 'display_name', $page->post_author ),
 			),
 			'featured_image' => $this->get_featured_image( $page->ID ),
-			'has_elementor'  => $this->has_elementor_data( $page->ID ),
 		);
 
 		if ( $include_full ) {
@@ -381,21 +298,6 @@ class Mcpwp_Pages {
 			'width'  => $image ? $image[1] : 0,
 			'height' => $image ? $image[2] : 0,
 		);
-	}
-
-	/**
-	 * Check if page has Elementor data.
-	 *
-	 * @param int $page_id Page ID.
-	 * @return bool True if has Elementor data.
-	 */
-	protected function has_elementor_data( $page_id ) {
-		if ( ! defined( 'ELEMENTOR_VERSION' ) ) {
-			return false;
-		}
-
-		$elementor_data = get_post_meta( $page_id, '_elementor_data', true );
-		return ! empty( $elementor_data );
 	}
 
 	/**

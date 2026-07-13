@@ -2,10 +2,6 @@
 
 use PHPUnit\Framework\TestCase;
 
-class Mcpwp_Api_Auth_Test_Harness {
-	use Mcpwp_Api_Auth;
-}
-
 final class ApiAuthTest extends TestCase {
 	protected function setUp(): void {
 		$GLOBALS['mcpwp_test_options'] = array();
@@ -90,54 +86,17 @@ final class ApiAuthTest extends TestCase {
 		$this->assertTrue( wp_check_password( 'mcpwp_legacy_plain', $keys[0]['hash'] ) );
 	}
 
-	public function test_oauth_bearer_token_with_read_scope_authenticates_read_requests(): void {
+	public function test_authorization_bearer_header_is_not_an_api_key_transport(): void {
 		$auth = new Mcpwp_Api_Auth_Test_Harness();
-		update_option(
-			'mcpwp_settings',
-			array(
-				'oauth_enabled'            => true,
-				'oauth_client_id'          => 'site_pilot_ai',
-				'oauth_client_secret_hash' => wp_hash_password( 'secret' ),
-				'oauth_token_ttl'          => 3600,
-			)
-		);
-
-		$token_response = $auth->issue_oauth_access_token( array( 'read' ), 3600 );
-
+		$created = $auth->create_scoped_api_key( 'read key', array( 'read' ) );
 		$request = new WP_REST_Request(
 			'GET',
 			'/mcpwp/v1/site-info',
 			array(),
-			array( 'Authorization' => 'Bearer ' . $token_response['access_token'] )
+			array( 'Authorization' => 'Bearer ' . $created['key'] )
 		);
-
-		$result = $auth->verify_api_key( $request );
-		$this->assertTrue( $result );
-	}
-
-	public function test_oauth_bearer_token_with_read_scope_cannot_write(): void {
-		$auth = new Mcpwp_Api_Auth_Test_Harness();
-		update_option(
-			'mcpwp_settings',
-			array(
-				'oauth_enabled'            => true,
-				'oauth_client_id'          => 'site_pilot_ai',
-				'oauth_client_secret_hash' => wp_hash_password( 'secret' ),
-				'oauth_token_ttl'          => 3600,
-			)
-		);
-
-		$token_response = $auth->issue_oauth_access_token( array( 'read' ), 3600 );
-
-		$request = new WP_REST_Request(
-			'POST',
-			'/mcpwp/v1/posts',
-			array(),
-			array( 'Authorization' => 'Bearer ' . $token_response['access_token'] )
-		);
-
 		$result = $auth->verify_api_key( $request );
 		$this->assertInstanceOf( WP_Error::class, $result );
-		$this->assertSame( 'insufficient_scope', $result->get_error_code() );
+		$this->assertSame( 'missing_api_key', $result->get_error_code() );
 	}
 }

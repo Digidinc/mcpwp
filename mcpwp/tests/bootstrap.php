@@ -29,13 +29,42 @@ if (! defined('HOUR_IN_SECONDS')) {
 $GLOBALS['mcpwp_test_options'] = array();
 $GLOBALS['mcpwp_test_transients'] = array();
 $GLOBALS['mcpwp_test_current_user'] = 0;
-// Per-user capability overrides for OAuth scope-clamping tests.
+// Per-user capability overrides for authorization tests.
 // Key: user_id (int), Value: array of capability => bool.
 // When empty (or user_id not present), current_user_can() grants all caps.
 $GLOBALS['mcpwp_test_user_caps'] = array();
 $GLOBALS['mcpwp_test_users'] = array(
     (object) array( 'ID' => 2, 'roles' => array( 'mcpwp_api_agent' ) ),
 );
+$GLOBALS['mcpwp_test_roles'] = array();
+$GLOBALS['mcpwp_test_cleared_hooks'] = array();
+
+class Mcpwp_Test_Role
+{
+    public $capabilities = array();
+
+    public function __construct($capabilities = array())
+    {
+        $this->capabilities = $capabilities;
+    }
+
+    public function add_cap($capability, $grant = true)
+    {
+        $this->capabilities[ $capability ] = (bool) $grant;
+    }
+}
+
+class Mcpwp_Test_Wpdb
+{
+    public $prefix = 'wp_';
+
+    public function get_charset_collate()
+    {
+        return 'DEFAULT CHARACTER SET utf8mb4';
+    }
+}
+
+$GLOBALS['wpdb'] = new Mcpwp_Test_Wpdb();
 
 class WP_Error
 {
@@ -171,6 +200,11 @@ class WP_REST_Request
     {
         return $this->json_params;
     }
+
+    public function get_file_params()
+    {
+        return array();
+    }
 }
 
 class WP_REST_Server
@@ -292,7 +326,6 @@ function current_user_can($capability)
     }
 
     // If per-user caps are configured for this user_id, check them.
-    // This lets OAuth scope-clamping tests drive subscriber/editor/admin behavior.
     if (isset($GLOBALS['mcpwp_test_user_caps'][ $user_id ])) {
         $caps = $GLOBALS['mcpwp_test_user_caps'][ $user_id ];
         // Explicit true/false per capability key.
@@ -326,6 +359,23 @@ function delete_option($name)
 {
     unset($GLOBALS['mcpwp_test_options'][ $name ]);
     return true;
+}
+
+function get_role($name)
+{
+    return isset($GLOBALS['mcpwp_test_roles'][ $name ]) ? $GLOBALS['mcpwp_test_roles'][ $name ] : null;
+}
+
+function add_role($name, $display_name, $capabilities = array())
+{
+    $GLOBALS['mcpwp_test_roles'][ $name ] = new Mcpwp_Test_Role($capabilities);
+    return $GLOBALS['mcpwp_test_roles'][ $name ];
+}
+
+function wp_clear_scheduled_hook($hook)
+{
+    $GLOBALS['mcpwp_test_cleared_hooks'][] = $hook;
+    return 1;
 }
 
 function set_transient($name, $value, $expiration)
@@ -543,7 +593,6 @@ function map_deep($value, $callback)
 
 $GLOBALS['_mcpwp_test_posts'] = array();
 $GLOBALS['_mcpwp_test_meta']  = array();
-$GLOBALS['_mcpwp_test_menu_page_ids'] = array();
 
 function get_post($id)
 {
@@ -583,34 +632,13 @@ function get_posts($args = array())
 
 function post_type_exists($post_type)
 {
-    $known = array( 'post', 'page', 'wp_block', 'elementor_library', 'elementor_snippet' );
+    $known = array( 'post', 'page', 'attachment' );
     return in_array((string) $post_type, $known, true);
 }
 
 function post_type_supports($post_type, $feature)
 {
     return in_array((string) $post_type, array( 'post', 'page' ), true);
-}
-
-// ── Cron / plugin-update stubs (drive via globals) ───────────────────────
-
-$GLOBALS['mcpwp_test_doing_cron']            = false;
-$GLOBALS['mcpwp_test_plugin_updates']        = array();
-$GLOBALS['mcpwp_test_update_plugins_called'] = false;
-
-function wp_doing_cron()
-{
-    return (bool) $GLOBALS['mcpwp_test_doing_cron'];
-}
-
-function wp_update_plugins()
-{
-    $GLOBALS['mcpwp_test_update_plugins_called'] = true;
-}
-
-function get_plugin_updates()
-{
-    return $GLOBALS['mcpwp_test_plugin_updates'];
 }
 
 function get_post_type_object($post_type)
@@ -774,21 +802,6 @@ function wp_get_attachment_image_src($attachment_id, $size = 'thumbnail')
     return false;
 }
 
-function wp_get_nav_menus()
-{
-    return empty($GLOBALS['_mcpwp_test_menu_page_ids']) ? array() : array((object) array( 'term_id' => 1 ));
-}
-
-function wp_get_nav_menu_items($term_id)
-{
-    return array_map(function ($post_id) {
-        return (object) array(
-            'object'    => 'page',
-            'object_id' => (int) $post_id,
-        );
-    }, $GLOBALS['_mcpwp_test_menu_page_ids']);
-}
-
 function get_post_meta($post_id, $key = '', $single = false)
 {
     $post_id = (int) $post_id;
@@ -820,59 +833,6 @@ function admin_url($path = '')
 function wp_slash($value)
 {
     return is_string($value) ? addslashes($value) : $value;
-}
-
-// -------------------------------------------------------------------------
-// Freemius double. Mcpwp_License treats Freemius as the single source of
-// truth via mcpwp_get_fs_instance(). Tests drive entitlement state by setting
-// $GLOBALS['mcpwp_test_fs'] to a Mcpwp_Test_Fs_Stub (or null for "no Freemius").
-// -------------------------------------------------------------------------
-
-$GLOBALS['mcpwp_test_fs'] = null;
-
-function mcpwp_get_fs_instance()
-{
-    return $GLOBALS['mcpwp_test_fs'];
-}
-
-class Mcpwp_Test_Fs_Stub
-{
-    private $is_paying;
-    private $is_trial;
-    private $can_use_premium_code;
-    private $plan;
-
-    public function __construct(
-        bool $can_use_premium_code = false,
-        bool $is_paying = false,
-        bool $is_trial = false,
-        $plan = ''
-    ) {
-        $this->can_use_premium_code = $can_use_premium_code;
-        $this->is_paying            = $is_paying;
-        $this->is_trial             = $is_trial;
-        $this->plan                 = $plan;
-    }
-
-    public function can_use_premium_code()
-    {
-        return $this->can_use_premium_code;
-    }
-
-    public function is_paying()
-    {
-        return $this->is_paying;
-    }
-
-    public function is_trial()
-    {
-        return $this->is_trial;
-    }
-
-    public function get_plan()
-    {
-        return $this->plan;
-    }
 }
 
 // ── Admin / AJAX stubs for auth trait bypass tests ───────────────────────
@@ -916,53 +876,28 @@ require_once dirname(__DIR__) . '/includes/traits/trait-mcpwp-api-auth.php';
 require_once dirname(__DIR__) . '/includes/traits/trait-mcpwp-sanitization.php';
 require_once dirname(__DIR__) . '/includes/traits/trait-mcpwp-logging.php';
 require_once dirname(__DIR__) . '/includes/class-mcpwp-rate-limiter.php';
-require_once dirname(__DIR__) . '/includes/core/class-mcpwp-event-store.php';
-require_once dirname(__DIR__) . '/includes/core/class-mcpwp-site-state.php';
-require_once dirname(__DIR__) . '/includes/core/class-mcpwp-agent-playbooks.php';
-require_once dirname(__DIR__) . '/includes/core/class-mcpwp-content-coherence.php';
-require_once dirname(__DIR__) . '/includes/core/class-mcpwp-seo-audit-store.php';
-require_once dirname(__DIR__) . '/includes/core/class-mcpwp-seo-autofix.php';
-require_once dirname(__DIR__) . '/includes/core/class-mcpwp-search-performance.php';
-require_once dirname(__DIR__) . '/includes/core/class-mcpwp-woocommerce-seo.php';
+require_once dirname(__DIR__) . '/includes/class-mcpwp-migrate.php';
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-posts.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-pages.php';
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-drafts.php';
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-media.php';
 require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-api.php';
 require_once dirname(__DIR__) . '/includes/mcp/class-mcpwp-mcp-tool-registry.php';
-require_once dirname(__DIR__) . '/includes/mcp/class-mcpwp-custom-tool-registry.php';
 require_once dirname(__DIR__) . '/includes/mcp/traits/trait-mcpwp-free-tools-site.php';
 require_once dirname(__DIR__) . '/includes/mcp/traits/trait-mcpwp-free-tools-content.php';
 require_once dirname(__DIR__) . '/includes/mcp/traits/trait-mcpwp-free-tools-media.php';
-require_once dirname(__DIR__) . '/includes/mcp/traits/trait-mcpwp-free-tools-elementor.php';
-require_once dirname(__DIR__) . '/includes/mcp/traits/trait-mcpwp-free-tools-blocks.php';
 require_once dirname(__DIR__) . '/includes/mcp/traits/trait-mcpwp-free-tools-ops.php';
 require_once dirname(__DIR__) . '/includes/mcp/class-mcpwp-mcp-free-tools.php';
-require_once dirname(__DIR__) . '/includes/mcp/traits/trait-mcpwp-pro-tools-seo.php';
-require_once dirname(__DIR__) . '/includes/mcp/traits/trait-mcpwp-pro-tools-forms.php';
-require_once dirname(__DIR__) . '/includes/mcp/traits/trait-mcpwp-pro-tools-elementor.php';
-require_once dirname(__DIR__) . '/includes/mcp/traits/trait-mcpwp-pro-tools-menus.php';
-require_once dirname(__DIR__) . '/includes/mcp/traits/trait-mcpwp-pro-tools-commerce.php';
-require_once dirname(__DIR__) . '/includes/mcp/traits/trait-mcpwp-pro-tools-network.php';
-require_once dirname(__DIR__) . '/includes/mcp/traits/trait-mcpwp-pro-tools-staging.php';
-require_once dirname(__DIR__) . '/includes/mcp/class-mcpwp-mcp-pro-tools.php';
-require_once dirname(__DIR__) . '/includes/mcp/class-mcpwp-integration.php';
+require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-site-info.php';
+require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-site-settings.php';
+require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-api-keys.php';
+require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-rate-limit.php';
+require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-posts.php';
 require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-mcp.php';
 require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-pages.php';
-require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-menus.php';
-require_once dirname(__DIR__) . '/includes/core/traits/trait-mcpwp-elementor-reader.php';
-require_once dirname(__DIR__) . '/includes/core/traits/trait-mcpwp-elementor-writer.php';
-require_once dirname(__DIR__) . '/includes/core/traits/trait-mcpwp-elementor-validator.php';
-require_once dirname(__DIR__) . '/includes/core/traits/trait-mcpwp-elementor-css.php';
-require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-basic.php';
-require_once dirname(__DIR__) . '/includes/pro/api/class-mcpwp-rest-elementor-pro.php';
-require_once dirname(__DIR__) . '/includes/class-mcpwp-license.php';
-require_once dirname(__DIR__) . '/includes/core/class-mcpwp-core.php';
-require_once dirname(__DIR__) . '/includes/pro/class-mcpwp-pro-bootstrap.php';
-require_once dirname(__DIR__) . '/includes/core/class-mcpwp-signals.php';
-require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-signals.php';
-// OAuth 2.1 server (#531).
-require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-oauth.php';
-require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-site-settings.php';
-require_once dirname(__DIR__) . '/includes/class-mcpwp-oauth-well-known.php';
-// Encryption + migration classes.
-require_once dirname(__DIR__) . '/includes/core/class-mcpwp-encryption.php';
-require_once dirname(__DIR__) . '/includes/core/class-mcpwp-integration-manager.php';
-require_once dirname(__DIR__) . '/includes/core/class-mcpwp-encryption-migration.php';
+require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-media.php';
+require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-site-taxonomy.php';
+
+class Mcpwp_Api_Auth_Test_Harness {
+    use Mcpwp_Api_Auth;
+}

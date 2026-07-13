@@ -55,10 +55,6 @@ rm -f "$DEST"/assets/screenshot-*.png
 rm -f "$DEST"/assets/*.svg
 rm -f "$DEST/assets/README.md"
 
-# Keep the directory artifact physically free of private distribution code.
-rm -rf "$DEST/freemius" "$DEST/includes/pro"
-rm -f "$DEST/includes/freemius-init.php" "$DEST/includes/class-mcpwp-updater.php"
-
 # Apply source distribution exclusions before removing the exclusion file itself.
 if [[ -f "$DEST/.distignore" ]]; then
 	while IFS= read -r pattern; do

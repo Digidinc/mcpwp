@@ -1,115 +1,29 @@
 <?php
-
 use PHPUnit\Framework\TestCase;
 
 final class McpEndpointTest extends TestCase {
-	protected function setUp(): void {
-		$GLOBALS['mcpwp_test_options'] = array();
-		$GLOBALS['mcpwp_test_transients'] = array();
+	protected function setUp(): void { $GLOBALS['mcpwp_test_options'] = array(); }
+	private function call( $method, $params = array() ) {
+		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/mcp', array(), array(), array( 'jsonrpc' => '2.0', 'id' => 1, 'method' => $method, 'params' => $params ) );
+		return ( new Mcpwp_REST_MCP() )->handle_mcp( $request )->get_data();
 	}
-
-	public function test_initialize_advertises_resources_capability(): void {
-		$controller = new Mcpwp_REST_MCP();
-		$request    = new WP_REST_Request(
-			'POST',
-			'/mcpwp/v1/mcp',
-			array(),
-			array(),
-			array(
-				'jsonrpc' => '2.0',
-				'id'      => 1,
-				'method'  => 'initialize',
-				'params'  => array(
-					'clientInfo' => array(
-						'name'    => 'phpunit',
-						'version' => '1.0',
-					),
-				),
-			)
-		);
-
-		$response = $controller->handle_mcp( $request );
-		$data     = $response->get_data();
-
-		$this->assertArrayHasKey( 'result', $data );
-		$this->assertArrayHasKey( 'capabilities', $data['result'] );
+	public function test_initialize_advertises_tools_and_resources(): void {
+		$data = $this->call( 'initialize' );
+		$this->assertArrayHasKey( 'tools', $data['result']['capabilities'] );
 		$this->assertArrayHasKey( 'resources', $data['result']['capabilities'] );
 	}
-
-	public function test_resources_list_returns_curated_resources(): void {
-		$controller = new Mcpwp_REST_MCP();
-		$request    = new WP_REST_Request(
-			'POST',
-			'/mcpwp/v1/mcp',
-			array(),
-			array(),
-			array(
-				'jsonrpc' => '2.0',
-				'id'      => 2,
-				'method'  => 'resources/list',
-				'params'  => array(),
-			)
-		);
-
-		$response  = $controller->handle_mcp( $request );
-		$data      = $response->get_data();
-		$resources = $data['result']['resources'];
-
-		// resources/list exposes a curated, non-empty set of MCP resources.
-		$this->assertIsArray( $resources );
-		$this->assertNotEmpty( $resources );
-
-		$names = array_column( $resources, 'name' );
-		$this->assertContains( 'Site Info', $names );
-		$this->assertContains( 'Elementor Status', $names );
-
-		foreach ( $resources as $resource ) {
-			$this->assertArrayHasKey( 'uri', $resource );
-			$this->assertArrayHasKey( 'name', $resource );
-			$this->assertArrayHasKey( 'mimeType', $resource );
-		}
+	public function test_tools_list_is_exact_approved_inventory(): void {
+		$data = $this->call( 'tools/list' );
+		$names = array_column( $data['result']['tools'], 'name' );
+		$this->assertSame( array( 'wp_site_info', 'wp_list_posts', 'wp_get_post', 'wp_create_post', 'wp_update_post', 'wp_list_pages', 'wp_get_page', 'wp_create_page', 'wp_update_page', 'wp_list_drafts', 'wp_delete_draft', 'wp_list_media', 'wp_get_media', 'wp_upload_media', 'wp_upload_media_b64', 'wp_list_categories', 'wp_list_tags', 'wp_create_term' ), $names );
 	}
-
-	public function test_tools_list_includes_annotations_hints(): void {
-		$controller = new Mcpwp_REST_MCP();
-		$request    = new WP_REST_Request(
-			'POST',
-			'/mcpwp/v1/mcp',
-			array(),
-			array(),
-			array(
-				'jsonrpc' => '2.0',
-				'id'      => 3,
-				'method'  => 'tools/list',
-				'params'  => array(),
-			)
-		);
-
-		$response = $controller->handle_mcp( $request );
-		$data     = $response->get_data();
-		$tools    = $data['result']['tools'];
-
-		$by_name = array();
-		foreach ( $tools as $tool ) {
-			$by_name[ $tool['name'] ] = $tool;
-		}
-
-		$this->assertArrayHasKey( 'wp_site_info', $by_name );
-		$this->assertArrayHasKey( 'annotations', $by_name['wp_site_info'] );
-		$this->assertArrayHasKey( 'readOnlyHint', $by_name['wp_site_info']['annotations'] );
-		$this->assertArrayHasKey( 'openWorldHint', $by_name['wp_site_info']['annotations'] );
-		$this->assertArrayHasKey( 'destructiveHint', $by_name['wp_site_info']['annotations'] );
-		$this->assertTrue( $by_name['wp_site_info']['annotations']['readOnlyHint'] );
-		$this->assertFalse( $by_name['wp_site_info']['annotations']['openWorldHint'] );
-		$this->assertFalse( $by_name['wp_site_info']['annotations']['destructiveHint'] );
-
-		$this->assertArrayHasKey( 'wp_delete_post', $by_name );
-		$this->assertTrue( $by_name['wp_delete_post']['annotations']['destructiveHint'] );
-		$this->assertFalse( $by_name['wp_delete_post']['annotations']['readOnlyHint'] );
-
-		$this->assertArrayHasKey( 'wp_search', $by_name );
-		$this->assertTrue( $by_name['wp_search']['annotations']['readOnlyHint'] );
-		$this->assertArrayHasKey( 'wp_fetch', $by_name );
-		$this->assertTrue( $by_name['wp_fetch']['annotations']['readOnlyHint'] );
+	public function test_delete_draft_is_the_only_destructive_tool(): void {
+		$data = $this->call( 'tools/list' ); $destructive = array();
+		foreach ( $data['result']['tools'] as $tool ) { if ( $tool['annotations']['destructiveHint'] ) { $destructive[] = $tool['name']; } }
+		$this->assertSame( array( 'wp_delete_draft' ), $destructive );
+	}
+	public function test_resources_are_local_and_curated(): void {
+		$data = $this->call( 'resources/list' );
+		$this->assertSame( array( 'Site Info', 'Posts' ), array_column( $data['result']['resources'], 'name' ) );
 	}
 }

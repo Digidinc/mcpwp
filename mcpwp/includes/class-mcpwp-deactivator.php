@@ -1,33 +1,17 @@
 <?php
-/**
- * Plugin Deactivator
- *
- * @package mumcp
- */
+/** Plugin deactivation. @package mumcp */
+if ( ! defined( 'ABSPATH' ) ) { exit; }
 
-if ( ! defined( 'ABSPATH' ) ) {
-	exit;
-}
-
-/**
- * Fired during plugin deactivation.
- */
 class Mcpwp_Deactivator {
-
-	/**
-	 * Deactivate the plugin.
-	 *
-	 * Clean up transients, flush rewrite rules.
-	 * Note: API key and settings are preserved for reactivation.
-	 * Full cleanup happens in uninstall.php.
-	 */
 	public static function deactivate() {
-		// Clear any transients
-		delete_transient( 'mcpwp_capabilities_cache' );
-		wp_clear_scheduled_hook( 'mcpwp_cleanup_logs' );
-		wp_clear_scheduled_hook( 'mcpwp_compute_signals' );
-
-		// Flush rewrite rules
-		flush_rewrite_rules();
+		$hooks = array(
+			'mcpwp_cleanup_logs',
+			'mcpwp_check_alerts',
+			'mcpwp_verify_screenshot',
+			'mcpwp_compute_signals',
+			'mcpwp_action_log_daily_prune',
+			'mcpwp_webhook_retry',
+		);
+		foreach ( $hooks as $hook ) { wp_clear_scheduled_hook( $hook ); }
 	}
 }

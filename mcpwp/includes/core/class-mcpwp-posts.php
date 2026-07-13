@@ -21,14 +21,7 @@ class Mcpwp_Posts {
 	 *
 	 * @var array
 	 */
-	private $allowed_post_types = array( 'post', 'wp_block' );
-
-	/**
-	 * Post types that should never be created/managed through this controller.
-	 *
-	 * @var array
-	 */
-	private $blocked_post_types = array( 'attachment', 'revision', 'nav_menu_item', 'custom_css', 'customize_changeset', 'oembed_cache', 'wp_global_styles', 'wp_navigation', 'wp_template', 'wp_template_part' );
+	private $allowed_post_types = array( 'post' );
 
 	/**
 	 * Validate and return a post type string.
@@ -36,49 +29,11 @@ class Mcpwp_Posts {
 	 * @param string $type Requested post type.
 	 * @return string|WP_Error Sanitized type or error.
 	 */
-	/**
-	 * Non-public post types that are safe to allow through the API.
-	 *
-	 * @var array
-	 */
-	private $safe_nonpublic_types = array( 'elementor_snippet', 'elementor_library' );
-
 	private function validate_post_type( $type ) {
 		$type = sanitize_key( $type );
 
-		if ( in_array( $type, $this->blocked_post_types, true ) ) {
-			return new WP_Error(
-				'invalid_post_type',
-				__( 'Invalid or unsupported post type.', 'mumega-mcp' ),
-				array(
-					'status' => 400,
-					'hint'   => sprintf(
-						'Post type "%s" is blocked for security reasons. Use wp_site_info to check available post types, or wp_list_content(post_type=\'...\') for custom post types.',
-						$type
-					),
-				)
-			);
-		}
-
 		if ( ! in_array( $type, $this->allowed_post_types, true ) ) {
-			// Allow whitelisted non-public types.
-			if ( in_array( $type, $this->safe_nonpublic_types, true ) && post_type_exists( $type ) ) {
-				return $type;
-			}
-			// Also allow any public custom post type that isn't blocked.
-			if ( ! post_type_exists( $type ) || ! get_post_type_object( $type )->public ) {
-				return new WP_Error(
-					'invalid_post_type',
-					__( 'Invalid or unsupported post type.', 'mumega-mcp' ),
-					array(
-						'status' => 400,
-						'hint'   => sprintf(
-							'Post type "%s" does not exist or is not public. Use wp_site_info to check available post types. Common types: post, page.',
-							$type
-						),
-					)
-				);
-			}
+			return new WP_Error( 'invalid_post_type', __( 'Only posts are supported by this endpoint.', 'mumega-mcp' ), array( 'status' => 400 ) );
 		}
 
 		return $type;
@@ -156,7 +111,7 @@ class Mcpwp_Posts {
 				array(
 					'status' => 404,
 					'hint'   => sprintf(
-						'Post ID %d not found. Use wp_list_posts to see available posts, or wp_search to find content by keyword. If this is a page, use wp_list_pages instead.',
+						'Post ID %d not found. Use wp_list_posts to see available posts. If this is a page, use wp_list_pages instead.',
 						absint( $post_id )
 					),
 				)
@@ -206,18 +161,6 @@ class Mcpwp_Posts {
 			return $post_id;
 		}
 
-		// Set Elementor snippet location meta (head, body_start, body_end).
-		if ( 'elementor_snippet' === $post_type ) {
-			$allowed_locations = array( 'head', 'body_start', 'body_end' );
-			$location          = isset( $data['elementor_location'] ) ? sanitize_key( $data['elementor_location'] ) : 'head';
-			if ( ! in_array( $location, $allowed_locations, true ) ) {
-				$location = 'head';
-			}
-			update_post_meta( $post_id, '_elementor_location', $location );
-			// Elementor Custom Code requires these meta keys to function.
-			update_post_meta( $post_id, '_elementor_edit_mode', 'builder' );
-		}
-
 		// Set categories
 		if ( ! empty( $data['categories'] ) ) {
 			$categories = array_map( 'absint', (array) $data['categories'] );
@@ -260,25 +203,6 @@ class Mcpwp_Posts {
 					),
 				)
 			);
-		}
-
-		// Snapshot fields that might change for before/after diff.
-		$before = array(
-			'title'  => $post->post_title,
-			'status' => $post->post_status,
-			'slug'   => $post->post_name,
-		);
-		if ( isset( $data['excerpt'] ) ) {
-			$before['excerpt'] = $post->post_excerpt;
-		}
-		if ( isset( $data['content'] ) ) {
-			$before['content_chars'] = mb_strlen( $post->post_content );
-		}
-		if ( isset( $data['categories'] ) ) {
-			$before['categories'] = wp_list_pluck( wp_get_post_categories( $post_id, array( 'fields' => 'all' ) ), 'name' );
-		}
-		if ( isset( $data['tags'] ) ) {
-			$before['tags'] = wp_list_pluck( wp_get_post_tags( $post_id ), 'slug' );
 		}
 
 		$post_data = array( 'ID' => $post_id );
@@ -334,101 +258,7 @@ class Mcpwp_Posts {
 			}
 		}
 
-		$post_result = $this->get_post( $post_id );
-
-		// Build before/after change summary.
-		if ( is_array( $post_result ) ) {
-			$after = array(
-				'title'  => $post_result['title'],
-				'status' => $post_result['status'],
-				'slug'   => $post_result['slug'],
-			);
-			if ( isset( $before['excerpt'] ) ) {
-				$after['excerpt'] = $post_result['excerpt'];
-			}
-			if ( isset( $before['content_chars'] ) ) {
-				$updated          = get_post( $post_id );
-				$after['content_chars'] = mb_strlen( $updated->post_content );
-			}
-			if ( isset( $before['categories'] ) ) {
-				$after['categories'] = wp_list_pluck( wp_get_post_categories( $post_id, array( 'fields' => 'all' ) ), 'name' );
-			}
-			if ( isset( $before['tags'] ) ) {
-				$after['tags'] = wp_list_pluck( wp_get_post_tags( $post_id ), 'slug' );
-			}
-
-			$changes   = array();
-			$unchanged = array();
-			foreach ( $before as $field => $old_val ) {
-				$new_val = isset( $after[ $field ] ) ? $after[ $field ] : null;
-				if ( is_array( $old_val ) ) {
-					$a = (array) $old_val;
-					$b = (array) $new_val;
-					sort( $a );
-					sort( $b );
-					$changed = $a !== $b;
-				} else {
-					$changed = $new_val !== $old_val;
-				}
-				if ( $changed ) {
-					$changes[] = array(
-						'field'  => $field,
-						'before' => $old_val,
-						'after'  => $new_val,
-					);
-				} else {
-					$unchanged[] = $field;
-				}
-			}
-
-			$post_result['changes']   = $changes;
-			$post_result['unchanged'] = $unchanged;
-		}
-
-		return $post_result;
-	}
-
-	/**
-	 * Delete a post.
-	 *
-	 * @param int  $post_id Post ID.
-	 * @param bool $force   Force delete (skip trash).
-	 * @return array|WP_Error Success or error.
-	 */
-	public function delete_post( $post_id, $force = false ) {
-		$post = get_post( absint( $post_id ) );
-
-		if ( ! $post || 'page' === $post->post_type || is_wp_error( $this->validate_post_type( $post->post_type ) ) ) {
-			return new WP_Error(
-				'not_found',
-				__( 'Post not found.', 'mumega-mcp' ),
-				array(
-					'status' => 404,
-					'hint'   => sprintf(
-						'Post ID %d not found. Use wp_list_posts to verify the post exists. If this is a page, use wp_delete_page instead.',
-						absint( $post_id )
-					),
-				)
-			);
-		}
-
-		$result = wp_delete_post( $post_id, $force );
-
-		if ( ! $result ) {
-			return new WP_Error(
-				'delete_failed',
-				__( 'Failed to delete post.', 'mumega-mcp' ),
-				array( 'status' => 500 )
-			);
-		}
-
-		return array(
-			'success' => true,
-			'message' => $force
-				? __( 'Post permanently deleted.', 'mumega-mcp' )
-				: __( 'Post moved to trash.', 'mumega-mcp' ),
-			'post_id' => $post_id,
-		);
+		return $this->get_post( $post_id );
 	}
 
 	/**

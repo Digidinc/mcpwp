@@ -65,55 +65,19 @@ class Mcpwp_Drafts {
 	}
 
 	/**
-	 * Delete all drafts.
+	 * Delete one draft.
 	 *
-	 * @param array $args Arguments.
+	 * @param int $post_id Post or page ID.
 	 * @return array Result.
 	 */
-	public function delete_all_drafts( $args = array() ) {
-		$post_types = array( 'post', 'page' );
-
-		// Filter by type
-		if ( ! empty( $args['type'] ) ) {
-			$type = sanitize_key( $args['type'] );
-			if ( in_array( $type, array( 'post', 'page' ), true ) ) {
-				$post_types = array( $type );
-			}
+	public function delete_draft( $post_id ) {
+		$post = get_post( $post_id );
+		if ( ! $post || ! in_array( $post->post_type, array( 'post', 'page' ), true ) || 'draft' !== $post->post_status ) {
+			return new WP_Error( 'not_a_draft', __( 'The requested post or page is not a draft.', 'mumega-mcp' ), array( 'status' => 404 ) );
 		}
-
-		$force = ! empty( $args['force'] );
-
-		$query = new WP_Query(
-			array(
-				'post_type'      => $post_types,
-				'post_status'    => 'draft',
-				'posts_per_page' => -1,
-				'fields'         => 'ids',
-			)
-		);
-
-		$deleted = 0;
-		$failed = 0;
-
-		foreach ( $query->posts as $post_id ) {
-			$result = wp_delete_post( $post_id, $force );
-			if ( $result ) {
-				++$deleted;
-			} else {
-				++$failed;
-			}
+		if ( ! wp_delete_post( $post_id, false ) ) {
+			return new WP_Error( 'delete_failed', __( 'The draft could not be deleted.', 'mumega-mcp' ), array( 'status' => 500 ) );
 		}
-
-		return array(
-			'success'  => true,
-			'deleted'  => $deleted,
-			'failed'   => $failed,
-			'message'  => sprintf(
-				/* translators: %d: number of deleted drafts */
-				__( '%d drafts deleted.', 'mumega-mcp' ),
-				$deleted
-			),
-			'force'    => $force,
-		);
+		return array( 'deleted' => true, 'id' => (int) $post_id );
 	}
 }

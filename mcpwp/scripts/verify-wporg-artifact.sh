@@ -9,8 +9,14 @@ if [[ $# -ne 1 ]]; then
 fi
 
 ZIP_PATH="$1"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+POLICY_PATH="$SCRIPT_DIR/wporg-artifact-policy.json"
 if [[ ! -f "$ZIP_PATH" ]]; then
 	echo "[FAIL] candidate ZIP does not exist: $ZIP_PATH" >&2
+	exit 1
+fi
+if [[ ! -f "$POLICY_PATH" ]]; then
+	echo "[FAIL] shared artifact policy does not exist: $POLICY_PATH" >&2
 	exit 1
 fi
 
@@ -19,7 +25,8 @@ if ! command -v python3 >/dev/null 2>&1; then
 	exit 1
 fi
 
-python3 - "$ZIP_PATH" <<'PY'
+python3 - "$ZIP_PATH" "$POLICY_PATH" <<'PY'
+import json
 import os
 import re
 import sys
@@ -27,9 +34,17 @@ import zipfile
 from pathlib import PurePosixPath
 
 zip_path = sys.argv[1]
+policy_path = sys.argv[2]
 slug = "mumega-mcp"
 main_name = f"{slug}/{slug}.php"
 readme_name = f"{slug}/readme.txt"
+
+try:
+    with open(policy_path, "r", encoding="utf-8") as policy_file:
+        policy = json.load(policy_file)
+except (OSError, ValueError) as error:
+    print(f"[FAIL] shared artifact policy: {error}", file=sys.stderr)
+    raise SystemExit(1)
 
 
 def fail(rule, detail):
@@ -193,6 +208,30 @@ with archive:
         if name.startswith("/") or "\\" in name or ".." in path.parts:
             fail("safe manifest path", name)
 
+    forbidden_directories = {item.lower() for item in policy["forbidden_directory_components"]}
+    forbidden_basenames = {item.lower() for item in policy["forbidden_basenames"]}
+    forbidden_prefixes = tuple(item.lower() for item in policy["forbidden_basename_prefixes"])
+    textual_suffixes = (".php", ".js", ".css", ".pot", ".txt")
+    for info in infos:
+        normalized = info.filename.replace("\\", "/")
+        parts = tuple(part.lower() for part in PurePosixPath(normalized.rstrip("/")).parts)
+        relative_parts = parts[1:]
+        if forbidden_directories.intersection(relative_parts[:-1] if relative_parts else ()):
+            fail("shared policy forbidden directory", info.filename)
+        basename = relative_parts[-1] if relative_parts else ""
+        if basename in forbidden_basenames or basename.startswith(forbidden_prefixes):
+            fail("shared policy forbidden basename", info.filename)
+        if info.is_dir() or not normalized.lower().endswith(textual_suffixes):
+            continue
+        relative = "/".join(PurePosixPath(normalized).parts[1:])
+        contents = archive.read(info.filename).decode("utf-8", errors="surrogateescape")
+        for exception in policy.get("lifecycle_cleanup_exceptions", {}).get(relative, []):
+            contents = contents.replace(exception, "")
+        lowered_contents = contents.lower()
+        for literal in policy["forbidden_literals"]:
+            if literal.lower() in lowered_contents:
+                fail("shared policy forbidden literal", f"{literal} in {info.filename}")
+
     roots = sorted({name.split("/", 1)[0] for name in names})
     if roots != [slug]:
         fail("single top-level root", f"expected {slug}/, found {roots}")
@@ -200,11 +239,16 @@ with archive:
         fail("rooted manifest", "every entry must be below the top-level plugin folder")
 
     required = {main_name, readme_name, f"{slug}/languages/{slug}.pot"}
+    for relative in policy["required_source_files"]:
+        if relative == "mcpwp.php":
+            required.add(main_name)
+        else:
+            required.add(f"{slug}/{relative}")
     missing = sorted(required.difference(names))
     if missing:
         fail("required identity files", ", ".join(missing))
 
-    allowed_top_files = {"LICENSE", "VERSION", "index.php", f"{slug}.php", "readme.txt"}
+    allowed_top_files = {"LICENSE", "VERSION", "index.php", f"{slug}.php", "readme.txt", "uninstall.php"}
     allowed_top_dirs = {"admin", "assets", "includes", "languages"}
     forbidden_components = {
         ".git",

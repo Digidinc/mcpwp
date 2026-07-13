@@ -1,165 +1,24 @@
-# Copyright (C) 2024 DigID Inc
-# This file is distributed under the GPL v2.
 msgid ""
 msgstr ""
 "Project-Id-Version: Mumega MCP 3.4.3\n"
-"Report-Msgid-Bugs-To: https://wordpress.org/support/plugin/mumega-mcp\n"
-"POT-Creation-Date: 2024-01-01 00:00:00+00:00\n"
+"Report-Msgid-Bugs-To: https://wordpress.org/support/plugin/mumega-mcp/\n"
+"POT-Creation-Date: 2026-07-13 00:00+0000\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"PO-Revision-Date: 2024-MO-DA HO:MI+ZONE\n"
-"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
-"Language-Team: LANGUAGE <LL@li.org>\n"
+"Text-Domain: mumega-mcp\n"
 
-#: mumega-mcp.php:1
 msgid "Mumega MCP"
 msgstr ""
 
-#: includes/admin/class-mcpwp-admin.php
+msgid "Setup & Keys"
+msgstr ""
+
+msgid "Tool Inventory"
+msgstr ""
+
 msgid "Settings"
 msgstr ""
 
-#: includes/admin/class-mcpwp-admin.php
-msgid "MCPWP Settings"
-msgstr ""
-
-#: includes/admin/class-mcpwp-admin.php
-msgid "API Key"
-msgstr ""
-
-#: includes/admin/class-mcpwp-admin.php
-msgid "Your API key for authenticating requests"
-msgstr ""
-
-#: includes/admin/class-mcpwp-admin.php
-msgid "Copy"
-msgstr ""
-
-#: includes/admin/class-mcpwp-admin.php
-msgid "Copied!"
-msgstr ""
-
-#: includes/admin/class-mcpwp-admin.php
-msgid "Copy failed"
-msgstr ""
-
-#: includes/admin/class-mcpwp-admin.php
-msgid "Regenerate Key"
-msgstr ""
-
-#: includes/admin/class-mcpwp-admin.php
-msgid "Are you sure you want to regenerate your API key? All existing integrations will stop working."
-msgstr ""
-
-#: includes/admin/class-mcpwp-settings.php
-msgid "Enable API"
-msgstr ""
-
-#: includes/admin/class-mcpwp-settings.php
-msgid "Allow REST API access"
-msgstr ""
-
-#: includes/admin/class-mcpwp-settings.php
-msgid "Enable Logging"
-msgstr ""
-
-#: includes/admin/class-mcpwp-settings.php
-msgid "Log all API requests"
-msgstr ""
-
-#: includes/admin/class-mcpwp-settings.php
-msgid "Log Retention"
-msgstr ""
-
-#: includes/admin/class-mcpwp-settings.php
-msgid "Days to keep logs (0 = forever)"
-msgstr ""
-
-#: includes/api/class-mcpwp-rest-api.php
-msgid "Unauthorized. API key required."
-msgstr ""
-
-#: includes/api/class-mcpwp-rest-api.php
-msgid "Invalid API key."
-msgstr ""
-
-#: includes/api/class-mcpwp-rest-posts.php
-msgid "Post created successfully."
-msgstr ""
-
-#: includes/api/class-mcpwp-rest-posts.php
-msgid "Post updated successfully."
-msgstr ""
-
-#: includes/api/class-mcpwp-rest-posts.php
-msgid "Post deleted successfully."
-msgstr ""
-
-#: includes/api/class-mcpwp-rest-posts.php
-msgid "Post not found."
-msgstr ""
-
-#: includes/api/class-mcpwp-rest-posts.php
-msgid "Failed to create post."
-msgstr ""
-
-#: includes/api/class-mcpwp-rest-posts.php
-msgid "Failed to update post."
-msgstr ""
-
-#: includes/api/class-mcpwp-rest-posts.php
-msgid "Failed to delete post."
-msgstr ""
-
-#: includes/api/class-mcpwp-rest-pages.php
-msgid "Page created successfully."
-msgstr ""
-
-#: includes/api/class-mcpwp-rest-pages.php
-msgid "Page updated successfully."
-msgstr ""
-
-#: includes/api/class-mcpwp-rest-pages.php
-msgid "Page deleted successfully."
-msgstr ""
-
-#: includes/api/class-mcpwp-rest-pages.php
-msgid "Page not found."
-msgstr ""
-
-#: includes/api/class-mcpwp-rest-media.php
-msgid "Media uploaded successfully."
-msgstr ""
-
-#: includes/api/class-mcpwp-rest-media.php
-msgid "No file provided."
-msgstr ""
-
-#: includes/api/class-mcpwp-rest-media.php
-msgid "File upload failed."
-msgstr ""
-
-#: includes/api/class-mcpwp-rest-media.php
-msgid "URL is required."
-msgstr ""
-
-#: includes/api/class-mcpwp-rest-media.php
-msgid "Failed to download file from URL."
-msgstr ""
-
-#: includes/api/class-mcpwp-rest-elementor.php
-msgid "Elementor is not active."
-msgstr ""
-
-#: includes/api/class-mcpwp-rest-elementor.php
-msgid "Elementor data retrieved successfully."
-msgstr ""
-
-#: includes/api/class-mcpwp-rest-elementor.php
-msgid "Elementor data updated successfully."
-msgstr ""
-
-#: includes/core/class-mcpwp-drafts.php
-msgid "Drafts deleted successfully."
+msgid "Activity"
 msgstr ""
