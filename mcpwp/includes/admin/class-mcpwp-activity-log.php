@@ -307,8 +307,8 @@ class Mcpwp_Activity_Log_Page {
 				'paged' => '%#%',
 			) ), admin_url( 'admin.php' ) ) ),
 			'format'    => '',
-			'prev_text' => __( '&laquo;', 'mumcp' ),
-			'next_text' => __( '&raquo;', 'mumcp' ),
+			'prev_text' => __( '&laquo;', 'mumega-mcp' ),
+			'next_text' => __( '&raquo;', 'mumega-mcp' ),
 			'total'     => $total_pages,
 			'current'   => $paged,
 		) ) );

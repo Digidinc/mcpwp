@@ -100,7 +100,7 @@ class Mcpwp_REST_Content_Quality extends Mcpwp_REST_API {
 		}
 
 		if ( 0 === $external_links ) {
-			$issues[] = $this->make_content_quality_issue( 'no_reference_hints', 'info', __( 'No external reference links were detected.', 'mumega-mcp' ), __( 'Use references only when they help users verify claims; do not invent citations.', 'mumcp' ) );
+			$issues[] = $this->make_content_quality_issue( 'no_reference_hints', 'info', __( 'No external reference links were detected.', 'mumega-mcp' ), __( 'Use references only when they help users verify claims; do not invent citations.', 'mumega-mcp' ) );
 		}
 
 		$score   = $this->calculate_content_quality_score( $word_count, $question_count, count( $entity_names ), count( $trust_signals ), $external_links, $freshness_days );

@@ -146,7 +146,7 @@ class Mcpwp_REST_Media extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'data'     => array(
-							'description' => __( 'Base64-encoded file content. Optionally prefixed with data URI (e.g., data:image/png;base64,...).', 'mumcp' ),
+							'description' => __( 'Base64-encoded file content. Optionally prefixed with data URI (e.g., data:image/png;base64,...).', 'mumega-mcp' ),
 							'type'        => 'string',
 							'required'    => true,
 						),

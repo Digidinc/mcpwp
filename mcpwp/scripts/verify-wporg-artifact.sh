@@ -20,6 +20,7 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 
 python3 - "$ZIP_PATH" <<'PY'
+import os
 import re
 import sys
 import zipfile
@@ -34,6 +35,139 @@ readme_name = f"{slug}/readme.txt"
 def fail(rule, detail):
     print(f"[FAIL] {rule}: {detail}", file=sys.stderr)
     raise SystemExit(1)
+
+
+GETTEXT_FUNCTIONS = {
+    "__",
+    "_e",
+    "_ex",
+    "_n",
+    "_n_noop",
+    "_nx",
+    "_nx_noop",
+    "_x",
+    "esc_attr__",
+    "esc_attr_e",
+    "esc_attr_x",
+    "esc_html__",
+    "esc_html_e",
+    "esc_html_x",
+    "translate",
+    "translate_with_gettext_context",
+}
+LEGACY_GETTEXT_DOMAINS = {"mumcp", "mcpwp"}
+
+
+def skip_quoted(source, start):
+    quote = source[start]
+    index = start + 1
+    while index < len(source):
+        if source[index] == "\\":
+            index += 2
+            continue
+        if source[index] == quote:
+            return index + 1
+        index += 1
+    return len(source) + 1
+
+
+def skip_trivia(source, start):
+    index = start
+    while index < len(source):
+        if source[index].isspace():
+            index += 1
+            continue
+        if source.startswith("//", index) or (source[index] == "#" and not source.startswith("#[", index)):
+            newline = source.find("\n", index + 1)
+            index = len(source) if newline < 0 else newline + 1
+            continue
+        if source.startswith("/*", index):
+            closing = source.find("*/", index + 2)
+            index = len(source) if closing < 0 else closing + 2
+            continue
+        break
+    return index
+
+
+def parse_call_arguments(source, opening):
+    pairs = {"(": ")", "[": "]", "{": "}"}
+    stack = [")"]
+    arguments = []
+    argument_start = opening + 1
+    index = argument_start
+    while index < len(source):
+        char = source[index]
+        if char in "'\"":
+            index = skip_quoted(source, index)
+            continue
+        if source.startswith("//", index) or (char == "#" and not source.startswith("#[", index)):
+            newline = source.find("\n", index + 1)
+            index = len(source) if newline < 0 else newline + 1
+            continue
+        if source.startswith("/*", index):
+            closing = source.find("*/", index + 2)
+            index = len(source) if closing < 0 else closing + 2
+            continue
+        if char in pairs:
+            stack.append(pairs[char])
+            index += 1
+            continue
+        if char in ")]}":
+            if not stack or char != stack[-1]:
+                return None
+            stack.pop()
+            if not stack:
+                arguments.append(source[argument_start:index])
+                return arguments
+            index += 1
+            continue
+        if char == "," and len(stack) == 1:
+            arguments.append(source[argument_start:index])
+            argument_start = index + 1
+        index += 1
+    return None
+
+
+def literal_string_value(argument):
+    start = skip_trivia(argument, 0)
+    if start >= len(argument) or argument[start] not in "'\"":
+        return None
+    closing = skip_quoted(argument, start)
+    if closing > len(argument) or skip_trivia(argument, closing) != len(argument):
+        return None
+    return argument[start + 1:closing - 1]
+
+
+def has_legacy_gettext_domain(contents):
+    source = contents.decode("utf-8", errors="surrogateescape")
+    index = 0
+    while index < len(source):
+        char = source[index]
+        if char in "'\"":
+            index = skip_quoted(source, index)
+            continue
+        if source.startswith("//", index) or (char == "#" and not source.startswith("#[", index)):
+            newline = source.find("\n", index + 1)
+            index = len(source) if newline < 0 else newline + 1
+            continue
+        if source.startswith("/*", index):
+            closing = source.find("*/", index + 2)
+            index = len(source) if closing < 0 else closing + 2
+            continue
+        if char.isalpha() or char == "_":
+            end = index + 1
+            while end < len(source) and (source[end].isalnum() or source[end] == "_"):
+                end += 1
+            function_name = source[index:end]
+            opening = skip_trivia(source, end)
+            if function_name in GETTEXT_FUNCTIONS and opening < len(source) and source[opening] == "(":
+                arguments = parse_call_arguments(source, opening)
+                if arguments and literal_string_value(arguments[-1]) in LEGACY_GETTEXT_DOMAINS:
+                    return True
+            index = end
+            continue
+        index += 1
+    return False
 
 
 try:
@@ -150,16 +284,14 @@ with archive:
     if len(set(versions)) != 1:
         fail("version equality", f"header/constant/stable-tag={versions}")
 
-    gettext_call = re.compile(
-        rb"\b(?:__|_e|_x|_ex|_n|_nx|_n_noop|_nx_noop|translate|"
-        rb"translate_with_gettext_context|esc_html__|esc_html_e|esc_html_x|"
-        rb"esc_attr__|esc_attr_e|esc_attr_x)\s*\((?:(?!;).)*?,\s*"
-        rb"(['\"])(mumcp|mcpwp)\1\s*\)",
-        re.DOTALL,
-    )
+    expected_filename = f"{slug}-{header_version}.zip"
+    actual_filename = os.path.basename(zip_path)
+    if actual_filename != expected_filename:
+        fail("artifact filename version", f"expected {expected_filename}, found {actual_filename}")
+
     legacy_domains = []
     for name in names:
-        if name.endswith(".php") and gettext_call.search(archive.read(name)):
+        if name.endswith(".php") and has_legacy_gettext_domain(archive.read(name)):
             legacy_domains.append(name)
     if legacy_domains:
         fail("legacy gettext domain", ", ".join(legacy_domains))

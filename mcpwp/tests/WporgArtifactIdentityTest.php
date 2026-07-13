@@ -23,23 +23,21 @@ final class WporgArtifactIdentityTest extends TestCase {
 			self::$zip_path = $provided;
 		} else {
 			$plugin_dir = dirname( __DIR__ );
+			$source_main = file_get_contents( $plugin_dir . '/mcpwp.php' );
+			if ( false === $source_main ) {
+				throw new RuntimeException( 'Could not read source plugin header.' );
+			}
+			$version = self::header_value( $source_main, 'Version' );
+			if ( '' === $version ) {
+				throw new RuntimeException( 'Could not determine source plugin version.' );
+			}
+			self::$zip_path = $plugin_dir . '/scripts/' . self::SLUG . '-' . $version . '.zip';
+
 			$command    = 'bash ' . escapeshellarg( $plugin_dir . '/scripts/build-wporg.sh' ) . ' 2>&1';
 			exec( $command, $output, $status );
 			if ( 0 !== $status ) {
 				throw new RuntimeException( "WordPress.org build failed:\n" . implode( "\n", $output ) );
 			}
-
-			$candidates = glob( $plugin_dir . '/scripts/*.zip' );
-			if ( false === $candidates || array() === $candidates ) {
-				throw new RuntimeException( 'WordPress.org builder did not produce a ZIP.' );
-			}
-			usort(
-				$candidates,
-				static function ( $left, $right ) {
-					return filemtime( $right ) <=> filemtime( $left );
-				}
-			);
-			self::$zip_path = $candidates[0];
 		}
 
 		if ( ! is_file( self::$zip_path ) ) {
@@ -100,18 +98,71 @@ final class WporgArtifactIdentityTest extends TestCase {
 		);
 		$this->assertSame( array( self::SLUG . '/languages/' . self::SLUG . '.pot' ), $pot_files );
 
-		$legacy_domains = array();
-		foreach ( self::$manifest as $entry ) {
-			if ( 1 !== preg_match( '/\.php$/', $entry ) ) {
-				continue;
-			}
-			$contents = self::zip_contents( $entry );
-			if ( preg_match( '/\b(?:__|_e|_x|_ex|_n|_nx|_n_noop|_nx_noop|translate|translate_with_gettext_context|esc_html__|esc_html_e|esc_html_x|esc_attr__|esc_attr_e|esc_attr_x)\s*\((?:(?!;).)*,\s*([\'\"])(?:mumcp|mcpwp)\1\s*\)/s', $contents ) ) {
-				$legacy_domains[] = $entry;
-			}
+		$result = self::verify_zip( self::$zip_path );
+		$this->assertSame( 0, $result['status'], implode( "\n", $result['output'] ) );
+	}
+
+	public function test_builder_rejects_explicit_version_that_differs_from_source_header(): void {
+		$plugin_dir = dirname( __DIR__ );
+		$wrong_zip  = $plugin_dir . '/scripts/' . self::SLUG . '-9.9.9.zip';
+		@unlink( $wrong_zip );
+
+		exec(
+			'bash ' . escapeshellarg( $plugin_dir . '/scripts/build-wporg.sh' ) . ' --version 9.9.9 2>&1',
+			$output,
+			$status
+		);
+		$created = is_file( $wrong_zip );
+		@unlink( $wrong_zip );
+
+		$this->assertNotSame( 0, $status, 'Builder must fail when --version differs from the source header.' );
+		$this->assertFalse( $created, 'Builder must not leave a mismatched-version ZIP behind.' );
+	}
+
+	public function test_verifier_rejects_filename_version_that_differs_from_artifact(): void {
+		$temp_dir = sys_get_temp_dir() . '/mcpwp-wporg-' . bin2hex( random_bytes( 8 ) );
+		if ( ! mkdir( $temp_dir, 0700, true ) && ! is_dir( $temp_dir ) ) {
+			throw new RuntimeException( 'Could not create temporary artifact directory.' );
 		}
 
-		$this->assertSame( array(), $legacy_domains, 'Shipped PHP must not use mumcp or mcpwp as a literal gettext domain.' );
+		try {
+			$mismatched = $temp_dir . '/' . self::SLUG . '-9.9.9.zip';
+			if ( ! copy( self::$zip_path, $mismatched ) ) {
+				throw new RuntimeException( 'Could not create mismatched-filename candidate.' );
+			}
+			$result = self::verify_zip( $mismatched );
+
+			$this->assertNotSame( 0, $result['status'], 'Verifier must reject filename/version drift.' );
+			$this->assertStringContainsString( '[FAIL] artifact filename version:', implode( "\n", $result['output'] ) );
+		} finally {
+			exec( 'rm -rf ' . escapeshellarg( $temp_dir ) );
+		}
+	}
+
+	public function test_verifier_rejects_legacy_gettext_domain_after_semicolon_in_message(): void {
+		$result = self::verify_zip_with_extra_php(
+			"<?php\n\$internal_slug = 'mcpwp';\n__( 'Legacy; message', 'mcpwp' );\n"
+		);
+
+		$this->assertNotSame( 0, $result['status'], 'Verifier must reject the legacy gettext domain.' );
+		$this->assertStringContainsString( '[FAIL] legacy gettext domain:', implode( "\n", $result['output'] ) );
+	}
+
+	public function test_verifier_rejects_legacy_gettext_domain_after_nested_message_expression(): void {
+		$result = self::verify_zip_with_extra_php(
+			"<?php\n__( sprintf( 'Legacy; %s', 'message' ), 'mcpwp' );\n"
+		);
+
+		$this->assertNotSame( 0, $result['status'], 'Verifier must inspect the final domain after nested calls.' );
+		$this->assertStringContainsString( '[FAIL] legacy gettext domain:', implode( "\n", $result['output'] ) );
+	}
+
+	public function test_verifier_accepts_internal_mcpwp_literals_outside_gettext_calls(): void {
+		$result = self::verify_zip_with_extra_php(
+			"<?php\n\$server_name = 'mcpwp';\nstrpos( \$server_name, 'mcpwp' );\n"
+		);
+
+		$this->assertSame( 0, $result['status'], implode( "\n", $result['output'] ) );
 	}
 
 	private static function header_value( $contents, $header ): string {
@@ -133,6 +184,43 @@ final class WporgArtifactIdentityTest extends TestCase {
 	private static function zip_contents( $entry ): string {
 		$output = self::run_command( 'unzip -p ' . escapeshellarg( self::$zip_path ) . ' ' . escapeshellarg( $entry ) );
 		return implode( "\n", $output );
+	}
+
+	/**
+	 * @return array{status:int,output:string[]}
+	 */
+	private static function verify_zip( $zip_path ): array {
+		$verifier = dirname( __DIR__ ) . '/scripts/verify-wporg-artifact.sh';
+		exec( 'bash ' . escapeshellarg( $verifier ) . ' ' . escapeshellarg( $zip_path ) . ' 2>&1', $output, $status );
+
+		return array( 'status' => $status, 'output' => $output );
+	}
+
+	/**
+	 * @return array{status:int,output:string[]}
+	 */
+	private static function verify_zip_with_extra_php( $php_contents ): array {
+		$temp_dir = sys_get_temp_dir() . '/mcpwp-wporg-' . bin2hex( random_bytes( 8 ) );
+		if ( ! mkdir( $temp_dir, 0700, true ) && ! is_dir( $temp_dir ) ) {
+			throw new RuntimeException( 'Could not create temporary artifact directory.' );
+		}
+
+		try {
+			self::run_command( 'unzip -qq ' . escapeshellarg( self::$zip_path ) . ' -d ' . escapeshellarg( $temp_dir ) );
+			$probe = $temp_dir . '/' . self::SLUG . '/includes/wporg-identity-probe.php';
+			if ( false === file_put_contents( $probe, $php_contents ) ) {
+				throw new RuntimeException( 'Could not create synthetic PHP probe.' );
+			}
+			$candidate = $temp_dir . '/' . basename( self::$zip_path );
+			self::run_command(
+				'cd ' . escapeshellarg( $temp_dir ) . ' && find ' . escapeshellarg( self::SLUG )
+				. ' -type f -print | LC_ALL=C sort | zip -q -X ' . escapeshellarg( $candidate ) . ' -@'
+			);
+
+			return self::verify_zip( $candidate );
+		} finally {
+			exec( 'rm -rf ' . escapeshellarg( $temp_dir ) );
+		}
 	}
 
 	/**

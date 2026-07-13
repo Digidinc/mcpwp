@@ -1751,7 +1751,7 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 		}
 
 		if ( '' !== $item['filename'] && preg_match( '/^(image|img|photo|screenshot|untitled|dsc)[-_]?\d*\./i', $item['filename'] ) ) {
-			$issues[] = $this->make_media_seo_issue( 'weak_image_filename', 'info', __( 'An image filename is generic.', 'mumega-mcp' ), __( 'Use descriptive filenames before upload when practical; do not rename live media blindly.', 'mumcp' ), array( 'attachment_id' => $item['attachment_id'], 'filename' => $item['filename'] ) );
+			$issues[] = $this->make_media_seo_issue( 'weak_image_filename', 'info', __( 'An image filename is generic.', 'mumega-mcp' ), __( 'Use descriptive filenames before upload when practical; do not rename live media blindly.', 'mumega-mcp' ), array( 'attachment_id' => $item['attachment_id'], 'filename' => $item['filename'] ) );
 		}
 
 		if ( $item['filesize'] > 0 && $item['filesize'] > 512000 ) {

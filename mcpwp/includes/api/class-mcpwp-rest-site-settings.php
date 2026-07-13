@@ -496,7 +496,7 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 				return $this->error_response(
 					'option_type_mismatch',
 					/* translators: %s: option key */
-					sprintf( __( 'Option "%s" currently holds an array/object; refusing to overwrite it with a plain string. Send the value as a JSON object/array, or pass force_type_change=true to override.', 'mumcp' ), $key ),
+					sprintf( __( 'Option "%s" currently holds an array/object; refusing to overwrite it with a plain string. Send the value as a JSON object/array, or pass force_type_change=true to override.', 'mumega-mcp' ), $key ),
 					409
 				);
 			}

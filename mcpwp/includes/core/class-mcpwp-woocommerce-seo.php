@@ -137,7 +137,7 @@ class Mcpwp_WooCommerce_SEO {
 
 		$search = self::search_performance_for_url( $url );
 		if ( empty( $search['clicks'] ) && ! empty( $search['impressions'] ) ) {
-			$opportunities[] = self::opportunity( 'high_impression_low_click_product', __( 'Search impressions exist but clicks are weak; review title, description, price, image, and internal links.', 'mumcp' ), 'seo_audit_triage' );
+			$opportunities[] = self::opportunity( 'high_impression_low_click_product', __( 'Search impressions exist but clicks are weak; review title, description, price, image, and internal links.', 'mumega-mcp' ), 'seo_audit_triage' );
 		}
 
 		$score = ( count( $issues ) * 20 ) + ( count( $opportunities ) * 8 ) + min( 30, (int) floor( (int) ( $search['impressions'] ?? 0 ) / 25 ) );

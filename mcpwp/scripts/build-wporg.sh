@@ -28,14 +28,17 @@ while [[ $# -gt 0 ]]; do
 	esac
 done
 
-if [[ -z "$VERSION" ]]; then
-	VERSION="$(sed -n 's/^[[:space:]]*\*[[:space:]]*Version:[[:space:]]*//p' "$PLUGIN_DIR/$SOURCE_MAIN" | head -n 1 | tr -d '[:space:]')"
-fi
-
-if [[ -z "$VERSION" ]]; then
+SOURCE_VERSION="$(sed -n 's/^[[:space:]]*\*[[:space:]]*Version:[[:space:]]*//p' "$PLUGIN_DIR/$SOURCE_MAIN" | head -n 1 | tr -d '[:space:]')"
+if [[ -z "$SOURCE_VERSION" ]]; then
 	echo "Error: could not determine the plugin version." >&2
 	exit 1
 fi
+
+if [[ -n "$VERSION" && "$VERSION" != "$SOURCE_VERSION" ]]; then
+	echo "Error: --version $VERSION does not match source header version $SOURCE_VERSION." >&2
+	exit 1
+fi
+VERSION="$SOURCE_VERSION"
 
 BUILD_DIR="$(mktemp -d)"
 DEST="$BUILD_DIR/$WPORG_SLUG"

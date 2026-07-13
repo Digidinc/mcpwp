@@ -115,7 +115,7 @@ $figma_oauth_message = isset( $_GET['message'] ) ? sanitize_text_field( wp_unsla
 							<?php echo esc_html( $unlock_desc ); ?><br />
 						<?php endif; ?>
 						<a href="<?php echo esc_url( 'https://mumcp.com/pricing/' ); ?>" target="_blank" rel="noopener">
-							<?php esc_html_e( 'Upgrade to Pro &rarr;', 'mumcp' ); ?>
+							<?php esc_html_e( 'Upgrade to Pro &rarr;', 'mumega-mcp' ); ?>
 						</a>
 					</p>
 				<?php else : ?>

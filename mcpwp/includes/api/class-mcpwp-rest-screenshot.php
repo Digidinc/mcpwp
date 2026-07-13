@@ -114,7 +114,7 @@ class Mcpwp_REST_Screenshot extends Mcpwp_REST_API {
 		// Strip inline base64 when a media URL is available (default mode).
 		if ( ! $inline && ! empty( $result['screenshot'] ) && ! empty( $result['media'] ) ) {
 			unset( $result['screenshot'] );
-			$result['note'] = __( 'Screenshot saved to the media library; base64 omitted. Pass inline=true for raw image data.', 'mumcp' );
+			$result['note'] = __( 'Screenshot saved to the media library; base64 omitted. Pass inline=true for raw image data.', 'mumega-mcp' );
 		}
 
 		// Async mode: webhook notification when screenshot is ready.

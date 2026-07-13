@@ -344,7 +344,7 @@ $unlinked_archetype_count = count(
 						<?php esc_html_e( 'Show advanced fields', 'mumega-mcp' ); ?> <span class="dashicons dashicons-arrow-down-alt2" aria-hidden="true"></span>
 					</summary>
 					<fieldset class="mcpwp-fieldset mcpwp-fieldset--optional">
-						<legend class="mcpwp-fieldset__legend"><?php esc_html_e( 'Optional: Analysis &amp; Rules', 'mumcp' ); ?></legend>
+						<legend class="mcpwp-fieldset__legend"><?php esc_html_e( 'Optional: Analysis &amp; Rules', 'mumega-mcp' ); ?></legend>
 						<p>
 							<label for="mcpwp_design_reference_class"><strong><?php esc_html_e( 'Archetype Class', 'mumega-mcp' ); ?></strong></label><br />
 							<input type="text" id="mcpwp_design_reference_class" name="mcpwp_design_reference_class" class="regular-text" placeholder="<?php esc_attr_e( 'saas_landing, editorial_blog, digital_product', 'mumega-mcp' ); ?>" />
