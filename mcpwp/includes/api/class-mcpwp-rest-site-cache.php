@@ -32,7 +32,7 @@ class Mcpwp_REST_Site_Cache extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'url' => array(
-							'description' => __( 'Optional URL to purge. Omit for a site-wide flush.', 'mumcp' ),
+							'description' => __( 'Optional URL to purge. Omit for a site-wide flush.', 'mumega-mcp' ),
 							'type'        => 'string',
 							'format'      => 'uri',
 						),

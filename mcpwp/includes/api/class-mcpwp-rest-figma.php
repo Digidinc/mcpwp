@@ -54,11 +54,11 @@ class Mcpwp_REST_Figma extends Mcpwp_REST_API {
 				'args'                => array(
 					'file_key' => array(
 						'type'        => 'string',
-						'description' => __( 'Figma file key. Optional if a default file key is configured.', 'mumcp' ),
+						'description' => __( 'Figma file key. Optional if a default file key is configured.', 'mumega-mcp' ),
 					),
 					'depth'    => array(
 						'type'        => 'integer',
-						'description' => __( 'Outline depth to request from Figma.', 'mumcp' ),
+						'description' => __( 'Outline depth to request from Figma.', 'mumega-mcp' ),
 						'default'     => 2,
 					),
 				),
@@ -75,16 +75,16 @@ class Mcpwp_REST_Figma extends Mcpwp_REST_API {
 				'args'                => array(
 					'file_key' => array(
 						'type'        => 'string',
-						'description' => __( 'Figma file key. Optional if a default file key is configured.', 'mumcp' ),
+						'description' => __( 'Figma file key. Optional if a default file key is configured.', 'mumega-mcp' ),
 					),
 					'node_id'  => array(
 						'type'        => 'string',
-						'description' => __( 'Figma node ID to fetch, such as 12:34.', 'mumcp' ),
+						'description' => __( 'Figma node ID to fetch, such as 12:34.', 'mumega-mcp' ),
 						'required'    => true,
 					),
 					'depth'    => array(
 						'type'        => 'integer',
-						'description' => __( 'Subtree depth to request from Figma.', 'mumcp' ),
+						'description' => __( 'Subtree depth to request from Figma.', 'mumega-mcp' ),
 						'default'     => 2,
 					),
 				),

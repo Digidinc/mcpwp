@@ -63,7 +63,7 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'ids' => array(
-							'description' => __( 'Comma-separated page IDs (max 25).', 'mumcp' ),
+							'description' => __( 'Comma-separated page IDs (max 25).', 'mumega-mcp' ),
 							'type'        => 'string',
 							'required'    => true,
 						),
@@ -83,7 +83,7 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'strip_defaults' => array(
-							'description' => __( 'Strip default widget settings to reduce payload size.', 'mumcp' ),
+							'description' => __( 'Strip default widget settings to reduce payload size.', 'mumega-mcp' ),
 							'type'        => 'boolean',
 							'default'     => false,
 						),
@@ -95,19 +95,19 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'elementor_data' => array(
-							'description' => __( 'Elementor data (JSON array or object).', 'mumcp' ),
+							'description' => __( 'Elementor data (JSON array or object).', 'mumega-mcp' ),
 							'type'        => array( 'string', 'array' ),
 						),
 						'elementor_json' => array(
-							'description' => __( 'Elementor data as JSON string.', 'mumcp' ),
+							'description' => __( 'Elementor data as JSON string.', 'mumega-mcp' ),
 							'type'        => 'string',
 						),
 						'elementor_data_base64' => array(
-							'description' => __( 'Base64-encoded Elementor JSON data. Use instead of elementor_data to avoid quoting/escaping issues with large HTML payloads.', 'mumcp' ),
+							'description' => __( 'Base64-encoded Elementor JSON data. Use instead of elementor_data to avoid quoting/escaping issues with large HTML payloads.', 'mumega-mcp' ),
 							'type'        => 'string',
 						),
 						'dry_run' => array(
-							'description' => __( 'If true, validate only — no changes are saved.', 'mumcp' ),
+							'description' => __( 'If true, validate only — no changes are saved.', 'mumega-mcp' ),
 							'type'        => 'boolean',
 							'default'     => false,
 						),
@@ -140,7 +140,7 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'format' => array(
-							'description' => __( 'Output format: "summary" (text + stats, no HTML — saves tokens), "text" (full text extraction), "html" (full rendered HTML).', 'mumcp' ),
+							'description' => __( 'Output format: "summary" (text + stats, no HTML — saves tokens), "text" (full text extraction), "html" (full rendered HTML).', 'mumega-mcp' ),
 							'type'        => 'string',
 							'enum'        => array( 'summary', 'text', 'html' ),
 							'default'     => 'summary',
@@ -161,23 +161,23 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'element_id'      => array(
-							'description' => __( 'Elementor element ID to edit.', 'mumcp' ),
+							'description' => __( 'Elementor element ID to edit.', 'mumega-mcp' ),
 							'type'        => 'string',
 						),
 						'section_index'   => array(
-							'description' => __( 'Top-level section index (0-based).', 'mumcp' ),
+							'description' => __( 'Top-level section index (0-based).', 'mumega-mcp' ),
 							'type'        => 'integer',
 						),
 						'find'            => array(
-							'description' => __( 'Search criteria: {widgetType, "settings.key": value}.', 'mumcp' ),
+							'description' => __( 'Search criteria: {widgetType, "settings.key": value}.', 'mumega-mcp' ),
 							'type'        => 'object',
 						),
 						'settings'        => array(
-							'description' => __( 'Settings to merge into the element.', 'mumcp' ),
+							'description' => __( 'Settings to merge into the element.', 'mumega-mcp' ),
 							'type'        => 'object',
 						),
 						'delete_settings' => array(
-							'description' => __( 'Setting keys to remove from the element.', 'mumcp' ),
+							'description' => __( 'Setting keys to remove from the element.', 'mumega-mcp' ),
 							'type'        => 'array',
 							'items'       => array( 'type' => 'string' ),
 						),
@@ -201,12 +201,12 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 							'type'     => 'integer',
 						),
 						'element'  => array(
-							'description' => __( 'The new section/container element object.', 'mumcp' ),
+							'description' => __( 'The new section/container element object.', 'mumega-mcp' ),
 							'required'    => true,
 							'type'        => 'object',
 						),
 						'position' => array(
-							'description' => __( 'Position: start, end, before:{id}, after:{id}.', 'mumcp' ),
+							'description' => __( 'Position: start, end, before:{id}, after:{id}.', 'mumega-mcp' ),
 							'required'    => false,
 							'type'        => 'string',
 							'default'     => 'end',
@@ -231,7 +231,7 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 							'type'     => 'integer',
 						),
 						'element_id' => array(
-							'description' => __( 'The Elementor element ID to remove.', 'mumcp' ),
+							'description' => __( 'The Elementor element ID to remove.', 'mumega-mcp' ),
 							'required'    => true,
 							'type'        => 'string',
 						),
@@ -255,12 +255,12 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 							'type'     => 'integer',
 						),
 						'element_id' => array(
-							'description' => __( 'The Elementor element ID to replace.', 'mumcp' ),
+							'description' => __( 'The Elementor element ID to replace.', 'mumega-mcp' ),
 							'required'    => true,
 							'type'        => 'string',
 						),
 						'element'    => array(
-							'description' => __( 'The replacement section/container element.', 'mumcp' ),
+							'description' => __( 'The replacement section/container element.', 'mumega-mcp' ),
 							'required'    => true,
 							'type'        => 'object',
 						),
@@ -284,7 +284,7 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 							'type'     => 'integer',
 						),
 						'operations' => array(
-							'description' => __( 'Array of patch operations: {op, element_id, element, position, settings, delete_settings}.', 'mumcp' ),
+							'description' => __( 'Array of patch operations: {op, element_id, element, position, settings, delete_settings}.', 'mumega-mcp' ),
 							'required'    => true,
 							'type'        => 'array',
 						),
@@ -304,16 +304,16 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'widget_id'       => array(
-							'description' => __( 'Elementor widget element ID (8-char alphanumeric).', 'mumcp' ),
+							'description' => __( 'Elementor widget element ID (8-char alphanumeric).', 'mumega-mcp' ),
 							'type'        => 'string',
 							'required'    => true,
 						),
 						'settings'        => array(
-							'description' => __( 'Settings to merge into the widget.', 'mumcp' ),
+							'description' => __( 'Settings to merge into the widget.', 'mumega-mcp' ),
 							'type'        => 'object',
 						),
 						'delete_settings' => array(
-							'description' => __( 'Setting keys to remove from the widget.', 'mumcp' ),
+							'description' => __( 'Setting keys to remove from the widget.', 'mumega-mcp' ),
 							'type'        => 'array',
 							'items'       => array( 'type' => 'string' ),
 						),
@@ -333,18 +333,18 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'title'          => array(
-							'description' => __( 'Page title.', 'mumcp' ),
+							'description' => __( 'Page title.', 'mumega-mcp' ),
 							'type'        => 'string',
 							'required'    => true,
 						),
 						'status'         => array(
-							'description' => __( 'Page status.', 'mumcp' ),
+							'description' => __( 'Page status.', 'mumega-mcp' ),
 							'type'        => 'string',
 							'enum'        => array( 'publish', 'draft', 'pending', 'private' ),
 							'default'     => 'draft',
 						),
 						'elementor_data' => array(
-							'description' => __( 'Initial Elementor data.', 'mumcp' ),
+							'description' => __( 'Initial Elementor data.', 'mumega-mcp' ),
 							'type'        => array( 'string', 'array' ),
 						),
 					),
@@ -363,13 +363,13 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'search'  => array(
-							'description' => __( 'Text to search for.', 'mumcp' ),
+							'description' => __( 'Text to search for.', 'mumega-mcp' ),
 							'type'        => 'string',
 							'required'    => true,
 							'minLength'   => 1,
 						),
 						'replace' => array(
-							'description' => __( 'Replacement text.', 'mumcp' ),
+							'description' => __( 'Replacement text.', 'mumega-mcp' ),
 							'type'        => 'string',
 							'required'    => true,
 						),
@@ -436,12 +436,12 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'css'  => array(
-							'description' => __( 'CSS to write to the Elementor kit (global stylesheet).', 'mumcp' ),
+							'description' => __( 'CSS to write to the Elementor kit (global stylesheet).', 'mumega-mcp' ),
 							'type'        => 'string',
 							'required'    => true,
 						),
 						'mode' => array(
-							'description' => __( 'append (default) or replace.', 'mumcp' ),
+							'description' => __( 'append (default) or replace.', 'mumega-mcp' ),
 							'type'        => 'string',
 							'enum'        => array( 'append', 'replace' ),
 							'default'     => 'replace',
@@ -462,11 +462,11 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'id' => array(
-							'description' => __( 'Page ID. Omit to regenerate all site CSS.', 'mumcp' ),
+							'description' => __( 'Page ID. Omit to regenerate all site CSS.', 'mumega-mcp' ),
 							'type'        => 'integer',
 						),
 						'force' => array(
-							'description' => __( 'Delete existing CSS files before regenerating.', 'mumcp' ),
+							'description' => __( 'Delete existing CSS files before regenerating.', 'mumega-mcp' ),
 							'type'        => 'boolean',
 							'default'     => false,
 						),
@@ -551,17 +551,17 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 
 		$ids_raw = $request->get_param( 'ids' );
 		if ( empty( $ids_raw ) ) {
-			return $this->error_response( 'missing_param', __( 'ids parameter is required.', 'mumcp' ), 400 );
+			return $this->error_response( 'missing_param', __( 'ids parameter is required.', 'mumega-mcp' ), 400 );
 		}
 
 		$page_ids = array_filter( array_map( 'absint', explode( ',', $ids_raw ) ) );
 
 		if ( count( $page_ids ) > 25 ) {
-			return $this->error_response( 'too_many_ids', __( 'Maximum 25 page IDs per request.', 'mumcp' ), 400 );
+			return $this->error_response( 'too_many_ids', __( 'Maximum 25 page IDs per request.', 'mumega-mcp' ), 400 );
 		}
 
 		if ( empty( $page_ids ) ) {
-			return $this->error_response( 'invalid_ids', __( 'No valid page IDs provided.', 'mumcp' ), 400 );
+			return $this->error_response( 'invalid_ids', __( 'No valid page IDs provided.', 'mumega-mcp' ), 400 );
 		}
 
 		$result = $this->elementor->get_elementor_data_bulk( $page_ids );
@@ -839,7 +839,7 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 		if ( empty( $raw ) ) {
 			return $this->error_response(
 				'no_elementor_data',
-				__( 'No Elementor data found for this post.', 'mumcp' ),
+				__( 'No Elementor data found for this post.', 'mumega-mcp' ),
 				404
 			);
 		}
@@ -853,7 +853,7 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 		if ( JSON_ERROR_NONE !== json_last_error() ) {
 			return $this->error_response(
 				'invalid_json',
-				__( 'Could not decode existing Elementor data. The stored data may be corrupt.', 'mumcp' ),
+				__( 'Could not decode existing Elementor data. The stored data may be corrupt.', 'mumega-mcp' ),
 				500
 			);
 		}
@@ -867,7 +867,7 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 				array(
 					'replacements' => 0,
 					'post_id'      => $page_id,
-					'message'      => __( 'Search text not found in Elementor data.', 'mumcp' ),
+					'message'      => __( 'Search text not found in Elementor data.', 'mumega-mcp' ),
 				)
 			);
 		}
@@ -877,7 +877,7 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 		if ( false === $updated ) {
 			return $this->error_response(
 				'json_encode_failed',
-				__( 'Failed to re-encode Elementor data after replacement. Aborting to prevent data loss.', 'mumcp' ),
+				__( 'Failed to re-encode Elementor data after replacement. Aborting to prevent data loss.', 'mumega-mcp' ),
 				500
 			);
 		}
@@ -913,12 +913,12 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 		$this->log_activity( 'get_kit_css', $request );
 
 		if ( ! class_exists( '\Elementor\Plugin' ) ) {
-			return $this->error_response( 'elementor_not_active', __( 'Elementor is not active.', 'mumcp' ), 400 );
+			return $this->error_response( 'elementor_not_active', __( 'Elementor is not active.', 'mumega-mcp' ), 400 );
 		}
 
 		$kit = \Elementor\Plugin::$instance->kits_manager->get_active_kit();
 		if ( ! $kit || ! $kit->get_id() ) {
-			return $this->error_response( 'no_kit', __( 'No active Elementor kit found.', 'mumcp' ), 500 );
+			return $this->error_response( 'no_kit', __( 'No active Elementor kit found.', 'mumega-mcp' ), 500 );
 		}
 
 		$settings   = get_post_meta( $kit->get_id(), '_elementor_page_settings', true );
@@ -946,12 +946,12 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 		$this->log_activity( 'set_kit_css', $request );
 
 		if ( ! class_exists( '\Elementor\Plugin' ) ) {
-			return $this->error_response( 'elementor_not_active', __( 'Elementor is not active.', 'mumcp' ), 400 );
+			return $this->error_response( 'elementor_not_active', __( 'Elementor is not active.', 'mumega-mcp' ), 400 );
 		}
 
 		$kit = \Elementor\Plugin::$instance->kits_manager->get_active_kit();
 		if ( ! $kit || ! $kit->get_id() ) {
-			return $this->error_response( 'no_kit', __( 'No active Elementor kit found.', 'mumcp' ), 500 );
+			return $this->error_response( 'no_kit', __( 'No active Elementor kit found.', 'mumega-mcp' ), 500 );
 		}
 
 		$kit_id  = $kit->get_id();

@@ -194,7 +194,7 @@ class Mcpwp_Keyword_Research {
 	public static function research( string $seed, array $args = array() ) {
 		$seed = trim( $seed );
 		if ( '' === $seed ) {
-			return new WP_Error( 'empty_seed', __( 'Seed phrase must not be empty.', 'mumcp' ) );
+			return new WP_Error( 'empty_seed', __( 'Seed phrase must not be empty.', 'mumega-mcp' ) );
 		}
 
 		// Validate locale codes against a BCP-47-ish shape; fall back to defaults on

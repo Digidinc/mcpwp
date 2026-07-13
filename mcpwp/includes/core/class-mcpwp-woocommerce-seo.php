@@ -111,28 +111,28 @@ class Mcpwp_WooCommerce_SEO {
 		$opportunities = array();
 
 		if ( '' === trim( $title ) ) {
-			$issues[] = self::issue( 'missing_product_title', 'error', __( 'Product title is missing.', 'mumcp' ), __( 'Add a clear product name before indexing or promotion.', 'mumcp' ) );
+			$issues[] = self::issue( 'missing_product_title', 'error', __( 'Product title is missing.', 'mumega-mcp' ), __( 'Add a clear product name before indexing or promotion.', 'mumega-mcp' ) );
 		}
 		if ( $content_words < 120 ) {
-			$issues[] = self::issue( 'thin_product_description', 'warning', __( 'Product description is thin.', 'mumcp' ), __( 'Add useful product details, use cases, specs, materials, fit, compatibility, or comparison guidance.', 'mumcp' ) );
+			$issues[] = self::issue( 'thin_product_description', 'warning', __( 'Product description is thin.', 'mumega-mcp' ), __( 'Add useful product details, use cases, specs, materials, fit, compatibility, or comparison guidance.', 'mumega-mcp' ) );
 		}
 		if ( $excerpt_words < 12 ) {
-			$issues[] = self::issue( 'missing_short_description', 'warning', __( 'Short product description is missing or too short.', 'mumcp' ), __( 'Add a concise benefit-led summary for product listings and product-page scanning.', 'mumcp' ) );
+			$issues[] = self::issue( 'missing_short_description', 'warning', __( 'Short product description is missing or too short.', 'mumega-mcp' ), __( 'Add a concise benefit-led summary for product listings and product-page scanning.', 'mumega-mcp' ) );
 		}
 		if ( '' === $meta['price'] ) {
-			$issues[] = self::issue( 'missing_price_signal', 'warning', __( 'Product price signal is missing.', 'mumcp' ), __( 'Confirm product price data before relying on Product schema or shopping search surfaces.', 'mumcp' ) );
+			$issues[] = self::issue( 'missing_price_signal', 'warning', __( 'Product price signal is missing.', 'mumega-mcp' ), __( 'Confirm product price data before relying on Product schema or shopping search surfaces.', 'mumega-mcp' ) );
 		}
 		if ( '' === $meta['sku'] ) {
-			$opportunities[] = self::opportunity( 'add_sku', __( 'Add SKU or product identifier where appropriate.', 'mumcp' ), 'seo_audit_triage' );
+			$opportunities[] = self::opportunity( 'add_sku', __( 'Add SKU or product identifier where appropriate.', 'mumega-mcp' ), 'seo_audit_triage' );
 		}
 		if ( empty( $meta['categories'] ) ) {
-			$issues[] = self::issue( 'missing_product_category', 'warning', __( 'Product has no category evidence.', 'mumcp' ), __( 'Assign a relevant product category so shoppers, crawlers, and agents understand the catalog structure.', 'mumcp' ) );
+			$issues[] = self::issue( 'missing_product_category', 'warning', __( 'Product has no category evidence.', 'mumega-mcp' ), __( 'Assign a relevant product category so shoppers, crawlers, and agents understand the catalog structure.', 'mumega-mcp' ) );
 		}
 		if ( ! $meta['has_featured_image'] ) {
-			$issues[] = self::issue( 'missing_product_image', 'warning', __( 'Product has no featured image.', 'mumcp' ), __( 'Add a descriptive product image before promotion.', 'mumcp' ) );
+			$issues[] = self::issue( 'missing_product_image', 'warning', __( 'Product has no featured image.', 'mumega-mcp' ), __( 'Add a descriptive product image before promotion.', 'mumega-mcp' ) );
 		}
 		if ( 'outofstock' === $meta['stock_status'] ) {
-			$opportunities[] = self::opportunity( 'out_of_stock_seo_review', __( 'Review whether out-of-stock product pages need alternatives, internal links, or noindex strategy.', 'mumcp' ), 'seo_audit_triage' );
+			$opportunities[] = self::opportunity( 'out_of_stock_seo_review', __( 'Review whether out-of-stock product pages need alternatives, internal links, or noindex strategy.', 'mumega-mcp' ), 'seo_audit_triage' );
 		}
 
 		$search = self::search_performance_for_url( $url );
@@ -260,14 +260,14 @@ class Mcpwp_WooCommerce_SEO {
 			$steps[] = array(
 				'tool'     => 'wp_run_seo_autofix_plan',
 				'playbook' => 'seo_audit_triage',
-				'action'   => __( 'Resolve product SEO issues through approval-first content, media, metadata, or internal-link changes.', 'mumcp' ),
+				'action'   => __( 'Resolve product SEO issues through approval-first content, media, metadata, or internal-link changes.', 'mumega-mcp' ),
 			);
 		}
 		if ( ! empty( $opportunities ) ) {
 			$steps[] = array(
 				'tool'     => 'wp_get_seo_trends',
 				'playbook' => 'seo_audit_triage',
-				'action'   => __( 'Use search evidence to decide whether a product page needs copy refresh, internal links, or category cleanup.', 'mumcp' ),
+				'action'   => __( 'Use search evidence to decide whether a product page needs copy refresh, internal links, or category cleanup.', 'mumega-mcp' ),
 			);
 		}
 		return $steps;

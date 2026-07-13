@@ -42,12 +42,12 @@ $event_escalated_count = (int) ( $event_summary['escalated'] ?? 0 );
 		<span class="mcpwp-logo">
 			<span class="dashicons dashicons-shield"></span>
 		</span>
-		<?php esc_html_e( 'Control Room', 'mumcp' ); ?>
+		<?php esc_html_e( 'Control Room', 'mumega-mcp' ); ?>
 		<span class="mcpwp-version">v<?php echo esc_html( MCPWP_VERSION ); ?></span>
 	</h1>
 
 	<p class="description">
-		<?php esc_html_e( 'Review agent work, SEO findings, recent activity, and rollback-ready changes from one supervised WordPress screen.', 'mumcp' ); ?>
+		<?php esc_html_e( 'Review agent work, SEO findings, recent activity, and rollback-ready changes from one supervised WordPress screen.', 'mumega-mcp' ); ?>
 	</p>
 
 	<?php settings_errors( 'mcpwp_messages' ); ?>
@@ -56,49 +56,49 @@ $event_escalated_count = (int) ( $event_summary['escalated'] ?? 0 );
 		<div class="mcpwp-library-stat mcpwp-control-stat <?php echo esc_attr( $pending_count > 0 ? 'is-warning' : 'is-good' ); ?>">
 			<span class="mcpwp-control-stat__icon dashicons <?php echo esc_attr( $pending_count > 0 ? 'dashicons-clock' : 'dashicons-yes-alt' ); ?>"></span>
 			<span class="mcpwp-library-stat__value"><?php echo esc_html( (string) $pending_count ); ?></span>
-			<span class="mcpwp-library-stat__label"><?php esc_html_e( 'Pending approvals', 'mumcp' ); ?></span>
+			<span class="mcpwp-library-stat__label"><?php esc_html_e( 'Pending approvals', 'mumega-mcp' ); ?></span>
 		</div>
 		<div class="mcpwp-library-stat mcpwp-control-stat <?php echo esc_attr( $applied_count > 0 ? 'is-info' : 'is-good' ); ?>">
 			<span class="mcpwp-control-stat__icon dashicons <?php echo esc_attr( $applied_count > 0 ? 'dashicons-backup' : 'dashicons-shield' ); ?>"></span>
 			<span class="mcpwp-library-stat__value"><?php echo esc_html( (string) $applied_count ); ?></span>
-			<span class="mcpwp-library-stat__label"><?php esc_html_e( 'Rollback-ready changes', 'mumcp' ); ?></span>
+			<span class="mcpwp-library-stat__label"><?php esc_html_e( 'Rollback-ready changes', 'mumega-mcp' ); ?></span>
 		</div>
 		<div class="mcpwp-library-stat mcpwp-control-stat <?php echo esc_attr( $seo_open_count > 0 ? 'is-warning' : 'is-good' ); ?>">
 			<span class="mcpwp-control-stat__icon dashicons <?php echo esc_attr( $seo_open_count > 0 ? 'dashicons-search' : 'dashicons-chart-line' ); ?>"></span>
 			<span class="mcpwp-library-stat__value"><?php echo esc_html( (string) $seo_open_count ); ?></span>
-			<span class="mcpwp-library-stat__label"><?php esc_html_e( 'Open SEO issues', 'mumcp' ); ?></span>
+			<span class="mcpwp-library-stat__label"><?php esc_html_e( 'Open SEO issues', 'mumega-mcp' ); ?></span>
 		</div>
 		<div class="mcpwp-library-stat mcpwp-control-stat <?php echo esc_attr( $seo_error_count > 0 ? 'is-critical' : 'is-good' ); ?>">
 			<span class="mcpwp-control-stat__icon dashicons <?php echo esc_attr( $seo_error_count > 0 ? 'dashicons-warning' : 'dashicons-yes' ); ?>"></span>
 			<span class="mcpwp-library-stat__value"><?php echo esc_html( (string) $seo_error_count ); ?></span>
-			<span class="mcpwp-library-stat__label"><?php esc_html_e( 'SEO errors', 'mumcp' ); ?></span>
+			<span class="mcpwp-library-stat__label"><?php esc_html_e( 'SEO errors', 'mumega-mcp' ); ?></span>
 		</div>
 		<div class="mcpwp-library-stat mcpwp-control-stat <?php echo esc_attr( $event_escalated_count > 0 ? 'is-critical' : 'is-good' ); ?>">
 			<span class="mcpwp-control-stat__icon dashicons <?php echo esc_attr( $event_escalated_count > 0 ? 'dashicons-bell' : 'dashicons-yes-alt' ); ?>"></span>
 			<span class="mcpwp-library-stat__value"><?php echo esc_html( (string) $event_escalated_count ); ?></span>
-			<span class="mcpwp-library-stat__label"><?php esc_html_e( 'Escalated events', 'mumcp' ); ?></span>
+			<span class="mcpwp-library-stat__label"><?php esc_html_e( 'Escalated events', 'mumega-mcp' ); ?></span>
 		</div>
 	</div>
 
 	<!-- F-07: in-page anchor nav strip -->
-	<nav class="mcpwp-anchor-nav nav-tab-wrapper" aria-label="<?php esc_attr_e( 'Jump to section', 'mumcp' ); ?>">
-		<a class="nav-tab" href="#mcpwp-section-approvals"><?php esc_html_e( 'Approvals', 'mumcp' ); ?></a>
-		<a class="nav-tab" href="#mcpwp-section-seo"><?php esc_html_e( 'SEO', 'mumcp' ); ?></a>
-		<a class="nav-tab" href="#mcpwp-section-events"><?php esc_html_e( 'Events', 'mumcp' ); ?></a>
-		<a class="nav-tab" href="#mcpwp-section-activity"><?php esc_html_e( 'Activity', 'mumcp' ); ?></a>
-		<a class="nav-tab" href="#mcpwp-section-signals"><?php esc_html_e( 'Signals', 'mumcp' ); ?></a>
+	<nav class="mcpwp-anchor-nav nav-tab-wrapper" aria-label="<?php esc_attr_e( 'Jump to section', 'mumega-mcp' ); ?>">
+		<a class="nav-tab" href="#mcpwp-section-approvals"><?php esc_html_e( 'Approvals', 'mumega-mcp' ); ?></a>
+		<a class="nav-tab" href="#mcpwp-section-seo"><?php esc_html_e( 'SEO', 'mumega-mcp' ); ?></a>
+		<a class="nav-tab" href="#mcpwp-section-events"><?php esc_html_e( 'Events', 'mumega-mcp' ); ?></a>
+		<a class="nav-tab" href="#mcpwp-section-activity"><?php esc_html_e( 'Activity', 'mumega-mcp' ); ?></a>
+		<a class="nav-tab" href="#mcpwp-section-signals"><?php esc_html_e( 'Signals', 'mumega-mcp' ); ?></a>
 	</nav>
 
 	<div class="mcpwp-control-grid">
 		<div class="mcpwp-card">
 			<h2>
 				<span class="dashicons dashicons-yes-alt"></span>
-				<?php esc_html_e( 'Recommended Next Actions', 'mumcp' ); ?>
+				<?php esc_html_e( 'Recommended Next Actions', 'mumega-mcp' ); ?>
 			</h2>
 			<?php if ( empty( $recommendations ) ) : ?>
 				<div class="mcpwp-control-empty is-muted">
 					<span class="dashicons dashicons-yes-alt"></span>
-					<p><?php esc_html_e( 'No actions needed right now — your site is in good shape.', 'mumcp' ); ?></p>
+					<p><?php esc_html_e( 'No actions needed right now — your site is in good shape.', 'mumega-mcp' ); ?></p>
 				</div>
 			<?php else : ?>
 			<?php foreach ( $recommendations as $recommendation ) : ?>
@@ -118,12 +118,12 @@ $event_escalated_count = (int) ( $event_summary['escalated'] ?? 0 );
 		<div class="mcpwp-card" id="mcpwp-section-approvals">
 			<h2>
 				<span class="dashicons dashicons-shield"></span>
-				<?php esc_html_e( 'Pending Approvals', 'mumcp' ); ?>
+				<?php esc_html_e( 'Pending Approvals', 'mumega-mcp' ); ?>
 			</h2>
 			<?php if ( empty( $pending_items ) ) : ?>
 				<div class="mcpwp-control-empty is-good">
 					<span class="dashicons dashicons-yes-alt"></span>
-					<p><?php esc_html_e( 'No pending approval requests.', 'mumcp' ); ?></p>
+					<p><?php esc_html_e( 'No pending approval requests.', 'mumega-mcp' ); ?></p>
 				</div>
 			<?php else : ?>
 				<ul class="mcpwp-control-list">
@@ -159,17 +159,17 @@ $event_escalated_count = (int) ( $event_summary['escalated'] ?? 0 );
 									<input type="hidden" name="mcpwp_control_room_action" value="approve">
 									<input type="hidden" name="mcpwp_approval_id" value="<?php echo esc_attr( $item['id'] ?? '' ); ?>">
 									<button type="submit" class="button button-primary"
-										onclick="return confirm('<?php esc_attr_e( 'Apply this change to the live site? You can roll it back from the Rollback Ready section.', 'mumcp' ); ?>')"
-									><?php esc_html_e( 'Approve', 'mumcp' ); ?></button>
+										onclick="return confirm('<?php esc_attr_e( 'Apply this change to the live site? You can roll it back from the Rollback Ready section.', 'mumega-mcp' ); ?>')"
+									><?php esc_html_e( 'Approve', 'mumega-mcp' ); ?></button>
 								</form>
 								<form method="post">
 									<?php wp_nonce_field( 'mcpwp_control_room_actions', 'mcpwp_control_room_nonce' ); ?>
 									<input type="hidden" name="mcpwp_control_room_action" value="reject">
 									<input type="hidden" name="mcpwp_approval_id" value="<?php echo esc_attr( $item['id'] ?? '' ); ?>">
-									<button type="submit" class="button"><?php esc_html_e( 'Reject', 'mumcp' ); ?></button>
+									<button type="submit" class="button"><?php esc_html_e( 'Reject', 'mumega-mcp' ); ?></button>
 								</form>
 								<?php if ( $edit_url ) : ?>
-									<a class="button" href="<?php echo esc_url( $edit_url ); ?>"><?php esc_html_e( 'Preview in WordPress', 'mumcp' ); ?></a>
+									<a class="button" href="<?php echo esc_url( $edit_url ); ?>"><?php esc_html_e( 'Preview in WordPress', 'mumega-mcp' ); ?></a>
 								<?php endif; ?>
 							</div>
 						</li>
@@ -183,13 +183,13 @@ $event_escalated_count = (int) ( $event_summary['escalated'] ?? 0 );
 		<div class="mcpwp-card">
 			<h2>
 				<span class="dashicons dashicons-saved"></span>
-				<?php esc_html_e( 'Approved Changes', 'mumcp' ); ?>
+				<?php esc_html_e( 'Approved Changes', 'mumega-mcp' ); ?>
 			</h2>
 			<p class="description">
 				<?php
 				printf(
 					/* translators: %d: number of approved approvals */
-					esc_html( _n( '%d approved change is ready to apply.', '%d approved changes are ready to apply.', $approved_count, 'mumcp' ) ),
+					esc_html( _n( '%d approved change is ready to apply.', '%d approved changes are ready to apply.', $approved_count, 'mumega-mcp' ) ),
 					esc_html( (string) $approved_count )
 				);
 				?>
@@ -197,7 +197,7 @@ $event_escalated_count = (int) ( $event_summary['escalated'] ?? 0 );
 			<?php if ( empty( $approved_items ) ) : ?>
 				<div class="mcpwp-control-empty is-muted">
 					<span class="dashicons dashicons-shield"></span>
-					<p><?php esc_html_e( 'No approved approval requests are waiting to apply.', 'mumcp' ); ?></p>
+					<p><?php esc_html_e( 'No approved approval requests are waiting to apply.', 'mumega-mcp' ); ?></p>
 				</div>
 			<?php else : ?>
 				<ul class="mcpwp-control-list">
@@ -212,14 +212,14 @@ $event_escalated_count = (int) ( $event_summary['escalated'] ?? 0 );
 									<input type="hidden" name="mcpwp_control_room_action" value="apply">
 									<input type="hidden" name="mcpwp_approval_id" value="<?php echo esc_attr( $item['id'] ?? '' ); ?>">
 									<button type="submit" class="button button-primary"
-										onclick="return confirm('<?php esc_attr_e( 'Apply this change to the live site? You can roll it back from the Rollback Ready section.', 'mumcp' ); ?>')"
-									><?php esc_html_e( 'Apply', 'mumcp' ); ?></button>
+										onclick="return confirm('<?php esc_attr_e( 'Apply this change to the live site? You can roll it back from the Rollback Ready section.', 'mumega-mcp' ); ?>')"
+									><?php esc_html_e( 'Apply', 'mumega-mcp' ); ?></button>
 								</form>
 								<form method="post">
 									<?php wp_nonce_field( 'mcpwp_control_room_actions', 'mcpwp_control_room_nonce' ); ?>
 									<input type="hidden" name="mcpwp_control_room_action" value="reject">
 									<input type="hidden" name="mcpwp_approval_id" value="<?php echo esc_attr( $item['id'] ?? '' ); ?>">
-									<button type="submit" class="button"><?php esc_html_e( 'Reject', 'mumcp' ); ?></button>
+									<button type="submit" class="button"><?php esc_html_e( 'Reject', 'mumega-mcp' ); ?></button>
 								</form>
 							</div>
 						</li>
@@ -232,49 +232,49 @@ $event_escalated_count = (int) ( $event_summary['escalated'] ?? 0 );
 			<div class="mcpwp-control-card-header">
 				<h2>
 					<span class="dashicons dashicons-search"></span>
-					<?php esc_html_e( 'Stored SEO Issues', 'mumcp' ); ?>
+					<?php esc_html_e( 'Stored SEO Issues', 'mumega-mcp' ); ?>
 				</h2>
 				<form method="post">
 					<?php wp_nonce_field( 'mcpwp_control_room_actions', 'mcpwp_control_room_nonce' ); ?>
 					<input type="hidden" name="mcpwp_control_room_action" value="run_seo_audit">
-					<button type="submit" class="button button-primary"><?php esc_html_e( 'Run SEO Audit', 'mumcp' ); ?></button>
+					<button type="submit" class="button button-primary"><?php esc_html_e( 'Run SEO Audit', 'mumega-mcp' ); ?></button>
 				</form>
 			</div>
 			<form method="get" class="mcpwp-control-filters">
 				<input type="hidden" name="page" value="<?php echo esc_attr( Mcpwp_Admin::CONTROL_ROOM_PAGE_SLUG ); ?>">
 				<label>
-					<span><?php esc_html_e( 'Status', 'mumcp' ); ?></span>
+					<span><?php esc_html_e( 'Status', 'mumega-mcp' ); ?></span>
 					<select name="mcpwp_seo_status">
-						<option value="open" <?php selected( $seo_filters['status'] ?? 'open', 'open' ); ?>><?php esc_html_e( 'Open', 'mumcp' ); ?></option>
-						<option value="resolved" <?php selected( $seo_filters['status'] ?? '', 'resolved' ); ?>><?php esc_html_e( 'Resolved', 'mumcp' ); ?></option>
-						<option value="" <?php selected( $seo_filters['status'] ?? '', '' ); ?>><?php esc_html_e( 'Any', 'mumcp' ); ?></option>
+						<option value="open" <?php selected( $seo_filters['status'] ?? 'open', 'open' ); ?>><?php esc_html_e( 'Open', 'mumega-mcp' ); ?></option>
+						<option value="resolved" <?php selected( $seo_filters['status'] ?? '', 'resolved' ); ?>><?php esc_html_e( 'Resolved', 'mumega-mcp' ); ?></option>
+						<option value="" <?php selected( $seo_filters['status'] ?? '', '' ); ?>><?php esc_html_e( 'Any', 'mumega-mcp' ); ?></option>
 					</select>
 				</label>
 				<label>
-					<span><?php esc_html_e( 'Severity', 'mumcp' ); ?></span>
+					<span><?php esc_html_e( 'Severity', 'mumega-mcp' ); ?></span>
 					<select name="mcpwp_seo_severity">
-						<option value="" <?php selected( $seo_filters['severity'] ?? '', '' ); ?>><?php esc_html_e( 'Any', 'mumcp' ); ?></option>
-						<option value="error" <?php selected( $seo_filters['severity'] ?? '', 'error' ); ?>><?php esc_html_e( 'Error', 'mumcp' ); ?></option>
-						<option value="warning" <?php selected( $seo_filters['severity'] ?? '', 'warning' ); ?>><?php esc_html_e( 'Warning', 'mumcp' ); ?></option>
-						<option value="info" <?php selected( $seo_filters['severity'] ?? '', 'info' ); ?>><?php esc_html_e( 'Info', 'mumcp' ); ?></option>
+						<option value="" <?php selected( $seo_filters['severity'] ?? '', '' ); ?>><?php esc_html_e( 'Any', 'mumega-mcp' ); ?></option>
+						<option value="error" <?php selected( $seo_filters['severity'] ?? '', 'error' ); ?>><?php esc_html_e( 'Error', 'mumega-mcp' ); ?></option>
+						<option value="warning" <?php selected( $seo_filters['severity'] ?? '', 'warning' ); ?>><?php esc_html_e( 'Warning', 'mumega-mcp' ); ?></option>
+						<option value="info" <?php selected( $seo_filters['severity'] ?? '', 'info' ); ?>><?php esc_html_e( 'Info', 'mumega-mcp' ); ?></option>
 					</select>
 				</label>
 				<label>
-					<span><?php esc_html_e( 'Category', 'mumcp' ); ?></span>
+					<span><?php esc_html_e( 'Category', 'mumega-mcp' ); ?></span>
 					<select name="mcpwp_seo_category">
-						<option value="" <?php selected( $seo_filters['category'] ?? '', '' ); ?>><?php esc_html_e( 'Any', 'mumcp' ); ?></option>
-						<option value="readiness" <?php selected( $seo_filters['category'] ?? '', 'readiness' ); ?>><?php esc_html_e( 'Readiness', 'mumcp' ); ?></option>
-						<option value="structured_data" <?php selected( $seo_filters['category'] ?? '', 'structured_data' ); ?>><?php esc_html_e( 'Structured data', 'mumcp' ); ?></option>
-						<option value="media" <?php selected( $seo_filters['category'] ?? '', 'media' ); ?>><?php esc_html_e( 'Media', 'mumcp' ); ?></option>
-						<option value="content_quality" <?php selected( $seo_filters['category'] ?? '', 'content_quality' ); ?>><?php esc_html_e( 'Content quality', 'mumcp' ); ?></option>
+						<option value="" <?php selected( $seo_filters['category'] ?? '', '' ); ?>><?php esc_html_e( 'Any', 'mumega-mcp' ); ?></option>
+						<option value="readiness" <?php selected( $seo_filters['category'] ?? '', 'readiness' ); ?>><?php esc_html_e( 'Readiness', 'mumega-mcp' ); ?></option>
+						<option value="structured_data" <?php selected( $seo_filters['category'] ?? '', 'structured_data' ); ?>><?php esc_html_e( 'Structured data', 'mumega-mcp' ); ?></option>
+						<option value="media" <?php selected( $seo_filters['category'] ?? '', 'media' ); ?>><?php esc_html_e( 'Media', 'mumega-mcp' ); ?></option>
+						<option value="content_quality" <?php selected( $seo_filters['category'] ?? '', 'content_quality' ); ?>><?php esc_html_e( 'Content quality', 'mumega-mcp' ); ?></option>
 					</select>
 				</label>
-				<button type="submit" class="button"><?php esc_html_e( 'Filter', 'mumcp' ); ?></button>
+				<button type="submit" class="button"><?php esc_html_e( 'Filter', 'mumega-mcp' ); ?></button>
 			</form>
 			<?php if ( empty( $seo_issues ) ) : ?>
 				<div class="mcpwp-control-empty is-good">
 					<span class="dashicons dashicons-chart-line"></span>
-					<p><?php esc_html_e( 'No stored open SEO issues. Run a site SEO audit with store=true to populate this panel.', 'mumcp' ); ?></p>
+					<p><?php esc_html_e( 'No stored open SEO issues. Run a site SEO audit with store=true to populate this panel.', 'mumega-mcp' ); ?></p>
 				</div>
 			<?php else : ?>
 				<ul class="mcpwp-control-list">
@@ -294,7 +294,7 @@ $event_escalated_count = (int) ( $event_summary['escalated'] ?? 0 );
 								<?php echo esc_html( ' · ' . (string) ( $issue['category'] ?? '' ) ); ?>
 							</span>
 							<?php if ( $edit_url ) : ?>
-								<a href="<?php echo esc_url( $edit_url ); ?>"><?php echo esc_html( $issue['title'] ?? __( 'Open post', 'mumcp' ) ); ?></a>
+								<a href="<?php echo esc_url( $edit_url ); ?>"><?php echo esc_html( $issue['title'] ?? __( 'Open post', 'mumega-mcp' ) ); ?></a>
 							<?php endif; ?>
 						</li>
 					<?php endforeach; ?>
@@ -305,12 +305,12 @@ $event_escalated_count = (int) ( $event_summary['escalated'] ?? 0 );
 		<div class="mcpwp-card">
 			<h2>
 				<span class="dashicons dashicons-backup"></span>
-				<?php esc_html_e( 'Rollback Ready', 'mumcp' ); ?>
+				<?php esc_html_e( 'Rollback Ready', 'mumega-mcp' ); ?>
 			</h2>
 			<?php if ( empty( $rollback_items ) ) : ?>
 				<div class="mcpwp-control-empty is-muted">
 					<span class="dashicons dashicons-shield"></span>
-					<p><?php esc_html_e( 'No applied approval requests are currently listed for rollback.', 'mumcp' ); ?></p>
+					<p><?php esc_html_e( 'No applied approval requests are currently listed for rollback.', 'mumega-mcp' ); ?></p>
 				</div>
 			<?php else : ?>
 				<ul class="mcpwp-control-list">
@@ -324,7 +324,7 @@ $event_escalated_count = (int) ( $event_summary['escalated'] ?? 0 );
 									<?php wp_nonce_field( 'mcpwp_control_room_actions', 'mcpwp_control_room_nonce' ); ?>
 									<input type="hidden" name="mcpwp_control_room_action" value="rollback">
 									<input type="hidden" name="mcpwp_approval_id" value="<?php echo esc_attr( $item['id'] ?? '' ); ?>">
-									<button type="submit" class="button"><?php esc_html_e( 'Rollback', 'mumcp' ); ?></button>
+									<button type="submit" class="button"><?php esc_html_e( 'Rollback', 'mumega-mcp' ); ?></button>
 								</form>
 							</div>
 						</li>
@@ -338,13 +338,13 @@ $event_escalated_count = (int) ( $event_summary['escalated'] ?? 0 );
 		<div class="mcpwp-control-card-header">
 			<h2>
 				<span class="dashicons dashicons-bell"></span>
-				<?php esc_html_e( 'Event Inbox', 'mumcp' ); ?>
+				<?php esc_html_e( 'Event Inbox', 'mumega-mcp' ); ?>
 			</h2>
 			<span class="mcpwp-control-count">
 				<?php
 				printf(
 					/* translators: %d: number of visible events */
-					esc_html( _n( '%d event', '%d events', (int) ( $event_summary['total'] ?? 0 ), 'mumcp' ) ),
+					esc_html( _n( '%d event', '%d events', (int) ( $event_summary['total'] ?? 0 ), 'mumega-mcp' ) ),
 					esc_html( (string) ( $event_summary['total'] ?? 0 ) )
 				);
 				?>
@@ -353,24 +353,24 @@ $event_escalated_count = (int) ( $event_summary['escalated'] ?? 0 );
 		<form method="get" class="mcpwp-control-filters">
 			<input type="hidden" name="page" value="<?php echo esc_attr( Mcpwp_Admin::CONTROL_ROOM_PAGE_SLUG ); ?>">
 			<label>
-				<span><?php esc_html_e( 'Event type', 'mumcp' ); ?></span>
+				<span><?php esc_html_e( 'Event type', 'mumega-mcp' ); ?></span>
 				<input type="text" name="mcpwp_event_type" value="<?php echo esc_attr( $event_filters['type'] ?? '' ); ?>" placeholder="approval.created">
 			</label>
 			<label>
-				<span><?php esc_html_e( 'Risk', 'mumcp' ); ?></span>
+				<span><?php esc_html_e( 'Risk', 'mumega-mcp' ); ?></span>
 				<select name="mcpwp_event_risk">
-					<option value="" <?php selected( $event_filters['risk_level'] ?? '', '' ); ?>><?php esc_html_e( 'Any', 'mumcp' ); ?></option>
-					<option value="high" <?php selected( $event_filters['risk_level'] ?? '', 'high' ); ?>><?php esc_html_e( 'High', 'mumcp' ); ?></option>
-					<option value="medium" <?php selected( $event_filters['risk_level'] ?? '', 'medium' ); ?>><?php esc_html_e( 'Medium', 'mumcp' ); ?></option>
-					<option value="low" <?php selected( $event_filters['risk_level'] ?? '', 'low' ); ?>><?php esc_html_e( 'Low', 'mumcp' ); ?></option>
+					<option value="" <?php selected( $event_filters['risk_level'] ?? '', '' ); ?>><?php esc_html_e( 'Any', 'mumega-mcp' ); ?></option>
+					<option value="high" <?php selected( $event_filters['risk_level'] ?? '', 'high' ); ?>><?php esc_html_e( 'High', 'mumega-mcp' ); ?></option>
+					<option value="medium" <?php selected( $event_filters['risk_level'] ?? '', 'medium' ); ?>><?php esc_html_e( 'Medium', 'mumega-mcp' ); ?></option>
+					<option value="low" <?php selected( $event_filters['risk_level'] ?? '', 'low' ); ?>><?php esc_html_e( 'Low', 'mumega-mcp' ); ?></option>
 				</select>
 			</label>
-			<button type="submit" class="button"><?php esc_html_e( 'Filter', 'mumcp' ); ?></button>
+			<button type="submit" class="button"><?php esc_html_e( 'Filter', 'mumega-mcp' ); ?></button>
 		</form>
 		<?php if ( empty( $event_items ) ) : ?>
 			<div class="mcpwp-control-empty is-muted">
 				<span class="dashicons dashicons-bell"></span>
-				<p><?php esc_html_e( 'No normalized events match the current filters yet.', 'mumcp' ); ?></p>
+				<p><?php esc_html_e( 'No normalized events match the current filters yet.', 'mumega-mcp' ); ?></p>
 			</div>
 		<?php else : ?>
 			<ul class="mcpwp-control-list mcpwp-control-event-list">
@@ -407,21 +407,21 @@ $event_escalated_count = (int) ( $event_summary['escalated'] ?? 0 );
 	<div class="mcpwp-card" id="mcpwp-section-activity">
 		<h2>
 			<span class="dashicons dashicons-list-view"></span>
-			<?php esc_html_e( 'Recent Agent Activity', 'mumcp' ); ?>
+			<?php esc_html_e( 'Recent Agent Activity', 'mumega-mcp' ); ?>
 		</h2>
 		<?php if ( empty( $activity_rows ) ) : ?>
 			<div class="mcpwp-control-empty is-muted">
 				<span class="dashicons dashicons-list-view"></span>
-				<p><?php esc_html_e( 'No activity recorded yet.', 'mumcp' ); ?></p>
+				<p><?php esc_html_e( 'No activity recorded yet.', 'mumega-mcp' ); ?></p>
 			</div>
 		<?php else : ?>
 			<table class="widefat striped">
 				<thead>
 					<tr>
-						<th><?php esc_html_e( 'When', 'mumcp' ); ?></th>
-						<th><?php esc_html_e( 'Action', 'mumcp' ); ?></th>
-						<th><?php esc_html_e( 'Endpoint', 'mumcp' ); ?></th>
-						<th><?php esc_html_e( 'Status', 'mumcp' ); ?></th>
+						<th><?php esc_html_e( 'When', 'mumega-mcp' ); ?></th>
+						<th><?php esc_html_e( 'Action', 'mumega-mcp' ); ?></th>
+						<th><?php esc_html_e( 'Endpoint', 'mumega-mcp' ); ?></th>
+						<th><?php esc_html_e( 'Status', 'mumega-mcp' ); ?></th>
 					</tr>
 				</thead>
 				<tbody>
@@ -448,25 +448,25 @@ $event_escalated_count = (int) ( $event_summary['escalated'] ?? 0 );
 		<div class="mcpwp-action-log__header">
 			<h2>
 				<span class="dashicons dashicons-backup"></span>
-				<?php esc_html_e( 'AI Action Log', 'mumcp' ); ?>
+				<?php esc_html_e( 'AI Action Log', 'mumega-mcp' ); ?>
 			</h2>
 			<a href="<?php echo esc_url( rest_url( 'mcpwp/v1/action-log/export' ) . '?_wpnonce=' . wp_create_nonce( 'wp_rest' ) ); ?>"
 			   class="button button-small" target="_blank">
-				<?php esc_html_e( 'Export CSV', 'mumcp' ); ?>
+				<?php esc_html_e( 'Export CSV', 'mumega-mcp' ); ?>
 			</a>
 		</div>
 
 		<?php if ( empty( $action_log_entries ) ) : ?>
 			<div class="mcpwp-control-empty is-muted mcpwp-action-log__empty">
 				<span class="dashicons dashicons-backup"></span>
-				<p><?php esc_html_e( 'No write-tool actions logged yet. Actions appear here the first time an AI agent calls a write tool (update, create, delete, set, etc.).', 'mumcp' ); ?></p>
+				<p><?php esc_html_e( 'No write-tool actions logged yet. Actions appear here the first time an AI agent calls a write tool (update, create, delete, set, etc.).', 'mumega-mcp' ); ?></p>
 			</div>
 		<?php else : ?>
 			<p class="description mcpwp-action-log__count">
 				<?php
 				printf(
 					/* translators: 1: shown count, 2: total */
-					esc_html__( 'Showing %1$d of %2$d logged actions (most recent first).', 'mumcp' ),
+					esc_html__( 'Showing %1$d of %2$d logged actions (most recent first).', 'mumega-mcp' ),
 					(int) count( $action_log_entries ),
 					(int) $action_log_total
 				);
@@ -475,12 +475,12 @@ $event_escalated_count = (int) ( $event_summary['escalated'] ?? 0 );
 			<table class="widefat striped mcpwp-action-log__table">
 				<thead>
 					<tr>
-						<th><?php esc_html_e( 'Tool', 'mumcp' ); ?></th>
-						<th><?php esc_html_e( 'Resource', 'mumcp' ); ?></th>
-						<th><?php esc_html_e( 'Time', 'mumcp' ); ?></th>
-						<th><?php esc_html_e( 'ms', 'mumcp' ); ?></th>
-						<th><?php esc_html_e( 'Result', 'mumcp' ); ?></th>
-						<th><?php esc_html_e( 'Action', 'mumcp' ); ?></th>
+						<th><?php esc_html_e( 'Tool', 'mumega-mcp' ); ?></th>
+						<th><?php esc_html_e( 'Resource', 'mumega-mcp' ); ?></th>
+						<th><?php esc_html_e( 'Time', 'mumega-mcp' ); ?></th>
+						<th><?php esc_html_e( 'ms', 'mumega-mcp' ); ?></th>
+						<th><?php esc_html_e( 'Result', 'mumega-mcp' ); ?></th>
+						<th><?php esc_html_e( 'Action', 'mumega-mcp' ); ?></th>
 					</tr>
 				</thead>
 				<tbody>
@@ -507,12 +507,12 @@ $event_escalated_count = (int) ( $event_summary['escalated'] ?? 0 );
 							<td class="mcpwp-action-log__td-sm"><?php echo esc_html( isset( $log_entry['duration_ms'] ) ? (string) $log_entry['duration_ms'] : '—' ); ?></td>
 							<td>
 								<?php if ( $le_success ) : ?>
-									<span class="mcpwp-badge is-good"><?php esc_html_e( 'OK', 'mumcp' ); ?></span>
+									<span class="mcpwp-badge is-good"><?php esc_html_e( 'OK', 'mumega-mcp' ); ?></span>
 								<?php else : ?>
 									<span class="mcpwp-badge is-critical"><?php echo esc_html( isset( $log_entry['error_code'] ) && $log_entry['error_code'] ? (string) $log_entry['error_code'] : 'error' ); ?></span>
 								<?php endif; ?>
 								<?php if ( $le_rolled ) : ?>
-									<span class="mcpwp-badge is-info"><?php esc_html_e( 'Rolled back', 'mumcp' ); ?></span>
+									<span class="mcpwp-badge is-info"><?php esc_html_e( 'Rolled back', 'mumega-mcp' ); ?></span>
 								<?php endif; ?>
 							</td>
 							<td>
@@ -522,8 +522,8 @@ $event_escalated_count = (int) ( $event_summary['escalated'] ?? 0 );
 										<input type="hidden" name="mcpwp_control_room_action" value="rollback_action_log" />
 										<input type="hidden" name="action_log_id" value="<?php echo esc_attr( $le_log_id ); ?>" />
 										<button type="submit" class="button button-small"
-											onclick="return confirm('<?php esc_attr_e( 'Roll back this action? The before-state will be restored.', 'mumcp' ); ?>')">
-											<?php esc_html_e( 'Rollback', 'mumcp' ); ?>
+											onclick="return confirm('<?php esc_attr_e( 'Roll back this action? The before-state will be restored.', 'mumega-mcp' ); ?>')">
+											<?php esc_html_e( 'Rollback', 'mumega-mcp' ); ?>
 										</button>
 									</form>
 								<?php else : ?>
@@ -541,26 +541,26 @@ $event_escalated_count = (int) ( $event_summary['escalated'] ?? 0 );
 <?php // ── Site Signals (#363) ────────────────────────────────────────────────── ?>
 <div class="mcpwp-card" id="mcpwp-section-signals" style="margin-top:1.5rem">
 	<div class="mcpwp-control-card-header">
-		<h2 class="mcpwp-control-card-title"><?php esc_html_e( 'Site Signals', 'mumcp' ); ?></h2>
+		<h2 class="mcpwp-control-card-title"><?php esc_html_e( 'Site Signals', 'mumega-mcp' ); ?></h2>
 		<div class="mcpwp-control-card-actions">
 			<form method="post" style="display:inline">
 				<?php wp_nonce_field( 'mcpwp_control_room_actions', 'mcpwp_control_room_nonce' ); ?>
 				<input type="hidden" name="mcpwp_control_room_action" value="refresh_signals" />
-				<button type="submit" class="button button-small"><?php esc_html_e( 'Refresh Signals', 'mumcp' ); ?></button>
+				<button type="submit" class="button button-small"><?php esc_html_e( 'Refresh Signals', 'mumega-mcp' ); ?></button>
 			</form>
 		</div>
 	</div>
 	<?php if ( empty( $signals ) ) : ?>
-		<p style="padding:1rem;color:#666"><?php esc_html_e( 'No signals found. Signals are computed daily via WP Cron — or click Refresh Signals to compute now.', 'mumcp' ); ?></p>
+		<p style="padding:1rem;color:#666"><?php esc_html_e( 'No signals found. Signals are computed daily via WP Cron — or click Refresh Signals to compute now.', 'mumega-mcp' ); ?></p>
 	<?php else : ?>
 		<table class="widefat striped" style="margin-top:.5rem">
 			<thead>
 				<tr>
-					<th><?php esc_html_e( 'Severity', 'mumcp' ); ?></th>
-					<th><?php esc_html_e( 'Type', 'mumcp' ); ?></th>
-					<th><?php esc_html_e( 'Entity', 'mumcp' ); ?></th>
-					<th><?php esc_html_e( 'Detail', 'mumcp' ); ?></th>
-					<th><?php esc_html_e( 'Action Hint', 'mumcp' ); ?></th>
+					<th><?php esc_html_e( 'Severity', 'mumega-mcp' ); ?></th>
+					<th><?php esc_html_e( 'Type', 'mumega-mcp' ); ?></th>
+					<th><?php esc_html_e( 'Entity', 'mumega-mcp' ); ?></th>
+					<th><?php esc_html_e( 'Detail', 'mumega-mcp' ); ?></th>
+					<th><?php esc_html_e( 'Action Hint', 'mumega-mcp' ); ?></th>
 				</tr>
 			</thead>
 			<tbody>
@@ -591,12 +591,12 @@ $event_escalated_count = (int) ( $event_summary['escalated'] ?? 0 );
 		<?php
 		printf(
 			/* translators: %1$d: entry count, %2$s: y or ies */
-			esc_html__( 'Site memory: %1$d entr%2$s stored across AI sessions.', 'mumcp' ),
+			esc_html__( 'Site memory: %1$d entr%2$s stored across AI sessions.', 'mumega-mcp' ),
 			(int) $memory_count,
 			1 === $memory_count ? 'y' : 'ies'
 		);
 		?>
-		&nbsp;<a href="<?php echo esc_url( rest_url( 'mcpwp/v1/memory' ) . '?_wpnonce=' . wp_create_nonce( 'wp_rest' ) ); ?>" target="_blank"><?php esc_html_e( 'View JSON', 'mumcp' ); ?></a>
+		&nbsp;<a href="<?php echo esc_url( rest_url( 'mcpwp/v1/memory' ) . '?_wpnonce=' . wp_create_nonce( 'wp_rest' ) ); ?>" target="_blank"><?php esc_html_e( 'View JSON', 'mumega-mcp' ); ?></a>
 	</p>
 	<?php endif; ?>
 </div>

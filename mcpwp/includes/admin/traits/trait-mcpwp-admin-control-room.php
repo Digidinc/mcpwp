@@ -18,7 +18,7 @@ trait Mcpwp_Admin_Control_Room_Trait {
 	 */
 	public function render_control_room_page() {
 		if ( ! current_user_can( 'activate_plugins' ) ) {
-			wp_die( esc_html__( 'You do not have permission to access this page.', 'mumcp' ) );
+			wp_die( esc_html__( 'You do not have permission to access this page.', 'mumega-mcp' ) );
 		}
 
 		$this->handle_control_room_actions();
@@ -49,7 +49,7 @@ trait Mcpwp_Admin_Control_Room_Trait {
 			if ( class_exists( 'Mcpwp_Signals' ) ) {
 				$computed = Mcpwp_Signals::compute( array(), Mcpwp_Signals::request_time_budget() );
 				/* translators: %d: number of signals found */
-				$result   = sprintf( __( 'Signals refreshed: %d signal(s) found.', 'mumcp' ), count( $computed ) );
+				$result   = sprintf( __( 'Signals refreshed: %d signal(s) found.', 'mumega-mcp' ), count( $computed ) );
 			}
 		} elseif ( 'rollback_action_log' === $action ) {
 			$log_id = isset( $_POST['action_log_id'] ) ? sanitize_text_field( wp_unslash( $_POST['action_log_id'] ) ) : '';
@@ -57,9 +57,9 @@ trait Mcpwp_Admin_Control_Room_Trait {
 				$rollback = Mcpwp_Action_Log::rollback( $log_id );
 				$result   = is_wp_error( $rollback )
 					? $rollback
-					: __( 'Action rolled back successfully.', 'mumcp' );
+					: __( 'Action rolled back successfully.', 'mumega-mcp' );
 			} else {
-				$result = new WP_Error( 'mcpwp_action_log_unavailable', __( 'Action log unavailable or missing log ID.', 'mumcp' ) );
+				$result = new WP_Error( 'mcpwp_action_log_unavailable', __( 'Action log unavailable or missing log ID.', 'mumega-mcp' ) );
 			}
 		} else {
 			$approval_id = isset( $_POST['mcpwp_approval_id'] ) ? sanitize_key( wp_unslash( $_POST['mcpwp_approval_id'] ) ) : '';
@@ -95,32 +95,32 @@ trait Mcpwp_Admin_Control_Room_Trait {
 	 */
 	private function handle_control_room_approval_action( $action, $approval_id ) {
 		if ( ! class_exists( 'Mcpwp_Approvals' ) ) {
-			return new WP_Error( 'mcpwp_approvals_unavailable', __( 'Approval storage is unavailable.', 'mumcp' ) );
+			return new WP_Error( 'mcpwp_approvals_unavailable', __( 'Approval storage is unavailable.', 'mumega-mcp' ) );
 		}
 
 		if ( '' === $approval_id ) {
-			return new WP_Error( 'mcpwp_missing_approval_id', __( 'Approval request ID is required.', 'mumcp' ) );
+			return new WP_Error( 'mcpwp_missing_approval_id', __( 'Approval request ID is required.', 'mumega-mcp' ) );
 		}
 
 		switch ( $action ) {
 			case 'approve':
 				$result = Mcpwp_Approvals::approve_request( $approval_id );
-				$message = __( 'Approval request approved.', 'mumcp' );
+				$message = __( 'Approval request approved.', 'mumega-mcp' );
 				break;
 			case 'reject':
 				$result = Mcpwp_Approvals::reject_request( $approval_id );
-				$message = __( 'Approval request rejected.', 'mumcp' );
+				$message = __( 'Approval request rejected.', 'mumega-mcp' );
 				break;
 			case 'apply':
 				$result = Mcpwp_Approvals::apply_request( $approval_id );
-				$message = __( 'Approved change applied.', 'mumcp' );
+				$message = __( 'Approved change applied.', 'mumega-mcp' );
 				break;
 			case 'rollback':
 				$result = Mcpwp_Approvals::rollback_request( $approval_id );
-				$message = __( 'Applied change rolled back.', 'mumcp' );
+				$message = __( 'Applied change rolled back.', 'mumega-mcp' );
 				break;
 			default:
-				return new WP_Error( 'mcpwp_unknown_control_action', __( 'Unknown control room action.', 'mumcp' ) );
+				return new WP_Error( 'mcpwp_unknown_control_action', __( 'Unknown control room action.', 'mumega-mcp' ) );
 		}
 
 		if ( is_wp_error( $result ) ) {
@@ -137,7 +137,7 @@ trait Mcpwp_Admin_Control_Room_Trait {
 	 */
 	private function run_control_room_seo_audit() {
 		if ( ! class_exists( 'Mcpwp_REST_SEO_Audit' ) || ! class_exists( 'WP_REST_Request' ) ) {
-			return new WP_Error( 'mcpwp_seo_audit_unavailable', __( 'SEO audit tools are unavailable.', 'mumcp' ) );
+			return new WP_Error( 'mcpwp_seo_audit_unavailable', __( 'SEO audit tools are unavailable.', 'mumega-mcp' ) );
 		}
 
 		$request = new WP_REST_Request( 'GET', '/mcpwp/v1/seo/audit-site' );
@@ -153,7 +153,7 @@ trait Mcpwp_Admin_Control_Room_Trait {
 
 		$data = $response instanceof WP_REST_Response ? $response->get_data() : array();
 		if ( isset( $data['success'] ) && empty( $data['success'] ) ) {
-			$message = isset( $data['message'] ) ? (string) $data['message'] : __( 'SEO audit failed.', 'mumcp' );
+			$message = isset( $data['message'] ) ? (string) $data['message'] : __( 'SEO audit failed.', 'mumega-mcp' );
 			return new WP_Error( 'mcpwp_seo_audit_failed', $message );
 		}
 
@@ -163,7 +163,7 @@ trait Mcpwp_Admin_Control_Room_Trait {
 
 		return sprintf(
 			/* translators: %d: number of audited URLs */
-			_n( 'Stored SEO audit completed for %d URL.', 'Stored SEO audit completed for %d URLs.', $count, 'mumcp' ),
+			_n( 'Stored SEO audit completed for %d URL.', 'Stored SEO audit completed for %d URLs.', $count, 'mumega-mcp' ),
 			$count
 		);
 	}
@@ -383,8 +383,8 @@ trait Mcpwp_Admin_Control_Room_Trait {
 			return array(
 				'escalated' => true,
 				'level'     => 'high',
-				'label'     => __( 'Needs attention', 'mumcp' ),
-				'reason'    => __( 'High-risk event or failing SEO state.', 'mumcp' ),
+				'label'     => __( 'Needs attention', 'mumega-mcp' ),
+				'reason'    => __( 'High-risk event or failing SEO state.', 'mumega-mcp' ),
 			);
 		}
 
@@ -392,16 +392,16 @@ trait Mcpwp_Admin_Control_Room_Trait {
 			return array(
 				'escalated' => true,
 				'level'     => 'medium',
-				'label'     => __( 'Human decision', 'mumcp' ),
-				'reason'    => __( 'Approval lifecycle event requires human awareness.', 'mumcp' ),
+				'label'     => __( 'Human decision', 'mumega-mcp' ),
+				'reason'    => __( 'Approval lifecycle event requires human awareness.', 'mumega-mcp' ),
 			);
 		}
 
 		return array(
 			'escalated' => false,
 			'level'     => 'low',
-			'label'     => __( 'Informational', 'mumcp' ),
-			'reason'    => __( 'No escalation rule matched.', 'mumcp' ),
+			'label'     => __( 'Informational', 'mumega-mcp' ),
+			'reason'    => __( 'No escalation rule matched.', 'mumega-mcp' ),
 		);
 	}
 
@@ -419,10 +419,10 @@ trait Mcpwp_Admin_Control_Room_Trait {
 		if ( ! empty( $approval_counts['pending'] ) ) {
 			$recommendations[] = array(
 				'priority' => 'high',
-				'title'    => __( 'Review pending approvals', 'mumcp' ),
+				'title'    => __( 'Review pending approvals', 'mumega-mcp' ),
 				'detail'   => sprintf(
 					/* translators: %d: number of pending approvals */
-					_n( '%d agent change is waiting for human review.', '%d agent changes are waiting for human review.', (int) $approval_counts['pending'], 'mumcp' ),
+					_n( '%d agent change is waiting for human review.', '%d agent changes are waiting for human review.', (int) $approval_counts['pending'], 'mumega-mcp' ),
 					(int) $approval_counts['pending']
 				),
 			);
@@ -431,18 +431,18 @@ trait Mcpwp_Admin_Control_Room_Trait {
 		if ( ! empty( $approval_counts['applied'] ) ) {
 			$recommendations[] = array(
 				'priority' => 'medium',
-				'title'    => __( 'Keep rollback handles visible', 'mumcp' ),
-				'detail'   => __( 'Applied approval requests can still be rolled back if production content needs to revert.', 'mumcp' ),
+				'title'    => __( 'Keep rollback handles visible', 'mumega-mcp' ),
+				'detail'   => __( 'Applied approval requests can still be rolled back if production content needs to revert.', 'mumega-mcp' ),
 			);
 		}
 
 		if ( ! empty( $seo_summary['error'] ) ) {
 			$recommendations[] = array(
 				'priority' => 'high',
-				'title'    => __( 'Prioritize SEO errors', 'mumcp' ),
+				'title'    => __( 'Prioritize SEO errors', 'mumega-mcp' ),
 				'detail'   => sprintf(
 					/* translators: %d: number of SEO errors */
-					_n( '%d stored SEO error needs attention before lower-priority warnings.', '%d stored SEO errors need attention before lower-priority warnings.', (int) $seo_summary['error'], 'mumcp' ),
+					_n( '%d stored SEO error needs attention before lower-priority warnings.', '%d stored SEO errors need attention before lower-priority warnings.', (int) $seo_summary['error'], 'mumega-mcp' ),
 					(int) $seo_summary['error']
 				),
 			);
@@ -451,10 +451,10 @@ trait Mcpwp_Admin_Control_Room_Trait {
 		if ( ! empty( $data['event_inbox']['summary']['escalated'] ) ) {
 			$recommendations[] = array(
 				'priority' => 'high',
-				'title'    => __( 'Review escalated events', 'mumcp' ),
+				'title'    => __( 'Review escalated events', 'mumega-mcp' ),
 				'detail'   => sprintf(
 					/* translators: %d: number of escalated events */
-					_n( '%d recent event needs human attention.', '%d recent events need human attention.', (int) $data['event_inbox']['summary']['escalated'], 'mumcp' ),
+					_n( '%d recent event needs human attention.', '%d recent events need human attention.', (int) $data['event_inbox']['summary']['escalated'], 'mumega-mcp' ),
 					(int) $data['event_inbox']['summary']['escalated']
 				),
 			);
@@ -463,8 +463,8 @@ trait Mcpwp_Admin_Control_Room_Trait {
 		if ( empty( $recommendations ) ) {
 			$recommendations[] = array(
 				'priority' => 'low',
-				'title'    => __( 'Run the next supervised workflow', 'mumcp' ),
-				'detail'   => __( 'No urgent approval or stored SEO issue is visible. Run a stored SEO audit or create an approval-required draft change to populate the control room.', 'mumcp' ),
+				'title'    => __( 'Run the next supervised workflow', 'mumega-mcp' ),
+				'detail'   => __( 'No urgent approval or stored SEO issue is visible. Run a stored SEO audit or create an approval-required draft change to populate the control room.', 'mumega-mcp' ),
 			);
 		}
 

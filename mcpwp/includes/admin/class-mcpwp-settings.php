@@ -67,7 +67,7 @@ class Mcpwp_Settings {
 		// General section
 		add_settings_section(
 			'mcpwp_general_section',
-			__( 'General Settings', 'mumcp' ),
+			__( 'General Settings', 'mumega-mcp' ),
 			array( $this, 'render_general_section' ),
 			'mcpwp_settings'
 		);
@@ -75,93 +75,93 @@ class Mcpwp_Settings {
 		// Logging
 		add_settings_field(
 			'enable_logging',
-			__( 'Activity Logging', 'mumcp' ),
+			__( 'Activity Logging', 'mumega-mcp' ),
 			array( $this, 'render_checkbox_field' ),
 			'mcpwp_settings',
 			'mcpwp_general_section',
 			array(
 				'id'          => 'enable_logging',
-				'description' => __( 'Log API requests for analytics and debugging.', 'mumcp' ),
+				'description' => __( 'Log API requests for analytics and debugging.', 'mumega-mcp' ),
 			)
 		);
 
 		// Log retention
 		add_settings_field(
 			'log_retention_days',
-			__( 'Log Retention', 'mumcp' ),
+			__( 'Log Retention', 'mumega-mcp' ),
 			array( $this, 'render_number_field' ),
 			'mcpwp_settings',
 			'mcpwp_general_section',
 			array(
 				'id'          => 'log_retention_days',
-				'description' => __( 'Number of days to keep activity logs.', 'mumcp' ),
+				'description' => __( 'Number of days to keep activity logs.', 'mumega-mcp' ),
 				'min'         => 1,
 				'max'         => 365,
-				'suffix'      => __( 'days', 'mumcp' ),
+				'suffix'      => __( 'days', 'mumega-mcp' ),
 			)
 		);
 
 		add_settings_field(
 			'log_store_response_data',
-			__( 'Store Response Data', 'mumcp' ),
+			__( 'Store Response Data', 'mumega-mcp' ),
 			array( $this, 'render_checkbox_field' ),
 			'mcpwp_settings',
 			'mcpwp_general_section',
 			array(
 				'id'          => 'log_store_response_data',
-				'description' => __( 'Store small response bodies for debugging (redacted). Disable for privacy.', 'mumcp' ),
+				'description' => __( 'Store small response bodies for debugging (redacted). Disable for privacy.', 'mumega-mcp' ),
 			)
 		);
 
 		add_settings_field(
 			'log_redaction_keys',
-			__( 'Redaction Keys', 'mumcp' ),
+			__( 'Redaction Keys', 'mumega-mcp' ),
 			array( $this, 'render_textarea_field' ),
 			'mcpwp_settings',
 			'mcpwp_general_section',
 			array(
 				'id'          => 'log_redaction_keys',
-				'description' => __( 'Comma or newline-separated keys to redact from logged request/response data.', 'mumcp' ),
+				'description' => __( 'Comma or newline-separated keys to redact from logged request/response data.', 'mumega-mcp' ),
 				'placeholder' => "api_key\nauthorization\ntoken",
 			)
 		);
 
 		add_settings_field(
 			'alerts_enabled',
-			__( 'Enable Alerts', 'mumcp' ),
+			__( 'Enable Alerts', 'mumega-mcp' ),
 			array( $this, 'render_checkbox_field' ),
 			'mcpwp_settings',
 			'mcpwp_general_section',
 			array(
 				'id'          => 'alerts_enabled',
-				'description' => __( 'Send webhook alerts on API error spikes (requires a configured webhook subscribed to api.alert.* events).', 'mumcp' ),
+				'description' => __( 'Send webhook alerts on API error spikes (requires a configured webhook subscribed to api.alert.* events).', 'mumega-mcp' ),
 			)
 		);
 
 		add_settings_field(
 			'alerts_window_minutes',
-			__( 'Alert Window', 'mumcp' ),
+			__( 'Alert Window', 'mumega-mcp' ),
 			array( $this, 'render_number_field' ),
 			'mcpwp_settings',
 			'mcpwp_general_section',
 			array(
 				'id'          => 'alerts_window_minutes',
-				'description' => __( 'Time window for counting errors.', 'mumcp' ),
+				'description' => __( 'Time window for counting errors.', 'mumega-mcp' ),
 				'min'         => 1,
 				'max'         => 120,
-				'suffix'      => __( 'minutes', 'mumcp' ),
+				'suffix'      => __( 'minutes', 'mumega-mcp' ),
 			)
 		);
 
 		add_settings_field(
 			'alerts_5xx_threshold',
-			__( '5xx Threshold', 'mumcp' ),
+			__( '5xx Threshold', 'mumega-mcp' ),
 			array( $this, 'render_number_field' ),
 			'mcpwp_settings',
 			'mcpwp_general_section',
 			array(
 				'id'          => 'alerts_5xx_threshold',
-				'description' => __( 'Trigger api.alert.5xx_spike when 5xx count meets or exceeds this value.', 'mumcp' ),
+				'description' => __( 'Trigger api.alert.5xx_spike when 5xx count meets or exceeds this value.', 'mumega-mcp' ),
 				'min'         => 1,
 				'max'         => 10000,
 			)
@@ -169,13 +169,13 @@ class Mcpwp_Settings {
 
 		add_settings_field(
 			'alerts_auth_threshold',
-			__( '401/403 Threshold', 'mumcp' ),
+			__( '401/403 Threshold', 'mumega-mcp' ),
 			array( $this, 'render_number_field' ),
 			'mcpwp_settings',
 			'mcpwp_general_section',
 			array(
 				'id'          => 'alerts_auth_threshold',
-				'description' => __( 'Trigger api.alert.auth_spike when 401/403 count meets or exceeds this value.', 'mumcp' ),
+				'description' => __( 'Trigger api.alert.auth_spike when 401/403 count meets or exceeds this value.', 'mumega-mcp' ),
 				'min'         => 1,
 				'max'         => 10000,
 			)
@@ -183,22 +183,22 @@ class Mcpwp_Settings {
 
 		add_settings_field(
 			'alerts_cooldown_minutes',
-			__( 'Alert Cooldown', 'mumcp' ),
+			__( 'Alert Cooldown', 'mumega-mcp' ),
 			array( $this, 'render_number_field' ),
 			'mcpwp_settings',
 			'mcpwp_general_section',
 			array(
 				'id'          => 'alerts_cooldown_minutes',
-				'description' => __( 'Minimum time between repeated alerts of the same type.', 'mumcp' ),
+				'description' => __( 'Minimum time between repeated alerts of the same type.', 'mumega-mcp' ),
 				'min'         => 1,
 				'max'         => 1440,
-				'suffix'      => __( 'minutes', 'mumcp' ),
+				'suffix'      => __( 'minutes', 'mumega-mcp' ),
 			)
 		);
 
 		add_settings_field(
 			'analytics_enabled',
-			__( 'Usage Analytics', 'mumcp' ),
+			__( 'Usage Analytics', 'mumega-mcp' ),
 			array( $this, 'render_analytics_enabled_field' ),
 			'mcpwp_settings',
 			'mcpwp_general_section'
@@ -207,91 +207,91 @@ class Mcpwp_Settings {
 		// Allowed origins (CORS)
 		add_settings_field(
 			'allowed_origins',
-			__( 'Allowed Origins', 'mumcp' ),
+			__( 'Allowed Origins', 'mumega-mcp' ),
 			array( $this, 'render_textarea_field' ),
 			'mcpwp_settings',
 			'mcpwp_general_section',
 			array(
 				'id'          => 'allowed_origins',
-				'description' => __( 'Comma-separated list of allowed origins for CORS. Leave empty to allow all.', 'mumcp' ),
+				'description' => __( 'Comma-separated list of allowed origins for CORS. Leave empty to allow all.', 'mumega-mcp' ),
 				'placeholder' => 'https://example.com, https://app.example.com',
 			)
 		);
 
 		add_settings_field(
 			'oauth_enabled',
-			__( 'OAuth Token Endpoint', 'mumcp' ),
+			__( 'OAuth Token Endpoint', 'mumega-mcp' ),
 			array( $this, 'render_checkbox_field' ),
 			'mcpwp_settings',
 			'mcpwp_general_section',
 			array(
 				'id'          => 'oauth_enabled',
-				'description' => __( 'Enable OAuth2 client credentials at /wp-json/mcpwp/v1/oauth/token.', 'mumcp' ),
+				'description' => __( 'Enable OAuth2 client credentials at /wp-json/mcpwp/v1/oauth/token.', 'mumega-mcp' ),
 			)
 		);
 
 		add_settings_field(
 			'oauth_client_id',
-			__( 'OAuth Client ID', 'mumcp' ),
+			__( 'OAuth Client ID', 'mumega-mcp' ),
 			array( $this, 'render_text_field' ),
 			'mcpwp_settings',
 			'mcpwp_general_section',
 			array(
 				'id'          => 'oauth_client_id',
-				'description' => __( 'Client ID used for token requests.', 'mumcp' ),
+				'description' => __( 'Client ID used for token requests.', 'mumega-mcp' ),
 				'placeholder' => 'site_pilot_ai',
 			)
 		);
 
 		add_settings_field(
 			'oauth_client_secret',
-			__( 'OAuth Client Secret', 'mumcp' ),
+			__( 'OAuth Client Secret', 'mumega-mcp' ),
 			array( $this, 'render_secret_field' ),
 			'mcpwp_settings',
 			'mcpwp_general_section',
 			array(
 				'id'          => 'oauth_client_secret',
-				'description' => __( 'Set a new secret. Leave empty to keep the existing value.', 'mumcp' ),
+				'description' => __( 'Set a new secret. Leave empty to keep the existing value.', 'mumega-mcp' ),
 			)
 		);
 
 		add_settings_field(
 			'oauth_token_ttl',
-			__( 'OAuth Token TTL', 'mumcp' ),
+			__( 'OAuth Token TTL', 'mumega-mcp' ),
 			array( $this, 'render_number_field' ),
 			'mcpwp_settings',
 			'mcpwp_general_section',
 			array(
 				'id'          => 'oauth_token_ttl',
-				'description' => __( 'Token lifetime in seconds.', 'mumcp' ),
+				'description' => __( 'Token lifetime in seconds.', 'mumega-mcp' ),
 				'min'         => 300,
 				'max'         => 86400,
-				'suffix'      => __( 'seconds', 'mumcp' ),
+				'suffix'      => __( 'seconds', 'mumega-mcp' ),
 			)
 		);
 
 		// GitHub Integration.
 		add_settings_field(
 			'github_token',
-			__( 'GitHub Token', 'mumcp' ),
+			__( 'GitHub Token', 'mumega-mcp' ),
 			array( $this, 'render_secret_field' ),
 			'mcpwp_settings',
 			'mcpwp_general_section',
 			array(
 				'id'          => 'github_token',
-				'description' => __( 'Personal access token with repo scope. Used to auto-create issues from AI feedback. Leave empty to keep existing value.', 'mumcp' ),
+				'description' => __( 'Personal access token with repo scope. Used to auto-create issues from AI feedback. Leave empty to keep existing value.', 'mumega-mcp' ),
 			)
 		);
 
 		add_settings_field(
 			'github_repo',
-			__( 'GitHub Repo', 'mumcp' ),
+			__( 'GitHub Repo', 'mumega-mcp' ),
 			array( $this, 'render_text_field' ),
 			'mcpwp_settings',
 			'mcpwp_general_section',
 			array(
 				'id'          => 'github_repo',
-				'description' => __( 'Repository in owner/repo format (e.g., Mumega-com/mcp-for-wp). Leave empty to disable GitHub integration.', 'mumcp' ),
+				'description' => __( 'Repository in owner/repo format (e.g., Mumega-com/mcp-for-wp). Leave empty to disable GitHub integration.', 'mumega-mcp' ),
 				'placeholder' => 'owner/repo',
 			)
 		);
@@ -314,7 +314,7 @@ class Mcpwp_Settings {
 
 		add_settings_field(
 			'action_log_retention_days',
-			__( 'Action Log Retention (days)', 'mumcp' ),
+			__( 'Action Log Retention (days)', 'mumega-mcp' ),
 			array( $this, 'render_action_log_retention_field' ),
 			'mcpwp_settings',
 			'mcpwp_general_section'
@@ -333,14 +333,14 @@ class Mcpwp_Settings {
 
 		add_settings_section(
 			'mcpwp_white_label_section',
-			__( 'White-Label & Chat Widget', 'mumcp' ),
+			__( 'White-Label & Chat Widget', 'mumega-mcp' ),
 			array( $this, 'render_white_label_section' ),
 			'mcpwp_settings'
 		);
 
 		add_settings_field(
 			'wl_enabled',
-			__( 'Enable White-Label', 'mumcp' ),
+			__( 'Enable White-Label', 'mumega-mcp' ),
 			array( $this, 'render_white_label_enabled_field' ),
 			'mcpwp_settings',
 			'mcpwp_white_label_section'
@@ -348,64 +348,64 @@ class Mcpwp_Settings {
 
 		add_settings_field(
 			'wl_agency_name',
-			__( 'Agency Name', 'mumcp' ),
+			__( 'Agency Name', 'mumega-mcp' ),
 			array( $this, 'render_white_label_text_field' ),
 			'mcpwp_settings',
 			'mcpwp_white_label_section',
 			array(
 				'key'         => 'agency_name',
-				'description' => __( 'Name shown in the chat widget and admin footer.', 'mumcp' ),
-				'placeholder' => __( 'Acme Agency', 'mumcp' ),
+				'description' => __( 'Name shown in the chat widget and admin footer.', 'mumega-mcp' ),
+				'placeholder' => __( 'Acme Agency', 'mumega-mcp' ),
 			)
 		);
 
 		add_settings_field(
 			'wl_logo_url',
-			__( 'Logo URL', 'mumcp' ),
+			__( 'Logo URL', 'mumega-mcp' ),
 			array( $this, 'render_white_label_text_field' ),
 			'mcpwp_settings',
 			'mcpwp_white_label_section',
 			array(
 				'key'         => 'logo_url',
-				'description' => __( 'Public HTTPS URL of your agency logo (shown in chat button). Leave empty to use text only.', 'mumcp' ),
+				'description' => __( 'Public HTTPS URL of your agency logo (shown in chat button). Leave empty to use text only.', 'mumega-mcp' ),
 				'placeholder' => 'https://yoursite.com/logo.png',
 			)
 		);
 
 		add_settings_field(
 			'wl_primary_color',
-			__( 'Primary Color', 'mumcp' ),
+			__( 'Primary Color', 'mumega-mcp' ),
 			array( $this, 'render_white_label_color_field' ),
 			'mcpwp_settings',
 			'mcpwp_white_label_section',
 			array(
 				'key'         => 'primary_color',
-				'description' => __( 'Hex color for chat button and admin accents.', 'mumcp' ),
+				'description' => __( 'Hex color for chat button and admin accents.', 'mumega-mcp' ),
 			)
 		);
 
 		add_settings_field(
 			'wl_chat_greeting',
-			__( 'Chat Greeting', 'mumcp' ),
+			__( 'Chat Greeting', 'mumega-mcp' ),
 			array( $this, 'render_white_label_text_field' ),
 			'mcpwp_settings',
 			'mcpwp_white_label_section',
 			array(
 				'key'         => 'chat_greeting',
-				'description' => __( 'Default greeting shown in the chat widget.', 'mumcp' ),
+				'description' => __( 'Default greeting shown in the chat widget.', 'mumega-mcp' ),
 				'placeholder' => 'Hi! How can I help you today?',
 			)
 		);
 
 		add_settings_field(
 			'wl_hide_branding',
-			__( 'Hide mumcp Branding', 'mumcp' ),
+			__( 'Hide mumcp Branding', 'mumega-mcp' ),
 			array( $this, 'render_white_label_hide_branding_field' ),
 			'mcpwp_settings',
 			'mcpwp_white_label_section',
 			array(
 				'key'         => 'hide_mcpwp_branding',
-				'description' => __( 'Remove "mumcp" labels from admin pages and chat widget.', 'mumcp' ),
+				'description' => __( 'Remove "mumcp" labels from admin pages and chat widget.', 'mumega-mcp' ),
 			)
 		);
 
@@ -422,14 +422,14 @@ class Mcpwp_Settings {
 
 		add_settings_section(
 			'mcpwp_site_context_section',
-			__( 'AI Site Context', 'mumcp' ),
+			__( 'AI Site Context', 'mumega-mcp' ),
 			array( $this, 'render_site_context_section' ),
 			'mcpwp_site_context_settings'
 		);
 
 		add_settings_field(
 			'mcpwp_site_context',
-			__( 'Site Context / AI Brief', 'mumcp' ),
+			__( 'Site Context / AI Brief', 'mumega-mcp' ),
 			array( $this, 'render_site_context_field' ),
 			'mcpwp_site_context_settings',
 			'mcpwp_site_context_section'
@@ -438,34 +438,34 @@ class Mcpwp_Settings {
 		// Rate-limiting section.
 		add_settings_section(
 			'mcpwp_rate_limit_section',
-			__( 'Rate Limiting', 'mumcp' ),
+			__( 'Rate Limiting', 'mumega-mcp' ),
 			array( $this, 'render_rate_limit_section' ),
 			'mcpwp_rate_limit_settings'
 		);
 
 		add_settings_field(
 			'enabled',
-			__( 'Enable Rate Limiting', 'mumcp' ),
+			__( 'Enable Rate Limiting', 'mumega-mcp' ),
 			array( $this, 'render_checkbox_field' ),
 			'mcpwp_rate_limit_settings',
 			'mcpwp_rate_limit_section',
 			array(
 				'option_name' => self::RATE_LIMIT_OPTION_NAME,
 				'id'          => 'enabled',
-				'description' => __( 'Apply request limits per identifier.', 'mumcp' ),
+				'description' => __( 'Apply request limits per identifier.', 'mumega-mcp' ),
 			)
 		);
 
 		add_settings_field(
 			'requests_per_minute',
-			__( 'Requests Per Minute', 'mumcp' ),
+			__( 'Requests Per Minute', 'mumega-mcp' ),
 			array( $this, 'render_number_field' ),
 			'mcpwp_rate_limit_settings',
 			'mcpwp_rate_limit_section',
 			array(
 				'option_name' => self::RATE_LIMIT_OPTION_NAME,
 				'id'          => 'requests_per_minute',
-				'description' => __( 'Maximum requests allowed per minute.', 'mumcp' ),
+				'description' => __( 'Maximum requests allowed per minute.', 'mumega-mcp' ),
 				'min'         => 1,
 				'max'         => 100000,
 			)
@@ -473,14 +473,14 @@ class Mcpwp_Settings {
 
 		add_settings_field(
 			'requests_per_hour',
-			__( 'Requests Per Hour', 'mumcp' ),
+			__( 'Requests Per Hour', 'mumega-mcp' ),
 			array( $this, 'render_number_field' ),
 			'mcpwp_rate_limit_settings',
 			'mcpwp_rate_limit_section',
 			array(
 				'option_name' => self::RATE_LIMIT_OPTION_NAME,
 				'id'          => 'requests_per_hour',
-				'description' => __( 'Maximum requests allowed per hour.', 'mumcp' ),
+				'description' => __( 'Maximum requests allowed per hour.', 'mumega-mcp' ),
 				'min'         => 1,
 				'max'         => 100000,
 			)
@@ -488,14 +488,14 @@ class Mcpwp_Settings {
 
 		add_settings_field(
 			'burst_limit',
-			__( 'Burst Limit (10s)', 'mumcp' ),
+			__( 'Burst Limit (10s)', 'mumega-mcp' ),
 			array( $this, 'render_number_field' ),
 			'mcpwp_rate_limit_settings',
 			'mcpwp_rate_limit_section',
 			array(
 				'option_name' => self::RATE_LIMIT_OPTION_NAME,
 				'id'          => 'burst_limit',
-				'description' => __( 'Maximum requests allowed in a short burst window.', 'mumcp' ),
+				'description' => __( 'Maximum requests allowed in a short burst window.', 'mumega-mcp' ),
 				'min'         => 1,
 				'max'         => 100000,
 			)
@@ -503,14 +503,14 @@ class Mcpwp_Settings {
 
 		add_settings_field(
 			'whitelist',
-			__( 'Whitelist', 'mumcp' ),
+			__( 'Whitelist', 'mumega-mcp' ),
 			array( $this, 'render_textarea_field' ),
 			'mcpwp_rate_limit_settings',
 			'mcpwp_rate_limit_section',
 			array(
 				'option_name' => self::RATE_LIMIT_OPTION_NAME,
 				'id'          => 'whitelist',
-				'description' => __( 'Comma or newline-separated identifiers that bypass limits.', 'mumcp' ),
+				'description' => __( 'Comma or newline-separated identifiers that bypass limits.', 'mumega-mcp' ),
 				'placeholder' => "127.0.0.1\nkey:example-id",
 			)
 		);
@@ -738,14 +738,14 @@ class Mcpwp_Settings {
 	 * Render general section.
 	 */
 	public function render_general_section() {
-		echo '<p>' . esc_html__( 'Configure general plugin settings.', 'mumcp' ) . '</p>';
+		echo '<p>' . esc_html__( 'Configure general plugin settings.', 'mumega-mcp' ) . '</p>';
 	}
 
 	/**
 	 * Render rate-limit section.
 	 */
 	public function render_rate_limit_section() {
-		echo '<p>' . esc_html__( 'Configure request throttling and bypass identifiers.', 'mumcp' ) . '</p>';
+		echo '<p>' . esc_html__( 'Configure request throttling and bypass identifiers.', 'mumega-mcp' ) . '</p>';
 	}
 
 	/**
@@ -800,11 +800,11 @@ class Mcpwp_Settings {
 		printf(
 			'<input type="number" name="mcpwp_action_log_retention_days" value="%d" min="1" max="3650" class="small-text" /> %s',
 			(int) $value,
-			esc_html__( 'days', 'mumcp' )
+			esc_html__( 'days', 'mumega-mcp' )
 		);
 		printf(
 			'<p class="description">%s</p>',
-			esc_html__( 'AI action log entries older than this are automatically deleted. Default: 90. Required for EU AI Act compliance (minimum 90 days recommended).', 'mumcp' )
+			esc_html__( 'AI action log entries older than this are automatically deleted. Default: 90. Required for EU AI Act compliance (minimum 90 days recommended).', 'mumega-mcp' )
 		);
 	}
 
@@ -886,7 +886,7 @@ class Mcpwp_Settings {
 		}
 
 		if ( $has_secret ) {
-			printf( '<p class="description">%s</p>', esc_html__( 'A value is already configured.', 'mumcp' ) );
+			printf( '<p class="description">%s</p>', esc_html__( 'A value is already configured.', 'mumega-mcp' ) );
 		}
 	}
 
@@ -894,8 +894,8 @@ class Mcpwp_Settings {
 	 * Render site context section.
 	 */
 	public function render_site_context_section() {
-		echo '<p>' . esc_html__( 'Define your site\'s design rules, style guide, and page structure. This is served to AI assistants when they connect, so they know how to build pages that match your brand.', 'mumcp' ) . '</p>';
-		echo '<p>' . esc_html__( 'This same context is also published publicly at /llms.txt so external AI crawlers and assistants can pick up the site\'s character, key pages, and preferred framing.', 'mumcp' ) . '</p>';
+		echo '<p>' . esc_html__( 'Define your site\'s design rules, style guide, and page structure. This is served to AI assistants when they connect, so they know how to build pages that match your brand.', 'mumega-mcp' ) . '</p>';
+		echo '<p>' . esc_html__( 'This same context is also published publicly at /llms.txt so external AI crawlers and assistants can pick up the site\'s character, key pages, and preferred framing.', 'mumega-mcp' ) . '</p>';
 	}
 
 	/**
@@ -912,13 +912,13 @@ class Mcpwp_Settings {
 		);
 
 		echo '<p class="description">';
-		esc_html_e( 'Write in Markdown. This text is included in the wp_introspect response, available via wp_get_site_context, and published in a public llms.txt summary. AI assistants will use this as their design reference when building or editing pages.', 'mumcp' );
+		esc_html_e( 'Write in Markdown. This text is included in the wp_introspect response, available via wp_get_site_context, and published in a public llms.txt summary. AI assistants will use this as their design reference when building or editing pages.', 'mumega-mcp' );
 		echo '</p>';
 
 		if ( '' !== $updated ) {
 			printf(
 				'<p class="description">%s %s</p>',
-				esc_html__( 'Last updated:', 'mumcp' ),
+				esc_html__( 'Last updated:', 'mumega-mcp' ),
 				esc_html( $updated )
 			);
 		}
@@ -979,22 +979,22 @@ class Mcpwp_Settings {
 				value="1"
 				<?php checked( $enabled ); ?>
 			/>
-			<?php esc_html_e( 'Share anonymous tool-usage data to help improve mumcp', 'mumcp' ); ?>
+			<?php esc_html_e( 'Share anonymous tool-usage data to help improve mumcp', 'mumega-mcp' ); ?>
 		</label>
 		<p class="description">
-			<?php esc_html_e( 'Sends MCP tool names, success/failure status, and execution time to PostHog. No WordPress content or personal data is ever collected.', 'mumcp' ); ?>
-			<a href="https://mumcp.com/privacy" target="_blank" rel="noopener noreferrer"><?php esc_html_e( 'Privacy policy', 'mumcp' ); ?></a>
+			<?php esc_html_e( 'Sends MCP tool names, success/failure status, and execution time to PostHog. No WordPress content or personal data is ever collected.', 'mumega-mcp' ); ?>
+			<a href="https://mumcp.com/privacy" target="_blank" rel="noopener noreferrer"><?php esc_html_e( 'Privacy policy', 'mumega-mcp' ); ?></a>
 		</p>
 		<?php if ( $uuid ) : ?>
 		<p class="description" style="margin-top:8px;">
-			<?php esc_html_e( 'Your site support ID:', 'mumcp' ); ?>
+			<?php esc_html_e( 'Your site support ID:', 'mumega-mcp' ); ?>
 			<code id="mcpwp-site-uuid"><?php echo esc_html( $uuid ); ?></code>
 			<button
 				type="button"
 				class="button button-small"
-				onclick="navigator.clipboard.writeText('<?php echo esc_js( $uuid ); ?>').then(function(){this.textContent='<?php echo esc_js( __( 'Copied!', 'mumcp' ) ); ?>';}.bind(this));"
-			><?php esc_html_e( 'Copy', 'mumcp' ); ?></button>
-			<span class="description"><?php esc_html_e( 'Share this with support when contacting us about your site.', 'mumcp' ); ?></span>
+				onclick="navigator.clipboard.writeText('<?php echo esc_js( $uuid ); ?>').then(function(){this.textContent='<?php echo esc_js( __( 'Copied!', 'mumega-mcp' ) ); ?>';}.bind(this));"
+			><?php esc_html_e( 'Copy', 'mumega-mcp' ); ?></button>
+			<span class="description"><?php esc_html_e( 'Share this with support when contacting us about your site.', 'mumega-mcp' ); ?></span>
 		</p>
 		<?php endif; ?>
 		<?php
@@ -1024,11 +1024,11 @@ class Mcpwp_Settings {
 	 * @return void
 	 */
 	public function render_white_label_section(): void {
-		echo '<p>' . esc_html__( 'Apply your agency branding to the plugin UI and enable the [mcpwp_chat] shortcode for client-facing chat widgets.', 'mumcp' ) . '</p>';
+		echo '<p>' . esc_html__( 'Apply your agency branding to the plugin UI and enable the [mcpwp_chat] shortcode for client-facing chat widgets.', 'mumega-mcp' ) . '</p>';
 		if ( class_exists( 'Mcpwp_White_Label' ) ) {
 			$s = Mcpwp_White_Label::get_settings();
 			if ( $s['enabled'] && ! empty( $s['agency_name'] ) ) {
-				echo '<p><code>[mcpwp_chat]</code> — ' . esc_html__( 'shortcode is active. Add it to any page to embed the chat widget.', 'mumcp' ) . '</p>';
+				echo '<p><code>[mcpwp_chat]</code> — ' . esc_html__( 'shortcode is active. Add it to any page to embed the chat widget.', 'mumega-mcp' ) . '</p>';
 			}
 		}
 	}
@@ -1044,7 +1044,7 @@ class Mcpwp_Settings {
 		?>
 		<label>
 			<input type="checkbox" name="mcpwp_white_label[enabled]" value="1" <?php checked( $checked ); ?> />
-			<?php esc_html_e( 'Enable white-label branding', 'mumcp' ); ?>
+			<?php esc_html_e( 'Enable white-label branding', 'mumega-mcp' ); ?>
 		</label>
 		<?php
 	}

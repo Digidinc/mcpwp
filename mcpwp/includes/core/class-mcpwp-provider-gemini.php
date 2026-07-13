@@ -74,7 +74,7 @@ class Mcpwp_Provider_Gemini {
 		}
 
 		if ( empty( $response['predictions'][0]['bytesBase64Encoded'] ) ) {
-			return new WP_Error( 'gemini_no_image', __( 'No image returned from Gemini.', 'mumcp' ) );
+			return new WP_Error( 'gemini_no_image', __( 'No image returned from Gemini.', 'mumega-mcp' ) );
 		}
 
 		return array(
@@ -144,7 +144,7 @@ class Mcpwp_Provider_Gemini {
 		}
 
 		if ( empty( $response['candidates'][0]['content']['parts'][0]['text'] ) ) {
-			return new WP_Error( 'gemini_no_response', __( 'No response from Gemini vision.', 'mumcp' ) );
+			return new WP_Error( 'gemini_no_response', __( 'No response from Gemini vision.', 'mumega-mcp' ) );
 		}
 
 		return $response['candidates'][0]['content']['parts'][0]['text'];
@@ -180,7 +180,7 @@ class Mcpwp_Provider_Gemini {
 		}
 
 		if ( empty( $response['candidates'][0]['content']['parts'][0]['text'] ) ) {
-			return new WP_Error( 'gemini_no_response', __( 'No response from Gemini.', 'mumcp' ) );
+			return new WP_Error( 'gemini_no_response', __( 'No response from Gemini.', 'mumega-mcp' ) );
 		}
 
 		return $response['candidates'][0]['content']['parts'][0]['text'];
@@ -214,7 +214,7 @@ class Mcpwp_Provider_Gemini {
 
 		return array(
 			'success' => true,
-			'message' => __( 'Gemini API connection successful.', 'mumcp' ),
+			'message' => __( 'Gemini API connection successful.', 'mumega-mcp' ),
 		);
 	}
 

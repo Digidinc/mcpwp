@@ -29,7 +29,7 @@ class Mcpwp_Integrations_Admin {
 	 */
 	public function render() {
 		if ( ! current_user_can( 'activate_plugins' ) ) {
-			wp_die( esc_html__( 'You do not have permission to access this page.', 'mumcp' ) );
+			wp_die( esc_html__( 'You do not have permission to access this page.', 'mumega-mcp' ) );
 		}
 
 		$manager   = Mcpwp_Integration_Manager::get_instance();
@@ -78,7 +78,7 @@ class Mcpwp_Integrations_Admin {
 
 		$provider = isset( $_POST['provider'] ) ? sanitize_key( wp_unslash( $_POST['provider'] ) ) : '';
 		if ( empty( $provider ) ) {
-			wp_send_json_error( array( 'message' => __( 'Provider is required.', 'mumcp' ) ) );
+			wp_send_json_error( array( 'message' => __( 'Provider is required.', 'mumega-mcp' ) ) );
 		}
 
 		$manager = Mcpwp_Integration_Manager::get_instance();
@@ -87,7 +87,7 @@ class Mcpwp_Integrations_Admin {
 		if ( $manager->is_multi_field_provider( $provider ) ) {
 			$config = isset( $_POST['config'] ) ? array_map( 'sanitize_text_field', wp_unslash( (array) $_POST['config'] ) ) : array();
 			if ( empty( $config ) ) {
-				wp_send_json_error( array( 'message' => __( 'Configuration fields are required.', 'mumcp' ) ) );
+				wp_send_json_error( array( 'message' => __( 'Configuration fields are required.', 'mumega-mcp' ) ) );
 			}
 			// Sanitize URL field specifically.
 			if ( isset( $config['url'] ) ) {
@@ -97,15 +97,15 @@ class Mcpwp_Integrations_Admin {
 		} else {
 			$key = isset( $_POST['key'] ) ? sanitize_text_field( wp_unslash( $_POST['key'] ) ) : '';
 			if ( empty( $key ) ) {
-				wp_send_json_error( array( 'message' => __( 'API key is required.', 'mumcp' ) ) );
+				wp_send_json_error( array( 'message' => __( 'API key is required.', 'mumega-mcp' ) ) );
 			}
 			$result = $manager->set_provider_key( $provider, $key );
 		}
 
 		if ( $result ) {
-			wp_send_json_success( array( 'message' => __( 'Configuration saved.', 'mumcp' ) ) );
+			wp_send_json_success( array( 'message' => __( 'Configuration saved.', 'mumega-mcp' ) ) );
 		} else {
-			wp_send_json_error( array( 'message' => __( 'Failed to save configuration.', 'mumcp' ) ) );
+			wp_send_json_error( array( 'message' => __( 'Failed to save configuration.', 'mumega-mcp' ) ) );
 		}
 	}
 
@@ -121,13 +121,13 @@ class Mcpwp_Integrations_Admin {
 
 		$provider = isset( $_POST['provider'] ) ? sanitize_key( wp_unslash( $_POST['provider'] ) ) : '';
 		if ( empty( $provider ) ) {
-			wp_send_json_error( array( 'message' => __( 'Provider is required.', 'mumcp' ) ) );
+			wp_send_json_error( array( 'message' => __( 'Provider is required.', 'mumega-mcp' ) ) );
 		}
 
 		$manager = Mcpwp_Integration_Manager::get_instance();
 		$manager->remove_provider_key( $provider );
 
-		wp_send_json_success( array( 'message' => __( 'API key removed.', 'mumcp' ) ) );
+		wp_send_json_success( array( 'message' => __( 'API key removed.', 'mumega-mcp' ) ) );
 	}
 
 	/**
@@ -142,7 +142,7 @@ class Mcpwp_Integrations_Admin {
 
 		$provider = isset( $_POST['provider'] ) ? sanitize_key( wp_unslash( $_POST['provider'] ) ) : '';
 		if ( empty( $provider ) ) {
-			wp_send_json_error( array( 'message' => __( 'Provider is required.', 'mumcp' ) ) );
+			wp_send_json_error( array( 'message' => __( 'Provider is required.', 'mumega-mcp' ) ) );
 		}
 
 		$manager = Mcpwp_Integration_Manager::get_instance();
@@ -162,7 +162,7 @@ class Mcpwp_Integrations_Admin {
 	 */
 	public function handle_figma_oauth_start() {
 		if ( ! current_user_can( 'activate_plugins' ) ) {
-			wp_die( esc_html__( 'You do not have permission to access this page.', 'mumcp' ) );
+			wp_die( esc_html__( 'You do not have permission to access this page.', 'mumega-mcp' ) );
 		}
 
 		check_admin_referer( 'mcpwp_figma_oauth_start', 'mcpwp_nonce' );

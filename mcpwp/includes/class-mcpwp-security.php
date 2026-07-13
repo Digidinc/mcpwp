@@ -26,7 +26,7 @@ class Mcpwp_Security {
 		if ( empty( $parsed['host'] ) ) {
 			return new WP_Error(
 				'invalid_url',
-				__( 'URL must contain a valid host.', 'mumcp' ),
+				__( 'URL must contain a valid host.', 'mumega-mcp' ),
 				array( 'status' => 400 )
 			);
 		}
@@ -38,7 +38,7 @@ class Mcpwp_Security {
 		if ( in_array( $host, $blocked_hosts, true ) ) {
 			return new WP_Error(
 				'ssrf_blocked',
-				__( 'URLs pointing to localhost are not allowed.', 'mumcp' ),
+				__( 'URLs pointing to localhost are not allowed.', 'mumega-mcp' ),
 				array( 'status' => 403 )
 			);
 		}
@@ -47,7 +47,7 @@ class Mcpwp_Security {
 		if ( preg_match( '/\.(local|internal|localhost|test|invalid|example)$/i', $host ) ) {
 			return new WP_Error(
 				'ssrf_blocked',
-				__( 'URLs pointing to local/internal domains are not allowed.', 'mumcp' ),
+				__( 'URLs pointing to local/internal domains are not allowed.', 'mumega-mcp' ),
 				array( 'status' => 403 )
 			);
 		}
@@ -59,7 +59,7 @@ class Mcpwp_Security {
 		if ( $ip === $host && ! filter_var( $host, FILTER_VALIDATE_IP ) ) {
 			return new WP_Error(
 				'dns_resolution_failed',
-				__( 'Could not resolve hostname.', 'mumcp' ),
+				__( 'Could not resolve hostname.', 'mumega-mcp' ),
 				array( 'status' => 400 )
 			);
 		}
@@ -67,7 +67,7 @@ class Mcpwp_Security {
 		if ( ! self::is_public_ip( $ip ) ) {
 			return new WP_Error(
 				'ssrf_blocked',
-				__( 'URLs pointing to private/reserved IP addresses are not allowed.', 'mumcp' ),
+				__( 'URLs pointing to private/reserved IP addresses are not allowed.', 'mumega-mcp' ),
 				array( 'status' => 403 )
 			);
 		}
@@ -77,7 +77,7 @@ class Mcpwp_Security {
 		if ( ! in_array( $scheme, array( 'http', 'https' ), true ) ) {
 			return new WP_Error(
 				'invalid_scheme',
-				__( 'Only HTTP and HTTPS URLs are allowed.', 'mumcp' ),
+				__( 'Only HTTP and HTTPS URLs are allowed.', 'mumega-mcp' ),
 				array( 'status' => 400 )
 			);
 		}
@@ -155,7 +155,7 @@ class Mcpwp_Security {
 				'payload_too_large',
 				sprintf(
 					/* translators: %s: max size in MB */
-					__( 'JSON payload exceeds maximum size of %s MB.', 'mumcp' ),
+					__( 'JSON payload exceeds maximum size of %s MB.', 'mumega-mcp' ),
 					round( $max_size / 1048576, 1 )
 				),
 				array( 'status' => 413 )
@@ -169,7 +169,7 @@ class Mcpwp_Security {
 				'json_too_deep',
 				sprintf(
 					/* translators: %d: max depth */
-					__( 'JSON nesting exceeds maximum depth of %d levels.', 'mumcp' ),
+					__( 'JSON nesting exceeds maximum depth of %d levels.', 'mumega-mcp' ),
 					$max_depth
 				),
 				array( 'status' => 400 )

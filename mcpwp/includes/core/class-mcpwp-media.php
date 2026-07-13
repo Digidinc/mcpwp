@@ -38,7 +38,7 @@ class Mcpwp_Media {
 		if ( empty( $file['tmp_name'] ) ) {
 			return new WP_Error(
 				'no_file',
-				__( 'No file uploaded.', 'mumcp' ),
+				__( 'No file uploaded.', 'mumega-mcp' ),
 				array( 'status' => 400 )
 			);
 		}
@@ -116,7 +116,7 @@ class Mcpwp_Media {
 		if ( empty( $url ) ) {
 			return new WP_Error(
 				'invalid_url',
-				__( 'Invalid URL provided.', 'mumcp' ),
+				__( 'Invalid URL provided.', 'mumega-mcp' ),
 				array(
 					'status' => 400,
 					'hint'   => 'Provide a fully qualified URL starting with http:// or https://. The URL must point to a publicly accessible file.',
@@ -222,7 +222,7 @@ class Mcpwp_Media {
 		if ( false === $decoded ) {
 			return new WP_Error(
 				'invalid_base64',
-				__( 'Invalid Base64 data.', 'mumcp' ),
+				__( 'Invalid Base64 data.', 'mumega-mcp' ),
 				array(
 					'status' => 400,
 					'hint'   => 'The Base64 data could not be decoded. Ensure the data is properly encoded. If using a data URI prefix (data:image/png;base64,...), it will be stripped automatically.',
@@ -235,7 +235,7 @@ class Mcpwp_Media {
 		if ( strlen( $decoded ) > $max_size ) {
 			return new WP_Error(
 				'file_too_large',
-				__( 'File exceeds maximum size of 10MB.', 'mumcp' ),
+				__( 'File exceeds maximum size of 10MB.', 'mumega-mcp' ),
 				array(
 					'status' => 400,
 					'hint'   => 'The decoded file exceeds the 10MB limit. Use a smaller file, or upload via URL with wp_upload_media_from_url if the server supports larger files.',
@@ -248,7 +248,7 @@ class Mcpwp_Media {
 		if ( empty( $filename ) ) {
 			return new WP_Error(
 				'invalid_filename',
-				__( 'A valid filename is required.', 'mumcp' ),
+				__( 'A valid filename is required.', 'mumega-mcp' ),
 				array( 'status' => 400 )
 			);
 		}
@@ -258,7 +258,7 @@ class Mcpwp_Media {
 		if ( ! $tmp_file ) {
 			return new WP_Error(
 				'tmp_error',
-				__( 'Could not create temporary file.', 'mumcp' ),
+				__( 'Could not create temporary file.', 'mumega-mcp' ),
 				array( 'status' => 500 )
 			);
 		}
@@ -284,7 +284,7 @@ class Mcpwp_Media {
 					'mime_mismatch',
 					sprintf(
 						/* translators: 1: supplied mime type, 2: detected mime type */
-						__( 'Supplied mime_type "%1$s" does not match detected type "%2$s". Upload rejected.', 'mumcp' ),
+						__( 'Supplied mime_type "%1$s" does not match detected type "%2$s". Upload rejected.', 'mumega-mcp' ),
 						$supplied,
 						$mime['type']
 					),
@@ -299,7 +299,7 @@ class Mcpwp_Media {
 			wp_delete_file( $tmp_file );
 			return new WP_Error(
 				'svg_not_allowed',
-				__( 'SVG uploads are blocked (SVGs can contain <script> tags — stored XSS risk). Use PNG or WebP instead. To allow SVGs, install an SVG sanitizer plugin (e.g. "Safe SVG") and upload via the WordPress media library directly.', 'mumcp' ),
+				__( 'SVG uploads are blocked (SVGs can contain <script> tags — stored XSS risk). Use PNG or WebP instead. To allow SVGs, install an SVG sanitizer plugin (e.g. "Safe SVG") and upload via the WordPress media library directly.', 'mumega-mcp' ),
 				array(
 					'status'      => 400,
 					'hint'        => 'Convert the SVG to PNG/WebP for API upload. Inline SVG code can be embedded directly in HTML widgets without uploading.',
@@ -339,7 +339,7 @@ class Mcpwp_Media {
 			wp_delete_file( $tmp_file );
 			return new WP_Error(
 				'move_error',
-				__( 'Could not move file to uploads directory.', 'mumcp' ),
+				__( 'Could not move file to uploads directory.', 'mumega-mcp' ),
 				array( 'status' => 500 )
 			);
 		}
@@ -486,7 +486,7 @@ class Mcpwp_Media {
 		if ( ! $attachment || 'attachment' !== $attachment->post_type ) {
 			return new WP_Error(
 				'not_found',
-				__( 'Attachment not found.', 'mumcp' ),
+				__( 'Attachment not found.', 'mumega-mcp' ),
 				array(
 					'status' => 404,
 					'hint'   => sprintf(
@@ -505,7 +505,7 @@ class Mcpwp_Media {
 		if ( ! $result ) {
 			return new WP_Error(
 				'delete_failed',
-				__( 'Failed to delete attachment.', 'mumcp' ),
+				__( 'Failed to delete attachment.', 'mumega-mcp' ),
 				array( 'status' => 500 )
 			);
 		}

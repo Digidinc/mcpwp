@@ -1,8 +1,8 @@
 <?php
 /**
- * mumcp
+ * Mumega MCP
  *
- * mumcp — Model Context Protocol for WordPress, by Mumega.
+ * Mumega MCP — Model Context Protocol for WordPress, by Mumega.
  * Expose your WordPress site's functionality to AI assistants like Claude.
  *
  * @package           Mumcp
@@ -11,9 +11,9 @@
  * @license           GPL-2.0-or-later
  *
  * @wordpress-plugin
- * Plugin Name:       mumcp
+ * Plugin Name:       Mumega MCP
  * Plugin URI:        https://mumcp.com/
- * Description:       mumcp — Model Context Protocol for WordPress, by Mumega. Connect your site to AI assistants like Claude: posts, pages, media, menus, and Elementor through natural language.
+ * Description:       Mumega MCP — Model Context Protocol for WordPress, by Mumega. Connect your site to AI assistants like Claude: posts, pages, media, menus, and Elementor through natural language.
  * x-release-please-start-version
  * Version:           3.4.3
  * x-release-please-end
@@ -21,7 +21,7 @@
  * Requires PHP:      7.4
  * Author:            Mumega
  * Author URI:        https://mumega.com/
- * Text Domain:       mumcp
+ * Text Domain:       mumega-mcp
  * Domain Path:       /languages
  * License:           GPL v2 or later
  * License URI:       https://www.gnu.org/licenses/gpl-2.0.html
@@ -36,6 +36,11 @@ if ( ! defined( 'ABSPATH' ) ) {
  * Plugin version.
  */
 define( 'MCPWP_VERSION', '3.4.3' ); // x-release-please-version
+
+/**
+ * This branch is the physically free WordPress.org product.
+ */
+define( 'MCPWP_WPORG_BUILD', true );
 
 /**
  * Plugin directory path.
@@ -133,7 +138,7 @@ if ( ! function_exists( 'mcpwp_php_version_notice' ) ) {
 			<?php
 			printf(
 				/* translators: 1: Required PHP version 2: Current PHP version */
-				esc_html__( 'mumcp requires PHP %1$s or higher. You are running PHP %2$s.', 'mumcp' ),
+				esc_html__( 'Mumega MCP requires PHP %1$s or higher. You are running PHP %2$s.', 'mumega-mcp' ),
 				esc_html( MCPWP_MIN_PHP_VERSION ),
 				esc_html( PHP_VERSION )
 			);
@@ -156,7 +161,7 @@ if ( ! function_exists( 'mcpwp_wp_version_notice' ) ) {
 			<?php
 			printf(
 				/* translators: 1: Required WP version 2: Current WP version */
-				esc_html__( 'mumcp requires WordPress %1$s or higher. You are running WordPress %2$s.', 'mumcp' ),
+				esc_html__( 'Mumega MCP requires WordPress %1$s or higher. You are running WordPress %2$s.', 'mumega-mcp' ),
 				esc_html( MCPWP_MIN_WP_VERSION ),
 				esc_html( $wp_version )
 			);

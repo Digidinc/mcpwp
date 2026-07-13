@@ -45,20 +45,20 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 						$this->get_pagination_args(),
 						array(
 							'status' => array(
-								'description' => __( 'Page status filter.', 'mumcp' ),
+								'description' => __( 'Page status filter.', 'mumega-mcp' ),
 								'type'        => 'string',
 								'default'     => 'any',
 							),
 							'parent' => array(
-								'description' => __( 'Parent page ID.', 'mumcp' ),
+								'description' => __( 'Parent page ID.', 'mumega-mcp' ),
 								'type'        => 'integer',
 							),
 							'ids'    => array(
-								'description' => __( 'Comma-separated page IDs to fetch.', 'mumcp' ),
+								'description' => __( 'Comma-separated page IDs to fetch.', 'mumega-mcp' ),
 								'type'        => 'string',
 							),
 							'fields' => array(
-								'description' => __( 'Comma-separated field names to return (e.g. id,title,word_count,content).', 'mumcp' ),
+								'description' => __( 'Comma-separated field names to return (e.g. id,title,word_count,content).', 'mumega-mcp' ),
 								'type'        => 'string',
 							),
 						)
@@ -70,27 +70,27 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'title'    => array(
-							'description' => __( 'Page title.', 'mumcp' ),
+							'description' => __( 'Page title.', 'mumega-mcp' ),
 							'type'        => 'string',
 							'required'    => true,
 						),
 						'content'  => array(
-							'description' => __( 'Page content.', 'mumcp' ),
+							'description' => __( 'Page content.', 'mumega-mcp' ),
 							'type'        => 'string',
 							'default'     => '',
 						),
 						'status'   => array(
-							'description' => __( 'Page status.', 'mumcp' ),
+							'description' => __( 'Page status.', 'mumega-mcp' ),
 							'type'        => 'string',
 							'enum'        => array( 'publish', 'draft', 'pending', 'private' ),
 							'default'     => 'draft',
 						),
 						'parent'   => array(
-							'description' => __( 'Parent page ID.', 'mumcp' ),
+							'description' => __( 'Parent page ID.', 'mumega-mcp' ),
 							'type'        => 'integer',
 						),
 						'template' => array(
-							'description' => __( 'Page template.', 'mumcp' ),
+							'description' => __( 'Page template.', 'mumega-mcp' ),
 							'type'        => 'string',
 						),
 					),
@@ -119,7 +119,7 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'force' => array(
-							'description' => __( 'Bypass trash and force deletion.', 'mumcp' ),
+							'description' => __( 'Bypass trash and force deletion.', 'mumega-mcp' ),
 							'type'        => 'boolean',
 							'default'     => false,
 						),
@@ -139,7 +139,7 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'pages' => array(
-							'description' => __( 'Array of page objects to create.', 'mumcp' ),
+							'description' => __( 'Array of page objects to create.', 'mumega-mcp' ),
 							'type'        => 'array',
 							'required'    => true,
 						),
@@ -151,7 +151,7 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'pages' => array(
-							'description' => __( 'Array of page objects to update. Each must have id.', 'mumcp' ),
+							'description' => __( 'Array of page objects to update. Each must have id.', 'mumega-mcp' ),
 							'type'        => 'array',
 							'required'    => true,
 						),
@@ -171,11 +171,11 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'title'  => array(
-							'description' => __( 'Title for the cloned page. Defaults to original title with (Copy) suffix.', 'mumcp' ),
+							'description' => __( 'Title for the cloned page. Defaults to original title with (Copy) suffix.', 'mumega-mcp' ),
 							'type'        => 'string',
 						),
 						'status' => array(
-							'description' => __( 'Status for the cloned page.', 'mumcp' ),
+							'description' => __( 'Status for the cloned page.', 'mumega-mcp' ),
 							'type'        => 'string',
 							'enum'        => array( 'publish', 'draft', 'pending', 'private' ),
 							'default'     => 'draft',
@@ -209,7 +209,7 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'template' => array(
-							'description' => __( 'Template slug (e.g., default, elementor_header_footer, elementor_canvas).', 'mumcp' ),
+							'description' => __( 'Template slug (e.g., default, elementor_header_footer, elementor_canvas).', 'mumega-mcp' ),
 							'type'        => 'string',
 							'required'    => true,
 						),
@@ -355,7 +355,7 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 		if ( ! $page || 'page' !== $page->post_type ) {
 			return $this->error_response(
 				'not_found',
-				__( 'Page not found.', 'mumcp' ),
+				__( 'Page not found.', 'mumega-mcp' ),
 				404,
 				array( 'id' => $page_id )
 			);
@@ -395,7 +395,7 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 		if ( ! $page || 'page' !== $page->post_type ) {
 			return $this->error_response(
 				'not_found',
-				__( 'Page not found.', 'mumcp' ),
+				__( 'Page not found.', 'mumega-mcp' ),
 				404,
 				array( 'id' => $page_id )
 			);
@@ -406,7 +406,7 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 
 		if ( empty( $title ) ) {
 			/* translators: %s: original page title */
-			$title = sprintf( __( '%s (Copy)', 'mumcp' ), $page->post_title );
+			$title = sprintf( __( '%s (Copy)', 'mumega-mcp' ), $page->post_title );
 		}
 
 		// Create the clone.
@@ -475,7 +475,7 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 		if ( ! $page ) {
 			return $this->error_response(
 				'not_found',
-				__( 'Page not found.', 'mumcp' ),
+				__( 'Page not found.', 'mumega-mcp' ),
 				404,
 				array( 'id' => $slug )
 			);
@@ -504,7 +504,7 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 		$formatted = array(
 			array(
 				'slug' => 'default',
-				'name' => __( 'Default Template', 'mumcp' ),
+				'name' => __( 'Default Template', 'mumega-mcp' ),
 			),
 		);
 
@@ -535,11 +535,11 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 		$pages_data = $request->get_param( 'pages' );
 
 		if ( ! is_array( $pages_data ) || empty( $pages_data ) ) {
-			return $this->error_response( 'invalid_pages', __( 'Pages must be a non-empty array.', 'mumcp' ), 400 );
+			return $this->error_response( 'invalid_pages', __( 'Pages must be a non-empty array.', 'mumega-mcp' ), 400 );
 		}
 
 		if ( count( $pages_data ) > 50 ) {
-			return $this->error_response( 'too_many_pages', __( 'Maximum 50 pages per batch.', 'mumcp' ), 400 );
+			return $this->error_response( 'too_many_pages', __( 'Maximum 50 pages per batch.', 'mumega-mcp' ), 400 );
 		}
 
 		$created = array();
@@ -549,7 +549,7 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 			if ( empty( $page_item['title'] ) ) {
 				$errors[] = array(
 					'index'   => $index,
-					'message' => __( 'Title is required.', 'mumcp' ),
+					'message' => __( 'Title is required.', 'mumega-mcp' ),
 				);
 				continue;
 			}
@@ -589,11 +589,11 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 		$pages_data = $request->get_param( 'pages' );
 
 		if ( ! is_array( $pages_data ) || empty( $pages_data ) ) {
-			return $this->error_response( 'invalid_pages', __( 'Pages must be a non-empty array.', 'mumcp' ), 400 );
+			return $this->error_response( 'invalid_pages', __( 'Pages must be a non-empty array.', 'mumega-mcp' ), 400 );
 		}
 
 		if ( count( $pages_data ) > 50 ) {
-			return $this->error_response( 'too_many_pages', __( 'Maximum 50 pages per batch.', 'mumcp' ), 400 );
+			return $this->error_response( 'too_many_pages', __( 'Maximum 50 pages per batch.', 'mumega-mcp' ), 400 );
 		}
 
 		$updated = array();
@@ -603,7 +603,7 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 			if ( empty( $page_item['id'] ) ) {
 				$errors[] = array(
 					'index'   => $index,
-					'message' => __( 'id is required for each page.', 'mumcp' ),
+					'message' => __( 'id is required for each page.', 'mumega-mcp' ),
 				);
 				continue;
 			}

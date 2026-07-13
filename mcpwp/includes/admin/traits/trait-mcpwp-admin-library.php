@@ -18,7 +18,7 @@ trait Mcpwp_Admin_Library_Trait {
 	 */
 	public function render_library_page() {
 		if ( ! current_user_can( 'activate_plugins' ) ) {
-			wp_die( esc_html__( 'You do not have permission to access this page.', 'mumcp' ) );
+			wp_die( esc_html__( 'You do not have permission to access this page.', 'mumega-mcp' ) );
 		}
 
 		// Handle library form actions.
@@ -100,7 +100,7 @@ trait Mcpwp_Admin_Library_Trait {
 			add_settings_error(
 				'mcpwp_messages',
 				'mcpwp_library_archetype_missing',
-				__( 'Elementor Pro handler is not available.', 'mumcp' ),
+				__( 'Elementor Pro handler is not available.', 'mumega-mcp' ),
 				'error'
 			);
 			return;
@@ -117,7 +117,7 @@ trait Mcpwp_Admin_Library_Trait {
 			add_settings_error(
 				'mcpwp_messages',
 				'mcpwp_library_archetype_invalid_id',
-				__( 'Enter a valid Elementor template ID to promote as an archetype.', 'mumcp' ),
+				__( 'Enter a valid Elementor template ID to promote as an archetype.', 'mumega-mcp' ),
 				'error'
 			);
 			return;
@@ -151,7 +151,7 @@ trait Mcpwp_Admin_Library_Trait {
 			'mcpwp_library_archetype_saved',
 			sprintf(
 				/* translators: %s: template title */
-				__( 'Saved archetype: %s', 'mumcp' ),
+				__( 'Saved archetype: %s', 'mumega-mcp' ),
 				isset( $result['title'] ) ? $result['title'] : (string) $template_id
 			),
 			'updated'
@@ -168,7 +168,7 @@ trait Mcpwp_Admin_Library_Trait {
 			add_settings_error(
 				'mcpwp_messages',
 				'mcpwp_library_part_missing',
-				__( 'Elementor Pro handler is not available.', 'mumcp' ),
+				__( 'Elementor Pro handler is not available.', 'mumega-mcp' ),
 				'error'
 			);
 			return;
@@ -184,7 +184,7 @@ trait Mcpwp_Admin_Library_Trait {
 			add_settings_error(
 				'mcpwp_messages',
 				'mcpwp_library_part_invalid_id',
-				__( 'Enter a valid Elementor template ID to promote as a reusable part.', 'mumcp' ),
+				__( 'Enter a valid Elementor template ID to promote as a reusable part.', 'mumega-mcp' ),
 				'error'
 			);
 			return;
@@ -217,7 +217,7 @@ trait Mcpwp_Admin_Library_Trait {
 			'mcpwp_library_part_saved',
 			sprintf(
 				/* translators: %s: template title */
-				__( 'Saved reusable part: %s', 'mumcp' ),
+				__( 'Saved reusable part: %s', 'mumega-mcp' ),
 				isset( $result['title'] ) ? $result['title'] : (string) $template_id
 			),
 			'updated'
@@ -234,7 +234,7 @@ trait Mcpwp_Admin_Library_Trait {
 			add_settings_error(
 				'mcpwp_messages',
 				'mcpwp_library_extract_missing',
-				__( 'Elementor Pro handler is not available.', 'mumcp' ),
+				__( 'Elementor Pro handler is not available.', 'mumega-mcp' ),
 				'error'
 			);
 			return;
@@ -251,7 +251,7 @@ trait Mcpwp_Admin_Library_Trait {
 			add_settings_error(
 				'mcpwp_messages',
 				'mcpwp_library_extract_invalid',
-				__( 'Enter a valid source page ID and Elementor element ID to extract a reusable part.', 'mumcp' ),
+				__( 'Enter a valid source page ID and Elementor element ID to extract a reusable part.', 'mumega-mcp' ),
 				'error'
 			);
 			return;
@@ -284,7 +284,7 @@ trait Mcpwp_Admin_Library_Trait {
 			'mcpwp_library_extract_saved',
 			sprintf(
 				/* translators: %s: part title */
-				__( 'Extracted reusable part: %s', 'mumcp' ),
+				__( 'Extracted reusable part: %s', 'mumega-mcp' ),
 				isset( $result['title'] ) ? $result['title'] : ''
 			),
 			'updated'
@@ -369,7 +369,7 @@ trait Mcpwp_Admin_Library_Trait {
 			'mcpwp_library_archetype_page_created',
 			sprintf(
 				/* translators: 1: page title 2: edit URL */
-				__( 'Created draft page: %1$s. <a href="%2$s">Open in Elementor</a>.', 'mumcp' ),
+				__( 'Created draft page: %1$s. <a href="%2$s">Open in Elementor</a>.', 'mumega-mcp' ),
 				esc_html( isset( $result['title'] ) ? $result['title'] : '' ),
 				esc_url( isset( $result['edit_url'] ) ? $result['edit_url'] : admin_url() )
 			),
@@ -422,7 +422,7 @@ trait Mcpwp_Admin_Library_Trait {
 			'mcpwp_library_part_applied',
 			sprintf(
 				/* translators: 1: page title 2: edit URL */
-				__( 'Updated page: %1$s. <a href="%2$s">Open page</a>.', 'mumcp' ),
+				__( 'Updated page: %1$s. <a href="%2$s">Open page</a>.', 'mumega-mcp' ),
 				esc_html( $page_title ? $page_title : '#' . $page_id ),
 				esc_url( $page_edit )
 			),
@@ -466,7 +466,7 @@ trait Mcpwp_Admin_Library_Trait {
 		add_settings_error(
 			'mcpwp_messages',
 			'mcpwp_library_archetype_demoted',
-			__( 'Archetype metadata removed from the template.', 'mumcp' ),
+			__( 'Archetype metadata removed from the template.', 'mumega-mcp' ),
 			'updated'
 		);
 	}
@@ -509,7 +509,7 @@ trait Mcpwp_Admin_Library_Trait {
 		add_settings_error(
 			'mcpwp_messages',
 			'mcpwp_library_part_demoted',
-			__( 'Reusable part metadata removed from the template.', 'mumcp' ),
+			__( 'Reusable part metadata removed from the template.', 'mumega-mcp' ),
 			'updated'
 		);
 	}
@@ -560,8 +560,8 @@ trait Mcpwp_Admin_Library_Trait {
 			'mcpwp_library_product_archetype_created',
 			sprintf(
 				/* translators: %s: archetype name */
-				__( 'Saved product archetype: %s', 'mumcp' ),
-				isset( $data['name'] ) ? $data['name'] : __( 'Untitled archetype', 'mumcp' )
+				__( 'Saved product archetype: %s', 'mumega-mcp' ),
+				isset( $data['name'] ) ? $data['name'] : __( 'Untitled archetype', 'mumega-mcp' )
 			),
 			'updated'
 		);
@@ -611,8 +611,8 @@ trait Mcpwp_Admin_Library_Trait {
 			'mcpwp_library_product_created',
 			sprintf(
 				/* translators: 1: product name 2: edit URL */
-				__( 'Created draft product: %1$s. <a href="%2$s">Open product</a>.', 'mumcp' ),
-				esc_html( isset( $product['name'] ) ? $product['name'] : __( 'New Product', 'mumcp' ) ),
+				__( 'Created draft product: %1$s. <a href="%2$s">Open product</a>.', 'mumega-mcp' ),
+				esc_html( isset( $product['name'] ) ? $product['name'] : __( 'New Product', 'mumega-mcp' ) ),
 				esc_url( $edit_url )
 			),
 			'updated'
@@ -656,7 +656,7 @@ trait Mcpwp_Admin_Library_Trait {
 		add_settings_error(
 			'mcpwp_messages',
 			'mcpwp_library_product_archetype_deleted',
-			__( 'Product archetype removed from the library.', 'mumcp' ),
+			__( 'Product archetype removed from the library.', 'mumega-mcp' ),
 			'updated'
 		);
 	}
@@ -725,8 +725,8 @@ trait Mcpwp_Admin_Library_Trait {
 			'mcpwp_library_design_reference_created',
 			sprintf(
 				/* translators: %s: design reference title */
-				__( 'Saved design reference: %s', 'mumcp' ),
-				isset( $result['title'] ) ? $result['title'] : __( 'Untitled reference', 'mumcp' )
+				__( 'Saved design reference: %s', 'mumega-mcp' ),
+				isset( $result['title'] ) ? $result['title'] : __( 'Untitled reference', 'mumega-mcp' )
 			),
 			'updated'
 		);
@@ -854,7 +854,7 @@ trait Mcpwp_Admin_Library_Trait {
 			'mcpwp_library_design_reference_page_created',
 			sprintf(
 				/* translators: 1: page title 2: edit URL 3: reusable part count */
-				__( 'Created draft page from design reference: %1$s. <a href="%2$s">Open page</a>. Saved %3$d reusable parts.', 'mumcp' ),
+				__( 'Created draft page from design reference: %1$s. <a href="%2$s">Open page</a>. Saved %3$d reusable parts.', 'mumega-mcp' ),
 				esc_html( get_the_title( $page_id ) ),
 				esc_url( $edit_url ),
 				count( $linked_part_ids )

@@ -30,18 +30,18 @@ class Mcpwp_REST_Site_Taxonomy extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'per_page' => array(
-							'description' => __( 'Results per page.', 'mumcp' ),
+							'description' => __( 'Results per page.', 'mumega-mcp' ),
 							'type'        => 'integer',
 							'default'     => 100,
 							'minimum'     => 1,
 							'maximum'     => 200,
 						),
 						'search'   => array(
-							'description' => __( 'Search term.', 'mumcp' ),
+							'description' => __( 'Search term.', 'mumega-mcp' ),
 							'type'        => 'string',
 						),
 						'parent'   => array(
-							'description' => __( 'Parent category ID.', 'mumcp' ),
+							'description' => __( 'Parent category ID.', 'mumega-mcp' ),
 							'type'        => 'integer',
 						),
 					),
@@ -58,14 +58,14 @@ class Mcpwp_REST_Site_Taxonomy extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'per_page' => array(
-							'description' => __( 'Results per page.', 'mumcp' ),
+							'description' => __( 'Results per page.', 'mumega-mcp' ),
 							'type'        => 'integer',
 							'default'     => 100,
 							'minimum'     => 1,
 							'maximum'     => 200,
 						),
 						'search'   => array(
-							'description' => __( 'Search term.', 'mumcp' ),
+							'description' => __( 'Search term.', 'mumega-mcp' ),
 							'type'        => 'string',
 						),
 					),
@@ -82,25 +82,25 @@ class Mcpwp_REST_Site_Taxonomy extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'taxonomy'    => array(
-							'description' => __( 'Taxonomy name.', 'mumcp' ),
+							'description' => __( 'Taxonomy name.', 'mumega-mcp' ),
 							'type'        => 'string',
 							'required'    => true,
 						),
 						'name'        => array(
-							'description' => __( 'Term name.', 'mumcp' ),
+							'description' => __( 'Term name.', 'mumega-mcp' ),
 							'type'        => 'string',
 							'required'    => true,
 						),
 						'slug'        => array(
-							'description' => __( 'Term slug.', 'mumcp' ),
+							'description' => __( 'Term slug.', 'mumega-mcp' ),
 							'type'        => 'string',
 						),
 						'description' => array(
-							'description' => __( 'Term description.', 'mumcp' ),
+							'description' => __( 'Term description.', 'mumega-mcp' ),
 							'type'        => 'string',
 						),
 						'parent'      => array(
-							'description' => __( 'Parent term ID.', 'mumcp' ),
+							'description' => __( 'Parent term ID.', 'mumega-mcp' ),
 							'type'        => 'integer',
 						),
 					),
@@ -117,20 +117,20 @@ class Mcpwp_REST_Site_Taxonomy extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'taxonomy'    => array(
-							'description' => __( 'Taxonomy name.', 'mumcp' ),
+							'description' => __( 'Taxonomy name.', 'mumega-mcp' ),
 							'type'        => 'string',
 							'required'    => true,
 						),
 						'name'        => array(
-							'description' => __( 'New term name.', 'mumcp' ),
+							'description' => __( 'New term name.', 'mumega-mcp' ),
 							'type'        => 'string',
 						),
 						'slug'        => array(
-							'description' => __( 'New term slug.', 'mumcp' ),
+							'description' => __( 'New term slug.', 'mumega-mcp' ),
 							'type'        => 'string',
 						),
 						'description' => array(
-							'description' => __( 'New term description.', 'mumcp' ),
+							'description' => __( 'New term description.', 'mumega-mcp' ),
 							'type'        => 'string',
 						),
 					),
@@ -141,7 +141,7 @@ class Mcpwp_REST_Site_Taxonomy extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'taxonomy' => array(
-							'description' => __( 'Taxonomy name.', 'mumcp' ),
+							'description' => __( 'Taxonomy name.', 'mumega-mcp' ),
 							'type'        => 'string',
 							'required'    => true,
 						),
@@ -236,7 +236,7 @@ class Mcpwp_REST_Site_Taxonomy extends Mcpwp_REST_API {
 		$name     = sanitize_text_field( $request->get_param( 'name' ) );
 
 		if ( ! taxonomy_exists( $taxonomy ) ) {
-			return $this->error_response( 'invalid_taxonomy', __( 'Taxonomy does not exist.', 'mumcp' ), 400 );
+			return $this->error_response( 'invalid_taxonomy', __( 'Taxonomy does not exist.', 'mumega-mcp' ), 400 );
 		}
 
 		$args = array();
@@ -279,12 +279,12 @@ class Mcpwp_REST_Site_Taxonomy extends Mcpwp_REST_API {
 		$taxonomy = sanitize_key( $request->get_param( 'taxonomy' ) );
 
 		if ( ! taxonomy_exists( $taxonomy ) ) {
-			return $this->error_response( 'invalid_taxonomy', __( 'Taxonomy does not exist.', 'mumcp' ), 400 );
+			return $this->error_response( 'invalid_taxonomy', __( 'Taxonomy does not exist.', 'mumega-mcp' ), 400 );
 		}
 
 		$term = get_term( $term_id, $taxonomy );
 		if ( ! $term || is_wp_error( $term ) ) {
-			return $this->error_response( 'not_found', __( 'Term not found.', 'mumcp' ), 404 );
+			return $this->error_response( 'not_found', __( 'Term not found.', 'mumega-mcp' ), 404 );
 		}
 
 		$args = array();
@@ -299,7 +299,7 @@ class Mcpwp_REST_Site_Taxonomy extends Mcpwp_REST_API {
 		}
 
 		if ( empty( $args ) ) {
-			return $this->error_response( 'no_changes', __( 'No fields to update.', 'mumcp' ), 400 );
+			return $this->error_response( 'no_changes', __( 'No fields to update.', 'mumega-mcp' ), 400 );
 		}
 
 		$result = wp_update_term( $term_id, $taxonomy, $args );
@@ -330,12 +330,12 @@ class Mcpwp_REST_Site_Taxonomy extends Mcpwp_REST_API {
 		$taxonomy = sanitize_key( $request->get_param( 'taxonomy' ) );
 
 		if ( ! taxonomy_exists( $taxonomy ) ) {
-			return $this->error_response( 'invalid_taxonomy', __( 'Taxonomy does not exist.', 'mumcp' ), 400 );
+			return $this->error_response( 'invalid_taxonomy', __( 'Taxonomy does not exist.', 'mumega-mcp' ), 400 );
 		}
 
 		$term = get_term( $term_id, $taxonomy );
 		if ( ! $term || is_wp_error( $term ) ) {
-			return $this->error_response( 'not_found', __( 'Term not found.', 'mumcp' ), 404 );
+			return $this->error_response( 'not_found', __( 'Term not found.', 'mumega-mcp' ), 404 );
 		}
 
 		$result = wp_delete_term( $term_id, $taxonomy );
@@ -345,7 +345,7 @@ class Mcpwp_REST_Site_Taxonomy extends Mcpwp_REST_API {
 		}
 
 		if ( false === $result ) {
-			return $this->error_response( 'delete_failed', __( 'Failed to delete term.', 'mumcp' ), 500 );
+			return $this->error_response( 'delete_failed', __( 'Failed to delete term.', 'mumega-mcp' ), 500 );
 		}
 
 		return $this->success_response(

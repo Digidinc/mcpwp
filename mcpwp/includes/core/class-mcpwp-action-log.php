@@ -122,24 +122,24 @@ class Mcpwp_Action_Log {
 		$entry = self::get_entry( $log_id );
 
 		if ( ! $entry ) {
-			return new WP_Error( 'not_found', __( 'Log entry not found.', 'mumcp' ), array( 'status' => 404 ) );
+			return new WP_Error( 'not_found', __( 'Log entry not found.', 'mumega-mcp' ), array( 'status' => 404 ) );
 		}
 
 		if ( ! $entry['rollback_supported'] ) {
-			return new WP_Error( 'not_rollbackable', __( 'This action does not support rollback.', 'mumcp' ), array( 'status' => 400 ) );
+			return new WP_Error( 'not_rollbackable', __( 'This action does not support rollback.', 'mumega-mcp' ), array( 'status' => 400 ) );
 		}
 
 		if ( $entry['rolled_back'] ) {
-			return new WP_Error( 'already_rolled_back', __( 'This action has already been rolled back.', 'mumcp' ), array( 'status' => 409 ) );
+			return new WP_Error( 'already_rolled_back', __( 'This action has already been rolled back.', 'mumega-mcp' ), array( 'status' => 409 ) );
 		}
 
 		if ( empty( $entry['before_snap'] ) ) {
-			return new WP_Error( 'no_snapshot', __( 'No before-snapshot available for rollback.', 'mumcp' ), array( 'status' => 500 ) );
+			return new WP_Error( 'no_snapshot', __( 'No before-snapshot available for rollback.', 'mumega-mcp' ), array( 'status' => 500 ) );
 		}
 
 		$snap = json_decode( $entry['before_snap'], true );
 		if ( ! is_array( $snap ) ) {
-			return new WP_Error( 'corrupt_snapshot', __( 'Before-snapshot is corrupt.', 'mumcp' ), array( 'status' => 500 ) );
+			return new WP_Error( 'corrupt_snapshot', __( 'Before-snapshot is corrupt.', 'mumega-mcp' ), array( 'status' => 500 ) );
 		}
 
 		$result = self::apply_snapshot( $entry['resource_type'], $snap );
@@ -405,7 +405,7 @@ class Mcpwp_Action_Log {
 		switch ( $resource_type ) {
 			case 'post':
 				if ( empty( $snap['post_id'] ) ) {
-					return new WP_Error( 'invalid_snap', __( 'Snapshot missing post_id.', 'mumcp' ), array( 'status' => 500 ) );
+					return new WP_Error( 'invalid_snap', __( 'Snapshot missing post_id.', 'mumega-mcp' ), array( 'status' => 500 ) );
 				}
 				$result = wp_update_post(
 					array(
@@ -432,7 +432,7 @@ class Mcpwp_Action_Log {
 
 			case 'elementor':
 				if ( empty( $snap['post_id'] ) ) {
-					return new WP_Error( 'invalid_snap', __( 'Snapshot missing post_id.', 'mumcp' ), array( 'status' => 500 ) );
+					return new WP_Error( 'invalid_snap', __( 'Snapshot missing post_id.', 'mumega-mcp' ), array( 'status' => 500 ) );
 				}
 				update_post_meta( (int) $snap['post_id'], '_elementor_data', isset( $snap['elementor_data'] ) ? $snap['elementor_data'] : '' );
 				delete_post_meta( (int) $snap['post_id'], '_elementor_css' );
@@ -440,13 +440,13 @@ class Mcpwp_Action_Log {
 
 			case 'option':
 				if ( empty( $snap['option_key'] ) ) {
-					return new WP_Error( 'invalid_snap', __( 'Snapshot missing option_key.', 'mumcp' ), array( 'status' => 500 ) );
+					return new WP_Error( 'invalid_snap', __( 'Snapshot missing option_key.', 'mumega-mcp' ), array( 'status' => 500 ) );
 				}
 				update_option( sanitize_key( $snap['option_key'] ), isset( $snap['value'] ) ? $snap['value'] : '' );
 				return true;
 
 			default:
-				return new WP_Error( 'unsupported_type', __( 'Rollback not supported for this resource type.', 'mumcp' ), array( 'status' => 400 ) );
+				return new WP_Error( 'unsupported_type', __( 'Rollback not supported for this resource type.', 'mumega-mcp' ), array( 'status' => 400 ) );
 		}
 	}
 

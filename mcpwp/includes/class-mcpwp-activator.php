@@ -155,7 +155,7 @@ class Mcpwp_Activator {
 		$key_id = function_exists( 'wp_generate_uuid4' ) ? wp_generate_uuid4() : uniqid( 'mcpwp_', true );
 		$record = array(
 			'id'           => sanitize_key( (string) $key_id ),
-			'label'        => __( 'Primary API Key', 'mumcp' ),
+			'label'        => __( 'Primary API Key', 'mumega-mcp' ),
 			'hash'         => $legacy_hash,
 			'scopes'       => array( 'read', 'write', 'admin' ),
 			'created_at'   => current_time( 'mysql' ),

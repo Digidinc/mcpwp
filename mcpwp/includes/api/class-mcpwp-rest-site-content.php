@@ -30,32 +30,32 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'query'    => array(
-							'description' => __( 'Search query string.', 'mumcp' ),
+							'description' => __( 'Search query string.', 'mumega-mcp' ),
 							'type'        => 'string',
 						),
 						'q'        => array(
-							'description' => __( 'Alias for query string.', 'mumcp' ),
+							'description' => __( 'Alias for query string.', 'mumega-mcp' ),
 							'type'        => 'string',
 						),
 						'type'     => array(
-							'description' => __( 'Content type filter (post, page, or any).', 'mumcp' ),
+							'description' => __( 'Content type filter (post, page, or any).', 'mumega-mcp' ),
 							'type'        => 'string',
 							'default'     => 'any',
 						),
 						'status'   => array(
-							'description' => __( 'Post status filter.', 'mumcp' ),
+							'description' => __( 'Post status filter.', 'mumega-mcp' ),
 							'type'        => 'string',
 							'default'     => 'publish',
 						),
 						'per_page' => array(
-							'description' => __( 'Results per page.', 'mumcp' ),
+							'description' => __( 'Results per page.', 'mumega-mcp' ),
 							'type'        => 'integer',
 							'default'     => 10,
 							'minimum'     => 1,
 							'maximum'     => 50,
 						),
 						'page'     => array(
-							'description' => __( 'Current page.', 'mumcp' ),
+							'description' => __( 'Current page.', 'mumega-mcp' ),
 							'type'        => 'integer',
 							'default'     => 1,
 							'minimum'     => 1,
@@ -74,20 +74,20 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'id'              => array(
-							'description' => __( 'Post or page ID.', 'mumcp' ),
+							'description' => __( 'Post or page ID.', 'mumega-mcp' ),
 							'type'        => 'integer',
 						),
 						'url'             => array(
-							'description' => __( 'Canonical post/page URL.', 'mumcp' ),
+							'description' => __( 'Canonical post/page URL.', 'mumega-mcp' ),
 							'type'        => 'string',
 						),
 						'type'            => array(
-							'description' => __( 'Expected content type (post, page, or any).', 'mumcp' ),
+							'description' => __( 'Expected content type (post, page, or any).', 'mumega-mcp' ),
 							'type'        => 'string',
 							'default'     => 'any',
 						),
 						'include_content' => array(
-							'description' => __( 'Include full content body in response.', 'mumcp' ),
+							'description' => __( 'Include full content body in response.', 'mumega-mcp' ),
 							'type'        => 'boolean',
 							'default'     => true,
 						),
@@ -105,12 +105,12 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'id'  => array(
-							'description' => __( 'Post or page ID.', 'mumcp' ),
+							'description' => __( 'Post or page ID.', 'mumega-mcp' ),
 							'type'        => 'integer',
 							'required'    => true,
 						),
 						'key' => array(
-							'description' => __( 'Specific meta key to retrieve.', 'mumcp' ),
+							'description' => __( 'Specific meta key to retrieve.', 'mumega-mcp' ),
 							'type'        => 'string',
 						),
 					),
@@ -121,17 +121,17 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'id'    => array(
-							'description' => __( 'Post or page ID.', 'mumcp' ),
+							'description' => __( 'Post or page ID.', 'mumega-mcp' ),
 							'type'        => 'integer',
 							'required'    => true,
 						),
 						'key'   => array(
-							'description' => __( 'Meta key to set.', 'mumcp' ),
+							'description' => __( 'Meta key to set.', 'mumega-mcp' ),
 							'type'        => 'string',
 							'required'    => true,
 						),
 						'value' => array(
-							'description' => __( 'Meta value to set.', 'mumcp' ),
+							'description' => __( 'Meta value to set.', 'mumega-mcp' ),
 							'required'    => true,
 						),
 					),
@@ -148,19 +148,19 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'id'        => array(
-							'description' => __( 'Post or page ID to fetch rendered HTML for.', 'mumcp' ),
+							'description' => __( 'Post or page ID to fetch rendered HTML for.', 'mumega-mcp' ),
 							'type'        => 'integer',
 						),
 						'url'       => array(
-							'description' => __( 'URL to fetch (same-host only for SSRF safety).', 'mumcp' ),
+							'description' => __( 'URL to fetch (same-host only for SSRF safety).', 'mumega-mcp' ),
 							'type'        => 'string',
 						),
 						'selector'  => array(
-							'description' => __( 'CSS selector to extract (tag, .class, or #id).', 'mumcp' ),
+							'description' => __( 'CSS selector to extract (tag, .class, or #id).', 'mumega-mcp' ),
 							'type'        => 'string',
 						),
 						'max_bytes' => array(
-							'description' => __( 'Maximum response size in bytes (default 51200, max 204800).', 'mumcp' ),
+							'description' => __( 'Maximum response size in bytes (default 51200, max 204800).', 'mumega-mcp' ),
 							'type'        => 'integer',
 							'default'     => 51200,
 						),
@@ -178,15 +178,15 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'id'              => array(
-							'description' => __( 'Post or page ID.', 'mumcp' ),
+							'description' => __( 'Post or page ID.', 'mumega-mcp' ),
 							'type'        => 'integer',
 						),
 						'url'             => array(
-							'description' => __( 'URL to fetch (same-host only).', 'mumcp' ),
+							'description' => __( 'URL to fetch (same-host only).', 'mumega-mcp' ),
 							'type'        => 'string',
 						),
 						'include_chrome'  => array(
-							'description' => __( 'Include nav/header/footer text (default false).', 'mumcp' ),
+							'description' => __( 'Include nav/header/footer text (default false).', 'mumega-mcp' ),
 							'type'        => 'boolean',
 							'default'     => false,
 						),
@@ -202,7 +202,7 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 		if ( ! class_exists( 'WP_Query' ) ) {
 			return $this->error_response(
 				'search_unavailable',
-				__( 'Search is not available in this environment.', 'mumcp' ),
+				__( 'Search is not available in this environment.', 'mumega-mcp' ),
 				500
 			);
 		}
@@ -216,7 +216,7 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 		if ( '' === $query ) {
 			return $this->error_response(
 				'missing_query',
-				__( 'Search query is required.', 'mumcp' ),
+				__( 'Search query is required.', 'mumega-mcp' ),
 				400
 			);
 		}
@@ -280,7 +280,7 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 		if ( 0 === $id && '' === $url ) {
 			return $this->error_response(
 				'missing_identifier',
-				__( 'Provide either id or url to fetch content.', 'mumcp' ),
+				__( 'Provide either id or url to fetch content.', 'mumega-mcp' ),
 				400
 			);
 		}
@@ -303,7 +303,7 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 		if ( ! $post instanceof WP_Post ) {
 			return $this->error_response(
 				'not_found',
-				__( 'Content not found.', 'mumcp' ),
+				__( 'Content not found.', 'mumega-mcp' ),
 				404
 			);
 		}
@@ -311,7 +311,7 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 		if ( 'any' !== $type && $type !== $post->post_type ) {
 			return $this->error_response(
 				'not_found',
-				__( 'Content not found for the requested type.', 'mumcp' ),
+				__( 'Content not found for the requested type.', 'mumega-mcp' ),
 				404
 			);
 		}
@@ -416,7 +416,7 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 		$post    = get_post( $post_id );
 
 		if ( ! $post instanceof WP_Post ) {
-			return $this->error_response( 'not_found', __( 'Post not found.', 'mumcp' ), 404 );
+			return $this->error_response( 'not_found', __( 'Post not found.', 'mumega-mcp' ), 404 );
 		}
 
 		$key = $request->get_param( 'key' );
@@ -425,7 +425,7 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			$key = sanitize_key( $key );
 
 			if ( $this->is_blocked_meta_key( $key ) ) {
-				return $this->error_response( 'forbidden_meta_key', __( 'This meta key is not accessible via API.', 'mumcp' ), 403 );
+				return $this->error_response( 'forbidden_meta_key', __( 'This meta key is not accessible via API.', 'mumega-mcp' ), 403 );
 			}
 
 			$value = get_post_meta( $post_id, $key, true );
@@ -464,14 +464,14 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 		$post    = get_post( $post_id );
 
 		if ( ! $post instanceof WP_Post ) {
-			return $this->error_response( 'not_found', __( 'Post not found.', 'mumcp' ), 404 );
+			return $this->error_response( 'not_found', __( 'Post not found.', 'mumega-mcp' ), 404 );
 		}
 
 		$key   = sanitize_key( (string) $request->get_param( 'key' ) );
 		$value = $request->get_param( 'value' );
 
 		if ( '' === $key ) {
-			return $this->error_response( 'missing_key', __( 'Meta key is required.', 'mumcp' ), 400 );
+			return $this->error_response( 'missing_key', __( 'Meta key is required.', 'mumega-mcp' ), 400 );
 		}
 
 		if ( $this->is_blocked_meta_key( $key ) ) {
@@ -479,25 +479,25 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			if ( '_elementor_data' === $key ) {
 				return $this->error_response(
 					'use_elementor_endpoint',
-					__( 'Use wp_set_elementor (POST /elementor/{id}) to set Elementor page data.', 'mumcp' ),
+					__( 'Use wp_set_elementor (POST /elementor/{id}) to set Elementor page data.', 'mumega-mcp' ),
 					400
 				);
 			}
 			if ( '_elementor_page_settings' === $key ) {
 				return $this->error_response(
 					'use_elementor_endpoint',
-					__( 'Use wp_set_elementor with the page_settings parameter to update Elementor page settings.', 'mumcp' ),
+					__( 'Use wp_set_elementor with the page_settings parameter to update Elementor page settings.', 'mumega-mcp' ),
 					400
 				);
 			}
 			if ( 0 === strpos( $key, '_elementor' ) ) {
 				return $this->error_response(
 					'use_elementor_endpoint',
-					__( 'Elementor meta keys cannot be set via wp_set_post_meta. Use the /elementor/{id} endpoints instead.', 'mumcp' ),
+					__( 'Elementor meta keys cannot be set via wp_set_post_meta. Use the /elementor/{id} endpoints instead.', 'mumega-mcp' ),
 					400
 				);
 			}
-			return $this->error_response( 'forbidden_meta_key', __( 'This meta key is not accessible via API.', 'mumcp' ), 403 );
+			return $this->error_response( 'forbidden_meta_key', __( 'This meta key is not accessible via API.', 'mumega-mcp' ), 403 );
 		}
 
 		// Sanitize value — decode JSON objects/arrays to PHP arrays so WordPress
@@ -565,7 +565,7 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 		if ( $post_id ) {
 			$post = get_post( absint( $post_id ) );
 			if ( ! $post ) {
-				return $this->error_response( 'not_found', __( 'Post not found.', 'mumcp' ), 404 );
+				return $this->error_response( 'not_found', __( 'Post not found.', 'mumega-mcp' ), 404 );
 			}
 			if ( 'publish' === $post->post_status ) {
 				$url = get_permalink( $post_id );
@@ -576,7 +576,7 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 		}
 
 		if ( empty( $url ) ) {
-			return $this->error_response( 'missing_param', __( 'Either id or url is required.', 'mumcp' ), 400 );
+			return $this->error_response( 'missing_param', __( 'Either id or url is required.', 'mumega-mcp' ), 400 );
 		}
 
 		// SSRF guard: only allow same-host URLs.
@@ -588,7 +588,7 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 				'ssrf_blocked',
 				sprintf(
 					/* translators: %s: allowed host */
-					__( 'Only same-host URLs are allowed. Expected host: %s', 'mumcp' ),
+					__( 'Only same-host URLs are allowed. Expected host: %s', 'mumega-mcp' ),
 					$site_host
 				),
 				403
@@ -710,7 +710,7 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 		if ( $post_id ) {
 			$post = get_post( absint( $post_id ) );
 			if ( ! $post ) {
-				return $this->error_response( 'not_found', __( 'Post not found.', 'mumcp' ), 404 );
+				return $this->error_response( 'not_found', __( 'Post not found.', 'mumega-mcp' ), 404 );
 			}
 			if ( 'publish' === $post->post_status ) {
 				$url = get_permalink( $post_id );
@@ -721,7 +721,7 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 		}
 
 		if ( empty( $url ) ) {
-			return $this->error_response( 'missing_param', __( 'Either id or url is required.', 'mumcp' ), 400 );
+			return $this->error_response( 'missing_param', __( 'Either id or url is required.', 'mumega-mcp' ), 400 );
 		}
 
 		// SSRF guard: same-host only.
@@ -731,7 +731,7 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			return $this->error_response(
 				'ssrf_blocked',
 				/* translators: %s: expected hostname of this site */
-				sprintf( __( 'Only same-host URLs allowed. Expected: %s', 'mumcp' ), $site_host ),
+				sprintf( __( 'Only same-host URLs allowed. Expected: %s', 'mumega-mcp' ), $site_host ),
 				403
 			);
 		}
@@ -756,7 +756,7 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			return $this->error_response(
 				'fetch_error',
 				/* translators: %d: HTTP status code returned by the page */
-				sprintf( __( 'Page returned HTTP %d.', 'mumcp' ), $status_code ),
+				sprintf( __( 'Page returned HTTP %d.', 'mumega-mcp' ), $status_code ),
 				502
 			);
 		}

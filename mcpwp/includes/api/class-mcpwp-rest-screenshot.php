@@ -42,37 +42,37 @@ class Mcpwp_REST_Screenshot extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'url'           => array(
-							'description' => __( 'URL to screenshot.', 'mumcp' ),
+							'description' => __( 'URL to screenshot.', 'mumega-mcp' ),
 							'type'        => 'string',
 							'required'    => true,
 							'format'      => 'uri',
 						),
 						'width'         => array(
-							'description' => __( 'Screenshot width (320-1920).', 'mumcp' ),
+							'description' => __( 'Screenshot width (320-1920).', 'mumega-mcp' ),
 							'type'        => 'integer',
 							'default'     => 1280,
 						),
 						'height'        => array(
-							'description' => __( 'Screenshot height (240-1440).', 'mumcp' ),
+							'description' => __( 'Screenshot height (240-1440).', 'mumega-mcp' ),
 							'type'        => 'integer',
 							'default'     => 960,
 						),
 						'save_to_media' => array(
-							'description' => __( 'Also save screenshot to media library.', 'mumcp' ),
+							'description' => __( 'Also save screenshot to media library.', 'mumega-mcp' ),
 							'type'        => 'boolean',
 							'default'     => false,
 						),
 						'inline'        => array(
-							'description' => __( 'Return raw base64 image data in the response. Off by default: screenshots are saved to the media library and returned as a URL, because inline base64 (500KB+) overflows AI-client contexts.', 'mumcp' ),
+							'description' => __( 'Return raw base64 image data in the response. Off by default: screenshots are saved to the media library and returned as a URL, because inline base64 (500KB+) overflows AI-client contexts.', 'mumega-mcp' ),
 							'type'        => 'boolean',
 							'default'     => false,
 						),
 						'title'         => array(
-							'description' => __( 'Title for saved media.', 'mumcp' ),
+							'description' => __( 'Title for saved media.', 'mumega-mcp' ),
 							'type'        => 'string',
 						),
 						'webhook_url'   => array(
-							'description' => __( 'Webhook URL to notify when screenshot is ready (async mode).', 'mumcp' ),
+							'description' => __( 'Webhook URL to notify when screenshot is ready (async mode).', 'mumega-mcp' ),
 							'type'        => 'string',
 							'format'      => 'uri',
 							'required'    => false,
@@ -139,7 +139,7 @@ class Mcpwp_REST_Screenshot extends Mcpwp_REST_API {
 					array(
 						'status'  => 'ready',
 						'service' => 'cloudflare-browser',
-						'message' => __( 'Screenshot captured and webhook fired.', 'mumcp' ),
+						'message' => __( 'Screenshot captured and webhook fired.', 'mumega-mcp' ),
 						'media'   => isset( $result['media'] ) ? $result['media'] : null,
 					)
 				);
@@ -158,7 +158,7 @@ class Mcpwp_REST_Screenshot extends Mcpwp_REST_API {
 					array(
 						'status'         => 'pending',
 						'screenshot_url' => $result['screenshot_url'],
-						'message'        => __( 'Screenshot queued. Webhook will fire when ready.', 'mumcp' ),
+						'message'        => __( 'Screenshot queued. Webhook will fire when ready.', 'mumega-mcp' ),
 					)
 				);
 			}

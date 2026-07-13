@@ -39,7 +39,7 @@ class Mcpwp_Approvals {
 	public static function create_post_content_request( $post_id, $after_content, $args = array() ) {
 		$post = get_post( $post_id );
 		if ( ! $post ) {
-			return new WP_Error( 'not_found', __( 'Post not found.', 'mumcp' ), array( 'status' => 404 ) );
+			return new WP_Error( 'not_found', __( 'Post not found.', 'mumega-mcp' ), array( 'status' => 404 ) );
 		}
 
 		$before_content = (string) $post->post_content;
@@ -90,7 +90,7 @@ class Mcpwp_Approvals {
 			$public,
 			'pending',
 			'medium',
-			__( 'Review approval request.', 'mumcp' )
+			__( 'Review approval request.', 'mumega-mcp' )
 		);
 
 		return $public;
@@ -140,7 +140,7 @@ class Mcpwp_Approvals {
 		$id    = sanitize_key( (string) $id );
 
 		if ( empty( $items[ $id ] ) ) {
-			return new WP_Error( 'approval_not_found', __( 'Approval request not found.', 'mumcp' ), array( 'status' => 404 ) );
+			return new WP_Error( 'approval_not_found', __( 'Approval request not found.', 'mumega-mcp' ), array( 'status' => 404 ) );
 		}
 
 		return self::public_record( $items[ $id ] );
@@ -181,7 +181,7 @@ class Mcpwp_Approvals {
 		}
 
 		if ( 'approved' !== $request['status'] ) {
-			return new WP_Error( 'approval_not_ready', __( 'Approval request must be approved before it can be applied.', 'mumcp' ), array( 'status' => 409 ) );
+			return new WP_Error( 'approval_not_ready', __( 'Approval request must be approved before it can be applied.', 'mumega-mcp' ), array( 'status' => 409 ) );
 		}
 
 		$result = self::apply_payload( $request, 'payload' );
@@ -200,7 +200,7 @@ class Mcpwp_Approvals {
 			$public,
 			'applied',
 			'medium',
-			__( 'Monitor applied change and keep rollback available.', 'mumcp' )
+			__( 'Monitor applied change and keep rollback available.', 'mumega-mcp' )
 		);
 
 		return $public;
@@ -219,7 +219,7 @@ class Mcpwp_Approvals {
 		}
 
 		if ( 'applied' !== $request['status'] ) {
-			return new WP_Error( 'approval_not_applied', __( 'Only applied approval requests can be rolled back.', 'mumcp' ), array( 'status' => 409 ) );
+			return new WP_Error( 'approval_not_applied', __( 'Only applied approval requests can be rolled back.', 'mumega-mcp' ), array( 'status' => 409 ) );
 		}
 
 		$result = self::apply_payload( $request, 'rollback' );
@@ -238,7 +238,7 @@ class Mcpwp_Approvals {
 			$public,
 			'rolled_back',
 			'low',
-			__( 'Review rollback result.', 'mumcp' )
+			__( 'Review rollback result.', 'mumega-mcp' )
 		);
 
 		return $public;
@@ -280,7 +280,7 @@ class Mcpwp_Approvals {
 		}
 
 		if ( ! in_array( $request['status'], array( 'pending', 'approved' ), true ) ) {
-			return new WP_Error( 'approval_closed', __( 'Approval request is already closed.', 'mumcp' ), array( 'status' => 409 ) );
+			return new WP_Error( 'approval_closed', __( 'Approval request is already closed.', 'mumega-mcp' ), array( 'status' => 409 ) );
 		}
 
 		$now                     = gmdate( 'c' );
@@ -297,7 +297,7 @@ class Mcpwp_Approvals {
 			$public,
 			$status,
 			'approved' === $status ? 'medium' : 'low',
-			'approved' === $status ? __( 'Apply approved change when ready.', 'mumcp' ) : __( 'No apply action needed.', 'mumcp' )
+			'approved' === $status ? __( 'Apply approved change when ready.', 'mumega-mcp' ) : __( 'No apply action needed.', 'mumega-mcp' )
 		);
 
 		return $public;
@@ -347,13 +347,13 @@ class Mcpwp_Approvals {
 		}
 
 		if ( 'post_content_update' !== $request['action'] || empty( $request['resource']['id'] ) ) {
-			return new WP_Error( 'unsupported_approval_action', __( 'Approval action is not supported yet.', 'mumcp' ), array( 'status' => 400 ) );
+			return new WP_Error( 'unsupported_approval_action', __( 'Approval action is not supported yet.', 'mumega-mcp' ), array( 'status' => 400 ) );
 		}
 
 		$post_id = (int) $request['resource']['id'];
 		$post    = get_post( $post_id );
 		if ( ! $post ) {
-			return new WP_Error( 'not_found', __( 'Post not found.', 'mumcp' ), array( 'status' => 404 ) );
+			return new WP_Error( 'not_found', __( 'Post not found.', 'mumega-mcp' ), array( 'status' => 404 ) );
 		}
 
 		$current_hash  = hash( 'sha256', (string) $post->post_content );
@@ -362,7 +362,7 @@ class Mcpwp_Approvals {
 			: ( isset( $request['rollback']['before_hash'] ) ? (string) $request['rollback']['before_hash'] : '' );
 
 		if ( '' !== $expected_hash && $current_hash !== $expected_hash ) {
-			return new WP_Error( 'approval_content_conflict', __( 'Post content changed after this approval request was created.', 'mumcp' ), array( 'status' => 409 ) );
+			return new WP_Error( 'approval_content_conflict', __( 'Post content changed after this approval request was created.', 'mumega-mcp' ), array( 'status' => 409 ) );
 		}
 
 		$content = 'rollback' === $field
@@ -395,7 +395,7 @@ class Mcpwp_Approvals {
 		$id    = sanitize_key( (string) $id );
 
 		if ( empty( $items[ $id ] ) ) {
-			return new WP_Error( 'approval_not_found', __( 'Approval request not found.', 'mumcp' ), array( 'status' => 404 ) );
+			return new WP_Error( 'approval_not_found', __( 'Approval request not found.', 'mumega-mcp' ), array( 'status' => 404 ) );
 		}
 
 		return $items[ $id ];
@@ -475,7 +475,7 @@ class Mcpwp_Approvals {
 				'staging_push_rollback_unavailable',
 				__(
 					'Staging push rollback is not available automatically. Restore from a host-level backup or push a known-good staging build to live again.',
-					'mumcp'
+					'mumega-mcp'
 				),
 				array( 'status' => 400 )
 			);
@@ -484,7 +484,7 @@ class Mcpwp_Approvals {
 		if ( ! class_exists( 'Mcpwp_Staging' ) ) {
 			return new WP_Error(
 				'staging_class_unavailable',
-				__( 'Staging module is not available. Ensure the Pro module is active.', 'mumcp' ),
+				__( 'Staging module is not available. Ensure the Pro module is active.', 'mumega-mcp' ),
 				array( 'status' => 500 )
 			);
 		}
@@ -499,7 +499,7 @@ class Mcpwp_Approvals {
 		if ( '' === $source || '' === $destination ) {
 			return new WP_Error(
 				'staging_push_missing_params',
-				__( 'Staging push approval is missing source or destination environment ID.', 'mumcp' ),
+				__( 'Staging push approval is missing source or destination environment ID.', 'mumega-mcp' ),
 				array( 'status' => 400 )
 			);
 		}
@@ -554,7 +554,7 @@ class Mcpwp_Approvals {
 		if ( isset( $result['success'] ) && ! $result['success'] ) {
 			return new WP_Error(
 				'staging_push_failed',
-				isset( $result['message'] ) ? $result['message'] : __( 'Staging push failed.', 'mumcp' ),
+				isset( $result['message'] ) ? $result['message'] : __( 'Staging push failed.', 'mumega-mcp' ),
 				array( 'status' => 502 )
 			);
 		}

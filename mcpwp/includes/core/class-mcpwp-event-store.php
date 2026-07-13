@@ -126,27 +126,27 @@ class Mcpwp_Event_Store {
 		return array(
 			'approval.created' => array(
 				'hook'        => 'mcpwp_approval_created',
-				'description' => __( 'An approval request was created.', 'mumcp' ),
+				'description' => __( 'An approval request was created.', 'mumega-mcp' ),
 			),
 			'approval.approved' => array(
 				'hook'        => 'mcpwp_approval_approved',
-				'description' => __( 'An approval request was approved.', 'mumcp' ),
+				'description' => __( 'An approval request was approved.', 'mumega-mcp' ),
 			),
 			'approval.rejected' => array(
 				'hook'        => 'mcpwp_approval_rejected',
-				'description' => __( 'An approval request was rejected.', 'mumcp' ),
+				'description' => __( 'An approval request was rejected.', 'mumega-mcp' ),
 			),
 			'approval.applied' => array(
 				'hook'        => 'mcpwp_approval_applied',
-				'description' => __( 'An approved change was applied.', 'mumcp' ),
+				'description' => __( 'An approved change was applied.', 'mumega-mcp' ),
 			),
 			'approval.rolled_back' => array(
 				'hook'        => 'mcpwp_approval_rolled_back',
-				'description' => __( 'An applied change was rolled back.', 'mumcp' ),
+				'description' => __( 'An applied change was rolled back.', 'mumega-mcp' ),
 			),
 			'seo.audit_completed' => array(
 				'hook'        => 'mcpwp_seo_audit_completed',
-				'description' => __( 'A stored SEO audit completed.', 'mumcp' ),
+				'description' => __( 'A stored SEO audit completed.', 'mumega-mcp' ),
 			),
 		);
 	}

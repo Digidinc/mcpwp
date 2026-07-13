@@ -63,8 +63,8 @@ class Mcpwp_Content_Coherence {
 		return self::dimension(
 			$configured ? 100 : 55,
 			$configured ? 'pass' : 'warn',
-			$configured ? __( 'Site context is configured.', 'mumcp' ) : __( 'Site context is missing.', 'mumcp' ),
-			$configured ? '' : __( 'Define audience, brand, design rules, and content boundaries.', 'mumcp' )
+			$configured ? __( 'Site context is configured.', 'mumega-mcp' ) : __( 'Site context is missing.', 'mumega-mcp' ),
+			$configured ? '' : __( 'Define audience, brand, design rules, and content boundaries.', 'mumega-mcp' )
 		);
 	}
 
@@ -86,10 +86,10 @@ class Mcpwp_Content_Coherence {
 			$score < 70 ? 'warn' : 'pass',
 			sprintf(
 				/* translators: %d: orphan page count */
-				_n( '%d orphan page found.', '%d orphan pages found.', $orphan_count, 'mumcp' ),
+				_n( '%d orphan page found.', '%d orphan pages found.', $orphan_count, 'mumega-mcp' ),
 				$orphan_count
 			),
-			$orphan_count > 0 ? __( 'Connect orphan pages through menus or contextual internal links.', 'mumcp' ) : ''
+			$orphan_count > 0 ? __( 'Connect orphan pages through menus or contextual internal links.', 'mumega-mcp' ) : ''
 		);
 	}
 
@@ -112,11 +112,11 @@ class Mcpwp_Content_Coherence {
 			$score < 70 ? 'warn' : 'pass',
 			sprintf(
 				/* translators: 1: thin content count, 2: stale content count */
-				__( '%1$d thin and %2$d stale content items found.', 'mumcp' ),
+				__( '%1$d thin and %2$d stale content items found.', 'mumega-mcp' ),
 				$thin_count,
 				$stale_count
 			),
-			( $thin_count + $stale_count ) > 0 ? __( 'Improve thin pages and refresh stale search-facing content.', 'mumcp' ) : ''
+			( $thin_count + $stale_count ) > 0 ? __( 'Improve thin pages and refresh stale search-facing content.', 'mumega-mcp' ) : ''
 		);
 	}
 
@@ -137,11 +137,11 @@ class Mcpwp_Content_Coherence {
 			$errors > 0 ? 'fail' : ( $warnings > 0 ? 'warn' : 'pass' ),
 			sprintf(
 				/* translators: 1: error count, 2: warning count */
-				__( '%1$d SEO errors and %2$d SEO warnings are stored.', 'mumcp' ),
+				__( '%1$d SEO errors and %2$d SEO warnings are stored.', 'mumega-mcp' ),
 				$errors,
 				$warnings
 			),
-			( $errors + $warnings ) > 0 ? __( 'Resolve stored SEO issues by severity before broad content expansion.', 'mumcp' ) : ''
+			( $errors + $warnings ) > 0 ? __( 'Resolve stored SEO issues by severity before broad content expansion.', 'mumega-mcp' ) : ''
 		);
 	}
 
@@ -169,11 +169,11 @@ class Mcpwp_Content_Coherence {
 			$score < 70 ? 'warn' : 'pass',
 			sprintf(
 				/* translators: 1: pending approval count, 2: high-risk event count */
-				__( '%1$d pending approvals and %2$d high-risk recent events.', 'mumcp' ),
+				__( '%1$d pending approvals and %2$d high-risk recent events.', 'mumega-mcp' ),
 				$pending,
 				$high
 			),
-			( $pending + $high ) > 0 ? __( 'Clear pending approvals and review high-risk events before new mutations.', 'mumcp' ) : ''
+			( $pending + $high ) > 0 ? __( 'Clear pending approvals and review high-risk events before new mutations.', 'mumega-mcp' ) : ''
 		);
 	}
 
@@ -238,7 +238,7 @@ class Mcpwp_Content_Coherence {
 			$items[] = array(
 				'priority' => 'low',
 				'code'     => 'continue_supervised_work',
-				'message'  => __( 'Choose the next low-risk supervised improvement from the site-state recommendations.', 'mumcp' ),
+				'message'  => __( 'Choose the next low-risk supervised improvement from the site-state recommendations.', 'mumega-mcp' ),
 				'playbook' => 'seo_audit_triage',
 			);
 		}

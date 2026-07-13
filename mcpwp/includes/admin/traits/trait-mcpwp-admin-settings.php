@@ -18,7 +18,7 @@ trait Mcpwp_Admin_Settings_Trait {
 	 */
 	public function render_settings_page() {
 		if ( ! current_user_can( 'activate_plugins' ) ) {
-			wp_die( esc_html__( 'You do not have permission to access this page.', 'mumcp' ) );
+			wp_die( esc_html__( 'You do not have permission to access this page.', 'mumega-mcp' ) );
 		}
 
 		if ( isset( $_POST['mcpwp_save_site_profile'] ) ) {
@@ -53,7 +53,7 @@ trait Mcpwp_Admin_Settings_Trait {
 		add_settings_error(
 			'mcpwp_messages',
 			'mcpwp_site_profile_saved',
-			__( 'Structured site profile saved and site context regenerated.', 'mumcp' ),
+			__( 'Structured site profile saved and site context regenerated.', 'mumega-mcp' ),
 			'updated'
 		);
 	}

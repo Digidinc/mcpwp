@@ -76,7 +76,7 @@ trait Mcpwp_Api_Auth {
 
 			return new WP_Error(
 				'missing_api_key',
-				__( 'API key is required.', 'mumcp' ),
+				__( 'API key is required.', 'mumega-mcp' ),
 				array(
 					'status' => 401,
 					'hint'   => 'Include your API key in the X-API-Key header or Authorization: Bearer header. Generate keys in WP Admin > mumcp > Settings, or call wp_create_api_key if you have admin access.',
@@ -122,7 +122,7 @@ trait Mcpwp_Api_Auth {
 			if ( ! $has_configured_keys ) {
 				return new WP_Error(
 					'api_not_configured',
-					__( 'API key not configured. Please visit the mumcp settings.', 'mumcp' ),
+					__( 'API key not configured. Please visit the mumcp settings.', 'mumega-mcp' ),
 					array(
 						'status' => 500,
 						'hint'   => 'No API keys have been configured yet. The site admin needs to visit WP Admin > mumcp > Settings to generate an API key.',
@@ -134,7 +134,7 @@ trait Mcpwp_Api_Auth {
 
 			return new WP_Error(
 				'invalid_api_key',
-				__( 'Invalid API key.', 'mumcp' ),
+				__( 'Invalid API key.', 'mumega-mcp' ),
 				array(
 					'status' => 401,
 					'hint'   => 'The provided API key is not valid. Check for typos or whitespace. Keys start with "mcpwp_". Generate a new key in WP Admin > mumcp > Settings.',
@@ -158,7 +158,7 @@ trait Mcpwp_Api_Auth {
 				'insufficient_scope',
 				sprintf(
 					/* translators: %s: scope name */
-					__( 'API key lacks required scope: %s', 'mumcp' ),
+					__( 'API key lacks required scope: %s', 'mumega-mcp' ),
 					$required_scope
 				),
 				array(
@@ -184,7 +184,7 @@ trait Mcpwp_Api_Auth {
 		if ( ! $this->set_api_user_context() ) {
 			return new WP_Error(
 				'api_user_missing',
-				__( 'API user context is not configured. Re-activate mumcp to provision the service account.', 'mumcp' ),
+				__( 'API user context is not configured. Re-activate mumcp to provision the service account.', 'mumega-mcp' ),
 				array(
 					'status' => 500,
 					'hint'   => 'The plugin\'s internal service account is missing. Deactivate and reactivate the mumcp plugin in WP Admin > Plugins to reprovision it.',
@@ -314,7 +314,7 @@ trait Mcpwp_Api_Auth {
 				'forbidden_category',
 				sprintf(
 					/* translators: %s: tool category name */
-					__( 'The "%s" tool category has been disabled by the site administrator.', 'mumcp' ),
+					__( 'The "%s" tool category has been disabled by the site administrator.', 'mumega-mcp' ),
 					$category
 				),
 				array(
@@ -340,7 +340,7 @@ trait Mcpwp_Api_Auth {
 		if ( empty( $api_key ) ) {
 			return new WP_Error(
 				'missing_api_key',
-				__( 'API key is required.', 'mumcp' ),
+				__( 'API key is required.', 'mumega-mcp' ),
 				array( 'status' => 401 )
 			);
 		}
@@ -360,7 +360,7 @@ trait Mcpwp_Api_Auth {
 		if ( ! $matched_key ) {
 			return new WP_Error(
 				'invalid_api_key',
-				__( 'Invalid API key.', 'mumcp' ),
+				__( 'Invalid API key.', 'mumega-mcp' ),
 				array( 'status' => 401 )
 			);
 		}
@@ -371,7 +371,7 @@ trait Mcpwp_Api_Auth {
 				'insufficient_scope',
 				sprintf(
 					/* translators: %s: scope name */
-					__( 'API key lacks required scope: %s', 'mumcp' ),
+					__( 'API key lacks required scope: %s', 'mumega-mcp' ),
 					$required_scope
 				),
 				array( 'status' => 403 )
@@ -386,7 +386,7 @@ trait Mcpwp_Api_Auth {
 		if ( ! $this->set_api_user_context() ) {
 			return new WP_Error(
 				'api_user_missing',
-				__( 'API user context is not configured.', 'mumcp' ),
+				__( 'API user context is not configured.', 'mumega-mcp' ),
 				array( 'status' => 500 )
 			);
 		}
@@ -481,7 +481,7 @@ trait Mcpwp_Api_Auth {
 		if ( empty( $oauth_settings['oauth_enabled'] ) ) {
 			return new WP_Error(
 				'invalid_api_key',
-				__( 'Invalid API key.', 'mumcp' ),
+				__( 'Invalid API key.', 'mumega-mcp' ),
 				array( 'status' => 401 )
 			);
 		}
@@ -503,7 +503,7 @@ trait Mcpwp_Api_Auth {
 			$this->log_auth_failure( $request );
 			return new WP_Error(
 				'invalid_api_key',
-				__( 'Invalid API key.', 'mumcp' ),
+				__( 'Invalid API key.', 'mumega-mcp' ),
 				array( 'status' => 401 )
 			);
 		}
@@ -523,7 +523,7 @@ trait Mcpwp_Api_Auth {
 				'insufficient_scope',
 				sprintf(
 					/* translators: %s: scope name */
-					__( 'API key lacks required scope: %s', 'mumcp' ),
+					__( 'API key lacks required scope: %s', 'mumega-mcp' ),
 					$required_scope
 				),
 				array(
@@ -537,7 +537,7 @@ trait Mcpwp_Api_Auth {
 		if ( ! $this->set_api_user_context() ) {
 			return new WP_Error(
 				'api_user_missing',
-				__( 'API user context is not configured. Re-activate mumcp to provision the service account.', 'mumcp' ),
+				__( 'API user context is not configured. Re-activate mumcp to provision the service account.', 'mumega-mcp' ),
 				array( 'status' => 500 )
 			);
 		}
@@ -1113,7 +1113,7 @@ trait Mcpwp_Api_Auth {
 
 		$record = array(
 			'id'              => sanitize_key( (string) $key_id ),
-			'label'           => '' !== $label ? sanitize_text_field( $label ) : __( 'API Key', 'mumcp' ),
+			'label'           => '' !== $label ? sanitize_text_field( $label ) : __( 'API Key', 'mumega-mcp' ),
 			'hash'            => wp_hash_password( $plain_key ),
 			'scopes'          => $scopes,
 			'role'            => $role,
@@ -1243,7 +1243,7 @@ trait Mcpwp_Api_Auth {
 
 		$migrated = array(
 			'id'           => sanitize_key( function_exists( 'wp_generate_uuid4' ) ? wp_generate_uuid4() : uniqid( 'mcpwp_', true ) ),
-			'label'        => __( 'Primary API Key (migrated)', 'mumcp' ),
+			'label'        => __( 'Primary API Key (migrated)', 'mumega-mcp' ),
 			'hash'         => $legacy_hash,
 			'scopes'       => $this->get_default_api_key_scopes(),
 			'created_at'   => current_time( 'mysql' ),
@@ -1319,7 +1319,7 @@ trait Mcpwp_Api_Auth {
 
 		return array(
 			'id'              => isset( $record['id'] ) ? sanitize_key( (string) $record['id'] ) : '',
-			'label'           => isset( $record['label'] ) ? sanitize_text_field( (string) $record['label'] ) : __( 'API Key', 'mumcp' ),
+			'label'           => isset( $record['label'] ) ? sanitize_text_field( (string) $record['label'] ) : __( 'API Key', 'mumega-mcp' ),
 			'hash'            => isset( $record['hash'] ) ? (string) $record['hash'] : '',
 			'scopes'          => $this->sanitize_scopes( isset( $record['scopes'] ) ? (array) $record['scopes'] : array() ),
 			'role'            => $role,
@@ -1402,28 +1402,28 @@ trait Mcpwp_Api_Auth {
 	public static function get_role_definitions() {
 		return array(
 			'admin'    => array(
-				'label'       => __( 'Admin', 'mumcp' ),
-				'description' => __( 'Full access to all tool categories.', 'mumcp' ),
+				'label'       => __( 'Admin', 'mumega-mcp' ),
+				'description' => __( 'Full access to all tool categories.', 'mumega-mcp' ),
 				'categories'  => array(), // Empty = all categories allowed.
 			),
 			'author'   => array(
-				'label'       => __( 'Author', 'mumcp' ),
-				'description' => __( 'Content writing — pages, posts, media, taxonomy.', 'mumcp' ),
+				'label'       => __( 'Author', 'mumega-mcp' ),
+				'description' => __( 'Content writing — pages, posts, media, taxonomy.', 'mumega-mcp' ),
 				'categories'  => array( 'content', 'media', 'taxonomy' ),
 			),
 			'designer' => array(
-				'label'       => __( 'Designer', 'mumcp' ),
-				'description' => __( 'Visual building — Elementor, Gutenberg, media, site settings.', 'mumcp' ),
+				'label'       => __( 'Designer', 'mumega-mcp' ),
+				'description' => __( 'Visual building — Elementor, Gutenberg, media, site settings.', 'mumega-mcp' ),
 				'categories'  => array( 'elementor', 'elementor-build', 'elementor-templates', 'elementor-theme', 'elementor-info', 'gutenberg', 'media', 'site' ),
 			),
 			'editor'   => array(
-				'label'       => __( 'Editor', 'mumcp' ),
-				'description' => __( 'Content + SEO management.', 'mumcp' ),
+				'label'       => __( 'Editor', 'mumega-mcp' ),
+				'description' => __( 'Content + SEO management.', 'mumega-mcp' ),
 				'categories'  => array( 'content', 'media', 'taxonomy', 'seo', 'elementor', 'elementor-build', 'elementor-templates', 'elementor-theme', 'elementor-info' ),
 			),
 			'custom'   => array(
-				'label'       => __( 'Custom', 'mumcp' ),
-				'description' => __( 'Pick individual tool categories.', 'mumcp' ),
+				'label'       => __( 'Custom', 'mumega-mcp' ),
+				'description' => __( 'Pick individual tool categories.', 'mumega-mcp' ),
 				'categories'  => array(), // User-defined.
 			),
 		);
@@ -1436,20 +1436,20 @@ trait Mcpwp_Api_Auth {
 	 */
 	public static function get_all_tool_category_labels() {
 		return array(
-			'content'    => __( 'Content', 'mumcp' ),
-			'media'      => __( 'Media', 'mumcp' ),
-			'taxonomy'   => __( 'Taxonomy', 'mumcp' ),
-			'elementor'           => __( 'Elementor', 'mumcp' ),
-			'elementor-build'     => __( 'Elementor Build', 'mumcp' ),
-			'elementor-templates' => __( 'Elementor Templates', 'mumcp' ),
-			'elementor-theme'     => __( 'Elementor Theme', 'mumcp' ),
-			'elementor-info'      => __( 'Elementor Info', 'mumcp' ),
-			'gutenberg'  => __( 'Gutenberg', 'mumcp' ),
-			'seo'        => __( 'SEO', 'mumcp' ),
-			'forms'      => __( 'Forms', 'mumcp' ),
-			'site'       => __( 'Site', 'mumcp' ),
-			'admin'      => __( 'Admin', 'mumcp' ),
-			'webhooks'   => __( 'Webhooks', 'mumcp' ),
+			'content'    => __( 'Content', 'mumega-mcp' ),
+			'media'      => __( 'Media', 'mumega-mcp' ),
+			'taxonomy'   => __( 'Taxonomy', 'mumega-mcp' ),
+			'elementor'           => __( 'Elementor', 'mumega-mcp' ),
+			'elementor-build'     => __( 'Elementor Build', 'mumega-mcp' ),
+			'elementor-templates' => __( 'Elementor Templates', 'mumega-mcp' ),
+			'elementor-theme'     => __( 'Elementor Theme', 'mumega-mcp' ),
+			'elementor-info'      => __( 'Elementor Info', 'mumega-mcp' ),
+			'gutenberg'  => __( 'Gutenberg', 'mumega-mcp' ),
+			'seo'        => __( 'SEO', 'mumega-mcp' ),
+			'forms'      => __( 'Forms', 'mumega-mcp' ),
+			'site'       => __( 'Site', 'mumega-mcp' ),
+			'admin'      => __( 'Admin', 'mumega-mcp' ),
+			'webhooks'   => __( 'Webhooks', 'mumega-mcp' ),
 		);
 	}
 
@@ -1672,7 +1672,7 @@ trait Mcpwp_Api_Auth {
 
 		update_option( $this->get_scoped_api_keys_option_name(), $keys );
 
-		$created = $this->create_scoped_api_key( __( 'Primary API Key', 'mumcp' ), $this->get_default_api_key_scopes() );
+		$created = $this->create_scoped_api_key( __( 'Primary API Key', 'mumega-mcp' ), $this->get_default_api_key_scopes() );
 		update_option( 'mcpwp_api_key', wp_hash_password( $created['key'] ) );
 
 		return $created['key'];

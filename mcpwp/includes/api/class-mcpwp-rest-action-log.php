@@ -110,14 +110,14 @@ class Mcpwp_REST_Action_Log extends Mcpwp_REST_API {
 	 */
 	public function get_entry( $request ) {
 		if ( ! class_exists( 'Mcpwp_Action_Log' ) ) {
-			return new WP_Error( 'not_found', __( 'Log entry not found.', 'mumcp' ), array( 'status' => 404 ) );
+			return new WP_Error( 'not_found', __( 'Log entry not found.', 'mumega-mcp' ), array( 'status' => 404 ) );
 		}
 
 		$log_id = sanitize_text_field( (string) $request->get_param( 'log_id' ) );
 		$entry  = Mcpwp_Action_Log::get_entry_public( $log_id );
 
 		if ( ! $entry ) {
-			return new WP_Error( 'not_found', __( 'Log entry not found.', 'mumcp' ), array( 'status' => 404 ) );
+			return new WP_Error( 'not_found', __( 'Log entry not found.', 'mumega-mcp' ), array( 'status' => 404 ) );
 		}
 
 		return new WP_REST_Response( $entry, 200 );
@@ -131,7 +131,7 @@ class Mcpwp_REST_Action_Log extends Mcpwp_REST_API {
 	 */
 	public function rollback_entry( $request ) {
 		if ( ! class_exists( 'Mcpwp_Action_Log' ) ) {
-			return new WP_Error( 'unavailable', __( 'Action log not available.', 'mumcp' ), array( 'status' => 503 ) );
+			return new WP_Error( 'unavailable', __( 'Action log not available.', 'mumega-mcp' ), array( 'status' => 503 ) );
 		}
 
 		$log_id = sanitize_text_field( (string) $request->get_param( 'log_id' ) );

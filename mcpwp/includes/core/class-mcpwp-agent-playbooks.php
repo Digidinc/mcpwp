@@ -57,7 +57,7 @@ class Mcpwp_Agent_Playbooks {
 				'invalid_playbook',
 				sprintf(
 					/* translators: 1: requested playbook name, 2: available playbook names */
-					__( 'Unknown playbook: %1$s. Available playbooks: %2$s', 'mumcp' ),
+					__( 'Unknown playbook: %1$s. Available playbooks: %2$s', 'mumega-mcp' ),
 					$name,
 					implode( ', ', array_keys( $definitions ) )
 				),

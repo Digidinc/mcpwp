@@ -2,8 +2,8 @@
 # This file is distributed under the GPL v2.
 msgid ""
 msgstr ""
-"Project-Id-Version: MCPWP 1.0.0\n"
-"Report-Msgid-Bugs-To: https://wordpress.org/support/plugin/mcpwp\n"
+"Project-Id-Version: Mumega MCP 3.4.3\n"
+"Report-Msgid-Bugs-To: https://wordpress.org/support/plugin/mumega-mcp\n"
 "POT-Creation-Date: 2024-01-01 00:00:00+00:00\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
@@ -12,8 +12,8 @@ msgstr ""
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
 
-#: mcpwp.php:1
-msgid "MCPWP"
+#: mumega-mcp.php:1
+msgid "Mumega MCP"
 msgstr ""
 
 #: includes/admin/class-mcpwp-admin.php

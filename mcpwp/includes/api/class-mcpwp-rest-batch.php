@@ -55,7 +55,7 @@ class Mcpwp_REST_Batch extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'operations' => array(
-							'description' => __( 'Array of operations to execute.', 'mumcp' ),
+							'description' => __( 'Array of operations to execute.', 'mumega-mcp' ),
 							'type'        => 'array',
 							'required'    => true,
 							'items'       => array(
@@ -99,7 +99,7 @@ class Mcpwp_REST_Batch extends Mcpwp_REST_API {
 		if ( ! is_array( $operations ) || empty( $operations ) ) {
 			return $this->error_response(
 				'invalid_operations',
-				__( 'Operations must be a non-empty array.', 'mumcp' ),
+				__( 'Operations must be a non-empty array.', 'mumega-mcp' ),
 				400
 			);
 		}
@@ -110,7 +110,7 @@ class Mcpwp_REST_Batch extends Mcpwp_REST_API {
 				'batch_too_large',
 				sprintf(
 					/* translators: %d: maximum number of operations */
-					__( 'Batch contains too many operations. Maximum %d allowed.', 'mumcp' ),
+					__( 'Batch contains too many operations. Maximum %d allowed.', 'mumega-mcp' ),
 					self::MAX_OPERATIONS
 				),
 				400
@@ -152,7 +152,7 @@ class Mcpwp_REST_Batch extends Mcpwp_REST_API {
 				'status' => 400,
 				'data'   => array(
 					'code'    => 'invalid_operation',
-					'message' => __( 'Operation must be an object.', 'mumcp' ),
+					'message' => __( 'Operation must be an object.', 'mumega-mcp' ),
 				),
 			);
 		}
@@ -168,7 +168,7 @@ class Mcpwp_REST_Batch extends Mcpwp_REST_API {
 				'status' => 400,
 				'data'   => array(
 					'code'    => 'invalid_method',
-					'message' => __( 'Method must be GET, POST, PUT, or DELETE.', 'mumcp' ),
+					'message' => __( 'Method must be GET, POST, PUT, or DELETE.', 'mumega-mcp' ),
 				),
 			);
 		}
@@ -180,7 +180,7 @@ class Mcpwp_REST_Batch extends Mcpwp_REST_API {
 				'status' => 400,
 				'data'   => array(
 					'code'    => 'invalid_path',
-					'message' => __( 'Path must be a non-empty string.', 'mumcp' ),
+					'message' => __( 'Path must be a non-empty string.', 'mumega-mcp' ),
 				),
 			);
 		}

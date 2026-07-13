@@ -343,7 +343,7 @@ class Mcpwp_REST_Integrations extends Mcpwp_REST_API {
 		$result  = $manager->set_provider_key( $provider, $key );
 
 		if ( ! $result ) {
-			return $this->error_response( 'store_failed', __( 'Failed to store API key.', 'mumcp' ) );
+			return $this->error_response( 'store_failed', __( 'Failed to store API key.', 'mumega-mcp' ) );
 		}
 
 		$this->log_activity( 'integrations_store_key', $request, array( 'provider' => $provider ) );
@@ -353,7 +353,7 @@ class Mcpwp_REST_Integrations extends Mcpwp_REST_API {
 				'provider' => $provider,
 				'message'  => sprintf(
 				/* translators: %s: Provider name */
-					__( '%s API key saved.', 'mumcp' ),
+					__( '%s API key saved.', 'mumega-mcp' ),
 					isset( Mcpwp_Integration_Manager::PROVIDERS[ $provider ]['name'] ) ? Mcpwp_Integration_Manager::PROVIDERS[ $provider ]['name'] : $provider
 				),
 			)
@@ -621,7 +621,7 @@ class Mcpwp_REST_Integrations extends Mcpwp_REST_API {
 		$post_id = absint( $request->get_param( 'post_id' ) );
 		$post    = get_post( $post_id );
 		if ( ! $post ) {
-			return $this->error_response( 'post_not_found', __( 'Post not found.', 'mumcp' ), 404 );
+			return $this->error_response( 'post_not_found', __( 'Post not found.', 'mumega-mcp' ), 404 );
 		}
 
 		$provider_slug = $this->resolve_provider( $request->get_param( 'provider' ), 'image_generation' );
@@ -669,7 +669,7 @@ class Mcpwp_REST_Integrations extends Mcpwp_REST_API {
 		$attachment_id = absint( $request->get_param( 'attachment_id' ) );
 		$image_url     = wp_get_attachment_url( $attachment_id );
 		if ( ! $image_url ) {
-			return $this->error_response( 'attachment_not_found', __( 'Attachment not found.', 'mumcp' ), 404 );
+			return $this->error_response( 'attachment_not_found', __( 'Attachment not found.', 'mumega-mcp' ), 404 );
 		}
 
 		$provider_slug = $this->resolve_provider( $request->get_param( 'provider' ), 'vision' );
@@ -718,7 +718,7 @@ class Mcpwp_REST_Integrations extends Mcpwp_REST_API {
 		$attachment_id = absint( $request->get_param( 'attachment_id' ) );
 		$image_url     = wp_get_attachment_url( $attachment_id );
 		if ( ! $image_url ) {
-			return $this->error_response( 'attachment_not_found', __( 'Attachment not found.', 'mumcp' ), 404 );
+			return $this->error_response( 'attachment_not_found', __( 'Attachment not found.', 'mumega-mcp' ), 404 );
 		}
 
 		$provider_slug = $this->resolve_provider( $request->get_param( 'provider' ), 'vision' );
@@ -760,7 +760,7 @@ class Mcpwp_REST_Integrations extends Mcpwp_REST_API {
 		$post_id = absint( $request->get_param( 'post_id' ) );
 		$post    = get_post( $post_id );
 		if ( ! $post ) {
-			return $this->error_response( 'post_not_found', __( 'Post not found.', 'mumcp' ), 404 );
+			return $this->error_response( 'post_not_found', __( 'Post not found.', 'mumega-mcp' ), 404 );
 		}
 
 		$provider_slug = $this->resolve_provider( $request->get_param( 'provider' ), 'text' );
@@ -771,7 +771,7 @@ class Mcpwp_REST_Integrations extends Mcpwp_REST_API {
 		$max_length = max( 50, min( 500, absint( $request->get_param( 'max_length' ) ) ) );
 		$content    = wp_strip_all_tags( $post->post_content );
 		if ( empty( $content ) ) {
-			return $this->error_response( 'no_content', __( 'Post has no content to summarize.', 'mumcp' ) );
+			return $this->error_response( 'no_content', __( 'Post has no content to summarize.', 'mumega-mcp' ) );
 		}
 
 		$prompt = sprintf(
@@ -855,7 +855,7 @@ class Mcpwp_REST_Integrations extends Mcpwp_REST_API {
 		if ( class_exists( 'Mcpwp_License' ) && ! Mcpwp_License::get_instance()->is_pro() ) {
 			return $this->error_response(
 				'pro_required',
-				__( 'This feature requires mumcp Pro. Upgrade at https://mumcp.com/pricing/', 'mumcp' ),
+				__( 'This feature requires mumcp Pro. Upgrade at https://mumcp.com/pricing/', 'mumega-mcp' ),
 				403,
 				array( 'upgrade_url' => 'https://mumcp.com/pricing/' )
 			);
@@ -882,7 +882,7 @@ class Mcpwp_REST_Integrations extends Mcpwp_REST_API {
 				'provider_not_configured',
 				sprintf(
 					/* translators: %s: Provider name */
-					__( '%s API key not configured. Go to mumcp > Integrations to add it.', 'mumcp' ),
+					__( '%s API key not configured. Go to mumcp > Integrations to add it.', 'mumega-mcp' ),
 					$name
 				),
 				400
@@ -909,7 +909,7 @@ class Mcpwp_REST_Integrations extends Mcpwp_REST_API {
 					'provider_not_configured',
 					sprintf(
 						/* translators: %s: Provider name */
-						__( '%s API key not configured. Go to mumcp > Integrations to add it.', 'mumcp' ),
+						__( '%s API key not configured. Go to mumcp > Integrations to add it.', 'mumega-mcp' ),
 						$requested
 					),
 					400
@@ -924,7 +924,7 @@ class Mcpwp_REST_Integrations extends Mcpwp_REST_API {
 				'no_provider_available',
 				sprintf(
 					/* translators: %s: Capability name */
-					__( 'No AI provider configured for %s. Go to mumcp > Integrations to add one.', 'mumcp' ),
+					__( 'No AI provider configured for %s. Go to mumcp > Integrations to add one.', 'mumega-mcp' ),
 					$capability
 				),
 				400

@@ -143,7 +143,7 @@ class Mcpwp_Screenshot {
 		if ( empty( $url ) ) {
 			return new WP_Error(
 				'invalid_url',
-				__( 'A valid URL is required.', 'mumcp' ),
+				__( 'A valid URL is required.', 'mumega-mcp' ),
 				array( 'status' => 400 )
 			);
 		}
@@ -492,7 +492,7 @@ class Mcpwp_Screenshot {
 				'url'            => $url,
 				'screenshot_url' => $screenshot_url,
 				'status'         => 'timeout',
-				'message'        => __( 'Screenshot generation timed out after 1 minute. The URL may be unreachable or mshots service may be slow.', 'mumcp' ),
+				'message'        => __( 'Screenshot generation timed out after 1 minute. The URL may be unreachable or mshots service may be slow.', 'mumega-mcp' ),
 				'timestamp'      => current_time( 'c' ),
 			);
 

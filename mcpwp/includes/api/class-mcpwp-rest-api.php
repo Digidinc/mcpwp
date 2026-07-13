@@ -117,14 +117,14 @@ abstract class Mcpwp_REST_API {
 	protected function get_pagination_args() {
 		return array(
 			'per_page' => array(
-				'description' => __( 'Maximum number of items per page.', 'mumcp' ),
+				'description' => __( 'Maximum number of items per page.', 'mumega-mcp' ),
 				'type'        => 'integer',
 				'default'     => 10,
 				'minimum'     => 1,
 				'maximum'     => 100,
 			),
 			'page'     => array(
-				'description' => __( 'Current page number.', 'mumcp' ),
+				'description' => __( 'Current page number.', 'mumega-mcp' ),
 				'type'        => 'integer',
 				'default'     => 1,
 				'minimum'     => 1,
@@ -140,23 +140,23 @@ abstract class Mcpwp_REST_API {
 	protected function get_post_args() {
 		return array(
 			'title'   => array(
-				'description' => __( 'Post title.', 'mumcp' ),
+				'description' => __( 'Post title.', 'mumega-mcp' ),
 				'type'        => 'string',
 				'required'    => true,
 			),
 			'content' => array(
-				'description' => __( 'Post content.', 'mumcp' ),
+				'description' => __( 'Post content.', 'mumega-mcp' ),
 				'type'        => 'string',
 				'default'     => '',
 			),
 			'status'  => array(
-				'description' => __( 'Post status.', 'mumcp' ),
+				'description' => __( 'Post status.', 'mumega-mcp' ),
 				'type'        => 'string',
 				'enum'        => array( 'publish', 'draft', 'pending', 'private' ),
 				'default'     => 'draft',
 			),
 			'excerpt' => array(
-				'description' => __( 'Post excerpt.', 'mumcp' ),
+				'description' => __( 'Post excerpt.', 'mumega-mcp' ),
 				'type'        => 'string',
 				'default'     => '',
 			),

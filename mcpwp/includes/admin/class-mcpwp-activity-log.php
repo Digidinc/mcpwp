@@ -22,14 +22,14 @@ class Mcpwp_Activity_Log_Page {
 		$log_id = isset( $_GET['log_id'] ) ? absint( wp_unslash( $_GET['log_id'] ) ) : 0;
 
 		echo '<div class="wrap">';
-		echo '<h1>' . esc_html__( 'mumcp Activity Log', 'mumcp' ) . '</h1>';
+		echo '<h1>' . esc_html__( 'mumcp Activity Log', 'mumega-mcp' ) . '</h1>';
 
 		$settings = get_option( 'mcpwp_settings', array() );
 		$enabled  = ! empty( $settings['enable_logging'] );
 
 		if ( ! $enabled ) {
 			echo '<div class="notice notice-warning"><p>' .
-				esc_html__( 'Activity logging is currently disabled. Enable it in mumcp settings to capture new entries.', 'mumcp' ) .
+				esc_html__( 'Activity logging is currently disabled. Enable it in mumcp settings to capture new entries.', 'mumega-mcp' ) .
 				'</p></div>';
 		}
 
@@ -137,17 +137,17 @@ class Mcpwp_Activity_Log_Page {
 
 		echo '<table class="widefat fixed striped">';
 		echo '<thead><tr>';
-		echo '<th style="width: 120px">' . esc_html__( 'When', 'mumcp' ) . '</th>';
-		echo '<th style="width: 140px">' . esc_html__( 'Action', 'mumcp' ) . '</th>';
-		echo '<th>' . esc_html__( 'Endpoint', 'mumcp' ) . '</th>';
-		echo '<th style="width: 70px">' . esc_html__( 'Method', 'mumcp' ) . '</th>';
-		echo '<th style="width: 70px">' . esc_html__( 'Status', 'mumcp' ) . '</th>';
-		echo '<th style="width: 140px">' . esc_html__( 'IP', 'mumcp' ) . '</th>';
+		echo '<th style="width: 120px">' . esc_html__( 'When', 'mumega-mcp' ) . '</th>';
+		echo '<th style="width: 140px">' . esc_html__( 'Action', 'mumega-mcp' ) . '</th>';
+		echo '<th>' . esc_html__( 'Endpoint', 'mumega-mcp' ) . '</th>';
+		echo '<th style="width: 70px">' . esc_html__( 'Method', 'mumega-mcp' ) . '</th>';
+		echo '<th style="width: 70px">' . esc_html__( 'Status', 'mumega-mcp' ) . '</th>';
+		echo '<th style="width: 140px">' . esc_html__( 'IP', 'mumega-mcp' ) . '</th>';
 		echo '</tr></thead>';
 		echo '<tbody>';
 
 		if ( empty( $rows ) ) {
-			echo '<tr><td colspan="6">' . esc_html__( 'No activity found.', 'mumcp' ) . '</td></tr>';
+			echo '<tr><td colspan="6">' . esc_html__( 'No activity found.', 'mumega-mcp' ) . '</td></tr>';
 		} else {
 			foreach ( $rows as $row ) {
 				$detail_url = add_query_arg(
@@ -201,24 +201,24 @@ class Mcpwp_Activity_Log_Page {
 			admin_url( 'admin.php' )
 		);
 
-		echo '<p><a class="button" href="' . esc_url( $back_url ) . '">' . esc_html__( 'Back to list', 'mumcp' ) . '</a></p>';
+		echo '<p><a class="button" href="' . esc_url( $back_url ) . '">' . esc_html__( 'Back to list', 'mumega-mcp' ) . '</a></p>';
 
 		if ( empty( $row ) ) {
-			echo '<div class="notice notice-error"><p>' . esc_html__( 'Log entry not found.', 'mumcp' ) . '</p></div>';
+			echo '<div class="notice notice-error"><p>' . esc_html__( 'Log entry not found.', 'mumega-mcp' ) . '</p></div>';
 			return;
 		}
 
-		echo '<h2>' . esc_html__( 'Log Entry', 'mumcp' ) . ' #' . esc_html( (string) $row['id'] ) . '</h2>';
+		echo '<h2>' . esc_html__( 'Log Entry', 'mumega-mcp' ) . ' #' . esc_html( (string) $row['id'] ) . '</h2>';
 
 		echo '<table class="widefat striped" style="max-width: 980px">';
 		echo '<tbody>';
-		$this->render_kv_row( __( 'When', 'mumcp' ), $this->format_datetime( $row['created_at'] ) );
-		$this->render_kv_row( __( 'Action', 'mumcp' ), (string) $row['action'] );
-		$this->render_kv_row( __( 'Endpoint', 'mumcp' ), (string) $row['endpoint'], true );
-		$this->render_kv_row( __( 'Method', 'mumcp' ), (string) $row['method'] );
-		$this->render_kv_row( __( 'Status', 'mumcp' ), (string) $row['status_code'] );
-		$this->render_kv_row( __( 'IP', 'mumcp' ), (string) $row['ip_address'] );
-		$this->render_kv_row( __( 'User Agent', 'mumcp' ), (string) $row['user_agent'] );
+		$this->render_kv_row( __( 'When', 'mumega-mcp' ), $this->format_datetime( $row['created_at'] ) );
+		$this->render_kv_row( __( 'Action', 'mumega-mcp' ), (string) $row['action'] );
+		$this->render_kv_row( __( 'Endpoint', 'mumega-mcp' ), (string) $row['endpoint'], true );
+		$this->render_kv_row( __( 'Method', 'mumega-mcp' ), (string) $row['method'] );
+		$this->render_kv_row( __( 'Status', 'mumega-mcp' ), (string) $row['status_code'] );
+		$this->render_kv_row( __( 'IP', 'mumega-mcp' ), (string) $row['ip_address'] );
+		$this->render_kv_row( __( 'User Agent', 'mumega-mcp' ), (string) $row['user_agent'] );
 		echo '</tbody>';
 		echo '</table>';
 
@@ -228,11 +228,11 @@ class Mcpwp_Activity_Log_Page {
 		$request_data  = $this->redact_sensitive( $request_data );
 		$response_data = $this->redact_sensitive( $response_data );
 
-		echo '<h2>' . esc_html__( 'Request Data (redacted)', 'mumcp' ) . '</h2>';
+		echo '<h2>' . esc_html__( 'Request Data (redacted)', 'mumega-mcp' ) . '</h2>';
 		// render_pretty_json_block() returns pre-escaped HTML via esc_html().
 		echo wp_kses_post( $this->render_pretty_json_block( $request_data ) );
 
-		echo '<h2>' . esc_html__( 'Response Data (redacted)', 'mumcp' ) . '</h2>';
+		echo '<h2>' . esc_html__( 'Response Data (redacted)', 'mumega-mcp' ) . '</h2>';
 		echo wp_kses_post( $this->render_pretty_json_block( $response_data ) );
 	}
 
@@ -253,26 +253,26 @@ class Mcpwp_Activity_Log_Page {
 		echo '<input type="hidden" name="page" value="' . esc_attr( Mcpwp_Admin::ACTIVITY_LOG_PAGE_SLUG ) . '" />';
 
 		echo '<p class="search-box" style="margin: 0 0 10px">';
-		echo '<label class="screen-reader-text" for="mcpwp-log-search-input">' . esc_html__( 'Search Activity', 'mumcp' ) . '</label>';
+		echo '<label class="screen-reader-text" for="mcpwp-log-search-input">' . esc_html__( 'Search Activity', 'mumega-mcp' ) . '</label>';
 		echo '<input type="search" id="mcpwp-log-search-input" name="s" value="' . esc_attr( (string) $values['s'] ) . '" />';
-		submit_button( __( 'Search', 'mumcp' ), 'button', false, false, array( 'id' => 'search-submit' ) );
+		submit_button( __( 'Search', 'mumega-mcp' ), 'button', false, false, array( 'id' => 'search-submit' ) );
 		echo '</p>';
 
 		echo '<div style="display:flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px">';
 
 		echo '<select name="method">';
-		echo '<option value="">' . esc_html__( 'All methods', 'mumcp' ) . '</option>';
+		echo '<option value="">' . esc_html__( 'All methods', 'mumega-mcp' ) . '</option>';
 		foreach ( array( 'GET', 'POST', 'PUT', 'PATCH', 'DELETE' ) as $method ) {
 			echo '<option value="' . esc_attr( strtolower( $method ) ) . '"' . selected( strtoupper( (string) $values['method'] ), $method, false ) . '>' . esc_html( $method ) . '</option>';
 		}
 		echo '</select>';
 
-		echo '<input type="number" name="status_code" placeholder="' . esc_attr__( 'Status', 'mumcp' ) . '" value="' . esc_attr( (string) $values['status_code'] ) . '" style="width: 110px" />';
-		echo '<input type="text" name="action_name" placeholder="' . esc_attr__( 'Action', 'mumcp' ) . '" value="' . esc_attr( (string) $values['action_name'] ) . '" style="width: 180px" />';
+		echo '<input type="number" name="status_code" placeholder="' . esc_attr__( 'Status', 'mumega-mcp' ) . '" value="' . esc_attr( (string) $values['status_code'] ) . '" style="width: 110px" />';
+		echo '<input type="text" name="action_name" placeholder="' . esc_attr__( 'Action', 'mumega-mcp' ) . '" value="' . esc_attr( (string) $values['action_name'] ) . '" style="width: 180px" />';
 
-		submit_button( __( 'Filter', 'mumcp' ), 'secondary', 'filter', false );
+		submit_button( __( 'Filter', 'mumega-mcp' ), 'secondary', 'filter', false );
 
-		echo '<a class="button-link" href="' . esc_url( $base_url ) . '">' . esc_html__( 'Reset', 'mumcp' ) . '</a>';
+		echo '<a class="button-link" href="' . esc_url( $base_url ) . '">' . esc_html__( 'Reset', 'mumega-mcp' ) . '</a>';
 		echo '</div>';
 
 		echo '</form>';
@@ -376,7 +376,7 @@ class Mcpwp_Activity_Log_Page {
 	 */
 	private function render_pretty_json_block( $value ) {
 		if ( null === $value || '' === $value ) {
-			return '<p><em>' . esc_html__( '(none)', 'mumcp' ) . '</em></p>';
+			return '<p><em>' . esc_html__( '(none)', 'mumega-mcp' ) . '</em></p>';
 		}
 
 		if ( is_string( $value ) ) {

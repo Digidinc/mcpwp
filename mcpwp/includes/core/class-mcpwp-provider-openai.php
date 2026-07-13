@@ -73,7 +73,7 @@ class Mcpwp_Provider_OpenAI {
 		}
 
 		if ( empty( $response['data'][0]['b64_json'] ) ) {
-			return new WP_Error( 'openai_no_image', __( 'No image returned from OpenAI.', 'mumcp' ) );
+			return new WP_Error( 'openai_no_image', __( 'No image returned from OpenAI.', 'mumega-mcp' ) );
 		}
 
 		return array(
@@ -148,7 +148,7 @@ class Mcpwp_Provider_OpenAI {
 		}
 
 		if ( empty( $response['choices'][0]['message']['content'] ) ) {
-			return new WP_Error( 'openai_no_response', __( 'No response from OpenAI vision.', 'mumcp' ) );
+			return new WP_Error( 'openai_no_response', __( 'No response from OpenAI vision.', 'mumega-mcp' ) );
 		}
 
 		return $response['choices'][0]['message']['content'];
@@ -178,7 +178,7 @@ class Mcpwp_Provider_OpenAI {
 		}
 
 		if ( empty( $response['choices'][0]['message']['content'] ) ) {
-			return new WP_Error( 'openai_no_response', __( 'No response from OpenAI.', 'mumcp' ) );
+			return new WP_Error( 'openai_no_response', __( 'No response from OpenAI.', 'mumega-mcp' ) );
 		}
 
 		return $response['choices'][0]['message']['content'];
@@ -216,7 +216,7 @@ class Mcpwp_Provider_OpenAI {
 
 		return array(
 			'success' => true,
-			'message' => __( 'OpenAI API connection successful.', 'mumcp' ),
+			'message' => __( 'OpenAI API connection successful.', 'mumega-mcp' ),
 		);
 	}
 

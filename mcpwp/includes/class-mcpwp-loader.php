@@ -162,7 +162,7 @@ class Mcpwp_Loader {
 		if ( ! isset( $schedules['mcpwp_every_five_minutes'] ) ) {
 			$schedules['mcpwp_every_five_minutes'] = array(
 				'interval' => 5 * MINUTE_IN_SECONDS,
-				'display'  => __( 'Every 5 Minutes (mumcp)', 'mumcp' ),
+				'display'  => __( 'Every 5 Minutes (mumcp)', 'mumega-mcp' ),
 			);
 		}
 

@@ -45,11 +45,11 @@ class Mcpwp_REST_Media extends Mcpwp_REST_API {
 						$this->get_pagination_args(),
 						array(
 							'mime_type' => array(
-								'description' => __( 'Filter by mime type (e.g., "image", "image/png", "video").', 'mumcp' ),
+								'description' => __( 'Filter by mime type (e.g., "image", "image/png", "video").', 'mumega-mcp' ),
 								'type'        => 'string',
 							),
 							'search'    => array(
-								'description' => __( 'Search media by title or filename.', 'mumcp' ),
+								'description' => __( 'Search media by title or filename.', 'mumega-mcp' ),
 								'type'        => 'string',
 							),
 						)
@@ -61,11 +61,11 @@ class Mcpwp_REST_Media extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'title' => array(
-							'description' => __( 'Media title.', 'mumcp' ),
+							'description' => __( 'Media title.', 'mumega-mcp' ),
 							'type'        => 'string',
 						),
 						'alt'   => array(
-							'description' => __( 'Alt text.', 'mumcp' ),
+							'description' => __( 'Alt text.', 'mumega-mcp' ),
 							'type'        => 'string',
 						),
 					),
@@ -84,21 +84,21 @@ class Mcpwp_REST_Media extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'url'      => array(
-							'description' => __( 'External URL.', 'mumcp' ),
+							'description' => __( 'External URL.', 'mumega-mcp' ),
 							'type'        => 'string',
 							'required'    => true,
 							'format'      => 'uri',
 						),
 						'title'    => array(
-							'description' => __( 'Media title.', 'mumcp' ),
+							'description' => __( 'Media title.', 'mumega-mcp' ),
 							'type'        => 'string',
 						),
 						'alt'      => array(
-							'description' => __( 'Alt text.', 'mumcp' ),
+							'description' => __( 'Alt text.', 'mumega-mcp' ),
 							'type'        => 'string',
 						),
 						'filename' => array(
-							'description' => __( 'Custom filename.', 'mumcp' ),
+							'description' => __( 'Custom filename.', 'mumega-mcp' ),
 							'type'        => 'string',
 						),
 					),
@@ -117,14 +117,14 @@ class Mcpwp_REST_Media extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'urls'  => array(
-							'description' => __( 'Array of URLs to upload.', 'mumcp' ),
+							'description' => __( 'Array of URLs to upload.', 'mumega-mcp' ),
 							'type'        => 'array',
 							'items'       => array(
 								'type' => 'string',
 							),
 						),
 						'items' => array(
-							'description' => __( 'Array of items with url, title, alt.', 'mumcp' ),
+							'description' => __( 'Array of items with url, title, alt.', 'mumega-mcp' ),
 							'type'        => 'array',
 							'items'       => array(
 								'type' => 'object',
@@ -151,20 +151,20 @@ class Mcpwp_REST_Media extends Mcpwp_REST_API {
 							'required'    => true,
 						),
 						'filename' => array(
-							'description' => __( 'Filename with extension (e.g., logo.png).', 'mumcp' ),
+							'description' => __( 'Filename with extension (e.g., logo.png).', 'mumega-mcp' ),
 							'type'        => 'string',
 							'required'    => true,
 						),
 						'title'     => array(
-							'description' => __( 'Media title.', 'mumcp' ),
+							'description' => __( 'Media title.', 'mumega-mcp' ),
 							'type'        => 'string',
 						),
 						'alt'       => array(
-							'description' => __( 'Alt text.', 'mumcp' ),
+							'description' => __( 'Alt text.', 'mumega-mcp' ),
 							'type'        => 'string',
 						),
 						'mime_type' => array(
-							'description' => __( 'MIME type (e.g. image/png, image/svg+xml). Inferred from filename when omitted.', 'mumcp' ),
+							'description' => __( 'MIME type (e.g. image/png, image/svg+xml). Inferred from filename when omitted.', 'mumega-mcp' ),
 							'type'        => 'string',
 						),
 					),
@@ -183,19 +183,19 @@ class Mcpwp_REST_Media extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'alt'         => array(
-							'description' => __( 'Image alt text.', 'mumcp' ),
+							'description' => __( 'Image alt text.', 'mumega-mcp' ),
 							'type'        => 'string',
 						),
 						'title'       => array(
-							'description' => __( 'Attachment title.', 'mumcp' ),
+							'description' => __( 'Attachment title.', 'mumega-mcp' ),
 							'type'        => 'string',
 						),
 						'caption'     => array(
-							'description' => __( 'Attachment caption (short description).', 'mumcp' ),
+							'description' => __( 'Attachment caption (short description).', 'mumega-mcp' ),
 							'type'        => 'string',
 						),
 						'description' => array(
-							'description' => __( 'Attachment description (long description).', 'mumcp' ),
+							'description' => __( 'Attachment description (long description).', 'mumega-mcp' ),
 							'type'        => 'string',
 						),
 					),
@@ -206,7 +206,7 @@ class Mcpwp_REST_Media extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'force' => array(
-							'description' => __( 'Permanently delete instead of trashing.', 'mumcp' ),
+							'description' => __( 'Permanently delete instead of trashing.', 'mumega-mcp' ),
 							'type'        => 'boolean',
 							'default'     => false,
 						),
@@ -251,7 +251,7 @@ class Mcpwp_REST_Media extends Mcpwp_REST_API {
 		if ( empty( $files['file'] ) ) {
 			return $this->error_response(
 				'no_file',
-				__( 'No file uploaded. Send file as multipart/form-data with "file" field.', 'mumcp' ),
+				__( 'No file uploaded. Send file as multipart/form-data with "file" field.', 'mumega-mcp' ),
 				400
 			);
 		}
@@ -284,7 +284,7 @@ class Mcpwp_REST_Media extends Mcpwp_REST_API {
 		if ( empty( $url ) ) {
 			return $this->error_response(
 				'missing_url',
-				__( 'URL is required.', 'mumcp' ),
+				__( 'URL is required.', 'mumega-mcp' ),
 				400
 			);
 		}
@@ -344,7 +344,7 @@ class Mcpwp_REST_Media extends Mcpwp_REST_API {
 		if ( empty( $to_upload ) ) {
 			return $this->error_response(
 				'missing_urls',
-				__( 'Provide either "urls" array or "items" array with url properties.', 'mumcp' ),
+				__( 'Provide either "urls" array or "items" array with url properties.', 'mumega-mcp' ),
 				400
 			);
 		}
@@ -355,7 +355,7 @@ class Mcpwp_REST_Media extends Mcpwp_REST_API {
 			return $this->error_response(
 				'too_many_files',
 				/* translators: %d: maximum number of files */
-				sprintf( __( 'Maximum %d files per request.', 'mumcp' ), $max_uploads ),
+				sprintf( __( 'Maximum %d files per request.', 'mumega-mcp' ), $max_uploads ),
 				400
 			);
 		}
@@ -410,7 +410,7 @@ class Mcpwp_REST_Media extends Mcpwp_REST_API {
 		if ( empty( $data ) || empty( $filename ) ) {
 			return $this->error_response(
 				'missing_params',
-				__( 'Both "data" (Base64 string) and "filename" are required.', 'mumcp' ),
+				__( 'Both "data" (Base64 string) and "filename" are required.', 'mumega-mcp' ),
 				400
 			);
 		}
@@ -453,7 +453,7 @@ class Mcpwp_REST_Media extends Mcpwp_REST_API {
 		);
 
 		if ( empty( $args ) ) {
-			return $this->error_response( 'no_fields', __( 'Provide at least one field to update: alt, title, caption, or description.', 'mumcp' ), 400 );
+			return $this->error_response( 'no_fields', __( 'Provide at least one field to update: alt, title, caption, or description.', 'mumega-mcp' ), 400 );
 		}
 
 		$result = $this->media->update_media( $attachment_id, $args );

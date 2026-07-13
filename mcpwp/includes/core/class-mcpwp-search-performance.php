@@ -79,7 +79,7 @@ class Mcpwp_Search_Performance {
 					),
 					'risk_level'         => 'low',
 					'seo_state'          => 'evidence_imported',
-					'recommended_action' => __( 'Review search performance trends before changing SEO content.', 'mumcp' ),
+					'recommended_action' => __( 'Review search performance trends before changing SEO content.', 'mumega-mcp' ),
 				)
 			);
 		}

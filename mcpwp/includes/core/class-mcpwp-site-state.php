@@ -60,7 +60,7 @@ class Mcpwp_Site_State {
 			'workflow'            => array(
 				'read_first' => true,
 				'next'       => array( 'choose_playbook', 'inspect_target_records', 'create_approval_for_mutations', 'validate_before_publish' ),
-				'guard'      => __( 'Use this snapshot before multi-step agent work. Mutations should remain approval-first.', 'mumcp' ),
+				'guard'      => __( 'Use this snapshot before multi-step agent work. Mutations should remain approval-first.', 'mumega-mcp' ),
 			),
 		);
 	}
@@ -285,7 +285,7 @@ class Mcpwp_Site_State {
 		return array(
 			'configured' => '' !== trim( $context ),
 			'length'     => strlen( $context ),
-			'hint'       => '' === trim( $context ) ? __( 'Set site context before asking agents to make broad content or design changes.', 'mumcp' ) : '',
+			'hint'       => '' === trim( $context ) ? __( 'Set site context before asking agents to make broad content or design changes.', 'mumega-mcp' ) : '',
 		);
 	}
 
@@ -305,31 +305,31 @@ class Mcpwp_Site_State {
 		$approval_map = isset( $approvals['counts'] ) && is_array( $approvals['counts'] ) ? $approvals['counts'] : array();
 
 		if ( empty( $context['configured'] ) ) {
-			$actions[] = self::recommendation( 'medium', 'set_site_context', 'wp_set_site_context', __( 'Define site context so agents know brand, audience, design rules, and content boundaries.', 'mumcp' ) );
+			$actions[] = self::recommendation( 'medium', 'set_site_context', 'wp_set_site_context', __( 'Define site context so agents know brand, audience, design rules, and content boundaries.', 'mumega-mcp' ) );
 		}
 
 		if ( ! empty( $approval_map['pending'] ) ) {
-			$actions[] = self::recommendation( 'high', 'review_pending_approvals', 'wp_list_approvals', __( 'Review pending human approvals before starting more production changes.', 'mumcp' ) );
+			$actions[] = self::recommendation( 'high', 'review_pending_approvals', 'wp_list_approvals', __( 'Review pending human approvals before starting more production changes.', 'mumega-mcp' ) );
 		}
 
 		if ( ! empty( $seo_summary['error'] ) ) {
-			$actions[] = self::recommendation( 'high', 'fix_seo_errors', 'wp_get_seo_issues', __( 'Resolve stored SEO errors before lower-priority content expansion.', 'mumcp' ) );
+			$actions[] = self::recommendation( 'high', 'fix_seo_errors', 'wp_get_seo_issues', __( 'Resolve stored SEO errors before lower-priority content expansion.', 'mumega-mcp' ) );
 		}
 
 		if ( ! empty( $graph['orphan_pages']['count'] ) ) {
-			$actions[] = self::recommendation( 'medium', 'connect_orphan_pages', 'wp_suggest_internal_links', __( 'Connect orphan pages through menus or internal links before creating more pages.', 'mumcp' ) );
+			$actions[] = self::recommendation( 'medium', 'connect_orphan_pages', 'wp_suggest_internal_links', __( 'Connect orphan pages through menus or internal links before creating more pages.', 'mumega-mcp' ) );
 		}
 
 		if ( ! empty( $graph['thin_content']['count'] ) ) {
-			$actions[] = self::recommendation( 'medium', 'improve_thin_content', 'wp_audit_content_quality', __( 'Improve thin pages with useful visible content, summaries, and clear answer coverage.', 'mumcp' ) );
+			$actions[] = self::recommendation( 'medium', 'improve_thin_content', 'wp_audit_content_quality', __( 'Improve thin pages with useful visible content, summaries, and clear answer coverage.', 'mumega-mcp' ) );
 		}
 
 		if ( empty( $content_counts['page']['publish'] ) ) {
-			$actions[] = self::recommendation( 'high', 'create_foundational_page', 'wp_create_page', __( 'Create at least one foundational published page before optimization work.', 'mumcp' ) );
+			$actions[] = self::recommendation( 'high', 'create_foundational_page', 'wp_create_page', __( 'Create at least one foundational published page before optimization work.', 'mumega-mcp' ) );
 		}
 
 		if ( empty( $actions ) ) {
-			$actions[] = self::recommendation( 'low', 'run_next_audit', 'wp_seo_audit_site', __( 'Run or refresh a stored SEO audit, then choose a deterministic playbook for the next change.', 'mumcp' ) );
+			$actions[] = self::recommendation( 'low', 'run_next_audit', 'wp_seo_audit_site', __( 'Run or refresh a stored SEO audit, then choose a deterministic playbook for the next change.', 'mumega-mcp' ) );
 		}
 
 		return array_slice( $actions, 0, 8 );

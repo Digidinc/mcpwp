@@ -36,12 +36,12 @@ class Mcpwp_REST_Content_Graph extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'post_types' => array(
-							'description' => __( 'Comma-separated post types to include.', 'mumcp' ),
+							'description' => __( 'Comma-separated post types to include.', 'mumega-mcp' ),
 							'type'        => 'string',
 							'default'     => 'page,post',
 						),
 						'limit' => array(
-							'description'       => __( 'Maximum number of content nodes.', 'mumcp' ),
+							'description'       => __( 'Maximum number of content nodes.', 'mumega-mcp' ),
 							'type'              => 'integer',
 							'default'           => 100,
 							'minimum'           => 1,
@@ -49,7 +49,7 @@ class Mcpwp_REST_Content_Graph extends Mcpwp_REST_API {
 							'sanitize_callback' => 'absint',
 						),
 						'include_drafts' => array(
-							'description'       => __( 'Include draft/private content nodes.', 'mumcp' ),
+							'description'       => __( 'Include draft/private content nodes.', 'mumega-mcp' ),
 							'type'              => 'boolean',
 							'default'           => false,
 							'sanitize_callback' => 'rest_sanitize_boolean',
@@ -70,18 +70,18 @@ class Mcpwp_REST_Content_Graph extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'source_id' => array(
-							'description'       => __( 'Source post or page ID that needs internal links.', 'mumcp' ),
+							'description'       => __( 'Source post or page ID that needs internal links.', 'mumega-mcp' ),
 							'type'              => 'integer',
 							'required'          => true,
 							'sanitize_callback' => 'absint',
 						),
 						'post_types' => array(
-							'description' => __( 'Comma-separated post types to include.', 'mumcp' ),
+							'description' => __( 'Comma-separated post types to include.', 'mumega-mcp' ),
 							'type'        => 'string',
 							'default'     => 'page,post',
 						),
 						'limit' => array(
-							'description'       => __( 'Maximum number of graph nodes to inspect.', 'mumcp' ),
+							'description'       => __( 'Maximum number of graph nodes to inspect.', 'mumega-mcp' ),
 							'type'              => 'integer',
 							'default'           => 100,
 							'minimum'           => 1,
@@ -89,7 +89,7 @@ class Mcpwp_REST_Content_Graph extends Mcpwp_REST_API {
 							'sanitize_callback' => 'absint',
 						),
 						'max_suggestions' => array(
-							'description'       => __( 'Maximum suggestions to return.', 'mumcp' ),
+							'description'       => __( 'Maximum suggestions to return.', 'mumega-mcp' ),
 							'type'              => 'integer',
 							'default'           => 5,
 							'minimum'           => 1,
@@ -97,7 +97,7 @@ class Mcpwp_REST_Content_Graph extends Mcpwp_REST_API {
 							'sanitize_callback' => 'absint',
 						),
 						'include_drafts' => array(
-							'description'       => __( 'Include draft/private content candidates.', 'mumcp' ),
+							'description'       => __( 'Include draft/private content candidates.', 'mumega-mcp' ),
 							'type'              => 'boolean',
 							'default'           => false,
 							'sanitize_callback' => 'rest_sanitize_boolean',
@@ -118,29 +118,29 @@ class Mcpwp_REST_Content_Graph extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'source_id' => array(
-							'description'       => __( 'Source post or page ID to update.', 'mumcp' ),
+							'description'       => __( 'Source post or page ID to update.', 'mumega-mcp' ),
 							'type'              => 'integer',
 							'required'          => true,
 							'sanitize_callback' => 'absint',
 						),
 						'target_id' => array(
-							'description'       => __( 'Existing graph target post or page ID.', 'mumcp' ),
+							'description'       => __( 'Existing graph target post or page ID.', 'mumega-mcp' ),
 							'type'              => 'integer',
 							'required'          => true,
 							'sanitize_callback' => 'absint',
 						),
 						'anchor' => array(
-							'description' => __( 'Optional link anchor text. Defaults to target title.', 'mumcp' ),
+							'description' => __( 'Optional link anchor text. Defaults to target title.', 'mumega-mcp' ),
 							'type'        => 'string',
 						),
 						'approval_required' => array(
-							'description'       => __( 'Create an approval request instead of saving immediately. Defaults to true.', 'mumcp' ),
+							'description'       => __( 'Create an approval request instead of saving immediately. Defaults to true.', 'mumega-mcp' ),
 							'type'              => 'boolean',
 							'default'           => true,
 							'sanitize_callback' => 'rest_sanitize_boolean',
 						),
 						'approval_note' => array(
-							'description' => __( 'Optional human review note.', 'mumcp' ),
+							'description' => __( 'Optional human review note.', 'mumega-mcp' ),
 							'type'        => 'string',
 						),
 					),
@@ -159,12 +159,12 @@ class Mcpwp_REST_Content_Graph extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'post_types' => array(
-							'description' => __( 'Comma-separated post types to include.', 'mumcp' ),
+							'description' => __( 'Comma-separated post types to include.', 'mumega-mcp' ),
 							'type'        => 'string',
 							'default'     => 'page,post',
 						),
 						'limit' => array(
-							'description'       => __( 'Maximum number of content nodes to inspect.', 'mumcp' ),
+							'description'       => __( 'Maximum number of content nodes to inspect.', 'mumega-mcp' ),
 							'type'              => 'integer',
 							'default'           => 100,
 							'minimum'           => 1,
@@ -172,7 +172,7 @@ class Mcpwp_REST_Content_Graph extends Mcpwp_REST_API {
 							'sanitize_callback' => 'absint',
 						),
 						'include_drafts' => array(
-							'description'       => __( 'Include draft/private source content.', 'mumcp' ),
+							'description'       => __( 'Include draft/private source content.', 'mumega-mcp' ),
 							'type'              => 'boolean',
 							'default'           => false,
 							'sanitize_callback' => 'rest_sanitize_boolean',
@@ -494,33 +494,33 @@ class Mcpwp_REST_Content_Graph extends Mcpwp_REST_API {
 				// "anchors" are button labels, not traditional hyperlink anchor text.
 				if ( ! $is_elementor ) {
 					if ( '' === trim( $link['anchor'] ) ) {
-						$issues[] = $this->make_internal_link_issue( 'empty_anchor', 'warning', $source_id, $target_id, $link, __( 'Use descriptive anchor text for internal links.', 'mumcp' ) );
+						$issues[] = $this->make_internal_link_issue( 'empty_anchor', 'warning', $source_id, $target_id, $link, __( 'Use descriptive anchor text for internal links.', 'mumega-mcp' ) );
 					} elseif ( $this->is_weak_internal_link_anchor( $link['anchor'] ) ) {
-						$issues[] = $this->make_internal_link_issue( 'weak_anchor', 'warning', $source_id, $target_id, $link, __( 'Replace generic anchor text with a descriptive phrase.', 'mumcp' ) );
+						$issues[] = $this->make_internal_link_issue( 'weak_anchor', 'warning', $source_id, $target_id, $link, __( 'Replace generic anchor text with a descriptive phrase.', 'mumega-mcp' ) );
 					}
 				}
 
 				if ( ! $target ) {
-					$issues[] = $this->make_internal_link_issue( 'missing_target', 'error', $source_id, 0, $link, __( 'Link points to an internal URL that does not resolve to known content.', 'mumcp' ) );
+					$issues[] = $this->make_internal_link_issue( 'missing_target', 'error', $source_id, 0, $link, __( 'Link points to an internal URL that does not resolve to known content.', 'mumega-mcp' ) );
 					continue;
 				}
 
 				if ( $source_id === $target_id ) {
-					$issues[] = $this->make_internal_link_issue( 'self_link', 'warning', $source_id, $target_id, $link, __( 'Remove self-links unless they point to a useful in-page anchor.', 'mumcp' ) );
+					$issues[] = $this->make_internal_link_issue( 'self_link', 'warning', $source_id, $target_id, $link, __( 'Remove self-links unless they point to a useful in-page anchor.', 'mumega-mcp' ) );
 				}
 
 				if ( 'publish' !== $target->post_status ) {
-					$issues[] = $this->make_internal_link_issue( 'unpublished_target', 'error', $source_id, $target_id, $link, __( 'Link target is not published.', 'mumcp' ) );
+					$issues[] = $this->make_internal_link_issue( 'unpublished_target', 'error', $source_id, $target_id, $link, __( 'Link target is not published.', 'mumega-mcp' ) );
 				}
 
 				if ( isset( $seen_targets[ $target_id ] ) ) {
-					$issues[] = $this->make_internal_link_issue( 'duplicate_target', 'warning', $source_id, $target_id, $link, __( 'Source content links to the same internal target more than once.', 'mumcp' ) );
+					$issues[] = $this->make_internal_link_issue( 'duplicate_target', 'warning', $source_id, $target_id, $link, __( 'Source content links to the same internal target more than once.', 'mumega-mcp' ) );
 				}
 				$seen_targets[ $target_id ] = true;
 
 				$canonical = get_permalink( $target );
 				if ( $canonical && $this->normalize_internal_graph_url( $canonical ) !== $this->normalize_internal_graph_url( $resolved['absolute'] ) ) {
-					$issues[] = $this->make_internal_link_issue( 'non_canonical_url', 'warning', $source_id, $target_id, $link, __( 'Use the canonical permalink for this internal target.', 'mumcp' ), array( 'canonical_url' => $canonical ) );
+					$issues[] = $this->make_internal_link_issue( 'non_canonical_url', 'warning', $source_id, $target_id, $link, __( 'Use the canonical permalink for this internal target.', 'mumega-mcp' ), array( 'canonical_url' => $canonical ) );
 				}
 			}
 		}
@@ -1216,7 +1216,7 @@ class Mcpwp_REST_Content_Graph extends Mcpwp_REST_API {
 			return implode( ' ', array_slice( $overlap, 0, 3 ) );
 		}
 
-		return trim( (string) ( $candidate['slug'] ?? __( 'Related content', 'mumcp' ) ) );
+		return trim( (string) ( $candidate['slug'] ?? __( 'Related content', 'mumega-mcp' ) ) );
 	}
 
 	/**
@@ -1230,7 +1230,7 @@ class Mcpwp_REST_Content_Graph extends Mcpwp_REST_API {
 		$link = sprintf( '<a href="%s">%s</a>', esc_url( $url ), esc_html( $anchor ) );
 		return sprintf(
 			'<!-- wp:paragraph --><p>%s %s</p><!-- /wp:paragraph -->',
-			esc_html__( 'Related:', 'mumcp' ),
+			esc_html__( 'Related:', 'mumega-mcp' ),
 			$link
 		);
 	}

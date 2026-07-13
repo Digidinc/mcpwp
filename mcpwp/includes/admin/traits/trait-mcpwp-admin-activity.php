@@ -18,7 +18,7 @@ trait Mcpwp_Admin_Activity_Trait {
 	 */
 	public function render_activity_log_page() {
 		if ( ! current_user_can( 'activate_plugins' ) ) {
-			wp_die( esc_html__( 'You do not have permission to access this page.', 'mumcp' ) );
+			wp_die( esc_html__( 'You do not have permission to access this page.', 'mumega-mcp' ) );
 		}
 
 		$page = new Mcpwp_Activity_Log_Page();
