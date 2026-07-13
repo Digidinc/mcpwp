@@ -157,6 +157,15 @@ final class WporgArtifactIdentityTest extends TestCase {
 		$this->assertStringContainsString( '[FAIL] legacy gettext domain:', implode( "\n", $result['output'] ) );
 	}
 
+	public function test_verifier_rejects_legacy_gettext_domain_before_trailing_comma(): void {
+		$result = self::verify_zip_with_extra_php(
+			"<?php\n__( 'Legacy', 'mcpwp', );\n"
+		);
+
+		$this->assertNotSame( 0, $result['status'], 'Verifier must ignore a trivia-only trailing argument segment.' );
+		$this->assertStringContainsString( '[FAIL] legacy gettext domain:', implode( "\n", $result['output'] ) );
+	}
+
 	public function test_verifier_accepts_internal_mcpwp_literals_outside_gettext_calls(): void {
 		$result = self::verify_zip_with_extra_php(
 			"<?php\n\$server_name = 'mcpwp';\nstrpos( \$server_name, 'mcpwp' );\n"

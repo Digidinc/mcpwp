@@ -162,6 +162,8 @@ def has_legacy_gettext_domain(contents):
             opening = skip_trivia(source, end)
             if function_name in GETTEXT_FUNCTIONS and opening < len(source) and source[opening] == "(":
                 arguments = parse_call_arguments(source, opening)
+                while arguments and skip_trivia(arguments[-1], 0) == len(arguments[-1]):
+                    arguments.pop()
                 if arguments and literal_string_value(arguments[-1]) in LEGACY_GETTEXT_DOMAINS:
                     return True
             index = end
