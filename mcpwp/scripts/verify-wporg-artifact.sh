@@ -187,6 +187,28 @@ def has_legacy_gettext_domain(contents):
     return False
 
 
+def mask_allowed_cleanup(relative, contents):
+    for quoted in policy.get("lifecycle_cleanup_exceptions", {}).get(relative, []):
+        token = quoted.strip("'\"")
+        functions = r"wp_clear_scheduled_hook"
+        if relative == "uninstall.php":
+            functions += r"|delete_option|delete_transient"
+        contents = re.sub(
+            rf"\b(?:{functions})\s*\(\s*(['\"]){re.escape(token)}\1\s*\)",
+            "__allowed_cleanup__",
+            contents,
+            flags=re.IGNORECASE,
+        )
+        if relative == "uninstall.php":
+            contents = re.sub(
+                rf"DROP\s+TABLE\s+IF\s+EXISTS[^;\n]*{re.escape(token)}",
+                "__allowed_drop__",
+                contents,
+                flags=re.IGNORECASE,
+            )
+    return contents
+
+
 try:
     archive = zipfile.ZipFile(zip_path)
 except (OSError, zipfile.BadZipFile) as error:
@@ -208,6 +230,22 @@ with archive:
         if name.startswith("/") or "\\" in name or ".." in path.parts:
             fail("safe manifest path", name)
 
+    expected_runtime = set(policy["allowed_runtime_files"])
+    expected_runtime.remove("mcpwp.php")
+    expected_runtime.add(f"{slug}.php")
+    actual_runtime = {
+        "/".join(PurePosixPath(info.filename).parts[1:])
+        for info in infos
+        if not info.is_dir()
+    }
+    unexpected_runtime = sorted(actual_runtime.difference(expected_runtime))
+    missing_runtime = sorted(expected_runtime.difference(actual_runtime))
+    if unexpected_runtime or missing_runtime:
+        fail(
+            "exclusive runtime inventory",
+            f"unexpected={unexpected_runtime}; missing={missing_runtime}",
+        )
+
     forbidden_directories = {item.lower() for item in policy["forbidden_directory_components"]}
     forbidden_basenames = {item.lower() for item in policy["forbidden_basenames"]}
     forbidden_prefixes = tuple(item.lower() for item in policy["forbidden_basename_prefixes"])
@@ -225,12 +263,14 @@ with archive:
             continue
         relative = "/".join(PurePosixPath(normalized).parts[1:])
         contents = archive.read(info.filename).decode("utf-8", errors="surrogateescape")
-        for exception in policy.get("lifecycle_cleanup_exceptions", {}).get(relative, []):
-            contents = contents.replace(exception, "")
+        contents = mask_allowed_cleanup(relative, contents)
         lowered_contents = contents.lower()
         for literal in policy["forbidden_literals"]:
             if literal.lower() in lowered_contents:
                 fail("shared policy forbidden literal", f"{literal} in {info.filename}")
+        for pattern in policy.get("forbidden_patterns", []):
+            if re.search(pattern, contents, flags=re.IGNORECASE):
+                fail("shared policy forbidden pattern", f"{pattern} in {info.filename}")
 
     roots = sorted({name.split("/", 1)[0] for name in names})
     if roots != [slug]:
@@ -341,6 +381,50 @@ with archive:
             legacy_domains.append(name)
     if legacy_domains:
         fail("legacy gettext domain", ", ".join(legacy_domains))
+
+    tool_source_name = f"{slug}/includes/mcp/class-mcpwp-mcp-free-tools.php"
+    tool_source = archive.read(tool_source_name).decode("utf-8", errors="strict")
+    tool_matches = re.findall(
+        r"'(wp_[a-z0-9_]+)'\s*=>\s*array\(\s*'method'\s*=>\s*'([A-Z]+)'\s*,\s*'route'\s*=>\s*'([^']+)'",
+        tool_source,
+    )
+    actual_tools = {name: [method, route] for name, method, route in tool_matches}
+    if actual_tools != policy["retained_tool_map"]:
+        fail("exact MCP tool map", f"expected={policy['retained_tool_map']}; found={actual_tools}")
+
+    method_constants = {
+        "WP_REST_Server::READABLE": ["GET"],
+        "WP_REST_Server::CREATABLE": ["POST"],
+        "WP_REST_Server::EDITABLE": ["POST", "PUT", "PATCH"],
+        "WP_REST_Server::DELETABLE": ["DELETE"],
+    }
+    actual_routes = {}
+    for name in names:
+        if not name.startswith(f"{slug}/includes/api/class-mcpwp-rest-") or not name.endswith(".php"):
+            continue
+        source = archive.read(name).decode("utf-8", errors="strict")
+        for match in re.finditer(r"\bregister_rest_route\s*\(", source):
+            arguments = parse_call_arguments(source, source.find("(", match.start()))
+            if not arguments or len(arguments) < 3:
+                fail("REST route extraction", name)
+            route = literal_string_value(arguments[1])
+            if route is None:
+                fail("REST route literal", name)
+            values = re.findall(
+                r"['\"]methods['\"]\s*=>\s*(WP_REST_Server::[A-Z]+|['\"][A-Z,]+['\"])",
+                arguments[2],
+            )
+            if not values:
+                fail("REST route methods", f"{name}:{route}")
+            for value in values:
+                methods = method_constants.get(value)
+                if methods is None:
+                    methods = value.strip("'\"").split(",")
+                actual_routes.setdefault(route, set()).update(methods)
+    actual_routes = {route: sorted(methods) for route, methods in actual_routes.items()}
+    expected_routes = {route: sorted(methods) for route, methods in policy["retained_rest_routes"].items()}
+    if actual_routes != expected_routes:
+        fail("exact REST route map", f"expected={expected_routes}; found={actual_routes}")
 
     for name in names:
         if not name.endswith(".php"):

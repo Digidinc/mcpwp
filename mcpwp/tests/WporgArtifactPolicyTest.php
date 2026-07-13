@@ -163,6 +163,76 @@ final class WporgArtifactPolicyTest extends TestCase {
 		$this->assertNotEmpty( $near_miss );
 	}
 
+	public function test_runtime_inventory_is_exclusive_for_source_and_zip(): void {
+		$this->assertArrayHasKey( 'allowed_runtime_files', self::$policy );
+		$violations = array();
+		$this->scan_path( 'includes/api/class-renamed-equivalent.php', $violations );
+		$this->scan_path( 'assets/runtime.php', $violations );
+		$this->assertCount( 2, $violations );
+	}
+
+	public function test_executable_runtime_content_is_scanned_in_any_location(): void {
+		$this->assertTrue( $this->source_content_is_scannable( 'assets/runtime.php' ) );
+		$this->assertTrue( $this->source_content_is_scannable( 'runtime/custom/location.php' ) );
+	}
+
+	public function test_wildcard_hosts_and_updater_primitives_are_rejected(): void {
+		foreach ( array(
+			"fetch( 'https://relay-example.workers.dev/path' );",
+			"fetch( 'https://abc-assets.i.posthog.com/bundle.js' );",
+			"set_site_transient( 'anything', array() );",
+			"delete_site_transient( 'anything' );",
+			"update_plugins();",
+		) as $contents ) {
+			$this->assertNotEmpty( $this->scan_contents( 'assets/runtime.php', $contents ), $contents );
+		}
+	}
+
+	public function test_lifecycle_cleanup_exception_requires_destructive_cleanup_context(): void {
+		$this->assertSame( array(), $this->scan_contents( 'uninstall.php', "delete_option( 'mcpwp_license' );" ) );
+		$this->assertNotEmpty( $this->scan_contents( 'uninstall.php', "update_option( 'mcpwp_license', true );" ) );
+		$this->assertNotEmpty( $this->scan_contents( 'uninstall.php', "wp_schedule_event( time(), 'daily', 'mcpwp_webhook_retry' );" ) );
+	}
+
+	public function test_verifier_rejects_unexpected_runtime_file_and_map_drift(): void {
+		$extra = $this->verify_mutated_zip( array( 'includes/api/class-renamed-equivalent.php' => "<?php class Mcpwp_REST_Renamed_Equivalent {}\n" ) );
+		$this->assertNotSame( 0, $extra['status'], $extra['output'] );
+
+		$tool_source = (string) shell_exec( 'unzip -p ' . escapeshellarg( self::$zip_path ) . ' ' . escapeshellarg( 'mumega-mcp/includes/mcp/class-mcpwp-mcp-free-tools.php' ) );
+		$tool_drift  = str_replace( "'route' => '/site-info'", "'route' => '/site-details'", $tool_source );
+		$tool = $this->verify_mutated_zip( array( 'includes/mcp/class-mcpwp-mcp-free-tools.php' => $tool_drift ) );
+		$this->assertNotSame( 0, $tool['status'], $tool['output'] );
+
+		$route_source = (string) shell_exec( 'unzip -p ' . escapeshellarg( self::$zip_path ) . ' ' . escapeshellarg( 'mumega-mcp/includes/api/class-mcpwp-rest-site-info.php' ) );
+		$route_drift  = str_replace( "'/site-info'", "'/site-details'", $route_source );
+		$route = $this->verify_mutated_zip( array( 'includes/api/class-mcpwp-rest-site-info.php' => $route_drift ) );
+		$this->assertNotSame( 0, $route['status'], $route['output'] );
+	}
+
+	public function test_runtime_gate_marker_is_absent(): void {
+		$this->assertStringNotContainsString( 'MCPWP_WPORG_BUILD', (string) file_get_contents( self::$plugin_dir . '/mcpwp.php' ) );
+	}
+
+	/** @param array<string,string> $replacements @return array{status:int,output:string} */
+	private function verify_mutated_zip( $replacements ): array {
+		$temp = sys_get_temp_dir() . '/mcpwp-policy-' . bin2hex( random_bytes( 6 ) );
+		mkdir( $temp, 0777, true );
+		exec( 'unzip -q ' . escapeshellarg( self::$zip_path ) . ' -d ' . escapeshellarg( $temp ), $unused, $unzip_status );
+		if ( 0 !== $unzip_status ) { throw new RuntimeException( 'Could not unpack mutation fixture.' ); }
+		foreach ( $replacements as $relative => $contents ) {
+			$path = $temp . '/mumega-mcp/' . $relative;
+			if ( ! is_dir( dirname( $path ) ) ) { mkdir( dirname( $path ), 0777, true ); }
+			file_put_contents( $path, $contents );
+		}
+		$zip = $temp . '/mumega-mcp-3.4.3.zip';
+		$command = 'cd ' . escapeshellarg( $temp ) . ' && find mumega-mcp -type f -print | LC_ALL=C sort | zip -q -X ' . escapeshellarg( $zip ) . ' -@';
+		exec( $command, $zip_output, $zip_status );
+		if ( 0 !== $zip_status ) { throw new RuntimeException( 'Could not build mutation fixture.' ); }
+		exec( 'bash ' . escapeshellarg( self::$plugin_dir . '/scripts/verify-wporg-artifact.sh' ) . ' ' . escapeshellarg( $zip ) . ' 2>&1', $output, $status );
+		exec( 'rm -rf ' . escapeshellarg( $temp ) );
+		return array( 'status' => $status, 'output' => implode( "\n", $output ) );
+	}
+
 	/** @return string[] */
 	private function scan_source(): array {
 		$violations = array();
@@ -172,7 +242,7 @@ final class WporgArtifactPolicyTest extends TestCase {
 
 		foreach ( $iterator as $file ) {
 			$relative = str_replace( '\\', '/', substr( $file->getPathname(), strlen( self::$plugin_dir ) + 1 ) );
-			$this->scan_path( $relative, $violations );
+			$this->scan_path( $relative, $violations, false );
 			if ( $file->isFile() && $this->source_content_is_scannable( $relative ) ) {
 				$violations = array_merge( $violations, $this->scan_contents( $relative, (string) file_get_contents( $file->getPathname() ) ) );
 			}
@@ -189,7 +259,7 @@ final class WporgArtifactPolicyTest extends TestCase {
 			throw new RuntimeException( 'Could not inspect candidate ZIP: ' . self::$zip_path );
 		}
 		foreach ( $names as $name ) {
-			$this->scan_path( $name, $violations );
+			$this->scan_path( $name, $violations, true );
 			if ( '/' !== substr( $name, -1 ) && $this->zip_content_is_scannable( $name ) ) {
 				$relative   = preg_replace( '#^[^/]+/#', '', $name );
 				$contents   = shell_exec( 'unzip -p ' . escapeshellarg( self::$zip_path ) . ' ' . escapeshellarg( $name ) );
@@ -201,10 +271,12 @@ final class WporgArtifactPolicyTest extends TestCase {
 	}
 
 	private function source_content_is_scannable( $relative ): bool {
+		$relative = str_replace( '\\', '/', ltrim( (string) $relative, '/' ) );
+		if ( 1 === preg_match( '#^(?:tests|scripts|vendor|docs|node_modules)/#i', $relative ) ) { return false; }
 		if ( in_array( $relative, array( 'mcpwp.php', 'readme.txt', 'uninstall.php', 'languages/mumega-mcp.pot' ), true ) ) {
 			return true;
 		}
-		return 1 === preg_match( '#^(?:admin|includes)/.*\.(?:php|js|css)$#i', $relative );
+		return 1 === preg_match( '/\.(?:php|js|css)$/i', $relative );
 	}
 
 	private function zip_content_is_scannable( $name ): bool {
@@ -212,9 +284,10 @@ final class WporgArtifactPolicyTest extends TestCase {
 	}
 
 	/** @param string[] $violations */
-	private function scan_path( $path, &$violations ): void {
+	private function scan_path( $path, &$violations, $is_zip = false ): void {
 		$normalized = strtolower( str_replace( '\\', '/', $path ) );
 		$parts      = array_values( array_filter( explode( '/', trim( $normalized, '/' ) ), 'strlen' ) );
+		if ( $is_zip && ! empty( $parts ) && 'mumega-mcp' === $parts[0] ) { array_shift( $parts ); }
 		$basename   = empty( $parts ) ? '' : end( $parts );
 		foreach ( self::$policy['forbidden_directory_components'] as $component ) {
 			if ( in_array( strtolower( $component ), array_slice( $parts, 0, -1 ), true ) ) {
@@ -229,21 +302,48 @@ final class WporgArtifactPolicyTest extends TestCase {
 				$violations[] = 'forbidden basename prefix [' . $prefix . ']: ' . $path;
 			}
 		}
+		$relative = implode( '/', $parts );
+		if ( 'mumega-mcp.php' === $relative ) { $relative = 'mcpwp.php'; }
+		$dev_path = 1 === preg_match( '#^(?:tests|scripts|vendor|docs|node_modules)/#', $relative );
+		$looks_like_file = false !== strpos( $basename, '.' ) || in_array( $relative, array( 'license', 'version' ), true );
+		$allowed = array_map( 'strtolower', self::$policy['allowed_runtime_files'] );
+		$source_artwork = array_map( 'strtolower', self::$policy['source_only_artwork_files'] );
+		$source_candidate = ! $dev_path && ( in_array( $relative, $allowed, true ) || in_array( $relative, $source_artwork, true ) || 1 === preg_match( '#^(?:admin|includes|languages|assets)/#', $relative ) || 1 === preg_match( '/\.(?:php|js|css|pot|txt)$/', $relative ) );
+		if ( $looks_like_file && ( $is_zip || $source_candidate ) ) {
+			if ( ! $is_zip ) { $allowed = array_merge( $allowed, $source_artwork ); }
+			if ( ! in_array( $relative, $allowed, true ) ) { $violations[] = 'unexpected runtime file: ' . $path; }
+		}
 	}
 
 	/** @return string[] */
 	private function scan_contents( $relative, $contents ): array {
 		$violations = array();
 		$normalized = str_replace( '\\', '/', ltrim( (string) $relative, '/' ) );
-		foreach ( self::$policy['lifecycle_cleanup_exceptions'][ $normalized ] ?? array() as $exception ) {
-			$contents = str_replace( $exception, '', $contents );
-		}
+		$contents = $this->mask_allowed_lifecycle_cleanup( $normalized, $contents );
 		$lower_contents = strtolower( $contents );
 		foreach ( self::$policy['forbidden_literals'] as $literal ) {
 			if ( false !== strpos( $lower_contents, strtolower( $literal ) ) ) {
 				$violations[] = 'forbidden literal [' . $literal . ']: ' . $normalized;
 			}
 		}
+		foreach ( self::$policy['forbidden_patterns'] as $pattern ) {
+			if ( 1 === preg_match( '/' . $pattern . '/i', $contents ) ) { $violations[] = 'forbidden pattern [' . $pattern . ']: ' . $normalized; }
+		}
 		return $violations;
+	}
+
+	private function mask_allowed_lifecycle_cleanup( $relative, $contents ) {
+		$exceptions = self::$policy['lifecycle_cleanup_exceptions'][ $relative ] ?? array();
+		foreach ( $exceptions as $quoted ) {
+			$token = trim( $quoted, "'\"" );
+			$escaped = preg_quote( $token, '/' );
+			$functions = 'wp_clear_scheduled_hook';
+			if ( 'uninstall.php' === $relative ) { $functions .= '|delete_option|delete_transient'; }
+			$contents = preg_replace( '/\b(?:' . $functions . ')\s*\(\s*([\'\"])' . $escaped . '\1\s*\)/i', '__allowed_cleanup__', $contents );
+			if ( 'uninstall.php' === $relative ) {
+				$contents = preg_replace( '/DROP\s+TABLE\s+IF\s+EXISTS[^;\n]*' . $escaped . '/i', '__allowed_drop__', $contents );
+			}
+		}
+		return $contents;
 	}
 }

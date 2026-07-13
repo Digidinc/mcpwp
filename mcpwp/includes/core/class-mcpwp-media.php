@@ -145,14 +145,21 @@ class Mcpwp_Media {
 			);
 		}
 
-		// Sanitize filename.
-		$filename = sanitize_file_name( $filename );
-		if ( empty( $filename ) ) {
+		// Reject path components, control characters, and executable/disallowed extensions.
+		$original_filename = (string) $filename;
+		$filename = sanitize_file_name( $original_filename );
+		$extension = strtolower( pathinfo( $filename, PATHINFO_EXTENSION ) );
+		$executable_extensions = array( 'php', 'php3', 'php4', 'php5', 'php7', 'php8', 'phtml', 'phar', 'cgi', 'pl', 'py', 'sh', 'bash', 'exe', 'dll', 'com', 'bat', 'cmd', 'js', 'html', 'htm', 'svg' );
+		$filetype = wp_check_filetype( $filename );
+		if ( empty( $filename ) || $original_filename !== $filename || basename( $original_filename ) !== $original_filename ) {
 			return new WP_Error(
 				'invalid_filename',
 				__( 'A valid filename is required.', 'mumega-mcp' ),
 				array( 'status' => 400 )
 			);
+		}
+		if ( in_array( $extension, $executable_extensions, true ) || empty( $filetype['ext'] ) || empty( $filetype['type'] ) ) {
+			return new WP_Error( 'invalid_file_type', __( 'The file type is not allowed for local media uploads.', 'mumega-mcp' ), array( 'status' => 400 ) );
 		}
 
 		// Write to temp file.
@@ -168,19 +175,18 @@ class Mcpwp_Media {
 		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
 		file_put_contents( $tmp_file, $decoded );
 
-		// Detect mime type from filename and content — never trust caller alone.
-		$mime = wp_check_filetype( $filename );
-		if ( empty( $mime['type'] ) ) {
-			$finfo         = new finfo( FILEINFO_MIME_TYPE );
-			$detected_mime = $finfo->buffer( $decoded );
-			$mime['type']  = $detected_mime ?: 'application/octet-stream';
+		// WordPress validates both the extension and file contents.
+		$check = wp_check_filetype_and_ext( $tmp_file, $filename );
+		if ( empty( $check['ext'] ) || empty( $check['type'] ) || $check['ext'] !== $filetype['ext'] || $check['type'] !== $filetype['type'] ) {
+			wp_delete_file( $tmp_file );
+			return new WP_Error( 'invalid_file_type', __( 'The file extension or contents are not allowed by WordPress.', 'mumega-mcp' ), array( 'status' => 400 ) );
 		}
 
 		// If caller supplied mime_type, it must match the detected type exactly.
 		// A mismatch (e.g. uploading HTML claiming to be image/png) is rejected.
 		if ( ! empty( $args['mime_type'] ) ) {
 			$supplied = sanitize_mime_type( $args['mime_type'] );
-			if ( $supplied !== $mime['type'] ) {
+			if ( $supplied !== $check['type'] ) {
 				wp_delete_file( $tmp_file );
 				return new WP_Error(
 					'mime_mismatch',
@@ -188,7 +194,7 @@ class Mcpwp_Media {
 						/* translators: 1: supplied mime type, 2: detected mime type */
 						__( 'Supplied mime_type "%1$s" does not match detected type "%2$s". Upload rejected.', 'mumega-mcp' ),
 						$supplied,
-						$mime['type']
+						$check['type']
 					),
 					array( 'status' => 400 )
 				);
@@ -197,7 +203,7 @@ class Mcpwp_Media {
 
 		// Block SVG uploads — SVGs can contain <script> tags (stored XSS).
 		// WordPress does not ship an SVG sanitizer; block at the API layer.
-		if ( 'image/svg+xml' === $mime['type'] || '.svg' === substr( strtolower( $filename ), -4 ) ) {
+		if ( 'image/svg+xml' === $check['type'] || '.svg' === substr( strtolower( $filename ), -4 ) ) {
 			wp_delete_file( $tmp_file );
 			return new WP_Error(
 				'svg_not_allowed',
@@ -210,8 +216,6 @@ class Mcpwp_Media {
 			);
 		}
 
-		// Validate allowed file types.
-		$check = wp_check_filetype_and_ext( $tmp_file, $filename );
 		if ( ! empty( $check['proper_filename'] ) ) {
 			$filename = $check['proper_filename'];
 		}
@@ -253,7 +257,7 @@ class Mcpwp_Media {
 
 		// Create attachment.
 		$attachment = array(
-			'post_mime_type' => $mime['type'],
+			'post_mime_type' => $check['type'],
 			'post_title'     => isset( $args['title'] ) ? sanitize_text_field( $args['title'] ) : sanitize_file_name( pathinfo( $filename, PATHINFO_FILENAME ) ),
 			'post_content'   => '',
 			'post_status'    => 'inherit',
@@ -375,105 +379,4 @@ class Mcpwp_Media {
 		return $data;
 	}
 
-	/**
-	 * Delete a media attachment.
-	 *
-	 * @param int  $attachment_id Attachment ID.
-	 * @param bool $force         True to permanently delete (skip trash).
-	 * @return array|WP_Error Deleted attachment info or error.
-	 */
-	public function delete_media( $attachment_id, $force = false ) {
-		$attachment = get_post( $attachment_id );
-
-		if ( ! $attachment || 'attachment' !== $attachment->post_type ) {
-			return new WP_Error(
-				'not_found',
-				__( 'Attachment not found.', 'mumega-mcp' ),
-				array(
-					'status' => 404,
-					'hint'   => sprintf(
-						'Media attachment ID %d not found. Use wp_list_media to see available media items and their IDs.',
-						absint( $attachment_id )
-					),
-				)
-			);
-		}
-
-		// Capture info before deletion.
-		$info = $this->format_attachment( $attachment_id );
-
-		$result = wp_delete_attachment( $attachment_id, $force );
-
-		if ( ! $result ) {
-			return new WP_Error(
-				'delete_failed',
-				__( 'Failed to delete attachment.', 'mumega-mcp' ),
-				array( 'status' => 500 )
-			);
-		}
-
-		$info['deleted'] = true;
-		$info['force']   = $force;
-
-		return $info;
-	}
-
-	/**
-	 * Convert mime type to file extension.
-	 *
-	 * @param string $mime Mime type.
-	 * @return string|false Extension or false.
-	 */
-	/**
-	 * Update attachment metadata (alt text, title, caption, description).
-	 *
-	 * @param int   $attachment_id Attachment post ID.
-	 * @param array $args          Fields to update: alt, title, caption, description.
-	 * @return array|WP_Error Updated attachment data or error.
-	 */
-	public function update_media( $attachment_id, $args = array() ) {
-		$attachment = get_post( $attachment_id );
-
-		if ( ! $attachment || 'attachment' !== $attachment->post_type ) {
-			return new WP_Error( 'not_found', 'Attachment not found.', array( 'status' => 404 ) );
-		}
-
-		$post_data = array( 'ID' => $attachment_id );
-
-		if ( isset( $args['title'] ) ) {
-			$post_data['post_title'] = sanitize_text_field( $args['title'] );
-		}
-		if ( isset( $args['caption'] ) ) {
-			$post_data['post_excerpt'] = sanitize_textarea_field( $args['caption'] );
-		}
-		if ( isset( $args['description'] ) ) {
-			$post_data['post_content'] = wp_kses_post( $args['description'] );
-		}
-
-		if ( count( $post_data ) > 1 ) {
-			$result = wp_update_post( $post_data, true );
-			if ( is_wp_error( $result ) ) {
-				return $result;
-			}
-		}
-
-		if ( isset( $args['alt'] ) ) {
-			update_post_meta( $attachment_id, '_wp_attachment_image_alt', sanitize_text_field( $args['alt'] ) );
-		}
-
-		return $this->format_attachment( $attachment_id );
-	}
-
-	protected function mime_to_extension( $mime ) {
-		$map = array(
-			'image/jpeg' => 'jpg',
-			'image/png'  => 'png',
-			'image/gif'  => 'gif',
-			'image/webp' => 'webp',
-			'image/svg+xml' => 'svg',
-			'application/pdf' => 'pdf',
-		);
-
-		return isset( $map[ $mime ] ) ? $map[ $mime ] : false;
-	}
 }

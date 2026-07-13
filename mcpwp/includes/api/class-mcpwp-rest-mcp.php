@@ -14,6 +14,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	private $server_version;
 	private $server_name;
 	private $registry;
+	private $api_key_header = '';
 
 	public function __construct() {
 		$this->server_version = defined( 'MCPWP_VERSION' ) ? MCPWP_VERSION : '1.0.0';
@@ -30,6 +31,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	}
 
 	public function handle_mcp( $request ) {
+		$this->api_key_header = (string) $request->get_header( 'X-API-Key' );
 		$body = $request->get_json_params();
 		if ( ! is_array( $body ) || empty( $body ) ) {
 			return $this->mcp_response( $this->jsonrpc_error( null, -32700, 'Parse error: invalid JSON-RPC request.' ) );
@@ -55,9 +57,6 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		$method = (string) ( $body['method'] ?? '' );
 		$id     = $body['id'] ?? null;
 		$params = is_array( $body['params'] ?? null ) ? $body['params'] : array();
-		if ( null === $id && 0 === strpos( $method, 'notifications/' ) ) {
-			return null;
-		}
 		switch ( $method ) {
 			case 'initialize':
 				return $this->jsonrpc_result( $id, array_merge( $this->server_metadata(), array( 'instructions' => 'Use tools/list to discover the local WordPress tools. Create content as a draft unless publishing is explicitly requested.' ) ) );
@@ -65,12 +64,6 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				return $this->handle_tools_list( $id, $params );
 			case 'tools/call':
 				return $this->handle_tools_call( $id, $params );
-			case 'resources/list':
-				return $this->jsonrpc_result( $id, array( 'resources' => $this->resources() ) );
-			case 'resources/read':
-				return $this->handle_resource_read( $id, $params );
-			case 'prompts/list':
-				return $this->jsonrpc_result( $id, array( 'prompts' => array() ) );
 			case 'ping':
 				return $this->jsonrpc_result( $id, array( 'pong' => true ) );
 			default:
@@ -82,7 +75,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		return array(
 			'protocolVersion' => $this->protocol_version,
 			'serverInfo'      => array( 'name' => $this->server_name, 'version' => $this->server_version ),
-			'capabilities'    => array( 'tools' => (object) array(), 'resources' => array( 'subscribe' => false, 'listChanged' => false ), 'prompts' => array( 'listChanged' => false ) ),
+			'capabilities'    => array( 'tools' => (object) array() ),
 		);
 	}
 
@@ -107,12 +100,15 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		$category = $this->registry->get_tool_category( $name );
 		$disabled = get_option( 'mcpwp_disabled_tool_categories', array() );
 		if ( is_array( $disabled ) && in_array( $category, $disabled, true ) ) {
+			$this->log_tool_call( $name, 403, microtime( true ) );
 			return $this->jsonrpc_error( $id, -32003, 'Tool category is disabled by the site administrator.' );
 		}
 		$record = $this->get_current_api_key_record();
 		if ( is_array( $record ) && ! $this->key_allows_category( $record, $category ) ) {
+			$this->log_tool_call( $name, 403, microtime( true ) );
 			return $this->jsonrpc_error( $id, -32003, 'Tool category is not allowed for this API key.' );
 		}
+		$started_at = microtime( true );
 
 		$route = $map[ $name ]['route'];
 		foreach ( $arguments as $key => $value ) {
@@ -123,15 +119,33 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			}
 		}
 		$request = new WP_REST_Request( $map[ $name ]['method'], '/' . $this->namespace . $route );
+		$request->set_header( 'X-API-Key', $this->api_key_header );
 		foreach ( $arguments as $key => $value ) {
 			$request->set_param( $key, $value );
 		}
 		$response = rest_do_request( $request );
 		if ( is_wp_error( $response ) ) {
-			return $this->jsonrpc_error( $id, -32000, $response->get_error_message() );
+			$status = (int) ( $response->get_error_data()['status'] ?? 500 );
+			$this->log_tool_call( $name, $status, $started_at );
+			return $this->jsonrpc_error( $id, -32000, $response->get_error_message(), array( 'status' => $status, 'code' => $response->get_error_code() ) );
 		}
 		$data = method_exists( $response, 'get_data' ) ? $response->get_data() : $response;
+		$status = method_exists( $response, 'get_status' ) ? (int) $response->get_status() : 200;
+		if ( $status >= 400 ) {
+			$this->log_tool_call( $name, $status, $started_at );
+			$message = is_array( $data ) && isset( $data['message'] ) ? (string) $data['message'] : 'WordPress REST request failed.';
+			$code    = is_array( $data ) && isset( $data['code'] ) ? (string) $data['code'] : 'rest_error';
+			return $this->jsonrpc_error( $id, -32000, $message, array( 'status' => $status, 'code' => $code ) );
+		}
+		$this->log_tool_call( $name, $status, $started_at );
 		return $this->jsonrpc_result( $id, array( 'content' => array( array( 'type' => 'text', 'text' => wp_json_encode( $data ) ) ), 'structuredContent' => $data ) );
+	}
+
+	private function log_tool_call( $name, $status_code, $started_at ) {
+		$record = $this->get_current_api_key_record();
+		$key_id = is_array( $record ) ? (string) ( $record['id'] ?? '' ) : '';
+		$duration_ms = max( 0, (int) round( ( microtime( true ) - $started_at ) * 1000 ) );
+		$this->log_activity( $name, $status_code, $duration_ms, $key_id );
 	}
 
 	private function filter_disabled_tools( $tools ) {
@@ -148,24 +162,6 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			return $tools;
 		}
 		return array_values( array_filter( $tools, function ( $tool ) use ( $record ) { return $this->key_allows_category( $record, $tool['annotations']['category'] ?? 'site' ); } ) );
-	}
-
-	private function resources() {
-		return array(
-			array( 'uri' => 'mcpwp://site-info', 'name' => 'Site Info', 'description' => 'Local WordPress site information.', 'mimeType' => 'application/json' ),
-			array( 'uri' => 'mcpwp://posts', 'name' => 'Posts', 'description' => 'Local WordPress posts.', 'mimeType' => 'application/json' ),
-		);
-	}
-
-	private function handle_resource_read( $id, $params ) {
-		$routes = array( 'mcpwp://site-info' => '/site-info', 'mcpwp://posts' => '/posts' );
-		$uri    = (string) ( $params['uri'] ?? '' );
-		if ( ! isset( $routes[ $uri ] ) ) {
-			return $this->jsonrpc_error( $id, -32602, 'Unknown resource: ' . $uri );
-		}
-		$response = rest_do_request( new WP_REST_Request( 'GET', '/' . $this->namespace . $routes[ $uri ] ) );
-		$data     = method_exists( $response, 'get_data' ) ? $response->get_data() : $response;
-		return $this->jsonrpc_result( $id, array( 'contents' => array( array( 'uri' => $uri, 'mimeType' => 'application/json', 'text' => wp_json_encode( $data ) ) ) ) );
 	}
 
 	public function get_introspection_data() {

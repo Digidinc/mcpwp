@@ -140,7 +140,7 @@ final class WporgArtifactIdentityTest extends TestCase {
 	}
 
 	public function test_verifier_rejects_legacy_gettext_domain_after_semicolon_in_message(): void {
-		$result = self::verify_zip_with_extra_php(
+		$result = self::verify_zip_with_php_probe(
 			"<?php\n\$internal_slug = 'mcpwp';\n__( 'Legacy; message', 'mcpwp' );\n"
 		);
 
@@ -149,7 +149,7 @@ final class WporgArtifactIdentityTest extends TestCase {
 	}
 
 	public function test_verifier_rejects_legacy_gettext_domain_after_nested_message_expression(): void {
-		$result = self::verify_zip_with_extra_php(
+		$result = self::verify_zip_with_php_probe(
 			"<?php\n__( sprintf( 'Legacy; %s', 'message' ), 'mcpwp' );\n"
 		);
 
@@ -158,7 +158,7 @@ final class WporgArtifactIdentityTest extends TestCase {
 	}
 
 	public function test_verifier_rejects_legacy_gettext_domain_before_trailing_comma(): void {
-		$result = self::verify_zip_with_extra_php(
+		$result = self::verify_zip_with_php_probe(
 			"<?php\n__( 'Legacy', 'mcpwp', );\n"
 		);
 
@@ -167,7 +167,7 @@ final class WporgArtifactIdentityTest extends TestCase {
 	}
 
 	public function test_verifier_accepts_internal_mcpwp_literals_outside_gettext_calls(): void {
-		$result = self::verify_zip_with_extra_php(
+		$result = self::verify_zip_with_php_probe(
 			"<?php\n\$server_name = 'mcpwp';\nstrpos( \$server_name, 'mcpwp' );\n"
 		);
 
@@ -208,7 +208,7 @@ final class WporgArtifactIdentityTest extends TestCase {
 	/**
 	 * @return array{status:int,output:string[]}
 	 */
-	private static function verify_zip_with_extra_php( $php_contents ): array {
+	private static function verify_zip_with_php_probe( $php_contents ): array {
 		$temp_dir = sys_get_temp_dir() . '/mcpwp-wporg-' . bin2hex( random_bytes( 8 ) );
 		if ( ! mkdir( $temp_dir, 0700, true ) && ! is_dir( $temp_dir ) ) {
 			throw new RuntimeException( 'Could not create temporary artifact directory.' );
@@ -216,7 +216,9 @@ final class WporgArtifactIdentityTest extends TestCase {
 
 		try {
 			self::run_command( 'unzip -qq ' . escapeshellarg( self::$zip_path ) . ' -d ' . escapeshellarg( $temp_dir ) );
-			$probe = $temp_dir . '/' . self::SLUG . '/includes/wporg-identity-probe.php';
+			// Mutate an allowlisted runtime file so the identity assertion remains
+			// independent from the exclusive artifact-inventory assertion.
+			$probe = $temp_dir . '/' . self::SLUG . '/includes/index.php';
 			if ( false === file_put_contents( $probe, $php_contents ) ) {
 				throw new RuntimeException( 'Could not create synthetic PHP probe.' );
 			}

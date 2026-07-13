@@ -57,10 +57,17 @@ class Mcpwp_Test_Role
 class Mcpwp_Test_Wpdb
 {
     public $prefix = 'wp_';
+    public $inserted = array();
 
     public function get_charset_collate()
     {
         return 'DEFAULT CHARACTER SET utf8mb4';
+    }
+
+    public function insert($table, $data, $format = null)
+    {
+        $this->inserted[] = array( 'table' => $table, 'data' => $data, 'format' => $format );
+        return 1;
     }
 }
 
@@ -246,6 +253,16 @@ function sanitize_title($value)
     $value = strtolower(trim((string) $value));
     $value = preg_replace('/[^a-z0-9]+/', '-', $value);
     return trim($value, '-');
+}
+
+function sanitize_file_name($value)
+{
+    return preg_replace('/[^a-zA-Z0-9._-]/', '', basename((string) $value));
+}
+
+function sanitize_mime_type($value)
+{
+    return preg_replace('/[^a-zA-Z0-9.+\/-]/', '', (string) $value);
 }
 
 function sanitize_email($value)
@@ -503,7 +520,22 @@ function get_bloginfo($show = '')
 
 function is_multisite()
 {
-    return false;
+    return ! empty($GLOBALS['mcpwp_test_is_multisite']);
+}
+
+function get_sites($args = array())
+{
+    return isset($GLOBALS['mcpwp_test_site_ids']) ? $GLOBALS['mcpwp_test_site_ids'] : array();
+}
+
+function switch_to_blog($blog_id)
+{
+    $GLOBALS['mcpwp_test_switched_blogs'][] = (int) $blog_id;
+}
+
+function restore_current_blog()
+{
+    $GLOBALS['mcpwp_test_restored_blogs'] = isset($GLOBALS['mcpwp_test_restored_blogs']) ? $GLOBALS['mcpwp_test_restored_blogs'] + 1 : 1;
 }
 
 function wp_generate_uuid4()
@@ -556,8 +588,11 @@ function register_rest_route($namespace = '', $route = '', $args = array())
     return true;
 }
 
-function rest_do_request()
+function rest_do_request($request = null)
 {
+    if (isset($GLOBALS['_mcpwp_test_rest_dispatcher']) && is_callable($GLOBALS['_mcpwp_test_rest_dispatcher'])) {
+        return call_user_func($GLOBALS['_mcpwp_test_rest_dispatcher'], $request);
+    }
     return new WP_REST_Response(array( 'ok' => true ), 200);
 }
 
@@ -833,6 +868,107 @@ function admin_url($path = '')
 function wp_slash($value)
 {
     return is_string($value) ? addslashes($value) : $value;
+}
+
+function wp_tempnam($filename = '')
+{
+    return tempnam(sys_get_temp_dir(), 'mcpwp-');
+}
+
+function wp_handle_upload($file, $overrides = array())
+{
+    return array( 'file' => isset($file['tmp_name']) ? $file['tmp_name'] : '', 'type' => isset($file['type']) ? $file['type'] : '', 'url' => '' );
+}
+
+function media_handle_upload($file_id, $post_id = 0, $post_data = array(), $overrides = array())
+{
+    return 1;
+}
+
+function wp_check_filetype($filename)
+{
+    $extension = strtolower(pathinfo((string) $filename, PATHINFO_EXTENSION));
+    $types = array( 'png' => 'image/png', 'jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'gif' => 'image/gif', 'webp' => 'image/webp', 'pdf' => 'application/pdf' );
+    return array( 'ext' => isset($types[ $extension ]) ? $extension : false, 'type' => isset($types[ $extension ]) ? $types[ $extension ] : false );
+}
+
+function wp_check_filetype_and_ext($file, $filename)
+{
+    $type = wp_check_filetype($filename);
+    return array( 'ext' => $type['ext'], 'type' => $type['type'], 'proper_filename' => false );
+}
+
+function wp_delete_file($file)
+{
+    if (is_file($file)) {
+        unlink($file);
+    }
+}
+
+function wp_upload_dir()
+{
+    $path = sys_get_temp_dir() . '/mcpwp-test-uploads';
+    if (! is_dir($path)) {
+        mkdir($path, 0777, true);
+    }
+    return array( 'path' => $path, 'url' => 'https://example.com/uploads', 'error' => false );
+}
+
+function wp_unique_filename($directory, $filename)
+{
+    return sanitize_file_name($filename);
+}
+
+class Mcpwp_Test_Filesystem
+{
+    public $moves = array();
+
+    public function move($source, $destination, $overwrite = false)
+    {
+        $this->moves[] = array( $source, $destination );
+        return rename($source, $destination);
+    }
+
+    public function chmod($file, $mode)
+    {
+        return true;
+    }
+}
+
+function WP_Filesystem()
+{
+    $GLOBALS['wp_filesystem'] = new Mcpwp_Test_Filesystem();
+    return true;
+}
+
+function wp_insert_attachment($attachment, $file)
+{
+    $attachment['post_type'] = 'attachment';
+    $id = wp_insert_post($attachment, true);
+    $GLOBALS['_mcpwp_test_posts'][ $id ]->post_mime_type = $attachment['post_mime_type'];
+    $GLOBALS['_mcpwp_test_posts'][ $id ]->attached_file = $file;
+    return $id;
+}
+
+function wp_generate_attachment_metadata($attachment_id, $file)
+{
+    return array();
+}
+
+function wp_update_attachment_metadata($attachment_id, $metadata)
+{
+    $GLOBALS['_mcpwp_test_attachment_metadata'][ (int) $attachment_id ] = $metadata;
+    return true;
+}
+
+function wp_get_attachment_metadata($attachment_id)
+{
+    return isset($GLOBALS['_mcpwp_test_attachment_metadata'][ (int) $attachment_id ]) ? $GLOBALS['_mcpwp_test_attachment_metadata'][ (int) $attachment_id ] : array();
+}
+
+function wp_get_attachment_url($attachment_id)
+{
+    return 'https://example.com/uploads/' . basename($GLOBALS['_mcpwp_test_posts'][ (int) $attachment_id ]->attached_file);
 }
 
 // ── Admin / AJAX stubs for auth trait bypass tests ───────────────────────

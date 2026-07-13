@@ -30,7 +30,6 @@ class Mcpwp_MCP_Free_Tools extends Mcpwp_MCP_Tool_Registry {
 			'wp_delete_draft'           => 'Delete one local draft post or page.',
 			'wp_list_media'             => 'List media attachments.',
 			'wp_get_media'              => 'Get one media attachment.',
-			'wp_upload_media'           => 'Upload a local media file.',
 			'wp_upload_media_b64'       => 'Upload media from base64 data.',
 			'wp_list_categories'        => 'List post categories.',
 			'wp_list_tags'              => 'List post tags.',
@@ -47,16 +46,67 @@ class Mcpwp_MCP_Free_Tools extends Mcpwp_MCP_Tool_Registry {
 	}
 
 	private function get_input_properties( $name ) {
-		if ( in_array( $name, array( 'wp_get_post', 'wp_update_post', 'wp_get_page', 'wp_update_page', 'wp_delete_draft', 'wp_get_media' ), true ) ) {
-			return array( 'id' => array( 'type' => 'integer', 'description' => 'Resource identifier.', 'required' => true ) );
+		$id = array( 'id' => array( 'type' => 'integer', 'description' => 'Resource identifier.', 'required' => true ) );
+		$list = array(
+			'posts_per_page' => array( 'type' => 'integer', 'description' => 'Maximum items to return.' ),
+			'paged'          => array( 'type' => 'integer', 'description' => 'One-based result page.' ),
+			'post_status'    => array( 'type' => 'string', 'description' => 'WordPress post status.' ),
+			'orderby'        => array( 'type' => 'string', 'description' => 'WordPress ordering field.' ),
+			'order'          => array( 'type' => 'string', 'description' => 'ASC or DESC.' ),
+		);
+		$post = array(
+			'title'          => array( 'type' => 'string', 'description' => 'Post title.' ),
+			'content'        => array( 'type' => 'string', 'description' => 'Post content.' ),
+			'status'         => array( 'type' => 'string', 'description' => 'Post status.' ),
+			'excerpt'        => array( 'type' => 'string', 'description' => 'Post excerpt.' ),
+			'slug'           => array( 'type' => 'string', 'description' => 'Post slug.' ),
+			'categories'     => array( 'type' => 'array', 'description' => 'Category identifiers.' ),
+			'tags'           => array( 'type' => 'array', 'description' => 'Tag names.' ),
+			'featured_image' => array( 'type' => 'integer', 'description' => 'Attachment identifier.' ),
+		);
+		$page = array(
+			'title'          => array( 'type' => 'string', 'description' => 'Page title.' ),
+			'content'        => array( 'type' => 'string', 'description' => 'Page content.' ),
+			'status'         => array( 'type' => 'string', 'description' => 'Page status.' ),
+			'slug'           => array( 'type' => 'string', 'description' => 'Page slug.' ),
+			'parent'         => array( 'type' => 'integer', 'description' => 'Parent page identifier.' ),
+			'menu_order'     => array( 'type' => 'integer', 'description' => 'Page sort order.' ),
+			'template'       => array( 'type' => 'string', 'description' => 'Installed page template.' ),
+			'featured_image' => array( 'type' => 'integer', 'description' => 'Attachment identifier.' ),
+		);
+		switch ( $name ) {
+			case 'wp_list_posts': return $list;
+			case 'wp_get_post':
+			case 'wp_get_page':
+			case 'wp_delete_draft':
+			case 'wp_get_media': return $id;
+			case 'wp_create_post': return $post;
+			case 'wp_update_post': return array_merge( $id, $post );
+			case 'wp_list_pages': return $list;
+			case 'wp_create_page': return $page;
+			case 'wp_update_page': return array_merge( $id, $page );
+			case 'wp_list_drafts':
+				return array( 'type' => array( 'type' => 'string', 'description' => 'post or page.' ), 'posts_per_page' => $list['posts_per_page'], 'orderby' => $list['orderby'], 'order' => $list['order'] );
+			case 'wp_list_media':
+				return array( 'posts_per_page' => $list['posts_per_page'], 'paged' => $list['paged'], 'mime_type' => array( 'type' => 'string', 'description' => 'Media MIME type.' ), 'search' => array( 'type' => 'string', 'description' => 'Title search.' ), 'orderby' => $list['orderby'], 'order' => $list['order'] );
+			case 'wp_upload_media_b64':
+				return array(
+					'data' => array( 'type' => 'string', 'description' => 'Base64-encoded local file data.', 'required' => true ),
+					'filename' => array( 'type' => 'string', 'description' => 'Safe filename with a WordPress-allowed extension.', 'required' => true ),
+					'mime_type' => array( 'type' => 'string', 'description' => 'Expected MIME type.' ),
+					'title' => array( 'type' => 'string', 'description' => 'Attachment title.' ),
+					'alt' => array( 'type' => 'string', 'description' => 'Alternative text.' ),
+					'caption' => array( 'type' => 'string', 'description' => 'Attachment caption.' ),
+				);
+			case 'wp_create_term':
+				return array(
+					'taxonomy' => array( 'type' => 'string', 'description' => 'category or post_tag.', 'required' => true ),
+					'name' => array( 'type' => 'string', 'description' => 'Term name.', 'required' => true ),
+					'slug' => array( 'type' => 'string', 'description' => 'Optional term slug.' ),
+					'description' => array( 'type' => 'string', 'description' => 'Optional term description.' ),
+				);
+			default: return array();
 		}
-		if ( 'wp_upload_media_b64' === $name ) {
-			return array(
-				'data'     => array( 'type' => 'string', 'description' => 'Base64-encoded file data.', 'required' => true ),
-				'filename' => array( 'type' => 'string', 'description' => 'Local file name.', 'required' => true ),
-			);
-		}
-		return array();
 	}
 
 	public function get_tool_map() {
@@ -74,7 +124,6 @@ class Mcpwp_MCP_Free_Tools extends Mcpwp_MCP_Tool_Registry {
 			'wp_delete_draft'           => array( 'method' => 'DELETE', 'route' => '/drafts/{id}' ),
 			'wp_list_media'             => array( 'method' => 'GET', 'route' => '/media' ),
 			'wp_get_media'              => array( 'method' => 'GET', 'route' => '/media/{id}' ),
-			'wp_upload_media'           => array( 'method' => 'POST', 'route' => '/media' ),
 			'wp_upload_media_b64'       => array( 'method' => 'POST', 'route' => '/media/from-base64' ),
 			'wp_list_categories'        => array( 'method' => 'GET', 'route' => '/categories' ),
 			'wp_list_tags'              => array( 'method' => 'GET', 'route' => '/tags' ),

@@ -3,15 +3,24 @@
 if ( ! defined( 'ABSPATH' ) ) { exit; }
 
 class Mcpwp_Deactivator {
-	public static function deactivate() {
-		$hooks = array(
-			'mcpwp_cleanup_logs',
-			'mcpwp_check_alerts',
-			'mcpwp_verify_screenshot',
-			'mcpwp_compute_signals',
-			'mcpwp_action_log_daily_prune',
-			'mcpwp_webhook_retry',
-		);
-		foreach ( $hooks as $hook ) { wp_clear_scheduled_hook( $hook ); }
+	public static function deactivate( $network_wide = false ) {
+		if ( $network_wide && is_multisite() && function_exists( 'get_sites' ) ) {
+			foreach ( get_sites( array( 'fields' => 'ids' ) ) as $blog_id ) {
+				switch_to_blog( $blog_id );
+				self::clear_site_hooks();
+				restore_current_blog();
+			}
+			return;
+		}
+		self::clear_site_hooks();
+	}
+
+	private static function clear_site_hooks() {
+		wp_clear_scheduled_hook( 'mcpwp_cleanup_logs' );
+		wp_clear_scheduled_hook( 'mcpwp_check_alerts' );
+		wp_clear_scheduled_hook( 'mcpwp_verify_screenshot' );
+		wp_clear_scheduled_hook( 'mcpwp_compute_signals' );
+		wp_clear_scheduled_hook( 'mcpwp_action_log_daily_prune' );
+		wp_clear_scheduled_hook( 'mcpwp_webhook_retry' );
 	}
 }

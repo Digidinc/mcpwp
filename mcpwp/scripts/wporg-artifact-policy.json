@@ -1,4 +1,28 @@
 {
+  "allowed_runtime_files": [
+    "LICENSE", "VERSION", "index.php", "mcpwp.php", "readme.txt", "uninstall.php",
+    "admin/css/index.php", "admin/css/mcpwp-admin.css", "admin/index.php", "admin/js/index.php", "admin/js/mcpwp-admin.js",
+    "admin/partials/index.php", "admin/partials/mcpwp-settings-display.php", "admin/partials/mcpwp-setup-display.php", "admin/partials/mcpwp-tools-display.php",
+    "assets/index.php",
+    "includes/admin/class-mcpwp-activity-log.php", "includes/admin/class-mcpwp-admin.php", "includes/admin/class-mcpwp-settings.php", "includes/admin/class-mcpwp-tools-admin.php",
+    "includes/admin/index.php", "includes/admin/traits/index.php", "includes/admin/traits/trait-mcpwp-admin-activity.php", "includes/admin/traits/trait-mcpwp-admin-settings.php", "includes/admin/traits/trait-mcpwp-admin-setup.php",
+    "includes/api/class-mcpwp-rest-api-keys.php", "includes/api/class-mcpwp-rest-api.php", "includes/api/class-mcpwp-rest-mcp.php", "includes/api/class-mcpwp-rest-media.php",
+    "includes/api/class-mcpwp-rest-pages.php", "includes/api/class-mcpwp-rest-posts.php", "includes/api/class-mcpwp-rest-rate-limit.php", "includes/api/class-mcpwp-rest-site-info.php",
+    "includes/api/class-mcpwp-rest-site-settings.php", "includes/api/class-mcpwp-rest-site-taxonomy.php", "includes/api/index.php",
+    "includes/class-mcpwp-activator.php", "includes/class-mcpwp-deactivator.php", "includes/class-mcpwp-i18n.php", "includes/class-mcpwp-loader.php", "includes/class-mcpwp-migrate.php", "includes/class-mcpwp-rate-limiter.php",
+    "includes/core/class-mcpwp-core.php", "includes/core/class-mcpwp-drafts.php", "includes/core/class-mcpwp-media.php", "includes/core/class-mcpwp-pages.php", "includes/core/class-mcpwp-posts.php",
+    "includes/core/index.php", "includes/core/traits/index.php", "includes/index.php",
+    "includes/mcp/class-mcpwp-mcp-free-tools.php", "includes/mcp/class-mcpwp-mcp-tool-registry.php", "includes/mcp/traits/index.php",
+    "includes/mcp/traits/trait-mcpwp-free-tools-content.php", "includes/mcp/traits/trait-mcpwp-free-tools-media.php", "includes/mcp/traits/trait-mcpwp-free-tools-ops.php", "includes/mcp/traits/trait-mcpwp-free-tools-site.php",
+    "includes/traits/index.php", "includes/traits/trait-mcpwp-api-auth.php", "includes/traits/trait-mcpwp-logging.php", "includes/traits/trait-mcpwp-sanitization.php",
+    "languages/index.php", "languages/mumega-mcp.pot"
+  ],
+  "source_only_artwork_files": [
+    "assets/README.md", "assets/banner-1544x500.png", "assets/banner-772x250.png", "assets/banner.svg",
+    "assets/icon-128x128.png", "assets/icon-256x256.png", "assets/icon-300x300.png", "assets/icon.svg",
+    "assets/screenshot-1.png", "assets/screenshot-1.svg", "assets/screenshot-2.png", "assets/screenshot-2.svg",
+    "assets/screenshot-3.png", "assets/screenshot-3.svg", "assets/screenshot-4.png", "assets/screenshot-4.svg"
+  ],
   "forbidden_directory_components": [
     "freemius",
     "pro"
@@ -94,7 +118,7 @@
     "wp_safe_remote_get", "wp_safe_remote_post", "wp_safe_remote_request",
     "download_url", "media_sideload_image", "media_handle_sideload",
     "Plugin_Upgrader", "Theme_Upgrader", "WP_Upgrader", "Automatic_Upgrader_Skin", "Plugin_Installer_Skin",
-    "wp_update_plugins", "plugins_api", "pre_set_site_transient_update_plugins", "site_transient_update_plugins",
+    "wp_update_plugins", "update_plugins", "set_site_transient", "delete_site_transient", "plugins_api", "pre_set_site_transient_update_plugins", "site_transient_update_plugins",
     "upgrade-plugin", "install-plugin", "activate-plugin", "plugin-install.php",
     "package_url", "manifest_url", "version_url", "remote_package", "option_package", "mcpwp_update_info", "mcpwp_version_url", "mcp-updates",
     "Mcpwp_Analytics", "MCPWP_POSTHOG_", "posthog", "telemetry",
@@ -137,6 +161,10 @@
     "raw_php", "custom_php", "custom_javascript", "custom_js",
     "'/action-log", "\"/action-log", "csv export", "rollback"
   ],
+  "forbidden_patterns": [
+    "[a-z0-9.-]+\\.workers\\.dev",
+    "[a-z0-9.-]+-assets\\.i\\.posthog\\.com"
+  ],
   "lifecycle_cleanup_exceptions": {
     "includes/class-mcpwp-deactivator.php": [
       "'mcpwp_check_alerts'", "'mcpwp_verify_screenshot'", "'mcpwp_webhook_retry'"
@@ -174,7 +202,7 @@
     "wp_create_page": ["POST", "/pages"], "wp_update_page": ["PATCH", "/pages/{id}"],
     "wp_list_drafts": ["GET", "/drafts"], "wp_delete_draft": ["DELETE", "/drafts/{id}"],
     "wp_list_media": ["GET", "/media"], "wp_get_media": ["GET", "/media/{id}"],
-    "wp_upload_media": ["POST", "/media"], "wp_upload_media_b64": ["POST", "/media/from-base64"],
+    "wp_upload_media_b64": ["POST", "/media/from-base64"],
     "wp_list_categories": ["GET", "/categories"], "wp_list_tags": ["GET", "/tags"],
     "wp_create_term": ["POST", "/terms"]
   },

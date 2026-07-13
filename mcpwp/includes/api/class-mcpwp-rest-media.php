@@ -27,7 +27,7 @@ class Mcpwp_REST_Media extends Mcpwp_REST_API {
 	public function upload_from_base64( $request ) {
 		$params = array_merge( $request->get_params(), (array) $request->get_json_params() );
 		if ( empty( $params['data'] ) || empty( $params['filename'] ) ) { return $this->error_response( 'missing_data', __( 'Base64 data and a file name are required.', 'mumega-mcp' ), 400 ); }
-		return $this->respond( $this->media->upload_from_base64( (string) $params['data'], sanitize_file_name( $params['filename'] ), $params ), 201 );
+		return $this->respond( $this->media->upload_from_base64( (string) $params['data'], (string) $params['filename'], $params ), 201 );
 	}
 	private function respond( $result, $status = 200 ) { return is_wp_error( $result ) ? $this->error_response( $result->get_error_code(), $result->get_error_message(), (int) ( $result->get_error_data()['status'] ?? 400 ) ) : $this->success_response( $result, $status ); }
 }

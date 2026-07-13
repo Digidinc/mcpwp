@@ -28,7 +28,6 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 define( 'MCPWP_VERSION', '3.4.3' ); // x-release-please-version
-define( 'MCPWP_WPORG_BUILD', true );
 define( 'MCPWP_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'MCPWP_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 define( 'MCPWP_PLUGIN_BASENAME', plugin_basename( __FILE__ ) );
@@ -110,9 +109,9 @@ function mcpwp_activate( $network_wide = false ) {
 	Mcpwp_Activator::activate();
 }
 
-function mcpwp_deactivate() {
+function mcpwp_deactivate( $network_wide = false ) {
 	require_once plugin_dir_path( __FILE__ ) . 'includes/class-mcpwp-deactivator.php';
-	Mcpwp_Deactivator::deactivate();
+	Mcpwp_Deactivator::deactivate( $network_wide );
 }
 
 register_activation_hook( __FILE__, 'mcpwp_activate' );

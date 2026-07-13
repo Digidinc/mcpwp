@@ -24,18 +24,15 @@ class Mcpwp_Activator {
 		dbDelta( "CREATE TABLE {$table} (
 			id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
 			created_at datetime NOT NULL,
-			method varchar(12) NOT NULL DEFAULT '',
-			endpoint varchar(255) NOT NULL DEFAULT '',
+			action varchar(191) NOT NULL DEFAULT '',
 			status_code smallint(5) unsigned NOT NULL DEFAULT 200,
 			duration_ms int(10) unsigned NOT NULL DEFAULT 0,
-			request_data longtext NULL,
-			response_data longtext NULL,
 			api_key_id varchar(64) NULL,
-			PRIMARY KEY (id), KEY created_at (created_at), KEY endpoint (endpoint)
+			PRIMARY KEY (id), KEY created_at (created_at), KEY action (action)
 		) {$charset};" );
 	}
 	private static function create_defaults() {
-		if ( false === get_option( 'mcpwp_settings', false ) ) { update_option( 'mcpwp_settings', array( 'enable_logging' => true, 'log_retention_days' => 30, 'log_store_response_data' => false, 'log_redaction_keys' => array( 'api_key', 'authorization', 'token' ) ), false ); }
+		if ( false === get_option( 'mcpwp_settings', false ) ) { update_option( 'mcpwp_settings', array( 'enable_logging' => true, 'log_retention_days' => 30 ), false ); }
 		if ( false === get_option( 'mcpwp_rate_limit_settings', false ) ) { update_option( 'mcpwp_rate_limit_settings', array( 'enabled' => true, 'requests_per_minute' => 60, 'requests_per_hour' => 1000, 'burst_limit' => 10, 'whitelist' => array() ), false ); }
 		update_option( 'mcpwp_db_version', MCPWP_VERSION, false );
 	}
