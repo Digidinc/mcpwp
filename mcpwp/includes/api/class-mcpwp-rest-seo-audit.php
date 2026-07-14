@@ -720,6 +720,8 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 			),
 		);
 
+		$payload['technical_signals'] = $this->get_cloudflare_technical_signals();
+
 		if ( $store && class_exists( 'Mcpwp_SEO_Audit_Store' ) ) {
 			$payload['stored_run'] = Mcpwp_SEO_Audit_Store::store_run(
 				$payload,
@@ -733,6 +735,60 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 
 		return $this->success_response(
 			$payload
+		);
+	}
+
+	/**
+	 * Site-level (not per-URL) technical signals from the Cloudflare zone, if
+	 * connected: Speed settings that affect Core Web Vitals (LCP/INP).
+	 *
+	 * @return array{cloudflare_connected: bool, checks?: array}
+	 */
+	private function get_cloudflare_technical_signals() {
+		if ( ! class_exists( 'Mcpwp_Integration_Manager' ) || ! Mcpwp_Integration_Manager::get_instance()->has_provider_key( 'cloudflare' ) ) {
+			return array(
+				'cloudflare_connected' => false,
+				'note'                 => 'Connect Cloudflare under WP Admin > Integrations to surface Speed settings (Early Hints, HTTP/3, Rocket Loader, image Polish) that affect Core Web Vitals here.',
+			);
+		}
+
+		$cloudflare = new Mcpwp_Provider_Cloudflare();
+		$settings   = $cloudflare->get_speed_settings();
+
+		if ( is_wp_error( $settings ) ) {
+			return array(
+				'cloudflare_connected' => true,
+				'error'                => $settings->get_error_message(),
+			);
+		}
+
+		$checks = array();
+		foreach ( array(
+			'early_hints'   => 'Early Hints (speeds up LCP by letting the browser start fetching key resources before the full response headers arrive)',
+			'http3'         => 'HTTP/3 (reduces connection overhead, improves load latency)',
+			'rocket_loader' => 'Rocket Loader (defers non-critical JS; can help or hurt INP depending on the theme — verify after enabling)',
+		) as $name => $label ) {
+			$value = isset( $settings[ $name ] ) ? $settings[ $name ] : null;
+			$on    = 'on' === $value;
+			$checks[] = array(
+				'setting'        => $name,
+				'value'          => is_array( $value ) ? null : $value,
+				'recommendation' => $on ? null : sprintf( 'Enable %s for this zone to help Core Web Vitals.', $label ),
+			);
+		}
+
+		$polish = isset( $settings['polish'] ) ? $settings['polish'] : null;
+		$checks[] = array(
+			'setting'        => 'polish',
+			'value'          => is_array( $polish ) ? null : $polish,
+			'recommendation' => ( 'off' === $polish || null === $polish )
+				? 'Enable Polish (lossy or webp) to shrink image payloads without a manual optimization pipeline.'
+				: null,
+		);
+
+		return array(
+			'cloudflare_connected' => true,
+			'checks'               => $checks,
 		);
 	}
 

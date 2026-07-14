@@ -250,7 +250,7 @@ trait Mcpwp_Free_Tools_Ops_Trait {
 					'type'        => 'string',
 					'description' => 'Provider slug: pexels, openai, gemini, elevenlabs, screenshot, google_indexing, figma',
 					'required'    => true,
-					'enum'        => array( 'pexels', 'openai', 'gemini', 'elevenlabs', 'screenshot', 'google_indexing', 'figma' ),
+					'enum'        => array( 'pexels', 'openai', 'gemini', 'elevenlabs', 'screenshot', 'google_indexing', 'figma', 'cloudflare' ),
 				),
 				'key' => array(
 					'type'        => 'string',
@@ -271,7 +271,7 @@ trait Mcpwp_Free_Tools_Ops_Trait {
 					'type'        => 'string',
 					'description' => 'Provider slug to test',
 					'required'    => true,
-					'enum'        => array( 'pexels', 'openai', 'gemini', 'elevenlabs', 'screenshot', 'google_indexing', 'figma' ),
+					'enum'        => array( 'pexels', 'openai', 'gemini', 'elevenlabs', 'screenshot', 'google_indexing', 'figma', 'cloudflare' ),
 				),
 			)
 		);
@@ -284,7 +284,69 @@ trait Mcpwp_Free_Tools_Ops_Trait {
 					'type'        => 'string',
 					'description' => 'Provider slug to remove',
 					'required'    => true,
-					'enum'        => array( 'pexels', 'openai', 'gemini', 'elevenlabs', 'screenshot', 'google_indexing', 'figma' ),
+					'enum'        => array( 'pexels', 'openai', 'gemini', 'elevenlabs', 'screenshot', 'google_indexing', 'figma', 'cloudflare' ),
+				),
+			)
+		);
+
+		return $tools;
+	}
+
+	/**
+	 * @return array
+	 */
+	private function get_cloudflare_tools() {
+		$tools   = array();
+		$setting_names = array( 'early_hints', 'http3', 'rocket_loader', 'polish' );
+
+		$tools[] = $this->define_tool(
+			'wp_cloudflare_status',
+			'Check whether Cloudflare is connected for this site (API token + zone ID configured under Integrations) and report the zone name, status, and plan.',
+			array()
+		);
+
+		$tools[] = $this->define_tool(
+			'wp_cloudflare_fix_mcp_access',
+			'Self-service fix for the most common Cloudflare/MCP problem: Bot Fight Mode or Security Level silently blocking MCP requests to this site. Creates or updates a Cloudflare Configuration Rule that drops Security Level to "essentially_off" for this site\'s own /wp-json/mcpwp/v1/* path (the confirmed fix), and best-effort adds a WAF skip rule for Super Bot Fight Mode / Managed Rules on the same path. Requires the Cloudflare integration to be configured first.',
+			array()
+		);
+
+		$tools[] = $this->define_tool(
+			'wp_cloudflare_purge_cache',
+			'Purge Cloudflare cache for specific URLs (e.g. right after editing a page) or the entire zone. Pass urls as an array, or purge_everything=true.',
+			array(
+				'urls'             => array(
+					'type'        => 'array',
+					'description' => 'URLs to purge (max 30). Omit if purge_everything is true.',
+					'items'       => array( 'type' => 'string' ),
+				),
+				'purge_everything' => array(
+					'type'        => 'boolean',
+					'description' => 'Purge the entire zone cache instead of specific URLs.',
+					'default'     => false,
+				),
+			)
+		);
+
+		$tools[] = $this->define_tool(
+			'wp_cloudflare_get_speed_settings',
+			'Read this zone\'s current Cloudflare Speed settings that affect Core Web Vitals: early_hints, http3, rocket_loader, polish (image optimization).',
+			array()
+		);
+
+		$tools[] = $this->define_tool(
+			'wp_cloudflare_update_speed_setting',
+			'Toggle one Cloudflare Speed setting for this zone. Valid settings: early_hints, http3, rocket_loader (values: "on"/"off"), polish (values: "off"/"lossless"/"lossy"/"webp").',
+			array(
+				'setting' => array(
+					'type'        => 'string',
+					'description' => 'Setting name.',
+					'required'    => true,
+					'enum'        => $setting_names,
+				),
+				'value'   => array(
+					'description' => 'New value for the setting.',
+					'required'    => true,
 				),
 			)
 		);

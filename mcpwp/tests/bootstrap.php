@@ -440,6 +440,11 @@ function get_site_url()
     return 'https://example.com';
 }
 
+function rest_url($path = '')
+{
+    return 'https://example.com/wp-json/' . ltrim($path, '/');
+}
+
 function get_bloginfo($show = '')
 {
     if ('version' === $show) {
@@ -826,6 +831,46 @@ function get_post_thumbnail_id($post_id)
 function wp_get_attachment_image_src($attachment_id, $size = 'thumbnail')
 {
     return false;
+}
+
+// -------------------------------------------------------------------------
+// Minimal HTTP API stubs. Mirrors WordPress's own short-circuit contract:
+// wp_remote_request() calls apply_filters('pre_http_request', false, $args, $url)
+// first; tests hook that same filter (as they would against real WP) to
+// mock responses instead of hitting the network.
+// -------------------------------------------------------------------------
+
+function wp_remote_request($url, $args = array())
+{
+    $args = wp_parse_args($args, array( 'method' => 'GET' ));
+    $pre  = apply_filters('pre_http_request', false, $args, $url);
+    if (false !== $pre) {
+        return $pre;
+    }
+
+    return new WP_Error('http_request_failed', 'No network access in test environment; hook pre_http_request to mock a response.');
+}
+
+function wp_remote_get($url, $args = array())
+{
+    $args['method'] = 'GET';
+    return wp_remote_request($url, $args);
+}
+
+function wp_remote_post($url, $args = array())
+{
+    $args['method'] = 'POST';
+    return wp_remote_request($url, $args);
+}
+
+function wp_remote_retrieve_response_code($response)
+{
+    return is_array($response) && isset($response['response']['code']) ? (int) $response['response']['code'] : 0;
+}
+
+function wp_remote_retrieve_body($response)
+{
+    return is_array($response) && isset($response['body']) ? $response['body'] : '';
 }
 
 function wp_get_nav_menus()

@@ -198,6 +198,25 @@ class Mcpwp_Integration_Manager {
 				),
 			),
 		),
+		'cloudflare' => array(
+			'name'        => 'Cloudflare',
+			'url'         => 'https://developers.cloudflare.com/fundamentals/api/get-started/create-token/',
+			'key_prefix'  => '',
+			'tier'        => 'free',
+			'description' => 'Connect this site\'s Cloudflare zone to fix Bot Fight Mode/Security Level blocking MCP requests, purge cache after content edits, and manage Speed settings (Early Hints, HTTP/3, Rocket Loader, Polish) that affect Core Web Vitals. Use a scoped API Token (Zone Settings: Edit, Zone WAF: Edit, Cache Purge: Purge) — not the Global API Key.',
+			'fields'      => array(
+				'api_token' => array(
+					'label'       => 'API Token',
+					'type'        => 'password',
+					'placeholder' => 'Scoped Cloudflare API Token for this zone',
+				),
+				'zone_id'   => array(
+					'label'       => 'Zone ID',
+					'type'        => 'text',
+					'placeholder' => 'Zone ID (Cloudflare dashboard > this domain > Overview > API)',
+				),
+			),
+		),
 	);
 
 	/**
@@ -214,6 +233,7 @@ class Mcpwp_Integration_Manager {
 		'screenshots'      => array( 'screenshot' ),
 		'indexing'          => array( 'google_indexing' ),
 		'design_context'   => array( 'figma' ),
+		'cdn'              => array( 'cloudflare' ),
 		// posthog omitted: analytics-only integration, not capability-selectable via get_preferred_provider()
 	);
 
@@ -414,6 +434,10 @@ class Mcpwp_Integration_Manager {
 			return $this->test_figma_provider();
 		}
 
+		if ( 'cloudflare' === $provider ) {
+			return $this->test_cloudflare_provider();
+		}
+
 		$key = $this->get_provider_key( $provider );
 		if ( false === $key ) {
 			return array(
@@ -549,6 +573,32 @@ class Mcpwp_Integration_Manager {
 		if ( is_array( $data ) && isset( $data['figma'] ) ) {
 			$data['figma']['last_tested'] = current_time( 'mysql' );
 			$data['figma']['test_status'] = $result['success'] ? 'ok' : 'failed';
+			update_option( self::OPTION_NAME, $data );
+		}
+
+		return $result;
+	}
+
+	/**
+	 * Test the Cloudflare API connection.
+	 *
+	 * @return array{success: bool, message: string}
+	 */
+	private function test_cloudflare_provider() {
+		if ( ! class_exists( 'Mcpwp_Provider_Cloudflare' ) ) {
+			return array(
+				'success' => false,
+				'message' => __( 'Cloudflare support is not available in this build.', 'mcpwp' ),
+			);
+		}
+
+		$cloudflare = new Mcpwp_Provider_Cloudflare();
+		$result     = $cloudflare->test_connection();
+
+		$data = get_option( self::OPTION_NAME, array() );
+		if ( is_array( $data ) && isset( $data['cloudflare'] ) ) {
+			$data['cloudflare']['last_tested'] = current_time( 'mysql' );
+			$data['cloudflare']['test_status'] = $result['success'] ? 'ok' : 'failed';
 			update_option( self::OPTION_NAME, $data );
 		}
 

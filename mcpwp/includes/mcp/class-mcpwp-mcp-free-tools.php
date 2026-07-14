@@ -221,6 +221,13 @@ class Mcpwp_MCP_Free_Tools extends Mcpwp_MCP_Tool_Registry {
 			'wp_test_integration'        => 'admin',
 			'wp_remove_integration'      => 'admin',
 
+			// Cloudflare
+			'wp_cloudflare_status'              => 'admin',
+			'wp_cloudflare_fix_mcp_access'       => 'admin',
+			'wp_cloudflare_purge_cache'          => 'admin',
+			'wp_cloudflare_get_speed_settings'   => 'admin',
+			'wp_cloudflare_update_speed_setting' => 'admin',
+
 			// Webhooks
 			'wp_list_webhook_events'     => 'webhooks',
 			'wp_get_event_schema'        => 'webhooks',
@@ -322,6 +329,7 @@ class Mcpwp_MCP_Free_Tools extends Mcpwp_MCP_Tool_Registry {
 			$this->get_plugin_settings_tools(),
 			$this->get_plugin_updates_tools(),
 			$this->get_integration_mgmt_tools(),
+			$this->get_cloudflare_tools(),
 			$this->get_webhooks_tools(),
 			$this->get_feedback_tools(),
 			$this->get_post_meta_tools(),
@@ -846,6 +854,28 @@ class Mcpwp_MCP_Free_Tools extends Mcpwp_MCP_Tool_Registry {
 			'wp_remove_integration'      => array(
 				'method' => 'POST',
 				'route'  => '/integrations/remove',
+			),
+
+			// Cloudflare
+			'wp_cloudflare_status'              => array(
+				'method' => 'GET',
+				'route'  => '/cloudflare/status',
+			),
+			'wp_cloudflare_fix_mcp_access'       => array(
+				'method' => 'POST',
+				'route'  => '/cloudflare/fix-mcp-access',
+			),
+			'wp_cloudflare_purge_cache'          => array(
+				'method' => 'POST',
+				'route'  => '/cloudflare/purge-cache',
+			),
+			'wp_cloudflare_get_speed_settings'   => array(
+				'method' => 'GET',
+				'route'  => '/cloudflare/speed-settings',
+			),
+			'wp_cloudflare_update_speed_setting' => array(
+				'method' => 'POST',
+				'route'  => '/cloudflare/speed-settings',
 			),
 
 			// Webhooks
