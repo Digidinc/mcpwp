@@ -55,6 +55,7 @@ trait Mcpwp_Sanitization {
 			$length_value = in_array( $name, array( 'title', 'name', 'label' ), true ) ? trim( $value ) : $value;
 			$length = strlen( $length_value );
 			if ( isset( $rules['minLength'] ) && $length < (int) $rules['minLength'] ) { return $this->invalid_parameter( $name ); }
+			if ( ! empty( $rules['minLength'] ) && ! in_array( $name, array( 'content', 'slug' ), true ) && '' === trim( sanitize_text_field( $value ) ) ) { return $this->invalid_parameter( $name ); }
 			if ( isset( $rules['maxLength'] ) && $length > (int) $rules['maxLength'] ) { return $this->invalid_parameter( $name ); }
 			if ( isset( $rules['enum'] ) && ! in_array( $value, $rules['enum'], true ) ) { return $this->invalid_parameter( $name ); }
 			if ( isset( $rules['pattern'] ) && 1 !== preg_match( '/' . str_replace( '/', '\\/', $rules['pattern'] ) . '/u', $value ) ) { return $this->invalid_parameter( $name ); }

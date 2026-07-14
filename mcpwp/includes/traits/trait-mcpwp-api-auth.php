@@ -87,6 +87,7 @@ trait Mcpwp_Api_Auth {
 	protected function find_scoped_api_key( $key ) {
 		foreach ( $this->get_scoped_api_keys_raw() as $record ) {
 			$record = $this->normalize_api_key_record( $record );
+			if ( ! $this->record_has_valid_identity_fields( $record ) ) { continue; }
 			if ( empty( $record['revoked_at'] ) && $this->is_api_key_match( $key, $record['hash'] ) ) {
 				return $record;
 			}
@@ -97,6 +98,7 @@ trait Mcpwp_Api_Auth {
 	protected function find_legacy_spai_key( $key ) {
 		foreach ( (array) get_option( 'spai_api_keys', array() ) as $record ) {
 			$record = $this->normalize_api_key_record( $record );
+			if ( ! $this->record_has_valid_identity_fields( $record ) ) { continue; }
 			if ( empty( $record['revoked_at'] ) && $this->is_api_key_match( $key, $record['hash'] ) ) {
 				return $record;
 			}
@@ -227,8 +229,8 @@ trait Mcpwp_Api_Auth {
 	protected function normalize_api_key_record( $record ) {
 		$record = is_array( $record ) ? $record : array();
 		return array(
-			'id' => isset( $record['id'] ) ? (string) $record['id'] : '', 'label' => isset( $record['label'] ) ? (string) $record['label'] : '',
-			'hash' => isset( $record['hash'] ) ? (string) $record['hash'] : '', 'user_id' => isset( $record['user_id'] ) ? $record['user_id'] : 0,
+			'id' => isset( $record['id'] ) ? $record['id'] : '', 'label' => isset( $record['label'] ) ? (string) $record['label'] : '',
+			'hash' => isset( $record['hash'] ) ? $record['hash'] : '', 'user_id' => isset( $record['user_id'] ) ? $record['user_id'] : 0,
 			'scopes' => isset( $record['scopes'] ) ? $record['scopes'] : array(), 'tool_categories' => isset( $record['tool_categories'] ) ? $record['tool_categories'] : array(),
 			'created_at' => isset( $record['created_at'] ) ? (string) $record['created_at'] : '', 'last_used_at' => isset( $record['last_used_at'] ) ? $record['last_used_at'] : null,
 			'revoked_at' => isset( $record['revoked_at'] ) ? $record['revoked_at'] : null,

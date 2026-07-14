@@ -116,6 +116,14 @@ final class WporgArtifactPolicyTest extends TestCase {
 		}
 	}
 
+	public function test_trusted_registry_byte_mutations_rerun_and_fail_the_source_comparator(): void {
+		foreach ( self::$policy['trusted_source_sha256'] as $relative => $expected ) {
+			$contents = (string) file_get_contents( self::$plugin_dir . '/' . $relative ) . ' ';
+			$violations = $this->scan_contents( $relative, $contents );
+			$this->assertStringContainsString( 'trusted source hash mismatch', implode( "\n", $violations ), $relative );
+		}
+	}
+
 	public function test_rest_route_inventory_is_exactly_retained_surface(): void {
 		$GLOBALS['_mcpwp_test_registered_routes'] = array();
 		$controllers = array(

@@ -127,4 +127,22 @@ final class ApiAuthTest extends TestCase {
 		$this->assertInstanceOf( WP_Error::class, $auth->create_scoped_api_key( 'bad scope', array( 'admin!!!' ), array() ) );
 		$this->assertInstanceOf( WP_Error::class, $auth->create_scoped_api_key( 'bad category', array( 'read' ), array( 'content!!!' ) ) );
 	}
+
+	/** @dataProvider malformedIdentityRecords */
+	public function test_malformed_stored_identity_types_never_authenticate_after_string_casts( $record, $presented_key ): void {
+		update_option( 'mcpwp_api_keys', array( $record ) );
+		$request = new WP_REST_Request( 'GET', '/mcpwp/v1/site-info', array(), array( 'X-API-Key' => $presented_key ) );
+		$result = ( new Mcpwp_Api_Auth_Test_Harness() )->verify_api_key( $request );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'invalid_api_key', $result->get_error_code() );
+	}
+
+	public function malformedIdentityRecords(): array {
+		$base = array( 'id' => 'valid-id', 'hash' => 'valid-hash', 'user_id' => 2, 'scopes' => array( 'read' ), 'tool_categories' => array() );
+		return array(
+			'numeric id' => array( array_merge( $base, array( 'id' => 123 ) ), 'valid-hash' ),
+			'numeric hash' => array( array_merge( $base, array( 'hash' => 123 ) ), '123' ),
+		);
+	}
 }

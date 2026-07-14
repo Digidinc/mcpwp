@@ -50,6 +50,27 @@ final class McpEndpointTest extends TestCase {
 			return new WP_Error( 'route_not_found', 'Route not found.', array( 'status' => 404 ) );
 		};
 	}
+	private function install_permission_only_router(): void {
+		foreach ( array( new Mcpwp_REST_Site_Info(), new Mcpwp_REST_Posts(), new Mcpwp_REST_Pages(), new Mcpwp_REST_Media(), new Mcpwp_REST_Site_Taxonomy() ) as $controller ) { $controller->register_routes(); }
+		$GLOBALS['_mcpwp_test_rest_dispatcher'] = static function ( $request ) {
+			foreach ( $GLOBALS['_mcpwp_test_registered_routes'] as $registration ) {
+				$pattern = '#^/mcpwp/v1' . $registration['route'] . '$#';
+				if ( 1 !== preg_match( $pattern, $request->get_route(), $matches ) ) { continue; }
+				$configurations = isset( $registration['args']['methods'] ) ? array( $registration['args'] ) : $registration['args'];
+				foreach ( $configurations as $configuration ) {
+					if ( ! in_array( $request->get_method(), explode( ',', $configuration['methods'] ), true ) ) { continue; }
+					foreach ( $matches as $key => $value ) { if ( is_string( $key ) ) { $request->set_param( $key, $value ); } }
+					$GLOBALS['_mcpwp_test_nested_permission_calls']++;
+					$permission = call_user_func( $configuration['permission_callback'], $request );
+					return true === $permission ? new WP_REST_Response( array( 'allowed' => true ) ) : $permission;
+				}
+			}
+			return new WP_Error( 'route_not_found', 'Route not found.', array( 'status' => 404 ) );
+		};
+	}
+	private function permission_post( $id, $type, $status ) {
+		return (object) array( 'ID' => $id, 'post_type' => $type, 'post_title' => 'Item', 'post_name' => 'item', 'post_status' => $status, 'post_date' => '2026-01-01', 'post_date_gmt' => '2026-01-01', 'post_modified' => '2026-01-01', 'post_modified_gmt' => '2026-01-01', 'post_parent' => 0, 'menu_order' => 0, 'post_author' => 2, 'post_content' => '', 'post_excerpt' => '', 'post_mime_type' => 'attachment' === $type ? 'image/png' : '' );
+	}
 	private function reset_limiter_singleton(): void {
 		$reflection = new ReflectionClass( Mcpwp_Rate_Limiter::class );
 		$instance = $reflection->getProperty( 'instance' );
@@ -99,8 +120,34 @@ final class McpEndpointTest extends TestCase {
 		$this->assertSame( -32602, $initialize['error']['code'] );
 		$list = $this->call_authenticated( 'tools/list', array( 'cursor' => 'not-supported' ) );
 		$this->assertSame( -32602, $list['error']['code'] );
+		$category = $this->call_authenticated( 'tools/list', array( 'category' => 'content' ) );
+		$this->assertSame( -32602, $category['error']['code'] );
 		$tool = $this->call_authenticated( 'tools/call', array( 'name' => 'wp_site_info!!!', 'arguments' => array() ) );
 		$this->assertSame( -32602, $tool['error']['code'] );
+	}
+
+	public function test_malformed_request_without_id_is_an_error_not_a_notification(): void {
+		$data = $this->call_authenticated_body( array( 'jsonrpc' => '1.0', 'method' => 'ping', 'params' => array() ) );
+		$this->assertSame( -32600, $data['error']['code'] );
+		$this->assertNull( $data['id'] );
+	}
+
+	/** @dataProvider invalidToolArguments */
+	public function test_tool_arguments_are_validated_against_exact_advertised_schema( $name, $arguments ): void {
+		$this->install_permission_only_router();
+		$data = $this->call_authenticated( 'tools/call', array( 'name' => $name, 'arguments' => $arguments ) );
+		$this->assertSame( -32602, $data['error']['code'] );
+		$this->assertSame( 0, $GLOBALS['_mcpwp_test_nested_permission_calls'] );
+	}
+
+	public function invalidToolArguments(): array {
+		return array(
+			'unknown argument' => array( 'wp_site_info', array( 'secret' => true ) ),
+			'numeric string integer' => array( 'wp_get_post', array( 'id' => '7' ) ),
+			'boolean string' => array( 'wp_list_categories', array( 'hide_empty' => 'false' ) ),
+			'missing required' => array( 'wp_create_term', array( 'taxonomy' => 'category' ) ),
+			'empty update' => array( 'wp_update_post', array( 'id' => 7 ) ),
+		);
 	}
 
 	public function test_notifications_are_omitted_and_mixed_batch_order_is_preserved(): void {
@@ -144,6 +191,18 @@ final class McpEndpointTest extends TestCase {
 		$this->assertStringNotContainsString( '/srv/', wp_json_encode( $data ) );
 		$this->assertStringNotContainsString( 'SELECT', wp_json_encode( $data ) );
 		$this->assertStringNotContainsString( 'api-key-hash', wp_json_encode( $data ) );
+	}
+
+	/** @dataProvider nestedStatusMappings */
+	public function test_nested_rest_statuses_map_to_stable_jsonrpc_codes( $status, $expected ): void {
+		$GLOBALS['_mcpwp_test_rest_dispatcher'] = static function () use ( $status ) { return new WP_Error( 'nested_failure', 'Safe failure.', array( 'status' => $status ) ); };
+		$data = $this->call_authenticated( 'tools/call', array( 'name' => 'wp_site_info', 'arguments' => array() ) );
+		$this->assertSame( $expected, $data['error']['code'] );
+		$this->assertSame( $status, $data['error']['data']['status'] );
+	}
+
+	public function nestedStatusMappings(): array {
+		return array( '403' => array( 403, -32003 ), '404' => array( 404, -32004 ), '413' => array( 413, -32013 ), '415' => array( 415, -32015 ), '429' => array( 429, -32029 ) );
 	}
 	public function test_internal_tool_request_forwards_outer_api_key_to_target_permission_callback(): void {
 		$this->install_test_router();
@@ -193,7 +252,7 @@ final class McpEndpointTest extends TestCase {
 	public function test_rest_error_response_becomes_jsonrpc_error(): void {
 		$this->install_test_router();
 		$data = $this->call_authenticated( 'tools/call', array( 'name' => 'wp_get_post', 'arguments' => array( 'id' => 999 ) ) );
-		$this->assertSame( -32000, $data['error']['code'] );
+		$this->assertSame( -32004, $data['error']['code'] );
 		$this->assertSame( 'Post not found.', $data['error']['message'] );
 		$this->assertSame( 404, $data['error']['data']['status'] );
 	}
@@ -233,6 +292,20 @@ final class McpEndpointTest extends TestCase {
 		foreach ( $GLOBALS['mcpwp_test_transients'] as $window ) { $this->assertSame( 2, $window['value']['count'] ); }
 	}
 
+	public function test_invalid_unknown_and_denied_batch_items_each_consume_one_rate_unit(): void {
+		$GLOBALS['mcpwp_test_options']['mcpwp_rate_limit_settings'] = array( 'enabled' => true, 'requests_per_minute' => 20, 'requests_per_hour' => 100, 'burst_limit' => 20, 'whitelist' => array() );
+		$GLOBALS['mcpwp_test_options']['mcpwp_disabled_tool_categories'] = array( 'site' );
+		$this->reset_limiter_singleton();
+		$data = $this->call_authenticated_body( array(
+			array( 'jsonrpc' => '1.0', 'id' => 60, 'method' => 'ping', 'params' => array() ),
+			array( 'jsonrpc' => '2.0', 'id' => 61, 'method' => 'tools/call', 'params' => array( 'name' => 'wp_unknown', 'arguments' => array() ) ),
+			array( 'jsonrpc' => '2.0', 'id' => 62, 'method' => 'tools/call', 'params' => array( 'name' => 'wp_get_post', 'arguments' => array( 'id' => '7' ) ) ),
+			array( 'jsonrpc' => '2.0', 'id' => 63, 'method' => 'tools/call', 'params' => array( 'name' => 'wp_site_info', 'arguments' => array() ) ),
+		) );
+		$this->assertCount( 4, $data );
+		foreach ( $GLOBALS['mcpwp_test_transients'] as $window ) { $this->assertSame( 4, $window['value']['count'] ); }
+	}
+
 	public function test_mcp_read_tool_uses_same_get_multiplier_as_direct_rest(): void {
 		$GLOBALS['mcpwp_test_options']['mcpwp_rate_limit_settings'] = array( 'enabled' => true, 'requests_per_minute' => 10, 'requests_per_hour' => 100, 'burst_limit' => 1, 'whitelist' => array() );
 		$this->reset_limiter_singleton();
@@ -242,9 +315,26 @@ final class McpEndpointTest extends TestCase {
 		$limited = $this->call_authenticated( 'tools/call', array( 'name' => 'wp_site_info', 'arguments' => array() ) );
 		$this->assertSame( 'rate_limit_exceeded', $limited['error']['data']['code'] );
 	}
+	public function test_all_seventeen_tools_execute_real_nested_permission_callbacks(): void {
+		$this->install_permission_only_router();
+		$GLOBALS['_mcpwp_test_posts'] = array( 1 => $this->permission_post( 1, 'post', 'draft' ), 2 => $this->permission_post( 2, 'page', 'draft' ), 3 => $this->permission_post( 3, 'post', 'draft' ), 4 => $this->permission_post( 4, 'attachment', 'inherit' ) );
+		$arguments = array(
+			'wp_site_info' => array(), 'wp_list_posts' => array(), 'wp_get_post' => array( 'id' => 1 ), 'wp_create_post' => array( 'title' => 'Post' ),
+			'wp_update_post' => array( 'id' => 1, 'title' => 'Updated' ), 'wp_list_pages' => array(), 'wp_get_page' => array( 'id' => 2 ), 'wp_create_page' => array( 'title' => 'Page' ),
+			'wp_update_page' => array( 'id' => 2, 'title' => 'Updated' ), 'wp_list_drafts' => array(), 'wp_delete_draft' => array( 'id' => 3 ), 'wp_list_media' => array(),
+			'wp_get_media' => array( 'id' => 4 ), 'wp_upload_media_b64' => array( 'data' => 'AA==', 'filename' => 'x.png' ), 'wp_list_categories' => array(),
+			'wp_list_tags' => array(), 'wp_create_term' => array( 'taxonomy' => 'category', 'name' => 'News' ),
+		);
+		foreach ( $arguments as $tool => $tool_arguments ) {
+			$before = $GLOBALS['_mcpwp_test_nested_permission_calls'];
+			$data = $this->call_authenticated( 'tools/call', array( 'name' => $tool, 'arguments' => $tool_arguments ) );
+			$this->assertSame( true, $data['result']['structuredContent']['allowed'], $tool );
+			$this->assertSame( $before + 1, $GLOBALS['_mcpwp_test_nested_permission_calls'], $tool );
+		}
+	}
 	public function test_authenticated_tool_call_logs_only_minimal_local_metadata(): void {
 		$this->install_test_router();
-		$this->call_authenticated( 'tools/call', array( 'name' => 'wp_site_info', 'arguments' => array( 'secret' => 'do-not-store' ) ) );
+		$this->call_authenticated( 'tools/call', array( 'name' => 'wp_site_info', 'arguments' => array() ) );
 		$this->assertCount( 1, $GLOBALS['wpdb']->inserted );
 		$logged = $GLOBALS['wpdb']->inserted[0]['data'];
 		$this->assertSame( 'wp_site_info', $logged['action'] );

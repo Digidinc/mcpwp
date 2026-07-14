@@ -26,7 +26,7 @@ class Mcpwp_REST_Media extends Mcpwp_REST_API {
 		$unknown_files = array_diff( array_keys( $files ), array( 'file' ) );
 		if ( ! empty( $unknown_files ) ) { return $this->error_response( 'unknown_parameter', __( 'The upload contains an unknown file part.', 'mumega-mcp' ), 400 ); }
 		if ( empty( $files['file'] ) ) { return $this->error_response( 'missing_file', __( 'A local file upload is required.', 'mumega-mcp' ), 400 ); }
-		$params = $this->validated_query_params( $request, $this->media_text_args() );
+		$params = $this->validated_form_params( $request, $this->media_text_args() );
 		if ( is_wp_error( $params ) ) { return $this->validation_error_response( $params ); }
 		return $this->respond( $this->media->upload_file( $files['file'], $params ), 201 );
 	}

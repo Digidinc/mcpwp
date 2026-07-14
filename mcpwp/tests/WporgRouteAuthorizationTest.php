@@ -76,18 +76,33 @@ final class WporgRouteAuthorizationTest extends TestCase {
 		$route_fixture = $this->read_fixture( 'wporg-routes.json' );
 		$mutated_routes = $route_fixture;
 		$mutated_routes['endpoints'][0]['method'] = 'DELETE';
-		$this->assertNotSame( $route_fixture, $mutated_routes );
+		$this->assertFalse( $this->route_fixture_matches_runtime( $mutated_routes ) );
 		$mutated_routes = $route_fixture;
 		$mutated_routes['endpoints'][0]['permission'] = 'check_permission';
-		$this->assertNotSame( $route_fixture, $mutated_routes );
+		$this->assertFalse( $this->route_fixture_matches_runtime( $mutated_routes ) );
+		$mutated_routes = $route_fixture;
+		$mutated_routes['endpoints'][0]['capabilities'][] = 'unreviewed_capability';
+		$this->assertFalse( $this->route_fixture_matches_runtime( $mutated_routes ) );
+		$mutated_routes = $route_fixture;
+		foreach ( $mutated_routes['endpoints'] as &$endpoint ) {
+			if ( isset( $endpoint['args']['posts_per_page']['maximum'] ) ) { $endpoint['args']['posts_per_page']['maximum'] = 101; break; }
+		}
+		unset( $endpoint );
+		$this->assertFalse( $this->route_fixture_matches_runtime( $mutated_routes ) );
 
 		$tool_fixture = $this->read_fixture( 'wporg-tools.json' );
 		$mutated_tools = $tool_fixture;
 		$mutated_tools['tools'][0]['annotations']['openWorldHint'] = true;
-		$this->assertNotSame( $tool_fixture, $mutated_tools );
+		$this->assertFalse( $this->tool_fixture_matches_runtime( $mutated_tools ) );
 		$mutated_tools = $tool_fixture;
 		$mutated_tools['tools'][0]['inputSchema']['additionalProperties'] = true;
-		$this->assertNotSame( $tool_fixture, $mutated_tools );
+		$this->assertFalse( $this->tool_fixture_matches_runtime( $mutated_tools ) );
+		$mutated_tools = $tool_fixture;
+		$mutated_tools['tools'][0]['dispatch']['route'] = '/unreviewed';
+		$this->assertFalse( $this->tool_fixture_matches_runtime( $mutated_tools ) );
+		$mutated_tools = $tool_fixture;
+		$mutated_tools['tools'][0]['requiredCapabilities'][] = 'unreviewed_capability';
+		$this->assertFalse( $this->tool_fixture_matches_runtime( $mutated_tools ) );
 	}
 
 	public function test_bound_key_replaces_ambient_cookie_identity_with_stored_owner(): void {
@@ -179,6 +194,40 @@ final class WporgRouteAuthorizationTest extends TestCase {
 		$this->assertArrayNotHasKey( 'edit_url', $result['posts'][0] );
 	}
 
+	public function test_drafts_filter_authority_independently_for_posts_and_pages(): void {
+		$GLOBALS['mcpwp_test_current_user'] = 7;
+		$GLOBALS['mcpwp_test_user_caps'][7] = array(
+			'edit_posts' => true, 'edit_pages' => true,
+			'edit_others_posts' => true, 'edit_others_pages' => false,
+		);
+		$GLOBALS['_mcpwp_test_posts'] = array(
+			41 => $this->post_fixture( 41, 'post', 'draft', 7 ),
+			42 => $this->post_fixture( 42, 'post', 'draft', 8 ),
+			43 => $this->post_fixture( 43, 'page', 'draft', 7 ),
+			44 => $this->post_fixture( 44, 'page', 'draft', 8 ),
+		);
+
+		$result = ( new Mcpwp_Drafts() )->list_drafts( array( 'type' => 'all', 'posts_per_page' => 20, 'paged' => 1, 'orderby' => 'id', 'order' => 'asc' ) );
+
+		$this->assertSame( array( 41, 42, 43 ), array_column( $result['drafts'], 'id' ) );
+		$this->assertSame( 3, $result['total'] );
+		$this->assertSame( 2, $result['posts'] );
+		$this->assertSame( 1, $result['pages'] );
+	}
+
+	public function test_drafts_skip_a_type_without_its_edit_capability(): void {
+		$GLOBALS['mcpwp_test_current_user'] = 7;
+		$GLOBALS['mcpwp_test_user_caps'][7] = array( 'edit_posts' => true, 'edit_others_posts' => true, 'edit_pages' => false );
+		$GLOBALS['_mcpwp_test_posts'] = array(
+			45 => $this->post_fixture( 45, 'post', 'draft', 8 ),
+			46 => $this->post_fixture( 46, 'page', 'draft', 7 ),
+		);
+
+		$result = ( new Mcpwp_Drafts() )->list_drafts( array( 'type' => 'all', 'posts_per_page' => 20, 'paged' => 1 ) );
+
+		$this->assertSame( array( 45 ), array_column( $result['drafts'], 'id' ) );
+	}
+
 	public function test_media_list_filters_every_attachment_by_read_post(): void {
 		$GLOBALS['mcpwp_test_current_user'] = 7;
 		$GLOBALS['mcpwp_test_user_caps'][7]['read_post:21'] = true;
@@ -189,6 +238,24 @@ final class WporgRouteAuthorizationTest extends TestCase {
 		);
 		$result = ( new Mcpwp_Media() )->list_media( array( 'posts_per_page' => 20, 'paged' => 1 ) );
 		$this->assertSame( array( 21 ), array_column( $result['media'], 'id' ) );
+	}
+
+	public function test_media_paginates_after_visibility_filter_with_authorized_totals(): void {
+		$GLOBALS['mcpwp_test_current_user'] = 7;
+		$GLOBALS['mcpwp_test_user_caps'][7] = array( 'read_post:51' => false, 'read_post:52' => true, 'read_post:53' => true );
+		$GLOBALS['_mcpwp_test_posts'] = array(
+			51 => $this->attachment_fixture( 51 ),
+			52 => $this->attachment_fixture( 52 ),
+			53 => $this->attachment_fixture( 53 ),
+		);
+
+		$page_one = ( new Mcpwp_Media() )->list_media( array( 'posts_per_page' => 1, 'paged' => 1, 'orderby' => 'id', 'order' => 'asc' ) );
+		$page_two = ( new Mcpwp_Media() )->list_media( array( 'posts_per_page' => 1, 'paged' => 2, 'orderby' => 'id', 'order' => 'asc' ) );
+
+		$this->assertSame( array( 52 ), array_column( $page_one['media'], 'id' ) );
+		$this->assertSame( array( 53 ), array_column( $page_two['media'], 'id' ) );
+		$this->assertSame( 2, $page_one['total'] );
+		$this->assertSame( 2, $page_one['pages'] );
 	}
 
 	public function test_term_creation_uses_selected_taxonomy_manage_capability(): void {
@@ -252,6 +319,33 @@ final class WporgRouteAuthorizationTest extends TestCase {
 
 	private function read_fixture( $name ): array {
 		return json_decode( (string) file_get_contents( __DIR__ . '/fixtures/' . $name ), true, 512, JSON_THROW_ON_ERROR );
+	}
+
+	private function route_fixture_matches_runtime( $fixture ): bool {
+		$GLOBALS['_mcpwp_test_registered_routes'] = array();
+		$this->register_all_routes();
+		$actual = array();
+		foreach ( $GLOBALS['_mcpwp_test_registered_routes'] as $registration ) {
+			$configurations = isset( $registration['args']['methods'] ) ? array( $registration['args'] ) : $registration['args'];
+			foreach ( $configurations as $configuration ) {
+				foreach ( array_map( 'trim', explode( ',', $configuration['methods'] ) ) as $method ) {
+					$permission = $configuration['permission_callback'] ?? null;
+					$actual[] = array( 'route' => $registration['route'], 'method' => $method, 'permission' => is_array( $permission ) ? $permission[1] : $permission, 'category' => $configuration['mcpwp_category'] ?? null, 'scope' => $configuration['mcpwp_scope'] ?? null, 'capabilities' => $configuration['mcpwp_capabilities'] ?? array(), 'mutable' => $configuration['mcpwp_mutable'] ?? null, 'args' => $configuration['args'] ?? array() );
+				}
+			}
+		}
+		$sort = static function ( $left, $right ) { return strcmp( $left['route'] . '|' . $left['method'], $right['route'] . '|' . $right['method'] ); };
+		usort( $fixture['endpoints'], $sort ); usort( $actual, $sort );
+		return $fixture['endpoints'] === $actual;
+	}
+
+	private function tool_fixture_matches_runtime( $fixture ): bool {
+		$registry = new Mcpwp_MCP_Free_Tools(); $map = $registry->get_tool_map(); $capabilities = $registry->get_required_capabilities(); $actual = array();
+		foreach ( $registry->get_tools() as $definition ) {
+			$name = $definition['name'];
+			$actual[] = array( 'name' => $name, 'dispatch' => $map[ $name ], 'category' => $registry->get_tool_category( $name ), 'description' => $definition['description'], 'requiredCapabilities' => $capabilities[ $name ] ?? array(), 'annotations' => $definition['annotations'], 'inputSchema' => json_decode( wp_json_encode( $definition['inputSchema'] ), true ) );
+		}
+		return $fixture['tools'] === $actual;
 	}
 
 	private function seed_key( $key, $user_id, $scopes, $categories = array() ): void {

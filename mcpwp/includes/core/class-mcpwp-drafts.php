@@ -21,27 +21,39 @@ class Mcpwp_Drafts {
 	 * @return array Drafts list.
 	 */
 	public function list_drafts( $args = array() ) {
-		$defaults = array(
-			'post_type'      => array( 'post', 'page' ),
-			'post_status'    => 'draft',
-			'posts_per_page' => 50,
-			'orderby'        => 'modified',
-			'order'          => 'DESC',
-		);
-
-		// Allow filtering by post type
-		if ( ! empty( $args['type'] ) ) {
-			$type = sanitize_key( $args['type'] );
-			if ( in_array( $type, array( 'post', 'page' ), true ) ) {
-				$defaults['post_type'] = $type;
-			}
+		$type = isset( $args['type'] ) && in_array( $args['type'], array( 'post', 'page' ), true ) ? $args['type'] : 'all';
+		$types = 'all' === $type ? array( 'post', 'page' ) : array( $type );
+		$posts = array();
+		foreach ( $types as $post_type ) {
+			$plural = 'page' === $post_type ? 'pages' : 'posts';
+			if ( ! current_user_can( 'edit_' . $plural ) ) { continue; }
+			$query_args = array(
+				'post_type' => $post_type, 'post_status' => 'draft', 'posts_per_page' => -1,
+				'orderby' => isset( $args['orderby'] ) ? $args['orderby'] : 'modified',
+				'order' => isset( $args['order'] ) ? strtoupper( $args['order'] ) : 'DESC',
+			);
+			if ( ! current_user_can( 'edit_others_' . $plural ) ) { $query_args['author'] = get_current_user_id(); }
+			$query = new WP_Query( $query_args );
+			$posts = array_merge( $posts, $query->posts );
 		}
 
-		$query_args = wp_parse_args( $args, $defaults );
-		$query = new WP_Query( $query_args );
+		$orderby = isset( $args['orderby'] ) ? $args['orderby'] : 'modified';
+		$order = isset( $args['order'] ) && 'asc' === strtolower( $args['order'] ) ? 1 : -1;
+		usort( $posts, function ( $left, $right ) use ( $orderby, $order ) {
+			$fields = array( 'modified' => 'post_modified', 'date' => 'post_date', 'title' => 'post_title', 'id' => 'ID' );
+			$field = isset( $fields[ $orderby ] ) ? $fields[ $orderby ] : 'post_modified';
+			$comparison = 'ID' === $field ? (int) $left->$field <=> (int) $right->$field : strcasecmp( (string) $left->$field, (string) $right->$field );
+			if ( 0 === $comparison ) { $comparison = (int) $left->ID <=> (int) $right->ID; }
+			return $comparison * $order;
+		} );
+		$total_posts = count( array_filter( $posts, function ( $post ) { return 'post' === $post->post_type; } ) );
+		$total_pages = count( $posts ) - $total_posts;
+		$per_page = isset( $args['posts_per_page'] ) ? (int) $args['posts_per_page'] : 20;
+		$paged = isset( $args['paged'] ) ? (int) $args['paged'] : 1;
+		$posts = array_slice( $posts, ( $paged - 1 ) * $per_page, $per_page );
 
 		$drafts = array();
-		foreach ( $query->posts as $post ) {
+		foreach ( $posts as $post ) {
 			$draft = array(
 				'id'       => $post->ID,
 				'type'     => $post->post_type,
@@ -59,9 +71,9 @@ class Mcpwp_Drafts {
 
 		return array(
 			'drafts' => $drafts,
-			'total'  => $query->found_posts,
-			'posts'  => count( array_filter( $drafts, fn( $d ) => 'post' === $d['type'] ) ),
-			'pages'  => count( array_filter( $drafts, fn( $d ) => 'page' === $d['type'] ) ),
+			'total'  => $total_posts + $total_pages,
+			'posts'  => $total_posts,
+			'pages'  => $total_pages,
 		);
 	}
 

@@ -163,7 +163,7 @@ class WP_REST_Request
         $this->params     = is_array($params) ? $params : array();
         $this->headers    = is_array($headers) ? $headers : array();
         $this->json_params = $json_params;
-        $this->body = null === $body && is_array($json_params) ? json_encode($json_params) : (string) $body;
+        $this->body = null === $body && is_array($json_params) ? json_encode(empty($json_params) ? (object) array() : $json_params) : (string) $body;
     }
 
     public function get_method()
@@ -187,6 +187,11 @@ class WP_REST_Request
     }
 
     public function get_params()
+    {
+        return $this->params;
+    }
+
+    public function get_body_params()
     {
         return $this->params;
     }
@@ -260,7 +265,7 @@ function is_wp_error($value)
 
 function sanitize_text_field($value)
 {
-    return trim((string) $value);
+    return trim(strip_tags((string) $value));
 }
 
 function sanitize_textarea_field($value)
@@ -821,7 +826,8 @@ class WP_Query
         }));
 
         $this->found_posts = count($posts);
-        $per_page = isset($args['posts_per_page']) ? max(1, (int) $args['posts_per_page']) : count($posts);
+        $requested_per_page = isset($args['posts_per_page']) ? (int) $args['posts_per_page'] : count($posts);
+        $per_page = -1 === $requested_per_page ? max(1, count($posts)) : max(1, $requested_per_page);
         $paged = isset($args['paged']) ? max(1, (int) $args['paged']) : 1;
         $this->max_num_pages = $per_page > 0 ? (int) ceil($this->found_posts / $per_page) : 0;
         $this->posts = array_slice($posts, ($paged - 1) * $per_page, $per_page);
@@ -1012,6 +1018,20 @@ function wp_handle_upload($file, $overrides = array())
     return array( 'file' => isset($file['tmp_name']) ? $file['tmp_name'] : '', 'type' => isset($file['type']) ? $file['type'] : '', 'url' => '' );
 }
 
+function wp_handle_sideload($file, $overrides = array())
+{
+    $upload = wp_upload_dir();
+    $destination = $upload['path'] . '/' . wp_unique_filename($upload['path'], $file['name']);
+    if (isset($GLOBALS['wp_filesystem']) && is_object($GLOBALS['wp_filesystem'])) {
+        $moved = $GLOBALS['wp_filesystem']->move($file['tmp_name'], $destination, true);
+    } else {
+        $moved = rename($file['tmp_name'], $destination);
+    }
+    return $moved
+        ? array( 'file' => $destination, 'type' => $file['type'], 'url' => $upload['url'] . '/' . basename($destination) )
+        : array( 'error' => 'Could not move sideload.' );
+}
+
 function media_handle_upload($file_id, $post_id = 0, $post_data = array(), $overrides = array())
 {
     return 1;
@@ -1069,6 +1089,7 @@ class Mcpwp_Test_Filesystem
 
 function WP_Filesystem()
 {
+    $GLOBALS['_mcpwp_test_wp_filesystem_calls'] = isset($GLOBALS['_mcpwp_test_wp_filesystem_calls']) ? $GLOBALS['_mcpwp_test_wp_filesystem_calls'] + 1 : 1;
     $GLOBALS['wp_filesystem'] = new Mcpwp_Test_Filesystem();
     return true;
 }
@@ -1087,7 +1108,10 @@ function wp_insert_attachment($attachment, $file)
 
 function wp_generate_attachment_metadata($attachment_id, $file)
 {
-    return array();
+    if (array_key_exists('_mcpwp_test_generate_attachment_metadata_result', $GLOBALS) && null !== $GLOBALS['_mcpwp_test_generate_attachment_metadata_result']) {
+        return $GLOBALS['_mcpwp_test_generate_attachment_metadata_result'];
+    }
+    return array( 'file' => basename($file) );
 }
 
 function wp_update_attachment_metadata($attachment_id, $metadata)

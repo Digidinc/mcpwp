@@ -86,11 +86,11 @@ function mcpwp_load_plugin() {
 	}
 
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-activator.php';
-	Mcpwp_Migrate::run();
 	if ( version_compare( (string) get_option( 'mcpwp_db_version', '0' ), MCPWP_VERSION, '<' ) ) {
 		Mcpwp_Activator::activate();
 		update_option( 'mcpwp_db_version', MCPWP_VERSION );
 	}
+	Mcpwp_Migrate::run();
 
 	( new Mcpwp_Loader() )->run();
 }

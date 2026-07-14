@@ -35,6 +35,37 @@ final class WporgMaliciousPayloadTest extends TestCase {
 		$this->assertSame( array(), $GLOBALS['_mcpwp_test_posts'] );
 	}
 
+	public function test_raw_json_types_are_validated_before_wordpress_route_coercion(): void {
+		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/pages', array(), array(), array( 'title' => 'Page', 'menu_order' => 1 ), '{"title":"Page","menu_order":"1"}' );
+		$response = ( new Mcpwp_REST_Pages() )->create_page( $request );
+		$this->assertError( 'invalid_parameter', 400, $response );
+		$this->assertSame( array(), $GLOBALS['_mcpwp_test_posts'] );
+
+		$request = new WP_REST_Request( 'PATCH', '/mcpwp/v1/plugin-settings', array(), array(), array( 'enable_logging' => false ), '{"enable_logging":"false"}' );
+		$response = ( new Mcpwp_REST_Site_Settings() )->update_plugin_settings( $request );
+		$this->assertError( 'invalid_parameter', 400, $response );
+	}
+
+	/** @dataProvider sanitizerEmptyBodies */
+	public function test_values_that_sanitize_to_empty_fail_before_content_or_term_mutation( $kind, $body ): void {
+		if ( 'term' === $kind ) {
+			$response = ( new Mcpwp_REST_Site_Taxonomy() )->create_term( new WP_REST_Request( 'POST', '/mcpwp/v1/terms', array(), array(), $body ) );
+			$this->assertSame( array(), $GLOBALS['_mcpwp_test_term_inserts'] );
+		} else {
+			$response = $this->create_post( $body );
+			$this->assertSame( array(), $GLOBALS['_mcpwp_test_posts'] );
+		}
+		$this->assertError( 'invalid_parameter', 400, $response );
+	}
+
+	public function sanitizerEmptyBodies(): array {
+		return array(
+			'post title' => array( 'post', array( 'title' => '<script></script>' ) ),
+			'post tag' => array( 'post', array( 'title' => 'Valid', 'tags' => array( '<script></script>' ) ) ),
+			'term name' => array( 'term', array( 'taxonomy' => 'category', 'name' => '<script></script>' ) ),
+		);
+	}
+
 	public function invalidPostBodies(): array {
 		return array(
 			'numeric title' => array( array( 'title' => 123 ) ),
@@ -96,7 +127,7 @@ final class WporgMaliciousPayloadTest extends TestCase {
 		$this->assertError( 'payload_too_large', 413, ( new Mcpwp_REST_Posts() )->create_post( $oversize ) );
 
 		$invalid_utf8 = $this->create_post( array( 'title' => "bad\xC3\x28" ) );
-		$this->assertError( 'invalid_parameter', 400, $invalid_utf8 );
+		$this->assertError( 'invalid_json_body', 400, $invalid_utf8 );
 
 		$nested = 'leaf';
 		for ( $index = 0; $index < 9; $index++ ) { $nested = array( 'nested' => $nested ); }

@@ -10,6 +10,8 @@ final class MediaSecurityTest extends TestCase {
 		$GLOBALS['wp_filesystem'] = new Mcpwp_Test_Filesystem();
 		$GLOBALS['_mcpwp_test_insert_attachment_result'] = null;
 		$GLOBALS['_mcpwp_test_update_attachment_metadata_result'] = null;
+		$GLOBALS['_mcpwp_test_generate_attachment_metadata_result'] = null;
+		$GLOBALS['_mcpwp_test_wp_filesystem_calls'] = 0;
 	}
 
 	public function test_base64_upload_rejects_php_payload_before_move(): void {
@@ -37,6 +39,25 @@ final class MediaSecurityTest extends TestCase {
 		$this->assertIsArray( $result );
 		$this->assertSame( 'image/png', $result['mime_type'] );
 		$this->assertCount( 1, $GLOBALS['wp_filesystem']->moves );
+	}
+
+	public function test_base64_upload_does_not_initialize_credential_backed_filesystem(): void {
+		$GLOBALS['wp_filesystem'] = null;
+		$png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+		$result = ( new Mcpwp_Media() )->upload_from_base64( $png, 'local-sideload.png', array( 'mime_type' => 'image/png' ) );
+
+		$this->assertIsArray( $result );
+		$this->assertSame( 0, $GLOBALS['_mcpwp_test_wp_filesystem_calls'] );
+		wp_delete_attachment( $result['id'], true );
+	}
+
+	public function test_base64_upload_accepts_empty_optional_image_metadata(): void {
+		$GLOBALS['_mcpwp_test_generate_attachment_metadata_result'] = array();
+		$png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+		$result = ( new Mcpwp_Media() )->upload_from_base64( $png, 'no-metadata.png', array( 'mime_type' => 'image/png' ) );
+
+		$this->assertIsArray( $result );
+		wp_delete_attachment( $result['id'], true );
 	}
 
 	public function test_removed_media_mutations_are_physically_absent(): void {
@@ -85,7 +106,7 @@ final class MediaSecurityTest extends TestCase {
 	}
 
 	public function test_base64_metadata_failure_removes_attachment_and_file(): void {
-		$GLOBALS['_mcpwp_test_update_attachment_metadata_result'] = false;
+		$GLOBALS['_mcpwp_test_generate_attachment_metadata_result'] = new WP_Error( 'image_editor_failed', 'Could not generate metadata.' );
 		$png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
 		$result = ( new Mcpwp_Media() )->upload_from_base64( $png, 'metadata-fail.png', array( 'mime_type' => 'image/png' ) );
 		$this->assertInstanceOf( WP_Error::class, $result );
@@ -105,5 +126,19 @@ final class MediaSecurityTest extends TestCase {
 		$not_uploaded = $media->upload_file( array( 'name' => 'x.png', 'type' => 'image/png', 'tmp_name' => $path, 'error' => UPLOAD_ERR_OK, 'size' => 5 ) );
 		$this->assertSame( 'invalid_upload', $not_uploaded->get_error_code() );
 		unlink( $path );
+	}
+
+	public function test_multipart_route_does_not_declare_file_as_a_rest_scalar_argument(): void {
+		$GLOBALS['_mcpwp_test_registered_routes'] = array();
+		( new Mcpwp_REST_Media() )->register_routes();
+		$upload = null;
+		foreach ( $GLOBALS['_mcpwp_test_registered_routes'] as $registration ) {
+			if ( '/media' !== $registration['route'] ) { continue; }
+			foreach ( $registration['args'] as $configuration ) {
+				if ( WP_REST_Server::CREATABLE === $configuration['methods'] ) { $upload = $configuration; }
+			}
+		}
+		$this->assertIsArray( $upload );
+		$this->assertArrayNotHasKey( 'file', $upload['args'] );
 	}
 }

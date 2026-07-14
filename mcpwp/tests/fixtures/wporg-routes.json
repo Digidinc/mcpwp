@@ -711,10 +711,6 @@
       ],
       "mutable": true,
       "args": {
-        "file": {
-          "type": "file",
-          "required": true
-        },
         "title": {
           "type": "string",
           "minLength": 1,

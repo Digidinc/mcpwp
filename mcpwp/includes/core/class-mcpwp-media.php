@@ -82,10 +82,11 @@ class Mcpwp_Media {
 
 		// Generate metadata
 		$metadata = wp_generate_attachment_metadata( $attachment_id, $upload['file'] );
-		if ( is_wp_error( $metadata ) || false === wp_update_attachment_metadata( $attachment_id, $metadata ) ) {
+		if ( is_wp_error( $metadata ) ) {
 			wp_delete_attachment( $attachment_id, true ); wp_delete_file( $upload['file'] );
 			return new WP_Error( 'attachment_metadata_failed', __( 'WordPress could not create attachment metadata.', 'mumega-mcp' ), array( 'status' => 500 ) );
 		}
+		if ( ! empty( $metadata ) ) { wp_update_attachment_metadata( $attachment_id, $metadata ); }
 
 		// Set alt text
 		if ( ! empty( $args['alt'] ) ) {
@@ -243,40 +244,25 @@ class Mcpwp_Media {
 			$filename = $check['proper_filename'];
 		}
 
-		// Get upload directory.
-		$upload_dir = wp_upload_dir();
-		if ( ! empty( $upload_dir['error'] ) ) {
-			wp_delete_file( $tmp_file );
-			return new WP_Error(
-				'upload_dir_error',
-				$upload_dir['error'],
-				array( 'status' => 500 )
+		// Use the core local sideload path. WP_Filesystem may require FTP/SSH
+		// credentials and is not the file-move API used for media uploads.
+		$sideload_file = array(
+				'name'     => $filename,
+				'type'     => $check['type'],
+				'tmp_name' => $tmp_file,
+				'error'    => UPLOAD_ERR_OK,
+				'size'     => strlen( $decoded ),
 			);
-		}
-
-		// Move to uploads directory.
-		$unique_filename = wp_unique_filename( $upload_dir['path'], $filename );
-		$new_file = $upload_dir['path'] . '/' . $unique_filename;
-
-		global $wp_filesystem;
-		if ( empty( $wp_filesystem ) ) {
-			require_once ABSPATH . 'wp-admin/includes/file.php';
-			WP_Filesystem();
-		}
-
-		if ( ! $wp_filesystem->move( $tmp_file, $new_file, true ) ) {
+		$sideload = wp_handle_sideload( $sideload_file, array( 'test_form' => false ) );
+		if ( ! empty( $sideload['error'] ) || empty( $sideload['file'] ) ) {
 			wp_delete_file( $tmp_file );
 			return new WP_Error(
 				'move_error',
-				__( 'Could not move file to uploads directory.', 'mumega-mcp' ),
+				! empty( $sideload['error'] ) ? $sideload['error'] : __( 'Could not move file to uploads directory.', 'mumega-mcp' ),
 				array( 'status' => 500 )
 			);
 		}
-
-		// Set file permissions to match parent directory.
-		$stat = stat( dirname( $new_file ) );
-		$perms = $stat['mode'] & 0000666;
-		$wp_filesystem->chmod( $new_file, $perms );
+		$new_file = $sideload['file'];
 
 		// Create attachment.
 		$attachment = array(
@@ -295,10 +281,11 @@ class Mcpwp_Media {
 
 		// Generate metadata.
 		$metadata = wp_generate_attachment_metadata( $attachment_id, $new_file );
-		if ( is_wp_error( $metadata ) || false === wp_update_attachment_metadata( $attachment_id, $metadata ) ) {
+		if ( is_wp_error( $metadata ) ) {
 			wp_delete_attachment( $attachment_id, true ); wp_delete_file( $new_file );
 			return new WP_Error( 'attachment_metadata_failed', __( 'WordPress could not create attachment metadata.', 'mumega-mcp' ), array( 'status' => 500 ) );
 		}
+		if ( ! empty( $metadata ) ) { wp_update_attachment_metadata( $attachment_id, $metadata ); }
 
 		// Set alt text.
 		if ( ! empty( $args['alt'] ) ) {
@@ -325,41 +312,51 @@ class Mcpwp_Media {
 	 * @return array Media list.
 	 */
 	public function list_media( $args = array() ) {
-		$defaults = array(
-			'post_type'      => 'attachment',
-			'post_status'    => 'inherit',
-			'posts_per_page' => 20,
-			'paged'          => 1,
-			'orderby'        => 'date',
-			'order'          => 'DESC',
+		$per_page = isset( $args['posts_per_page'] ) ? (int) $args['posts_per_page'] : 20;
+		$page = isset( $args['paged'] ) ? (int) $args['paged'] : 1;
+		$orderby = isset( $args['orderby'] ) ? $args['orderby'] : 'date';
+		$order = isset( $args['order'] ) && 'asc' === strtolower( $args['order'] ) ? 1 : -1;
+		$query_args = array(
+			'post_type' => 'attachment', 'post_status' => 'inherit', 'posts_per_page' => -1,
+			'orderby' => 'id' === $orderby ? 'ID' : $orderby, 'order' => 1 === $order ? 'ASC' : 'DESC',
 		);
-
-		$args = wp_parse_args( $args, $defaults );
 
 		// Filter by mime type
 		if ( ! empty( $args['mime_type'] ) ) {
-			$args['post_mime_type'] = sanitize_mime_type( $args['mime_type'] );
+			$query_args['post_mime_type'] = sanitize_mime_type( $args['mime_type'] );
 		}
 
 		// Search by title/alt
 		if ( ! empty( $args['search'] ) ) {
-			$args['s'] = sanitize_text_field( $args['search'] );
+			$query_args['s'] = sanitize_text_field( $args['search'] );
 		}
 
-		$query = new WP_Query( $args );
+		$query = new WP_Query( $query_args );
+		$visible = array();
+		foreach ( $query->posts as $attachment ) {
+			if ( current_user_can( 'read_post', $attachment->ID ) ) { $visible[] = $attachment; }
+		}
+		usort( $visible, function ( $left, $right ) use ( $orderby, $order ) {
+			$fields = array( 'modified' => 'post_modified', 'date' => 'post_date', 'title' => 'post_title', 'id' => 'ID' );
+			$field = isset( $fields[ $orderby ] ) ? $fields[ $orderby ] : 'post_date';
+			$comparison = 'ID' === $field ? (int) $left->$field <=> (int) $right->$field : strcasecmp( (string) $left->$field, (string) $right->$field );
+			if ( 0 === $comparison ) { $comparison = (int) $left->ID <=> (int) $right->ID; }
+			return $comparison * $order;
+		} );
+		$total = count( $visible );
+		$visible = array_slice( $visible, ( $page - 1 ) * $per_page, $per_page );
 		$media = array();
 
-		foreach ( $query->posts as $attachment ) {
-			if ( ! current_user_can( 'read_post', $attachment->ID ) ) { continue; }
+		foreach ( $visible as $attachment ) {
 			$media[] = $this->format_attachment( $attachment->ID );
 		}
 
 		return array(
 			'media'    => $media,
-			'total'    => count( $media ),
-			'pages'    => $query->max_num_pages,
-			'page'     => absint( $args['paged'] ),
-			'per_page' => absint( $args['posts_per_page'] ),
+			'total'    => $total,
+			'pages'    => (int) ceil( $total / $per_page ),
+			'page'     => $page,
+			'per_page' => $per_page,
 		);
 	}
 

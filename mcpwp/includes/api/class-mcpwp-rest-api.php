@@ -70,7 +70,9 @@ abstract class Mcpwp_REST_API {
 	public function check_list_drafts_permission( $request ) {
 		$result = $this->authorize_request( $request, 'read', 'read', 'content' );
 		if ( true !== $result ) { return $result; }
-		return current_user_can( 'edit_posts' ) || current_user_can( 'edit_pages' ) ? true : new WP_Error( 'insufficient_capability', __( 'The bound WordPress user cannot read drafts.', 'mumega-mcp' ), array( 'status' => 403 ) );
+		$type = $request->get_param( 'type' );
+		$allowed = 'post' === $type ? current_user_can( 'edit_posts' ) : ( 'page' === $type ? current_user_can( 'edit_pages' ) : ( current_user_can( 'edit_posts' ) || current_user_can( 'edit_pages' ) ) );
+		return $allowed ? true : new WP_Error( 'insufficient_capability', __( 'The bound WordPress user cannot read drafts.', 'mumega-mcp' ), array( 'status' => 403 ) );
 	}
 	public function check_delete_draft_permission( $request ) { return $this->authorize_request( $request, 'admin', 'delete_post', 'content', $request->get_param( 'id' ) ); }
 	public function check_list_media_permission( $request ) { return $this->authorize_request( $request, 'read', 'read', 'media' ); }
@@ -147,8 +149,9 @@ abstract class Mcpwp_REST_API {
 		if ( strlen( $body ) > $max_bytes ) {
 			return new WP_Error( 'payload_too_large', __( 'The JSON request body is too large.', 'mumega-mcp' ), array( 'status' => 413 ) );
 		}
-		$data = $request->get_json_params();
-		if ( ! is_array( $data ) ) {
+		$object = json_decode( $body );
+		$data = json_decode( $body, true );
+		if ( JSON_ERROR_NONE !== json_last_error() || ! is_object( $object ) || ! is_array( $data ) ) {
 			return new WP_Error( 'invalid_json_body', __( 'A JSON object body is required.', 'mumega-mcp' ), array( 'status' => 400 ) );
 		}
 		return $this->validate_strict_object( $data, $schema, $require_field );
@@ -166,6 +169,11 @@ abstract class Mcpwp_REST_API {
 		}
 		unset( $value );
 		return $this->validate_strict_object( $params, $schema );
+	}
+
+	protected function validated_form_params( $request, $schema ) {
+		$params = method_exists( $request, 'get_body_params' ) ? $request->get_body_params() : array();
+		return $this->validate_strict_object( is_array( $params ) ? $params : array(), $schema );
 	}
 
 	protected function validation_error_response( $error ) {
@@ -273,7 +281,7 @@ abstract class Mcpwp_REST_API {
 		);
 	}
 	protected function media_text_args() { return array( 'title' => $this->string_arg( array( 'minLength' => 1, 'maxLength' => 200 ) ), 'alt' => $this->string_arg( array( 'maxLength' => 250 ) ), 'caption' => $this->string_arg( array( 'maxLength' => 10000 ) ) ); }
-	protected function multipart_media_args() { return array_merge( array( 'file' => array( 'type' => 'file', 'required' => true ) ), $this->media_text_args() ); }
+	protected function multipart_media_args() { return $this->media_text_args(); }
 	protected function base64_media_args() { return array_merge( array( 'data' => $this->string_arg( array( 'minLength' => 1, 'required' => true ) ), 'filename' => $this->string_arg( array( 'minLength' => 1, 'maxLength' => 255, 'required' => true ) ), 'mime_type' => $this->string_arg( array( 'maxLength' => 100 ) ) ), $this->media_text_args() ); }
 	protected function term_list_args() {
 		return array( 'per_page' => $this->integer_arg( 1, 100, array( 'default' => 50 ) ), 'page' => $this->integer_arg( 1, 10000, array( 'default' => 1 ) ), 'search' => $this->string_arg( array( 'maxLength' => 200 ) ), 'hide_empty' => array( 'type' => 'boolean', 'default' => false ), 'orderby' => $this->string_arg( array( 'enum' => array( 'name', 'slug', 'count', 'id' ) ) ), 'order' => $this->string_arg( array( 'enum' => array( 'asc', 'desc' ) ) ) );

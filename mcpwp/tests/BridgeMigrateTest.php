@@ -25,4 +25,35 @@ final class BridgeMigrateTest extends TestCase {
 		update_option( 'spai_api_key', 'first' ); Mcpwp_Migrate::run(); update_option( 'spai_api_key', 'second' ); Mcpwp_Migrate::run();
 		$this->assertSame( 'first', get_option( 'mcpwp_api_key' ) );
 	}
+	public function test_upgrade_bootstrap_does_not_seed_or_mark_credentials_before_authenticated_activation_owner(): void {
+		$GLOBALS['mcpwp_test_current_user'] = 0;
+		delete_option( 'mcpwp_legacy_migration_owner_id' );
+		update_option( 'spai_api_keys', array( array( 'id' => 'legacy', 'hash' => 'legacy-hash', 'scopes' => array( 'read' ) ) ) );
+
+		Mcpwp_Migrate::run();
+		Mcpwp_Activator::activate();
+
+		$this->assertFalse( get_option( 'mcpwp_api_keys', false ) );
+		$this->assertFalse( get_option( 'mcpwp_migrated_from_spai', false ) );
+
+		$GLOBALS['mcpwp_test_current_user'] = 2;
+		Mcpwp_Migrate::setup_owner( 2 );
+
+		$this->assertSame( 2, get_option( 'mcpwp_api_keys' )[0]['user_id'] );
+		$this->assertTrue( get_option( 'mcpwp_migrated_from_spai' ) );
+	}
+	public function test_explicit_setup_repairs_only_integer_zero_owner_records(): void {
+		update_option( 'mcpwp_api_keys', array(
+			array( 'id' => 'unbound', 'hash' => 'hash-one', 'user_id' => 0, 'scopes' => array( 'read' ), 'tool_categories' => array() ),
+			array( 'id' => 'owned', 'hash' => 'hash-two', 'user_id' => 7, 'scopes' => array( 'read' ), 'tool_categories' => array() ),
+			array( 'id' => 'malformed', 'hash' => 'hash-three', 'user_id' => '0', 'scopes' => array( 'read' ), 'tool_categories' => array() ),
+		) );
+
+		Mcpwp_Migrate::setup_owner( 2 );
+		$keys = get_option( 'mcpwp_api_keys' );
+
+		$this->assertSame( 2, $keys[0]['user_id'] );
+		$this->assertSame( 7, $keys[1]['user_id'] );
+		$this->assertSame( '0', $keys[2]['user_id'] );
+	}
 }

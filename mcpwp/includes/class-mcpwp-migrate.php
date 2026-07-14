@@ -6,6 +6,7 @@ class Mcpwp_Migrate {
 	public static function run() {
 		if ( get_option( 'mcpwp_migrated_from_spai', false ) ) { return; }
 		$owner_id = self::migration_owner_id();
+		if ( $owner_id < 1 ) { return; }
 		self::copy_if_empty( 'spai_api_key', 'mcpwp_api_key' );
 		self::copy_legacy_keys_if_empty( $owner_id );
 		self::copy_if_empty( 'spai_rate_limit_settings', 'mcpwp_rate_limit_settings' );
@@ -16,15 +17,34 @@ class Mcpwp_Migrate {
 		}
 		update_option( 'mcpwp_migrated_from_spai', true, false );
 	}
+	public static function setup_owner( $owner_id ) {
+		$owner_id = is_int( $owner_id ) ? $owner_id : 0;
+		if ( $owner_id < 1 || $owner_id !== get_current_user_id() || ! get_userdata( $owner_id ) || ! current_user_can( 'mcpwp_manage_settings' ) ) { return false; }
+		update_option( 'mcpwp_legacy_migration_owner_id', $owner_id, false );
+		self::repair_unbound_key_owners( $owner_id );
+		self::run();
+		return true;
+	}
 	private static function migration_owner_id() {
+		$current = get_current_user_id();
+		if ( $current < 1 || ! get_userdata( $current ) || ! current_user_can( 'mcpwp_manage_settings' ) ) { return 0; }
 		$owner_id = get_option( 'mcpwp_legacy_migration_owner_id', 0 );
 		if ( is_int( $owner_id ) && $owner_id > 0 && get_userdata( $owner_id ) ) { return $owner_id; }
-		$current = get_current_user_id();
-		if ( $current > 0 && get_userdata( $current ) && current_user_can( 'mcpwp_manage_settings' ) ) {
-			update_option( 'mcpwp_legacy_migration_owner_id', $current, false );
-			return $current;
+		update_option( 'mcpwp_legacy_migration_owner_id', $current, false );
+		return $current;
+	}
+	private static function repair_unbound_key_owners( $owner_id ) {
+		$records = get_option( 'mcpwp_api_keys', false );
+		if ( ! is_array( $records ) ) { return; }
+		$changed = false;
+		foreach ( $records as &$record ) {
+			if ( is_array( $record ) && isset( $record['user_id'] ) && is_int( $record['user_id'] ) && 0 === $record['user_id'] ) {
+				$record['user_id'] = $owner_id;
+				$changed = true;
+			}
 		}
-		return 0;
+		unset( $record );
+		if ( $changed ) { update_option( 'mcpwp_api_keys', $records, false ); }
 	}
 	private static function copy_legacy_keys_if_empty( $owner_id ) {
 		if ( false !== get_option( 'mcpwp_api_keys', false ) ) { return; }
