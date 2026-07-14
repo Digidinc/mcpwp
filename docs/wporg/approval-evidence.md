@@ -83,7 +83,7 @@ The skipped product tests are environment-dependent fixtures and are not counted
 Key reproducible commands:
 
 ```bash
-vendor/bin/phpunit --configuration mcpwp/tests/phpunit.xml
+mcpwp/vendor/bin/phpunit --configuration mcpwp/tests/phpunit.xml
 bash mcpwp/scripts/build-pot.sh
 bash mcpwp/scripts/check-readme-links.sh
 ```

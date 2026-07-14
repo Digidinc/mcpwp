@@ -32,6 +32,67 @@ final class WporgNoOutboundHttpTest extends TestCase {
 		$this->assertMatchesRegularExpression( '/uses:\s+[A-Za-z0-9_.\/-]+@[0-9a-f]{40}\b/', $source, 'Actions must be pinned to full commit SHAs.' );
 	}
 
+	public function test_release_workflow_locks_reviewed_wpcs_and_plugin_check_findings(): void {
+		$workflow = dirname( __DIR__, 2 ) . '/.github/workflows/wporg-approval.yml';
+		$source   = (string) file_get_contents( $workflow );
+
+		$this->assertStringContainsString( '--report=json', $source );
+		$this->assertStringContainsString( 'expected_wpcs_errors = 0', $source );
+		$this->assertStringContainsString( 'expected_wpcs_warnings = 40', $source );
+		foreach (
+			array(
+				'WordPress.DB.DirectDatabaseQuery.DirectQuery'                         => 10,
+				'WordPress.DB.DirectDatabaseQuery.NoCaching'                           => 10,
+				'WordPress.DB.DirectDatabaseQuery.SchemaChange'                        => 4,
+				'Generic.CodeAnalysis.UnusedFunctionParameter.FoundAfterLastUsed'       => 10,
+				'Generic.CodeAnalysis.UnusedFunctionParameter.Found'                    => 1,
+				'Generic.Formatting.MultipleStatementAlignment.NotSameWarning'          => 2,
+				'WordPress.Security.NonceVerification.Recommended'                      => 2,
+				'WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_decode'       => 1,
+			) as $source_name => $count
+		) {
+			$this->assertStringContainsString( "'{$source_name}': {$count}", $source );
+		}
+
+		$this->assertStringContainsString( 'expected_plugin_check_errors = 0', $source );
+		$this->assertStringContainsString( 'expected_plugin_check_warnings = 36', $source );
+		foreach (
+			array(
+				'WordPress.Security.NonceVerification.Recommended'                  => 2,
+				'PluginCheck.Security.DirectDB.UnescapedDBParameter'                => 3,
+				'WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound' => 7,
+				'WordPress.DB.DirectDatabaseQuery.DirectQuery'                     => 10,
+				'WordPress.DB.DirectDatabaseQuery.NoCaching'                       => 10,
+				'WordPress.DB.DirectDatabaseQuery.SchemaChange'                    => 4,
+			) as $code => $count
+		) {
+			$this->assertStringContainsString( "'{$code}': {$count}", $source );
+		}
+
+		$this->assertStringContainsString( "raw == 'Success: Checks complete. No errors found.'", $source );
+		$this->assertStringNotContainsString( "'Success: Checks complete. No errors found.' in raw", $source );
+	}
+
+	public function test_release_workflow_has_an_always_run_aggregate_gate(): void {
+		$workflow = dirname( __DIR__, 2 ) . '/.github/workflows/wporg-approval.yml';
+		$source   = (string) file_get_contents( $workflow );
+
+		$this->assertStringContainsString( 'approval-gate:', $source );
+		$this->assertStringContainsString( 'if: ${{ always() }}', $source );
+		foreach (
+			array(
+				'candidate: ${{ needs.candidate.result }}',
+				"artifact_policy: \${{ needs['artifact-policy'].result }}",
+				"php_quality: \${{ needs['php-quality'].result }}",
+				'wpcs: ${{ needs.wpcs.result }}',
+				"plugin_check: \${{ needs['plugin-check'].result }}",
+				"clean_install: \${{ needs['clean-install'].result }}",
+			) as $result_contract
+		) {
+			$this->assertStringContainsString( $result_contract, $source );
+		}
+	}
+
 	/** @return string[] */
 	private function required_contexts(): array {
 		return array(
