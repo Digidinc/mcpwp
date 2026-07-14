@@ -260,8 +260,35 @@ trait Mcpwp_Elementor_Validator_Trait {
 			}
 
 			// --- 6. Flag unknown settings keys using widget reference ---
-			// Skip validation for Elementor v4 atomic elements — they use props/styles, not settings (#211, #618).
 			$is_atomic = in_array( $el_type, array( 'e-div-block', 'e-flexbox', 'e-grid', 'e-heading', 'e-paragraph', 'e-button', 'e-image', 'e-svg', 'e-divider', 'e-youtube', 'e-self-hosted-video' ), true );
+
+			// (#618/#622) Atomic elements use props/styles, not the legacy
+			// Controls_Manager settings model — validate against the real schema
+			// from get_props_schema() (#621) instead of skipping validation
+			// entirely, so a malformed atomic payload gets a warning instead of
+			// silently writing something Elementor's own editor can't parse.
+			if ( $is_atomic && ! empty( $el['settings'] ) && is_array( $el['settings'] ) && method_exists( $this, 'get_widget_schema' ) ) {
+				$atomic_schema = $this->get_widget_schema( $el_type );
+				if ( ! is_wp_error( $atomic_schema ) && ! empty( $atomic_schema['props'] ) && is_array( $atomic_schema['props'] ) ) {
+					$valid_prop_keys = array_keys( $atomic_schema['props'] );
+					foreach ( $el['settings'] as $key => $value ) {
+						if ( ! in_array( $key, $valid_prop_keys, true ) ) {
+							$valid_list = implode( ', ', array_slice( $valid_prop_keys, 0, 15 ) );
+							$suffix     = count( $valid_prop_keys ) > 15 ? ', ...' : '';
+							$warnings[] = "{$path}: unknown prop '{$key}' on atomic element '{$el_type}' — valid props: {$valid_list}{$suffix}";
+							continue;
+						}
+						// Atomic prop values must be {"$$type": "<kind>", "value": <actual>}
+						// (#618, confirmed against Elementor source) — a plain scalar here
+						// is the single most common mistake and Elementor's own editor
+						// will silently fail to parse it.
+						if ( ! is_array( $value ) || ! array_key_exists( '$$type', $value ) || ! array_key_exists( 'value', $value ) ) {
+							$warnings[] = "{$path}: prop '{$key}' on atomic element '{$el_type}' must be wrapped as {\"\$\$type\": \"<kind>\", \"value\": <actual>}, not a plain value — call wp_get_widget_schema('{$el_type}') to see the expected \"kind\" for this prop";
+						}
+					}
+				}
+			}
+
 			if ( ! $is_atomic && 'widget' === $el_type && '' !== $widget_type && ! empty( $el['settings'] ) && is_array( $el['settings'] ) ) {
 				$valid_keys = $this->get_valid_widget_keys( $widget_type );
 				if ( ! empty( $valid_keys ) ) {

@@ -6,7 +6,7 @@ Requires at least: 6.1
 Tested up to: 7.0
 Requires PHP: 7.4
 <!-- x-release-please-start-version -->
-Stable tag: 3.4.13
+Stable tag: 3.4.14
 <!-- x-release-please-end -->
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -152,6 +152,10 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 4. Integrations and Chat — connected services plus safety-first agent workflow
 
 == Changelog ==
+
+= 3.4.14 =
+* new: **elementor:** dry_run/wp_set_elementor now validates Atomic Elements props against their real schema (via wp_get_widget_schema) instead of skipping validation entirely — flags unknown prop keys and the #1 real mistake (a plain scalar instead of the required {"$$type","value"} wrapper) before writing. wp_add_section/wp_replace_section/wp_edit_section/wp_edit_widget were already elType-agnostic and work with Atomic Elements as-is.
+* new: **docs:** wp_get_guide(topic="elementor") documents Atomic Elements (Editor V4) — layout modes, structure, prop wrapper format, and a worked example — so AI agents know the surface exists and how to use it correctly. Tool descriptions for wp_get_elementor/wp_get_elementor_summary/wp_edit_widget/wp_set_elementor updated to match. (#618, #622, #623)
 
 = 3.4.13 =
 * new: **elementor:** wp_get_widget_schema now returns a real, deep schema for Elementor v4 Atomic Elements (props, types, enums, defaults — e.g. a heading's "tag" prop correctly lists h1-h6) instead of an empty tabs list. Built from Elementor's own get_props_schema()/define_props_schema() methods, not guesswork. Covers both atomic leaf widgets (e-heading, e-button, ...) and atomic container elements (e-div-block, e-flexbox, ...), which register through two different Elementor managers — both now resolve correctly instead of "unknown widget" for the container types.

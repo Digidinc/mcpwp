@@ -24,7 +24,7 @@ trait Mcpwp_Free_Tools_Elementor_Trait {
 		// Elementor Basic
 		$tools[] = $this->define_tool(
 			'wp_get_elementor',
-			'Get the full Elementor JSON data for a page or post. Returns sections, columns, widgets, and settings. Check elementor_layout_mode from wp_onboard before editing.',
+			'Get the full Elementor JSON data for a page or post. Returns sections, columns, widgets, and settings — or, on a site with Elementor Atomic Elements (Editor V4) active, container/leaf elements (e-div-block, e-heading, ...) with props/styles. Check elementor_layout_mode from wp_onboard before editing — it reports "section", "container", or "atomic".',
 			array(
 				'id' => array(
 					'type'        => 'number',
@@ -56,7 +56,7 @@ trait Mcpwp_Free_Tools_Elementor_Trait {
 
 		$tools[] = $this->define_tool(
 			'wp_get_elementor_summary',
-			'ALWAYS call this first before editing Elementor pages. Returns a lightweight structural summary with element IDs (needed for add/remove/replace/edit), section types, widget types, and key settings. Every element includes its ID and top-level sections include their index. Use this instead of wp_get_elementor when you only need to understand the page structure.',
+			'ALWAYS call this first before editing Elementor pages. Returns a lightweight structural summary with element IDs (needed for add/remove/replace/edit), section types, widget types, and key settings. Every element includes its ID and top-level sections include their index. Atomic Elements (e-div-block, e-heading, ...) are summarized too, with their props unwrapped for display. Use this instead of wp_get_elementor when you only need to understand the page structure.',
 			array(
 				'id' => array(
 					'type'        => 'number',
@@ -100,7 +100,7 @@ trait Mcpwp_Free_Tools_Elementor_Trait {
 
 		$tools[] = $this->define_tool(
 			'wp_edit_widget',
-			'Edit a single Elementor widget by ID on a page. Updates widget settings without replacing the full page data. More efficient than get+set for updating text, colors, or other widget properties. Widget must be a widget element, not section or container.',
+			'Edit a single Elementor widget by ID on a page. Updates widget settings without replacing the full page data. More efficient than get+set for updating text, colors, or other widget properties. Widget must be a widget element, not section or container — or, on Atomic Elements (Editor V4) sites, a leaf content element (e-heading, e-button, e-image, e-svg, e-divider, e-youtube, e-self-hosted-video, e-paragraph). For atomic elements, settings values must be wrapped as {"$$type": "<kind>", "value": <actual>} — call wp_get_widget_schema(widget_type) to see the expected kind per prop.',
 			array(
 				'id'              => array(
 					'type'        => 'number',
@@ -202,7 +202,7 @@ trait Mcpwp_Free_Tools_Elementor_Trait {
 
 		$tools[] = $this->define_tool(
 			'wp_set_elementor',
-			'FULL PAGE REPLACEMENT — overwrites all Elementor data on the page. For surgical edits, prefer wp_add_section, wp_replace_section, wp_edit_section, or wp_edit_widget instead. Use dry_run=true to validate data without saving. For large payloads with HTML content, use elementor_data_base64 (base64-encoded JSON) instead of elementor_data to avoid quoting/escaping issues.',
+			'FULL PAGE REPLACEMENT — overwrites all Elementor data on the page. For surgical edits, prefer wp_add_section, wp_replace_section, wp_edit_section, or wp_edit_widget instead. Use dry_run=true to validate data without saving. For large payloads with HTML content, use elementor_data_base64 (base64-encoded JSON) instead of elementor_data to avoid quoting/escaping issues. Check elementor_layout_mode from wp_site_info first: sending "container" elements to a "section"-mode site, or Atomic Elements (e-div-block, e-heading, ...) to a site without the Atomic Elements experiment active, is rejected up front with a clear error rather than silently losing data.',
 			array(
 				'id'             => array(
 					'type'        => 'number',

@@ -167,10 +167,11 @@ class Mcpwp_Guides {
 			'sections' => array(
 				array(
 					'heading' => 'Layout Modes',
-					'content' => 'Elementor has two layout modes. This site uses: ' . $layout_mode . ".\n\n"
+					'content' => 'Elementor has three possible layout modes. This site uses: ' . $layout_mode . ".\n\n"
 						. "**Section mode (classic):** section -> column(s) -> widget(s)\n"
-						. "**Container mode (flexbox):** container -> container(s) -> widget(s)\n\n"
-						. "Always check the layout mode via wp_site_info or wp_introspect before building pages. Using the wrong mode will cause rendering failures.",
+						. "**Container mode (flexbox):** container -> container(s) -> widget(s)\n"
+						. "**Atomic mode (Editor V4):** e-div-block/e-flexbox/e-grid -> more of the same -> leaf elements (e-heading, e-button, ...). See the 'Atomic Elements' section below — the data shape is different from the other two modes.\n\n"
+						. "Always check the layout mode via wp_site_info or wp_introspect before building pages. Sending the wrong element types for this site's mode (e.g. container elements on a section-mode site, or atomic elements on a site without Atomic Elements active) is rejected up front with a clear error — it will not silently corrupt the page, but it also will not work, so check first.",
 				),
 				array(
 					'heading' => 'Element Structure',
@@ -195,6 +196,35 @@ class Mcpwp_Guides {
 						. "  \"elements\": [{ \"id\": \"wid12345\", \"elType\": \"widget\", \"widgetType\": \"heading\", \"settings\": {\"title\": \"Hello\"} }]\n"
 						. "}]\n"
 						. "```",
+				),
+				array(
+					'heading' => 'Atomic Elements (Editor V4)',
+					'content' => "Only applies when elementor_layout_mode is \"atomic\" (Elementor's Atomic Elements / Editor V4 experiment active). Do not send these element types otherwise — they will be rejected up front.\n\n"
+						. "**Key difference from section/container mode:** atomic elements are typed purely by `elType` — there is no separate `widgetType`. A heading is `{\"elType\": \"e-heading\", ...}`, not `{\"elType\": \"widget\", \"widgetType\": \"e-heading\"}`.\n\n"
+						. "**Container-style elements** (can nest anything, including each other): `e-div-block`, `e-flexbox`, `e-grid`.\n"
+						. "**Leaf content elements:** `e-heading`, `e-paragraph`, `e-button`, `e-image`, `e-svg`, `e-divider`, `e-youtube`, `e-self-hosted-video`.\n\n"
+						. "**Every prop value must be wrapped**, not a plain scalar:\n"
+						. "```json\n"
+						. "{\"\$\$type\": \"<kind>\", \"value\": <actual>}\n"
+						. "```\n"
+						. "e.g. `{\"title\": {\"\$\$type\": \"string\", \"value\": \"Hello\"}}` — a plain `{\"title\": \"Hello\"}` is invalid and will be flagged by dry_run.\n\n"
+						. "**Example structure:**\n"
+						. "```json\n"
+						. "[{\n"
+						. "  \"id\": \"div123ab\", \"elType\": \"e-div-block\",\n"
+						. "  \"settings\": {}, \"styles\": {},\n"
+						. "  \"elements\": [{\n"
+						. "    \"id\": \"hed456cd\", \"elType\": \"e-heading\",\n"
+						. "    \"settings\": {\n"
+						. "      \"tag\": {\"\$\$type\": \"string\", \"value\": \"h2\"},\n"
+						. "      \"title\": {\"\$\$type\": \"string\", \"value\": \"Hello Atomic World\"}\n"
+						. "    },\n"
+						. "    \"styles\": {}\n"
+						. "  }]\n"
+						. "}]\n"
+						. "```\n\n"
+						. "**Always call `wp_get_widget_schema(widget_type)`** before setting props on an atomic element (e.g. `wp_get_widget_schema(\"e-heading\")`) — it returns the real prop list and the exact \"kind\" each one expects (string, union with an enum, etc.), taken directly from Elementor's own schema, not guessed.\n\n"
+						. "**Not yet supported:** full atomic write support is still gated on stability — Elementor's own Atomic Editor has open upstream bugs around saving. wp_set_elementor/wp_add_section/wp_edit_widget do work with atomic elements today (validated with a full recursive integrity check that catches and restores anything Elementor's own save silently drops), but treat atomic pages as more likely to need a retry/verify pass than section/container pages.",
 				),
 				array(
 					'heading' => 'Multi-Column Sections',
