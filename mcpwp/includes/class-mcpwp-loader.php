@@ -91,6 +91,7 @@ class Mcpwp_Loader {
 		$days     = max( 1, absint( $settings['log_retention_days'] ?? 30 ) );
 		$table    = $wpdb->prefix . 'mcpwp_activity_log';
 		$cutoff   = gmdate( 'Y-m-d H:i:s', strtotime( "-{$days} days" ) );
+		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- WordPress 6.1 lacks the %i identifier placeholder; the table name is only $wpdb->prefix plus a fixed suffix, and the cutoff retains a %s placeholder.
 		$wpdb->query( $wpdb->prepare( "DELETE FROM {$table} WHERE created_at < %s", $cutoff ) );
 	}
 

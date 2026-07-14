@@ -172,35 +172,35 @@ msgstr ""
 msgid "This inventory is generated from the active free registry."
 msgstr ""
 
-#: includes/admin/class-mcpwp-activity-log.php:32
+#: includes/admin/class-mcpwp-activity-log.php:33
 msgid "Mumega MCP Activity"
 msgstr ""
 
-#: includes/admin/class-mcpwp-activity-log.php:33
+#: includes/admin/class-mcpwp-activity-log.php:34
 msgid "Local MCP tool activity metadata only; arguments and content are never stored."
 msgstr ""
 
-#: includes/admin/class-mcpwp-activity-log.php:35
+#: includes/admin/class-mcpwp-activity-log.php:36
 msgid "When"
 msgstr ""
 
-#: includes/admin/class-mcpwp-activity-log.php:35
+#: includes/admin/class-mcpwp-activity-log.php:36
 msgid "Tool"
 msgstr ""
 
-#: includes/admin/class-mcpwp-activity-log.php:35
+#: includes/admin/class-mcpwp-activity-log.php:36
 msgid "Status"
 msgstr ""
 
-#: includes/admin/class-mcpwp-activity-log.php:35
+#: includes/admin/class-mcpwp-activity-log.php:36
 msgid "Duration (ms)"
 msgstr ""
 
-#: includes/admin/class-mcpwp-activity-log.php:35
+#: includes/admin/class-mcpwp-activity-log.php:36
 msgid "API key ID"
 msgstr ""
 
-#: includes/admin/class-mcpwp-activity-log.php:39
+#: includes/admin/class-mcpwp-activity-log.php:40
 msgid "No activity found."
 msgstr ""
 

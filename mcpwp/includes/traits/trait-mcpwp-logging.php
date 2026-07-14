@@ -46,6 +46,7 @@ trait Mcpwp_Logging {
 		global $wpdb;
 		$table  = $wpdb->prefix . 'mcpwp_activity_log';
 		$cutoff = gmdate( 'Y-m-d H:i:s', strtotime( '-' . absint( $days ) . ' days' ) );
+		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- WordPress 6.1 lacks the %i identifier placeholder; the table name is only $wpdb->prefix plus a fixed suffix, and the cutoff retains a %s placeholder.
 		return $wpdb->query( $wpdb->prepare( "DELETE FROM {$table} WHERE created_at < %s", $cutoff ) );
 	}
 
@@ -58,6 +59,7 @@ trait Mcpwp_Logging {
 	public function get_recent_activity( $limit = 50 ) {
 		global $wpdb;
 		$table = $wpdb->prefix . 'mcpwp_activity_log';
+		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- WordPress 6.1 lacks the %i identifier placeholder; the table name is only $wpdb->prefix plus a fixed suffix, and the limit retains a %d placeholder.
 		return $wpdb->get_results( $wpdb->prepare( "SELECT id, action, status_code, duration_ms, api_key_id, created_at FROM {$table} ORDER BY created_at DESC LIMIT %d", absint( $limit ) ), ARRAY_A );
 	}
 }

@@ -18,8 +18,8 @@ trait Mcpwp_Admin_Setup_Trait {
 			wp_die( esc_html__( 'You do not have permission to view this page.', 'mumega-mcp' ) ); }
 		$new_key = '';
 		$notice  = null;
-		if ( isset( $_POST['mcpwp_create_key'] ) || isset( $_POST['mcpwp_revoke_key'] ) ) {
-			$result = $this->handle_setup_action( $_POST );
+		if ( isset( $_POST['mcpwp_create_key'] ) || isset( $_POST['mcpwp_revoke_key'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification.Missing -- The delegated handler verifies the selected action-specific nonce before mutation.
+			$result = $this->handle_setup_action( $_POST ); // phpcs:ignore WordPress.Security.NonceVerification.Missing -- handle_setup_action() verifies the selected action-specific nonce before mutation.
 			if ( is_wp_error( $result ) ) {
 				$notice = array( 'error', $result->get_error_message() );
 			} elseif ( isset( $result['created']['key'] ) ) {

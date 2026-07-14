@@ -23,8 +23,9 @@ class Mcpwp_Activity_Log_Page {
 		$paged    = isset( $_GET['paged'] ) ? max( 1, absint( wp_unslash( $_GET['paged'] ) ) ) : 1; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
 		$per_page = 50;
 		$offset   = ( $paged - 1 ) * $per_page;
-		$total    = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$table}" ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.PreparedSQL.NotPrepared
+		$total    = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$table}" ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- WordPress 6.1 lacks the %i identifier placeholder; the table name is only $wpdb->prefix plus a fixed suffix.
 		$rows     = $wpdb->get_results(
+			// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- WordPress 6.1 lacks the %i identifier placeholder; the table name is only $wpdb->prefix plus a fixed suffix, and values retain %d placeholders.
 			$wpdb->prepare( "SELECT id, action, status_code, duration_ms, api_key_id, created_at FROM {$table} ORDER BY created_at DESC LIMIT %d OFFSET %d", $per_page, $offset ),
 			ARRAY_A
 		);
