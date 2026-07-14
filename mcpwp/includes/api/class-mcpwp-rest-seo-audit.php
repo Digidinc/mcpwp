@@ -796,6 +796,10 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 		$microdata_items = $this->extract_microdata_items( $content );
 		$issues          = array();
 		$schema_types    = array();
+		// (#616) Entities whose content-vs-page-placement is worth checking —
+		// Google's March 2026 eligibility rule requires this schema to describe
+		// the page's primary content, not a supplementary/off-topic section.
+		$placement_check_entities = array();
 
 		foreach ( $json_ld_items as $index => $item ) {
 			if ( ! empty( $item['error'] ) ) {
@@ -817,6 +821,10 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 				$type = $this->normalize_schema_type( $entity['@type'] ?? '' );
 				if ( '' !== $type ) {
 					$schema_types[] = $type;
+				}
+
+				if ( in_array( $type, array( 'faqpage', 'howto', 'qapage' ), true ) ) {
+					$placement_check_entities[] = array( 'type' => $type, 'entity' => $entity );
 				}
 
 				if ( empty( $entity['@context'] ) ) {
@@ -860,6 +868,9 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 						$t = $this->normalize_schema_type( $entity['@type'] ?? '' );
 						if ( '' !== $t ) {
 							$rendered_jsonld_types[] = $t;
+						}
+						if ( in_array( $t, array( 'faqpage', 'howto', 'qapage' ), true ) ) {
+							$placement_check_entities[] = array( 'type' => $t, 'entity' => $entity );
 						}
 					}
 				}
@@ -923,6 +934,39 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 				__( 'The markup is valid and harmless to keep — it just will not produce a rich result/snippet in Google Search anymore. No action needed unless you want to remove it for other reasons.', 'mcpwp' ),
 				array( 'types' => $deprecated_found )
 			);
+		}
+
+		// (#616) Schema-on-primary-content check — Google's March 2026 eligibility
+		// rule requires FAQPage/HowTo/QAPage schema to describe the page's primary
+		// content, not a supplementary/off-topic section (this is what killed
+		// FAQ/HowTo-padding tactics). Heuristic: the question/answer/step text the
+		// schema claims must actually appear somewhere in the page's own visible
+		// text. No exact DOM section-mapping is attempted — this is a coarse,
+		// honest presence check, not a layout analyzer.
+		if ( ! empty( $placement_check_entities ) ) {
+			$visible_text = $this->get_structured_data_visible_text( $rendered_html, $content );
+			if ( '' !== $visible_text ) {
+				$mismatched_types = array();
+				foreach ( $placement_check_entities as $check ) {
+					if ( $this->schema_entity_content_missing_from_page( $check['type'], $check['entity'], $visible_text ) ) {
+						$mismatched_types[ $check['type'] ] = true;
+					}
+				}
+				if ( ! empty( $mismatched_types ) ) {
+					$mismatched_types = array_keys( $mismatched_types );
+					$issues[]         = $this->make_structured_data_issue(
+						'schema_placement_mismatch',
+						'warning',
+						sprintf(
+							/* translators: %s: comma-separated list of schema @type names */
+							__( 'Schema type(s) %s describe content that could not be found on this page.', 'mcpwp' ),
+							implode( ', ', $mismatched_types )
+						),
+						__( 'Google requires this schema to describe the page\'s own primary content, not a supplementary or off-topic section — schema for content that is not actually visible on the page is not eligible for a rich result and may be treated as spam. Make sure the question/answer or step text in the schema matches text that genuinely appears on this page.', 'mcpwp' ),
+						array( 'types' => $mismatched_types )
+					);
+				}
+			}
 		}
 
 		$summary = $this->summarize_structured_data_issues( $issues );
@@ -1590,6 +1634,126 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 		);
 
 		return isset( $deprecated[ $normalized_type ] ) ? $deprecated[ $normalized_type ] : null;
+	}
+
+	/**
+	 * Build a normalized, lowercased plain-text version of the page's own
+	 * visible content, for the schema-placement check. (#616)
+	 *
+	 * Prefers the rendered page body (catches content injected by the theme,
+	 * page builder, or other plugins) and falls back to raw post_content when
+	 * no rendered HTML is available (draft posts, or the fetch failed).
+	 *
+	 * @param string|null $rendered_html Rendered page body HTML, or null.
+	 * @param string      $post_content  Raw post_content.
+	 * @return string Normalized plain text (lowercase, collapsed whitespace).
+	 */
+	protected function get_structured_data_visible_text( $rendered_html, $post_content ) {
+		$source = ( null !== $rendered_html && '' !== $rendered_html ) ? $rendered_html : $post_content;
+		$text   = wp_strip_all_tags( (string) $source );
+		$text   = html_entity_decode( $text, ENT_QUOTES, 'UTF-8' );
+		$text   = strtolower( $text );
+		$text   = preg_replace( '/\s+/', ' ', $text );
+
+		return trim( (string) $text );
+	}
+
+	/**
+	 * Extract the text fragments a FAQPage/HowTo/QAPage entity claims to
+	 * answer/describe, and check whether the majority of them are actually
+	 * findable in the page's own visible text. (#616)
+	 *
+	 * Coarse presence check, not a DOM section-mapper — flags entities that
+	 * appear to describe off-page/supplementary content, per Google's March
+	 * 2026 schema-eligibility rule (schema must describe primary content).
+	 *
+	 * @param string $type         Normalized schema type (faqpage|howto|qapage).
+	 * @param array  $entity       Decoded JSON-LD entity.
+	 * @param string $visible_text Normalized visible page text (from get_structured_data_visible_text()).
+	 * @return bool True when the entity's content mismatches the page.
+	 */
+	protected function schema_entity_content_missing_from_page( $type, $entity, $visible_text ) {
+		$fragments = array();
+
+		if ( 'faqpage' === $type ) {
+			$main_entity = isset( $entity['mainEntity'] ) ? $entity['mainEntity'] : array();
+			if ( isset( $main_entity['@type'] ) ) {
+				$main_entity = array( $main_entity ); // Single-question FAQPage.
+			}
+			foreach ( (array) $main_entity as $question ) {
+				if ( ! is_array( $question ) ) {
+					continue;
+				}
+				if ( ! empty( $question['name'] ) ) {
+					$fragments[] = (string) $question['name'];
+				}
+				$answer = isset( $question['acceptedAnswer'] ) ? $question['acceptedAnswer'] : null;
+				if ( is_array( $answer ) && ! empty( $answer['text'] ) ) {
+					$fragments[] = (string) $answer['text'];
+				}
+			}
+		} elseif ( 'howto' === $type ) {
+			$steps = isset( $entity['step'] ) ? $entity['step'] : array();
+			foreach ( (array) $steps as $step ) {
+				if ( ! is_array( $step ) ) {
+					continue;
+				}
+				if ( ! empty( $step['name'] ) ) {
+					$fragments[] = (string) $step['name'];
+				}
+				if ( ! empty( $step['text'] ) ) {
+					$fragments[] = (string) $step['text'];
+				}
+			}
+		} elseif ( 'qapage' === $type ) {
+			$main_entity = isset( $entity['mainEntity'] ) && is_array( $entity['mainEntity'] ) ? $entity['mainEntity'] : array();
+			if ( ! empty( $main_entity['name'] ) ) {
+				$fragments[] = (string) $main_entity['name'];
+			}
+			$answers = array();
+			if ( isset( $main_entity['acceptedAnswer'] ) ) {
+				$answers[] = $main_entity['acceptedAnswer'];
+			}
+			if ( isset( $main_entity['suggestedAnswer'] ) ) {
+				$answers = array_merge( $answers, (array) $main_entity['suggestedAnswer'] );
+			}
+			foreach ( $answers as $answer ) {
+				if ( is_array( $answer ) && ! empty( $answer['text'] ) ) {
+					$fragments[] = (string) $answer['text'];
+				}
+			}
+		}
+
+		// Normalize and drop trivially short fragments (not meaningful to match).
+		$fragments = array_filter(
+			array_map(
+				static function ( $fragment ) {
+					$fragment = wp_strip_all_tags( $fragment );
+					$fragment = html_entity_decode( $fragment, ENT_QUOTES, 'UTF-8' );
+					$fragment = strtolower( trim( preg_replace( '/\s+/', ' ', $fragment ) ) );
+					return $fragment;
+				},
+				$fragments
+			),
+			static function ( $fragment ) {
+				return strlen( $fragment ) >= 15;
+			}
+		);
+
+		if ( empty( $fragments ) ) {
+			// Nothing substantial enough to check — don't flag on absence of evidence.
+			return false;
+		}
+
+		$found = 0;
+		foreach ( $fragments as $fragment ) {
+			if ( false !== strpos( $visible_text, $fragment ) ) {
+				++$found;
+			}
+		}
+
+		// Flag when less than half the schema's content can be found on the page.
+		return ( $found / count( $fragments ) ) < 0.5;
 	}
 
 	/**

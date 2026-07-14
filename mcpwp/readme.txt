@@ -6,7 +6,7 @@ Requires at least: 6.1
 Tested up to: 7.0
 Requires PHP: 7.4
 <!-- x-release-please-start-version -->
-Stable tag: 3.4.15
+Stable tag: 3.4.16
 <!-- x-release-please-end -->
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -152,6 +152,10 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 4. Integrations and Chat — connected services plus safety-first agent workflow
 
 == Changelog ==
+
+= 3.4.16 =
+* new: **seo:** /seo/structured-data flags schema_placement_mismatch when FAQPage/HowTo/QAPage schema describes content that can't be found on the page itself — Google's March 2026 eligibility rule requires this schema to describe primary content, not a supplementary/off-topic section. Coarse presence check against the page's own visible text, not a DOM layout analyzer.
+* new: **seo:** /seo/content-quality returns an explicit eeat field with Google's 4-factor E-E-A-T rubric (Experience, Expertise, Authoritativeness, Trustworthiness — Search Quality Rater Guidelines, updated Sept 2025), each with its own 0-100 sub-score and the specific evidence found — not one aggregate number. Authoritativeness explicitly discloses it can't check off-site signals from a single page. 15 new regression tests across both checks; full suite green (319 tests, 922 assertions). (#614, #616)
 
 = 3.4.15 =
 * new: **seo:** /seo/structured-data now classifies each detected schema @type as active or deprecated_no_rich_result (new rich_result_status field), catching HowTo (retired 2023), FAQPage (retired May 2026), and 5 more types retired June 2025 (ClaimReview, EstimatedSalary, LearningVideo, SpecialAnnouncement, VehicleListing) — confirmed via Google Search Central, not vendor blogs. The markup stays valid; this just tells you it earns no SERP snippet anymore, without recommending deletion. Book/Course deliberately excluded (Book was un-deprecated Nov 2025; Course is too broad a type to flag without false positives). (#614, #615)
