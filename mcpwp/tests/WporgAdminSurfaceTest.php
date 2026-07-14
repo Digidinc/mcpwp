@@ -98,6 +98,19 @@ final class WporgAdminSurfaceTest extends TestCase {
 		$this->assertMatchesRegularExpression( '/check_admin_referer\s*\([^)]*revoke|wp_verify_nonce\s*\([^)]*revoke/i', $source );
 	}
 
+	public function test_default_key_form_grants_reviewable_draft_write_access(): void {
+		$source = $this->read( 'admin/partials/mcpwp-setup-display.php' );
+
+		$this->assertMatchesRegularExpression( '/<input\s+type="checkbox"\s+name="scopes\[\]"\s+value="read"\s+checked="checked"\s+disabled(?:="disabled")?>/', $source );
+		$this->assertMatchesRegularExpression( '/<input\s+type="hidden"\s+name="scopes\[\]"\s+value="read">/', $source );
+		$this->assertMatchesRegularExpression( '/<input\s+type="checkbox"\s+name="scopes\[\]"\s+value="write"\s+checked="checked">/', $source );
+		$this->assertMatchesRegularExpression( '/<input\s+type="checkbox"\s+name="tool_categories\[\]"\s+value="content"\s+checked="checked">/', $source );
+
+		foreach ( array( 'admin', 'site', 'media', 'taxonomy' ) as $value ) {
+			$this->assertDoesNotMatchRegularExpression( '/<input[^>]+value="' . $value . '"[^>]+checked="checked"[^>]*>/', $source );
+		}
+	}
+
 	public function test_create_key_binds_current_user_and_selected_scope_and_categories(): void {
 		$admin = new Mcpwp_Admin_Setup_Test_Harness();
 		$this->assertTrue( method_exists( $admin, 'handle_setup_action' ), 'Setup needs a directly testable fail-closed mutation handler.' );

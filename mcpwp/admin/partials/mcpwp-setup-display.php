@@ -24,13 +24,13 @@ if ( $notice ) :
 		<?php wp_nonce_field( 'mcpwp_create_key' ); ?>
 		<p><label><?php esc_html_e( 'Key label', 'mumega-mcp' ); ?> <input name="label" type="text" required maxlength="100"></label></p>
 		<fieldset><legend><?php esc_html_e( 'Scopes', 'mumega-mcp' ); ?></legend>
-			<label><input type="checkbox" name="scopes[]" value="read"> <?php esc_html_e( 'Read', 'mumega-mcp' ); ?></label>
-			<label><input type="checkbox" name="scopes[]" value="write"> <?php esc_html_e( 'Write', 'mumega-mcp' ); ?></label>
+			<label><input type="hidden" name="scopes[]" value="read"><input type="checkbox" name="scopes[]" value="read" checked="checked" disabled="disabled"> <?php esc_html_e( 'Read', 'mumega-mcp' ); ?></label>
+			<label><input type="checkbox" name="scopes[]" value="write" checked="checked"> <?php esc_html_e( 'Write', 'mumega-mcp' ); ?></label>
 			<label><input type="checkbox" name="scopes[]" value="admin"> <?php esc_html_e( 'Admin', 'mumega-mcp' ); ?></label>
 		</fieldset>
 		<fieldset><legend><?php esc_html_e( 'Tool categories', 'mumega-mcp' ); ?></legend>
 			<label><input type="checkbox" name="tool_categories[]" value="site"> <?php esc_html_e( 'Site', 'mumega-mcp' ); ?></label>
-			<label><input type="checkbox" name="tool_categories[]" value="content"> <?php esc_html_e( 'Content', 'mumega-mcp' ); ?></label>
+			<label><input type="checkbox" name="tool_categories[]" value="content" checked="checked"> <?php esc_html_e( 'Content', 'mumega-mcp' ); ?></label>
 			<label><input type="checkbox" name="tool_categories[]" value="media"> <?php esc_html_e( 'Media', 'mumega-mcp' ); ?></label>
 			<label><input type="checkbox" name="tool_categories[]" value="taxonomy"> <?php esc_html_e( 'Taxonomy', 'mumega-mcp' ); ?></label>
 		</fieldset>
