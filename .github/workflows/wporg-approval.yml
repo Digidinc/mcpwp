@@ -1,0 +1,419 @@
+name: WordPress.org approval
+
+on:
+  push:
+    branches: [wporg]
+  pull_request:
+    branches: [wporg]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wporg-approval-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  MCPWP_WPORG_ZIP: mcpwp/scripts/mumega-mcp-3.4.3.zip
+  MCPWP_WPORG_SHA256_FILE: mcpwp/scripts/mumega-mcp-3.4.3.zip.sha256
+
+jobs:
+  candidate:
+    name: Build immutable candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out approval source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Build and freeze candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash mcpwp/scripts/build-wporg.sh
+          cd mcpwp/scripts
+          sha256sum "$(basename "$MCPWP_WPORG_ZIP")" > "$(basename "$MCPWP_WPORG_SHA256_FILE")"
+          sha256sum --check "$(basename "$MCPWP_WPORG_SHA256_FILE")"
+
+      - name: Upload immutable candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: wporg-candidate-${{ github.sha }}
+          path: |
+            ${{ env.MCPWP_WPORG_ZIP }}
+            ${{ env.MCPWP_WPORG_SHA256_FILE }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  artifact-policy:
+    name: Exact artifact policy
+    needs: candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out verifier
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Download immutable candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: wporg-candidate-${{ github.sha }}
+          path: mcpwp/scripts
+
+      - name: Verify hash and artifact policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd mcpwp/scripts
+          sha256sum --check "$(basename "$MCPWP_WPORG_SHA256_FILE")"
+          cd "$GITHUB_WORKSPACE"
+          bash mcpwp/scripts/verify-wporg-artifact.sh "$MCPWP_WPORG_ZIP"
+          actual_manifest="$RUNNER_TEMP/mumega-mcp-manifest.txt"
+          unzip -Z1 "$MCPWP_WPORG_ZIP" | LC_ALL=C sort > "$actual_manifest"
+          diff --unified docs/wporg/mumega-mcp-manifest.txt "$actual_manifest"
+          candidate_sha="$(sha256sum "$MCPWP_WPORG_ZIP" | awk '{print $1}')"
+          evidence_row="| Candidate SHA-256 | \`$candidate_sha\` |"
+          grep --fixed-strings --line-regexp "$evidence_row" docs/wporg/approval-evidence.md
+          unzip -p "$MCPWP_WPORG_ZIP" mumega-mcp/readme.txt \
+            > "$RUNNER_TEMP/mumega-mcp-readme.txt"
+          bash mcpwp/scripts/check-readme-links.sh "$RUNNER_TEMP/mumega-mcp-readme.txt"
+
+  php-quality:
+    name: PHP ${{ matrix.php }} lint and tests
+    needs: candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['7.4', '8.3']
+    steps:
+      - name: Check out tests
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Set up PHP ${{ matrix.php }}
+        uses: shivammathur/setup-php@bf6b4fbd49ca58e4608c9c89fba0b8d90bd2a39f # 2.35.5
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+          tools: composer:2.8.12
+
+      - name: Install locked test dependencies
+        shell: bash
+        run: composer install --working-dir=mcpwp --no-interaction --no-progress --prefer-dist
+
+      - name: Download immutable candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: wporg-candidate-${{ github.sha }}
+          path: mcpwp/scripts
+
+      - name: Verify candidate hash
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd mcpwp/scripts
+          sha256sum --check "$(basename "$MCPWP_WPORG_SHA256_FILE")"
+
+      - name: Lint extracted shipped PHP
+        shell: bash
+        run: |
+          set -euo pipefail
+          extracted="$RUNNER_TEMP/wporg-php-${{ matrix.php }}"
+          mkdir -p "$extracted"
+          unzip -q "$MCPWP_WPORG_ZIP" -d "$extracted"
+          find "$extracted/mumega-mcp" -type f -name '*.php' -print0 \
+            | LC_ALL=C sort -z \
+            | xargs -0 -n1 php -l
+
+      - name: Run PHPUnit against the frozen candidate
+        shell: bash
+        run: mcpwp/vendor/bin/phpunit --configuration mcpwp/tests/phpunit.xml
+
+  wpcs:
+    name: WPCS on shipped PHP
+    needs: candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out WPCS configuration
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Set up PHP 7.4
+        uses: shivammathur/setup-php@bf6b4fbd49ca58e4608c9c89fba0b8d90bd2a39f # 2.35.5
+        with:
+          php-version: '7.4'
+          coverage: none
+          tools: composer:2.8.12
+
+      - name: Install locked WPCS dependencies
+        shell: bash
+        run: composer install --working-dir=mcpwp --no-interaction --no-progress --prefer-dist
+
+      - name: Download immutable candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: wporg-candidate-${{ github.sha }}
+          path: mcpwp/scripts
+
+      - name: Verify hash and extract candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd mcpwp/scripts
+          sha256sum --check "$(basename "$MCPWP_WPORG_SHA256_FILE")"
+          cd "$GITHUB_WORKSPACE"
+          mkdir -p "$RUNNER_TEMP/wporg-wpcs"
+          unzip -q "$MCPWP_WPORG_ZIP" -d "$RUNNER_TEMP/wporg-wpcs"
+
+      - name: Run WPCS and PHPCompatibilityWP
+        shell: bash
+        run: |
+          set -euo pipefail
+          mcpwp/vendor/bin/phpcs \
+            --standard=mcpwp/phpcs.xml.dist \
+            --runtime-set ignore_warnings_on_exit 1 \
+            --report=full \
+            --report-file="$RUNNER_TEMP/wpcs-report.txt" \
+            "$RUNNER_TEMP/wporg-wpcs/mumega-mcp"
+          cat "$RUNNER_TEMP/wpcs-report.txt"
+
+      - name: Upload WPCS report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: wporg-wpcs-${{ github.sha }}
+          path: ${{ runner.temp }}/wpcs-report.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  plugin-check:
+    name: Plugin Check 2.0.0
+    needs: candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      MCPWP_WORDPRESS_IMAGE: wordpress:7.0.1-php8.3-apache@sha256:e36cd332ae0de78f3c3691e468c54c5540c0a74286b51eb9b5964fa1e9c916cd
+      MCPWP_WPCLI_IMAGE: wordpress:cli-php8.3@sha256:0587fa20d1fce7880f4137ece2154c92ec948dab920f8d6ca3559a50c354efe8
+      MCPWP_MARIADB_IMAGE: mariadb:10.6@sha256:114d40be36852d0a019afd8458f7e1cc63fd300403b115b1f32e31130d5f671b
+      MCPWP_PLUGIN_CHECK_URL: https://downloads.wordpress.org/plugin/plugin-check.2.0.0.zip
+      MCPWP_PLUGIN_CHECK_SHA256: d744ee1f93866527aedf7d0a73df40bd87018f02cd5465fa39230bf4c2b3a3fa
+    steps:
+      - name: Check out Plugin Check harness
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Download immutable candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: wporg-candidate-${{ github.sha }}
+          path: mcpwp/scripts
+
+      - name: Verify hash and extract candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd mcpwp/scripts
+          sha256sum --check "$(basename "$MCPWP_WPORG_SHA256_FILE")"
+          cd "$GITHUB_WORKSPACE"
+          mkdir -p "$RUNNER_TEMP/plugin-check-candidate"
+          unzip -q "$MCPWP_WPORG_ZIP" -d "$RUNNER_TEMP/plugin-check-candidate"
+          test -f "$RUNNER_TEMP/plugin-check-candidate/mumega-mcp/mumega-mcp.php"
+
+      - name: Fetch pinned Plugin Check package
+        shell: bash
+        run: |
+          set -euo pipefail
+          package="$RUNNER_TEMP/plugin-check.2.0.0.zip"
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 \
+            --output "$package" "$MCPWP_PLUGIN_CHECK_URL"
+          echo "$MCPWP_PLUGIN_CHECK_SHA256  $package" | sha256sum --check --strict
+          unzip -p "$package" plugin-check/plugin.php \
+            | grep -F 'Version: 2.0.0'
+
+      - name: Run Plugin Check against the exact installed ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          compose_file="mcpwp/tests/integration/wporg-clean-install/docker-compose.yml"
+          project="mcpwp-plugin-check-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          report="$RUNNER_TEMP/plugin-check-results.json"
+          diagnostics="$RUNNER_TEMP/plugin-check-diagnostics.txt"
+          package="$RUNNER_TEMP/plugin-check.2.0.0.zip"
+          export MCPWP_WPORG_SHA256
+          MCPWP_WPORG_SHA256="$(sha256sum "$MCPWP_WPORG_ZIP" | awk '{print $1}')"
+          export MCPWP_WPORG_EXPECTED_WP='7.0.1'
+          export MCPWP_WPORG_EXPECTED_PHP='8.3'
+
+          cleanup() {
+            docker compose -f "$compose_file" -p "$project" down \
+              --volumes --remove-orphans >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          docker pull "$MCPWP_MARIADB_IMAGE"
+          docker pull "$MCPWP_WORDPRESS_IMAGE"
+          docker pull "$MCPWP_WPCLI_IMAGE"
+          docker compose -f "$compose_file" -p "$project" up -d --wait --pull never
+          docker compose -f "$compose_file" -p "$project" cp \
+            "$MCPWP_WPORG_ZIP" wordpress:/opt/mcpwp-candidate.zip
+          docker compose -f "$compose_file" -p "$project" exec -T --user www-data \
+            wordpress php /opt/mcpwp-wporg-harness/install.php
+
+          wordpress_id="$(docker compose -f "$compose_file" -p "$project" ps -q wordpress)"
+          wp_cli=(
+            docker run --rm
+            --network "${project}_wporg"
+            --volumes-from "$wordpress_id"
+            --user 33:33
+            --volume "$package:/tmp/plugin-check.2.0.0.zip:ro"
+            --env WORDPRESS_DB_HOST=db:3306
+            --env WORDPRESS_DB_USER=wordpress
+            --env WORDPRESS_DB_PASSWORD=wordpress
+            --env WORDPRESS_DB_NAME=wordpress
+            "$MCPWP_WPCLI_IMAGE"
+            --path=/var/www/html
+          )
+          "${wp_cli[@]}" plugin install /tmp/plugin-check.2.0.0.zip --activate
+          "${wp_cli[@]}" plugin get plugin-check --field=version \
+            | tee "$RUNNER_TEMP/plugin-check-version.txt"
+          grep -Fx '2.0.0' "$RUNNER_TEMP/plugin-check-version.txt"
+          "${wp_cli[@]}" eval \
+            "set_transient( 'wp_plugin_check_latest_version_info', array( 'current' => '7.0.1' ), DAY_IN_SECONDS );"
+          "${wp_cli[@]}" eval \
+            "\$info = get_transient( 'wp_plugin_check_latest_version_info' ); if ( ! is_array( \$info ) || '7.0.1' !== ( \$info['current'] ?? '' ) ) { WP_CLI::error( 'Plugin Check version cache was not seeded.' ); } mcpwp_wporg_reset_spy(); mcpwp_wporg_mark_context( 'plugin_check' );"
+
+          set +e
+          "${wp_cli[@]}" \
+            --require=/var/www/html/wp-content/plugins/plugin-check/cli.php \
+            plugin check mumega-mcp \
+            --mode=new \
+            --format=strict-json \
+            --fields=file,line,column,type,code,message,docs \
+            --error-severity=1 \
+            --warning-severity=1 \
+            >"$report" 2>"$diagnostics"
+          plugin_check_status=$?
+          set -e
+          echo "MCPWP_PLUGIN_CHECK_STATUS=$plugin_check_status" >> "$GITHUB_ENV"
+          cat "$diagnostics" >&2
+          cat "$report"
+          cd "$GITHUB_WORKSPACE/mcpwp/scripts"
+          sha256sum --check "$(basename "$MCPWP_WPORG_SHA256_FILE")"
+          cd "$GITHUB_WORKSPACE"
+          docker compose -f "$compose_file" -p "$project" exec -T wordpress sh -eu -c '
+            test ! -s /var/www/html/wp-content/mcpwp-wporg-http-attempts.jsonl
+            test ! -s /var/www/html/wp-content/debug.log
+            test ! -e /var/www/html/wp-content/object-cache.php
+          '
+
+      - name: Parse complete Plugin Check report
+        shell: bash
+        run: |
+          python3 - "$RUNNER_TEMP/plugin-check-results.json" <<'PY'
+          import json
+          import os
+          import pathlib
+          import sys
+
+          report_path = pathlib.Path(sys.argv[1])
+          raw = report_path.read_text(encoding='utf-8').strip()
+          try:
+              findings = json.loads(raw)
+          except json.JSONDecodeError as error:
+              if 'Success: Checks complete. No errors found.' in raw:
+                  findings = []
+              else:
+                  raise SystemExit(f'Plugin Check did not produce strict JSON: {error}')
+          if not isinstance(findings, list):
+              raise SystemExit('Plugin Check strict JSON must be a list of findings.')
+          if not all(isinstance(item, dict) for item in findings):
+              raise SystemExit('Plugin Check strict JSON contains a malformed finding.')
+
+          errors = [item for item in findings if item.get('type') == 'ERROR']
+          warnings = [item for item in findings if item.get('type') == 'WARNING']
+          other = [item for item in findings if item.get('type') not in ('ERROR', 'WARNING')]
+          print(f'Plugin Check 2.0.0: {len(errors)} errors, {len(warnings)} warnings, {len(other)} other findings')
+          for item in warnings:
+              print(f"WARNING {item.get('code', '<unknown>')}: {item.get('file', '')}:{item.get('line', '')}")
+
+          summary = os.environ.get('GITHUB_STEP_SUMMARY')
+          if summary:
+              with open(summary, 'a', encoding='utf-8') as stream:
+                  stream.write(f'Plugin Check 2.0.0: **{len(errors)} errors**, **{len(warnings)} warnings**.\n')
+          if other:
+              raise SystemExit('Plugin Check returned findings with an unknown type.')
+          if errors:
+              raise SystemExit('Plugin Check reported errors.')
+          if int(os.environ.get('MCPWP_PLUGIN_CHECK_STATUS', '1')) != 0:
+              raise SystemExit('Plugin Check CLI exited unsuccessfully.')
+          PY
+
+      - name: Upload complete Plugin Check report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: wporg-plugin-check-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/plugin-check-results.json
+            ${{ runner.temp }}/plugin-check-diagnostics.txt
+            ${{ runner.temp }}/plugin-check-version.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  clean-install:
+    name: Clean install (${{ matrix.lane }})
+    needs: candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [wp61, wp70]
+    steps:
+      - name: Check out clean-install harness
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Download immutable candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: wporg-candidate-${{ github.sha }}
+          path: mcpwp/scripts
+
+      - name: Verify candidate hash
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd mcpwp/scripts
+          sha256sum --check "$(basename "$MCPWP_WPORG_SHA256_FILE")"
+
+      - name: Pull pinned clean-install images
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull mariadb:10.6@sha256:114d40be36852d0a019afd8458f7e1cc63fd300403b115b1f32e31130d5f671b
+          case "${{ matrix.lane }}" in
+            wp61)
+              docker pull wordpress:6.1.1-php7.4-apache@sha256:7e46cf3373751b6d62b7a0fc3a7d6686f641a34a2a0eb18947da5375c55fd009
+              ;;
+            wp70)
+              docker pull wordpress:7.0.1-php8.3-apache@sha256:e36cd332ae0de78f3c3691e468c54c5540c0a74286b51eb9b5964fa1e9c916cd
+              ;;
+          esac
+
+      - name: Run exact-ZIP lifecycle and no-outbound gate
+        shell: bash
+        run: bash mcpwp/scripts/test-wporg-clean-install.sh "${{ matrix.lane }}"
