@@ -889,6 +889,42 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 			$issues[] = $this->make_structured_data_issue( 'schema_recommendation_available', 'info', __( 'Page-appropriate schema recommendations are available.', 'mcpwp' ), __( 'Review the recommendations and add schema through an SEO plugin or approved block-native workflow only when supported by visible content.', 'mcpwp' ) );
 		}
 
+		// (#615) Classify each detected @type as active vs. deprecated_no_rich_result —
+		// markup can be perfectly valid and still earn zero SERP benefit if Google
+		// has retired the rich result for that type. Never recommend deleting it
+		// (harmless to keep, may still carry AI/entity-understanding value); just
+		// stop the site owner from expecting a snippet that will not appear.
+		$all_detected_types = array_values( array_unique( array_merge( $schema_types, $rendered_jsonld_types ) ) );
+		$rich_result_status = array();
+		$deprecated_found    = array();
+		foreach ( $all_detected_types as $detected_type ) {
+			$deprecation = $this->get_deprecated_schema_type_info( $detected_type );
+			if ( null !== $deprecation ) {
+				$rich_result_status[ $detected_type ] = array(
+					'status'           => 'deprecated_no_rich_result',
+					'deprecated_since' => $deprecation['since'],
+					'note'             => $deprecation['note'],
+				);
+				$deprecated_found[] = $detected_type;
+			} else {
+				$rich_result_status[ $detected_type ] = array( 'status' => 'active' );
+			}
+		}
+
+		if ( ! empty( $deprecated_found ) ) {
+			$issues[] = $this->make_structured_data_issue(
+				'schema_type_deprecated_no_rich_result',
+				'info',
+				sprintf(
+					/* translators: %s: comma-separated list of schema @type names */
+					__( 'Detected schema type(s) with no active Google rich result: %s.', 'mcpwp' ),
+					implode( ', ', $deprecated_found )
+				),
+				__( 'The markup is valid and harmless to keep — it just will not produce a rich result/snippet in Google Search anymore. No action needed unless you want to remove it for other reasons.', 'mcpwp' ),
+				array( 'types' => $deprecated_found )
+			);
+		}
+
 		$summary = $this->summarize_structured_data_issues( $issues );
 
 		return $this->success_response(
@@ -908,6 +944,7 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 					'types'                => $schema_types,
 					'rendered_jsonld_count' => count( $rendered_jsonld ),
 					'rendered_types'       => $rendered_jsonld_types,
+					'rich_result_status'   => $rich_result_status,
 				),
 				'json_ld'                => $this->summarize_json_ld_items( $json_ld_items ),
 				'rendered_jsonld'        => $rendered_jsonld,
@@ -1500,6 +1537,59 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 		}
 
 		return array( $data );
+	}
+
+	/**
+	 * Look up whether a normalized schema @type has no active Google rich
+	 * result as of this writing. (#615)
+	 *
+	 * Confirmed via Google Search Central changelog/docs, not vendor blogs.
+	 * The markup itself stays valid Schema.org — Google just stopped
+	 * rendering a rich result/snippet for it. Never recommend deleting it.
+	 *
+	 * Deliberately NOT included: "Book"/Book Actions (retired June 2025, then
+	 * un-deprecated Nov 2025 — a live Search feature still consumes it), and
+	 * "Course"/CourseInfo (the "Course List carousel" rich result was
+	 * retired, but "Course" is a broad, still-generally-valid @type and we
+	 * don't have high enough confidence to flag the whole type without
+	 * risking a false positive on a legitimately active schema).
+	 *
+	 * @param string $normalized_type Lowercased, schema.org-prefix-stripped @type (via normalize_schema_type()).
+	 * @return array{since:string,note:string}|null Deprecation info, or null if still active.
+	 */
+	protected function get_deprecated_schema_type_info( $normalized_type ) {
+		$deprecated = array(
+			'howto'               => array(
+				'since' => '2023-09',
+				'note'  => 'HowTo rich result removed from Google Search (desktop first, then all surfaces).',
+			),
+			'faqpage'             => array(
+				'since' => '2026-05-07',
+				'note'  => 'FAQPage rich result retired. Search Console reporting for it ends June 2026; API support ends August 2026.',
+			),
+			'claimreview'         => array(
+				'since' => '2025-06-12',
+				'note'  => 'ClaimReview rich result retired as part of a batch of low-usage rich result types.',
+			),
+			'estimatedsalary'     => array(
+				'since' => '2025-06-12',
+				'note'  => 'Estimated Salary rich result retired as part of a batch of low-usage rich result types.',
+			),
+			'learningvideo'       => array(
+				'since' => '2025-06-12',
+				'note'  => 'Learning Video rich result retired as part of a batch of low-usage rich result types.',
+			),
+			'specialannouncement' => array(
+				'since' => '2025-06-12',
+				'note'  => 'Special Announcement rich result retired as part of a batch of low-usage rich result types.',
+			),
+			'vehiclelisting'      => array(
+				'since' => '2025-06-12',
+				'note'  => 'Vehicle Listing rich result retired as part of a batch of low-usage rich result types.',
+			),
+		);
+
+		return isset( $deprecated[ $normalized_type ] ) ? $deprecated[ $normalized_type ] : null;
 	}
 
 	/**

@@ -6,7 +6,7 @@ Requires at least: 6.1
 Tested up to: 7.0
 Requires PHP: 7.4
 <!-- x-release-please-start-version -->
-Stable tag: 3.4.14
+Stable tag: 3.4.15
 <!-- x-release-please-end -->
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -152,6 +152,9 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 4. Integrations and Chat — connected services plus safety-first agent workflow
 
 == Changelog ==
+
+= 3.4.15 =
+* new: **seo:** /seo/structured-data now classifies each detected schema @type as active or deprecated_no_rich_result (new rich_result_status field), catching HowTo (retired 2023), FAQPage (retired May 2026), and 5 more types retired June 2025 (ClaimReview, EstimatedSalary, LearningVideo, SpecialAnnouncement, VehicleListing) — confirmed via Google Search Central, not vendor blogs. The markup stays valid; this just tells you it earns no SERP snippet anymore, without recommending deletion. Book/Course deliberately excluded (Book was un-deprecated Nov 2025; Course is too broad a type to flag without false positives). (#614, #615)
 
 = 3.4.14 =
 * new: **elementor:** dry_run/wp_set_elementor now validates Atomic Elements props against their real schema (via wp_get_widget_schema) instead of skipping validation entirely — flags unknown prop keys and the #1 real mistake (a plain scalar instead of the required {"$$type","value"} wrapper) before writing. wp_add_section/wp_replace_section/wp_edit_section/wp_edit_widget were already elType-agnostic and work with Atomic Elements as-is.
