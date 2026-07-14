@@ -63,7 +63,7 @@ Agent mandate (refocused 2026-06-09): **MCPWP repo health + GTM enablement + pri
 
 `/seo/*` tools encode guidance that predates several confirmed 2025-2026 Google changes. Researched via 4 parallel agents against primary sources (Google Search Central, Search Engine Land/Roundtable) — findings and scope in epic **#614**.
 
-- **#615 (P0, `status:ready`)** — structured-data validator classifies deprecated rich-result types (FAQPage retired May 2026, HowTo retired 2023, +5 more retired June 2025) as "valid, no rich-result benefit" instead of pass/fail. Cheapest, zero-ambiguity.
+- **#615 — ✅ SHIPPED v3.4.15** — `/seo/structured-data` classifies each detected @type as `active`/`deprecated_no_rich_result` (HowTo, FAQPage, ClaimReview, EstimatedSalary, LearningVideo, SpecialAnnouncement, VehicleListing). Book and Course deliberately excluded (Book un-deprecated Nov 2025; Course too broad to flag without false positives). 10 new regression tests.
 - **#616 (P1, `status:ready`)** — schema-on-primary-content check (new March 2026 Google eligibility rule) + explicit 4-factor E-E-A-T rubric in the content-quality scorer (SQRG updated Sept 2025).
 - **#617 (P2, `discussion`)** — experimental, opt-in GEO/AEO citability heuristic. Vendor-sourced, not Google-confirmed — must ship clearly labeled as such, held until P0/P1 land. Explicitly **not** building an llms.txt generator (Google doesn't consume it; Ahrefs: 97% of 137k sampled files got zero requests).
 - Trigger order per epic: drafts → tests → reviews → ships. Sequence P0 → P1 → P2.
