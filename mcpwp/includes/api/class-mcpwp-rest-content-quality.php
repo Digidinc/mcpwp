@@ -47,6 +47,12 @@ class Mcpwp_REST_Content_Quality extends Mcpwp_REST_API {
 							'required'          => true,
 							'sanitize_callback' => 'absint',
 						),
+						'include_geo_experimental' => array(
+							'description'       => __( 'Include an experimental, vendor-sourced GEO/AI-citability score. Off by default — this is not a Google-confirmed signal, see the "basis" field in the response.', 'mcpwp' ),
+							'type'              => 'boolean',
+							'default'           => false,
+							'sanitize_callback' => 'rest_sanitize_boolean',
+						),
 					),
 				),
 			)
@@ -119,35 +125,45 @@ class Mcpwp_REST_Content_Quality extends Mcpwp_REST_API {
 		// matches the falsifiable-finding pattern (a claim plus what backs it).
 		$eeat = $this->calculate_eeat_rubric( $post, $text, $content, $headings, $trust_signals, $external_links );
 
-		return $this->success_response(
-			array(
-				'post'       => array(
-					'id'     => $post_id,
-					'title'  => get_the_title( $post ),
-					'type'   => $post->post_type,
-					'status' => $post->post_status,
-					'url'    => get_permalink( $post ),
-				),
-				'summary'    => $summary,
-				'signals'    => array(
-					'word_count'          => $word_count,
-					'heading_count'       => count( $headings ),
-					'question_count'      => $question_count,
-					'entity_name_count'   => count( $entity_names ),
-					'entity_names'        => array_slice( $entity_names, 0, 12 ),
-					'external_references' => $external_links,
-					'trust_signals'       => $trust_signals,
-					'freshness_days'      => $freshness_days,
-				),
-				'eeat'       => $eeat,
-				'issues'     => $issues,
-				'workflow'   => array(
-					'read'  => 'Use before publishing answer-oriented or AI-search-sensitive content.',
-					'fix'   => 'Improve visible content through approval-first Gutenberg edits; do not invent facts, entities, or citations.',
-					'guard' => 'This endpoint is read-only and does not mutate content.',
-				),
-			)
+		$response = array(
+			'post'       => array(
+				'id'     => $post_id,
+				'title'  => get_the_title( $post ),
+				'type'   => $post->post_type,
+				'status' => $post->post_status,
+				'url'    => get_permalink( $post ),
+			),
+			'summary'    => $summary,
+			'signals'    => array(
+				'word_count'          => $word_count,
+				'heading_count'       => count( $headings ),
+				'question_count'      => $question_count,
+				'entity_name_count'   => count( $entity_names ),
+				'entity_names'        => array_slice( $entity_names, 0, 12 ),
+				'external_references' => $external_links,
+				'trust_signals'       => $trust_signals,
+				'freshness_days'      => $freshness_days,
+			),
+			'eeat'       => $eeat,
+			'issues'     => $issues,
+			'workflow'   => array(
+				'read'  => 'Use before publishing answer-oriented or AI-search-sensitive content.',
+				'fix'   => 'Improve visible content through approval-first Gutenberg edits; do not invent facts, entities, or citations.',
+				'guard' => 'This endpoint is read-only and does not mutate content.',
+			),
 		);
+
+		// (#617) Experimental GEO/AI-citability score — opt-in only, and kept
+		// entirely separate from the main score/summary/eeat above. These checks
+		// are vendor-observed correlations (SEO/GEO industry blog analyses), NOT
+		// confirmed by Google — Google's own AI Optimization Guide makes no such
+		// claims. Never mix this into anything presented with Google-sourced
+		// confidence.
+		if ( rest_sanitize_boolean( $request->get_param( 'include_geo_experimental' ) ) ) {
+			$response['geo_citability_experimental'] = $this->calculate_geo_citability_experimental( $content, $text, $headings );
+		}
+
+		return $this->success_response( $response );
 	}
 
 	/**
@@ -545,6 +561,121 @@ class Mcpwp_REST_Content_Quality extends Mcpwp_REST_API {
 		}
 
 		return false;
+	}
+
+	/**
+	 * Experimental GEO/AI-citability score. (#617)
+	 *
+	 * EXPLICITLY NOT Google-confirmed — these checks are vendor-observed
+	 * correlations from SEO/GEO industry analyses (e.g. self-contained
+	 * ~100-300 word answer blocks, question-phrased headings), not signals
+	 * Google's own AI Optimization Guide describes as required. Opt-in only
+	 * (see include_geo_experimental param) and always returned as its own
+	 * clearly-labeled field — never folded into the main score/summary/eeat.
+	 *
+	 * Deliberately does NOT score or penalize total page word_count: vendor
+	 * data cited when this was scoped found only a ~0.04 correlation between
+	 * whole-page length and AI Overview citation.
+	 *
+	 * @param string $content  Raw post_content.
+	 * @param string $text     Plain-text content.
+	 * @param array  $headings Extracted heading texts.
+	 * @return array{score:int,basis:string,checks:array}
+	 */
+	protected function calculate_geo_citability_experimental( $content, $text, $headings ) {
+		$score  = 0;
+		$checks = array();
+
+		$paragraphs        = $this->extract_plain_paragraphs( $content );
+		$self_contained    = false;
+		foreach ( $paragraphs as $paragraph ) {
+			$count = str_word_count( $paragraph );
+			if ( $count >= 100 && $count <= 300 ) {
+				$self_contained = true;
+				break;
+			}
+		}
+		$checks[] = array(
+			'check'   => 'self_contained_answer_block',
+			'passed'  => $self_contained,
+			'note'    => $self_contained
+				? 'At least one paragraph in the 100-300 word range was found — vendor data associates this length with higher AI Overview citation.'
+				: 'No single paragraph in the 100-300 word range was found.',
+		);
+		if ( $self_contained ) {
+			$score += 30;
+		}
+
+		$first_paragraph_words = ! empty( $paragraphs ) ? str_word_count( $paragraphs[0] ) : 0;
+		$concise_opening       = $first_paragraph_words > 0 && $first_paragraph_words <= 60;
+		$checks[]              = array(
+			'check'  => 'concise_opening_answer',
+			'passed' => $concise_opening,
+			'note'   => $concise_opening
+				? sprintf( 'Opening paragraph is %d words — concise enough to read as a direct answer.', $first_paragraph_words )
+				: 'Opening paragraph is missing, empty, or longer than the ~40-60 word range vendor data associates with a direct-answer opening.',
+		);
+		if ( $concise_opening ) {
+			$score += 20;
+		}
+
+		$question_heading = false;
+		foreach ( $headings as $heading ) {
+			$heading_text = is_array( $heading ) ? ( isset( $heading['text'] ) ? $heading['text'] : '' ) : (string) $heading;
+			$heading_text = trim( $heading_text );
+			if ( preg_match( '/\?\s*$/', $heading_text ) || preg_match( '/^(who|what|why|when|where|how|which|can|should|is|are|does|do)\b/i', $heading_text ) ) {
+				$question_heading = true;
+				break;
+			}
+		}
+		$checks[] = array(
+			'check'  => 'question_based_heading',
+			'passed' => $question_heading,
+			'note'   => $question_heading
+				? 'At least one heading is phrased as a question, matching typical search-intent phrasing.'
+				: 'No heading appears to be phrased as a question.',
+		);
+		if ( $question_heading ) {
+			$score += 25;
+		}
+
+		$structured_data_present = false !== stripos( $content, 'application/ld+json' );
+		$checks[]                = array(
+			'check'  => 'structured_data_present',
+			'passed' => $structured_data_present,
+			'note'   => $structured_data_present
+				? 'JSON-LD structured data was found on the page. Vendor data shows this correlates with citation but is not required.'
+				: 'No JSON-LD structured data was found. Not required for citation per vendor data, but its presence correlates with it.',
+		);
+		if ( $structured_data_present ) {
+			$score += 25;
+		}
+
+		return array(
+			'score'  => min( 100, $score ),
+			'basis'  => 'vendor-observed correlation, not Google-confirmed — Google\'s own AI Optimization Guide does not describe these as required signals. Whole-page word count is deliberately not scored (vendor data found only ~0.04 correlation with citation).',
+			'checks' => $checks,
+		);
+	}
+
+	/**
+	 * Split raw post_content into plain-text paragraphs for word-count checks.
+	 *
+	 * @param string $content Raw post_content.
+	 * @return string[] Non-empty plain-text paragraphs.
+	 */
+	protected function extract_plain_paragraphs( $content ) {
+		$blocks = preg_split( '/<\/p>|<br\s*\/?>\s*<br\s*\/?>/i', (string) $content );
+		$paragraphs = array();
+
+		foreach ( (array) $blocks as $block ) {
+			$plain = trim( preg_replace( '/\s+/', ' ', wp_strip_all_tags( $block ) ) );
+			if ( '' !== $plain ) {
+				$paragraphs[] = $plain;
+			}
+		}
+
+		return $paragraphs;
 	}
 
 }

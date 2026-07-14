@@ -6,7 +6,7 @@ Requires at least: 6.1
 Tested up to: 7.0
 Requires PHP: 7.4
 <!-- x-release-please-start-version -->
-Stable tag: 3.4.16
+Stable tag: 3.4.17
 <!-- x-release-please-end -->
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -152,6 +152,9 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 4. Integrations and Chat — connected services plus safety-first agent workflow
 
 == Changelog ==
+
+= 3.4.17 =
+* new: **seo:** /seo/content-quality gains an optional geo_citability_experimental score (include_geo_experimental=true, off by default) — self-contained answer blocks, question-phrased headings, and structured-data presence, explicitly labeled as vendor-observed correlation, not a Google-confirmed signal, and never mixed into the main score. Deliberately does not score total page word count (vendor data found only ~0.04 correlation with citation). Not building an llms.txt generator — Google doesn't consume it. (#614, #617)
 
 = 3.4.16 =
 * new: **seo:** /seo/structured-data flags schema_placement_mismatch when FAQPage/HowTo/QAPage schema describes content that can't be found on the page itself — Google's March 2026 eligibility rule requires this schema to describe primary content, not a supplementary/off-topic section. Coarse presence check against the page's own visible text, not a DOM layout analyzer.
