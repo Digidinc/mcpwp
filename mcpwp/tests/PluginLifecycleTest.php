@@ -78,6 +78,26 @@ final class PluginLifecycleTest extends TestCase {
 		}
 	}
 
+	public function test_activity_schema_places_each_index_on_its_own_dbdelta_line(): void {
+		Mcpwp_Activator::activate();
+
+		$schema      = $GLOBALS['mcpwp_test_dbdelta'][0];
+		$lines       = preg_split( '/\R/', $schema );
+		$index_lines = array_values(
+			array_filter(
+				array_map( 'trim', $lines ),
+				static function ( $line ) {
+					return 1 === preg_match( '/^(?:PRIMARY\s+KEY|KEY)\s+/i', $line );
+				}
+			)
+		);
+
+		$this->assertCount( 3, $index_lines, 'dbDelta parses schema indexes one physical line at a time.' );
+		$this->assertMatchesRegularExpression( '/^PRIMARY\s+KEY\s+\(id\),?$/i', $index_lines[0] );
+		$this->assertSame( 'KEY created_at (created_at),', $index_lines[1] );
+		$this->assertSame( 'KEY action (action)', $index_lines[2] );
+	}
+
 	public function test_deactivation_preserves_all_state_except_six_approved_hooks(): void {
 		$approved_hooks = array(
 			'mcpwp_cleanup_logs',

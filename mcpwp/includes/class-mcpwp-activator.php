@@ -40,7 +40,9 @@ class Mcpwp_Activator {
 			status_code smallint(5) unsigned NOT NULL DEFAULT 200,
 			duration_ms int(10) unsigned NOT NULL DEFAULT 0,
 			api_key_id varchar(64) NULL,
-			PRIMARY KEY (id), KEY created_at (created_at), KEY action (action)
+			PRIMARY KEY  (id),
+			KEY created_at (created_at),
+			KEY action (action)
 		) {$charset};"
 		);
 	}
