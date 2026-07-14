@@ -1,4 +1,5 @@
 {
+  "expected_version": "3.4.3",
   "allowed_runtime_files": [
     "LICENSE", "VERSION", "index.php", "mcpwp.php", "readme.txt", "uninstall.php",
     "admin/css/index.php", "admin/css/mcpwp-admin.css", "admin/index.php", "admin/js/index.php",

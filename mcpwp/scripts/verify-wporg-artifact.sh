@@ -229,6 +229,34 @@ def normalize_static_string_expressions(contents):
         contents = normalized
 
 
+def strip_comments(contents, hash_comments=False, line_comments=True):
+    stripped = []
+    index = 0
+    while index < len(contents):
+        char = contents[index]
+        if char in "'\"":
+            closing = min(skip_quoted(contents, index), len(contents))
+            stripped.append(contents[index:closing])
+            index = closing
+            continue
+        if contents.startswith("/*", index):
+            closing = contents.find("*/", index + 2)
+            index = len(contents) if closing < 0 else closing + 2
+            stripped.append(" ")
+            continue
+        if (line_comments and contents.startswith("//", index)) or (hash_comments and char == "#" and not contents.startswith("#[", index)):
+            newline = contents.find("\n", index + 1)
+            if newline < 0:
+                stripped.append(" ")
+                break
+            stripped.append("\n")
+            index = newline + 1
+            continue
+        stripped.append(char)
+        index += 1
+    return "".join(stripped)
+
+
 try:
     archive = zipfile.ZipFile(zip_path)
 except (OSError, zipfile.BadZipFile) as error:
@@ -250,6 +278,10 @@ with archive:
     collisions = [sorted(values) for values in folded_names.values() if len(values) > 1]
     if collisions:
         fail("case-colliding entry", repr(collisions))
+
+    for name in names:
+        if name != str(PurePosixPath(name)):
+            fail("canonical manifest path", name)
 
     if names != sorted(names, key=lambda name: name.encode("utf-8")):
         fail("sorted manifest", "ZIP entries are not in bytewise lexical order")
@@ -328,17 +360,16 @@ with archive:
     expected_runtime = set(policy["allowed_runtime_files"])
     expected_runtime.remove("mcpwp.php")
     expected_runtime.add(f"{slug}.php")
-    actual_runtime = {
-        "/".join(PurePosixPath(info.filename).parts[1:])
-        for info in infos
-        if not info.is_dir()
-    }
-    unexpected_runtime = sorted(actual_runtime.difference(expected_runtime))
-    missing_runtime = sorted(expected_runtime.difference(actual_runtime))
-    if unexpected_runtime or missing_runtime:
+    expected_manifest = sorted(
+        (f"{slug}/{relative}" for relative in expected_runtime),
+        key=lambda name: name.encode("utf-8"),
+    )
+    if names != expected_manifest:
+        unexpected_runtime = sorted(set(names).difference(expected_manifest))
+        missing_runtime = sorted(set(expected_manifest).difference(names))
         fail(
             "exclusive runtime inventory",
-            f"unexpected={unexpected_runtime}; missing={missing_runtime}",
+            f"unexpected={unexpected_runtime}; missing={missing_runtime}; count={len(names)}/{len(expected_manifest)}",
         )
 
     execution_pattern = re.compile(
@@ -350,7 +381,7 @@ with archive:
         flags=re.IGNORECASE,
     )
     package_pattern = re.compile(
-        r"\b(?:Plugin_Upgrader|Theme_Upgrader|Core_Upgrader|Language_Pack_Upgrader|plugins_api|themes_api|wp_update_plugins|wp_update_themes|delete_plugins|delete_theme|activate_plugin|deactivate_plugins)\b",
+        r"\b(?:Plugin_Upgrader|Theme_Upgrader|Core_Upgrader|Language_Pack_Upgrader|plugins_api|themes_api|wp_update_plugins|wp_update_themes|delete_plugins|delete_theme|activate_plugin|activate_plugins|deactivate_plugin|deactivate_plugins)\b",
         flags=re.IGNORECASE,
     )
     code_writer_pattern = re.compile(
@@ -361,32 +392,60 @@ with archive:
         r"\b(?:curl_init|curl_exec|fsockopen|pfsockopen|socket_create|socket_connect|stream_socket_client|wp_remote_get|wp_remote_post|wp_remote_request)\s*\(",
         flags=re.IGNORECASE,
     )
-    allowed_hosts = {"mumega.com", "www.gnu.org", "wordpress.org"}
     url_host_pattern = re.compile(r"https?://([a-z0-9.-]+)", flags=re.IGNORECASE)
     fixed_host_pattern = re.compile(
         r"\b(?:[a-z0-9-]+\.)+(?:com|net|org|dev|io|ai|co|ca|app|cloud)\b",
         flags=re.IGNORECASE,
     )
+    remote_authority_pattern = re.compile(
+        r"(?:https?:)?//(?:[^\s/'\"]+@)?[a-z0-9.-]+\.[a-z]{2,}",
+        flags=re.IGNORECASE,
+    )
 
     for name in names:
-        if not name.endswith(".php"):
+        lowered_name = name.lower()
+        if not lowered_name.endswith((".php", ".js", ".css")):
             continue
         contents = archive.read(name).decode("utf-8", errors="surrogateescape")
-        normalized_contents = normalize_static_string_expressions(contents)
-        if execution_pattern.search(contents) or dynamic_include_pattern.search(contents):
+        executable_contents = strip_comments(
+            contents,
+            hash_comments=lowered_name.endswith(".php"),
+            line_comments=not lowered_name.endswith(".css"),
+        )
+        normalized_contents = normalize_static_string_expressions(executable_contents)
+
+        if lowered_name.endswith((".js", ".css")):
+            if remote_authority_pattern.search(normalized_contents):
+                fail("remote runtime asset", name)
+            continue
+
+        if execution_pattern.search(executable_contents) or dynamic_include_pattern.search(executable_contents):
             fail("forbidden execution primitive", name)
-        if package_pattern.search(contents):
+        if package_pattern.search(executable_contents):
             fail("forbidden package operation", name)
         if code_writer_pattern.search(normalized_contents):
             fail("forbidden arbitrary code writer", name)
-        if outbound_pattern.search(contents):
+
+        dangerous_path_variables = set(re.findall(
+            r"\$([a-z_][a-z0-9_]*)\s*=\s*[^;\r\n]*(?:\.php|\.css|wp-config\.php)[^;\r\n]*;",
+            normalized_contents,
+            flags=re.IGNORECASE,
+        ))
+        for variable in dangerous_path_variables:
+            if re.search(
+                rf"\b(?:file_put_contents|fopen|touch|rename|copy)\s*\(\s*\${re.escape(variable)}\b",
+                normalized_contents,
+                flags=re.IGNORECASE,
+            ):
+                fail("forbidden arbitrary code writer", name)
+
+        if outbound_pattern.search(executable_contents):
             fail("forbidden outbound primitive", name)
 
         hosts = {match.lower().rstrip(".") for match in url_host_pattern.findall(normalized_contents)}
         hosts.update(match.lower().rstrip(".") for match in fixed_host_pattern.findall(normalized_contents))
-        unexpected_hosts = sorted(host for host in hosts if host not in allowed_hosts)
-        if unexpected_hosts:
-            fail("fixed external host", f"{name}: {unexpected_hosts}")
+        if hosts or remote_authority_pattern.search(normalized_contents):
+            fail("fixed external host", f"{name}: {sorted(hosts)}")
 
     forbidden_directories = {item.lower() for item in policy["forbidden_directory_components"]}
     forbidden_basenames = {item.lower() for item in policy["forbidden_basenames"]}
@@ -459,6 +518,11 @@ with archive:
     versions = (header_version, constant.group(1), stable_tag.group(1), version_file)
     if len(set(versions)) != 1:
         fail("version equality", f"header/constant/stable-tag/VERSION={versions}")
+    expected_version = policy.get("expected_version")
+    if expected_version != "3.4.3":
+        fail("shared artifact policy", f"expected_version must be 3.4.3, found {expected_version!r}")
+    if any(version != expected_version for version in versions):
+        fail("expected release version", f"expected {expected_version}, found {versions}")
 
     expected_filename = f"{slug}-{header_version}.zip"
     actual_filename = os.path.basename(zip_path)

