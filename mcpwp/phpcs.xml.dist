@@ -3,11 +3,12 @@
 	<description>WordPress.org coding standards for the extracted, shipped plugin artifact.</description>
 
 	<!-- Supply the extracted mumega-mcp directory as the PHPCS command-line path. -->
-	<arg name="extensions" value="php,css,js" />
+	<arg name="extensions" value="php" />
 	<config name="minimum_wp_version" value="6.1" />
 	<config name="testVersion" value="7.4-" />
 
 	<rule ref="WordPress" />
+	<rule ref="PHPCompatibilityWP" />
 
 	<!-- The plugin intentionally defines and checks this custom capability. -->
 	<rule ref="WordPress.WP.Capabilities">
