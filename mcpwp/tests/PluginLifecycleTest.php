@@ -18,13 +18,26 @@ final class PluginLifecycleTest extends TestCase {
 		$GLOBALS['mcpwp_test_cleared_hooks'] = array();
 		$GLOBALS['mcpwp_test_removed_roles'] = array();
 		$GLOBALS['mcpwp_test_removed_caps'] = array();
+		$GLOBALS['mcpwp_test_removed_roles_by_blog'] = array();
+		$GLOBALS['mcpwp_test_removed_caps_by_blog'] = array();
 		$GLOBALS['mcpwp_test_scheduled_hooks'] = array();
+		$GLOBALS['mcpwp_test_option_rows'] = array();
+		$GLOBALS['mcpwp_test_blog_roles'] = null;
+		$GLOBALS['mcpwp_test_blog_options'] = null;
+		$GLOBALS['mcpwp_test_blog_option_rows'] = null;
+		$GLOBALS['mcpwp_test_blog_scheduled_hooks'] = null;
+		$GLOBALS['mcpwp_test_blog_stack'] = array();
+		$GLOBALS['mcpwp_test_current_blog_id'] = 0;
+		$GLOBALS['mcpwp_test_tables'] = array();
+		$GLOBALS['mcpwp_test_table_rows'] = array();
+		$GLOBALS['_mcpwp_test_posts'] = array();
 		$GLOBALS['mcpwp_test_get_sites_args'] = array();
 		$GLOBALS['mcpwp_test_site_ids'] = array();
 		$GLOBALS['mcpwp_test_switched_blogs'] = array();
 		$GLOBALS['mcpwp_test_restored_blogs'] = 0;
 		$GLOBALS['mcpwp_test_is_multisite'] = false;
 		$GLOBALS['wpdb']->queries = array();
+		$GLOBALS['wpdb']->prepared = array();
 		$GLOBALS['mcpwp_test_users'] = array(
 			(object) array( 'ID' => 2, 'roles' => array( 'administrator' ) ),
 			(object) array( 'ID' => 7, 'roles' => array( 'subscriber' ) ),
@@ -65,11 +78,43 @@ final class PluginLifecycleTest extends TestCase {
 		}
 	}
 
-	public function test_deactivation_only_clears_scheduled_hooks(): void {
+	public function test_deactivation_preserves_all_state_except_six_approved_hooks(): void {
+		$approved_hooks = array(
+			'mcpwp_cleanup_logs',
+			'mcpwp_check_alerts',
+			'mcpwp_verify_screenshot',
+			'mcpwp_compute_signals',
+			'mcpwp_action_log_daily_prune',
+			'mcpwp_webhook_retry',
+		);
+		$GLOBALS['mcpwp_test_options'] = array(
+			'mcpwp_settings' => array( 'enable_logging' => true ),
+			'mcpwp_api_keys' => array( array( 'id' => 'keep-key' ) ),
+			'unrelated_option' => 'keep-option',
+		);
+		$GLOBALS['mcpwp_test_roles'] = array(
+			'administrator' => new Mcpwp_Test_Role( array( 'manage_options' => true, 'mcpwp_manage_settings' => true ) ),
+			'mcpwp_api_agent' => new Mcpwp_Test_Role( array( 'read' => true ) ),
+		);
+		$GLOBALS['mcpwp_test_scheduled_hooks'] = array_fill_keys( array_merge( $approved_hooks, array( 'unrelated_schedule' ) ), true );
+		$GLOBALS['_mcpwp_test_posts'] = array( 41 => (object) array( 'ID' => 41, 'post_title' => 'Keep content' ) );
+		$GLOBALS['mcpwp_test_tables'] = array( 'wp_mcpwp_activity_log' => true );
+		$GLOBALS['mcpwp_test_table_rows'] = array( 'wp_mcpwp_activity_log' => array( array( 'action' => 'keep-row' ) ) );
+		$options_before = $GLOBALS['mcpwp_test_options'];
+		$roles_before = serialize( $GLOBALS['mcpwp_test_roles'] );
+		$posts_before = $GLOBALS['_mcpwp_test_posts'];
+		$tables_before = $GLOBALS['mcpwp_test_tables'];
+		$rows_before = $GLOBALS['mcpwp_test_table_rows'];
 		Mcpwp_Deactivator::deactivate();
 
-		$this->assertContains( 'mcpwp_cleanup_logs', $GLOBALS['mcpwp_test_cleared_hooks'] );
-		$this->assertSame( array(), $GLOBALS['mcpwp_test_options'] );
+		$this->assertSame( $approved_hooks, $GLOBALS['mcpwp_test_cleared_hooks'] );
+		$this->assertSame( array( 'unrelated_schedule' => true ), $GLOBALS['mcpwp_test_scheduled_hooks'] );
+		$this->assertSame( $options_before, $GLOBALS['mcpwp_test_options'] );
+		$this->assertSame( $roles_before, serialize( $GLOBALS['mcpwp_test_roles'] ) );
+		$this->assertSame( $posts_before, $GLOBALS['_mcpwp_test_posts'] );
+		$this->assertSame( $tables_before, $GLOBALS['mcpwp_test_tables'] );
+		$this->assertSame( $rows_before, $GLOBALS['mcpwp_test_table_rows'] );
+		$this->assertSame( array(), $GLOBALS['wpdb']->queries );
 	}
 
 	public function test_network_deactivation_clears_hooks_for_every_site(): void {
@@ -130,6 +175,34 @@ final class PluginLifecycleTest extends TestCase {
 		$this->assertSame( array( 'mcpwp_manage_settings' ), $GLOBALS['mcpwp_test_removed_caps'] );
 	}
 
+	public function test_uninstall_removes_only_owned_rate_limit_transient_namespace_rows(): void {
+		$hash = md5( 'key:example_minute' );
+		$GLOBALS['mcpwp_test_option_rows'] = array(
+			'_transient_mcpwp_rate_' . $hash => 'plugin-counter',
+			'_transient_timeout_mcpwp_rate_' . $hash => 'plugin-timeout',
+			'_transient_mcpwp_rate_not-a-md5' => 'owned-legacy-shape',
+			'_transient_mcpwp_ratex_' . $hash => 'similar-prefix-unrelated',
+			'_transient_unrelated' => 'unrelated',
+		);
+
+		$this->run_uninstall();
+
+		$this->assertSame(
+			array(
+				'_transient_mcpwp_ratex_' . $hash => 'similar-prefix-unrelated',
+				'_transient_unrelated' => 'unrelated',
+			),
+			$GLOBALS['mcpwp_test_option_rows']
+		);
+		$this->assertCount( 1, $GLOBALS['wpdb']->prepared );
+		$this->assertSame(
+			array( '\\_transient\\_mcpwp\\_rate\\_%', '\\_transient\\_timeout\\_mcpwp\\_rate\\_%' ),
+			$GLOBALS['wpdb']->prepared[0]['args']
+		);
+		$this->assertStringContainsString( 'DELETE FROM wp_options', $GLOBALS['wpdb']->prepared[0]['query'] );
+		$this->assertSame( 2, substr_count( $GLOBALS['wpdb']->prepared[0]['query'], 'LIKE %s' ) );
+	}
+
 	public function test_uninstall_is_idempotent(): void {
 		$GLOBALS['mcpwp_test_roles'] = array(
 			'administrator' => new Mcpwp_Test_Role( array( 'manage_options' => true, 'mcpwp_manage_settings' => true ) ),
@@ -151,7 +224,25 @@ final class PluginLifecycleTest extends TestCase {
 		$site_ids = range( 1, 150 );
 		$GLOBALS['mcpwp_test_is_multisite'] = true;
 		$GLOBALS['mcpwp_test_site_ids'] = $site_ids;
-		$GLOBALS['mcpwp_test_roles']['mcpwp_api_agent'] = new Mcpwp_Test_Role( array( 'read' => true ) );
+		$GLOBALS['mcpwp_test_blog_roles'] = array();
+		$GLOBALS['mcpwp_test_blog_options'] = array();
+		$GLOBALS['mcpwp_test_blog_option_rows'] = array();
+		$GLOBALS['mcpwp_test_blog_scheduled_hooks'] = array();
+		foreach ( $site_ids as $site_id ) {
+			$GLOBALS['mcpwp_test_blog_roles'][ $site_id ] = array(
+				'administrator' => new Mcpwp_Test_Role( array( 'manage_options' => true, 'mcpwp_manage_settings' => true ) ),
+				'mcpwp_api_agent' => new Mcpwp_Test_Role( array( 'read' => true ) ),
+				'editor' => new Mcpwp_Test_Role( array( 'edit_posts' => true ) ),
+			);
+			$GLOBALS['mcpwp_test_blog_options'][ $site_id ] = array( 'mcpwp_settings' => array(), 'unrelated_option' => 'site-' . $site_id );
+			$site_hash = md5( 'site-' . $site_id );
+			$GLOBALS['mcpwp_test_blog_option_rows'][ $site_id ] = array(
+				'_transient_mcpwp_rate_' . $site_hash => 'plugin-counter',
+				'_transient_timeout_mcpwp_rate_' . $site_hash => 'plugin-timeout',
+				'_transient_unrelated' => 'site-' . $site_id,
+			);
+			$GLOBALS['mcpwp_test_blog_scheduled_hooks'][ $site_id ] = array( 'mcpwp_cleanup_logs' => true, 'unrelated_schedule' => true );
+		}
 
 		$this->run_uninstall();
 
@@ -160,6 +251,18 @@ final class PluginLifecycleTest extends TestCase {
 		$this->assertSame( 150, $GLOBALS['mcpwp_test_restored_blogs'] );
 		$this->assertCount( 150, $GLOBALS['mcpwp_test_removed_roles'] );
 		$this->assertCount( 150, $GLOBALS['mcpwp_test_removed_caps'] );
+		foreach ( $site_ids as $site_id ) {
+			$roles = $GLOBALS['mcpwp_test_blog_roles'][ $site_id ];
+			$this->assertArrayNotHasKey( 'mcpwp_api_agent', $roles, 'site ' . $site_id );
+			$this->assertArrayNotHasKey( 'mcpwp_manage_settings', $roles['administrator']->capabilities, 'site ' . $site_id );
+			$this->assertTrue( $roles['administrator']->capabilities['manage_options'], 'site ' . $site_id );
+			$this->assertTrue( $roles['editor']->capabilities['edit_posts'], 'site ' . $site_id );
+			$this->assertSame( array( 'mcpwp_api_agent' ), $GLOBALS['mcpwp_test_removed_roles_by_blog'][ $site_id ], 'site ' . $site_id );
+			$this->assertSame( array( 'mcpwp_manage_settings' ), $GLOBALS['mcpwp_test_removed_caps_by_blog'][ $site_id ], 'site ' . $site_id );
+			$this->assertSame( array( 'unrelated_option' => 'site-' . $site_id ), $GLOBALS['mcpwp_test_blog_options'][ $site_id ], 'site ' . $site_id );
+			$this->assertSame( array( '_transient_unrelated' => 'site-' . $site_id ), $GLOBALS['mcpwp_test_blog_option_rows'][ $site_id ], 'site ' . $site_id );
+			$this->assertSame( array( 'unrelated_schedule' => true ), $GLOBALS['mcpwp_test_blog_scheduled_hooks'][ $site_id ], 'site ' . $site_id );
+		}
 	}
 
 	public function test_lifecycle_loops_do_not_reuse_wordpress_global_blog_id(): void {

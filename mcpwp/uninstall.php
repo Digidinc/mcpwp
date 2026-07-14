@@ -14,6 +14,15 @@ $mcpwp_uninstall_site = static function () {
 	delete_option( 'mcpwp_disabled_tool_categories' );
 	delete_option( 'mcpwp_db_version' );
 	delete_option( 'mcpwp_migrated_from_spai' );
+	$mcpwp_rate_transient_like = $wpdb->esc_like( '_transient_mcpwp_rate_' ) . '%';
+	$mcpwp_rate_timeout_like   = $wpdb->esc_like( '_transient_timeout_mcpwp_rate_' ) . '%';
+	$wpdb->query(
+		$wpdb->prepare(
+			"DELETE FROM {$wpdb->options} WHERE option_name LIKE %s OR option_name LIKE %s",
+			$mcpwp_rate_transient_like,
+			$mcpwp_rate_timeout_like
+		)
+	);
 	// Legacy-only option cleanup; these names have no active implementation, network call, UI, or commercial behavior in this edition.
 	delete_option( 'mcpwp_integrations' );
 	delete_option( 'mcpwp_license' );

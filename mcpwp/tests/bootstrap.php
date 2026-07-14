@@ -56,6 +56,8 @@ class Mcpwp_Test_Role
     public function remove_cap($capability)
     {
         $GLOBALS['mcpwp_test_removed_caps'][] = (string) $capability;
+        $site_id = isset($GLOBALS['mcpwp_test_current_blog_id']) ? (int) $GLOBALS['mcpwp_test_current_blog_id'] : 0;
+        $GLOBALS['mcpwp_test_removed_caps_by_blog'][ $site_id ][] = (string) $capability;
         unset($this->capabilities[ $capability ]);
     }
 }
@@ -65,6 +67,8 @@ class Mcpwp_Test_Wpdb
     public $prefix = 'wp_';
     public $inserted = array();
     public $queries = array();
+    public $prepared = array();
+    public $options = 'wp_options';
 
     public function get_charset_collate()
     {
@@ -80,7 +84,54 @@ class Mcpwp_Test_Wpdb
     public function query($query)
     {
         $this->queries[] = (string) $query;
+        $prepared = end($this->prepared);
+        if (false !== strpos((string) $query, 'DELETE FROM') && is_array($prepared) && 2 === count($prepared['args'])) {
+            $rows =& mcpwp_test_option_rows_store();
+            foreach (array_keys($rows) as $option_name) {
+                if ($this->matches_like($option_name, $prepared['args'][0]) || $this->matches_like($option_name, $prepared['args'][1])) {
+                    unset($rows[ $option_name ]);
+                }
+            }
+        }
         return true;
+    }
+
+    public function esc_like($text)
+    {
+        return addcslashes((string) $text, '_%\\');
+    }
+
+    public function prepare($query)
+    {
+        $args = array_slice(func_get_args(), 1);
+        $this->prepared[] = array( 'query' => (string) $query, 'args' => $args );
+        return (string) $query;
+    }
+
+    private function matches_like($value, $like_pattern)
+    {
+        $regex = '';
+        $escaped = false;
+        $length = strlen((string) $like_pattern);
+        for ($index = 0; $index < $length; $index++) {
+            $character = $like_pattern[ $index ];
+            if ($escaped) {
+                $regex .= preg_quote($character, '/');
+                $escaped = false;
+            } elseif ('\\' === $character) {
+                $escaped = true;
+            } elseif ('%' === $character) {
+                $regex .= '.*';
+            } elseif ('_' === $character) {
+                $regex .= '.';
+            } else {
+                $regex .= preg_quote($character, '/');
+            }
+        }
+        if ($escaped) {
+            $regex .= '\\\\';
+        }
+        return 1 === preg_match('/^' . $regex . '$/D', (string) $value);
     }
 }
 
@@ -426,7 +477,8 @@ function current_user_can($capability)
 
 function get_option($name, $default = false)
 {
-    return array_key_exists($name, $GLOBALS['mcpwp_test_options']) ? $GLOBALS['mcpwp_test_options'][ $name ] : $default;
+    $options =& mcpwp_test_options_store();
+    return array_key_exists($name, $options) ? $options[ $name ] : $default;
 }
 
 function update_option($name, $value, $autoload = null)
@@ -435,40 +487,94 @@ function update_option($name, $value, $autoload = null)
     if (! empty($GLOBALS['mcpwp_test_update_option_fail'][ $name ])) {
         return false;
     }
-    $GLOBALS['mcpwp_test_options'][ $name ] = $value;
+    $options =& mcpwp_test_options_store();
+    $options[ $name ] = $value;
     return true;
 }
 
 function delete_option($name)
 {
-    unset($GLOBALS['mcpwp_test_options'][ $name ]);
+    $options =& mcpwp_test_options_store();
+    unset($options[ $name ]);
     return true;
+}
+
+function &mcpwp_test_options_store()
+{
+    $site_id = isset($GLOBALS['mcpwp_test_current_blog_id']) ? (int) $GLOBALS['mcpwp_test_current_blog_id'] : 0;
+    if ($site_id && isset($GLOBALS['mcpwp_test_blog_options'])) {
+        if (! isset($GLOBALS['mcpwp_test_blog_options'][ $site_id ])) {
+            $GLOBALS['mcpwp_test_blog_options'][ $site_id ] = array();
+        }
+        return $GLOBALS['mcpwp_test_blog_options'][ $site_id ];
+    }
+    return $GLOBALS['mcpwp_test_options'];
+}
+
+function &mcpwp_test_option_rows_store()
+{
+    $site_id = isset($GLOBALS['mcpwp_test_current_blog_id']) ? (int) $GLOBALS['mcpwp_test_current_blog_id'] : 0;
+    if ($site_id && isset($GLOBALS['mcpwp_test_blog_option_rows'])) {
+        if (! isset($GLOBALS['mcpwp_test_blog_option_rows'][ $site_id ])) {
+            $GLOBALS['mcpwp_test_blog_option_rows'][ $site_id ] = array();
+        }
+        return $GLOBALS['mcpwp_test_blog_option_rows'][ $site_id ];
+    }
+    return $GLOBALS['mcpwp_test_option_rows'];
 }
 
 function get_role($name)
 {
-    return isset($GLOBALS['mcpwp_test_roles'][ $name ]) ? $GLOBALS['mcpwp_test_roles'][ $name ] : null;
+    $roles =& mcpwp_test_roles_store();
+    return isset($roles[ $name ]) ? $roles[ $name ] : null;
 }
 
 function add_role($name, $display_name, $capabilities = array())
 {
-    $GLOBALS['mcpwp_test_roles'][ $name ] = new Mcpwp_Test_Role($capabilities);
-    return $GLOBALS['mcpwp_test_roles'][ $name ];
+    $roles =& mcpwp_test_roles_store();
+    $roles[ $name ] = new Mcpwp_Test_Role($capabilities);
+    return $roles[ $name ];
 }
 
 function remove_role($name)
 {
+    $site_id = isset($GLOBALS['mcpwp_test_current_blog_id']) ? (int) $GLOBALS['mcpwp_test_current_blog_id'] : 0;
     $GLOBALS['mcpwp_test_removed_roles'][] = (string) $name;
-    unset($GLOBALS['mcpwp_test_roles'][ $name ]);
+    $GLOBALS['mcpwp_test_removed_roles_by_blog'][ $site_id ][] = (string) $name;
+    $roles =& mcpwp_test_roles_store();
+    unset($roles[ $name ]);
+}
+
+function &mcpwp_test_roles_store()
+{
+    $site_id = isset($GLOBALS['mcpwp_test_current_blog_id']) ? (int) $GLOBALS['mcpwp_test_current_blog_id'] : 0;
+    if ($site_id && isset($GLOBALS['mcpwp_test_blog_roles'])) {
+        if (! isset($GLOBALS['mcpwp_test_blog_roles'][ $site_id ])) {
+            $GLOBALS['mcpwp_test_blog_roles'][ $site_id ] = array();
+        }
+        return $GLOBALS['mcpwp_test_blog_roles'][ $site_id ];
+    }
+    return $GLOBALS['mcpwp_test_roles'];
 }
 
 function wp_clear_scheduled_hook($hook)
 {
     $GLOBALS['mcpwp_test_cleared_hooks'][] = $hook;
-    if (isset($GLOBALS['mcpwp_test_scheduled_hooks'])) {
-        unset($GLOBALS['mcpwp_test_scheduled_hooks'][ $hook ]);
-    }
+    $scheduled =& mcpwp_test_scheduled_hooks_store();
+    unset($scheduled[ $hook ]);
     return 1;
+}
+
+function &mcpwp_test_scheduled_hooks_store()
+{
+    $site_id = isset($GLOBALS['mcpwp_test_current_blog_id']) ? (int) $GLOBALS['mcpwp_test_current_blog_id'] : 0;
+    if ($site_id && isset($GLOBALS['mcpwp_test_blog_scheduled_hooks'])) {
+        if (! isset($GLOBALS['mcpwp_test_blog_scheduled_hooks'][ $site_id ])) {
+            $GLOBALS['mcpwp_test_blog_scheduled_hooks'][ $site_id ] = array();
+        }
+        return $GLOBALS['mcpwp_test_blog_scheduled_hooks'][ $site_id ];
+    }
+    return $GLOBALS['mcpwp_test_scheduled_hooks'];
 }
 
 function set_transient($name, $value, $expiration)
@@ -613,11 +719,14 @@ function get_sites($args = array())
 function switch_to_blog($blog_id)
 {
     $GLOBALS['mcpwp_test_switched_blogs'][] = (int) $blog_id;
+    $GLOBALS['mcpwp_test_blog_stack'][] = isset($GLOBALS['mcpwp_test_current_blog_id']) ? (int) $GLOBALS['mcpwp_test_current_blog_id'] : 0;
+    $GLOBALS['mcpwp_test_current_blog_id'] = (int) $blog_id;
 }
 
 function restore_current_blog()
 {
     $GLOBALS['mcpwp_test_restored_blogs'] = isset($GLOBALS['mcpwp_test_restored_blogs']) ? $GLOBALS['mcpwp_test_restored_blogs'] + 1 : 1;
+    $GLOBALS['mcpwp_test_current_blog_id'] = empty($GLOBALS['mcpwp_test_blog_stack']) ? 0 : (int) array_pop($GLOBALS['mcpwp_test_blog_stack']);
 }
 
 function wp_generate_uuid4()
