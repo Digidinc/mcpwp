@@ -13,6 +13,7 @@ final class MediaSecurityTest extends TestCase {
 		$GLOBALS['_mcpwp_test_generate_attachment_metadata_result'] = null;
 		$GLOBALS['_mcpwp_test_update_post_meta_result'] = null;
 		$GLOBALS['_mcpwp_test_update_post_result'] = null;
+		$GLOBALS['_mcpwp_test_extra_filetypes'] = array();
 		unset( $GLOBALS['_mcpwp_test_handle_upload_result'], $GLOBALS['_mcpwp_test_handle_sideload_result'] );
 		$GLOBALS['_mcpwp_test_wp_filesystem_calls'] = 0;
 	}
@@ -24,6 +25,33 @@ final class MediaSecurityTest extends TestCase {
 		$this->assertInstanceOf( WP_Error::class, $result );
 		$this->assertSame( 'invalid_file_type', $result->get_error_code() );
 		$this->assertSame( array(), $GLOBALS['wp_filesystem']->moves );
+	}
+
+	/** @dataProvider codeLikeUploadExtensions */
+	public function test_base64_upload_rejects_code_extensions_even_when_wordpress_mimes_are_expanded( $extension, $mime ): void {
+		$GLOBALS['_mcpwp_test_extra_filetypes'][ $extension ] = $mime;
+		$result = ( new Mcpwp_Media() )->upload_from_base64(
+			base64_encode( 'reviewer-controlled code-like content' ),
+			'payload.' . $extension,
+			array( 'mime_type' => $mime )
+		);
+
+		$this->assertInstanceOf( WP_Error::class, $result, $extension );
+		$this->assertSame( 'invalid_file_type', $result->get_error_code(), $extension );
+		$this->assertSame( array(), $GLOBALS['wp_filesystem']->moves, $extension );
+	}
+
+	public function codeLikeUploadExtensions(): array {
+		return array(
+			'CSS' => array( 'css', 'text/plain' ),
+			'ES module' => array( 'mjs', 'application/javascript' ),
+			'CommonJS' => array( 'cjs', 'application/javascript' ),
+			'JSX' => array( 'jsx', 'text/plain' ),
+			'TypeScript' => array( 'ts', 'text/plain' ),
+			'TSX' => array( 'tsx', 'text/plain' ),
+			'PHP include' => array( 'inc', 'text/plain' ),
+			'PHP source' => array( 'phps', 'text/plain' ),
+		);
 	}
 
 	public function test_base64_upload_rejects_extension_and_mime_mismatch_before_move(): void {

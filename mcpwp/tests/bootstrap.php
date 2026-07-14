@@ -1199,6 +1199,9 @@ function wp_check_filetype($filename)
 {
     $extension = strtolower(pathinfo((string) $filename, PATHINFO_EXTENSION));
     $types = array( 'png' => 'image/png', 'jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'gif' => 'image/gif', 'webp' => 'image/webp', 'pdf' => 'application/pdf' );
+    if (isset($GLOBALS['_mcpwp_test_extra_filetypes']) && is_array($GLOBALS['_mcpwp_test_extra_filetypes'])) {
+        $types = array_merge($types, $GLOBALS['_mcpwp_test_extra_filetypes']);
+    }
     return array( 'ext' => isset($types[ $extension ]) ? $extension : false, 'type' => isset($types[ $extension ]) ? $types[ $extension ] : false );
 }
 

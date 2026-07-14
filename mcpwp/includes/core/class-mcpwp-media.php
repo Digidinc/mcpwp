@@ -14,6 +14,15 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 class Mcpwp_Media {
 
+	/** File extensions that this content-only directory edition never stores. */
+	private const DISALLOWED_CODE_EXTENSIONS = array(
+		'php', 'php2', 'php3', 'php4', 'php5', 'php6', 'php7', 'php8', 'pht', 'phtm', 'phtml', 'phps', 'phar', 'inc',
+		'js', 'mjs', 'cjs', 'jsx', 'ts', 'tsx', 'coffee', 'css', 'scss', 'sass', 'less',
+		'html', 'htm', 'xhtml', 'shtml', 'shtm', 'svg', 'swf',
+		'cgi', 'pl', 'py', 'rb', 'sh', 'bash', 'asp', 'aspx', 'jsp', 'cfm',
+		'exe', 'dll', 'com', 'bat', 'cmd', 'msi', 'jar', 'war',
+	);
+
 	use Mcpwp_Sanitization;
 
 	/**
@@ -108,7 +117,7 @@ class Mcpwp_Media {
 		$original_filename = (string) $original_filename;
 		$filename          = sanitize_file_name( $original_filename );
 		$extension         = strtolower( pathinfo( $filename, PATHINFO_EXTENSION ) );
-		$executable        = array( 'php', 'php3', 'php4', 'php5', 'php7', 'php8', 'phtml', 'phar', 'cgi', 'pl', 'py', 'sh', 'bash', 'exe', 'dll', 'com', 'bat', 'cmd', 'js', 'html', 'htm', 'svg' );
+		$executable        = self::DISALLOWED_CODE_EXTENSIONS;
 		$segments          = array_map( 'strtolower', explode( '.', $filename ) );
 		$filetype          = wp_check_filetype( $filename );
 		if ( '' === $filename || $filename !== $original_filename || basename( $original_filename ) !== $original_filename ) {
@@ -244,7 +253,7 @@ class Mcpwp_Media {
 		$original_filename     = (string) $filename;
 		$filename              = sanitize_file_name( $original_filename );
 		$extension             = strtolower( pathinfo( $filename, PATHINFO_EXTENSION ) );
-		$executable_extensions = array( 'php', 'php3', 'php4', 'php5', 'php7', 'php8', 'phtml', 'phar', 'cgi', 'pl', 'py', 'sh', 'bash', 'exe', 'dll', 'com', 'bat', 'cmd', 'js', 'html', 'htm', 'svg' );
+		$executable_extensions = self::DISALLOWED_CODE_EXTENSIONS;
 		$filename_segments     = array_map( 'strtolower', explode( '.', $filename ) );
 		$filetype              = wp_check_filetype( $filename );
 		if ( empty( $filename ) || $original_filename !== $filename || basename( $original_filename ) !== $original_filename ) {
