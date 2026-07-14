@@ -107,7 +107,7 @@ final class WporgAdminSurfaceTest extends TestCase {
 		$this->assertMatchesRegularExpression( '/<input\s+type="checkbox"\s+name="tool_categories\[\]"\s+value="content"\s+checked="checked">/', $source );
 
 		foreach ( array( 'admin', 'site', 'media', 'taxonomy' ) as $value ) {
-			$this->assertDoesNotMatchRegularExpression( '/<input[^>]+value="' . $value . '"[^>]+checked="checked"[^>]*>/', $source );
+			$this->assertDoesNotMatchRegularExpression( '/<input(?=[^>]*\bvalue="' . $value . '")(?=[^>]*\bchecked="checked")[^>]*>/', $source );
 		}
 	}
 
