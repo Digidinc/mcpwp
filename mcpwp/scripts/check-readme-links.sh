@@ -143,7 +143,7 @@ check_url() {
 
 		if ! result="$("$CURL_BIN" --disable --silent --show-error --output /dev/null \
 			--proxy '' --noproxy '*' --resolve "$resolve_entry" \
-			--connect-timeout 10 --max-time 20 --max-redirs 0 --proto '=http,https' --proto-redir '=http,https' \
+			--connect-timeout 10 --max-time 60 --max-redirs 0 --proto '=http,https' --proto-redir '=http,https' \
 			--user-agent 'Mumega-MCP-Readme-Link-Checker/1.0' \
 			--write-out $'%{http_code}\n%{redirect_url}\n%{url_effective}' "$current")"; then
 			echo "[FAIL] Request failed: $current" >&2

@@ -478,6 +478,8 @@ SH;
 		$this->assertSame( '*', $result['curl_args'][ $noproxy_index + 1 ] ?? null );
 		$resolve_index = array_search( '--resolve', $result['curl_args'], true );
 		$this->assertSame( 'public.example:443:93.184.216.34', $result['curl_args'][ $resolve_index + 1 ] ?? null );
+		$max_time_index = array_search( '--max-time', $result['curl_args'], true );
+		$this->assertSame( '60', $result['curl_args'][ $max_time_index + 1 ] ?? null, 'Slow but valid public review links need a realistic per-hop timeout.' );
 		foreach ( array( '--user', '--netrc', '--cookie', '--cookie-jar' ) as $ambient_auth ) {
 			$this->assertNotContains( $ambient_auth, $result['curl_args'] );
 		}
