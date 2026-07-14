@@ -6,7 +6,7 @@ This record applies only to the immutable WordPress.org candidate described belo
 
 ## Release status
 
-The exact-ZIP verifier, reproducible build, PHP compatibility lint, artifact policy/identity suite, both clean-install lifecycle lanes, official Plugin Check, WPCS review, and anonymous readme-link check pass for the recorded SHA. Plugin Check and PHPCS have reviewed warnings; neither result is represented as zero warnings.
+The exact-ZIP verifier, reproducible build, PHP compatibility lint, artifact policy/identity suite, both clean-install lifecycle lanes, official Plugin Check, and WPCS review pass for the recorded SHA. Plugin Check and PHPCS have reviewed warnings; neither result is represented as zero warnings.
 
 This evidence does **not** by itself authorize upload. The SHA-pinned approval workflow and a final fresh human review of this exact manifest/package remain release go/no-go requirements. No WordPress.org upload, SVN write, GitHub push, or release is evidenced here.
 
@@ -14,15 +14,15 @@ This evidence does **not** by itself authorize upload. The SHA-pinned approval w
 
 | Field | Recorded value |
 | --- | --- |
-| File | `mcpwp/scripts/mumega-mcp-3.4.3.zip` |
+| File | `mcpwp/scripts/mumega-mcp-3.4.13.zip` |
 | Installed directory/main file | `mumega-mcp/mumega-mcp.php` |
-| Plugin version | `3.4.3` |
-| Candidate SHA-256 | `138b2bdf9fd94130306af1fde7732f63008f0e0a36568e7b5816850c3d2935ed` |
-| Size | 85,344 bytes |
+| Plugin version | `3.4.13` |
+| Candidate SHA-256 | `4ff90b406b0a6343a4d511b374b00ecb281c5f7211d1a348bf0bbf3d116c4fb1` |
+| Size | 85,422 bytes |
 | ZIP entries | 62 sorted regular files under one `mumega-mcp/` root |
 | Manifest | `docs/wporg/mumega-mcp-manifest.txt` |
 | Manifest SHA-256 | `13dd5d0abea3be56512432abb588de2db5d727a928280a608e2df2762c2cfd94` |
-| Last shipped-file evidence commit | `f45a9cee8bf1437248b6242df2330ce4617a8f9a` |
+| Last shipped-file evidence commit | `69650f6f49f81437ef052ba82039bad6b586d87e` |
 
 The build was run twice from the same tracked shipped source. Both independent outputs had the candidate SHA above. The builder normalizes shipped-file timestamps to 1980-01-01, sorts the input list with `LC_ALL=C`, and invokes Info-ZIP with metadata stripping (`zip -X`).
 
@@ -30,19 +30,19 @@ Reproduction commands:
 
 ```bash
 bash mcpwp/scripts/build-wporg.sh
-first=$(shasum -a 256 mcpwp/scripts/mumega-mcp-3.4.3.zip | awk '{print $1}')
+first=$(shasum -a 256 mcpwp/scripts/mumega-mcp-3.4.13.zip | awk '{print $1}')
 bash mcpwp/scripts/build-wporg.sh
-second=$(shasum -a 256 mcpwp/scripts/mumega-mcp-3.4.3.zip | awk '{print $1}')
+second=$(shasum -a 256 mcpwp/scripts/mumega-mcp-3.4.13.zip | awk '{print $1}')
 test "$first" = "$second"
-bash mcpwp/scripts/verify-wporg-artifact.sh mcpwp/scripts/mumega-mcp-3.4.3.zip
-shasum -a 256 mcpwp/scripts/mumega-mcp-3.4.3.zip
-wc -c < mcpwp/scripts/mumega-mcp-3.4.3.zip
-unzip -Z1 mcpwp/scripts/mumega-mcp-3.4.3.zip | LC_ALL=C sort > docs/wporg/mumega-mcp-manifest.txt
-test "$(unzip -Z1 mcpwp/scripts/mumega-mcp-3.4.3.zip | LC_ALL=C sort | wc -l | tr -d ' ')" = 62
+bash mcpwp/scripts/verify-wporg-artifact.sh mcpwp/scripts/mumega-mcp-3.4.13.zip
+shasum -a 256 mcpwp/scripts/mumega-mcp-3.4.13.zip
+wc -c < mcpwp/scripts/mumega-mcp-3.4.13.zip
+unzip -Z1 mcpwp/scripts/mumega-mcp-3.4.13.zip | LC_ALL=C sort > docs/wporg/mumega-mcp-manifest.txt
+test "$(unzip -Z1 mcpwp/scripts/mumega-mcp-3.4.13.zip | LC_ALL=C sort | wc -l | tr -d ' ')" = 62
 shasum -a 256 docs/wporg/mumega-mcp-manifest.txt
 ```
 
-Recorded result: both builds produced `138b2bdf…`; the verifier returned `[OK]`; size, entry count, and manifest hash matched the table.
+Recorded result: both builds produced `4ff90b40…`; the verifier returned `[OK]`; size, entry count, and manifest hash matched the table.
 
 ## Pinned tools and environments
 
@@ -70,13 +70,10 @@ Development package versions are locked in `mcpwp/composer.lock`; Docker image d
 | Gate | Result |
 | --- | --- |
 | Exact archive verifier | PASS |
-| Full repository suite (PHP 7.4) | 347 tests, 4,148 assertions, PASS |
-| Full repository suite (PHP 8.3) | 347 tests, 4,148 assertions, PASS |
-| Final activation/rate-limit/media regression set (PHP 7.4) | 61 tests, 2,335 assertions, PASS |
+| Full repository suite (PHP 7.4) | 352 tests, 4,168 assertions, PASS |
+| Full repository suite (PHP 8.3) | 352 tests, 4,168 assertions, PASS |
 | Exact candidate PHP 7.4 syntax | 57/57 shipped PHP files, PASS |
 | Exact candidate PHP 8.3 syntax | 57/57 shipped PHP files, PASS |
-| Deterministic POT rebuild/source coverage | PASS; only reviewed source-reference changes occurred before the final candidate freeze |
-| Anonymous readme URLs | 1/1, HTTP 200 after a validated public redirect, PASS |
 
 The full repository runs completed after the last shipped-file commit and include the artifact builder, identity, policy, lifecycle, authorization, malicious-input, admin, and product contracts. The dedicated approval workflow repeats the complete matrix against its single frozen candidate artifact.
 
@@ -96,7 +93,7 @@ Command:
 
 ```bash
 bash mcpwp/scripts/test-wporg-clean-install.sh \
-  "$PWD/mcpwp/scripts/mumega-mcp-3.4.3.zip" all
+  "$PWD/mcpwp/scripts/mumega-mcp-3.4.13.zip" all
 ```
 
 | Lane | Result |
@@ -104,7 +101,7 @@ bash mcpwp/scripts/test-wporg-clean-install.sh \
 | WordPress 6.1.1 / PHP 7.4 | 43/43 TAP checks, PASS |
 | WordPress 7.0.1 / PHP 8.3 | 43/43 TAP checks, PASS |
 
-Each lane installed the exact 85,344-byte ZIP (not a source mount), rechecked its SHA before and after the run, enabled `WP_DEBUG`/`WP_DEBUG_LOG`, and used an internal-only Docker network. The pre-activation `pre_http_request` spy first proved it could observe and block a probe request, then recorded zero plugin outbound attempts. `debug.log` and the outbound-attempt log were absent or exactly zero bytes at the end.
+Each lane installed the exact 85,422-byte ZIP (not a source mount), rechecked its SHA before and after the run, enabled `WP_DEBUG`/`WP_DEBUG_LOG`, and used an internal-only Docker network. The pre-activation `pre_http_request` spy first proved it could observe and block a probe request, then recorded zero plugin outbound attempts. `debug.log` and the outbound-attempt log were absent or exactly zero bytes at the end.
 
 Both lanes verified:
 
@@ -128,7 +125,7 @@ wp --path=/var/www/html --allow-root \
   --error-severity=1 --warning-severity=1
 ```
 
-Result: **0 errors, 36 warnings**. The candidate SHA remained `138b2bdf…`; outbound attempts and `debug.log` remained zero; the disposable lane was torn down with no Docker residue. Raw strict-JSON report SHA-256: `786acbbec4a4af927315d7d7f9f4fa3f3d890ab73dec2745a1350f4f60c2ec75`.
+Result: **0 errors, 36 warnings**. The candidate SHA remained `4ff90b40…`; outbound attempts and `debug.log` remained zero. Raw strict-JSON report SHA-256: `97ecd09f9fce06c8ae82d763d2d392638af5f55c12eb3e0bb021c9f996d71df5`.
 
 All 36 warnings were reviewed:
 
