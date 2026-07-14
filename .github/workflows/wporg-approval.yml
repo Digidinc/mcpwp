@@ -75,6 +75,17 @@ jobs:
             echo 'No ambient HTTP(S) proxy is configured.'
           fi
 
+      - name: Diagnose hostname-only public link transport
+        shell: bash
+        run: |
+          set +e
+          http_code="$(curl --disable --silent --show-error --output /dev/null \
+            --proxy '' --noproxy '*' --connect-timeout 10 --max-time 20 \
+            --write-out '%{http_code}' https://wordpress.org/about/license/)"
+          curl_status=$?
+          set -e
+          echo "Hostname-only link transport: curl_status=$curl_status http_status=$http_code"
+
       - name: Verify hash and artifact policy
         shell: bash
         run: |
