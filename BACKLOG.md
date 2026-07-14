@@ -59,14 +59,15 @@ Agent mandate (refocused 2026-06-09): **MCPWP repo health + GTM enablement + pri
 
 ---
 
-## Roadmap — SEO/GEO 2026 Modernization (filed 2026-07-14)
+## Roadmap — SEO/GEO 2026 Modernization — ✅ EPIC CLOSED (filed + shipped 2026-07-14)
 
-`/seo/*` tools encode guidance that predates several confirmed 2025-2026 Google changes. Researched via 4 parallel agents against primary sources (Google Search Central, Search Engine Land/Roundtable) — findings and scope in epic **#614**.
+`/seo/*` tools encoded guidance that predated several confirmed 2025-2026 Google changes. Researched via 4 parallel agents against primary sources (Google Search Central, Search Engine Land/Roundtable) — epic **#614** (closed), all 3 children shipped.
 
 - **#615 — ✅ SHIPPED v3.4.15** — `/seo/structured-data` classifies each detected @type as `active`/`deprecated_no_rich_result` (HowTo, FAQPage, ClaimReview, EstimatedSalary, LearningVideo, SpecialAnnouncement, VehicleListing). Book and Course deliberately excluded (Book un-deprecated Nov 2025; Course too broad to flag without false positives). 10 new regression tests.
 - **#616 — ✅ SHIPPED v3.4.16** — `schema_placement_mismatch` check (FAQPage/HowTo/QAPage schema must describe content actually on the page, per Google's March 2026 rule) + explicit `eeat` field in content-quality scorer (4 factors, each with its own score + evidence, not one aggregate number). 15 new regression tests.
-- **#617 (P2, `discussion`)** — experimental, opt-in GEO/AEO citability heuristic. Vendor-sourced, not Google-confirmed — must ship clearly labeled as such, held until P0/P1 land. Explicitly **not** building an llms.txt generator (Google doesn't consume it; Ahrefs: 97% of 137k sampled files got zero requests).
-- Trigger order per epic: drafts → tests → reviews → ships. Sequence P0 → P1 → P2.
+- **#617 — ✅ SHIPPED v3.4.17** — `geo_citability_experimental` on content-quality, opt-in only (`include_geo_experimental=true`, off by default), clearly labeled vendor-sourced/not-Google-confirmed, never mixed into the main score. Explicitly did **not** build an llms.txt generator (Google doesn't consume it; Ahrefs: 97% of 137k sampled files got zero requests). **Bonus find while live-testing:** `extract_heading_texts()` returns array-shaped headings (`['level','text']`), not plain strings — a naive string-assuming check fatally crashed until caught end-to-end, not by unit tests against hand-built fixtures alone. 5 new regression tests.
+- 30 new regression tests total across the epic; full suite green throughout (324 tests, 936 assertions at close).
+- Ground truth worth remembering: always test SEO/content-quality checks against a real REST call on a real post, not just hand-built fixtures passed straight to a method — internal data shapes (like heading arrays) don't always match what a fixture-writer assumes.
 
 ---
 
