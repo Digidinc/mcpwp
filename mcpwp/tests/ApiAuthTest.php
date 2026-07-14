@@ -6,7 +6,7 @@ final class ApiAuthTest extends TestCase {
 	protected function setUp(): void {
 		$GLOBALS['mcpwp_test_options'] = array();
 		$GLOBALS['mcpwp_test_transients'] = array();
-		$GLOBALS['mcpwp_test_current_user'] = 0;
+		$GLOBALS['mcpwp_test_current_user'] = 2;
 	}
 
 	public function test_query_parameter_key_is_not_accepted(): void {
@@ -64,6 +64,7 @@ final class ApiAuthTest extends TestCase {
 	public function test_plaintext_legacy_key_is_hashed_when_migrated(): void {
 		$auth = new Mcpwp_Api_Auth_Test_Harness();
 		update_option( 'mcpwp_api_key', 'mcpwp_legacy_plain' );
+		update_option( 'mcpwp_legacy_migration_owner_id', 2 );
 
 		$request = new WP_REST_Request(
 			'GET',
@@ -82,6 +83,7 @@ final class ApiAuthTest extends TestCase {
 
 		$keys = get_option( 'mcpwp_api_keys', array() );
 		$this->assertNotEmpty( $keys );
+		$this->assertSame( 2, $keys[0]['user_id'] );
 		$this->assertNotSame( 'mcpwp_legacy_plain', $keys[0]['hash'] );
 		$this->assertTrue( wp_check_password( 'mcpwp_legacy_plain', $keys[0]['hash'] ) );
 	}

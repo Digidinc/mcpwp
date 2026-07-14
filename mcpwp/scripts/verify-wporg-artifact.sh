@@ -484,6 +484,10 @@ with archive:
                 r"['\"]methods['\"]\s*=>\s*(WP_REST_Server::[A-Z]+|['\"][A-Z,]+['\"])",
                 arguments[2],
             )
+            values.extend(re.findall(
+                r"\broute_definition\s*\(\s*(WP_REST_Server::[A-Z]+|['\"][A-Z,]+['\"])",
+                arguments[2],
+            ))
             if not values:
                 fail("REST route methods", f"{name}:{route}")
             for value in values:

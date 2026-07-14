@@ -7,11 +7,11 @@ class Mcpwp_REST_Media extends Mcpwp_REST_API {
 	public function __construct() { $this->media = new Mcpwp_Media(); }
 	public function register_routes() {
 		register_rest_route( $this->namespace, '/media', array(
-			array( 'methods' => WP_REST_Server::READABLE, 'callback' => array( $this, 'list_media' ), 'permission_callback' => array( $this, 'check_permission' ) ),
-			array( 'methods' => WP_REST_Server::CREATABLE, 'callback' => array( $this, 'upload_media' ), 'permission_callback' => array( $this, 'check_permission' ) ),
+			$this->route_definition( WP_REST_Server::READABLE, 'list_media', 'check_list_media_permission', 'media', 'read', array( 'read', 'read_post per non-public attachment' ), false, $this->media_list_args() ),
+			$this->route_definition( WP_REST_Server::CREATABLE, 'upload_media', 'check_upload_media_permission', 'media', 'write', array( 'upload_files' ), true, $this->multipart_media_args() ),
 		) );
-		register_rest_route( $this->namespace, '/media/from-base64', array( 'methods' => WP_REST_Server::CREATABLE, 'callback' => array( $this, 'upload_from_base64' ), 'permission_callback' => array( $this, 'check_permission' ) ) );
-		register_rest_route( $this->namespace, '/media/(?P<id>\d+)', array( 'methods' => WP_REST_Server::READABLE, 'callback' => array( $this, 'get_media' ), 'permission_callback' => array( $this, 'check_permission' ) ) );
+		register_rest_route( $this->namespace, '/media/from-base64', $this->route_definition( WP_REST_Server::CREATABLE, 'upload_from_base64', 'check_upload_media_permission', 'media', 'write', array( 'upload_files' ), true, $this->base64_media_args() ) );
+		register_rest_route( $this->namespace, '/media/(?P<id>\d+)', $this->route_definition( WP_REST_Server::READABLE, 'get_media', 'check_get_media_permission', 'media', 'read', array( 'read_post:{id}', 'post type must be attachment' ), false, $this->id_route_args() ) );
 	}
 	public function list_media( $request ) { return $this->respond( $this->media->list_media( $request->get_params() ) ); }
 	public function get_media( $request ) {

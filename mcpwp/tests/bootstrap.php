@@ -318,6 +318,14 @@ function get_userdata($user_id)
     return false;
 }
 
+function get_user_by($field, $value)
+{
+    if ('id' !== $field && 'ID' !== $field) {
+        return false;
+    }
+    return get_userdata((int) $value);
+}
+
 function get_users($args = array())
 {
     $users = isset($GLOBALS['mcpwp_test_users']) ? $GLOBALS['mcpwp_test_users'] : array();
@@ -345,6 +353,13 @@ function current_user_can($capability)
     // If per-user caps are configured for this user_id, check them.
     if (isset($GLOBALS['mcpwp_test_user_caps'][ $user_id ])) {
         $caps = $GLOBALS['mcpwp_test_user_caps'][ $user_id ];
+        $arguments = func_get_args();
+        if (isset($arguments[1])) {
+            $object_capability = $capability . ':' . (int) $arguments[1];
+            if (array_key_exists($object_capability, $caps)) {
+                return (bool) $caps[ $object_capability ];
+            }
+        }
         // Explicit true/false per capability key.
         if (array_key_exists($capability, $caps)) {
             return (bool) $caps[ $capability ];

@@ -4,9 +4,9 @@ if ( ! defined( 'ABSPATH' ) ) { exit; }
 
 class Mcpwp_REST_Site_Taxonomy extends Mcpwp_REST_API {
 	public function register_routes() {
-		register_rest_route( $this->namespace, '/categories', array( 'methods' => WP_REST_Server::READABLE, 'callback' => array( $this, 'list_categories' ), 'permission_callback' => array( $this, 'check_permission' ) ) );
-		register_rest_route( $this->namespace, '/tags', array( 'methods' => WP_REST_Server::READABLE, 'callback' => array( $this, 'list_tags' ), 'permission_callback' => array( $this, 'check_permission' ) ) );
-		register_rest_route( $this->namespace, '/terms', array( 'methods' => WP_REST_Server::CREATABLE, 'callback' => array( $this, 'create_term' ), 'permission_callback' => array( $this, 'check_permission' ) ) );
+		register_rest_route( $this->namespace, '/categories', $this->route_definition( WP_REST_Server::READABLE, 'list_categories', 'check_taxonomy_read_permission', 'taxonomy', 'read', array( 'read' ), false, $this->term_list_args() ) );
+		register_rest_route( $this->namespace, '/tags', $this->route_definition( WP_REST_Server::READABLE, 'list_tags', 'check_taxonomy_read_permission', 'taxonomy', 'read', array( 'read' ), false, $this->term_list_args() ) );
+		register_rest_route( $this->namespace, '/terms', $this->route_definition( WP_REST_Server::CREATABLE, 'create_term', 'check_create_term_permission', 'taxonomy', 'write', array( 'selected taxonomy manage_terms' ), true, $this->term_create_args() ) );
 	}
 	public function list_categories( $request ) { return $this->success_response( array( 'categories' => $this->format_terms( get_terms( array( 'taxonomy' => 'category', 'hide_empty' => false ) ) ) ) ); }
 	public function list_tags( $request ) { return $this->success_response( array( 'tags' => $this->format_terms( get_terms( array( 'taxonomy' => 'post_tag', 'hide_empty' => false ) ) ) ) ); }

@@ -1,0 +1,1183 @@
+{
+  "namespace": "mcpwp/v1",
+  "endpoints": [
+    {
+      "route": "/mcp",
+      "method": "POST",
+      "permission": "check_mcp_permission",
+      "category": "site",
+      "scope": "read",
+      "capabilities": [
+        "read",
+        "nested route decides"
+      ],
+      "mutable": true,
+      "args": {}
+    },
+    {
+      "route": "/site-info",
+      "method": "GET",
+      "permission": "check_site_info_permission",
+      "category": "site",
+      "scope": "read",
+      "capabilities": [
+        "read"
+      ],
+      "mutable": false,
+      "args": {}
+    },
+    {
+      "route": "/posts",
+      "method": "GET",
+      "permission": "check_list_posts_permission",
+      "category": "content",
+      "scope": "read",
+      "capabilities": [
+        "read",
+        "edit_posts/read_private_posts for non-public visibility"
+      ],
+      "mutable": false,
+      "args": {
+        "posts_per_page": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 20
+        },
+        "paged": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000,
+          "default": 1
+        },
+        "post_status": {
+          "type": "string",
+          "enum": [
+            "publish",
+            "draft",
+            "pending",
+            "private"
+          ],
+          "default": "publish"
+        },
+        "order": {
+          "type": "string",
+          "enum": [
+            "asc",
+            "desc"
+          ]
+        },
+        "orderby": {
+          "type": "string",
+          "enum": [
+            "date",
+            "modified",
+            "title",
+            "id"
+          ]
+        }
+      }
+    },
+    {
+      "route": "/posts",
+      "method": "POST",
+      "permission": "check_create_post_permission",
+      "category": "content",
+      "scope": "write",
+      "capabilities": [
+        "edit_posts",
+        "publish_posts for publish/private",
+        "assign_terms when terms supplied"
+      ],
+      "mutable": true,
+      "args": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "required": true
+        },
+        "content": {
+          "type": "string",
+          "maxLength": 1000000
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "draft",
+            "pending",
+            "publish",
+            "private"
+          ]
+        },
+        "excerpt": {
+          "type": "string",
+          "maxLength": 10000
+        },
+        "slug": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "categories": {
+          "type": "array",
+          "maxItems": 100,
+          "uniqueItems": true,
+          "items": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
+          }
+        },
+        "tags": {
+          "type": "array",
+          "maxItems": 100,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "featured_image": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        }
+      }
+    },
+    {
+      "route": "/posts/(?P<id>\\d+)",
+      "method": "GET",
+      "permission": "check_get_post_permission",
+      "category": "content",
+      "scope": "read",
+      "capabilities": [
+        "read_post:{id}",
+        "post type must be post"
+      ],
+      "mutable": false,
+      "args": {
+        "id": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647,
+          "required": true
+        }
+      }
+    },
+    {
+      "route": "/posts/(?P<id>\\d+)",
+      "method": "PUT",
+      "permission": "check_update_post_permission",
+      "category": "content",
+      "scope": "write/dynamic-admin",
+      "capabilities": [
+        "edit_post:{id}",
+        "publish_posts for publish/private",
+        "assign_terms when terms supplied",
+        "post type must be post"
+      ],
+      "mutable": true,
+      "args": {
+        "id": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647,
+          "required": true
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "required": false
+        },
+        "content": {
+          "type": "string",
+          "maxLength": 1000000
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "draft",
+            "pending",
+            "publish",
+            "private"
+          ]
+        },
+        "excerpt": {
+          "type": "string",
+          "maxLength": 10000
+        },
+        "slug": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "categories": {
+          "type": "array",
+          "maxItems": 100,
+          "uniqueItems": true,
+          "items": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
+          }
+        },
+        "tags": {
+          "type": "array",
+          "maxItems": 100,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "featured_image": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        }
+      }
+    },
+    {
+      "route": "/posts/(?P<id>\\d+)",
+      "method": "PATCH",
+      "permission": "check_update_post_permission",
+      "category": "content",
+      "scope": "write/dynamic-admin",
+      "capabilities": [
+        "edit_post:{id}",
+        "publish_posts for publish/private",
+        "assign_terms when terms supplied",
+        "post type must be post"
+      ],
+      "mutable": true,
+      "args": {
+        "id": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647,
+          "required": true
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "required": false
+        },
+        "content": {
+          "type": "string",
+          "maxLength": 1000000
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "draft",
+            "pending",
+            "publish",
+            "private"
+          ]
+        },
+        "excerpt": {
+          "type": "string",
+          "maxLength": 10000
+        },
+        "slug": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "categories": {
+          "type": "array",
+          "maxItems": 100,
+          "uniqueItems": true,
+          "items": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
+          }
+        },
+        "tags": {
+          "type": "array",
+          "maxItems": 100,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "featured_image": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        }
+      }
+    },
+    {
+      "route": "/pages",
+      "method": "GET",
+      "permission": "check_list_pages_permission",
+      "category": "content",
+      "scope": "read",
+      "capabilities": [
+        "read",
+        "edit_pages/read_private_pages for non-public visibility"
+      ],
+      "mutable": false,
+      "args": {
+        "posts_per_page": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 20
+        },
+        "paged": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000,
+          "default": 1
+        },
+        "post_status": {
+          "type": "string",
+          "enum": [
+            "publish",
+            "draft",
+            "pending",
+            "private"
+          ],
+          "default": "publish"
+        },
+        "order": {
+          "type": "string",
+          "enum": [
+            "asc",
+            "desc"
+          ]
+        },
+        "orderby": {
+          "type": "string",
+          "enum": [
+            "date",
+            "modified",
+            "title",
+            "id",
+            "menu_order"
+          ]
+        }
+      }
+    },
+    {
+      "route": "/pages",
+      "method": "POST",
+      "permission": "check_create_page_permission",
+      "category": "content",
+      "scope": "write",
+      "capabilities": [
+        "edit_pages",
+        "publish_pages for publish/private"
+      ],
+      "mutable": true,
+      "args": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "required": true
+        },
+        "content": {
+          "type": "string",
+          "maxLength": 1000000
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "draft",
+            "pending",
+            "publish",
+            "private"
+          ]
+        },
+        "slug": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "parent": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        "menu_order": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000
+        },
+        "template": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "featured_image": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        }
+      }
+    },
+    {
+      "route": "/pages/(?P<id>\\d+)",
+      "method": "GET",
+      "permission": "check_get_page_permission",
+      "category": "content",
+      "scope": "read",
+      "capabilities": [
+        "read_post:{id}",
+        "post type must be page"
+      ],
+      "mutable": false,
+      "args": {
+        "id": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647,
+          "required": true
+        }
+      }
+    },
+    {
+      "route": "/pages/(?P<id>\\d+)",
+      "method": "PUT",
+      "permission": "check_update_page_permission",
+      "category": "content",
+      "scope": "write/dynamic-admin",
+      "capabilities": [
+        "edit_post:{id}",
+        "publish_pages for publish/private",
+        "post type must be page"
+      ],
+      "mutable": true,
+      "args": {
+        "id": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647,
+          "required": true
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "required": false
+        },
+        "content": {
+          "type": "string",
+          "maxLength": 1000000
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "draft",
+            "pending",
+            "publish",
+            "private"
+          ]
+        },
+        "slug": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "parent": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        "menu_order": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000
+        },
+        "template": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "featured_image": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        }
+      }
+    },
+    {
+      "route": "/pages/(?P<id>\\d+)",
+      "method": "PATCH",
+      "permission": "check_update_page_permission",
+      "category": "content",
+      "scope": "write/dynamic-admin",
+      "capabilities": [
+        "edit_post:{id}",
+        "publish_pages for publish/private",
+        "post type must be page"
+      ],
+      "mutable": true,
+      "args": {
+        "id": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647,
+          "required": true
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "required": false
+        },
+        "content": {
+          "type": "string",
+          "maxLength": 1000000
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "draft",
+            "pending",
+            "publish",
+            "private"
+          ]
+        },
+        "slug": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "parent": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        "menu_order": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000
+        },
+        "template": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "featured_image": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        }
+      }
+    },
+    {
+      "route": "/drafts",
+      "method": "GET",
+      "permission": "check_list_drafts_permission",
+      "category": "content",
+      "scope": "read",
+      "capabilities": [
+        "read",
+        "edit_posts and/or edit_pages",
+        "own drafts without edit_others capability"
+      ],
+      "mutable": false,
+      "args": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "all",
+            "post",
+            "page"
+          ],
+          "default": "all"
+        },
+        "posts_per_page": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 20
+        },
+        "paged": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000,
+          "default": 1
+        },
+        "orderby": {
+          "type": "string",
+          "enum": [
+            "modified",
+            "date",
+            "title",
+            "id"
+          ]
+        },
+        "order": {
+          "type": "string",
+          "enum": [
+            "asc",
+            "desc"
+          ],
+          "default": "desc"
+        }
+      }
+    },
+    {
+      "route": "/drafts/(?P<id>\\d+)",
+      "method": "DELETE",
+      "permission": "check_delete_draft_permission",
+      "category": "content",
+      "scope": "admin",
+      "capabilities": [
+        "delete_post:{id}",
+        "post/page status must be draft"
+      ],
+      "mutable": true,
+      "args": {
+        "id": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647,
+          "required": true
+        }
+      }
+    },
+    {
+      "route": "/media",
+      "method": "GET",
+      "permission": "check_list_media_permission",
+      "category": "media",
+      "scope": "read",
+      "capabilities": [
+        "read",
+        "read_post per non-public attachment"
+      ],
+      "mutable": false,
+      "args": {
+        "posts_per_page": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 20
+        },
+        "paged": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000,
+          "default": 1
+        },
+        "mime_type": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "search": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "orderby": {
+          "type": "string",
+          "enum": [
+            "date",
+            "modified",
+            "title",
+            "id"
+          ]
+        },
+        "order": {
+          "type": "string",
+          "enum": [
+            "asc",
+            "desc"
+          ]
+        }
+      }
+    },
+    {
+      "route": "/media",
+      "method": "POST",
+      "permission": "check_upload_media_permission",
+      "category": "media",
+      "scope": "write",
+      "capabilities": [
+        "upload_files"
+      ],
+      "mutable": true,
+      "args": {
+        "file": {
+          "type": "file",
+          "required": true
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "alt": {
+          "type": "string",
+          "maxLength": 250
+        },
+        "caption": {
+          "type": "string",
+          "maxLength": 10000
+        }
+      }
+    },
+    {
+      "route": "/media/from-base64",
+      "method": "POST",
+      "permission": "check_upload_media_permission",
+      "category": "media",
+      "scope": "write",
+      "capabilities": [
+        "upload_files"
+      ],
+      "mutable": true,
+      "args": {
+        "data": {
+          "type": "string",
+          "minLength": 1,
+          "required": true
+        },
+        "filename": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255,
+          "required": true
+        },
+        "mime_type": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "alt": {
+          "type": "string",
+          "maxLength": 250
+        },
+        "caption": {
+          "type": "string",
+          "maxLength": 10000
+        }
+      }
+    },
+    {
+      "route": "/media/(?P<id>\\d+)",
+      "method": "GET",
+      "permission": "check_get_media_permission",
+      "category": "media",
+      "scope": "read",
+      "capabilities": [
+        "read_post:{id}",
+        "post type must be attachment"
+      ],
+      "mutable": false,
+      "args": {
+        "id": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647,
+          "required": true
+        }
+      }
+    },
+    {
+      "route": "/categories",
+      "method": "GET",
+      "permission": "check_taxonomy_read_permission",
+      "category": "taxonomy",
+      "scope": "read",
+      "capabilities": [
+        "read"
+      ],
+      "mutable": false,
+      "args": {
+        "per_page": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 50
+        },
+        "page": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000,
+          "default": 1
+        },
+        "search": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "hide_empty": {
+          "type": "boolean",
+          "default": false
+        },
+        "orderby": {
+          "type": "string",
+          "enum": [
+            "name",
+            "slug",
+            "count",
+            "id"
+          ]
+        },
+        "order": {
+          "type": "string",
+          "enum": [
+            "asc",
+            "desc"
+          ]
+        }
+      }
+    },
+    {
+      "route": "/tags",
+      "method": "GET",
+      "permission": "check_taxonomy_read_permission",
+      "category": "taxonomy",
+      "scope": "read",
+      "capabilities": [
+        "read"
+      ],
+      "mutable": false,
+      "args": {
+        "per_page": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 50
+        },
+        "page": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000,
+          "default": 1
+        },
+        "search": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "hide_empty": {
+          "type": "boolean",
+          "default": false
+        },
+        "orderby": {
+          "type": "string",
+          "enum": [
+            "name",
+            "slug",
+            "count",
+            "id"
+          ]
+        },
+        "order": {
+          "type": "string",
+          "enum": [
+            "asc",
+            "desc"
+          ]
+        }
+      }
+    },
+    {
+      "route": "/terms",
+      "method": "POST",
+      "permission": "check_create_term_permission",
+      "category": "taxonomy",
+      "scope": "write",
+      "capabilities": [
+        "selected taxonomy manage_terms"
+      ],
+      "mutable": true,
+      "args": {
+        "taxonomy": {
+          "type": "string",
+          "enum": [
+            "category",
+            "post_tag"
+          ],
+          "required": true
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "required": true
+        },
+        "slug": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 10000
+        }
+      }
+    },
+    {
+      "route": "/plugin-settings",
+      "method": "GET",
+      "permission": "check_admin_permission",
+      "category": "site",
+      "scope": "admin",
+      "capabilities": [
+        "mcpwp_manage_settings"
+      ],
+      "mutable": false,
+      "args": {}
+    },
+    {
+      "route": "/plugin-settings",
+      "method": "PUT",
+      "permission": "check_admin_permission",
+      "category": "site",
+      "scope": "admin",
+      "capabilities": [
+        "mcpwp_manage_settings"
+      ],
+      "mutable": true,
+      "args": {
+        "enable_logging": {
+          "type": "boolean"
+        },
+        "log_retention_days": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 365
+        }
+      }
+    },
+    {
+      "route": "/plugin-settings",
+      "method": "PATCH",
+      "permission": "check_admin_permission",
+      "category": "site",
+      "scope": "admin",
+      "capabilities": [
+        "mcpwp_manage_settings"
+      ],
+      "mutable": true,
+      "args": {
+        "enable_logging": {
+          "type": "boolean"
+        },
+        "log_retention_days": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 365
+        }
+      }
+    },
+    {
+      "route": "/rate-limit",
+      "method": "GET",
+      "permission": "check_admin_permission",
+      "category": "site",
+      "scope": "admin",
+      "capabilities": [
+        "mcpwp_manage_settings"
+      ],
+      "mutable": false,
+      "args": {}
+    },
+    {
+      "route": "/rate-limit",
+      "method": "PUT",
+      "permission": "check_admin_permission",
+      "category": "site",
+      "scope": "admin",
+      "capabilities": [
+        "mcpwp_manage_settings"
+      ],
+      "mutable": true,
+      "args": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "requests_per_minute": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000
+        },
+        "requests_per_hour": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000
+        },
+        "burst_limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000
+        },
+        "whitelist": {
+          "type": "array",
+          "maxItems": 100,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        }
+      }
+    },
+    {
+      "route": "/rate-limit",
+      "method": "PATCH",
+      "permission": "check_admin_permission",
+      "category": "site",
+      "scope": "admin",
+      "capabilities": [
+        "mcpwp_manage_settings"
+      ],
+      "mutable": true,
+      "args": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "requests_per_minute": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000
+        },
+        "requests_per_hour": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000
+        },
+        "burst_limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000
+        },
+        "whitelist": {
+          "type": "array",
+          "maxItems": 100,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        }
+      }
+    },
+    {
+      "route": "/rate-limit/reset",
+      "method": "POST",
+      "permission": "check_admin_permission",
+      "category": "site",
+      "scope": "admin",
+      "capabilities": [
+        "mcpwp_manage_settings"
+      ],
+      "mutable": true,
+      "args": {
+        "identifier": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "required": true,
+          "pattern": "^key:[a-z0-9-]+$"
+        }
+      }
+    },
+    {
+      "route": "/api-keys",
+      "method": "GET",
+      "permission": "check_admin_permission",
+      "category": "site",
+      "scope": "admin",
+      "capabilities": [
+        "mcpwp_manage_settings"
+      ],
+      "mutable": false,
+      "args": {
+        "include_revoked": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    {
+      "route": "/api-keys",
+      "method": "POST",
+      "permission": "check_admin_permission",
+      "category": "site",
+      "scope": "admin",
+      "capabilities": [
+        "mcpwp_manage_settings"
+      ],
+      "mutable": true,
+      "args": {
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "required": true
+        },
+        "scopes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 3,
+          "uniqueItems": true,
+          "required": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "read",
+              "write",
+              "admin"
+            ]
+          }
+        },
+        "tool_categories": {
+          "type": "array",
+          "maxItems": 4,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "site",
+              "content",
+              "media",
+              "taxonomy"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "route": "/api-keys/(?P<id>[a-z0-9-]+)",
+      "method": "DELETE",
+      "permission": "check_admin_permission",
+      "category": "site",
+      "scope": "admin",
+      "capabilities": [
+        "mcpwp_manage_settings"
+      ],
+      "mutable": true,
+      "args": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "required": true,
+          "pattern": "^[a-z0-9-]+$"
+        }
+      }
+    }
+  ]
+}
+

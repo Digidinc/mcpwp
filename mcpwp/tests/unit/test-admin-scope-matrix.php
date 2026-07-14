@@ -18,11 +18,11 @@ final class AdminScopeMatrixTest extends TestCase {
 	public function test_content_routes_use_read_and_write_scopes(): void {
 		$this->assertSame( 'read', $this->auth->scope( 'GET', '/mcpwp/v1/posts' ) );
 		$this->assertSame( 'write', $this->auth->scope( 'PATCH', '/mcpwp/v1/posts/7' ) );
-		$this->assertSame( 'write', $this->auth->scope( 'DELETE', '/mcpwp/v1/drafts/7' ) );
+		$this->assertSame( 'admin', $this->auth->scope( 'DELETE', '/mcpwp/v1/drafts/7' ) );
 	}
 	public function test_approved_mcp_tool_scope_mirror(): void {
 		$this->assertSame( 'read', $this->auth->tool_scope( 'wp_get_post' ) );
 		$this->assertSame( 'write', $this->auth->tool_scope( 'wp_update_post' ) );
-		$this->assertSame( 'write', $this->auth->tool_scope( 'wp_delete_draft' ) );
+		$this->assertSame( 'admin', $this->auth->tool_scope( 'wp_delete_draft' ) );
 	}
 }

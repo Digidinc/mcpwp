@@ -28,7 +28,7 @@ final class BridgeAuthTest extends TestCase {
 	protected function setUp(): void {
 		$GLOBALS['mcpwp_test_options']    = array();
 		$GLOBALS['mcpwp_test_transients'] = array();
-		$GLOBALS['mcpwp_test_current_user'] = 0;
+		$GLOBALS['mcpwp_test_current_user'] = 2;
 	}
 
 	// -----------------------------------------------------------------------
@@ -75,6 +75,7 @@ final class BridgeAuthTest extends TestCase {
 				'id'         => 'spai-key-1',
 				'label'      => 'Legacy scoped key',
 				'hash'       => $hash,
+				'user_id'    => 2,
 				'scopes'     => array( 'read', 'write', 'admin' ),
 				'role'       => 'admin',
 				'created_at' => '2026-01-01 00:00:00',
@@ -97,6 +98,7 @@ final class BridgeAuthTest extends TestCase {
 				'id'         => 'spai-key-ctx',
 				'label'      => 'Context key',
 				'hash'       => $hash,
+				'user_id'    => 2,
 				'scopes'     => array( 'read', 'write', 'admin' ),
 				'role'       => 'admin',
 				'created_at' => '2026-01-01 00:00:00',
@@ -120,6 +122,7 @@ final class BridgeAuthTest extends TestCase {
 		$hash      = wp_hash_password( $plain_key );
 
 		update_option( 'spai_api_key', $hash );
+		update_option( 'mcpwp_legacy_migration_owner_id', 2 );
 
 		$result = $auth->verify_api_key( $this->get_request( $plain_key ) );
 
@@ -132,6 +135,7 @@ final class BridgeAuthTest extends TestCase {
 		$hash      = wp_hash_password( $plain_key );
 
 		update_option( 'spai_api_key', $hash );
+		update_option( 'mcpwp_legacy_migration_owner_id', 2 );
 
 		$request = new WP_REST_Request(
 			'POST',
@@ -197,6 +201,7 @@ final class BridgeAuthTest extends TestCase {
 				'id'         => 'spai-good',
 				'label'      => 'Good',
 				'hash'       => wp_hash_password( 'spai_goodkey_12345678901234' ),
+				'user_id'    => 2,
 				'scopes'     => array( 'read', 'write', 'admin' ),
 				'role'       => 'admin',
 				'created_at' => '2026-01-01 00:00:00',
@@ -252,6 +257,7 @@ final class BridgeAuthTest extends TestCase {
 				'id'         => 'v3-key-1',
 				'label'      => 'v3',
 				'hash'       => wp_hash_password( $v3_plain ),
+				'user_id'    => 2,
 				'scopes'     => array( 'read', 'write', 'admin' ),
 				'role'       => 'admin',
 				'created_at' => '2026-01-01 00:00:00',
@@ -265,6 +271,7 @@ final class BridgeAuthTest extends TestCase {
 				'id'         => 'spai-key-1',
 				'label'      => 'legacy',
 				'hash'       => wp_hash_password( $spai_plain ),
+				'user_id'    => 2,
 				'scopes'     => array( 'read', 'write', 'admin' ),
 				'role'       => 'admin',
 				'created_at' => '2026-01-01 00:00:00',
@@ -301,6 +308,7 @@ final class BridgeAuthTest extends TestCase {
 				'id'         => 'spai-author-key',
 				'label'      => 'Author read-only',
 				'hash'       => $hash,
+				'user_id'    => 2,
 				'scopes'     => array( 'read' ),
 				'role'       => 'author',
 				'created_at' => '2026-01-01 00:00:00',
@@ -336,6 +344,7 @@ final class BridgeAuthTest extends TestCase {
 				'id'         => 'spai-read-key',
 				'label'      => 'Read-only',
 				'hash'       => $hash,
+				'user_id'    => 2,
 				'scopes'     => array( 'read' ),
 				'role'       => 'author',
 				'created_at' => '2026-01-01 00:00:00',

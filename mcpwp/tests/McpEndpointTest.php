@@ -3,7 +3,13 @@ use PHPUnit\Framework\TestCase;
 
 final class McpEndpointTest extends TestCase {
 	protected function setUp(): void {
-		$GLOBALS['mcpwp_test_options'] = array( 'mcpwp_api_key' => 'test-key', 'mcpwp_settings' => array( 'enable_logging' => true ), 'mcpwp_rate_limit_settings' => array( 'enabled' => false ) );
+		$GLOBALS['mcpwp_test_options'] = array(
+			'mcpwp_api_keys' => array(
+				array( 'id' => 'test-key-id', 'hash' => 'test-key', 'user_id' => 2, 'scopes' => array( 'read', 'write', 'admin' ), 'tool_categories' => array(), 'revoked_at' => null ),
+			),
+			'mcpwp_settings' => array( 'enable_logging' => true ),
+			'mcpwp_rate_limit_settings' => array( 'enabled' => false ),
+		);
 		$GLOBALS['mcpwp_test_transients'] = array();
 		$GLOBALS['_mcpwp_test_registered_routes'] = array();
 		$GLOBALS['_mcpwp_test_rest_dispatcher'] = null;
@@ -77,7 +83,7 @@ final class McpEndpointTest extends TestCase {
 	}
 	public function test_authenticated_mcp_tool_call_consumes_one_rate_limit_unit_across_nested_rest_auth(): void {
 		$GLOBALS['mcpwp_test_options']['mcpwp_api_keys'] = array(
-			array( 'id' => 'rate-key', 'hash' => 'test-key', 'scopes' => array( 'read', 'write', 'admin' ), 'tool_categories' => array(), 'revoked_at' => null ),
+			array( 'id' => 'rate-key', 'hash' => 'test-key', 'user_id' => 2, 'scopes' => array( 'read', 'write', 'admin' ), 'tool_categories' => array(), 'revoked_at' => null ),
 		);
 		$GLOBALS['mcpwp_test_options']['mcpwp_rate_limit_settings'] = array(
 			'enabled' => true, 'requests_per_minute' => 10, 'requests_per_hour' => 100, 'burst_limit' => 10, 'whitelist' => array(),
@@ -95,7 +101,7 @@ final class McpEndpointTest extends TestCase {
 	}
 	public function test_authenticated_jsonrpc_batch_consumes_one_rate_limit_unit_per_tool_call(): void {
 		$GLOBALS['mcpwp_test_options']['mcpwp_api_keys'] = array(
-			array( 'id' => 'rate-key', 'hash' => 'test-key', 'scopes' => array( 'read', 'write', 'admin' ), 'tool_categories' => array(), 'revoked_at' => null ),
+			array( 'id' => 'rate-key', 'hash' => 'test-key', 'user_id' => 2, 'scopes' => array( 'read', 'write', 'admin' ), 'tool_categories' => array(), 'revoked_at' => null ),
 		);
 		$GLOBALS['mcpwp_test_options']['mcpwp_rate_limit_settings'] = array(
 			'enabled' => true, 'requests_per_minute' => 10, 'requests_per_hour' => 100, 'burst_limit' => 10, 'whitelist' => array(),

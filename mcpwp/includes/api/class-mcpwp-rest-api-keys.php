@@ -5,10 +5,10 @@ if ( ! defined( 'ABSPATH' ) ) { exit; }
 class Mcpwp_REST_API_Keys extends Mcpwp_REST_API {
 	public function register_routes() {
 		register_rest_route( $this->namespace, '/api-keys', array(
-			array( 'methods' => WP_REST_Server::READABLE, 'callback' => array( $this, 'list_api_keys' ), 'permission_callback' => array( $this, 'check_permission' ) ),
-			array( 'methods' => WP_REST_Server::CREATABLE, 'callback' => array( $this, 'create_api_key' ), 'permission_callback' => array( $this, 'check_permission' ) ),
+			$this->route_definition( WP_REST_Server::READABLE, 'list_api_keys', 'check_admin_permission', 'site', 'admin', array( 'mcpwp_manage_settings' ), false, array( 'include_revoked' => array( 'type' => 'boolean', 'default' => false ) ) ),
+			$this->route_definition( WP_REST_Server::CREATABLE, 'create_api_key', 'check_admin_permission', 'site', 'admin', array( 'mcpwp_manage_settings' ), true, $this->api_key_create_args() ),
 		) );
-		register_rest_route( $this->namespace, '/api-keys/(?P<id>[a-z0-9-]+)', array( 'methods' => WP_REST_Server::DELETABLE, 'callback' => array( $this, 'revoke_api_key' ), 'permission_callback' => array( $this, 'check_permission' ) ) );
+		register_rest_route( $this->namespace, '/api-keys/(?P<id>[a-z0-9-]+)', $this->route_definition( WP_REST_Server::DELETABLE, 'revoke_api_key', 'check_admin_permission', 'site', 'admin', array( 'mcpwp_manage_settings' ), true, array( 'id' => $this->string_arg( array( 'minLength' => 1, 'maxLength' => 64, 'required' => true, 'pattern' => '^[a-z0-9-]+$' ) ) ) ) );
 	}
 	public function list_api_keys( $request ) {
 		if ( ! $this->can_manage() ) { return $this->error_response( 'forbidden', __( 'You do not have permission to manage API keys.', 'mumega-mcp' ), 403 ); }
@@ -17,7 +17,9 @@ class Mcpwp_REST_API_Keys extends Mcpwp_REST_API {
 	}
 	public function create_api_key( $request ) {
 		if ( ! $this->can_manage() ) { return $this->error_response( 'forbidden', __( 'You do not have permission to manage API keys.', 'mumega-mcp' ), 403 ); }
-		$key = $this->create_scoped_api_key( (string) $request->get_param( 'label' ), (array) $request->get_param( 'scopes' ), (string) $request->get_param( 'role' ) ?: 'admin', (array) $request->get_param( 'tool_categories' ) );
+		$record = $this->get_current_api_key_record();
+		$key = $this->create_scoped_api_key( (string) $request->get_param( 'label' ), (array) $request->get_param( 'scopes' ), (array) $request->get_param( 'tool_categories' ), (int) ( $record['user_id'] ?? 0 ) );
+		if ( is_wp_error( $key ) ) { return $this->error_response( $key->get_error_code(), $key->get_error_message(), (int) ( $key->get_error_data()['status'] ?? 400 ) ); }
 		return $this->success_response( array( 'api_key' => $key ), 201 );
 	}
 	public function revoke_api_key( $request ) {

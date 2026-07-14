@@ -4,7 +4,7 @@ if ( ! defined( 'ABSPATH' ) ) { exit; }
 
 class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 	public function register_routes() {
-		register_rest_route( $this->namespace, '/site-info', array( 'methods' => WP_REST_Server::READABLE, 'callback' => array( $this, 'get_site_info' ), 'permission_callback' => array( $this, 'check_permission' ) ) );
+		register_rest_route( $this->namespace, '/site-info', $this->route_definition( WP_REST_Server::READABLE, 'get_site_info', 'check_site_info_permission', 'site', 'read', array( 'read' ), false ) );
 	}
 
 	public function get_site_info( $request ) {

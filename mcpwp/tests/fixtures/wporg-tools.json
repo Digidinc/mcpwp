@@ -1,0 +1,955 @@
+{
+  "protocolVersion": "2024-11-05",
+  "tools": [
+    {
+      "name": "wp_site_info",
+      "dispatch": {
+        "method": "GET",
+        "route": "/site-info"
+      },
+      "category": "site",
+      "description": "Get readable local WordPress site information.",
+      "requiredCapabilities": [
+        "read"
+      ],
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "category": "site"
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "wp_list_posts",
+      "dispatch": {
+        "method": "GET",
+        "route": "/posts"
+      },
+      "category": "content",
+      "description": "List visible WordPress posts.",
+      "requiredCapabilities": [
+        "read",
+        "edit_posts/read_private_posts for non-public visibility"
+      ],
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "category": "content"
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "posts_per_page": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 20
+          },
+          "paged": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000,
+            "default": 1
+          },
+          "post_status": {
+            "type": "string",
+            "enum": [
+              "publish",
+              "draft",
+              "pending",
+              "private"
+            ],
+            "default": "publish"
+          },
+          "orderby": {
+            "type": "string",
+            "enum": [
+              "date",
+              "modified",
+              "title",
+              "id"
+            ]
+          },
+          "order": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ]
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "wp_get_post",
+      "dispatch": {
+        "method": "GET",
+        "route": "/posts/{id}"
+      },
+      "category": "content",
+      "description": "Get one visible WordPress post.",
+      "requiredCapabilities": [
+        "read_post:{id}"
+      ],
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "category": "content"
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "wp_create_post",
+      "dispatch": {
+        "method": "POST",
+        "route": "/posts"
+      },
+      "category": "content",
+      "description": "Create a WordPress post as draft or pending. Publish/private status additionally requires admin key scope and publish_posts.",
+      "requiredCapabilities": [
+        "edit_posts",
+        "publish_posts for publish/private",
+        "assign_terms when terms supplied"
+      ],
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "category": "content"
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "content": {
+            "type": "string",
+            "maxLength": 1000000
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "pending",
+              "publish",
+              "private"
+            ]
+          },
+          "excerpt": {
+            "type": "string",
+            "maxLength": 10000
+          },
+          "slug": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "categories": {
+            "type": "array",
+            "maxItems": 100,
+            "uniqueItems": true,
+            "items": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2147483647
+            }
+          },
+          "tags": {
+            "type": "array",
+            "maxItems": 100,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          },
+          "featured_image": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "wp_update_post",
+      "dispatch": {
+        "method": "PATCH",
+        "route": "/posts/{id}"
+      },
+      "category": "content",
+      "description": "Update a WordPress post. Publishing/private status or editing an existing published/private post additionally requires admin key scope; publish/private also requires publish_posts.",
+      "requiredCapabilities": [
+        "edit_post:{id}",
+        "publish_posts for publish/private",
+        "assign_terms when terms supplied"
+      ],
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "category": "content"
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "content": {
+            "type": "string",
+            "maxLength": 1000000
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "pending",
+              "publish",
+              "private"
+            ]
+          },
+          "excerpt": {
+            "type": "string",
+            "maxLength": 10000
+          },
+          "slug": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "categories": {
+            "type": "array",
+            "maxItems": 100,
+            "uniqueItems": true,
+            "items": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2147483647
+            }
+          },
+          "tags": {
+            "type": "array",
+            "maxItems": 100,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          },
+          "featured_image": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false,
+        "minProperties": 2
+      }
+    },
+    {
+      "name": "wp_list_pages",
+      "dispatch": {
+        "method": "GET",
+        "route": "/pages"
+      },
+      "category": "content",
+      "description": "List visible WordPress pages.",
+      "requiredCapabilities": [
+        "read",
+        "edit_pages/read_private_pages for non-public visibility"
+      ],
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "category": "content"
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "posts_per_page": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 20
+          },
+          "paged": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000,
+            "default": 1
+          },
+          "post_status": {
+            "type": "string",
+            "enum": [
+              "publish",
+              "draft",
+              "pending",
+              "private"
+            ],
+            "default": "publish"
+          },
+          "orderby": {
+            "type": "string",
+            "enum": [
+              "date",
+              "modified",
+              "title",
+              "id",
+              "menu_order"
+            ]
+          },
+          "order": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ]
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "wp_get_page",
+      "dispatch": {
+        "method": "GET",
+        "route": "/pages/{id}"
+      },
+      "category": "content",
+      "description": "Get one visible WordPress page.",
+      "requiredCapabilities": [
+        "read_post:{id}"
+      ],
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "category": "content"
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "wp_create_page",
+      "dispatch": {
+        "method": "POST",
+        "route": "/pages"
+      },
+      "category": "content",
+      "description": "Create a WordPress page as draft or pending. Publish/private status additionally requires admin key scope and publish_pages.",
+      "requiredCapabilities": [
+        "edit_pages",
+        "publish_pages for publish/private"
+      ],
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "category": "content"
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "content": {
+            "type": "string",
+            "maxLength": 1000000
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "pending",
+              "publish",
+              "private"
+            ]
+          },
+          "slug": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "parent": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          "menu_order": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100000
+          },
+          "template": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "featured_image": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "wp_update_page",
+      "dispatch": {
+        "method": "PATCH",
+        "route": "/pages/{id}"
+      },
+      "category": "content",
+      "description": "Update a WordPress page. Publishing/private status or editing an existing published/private page additionally requires admin key scope; publish/private also requires publish_pages.",
+      "requiredCapabilities": [
+        "edit_post:{id}",
+        "publish_pages for publish/private"
+      ],
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "category": "content"
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "content": {
+            "type": "string",
+            "maxLength": 1000000
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "pending",
+              "publish",
+              "private"
+            ]
+          },
+          "slug": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "parent": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          "menu_order": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100000
+          },
+          "template": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "featured_image": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false,
+        "minProperties": 2
+      }
+    },
+    {
+      "name": "wp_list_drafts",
+      "dispatch": {
+        "method": "GET",
+        "route": "/drafts"
+      },
+      "category": "content",
+      "description": "List visible draft posts and pages owned by the bound user unless edit-others capabilities grant broader access.",
+      "requiredCapabilities": [
+        "read",
+        "edit_posts and/or edit_pages"
+      ],
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "category": "content"
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "all",
+              "post",
+              "page"
+            ],
+            "default": "all"
+          },
+          "posts_per_page": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 20
+          },
+          "paged": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000,
+            "default": 1
+          },
+          "orderby": {
+            "type": "string",
+            "enum": [
+              "modified",
+              "date",
+              "title",
+              "id"
+            ]
+          },
+          "order": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ],
+            "default": "desc"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "wp_delete_draft",
+      "dispatch": {
+        "method": "DELETE",
+        "route": "/drafts/{id}"
+      },
+      "category": "content",
+      "description": "Move one draft post or page to Trash.",
+      "requiredCapabilities": [
+        "delete_post:{id}"
+      ],
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "openWorldHint": false,
+        "category": "content"
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "wp_list_media",
+      "dispatch": {
+        "method": "GET",
+        "route": "/media"
+      },
+      "category": "media",
+      "description": "List visible local media attachments.",
+      "requiredCapabilities": [
+        "read",
+        "read_post per non-public attachment"
+      ],
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "category": "media"
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "posts_per_page": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 20
+          },
+          "paged": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000,
+            "default": 1
+          },
+          "mime_type": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "search": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "orderby": {
+            "type": "string",
+            "enum": [
+              "date",
+              "modified",
+              "title",
+              "id"
+            ]
+          },
+          "order": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ]
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "wp_get_media",
+      "dispatch": {
+        "method": "GET",
+        "route": "/media/{id}"
+      },
+      "category": "media",
+      "description": "Get one visible local media attachment.",
+      "requiredCapabilities": [
+        "read_post:{id}"
+      ],
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "category": "media"
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "wp_upload_media_b64",
+      "dispatch": {
+        "method": "POST",
+        "route": "/media/from-base64"
+      },
+      "category": "media",
+      "description": "Upload one bounded local file from strict Base64 data.",
+      "requiredCapabilities": [
+        "upload_files"
+      ],
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "category": "media"
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 15728640
+          },
+          "filename": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "mime_type": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "alt": {
+            "type": "string",
+            "maxLength": 250
+          },
+          "caption": {
+            "type": "string",
+            "maxLength": 10000
+          }
+        },
+        "required": [
+          "data",
+          "filename"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "wp_list_categories",
+      "dispatch": {
+        "method": "GET",
+        "route": "/categories"
+      },
+      "category": "taxonomy",
+      "description": "List WordPress post categories.",
+      "requiredCapabilities": [
+        "read"
+      ],
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "category": "taxonomy"
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "per_page": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 50
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000,
+            "default": 1
+          },
+          "search": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "hide_empty": {
+            "type": "boolean",
+            "default": false
+          },
+          "orderby": {
+            "type": "string",
+            "enum": [
+              "name",
+              "slug",
+              "count",
+              "id"
+            ]
+          },
+          "order": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ]
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "wp_list_tags",
+      "dispatch": {
+        "method": "GET",
+        "route": "/tags"
+      },
+      "category": "taxonomy",
+      "description": "List WordPress post tags.",
+      "requiredCapabilities": [
+        "read"
+      ],
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "category": "taxonomy"
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "per_page": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 50
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000,
+            "default": 1
+          },
+          "search": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "hide_empty": {
+            "type": "boolean",
+            "default": false
+          },
+          "orderby": {
+            "type": "string",
+            "enum": [
+              "name",
+              "slug",
+              "count",
+              "id"
+            ]
+          },
+          "order": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ]
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "wp_create_term",
+      "dispatch": {
+        "method": "POST",
+        "route": "/terms"
+      },
+      "category": "taxonomy",
+      "description": "Create one category or tag.",
+      "requiredCapabilities": [
+        "selected taxonomy manage_terms"
+      ],
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "category": "taxonomy"
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "taxonomy": {
+            "type": "string",
+            "enum": [
+              "category",
+              "post_tag"
+            ]
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "slug": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 10000
+          }
+        },
+        "required": [
+          "taxonomy",
+          "name"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ]
+}
+

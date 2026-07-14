@@ -504,6 +504,8 @@ final class WporgArtifactPolicyTest extends TestCase {
 			preg_match_all( '#register_rest_route\s*\(\s*[^,]+,\s*([\'\"])([^\'\"]+)\1\s*,(.*?)\)\s*;#s', $contents, $registrations, PREG_SET_ORDER );
 			foreach ( $registrations as $registration ) {
 				preg_match_all( "/['\"]methods['\"]\s*=>\s*(WP_REST_Server::[A-Z]+|'[A-Z,]+'|\"[A-Z,]+\")/", $registration[3], $method_values );
+				preg_match_all( "/route_definition\s*\(\s*(WP_REST_Server::[A-Z]+|'[A-Z,]+'|\"[A-Z,]+\")/", $registration[3], $definition_values );
+				$method_values[1] = array_merge( $method_values[1], $definition_values[1] );
 				foreach ( $method_values[1] as $value ) {
 					$methods = isset( $constants[ $value ] ) ? $constants[ $value ] : explode( ',', trim( $value, "'\"" ) );
 					$routes[ $registration[2] ] = array_merge( $routes[ $registration[2] ] ?? array(), $methods );

@@ -7,12 +7,12 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 	public function __construct() { $this->pages = new Mcpwp_Pages(); }
 	public function register_routes() {
 		register_rest_route( $this->namespace, '/pages', array(
-			array( 'methods' => WP_REST_Server::READABLE, 'callback' => array( $this, 'list_pages' ), 'permission_callback' => array( $this, 'check_permission' ) ),
-			array( 'methods' => WP_REST_Server::CREATABLE, 'callback' => array( $this, 'create_page' ), 'permission_callback' => array( $this, 'check_permission' ) ),
+			$this->route_definition( WP_REST_Server::READABLE, 'list_pages', 'check_list_pages_permission', 'content', 'read', array( 'read', 'edit_pages/read_private_pages for non-public visibility' ), false, $this->content_list_args( true ) ),
+			$this->route_definition( WP_REST_Server::CREATABLE, 'create_page', 'check_create_page_permission', 'content', 'write', array( 'edit_pages', 'publish_pages for publish/private' ), true, $this->page_body_args() ),
 		) );
 		register_rest_route( $this->namespace, '/pages/(?P<id>\d+)', array(
-			array( 'methods' => WP_REST_Server::READABLE, 'callback' => array( $this, 'get_page' ), 'permission_callback' => array( $this, 'check_permission' ) ),
-			array( 'methods' => 'PUT,PATCH', 'callback' => array( $this, 'update_page' ), 'permission_callback' => array( $this, 'check_permission' ) ),
+			$this->route_definition( WP_REST_Server::READABLE, 'get_page', 'check_get_page_permission', 'content', 'read', array( 'read_post:{id}', 'post type must be page' ), false, $this->id_route_args() ),
+			$this->route_definition( 'PUT,PATCH', 'update_page', 'check_update_page_permission', 'content', 'write/dynamic-admin', array( 'edit_post:{id}', 'publish_pages for publish/private', 'post type must be page' ), true, $this->page_body_args( true ) ),
 		) );
 	}
 	public function list_pages( $request ) { return $this->respond( $this->pages->list_pages( $request->get_params() ) ); }

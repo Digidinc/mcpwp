@@ -17,62 +17,62 @@ class Mcpwp_MCP_Free_Tools extends Mcpwp_MCP_Tool_Registry {
 
 	public function get_tools() {
 		$descriptions = array(
-			'wp_site_info'              => 'Get local WordPress site information.',
-			'wp_list_posts'             => 'List WordPress posts.',
-			'wp_get_post'               => 'Get one WordPress post.',
-			'wp_create_post'            => 'Create a WordPress post.',
-			'wp_update_post'            => 'Update a WordPress post.',
-			'wp_list_pages'             => 'List WordPress pages.',
-			'wp_get_page'               => 'Get one WordPress page.',
-			'wp_create_page'            => 'Create a WordPress page.',
-			'wp_update_page'            => 'Update a WordPress page.',
-			'wp_list_drafts'            => 'List local draft posts and pages.',
-			'wp_delete_draft'           => 'Delete one local draft post or page.',
-			'wp_list_media'             => 'List media attachments.',
-			'wp_get_media'              => 'Get one media attachment.',
-			'wp_upload_media_b64'       => 'Upload media from base64 data.',
-			'wp_list_categories'        => 'List post categories.',
-			'wp_list_tags'              => 'List post tags.',
-			'wp_create_term'            => 'Create a category or tag.',
+			'wp_site_info'              => 'Get readable local WordPress site information.',
+			'wp_list_posts'             => 'List visible WordPress posts.',
+			'wp_get_post'               => 'Get one visible WordPress post.',
+			'wp_create_post'            => 'Create a WordPress post as draft or pending. Publish/private status additionally requires admin key scope and publish_posts.',
+			'wp_update_post'            => 'Update a WordPress post. Publishing/private status or editing an existing published/private post additionally requires admin key scope; publish/private also requires publish_posts.',
+			'wp_list_pages'             => 'List visible WordPress pages.',
+			'wp_get_page'               => 'Get one visible WordPress page.',
+			'wp_create_page'            => 'Create a WordPress page as draft or pending. Publish/private status additionally requires admin key scope and publish_pages.',
+			'wp_update_page'            => 'Update a WordPress page. Publishing/private status or editing an existing published/private page additionally requires admin key scope; publish/private also requires publish_pages.',
+			'wp_list_drafts'            => 'List visible draft posts and pages owned by the bound user unless edit-others capabilities grant broader access.',
+			'wp_delete_draft'           => 'Move one draft post or page to Trash.',
+			'wp_list_media'             => 'List visible local media attachments.',
+			'wp_get_media'              => 'Get one visible local media attachment.',
+			'wp_upload_media_b64'       => 'Upload one bounded local file from strict Base64 data.',
+			'wp_list_categories'        => 'List WordPress post categories.',
+			'wp_list_tags'              => 'List WordPress post tags.',
+			'wp_create_term'            => 'Create one category or tag.',
 		);
 
 		$tools = array();
 		$inventory = array_merge( $this->mcpwp_site_tool_names(), $this->mcpwp_content_tool_names(), $this->mcpwp_media_tool_names(), $this->mcpwp_taxonomy_tool_names() );
 		foreach ( $inventory as $name ) {
 			$description = $descriptions[ $name ];
-			$tools[] = $this->define_tool( $name, $description, $this->get_input_properties( $name ) );
+			$tools[] = $this->define_tool( $name, $description, $this->get_input_properties( $name ), $this->get_input_schema_options( $name ) );
 		}
 		return $tools;
 	}
 
 	private function get_input_properties( $name ) {
-		$id = array( 'id' => array( 'type' => 'integer', 'description' => 'Resource identifier.', 'required' => true ) );
+		$id = array( 'id' => array( 'type' => 'integer', 'minimum' => 1, 'maximum' => 2147483647, 'required' => true ) );
 		$list = array(
-			'posts_per_page' => array( 'type' => 'integer', 'description' => 'Maximum items to return.' ),
-			'paged'          => array( 'type' => 'integer', 'description' => 'One-based result page.' ),
-			'post_status'    => array( 'type' => 'string', 'description' => 'WordPress post status.' ),
-			'orderby'        => array( 'type' => 'string', 'description' => 'WordPress ordering field.' ),
-			'order'          => array( 'type' => 'string', 'description' => 'ASC or DESC.' ),
+			'posts_per_page' => array( 'type' => 'integer', 'minimum' => 1, 'maximum' => 100, 'default' => 20 ),
+			'paged'          => array( 'type' => 'integer', 'minimum' => 1, 'maximum' => 10000, 'default' => 1 ),
+			'post_status'    => array( 'type' => 'string', 'enum' => array( 'publish', 'draft', 'pending', 'private' ), 'default' => 'publish' ),
+			'orderby'        => array( 'type' => 'string', 'enum' => array( 'date', 'modified', 'title', 'id' ) ),
+			'order'          => array( 'type' => 'string', 'enum' => array( 'asc', 'desc' ) ),
 		);
 		$post = array(
-			'title'          => array( 'type' => 'string', 'description' => 'Post title.' ),
-			'content'        => array( 'type' => 'string', 'description' => 'Post content.' ),
-			'status'         => array( 'type' => 'string', 'description' => 'Post status.' ),
-			'excerpt'        => array( 'type' => 'string', 'description' => 'Post excerpt.' ),
-			'slug'           => array( 'type' => 'string', 'description' => 'Post slug.' ),
-			'categories'     => array( 'type' => 'array', 'description' => 'Category identifiers.' ),
-			'tags'           => array( 'type' => 'array', 'description' => 'Tag names.' ),
-			'featured_image' => array( 'type' => 'integer', 'description' => 'Attachment identifier.' ),
+			'title'          => array( 'type' => 'string', 'minLength' => 1, 'maxLength' => 200, 'required' => true ),
+			'content'        => array( 'type' => 'string', 'maxLength' => 1000000 ),
+			'status'         => array( 'type' => 'string', 'enum' => array( 'draft', 'pending', 'publish', 'private' ) ),
+			'excerpt'        => array( 'type' => 'string', 'maxLength' => 10000 ),
+			'slug'           => array( 'type' => 'string', 'minLength' => 1, 'maxLength' => 200 ),
+			'categories'     => array( 'type' => 'array', 'maxItems' => 100, 'uniqueItems' => true, 'items' => array( 'type' => 'integer', 'minimum' => 1, 'maximum' => 2147483647 ) ),
+			'tags'           => array( 'type' => 'array', 'maxItems' => 100, 'uniqueItems' => true, 'items' => array( 'type' => 'string', 'minLength' => 1, 'maxLength' => 200 ) ),
+			'featured_image' => array( 'type' => 'integer', 'minimum' => 0, 'maximum' => 2147483647 ),
 		);
 		$page = array(
-			'title'          => array( 'type' => 'string', 'description' => 'Page title.' ),
-			'content'        => array( 'type' => 'string', 'description' => 'Page content.' ),
-			'status'         => array( 'type' => 'string', 'description' => 'Page status.' ),
-			'slug'           => array( 'type' => 'string', 'description' => 'Page slug.' ),
-			'parent'         => array( 'type' => 'integer', 'description' => 'Parent page identifier.' ),
-			'menu_order'     => array( 'type' => 'integer', 'description' => 'Page sort order.' ),
-			'template'       => array( 'type' => 'string', 'description' => 'Installed page template.' ),
-			'featured_image' => array( 'type' => 'integer', 'description' => 'Attachment identifier.' ),
+			'title'          => array( 'type' => 'string', 'minLength' => 1, 'maxLength' => 200, 'required' => true ),
+			'content'        => array( 'type' => 'string', 'maxLength' => 1000000 ),
+			'status'         => array( 'type' => 'string', 'enum' => array( 'draft', 'pending', 'publish', 'private' ) ),
+			'slug'           => array( 'type' => 'string', 'minLength' => 1, 'maxLength' => 200 ),
+			'parent'         => array( 'type' => 'integer', 'minimum' => 0, 'maximum' => 2147483647 ),
+			'menu_order'     => array( 'type' => 'integer', 'minimum' => 0, 'maximum' => 100000 ),
+			'template'       => array( 'type' => 'string', 'minLength' => 1, 'maxLength' => 200 ),
+			'featured_image' => array( 'type' => 'integer', 'minimum' => 0, 'maximum' => 2147483647 ),
 		);
 		switch ( $name ) {
 			case 'wp_list_posts': return $list;
@@ -81,32 +81,48 @@ class Mcpwp_MCP_Free_Tools extends Mcpwp_MCP_Tool_Registry {
 			case 'wp_delete_draft':
 			case 'wp_get_media': return $id;
 			case 'wp_create_post': return $post;
-			case 'wp_update_post': return array_merge( $id, $post );
-			case 'wp_list_pages': return $list;
+			case 'wp_update_post': $post['title']['required'] = false; return array_merge( $id, $post );
+			case 'wp_list_pages': $list['orderby']['enum'][] = 'menu_order'; return $list;
 			case 'wp_create_page': return $page;
-			case 'wp_update_page': return array_merge( $id, $page );
+			case 'wp_update_page': $page['title']['required'] = false; return array_merge( $id, $page );
 			case 'wp_list_drafts':
-				return array( 'type' => array( 'type' => 'string', 'description' => 'post or page.' ), 'posts_per_page' => $list['posts_per_page'], 'orderby' => $list['orderby'], 'order' => $list['order'] );
+				return array( 'type' => array( 'type' => 'string', 'enum' => array( 'all', 'post', 'page' ), 'default' => 'all' ), 'posts_per_page' => $list['posts_per_page'], 'paged' => $list['paged'], 'orderby' => array( 'type' => 'string', 'enum' => array( 'modified', 'date', 'title', 'id' ) ), 'order' => array( 'type' => 'string', 'enum' => array( 'asc', 'desc' ), 'default' => 'desc' ) );
 			case 'wp_list_media':
-				return array( 'posts_per_page' => $list['posts_per_page'], 'paged' => $list['paged'], 'mime_type' => array( 'type' => 'string', 'description' => 'Media MIME type.' ), 'search' => array( 'type' => 'string', 'description' => 'Title search.' ), 'orderby' => $list['orderby'], 'order' => $list['order'] );
+				return array( 'posts_per_page' => $list['posts_per_page'], 'paged' => $list['paged'], 'mime_type' => array( 'type' => 'string', 'maxLength' => 100 ), 'search' => array( 'type' => 'string', 'maxLength' => 200 ), 'orderby' => $list['orderby'], 'order' => $list['order'] );
 			case 'wp_upload_media_b64':
 				return array(
-					'data' => array( 'type' => 'string', 'description' => 'Base64-encoded local file data.', 'required' => true ),
-					'filename' => array( 'type' => 'string', 'description' => 'Safe filename with a WordPress-allowed extension.', 'required' => true ),
-					'mime_type' => array( 'type' => 'string', 'description' => 'Expected MIME type.' ),
-					'title' => array( 'type' => 'string', 'description' => 'Attachment title.' ),
-					'alt' => array( 'type' => 'string', 'description' => 'Alternative text.' ),
-					'caption' => array( 'type' => 'string', 'description' => 'Attachment caption.' ),
+					'data' => array( 'type' => 'string', 'minLength' => 1, 'maxLength' => 15728640, 'required' => true ),
+					'filename' => array( 'type' => 'string', 'minLength' => 1, 'maxLength' => 255, 'required' => true ),
+					'mime_type' => array( 'type' => 'string', 'maxLength' => 100 ),
+					'title' => array( 'type' => 'string', 'minLength' => 1, 'maxLength' => 200 ),
+					'alt' => array( 'type' => 'string', 'maxLength' => 250 ),
+					'caption' => array( 'type' => 'string', 'maxLength' => 10000 ),
 				);
+			case 'wp_list_categories':
+			case 'wp_list_tags':
+				return array( 'per_page' => array( 'type' => 'integer', 'minimum' => 1, 'maximum' => 100, 'default' => 50 ), 'page' => array( 'type' => 'integer', 'minimum' => 1, 'maximum' => 10000, 'default' => 1 ), 'search' => array( 'type' => 'string', 'maxLength' => 200 ), 'hide_empty' => array( 'type' => 'boolean', 'default' => false ), 'orderby' => array( 'type' => 'string', 'enum' => array( 'name', 'slug', 'count', 'id' ) ), 'order' => array( 'type' => 'string', 'enum' => array( 'asc', 'desc' ) ) );
 			case 'wp_create_term':
 				return array(
-					'taxonomy' => array( 'type' => 'string', 'description' => 'category or post_tag.', 'required' => true ),
-					'name' => array( 'type' => 'string', 'description' => 'Term name.', 'required' => true ),
-					'slug' => array( 'type' => 'string', 'description' => 'Optional term slug.' ),
-					'description' => array( 'type' => 'string', 'description' => 'Optional term description.' ),
+					'taxonomy' => array( 'type' => 'string', 'enum' => array( 'category', 'post_tag' ), 'required' => true ),
+					'name' => array( 'type' => 'string', 'minLength' => 1, 'maxLength' => 200, 'required' => true ),
+					'slug' => array( 'type' => 'string', 'minLength' => 1, 'maxLength' => 200 ),
+					'description' => array( 'type' => 'string', 'maxLength' => 10000 ),
 				);
 			default: return array();
 		}
+	}
+
+	private function get_input_schema_options( $name ) { return in_array( $name, array( 'wp_update_post', 'wp_update_page' ), true ) ? array( 'minProperties' => 2 ) : array(); }
+
+	public function get_required_capabilities() {
+		return array(
+			'wp_site_info' => array( 'read' ), 'wp_list_posts' => array( 'read', 'edit_posts/read_private_posts for non-public visibility' ), 'wp_get_post' => array( 'read_post:{id}' ),
+			'wp_create_post' => array( 'edit_posts', 'publish_posts for publish/private', 'assign_terms when terms supplied' ), 'wp_update_post' => array( 'edit_post:{id}', 'publish_posts for publish/private', 'assign_terms when terms supplied' ),
+			'wp_list_pages' => array( 'read', 'edit_pages/read_private_pages for non-public visibility' ), 'wp_get_page' => array( 'read_post:{id}' ), 'wp_create_page' => array( 'edit_pages', 'publish_pages for publish/private' ), 'wp_update_page' => array( 'edit_post:{id}', 'publish_pages for publish/private' ),
+			'wp_list_drafts' => array( 'read', 'edit_posts and/or edit_pages' ), 'wp_delete_draft' => array( 'delete_post:{id}' ),
+			'wp_list_media' => array( 'read', 'read_post per non-public attachment' ), 'wp_get_media' => array( 'read_post:{id}' ), 'wp_upload_media_b64' => array( 'upload_files' ),
+			'wp_list_categories' => array( 'read' ), 'wp_list_tags' => array( 'read' ), 'wp_create_term' => array( 'selected taxonomy manage_terms' ),
+		);
 	}
 
 	public function get_tool_map() {

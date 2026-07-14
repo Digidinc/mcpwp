@@ -30,7 +30,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		register_rest_route(
 			$this->namespace,
 			'/mcp',
-			array( 'methods' => WP_REST_Server::CREATABLE, 'callback' => array( $this, 'handle_mcp' ), 'permission_callback' => array( $this, 'check_permission' ) )
+			$this->route_definition( WP_REST_Server::CREATABLE, 'handle_mcp', 'check_mcp_permission', 'site', 'read', array( 'read', 'nested route decides' ), true )
 		);
 	}
 

@@ -30,13 +30,13 @@ final class McpFreeToolsTest extends TestCase {
 			'wp_get_page' => array( 'id' ),
 			'wp_create_page' => array( 'title', 'content', 'status', 'slug', 'parent', 'menu_order', 'template', 'featured_image' ),
 			'wp_update_page' => array( 'id', 'title', 'content', 'status', 'slug', 'parent', 'menu_order', 'template', 'featured_image' ),
-			'wp_list_drafts' => array( 'type', 'posts_per_page', 'orderby', 'order' ),
+			'wp_list_drafts' => array( 'type', 'posts_per_page', 'paged', 'orderby', 'order' ),
 			'wp_delete_draft' => array( 'id' ),
 			'wp_list_media' => array( 'posts_per_page', 'paged', 'mime_type', 'search', 'orderby', 'order' ),
 			'wp_get_media' => array( 'id' ),
 			'wp_upload_media_b64' => array( 'data', 'filename', 'mime_type', 'title', 'alt', 'caption' ),
-			'wp_list_categories' => array(),
-			'wp_list_tags' => array(),
+			'wp_list_categories' => array( 'per_page', 'page', 'search', 'hide_empty', 'orderby', 'order' ),
+			'wp_list_tags' => array( 'per_page', 'page', 'search', 'hide_empty', 'orderby', 'order' ),
 			'wp_create_term' => array( 'taxonomy', 'name', 'slug', 'description' ),
 		);
 		foreach ( ( new Mcpwp_MCP_Free_Tools() )->get_tools() as $tool ) {
