@@ -18,6 +18,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	private $server_name;
 	private $registry;
 	private $api_key_header = '';
+	private $nested_rate_limit_credit = 0;
 
 	public function __construct() {
 		$this->server_version = defined( 'MCPWP_VERSION' ) ? MCPWP_VERSION : '1.0.0';
@@ -35,6 +36,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 
 	public function handle_mcp( $request ) {
 		$this->api_key_header = (string) $request->get_header( 'X-API-Key' );
+		$this->nested_rate_limit_credit = 1;
 		$body = $request->get_json_params();
 		if ( ! is_array( $body ) || empty( $body ) ) {
 			return $this->mcp_response( $this->jsonrpc_error( null, -32700, 'Parse error: invalid JSON-RPC request.' ) );
@@ -126,7 +128,10 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		foreach ( $arguments as $key => $value ) {
 			$request->set_param( $key, $value );
 		}
-		self::$is_internal_sub_request = true;
+		self::$is_internal_sub_request = $this->nested_rate_limit_credit > 0;
+		if ( self::$is_internal_sub_request ) {
+			$this->nested_rate_limit_credit--;
+		}
 		try {
 			$response = rest_do_request( $request );
 		} finally {

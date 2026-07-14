@@ -16,7 +16,10 @@ final class McpEndpointTest extends TestCase {
 		return ( new Mcpwp_REST_MCP() )->handle_mcp( $request )->get_data();
 	}
 	private function call_authenticated( $method, $params = array() ) {
-		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/mcp', array(), array( 'X-API-Key' => 'test-key' ), array( 'jsonrpc' => '2.0', 'id' => 7, 'method' => $method, 'params' => $params ) );
+		return $this->call_authenticated_body( array( 'jsonrpc' => '2.0', 'id' => 7, 'method' => $method, 'params' => $params ) );
+	}
+	private function call_authenticated_body( $body ) {
+		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/mcp', array(), array( 'X-API-Key' => 'test-key' ), $body );
 		$controller = new Mcpwp_REST_MCP();
 		$this->assertTrue( $controller->check_permission( $request ) );
 		return $controller->handle_mcp( $request )->get_data();
@@ -88,6 +91,28 @@ final class McpEndpointTest extends TestCase {
 		$this->assertSame( 1, $GLOBALS['_mcpwp_test_nested_permission_calls'], 'The nested REST permission callback must still run.' );
 		foreach ( $GLOBALS['mcpwp_test_transients'] as $window ) {
 			$this->assertSame( 1, $window['value']['count'], 'Outer plus nested MCP dispatch must consume exactly one rate-limit unit.' );
+		}
+	}
+	public function test_authenticated_jsonrpc_batch_consumes_one_rate_limit_unit_per_tool_call(): void {
+		$GLOBALS['mcpwp_test_options']['mcpwp_api_keys'] = array(
+			array( 'id' => 'rate-key', 'hash' => 'test-key', 'scopes' => array( 'read', 'write', 'admin' ), 'tool_categories' => array(), 'revoked_at' => null ),
+		);
+		$GLOBALS['mcpwp_test_options']['mcpwp_rate_limit_settings'] = array(
+			'enabled' => true, 'requests_per_minute' => 10, 'requests_per_hour' => 100, 'burst_limit' => 10, 'whitelist' => array(),
+		);
+		$this->reset_limiter_singleton();
+		$this->install_test_router();
+
+		$data = $this->call_authenticated_body( array(
+			array( 'jsonrpc' => '2.0', 'id' => 10, 'method' => 'tools/call', 'params' => array( 'name' => 'wp_site_info', 'arguments' => array() ) ),
+			array( 'jsonrpc' => '2.0', 'id' => 11, 'method' => 'tools/call', 'params' => array( 'name' => 'wp_site_info', 'arguments' => array() ) ),
+		) );
+
+		$this->assertCount( 2, $data );
+		$this->assertSame( array( 10, 11 ), array_column( $data, 'id' ) );
+		$this->assertSame( 2, $GLOBALS['_mcpwp_test_nested_permission_calls'], 'Every nested tool permission callback must still run.' );
+		foreach ( $GLOBALS['mcpwp_test_transients'] as $window ) {
+			$this->assertSame( 2, $window['value']['count'], 'A two-tool JSON-RPC batch must consume two total rate-limit units.' );
 		}
 	}
 	public function test_rest_error_response_becomes_jsonrpc_error(): void {

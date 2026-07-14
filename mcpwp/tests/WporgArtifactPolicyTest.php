@@ -101,6 +101,11 @@ final class WporgArtifactPolicyTest extends TestCase {
 		}
 	}
 
+	public function test_runtime_source_has_no_dynamic_tool_advertisement_mutations(): void {
+		$source = (string) file_get_contents( self::$plugin_dir . '/includes/mcp/class-mcpwp-mcp-free-tools.php' );
+		$this->assertDoesNotMatchRegularExpression( '/\$(?:inventory|descriptions|map)\s*\[[^\]]*\]\s*=/', $source );
+	}
+
 	public function test_rest_route_inventory_is_exactly_retained_surface(): void {
 		$GLOBALS['_mcpwp_test_registered_routes'] = array();
 		$controllers = array(
@@ -246,6 +251,13 @@ final class WporgArtifactPolicyTest extends TestCase {
 		$this->assertNotSame( 0, $zip['status'], $zip['output'] );
 	}
 
+	public function test_top_level_and_arbitrary_location_extensionless_source_files_are_rejected(): void {
+		$violations = array();
+		$this->scan_path( 'policy-probe', $violations );
+		$this->scan_path( 'runtime/custom/policy-probe', $violations );
+		$this->assertCount( 2, $violations );
+	}
+
 	public function test_statically_composed_fixed_and_wildcard_hosts_are_rejected(): void {
 		$probe = "<?php\n\$relay = 'relay-example.' . 'workers.dev';\n";
 		$this->assertNotEmpty( $this->scan_contents( 'assets/index.php', $probe ) );
@@ -253,6 +265,17 @@ final class WporgArtifactPolicyTest extends TestCase {
 
 	public function test_verifier_rejects_statically_composed_fixed_and_wildcard_hosts(): void {
 		$probe = "<?php\n\$relay = 'relay-example.' . 'workers.dev';\n";
+		$zip = $this->verify_mutated_zip( array( 'assets/index.php' => $probe ) );
+		$this->assertNotSame( 0, $zip['status'], $zip['output'] );
+	}
+
+	public function test_comment_separated_static_host_concatenation_is_rejected_in_source(): void {
+		$probe = "<?php\n\$relay = 'relay-example.' /* static join */ . 'workers.dev';\n";
+		$this->assertNotEmpty( $this->scan_contents( 'assets/index.php', $probe ) );
+	}
+
+	public function test_verifier_rejects_comment_separated_static_host_concatenation(): void {
+		$probe = "<?php\n\$relay = 'relay-example.' /* static join */ . 'workers.dev';\n";
 		$zip = $this->verify_mutated_zip( array( 'assets/index.php' => $probe ) );
 		$this->assertNotSame( 0, $zip['status'], $zip['output'] );
 	}
@@ -279,6 +302,26 @@ final class WporgArtifactPolicyTest extends TestCase {
 		$this->assertNotSame( 0, $advertised['status'], $advertised['output'] );
 	}
 
+	public function test_verifier_rejects_dynamic_inventory_and_description_advertisement(): void {
+		$source = (string) shell_exec( 'unzip -p ' . escapeshellarg( self::$zip_path ) . ' ' . escapeshellarg( 'mumega-mcp/includes/mcp/class-mcpwp-mcp-free-tools.php' ) );
+		$mutation = "\t\t\$inventory[] = 'wp_policy_probe';\n\t\t\$descriptions['wp_policy_probe'] = 'Policy probe.';";
+		$source = preg_replace( '/(\$inventory\s*=\s*array_merge\([^;]+;)/', "$1\n" . $mutation, $source, 1 );
+		$result = $this->verify_mutated_zip( array( 'includes/mcp/class-mcpwp-mcp-free-tools.php' => $source ) );
+		$this->assertNotSame( 0, $result['status'], $result['output'] );
+	}
+
+	public function test_verifier_rejects_dynamic_map_assignment_after_literal_map(): void {
+		$source = (string) shell_exec( 'unzip -p ' . escapeshellarg( self::$zip_path ) . ' ' . escapeshellarg( 'mumega-mcp/includes/mcp/class-mcpwp-mcp-free-tools.php' ) );
+		$source = str_replace( "public function get_tool_map() {\n\t\treturn array(", "public function get_tool_map() {\n\t\t\$map = array(", $source );
+		$source = str_replace(
+			"\t\t);\n\t}\n\n\tpublic function get_tool_categories()",
+			"\t\t);\n\t\t\$map['wp_policy_probe'] = array( 'method' => 'GET', 'route' => '/site-info' );\n\t\treturn \$map;\n\t}\n\n\tpublic function get_tool_categories()",
+			$source
+		);
+		$result = $this->verify_mutated_zip( array( 'includes/mcp/class-mcpwp-mcp-free-tools.php' => $source ) );
+		$this->assertNotSame( 0, $result['status'], $result['output'] );
+	}
+
 	public function test_verifier_rejects_short_array_map_alias(): void {
 		$map_source = (string) shell_exec( 'unzip -p ' . escapeshellarg( self::$zip_path ) . ' ' . escapeshellarg( 'mumega-mcp/includes/mcp/class-mcpwp-mcp-free-tools.php' ) );
 		$map_drift = str_replace(
@@ -300,6 +343,18 @@ final class WporgArtifactPolicyTest extends TestCase {
 	public function test_verifier_rejects_cleanup_table_suffix_near_miss(): void {
 		$uninstall = (string) shell_exec( 'unzip -p ' . escapeshellarg( self::$zip_path ) . ' ' . escapeshellarg( 'mumega-mcp/uninstall.php' ) );
 		$uninstall .= "\n<?php \$wpdb->query( \"DROP TABLE IF EXISTS {\$wpdb->prefix}mcpwp_feedback_backup\" );\n";
+		$result = $this->verify_mutated_zip( array( 'uninstall.php' => $uninstall ) );
+		$this->assertNotSame( 0, $result['status'], $result['output'] );
+	}
+
+	public function test_cleanup_mask_does_not_hide_comma_separated_near_miss_before_allowed_table(): void {
+		$contents = 'DROP TABLE IF EXISTS {$wpdb->prefix}mcpwp_feedback_backup, {$wpdb->prefix}mcpwp_feedback;';
+		$this->assertNotEmpty( $this->scan_contents( 'uninstall.php', $contents ) );
+	}
+
+	public function test_verifier_rejects_comma_separated_cleanup_near_miss_before_allowed_table(): void {
+		$uninstall = (string) shell_exec( 'unzip -p ' . escapeshellarg( self::$zip_path ) . ' ' . escapeshellarg( 'mumega-mcp/uninstall.php' ) );
+		$uninstall .= "\n<?php \$wpdb->query( \"DROP TABLE IF EXISTS {\$wpdb->prefix}mcpwp_feedback_backup, {\$wpdb->prefix}mcpwp_feedback\" );\n";
 		$result = $this->verify_mutated_zip( array( 'uninstall.php' => $uninstall ) );
 		$this->assertNotSame( 0, $result['status'], $result['output'] );
 	}
@@ -473,7 +528,8 @@ final class WporgArtifactPolicyTest extends TestCase {
 		$dev_path = 1 === preg_match( '#^(?:tests|scripts|vendor|docs|node_modules)/#', $relative );
 		$allowed = array_map( 'strtolower', self::$policy['allowed_runtime_files'] );
 		$source_artwork = array_map( 'strtolower', self::$policy['source_only_artwork_files'] );
-		$source_candidate = ! $dev_path && ( in_array( $relative, $allowed, true ) || in_array( $relative, $source_artwork, true ) || 1 === preg_match( '#^(?:admin|includes|languages|assets)/#', $relative ) || 1 === preg_match( '/\.(?:php|js|css|pot|txt)$/', $relative ) );
+		$extensionless = false === strpos( $basename, '.' );
+		$source_candidate = ! $dev_path && ( $extensionless || in_array( $relative, $allowed, true ) || in_array( $relative, $source_artwork, true ) || 1 === preg_match( '#^(?:admin|includes|languages|assets)/#', $relative ) || 1 === preg_match( '/\.(?:php|js|css|pot|txt)$/', $relative ) );
 		if ( $is_file && ( $is_zip || $source_candidate ) ) {
 			if ( ! $is_zip ) { $allowed = array_merge( $allowed, $source_artwork ); }
 			if ( ! in_array( $relative, $allowed, true ) ) { $violations[] = 'unexpected runtime file: ' . $path; }
@@ -507,14 +563,15 @@ final class WporgArtifactPolicyTest extends TestCase {
 			if ( 'uninstall.php' === $relative ) { $functions .= '|delete_option|delete_transient'; }
 			$contents = preg_replace( '/\b(?:' . $functions . ')\s*\(\s*([\'\"])' . $escaped . '\1\s*\)/i', '__allowed_cleanup__', $contents );
 			if ( 'uninstall.php' === $relative ) {
-				$contents = preg_replace( '/DROP\s+TABLE\s+IF\s+EXISTS[^;\n]*' . $escaped . '(?![A-Za-z0-9_])/i', '__allowed_drop__', $contents );
+				$contents = preg_replace( '/DROP\s+TABLE\s+IF\s+EXISTS\s+(?:\{\$wpdb->prefix\})?' . $escaped . '(?=\s*(?:[\"\';\)]|$))/i', '__allowed_drop__', $contents );
 			}
 		}
 		return $contents;
 	}
 
 	private function normalize_static_string_expressions( $contents ) {
-		$pattern = '/([\'\"])([^\'\"\r\n]*)\1\s*\.\s*([\'\"])([^\'\"\r\n]*)\3/';
+		$comment = '(?:\/\*[^*]*(?:\*(?!\/)[^*]*)*\*\/\s*)?';
+		$pattern = '/([\'\"])([^\'\"\r\n]*)\1\s*' . $comment . '\.\s*' . $comment . '([\'\"])([^\'\"\r\n]*)\3/';
 		do {
 			$previous = $contents;
 			$contents = preg_replace_callback(

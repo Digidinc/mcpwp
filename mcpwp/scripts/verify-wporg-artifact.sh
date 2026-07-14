@@ -200,8 +200,9 @@ def mask_allowed_cleanup(relative, contents):
             flags=re.IGNORECASE,
         )
         if relative == "uninstall.php":
+            prefix = r"(?:\{\$wpdb->prefix\})?"
             contents = re.sub(
-                rf"DROP\s+TABLE\s+IF\s+EXISTS[^;\n]*{re.escape(token)}(?![A-Za-z0-9_])",
+                rf"DROP\s+TABLE\s+IF\s+EXISTS\s+{prefix}{re.escape(token)}(?=\s*(?:[\"';)]|$))",
                 "__allowed_drop__",
                 contents,
                 flags=re.IGNORECASE,
@@ -210,7 +211,8 @@ def mask_allowed_cleanup(relative, contents):
 
 
 def normalize_static_string_expressions(contents):
-    pattern = re.compile(r"(['\"])([^'\"\r\n]*)\1\s*\.\s*(['\"])([^'\"\r\n]*)\3")
+    comment = r"(?:/\*[^*]*(?:\*(?!/)[^*]*)*\*/\s*)?"
+    pattern = re.compile(r"(['\"])([^'\"\r\n]*)\1\s*" + comment + r"\.\s*" + comment + r"(['\"])([^'\"\r\n]*)\3")
     while True:
         normalized = pattern.sub(lambda match: "'" + match.group(2) + match.group(4) + "'", contents)
         if normalized == contents:
@@ -394,6 +396,8 @@ with archive:
 
     tool_source_name = f"{slug}/includes/mcp/class-mcpwp-mcp-free-tools.php"
     tool_source = archive.read(tool_source_name).decode("utf-8", errors="strict")
+    if re.search(r"\$(?:inventory|descriptions|map)\s*\[[^\]]*\]\s*=", tool_source):
+        fail("dynamic MCP advertisement", "tool inventories and maps must be literal and immutable")
     tool_matches = re.findall(
         r"'(wp_[a-z0-9_]+)'\s*=>\s*(?:array\s*\(|\[)\s*'method'\s*=>\s*'([A-Z]+)'\s*,\s*'route'\s*=>\s*'([^']+)'",
         tool_source,

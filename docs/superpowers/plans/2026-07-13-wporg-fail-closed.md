@@ -77,3 +77,26 @@
 - [ ] Run full PHPUnit, PHP 7.4 syntax, deterministic build twice with hash comparison, exact verifier, and `git diff --check`.
 - [ ] Append exact outcomes to the Task 2 report.
 - [ ] Commit all scoped tracked changes without pushing.
+
+### Task 5: Final Closure — Batch Credits and Parser Evasion
+
+**Files:**
+- Modify: `mcpwp/tests/McpEndpointTest.php`
+- Modify: `mcpwp/tests/WporgArtifactPolicyTest.php`
+- Modify: `mcpwp/includes/api/class-mcpwp-rest-mcp.php`
+- Modify: `mcpwp/includes/traits/trait-mcpwp-api-auth.php`
+- Modify: `mcpwp/scripts/verify-wporg-artifact.sh`
+- Modify: `.superpowers/sdd/task-2-acceptance-oracle.md`
+- Modify: `.superpowers/sdd/task-2-report.md`
+
+**Interfaces:**
+- Consumes: authenticated JSON-RPC single/batch requests, the shared exact policy fixture, and the retained runtime allowlist.
+- Produces: one outer rate-limit credit consumed by the first nested tool and one unit per additional batch tool, plus fail-closed parsing of dynamic advertisements, cleanup expressions, comment-separated hosts, and extensionless paths.
+
+- [ ] Add single-call and two-tool JSON-RPC batch regressions that execute real nested permission callbacks and assert limiter counts of one and two respectively.
+- [ ] Run `McpEndpointTest.php`; expect the batch count to remain one because every tool call currently creates a fresh bypass marker.
+- [ ] Add ZIP mutations for `$inventory[]`/`$descriptions[...]` dynamic tool advertisements, comma-separated cleanup-table near misses, comment-separated literal hosts, and top-level/nested extensionless runtime files; add matching source-scanner assertions.
+- [ ] Run `WporgArtifactPolicyTest.php`; expect the new evasions to be accepted and fail their assertions.
+- [ ] Replace the per-tool boolean bypass with an outer-request credit consumed only by the first nested tool, deny dynamic advertisement mutation, constrain cleanup masking to the exact table expression, fold comments only between literal concatenation tokens, and treat every non-dev file path as an inventory candidate.
+- [ ] Update the ignored Task 2 oracle to exactly 17 MCP tools, multipart REST-only, and metadata-only logging without request/response storage or redaction claims; keep the tracked plan and JSON fixture aligned.
+- [ ] Run focused and full GREEN verification, PHP 7.4 lint, two deterministic builds, the exact verifier, and `git diff --check`; refresh report counts and commit without pushing.
