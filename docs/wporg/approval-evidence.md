@@ -17,7 +17,7 @@ This evidence does **not** by itself authorize upload. The SHA-pinned approval w
 | File | `mcpwp/scripts/mumega-mcp-3.4.3.zip` |
 | Installed directory/main file | `mumega-mcp/mumega-mcp.php` |
 | Plugin version | `3.4.3` |
-| SHA-256 | `e9c84443c7c496e1b4ea4f06a75e3db4908273fb8d82e2ff8338a2203b29c7c0` |
+| Candidate SHA-256 | `e9c84443c7c496e1b4ea4f06a75e3db4908273fb8d82e2ff8338a2203b29c7c0` |
 | Size | 85,364 bytes |
 | ZIP entries | 62 sorted regular files under one `mumega-mcp/` root |
 | Manifest | `docs/wporg/mumega-mcp-manifest.txt` |
