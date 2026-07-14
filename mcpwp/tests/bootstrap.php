@@ -52,12 +52,19 @@ class Mcpwp_Test_Role
     {
         $this->capabilities[ $capability ] = (bool) $grant;
     }
+
+    public function remove_cap($capability)
+    {
+        $GLOBALS['mcpwp_test_removed_caps'][] = (string) $capability;
+        unset($this->capabilities[ $capability ]);
+    }
 }
 
 class Mcpwp_Test_Wpdb
 {
     public $prefix = 'wp_';
     public $inserted = array();
+    public $queries = array();
 
     public function get_charset_collate()
     {
@@ -68,6 +75,12 @@ class Mcpwp_Test_Wpdb
     {
         $this->inserted[] = array( 'table' => $table, 'data' => $data, 'format' => $format );
         return 1;
+    }
+
+    public function query($query)
+    {
+        $this->queries[] = (string) $query;
+        return true;
     }
 }
 
@@ -443,9 +456,18 @@ function add_role($name, $display_name, $capabilities = array())
     return $GLOBALS['mcpwp_test_roles'][ $name ];
 }
 
+function remove_role($name)
+{
+    $GLOBALS['mcpwp_test_removed_roles'][] = (string) $name;
+    unset($GLOBALS['mcpwp_test_roles'][ $name ]);
+}
+
 function wp_clear_scheduled_hook($hook)
 {
     $GLOBALS['mcpwp_test_cleared_hooks'][] = $hook;
+    if (isset($GLOBALS['mcpwp_test_scheduled_hooks'])) {
+        unset($GLOBALS['mcpwp_test_scheduled_hooks'][ $hook ]);
+    }
     return 1;
 }
 
@@ -584,6 +606,7 @@ function is_multisite()
 
 function get_sites($args = array())
 {
+    $GLOBALS['mcpwp_test_get_sites_args'][] = $args;
     return isset($GLOBALS['mcpwp_test_site_ids']) ? $GLOBALS['mcpwp_test_site_ids'] : array();
 }
 

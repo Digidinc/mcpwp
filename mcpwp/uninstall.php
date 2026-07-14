@@ -41,11 +41,18 @@ $mcpwp_uninstall_site = static function () {
 	$wpdb->query( "DROP TABLE IF EXISTS {$wpdb->prefix}mcpwp_webhooks" );
 	$wpdb->query( "DROP TABLE IF EXISTS {$wpdb->prefix}mcpwp_webhook_logs" );
 	$wpdb->query( "DROP TABLE IF EXISTS {$wpdb->prefix}mcpwp_feedback" );
+
+	// Remove only the role and administrator capability owned by this plugin.
+	remove_role( 'mcpwp_api_agent' );
+	$mcpwp_administrator_role = get_role( 'administrator' );
+	if ( $mcpwp_administrator_role ) {
+		$mcpwp_administrator_role->remove_cap( 'mcpwp_manage_settings' );
+	}
 };
 
 if ( is_multisite() ) {
-	foreach ( get_sites( array( 'fields' => 'ids' ) ) as $blog_id ) {
-		switch_to_blog( $blog_id );
+	foreach ( get_sites( array( 'fields' => 'ids', 'number' => 0 ) ) as $mcpwp_site_id ) {
+		switch_to_blog( $mcpwp_site_id );
 		$mcpwp_uninstall_site();
 		restore_current_blog();
 	}

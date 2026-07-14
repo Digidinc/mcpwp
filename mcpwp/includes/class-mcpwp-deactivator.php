@@ -5,8 +5,8 @@ if ( ! defined( 'ABSPATH' ) ) { exit; }
 class Mcpwp_Deactivator {
 	public static function deactivate( $network_wide = false ) {
 		if ( $network_wide && is_multisite() && function_exists( 'get_sites' ) ) {
-			foreach ( get_sites( array( 'fields' => 'ids' ) ) as $blog_id ) {
-				switch_to_blog( $blog_id );
+			foreach ( get_sites( array( 'fields' => 'ids', 'number' => 0 ) ) as $mcpwp_site_id ) {
+				switch_to_blog( $mcpwp_site_id );
 				self::clear_site_hooks();
 				restore_current_blog();
 			}
