@@ -1,9 +1,22 @@
 <?php
-/** Retained compatibility migration. @package mumcp */
+/**
+ * Retained compatibility migration routines.
+ *
+ * @package MCPWP
+ */
+
 if ( ! defined( 'ABSPATH' ) ) {
 	exit; }
 
+/**
+ * Migrate retained settings and API keys from legacy storage.
+ */
 class Mcpwp_Migrate {
+	/**
+	 * Run retained legacy migrations for the authenticated owner.
+	 *
+	 * @return void
+	 */
 	public static function run() {
 		$owner_id = self::migration_owner_id();
 		if ( $owner_id < 1 ) {
@@ -22,15 +35,26 @@ class Mcpwp_Migrate {
 		}
 		update_option( 'mcpwp_migrated_from_spai', true, false );
 	}
+	/**
+	 * Bind legacy migration to the current administrator.
+	 *
+	 * @param int $owner_id Proposed WordPress user ID.
+	 * @return bool True when the owner is valid and migration ran.
+	 */
 	public static function setup_owner( $owner_id ) {
 		$owner_id = is_int( $owner_id ) ? $owner_id : 0;
-		if ( $owner_id < 1 || $owner_id !== get_current_user_id() || ! get_userdata( $owner_id ) || ! current_user_can( 'manage_options' ) || ! current_user_can( 'mcpwp_manage_settings' ) ) {
+		if ( $owner_id < 1 || get_current_user_id() !== $owner_id || ! get_userdata( $owner_id ) || ! current_user_can( 'manage_options' ) || ! current_user_can( 'mcpwp_manage_settings' ) ) {
 			return false; }
 		update_option( 'mcpwp_legacy_migration_owner_id', $owner_id, false );
 		self::repair_unbound_key_owners( $owner_id );
 		self::run();
 		return true;
 	}
+	/**
+	 * Resolve the authorized migration owner for the current request.
+	 *
+	 * @return int Valid WordPress user ID, or zero when unavailable.
+	 */
 	private static function migration_owner_id() {
 		$current = get_current_user_id();
 		if ( $current < 1 || ! get_userdata( $current ) || ! current_user_can( 'manage_options' ) || ! current_user_can( 'mcpwp_manage_settings' ) ) {
@@ -41,6 +65,12 @@ class Mcpwp_Migrate {
 		update_option( 'mcpwp_legacy_migration_owner_id', $current, false );
 		return $current;
 	}
+	/**
+	 * Assign an authorized owner to legacy unbound key records.
+	 *
+	 * @param int $owner_id WordPress user ID to assign.
+	 * @return void
+	 */
 	private static function repair_unbound_key_owners( $owner_id ) {
 		$records = get_option( 'mcpwp_api_keys', false );
 		if ( ! is_array( $records ) ) {
@@ -56,6 +86,12 @@ class Mcpwp_Migrate {
 		if ( $changed ) {
 			update_option( 'mcpwp_api_keys', $records, false ); }
 	}
+	/**
+	 * Copy legacy scoped key records when the current store is absent.
+	 *
+	 * @param int $owner_id WordPress user ID assigned to copied records.
+	 * @return void
+	 */
 	private static function copy_legacy_keys_if_empty( $owner_id ) {
 		if ( false !== get_option( 'mcpwp_api_keys', false ) ) {
 			return; }
@@ -82,6 +118,13 @@ class Mcpwp_Migrate {
 		}
 		update_option( 'mcpwp_api_keys', $records, false );
 	}
+	/**
+	 * Copy a legacy option only when the target option is absent.
+	 *
+	 * @param string $from Legacy option name.
+	 * @param string $to   Current option name.
+	 * @return void
+	 */
 	private static function copy_if_empty( $from, $to ) {
 		if ( false !== get_option( $to, false ) ) {
 			return; }

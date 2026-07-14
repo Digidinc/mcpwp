@@ -1,5 +1,10 @@
 <?php
-/** Multisite-aware plugin-owned data cleanup. @package mumcp */
+/**
+ * Multisite-aware cleanup of plugin-owned data.
+ *
+ * @package MCPWP
+ */
+
 if ( ! defined( 'WP_UNINSTALL_PLUGIN' ) ) {
 	exit; }
 

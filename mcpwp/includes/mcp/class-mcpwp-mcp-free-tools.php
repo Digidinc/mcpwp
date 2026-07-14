@@ -9,12 +9,20 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
+/**
+ * Define the exact retained MCP tool catalog.
+ */
 class Mcpwp_MCP_Free_Tools extends Mcpwp_MCP_Tool_Registry {
 	use Mcpwp_Free_Tools_Site_Trait;
 	use Mcpwp_Free_Tools_Content_Trait;
 	use Mcpwp_Free_Tools_Media_Trait;
 	use Mcpwp_Free_Tools_Ops_Trait;
 
+	/**
+	 * Build the exact retained MCP tool definitions.
+	 *
+	 * @return array<int,array<string,mixed>> Tool definitions.
+	 */
 	public function get_tools() {
 		$descriptions = array(
 			'wp_site_info'        => 'Get readable local WordPress site information.',
@@ -45,6 +53,12 @@ class Mcpwp_MCP_Free_Tools extends Mcpwp_MCP_Tool_Registry {
 		return $tools;
 	}
 
+	/**
+	 * Get input-property schemas for one retained tool.
+	 *
+	 * @param string $name Tool name.
+	 * @return array<string,mixed> Input-property schemas.
+	 */
 	private function get_input_properties( $name ) {
 		$id   = array(
 			'id' => array(
@@ -319,9 +333,20 @@ class Mcpwp_MCP_Free_Tools extends Mcpwp_MCP_Tool_Registry {
 		}
 	}
 
+	/**
+	 * Get additional input-schema constraints for one tool.
+	 *
+	 * @param string $name Tool name.
+	 * @return array<string,int> Additional schema constraints.
+	 */
 	private function get_input_schema_options( $name ) {
 		return in_array( $name, array( 'wp_update_post', 'wp_update_page' ), true ) ? array( 'minProperties' => 2 ) : array(); }
 
+	/**
+	 * Get human-readable WordPress capability requirements by tool.
+	 *
+	 * @return array<string,string[]> Capability requirements by tool.
+	 */
 	public function get_required_capabilities() {
 		return array(
 			'wp_site_info'        => array( 'read' ),
@@ -344,6 +369,11 @@ class Mcpwp_MCP_Free_Tools extends Mcpwp_MCP_Tool_Registry {
 		);
 	}
 
+	/**
+	 * Get the exact retained tool-to-route map.
+	 *
+	 * @return array<string,array<string,string>> Tool route mappings.
+	 */
 	public function get_tool_map() {
 		return array(
 			'wp_site_info'        => array(
@@ -417,6 +447,11 @@ class Mcpwp_MCP_Free_Tools extends Mcpwp_MCP_Tool_Registry {
 		);
 	}
 
+	/**
+	 * Classify each retained tool by policy category.
+	 *
+	 * @return array<string,string> Tool category mappings.
+	 */
 	public function get_tool_categories() {
 		$categories = array();
 		foreach ( array_keys( $this->get_tool_map() ) as $name ) {
@@ -433,6 +468,11 @@ class Mcpwp_MCP_Free_Tools extends Mcpwp_MCP_Tool_Registry {
 		return $categories;
 	}
 
+	/**
+	 * Get retained tools that can delete WordPress data.
+	 *
+	 * @return string[] Destructive tool names.
+	 */
 	protected function get_destructive_tools() {
 		return array( 'wp_delete_draft' );
 	}

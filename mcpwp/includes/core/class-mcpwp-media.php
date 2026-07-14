@@ -60,7 +60,7 @@ class Mcpwp_Media {
 		$file['name'] = $policy['filename'];
 		$file['type'] = $policy['type'];
 
-		// Upload the file
+		// Upload the file.
 		$upload = wp_handle_upload(
 			$file,
 			array( 'test_form' => false )
@@ -74,7 +74,7 @@ class Mcpwp_Media {
 			);
 		}
 
-		// Create attachment
+		// Create the attachment.
 		$attachment = array(
 			'post_mime_type' => $upload['type'],
 			'post_title'     => isset( $args['title'] ) ? sanitize_text_field( $args['title'] ) : sanitize_file_name( pathinfo( $file['name'], PATHINFO_FILENAME ) ),
@@ -96,6 +96,14 @@ class Mcpwp_Media {
 		return $this->format_attachment( $attachment_id );
 	}
 
+	/**
+	 * Validate a local upload path, filename, extension, and detected MIME type.
+	 *
+	 * @param string $path              Local temporary file path.
+	 * @param string $original_filename Client-supplied filename.
+	 * @param string $supplied_mime     Optional client-supplied MIME type.
+	 * @return array<string,string>|WP_Error Normalized file data or validation error.
+	 */
 	private function validate_local_media_file( $path, $original_filename, $supplied_mime = '' ) {
 		$original_filename = (string) $original_filename;
 		$filename          = sanitize_file_name( $original_filename );
@@ -118,19 +126,27 @@ class Mcpwp_Media {
 		);
 	}
 
+	/**
+	 * Generate metadata and persist optional attachment text fields.
+	 *
+	 * @param int                 $attachment_id Attachment post ID.
+	 * @param string              $file          Stored file path.
+	 * @param array<string,mixed> $args          Optional attachment text fields.
+	 * @return true|WP_Error True on success or an attachment-cleanup error.
+	 */
 	private function finalize_attachment( $attachment_id, $file, $args ) {
 		$metadata = wp_generate_attachment_metadata( $attachment_id, $file );
 		if ( is_wp_error( $metadata ) ) {
 			return $this->discard_attachment( $attachment_id, $file, 'attachment_metadata_failed', __( 'WordPress could not create attachment metadata.', 'mumega-mcp' ) ); }
 		if ( ! empty( $metadata ) ) {
 			$updated = wp_update_attachment_metadata( $attachment_id, $metadata );
-			if ( false === $updated && $metadata !== wp_get_attachment_metadata( $attachment_id ) ) {
+			if ( false === $updated && wp_get_attachment_metadata( $attachment_id ) !== $metadata ) {
 				return $this->discard_attachment( $attachment_id, $file ); }
 		}
 		if ( ! empty( $args['alt'] ) ) {
 			$alt     = sanitize_text_field( $args['alt'] );
 			$updated = update_post_meta( $attachment_id, '_wp_attachment_image_alt', $alt );
-			if ( false === $updated && $alt !== get_post_meta( $attachment_id, '_wp_attachment_image_alt', true ) ) {
+			if ( false === $updated && get_post_meta( $attachment_id, '_wp_attachment_image_alt', true ) !== $alt ) {
 				return $this->discard_attachment( $attachment_id, $file ); }
 		}
 		if ( ! empty( $args['caption'] ) ) {
@@ -149,6 +165,15 @@ class Mcpwp_Media {
 		return true;
 	}
 
+	/**
+	 * Remove a failed attachment and its stored file.
+	 *
+	 * @param int    $attachment_id Attachment post ID.
+	 * @param string $file          Stored file path.
+	 * @param string $code          Error code.
+	 * @param string $message       Optional public error message.
+	 * @return WP_Error Attachment-cleanup error response.
+	 */
 	private function discard_attachment( $attachment_id, $file, $code = 'attachment_write_failed', $message = '' ) {
 		wp_delete_attachment( $attachment_id, true );
 		wp_delete_file( $file );
@@ -363,12 +388,12 @@ class Mcpwp_Media {
 			'order'          => 1 === $order ? 'ASC' : 'DESC',
 		);
 
-		// Filter by mime type
+		// Filter by MIME type.
 		if ( ! empty( $args['mime_type'] ) ) {
 			$query_args['post_mime_type'] = sanitize_mime_type( $args['mime_type'] );
 		}
 
-		// Search by title/alt
+		// Search by title or alternative text.
 		if ( ! empty( $args['search'] ) ) {
 			$query_args['s'] = sanitize_text_field( $args['search'] );
 		}
@@ -424,7 +449,7 @@ class Mcpwp_Media {
 			'date'      => $attachment->post_date,
 		);
 
-		// Add image sizes if available
+		// Add image sizes when available.
 		if ( $metadata && ! empty( $metadata['width'] ) ) {
 			$data['width']  = $metadata['width'];
 			$data['height'] = $metadata['height'];

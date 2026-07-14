@@ -1,9 +1,23 @@
 <?php
-/** Minimal local activity logging. @package mumcp */
+/**
+ * Minimal local activity logging.
+ *
+ * @package MCPWP
+ */
+
 if ( ! defined( 'ABSPATH' ) ) {
 	exit; }
 
 trait Mcpwp_Logging {
+	/**
+	 * Store one local MCP activity metadata row when logging is enabled.
+	 *
+	 * @param string $action      Tool or operation name.
+	 * @param int    $status_code Resulting status code.
+	 * @param int    $duration_ms Operation duration in milliseconds.
+	 * @param string $api_key_id  Scoped API-key identifier.
+	 * @return void
+	 */
 	protected function log_activity( $action, $status_code, $duration_ms, $api_key_id ) {
 		$settings = get_option( 'mcpwp_settings', array() );
 		if ( empty( $settings['enable_logging'] ) ) {
@@ -22,6 +36,12 @@ trait Mcpwp_Logging {
 		);
 	}
 
+	/**
+	 * Delete local activity rows older than a retention period.
+	 *
+	 * @param int $days Retention period in days.
+	 * @return int|false Number of deleted rows, or false on failure.
+	 */
 	public function clean_old_logs( $days = 30 ) {
 		global $wpdb;
 		$table  = $wpdb->prefix . 'mcpwp_activity_log';
@@ -29,6 +49,12 @@ trait Mcpwp_Logging {
 		return $wpdb->query( $wpdb->prepare( "DELETE FROM {$table} WHERE created_at < %s", $cutoff ) );
 	}
 
+	/**
+	 * Get recent local activity metadata rows.
+	 *
+	 * @param int $limit Maximum rows to return.
+	 * @return array<int,array<string,mixed>>|null Activity rows, or null on failure.
+	 */
 	public function get_recent_activity( $limit = 50 ) {
 		global $wpdb;
 		$table = $wpdb->prefix . 'mcpwp_activity_log';

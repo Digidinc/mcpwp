@@ -62,7 +62,14 @@ trait Mcpwp_Sanitization {
 		return $data;
 	}
 
-	/** @return true|WP_Error */
+	/**
+	 * Validate one value against a strict property schema.
+	 *
+	 * @param mixed               $value Value to validate.
+	 * @param array<string,mixed> $rules Property validation rules.
+	 * @param string              $name  Property name used in errors.
+	 * @return true|WP_Error True when valid or a validation error.
+	 */
 	protected function validate_strict_value( $value, $rules, $name ) {
 		$type = isset( $rules['type'] ) ? $rules['type'] : null;
 		if ( 'string' === $type ) {
@@ -118,6 +125,12 @@ trait Mcpwp_Sanitization {
 		return $this->invalid_parameter( $name );
 	}
 
+	/**
+	 * Validate retained content against safe post HTML policy.
+	 *
+	 * @param string $html Submitted HTML.
+	 * @return true|WP_Error True when safe or a validation error.
+	 */
 	protected function validate_safe_html( $html ) {
 		if ( false !== strpos( $html, '<?' ) || $this->contains_wrapper_html_tags( $html ) || wp_kses_post( $html ) !== $html ) {
 			return new WP_Error( 'unsafe_html', __( 'The content contains unsafe HTML.', 'mumega-mcp' ), array( 'status' => 400 ) );
@@ -125,6 +138,12 @@ trait Mcpwp_Sanitization {
 		return true;
 	}
 
+	/**
+	 * Check whether a page template is default or exposed by the active theme.
+	 *
+	 * @param string $template Template identifier.
+	 * @return bool True when the template is selectable.
+	 */
 	protected function is_valid_page_template( $template ) {
 		if ( 'default' === $template ) {
 			return true; }
@@ -134,6 +153,12 @@ trait Mcpwp_Sanitization {
 		return is_array( $templates ) && array_key_exists( $template, $templates );
 	}
 
+	/**
+	 * Measure nested array depth for complexity limits.
+	 *
+	 * @param mixed $value Value to measure.
+	 * @return int Nested depth, with scalar and empty values counting as one.
+	 */
 	protected function input_depth( $value ) {
 		if ( ! is_array( $value ) || empty( $value ) ) {
 			return 1; }
@@ -143,6 +168,12 @@ trait Mcpwp_Sanitization {
 		return $depth;
 	}
 
+	/**
+	 * Build a standard invalid-parameter error.
+	 *
+	 * @param string $name Invalid property name.
+	 * @return WP_Error Validation error.
+	 */
 	protected function invalid_parameter( $name ) {
 		return new WP_Error(
 			'invalid_parameter',
@@ -351,7 +382,7 @@ trait Mcpwp_Sanitization {
 			return false;
 		}
 
-		// Check for valid scheme
+		// Check for a valid scheme.
 		$scheme = wp_parse_url( $url, PHP_URL_SCHEME );
 		if ( ! in_array( $scheme, array( 'http', 'https' ), true ) ) {
 			return false;
@@ -371,7 +402,7 @@ trait Mcpwp_Sanitization {
 			return false;
 		}
 
-		// Try to decode and re-encode to validate
+		// Decode and re-encode the value to validate it.
 		$decoded = json_decode( $json, true );
 
 		if ( null === $decoded && json_last_error() !== JSON_ERROR_NONE ) {
@@ -388,10 +419,10 @@ trait Mcpwp_Sanitization {
 	 * @return string Sanitized filename.
 	 */
 	protected function sanitize_filename( $filename ) {
-		// Remove path components
+		// Remove path components.
 		$filename = basename( $filename );
 
-		// Use WordPress sanitization
+		// Apply WordPress filename sanitization.
 		return sanitize_file_name( $filename );
 	}
 }

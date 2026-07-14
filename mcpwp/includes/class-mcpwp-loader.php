@@ -9,12 +9,29 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
+/**
+ * Register and run the plugin's WordPress hooks.
+ */
 class Mcpwp_Loader {
 	use Mcpwp_Logging;
 
+	/**
+	 * Registered WordPress actions.
+	 *
+	 * @var array<int,array<string,mixed>>
+	 */
 	private $actions = array();
+
+	/**
+	 * Registered WordPress filters.
+	 *
+	 * @var array<int,array<string,mixed>>
+	 */
 	private $filters = array();
 
+	/**
+	 * Register the plugin's deferred actions and filters.
+	 */
 	public function __construct() {
 		$i18n = new Mcpwp_i18n();
 		$this->add_action( 'plugins_loaded', $i18n, 'load_plugin_textdomain' );
@@ -30,6 +47,11 @@ class Mcpwp_Loader {
 		$this->add_action( 'mcpwp_cleanup_logs', $this, 'cleanup_old_logs' );
 	}
 
+	/**
+	 * Instantiate retained controllers and register their REST routes.
+	 *
+	 * @return void
+	 */
 	public function register_rest_routes() {
 		$controllers = array(
 			new Mcpwp_REST_Site_Info(),
@@ -47,12 +69,22 @@ class Mcpwp_Loader {
 		}
 	}
 
+	/**
+	 * Schedule daily local activity-log cleanup when it is absent.
+	 *
+	 * @return void
+	 */
 	public function maybe_schedule_log_cleanup() {
 		if ( ! wp_next_scheduled( 'mcpwp_cleanup_logs' ) ) {
 			wp_schedule_event( time() + HOUR_IN_SECONDS, 'daily', 'mcpwp_cleanup_logs' );
 		}
 	}
 
+	/**
+	 * Delete local activity rows older than the configured retention period.
+	 *
+	 * @return void
+	 */
 	public function cleanup_old_logs() {
 		global $wpdb;
 		$settings = get_option( 'mcpwp_settings', array() );
@@ -62,6 +94,14 @@ class Mcpwp_Loader {
 		$wpdb->query( $wpdb->prepare( "DELETE FROM {$table} WHERE created_at < %s", $cutoff ) );
 	}
 
+	/**
+	 * Add rate-limit headers to responses from retained REST routes.
+	 *
+	 * @param WP_HTTP_Response $response Response being dispatched.
+	 * @param WP_REST_Server   $server   Active REST server.
+	 * @param WP_REST_Request  $request  Current REST request.
+	 * @return WP_HTTP_Response Response with any applicable headers.
+	 */
 	public function add_mcpwp_rate_limit_headers( $response, $server, $request ) {
 		if ( $request instanceof WP_REST_Request && 0 === strpos( (string) $request->get_route(), '/mcpwp/v1/' ) && method_exists( $response, 'header' ) ) {
 			foreach ( Mcpwp_Rate_Limiter::get_instance()->get_headers() as $name => $value ) {
@@ -71,14 +111,39 @@ class Mcpwp_Loader {
 		return $response;
 	}
 
+	/**
+	 * Queue a WordPress action registration.
+	 *
+	 * @param string $hook          Action hook name.
+	 * @param object $component     Callback owner.
+	 * @param string $callback      Callback method name.
+	 * @param int    $priority      Hook priority.
+	 * @param int    $accepted_args Number of accepted callback arguments.
+	 * @return void
+	 */
 	public function add_action( $hook, $component, $callback, $priority = 10, $accepted_args = 1 ) {
 		$this->actions[] = compact( 'hook', 'component', 'callback', 'priority', 'accepted_args' );
 	}
 
+	/**
+	 * Queue a WordPress filter registration.
+	 *
+	 * @param string $hook          Filter hook name.
+	 * @param object $component     Callback owner.
+	 * @param string $callback      Callback method name.
+	 * @param int    $priority      Hook priority.
+	 * @param int    $accepted_args Number of accepted callback arguments.
+	 * @return void
+	 */
 	public function add_filter( $hook, $component, $callback, $priority = 10, $accepted_args = 1 ) {
 		$this->filters[] = compact( 'hook', 'component', 'callback', 'priority', 'accepted_args' );
 	}
 
+	/**
+	 * Register all queued actions and filters with WordPress.
+	 *
+	 * @return void
+	 */
 	public function run() {
 		foreach ( $this->filters as $item ) {
 			add_filter( $item['hook'], array( $item['component'], $item['callback'] ), $item['priority'], $item['accepted_args'] );

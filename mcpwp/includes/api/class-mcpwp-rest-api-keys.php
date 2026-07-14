@@ -1,9 +1,22 @@
 <?php
-/** Scoped API-key routes. @package mumcp */
+/**
+ * Scoped API-key REST routes.
+ *
+ * @package MCPWP
+ */
+
 if ( ! defined( 'ABSPATH' ) ) {
 	exit; }
 
+/**
+ * Expose scoped API-key management through authenticated REST routes.
+ */
 class Mcpwp_REST_API_Keys extends Mcpwp_REST_API {
+	/**
+	 * Register retained scoped API-key routes.
+	 *
+	 * @return void
+	 */
 	public function register_routes() {
 		register_rest_route(
 			$this->namespace,
@@ -51,6 +64,12 @@ class Mcpwp_REST_API_Keys extends Mcpwp_REST_API {
 			)
 		);
 	}
+	/**
+	 * Return sanitized scoped API-key records.
+	 *
+	 * @param WP_REST_Request $request Current REST request.
+	 * @return WP_REST_Response API-key collection response.
+	 */
 	public function list_api_keys( $request ) {
 		if ( ! $this->can_manage() ) {
 			return $this->error_response( 'forbidden', __( 'You do not have permission to manage API keys.', 'mumega-mcp' ), 403 ); }
@@ -73,6 +92,12 @@ class Mcpwp_REST_API_Keys extends Mcpwp_REST_API {
 			)
 		);
 	}
+	/**
+	 * Validate input and create a scoped API key.
+	 *
+	 * @param WP_REST_Request $request Current REST request.
+	 * @return WP_REST_Response Creation response containing the one-time key.
+	 */
 	public function create_api_key( $request ) {
 		if ( ! $this->can_manage() ) {
 			return $this->error_response( 'forbidden', __( 'You do not have permission to manage API keys.', 'mumega-mcp' ), 403 ); }
@@ -85,6 +110,12 @@ class Mcpwp_REST_API_Keys extends Mcpwp_REST_API {
 			return $this->error_response( $key->get_error_code(), $key->get_error_message(), (int) ( $key->get_error_data()['status'] ?? 400 ) ); }
 		return $this->success_response( array( 'api_key' => $key ), 201 );
 	}
+	/**
+	 * Revoke one scoped API key.
+	 *
+	 * @param WP_REST_Request $request Current REST request.
+	 * @return WP_REST_Response Revocation response.
+	 */
 	public function revoke_api_key( $request ) {
 		if ( ! $this->can_manage() ) {
 			return $this->error_response( 'forbidden', __( 'You do not have permission to manage API keys.', 'mumega-mcp' ), 403 ); }
@@ -109,6 +140,11 @@ class Mcpwp_REST_API_Keys extends Mcpwp_REST_API {
 			)
 		) : $this->error_response( 'not_found', __( 'API key not found or already revoked.', 'mumega-mcp' ), 404 );
 	}
+	/**
+	 * Check the retained settings capability.
+	 *
+	 * @return bool True when the current user can manage settings.
+	 */
 	private function can_manage() {
 		return function_exists( 'current_user_can' ) && current_user_can( 'mcpwp_manage_settings' ); }
 }

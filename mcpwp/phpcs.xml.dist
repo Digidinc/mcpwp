@@ -18,4 +18,15 @@
 			</property>
 		</properties>
 	</rule>
+
+	<!--
+		These two legacy class/file pairs are loaded by stable plugin paths. Renaming
+		them would require a compatibility migration unrelated to coding standards.
+	-->
+	<rule ref="PEAR.NamingConventions.ValidClassName.Invalid">
+		<exclude-pattern>*/includes/class-mcpwp-i18n.php</exclude-pattern>
+	</rule>
+	<rule ref="WordPress.Files.FileName.InvalidClassFileName">
+		<exclude-pattern>*/includes/admin/class-mcpwp-activity-log.php</exclude-pattern>
+	</rule>
 </ruleset>

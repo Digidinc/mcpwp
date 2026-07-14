@@ -1,9 +1,22 @@
 <?php
-/** Local site information core. @package mumcp */
+/**
+ * Core local site-information helpers.
+ *
+ * @package MCPWP
+ */
+
 if ( ! defined( 'ABSPATH' ) ) {
 	exit; }
 
+/**
+ * Provide core local site information.
+ */
 class Mcpwp_Core {
+	/**
+	 * Get readable local site and plugin metadata.
+	 *
+	 * @return array<string,mixed> Site and plugin metadata.
+	 */
 	public function get_site_info() {
 		return array(
 			'name'     => get_bloginfo( 'name' ),

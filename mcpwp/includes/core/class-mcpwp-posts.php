@@ -73,7 +73,7 @@ class Mcpwp_Posts {
 			$args['post_type'] = $validated;
 		}
 
-		// Sanitize arguments
+		// Sanitize query arguments.
 		$args['posts_per_page'] = absint( $args['posts_per_page'] );
 		$args['paged']          = absint( $args['paged'] );
 
@@ -149,7 +149,7 @@ class Mcpwp_Posts {
 			'post_excerpt' => isset( $data['excerpt'] ) ? sanitize_textarea_field( $data['excerpt'] ) : '',
 		);
 
-		// Validate status
+		// Validate the post status.
 		$allowed_statuses = array( 'publish', 'draft', 'pending', 'private' );
 		if ( ! in_array( $post_data['post_status'], $allowed_statuses, true ) ) {
 			$post_data['post_status'] = 'draft';
@@ -165,19 +165,19 @@ class Mcpwp_Posts {
 			return $post_id;
 		}
 
-		// Set categories
+		// Set the post categories.
 		if ( ! empty( $data['categories'] ) ) {
 			$categories = array_map( 'absint', (array) $data['categories'] );
 			wp_set_post_categories( $post_id, $categories );
 		}
 
-		// Set tags
+		// Set the post tags.
 		if ( ! empty( $data['tags'] ) ) {
 			$tags = array_map( 'sanitize_text_field', (array) $data['tags'] );
 			wp_set_post_tags( $post_id, $tags );
 		}
 
-		// Set featured image
+		// Set the featured image.
 		if ( ! empty( $data['featured_image'] ) ) {
 			set_post_thumbnail( $post_id, absint( $data['featured_image'] ) );
 		}
@@ -241,19 +241,19 @@ class Mcpwp_Posts {
 			return $result;
 		}
 
-		// Update categories
+		// Update the post categories.
 		if ( isset( $data['categories'] ) ) {
 			$categories = array_map( 'absint', (array) $data['categories'] );
 			wp_set_post_categories( $post_id, $categories );
 		}
 
-		// Update tags
+		// Update the post tags.
 		if ( isset( $data['tags'] ) ) {
 			$tags = array_map( 'sanitize_text_field', (array) $data['tags'] );
 			wp_set_post_tags( $post_id, $tags );
 		}
 
-		// Update featured image
+		// Update the featured image.
 		if ( isset( $data['featured_image'] ) ) {
 			if ( empty( $data['featured_image'] ) ) {
 				delete_post_thumbnail( $post_id );
@@ -299,7 +299,7 @@ class Mcpwp_Posts {
 			$data['excerpt']    = $post->post_excerpt;
 			$data['word_count'] = str_word_count( wp_strip_all_tags( $post->post_content ) );
 		} else {
-			$data['excerpt'] = wp_trim_words( $post->post_excerpt ?: $post->post_content, 30 );
+			$data['excerpt'] = wp_trim_words( $post->post_excerpt ? $post->post_excerpt : $post->post_content, 30 );
 		}
 
 		return $data;

@@ -26,18 +26,28 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'MCPWP_VERSION', '3.4.3' ); // x-release-please-version
+define( 'MCPWP_VERSION', '3.4.3' ); // x-release-please-version.
 define( 'MCPWP_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'MCPWP_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 define( 'MCPWP_PLUGIN_BASENAME', plugin_basename( __FILE__ ) );
 define( 'MCPWP_MIN_WP_VERSION', '6.1' );
 define( 'MCPWP_MIN_PHP_VERSION', '7.4' );
 
+/**
+ * Check the minimum WordPress and PHP versions.
+ *
+ * @return bool True when both runtime requirements are met.
+ */
 function mcpwp_requirements_met() {
 	global $wp_version;
 	return version_compare( PHP_VERSION, MCPWP_MIN_PHP_VERSION, '>=' ) && version_compare( $wp_version, MCPWP_MIN_WP_VERSION, '>=' );
 }
 
+/**
+ * Load the retained plugin classes and start WordPress integrations.
+ *
+ * @return void
+ */
 function mcpwp_load_plugin() {
 	if ( ! mcpwp_requirements_met() ) {
 		return;
@@ -94,6 +104,12 @@ function mcpwp_load_plugin() {
 	( new Mcpwp_Loader() )->run();
 }
 
+/**
+ * Activate plugin storage for one site or every site in a network.
+ *
+ * @param bool $network_wide Whether WordPress requested network activation.
+ * @return void
+ */
 function mcpwp_activate( $network_wide = false ) {
 	require_once plugin_dir_path( __FILE__ ) . 'includes/traits/trait-mcpwp-api-auth.php';
 	require_once plugin_dir_path( __FILE__ ) . 'includes/class-mcpwp-activator.php';
@@ -108,6 +124,12 @@ function mcpwp_activate( $network_wide = false ) {
 	Mcpwp_Activator::activate();
 }
 
+/**
+ * Clear plugin schedules for one site or every site in a network.
+ *
+ * @param bool $network_wide Whether WordPress requested network deactivation.
+ * @return void
+ */
 function mcpwp_deactivate( $network_wide = false ) {
 	require_once plugin_dir_path( __FILE__ ) . 'includes/class-mcpwp-deactivator.php';
 	Mcpwp_Deactivator::deactivate( $network_wide );

@@ -99,28 +99,28 @@ class Mcpwp_Pages {
 			'post_status'  => isset( $data['status'] ) ? sanitize_key( $data['status'] ) : 'draft',
 		);
 
-		// Validate status
+		// Validate the page status.
 		$allowed_statuses = array( 'publish', 'draft', 'pending', 'private' );
 		if ( ! in_array( $page_data['post_status'], $allowed_statuses, true ) ) {
 			$page_data['post_status'] = 'draft';
 		}
 
-		// Slug
+		// Set the page slug.
 		if ( isset( $data['slug'] ) ) {
 			$page_data['post_name'] = sanitize_title( $data['slug'] );
 		}
 
-		// Parent page
+		// Set the parent page.
 		if ( ! empty( $data['parent'] ) ) {
 			$page_data['post_parent'] = absint( $data['parent'] );
 		}
 
-		// Menu order
+		// Set the menu order.
 		if ( isset( $data['menu_order'] ) ) {
 			$page_data['menu_order'] = absint( $data['menu_order'] );
 		}
 
-		// Page template
+		// Set the page template.
 		if ( ! empty( $data['template'] ) ) {
 			$page_data['page_template'] = sanitize_text_field( $data['template'] );
 		}
@@ -131,12 +131,12 @@ class Mcpwp_Pages {
 			return $page_id;
 		}
 
-		// Set page template if provided
+		// Set the page template when provided.
 		if ( ! empty( $data['template'] ) ) {
 			update_post_meta( $page_id, '_wp_page_template', sanitize_text_field( $data['template'] ) );
 		}
 
-		// Set featured image
+		// Set the featured image.
 		if ( ! empty( $data['featured_image'] ) ) {
 			set_post_thumbnail( $page_id, absint( $data['featured_image'] ) );
 		}
@@ -200,11 +200,11 @@ class Mcpwp_Pages {
 			return $result;
 		}
 
-		// Update template only if explicitly provided and not empty
+		// Update the template only when explicitly provided and non-empty.
 		if ( array_key_exists( 'template', $data ) && '' !== $data['template'] ) {
 			$template = sanitize_text_field( $data['template'] );
 
-			// Validate template exists (allow 'default' or valid theme templates)
+			// Accept the default template or a template exposed by the active theme.
 			if ( 'default' === $template || '' === $template ) {
 				update_post_meta( $page_id, '_wp_page_template', 'default' );
 			} else {
@@ -212,11 +212,11 @@ class Mcpwp_Pages {
 				if ( isset( $valid_templates[ $template ] ) ) {
 					update_post_meta( $page_id, '_wp_page_template', $template );
 				}
-				// Silently ignore invalid templates instead of failing
+				// Ignore invalid templates instead of failing the whole update.
 			}
 		}
 
-		// Update featured image
+		// Update the featured image.
 		if ( isset( $data['featured_image'] ) ) {
 			if ( empty( $data['featured_image'] ) ) {
 				delete_post_thumbnail( $page_id );
@@ -264,7 +264,7 @@ class Mcpwp_Pages {
 			'url'            => get_permalink( $page ),
 			'parent'         => $page->post_parent,
 			'menu_order'     => $page->menu_order,
-			'template'       => $template ?: 'default',
+			'template'       => $template ? $template : 'default',
 			'author'         => array(
 				'id'   => (int) $page->post_author,
 				'name' => get_the_author_meta( 'display_name', $page->post_author ),

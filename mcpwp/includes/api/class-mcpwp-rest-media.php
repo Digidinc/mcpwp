@@ -1,12 +1,31 @@
 <?php
-/** Local media routes. @package mumcp */
+/**
+ * Local media REST routes.
+ *
+ * @package MCPWP
+ */
+
 if ( ! defined( 'ABSPATH' ) ) {
 	exit; }
 
+/**
+ * Expose local media queries and uploads through authenticated REST routes.
+ */
 class Mcpwp_REST_Media extends Mcpwp_REST_API {
+	/**
+	 * Local media service.
+	 *
+	 * @var Mcpwp_Media
+	 */
 	private $media;
+	/** Initialize the local media service. */
 	public function __construct() {
 		$this->media = new Mcpwp_Media(); }
+	/**
+	 * Register retained media REST routes.
+	 *
+	 * @return void
+	 */
 	public function register_routes() {
 		register_rest_route(
 			$this->namespace,
@@ -19,9 +38,21 @@ class Mcpwp_REST_Media extends Mcpwp_REST_API {
 		register_rest_route( $this->namespace, '/media/from-base64', $this->route_definition( WP_REST_Server::CREATABLE, 'upload_from_base64', 'check_upload_media_permission', 'media', 'write', array( 'upload_files' ), true, $this->base64_media_args() ) );
 		register_rest_route( $this->namespace, '/media/(?P<id>\d+)', $this->route_definition( WP_REST_Server::READABLE, 'get_media', 'check_get_media_permission', 'media', 'read', array( 'read_post:{id}', 'post type must be attachment' ), false, $this->id_route_args() ) );
 	}
+	/**
+	 * Return media visible to the authenticated key owner.
+	 *
+	 * @param WP_REST_Request $request Current REST request.
+	 * @return WP_REST_Response Media collection response.
+	 */
 	public function list_media( $request ) {
 		$params = $this->validated_query_params( $request, $this->media_list_args() );
 		return is_wp_error( $params ) ? $this->validation_error_response( $params ) : $this->respond( $this->media->list_media( $params ) ); }
+	/**
+	 * Return one visible attachment.
+	 *
+	 * @param WP_REST_Request $request Current REST request.
+	 * @return WP_REST_Response Attachment response.
+	 */
 	public function get_media( $request ) {
 		$params = $this->validated_query_params( $request, $this->id_route_args() );
 		if ( is_wp_error( $params ) ) {
@@ -40,6 +71,12 @@ class Mcpwp_REST_Media extends Mcpwp_REST_API {
 			)
 		);
 	}
+	/**
+	 * Validate and store a multipart media upload.
+	 *
+	 * @param WP_REST_Request $request Current REST request.
+	 * @return WP_REST_Response Upload response.
+	 */
 	public function upload_media( $request ) {
 		$files         = $request->get_file_params();
 		$unknown_files = array_diff( array_keys( $files ), array( 'file' ) );
@@ -52,12 +89,25 @@ class Mcpwp_REST_Media extends Mcpwp_REST_API {
 			return $this->validation_error_response( $params ); }
 		return $this->respond( $this->media->upload_file( $files['file'], $params ), 201 );
 	}
+	/**
+	 * Validate and store a base64-encoded media upload.
+	 *
+	 * @param WP_REST_Request $request Current REST request.
+	 * @return WP_REST_Response Upload response.
+	 */
 	public function upload_from_base64( $request ) {
 		$params = $this->validated_json_body( $request, $this->base64_media_args(), false, 15 * 1024 * 1024 );
 		if ( is_wp_error( $params ) ) {
 			return $this->validation_error_response( $params ); }
 		return $this->respond( $this->media->upload_from_base64( $params['data'], $params['filename'], $params ), 201 );
 	}
+	/**
+	 * Convert a media-service result to a REST response.
+	 *
+	 * @param mixed $result Media-service result.
+	 * @param int   $status Success status code.
+	 * @return WP_REST_Response REST response.
+	 */
 	private function respond( $result, $status = 200 ) {
 		return is_wp_error( $result ) ? $this->error_response( $result->get_error_code(), $result->get_error_message(), (int) ( $result->get_error_data()['status'] ?? 400 ) ) : $this->success_response( $result, $status ); }
 }

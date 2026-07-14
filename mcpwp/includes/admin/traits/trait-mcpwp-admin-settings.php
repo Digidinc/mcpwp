@@ -1,7 +1,18 @@
 <?php
+/**
+ * Settings-page administration methods.
+ *
+ * @package MCPWP
+ */
+
 if ( ! defined( 'ABSPATH' ) ) {
 	exit; }
 trait Mcpwp_Admin_Settings_Trait {
+	/**
+	 * Render retained settings and process an optional settings submission.
+	 *
+	 * @return void
+	 */
 	public function render_settings_page() {
 		if ( ! current_user_can( 'mcpwp_manage_settings' ) ) {
 			wp_die( esc_html__( 'You do not have permission to view this page.', 'mumega-mcp' ) ); }

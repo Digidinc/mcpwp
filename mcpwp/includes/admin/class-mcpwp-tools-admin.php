@@ -1,10 +1,23 @@
 <?php
-/** Exact retained MCP tool inventory administration. @package mumcp */
+/**
+ * Administration of the retained MCP tool inventory.
+ *
+ * @package MCPWP
+ */
+
 if ( ! defined( 'ABSPATH' ) ) {
 	exit; }
 
+/**
+ * Render the retained MCP tool inventory in WordPress administration.
+ */
 class Mcpwp_Tools_Admin {
 	const PAGE_SLUG = 'mcpwp-tools';
+	/**
+	 * Get display metadata for each retained tool category.
+	 *
+	 * @return array<string,array<string,string>> Category display metadata.
+	 */
 	public function get_categories() {
 		return array(
 			'site'     => array(
@@ -25,6 +38,11 @@ class Mcpwp_Tools_Admin {
 			),
 		);
 	}
+	/**
+	 * Render the retained MCP tool inventory for authorized administrators.
+	 *
+	 * @return void
+	 */
 	public function render() {
 		if ( ! current_user_can( 'mcpwp_manage_settings' ) ) {
 			wp_die( esc_html__( 'You do not have permission to view this page.', 'mumega-mcp' ) ); }

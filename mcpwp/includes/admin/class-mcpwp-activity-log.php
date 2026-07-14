@@ -1,9 +1,22 @@
 <?php
-/** Minimal local activity log admin page. @package mumcp */
+/**
+ * Local activity-log administration.
+ *
+ * @package MCPWP
+ */
+
 if ( ! defined( 'ABSPATH' ) ) {
 	exit; }
 
+/**
+ * Render the local activity-log administration page.
+ */
 class Mcpwp_Activity_Log_Page {
+	/**
+	 * Render a paginated table of local activity metadata.
+	 *
+	 * @return void
+	 */
 	public function render() {
 		global $wpdb;
 		$table    = $wpdb->prefix . 'mcpwp_activity_log';

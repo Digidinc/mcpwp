@@ -1,14 +1,32 @@
 <?php
-/** Plugin activation. @package mumcp */
+/**
+ * Plugin activation routines.
+ *
+ * @package MCPWP
+ */
+
 if ( ! defined( 'ABSPATH' ) ) {
 	exit; }
 
+/**
+ * Provision the retained role, activity table, and default options on activation.
+ */
 class Mcpwp_Activator {
+	/**
+	 * Run all activation provisioning routines.
+	 *
+	 * @return void
+	 */
 	public static function activate() {
 		self::create_api_role();
 		self::create_activity_table();
 		self::create_defaults();
 	}
+	/**
+	 * Create or update the API-agent role and administrative capability.
+	 *
+	 * @return void
+	 */
 	private static function create_api_role() {
 		$capabilities = array(
 			'read'                  => true,
@@ -27,6 +45,11 @@ class Mcpwp_Activator {
 		if ( $administrator ) {
 			$administrator->add_cap( 'mcpwp_manage_settings' ); }
 	}
+	/**
+	 * Create or update the local activity-log database table.
+	 *
+	 * @return void
+	 */
 	private static function create_activity_table() {
 		global $wpdb;
 		require_once ABSPATH . 'wp-admin/includes/upgrade.php';
@@ -46,6 +69,11 @@ class Mcpwp_Activator {
 		) {$charset};"
 		);
 	}
+	/**
+	 * Persist initial plugin, rate-limit, migration-owner, and database settings.
+	 *
+	 * @return void
+	 */
 	private static function create_defaults() {
 		$owner_id = get_current_user_id();
 		if ( $owner_id > 0 && get_userdata( $owner_id ) && current_user_can( 'manage_options' ) ) {

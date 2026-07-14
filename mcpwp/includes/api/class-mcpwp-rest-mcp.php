@@ -9,19 +9,59 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
+/**
+ * Serve the JSON-RPC MCP endpoint and dispatch retained tools.
+ */
 class Mcpwp_REST_MCP extends Mcpwp_REST_API {
+	/**
+	 * Supported MCP protocol version.
+	 *
+	 * @var string
+	 */
 	private $protocol_version = '2024-11-05';
+
+	/**
+	 * Plugin version advertised to MCP clients.
+	 *
+	 * @var string
+	 */
 	private $server_version;
+
+	/**
+	 * Stable MCP server name.
+	 *
+	 * @var string
+	 */
 	private $server_name;
+
+	/**
+	 * Retained MCP tool registry.
+	 *
+	 * @var Mcpwp_MCP_Free_Tools
+	 */
 	private $registry;
+
+	/**
+	 * API-key header retained for request logging.
+	 *
+	 * @var string
+	 */
 	private $api_key_header = '';
 
+	/**
+	 * Initialize retained MCP server metadata and the free tool registry.
+	 */
 	public function __construct() {
 		$this->server_version = defined( 'MCPWP_VERSION' ) ? MCPWP_VERSION : '1.0.0';
 		$this->server_name    = 'mcpwp';
 		$this->registry       = new Mcpwp_MCP_Free_Tools();
 	}
 
+	/**
+	 * Register the retained MCP JSON-RPC endpoint.
+	 *
+	 * @return void
+	 */
 	public function register_routes() {
 		register_rest_route(
 			$this->namespace,
@@ -30,6 +70,12 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		);
 	}
 
+	/**
+	 * Parse and dispatch a single or batched MCP JSON-RPC request.
+	 *
+	 * @param WP_REST_Request $request REST request.
+	 * @return WP_REST_Response MCP response.
+	 */
 	public function handle_mcp( $request ) {
 		$this->api_key_header = (string) $request->get_header( 'X-API-Key' );
 		$raw                  = method_exists( $request, 'get_body' ) ? (string) $request->get_body() : '';
@@ -65,6 +111,12 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		return $this->mcp_response( $response, null === $response ? 204 : 200 );
 	}
 
+	/**
+	 * Validate and dispatch one decoded JSON-RPC request object.
+	 *
+	 * @param mixed $body Decoded JSON value.
+	 * @return array<string,mixed>|null JSON-RPC response, or null for a notification.
+	 */
 	private function process_request( $body ) {
 		if ( ! is_object( $body ) ) {
 			$rate = $this->charge_item( 'GET' );
@@ -120,9 +172,21 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		return $notification ? null : $response;
 	}
 
+	/**
+	 * Determine whether an array uses contiguous zero-based integer keys.
+	 *
+	 * @param mixed $value Candidate value.
+	 * @return bool Whether the value is a list array.
+	 */
 	private function is_list_array( $value ) {
 		return is_array( $value ) && array_keys( $value ) === range( 0, count( $value ) - 1 ); }
 
+	/**
+	 * Determine whether a decoded request contains the base64 upload tool.
+	 *
+	 * @param mixed $body Decoded single or batch request.
+	 * @return bool Whether an upload tool call is present.
+	 */
 	private function contains_upload_tool( $body ) {
 		$items = is_array( $body ) ? $body : array( $body );
 		foreach ( $items as $item ) {
@@ -136,11 +200,23 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		return false;
 	}
 
+	/**
+	 * Charge and return a top-level JSON-RPC parse or shape error.
+	 *
+	 * @param array<string,mixed> $error JSON-RPC error envelope.
+	 * @return array<string,mixed> Rate-limit error or original error envelope.
+	 */
 	private function charged_top_level_error( $error ) {
 		$rate = $this->charge_item( 'GET' );
 		return is_wp_error( $rate ) ? $this->rate_limit_error( null, $rate ) : $error;
 	}
 
+	/**
+	 * Validate the bounded subset of MCP initialize parameters.
+	 *
+	 * @param array<string,mixed> $params Initialize parameters.
+	 * @return bool Whether the parameters are valid.
+	 */
 	private function valid_initialize_params( $params ) {
 		if ( array_diff( array_keys( $params ), array( 'protocolVersion', 'capabilities', 'clientInfo' ) ) ) {
 			return false; }
@@ -167,6 +243,13 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		return true;
 	}
 
+	/**
+	 * Validate a bounded client capability value recursively.
+	 *
+	 * @param mixed $value Capability value.
+	 * @param int   $depth Current traversal depth.
+	 * @return bool Whether the value is within retained depth and size limits.
+	 */
 	private function bounded_capability_value( $value, $depth ) {
 		if ( $depth > 4 ) {
 			return false; }
@@ -192,6 +275,11 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		return is_bool( $value ) || is_int( $value ) || is_float( $value ) || null === $value || ( is_string( $value ) && strlen( $value ) <= 1000 );
 	}
 
+	/**
+	 * Return MCP protocol, server, and capability metadata.
+	 *
+	 * @return array<string,mixed> Server metadata.
+	 */
 	private function server_metadata() {
 		return array(
 			'protocolVersion' => $this->protocol_version,
@@ -203,6 +291,12 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		);
 	}
 
+	/**
+	 * Build a tools/list result filtered by site and key policy.
+	 *
+	 * @param int|string|null $id JSON-RPC request ID.
+	 * @return array<string,mixed> JSON-RPC result envelope.
+	 */
 	private function handle_tools_list( $id ) {
 		$tools = $this->registry->get_tools();
 		$tools = $this->filter_disabled_tools( $tools );
@@ -210,6 +304,13 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		return $this->jsonrpc_result( $id, array( 'tools' => $tools ) );
 	}
 
+	/**
+	 * Validate, authorize, dispatch, and wrap an MCP tool call.
+	 *
+	 * @param int|string|null     $id     JSON-RPC request ID.
+	 * @param array<string,mixed> $params Validated tools/call parameters.
+	 * @return array<string,mixed> JSON-RPC result or error envelope.
+	 */
 	private function handle_tools_call( $id, $params ) {
 		$name      = $params['name'];
 		$arguments = isset( $params['arguments'] ) && is_object( $params['arguments'] ) ? get_object_vars( $params['arguments'] ) : array();
@@ -304,12 +405,25 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		);
 	}
 
+	/**
+	 * Charge the authenticated key for one MCP request item.
+	 *
+	 * @param string $method HTTP or logical method used for rate-limit policy.
+	 * @return true|WP_Error True when allowed, otherwise a rate-limit error.
+	 */
 	private function charge_item( $method ) {
 		$record     = $this->get_current_api_key_record();
 		$identifier = 'key:' . sanitize_key( is_array( $record ) ? (string) ( $record['id'] ?? '' ) : '' );
 		return $this->check_rate_limit( $identifier, strtoupper( (string) $method ), $record );
 	}
 
+	/**
+	 * Convert a rate-limit error to a JSON-RPC error envelope.
+	 *
+	 * @param int|string|null $id   JSON-RPC request ID.
+	 * @param WP_Error        $rate Rate-limit error.
+	 * @return array<string,mixed> JSON-RPC rate-limit error envelope.
+	 */
 	private function rate_limit_error( $id, $rate ) {
 		return $this->jsonrpc_error(
 			$id,
@@ -322,6 +436,12 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		);
 	}
 
+	/**
+	 * Map an HTTP error status to the retained JSON-RPC server code.
+	 *
+	 * @param int $status HTTP status code.
+	 * @return int JSON-RPC error code.
+	 */
 	private function jsonrpc_code_for_status( $status ) {
 		$codes = array(
 			403 => -32003,
@@ -333,6 +453,13 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		return isset( $codes[ $status ] ) ? $codes[ $status ] : -32000;
 	}
 
+	/**
+	 * Validate tool arguments against the registered input schema.
+	 *
+	 * @param string $name      Tool name.
+	 * @param array  $arguments Tool arguments.
+	 * @return string|null Validation message, or null when valid.
+	 */
 	private function validate_tool_arguments( $name, $arguments ) {
 		foreach ( $this->registry->get_tools() as $tool ) {
 			if ( $name !== $tool['name'] ) {
@@ -342,6 +469,14 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		return 'Unknown tool.';
 	}
 
+	/**
+	 * Recursively test whether a value violates a retained tool schema.
+	 *
+	 * @param mixed $value  Candidate value.
+	 * @param array $schema Tool schema.
+	 * @param int   $depth  Current traversal depth.
+	 * @return bool Whether the value violates the schema.
+	 */
 	private function validate_schema_value( $value, $schema, $depth ) {
 		if ( $depth > 8 || ! is_array( $schema ) ) {
 			return true; }
@@ -395,6 +530,14 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		return isset( $schema['enum'] ) && ! in_array( $value, $schema['enum'], true );
 	}
 
+	/**
+	 * Record the outcome and duration of a dispatched MCP tool call.
+	 *
+	 * @param string $name        Tool name.
+	 * @param int    $status_code HTTP status code.
+	 * @param float  $started_at  Start time from microtime.
+	 * @return void
+	 */
 	private function log_tool_call( $name, $status_code, $started_at ) {
 		$record      = $this->get_current_api_key_record();
 		$key_id      = is_array( $record ) ? (string) ( $record['id'] ?? '' ) : '';
@@ -402,6 +545,12 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		$this->log_activity( $name, $status_code, $duration_ms, $key_id );
 	}
 
+	/**
+	 * Remove tools whose categories are disabled by site policy.
+	 *
+	 * @param array<int,array<string,mixed>> $tools Registered tools.
+	 * @return array<int,array<string,mixed>> Enabled tools.
+	 */
 	private function filter_disabled_tools( $tools ) {
 		$disabled = get_option( 'mcpwp_disabled_tool_categories', array() );
 		if ( ! is_array( $disabled ) || empty( $disabled ) ) {
@@ -417,6 +566,12 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		);
 	}
 
+	/**
+	 * Remove tools outside the authenticated key's category grants.
+	 *
+	 * @param array<int,array<string,mixed>> $tools Site-enabled tools.
+	 * @return array<int,array<string,mixed>> Tools allowed for the key.
+	 */
 	private function filter_tools_for_key( $tools ) {
 		$record = $this->get_current_api_key_record();
 		if ( ! is_array( $record ) ) {
@@ -432,6 +587,11 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		);
 	}
 
+	/**
+	 * Return retained MCP tools and dispatch metadata for introspection.
+	 *
+	 * @return array<string,mixed> Introspection data.
+	 */
 	public function get_introspection_data() {
 		$tools = $this->registry->get_tools();
 		$map   = $this->registry->get_tool_map();
@@ -450,6 +610,13 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		);
 	}
 
+	/**
+	 * Build a JSON-RPC success envelope.
+	 *
+	 * @param int|string|null $id     JSON-RPC request ID.
+	 * @param mixed           $result Result payload.
+	 * @return array<string,mixed> JSON-RPC result envelope.
+	 */
 	private function jsonrpc_result( $id, $result ) {
 		return array(
 			'jsonrpc' => '2.0',
@@ -458,6 +625,15 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		);
 	}
 
+	/**
+	 * Build a JSON-RPC error envelope.
+	 *
+	 * @param int|string|null $id      JSON-RPC request ID.
+	 * @param int             $code    JSON-RPC error code.
+	 * @param string          $message Human-readable error message.
+	 * @param array           $data    Optional structured error data.
+	 * @return array<string,mixed> JSON-RPC error envelope.
+	 */
 	private function jsonrpc_error( $id, $code, $message, $data = array() ) {
 		$error = array(
 			'code'    => $code,
@@ -473,6 +649,13 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		);
 	}
 
+	/**
+	 * Build a JSON REST response for an MCP JSON-RPC payload.
+	 *
+	 * @param mixed $data   JSON-RPC response payload.
+	 * @param int   $status HTTP status code.
+	 * @return WP_REST_Response MCP response.
+	 */
 	private function mcp_response( $data, $status = 200 ) {
 		$response = new WP_REST_Response( $data, $status );
 		$response->header( 'Content-Type', 'application/json; charset=UTF-8' );

@@ -1,12 +1,31 @@
 <?php
-/** Pages routes. @package mumcp */
+/**
+ * Page REST routes.
+ *
+ * @package MCPWP
+ */
+
 if ( ! defined( 'ABSPATH' ) ) {
 	exit; }
 
+/**
+ * Expose page operations through authenticated REST routes.
+ */
 class Mcpwp_REST_Pages extends Mcpwp_REST_API {
+	/**
+	 * Local page service.
+	 *
+	 * @var Mcpwp_Pages
+	 */
 	private $pages;
+	/** Initialize the local page service. */
 	public function __construct() {
 		$this->pages = new Mcpwp_Pages(); }
+	/**
+	 * Register retained page REST routes.
+	 *
+	 * @return void
+	 */
 	public function register_routes() {
 		register_rest_route(
 			$this->namespace,
@@ -25,12 +44,30 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 			)
 		);
 	}
+	/**
+	 * Return pages visible to the authenticated key owner.
+	 *
+	 * @param WP_REST_Request $request Current REST request.
+	 * @return WP_REST_Response Page collection response.
+	 */
 	public function list_pages( $request ) {
 		$params = $this->validated_query_params( $request, $this->content_list_args( true ) );
 		return is_wp_error( $params ) ? $this->validation_error_response( $params ) : $this->respond( $this->pages->list_pages( $params ) ); }
+	/**
+	 * Return one visible page.
+	 *
+	 * @param WP_REST_Request $request Current REST request.
+	 * @return WP_REST_Response Page response.
+	 */
 	public function get_page( $request ) {
 		$params = $this->validated_query_params( $request, $this->id_route_args() );
 		return is_wp_error( $params ) ? $this->validation_error_response( $params ) : $this->respond( $this->pages->get_page( $params['id'] ) ); }
+	/**
+	 * Validate input and create a page.
+	 *
+	 * @param WP_REST_Request $request Current REST request.
+	 * @return WP_REST_Response Creation response.
+	 */
 	public function create_page( $request ) {
 		$data = $this->validated_json_body( $request, $this->page_body_args() );
 		if ( is_wp_error( $data ) ) {
@@ -38,6 +75,12 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 		$relationships = $this->validate_content_relationships( $data, 0, true );
 		return is_wp_error( $relationships ) ? $this->validation_error_response( $relationships ) : $this->respond( $this->pages->create_page( $data ), 201 );
 	}
+	/**
+	 * Validate input and update a page.
+	 *
+	 * @param WP_REST_Request $request Current REST request.
+	 * @return WP_REST_Response Update response.
+	 */
 	public function update_page( $request ) {
 		$schema = $this->page_body_args( true );
 		unset( $schema['id'] );
@@ -48,6 +91,13 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 		$relationships = $this->validate_content_relationships( $data, $id, true );
 		return is_wp_error( $relationships ) ? $this->validation_error_response( $relationships ) : $this->respond( $this->pages->update_page( $id, $data ) );
 	}
+	/**
+	 * Convert a page-service result to a REST response.
+	 *
+	 * @param mixed $result Page-service result.
+	 * @param int   $status Success status code.
+	 * @return WP_REST_Response REST response.
+	 */
 	private function respond( $result, $status = 200 ) {
 		return is_wp_error( $result ) ? $this->error_response( $result->get_error_code(), $result->get_error_message(), (int) ( $result->get_error_data()['status'] ?? 400 ) ) : $this->success_response( $result, $status ); }
 }

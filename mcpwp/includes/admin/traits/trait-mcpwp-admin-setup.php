@@ -1,7 +1,18 @@
 <?php
+/**
+ * Setup-page and API-key administration methods.
+ *
+ * @package MCPWP
+ */
+
 if ( ! defined( 'ABSPATH' ) ) {
 	exit; }
 trait Mcpwp_Admin_Setup_Trait {
+	/**
+	 * Render API-key setup and process an optional submitted action.
+	 *
+	 * @return void
+	 */
 	public function render_setup_page() {
 		if ( ! current_user_can( 'mcpwp_manage_settings' ) ) {
 			wp_die( esc_html__( 'You do not have permission to view this page.', 'mumega-mcp' ) ); }
@@ -22,6 +33,12 @@ trait Mcpwp_Admin_Setup_Trait {
 		include MCPWP_PLUGIN_DIR . 'admin/partials/mcpwp-setup-display.php';
 	}
 
+	/**
+	 * Validate and execute an API-key creation or revocation action.
+	 *
+	 * @param array<string,mixed> $post Submitted form data.
+	 * @return array<string,mixed>|WP_Error Action result or validation error.
+	 */
 	public function handle_setup_action( $post ) {
 		if ( ! current_user_can( 'mcpwp_manage_settings' ) ) {
 			return new WP_Error( 'forbidden', __( 'You do not have permission to manage API keys.', 'mumega-mcp' ) );

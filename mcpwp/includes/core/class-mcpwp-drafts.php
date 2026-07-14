@@ -54,8 +54,9 @@ class Mcpwp_Drafts {
 				$needed = max( 0, $retain - count( $type_posts ) );
 				if ( $needed > 0 ) {
 					$type_posts = array_merge( $type_posts, array_slice( $query->posts, 0, $needed ) ); }
+				$retained_count = count( $type_posts );
 				++$chunk_page;
-			} while ( count( $type_posts ) < $retain && ! empty( $query->posts ) && $chunk_page <= (int) $query->max_num_pages );
+			} while ( $retained_count < $retain && ! empty( $query->posts ) && $chunk_page <= (int) $query->max_num_pages );
 			$posts = array_merge( $posts, $type_posts );
 		}
 
@@ -86,7 +87,7 @@ class Mcpwp_Drafts {
 			$draft = array(
 				'id'       => $post->ID,
 				'type'     => $post->post_type,
-				'title'    => $post->post_title ?: __( '(no title)', 'mumega-mcp' ),
+				'title'    => $post->post_title ? $post->post_title : __( '(no title)', 'mumega-mcp' ),
 				'created'  => $post->post_date,
 				'modified' => $post->post_modified,
 				'author'   => array(

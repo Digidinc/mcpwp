@@ -1,4 +1,11 @@
-<?php if ( ! defined( 'ABSPATH' ) ) {
+<?php
+/**
+ * Retained MCP tool-inventory markup.
+ *
+ * @package MCPWP
+ */
+
+if ( ! defined( 'ABSPATH' ) ) {
 	exit; } ?>
 <div class="wrap mcpwp-wrap"><h1><?php esc_html_e( 'MCP Tool Inventory', 'mumega-mcp' ); ?></h1><p><?php esc_html_e( 'This inventory is generated from the active free registry.', 'mumega-mcp' ); ?></p>
 <?php

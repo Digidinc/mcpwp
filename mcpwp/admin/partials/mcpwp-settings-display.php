@@ -1,4 +1,11 @@
-<?php if ( ! defined( 'ABSPATH' ) ) {
+<?php
+/**
+ * Settings-page markup.
+ *
+ * @package MCPWP
+ */
+
+if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 } $settings_controller = isset( $settings_controller ) ? $settings_controller : new Mcpwp_Settings();
 $settings              = array_merge( $settings_controller->get_defaults(), (array) get_option( 'mcpwp_settings', array() ) );

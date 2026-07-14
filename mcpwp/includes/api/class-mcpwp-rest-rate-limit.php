@@ -1,9 +1,22 @@
 <?php
-/** Local rate-limit routes. @package mumcp */
+/**
+ * Local rate-limit REST routes.
+ *
+ * @package MCPWP
+ */
+
 if ( ! defined( 'ABSPATH' ) ) {
 	exit; }
 
+/**
+ * Expose administrative rate-limit status and settings routes.
+ */
 class Mcpwp_REST_Rate_Limit extends Mcpwp_REST_API {
+	/**
+	 * Register retained rate-limit administration routes.
+	 *
+	 * @return void
+	 */
 	public function register_routes() {
 		register_rest_route(
 			$this->namespace,
@@ -37,6 +50,12 @@ class Mcpwp_REST_Rate_Limit extends Mcpwp_REST_API {
 			)
 		);
 	}
+	/**
+	 * Return effective rate-limit settings and current usage.
+	 *
+	 * @param WP_REST_Request $request Current REST request.
+	 * @return WP_REST_Response Rate-limit status response.
+	 */
 	public function get_status( $request ) {
 		$limiter = Mcpwp_Rate_Limiter::get_instance();
 		$record  = $this->get_current_api_key_record();
@@ -48,6 +67,12 @@ class Mcpwp_REST_Rate_Limit extends Mcpwp_REST_API {
 			)
 		);
 	}
+	/**
+	 * Validate and save rate-limit settings.
+	 *
+	 * @param WP_REST_Request $request Current REST request.
+	 * @return WP_REST_Response Settings update response.
+	 */
 	public function save_settings( $request ) {
 		if ( ! $this->can_manage() ) {
 			return $this->error_response( 'forbidden', __( 'You do not have permission to manage rate limiting.', 'mumega-mcp' ), 403 ); }
@@ -62,6 +87,12 @@ class Mcpwp_REST_Rate_Limit extends Mcpwp_REST_API {
 		$limiter->update_settings( $values );
 		return $this->success_response( $limiter->get_settings() );
 	}
+	/**
+	 * Reset stored counters for one identifier.
+	 *
+	 * @param WP_REST_Request $request Current REST request.
+	 * @return WP_REST_Response Reset response.
+	 */
 	public function reset_counter( $request ) {
 		if ( ! $this->can_manage() ) {
 			return $this->error_response( 'forbidden', __( 'You do not have permission to reset rate limits.', 'mumega-mcp' ), 403 ); }
@@ -95,6 +126,11 @@ class Mcpwp_REST_Rate_Limit extends Mcpwp_REST_API {
 			)
 		);
 	}
+	/**
+	 * Check the retained settings capability.
+	 *
+	 * @return bool True when the current user can manage settings.
+	 */
 	private function can_manage() {
 		return function_exists( 'current_user_can' ) && current_user_can( 'mcpwp_manage_settings' ); }
 }

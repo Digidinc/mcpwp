@@ -1,16 +1,34 @@
 <?php
-/** Typed local plugin settings. @package mumcp */
+/**
+ * Typed local plugin settings.
+ *
+ * @package MCPWP
+ */
+
 if ( ! defined( 'ABSPATH' ) ) {
 	exit; }
 
+/**
+ * Validate and persist the retained plugin and rate-limit settings.
+ */
 class Mcpwp_Settings {
 	const OPTION_NAME            = 'mcpwp_settings';
 	const RATE_LIMIT_OPTION_NAME = 'mcpwp_rate_limit_settings';
+	/**
+	 * Get canonical local activity setting defaults.
+	 *
+	 * @return array<string,bool|int> Plugin setting defaults.
+	 */
 	public function get_defaults() {
 		return array(
 			'enable_logging'     => true,
 			'log_retention_days' => 30,
 		); }
+	/**
+	 * Get canonical rate-limit setting defaults.
+	 *
+	 * @return array<string,bool|int|array> Rate-limit setting defaults.
+	 */
 	public function get_rate_limit_defaults() {
 		return array(
 			'enabled'             => true,
@@ -19,6 +37,12 @@ class Mcpwp_Settings {
 			'burst_limit'         => 10,
 			'whitelist'           => array(),
 		); }
+	/**
+	 * Validate and save one retained administration settings form.
+	 *
+	 * @param array<string,mixed> $post Submitted form data.
+	 * @return array<string,mixed>|WP_Error Saved option result or validation error.
+	 */
 	public function handle_admin_save( $post ) {
 		if ( ! current_user_can( 'mcpwp_manage_settings' ) ) {
 			return new WP_Error( 'forbidden', __( 'You do not have permission to save these settings.', 'mumega-mcp' ) );
@@ -73,6 +97,12 @@ class Mcpwp_Settings {
 			'value' => $clean,
 		);
 	}
+	/**
+	 * Sanitize and bound rate-limit whitelist identifiers.
+	 *
+	 * @param mixed $whitelist Submitted identifiers.
+	 * @return string[]|WP_Error Sanitized identifiers or validation error.
+	 */
 	private function sanitize_rate_whitelist( $whitelist ) {
 		$clean = array();
 		foreach ( (array) $whitelist as $identifier ) {

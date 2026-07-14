@@ -1,14 +1,32 @@
 <?php
-/** Curated plugin settings. @package mumcp */
+/**
+ * Curated plugin-settings REST routes.
+ *
+ * @package MCPWP
+ */
+
 if ( ! defined( 'ABSPATH' ) ) {
 	exit; }
 
+/**
+ * Expose retained plugin settings through authenticated REST routes.
+ */
 class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
+	/**
+	 * Canonical retained setting defaults.
+	 *
+	 * @var array<string,bool|int>
+	 */
 	private $defaults = array(
 		'enable_logging'     => true,
 		'log_retention_days' => 30,
 	);
 
+	/**
+	 * Register retained plugin-settings REST routes.
+	 *
+	 * @return void
+	 */
 	public function register_routes() {
 		register_rest_route(
 			$this->namespace,
@@ -20,10 +38,22 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 		);
 	}
 
+	/**
+	 * Return canonical retained plugin settings.
+	 *
+	 * @param WP_REST_Request $request Current REST request.
+	 * @return WP_REST_Response Settings response.
+	 */
 	public function get_plugin_settings( $request ) {
 		return $this->success_response( $this->canonical_settings() );
 	}
 
+	/**
+	 * Validate and update retained plugin settings.
+	 *
+	 * @param WP_REST_Request $request Current REST request.
+	 * @return WP_REST_Response Update response.
+	 */
 	public function update_plugin_settings( $request ) {
 		$params = $this->validated_json_body( $request, $this->plugin_settings_args(), true );
 		if ( is_wp_error( $params ) ) {
@@ -36,6 +66,11 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 		update_option( 'mcpwp_settings', $current, false );
 		return $this->success_response( $current );
 	}
+	/**
+	 * Merge stored plugin settings with canonical defaults.
+	 *
+	 * @return array<string,bool|int> Canonical settings.
+	 */
 	private function canonical_settings() {
 		$stored = get_option( 'mcpwp_settings', array() );
 		$stored = is_array( $stored ) ? $stored : array();

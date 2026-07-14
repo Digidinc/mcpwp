@@ -1,13 +1,20 @@
-<?php if ( ! defined( 'ABSPATH' ) ) {
+<?php
+/**
+ * Setup and API-key management markup.
+ *
+ * @package MCPWP
+ */
+
+if ( ! defined( 'ABSPATH' ) ) {
 	exit; } ?>
 <div class="wrap mcpwp-wrap">
 	<h1><?php esc_html_e( 'Mumega MCP Setup & Keys', 'mumega-mcp' ); ?></h1>
 	<p><?php esc_html_e( 'Connect an MCP client to the authenticated local WordPress endpoint.', 'mumega-mcp' ); ?></p>
 	<code><?php echo esc_html( rest_url( 'mcpwp/v1/mcp' ) ); ?></code>
 	<p><code>X-API-Key: YOUR_API_KEY</code></p>
-	<?php
-	if ( $notice ) :
-		?>
+<?php
+if ( $notice ) :
+	?>
 		<div class="notice notice-<?php echo esc_attr( $notice[0] ); ?>"><p><?php echo esc_html( $notice[1] ); ?></p></div><?php endif; ?>
 	<?php
 	if ( $new_key ) :
@@ -34,6 +41,6 @@
 	<?php
 	foreach ( $keys as $key ) :
 		?>
-		<tr><td><?php echo esc_html( $key['label'] ?: $key['id'] ); ?></td><td><?php echo esc_html( (string) $key['user_id'] ); ?></td><td><?php echo esc_html( implode( ', ', (array) $key['scopes'] ) ); ?></td><td><?php echo esc_html( implode( ', ', (array) $key['tool_categories'] ) ); ?></td><td><?php echo esc_html( $key['created_at'] ); ?></td><td><form method="post"><?php wp_nonce_field( 'mcpwp_revoke_key' ); ?><input type="hidden" name="key_id" value="<?php echo esc_attr( $key['id'] ); ?>"><button class="button button-link-delete" name="mcpwp_revoke_key" value="1"><?php esc_html_e( 'Revoke', 'mumega-mcp' ); ?></button></form></td></tr><?php endforeach; ?>
+		<tr><td><?php echo esc_html( $key['label'] ? $key['label'] : $key['id'] ); ?></td><td><?php echo esc_html( (string) $key['user_id'] ); ?></td><td><?php echo esc_html( implode( ', ', (array) $key['scopes'] ) ); ?></td><td><?php echo esc_html( implode( ', ', (array) $key['tool_categories'] ) ); ?></td><td><?php echo esc_html( $key['created_at'] ); ?></td><td><form method="post"><?php wp_nonce_field( 'mcpwp_revoke_key' ); ?><input type="hidden" name="key_id" value="<?php echo esc_attr( $key['id'] ); ?>"><button class="button button-link-delete" name="mcpwp_revoke_key" value="1"><?php esc_html_e( 'Revoke', 'mumega-mcp' ); ?></button></form></td></tr><?php endforeach; ?>
 	</tbody></table>
 </div>

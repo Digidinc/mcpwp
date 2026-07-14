@@ -1,18 +1,49 @@
 <?php
-/** Category and tag routes. @package mumcp */
+/**
+ * Category and tag REST routes.
+ *
+ * @package MCPWP
+ */
+
 if ( ! defined( 'ABSPATH' ) ) {
 	exit; }
 
+/**
+ * Expose category and tag operations through authenticated REST routes.
+ */
 class Mcpwp_REST_Site_Taxonomy extends Mcpwp_REST_API {
+	/**
+	 * Register retained category, tag, and term routes.
+	 *
+	 * @return void
+	 */
 	public function register_routes() {
 		register_rest_route( $this->namespace, '/categories', $this->route_definition( WP_REST_Server::READABLE, 'list_categories', 'check_taxonomy_read_permission', 'taxonomy', 'read', array( 'read' ), false, $this->term_list_args() ) );
 		register_rest_route( $this->namespace, '/tags', $this->route_definition( WP_REST_Server::READABLE, 'list_tags', 'check_taxonomy_read_permission', 'taxonomy', 'read', array( 'read' ), false, $this->term_list_args() ) );
 		register_rest_route( $this->namespace, '/terms', $this->route_definition( WP_REST_Server::CREATABLE, 'create_term', 'check_create_term_permission', 'taxonomy', 'write', array( 'selected taxonomy manage_terms' ), true, $this->term_create_args() ) );
 	}
+	/**
+	 * Return readable categories.
+	 *
+	 * @param WP_REST_Request $request Current REST request.
+	 * @return WP_REST_Response Category collection response.
+	 */
 	public function list_categories( $request ) {
 		return $this->list_taxonomy( $request, 'category', 'categories' ); }
+	/**
+	 * Return readable tags.
+	 *
+	 * @param WP_REST_Request $request Current REST request.
+	 * @return WP_REST_Response Tag collection response.
+	 */
 	public function list_tags( $request ) {
 		return $this->list_taxonomy( $request, 'post_tag', 'tags' ); }
+	/**
+	 * Validate input and create a category or tag.
+	 *
+	 * @param WP_REST_Request $request Current REST request.
+	 * @return WP_REST_Response Creation response.
+	 */
 	public function create_term( $request ) {
 		$data = $this->validated_json_body( $request, $this->term_create_args() );
 		if ( is_wp_error( $data ) ) {
@@ -33,6 +64,14 @@ class Mcpwp_REST_Site_Taxonomy extends Mcpwp_REST_API {
 			201
 		);
 	}
+	/**
+	 * Query and format terms for one retained taxonomy.
+	 *
+	 * @param WP_REST_Request $request      Current REST request.
+	 * @param string          $taxonomy     WordPress taxonomy name.
+	 * @param string          $response_key Response collection key.
+	 * @return WP_REST_Response Term collection response.
+	 */
 	private function list_taxonomy( $request, $taxonomy, $response_key ) {
 		$params = $this->validated_query_params( $request, $this->term_list_args() );
 		if ( is_wp_error( $params ) ) {
@@ -53,6 +92,12 @@ class Mcpwp_REST_Site_Taxonomy extends Mcpwp_REST_API {
 			return $this->validation_error_response( $terms ); }
 		return $this->success_response( array( $response_key => $this->format_terms( $terms ) ) );
 	}
+	/**
+	 * Format term objects for a public response.
+	 *
+	 * @param WP_Term[] $terms Term objects.
+	 * @return array<int,array<string,mixed>> Formatted terms.
+	 */
 	private function format_terms( $terms ) {
 		return array_map(
 			static function ( $term ) {
