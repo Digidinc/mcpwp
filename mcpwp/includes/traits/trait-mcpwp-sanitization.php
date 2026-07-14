@@ -30,15 +30,30 @@ trait Mcpwp_Sanitization {
 		}
 		$unknown = array_diff( array_keys( $data ), array_keys( $schema ) );
 		if ( ! empty( $unknown ) ) {
-			return new WP_Error( 'unknown_parameter', __( 'The request contains an unknown parameter.', 'mumega-mcp' ), array( 'status' => 400, 'parameter' => (string) reset( $unknown ) ) );
+			return new WP_Error(
+				'unknown_parameter',
+				__( 'The request contains an unknown parameter.', 'mumega-mcp' ),
+				array(
+					'status'    => 400,
+					'parameter' => (string) reset( $unknown ),
+				)
+			);
 		}
 		foreach ( $schema as $name => $rules ) {
 			if ( ! empty( $rules['required'] ) && ! array_key_exists( $name, $data ) ) {
-				return new WP_Error( 'missing_parameter', __( 'A required parameter is missing.', 'mumega-mcp' ), array( 'status' => 400, 'parameter' => $name ) );
+				return new WP_Error(
+					'missing_parameter',
+					__( 'A required parameter is missing.', 'mumega-mcp' ),
+					array(
+						'status'    => 400,
+						'parameter' => $name,
+					)
+				);
 			}
 			if ( array_key_exists( $name, $data ) ) {
 				$result = $this->validate_strict_value( $data[ $name ], $rules, $name );
-				if ( is_wp_error( $result ) ) { return $result; }
+				if ( is_wp_error( $result ) ) {
+					return $result; }
 			}
 		}
 		if ( $require_field && empty( $data ) ) {
@@ -51,34 +66,52 @@ trait Mcpwp_Sanitization {
 	protected function validate_strict_value( $value, $rules, $name ) {
 		$type = isset( $rules['type'] ) ? $rules['type'] : null;
 		if ( 'string' === $type ) {
-			if ( ! is_string( $value ) || 1 !== preg_match( '//u', $value ) ) { return $this->invalid_parameter( $name ); }
+			if ( ! is_string( $value ) || 1 !== preg_match( '//u', $value ) ) {
+				return $this->invalid_parameter( $name ); }
 			$length_value = in_array( $name, array( 'title', 'name', 'label' ), true ) ? trim( $value ) : $value;
-			$length = strlen( $length_value );
-			if ( isset( $rules['minLength'] ) && $length < (int) $rules['minLength'] ) { return $this->invalid_parameter( $name ); }
-			if ( ! empty( $rules['minLength'] ) && ! in_array( $name, array( 'content', 'slug' ), true ) && '' === trim( sanitize_text_field( $value ) ) ) { return $this->invalid_parameter( $name ); }
-			if ( isset( $rules['maxLength'] ) && $length > (int) $rules['maxLength'] ) { return $this->invalid_parameter( $name ); }
-			if ( isset( $rules['enum'] ) && ! in_array( $value, $rules['enum'], true ) ) { return $this->invalid_parameter( $name ); }
-			if ( isset( $rules['pattern'] ) && 1 !== preg_match( '/' . str_replace( '/', '\\/', $rules['pattern'] ) . '/u', $value ) ) { return $this->invalid_parameter( $name ); }
-			if ( 'slug' === $name && sanitize_title( $value ) !== $value ) { return $this->invalid_parameter( $name ); }
+			$length       = strlen( $length_value );
+			if ( isset( $rules['minLength'] ) && $length < (int) $rules['minLength'] ) {
+				return $this->invalid_parameter( $name ); }
+			if ( ! empty( $rules['minLength'] ) && ! in_array( $name, array( 'content', 'slug' ), true ) && '' === trim( sanitize_text_field( $value ) ) ) {
+				return $this->invalid_parameter( $name ); }
+			if ( isset( $rules['maxLength'] ) && $length > (int) $rules['maxLength'] ) {
+				return $this->invalid_parameter( $name ); }
+			if ( isset( $rules['enum'] ) && ! in_array( $value, $rules['enum'], true ) ) {
+				return $this->invalid_parameter( $name ); }
+			if ( isset( $rules['pattern'] ) && 1 !== preg_match( '/' . str_replace( '/', '\\/', $rules['pattern'] ) . '/u', $value ) ) {
+				return $this->invalid_parameter( $name ); }
+			if ( 'slug' === $name && sanitize_title( $value ) !== $value ) {
+				return $this->invalid_parameter( $name ); }
 			if ( 'content' === $name ) {
 				$safe = $this->validate_safe_html( $value );
-				if ( is_wp_error( $safe ) ) { return $safe; }
+				if ( is_wp_error( $safe ) ) {
+					return $safe; }
 			}
-			if ( 'template' === $name && ! $this->is_valid_page_template( $value ) ) { return $this->invalid_parameter( $name ); }
+			if ( 'template' === $name && ! $this->is_valid_page_template( $value ) ) {
+				return $this->invalid_parameter( $name ); }
 			return true;
 		}
 		if ( 'integer' === $type ) {
-			if ( ! is_int( $value ) || ( isset( $rules['minimum'] ) && $value < $rules['minimum'] ) || ( isset( $rules['maximum'] ) && $value > $rules['maximum'] ) ) { return $this->invalid_parameter( $name ); }
+			if ( ! is_int( $value ) || ( isset( $rules['minimum'] ) && $value < $rules['minimum'] ) || ( isset( $rules['maximum'] ) && $value > $rules['maximum'] ) ) {
+				return $this->invalid_parameter( $name ); }
 			return true;
 		}
-		if ( 'boolean' === $type ) { return is_bool( $value ) ? true : $this->invalid_parameter( $name ); }
+		if ( 'boolean' === $type ) {
+			return is_bool( $value ) ? true : $this->invalid_parameter( $name ); }
 		if ( 'array' === $type ) {
-			if ( ! is_array( $value ) || ( ! empty( $value ) && array_keys( $value ) !== range( 0, count( $value ) - 1 ) ) ) { return $this->invalid_parameter( $name ); }
+			if ( ! is_array( $value ) || ( ! empty( $value ) && array_keys( $value ) !== range( 0, count( $value ) - 1 ) ) ) {
+				return $this->invalid_parameter( $name ); }
 			$count = count( $value );
-			if ( ( isset( $rules['minItems'] ) && $count < $rules['minItems'] ) || ( isset( $rules['maxItems'] ) && $count > $rules['maxItems'] ) ) { return $this->invalid_parameter( $name ); }
-			if ( ! empty( $rules['uniqueItems'] ) && count( array_unique( array_map( 'serialize', $value ) ) ) !== $count ) { return $this->invalid_parameter( $name ); }
+			if ( ( isset( $rules['minItems'] ) && $count < $rules['minItems'] ) || ( isset( $rules['maxItems'] ) && $count > $rules['maxItems'] ) ) {
+				return $this->invalid_parameter( $name ); }
+			if ( ! empty( $rules['uniqueItems'] ) && count( array_unique( array_map( 'serialize', $value ) ) ) !== $count ) {
+				return $this->invalid_parameter( $name ); }
 			if ( isset( $rules['items'] ) ) {
-				foreach ( $value as $item ) { $result = $this->validate_strict_value( $item, $rules['items'], $name ); if ( is_wp_error( $result ) ) { return $result; } }
+				foreach ( $value as $item ) {
+					$result = $this->validate_strict_value( $item, $rules['items'], $name );
+					if ( is_wp_error( $result ) ) {
+						return $result; }
+				}
 			}
 			return true;
 		}
@@ -93,21 +126,32 @@ trait Mcpwp_Sanitization {
 	}
 
 	protected function is_valid_page_template( $template ) {
-		if ( 'default' === $template ) { return true; }
-		if ( ! function_exists( 'wp_get_theme' ) ) { return false; }
+		if ( 'default' === $template ) {
+			return true; }
+		if ( ! function_exists( 'wp_get_theme' ) ) {
+			return false; }
 		$templates = wp_get_theme()->get_page_templates();
 		return is_array( $templates ) && array_key_exists( $template, $templates );
 	}
 
 	protected function input_depth( $value ) {
-		if ( ! is_array( $value ) || empty( $value ) ) { return 1; }
+		if ( ! is_array( $value ) || empty( $value ) ) {
+			return 1; }
 		$depth = 1;
-		foreach ( $value as $child ) { $depth = max( $depth, 1 + $this->input_depth( $child ) ); }
+		foreach ( $value as $child ) {
+			$depth = max( $depth, 1 + $this->input_depth( $child ) ); }
 		return $depth;
 	}
 
 	protected function invalid_parameter( $name ) {
-		return new WP_Error( 'invalid_parameter', __( 'A request parameter is invalid.', 'mumega-mcp' ), array( 'status' => 400, 'parameter' => $name ) );
+		return new WP_Error(
+			'invalid_parameter',
+			__( 'A request parameter is invalid.', 'mumega-mcp' ),
+			array(
+				'status'    => 400,
+				'parameter' => $name,
+			)
+		);
 	}
 	/**
 	 * Check whether content contains wrapper HTML tags that should never be injected.
@@ -236,7 +280,7 @@ trait Mcpwp_Sanitization {
 
 		if ( isset( $args['status'] ) ) {
 			$valid_statuses = array( 'publish', 'draft', 'pending', 'private', 'any' );
-			$status = sanitize_key( $args['status'] );
+			$status         = sanitize_key( $args['status'] );
 			if ( in_array( $status, $valid_statuses, true ) ) {
 				$sanitized['post_status'] = $status;
 			}
@@ -244,7 +288,7 @@ trait Mcpwp_Sanitization {
 
 		if ( isset( $args['orderby'] ) ) {
 			$valid_orderby = array( 'date', 'modified', 'title', 'ID', 'menu_order', 'rand' );
-			$orderby = sanitize_key( $args['orderby'] );
+			$orderby       = sanitize_key( $args['orderby'] );
 			if ( in_array( $orderby, $valid_orderby, true ) ) {
 				$sanitized['orderby'] = $orderby;
 			}

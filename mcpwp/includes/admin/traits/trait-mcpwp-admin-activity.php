@@ -24,5 +24,4 @@ trait Mcpwp_Admin_Activity_Trait {
 		$page = new Mcpwp_Activity_Log_Page();
 		$page->render();
 	}
-
 }

@@ -1,6 +1,17 @@
-<?php if ( ! defined( 'ABSPATH' ) ) { exit; } $settings_controller = isset( $settings_controller ) ? $settings_controller : new Mcpwp_Settings(); $settings = array_merge( $settings_controller->get_defaults(), (array) get_option( 'mcpwp_settings', array() ) ); $limits = array_merge( $settings_controller->get_rate_limit_defaults(), (array) get_option( 'mcpwp_rate_limit_settings', array() ) ); ?>
+<?php if ( ! defined( 'ABSPATH' ) ) {
+	exit;
+} $settings_controller = isset( $settings_controller ) ? $settings_controller : new Mcpwp_Settings();
+$settings              = array_merge( $settings_controller->get_defaults(), (array) get_option( 'mcpwp_settings', array() ) );
+$limits                = array_merge( $settings_controller->get_rate_limit_defaults(), (array) get_option( 'mcpwp_rate_limit_settings', array() ) ); ?>
 <div class="wrap mcpwp-wrap"><h1><?php esc_html_e( 'Mumega MCP Settings', 'mumega-mcp' ); ?></h1>
-<?php if ( isset( $save_result ) && is_wp_error( $save_result ) ) : ?><div class="notice notice-error"><p><?php echo esc_html( $save_result->get_error_message() ); ?></p></div><?php elseif ( ! empty( $save_result ) ) : ?><div class="notice notice-success"><p><?php esc_html_e( 'Settings saved.', 'mumega-mcp' ); ?></p></div><?php endif; ?>
+<?php
+if ( isset( $save_result ) && is_wp_error( $save_result ) ) :
+	?>
+	<div class="notice notice-error"><p><?php echo esc_html( $save_result->get_error_message() ); ?></p></div>
+	<?php
+elseif ( ! empty( $save_result ) ) :
+	?>
+	<div class="notice notice-success"><p><?php esc_html_e( 'Settings saved.', 'mumega-mcp' ); ?></p></div><?php endif; ?>
 <form method="post"><?php wp_nonce_field( 'mcpwp_save_plugin_settings' ); ?><input type="hidden" name="mcpwp_save_settings" value="plugin">
 <h2><?php esc_html_e( 'Local Activity', 'mumega-mcp' ); ?></h2>
 <label><input type="checkbox" name="mcpwp_settings[enable_logging]" value="1" <?php checked( ! empty( $settings['enable_logging'] ) ); ?>> <?php esc_html_e( 'Enable local request logging', 'mumega-mcp' ); ?></label>

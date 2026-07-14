@@ -15,7 +15,7 @@ msgstr ""
 
 #. Plugin Name of the plugin
 #: mcpwp.php
-#: includes/admin/class-mcpwp-admin.php:15
+#: includes/admin/class-mcpwp-admin.php:17
 msgid "Mumega MCP"
 msgstr ""
 
@@ -34,236 +34,236 @@ msgstr ""
 msgid "https://mumega.com/"
 msgstr ""
 
-#: admin/partials/mcpwp-settings-display.php:2
+#: admin/partials/mcpwp-settings-display.php:6
 msgid "Mumega MCP Settings"
 msgstr ""
 
-#: admin/partials/mcpwp-settings-display.php:3
+#: admin/partials/mcpwp-settings-display.php:14
 msgid "Settings saved."
 msgstr ""
 
-#: admin/partials/mcpwp-settings-display.php:5
+#: admin/partials/mcpwp-settings-display.php:16
 msgid "Local Activity"
 msgstr ""
 
-#: admin/partials/mcpwp-settings-display.php:6
+#: admin/partials/mcpwp-settings-display.php:17
 msgid "Enable local request logging"
 msgstr ""
 
-#: admin/partials/mcpwp-settings-display.php:7
+#: admin/partials/mcpwp-settings-display.php:18
 msgid "Retention days"
 msgstr ""
 
-#: admin/partials/mcpwp-settings-display.php:9
+#: admin/partials/mcpwp-settings-display.php:20
 msgid "Rate Limits"
 msgstr ""
 
-#: admin/partials/mcpwp-settings-display.php:10
+#: admin/partials/mcpwp-settings-display.php:21
 msgid "Enable rate limiting"
 msgstr ""
 
-#: admin/partials/mcpwp-settings-display.php:11
+#: admin/partials/mcpwp-settings-display.php:22
 msgid "Requests per minute"
 msgstr ""
 
-#: admin/partials/mcpwp-settings-display.php:12
+#: admin/partials/mcpwp-settings-display.php:23
 msgid "Requests per hour"
 msgstr ""
 
-#: admin/partials/mcpwp-settings-display.php:13
+#: admin/partials/mcpwp-settings-display.php:24
 msgid "Burst limit"
 msgstr ""
 
-#: admin/partials/mcpwp-settings-display.php:14
+#: admin/partials/mcpwp-settings-display.php:25
 msgid "Whitelisted identifiers"
 msgstr ""
 
-#: admin/partials/mcpwp-setup-display.php:3
+#: admin/partials/mcpwp-setup-display.php:4
 msgid "Mumega MCP Setup & Keys"
 msgstr ""
 
-#: admin/partials/mcpwp-setup-display.php:4
+#: admin/partials/mcpwp-setup-display.php:5
 msgid "Connect an MCP client to the authenticated local WordPress endpoint."
 msgstr ""
 
-#: admin/partials/mcpwp-setup-display.php:8
+#: admin/partials/mcpwp-setup-display.php:15
 msgid "Copy this key now; it is shown once:"
 msgstr ""
 
-#: admin/partials/mcpwp-setup-display.php:11
+#: admin/partials/mcpwp-setup-display.php:18
 msgid "Key label"
 msgstr ""
 
-#: admin/partials/mcpwp-setup-display.php:12
-#: admin/partials/mcpwp-setup-display.php:26
+#: admin/partials/mcpwp-setup-display.php:19
+#: admin/partials/mcpwp-setup-display.php:33
 msgid "Scopes"
 msgstr ""
 
-#: admin/partials/mcpwp-setup-display.php:13
+#: admin/partials/mcpwp-setup-display.php:20
 msgid "Read"
 msgstr ""
 
-#: admin/partials/mcpwp-setup-display.php:14
+#: admin/partials/mcpwp-setup-display.php:21
 msgid "Write"
 msgstr ""
 
-#: admin/partials/mcpwp-setup-display.php:15
+#: admin/partials/mcpwp-setup-display.php:22
 msgid "Admin"
 msgstr ""
 
-#: admin/partials/mcpwp-setup-display.php:17
-#: admin/partials/mcpwp-setup-display.php:26
+#: admin/partials/mcpwp-setup-display.php:24
+#: admin/partials/mcpwp-setup-display.php:33
 msgid "Tool categories"
 msgstr ""
 
-#: admin/partials/mcpwp-setup-display.php:18
-#: includes/admin/class-mcpwp-tools-admin.php:9
+#: admin/partials/mcpwp-setup-display.php:25
+#: includes/admin/class-mcpwp-tools-admin.php:11
 msgid "Site"
 msgstr ""
 
-#: admin/partials/mcpwp-setup-display.php:19
-#: includes/admin/class-mcpwp-tools-admin.php:10
+#: admin/partials/mcpwp-setup-display.php:26
+#: includes/admin/class-mcpwp-tools-admin.php:15
 msgid "Content"
 msgstr ""
 
-#: admin/partials/mcpwp-setup-display.php:20
-#: includes/admin/class-mcpwp-tools-admin.php:11
+#: admin/partials/mcpwp-setup-display.php:27
+#: includes/admin/class-mcpwp-tools-admin.php:19
 msgid "Media"
 msgstr ""
 
-#: admin/partials/mcpwp-setup-display.php:21
-#: includes/admin/class-mcpwp-tools-admin.php:12
+#: admin/partials/mcpwp-setup-display.php:28
+#: includes/admin/class-mcpwp-tools-admin.php:23
 msgid "Taxonomy"
 msgstr ""
 
-#: admin/partials/mcpwp-setup-display.php:23
+#: admin/partials/mcpwp-setup-display.php:30
 msgid "Create API Key"
 msgstr ""
 
-#: admin/partials/mcpwp-setup-display.php:25
+#: admin/partials/mcpwp-setup-display.php:32
 msgid "Active API Keys"
 msgstr ""
 
-#: admin/partials/mcpwp-setup-display.php:26
+#: admin/partials/mcpwp-setup-display.php:33
 msgid "Label"
 msgstr ""
 
-#: admin/partials/mcpwp-setup-display.php:26
+#: admin/partials/mcpwp-setup-display.php:33
 msgid "WordPress user ID"
 msgstr ""
 
-#: admin/partials/mcpwp-setup-display.php:26
+#: admin/partials/mcpwp-setup-display.php:33
 msgid "Created"
 msgstr ""
 
-#: admin/partials/mcpwp-setup-display.php:26
+#: admin/partials/mcpwp-setup-display.php:33
 msgid "Action"
 msgstr ""
 
-#: admin/partials/mcpwp-setup-display.php:27
+#: admin/partials/mcpwp-setup-display.php:37
 msgid "Revoke"
 msgstr ""
 
-#: admin/partials/mcpwp-tools-display.php:2
+#: admin/partials/mcpwp-tools-display.php:3
 msgid "MCP Tool Inventory"
 msgstr ""
 
-#: admin/partials/mcpwp-tools-display.php:2
+#: admin/partials/mcpwp-tools-display.php:3
 msgid "This inventory is generated from the active free registry."
 msgstr ""
 
-#: includes/admin/class-mcpwp-activity-log.php:18
+#: includes/admin/class-mcpwp-activity-log.php:19
 msgid "Mumega MCP Activity"
 msgstr ""
 
-#: includes/admin/class-mcpwp-activity-log.php:19
+#: includes/admin/class-mcpwp-activity-log.php:20
 msgid "Local MCP tool activity metadata only; arguments and content are never stored."
 msgstr ""
 
-#: includes/admin/class-mcpwp-activity-log.php:21
+#: includes/admin/class-mcpwp-activity-log.php:22
 msgid "When"
 msgstr ""
 
-#: includes/admin/class-mcpwp-activity-log.php:21
+#: includes/admin/class-mcpwp-activity-log.php:22
 msgid "Tool"
 msgstr ""
 
-#: includes/admin/class-mcpwp-activity-log.php:21
+#: includes/admin/class-mcpwp-activity-log.php:22
 msgid "Status"
 msgstr ""
 
-#: includes/admin/class-mcpwp-activity-log.php:21
+#: includes/admin/class-mcpwp-activity-log.php:22
 msgid "Duration (ms)"
 msgstr ""
 
-#: includes/admin/class-mcpwp-activity-log.php:21
+#: includes/admin/class-mcpwp-activity-log.php:22
 msgid "API key ID"
 msgstr ""
 
-#: includes/admin/class-mcpwp-activity-log.php:24
+#: includes/admin/class-mcpwp-activity-log.php:26
 msgid "No activity found."
 msgstr ""
 
-#: includes/admin/class-mcpwp-admin.php:16
+#: includes/admin/class-mcpwp-admin.php:18
 msgid "Setup & Keys"
 msgstr ""
 
-#: includes/admin/class-mcpwp-admin.php:17
+#: includes/admin/class-mcpwp-admin.php:19
 msgid "Tool Inventory"
 msgstr ""
 
-#: includes/admin/class-mcpwp-admin.php:18
+#: includes/admin/class-mcpwp-admin.php:20
 msgid "Settings"
 msgstr ""
 
-#: includes/admin/class-mcpwp-admin.php:19
+#: includes/admin/class-mcpwp-admin.php:21
 msgid "Activity"
 msgstr ""
 
-#: includes/admin/class-mcpwp-admin.php:27
+#: includes/admin/class-mcpwp-admin.php:31
 msgid "Setup"
 msgstr ""
 
-#: includes/admin/class-mcpwp-settings.php:12
+#: includes/admin/class-mcpwp-settings.php:24
 msgid "You do not have permission to save these settings."
 msgstr ""
 
-#: includes/admin/class-mcpwp-settings.php:19
+#: includes/admin/class-mcpwp-settings.php:31
 msgid "The settings request could not be verified."
 msgstr ""
 
-#: includes/admin/class-mcpwp-settings.php:52
-#: includes/api/class-mcpwp-rest-rate-limit.php:26
+#: includes/admin/class-mcpwp-settings.php:67
+#: includes/api/class-mcpwp-rest-rate-limit.php:61
 msgid "Burst limit cannot exceed requests per minute."
 msgstr ""
 
-#: includes/admin/class-mcpwp-settings.php:67
+#: includes/admin/class-mcpwp-settings.php:85
 msgid "Whitelist identifiers must be non-empty and no more than 100 bytes."
 msgstr ""
 
-#: includes/admin/class-mcpwp-settings.php:73
+#: includes/admin/class-mcpwp-settings.php:91
 msgid "The whitelist cannot contain more than 100 unique identifiers."
 msgstr ""
 
-#: includes/admin/class-mcpwp-tools-admin.php:9
+#: includes/admin/class-mcpwp-tools-admin.php:12
 msgid "Local site information."
 msgstr ""
 
-#: includes/admin/class-mcpwp-tools-admin.php:10
+#: includes/admin/class-mcpwp-tools-admin.php:16
 msgid "Posts, pages, and drafts."
 msgstr ""
 
-#: includes/admin/class-mcpwp-tools-admin.php:11
+#: includes/admin/class-mcpwp-tools-admin.php:20
 msgid "Local file and base64 uploads."
 msgstr ""
 
-#: includes/admin/class-mcpwp-tools-admin.php:12
+#: includes/admin/class-mcpwp-tools-admin.php:24
 msgid "Categories and tags."
 msgstr ""
 
-#: includes/admin/class-mcpwp-tools-admin.php:16
-#: includes/admin/traits/trait-mcpwp-admin-settings.php:5
-#: includes/admin/traits/trait-mcpwp-admin-setup.php:5
+#: includes/admin/class-mcpwp-tools-admin.php:30
+#: includes/admin/traits/trait-mcpwp-admin-settings.php:7
+#: includes/admin/traits/trait-mcpwp-admin-setup.php:7
 msgid "You do not have permission to view this page."
 msgstr ""
 
@@ -271,159 +271,159 @@ msgstr ""
 msgid "You do not have permission to access this page."
 msgstr ""
 
-#: includes/admin/traits/trait-mcpwp-admin-setup.php:14
+#: includes/admin/traits/trait-mcpwp-admin-setup.php:16
 msgid "API key created. Copy it now because it will not be shown again."
 msgstr ""
 
-#: includes/admin/traits/trait-mcpwp-admin-setup.php:16
+#: includes/admin/traits/trait-mcpwp-admin-setup.php:18
 msgid "API key revoked."
 msgstr ""
 
-#: includes/admin/traits/trait-mcpwp-admin-setup.php:25
-#: includes/api/class-mcpwp-rest-api-keys.php:14
-#: includes/api/class-mcpwp-rest-api-keys.php:21
-#: includes/api/class-mcpwp-rest-api-keys.php:30
+#: includes/admin/traits/trait-mcpwp-admin-setup.php:27
+#: includes/api/class-mcpwp-rest-api-keys.php:56
+#: includes/api/class-mcpwp-rest-api-keys.php:78
+#: includes/api/class-mcpwp-rest-api-keys.php:90
 msgid "You do not have permission to manage API keys."
 msgstr ""
 
-#: includes/admin/traits/trait-mcpwp-admin-setup.php:32
+#: includes/admin/traits/trait-mcpwp-admin-setup.php:34
 msgid "The API-key creation request could not be verified."
 msgstr ""
 
-#: includes/admin/traits/trait-mcpwp-admin-setup.php:36
+#: includes/admin/traits/trait-mcpwp-admin-setup.php:38
 msgid "Enter an API-key label of no more than 100 bytes."
 msgstr ""
 
-#: includes/admin/traits/trait-mcpwp-admin-setup.php:41
+#: includes/admin/traits/trait-mcpwp-admin-setup.php:43
 msgid "Select at least one scope and one tool category."
 msgstr ""
 
-#: includes/admin/traits/trait-mcpwp-admin-setup.php:59
+#: includes/admin/traits/trait-mcpwp-admin-setup.php:61
 msgid "The API-key revocation request could not be verified."
 msgstr ""
 
-#: includes/admin/traits/trait-mcpwp-admin-setup.php:63
+#: includes/admin/traits/trait-mcpwp-admin-setup.php:65
 msgid "The API key could not be revoked."
 msgstr ""
 
-#: includes/api/class-mcpwp-rest-api-keys.php:35
+#: includes/api/class-mcpwp-rest-api-keys.php:110
 msgid "API key not found or already revoked."
 msgstr ""
 
-#: includes/api/class-mcpwp-rest-api.php:37
+#: includes/api/class-mcpwp-rest-api.php:44
 msgid "This tool category is disabled by the site administrator."
 msgstr ""
 
-#: includes/api/class-mcpwp-rest-api.php:41
+#: includes/api/class-mcpwp-rest-api.php:48
 msgid "This API key does not grant the requested tool category."
 msgstr ""
 
-#: includes/api/class-mcpwp-rest-api.php:45
+#: includes/api/class-mcpwp-rest-api.php:54
 msgid "The bound WordPress user lacks the required capability."
 msgstr ""
 
-#: includes/api/class-mcpwp-rest-api.php:53
+#: includes/api/class-mcpwp-rest-api.php:70
 msgid "The bound WordPress user lacks the read capability."
 msgstr ""
 
-#: includes/api/class-mcpwp-rest-api.php:75
+#: includes/api/class-mcpwp-rest-api.php:105
 msgid "The bound WordPress user cannot read drafts."
 msgstr ""
 
-#: includes/api/class-mcpwp-rest-api.php:80
-#: includes/core/class-mcpwp-drafts.php:100
+#: includes/api/class-mcpwp-rest-api.php:111
+#: includes/core/class-mcpwp-drafts.php:119
 msgid "The requested post or page is not a draft."
 msgstr ""
 
-#: includes/api/class-mcpwp-rest-api.php:101
-#: includes/api/class-mcpwp-rest-api.php:137
+#: includes/api/class-mcpwp-rest-api.php:138
+#: includes/api/class-mcpwp-rest-api.php:207
 msgid "The bound WordPress user cannot publish this content type."
 msgstr ""
 
-#: includes/api/class-mcpwp-rest-api.php:110
+#: includes/api/class-mcpwp-rest-api.php:152
 msgid "The bound WordPress user cannot list non-public content."
 msgstr ""
 
-#: includes/api/class-mcpwp-rest-api.php:112
+#: includes/api/class-mcpwp-rest-api.php:162
 msgid "The bound WordPress user cannot read private content."
 msgstr ""
 
-#: includes/api/class-mcpwp-rest-api.php:123
+#: includes/api/class-mcpwp-rest-api.php:186
 msgid "The bound WordPress user cannot assign the requested terms."
 msgstr ""
 
-#: includes/api/class-mcpwp-rest-api.php:131
+#: includes/api/class-mcpwp-rest-api.php:200
 msgid "The requested content was not found."
 msgstr ""
 
-#: includes/api/class-mcpwp-rest-api.php:155
+#: includes/api/class-mcpwp-rest-api.php:243
 msgid "The JSON request body is too large."
 msgstr ""
 
-#: includes/api/class-mcpwp-rest-api.php:160
+#: includes/api/class-mcpwp-rest-api.php:248
 #: includes/traits/trait-mcpwp-sanitization.php:26
 msgid "A JSON object body is required."
 msgstr ""
 
-#: includes/api/class-mcpwp-rest-api.php:175
-#: includes/core/class-mcpwp-posts.php:113
-#: includes/core/class-mcpwp-posts.php:200
+#: includes/api/class-mcpwp-rest-api.php:264
+#: includes/core/class-mcpwp-posts.php:114
+#: includes/core/class-mcpwp-posts.php:201
 msgid "Post not found."
 msgstr ""
 
-#: includes/api/class-mcpwp-rest-api.php:175
-#: includes/core/class-mcpwp-pages.php:79
-#: includes/core/class-mcpwp-pages.php:159
+#: includes/api/class-mcpwp-rest-api.php:265
+#: includes/core/class-mcpwp-pages.php:80
+#: includes/core/class-mcpwp-pages.php:160
 msgid "Page not found."
 msgstr ""
 
-#: includes/api/class-mcpwp-rest-api.php:175
-#: includes/api/class-mcpwp-rest-media.php:21
+#: includes/api/class-mcpwp-rest-api.php:266
+#: includes/api/class-mcpwp-rest-media.php:31
 msgid "Media attachment not found."
 msgstr ""
 
-#: includes/api/class-mcpwp-rest-api.php:184
-#: includes/traits/trait-mcpwp-sanitization.php:33
+#: includes/api/class-mcpwp-rest-api.php:281
+#: includes/traits/trait-mcpwp-sanitization.php:35
 msgid "The request contains an unknown parameter."
 msgstr ""
 
-#: includes/api/class-mcpwp-rest-api.php:210
+#: includes/api/class-mcpwp-rest-api.php:317
 msgid "A category does not exist in the category taxonomy."
 msgstr ""
 
-#: includes/api/class-mcpwp-rest-api.php:217
+#: includes/api/class-mcpwp-rest-api.php:329
 msgid "The featured image must be a readable non-SVG image attachment."
 msgstr ""
 
-#: includes/api/class-mcpwp-rest-api.php:224
+#: includes/api/class-mcpwp-rest-api.php:337
 msgid "The requested page parent creates a cycle."
 msgstr ""
 
-#: includes/api/class-mcpwp-rest-api.php:227
+#: includes/api/class-mcpwp-rest-api.php:341
 msgid "The page parent must be another readable page."
 msgstr ""
 
-#: includes/api/class-mcpwp-rest-media.php:27
+#: includes/api/class-mcpwp-rest-media.php:47
 msgid "The upload contains an unknown file part."
 msgstr ""
 
-#: includes/api/class-mcpwp-rest-media.php:28
+#: includes/api/class-mcpwp-rest-media.php:49
 msgid "A local file upload is required."
 msgstr ""
 
-#: includes/api/class-mcpwp-rest-rate-limit.php:20
+#: includes/api/class-mcpwp-rest-rate-limit.php:53
 msgid "You do not have permission to manage rate limiting."
 msgstr ""
 
-#: includes/api/class-mcpwp-rest-rate-limit.php:31
+#: includes/api/class-mcpwp-rest-rate-limit.php:67
 msgid "You do not have permission to reset rate limits."
 msgstr ""
 
-#: includes/api/class-mcpwp-rest-rate-limit.php:38
+#: includes/api/class-mcpwp-rest-rate-limit.php:89
 msgid "The rate-limit identifier is not a stored API key."
 msgstr ""
 
-#: includes/class-mcpwp-activator.php:14
+#: includes/class-mcpwp-activator.php:21
 msgid "Mumega MCP Agent"
 msgstr ""
 
@@ -445,11 +445,11 @@ msgstr ""
 msgid "Rate limit exceeded. %1$d requests per hour allowed. Try again in %2$d seconds."
 msgstr ""
 
-#: includes/core/class-mcpwp-drafts.php:71
+#: includes/core/class-mcpwp-drafts.php:89
 msgid "(no title)"
 msgstr ""
 
-#: includes/core/class-mcpwp-drafts.php:103
+#: includes/core/class-mcpwp-drafts.php:122
 msgid "The draft could not be deleted."
 msgstr ""
 
@@ -461,100 +461,100 @@ msgstr ""
 msgid "No file uploaded."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:48
+#: includes/core/class-mcpwp-media.php:49
 msgid "The uploaded file is empty."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:49
-#: includes/core/class-mcpwp-media.php:185
+#: includes/core/class-mcpwp-media.php:51
+#: includes/core/class-mcpwp-media.php:210
 msgid "File exceeds maximum size of 10MB."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:50
+#: includes/core/class-mcpwp-media.php:53
 msgid "The file is not a genuine HTTP upload."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:52
+#: includes/core/class-mcpwp-media.php:56
 msgid "The uploaded file size is invalid."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:67
-#: includes/core/class-mcpwp-media.php:290
+#: includes/core/class-mcpwp-media.php:72
+#: includes/core/class-mcpwp-media.php:319
 msgid "WordPress could not store the uploaded media file."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:84
-#: includes/core/class-mcpwp-media.php:308
+#: includes/core/class-mcpwp-media.php:89
+#: includes/core/class-mcpwp-media.php:337
 msgid "WordPress could not create the media attachment."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:100
-#: includes/core/class-mcpwp-media.php:203
+#: includes/core/class-mcpwp-media.php:107
+#: includes/core/class-mcpwp-media.php:228
 msgid "A valid filename is required."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:101
-#: includes/core/class-mcpwp-media.php:208
+#: includes/core/class-mcpwp-media.php:109
+#: includes/core/class-mcpwp-media.php:233
 msgid "The file type is not allowed for local media uploads."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:103
-#: includes/core/class-mcpwp-media.php:234
+#: includes/core/class-mcpwp-media.php:112
+#: includes/core/class-mcpwp-media.php:261
 msgid "The file extension or contents are not allowed by WordPress."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:104
+#: includes/core/class-mcpwp-media.php:114
 msgid "The supplied MIME type does not match the detected file type."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:110
+#: includes/core/class-mcpwp-media.php:124
 msgid "WordPress could not create attachment metadata."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:132
+#: includes/core/class-mcpwp-media.php:155
 msgid "WordPress could not save attachment details."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:158
+#: includes/core/class-mcpwp-media.php:182
 msgid "Invalid Base64 data URI."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:163
+#: includes/core/class-mcpwp-media.php:187
 msgid "Base64 data must be non-empty and unwrapped."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:171
+#: includes/core/class-mcpwp-media.php:195
 msgid "Invalid Base64 data."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:178
+#: includes/core/class-mcpwp-media.php:203
 msgid "The decoded file is empty."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:211
+#: includes/core/class-mcpwp-media.php:236
 msgid "The filename contains a disallowed extension."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:219
+#: includes/core/class-mcpwp-media.php:244
 msgid "Could not create temporary file."
 msgstr ""
 
 #. translators: 1: supplied mime type, 2: detected mime type
-#: includes/core/class-mcpwp-media.php:247
+#: includes/core/class-mcpwp-media.php:274
 #, php-format
 msgid "Supplied mime_type \"%1$s\" does not match detected type \"%2$s\". Upload rejected."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:255
+#: includes/core/class-mcpwp-media.php:284
 msgid "The data URI MIME type does not match the detected file type."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:263
+#: includes/core/class-mcpwp-media.php:292
 msgid "SVG uploads are blocked (SVGs can contain <script> tags — stored XSS risk). Use PNG or WebP instead. To allow SVGs, install an SVG sanitizer plugin (e.g. \"Safe SVG\") and upload via the WordPress media library directly."
 msgstr ""
 
 #. translators: 1: requested slug, 2: actual stored slug
-#: includes/core/class-mcpwp-pages.php:236
+#: includes/core/class-mcpwp-pages.php:237
 #, php-format
 msgid "Requested slug \"%1$s\" was not stored — WordPress rewrote it to \"%2$s\" due to a collision with another post. To force the slug, permanently delete any trashed or auto-draft posts that hold \"%1$s\" and then re-save."
 msgstr ""
@@ -591,29 +591,29 @@ msgstr ""
 msgid "The WordPress user bound to this API key is unavailable."
 msgstr ""
 
-#: includes/traits/trait-mcpwp-api-auth.php:56
+#: includes/traits/trait-mcpwp-api-auth.php:58
 msgid "The API key does not grant the required scope."
 msgstr ""
 
-#: includes/traits/trait-mcpwp-api-auth.php:161
+#: includes/traits/trait-mcpwp-api-auth.php:180
 msgid "A valid owner and non-empty scopes are required."
 msgstr ""
 
-#: includes/traits/trait-mcpwp-api-auth.php:248
+#: includes/traits/trait-mcpwp-api-auth.php:282
 msgid "At least one API-key scope is required."
 msgstr ""
 
-#: includes/traits/trait-mcpwp-api-auth.php:251
-#: includes/traits/trait-mcpwp-api-auth.php:253
+#: includes/traits/trait-mcpwp-api-auth.php:287
+#: includes/traits/trait-mcpwp-api-auth.php:290
 msgid "API-key scopes must be unique read, write, or admin values."
 msgstr ""
 
-#: includes/traits/trait-mcpwp-api-auth.php:269
+#: includes/traits/trait-mcpwp-api-auth.php:307
 msgid "Tool categories must be an array."
 msgstr ""
 
-#: includes/traits/trait-mcpwp-api-auth.php:271
-#: includes/traits/trait-mcpwp-api-auth.php:273
+#: includes/traits/trait-mcpwp-api-auth.php:311
+#: includes/traits/trait-mcpwp-api-auth.php:314
 msgid "Tool categories contain an invalid or duplicate value."
 msgstr ""
 
@@ -621,18 +621,18 @@ msgstr ""
 msgid "The request object exceeds the allowed complexity."
 msgstr ""
 
-#: includes/traits/trait-mcpwp-sanitization.php:37
+#: includes/traits/trait-mcpwp-sanitization.php:46
 msgid "A required parameter is missing."
 msgstr ""
 
-#: includes/traits/trait-mcpwp-sanitization.php:45
+#: includes/traits/trait-mcpwp-sanitization.php:60
 msgid "At least one mutable field is required."
 msgstr ""
 
-#: includes/traits/trait-mcpwp-sanitization.php:90
+#: includes/traits/trait-mcpwp-sanitization.php:123
 msgid "The content contains unsafe HTML."
 msgstr ""
 
-#: includes/traits/trait-mcpwp-sanitization.php:110
+#: includes/traits/trait-mcpwp-sanitization.php:149
 msgid "A request parameter is invalid."
 msgstr ""

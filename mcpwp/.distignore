@@ -6,6 +6,7 @@
 /.editorconfig
 /.gitignore
 /.phpcs.xml
+/phpcs.xml.dist
 /phpunit.xml
 /composer.json
 /composer.lock

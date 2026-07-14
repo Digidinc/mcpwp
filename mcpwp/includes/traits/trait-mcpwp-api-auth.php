@@ -53,11 +53,19 @@ trait Mcpwp_Api_Auth {
 
 		$required = null === $required_scope ? $this->get_required_scope_for_request( $request ) : $required_scope;
 		if ( ! $this->key_has_scope( $record, $required ) ) {
-			return new WP_Error( 'insufficient_scope', __( 'The API key does not grant the required scope.', 'mumega-mcp' ), array( 'status' => 403, 'required_scope' => $required ) );
+			return new WP_Error(
+				'insufficient_scope',
+				__( 'The API key does not grant the required scope.', 'mumega-mcp' ),
+				array(
+					'status'         => 403,
+					'required_scope' => $required,
+				)
+			);
 		}
 
 		$this->mcpwp_current_api_key_record = $record;
-		if ( ! $charge_rate_limit ) { return true; }
+		if ( ! $charge_rate_limit ) {
+			return true; }
 		$rate = $this->check_rate_limit( 'key:' . sanitize_key( $record['id'] ), $request->get_method(), $record );
 		return is_wp_error( $rate ) ? $rate : true;
 	}
@@ -87,7 +95,8 @@ trait Mcpwp_Api_Auth {
 	protected function find_scoped_api_key( $key ) {
 		foreach ( $this->get_scoped_api_keys_raw() as $record ) {
 			$record = $this->normalize_api_key_record( $record );
-			if ( ! $this->record_has_valid_identity_fields( $record ) ) { continue; }
+			if ( ! $this->record_has_valid_identity_fields( $record ) ) {
+				continue; }
 			if ( empty( $record['revoked_at'] ) && $this->is_api_key_match( $key, $record['hash'] ) ) {
 				return $record;
 			}
@@ -98,14 +107,23 @@ trait Mcpwp_Api_Auth {
 	protected function find_legacy_spai_key( $key ) {
 		foreach ( (array) get_option( 'spai_api_keys', array() ) as $record ) {
 			$record = $this->normalize_api_key_record( $record );
-			if ( ! $this->record_has_valid_identity_fields( $record ) ) { continue; }
+			if ( ! $this->record_has_valid_identity_fields( $record ) ) {
+				continue; }
 			if ( empty( $record['revoked_at'] ) && $this->is_api_key_match( $key, $record['hash'] ) ) {
 				return $record;
 			}
 		}
 		$single = get_option( 'spai_api_key', '' );
 		if ( $single && $this->is_api_key_match( $key, $single ) ) {
-			return array( 'id' => 'legacy-spai', 'label' => 'Legacy key', 'hash' => $single, 'user_id' => (int) get_option( 'mcpwp_legacy_migration_owner_id', 0 ), 'scopes' => array( 'read', 'write', 'admin' ), 'tool_categories' => array(), 'revoked_at' => null );
+			return array(
+				'id'              => 'legacy-spai',
+				'label'           => 'Legacy key',
+				'hash'            => $single,
+				'user_id'         => (int) get_option( 'mcpwp_legacy_migration_owner_id', 0 ),
+				'scopes'          => array( 'read', 'write', 'admin' ),
+				'tool_categories' => array(),
+				'revoked_at'      => null,
+			);
 		}
 		return null;
 	}
@@ -123,7 +141,8 @@ trait Mcpwp_Api_Auth {
 		if ( $this->route_matches( $route, '/mcpwp/v1/api-keys' ) || $this->route_matches( $route, '/mcpwp/v1/plugin-settings' ) || $this->route_matches( $route, '/mcpwp/v1/rate-limit' ) ) {
 			return 'admin';
 		}
-		if ( $this->route_matches( $route, '/mcpwp/v1/drafts' ) && 'DELETE' === $method ) { return 'admin'; }
+		if ( $this->route_matches( $route, '/mcpwp/v1/drafts' ) && 'DELETE' === $method ) {
+			return 'admin'; }
 		return in_array( $method, array( 'GET', 'HEAD', 'OPTIONS' ), true ) ? 'read' : 'write';
 	}
 
@@ -154,14 +173,14 @@ trait Mcpwp_Api_Auth {
 	}
 
 	public function create_scoped_api_key( $label = '', $scopes = array(), $tool_categories = array(), $user_id = null ) {
-		$user_id = null === $user_id ? get_current_user_id() : (int) $user_id;
-		$valid_scopes = $this->validated_scopes( $scopes );
+		$user_id          = null === $user_id ? get_current_user_id() : (int) $user_id;
+		$valid_scopes     = $this->validated_scopes( $scopes );
 		$valid_categories = $this->validated_tool_categories( $tool_categories );
 		if ( is_wp_error( $valid_scopes ) || is_wp_error( $valid_categories ) || $user_id < 1 || ! get_userdata( $user_id ) ) {
 			return new WP_Error( 'invalid_api_key_record', __( 'A valid owner and non-empty scopes are required.', 'mumega-mcp' ), array( 'status' => 400 ) );
 		}
-		$key    = $this->generate_api_key();
-		$record = array(
+		$key       = $this->generate_api_key();
+		$record    = array(
 			'id'              => wp_generate_uuid4(),
 			'label'           => sanitize_text_field( $label ),
 			'hash'            => wp_hash_password( $key ),
@@ -200,7 +219,7 @@ trait Mcpwp_Api_Auth {
 		foreach ( $records as &$record ) {
 			if ( sanitize_key( $record['id'] ?? '' ) === sanitize_key( $key_id ) && empty( $record['revoked_at'] ) ) {
 				$record['revoked_at'] = current_time( 'mysql' );
-				$changed = true;
+				$changed              = true;
 			}
 		}
 		unset( $record );
@@ -214,8 +233,19 @@ trait Mcpwp_Api_Auth {
 		$hash = wp_hash_password( $legacy_key );
 		update_option( 'mcpwp_api_key', $hash, false );
 		$owner_id = (int) get_option( 'mcpwp_legacy_migration_owner_id', 0 );
-		$record = array( 'id' => wp_generate_uuid4(), 'label' => 'Legacy key', 'hash' => $hash, 'user_id' => $owner_id, 'scopes' => array( 'read', 'write', 'admin' ), 'tool_categories' => array(), 'created_at' => current_time( 'mysql' ), 'last_used_at' => null, 'revoked_at' => null );
-		if ( $owner_id < 1 ) { return $record; }
+		$record   = array(
+			'id'              => wp_generate_uuid4(),
+			'label'           => 'Legacy key',
+			'hash'            => $hash,
+			'user_id'         => $owner_id,
+			'scopes'          => array( 'read', 'write', 'admin' ),
+			'tool_categories' => array(),
+			'created_at'      => current_time( 'mysql' ),
+			'last_used_at'    => null,
+			'revoked_at'      => null,
+		);
+		if ( $owner_id < 1 ) {
+			return $record; }
 		$records   = $this->get_scoped_api_keys_raw();
 		$records[] = $record;
 		update_option( $this->get_scoped_api_keys_option_name(), $records, false );
@@ -230,11 +260,15 @@ trait Mcpwp_Api_Auth {
 	protected function normalize_api_key_record( $record ) {
 		$record = is_array( $record ) ? $record : array();
 		return array(
-			'id' => isset( $record['id'] ) ? $record['id'] : '', 'label' => isset( $record['label'] ) ? (string) $record['label'] : '',
-			'hash' => isset( $record['hash'] ) ? $record['hash'] : '', 'user_id' => isset( $record['user_id'] ) ? $record['user_id'] : 0,
-			'scopes' => isset( $record['scopes'] ) ? $record['scopes'] : array(), 'tool_categories' => isset( $record['tool_categories'] ) ? $record['tool_categories'] : array(),
-			'created_at' => isset( $record['created_at'] ) ? (string) $record['created_at'] : '', 'last_used_at' => isset( $record['last_used_at'] ) ? $record['last_used_at'] : null,
-			'revoked_at' => isset( $record['revoked_at'] ) ? $record['revoked_at'] : null,
+			'id'              => isset( $record['id'] ) ? $record['id'] : '',
+			'label'           => isset( $record['label'] ) ? (string) $record['label'] : '',
+			'hash'            => isset( $record['hash'] ) ? $record['hash'] : '',
+			'user_id'         => isset( $record['user_id'] ) ? $record['user_id'] : 0,
+			'scopes'          => isset( $record['scopes'] ) ? $record['scopes'] : array(),
+			'tool_categories' => isset( $record['tool_categories'] ) ? $record['tool_categories'] : array(),
+			'created_at'      => isset( $record['created_at'] ) ? (string) $record['created_at'] : '',
+			'last_used_at'    => isset( $record['last_used_at'] ) ? $record['last_used_at'] : null,
+			'revoked_at'      => isset( $record['revoked_at'] ) ? $record['revoked_at'] : null,
 		);
 	}
 
@@ -248,7 +282,10 @@ trait Mcpwp_Api_Auth {
 			return new WP_Error( 'invalid_scopes', __( 'At least one API-key scope is required.', 'mumega-mcp' ), array( 'status' => 400 ) );
 		}
 		$normalized = array_values( $scopes );
-		foreach ( $normalized as $scope ) { if ( ! is_string( $scope ) ) { return new WP_Error( 'invalid_scopes', __( 'API-key scopes must be unique read, write, or admin values.', 'mumega-mcp' ), array( 'status' => 400 ) ); } }
+		foreach ( $normalized as $scope ) {
+			if ( ! is_string( $scope ) ) {
+				return new WP_Error( 'invalid_scopes', __( 'API-key scopes must be unique read, write, or admin values.', 'mumega-mcp' ), array( 'status' => 400 ) ); }
+		}
 		if ( count( $normalized ) !== count( array_unique( $normalized ) ) || array_diff( $normalized, array( 'read', 'write', 'admin' ) ) ) {
 			return new WP_Error( 'invalid_scopes', __( 'API-key scopes must be unique read, write, or admin values.', 'mumega-mcp' ), array( 'status' => 400 ) );
 		}
@@ -260,15 +297,19 @@ trait Mcpwp_Api_Auth {
 	}
 
 	protected function record_has_valid_identity_fields( $record ) {
-		$id = isset( $record['id'] ) ? $record['id'] : '';
+		$id   = isset( $record['id'] ) ? $record['id'] : '';
 		$hash = isset( $record['hash'] ) ? $record['hash'] : '';
 		return is_string( $id ) && '' !== $id && strlen( $id ) <= 64 && sanitize_key( $id ) === $id && is_string( $hash ) && '' !== $hash;
 	}
 
 	protected function validated_tool_categories( $categories ) {
-		if ( ! is_array( $categories ) ) { return new WP_Error( 'invalid_tool_categories', __( 'Tool categories must be an array.', 'mumega-mcp' ), array( 'status' => 400 ) ); }
+		if ( ! is_array( $categories ) ) {
+			return new WP_Error( 'invalid_tool_categories', __( 'Tool categories must be an array.', 'mumega-mcp' ), array( 'status' => 400 ) ); }
 		$normalized = array_values( $categories );
-		foreach ( $normalized as $category ) { if ( ! is_string( $category ) ) { return new WP_Error( 'invalid_tool_categories', __( 'Tool categories contain an invalid or duplicate value.', 'mumega-mcp' ), array( 'status' => 400 ) ); } }
+		foreach ( $normalized as $category ) {
+			if ( ! is_string( $category ) ) {
+				return new WP_Error( 'invalid_tool_categories', __( 'Tool categories contain an invalid or duplicate value.', 'mumega-mcp' ), array( 'status' => 400 ) ); }
+		}
 		if ( count( $normalized ) > 4 || count( $normalized ) !== count( array_unique( $normalized ) ) || array_diff( $normalized, array( 'site', 'content', 'media', 'taxonomy' ) ) ) {
 			return new WP_Error( 'invalid_tool_categories', __( 'Tool categories contain an invalid or duplicate value.', 'mumega-mcp' ), array( 'status' => 400 ) );
 		}

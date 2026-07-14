@@ -59,21 +59,21 @@ class Mcpwp_Rate_Limiter {
 	 */
 	private function load_settings() {
 		$defaults = array(
-			'enabled'            => true,
+			'enabled'             => true,
 			'requests_per_minute' => 60,
 			'requests_per_hour'   => 1000,
 			'burst_limit'         => 30,
 			'whitelist'           => array(),
 		);
 
-		$saved = get_option( 'mcpwp_rate_limit_settings', array() );
-		$saved = is_array( $saved ) ? array_intersect_key( $saved, $defaults ) : array();
-		$this->settings = wp_parse_args( $saved, $defaults );
-		$this->settings['enabled'] = (bool) $this->settings['enabled'];
+		$saved                                 = get_option( 'mcpwp_rate_limit_settings', array() );
+		$saved                                 = is_array( $saved ) ? array_intersect_key( $saved, $defaults ) : array();
+		$this->settings                        = wp_parse_args( $saved, $defaults );
+		$this->settings['enabled']             = (bool) $this->settings['enabled'];
 		$this->settings['requests_per_minute'] = max( 1, min( 100000, (int) $this->settings['requests_per_minute'] ) );
-		$this->settings['requests_per_hour'] = max( 1, min( 100000, (int) $this->settings['requests_per_hour'] ) );
-		$this->settings['burst_limit'] = max( 1, min( 100000, (int) $this->settings['burst_limit'] ) );
-		$this->settings['whitelist'] = $this->sanitize_whitelist( $this->settings['whitelist'] );
+		$this->settings['requests_per_hour']   = max( 1, min( 100000, (int) $this->settings['requests_per_hour'] ) );
+		$this->settings['burst_limit']         = max( 1, min( 100000, (int) $this->settings['burst_limit'] ) );
+		$this->settings['whitelist']           = $this->sanitize_whitelist( $this->settings['whitelist'] );
 		if ( $this->settings['burst_limit'] > $this->settings['requests_per_minute'] ) {
 			$this->settings['burst_limit'] = $this->settings['requests_per_minute'];
 		}
@@ -128,7 +128,7 @@ class Mcpwp_Rate_Limiter {
 		$hour_data   = get_transient( $cache_key_hour );
 		$burst_data  = get_transient( $cache_key_burst );
 
-		$now = time();
+		$now          = time();
 		$burst_window = $this->get_burst_window();
 
 		$minute_data = $this->initialize_window_data( $minute_data, 60, $now );
@@ -157,12 +157,12 @@ class Mcpwp_Rate_Limiter {
 					$retry_after
 				),
 				array(
-					'status'           => 429,
-					'retry_after'      => $retry_after,
-					'limit'            => $burst_limit,
-					'remaining'        => 0,
-					'reset'            => $burst_data['reset'],
-					'hint'             => sprintf(
+					'status'      => 429,
+					'retry_after' => $retry_after,
+					'limit'       => $burst_limit,
+					'remaining'   => 0,
+					'reset'       => $burst_data['reset'],
+					'hint'        => sprintf(
 						'Burst rate limit exceeded (%d/%ds). Wait %d seconds before retrying. To increase limits, the site admin can adjust settings in WP Admin > mumcp > Settings, or create a key with custom rate_limits.',
 						$burst_limit,
 						$burst_window,
@@ -177,10 +177,10 @@ class Mcpwp_Rate_Limiter {
 			$retry_after = max( 0, $minute_data['reset'] - $now );
 
 			$this->current_data = array(
-				'limit'     => $minute_limit,
-				'remaining' => 0,
-				'reset'     => $minute_data['reset'],
-				'window'    => 'minute',
+				'limit'       => $minute_limit,
+				'remaining'   => 0,
+				'reset'       => $minute_data['reset'],
+				'window'      => 'minute',
 				'retry_after' => $retry_after,
 			);
 
@@ -193,12 +193,12 @@ class Mcpwp_Rate_Limiter {
 					$retry_after
 				),
 				array(
-					'status'           => 429,
-					'retry_after'      => $retry_after,
-					'limit'            => $minute_limit,
-					'remaining'        => 0,
-					'reset'            => $minute_data['reset'],
-					'hint'             => sprintf(
+					'status'      => 429,
+					'retry_after' => $retry_after,
+					'limit'       => $minute_limit,
+					'remaining'   => 0,
+					'reset'       => $minute_data['reset'],
+					'hint'        => sprintf(
 						'Per-minute rate limit exceeded (%d/min). Wait %d seconds before retrying. To increase limits, the site admin can adjust rate limit settings or create a key with custom rate_limits.',
 						$minute_limit,
 						$retry_after
@@ -212,10 +212,10 @@ class Mcpwp_Rate_Limiter {
 			$retry_after = max( 0, $hour_data['reset'] - $now );
 
 			$this->current_data = array(
-				'limit'     => $hour_limit,
-				'remaining' => 0,
-				'reset'     => $hour_data['reset'],
-				'window'    => 'hour',
+				'limit'       => $hour_limit,
+				'remaining'   => 0,
+				'reset'       => $hour_data['reset'],
+				'window'      => 'hour',
 				'retry_after' => $retry_after,
 			);
 
@@ -228,12 +228,12 @@ class Mcpwp_Rate_Limiter {
 					$retry_after
 				),
 				array(
-					'status'           => 429,
-					'retry_after'      => $retry_after,
-					'limit'            => $hour_limit,
-					'remaining'        => 0,
-					'reset'            => $hour_data['reset'],
-					'hint'             => sprintf(
+					'status'      => 429,
+					'retry_after' => $retry_after,
+					'limit'       => $hour_limit,
+					'remaining'   => 0,
+					'reset'       => $hour_data['reset'],
+					'hint'        => sprintf(
 						'Hourly rate limit exceeded (%d/hr). Wait %d seconds before retrying. To increase limits, the site admin can adjust rate limit settings or create a key with custom rate_limits.',
 						$hour_limit,
 						$retry_after
@@ -243,9 +243,9 @@ class Mcpwp_Rate_Limiter {
 		}
 
 		// Increment counts.
-		$minute_data['count']++;
-		$hour_data['count']++;
-		$burst_data['count']++;
+		++$minute_data['count'];
+		++$hour_data['count'];
+		++$burst_data['count'];
 
 		// Store updated counts using remaining window TTL (fixed window, no sliding expiration).
 		set_transient( $cache_key_minute, $minute_data, max( 1, $minute_data['reset'] - $now ) );
@@ -254,10 +254,10 @@ class Mcpwp_Rate_Limiter {
 
 		// Store current data for headers.
 		$this->current_data = array(
-			'limit'     => $minute_limit,
-			'remaining' => $minute_limit - $minute_data['count'],
-			'reset'     => $minute_data['reset'],
-			'window'    => 'minute',
+			'limit'       => $minute_limit,
+			'remaining'   => $minute_limit - $minute_data['count'],
+			'reset'       => $minute_data['reset'],
+			'window'      => 'minute',
 			'retry_after' => max( 0, $minute_data['reset'] - $now ),
 		);
 
@@ -429,20 +429,20 @@ class Mcpwp_Rate_Limiter {
 		}
 
 		return array(
-			'identifier'         => $identifier,
-			'burst' => array(
+			'identifier' => $identifier,
+			'burst'      => array(
 				'used'      => $burst_data ? $burst_data['count'] : 0,
 				'limit'     => $this->settings['burst_limit'],
 				'remaining' => max( 0, $this->settings['burst_limit'] - ( $burst_data ? $burst_data['count'] : 0 ) ),
 				'reset'     => $burst_data ? $burst_data['reset'] : null,
 			),
-			'minute' => array(
+			'minute'     => array(
 				'used'      => $minute_data ? $minute_data['count'] : 0,
 				'limit'     => $this->settings['requests_per_minute'],
 				'remaining' => max( 0, $this->settings['requests_per_minute'] - ( $minute_data ? $minute_data['count'] : 0 ) ),
 				'reset'     => $minute_data ? $minute_data['reset'] : null,
 			),
-			'hour' => array(
+			'hour'       => array(
 				'used'      => $hour_data ? $hour_data['count'] : 0,
 				'limit'     => $this->settings['requests_per_hour'],
 				'remaining' => max( 0, $this->settings['requests_per_hour'] - ( $hour_data ? $hour_data['count'] : 0 ) ),

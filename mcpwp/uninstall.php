@@ -1,6 +1,7 @@
 <?php
 /** Multisite-aware plugin-owned data cleanup. @package mumcp */
-if ( ! defined( 'WP_UNINSTALL_PLUGIN' ) ) { exit; }
+if ( ! defined( 'WP_UNINSTALL_PLUGIN' ) ) {
+	exit; }
 
 // Delete plugin-owned current and compatibility state.
 
@@ -60,7 +61,12 @@ $mcpwp_uninstall_site = static function () {
 };
 
 if ( is_multisite() ) {
-	foreach ( get_sites( array( 'fields' => 'ids', 'number' => 0 ) ) as $mcpwp_site_id ) {
+	foreach ( get_sites(
+		array(
+			'fields' => 'ids',
+			'number' => 0,
+		)
+	) as $mcpwp_site_id ) {
 		switch_to_blog( $mcpwp_site_id );
 		$mcpwp_uninstall_site();
 		restore_current_blog();

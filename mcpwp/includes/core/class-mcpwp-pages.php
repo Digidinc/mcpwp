@@ -36,11 +36,12 @@ class Mcpwp_Pages {
 			'order'          => 'ASC',
 		);
 
-		$args = wp_parse_args( $args, $defaults );
+		$args              = wp_parse_args( $args, $defaults );
 		$args['post_type'] = 'page';
-		if ( 'publish' !== $args['post_status'] && ! current_user_can( 'edit_others_pages' ) ) { $args['author'] = get_current_user_id(); }
+		if ( 'publish' !== $args['post_status'] && ! current_user_can( 'edit_others_pages' ) ) {
+			$args['author'] = get_current_user_id(); }
 		$args['posts_per_page'] = absint( $args['posts_per_page'] );
-		$args['paged'] = absint( $args['paged'] );
+		$args['paged']          = absint( $args['paged'] );
 
 		$query = new WP_Query( $args );
 		$pages = array();
@@ -56,11 +57,11 @@ class Mcpwp_Pages {
 		}
 
 		return array(
-			'pages'    => $pages,
-			'total'    => $query->found_posts,
+			'pages'       => $pages,
+			'total'       => $query->found_posts,
 			'pages_count' => $query->max_num_pages,
-			'page'     => $args['paged'],
-			'per_page' => $args['posts_per_page'],
+			'page'        => $args['paged'],
+			'per_page'    => $args['posts_per_page'],
 		);
 	}
 
@@ -173,7 +174,7 @@ class Mcpwp_Pages {
 
 		if ( isset( $data['status'] ) ) {
 			$allowed_statuses = array( 'publish', 'draft', 'pending', 'private', 'trash' );
-			$status = sanitize_key( $data['status'] );
+			$status           = sanitize_key( $data['status'] );
 			if ( in_array( $status, $allowed_statuses, true ) ) {
 				$page_data['post_status'] = $status;
 			}
@@ -254,23 +255,24 @@ class Mcpwp_Pages {
 		$template = get_post_meta( $page->ID, '_wp_page_template', true );
 
 		$data = array(
-			'id'           => $page->ID,
-			'title'        => $page->post_title,
-			'slug'         => $page->post_name,
-			'status'       => $page->post_status,
-			'date'         => $page->post_date,
-			'modified'     => $page->post_modified,
-			'url'          => get_permalink( $page ),
-			'parent'       => $page->post_parent,
-			'menu_order'   => $page->menu_order,
-			'template'     => $template ?: 'default',
-			'author'       => array(
+			'id'             => $page->ID,
+			'title'          => $page->post_title,
+			'slug'           => $page->post_name,
+			'status'         => $page->post_status,
+			'date'           => $page->post_date,
+			'modified'       => $page->post_modified,
+			'url'            => get_permalink( $page ),
+			'parent'         => $page->post_parent,
+			'menu_order'     => $page->menu_order,
+			'template'       => $template ?: 'default',
+			'author'         => array(
 				'id'   => (int) $page->post_author,
 				'name' => get_the_author_meta( 'display_name', $page->post_author ),
 			),
 			'featured_image' => $this->get_featured_image( $page->ID ),
 		);
-		if ( current_user_can( 'edit_post', $page->ID ) ) { $data['edit_url'] = get_edit_post_link( $page->ID, 'raw' ); }
+		if ( current_user_can( 'edit_post', $page->ID ) ) {
+			$data['edit_url'] = get_edit_post_link( $page->ID, 'raw' ); }
 
 		if ( $include_full ) {
 			$data['content']    = $page->post_content;

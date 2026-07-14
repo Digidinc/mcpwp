@@ -1,8 +1,10 @@
 <?php
-if ( ! defined( 'ABSPATH' ) ) { exit; }
+if ( ! defined( 'ABSPATH' ) ) {
+	exit; }
 trait Mcpwp_Admin_Setup_Trait {
 	public function render_setup_page() {
-		if ( ! current_user_can( 'mcpwp_manage_settings' ) ) { wp_die( esc_html__( 'You do not have permission to view this page.', 'mumega-mcp' ) ); }
+		if ( ! current_user_can( 'mcpwp_manage_settings' ) ) {
+			wp_die( esc_html__( 'You do not have permission to view this page.', 'mumega-mcp' ) ); }
 		$new_key = '';
 		$notice  = null;
 		if ( isset( $_POST['mcpwp_create_key'] ) || isset( $_POST['mcpwp_revoke_key'] ) ) {

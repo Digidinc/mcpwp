@@ -1,11 +1,13 @@
 <?php
 /** Minimal local activity logging. @package mumcp */
-if ( ! defined( 'ABSPATH' ) ) { exit; }
+if ( ! defined( 'ABSPATH' ) ) {
+	exit; }
 
 trait Mcpwp_Logging {
 	protected function log_activity( $action, $status_code, $duration_ms, $api_key_id ) {
 		$settings = get_option( 'mcpwp_settings', array() );
-		if ( empty( $settings['enable_logging'] ) ) { return; }
+		if ( empty( $settings['enable_logging'] ) ) {
+			return; }
 		global $wpdb;
 		$wpdb->insert(
 			$wpdb->prefix . 'mcpwp_activity_log',

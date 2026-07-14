@@ -59,9 +59,10 @@ class Mcpwp_Posts {
 			'order'          => 'DESC',
 		);
 
-		$args = wp_parse_args( $args, $defaults );
+		$args              = wp_parse_args( $args, $defaults );
 		$args['post_type'] = 'post';
-		if ( 'publish' !== $args['post_status'] && ! current_user_can( 'edit_others_posts' ) ) { $args['author'] = get_current_user_id(); }
+		if ( 'publish' !== $args['post_status'] && ! current_user_can( 'edit_others_posts' ) ) {
+			$args['author'] = get_current_user_id(); }
 
 		// Validate post type if overridden.
 		if ( isset( $args['post_type'] ) && 'post' !== $args['post_type'] ) {
@@ -74,7 +75,7 @@ class Mcpwp_Posts {
 
 		// Sanitize arguments
 		$args['posts_per_page'] = absint( $args['posts_per_page'] );
-		$args['paged'] = absint( $args['paged'] );
+		$args['paged']          = absint( $args['paged'] );
 
 		$query = new WP_Query( $args );
 		$posts = array();
@@ -90,11 +91,11 @@ class Mcpwp_Posts {
 		}
 
 		return array(
-			'posts'       => $posts,
-			'total'       => $query->found_posts,
-			'pages'       => $query->max_num_pages,
-			'page'        => $args['paged'],
-			'per_page'    => $args['posts_per_page'],
+			'posts'    => $posts,
+			'total'    => $query->found_posts,
+			'pages'    => $query->max_num_pages,
+			'page'     => $args['paged'],
+			'per_page' => $args['posts_per_page'],
 		);
 	}
 
@@ -220,7 +221,7 @@ class Mcpwp_Posts {
 
 		if ( isset( $data['status'] ) ) {
 			$allowed_statuses = array( 'publish', 'draft', 'pending', 'private', 'trash' );
-			$status = sanitize_key( $data['status'] );
+			$status           = sanitize_key( $data['status'] );
 			if ( in_array( $status, $allowed_statuses, true ) ) {
 				$post_data['post_status'] = $status;
 			}
@@ -290,7 +291,8 @@ class Mcpwp_Posts {
 			'categories'     => $this->get_post_terms( $post->ID, 'category' ),
 			'tags'           => $this->get_post_terms( $post->ID, 'post_tag' ),
 		);
-		if ( current_user_can( 'edit_post', $post->ID ) ) { $data['edit_url'] = get_edit_post_link( $post->ID, 'raw' ); }
+		if ( current_user_can( 'edit_post', $post->ID ) ) {
+			$data['edit_url'] = get_edit_post_link( $post->ID, 'raw' ); }
 
 		if ( $include_full ) {
 			$data['content']    = $post->post_content;

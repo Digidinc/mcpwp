@@ -1,12 +1,14 @@
 <?php
 /** Minimal local administration. @package mumcp */
-if ( ! defined( 'ABSPATH' ) ) { exit; }
+if ( ! defined( 'ABSPATH' ) ) {
+	exit; }
 
 class Mcpwp_Admin {
 	use Mcpwp_Api_Auth;
 	use Mcpwp_Admin_Setup_Trait;
 	use Mcpwp_Admin_Settings_Trait;
 	use Mcpwp_Admin_Activity_Trait;
+
 	const PAGE_SLUG = 'mcpwp';
 	const SETTINGS_PAGE_SLUG = 'mcpwp-settings';
 	const ACTIVITY_LOG_PAGE_SLUG = 'mcpwp-activity-log';
@@ -22,7 +24,9 @@ class Mcpwp_Admin {
 		$page = isset( $_GET['page'] ) ? sanitize_key( wp_unslash( $_GET['page'] ) ) : '';
 		return in_array( $page, array( self::PAGE_SLUG, self::SETTINGS_PAGE_SLUG, self::ACTIVITY_LOG_PAGE_SLUG, Mcpwp_Tools_Admin::PAGE_SLUG ), true );
 	}
-	public function enqueue_styles( $hook ) { if ( $this->is_plugin_page() ) { wp_enqueue_style( 'mcpwp-admin', MCPWP_PLUGIN_URL . 'admin/css/mcpwp-admin.css', array(), MCPWP_VERSION ); } }
+	public function enqueue_styles( $hook ) {
+		if ( $this->is_plugin_page() ) {
+			wp_enqueue_style( 'mcpwp-admin', MCPWP_PLUGIN_URL . 'admin/css/mcpwp-admin.css', array(), MCPWP_VERSION ); } }
 	public function add_action_links( $links ) {
 		array_unshift( $links, '<a href="' . esc_url( admin_url( 'admin.php?page=' . self::PAGE_SLUG ) ) . '">' . esc_html__( 'Setup', 'mumega-mcp' ) . '</a>' );
 		return $links;
