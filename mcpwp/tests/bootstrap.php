@@ -1175,6 +1175,7 @@ $GLOBALS['mcpwp_test_is_admin']             = false;
 $GLOBALS['mcpwp_test_doing_ajax']           = false;
 $GLOBALS['mcpwp_test_ajax_referer_valid']   = false;
 $GLOBALS['mcpwp_test_post_action']          = '';
+$GLOBALS['mcpwp_test_valid_nonces']         = array();
 
 if (! function_exists('is_admin')) {
     function is_admin()
@@ -1196,6 +1197,14 @@ if (! function_exists('check_ajax_referer')) {
     function check_ajax_referer($action, $query_arg = false, $die = true)
     {
         return (bool) $GLOBALS['mcpwp_test_ajax_referer_valid'];
+    }
+}
+
+if (! function_exists('wp_verify_nonce')) {
+    function wp_verify_nonce($nonce, $action)
+    {
+        return isset($GLOBALS['mcpwp_test_valid_nonces'][ $action ])
+            && hash_equals((string) $GLOBALS['mcpwp_test_valid_nonces'][ $action ], (string) $nonce);
     }
 }
 

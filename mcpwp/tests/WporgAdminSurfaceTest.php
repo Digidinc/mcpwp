@@ -7,6 +7,18 @@
 
 use PHPUnit\Framework\TestCase;
 
+if ( ! defined( 'MCPWP_PLUGIN_DIR' ) ) {
+	define( 'MCPWP_PLUGIN_DIR', dirname( __DIR__ ) . '/' );
+}
+
+require_once dirname( __DIR__ ) . '/includes/admin/class-mcpwp-settings.php';
+require_once dirname( __DIR__ ) . '/includes/admin/traits/trait-mcpwp-admin-setup.php';
+
+final class Mcpwp_Admin_Setup_Test_Harness {
+	use Mcpwp_Api_Auth;
+	use Mcpwp_Admin_Setup_Trait;
+}
+
 final class WporgAdminSurfaceTest extends TestCase {
 
 	/** @var string */
@@ -18,6 +30,19 @@ final class WporgAdminSurfaceTest extends TestCase {
 	public static function setUpBeforeClass(): void {
 		self::$plugin_dir     = dirname( __DIR__ );
 		self::$repository_dir = dirname( self::$plugin_dir );
+	}
+
+	protected function setUp(): void {
+		$GLOBALS['mcpwp_test_options']       = array();
+		$GLOBALS['mcpwp_test_current_user']  = 7;
+		$GLOBALS['mcpwp_test_users']         = array( (object) array( 'ID' => 7, 'roles' => array( 'subscriber' ) ) );
+		$GLOBALS['mcpwp_test_user_caps']     = array( 7 => array( 'mcpwp_manage_settings' => true, 'manage_options' => false ) );
+		$GLOBALS['mcpwp_test_valid_nonces']  = array(
+			'mcpwp_create_key'  => 'valid-create',
+			'mcpwp_revoke_key'  => 'valid-revoke',
+			'mcpwp_save_plugin_settings' => 'valid-plugin-settings',
+			'mcpwp_save_rate_settings'   => 'valid-rate-settings',
+		);
 	}
 
 	public function test_exact_four_admin_submenus_use_the_custom_capability(): void {
@@ -64,6 +89,177 @@ final class WporgAdminSurfaceTest extends TestCase {
 			$this->assertStringContainsStringIgnoringCase( $required, $source, 'Setup must expose ' . $required . '.' );
 		}
 		$this->assertMatchesRegularExpression( '/check_admin_referer\s*\([^)]*revoke|wp_verify_nonce\s*\([^)]*revoke/i', $source );
+	}
+
+	public function test_create_key_binds_current_user_and_selected_scope_and_categories(): void {
+		$admin = new Mcpwp_Admin_Setup_Test_Harness();
+		$this->assertTrue( method_exists( $admin, 'handle_setup_action' ), 'Setup needs a directly testable fail-closed mutation handler.' );
+		$result = $admin->handle_setup_action( array(
+			'mcpwp_create_key' => '1',
+			'_wpnonce'         => 'valid-create',
+			'label'            => 'Editorial key',
+			'scopes'           => array( 'read', 'write' ),
+			'tool_categories'  => array( 'content', 'media' ),
+		) );
+
+		$this->assertFalse( is_wp_error( $result ) );
+		$this->assertSame( 7, $result['created']['user_id'] );
+		$this->assertSame( array( 'read', 'write' ), $result['created']['scopes'] );
+		$this->assertSame( array( 'content', 'media' ), $result['created']['tool_categories'] );
+		$this->assertCount( 1, get_option( 'mcpwp_api_keys', array() ) );
+	}
+
+	public function test_create_key_rejects_invalid_nonce_unauthorized_user_and_empty_authority(): void {
+		$admin = new Mcpwp_Admin_Setup_Test_Harness();
+		$this->assertTrue( method_exists( $admin, 'handle_setup_action' ) );
+		$valid = array(
+			'mcpwp_create_key' => '1',
+			'_wpnonce'         => 'wrong',
+			'label'            => 'No authority',
+			'scopes'           => array( 'read' ),
+			'tool_categories'  => array( 'content' ),
+		);
+		$this->assertSame( 'invalid_admin_nonce', $admin->handle_setup_action( $valid )->get_error_code() );
+		$this->assertSame( array(), get_option( 'mcpwp_api_keys', array() ) );
+
+		$valid['_wpnonce'] = 'valid-create';
+		$GLOBALS['mcpwp_test_user_caps'][7]['mcpwp_manage_settings'] = false;
+		$this->assertSame( 'forbidden', $admin->handle_setup_action( $valid )->get_error_code() );
+		$this->assertSame( array(), get_option( 'mcpwp_api_keys', array() ) );
+
+		$GLOBALS['mcpwp_test_user_caps'][7]['mcpwp_manage_settings'] = true;
+		$valid['scopes'] = array();
+		$this->assertSame( 'invalid_api_key_record', $admin->handle_setup_action( $valid )->get_error_code() );
+		$valid['scopes'] = array( 'read' );
+		$valid['tool_categories'] = array();
+		$this->assertSame( 'invalid_api_key_record', $admin->handle_setup_action( $valid )->get_error_code() );
+		$this->assertSame( array(), get_option( 'mcpwp_api_keys', array() ) );
+	}
+
+	public function test_create_key_requires_a_bounded_nonempty_label(): void {
+		$admin = new Mcpwp_Admin_Setup_Test_Harness();
+		$post = array(
+			'mcpwp_create_key' => '1', '_wpnonce' => 'valid-create',
+			'scopes' => array( 'read' ), 'tool_categories' => array( 'content' ),
+			'label' => ' <script></script> ',
+		);
+		$result = $admin->handle_setup_action( $post );
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'invalid_api_key_label', $result->get_error_code() );
+		$post['label'] = str_repeat( 'a', 101 );
+		$result = $admin->handle_setup_action( $post );
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'invalid_api_key_label', $result->get_error_code() );
+		$this->assertSame( array(), get_option( 'mcpwp_api_keys', array() ) );
+	}
+
+	public function test_revoke_key_requires_its_own_nonce_and_capability(): void {
+		$admin = new Mcpwp_Admin_Setup_Test_Harness();
+		$this->assertTrue( method_exists( $admin, 'handle_setup_action' ) );
+		$created = $admin->handle_setup_action( array(
+			'mcpwp_create_key' => '1', '_wpnonce' => 'valid-create', 'label' => 'Temporary',
+			'scopes' => array( 'read' ), 'tool_categories' => array( 'site' ),
+		) );
+		$this->assertFalse( is_wp_error( $created ) );
+		$key_id = $created['created']['id'];
+
+		$bad = $admin->handle_setup_action( array( 'mcpwp_revoke_key' => '1', '_wpnonce' => 'valid-create', 'key_id' => $key_id ) );
+		$this->assertSame( 'invalid_admin_nonce', $bad->get_error_code() );
+		$this->assertNull( get_option( 'mcpwp_api_keys' )[0]['revoked_at'] );
+
+		$GLOBALS['mcpwp_test_user_caps'][7]['mcpwp_manage_settings'] = false;
+		$forbidden = $admin->handle_setup_action( array( 'mcpwp_revoke_key' => '1', '_wpnonce' => 'valid-revoke', 'key_id' => $key_id ) );
+		$this->assertSame( 'forbidden', $forbidden->get_error_code() );
+		$GLOBALS['mcpwp_test_user_caps'][7]['mcpwp_manage_settings'] = true;
+
+		$revoked = $admin->handle_setup_action( array( 'mcpwp_revoke_key' => '1', '_wpnonce' => 'valid-revoke', 'key_id' => $key_id ) );
+		$this->assertSame( $key_id, $revoked['revoked'] );
+		$this->assertNotEmpty( get_option( 'mcpwp_api_keys' )[0]['revoked_at'] );
+	}
+
+	public function test_settings_partial_save_is_lossless_and_checkbox_absence_is_false(): void {
+		$settings = new Mcpwp_Settings();
+		$this->assertTrue( method_exists( $settings, 'handle_admin_save' ), 'Settings need a custom-capability save handler.' );
+		update_option( 'mcpwp_settings', array( 'enable_logging' => true, 'log_retention_days' => 30 ) );
+		$rates = array( 'enabled' => true, 'requests_per_minute' => 60, 'requests_per_hour' => 1000, 'burst_limit' => 10, 'whitelist' => array( 'key:keep' ) );
+		update_option( 'mcpwp_rate_limit_settings', $rates );
+
+		$result = $settings->handle_admin_save( array(
+			'mcpwp_save_settings' => 'plugin',
+			'_wpnonce' => 'valid-plugin-settings',
+			'mcpwp_settings' => array( 'log_retention_days' => '45' ),
+		) );
+		$this->assertFalse( is_wp_error( $result ) );
+		$this->assertSame( array( 'enable_logging' => false, 'log_retention_days' => 45 ), get_option( 'mcpwp_settings' ) );
+		$this->assertSame( $rates, get_option( 'mcpwp_rate_limit_settings' ), 'Saving logging must not erase rate settings.' );
+	}
+
+	public function test_rate_settings_round_trip_bounds_relationship_and_xss(): void {
+		$settings = new Mcpwp_Settings();
+		$this->assertTrue( method_exists( $settings, 'handle_admin_save' ) );
+		$input = array(
+			'mcpwp_save_settings' => 'rate',
+			'_wpnonce' => 'valid-rate-settings',
+			'mcpwp_rate_limit_settings' => array(
+				'enabled' => '1', 'requests_per_minute' => '20', 'requests_per_hour' => '400', 'burst_limit' => '5',
+				'whitelist' => " key:one\n<script>alert(1)</script>key:two ",
+			),
+		);
+		$result = $settings->handle_admin_save( $input );
+		$this->assertFalse( is_wp_error( $result ) );
+		$this->assertSame(
+			array( 'enabled' => true, 'requests_per_minute' => 20, 'requests_per_hour' => 400, 'burst_limit' => 5, 'whitelist' => array( 'key:one', 'alert(1)key:two' ) ),
+			get_option( 'mcpwp_rate_limit_settings' )
+		);
+
+		$before = get_option( 'mcpwp_rate_limit_settings' );
+		$input['mcpwp_rate_limit_settings']['burst_limit'] = '21';
+		$this->assertSame( 'invalid_rate_settings', $settings->handle_admin_save( $input )->get_error_code() );
+		$this->assertSame( $before, get_option( 'mcpwp_rate_limit_settings' ) );
+	}
+
+	public function test_rate_whitelist_rejects_empty_long_or_excess_entries(): void {
+		$settings = new Mcpwp_Settings();
+		$base = array(
+			'mcpwp_save_settings' => 'rate', '_wpnonce' => 'valid-rate-settings',
+			'mcpwp_rate_limit_settings' => array(
+				'enabled' => '1', 'requests_per_minute' => '20', 'requests_per_hour' => '400', 'burst_limit' => '5',
+			),
+		);
+		foreach ( array(
+			array( 'key:valid', '<script></script>' ),
+			array( str_repeat( 'a', 101 ) ),
+			array_map( function ( $index ) { return 'key:' . $index; }, range( 1, 101 ) ),
+		) as $invalid ) {
+			$base['mcpwp_rate_limit_settings']['whitelist'] = $invalid;
+			$result = $settings->handle_admin_save( $base );
+			$this->assertInstanceOf( WP_Error::class, $result );
+			$this->assertSame( 'invalid_rate_whitelist', $result->get_error_code() );
+			$this->assertSame( array(), get_option( 'mcpwp_rate_limit_settings', array() ) );
+		}
+	}
+
+	public function test_custom_handlers_are_the_only_admin_settings_mutation_path(): void {
+		$settings = $this->read( 'includes/admin/class-mcpwp-settings.php' );
+		$loader   = $this->read( 'includes/class-mcpwp-loader.php' );
+		$this->assertStringNotContainsString( 'register_setting(', $settings );
+		$this->assertStringNotContainsString( "'admin_init', \$settings, 'register_settings'", $loader );
+		$this->assertStringNotContainsString( 'action="options.php"', $this->read( 'admin/partials/mcpwp-settings-display.php' ) );
+	}
+
+	public function test_settings_save_rejects_invalid_nonce_and_custom_capability_failure(): void {
+		$settings = new Mcpwp_Settings();
+		$this->assertTrue( method_exists( $settings, 'handle_admin_save' ) );
+		$before = array( 'enable_logging' => true, 'log_retention_days' => 30 );
+		update_option( 'mcpwp_settings', $before );
+		$post = array( 'mcpwp_save_settings' => 'plugin', '_wpnonce' => 'wrong', 'mcpwp_settings' => array( 'log_retention_days' => 99 ) );
+		$this->assertSame( 'invalid_admin_nonce', $settings->handle_admin_save( $post )->get_error_code() );
+		$this->assertSame( $before, get_option( 'mcpwp_settings' ) );
+
+		$post['_wpnonce'] = 'valid-plugin-settings';
+		$GLOBALS['mcpwp_test_user_caps'][7]['mcpwp_manage_settings'] = false;
+		$this->assertSame( 'forbidden', $settings->handle_admin_save( $post )->get_error_code() );
+		$this->assertSame( $before, get_option( 'mcpwp_settings' ) );
 	}
 
 	public function test_settings_form_round_trips_every_retained_field(): void {
