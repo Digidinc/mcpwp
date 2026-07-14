@@ -421,6 +421,10 @@ jobs:
               raise SystemExit('Plugin Check CLI exited unsuccessfully.')
           PY
 
+          report_sha="$(sha256sum "$RUNNER_TEMP/plugin-check-results.json" | awk '{print $1}')"
+          evidence_fragment="Raw strict-JSON report SHA-256: \`$report_sha\`."
+          grep --fixed-strings "$evidence_fragment" docs/wporg/approval-evidence.md
+
       - name: Upload complete Plugin Check report
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

@@ -17,12 +17,12 @@ This evidence does **not** by itself authorize upload. The SHA-pinned approval w
 | File | `mcpwp/scripts/mumega-mcp-3.4.3.zip` |
 | Installed directory/main file | `mumega-mcp/mumega-mcp.php` |
 | Plugin version | `3.4.3` |
-| Candidate SHA-256 | `e9c84443c7c496e1b4ea4f06a75e3db4908273fb8d82e2ff8338a2203b29c7c0` |
-| Size | 85,364 bytes |
+| Candidate SHA-256 | `9e2bffa26e51624a1e0d2c213ba6efbad0a4d2b18561ecd980968ac9881cb735` |
+| Size | 85,362 bytes |
 | ZIP entries | 62 sorted regular files under one `mumega-mcp/` root |
 | Manifest | `docs/wporg/mumega-mcp-manifest.txt` |
 | Manifest SHA-256 | `13dd5d0abea3be56512432abb588de2db5d727a928280a608e2df2762c2cfd94` |
-| Last shipped-file evidence commit | `b06a3f5b590432d5b7435a855d811cc1d491de48` |
+| Last shipped-file evidence commit | `675d0c81023faa437e8bb2e79cf03bce76be8ea0` |
 
 The build was run twice from the same tracked shipped source. Both independent outputs had the candidate SHA above. The builder normalizes shipped-file timestamps to 1980-01-01, sorts the input list with `LC_ALL=C`, and invokes Info-ZIP with metadata stripping (`zip -X`).
 
@@ -42,7 +42,7 @@ test "$(unzip -Z1 mcpwp/scripts/mumega-mcp-3.4.3.zip | LC_ALL=C sort | wc -l | t
 shasum -a 256 docs/wporg/mumega-mcp-manifest.txt
 ```
 
-Recorded result: both builds produced `e9c84443…`; the verifier returned `[OK]`; size, entry count, and manifest hash matched the table.
+Recorded result: both builds produced `9e2bffa2…`; the verifier returned `[OK]`; size, entry count, and manifest hash matched the table.
 
 ## Pinned tools and environments
 
@@ -70,15 +70,15 @@ Development package versions are locked in `mcpwp/composer.lock`; Docker image d
 | Gate | Result |
 | --- | --- |
 | Exact archive verifier | PASS |
-| Artifact policy + identity (PHP 7.4) | 91 tests, 467 assertions, PASS |
-| Product suite excluding artifact-only release contracts | 225 tests, 2,682 assertions, 7 skipped, PASS |
-| Focused lifecycle suite | 12 tests, 1,428 assertions, PASS |
+| Full repository suite (PHP 7.4) | 345 tests, 4,138 assertions, PASS |
+| Full repository suite (PHP 8.3) | 345 tests, 4,138 assertions, PASS |
+| Final activation/rate-limit/media regression set (PHP 7.4) | 61 tests, 2,335 assertions, PASS |
 | Exact candidate PHP 7.4 syntax | 57/57 shipped PHP files, PASS |
 | Exact candidate PHP 8.3 syntax | 57/57 shipped PHP files, PASS |
 | Deterministic POT rebuild/source coverage | PASS; only reviewed source-reference changes occurred before the final candidate freeze |
 | Anonymous readme URLs | 1/1, HTTP 200 after a validated public redirect, PASS |
 
-The skipped product tests are environment-dependent fixtures and are not counted as passes. The final repository-wide PHPUnit run remains part of the approval workflow gate; the counts above are the completed focused/full product gates established before the repository-only workflow/evidence files land.
+The full repository runs completed after the last shipped-file commit and include the artifact builder, identity, policy, lifecycle, authorization, malicious-input, admin, and product contracts. The dedicated approval workflow repeats the complete matrix against its single frozen candidate artifact.
 
 Key reproducible commands:
 
@@ -104,7 +104,7 @@ bash mcpwp/scripts/test-wporg-clean-install.sh \
 | WordPress 6.1.1 / PHP 7.4 | 43/43 TAP checks, PASS |
 | WordPress 7.0.1 / PHP 8.3 | 43/43 TAP checks, PASS |
 
-Each lane installed the exact 85,364-byte ZIP (not a source mount), rechecked its SHA before and after the run, enabled `WP_DEBUG`/`WP_DEBUG_LOG`, and used an internal-only Docker network. The pre-activation `pre_http_request` spy first proved it could observe and block a probe request, then recorded zero plugin outbound attempts. `debug.log` and the outbound-attempt log were absent or exactly zero bytes at the end.
+Each lane installed the exact 85,362-byte ZIP (not a source mount), rechecked its SHA before and after the run, enabled `WP_DEBUG`/`WP_DEBUG_LOG`, and used an internal-only Docker network. The pre-activation `pre_http_request` spy first proved it could observe and block a probe request, then recorded zero plugin outbound attempts. `debug.log` and the outbound-attempt log were absent or exactly zero bytes at the end.
 
 Both lanes verified:
 
@@ -128,7 +128,7 @@ wp --path=/var/www/html --allow-root \
   --error-severity=1 --warning-severity=1
 ```
 
-Result: **0 errors, 36 warnings**. The candidate SHA remained `e9c84443…`; outbound attempts and `debug.log` remained zero; the disposable lane was torn down with no Docker residue. Raw strict-JSON report SHA-256: `97ecd09f9fce06c8ae82d763d2d392638af5f55c12eb3e0bb021c9f996d71df5`.
+Result: **0 errors, 36 warnings**. The candidate SHA remained `9e2bffa2…`; outbound attempts and `debug.log` remained zero; the disposable lane was torn down with no Docker residue. Raw strict-JSON report SHA-256: `97ecd09f9fce06c8ae82d763d2d392638af5f55c12eb3e0bb021c9f996d71df5`.
 
 All 36 warnings were reviewed:
 
@@ -169,7 +169,7 @@ All 40 warnings were reviewed and are itemized by complete category below:
 | 1 | `Generic.CodeAnalysis.UnusedFunctionParameter.Found` | `includes/admin/class-mcpwp-admin.php:51` | WordPress callback-signature parameter `$hook`; retained for hook compatibility even though page detection uses the sanitized page slug. |
 | 2 | `Generic.Formatting.MultipleStatementAlignment.NotSameWarning` | `includes/admin/class-mcpwp-admin.php:20-21` | Cosmetic only. The unaligned constant declarations preserve exact reviewed/snapshotted slug declarations and have no runtime or security effect. |
 | 2 | `WordPress.Security.NonceVerification.Recommended` | `includes/admin/class-mcpwp-admin.php:42` | Read-only, sanitized, allowlisted `page` routing used solely for asset enqueueing; no state change occurs and no nonce is applicable. |
-| 1 | `WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_decode` | `includes/core/class-mcpwp-media.php:216` | Benign strict media decode (`base64_decode(..., true)`), not code execution. Input grammar/size/filename/extension are checked; the temporary file is then validated by WordPress against its content and declared MIME; executable extensions and SVG are rejected. |
+| 1 | `WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_decode` | `includes/core/class-mcpwp-media.php:295` | Benign strict media decode (`base64_decode(..., true)`), not code execution. Input grammar/size/filename/extension are checked; the temporary file is then validated by WordPress against its content and declared MIME; executable extensions and SVG are rejected. |
 
 The counts sum to 40. Security-error false positives for fixed table identifiers and nonce-protected delegated admin mutations use narrow line-level explanations in source; no broad ruleset suppression was added.
 
