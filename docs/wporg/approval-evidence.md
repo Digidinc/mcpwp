@@ -128,7 +128,7 @@ wp --path=/var/www/html --allow-root \
   --error-severity=1 --warning-severity=1
 ```
 
-Result: **0 errors, 36 warnings**. The candidate SHA remained `138b2bdf…`; outbound attempts and `debug.log` remained zero; the disposable lane was torn down with no Docker residue. Raw strict-JSON report SHA-256: `97ecd09f9fce06c8ae82d763d2d392638af5f55c12eb3e0bb021c9f996d71df5`.
+Result: **0 errors, 36 warnings**. The candidate SHA remained `138b2bdf…`; outbound attempts and `debug.log` remained zero; the disposable lane was torn down with no Docker residue. Raw strict-JSON report SHA-256: `786acbbec4a4af927315d7d7f9f4fa3f3d890ab73dec2745a1350f4f60c2ec75`.
 
 All 36 warnings were reviewed:
 
