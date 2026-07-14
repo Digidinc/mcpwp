@@ -17,17 +17,11 @@ class Mcpwp_Media {
 	/** File extensions that this content-only directory edition never stores. */
 	private const DISALLOWED_CODE_EXTENSIONS = array(
 		'php',
-		'php2',
-		'php3',
-		'php4',
-		'php5',
-		'php6',
-		'php7',
-		'php8',
 		'pht',
 		'phtm',
 		'phtml',
 		'phps',
+		'phpt',
 		'phar',
 		'inc',
 		'js',
@@ -167,7 +161,8 @@ class Mcpwp_Media {
 		$filetype          = wp_check_filetype( $filename );
 		if ( '' === $filename || $filename !== $original_filename || basename( $original_filename ) !== $original_filename ) {
 			return new WP_Error( 'invalid_filename', __( 'A valid filename is required.', 'mumega-mcp' ), array( 'status' => 400 ) ); }
-		if ( in_array( $extension, $executable, true ) || array_intersect( array_slice( $segments, 0, -1 ), $executable ) || empty( $filetype['ext'] ) || empty( $filetype['type'] ) ) {
+		$has_disallowed_inner_extension = self::contains_disallowed_code_extension( array_slice( $segments, 0, -1 ), $executable );
+		if ( self::is_disallowed_code_extension( $extension, $executable ) || $has_disallowed_inner_extension || empty( $filetype['ext'] ) || empty( $filetype['type'] ) ) {
 			return new WP_Error( 'invalid_file_type', __( 'The file type is not allowed for local media uploads.', 'mumega-mcp' ), array( 'status' => 415 ) ); }
 		$check = wp_check_filetype_and_ext( $path, $filename );
 		if ( empty( $check['ext'] ) || empty( $check['type'] ) || $check['ext'] !== $filetype['ext'] || $check['type'] !== $filetype['type'] || 'image/svg+xml' === $check['type'] ) {
@@ -178,6 +173,36 @@ class Mcpwp_Media {
 			'filename' => ! empty( $check['proper_filename'] ) ? $check['proper_filename'] : $filename,
 			'type'     => $check['type'],
 		);
+	}
+
+	/**
+	 * Determine whether an extension can represent executable or active content.
+	 *
+	 * PHP handlers may recognize version-suffixed extensions beyond today's
+	 * common finite list, so reject the complete php + digits family.
+	 *
+	 * @param string        $extension Extension without a leading dot.
+	 * @param array<string> $disallowed Exact denylist for non-PHP families.
+	 * @return bool Whether the extension must be rejected.
+	 */
+	private static function is_disallowed_code_extension( $extension, $disallowed ) {
+		return in_array( $extension, $disallowed, true ) || 1 === preg_match( '/^php[0-9]*$/', $extension );
+	}
+
+	/**
+	 * Check every filename segment for a disallowed code extension.
+	 *
+	 * @param array<string> $extensions Filename segments without dots.
+	 * @param array<string> $disallowed Exact denylist for non-PHP families.
+	 * @return bool Whether any segment must be rejected.
+	 */
+	private static function contains_disallowed_code_extension( $extensions, $disallowed ) {
+		foreach ( $extensions as $extension ) {
+			if ( self::is_disallowed_code_extension( $extension, $disallowed ) ) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -308,10 +333,10 @@ class Mcpwp_Media {
 				array( 'status' => 400 )
 			);
 		}
-		if ( in_array( $extension, $executable_extensions, true ) || empty( $filetype['ext'] ) || empty( $filetype['type'] ) ) {
+		if ( self::is_disallowed_code_extension( $extension, $executable_extensions ) || empty( $filetype['ext'] ) || empty( $filetype['type'] ) ) {
 			return new WP_Error( 'invalid_file_type', __( 'The file type is not allowed for local media uploads.', 'mumega-mcp' ), array( 'status' => 415 ) );
 		}
-		if ( array_intersect( array_slice( $filename_segments, 0, -1 ), $executable_extensions ) ) {
+		if ( self::contains_disallowed_code_extension( array_slice( $filename_segments, 0, -1 ), $executable_extensions ) ) {
 			return new WP_Error( 'invalid_filename', __( 'The filename contains a disallowed extension.', 'mumega-mcp' ), array( 'status' => 400 ) );
 		}
 

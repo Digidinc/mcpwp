@@ -51,6 +51,9 @@ final class MediaSecurityTest extends TestCase {
 			'TSX' => array( 'tsx', 'text/plain' ),
 			'PHP include' => array( 'inc', 'text/plain' ),
 			'PHP source' => array( 'phps', 'text/plain' ),
+			'PHP 9' => array( 'php9', 'text/plain' ),
+			'PHP 74' => array( 'php74', 'text/plain' ),
+			'PHP test' => array( 'phpt', 'text/plain' ),
 		);
 	}
 
@@ -110,6 +113,8 @@ final class MediaSecurityTest extends TestCase {
 			'empty' => array( '', 'empty.png', 'empty_file' ),
 			'wrapped' => array( "iVBORw0KGgoAAAAN\nSUhEUgAAAAEAAAAB", 'wrapped.png', 'invalid_base64' ),
 			'double executable extension' => array( $png, 'photo.php.png', 'invalid_filename' ),
+			'double PHP-family extension' => array( $png, 'photo.php74.png', 'invalid_filename' ),
+			'double PHP test extension' => array( $png, 'photo.phpt.png', 'invalid_filename' ),
 			'data uri mismatch' => array( 'data:image/jpeg;base64,' . $png, 'photo.png', 'mime_mismatch' ),
 		);
 	}

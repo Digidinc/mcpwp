@@ -453,103 +453,103 @@ msgstr ""
 msgid "The draft could not be deleted."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:92
+#: includes/core/class-mcpwp-media.php:86
 msgid "The multipart upload did not complete successfully."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:97
+#: includes/core/class-mcpwp-media.php:91
 msgid "No file uploaded."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:103
+#: includes/core/class-mcpwp-media.php:97
 msgid "The uploaded file is empty."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:105
-#: includes/core/class-mcpwp-media.php:289
+#: includes/core/class-mcpwp-media.php:99
+#: includes/core/class-mcpwp-media.php:314
 msgid "File exceeds maximum size of 10MB."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:107
+#: includes/core/class-mcpwp-media.php:101
 msgid "The file is not a genuine HTTP upload."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:110
+#: includes/core/class-mcpwp-media.php:104
 msgid "The uploaded file size is invalid."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:126
-#: includes/core/class-mcpwp-media.php:398
+#: includes/core/class-mcpwp-media.php:120
+#: includes/core/class-mcpwp-media.php:423
 msgid "WordPress could not store the uploaded media file."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:143
-#: includes/core/class-mcpwp-media.php:416
+#: includes/core/class-mcpwp-media.php:137
+#: includes/core/class-mcpwp-media.php:441
 msgid "WordPress could not create the media attachment."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:169
-#: includes/core/class-mcpwp-media.php:307
+#: includes/core/class-mcpwp-media.php:163
+#: includes/core/class-mcpwp-media.php:332
 msgid "A valid filename is required."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:171
-#: includes/core/class-mcpwp-media.php:312
+#: includes/core/class-mcpwp-media.php:166
+#: includes/core/class-mcpwp-media.php:337
 msgid "The file type is not allowed for local media uploads."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:174
-#: includes/core/class-mcpwp-media.php:340
+#: includes/core/class-mcpwp-media.php:169
+#: includes/core/class-mcpwp-media.php:365
 msgid "The file extension or contents are not allowed by WordPress."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:176
+#: includes/core/class-mcpwp-media.php:171
 msgid "The supplied MIME type does not match the detected file type."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:194
+#: includes/core/class-mcpwp-media.php:219
 msgid "WordPress could not create attachment metadata."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:234
+#: includes/core/class-mcpwp-media.php:259
 msgid "WordPress could not save attachment details."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:261
+#: includes/core/class-mcpwp-media.php:286
 msgid "Invalid Base64 data URI."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:266
+#: includes/core/class-mcpwp-media.php:291
 msgid "Base64 data must be non-empty and unwrapped."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:274
+#: includes/core/class-mcpwp-media.php:299
 msgid "Invalid Base64 data."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:282
+#: includes/core/class-mcpwp-media.php:307
 msgid "The decoded file is empty."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:315
+#: includes/core/class-mcpwp-media.php:340
 msgid "The filename contains a disallowed extension."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:323
+#: includes/core/class-mcpwp-media.php:348
 msgid "Could not create temporary file."
 msgstr ""
 
 #. translators: 1: supplied mime type, 2: detected mime type
-#: includes/core/class-mcpwp-media.php:353
+#: includes/core/class-mcpwp-media.php:378
 #, php-format
 msgid "Supplied mime_type \"%1$s\" does not match detected type \"%2$s\". Upload rejected."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:363
+#: includes/core/class-mcpwp-media.php:388
 msgid "The data URI MIME type does not match the detected file type."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:371
+#: includes/core/class-mcpwp-media.php:396
 msgid "SVG uploads are blocked (SVGs can contain <script> tags — stored XSS risk). Use PNG or WebP instead. To allow SVGs, install an SVG sanitizer plugin (e.g. \"Safe SVG\") and upload via the WordPress media library directly."
 msgstr ""
 
