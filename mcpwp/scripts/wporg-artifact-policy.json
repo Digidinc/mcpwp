@@ -24,6 +24,17 @@
     "assets/screenshot-3.png", "assets/screenshot-3.svg", "assets/screenshot-4.png", "assets/screenshot-4.svg"
   ],
   "trusted_source_sha256": {
+    "includes/api/class-mcpwp-rest-api.php": "51cd300d9edc1dc437c973f56103248d633881f0041922af037b5f3daa1e01fb",
+    "includes/api/class-mcpwp-rest-api-keys.php": "f9c803df199aa19a9e830b07b1c459f172179ba2f1eaa11d71cc95df530cde04",
+    "includes/api/class-mcpwp-rest-mcp.php": "455c3733eb818f792c586c97724bca5d38e421a6ae054fd51fe68f44464fa144",
+    "includes/api/class-mcpwp-rest-media.php": "2bc10e107b1a6d98e97a43e8cfb1123f9ff4eb1b240ea4a18812b8e3747babe0",
+    "includes/api/class-mcpwp-rest-pages.php": "8ffe0140e40338e92e3d465b6024a528d25302eee7244d2315aaf9f9a601c45a",
+    "includes/api/class-mcpwp-rest-posts.php": "6b50632e5117d813b2570bd3750dd833b6b6421c8e9cb2d8f8a01659d46f1425",
+    "includes/api/class-mcpwp-rest-rate-limit.php": "f9e6ef11299f2237b9a2f8b146cda39f156ac9c000eca73766f9bc71428412e1",
+    "includes/api/class-mcpwp-rest-site-info.php": "a02dca21939f32bb2802f82d20b885abf81fa247b3914b9d028b6241dfe38496",
+    "includes/api/class-mcpwp-rest-site-settings.php": "36c76aa2ab0bd5fc98898a55b916e1c14a62323725d2a27dbe209598178c6ccb",
+    "includes/api/class-mcpwp-rest-site-taxonomy.php": "debeb742791764552da3860e969806bc933df6fe5f63e83c422baf284f6e9928",
+    "includes/traits/trait-mcpwp-api-auth.php": "b53f41f4a3a16ff9fb7ebab44fa940e8d2cf948371c2f853ceabad970542aead",
     "includes/mcp/class-mcpwp-mcp-tool-registry.php": "3e748087615d720ff00ed8db401570b23d78034e3c2e5da65b9491ec8d96722f",
     "includes/mcp/class-mcpwp-mcp-free-tools.php": "99ec04565c1244929e0d357084c83e588286e834343f0841e154200276857f5b",
     "includes/mcp/traits/trait-mcpwp-free-tools-site.php": "c0aecad9aa2d695c08445424333719468c9b239dcd88e4f0ea785a0fc01db42b",

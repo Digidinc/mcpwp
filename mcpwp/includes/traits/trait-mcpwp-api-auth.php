@@ -215,6 +215,7 @@ trait Mcpwp_Api_Auth {
 		update_option( 'mcpwp_api_key', $hash, false );
 		$owner_id = (int) get_option( 'mcpwp_legacy_migration_owner_id', 0 );
 		$record = array( 'id' => wp_generate_uuid4(), 'label' => 'Legacy key', 'hash' => $hash, 'user_id' => $owner_id, 'scopes' => array( 'read', 'write', 'admin' ), 'tool_categories' => array(), 'created_at' => current_time( 'mysql' ), 'last_used_at' => null, 'revoked_at' => null );
+		if ( $owner_id < 1 ) { return $record; }
 		$records   = $this->get_scoped_api_keys_raw();
 		$records[] = $record;
 		update_option( $this->get_scoped_api_keys_option_name(), $records, false );

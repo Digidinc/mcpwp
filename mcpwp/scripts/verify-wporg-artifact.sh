@@ -396,6 +396,17 @@ with archive:
         fail("legacy gettext domain", ", ".join(legacy_domains))
 
     expected_trusted_sources = {
+        "includes/api/class-mcpwp-rest-api.php",
+        "includes/api/class-mcpwp-rest-api-keys.php",
+        "includes/api/class-mcpwp-rest-mcp.php",
+        "includes/api/class-mcpwp-rest-media.php",
+        "includes/api/class-mcpwp-rest-pages.php",
+        "includes/api/class-mcpwp-rest-posts.php",
+        "includes/api/class-mcpwp-rest-rate-limit.php",
+        "includes/api/class-mcpwp-rest-site-info.php",
+        "includes/api/class-mcpwp-rest-site-settings.php",
+        "includes/api/class-mcpwp-rest-site-taxonomy.php",
+        "includes/traits/trait-mcpwp-api-auth.php",
         "includes/mcp/class-mcpwp-mcp-tool-registry.php",
         "includes/mcp/class-mcpwp-mcp-free-tools.php",
     }

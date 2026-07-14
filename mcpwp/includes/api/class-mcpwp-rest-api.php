@@ -58,14 +58,14 @@ abstract class Mcpwp_REST_API {
 		$result = $this->check_content_create_permission( $request, 'edit_posts', 'publish_posts' );
 		return true === $result ? $this->check_post_term_assignment_permission( $request ) : $result;
 	}
-	public function check_get_post_permission( $request ) { return $this->authorize_request( $request, 'read', 'read_post', 'content', $request->get_param( 'id' ) ); }
+	public function check_get_post_permission( $request ) { return $this->check_typed_resource_permission( $request, 'post', 'read', 'read_post', 'content' ); }
 	public function check_update_post_permission( $request ) {
 		$result = $this->check_content_update_permission( $request, 'post', 'publish_posts' );
 		return true === $result ? $this->check_post_term_assignment_permission( $request ) : $result;
 	}
 	public function check_list_pages_permission( $request ) { return $this->check_content_list_permission( $request, 'page' ); }
 	public function check_create_page_permission( $request ) { return $this->check_content_create_permission( $request, 'edit_pages', 'publish_pages' ); }
-	public function check_get_page_permission( $request ) { return $this->authorize_request( $request, 'read', 'read_post', 'content', $request->get_param( 'id' ) ); }
+	public function check_get_page_permission( $request ) { return $this->check_typed_resource_permission( $request, 'page', 'read', 'read_post', 'content' ); }
 	public function check_update_page_permission( $request ) { return $this->check_content_update_permission( $request, 'page', 'publish_pages' ); }
 	public function check_list_drafts_permission( $request ) {
 		$result = $this->authorize_request( $request, 'read', 'read', 'content' );
@@ -74,13 +74,18 @@ abstract class Mcpwp_REST_API {
 		$allowed = 'post' === $type ? current_user_can( 'edit_posts' ) : ( 'page' === $type ? current_user_can( 'edit_pages' ) : ( current_user_can( 'edit_posts' ) || current_user_can( 'edit_pages' ) ) );
 		return $allowed ? true : new WP_Error( 'insufficient_capability', __( 'The bound WordPress user cannot read drafts.', 'mumega-mcp' ), array( 'status' => 403 ) );
 	}
-	public function check_delete_draft_permission( $request ) { return $this->authorize_request( $request, 'admin', 'delete_post', 'content', $request->get_param( 'id' ) ); }
+	public function check_delete_draft_permission( $request ) {
+		$id = (int) $request->get_param( 'id' );
+		$post = get_post( $id );
+		if ( ! $post || ! in_array( $post->post_type, array( 'post', 'page' ), true ) || 'draft' !== $post->post_status ) { return new WP_Error( 'not_a_draft', __( 'The requested post or page is not a draft.', 'mumega-mcp' ), array( 'status' => 404 ) ); }
+		return $this->authorize_request( $request, 'admin', 'delete_post', 'content', $id );
+	}
 	public function check_list_media_permission( $request ) { return $this->authorize_request( $request, 'read', 'read', 'media' ); }
-	public function check_get_media_permission( $request ) { return $this->authorize_request( $request, 'read', 'read_post', 'media', $request->get_param( 'id' ) ); }
+	public function check_get_media_permission( $request ) { return $this->check_typed_resource_permission( $request, 'attachment', 'read', 'read_post', 'media' ); }
 	public function check_upload_media_permission( $request ) { return $this->authorize_request( $request, 'write', 'upload_files', 'media' ); }
 	public function check_taxonomy_read_permission( $request ) { return $this->authorize_request( $request, 'read', 'read', 'taxonomy' ); }
 	public function check_create_term_permission( $request ) {
-		$params = $request->get_json_params();
+		$params = $this->raw_json_params( $request );
 		$taxonomy_name = is_array( $params ) && isset( $params['taxonomy'] ) && is_string( $params['taxonomy'] ) ? $params['taxonomy'] : '';
 		$taxonomy = get_taxonomy( $taxonomy_name );
 		$capability = $taxonomy && isset( $taxonomy->cap->manage_terms ) ? $taxonomy->cap->manage_terms : 'manage_categories';
@@ -89,7 +94,7 @@ abstract class Mcpwp_REST_API {
 	public function check_admin_permission( $request ) { return $this->authorize_request( $request, 'admin', 'mcpwp_manage_settings', 'site' ); }
 
 	private function check_content_create_permission( $request, $edit_capability, $publish_capability ) {
-		$params = (array) $request->get_json_params();
+		$params = (array) $this->raw_json_params( $request );
 		$publishing = isset( $params['status'] ) && in_array( $params['status'], array( 'publish', 'private' ), true );
 		$result = $this->authorize_request( $request, $publishing ? 'admin' : 'write', $edit_capability, 'content' );
 		if ( true !== $result || ! $publishing ) { return $result; }
@@ -109,7 +114,7 @@ abstract class Mcpwp_REST_API {
 	}
 
 	private function check_post_term_assignment_permission( $request ) {
-		$params = $request->get_json_params();
+		$params = $this->raw_json_params( $request );
 		if ( ! is_array( $params ) ) { return true; }
 		foreach ( array( 'categories' => 'category', 'tags' => 'post_tag' ) as $field => $taxonomy_name ) {
 			if ( ! array_key_exists( $field, $params ) ) { continue; }
@@ -124,7 +129,7 @@ abstract class Mcpwp_REST_API {
 		$id = (int) $request->get_param( 'id' );
 		$post = get_post( $id );
 		if ( ! $post || $post_type !== $post->post_type ) { return new WP_Error( 'not_found', __( 'The requested content was not found.', 'mumega-mcp' ), array( 'status' => 404 ) ); }
-		$params = (array) $request->get_json_params();
+		$params = (array) $this->raw_json_params( $request );
 		$publishing = isset( $params['status'] ) && in_array( $params['status'], array( 'publish', 'private' ), true );
 		$admin = $publishing || in_array( $post->post_status, array( 'publish', 'private' ), true );
 		$result = $this->authorize_request( $request, $admin ? 'admin' : 'write', 'edit_post', 'content', $id );
@@ -155,6 +160,21 @@ abstract class Mcpwp_REST_API {
 			return new WP_Error( 'invalid_json_body', __( 'A JSON object body is required.', 'mumega-mcp' ), array( 'status' => 400 ) );
 		}
 		return $this->validate_strict_object( $data, $schema, $require_field );
+	}
+
+	protected function raw_json_params( $request ) {
+		$body = method_exists( $request, 'get_body' ) ? (string) $request->get_body() : '';
+		$object = json_decode( $body );
+		$data = json_decode( $body, true );
+		return JSON_ERROR_NONE === json_last_error() && is_object( $object ) && is_array( $data ) ? $data : null;
+	}
+
+	private function check_typed_resource_permission( $request, $post_type, $scope, $capability, $category ) {
+		$id = (int) $request->get_param( 'id' );
+		$post = get_post( $id );
+		$messages = array( 'post' => __( 'Post not found.', 'mumega-mcp' ), 'page' => __( 'Page not found.', 'mumega-mcp' ), 'attachment' => __( 'Media attachment not found.', 'mumega-mcp' ) );
+		if ( ! $post || $post_type !== $post->post_type ) { return new WP_Error( 'not_found', $messages[ $post_type ], array( 'status' => 404 ) ); }
+		return $this->authorize_request( $request, $scope, $capability, $category, $id );
 	}
 
 	protected function validated_query_params( $request, $schema ) {

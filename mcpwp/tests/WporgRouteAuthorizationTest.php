@@ -281,6 +281,70 @@ final class WporgRouteAuthorizationTest extends TestCase {
 		$this->assertWpError( 'insufficient_scope', 403, ( new Mcpwp_REST_Posts() )->check_update_post_permission( $request ) );
 	}
 
+	public function test_text_plain_raw_json_uses_same_dynamic_capabilities_as_handlers(): void {
+		$this->seed_key( 'raw-write', 7, array( 'read', 'write' ), array( 'content', 'taxonomy' ) );
+		$GLOBALS['mcpwp_test_user_caps'][7]['publish_posts'] = true;
+		$GLOBALS['mcpwp_test_user_caps'][7]['assign_categories'] = false;
+		$GLOBALS['mcpwp_test_user_caps'][7]['manage_categories'] = false;
+		$GLOBALS['_mcpwp_test_posts'][31] = $this->post_fixture( 31, 'post', 'draft', 7 );
+		$GLOBALS['mcpwp_test_user_caps'][7]['edit_post:31'] = true;
+		$raw = function ( $method, $route, $params, $body ) {
+			return new WP_REST_Request( $method, $route, $params, array( 'X-API-Key' => 'raw-write', 'Content-Type' => 'text/plain' ), null, wp_json_encode( $body ) );
+		};
+		$cases = array(
+			'publish create' => array( new Mcpwp_REST_Posts(), 'check_create_post_permission', $raw( 'POST', '/mcpwp/v1/posts', array(), array( 'title' => 'Published', 'status' => 'publish' ) ), 'insufficient_scope' ),
+			'publish update' => array( new Mcpwp_REST_Posts(), 'check_update_post_permission', $raw( 'PATCH', '/mcpwp/v1/posts/31', array( 'id' => 31 ), array( 'status' => 'publish' ) ), 'insufficient_scope' ),
+			'term assignment' => array( new Mcpwp_REST_Posts(), 'check_create_post_permission', $raw( 'POST', '/mcpwp/v1/posts', array(), array( 'title' => 'Terms', 'categories' => array( 3 ) ) ), 'insufficient_capability' ),
+			'term creation' => array( new Mcpwp_REST_Site_Taxonomy(), 'check_create_term_permission', $raw( 'POST', '/mcpwp/v1/terms', array(), array( 'taxonomy' => 'category', 'name' => 'News' ) ), 'insufficient_capability' ),
+		);
+		foreach ( $cases as $label => $case ) {
+			list( $controller, $callback, $request, $expected_code ) = $case;
+			$this->assertWpError( $expected_code, 403, $controller->$callback( $request ) );
+		}
+	}
+
+	/** @dataProvider wrongControllerResources */
+	public function test_wrong_controller_resource_returns_not_found_before_meta_capability( $controller, $callback, $request ): void {
+		$this->seed_key( 'shape-key', 7, array( 'read', 'write', 'admin' ), array( 'content', 'media' ) );
+		$GLOBALS['mcpwp_test_user_caps'][7]['read_post:70'] = false;
+		$GLOBALS['_mcpwp_test_posts'][70] = $this->post_fixture( 70, 'page', 'publish', 7 );
+		$result = $controller->$callback( $request );
+		$this->assertWpError( 'not_found', 404, $result );
+	}
+
+	public function wrongControllerResources(): array {
+		return array(
+			'page through posts' => array( new Mcpwp_REST_Posts(), 'check_get_post_permission', new WP_REST_Request( 'GET', '/mcpwp/v1/posts/70', array( 'id' => 70 ), array( 'X-API-Key' => 'shape-key' ) ) ),
+			'page through media' => array( new Mcpwp_REST_Media(), 'check_get_media_permission', new WP_REST_Request( 'GET', '/mcpwp/v1/media/70', array( 'id' => 70 ), array( 'X-API-Key' => 'shape-key' ) ) ),
+		);
+	}
+
+	public function test_non_draft_delete_returns_not_found_before_delete_capability(): void {
+		$this->seed_key( 'delete-shape', 7, array( 'admin' ), array( 'content' ) );
+		$GLOBALS['_mcpwp_test_posts'][71] = $this->post_fixture( 71, 'post', 'publish', 7 );
+		$GLOBALS['mcpwp_test_user_caps'][7]['delete_post:71'] = false;
+		$request = new WP_REST_Request( 'DELETE', '/mcpwp/v1/drafts/71', array( 'id' => 71 ), array( 'X-API-Key' => 'delete-shape' ) );
+		$this->assertWpError( 'not_a_draft', 404, ( new Mcpwp_REST_Posts() )->check_delete_draft_permission( $request ) );
+	}
+
+	public function test_visibility_queries_are_bounded_while_totals_remain_authorized(): void {
+		$GLOBALS['mcpwp_test_current_user'] = 7;
+		$GLOBALS['_mcpwp_test_wp_query_args'] = array();
+		$GLOBALS['_mcpwp_test_posts'] = array();
+		for ( $id = 1; $id <= 230; $id++ ) {
+			$GLOBALS['_mcpwp_test_posts'][ $id ] = $this->attachment_fixture( $id );
+			$GLOBALS['mcpwp_test_user_caps'][7][ 'read_post:' . $id ] = 0 === $id % 3;
+		}
+		$result = ( new Mcpwp_Media() )->list_media( array( 'posts_per_page' => 20, 'paged' => 3, 'orderby' => 'id', 'order' => 'asc' ) );
+		$this->assertSame( 76, $result['total'] );
+		$this->assertSame( 4, $result['pages'] );
+		$this->assertSame( range( 123, 180, 3 ), array_column( $result['media'], 'id' ) );
+		foreach ( $GLOBALS['_mcpwp_test_wp_query_args'] as $query ) {
+			$this->assertNotSame( -1, $query['posts_per_page'] ?? null, 'Visibility filtering must use bounded chunks.' );
+			$this->assertLessThanOrEqual( 100, $query['posts_per_page'] ?? 0 );
+		}
+	}
+
 	public function test_site_info_returns_numeric_readable_counts(): void {
 		$GLOBALS['_mcpwp_test_posts'] = array( 1 => $this->post_fixture( 1, 'post', 'publish', 7 ), 2 => $this->post_fixture( 2, 'page', 'draft', 7 ) );
 		$GLOBALS['_mcpwp_test_count_post_calls'] = array();

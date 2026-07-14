@@ -67,6 +67,7 @@ class Mcpwp_Rate_Limiter {
 		);
 
 		$saved = get_option( 'mcpwp_rate_limit_settings', array() );
+		$saved = is_array( $saved ) ? array_intersect_key( $saved, $defaults ) : array();
 		$this->settings = wp_parse_args( $saved, $defaults );
 		$this->settings['enabled'] = (bool) $this->settings['enabled'];
 		$this->settings['requests_per_minute'] = max( 1, min( 100000, (int) $this->settings['requests_per_minute'] ) );

@@ -28,7 +28,7 @@ function mcpwp_code( $response ) {
 }
 
 echo "TAP version 13\n";
-echo "1..15\n";
+echo "1..18\n";
 
 $admin = get_user_by( 'login', 'integration-admin' );
 $author_id = username_exists( 'integration-author' );
@@ -47,6 +47,7 @@ $keys = array(
 	array( 'id' => 'integration-deleted', 'label' => 'Deleted', 'hash' => wp_hash_password( 'integration-deleted-key' ), 'user_id' => (int) $deleted_id, 'scopes' => array( 'read' ), 'tool_categories' => array(), 'created_at' => current_time( 'mysql' ), 'last_used_at' => null, 'revoked_at' => null ),
 );
 update_option( 'mcpwp_api_keys', $keys, false );
+update_option( 'mcpwp_rate_limit_settings', array( 'enabled' => false, 'requests_per_minute' => 60, 'requests_per_hour' => 1000, 'burst_limit' => 10, 'whitelist' => array() ), false );
 do_action( 'rest_api_init' );
 
 mcpwp_tap( '6.1.1' === get_bloginfo( 'version' ), 'runs exact WordPress 6.1.1' );
@@ -99,6 +100,27 @@ $multipart_data = json_decode( implode( "\n", $multipart_output ), true );
 $multipart_ok = 0 === $multipart_status && is_array( $multipart_data ) && isset( $multipart_data['mime_type'] ) && 'image/png' === $multipart_data['mime_type'];
 if ( ! $multipart_ok ) { echo '# multipart response: ' . wp_json_encode( array( 'exit' => $multipart_status, 'data' => $multipart_data ) ) . "\n"; }
 mcpwp_tap( $multipart_ok, 'real HTTP multipart local upload succeeds' );
+
+$mu_dir = WP_CONTENT_DIR . '/mu-plugins';
+if ( ! is_dir( $mu_dir ) ) { wp_mkdir_p( $mu_dir ); }
+$mu_policy = $mu_dir . '/mcpwp-integration-dangerous-mimes.php';
+file_put_contents( $mu_policy, "<?php\nadd_filter( 'upload_mimes', function ( \$mimes ) { \$mimes['svg'] = 'image/svg+xml'; \$mimes['php'] = 'application/x-httpd-php'; return \$mimes; } );\nadd_filter( 'user_has_cap', function ( \$allcaps ) { \$allcaps['unfiltered_upload'] = true; return \$allcaps; } );\n" );
+$dangerous = array(
+	array( 'filename' => 'review.svg', 'type' => 'image/svg+xml', 'bytes' => '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>' ),
+	array( 'filename' => 'review.php', 'type' => 'application/x-httpd-php', 'bytes' => '<?php echo "owned";' ),
+	array( 'filename' => 'mismatch.png', 'type' => 'image/png', 'bytes' => 'plain text is not a PNG' ),
+);
+foreach ( $dangerous as $probe ) {
+	$probe_file = wp_tempnam( $probe['filename'] );
+	file_put_contents( $probe_file, $probe['bytes'] );
+	$command = 'curl --silent --show-error --request POST --header ' . escapeshellarg( 'X-API-Key: integration-admin-key' ) . ' --form ' . escapeshellarg( 'file=@' . $probe_file . ';filename=' . $probe['filename'] . ';type=' . $probe['type'] ) . ' ' . escapeshellarg( 'http://127.0.0.1/?rest_route=/mcpwp/v1/media' );
+	$output = array(); $status = 0; exec( $command, $output, $status ); wp_delete_file( $probe_file );
+	$data = json_decode( implode( "\n", $output ), true );
+	$rejected = 0 === $status && is_array( $data ) && isset( $data['code'] ) && in_array( $data['code'], array( 'invalid_file_type', 'mime_mismatch' ), true );
+	if ( ! $rejected ) { echo '# dangerous multipart response: ' . wp_json_encode( array( 'probe' => $probe['filename'], 'exit' => $status, 'data' => $data ) ) . "\n"; }
+	mcpwp_tap( $rejected, 'multipart rejects dangerous or byte-mismatched ' . $probe['filename'] . ' despite filtered MIME and unfiltered_upload' );
+}
+wp_delete_file( $mu_policy );
 
 $debug_log = WP_CONTENT_DIR . '/debug.log';
 $debug = is_file( $debug_log ) ? file_get_contents( $debug_log ) : '';

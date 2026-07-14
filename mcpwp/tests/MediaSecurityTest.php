@@ -11,6 +11,9 @@ final class MediaSecurityTest extends TestCase {
 		$GLOBALS['_mcpwp_test_insert_attachment_result'] = null;
 		$GLOBALS['_mcpwp_test_update_attachment_metadata_result'] = null;
 		$GLOBALS['_mcpwp_test_generate_attachment_metadata_result'] = null;
+		$GLOBALS['_mcpwp_test_update_post_meta_result'] = null;
+		$GLOBALS['_mcpwp_test_update_post_result'] = null;
+		unset( $GLOBALS['_mcpwp_test_handle_upload_result'], $GLOBALS['_mcpwp_test_handle_sideload_result'] );
 		$GLOBALS['_mcpwp_test_wp_filesystem_calls'] = 0;
 	}
 
@@ -113,6 +116,50 @@ final class MediaSecurityTest extends TestCase {
 		$this->assertSame( 'attachment_metadata_failed', $result->get_error_code() );
 		$this->assertSame( array(), $GLOBALS['_mcpwp_test_posts'] );
 		$this->assertFileDoesNotExist( $GLOBALS['wp_filesystem']->moves[0][1] );
+	}
+
+	/** @dataProvider attachmentWriteFailures */
+	public function test_real_attachment_write_failure_rolls_back_attachment_and_file( $failure, $args ): void {
+		$GLOBALS[ $failure ] = false;
+		$png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+		$result = ( new Mcpwp_Media() )->upload_from_base64( $png, 'write-fail.png', array_merge( array( 'mime_type' => 'image/png' ), $args ) );
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'attachment_write_failed', $result->get_error_code() );
+		$this->assertSame( array(), $GLOBALS['_mcpwp_test_posts'] );
+		$this->assertFileDoesNotExist( $GLOBALS['wp_filesystem']->moves[0][1] );
+	}
+
+	public function attachmentWriteFailures(): array {
+		return array(
+			'metadata' => array( '_mcpwp_test_update_attachment_metadata_result', array() ),
+			'alt' => array( '_mcpwp_test_update_post_meta_result', array( 'alt' => 'Expected alt' ) ),
+			'caption' => array( '_mcpwp_test_update_post_result', array( 'caption' => 'Expected caption' ) ),
+		);
+	}
+
+	public function test_metadata_false_is_accepted_only_when_stored_value_is_already_identical(): void {
+		$GLOBALS['_mcpwp_test_update_attachment_metadata_result'] = false;
+		$GLOBALS['_mcpwp_test_attachment_metadata'][1] = array( 'file' => 'metadata-noop.png' );
+		$png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+		$result = ( new Mcpwp_Media() )->upload_from_base64( $png, 'metadata-noop.png', array( 'mime_type' => 'image/png' ) );
+		$this->assertIsArray( $result );
+	}
+
+	public function test_sideload_library_error_is_generic_bounded_and_path_free(): void {
+		$GLOBALS['_mcpwp_test_handle_sideload_result'] = array( 'error' => 'Could not move /srv/wordpress/private/uploads/secret.png because /tmp/phpXYZ failed.' );
+		$png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+		$result = ( new Mcpwp_Media() )->upload_from_base64( $png, 'generic-error.png', array( 'mime_type' => 'image/png' ) );
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'media_upload_failed', $result->get_error_code() );
+		$this->assertStringNotContainsString( '/srv/', $result->get_error_message() );
+		$this->assertStringNotContainsString( '/tmp/', $result->get_error_message() );
+		$this->assertLessThanOrEqual( 120, strlen( $result->get_error_message() ) );
+	}
+
+	public function test_multipart_and_base64_call_the_same_local_file_policy_and_finalizer(): void {
+		$source = (string) file_get_contents( dirname( __DIR__ ) . '/includes/core/class-mcpwp-media.php' );
+		$this->assertGreaterThanOrEqual( 2, substr_count( $source, '$this->validate_local_media_file(' ) );
+		$this->assertGreaterThanOrEqual( 2, substr_count( $source, '$this->finalize_attachment(' ) );
 	}
 
 	public function test_multipart_rejects_upload_error_size_and_non_uploaded_path(): void {

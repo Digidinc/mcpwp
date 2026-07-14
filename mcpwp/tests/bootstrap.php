@@ -773,6 +773,9 @@ function wp_insert_post($postarr, $wp_error = false)
 
 function wp_update_post($postarr, $wp_error = false)
 {
+    if (array_key_exists('_mcpwp_test_update_post_result', $GLOBALS) && null !== $GLOBALS['_mcpwp_test_update_post_result']) {
+        return $GLOBALS['_mcpwp_test_update_post_result'];
+    }
     if (empty($postarr['ID']) || empty($GLOBALS['_mcpwp_test_posts'][ (int) $postarr['ID'] ])) {
         return $wp_error ? new WP_Error('not_found', 'Post not found.', array( 'status' => 404 )) : 0;
     }
@@ -799,6 +802,7 @@ class WP_Query
 
     public function __construct($args = array())
     {
+        $GLOBALS['_mcpwp_test_wp_query_args'][] = $args;
         $posts = array_values($GLOBALS['_mcpwp_test_posts']);
         $types = isset($args['post_type']) ? (array) $args['post_type'] : array();
         $statuses = isset($args['post_status']) ? (array) $args['post_status'] : array();
@@ -822,8 +826,21 @@ class WP_Query
             if (! empty($args['s']) && false === stripos($post->post_title . ' ' . $post->post_content, (string) $args['s'])) {
                 return false;
             }
+            if (! empty($args['post_mime_type']) && (string) $post->post_mime_type !== (string) $args['post_mime_type']) {
+                return false;
+            }
             return true;
         }));
+
+        $orderby = isset($args['orderby']) ? $args['orderby'] : 'date';
+        $order = isset($args['order']) && 'ASC' === strtoupper($args['order']) ? 1 : -1;
+        usort($posts, function ($left, $right) use ($orderby, $order) {
+            $fields = array( 'modified' => 'post_modified', 'date' => 'post_date', 'title' => 'post_title', 'ID' => 'ID', 'id' => 'ID' );
+            $field = isset($fields[ $orderby ]) ? $fields[ $orderby ] : 'post_date';
+            $comparison = 'ID' === $field ? (int) $left->$field <=> (int) $right->$field : strcasecmp((string) $left->$field, (string) $right->$field);
+            if (0 === $comparison) { $comparison = (int) $left->ID <=> (int) $right->ID; }
+            return $comparison * $order;
+        });
 
         $this->found_posts = count($posts);
         $requested_per_page = isset($args['posts_per_page']) ? (int) $args['posts_per_page'] : count($posts);
@@ -989,6 +1006,9 @@ function get_post_meta($post_id, $key = '', $single = false)
 
 function update_post_meta($post_id, $key, $value)
 {
+    if (array_key_exists('_mcpwp_test_update_post_meta_result', $GLOBALS) && null !== $GLOBALS['_mcpwp_test_update_post_meta_result']) {
+        return $GLOBALS['_mcpwp_test_update_post_meta_result'];
+    }
     $GLOBALS['_mcpwp_test_meta'][ (int) $post_id ][ $key ] = $value;
     return true;
 }
@@ -1015,11 +1035,17 @@ function wp_tempnam($filename = '')
 
 function wp_handle_upload($file, $overrides = array())
 {
+    if (isset($GLOBALS['_mcpwp_test_handle_upload_result'])) {
+        return $GLOBALS['_mcpwp_test_handle_upload_result'];
+    }
     return array( 'file' => isset($file['tmp_name']) ? $file['tmp_name'] : '', 'type' => isset($file['type']) ? $file['type'] : '', 'url' => '' );
 }
 
 function wp_handle_sideload($file, $overrides = array())
 {
+    if (isset($GLOBALS['_mcpwp_test_handle_sideload_result'])) {
+        return $GLOBALS['_mcpwp_test_handle_sideload_result'];
+    }
     $upload = wp_upload_dir();
     $destination = $upload['path'] . '/' . wp_unique_filename($upload['path'], $file['name']);
     if (isset($GLOBALS['wp_filesystem']) && is_object($GLOBALS['wp_filesystem'])) {

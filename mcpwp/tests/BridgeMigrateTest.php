@@ -2,7 +2,7 @@
 use PHPUnit\Framework\TestCase;
 
 final class BridgeMigrateTest extends TestCase {
-	protected function setUp(): void { $GLOBALS['mcpwp_test_options'] = array(); $GLOBALS['mcpwp_test_current_user'] = 2; update_option( 'mcpwp_legacy_migration_owner_id', 2 ); }
+	protected function setUp(): void { $GLOBALS['mcpwp_test_options'] = array(); $GLOBALS['mcpwp_test_current_user'] = 2; $GLOBALS['mcpwp_test_user_caps'][2] = array( 'manage_options' => true, 'mcpwp_manage_settings' => true ); update_option( 'mcpwp_legacy_migration_owner_id', 2 ); }
 	public function test_migration_copies_only_retained_compatibility_state(): void {
 		update_option( 'spai_api_key', 'legacy-hash' );
 		update_option( 'spai_api_keys', array( array( 'id' => 'one', 'label' => 'Legacy', 'hash' => 'legacy-hash', 'scopes' => array( 'read' ), 'role' => 'administrator', 'rate_limits' => array( 'burst' => 1 ) ) ) );
@@ -55,5 +55,10 @@ final class BridgeMigrateTest extends TestCase {
 		$this->assertSame( 2, $keys[0]['user_id'] );
 		$this->assertSame( 7, $keys[1]['user_id'] );
 		$this->assertSame( '0', $keys[2]['user_id'] );
+	}
+	public function test_normal_admin_migration_repairs_preexisting_integer_zero_owner_records(): void {
+		update_option( 'mcpwp_api_keys', array( array( 'id' => 'legacy-zero', 'hash' => 'hash', 'user_id' => 0, 'scopes' => array( 'read' ), 'tool_categories' => array() ) ) );
+		Mcpwp_Migrate::run();
+		$this->assertSame( 2, get_option( 'mcpwp_api_keys' )[0]['user_id'] );
 	}
 }

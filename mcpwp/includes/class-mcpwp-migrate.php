@@ -4,9 +4,10 @@ if ( ! defined( 'ABSPATH' ) ) { exit; }
 
 class Mcpwp_Migrate {
 	public static function run() {
-		if ( get_option( 'mcpwp_migrated_from_spai', false ) ) { return; }
 		$owner_id = self::migration_owner_id();
 		if ( $owner_id < 1 ) { return; }
+		self::repair_unbound_key_owners( $owner_id );
+		if ( get_option( 'mcpwp_migrated_from_spai', false ) ) { return; }
 		self::copy_if_empty( 'spai_api_key', 'mcpwp_api_key' );
 		self::copy_legacy_keys_if_empty( $owner_id );
 		self::copy_if_empty( 'spai_rate_limit_settings', 'mcpwp_rate_limit_settings' );
@@ -19,7 +20,7 @@ class Mcpwp_Migrate {
 	}
 	public static function setup_owner( $owner_id ) {
 		$owner_id = is_int( $owner_id ) ? $owner_id : 0;
-		if ( $owner_id < 1 || $owner_id !== get_current_user_id() || ! get_userdata( $owner_id ) || ! current_user_can( 'mcpwp_manage_settings' ) ) { return false; }
+		if ( $owner_id < 1 || $owner_id !== get_current_user_id() || ! get_userdata( $owner_id ) || ! current_user_can( 'manage_options' ) || ! current_user_can( 'mcpwp_manage_settings' ) ) { return false; }
 		update_option( 'mcpwp_legacy_migration_owner_id', $owner_id, false );
 		self::repair_unbound_key_owners( $owner_id );
 		self::run();
@@ -27,7 +28,7 @@ class Mcpwp_Migrate {
 	}
 	private static function migration_owner_id() {
 		$current = get_current_user_id();
-		if ( $current < 1 || ! get_userdata( $current ) || ! current_user_can( 'mcpwp_manage_settings' ) ) { return 0; }
+		if ( $current < 1 || ! get_userdata( $current ) || ! current_user_can( 'manage_options' ) || ! current_user_can( 'mcpwp_manage_settings' ) ) { return 0; }
 		$owner_id = get_option( 'mcpwp_legacy_migration_owner_id', 0 );
 		if ( is_int( $owner_id ) && $owner_id > 0 && get_userdata( $owner_id ) ) { return $owner_id; }
 		update_option( 'mcpwp_legacy_migration_owner_id', $current, false );

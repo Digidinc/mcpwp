@@ -94,6 +94,16 @@ final class RateLimiterTest extends TestCase {
 		$this->assertSame( array( '127.0.0.1', 'key:test' ), $settings['whitelist'] );
 	}
 
+	public function test_persisted_and_updated_settings_are_projected_to_exact_canonical_keys(): void {
+		update_option( 'mcpwp_rate_limit_settings', array( 'enabled' => false, 'requests_per_minute' => 7, 'unknown_authority' => 'drop-me' ) );
+		$this->resetLimiterSingleton();
+		$limiter = Mcpwp_Rate_Limiter::get_instance();
+		$expected = array( 'enabled', 'requests_per_minute', 'requests_per_hour', 'burst_limit', 'whitelist' );
+		$this->assertSame( $expected, array_keys( $limiter->get_settings() ) );
+		$limiter->update_settings( array( 'requests_per_hour' => 77, 'another_unknown' => true ) );
+		$this->assertSame( $expected, array_keys( get_option( 'mcpwp_rate_limit_settings' ) ) );
+	}
+
 	private function resetLimiterSingleton(): void {
 		$ref  = new ReflectionClass( Mcpwp_Rate_Limiter::class );
 		$prop = $ref->getProperty( 'instance' );

@@ -88,6 +88,16 @@ final class ApiAuthTest extends TestCase {
 		$this->assertTrue( wp_check_password( 'mcpwp_legacy_plain', $keys[0]['hash'] ) );
 	}
 
+	public function test_anonymous_legacy_authentication_never_persists_owner_zero_record(): void {
+		$GLOBALS['mcpwp_test_current_user'] = 0;
+		update_option( 'mcpwp_api_key', 'mcpwp_anonymous_legacy' );
+		delete_option( 'mcpwp_legacy_migration_owner_id' );
+		$result = ( new Mcpwp_Api_Auth_Test_Harness() )->verify_api_key( new WP_REST_Request( 'GET', '/mcpwp/v1/site-info', array(), array( 'X-API-Key' => 'mcpwp_anonymous_legacy' ) ) );
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'api_key_owner_setup_required', $result->get_error_code() );
+		$this->assertSame( array(), get_option( 'mcpwp_api_keys', array() ) );
+	}
+
 	public function test_authorization_bearer_header_is_not_an_api_key_transport(): void {
 		$auth = new Mcpwp_Api_Auth_Test_Harness();
 		$created = $auth->create_scoped_api_key( 'read key', array( 'read' ) );

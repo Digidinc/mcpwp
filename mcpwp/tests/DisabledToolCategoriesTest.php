@@ -18,20 +18,22 @@ final class DisabledToolCategoriesTest extends TestCase {
 
 	private function call_tool( string $tool_name ): array {
 		$controller = new Mcpwp_REST_MCP();
+		$body = array(
+			'jsonrpc' => '2.0',
+			'id'      => 42,
+			'method'  => 'tools/call',
+			'params'  => array(
+				'name'      => $tool_name,
+				'arguments' => (object) array(),
+			),
+		);
 		$request    = new WP_REST_Request(
 			'POST',
 			'/mcpwp/v1/mcp',
 			array(),
 			array(),
-			array(
-				'jsonrpc' => '2.0',
-				'id'      => 42,
-				'method'  => 'tools/call',
-				'params'  => array(
-					'name'      => $tool_name,
-					'arguments' => array(),
-				),
-			)
+			null,
+			wp_json_encode( $body )
 		);
 
 		return $controller->handle_mcp( $request )->get_data();

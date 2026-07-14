@@ -50,6 +50,10 @@ class Mcpwp_Media {
 		if ( ! is_uploaded_file( $file['tmp_name'] ) ) { return new WP_Error( 'invalid_upload', __( 'The file is not a genuine HTTP upload.', 'mumega-mcp' ), array( 'status' => 400 ) ); }
 		$actual_size = filesize( $file['tmp_name'] );
 		if ( false === $actual_size || $actual_size < 1 || $actual_size > 10 * 1024 * 1024 || $actual_size !== $declared_size ) { return new WP_Error( 'invalid_upload_size', __( 'The uploaded file size is invalid.', 'mumega-mcp' ), array( 'status' => $actual_size > 10 * 1024 * 1024 ? 413 : 400 ) ); }
+		$policy = $this->validate_local_media_file( $file['tmp_name'], $file['name'] ?? '', $file['type'] ?? '' );
+		if ( is_wp_error( $policy ) ) { return $policy; }
+		$file['name'] = $policy['filename'];
+		$file['type'] = $policy['type'];
 
 		// Upload the file
 		$upload = wp_handle_upload(
@@ -59,8 +63,8 @@ class Mcpwp_Media {
 
 		if ( isset( $upload['error'] ) ) {
 			return new WP_Error(
-				'upload_error',
-				$upload['error'],
+				'media_upload_failed',
+				__( 'WordPress could not store the uploaded media file.', 'mumega-mcp' ),
 				array( 'status' => 400 )
 			);
 		}
@@ -80,30 +84,52 @@ class Mcpwp_Media {
 			return is_wp_error( $attachment_id ) ? $attachment_id : new WP_Error( 'attachment_insert_failed', __( 'WordPress could not create the media attachment.', 'mumega-mcp' ), array( 'status' => 500 ) );
 		}
 
-		// Generate metadata
-		$metadata = wp_generate_attachment_metadata( $attachment_id, $upload['file'] );
-		if ( is_wp_error( $metadata ) ) {
-			wp_delete_attachment( $attachment_id, true ); wp_delete_file( $upload['file'] );
-			return new WP_Error( 'attachment_metadata_failed', __( 'WordPress could not create attachment metadata.', 'mumega-mcp' ), array( 'status' => 500 ) );
-		}
-		if ( ! empty( $metadata ) ) { wp_update_attachment_metadata( $attachment_id, $metadata ); }
-
-		// Set alt text
-		if ( ! empty( $args['alt'] ) ) {
-			update_post_meta( $attachment_id, '_wp_attachment_image_alt', sanitize_text_field( $args['alt'] ) );
-		}
-
-		// Set caption
-		if ( ! empty( $args['caption'] ) ) {
-			wp_update_post(
-				array(
-					'ID'           => $attachment_id,
-					'post_excerpt' => sanitize_textarea_field( $args['caption'] ),
-				)
-			);
-		}
+		$finalized = $this->finalize_attachment( $attachment_id, $upload['file'], $args );
+		if ( is_wp_error( $finalized ) ) { return $finalized; }
 
 		return $this->format_attachment( $attachment_id );
+	}
+
+	private function validate_local_media_file( $path, $original_filename, $supplied_mime = '' ) {
+		$original_filename = (string) $original_filename;
+		$filename = sanitize_file_name( $original_filename );
+		$extension = strtolower( pathinfo( $filename, PATHINFO_EXTENSION ) );
+		$executable = array( 'php', 'php3', 'php4', 'php5', 'php7', 'php8', 'phtml', 'phar', 'cgi', 'pl', 'py', 'sh', 'bash', 'exe', 'dll', 'com', 'bat', 'cmd', 'js', 'html', 'htm', 'svg' );
+		$segments = array_map( 'strtolower', explode( '.', $filename ) );
+		$filetype = wp_check_filetype( $filename );
+		if ( '' === $filename || $filename !== $original_filename || basename( $original_filename ) !== $original_filename ) { return new WP_Error( 'invalid_filename', __( 'A valid filename is required.', 'mumega-mcp' ), array( 'status' => 400 ) ); }
+		if ( in_array( $extension, $executable, true ) || array_intersect( array_slice( $segments, 0, -1 ), $executable ) || empty( $filetype['ext'] ) || empty( $filetype['type'] ) ) { return new WP_Error( 'invalid_file_type', __( 'The file type is not allowed for local media uploads.', 'mumega-mcp' ), array( 'status' => 415 ) ); }
+		$check = wp_check_filetype_and_ext( $path, $filename );
+		if ( empty( $check['ext'] ) || empty( $check['type'] ) || $check['ext'] !== $filetype['ext'] || $check['type'] !== $filetype['type'] || 'image/svg+xml' === $check['type'] ) { return new WP_Error( 'invalid_file_type', __( 'The file extension or contents are not allowed by WordPress.', 'mumega-mcp' ), array( 'status' => 415 ) ); }
+		if ( '' !== (string) $supplied_mime && sanitize_mime_type( $supplied_mime ) !== $check['type'] ) { return new WP_Error( 'mime_mismatch', __( 'The supplied MIME type does not match the detected file type.', 'mumega-mcp' ), array( 'status' => 415 ) ); }
+		return array( 'filename' => ! empty( $check['proper_filename'] ) ? $check['proper_filename'] : $filename, 'type' => $check['type'] );
+	}
+
+	private function finalize_attachment( $attachment_id, $file, $args ) {
+		$metadata = wp_generate_attachment_metadata( $attachment_id, $file );
+		if ( is_wp_error( $metadata ) ) { return $this->discard_attachment( $attachment_id, $file, 'attachment_metadata_failed', __( 'WordPress could not create attachment metadata.', 'mumega-mcp' ) ); }
+		if ( ! empty( $metadata ) ) {
+			$updated = wp_update_attachment_metadata( $attachment_id, $metadata );
+			if ( false === $updated && $metadata !== wp_get_attachment_metadata( $attachment_id ) ) { return $this->discard_attachment( $attachment_id, $file ); }
+		}
+		if ( ! empty( $args['alt'] ) ) {
+			$alt = sanitize_text_field( $args['alt'] );
+			$updated = update_post_meta( $attachment_id, '_wp_attachment_image_alt', $alt );
+			if ( false === $updated && $alt !== get_post_meta( $attachment_id, '_wp_attachment_image_alt', true ) ) { return $this->discard_attachment( $attachment_id, $file ); }
+		}
+		if ( ! empty( $args['caption'] ) ) {
+			$caption = sanitize_textarea_field( $args['caption'] );
+			$updated = wp_update_post( array( 'ID' => $attachment_id, 'post_excerpt' => $caption ), true );
+			$post = get_post( $attachment_id );
+			if ( ( is_wp_error( $updated ) || ! $updated ) && ( ! $post || $caption !== $post->post_excerpt ) ) { return $this->discard_attachment( $attachment_id, $file ); }
+		}
+		return true;
+	}
+
+	private function discard_attachment( $attachment_id, $file, $code = 'attachment_write_failed', $message = '' ) {
+		wp_delete_attachment( $attachment_id, true );
+		wp_delete_file( $file );
+		return new WP_Error( $code, '' !== $message ? $message : __( 'WordPress could not save attachment details.', 'mumega-mcp' ), array( 'status' => 500 ) );
 	}
 
 	/**
@@ -197,6 +223,9 @@ class Mcpwp_Media {
 
 		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
 		file_put_contents( $tmp_file, $decoded );
+		$policy = $this->validate_local_media_file( $tmp_file, $filename, $args['mime_type'] ?? $data_uri_mime );
+		if ( is_wp_error( $policy ) ) { wp_delete_file( $tmp_file ); return $policy; }
+		$filename = $policy['filename'];
 
 		// WordPress validates both the extension and file contents.
 		$check = wp_check_filetype_and_ext( $tmp_file, $filename );
@@ -257,8 +286,8 @@ class Mcpwp_Media {
 		if ( ! empty( $sideload['error'] ) || empty( $sideload['file'] ) ) {
 			wp_delete_file( $tmp_file );
 			return new WP_Error(
-				'move_error',
-				! empty( $sideload['error'] ) ? $sideload['error'] : __( 'Could not move file to uploads directory.', 'mumega-mcp' ),
+				'media_upload_failed',
+				__( 'WordPress could not store the uploaded media file.', 'mumega-mcp' ),
 				array( 'status' => 500 )
 			);
 		}
@@ -279,28 +308,8 @@ class Mcpwp_Media {
 			return is_wp_error( $attachment_id ) ? $attachment_id : new WP_Error( 'attachment_insert_failed', __( 'WordPress could not create the media attachment.', 'mumega-mcp' ), array( 'status' => 500 ) );
 		}
 
-		// Generate metadata.
-		$metadata = wp_generate_attachment_metadata( $attachment_id, $new_file );
-		if ( is_wp_error( $metadata ) ) {
-			wp_delete_attachment( $attachment_id, true ); wp_delete_file( $new_file );
-			return new WP_Error( 'attachment_metadata_failed', __( 'WordPress could not create attachment metadata.', 'mumega-mcp' ), array( 'status' => 500 ) );
-		}
-		if ( ! empty( $metadata ) ) { wp_update_attachment_metadata( $attachment_id, $metadata ); }
-
-		// Set alt text.
-		if ( ! empty( $args['alt'] ) ) {
-			update_post_meta( $attachment_id, '_wp_attachment_image_alt', sanitize_text_field( $args['alt'] ) );
-		}
-
-		// Set caption.
-		if ( ! empty( $args['caption'] ) ) {
-			wp_update_post(
-				array(
-					'ID'           => $attachment_id,
-					'post_excerpt' => sanitize_textarea_field( $args['caption'] ),
-				)
-			);
-		}
+		$finalized = $this->finalize_attachment( $attachment_id, $new_file, $args );
+		if ( is_wp_error( $finalized ) ) { return $finalized; }
 
 		return $this->format_attachment( $attachment_id );
 	}
@@ -317,7 +326,7 @@ class Mcpwp_Media {
 		$orderby = isset( $args['orderby'] ) ? $args['orderby'] : 'date';
 		$order = isset( $args['order'] ) && 'asc' === strtolower( $args['order'] ) ? 1 : -1;
 		$query_args = array(
-			'post_type' => 'attachment', 'post_status' => 'inherit', 'posts_per_page' => -1,
+			'post_type' => 'attachment', 'post_status' => 'inherit', 'posts_per_page' => 100,
 			'orderby' => 'id' === $orderby ? 'ID' : $orderby, 'order' => 1 === $order ? 'ASC' : 'DESC',
 		);
 
@@ -331,20 +340,20 @@ class Mcpwp_Media {
 			$query_args['s'] = sanitize_text_field( $args['search'] );
 		}
 
-		$query = new WP_Query( $query_args );
 		$visible = array();
-		foreach ( $query->posts as $attachment ) {
-			if ( current_user_can( 'read_post', $attachment->ID ) ) { $visible[] = $attachment; }
-		}
-		usort( $visible, function ( $left, $right ) use ( $orderby, $order ) {
-			$fields = array( 'modified' => 'post_modified', 'date' => 'post_date', 'title' => 'post_title', 'id' => 'ID' );
-			$field = isset( $fields[ $orderby ] ) ? $fields[ $orderby ] : 'post_date';
-			$comparison = 'ID' === $field ? (int) $left->$field <=> (int) $right->$field : strcasecmp( (string) $left->$field, (string) $right->$field );
-			if ( 0 === $comparison ) { $comparison = (int) $left->ID <=> (int) $right->ID; }
-			return $comparison * $order;
-		} );
-		$total = count( $visible );
-		$visible = array_slice( $visible, ( $page - 1 ) * $per_page, $per_page );
+		$total = 0;
+		$offset = ( $page - 1 ) * $per_page;
+		$chunk_page = 1;
+		do {
+			$query_args['paged'] = $chunk_page;
+			$query = new WP_Query( $query_args );
+			foreach ( $query->posts as $attachment ) {
+				if ( ! current_user_can( 'read_post', $attachment->ID ) ) { continue; }
+				if ( $total >= $offset && count( $visible ) < $per_page ) { $visible[] = $attachment; }
+				$total++;
+			}
+			$chunk_page++;
+		} while ( ! empty( $query->posts ) && $chunk_page <= (int) $query->max_num_pages );
 		$media = array();
 
 		foreach ( $visible as $attachment ) {

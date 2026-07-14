@@ -12,6 +12,24 @@ final class PluginLifecycleTest extends TestCase {
 		$GLOBALS['mcpwp_test_roles']         = array( 'administrator' => new Mcpwp_Test_Role() );
 		$GLOBALS['mcpwp_test_dbdelta']       = array();
 		$GLOBALS['mcpwp_test_cleared_hooks'] = array();
+		$GLOBALS['mcpwp_test_users'] = array(
+			(object) array( 'ID' => 2, 'roles' => array( 'administrator' ) ),
+			(object) array( 'ID' => 7, 'roles' => array( 'subscriber' ) ),
+		);
+		$GLOBALS['mcpwp_test_user_caps'] = array(
+			2 => array( 'manage_options' => true, 'mcpwp_manage_settings' => true ),
+			7 => array( 'manage_options' => false, 'mcpwp_manage_settings' => true ),
+		);
+	}
+
+	public function test_version_mismatch_activation_seeds_owner_only_for_an_administrator(): void {
+		$GLOBALS['mcpwp_test_current_user'] = 7;
+		Mcpwp_Activator::activate();
+		$this->assertFalse( get_option( 'mcpwp_legacy_migration_owner_id', false ), 'A subscriber must never become migration owner.' );
+
+		$GLOBALS['mcpwp_test_current_user'] = 2;
+		Mcpwp_Activator::activate();
+		$this->assertSame( 2, get_option( 'mcpwp_legacy_migration_owner_id' ) );
 	}
 
 	public function test_clean_activation_creates_only_retained_local_state(): void {
