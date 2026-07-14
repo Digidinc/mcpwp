@@ -101,4 +101,30 @@ final class ApiAuthTest extends TestCase {
 		$this->assertInstanceOf( WP_Error::class, $result );
 		$this->assertSame( 'missing_api_key', $result->get_error_code() );
 	}
+
+	public function test_public_key_projection_strips_noncanonical_authority_fields(): void {
+		update_option( 'mcpwp_api_keys', array( array(
+			'id' => 'canonical-id', 'label' => 'Canonical', 'hash' => 'secret', 'user_id' => 2,
+			'scopes' => array( 'read' ), 'tool_categories' => array( 'content' ), 'created_at' => '2026-07-13 00:00:00',
+			'last_used_at' => null, 'revoked_at' => null, 'role' => 'administrator', 'rate_limits' => array( 'burst' => 1 ), 'arbitrary' => 'authority',
+		) ) );
+		$keys = ( new Mcpwp_Api_Auth_Test_Harness() )->list_scoped_api_keys( true );
+		$this->assertSame( array( 'id', 'label', 'user_id', 'scopes', 'tool_categories', 'created_at', 'last_used_at', 'revoked_at' ), array_keys( $keys[0] ) );
+	}
+
+	public function test_numeric_string_owner_and_unknown_categories_fail_closed(): void {
+		update_option( 'mcpwp_api_keys', array( array( 'id' => 'bad-owner', 'hash' => 'bad-owner', 'user_id' => '2', 'scopes' => array( 'read' ), 'tool_categories' => array() ) ) );
+		$result = ( new Mcpwp_Api_Auth_Test_Harness() )->verify_api_key( new WP_REST_Request( 'GET', '/mcpwp/v1/site-info', array(), array( 'X-API-Key' => 'bad-owner' ) ) );
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'api_key_owner_setup_required', $result->get_error_code() );
+
+		$created = ( new Mcpwp_Api_Auth_Test_Harness() )->create_scoped_api_key( 'bad categories', array( 'read' ), array( 'content', 'root' ) );
+		$this->assertInstanceOf( WP_Error::class, $created );
+	}
+
+	public function test_scope_and_category_enums_are_exact_not_sanitized_into_validity(): void {
+		$auth = new Mcpwp_Api_Auth_Test_Harness();
+		$this->assertInstanceOf( WP_Error::class, $auth->create_scoped_api_key( 'bad scope', array( 'admin!!!' ), array() ) );
+		$this->assertInstanceOf( WP_Error::class, $auth->create_scoped_api_key( 'bad category', array( 'read' ), array( 'content!!!' ) ) );
+	}
 }

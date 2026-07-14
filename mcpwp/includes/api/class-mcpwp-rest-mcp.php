@@ -10,15 +10,11 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 class Mcpwp_REST_MCP extends Mcpwp_REST_API {
-	/** @var bool In-process, one-use marker for the nested REST permission check. */
-	public static $is_internal_sub_request = false;
-
 	private $protocol_version = '2024-11-05';
 	private $server_version;
 	private $server_name;
 	private $registry;
 	private $api_key_header = '';
-	private $nested_rate_limit_credit = 0;
 
 	public function __construct() {
 		$this->server_version = defined( 'MCPWP_VERSION' ) ? MCPWP_VERSION : '1.0.0';
@@ -36,12 +32,13 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 
 	public function handle_mcp( $request ) {
 		$this->api_key_header = (string) $request->get_header( 'X-API-Key' );
-		$this->nested_rate_limit_credit = 1;
+		if ( method_exists( $request, 'get_body' ) && strlen( (string) $request->get_body() ) > 15 * 1024 * 1024 ) { return $this->mcp_response( $this->jsonrpc_error( null, -32600, 'Request body is too large.', array( 'status' => 413 ) ), 413 ); }
 		$body = $request->get_json_params();
-		if ( ! is_array( $body ) || empty( $body ) ) {
+		if ( ! is_array( $body ) ) {
 			return $this->mcp_response( $this->jsonrpc_error( null, -32700, 'Parse error: invalid JSON-RPC request.' ) );
 		}
-		if ( isset( $body[0] ) ) {
+		if ( empty( $body ) ) { return $this->mcp_response( $this->jsonrpc_error( null, -32600, 'Invalid Request: empty batch or object.' ) ); }
+		if ( $this->is_list_array( $body ) ) {
 			if ( count( $body ) > 10 ) {
 				return $this->mcp_response( $this->jsonrpc_error( null, -32600, 'Batch too large.' ) );
 			}
@@ -52,29 +49,47 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 					$output[] = $response;
 				}
 			}
-			return $this->mcp_response( $output );
+			return empty( $output ) ? $this->mcp_response( null, 204 ) : $this->mcp_response( $output );
 		}
 		$response = $this->process_request( $body );
 		return $this->mcp_response( $response, null === $response ? 204 : 200 );
 	}
 
 	private function process_request( $body ) {
-		$method = (string) ( $body['method'] ?? '' );
-		$id     = $body['id'] ?? null;
-		$params = is_array( $body['params'] ?? null ) ? $body['params'] : array();
+		if ( ! is_array( $body ) || $this->is_list_array( $body ) ) { return $this->jsonrpc_error( null, -32600, 'Invalid Request.' ); }
+		$notification = ! array_key_exists( 'id', $body );
+		$id = $notification ? null : $body['id'];
+		if ( array_diff( array_keys( $body ), array( 'jsonrpc', 'id', 'method', 'params' ) ) || ! isset( $body['jsonrpc'] ) || '2.0' !== $body['jsonrpc'] || ! isset( $body['method'] ) || ! is_string( $body['method'] ) || '' === $body['method'] ) { return $notification ? null : $this->jsonrpc_error( $id, -32600, 'Invalid Request.' ); }
+		if ( ! $notification && ! is_int( $id ) && ! is_string( $id ) && null !== $id ) { return $this->jsonrpc_error( null, -32600, 'Invalid Request ID.' ); }
+		if ( isset( $body['params'] ) && ( ! is_array( $body['params'] ) || ( ! empty( $body['params'] ) && $this->is_list_array( $body['params'] ) ) ) ) { return $notification ? null : $this->jsonrpc_error( $id, -32600, 'Invalid Request params.' ); }
+		$method = $body['method'];
+		$params = isset( $body['params'] ) ? $body['params'] : array();
+		if ( 'tools/call' !== $method ) {
+			$record = $this->get_current_api_key_record();
+			$identifier = 'key:' . sanitize_key( is_array( $record ) ? (string) ( $record['id'] ?? '' ) : '' );
+			$rate = $this->check_rate_limit( $identifier, 'GET', $record );
+			if ( is_wp_error( $rate ) ) { return $notification ? null : $this->jsonrpc_error( $id, -32029, $rate->get_error_message(), array( 'status' => 429, 'code' => $rate->get_error_code() ) ); }
+		}
+		$response = null;
 		switch ( $method ) {
 			case 'initialize':
-				return $this->jsonrpc_result( $id, array_merge( $this->server_metadata(), array( 'instructions' => 'Use tools/list to discover the local WordPress tools. Create content as a draft unless publishing is explicitly requested.' ) ) );
+				if ( array_diff( array_keys( $params ), array( 'protocolVersion', 'capabilities', 'clientInfo' ) ) || ( isset( $params['protocolVersion'] ) && $this->protocol_version !== $params['protocolVersion'] ) ) { $response = $this->jsonrpc_error( $id, -32602, 'Unsupported initialize parameters.' ); break; }
+				$response = $this->jsonrpc_result( $id, array_merge( $this->server_metadata(), array( 'instructions' => 'Use tools/list to discover the local WordPress tools. Create content as a draft unless publishing is explicitly requested.' ) ) ); break;
 			case 'tools/list':
-				return $this->handle_tools_list( $id, $params );
+				if ( array_diff( array_keys( $params ), array( 'category' ) ) ) { $response = $this->jsonrpc_error( $id, -32602, 'Unsupported tools/list parameters.' ); break; }
+				$response = $this->handle_tools_list( $id, $params ); break;
 			case 'tools/call':
-				return $this->handle_tools_call( $id, $params );
+				if ( array_diff( array_keys( $params ), array( 'name', 'arguments' ) ) || ! isset( $params['name'] ) || ! is_string( $params['name'] ) || ( isset( $params['arguments'] ) && ( ! is_array( $params['arguments'] ) || ( ! empty( $params['arguments'] ) && $this->is_list_array( $params['arguments'] ) ) ) ) ) { $response = $this->jsonrpc_error( $id, -32602, 'Invalid tools/call parameters.' ); break; }
+				$response = $this->handle_tools_call( $id, $params ); break;
 			case 'ping':
-				return $this->jsonrpc_result( $id, array( 'pong' => true ) );
+				$response = empty( $params ) ? $this->jsonrpc_result( $id, array( 'pong' => true ) ) : $this->jsonrpc_error( $id, -32602, 'Ping accepts no parameters.' ); break;
 			default:
-				return $this->jsonrpc_error( $id, -32601, 'Method not found: ' . $method );
+				$response = $this->jsonrpc_error( $id, -32601, 'Method not found: ' . $method );
 		}
+		return $notification ? null : $response;
 	}
+
+	private function is_list_array( $value ) { return is_array( $value ) && ! empty( $value ) && array_keys( $value ) === range( 0, count( $value ) - 1 ); }
 
 	private function server_metadata() {
 		return array(
@@ -96,7 +111,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	}
 
 	private function handle_tools_call( $id, $params ) {
-		$name      = sanitize_key( (string) ( $params['name'] ?? '' ) );
+		$name      = $params['name'];
 		$arguments = is_array( $params['arguments'] ?? null ) ? $params['arguments'] : array();
 		$map       = $this->registry->get_tool_map();
 		if ( ! isset( $map[ $name ] ) ) {
@@ -125,18 +140,13 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		}
 		$request = new WP_REST_Request( $map[ $name ]['method'], '/' . $this->namespace . $route );
 		$request->set_header( 'X-API-Key', $this->api_key_header );
-		foreach ( $arguments as $key => $value ) {
-			$request->set_param( $key, $value );
+		if ( in_array( $map[ $name ]['method'], array( 'POST', 'PUT', 'PATCH' ), true ) ) {
+			$request->set_header( 'Content-Type', 'application/json' );
+			$request->set_body( wp_json_encode( $arguments ) );
+		} else {
+			foreach ( $arguments as $key => $value ) { $request->set_param( $key, $value ); }
 		}
-		self::$is_internal_sub_request = $this->nested_rate_limit_credit > 0;
-		if ( self::$is_internal_sub_request ) {
-			$this->nested_rate_limit_credit--;
-		}
-		try {
-			$response = rest_do_request( $request );
-		} finally {
-			self::$is_internal_sub_request = false;
-		}
+		$response = rest_do_request( $request );
 		if ( is_wp_error( $response ) ) {
 			$status = (int) ( $response->get_error_data()['status'] ?? 500 );
 			$this->log_tool_call( $name, $status, $started_at );

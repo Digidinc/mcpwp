@@ -20,13 +20,23 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 		register_rest_route( $this->namespace, '/drafts/(?P<id>\d+)', $this->route_definition( WP_REST_Server::DELETABLE, 'delete_draft', 'check_delete_draft_permission', 'content', 'admin', array( 'delete_post:{id}', 'post/page status must be draft' ), true, $this->id_route_args() ) );
 	}
 
-	public function list_posts( $request ) { return $this->respond( $this->posts->list_posts( $request->get_params() ) ); }
-	public function get_post( $request ) { return $this->respond( $this->posts->get_post( absint( $request->get_param( 'id' ) ) ) ); }
-	public function create_post( $request ) { return $this->respond( $this->posts->create_post( $this->request_data( $request ) ), 201 ); }
-	public function update_post( $request ) { return $this->respond( $this->posts->update_post( absint( $request->get_param( 'id' ) ), $this->request_data( $request ) ) ); }
-	public function list_drafts( $request ) { return $this->respond( $this->drafts->list_drafts( $request->get_params() ) ); }
-	public function delete_draft( $request ) { return $this->respond( $this->drafts->delete_draft( absint( $request->get_param( 'id' ) ) ) ); }
+	public function list_posts( $request ) { $params = $this->validated_query_params( $request, $this->content_list_args() ); return is_wp_error( $params ) ? $this->validation_error_response( $params ) : $this->respond( $this->posts->list_posts( $params ) ); }
+	public function get_post( $request ) { $params = $this->validated_query_params( $request, $this->id_route_args() ); return is_wp_error( $params ) ? $this->validation_error_response( $params ) : $this->respond( $this->posts->get_post( $params['id'] ) ); }
+	public function create_post( $request ) {
+		$data = $this->validated_json_body( $request, $this->post_body_args() );
+		if ( is_wp_error( $data ) ) { return $this->validation_error_response( $data ); }
+		$relationships = $this->validate_content_relationships( $data );
+		return is_wp_error( $relationships ) ? $this->validation_error_response( $relationships ) : $this->respond( $this->posts->create_post( $data ), 201 );
+	}
+	public function update_post( $request ) {
+		$schema = $this->post_body_args( true ); unset( $schema['id'] );
+		$data = $this->validated_json_body( $request, $schema, true );
+		if ( is_wp_error( $data ) ) { return $this->validation_error_response( $data ); }
+		$id = absint( $request->get_param( 'id' ) ); $relationships = $this->validate_content_relationships( $data, $id );
+		return is_wp_error( $relationships ) ? $this->validation_error_response( $relationships ) : $this->respond( $this->posts->update_post( $id, $data ) );
+	}
+	public function list_drafts( $request ) { $params = $this->validated_query_params( $request, $this->draft_list_args() ); return is_wp_error( $params ) ? $this->validation_error_response( $params ) : $this->respond( $this->drafts->list_drafts( $params ) ); }
+	public function delete_draft( $request ) { $params = $this->validated_query_params( $request, $this->id_route_args() ); return is_wp_error( $params ) ? $this->validation_error_response( $params ) : $this->respond( $this->drafts->delete_draft( $params['id'] ) ); }
 
-	private function request_data( $request ) { $json = $request->get_json_params(); return is_array( $json ) ? $json : $request->get_params(); }
 	private function respond( $result, $status = 200 ) { return is_wp_error( $result ) ? $this->error_response( $result->get_error_code(), $result->get_error_message(), (int) ( $result->get_error_data()['status'] ?? 400 ) ) : $this->success_response( $result, $status ); }
 }

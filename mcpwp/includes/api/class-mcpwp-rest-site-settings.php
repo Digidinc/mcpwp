@@ -13,15 +13,24 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 	}
 
 	public function get_plugin_settings( $request ) {
-		return $this->success_response( array_merge( $this->defaults, (array) get_option( 'mcpwp_settings', array() ) ) );
+		return $this->success_response( $this->canonical_settings() );
 	}
 
 	public function update_plugin_settings( $request ) {
-		$params  = array_merge( $request->get_params(), (array) $request->get_json_params() );
-		$current = array_merge( $this->defaults, (array) get_option( 'mcpwp_settings', array() ) );
+		$params = $this->validated_json_body( $request, $this->plugin_settings_args(), true );
+		if ( is_wp_error( $params ) ) { return $this->validation_error_response( $params ); }
+		$current = $this->canonical_settings();
 		if ( array_key_exists( 'enable_logging', $params ) ) { $current['enable_logging'] = (bool) $params['enable_logging']; }
-		if ( array_key_exists( 'log_retention_days', $params ) ) { $current['log_retention_days'] = min( 365, max( 1, absint( $params['log_retention_days'] ) ) ); }
+		if ( array_key_exists( 'log_retention_days', $params ) ) { $current['log_retention_days'] = $params['log_retention_days']; }
 		update_option( 'mcpwp_settings', $current, false );
 		return $this->success_response( $current );
+	}
+	private function canonical_settings() {
+		$stored = get_option( 'mcpwp_settings', array() );
+		$stored = is_array( $stored ) ? $stored : array();
+		return array(
+			'enable_logging' => isset( $stored['enable_logging'] ) && is_bool( $stored['enable_logging'] ) ? $stored['enable_logging'] : $this->defaults['enable_logging'],
+			'log_retention_days' => isset( $stored['log_retention_days'] ) && is_int( $stored['log_retention_days'] ) && $stored['log_retention_days'] >= 1 && $stored['log_retention_days'] <= 365 ? $stored['log_retention_days'] : $this->defaults['log_retention_days'],
+		);
 	}
 }

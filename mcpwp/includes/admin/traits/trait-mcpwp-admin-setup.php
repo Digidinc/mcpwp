@@ -5,6 +5,7 @@ trait Mcpwp_Admin_Setup_Trait {
 		if ( ! current_user_can( 'mcpwp_manage_settings' ) ) { wp_die( esc_html__( 'You do not have permission to view this page.', 'mumega-mcp' ) ); }
 		$new_key = '';
 		if ( isset( $_POST['mcpwp_create_key'] ) && check_admin_referer( 'mcpwp_create_key' ) ) {
+			update_option( 'mcpwp_legacy_migration_owner_id', get_current_user_id(), false );
 			$created = $this->create_scoped_api_key( sanitize_text_field( wp_unslash( $_POST['label'] ?? '' ) ), array( 'read', 'write', 'admin' ) );
 			$new_key = $created['key'];
 		}

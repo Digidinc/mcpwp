@@ -23,6 +23,7 @@ class Mcpwp_Pages {
 	 * @return array Pages data.
 	 */
 	public function list_pages( $args = array() ) {
+		unset( $args['post_type'] );
 		$mcpwp_fields = isset( $args['_mcpwp_fields'] ) ? $args['_mcpwp_fields'] : null;
 		unset( $args['_mcpwp_fields'] );
 
@@ -36,6 +37,8 @@ class Mcpwp_Pages {
 		);
 
 		$args = wp_parse_args( $args, $defaults );
+		$args['post_type'] = 'page';
+		if ( 'publish' !== $args['post_status'] && ! current_user_can( 'edit_others_pages' ) ) { $args['author'] = get_current_user_id(); }
 		$args['posts_per_page'] = absint( $args['posts_per_page'] );
 		$args['paged'] = absint( $args['paged'] );
 
@@ -258,7 +261,6 @@ class Mcpwp_Pages {
 			'date'         => $page->post_date,
 			'modified'     => $page->post_modified,
 			'url'          => get_permalink( $page ),
-			'edit_url'     => get_edit_post_link( $page->ID, 'raw' ),
 			'parent'       => $page->post_parent,
 			'menu_order'   => $page->menu_order,
 			'template'     => $template ?: 'default',
@@ -268,6 +270,7 @@ class Mcpwp_Pages {
 			),
 			'featured_image' => $this->get_featured_image( $page->ID ),
 		);
+		if ( current_user_can( 'edit_post', $page->ID ) ) { $data['edit_url'] = get_edit_post_link( $page->ID, 'raw' ); }
 
 		if ( $include_full ) {
 			$data['content']    = $page->post_content;

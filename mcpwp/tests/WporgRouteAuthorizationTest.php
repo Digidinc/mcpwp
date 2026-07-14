@@ -72,6 +72,24 @@ final class WporgRouteAuthorizationTest extends TestCase {
 		$this->assertSame( $fixture['tools'], $actual );
 	}
 
+	public function test_route_and_tool_snapshot_mutations_are_detected(): void {
+		$route_fixture = $this->read_fixture( 'wporg-routes.json' );
+		$mutated_routes = $route_fixture;
+		$mutated_routes['endpoints'][0]['method'] = 'DELETE';
+		$this->assertNotSame( $route_fixture, $mutated_routes );
+		$mutated_routes = $route_fixture;
+		$mutated_routes['endpoints'][0]['permission'] = 'check_permission';
+		$this->assertNotSame( $route_fixture, $mutated_routes );
+
+		$tool_fixture = $this->read_fixture( 'wporg-tools.json' );
+		$mutated_tools = $tool_fixture;
+		$mutated_tools['tools'][0]['annotations']['openWorldHint'] = true;
+		$this->assertNotSame( $tool_fixture, $mutated_tools );
+		$mutated_tools = $tool_fixture;
+		$mutated_tools['tools'][0]['inputSchema']['additionalProperties'] = true;
+		$this->assertNotSame( $tool_fixture, $mutated_tools );
+	}
+
 	public function test_bound_key_replaces_ambient_cookie_identity_with_stored_owner(): void {
 		$this->seed_key( 'owner-seven', 7, array( 'read' ) );
 		$result = ( new Mcpwp_Api_Auth_Test_Harness() )->verify_api_key( $this->request( 'owner-seven' ) );
@@ -121,6 +139,12 @@ final class WporgRouteAuthorizationTest extends TestCase {
 		$this->assertWpError( 'tool_category_forbidden', 403, $result );
 	}
 
+	public function test_mcp_transport_does_not_require_site_category(): void {
+		$this->seed_key( 'content-only-mcp', 7, array( 'read', 'write' ), array( 'content' ) );
+		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/mcp', array(), array( 'X-API-Key' => 'content-only-mcp' ), array( 'jsonrpc' => '2.0', 'id' => 1, 'method' => 'tools/list', 'params' => array() ) );
+		$this->assertTrue( ( new Mcpwp_REST_MCP() )->check_mcp_permission( $request ) );
+	}
+
 	public function test_direct_rest_honors_site_disabled_category(): void {
 		$this->seed_key( 'site-key', 7, array( 'read' ) );
 		$GLOBALS['mcpwp_test_options']['mcpwp_disabled_tool_categories'] = array( 'site' );
@@ -135,6 +159,69 @@ final class WporgRouteAuthorizationTest extends TestCase {
 		$this->assertWpError( 'insufficient_capability', 403, $result );
 	}
 
+	public function test_nonpublic_lists_require_edit_and_private_capabilities(): void {
+		$this->seed_key( 'private-list', 7, array( 'read' ), array( 'content' ) );
+		$request = new WP_REST_Request( 'GET', '/mcpwp/v1/posts', array( 'post_status' => 'private' ), array( 'X-API-Key' => 'private-list' ) );
+		$result = ( new Mcpwp_REST_Posts() )->check_list_posts_permission( $request );
+		$this->assertWpError( 'insufficient_capability', 403, $result );
+		$GLOBALS['mcpwp_test_user_caps'][7]['read_private_posts'] = true;
+		$this->assertTrue( ( new Mcpwp_REST_Posts() )->check_list_posts_permission( $request ) );
+	}
+
+	public function test_nonpublic_list_is_restricted_to_owner_without_edit_others(): void {
+		$GLOBALS['mcpwp_test_current_user'] = 7;
+		$GLOBALS['_mcpwp_test_posts'] = array(
+			7 => $this->post_fixture( 7, 'post', 'draft', 7 ),
+			8 => $this->post_fixture( 8, 'post', 'draft', 8 ),
+		);
+		$result = ( new Mcpwp_Posts() )->list_posts( array( 'post_status' => 'draft', 'posts_per_page' => 20, 'paged' => 1 ) );
+		$this->assertSame( array( 7 ), array_column( $result['posts'], 'id' ) );
+		$this->assertArrayNotHasKey( 'edit_url', $result['posts'][0] );
+	}
+
+	public function test_media_list_filters_every_attachment_by_read_post(): void {
+		$GLOBALS['mcpwp_test_current_user'] = 7;
+		$GLOBALS['mcpwp_test_user_caps'][7]['read_post:21'] = true;
+		$GLOBALS['mcpwp_test_user_caps'][7]['read_post:22'] = false;
+		$GLOBALS['_mcpwp_test_posts'] = array(
+			21 => $this->attachment_fixture( 21 ),
+			22 => $this->attachment_fixture( 22 ),
+		);
+		$result = ( new Mcpwp_Media() )->list_media( array( 'posts_per_page' => 20, 'paged' => 1 ) );
+		$this->assertSame( array( 21 ), array_column( $result['media'], 'id' ) );
+	}
+
+	public function test_term_creation_uses_selected_taxonomy_manage_capability(): void {
+		$this->seed_key( 'term-key', 7, array( 'write' ), array( 'taxonomy' ) );
+		$GLOBALS['mcpwp_test_user_caps'][7]['manage_categories'] = false;
+		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/terms', array(), array( 'X-API-Key' => 'term-key' ), array( 'taxonomy' => 'category', 'name' => 'News' ) );
+		$this->assertWpError( 'insufficient_capability', 403, ( new Mcpwp_REST_Site_Taxonomy() )->check_create_term_permission( $request ) );
+	}
+
+	public function test_category_assignment_requires_taxonomy_assign_capability(): void {
+		$this->seed_key( 'post-key', 7, array( 'write' ), array( 'content' ) );
+		$GLOBALS['mcpwp_test_user_caps'][7]['assign_categories'] = false;
+		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/posts', array(), array( 'X-API-Key' => 'post-key' ), array( 'title' => 'Post', 'categories' => array( 3 ) ) );
+		$this->assertWpError( 'insufficient_capability', 403, ( new Mcpwp_REST_Posts() )->check_create_post_permission( $request ) );
+	}
+
+	public function test_direct_update_to_publish_requires_admin_scope(): void {
+		$this->seed_key( 'write-update', 7, array( 'read', 'write' ), array( 'content' ) );
+		$GLOBALS['_mcpwp_test_posts'][31] = $this->post_fixture( 31, 'post', 'draft', 7 );
+		$GLOBALS['mcpwp_test_user_caps'][7]['edit_post:31'] = true;
+		$GLOBALS['mcpwp_test_user_caps'][7]['publish_posts'] = true;
+		$request = new WP_REST_Request( 'PATCH', '/mcpwp/v1/posts/31', array( 'id' => 31 ), array( 'X-API-Key' => 'write-update' ), array( 'status' => 'publish' ) );
+		$this->assertWpError( 'insufficient_scope', 403, ( new Mcpwp_REST_Posts() )->check_update_post_permission( $request ) );
+	}
+
+	public function test_site_info_returns_numeric_readable_counts(): void {
+		$GLOBALS['_mcpwp_test_posts'] = array( 1 => $this->post_fixture( 1, 'post', 'publish', 7 ), 2 => $this->post_fixture( 2, 'page', 'draft', 7 ) );
+		$GLOBALS['_mcpwp_test_count_post_calls'] = array();
+		$data = ( new Mcpwp_REST_Site_Info() )->get_site_info( new WP_REST_Request() )->get_data();
+		$this->assertSame( array( 'posts' => 1, 'pages' => 1, 'media' => 0 ), $data['counts'] );
+		$this->assertSame( array( array( 'post', 'readable' ), array( 'page', 'readable' ), array( 'attachment', 'readable' ) ), $GLOBALS['_mcpwp_test_count_post_calls'] );
+	}
+
 	public function test_limiter_receives_get_method_for_read_multiplier(): void {
 		$this->enable_rate_limit( 1 );
 		$this->seed_key( 'read-rate', 7, array( 'read' ) );
@@ -143,15 +230,14 @@ final class WporgRouteAuthorizationTest extends TestCase {
 		$this->assertTrue( $auth->verify_api_key( $this->request( 'read-rate', 'GET' ) ), 'GET must retain the limiter read multiplier.' );
 	}
 
-	public function test_limiter_receives_full_key_record_for_reviewed_override(): void {
+	public function test_unreviewed_stored_rate_override_is_not_authoritative(): void {
 		$this->enable_rate_limit( 10 );
 		$record = $this->key_record( 'override-rate', 7, array( 'write' ) );
 		$record['rate_limits'] = array( 'burst' => 1, 'per_minute' => 100, 'per_hour' => 100 );
 		$this->seed_keys( array( $record ) );
 		$auth = new Mcpwp_Api_Auth_Test_Harness();
 		$this->assertTrue( $auth->verify_api_key( $this->request( 'override-rate', 'POST', '/mcpwp/v1/posts' ) ) );
-		$result = $auth->verify_api_key( $this->request( 'override-rate', 'POST', '/mcpwp/v1/posts' ) );
-		$this->assertWpError( 'rate_limit_exceeded', 429, $result );
+		$this->assertTrue( $auth->verify_api_key( $this->request( 'override-rate', 'POST', '/mcpwp/v1/posts' ) ) );
 	}
 
 	private function register_all_routes(): void {
@@ -187,6 +273,17 @@ final class WporgRouteAuthorizationTest extends TestCase {
 
 	private function request( $key, $method = 'GET', $route = '/mcpwp/v1/site-info' ): WP_REST_Request {
 		return new WP_REST_Request( $method, $route, array(), array( 'X-API-Key' => $key ) );
+	}
+
+	private function post_fixture( $id, $type, $status, $author ) {
+		return (object) array( 'ID' => $id, 'post_type' => $type, 'post_title' => 'Item ' . $id, 'post_name' => 'item-' . $id, 'post_status' => $status, 'post_date' => '2026-01-01', 'post_date_gmt' => '2026-01-01', 'post_modified' => '2026-01-02', 'post_modified_gmt' => '2026-01-02', 'post_parent' => 0, 'menu_order' => 0, 'post_author' => $author, 'post_content' => '', 'post_excerpt' => '' );
+	}
+
+	private function attachment_fixture( $id ) {
+		$post = $this->post_fixture( $id, 'attachment', 'inherit', 7 );
+		$post->post_mime_type = 'image/png';
+		$post->attached_file = $id . '.png';
+		return $post;
 	}
 
 	private function assertWpError( $code, $status, $result ): void {

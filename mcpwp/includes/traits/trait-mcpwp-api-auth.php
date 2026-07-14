@@ -16,7 +16,7 @@ trait Mcpwp_Api_Auth {
 		return $this->mcpwp_current_api_key_record;
 	}
 
-	public function verify_api_key( $request, $required_scope = null ) {
+	public function verify_api_key( $request, $required_scope = null, $charge_rate_limit = true ) {
 		$key = $this->get_api_key_from_request( $request );
 		if ( '' === $key ) {
 			return new WP_Error( 'missing_api_key', __( 'An API key is required in the X-API-Key header.', 'mumega-mcp' ), array( 'status' => 401 ) );
@@ -36,10 +36,13 @@ trait Mcpwp_Api_Auth {
 			}
 			return new WP_Error( 'invalid_api_key', __( 'The API key is invalid.', 'mumega-mcp' ), array( 'status' => 401 ) );
 		}
+		if ( ! $this->record_has_valid_identity_fields( $record ) ) {
+			return new WP_Error( 'api_key_record_invalid', __( 'The API key has an invalid stored record.', 'mumega-mcp' ), array( 'status' => 500 ) );
+		}
 		if ( ! $this->record_has_valid_scopes( $record ) ) {
 			return new WP_Error( 'api_key_scope_invalid', __( 'The API key has an invalid stored scope configuration.', 'mumega-mcp' ), array( 'status' => 500 ) );
 		}
-		if ( empty( $record['user_id'] ) || ! is_numeric( $record['user_id'] ) || (int) $record['user_id'] < 1 ) {
+		if ( ! isset( $record['user_id'] ) || ! is_int( $record['user_id'] ) || $record['user_id'] < 1 ) {
 			return new WP_Error( 'api_key_owner_setup_required', __( 'The API key must be bound to an explicit WordPress user.', 'mumega-mcp' ), array( 'status' => 500 ) );
 		}
 		$user = function_exists( 'get_user_by' ) ? get_user_by( 'id', (int) $record['user_id'] ) : get_userdata( (int) $record['user_id'] );
@@ -54,13 +57,7 @@ trait Mcpwp_Api_Auth {
 		}
 
 		$this->mcpwp_current_api_key_record = $record;
-		// The outer authenticated MCP request already consumed the rate-limit unit.
-		// Consume this in-process marker only after the nested request has passed
-		// the same API-key and scope checks above.
-		if ( class_exists( 'Mcpwp_REST_MCP' ) && Mcpwp_REST_MCP::$is_internal_sub_request ) {
-			Mcpwp_REST_MCP::$is_internal_sub_request = false;
-			return true;
-		}
+		if ( ! $charge_rate_limit ) { return true; }
 		$rate = $this->check_rate_limit( 'key:' . sanitize_key( $record['id'] ), $request->get_method(), $record );
 		return is_wp_error( $rate ) ? $rate : true;
 	}
@@ -157,7 +154,8 @@ trait Mcpwp_Api_Auth {
 	public function create_scoped_api_key( $label = '', $scopes = array(), $tool_categories = array(), $user_id = null ) {
 		$user_id = null === $user_id ? get_current_user_id() : (int) $user_id;
 		$valid_scopes = $this->validated_scopes( $scopes );
-		if ( is_wp_error( $valid_scopes ) || $user_id < 1 || ! get_userdata( $user_id ) ) {
+		$valid_categories = $this->validated_tool_categories( $tool_categories );
+		if ( is_wp_error( $valid_scopes ) || is_wp_error( $valid_categories ) || $user_id < 1 || ! get_userdata( $user_id ) ) {
 			return new WP_Error( 'invalid_api_key_record', __( 'A valid owner and non-empty scopes are required.', 'mumega-mcp' ), array( 'status' => 400 ) );
 		}
 		$key    = $this->generate_api_key();
@@ -167,7 +165,7 @@ trait Mcpwp_Api_Auth {
 			'hash'            => wp_hash_password( $key ),
 			'user_id'         => $user_id,
 			'scopes'          => $valid_scopes,
-			'tool_categories' => array_values( array_unique( array_map( 'sanitize_key', (array) $tool_categories ) ) ),
+			'tool_categories' => $valid_categories,
 			'created_at'      => current_time( 'mysql' ),
 			'last_used_at'    => null,
 			'revoked_at'      => null,
@@ -227,7 +225,14 @@ trait Mcpwp_Api_Auth {
 	}
 
 	protected function normalize_api_key_record( $record ) {
-		return array_merge( array( 'id' => '', 'label' => '', 'hash' => '', 'user_id' => 0, 'scopes' => array(), 'tool_categories' => array(), 'created_at' => '', 'last_used_at' => null, 'revoked_at' => null ), is_array( $record ) ? $record : array() );
+		$record = is_array( $record ) ? $record : array();
+		return array(
+			'id' => isset( $record['id'] ) ? (string) $record['id'] : '', 'label' => isset( $record['label'] ) ? (string) $record['label'] : '',
+			'hash' => isset( $record['hash'] ) ? (string) $record['hash'] : '', 'user_id' => isset( $record['user_id'] ) ? $record['user_id'] : 0,
+			'scopes' => isset( $record['scopes'] ) ? $record['scopes'] : array(), 'tool_categories' => isset( $record['tool_categories'] ) ? $record['tool_categories'] : array(),
+			'created_at' => isset( $record['created_at'] ) ? (string) $record['created_at'] : '', 'last_used_at' => isset( $record['last_used_at'] ) ? $record['last_used_at'] : null,
+			'revoked_at' => isset( $record['revoked_at'] ) ? $record['revoked_at'] : null,
+		);
 	}
 
 	protected function sanitize_scopes( $scopes ) {
@@ -239,7 +244,8 @@ trait Mcpwp_Api_Auth {
 		if ( ! is_array( $scopes ) || empty( $scopes ) ) {
 			return new WP_Error( 'invalid_scopes', __( 'At least one API-key scope is required.', 'mumega-mcp' ), array( 'status' => 400 ) );
 		}
-		$normalized = array_map( 'sanitize_key', $scopes );
+		$normalized = array_values( $scopes );
+		foreach ( $normalized as $scope ) { if ( ! is_string( $scope ) ) { return new WP_Error( 'invalid_scopes', __( 'API-key scopes must be unique read, write, or admin values.', 'mumega-mcp' ), array( 'status' => 400 ) ); } }
 		if ( count( $normalized ) !== count( array_unique( $normalized ) ) || array_diff( $normalized, array( 'read', 'write', 'admin' ) ) ) {
 			return new WP_Error( 'invalid_scopes', __( 'API-key scopes must be unique read, write, or admin values.', 'mumega-mcp' ), array( 'status' => 400 ) );
 		}
@@ -247,7 +253,23 @@ trait Mcpwp_Api_Auth {
 	}
 
 	protected function record_has_valid_scopes( $record ) {
-		return ! is_wp_error( $this->validated_scopes( $record['scopes'] ?? null ) );
+		return ! is_wp_error( $this->validated_scopes( $record['scopes'] ?? null ) ) && ! is_wp_error( $this->validated_tool_categories( $record['tool_categories'] ?? null ) );
+	}
+
+	protected function record_has_valid_identity_fields( $record ) {
+		$id = isset( $record['id'] ) ? $record['id'] : '';
+		$hash = isset( $record['hash'] ) ? $record['hash'] : '';
+		return is_string( $id ) && '' !== $id && strlen( $id ) <= 64 && sanitize_key( $id ) === $id && is_string( $hash ) && '' !== $hash;
+	}
+
+	protected function validated_tool_categories( $categories ) {
+		if ( ! is_array( $categories ) ) { return new WP_Error( 'invalid_tool_categories', __( 'Tool categories must be an array.', 'mumega-mcp' ), array( 'status' => 400 ) ); }
+		$normalized = array_values( $categories );
+		foreach ( $normalized as $category ) { if ( ! is_string( $category ) ) { return new WP_Error( 'invalid_tool_categories', __( 'Tool categories contain an invalid or duplicate value.', 'mumega-mcp' ), array( 'status' => 400 ) ); } }
+		if ( count( $normalized ) > 4 || count( $normalized ) !== count( array_unique( $normalized ) ) || array_diff( $normalized, array( 'site', 'content', 'media', 'taxonomy' ) ) ) {
+			return new WP_Error( 'invalid_tool_categories', __( 'Tool categories contain an invalid or duplicate value.', 'mumega-mcp' ), array( 'status' => 400 ) );
+		}
+		return array_values( $normalized );
 	}
 
 	public function resolve_key_tool_categories( $record ) {

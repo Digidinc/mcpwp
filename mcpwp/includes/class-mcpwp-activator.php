@@ -32,6 +32,8 @@ class Mcpwp_Activator {
 		) {$charset};" );
 	}
 	private static function create_defaults() {
+		$owner_id = get_current_user_id();
+		if ( $owner_id > 0 && get_userdata( $owner_id ) ) { update_option( 'mcpwp_legacy_migration_owner_id', $owner_id, false ); }
 		if ( false === get_option( 'mcpwp_settings', false ) ) { update_option( 'mcpwp_settings', array( 'enable_logging' => true, 'log_retention_days' => 30 ), false ); }
 		if ( false === get_option( 'mcpwp_rate_limit_settings', false ) ) { update_option( 'mcpwp_rate_limit_settings', array( 'enabled' => true, 'requests_per_minute' => 60, 'requests_per_hour' => 1000, 'burst_limit' => 10, 'whitelist' => array() ), false ); }
 		update_option( 'mcpwp_db_version', MCPWP_VERSION, false );

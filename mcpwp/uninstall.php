@@ -6,6 +6,7 @@ $mcpwp_uninstall_site = static function () {
 	global $wpdb;
 	delete_option( 'mcpwp_api_key' );
 	delete_option( 'mcpwp_api_keys' );
+	delete_option( 'mcpwp_legacy_migration_owner_id' );
 	delete_option( 'mcpwp_settings' );
 	delete_option( 'mcpwp_rate_limit_settings' );
 	delete_option( 'mcpwp_disabled_tool_categories' );

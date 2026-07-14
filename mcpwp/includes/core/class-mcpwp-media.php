@@ -34,7 +34,9 @@ class Mcpwp_Media {
 			require_once ABSPATH . 'wp-admin/includes/media.php';
 		}
 
-		// Validate file
+		if ( ! is_array( $file ) || ! isset( $file['error'] ) || UPLOAD_ERR_OK !== (int) $file['error'] ) {
+			return new WP_Error( 'upload_error', __( 'The multipart upload did not complete successfully.', 'mumega-mcp' ), array( 'status' => 400 ) );
+		}
 		if ( empty( $file['tmp_name'] ) ) {
 			return new WP_Error(
 				'no_file',
@@ -42,6 +44,12 @@ class Mcpwp_Media {
 				array( 'status' => 400 )
 			);
 		}
+		$declared_size = isset( $file['size'] ) ? (int) $file['size'] : -1;
+		if ( $declared_size < 1 ) { return new WP_Error( 'empty_file', __( 'The uploaded file is empty.', 'mumega-mcp' ), array( 'status' => 400 ) ); }
+		if ( $declared_size > 10 * 1024 * 1024 ) { return new WP_Error( 'file_too_large', __( 'File exceeds maximum size of 10MB.', 'mumega-mcp' ), array( 'status' => 413 ) ); }
+		if ( ! is_uploaded_file( $file['tmp_name'] ) ) { return new WP_Error( 'invalid_upload', __( 'The file is not a genuine HTTP upload.', 'mumega-mcp' ), array( 'status' => 400 ) ); }
+		$actual_size = filesize( $file['tmp_name'] );
+		if ( false === $actual_size || $actual_size < 1 || $actual_size > 10 * 1024 * 1024 || $actual_size !== $declared_size ) { return new WP_Error( 'invalid_upload_size', __( 'The uploaded file size is invalid.', 'mumega-mcp' ), array( 'status' => $actual_size > 10 * 1024 * 1024 ? 413 : 400 ) ); }
 
 		// Upload the file
 		$upload = wp_handle_upload(
@@ -67,13 +75,17 @@ class Mcpwp_Media {
 
 		$attachment_id = wp_insert_attachment( $attachment, $upload['file'] );
 
-		if ( is_wp_error( $attachment_id ) ) {
-			return $attachment_id;
+		if ( is_wp_error( $attachment_id ) || ! is_int( $attachment_id ) || $attachment_id < 1 ) {
+			wp_delete_file( $upload['file'] );
+			return is_wp_error( $attachment_id ) ? $attachment_id : new WP_Error( 'attachment_insert_failed', __( 'WordPress could not create the media attachment.', 'mumega-mcp' ), array( 'status' => 500 ) );
 		}
 
 		// Generate metadata
 		$metadata = wp_generate_attachment_metadata( $attachment_id, $upload['file'] );
-		wp_update_attachment_metadata( $attachment_id, $metadata );
+		if ( is_wp_error( $metadata ) || false === wp_update_attachment_metadata( $attachment_id, $metadata ) ) {
+			wp_delete_attachment( $attachment_id, true ); wp_delete_file( $upload['file'] );
+			return new WP_Error( 'attachment_metadata_failed', __( 'WordPress could not create attachment metadata.', 'mumega-mcp' ), array( 'status' => 500 ) );
+		}
 
 		// Set alt text
 		if ( ! empty( $args['alt'] ) ) {
@@ -114,9 +126,14 @@ class Mcpwp_Media {
 			require_once ABSPATH . 'wp-admin/includes/media.php';
 		}
 
-		// Strip optional data URI prefix (e.g. "data:image/png;base64,").
-		if ( preg_match( '/^data:[^;]+;base64,/', $base64_data ) ) {
-			$base64_data = preg_replace( '/^data:[^;]+;base64,/', '', $base64_data );
+		$data_uri_mime = '';
+		if ( 0 === strpos( $base64_data, 'data:' ) ) {
+			if ( ! preg_match( '/^data:([a-z0-9.+-]+\/[a-z0-9.+-]+);base64,([A-Za-z0-9+\/=]+)$/D', $base64_data, $matches ) ) { return new WP_Error( 'invalid_base64', __( 'Invalid Base64 data URI.', 'mumega-mcp' ), array( 'status' => 400 ) ); }
+			$data_uri_mime = $matches[1];
+			$base64_data = $matches[2];
+		}
+		if ( '' === $base64_data || ! preg_match( '/^(?:[A-Za-z0-9+\/]{4})*(?:[A-Za-z0-9+\/]{2}==|[A-Za-z0-9+\/]{3}=)?$/D', $base64_data ) ) {
+			return new WP_Error( '' === $base64_data ? 'empty_file' : 'invalid_base64', __( 'Base64 data must be non-empty and unwrapped.', 'mumega-mcp' ), array( 'status' => 400 ) );
 		}
 
 		// Decode.
@@ -131,6 +148,7 @@ class Mcpwp_Media {
 				)
 			);
 		}
+		if ( '' === $decoded ) { return new WP_Error( 'empty_file', __( 'The decoded file is empty.', 'mumega-mcp' ), array( 'status' => 400 ) ); }
 
 		// Limit file size to 10MB.
 		$max_size = 10 * 1024 * 1024;
@@ -139,7 +157,7 @@ class Mcpwp_Media {
 				'file_too_large',
 				__( 'File exceeds maximum size of 10MB.', 'mumega-mcp' ),
 				array(
-					'status' => 400,
+					'status' => 413,
 					'hint'   => 'The decoded file exceeds the 10MB limit. Use a smaller local file.',
 				)
 			);
@@ -150,6 +168,7 @@ class Mcpwp_Media {
 		$filename = sanitize_file_name( $original_filename );
 		$extension = strtolower( pathinfo( $filename, PATHINFO_EXTENSION ) );
 		$executable_extensions = array( 'php', 'php3', 'php4', 'php5', 'php7', 'php8', 'phtml', 'phar', 'cgi', 'pl', 'py', 'sh', 'bash', 'exe', 'dll', 'com', 'bat', 'cmd', 'js', 'html', 'htm', 'svg' );
+		$filename_segments = array_map( 'strtolower', explode( '.', $filename ) );
 		$filetype = wp_check_filetype( $filename );
 		if ( empty( $filename ) || $original_filename !== $filename || basename( $original_filename ) !== $original_filename ) {
 			return new WP_Error(
@@ -159,7 +178,10 @@ class Mcpwp_Media {
 			);
 		}
 		if ( in_array( $extension, $executable_extensions, true ) || empty( $filetype['ext'] ) || empty( $filetype['type'] ) ) {
-			return new WP_Error( 'invalid_file_type', __( 'The file type is not allowed for local media uploads.', 'mumega-mcp' ), array( 'status' => 400 ) );
+			return new WP_Error( 'invalid_file_type', __( 'The file type is not allowed for local media uploads.', 'mumega-mcp' ), array( 'status' => 415 ) );
+		}
+		if ( array_intersect( array_slice( $filename_segments, 0, -1 ), $executable_extensions ) ) {
+			return new WP_Error( 'invalid_filename', __( 'The filename contains a disallowed extension.', 'mumega-mcp' ), array( 'status' => 400 ) );
 		}
 
 		// Write to temp file.
@@ -200,6 +222,7 @@ class Mcpwp_Media {
 				);
 			}
 		}
+		if ( '' !== $data_uri_mime && $data_uri_mime !== $check['type'] ) { wp_delete_file( $tmp_file ); return new WP_Error( 'mime_mismatch', __( 'The data URI MIME type does not match the detected file type.', 'mumega-mcp' ), array( 'status' => 415 ) ); }
 
 		// Block SVG uploads — SVGs can contain <script> tags (stored XSS).
 		// WordPress does not ship an SVG sanitizer; block at the API layer.
@@ -265,14 +288,17 @@ class Mcpwp_Media {
 
 		$attachment_id = wp_insert_attachment( $attachment, $new_file );
 
-		if ( is_wp_error( $attachment_id ) ) {
+		if ( is_wp_error( $attachment_id ) || ! is_int( $attachment_id ) || $attachment_id < 1 ) {
 			wp_delete_file( $new_file );
-			return $attachment_id;
+			return is_wp_error( $attachment_id ) ? $attachment_id : new WP_Error( 'attachment_insert_failed', __( 'WordPress could not create the media attachment.', 'mumega-mcp' ), array( 'status' => 500 ) );
 		}
 
 		// Generate metadata.
 		$metadata = wp_generate_attachment_metadata( $attachment_id, $new_file );
-		wp_update_attachment_metadata( $attachment_id, $metadata );
+		if ( is_wp_error( $metadata ) || false === wp_update_attachment_metadata( $attachment_id, $metadata ) ) {
+			wp_delete_attachment( $attachment_id, true ); wp_delete_file( $new_file );
+			return new WP_Error( 'attachment_metadata_failed', __( 'WordPress could not create attachment metadata.', 'mumega-mcp' ), array( 'status' => 500 ) );
+		}
 
 		// Set alt text.
 		if ( ! empty( $args['alt'] ) ) {
@@ -324,12 +350,13 @@ class Mcpwp_Media {
 		$media = array();
 
 		foreach ( $query->posts as $attachment ) {
+			if ( ! current_user_can( 'read_post', $attachment->ID ) ) { continue; }
 			$media[] = $this->format_attachment( $attachment->ID );
 		}
 
 		return array(
 			'media'    => $media,
-			'total'    => $query->found_posts,
+			'total'    => count( $media ),
 			'pages'    => $query->max_num_pages,
 			'page'     => absint( $args['paged'] ),
 			'per_page' => absint( $args['posts_per_page'] ),

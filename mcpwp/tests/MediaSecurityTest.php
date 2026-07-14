@@ -8,6 +8,8 @@ final class MediaSecurityTest extends TestCase {
 		$GLOBALS['_mcpwp_test_posts'] = array();
 		$GLOBALS['_mcpwp_test_attachment_metadata'] = array();
 		$GLOBALS['wp_filesystem'] = new Mcpwp_Test_Filesystem();
+		$GLOBALS['_mcpwp_test_insert_attachment_result'] = null;
+		$GLOBALS['_mcpwp_test_update_attachment_metadata_result'] = null;
 	}
 
 	public function test_base64_upload_rejects_php_payload_before_move(): void {
@@ -40,5 +42,68 @@ final class MediaSecurityTest extends TestCase {
 	public function test_removed_media_mutations_are_physically_absent(): void {
 		$this->assertFalse( method_exists( Mcpwp_Media::class, 'update_media' ) );
 		$this->assertFalse( method_exists( Mcpwp_Media::class, 'delete_media' ) );
+	}
+
+	/** @dataProvider invalidBase64Inputs */
+	public function test_base64_upload_rejects_empty_wrapped_double_extension_and_data_uri_mismatch( $data, $filename, $code ): void {
+		$result = ( new Mcpwp_Media() )->upload_from_base64( $data, $filename );
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( $code, $result->get_error_code() );
+		$this->assertSame( array(), $GLOBALS['wp_filesystem']->moves );
+	}
+
+	public function invalidBase64Inputs(): array {
+		$png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+		return array(
+			'empty' => array( '', 'empty.png', 'empty_file' ),
+			'wrapped' => array( "iVBORw0KGgoAAAAN\nSUhEUgAAAAEAAAAB", 'wrapped.png', 'invalid_base64' ),
+			'double executable extension' => array( $png, 'photo.php.png', 'invalid_filename' ),
+			'data uri mismatch' => array( 'data:image/jpeg;base64,' . $png, 'photo.png', 'mime_mismatch' ),
+		);
+	}
+
+	public function test_attachment_insert_zero_cleans_moved_file(): void {
+		$GLOBALS['_mcpwp_test_insert_attachment_result'] = 0;
+		$png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+		$result = ( new Mcpwp_Media() )->upload_from_base64( $png, 'insert-zero.png', array( 'mime_type' => 'image/png' ) );
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'attachment_insert_failed', $result->get_error_code() );
+		$this->assertFileDoesNotExist( $GLOBALS['wp_filesystem']->moves[0][1] );
+	}
+
+	public function test_media_controllers_reject_extra_parts_remote_keys_and_oversized_body(): void {
+		$controller = new Mcpwp_REST_Media();
+		$multipart = new WP_REST_Request( 'POST', '/mcpwp/v1/media' );
+		$multipart->set_file_params( array( 'file' => array( 'name' => 'ok.png' ), 'extra' => array( 'name' => 'bad.png' ) ) );
+		$this->assertSame( 'unknown_parameter', $controller->upload_media( $multipart )->get_data()['code'] );
+
+		$remote = new WP_REST_Request( 'POST', '/mcpwp/v1/media/from-base64', array(), array(), array( 'data' => 'AA==', 'filename' => 'x.png', 'url' => 'https://example.com/x.png' ) );
+		$this->assertSame( 'unknown_parameter', $controller->upload_from_base64( $remote )->get_data()['code'] );
+
+		$oversize = new WP_REST_Request( 'POST', '/mcpwp/v1/media/from-base64', array(), array(), array( 'data' => 'AA==', 'filename' => 'x.png' ), str_repeat( 'x', 15 * 1024 * 1024 + 1 ) );
+		$this->assertSame( 413, $controller->upload_from_base64( $oversize )->get_status() );
+	}
+
+	public function test_base64_metadata_failure_removes_attachment_and_file(): void {
+		$GLOBALS['_mcpwp_test_update_attachment_metadata_result'] = false;
+		$png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+		$result = ( new Mcpwp_Media() )->upload_from_base64( $png, 'metadata-fail.png', array( 'mime_type' => 'image/png' ) );
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'attachment_metadata_failed', $result->get_error_code() );
+		$this->assertSame( array(), $GLOBALS['_mcpwp_test_posts'] );
+		$this->assertFileDoesNotExist( $GLOBALS['wp_filesystem']->moves[0][1] );
+	}
+
+	public function test_multipart_rejects_upload_error_size_and_non_uploaded_path(): void {
+		$media = new Mcpwp_Media();
+		$error = $media->upload_file( array( 'name' => 'x.png', 'type' => 'image/png', 'tmp_name' => '/tmp/x', 'error' => UPLOAD_ERR_INI_SIZE, 'size' => 1 ) );
+		$this->assertSame( 'upload_error', $error->get_error_code() );
+		$large = $media->upload_file( array( 'name' => 'x.png', 'type' => 'image/png', 'tmp_name' => '/tmp/x', 'error' => UPLOAD_ERR_OK, 'size' => 10 * 1024 * 1024 + 1 ) );
+		$this->assertSame( 'file_too_large', $large->get_error_code() );
+		$path = tempnam( sys_get_temp_dir(), 'mcpwp-not-upload-' );
+		file_put_contents( $path, 'bytes' );
+		$not_uploaded = $media->upload_file( array( 'name' => 'x.png', 'type' => 'image/png', 'tmp_name' => $path, 'error' => UPLOAD_ERR_OK, 'size' => 5 ) );
+		$this->assertSame( 'invalid_upload', $not_uploaded->get_error_code() );
+		unlink( $path );
 	}
 }

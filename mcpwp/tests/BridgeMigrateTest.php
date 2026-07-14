@@ -2,15 +2,18 @@
 use PHPUnit\Framework\TestCase;
 
 final class BridgeMigrateTest extends TestCase {
-	protected function setUp(): void { $GLOBALS['mcpwp_test_options'] = array(); }
+	protected function setUp(): void { $GLOBALS['mcpwp_test_options'] = array(); $GLOBALS['mcpwp_test_current_user'] = 2; update_option( 'mcpwp_legacy_migration_owner_id', 2 ); }
 	public function test_migration_copies_only_retained_compatibility_state(): void {
 		update_option( 'spai_api_key', 'legacy-hash' );
-		update_option( 'spai_api_keys', array( array( 'id' => 'one' ) ) );
+		update_option( 'spai_api_keys', array( array( 'id' => 'one', 'label' => 'Legacy', 'hash' => 'legacy-hash', 'scopes' => array( 'read' ), 'role' => 'administrator', 'rate_limits' => array( 'burst' => 1 ) ) ) );
 		update_option( 'spai_rate_limit_settings', array( 'enabled' => true ) );
 		update_option( 'spai_settings', array( 'enable_logging' => true, 'log_retention_days' => 14, 'removed_value' => 'ignored' ) );
 		Mcpwp_Migrate::run();
 		$this->assertSame( 'legacy-hash', get_option( 'mcpwp_api_key' ) );
-		$this->assertSame( array( array( 'id' => 'one' ) ), get_option( 'mcpwp_api_keys' ) );
+		$keys = get_option( 'mcpwp_api_keys' );
+		$this->assertSame( 2, $keys[0]['user_id'] );
+		$this->assertArrayNotHasKey( 'role', $keys[0] );
+		$this->assertArrayNotHasKey( 'rate_limits', $keys[0] );
 		$this->assertSame( array( 'enabled' => true ), get_option( 'mcpwp_rate_limit_settings' ) );
 		$this->assertSame( array( 'enable_logging' => true, 'log_retention_days' => 14 ), get_option( 'mcpwp_settings' ) );
 	}

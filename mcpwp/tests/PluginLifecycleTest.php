@@ -20,7 +20,7 @@ final class PluginLifecycleTest extends TestCase {
 		$this->assertArrayHasKey( 'mcpwp_api_agent', $GLOBALS['mcpwp_test_roles'] );
 		$this->assertTrue( $GLOBALS['mcpwp_test_roles']['administrator']->capabilities['mcpwp_manage_settings'] );
 		$this->assertSame(
-			array( 'mcpwp_settings', 'mcpwp_rate_limit_settings', 'mcpwp_db_version' ),
+			array( 'mcpwp_legacy_migration_owner_id', 'mcpwp_settings', 'mcpwp_rate_limit_settings', 'mcpwp_db_version' ),
 			array_keys( $GLOBALS['mcpwp_test_options'] )
 		);
 		$this->assertCount( 1, $GLOBALS['mcpwp_test_dbdelta'] );

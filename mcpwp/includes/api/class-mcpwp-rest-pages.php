@@ -15,10 +15,20 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 			$this->route_definition( 'PUT,PATCH', 'update_page', 'check_update_page_permission', 'content', 'write/dynamic-admin', array( 'edit_post:{id}', 'publish_pages for publish/private', 'post type must be page' ), true, $this->page_body_args( true ) ),
 		) );
 	}
-	public function list_pages( $request ) { return $this->respond( $this->pages->list_pages( $request->get_params() ) ); }
-	public function get_page( $request ) { return $this->respond( $this->pages->get_page( absint( $request->get_param( 'id' ) ) ) ); }
-	public function create_page( $request ) { return $this->respond( $this->pages->create_page( $this->request_data( $request ) ), 201 ); }
-	public function update_page( $request ) { return $this->respond( $this->pages->update_page( absint( $request->get_param( 'id' ) ), $this->request_data( $request ) ) ); }
-	private function request_data( $request ) { $json = $request->get_json_params(); return is_array( $json ) ? $json : $request->get_params(); }
+	public function list_pages( $request ) { $params = $this->validated_query_params( $request, $this->content_list_args( true ) ); return is_wp_error( $params ) ? $this->validation_error_response( $params ) : $this->respond( $this->pages->list_pages( $params ) ); }
+	public function get_page( $request ) { $params = $this->validated_query_params( $request, $this->id_route_args() ); return is_wp_error( $params ) ? $this->validation_error_response( $params ) : $this->respond( $this->pages->get_page( $params['id'] ) ); }
+	public function create_page( $request ) {
+		$data = $this->validated_json_body( $request, $this->page_body_args() );
+		if ( is_wp_error( $data ) ) { return $this->validation_error_response( $data ); }
+		$relationships = $this->validate_content_relationships( $data, 0, true );
+		return is_wp_error( $relationships ) ? $this->validation_error_response( $relationships ) : $this->respond( $this->pages->create_page( $data ), 201 );
+	}
+	public function update_page( $request ) {
+		$schema = $this->page_body_args( true ); unset( $schema['id'] );
+		$data = $this->validated_json_body( $request, $schema, true );
+		if ( is_wp_error( $data ) ) { return $this->validation_error_response( $data ); }
+		$id = absint( $request->get_param( 'id' ) ); $relationships = $this->validate_content_relationships( $data, $id, true );
+		return is_wp_error( $relationships ) ? $this->validation_error_response( $relationships ) : $this->respond( $this->pages->update_page( $id, $data ) );
+	}
 	private function respond( $result, $status = 200 ) { return is_wp_error( $result ) ? $this->error_response( $result->get_error_code(), $result->get_error_message(), (int) ( $result->get_error_data()['status'] ?? 400 ) ) : $this->success_response( $result, $status ); }
 }

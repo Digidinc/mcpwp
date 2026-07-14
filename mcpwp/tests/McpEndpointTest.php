@@ -15,6 +15,7 @@ final class McpEndpointTest extends TestCase {
 		$GLOBALS['_mcpwp_test_rest_dispatcher'] = null;
 		$GLOBALS['_mcpwp_test_nested_permission_calls'] = 0;
 		$GLOBALS['wpdb']->inserted = array();
+		$GLOBALS['_mcpwp_test_posts'] = array();
 		$this->reset_limiter_singleton();
 	}
 	private function call( $method, $params = array() ) {
@@ -76,6 +77,74 @@ final class McpEndpointTest extends TestCase {
 			$this->assertSame( -32601, $data['error']['code'] );
 		}
 	}
+
+	/** @dataProvider invalidEnvelopes */
+	public function test_invalid_jsonrpc_envelopes_are_rejected( $body ): void {
+		$data = $this->call_authenticated_body( $body );
+		$this->assertSame( -32600, $data['error']['code'] );
+	}
+
+	public function invalidEnvelopes(): array {
+		return array(
+			'missing jsonrpc' => array( array( 'id' => 1, 'method' => 'ping', 'params' => array() ) ),
+			'wrong jsonrpc' => array( array( 'jsonrpc' => '1.0', 'id' => 1, 'method' => 'ping', 'params' => array() ) ),
+			'extra key' => array( array( 'jsonrpc' => '2.0', 'id' => 1, 'method' => 'ping', 'params' => array(), 'extra' => true ) ),
+			'boolean id' => array( array( 'jsonrpc' => '2.0', 'id' => true, 'method' => 'ping', 'params' => array() ) ),
+			'non-object params' => array( array( 'jsonrpc' => '2.0', 'id' => 1, 'method' => 'ping', 'params' => 'bad' ) ),
+		);
+	}
+
+	public function test_protocol_params_and_tool_names_are_exact(): void {
+		$initialize = $this->call_authenticated( 'initialize', array( 'protocolVersion' => '1900-01-01' ) );
+		$this->assertSame( -32602, $initialize['error']['code'] );
+		$list = $this->call_authenticated( 'tools/list', array( 'cursor' => 'not-supported' ) );
+		$this->assertSame( -32602, $list['error']['code'] );
+		$tool = $this->call_authenticated( 'tools/call', array( 'name' => 'wp_site_info!!!', 'arguments' => array() ) );
+		$this->assertSame( -32602, $tool['error']['code'] );
+	}
+
+	public function test_notifications_are_omitted_and_mixed_batch_order_is_preserved(): void {
+		$data = $this->call_authenticated_body( array(
+			array( 'jsonrpc' => '2.0', 'method' => 'ping', 'params' => array() ),
+			array( 'jsonrpc' => '2.0', 'id' => 41, 'method' => 'ping', 'params' => array() ),
+			array( 'jsonrpc' => '2.0', 'method' => 'tools/list', 'params' => array() ),
+			array( 'jsonrpc' => '2.0', 'id' => 42, 'method' => 'tools/list', 'params' => array() ),
+		) );
+		$this->assertSame( array( 41, 42 ), array_column( $data, 'id' ) );
+	}
+
+	public function test_empty_batch_is_invalid_and_notification_only_is_204(): void {
+		$empty = $this->call_authenticated_body( array() );
+		$this->assertSame( -32600, $empty['error']['code'] );
+		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/mcp', array(), array( 'X-API-Key' => 'test-key' ), array( array( 'jsonrpc' => '2.0', 'method' => 'ping', 'params' => array() ) ) );
+		$controller = new Mcpwp_REST_MCP();
+		$this->assertTrue( $controller->check_permission( $request ) );
+		$response = $controller->handle_mcp( $request );
+		$this->assertSame( 204, $response->get_status() );
+		$this->assertNull( $response->get_data() );
+	}
+
+	public function test_non_object_batch_member_returns_ordered_invalid_request_error(): void {
+		$data = $this->call_authenticated_body( array(
+			array( 'jsonrpc' => '2.0', 'id' => 51, 'method' => 'ping', 'params' => array() ),
+			'not-an-object',
+			array( 'jsonrpc' => '2.0', 'id' => 52, 'method' => 'ping', 'params' => array() ),
+		) );
+		$this->assertSame( 51, $data[0]['id'] );
+		$this->assertSame( -32600, $data[1]['error']['code'] );
+		$this->assertSame( 52, $data[2]['id'] );
+	}
+
+	public function test_nested_error_mapping_drops_unreviewed_sensitive_context(): void {
+		$GLOBALS['_mcpwp_test_rest_dispatcher'] = static function () {
+			return new WP_Error( 'bounded_failure', 'Safe message.', array( 'status' => 403, 'path' => '/srv/private.php', 'sql' => 'SELECT secret', 'hash' => 'api-key-hash' ) );
+		};
+		$data = $this->call_authenticated( 'tools/call', array( 'name' => 'wp_site_info', 'arguments' => array() ) );
+		$this->assertSame( array( 'status' => 403, 'code' => 'bounded_failure' ), $data['error']['data'] );
+		$this->assertStringNotContainsString( '/srv/', wp_json_encode( $data ) );
+		$this->assertStringNotContainsString( 'SELECT', wp_json_encode( $data ) );
+		$this->assertStringNotContainsString( 'api-key-hash', wp_json_encode( $data ) );
+	}
 	public function test_internal_tool_request_forwards_outer_api_key_to_target_permission_callback(): void {
 		$this->install_test_router();
 		$data = $this->call_authenticated( 'tools/call', array( 'name' => 'wp_site_info', 'arguments' => array() ) );
@@ -127,6 +196,51 @@ final class McpEndpointTest extends TestCase {
 		$this->assertSame( -32000, $data['error']['code'] );
 		$this->assertSame( 'Post not found.', $data['error']['message'] );
 		$this->assertSame( 404, $data['error']['data']['status'] );
+	}
+	public function test_mcp_mutation_forwards_canonical_json_body_to_permission_and_handler(): void {
+		$this->install_test_router();
+		$data = $this->call_authenticated( 'tools/call', array( 'name' => 'wp_create_post', 'arguments' => array( 'title' => 'MCP draft', 'status' => 'draft' ) ) );
+		$this->assertSame( 'MCP draft', $data['result']['structuredContent']['title'] );
+		$this->assertSame( 'draft', $GLOBALS['_mcpwp_test_posts'][1]->post_status );
+	}
+
+	public function test_mcp_publish_uses_canonical_body_for_dynamic_admin_scope(): void {
+		$GLOBALS['mcpwp_test_options']['mcpwp_api_keys'][0]['scopes'] = array( 'read', 'write' );
+		$this->install_test_router();
+		$data = $this->call_authenticated( 'tools/call', array( 'name' => 'wp_create_post', 'arguments' => array( 'title' => 'No publish', 'status' => 'publish' ) ) );
+		$this->assertSame( 'insufficient_scope', $data['error']['data']['code'] );
+		$this->assertSame( array(), $GLOBALS['_mcpwp_test_posts'] );
+	}
+
+	public function test_mcp_update_to_publish_uses_dynamic_admin_scope(): void {
+		$GLOBALS['mcpwp_test_options']['mcpwp_api_keys'][0]['scopes'] = array( 'read', 'write' );
+		$GLOBALS['_mcpwp_test_posts'][7] = (object) array( 'ID' => 7, 'post_type' => 'post', 'post_title' => 'Draft', 'post_name' => 'draft', 'post_status' => 'draft', 'post_date' => '2026-01-01', 'post_date_gmt' => '2026-01-01', 'post_modified' => '2026-01-01', 'post_modified_gmt' => '2026-01-01', 'post_parent' => 0, 'menu_order' => 0, 'post_author' => 2, 'post_content' => '', 'post_excerpt' => '' );
+		$this->install_test_router();
+		$data = $this->call_authenticated( 'tools/call', array( 'name' => 'wp_update_post', 'arguments' => array( 'id' => 7, 'status' => 'publish' ) ) );
+		$this->assertSame( 'insufficient_scope', $data['error']['data']['code'] );
+		$this->assertSame( 'draft', $GLOBALS['_mcpwp_test_posts'][7]->post_status );
+	}
+
+	public function test_protocol_and_tool_batch_charge_exactly_once_per_item(): void {
+		$GLOBALS['mcpwp_test_options']['mcpwp_rate_limit_settings'] = array( 'enabled' => true, 'requests_per_minute' => 10, 'requests_per_hour' => 100, 'burst_limit' => 10, 'whitelist' => array() );
+		$this->reset_limiter_singleton();
+		$this->install_test_router();
+		$data = $this->call_authenticated_body( array(
+			array( 'jsonrpc' => '2.0', 'id' => 30, 'method' => 'ping', 'params' => array() ),
+			array( 'jsonrpc' => '2.0', 'id' => 31, 'method' => 'tools/call', 'params' => array( 'name' => 'wp_site_info', 'arguments' => array() ) ),
+		) );
+		$this->assertCount( 2, $data );
+		foreach ( $GLOBALS['mcpwp_test_transients'] as $window ) { $this->assertSame( 2, $window['value']['count'] ); }
+	}
+
+	public function test_mcp_read_tool_uses_same_get_multiplier_as_direct_rest(): void {
+		$GLOBALS['mcpwp_test_options']['mcpwp_rate_limit_settings'] = array( 'enabled' => true, 'requests_per_minute' => 10, 'requests_per_hour' => 100, 'burst_limit' => 1, 'whitelist' => array() );
+		$this->reset_limiter_singleton();
+		$this->install_test_router();
+		$this->assertArrayHasKey( 'result', $this->call_authenticated( 'tools/call', array( 'name' => 'wp_site_info', 'arguments' => array() ) ) );
+		$this->assertArrayHasKey( 'result', $this->call_authenticated( 'tools/call', array( 'name' => 'wp_site_info', 'arguments' => array() ) ) );
+		$limited = $this->call_authenticated( 'tools/call', array( 'name' => 'wp_site_info', 'arguments' => array() ) );
+		$this->assertSame( 'rate_limit_exceeded', $limited['error']['data']['code'] );
 	}
 	public function test_authenticated_tool_call_logs_only_minimal_local_metadata(): void {
 		$this->install_test_router();

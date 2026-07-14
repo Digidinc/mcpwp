@@ -47,13 +47,23 @@ abstract class Mcpwp_REST_API {
 		return true;
 	}
 
-	public function check_mcp_permission( $request ) { return $this->authorize_request( $request, 'read', 'read', 'site' ); }
+	public function check_mcp_permission( $request ) {
+		$result = $this->verify_api_key( $request, 'read', false );
+		if ( true !== $result ) { return $result; }
+		return current_user_can( 'read' ) ? true : new WP_Error( 'insufficient_capability', __( 'The bound WordPress user lacks the read capability.', 'mumega-mcp' ), array( 'status' => 403, 'required_capability' => 'read' ) );
+	}
 	public function check_site_info_permission( $request ) { return $this->authorize_request( $request, 'read', 'read', 'site' ); }
-	public function check_list_posts_permission( $request ) { return $this->authorize_request( $request, 'read', 'read', 'content' ); }
-	public function check_create_post_permission( $request ) { return $this->check_content_create_permission( $request, 'edit_posts', 'publish_posts' ); }
+	public function check_list_posts_permission( $request ) { return $this->check_content_list_permission( $request, 'post' ); }
+	public function check_create_post_permission( $request ) {
+		$result = $this->check_content_create_permission( $request, 'edit_posts', 'publish_posts' );
+		return true === $result ? $this->check_post_term_assignment_permission( $request ) : $result;
+	}
 	public function check_get_post_permission( $request ) { return $this->authorize_request( $request, 'read', 'read_post', 'content', $request->get_param( 'id' ) ); }
-	public function check_update_post_permission( $request ) { return $this->check_content_update_permission( $request, 'post', 'publish_posts' ); }
-	public function check_list_pages_permission( $request ) { return $this->authorize_request( $request, 'read', 'read', 'content' ); }
+	public function check_update_post_permission( $request ) {
+		$result = $this->check_content_update_permission( $request, 'post', 'publish_posts' );
+		return true === $result ? $this->check_post_term_assignment_permission( $request ) : $result;
+	}
+	public function check_list_pages_permission( $request ) { return $this->check_content_list_permission( $request, 'page' ); }
 	public function check_create_page_permission( $request ) { return $this->check_content_create_permission( $request, 'edit_pages', 'publish_pages' ); }
 	public function check_get_page_permission( $request ) { return $this->authorize_request( $request, 'read', 'read_post', 'content', $request->get_param( 'id' ) ); }
 	public function check_update_page_permission( $request ) { return $this->check_content_update_permission( $request, 'page', 'publish_pages' ); }
@@ -67,7 +77,13 @@ abstract class Mcpwp_REST_API {
 	public function check_get_media_permission( $request ) { return $this->authorize_request( $request, 'read', 'read_post', 'media', $request->get_param( 'id' ) ); }
 	public function check_upload_media_permission( $request ) { return $this->authorize_request( $request, 'write', 'upload_files', 'media' ); }
 	public function check_taxonomy_read_permission( $request ) { return $this->authorize_request( $request, 'read', 'read', 'taxonomy' ); }
-	public function check_create_term_permission( $request ) { return $this->authorize_request( $request, 'write', 'manage_categories', 'taxonomy' ); }
+	public function check_create_term_permission( $request ) {
+		$params = $request->get_json_params();
+		$taxonomy_name = is_array( $params ) && isset( $params['taxonomy'] ) && is_string( $params['taxonomy'] ) ? $params['taxonomy'] : '';
+		$taxonomy = get_taxonomy( $taxonomy_name );
+		$capability = $taxonomy && isset( $taxonomy->cap->manage_terms ) ? $taxonomy->cap->manage_terms : 'manage_categories';
+		return $this->authorize_request( $request, 'write', $capability, 'taxonomy' );
+	}
 	public function check_admin_permission( $request ) { return $this->authorize_request( $request, 'admin', 'mcpwp_manage_settings', 'site' ); }
 
 	private function check_content_create_permission( $request, $edit_capability, $publish_capability ) {
@@ -76,6 +92,30 @@ abstract class Mcpwp_REST_API {
 		$result = $this->authorize_request( $request, $publishing ? 'admin' : 'write', $edit_capability, 'content' );
 		if ( true !== $result || ! $publishing ) { return $result; }
 		return current_user_can( $publish_capability ) ? true : new WP_Error( 'insufficient_capability', __( 'The bound WordPress user cannot publish this content type.', 'mumega-mcp' ), array( 'status' => 403 ) );
+	}
+
+	private function check_content_list_permission( $request, $post_type ) {
+		$result = $this->authorize_request( $request, 'read', 'read', 'content' );
+		if ( true !== $result ) { return $result; }
+		$status = (string) $request->get_param( 'post_status' );
+		if ( '' === $status || 'publish' === $status ) { return true; }
+		$edit_capability = 'page' === $post_type ? 'edit_pages' : 'edit_posts';
+		if ( ! current_user_can( $edit_capability ) ) { return new WP_Error( 'insufficient_capability', __( 'The bound WordPress user cannot list non-public content.', 'mumega-mcp' ), array( 'status' => 403, 'required_capability' => $edit_capability ) ); }
+		$private_capability = 'page' === $post_type ? 'read_private_pages' : 'read_private_posts';
+		if ( 'private' === $status && ! current_user_can( $private_capability ) ) { return new WP_Error( 'insufficient_capability', __( 'The bound WordPress user cannot read private content.', 'mumega-mcp' ), array( 'status' => 403, 'required_capability' => $private_capability ) ); }
+		return true;
+	}
+
+	private function check_post_term_assignment_permission( $request ) {
+		$params = $request->get_json_params();
+		if ( ! is_array( $params ) ) { return true; }
+		foreach ( array( 'categories' => 'category', 'tags' => 'post_tag' ) as $field => $taxonomy_name ) {
+			if ( ! array_key_exists( $field, $params ) ) { continue; }
+			$taxonomy = get_taxonomy( $taxonomy_name );
+			$capability = $taxonomy && isset( $taxonomy->cap->assign_terms ) ? $taxonomy->cap->assign_terms : 'edit_posts';
+			if ( ! current_user_can( $capability ) ) { return new WP_Error( 'insufficient_capability', __( 'The bound WordPress user cannot assign the requested terms.', 'mumega-mcp' ), array( 'status' => 403, 'required_capability' => $capability ) ); }
+		}
+		return true;
 	}
 
 	private function check_content_update_permission( $request, $post_type, $publish_capability ) {
@@ -100,6 +140,67 @@ abstract class Mcpwp_REST_API {
 
 	protected function error_response( $code, $message, $status = 400, $context = array() ) {
 		return $this->add_rate_limit_headers( new WP_REST_Response( array( 'code' => $code, 'message' => $message, 'data' => array_merge( array( 'status' => $status ), $context ) ), $status ) );
+	}
+
+	protected function validated_json_body( $request, $schema, $require_field = false, $max_bytes = 1048576 ) {
+		$body = method_exists( $request, 'get_body' ) ? (string) $request->get_body() : '';
+		if ( strlen( $body ) > $max_bytes ) {
+			return new WP_Error( 'payload_too_large', __( 'The JSON request body is too large.', 'mumega-mcp' ), array( 'status' => 413 ) );
+		}
+		$data = $request->get_json_params();
+		if ( ! is_array( $data ) ) {
+			return new WP_Error( 'invalid_json_body', __( 'A JSON object body is required.', 'mumega-mcp' ), array( 'status' => 400 ) );
+		}
+		return $this->validate_strict_object( $data, $schema, $require_field );
+	}
+
+	protected function validated_query_params( $request, $schema ) {
+		$params = $request->get_params();
+		if ( ! is_array( $params ) ) { $params = array(); }
+		$unknown = array_diff( array_keys( $params ), array_keys( $schema ) );
+		if ( ! empty( $unknown ) ) { return new WP_Error( 'unknown_parameter', __( 'The request contains an unknown parameter.', 'mumega-mcp' ), array( 'status' => 400, 'parameter' => (string) reset( $unknown ) ) ); }
+		foreach ( $params as $name => &$value ) {
+			$type = isset( $schema[ $name ]['type'] ) ? $schema[ $name ]['type'] : '';
+			if ( 'integer' === $type && is_string( $value ) && preg_match( '/^(0|[1-9][0-9]*)$/', $value ) ) { $value = (int) $value; }
+			if ( 'boolean' === $type && is_string( $value ) && in_array( $value, array( 'true', 'false', '1', '0' ), true ) ) { $value = in_array( $value, array( 'true', '1' ), true ); }
+		}
+		unset( $value );
+		return $this->validate_strict_object( $params, $schema );
+	}
+
+	protected function validation_error_response( $error ) {
+		$data = $error->get_error_data();
+		$status = is_array( $data ) && isset( $data['status'] ) ? (int) $data['status'] : 400;
+		$context = is_array( $data ) ? $data : array();
+		unset( $context['status'] );
+		return $this->error_response( $error->get_error_code(), $error->get_error_message(), $status, $context );
+	}
+
+	protected function validate_content_relationships( $data, $current_id = 0, $page = false ) {
+		if ( isset( $data['categories'] ) ) {
+			foreach ( $data['categories'] as $category_id ) {
+				if ( ! term_exists( $category_id, 'category' ) ) { return new WP_Error( 'invalid_category', __( 'A category does not exist in the category taxonomy.', 'mumega-mcp' ), array( 'status' => 400, 'category_id' => $category_id ) ); }
+			}
+		}
+		if ( isset( $data['featured_image'] ) && (int) $data['featured_image'] > 0 ) {
+			$attachment = get_post( $data['featured_image'] );
+			$mime = $attachment && isset( $attachment->post_mime_type ) ? (string) $attachment->post_mime_type : '';
+			if ( ! $attachment || 'attachment' !== $attachment->post_type || 0 !== strpos( $mime, 'image/' ) || 'image/svg+xml' === $mime || ! current_user_can( 'read_post', $attachment->ID ) ) {
+				return new WP_Error( 'invalid_featured_image', __( 'The featured image must be a readable non-SVG image attachment.', 'mumega-mcp' ), array( 'status' => 400 ) );
+			}
+		}
+		if ( $page && isset( $data['parent'] ) && (int) $data['parent'] > 0 ) {
+			$parent_id = (int) $data['parent'];
+			$seen = array();
+			while ( $parent_id > 0 ) {
+				if ( $parent_id === (int) $current_id || isset( $seen[ $parent_id ] ) ) { return new WP_Error( 'invalid_parent', __( 'The requested page parent creates a cycle.', 'mumega-mcp' ), array( 'status' => 400 ) ); }
+				$seen[ $parent_id ] = true;
+				$parent = get_post( $parent_id );
+				if ( ! $parent || 'page' !== $parent->post_type || ! current_user_can( 'read_post', $parent_id ) ) { return new WP_Error( 'invalid_parent', __( 'The page parent must be another readable page.', 'mumega-mcp' ), array( 'status' => 400 ) ); }
+				$parent_id = (int) $parent->post_parent;
+			}
+		}
+		return true;
 	}
 
 	protected function add_rate_limit_headers( $response ) {

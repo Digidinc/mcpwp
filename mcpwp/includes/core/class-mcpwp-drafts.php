@@ -42,7 +42,7 @@ class Mcpwp_Drafts {
 
 		$drafts = array();
 		foreach ( $query->posts as $post ) {
-			$drafts[] = array(
+			$draft = array(
 				'id'       => $post->ID,
 				'type'     => $post->post_type,
 				'title'    => $post->post_title ?: __( '(no title)', 'mumega-mcp' ),
@@ -52,8 +52,9 @@ class Mcpwp_Drafts {
 					'id'   => (int) $post->post_author,
 					'name' => get_the_author_meta( 'display_name', $post->post_author ),
 				),
-				'edit_url' => get_edit_post_link( $post->ID, 'raw' ),
 			);
+			if ( current_user_can( 'edit_post', $post->ID ) ) { $draft['edit_url'] = get_edit_post_link( $post->ID, 'raw' ); }
+			$drafts[] = $draft;
 		}
 
 		return array(

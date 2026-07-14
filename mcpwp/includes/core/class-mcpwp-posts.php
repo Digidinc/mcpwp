@@ -46,6 +46,7 @@ class Mcpwp_Posts {
 	 * @return array Posts data.
 	 */
 	public function list_posts( $args = array() ) {
+		unset( $args['post_type'] );
 		$mcpwp_fields = isset( $args['_mcpwp_fields'] ) ? $args['_mcpwp_fields'] : null;
 		unset( $args['_mcpwp_fields'] );
 
@@ -59,6 +60,8 @@ class Mcpwp_Posts {
 		);
 
 		$args = wp_parse_args( $args, $defaults );
+		$args['post_type'] = 'post';
+		if ( 'publish' !== $args['post_status'] && ! current_user_can( 'edit_others_posts' ) ) { $args['author'] = get_current_user_id(); }
 
 		// Validate post type if overridden.
 		if ( isset( $args['post_type'] ) && 'post' !== $args['post_type'] ) {
@@ -279,7 +282,6 @@ class Mcpwp_Posts {
 			'modified'       => $post->post_modified,
 			'modified_gmt'   => $post->post_modified_gmt,
 			'url'            => get_permalink( $post ),
-			'edit_url'       => get_edit_post_link( $post->ID, 'raw' ),
 			'author'         => array(
 				'id'   => (int) $post->post_author,
 				'name' => get_the_author_meta( 'display_name', $post->post_author ),
@@ -288,6 +290,7 @@ class Mcpwp_Posts {
 			'categories'     => $this->get_post_terms( $post->ID, 'category' ),
 			'tags'           => $this->get_post_terms( $post->ID, 'post_tag' ),
 		);
+		if ( current_user_can( 'edit_post', $post->ID ) ) { $data['edit_url'] = get_edit_post_link( $post->ID, 'raw' ); }
 
 		if ( $include_full ) {
 			$data['content']    = $post->post_content;

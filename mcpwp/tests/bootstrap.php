@@ -147,19 +147,23 @@ class WP_REST_Request
     private $params;
     private $headers;
     private $json_params;
+    private $body;
+    private $file_params = array();
 
     public function __construct(
         $method = 'GET',
         $route = '/',
         $params = array(),
         $headers = array(),
-        $json_params = null
+        $json_params = null,
+        $body = null
     ) {
         $this->method     = strtoupper($method);
         $this->route      = $route;
         $this->params     = is_array($params) ? $params : array();
         $this->headers    = is_array($headers) ? $headers : array();
         $this->json_params = $json_params;
+        $this->body = null === $body && is_array($json_params) ? json_encode($json_params) : (string) $body;
     }
 
     public function get_method()
@@ -208,9 +212,26 @@ class WP_REST_Request
         return $this->json_params;
     }
 
+    public function get_body()
+    {
+        return $this->body;
+    }
+
+    public function set_body($body)
+    {
+        $this->body = (string) $body;
+        $decoded = json_decode($this->body, true);
+        $this->json_params = is_array($decoded) ? $decoded : null;
+    }
+
     public function get_file_params()
     {
-        return array();
+        return $this->file_params;
+    }
+
+    public function set_file_params($files)
+    {
+        $this->file_params = is_array($files) ? $files : array();
     }
 }
 
@@ -240,6 +261,19 @@ function is_wp_error($value)
 function sanitize_text_field($value)
 {
     return trim((string) $value);
+}
+
+function sanitize_textarea_field($value)
+{
+    return trim((string) $value);
+}
+
+function wp_kses_post($value)
+{
+    $value = preg_replace('#<\s*(script|style|html|head|body)\b[^>]*>.*?<\s*/\s*\1\s*>#is', '', (string) $value);
+    $value = preg_replace('/\s+on[a-z]+\s*=\s*(?:"[^"]*"|\'[^\']*\'|[^\s>]+)/i', '', $value);
+    $value = preg_replace('/\s+(href|src)\s*=\s*(["\'])\s*(?:javascript|data):.*?\2/i', '', $value);
+    return $value;
 }
 
 function sanitize_key($value)
@@ -719,6 +753,7 @@ function wp_insert_post($postarr, $wp_error = false)
         'post_name'         => isset($postarr['post_name']) ? $postarr['post_name'] : sanitize_title(isset($postarr['post_title']) ? $postarr['post_title'] : ''),
         'post_status'       => isset($postarr['post_status']) ? $postarr['post_status'] : 'draft',
         'post_date'         => '2026-06-06 00:00:00',
+        'post_date_gmt'     => '2026-06-06 00:00:00',
         'post_modified'     => '2026-06-06 00:00:00',
         'post_modified_gmt' => '2026-06-06 00:00:00',
         'post_parent'       => 0,
@@ -776,6 +811,9 @@ class WP_Query
             if (! empty($args['post__in']) && ! in_array((int) $post->ID, $args['post__in'], true)) {
                 return false;
             }
+            if (isset($args['author']) && (int) $post->post_author !== (int) $args['author']) {
+                return false;
+            }
             if (! empty($args['s']) && false === stripos($post->post_title . ' ' . $post->post_content, (string) $args['s'])) {
                 return false;
             }
@@ -790,8 +828,9 @@ class WP_Query
     }
 }
 
-function wp_count_posts($type)
+function wp_count_posts($type, $permission = '')
 {
+    $GLOBALS['_mcpwp_test_count_post_calls'][] = array( $type, $permission );
     $counts = array(
         'publish' => 0,
         'draft'   => 0,
@@ -808,9 +847,45 @@ function wp_count_posts($type)
     return (object) $counts;
 }
 
+function get_taxonomy($taxonomy)
+{
+    if ('category' === $taxonomy) {
+        return (object) array( 'cap' => (object) array( 'manage_terms' => 'manage_categories', 'assign_terms' => 'assign_categories' ) );
+    }
+    if ('post_tag' === $taxonomy) {
+        return (object) array( 'cap' => (object) array( 'manage_terms' => 'manage_post_tags', 'assign_terms' => 'assign_post_tags' ) );
+    }
+    return false;
+}
+
+function term_exists($term_id, $taxonomy = '')
+{
+    $key = $taxonomy . ':' . (int) $term_id;
+    return ! empty($GLOBALS['_mcpwp_test_existing_terms'][ $key ]) ? array( 'term_id' => (int) $term_id ) : 0;
+}
+
+class Mcpwp_Test_Theme
+{
+    public function get_page_templates()
+    {
+        return isset($GLOBALS['_mcpwp_test_page_templates']) ? $GLOBALS['_mcpwp_test_page_templates'] : array( 'templates/landing.php' => 'Landing' );
+    }
+}
+
+function wp_get_theme()
+{
+    return new Mcpwp_Test_Theme();
+}
+
 function wp_strip_all_tags($value)
 {
     return strip_tags((string) $value);
+}
+
+function wp_trim_words($value, $number = 55)
+{
+    $words = preg_split('/\s+/', trim((string) $value));
+    return implode(' ', array_slice(array_filter($words), 0, (int) $number));
 }
 
 function get_post_modified_time($format, $gmt, $post)
@@ -850,6 +925,43 @@ function get_the_author_meta($field, $user_id)
 function get_post_thumbnail_id($post_id)
 {
     return 0;
+}
+
+function wp_get_post_terms($post_id, $taxonomy)
+{
+    return array();
+}
+
+function wp_set_post_categories($post_id, $categories)
+{
+    return $categories;
+}
+
+function wp_set_post_tags($post_id, $tags)
+{
+    return $tags;
+}
+
+function set_post_thumbnail($post_id, $thumbnail_id)
+{
+    return true;
+}
+
+function delete_post_thumbnail($post_id)
+{
+    return true;
+}
+
+function get_terms($args = array())
+{
+    $GLOBALS['_mcpwp_test_last_term_args'] = $args;
+    return isset($GLOBALS['_mcpwp_test_terms_result']) ? $GLOBALS['_mcpwp_test_terms_result'] : array();
+}
+
+function wp_insert_term($name, $taxonomy, $args = array())
+{
+    $GLOBALS['_mcpwp_test_term_inserts'][] = array( 'name' => $name, 'taxonomy' => $taxonomy, 'args' => $args );
+    return array( 'term_id' => 1 );
 }
 
 function wp_get_attachment_image_src($attachment_id, $size = 'thumbnail')
@@ -963,6 +1075,9 @@ function WP_Filesystem()
 
 function wp_insert_attachment($attachment, $file)
 {
+    if (array_key_exists('_mcpwp_test_insert_attachment_result', $GLOBALS) && null !== $GLOBALS['_mcpwp_test_insert_attachment_result']) {
+        return $GLOBALS['_mcpwp_test_insert_attachment_result'];
+    }
     $attachment['post_type'] = 'attachment';
     $id = wp_insert_post($attachment, true);
     $GLOBALS['_mcpwp_test_posts'][ $id ]->post_mime_type = $attachment['post_mime_type'];
@@ -977,7 +1092,20 @@ function wp_generate_attachment_metadata($attachment_id, $file)
 
 function wp_update_attachment_metadata($attachment_id, $metadata)
 {
+    if (array_key_exists('_mcpwp_test_update_attachment_metadata_result', $GLOBALS) && null !== $GLOBALS['_mcpwp_test_update_attachment_metadata_result']) {
+        return $GLOBALS['_mcpwp_test_update_attachment_metadata_result'];
+    }
     $GLOBALS['_mcpwp_test_attachment_metadata'][ (int) $attachment_id ] = $metadata;
+    return true;
+}
+
+function wp_delete_attachment($attachment_id, $force_delete = false)
+{
+    $attachment_id = (int) $attachment_id;
+    if (isset($GLOBALS['_mcpwp_test_posts'][ $attachment_id ]->attached_file)) {
+        wp_delete_file($GLOBALS['_mcpwp_test_posts'][ $attachment_id ]->attached_file);
+    }
+    unset($GLOBALS['_mcpwp_test_posts'][ $attachment_id ]);
     return true;
 }
 
