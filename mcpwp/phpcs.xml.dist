@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<ruleset name="Mumega MCP WordPress.org">
+	<description>WordPress.org coding standards for the extracted, shipped plugin artifact.</description>
+
+	<!-- Supply the extracted mumega-mcp directory as the PHPCS command-line path. -->
+	<arg name="extensions" value="php,css,js" />
+	<config name="minimum_wp_version" value="6.1" />
+	<config name="testVersion" value="7.4-" />
+
+	<rule ref="WordPress" />
+
+	<!-- The plugin intentionally defines and checks this custom capability. -->
+	<rule ref="WordPress.WP.Capabilities">
+		<properties>
+			<property name="custom_capabilities" type="array">
+				<element value="mcpwp_manage_settings" />
+			</property>
+		</properties>
+	</rule>
+</ruleset>

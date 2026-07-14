@@ -3,8 +3,19 @@
   "description": "Development dependencies for MCPWP plugin quality checks",
   "type": "project",
   "require-dev": {
+    "dealerdirect/phpcodesniffer-composer-installer": "1.2.1",
     "phpunit/phpunit": "^9.6",
-    "squizlabs/php_codesniffer": "^3.10"
+    "squizlabs/php_codesniffer": "^3.10",
+    "wp-coding-standards/wpcs": "3.3.0"
+  },
+  "config": {
+    "allow-plugins": {
+      "dealerdirect/phpcodesniffer-composer-installer": true
+    },
+    "platform": {
+      "php": "7.4.33"
+    },
+    "sort-packages": true
   },
   "scripts": {
     "test": "phpunit --configuration tests/phpunit.xml",
