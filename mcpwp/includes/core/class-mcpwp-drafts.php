@@ -2,7 +2,7 @@
 /**
  * Drafts handler
  *
- * @package mumcp
+ * @package MCPWP
  */
 
 if ( ! defined( 'ABSPATH' ) ) {

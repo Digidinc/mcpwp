@@ -428,19 +428,19 @@ msgid "Mumega MCP Agent"
 msgstr ""
 
 #. translators: 1: burst request limit 2: burst window in seconds 3: seconds until retry
-#: includes/class-mcpwp-rate-limiter.php:154
+#: includes/class-mcpwp-rate-limiter.php:152
 #, php-format
 msgid "Burst limit exceeded. %1$d requests per %2$d seconds allowed. Try again in %3$d seconds."
 msgstr ""
 
 #. translators: 1: request limit per minute 2: seconds until retry
-#: includes/class-mcpwp-rate-limiter.php:191
+#: includes/class-mcpwp-rate-limiter.php:189
 #, php-format
 msgid "Rate limit exceeded. %1$d requests per minute allowed. Try again in %2$d seconds."
 msgstr ""
 
 #. translators: 1: request limit per hour 2: seconds until retry
-#: includes/class-mcpwp-rate-limiter.php:226
+#: includes/class-mcpwp-rate-limiter.php:224
 #, php-format
 msgid "Rate limit exceeded. %1$d requests per hour allowed. Try again in %2$d seconds."
 msgstr ""
@@ -453,103 +453,103 @@ msgstr ""
 msgid "The draft could not be deleted."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:38
+#: includes/core/class-mcpwp-media.php:92
 msgid "The multipart upload did not complete successfully."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:43
+#: includes/core/class-mcpwp-media.php:97
 msgid "No file uploaded."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:49
+#: includes/core/class-mcpwp-media.php:103
 msgid "The uploaded file is empty."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:51
-#: includes/core/class-mcpwp-media.php:235
+#: includes/core/class-mcpwp-media.php:105
+#: includes/core/class-mcpwp-media.php:289
 msgid "File exceeds maximum size of 10MB."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:53
+#: includes/core/class-mcpwp-media.php:107
 msgid "The file is not a genuine HTTP upload."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:56
+#: includes/core/class-mcpwp-media.php:110
 msgid "The uploaded file size is invalid."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:72
-#: includes/core/class-mcpwp-media.php:344
+#: includes/core/class-mcpwp-media.php:126
+#: includes/core/class-mcpwp-media.php:398
 msgid "WordPress could not store the uploaded media file."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:89
-#: includes/core/class-mcpwp-media.php:362
+#: includes/core/class-mcpwp-media.php:143
+#: includes/core/class-mcpwp-media.php:416
 msgid "WordPress could not create the media attachment."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:115
-#: includes/core/class-mcpwp-media.php:253
+#: includes/core/class-mcpwp-media.php:169
+#: includes/core/class-mcpwp-media.php:307
 msgid "A valid filename is required."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:117
-#: includes/core/class-mcpwp-media.php:258
+#: includes/core/class-mcpwp-media.php:171
+#: includes/core/class-mcpwp-media.php:312
 msgid "The file type is not allowed for local media uploads."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:120
-#: includes/core/class-mcpwp-media.php:286
+#: includes/core/class-mcpwp-media.php:174
+#: includes/core/class-mcpwp-media.php:340
 msgid "The file extension or contents are not allowed by WordPress."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:122
+#: includes/core/class-mcpwp-media.php:176
 msgid "The supplied MIME type does not match the detected file type."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:140
+#: includes/core/class-mcpwp-media.php:194
 msgid "WordPress could not create attachment metadata."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:180
+#: includes/core/class-mcpwp-media.php:234
 msgid "WordPress could not save attachment details."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:207
+#: includes/core/class-mcpwp-media.php:261
 msgid "Invalid Base64 data URI."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:212
+#: includes/core/class-mcpwp-media.php:266
 msgid "Base64 data must be non-empty and unwrapped."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:220
+#: includes/core/class-mcpwp-media.php:274
 msgid "Invalid Base64 data."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:228
+#: includes/core/class-mcpwp-media.php:282
 msgid "The decoded file is empty."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:261
+#: includes/core/class-mcpwp-media.php:315
 msgid "The filename contains a disallowed extension."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:269
+#: includes/core/class-mcpwp-media.php:323
 msgid "Could not create temporary file."
 msgstr ""
 
 #. translators: 1: supplied mime type, 2: detected mime type
-#: includes/core/class-mcpwp-media.php:299
+#: includes/core/class-mcpwp-media.php:353
 #, php-format
 msgid "Supplied mime_type \"%1$s\" does not match detected type \"%2$s\". Upload rejected."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:309
+#: includes/core/class-mcpwp-media.php:363
 msgid "The data URI MIME type does not match the detected file type."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:317
+#: includes/core/class-mcpwp-media.php:371
 msgid "SVG uploads are blocked (SVGs can contain <script> tags — stored XSS risk). Use PNG or WebP instead. To allow SVGs, install an SVG sanitizer plugin (e.g. \"Safe SVG\") and upload via the WordPress media library directly."
 msgstr ""
 
@@ -595,25 +595,25 @@ msgstr ""
 msgid "The API key does not grant the required scope."
 msgstr ""
 
-#: includes/traits/trait-mcpwp-api-auth.php:279
+#: includes/traits/trait-mcpwp-api-auth.php:278
 msgid "A valid owner and non-empty scopes are required."
 msgstr ""
 
-#: includes/traits/trait-mcpwp-api-auth.php:422
+#: includes/traits/trait-mcpwp-api-auth.php:421
 msgid "At least one API-key scope is required."
 msgstr ""
 
-#: includes/traits/trait-mcpwp-api-auth.php:427
-#: includes/traits/trait-mcpwp-api-auth.php:430
+#: includes/traits/trait-mcpwp-api-auth.php:426
+#: includes/traits/trait-mcpwp-api-auth.php:429
 msgid "API-key scopes must be unique read, write, or admin values."
 msgstr ""
 
-#: includes/traits/trait-mcpwp-api-auth.php:465
+#: includes/traits/trait-mcpwp-api-auth.php:464
 msgid "Tool categories must be an array."
 msgstr ""
 
-#: includes/traits/trait-mcpwp-api-auth.php:469
-#: includes/traits/trait-mcpwp-api-auth.php:472
+#: includes/traits/trait-mcpwp-api-auth.php:468
+#: includes/traits/trait-mcpwp-api-auth.php:471
 msgid "Tool categories contain an invalid or duplicate value."
 msgstr ""
 

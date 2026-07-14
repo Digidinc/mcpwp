@@ -2,7 +2,7 @@
 /**
  * Mumega MCP
  *
- * @package           Mumcp
+ * @package           MCPWP
  * @author            Mumega
  * @license           GPL-2.0-or-later
  *
@@ -114,8 +114,14 @@ function mcpwp_activate( $network_wide = false ) {
 	require_once plugin_dir_path( __FILE__ ) . 'includes/traits/trait-mcpwp-api-auth.php';
 	require_once plugin_dir_path( __FILE__ ) . 'includes/class-mcpwp-activator.php';
 	if ( $network_wide && function_exists( 'get_sites' ) ) {
-		foreach ( get_sites( array( 'fields' => 'ids' ) ) as $blog_id ) {
-			switch_to_blog( $blog_id );
+		$site_ids = get_sites(
+			array(
+				'fields' => 'ids',
+				'number' => 0,
+			)
+		);
+		foreach ( $site_ids as $mcpwp_site_id ) {
+			switch_to_blog( $mcpwp_site_id );
 			Mcpwp_Activator::activate();
 			restore_current_blog();
 		}

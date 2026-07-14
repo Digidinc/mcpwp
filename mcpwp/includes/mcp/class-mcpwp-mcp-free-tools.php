@@ -2,7 +2,7 @@
 /**
  * Free-only MCP tool inventory.
  *
- * @package mumcp
+ * @package MCPWP
  */
 
 if ( ! defined( 'ABSPATH' ) ) {

@@ -2,7 +2,7 @@
 /**
  * Rate Limiter
  *
- * @package mumcp
+ * @package MCPWP
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -91,12 +91,11 @@ class Mcpwp_Rate_Limiter {
 	/**
 	 * Check rate limit for current request.
 	 *
-	 * @param string     $identifier Unique identifier (IP or API key).
-	 * @param string     $method     HTTP method (GET requests get 2x burst/minute limits).
-	 * @param array|null $key_record Optional scoped API key record with per-key rate_limits overrides.
+	 * @param string $identifier Unique identifier (IP or API key).
+	 * @param string $method     HTTP method (GET requests get 2x burst/minute limits).
 	 * @return bool|WP_Error True if allowed, WP_Error if rate limited.
 	 */
-	public function check_limit( $identifier = null, $method = 'POST', $key_record = null ) {
+	public function check_limit( $identifier = null, $method = 'POST' ) {
 		if ( ! $this->is_enabled() ) {
 			return true;
 		}
@@ -110,8 +109,7 @@ class Mcpwp_Rate_Limiter {
 			return true;
 		}
 
-		// Apply per-key rate limit overrides if present.
-		$effective_limits = $this->get_effective_limits( $key_record );
+		$effective_limits = $this->get_effective_limits();
 
 		// GET/HEAD/OPTIONS requests get 2x burst and minute limits (reads are non-destructive).
 		$is_read      = in_array( strtoupper( $method ), array( 'GET', 'HEAD', 'OPTIONS' ), true );
@@ -163,7 +161,7 @@ class Mcpwp_Rate_Limiter {
 					'remaining'   => 0,
 					'reset'       => $burst_data['reset'],
 					'hint'        => sprintf(
-						'Burst rate limit exceeded (%d/%ds). Wait %d seconds before retrying. To increase limits, the site admin can adjust settings in WP Admin > mumcp > Settings, or create a key with custom rate_limits.',
+						'Burst rate limit exceeded (%d/%ds). Wait %d seconds before retrying. To increase limits, the site admin can adjust rate limit settings in Mumega MCP > Settings.',
 						$burst_limit,
 						$burst_window,
 						$retry_after
@@ -199,7 +197,7 @@ class Mcpwp_Rate_Limiter {
 					'remaining'   => 0,
 					'reset'       => $minute_data['reset'],
 					'hint'        => sprintf(
-						'Per-minute rate limit exceeded (%d/min). Wait %d seconds before retrying. To increase limits, the site admin can adjust rate limit settings or create a key with custom rate_limits.',
+						'Per-minute rate limit exceeded (%d/min). Wait %d seconds before retrying. To increase limits, the site admin can adjust rate limit settings in Mumega MCP > Settings.',
 						$minute_limit,
 						$retry_after
 					),
@@ -234,7 +232,7 @@ class Mcpwp_Rate_Limiter {
 					'remaining'   => 0,
 					'reset'       => $hour_data['reset'],
 					'hint'        => sprintf(
-						'Hourly rate limit exceeded (%d/hr). Wait %d seconds before retrying. To increase limits, the site admin can adjust rate limit settings or create a key with custom rate_limits.',
+						'Hourly rate limit exceeded (%d/hr). Wait %d seconds before retrying. To increase limits, the site admin can adjust rate limit settings in Mumega MCP > Settings.',
 						$hour_limit,
 						$retry_after
 					),
@@ -505,49 +503,16 @@ class Mcpwp_Rate_Limiter {
 	}
 
 	/**
-	 * Get effective rate limits, applying per-key overrides if present.
+	 * Get the canonical site-wide rate limits.
 	 *
-	 * Scoped API keys stored in the `mcpwp_scoped_api_keys` option may include
-	 * an optional `rate_limits` field, e.g. {"burst": 50, "per_minute": 120, "per_hour": 2000}.
-	 * These values override the global defaults for that specific key.
-	 *
-	 * @param array|null $key_record Scoped API key record (or null for defaults).
 	 * @return array Effective limits with keys: burst_limit, requests_per_minute, requests_per_hour.
 	 */
-	private function get_effective_limits( $key_record = null ) {
-		$limits = array(
+	private function get_effective_limits() {
+		return array(
 			'burst_limit'         => $this->settings['burst_limit'],
 			'requests_per_minute' => $this->settings['requests_per_minute'],
 			'requests_per_hour'   => $this->settings['requests_per_hour'],
 		);
-
-		if ( ! is_array( $key_record ) || empty( $key_record['rate_limits'] ) ) {
-			return $limits;
-		}
-
-		$overrides = $key_record['rate_limits'];
-		if ( ! is_array( $overrides ) ) {
-			return $limits;
-		}
-
-		if ( isset( $overrides['burst'] ) ) {
-			$limits['burst_limit'] = max( 1, min( 100000, (int) $overrides['burst'] ) );
-		}
-
-		if ( isset( $overrides['per_minute'] ) ) {
-			$limits['requests_per_minute'] = max( 1, min( 100000, (int) $overrides['per_minute'] ) );
-		}
-
-		if ( isset( $overrides['per_hour'] ) ) {
-			$limits['requests_per_hour'] = max( 1, min( 100000, (int) $overrides['per_hour'] ) );
-		}
-
-		// Burst cannot exceed per-minute limit.
-		if ( $limits['burst_limit'] > $limits['requests_per_minute'] ) {
-			$limits['burst_limit'] = $limits['requests_per_minute'];
-		}
-
-		return $limits;
 	}
 
 	/**

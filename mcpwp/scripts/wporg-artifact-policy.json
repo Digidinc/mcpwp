@@ -28,9 +28,9 @@
     "readme.txt": ["There are no plugin-initiated outbound requests, no telemetry, and no contact with Mumega."]
   },
   "trusted_source_sha256": {
-    "includes/api/class-mcpwp-rest-api.php": "68ebf8868769594239f463a7dbfb8ccc5bd01a9a1886eb34c5364e854e1ea390",
+    "includes/api/class-mcpwp-rest-api.php": "93275a5be6889bdbaf3e64f5ac13bb6d6a4b82a8d14eb1a871200c11c35c2e15",
     "includes/api/class-mcpwp-rest-api-keys.php": "529ba8e37dbc9bb7c445701525525fb0ad1f14070bc73103a2d4ce6fbfee5906",
-    "includes/api/class-mcpwp-rest-mcp.php": "3a162f46855f2dccd6bd15d110ff96a47013c9c4a9dd3fc714d01c94b197f6e4",
+    "includes/api/class-mcpwp-rest-mcp.php": "83235eb84b0c5a9c0604ea43510c1624dcfe0d7c9d65e9664e8f81aa98673aba",
     "includes/api/class-mcpwp-rest-media.php": "15c777105aed34f038708ccccbbe706c44d22c2b8f92478e69f1c4b1a5abfbd2",
     "includes/api/class-mcpwp-rest-pages.php": "853f525e1033f7ecaf092f6c01f4507ea02b54ddab40d496fd142d028c0029f8",
     "includes/api/class-mcpwp-rest-posts.php": "f7763c24a395296ce8b5def8e39069d937ccdd5593cb758342bcba47b52d398f",
@@ -38,9 +38,9 @@
     "includes/api/class-mcpwp-rest-site-info.php": "719389525c08aa70c8e73ff0e2d8052af0c1ede1ffa33614ed730ffcf947dd12",
     "includes/api/class-mcpwp-rest-site-settings.php": "a4dec645ba5bc15c515bd20ec2ec4ea47e5bec9e4fe31c8380dca91fc707eef4",
     "includes/api/class-mcpwp-rest-site-taxonomy.php": "4250bba839c97ea9c200e7b0024ca8be3cdd82d470da2286c00c5a4385c5eb0a",
-    "includes/traits/trait-mcpwp-api-auth.php": "c20d0066c38df87ccf5c9c71133cec13df4f12b19c0ea45df7147346533483bb",
+    "includes/traits/trait-mcpwp-api-auth.php": "0a2c486aaf51208571c35b3152d03d6c88363e3d0c0be1c8713461c1d8c09890",
     "includes/mcp/class-mcpwp-mcp-tool-registry.php": "dcc99179c939ffabe2e8ad4b341dccc489c6a1718f6e1183bc2d1f5e8542abf5",
-    "includes/mcp/class-mcpwp-mcp-free-tools.php": "1a45ade19d985070db9b2213f702127eb41244b555ceaa0f6f95a46acc2fb0b3",
+    "includes/mcp/class-mcpwp-mcp-free-tools.php": "d6a1e474de233d6a7cb4072aa45e295c5a0503664545c73dfaa2086024089d41",
     "includes/mcp/traits/trait-mcpwp-free-tools-site.php": "5e50d4b14dcd05269d734b1edc22ef4bf8f5de75c7c78b829a63a63d2aa5eab4",
     "includes/mcp/traits/trait-mcpwp-free-tools-content.php": "69253567f1a00685ba9706aadfcea3aad619668229042785b4010eb38ec5d724",
     "includes/mcp/traits/trait-mcpwp-free-tools-media.php": "0df90b28cdc90c6be5e4bd9dca88a89cb1fbc73058e74a817fb1e0cd42c5b720",
@@ -136,6 +136,8 @@
     "trait-mcpwp-elementor-"
   ],
   "forbidden_literals": [
+    "x_spai",
+    "mumcp",
     "curl_init", "curl_exec", "curl_setopt", "curl_setopt_array", "curl_close",
     "wp_remote_get", "wp_remote_post", "wp_remote_request", "wp_remote_head",
     "wp_safe_remote_get", "wp_safe_remote_post", "wp_safe_remote_request",

@@ -2,7 +2,7 @@
 /**
  * Sanitization Trait
  *
- * @package mumcp
+ * @package MCPWP
  */
 
 if ( ! defined( 'ABSPATH' ) ) {

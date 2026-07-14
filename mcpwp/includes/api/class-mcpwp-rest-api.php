@@ -2,7 +2,7 @@
 /**
  * Base REST controller.
  *
- * @package mumcp
+ * @package MCPWP
  */
 
 if ( ! defined( 'ABSPATH' ) ) {

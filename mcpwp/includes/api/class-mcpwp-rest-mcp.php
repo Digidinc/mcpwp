@@ -2,7 +2,7 @@
 /**
  * Free-only MCP JSON-RPC controller.
  *
- * @package mumcp
+ * @package MCPWP
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -414,7 +414,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	private function charge_item( $method ) {
 		$record     = $this->get_current_api_key_record();
 		$identifier = 'key:' . sanitize_key( is_array( $record ) ? (string) ( $record['id'] ?? '' ) : '' );
-		return $this->check_rate_limit( $identifier, strtoupper( (string) $method ), $record );
+		return $this->check_rate_limit( $identifier, strtoupper( (string) $method ) );
 	}
 
 	/**
@@ -584,29 +584,6 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 					return $this->key_allows_category( $record, $tool['annotations']['category'] ?? 'site' );
 				}
 			)
-		);
-	}
-
-	/**
-	 * Return retained MCP tools and dispatch metadata for introspection.
-	 *
-	 * @return array<string,mixed> Introspection data.
-	 */
-	public function get_introspection_data() {
-		$tools = $this->registry->get_tools();
-		$map   = $this->registry->get_tool_map();
-		foreach ( $tools as &$tool ) {
-			$tool['x_spai']  = $map[ $tool['name'] ];
-			$tool['x_mcpwp'] = $map[ $tool['name'] ];
-		}
-		unset( $tool );
-		return array(
-			'plugin' => array(
-				'name'    => 'mumcp',
-				'version' => $this->server_version,
-			),
-			'auth'   => array( 'header' => 'X-API-Key' ),
-			'tools'  => $tools,
 		);
 	}
 

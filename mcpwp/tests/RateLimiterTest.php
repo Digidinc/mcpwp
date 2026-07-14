@@ -76,6 +76,51 @@ final class RateLimiterTest extends TestCase {
 		$this->assertSame( 'rate_limit_exceeded', $error->get_error_code() );
 	}
 
+	/**
+	 * @dataProvider rateLimitHintProvider
+	 */
+	public function test_rate_limit_error_hints_point_to_the_real_settings_screen( $settings, $identifier ): void {
+		update_option( 'mcpwp_rate_limit_settings', $settings );
+		$this->resetLimiterSingleton();
+		$limiter = Mcpwp_Rate_Limiter::get_instance();
+		$this->assertTrue( $limiter->check_limit( $identifier ) );
+
+		$error = $limiter->check_limit( $identifier );
+		$this->assertInstanceOf( WP_Error::class, $error );
+		$hint = (string) $error->get_error_data()['hint'];
+		$this->assertStringContainsString( 'Mumega MCP > Settings', $hint );
+		$this->assertStringNotContainsString( 'mumcp', $hint );
+		$this->assertStringNotContainsString( 'custom rate_limits', $hint );
+	}
+
+	public function rateLimitHintProvider(): array {
+		return array(
+			'burst'  => array( array( 'enabled' => true, 'requests_per_minute' => 10, 'requests_per_hour' => 100, 'burst_limit' => 1, 'whitelist' => array() ), 'hint-burst' ),
+			'minute' => array( array( 'enabled' => true, 'requests_per_minute' => 1, 'requests_per_hour' => 100, 'burst_limit' => 10, 'whitelist' => array() ), 'hint-minute' ),
+			'hour'   => array( array( 'enabled' => true, 'requests_per_minute' => 100, 'requests_per_hour' => 1, 'burst_limit' => 10, 'whitelist' => array() ), 'hint-hour' ),
+		);
+	}
+
+	public function test_noncanonical_per_key_rate_override_surface_is_removed(): void {
+		update_option(
+			'mcpwp_rate_limit_settings',
+			array(
+				'enabled'             => true,
+				'requests_per_minute' => 10,
+				'requests_per_hour'   => 100,
+				'burst_limit'         => 2,
+				'whitelist'           => array(),
+			)
+		);
+		$this->resetLimiterSingleton();
+		$limiter = Mcpwp_Rate_Limiter::get_instance();
+
+		$method = new ReflectionMethod( Mcpwp_Rate_Limiter::class, 'check_limit' );
+		$this->assertSame( 2, $method->getNumberOfParameters() );
+		$this->assertTrue( $limiter->check_limit( 'canonical-client', 'POST' ) );
+		$this->assertTrue( $limiter->check_limit( 'canonical-client', 'POST' ) );
+	}
+
 	public function test_update_settings_sanitizes_values(): void {
 		$limiter = Mcpwp_Rate_Limiter::get_instance();
 		$limiter->update_settings(

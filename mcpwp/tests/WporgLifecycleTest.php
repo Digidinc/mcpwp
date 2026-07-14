@@ -16,7 +16,7 @@ final class WporgLifecycleTest extends TestCase {
 	}
 
 	public function test_multisite_lifecycle_queries_are_explicitly_unbounded(): void {
-		foreach ( array( 'uninstall.php', 'includes/class-mcpwp-deactivator.php' ) as $relative ) {
+		foreach ( array( 'mcpwp.php', 'uninstall.php', 'includes/class-mcpwp-deactivator.php' ) as $relative ) {
 			$source = (string) file_get_contents( dirname( __DIR__ ) . '/' . $relative );
 			$this->assertMatchesRegularExpression(
 				"/get_sites\\s*\\(\\s*array\\s*\\([^)]*'fields'\\s*=>\\s*'ids'[^)]*'number'\\s*=>\\s*0/s",

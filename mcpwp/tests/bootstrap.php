@@ -713,7 +713,9 @@ function is_multisite()
 function get_sites($args = array())
 {
     $GLOBALS['mcpwp_test_get_sites_args'][] = $args;
-    return isset($GLOBALS['mcpwp_test_site_ids']) ? $GLOBALS['mcpwp_test_site_ids'] : array();
+    $site_ids = isset($GLOBALS['mcpwp_test_site_ids']) ? $GLOBALS['mcpwp_test_site_ids'] : array();
+    $number = array_key_exists('number', $args) ? (int) $args['number'] : 100;
+    return 0 === $number ? $site_ids : array_slice($site_ids, 0, $number);
 }
 
 function switch_to_blog($blog_id)

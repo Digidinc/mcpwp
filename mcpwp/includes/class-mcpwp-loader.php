@@ -2,7 +2,7 @@
 /**
  * Plugin loader.
  *
- * @package mumcp
+ * @package MCPWP
  */
 
 if ( ! defined( 'ABSPATH' ) ) {

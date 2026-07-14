@@ -2,7 +2,7 @@
 /**
  * Internationalization
  *
- * @package mumcp
+ * @package MCPWP
  */
 
 if ( ! defined( 'ABSPATH' ) ) {

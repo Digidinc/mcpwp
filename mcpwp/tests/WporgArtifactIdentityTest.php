@@ -102,6 +102,15 @@ final class WporgArtifactIdentityTest extends TestCase {
 		$this->assertSame( 0, $result['status'], implode( "\n", $result['output'] ) );
 	}
 
+	public function test_shipped_php_has_no_legacy_mumcp_identity(): void {
+		foreach ( self::$manifest as $entry ) {
+			if ( '.php' !== substr( $entry, -4 ) ) {
+				continue;
+			}
+			$this->assertStringNotContainsString( 'mumcp', strtolower( self::zip_contents( $entry ) ), $entry );
+		}
+	}
+
 	public function test_builder_rejects_explicit_version_that_differs_from_source_header(): void {
 		$plugin_dir = dirname( __DIR__ );
 		$wrong_zip  = $plugin_dir . '/scripts/' . self::SLUG . '-9.9.9.zip';

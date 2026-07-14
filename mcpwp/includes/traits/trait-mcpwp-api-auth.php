@@ -2,7 +2,7 @@
 /**
  * Scoped local API-key authentication.
  *
- * @package mumcp
+ * @package MCPWP
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -84,7 +84,7 @@ trait Mcpwp_Api_Auth {
 		$this->mcpwp_current_api_key_record = $record;
 		if ( ! $charge_rate_limit ) {
 			return true; }
-		$rate = $this->check_rate_limit( 'key:' . sanitize_key( $record['id'] ), $request->get_method(), $record );
+		$rate = $this->check_rate_limit( 'key:' . sanitize_key( $record['id'] ), $request->get_method() );
 		return is_wp_error( $rate ) ? $rate : true;
 	}
 
@@ -101,16 +101,15 @@ trait Mcpwp_Api_Auth {
 	/**
 	 * Charge the configured rate limiter when it is available.
 	 *
-	 * @param string|null              $identifier Identifier used for the rate bucket.
-	 * @param string                   $method     HTTP or logical request method.
-	 * @param array<string,mixed>|null $key_record Authenticated API-key record.
+	 * @param string|null $identifier Identifier used for the rate bucket.
+	 * @param string      $method     HTTP or logical request method.
 	 * @return true|WP_Error True when allowed, otherwise a rate-limit error.
 	 */
-	protected function check_rate_limit( $identifier = null, $method = 'POST', $key_record = null ) {
+	protected function check_rate_limit( $identifier = null, $method = 'POST' ) {
 		if ( ! class_exists( 'Mcpwp_Rate_Limiter' ) ) {
 			return true;
 		}
-		return Mcpwp_Rate_Limiter::get_instance()->check_limit( $identifier, $method, $key_record );
+		return Mcpwp_Rate_Limiter::get_instance()->check_limit( $identifier, $method );
 	}
 
 	/**

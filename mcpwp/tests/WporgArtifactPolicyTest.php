@@ -78,6 +78,15 @@ final class WporgArtifactPolicyTest extends TestCase {
 		$this->assertArrayNotHasKey( 'wp_upload_media', $actual, 'Multipart upload must remain REST-only.' );
 	}
 
+	public function test_runtime_does_not_expose_stale_identity_metadata(): void {
+		$controller = new Mcpwp_REST_MCP();
+		$this->assertFalse( method_exists( $controller, 'get_introspection_data' ), 'Unused legacy introspection must not remain public.' );
+		foreach ( array( 'x_spai', 'mumcp' ) as $stale_metadata ) {
+			$violations = $this->scan_contents( 'includes/runtime.php', $stale_metadata );
+			$this->assertNotEmpty( $violations, 'Artifact policy must reject stale advertised metadata: ' . $stale_metadata );
+		}
+	}
+
 	public function test_source_and_zip_structural_tool_definitions_are_exact(): void {
 		$source_class = (string) file_get_contents( self::$plugin_dir . '/includes/mcp/class-mcpwp-mcp-free-tools.php' );
 		$source_traits = '';
