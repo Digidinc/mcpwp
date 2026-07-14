@@ -348,6 +348,14 @@ final class WporgAdminSurfaceTest extends TestCase {
 		$this->assertDoesNotMatchRegularExpression( '/^\s*\*\s*Plugin URI:\s*\S+/mi', $header );
 	}
 
+	public function test_public_license_references_use_the_reachable_wordpress_org_page(): void {
+		foreach ( array( 'mcpwp.php', 'readme.txt' ) as $relative ) {
+			$source = $this->read( $relative );
+			$this->assertStringContainsString( 'https://wordpress.org/about/license/', $source, $relative );
+			$this->assertStringNotContainsString( 'https://www.gnu.org/licenses/gpl-2.0.html', $source, $relative );
+		}
+	}
+
 	public function test_readme_discloses_authority_data_flow_and_negative_capabilities(): void {
 		$readme = strtolower( $this->read( 'readme.txt' ) );
 		$this->assertMatchesRegularExpression( '/^tested up to:\s*7\.0\s*$/mi', $readme, 'The WordPress 7.0 claim is backed by a 7.0.1 smoke matrix.' );
