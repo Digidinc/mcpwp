@@ -30,7 +30,9 @@ import hashlib
 import json
 import os
 import re
+import stat
 import sys
+import unicodedata
 import zipfile
 from pathlib import PurePosixPath
 
@@ -240,73 +242,37 @@ with archive:
     if len(names) != len(set(names)):
         duplicates = sorted({name for name in names if names.count(name) > 1})
         fail("manifest uniqueness", ", ".join(duplicates))
+
+    folded_names = {}
+    for name in names:
+        folded = unicodedata.normalize("NFKC", name).casefold()
+        folded_names.setdefault(folded, []).append(name)
+    collisions = [sorted(values) for values in folded_names.values() if len(values) > 1]
+    if collisions:
+        fail("case-colliding entry", repr(collisions))
+
     if names != sorted(names, key=lambda name: name.encode("utf-8")):
         fail("sorted manifest", "ZIP entries are not in bytewise lexical order")
 
-    for name in names:
+    for info in infos:
+        name = info.filename
         path = PurePosixPath(name)
         if name.startswith("/") or "\\" in name or ".." in path.parts:
-            fail("safe manifest path", name)
+            fail("unsafe manifest path", name)
 
-    expected_runtime = set(policy["allowed_runtime_files"])
-    expected_runtime.remove("mcpwp.php")
-    expected_runtime.add(f"{slug}.php")
-    actual_runtime = {
-        "/".join(PurePosixPath(info.filename).parts[1:])
-        for info in infos
-        if not info.is_dir()
-    }
-    unexpected_runtime = sorted(actual_runtime.difference(expected_runtime))
-    missing_runtime = sorted(expected_runtime.difference(actual_runtime))
-    if unexpected_runtime or missing_runtime:
-        fail(
-            "exclusive runtime inventory",
-            f"unexpected={unexpected_runtime}; missing={missing_runtime}",
-        )
-
-    forbidden_directories = {item.lower() for item in policy["forbidden_directory_components"]}
-    forbidden_basenames = {item.lower() for item in policy["forbidden_basenames"]}
-    forbidden_prefixes = tuple(item.lower() for item in policy["forbidden_basename_prefixes"])
-    textual_suffixes = (".php", ".js", ".css", ".pot", ".txt")
-    for info in infos:
-        normalized = info.filename.replace("\\", "/")
-        parts = tuple(part.lower() for part in PurePosixPath(normalized.rstrip("/")).parts)
-        relative_parts = parts[1:]
-        if forbidden_directories.intersection(relative_parts[:-1] if relative_parts else ()):
-            fail("shared policy forbidden directory", info.filename)
-        basename = relative_parts[-1] if relative_parts else ""
-        if basename in forbidden_basenames or basename.startswith(forbidden_prefixes):
-            fail("shared policy forbidden basename", info.filename)
-        if info.is_dir() or not normalized.lower().endswith(textual_suffixes):
-            continue
-        relative = "/".join(PurePosixPath(normalized).parts[1:])
-        contents = archive.read(info.filename).decode("utf-8", errors="surrogateescape")
-        contents = mask_allowed_cleanup(relative, contents)
-        contents = mask_documentation_negative_disclosures(relative, contents)
-        contents += "\n" + normalize_static_string_expressions(contents)
-        lowered_contents = contents.lower()
-        for literal in policy["forbidden_literals"]:
-            if literal.lower() in lowered_contents:
-                fail("shared policy forbidden literal", f"{literal} in {info.filename}")
-        for pattern in policy.get("forbidden_patterns", []):
-            if re.search(pattern, contents, flags=re.IGNORECASE):
-                fail("shared policy forbidden pattern", f"{pattern} in {info.filename}")
+        mode = info.external_attr >> 16
+        if stat.S_ISLNK(mode):
+            fail("symlink ZIP entry", name)
+        if not stat.S_ISREG(mode):
+            fail("non-regular ZIP entry", name)
 
     roots = sorted({name.split("/", 1)[0] for name in names})
     if roots != [slug]:
         fail("single top-level root", f"expected {slug}/, found {roots}")
     if any(not name.startswith(f"{slug}/") for name in names):
         fail("rooted manifest", "every entry must be below the top-level plugin folder")
-
-    required = {main_name, readme_name, f"{slug}/languages/{slug}.pot"}
-    for relative in policy["required_source_files"]:
-        if relative == "mcpwp.php":
-            required.add(main_name)
-        else:
-            required.add(f"{slug}/{relative}")
-    missing = sorted(required.difference(names))
-    if missing:
-        fail("required identity files", ", ".join(missing))
+    if main_name not in names:
+        fail("main file identity", f"missing {main_name}")
 
     allowed_top_files = {"LICENSE", "VERSION", "index.php", f"{slug}.php", "readme.txt", "uninstall.php"}
     allowed_top_dirs = {"admin", "assets", "includes", "languages"}
@@ -341,23 +307,124 @@ with archive:
 
     for info in infos:
         name = info.filename
-        parts = PurePosixPath(name.rstrip("/")).parts
+        parts = PurePosixPath(name).parts
         relative = parts[1:]
         lowered = tuple(part.lower() for part in relative)
         if forbidden_components.intersection(lowered):
             fail("private path exclusion", name)
-        if relative:
-            basename = relative[-1].lower()
-            if basename in forbidden_files or basename.endswith((".md", ".zip", ".sh")):
-                fail("private/build file exclusion", name)
-            top = relative[0]
-            if len(relative) == 1:
-                if info.is_dir() and top not in allowed_top_dirs:
-                    fail("unexpected top-level directory", name)
-                if not info.is_dir() and top not in allowed_top_files:
-                    fail("unexpected top-level file", name)
-            if len(relative) > 1 and top not in allowed_top_dirs:
-                fail("unexpected top-level directory", name)
+        if not relative:
+            continue
+        basename = relative[-1].lower()
+        if basename in forbidden_files or basename.endswith((".md", ".zip", ".sh")):
+            fail("private/build file exclusion", name)
+        if "." not in basename and basename not in {"license", "version"}:
+            fail("extensionless executable", name)
+        top = relative[0]
+        if len(relative) == 1 and top not in allowed_top_files:
+            fail("unexpected top-level file", name)
+        if len(relative) > 1 and top not in allowed_top_dirs:
+            fail("unexpected top-level directory", name)
+
+    expected_runtime = set(policy["allowed_runtime_files"])
+    expected_runtime.remove("mcpwp.php")
+    expected_runtime.add(f"{slug}.php")
+    actual_runtime = {
+        "/".join(PurePosixPath(info.filename).parts[1:])
+        for info in infos
+        if not info.is_dir()
+    }
+    unexpected_runtime = sorted(actual_runtime.difference(expected_runtime))
+    missing_runtime = sorted(expected_runtime.difference(actual_runtime))
+    if unexpected_runtime or missing_runtime:
+        fail(
+            "exclusive runtime inventory",
+            f"unexpected={unexpected_runtime}; missing={missing_runtime}",
+        )
+
+    execution_pattern = re.compile(
+        r"\b(?:eval|assert|shell_exec|exec|system|passthru|proc_open|popen)\s*\(",
+        flags=re.IGNORECASE,
+    )
+    dynamic_include_pattern = re.compile(
+        r"\b(?:include|include_once|require|require_once)\s*(?:\(\s*)?(?:\$|(?:download_url|wp_remote_retrieve_body|file_get_contents)\s*\()",
+        flags=re.IGNORECASE,
+    )
+    package_pattern = re.compile(
+        r"\b(?:Plugin_Upgrader|Theme_Upgrader|Core_Upgrader|Language_Pack_Upgrader|plugins_api|themes_api|wp_update_plugins|wp_update_themes|delete_plugins|delete_theme|activate_plugin|deactivate_plugins)\b",
+        flags=re.IGNORECASE,
+    )
+    code_writer_pattern = re.compile(
+        r"\b(?:file_put_contents|fopen|fwrite|touch|rename|copy)\s*\([^;\r\n]*(?:\.php|\.css|wp-config\.php)",
+        flags=re.IGNORECASE,
+    )
+    outbound_pattern = re.compile(
+        r"\b(?:curl_init|curl_exec|fsockopen|pfsockopen|socket_create|socket_connect|stream_socket_client|wp_remote_get|wp_remote_post|wp_remote_request)\s*\(",
+        flags=re.IGNORECASE,
+    )
+    allowed_hosts = {"mumega.com", "www.gnu.org", "wordpress.org"}
+    url_host_pattern = re.compile(r"https?://([a-z0-9.-]+)", flags=re.IGNORECASE)
+    fixed_host_pattern = re.compile(
+        r"\b(?:[a-z0-9-]+\.)+(?:com|net|org|dev|io|ai|co|ca|app|cloud)\b",
+        flags=re.IGNORECASE,
+    )
+
+    for name in names:
+        if not name.endswith(".php"):
+            continue
+        contents = archive.read(name).decode("utf-8", errors="surrogateescape")
+        normalized_contents = normalize_static_string_expressions(contents)
+        if execution_pattern.search(contents) or dynamic_include_pattern.search(contents):
+            fail("forbidden execution primitive", name)
+        if package_pattern.search(contents):
+            fail("forbidden package operation", name)
+        if code_writer_pattern.search(normalized_contents):
+            fail("forbidden arbitrary code writer", name)
+        if outbound_pattern.search(contents):
+            fail("forbidden outbound primitive", name)
+
+        hosts = {match.lower().rstrip(".") for match in url_host_pattern.findall(normalized_contents)}
+        hosts.update(match.lower().rstrip(".") for match in fixed_host_pattern.findall(normalized_contents))
+        unexpected_hosts = sorted(host for host in hosts if host not in allowed_hosts)
+        if unexpected_hosts:
+            fail("fixed external host", f"{name}: {unexpected_hosts}")
+
+    forbidden_directories = {item.lower() for item in policy["forbidden_directory_components"]}
+    forbidden_basenames = {item.lower() for item in policy["forbidden_basenames"]}
+    forbidden_prefixes = tuple(item.lower() for item in policy["forbidden_basename_prefixes"])
+    textual_suffixes = (".php", ".js", ".css", ".pot", ".txt")
+    for info in infos:
+        normalized = info.filename.replace("\\", "/")
+        parts = tuple(part.lower() for part in PurePosixPath(normalized.rstrip("/")).parts)
+        relative_parts = parts[1:]
+        if forbidden_directories.intersection(relative_parts[:-1] if relative_parts else ()):
+            fail("shared policy forbidden directory", info.filename)
+        basename = relative_parts[-1] if relative_parts else ""
+        if basename in forbidden_basenames or basename.startswith(forbidden_prefixes):
+            fail("shared policy forbidden basename", info.filename)
+        if info.is_dir() or not normalized.lower().endswith(textual_suffixes):
+            continue
+        relative = "/".join(PurePosixPath(normalized).parts[1:])
+        contents = archive.read(info.filename).decode("utf-8", errors="surrogateescape")
+        contents = mask_allowed_cleanup(relative, contents)
+        contents = mask_documentation_negative_disclosures(relative, contents)
+        contents += "\n" + normalize_static_string_expressions(contents)
+        lowered_contents = contents.lower()
+        for literal in policy["forbidden_literals"]:
+            if literal.lower() in lowered_contents:
+                fail("shared policy forbidden literal", f"{literal} in {info.filename}")
+        for pattern in policy.get("forbidden_patterns", []):
+            if re.search(pattern, contents, flags=re.IGNORECASE):
+                fail("shared policy forbidden pattern", f"{pattern} in {info.filename}")
+
+    required = {main_name, readme_name, f"{slug}/languages/{slug}.pot"}
+    for relative in policy["required_source_files"]:
+        if relative == "mcpwp.php":
+            required.add(main_name)
+        else:
+            required.add(f"{slug}/{relative}")
+    missing = sorted(required.difference(names))
+    if missing:
+        fail("required identity files", ", ".join(missing))
 
     pot_files = sorted(name for name in names if name.endswith(".pot"))
     expected_pot = [f"{slug}/languages/{slug}.pot"]
@@ -367,6 +434,9 @@ with archive:
     try:
         main = archive.read(main_name).decode("utf-8", errors="strict")
         readme = archive.read(readme_name).decode("utf-8", errors="strict")
+        version_file = archive.read(f"{slug}/VERSION").decode("utf-8", errors="strict").strip()
+    except KeyError as error:
+        fail("version declarations", f"missing {error}")
     except UnicodeDecodeError as error:
         fail("UTF-8 identity files", str(error))
 
@@ -386,9 +456,9 @@ with archive:
     stable_tag = re.search(r"^Stable tag:\s*(\S+)\s*$", readme, re.MULTILINE | re.IGNORECASE)
     if not header_version or constant is None or stable_tag is None:
         fail("version declarations", "header, constant, and stable tag must all exist")
-    versions = (header_version, constant.group(1), stable_tag.group(1))
+    versions = (header_version, constant.group(1), stable_tag.group(1), version_file)
     if len(set(versions)) != 1:
-        fail("version equality", f"header/constant/stable-tag={versions}")
+        fail("version equality", f"header/constant/stable-tag/VERSION={versions}")
 
     expected_filename = f"{slug}-{header_version}.zip"
     actual_filename = os.path.basename(zip_path)
@@ -401,40 +471,6 @@ with archive:
             legacy_domains.append(name)
     if legacy_domains:
         fail("legacy gettext domain", ", ".join(legacy_domains))
-
-    expected_trusted_sources = {
-        "includes/api/class-mcpwp-rest-api.php",
-        "includes/api/class-mcpwp-rest-api-keys.php",
-        "includes/api/class-mcpwp-rest-mcp.php",
-        "includes/api/class-mcpwp-rest-media.php",
-        "includes/api/class-mcpwp-rest-pages.php",
-        "includes/api/class-mcpwp-rest-posts.php",
-        "includes/api/class-mcpwp-rest-rate-limit.php",
-        "includes/api/class-mcpwp-rest-site-info.php",
-        "includes/api/class-mcpwp-rest-site-settings.php",
-        "includes/api/class-mcpwp-rest-site-taxonomy.php",
-        "includes/traits/trait-mcpwp-api-auth.php",
-        "includes/mcp/class-mcpwp-mcp-tool-registry.php",
-        "includes/mcp/class-mcpwp-mcp-free-tools.php",
-    }
-    expected_trusted_sources.update(
-        "/".join(PurePosixPath(name).parts[1:])
-        for name in names
-        if name.startswith(f"{slug}/includes/mcp/traits/trait-mcpwp-free-tools-") and name.endswith(".php")
-    )
-    trusted_sources = policy.get("trusted_source_sha256", {})
-    if set(trusted_sources) != expected_trusted_sources:
-        fail(
-            "trusted source policy",
-            f"expected={sorted(expected_trusted_sources)}; found={sorted(trusted_sources)}",
-        )
-    for relative, expected_hash in trusted_sources.items():
-        trusted_name = f"{slug}/{relative}"
-        if trusted_name not in names:
-            fail("trusted source", f"missing {trusted_name}")
-        actual_hash = hashlib.sha256(archive.read(trusted_name)).hexdigest()
-        if actual_hash != expected_hash:
-            fail("trusted source hash", f"{relative}: expected={expected_hash}; found={actual_hash}")
 
     tool_source_name = f"{slug}/includes/mcp/class-mcpwp-mcp-free-tools.php"
     tool_source = archive.read(tool_source_name).decode("utf-8", errors="strict")
@@ -491,6 +527,8 @@ with archive:
         if not name.startswith(f"{slug}/") or not name.endswith(".php"):
             continue
         source = archive.read(name).decode("utf-8", errors="strict")
+        if re.search(r"\bregister_rest_route\s*\(", source) and re.search(r"['\"]__return_true['\"]", source):
+            fail("public REST permission callback", name)
         for match in re.finditer(r"\bregister_rest_route\s*\(", source):
             arguments = parse_call_arguments(source, source.find("(", match.start()))
             if not arguments or len(arguments) < 3:
@@ -517,6 +555,40 @@ with archive:
     expected_routes = {route: sorted(methods) for route, methods in policy["retained_rest_routes"].items()}
     if actual_routes != expected_routes:
         fail("exact REST route map", f"expected={expected_routes}; found={actual_routes}")
+
+    expected_trusted_sources = {
+        "includes/api/class-mcpwp-rest-api.php",
+        "includes/api/class-mcpwp-rest-api-keys.php",
+        "includes/api/class-mcpwp-rest-mcp.php",
+        "includes/api/class-mcpwp-rest-media.php",
+        "includes/api/class-mcpwp-rest-pages.php",
+        "includes/api/class-mcpwp-rest-posts.php",
+        "includes/api/class-mcpwp-rest-rate-limit.php",
+        "includes/api/class-mcpwp-rest-site-info.php",
+        "includes/api/class-mcpwp-rest-site-settings.php",
+        "includes/api/class-mcpwp-rest-site-taxonomy.php",
+        "includes/traits/trait-mcpwp-api-auth.php",
+        "includes/mcp/class-mcpwp-mcp-tool-registry.php",
+        "includes/mcp/class-mcpwp-mcp-free-tools.php",
+    }
+    expected_trusted_sources.update(
+        "/".join(PurePosixPath(name).parts[1:])
+        for name in names
+        if name.startswith(f"{slug}/includes/mcp/traits/trait-mcpwp-free-tools-") and name.endswith(".php")
+    )
+    trusted_sources = policy.get("trusted_source_sha256", {})
+    if set(trusted_sources) != expected_trusted_sources:
+        fail(
+            "trusted source policy",
+            f"expected={sorted(expected_trusted_sources)}; found={sorted(trusted_sources)}",
+        )
+    for relative, expected_hash in trusted_sources.items():
+        trusted_name = f"{slug}/{relative}"
+        if trusted_name not in names:
+            fail("trusted source", f"missing {trusted_name}")
+        actual_hash = hashlib.sha256(archive.read(trusted_name)).hexdigest()
+        if actual_hash != expected_hash:
+            fail("trusted source hash", f"{relative}: expected={expected_hash}; found={actual_hash}")
 
     for name in names:
         if not name.endswith(".php"):

