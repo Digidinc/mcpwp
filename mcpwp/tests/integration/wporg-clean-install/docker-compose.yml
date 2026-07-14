@@ -1,0 +1,52 @@
+services:
+  db:
+    image: mariadb:10.6@sha256:114d40be36852d0a019afd8458f7e1cc63fd300403b115b1f32e31130d5f671b
+    pull_policy: never
+    environment:
+      MARIADB_DATABASE: wordpress
+      MARIADB_USER: wordpress
+      MARIADB_PASSWORD: wordpress
+      MARIADB_ROOT_PASSWORD: wporg-root
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-pwporg-root"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    networks: [wporg]
+
+  wordpress:
+    image: ${MCPWP_WORDPRESS_IMAGE:?Set MCPWP_WORDPRESS_IMAGE to a pinned lane image}
+    pull_policy: never
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      WORDPRESS_DB_HOST: db:3306
+      WORDPRESS_DB_USER: wordpress
+      WORDPRESS_DB_PASSWORD: wordpress
+      WORDPRESS_DB_NAME: wordpress
+      WORDPRESS_DEBUG: "1"
+      MCPWP_WPORG_SHA256: ${MCPWP_WPORG_SHA256:?Set MCPWP_WPORG_SHA256}
+      MCPWP_WPORG_EXPECTED_WP: ${MCPWP_WPORG_EXPECTED_WP:?Set MCPWP_WPORG_EXPECTED_WP}
+      MCPWP_WPORG_EXPECTED_PHP: ${MCPWP_WPORG_EXPECTED_PHP:?Set MCPWP_WPORG_EXPECTED_PHP}
+      WORDPRESS_CONFIG_EXTRA: |
+        define( 'WP_DEBUG_LOG', true );
+        define( 'WP_DEBUG_DISPLAY', false );
+        define( 'DISABLE_WP_CRON', true );
+        define( 'AUTOMATIC_UPDATER_DISABLED', true );
+    volumes:
+      - wordpress_data:/var/www/html
+      - ./:/opt/mcpwp-wporg-harness:ro
+    healthcheck:
+      test: ["CMD", "php", "-r", "exit(file_exists('/var/www/html/wp-load.php') ? 0 : 1);"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    networks: [wporg]
+
+networks:
+  wporg:
+    internal: true
+
+volumes:
+  wordpress_data:
