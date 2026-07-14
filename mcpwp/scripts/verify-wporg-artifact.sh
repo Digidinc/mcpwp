@@ -384,10 +384,6 @@ with archive:
         r"\b(?:Plugin_Upgrader|Theme_Upgrader|Core_Upgrader|Language_Pack_Upgrader|plugins_api|themes_api|wp_update_plugins|wp_update_themes|delete_plugins|delete_theme|activate_plugin|activate_plugins|deactivate_plugin|deactivate_plugins)\b",
         flags=re.IGNORECASE,
     )
-    code_writer_pattern = re.compile(
-        r"\b(?:file_put_contents|fopen|fwrite|touch|rename|copy)\s*\([^;\r\n]*(?:\.php|\.css|wp-config\.php)",
-        flags=re.IGNORECASE,
-    )
     outbound_pattern = re.compile(
         r"\b(?:curl_init|curl_exec|fsockopen|pfsockopen|socket_create|socket_connect|stream_socket_client|wp_remote_get|wp_remote_post|wp_remote_request)\s*\(",
         flags=re.IGNORECASE,
@@ -401,6 +397,24 @@ with archive:
         r"(?:https?:)?//(?:[^\s/'\"]+@)?[a-z0-9.-]+\.[a-z]{2,}",
         flags=re.IGNORECASE,
     )
+    remote_asset_authority_pattern = re.compile(
+        r"(?:https?:)?//(?:\[[^\]\s]+\]|[^/\s'\"()]+)",
+        flags=re.IGNORECASE,
+    )
+    allowed_local_include_statements = {
+        "include MCPWP_PLUGIN_DIR . 'admin/partials/mcpwp-tools-display.php';",
+        "include MCPWP_PLUGIN_DIR . 'admin/partials/mcpwp-settings-display.php';",
+        "include MCPWP_PLUGIN_DIR . 'admin/partials/mcpwp-setup-display.php';",
+        "require_once ABSPATH . 'wp-admin/includes/upgrade.php';",
+        "require_once ABSPATH . 'wp-admin/includes/file.php';",
+        "require_once ABSPATH . 'wp-admin/includes/image.php';",
+        "require_once ABSPATH . 'wp-admin/includes/media.php';",
+        "require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-activator.php';",
+        "require_once plugin_dir_path( __FILE__ ) . 'includes/traits/trait-mcpwp-api-auth.php';",
+        "require_once plugin_dir_path( __FILE__ ) . 'includes/class-mcpwp-activator.php';",
+        "require_once plugin_dir_path( __FILE__ ) . 'includes/class-mcpwp-deactivator.php';",
+    }
+    allowed_writer_count = 0
 
     for name in names:
         lowered_name = name.lower()
@@ -415,29 +429,63 @@ with archive:
         normalized_contents = normalize_static_string_expressions(executable_contents)
 
         if lowered_name.endswith((".js", ".css")):
-            if remote_authority_pattern.search(normalized_contents):
+            if remote_asset_authority_pattern.search(normalized_contents):
                 fail("remote runtime asset", name)
             continue
+
+        static_bootstrap_inventory = False
+        if name == main_name:
+            bootstrap_match = re.search(
+                r"\$files\s*=\s*array\((.*?)\)\s*;\s*foreach\s*\(\s*\$files\s+as\s+\$file\s*\)\s*\{\s*require_once\s+MCPWP_PLUGIN_DIR\s*\.\s*\$file\s*;\s*\}",
+                executable_contents,
+                flags=re.DOTALL,
+            )
+            if bootstrap_match is not None:
+                bootstrap_body = bootstrap_match.group(1)
+                bootstrap_paths = re.findall(r"'([^']+)'", bootstrap_body)
+                bootstrap_residual = re.sub(r"'[^']*'", "", bootstrap_body)
+                static_bootstrap_inventory = (
+                    bool(bootstrap_paths)
+                    and re.fullmatch(r"[\s,]*", bootstrap_residual) is not None
+                    and len(bootstrap_paths) == len(set(bootstrap_paths))
+                    and all(path in expected_runtime and path.endswith(".php") for path in bootstrap_paths)
+                )
+
+        for include_match in re.finditer(r"\b(?:include|include_once|require|require_once)\b", executable_contents, flags=re.IGNORECASE):
+            statement_end = executable_contents.find(";", include_match.start())
+            if statement_end < 0:
+                fail("forbidden execution primitive", f"unterminated include in {name}")
+            statement = re.sub(r"\s+", " ", executable_contents[include_match.start():statement_end + 1]).strip()
+            dynamic_bootstrap = (
+                name == main_name
+                and static_bootstrap_inventory
+                and statement == "require_once MCPWP_PLUGIN_DIR . $file;"
+            )
+            if statement not in allowed_local_include_statements and not dynamic_bootstrap:
+                fail("forbidden execution primitive", f"computed include in {name}")
+
+        for writer_match in re.finditer(
+            r"\b(?:file_put_contents|fopen|fwrite|touch|rename|copy)\s*\(",
+            executable_contents,
+            flags=re.IGNORECASE,
+        ):
+            opening = executable_contents.find("(", writer_match.start())
+            arguments = parse_call_arguments(executable_contents, opening)
+            function_name = re.match(r"[a-z_]+", writer_match.group(0), flags=re.IGNORECASE).group(0).lower()
+            normalized_arguments = [] if arguments is None else [re.sub(r"\s+", " ", argument).strip() for argument in arguments]
+            allowed_writer = (
+                name == f"{slug}/includes/core/class-mcpwp-media.php"
+                and function_name == "file_put_contents"
+                and normalized_arguments == ["$tmp_file", "$decoded"]
+            )
+            if not allowed_writer:
+                fail("forbidden arbitrary code writer", name)
+            allowed_writer_count += 1
 
         if execution_pattern.search(executable_contents) or dynamic_include_pattern.search(executable_contents):
             fail("forbidden execution primitive", name)
         if package_pattern.search(executable_contents):
             fail("forbidden package operation", name)
-        if code_writer_pattern.search(normalized_contents):
-            fail("forbidden arbitrary code writer", name)
-
-        dangerous_path_variables = set(re.findall(
-            r"\$([a-z_][a-z0-9_]*)\s*=\s*[^;\r\n]*(?:\.php|\.css|wp-config\.php)[^;\r\n]*;",
-            normalized_contents,
-            flags=re.IGNORECASE,
-        ))
-        for variable in dangerous_path_variables:
-            if re.search(
-                rf"\b(?:file_put_contents|fopen|touch|rename|copy)\s*\(\s*\${re.escape(variable)}\b",
-                normalized_contents,
-                flags=re.IGNORECASE,
-            ):
-                fail("forbidden arbitrary code writer", name)
 
         if outbound_pattern.search(executable_contents):
             fail("forbidden outbound primitive", name)
@@ -446,6 +494,9 @@ with archive:
         hosts.update(match.lower().rstrip(".") for match in fixed_host_pattern.findall(normalized_contents))
         if hosts or remote_authority_pattern.search(normalized_contents):
             fail("fixed external host", f"{name}: {sorted(hosts)}")
+
+    if allowed_writer_count != 1:
+        fail("local media writer allowlist", f"expected exactly one retained temp write, found {allowed_writer_count}")
 
     forbidden_directories = {item.lower() for item in policy["forbidden_directory_components"]}
     forbidden_basenames = {item.lower() for item in policy["forbidden_basenames"]}
