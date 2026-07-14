@@ -201,12 +201,21 @@ def mask_allowed_cleanup(relative, contents):
         )
         if relative == "uninstall.php":
             contents = re.sub(
-                rf"DROP\s+TABLE\s+IF\s+EXISTS[^;\n]*{re.escape(token)}",
+                rf"DROP\s+TABLE\s+IF\s+EXISTS[^;\n]*{re.escape(token)}(?![A-Za-z0-9_])",
                 "__allowed_drop__",
                 contents,
                 flags=re.IGNORECASE,
             )
     return contents
+
+
+def normalize_static_string_expressions(contents):
+    pattern = re.compile(r"(['\"])([^'\"\r\n]*)\1\s*\.\s*(['\"])([^'\"\r\n]*)\3")
+    while True:
+        normalized = pattern.sub(lambda match: "'" + match.group(2) + match.group(4) + "'", contents)
+        if normalized == contents:
+            return normalized
+        contents = normalized
 
 
 try:
@@ -264,6 +273,7 @@ with archive:
         relative = "/".join(PurePosixPath(normalized).parts[1:])
         contents = archive.read(info.filename).decode("utf-8", errors="surrogateescape")
         contents = mask_allowed_cleanup(relative, contents)
+        contents += "\n" + normalize_static_string_expressions(contents)
         lowered_contents = contents.lower()
         for literal in policy["forbidden_literals"]:
             if literal.lower() in lowered_contents:
@@ -385,12 +395,46 @@ with archive:
     tool_source_name = f"{slug}/includes/mcp/class-mcpwp-mcp-free-tools.php"
     tool_source = archive.read(tool_source_name).decode("utf-8", errors="strict")
     tool_matches = re.findall(
-        r"'(wp_[a-z0-9_]+)'\s*=>\s*array\(\s*'method'\s*=>\s*'([A-Z]+)'\s*,\s*'route'\s*=>\s*'([^']+)'",
+        r"'(wp_[a-z0-9_]+)'\s*=>\s*(?:array\s*\(|\[)\s*'method'\s*=>\s*'([A-Z]+)'\s*,\s*'route'\s*=>\s*'([^']+)'",
         tool_source,
     )
     actual_tools = {name: [method, route] for name, method, route in tool_matches}
     if actual_tools != policy["retained_tool_map"]:
         fail("exact MCP tool map", f"expected={policy['retained_tool_map']}; found={actual_tools}")
+
+    expected_tool_names = set(policy["retained_tool_map"])
+    description_match = re.search(
+        r"\$descriptions\s*=\s*array\((.*?)\);\s*\$tools",
+        tool_source,
+        flags=re.DOTALL,
+    )
+    if description_match is None:
+        fail("MCP advertised descriptions", "could not extract get_tools descriptions")
+    description_names = set(re.findall(r"'(wp_[a-z0-9_]+)'\s*=>", description_match.group(1)))
+    if description_names != expected_tool_names:
+        fail("exact MCP advertised descriptions", f"expected={sorted(expected_tool_names)}; found={sorted(description_names)}")
+
+    trait_names = set()
+    trait_files = sorted(
+        name
+        for name in names
+        if name.startswith(f"{slug}/includes/mcp/traits/trait-mcpwp-free-tools-") and name.endswith(".php")
+    )
+    if not trait_files:
+        fail("MCP trait inventory", "no retained tool-name traits found")
+    for trait_file in trait_files:
+        trait_source = archive.read(trait_file).decode("utf-8", errors="strict")
+        inventories = re.findall(
+            r"function\s+mcpwp_[a-z0-9_]+_tool_names\s*\(\s*\)\s*\{\s*return\s+array\((.*?)\);\s*\}",
+            trait_source,
+            flags=re.DOTALL,
+        )
+        if not inventories:
+            fail("MCP trait inventory", trait_file)
+        for inventory in inventories:
+            trait_names.update(re.findall(r"'(wp_[a-z0-9_]+)'", inventory))
+    if trait_names != expected_tool_names:
+        fail("exact MCP trait-advertised tools", f"expected={sorted(expected_tool_names)}; found={sorted(trait_names)}")
 
     method_constants = {
         "WP_REST_Server::READABLE": ["GET"],
@@ -400,7 +444,7 @@ with archive:
     }
     actual_routes = {}
     for name in names:
-        if not name.startswith(f"{slug}/includes/api/class-mcpwp-rest-") or not name.endswith(".php"):
+        if not name.startswith(f"{slug}/") or not name.endswith(".php"):
             continue
         source = archive.read(name).decode("utf-8", errors="strict")
         for match in re.finditer(r"\bregister_rest_route\s*\(", source):

@@ -102,7 +102,7 @@
 
 **Interfaces:**
 - Consumes: the Task 1 artifact verifier and deterministic `mumega-mcp` builder.
-- Produces: a source tree and candidate ZIP with no forbidden files/symbols/hosts and a bootstrap that only requires retained classes.
+- Produces: a source tree and candidate ZIP with no forbidden files/symbols/hosts, a bootstrap that only requires retained classes, and exactly 17 MCP tools; multipart media upload is REST-only.
 
 - [ ] **Step 1: Add failing denylist and inventory tests.**
 
@@ -163,7 +163,7 @@
 
 - [ ] **Step 1: Define the exact route and tool snapshots.**
 
-  Permit only authenticated MCP `initialize`, `tools/list`, `tools/call`, and `ping`; read-only site information; list/get/create/update posts and pages; list/delete drafts; local media list/get/upload; and category/tag list/create. Menus/Gutenberg are excluded unless they can be retained without broad option/raw-HTML mutation and with the same complete test coverage.
+  Permit exactly 17 MCP tools: site information; list/get/create/update posts and pages; list/delete drafts; media list/get/base64 upload; and category/tag list/create. Multipart media upload is REST-only. Permit only authenticated MCP `initialize`, `tools/list`, `tools/call`, and `ping`. Menus/Gutenberg are excluded unless they can be retained without broad option/raw-HTML mutation and with the same complete test coverage.
 
 - [ ] **Step 2: Write failing authorization tests and capture RED.**
 

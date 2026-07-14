@@ -4,9 +4,12 @@ use PHPUnit\Framework\TestCase;
 final class McpEndpointTest extends TestCase {
 	protected function setUp(): void {
 		$GLOBALS['mcpwp_test_options'] = array( 'mcpwp_api_key' => 'test-key', 'mcpwp_settings' => array( 'enable_logging' => true ), 'mcpwp_rate_limit_settings' => array( 'enabled' => false ) );
+		$GLOBALS['mcpwp_test_transients'] = array();
 		$GLOBALS['_mcpwp_test_registered_routes'] = array();
 		$GLOBALS['_mcpwp_test_rest_dispatcher'] = null;
+		$GLOBALS['_mcpwp_test_nested_permission_calls'] = 0;
 		$GLOBALS['wpdb']->inserted = array();
+		$this->reset_limiter_singleton();
 	}
 	private function call( $method, $params = array() ) {
 		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/mcp', array(), array(), array( 'jsonrpc' => '2.0', 'id' => 1, 'method' => $method, 'params' => $params ) );
@@ -19,9 +22,8 @@ final class McpEndpointTest extends TestCase {
 		return $controller->handle_mcp( $request )->get_data();
 	}
 	private function install_test_router(): void {
-		$auth = new Mcpwp_Api_Auth_Test_Harness();
-		register_rest_route( 'mcpwp/v1', '/site-info', array( 'methods' => 'GET', 'permission_callback' => array( $auth, 'verify_api_key' ), 'callback' => static function () { return new WP_REST_Response( array( 'name' => 'Example Site' ), 200 ); } ) );
-		register_rest_route( 'mcpwp/v1', '/posts/(?P<id>\\d+)', array( 'methods' => 'GET', 'permission_callback' => array( $auth, 'verify_api_key' ), 'callback' => static function () { return new WP_REST_Response( array( 'code' => 'not_found', 'message' => 'Post not found.', 'data' => array( 'status' => 404 ) ), 404 ); } ) );
+		( new Mcpwp_REST_Site_Info() )->register_routes();
+		( new Mcpwp_REST_Posts() )->register_routes();
 		$GLOBALS['_mcpwp_test_rest_dispatcher'] = static function ( $request ) {
 			foreach ( $GLOBALS['_mcpwp_test_registered_routes'] as $registration ) {
 				$pattern = '#^/mcpwp/v1' . $registration['route'] . '$#';
@@ -30,12 +32,19 @@ final class McpEndpointTest extends TestCase {
 				foreach ( $configurations as $configuration ) {
 					if ( ! in_array( $request->get_method(), explode( ',', $configuration['methods'] ), true ) ) { continue; }
 					foreach ( $matches as $key => $value ) { if ( is_string( $key ) ) { $request->set_param( $key, $value ); } }
+					$GLOBALS['_mcpwp_test_nested_permission_calls']++;
 					$permission = call_user_func( $configuration['permission_callback'], $request );
 					return true === $permission ? call_user_func( $configuration['callback'], $request ) : $permission;
 				}
 			}
 			return new WP_Error( 'route_not_found', 'Route not found.', array( 'status' => 404 ) );
 		};
+	}
+	private function reset_limiter_singleton(): void {
+		$reflection = new ReflectionClass( Mcpwp_Rate_Limiter::class );
+		$instance = $reflection->getProperty( 'instance' );
+		$instance->setAccessible( true );
+		$instance->setValue( null );
 	}
 	public function test_initialize_advertises_only_approved_capabilities(): void {
 		$data = $this->call( 'initialize' );
@@ -62,6 +71,24 @@ final class McpEndpointTest extends TestCase {
 		$this->install_test_router();
 		$data = $this->call_authenticated( 'tools/call', array( 'name' => 'wp_site_info', 'arguments' => array() ) );
 		$this->assertSame( 'Example Site', $data['result']['structuredContent']['name'] );
+	}
+	public function test_authenticated_mcp_tool_call_consumes_one_rate_limit_unit_across_nested_rest_auth(): void {
+		$GLOBALS['mcpwp_test_options']['mcpwp_api_keys'] = array(
+			array( 'id' => 'rate-key', 'hash' => 'test-key', 'scopes' => array( 'read', 'write', 'admin' ), 'tool_categories' => array(), 'revoked_at' => null ),
+		);
+		$GLOBALS['mcpwp_test_options']['mcpwp_rate_limit_settings'] = array(
+			'enabled' => true, 'requests_per_minute' => 10, 'requests_per_hour' => 100, 'burst_limit' => 10, 'whitelist' => array(),
+		);
+		$this->reset_limiter_singleton();
+		$this->install_test_router();
+
+		$data = $this->call_authenticated( 'tools/call', array( 'name' => 'wp_site_info', 'arguments' => array() ) );
+
+		$this->assertSame( 'Example Site', $data['result']['structuredContent']['name'] );
+		$this->assertSame( 1, $GLOBALS['_mcpwp_test_nested_permission_calls'], 'The nested REST permission callback must still run.' );
+		foreach ( $GLOBALS['mcpwp_test_transients'] as $window ) {
+			$this->assertSame( 1, $window['value']['count'], 'Outer plus nested MCP dispatch must consume exactly one rate-limit unit.' );
+		}
 	}
 	public function test_rest_error_response_becomes_jsonrpc_error(): void {
 		$this->install_test_router();

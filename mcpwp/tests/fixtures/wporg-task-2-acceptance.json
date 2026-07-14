@@ -1,0 +1,42 @@
+{
+  "mcp_tools": [
+    "wp_site_info",
+    "wp_list_posts",
+    "wp_get_post",
+    "wp_create_post",
+    "wp_update_post",
+    "wp_list_pages",
+    "wp_get_page",
+    "wp_create_page",
+    "wp_update_page",
+    "wp_list_drafts",
+    "wp_delete_draft",
+    "wp_list_media",
+    "wp_get_media",
+    "wp_upload_media_b64",
+    "wp_list_categories",
+    "wp_list_tags",
+    "wp_create_term"
+  ],
+  "rest_routes": {
+    "/mcp": ["POST"],
+    "/site-info": ["GET"],
+    "/posts": ["GET", "POST"],
+    "/posts/(?P<id>\\d+)": ["GET", "PATCH", "PUT"],
+    "/pages": ["GET", "POST"],
+    "/pages/(?P<id>\\d+)": ["GET", "PATCH", "PUT"],
+    "/drafts": ["GET"],
+    "/drafts/(?P<id>\\d+)": ["DELETE"],
+    "/media": ["GET", "POST"],
+    "/media/from-base64": ["POST"],
+    "/media/(?P<id>\\d+)": ["GET"],
+    "/categories": ["GET"],
+    "/tags": ["GET"],
+    "/terms": ["POST"],
+    "/plugin-settings": ["GET", "PATCH", "PUT"],
+    "/rate-limit": ["GET", "PATCH", "PUT"],
+    "/rate-limit/reset": ["POST"],
+    "/api-keys": ["GET", "POST"],
+    "/api-keys/(?P<id>[a-z0-9-]+)": ["DELETE"]
+  }
+}

@@ -10,6 +10,9 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 class Mcpwp_REST_MCP extends Mcpwp_REST_API {
+	/** @var bool In-process, one-use marker for the nested REST permission check. */
+	public static $is_internal_sub_request = false;
+
 	private $protocol_version = '2024-11-05';
 	private $server_version;
 	private $server_name;
@@ -123,7 +126,12 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		foreach ( $arguments as $key => $value ) {
 			$request->set_param( $key, $value );
 		}
-		$response = rest_do_request( $request );
+		self::$is_internal_sub_request = true;
+		try {
+			$response = rest_do_request( $request );
+		} finally {
+			self::$is_internal_sub_request = false;
+		}
 		if ( is_wp_error( $response ) ) {
 			$status = (int) ( $response->get_error_data()['status'] ?? 500 );
 			$this->log_tool_call( $name, $status, $started_at );

@@ -18,7 +18,7 @@ The plugin includes:
 
 * Scoped API keys stored as password hashes
 * Local request rate limiting
-* Local activity logging with configurable retention and redaction
+* Local metadata-only activity logging with configurable retention and no request or response content
 * MCP tools for the retained WordPress content operations
 * Multipart and base64 uploads from your device
 

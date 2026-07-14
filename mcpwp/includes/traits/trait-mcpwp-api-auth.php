@@ -44,6 +44,13 @@ trait Mcpwp_Api_Auth {
 
 		$this->mcpwp_current_api_key_record = $record;
 		$this->set_api_user_context();
+		// The outer authenticated MCP request already consumed the rate-limit unit.
+		// Consume this in-process marker only after the nested request has passed
+		// the same API-key and scope checks above.
+		if ( class_exists( 'Mcpwp_REST_MCP' ) && Mcpwp_REST_MCP::$is_internal_sub_request ) {
+			Mcpwp_REST_MCP::$is_internal_sub_request = false;
+			return true;
+		}
 		$rate = $this->check_rate_limit( 'key:' . sanitize_key( $record['id'] ), $request->get_method(), $record );
 		return is_wp_error( $rate ) ? $rate : true;
 	}

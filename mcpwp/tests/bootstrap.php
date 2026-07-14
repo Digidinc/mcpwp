@@ -507,6 +507,11 @@ function get_site_url()
     return 'https://example.com';
 }
 
+function wp_timezone_string()
+{
+    return 'UTC';
+}
+
 function get_bloginfo($show = '')
 {
     if ('version' === $show) {
