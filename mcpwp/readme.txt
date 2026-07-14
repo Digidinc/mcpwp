@@ -4,7 +4,7 @@ Tags: mcp, ai, automation, content, media
 Requires at least: 6.1
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 3.4.3
+Stable tag: 3.4.13
 License: GPLv2 or later
 License URI: https://wordpress.org/about/license/
 
@@ -57,6 +57,10 @@ No plugin-initiated outbound request is made. The plugin sends authenticated res
 When local logging is enabled, the plugin stores tool name, status code, duration, API-key ID, and time. It does not store request arguments or response content. The site owner controls retention in Settings.
 
 == Changelog ==
+
+= 3.4.13 =
+
+* Default Setup & Keys selections include read and write access for draft-first content testing.
 
 = 3.4.3 =
 

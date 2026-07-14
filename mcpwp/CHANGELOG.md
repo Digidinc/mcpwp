@@ -5,6 +5,13 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.4.13](https://github.com/Mumega-com/mcpwp/compare/v3.4.3...v3.4.13) (2026-07-14)
+
+
+### Fixed
+
+* **wporg:** default new API keys to read and write access for draft-first content testing.
+
 ## [3.4.3](https://github.com/Mumega-com/mcpwp/compare/v3.4.2...v3.4.3) (2026-07-07)
 
 

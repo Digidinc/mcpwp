@@ -52,7 +52,7 @@ $upgrade_dir = WP_CONTENT_DIR . '/upgrade';
 if ( ! wp_mkdir_p( $upgrade_dir ) ) {
 	mcpwp_wporg_install_fail( 'could not create the candidate staging directory.' );
 }
-$staged = $upgrade_dir . '/mumega-mcp-3.4.3.zip';
+$staged = $upgrade_dir . '/mumega-mcp-3.4.13.zip';
 if ( ! copy( $candidate, $staged ) || hash_file( 'sha256', $staged ) !== $expected_hash ) {
 	mcpwp_wporg_install_fail( 'the staged candidate bytes do not match the frozen candidate.' );
 }

@@ -1,6 +1,6 @@
 # Mumega MCP — WordPress.org reviewer notes
 
-Candidate identity: **Mumega MCP** / `mumega-mcp`, version 3.4.3. Internal `mcpwp_*` option and hook prefixes and the `mcpwp/v1` namespace remain for compatibility with installations of the earlier off-directory build.
+Candidate identity: **Mumega MCP** / `mumega-mcp`, version 3.4.13. Internal `mcpwp_*` option and hook prefixes and the `mcpwp/v1` namespace remain for compatibility with installations of the earlier off-directory build.
 
 ## Exact directory surface
 

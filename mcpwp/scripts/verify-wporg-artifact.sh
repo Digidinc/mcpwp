@@ -570,8 +570,8 @@ with archive:
     if len(set(versions)) != 1:
         fail("version equality", f"header/constant/stable-tag/VERSION={versions}")
     expected_version = policy.get("expected_version")
-    if expected_version != "3.4.3":
-        fail("shared artifact policy", f"expected_version must be 3.4.3, found {expected_version!r}")
+    if expected_version != "3.4.13":
+        fail("shared artifact policy", f"expected_version must be 3.4.13, found {expected_version!r}")
     if any(version != expected_version for version in versions):
         fail("expected release version", f"expected {expected_version}, found {versions}")
 

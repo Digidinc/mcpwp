@@ -3,7 +3,7 @@
 #
 # Usage:
 #   bash mcpwp/scripts/build-wporg.sh
-#   bash mcpwp/scripts/build-wporg.sh --version 3.4.3
+#   bash mcpwp/scripts/build-wporg.sh --version 3.4.13
 
 set -euo pipefail
 

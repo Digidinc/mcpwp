@@ -46,7 +46,7 @@ final class WporgLifecycleTest extends TestCase {
 		$workflow = dirname( __DIR__, 2 ) . '/.github/workflows/wporg-approval.yml';
 		$this->assertFileExists( $workflow );
 		$source = (string) file_get_contents( $workflow );
-		$this->assertMatchesRegularExpression( '/MCPWP_WPORG_ZIP:\s*\S+mumega-mcp-3\.4\.3\.zip/', $source );
+		$this->assertMatchesRegularExpression( '/MCPWP_WPORG_ZIP:\s*\S+mumega-mcp-3\.4\.13\.zip/', $source );
 	}
 
 	public function test_approval_workflow_ignores_inherited_composer_authentication(): void {

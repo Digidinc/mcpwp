@@ -15,8 +15,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  MCPWP_WPORG_ZIP: mcpwp/scripts/mumega-mcp-3.4.3.zip
-  MCPWP_WPORG_SHA256_FILE: mcpwp/scripts/mumega-mcp-3.4.3.zip.sha256
+  MCPWP_WPORG_ZIP: mcpwp/scripts/mumega-mcp-3.4.13.zip
+  MCPWP_WPORG_SHA256_FILE: mcpwp/scripts/mumega-mcp-3.4.13.zip.sha256
 
 jobs:
   candidate:

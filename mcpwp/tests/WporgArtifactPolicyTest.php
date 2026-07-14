@@ -44,6 +44,19 @@ final class WporgArtifactPolicyTest extends TestCase {
 		}
 	}
 
+	public function test_release_metadata_and_generated_zip_name_are_pinned_to_3_4_13(): void {
+		$expected = '3.4.13';
+		$main     = (string) file_get_contents( self::$plugin_dir . '/mcpwp.php' );
+		$readme   = (string) file_get_contents( self::$plugin_dir . '/readme.txt' );
+
+		$this->assertMatchesRegularExpression( '/^\s*\*\s*Version:\s*3\.4\.13\s*$/m', $main );
+		$this->assertStringContainsString( "define( 'MCPWP_VERSION', '3.4.13' );", $main );
+		$this->assertSame( $expected, trim( (string) file_get_contents( self::$plugin_dir . '/VERSION' ) ) );
+		$this->assertMatchesRegularExpression( '/^Stable tag:\s*3\.4\.13\s*$/m', $readme );
+		$this->assertSame( $expected, self::$policy['expected_version'] );
+		$this->assertSame( 'mumega-mcp-3.4.13.zip', basename( self::$zip_path ) );
+	}
+
 	public function test_runtime_source_has_no_forbidden_paths_or_literals(): void {
 		$violations = $this->scan_source();
 		$this->assertSame( array(), $violations, implode( "\n", $violations ) );
@@ -611,7 +624,7 @@ final class WporgArtifactPolicyTest extends TestCase {
 	public function test_verifier_rejects_coordinated_release_version_rewrite(): void {
 		$mutation = "for target in ['mumega-mcp/mumega-mcp.php', 'mumega-mcp/readme.txt', 'mumega-mcp/VERSION']:\n"
 			. "    index = next(i for i, item in enumerate(entries) if item[0].filename == target)\n"
-			. "    entries[index] = (entries[index][0], entries[index][1].replace(b'3.4.3', b'9.9.9'))";
+			. "    entries[index] = (entries[index][0], entries[index][1].replace(b'3.4.13', b'9.9.9'))";
 		$result = $this->verify_archive_mutation( $mutation, 'mumega-mcp-9.9.9.zip' );
 		$this->assertStringContainsString( '[FAIL] expected release version:', $result['output'] );
 	}
@@ -770,7 +783,7 @@ final class WporgArtifactPolicyTest extends TestCase {
 			$this->assertNotSame( $original, $contents, 'Mutation fixture must alter ' . $relative );
 			$this->assertSame( strlen( $contents ), file_put_contents( $path, $contents ), 'Could not write mutation fixture: ' . $relative );
 		}
-		$zip = $temp . '/mumega-mcp-3.4.3.zip';
+		$zip = $temp . '/mumega-mcp-3.4.13.zip';
 		$command = 'cd ' . escapeshellarg( $temp ) . ' && find mumega-mcp -type f -print | LC_ALL=C sort | zip -q -X ' . escapeshellarg( $zip ) . ' -@';
 		exec( $command, $zip_output, $zip_status );
 		if ( 0 !== $zip_status ) { throw new RuntimeException( 'Could not build mutation fixture.' ); }
@@ -800,7 +813,7 @@ final class WporgArtifactPolicyTest extends TestCase {
 	private function verify_standalone_archive( $kind ): array {
 		$temp = sys_get_temp_dir() . '/mcpwp-standalone-' . bin2hex( random_bytes( 6 ) );
 		mkdir( $temp, 0700, true );
-		$zip = $temp . '/mumega-mcp-3.4.3.zip';
+		$zip = $temp . '/mumega-mcp-3.4.13.zip';
 		if ( 'empty' === $kind ) {
 			file_put_contents( $zip, "PK\x05\x06" . str_repeat( "\x00", 18 ) );
 		} else {
@@ -812,7 +825,7 @@ final class WporgArtifactPolicyTest extends TestCase {
 	}
 
 	/** @return array{status:int,output:string} */
-	private function verify_archive_mutation( $mutation, $filename = 'mumega-mcp-3.4.3.zip' ): array {
+	private function verify_archive_mutation( $mutation, $filename = 'mumega-mcp-3.4.13.zip' ): array {
 		$temp = sys_get_temp_dir() . '/mcpwp-archive-' . bin2hex( random_bytes( 6 ) );
 		mkdir( $temp, 0700, true );
 		$zip = $temp . '/' . $filename;
