@@ -100,3 +100,21 @@
 - [ ] Replace the per-tool boolean bypass with an outer-request credit consumed only by the first nested tool, deny dynamic advertisement mutation, constrain cleanup masking to the exact table expression, fold comments only between literal concatenation tokens, and treat every non-dev file path as an inventory candidate.
 - [ ] Update the ignored Task 2 oracle to exactly 17 MCP tools, multipart REST-only, and metadata-only logging without request/response storage or redaction claims; keep the tracked plan and JSON fixture aligned.
 - [ ] Run focused and full GREEN verification, PHP 7.4 lint, two deterministic builds, the exact verifier, and `git diff --check`; refresh report counts and commit without pushing.
+
+### Task 6: Compliance Re-review — Canonical Registry and Line-Comment Folding
+
+**Files:**
+- Modify: `mcpwp/tests/WporgArtifactPolicyTest.php`
+- Modify: `mcpwp/scripts/wporg-artifact-policy.json`
+- Modify: `mcpwp/scripts/verify-wporg-artifact.sh`
+- Modify: `.superpowers/sdd/task-2-report.md`
+
+**Interfaces:**
+- Consumes: the canonical free-tool registry and trait source files, shared external artifact policy, source scanner, and ZIP verifier.
+- Produces: byte-exact immutable registry enforcement in both source and ZIP plus narrowly comment-aware static-literal host normalization.
+
+- [ ] Add source and ZIP regressions that compose `$inventory` and `$descriptions` with `array_merge`, compose `$map` with array union, and join a forbidden host across `//` and `#` line comments.
+- [ ] Run `WporgArtifactPolicyTest.php`; expect the composition and line-comment probes to remain accepted, proving the current operator blacklist and block-comment-only normalizer are incomplete.
+- [ ] Add trusted SHA-256 values for the canonical free-tool registry and all retained tool-name traits to the shared policy; enforce them for every source scan and ZIP verification before structural inventory parsing.
+- [ ] Extend only the literal-concatenation normalizer's between-token trivia to accept bounded block comments, `//` line comments, and legal `#` line comments without stripping comments globally.
+- [ ] Run focused and full GREEN verification, PHP 7.4 lint, two deterministic builds, the exact verifier, and `git diff --check`; refresh the ignored Task 2 report and commit without pushing.

@@ -101,9 +101,19 @@ final class WporgArtifactPolicyTest extends TestCase {
 		}
 	}
 
-	public function test_runtime_source_has_no_dynamic_tool_advertisement_mutations(): void {
-		$source = (string) file_get_contents( self::$plugin_dir . '/includes/mcp/class-mcpwp-mcp-free-tools.php' );
-		$this->assertDoesNotMatchRegularExpression( '/\$(?:inventory|descriptions|map)\s*\[[^\]]*\]\s*=/', $source );
+	public function test_runtime_source_has_canonical_tool_registry_hashes(): void {
+		$expected_paths = array(
+			'includes/mcp/class-mcpwp-mcp-tool-registry.php',
+			'includes/mcp/class-mcpwp-mcp-free-tools.php',
+			'includes/mcp/traits/trait-mcpwp-free-tools-site.php',
+			'includes/mcp/traits/trait-mcpwp-free-tools-content.php',
+			'includes/mcp/traits/trait-mcpwp-free-tools-media.php',
+			'includes/mcp/traits/trait-mcpwp-free-tools-ops.php',
+		);
+		$this->assertSame( $expected_paths, array_keys( self::$policy['trusted_source_sha256'] ), 'Trusted source policy must cover the complete canonical registry.' );
+		foreach ( self::$policy['trusted_source_sha256'] as $relative => $expected ) {
+			$this->assertSame( $expected, hash_file( 'sha256', self::$plugin_dir . '/' . $relative ), 'Trusted source drifted: ' . $relative );
+		}
 	}
 
 	public function test_rest_route_inventory_is_exactly_retained_surface(): void {
@@ -322,6 +332,86 @@ final class WporgArtifactPolicyTest extends TestCase {
 		$this->assertNotSame( 0, $result['status'], $result['output'] );
 	}
 
+	public function test_source_policy_rejects_composed_tool_registry_mutations(): void {
+		$relative = 'includes/mcp/class-mcpwp-mcp-free-tools.php';
+		$source   = (string) file_get_contents( self::$plugin_dir . '/' . $relative );
+		$mutations = array(
+			str_replace(
+				"\t\tforeach ( \$inventory as \$name ) {",
+				"\t\t\$inventory = array_merge( \$inventory, json_decode( '[\"wp_policy_probe\"]', true ) );\n\t\tforeach ( \$inventory as \$name ) {",
+				$source
+			),
+			str_replace(
+				"\t\t\$tools = array();",
+				"\t\t\$descriptions = array_merge( \$descriptions, json_decode( '{\"wp_policy_probe\":\"Policy probe.\"}', true ) );\n\n\t\t\$tools = array();",
+				$source
+			),
+			$this->compose_tool_map_with_union( $source ),
+		);
+
+		$accepted = array();
+		foreach ( $mutations as $index => $mutation ) {
+			$this->assertNotSame( $source, $mutation, 'Mutation fixture must alter the canonical registry.' );
+			if ( empty( $this->scan_contents( $relative, $mutation ) ) ) {
+				$accepted[] = $index;
+			}
+		}
+		$this->assertSame( array(), $accepted, 'Source policy accepted composed registry mutations at indexes: ' . implode( ', ', $accepted ) );
+	}
+
+	public function test_verifier_rejects_composed_tool_registry_mutations(): void {
+		$relative = 'includes/mcp/class-mcpwp-mcp-free-tools.php';
+		$source   = (string) shell_exec( 'unzip -p ' . escapeshellarg( self::$zip_path ) . ' ' . escapeshellarg( 'mumega-mcp/' . $relative ) );
+		$mutations = array(
+			str_replace(
+				"\t\tforeach ( \$inventory as \$name ) {",
+				"\t\t\$inventory = array_merge( \$inventory, json_decode( '[\"wp_policy_probe\"]', true ) );\n\t\tforeach ( \$inventory as \$name ) {",
+				$source
+			),
+			str_replace(
+				"\t\t\$tools = array();",
+				"\t\t\$descriptions = array_merge( \$descriptions, json_decode( '{\"wp_policy_probe\":\"Policy probe.\"}', true ) );\n\n\t\t\$tools = array();",
+				$source
+			),
+			$this->compose_tool_map_with_union( $source ),
+		);
+
+		$statuses = array();
+		foreach ( $mutations as $mutation ) {
+			$this->assertNotSame( $source, $mutation, 'Mutation fixture must alter the canonical registry.' );
+			$result = $this->verify_mutated_zip( array( $relative => $mutation ) );
+			$statuses[] = $result['status'];
+		}
+		$this->assertNotContains( 0, $statuses, 'Verifier accepted composed registry mutations: ' . implode( ', ', $statuses ) );
+	}
+
+	public function test_line_comment_separated_static_host_concatenation_is_rejected_in_source(): void {
+		$probes = array(
+			"<?php\n\$relay = 'relay-example.' // static join\n . 'workers.dev';\n",
+			"<?php\n\$relay = 'relay-example.' . # static join\n 'workers.dev';\n",
+		);
+		$accepted = array();
+		foreach ( $probes as $index => $probe ) {
+			if ( empty( $this->scan_contents( 'assets/index.php', $probe ) ) ) {
+				$accepted[] = $index;
+			}
+		}
+		$this->assertSame( array(), $accepted, 'Source policy accepted line-comment host probes at indexes: ' . implode( ', ', $accepted ) );
+	}
+
+	public function test_verifier_rejects_line_comment_separated_static_host_concatenation(): void {
+		$probes = array(
+			"<?php\n\$relay = 'relay-example.' // static join\n . 'workers.dev';\n",
+			"<?php\n\$relay = 'relay-example.' . # static join\n 'workers.dev';\n",
+		);
+		$statuses = array();
+		foreach ( $probes as $probe ) {
+			$result = $this->verify_mutated_zip( array( 'assets/index.php' => $probe ) );
+			$statuses[] = $result['status'];
+		}
+		$this->assertNotContains( 0, $statuses, 'Verifier accepted line-comment host probes: ' . implode( ', ', $statuses ) );
+	}
+
 	public function test_verifier_rejects_short_array_map_alias(): void {
 		$map_source = (string) shell_exec( 'unzip -p ' . escapeshellarg( self::$zip_path ) . ' ' . escapeshellarg( 'mumega-mcp/includes/mcp/class-mcpwp-mcp-free-tools.php' ) );
 		$map_drift = str_replace(
@@ -454,6 +544,19 @@ final class WporgArtifactPolicyTest extends TestCase {
 		return array( 'status' => $status, 'output' => implode( "\n", $output ) );
 	}
 
+	private function compose_tool_map_with_union( $source ) {
+		$source = str_replace(
+			"public function get_tool_map() {\n\t\treturn array(",
+			"public function get_tool_map() {\n\t\t\$map = array(",
+			$source
+		);
+		return str_replace(
+			"\t\t);\n\t}\n\n\tpublic function get_tool_categories()",
+			"\t\t);\n\t\t\$map += json_decode( '{\"wp_policy_probe\":{\"method\":\"GET\",\"route\":\"/site-info\"}}', true );\n\t\treturn \$map;\n\t}\n\n\tpublic function get_tool_categories()",
+			$source
+		);
+	}
+
 	/** @return string[] */
 	private function scan_source(): array {
 		$violations = array();
@@ -540,6 +643,10 @@ final class WporgArtifactPolicyTest extends TestCase {
 	private function scan_contents( $relative, $contents ): array {
 		$violations = array();
 		$normalized = str_replace( '\\', '/', ltrim( (string) $relative, '/' ) );
+		$trusted_hash = self::$policy['trusted_source_sha256'][ $normalized ] ?? null;
+		if ( null !== $trusted_hash && ! hash_equals( $trusted_hash, hash( 'sha256', $contents ) ) ) {
+			$violations[] = 'trusted source hash mismatch: ' . $normalized;
+		}
 		$contents = $this->mask_allowed_lifecycle_cleanup( $normalized, $contents );
 		$contents .= "\n" . $this->normalize_static_string_expressions( $contents );
 		$lower_contents = strtolower( $contents );
@@ -570,7 +677,7 @@ final class WporgArtifactPolicyTest extends TestCase {
 	}
 
 	private function normalize_static_string_expressions( $contents ) {
-		$comment = '(?:\/\*[^*]*(?:\*(?!\/)[^*]*)*\*\/\s*)?';
+		$comment = '(?:(?:\/\*[^*]*(?:\*(?!\/)[^*]*)*\*\/|\/\/[^\r\n]*(?:\r\n|\r|\n)|\#[^\r\n]*(?:\r\n|\r|\n))\s*)*';
 		$pattern = '/([\'\"])([^\'\"\r\n]*)\1\s*' . $comment . '\.\s*' . $comment . '([\'\"])([^\'\"\r\n]*)\3/';
 		do {
 			$previous = $contents;

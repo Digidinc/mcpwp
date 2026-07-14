@@ -26,6 +26,7 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 
 python3 - "$ZIP_PATH" "$POLICY_PATH" <<'PY'
+import hashlib
 import json
 import os
 import re
@@ -211,7 +212,7 @@ def mask_allowed_cleanup(relative, contents):
 
 
 def normalize_static_string_expressions(contents):
-    comment = r"(?:/\*[^*]*(?:\*(?!/)[^*]*)*\*/\s*)?"
+    comment = r"(?:(?:/\*[^*]*(?:\*(?!/)[^*]*)*\*/|//[^\r\n]*(?:\r\n|\r|\n)|\#[^\r\n]*(?:\r\n|\r|\n))\s*)*"
     pattern = re.compile(r"(['\"])([^'\"\r\n]*)\1\s*" + comment + r"\.\s*" + comment + r"(['\"])([^'\"\r\n]*)\3")
     while True:
         normalized = pattern.sub(lambda match: "'" + match.group(2) + match.group(4) + "'", contents)
@@ -394,10 +395,31 @@ with archive:
     if legacy_domains:
         fail("legacy gettext domain", ", ".join(legacy_domains))
 
+    expected_trusted_sources = {
+        "includes/mcp/class-mcpwp-mcp-tool-registry.php",
+        "includes/mcp/class-mcpwp-mcp-free-tools.php",
+    }
+    expected_trusted_sources.update(
+        "/".join(PurePosixPath(name).parts[1:])
+        for name in names
+        if name.startswith(f"{slug}/includes/mcp/traits/trait-mcpwp-free-tools-") and name.endswith(".php")
+    )
+    trusted_sources = policy.get("trusted_source_sha256", {})
+    if set(trusted_sources) != expected_trusted_sources:
+        fail(
+            "trusted source policy",
+            f"expected={sorted(expected_trusted_sources)}; found={sorted(trusted_sources)}",
+        )
+    for relative, expected_hash in trusted_sources.items():
+        trusted_name = f"{slug}/{relative}"
+        if trusted_name not in names:
+            fail("trusted source", f"missing {trusted_name}")
+        actual_hash = hashlib.sha256(archive.read(trusted_name)).hexdigest()
+        if actual_hash != expected_hash:
+            fail("trusted source hash", f"{relative}: expected={expected_hash}; found={actual_hash}")
+
     tool_source_name = f"{slug}/includes/mcp/class-mcpwp-mcp-free-tools.php"
     tool_source = archive.read(tool_source_name).decode("utf-8", errors="strict")
-    if re.search(r"\$(?:inventory|descriptions|map)\s*\[[^\]]*\]\s*=", tool_source):
-        fail("dynamic MCP advertisement", "tool inventories and maps must be literal and immutable")
     tool_matches = re.findall(
         r"'(wp_[a-z0-9_]+)'\s*=>\s*(?:array\s*\(|\[)\s*'method'\s*=>\s*'([A-Z]+)'\s*,\s*'route'\s*=>\s*'([^']+)'",
         tool_source,

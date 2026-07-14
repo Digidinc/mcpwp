@@ -23,6 +23,14 @@
     "assets/screenshot-1.png", "assets/screenshot-1.svg", "assets/screenshot-2.png", "assets/screenshot-2.svg",
     "assets/screenshot-3.png", "assets/screenshot-3.svg", "assets/screenshot-4.png", "assets/screenshot-4.svg"
   ],
+  "trusted_source_sha256": {
+    "includes/mcp/class-mcpwp-mcp-tool-registry.php": "3fb6d867dfc0103e2f62e824c9cce0bc71efce1ee41ceef962907346477e2f51",
+    "includes/mcp/class-mcpwp-mcp-free-tools.php": "42dc2d6525adddbcc414e7ff71ba7d0d7464eaf65f32c0abbf6f5ee25ae70655",
+    "includes/mcp/traits/trait-mcpwp-free-tools-site.php": "c0aecad9aa2d695c08445424333719468c9b239dcd88e4f0ea785a0fc01db42b",
+    "includes/mcp/traits/trait-mcpwp-free-tools-content.php": "dbc800ca9d2cdafb3f1f1d2bd3e5efd8f407c3eff14b1bf12ff511b33e4dc8a6",
+    "includes/mcp/traits/trait-mcpwp-free-tools-media.php": "bc2e6011959bfeea92c0ef7eb9a84db1478bfc95b409fc54c5c1aac0bc7a1fd3",
+    "includes/mcp/traits/trait-mcpwp-free-tools-ops.php": "6b7f6668496f3a32670d8b99e1b3e7cbed02ea13c763d09d2a87f1e80ceac42c"
+  },
   "forbidden_directory_components": [
     "freemius",
     "pro"
