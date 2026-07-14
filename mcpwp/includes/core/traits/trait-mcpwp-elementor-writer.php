@@ -180,6 +180,62 @@ trait Mcpwp_Elementor_Writer_Trait {
 			);
 		}
 
+		// --- Layout-mode mismatch guard (#612) ---
+		// 'container' elements only render/persist correctly when the site's
+		// Elementor Container experiment is active. On a site still in classic
+		// 'section' mode, a container payload passes Document::save() once, but a
+		// later internal re-save (used to rebuild post_content/HTML cache, below)
+		// can silently drop elements Elementor's own registry doesn't recognize as
+		// valid in that mode — producing a false "success" followed by an empty
+		// page on readback, with no error surfaced anywhere. Catch it up front.
+		if ( class_exists( '\Elementor\Plugin' ) ) {
+			$container_experiment = get_option( 'elementor_experiment-container', '' );
+			$containers_active    = in_array( $container_experiment, array( 'active', 'default' ), true );
+			if ( ! $containers_active ) {
+				$decoded_for_check = json_decode( $elementor_json, true );
+				if ( is_array( $decoded_for_check ) && $this->elementor_tree_contains_type( $decoded_for_check, 'container' ) ) {
+					return new WP_Error(
+						'layout_mode_mismatch',
+						__( 'This site is in classic "section" layout mode (Elementor\'s Container experiment is not active), but the submitted data uses "container" elements. Container elements are not supported in this mode and will be silently lost after saving. Rebuild the payload as section > column(_column_size) > widget instead, or ask the site admin to enable it under Elementor > Settings > Experiments > Container.', 'mcpwp' ),
+						array(
+							'status' => 400,
+						'hint'   => 'Always check elementor_layout_mode from wp_site_info before building a page — this site currently reports "section".',
+							'guide'  => 'wp_get_guide(topic=\'elementor\')',
+						)
+					);
+				}
+			}
+
+			// --- Atomic layout-mode mismatch guard (#618/#619) ---
+			// Same failure class as the container guard above: Elementor v4 Atomic
+			// elements (e-div-block, e-heading, etc.) only persist correctly when the
+			// site's 'e_atomic_elements' experiment is active. Unlike container mode,
+			// atomic is additive — it can be on alongside section or container mode —
+			// so this check is independent of the containers_active check above.
+			$atomic_experiment = get_option( 'elementor_experiment-e_atomic_elements', '' );
+			$atomic_active     = in_array( $atomic_experiment, array( 'active', 'default' ), true );
+			if ( ! $atomic_active ) {
+				$decoded_for_atomic_check = json_decode( $elementor_json, true );
+				$known_atomic_types       = array( 'e-div-block', 'e-flexbox', 'e-grid', 'e-heading', 'e-paragraph', 'e-button', 'e-image', 'e-svg', 'e-divider', 'e-youtube', 'e-self-hosted-video' );
+				if ( is_array( $decoded_for_atomic_check ) ) {
+					foreach ( $known_atomic_types as $atomic_type ) {
+						if ( $this->elementor_tree_contains_type( $decoded_for_atomic_check, $atomic_type ) ) {
+							return new WP_Error(
+								'layout_mode_mismatch',
+								__( 'This site does not have Elementor\'s Atomic Elements experiment active, but the submitted data uses atomic element types (e.g. e-div-block, e-heading). Atomic elements are not supported until enabled and will be silently lost after saving. Rebuild the payload with classic section/container elements instead, or ask the site admin to enable it under Elementor > Settings > Experiments > Atomic Elements.', 'mcpwp' ),
+								array(
+									'status'      => 400,
+									'atomic_type' => $atomic_type,
+									'hint'        => 'Always check elementor_layout_mode from wp_site_info before building a page — this site does not currently report "atomic".',
+									'guide'       => 'wp_get_guide(topic=\'elementor\')',
+								)
+							);
+						}
+					}
+				}
+			}
+		}
+
 		// --- Dry-run mode: validate only, no DB writes ---
 		if ( $dry_run ) {
 			$dry_json   = $elementor_json; // work on a copy
@@ -361,8 +417,15 @@ trait Mcpwp_Elementor_Writer_Trait {
 
 		// Fallback: direct meta write if Document::save() is unavailable or failed.
 		if ( ! $document_saved ) {
+			global $wpdb;
 			update_post_meta( $page_id, '_elementor_data', wp_slash( $elementor_json ) );
 			$save_debug['meta_written'] = true;
+			if ( $wpdb->last_error ) {
+				// (#612) update_post_meta() swallows $wpdb errors — a query that fails
+				// (e.g. max_allowed_packet on cheap shared hosting) still returns from
+				// update_post_meta() silently. Surface it so we don't report a false success.
+				$save_debug['db_error_on_write'] = $wpdb->last_error;
+			}
 
 			// (#187) Update post_content so Elementor's front-end renderer doesn't
 			// short-circuit on stale/empty post_content from a previous save attempt.
@@ -382,13 +445,32 @@ trait Mcpwp_Elementor_Writer_Trait {
 			}
 		}
 
-		// Verify data was stored correctly.
-		wp_cache_delete( $page_id, 'post_meta' );
-		$stored = get_post_meta( $page_id, '_elementor_data', true );
-		$stored_decoded = json_decode( $stored, true );
+		// Verify data was stored correctly — read the raw DB row directly instead
+		// of get_post_meta(). (#612) get_post_meta() can be served by a persistent
+		// object cache (Redis, LiteSpeed Object Cache, etc.) that was populated
+		// optimistically when update_post_meta() was called, independent of whether
+		// the underlying UPDATE actually committed. On hosts where that write
+		// silently fails (locks, max_allowed_packet, disk quota) the cache can keep
+		// reporting the intended value while the DB row never changed — which made
+		// this exact check lie about success. Querying $wpdb directly bypasses any
+		// such cache and reflects only what MySQL actually has right now.
+		global $wpdb;
+		$stored = $wpdb->get_var(
+			$wpdb->prepare(
+				"SELECT meta_value FROM {$wpdb->postmeta} WHERE post_id = %d AND meta_key = '_elementor_data' ORDER BY meta_id DESC LIMIT 1",
+				$page_id
+			)
+		);
+		$db_error_on_verify = $wpdb->last_error ?: null;
+		wp_cache_delete( $page_id, 'post_meta' ); // Keep WP's cache in sync with the DB truth we just read.
+
+		$stored_decoded = $stored ? json_decode( $stored, true ) : null;
 		$stored_count   = is_array( $stored_decoded ) ? count( $stored_decoded ) : 0;
 		$save_debug['meta_verified']    = ( $stored_count === $input_count );
 		$save_debug['sections_saved']   = $stored_count;
+		if ( $db_error_on_verify ) {
+			$save_debug['db_error_on_verify'] = $db_error_on_verify;
+		}
 
 		if ( $stored_count !== $input_count ) {
 				return new WP_Error(
@@ -404,6 +486,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 					'sections_submitted'  => $input_count,
 					'sections_saved'      => $stored_count,
 					'hint'                => 'Base64-encode your JSON and send via elementor_data_base64 parameter to bypass size limits.',
+					'db_error'            => $db_error_on_verify,
 				)
 			);
 		}
@@ -425,8 +508,38 @@ trait Mcpwp_Elementor_Writer_Trait {
 				if ( $fresh_doc && method_exists( $fresh_doc, 'save' ) ) {
 					$fresh_elements = json_decode( get_post_meta( $page_id, '_elementor_data', true ), true );
 					if ( is_array( $fresh_elements ) && ! empty( $fresh_elements ) ) {
+						// (#618) Recursive total, not just top-level count — a shallow count
+						// missed nested atomic content silently stripped by this exact save
+						// call while the top-level array length stayed unchanged (e.g. a
+						// container's children emptied but the container itself still counts
+						// as 1). Verified against a live install: this happens in practice.
+						$pre_rebuild_total = $this->count_elements_recursive( $fresh_elements );
+
 						$fresh_doc->save( array( 'elements' => $fresh_elements ) );
 						$save_debug['html_cache_rebuilt'] = true;
+
+						// (#612, #618) This is Elementor's own save path, not ours — if its
+						// internal element registry silently drops anything (e.g. element
+						// types/props it doesn't recognize as valid), it can overwrite
+						// _elementor_data with less content than we just verified, with no
+						// error surfaced anywhere. Re-check (recursively, whole tree — not
+						// just top-level count) and restore our known-good bytes rather than
+						// let a "successful" write end up partially or fully empty on disk.
+						$post_rebuild = $wpdb->get_var(
+							$wpdb->prepare(
+								"SELECT meta_value FROM {$wpdb->postmeta} WHERE post_id = %d AND meta_key = '_elementor_data' ORDER BY meta_id DESC LIMIT 1",
+								$page_id
+							)
+						);
+						$post_rebuild_decoded = $post_rebuild ? json_decode( $post_rebuild, true ) : null;
+						$post_rebuild_total    = is_array( $post_rebuild_decoded ) ? $this->count_elements_recursive( $post_rebuild_decoded ) : 0;
+						if ( $post_rebuild_total !== $pre_rebuild_total ) {
+							update_post_meta( $page_id, '_elementor_data', wp_slash( $elementor_json ) );
+							wp_cache_delete( $page_id, 'post_meta' );
+							$save_debug['html_rebuild_corrupted_data'] = true;
+							$save_debug['html_rebuild_elements_before'] = $pre_rebuild_total;
+							$save_debug['html_rebuild_elements_after']  = $post_rebuild_total;
+						}
 					}
 				}
 			}
@@ -866,9 +979,15 @@ trait Mcpwp_Elementor_Writer_Trait {
 			);
 		}
 
-		// Verify it is actually a widget.
+		// Verify it is actually a widget (or an Elementor v4 Atomic content
+		// element — those are self-typed via elType directly, e.g. e-heading,
+		// with no 'widget' wrapper, unlike legacy widgets). (#618/#620)
+		static $atomic_leaf_types = array(
+			'e-heading', 'e-paragraph', 'e-button', 'e-image', 'e-svg',
+			'e-divider', 'e-youtube', 'e-self-hosted-video',
+		);
 		$el_type = isset( $found['elType'] ) ? $found['elType'] : '';
-		if ( 'widget' !== $el_type ) {
+		if ( 'widget' !== $el_type && ! in_array( $el_type, $atomic_leaf_types, true ) ) {
 			return new WP_Error(
 				'not_a_widget',
 				sprintf(
@@ -918,7 +1037,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 			'success'     => true,
 			'page_id'     => (int) $page_id,
 			'widget_id'   => $widget_id,
-			'widget_type' => isset( $found['widgetType'] ) ? $found['widgetType'] : null,
+			'widget_type' => isset( $found['widgetType'] ) ? $found['widgetType'] : $el_type,
 			'path'        => $found_path,
 			'changes'     => $changes,
 			'widget'      => $saved_widget ? $saved_widget : $found,
@@ -1741,9 +1860,16 @@ trait Mcpwp_Elementor_Writer_Trait {
 	 * @return int Widget count.
 	 */
 	private function count_elementor_widgets( array $elements ) {
+		// (#618/#620) Atomic content elements (e-heading, e-button, ...) are the
+		// widget-equivalent for Editor V4 — self-typed via elType, no 'widget' wrapper.
+		static $atomic_leaf_types = array(
+			'e-heading', 'e-paragraph', 'e-button', 'e-image', 'e-svg',
+			'e-divider', 'e-youtube', 'e-self-hosted-video',
+		);
+
 		$count = 0;
 		foreach ( $elements as $element ) {
-			if ( isset( $element['elType'] ) && 'widget' === $element['elType'] ) {
+			if ( isset( $element['elType'] ) && ( 'widget' === $element['elType'] || in_array( $element['elType'], $atomic_leaf_types, true ) ) ) {
 				++$count;
 			}
 			if ( ! empty( $element['elements'] ) && is_array( $element['elements'] ) ) {
@@ -1751,5 +1877,52 @@ trait Mcpwp_Elementor_Writer_Trait {
 			}
 		}
 		return $count;
+	}
+
+	/**
+	 * Recursively count every element node in an Elementor element tree
+	 * (containers and leaf elements alike). Used for whole-tree data-loss
+	 * detection where a shallow top-level count() would miss nested content
+	 * silently stripped while the top-level array length stays the same. (#618)
+	 *
+	 * @param array $elements Element tree.
+	 * @return int Total element count, all depths.
+	 */
+	private function count_elements_recursive( array $elements ) {
+		$count = 0;
+		foreach ( $elements as $element ) {
+			if ( ! is_array( $element ) ) {
+				continue;
+			}
+			++$count;
+			if ( ! empty( $element['elements'] ) && is_array( $element['elements'] ) ) {
+				$count += $this->count_elements_recursive( $element['elements'] );
+			}
+		}
+		return $count;
+	}
+
+	/**
+	 * Recursively check whether an Elementor element tree contains a given elType.
+	 *
+	 * @param array  $elements Element tree.
+	 * @param string $type     elType to look for (e.g. 'container').
+	 * @return bool
+	 */
+	private function elementor_tree_contains_type( array $elements, $type ) {
+		foreach ( $elements as $element ) {
+			if ( ! is_array( $element ) ) {
+				continue;
+			}
+			if ( isset( $element['elType'] ) && $type === $element['elType'] ) {
+				return true;
+			}
+			if ( ! empty( $element['elements'] ) && is_array( $element['elements'] ) ) {
+				if ( $this->elementor_tree_contains_type( $element['elements'], $type ) ) {
+					return true;
+				}
+			}
+		}
+		return false;
 	}
 }

@@ -201,9 +201,10 @@ trait Mcpwp_Elementor_Reader_Trait {
 			return null;
 		}
 
+		$el_type = $element['elType'];
 		$summary = array(
 			'id'   => isset( $element['id'] ) ? $element['id'] : null,
-			'type' => $element['elType'],
+			'type' => $el_type,
 		);
 
 		if ( ! empty( $element['widgetType'] ) ) {
@@ -224,6 +225,29 @@ trait Mcpwp_Elementor_Reader_Trait {
 					}
 					$key_settings[ $key ] = $value;
 				}
+			}
+
+			if ( ! empty( $key_settings ) ) {
+				$summary['settings'] = $key_settings;
+			}
+		} elseif ( in_array( $el_type, self::$atomic_leaf_types, true ) ) {
+			// (#618/#620) Atomic content elements (e-heading, e-button, ...) are
+			// self-typed via elType directly — there's no widgetType wrapper like
+			// legacy widgets, so the branch above never fires for them.
+			$summary['widget'] = $el_type;
+			$widget_count++;
+
+			$settings     = isset( $element['settings'] ) && is_array( $element['settings'] ) ? $element['settings'] : array();
+			$key_settings = array();
+			foreach ( $settings as $key => $value ) {
+				$unwrapped = $this->unwrap_atomic_prop_value( $value );
+				if ( null === $unwrapped || '' === $unwrapped ) {
+					continue;
+				}
+				if ( is_string( $unwrapped ) && strlen( $unwrapped ) > 100 ) {
+					$unwrapped = substr( $unwrapped, 0, 100 ) . '...';
+				}
+				$key_settings[ $key ] = $unwrapped;
 			}
 
 			if ( ! empty( $key_settings ) ) {
@@ -294,6 +318,44 @@ trait Mcpwp_Elementor_Reader_Trait {
 	}
 
 	/**
+	 * Unwrap an Elementor v4 Atomic prop value.
+	 *
+	 * Atomic props are stored as {"$$type": "<kind>", "value": <actual>} —
+	 * confirmed directly against Elementor 4.1.3 source (has-atomic-base.php,
+	 * div-block.php, flexbox.php). Some props (e.g. heading's `title`) nest an
+	 * inner value one level deeper (Html_V3_Prop_Type wrapping a String_Prop_Type),
+	 * so this recurses until it finds a scalar. This is a generic best-effort
+	 * unwrap for summary display, not a full schema-aware read — see #621 for
+	 * the real per-widget schema registry.
+	 *
+	 * @param mixed $value Raw prop value from element JSON.
+	 * @return string|int|float|bool|null Unwrapped scalar, or null if not extractable.
+	 */
+	private function unwrap_atomic_prop_value( $value ) {
+		if ( is_scalar( $value ) ) {
+			return $value;
+		}
+
+		if ( is_array( $value ) && array_key_exists( 'value', $value ) && isset( $value['$$type'] ) ) {
+			$inner = $value['value'];
+			if ( is_scalar( $inner ) ) {
+				return $inner;
+			}
+			if ( is_array( $inner ) ) {
+				// Nested wrapper (e.g. Html_V3_Prop_Type => { content: {$$type,value} }).
+				if ( isset( $inner['content'] ) ) {
+					return $this->unwrap_atomic_prop_value( $inner['content'] );
+				}
+				if ( array_key_exists( 'value', $inner ) ) {
+					return $this->unwrap_atomic_prop_value( $inner );
+				}
+			}
+		}
+
+		return null;
+	}
+
+	/**
 	 * Known control key renames per widget type.
 	 *
 	 * Maps commonly-used wrong key names to their correct Elementor equivalents.
@@ -345,9 +407,20 @@ trait Mcpwp_Elementor_Reader_Trait {
 	private static $valid_el_types = array(
 		// Classic layout.
 		'section', 'column', 'widget', 'container',
-		// Elementor v4 Atomic elements (#211).
-		'e-div-block', 'e-flexbox', 'e-heading', 'e-paragraph', 'e-button',
+		// Elementor v4 Atomic elements (#211, #618).
+		'e-div-block', 'e-flexbox', 'e-grid', 'e-heading', 'e-paragraph', 'e-button',
 		'e-image', 'e-svg', 'e-divider', 'e-youtube', 'e-self-hosted-video',
+	);
+
+	/**
+	 * Atomic content ("widget-equivalent") elTypes — self-typed leaf elements
+	 * with no separate widgetType, unlike legacy widgets. (#618/#620)
+	 *
+	 * @var array
+	 */
+	private static $atomic_leaf_types = array(
+		'e-heading', 'e-paragraph', 'e-button', 'e-image', 'e-svg',
+		'e-divider', 'e-youtube', 'e-self-hosted-video',
 	);
 
 	/**
@@ -360,9 +433,10 @@ trait Mcpwp_Elementor_Reader_Trait {
 		'section'     => array( 'column' ),
 		'column'      => array( 'widget', 'section', 'container' ),
 		'container'   => array( 'widget', 'container' ),
-		// Elementor v4 Atomic layout (#211) — div-block and flexbox can nest anything.
-		'e-div-block' => array( 'e-div-block', 'e-flexbox', 'e-heading', 'e-paragraph', 'e-button', 'e-image', 'e-svg', 'e-divider', 'e-youtube', 'e-self-hosted-video', 'widget', 'container' ),
-		'e-flexbox'   => array( 'e-div-block', 'e-flexbox', 'e-heading', 'e-paragraph', 'e-button', 'e-image', 'e-svg', 'e-divider', 'e-youtube', 'e-self-hosted-video', 'widget', 'container' ),
+		// Elementor v4 Atomic layout (#211, #618) — layout elements can nest anything.
+		'e-div-block' => array( 'e-div-block', 'e-flexbox', 'e-grid', 'e-heading', 'e-paragraph', 'e-button', 'e-image', 'e-svg', 'e-divider', 'e-youtube', 'e-self-hosted-video', 'widget', 'container' ),
+		'e-flexbox'   => array( 'e-div-block', 'e-flexbox', 'e-grid', 'e-heading', 'e-paragraph', 'e-button', 'e-image', 'e-svg', 'e-divider', 'e-youtube', 'e-self-hosted-video', 'widget', 'container' ),
+		'e-grid'      => array( 'e-div-block', 'e-flexbox', 'e-grid', 'e-heading', 'e-paragraph', 'e-button', 'e-image', 'e-svg', 'e-divider', 'e-youtube', 'e-self-hosted-video', 'widget', 'container' ),
 	);
 
 	/**
@@ -545,7 +619,21 @@ trait Mcpwp_Elementor_Reader_Trait {
 			);
 		}
 
-			if ( ! isset( $types[ $widget_type ] ) ) {
+		$widget = isset( $types[ $widget_type ] ) ? $types[ $widget_type ] : null;
+
+		// (#618/#621) Atomic container elements (e-div-block, e-flexbox, e-grid,
+		// tabs group) register via Elementor's separate elements_manager, not
+		// widgets_manager — confirmed via elementor/modules/atomic-widgets/module.php.
+		// Atomic leaf widgets (e-heading, e-button, ...) DO register in
+		// widgets_manager alongside legacy widgets, so those are already found above.
+		if ( ! $widget && ! empty( \Elementor\Plugin::$instance->elements_manager ) ) {
+			$element = \Elementor\Plugin::$instance->elements_manager->get_element_types( $widget_type );
+			if ( $element ) {
+				$widget = $element;
+			}
+		}
+
+			if ( ! $widget ) {
 				$suggestion = $this->find_closest_widget( $widget_type, array_keys( $types ) );
 				/* translators: %s: Elementor widget type */
 				$msg        = sprintf( __( "Unknown widget type '%s'.", 'mcpwp' ), $widget_type );
@@ -568,7 +656,35 @@ trait Mcpwp_Elementor_Reader_Trait {
 			);
 		}
 
-		$widget   = $types[ $widget_type ];
+		// (#618/#621) Atomic elements expose a real, introspectable schema via
+		// get_props_schema() (props/styles, not legacy Controls_Manager controls) —
+		// confirmed directly against Elementor 4.1.3 source
+		// (modules/atomic-widgets/elements/base/has-atomic-base.php:310). Use it
+		// instead of get_controls(), which returns nothing useful for these.
+		if ( method_exists( $widget, 'get_props_schema' ) ) {
+			$schema       = $widget::get_props_schema();
+			$props_plain  = json_decode( wp_json_encode( $schema ), true );
+
+			$result = array(
+				'widget'    => $widget_type,
+				'title'     => $widget->get_title(),
+				'icon'      => $widget->get_icon(),
+				'is_atomic' => true,
+				'props'     => is_array( $props_plain ) ? $props_plain : array(),
+				'note'      => 'Atomic Elements (Editor V4) prop — set values as {"$$type": "<kind>", "value": <actual>} per the "kind"/"key" shown for each prop, not a plain scalar.',
+			);
+
+			$ref = Mcpwp_Elementor_Widgets::get( $widget_type );
+			if ( $ref ) {
+				$result['description']     = $ref['description'];
+				$result['category']        = $ref['category'];
+				$result['example']         = $ref['example'];
+				$result['common_mistakes'] = $ref['common_mistakes'];
+			}
+
+			return $result;
+		}
+
 		$controls = $widget->get_controls();
 		$grouped  = array();
 
@@ -833,6 +949,9 @@ trait Mcpwp_Elementor_Reader_Trait {
 				$stats['sections']++;
 			} elseif ( 'column' === $el_type ) {
 				$stats['columns']++;
+			} elseif ( in_array( $el_type, array( 'e-div-block', 'e-flexbox', 'e-grid' ), true ) ) {
+				// (#618/#620) Atomic layout/container elements — same role as section/container.
+				$stats['sections']++;
 			} elseif ( 'widget' === $el_type ) {
 				$stats['widgets']++;
 				if ( ! empty( $element['widgetType'] ) ) {
@@ -845,6 +964,18 @@ trait Mcpwp_Elementor_Reader_Trait {
 				foreach ( $text_keys as $key ) {
 					if ( ! empty( $settings[ $key ] ) && is_string( $settings[ $key ] ) ) {
 						$all_text .= ' ' . wp_strip_all_tags( $settings[ $key ] );
+					}
+				}
+			} elseif ( in_array( $el_type, self::$atomic_leaf_types, true ) ) {
+				// (#618/#620) Atomic content elements — same role as legacy 'widget'.
+				$stats['widgets']++;
+				$stats['widget_types'][] = $el_type;
+
+				$settings = isset( $element['settings'] ) && is_array( $element['settings'] ) ? $element['settings'] : array();
+				foreach ( $settings as $value ) {
+					$unwrapped = $this->unwrap_atomic_prop_value( $value );
+					if ( is_string( $unwrapped ) && '' !== $unwrapped ) {
+						$all_text .= ' ' . wp_strip_all_tags( $unwrapped );
 					}
 				}
 			}

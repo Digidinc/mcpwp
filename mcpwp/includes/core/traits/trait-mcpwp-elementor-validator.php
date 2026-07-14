@@ -260,8 +260,8 @@ trait Mcpwp_Elementor_Validator_Trait {
 			}
 
 			// --- 6. Flag unknown settings keys using widget reference ---
-			// Skip validation for Elementor v4 atomic elements — they use props/styles, not settings (#211).
-			$is_atomic = in_array( $el_type, array( 'e-div-block', 'e-flexbox', 'e-heading', 'e-paragraph', 'e-button', 'e-image', 'e-svg', 'e-divider', 'e-youtube', 'e-self-hosted-video' ), true );
+			// Skip validation for Elementor v4 atomic elements — they use props/styles, not settings (#211, #618).
+			$is_atomic = in_array( $el_type, array( 'e-div-block', 'e-flexbox', 'e-grid', 'e-heading', 'e-paragraph', 'e-button', 'e-image', 'e-svg', 'e-divider', 'e-youtube', 'e-self-hosted-video' ), true );
 			if ( ! $is_atomic && 'widget' === $el_type && '' !== $widget_type && ! empty( $el['settings'] ) && is_array( $el['settings'] ) ) {
 				$valid_keys = $this->get_valid_widget_keys( $widget_type );
 				if ( ! empty( $valid_keys ) ) {

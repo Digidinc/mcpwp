@@ -15,7 +15,7 @@
  * Plugin URI:        https://mcpwp.net/
  * Description:       Connect WordPress to AI assistants via the Model Context Protocol (MCP). Manage posts, pages, media, and Elementor through natural language.
  * x-release-please-start-version
- * Version:           3.4.6
+ * Version:           3.4.13
  * x-release-please-end
  * Requires at least: 6.1
  * Requires PHP:      7.4
@@ -35,7 +35,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 /**
  * Plugin version.
  */
-define( 'MCPWP_VERSION', '3.4.6' ); // x-release-please-version
+define( 'MCPWP_VERSION', '3.4.13' ); // x-release-please-version
 
 /**
  * Plugin directory path.
@@ -215,6 +215,7 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/traits/trait-mcpwp-elementor-css.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-elementor-basic.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-elementor-widgets.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-elementor-data-audit.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-screenshot.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-guides.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-workflows.php';
@@ -380,6 +381,11 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	// Initialize white-label (shortcode, branding hooks, Elementor widget).
 	if ( class_exists( 'Mcpwp_White_Label' ) ) {
 		Mcpwp_White_Label::init();
+	}
+
+	// Elementor data write/delete audit trail — see #612.
+	if ( class_exists( 'Mcpwp_Elementor_Data_Audit' ) ) {
+		Mcpwp_Elementor_Data_Audit::init();
 	}
 
 	// Signals cron — compute signal feed on schedule.

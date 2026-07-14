@@ -6,7 +6,7 @@ Requires at least: 6.1
 Tested up to: 7.0
 Requires PHP: 7.4
 <!-- x-release-please-start-version -->
-Stable tag: 3.4.6
+Stable tag: 3.4.13
 <!-- x-release-please-end -->
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -66,11 +66,22 @@ The WordPress.org package is the free core: API keys, scoped access, activity lo
 
 = MCP Server Setup =
 
-Add to your MCP client config (Claude Desktop, Cursor, Windsurf):
+**Claude Desktop** (Settings → Connectors → Add custom connector) — enable OAuth in the plugin settings and paste the plain MCP URL; Claude opens your WordPress login to authorize, so no key is stored in the client:
+
+`https://yoursite.com/wp-json/mcpwp/v1/mcp`
+
+Prefer an API key? Claude Desktop's claude_desktop_config.json only supports command-based servers, so route the key through the mcp-remote bridge, which sends it as a header:
+
+`npx mcp-remote https://yoursite.com/wp-json/mcpwp/v1/mcp --header "X-API-Key:mcpwp_your_api_key_here"`
+
+(A `?api_key=...` query string on the connector URL also works but writes the key into server/proxy access logs — prefer OAuth or the header method above.)
+
+**Claude Code, Cursor, Windsurf** — add to the client's MCP config:
 
 `{
   "mcpServers": {
     "mcpwp": {
+      "type": "http",
       "url": "https://yoursite.com/wp-json/mcpwp/v1/mcp",
       "headers": {
         "X-API-Key": "mcpwp_your_api_key_here"
@@ -78,6 +89,8 @@ Add to your MCP client config (Claude Desktop, Cursor, Windsurf):
     }
   }
 }`
+
+The Setup page in wp-admin shows these snippets pre-filled with your site URL and key, per client.
 
 For ChatGPT GPT Actions, use the public OpenAPI schema at `https://yoursite.com/wp-json/mcpwp/v1/openapi.json`.
 
@@ -140,11 +153,37 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 
 == Changelog ==
 
+= 3.4.13 =
+* new: **elementor:** wp_get_widget_schema now returns a real, deep schema for Elementor v4 Atomic Elements (props, types, enums, defaults — e.g. a heading's "tag" prop correctly lists h1-h6) instead of an empty tabs list. Built from Elementor's own get_props_schema()/define_props_schema() methods, not guesswork. Covers both atomic leaf widgets (e-heading, e-button, ...) and atomic container elements (e-div-block, e-flexbox, ...), which register through two different Elementor managers — both now resolve correctly instead of "unknown widget" for the container types.
+
+= 3.4.12 =
+* fix: **elementor:** wp_get_elementor_summary and the /preview stats endpoint were blind to Elementor v4 Atomic content elements (e-heading, e-button, etc.) — they're self-typed via elType with no widgetType wrapper, so both silently reported zero widgets on atomic pages. Now correctly counted and summarized, including unwrapping the {"$$type","value"} prop format for display.
+* fix: **elementor:** wp_edit_widget could not edit any Atomic content element at all (hard-checked elType === 'widget', which atomic leaf elements never are) — now accepts them.
+* fix: **elementor:** found and fixed a real silent-data-loss bug live-testing the above — Elementor's own internal HTML-cache-rebuild re-save (part of every wp_set_elementor write) was silently stripping atomic elements nested inside a container while leaving the top-level element count unchanged. The existing post-write integrity check only compared top-level count and missed this; it now does a full recursive comparison and restores the verified data if Elementor's internal save corrupts anything at any depth. (#618, #620)
+
+= 3.4.11 =
+* fix: **elementor:** wp_site_info now detects Elementor's Atomic Elements (Editor V4) experiment — elementor_layout_mode reports "atomic" and a new elementor_atomic_active flag is exposed, instead of silently reporting stale section/container state on Atomic-enabled sites.
+* fix: **elementor:** wp_set_elementor now rejects atomic element payloads (e-div-block, e-heading, etc.) up front with a clear error when the site's Atomic Elements experiment is inactive, instead of a false success followed by the page silently coming back empty — same failure class as the container/section fix below, closed before it shipped to production. (#618, #619)
+* fix: **elementor:** added missing "e-grid" atomic element type to the validator/reader whitelist (was shipped by Elementor after the original #211 atomic support landed).
+
+= 3.4.10 =
+* fix: **elementor:** wp_set_elementor now rejects "container" elements up front with a clear error when the site's Elementor Container experiment is inactive (classic "section" layout mode), instead of reporting a false success followed by the page silently coming back empty. Root cause: on section-mode sites, a later internal re-save used to rebuild post_content/HTML cache could silently drop container elements Elementor's own registry doesn't recognize in that mode — after the plugin's own success check had already passed. Also added a defense-in-depth re-check that restores the verified data if that internal re-save ever corrupts it for any other reason. (#612)
+
+= 3.4.9 =
+* diagnostic: **elementor:** every write/delete of _elementor_data now logs post ID, element count, and a full call-stack backtrace via error_log() — visible in wp-content/debug.log or the host's PHP error log, no SSH/DB access needed. Added to track down #612 (wp_set_elementor reports success but readback is empty on at least one Elementor Pro + shared-hosting site).
+
+= 3.4.8 =
+* fix: **admin ui:** sidebar menu icon was invisible — SVG background square nearly matched WP admin's dark theme color; icon is now transparent-background so it's actually visible.
+* fix: **admin ui:** Permissions checkboxes on the Create API Key form could overflow off-screen on narrow admin widths; now wraps properly.
+* hardening: **elementor:** wp_set_elementor's post-write verification now reads the raw DB row directly (bypassing any persistent object cache) instead of get_post_meta(), and surfaces the real MySQL error if the write itself silently failed. Addresses reports of wp_set_elementor returning success/meta_verified:true while immediate readback shows an empty page on certain shared-hosting setups (#612).
+
+= 3.4.7 =
+* fix: **auth:** Create API Key form was missing scope checkboxes — every scoped key (including Admin role) silently saved as read-only, so no key could write. Form now defaults to read+write (+admin for the Admin role) and lets you uncheck Write for a real read-only key.
+
 = 3.4.6 =
 * fix: **security:** restrict non-public content reads to write-scoped keys ([#601](https://github.com/Mumega-com/mcpwp/issues/601))
 
 = 3.4.5 =
-* fix: **security:** require admin scope to bypass content-approval gate
 * fix: **security:** require admin scope to bypass content-approval gate
 
 = 3.4.4 =

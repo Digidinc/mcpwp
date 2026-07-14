@@ -59,6 +59,30 @@ Agent mandate (refocused 2026-06-09): **MCPWP repo health + GTM enablement + pri
 
 ---
 
+## Roadmap — SEO/GEO 2026 Modernization (filed 2026-07-14)
+
+`/seo/*` tools encode guidance that predates several confirmed 2025-2026 Google changes. Researched via 4 parallel agents against primary sources (Google Search Central, Search Engine Land/Roundtable) — findings and scope in epic **#614**.
+
+- **#615 (P0, `status:ready`)** — structured-data validator classifies deprecated rich-result types (FAQPage retired May 2026, HowTo retired 2023, +5 more retired June 2025) as "valid, no rich-result benefit" instead of pass/fail. Cheapest, zero-ambiguity.
+- **#616 (P1, `status:ready`)** — schema-on-primary-content check (new March 2026 Google eligibility rule) + explicit 4-factor E-E-A-T rubric in the content-quality scorer (SQRG updated Sept 2025).
+- **#617 (P2, `discussion`)** — experimental, opt-in GEO/AEO citability heuristic. Vendor-sourced, not Google-confirmed — must ship clearly labeled as such, held until P0/P1 land. Explicitly **not** building an llms.txt generator (Google doesn't consume it; Ahrefs: 97% of 137k sampled files got zero requests).
+- Trigger order per epic: drafts → tests → reviews → ships. Sequence P0 → P1 → P2.
+
+---
+
+## Roadmap — Elementor Atomic Editor (V4) support (filed 2026-07-14)
+
+Elementor is core to MCPWP — this gets priority attention. Facts verified directly against Elementor 4.1.3 PHP source on `wp-rig-wp-dev` (not docs/inference) — epic **#618** supersedes **#211**, which shipped only 1 of 5 planned checkboxes before being closed 2026-06-07.
+
+- **#619 — ✅ SHIPPED v3.4.9** — `elementor_layout_mode` capability gains a third `atomic` state (+ new `elementor_atomic_active` bool); layout-mismatch guard for atomic elType payloads mirroring the #612 fix. Live-tested locally: rejects atomic payloads when the site's `e_atomic_elements` experiment is off, writes cleanly when on, no regression on container-mode payloads. Also backfilled missing `e-grid` type into the whitelist (gap left by #211).
+- **#620 — ✅ SHIPPED v3.4.10** — reader (`summarize_element`/`walk_elements_for_stats`/`count_elementor_widgets`) now handles atomic leaf types correctly (real counts, unwrapped `$$type`/`value` display); `wp_edit_widget` now accepts atomic elements. **Bonus find while live-testing:** Elementor's own internal HTML-cache-rebuild save was silently stripping *nested* atomic elements past the 3.4.6 top-level-only integrity check (container stayed count=1, children wiped) — confirmed via direct DB readback, genuinely reproducible. Fixed the check to be fully recursive.
+- **#621 — ✅ SHIPPED v3.4.11** — `wp_get_widget_schema` returns a real deep schema (props/types/enums/defaults) for atomic elements via Elementor's own `get_props_schema()`. Found: leaf widgets (e-heading, e-button) and container elements (e-div-block, e-flexbox) register through two *different* Elementor managers (`widgets_manager` vs `elements_manager`) — added the fallback so both resolve instead of containers 404ing as "unknown_widget".
+- **#622 (P2, `status:blocked`)** — full atomic write support. Explicitly held: Elementor's own atomic save pipeline has 4 open upstream data-loss bugs right now (elementor/elementor#35888, #36415, #36443, #36405), none fixed. Re-verify before starting.
+- **#623 (docs, `status:blocked`)** — extends the `mumcp` skill + MCPWP tool descriptions with atomic-building guidance. Blocked on #619-621 shipping first — no describing capability that doesn't exist yet.
+- Confirmed ground truth worth remembering: `elType` is direct (`e-heading`, `e-div-block`, no `widgetType` wrapper); values wrap as `{"$$type": "<kind>", "value": ...}`; `Atomic_Element_Base` (container) vs `Atomic_Widget_Base` (leaf) is a real class distinction. Trigger order per epic: drafts → verifies-against-source → tests → reviews → ships. Sequence #619 → #620/#621 → #622 → #623.
+
+---
+
 ## Milestone Map — MVP → Full (traced to major versions)
 
 ```

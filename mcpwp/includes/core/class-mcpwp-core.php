@@ -85,13 +85,26 @@ class Mcpwp_Core {
 			|| class_exists( 'RankMath\\Helper' )
 			|| class_exists( 'RankMath\\Loader' );
 
-		// Detect Elementor layout mode (container vs section).
-		$elementor_layout = 'section';
+		// Detect Elementor layout mode (section / container / atomic).
+		// (#619) Atomic (Editor V4, elementor/modules/atomic-widgets, experiment
+		// slug 'e_atomic_elements') coexists with legacy section/container content
+		// on the same site — it's additive, not a replacement. Report it as the
+		// primary mode when active (agents should build atomic on a V4 site), but
+		// also expose a standalone flag so callers that only care about legacy
+		// section-vs-container detection aren't broken by a new string value.
+		$elementor_layout        = 'section';
+		$elementor_atomic_active = false;
 		if ( defined( 'ELEMENTOR_VERSION' ) ) {
 			// Elementor 3.15+ uses containers by default; check experiment setting.
 			$experiments = get_option( 'elementor_experiment-container', '' );
 			if ( 'active' === $experiments || 'default' === $experiments ) {
 				$elementor_layout = 'container';
+			}
+
+			$atomic_experiment = get_option( 'elementor_experiment-e_atomic_elements', '' );
+			if ( 'active' === $atomic_experiment || 'default' === $atomic_experiment ) {
+				$elementor_atomic_active = true;
+				$elementor_layout        = 'atomic';
 			}
 		}
 
@@ -111,6 +124,7 @@ class Mcpwp_Core {
 			'elementor'             => defined( 'ELEMENTOR_VERSION' ),
 			'elementor_pro'         => defined( 'ELEMENTOR_PRO_VERSION' ),
 			'elementor_layout_mode' => $elementor_layout,
+			'elementor_atomic_active' => $elementor_atomic_active,
 			'woocommerce'    => class_exists( 'WooCommerce' ),
 			'yoast'          => defined( 'WPSEO_VERSION' ),
 			'rankmath'       => $rankmath_active,
