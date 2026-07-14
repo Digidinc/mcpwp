@@ -54,4 +54,10 @@ final class WporgLifecycleTest extends TestCase {
 		$source   = (string) file_get_contents( $workflow );
 		$this->assertSame( 2, substr_count( $source, "COMPOSER_AUTH: '{}'" ), 'Both Composer install lanes must not inherit a runner OAuth token.' );
 	}
+
+	public function test_approval_workflow_uses_verified_hostname_transport_for_live_links(): void {
+		$workflow = dirname( __DIR__, 2 ) . '/.github/workflows/wporg-approval.yml';
+		$source   = (string) file_get_contents( $workflow );
+		$this->assertStringContainsString( 'MCPWP_LINK_CHECK_HOSTNAME_TRANSPORT=1 bash mcpwp/scripts/check-readme-links.sh', $source );
+	}
 }

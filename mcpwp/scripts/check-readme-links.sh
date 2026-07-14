@@ -121,7 +121,8 @@ print("\n".join(str(address) for address in valid))' "$host")" || classify_statu
 }
 
 check_url() {
-	local original current host port pinned resolve_entry result code redirect effective effective_host hop
+	local original current host port pinned resolve_entry result code redirect effective effective_host remote_ip hop write_out
+	local -a destination_args
 	original="$1"
 	current="$original"
 	hop=0
@@ -140,12 +141,22 @@ check_url() {
 		pinned="$(printf '%s\n' "$MCPWP_VALIDATED_ADDRESSES" | sed -n '1p')"
 		if [[ "$pinned" == *:* ]]; then pinned="[$pinned]"; fi
 		resolve_entry="$host:$port:$pinned"
+		write_out=$'%{http_code}\n%{redirect_url}\n%{url_effective}'
+		if [[ "${MCPWP_LINK_CHECK_HOSTNAME_TRANSPORT:-0}" == '1' ]]; then
+			# GitHub-hosted runners may block direct connections to a pinned IP.
+			# Preserve the DNS-rebinding guard by requiring curl's connected address
+			# to be one of the public addresses resolved immediately before this hop.
+			destination_args=()
+			write_out+=$'\n%{remote_ip}'
+		else
+			destination_args=( --resolve "$resolve_entry" )
+		fi
 
 		if ! result="$("$CURL_BIN" --disable --silent --show-error --output /dev/null \
-			--proxy '' --noproxy '*' --resolve "$resolve_entry" \
+			--proxy '' --noproxy '*' "${destination_args[@]}" \
 			--connect-timeout 10 --max-time 60 --retry 3 --retry-all-errors --retry-delay 2 --max-redirs 0 --proto '=http,https' --proto-redir '=http,https' \
 			--user-agent 'Mumega-MCP-Readme-Link-Checker/1.0' \
-			--write-out $'%{http_code}\n%{redirect_url}\n%{url_effective}' "$current")"; then
+			--write-out "$write_out" "$current")"; then
 			echo "[FAIL] Request failed: $current" >&2
 			return 1
 		fi
@@ -154,6 +165,13 @@ check_url() {
 		effective="$(printf '%s\n' "$result" | sed -n '3p')"
 		effective_host="$(url_host "$effective")"
 		validate_public_host "$effective_host" || return 1
+		if [[ "${MCPWP_LINK_CHECK_HOSTNAME_TRANSPORT:-0}" == '1' ]]; then
+			remote_ip="$(printf '%s\n' "$result" | sed -n '4p')"
+			if [[ -z "$remote_ip" ]] || ! printf '%s\n' "$MCPWP_VALIDATED_ADDRESSES" | grep -F -x -- "$remote_ip" >/dev/null; then
+				echo "[FAIL] Hostname transport connected outside the validated address set: $host -> ${remote_ip:-<empty>}" >&2
+				return 1
+			fi
+		fi
 
 		if [[ "$code" =~ ^2[0-9][0-9]$ ]]; then
 			echo "[OK] HTTP $code: $original -> $effective"

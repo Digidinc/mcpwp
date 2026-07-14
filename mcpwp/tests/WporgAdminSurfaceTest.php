@@ -498,6 +498,36 @@ SH;
 		}
 	}
 
+	public function test_readme_link_checker_ci_hostname_transport_requires_the_validated_connected_address(): void {
+		$this->require_python_for_link_checker_fixtures();
+		$curl = <<<'SH'
+#!/bin/sh
+printf '%s\n' "$@" > "$MCPWP_LINK_CHECK_TEST_LOG"
+printf '200\n\nhttps://public.example/path\n93.184.216.34\n'
+SH;
+		$result = $this->run_link_checker_fixture(
+			'https://public.example/path',
+			"#!/bin/sh\necho 93.184.216.34\n",
+			$curl . "\n",
+			'MCPWP_LINK_CHECK_HOSTNAME_TRANSPORT=1'
+		);
+		$this->assertSame( 0, $result['status'], $result['output'] );
+		$this->assertNotContains( '--resolve', $result['curl_args'] );
+	}
+
+	public function test_readme_link_checker_ci_hostname_transport_rejects_an_unvalidated_connected_address(): void {
+		$this->require_python_for_link_checker_fixtures();
+		$curl = "#!/bin/sh\nprintf '200\\n\\nhttps://public.example/path\\n8.8.8.8\\n'\n";
+		$result = $this->run_link_checker_fixture(
+			'https://public.example/path',
+			"#!/bin/sh\necho 93.184.216.34\n",
+			$curl,
+			'MCPWP_LINK_CHECK_HOSTNAME_TRANSPORT=1'
+		);
+		$this->assertNotSame( 0, $result['status'] );
+		$this->assertStringContainsString( 'validated address', strtolower( $result['output'] ) );
+	}
+
 	public function test_submission_notes_describe_only_the_retained_directory_artifact(): void {
 		$submission = strtolower( (string) file_get_contents( self::$repository_dir . '/SUBMISSION.md' ) );
 		$this->assertStringContainsString( '17 mcp tools', $submission );
@@ -547,7 +577,7 @@ SH;
 		return $source;
 	}
 
-	private function run_link_checker_fixture( $url, $resolver, $curl ): array {
+	private function run_link_checker_fixture( $url, $resolver, $curl, $extra_environment = '' ): array {
 		$directory = sys_get_temp_dir() . '/mcpwp-link-' . str_replace( '.', '', uniqid( '', true ) );
 		mkdir( $directory, 0700, true );
 		$readme_path  = $directory . '/readme.txt';
@@ -568,6 +598,7 @@ SH;
 			. ' CURL_HOME=' . escapeshellarg( $directory )
 			. ' HTTPS_PROXY=' . escapeshellarg( 'http://127.0.0.1:9999' )
 			. ' ALL_PROXY=' . escapeshellarg( 'http://127.0.0.1:9999' )
+			. ( '' !== $extra_environment ? ' ' . $extra_environment : '' )
 			. ' bash ' . escapeshellarg( self::$plugin_dir . '/scripts/check-readme-links.sh' )
 			. ' ' . escapeshellarg( $readme_path ) . ' 2>&1';
 		$output = array();
