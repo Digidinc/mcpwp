@@ -45,6 +45,13 @@ final class WporgAdminSurfaceTest extends TestCase {
 		);
 	}
 
+	protected function tearDown(): void {
+		$GLOBALS['mcpwp_test_current_user'] = 0;
+		$GLOBALS['mcpwp_test_user_caps']    = array();
+		$GLOBALS['mcpwp_test_users']        = array( (object) array( 'ID' => 2, 'roles' => array( 'mcpwp_api_agent' ) ) );
+		$GLOBALS['mcpwp_test_valid_nonces'] = array();
+	}
+
 	public function test_exact_four_admin_submenus_use_the_custom_capability(): void {
 		$source = $this->read( 'includes/admin/class-mcpwp-admin.php' );
 		$tools  = $this->read( 'includes/admin/class-mcpwp-tools-admin.php' );
@@ -239,6 +246,26 @@ final class WporgAdminSurfaceTest extends TestCase {
 		}
 	}
 
+	public function test_blank_whitelist_textarea_clears_existing_and_saves_empty_on_fresh_install(): void {
+		$settings = new Mcpwp_Settings();
+		$post = array(
+			'mcpwp_save_settings' => 'rate', '_wpnonce' => 'valid-rate-settings',
+			'mcpwp_rate_limit_settings' => array(
+				'enabled' => '1', 'requests_per_minute' => '20', 'requests_per_hour' => '400', 'burst_limit' => '5',
+				'whitelist' => "  \n,\r\n ",
+			),
+		);
+		update_option( 'mcpwp_rate_limit_settings', array( 'enabled' => true, 'requests_per_minute' => 60, 'requests_per_hour' => 1000, 'burst_limit' => 10, 'whitelist' => array( 'key:old' ) ) );
+		$result = $settings->handle_admin_save( $post );
+		$this->assertFalse( is_wp_error( $result ) );
+		$this->assertSame( array(), get_option( 'mcpwp_rate_limit_settings' )['whitelist'] );
+
+		$GLOBALS['mcpwp_test_options'] = array();
+		$result = $settings->handle_admin_save( $post );
+		$this->assertFalse( is_wp_error( $result ) );
+		$this->assertSame( array(), get_option( 'mcpwp_rate_limit_settings' )['whitelist'] );
+	}
+
 	public function test_custom_handlers_are_the_only_admin_settings_mutation_path(): void {
 		$settings = $this->read( 'includes/admin/class-mcpwp-settings.php' );
 		$loader   = $this->read( 'includes/class-mcpwp-loader.php' );
@@ -272,14 +299,16 @@ final class WporgAdminSurfaceTest extends TestCase {
 	public function test_activity_queries_only_the_retained_local_metadata_schema(): void {
 		$source = $this->read( 'includes/admin/class-mcpwp-activity-log.php' ) . "\n" . $this->read( 'includes/admin/traits/trait-mcpwp-admin-activity.php' );
 		foreach ( array( 'request_data', 'response_data', 'ip_address', 'user_agent', 'endpoint', 'method' ) as $column ) {
-			$this->assertStringNotContainsString( $column, $source, 'Activity admin references removed column ' . $column . '.' );
+			$this->assertDoesNotMatchRegularExpression( '/\bSELECT\b[^"\n]*\b' . preg_quote( $column, '/' ) . '\b/i', $source, 'Activity query references removed column ' . $column . '.' );
+			$this->assertStringNotContainsString( "['" . $column . "']", $source, 'Activity output references removed column ' . $column . '.' );
 		}
 	}
 
 	public function test_admin_presentation_is_local_enqueued_and_has_no_inline_behavior(): void {
 		$source = $this->admin_php_source();
 		$this->assertStringContainsString( "wp_enqueue_style( 'mcpwp-admin'", $source );
-		$this->assertStringContainsString( "wp_enqueue_script( 'mcpwp-admin'", $source );
+		$this->assertStringNotContainsString( 'wp_enqueue_script(', $source, 'The directory admin has no retained JavaScript behavior.' );
+		$this->assertFileDoesNotExist( self::$plugin_dir . '/admin/js/mcpwp-admin.js' );
 		$this->assertDoesNotMatchRegularExpression( '/<(?:script|style)\b|\son[a-z]+\s*=/i', $source );
 		$this->assertDoesNotMatchRegularExpression( '#(?:src|href)\s*=\s*[\'\"]https?://#i', $source );
 	}
@@ -293,6 +322,24 @@ final class WporgAdminSurfaceTest extends TestCase {
 		foreach ( $matches as $match ) {
 			$this->assertSame( 'mumega-mcp', $match[4], 'Wrong text domain for: ' . $match[2] );
 			$this->assertStringContainsString( 'msgid "' . addcslashes( $match[2], "\\\"\n\r\t" ) . '"', $pot, 'POT omits: ' . $match[2] );
+		}
+	}
+
+	public function test_pot_has_a_deterministic_generator_contract(): void {
+		$builder = self::$plugin_dir . '/scripts/build-pot.sh';
+		$this->assertFileExists( $builder );
+		$this->assertTrue( is_executable( $builder ) );
+		$this->assertStringContainsString( 'wordpress:cli@sha256:', (string) file_get_contents( $builder ) );
+		$this->assertStringContainsString( 'POT-Creation-Date: 1980-01-01T00:00:00+00:00', $this->read( 'languages/mumega-mcp.pot' ) );
+	}
+
+	public function test_integration_compose_projects_are_unique_per_process_with_debug_overrides(): void {
+		foreach ( array( 'wp61', 'wp70' ) as $matrix ) {
+			$runner = $this->read( 'tests/integration/' . $matrix . '/run.sh' );
+			$this->assertStringNotContainsString( 'PPID', $runner, $matrix . ' must not share a parent-shell Compose project.' );
+			$this->assertStringContainsString( '$$', $runner );
+			$this->assertStringContainsString( '$RANDOM', $runner );
+			$this->assertStringContainsString( 'MCPWP_' . strtoupper( $matrix ) . '_PROJECT', $runner );
 		}
 	}
 
@@ -310,7 +357,6 @@ final class WporgAdminSurfaceTest extends TestCase {
 			'mumega',
 			'mcp client',
 			'provider',
-			'scoped',
 			'wordpress user',
 			'retention',
 			'draft by default',
@@ -329,6 +375,11 @@ final class WporgAdminSurfaceTest extends TestCase {
 			$this->assertStringContainsString( $required, $readme, 'Readme omits required disclosure: ' . $required );
 		}
 		$this->assertStringNotContainsString( 'does not send site data to a third-party service', $readme );
+		$this->assertStringContainsString( 'setup & keys requires', $readme );
+		$this->assertStringContainsString( 'direct rest child-key creation inherits', $readme );
+		$this->assertStringContainsString( 'empty tool categories mean all retained categories', $readme );
+		$this->assertStringContainsString( 'all usable api keys have non-empty scopes', $readme );
+		$this->assertStringNotContainsString( 'scoped api keys have selected, non-empty read, write, or admin scopes and selected tool categories', $readme );
 	}
 
 	public function test_anonymous_readme_link_checker_is_present_and_executable(): void {
@@ -337,9 +388,111 @@ final class WporgAdminSurfaceTest extends TestCase {
 		$this->assertTrue( is_executable( $checker ), 'Readme link checker must be executable.' );
 	}
 
+	public function test_readme_link_checker_rejects_dns_resolved_private_addresses_before_request(): void {
+		$this->require_python_for_link_checker_fixtures();
+		$result = $this->run_link_checker_fixture( 'https://public.example/path', "#!/bin/sh\necho 127.0.0.1\n", "#!/bin/sh\necho 'curl must not run' >&2\nexit 99\n" );
+		$this->assertNotSame( 0, $result['status'] );
+		$this->assertStringContainsString( 'private', strtolower( $result['output'] ) );
+		$this->assertStringNotContainsString( 'curl must not run', $result['output'] );
+	}
+
+	public function test_readme_link_checker_rejects_non_global_ipv6_forms(): void {
+		$this->require_python_for_link_checker_fixtures();
+		foreach ( array( '::1', 'fe80::1', '::ffff:7f00:1' ) as $address ) {
+			$result = $this->run_link_checker_fixture( 'https://public.example/path', "#!/bin/sh\necho " . escapeshellarg( $address ) . "\n", "#!/bin/sh\necho 'curl must not run' >&2\nexit 99\n" );
+			$this->assertNotSame( 0, $result['status'], $address );
+			$this->assertStringContainsString( 'private', strtolower( $result['output'] ), $address );
+			$this->assertStringNotContainsString( 'curl must not run', $result['output'], $address );
+		}
+	}
+
+	public function test_readme_link_checker_rejects_private_redirect_before_following_it(): void {
+		$this->require_python_for_link_checker_fixtures();
+		$resolver = <<<'SH'
+#!/bin/sh
+case "$1" in
+  public.example) echo 93.184.216.34 ;;
+  *) echo 127.0.0.1 ;;
+esac
+SH;
+		$curl = <<<'SH'
+#!/bin/sh
+printf '302\nhttp://127.0.0.1/private\nhttps://public.example/path\n'
+SH;
+		$result = $this->run_link_checker_fixture( 'https://public.example/path', $resolver . "\n", $curl . "\n" );
+		$this->assertNotSame( 0, $result['status'] );
+		$this->assertStringContainsString( 'private', strtolower( $result['output'] ) );
+	}
+
+	public function test_readme_link_checker_rejects_initial_url_userinfo_before_curl(): void {
+		$this->require_python_for_link_checker_fixtures();
+		$result = $this->run_link_checker_fixture( 'https://user:pass@public.example/path', "#!/bin/sh\necho 93.184.216.34\n", "#!/bin/sh\necho 'curl must not run' >&2\nexit 99\n" );
+		$this->assertNotSame( 0, $result['status'] );
+		$this->assertStringContainsString( 'userinfo', strtolower( $result['output'] ) );
+		$this->assertStringNotContainsString( 'curl must not run', $result['output'] );
+	}
+
+	public function test_readme_link_checker_rejects_redirect_url_userinfo_before_second_request(): void {
+		$this->require_python_for_link_checker_fixtures();
+		$curl = <<<'SH'
+#!/bin/sh
+count_file="$MCPWP_LINK_CHECK_TEST_LOG.count"
+count=0
+if [ -f "$count_file" ]; then count=$(cat "$count_file"); fi
+count=$((count + 1))
+printf '%s\n' "$count" > "$count_file"
+if [ "$count" -gt 1 ]; then echo 'second request must not run' >&2; exit 99; fi
+printf '302\nhttps://user:pass@public.example/private\nhttps://public.example/path\n'
+SH;
+		$result = $this->run_link_checker_fixture( 'https://public.example/path', "#!/bin/sh\necho 93.184.216.34\n", $curl . "\n" );
+		$this->assertNotSame( 0, $result['status'] );
+		$this->assertStringContainsString( 'userinfo', strtolower( $result['output'] ) );
+		$this->assertStringNotContainsString( 'second request must not run', $result['output'] );
+	}
+
+	public function test_readme_link_checker_accepts_a_dns_resolved_public_destination(): void {
+		$this->require_python_for_link_checker_fixtures();
+		$result = $this->run_link_checker_fixture(
+			'https://public.example/path',
+			"#!/bin/sh\necho 93.184.216.34\n",
+			"#!/bin/sh\nprintf '200\\n\\nhttps://public.example/path\\n'\n"
+		);
+		$this->assertSame( 0, $result['status'], $result['output'] );
+		$this->assertStringContainsString( '[OK] HTTP 200', $result['output'] );
+	}
+
+	public function test_readme_link_checker_disables_ambient_curl_state_and_pins_validated_dns(): void {
+		$this->require_python_for_link_checker_fixtures();
+		$curl = <<<'SH'
+#!/bin/sh
+printf '%s\n' "$@" > "$MCPWP_LINK_CHECK_TEST_LOG"
+printf '200\n\nhttps://public.example/path\n'
+SH;
+		$result = $this->run_link_checker_fixture( 'https://public.example/path', "#!/bin/sh\necho 93.184.216.34\n", $curl . "\n" );
+		$this->assertSame( 0, $result['status'], $result['output'] );
+		$this->assertSame( '--disable', $result['curl_args'][0] ?? null, 'curl config must be disabled by the first argument.' );
+		$proxy_index = array_search( '--proxy', $result['curl_args'], true );
+		$this->assertNotFalse( $proxy_index );
+		$this->assertSame( '', $result['curl_args'][ $proxy_index + 1 ] ?? null );
+		$noproxy_index = array_search( '--noproxy', $result['curl_args'], true );
+		$this->assertSame( '*', $result['curl_args'][ $noproxy_index + 1 ] ?? null );
+		$resolve_index = array_search( '--resolve', $result['curl_args'], true );
+		$this->assertSame( 'public.example:443:93.184.216.34', $result['curl_args'][ $resolve_index + 1 ] ?? null );
+		foreach ( array( '--user', '--netrc', '--cookie', '--cookie-jar' ) as $ambient_auth ) {
+			$this->assertNotContains( $ambient_auth, $result['curl_args'] );
+		}
+	}
+
 	public function test_submission_notes_describe_only_the_retained_directory_artifact(): void {
 		$submission = strtolower( (string) file_get_contents( self::$repository_dir . '/SUBMISSION.md' ) );
-		foreach ( array( '17 tool', '19 route', 'no outbound', 'no telemetry', 'no self-update', 'explicit', 'existing wordpress user', 'task 5' ) as $required ) {
+		$this->assertStringContainsString( '17 mcp tools', $submission );
+		$this->assertStringContainsString( '19 route patterns', $submission );
+		$this->assertStringContainsString( 'setup & keys requires', $submission );
+		$this->assertStringContainsString( 'direct rest child-key creation inherits', $submission );
+		$this->assertStringContainsString( 'empty tool categories mean all retained categories', $submission );
+		$this->assertStringContainsString( 'all usable api keys have non-empty scopes', $submission );
+		$this->assertStringNotContainsString( 'each new key is bound to the explicit existing wordpress user who creates it and to selected non-empty scopes and tool categories', $submission );
+		foreach ( array( 'no outbound', 'no telemetry', 'no self-update', 'explicit', 'task 5' ) as $required ) {
 			$this->assertStringContainsString( $required, $submission, 'Submission notes omit: ' . $required );
 		}
 		foreach ( array( 'posthog', 'feedback relay', 'provider apis', 'mcpwp_wporg_build', 'oauth controller', 'freemius', 'service account user' ) as $stale ) {
@@ -377,5 +530,43 @@ final class WporgAdminSurfaceTest extends TestCase {
 			}
 		}
 		return $source;
+	}
+
+	private function run_link_checker_fixture( $url, $resolver, $curl ): array {
+		$directory = sys_get_temp_dir() . '/mcpwp-link-' . str_replace( '.', '', uniqid( '', true ) );
+		mkdir( $directory, 0700, true );
+		$readme_path  = $directory . '/readme.txt';
+		$resolver_path = $directory . '/resolver';
+		$curl_path     = $directory . '/curl';
+		$curl_log      = $directory . '/curl-args';
+		file_put_contents( $readme_path, $url . "\n" );
+		file_put_contents( $resolver_path, $resolver );
+		file_put_contents( $curl_path, $curl );
+		file_put_contents( $directory . '/.curlrc', "user = attacker:secret\nproxy = http://127.0.0.1:9999\n" );
+		chmod( $resolver_path, 0700 );
+		chmod( $curl_path, 0700 );
+
+		$command = 'MCPWP_LINK_CHECK_RESOLVER=' . escapeshellarg( $resolver_path )
+			. ' MCPWP_LINK_CHECK_CURL=' . escapeshellarg( $curl_path )
+			. ' MCPWP_LINK_CHECK_TEST_LOG=' . escapeshellarg( $curl_log )
+			. ' HOME=' . escapeshellarg( $directory )
+			. ' CURL_HOME=' . escapeshellarg( $directory )
+			. ' HTTPS_PROXY=' . escapeshellarg( 'http://127.0.0.1:9999' )
+			. ' ALL_PROXY=' . escapeshellarg( 'http://127.0.0.1:9999' )
+			. ' bash ' . escapeshellarg( self::$plugin_dir . '/scripts/check-readme-links.sh' )
+			. ' ' . escapeshellarg( $readme_path ) . ' 2>&1';
+		$output = array();
+		exec( $command, $output, $status );
+		$curl_args = file_exists( $curl_log ) ? file( $curl_log, FILE_IGNORE_NEW_LINES ) : array();
+		foreach ( array( $readme_path, $resolver_path, $curl_path, $curl_log, $curl_log . '.count', $directory . '/.curlrc' ) as $path ) { if ( file_exists( $path ) ) { unlink( $path ); } }
+		rmdir( $directory );
+		return array( 'status' => $status, 'output' => implode( "\n", $output ), 'curl_args' => $curl_args );
+	}
+
+	private function require_python_for_link_checker_fixtures(): void {
+		exec( 'command -v python3 >/dev/null 2>&1', $output, $status );
+		if ( 0 !== $status ) {
+			$this->markTestSkipped( 'python3 is required to exercise DNS/IP link-checker fixtures.' );
+		}
 	}
 }

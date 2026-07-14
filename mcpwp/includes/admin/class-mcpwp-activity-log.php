@@ -18,7 +18,7 @@ class Mcpwp_Activity_Log_Page {
 		echo '<div class="wrap"><h1>' . esc_html__( 'Mumega MCP Activity', 'mumega-mcp' ) . '</h1>';
 		echo '<p>' . esc_html__( 'Local MCP tool activity metadata only; arguments and content are never stored.', 'mumega-mcp' ) . '</p>';
 		echo '<table class="widefat fixed striped"><thead><tr>';
-		foreach ( array( 'When', 'Tool', 'Status', 'Duration (ms)', 'API key ID' ) as $heading ) { echo '<th>' . esc_html( $heading ) . '</th>'; }
+		foreach ( array( __( 'When', 'mumega-mcp' ), __( 'Tool', 'mumega-mcp' ), __( 'Status', 'mumega-mcp' ), __( 'Duration (ms)', 'mumega-mcp' ), __( 'API key ID', 'mumega-mcp' ) ) as $heading ) { echo '<th>' . esc_html( $heading ) . '</th>'; }
 		echo '</tr></thead><tbody>';
 		if ( empty( $rows ) ) {
 			echo '<tr><td colspan="5">' . esc_html__( 'No activity found.', 'mumega-mcp' ) . '</td></tr>';

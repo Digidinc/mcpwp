@@ -1,7 +1,7 @@
 {
   "allowed_runtime_files": [
     "LICENSE", "VERSION", "index.php", "mcpwp.php", "readme.txt", "uninstall.php",
-    "admin/css/index.php", "admin/css/mcpwp-admin.css", "admin/index.php", "admin/js/index.php", "admin/js/mcpwp-admin.js",
+    "admin/css/index.php", "admin/css/mcpwp-admin.css", "admin/index.php", "admin/js/index.php",
     "admin/partials/index.php", "admin/partials/mcpwp-settings-display.php", "admin/partials/mcpwp-setup-display.php", "admin/partials/mcpwp-tools-display.php",
     "assets/index.php",
     "includes/admin/class-mcpwp-activity-log.php", "includes/admin/class-mcpwp-admin.php", "includes/admin/class-mcpwp-settings.php", "includes/admin/class-mcpwp-tools-admin.php",
@@ -23,6 +23,9 @@
     "assets/screenshot-1.png", "assets/screenshot-1.svg", "assets/screenshot-2.png", "assets/screenshot-2.svg",
     "assets/screenshot-3.png", "assets/screenshot-3.svg", "assets/screenshot-4.png", "assets/screenshot-4.svg"
   ],
+  "documentation_negative_disclosures": {
+    "readme.txt": ["There are no plugin-initiated outbound requests, no telemetry, and no contact with Mumega."]
+  },
   "trusted_source_sha256": {
     "includes/api/class-mcpwp-rest-api.php": "51cd300d9edc1dc437c973f56103248d633881f0041922af037b5f3daa1e01fb",
     "includes/api/class-mcpwp-rest-api-keys.php": "f9c803df199aa19a9e830b07b1c459f172179ba2f1eaa11d71cc95df530cde04",

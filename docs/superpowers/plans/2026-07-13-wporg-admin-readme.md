@@ -12,7 +12,7 @@
 - Save logging, retention, enabled rate limiting, per-minute/hour limits, burst limit, and whitelist without erasing retained values. Enforce bounds and `burst_limit <= requests_per_minute`; support users holding the custom capability without requiring `manage_options`.
 - Keep Activity read-only and limited to local metadata; localize all headings and remove stale nonexistent-column queries.
 - Ship only local assets enqueued through WordPress APIs. Remove inline scripts/styles/handlers, remote assets, and obsolete localized data.
-- Rebuild `languages/mumega-mcp.pot` reproducibly from shipped source with the `mumega-mcp` domain.
+- Rebuild `languages/mumega-mcp.pot` reproducibly from shipped source with `bash mcpwp/scripts/build-pot.sh`; the script pins WP-CLI and normalizes its creation timestamp.
 - Remove the overbroad Plugin URI unless it describes the exact directory edition.
 - Rewrite `readme.txt` to disclose no plugin-initiated outbound request/telemetry/Mumega contact, owner-configured client/provider data flow, explicit-user key binding/scopes, logging/retention, draft defaults, stronger publish/private/delete authority, and the edition's explicit inability to edit code/plugins/themes or self-update.
 - Add an anonymous readme-link checker that follows redirects, rejects unreachable links and unexpected private hosts, and reports the failing URL.

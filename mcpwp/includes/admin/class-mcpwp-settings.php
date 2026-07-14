@@ -58,7 +58,11 @@ class Mcpwp_Settings {
 	private function sanitize_rate_whitelist( $whitelist ) {
 		$clean = array();
 		foreach ( (array) $whitelist as $identifier ) {
-			$identifier = sanitize_text_field( (string) $identifier );
+			$identifier = (string) $identifier;
+			if ( '' === trim( $identifier ) ) {
+				continue;
+			}
+			$identifier = sanitize_text_field( $identifier );
 			if ( '' === $identifier || strlen( $identifier ) > 100 ) {
 				return new WP_Error( 'invalid_rate_whitelist', __( 'Whitelist identifiers must be non-empty and no more than 100 bytes.', 'mumega-mcp' ) );
 			}

@@ -237,6 +237,11 @@ final class WporgArtifactPolicyTest extends TestCase {
 		);
 		$near_miss = $this->scan_contents( 'uninstall.php', "delete_option( 'mcpwp_license_copy' ); wp_get_option( 'siteurl' );" );
 		$this->assertNotEmpty( $near_miss );
+		$approved_disclosure = 'There are no plugin-initiated outbound requests, no telemetry, and no contact with Mumega.';
+		$this->assertSame( array(), $this->scan_contents( 'readme.txt', $approved_disclosure ) );
+		$this->assertNotEmpty( $this->scan_contents( 'readme.txt', 'There are no plugin-initiated outbound requests, no telemetry opt-out, and no contact with Mumega.' ) );
+		$this->assertNotEmpty( $this->scan_contents( 'readme.txt', $approved_disclosure . ' Telemetry tracking is enabled.' ) );
+		$this->assertNotEmpty( $this->scan_contents( 'includes/runtime.php', $approved_disclosure ) );
 	}
 
 	public function test_runtime_inventory_is_exclusive_for_source_and_zip(): void {
@@ -669,6 +674,9 @@ final class WporgArtifactPolicyTest extends TestCase {
 			$violations[] = 'trusted source hash mismatch: ' . $normalized;
 		}
 		$contents = $this->mask_allowed_lifecycle_cleanup( $normalized, $contents );
+		foreach ( self::$policy['documentation_negative_disclosures'][ $normalized ] ?? array() as $disclosure ) {
+			$contents = str_ireplace( $disclosure, '__allowed_negative_disclosure__', $contents );
+		}
 		$contents .= "\n" . $this->normalize_static_string_expressions( $contents );
 		$lower_contents = strtolower( $contents );
 		foreach ( self::$policy['forbidden_literals'] as $literal ) {

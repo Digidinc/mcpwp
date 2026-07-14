@@ -23,16 +23,6 @@ class Mcpwp_Admin {
 		return in_array( $page, array( self::PAGE_SLUG, self::SETTINGS_PAGE_SLUG, self::ACTIVITY_LOG_PAGE_SLUG, Mcpwp_Tools_Admin::PAGE_SLUG ), true );
 	}
 	public function enqueue_styles( $hook ) { if ( $this->is_plugin_page() ) { wp_enqueue_style( 'mcpwp-admin', MCPWP_PLUGIN_URL . 'admin/css/mcpwp-admin.css', array(), MCPWP_VERSION ); } }
-	public function enqueue_scripts( $hook ) {
-		if ( ! $this->is_plugin_page() ) { return; }
-		wp_enqueue_script( 'mcpwp-admin', MCPWP_PLUGIN_URL . 'admin/js/mcpwp-admin.js', array(), MCPWP_VERSION, true );
-		wp_localize_script( 'mcpwp-admin', 'mcpwpAdmin', array( 'ajaxUrl' => admin_url( 'admin-ajax.php' ), 'nonce' => wp_create_nonce( 'mcpwp_admin_nonce' ), 'toolsNonce' => wp_create_nonce( 'mcpwp_tools_nonce' ) ) );
-	}
-	public function ajax_test_connection() {
-		check_ajax_referer( 'mcpwp_admin_nonce', 'nonce' );
-		if ( ! current_user_can( 'mcpwp_manage_settings' ) ) { wp_send_json_error( array( 'message' => __( 'Unauthorized.', 'mumega-mcp' ) ), 403 ); }
-		wp_send_json_success( array( 'message' => __( 'Mumega MCP is active.', 'mumega-mcp' ) ) );
-	}
 	public function add_action_links( $links ) {
 		array_unshift( $links, '<a href="' . esc_url( admin_url( 'admin.php?page=' . self::PAGE_SLUG ) ) . '">' . esc_html__( 'Setup', 'mumega-mcp' ) . '</a>' );
 		return $links;

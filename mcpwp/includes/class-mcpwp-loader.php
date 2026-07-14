@@ -20,13 +20,8 @@ class Mcpwp_Loader {
 		$this->add_action( 'plugins_loaded', $i18n, 'load_plugin_textdomain' );
 
 		$admin = new Mcpwp_Admin();
-		$tools = new Mcpwp_Tools_Admin();
 		$this->add_action( 'admin_menu', $admin, 'add_admin_menu' );
 		$this->add_action( 'admin_enqueue_scripts', $admin, 'enqueue_styles' );
-		$this->add_action( 'admin_enqueue_scripts', $admin, 'enqueue_scripts' );
-		$this->add_action( 'admin_enqueue_scripts', $tools, 'enqueue_assets' );
-		$this->add_action( 'wp_ajax_mcpwp_toggle_tool_category', $tools, 'ajax_toggle_category' );
-		$this->add_action( 'wp_ajax_mcpwp_test_connection', $admin, 'ajax_test_connection' );
 		$this->add_filter( 'plugin_action_links_' . MCPWP_PLUGIN_BASENAME, $admin, 'add_action_links', 100 );
 
 		$this->add_action( 'rest_api_init', $this, 'register_rest_routes' );

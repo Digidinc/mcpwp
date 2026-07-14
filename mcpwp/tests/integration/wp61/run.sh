@@ -2,7 +2,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")"
-project="mcpwp-wp61-${PPID:-$$}"
+project="${MCPWP_WP61_PROJECT:-mcpwp-wp61-$$-$RANDOM}"
 
 cleanup() {
   if [[ "${KEEP_WP61:-0}" != "1" ]]; then
@@ -11,7 +11,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Remove residue from an interrupted prior run that reused the parent-shell ID.
+# Remove residue when an explicit debugging project override is reused.
 docker compose -p "$project" down --volumes --remove-orphans >/dev/null 2>&1 || true
 docker compose -p "$project" up -d --wait --pull never
 docker compose -p "$project" exec -T --user www-data wordpress php /opt/mcpwp-integration/install.php

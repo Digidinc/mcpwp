@@ -8,7 +8,6 @@
  *
  * @wordpress-plugin
  * Plugin Name:       Mumega MCP
- * Plugin URI:        https://mumcp.com/
  * Description:       A focused Model Context Protocol server for WordPress posts, pages, local media, and taxonomies.
  * x-release-please-start-version
  * Version:           3.4.3

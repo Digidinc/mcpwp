@@ -211,6 +211,12 @@ def mask_allowed_cleanup(relative, contents):
     return contents
 
 
+def mask_documentation_negative_disclosures(relative, contents):
+    for disclosure in policy.get("documentation_negative_disclosures", {}).get(relative, []):
+        contents = re.sub(re.escape(disclosure), "__allowed_negative_disclosure__", contents, flags=re.IGNORECASE)
+    return contents
+
+
 def normalize_static_string_expressions(contents):
     comment = r"(?:(?:/\*[^*]*(?:\*(?!/)[^*]*)*\*/|//[^\r\n]*(?:\r\n|\r|\n)|\#[^\r\n]*(?:\r\n|\r|\n))\s*)*"
     pattern = re.compile(r"(['\"])([^'\"\r\n]*)\1\s*" + comment + r"\.\s*" + comment + r"(['\"])([^'\"\r\n]*)\3")
@@ -276,6 +282,7 @@ with archive:
         relative = "/".join(PurePosixPath(normalized).parts[1:])
         contents = archive.read(info.filename).decode("utf-8", errors="surrogateescape")
         contents = mask_allowed_cleanup(relative, contents)
+        contents = mask_documentation_negative_disclosures(relative, contents)
         contents += "\n" + normalize_static_string_expressions(contents)
         lowered_contents = contents.lower()
         for literal in policy["forbidden_literals"]:

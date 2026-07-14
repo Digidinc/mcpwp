@@ -16,7 +16,9 @@ class Mcpwp_Deactivator {
 	}
 
 	private static function clear_site_hooks() {
+		// Current directory-edition metadata-retention cleanup.
 		wp_clear_scheduled_hook( 'mcpwp_cleanup_logs' );
+		// Legacy-only compatibility cleanup; these hooks have no active scheduler or implementation in this edition.
 		wp_clear_scheduled_hook( 'mcpwp_check_alerts' );
 		wp_clear_scheduled_hook( 'mcpwp_verify_screenshot' );
 		wp_clear_scheduled_hook( 'mcpwp_compute_signals' );
