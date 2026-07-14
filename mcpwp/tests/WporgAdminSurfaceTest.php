@@ -480,6 +480,11 @@ SH;
 		$this->assertSame( 'public.example:443:93.184.216.34', $result['curl_args'][ $resolve_index + 1 ] ?? null );
 		$max_time_index = array_search( '--max-time', $result['curl_args'], true );
 		$this->assertSame( '60', $result['curl_args'][ $max_time_index + 1 ] ?? null, 'Slow but valid public review links need a realistic per-hop timeout.' );
+		$retry_index = array_search( '--retry', $result['curl_args'], true );
+		$this->assertSame( '3', $result['curl_args'][ $retry_index + 1 ] ?? null, 'Transient public-network failures need bounded retries.' );
+		$this->assertContains( '--retry-all-errors', $result['curl_args'] );
+		$retry_delay_index = array_search( '--retry-delay', $result['curl_args'], true );
+		$this->assertSame( '2', $result['curl_args'][ $retry_delay_index + 1 ] ?? null );
 		foreach ( array( '--user', '--netrc', '--cookie', '--cookie-jar' ) as $ambient_auth ) {
 			$this->assertNotContains( $ambient_auth, $result['curl_args'] );
 		}

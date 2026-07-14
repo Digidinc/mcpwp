@@ -108,6 +108,9 @@ jobs:
 
       - name: Install locked test dependencies
         shell: bash
+        env:
+          COMPOSER_AUTH: '{}'
+          COMPOSER_HOME: ${{ runner.temp }}/mcpwp-composer-${{ matrix.php }}
         run: composer install --working-dir=mcpwp --no-interaction --no-progress --prefer-dist
 
       - name: Download immutable candidate
@@ -158,6 +161,9 @@ jobs:
 
       - name: Install locked WPCS dependencies
         shell: bash
+        env:
+          COMPOSER_AUTH: '{}'
+          COMPOSER_HOME: ${{ runner.temp }}/mcpwp-composer-wpcs
         run: composer install --working-dir=mcpwp --no-interaction --no-progress --prefer-dist
 
       - name: Download immutable candidate

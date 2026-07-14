@@ -48,4 +48,10 @@ final class WporgLifecycleTest extends TestCase {
 		$source = (string) file_get_contents( $workflow );
 		$this->assertMatchesRegularExpression( '/MCPWP_WPORG_ZIP:\s*\S+mumega-mcp-3\.4\.3\.zip/', $source );
 	}
+
+	public function test_approval_workflow_ignores_inherited_composer_authentication(): void {
+		$workflow = dirname( __DIR__, 2 ) . '/.github/workflows/wporg-approval.yml';
+		$source   = (string) file_get_contents( $workflow );
+		$this->assertSame( 2, substr_count( $source, "COMPOSER_AUTH: '{}'" ), 'Both Composer install lanes must not inherit a runner OAuth token.' );
+	}
 }
