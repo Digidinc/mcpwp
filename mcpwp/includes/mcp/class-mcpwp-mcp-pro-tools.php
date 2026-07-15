@@ -455,8 +455,13 @@ class Mcpwp_MCP_Pro_Tools extends Mcpwp_MCP_Tool_Registry {
 				'route'  => '/elementor/templates/{template_id}/apply',
 			),
 			'wp_list_elementor_archetypes'   => array(
-				'method' => 'GET',
-				'route'  => '/elementor/archetypes',
+				'method'      => 'GET',
+				'route'       => '/elementor/archetypes',
+				// Accept wp_create_elementor_archetype's param names as aliases (#634).
+				'param_remap' => array(
+					'archetype_scope' => 'scope',
+					'archetype_style' => 'style',
+				),
 			),
 			'wp_get_elementor_archetype'     => array(
 				'method' => 'GET',
@@ -471,8 +476,15 @@ class Mcpwp_MCP_Pro_Tools extends Mcpwp_MCP_Tool_Registry {
 				'route'  => '/elementor/archetypes/{id}/apply',
 			),
 			'wp_list_elementor_parts'        => array(
-				'method' => 'GET',
-				'route'  => '/elementor/parts',
+				'method'      => 'GET',
+				'route'       => '/elementor/parts',
+				// Accept wp_create_elementor_part's param names as aliases (#634).
+				// part_tags -> tag is NOT remapped here (array vs scalar) — the
+				// REST handler itself reduces part_tags to a single tag.
+				'param_remap' => array(
+					'part_kind'  => 'kind',
+					'part_style' => 'style',
+				),
 			),
 			'wp_get_elementor_part'          => array(
 				'method' => 'GET',
