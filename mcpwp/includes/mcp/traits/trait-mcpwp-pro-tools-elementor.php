@@ -118,7 +118,11 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 			array(
 				'scope' => array(
 					'type'        => 'string',
-					'description' => 'Optional archetype scope such as page or product',
+					'description' => 'Optional archetype scope such as page or product. Alias: archetype_scope.',
+				),
+				'archetype_scope' => array(
+					'type'        => 'string',
+					'description' => 'Alias of scope, matching wp_create_elementor_archetype\'s parameter name.',
 				),
 				'archetype_class' => array(
 					'type'        => 'string',
@@ -126,7 +130,11 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 				),
 				'style' => array(
 					'type'        => 'string',
-					'description' => 'Optional style or variant label',
+					'description' => 'Optional style or variant label. Alias: archetype_style.',
+				),
+				'archetype_style' => array(
+					'type'        => 'string',
+					'description' => 'Alias of style, matching wp_create_elementor_archetype\'s parameter name.',
 				),
 				'search' => array(
 					'type'        => 'string',
@@ -204,15 +212,27 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 			array(
 				'kind'   => array(
 					'type'        => 'string',
-					'description' => 'Optional part kind, such as hero, faq, cta, pricing, features, proof, testimonial, footer_promo',
+					'description' => 'Optional part kind, such as hero, faq, cta, pricing, features, proof, testimonial, footer_promo. Alias: part_kind.',
+				),
+				'part_kind' => array(
+					'type'        => 'string',
+					'description' => 'Alias of kind, matching wp_create_elementor_part\'s parameter name.',
 				),
 				'style'  => array(
 					'type'        => 'string',
-					'description' => 'Optional style or variant label, such as dark, minimal, editorial, saas',
+					'description' => 'Optional style or variant label, such as dark, minimal, editorial, saas. Alias: part_style.',
+				),
+				'part_style' => array(
+					'type'        => 'string',
+					'description' => 'Alias of style, matching wp_create_elementor_part\'s parameter name.',
 				),
 				'tag'    => array(
 					'type'        => 'string',
 					'description' => 'Optional tag to filter by',
+				),
+				'part_tags' => array(
+					'type'        => 'array',
+					'description' => 'Alias of tag, matching wp_create_elementor_part\'s parameter name. Filters by the first tag in the list.',
 				),
 				'search' => array(
 					'type'        => 'string',

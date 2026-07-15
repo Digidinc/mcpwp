@@ -1421,12 +1421,24 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	 * @return WP_REST_Response Response.
 	 */
 	public function get_parts( $request ) {
+		// wp_create_elementor_part uses part_tags (array); the list filter is a
+		// single tag. Fall back to the first entry when tag isn't given directly (#634).
+		$tag = $request->get_param( 'tag' );
+		if ( ! $tag ) {
+			$part_tags = $request->get_param( 'part_tags' );
+			if ( is_array( $part_tags ) && ! empty( $part_tags ) ) {
+				$tag = reset( $part_tags );
+			} elseif ( is_string( $part_tags ) && '' !== $part_tags ) {
+				$tag = $part_tags;
+			}
+		}
+
 		$args = array(
 			'per_page' => $request->get_param( 'per_page' ) ?: 50,
 			'page'     => $request->get_param( 'page' ) ?: 1,
 			'kind'     => $request->get_param( 'kind' ),
 			'style'    => $request->get_param( 'style' ),
-			'tag'      => $request->get_param( 'tag' ),
+			'tag'      => $tag,
 			'search'   => $request->get_param( 'search' ),
 		);
 
