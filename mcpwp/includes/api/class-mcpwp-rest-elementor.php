@@ -451,6 +451,60 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 			)
 		);
 
+		// Elementor kit CSS blocks — named, hash-tagged, idempotent regions
+		// inside the same kit CSS (#641). Complements the whole-stylesheet
+		// replace/append modes above with an upsert/delete primitive that
+		// never duplicates content on retries and never touches unrelated CSS.
+		register_rest_route(
+			$this->namespace,
+			'/elementor/kit-css/blocks',
+			array(
+				array(
+					'methods'             => WP_REST_Server::READABLE,
+					'callback'            => array( $this, 'list_kit_css_blocks' ),
+					'permission_callback' => array( $this, 'check_permission' ),
+				),
+				array(
+					'methods'             => WP_REST_Server::CREATABLE,
+					'callback'            => array( $this, 'upsert_kit_css_block' ),
+					'permission_callback' => array( $this, 'check_permission' ),
+					'args'                => array(
+						'name'          => array(
+							'description' => __( 'Block name — lowercase letters, digits, hyphens, underscores.', 'mcpwp' ),
+							'type'        => 'string',
+							'required'    => true,
+						),
+						'css'           => array(
+							'description' => __( 'CSS body for this named block.', 'mcpwp' ),
+							'type'        => 'string',
+							'required'    => true,
+						),
+						'expected_hash' => array(
+							'description' => __( 'Optional optimistic-concurrency hash from a prior read; rejected with a conflict if the block changed since.', 'mcpwp' ),
+							'type'        => 'string',
+						),
+					),
+				),
+			)
+		);
+
+		register_rest_route(
+			$this->namespace,
+			'/elementor/kit-css/blocks/(?P<name>[\w-]+)',
+			array(
+				array(
+					'methods'             => WP_REST_Server::READABLE,
+					'callback'            => array( $this, 'get_kit_css_block' ),
+					'permission_callback' => array( $this, 'check_permission' ),
+				),
+				array(
+					'methods'             => WP_REST_Server::DELETABLE,
+					'callback'            => array( $this, 'delete_kit_css_block' ),
+					'permission_callback' => array( $this, 'check_permission' ),
+				),
+			)
+		);
+
 		// Regenerate CSS
 		register_rest_route(
 			$this->namespace,
@@ -984,6 +1038,303 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 				'custom_css' => $settings['custom_css'],
 				'length'     => strlen( $settings['custom_css'] ),
 				'mode'       => $mode,
+			)
+		);
+	}
+
+	/**
+	 * Marker pattern for named, hash-tagged Kit CSS blocks (#641).
+	 *
+	 * Blocks live inline inside the same custom_css string that
+	 * get_kit_css/set_kit_css already read and write — no new storage, and
+	 * any CSS written outside a block (e.g. by the plain replace/append
+	 * modes, or by pre-existing sites) is left untouched.
+	 *
+	 * @var string
+	 */
+	private $kit_css_block_pattern = '/\/\* mcpwp:block:start name="([a-z0-9][a-z0-9_-]{0,63})" hash="([a-f0-9]{16})" \*\/\n(.*?)\n\/\* mcpwp:block:end name="\1" \*\//s';
+
+	/**
+	 * Parse all named blocks out of a Kit CSS string.
+	 *
+	 * @param string $css Full Kit custom_css value.
+	 * @return array<string,array{name:string,hash:string,css:string,raw:string}> Keyed by block name.
+	 */
+	private function parse_kit_css_blocks( $css ) {
+		$blocks = array();
+		if ( ! is_string( $css ) || '' === $css ) {
+			return $blocks;
+		}
+		if ( preg_match_all( $this->kit_css_block_pattern, $css, $matches, PREG_SET_ORDER ) ) {
+			foreach ( $matches as $match ) {
+				$blocks[ $match[1] ] = array(
+					'name' => $match[1],
+					'hash' => $match[2],
+					'css'  => $match[3],
+					'raw'  => $match[0],
+				);
+			}
+		}
+		return $blocks;
+	}
+
+	/**
+	 * Render one named block's marker-delimited text.
+	 *
+	 * @param string $name Block name.
+	 * @param string $css  Block CSS body.
+	 * @param string $hash Content hash.
+	 * @return string
+	 */
+	private function render_kit_css_block( $name, $css, $hash ) {
+		return sprintf(
+			"/* mcpwp:block:start name=\"%s\" hash=\"%s\" */\n%s\n/* mcpwp:block:end name=\"%s\" */",
+			$name,
+			$hash,
+			rtrim( $css ),
+			$name
+		);
+	}
+
+	/**
+	 * Get the current Kit custom_css value and its kit ID.
+	 *
+	 * @return array{kit_id:int,css:string}|WP_Error
+	 */
+	private function get_kit_css_raw() {
+		if ( ! class_exists( '\Elementor\Plugin' ) ) {
+			return new WP_Error( 'elementor_not_active', __( 'Elementor is not active.', 'mcpwp' ), array( 'status' => 400 ) );
+		}
+
+		$kit = \Elementor\Plugin::$instance->kits_manager->get_active_kit();
+		if ( ! $kit || ! $kit->get_id() ) {
+			return new WP_Error( 'no_kit', __( 'No active Elementor kit found.', 'mcpwp' ), array( 'status' => 500 ) );
+		}
+
+		$settings = get_post_meta( $kit->get_id(), '_elementor_page_settings', true );
+		$css      = is_array( $settings ) && isset( $settings['custom_css'] ) ? $settings['custom_css'] : '';
+
+		return array(
+			'kit_id' => $kit->get_id(),
+			'css'    => $css,
+		);
+	}
+
+	/**
+	 * Persist a full Kit custom_css value and clear the CSS cache.
+	 *
+	 * @param int    $kit_id Kit post ID.
+	 * @param string $css    Full custom_css value to store.
+	 * @return void
+	 */
+	private function set_kit_css_raw( $kit_id, $css ) {
+		$settings               = get_post_meta( $kit_id, '_elementor_page_settings', true );
+		$settings               = is_array( $settings ) ? $settings : array();
+		$settings['custom_css'] = $css;
+		update_post_meta( $kit_id, '_elementor_page_settings', $settings );
+
+		if ( method_exists( \Elementor\Plugin::$instance->files_manager, 'clear_cache' ) ) {
+			\Elementor\Plugin::$instance->files_manager->clear_cache();
+		}
+	}
+
+	/**
+	 * Validate a block name against the marker pattern's allowed charset.
+	 *
+	 * @param string $name Candidate block name.
+	 * @return bool
+	 */
+	private function is_valid_kit_css_block_name( $name ) {
+		return is_string( $name ) && (bool) preg_match( '/^[a-z0-9][a-z0-9_-]{0,63}$/', $name );
+	}
+
+	/**
+	 * List all named Kit CSS blocks (name, hash, byte count — not the CSS body).
+	 *
+	 * @param WP_REST_Request $request Request object.
+	 * @return WP_REST_Response|WP_Error Response.
+	 */
+	public function list_kit_css_blocks( $request ) {
+		$this->log_activity( 'list_kit_css_blocks', $request );
+
+		$raw = $this->get_kit_css_raw();
+		if ( is_wp_error( $raw ) ) {
+			return $this->error_response( $raw->get_error_code(), $raw->get_error_message(), $raw->get_error_data()['status'] ?? 400 );
+		}
+
+		$blocks = array_values( array_map(
+			function ( $block ) {
+				return array(
+					'name'  => $block['name'],
+					'hash'  => $block['hash'],
+					'bytes' => strlen( $block['css'] ),
+				);
+			},
+			$this->parse_kit_css_blocks( $raw['css'] )
+		) );
+
+		return $this->success_response(
+			array(
+				'blocks' => $blocks,
+				'total'  => count( $blocks ),
+			)
+		);
+	}
+
+	/**
+	 * Get one named Kit CSS block's full CSS body.
+	 *
+	 * @param WP_REST_Request $request Request object.
+	 * @return WP_REST_Response|WP_Error Response.
+	 */
+	public function get_kit_css_block( $request ) {
+		$this->log_activity( 'get_kit_css_block', $request );
+
+		$name = (string) $request->get_param( 'name' );
+		$raw  = $this->get_kit_css_raw();
+		if ( is_wp_error( $raw ) ) {
+			return $this->error_response( $raw->get_error_code(), $raw->get_error_message(), $raw->get_error_data()['status'] ?? 400 );
+		}
+
+		$blocks = $this->parse_kit_css_blocks( $raw['css'] );
+		if ( ! isset( $blocks[ $name ] ) ) {
+			return $this->error_response( 'block_not_found', sprintf( __( 'No Kit CSS block named "%s".', 'mcpwp' ), $name ), 404 );
+		}
+
+		return $this->success_response(
+			array(
+				'name'  => $name,
+				'hash'  => $blocks[ $name ]['hash'],
+				'css'   => $blocks[ $name ]['css'],
+				'bytes' => strlen( $blocks[ $name ]['css'] ),
+			)
+		);
+	}
+
+	/**
+	 * Create or update a named Kit CSS block idempotently.
+	 *
+	 * Re-upserting identical CSS is a no-op (skipped) rather than growing the
+	 * kit — this is the gap #641 reports: append-only editing tripled the
+	 * kit's CSS on repeated build passes. Updating one block never touches
+	 * any other block or any unmanaged CSS elsewhere in the kit.
+	 *
+	 * @param WP_REST_Request $request Request object.
+	 * @return WP_REST_Response|WP_Error Response.
+	 */
+	public function upsert_kit_css_block( $request ) {
+		$this->log_activity( 'upsert_kit_css_block', $request );
+
+		$name = (string) $request->get_param( 'name' );
+		if ( ! $this->is_valid_kit_css_block_name( $name ) ) {
+			return $this->error_response(
+				'invalid_name',
+				__( 'Block name must be 1-64 lowercase letters, digits, hyphens, or underscores, starting with a letter or digit.', 'mcpwp' ),
+				400
+			);
+		}
+
+		$css = (string) $request->get_param( 'css' );
+		if ( false !== strpos( $css, 'mcpwp:block:' ) ) {
+			return $this->error_response(
+				'reserved_marker_in_css',
+				__( 'CSS must not contain the literal text "mcpwp:block:" — that marker is reserved for block boundaries.', 'mcpwp' ),
+				400
+			);
+		}
+
+		$expected_hash = $request->get_param( 'expected_hash' );
+
+		$raw = $this->get_kit_css_raw();
+		if ( is_wp_error( $raw ) ) {
+			return $this->error_response( $raw->get_error_code(), $raw->get_error_message(), $raw->get_error_data()['status'] ?? 400 );
+		}
+
+		$blocks   = $this->parse_kit_css_blocks( $raw['css'] );
+		$existing = isset( $blocks[ $name ] ) ? $blocks[ $name ] : null;
+		$new_hash = substr( hash( 'sha256', $css ), 0, 16 );
+
+		if ( $existing && $expected_hash && (string) $expected_hash !== $existing['hash'] ) {
+			return $this->error_response(
+				'hash_conflict',
+				sprintf( __( 'Block "%s" hash is %s, not the expected %s — someone else changed it since you last read it.', 'mcpwp' ), $name, $existing['hash'], $expected_hash ),
+				409
+			);
+		}
+
+		if ( $existing && $existing['hash'] === $new_hash ) {
+			return $this->success_response(
+				array(
+					'name'    => $name,
+					'action'  => 'skipped',
+					'old_hash' => $existing['hash'],
+					'new_hash' => $new_hash,
+					'bytes'   => strlen( $css ),
+				)
+			);
+		}
+
+		$new_block_raw = $this->render_kit_css_block( $name, $css, $new_hash );
+
+		if ( $existing ) {
+			$updated_css = str_replace( $existing['raw'], $new_block_raw, $raw['css'] );
+			$action      = 'updated';
+		} else {
+			$updated_css = '' === trim( $raw['css'] ) ? $new_block_raw : rtrim( $raw['css'] ) . "\n\n" . $new_block_raw;
+			$action      = 'created';
+		}
+
+		$this->set_kit_css_raw( $raw['kit_id'], $updated_css );
+
+		return $this->success_response(
+			array(
+				'name'            => $name,
+				'action'          => $action,
+				'old_hash'        => $existing ? $existing['hash'] : null,
+				'new_hash'        => $new_hash,
+				'bytes'           => strlen( $css ),
+				'total_kit_bytes' => strlen( $updated_css ),
+			)
+		);
+	}
+
+	/**
+	 * Delete a named Kit CSS block, leaving all other CSS untouched.
+	 *
+	 * @param WP_REST_Request $request Request object.
+	 * @return WP_REST_Response|WP_Error Response.
+	 */
+	public function delete_kit_css_block( $request ) {
+		$this->log_activity( 'delete_kit_css_block', $request );
+
+		$name = (string) $request->get_param( 'name' );
+		$raw  = $this->get_kit_css_raw();
+		if ( is_wp_error( $raw ) ) {
+			return $this->error_response( $raw->get_error_code(), $raw->get_error_message(), $raw->get_error_data()['status'] ?? 400 );
+		}
+
+		$blocks = $this->parse_kit_css_blocks( $raw['css'] );
+		if ( ! isset( $blocks[ $name ] ) ) {
+			return $this->error_response( 'block_not_found', sprintf( __( 'No Kit CSS block named "%s".', 'mcpwp' ), $name ), 404 );
+		}
+
+		// Remove the block and one adjoining blank-line gap it was separated by.
+		$updated_css = preg_replace(
+			'/\n*' . preg_quote( $blocks[ $name ]['raw'], '/' ) . '\n*/',
+			"\n",
+			$raw['css'],
+			1
+		);
+		$updated_css = trim( (string) $updated_css ) . ( '' !== trim( (string) $updated_css ) ? "\n" : '' );
+
+		$this->set_kit_css_raw( $raw['kit_id'], $updated_css );
+
+		return $this->success_response(
+			array(
+				'name'            => $name,
+				'deleted'         => true,
+				'old_hash'        => $blocks[ $name ]['hash'],
+				'total_kit_bytes' => strlen( $updated_css ),
 			)
 		);
 	}

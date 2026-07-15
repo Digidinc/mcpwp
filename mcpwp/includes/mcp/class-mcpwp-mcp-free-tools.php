@@ -178,6 +178,10 @@ class Mcpwp_MCP_Free_Tools extends Mcpwp_MCP_Tool_Registry {
 			// Elementor kit CSS — global CSS injection, free tier (no Elementor Pro needed)
 			'wp_get_kit_css'             => 'elementor',
 			'wp_set_kit_css'             => 'elementor',
+			'wp_list_kit_css_blocks'     => 'elementor',
+			'wp_get_kit_css_block'       => 'elementor',
+			'wp_upsert_kit_css_block'    => 'elementor',
+			'wp_delete_kit_css_block'    => 'elementor',
 
 			// Elementor Info — reference/status
 			'wp_elementor_status'        => 'elementor-info',
@@ -290,6 +294,10 @@ class Mcpwp_MCP_Free_Tools extends Mcpwp_MCP_Tool_Registry {
 			'wp_bulk_find_replace'        => 'elementor',
 			'wp_get_kit_css'              => 'elementor',
 			'wp_set_kit_css'              => 'elementor',
+			'wp_list_kit_css_blocks'      => 'elementor',
+			'wp_get_kit_css_block'        => 'elementor',
+			'wp_upsert_kit_css_block'     => 'elementor',
+			'wp_delete_kit_css_block'     => 'elementor',
 			'wp_get_elementor_widgets'    => 'elementor',
 			'wp_get_widget_schema'        => 'elementor',
 			'wp_preview_elementor'        => 'elementor',
@@ -578,6 +586,22 @@ class Mcpwp_MCP_Free_Tools extends Mcpwp_MCP_Tool_Registry {
 			'wp_set_kit_css'         => array(
 				'method' => 'POST',
 				'route'  => '/elementor/kit-css',
+			),
+			'wp_list_kit_css_blocks' => array(
+				'method' => 'GET',
+				'route'  => '/elementor/kit-css/blocks',
+			),
+			'wp_get_kit_css_block'   => array(
+				'method' => 'GET',
+				'route'  => '/elementor/kit-css/blocks/{name}',
+			),
+			'wp_upsert_kit_css_block' => array(
+				'method' => 'POST',
+				'route'  => '/elementor/kit-css/blocks',
+			),
+			'wp_delete_kit_css_block' => array(
+				'method' => 'DELETE',
+				'route'  => '/elementor/kit-css/blocks/{name}',
 			),
 			'wp_list_media'          => array(
 				'method' => 'GET',
