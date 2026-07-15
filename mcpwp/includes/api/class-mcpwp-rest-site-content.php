@@ -654,6 +654,15 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			}
 			if ( 'publish' === $post->post_status ) {
 				$url = get_permalink( $post_id );
+			} elseif ( class_exists( '\Elementor\Plugin' ) && get_post_meta( $post_id, '_elementor_data', true ) ) {
+				// Draft/pending/private Elementor content can't reliably be reached
+				// by an outbound loopback fetch: WP's own preview link needs a
+				// logged-in session wp_remote_get() doesn't carry, and hosting-level
+				// gates (e.g. HostGator's "Coming Soon" staging lock, #613) intercept
+				// it before WordPress even runs. Render in-process instead — no
+				// network hop, so neither problem applies. Note: this returns the
+				// Elementor content only, not the surrounding theme header/footer.
+				return $this->get_rendered_html_via_elementor( $post_id, $selector, $max_bytes );
 			} else {
 				// Draft/pending — use Elementor preview URL or plain preview.
 				$url = add_query_arg( 'elementor-preview', $post_id, get_permalink( $post_id ) );
@@ -733,6 +742,55 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 				'truncated'      => $truncated,
 				'selector_used'  => $selector_used,
 				'selector_found' => $selector_found,
+			)
+		);
+	}
+
+	/**
+	 * Render a draft/pending/private Elementor post's content in-process.
+	 *
+	 * Bypasses the outbound loopback fetch used for published posts — see the
+	 * caller for why that fetch is unreliable for unpublished content (#613).
+	 *
+	 * @param int         $post_id   Post ID.
+	 * @param string|null $selector  Optional CSS selector to extract.
+	 * @param int         $max_bytes Truncation limit.
+	 * @return WP_REST_Response
+	 */
+	private function get_rendered_html_via_elementor( $post_id, $selector, $max_bytes ) {
+		$html = \Elementor\Plugin::$instance->frontend->get_builder_content_for_display( $post_id, true );
+
+		$selector_used  = null;
+		$selector_found = true;
+
+		if ( $selector && $html ) {
+			$extracted = $this->extract_html_by_selector( $html, $selector );
+			if ( null !== $extracted ) {
+				$html          = $extracted;
+				$selector_used = $selector;
+			} else {
+				$selector_found = false;
+				$selector_used  = $selector;
+			}
+		}
+
+		$truncated = false;
+		if ( strlen( $html ) > $max_bytes ) {
+			$html      = substr( $html, 0, $max_bytes );
+			$truncated = true;
+		}
+
+		return $this->success_response(
+			array(
+				'url'            => add_query_arg( 'elementor-preview', $post_id, get_permalink( $post_id ) ),
+				'status_code'    => 200,
+				'html'           => $html,
+				'length'         => strlen( $html ),
+				'truncated'      => $truncated,
+				'selector_used'  => $selector_used,
+				'selector_found' => $selector_found,
+				'render_method'  => 'internal_elementor',
+				'render_note'    => 'Rendered in-process from Elementor data — this is the Elementor content only, not the surrounding theme header/footer, and did not require an HTTP round trip to the site.',
 			)
 		);
 	}
