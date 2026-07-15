@@ -27,6 +27,31 @@ $license         = class_exists( 'Mcpwp_License' ) ? Mcpwp_License::get_instance
 $license_plan    = $license ? $license->get_plan() : 'unlicensed';
 $license_label   = ucwords( str_replace( '_', ' ', $license_plan ) );
 
+// Prefer the Freemius SDK's own install-linked URL — it carries the site's
+// install_id so checkout activates THIS site and redirects back into
+// wp-admin. A plain marketing-site link has no install context, so a
+// completed purchase there never syncs back to the plugin (issue reported
+// by Hadi: "pay with coupon, nothing happens, no way back to WP").
+$mcpwp_fs_obj        = function_exists( 'mcpwp_get_fs_instance' ) ? mcpwp_get_fs_instance() : null;
+$license_manage_url = $license ? $license->get_upgrade_url() : 'https://mcpwp.net/pricing/';
+if ( is_object( $mcpwp_fs_obj ) ) {
+	$fs_is_stuck = ( method_exists( $mcpwp_fs_obj, 'is_anonymous' ) && $mcpwp_fs_obj->is_anonymous() )
+		|| ( method_exists( $mcpwp_fs_obj, 'is_pending_activation' ) && $mcpwp_fs_obj->is_pending_activation() );
+
+	if ( $fs_is_stuck && method_exists( $mcpwp_fs_obj, 'get_reconnect_url' ) ) {
+		// Site skipped connect (or an old dev-cycle install left it in
+		// pending-activation) — the opt-in screen never shows again on its
+		// own. get_reconnect_url() clears that state and forces the real
+		// connect screen back up (Freemius's own official flow for this,
+		// not a raw option edit).
+		$license_manage_url = $mcpwp_fs_obj->get_reconnect_url();
+	} elseif ( method_exists( $mcpwp_fs_obj, 'is_registered' ) && $mcpwp_fs_obj->is_registered() && method_exists( $mcpwp_fs_obj, 'get_upgrade_url' ) ) {
+		$license_manage_url = $mcpwp_fs_obj->get_upgrade_url();
+	} elseif ( method_exists( $mcpwp_fs_obj, 'get_account_url' ) ) {
+		$license_manage_url = $mcpwp_fs_obj->get_account_url();
+	}
+}
+
 // Non-Latin site names (Persian, Arabic, CJK) produce URL-encoded slugs — fall back to hostname.
 if ( empty( $site_slug ) || false !== strpos( $site_slug, '%' ) ) {
 	$site_slug = preg_replace( '/^www\./', '', wp_parse_url( home_url(), PHP_URL_HOST ) );
@@ -124,7 +149,7 @@ $last_activity_time = ! empty( $recent_activity[0]['created_at'] ) ? $recent_act
 				?>
 			</strong>
 			&mdash;
-			<a href="https://mcpwp.net/pricing/" target="_blank"><?php esc_html_e( 'Manage pricing and license', 'mcpwp' ); ?></a>
+			<a href="<?php echo esc_url( $license_manage_url ); ?>"<?php echo ( false !== strpos( $license_manage_url, 'mcpwp.net' ) ) ? ' target="_blank"' : ''; ?>><?php esc_html_e( 'Manage pricing and license', 'mcpwp' ); ?></a>
 		</div>
 	</div>
 
