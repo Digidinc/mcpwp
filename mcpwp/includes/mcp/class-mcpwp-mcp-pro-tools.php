@@ -37,6 +37,10 @@ class Mcpwp_MCP_Pro_Tools extends Mcpwp_MCP_Tool_Registry {
 			'wc_delete_product',
 			'wp_delete_course_category',
 			'wp_push_to_live',
+			// Replace all existing Elementor content on the target page (#637).
+			'wp_apply_elementor_template',
+			'wp_apply_elementor_archetype',
+			'wp_apply_elementor_part',
 		);
 	}
 

@@ -1603,7 +1603,9 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	public function apply_part( $request ) {
 		$part_id = absint( $request->get_param( 'id' ) );
 		$page_id = absint( $request->get_param( 'page_id' ) );
-		$mode    = sanitize_key( (string) ( $request->get_param( 'mode' ) ?: 'replace' ) );
+		// Default is insert (non-destructive) — omission must never silently erase
+		// a page's existing content (#637). Callers opt into replace explicitly.
+		$mode    = sanitize_key( (string) ( $request->get_param( 'mode' ) ?: 'insert' ) );
 		$position = (string) ( $request->get_param( 'position' ) ?: 'end' );
 
 		if ( ! $page_id ) {

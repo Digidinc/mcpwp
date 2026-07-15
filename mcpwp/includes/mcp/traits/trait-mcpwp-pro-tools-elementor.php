@@ -301,7 +301,7 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 
 		$pro_tools[] = $this->define_tool(
 			'wp_apply_elementor_part',
-			'Apply a reusable Elementor part to a page. Use mode=\"replace\" to stamp the page from the part, or mode=\"insert\" to append/insert the part into an existing page without replacing other top-level sections.',
+			'Apply a reusable Elementor part to a page. Use mode=\"insert\" (default) to append/insert the part into an existing page without touching other top-level sections, or mode=\"replace\" to DESTRUCTIVELY replace all existing page content with the part.',
 			array(
 				'id'      => array(
 					'type'        => 'number',
@@ -315,8 +315,8 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 				),
 				'mode'    => array(
 					'type'        => 'string',
-					'description' => 'replace (default) or insert',
-					'default'     => 'replace',
+					'description' => 'insert (default, safe) or replace (destructive — erases existing page content)',
+					'default'     => 'insert',
 				),
 				'position' => array(
 					'type'        => 'string',

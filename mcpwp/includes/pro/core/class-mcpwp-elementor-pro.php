@@ -488,8 +488,21 @@ class Mcpwp_Elementor_Pro {
 		}
 
 		if ( $include_data ) {
-			$data['elementor_data'] = get_post_meta( $template->ID, '_elementor_data', true );
-			$data['page_settings']  = get_post_meta( $template->ID, '_elementor_page_settings', true );
+			// Parse into the same array/object shapes wp_get_elementor returns and
+			// wp_create_elementor_*/wp_update_elementor_* accept — the raw JSON
+			// string form broke direct read -> modify -> write round trips (#636).
+			$raw_data          = get_post_meta( $template->ID, '_elementor_data', true );
+			$raw_page_settings = get_post_meta( $template->ID, '_elementor_page_settings', true );
+
+			$decoded_data           = $raw_data ? json_decode( $raw_data, true ) : array();
+			$data['elementor_data'] = is_array( $decoded_data ) ? $decoded_data : array();
+
+			if ( empty( $raw_page_settings ) ) {
+				$data['page_settings'] = null;
+			} else {
+				$decoded_settings      = is_array( $raw_page_settings ) ? $raw_page_settings : json_decode( $raw_page_settings, true );
+				$data['page_settings'] = is_array( $decoded_settings ) ? $decoded_settings : null;
+			}
 		}
 
 		return $data;
