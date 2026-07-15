@@ -1168,7 +1168,7 @@ trait Mcpwp_Free_Tools_Site_Trait {
 
 		$tools[] = $this->define_tool(
 			'wp_set_kit_css',
-			'Write global CSS to the Elementor kit. Reliable alternative to wp_set_custom_css — bypasses WordPress Customizer output order and child theme cascade issues. Works on any Elementor site without Elementor Pro. Default mode is replace; use append to add without clobbering existing rules.',
+			'Write global CSS to the Elementor kit. Reliable alternative to wp_set_custom_css — bypasses WordPress Customizer output order and child theme cascade issues. Works on any Elementor site without Elementor Pro. Default mode is replace; use append to add without clobbering existing rules. For CSS you plan to update across multiple build passes (e.g. a template library\'s shared styles), prefer wp_upsert_kit_css_block instead — append duplicates content on every retry.',
 			array(
 				'css'  => array(
 					'type'        => 'string',
@@ -1179,6 +1179,57 @@ trait Mcpwp_Free_Tools_Site_Trait {
 					'type'        => 'string',
 					'enum'        => array( 'replace', 'append' ),
 					'description' => 'replace (default) overwrites existing kit CSS; append adds to it',
+				),
+			)
+		);
+
+		$tools[] = $this->define_tool(
+			'wp_list_kit_css_blocks',
+			'List named, hash-tagged Kit CSS blocks managed via wp_upsert_kit_css_block. Returns name/hash/byte count for each — not the CSS body itself, use wp_get_kit_css_block for that.',
+			array()
+		);
+
+		$tools[] = $this->define_tool(
+			'wp_get_kit_css_block',
+			'Get one named Kit CSS block\'s full CSS body and content hash.',
+			array(
+				'name' => array(
+					'type'        => 'string',
+					'description' => 'Block name',
+					'required'    => true,
+				),
+			)
+		);
+
+		$tools[] = $this->define_tool(
+			'wp_upsert_kit_css_block',
+			'Create or update a named, idempotent region inside the Elementor Kit CSS, without touching any other block or any unmanaged CSS elsewhere in the kit. Re-submitting identical CSS is a no-op (reported as "skipped") instead of growing the kit — use this instead of wp_set_kit_css mode=append when the same CSS may be written more than once across build/polish passes. Pass expected_hash (from a prior wp_get_kit_css_block/wp_list_kit_css_blocks call) to fail with a conflict if the block changed since you last read it.',
+			array(
+				'name'          => array(
+					'type'        => 'string',
+					'description' => 'Block name — 1-64 lowercase letters, digits, hyphens, or underscores, starting with a letter or digit',
+					'required'    => true,
+				),
+				'css'           => array(
+					'type'        => 'string',
+					'description' => 'CSS body for this block',
+					'required'    => true,
+				),
+				'expected_hash' => array(
+					'type'        => 'string',
+					'description' => 'Optional optimistic-concurrency hash from a prior read',
+				),
+			)
+		);
+
+		$tools[] = $this->define_tool(
+			'wp_delete_kit_css_block',
+			'Delete a named Kit CSS block. All other CSS in the kit (other blocks and any unmanaged CSS) is left untouched.',
+			array(
+				'name' => array(
+					'type'        => 'string',
+					'description' => 'Block name',
+					'required'    => true,
 				),
 			)
 		);
