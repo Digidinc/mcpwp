@@ -5,6 +5,35 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.0](https://github.com/Mumega-com/mcpwp/compare/v3.4.17...v3.5.0) (2026-07-15)
+
+
+### Features
+
+* **elementor:** idempotent, named Kit CSS blocks ([#645](https://github.com/Mumega-com/mcpwp/issues/645)) ([b3b5519](https://github.com/Mumega-com/mcpwp/commit/b3b551932cffce0fcf5d2b5eb630b0990df40c70))
+* **elementor:** validate Atomic Elements props against real schema + document the feature ([1ffbff9](https://github.com/Mumega-com/mcpwp/commit/1ffbff916c50af63384371c0b7994cb12da311c7))
+* **seo:** classify deprecated schema.org rich-result types ([#615](https://github.com/Mumega-com/mcpwp/issues/615)) ([b16ccfb](https://github.com/Mumega-com/mcpwp/commit/b16ccfbcd4329cf589c2e90ead3f3903682d382c))
+* **seo:** experimental opt-in GEO/AI-citability score ([#617](https://github.com/Mumega-com/mcpwp/issues/617)) ([21bc3ee](https://github.com/Mumega-com/mcpwp/commit/21bc3ee3e5d090eb5e50dd301f6912a12bf29c4d))
+* **seo:** schema-placement check + explicit E-E-A-T rubric ([#616](https://github.com/Mumega-com/mcpwp/issues/616)) ([bd98a7d](https://github.com/Mumega-com/mcpwp/commit/bd98a7df3eae0d2ac2127da4d160ce85ed73bca8))
+
+
+### Bug Fixes
+
+* **elementor:** accept create-side param names on archetype/part list tools ([#640](https://github.com/Mumega-com/mcpwp/issues/640)) ([5de3176](https://github.com/Mumega-com/mcpwp/commit/5de3176583b459b4b03f8be5ea116a6f928caf2d))
+* **elementor:** correct destructive annotations and elementor_data round-trip typing ([#642](https://github.com/Mumega-com/mcpwp/issues/642)) ([55252ec](https://github.com/Mumega-com/mcpwp/commit/55252ec251968065117f3e4f65747ff3c7233fab))
+* **elementor:** stop silent data loss on section/container/atomic layout mismatches ([3356719](https://github.com/Mumega-com/mcpwp/commit/33567199ca9b4e92dffee6582ed1d08ecd430e39))
+* **license:** reconnect Freemius when a site is stuck anonymous/pending ([#633](https://github.com/Mumega-com/mcpwp/issues/633)) ([3fe334a](https://github.com/Mumega-com/mcpwp/commit/3fe334aaa7c12bd53406665d51372a50eb8afc9b))
+* **rendered-html:** render draft/private Elementor content in-process, not via loopback ([#644](https://github.com/Mumega-com/mcpwp/issues/644)) ([7b94091](https://github.com/Mumega-com/mcpwp/commit/7b940919e30561987c19aebadc7a05c1231509cf))
+* **security:** block secret option stores from /option and admin-gate /plugin-settings ([094e472](https://github.com/Mumega-com/mcpwp/commit/094e472e3fe3f0bf7467869d4ad1e4b2d11d9178))
+* **security:** block secret option stores from /option and admin-gate /plugin-settings ([3b30a37](https://github.com/Mumega-com/mcpwp/commit/3b30a37960769cb6c2ba31c94d215314758ea107))
+* **security:** harden REST/MCP scope matrix and self-approval gate ([3959a13](https://github.com/Mumega-com/mcpwp/commit/3959a13ec7304d8cba0003e87627ba66279f1549))
+* **security:** harden REST/MCP scope matrix and self-approval gate ([aadd238](https://github.com/Mumega-com/mcpwp/commit/aadd2388dfd1eeff0f806696205cc18b6f8e94e5))
+* **security:** require admin scope to bypass content-approval gate ([172fd28](https://github.com/Mumega-com/mcpwp/commit/172fd2803cfa0fa48c7907e4b8c6e2c08cb01f4b))
+* **security:** require admin scope to bypass content-approval gate ([b27591b](https://github.com/Mumega-com/mcpwp/commit/b27591bb83de625eea5f916b834140dc7a34eb81))
+* **security:** restrict non-public content reads to write-scoped keys ([#601](https://github.com/Mumega-com/mcpwp/issues/601)) ([ea27690](https://github.com/Mumega-com/mcpwp/commit/ea2769065bb8c1430ac9f78de1490087abb737bd))
+* **seo:** stop /seo/audit fatal and per-post self-fetch storm ([9a60782](https://github.com/Mumega-com/mcpwp/commit/9a607829f60cfe0d73a30336b135754b4c0706be))
+* **seo:** stop /seo/audit fatal and per-post self-fetch storm ([c4c4ec5](https://github.com/Mumega-com/mcpwp/commit/c4c4ec55d94fa8fcda75289ec1923faf0f6bc3da))
+
 ## [3.4.6](https://github.com/Mumega-com/mcpwp/compare/v3.4.5...v3.4.6) (2026-07-09)
 
 
