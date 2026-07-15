@@ -153,6 +153,27 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 
 == Changelog ==
 
+= 3.5.0 =
+* feat: **elementor:** idempotent, named Kit CSS blocks ([#645](https://github.com/Mumega-com/mcpwp/issues/645))
+* feat: **elementor:** validate Atomic Elements props against real schema + document the feature
+* feat: **seo:** classify deprecated schema.org rich-result types ([#615](https://github.com/Mumega-com/mcpwp/issues/615))
+* feat: **seo:** experimental opt-in GEO/AI-citability score ([#617](https://github.com/Mumega-com/mcpwp/issues/617))
+* feat: **seo:** schema-placement check + explicit E-E-A-T rubric ([#616](https://github.com/Mumega-com/mcpwp/issues/616))
+* fix: **elementor:** accept create-side param names on archetype/part list tools ([#640](https://github.com/Mumega-com/mcpwp/issues/640))
+* fix: **elementor:** correct destructive annotations and elementor_data round-trip typing ([#642](https://github.com/Mumega-com/mcpwp/issues/642))
+* fix: **elementor:** stop silent data loss on section/container/atomic layout mismatches
+* fix: **license:** reconnect Freemius when a site is stuck anonymous/pending ([#633](https://github.com/Mumega-com/mcpwp/issues/633))
+* fix: **rendered-html:** render draft/private Elementor content in-process, not via loopback ([#644](https://github.com/Mumega-com/mcpwp/issues/644))
+* fix: **security:** block secret option stores from /option and admin-gate /plugin-settings
+* fix: **security:** block secret option stores from /option and admin-gate /plugin-settings
+* fix: **security:** harden REST/MCP scope matrix and self-approval gate
+* fix: **security:** harden REST/MCP scope matrix and self-approval gate
+* fix: **security:** require admin scope to bypass content-approval gate
+* fix: **security:** require admin scope to bypass content-approval gate
+* fix: **security:** restrict non-public content reads to write-scoped keys ([#601](https://github.com/Mumega-com/mcpwp/issues/601))
+* fix: **seo:** stop /seo/audit fatal and per-post self-fetch storm
+* fix: **seo:** stop /seo/audit fatal and per-post self-fetch storm
+
 = 3.4.17 =
 * new: **seo:** /seo/content-quality gains an optional geo_citability_experimental score (include_geo_experimental=true, off by default) — self-contained answer blocks, question-phrased headings, and structured-data presence, explicitly labeled as vendor-observed correlation, not a Google-confirmed signal, and never mixed into the main score. Deliberately does not score total page word count (vendor data found only ~0.04 correlation with citation). Not building an llms.txt generator — Google doesn't consume it. (#614, #617)
 
