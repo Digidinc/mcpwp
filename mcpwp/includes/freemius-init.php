@@ -67,9 +67,15 @@ if ( ! function_exists( 'mcpwp_fs' ) ) {
 				// Authorizes Freemius to generate the free wp.org build. Stripped
 				// from the free version automatically.
 				'wp_org_gatekeeper'   => 'OA7#BoRiBNqdf52FvzEf!!074aRLPs8fspif$7K1#4u4Csys1fQlCecVcUTOs2mcpeVHi#C2j9d09fOTvbC0HloPT7fFee5WdS3G',
+				// is_require_payment=false + anonymous mode allowed: free tier is
+				// usable immediately (Skip), Pro is a passive Upgrade nag rather
+				// than a hard license/payment gate at first activation. The free
+				// vs Pro split already happens per-tool at runtime (pro_required
+				// upsell telemetry, v3.2.2+) — that only works if people can
+				// actually reach the free tier first.
 				'trial'               => array(
 					'days'               => 14,
-					'is_require_payment' => true,
+					'is_require_payment' => false,
 				),
 				// NOTE: menu kept as the plugin's real TOP-LEVEL page
 				// (admin.php?page=mcpwp). The dashboard snippet's
@@ -124,6 +130,50 @@ $mcpwp_fs_instance = mcpwp_get_fs_instance();
 if ( $mcpwp_fs_instance && method_exists( $mcpwp_fs_instance, 'add_filter' ) ) {
 	$mcpwp_fs_instance->add_filter( 'plugin_icon', 'mcpwp_fs_custom_icon' );
 }
+
+/**
+ * Freemius's connect screen defaults to requiring a license key whenever the
+ * running code is the premium package itself — it assumes premium code only
+ * ever arrives via its own free-to-paid auto-upgrade, never a cold direct
+ * download. We distribute the premium zip directly (mcpwp-freemius-*.zip),
+ * so without this every fresh install hit a hard license/trial gate with no
+ * way to just try the free tier — the opposite of how the free/Pro split
+ * already works everywhere else in this plugin (per-tool gating, not an
+ * all-or-nothing wall).
+ *
+ * @param string $url Connect/activation URL Freemius is about to redirect to.
+ * @return string
+ */
+function mcpwp_fs_soften_connect_gate( $url ) {
+	return add_query_arg( 'require_license', 'false', $url );
+}
+if ( $mcpwp_fs_instance && method_exists( $mcpwp_fs_instance, 'add_filter' ) ) {
+	$mcpwp_fs_instance->add_filter( 'connect_url', 'mcpwp_fs_soften_connect_gate' );
+}
+
+/**
+ * The connect_url filter above only covers URLs Freemius builds itself (e.g.
+ * "Connect Again"). The routine case — a user just clicking the plugin's own
+ * admin menu item while still in activation mode — renders the connect
+ * screen in place of the page content and reads require_license straight off
+ * the current request, which never has our param. Inject it on admin_init,
+ * before Freemius's own page callback runs, so the soft gate applies
+ * regardless of how the page was reached.
+ */
+function mcpwp_fs_default_require_license_false() {
+	if ( ! isset( $_GET['page'] ) || 'mcpwp' !== $_GET['page'] ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only page routing check, no state change.
+		return;
+	}
+	// fs_request_get_bool() reads $_REQUEST, not $_GET — both must be set,
+	// they are independent superglobals in PHP, not aliases of each other.
+	if ( ! isset( $_GET['require_license'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		$_GET['require_license'] = 'false';
+	}
+	if ( ! isset( $_REQUEST['require_license'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		$_REQUEST['require_license'] = 'false';
+	}
+}
+add_action( 'admin_init', 'mcpwp_fs_default_require_license_false', 5 );
 
 // Custom connect message.
 function mcpwp_fs_custom_connect_message(
