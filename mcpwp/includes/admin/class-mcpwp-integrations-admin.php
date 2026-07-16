@@ -193,6 +193,26 @@ class Mcpwp_Integrations_Admin {
 	 * @return void
 	 */
 	public function handle_figma_oauth_callback() {
+		// Also hooked on admin_post_nopriv (Figma's redirect lands back on this
+		// domain as a normal browser navigation, so the admin's own session
+		// cookie is present — nopriv exists only so a logged-out hit doesn't
+		// fatal). The state-transient check below proves an admin genuinely
+		// started this flow, but doesn't confirm the CURRENT request is that
+		// same admin's browser — require the capability directly too.
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_safe_redirect(
+				add_query_arg(
+					array(
+						'page'             => self::PAGE_SLUG,
+						'mcpwp_figma_oauth' => 'error',
+						'message'          => rawurlencode( __( 'You must be logged in as an administrator to complete this connection.', 'mcpwp' ) ),
+					),
+					admin_url( 'admin.php' )
+				)
+			);
+			exit;
+		}
+
 		$code  = isset( $_GET['code'] ) ? sanitize_text_field( wp_unslash( $_GET['code'] ) ) : '';
 		$state = isset( $_GET['state'] ) ? sanitize_text_field( wp_unslash( $_GET['state'] ) ) : '';
 		$error = isset( $_GET['error'] ) ? sanitize_text_field( wp_unslash( $_GET['error'] ) ) : '';

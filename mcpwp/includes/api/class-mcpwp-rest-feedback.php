@@ -227,20 +227,29 @@ class Mcpwp_REST_Feedback extends Mcpwp_REST_API {
 	/**
 	 * Get client IP address for relay rate limiting.
 	 *
+	 * This gates an unauthenticated, privileged action (creating a GitHub
+	 * issue with the site's own token) — the rate limit is the ONLY control,
+	 * so the IP it keys on must not be attacker-choosable. X-Forwarded-For
+	 * and X-Real-IP are set by the client itself unless a trusted proxy
+	 * overwrites them, and WordPress has no reliable way to confirm that
+	 * here — trusting them let any caller reset their own rate-limit bucket
+	 * on every request by sending a different fake value. CF-Connecting-IP
+	 * is safe: only Cloudflare's edge sets that specific header, so its mere
+	 * presence means Cloudflare (not the client) supplied it. Otherwise fall
+	 * straight to REMOTE_ADDR — the actual TCP peer, which the HTTP client
+	 * cannot forge (note: if the origin's own web server is configured to
+	 * rewrite REMOTE_ADDR from a client-supplied header, that trust must be
+	 * fixed at the proxy/nginx layer — no application code can distinguish
+	 * a forged REMOTE_ADDR from a real one once the web server already
+	 * rewrote it).
+	 *
 	 * @return string
 	 */
 	private function get_relay_client_ip() {
-		$headers = array( 'HTTP_CF_CONNECTING_IP', 'HTTP_X_FORWARDED_FOR', 'HTTP_X_REAL_IP', 'REMOTE_ADDR' );
-		foreach ( $headers as $header ) {
-			if ( ! empty( $_SERVER[ $header ] ) ) {
-				$ip = sanitize_text_field( wp_unslash( $_SERVER[ $header ] ) );
-				if ( false !== strpos( $ip, ',' ) ) {
-					$ip = trim( explode( ',', $ip )[0] );
-				}
-				return $ip;
-			}
+		if ( ! empty( $_SERVER['HTTP_CF_CONNECTING_IP'] ) ) {
+			return sanitize_text_field( wp_unslash( $_SERVER['HTTP_CF_CONNECTING_IP'] ) );
 		}
-		return '0.0.0.0';
+		return ! empty( $_SERVER['REMOTE_ADDR'] ) ? sanitize_text_field( wp_unslash( $_SERVER['REMOTE_ADDR'] ) ) : '0.0.0.0';
 	}
 
 	/**
