@@ -21,18 +21,39 @@ Different runtimes have genuinely different native tools:
 Putting them on the SAME project's squad means the squad as a whole can do things no single
 member can — this is capability pooling, not just access control.
 
-## The naming convention
+## The naming convention — and a correction (2026-07-16, same night)
 
 `<host>-<runtime>-<project>` — encodes where it runs, what it is, and which project it's
 scoped to, in the identity itself (complements mupot's host-signal radar, which surfaces the
-same "where" as telemetry rather than identity).
+same "where" as telemetry rather than identity). Confirmed hosts: `vps` = this Hetzner box,
+`mac` = Hadi's personal Mac (the model/inference literally runs there — not "hadi-" as a
+prefix, which is a reserved anti-impersonation namespace on the SOS bus, see below).
 
 - `vps-kasra` — this session, cross-repo/security lane.
 - `vps-claude-mumcp` — the mumcp architect, this VPS.
-- `hadi-codex-cli-mumcp` — hadi-codex-cli scoped to this project.
-- `vps-hermes-mumcp` — proposed Hermes instance for the mumcp.com marketplace-brand track.
-- `vps-hermes-mcwp` — proposed Hermes instance for the mcpwp.net WP-plugin track (per
-  STRATEGY.md §11, mumcp.com and mcpwp.net are genuinely separate tracks, not a typo).
+- `mac-codex-mumcp` — the accurate name for the Codex CLI instance whose model runs on
+  Hadi's Mac, scoped to this project (corrected from an earlier `hadi-codex-cli-mumcp` /
+  `hadi-codex-mumcp` attempt — `hadi-` is a reserved bus prefix, see the mint-attempt note).
+- `vps-hermes-mumcp` — a REAL Hermes profile, created 2026-07-16, idle (not yet activated),
+  cheap-continuous-perception role per §4b. See "What's actually true" below — proposed
+  scope (mumcp.com marketplace track vs mcpwp.net WP-plugin track) not yet resolved; this
+  profile's `terminal.cwd` currently points at THIS repo (the WP-plugin track), so the name
+  vs scope may need reconciling once the mumcp.com/mcpwp.net split is real.
+
+### What's actually true, after attempting this live (correction)
+
+Attempting to formally MINT `hadi-codex-mumcp` / `vps-codex-mumcp` as a new bus sub-identity
+hit a real wall: the only agent-identity-minting surface on the SOS bus
+(`sos/bus/tenant_agent_mint.py`, S028 C-1b) is the **customer-tenant custom-agent-mint**
+API — built for paying customers (digid/viamar-style) minting their own scoped support
+agent, protected by 9 named LOCK invariants (charter-injection-defense, RLS, QNFT signing).
+Using `mumcp`/`mcpwp` as a `tenant_id` there is a category error — an internal project is
+not a customer tenant. **No new bus sub-identity was minted, and none was needed:**
+hadi-codex already has a working bus identity (`agent:hadi-codex`) and needs no separate
+mint to coordinate on this project — it just orients via this doc + `BACKLOG.md` +
+`STRATEGY.md` and reports back under its existing identity. The "each squad member gets
+its own freshly-minted sub-identity" framing in the original version of this doc was
+over-engineered; corrected here rather than left standing.
 
 ## The platform primitive this should eventually formalize onto
 
