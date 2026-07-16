@@ -4,6 +4,10 @@ use PHPUnit\Framework\TestCase;
 
 class Mcpwp_Api_Auth_Test_Harness {
 	use Mcpwp_Api_Auth;
+
+	public function required_scope_for_tool( string $tool_name ): string {
+		return $this->get_required_scope_for_tool_name( $tool_name );
+	}
 }
 
 final class ApiAuthTest extends TestCase {
@@ -11,6 +15,60 @@ final class ApiAuthTest extends TestCase {
 		$GLOBALS['mcpwp_test_options'] = array();
 		$GLOBALS['mcpwp_test_transients'] = array();
 		$GLOBALS['mcpwp_test_current_user'] = 0;
+		$GLOBALS['mcpwp_test_filters'] = array();
+	}
+
+	public function test_extension_can_raise_custom_tool_scope_to_admin(): void {
+		add_filter(
+			'mcpwp_required_scope_for_tool',
+			static function ( string $scope, string $tool_name ): string {
+				return 'wp_update_mumega_motion' === $tool_name ? 'admin' : $scope;
+			},
+			10,
+			2
+		);
+
+		$auth = new Mcpwp_Api_Auth_Test_Harness();
+
+		$this->assertSame( 'admin', $auth->required_scope_for_tool( 'wp_update_mumega_motion' ) );
+	}
+
+	public function test_extension_cannot_lower_builtin_admin_scope(): void {
+		add_filter(
+			'mcpwp_required_scope_for_tool',
+			static function (): string {
+				return 'read';
+			},
+			10,
+			2
+		);
+
+		$auth = new Mcpwp_Api_Auth_Test_Harness();
+
+		$this->assertSame( 'admin', $auth->required_scope_for_tool( 'wp_trigger_update' ) );
+	}
+
+	public function test_invalid_filtered_scope_is_ignored(): void {
+		add_filter(
+			'mcpwp_required_scope_for_tool',
+			static function (): string {
+				return 'root';
+			},
+			10,
+			2
+		);
+
+		$auth = new Mcpwp_Api_Auth_Test_Harness();
+
+		$this->assertSame( 'write', $auth->required_scope_for_tool( 'wp_update_example' ) );
+	}
+
+	public function test_scope_inference_is_unchanged_without_filter(): void {
+		$auth = new Mcpwp_Api_Auth_Test_Harness();
+
+		$this->assertSame( 'read', $auth->required_scope_for_tool( 'vendor_list_records' ) );
+		$this->assertSame( 'write', $auth->required_scope_for_tool( 'wp_update_example' ) );
+		$this->assertSame( 'admin', $auth->required_scope_for_tool( 'wp_trigger_update' ) );
 	}
 
 	public function test_query_parameter_key_is_not_accepted(): void {
