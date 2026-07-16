@@ -156,6 +156,76 @@ add_filter( 'mcpwp_register_tools', function( array $tools ): array {
 `get_tools()` / `get_tool_map()` interface. The `rest_path` is used verbatim — no namespace
 prepend — so use the full route including `/mcpwp/v1` if targeting this plugin's own routes.
 
+The `destructive` registration key sets the MCP `annotations.destructiveHint` metadata. That
+hint describes behavior to MCP clients; it does not grant or raise an authorization scope.
+
+### Elevating a custom tool's authorization scope
+
+Destructive extensions should feature-detect scope-filter support before registering tools
+that require elevation. This complete extension example registers two tools and raises their
+inferred scopes to `admin` by exact name:
+
+```php
+add_action(
+	'plugins_loaded',
+	static function (): void {
+		if (
+			! defined( 'MCPWP_SUPPORTS_CUSTOM_TOOL_SCOPE_FILTER' )
+			|| ! MCPWP_SUPPORTS_CUSTOM_TOOL_SCOPE_FILTER
+		) {
+			return;
+		}
+
+		add_filter(
+			'mcpwp_register_tools',
+			static function ( array $tools ): array {
+				$tools[] = array(
+					'name'        => 'wp_update_mumega_motion',
+					'description' => 'Update the configured Mumega motion settings.',
+					'rest_path'   => '/mumega-motion/v1/settings',
+					'method'      => 'POST',
+					'category'    => 'mumega-motion',
+					'destructive' => true,
+				);
+				$tools[] = array(
+					'name'        => 'wp_rollback_mumega_motion',
+					'description' => 'Roll back Mumega motion settings to the previous revision.',
+					'rest_path'   => '/mumega-motion/v1/rollback',
+					'method'      => 'POST',
+					'category'    => 'mumega-motion',
+					'destructive' => true,
+				);
+
+				return $tools;
+			}
+		);
+
+		add_filter(
+			'mcpwp_required_scope_for_tool',
+			static function ( string $scope, string $tool_name ): string {
+				$admin_tools = array(
+					'wp_update_mumega_motion',
+					'wp_rollback_mumega_motion',
+				);
+
+				return in_array( $tool_name, $admin_tools, true ) ? 'admin' : $scope;
+			},
+			10,
+			2
+		);
+	}
+);
+```
+
+The scope filter is raise-only:
+
+- It can raise `read` to `write` or `admin`, and `write` to `admin`.
+- It cannot lower a core or inferred requirement.
+- Invalid scope values are ignored.
+- Use exact tool names instead of broad prefixes or patterns.
+- The tool must still enforce an appropriate WordPress capability in its callback or REST
+  `permission_callback`; the MCP scope filter is not a substitute for WordPress authorization.
+
 ## How to add a tool
 
 1. **Pick the right file**: free tier feature → `class-mcpwp-mcp-free-tools.php`; pro-gated → `class-mcpwp-mcp-pro-tools.php`.
