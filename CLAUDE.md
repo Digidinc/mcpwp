@@ -385,6 +385,15 @@ All endpoints require `X-API-Key` header. Namespace: `mcpwp/v1`.
 | `/design-references` | GET/POST | List/create design references |
 | `/design-references/{id}` | GET/PUT | Design reference CRUD |
 
+### Figma
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/figma/status` | GET | Connection status, auth mode, default file key |
+| `/figma/file` | GET | File summary + outline |
+| `/figma/node` | GET | Specific node/frame summary |
+| `/figma/design-tokens` | GET | Cached colors + typography from last sync (`mcpwp_figma_design_tokens` option) |
+| `/figma/design-tokens/sync` | POST | Pull colors/typography from the file's shared styles and refresh the cache — admin scope required |
+
 ### Integrations
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
@@ -550,6 +559,7 @@ Config stored per-provider in `mcpwp_integrations` wp_option (encrypted). Manage
 | `mcpwp_design_references` | Stored design reference library |
 | `mcpwp_integrations` | Provider API keys (encrypted) |
 | `mcpwp_disabled_tool_categories` | Tool category toggles |
+| `mcpwp_figma_design_tokens` | Cached Figma colors/typography tokens (synced hourly via cron + on-demand via `/figma/design-tokens/sync`); read directly by companion theme projects |
 | `mcpwp_update_info` | Update manifest override (leave empty unless overriding) |
 | `mcpwp_version_url` | Update check URL (→ mumega.com manifest) |
 | `mcpwp_site_uuid` | Anonymous site UUID for analytics (`mcpwp-<uuid4>`) |

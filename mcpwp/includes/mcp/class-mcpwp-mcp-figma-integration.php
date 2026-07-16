@@ -48,9 +48,11 @@ class Mcpwp_MCP_Figma_Integration extends Mcpwp_Integration {
 	 */
 	public function get_tool_categories() {
 		return array(
-			'wp_figma_status'   => 'site',
-			'wp_get_figma_file' => 'site',
-			'wp_get_figma_node' => 'site',
+			'wp_figma_status'             => 'site',
+			'wp_get_figma_file'           => 'site',
+			'wp_get_figma_node'           => 'site',
+			'wp_get_figma_design_tokens'  => 'site',
+			'wp_sync_figma_design_tokens' => 'site',
 		);
 	}
 
@@ -101,6 +103,21 @@ class Mcpwp_MCP_Figma_Integration extends Mcpwp_Integration {
 					),
 				)
 			),
+			$this->define_tool(
+				'wp_get_figma_design_tokens',
+				'Read the cached design tokens (colors + typography) last synced from the Figma file\'s shared styles. Does not call Figma — use wp_sync_figma_design_tokens first to refresh.',
+				array()
+			),
+			$this->define_tool(
+				'wp_sync_figma_design_tokens',
+				'Pull colors and typography from the configured Figma file\'s shared styles, resolve them to CSS-usable values (hex/rgba colors, font properties), and cache them so a companion WordPress theme can read them as CSS custom properties.',
+				array(
+					'file_key' => array(
+						'type'        => 'string',
+						'description' => 'Figma file key. Optional if a default file key is configured.',
+					),
+				)
+			),
 		);
 	}
 
@@ -111,17 +128,25 @@ class Mcpwp_MCP_Figma_Integration extends Mcpwp_Integration {
 	 */
 	public function get_tool_map() {
 		return array(
-			'wp_figma_status'   => array(
+			'wp_figma_status'             => array(
 				'route'  => '/figma/status',
 				'method' => 'GET',
 			),
-			'wp_get_figma_file' => array(
+			'wp_get_figma_file'           => array(
 				'route'  => '/figma/file',
 				'method' => 'GET',
 			),
-			'wp_get_figma_node' => array(
+			'wp_get_figma_node'           => array(
 				'route'  => '/figma/node',
 				'method' => 'GET',
+			),
+			'wp_get_figma_design_tokens'  => array(
+				'route'  => '/figma/design-tokens',
+				'method' => 'GET',
+			),
+			'wp_sync_figma_design_tokens' => array(
+				'route'  => '/figma/design-tokens/sync',
+				'method' => 'POST',
 			),
 		);
 	}
@@ -136,6 +161,7 @@ class Mcpwp_MCP_Figma_Integration extends Mcpwp_Integration {
 			'wp_figma_status',
 			'wp_get_figma_file',
 			'wp_get_figma_node',
+			'wp_sync_figma_design_tokens',
 		);
 	}
 

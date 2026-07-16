@@ -90,6 +90,32 @@ class Mcpwp_REST_Figma extends Mcpwp_REST_API {
 				),
 			)
 		);
+
+		register_rest_route(
+			$this->namespace,
+			'/figma/design-tokens',
+			array(
+				'methods'             => WP_REST_Server::READABLE,
+				'callback'            => array( $this, 'get_design_tokens' ),
+				'permission_callback' => array( $this, 'check_permission' ),
+			)
+		);
+
+		register_rest_route(
+			$this->namespace,
+			'/figma/design-tokens/sync',
+			array(
+				'methods'             => WP_REST_Server::CREATABLE,
+				'callback'            => array( $this, 'sync_design_tokens' ),
+				'permission_callback' => array( $this, 'check_permission' ),
+				'args'                => array(
+					'file_key' => array(
+						'type'        => 'string',
+						'description' => __( 'Figma file key. Optional if a default file key is configured.', 'mcpwp' ),
+					),
+				),
+			)
+		);
 	}
 
 	/**
@@ -147,6 +173,48 @@ class Mcpwp_REST_Figma extends Mcpwp_REST_API {
 			array(
 				'file_key' => $result['file_key'],
 				'node_id'  => $result['node_id'],
+			)
+		);
+
+		return $this->success_response( $result );
+	}
+
+	/**
+	 * Get the cached design-tokens payload (no Figma API call).
+	 *
+	 * @param WP_REST_Request $request Request object.
+	 * @return WP_REST_Response
+	 */
+	public function get_design_tokens( $request ) {
+		$result = $this->figma->get_cached_design_tokens();
+		$this->log_activity( 'figma_get_design_tokens', $request, array( 'file_key' => $result['file_key'] ) );
+		return $this->success_response( $result );
+	}
+
+	/**
+	 * Trigger a fresh design-tokens sync from Figma's shared styles.
+	 *
+	 * Makes an external Figma API call and overwrites the cached
+	 * mcpwp_figma_design_tokens option — admin scope required (see
+	 * Mcpwp_Api_Auth::get_required_scope_for_request()).
+	 *
+	 * @param WP_REST_Request $request Request object.
+	 * @return WP_REST_Response|WP_Error
+	 */
+	public function sync_design_tokens( $request ) {
+		$result = $this->figma->sync_design_tokens( (string) $request->get_param( 'file_key' ) );
+
+		if ( is_wp_error( $result ) ) {
+			return $result;
+		}
+
+		$this->log_activity(
+			'figma_sync_design_tokens',
+			$request,
+			array(
+				'file_key'  => $result['file_key'],
+				'colors'    => count( $result['colors'] ),
+				'typography' => count( $result['typography'] ),
 			)
 		);
 

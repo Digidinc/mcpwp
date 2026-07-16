@@ -15,6 +15,34 @@ if ( ! defined( 'ABSPATH' ) ) {
 class Mcpwp_Figma {
 
 	/**
+	 * WP option storing the last synced design-tokens payload.
+	 *
+	 * Shape: array{ synced_at: int, file_key: string, colors: array<string,string>,
+	 * typography: array<string,array{fontFamily:string,fontWeight:int,fontSize:int,lineHeightPx:int}> }
+	 *
+	 * A separate WordPress theme project reads this option directly to emit
+	 * CSS custom properties — the key names in that shape are a public contract;
+	 * do not rename them without coordinating the theme-side consumer.
+	 *
+	 * @var string
+	 */
+	const DESIGN_TOKENS_OPTION = 'mcpwp_figma_design_tokens';
+
+	/**
+	 * Cron hook for the periodic design-token sync.
+	 *
+	 * @var string
+	 */
+	const CRON_HOOK = 'mcpwp_figma_sync_design_tokens';
+
+	/**
+	 * Cron schedule recurrence for the design-token sync.
+	 *
+	 * @var string
+	 */
+	const CRON_INTERVAL = 'hourly';
+
+	/**
 	 * Figma OAuth authorize URL.
 	 *
 	 * @var string
@@ -329,6 +357,179 @@ class Mcpwp_Figma {
 	}
 
 	/**
+	 * Sync design tokens (colors + typography) from a Figma file's shared
+	 * styles into the mcpwp_figma_design_tokens option.
+	 *
+	 * Flow: GET /files/{file_key}/styles (all plans, not Enterprise-gated) to
+	 * enumerate FILL and TEXT styles, then a single batched
+	 * GET /files/{file_key}/nodes?ids=... to resolve every style's node in one
+	 * request. FILL styles resolve to a CSS color (hex, or rgba() when the
+	 * fill has alpha < 1). TEXT styles resolve to a small typography record.
+	 * EFFECT/GRID styles are ignored — they have no simple CSS token form.
+	 *
+	 * An empty styles list (or a file with no FILL/TEXT styles) is a valid,
+	 * successful result — it stores and returns an empty-but-valid tokens
+	 * shape rather than a WP_Error.
+	 *
+	 * @param string|null $file_key Explicit Figma file key. Falls back to the
+	 *                              configured default_file_key when omitted/empty.
+	 * @return array|WP_Error Tokens payload (see DESIGN_TOKENS_OPTION docblock), or WP_Error on failure.
+	 */
+	public function sync_design_tokens( $file_key = null ) {
+		$resolved_key = $this->resolve_file_key( (string) $file_key );
+		if ( is_wp_error( $resolved_key ) ) {
+			return $resolved_key;
+		}
+
+		$styles_response = $this->request( '/files/' . rawurlencode( $resolved_key ) . '/styles' );
+		if ( is_wp_error( $styles_response ) ) {
+			return $styles_response;
+		}
+
+		// Figma wraps the styles list in a `meta` envelope; fall back to a
+		// top-level `styles` key defensively in case that ever changes.
+		if ( isset( $styles_response['meta']['styles'] ) && is_array( $styles_response['meta']['styles'] ) ) {
+			$styles = $styles_response['meta']['styles'];
+		} elseif ( isset( $styles_response['styles'] ) && is_array( $styles_response['styles'] ) ) {
+			$styles = $styles_response['styles'];
+		} else {
+			$styles = array();
+		}
+
+		// Only FILL (color) and TEXT (typography) styles map to simple CSS
+		// tokens; EFFECT (shadows/blurs) and GRID styles are skipped.
+		$relevant = array();
+		foreach ( $styles as $style ) {
+			if ( ! is_array( $style ) || empty( $style['node_id'] ) || empty( $style['style_type'] ) ) {
+				continue;
+			}
+
+			$style_type = strtoupper( (string) $style['style_type'] );
+			if ( ! in_array( $style_type, array( 'FILL', 'TEXT' ), true ) ) {
+				continue;
+			}
+
+			$name = isset( $style['name'] ) ? (string) $style['name'] : '';
+			$slug = $this->slugify_style_name( $name );
+			if ( '' === $slug ) {
+				$slug = 'style-' . sanitize_key( (string) $style['node_id'] );
+			}
+
+			$relevant[ (string) $style['node_id'] ] = array(
+				'style_type' => $style_type,
+				'slug'       => $slug,
+			);
+		}
+
+		$tokens = array(
+			'synced_at'  => time(),
+			'file_key'   => $resolved_key,
+			'colors'     => array(),
+			'typography' => array(),
+		);
+
+		if ( empty( $relevant ) ) {
+			update_option( self::DESIGN_TOKENS_OPTION, $tokens );
+			return $tokens;
+		}
+
+		$documents = $this->fetch_nodes_batch( $resolved_key, array_keys( $relevant ) );
+		if ( is_wp_error( $documents ) ) {
+			return $documents;
+		}
+
+		foreach ( $relevant as $node_id => $meta ) {
+			if ( ! isset( $documents[ $node_id ] ) ) {
+				continue;
+			}
+
+			$document = $documents[ $node_id ];
+
+			if ( 'FILL' === $meta['style_type'] ) {
+				$css_color = $this->extract_fill_color( $document );
+				if ( null !== $css_color ) {
+					$tokens['colors'][ $meta['slug'] ] = $css_color;
+				}
+				continue;
+			}
+
+			$typography = $this->extract_typography( $document );
+			if ( null !== $typography ) {
+				$tokens['typography'][ $meta['slug'] ] = $typography;
+			}
+		}
+
+		update_option( self::DESIGN_TOKENS_OPTION, $tokens );
+
+		return $tokens;
+	}
+
+	/**
+	 * Read the cached design-tokens option without hitting the Figma API.
+	 *
+	 * Returns an empty-but-valid shape (null synced_at, empty maps) when
+	 * design tokens have never been synced, so callers never have to
+	 * special-case "not synced yet" vs. "synced, but no tokens found".
+	 *
+	 * @return array{synced_at: int|null, file_key: string, colors: array, typography: array}
+	 */
+	public function get_cached_design_tokens() {
+		$tokens = get_option( self::DESIGN_TOKENS_OPTION, array() );
+
+		if ( ! is_array( $tokens ) || empty( $tokens ) ) {
+			return array(
+				'synced_at'  => null,
+				'file_key'   => '',
+				'colors'     => array(),
+				'typography' => array(),
+			);
+		}
+
+		return array(
+			'synced_at'  => isset( $tokens['synced_at'] ) ? (int) $tokens['synced_at'] : null,
+			'file_key'   => isset( $tokens['file_key'] ) ? (string) $tokens['file_key'] : '',
+			'colors'     => isset( $tokens['colors'] ) && is_array( $tokens['colors'] ) ? $tokens['colors'] : array(),
+			'typography' => isset( $tokens['typography'] ) && is_array( $tokens['typography'] ) ? $tokens['typography'] : array(),
+		);
+	}
+
+	/**
+	 * Schedule the recurring design-token sync cron event, if not already scheduled.
+	 */
+	public static function schedule() {
+		if ( ! wp_next_scheduled( self::CRON_HOOK ) ) {
+			wp_schedule_event( time(), self::CRON_INTERVAL, self::CRON_HOOK );
+		}
+	}
+
+	/**
+	 * Remove the scheduled design-token sync cron event.
+	 */
+	public static function unschedule() {
+		$timestamp = wp_next_scheduled( self::CRON_HOOK );
+		if ( $timestamp ) {
+			wp_unschedule_event( $timestamp, self::CRON_HOOK );
+		}
+	}
+
+	/**
+	 * Cron entry point. Only syncs when Figma has a usable access token AND a
+	 * default_file_key configured; a safe no-op otherwise (e.g. Figma never
+	 * configured on this site). Swallows WP_Error results — a failed
+	 * background sync must not surface to the WP-Cron scheduler.
+	 */
+	public static function cron_sync_design_tokens() {
+		$figma  = new self();
+		$status = $figma->get_status();
+
+		if ( empty( $status['configured'] ) || empty( $status['default_file_key'] ) ) {
+			return;
+		}
+
+		$figma->sync_design_tokens();
+	}
+
+	/**
 	 * Resolve the effective file key.
 	 *
 	 * @param string $file_key Requested file key.
@@ -623,5 +824,141 @@ class Mcpwp_Figma {
 		}
 
 		return $summary;
+	}
+
+	/**
+	 * Batch-resolve a set of Figma node IDs to their document payloads in a
+	 * single request (Figma's /nodes endpoint accepts comma-separated ids).
+	 *
+	 * @param string $file_key Figma file key.
+	 * @param array  $node_ids Node IDs to resolve.
+	 * @return array|WP_Error Map of node_id => document array, or WP_Error.
+	 */
+	private function fetch_nodes_batch( $file_key, array $node_ids ) {
+		if ( empty( $node_ids ) ) {
+			return array();
+		}
+
+		$response = $this->request(
+			'/files/' . rawurlencode( $file_key ) . '/nodes',
+			array( 'ids' => implode( ',', $node_ids ) )
+		);
+
+		if ( is_wp_error( $response ) ) {
+			return $response;
+		}
+
+		$nodes     = isset( $response['nodes'] ) && is_array( $response['nodes'] ) ? $response['nodes'] : array();
+		$documents = array();
+
+		foreach ( $node_ids as $node_id ) {
+			if ( isset( $nodes[ $node_id ]['document'] ) && is_array( $nodes[ $node_id ]['document'] ) ) {
+				$documents[ $node_id ] = $nodes[ $node_id ]['document'];
+			}
+		}
+
+		return $documents;
+	}
+
+	/**
+	 * Extract a CSS-usable color from a resolved FILL-style node's first
+	 * solid fill.
+	 *
+	 * @param array $document Resolved node document.
+	 * @return string|null Hex or rgba() color string, or null if no solid fill was found.
+	 */
+	private function extract_fill_color( array $document ) {
+		if ( empty( $document['fills'] ) || ! is_array( $document['fills'] ) ) {
+			return null;
+		}
+
+		foreach ( $document['fills'] as $fill ) {
+			if ( is_array( $fill ) && isset( $fill['type'] ) && 'SOLID' === $fill['type']
+				&& isset( $fill['color'] ) && is_array( $fill['color'] ) ) {
+				return $this->figma_color_to_css( $fill['color'] );
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * Convert a Figma color object ({r,g,b,a} each 0-1 float) to a CSS color
+	 * string. Fully opaque colors become #RRGGBB hex; anything with alpha
+	 * below 1 becomes rgba(r, g, b, a) so transparency is preserved.
+	 *
+	 * @param array $color Figma color object.
+	 * @return string CSS color string.
+	 */
+	private function figma_color_to_css( array $color ) {
+		$r = isset( $color['r'] ) ? (float) $color['r'] : 0.0;
+		$g = isset( $color['g'] ) ? (float) $color['g'] : 0.0;
+		$b = isset( $color['b'] ) ? (float) $color['b'] : 0.0;
+		$a = isset( $color['a'] ) ? (float) $color['a'] : 1.0;
+
+		$r255 = (int) round( $r * 255 );
+		$g255 = (int) round( $g * 255 );
+		$b255 = (int) round( $b * 255 );
+
+		if ( $a >= 0.999 ) {
+			return sprintf( '#%02X%02X%02X', $r255, $g255, $b255 );
+		}
+
+		// Trim to a compact decimal (e.g. 0.5, 0.25) without trailing zeros.
+		$alpha = rtrim( rtrim( number_format( $a, 3, '.', '' ), '0' ), '.' );
+		if ( '' === $alpha ) {
+			$alpha = '0';
+		}
+
+		return sprintf( 'rgba(%d, %d, %d, %s)', $r255, $g255, $b255, $alpha );
+	}
+
+	/**
+	 * Extract typography properties from a resolved TEXT-style node.
+	 *
+	 * lineHeightPx is passed through as a pixel value (matching Figma's own
+	 * field name) rather than converted to a unitless ratio — simpler for the
+	 * theme-side CSS consumer, which can divide by fontSize itself if it
+	 * wants a ratio instead.
+	 *
+	 * @param array $document Resolved node document.
+	 * @return array{fontFamily:string,fontWeight:int,fontSize:int,lineHeightPx?:int}|null
+	 */
+	private function extract_typography( array $document ) {
+		if ( empty( $document['style'] ) || ! is_array( $document['style'] ) ) {
+			return null;
+		}
+
+		$style = $document['style'];
+
+		$typography = array(
+			'fontFamily' => isset( $style['fontFamily'] ) ? (string) $style['fontFamily'] : '',
+			'fontWeight' => isset( $style['fontWeight'] ) ? (int) $style['fontWeight'] : 400,
+			'fontSize'   => isset( $style['fontSize'] ) ? (int) round( (float) $style['fontSize'] ) : 0,
+		);
+
+		if ( isset( $style['lineHeightPx'] ) ) {
+			$typography['lineHeightPx'] = (int) round( (float) $style['lineHeightPx'] );
+		}
+
+		return $typography;
+	}
+
+	/**
+	 * Slugify a Figma style name into a CSS-custom-property-safe key.
+	 *
+	 * Figma style names are often hierarchical ("Brand/Primary",
+	 * "Heading/H1") — the whole path is slugified into a single dashed key
+	 * (e.g. "brand-primary", "heading-h1").
+	 *
+	 * @param string $name Raw Figma style name.
+	 * @return string Slug containing only [a-z0-9-], or '' if nothing usable remained.
+	 */
+	private function slugify_style_name( $name ) {
+		$slug = strtolower( (string) $name );
+		$slug = str_replace( array( '/', ' ' ), '-', $slug );
+		$slug = preg_replace( '/[^a-z0-9-]/', '', $slug );
+		$slug = preg_replace( '/-+/', '-', $slug );
+		return trim( $slug, '-' );
 	}
 }
