@@ -115,6 +115,26 @@ A real DME (digitalmarketingexperts.ca) template-library build surfaced 6 issues
 
 ---
 
+## Roadmap — MCP marketplace distribution + mumcp.com pivot — 🔵 PLANNING (2026-07-16)
+
+Origin: `mumcp.com` domain bought for the wp.org `mumega-mcp` free listing. Discussed extending it past "MCP for WordPress" into a broader MCP-server shop (mumcp.com = MCP delivery/marketplace, mcpwp.net stays the WP-specific authority/content hub). Bardia's FormFlow-for-Strapi (already has traction) floated as a first anchor listing. Researched submission requirements for 4 adjacent agentic products (Codex, Claude Cowork, Copilot Cowork, Perplexity/Comet) — verdict: **Claude Cowork is the real competitive pressure**, not the other three — same non-technical business-owner persona MCPWP targets, same jobs-to-be-done (delegate business ops to AI). Two ways that resolves: MCPWP becomes a listed Cowork connector (ride Anthropic's distribution) or an independent MCP shop gets squeezed into a thin reseller layer if Anthropic's own directory becomes the default store for that buyer.
+
+**Directory submission — researched, none of the reachable paths need Dynamic Client Registration:**
+- MCPWP already has OAuth 2.1 authorize+token flow and RFC 8414/9728 well-known discovery built (v3.2.0+). DCR (RFC 7591) is genuinely NOT built yet — confirmed by code check, not stale memory.
+- **Live today, zero backend work:** any Claude user can add MCPWP right now as a custom connector by URL — static OAuth client supported, no submission, no review. Push this as the immediate channel before anything else.
+- **Claude Cowork Connectors Directory** — submit via `oauth_anthropic_creds` (email existing static client_id/secret to `mcp-review@anthropic.com`), skips DCR entirely, reuses the OAuth flow already built. Requires a public privacy policy page (missing = instant rejection) — verify `mcpwp.net`/`mumcp.com` has one before applying.
+- **OpenAI Codex/ChatGPT plugin marketplace** — separate program, `platform.openai.com/plugins`, also accepts a "predefined OAuth client" (no DCR needed). Multi-section form: server URL + auth, skills bundle, 3-5 example prompts, 5 positive/3 negative test cases, domain-verification token at `/.well-known/openai-apps-challenge`.
+- **Cheap side-channel:** MCPWP already exposes `/wp-json/mcpwp/v1/openapi.json` (built for GPT Actions) — submit as-is via PR to the community GPT Actions library on GitHub, near-zero additional work.
+- DCR/CIMD only matter later as a zero-touch scaling optimization once past manual submission — not a blocker for applying to either directory now.
+
+**Open decisions before building anything (flagged, not resolved):**
+- What/where is "Inkwell" concretely — a real WordPress instance to activate mumcp on, or the not-yet-built brand-brain product referenced in `docs/squad/GTM-DESIGN-THINKING.md`? Need a URL/access before any activation.
+- Revenue-share/listing terms with Bardia (FormFlow-for-Strapi) and any other third-party MCP servers on mumcp.com — settle before the shelf has more than one listing.
+- Content-basin/podcast pipeline (NotebookLM → Spotify/YouTube, business-owner-facing WP+AI news + plugin reviews) discussed as a separate top-of-funnel play for mcpwp.net — needs a podcast/RSS plugin (Seriously Simple Podcasting or PowerPress), nothing else new.
+- Orchestration for any recurring/scheduled content-ops work: route through mupot + a scoped marketing squad + one approval channel (matches the already-validated MVP-proof-loop pattern), not an ad-hoc Claude Code session running unattended for days — no cost cap or governance gate that way.
+
+---
+
 ## Milestone Map — MVP → Full (traced to major versions)
 
 ```
