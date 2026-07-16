@@ -916,6 +916,68 @@ function admin_url($path = '')
     return 'https://example.com/wp-admin/' . ltrim($path, '/');
 }
 
+function trailingslashit($string)
+{
+    return rtrim((string) $string, '/\\') . '/';
+}
+
+function untrailingslashit($string)
+{
+    return rtrim((string) $string, '/\\');
+}
+
+if (! function_exists('add_query_arg')) {
+    /**
+     * Minimal stand-in for WP's add_query_arg(). Supports both call forms:
+     * add_query_arg($key, $value, $url) and add_query_arg($array, $url).
+     * Mirrors real WP behavior of NOT urlencoding query values (WP's
+     * build_query() intentionally skips encoding for backcompat), so callers
+     * that need encoded values must pre-encode them (as production code does).
+     */
+    function add_query_arg(...$args)
+    {
+        if (count($args) >= 3) {
+            $params = array( $args[0] => $args[1] );
+            $url    = (string) $args[2];
+        } else {
+            $params = is_array($args[0]) ? $args[0] : array();
+            $url    = isset($args[1]) ? (string) $args[1] : '';
+        }
+
+        $frag = '';
+        $hash_pos = strpos($url, '#');
+        if (false !== $hash_pos) {
+            $frag = substr($url, $hash_pos);
+            $url  = substr($url, 0, $hash_pos);
+        }
+
+        $query_pos = strpos($url, '?');
+        if (false !== $query_pos) {
+            $base         = substr($url, 0, $query_pos);
+            $query_string = substr($url, $query_pos + 1);
+        } else {
+            $base         = $url;
+            $query_string = '';
+        }
+
+        parse_str($query_string, $query);
+        foreach ($params as $key => $value) {
+            if (null === $value || false === $value) {
+                unset($query[ $key ]);
+            } else {
+                $query[ $key ] = $value;
+            }
+        }
+
+        $pairs = array();
+        foreach ($query as $key => $value) {
+            $pairs[] = '' === $value ? $key : $key . '=' . $value;
+        }
+
+        return $base . ( empty($pairs) ? '' : '?' . implode('&', $pairs) ) . $frag;
+    }
+}
+
 function wp_slash($value)
 {
     return is_string($value) ? addslashes($value) : $value;

@@ -402,6 +402,15 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 		add_action( Mcpwp_Signals::CRON_HOOK, array( 'Mcpwp_Signals', 'compute' ) );
 	}
 
+	// Figma design-token sync cron — pulls colors/typography from the configured
+	// Figma file's shared styles so a companion theme can read them as CSS custom
+	// properties. cron_sync_design_tokens() no-ops when Figma isn't configured or
+	// has no default_file_key, so scheduling is always safe.
+	if ( class_exists( 'Mcpwp_Figma' ) ) {
+		Mcpwp_Figma::schedule();
+		add_action( Mcpwp_Figma::CRON_HOOK, array( 'Mcpwp_Figma', 'cron_sync_design_tokens' ) );
+	}
+
 	// Schedule daily prune of old action log entries.
 	add_action( 'mcpwp_action_log_daily_prune', function() {
 		if ( class_exists( 'Mcpwp_Action_Log' ) ) {

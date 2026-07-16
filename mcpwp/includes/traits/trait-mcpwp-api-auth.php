@@ -802,6 +802,13 @@ trait Mcpwp_Api_Auth {
 			return 'admin';
 		}
 
+		// Figma design-token sync makes an external Figma API call and overwrites
+		// the cached mcpwp_figma_design_tokens option (read by a companion theme) —
+		// require admin. Reading the cached tokens stays at the read default.
+		if ( preg_match( '#^/mcpwp/v1/figma/design-tokens/sync(/|$)#', $route ) ) {
+			return 'admin';
+		}
+
 		// Integrations: reading, writing, deleting, or probing a stored provider
 		// secret requires admin scope. Discovery (status/providers/
 		// stock-photos) stays read; content-generation stays at the write default.
@@ -1024,6 +1031,10 @@ trait Mcpwp_Api_Auth {
 			'wp_get_option',
 			'wp_update_option',
 			'wp_get_plugin_settings',
+			// Figma design-token sync calls the external Figma API and overwrites
+			// the cached design-tokens option a companion theme reads — admin only,
+			// mirroring the REST /figma/design-tokens/sync gate above.
+			'wp_sync_figma_design_tokens',
 		);
 
 		if ( in_array( $tool_name, $admin_tools, true ) ) {
