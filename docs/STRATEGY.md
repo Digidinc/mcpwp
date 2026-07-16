@@ -4,7 +4,7 @@
 > the taxation/numbers detail; the [mupot repo](https://github.com/Mumega-com/mupot) is the substrate code.
 > When those disagree with this doc, this doc is the intent.
 >
-> **Last updated:** 2026-06-09.
+> **Last updated:** 2026-07-16 (§11 added — see below).
 
 ---
 
@@ -231,3 +231,35 @@ store.** Everything else is supporting cast until that happens.
 | Marketplace storefront + cut + performance-ranking · snapshot composition layer | 🔶 primitives exist, not productized | v3.x–v4.0 |
 
 Launch each promise on what is built. Later-phase items are "included as they ship," never live today.
+
+---
+
+## 11. The 2026-07-16 reframe — WordPress as fortress, mupot as the running business
+
+Session-long strategy conversation (Hadi, 2026-07-16), extending §0's "we're an economy, not a product" one level further. Recorded here in full so it survives a context compact.
+
+**The sharpest version of the reframe so far:** don't see WordPress. See an online engine that moves the needle in a real business, on any workflow that business already has — because the business can *expand from here*, instead of us making a plugin for WordPress. WordPress's actual moat was never pages — it's the thing everyone forgets it already solved: real, battle-tested **RBAC** and **60,000+ plugins** of payments/LMS/memberships/forms already built. Obsidian/flat-file/md-based tools never solved that (no roles, no capability system). So mupot doesn't rebuild that stack from scratch on a custom substrate — it runs *on top of* WordPress and activates what's already sitting there dormant. WordPress = **fortress**, not product.
+
+**The sellable object changes shape.** Not "software you rent." A mupot pot navigating a real WooCommerce store + PostHog + ad optimization *is an actual running online business* — that's an **acquisition thesis**, not a SaaS pitch: sell the business itself to someone with capital who can't build it themselves. Binding constraint carries over unchanged from §9: this only means something once there's a **provable number** (real revenue, real ROAS, real growth) on one actual running loop — "acquisition target" is a story until then, not an asset.
+
+**Distribution is one brain, many doors — not "post to the WP blog."** Same content fans out to every free/owned channel at once: social feed, podcast (NotebookLM → Spotify/YouTube), video, research papers, Android/iOS apps. No single channel is the product; WP is one execution surface among several the same brain feeds.
+
+**Audience refinement:** people who already built their own second brain (Obsidian/Andrej-Karpathy-style personal knowledge systems) don't need another content tool — they need the engine that turns that brain into a running business. Sharpest underserved buyer identified so far.
+
+### mumcp.com — MCP shop pivot (separate from the WP-specific play)
+
+`mumcp.com` (domain bought for the wp.org `mumega-mcp` free listing) discussed as a broader MCP-server marketplace, not WP-only: mcpwp.net stays the WordPress-specific authority/content hub, mumcp.com becomes the storefront for MCP servers across tools (Strapi, others). Bardia's FormFlow-for-Strapi (existing traction) floated as first anchor listing — real proof-of-demand beats an empty shelf. **Open, unresolved:** revenue-share/listing terms with Bardia and any other third party, before the shelf has more than one listing.
+
+**Competitive research (full detail + sourcing in BACKLOG.md "MCP marketplace distribution" entry):** of four adjacent agentic products researched (Codex, Claude Cowork, Microsoft Copilot Cowork, Perplexity/Comet), **Claude Cowork is the real competitive pressure** — same non-technical business-owner persona, same jobs-to-be-done (delegate business ops to AI) MCPWP already targets. Either MCPWP becomes a listed Cowork connector (ride Anthropic's distribution) or an independent MCP shop gets squeezed into a thin reseller layer if Anthropic's own directory becomes the default store for that buyer. Concretely reachable now, confirmed against our own code: MCPWP already has OAuth 2.1 authorize+token + well-known discovery (v3.2.0+); Dynamic Client Registration is genuinely missing but **not required** for either Claude Cowork Connectors Directory (static `oauth_anthropic_creds`) or OpenAI's Codex/ChatGPT plugin marketplace (predefined OAuth client) — both reachable without building DCR first. Custom-connector-by-URL in Claude already works today with zero backend changes.
+
+### Hermes-as-admin — design sketch for the next real project
+
+Handed a concrete project (2026-07-16): one domain fully on Cloudflare (Inkwell candidate, connects to mupot) + one WordPress domain ("our art canvas"), already wired to Freemius and Stripe. Design intent for the admin agent, if built as a Hermes flock member:
+
+- **Scoped capability tokens per surface**, not one master credential — WP via MCPWP's existing API-key scopes, Cloudflare via the provider class already built, Freemius/Stripe read-only until a specific write is explicitly approved.
+- **Approval gate on anything touching money or customer data** — reuse MCPWP's existing approval/rollback system, don't build a parallel one.
+- **Audit trail on every action** across all four surfaces (WP, Cloudflare, Freemius, Stripe) in one place, extending the existing activity-log/event-store pattern.
+- **Adversarial review in parallel** on sensitive surfaces (pricing, refunds, customer PII), per the existing agent-comms convention — not sequential, not skipped.
+- **One literal admin agent, not a swarm** — avoids the exact coordination-deadlock failure mode the agent-comms doc already learned the hard way.
+
+**Blocking, unresolved as of this writing:** no concrete access yet (domain names, Cloudflare zone ID/token, WP admin URL, Freemius product ID, Stripe account) — nothing above is executable until that's handed over. **"Inkwell" itself is still ambiguous** — is it a real, currently-running WordPress/Cloudflare instance to activate mumcp on, or the not-yet-built brand-brain product referenced in `docs/squad/GTM-DESIGN-THINKING.md` (`inkwell↔MCPWP SYNC` — brand brain → WP publish, separate MCP-to-MCP track)? Resolve before acting.
