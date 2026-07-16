@@ -312,7 +312,9 @@ All endpoints require `X-API-Key` header. Namespace: `mcpwp/v1`.
 | `/elementor/widgets` | GET | Available widgets |
 | `/elementor/widgets/{type}` | GET | Widget schema |
 | `/elementor/widget-help/{type}` | GET | Widget help |
-| `/elementor/kit-css` | GET/PUT | Global kit CSS |
+| `/elementor/kit-css` | GET/POST | Global kit CSS (replace/append) |
+| `/elementor/kit-css/blocks` | GET/POST | List / upsert named, hash-tagged, idempotent kit CSS blocks |
+| `/elementor/kit-css/blocks/{name}` | GET/DELETE | Get / delete one named kit CSS block |
 | `/elementor/regenerate-css` | POST | Regenerate CSS cache |
 
 ### Gutenberg
@@ -481,7 +483,7 @@ When changing plugin code, bump version in **3 files**:
 2. `readme.txt` — `Stable tag:` AND add changelog entry under `== Changelog ==`
 3. `version.json` — `version` field AND prepend changelog HTML fragment
 
-Current version: **3.4.1** <!-- maintained by release-please; source of truth is mcpwp/VERSION -->
+Current version: **3.5.0** <!-- maintained by release-please; source of truth is mcpwp/VERSION -->
 
 Then build and deploy:
 ```bash
