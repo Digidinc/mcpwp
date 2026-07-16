@@ -85,6 +85,20 @@ Elementor is core to MCPWP — this got priority attention. Facts verified direc
 
 ---
 
+## Roadmap — Cloudflare Integration — ✅ EPIC SHIPPED, PR open (2026-07-14)
+
+Origin: a real customer (digitalmarketingexperts.ca) hit free-tier Cloudflare Bot Fight Mode / Security Level silently blocking MCP requests earlier this cycle — fixed manually via a one-off Configuration Rule + customer email. Researched Cloudflare's actual API surface (Rulesets/Configuration Rules, Cache Purge, Speed settings, GraphQL Analytics, AI Crawl Control) against live docs before building — epic **#626**, children **#627-631**, shipped on `feat/cloudflare-integration` (PR #632, not yet merged).
+
+- **#627 — ✅ SHIPPED** — Cloudflare as a zone-scoped integration provider (`api_token` + `zone_id`, multi-field like Figma/staging).
+- **#628 — ✅ SHIPPED** — `wp_cloudflare_fix_mcp_access`: idempotent Configuration Rule (`security_level: essentially_off`) for this site's own `/wp-json/mcpwp/v1/*` — the confirmed fix for the origin bug. Best-effort WAF skip rule for Super Bot Fight Mode/Managed Rules alongside it (unverified skip-target product string — fails gracefully, doesn't block the primary fix).
+- **#629 — ✅ SHIPPED** — auto cache purge on publish/update (posts, pages, `_elementor_data` writes) + manual `wp_cloudflare_purge_cache`. Fire-and-forget; a purge failure never blocks the content write.
+- **#630 — ✅ SHIPPED** — `wp_cloudflare_get_speed_settings`/`wp_cloudflare_update_speed_setting` (Early Hints, HTTP/3, Rocket Loader, Polish — Mirage excluded, Cloudflare removed it Sept 2025); surfaced as `technical_signals` recommendations in `wp_seo_audit_site()`.
+- **#631 — ✅ SHIPPED** — guide topic (`wp_get_guide(topic="cloudflare")`), 11 new regression tests (request shaping, idempotent rule upsert, purge payload shapes, error mapping). Full suite: 335 tests / 972 assertions.
+- Explicit non-goals (no public API existed at research time, confirmed against live docs): real RUM Core Web Vitals via the GraphQL Analytics API (field set needs a live-account introspection spike), AI Crawl Control per-bot management (dashboard-only), llms.txt/custom robots.txt at the edge (no first-party feature — would need a self-authored Worker).
+- No live Cloudflare account available to test against directly — outbound request shapes verified instead via `pre_http_request` interception (base URL, Bearer auth, ruleset phase paths, whole-ruleset PUT semantics, payload shapes) matched against the confirmed API research, plus full live-WP functional testing (activation, MCP dispatch, REST scope enforcement, auto-purge hook) on local docker.
+
+---
+
 ## Milestone Map — MVP → Full (traced to major versions)
 
 ```

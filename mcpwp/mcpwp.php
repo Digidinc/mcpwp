@@ -240,6 +240,8 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-provider-gemini.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-provider-elevenlabs.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-provider-pexels.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-provider-cloudflare.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-cloudflare-cache-sync.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-analytics.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-white-label.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-site-memory.php';
@@ -315,6 +317,7 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-batch.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-openapi.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-integrations.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-cloudflare.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-figma.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-oauth.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-oauth-well-known.php';
@@ -386,6 +389,11 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	// Elementor data write/delete audit trail — see #612.
 	if ( class_exists( 'Mcpwp_Elementor_Data_Audit' ) ) {
 		Mcpwp_Elementor_Data_Audit::init();
+	}
+
+	// Auto-purge Cloudflare cache for the edited permalink after a content write.
+	if ( class_exists( 'Mcpwp_Cloudflare_Cache_Sync' ) ) {
+		Mcpwp_Cloudflare_Cache_Sync::init();
 	}
 
 	// Signals cron — compute signal feed on schedule.

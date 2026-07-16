@@ -294,6 +294,10 @@ class Mcpwp_Loader {
 		$screenshot_controller = new Mcpwp_REST_Screenshot();
 		$screenshot_controller->register_routes();
 
+		// Cloudflare
+		$cloudflare_controller = new Mcpwp_REST_Cloudflare();
+		$cloudflare_controller->register_routes();
+
 		// Feedback
 		$feedback_controller = new Mcpwp_REST_Feedback();
 		$feedback_controller->register_routes();

@@ -872,6 +872,10 @@ trait Mcpwp_Api_Auth {
 			// Action-log rollback reverts an arbitrary historical mutation; the log
 			// GET/export routes stay read.
 			'/mcpwp/v1/action-log',
+			// Cloudflare zone mutations (bot-check fix, cache purge, Speed settings)
+			// change external infra config outside this site; status/speed-settings
+			// GETs stay read.
+			'/mcpwp/v1/cloudflare',
 		);
 
 		foreach ( $admin_write_routes as $admin_write_route ) {

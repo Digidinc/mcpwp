@@ -98,6 +98,12 @@ class Mcpwp_Guides {
 				'description' => 'Common errors, debugging tips, and fixes for frequent issues with MCPWP tools.',
 				'requires'    => null,
 			),
+			array(
+				'topic'       => 'cloudflare',
+				'title'       => 'Cloudflare Integration',
+				'description' => 'Connecting a Cloudflare zone, fixing Bot Fight Mode blocking MCP requests, cache purge, and Speed settings that affect Core Web Vitals.',
+				'requires'    => null,
+			),
 		);
 
 		// Filter based on active capabilities.
@@ -1083,6 +1089,41 @@ class Mcpwp_Guides {
 						. "3. `wp_site_info()` — WordPress and PHP version\n"
 						. "4. `wp_get_site_health()` — WordPress site health report\n"
 						. "5. `wp_elementor_status()` — Elementor-specific status",
+				),
+			),
+		);
+	}
+
+	/**
+	 * Cloudflare guide.
+	 *
+	 * @return array Guide content.
+	 */
+	public static function guide_cloudflare() {
+		return array(
+			'topic' => 'cloudflare',
+			'title' => 'Cloudflare Integration Guide',
+			'sections' => array(
+				array(
+					'heading' => 'Connecting a Zone',
+					'content' => "Create a scoped Cloudflare API Token (not the Global API Key) at https://developers.cloudflare.com/fundamentals/api/get-started/create-token/ with permissions: **Zone Settings: Edit**, **Zone WAF: Edit**, **Cache Purge: Purge**, scoped to the one zone this site's domain lives in.\n\n"
+						. "Configure with `wp_configure_integration(provider=\"cloudflare\", config={\"api_token\": \"...\", \"zone_id\": \"...\"})` — find the Zone ID on the Cloudflare dashboard's Overview page for the domain, right-hand sidebar under API. Test with `wp_test_integration(provider=\"cloudflare\")`, or check overall status with `wp_cloudflare_status()`.",
+				),
+				array(
+					'heading' => 'Fixing Bot Fight Mode / Security Level Blocking MCP',
+					'content' => "The most common Cloudflare problem: free-tier **Bot Fight Mode** or a strict **Security Level** silently returns a challenge/block page for MCP API requests instead of reaching WordPress — this looks like a connection failure or empty response, not an obvious \"blocked\" error.\n\n"
+						. "Call `wp_cloudflare_fix_mcp_access()` once the integration is connected. It creates (or updates, idempotently — safe to call again) a Configuration Rule that drops Security Level to \"essentially_off\" for this site's own `/wp-json/mcpwp/v1/*` path — this is the confirmed fix, verified live against a real blocked site. It also best-effort adds a WAF skip rule for Super Bot Fight Mode / Managed Rules (Pro-plan features) on the same path; that part can fail independently without affecting the primary fix.\n\n"
+						. "This only touches the MCP API path — it does not disable bot protection anywhere else on the site.",
+				),
+				array(
+					'heading' => 'Cache Purge',
+					'content' => "Once connected, publishing or updating a page/post, or writing Elementor data to a published page, automatically purges that page's URL from Cloudflare's cache — so freshness reaches crawlers and visitors immediately instead of waiting out the cache TTL. This is fire-and-forget: a purge failure is logged, never blocks the content write.\n\n"
+						. "For ad-hoc purges, call `wp_cloudflare_purge_cache(urls=[...])` for specific URLs, or `wp_cloudflare_purge_cache(purge_everything=true)` to clear the whole zone (use sparingly — it drops cache for the entire site, not just one page).",
+				),
+				array(
+					'heading' => 'Speed Settings (Core Web Vitals)',
+					'content' => "`wp_cloudflare_get_speed_settings()` reads the zone's current Early Hints, HTTP/3, Rocket Loader, and Polish (image optimization) settings — all of which affect LCP/INP, the ranking-relevant Core Web Vitals. `wp_cloudflare_update_speed_setting(setting, value)` toggles one: early_hints/http3/rocket_loader take \"on\"/\"off\"; polish takes \"off\"/\"lossless\"/\"lossy\"/\"webp\". These same checks also surface as recommendations in `wp_seo_audit_site()`'s `technical_signals` block when Cloudflare is connected.\n\n"
+						. "Mirage is intentionally not supported — Cloudflare deprecated it as a settable zone setting in September 2025.",
 				),
 			),
 		);
