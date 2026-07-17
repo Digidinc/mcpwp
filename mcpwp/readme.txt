@@ -153,6 +153,21 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 
 == Changelog ==
 
+= 3.6.0 =
+* feat: allow extensions to raise custom MCP tool scope ([#654](https://github.com/Mumega-com/mcpwp/issues/654))
+* feat: **cloudflare:** cloudflare integration — bot-fix, cache purge, speed/CWV signals ([#632](https://github.com/Mumega-com/mcpwp/issues/632))
+* feat: **integrations:** self-service Cloudflare Bot Fight Mode fix in wp-admin
+* feat: support trusted custom tool callbacks ([#657](https://github.com/Mumega-com/mcpwp/issues/657))
+* fix: **freemius:** soft-gate first activation instead of hard license wall ([#646](https://github.com/Mumega-com/mcpwp/issues/646))
+* fix: **license:** close reconnect-link render-time gap + notify on blocked updates
+* fix: **license:** detect wrong-package downgrade + warn loudly ([#656](https://github.com/Mumega-com/mcpwp/issues/656))
+* fix: **license:** reconnect flow no longer forces skip-mode (found the actual bug)
+* fix: **license:** update vendored Freemius SDK 2.13.0 -&gt; 2.13.4
+* fix: **license:** use Freemius's install-linked checkout URL, not marketing site
+* fix: **mcp:** draft rendered-copy 404/502 + expose unlicensed-reason code
+* fix: **release:** release_freemius.sh never defined MCPWP_FREEMIUS_BUILD
+* fix: **security:** harden feedback-relay rate limiting and Figma OAuth callback ([#649](https://github.com/Mumega-com/mcpwp/issues/649))
+
 = 3.5.8 =
 * fix: **build:** the actual root cause of every "unlicensed"/"no_freemius_sdk" report this cycle — scripts/release_freemius.sh (the script used to upload every real release to Freemius) built its zip with the freemius/ SDK folder physically present but never defined the MCPWP_FREEMIUS_BUILD constant that mcpwp.php's own bootstrap requires to actually load it. Every zip Freemius served to real customers since 3.5.1 had the SDK on disk but dead code — license would never activate no matter what was reinstalled. Fixed to inject the constant identically to build-freemius.sh; verified by unzipping the corrected build and confirming the define is present.
 
