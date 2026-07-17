@@ -6,7 +6,7 @@ Requires at least: 6.1
 Tested up to: 7.0
 Requires PHP: 7.4
 <!-- x-release-please-start-version -->
-Stable tag: 3.5.5
+Stable tag: 3.5.6
 <!-- x-release-please-end -->
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -152,6 +152,10 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 4. Integrations and Chat — connected services plus safety-first agent workflow
 
 == Changelog ==
+
+= 3.5.6 =
+* fix: **license:** closed a gap in the 3.5.5 reconnect fix — the displayed "Manage pricing and license" link itself still got `require_license=false` baked into its href at render time (a separate moment from the two already covered), silently reintroducing the same stuck loop. Fixed and live-verified end-to-end from a clean state.
+* new: **license:** admin notice when a newer version exists but Freemius can't push it to this site because it's anonymous/pending/unlicensed — read-only version check against the canonical manifest, never offers an install action (that would require the self-hosted zip, which has no Freemius SDK)
 
 = 3.5.5 =
 * fix: **license:** "Manage pricing and license" (reconnect after Skip) actually lets you enter a license again — the soft-gate default from 3.4.x forced `require_license=false` onto Freemius's own reconnect redirect too, so clicking it always landed back on the skip-oriented connect screen with no visible way to enter a license. Live-verified: connect screen now renders with `requireLicenseKey: true` and a real license-key field after reconnecting

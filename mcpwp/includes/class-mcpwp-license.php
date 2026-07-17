@@ -549,3 +549,73 @@ function mcpwp_maybe_show_freemius_removed_notice() {
 	);
 }
 add_action( 'admin_notices', 'mcpwp_maybe_show_freemius_removed_notice' );
+
+/**
+ * Warn when a newer MCPWP version exists but WordPress's own update-check
+ * can't reach it, because Freemius only pushes updates to a connected/
+ * licensed site — an anonymous, pending, or otherwise disconnected Pro
+ * install silently stops seeing new versions with no visible cause.
+ *
+ * Deliberately READ-ONLY: this only compares version numbers against the
+ * public canonical manifest and never surfaces a download/install action.
+ * The self-hosted package's zip has no Freemius SDK at all — offering it
+ * as an "update" here would recreate the exact wrong-package accident this
+ * class already detects elsewhere (freemius_removed_had_license), just via
+ * an automated click instead of a manual one.
+ */
+function mcpwp_maybe_notify_freemius_update_unreachable() {
+	if ( ! current_user_can( 'manage_options' ) ) {
+		return;
+	}
+	if ( ! defined( 'MCPWP_FREEMIUS_BUILD' ) || ! MCPWP_FREEMIUS_BUILD ) {
+		// The self-hosted build already has its own real updater
+		// (Mcpwp_Updater) that isn't gated on Freemius connection state.
+		return;
+	}
+
+	$reason = mcpwp_license()->get_unlicensed_reason();
+	// Only the states where Freemius exists but isn't actively delivering
+	// updates to THIS site — not a fresh/never-decided install (that one
+	// still gets Freemius's real connect screen, not stuck at all) and not
+	// the self-hosted-package-installed case (its own separate notice above
+	// already covers that, with a stronger, more specific message).
+	$update_blocked_reasons = array( 'anonymous', 'pending_activation', 'no_active_license' );
+	if ( ! in_array( $reason, $update_blocked_reasons, true ) ) {
+		return;
+	}
+
+	$cache_key = 'mcpwp_canonical_version_check';
+	$remote    = get_transient( $cache_key );
+	if ( false === $remote ) {
+		$response = wp_remote_get(
+			'https://mumega.com/mcp-updates/version.json',
+			array(
+				'timeout' => 8,
+				'headers' => array( 'Accept' => 'application/json' ),
+			)
+		);
+		$remote = ( ! is_wp_error( $response ) && 200 === wp_remote_retrieve_response_code( $response ) )
+			? json_decode( wp_remote_retrieve_body( $response ), true )
+			: array();
+		// Cache both the successful result and a failed lookup, so a
+		// down/unreachable manifest doesn't retry on every single page load.
+		set_transient( $cache_key, $remote, 12 * HOUR_IN_SECONDS );
+	}
+
+	if ( empty( $remote['version'] ) || ! version_compare( $remote['version'], MCPWP_VERSION, '>' ) ) {
+		return;
+	}
+
+	printf(
+		'<div class="notice notice-warning"><p>%s</p></div>',
+		wp_kses_post(
+			sprintf(
+				/* translators: 1: latest available version, 2: reconnect URL */
+				__( '<strong>MCPWP:</strong> Version %1$s is available, but this site isn\'t currently connected/licensed with Freemius, so the automatic update can\'t reach it. <a href="%2$s">Reconnect your license</a>, or download the latest Pro package manually from your Freemius account.', 'mcpwp' ),
+				esc_html( $remote['version'] ),
+				esc_url( mcpwp_license()->get_upgrade_url() )
+			)
+		)
+	);
+}
+add_action( 'admin_notices', 'mcpwp_maybe_notify_freemius_update_unreachable' );

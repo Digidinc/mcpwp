@@ -149,23 +149,30 @@ if ( $mcpwp_fs_instance && method_exists( $mcpwp_fs_instance, 'add_filter' ) ) {
  * it, landing back on the same skip-oriented screen with no obvious way to
  * enter a license (just a small, easy-to-miss "Have a license key?" toggle).
  *
- * A URL-string check alone isn't enough: Freemius's own connect_again()
- * (hooked on admin_init, fired when it sees fs_action=reset_anonymous_mode)
- * resets anonymous mode THEN does a SECOND internal redirect to a freshly
- * built activation URL that no longer carries that marker — which also goes
- * through this same connect_url filter. Live-verified via a real reproduction
- * (Reflection-forced is_anonymous=true, then walked the full request chain):
- * without tracking real user intent across that hop, the second URL still
- * gets require_license=false appended, right back to the same stuck loop.
- * mcpwp_fs_mark_reconnect_intent() below sets a short-lived transient the
- * moment the FIRST request is seen, and both functions here honor it across
- * the whole hop instead of re-deriving intent from each individual URL.
+ * TWO separate moments need covering, not one:
+ *  1. Building the "Manage pricing and license" href on the Setup page
+ *     (get_reconnect_url() → get_activation_url($params) with
+ *     fs_action=reset_anonymous_mode already merged into $url BEFORE this
+ *     filter runs) — a plain substring check on $url catches this, since the
+ *     marker is right there in the string being filtered.
+ *  2. Freemius's own connect_again() (hooked on admin_init, fired when a
+ *     click lands on that href): it resets anonymous mode, THEN does a
+ *     SECOND internal redirect to a freshly built activation URL with NO
+ *     fs_action marker at all — which goes through this same filter again.
+ *     A substring check can't see this one; only real, tracked intent can.
+ *     mcpwp_fs_mark_reconnect_intent() sets a short-lived transient the
+ *     moment case 1's URL is actually visited, and this covers case 2.
+ * Live-verified via a real reproduction (Reflection-forced is_anonymous=true,
+ * walked the full request chain): missing either check alone still lets
+ * require_license=false leak onto the link, right back to the stuck loop.
  *
  * @param string $url Connect/activation URL Freemius is about to redirect to.
  * @return string
  */
 function mcpwp_fs_soften_connect_gate( $url ) {
-	if ( get_transient( 'mcpwp_fs_reconnect_intent' ) ) {
+	if ( false !== strpos( $url, 'fs_action=reset_anonymous_mode' )
+		|| get_transient( 'mcpwp_fs_reconnect_intent' )
+	) {
 		return $url;
 	}
 	return add_query_arg( 'require_license', 'false', $url );
