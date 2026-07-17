@@ -1038,14 +1038,42 @@ trait Mcpwp_Api_Auth {
 		);
 
 		if ( in_array( $tool_name, $admin_tools, true ) ) {
-			return 'admin';
+			$required_scope = 'admin';
+		} elseif ( preg_match( '/^wp_(create|update|delete|set|upload|bulk|generate|download)/', $tool_name ) ) {
+			$required_scope = 'write';
+		} else {
+			$required_scope = 'read';
 		}
 
-		if ( preg_match( '/^wp_(create|update|delete|set|upload|bulk|generate|download)/', $tool_name ) ) {
-			return 'write';
+		/**
+		 * Filters the required authorization scope for an MCP tool call.
+		 *
+		 * Implementations may raise, but cannot lower, the inferred requirement.
+		 *
+		 * @param string $required_scope Inferred scope requirement.
+		 * @param string $tool_name      MCP tool name.
+		 */
+		$filtered_scope = apply_filters(
+			'mcpwp_required_scope_for_tool',
+			$required_scope,
+			$tool_name
+		);
+
+		$scope_ranks = array(
+			'read'  => 1,
+			'write' => 2,
+			'admin' => 3,
+		);
+
+		if (
+			is_string( $filtered_scope )
+			&& isset( $scope_ranks[ $filtered_scope ] )
+			&& $scope_ranks[ $filtered_scope ] > $scope_ranks[ $required_scope ]
+		) {
+			return $filtered_scope;
 		}
 
-		return 'read';
+		return $required_scope;
 	}
 
 	/**

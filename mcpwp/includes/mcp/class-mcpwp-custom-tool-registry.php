@@ -43,7 +43,10 @@
  *                                    Tool is gated off when the capability is inactive.
  *   version     (string)          — addon-defined version string (informational)
  *   input_props (array)           — tool parameters, same format as define_tool()
- *   destructive (bool)            — hint: deletes / irreversibly modifies data (default false)
+ *   destructive (bool)            — sets annotations.destructiveHint (default false).
+ *     This describes tool behavior; it does not grant or raise an authorization
+ *     scope. Use mcpwp_required_scope_for_tool to raise the inferred scope for
+ *     exact custom tool names.
  *   open_world  (bool)            — hint: calls external services (default false)
  *   param_remap (array)           — map MCP param names to REST param names if they differ
  *
