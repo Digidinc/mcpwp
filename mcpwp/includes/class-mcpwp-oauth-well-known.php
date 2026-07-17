@@ -88,7 +88,7 @@ class Mcpwp_OAuth_Well_Known {
 			return $response;
 		}
 
-		$resource_metadata_url = self::get_site_origin() . '/.well-known/oauth-protected-resource';
+		$resource_metadata_url = self::get_site_origin() . '/.well-known/oauth-protected-resource' . self::get_site_path_prefix();
 		$response->header( 'WWW-Authenticate', 'Bearer resource_metadata="' . $resource_metadata_url . '"' );
 
 		return $response;
@@ -101,6 +101,21 @@ class Mcpwp_OAuth_Well_Known {
 	 * to skip its own rewrite logic for this request; we have already sent the
 	 * full HTTP response and called exit().  Returning true means "carry on,
 	 * WordPress" (path did not match or OAuth is disabled).
+	 *
+	 * Matches TWO path shapes for a subdirectory-installed site (e.g. this
+	 * WordPress at /staging/5707), since MCP clients don't consistently agree
+	 * on which one to use:
+	 *   - RFC 8414 §3.1 insertion form: /.well-known/oauth-authorization-server/staging/5707
+	 *     (the well-known segment is spliced in BEFORE the site's own path —
+	 *     this is what a strictly spec-compliant client computes from an
+	 *     issuer that has a path component, and is now what our own issuer/
+	 *     resource claims below actually point at).
+	 *   - Simple suffix form: /staging/5707/.well-known/oauth-authorization-server
+	 *     (some real-world client implementations just append the well-known
+	 *     segment to whatever base URL they already have, instead of doing
+	 *     the RFC 8414 splice — support this defensively too, no downside).
+	 * A root-installed site (no path prefix) only ever needs the bare path,
+	 * which both forms collapse to.
 	 *
 	 * @param bool $do_parse   Whether WordPress should continue parsing the request.
 	 * @param WP   $wp         Current WP instance (has ->request set to the request path).
@@ -119,12 +134,22 @@ class Mcpwp_OAuth_Well_Known {
 		$path_only = strtok( $request_path, '?' );
 		$path_only = '/' . ltrim( (string) $path_only, '/' );
 
-		if ( '/.well-known/oauth-protected-resource' === $path_only ) {
+		$prefix = self::get_site_path_prefix();
+
+		$protected_resource_paths = array(
+			'/.well-known/oauth-protected-resource' . $prefix,
+			$prefix . '/.well-known/oauth-protected-resource',
+		);
+		if ( in_array( $path_only, $protected_resource_paths, true ) ) {
 			self::serve_protected_resource_metadata();
 			exit;
 		}
 
-		if ( '/.well-known/oauth-authorization-server' === $path_only ) {
+		$authorization_server_paths = array(
+			'/.well-known/oauth-authorization-server' . $prefix,
+			$prefix . '/.well-known/oauth-authorization-server',
+		);
+		if ( in_array( $path_only, $authorization_server_paths, true ) ) {
 			self::serve_authorization_server_metadata();
 			exit;
 		}
@@ -148,10 +173,11 @@ class Mcpwp_OAuth_Well_Known {
 	 */
 	private static function serve_protected_resource_metadata() {
 		$origin = self::get_site_origin();
+		$prefix = self::get_site_path_prefix();
 
 		$body = array(
-			'resource'              => $origin,
-			'authorization_servers' => array( $origin . '/.well-known/oauth-authorization-server' ),
+			'resource'              => $origin . $prefix,
+			'authorization_servers' => array( $origin . '/.well-known/oauth-authorization-server' . $prefix ),
 			'scopes_supported'      => array( 'read', 'write', 'admin' ),
 			'bearer_methods_supported' => array( 'header' ),
 		);
@@ -183,7 +209,7 @@ class Mcpwp_OAuth_Well_Known {
 		$rest_base        = rest_url( 'mcpwp/v1' );
 
 		$body = array(
-			'issuer'                                 => $origin,
+			'issuer'                                 => $origin . self::get_site_path_prefix(),
 			'authorization_endpoint'                 => $rest_base . '/oauth/authorize',
 			'token_endpoint'                         => $rest_base . '/oauth/token',
 			'response_types_supported'               => array( 'code' ),
@@ -265,5 +291,21 @@ class Mcpwp_OAuth_Well_Known {
 		}
 
 		return rtrim( $origin, '/' );
+	}
+
+	/**
+	 * Get the path component of this WordPress install, if any.
+	 *
+	 * Empty string for a root install (siteurl == origin). For a subdirectory
+	 * install (e.g. https://example.com/staging/5707), returns "/staging/5707"
+	 * — needed so OAuth discovery works correctly for sites not installed at
+	 * the domain root (see maybe_serve_well_known() for why this matters).
+	 *
+	 * @return string Path prefix with a leading slash, or '' for a root install.
+	 */
+	public static function get_site_path_prefix() {
+		$parsed = wp_parse_url( get_site_url() );
+		$path   = isset( $parsed['path'] ) ? rtrim( $parsed['path'], '/' ) : '';
+		return $path;
 	}
 }

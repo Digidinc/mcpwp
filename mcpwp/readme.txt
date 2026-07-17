@@ -6,7 +6,7 @@ Requires at least: 6.1
 Tested up to: 7.0
 Requires PHP: 7.4
 <!-- x-release-please-start-version -->
-Stable tag: 3.6.0
+Stable tag: 3.6.1
 <!-- x-release-please-end -->
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -152,6 +152,10 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 4. Integrations and Chat — connected services plus safety-first agent workflow
 
 == Changelog ==
+
+= 3.6.1 =
+* fix: **oauth:** discovery documents (`/.well-known/oauth-authorization-server`, `/.well-known/oauth-protected-resource`) only worked for a WordPress install at the domain root — a subdirectory install (e.g. `/staging/5707`) never matched, so OAuth-based clients (Claude, ChatGPT) trying to connect via browser sign-in could never discover the auth server. Now matches both the RFC 8414 §3.1 insertion form and a plain suffix form, and `issuer`/`resource` correctly include the site's own path
+* new: **integrations:** Cloudflare's "Fix MCP Access" rule now also covers the `.well-known/oauth-*` discovery paths, not just the REST API prefix — confirmed live that Cloudflare's challenge page was blocking OAuth discovery on a real customer site even after the REST-only rule was applied
 
 = 3.6.0 =
 * feat: allow extensions to raise custom MCP tool scope ([#654](https://github.com/Mumega-com/mcpwp/issues/654))

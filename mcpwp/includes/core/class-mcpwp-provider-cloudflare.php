@@ -146,7 +146,24 @@ class Mcpwp_Provider_Cloudflare {
 		if ( ! $path_prefix ) {
 			$path_prefix = '/wp-json/mcpwp/v1/';
 		}
-		$expression = sprintf( '(starts_with(http.request.uri.path, "%s"))', $path_prefix );
+
+		// The OAuth discovery documents (RFC 8414 / RFC 9728) are deliberately
+		// served OUTSIDE the REST namespace, at /.well-known/oauth-* — see
+		// class-mcpwp-oauth-well-known.php. A rule scoped only to the REST
+		// prefix above misses them entirely, which breaks the connect flow
+		// for any client (e.g. Claude, ChatGPT) that starts with discovery
+		// rather than a direct MCP request — confirmed live: this exact path
+		// returned Cloudflare's challenge page on a real customer site while
+		// the REST prefix rule (already applied) worked fine.
+		$well_known_paths = array(
+			'/.well-known/oauth-',
+			( class_exists( 'Mcpwp_OAuth_Well_Known' ) ? Mcpwp_OAuth_Well_Known::get_site_path_prefix() : '' ) . '/.well-known/oauth-',
+		);
+		$expression_parts = array( sprintf( 'starts_with(http.request.uri.path, "%s")', $path_prefix ) );
+		foreach ( array_unique( $well_known_paths ) as $well_known_path ) {
+			$expression_parts[] = sprintf( 'starts_with(http.request.uri.path, "%s")', $well_known_path );
+		}
+		$expression = '(' . implode( ' or ', $expression_parts ) . ')';
 
 		$summary = array();
 
@@ -186,8 +203,8 @@ class Mcpwp_Provider_Cloudflare {
 			return $updated;
 		}
 		$summary[] = $found
-			? 'Updated existing Configuration Rule to skip Security Level checks for ' . $path_prefix . '*'
-			: 'Created Configuration Rule to skip Security Level checks for ' . $path_prefix . '*';
+			? 'Updated existing Configuration Rule to skip Security Level checks for ' . $path_prefix . '* and the OAuth discovery endpoints'
+			: 'Created Configuration Rule to skip Security Level checks for ' . $path_prefix . '* and the OAuth discovery endpoints';
 
 		// 2. WAF custom rule — best-effort skip for Super Bot Fight Mode / Managed Rules.
 		$waf_ruleset = $this->request( 'GET', 'zones/' . rawurlencode( $this->zone_id ) . '/rulesets/phases/http_request_firewall_custom/entrypoint' );

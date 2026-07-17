@@ -15,7 +15,7 @@
  * Plugin URI:        https://mcpwp.net/
  * Description:       Connect WordPress to AI assistants via the Model Context Protocol (MCP). Manage posts, pages, media, and Elementor through natural language.
  * x-release-please-start-version
- * Version:           3.6.0
+ * Version:           3.6.1
  * x-release-please-end
  * Requires at least: 6.1
  * Requires PHP:      7.4
@@ -35,12 +35,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 /**
  * Plugin version.
  */
-define( 'MCPWP_VERSION', '3.6.0' ); // x-release-please-version
-
-/**
- * Whether custom MCP tool scope filtering is supported.
- */
-define( 'MCPWP_SUPPORTS_CUSTOM_TOOL_SCOPE_FILTER', true );
+define( 'MCPWP_VERSION', '3.6.1' ); // x-release-please-version
 
 /**
  * Whether custom MCP tool scope filtering is supported.
