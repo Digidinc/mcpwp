@@ -116,4 +116,70 @@ final class CallbackToolDispatchTest extends TestCase {
 		$this->assertSame( 422, $data['error']['data']['status'] );
 		$this->assertSame( 'Check the update package.', $data['error']['data']['hint'] );
 	}
+
+	/**
+	 * Proves a write-scoped key is denied by the authenticated MCP route before
+	 * an extension callback can run when that exact tool requires admin scope.
+	 */
+	public function test_write_scoped_key_cannot_reach_admin_callback(): void {
+		$called = false;
+		$this->register_callback_tool(
+			function ( array $arguments ) use ( &$called ) {
+				$called = true;
+				return array( 'updated' => true );
+			}
+		);
+		add_filter(
+			'mcpwp_required_scope_for_tool',
+			static function ( $scope, $tool_name ) {
+				return 'digid_callback_tool' === $tool_name ? 'admin' : $scope;
+			},
+			10,
+			2
+		);
+
+		$controller = new Mcpwp_REST_MCP();
+		$key        = $controller->create_scoped_api_key( 'write key', array( 'write' ) );
+		$request    = new WP_REST_Request(
+			'POST',
+			'/mcpwp/v1/mcp',
+			array(),
+			array( 'X-API-Key' => $key['key'] ),
+			array(
+				'jsonrpc' => '2.0',
+				'id'      => 23,
+				'method'  => 'tools/call',
+				'params'  => array(
+					'name'      => 'digid_callback_tool',
+					'arguments' => array(),
+				),
+			)
+		);
+
+		$result = $controller->check_permission( $request );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'insufficient_scope', $result->get_error_code() );
+		$this->assertFalse( $called );
+	}
+
+	/**
+	 * Proves a disabled category rejects the custom tool before its callback.
+	 */
+	public function test_disabled_category_cannot_reach_callback(): void {
+		$called = false;
+		$this->register_callback_tool(
+			function ( array $arguments ) use ( &$called ) {
+				$called = true;
+				return array( 'updated' => true );
+			},
+			array( 'category' => 'admin' )
+		);
+		update_option( 'mcpwp_disabled_tool_categories', array( 'admin' ) );
+
+		$data = $this->call_tool();
+
+		$this->assertSame( -32003, $data['error']['code'] );
+		$this->assertFalse( $called );
+	}
 }
