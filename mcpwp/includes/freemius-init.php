@@ -141,15 +141,53 @@ if ( $mcpwp_fs_instance && method_exists( $mcpwp_fs_instance, 'add_filter' ) ) {
  * already works everywhere else in this plugin (per-tool gating, not an
  * all-or-nothing wall).
  *
+ * BUG FIX (2026-07-17, Hadi report: "manage pricing and license" led nowhere):
+ * get_reconnect_url() ALSO builds its link through this same connect_url
+ * filter, carrying fs_action=reset_anonymous_mode. That's a user explicitly
+ * asking to come back and enter a real license after having skipped — forcing
+ * require_license=false onto that flow defeats the entire point of clicking
+ * it, landing back on the same skip-oriented screen with no obvious way to
+ * enter a license (just a small, easy-to-miss "Have a license key?" toggle).
+ *
+ * A URL-string check alone isn't enough: Freemius's own connect_again()
+ * (hooked on admin_init, fired when it sees fs_action=reset_anonymous_mode)
+ * resets anonymous mode THEN does a SECOND internal redirect to a freshly
+ * built activation URL that no longer carries that marker — which also goes
+ * through this same connect_url filter. Live-verified via a real reproduction
+ * (Reflection-forced is_anonymous=true, then walked the full request chain):
+ * without tracking real user intent across that hop, the second URL still
+ * gets require_license=false appended, right back to the same stuck loop.
+ * mcpwp_fs_mark_reconnect_intent() below sets a short-lived transient the
+ * moment the FIRST request is seen, and both functions here honor it across
+ * the whole hop instead of re-deriving intent from each individual URL.
+ *
  * @param string $url Connect/activation URL Freemius is about to redirect to.
  * @return string
  */
 function mcpwp_fs_soften_connect_gate( $url ) {
+	if ( get_transient( 'mcpwp_fs_reconnect_intent' ) ) {
+		return $url;
+	}
 	return add_query_arg( 'require_license', 'false', $url );
 }
 if ( $mcpwp_fs_instance && method_exists( $mcpwp_fs_instance, 'add_filter' ) ) {
 	$mcpwp_fs_instance->add_filter( 'connect_url', 'mcpwp_fs_soften_connect_gate' );
 }
+
+/**
+ * Mark that the user just explicitly asked to reconnect/re-enter a license
+ * (get_reconnect_url()'s fs_action=reset_anonymous_mode), so the soft-gate
+ * functions below can recognize real intent even across Freemius's own
+ * internal redirect that drops that marker from the URL. Must run before
+ * Freemius's own connect_again() (default priority on admin_init) so the
+ * transient exists by the time that handler's redirect gets filtered.
+ */
+function mcpwp_fs_mark_reconnect_intent() {
+	if ( isset( $_GET['fs_action'] ) && 'reset_anonymous_mode' === $_GET['fs_action'] ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only routing check, mirrors Freemius's own unauthenticated dispatch check.
+		set_transient( 'mcpwp_fs_reconnect_intent', true, 60 );
+	}
+}
+add_action( 'admin_init', 'mcpwp_fs_mark_reconnect_intent', 1 );
 
 /**
  * The connect_url filter above only covers URLs Freemius builds itself (e.g.
@@ -162,6 +200,11 @@ if ( $mcpwp_fs_instance && method_exists( $mcpwp_fs_instance, 'add_filter' ) ) {
  */
 function mcpwp_fs_default_require_license_false() {
 	if ( ! isset( $_GET['page'] ) || 'mcpwp' !== $_GET['page'] ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only page routing check, no state change.
+		return;
+	}
+	// See mcpwp_fs_mark_reconnect_intent() above — a user explicitly
+	// reconnecting must not be forced back into skip-mode.
+	if ( get_transient( 'mcpwp_fs_reconnect_intent' ) ) {
 		return;
 	}
 	// fs_request_get_bool() reads $_REQUEST, not $_GET — both must be set,
