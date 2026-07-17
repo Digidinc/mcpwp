@@ -181,6 +181,29 @@ echo "Building zip package"
 	RSYNC_EXCLUDES+=("--exclude=*.sh" "--exclude=.git" "--exclude=.github")
 
 	rsync -a "${RSYNC_EXCLUDES[@]}" "mcpwp/" "$BUILD_DIR/mcpwp/"
+
+	# CRITICAL: without this constant, mcpwp.php's own bootstrap never
+	# requires includes/freemius-init.php even though the file (and the
+	# whole freemius/ SDK folder) is physically present in the zip above —
+	# the Freemius SDK silently never loads at runtime. This was missing
+	# here for every release this session (3.5.1-3.5.7): the zip Freemius
+	# served to real customers had the SDK files on disk but dead code,
+	# reporting unlicensed_reason=no_freemius_sdk even on a fresh install of
+	# "the Pro zip downloaded straight from Freemius's own dashboard."
+	# Mirrors build-freemius.sh's identical injection exactly.
+	python3 - "$BUILD_DIR/mcpwp/mcpwp.php" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text(encoding="utf-8")
+needle = "define( 'MCPWP_VERSION'"
+replacement = "define( 'MCPWP_FREEMIUS_BUILD', true );\n" + needle
+if "define( 'MCPWP_FREEMIUS_BUILD'" not in content:
+    content = content.replace(needle, replacement, 1)
+path.write_text(content, encoding="utf-8")
+PY
+
 	cd "$BUILD_DIR"
 	zip -qr "$ROOT_DIR/$FREE_ZIP" "mcpwp"
 	rm -rf "$BUILD_DIR" || true

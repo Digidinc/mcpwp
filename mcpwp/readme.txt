@@ -6,7 +6,7 @@ Requires at least: 6.1
 Tested up to: 7.0
 Requires PHP: 7.4
 <!-- x-release-please-start-version -->
-Stable tag: 3.5.7
+Stable tag: 3.5.8
 <!-- x-release-please-end -->
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -152,6 +152,9 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 4. Integrations and Chat — connected services plus safety-first agent workflow
 
 == Changelog ==
+
+= 3.5.8 =
+* fix: **build:** the actual root cause of every "unlicensed"/"no_freemius_sdk" report this cycle — scripts/release_freemius.sh (the script used to upload every real release to Freemius) built its zip with the freemius/ SDK folder physically present but never defined the MCPWP_FREEMIUS_BUILD constant that mcpwp.php's own bootstrap requires to actually load it. Every zip Freemius served to real customers since 3.5.1 had the SDK on disk but dead code — license would never activate no matter what was reinstalled. Fixed to inject the constant identically to build-freemius.sh; verified by unzipping the corrected build and confirming the define is present.
 
 = 3.5.7 =
 * new: **integrations:** "Fix MCP Access (Bot Fight Mode)" button on the Cloudflare integration card — self-service Cloudflare WAF/Bot Fight Mode fix for AI-client requests, previously only reachable via the `wp_cloudflare_fix_mcp_access` MCP tool or a raw REST call. Any customer with the Cloudflare integration configured can now fix this themselves in wp-admin, no per-site manual dashboard rule-writing needed
