@@ -102,6 +102,7 @@ class Mcpwp_Loader {
 		$this->add_action( 'wp_ajax_mcpwp_save_integration_key', $integrations_admin, 'ajax_save_key' );
 		$this->add_action( 'wp_ajax_mcpwp_remove_integration_key', $integrations_admin, 'ajax_remove_key' );
 		$this->add_action( 'wp_ajax_mcpwp_test_integration', $integrations_admin, 'ajax_test_connection' );
+		$this->add_action( 'wp_ajax_mcpwp_fix_cloudflare_access', $integrations_admin, 'ajax_fix_cloudflare_access' );
 		$this->add_action( 'admin_post_mcpwp_figma_oauth_start', $integrations_admin, 'handle_figma_oauth_start' );
 		$this->add_action( 'admin_post_mcpwp_figma_oauth_callback', $integrations_admin, 'handle_figma_oauth_callback' );
 		$this->add_action( 'admin_post_nopriv_mcpwp_figma_oauth_callback', $integrations_admin, 'handle_figma_oauth_callback' );

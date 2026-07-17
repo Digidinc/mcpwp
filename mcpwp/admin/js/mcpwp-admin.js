@@ -414,6 +414,24 @@
 				setStatusText(status, msg, response.success);
 			});
 		});
+
+		$(document).on('click', '.mcpwp-fix-cloudflare-access', function() {
+			var btn    = $(this);
+			var result = btn.closest('.mcpwp-integration-key-form').find('.mcpwp-fix-cloudflare-result');
+			btn.prop('disabled', true).text('Applying...');
+			$.post(ajaxUrl, { action: 'mcpwp_fix_cloudflare_access', nonce: intNonce }, function(response) {
+				btn.prop('disabled', false).text('Fix MCP Access (Bot Fight Mode)');
+				var lines = response.success && response.data && response.data.summary ? response.data.summary : [];
+				var html;
+				if (response.success) {
+					html = '<div class="notice notice-success inline"><p>' + (lines.length ? lines.join('<br>') : 'Done.') + '</p></div>';
+				} else {
+					var msg = response.data && response.data.message ? response.data.message : 'Something went wrong.';
+					html = '<div class="notice notice-error inline"><p>' + msg + '</p></div>';
+				}
+				result.html(html).show();
+			});
+		});
 	}
 
 	// ── Chat page ─────────────────────────────────────────────────────────────

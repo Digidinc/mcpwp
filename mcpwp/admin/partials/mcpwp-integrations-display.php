@@ -47,6 +47,7 @@ $figma_oauth_message = isset( $_GET['message'] ) ? sanitize_text_field( wp_unsla
 			$is_multi_field   = ! empty( $provider['fields'] );
 			$has_description  = ! empty( $provider['description'] );
 			$is_figma         = 'figma' === $slug;
+			$is_cloudflare    = 'cloudflare' === $slug;
 			$figma_auth_mode  = $is_figma && ! empty( $provider['auth_mode'] ) ? (string) $provider['auth_mode'] : '';
 			$figma_mode_label = 'oauth' === $figma_auth_mode ? __( 'OAuth Connected', 'mcpwp' ) : ( 'personal_token' === $figma_auth_mode ? __( 'Personal Token Active', 'mcpwp' ) : __( 'Not Connected Yet', 'mcpwp' ) );
 			?>
@@ -150,7 +151,18 @@ $figma_oauth_message = isset( $_GET['message'] ) ? sanitize_text_field( wp_unsla
 										<?php esc_html_e( 'Reconnect OAuth', 'mcpwp' ); ?>
 									</a>
 								<?php endif; ?>
+								<?php if ( $is_cloudflare ) : ?>
+									<button type="button" class="button button-primary mcpwp-fix-cloudflare-access">
+										<?php esc_html_e( 'Fix MCP Access (Bot Fight Mode)', 'mcpwp' ); ?>
+									</button>
+								<?php endif; ?>
 							</div>
+							<?php if ( $is_cloudflare ) : ?>
+								<p class="description mcpwp-desc-mb">
+									<?php esc_html_e( 'If AI clients get blocked with a Cloudflare "Just a moment..." challenge page instead of a real response, click Fix MCP Access — it adds the Cloudflare rules needed to let authenticated MCP requests through Bot Fight Mode / Security Level, without lowering protection for the rest of the site.', 'mcpwp' ); ?>
+								</p>
+								<div class="mcpwp-fix-cloudflare-result" style="display:none;"></div>
+							<?php endif; ?>
 							<div class="mcpwp-update-section">
 								<?php if ( $is_figma && ! empty( $provider['auth_mode'] ) ) : ?>
 									<p class="description mcpwp-desc-mb">

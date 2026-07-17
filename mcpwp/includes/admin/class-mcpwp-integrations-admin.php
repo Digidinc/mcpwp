@@ -156,6 +156,38 @@ class Mcpwp_Integrations_Admin {
 	}
 
 	/**
+	 * AJAX: One-click Cloudflare self-service fix for MCP requests being
+	 * blocked by Bot Fight Mode / Security Level / Super Bot Fight Mode.
+	 *
+	 * Same underlying Mcpwp_Provider_Cloudflare::fix_mcp_access() already
+	 * exposed via the wp_cloudflare_fix_mcp_access MCP tool and the
+	 * POST /cloudflare/fix-mcp-access REST route — this just makes it
+	 * reachable from wp-admin directly, so a customer without an AI client
+	 * connected yet (or without Cloudflare dashboard access themselves) isn't
+	 * stuck needing a manual per-site WAF rule walked through by support.
+	 */
+	public function ajax_fix_cloudflare_access() {
+		check_ajax_referer( 'mcpwp_integrations_nonce', 'nonce' );
+
+		if ( ! current_user_can( 'activate_plugins' ) ) {
+			wp_send_json_error( array( 'message' => 'Unauthorized' ) );
+		}
+
+		if ( ! class_exists( 'Mcpwp_Provider_Cloudflare' ) ) {
+			wp_send_json_error( array( 'message' => __( 'Cloudflare support is not available in this build.', 'mcpwp' ) ) );
+		}
+
+		$cloudflare = new Mcpwp_Provider_Cloudflare();
+		$result     = $cloudflare->fix_mcp_access();
+
+		if ( is_wp_error( $result ) ) {
+			wp_send_json_error( array( 'message' => $result->get_error_message() ) );
+		}
+
+		wp_send_json_success( $result );
+	}
+
+	/**
 	 * Start the Figma OAuth handshake.
 	 *
 	 * @return void

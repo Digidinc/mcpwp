@@ -6,7 +6,7 @@ Requires at least: 6.1
 Tested up to: 7.0
 Requires PHP: 7.4
 <!-- x-release-please-start-version -->
-Stable tag: 3.5.6
+Stable tag: 3.5.7
 <!-- x-release-please-end -->
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -152,6 +152,9 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 4. Integrations and Chat — connected services plus safety-first agent workflow
 
 == Changelog ==
+
+= 3.5.7 =
+* new: **integrations:** "Fix MCP Access (Bot Fight Mode)" button on the Cloudflare integration card — self-service Cloudflare WAF/Bot Fight Mode fix for AI-client requests, previously only reachable via the `wp_cloudflare_fix_mcp_access` MCP tool or a raw REST call. Any customer with the Cloudflare integration configured can now fix this themselves in wp-admin, no per-site manual dashboard rule-writing needed
 
 = 3.5.6 =
 * fix: **license:** closed a gap in the 3.5.5 reconnect fix — the displayed "Manage pricing and license" link itself still got `require_license=false` baked into its href at render time (a separate moment from the two already covered), silently reintroducing the same stuck loop. Fixed and live-verified end-to-end from a clean state.
