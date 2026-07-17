@@ -6,7 +6,7 @@ Requires at least: 6.1
 Tested up to: 7.0
 Requires PHP: 7.4
 <!-- x-release-please-start-version -->
-Stable tag: 3.5.1
+Stable tag: 3.5.2
 <!-- x-release-please-end -->
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -152,6 +152,9 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 4. Integrations and Chat — connected services plus safety-first agent workflow
 
 == Changelog ==
+
+= 3.5.2 =
+* fix: **license:** update vendored Freemius SDK 2.13.0 &rarr; 2.13.4 &mdash; includes an upstream checkout-context fix where raw request params could override computed checkout params (a plausible cause of "pay with coupon does nothing")
 
 = 3.5.1 =
 * fix: **license:** Upgrade/pricing links now use Freemius's own install-linked checkout URL instead of a plain marketing-site link — a purchase made on the marketing site had no install context, so it never synced back to the plugin (license appeared stuck unactivated even after payment)
