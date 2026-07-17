@@ -5,6 +5,29 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.6.0](https://github.com/Mumega-com/mcpwp/compare/v3.5.0...v3.6.0) (2026-07-17)
+
+
+### Features
+
+* allow extensions to raise custom MCP tool scope ([#654](https://github.com/Mumega-com/mcpwp/issues/654)) ([bbae9aa](https://github.com/Mumega-com/mcpwp/commit/bbae9aaba28220b002069584f7ca352bf6d2175e))
+* **cloudflare:** cloudflare integration — bot-fix, cache purge, speed/CWV signals ([#632](https://github.com/Mumega-com/mcpwp/issues/632)) ([f2d9f72](https://github.com/Mumega-com/mcpwp/commit/f2d9f7289ba2d590c9e02563f689f53dafbd0a45))
+* **integrations:** self-service Cloudflare Bot Fight Mode fix in wp-admin ([ddb4e6b](https://github.com/Mumega-com/mcpwp/commit/ddb4e6b79ab700d6b17b40429d276f1813d44b5f))
+* support trusted custom tool callbacks ([#657](https://github.com/Mumega-com/mcpwp/issues/657)) ([9503424](https://github.com/Mumega-com/mcpwp/commit/95034246c02deff858761eaa08661be60e3f728b))
+
+
+### Bug Fixes
+
+* **freemius:** soft-gate first activation instead of hard license wall ([#646](https://github.com/Mumega-com/mcpwp/issues/646)) ([3ad18bc](https://github.com/Mumega-com/mcpwp/commit/3ad18bc5ab8a7725da86a4a7e40f2b8da338d643))
+* **license:** close reconnect-link render-time gap + notify on blocked updates ([589fb36](https://github.com/Mumega-com/mcpwp/commit/589fb361cb8bc3fea1aaf2df21c19caba3e964e7))
+* **license:** detect wrong-package downgrade + warn loudly ([#656](https://github.com/Mumega-com/mcpwp/issues/656)) ([c2e9492](https://github.com/Mumega-com/mcpwp/commit/c2e9492849365239743fdc100db871de8db29068))
+* **license:** reconnect flow no longer forces skip-mode (found the actual bug) ([00a5e8a](https://github.com/Mumega-com/mcpwp/commit/00a5e8aaf851949c3c0aa9f47adf404bfc076b0d))
+* **license:** update vendored Freemius SDK 2.13.0 -&gt; 2.13.4 ([d3fb7cf](https://github.com/Mumega-com/mcpwp/commit/d3fb7cf2f6a8fb7d46579255ae8c77045ca9677f))
+* **license:** use Freemius's install-linked checkout URL, not marketing site ([9e7b070](https://github.com/Mumega-com/mcpwp/commit/9e7b070de59920e2411186b4308b515c07038323))
+* **mcp:** draft rendered-copy 404/502 + expose unlicensed-reason code ([4b7f8ef](https://github.com/Mumega-com/mcpwp/commit/4b7f8ef637f0d82f81926674402715430ae5ffd5))
+* **release:** release_freemius.sh never defined MCPWP_FREEMIUS_BUILD ([673f943](https://github.com/Mumega-com/mcpwp/commit/673f94384723c07e38144e4660fd8657811341d8))
+* **security:** harden feedback-relay rate limiting and Figma OAuth callback ([#649](https://github.com/Mumega-com/mcpwp/issues/649)) ([a1040c9](https://github.com/Mumega-com/mcpwp/commit/a1040c959d8a8a07352cd67034d4a56c176de55d))
+
 ## [3.5.0](https://github.com/Mumega-com/mcpwp/compare/v3.4.17...v3.5.0) (2026-07-15)
 
 
