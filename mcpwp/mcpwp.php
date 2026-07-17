@@ -43,6 +43,16 @@ define( 'MCPWP_VERSION', '3.5.8' ); // x-release-please-version
 define( 'MCPWP_SUPPORTS_CUSTOM_TOOL_SCOPE_FILTER', true );
 
 /**
+ * Whether custom MCP tool scope filtering is supported.
+ */
+define( 'MCPWP_SUPPORTS_CUSTOM_TOOL_SCOPE_FILTER', true );
+
+/**
+ * Whether trusted custom-tool callback handlers are supported.
+ */
+define( 'MCPWP_SUPPORTS_CUSTOM_TOOL_CALLBACKS', true );
+
+/**
  * Plugin directory path.
  */
 define( 'MCPWP_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );

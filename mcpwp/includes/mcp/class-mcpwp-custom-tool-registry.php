@@ -7,9 +7,9 @@
  * validated/normalized against a formal contract before they enter dispatch.
  *
  * This is the seam third-party + owner-authored addons register through. A tool
- * is a pointer to a handler (`rest_path`, local or remote), gated at the single
- * dispatch choke point by tier, category/scope, capability, and rate — the same
- * gates first-party tools pass. See docs/adr/0001-extension-architecture.md.
+ * is a pointer to a handler (a `rest_path` or trusted local `callback`), gated at
+ * the single dispatch choke point by tier, category/scope, capability, and rate
+ * — the same gates first-party tools pass. See docs/adr/0001-extension-architecture.md.
  *
  * Usage in any plugin or theme:
  *
@@ -33,8 +33,12 @@
  * Tool definition keys (the contract):
  *   name        (string, required) — unique tool name, plugin_prefix_action format
  *   description (string, required) — one sentence, plain English
- *   rest_path   (string, required) — full WP REST route '/digid/v1/listings'
- *                                    or MCPWP-relative '/my-endpoint' (gets /mcpwp/v1 prepended)
+ *   rest_path   (string, conditional) — full WP REST route '/digid/v1/listings'
+ *                                    or MCPWP-relative '/my-endpoint' (gets /mcpwp/v1 prepended).
+ *                                    Supply exactly one of rest_path or callback.
+ *   callback    (callable, conditional) — trusted in-process handler that receives
+ *                                    the validated and remapped MCP arguments. Supply
+ *                                    exactly one of callback or rest_path.
  *   method      (string)          — HTTP method GET|POST|PUT|PATCH|DELETE (default GET)
  *   category    (string)          — category slug for scope/toggle (default 'custom')
  *   tier        (string)          — 'free' | 'pro' (default 'free'). Pro tools are hidden
@@ -146,9 +150,19 @@ class Mcpwp_Custom_Tool_Registry extends Mcpwp_MCP_Tool_Registry {
 	private function normalize_registration( $entry ) {
 		if ( ! is_array( $entry )
 			|| empty( $entry['name'] )
-			|| empty( $entry['description'] )
-			|| empty( $entry['rest_path'] )
-			|| ! $this->is_safe_rest_path( $entry['rest_path'] ) ) {
+			|| empty( $entry['description'] ) ) {
+			return null;
+		}
+
+		$has_rest_path = array_key_exists( 'rest_path', $entry );
+		$has_callback  = array_key_exists( 'callback', $entry );
+		if ( $has_rest_path === $has_callback ) {
+			return null;
+		}
+		if ( $has_rest_path && ! $this->is_safe_rest_path( $entry['rest_path'] ) ) {
+			return null;
+		}
+		if ( $has_callback && ! is_callable( $entry['callback'] ) ) {
 			return null;
 		}
 
@@ -167,10 +181,9 @@ class Mcpwp_Custom_Tool_Registry extends Mcpwp_MCP_Tool_Registry {
 			$tier = 'free';
 		}
 
-		return array(
+		$normalized = array(
 			'name'        => $name,
 			'description' => sanitize_text_field( $entry['description'] ),
-			'rest_path'   => $entry['rest_path'],
 			'method'      => $method,
 			'category'    => isset( $entry['category'] ) && is_string( $entry['category'] )
 				? sanitize_key( $entry['category'] )
@@ -187,6 +200,13 @@ class Mcpwp_Custom_Tool_Registry extends Mcpwp_MCP_Tool_Registry {
 			'open_world'  => ! empty( $entry['open_world'] ),
 			'param_remap' => $this->sanitize_param_remap( isset( $entry['param_remap'] ) ? $entry['param_remap'] : null ),
 		);
+		if ( $has_rest_path ) {
+			$normalized['rest_path'] = $entry['rest_path'];
+		} else {
+			$normalized['callback'] = $entry['callback'];
+		}
+
+		return $normalized;
 	}
 
 	/**
@@ -243,7 +263,8 @@ class Mcpwp_Custom_Tool_Registry extends Mcpwp_MCP_Tool_Registry {
 		 * Register custom MCP tools.
 		 *
 		 * Third-party plugins append tool definition arrays to this filter. Each
-		 * definition must include 'name', 'description', and 'rest_path'.
+		 * definition must include 'name', 'description', and exactly one handler:
+		 * 'rest_path' or 'callback'.
 		 *
 		 * @param array[] $tools Existing tool registrations (starts empty).
 		 * @return array[] Modified tool registrations.
@@ -310,20 +331,26 @@ class Mcpwp_Custom_Tool_Registry extends Mcpwp_MCP_Tool_Registry {
 	/**
 	 * Build tool → REST route map from validated registrations.
 	 *
-	 * Each entry includes 'rest_path' so the dispatcher knows the full route,
-	 * bypassing the default '/mcpwp/v1' namespace prepend.
+	 * REST entries include 'rest_path' so the dispatcher knows the full route,
+	 * bypassing the default '/mcpwp/v1' namespace prepend. Callback entries
+	 * retain their callable for trusted in-process dispatch.
 	 *
 	 * @return array Tool name → mapping array.
 	 */
 	public function get_tool_map() {
 		$map = array();
 		foreach ( $this->get_registrations() as $reg ) {
-			$map[ $reg['name'] ] = array(
-				'rest_path'   => $reg['rest_path'],
-				'route'       => $reg['rest_path'],
+			$mapping = array(
 				'method'      => $reg['method'],
 				'param_remap' => $reg['param_remap'],
 			);
+			if ( isset( $reg['rest_path'] ) ) {
+				$mapping['rest_path'] = $reg['rest_path'];
+				$mapping['route']     = $reg['rest_path'];
+			} else {
+				$mapping['callback'] = $reg['callback'];
+			}
+			$map[ $reg['name'] ] = $mapping;
 		}
 		return $map;
 	}

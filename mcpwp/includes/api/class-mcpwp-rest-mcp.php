@@ -288,7 +288,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				continue;
 			}
 
-			if ( isset( $tool_map[ $name ] ) ) {
+			if ( isset( $tool_map[ $name ] ) && ! isset( $tool_map[ $name ]['callback'] ) ) {
 				// x_spai kept for backward-compat; remove in a future major.
 				$tool['x_spai']   = array(
 					'method' => $tool_map[ $name ]['method'],
@@ -1253,9 +1253,10 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			return $this->jsonrpc_error( $id, -32602, $validation_error );
 		}
 
-		$mapping = $tool_map[ $tool_name ];
-		$route   = $mapping['route'];
-		$method  = $mapping['method'];
+		$mapping     = $tool_map[ $tool_name ];
+		$is_callback = isset( $mapping['callback'] ) && is_callable( $mapping['callback'] );
+		$route       = $is_callback ? '' : $mapping['route'];
+		$method      = $mapping['method'];
 
 		// Remap tool param names to REST endpoint param names where they differ.
 		$param_remap = isset( $mapping['param_remap'] ) ? $mapping['param_remap'] : array();
@@ -1267,36 +1268,14 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		}
 
 		// Substitute path parameters (e.g., {id})
-		foreach ( $arguments as $key => $value ) {
-			$placeholder = '{' . $key . '}';
-			if ( false !== strpos( $route, $placeholder ) ) {
-				$route = str_replace( $placeholder, $value, $route );
-				unset( $arguments[ $key ] );
+		if ( ! $is_callback ) {
+			foreach ( $arguments as $key => $value ) {
+				$placeholder = '{' . $key . '}';
+				if ( false !== strpos( $route, $placeholder ) ) {
+					$route = str_replace( $placeholder, $value, $route );
+					unset( $arguments[ $key ] );
+				}
 			}
-		}
-
-		// Build internal REST request.
-		// Custom tools (mcpwp_register_tools) store 'rest_path' as the full WP REST route.
-		// Built-in tools store a relative path that is prefixed with the MCPWP namespace.
-		$full_route = isset( $mapping['rest_path'] )
-			? $mapping['rest_path']
-			: '/mcpwp/v1' . $route;
-		$internal_request = new WP_REST_Request( $method, $full_route );
-
-		// Set remaining arguments as params.
-		// For write methods, also set body params so get_param() finds them
-		// in the body bucket (higher priority than defaults).
-		foreach ( $arguments as $key => $value ) {
-			$internal_request->set_param( $key, $value );
-		}
-		if ( 'GET' !== $method ) {
-			$internal_request->set_body_params( $arguments );
-		}
-
-		// Copy authentication from current request
-		$api_key = $this->get_api_key_from_request( $request );
-		if ( $api_key ) {
-			$internal_request->set_header( 'X-API-Key', $api_key );
 		}
 
 		// Capture before-state for audit log (no-op for non-write tools).
@@ -1307,16 +1286,46 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			? Mcpwp_Action_Log::begin( $tool_name, $arguments, $audit_key_id, $audit_category )
 			: null;
 
-		// Mark as internal sub-request via a PHP static property so rate limiting
-		// is not double-counted.  Using a static flag (not an HTTP header) prevents
-		// external callers from forging this bypass.
-		if ( class_exists( 'Mcpwp_REST_Batch' ) ) {
-			Mcpwp_REST_Batch::$is_batch_sub_request = true;
-		}
-		// Dispatch internally
-		$response = rest_do_request( $internal_request );
-		if ( class_exists( 'Mcpwp_REST_Batch' ) ) {
-			Mcpwp_REST_Batch::$is_batch_sub_request = false;
+		if ( $is_callback ) {
+			$full_route = 'callback:' . $tool_name;
+			$response   = $this->normalize_custom_tool_callback_response(
+				call_user_func( $mapping['callback'], $arguments )
+			);
+		} else {
+			// Build internal REST request.
+			// Custom tools (mcpwp_register_tools) store 'rest_path' as the full WP REST route.
+			// Built-in tools store a relative path that is prefixed with the MCPWP namespace.
+			$full_route = isset( $mapping['rest_path'] )
+				? $mapping['rest_path']
+				: '/mcpwp/v1' . $route;
+			$internal_request = new WP_REST_Request( $method, $full_route );
+
+			// Set remaining arguments as params.
+			// For write methods, also set body params so get_param() finds them
+			// in the body bucket (higher priority than defaults).
+			foreach ( $arguments as $key => $value ) {
+				$internal_request->set_param( $key, $value );
+			}
+			if ( 'GET' !== $method ) {
+				$internal_request->set_body_params( $arguments );
+			}
+
+			// Copy authentication from current request.
+			$api_key = $this->get_api_key_from_request( $request );
+			if ( $api_key ) {
+				$internal_request->set_header( 'X-API-Key', $api_key );
+			}
+
+			// Mark as internal sub-request via a PHP static property so rate limiting
+			// is not double-counted. Using a static flag (not an HTTP header) prevents
+			// external callers from forging this bypass.
+			if ( class_exists( 'Mcpwp_REST_Batch' ) ) {
+				Mcpwp_REST_Batch::$is_batch_sub_request = true;
+			}
+			$response = rest_do_request( $internal_request );
+			if ( class_exists( 'Mcpwp_REST_Batch' ) ) {
+				Mcpwp_REST_Batch::$is_batch_sub_request = false;
+			}
 		}
 		$data   = $response->get_data();
 		$status = $response->get_status();
@@ -1403,6 +1412,49 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				),
 				'isError' => false,
 			),
+		);
+	}
+
+	/**
+	 * Normalize a trusted custom-tool callback result to a REST response.
+	 *
+	 * Callback registrations run only after the standard MCP gateway gates have
+	 * passed. They receive the validated, remapped arguments and may return the
+	 * same result shapes as a WordPress REST handler.
+	 *
+	 * @param mixed $result Callback return value.
+	 * @return WP_REST_Response Normalized response for the shared MCP response flow.
+	 */
+	private function normalize_custom_tool_callback_response( $result ) {
+		if ( $result instanceof WP_REST_Response ) {
+			return $result;
+		}
+
+		if ( is_wp_error( $result ) ) {
+			$error_data = $result->get_error_data();
+			$error_data = is_array( $error_data ) ? $error_data : array();
+			$status     = isset( $error_data['status'] ) ? (int) $error_data['status'] : 500;
+
+			return new WP_REST_Response(
+				array(
+					'code'    => $result->get_error_code(),
+					'message' => $result->get_error_message(),
+					'data'    => $error_data,
+				),
+				$status
+			);
+		}
+
+		if ( is_array( $result ) ) {
+			return new WP_REST_Response( $result, 200 );
+		}
+
+		return new WP_REST_Response(
+			array(
+				'code'    => 'invalid_callback_response',
+				'message' => 'Custom tool callback must return a WP_REST_Response, WP_Error, or array.',
+			),
+			500
 		);
 	}
 
