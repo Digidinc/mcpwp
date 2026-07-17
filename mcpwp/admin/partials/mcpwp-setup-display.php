@@ -149,7 +149,7 @@ $last_activity_time = ! empty( $recent_activity[0]['created_at'] ) ? $recent_act
 				?>
 			</strong>
 			&mdash;
-			<a href="<?php echo esc_url( $license_manage_url ); ?>"<?php echo ( false !== strpos( $license_manage_url, 'mcpwp.net' ) ) ? ' target="_blank"' : ''; ?>><?php esc_html_e( 'Manage pricing and license', 'mcpwp' ); ?></a>
+			<a href="<?php echo esc_url( $license_manage_url ); ?>" class="mcpwp-upgrade-link"<?php echo ( false !== strpos( $license_manage_url, 'mcpwp.net' ) ) ? ' target="_blank"' : ''; ?>><?php esc_html_e( 'Manage pricing and license', 'mcpwp' ); ?></a>
 		</div>
 	</div>
 

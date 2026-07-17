@@ -114,7 +114,13 @@ $figma_oauth_message = isset( $_GET['message'] ) ? sanitize_text_field( wp_unsla
 						<?php if ( $unlock_desc ) : ?>
 							<?php echo esc_html( $unlock_desc ); ?><br />
 						<?php endif; ?>
-						<a href="<?php echo esc_url( 'https://mcpwp.net/pricing/' ); ?>" target="_blank" rel="noopener">
+						<?php
+						// Install-linked checkout so a completed purchase activates THIS
+						// site automatically instead of stranding the license on the
+						// marketing site with no way back into wp-admin.
+						$mcpwp_upgrade_url = class_exists( 'Mcpwp_License' ) ? Mcpwp_License::get_instance()->get_upgrade_url() : 'https://mcpwp.net/pricing/';
+						?>
+						<a href="<?php echo esc_url( $mcpwp_upgrade_url ); ?>" class="mcpwp-upgrade-link" target="_blank" rel="noopener">
 							<?php esc_html_e( 'Upgrade to Pro &rarr;', 'mcpwp' ); ?>
 						</a>
 					</p>

@@ -343,18 +343,49 @@ class Mcpwp_License {
 	/**
 	 * Upgrade URL.
 	 *
+	 * Prefers Freemius's own install-linked checkout URL — it carries this
+	 * site's install_id, so a completed purchase activates THIS site and
+	 * redirects back into wp-admin. The plain marketing-site URL has no
+	 * install context: a purchase made there never syncs back to the plugin
+	 * (reported bug: "pay with coupon, nothing happens, no way back to WP").
+	 * Only falls back to the marketing URL when Freemius isn't available.
+	 *
 	 * @return string
 	 */
 	public function get_upgrade_url() {
+		if ( function_exists( 'mcpwp_get_fs_instance' ) ) {
+			$fs = mcpwp_get_fs_instance();
+			if ( is_object( $fs ) ) {
+				if ( method_exists( $fs, 'is_anonymous' ) && $fs->is_anonymous()
+					&& method_exists( $fs, 'get_reconnect_url' ) ) {
+					return $fs->get_reconnect_url();
+				}
+				if ( method_exists( $fs, 'is_pending_activation' ) && $fs->is_pending_activation()
+					&& method_exists( $fs, 'get_reconnect_url' ) ) {
+					return $fs->get_reconnect_url();
+				}
+				if ( method_exists( $fs, 'get_upgrade_url' ) ) {
+					return $fs->get_upgrade_url();
+				}
+			}
+		}
 		return 'https://mcpwp.net/pricing/';
 	}
 
 	/**
 	 * Account URL.
 	 *
+	 * Same install-linked preference as get_upgrade_url() — see there.
+	 *
 	 * @return string
 	 */
 	public function get_account_url() {
+		if ( function_exists( 'mcpwp_get_fs_instance' ) ) {
+			$fs = mcpwp_get_fs_instance();
+			if ( is_object( $fs ) && method_exists( $fs, 'get_account_url' ) ) {
+				return $fs->get_account_url();
+			}
+		}
 		return 'https://mcpwp.net/account/';
 	}
 

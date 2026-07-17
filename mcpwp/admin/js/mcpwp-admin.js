@@ -195,7 +195,7 @@
 	// ── Upgrade link tracking ─────────────────────────────────────────────────
 
 	function initUpgradeTracking() {
-		$(document).on('click', 'a[href*="mcpwp.net/pricing"], a[href*="mcpwp.net/account"]', function() {
+		$(document).on('click', 'a.mcpwp-upgrade-link, a[href*="mcpwp.net/pricing"], a[href*="mcpwp.net/account"]', function() {
 			if (window.posthog) {
 				posthog.capture('upgrade_link_clicked', { href: $(this).attr('href') });
 			}
