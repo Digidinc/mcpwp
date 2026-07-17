@@ -857,6 +857,13 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			}
 			if ( 'publish' === $post->post_status ) {
 				$url = get_permalink( $post_id );
+			} elseif ( class_exists( '\Elementor\Plugin' ) && get_post_meta( $post_id, '_elementor_data', true ) ) {
+				// Same reason as get_rendered_html_via_elementor(): an outbound
+				// loopback fetch of a draft/pending/private preview URL is
+				// unreliable (no logged-in session, and hosting-level gates like
+				// a staging "Coming Soon" lock intercept it before WordPress
+				// even runs — #613/#655). Render in-process instead.
+				return $this->get_rendered_copy_via_elementor( $post_id, $include_chrome );
 			} else {
 				// Draft — use preview URL so agents can audit before publish.
 				$url = get_preview_post_link( $post_id );
@@ -916,6 +923,37 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 				'include_chrome'   => $include_chrome,
 				'validation_basis' => 'rendered_html',
 				'validation_note'  => 'Text extracted from live rendered page — reflects what visitors actually see, including SEO plugin injections and Elementor/Gutenberg output.',
+			)
+		);
+	}
+
+	/**
+	 * Render a draft/pending/private Elementor post's visible text in-process.
+	 *
+	 * Mirrors get_rendered_html_via_elementor() — bypasses the outbound
+	 * loopback fetch entirely for content that isn't publicly reachable yet.
+	 *
+	 * @param int  $post_id        Post ID.
+	 * @param bool $include_chrome Whether to include nav/header/footer text.
+	 * @return WP_REST_Response
+	 */
+	private function get_rendered_copy_via_elementor( $post_id, $include_chrome ) {
+		$html     = \Elementor\Plugin::$instance->frontend->get_builder_content_for_display( $post_id, true );
+		$sections = $this->parse_visible_text( $html, $include_chrome );
+		$all_text = implode( ' ', array_column( $sections, 'text' ) );
+
+		return $this->success_response(
+			array(
+				'post_id'          => absint( $post_id ),
+				'url'              => add_query_arg( 'elementor-preview', $post_id, get_permalink( $post_id ) ),
+				'sections'         => $sections,
+				'all_text'         => $all_text,
+				'word_count'       => str_word_count( $all_text ),
+				'section_count'    => count( $sections ),
+				'include_chrome'   => $include_chrome,
+				'validation_basis' => 'rendered_html',
+				'validation_note'  => 'Text extracted from an in-process Elementor render (no HTTP round trip) — this is the Elementor content only, not the surrounding theme header/footer.',
+				'render_method'    => 'internal_elementor',
 			)
 		);
 	}

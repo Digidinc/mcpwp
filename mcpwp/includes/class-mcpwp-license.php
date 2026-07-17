@@ -327,6 +327,51 @@ class Mcpwp_License {
 	}
 
 	/**
+	 * Diagnose why is_pro() is false, without exposing any license key.
+	 *
+	 * Requested by issue #656 (DME regression report): a licensed site can lose
+	 * Pro after an update with no visible explanation. The most common real
+	 * cause found while triaging that report is 'no_freemius_sdk' — the
+	 * self-hosted distribution (mumega.com/updates.mcpwp.net) deliberately
+	 * ships with no Freemius SDK at all (see build-selfhosted.sh), so a site
+	 * that was Pro under the Freemius-built package silently loses Pro if a
+	 * self-hosted update ever gets installed over it — the two packages share
+	 * the same plugin slug/name, so this is easy to do by accident.
+	 *
+	 * @return string Empty string when is_pro() is true; otherwise one of:
+	 *                'wporg_build', 'no_freemius_sdk', 'anonymous',
+	 *                'pending_activation', 'no_active_license'.
+	 */
+	public function get_unlicensed_reason() {
+		if ( $this->is_pro() ) {
+			return '';
+		}
+
+		if ( defined( 'MCPWP_WPORG_BUILD' ) ) {
+			return 'wporg_build';
+		}
+
+		if ( ! function_exists( 'mcpwp_get_fs_instance' ) ) {
+			return 'no_freemius_sdk';
+		}
+
+		$fs = mcpwp_get_fs_instance();
+		if ( ! is_object( $fs ) ) {
+			return 'no_freemius_sdk';
+		}
+
+		if ( method_exists( $fs, 'is_anonymous' ) && $fs->is_anonymous() ) {
+			return 'anonymous';
+		}
+
+		if ( method_exists( $fs, 'is_pending_activation' ) && $fs->is_pending_activation() ) {
+			return 'pending_activation';
+		}
+
+		return 'no_active_license';
+	}
+
+	/**
 	 * Check if a Freemius trial is active.
 	 *
 	 * @return bool
@@ -420,6 +465,7 @@ class Mcpwp_License {
 				'is_pro'    => false,
 				'is_paying' => false,
 				'is_agency' => false,
+				'reason'    => $this->get_unlicensed_reason(),
 			);
 		}
 
@@ -441,6 +487,7 @@ class Mcpwp_License {
 			'is_pro'    => true,
 			'is_paying' => $is_paying,
 			'is_agency' => ( 'agency' === $plan ) || $this->is_agency(),
+			'reason'    => '',
 		);
 	}
 }

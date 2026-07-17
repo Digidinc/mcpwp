@@ -282,4 +282,46 @@ final class LicenseCapabilitiesTest extends TestCase
         $this->assertSame('unlicensed', $caps['plan']);
         $this->assertConsistent($caps);
     }
+
+    // -- get_unlicensed_reason() (#656: diagnose unlicensed without exposing the key) --
+
+    public function test_reason_is_empty_string_when_pro(): void
+    {
+        $this->stub_paying('pro');
+        $info = Mcpwp_License::get_instance()->get_license_info();
+        $this->assertSame('', $info['reason']);
+        $this->assertSame('', Mcpwp_License::get_instance()->get_unlicensed_reason());
+    }
+
+    public function test_reason_is_no_freemius_sdk_when_no_fs_instance(): void
+    {
+        // No Freemius instance at all — the self-hosted package (no SDK
+        // bundled) reports this same state, which was the likely root cause
+        // in #656: a previously-Freemius-licensed site loses Pro silently if
+        // a self-hosted update ever gets installed over it.
+        $info = Mcpwp_License::get_instance()->get_license_info();
+        $this->assertSame('no_freemius_sdk', $info['reason']);
+    }
+
+    public function test_reason_is_no_active_license_when_fs_reports_unlicensed(): void
+    {
+        // Freemius instance present and reachable, but no paying/trial/premium
+        // entitlement — a genuinely unlicensed connected site.
+        $this->stub_unlicensed();
+        $info = Mcpwp_License::get_instance()->get_license_info();
+        $this->assertSame('no_active_license', $info['reason']);
+    }
+
+    /**
+     * @runInSeparateProcess
+     * @preserveGlobalState disabled
+     */
+    public function test_reason_is_wporg_build_regardless_of_fs_state(): void
+    {
+        define('MCPWP_WPORG_BUILD', true);
+        $this->stub_paying('agency');
+
+        $info = Mcpwp_License::get_instance()->get_license_info();
+        $this->assertSame('wporg_build', $info['reason']);
+    }
 }

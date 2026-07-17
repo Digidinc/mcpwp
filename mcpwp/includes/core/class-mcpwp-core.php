@@ -55,11 +55,14 @@ class Mcpwp_Core {
 			: array(
 				'plan'   => 'unlicensed',
 				'is_pro' => false,
+				'reason' => 'no_freemius_sdk',
 			);
 
 		$info['license'] = array(
 			'plan'   => $license_info['plan'],
 			'is_pro' => $license_info['is_pro'],
+			// Diagnostic only when unlicensed — never exposes the key itself (#656).
+			'reason' => $license_info['is_pro'] ? '' : ( $license_info['reason'] ?? '' ),
 		);
 
 		return $info;
@@ -148,12 +151,15 @@ class Mcpwp_Core {
 		// canonical license accessor AFTER the filter so they cannot be made
 		// inconsistent by other consumers.
 		if ( class_exists( 'Mcpwp_License' ) ) {
-			$license_info               = Mcpwp_License::get_instance()->get_license_info();
-			$capabilities['plan']       = $license_info['plan'];
-			$capabilities['pro_active'] = $license_info['is_pro'];
+			$license_info                       = Mcpwp_License::get_instance()->get_license_info();
+			$capabilities['plan']               = $license_info['plan'];
+			$capabilities['pro_active']         = $license_info['is_pro'];
+			// Diagnostic only when unlicensed — never exposes the key itself (#656).
+			$capabilities['unlicensed_reason']  = $license_info['is_pro'] ? '' : ( $license_info['reason'] ?? '' );
 		} else {
-			$capabilities['plan']       = 'unlicensed';
-			$capabilities['pro_active'] = false;
+			$capabilities['plan']              = 'unlicensed';
+			$capabilities['pro_active']        = false;
+			$capabilities['unlicensed_reason']  = 'no_freemius_sdk';
 		}
 
 		// Merge capabilities from third-party integrations.
