@@ -312,6 +312,34 @@ final class LicenseCapabilitiesTest extends TestCase
         $this->assertSame('no_active_license', $info['reason']);
     }
 
+    public function test_reason_is_freemius_removed_when_residual_account_data_present(): void
+    {
+        // No Freemius SDK loaded (same as the plain no_freemius_sdk case), but
+        // wp_options still holds Freemius's own site-wide account record
+        // mentioning our product ID — evidence this site WAS Freemius-licensed
+        // before the SDK-less (self-hosted) package got installed over it.
+        update_option('fs_accounts', array(
+            'sites' => array(
+                Mcpwp_License::FREEMIUS_PRODUCT_ID => array( 'id' => '999' ),
+            ),
+        ));
+
+        $info = Mcpwp_License::get_instance()->get_license_info();
+        $this->assertSame('freemius_removed_had_license', $info['reason']);
+    }
+
+    public function test_reason_stays_no_freemius_sdk_when_account_data_is_for_other_product(): void
+    {
+        // A DIFFERENT Freemius-integrated plugin's account data must not be
+        // mistaken for evidence that THIS product was ever licensed.
+        update_option('fs_accounts', array(
+            'sites' => array( '99999' => array( 'id' => '1' ) ),
+        ));
+
+        $info = Mcpwp_License::get_instance()->get_license_info();
+        $this->assertSame('no_freemius_sdk', $info['reason']);
+    }
+
     /**
      * @runInSeparateProcess
      * @preserveGlobalState disabled

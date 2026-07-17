@@ -59,6 +59,15 @@ class Mcpwp_License {
 	const BRIDGE_MIGRATED_FLAG = 'mcpwp_migrated_from_spai';
 
 	/**
+	 * Freemius product ID — mirrors the 'id' passed to fs_dynamic_init() in
+	 * freemius-init.php. Used only as a substring marker to detect residual
+	 * Freemius account data (see get_unlicensed_reason()); not a credential.
+	 *
+	 * @var string
+	 */
+	const FREEMIUS_PRODUCT_ID = '23824';
+
+	/**
 	 * Singleton instance.
 	 *
 	 * @var Mcpwp_License
@@ -339,8 +348,8 @@ class Mcpwp_License {
 	 * the same plugin slug/name, so this is easy to do by accident.
 	 *
 	 * @return string Empty string when is_pro() is true; otherwise one of:
-	 *                'wporg_build', 'no_freemius_sdk', 'anonymous',
-	 *                'pending_activation', 'no_active_license'.
+	 *                'wporg_build', 'no_freemius_sdk', 'freemius_removed_had_license',
+	 *                'anonymous', 'pending_activation', 'no_active_license'.
 	 */
 	public function get_unlicensed_reason() {
 		if ( $this->is_pro() ) {
@@ -351,14 +360,31 @@ class Mcpwp_License {
 			return 'wporg_build';
 		}
 
-		if ( ! function_exists( 'mcpwp_get_fs_instance' ) ) {
+		if ( ! function_exists( 'mcpwp_get_fs_instance' ) || ! is_object( mcpwp_get_fs_instance() ) ) {
+			// No Freemius SDK loaded at all (self-hosted build) — distinguish a
+			// genuinely fresh free install from a site that WAS Freemius-licensed
+			// before a self-hosted zip got installed over it (#656): both
+			// packages share the same plugin slug, so this is an easy accident,
+			// and it silently strips every path to Pro with no visible cause.
+			// fs_accounts is Freemius's own site-wide account store — it
+			// persists in wp_options regardless of whether the SDK files are
+			// currently present, so its content survives the accidental
+			// downgrade even though the code that would normally read it
+			// doesn't exist right now. This is a best-effort heuristic (a
+			// substring check, not a parse of Freemius's private option
+			// schema), used only for a diagnostic message — never for gating.
+			$accounts = get_option( 'fs_accounts', '' );
+			// get_option() auto-unserializes into an array/object; flatten back
+			// to a string for a simple substring check rather than parsing
+			// Freemius's private nested schema.
+			$accounts_raw = is_string( $accounts ) ? $accounts : maybe_serialize( $accounts );
+			if ( '' !== $accounts_raw && false !== strpos( $accounts_raw, self::FREEMIUS_PRODUCT_ID ) ) {
+				return 'freemius_removed_had_license';
+			}
 			return 'no_freemius_sdk';
 		}
 
 		$fs = mcpwp_get_fs_instance();
-		if ( ! is_object( $fs ) ) {
-			return 'no_freemius_sdk';
-		}
 
 		if ( method_exists( $fs, 'is_anonymous' ) && $fs->is_anonymous() ) {
 			return 'anonymous';
@@ -500,3 +526,26 @@ class Mcpwp_License {
 function mcpwp_license() {
 	return Mcpwp_License::get_instance();
 }
+
+/**
+ * Warn loudly when this site looks like it was Freemius-licensed before, but
+ * currently has no Freemius SDK loaded at all — the self-hosted and Freemius
+ * packages share the same plugin slug, so installing the self-hosted zip over
+ * a previously-Pro site is an easy accident that otherwise fails completely
+ * silently (#656).
+ */
+function mcpwp_maybe_show_freemius_removed_notice() {
+	if ( ! current_user_can( 'manage_options' ) ) {
+		return;
+	}
+	if ( 'freemius_removed_had_license' !== mcpwp_license()->get_unlicensed_reason() ) {
+		return;
+	}
+	printf(
+		'<div class="notice notice-error"><p>%s</p></div>',
+		wp_kses_post(
+			__( '<strong>MCPWP:</strong> This site looks like it previously had a licensed Pro install, but the currently installed plugin package has no Freemius licensing component at all — likely the free/self-hosted package was installed over the Pro one by accident (both share the same plugin name). Reinstall the Pro package from your Freemius account to restore your license and Pro features.', 'mcpwp' )
+		)
+	);
+}
+add_action( 'admin_notices', 'mcpwp_maybe_show_freemius_removed_notice' );

@@ -191,6 +191,20 @@ function _n($single, $plural, $number)
     return 1 === (int) $number ? $single : $plural;
 }
 
+if (! function_exists('wp_kses_post')) {
+    function wp_kses_post($text)
+    {
+        return $text;
+    }
+}
+
+if (! function_exists('maybe_serialize')) {
+    function maybe_serialize($data)
+    {
+        return is_array($data) || is_object($data) ? serialize($data) : $data;
+    }
+}
+
 function is_wp_error($value)
 {
     return $value instanceof WP_Error;

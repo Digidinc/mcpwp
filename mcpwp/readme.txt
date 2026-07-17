@@ -6,7 +6,7 @@ Requires at least: 6.1
 Tested up to: 7.0
 Requires PHP: 7.4
 <!-- x-release-please-start-version -->
-Stable tag: 3.5.3
+Stable tag: 3.5.4
 <!-- x-release-please-end -->
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -152,6 +152,9 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 4. Integrations and Chat — connected services plus safety-first agent workflow
 
 == Changelog ==
+
+= 3.5.4 =
+* fix: **license:** detect the specific case behind #656 — a site that shows residual Freemius account data (`fs_accounts`) for this product but has no Freemius SDK currently loaded reports `reason: freemius_removed_had_license` (not just `no_freemius_sdk`), plus a loud admin notice pointing at the fix: reinstall the Pro package from your Freemius account
 
 = 3.5.3 =
 * fix: **rendered-copy:** `wp_get_rendered_copy` (`GET /rendered-copy`) now renders private/draft/pending Elementor content in-process, same as `wp_get_rendered_html` — was fetching the public/preview URL and getting a host 404/coming-soon page on unpublished content ([#655](https://github.com/Mumega-com/mcpwp/issues/655))
