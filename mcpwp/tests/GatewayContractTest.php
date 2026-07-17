@@ -47,6 +47,28 @@ final class GatewayContractTest extends TestCase {
 		$this->assertSame( 0, $reg->get_rejected_count() );
 	}
 
+	public function test_valid_callback_tool_is_registered_and_callback_is_retained_in_map(): void {
+		$callback = function ( array $arguments ) {
+			return array( 'arguments' => $arguments );
+		};
+		$this->register(
+			array(
+				array(
+					'name'        => 'digid_refresh_cache',
+					'description' => 'Refresh the addon cache.',
+					'callback'    => $callback,
+				),
+			)
+		);
+		$reg = new Mcpwp_Custom_Tool_Registry();
+
+		$map = $reg->get_tool_map();
+		$this->assertArrayHasKey( 'digid_refresh_cache', $map );
+		$this->assertSame( $callback, $map['digid_refresh_cache']['callback'] );
+		$this->assertArrayNotHasKey( 'rest_path', $map['digid_refresh_cache'] );
+		$this->assertSame( 0, $reg->get_rejected_count() );
+	}
+
 	public function test_missing_required_fields_are_rejected(): void {
 		$this->register(
 			array(
@@ -60,6 +82,41 @@ final class GatewayContractTest extends TestCase {
 
 		$this->assertSame( array(), $reg->get_tools() );
 		$this->assertSame( 4, $reg->get_rejected_count() );
+	}
+
+	public function test_non_callable_callback_is_rejected(): void {
+		$this->register(
+			array(
+				array(
+					'name'        => 'digid_broken_callback',
+					'description' => 'This callback is not callable.',
+					'callback'    => 'digid_missing_callback',
+				),
+			)
+		);
+		$reg = new Mcpwp_Custom_Tool_Registry();
+
+		$this->assertSame( array(), $reg->get_tools() );
+		$this->assertSame( 1, $reg->get_rejected_count() );
+	}
+
+	public function test_registration_with_both_rest_path_and_callback_is_rejected(): void {
+		$this->register(
+			array(
+				array(
+					'name'        => 'digid_ambiguous_handler',
+					'description' => 'This registration has two handlers.',
+					'rest_path'   => '/digid/v1/ambiguous',
+					'callback'    => function () {
+						return array();
+					},
+				),
+			)
+		);
+		$reg = new Mcpwp_Custom_Tool_Registry();
+
+		$this->assertSame( array(), $reg->get_tools() );
+		$this->assertSame( 1, $reg->get_rejected_count() );
 	}
 
 	public function test_duplicate_names_keep_first_and_reject_rest(): void {
