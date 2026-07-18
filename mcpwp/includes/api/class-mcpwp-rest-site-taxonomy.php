@@ -18,9 +18,9 @@ class Mcpwp_REST_Site_Taxonomy extends Mcpwp_REST_API {
 	 * @return void
 	 */
 	public function register_routes() {
-		register_rest_route( $this->namespace, '/categories', $this->route_definition( WP_REST_Server::READABLE, 'list_categories', 'check_taxonomy_read_permission', 'taxonomy', 'read', array( 'read' ), false, $this->term_list_args() ) );
-		register_rest_route( $this->namespace, '/tags', $this->route_definition( WP_REST_Server::READABLE, 'list_tags', 'check_taxonomy_read_permission', 'taxonomy', 'read', array( 'read' ), false, $this->term_list_args() ) );
-		register_rest_route( $this->namespace, '/terms', $this->route_definition( WP_REST_Server::CREATABLE, 'create_term', 'check_create_term_permission', 'taxonomy', 'write', array( 'selected taxonomy manage_terms' ), true, $this->term_create_args() ) );
+		register_rest_route( $this->namespace, '/categories', array_merge( $this->route_definition( WP_REST_Server::READABLE, 'list_categories', 'check_taxonomy_read_permission', 'taxonomy', 'read', array( 'read' ), false, $this->term_list_args() ), array( 'permission_callback' => array( $this, 'check_taxonomy_read_permission' ) ) ) );
+		register_rest_route( $this->namespace, '/tags', array_merge( $this->route_definition( WP_REST_Server::READABLE, 'list_tags', 'check_taxonomy_read_permission', 'taxonomy', 'read', array( 'read' ), false, $this->term_list_args() ), array( 'permission_callback' => array( $this, 'check_taxonomy_read_permission' ) ) ) );
+		register_rest_route( $this->namespace, '/terms', array_merge( $this->route_definition( WP_REST_Server::CREATABLE, 'create_term', 'check_create_term_permission', 'taxonomy', 'write', array( 'selected taxonomy manage_terms' ), true, $this->term_create_args() ), array( 'permission_callback' => array( $this, 'check_create_term_permission' ) ) ) );
 	}
 	/**
 	 * Return readable categories.

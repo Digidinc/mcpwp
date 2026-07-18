@@ -22,45 +22,54 @@ class Mcpwp_REST_API_Keys extends Mcpwp_REST_API {
 			$this->namespace,
 			'/api-keys',
 			array(
-				$this->route_definition(
-					WP_REST_Server::READABLE,
-					'list_api_keys',
-					'check_admin_permission',
-					'site',
-					'admin',
-					array( 'mcpwp_manage_settings' ),
-					false,
-					array(
-						'include_revoked' => array(
-							'type'    => 'boolean',
-							'default' => false,
-						),
-					)
+				array_merge(
+					$this->route_definition(
+						WP_REST_Server::READABLE,
+						'list_api_keys',
+						'check_admin_permission',
+						'site',
+						'admin',
+						array( 'mcpwp_manage_settings' ),
+						false,
+						array(
+							'include_revoked' => array(
+								'type'    => 'boolean',
+								'default' => false,
+							),
+						)
+					),
+					array( 'permission_callback' => array( $this, 'check_admin_permission' ) )
 				),
-				$this->route_definition( WP_REST_Server::CREATABLE, 'create_api_key', 'check_admin_permission', 'site', 'admin', array( 'mcpwp_manage_settings' ), true, $this->api_key_create_args() ),
+				array_merge(
+					$this->route_definition( WP_REST_Server::CREATABLE, 'create_api_key', 'check_admin_permission', 'site', 'admin', array( 'mcpwp_manage_settings' ), true, $this->api_key_create_args() ),
+					array( 'permission_callback' => array( $this, 'check_admin_permission' ) )
+				),
 			)
 		);
 		register_rest_route(
 			$this->namespace,
 			'/api-keys/(?P<id>[a-z0-9-]+)',
-			$this->route_definition(
-				WP_REST_Server::DELETABLE,
-				'revoke_api_key',
-				'check_admin_permission',
-				'site',
-				'admin',
-				array( 'mcpwp_manage_settings' ),
-				true,
-				array(
-					'id' => $this->string_arg(
-						array(
-							'minLength' => 1,
-							'maxLength' => 64,
-							'required'  => true,
-							'pattern'   => '^[a-z0-9-]+$',
-						)
-					),
-				)
+			array_merge(
+				$this->route_definition(
+					WP_REST_Server::DELETABLE,
+					'revoke_api_key',
+					'check_admin_permission',
+					'site',
+					'admin',
+					array( 'mcpwp_manage_settings' ),
+					true,
+					array(
+						'id' => $this->string_arg(
+							array(
+								'minLength' => 1,
+								'maxLength' => 64,
+								'required'  => true,
+								'pattern'   => '^[a-z0-9-]+$',
+							)
+						),
+					)
+				),
+				array( 'permission_callback' => array( $this, 'check_admin_permission' ) )
 			)
 		);
 	}

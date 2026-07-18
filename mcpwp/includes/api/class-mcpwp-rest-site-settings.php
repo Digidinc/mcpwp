@@ -32,8 +32,14 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 			$this->namespace,
 			'/plugin-settings',
 			array(
-				$this->route_definition( WP_REST_Server::READABLE, 'get_plugin_settings', 'check_admin_permission', 'site', 'admin', array( 'mcpwp_manage_settings' ), false ),
-				$this->route_definition( 'PUT,PATCH', 'update_plugin_settings', 'check_admin_permission', 'site', 'admin', array( 'mcpwp_manage_settings' ), true, $this->plugin_settings_args() ),
+				array_merge(
+					$this->route_definition( WP_REST_Server::READABLE, 'get_plugin_settings', 'check_admin_permission', 'site', 'admin', array( 'mcpwp_manage_settings' ), false ),
+					array( 'permission_callback' => array( $this, 'check_admin_permission' ) )
+				),
+				array_merge(
+					$this->route_definition( 'PUT,PATCH', 'update_plugin_settings', 'check_admin_permission', 'site', 'admin', array( 'mcpwp_manage_settings' ), true, $this->plugin_settings_args() ),
+					array( 'permission_callback' => array( $this, 'check_admin_permission' ) )
+				),
 			)
 		);
 	}

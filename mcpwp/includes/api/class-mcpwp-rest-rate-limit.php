@@ -22,31 +22,40 @@ class Mcpwp_REST_Rate_Limit extends Mcpwp_REST_API {
 			$this->namespace,
 			'/rate-limit',
 			array(
-				$this->route_definition( WP_REST_Server::READABLE, 'get_status', 'check_admin_permission', 'site', 'admin', array( 'mcpwp_manage_settings' ), false ),
-				$this->route_definition( 'PUT,PATCH', 'save_settings', 'check_admin_permission', 'site', 'admin', array( 'mcpwp_manage_settings' ), true, $this->rate_settings_args() ),
+				array_merge(
+					$this->route_definition( WP_REST_Server::READABLE, 'get_status', 'check_admin_permission', 'site', 'admin', array( 'mcpwp_manage_settings' ), false ),
+					array( 'permission_callback' => array( $this, 'check_admin_permission' ) )
+				),
+				array_merge(
+					$this->route_definition( 'PUT,PATCH', 'save_settings', 'check_admin_permission', 'site', 'admin', array( 'mcpwp_manage_settings' ), true, $this->rate_settings_args() ),
+					array( 'permission_callback' => array( $this, 'check_admin_permission' ) )
+				),
 			)
 		);
 		register_rest_route(
 			$this->namespace,
 			'/rate-limit/reset',
-			$this->route_definition(
-				WP_REST_Server::CREATABLE,
-				'reset_counter',
-				'check_admin_permission',
-				'site',
-				'admin',
-				array( 'mcpwp_manage_settings' ),
-				true,
-				array(
-					'identifier' => $this->string_arg(
-						array(
-							'minLength' => 1,
-							'maxLength' => 100,
-							'required'  => true,
-							'pattern'   => '^key:[a-z0-9-]+$',
-						)
-					),
-				)
+			array_merge(
+				$this->route_definition(
+					WP_REST_Server::CREATABLE,
+					'reset_counter',
+					'check_admin_permission',
+					'site',
+					'admin',
+					array( 'mcpwp_manage_settings' ),
+					true,
+					array(
+						'identifier' => $this->string_arg(
+							array(
+								'minLength' => 1,
+								'maxLength' => 100,
+								'required'  => true,
+								'pattern'   => '^key:[a-z0-9-]+$',
+							)
+						),
+					)
+				),
+				array( 'permission_callback' => array( $this, 'check_admin_permission' ) )
 			)
 		);
 	}

@@ -31,12 +31,18 @@ class Mcpwp_REST_Media extends Mcpwp_REST_API {
 			$this->namespace,
 			'/media',
 			array(
-				$this->route_definition( WP_REST_Server::READABLE, 'list_media', 'check_list_media_permission', 'media', 'read', array( 'read', 'read_post per non-public attachment' ), false, $this->media_list_args() ),
-				$this->route_definition( WP_REST_Server::CREATABLE, 'upload_media', 'check_upload_media_permission', 'media', 'write', array( 'upload_files' ), true, $this->multipart_media_args() ),
+				array_merge(
+					$this->route_definition( WP_REST_Server::READABLE, 'list_media', 'check_list_media_permission', 'media', 'read', array( 'read', 'read_post per non-public attachment' ), false, $this->media_list_args() ),
+					array( 'permission_callback' => array( $this, 'check_list_media_permission' ) )
+				),
+				array_merge(
+					$this->route_definition( WP_REST_Server::CREATABLE, 'upload_media', 'check_upload_media_permission', 'media', 'write', array( 'upload_files' ), true, $this->multipart_media_args() ),
+					array( 'permission_callback' => array( $this, 'check_upload_media_permission' ) )
+				),
 			)
 		);
-		register_rest_route( $this->namespace, '/media/from-base64', $this->route_definition( WP_REST_Server::CREATABLE, 'upload_from_base64', 'check_upload_media_permission', 'media', 'write', array( 'upload_files' ), true, $this->base64_media_args() ) );
-		register_rest_route( $this->namespace, '/media/(?P<id>\d+)', $this->route_definition( WP_REST_Server::READABLE, 'get_media', 'check_get_media_permission', 'media', 'read', array( 'read_post:{id}', 'post type must be attachment' ), false, $this->id_route_args() ) );
+		register_rest_route( $this->namespace, '/media/from-base64', array_merge( $this->route_definition( WP_REST_Server::CREATABLE, 'upload_from_base64', 'check_upload_media_permission', 'media', 'write', array( 'upload_files' ), true, $this->base64_media_args() ), array( 'permission_callback' => array( $this, 'check_upload_media_permission' ) ) ) );
+		register_rest_route( $this->namespace, '/media/(?P<id>\d+)', array_merge( $this->route_definition( WP_REST_Server::READABLE, 'get_media', 'check_get_media_permission', 'media', 'read', array( 'read_post:{id}', 'post type must be attachment' ), false, $this->id_route_args() ), array( 'permission_callback' => array( $this, 'check_get_media_permission' ) ) ) );
 	}
 	/**
 	 * Return media visible to the authenticated key owner.

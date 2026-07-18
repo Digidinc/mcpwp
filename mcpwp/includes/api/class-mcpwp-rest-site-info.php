@@ -18,7 +18,7 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 	 * @return void
 	 */
 	public function register_routes() {
-		register_rest_route( $this->namespace, '/site-info', $this->route_definition( WP_REST_Server::READABLE, 'get_site_info', 'check_site_info_permission', 'site', 'read', array( 'read' ), false ) );
+		register_rest_route( $this->namespace, '/site-info', array_merge( $this->route_definition( WP_REST_Server::READABLE, 'get_site_info', 'check_site_info_permission', 'site', 'read', array( 'read' ), false ), array( 'permission_callback' => array( $this, 'check_site_info_permission' ) ) ) );
 	}
 
 	/**
