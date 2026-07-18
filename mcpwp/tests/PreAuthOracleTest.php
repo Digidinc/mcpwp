@@ -147,6 +147,182 @@ final class PreAuthOracleTest extends TestCase {
 		$this->assertSame( 401, $result->get_error_data()['status'] );
 	}
 
+	/**
+	 * Coverage gap (GH #670 review): the pre-auth uniformity above must not
+	 * have come at the cost of breaking the AUTHENTICATED flow. For a caller
+	 * who presents a valid, correctly scoped API key, existence/type checks
+	 * must still run BEFORE the meta-capability check — a missing/wrong-type
+	 * id must return 404 not_found even when the bound user's capability
+	 * would otherwise deny the request, and the same bound key/user must
+	 * still be capability-gated against a resource that does exist (proving
+	 * the 404 above is a real existence failure, not an accidental allow).
+	 */
+	public function test_authenticated_caller_gets_existence_404_before_capability_403(): void {
+		$GLOBALS['mcpwp_test_options']['mcpwp_api_keys'] = array( $this->key_record( 'auth-key', 7 ) );
+		$GLOBALS['mcpwp_test_users']     = array( (object) array( 'ID' => 7, 'roles' => array( 'author' ) ) );
+		$GLOBALS['_mcpwp_test_posts'][60] = $this->post_fixture( 60, 'post', 'publish' );
+		// Deny every meta capability the bound user could hold, so a 403 can
+		// only occur if the existence check is skipped or reordered.
+		$GLOBALS['mcpwp_test_user_caps'][7] = array( 'read_post:60' => false, 'edit_post:61' => false, 'delete_post:62' => false );
+
+		// check_typed_resource_permission() (backs check_get_post_permission).
+		$missing = ( new Mcpwp_REST_Posts() )->check_get_post_permission( $this->keyed_request( 'GET', '/mcpwp/v1/posts/999', 999, 'auth-key' ) );
+		$this->assertSame( 'not_found', $missing->get_error_code(), 'Missing id must fail on existence, not capability.' );
+		$this->assertSame( 404, $missing->get_error_data()['status'] );
+		$existing = ( new Mcpwp_REST_Posts() )->check_get_post_permission( $this->keyed_request( 'GET', '/mcpwp/v1/posts/60', 60, 'auth-key' ) );
+		$this->assertSame( 'insufficient_capability', $existing->get_error_code(), 'An existing resource must still be capability-gated.' );
+		$this->assertSame( 403, $existing->get_error_data()['status'] );
+
+		// check_content_update_permission() (backs check_update_post_permission).
+		$GLOBALS['_mcpwp_test_posts'][61] = $this->post_fixture( 61, 'post', 'draft' );
+		$missing_update = ( new Mcpwp_REST_Posts() )->check_update_post_permission( new WP_REST_Request( 'PUT', '/mcpwp/v1/posts/999', array( 'id' => 999 ), array( 'X-API-Key' => 'auth-key' ), null, wp_json_encode( array() ) ) );
+		$this->assertSame( 'not_found', $missing_update->get_error_code() );
+		$this->assertSame( 404, $missing_update->get_error_data()['status'] );
+		$existing_update = ( new Mcpwp_REST_Posts() )->check_update_post_permission( new WP_REST_Request( 'PUT', '/mcpwp/v1/posts/61', array( 'id' => 61 ), array( 'X-API-Key' => 'auth-key' ), null, wp_json_encode( array() ) ) );
+		$this->assertSame( 'insufficient_capability', $existing_update->get_error_code() );
+		$this->assertSame( 403, $existing_update->get_error_data()['status'] );
+
+		// check_delete_draft_permission().
+		$GLOBALS['_mcpwp_test_posts'][62] = $this->post_fixture( 62, 'post', 'draft' );
+		$missing_delete = ( new Mcpwp_REST_Posts() )->check_delete_draft_permission( $this->keyed_request( 'DELETE', '/mcpwp/v1/drafts/999', 999, 'auth-key' ) );
+		$this->assertSame( 'not_a_draft', $missing_delete->get_error_code() );
+		$this->assertSame( 404, $missing_delete->get_error_data()['status'] );
+		$existing_delete = ( new Mcpwp_REST_Posts() )->check_delete_draft_permission( $this->keyed_request( 'DELETE', '/mcpwp/v1/drafts/62', 62, 'auth-key' ) );
+		$this->assertSame( 'insufficient_capability', $existing_delete->get_error_code() );
+		$this->assertSame( 403, $existing_delete->get_error_data()['status'] );
+	}
+
+	/**
+	 * Coverage gap (GH #670 review): the uniform pre-auth envelope was only
+	 * ever exercised for the NO-KEY case. An INVALID key (one that fails to
+	 * match any configured record) must get the same enumeration protection
+	 * — existence/type/draft-status must stay hidden behind a uniform 401
+	 * before get_post() ever runs, exactly like the no-key path.
+	 */
+	public function test_typed_resource_permission_is_uniform_with_invalid_api_key(): void {
+		$GLOBALS['mcpwp_test_options']['mcpwp_api_keys'] = array( $this->key_record( 'configured-key', 7 ) );
+		$GLOBALS['_mcpwp_test_posts'][10] = $this->post_fixture( 10, 'post', 'publish' );
+		$GLOBALS['_mcpwp_test_posts'][11] = $this->post_fixture( 11, 'page', 'publish' );
+		$GLOBALS['_mcpwp_test_posts'][12] = $this->attachment_fixture( 12 );
+
+		$cases = array(
+			'post: missing id'        => array( new Mcpwp_REST_Posts(), 'check_get_post_permission', 999 ),
+			'post: correct type'      => array( new Mcpwp_REST_Posts(), 'check_get_post_permission', 10 ),
+			'post: wrong type (page)' => array( new Mcpwp_REST_Posts(), 'check_get_post_permission', 11 ),
+			'page: missing id'        => array( new Mcpwp_REST_Pages(), 'check_get_page_permission', 999 ),
+			'page: correct type'      => array( new Mcpwp_REST_Pages(), 'check_get_page_permission', 11 ),
+			'page: wrong type (post)' => array( new Mcpwp_REST_Pages(), 'check_get_page_permission', 10 ),
+			'media: missing id'       => array( new Mcpwp_REST_Media(), 'check_get_media_permission', 999 ),
+			'media: correct type'     => array( new Mcpwp_REST_Media(), 'check_get_media_permission', 12 ),
+			'media: wrong type (post)' => array( new Mcpwp_REST_Media(), 'check_get_media_permission', 10 ),
+		);
+
+		$envelopes = array();
+		foreach ( $cases as $label => $case ) {
+			list( $controller, $callback, $id ) = $case;
+			$envelopes[ $label ] = $this->unauthenticated_envelope( $controller->$callback( $this->keyed_request( 'GET', '/mcpwp/v1/resource/' . $id, $id, 'not-the-configured-key' ) ) );
+		}
+
+		$reference = reset( $envelopes );
+		$this->assertSame( 'invalid_api_key', $reference['code'] );
+		$this->assertSame( 401, $reference['data']['status'] );
+		foreach ( $envelopes as $label => $envelope ) {
+			$this->assertSame( $reference, $envelope, "Case '$label' leaked resource existence/type for an invalid key." );
+		}
+	}
+
+	public function test_content_update_permission_is_uniform_with_invalid_api_key(): void {
+		$GLOBALS['mcpwp_test_options']['mcpwp_api_keys'] = array( $this->key_record( 'configured-key', 7 ) );
+		$GLOBALS['_mcpwp_test_posts'][20] = $this->post_fixture( 20, 'post', 'draft' );
+		$GLOBALS['_mcpwp_test_posts'][21] = $this->post_fixture( 21, 'post', 'publish' );
+		$GLOBALS['_mcpwp_test_posts'][22] = $this->post_fixture( 22, 'page', 'draft' );
+
+		$cases = array(
+			'post: missing id'           => array( new Mcpwp_REST_Posts(), 'check_update_post_permission', 999 ),
+			'post: correct type draft'   => array( new Mcpwp_REST_Posts(), 'check_update_post_permission', 20 ),
+			'post: correct type publish' => array( new Mcpwp_REST_Posts(), 'check_update_post_permission', 21 ),
+			'post: wrong type (page)'    => array( new Mcpwp_REST_Posts(), 'check_update_post_permission', 22 ),
+			'page: missing id'           => array( new Mcpwp_REST_Pages(), 'check_update_page_permission', 999 ),
+			'page: correct type'         => array( new Mcpwp_REST_Pages(), 'check_update_page_permission', 22 ),
+			'page: wrong type (post)'    => array( new Mcpwp_REST_Pages(), 'check_update_page_permission', 20 ),
+		);
+
+		$envelopes = array();
+		foreach ( $cases as $label => $case ) {
+			list( $controller, $callback, $id ) = $case;
+			$request = new WP_REST_Request( 'PUT', '/mcpwp/v1/resource/' . $id, array( 'id' => $id ), array( 'X-API-Key' => 'not-the-configured-key' ), null, wp_json_encode( array() ) );
+			$envelopes[ $label ] = $this->unauthenticated_envelope( $controller->$callback( $request ) );
+		}
+
+		$reference = reset( $envelopes );
+		$this->assertSame( 'invalid_api_key', $reference['code'] );
+		$this->assertSame( 401, $reference['data']['status'] );
+		foreach ( $envelopes as $label => $envelope ) {
+			$this->assertSame( $reference, $envelope, "Case '$label' leaked resource existence/type/status for an invalid key." );
+		}
+	}
+
+	public function test_delete_draft_permission_is_uniform_with_invalid_api_key(): void {
+		$GLOBALS['mcpwp_test_options']['mcpwp_api_keys'] = array( $this->key_record( 'configured-key', 7 ) );
+		$GLOBALS['_mcpwp_test_posts'][30] = $this->post_fixture( 30, 'post', 'draft' );
+		$GLOBALS['_mcpwp_test_posts'][31] = $this->post_fixture( 31, 'post', 'publish' );
+		$GLOBALS['_mcpwp_test_posts'][32] = $this->post_fixture( 32, 'page', 'draft' );
+		$GLOBALS['_mcpwp_test_posts'][33] = $this->attachment_fixture( 33 );
+
+		$cases = array(
+			'missing id'                  => 999,
+			'draft post (draft)'          => 30,
+			'published post (not draft)' => 31,
+			'draft page (draft)'         => 32,
+			'wrong type (attachment)'    => 33,
+		);
+
+		$envelopes = array();
+		foreach ( $cases as $label => $id ) {
+			$envelopes[ $label ] = $this->unauthenticated_envelope( ( new Mcpwp_REST_Posts() )->check_delete_draft_permission( $this->keyed_request( 'DELETE', '/mcpwp/v1/drafts/' . $id, $id, 'not-the-configured-key' ) ) );
+		}
+
+		$reference = reset( $envelopes );
+		$this->assertSame( 'invalid_api_key', $reference['code'] );
+		$this->assertSame( 401, $reference['data']['status'] );
+		foreach ( $envelopes as $label => $envelope ) {
+			$this->assertSame( $reference, $envelope, "Case '$label' leaked draft status for an invalid key." );
+		}
+	}
+
+	/**
+	 * Single-rate-limit-charge property (GH #670 review, optional item):
+	 * SKIPPED here. verify_api_key() is called twice per guarded request by
+	 * design — once with $charge_rate_limit = false purely to authenticate
+	 * ahead of the existence check, and once inside authorize_request() with
+	 * charging enabled — a pattern that predates and is orthogonal to #670.
+	 * Asserting "exactly one charge" would require instrumenting
+	 * Mcpwp_Rate_Limiter::check_limit() call counts, which the existing rate
+	 * limiter test harness (WporgRouteAuthorizationTest's enable_rate_limit()
+	 * + reset_limiter_singleton()) does not expose — it only observes
+	 * allow/deny outcomes, not call counts. This is already structurally
+	 * verified by reading the source: only the second, charging call is ever
+	 * reachable through authorize_request(), and the first call always
+	 * passes $charge_rate_limit = false explicitly.
+	 */
+
+	private function key_record( $key, $user_id ): array {
+		return array(
+			'id'              => 'k-' . $key,
+			'hash'            => $key,
+			'user_id'         => $user_id,
+			'scopes'          => array( 'read', 'write', 'admin' ),
+			'tool_categories' => array(),
+			'created_at'      => '2026-01-01 00:00:00',
+			'last_used_at'    => null,
+			'revoked_at'      => null,
+		);
+	}
+
+	private function keyed_request( $method, $route, $id, $key ): WP_REST_Request {
+		return new WP_REST_Request( $method, $route, array( 'id' => $id ), array( 'X-API-Key' => $key ) );
+	}
+
 	private function unauthenticated_envelope( $result ): array {
 		$this->assertInstanceOf( WP_Error::class, $result, 'Anonymous caller unexpectedly authorized.' );
 		return array(
