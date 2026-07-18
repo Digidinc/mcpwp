@@ -108,6 +108,68 @@ final class PluginLifecycleTest extends TestCase {
 		}
 	}
 
+	public function test_clean_activation_yields_agent_role_without_manage_settings_cap(): void {
+		Mcpwp_Activator::activate();
+
+		$this->assertArrayHasKey( 'mcpwp_api_agent', $GLOBALS['mcpwp_test_roles'] );
+		$this->assertFalse(
+			$GLOBALS['mcpwp_test_roles']['mcpwp_api_agent']->has_cap( 'mcpwp_manage_settings' ),
+			'A freshly created (or freshly upgraded) mcpwp_api_agent role must never carry mcpwp_manage_settings (#669).'
+		);
+	}
+
+	/**
+	 * Regression coverage for GH #669: the version-independent migration step
+	 * (Mcpwp_Migrate::harden_agent_role(), called unconditionally from run())
+	 * must reach a site that upgraded through a version which granted
+	 * mcpwp_manage_settings to the agent role, even when that site never hits
+	 * the plugins_loaded version-bump guard that runs Mcpwp_Activator::activate().
+	 */
+	public function test_migrate_run_strips_manage_settings_from_preexisting_agent_role_independent_of_version(): void {
+		$GLOBALS['mcpwp_test_roles']['mcpwp_api_agent'] = new Mcpwp_Test_Role( array( 'read' => true, 'mcpwp_manage_settings' => true ) );
+		$this->assertTrue(
+			$GLOBALS['mcpwp_test_roles']['mcpwp_api_agent']->has_cap( 'mcpwp_manage_settings' ),
+			'Precondition: simulate a site that upgraded through a version that granted the cap (pre-#669).'
+		);
+
+		Mcpwp_Migrate::run();
+
+		$this->assertFalse( $GLOBALS['mcpwp_test_roles']['mcpwp_api_agent']->has_cap( 'mcpwp_manage_settings' ) );
+		$this->assertTrue(
+			$GLOBALS['mcpwp_test_roles']['mcpwp_api_agent']->has_cap( 'read' ),
+			'Unrelated retained capabilities must survive the remediation.'
+		);
+		$this->assertSame( MCPWP_VERSION, get_option( 'mcpwp_role_hardened' ) );
+	}
+
+	public function test_migrate_run_role_hardening_no_ops_when_role_or_cap_absent(): void {
+		// No mcpwp_api_agent role registered at all yet.
+		Mcpwp_Migrate::run();
+		$this->assertArrayNotHasKey( 'mcpwp_api_agent', $GLOBALS['mcpwp_test_roles'] );
+		$this->assertSame( MCPWP_VERSION, get_option( 'mcpwp_role_hardened' ), 'The one-time flag must be set even when there was nothing to strip.' );
+
+		delete_option( 'mcpwp_role_hardened' );
+		$GLOBALS['mcpwp_test_roles']['mcpwp_api_agent'] = new Mcpwp_Test_Role( array( 'read' => true ) );
+		Mcpwp_Migrate::run();
+		$this->assertFalse( $GLOBALS['mcpwp_test_roles']['mcpwp_api_agent']->has_cap( 'mcpwp_manage_settings' ) );
+		$this->assertTrue( $GLOBALS['mcpwp_test_roles']['mcpwp_api_agent']->has_cap( 'read' ) );
+	}
+
+	public function test_migrate_run_role_hardening_is_idempotent_after_first_pass(): void {
+		$GLOBALS['mcpwp_test_roles']['mcpwp_api_agent'] = new Mcpwp_Test_Role( array( 'mcpwp_manage_settings' => true ) );
+		Mcpwp_Migrate::run();
+		$this->assertFalse( $GLOBALS['mcpwp_test_roles']['mcpwp_api_agent']->has_cap( 'mcpwp_manage_settings' ) );
+
+		// Simulate the cap reappearing (e.g. a stray admin action) after the
+		// one-time flag is already set — the migration must not run again.
+		$GLOBALS['mcpwp_test_roles']['mcpwp_api_agent']->add_cap( 'mcpwp_manage_settings' );
+		Mcpwp_Migrate::run();
+		$this->assertTrue(
+			$GLOBALS['mcpwp_test_roles']['mcpwp_api_agent']->has_cap( 'mcpwp_manage_settings' ),
+			'Idempotent flag must gate the strip to a single pass; run() must not touch the role again.'
+		);
+	}
+
 	public function test_activity_schema_places_each_index_on_its_own_dbdelta_line(): void {
 		Mcpwp_Activator::activate();
 

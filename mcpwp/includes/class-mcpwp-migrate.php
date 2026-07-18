@@ -18,6 +18,7 @@ class Mcpwp_Migrate {
 	 * @return void
 	 */
 	public static function run() {
+		self::harden_agent_role();
 		$owner_id = self::migration_owner_id();
 		if ( $owner_id < 1 ) {
 			return; }
@@ -34,6 +35,30 @@ class Mcpwp_Migrate {
 				update_option( 'mcpwp_settings', $allowed, false ); }
 		}
 		update_option( 'mcpwp_migrated_from_spai', true, false );
+	}
+	/**
+	 * One-time, version-independent strip of the mcpwp_manage_settings capability
+	 * from the mcpwp_api_agent role (GH #669).
+	 *
+	 * Mcpwp_Activator::create_api_role() already removes this capability as
+	 * defense-in-depth, but it only runs when the `plugins_loaded` upgrade guard
+	 * (`version_compare( db_version, MCPWP_VERSION, '<' )`) fires — coupling a
+	 * privilege-escalation remediation to a version bump. This step runs
+	 * unconditionally (once) every time run() executes in an admin/REST/CLI
+	 * context per the #668 gating, so existing installs are remediated without
+	 * requiring the site to update the plugin at all. Belt-and-suspenders with
+	 * the activator's remove_cap(), not a replacement for it.
+	 *
+	 * @return void
+	 */
+	private static function harden_agent_role() {
+		if ( get_option( 'mcpwp_role_hardened', false ) ) {
+			return; }
+		$role = get_role( 'mcpwp_api_agent' );
+		if ( $role && $role->has_cap( 'mcpwp_manage_settings' ) ) {
+			$role->remove_cap( 'mcpwp_manage_settings' );
+		}
+		update_option( 'mcpwp_role_hardened', MCPWP_VERSION, false );
 	}
 	/**
 	 * Bind legacy migration to the current administrator.

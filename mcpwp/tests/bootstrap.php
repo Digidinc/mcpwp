@@ -60,6 +60,11 @@ class Mcpwp_Test_Role
         $GLOBALS['mcpwp_test_removed_caps_by_blog'][ $site_id ][] = (string) $capability;
         unset($this->capabilities[ $capability ]);
     }
+
+    public function has_cap($capability)
+    {
+        return ! empty($this->capabilities[ $capability ]);
+    }
 }
 
 class Mcpwp_Test_Wpdb
