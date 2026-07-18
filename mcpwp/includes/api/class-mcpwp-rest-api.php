@@ -377,6 +377,14 @@ abstract class Mcpwp_REST_API {
 	/**
 	 * Build a WordPress REST route definition with retained policy metadata.
 	 *
+	 * Note (#667): several call sites wrap this return value in
+	 * `array_merge( ..., array( 'permission_callback' => array( $this, 'literal_method_name' ) ) )`
+	 * to pin an inline literal permission_callback, which silently overrides
+	 * the `$permission` argument below at that key. When that pattern is
+	 * used, the array_merge literal is the actual runtime source of truth —
+	 * keep it in sync with the 3rd-arg permission name passed here, or the
+	 * two will drift without either raising an error.
+	 *
 	 * @param string|string[] $methods      Allowed HTTP methods.
 	 * @param string          $callback     Controller callback method name.
 	 * @param string          $permission   Permission callback method name.
