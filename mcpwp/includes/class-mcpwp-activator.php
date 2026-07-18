@@ -29,10 +29,9 @@ class Mcpwp_Activator {
 	 */
 	private static function create_api_role() {
 		$capabilities = array(
-			'read'                  => true,
-			'edit_posts'            => true,
-			'upload_files'          => true,
-			'mcpwp_manage_settings' => true,
+			'read'         => true,
+			'edit_posts'   => true,
+			'upload_files' => true,
 		);
 		$role         = get_role( 'mcpwp_api_agent' );
 		if ( ! $role ) {
@@ -40,6 +39,11 @@ class Mcpwp_Activator {
 		if ( $role ) {
 			foreach ( $capabilities as $capability => $grant ) {
 				$role->add_cap( $capability, $grant ); }
+			// Defense-in-depth for sites upgrading from a version that granted
+			// this cap: an agent-bound key must never carry admin-route access,
+			// only its scoped API-key permissions. add_cap() above only sets the
+			// retained caps — it does not strip a stale cap already on the role.
+			$role->remove_cap( 'mcpwp_manage_settings' );
 		}
 		$administrator = get_role( 'administrator' );
 		if ( $administrator ) {
