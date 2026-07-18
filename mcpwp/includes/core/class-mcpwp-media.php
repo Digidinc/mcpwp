@@ -78,6 +78,11 @@ class Mcpwp_Media {
 		if ( ! function_exists( 'wp_generate_attachment_metadata' ) ) {
 			require_once ABSPATH . 'wp-admin/includes/image.php';
 		}
+		// media.php is not called directly here: it is transitively required so that
+		// wp_generate_attachment_metadata() below can reach wp_read_video_metadata()/
+		// wp_read_audio_metadata() (audio/video attachments fatal without it). Guarded
+		// on media_handle_upload() rather than one of those two so this require and its
+		// counterpart in upload_from_base64() stay identical and easy to diff.
 		if ( ! function_exists( 'media_handle_upload' ) ) {
 			require_once ABSPATH . 'wp-admin/includes/media.php';
 		}
@@ -276,6 +281,11 @@ class Mcpwp_Media {
 		if ( ! function_exists( 'wp_generate_attachment_metadata' ) ) {
 			require_once ABSPATH . 'wp-admin/includes/image.php';
 		}
+		// media.php is not called directly here: it is transitively required so that
+		// wp_generate_attachment_metadata() below can reach wp_read_video_metadata()/
+		// wp_read_audio_metadata() (audio/video attachments fatal without it). Guarded
+		// on media_handle_upload() rather than one of those two so this require and its
+		// counterpart in upload_from_base64() stay identical and easy to diff.
 		if ( ! function_exists( 'media_handle_upload' ) ) {
 			require_once ABSPATH . 'wp-admin/includes/media.php';
 		}
@@ -351,7 +361,11 @@ class Mcpwp_Media {
 		}
 
 		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
-		file_put_contents( $tmp_file, $decoded );
+		$written = file_put_contents( $tmp_file, $decoded );
+		if ( false === $written || $written !== strlen( $decoded ) ) {
+			wp_delete_file( $tmp_file );
+			return new WP_Error( 'tmp_write_failed', __( 'Could not write the decoded file to a temporary location.', 'mumega-mcp' ), array( 'status' => 500 ) );
+		}
 		$policy = $this->validate_local_media_file( $tmp_file, $filename, $args['mime_type'] ?? $data_uri_mime );
 		if ( is_wp_error( $policy ) ) {
 			wp_delete_file( $tmp_file );

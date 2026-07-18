@@ -539,17 +539,21 @@ msgstr ""
 msgid "Could not create temporary file."
 msgstr ""
 
+#: includes/core/class-mcpwp-media.php:357
+msgid "Could not write the decoded file to a temporary location."
+msgstr ""
+
 #. translators: 1: supplied mime type, 2: detected mime type
-#: includes/core/class-mcpwp-media.php:378
+#: includes/core/class-mcpwp-media.php:382
 #, php-format
 msgid "Supplied mime_type \"%1$s\" does not match detected type \"%2$s\". Upload rejected."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:388
+#: includes/core/class-mcpwp-media.php:392
 msgid "The data URI MIME type does not match the detected file type."
 msgstr ""
 
-#: includes/core/class-mcpwp-media.php:396
+#: includes/core/class-mcpwp-media.php:400
 msgid "SVG uploads are blocked (SVGs can contain <script> tags — stored XSS risk). Use PNG or WebP instead. To allow SVGs, install an SVG sanitizer plugin (e.g. \"Safe SVG\") and upload via the WordPress media library directly."
 msgstr ""
 
