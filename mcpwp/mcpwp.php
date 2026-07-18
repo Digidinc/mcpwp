@@ -99,9 +99,37 @@ function mcpwp_load_plugin() {
 		Mcpwp_Activator::activate();
 		update_option( 'mcpwp_db_version', MCPWP_VERSION );
 	}
-	Mcpwp_Migrate::run();
+	if ( mcpwp_is_admin_or_rest_context() ) {
+		Mcpwp_Migrate::run();
+	}
 
 	( new Mcpwp_Loader() )->run();
+}
+
+/**
+ * Determine whether the current request is an admin or REST-API context.
+ *
+ * Legacy migration forces current-user determination (get_current_user_id(),
+ * current_user_can()) ahead of the `init` hook. That work is only ever
+ * needed for wp-admin screens, REST API calls, or WP-CLI runs — never for
+ * ordinary front-end page views, where it is a wasted pre-init auth check
+ * on every request. `REST_REQUEST` is not yet defined this early in the
+ * request lifecycle (it is set on `parse_request`, after `plugins_loaded`),
+ * so a request-URI prefix check is used as the REST detector.
+ *
+ * @return bool Whether legacy migration should run for this request.
+ */
+function mcpwp_is_admin_or_rest_context() {
+	if ( is_admin() ) {
+		return true;
+	}
+	if ( defined( 'REST_REQUEST' ) && REST_REQUEST ) {
+		return true;
+	}
+	if ( defined( 'WP_CLI' ) && WP_CLI ) {
+		return true;
+	}
+	return isset( $_SERVER['REQUEST_URI'] ) && false !== strpos( (string) $_SERVER['REQUEST_URI'], '/wp-json/' );
 }
 
 /**

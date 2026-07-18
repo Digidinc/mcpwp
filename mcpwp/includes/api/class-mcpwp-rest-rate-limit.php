@@ -72,7 +72,7 @@ class Mcpwp_REST_Rate_Limit extends Mcpwp_REST_API {
 		return $this->success_response(
 			array(
 				'settings' => $limiter->get_settings(),
-				'usage'    => $limiter->get_usage( $id ),
+				'usage'    => $limiter->get_usage( $id, $request->get_method() ),
 			)
 		);
 	}

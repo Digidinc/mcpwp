@@ -33,9 +33,10 @@ class Mcpwp_Loader {
 	 * Register the plugin's deferred actions and filters.
 	 */
 	public function __construct() {
-		$i18n = new Mcpwp_i18n();
-		$this->add_action( 'plugins_loaded', $i18n, 'load_plugin_textdomain' );
-
+		// Note: no plugins_loaded textdomain hook here — Mcpwp_i18n::load_plugin_textdomain()
+		// is an intentional no-op (WordPress.org language packs auto-load since WP 4.6),
+		// so registering it as a hook callback was dead code. The class file itself is
+		// retained (see scripts/wporg-artifact-policy.json) for packaging-policy parity.
 		$admin = new Mcpwp_Admin();
 		$this->add_action( 'admin_menu', $admin, 'add_admin_menu' );
 		$this->add_action( 'admin_enqueue_scripts', $admin, 'enqueue_styles' );

@@ -59,8 +59,8 @@ class Mcpwp_Migrate {
 		$current = get_current_user_id();
 		if ( $current < 1 || ! get_userdata( $current ) || ! current_user_can( 'manage_options' ) || ! current_user_can( 'mcpwp_manage_settings' ) ) {
 			return 0; }
-		$owner_id = get_option( 'mcpwp_legacy_migration_owner_id', 0 );
-		if ( is_int( $owner_id ) && $owner_id > 0 && get_userdata( $owner_id ) ) {
+		$owner_id = (int) get_option( 'mcpwp_legacy_migration_owner_id', 0 );
+		if ( $owner_id > 0 && get_userdata( $owner_id ) ) {
 			return $owner_id; }
 		update_option( 'mcpwp_legacy_migration_owner_id', $current, false );
 		return $current;

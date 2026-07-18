@@ -62,7 +62,7 @@ class Mcpwp_Rate_Limiter {
 			'enabled'             => true,
 			'requests_per_minute' => 60,
 			'requests_per_hour'   => 1000,
-			'burst_limit'         => 30,
+			'burst_limit'         => 10,
 			'whitelist'           => array(),
 		);
 
@@ -394,13 +394,23 @@ class Mcpwp_Rate_Limiter {
 	/**
 	 * Get usage stats for identifier.
 	 *
+	 * Burst and minute limits are reported method-aware (doubled for
+	 * GET/HEAD/OPTIONS) to match the effective threshold `check_limit()`
+	 * actually enforces for that method — otherwise a read-heavy client can
+	 * show `used` above the displayed `limit`, which reads as impossible.
+	 *
 	 * @param string $identifier Client identifier.
+	 * @param string $method     HTTP method the usage is reported for (GET/HEAD/OPTIONS double burst/minute).
 	 * @return array Usage stats.
 	 */
-	public function get_usage( $identifier = null ) {
+	public function get_usage( $identifier = null, $method = 'GET' ) {
 		if ( null === $identifier ) {
 			$identifier = $this->get_client_identifier();
 		}
+
+		$is_read      = in_array( strtoupper( $method ), array( 'GET', 'HEAD', 'OPTIONS' ), true );
+		$burst_limit  = $is_read ? $this->settings['burst_limit'] * 2 : $this->settings['burst_limit'];
+		$minute_limit = $is_read ? $this->settings['requests_per_minute'] * 2 : $this->settings['requests_per_minute'];
 
 		$cache_key_minute = 'mcpwp_rate_' . md5( $identifier . '_minute' );
 		$cache_key_hour   = 'mcpwp_rate_' . md5( $identifier . '_hour' );
@@ -430,14 +440,14 @@ class Mcpwp_Rate_Limiter {
 			'identifier' => $identifier,
 			'burst'      => array(
 				'used'      => $burst_data ? $burst_data['count'] : 0,
-				'limit'     => $this->settings['burst_limit'],
-				'remaining' => max( 0, $this->settings['burst_limit'] - ( $burst_data ? $burst_data['count'] : 0 ) ),
+				'limit'     => $burst_limit,
+				'remaining' => max( 0, $burst_limit - ( $burst_data ? $burst_data['count'] : 0 ) ),
 				'reset'     => $burst_data ? $burst_data['reset'] : null,
 			),
 			'minute'     => array(
 				'used'      => $minute_data ? $minute_data['count'] : 0,
-				'limit'     => $this->settings['requests_per_minute'],
-				'remaining' => max( 0, $this->settings['requests_per_minute'] - ( $minute_data ? $minute_data['count'] : 0 ) ),
+				'limit'     => $minute_limit,
+				'remaining' => max( 0, $minute_limit - ( $minute_data ? $minute_data['count'] : 0 ) ),
 				'reset'     => $minute_data ? $minute_data['reset'] : null,
 			),
 			'hour'       => array(
