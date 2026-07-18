@@ -201,6 +201,9 @@ abstract class Mcpwp_REST_API {
 	 * @return bool|WP_Error True when authorized, otherwise an authorization error.
 	 */
 	public function check_delete_draft_permission( $request ) {
+		$authenticated = $this->verify_api_key( $request, 'read', false );
+		if ( true !== $authenticated ) {
+			return $authenticated; }
 		$id   = (int) $request->get_param( 'id' );
 		$post = get_post( $id );
 		if ( ! $post || ! in_array( $post->post_type, array( 'post', 'page' ), true ) || 'draft' !== $post->post_status ) {
@@ -355,6 +358,9 @@ abstract class Mcpwp_REST_API {
 	 * @return bool|WP_Error True when authorized, otherwise an authorization error.
 	 */
 	private function check_content_update_permission( $request, $post_type, $publish_capability ) {
+		$authenticated = $this->verify_api_key( $request, 'read', false );
+		if ( true !== $authenticated ) {
+			return $authenticated; }
 		$id   = (int) $request->get_param( 'id' );
 		$post = get_post( $id );
 		if ( ! $post || $post_type !== $post->post_type ) {
@@ -473,6 +479,9 @@ abstract class Mcpwp_REST_API {
 	 * @return bool|WP_Error True when authorized, otherwise a not-found or authorization error.
 	 */
 	private function check_typed_resource_permission( $request, $post_type, $scope, $capability, $category ) {
+		$authenticated = $this->verify_api_key( $request, 'read', false );
+		if ( true !== $authenticated ) {
+			return $authenticated; }
 		$id       = (int) $request->get_param( 'id' );
 		$post     = get_post( $id );
 		$messages = array(
