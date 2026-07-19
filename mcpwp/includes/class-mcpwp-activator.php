@@ -91,26 +91,30 @@ class Mcpwp_Activator {
 	 * self-heals, because a pending approval persists until actioned.
 	 *
 	 * The safe, non-runtime-semantic remediation is to drop those unattributed
-	 * PENDING records at upgrade so they must be recreated with proper
+	 * still-actionable records at upgrade so they must be recreated with proper
 	 * attribution. Gated by a flag so it runs once (a later upgrade must not keep
-	 * deleting legitimate admin-created empty-requester approvals). Approved,
-	 * applied, rejected and rolled-back records are left untouched — only pending
-	 * ones are exploitable.
+	 * deleting legitimate admin-created empty-requester approvals). Both PENDING
+	 * and APPROVED (approved-but-not-yet-applied) records are exploitable — the
+	 * approve and apply paths both run check_self_approval(), and the old bypass
+	 * could have already self-approved a request, so purging pending alone would
+	 * leave an approved record applyable. Terminal records (applied, rejected,
+	 * rolled_back) are left untouched — they can't be re-actioned.
 	 */
 	public static function migrate_identity_less_approvals() {
 		if ( get_option( 'mcpwp_approvals_identity_migrated' ) ) {
 			return;
 		}
 
-		$option_name = class_exists( 'Mcpwp_Approvals' ) ? Mcpwp_Approvals::OPTION_NAME : 'mcpwp_approval_requests';
-		$items       = get_option( $option_name, array() );
+		$option_name    = class_exists( 'Mcpwp_Approvals' ) ? Mcpwp_Approvals::OPTION_NAME : 'mcpwp_approval_requests';
+		$items          = get_option( $option_name, array() );
+		$actionable     = array( 'pending', 'approved' );
 
 		if ( is_array( $items ) && ! empty( $items ) ) {
 			$changed = false;
 			foreach ( $items as $id => $record ) {
 				$status    = is_array( $record ) && isset( $record['status'] ) ? (string) $record['status'] : '';
 				$requester = is_array( $record ) && isset( $record['requested_by_key_id'] ) ? (string) $record['requested_by_key_id'] : '';
-				if ( 'pending' === $status && '' === $requester ) {
+				if ( in_array( $status, $actionable, true ) && '' === $requester ) {
 					unset( $items[ $id ] );
 					$changed = true;
 				}

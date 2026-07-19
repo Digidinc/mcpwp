@@ -27,13 +27,18 @@ final class ApprovalIdentityMigrationTest extends TestCase {
 		update_option( self::OPTION, $items );
 	}
 
-	public function test_purges_only_pending_unattributed_approvals(): void {
+	public function test_purges_actionable_unattributed_approvals(): void {
 		$this->seed(
 			array(
-				'a_pending_empty'     => array( 'id' => 'a_pending_empty', 'status' => 'pending', 'requested_by_key_id' => '' ),
-				'b_pending_attr'      => array( 'id' => 'b_pending_attr', 'status' => 'pending', 'requested_by_key_id' => 'oauth-user:5' ),
-				'c_approved_empty'    => array( 'id' => 'c_approved_empty', 'status' => 'approved', 'requested_by_key_id' => '' ),
-				'd_pending_no_field'  => array( 'id' => 'd_pending_no_field', 'status' => 'pending' ),
+				// Actionable + unattributed → purged.
+				'a_pending_empty'    => array( 'id' => 'a_pending_empty', 'status' => 'pending', 'requested_by_key_id' => '' ),
+				'd_pending_no_field' => array( 'id' => 'd_pending_no_field', 'status' => 'pending' ),
+				'e_approved_empty'   => array( 'id' => 'e_approved_empty', 'status' => 'approved', 'requested_by_key_id' => '' ),
+				// Attributed → preserved even when actionable.
+				'b_pending_attr'     => array( 'id' => 'b_pending_attr', 'status' => 'pending', 'requested_by_key_id' => 'oauth-user:5' ),
+				// Terminal states → preserved even when unattributed.
+				'f_applied_empty'    => array( 'id' => 'f_applied_empty', 'status' => 'applied', 'requested_by_key_id' => '' ),
+				'g_rejected_empty'   => array( 'id' => 'g_rejected_empty', 'status' => 'rejected', 'requested_by_key_id' => '' ),
 			)
 		);
 
@@ -41,12 +46,15 @@ final class ApprovalIdentityMigrationTest extends TestCase {
 
 		$items = get_option( self::OPTION, array() );
 
-		// Pending + empty (explicit or missing field) are gone.
+		// Actionable (pending/approved) + empty requester are gone — both can be
+		// approved and/or applied via the empty-requester branch.
 		$this->assertArrayNotHasKey( 'a_pending_empty', $items );
 		$this->assertArrayNotHasKey( 'd_pending_no_field', $items );
-		// Attributed pending and non-pending records are preserved.
+		$this->assertArrayNotHasKey( 'e_approved_empty', $items );
+		// Attributed and terminal records are preserved.
 		$this->assertArrayHasKey( 'b_pending_attr', $items );
-		$this->assertArrayHasKey( 'c_approved_empty', $items );
+		$this->assertArrayHasKey( 'f_applied_empty', $items );
+		$this->assertArrayHasKey( 'g_rejected_empty', $items );
 
 		$this->assertSame( 1, get_option( 'mcpwp_approvals_identity_migrated' ) );
 	}
