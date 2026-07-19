@@ -79,6 +79,21 @@ abstract class Mcpwp_REST_API {
 	}
 
 	/**
+	 * Whether the current principal authenticated via an OAuth access token.
+	 *
+	 * OAuth records are tagged `type => 'oauth'` at authentication; scoped API
+	 * keys never carry that tag. Used to keep OAuth connectors subject to the
+	 * approval floor even when they hold admin scope — only a provisioned
+	 * admin-scoped API key (or admin-AJAX) may bypass approval.
+	 *
+	 * @return bool
+	 */
+	protected function requester_is_oauth() {
+		$key_record = $this->get_current_api_key_record();
+		return is_array( $key_record ) && isset( $key_record['type'] ) && 'oauth' === $key_record['type'];
+	}
+
+	/**
 	 * Abort the approval surface for an unstable-identity OAuth principal.
 	 *
 	 * @return WP_Error|null WP_Error when the caller must be refused, else null.

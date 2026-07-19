@@ -177,6 +177,37 @@ final class OAuthSelfApprovalTest extends TestCase {
 		$this->assertSame( 'oauth_identity_unstable', $guard->get_error_code() );
 	}
 
+	// ── (d) OAuth is kept subject to the approval floor ──────────────────
+
+	/** Invoke the protected requester_is_oauth() with a chosen key record. */
+	private function requester_is_oauth( $record ): bool {
+		$controller = new Mcpwp_REST_Approvals();
+		$prop       = new ReflectionProperty( Mcpwp_REST_Approvals::class, 'current_api_key_record' );
+		$prop->setAccessible( true );
+		$prop->setValue( $controller, $record );
+
+		$method = new ReflectionMethod( Mcpwp_REST_Approvals::class, 'requester_is_oauth' );
+		$method->setAccessible( true );
+		return (bool) $method->invoke( $controller );
+	}
+
+	public function test_oauth_admin_record_is_flagged_as_oauth(): void {
+		// An admin-scoped OAuth token must be recognised as OAuth so the approval
+		// floor keeps forcing it through approval (it must NOT inherit the
+		// admin-API-key bypass just because it now carries a record).
+		$this->assertTrue(
+			$this->requester_is_oauth( array( 'id' => 'oauth-user:7', 'type' => 'oauth', 'scopes' => array( 'admin' ) ) )
+		);
+	}
+
+	public function test_scoped_admin_key_is_not_flagged_as_oauth(): void {
+		// A provisioned admin API key is NOT OAuth, so it retains its ability to
+		// bypass the approval floor.
+		$this->assertFalse(
+			$this->requester_is_oauth( array( 'id' => 'key-123', 'scopes' => array( 'admin' ) ) )
+		);
+	}
+
 	public function test_stable_oauth_identity_passes_approval_guard(): void {
 		$controller = new Mcpwp_REST_Approvals();
 		$prop       = new ReflectionProperty( Mcpwp_REST_Approvals::class, 'current_api_key_record' );

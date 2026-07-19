@@ -233,13 +233,14 @@ class Mcpwp_REST_Blocks extends Mcpwp_REST_API {
 		$approval_note           = (string) $request->get_param( 'approval_note' );
 
 		// Approval-gate floor (admin-only bypass): an explicit approval_required=false is
-		// honored for an admin-scoped API key or the trusted admin-AJAX context. A plain
-		// write/read key or OAuth token is silently forced through approval. A null key
-		// record is NOT treated as trusted (OAuth leaves it null); only the explicit
-		// admin-scope is_trusted_admin_ajax_request() predicate (admin cap + nonce) is exempt.
+		// honored only for an admin-scoped API key or the trusted admin-AJAX context. A
+		// plain write/read key — or ANY OAuth connector, regardless of scope — is silently
+		// forced through approval. OAuth now carries a key record (type 'oauth'), so it is
+		// excluded here explicitly rather than by relying on a null record.
 		if ( false === $approval_required ) {
 			$requester_key = $this->get_current_api_key_record();
-			if ( ! ( ( $requester_key && $this->key_has_scope( $requester_key, 'admin' ) ) || $this->is_trusted_admin_ajax_request() ) ) {
+			$can_bypass    = $requester_key && ! $this->requester_is_oauth() && $this->key_has_scope( $requester_key, 'admin' );
+			if ( ! ( $can_bypass || $this->is_trusted_admin_ajax_request() ) ) {
 				$approval_required = true;
 			}
 		}
@@ -624,13 +625,14 @@ class Mcpwp_REST_Blocks extends Mcpwp_REST_API {
 		$approval_note     = (string) $request->get_param( 'approval_note' );
 
 		// Approval-gate floor (admin-only bypass): an explicit approval_required=false is
-		// honored for an admin-scoped API key or the trusted admin-AJAX context. A plain
-		// write/read key or OAuth token is silently forced through approval. A null key
-		// record is NOT treated as trusted (OAuth leaves it null); only the explicit
-		// admin-scope is_trusted_admin_ajax_request() predicate (admin cap + nonce) is exempt.
+		// honored only for an admin-scoped API key or the trusted admin-AJAX context. A
+		// plain write/read key — or ANY OAuth connector, regardless of scope — is silently
+		// forced through approval. OAuth now carries a key record (type 'oauth'), so it is
+		// excluded here explicitly rather than by relying on a null record.
 		if ( false === $approval_required ) {
 			$requester_key = $this->get_current_api_key_record();
-			if ( ! ( ( $requester_key && $this->key_has_scope( $requester_key, 'admin' ) ) || $this->is_trusted_admin_ajax_request() ) ) {
+			$can_bypass    = $requester_key && ! $this->requester_is_oauth() && $this->key_has_scope( $requester_key, 'admin' );
+			if ( ! ( $can_bypass || $this->is_trusted_admin_ajax_request() ) ) {
 				$approval_required = true;
 			}
 		}
@@ -638,6 +640,11 @@ class Mcpwp_REST_Blocks extends Mcpwp_REST_API {
 		if ( $approval_required ) {
 			if ( ! class_exists( 'Mcpwp_Approvals' ) ) {
 				return $this->error_response( 'approvals_unavailable', 'Approval pipeline is not available.', 500 );
+			}
+
+			$identity_guard = $this->guard_stable_identity_for_approvals();
+			if ( is_wp_error( $identity_guard ) ) {
+				return $identity_guard;
 			}
 
 			$approval = Mcpwp_Approvals::create_post_content_request(

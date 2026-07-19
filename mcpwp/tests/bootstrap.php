@@ -871,6 +871,17 @@ function wp_remote_get($url, $args = array())
     return wp_remote_request($url, $args);
 }
 
+if (! function_exists('wp_safe_remote_get')) {
+    function wp_safe_remote_get($url, $args = array())
+    {
+        // Mirror core: same transport, with reject_unsafe_urls on. Tests mock
+        // the response via the pre_http_request filter regardless.
+        $args['method']             = 'GET';
+        $args['reject_unsafe_urls'] = true;
+        return wp_remote_request($url, $args);
+    }
+}
+
 function wp_remote_post($url, $args = array())
 {
     $args['method'] = 'POST';

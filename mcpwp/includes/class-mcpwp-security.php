@@ -121,10 +121,12 @@ class Mcpwp_Security {
 
 			// Stream the body straight to disk (stream + filename) instead of
 			// buffering the whole response in memory — a large/unbounded body
-			// from a public URL must not exhaust the PHP worker. Automatic
-			// redirects stay OFF so every hop is re-validated above before it is
-			// ever fetched.
-			$response = wp_remote_get(
+			// from a public URL must not exhaust the PHP worker. Use
+			// wp_safe_remote_get so WordPress's own outbound-request policy
+			// (reject_unsafe_urls: port allowlist + private-host checks) applies
+			// on top of validate_external_url() on every hop. Automatic redirects
+			// stay OFF so each hop is re-validated above before it is ever fetched.
+			$response = wp_safe_remote_get(
 				$current,
 				array(
 					'timeout'     => $timeout,
