@@ -103,10 +103,13 @@ class Mcpwp_Updater {
 			return false;
 		}
 
-		// Reject any manifest whose package would be fetched over plain HTTP.
-		// Applies to both the option manifest and the remote manifest so a
-		// downgraded/injected download_url cannot be installed.
-		if ( ! Mcpwp_Security::is_https_url( $data['download_url'] ) ) {
+		// Host-pin the package source for parity with the caller-supplied
+		// package_url path (is_trusted_package_url). HTTPS alone let a
+		// hijacked/injected/MITM'd manifest point the auto-updater at an
+		// arbitrary zip; require an allowlisted host too. Applies to both the
+		// option manifest and the remote manifest. Self-hosted update channels
+		// extend the allowlist via the mcpwp_trusted_package_hosts filter.
+		if ( ! Mcpwp_Security::is_trusted_package_url( $data['download_url'] ) ) {
 			return false;
 		}
 

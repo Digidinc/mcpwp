@@ -182,4 +182,63 @@ final class CallbackToolDispatchTest extends TestCase {
 		$this->assertSame( -32003, $data['error']['code'] );
 		$this->assertFalse( $called );
 	}
+
+	/** Dispatch the tool with a given API key record set on the controller. */
+	private function call_tool_as( array $key_record, array $arguments = array() ): array {
+		$controller = new Mcpwp_REST_MCP();
+
+		$prop = new ReflectionProperty( Mcpwp_REST_API::class, 'current_api_key_record' );
+		$prop->setAccessible( true );
+		$prop->setValue( $controller, $key_record );
+
+		$request = new WP_REST_Request(
+			'POST',
+			'/mcpwp/v1/mcp',
+			array(),
+			array(),
+			array(
+				'jsonrpc' => '2.0',
+				'id'      => 23,
+				'method'  => 'tools/call',
+				'params'  => array(
+					'name'      => 'digid_callback_tool',
+					'arguments' => $arguments,
+				),
+			)
+		);
+
+		return $controller->handle_mcp( $request )->get_data();
+	}
+
+	public function test_read_scoped_key_cannot_reach_mutating_callback(): void {
+		$called = false;
+		// A callback whose name carries no write verb defaults to read scope, but
+		// it still executes arbitrary code — a read key must not reach it.
+		$this->register_callback_tool(
+			function ( array $arguments ) use ( &$called ) {
+				$called = true;
+				return array( 'updated' => true );
+			}
+		);
+
+		$data = $this->call_tool_as( array( 'id' => 'k_read', 'scopes' => array( 'read' ) ) );
+
+		$this->assertSame( -32003, $data['error']['code'] );
+		$this->assertFalse( $called, 'Callback must not run for a read-only key' );
+	}
+
+	public function test_write_scoped_key_reaches_callback(): void {
+		$called = false;
+		$this->register_callback_tool(
+			function ( array $arguments ) use ( &$called ) {
+				$called = true;
+				return array( 'updated' => true );
+			}
+		);
+
+		$data = $this->call_tool_as( array( 'id' => 'k_write', 'scopes' => array( 'read', 'write' ) ) );
+
+		$this->assertArrayNotHasKey( 'error', $data );
+		$this->assertTrue( $called, 'Callback should run for a write-scoped key' );
+	}
 }

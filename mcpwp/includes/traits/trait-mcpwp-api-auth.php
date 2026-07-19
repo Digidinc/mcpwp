@@ -598,12 +598,22 @@ trait Mcpwp_Api_Auth {
 	 * @return string IP address.
 	 */
 	protected function get_client_ip() {
-		$ip_keys = array(
-			'HTTP_CF_CONNECTING_IP', // Cloudflare
-			'HTTP_X_FORWARDED_FOR',  // Proxy
-			'HTTP_X_REAL_IP',        // Nginx
-			'REMOTE_ADDR',           // Standard
-		);
+		// Proxy-supplied client-IP headers are trivially spoofable, so an
+		// attacker could otherwise mint a fresh rate-limit/auth-throttle bucket
+		// (or forge a whitelisted IP) per request. Only trust them behind an
+		// explicit opt-in — the same MCPWP_TRUST_PROXY_HEADERS gate the OAuth
+		// well-known scheme check uses; otherwise fall back to REMOTE_ADDR, which
+		// the web server controls.
+		$trust_proxy = defined( 'MCPWP_TRUST_PROXY_HEADERS' ) && MCPWP_TRUST_PROXY_HEADERS;
+
+		$ip_keys = $trust_proxy
+			? array(
+				'HTTP_CF_CONNECTING_IP', // Cloudflare
+				'HTTP_X_FORWARDED_FOR',  // Proxy
+				'HTTP_X_REAL_IP',        // Nginx
+				'REMOTE_ADDR',           // Standard
+			)
+			: array( 'REMOTE_ADDR' );
 
 		foreach ( $ip_keys as $key ) {
 			if ( ! empty( $_SERVER[ $key ] ) ) {

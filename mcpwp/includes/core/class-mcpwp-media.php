@@ -147,7 +147,7 @@ class Mcpwp_Media {
 				$tmp->get_error_message(),
 				array(
 					'status' => 400,
-					'hint'   => 'Failed to download the file from the URL. Check that the URL is publicly accessible and returns a valid file. Supported formats: jpg, png, gif, webp, svg, pdf.',
+					'hint'   => 'Failed to download the file from the URL. Check that the URL is publicly accessible and returns a valid file. Supported formats: jpg, png, gif, webp, pdf. (SVG is not accepted — stored-XSS risk.)',
 				)
 			);
 		}
@@ -165,6 +165,23 @@ class Mcpwp_Media {
 			if ( $ext ) {
 				$file_array['name'] .= '.' . $ext;
 			}
+		}
+
+		// Block SVG, same as the base64 path — an SVG can carry <script> (stored
+		// XSS) and WordPress ships no sanitizer. Check both the detected content
+		// type and the resolved filename so a mislabeled URL can't slip through.
+		$detected_mime = function_exists( 'mime_content_type' ) ? mime_content_type( $tmp ) : '';
+		if ( 'image/svg+xml' === $detected_mime || str_ends_with( strtolower( $file_array['name'] ), '.svg' ) ) {
+			wp_delete_file( $tmp );
+			return new WP_Error(
+				'svg_not_allowed',
+				__( 'SVG uploads are blocked (SVGs can contain <script> tags — stored XSS risk). Use PNG or WebP instead. To allow SVGs, install an SVG sanitizer plugin (e.g. "Safe SVG") and upload via the WordPress media library directly.', 'mcpwp' ),
+				array(
+					'status'       => 400,
+					'hint'         => 'Convert the SVG to PNG/WebP for API upload. Inline SVG code can be embedded directly in HTML widgets without uploading.',
+					'alternatives' => array( 'png', 'webp', 'jpg' ),
+				)
+			);
 		}
 
 		// Upload

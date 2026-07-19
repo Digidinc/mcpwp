@@ -294,12 +294,20 @@ class Mcpwp_Rate_Limiter {
 	 * @return string Client identifier (IP address).
 	 */
 	private function get_client_identifier() {
-		$ip_keys = array(
-			'HTTP_CF_CONNECTING_IP',
-			'HTTP_X_FORWARDED_FOR',
-			'HTTP_X_REAL_IP',
-			'REMOTE_ADDR',
-		);
+		// Proxy-supplied client-IP headers are spoofable; trusting them lets an
+		// anonymous caller rotate the value to evade the per-IP throttle or forge
+		// a whitelisted IP. Honour them only behind the explicit
+		// MCPWP_TRUST_PROXY_HEADERS opt-in; otherwise use REMOTE_ADDR.
+		$trust_proxy = defined( 'MCPWP_TRUST_PROXY_HEADERS' ) && MCPWP_TRUST_PROXY_HEADERS;
+
+		$ip_keys = $trust_proxy
+			? array(
+				'HTTP_CF_CONNECTING_IP',
+				'HTTP_X_FORWARDED_FOR',
+				'HTTP_X_REAL_IP',
+				'REMOTE_ADDR',
+			)
+			: array( 'REMOTE_ADDR' );
 
 		foreach ( $ip_keys as $key ) {
 			if ( ! empty( $_SERVER[ $key ] ) ) {
