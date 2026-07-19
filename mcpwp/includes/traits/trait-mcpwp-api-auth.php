@@ -42,9 +42,6 @@ trait Mcpwp_Api_Auth {
 
 		$legacy = get_option( 'mcpwp_api_key', '' );
 		$record = $this->find_scoped_api_key( $key );
-		if ( ! $record ) {
-			$record = $this->find_legacy_spai_key( $key );
-		}
 		if ( ! $record && $legacy && $this->is_api_key_match( $key, $legacy ) ) {
 			$record = $this->migrate_legacy_key_to_scoped_store( $key );
 		}
@@ -133,7 +130,7 @@ trait Mcpwp_Api_Auth {
 	 * @return bool Whether at least one API key is configured.
 	 */
 	protected function has_configured_api_keys( $legacy_key ) {
-		return '' !== (string) $legacy_key || ! empty( $this->get_scoped_api_keys_raw() ) || ! empty( get_option( 'spai_api_keys', array() ) ) || '' !== (string) get_option( 'spai_api_key', '' );
+		return '' !== (string) $legacy_key || ! empty( $this->get_scoped_api_keys_raw() );
 	}
 
 	/**
@@ -150,36 +147,6 @@ trait Mcpwp_Api_Auth {
 			if ( empty( $record['revoked_at'] ) && $this->is_api_key_match( $key, $record['hash'] ) ) {
 				return $record;
 			}
-		}
-		return null;
-	}
-
-	/**
-	 * Find a matching key in legacy SPAI key stores.
-	 *
-	 * @param string $key Submitted API key.
-	 * @return array<string,mixed>|null Matching normalized legacy record, or null.
-	 */
-	protected function find_legacy_spai_key( $key ) {
-		foreach ( (array) get_option( 'spai_api_keys', array() ) as $record ) {
-			$record = $this->normalize_api_key_record( $record );
-			if ( ! $this->record_has_valid_identity_fields( $record ) ) {
-				continue; }
-			if ( empty( $record['revoked_at'] ) && $this->is_api_key_match( $key, $record['hash'] ) ) {
-				return $record;
-			}
-		}
-		$single = get_option( 'spai_api_key', '' );
-		if ( $single && $this->is_api_key_match( $key, $single ) ) {
-			return array(
-				'id'              => 'legacy-spai',
-				'label'           => 'Legacy key',
-				'hash'            => $single,
-				'user_id'         => (int) get_option( 'mcpwp_legacy_migration_owner_id', 0 ),
-				'scopes'          => array( 'read', 'write', 'admin' ),
-				'tool_categories' => array(),
-				'revoked_at'      => null,
-			);
 		}
 		return null;
 	}
