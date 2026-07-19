@@ -115,7 +115,11 @@ function mcpwp_load_plugin() {
  * ordinary front-end page views, where it is a wasted pre-init auth check
  * on every request. `REST_REQUEST` is not yet defined this early in the
  * request lifecycle (it is set on `parse_request`, after `plugins_loaded`),
- * so a request-URI prefix check is used as the REST detector.
+ * so a request-shape check is used as the REST detector. It matches both the
+ * pretty-permalink form (`/wp-json/...`) and the always-available
+ * `?rest_route=/...` fallback WordPress serves when pretty permalinks are off
+ * (the default state) — otherwise a headless/MCP client that only ever calls
+ * the site over `?rest_route=` would never trigger migration.
  *
  * @return bool Whether legacy migration should run for this request.
  */
@@ -127,6 +131,9 @@ function mcpwp_is_admin_or_rest_context() {
 		return true;
 	}
 	if ( defined( 'WP_CLI' ) && WP_CLI ) {
+		return true;
+	}
+	if ( isset( $_GET['rest_route'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only context detector, no state mutation.
 		return true;
 	}
 	return isset( $_SERVER['REQUEST_URI'] ) && false !== strpos( (string) $_SERVER['REQUEST_URI'], '/wp-json/' );
