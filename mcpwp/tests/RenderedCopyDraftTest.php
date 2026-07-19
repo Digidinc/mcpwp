@@ -1,0 +1,62 @@
+<?php
+/**
+ * Regression test for wp_get_rendered_copy on unpublished drafts (GH #675).
+ *
+ * The copy reader used to resolve unpublished posts to a preview URL and fetch
+ * it over an outbound loopback, then hard-fail with `fetch_error` when the fetch
+ * did not return HTTP 200 — which it never does for a draft without a logged-in
+ * session. An authenticated agent should be able to audit draft copy without
+ * publishing, so unpublished content is now rendered in-process.
+ *
+ * @package SitePilotAI\Tests
+ */
+
+class RenderedCopyDraftTest extends PHPUnit\Framework\TestCase {
+
+	private const DRAFT_ID = 5777;
+
+	protected function setUp(): void {
+		$GLOBALS['_mcpwp_test_posts'] = array();
+		$GLOBALS['_mcpwp_test_meta']  = array();
+	}
+
+	private function seed_draft( string $content ): void {
+		$GLOBALS['_mcpwp_test_posts'][ self::DRAFT_ID ] = new WP_Post( array(
+			'ID'           => self::DRAFT_ID,
+			'post_type'    => 'page',
+			'post_title'   => 'Book',
+			'post_name'    => 'book',
+			'post_status'  => 'draft',
+			'post_content' => $content,
+		) );
+	}
+
+	private function call_copy() {
+		$controller = new Mcpwp_REST_Site_Content();
+		$request    = new WP_REST_Request( 'GET', '/mcpwp/v1/rendered-copy', array( 'id' => self::DRAFT_ID ) );
+		return $controller->get_rendered_copy( $request );
+	}
+
+	public function test_draft_copy_renders_in_process_instead_of_fetch_error() {
+		$this->seed_draft( '<h1>Book Title</h1><p>Draft body copy that agents must audit.</p>' );
+
+		$resp = $this->call_copy();
+
+		$this->assertSame( 200, $resp->get_status(), 'A draft must not return a fetch_error.' );
+		$data = $resp->get_data();
+		$this->assertSame( 'internal_content', $data['render_method'] );
+		$this->assertStringContainsString( 'Draft body copy that agents must audit.', $data['all_text'] );
+		$this->assertGreaterThan( 0, $data['section_count'] );
+	}
+
+	public function test_missing_post_still_404s() {
+		$controller = new Mcpwp_REST_Site_Content();
+		$request    = new WP_REST_Request( 'GET', '/mcpwp/v1/rendered-copy', array( 'id' => 999999 ) );
+
+		$resp = $controller->get_rendered_copy( $request );
+
+		// error_response returns a WP_Error or a response carrying a 404 status.
+		$status = $resp instanceof WP_Error ? $resp->get_error_data()['status'] : $resp->get_status();
+		$this->assertSame( 404, $status );
+	}
+}
