@@ -140,6 +140,34 @@ final class BridgeAuthTest extends TestCase {
 	// Rejection cases (independent of the bridge)
 	// -----------------------------------------------------------------------
 
+	public function test_revoked_mcpwp_scoped_key_is_rejected(): void {
+		$auth      = $this->make_auth();
+		$plain_key = 'mcpwp_revoked_scoped_key_1234567';
+
+		// A revoked record in the retained scoped store must not authenticate.
+		// (Regression cover for the revoked_at branch previously exercised only
+		// by the removed spai_ revocation test — kasra-review P3.)
+		update_option( 'mcpwp_api_keys', array(
+			array(
+				'id'         => 'revoked-scoped',
+				'label'      => 'Revoked',
+				'hash'       => wp_hash_password( $plain_key ),
+				'user_id'    => 2,
+				'scopes'     => array( 'read', 'write', 'admin' ),
+				'created_at' => '2026-01-01 00:00:00',
+				'revoked_at' => '2026-06-01 00:00:00',
+			),
+		) );
+		// A separate active key so has_configured_api_keys() is true → 401, not 500.
+		$auth->create_scoped_api_key( 'active sentinel', array( 'read' ) );
+
+		$result = $auth->verify_api_key( $this->get_request( $plain_key ) );
+
+		$this->assertInstanceOf( WP_Error::class, $result, 'A revoked scoped key must never authenticate.' );
+		$this->assertSame( 'invalid_api_key', $result->get_error_code() );
+		$this->assertSame( 401, $result->get_error_data()['status'] );
+	}
+
 	public function test_unknown_key_is_rejected(): void {
 		$auth = $this->make_auth();
 		$auth->create_scoped_api_key( 'real key', array( 'read', 'write', 'admin' ) );

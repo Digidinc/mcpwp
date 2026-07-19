@@ -136,7 +136,11 @@ function mcpwp_is_admin_or_rest_context() {
 	if ( isset( $_GET['rest_route'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only context detector, no state mutation.
 		return true;
 	}
-	return isset( $_SERVER['REQUEST_URI'] ) && false !== strpos( (string) $_SERVER['REQUEST_URI'], '/wp-json/' );
+	if ( ! isset( $_SERVER['REQUEST_URI'] ) ) {
+		return false;
+	}
+	$request_uri = sanitize_text_field( wp_unslash( $_SERVER['REQUEST_URI'] ) );
+	return false !== strpos( $request_uri, '/wp-json/' );
 }
 
 /**
