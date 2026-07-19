@@ -134,6 +134,61 @@ final class OAuthSelfApprovalTest extends TestCase {
 		$this->assertTrue( $result );
 	}
 
+	// ── (c) Weak-identity (legacy/bridge) OAuth token is refused ─────────
+
+	public function test_weak_identity_oauth_token_cannot_approve(): void {
+		// A legacy/bridge token is identified only by the oauth:<hash> fallback.
+		$this->seed_approval( 'appr_1', 'oauth:deadbeefdeadbeef' );
+
+		$result = $this->check_self_approval(
+			array( 'id' => 'oauth:deadbeefdeadbeef', 'scopes' => array( 'admin' ) ),
+			'appr_1'
+		);
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'oauth_identity_unstable', $result->get_error_code() );
+	}
+
+	public function test_legacy_token_maps_to_weak_identity_and_is_guarded(): void {
+		// End-to-end: a token issued with no user_id authenticates, is stamped
+		// with the oauth:<hash> fallback, and is then refused at the approval
+		// guard — closing the create-with-legacy / approve-with-refreshed chain.
+		$auth  = new Mcpwp_OAuth_SelfApproval_Auth_Harness();
+		$token = $auth->issue_oauth_access_token( array( 'read', 'write', 'admin' ), 3600 )['access_token'];
+
+		$request = new WP_REST_Request(
+			'GET',
+			'/mcpwp/v1/site-info',
+			array(),
+			array( 'Authorization' => 'Bearer ' . $token )
+		);
+		$this->assertTrue( $auth->verify_api_key( $request ) );
+
+		$controller = new Mcpwp_REST_Approvals();
+		$prop       = new ReflectionProperty( Mcpwp_REST_Approvals::class, 'current_api_key_record' );
+		$prop->setAccessible( true );
+		$prop->setValue( $controller, $auth->get_current_api_key_record() );
+
+		$method = new ReflectionMethod( Mcpwp_REST_Approvals::class, 'guard_stable_identity_for_approvals' );
+		$method->setAccessible( true );
+		$guard = $method->invoke( $controller );
+
+		$this->assertInstanceOf( WP_Error::class, $guard );
+		$this->assertSame( 'oauth_identity_unstable', $guard->get_error_code() );
+	}
+
+	public function test_stable_oauth_identity_passes_approval_guard(): void {
+		$controller = new Mcpwp_REST_Approvals();
+		$prop       = new ReflectionProperty( Mcpwp_REST_Approvals::class, 'current_api_key_record' );
+		$prop->setAccessible( true );
+		$prop->setValue( $controller, array( 'id' => 'oauth-user:7', 'scopes' => array( 'admin' ) ) );
+
+		$method = new ReflectionMethod( Mcpwp_REST_Approvals::class, 'guard_stable_identity_for_approvals' );
+		$method->setAccessible( true );
+
+		$this->assertNull( $method->invoke( $controller ) );
+	}
+
 	public function test_idless_non_admin_ajax_caller_is_forbidden(): void {
 		// This is the exact previous bug: a null/id-less record used to return
 		// true (trusted). It must now be forbidden unless it is genuine admin-AJAX.

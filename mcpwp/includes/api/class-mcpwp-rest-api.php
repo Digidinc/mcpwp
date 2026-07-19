@@ -55,6 +55,46 @@ abstract class Mcpwp_REST_API {
 	}
 
 	/**
+	 * Whether the current OAuth principal lacks a stable identity.
+	 *
+	 * A legacy OAuth access token issued before per-token identity was persisted
+	 * (or a 2.8.56 `spai_at_` bridge token) carries no user_id/client_id, so it
+	 * is identified only by a token-hash fallback (`oauth:<hash>`). Refreshing
+	 * such a grant mints a differently-keyed `oauth-user:<id>` token, so an
+	 * unstable-identity principal must not create or approve approval requests —
+	 * otherwise the self-approval gate can be sidestepped by creating with the
+	 * legacy token and approving with the refreshed one. All other operations
+	 * (read/write) remain available; reconnecting re-mints an identified token.
+	 *
+	 * @return bool
+	 */
+	protected function requester_has_unstable_oauth_identity() {
+		$key_record = $this->get_current_api_key_record();
+		if ( ! is_array( $key_record ) || empty( $key_record['id'] ) ) {
+			return false;
+		}
+		// Strong identities are `oauth-user:` / `oauth-client:` / scoped-key ids;
+		// only the weak fallback is the bare `oauth:` prefix.
+		return 0 === strpos( (string) $key_record['id'], 'oauth:' );
+	}
+
+	/**
+	 * Abort the approval surface for an unstable-identity OAuth principal.
+	 *
+	 * @return WP_Error|null WP_Error when the caller must be refused, else null.
+	 */
+	protected function guard_stable_identity_for_approvals() {
+		if ( $this->requester_has_unstable_oauth_identity() ) {
+			return new WP_Error(
+				'oauth_identity_unstable',
+				__( 'This OAuth session predates the current security update and is not stably identified. Reconnect the connector, then retry — approval requests require a re-authenticated session.', 'mcpwp' ),
+				array( 'status' => 403 )
+			);
+		}
+		return null;
+	}
+
+	/**
 	 * Prepare success response.
 	 *
 	 * @param mixed $data Response data.

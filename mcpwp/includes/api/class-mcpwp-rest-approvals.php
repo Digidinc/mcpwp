@@ -206,6 +206,15 @@ class Mcpwp_REST_Approvals extends Mcpwp_REST_API {
 			);
 		}
 
+		// A weak-identity OAuth principal (legacy/bridge token identified only by
+		// a token-hash fallback) must not approve either: its id is not stable
+		// across a refresh, so it cannot be reliably matched against the
+		// requester. Force a reconnect to a stably-identified session.
+		$identity_guard = $this->guard_stable_identity_for_approvals();
+		if ( is_wp_error( $identity_guard ) ) {
+			return $identity_guard;
+		}
+
 		$current_key_id = (string) $key_record['id'];
 
 		// Fetch the raw stored record (not public_record — we need the internal field).

@@ -287,6 +287,11 @@ class Mcpwp_REST_Blocks extends Mcpwp_REST_API {
 				return $this->error_response( 'approvals_unavailable', 'Approval pipeline is not available.', 500 );
 			}
 
+			$identity_guard = $this->guard_stable_identity_for_approvals();
+			if ( is_wp_error( $identity_guard ) ) {
+				return $identity_guard;
+			}
+
 			$approval = Mcpwp_Approvals::create_post_content_request(
 				$post_id,
 				$content,

@@ -114,14 +114,27 @@ class Mcpwp_Security {
 				return $check;
 			}
 
+			$tmp = wp_tempnam( $current );
+			if ( ! $tmp ) {
+				return new WP_Error( 'download_error', __( 'Could not create a temporary file.', 'mcpwp' ), array( 'status' => 500 ) );
+			}
+
+			// Stream the body straight to disk (stream + filename) instead of
+			// buffering the whole response in memory — a large/unbounded body
+			// from a public URL must not exhaust the PHP worker. Automatic
+			// redirects stay OFF so every hop is re-validated above before it is
+			// ever fetched.
 			$response = wp_remote_get(
 				$current,
 				array(
 					'timeout'     => $timeout,
 					'redirection' => 0,
+					'stream'      => true,
+					'filename'    => $tmp,
 				)
 			);
 			if ( is_wp_error( $response ) ) {
+				wp_delete_file( $tmp );
 				return $response;
 			}
 
@@ -129,6 +142,7 @@ class Mcpwp_Security {
 
 			if ( $code >= 300 && $code < 400 ) {
 				$location = wp_remote_retrieve_header( $response, 'location' );
+				wp_delete_file( $tmp );
 				if ( empty( $location ) ) {
 					return new WP_Error( 'download_error', __( 'Redirect response had no Location header.', 'mcpwp' ), array( 'status' => 400 ) );
 				}
@@ -139,6 +153,7 @@ class Mcpwp_Security {
 			}
 
 			if ( $code < 200 || $code >= 300 ) {
+				wp_delete_file( $tmp );
 				return new WP_Error(
 					'download_error',
 					sprintf(
@@ -148,18 +163,6 @@ class Mcpwp_Security {
 					),
 					array( 'status' => 400 )
 				);
-			}
-
-			$tmp = wp_tempnam( $current );
-			if ( ! $tmp ) {
-				return new WP_Error( 'download_error', __( 'Could not create a temporary file.', 'mcpwp' ), array( 'status' => 500 ) );
-			}
-
-			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- writing a downloaded HTTP body to a temp file, matching download_url() behaviour.
-			$written = file_put_contents( $tmp, wp_remote_retrieve_body( $response ) );
-			if ( false === $written ) {
-				wp_delete_file( $tmp );
-				return new WP_Error( 'download_error', __( 'Could not write the downloaded file.', 'mcpwp' ), array( 'status' => 500 ) );
 			}
 
 			return $tmp;

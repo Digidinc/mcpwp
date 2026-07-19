@@ -48,19 +48,29 @@ final class MediaSsrfRedirectTest extends TestCase {
 						'body'     => '',
 					);
 				}
+
+				// 2xx bodies. Simulate WP's streaming behaviour: when the caller
+				// passes stream + filename, the body is written to that file and
+				// the returned body is empty (this is what safe_download_url relies
+				// on to avoid buffering in memory).
 				// The internal target — must never be reached.
-				if ( false !== strpos( $url, MediaSsrfRedirectTest::METADATA_IP ) ) {
+				$body = ( false !== strpos( $url, MediaSsrfRedirectTest::METADATA_IP ) )
+					? 'SECRET-INSTANCE-METADATA'
+					: 'PIXELDATA';
+
+				if ( ! empty( $args['stream'] ) && ! empty( $args['filename'] ) ) {
+					file_put_contents( $args['filename'], $body );
 					return array(
 						'response' => array( 'code' => 200 ),
 						'headers'  => array(),
-						'body'     => 'SECRET-INSTANCE-METADATA',
+						'body'     => '',
 					);
 				}
-				// Any other public URL → a normal 200 image body.
+
 				return array(
 					'response' => array( 'code' => 200 ),
 					'headers'  => array(),
-					'body'     => 'PIXELDATA',
+					'body'     => $body,
 				);
 			},
 			10,
