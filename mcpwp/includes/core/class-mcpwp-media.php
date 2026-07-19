@@ -171,7 +171,7 @@ class Mcpwp_Media {
 		// XSS) and WordPress ships no sanitizer. Check both the detected content
 		// type and the resolved filename so a mislabeled URL can't slip through.
 		$detected_mime = function_exists( 'mime_content_type' ) ? mime_content_type( $tmp ) : '';
-		if ( 'image/svg+xml' === $detected_mime || str_ends_with( strtolower( $file_array['name'] ), '.svg' ) ) {
+		if ( 'image/svg+xml' === $detected_mime || '.svg' === substr( strtolower( $file_array['name'] ), -4 ) ) {
 			wp_delete_file( $tmp );
 			return new WP_Error(
 				'svg_not_allowed',
@@ -318,7 +318,7 @@ class Mcpwp_Media {
 
 		// Block SVG uploads — SVGs can contain <script> tags (stored XSS).
 		// WordPress does not ship an SVG sanitizer; block at the API layer.
-		if ( 'image/svg+xml' === $mime['type'] || str_ends_with( strtolower( $filename ), '.svg' ) ) {
+		if ( 'image/svg+xml' === $mime['type'] || '.svg' === substr( strtolower( $filename ), -4 ) ) {
 			wp_delete_file( $tmp_file );
 			return new WP_Error(
 				'svg_not_allowed',
