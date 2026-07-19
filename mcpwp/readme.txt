@@ -4,7 +4,7 @@ Tags: mcp, ai, automation, content, media
 Requires at least: 6.1
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 3.4.13
+Stable tag: 3.4.14
 License: GPLv2 or later
 License URI: https://wordpress.org/about/license/
 
@@ -57,6 +57,15 @@ No plugin-initiated outbound request is made. The plugin sends authenticated res
 When local logging is enabled, the plugin stores tool name, status code, duration, API-key ID, and time. It does not store request arguments or response content. The site owner controls retention in Settings.
 
 == Changelog ==
+
+= 3.4.14 =
+
+* Security and stability hardening pass.
+* Load wp-admin/includes/media.php only for audio and video uploads, immediately before the metadata function that needs it; image uploads no longer load it at all.
+* Add an explicit permission_callback literal at every REST route registration so authorization is visible to static analysis.
+* Authenticate before any resource existence check in REST permission callbacks.
+* Remove the mcpwp_manage_settings capability from the API agent role.
+* Load only the current-namespace API keys; the legacy cross-prefix key path has been removed from this edition.
 
 = 3.4.13 =
 

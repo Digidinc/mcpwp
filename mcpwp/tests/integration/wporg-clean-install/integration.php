@@ -85,7 +85,7 @@ mcpwp_wporg_tap( $expected_wp === get_bloginfo( 'version' ), 'runs the exact pin
 mcpwp_wporg_tap( 0 === strpos( PHP_VERSION, $expected_php_minor . '.' ), 'runs the exact required PHP minor' );
 mcpwp_wporg_tap( is_plugin_active( $plugin ) && defined( 'MCPWP_PLUGIN_BASENAME' ) && $plugin === MCPWP_PLUGIN_BASENAME, 'runs only the final installed plugin basename' );
 $plugin_data = get_plugin_data( WP_PLUGIN_DIR . '/' . $plugin, false, false );
-mcpwp_wporg_tap( isset( $plugin_data['Version'] ) && '3.4.13' === $plugin_data['Version'] && defined( 'MCPWP_VERSION' ) && '3.4.13' === MCPWP_VERSION, 'installed plugin identity is version 3.4.13' );
+mcpwp_wporg_tap( isset( $plugin_data['Version'] ) && '3.4.14' === $plugin_data['Version'] && defined( 'MCPWP_VERSION' ) && '3.4.14' === MCPWP_VERSION, 'installed plugin identity is version 3.4.14' );
 
 global $wpdb;
 $activity_table = $wpdb->prefix . 'mcpwp_activity_log';

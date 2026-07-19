@@ -12,8 +12,8 @@ readonly required_contexts='activation admin_setup admin_tools admin_settings ad
 : "$required_contexts"
 
 usage() {
-  echo "Usage: MCPWP_WPORG_ZIP=/absolute/mumega-mcp-3.4.13.zip $0 [wp61|wp70|all]" >&2
-  echo "   or: $0 /absolute/mumega-mcp-3.4.13.zip [wp61|wp70|all]" >&2
+  echo "Usage: MCPWP_WPORG_ZIP=/absolute/mumega-mcp-3.4.14.zip $0 [wp61|wp70|all]" >&2
+  echo "   or: $0 /absolute/mumega-mcp-3.4.14.zip [wp61|wp70|all]" >&2
   exit 64
 }
 
@@ -38,8 +38,8 @@ esac
 
 candidate_dir="$(cd "$(dirname "$MCPWP_WPORG_ZIP")" && pwd -P)"
 candidate="$candidate_dir/$(basename "$MCPWP_WPORG_ZIP")"
-[[ "$(basename "$candidate")" == 'mumega-mcp-3.4.13.zip' ]] || {
-  echo "The immutable candidate filename must be mumega-mcp-3.4.13.zip." >&2
+[[ "$(basename "$candidate")" == 'mumega-mcp-3.4.14.zip' ]] || {
+  echo "The immutable candidate filename must be mumega-mcp-3.4.14.zip." >&2
   exit 65
 }
 

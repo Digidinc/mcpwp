@@ -10,7 +10,7 @@
  * Plugin Name:       Mumega MCP
  * Description:       A focused Model Context Protocol server for WordPress posts, pages, local media, and taxonomies.
  * x-release-please-start-version
- * Version:           3.4.13
+ * Version:           3.4.14
  * x-release-please-end
  * Requires at least: 6.1
  * Requires PHP:      7.4
@@ -26,7 +26,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'MCPWP_VERSION', '3.4.13' ); // x-release-please-version.
+define( 'MCPWP_VERSION', '3.4.14' ); // x-release-please-version.
 define( 'MCPWP_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'MCPWP_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 define( 'MCPWP_PLUGIN_BASENAME', plugin_basename( __FILE__ ) );
