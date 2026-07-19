@@ -926,6 +926,26 @@ if (! function_exists('wp_delete_file')) {
     }
 }
 
+if (! function_exists('verify_file_md5')) {
+    // Mirror WP core: hex (32 chars) or base64 expected digest; true on match,
+    // WP_Error('md5_mismatch') otherwise. Unknown format is a no-op (true).
+    function verify_file_md5($filename, $expected_md5)
+    {
+        if (32 === strlen($expected_md5)) {
+            $expected_raw = pack('H*', $expected_md5);
+        } elseif (24 === strlen($expected_md5)) {
+            $expected_raw = base64_decode($expected_md5);
+        } else {
+            return true;
+        }
+        $file_md5 = md5_file($filename, true);
+        if ($file_md5 === $expected_raw) {
+            return true;
+        }
+        return new WP_Error('md5_mismatch', 'The checksum of the file does not match the expected checksum value.');
+    }
+}
+
 if (! class_exists('WP_Http')) {
     class WP_Http
     {

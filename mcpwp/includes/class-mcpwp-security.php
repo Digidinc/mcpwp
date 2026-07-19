@@ -167,6 +167,19 @@ class Mcpwp_Security {
 				);
 			}
 
+			// Parity with core download_url(): when the server advertises a
+			// Content-MD5, reject a corrupted/truncated body instead of importing
+			// it. verify_file_md5() lives in wp-admin/includes/file.php (already
+			// required above for wp_tempnam()).
+			$content_md5 = wp_remote_retrieve_header( $response, 'content-md5' );
+			if ( ! empty( $content_md5 ) && function_exists( 'verify_file_md5' ) ) {
+				$verified = verify_file_md5( $tmp, $content_md5 );
+				if ( is_wp_error( $verified ) ) {
+					wp_delete_file( $tmp );
+					return $verified;
+				}
+			}
+
 			return $tmp;
 		}
 

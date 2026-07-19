@@ -58,18 +58,27 @@ final class MediaSsrfRedirectTest extends TestCase {
 					? 'SECRET-INSTANCE-METADATA'
 					: 'PIXELDATA';
 
+				// A Content-MD5 integrity path: /md5-good returns a matching
+				// digest, /md5-bad returns a digest for different content.
+				$headers = array();
+				if ( false !== strpos( $url, '/md5-good' ) ) {
+					$headers['content-md5'] = md5( $body );
+				} elseif ( false !== strpos( $url, '/md5-bad' ) ) {
+					$headers['content-md5'] = md5( 'entirely-different-content' );
+				}
+
 				if ( ! empty( $args['stream'] ) && ! empty( $args['filename'] ) ) {
 					file_put_contents( $args['filename'], $body );
 					return array(
 						'response' => array( 'code' => 200 ),
-						'headers'  => array(),
+						'headers'  => $headers,
 						'body'     => '',
 					);
 				}
 
 				return array(
 					'response' => array( 'code' => 200 ),
-					'headers'  => array(),
+					'headers'  => $headers,
 					'body'     => $body,
 				);
 			},
@@ -107,6 +116,23 @@ final class MediaSsrfRedirectTest extends TestCase {
 		$this->assertSame( 'PIXELDATA', file_get_contents( $result ) );
 
 		wp_delete_file( $result );
+	}
+
+	public function test_matching_content_md5_is_accepted(): void {
+		$result = Mcpwp_Security::safe_download_url( 'http://' . self::PUBLIC_IP . '/md5-good.png' );
+
+		$this->assertIsString( $result );
+		$this->assertFileExists( $result );
+		$this->assertSame( 'PIXELDATA', file_get_contents( $result ) );
+
+		wp_delete_file( $result );
+	}
+
+	public function test_mismatched_content_md5_is_rejected(): void {
+		$result = Mcpwp_Security::safe_download_url( 'http://' . self::PUBLIC_IP . '/md5-bad.png' );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'md5_mismatch', $result->get_error_code() );
 	}
 
 	public function test_redirect_to_public_url_is_followed(): void {
