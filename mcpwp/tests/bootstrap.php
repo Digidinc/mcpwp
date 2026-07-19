@@ -887,6 +887,57 @@ function wp_remote_retrieve_body($response)
     return is_array($response) && isset($response['body']) ? $response['body'] : '';
 }
 
+if (! function_exists('wp_remote_retrieve_header')) {
+    function wp_remote_retrieve_header($response, $header)
+    {
+        if (! is_array($response) || ! isset($response['headers'])) {
+            return '';
+        }
+        $headers = array_change_key_case((array) $response['headers'], CASE_LOWER);
+        $header  = strtolower((string) $header);
+        return isset($headers[ $header ]) ? $headers[ $header ] : '';
+    }
+}
+
+if (! function_exists('wp_tempnam')) {
+    function wp_tempnam($filename = '')
+    {
+        return tempnam(sys_get_temp_dir(), 'mcpwp_test_');
+    }
+}
+
+if (! function_exists('wp_delete_file')) {
+    function wp_delete_file($file)
+    {
+        if (is_string($file) && file_exists($file)) {
+            unlink($file);
+        }
+    }
+}
+
+if (! class_exists('WP_Http')) {
+    class WP_Http
+    {
+        // Minimal make_absolute_url: return absolute URLs as-is, resolve a
+        // root-relative path against the base origin. Sufficient for tests.
+        public static function make_absolute_url($maybe_relative_url, $url)
+        {
+            if (preg_match('#^https?://#i', (string) $maybe_relative_url)) {
+                return (string) $maybe_relative_url;
+            }
+            $parts = parse_url((string) $url);
+            if (empty($parts['scheme']) || empty($parts['host'])) {
+                return (string) $maybe_relative_url;
+            }
+            $origin = $parts['scheme'] . '://' . $parts['host'] . (isset($parts['port']) ? ':' . $parts['port'] : '');
+            if ('' !== (string) $maybe_relative_url && '/' === $maybe_relative_url[0]) {
+                return $origin . $maybe_relative_url;
+            }
+            return $origin . '/' . ltrim((string) $maybe_relative_url, '/');
+        }
+    }
+}
+
 function wp_get_nav_menus()
 {
     return empty($GLOBALS['_mcpwp_test_menu_page_ids']) ? array() : array((object) array( 'term_id' => 1 ));

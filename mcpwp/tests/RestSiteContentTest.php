@@ -259,4 +259,69 @@ final class RestSiteContentTest extends TestCase {
 		$this->assertSame( 200, $resp->get_status() );
 		$this->assertSame( 'publish', $resp->get_data()['status'] );
 	}
+
+	// ── Render endpoints: a read key must not reach an unpublished body ──
+
+	private function rendered_copy( array $scopes, array $params ) {
+		[ $controller, $request ] = $this->authed( '/mcpwp/v1/rendered-copy', $params, $scopes );
+		return $controller->get_rendered_copy( $request );
+	}
+
+	private function rendered_html( array $scopes, array $params ) {
+		[ $controller, $request ] = $this->authed( '/mcpwp/v1/rendered-html', $params, $scopes );
+		return $controller->get_rendered_html( $request );
+	}
+
+	public function test_rendered_copy_draft_read_key_blocked_as_404(): void {
+		$resp = $this->rendered_copy( array( 'read' ), array( 'id' => self::DRAFT_ID ) );
+
+		$this->assertInstanceOf( WP_Error::class, $resp );
+		$this->assertSame( 'not_found', $resp->get_error_code() );
+		$this->assertSame( 404, $resp->get_error_data()['status'] );
+	}
+
+	public function test_rendered_html_draft_read_key_blocked_as_404(): void {
+		$resp = $this->rendered_html( array( 'read' ), array( 'id' => self::DRAFT_ID ) );
+
+		$this->assertInstanceOf( WP_Error::class, $resp );
+		$this->assertSame( 'not_found', $resp->get_error_code() );
+		$this->assertSame( 404, $resp->get_error_data()['status'] );
+	}
+
+	// ── post-meta: non-public meta gated to write scope ──────────────────
+
+	private function post_meta( array $scopes, array $params ) {
+		[ $controller, $request ] = $this->authed( '/mcpwp/v1/post-meta', $params, $scopes );
+		return $controller->get_post_meta_handler( $request );
+	}
+
+	public function test_post_meta_draft_read_key_blocked_as_404(): void {
+		$GLOBALS['_mcpwp_test_meta'][ self::DRAFT_ID ]['price'] = '999';
+
+		$resp = $this->post_meta( array( 'read' ), array( 'id' => self::DRAFT_ID, 'key' => 'price' ) );
+
+		$this->assertInstanceOf( WP_Error::class, $resp );
+		$this->assertSame( 'not_found', $resp->get_error_code() );
+		$this->assertSame( 404, $resp->get_error_data()['status'] );
+	}
+
+	public function test_post_meta_draft_write_key_returns_value(): void {
+		$GLOBALS['_mcpwp_test_meta'][ self::DRAFT_ID ]['price'] = '999';
+
+		$resp = $this->post_meta( array( 'write' ), array( 'id' => self::DRAFT_ID, 'key' => 'price' ) );
+
+		$this->assertInstanceOf( WP_REST_Response::class, $resp );
+		$this->assertSame( 200, $resp->get_status() );
+		$this->assertSame( '999', $resp->get_data()['value'] );
+	}
+
+	public function test_post_meta_published_read_key_returns_value(): void {
+		$GLOBALS['_mcpwp_test_meta'][ self::PUBLISHED_ID ]['color'] = 'blue';
+
+		$resp = $this->post_meta( array( 'read' ), array( 'id' => self::PUBLISHED_ID, 'key' => 'color' ) );
+
+		$this->assertInstanceOf( WP_REST_Response::class, $resp );
+		$this->assertSame( 200, $resp->get_status() );
+		$this->assertSame( 'blue', $resp->get_data()['value'] );
+	}
 }

@@ -187,9 +187,23 @@ class Mcpwp_REST_Approvals extends Mcpwp_REST_API {
 	private function check_self_approval( $approval_id ) {
 		$key_record = $this->get_current_api_key_record();
 
-		// No key record means we are in an admin-AJAX trusted context — no restriction.
+		// A missing/id-less key record must map to the genuine admin-AJAX human
+		// context (a logged-in admin acting through the chat UI) — the ONLY
+		// authenticated path that produces no key record. Every remote principal
+		// now carries an id (scoped API keys and OAuth tokens alike), so any
+		// other id-less caller is treated as forbidden rather than trusted.
+		// Previously this returned true unconditionally, which let an OAuth token
+		// (which carried no id) both create and approve/apply its own request,
+		// defeating the two-person rule on push-to-live.
 		if ( ! $key_record || empty( $key_record['id'] ) ) {
-			return true;
+			if ( $this->is_trusted_admin_ajax_request() ) {
+				return true;
+			}
+			return new WP_Error(
+				'self_approval_forbidden',
+				__( 'This request cannot be approved by an unidentified caller. Use a different admin key or approve via WordPress admin.', 'mcpwp' ),
+				array( 'status' => 403 )
+			);
 		}
 
 		$current_key_id = (string) $key_record['id'];

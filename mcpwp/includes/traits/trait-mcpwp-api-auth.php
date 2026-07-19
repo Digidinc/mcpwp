@@ -513,10 +513,26 @@ trait Mcpwp_Api_Auth {
 			return $rate_limit_check;
 		}
 
+		// Give the OAuth principal a stable, non-empty identity so downstream
+		// separation-of-duties checks (check_self_approval) treat it as a real
+		// remote caller rather than the id-less admin-AJAX human context. Prefer
+		// the consenting user, then the client, then a token-derived fallback for
+		// legacy tokens issued before the identity was persisted.
+		if ( isset( $record['user_id'] ) && (int) $record['user_id'] > 0 ) {
+			$principal_id = 'oauth-user:' . (int) $record['user_id'];
+		} elseif ( ! empty( $record['client_id'] ) ) {
+			$principal_id = 'oauth-client:' . sanitize_key( (string) $record['client_id'] );
+		} else {
+			$principal_id = 'oauth:' . substr( hash( 'sha256', (string) $token ), 0, 16 );
+		}
+
 		$key_record = array(
+			'id'     => $principal_id,
+			'type'   => 'oauth',
 			'scopes' => $this->sanitize_scopes( (array) $record['scopes'] ),
 		);
-		$required_scope = $this->get_required_scope_for_request( $request );
+		$this->current_api_key_record = $key_record;
+		$required_scope               = $this->get_required_scope_for_request( $request );
 
 		if ( ! $this->key_has_scope( $key_record, $required_scope ) ) {
 			return new WP_Error(
@@ -1590,7 +1606,7 @@ trait Mcpwp_Api_Auth {
 	 * @param int   $ttl    Token TTL in seconds.
 	 * @return array Token response payload.
 	 */
-	public function issue_oauth_access_token( $scopes, $ttl ) {
+	public function issue_oauth_access_token( $scopes, $ttl, $context = array() ) {
 		$ttl    = max( 300, min( 86400, absint( $ttl ) ) );
 		$scopes = $this->sanitize_scopes( $scopes );
 		$token  = 'mcpwp_at_' . bin2hex( random_bytes( 24 ) );
@@ -1600,6 +1616,17 @@ trait Mcpwp_Api_Auth {
 			'created_at' => time(),
 			'expires_at' => time() + $ttl,
 		);
+
+		// Persist the consenting principal (user or client) so the auth path can
+		// give the token a stable, non-empty identity — required for the
+		// separation-of-duties (self-approval) gate to distinguish it from the
+		// trusted admin-AJAX human context.
+		if ( isset( $context['user_id'] ) && (int) $context['user_id'] > 0 ) {
+			$payload['user_id'] = (int) $context['user_id'];
+		}
+		if ( ! empty( $context['client_id'] ) ) {
+			$payload['client_id'] = sanitize_key( (string) $context['client_id'] );
+		}
 
 		set_transient( $this->get_oauth_token_transient_key( $token ), $payload, $ttl );
 

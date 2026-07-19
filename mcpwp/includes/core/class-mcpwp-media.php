@@ -124,7 +124,9 @@ class Mcpwp_Media {
 			);
 		}
 
-		// SSRF protection: block internal/private URLs.
+		// SSRF protection: block internal/private URLs — validated here for an
+		// early, clear error, and again on every redirect hop inside
+		// safe_download_url() so a 30x to an internal IP can't slip past.
 		if ( class_exists( 'Mcpwp_Security' ) ) {
 			$ssrf_check = Mcpwp_Security::validate_external_url( $url );
 			if ( is_wp_error( $ssrf_check ) ) {
@@ -132,8 +134,12 @@ class Mcpwp_Media {
 			}
 		}
 
-		// Download the file
-		$tmp = download_url( $url );
+		// Download the file. Use the SSRF-guarded downloader (not core
+		// download_url(), which follows redirects with no re-validation) so a
+		// public URL cannot redirect into the private network.
+		$tmp = class_exists( 'Mcpwp_Security' )
+			? Mcpwp_Security::safe_download_url( $url )
+			: download_url( $url );
 
 		if ( is_wp_error( $tmp ) ) {
 			return new WP_Error(

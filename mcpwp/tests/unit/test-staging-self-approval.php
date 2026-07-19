@@ -48,9 +48,22 @@ if ( ! function_exists( 'wp_trim_words' ) ) {
  */
 class Mcpwp_REST_Approvals_Testable extends Mcpwp_REST_Approvals {
 
+	/** When true, the controller reports a genuine admin-AJAX context. */
+	public bool $simulate_admin_ajax = false;
+
 	/** @param array|null $record Key record to inject as "current authenticated key". */
 	public function set_key_record( ?array $record ): void {
 		$this->current_api_key_record = $record;
+	}
+
+	/**
+	 * A null key record is only the trusted no-op case when it corresponds to a
+	 * genuine admin-AJAX human context. Model that signal explicitly so tests
+	 * distinguish it from an id-less remote principal (e.g. an OAuth token),
+	 * which must be blocked.
+	 */
+	protected function is_trusted_admin_ajax_request() {
+		return $this->simulate_admin_ajax;
 	}
 
 	/** Satisfy the abstract requirement from Mcpwp_REST_API. */
@@ -292,18 +305,43 @@ final class StagingSelfApprovalTest extends TestCase {
 		$apr_id = $this->insert_staging_approval( 'key-original' );
 
 		$controller = new Mcpwp_REST_Approvals_Testable();
-		// Simulate admin-AJAX trusted context: no API key record set.
+		// Simulate a GENUINE admin-AJAX trusted context: no API key record, and
+		// the admin-AJAX signal (admin cap + nonce) actually present.
 		$controller->set_key_record( null );
+		$controller->simulate_admin_ajax = true;
 
 		$result = $controller->approve_approval( $this->make_request( $apr_id ) );
 
-		// The self-approval gate must be a no-op when there is no key record.
+		// The self-approval gate must be a no-op for the genuine admin-AJAX human.
 		// Outcome: either success (array/WP_REST_Response) or a non-self-approval error.
 		$error_code = is_wp_error( $result ) ? $result->get_error_code() : '';
 		$this->assertNotSame(
 			'self_approval_forbidden',
 			$error_code,
 			'Admin-AJAX context (null key record) must not trigger self-approval block.'
+		);
+	}
+
+	// ─────────────────────────────────────────────────────────────────────
+	// 6b. Null key record that is NOT admin-AJAX (e.g. an OAuth remote
+	//     principal that failed to carry an id) → MUST be blocked. This is the
+	//     P0 regression: previously any null record was treated as trusted.
+	// ─────────────────────────────────────────────────────────────────────
+
+	public function test_null_key_record_without_admin_ajax_is_blocked(): void {
+		$apr_id = $this->insert_staging_approval( 'key-original' );
+
+		$controller = new Mcpwp_REST_Approvals_Testable();
+		$controller->set_key_record( null );
+		$controller->simulate_admin_ajax = false;
+
+		$result = $controller->approve_approval( $this->make_request( $apr_id ) );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame(
+			'self_approval_forbidden',
+			$result->get_error_code(),
+			'An id-less non-admin-AJAX caller must not approve its own request.'
 		);
 	}
 
