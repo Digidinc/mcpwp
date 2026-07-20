@@ -454,6 +454,37 @@ function get_site_url()
     return 'https://example.com';
 }
 
+if (! function_exists('home_url')) {
+    function home_url($path = '', $scheme = null)
+    {
+        return 'https://example.com' . ('' !== (string) $path ? '/' . ltrim((string) $path, '/') : '');
+    }
+}
+
+if (! function_exists('get_nav_menu_locations')) {
+    function get_nav_menu_locations()
+    {
+        return array();
+    }
+}
+
+if (! function_exists('wp_list_pluck')) {
+    function wp_list_pluck($list, $field, $index_key = null)
+    {
+        $out = array();
+        foreach ((array) $list as $key => $item) {
+            $value = is_object($item) ? ($item->{$field} ?? null) : ($item[$field] ?? null);
+            if (null === $index_key) {
+                $out[] = $value;
+            } else {
+                $idx       = is_object($item) ? ($item->{$index_key} ?? null) : ($item[$index_key] ?? null);
+                $out[$idx] = $value;
+            }
+        }
+        return $out;
+    }
+}
+
 function rest_url($path = '')
 {
     return 'https://example.com/wp-json/' . ltrim($path, '/');
@@ -672,6 +703,13 @@ function get_post($id)
     return isset($GLOBALS['_mcpwp_test_posts'][ $id ]) ? $GLOBALS['_mcpwp_test_posts'][ $id ] : null;
 }
 
+if (! function_exists('clean_post_cache')) {
+    function clean_post_cache($post)
+    {
+        // No object cache in tests; nothing to bust.
+    }
+}
+
 function get_posts($args = array())
 {
     $posts = array_values($GLOBALS['_mcpwp_test_posts']);
@@ -791,6 +829,21 @@ if (! function_exists('get_preview_post_link')) {
     {
         $id = is_object($post) ? (int) $post->ID : (int) $post;
         return 'https://example.com/?p=' . $id . '&preview=true';
+    }
+}
+
+if (! function_exists('has_excerpt')) {
+    function has_excerpt($post = 0)
+    {
+        $post = is_object($post) ? $post : get_post($post);
+        return $post && '' !== trim((string) ($post->post_excerpt ?? ''));
+    }
+}
+
+if (! function_exists('get_object_taxonomies')) {
+    function get_object_taxonomies($object, $output = 'names')
+    {
+        return array();
     }
 }
 

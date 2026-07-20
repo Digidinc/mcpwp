@@ -43,9 +43,13 @@ trait Mcpwp_Api_Auth {
 	 * strings also return false, so ambiguous input is treated as non-public.
 	 *
 	 * Shared gate: every REST controller that reads or renders post bodies
-	 * (site-content, elementor, blocks, pages, posts) uses this together with
-	 * requester_can_see_non_public() so a read-only key can never reach an
-	 * unpublished body through any read surface.
+	 * (site-content, elementor, blocks, pages, posts, the SEO structured-data /
+	 * media / readiness audits, content-quality, and the content-graph) uses this
+	 * together with requester_can_see_non_public() so a read-only key can never
+	 * reach an unpublished body through any read surface. The content-graph and
+	 * /drafts surfaces enumerate rather than resolve a single post, so they clamp
+	 * on requester_can_see_non_public() directly instead of calling
+	 * guard_non_public_post().
 	 *
 	 * @param string $status Post status slug.
 	 * @return bool True when the status is publicly viewable.

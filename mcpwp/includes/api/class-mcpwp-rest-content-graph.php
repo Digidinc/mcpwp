@@ -577,6 +577,13 @@ class Mcpwp_REST_Content_Graph extends Mcpwp_REST_API {
 	// --- Private helpers ---
 
 	protected function build_content_graph_data( $post_types, $limit, $include_drafts = false ) {
+		// Security clamp: a read-only key must never receive draft/private nodes
+		// even when it passes include_drafts=true. Only a caller with write scope
+		// (or a trusted admin-AJAX context) may widen the status set beyond public.
+		// This is the single choke point for all three graph entry points
+		// (get_content_graph, get_internal_link_suggestions, validate_internal_links),
+		// so the caller-controlled boolean cannot be honored through any of them.
+		$include_drafts = $include_drafts && $this->requester_can_see_non_public();
 		$statuses = $include_drafts ? array( 'publish', 'draft', 'private' ) : array( 'publish' );
 
 		$posts = get_posts(

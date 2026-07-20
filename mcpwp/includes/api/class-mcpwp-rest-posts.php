@@ -499,6 +499,22 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 	public function list_drafts( $request ) {
 		$this->log_activity( 'list_drafts', $request );
 
+		// Non-public gate: /drafts enumerates every draft's title, author, dates and
+		// edit URL — all unpublished. A read-only key must never see them. Mirror the
+		// search_content clamp-and-report pattern: return an empty list (not a 403)
+		// with status_downgraded=true, rather than disclosing unpublished content.
+		if ( ! $this->requester_can_see_non_public() ) {
+			return $this->success_response(
+				array(
+					'drafts'            => array(),
+					'total'             => 0,
+					'posts'             => 0,
+					'pages'             => 0,
+					'status_downgraded' => true,
+				)
+			);
+		}
+
 		$args = array(
 			'type' => $request->get_param( 'type' ),
 		);

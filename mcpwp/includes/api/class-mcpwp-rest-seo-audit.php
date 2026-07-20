@@ -413,6 +413,14 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 			return $this->error_response( 'not_found', 'Post not found.', 404 );
 		}
 
+		// Non-public gate: this surface returns the draft's title/status/meta-
+		// description/heading signals, so a read-only key must be denied with the
+		// same 404 as a missing post before any of those are read.
+		$denied = $this->guard_non_public_post( $post, 'Post not found.' );
+		if ( $denied ) {
+			return $denied;
+		}
+
 		$this->log_activity( 'validate_seo_readiness', $request, array( 'post_id' => $post_id ) );
 
 		$issues       = array();
@@ -845,6 +853,14 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 			return $this->error_response( 'not_found', 'Post not found.', 404 );
 		}
 
+		// Non-public gate: this surface reads $post->post_content (JSON-LD/microdata)
+		// and returns draft-derived data, so a read-only key must be denied with the
+		// same 404 as a missing post before any body is read.
+		$denied = $this->guard_non_public_post( $post, 'Post not found.' );
+		if ( $denied ) {
+			return $denied;
+		}
+
 		$this->log_activity( 'validate_structured_data', $request, array( 'post_id' => $post_id ) );
 
 		$content         = (string) $post->post_content;
@@ -1076,6 +1092,14 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 
 		if ( ! $post ) {
 			return $this->error_response( 'not_found', 'Post not found.', 404 );
+		}
+
+		// Non-public gate: this surface reads $post->post_content (image inventory)
+		// and returns draft-derived data, so a read-only key must be denied with the
+		// same 404 as a missing post before any body is read.
+		$denied = $this->guard_non_public_post( $post, 'Post not found.' );
+		if ( $denied ) {
+			return $denied;
 		}
 
 		$this->log_activity( 'audit_media_seo', $request, array( 'post_id' => $post_id ) );
