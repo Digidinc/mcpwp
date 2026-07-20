@@ -317,10 +317,18 @@ class Mcpwp_REST_LearnPress extends Mcpwp_REST_API {
 	 * @return WP_REST_Response
 	 */
 	public function list_courses( $request ) {
+		// Security clamp: a read-only key may only list published courses. The
+		// model uses this status as post_status directly, so a caller-supplied
+		// draft/private/any would otherwise enumerate unpublished course titles.
+		$status = $request->get_param( 'status' );
+		if ( ! $this->requester_can_see_non_public() ) {
+			$status = 'publish';
+		}
+
 		$args = array(
 			'per_page' => $request->get_param( 'per_page' ),
 			'page'     => $request->get_param( 'page' ),
-			'status'   => $request->get_param( 'status' ),
+			'status'   => $status,
 			'search'   => $request->get_param( 'search' ),
 			'category' => $request->get_param( 'category' ),
 		);

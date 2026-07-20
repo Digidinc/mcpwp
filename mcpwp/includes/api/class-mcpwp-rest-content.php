@@ -100,6 +100,15 @@ class Mcpwp_REST_Content extends Mcpwp_REST_API {
 			$status = 'any';
 		}
 
+		// Security clamp: a read-only key may only enumerate published content.
+		// The default (and any caller-supplied draft/private/pending/any) is
+		// forced to 'publish' unless the caller carries write scope (or trusted
+		// admin-AJAX), so this generic CPT listing cannot leak non-public titles,
+		// URLs, or statuses.
+		if ( ! $this->requester_can_see_non_public() ) {
+			$status = 'publish';
+		}
+
 		$search = sanitize_text_field( (string) $request->get_param( 'search' ) );
 
 		$query = new WP_Query(

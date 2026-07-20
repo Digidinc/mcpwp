@@ -113,10 +113,21 @@ class Mcpwp_SEO_Audit_Store {
 		$post_id  = isset( $args['post_id'] ) ? absint( $args['post_id'] ) : 0;
 		$limit    = isset( $args['limit'] ) ? min( 200, max( 1, absint( $args['limit'] ) ) ) : 50;
 
+		// Security clamp: an unprivileged (read-only) caller must not see stored
+		// issues that carry a draft/private post's title/url — a run stored by a
+		// write key with include_drafts persists those. When set, drop any issue
+		// whose referenced post is not currently public (missing posts fail
+		// closed). Kept BEFORE summarize_issues() so the summary counts match the
+		// visible set. Decided by the REST handler, which knows the caller scope.
+		$exclude_non_public = ! empty( $args['exclude_non_public'] );
+
 		$issues = array_values(
 			array_filter(
 				$issues,
-				function ( $issue ) use ( $status, $severity, $category, $run_id, $post_id ) {
+				function ( $issue ) use ( $status, $severity, $category, $run_id, $post_id, $exclude_non_public ) {
+					if ( $exclude_non_public && ! self::issue_post_is_public( $issue ) ) {
+						return false;
+					}
 					if ( '' !== $status && ( $issue['status'] ?? '' ) !== $status ) {
 						return false;
 					}
@@ -153,6 +164,32 @@ class Mcpwp_SEO_Audit_Store {
 			'summary' => self::summarize_issues( $issues ),
 			'issues'  => array_slice( $issues, 0, $limit ),
 		);
+	}
+
+	/**
+	 * Whether a stored issue's referenced post is currently publicly viewable.
+	 *
+	 * Used to hide draft/private issues from unprivileged readers. Resolves the
+	 * live post status (so a post unpublished after the run is also hidden) and
+	 * fails closed: a missing post or unregistered status is treated as
+	 * non-public, since the stored title/url may still describe hidden content.
+	 *
+	 * @param array $issue Stored issue record.
+	 * @return bool True when the post is public.
+	 */
+	private static function issue_post_is_public( $issue ) {
+		$post_id = (int) ( $issue['post_id'] ?? 0 );
+		if ( $post_id <= 0 ) {
+			return false;
+		}
+
+		$post = get_post( $post_id );
+		if ( ! $post ) {
+			return false;
+		}
+
+		$status_obj = get_post_status_object( (string) $post->post_status );
+		return $status_obj && ! empty( $status_obj->public );
 	}
 
 	/**

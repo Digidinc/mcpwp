@@ -413,6 +413,62 @@ class Mcpwp_Approvals {
 	}
 
 	/**
+	 * Redact source-derived fields from a public approval record when the reader
+	 * is unprivileged and the referenced post is non-public.
+	 *
+	 * The approvals read surface (GET /approvals, GET /approvals/{id}) is only
+	 * API-key gated, not write-scope gated, so a read-only key can list every
+	 * queued approval. A record that references a draft/private post carries the
+	 * source's title, permalink, status, and a 40-word before/after excerpt of
+	 * its body via public_record(). Without this clamp a read key could harvest
+	 * unpublished content that a privileged key legitimately queued for review.
+	 *
+	 * Scope is decided by the caller (it lives on the REST controller, which has
+	 * the auth trait); this static helper only performs the field-level strip so
+	 * the redaction is identical across every read entry point. Only 'post'
+	 * resources are touched — staging-push and other non-post approvals are
+	 * unaffected. Non-public status is resolved from the LIVE post first (a post
+	 * that was published then unpublished is still protected), falling back to the
+	 * status stored on the record.
+	 *
+	 * @param array $record Public approval record.
+	 * @return array Record with source fields stripped when protected.
+	 */
+	public static function redact_source_for_unprivileged( $record ) {
+		if ( ! is_array( $record ) || empty( $record['resource'] ) || ! is_array( $record['resource'] ) ) {
+			return $record;
+		}
+
+		$resource = $record['resource'];
+		if ( ( isset( $resource['type'] ) && 'post' !== $resource['type'] ) || empty( $resource['id'] ) ) {
+			return $record;
+		}
+
+		$post   = get_post( (int) $resource['id'] );
+		$status = $post ? $post->post_status : ( isset( $resource['status'] ) ? (string) $resource['status'] : '' );
+
+		$status_obj = get_post_status_object( (string) $status );
+		if ( $status_obj && ! empty( $status_obj->public ) ) {
+			return $record;
+		}
+
+		// Non-public source: strip everything that would reveal the hidden body,
+		// title, location, or confirm which draft/private status it holds.
+		$record['resource']['title']  = '';
+		$record['resource']['url']    = '';
+		$record['resource']['status'] = 'restricted';
+
+		if ( isset( $record['diff'] ) && is_array( $record['diff'] ) ) {
+			unset( $record['diff']['before_excerpt'], $record['diff']['after_excerpt'] );
+			$record['diff']['redacted'] = true;
+		}
+
+		$record['redacted'] = true;
+
+		return $record;
+	}
+
+	/**
 	 * Upsert request.
 	 *
 	 * @param array $request Request.

@@ -86,12 +86,24 @@ class Mcpwp_REST_Approvals extends Mcpwp_REST_API {
 	public function list_approvals( $request ) {
 		$this->log_activity( 'list_approvals', $request );
 
+		$approvals = Mcpwp_Approvals::list_requests(
+			(string) $request->get_param( 'status' ),
+			(int) $request->get_param( 'limit' )
+		);
+
+		// Read-only keys must not harvest draft/private source bodies that a
+		// privileged key queued for review. Redact source fields for non-public
+		// resources unless the caller carries write scope (or trusted admin-AJAX).
+		if ( ! $this->requester_can_see_non_public() ) {
+			$approvals = array_map(
+				array( 'Mcpwp_Approvals', 'redact_source_for_unprivileged' ),
+				$approvals
+			);
+		}
+
 		return $this->success_response(
 			array(
-				'approvals' => Mcpwp_Approvals::list_requests(
-					(string) $request->get_param( 'status' ),
-					(int) $request->get_param( 'limit' )
-				),
+				'approvals' => $approvals,
 			)
 		);
 	}
@@ -106,6 +118,10 @@ class Mcpwp_REST_Approvals extends Mcpwp_REST_API {
 		$result = Mcpwp_Approvals::get_request( $request->get_param( 'id' ) );
 		if ( is_wp_error( $result ) ) {
 			return $result;
+		}
+
+		if ( ! $this->requester_can_see_non_public() ) {
+			$result = Mcpwp_Approvals::redact_source_for_unprivileged( $result );
 		}
 
 		$this->log_activity( 'get_approval', $request, array( 'approval_id' => $result['id'] ) );
