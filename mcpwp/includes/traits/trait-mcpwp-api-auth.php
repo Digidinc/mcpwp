@@ -170,6 +170,25 @@ trait Mcpwp_Api_Auth {
 			return $this->authenticate_oauth_access_token( $api_key, $request );
 		}
 
+		// mumcp.com broker OAuth Bearer token — alternative to X-API-Key, the
+		// integration that makes claude.ai sign-in work. Only ever attempted
+		// when the credential arrived via the Authorization: Bearer header
+		// (never the X-API-Key header, never the ?api_key= query fallback) and
+		// only when the site is actively enrolled with the broker — the
+		// kill-switch inside Mcpwp_Broker_Auth::is_enrolled() means an
+		// unenrolled/disabled site makes NO network call for a bearer token and
+		// falls straight through to the unchanged invalid-key handling below.
+		$auth_header        = method_exists( $request, 'get_header' ) ? $request->get_header( 'Authorization' ) : null;
+		$has_bearer_header   = ! empty( $auth_header ) && 0 === strpos( (string) $auth_header, 'Bearer ' );
+		$has_api_key_header  = method_exists( $request, 'get_header' ) && ! empty( $request->get_header( 'X-API-Key' ) );
+
+		if ( $has_bearer_header && ! $has_api_key_header && class_exists( 'Mcpwp_Broker_Auth' ) ) {
+			$broker_auth = new Mcpwp_Broker_Auth();
+			if ( $broker_auth->is_enrolled() ) {
+				return $this->authenticate_broker_bearer_token( $api_key, $request, $broker_auth );
+			}
+		}
+
 		$matched_key = $this->find_scoped_api_key( $api_key );
 		$legacy_key  = get_option( 'mcpwp_api_key' );
 
@@ -638,6 +657,104 @@ trait Mcpwp_Api_Auth {
 				__( 'API user context is not configured. Re-activate MCPWP to provision the service account.', 'mcpwp' ),
 				array( 'status' => 500 )
 			);
+		}
+
+		return true;
+	}
+
+	/**
+	 * Authenticate a mumcp.com broker-issued opaque Bearer token.
+	 *
+	 * Alternative to X-API-Key auth. Delegates validation to
+	 * Mcpwp_Broker_Auth::validate_token() (cached RFC 7662-shaped introspection
+	 * against mumcp.com, fail-closed) and, on success, builds a $key_record in
+	 * the SAME shape find_scoped_api_key() / authenticate_oauth_access_token()
+	 * produce — 'id' / 'type' / 'scopes' — so every downstream consumer
+	 * (scope enforcement via key_has_scope(), requester_can_see_non_public(),
+	 * the #683 self-approval separation-of-duties identity, rate limiting,
+	 * disabled-tool-category enforcement) treats a broker principal exactly
+	 * like any other authenticated caller.
+	 *
+	 * Admin is impossible via this path: Mcpwp_Broker_Auth::scope_to_capability()
+	 * only ever returns 'read' or 'write' (never 'admin', even defensively if a
+	 * future/compromised broker response claimed it), and sanitize_scopes() is
+	 * only ever fed that single capability string here — there is no code path
+	 * by which 'admin' could enter $key_record['scopes'] for a broker principal.
+	 *
+	 * @param string            $token       Opaque bearer token (Bearer prefix already stripped).
+	 * @param WP_REST_Request   $request     Request object.
+	 * @param Mcpwp_Broker_Auth $broker_auth Validator instance (caller already confirmed is_enrolled()).
+	 * @return bool|WP_Error True when valid, error otherwise.
+	 */
+	protected function authenticate_broker_bearer_token( $token, $request, $broker_auth ) {
+		$result = $broker_auth->validate_token( $token );
+		if ( is_wp_error( $result ) ) {
+			// Fail-closed: not enrolled (kill-switch), transport error, non-200,
+			// active !== true, or audience/site_id mismatch — validate_token()
+			// already shaped the WP_Error/status for each case.
+			return $result;
+		}
+
+		$rate_limit_check = $this->check_rate_limit( 'broker:' . substr( hash( 'sha256', (string) $token ), 0, 16 ) );
+		if ( is_wp_error( $rate_limit_check ) ) {
+			return $rate_limit_check;
+		}
+
+		// Cap capability at read/write. scope_to_capability() never returns
+		// 'admin'; sanitize_scopes() is only ever given that single string, so
+		// 'admin' can never appear in the resulting scopes array.
+		$scope      = isset( $result['scope'] ) ? (array) $result['scope'] : array();
+		$capability = $broker_auth->scope_to_capability( $scope );
+		$scopes     = $this->sanitize_scopes( array( $capability ) );
+
+		// Stable, non-empty identity in its own namespace for the #683
+		// self-approval separation-of-duties gate (current_requester_key_id() /
+		// check_self_approval()) — a broker principal is `broker:<sub>`,
+		// distinct from `oauth-user:`, `oauth-client:`, the legacy `oauth:`
+		// fallback, and scoped-key UUIDs, so it can never collide with (and
+		// thus never satisfy "same identity" against) any other principal type.
+		$sub          = isset( $result['sub'] ) && '' !== (string) $result['sub'] ? (string) $result['sub'] : '';
+		$principal_id = '' !== $sub ? 'broker:' . $sub : 'broker:' . substr( hash( 'sha256', (string) $token ), 0, 16 );
+
+		$key_record = array(
+			'id'     => $principal_id,
+			'type'   => 'broker',
+			'scopes' => $scopes,
+		);
+		$this->current_api_key_record = $key_record;
+
+		$required_scope = $this->get_required_scope_for_request( $request );
+		if ( ! $this->key_has_scope( $key_record, $required_scope ) ) {
+			return new WP_Error(
+				'insufficient_scope',
+				sprintf(
+					/* translators: %s: scope name */
+					__( 'API key lacks required scope: %s', 'mcpwp' ),
+					$required_scope
+				),
+				array(
+					'status'         => 403,
+					'required_scope' => $required_scope,
+					'granted_scopes' => $key_record['scopes'],
+				)
+			);
+		}
+
+		if ( ! $this->set_api_user_context() ) {
+			return new WP_Error(
+				'api_user_missing',
+				__( 'API user context is not configured. Re-activate MCPWP to provision the service account.', 'mcpwp' ),
+				array( 'status' => 500 )
+			);
+		}
+
+		// Same site-administrator category toggle enforcement the X-API-Key
+		// path applies (verify_api_key() line ~282) — a broker principal must
+		// not be able to reach a disabled tool category any more than a scoped
+		// API key can.
+		$category_check = $this->check_disabled_category_for_route( $request );
+		if ( is_wp_error( $category_check ) ) {
+			return $category_check;
 		}
 
 		return true;

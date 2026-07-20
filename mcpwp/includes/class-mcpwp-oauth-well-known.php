@@ -60,9 +60,13 @@ class Mcpwp_OAuth_Well_Known {
 	/**
 	 * Inject WWW-Authenticate header on 401 responses for MCPWP routes.
 	 *
-	 * Only fires when OAuth is enabled; leaves existing X-API-Key auth path
+	 * Fires when the legacy self-issued OAuth AS is enabled OR the site is
+	 * enrolled with the mumcp.com broker (same independent-gate pair as
+	 * should_serve_protected_resource_metadata()), so a broker-only site
+	 * (legacy oauth_enabled never turned on) still advertises discovery on an
+	 * unauthenticated request. Leaves the existing X-API-Key auth path
 	 * completely unaffected (that path still returns 401, just without the
-	 * discovery header).
+	 * discovery header when neither gate is active).
 	 *
 	 * Header format per MCP Auth Spec §2.1 / RFC 9728:
 	 *   WWW-Authenticate: Bearer resource_metadata="<site>/.well-known/oauth-protected-resource"
@@ -90,8 +94,7 @@ class Mcpwp_OAuth_Well_Known {
 			return $response;
 		}
 
-		$settings = get_option( 'mcpwp_settings', array() );
-		if ( empty( $settings['oauth_enabled'] ) ) {
+		if ( ! self::is_legacy_oauth_enabled() && ! self::is_broker_enrolled() ) {
 			return $response;
 		}
 
