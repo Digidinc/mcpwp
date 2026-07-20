@@ -358,10 +358,12 @@ final class BrokerLifecycleTest extends TestCase {
 
 		$ctrl    = $this->broker();
 		$params  = array(
-			'nonce'           => 'storeNonce3',
-			'site_id'         => 'site-abc',
-			'audience'        => 'https://example.test',
-			'site_credential' => 'plaintext-super-secret',
+			'nonce'                  => 'storeNonce3',
+			'site_id'                => 'site-abc',
+			'audience'               => 'https://example.test',
+			'issuer'                 => 'https://mumcp.com',
+			'introspection_endpoint' => 'https://mumcp.com/oauth/introspect',
+			'site_credential'        => 'plaintext-super-secret',
 		);
 
 		$first  = $ctrl->handle_enroll_store( $this->storeRequest( $params ) );
@@ -389,6 +391,123 @@ final class BrokerLifecycleTest extends TestCase {
 		$this->assertFalse( get_option( 'mcpwp_broker_enrollment', false ) );
 	}
 
+	// ── Host-lock — issuer / introspection_endpoint (adversarial review) ────
+
+	public function test_store_with_poisoned_introspection_endpoint_fails_and_writes_nothing(): void {
+		$this->confirmedEnrollment( 'hostLockNonce1' );
+
+		$ctrl     = $this->broker();
+		$response = $ctrl->handle_enroll_store(
+			$this->storeRequest(
+				array(
+					'nonce'                  => 'hostLockNonce1',
+					'site_id'                => 'site-abc',
+					'audience'               => 'https://example.test',
+					'issuer'                 => 'https://mumcp.com',
+					'introspection_endpoint' => 'https://evil.example/x',
+					'site_credential'        => 'plaintext-super-secret',
+				)
+			)
+		);
+
+		$this->assertFalse( $response->get_data()['stored'], 'A non-mumcp.com introspection_endpoint must be rejected — it would exfiltrate the site credential.' );
+		$this->assertFalse( get_option( 'mcpwp_broker_enrollment', false ) );
+	}
+
+	public function test_store_with_poisoned_issuer_fails_and_writes_nothing(): void {
+		$this->confirmedEnrollment( 'hostLockNonce2' );
+
+		$ctrl     = $this->broker();
+		$response = $ctrl->handle_enroll_store(
+			$this->storeRequest(
+				array(
+					'nonce'                  => 'hostLockNonce2',
+					'site_id'                => 'site-abc',
+					'audience'               => 'https://example.test',
+					'issuer'                 => 'https://evil.com',
+					'introspection_endpoint' => 'https://mumcp.com/oauth/introspect',
+					'site_credential'        => 'plaintext-super-secret',
+				)
+			)
+		);
+
+		$this->assertFalse( $response->get_data()['stored'], 'A non-mumcp.com issuer must be rejected.' );
+		$this->assertFalse( get_option( 'mcpwp_broker_enrollment', false ) );
+	}
+
+	public function test_store_with_missing_introspection_endpoint_fails_and_writes_nothing(): void {
+		$this->confirmedEnrollment( 'hostLockNonce3' );
+
+		$ctrl     = $this->broker();
+		$response = $ctrl->handle_enroll_store(
+			$this->storeRequest(
+				array(
+					'nonce'           => 'hostLockNonce3',
+					'site_id'         => 'site-abc',
+					'audience'        => 'https://example.test',
+					'issuer'          => 'https://mumcp.com',
+					'site_credential' => 'plaintext-super-secret',
+					// introspection_endpoint deliberately omitted.
+				)
+			)
+		);
+
+		$this->assertFalse( $response->get_data()['stored'], 'A missing introspection_endpoint must be rejected, not silently defaulted.' );
+		$this->assertFalse( get_option( 'mcpwp_broker_enrollment', false ) );
+	}
+
+	public function test_store_with_valid_mumcp_issuer_and_endpoint_succeeds(): void {
+		$this->confirmedEnrollment( 'hostLockNonce4' );
+
+		$ctrl     = $this->broker();
+		$response = $ctrl->handle_enroll_store(
+			$this->storeRequest(
+				array(
+					'nonce'                  => 'hostLockNonce4',
+					'site_id'                => 'site-abc',
+					'audience'               => 'https://example.test',
+					'issuer'                 => 'https://mumcp.com',
+					'introspection_endpoint' => 'https://mumcp.com/oauth/introspect',
+					'site_credential'        => 'plaintext-super-secret',
+				)
+			)
+		);
+
+		$this->assertTrue( $response->get_data()['stored'], 'A legitimate https://mumcp.com issuer + introspection_endpoint must still be accepted.' );
+		$this->assertIsArray( get_option( 'mcpwp_broker_enrollment', false ) );
+	}
+
+	/**
+	 * @dataProvider spoofedMumcpHostProvider
+	 */
+	public function test_store_with_lookalike_mumcp_host_in_introspection_endpoint_fails( string $spoofed_endpoint ): void {
+		$this->confirmedEnrollment( 'hostLockNonce_' . md5( $spoofed_endpoint ) );
+
+		$ctrl     = $this->broker();
+		$response = $ctrl->handle_enroll_store(
+			$this->storeRequest(
+				array(
+					'nonce'                  => 'hostLockNonce_' . md5( $spoofed_endpoint ),
+					'site_id'                => 'site-abc',
+					'audience'               => 'https://example.test',
+					'issuer'                 => 'https://mumcp.com',
+					'introspection_endpoint' => $spoofed_endpoint,
+					'site_credential'        => 'plaintext-super-secret',
+				)
+			)
+		);
+
+		$this->assertFalse( $response->get_data()['stored'], "Lookalike host '$spoofed_endpoint' must be rejected, not treated as mumcp.com." );
+		$this->assertFalse( get_option( 'mcpwp_broker_enrollment', false ) );
+	}
+
+	public static function spoofedMumcpHostProvider(): array {
+		return array(
+			'subdomain-suffix lookalike' => array( 'https://mumcp.com.evil.com/oauth/introspect' ),
+			'userinfo lookalike'         => array( 'https://mumcp.com@evil.com/oauth/introspect' ),
+		);
+	}
+
 	public function test_store_never_logs_plaintext_site_credential(): void {
 		update_option( 'mcpwp_settings', array( 'enable_logging' => true ) );
 		$this->confirmedEnrollment( 'logSafeNonce1' );
@@ -402,10 +521,12 @@ final class BrokerLifecycleTest extends TestCase {
 			$response = $ctrl->handle_enroll_store(
 				$this->storeRequest(
 					array(
-						'nonce'           => 'logSafeNonce1',
-						'site_id'         => 'site-abc',
-						'audience'        => 'https://example.test',
-						'site_credential' => 'super-secret-plaintext-value',
+						'nonce'                  => 'logSafeNonce1',
+						'site_id'                => 'site-abc',
+						'audience'               => 'https://example.test',
+						'issuer'                 => 'https://mumcp.com',
+						'introspection_endpoint' => 'https://mumcp.com/oauth/introspect',
+						'site_credential'        => 'super-secret-plaintext-value',
 					)
 				)
 			);

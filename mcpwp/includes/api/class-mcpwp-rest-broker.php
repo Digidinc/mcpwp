@@ -33,6 +33,12 @@
  *    win once. A miss (unknown, expired, or already-consumed nonce) returns a
  *    clean `{confirmed:false}`, never a 500 and never a distinguishing error
  *    code, so the response leaks nothing about why it failed.
+ *  - enroll-store: `issuer` and `introspection_endpoint` are host-locked to
+ *    https://mumcp.com (same check as `return`, see is_allowed_mumcp_url()) —
+ *    Mcpwp_Broker_Auth::validate_token() sends the decrypted site credential
+ *    to whatever `introspection_endpoint` this endpoint stores, so an
+ *    unvalidated value here would be a credential-exfiltration / auth-bypass
+ *    vector, not just an open redirect.
  *
  * @package MCPWP
  * @since   3.7.0
@@ -216,7 +222,7 @@ class Mcpwp_REST_Broker extends Mcpwp_REST_API {
 		}
 
 		$return_url = $request->get_param( 'return' );
-		if ( ! $this->is_allowed_broker_return_url( $return_url ) ) {
+		if ( ! $this->is_allowed_mumcp_url( $return_url ) ) {
 			return $this->error_response(
 				'invalid_return_url',
 				__( 'The return URL must be an https://mumcp.com/... address.', 'mcpwp' ),
@@ -306,6 +312,15 @@ class Mcpwp_REST_Broker extends Mcpwp_REST_API {
 	 * same nonce (network retry, or an attacker capturing the S2S call)
 	 * cannot re-deliver or overwrite the credential a second time.
 	 *
+	 * `issuer` and `introspection_endpoint` are host-locked to
+	 * https://mumcp.com (see is_allowed_mumcp_url()) before anything is
+	 * written. Mcpwp_Broker_Auth::validate_token() later POSTs the decrypted
+	 * site_credential, Basic-auth-encoded, straight to whatever
+	 * `introspection_endpoint` is on file — without this lock, a spoofed S2S
+	 * enroll-store call (or a confused-deputy broker bug) could park an
+	 * attacker's own endpoint there and have this site hand it the site
+	 * credential plus every bearer token it is ever asked to validate.
+	 *
 	 * The plaintext `site_credential` exists only for the lifetime of this
 	 * request: it is never returned in the response, never passed to
 	 * log_activity() (which would otherwise redact it, but the safest rule is
@@ -338,7 +353,23 @@ class Mcpwp_REST_Broker extends Mcpwp_REST_API {
 		$introspection_endpoint = (string) $request->get_param( 'introspection_endpoint' );
 		$site_credential        = (string) $request->get_param( 'site_credential' );
 
-		if ( '' === $site_id || '' === $audience || '' === $site_credential ) {
+		if ( '' === $site_id || '' === $audience || '' === $introspection_endpoint || '' === $site_credential ) {
+			return $this->success_response( array( 'stored' => false ) );
+		}
+
+		// Host-lock: `issuer` and `introspection_endpoint` are the only two
+		// enrollment fields later used to make an authenticated, credential-
+		// bearing request (Mcpwp_Broker_Auth::validate_token() POSTs the
+		// decrypted site_credential, Basic-auth-encoded, to whatever
+		// `introspection_endpoint` says). A poisoned S2S enroll-store call
+		// with an attacker-controlled `introspection_endpoint` would make this
+		// site exfiltrate its own broker credential (and every bearer token it
+		// is ever asked to validate) to that attacker host on every request.
+		// Both must resolve to the same https://mumcp.com origin the `return`
+		// URL is already locked to — same helper, same rejection shape as
+		// every other malformed-input path here: a clean `{stored:false}`,
+		// nothing written, nothing distinguishing why.
+		if ( ! $this->is_allowed_mumcp_url( $issuer ) || ! $this->is_allowed_mumcp_url( $introspection_endpoint ) ) {
 			return $this->success_response( array( 'stored' => false ) );
 		}
 
@@ -426,22 +457,27 @@ class Mcpwp_REST_Broker extends Mcpwp_REST_API {
 	}
 
 	/**
-	 * Whether a `return` URL is an allowed https://mumcp.com/... address.
+	 * Whether a URL is an allowed https://mumcp.com/... address.
 	 *
+	 * Shared host-lock used for every broker-supplied URL this plugin will
+	 * ever redirect to OR send an authenticated, credential-bearing request
+	 * to: the `return` URL (enroll-callback), and `issuer` /
+	 * `introspection_endpoint` (enroll-store — see handle_enroll_store()).
 	 * Rejects anything else outright — including a host that merely contains
-	 * "mumcp.com" as a substring (e.g. "mumcp.com.evil.com") — so this
-	 * callback can never be used as an open redirect to an attacker-chosen
-	 * destination.
+	 * "mumcp.com" as a substring (e.g. "mumcp.com.evil.com") or userinfo
+	 * tricks (e.g. "https://mumcp.com@evil.com") — so none of these fields
+	 * can ever be turned into an open redirect or, worse, a exfiltration
+	 * target for a decrypted site credential.
 	 *
-	 * @param mixed $return_url Raw return param.
+	 * @param mixed $url Raw URL param.
 	 * @return bool
 	 */
-	private function is_allowed_broker_return_url( $return_url ) {
-		if ( ! is_string( $return_url ) || '' === trim( $return_url ) ) {
+	private function is_allowed_mumcp_url( $url ) {
+		if ( ! is_string( $url ) || '' === trim( $url ) ) {
 			return false;
 		}
 
-		$parts = wp_parse_url( $return_url );
+		$parts = wp_parse_url( $url );
 		if ( empty( $parts['scheme'] ) || empty( $parts['host'] ) ) {
 			return false;
 		}
