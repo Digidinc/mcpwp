@@ -34,6 +34,84 @@ trait Mcpwp_Api_Auth {
 	}
 
 	/**
+	 * Whether a post status is publicly viewable.
+	 *
+	 * Only statuses whose registered status object carries the `public` flag
+	 * count as public — on a stock WordPress install that is exactly the
+	 * built-in `publish` status. Draft, pending, private, future, trash and
+	 * every internal status return false. Unknown or unregistered status
+	 * strings also return false, so ambiguous input is treated as non-public.
+	 *
+	 * Shared gate: every REST controller that reads or renders post bodies
+	 * (site-content, elementor, blocks, pages, posts) uses this together with
+	 * requester_can_see_non_public() so a read-only key can never reach an
+	 * unpublished body through any read surface.
+	 *
+	 * @param string $status Post status slug.
+	 * @return bool True when the status is publicly viewable.
+	 */
+	protected function is_public_status( $status ) {
+		$status_obj = get_post_status_object( (string) $status );
+		return $status_obj && ! empty( $status_obj->public );
+	}
+
+	/**
+	 * Whether the current caller may access non-public content.
+	 *
+	 * Non-public content (draft, pending, private, etc.) is limited to keys
+	 * carrying write scope or higher (write or admin). A read-only key — or a
+	 * request with no matched key record — is treated as unprivileged and sees
+	 * published content only. Trusted in-dashboard admin-AJAX callers (admin
+	 * capability plus a valid nonce) are also allowed, matching the plugin's
+	 * other privileged read gates.
+	 *
+	 * @return bool True when the caller may access non-public content.
+	 */
+	protected function requester_can_see_non_public() {
+		$key_record = $this->get_current_api_key_record();
+		if ( $key_record && $this->key_has_scope( $key_record, 'write' ) ) {
+			return true;
+		}
+
+		return $this->is_trusted_admin_ajax_request();
+	}
+
+	/**
+	 * Status-parity guard for a resolved post on a read surface.
+	 *
+	 * Returns a 404 WP_Error when the post is non-public and the caller lacks
+	 * write scope (or trusted admin-AJAX context); returns null when access is
+	 * allowed. The 404 is intentionally indistinguishable from a genuinely
+	 * missing post so the response never discloses that a hidden draft/pending/
+	 * private post exists. Callers pass the exact not-found message their
+	 * surface already uses so the parity is byte-for-byte.
+	 *
+	 * @param WP_Post|mixed $post    Resolved post object.
+	 * @param string        $message Surface-specific "not found" message.
+	 * @return WP_Error|null WP_Error(404) when blocked, null when allowed.
+	 */
+	protected function guard_non_public_post( $post, $message ) {
+		if ( ! $post instanceof WP_Post ) {
+			return null;
+		}
+
+		if ( $this->is_public_status( $post->post_status ) || $this->requester_can_see_non_public() ) {
+			return null;
+		}
+
+		// Build the 404 inline rather than via $this->error_response() so this
+		// guard has no dependency on the base REST controller — the trait is
+		// also composed into non-controller classes. Mirrors error_response()'s
+		// hint enrichment so the response is identical to a genuine not-found.
+		$error = new WP_Error( 'not_found', $message, array( 'status' => 404 ) );
+		if ( class_exists( 'Mcpwp_Error_Hints' ) ) {
+			$error = Mcpwp_Error_Hints::enhance_error( $error );
+		}
+
+		return $error;
+	}
+
+	/**
 	 * Verify API key from request.
 	 *
 	 * Accepts both current mcpwp_ keys (from mcpwp_api_keys / mcpwp_api_key)

@@ -240,7 +240,19 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 		$this->log_activity( 'get_post', $request );
 
 		$post_id = $request->get_param( 'id' );
-		$result  = $this->posts->get_post( $post_id );
+
+		// Non-public gate: get_post() formats the post regardless of status, so a
+		// read-only key could otherwise read a draft/pending/private body. Return
+		// the same 404 as a missing post so existence is never disclosed.
+		$denied = $this->guard_non_public_post(
+			get_post( absint( $post_id ) ),
+			__( 'Post not found.', 'mcpwp' )
+		);
+		if ( $denied ) {
+			return $denied;
+		}
+
+		$result = $this->posts->get_post( $post_id );
 
 		if ( is_wp_error( $result ) ) {
 			return $result;

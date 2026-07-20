@@ -581,6 +581,18 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 		$this->log_activity( 'get_elementor', $request );
 
 		$page_id = $request->get_param( 'id' );
+
+		// Non-public gate: a read-only key must not reach the full Elementor body
+		// of a draft/pending/private page. Return the same 404 as validate_post()
+		// for a genuinely missing/unsupported post so existence is never disclosed.
+		$denied = $this->guard_non_public_post(
+			get_post( absint( $page_id ) ),
+			__( 'Post not found or unsupported type.', 'mcpwp' )
+		);
+		if ( $denied ) {
+			return $denied;
+		}
+
 		$options = array(
 			'strip_defaults' => (bool) $request->get_param( 'strip_defaults' ),
 			'include_raw'    => (bool) $request->get_param( 'include_raw' ),
@@ -618,7 +630,32 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 			return $this->error_response( 'invalid_ids', __( 'No valid page IDs provided.', 'mcpwp' ), 400 );
 		}
 
+		// Non-public gate for the batch: a read-only key must not receive even a
+		// single draft/pending/private body. Drop the ids the caller can't see
+		// and record them in the errors map with the same message a genuinely
+		// missing id gets, so a hidden draft is indistinguishable from absent.
+		$blocked = array();
+		if ( ! $this->requester_can_see_non_public() ) {
+			$visible = array();
+			foreach ( $page_ids as $pid ) {
+				$post = get_post( absint( $pid ) );
+				if ( $post instanceof WP_Post && ! $this->is_public_status( $post->post_status ) ) {
+					$blocked[ (int) $pid ] = __( 'Post not found or unsupported type.', 'mcpwp' );
+				} else {
+					$visible[] = $pid;
+				}
+			}
+			$page_ids = $visible;
+		}
+
 		$result = $this->elementor->get_elementor_data_bulk( $page_ids );
+
+		if ( ! empty( $blocked ) ) {
+			// Union (+) not array_merge: page IDs are integer keys and array_merge
+			// would renumber them, dropping the id→message mapping.
+			$existing         = isset( $result['errors'] ) && is_array( $result['errors'] ) ? $result['errors'] : array();
+			$result['errors'] = $existing + $blocked;
+		}
 
 		return $this->success_response( $result );
 	}
@@ -633,7 +670,17 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 		$this->log_activity( 'get_elementor_summary', $request );
 
 		$page_id = $request->get_param( 'id' );
-		$result  = $this->elementor->get_elementor_summary( $page_id );
+
+		// Non-public gate — a read-only key must not read a draft's structure/copy.
+		$denied = $this->guard_non_public_post(
+			get_post( absint( $page_id ) ),
+			__( 'Post not found or unsupported type.', 'mcpwp' )
+		);
+		if ( $denied ) {
+			return $denied;
+		}
+
+		$result = $this->elementor->get_elementor_summary( $page_id );
 
 		if ( is_wp_error( $result ) ) {
 			return $result;
@@ -652,8 +699,20 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 		$this->log_activity( 'get_elementor_preview', $request );
 
 		$page_id = $request->get_param( 'id' );
-		$format  = $request->get_param( 'format' ) ? (string) $request->get_param( 'format' ) : 'summary';
-		$result  = $this->elementor->get_rendered_content( $page_id, $format );
+
+		// Non-public gate — get_rendered_content() renders the full body in-process
+		// (reaching unpublished content directly), so a read-only key must be
+		// stopped here before any render happens.
+		$denied = $this->guard_non_public_post(
+			get_post( absint( $page_id ) ),
+			__( 'Post not found or unsupported type.', 'mcpwp' )
+		);
+		if ( $denied ) {
+			return $denied;
+		}
+
+		$format = $request->get_param( 'format' ) ? (string) $request->get_param( 'format' ) : 'summary';
+		$result = $this->elementor->get_rendered_content( $page_id, $format );
 
 		if ( is_wp_error( $result ) ) {
 			return $result;

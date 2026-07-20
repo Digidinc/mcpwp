@@ -188,6 +188,14 @@ class Mcpwp_REST_Blocks extends Mcpwp_REST_API {
 			return $this->error_response( 'not_found', 'Post not found.', 404 );
 		}
 
+		// Non-public gate: get_blocks returns raw_content + parsed blocks for ANY
+		// status, so a read-only key could otherwise read an unpublished body.
+		// Return the same 404 as a missing post so existence is not disclosed.
+		$denied = $this->guard_non_public_post( $post, 'Post not found.' );
+		if ( $denied ) {
+			return $denied;
+		}
+
 		$content = $post->post_content;
 		$blocks  = parse_blocks( $content );
 

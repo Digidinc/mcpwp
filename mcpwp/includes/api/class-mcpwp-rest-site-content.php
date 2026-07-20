@@ -196,43 +196,11 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 		);
 	}
 
-	/**
-	 * Whether a post status is publicly viewable.
-	 *
-	 * Only statuses whose registered status object carries the `public` flag
-	 * count as public — on a stock WordPress install that is exactly the
-	 * built-in `publish` status. Draft, pending, private, future, trash and
-	 * every internal status return false. Unknown or unregistered status
-	 * strings also return false, so ambiguous input is treated as non-public.
-	 *
-	 * @param string $status Post status slug.
-	 * @return bool True when the status is publicly viewable.
-	 */
-	private function is_public_status( $status ) {
-		$status_obj = get_post_status_object( (string) $status );
-		return $status_obj && ! empty( $status_obj->public );
-	}
-
-	/**
-	 * Whether the current caller may access non-public content.
-	 *
-	 * Non-public content (draft, pending, private, etc.) is limited to keys
-	 * carrying write scope or higher (write or admin). A read-only key — or a
-	 * request with no matched key record — is treated as unprivileged and sees
-	 * published content only. Trusted in-dashboard admin-AJAX callers (admin
-	 * capability plus a valid nonce) are also allowed, matching the plugin's
-	 * other privileged read gates.
-	 *
-	 * @return bool True when the caller may access non-public content.
-	 */
-	private function requester_can_see_non_public() {
-		$key_record = $this->get_current_api_key_record();
-		if ( $key_record && $this->key_has_scope( $key_record, 'write' ) ) {
-			return true;
-		}
-
-		return $this->is_trusted_admin_ajax_request();
-	}
+	// is_public_status() and requester_can_see_non_public() were promoted to the
+	// shared Mcpwp_Api_Auth trait (trait-mcpwp-api-auth.php) so every REST
+	// controller that reads or renders post bodies — elementor, blocks, pages,
+	// posts — enforces the same non-public gate. This controller now inherits
+	// them; see the trait for the canonical implementation.
 
 	public function search_content( $request ) {
 		$this->log_activity( 'search_content', $request );

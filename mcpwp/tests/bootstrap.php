@@ -558,7 +558,109 @@ function map_deep($value, $callback)
     return $value;
 }
 
+// ── Minimal $wpdb double ─────────────────────────────────────────────────
+//
+// Most tests never touch $wpdb (the code paths that would are guarded), so it
+// was previously left null. Once ELEMENTOR_VERSION is defined in-process (any
+// Elementor test), Mcpwp_Signals::compute_broken_elementor() stops short-
+// circuiting and runs a real query — so a benign $wpdb that returns no rows
+// keeps that path (and SignalsTest) working regardless of load order.
+if (! isset($GLOBALS['wpdb'])) {
+    class Mcpwp_Test_WPDB
+    {
+        public $prefix   = 'wp_';
+        public $posts    = 'wp_posts';
+        public $postmeta = 'wp_postmeta';
+        public $options  = 'wp_options';
+        public $users    = 'wp_users';
+        public $usermeta = 'wp_usermeta';
+        public $last_error = '';
+        public $insert_id  = 0;
+
+        public function prepare($query, ...$args)
+        {
+            return $query;
+        }
+        public function get_results($query = '', $output = ARRAY_A)
+        {
+            return array();
+        }
+        public function get_row($query = '', $output = OBJECT, $y = 0)
+        {
+            return null;
+        }
+        public function get_var($query = '', $x = 0, $y = 0)
+        {
+            return null;
+        }
+        public function get_col($query = '', $x = 0)
+        {
+            return array();
+        }
+        public function query($query)
+        {
+            return 0;
+        }
+        public function insert($table, $data, $format = null)
+        {
+            return 1;
+        }
+        public function update($table, $data, $where, $f = null, $wf = null)
+        {
+            return 1;
+        }
+        public function delete($table, $where, $where_format = null)
+        {
+            return 1;
+        }
+        public function replace($table, $data, $format = null)
+        {
+            return 1;
+        }
+        public function esc_like($text)
+        {
+            return (string) $text;
+        }
+    }
+
+    if (! defined('ARRAY_A')) {
+        define('ARRAY_A', 'ARRAY_A');
+    }
+    $GLOBALS['wpdb'] = new Mcpwp_Test_WPDB();
+}
+
 // ── Post / meta stubs (controllable via globals) ─────────────────────────
+
+// Minimal WP_Post double. The non-public content gate (guard_non_public_post)
+// keys on `instanceof WP_Post`, which is how production posts arrive, so tests
+// exercising that gate must seed WP_Post instances (not bare stdClass). The
+// array constructor matches the shape RestSiteContentTest already relied on.
+if (! class_exists('WP_Post')) {
+    class WP_Post
+    {
+        public $ID                = 0;
+        public $post_type         = 'post';
+        public $post_title        = '';
+        public $post_name         = '';
+        public $post_status       = 'publish';
+        public $post_content      = '';
+        public $post_excerpt      = '';
+        public $post_date         = '';
+        public $post_date_gmt     = '';
+        public $post_modified     = '';
+        public $post_modified_gmt = '';
+        public $post_parent       = 0;
+        public $menu_order        = 0;
+        public $post_author       = 0;
+
+        public function __construct(array $data = array())
+        {
+            foreach ($data as $key => $value) {
+                $this->{$key} = $value;
+            }
+        }
+    }
+}
 
 $GLOBALS['_mcpwp_test_posts'] = array();
 $GLOBALS['_mcpwp_test_meta']  = array();
@@ -662,6 +764,51 @@ if (! function_exists('get_page_by_path')) {
             }
         }
         return null;
+    }
+}
+
+if (! function_exists('parse_blocks')) {
+    // Minimal: wrap non-empty content as one freeform block; empty → no blocks.
+    function parse_blocks($content)
+    {
+        if ('' === trim((string) $content)) {
+            return array();
+        }
+        return array(
+            array(
+                'blockName'    => null,
+                'attrs'        => array(),
+                'innerHTML'    => (string) $content,
+                'innerBlocks'  => array(),
+                'innerContent' => array( (string) $content ),
+            ),
+        );
+    }
+}
+
+if (! function_exists('get_preview_post_link')) {
+    function get_preview_post_link($post = 0)
+    {
+        $id = is_object($post) ? (int) $post->ID : (int) $post;
+        return 'https://example.com/?p=' . $id . '&preview=true';
+    }
+}
+
+if (! function_exists('wp_get_post_terms')) {
+    function wp_get_post_terms($post_id = 0, $taxonomy = 'post_tag', $args = array())
+    {
+        return array();
+    }
+}
+
+if (! function_exists('wp_trim_words')) {
+    function wp_trim_words($text, $num_words = 55, $more = null)
+    {
+        $words = preg_split('/\s+/', trim((string) $text));
+        if (count($words) <= $num_words) {
+            return (string) $text;
+        }
+        return implode(' ', array_slice($words, 0, $num_words)) . ($more ?? '…');
     }
 }
 
