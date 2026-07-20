@@ -413,6 +413,14 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 			return $this->error_response( 'not_found', 'Post not found.', 404 );
 		}
 
+		// Non-public gate: this surface returns the draft's title/status/meta-
+		// description/heading signals, so a read-only key must be denied with the
+		// same 404 as a missing post before any of those are read.
+		$denied = $this->guard_non_public_post( $post, 'Post not found.' );
+		if ( $denied ) {
+			return $denied;
+		}
+
 		$this->log_activity( 'validate_seo_readiness', $request, array( 'post_id' => $post_id ) );
 
 		$issues       = array();
@@ -588,7 +596,12 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 
 		$post_types     = $this->parse_graph_post_types( (string) $request->get_param( 'post_types' ) );
 		$limit          = min( 50, max( 1, absint( $request->get_param( 'limit' ) ) ) );
-		$include_drafts = rest_sanitize_boolean( $request->get_param( 'include_drafts' ) );
+		// Security clamp: a read-only key must never enumerate draft/private posts
+		// (titles, permalinks, statuses) through the site audit. Only a caller with
+		// write scope (or a trusted admin-AJAX context) may widen beyond public.
+		// This clamps the direct get_posts() below AND the include_drafts flag
+		// handed to build_content_graph_data() / the stored-run metadata.
+		$include_drafts = rest_sanitize_boolean( $request->get_param( 'include_drafts' ) ) && $this->requester_can_see_non_public();
 		$store          = rest_sanitize_boolean( $request->get_param( 'store' ) );
 		$statuses       = $include_drafts ? array( 'publish', 'draft', 'private' ) : array( 'publish' );
 		$posts          = get_posts(
@@ -826,6 +839,10 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 					'post_id'  => $request->get_param( 'post_id' ),
 					'run_id'   => $request->get_param( 'run_id' ),
 					'limit'    => $request->get_param( 'limit' ),
+					// A read-only key must not read stored draft/private issue
+					// titles/urls that a write-key audit run persisted. The model
+					// is fail-closed by default; only a privileged caller reveals.
+					'reveal_non_public' => $this->requester_can_see_non_public(),
 				)
 			)
 		);
@@ -843,6 +860,14 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 
 		if ( ! $post ) {
 			return $this->error_response( 'not_found', 'Post not found.', 404 );
+		}
+
+		// Non-public gate: this surface reads $post->post_content (JSON-LD/microdata)
+		// and returns draft-derived data, so a read-only key must be denied with the
+		// same 404 as a missing post before any body is read.
+		$denied = $this->guard_non_public_post( $post, 'Post not found.' );
+		if ( $denied ) {
+			return $denied;
 		}
 
 		$this->log_activity( 'validate_structured_data', $request, array( 'post_id' => $post_id ) );
@@ -1078,6 +1103,14 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 			return $this->error_response( 'not_found', 'Post not found.', 404 );
 		}
 
+		// Non-public gate: this surface reads $post->post_content (image inventory)
+		// and returns draft-derived data, so a read-only key must be denied with the
+		// same 404 as a missing post before any body is read.
+		$denied = $this->guard_non_public_post( $post, 'Post not found.' );
+		if ( $denied ) {
+			return $denied;
+		}
+
 		$this->log_activity( 'audit_media_seo', $request, array( 'post_id' => $post_id ) );
 
 		$content       = (string) $post->post_content;
@@ -1161,6 +1194,9 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 				'run_id'   => $request->get_param( 'run_id' ),
 				'issue_id' => $request->get_param( 'issue_id' ),
 				'limit'    => $request->get_param( 'limit' ),
+				// A read-only key must not pull draft/private issue titles/urls
+				// into the plan's actions[]. Threaded to the fail-closed model.
+				'reveal_non_public' => $this->requester_can_see_non_public(),
 			)
 		) : array(
 			'schema_version' => '2026-05-20',
@@ -1257,9 +1293,18 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 	public function get_woocommerce_seo_report( $request ) {
 		$this->log_activity( 'get_woocommerce_seo_report', $request );
 
+		// Security clamp: a read-only key must not enumerate draft/private product
+		// titles/SEO through the report. get_report() honors a caller-supplied
+		// status ('any'/'draft'/'private' widen beyond published), so force
+		// 'publish' unless the caller may see non-public content.
+		$status_param = $request->get_param( 'status' );
+		if ( ! $this->requester_can_see_non_public() ) {
+			$status_param = 'publish';
+		}
+
 		$report = class_exists( 'Mcpwp_WooCommerce_SEO' ) ? Mcpwp_WooCommerce_SEO::get_report(
 			array(
-				'status' => $request->get_param( 'status' ),
+				'status' => $status_param,
 				'limit'  => $request->get_param( 'limit' ),
 			)
 		) : array(

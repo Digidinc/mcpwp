@@ -564,6 +564,7 @@ Config stored per-provider in `mcpwp_integrations` wp_option (encrypted). Manage
 | `mcpwp_version_url` | Update check URL (→ mumega.com manifest) |
 | `mcpwp_site_uuid` | Anonymous site UUID for analytics (`mcpwp-<uuid4>`) |
 | `mcpwp_first_activation` | Initial activation timestamp |
+| `mcpwp_approvals_identity_migrated` | One-time flag: on upgrade, purge identity-less pending/approved approvals so a reconnected OAuth principal can't self-approve a pre-fix request |
 
 ## WP Hooks
 

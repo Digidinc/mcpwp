@@ -443,7 +443,7 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 		$scope_string   = (string) $request->get_param( 'scope' );
 		$scopes         = $this->parse_oauth_scope_string( $scope_string );
 		$oauth_settings = $this->get_oauth_settings();
-		$token_data     = $this->issue_oauth_access_token( $scopes, $oauth_settings['oauth_token_ttl'] );
+		$token_data     = $this->issue_oauth_access_token( $scopes, $oauth_settings['oauth_token_ttl'], array( 'client_id' => $client_id ) );
 
 		return new WP_REST_Response( $token_data, 200 );
 	}
@@ -810,7 +810,7 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 	 * @return array Token response payload including refresh_token.
 	 */
 	private function issue_oauth_access_token_with_user( $scopes, $ttl, $user_id ) {
-		$token_response = $this->issue_oauth_access_token( $scopes, $ttl );
+		$token_response = $this->issue_oauth_access_token( $scopes, $ttl, array( 'user_id' => (int) $user_id ) );
 
 		// Issue a refresh token (separate, longer-lived transient).
 		// Refresh TTL = 30 days max or 10x access TTL, whichever is smaller.

@@ -178,6 +178,19 @@ trait Mcpwp_Sanitization {
 			$sanitized['_mcpwp_fields'] = array_map( 'sanitize_key', explode( ',', (string) $args['fields'] ) );
 		}
 
+		// Security clamp: a caller without non-public privilege (read-only key)
+		// may only ever enumerate published content. Force post_status='publish'
+		// here — the single choke point every list surface built on
+		// sanitize_query_args() flows through (pages, posts, Elementor Pro custom
+		// code). This overrides BOTH a caller-supplied draft/private/pending/any
+		// status AND any non-public model default (the pages model defaults to
+		// 'any'), so no such list can leak unpublished titles, URLs, or bodies to
+		// an unprivileged key. Write/admin keys and trusted admin-AJAX are
+		// unaffected and keep their requested (or default) status set.
+		if ( ! ( method_exists( $this, 'requester_can_see_non_public' ) && $this->requester_can_see_non_public() ) ) {
+			$sanitized['post_status'] = 'publish';
+		}
+
 		return $sanitized;
 	}
 

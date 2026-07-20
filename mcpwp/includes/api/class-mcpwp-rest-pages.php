@@ -262,7 +262,19 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 		$this->log_activity( 'get_page', $request );
 
 		$page_id = $request->get_param( 'id' );
-		$result  = $this->pages->get_page( $page_id );
+
+		// Non-public gate: get_page() formats the post regardless of status, so a
+		// read-only key could otherwise read a draft/pending/private body. Return
+		// the same 404 as a missing page so existence is never disclosed.
+		$denied = $this->guard_non_public_post(
+			get_post( absint( $page_id ) ),
+			__( 'Page not found.', 'mcpwp' )
+		);
+		if ( $denied ) {
+			return $denied;
+		}
+
+		$result = $this->pages->get_page( $page_id );
 
 		if ( is_wp_error( $result ) ) {
 			return $result;
@@ -479,6 +491,13 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 				404,
 				array( 'id' => $slug )
 			);
+		}
+
+		// Non-public gate: WordPress's get_page_by_path() resolves non-public
+		// statuses too, so a read-only key must not read a draft body via slug.
+		$denied = $this->guard_non_public_post( $page, __( 'Page not found.', 'mcpwp' ) );
+		if ( $denied ) {
+			return $denied;
 		}
 
 		$result = $this->pages->get_page( $page->ID );

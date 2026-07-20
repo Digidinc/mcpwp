@@ -24,17 +24,24 @@ class Mcpwp_Site_State {
 		$args = wp_parse_args(
 			is_array( $args ) ? $args : array(),
 			array(
-				'graph_limit'     => 100,
-				'event_limit'     => 20,
-				'include_drafts'  => false,
-				'include_plugins' => false,
+				'graph_limit'       => 100,
+				'event_limit'       => 20,
+				'include_drafts'    => false,
+				'include_plugins'   => false,
+				'reveal_non_public' => false,
 			)
 		);
 
+		// Fail-closed: the approval and SEO summaries embed source-derived
+		// title/url/status/excerpt fields, so they are redacted unless the REST
+		// handler proved the caller may see non-public content. Defaults to false
+		// so any caller that forgets to pass it (e.g. content-coherence) stays safe.
+		$reveal_non_public = ! empty( $args['reveal_non_public'] );
+
 		$content_counts = self::get_content_counts();
 		$graph          = self::get_graph_summary( (int) $args['graph_limit'], ! empty( $args['include_drafts'] ) );
-		$approvals      = self::get_approval_summary();
-		$seo            = self::get_seo_summary();
+		$approvals      = self::get_approval_summary( $reveal_non_public );
+		$seo            = self::get_seo_summary( $reveal_non_public );
 		$event_result   = class_exists( 'Mcpwp_Event_Store' )
 			? Mcpwp_Event_Store::list_events( array( 'limit' => min( 50, max( 1, absint( $args['event_limit'] ) ) ) ) )
 			: array( 'events' => array(), 'total' => 0 );
@@ -185,9 +192,11 @@ class Mcpwp_Site_State {
 	/**
 	 * Approval state summary.
 	 *
+	 * @param bool $reveal_non_public When true, embed full source fields; when
+	 *                                false (default) non-public sources are redacted.
 	 * @return array
 	 */
-	private static function get_approval_summary() {
+	private static function get_approval_summary( $reveal_non_public = false ) {
 		$counts = array(
 			'pending'     => 0,
 			'approved'    => 0,
@@ -195,7 +204,7 @@ class Mcpwp_Site_State {
 			'rejected'    => 0,
 			'rolled_back' => 0,
 		);
-		$items  = class_exists( 'Mcpwp_Approvals' ) ? Mcpwp_Approvals::list_requests( '', 100 ) : array();
+		$items  = class_exists( 'Mcpwp_Approvals' ) ? Mcpwp_Approvals::list_requests( '', 100, $reveal_non_public ) : array();
 
 		foreach ( $items as $item ) {
 			$status = isset( $item['status'] ) ? sanitize_key( (string) $item['status'] ) : '';
@@ -206,8 +215,8 @@ class Mcpwp_Site_State {
 
 		return array(
 			'counts'         => $counts,
-			'pending_items'  => class_exists( 'Mcpwp_Approvals' ) ? Mcpwp_Approvals::list_requests( 'pending', 5 ) : array(),
-			'approved_items' => class_exists( 'Mcpwp_Approvals' ) ? Mcpwp_Approvals::list_requests( 'approved', 5 ) : array(),
+			'pending_items'  => class_exists( 'Mcpwp_Approvals' ) ? Mcpwp_Approvals::list_requests( 'pending', 5, $reveal_non_public ) : array(),
+			'approved_items' => class_exists( 'Mcpwp_Approvals' ) ? Mcpwp_Approvals::list_requests( 'approved', 5, $reveal_non_public ) : array(),
 			'rollback_ready' => array_slice(
 				array_values(
 					array_filter(
@@ -226,9 +235,11 @@ class Mcpwp_Site_State {
 	/**
 	 * Stored SEO issue summary.
 	 *
+	 * @param bool $reveal_non_public When true, include non-public issues; when
+	 *                                false (default) they are excluded.
 	 * @return array
 	 */
-	private static function get_seo_summary() {
+	private static function get_seo_summary( $reveal_non_public = false ) {
 		if ( ! class_exists( 'Mcpwp_SEO_Audit_Store' ) ) {
 			return array(
 				'summary'    => array( 'total' => 0, 'open' => 0, 'resolved' => 0, 'error' => 0, 'warning' => 0, 'info' => 0 ),
@@ -236,7 +247,7 @@ class Mcpwp_Site_State {
 			);
 		}
 
-		$issues = Mcpwp_SEO_Audit_Store::list_issues( array( 'limit' => 8 ) );
+		$issues = Mcpwp_SEO_Audit_Store::list_issues( array( 'limit' => 8, 'reveal_non_public' => $reveal_non_public ) );
 
 		return array(
 			'summary'    => isset( $issues['summary'] ) && is_array( $issues['summary'] ) ? $issues['summary'] : array(),

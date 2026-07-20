@@ -86,12 +86,18 @@ class Mcpwp_REST_Approvals extends Mcpwp_REST_API {
 	public function list_approvals( $request ) {
 		$this->log_activity( 'list_approvals', $request );
 
+		// Read-only keys must not harvest draft/private source bodies that a
+		// privileged key queued for review. The redaction now lives inside
+		// list_requests() (fail-closed chokepoint); we only prove privilege here.
+		$approvals = Mcpwp_Approvals::list_requests(
+			(string) $request->get_param( 'status' ),
+			(int) $request->get_param( 'limit' ),
+			$this->requester_can_see_non_public()
+		);
+
 		return $this->success_response(
 			array(
-				'approvals' => Mcpwp_Approvals::list_requests(
-					(string) $request->get_param( 'status' ),
-					(int) $request->get_param( 'limit' )
-				),
+				'approvals' => $approvals,
 			)
 		);
 	}
@@ -106,6 +112,10 @@ class Mcpwp_REST_Approvals extends Mcpwp_REST_API {
 		$result = Mcpwp_Approvals::get_request( $request->get_param( 'id' ) );
 		if ( is_wp_error( $result ) ) {
 			return $result;
+		}
+
+		if ( ! $this->requester_can_see_non_public() ) {
+			$result = Mcpwp_Approvals::redact_source_for_unprivileged( $result );
 		}
 
 		$this->log_activity( 'get_approval', $request, array( 'approval_id' => $result['id'] ) );
@@ -187,9 +197,32 @@ class Mcpwp_REST_Approvals extends Mcpwp_REST_API {
 	private function check_self_approval( $approval_id ) {
 		$key_record = $this->get_current_api_key_record();
 
-		// No key record means we are in an admin-AJAX trusted context — no restriction.
+		// A missing/id-less key record must map to the genuine admin-AJAX human
+		// context (a logged-in admin acting through the chat UI) — the ONLY
+		// authenticated path that produces no key record. Every remote principal
+		// now carries an id (scoped API keys and OAuth tokens alike), so any
+		// other id-less caller is treated as forbidden rather than trusted.
+		// Previously this returned true unconditionally, which let an OAuth token
+		// (which carried no id) both create and approve/apply its own request,
+		// defeating the two-person rule on push-to-live.
 		if ( ! $key_record || empty( $key_record['id'] ) ) {
-			return true;
+			if ( $this->is_trusted_admin_ajax_request() ) {
+				return true;
+			}
+			return new WP_Error(
+				'self_approval_forbidden',
+				__( 'This request cannot be approved by an unidentified caller. Use a different admin key or approve via WordPress admin.', 'mcpwp' ),
+				array( 'status' => 403 )
+			);
+		}
+
+		// A weak-identity OAuth principal (legacy/bridge token identified only by
+		// a token-hash fallback) must not approve either: its id is not stable
+		// across a refresh, so it cannot be reliably matched against the
+		// requester. Force a reconnect to a stably-identified session.
+		$identity_guard = $this->guard_stable_identity_for_approvals();
+		if ( is_wp_error( $identity_guard ) ) {
+			return $identity_guard;
 		}
 
 		$current_key_id = (string) $key_record['id'];

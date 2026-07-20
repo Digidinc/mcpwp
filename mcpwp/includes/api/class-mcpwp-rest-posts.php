@@ -240,7 +240,19 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 		$this->log_activity( 'get_post', $request );
 
 		$post_id = $request->get_param( 'id' );
-		$result  = $this->posts->get_post( $post_id );
+
+		// Non-public gate: get_post() formats the post regardless of status, so a
+		// read-only key could otherwise read a draft/pending/private body. Return
+		// the same 404 as a missing post so existence is never disclosed.
+		$denied = $this->guard_non_public_post(
+			get_post( absint( $post_id ) ),
+			__( 'Post not found.', 'mcpwp' )
+		);
+		if ( $denied ) {
+			return $denied;
+		}
+
+		$result = $this->posts->get_post( $post_id );
 
 		if ( is_wp_error( $result ) ) {
 			return $result;
@@ -486,6 +498,22 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 	 */
 	public function list_drafts( $request ) {
 		$this->log_activity( 'list_drafts', $request );
+
+		// Non-public gate: /drafts enumerates every draft's title, author, dates and
+		// edit URL — all unpublished. A read-only key must never see them. Mirror the
+		// search_content clamp-and-report pattern: return an empty list (not a 403)
+		// with status_downgraded=true, rather than disclosing unpublished content.
+		if ( ! $this->requester_can_see_non_public() ) {
+			return $this->success_response(
+				array(
+					'drafts'            => array(),
+					'total'             => 0,
+					'posts'             => 0,
+					'pages'             => 0,
+					'status_downgraded' => true,
+				)
+			);
+		}
 
 		$args = array(
 			'type' => $request->get_param( 'type' ),

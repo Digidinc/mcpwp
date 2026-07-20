@@ -11,6 +11,10 @@
  * @package SitePilotAI\Tests
  */
 
+// The controller under test is not loaded by the shared bootstrap; require it
+// directly so this test is independent of file execution order.
+require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-site-content.php';
+
 class RenderedCopyDraftTest extends PHPUnit\Framework\TestCase {
 
 	private const DRAFT_ID = 5777;
@@ -18,6 +22,17 @@ class RenderedCopyDraftTest extends PHPUnit\Framework\TestCase {
 	protected function setUp(): void {
 		$GLOBALS['_mcpwp_test_posts'] = array();
 		$GLOBALS['_mcpwp_test_meta']  = array();
+
+		// The in-process draft render is gated behind write scope (a read-only
+		// key must never reach an unpublished body — see the trait's
+		// requester_can_see_non_public() and RestSiteContentTest). Reset the
+		// option/user globals the key-minting + auth path reads so call_copy()
+		// can mint and verify a write-scoped key cleanly, matching the
+		// "authenticated agent" the #675 feature is written for.
+		$GLOBALS['mcpwp_test_options']      = array();
+		$GLOBALS['mcpwp_test_transients']   = array();
+		$GLOBALS['mcpwp_test_current_user'] = 0;
+		$GLOBALS['mcpwp_test_is_admin']     = false;
 	}
 
 	private function seed_draft( string $content ): void {
@@ -33,7 +48,20 @@ class RenderedCopyDraftTest extends PHPUnit\Framework\TestCase {
 
 	private function call_copy() {
 		$controller = new Mcpwp_REST_Site_Content();
-		$request    = new WP_REST_Request( 'GET', '/mcpwp/v1/rendered-copy', array( 'id' => self::DRAFT_ID ) );
+
+		// Mint + authenticate a write-scoped key so the request carries the
+		// privilege the draft render requires. verify_api_key() populates the
+		// controller's current_api_key_record, which requester_can_see_non_public()
+		// reads to allow unpublished content through.
+		$created = $controller->create_scoped_api_key( 'test key', array( 'write' ), 'custom' );
+		$request = new WP_REST_Request(
+			'GET',
+			'/mcpwp/v1/rendered-copy',
+			array( 'id' => self::DRAFT_ID ),
+			array( 'X-API-Key' => $created['key'] )
+		);
+		$this->assertTrue( $controller->verify_api_key( $request ), 'verify_api_key should succeed for a valid write-scoped key.' );
+
 		return $controller->get_rendered_copy( $request );
 	}
 

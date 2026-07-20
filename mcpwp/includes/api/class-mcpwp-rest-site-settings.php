@@ -761,7 +761,8 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 
 			$url = esc_url_raw( $params['url'] );
 
-			// SSRF protection: block internal/private URLs.
+			// SSRF protection: block internal/private URLs (re-checked on every
+			// redirect hop by safe_download_url() below).
 			if ( class_exists( 'Mcpwp_Security' ) ) {
 				$ssrf_check = Mcpwp_Security::validate_external_url( $url );
 				if ( is_wp_error( $ssrf_check ) ) {
@@ -769,8 +770,11 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 				}
 			}
 
-			// Download and sideload the image
-			$tmp = download_url( $url );
+			// Download and sideload the image via the SSRF-guarded downloader so a
+			// redirect cannot bypass the check above.
+			$tmp = class_exists( 'Mcpwp_Security' )
+				? Mcpwp_Security::safe_download_url( $url )
+				: download_url( $url );
 
 			if ( is_wp_error( $tmp ) ) {
 				return $this->error_response(

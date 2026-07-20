@@ -86,6 +86,107 @@ class Mcpwp_Security {
 	}
 
 	/**
+	 * Download a remote file with SSRF protection across every redirect hop.
+	 *
+	 * WordPress core `download_url()` validates nothing and follows up to 5
+	 * redirects via `wp_remote_get` (not `wp_safe_remote_get`), so an initially
+	 * "public" URL can 30x-redirect to 169.254.169.254 (cloud metadata) or an
+	 * internal host and be fetched anyway. This helper disables automatic
+	 * redirects and re-runs `validate_external_url()` on the initial URL and on
+	 * every `Location` target before following it, then writes the final 2xx
+	 * body to a temp file (mirroring `download_url()`'s return contract).
+	 *
+	 * @param string $url     URL to download.
+	 * @param int    $timeout Request timeout in seconds.
+	 * @return string|WP_Error Temp file path on success, WP_Error otherwise.
+	 */
+	public static function safe_download_url( $url, $timeout = 300 ) {
+		if ( ! function_exists( 'wp_tempnam' ) && defined( 'ABSPATH' ) && file_exists( ABSPATH . 'wp-admin/includes/file.php' ) ) {
+			require_once ABSPATH . 'wp-admin/includes/file.php';
+		}
+
+		$max_redirects = 5;
+		$current       = (string) $url;
+
+		for ( $hop = 0; $hop <= $max_redirects; $hop++ ) {
+			$check = self::validate_external_url( $current );
+			if ( is_wp_error( $check ) ) {
+				return $check;
+			}
+
+			$tmp = wp_tempnam( $current );
+			if ( ! $tmp ) {
+				return new WP_Error( 'download_error', __( 'Could not create a temporary file.', 'mcpwp' ), array( 'status' => 500 ) );
+			}
+
+			// Stream the body straight to disk (stream + filename) instead of
+			// buffering the whole response in memory — a large/unbounded body
+			// from a public URL must not exhaust the PHP worker. Use
+			// wp_safe_remote_get so WordPress's own outbound-request policy
+			// (reject_unsafe_urls: port allowlist + private-host checks) applies
+			// on top of validate_external_url() on every hop. Automatic redirects
+			// stay OFF so each hop is re-validated above before it is ever fetched.
+			$response = wp_safe_remote_get(
+				$current,
+				array(
+					'timeout'     => $timeout,
+					'redirection' => 0,
+					'stream'      => true,
+					'filename'    => $tmp,
+				)
+			);
+			if ( is_wp_error( $response ) ) {
+				wp_delete_file( $tmp );
+				return $response;
+			}
+
+			$code = (int) wp_remote_retrieve_response_code( $response );
+
+			if ( $code >= 300 && $code < 400 ) {
+				$location = wp_remote_retrieve_header( $response, 'location' );
+				wp_delete_file( $tmp );
+				if ( empty( $location ) ) {
+					return new WP_Error( 'download_error', __( 'Redirect response had no Location header.', 'mcpwp' ), array( 'status' => 400 ) );
+				}
+				// Resolve relative redirects against the current URL, then loop
+				// so the target is re-validated before it is ever fetched.
+				$current = class_exists( 'WP_Http' ) ? WP_Http::make_absolute_url( $location, $current ) : (string) $location;
+				continue;
+			}
+
+			if ( $code < 200 || $code >= 300 ) {
+				wp_delete_file( $tmp );
+				return new WP_Error(
+					'download_error',
+					sprintf(
+						/* translators: %d: HTTP status code */
+						__( 'Remote server returned HTTP %d.', 'mcpwp' ),
+						$code
+					),
+					array( 'status' => 400 )
+				);
+			}
+
+			// Parity with core download_url(): when the server advertises a
+			// Content-MD5, reject a corrupted/truncated body instead of importing
+			// it. verify_file_md5() lives in wp-admin/includes/file.php (already
+			// required above for wp_tempnam()).
+			$content_md5 = wp_remote_retrieve_header( $response, 'content-md5' );
+			if ( ! empty( $content_md5 ) && function_exists( 'verify_file_md5' ) ) {
+				$verified = verify_file_md5( $tmp, $content_md5 );
+				if ( is_wp_error( $verified ) ) {
+					wp_delete_file( $tmp );
+					return $verified;
+				}
+			}
+
+			return $tmp;
+		}
+
+		return new WP_Error( 'too_many_redirects', __( 'The URL exceeded the maximum number of redirects.', 'mcpwp' ), array( 'status' => 400 ) );
+	}
+
+	/**
 	 * Check whether a URL uses the HTTPS scheme.
 	 *
 	 * @param string $url URL to check.

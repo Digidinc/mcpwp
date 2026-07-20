@@ -294,6 +294,14 @@ class Mcpwp_REST_Staging extends Mcpwp_REST_API {
 		$id  = $this->generate_approval_id();
 		$now = gmdate( 'c' );
 
+		// An unstable-identity OAuth token (legacy/bridge, no user_id) must not
+		// open a push-to-live request: it could later be approved by its own
+		// refreshed token under a different id, defeating separation of duties.
+		$identity_guard = $this->guard_stable_identity_for_approvals();
+		if ( is_wp_error( $identity_guard ) ) {
+			return $identity_guard;
+		}
+
 		// Capture the requesting key's identity so the approve/apply path can
 		// enforce separation of duties (same key cannot both request and approve).
 		$key_record   = $this->get_current_api_key_record();

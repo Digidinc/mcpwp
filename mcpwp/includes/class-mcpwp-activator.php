@@ -69,11 +69,62 @@ class Mcpwp_Activator {
 		// Ensure periodic log cleanup is scheduled.
 		self::schedule_log_cleanup();
 
+		// One-time: purge identity-less pending approvals (see method docblock).
+		self::migrate_identity_less_approvals();
+
 		// Set version
 		update_option( 'mcpwp_version', MCPWP_VERSION );
 
 		// Flush rewrite rules
 		flush_rewrite_rules();
+	}
+
+	/**
+	 * One-time purge of pending approvals that carry no requester identity.
+	 *
+	 * Before per-request identity stamping, an approval created through an OAuth
+	 * connector was stored with an empty `requested_by_key_id`. After the fix,
+	 * that grant reconnects as a stably-identified principal that would sail
+	 * through the `empty( requested_by_key_id )` branch of check_self_approval()
+	 * and approve/apply the very request it created — reopening the self-approval
+	 * bypass for records that predate the fix. Unlike the token case this never
+	 * self-heals, because a pending approval persists until actioned.
+	 *
+	 * The safe, non-runtime-semantic remediation is to drop those unattributed
+	 * still-actionable records at upgrade so they must be recreated with proper
+	 * attribution. Gated by a flag so it runs once (a later upgrade must not keep
+	 * deleting legitimate admin-created empty-requester approvals). Both PENDING
+	 * and APPROVED (approved-but-not-yet-applied) records are exploitable — the
+	 * approve and apply paths both run check_self_approval(), and the old bypass
+	 * could have already self-approved a request, so purging pending alone would
+	 * leave an approved record applyable. Terminal records (applied, rejected,
+	 * rolled_back) are left untouched — they can't be re-actioned.
+	 */
+	public static function migrate_identity_less_approvals() {
+		if ( get_option( 'mcpwp_approvals_identity_migrated' ) ) {
+			return;
+		}
+
+		$option_name    = class_exists( 'Mcpwp_Approvals' ) ? Mcpwp_Approvals::OPTION_NAME : 'mcpwp_approval_requests';
+		$items          = get_option( $option_name, array() );
+		$actionable     = array( 'pending', 'approved' );
+
+		if ( is_array( $items ) && ! empty( $items ) ) {
+			$changed = false;
+			foreach ( $items as $id => $record ) {
+				$status    = is_array( $record ) && isset( $record['status'] ) ? (string) $record['status'] : '';
+				$requester = is_array( $record ) && isset( $record['requested_by_key_id'] ) ? (string) $record['requested_by_key_id'] : '';
+				if ( in_array( $status, $actionable, true ) && '' === $requester ) {
+					unset( $items[ $id ] );
+					$changed = true;
+				}
+			}
+			if ( $changed ) {
+				update_option( $option_name, $items, false );
+			}
+		}
+
+		update_option( 'mcpwp_approvals_identity_migrated', 1, false );
 	}
 
 	/**

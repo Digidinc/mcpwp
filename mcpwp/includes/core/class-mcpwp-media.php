@@ -124,7 +124,9 @@ class Mcpwp_Media {
 			);
 		}
 
-		// SSRF protection: block internal/private URLs.
+		// SSRF protection: block internal/private URLs — validated here for an
+		// early, clear error, and again on every redirect hop inside
+		// safe_download_url() so a 30x to an internal IP can't slip past.
 		if ( class_exists( 'Mcpwp_Security' ) ) {
 			$ssrf_check = Mcpwp_Security::validate_external_url( $url );
 			if ( is_wp_error( $ssrf_check ) ) {
@@ -132,8 +134,12 @@ class Mcpwp_Media {
 			}
 		}
 
-		// Download the file
-		$tmp = download_url( $url );
+		// Download the file. Use the SSRF-guarded downloader (not core
+		// download_url(), which follows redirects with no re-validation) so a
+		// public URL cannot redirect into the private network.
+		$tmp = class_exists( 'Mcpwp_Security' )
+			? Mcpwp_Security::safe_download_url( $url )
+			: download_url( $url );
 
 		if ( is_wp_error( $tmp ) ) {
 			return new WP_Error(
@@ -141,7 +147,7 @@ class Mcpwp_Media {
 				$tmp->get_error_message(),
 				array(
 					'status' => 400,
-					'hint'   => 'Failed to download the file from the URL. Check that the URL is publicly accessible and returns a valid file. Supported formats: jpg, png, gif, webp, svg, pdf.',
+					'hint'   => 'Failed to download the file from the URL. Check that the URL is publicly accessible and returns a valid file. Supported formats: jpg, png, gif, webp, pdf. (SVG is not accepted — stored-XSS risk.)',
 				)
 			);
 		}
@@ -159,6 +165,23 @@ class Mcpwp_Media {
 			if ( $ext ) {
 				$file_array['name'] .= '.' . $ext;
 			}
+		}
+
+		// Block SVG, same as the base64 path — an SVG can carry <script> (stored
+		// XSS) and WordPress ships no sanitizer. Check both the detected content
+		// type and the resolved filename so a mislabeled URL can't slip through.
+		$detected_mime = function_exists( 'mime_content_type' ) ? mime_content_type( $tmp ) : '';
+		if ( 'image/svg+xml' === $detected_mime || '.svg' === substr( strtolower( $file_array['name'] ), -4 ) ) {
+			wp_delete_file( $tmp );
+			return new WP_Error(
+				'svg_not_allowed',
+				__( 'SVG uploads are blocked (SVGs can contain <script> tags — stored XSS risk). Use PNG or WebP instead. To allow SVGs, install an SVG sanitizer plugin (e.g. "Safe SVG") and upload via the WordPress media library directly.', 'mcpwp' ),
+				array(
+					'status'       => 400,
+					'hint'         => 'Convert the SVG to PNG/WebP for API upload. Inline SVG code can be embedded directly in HTML widgets without uploading.',
+					'alternatives' => array( 'png', 'webp', 'jpg' ),
+				)
+			);
 		}
 
 		// Upload
@@ -295,7 +318,7 @@ class Mcpwp_Media {
 
 		// Block SVG uploads — SVGs can contain <script> tags (stored XSS).
 		// WordPress does not ship an SVG sanitizer; block at the API layer.
-		if ( 'image/svg+xml' === $mime['type'] || str_ends_with( strtolower( $filename ), '.svg' ) ) {
+		if ( 'image/svg+xml' === $mime['type'] || '.svg' === substr( strtolower( $filename ), -4 ) ) {
 			wp_delete_file( $tmp_file );
 			return new WP_Error(
 				'svg_not_allowed',

@@ -453,29 +453,42 @@ class Mcpwp_Webhooks {
 
 		$start_time = microtime( true );
 
-		$response = wp_remote_post(
-			$webhook['url'],
-			array(
-				'timeout'     => 15,
-				'redirection' => 0, // Disable redirects to prevent SSRF via redirect chains.
-				'httpversion' => '1.1',
-				'blocking'    => true,
-				'sslverify'   => true,
-				'headers'     => array(
-					'Content-Type'           => 'application/json',
-					// X-SPAI-* kept for backward-compat; remove in a future major.
-					'X-SPAI-Event'           => $event,
-					'X-SPAI-Signature'       => $signature,
-					'X-SPAI-Webhook-ID'      => $webhook['id'],
-					'X-SPAI-Delivery-ID'     => wp_generate_uuid4(),
-					// X-MCPWP-* aliases (new canonical names).
-					'X-MCPWP-Event'          => $event,
-					'X-MCPWP-Signature'      => $signature,
-					'X-MCPWP-Webhook-ID'     => $webhook['id'],
-				),
-				'body'        => $body,
-			)
-		);
+		// Re-validate the target at send time. register/update/test already run
+		// validate_external_url, and redirection=0 blocks redirect-based SSRF, but
+		// a webhook registered against a short-TTL host can DNS-rebind to an
+		// internal/reserved address between registration and this delivery. Fail
+		// closed and record it through the normal delivery-logging path below.
+		$ssrf_check = class_exists( 'Mcpwp_Security' )
+			? Mcpwp_Security::validate_external_url( $webhook['url'] )
+			: true;
+
+		if ( is_wp_error( $ssrf_check ) ) {
+			$response = $ssrf_check;
+		} else {
+			$response = wp_remote_post(
+				$webhook['url'],
+				array(
+					'timeout'     => 15,
+					'redirection' => 0, // Disable redirects to prevent SSRF via redirect chains.
+					'httpversion' => '1.1',
+					'blocking'    => true,
+					'sslverify'   => true,
+					'headers'     => array(
+						'Content-Type'           => 'application/json',
+						// X-SPAI-* kept for backward-compat; remove in a future major.
+						'X-SPAI-Event'           => $event,
+						'X-SPAI-Signature'       => $signature,
+						'X-SPAI-Webhook-ID'      => $webhook['id'],
+						'X-SPAI-Delivery-ID'     => wp_generate_uuid4(),
+						// X-MCPWP-* aliases (new canonical names).
+						'X-MCPWP-Event'          => $event,
+						'X-MCPWP-Signature'      => $signature,
+						'X-MCPWP-Webhook-ID'     => $webhook['id'],
+					),
+					'body'        => $body,
+				)
+			);
+		}
 
 		$duration = microtime( true ) - $start_time;
 

@@ -1287,6 +1287,25 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			: null;
 
 		if ( $is_callback ) {
+			// Callback tools run in-process and skip the rest_do_request()
+			// re-dispatch that re-checks the underlying route's scope, so the only
+			// gate is the tool-name-derived scope — which defaults to read unless
+			// the name carries a write verb. Enforce a write floor: an extension
+			// callback (arbitrary code) must not be reachable by a read-only key
+			// just because its name lacks a write-verb prefix. Authors can still
+			// raise the requirement to admin via mcpwp_required_scope_for_tool.
+			// A null key record is the trusted admin-AJAX context and is exempt,
+			// consistent with the other gates in this method.
+			if ( $key_record && ! $this->key_has_scope( $key_record, 'write' ) ) {
+				$this->fire_tool_called( $tool_name, $start, 'scope_denied' );
+				return $this->jsonrpc_error(
+					$id,
+					-32003,
+					sprintf( 'Tool "%s" requires at least write scope.', $tool_name ),
+					array( 'hint' => 'Custom callback tools mutate state and require a write- or admin-scoped API key.' )
+				);
+			}
+
 			$full_route = 'callback:' . $tool_name;
 			$response   = $this->normalize_custom_tool_callback_response(
 				call_user_func( $mapping['callback'], $arguments )

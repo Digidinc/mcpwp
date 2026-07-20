@@ -454,6 +454,37 @@ function get_site_url()
     return 'https://example.com';
 }
 
+if (! function_exists('home_url')) {
+    function home_url($path = '', $scheme = null)
+    {
+        return 'https://example.com' . ('' !== (string) $path ? '/' . ltrim((string) $path, '/') : '');
+    }
+}
+
+if (! function_exists('get_nav_menu_locations')) {
+    function get_nav_menu_locations()
+    {
+        return array();
+    }
+}
+
+if (! function_exists('wp_list_pluck')) {
+    function wp_list_pluck($list, $field, $index_key = null)
+    {
+        $out = array();
+        foreach ((array) $list as $key => $item) {
+            $value = is_object($item) ? ($item->{$field} ?? null) : ($item[$field] ?? null);
+            if (null === $index_key) {
+                $out[] = $value;
+            } else {
+                $idx       = is_object($item) ? ($item->{$index_key} ?? null) : ($item[$index_key] ?? null);
+                $out[$idx] = $value;
+            }
+        }
+        return $out;
+    }
+}
+
 function rest_url($path = '')
 {
     return 'https://example.com/wp-json/' . ltrim($path, '/');
@@ -558,7 +589,109 @@ function map_deep($value, $callback)
     return $value;
 }
 
+// ── Minimal $wpdb double ─────────────────────────────────────────────────
+//
+// Most tests never touch $wpdb (the code paths that would are guarded), so it
+// was previously left null. Once ELEMENTOR_VERSION is defined in-process (any
+// Elementor test), Mcpwp_Signals::compute_broken_elementor() stops short-
+// circuiting and runs a real query — so a benign $wpdb that returns no rows
+// keeps that path (and SignalsTest) working regardless of load order.
+if (! isset($GLOBALS['wpdb'])) {
+    class Mcpwp_Test_WPDB
+    {
+        public $prefix   = 'wp_';
+        public $posts    = 'wp_posts';
+        public $postmeta = 'wp_postmeta';
+        public $options  = 'wp_options';
+        public $users    = 'wp_users';
+        public $usermeta = 'wp_usermeta';
+        public $last_error = '';
+        public $insert_id  = 0;
+
+        public function prepare($query, ...$args)
+        {
+            return $query;
+        }
+        public function get_results($query = '', $output = ARRAY_A)
+        {
+            return array();
+        }
+        public function get_row($query = '', $output = OBJECT, $y = 0)
+        {
+            return null;
+        }
+        public function get_var($query = '', $x = 0, $y = 0)
+        {
+            return null;
+        }
+        public function get_col($query = '', $x = 0)
+        {
+            return array();
+        }
+        public function query($query)
+        {
+            return 0;
+        }
+        public function insert($table, $data, $format = null)
+        {
+            return 1;
+        }
+        public function update($table, $data, $where, $f = null, $wf = null)
+        {
+            return 1;
+        }
+        public function delete($table, $where, $where_format = null)
+        {
+            return 1;
+        }
+        public function replace($table, $data, $format = null)
+        {
+            return 1;
+        }
+        public function esc_like($text)
+        {
+            return (string) $text;
+        }
+    }
+
+    if (! defined('ARRAY_A')) {
+        define('ARRAY_A', 'ARRAY_A');
+    }
+    $GLOBALS['wpdb'] = new Mcpwp_Test_WPDB();
+}
+
 // ── Post / meta stubs (controllable via globals) ─────────────────────────
+
+// Minimal WP_Post double. The non-public content gate (guard_non_public_post)
+// keys on `instanceof WP_Post`, which is how production posts arrive, so tests
+// exercising that gate must seed WP_Post instances (not bare stdClass). The
+// array constructor matches the shape RestSiteContentTest already relied on.
+if (! class_exists('WP_Post')) {
+    class WP_Post
+    {
+        public $ID                = 0;
+        public $post_type         = 'post';
+        public $post_title        = '';
+        public $post_name         = '';
+        public $post_status       = 'publish';
+        public $post_content      = '';
+        public $post_excerpt      = '';
+        public $post_date         = '';
+        public $post_date_gmt     = '';
+        public $post_modified     = '';
+        public $post_modified_gmt = '';
+        public $post_parent       = 0;
+        public $menu_order        = 0;
+        public $post_author       = 0;
+
+        public function __construct(array $data = array())
+        {
+            foreach ($data as $key => $value) {
+                $this->{$key} = $value;
+            }
+        }
+    }
+}
 
 $GLOBALS['_mcpwp_test_posts'] = array();
 $GLOBALS['_mcpwp_test_meta']  = array();
@@ -568,6 +701,13 @@ function get_post($id)
 {
     $id = (int) $id;
     return isset($GLOBALS['_mcpwp_test_posts'][ $id ]) ? $GLOBALS['_mcpwp_test_posts'][ $id ] : null;
+}
+
+if (! function_exists('clean_post_cache')) {
+    function clean_post_cache($post)
+    {
+        // No object cache in tests; nothing to bust.
+    }
 }
 
 function get_posts($args = array())
@@ -662,6 +802,66 @@ if (! function_exists('get_page_by_path')) {
             }
         }
         return null;
+    }
+}
+
+if (! function_exists('parse_blocks')) {
+    // Minimal: wrap non-empty content as one freeform block; empty → no blocks.
+    function parse_blocks($content)
+    {
+        if ('' === trim((string) $content)) {
+            return array();
+        }
+        return array(
+            array(
+                'blockName'    => null,
+                'attrs'        => array(),
+                'innerHTML'    => (string) $content,
+                'innerBlocks'  => array(),
+                'innerContent' => array( (string) $content ),
+            ),
+        );
+    }
+}
+
+if (! function_exists('get_preview_post_link')) {
+    function get_preview_post_link($post = 0)
+    {
+        $id = is_object($post) ? (int) $post->ID : (int) $post;
+        return 'https://example.com/?p=' . $id . '&preview=true';
+    }
+}
+
+if (! function_exists('has_excerpt')) {
+    function has_excerpt($post = 0)
+    {
+        $post = is_object($post) ? $post : get_post($post);
+        return $post && '' !== trim((string) ($post->post_excerpt ?? ''));
+    }
+}
+
+if (! function_exists('get_object_taxonomies')) {
+    function get_object_taxonomies($object, $output = 'names')
+    {
+        return array();
+    }
+}
+
+if (! function_exists('wp_get_post_terms')) {
+    function wp_get_post_terms($post_id = 0, $taxonomy = 'post_tag', $args = array())
+    {
+        return array();
+    }
+}
+
+if (! function_exists('wp_trim_words')) {
+    function wp_trim_words($text, $num_words = 55, $more = null)
+    {
+        $words = preg_split('/\s+/', trim((string) $text));
+        if (count($words) <= $num_words) {
+            return (string) $text;
+        }
+        return implode(' ', array_slice($words, 0, $num_words)) . ($more ?? '…');
     }
 }
 
@@ -871,6 +1071,17 @@ function wp_remote_get($url, $args = array())
     return wp_remote_request($url, $args);
 }
 
+if (! function_exists('wp_safe_remote_get')) {
+    function wp_safe_remote_get($url, $args = array())
+    {
+        // Mirror core: same transport, with reject_unsafe_urls on. Tests mock
+        // the response via the pre_http_request filter regardless.
+        $args['method']             = 'GET';
+        $args['reject_unsafe_urls'] = true;
+        return wp_remote_request($url, $args);
+    }
+}
+
 function wp_remote_post($url, $args = array())
 {
     $args['method'] = 'POST';
@@ -885,6 +1096,77 @@ function wp_remote_retrieve_response_code($response)
 function wp_remote_retrieve_body($response)
 {
     return is_array($response) && isset($response['body']) ? $response['body'] : '';
+}
+
+if (! function_exists('wp_remote_retrieve_header')) {
+    function wp_remote_retrieve_header($response, $header)
+    {
+        if (! is_array($response) || ! isset($response['headers'])) {
+            return '';
+        }
+        $headers = array_change_key_case((array) $response['headers'], CASE_LOWER);
+        $header  = strtolower((string) $header);
+        return isset($headers[ $header ]) ? $headers[ $header ] : '';
+    }
+}
+
+if (! function_exists('wp_tempnam')) {
+    function wp_tempnam($filename = '')
+    {
+        return tempnam(sys_get_temp_dir(), 'mcpwp_test_');
+    }
+}
+
+if (! function_exists('wp_delete_file')) {
+    function wp_delete_file($file)
+    {
+        if (is_string($file) && file_exists($file)) {
+            unlink($file);
+        }
+    }
+}
+
+if (! function_exists('verify_file_md5')) {
+    // Mirror WP core: hex (32 chars) or base64 expected digest; true on match,
+    // WP_Error('md5_mismatch') otherwise. Unknown format is a no-op (true).
+    function verify_file_md5($filename, $expected_md5)
+    {
+        if (32 === strlen($expected_md5)) {
+            $expected_raw = pack('H*', $expected_md5);
+        } elseif (24 === strlen($expected_md5)) {
+            $expected_raw = base64_decode($expected_md5);
+        } else {
+            return true;
+        }
+        $file_md5 = md5_file($filename, true);
+        if ($file_md5 === $expected_raw) {
+            return true;
+        }
+        return new WP_Error('md5_mismatch', 'The checksum of the file does not match the expected checksum value.');
+    }
+}
+
+if (! class_exists('WP_Http')) {
+    class WP_Http
+    {
+        // Minimal make_absolute_url: return absolute URLs as-is, resolve a
+        // root-relative path against the base origin. Sufficient for tests.
+        public static function make_absolute_url($maybe_relative_url, $url)
+        {
+            if (preg_match('#^https?://#i', (string) $maybe_relative_url)) {
+                return (string) $maybe_relative_url;
+            }
+            $parts = parse_url((string) $url);
+            if (empty($parts['scheme']) || empty($parts['host'])) {
+                return (string) $maybe_relative_url;
+            }
+            $origin = $parts['scheme'] . '://' . $parts['host'] . (isset($parts['port']) ? ':' . $parts['port'] : '');
+            if ('' !== (string) $maybe_relative_url && '/' === $maybe_relative_url[0]) {
+                return $origin . $maybe_relative_url;
+            }
+            return $origin . '/' . ltrim((string) $maybe_relative_url, '/');
+        }
+    }
 }
 
 function wp_get_nav_menus()

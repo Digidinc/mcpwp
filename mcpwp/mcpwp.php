@@ -379,6 +379,18 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 		update_option( 'mcpwp_db_version', MCPWP_VERSION );
 	}
 
+	// One-time purge of identity-less pending approvals — gated on its OWN flag,
+	// not the version check above. A same-version deployment (e.g. 3.6.1 -> 3.6.1)
+	// never enters the activate() branch, so relying on the version gate alone
+	// would skip this security migration and leave a pre-fix pending approval
+	// exploitable by a reconnected OAuth principal. Idempotent; after the first
+	// run this is a single (cached) get_option() per load. Runs on plugins_loaded,
+	// before REST routes, so the purge precedes any approve/apply request.
+	if ( ! get_option( 'mcpwp_approvals_identity_migrated' ) ) {
+		require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-activator.php';
+		Mcpwp_Activator::migrate_identity_less_approvals();
+	}
+
 	// Initialize the plugin
 	$loader = new Mcpwp_Loader();
 	$loader->run();

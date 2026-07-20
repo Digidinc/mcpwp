@@ -188,6 +188,14 @@ class Mcpwp_REST_Blocks extends Mcpwp_REST_API {
 			return $this->error_response( 'not_found', 'Post not found.', 404 );
 		}
 
+		// Non-public gate: get_blocks returns raw_content + parsed blocks for ANY
+		// status, so a read-only key could otherwise read an unpublished body.
+		// Return the same 404 as a missing post so existence is not disclosed.
+		$denied = $this->guard_non_public_post( $post, 'Post not found.' );
+		if ( $denied ) {
+			return $denied;
+		}
+
 		$content = $post->post_content;
 		$blocks  = parse_blocks( $content );
 
@@ -224,6 +232,15 @@ class Mcpwp_REST_Blocks extends Mcpwp_REST_API {
 			return $this->error_response( 'not_found', 'Post not found.', 404 );
 		}
 
+		// Status-parity guard: a read-only key must not read a draft/private post
+		// body. set_blocks queues an approval whose public_record.diff carries a
+		// before_excerpt of the existing content, so reject a non-public source
+		// with the same 404 a missing post returns before any body is read.
+		$source_guard = $this->guard_non_public_post( $post, 'Post not found.' );
+		if ( is_wp_error( $source_guard ) ) {
+			return $source_guard;
+		}
+
 		$blocks  = $request->get_param( 'blocks' );
 		$content = $request->get_param( 'content' );
 		$allow_restricted_blocks = rest_sanitize_boolean( $request->get_param( 'allow_restricted_blocks' ) );
@@ -233,13 +250,14 @@ class Mcpwp_REST_Blocks extends Mcpwp_REST_API {
 		$approval_note           = (string) $request->get_param( 'approval_note' );
 
 		// Approval-gate floor (admin-only bypass): an explicit approval_required=false is
-		// honored for an admin-scoped API key or the trusted admin-AJAX context. A plain
-		// write/read key or OAuth token is silently forced through approval. A null key
-		// record is NOT treated as trusted (OAuth leaves it null); only the explicit
-		// admin-scope is_trusted_admin_ajax_request() predicate (admin cap + nonce) is exempt.
+		// honored only for an admin-scoped API key or the trusted admin-AJAX context. A
+		// plain write/read key — or ANY OAuth connector, regardless of scope — is silently
+		// forced through approval. OAuth now carries a key record (type 'oauth'), so it is
+		// excluded here explicitly rather than by relying on a null record.
 		if ( false === $approval_required ) {
 			$requester_key = $this->get_current_api_key_record();
-			if ( ! ( ( $requester_key && $this->key_has_scope( $requester_key, 'admin' ) ) || $this->is_trusted_admin_ajax_request() ) ) {
+			$can_bypass    = $requester_key && ! $this->requester_is_oauth() && $this->key_has_scope( $requester_key, 'admin' );
+			if ( ! ( $can_bypass || $this->is_trusted_admin_ajax_request() ) ) {
 				$approval_required = true;
 			}
 		}
@@ -285,6 +303,11 @@ class Mcpwp_REST_Blocks extends Mcpwp_REST_API {
 		if ( $approval_required ) {
 			if ( ! class_exists( 'Mcpwp_Approvals' ) ) {
 				return $this->error_response( 'approvals_unavailable', 'Approval pipeline is not available.', 500 );
+			}
+
+			$identity_guard = $this->guard_stable_identity_for_approvals();
+			if ( is_wp_error( $identity_guard ) ) {
+				return $identity_guard;
 			}
 
 			$approval = Mcpwp_Approvals::create_post_content_request(
@@ -564,6 +587,15 @@ class Mcpwp_REST_Blocks extends Mcpwp_REST_API {
 			return $this->error_response( 'not_found', 'Post not found.', 404 );
 		}
 
+		// Status-parity guard: patching a section reads the existing post body and
+		// queues an approval whose diff carries a before_excerpt of it. A read-only
+		// key must not reach a draft/private body — reject with the same 404 a
+		// missing post returns.
+		$source_guard = $this->guard_non_public_post( $post, 'Post not found.' );
+		if ( is_wp_error( $source_guard ) ) {
+			return $source_guard;
+		}
+
 		$selector = $request->get_param( 'selector' );
 		$content  = $request->get_param( 'content' );
 		$blocks   = $request->get_param( 'blocks' );
@@ -619,13 +651,14 @@ class Mcpwp_REST_Blocks extends Mcpwp_REST_API {
 		$approval_note     = (string) $request->get_param( 'approval_note' );
 
 		// Approval-gate floor (admin-only bypass): an explicit approval_required=false is
-		// honored for an admin-scoped API key or the trusted admin-AJAX context. A plain
-		// write/read key or OAuth token is silently forced through approval. A null key
-		// record is NOT treated as trusted (OAuth leaves it null); only the explicit
-		// admin-scope is_trusted_admin_ajax_request() predicate (admin cap + nonce) is exempt.
+		// honored only for an admin-scoped API key or the trusted admin-AJAX context. A
+		// plain write/read key — or ANY OAuth connector, regardless of scope — is silently
+		// forced through approval. OAuth now carries a key record (type 'oauth'), so it is
+		// excluded here explicitly rather than by relying on a null record.
 		if ( false === $approval_required ) {
 			$requester_key = $this->get_current_api_key_record();
-			if ( ! ( ( $requester_key && $this->key_has_scope( $requester_key, 'admin' ) ) || $this->is_trusted_admin_ajax_request() ) ) {
+			$can_bypass    = $requester_key && ! $this->requester_is_oauth() && $this->key_has_scope( $requester_key, 'admin' );
+			if ( ! ( $can_bypass || $this->is_trusted_admin_ajax_request() ) ) {
 				$approval_required = true;
 			}
 		}
@@ -633,6 +666,11 @@ class Mcpwp_REST_Blocks extends Mcpwp_REST_API {
 		if ( $approval_required ) {
 			if ( ! class_exists( 'Mcpwp_Approvals' ) ) {
 				return $this->error_response( 'approvals_unavailable', 'Approval pipeline is not available.', 500 );
+			}
+
+			$identity_guard = $this->guard_stable_identity_for_approvals();
+			if ( is_wp_error( $identity_guard ) ) {
+				return $identity_guard;
 			}
 
 			$approval = Mcpwp_Approvals::create_post_content_request(

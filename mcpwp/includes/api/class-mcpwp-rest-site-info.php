@@ -367,11 +367,16 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 			);
 		}
 
-		// Recent updates (last 5 modified posts/pages).
+		// Recent updates (last 5 modified posts/pages). Security clamp: a read-only
+		// key must not see draft/private titles/statuses in the onboarding brief —
+		// only widen beyond published for write scope (or trusted admin-AJAX).
+		$recent_statuses = $this->requester_can_see_non_public()
+			? array( 'publish', 'draft', 'private' )
+			: array( 'publish' );
 		$recent_posts = get_posts(
 			array(
 				'post_type'      => array( 'post', 'page' ),
-				'post_status'    => array( 'publish', 'draft', 'private' ),
+				'post_status'    => $recent_statuses,
 				'orderby'        => 'modified',
 				'order'          => 'DESC',
 				'posts_per_page' => 5,
@@ -793,8 +798,14 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 				array(
 					'graph_limit'     => min( 250, max( 1, absint( $request->get_param( 'graph_limit' ) ) ) ),
 					'event_limit'     => min( 50, max( 1, absint( $request->get_param( 'event_limit' ) ) ) ),
-					'include_drafts'  => rest_sanitize_boolean( $request->get_param( 'include_drafts' ) ),
+					// Security clamp: caller-controlled include_drafts only honored for
+					// a key that may see non-public content; a read-only key can never
+					// pull draft/private nodes into the site-state graph snapshot.
+					'include_drafts'  => rest_sanitize_boolean( $request->get_param( 'include_drafts' ) ) && $this->requester_can_see_non_public(),
 					'include_plugins' => rest_sanitize_boolean( $request->get_param( 'include_plugins' ) ),
+					// Approval + SEO summaries carry source-derived title/url/status/
+					// excerpt fields; only a privileged caller sees non-public ones.
+					'reveal_non_public' => $this->requester_can_see_non_public(),
 				)
 			)
 			: array();

@@ -113,10 +113,28 @@ class Mcpwp_SEO_Audit_Store {
 		$post_id  = isset( $args['post_id'] ) ? absint( $args['post_id'] ) : 0;
 		$limit    = isset( $args['limit'] ) ? min( 200, max( 1, absint( $args['limit'] ) ) ) : 50;
 
+		// Fail-closed chokepoint. Every read of stored issues flows through here,
+		// so the non-public clamp is the DEFAULT, not an opt-in a consumer can
+		// forget (prior passes left /site-state, /signals, and /seo/autofix-plan
+		// reading the un-clamped set). An unprivileged caller must not see stored
+		// issues that carry a draft/private post's title/url — a run stored by a
+		// write key with include_drafts persists those. Unless the caller proves
+		// it may see non-public content ($args['reveal_non_public'] === true), any
+		// issue that REFERENCES a non-public (or missing) post is dropped. Issues
+		// with no post reference (post_id <= 0, i.e. site-level) are kept — they
+		// carry no hidden post title/url. Kept BEFORE summarize_issues() so the
+		// summary counts match the visible set.
+		$reveal_non_public = ! empty( $args['reveal_non_public'] );
+
 		$issues = array_values(
 			array_filter(
 				$issues,
-				function ( $issue ) use ( $status, $severity, $category, $run_id, $post_id ) {
+				function ( $issue ) use ( $status, $severity, $category, $run_id, $post_id, $reveal_non_public ) {
+					if ( ! $reveal_non_public
+						&& (int) ( $issue['post_id'] ?? 0 ) > 0
+						&& ! self::issue_post_is_public( $issue ) ) {
+						return false;
+					}
 					if ( '' !== $status && ( $issue['status'] ?? '' ) !== $status ) {
 						return false;
 					}
@@ -153,6 +171,32 @@ class Mcpwp_SEO_Audit_Store {
 			'summary' => self::summarize_issues( $issues ),
 			'issues'  => array_slice( $issues, 0, $limit ),
 		);
+	}
+
+	/**
+	 * Whether a stored issue's referenced post is currently publicly viewable.
+	 *
+	 * Used to hide draft/private issues from unprivileged readers. Resolves the
+	 * live post status (so a post unpublished after the run is also hidden) and
+	 * fails closed: a missing post or unregistered status is treated as
+	 * non-public, since the stored title/url may still describe hidden content.
+	 *
+	 * @param array $issue Stored issue record.
+	 * @return bool True when the post is public.
+	 */
+	private static function issue_post_is_public( $issue ) {
+		$post_id = (int) ( $issue['post_id'] ?? 0 );
+		if ( $post_id <= 0 ) {
+			return false;
+		}
+
+		$post = get_post( $post_id );
+		if ( ! $post ) {
+			return false;
+		}
+
+		$status_obj = get_post_status_object( (string) $post->post_status );
+		return $status_obj && ! empty( $status_obj->public );
 	}
 
 	/**

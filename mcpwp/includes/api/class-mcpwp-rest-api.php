@@ -55,6 +55,61 @@ abstract class Mcpwp_REST_API {
 	}
 
 	/**
+	 * Whether the current OAuth principal lacks a stable identity.
+	 *
+	 * A legacy OAuth access token issued before per-token identity was persisted
+	 * (or a 2.8.56 `spai_at_` bridge token) carries no user_id/client_id, so it
+	 * is identified only by a token-hash fallback (`oauth:<hash>`). Refreshing
+	 * such a grant mints a differently-keyed `oauth-user:<id>` token, so an
+	 * unstable-identity principal must not create or approve approval requests —
+	 * otherwise the self-approval gate can be sidestepped by creating with the
+	 * legacy token and approving with the refreshed one. All other operations
+	 * (read/write) remain available; reconnecting re-mints an identified token.
+	 *
+	 * @return bool
+	 */
+	protected function requester_has_unstable_oauth_identity() {
+		$key_record = $this->get_current_api_key_record();
+		if ( ! is_array( $key_record ) || empty( $key_record['id'] ) ) {
+			return false;
+		}
+		// Strong identities are `oauth-user:` / `oauth-client:` / scoped-key ids;
+		// only the weak fallback is the bare `oauth:` prefix.
+		return 0 === strpos( (string) $key_record['id'], 'oauth:' );
+	}
+
+	/**
+	 * Whether the current principal authenticated via an OAuth access token.
+	 *
+	 * OAuth records are tagged `type => 'oauth'` at authentication; scoped API
+	 * keys never carry that tag. Used to keep OAuth connectors subject to the
+	 * approval floor even when they hold admin scope — only a provisioned
+	 * admin-scoped API key (or admin-AJAX) may bypass approval.
+	 *
+	 * @return bool
+	 */
+	protected function requester_is_oauth() {
+		$key_record = $this->get_current_api_key_record();
+		return is_array( $key_record ) && isset( $key_record['type'] ) && 'oauth' === $key_record['type'];
+	}
+
+	/**
+	 * Abort the approval surface for an unstable-identity OAuth principal.
+	 *
+	 * @return WP_Error|null WP_Error when the caller must be refused, else null.
+	 */
+	protected function guard_stable_identity_for_approvals() {
+		if ( $this->requester_has_unstable_oauth_identity() ) {
+			return new WP_Error(
+				'oauth_identity_unstable',
+				__( 'This OAuth session predates the current security update and is not stably identified. Reconnect the connector, then retry — approval requests require a re-authenticated session.', 'mcpwp' ),
+				array( 'status' => 403 )
+			);
+		}
+		return null;
+	}
+
+	/**
 	 * Prepare success response.
 	 *
 	 * @param mixed $data Response data.
@@ -171,6 +226,13 @@ abstract class Mcpwp_REST_API {
 	// --- Private helpers ---
 
 	protected function build_content_graph_data( $post_types, $limit, $include_drafts = false ) {
+		// Security clamp: a read-only key must never receive draft/private nodes
+		// even when it passes include_drafts=true. Only a caller with write scope
+		// (or a trusted admin-AJAX context) may widen the status set beyond public.
+		// This is the SINGLE canonical builder — every graph consumer (content
+		// graph, SEO audit, content quality) inherits it, so the clamp cannot be
+		// bypassed by a subclass that forgets to re-apply it.
+		$include_drafts = $include_drafts && $this->requester_can_see_non_public();
 		$statuses = $include_drafts ? array( 'publish', 'draft', 'private' ) : array( 'publish' );
 
 		$posts = get_posts(
@@ -248,11 +310,24 @@ abstract class Mcpwp_REST_API {
 			$from_id = (int) $post->ID;
 			$links   = $this->extract_internal_links_from_content( $post->post_content, $url_to_id );
 
+			// Also extract links embedded in Elementor widget settings (buttons, text editors, HTML widgets, etc.)
+			// post_content is empty/minimal for Elementor pages, so <a> regex alone misses all rendered links.
+			$elementor_links = $this->extract_elementor_links_from_postmeta( $from_id, $url_to_id );
+			$links           = array_merge( $links, $elementor_links );
+
+			$linked_to = array();
+
 			foreach ( $links as $link ) {
 				$to_id = $link['target_id'];
 				if ( $from_id === $to_id || ! isset( $nodes_by_id[ $to_id ] ) ) {
 					continue;
 				}
+
+				// Deduplicate edges per source→target pair so Elementor + post_content don't double-count.
+				if ( isset( $linked_to[ $to_id ] ) ) {
+					continue;
+				}
+				$linked_to[ $to_id ] = true;
 
 				$edges[] = array(
 					'from'   => $from_id,
@@ -663,6 +738,102 @@ abstract class Mcpwp_REST_API {
 			'url'       => $absolute,
 			'anchor'    => trim( $anchor ),
 		);
+	}
+
+	/**
+	 * Extract internal links embedded in an Elementor page's `_elementor_data`.
+	 *
+	 * post_content is empty/minimal for Elementor-built pages, so the plain
+	 * <a href> scan of extract_internal_links_from_content() misses every link
+	 * that lives in a widget setting (button link, icon-box link, text-editor /
+	 * HTML widget markup, etc.). This walks the Elementor element tree and
+	 * resolves each href to an internal post link in the same shape the graph
+	 * builder consumes.
+	 *
+	 * @param int   $post_id   Post ID.
+	 * @param array $url_to_id Normalized URL to post ID map.
+	 * @return array Links.
+	 */
+	protected function extract_elementor_links_from_postmeta( $post_id, $url_to_id ) {
+		$raw = get_post_meta( $post_id, '_elementor_data', true );
+		if ( empty( $raw ) || ! is_string( $raw ) ) {
+			return array();
+		}
+
+		$data = json_decode( $raw, true );
+		if ( ! is_array( $data ) ) {
+			return array();
+		}
+
+		$hrefs = array();
+		$this->collect_elementor_link_hrefs( $data, $hrefs );
+
+		$links = array();
+		foreach ( array_unique( $hrefs ) as $href ) {
+			$href = trim( html_entity_decode( $href, ENT_QUOTES, 'UTF-8' ) );
+			if ( '' === $href ) {
+				continue;
+			}
+			$link = $this->resolve_internal_graph_link( $href, '', $url_to_id );
+			if ( $link ) {
+				$links[] = $link;
+			}
+		}
+
+		return $links;
+	}
+
+	/**
+	 * Recursively collect link hrefs from an Elementor elements tree.
+	 *
+	 * Covers the most common link-bearing widget settings:
+	 *   - settings.link.url   (button, icon-box, image, image-box, call-to-action, flip-box)
+	 *   - settings.url.url    (icon widget)
+	 *   - settings.editor     (text-editor: HTML content with <a> tags)
+	 *   - settings.html       (html widget: raw HTML with <a> tags)
+	 *   - settings.content    (some rich-text widgets)
+	 *
+	 * @param array $elements Elementor elements array.
+	 * @param array $hrefs    Accumulator passed by reference.
+	 */
+	protected function collect_elementor_link_hrefs( $elements, &$hrefs ) {
+		if ( ! is_array( $elements ) ) {
+			return;
+		}
+
+		foreach ( $elements as $element ) {
+			if ( ! is_array( $element ) ) {
+				continue;
+			}
+
+			$settings = isset( $element['settings'] ) && is_array( $element['settings'] ) ? $element['settings'] : array();
+
+			// button, icon-box, image, image-box, call-to-action, flip-box — link object.
+			if ( ! empty( $settings['link']['url'] ) && is_string( $settings['link']['url'] ) ) {
+				$hrefs[] = $settings['link']['url'];
+			}
+
+			// icon widget — url object.
+			if ( ! empty( $settings['url']['url'] ) && is_string( $settings['url']['url'] ) ) {
+				$hrefs[] = $settings['url']['url'];
+			}
+
+			// text-editor, html, rich-text content — parse HTML for <a href>.
+			foreach ( array( 'editor', 'html', 'content', 'inner_text' ) as $field ) {
+				if ( ! empty( $settings[ $field ] ) && is_string( $settings[ $field ] ) ) {
+					if ( preg_match_all( '/<a\s[^>]*href=["\']([^"\']+)["\'][^>]*>/i', $settings[ $field ], $matches ) ) {
+						foreach ( $matches[1] as $href ) {
+							$hrefs[] = $href;
+						}
+					}
+				}
+			}
+
+			// Recurse into child elements.
+			if ( ! empty( $element['elements'] ) && is_array( $element['elements'] ) ) {
+				$this->collect_elementor_link_hrefs( $element['elements'], $hrefs );
+			}
+		}
 	}
 
 	/**

@@ -104,7 +104,9 @@ class Mcpwp_REST_Signals extends Mcpwp_REST_API {
 		$since = $request->get_param( 'since' ) ?? '';
 		$limit = (int) $request->get_param( 'limit' );
 
-		$signals = Mcpwp_Signals::get_signals( $types, $since, $limit );
+		// Fail-closed at read: a read-only key never receives a signal's
+		// draft/private source title or detail; only a privileged caller reveals.
+		$signals = Mcpwp_Signals::get_signals( $types, $since, $limit, $this->requester_can_see_non_public() );
 
 		$counts = array();
 		foreach ( $signals as $s ) {
@@ -132,13 +134,23 @@ class Mcpwp_REST_Signals extends Mcpwp_REST_API {
 		$types = array_filter( array_map( 'trim', explode( ',', $request->get_param( 'types' ) ?? '' ) ) );
 		$types = array_values( array_intersect( $types, Mcpwp_Signals::SIGNAL_TYPES ) );
 
-		$signals = Mcpwp_Signals::compute( $types, Mcpwp_Signals::request_time_budget() );
-		$meta    = Mcpwp_Signals::get_meta();
+		// compute() refreshes and persists the shared cache but returns the
+		// freshly-computed signals RAW (unredacted) — returning that directly to
+		// a read-only key would leak a draft/private post's title or detail
+		// (e.g. seo_issue.entity_title). Never respond with compute()'s value.
+		// Read the refreshed cache back through get_signals() — the SINGLE
+		// redaction chokepoint every signal read passes — so refresh clears the
+		// exact same fail-closed gate as GET /signals. $computed is used only for
+		// its count (an integer, no source fields).
+		$computed = Mcpwp_Signals::compute( $types, Mcpwp_Signals::request_time_budget() );
+		$meta     = Mcpwp_Signals::get_meta();
+
+		$signals = Mcpwp_Signals::get_signals( $types, '', 200, $this->requester_can_see_non_public() );
 
 		return new WP_REST_Response(
 			array(
 				'success'       => true,
-				'computed'      => count( $signals ),
+				'computed'      => count( $computed ),
 				'signals'       => $signals,
 				'last_computed' => '' !== $meta['last_computed'] ? $meta['last_computed'] : null,
 				'partial'       => (bool) $meta['partial'],

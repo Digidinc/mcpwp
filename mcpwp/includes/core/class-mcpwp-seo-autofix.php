@@ -26,6 +26,11 @@ class Mcpwp_SEO_Autofix {
 	 * @return array
 	 */
 	public static function get_plan( $args = array() ) {
+		// Fail-closed: the plan surfaces each issue's title/url in actions[]. The
+		// reveal flag is threaded from the REST handler; default false keeps a
+		// forgetful caller safe. The model excludes non-public issues by default.
+		$reveal_non_public = ! empty( $args['reveal_non_public'] );
+
 		$issue_result = class_exists( 'Mcpwp_SEO_Audit_Store' ) ? Mcpwp_SEO_Audit_Store::list_issues(
 			array(
 				'status'   => 'open',
@@ -34,6 +39,7 @@ class Mcpwp_SEO_Autofix {
 				'post_id'  => isset( $args['post_id'] ) ? absint( $args['post_id'] ) : 0,
 				'run_id'   => isset( $args['run_id'] ) ? sanitize_key( (string) $args['run_id'] ) : '',
 				'limit'    => isset( $args['limit'] ) ? absint( $args['limit'] ) : 50,
+				'reveal_non_public' => $reveal_non_public,
 			)
 		) : array(
 			'summary' => array(),
