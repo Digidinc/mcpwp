@@ -115,14 +115,28 @@ class Mcpwp_Site_Manager {
 			set_theme_mod( 'nav_menu_locations', $locations );
 		}
 
-		// Add items if provided.
+		// Add items if provided, collecting item-level failures so the caller
+		// can detect a partially-built menu instead of a silent success.
+		$item_errors = array();
 		if ( ! empty( $data['items'] ) && is_array( $data['items'] ) ) {
-			foreach ( $data['items'] as $item ) {
-				$this->add_menu_item( $menu_id, $item );
+			foreach ( array_values( $data['items'] ) as $index => $item ) {
+				$result = $this->add_menu_item( $menu_id, $item );
+				if ( is_wp_error( $result ) ) {
+					$item_errors[] = array(
+						'index'   => (int) $index,
+						'code'    => $result->get_error_code(),
+						'message' => $result->get_error_message(),
+					);
+				}
 			}
 		}
 
-		return $this->get_menu( $menu_id );
+		$menu = $this->get_menu( $menu_id );
+		if ( ! empty( $item_errors ) && is_array( $menu ) ) {
+			$menu['item_errors'] = $item_errors;
+		}
+
+		return $menu;
 	}
 
 	/**
@@ -206,36 +220,60 @@ class Mcpwp_Site_Manager {
 
 		$item_data = array(
 			'menu-item-title'     => isset( $data['title'] ) ? sanitize_text_field( $data['title'] ) : '',
-			'menu-item-url'       => isset( $data['url'] ) ? esc_url_raw( $data['url'] ) : '',
 			'menu-item-status'    => 'publish',
 			'menu-item-position'  => isset( $data['position'] ) ? absint( $data['position'] ) : 0,
 			'menu-item-parent-id' => isset( $data['parent_id'] ) ? absint( $data['parent_id'] ) : 0,
 		);
 
-		// Handle different item types.
-		if ( ! empty( $data['type'] ) ) {
-			switch ( $data['type'] ) {
-				case 'post':
-				case 'page':
-					$item_data['menu-item-type'] = 'post_type';
-					$item_data['menu-item-object'] = $data['type'];
-					$item_data['menu-item-object-id'] = isset( $data['object_id'] ) ? absint( $data['object_id'] ) : 0;
-					break;
+		// Normalize the item type onto the documented custom|post_type|taxonomy
+		// contract. Older callers passed the WordPress object directly as `type`
+		// (post|page|category|tag); keep those as back-compat aliases so existing
+		// integrations do not break.
+		$type      = isset( $data['type'] ) ? sanitize_key( (string) $data['type'] ) : 'custom';
+		$object    = isset( $data['object'] ) ? sanitize_key( (string) $data['object'] ) : '';
+		$object_id = isset( $data['object_id'] ) ? absint( $data['object_id'] ) : 0;
 
-				case 'category':
-				case 'tag':
-					$item_data['menu-item-type'] = 'taxonomy';
-					$item_data['menu-item-object'] = $data['type'] === 'tag' ? 'post_tag' : 'category';
-					$item_data['menu-item-object-id'] = isset( $data['object_id'] ) ? absint( $data['object_id'] ) : 0;
-					break;
+		switch ( $type ) {
+			case 'post':
+			case 'page':
+				$object = '' !== $object ? $object : $type;
+				$type   = 'post_type';
+				break;
+			case 'category':
+				$object = '' !== $object ? $object : 'category';
+				$type   = 'taxonomy';
+				break;
+			case 'tag':
+			case 'post_tag':
+				$object = '' !== $object ? $object : 'post_tag';
+				$type   = 'taxonomy';
+				break;
+		}
 
-				case 'custom':
-				default:
-					$item_data['menu-item-type'] = 'custom';
-					break;
-			}
-		} else {
-			$item_data['menu-item-type'] = 'custom';
+		switch ( $type ) {
+			case 'post_type':
+				if ( '' === $object || $object_id <= 0 ) {
+					return new WP_Error( 'missing_object', __( 'object and object_id are required for post_type menu items.', 'mcpwp' ) );
+				}
+				$item_data['menu-item-type']      = 'post_type';
+				$item_data['menu-item-object']    = $object;
+				$item_data['menu-item-object-id'] = $object_id;
+				break;
+
+			case 'taxonomy':
+				if ( '' === $object || $object_id <= 0 ) {
+					return new WP_Error( 'missing_object', __( 'object and object_id are required for taxonomy menu items.', 'mcpwp' ) );
+				}
+				$item_data['menu-item-type']      = 'taxonomy';
+				$item_data['menu-item-object']    = $object;
+				$item_data['menu-item-object-id'] = $object_id;
+				break;
+
+			case 'custom':
+			default:
+				$item_data['menu-item-type'] = 'custom';
+				$item_data['menu-item-url']  = isset( $data['url'] ) ? esc_url_raw( $data['url'] ) : '';
+				break;
 		}
 
 		// Additional attributes.

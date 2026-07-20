@@ -1184,6 +1184,46 @@ function wp_get_nav_menu_items($term_id)
     }, $GLOBALS['_mcpwp_test_menu_page_ids']);
 }
 
+function get_nav_menu_locations()
+{
+    return isset($GLOBALS['_mcpwp_test_nav_menu_locations']) ? $GLOBALS['_mcpwp_test_nav_menu_locations'] : array();
+}
+
+function wp_create_nav_menu($name)
+{
+    $id = empty($GLOBALS['_mcpwp_test_nav_menus']) ? 1 : (max(array_keys($GLOBALS['_mcpwp_test_nav_menus'])) + 1);
+    $GLOBALS['_mcpwp_test_nav_menus'][ $id ] = (object) array(
+        'term_id'     => $id,
+        'name'        => (string) $name,
+        'slug'        => sanitize_title((string) $name),
+        'description' => '',
+        'count'       => 0,
+    );
+    return $id;
+}
+
+// A nav menu exists only when registered in $GLOBALS['_mcpwp_test_nav_menus'].
+function wp_get_nav_menu_object($menu)
+{
+    $id = is_object($menu) ? (int) $menu->term_id : (int) $menu;
+    return isset($GLOBALS['_mcpwp_test_nav_menus'][ $id ]) ? $GLOBALS['_mcpwp_test_nav_menus'][ $id ] : false;
+}
+
+// Capture the item data WordPress would persist so tests can assert the
+// menu-item-type / object / object-id contract without a real DB.
+function wp_update_nav_menu_item($menu_id, $item_id, $item_data)
+{
+    if (! isset($GLOBALS['_mcpwp_test_nav_menu_item_writes'])) {
+        $GLOBALS['_mcpwp_test_nav_menu_item_writes'] = array();
+    }
+    $GLOBALS['_mcpwp_test_nav_menu_item_writes'][] = array(
+        'menu_id' => (int) $menu_id,
+        'item_id' => (int) $item_id,
+        'data'    => $item_data,
+    );
+    return 1000 + count($GLOBALS['_mcpwp_test_nav_menu_item_writes']);
+}
+
 function get_post_meta($post_id, $key = '', $single = false)
 {
     $post_id = (int) $post_id;

@@ -6,7 +6,7 @@ Requires at least: 6.1
 Tested up to: 7.0
 Requires PHP: 7.4
 <!-- x-release-please-start-version -->
-Stable tag: 3.6.1
+Stable tag: 3.6.2
 <!-- x-release-please-end -->
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -152,6 +152,12 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 4. Integrations and Chat — connected services plus safety-first agent workflow
 
 == Changelog ==
+
+= 3.6.2 =
+* fix: **menus:** `wp_add_menu_item` / `wp_create_menu` now honor the documented `taxonomy` and `post_type` item types (with `object` + `object_id`) instead of silently storing a blank custom link; `wp_create_menu` reports per-item failures instead of returning a partially-broken menu ([#676](https://github.com/Mumega-com/mcpwp/issues/676))
+* fix: **seo:** `wp_set_seo` (AIOSEO) now persists the meta description and robots flags reliably — sets `robots_default` so per-post noindex/nofollow take effect, reads the description from AIOSEO's table in readiness checks, and returns an explicit error instead of a false success when a field does not persist ([#672](https://github.com/Mumega-com/mcpwp/issues/672))
+* fix: **content:** `wp_get_rendered_copy` renders unpublished drafts in-process (Elementor or classic/Gutenberg) instead of failing with a loopback `fetch_error`, so agents can audit copy before publishing ([#675](https://github.com/Mumega-com/mcpwp/issues/675))
+* test: lock a tool-name-stability invariant so no registration path can leak a hash-suffixed tool name ([#673](https://github.com/Mumega-com/mcpwp/issues/673))
 
 = 3.6.1 =
 * fix: **oauth:** discovery documents (`/.well-known/oauth-authorization-server`, `/.well-known/oauth-protected-resource`) only worked for a WordPress install at the domain root — a subdirectory install (e.g. `/staging/5707`) never matched, so OAuth-based clients (Claude, ChatGPT) trying to connect via browser sign-in could never discover the auth server. Now matches both the RFC 8414 §3.1 insertion form and a plain suffix form, and `issuer`/`resource` correctly include the site's own path
