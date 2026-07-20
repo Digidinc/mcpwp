@@ -14,9 +14,16 @@
  * request before WordPress's own rewrite engine processes it.  When the path
  * matches, we emit JSON + exit immediately.
  *
- * Both endpoints are gated on the `oauth_enabled` setting.  When OAuth is
- * disabled the filter returns true (WordPress processes the request normally,
- * resulting in a 404 from the theme or rewrite fallback).
+ * The oauth-authorization-server document remains gated on the legacy
+ * `oauth_enabled` setting alone.  The oauth-protected-resource document is
+ * gated on `oauth_enabled` OR mumcp.com broker enrollment
+ * (`mcpwp_broker_enrollment` option, non-empty with a `site_id`) — broker
+ * enrollment independently enables protected-resource discovery, and when
+ * enrolled its `authorization_servers` points at `https://mumcp.com` instead
+ * of this site's own authorization-server document (the broker is the AS,
+ * not the site). When neither is active the filter returns true (WordPress
+ * processes the request normally, resulting in a 404 from the theme or
+ * rewrite fallback).
  *
  * Security note: these documents contain NO secrets — only public metadata
  * (endpoint URLs, supported algorithms, resource identifier).  They are always
@@ -122,11 +129,6 @@ class Mcpwp_OAuth_Well_Known {
 	 * @return bool
 	 */
 	public static function maybe_serve_well_known( $do_parse, $wp ) {
-		$settings = get_option( 'mcpwp_settings', array() );
-		if ( empty( $settings['oauth_enabled'] ) ) {
-			return $do_parse;
-		}
-
 		// Determine the request path, stripping leading slash.
 		$request_path = isset( $_SERVER['REQUEST_URI'] ) ? sanitize_text_field( wp_unslash( $_SERVER['REQUEST_URI'] ) ) : '';
 
@@ -141,6 +143,11 @@ class Mcpwp_OAuth_Well_Known {
 			$prefix . '/.well-known/oauth-protected-resource',
 		);
 		if ( in_array( $path_only, $protected_resource_paths, true ) ) {
+			// Broker enrollment independently enables this document, regardless
+			// of the legacy `oauth_enabled` setting — see should_serve_protected_resource_metadata().
+			if ( ! self::should_serve_protected_resource_metadata() ) {
+				return $do_parse;
+			}
 			self::serve_protected_resource_metadata();
 			exit;
 		}
@@ -150,6 +157,11 @@ class Mcpwp_OAuth_Well_Known {
 			$prefix . '/.well-known/oauth-authorization-server',
 		);
 		if ( in_array( $path_only, $authorization_server_paths, true ) ) {
+			// Unchanged: this document only ever describes this site's own
+			// self-issued AS, so it stays gated on the legacy setting alone.
+			if ( ! self::is_legacy_oauth_enabled() ) {
+				return $do_parse;
+			}
 			self::serve_authorization_server_metadata();
 			exit;
 		}
@@ -172,17 +184,78 @@ class Mcpwp_OAuth_Well_Known {
 	 * We add scopes_supported and bearer_methods_supported as optional hints.
 	 */
 	private static function serve_protected_resource_metadata() {
-		$origin = self::get_site_origin();
-		$prefix = self::get_site_path_prefix();
+		self::emit_json( self::build_protected_resource_metadata() );
+	}
 
-		$body = array(
-			'resource'              => $origin . $prefix,
-			'authorization_servers' => array( $origin . '/.well-known/oauth-authorization-server' . $prefix ),
-			'scopes_supported'      => array( 'read', 'write', 'admin' ),
+	/**
+	 * Build the RFC 9728 oauth-protected-resource metadata array.
+	 *
+	 * Split out from serve_protected_resource_metadata() so unit tests can
+	 * assert on the exact shape without going through emit_json()'s exit().
+	 *
+	 * When this site is enrolled with the mumcp.com broker
+	 * (`mcpwp_broker_enrollment` option, non-empty with a `site_id` —
+	 * see is_broker_enrolled()), `authorization_servers` points at mumcp.com:
+	 * the broker is the authorization server, not this site. Otherwise the
+	 * site remains its own AS, exactly as before broker support existed.
+	 *
+	 * @return array{resource:string,authorization_servers:string[],scopes_supported:string[],bearer_methods_supported:string[]}
+	 */
+	public static function build_protected_resource_metadata() {
+		$origin   = self::get_site_origin();
+		$prefix   = self::get_site_path_prefix();
+		$resource = $origin . $prefix;
+
+		if ( self::is_broker_enrolled() ) {
+			$authorization_servers = array( 'https://mumcp.com' );
+		} else {
+			$authorization_servers = array( $origin . '/.well-known/oauth-authorization-server' . $prefix );
+		}
+
+		return array(
+			'resource'                 => $resource,
+			'authorization_servers'    => $authorization_servers,
+			'scopes_supported'         => array( 'read', 'write', 'admin' ),
 			'bearer_methods_supported' => array( 'header' ),
 		);
+	}
 
-		self::emit_json( $body );
+	/**
+	 * Whether the RFC 9728 oauth-protected-resource document should be served.
+	 *
+	 * True when the legacy self-issued AS is enabled OR the site is enrolled
+	 * with the mumcp.com broker — the two gates are independent, so a
+	 * broker-only site (legacy `oauth_enabled` never turned on) still gets
+	 * discovery, and vice versa during any transition period.
+	 *
+	 * @return bool
+	 */
+	public static function should_serve_protected_resource_metadata() {
+		return self::is_legacy_oauth_enabled() || self::is_broker_enrolled();
+	}
+
+	/**
+	 * Whether the legacy self-issued OAuth AS is enabled.
+	 *
+	 * @return bool
+	 */
+	public static function is_legacy_oauth_enabled() {
+		$settings = get_option( 'mcpwp_settings', array() );
+		return ! empty( $settings['oauth_enabled'] );
+	}
+
+	/**
+	 * Whether this site is enrolled with the mumcp.com broker.
+	 *
+	 * Enrollment is considered active when the `mcpwp_broker_enrollment`
+	 * option is a non-empty array containing a `site_id`. An empty array
+	 * (never enrolled, or disconnected) does not count.
+	 *
+	 * @return bool
+	 */
+	public static function is_broker_enrolled() {
+		$enrollment = get_option( 'mcpwp_broker_enrollment', array() );
+		return is_array( $enrollment ) && ! empty( $enrollment['site_id'] );
 	}
 
 	// -------------------------------------------------------------------------
