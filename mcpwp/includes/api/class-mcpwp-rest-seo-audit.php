@@ -2176,6 +2176,25 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 
 		// AIOSEO — check for computed excerpt fallback when no per-post value is stored.
 		if ( defined( 'AIOSEO_VERSION' ) ) {
+			// AIOSEO 4.x stores per-post SEO in its own table, not post meta. Read
+			// the same store the writer uses so a stored description is not reported
+			// as missing (GH #672).
+			global $wpdb;
+			$aioseo_table = $wpdb->prefix . 'aioseo_posts';
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- table name from $wpdb->prefix.
+			$table_desc = $wpdb->get_var( $wpdb->prepare( "SELECT description FROM $aioseo_table WHERE post_id = %d", $post_id ) );
+			$table_desc = trim( (string) $table_desc );
+			if ( '' !== $table_desc ) {
+				$is_template = (bool) preg_match( $template_pattern, $table_desc );
+				if ( $is_template && function_exists( 'aioseo' ) ) {
+					$rendered = $this->try_render_aioseo_description( $post_id, $table_desc );
+					if ( '' !== $rendered ) {
+						return array( 'value' => $rendered, 'source' => 'aioseo_stored', 'is_template' => false );
+					}
+				}
+				return array( 'value' => $table_desc, 'source' => 'aioseo_stored', 'is_template' => $is_template );
+			}
+
 			$raw = trim( (string) get_post_meta( $post_id, '_aioseo_description', true ) );
 			if ( '' !== $raw ) {
 				$is_template = (bool) preg_match( $template_pattern, $raw );

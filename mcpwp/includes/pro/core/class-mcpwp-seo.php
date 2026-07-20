@@ -410,6 +410,16 @@ class Mcpwp_SEO {
 
 		$table = $wpdb->prefix . 'aioseo_posts';
 
+		// Canonicalize the noindex/nofollow aliases onto robots_* so both the
+		// write and the readback verification below operate on one key.
+		if ( isset( $data['noindex'] ) && ! isset( $data['robots_noindex'] ) ) {
+			$data['robots_noindex'] = $data['noindex'];
+		}
+		if ( isset( $data['nofollow'] ) && ! isset( $data['robots_nofollow'] ) ) {
+			$data['robots_nofollow'] = $data['nofollow'];
+		}
+		unset( $data['noindex'], $data['nofollow'] );
+
 		// Check if row exists.
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- table name from $wpdb->prefix.
 		$exists = $wpdb->get_var(
@@ -438,21 +448,91 @@ class Mcpwp_SEO {
 			'robots_nofollow' => 'robots_nofollow',
 		);
 
+		$robots_provided = false;
 		foreach ( $data as $key => $value ) {
-			if ( isset( $field_map[ $key ] ) ) {
-				$db_data[ $field_map[ $key ] ] = sanitize_text_field( $value );
+			if ( ! isset( $field_map[ $key ] ) ) {
+				continue;
 			}
+			$column = $field_map[ $key ];
+			if ( 'robots_noindex' === $column || 'robots_nofollow' === $column ) {
+				// Robots columns are tinyint flags, not text.
+				$db_data[ $column ] = $this->to_bool_flag( $value );
+				$robots_provided    = true;
+			} else {
+				$db_data[ $column ] = sanitize_text_field( $value );
+			}
+		}
+
+		// AIOSEO ignores the per-post robots_noindex/robots_nofollow flags unless
+		// robots_default is disabled; without this the values are stored but never
+		// take effect and read back as 0 (GH #672).
+		if ( $robots_provided ) {
+			$db_data['robots_default'] = 0;
 		}
 
 		if ( $exists ) {
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-			$wpdb->update( $table, $db_data, array( 'post_id' => $post_id ) );
+			$written = $wpdb->update( $table, $db_data, array( 'post_id' => $post_id ) );
 		} else {
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
-			$wpdb->insert( $table, $db_data );
+			$written = $wpdb->insert( $table, $db_data );
 		}
 
-		return $this->get_aioseo_data( $post_id );
+		if ( false === $written ) {
+			return new WP_Error(
+				'seo_write_failed',
+				__( 'The SEO integration rejected the write.', 'mcpwp' ),
+				array( 'db_error' => $wpdb->last_error )
+			);
+		}
+
+		// Read back and verify the submitted fields actually persisted, so the
+		// caller cannot mistake an echoed request for a stored update (GH #672).
+		$stored      = $this->get_aioseo_data( $post_id );
+		$unpersisted = array();
+		foreach ( $data as $key => $value ) {
+			if ( ! isset( $field_map[ $key ] ) || ! array_key_exists( $key, $stored ) ) {
+				continue;
+			}
+			$column = $field_map[ $key ];
+			if ( 'robots_noindex' === $column || 'robots_nofollow' === $column ) {
+				if ( $this->to_bool_flag( $value ) !== $this->to_bool_flag( $stored[ $key ] ) ) {
+					$unpersisted[ $key ] = $stored[ $key ];
+				}
+			} elseif ( sanitize_text_field( $value ) !== (string) $stored[ $key ] ) {
+				$unpersisted[ $key ] = $stored[ $key ];
+			}
+		}
+
+		if ( ! empty( $unpersisted ) ) {
+			return new WP_Error(
+				'seo_not_persisted',
+				__( 'The SEO plugin did not persist one or more submitted fields.', 'mcpwp' ),
+				array(
+					'unpersisted_fields' => array_keys( $unpersisted ),
+					'stored'             => $stored,
+				)
+			);
+		}
+
+		return $stored;
+	}
+
+	/**
+	 * Normalize a truthy/falsey SEO flag to an integer 1/0.
+	 *
+	 * @param mixed $value Raw flag value (bool, int, or string).
+	 * @return int 1 when truthy, 0 otherwise.
+	 */
+	private function to_bool_flag( $value ) {
+		if ( is_string( $value ) ) {
+			$value = strtolower( trim( $value ) );
+			if ( '' === $value || 'false' === $value || '0' === $value || 'no' === $value ) {
+				return 0;
+			}
+			return 1;
+		}
+		return $value ? 1 : 0;
 	}
 
 	/**

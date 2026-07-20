@@ -857,16 +857,17 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			}
 			if ( 'publish' === $post->post_status ) {
 				$url = get_permalink( $post_id );
-			} elseif ( class_exists( '\Elementor\Plugin' ) && get_post_meta( $post_id, '_elementor_data', true ) ) {
-				// Same reason as get_rendered_html_via_elementor(): an outbound
-				// loopback fetch of a draft/pending/private preview URL is
-				// unreliable (no logged-in session, and hosting-level gates like
-				// a staging "Coming Soon" lock intercept it before WordPress
-				// even runs — #613/#655). Render in-process instead.
-				return $this->get_rendered_copy_via_elementor( $post_id, $include_chrome );
 			} else {
-				// Draft — use preview URL so agents can audit before publish.
-				$url = get_preview_post_link( $post_id );
+				// Unpublished content (draft/pending/private) isn't reliably
+				// reachable via an outbound loopback: preview URLs need a
+				// logged-in session wp_remote_get() can't carry, and hosting-level
+				// gates (staging "Coming Soon" locks, #613/#655) intercept the
+				// request before WordPress runs — so a loopback fetch 404s/502s
+				// even though the page renders fine for an authenticated agent.
+				// Render in-process instead so pre-publish copy QA works without
+				// publishing (#675). This mirrors get_rendered_html's Elementor
+				// branch, extended to classic/Gutenberg drafts.
+				return $this->get_rendered_copy_in_process( $post, $include_chrome );
 			}
 		}
 
@@ -937,25 +938,60 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 	 * @param bool $include_chrome Whether to include nav/header/footer text.
 	 * @return WP_REST_Response
 	 */
-	private function get_rendered_copy_via_elementor( $post_id, $include_chrome ) {
-		$html     = \Elementor\Plugin::$instance->frontend->get_builder_content_for_display( $post_id, true );
+	private function get_rendered_copy_in_process( $post, $include_chrome ) {
+		$post_id = (int) $post->ID;
+		$html    = '';
+		$method  = 'internal_content';
+
+		if ( $this->is_elementor_built( $post_id ) && class_exists( '\Elementor\Plugin' ) ) {
+			$html   = \Elementor\Plugin::$instance->frontend->get_builder_content_for_display( $post_id, true );
+			$method = 'internal_elementor';
+		}
+
+		if ( '' === trim( (string) $html ) ) {
+			// Classic/Gutenberg content — or an Elementor render that produced
+			// nothing — render the stored content through the_content so the copy
+			// is still auditable before publish.
+			$html   = apply_filters( 'the_content', $post->post_content );
+			$method = 'internal_content';
+		}
+
 		$sections = $this->parse_visible_text( $html, $include_chrome );
 		$all_text = implode( ' ', array_column( $sections, 'text' ) );
 
 		return $this->success_response(
 			array(
-				'post_id'          => absint( $post_id ),
-				'url'              => add_query_arg( 'elementor-preview', $post_id, get_permalink( $post_id ) ),
+				'post_id'          => $post_id,
+				'url'              => get_permalink( $post_id ),
 				'sections'         => $sections,
 				'all_text'         => $all_text,
 				'word_count'       => str_word_count( $all_text ),
 				'section_count'    => count( $sections ),
 				'include_chrome'   => $include_chrome,
 				'validation_basis' => 'rendered_html',
-				'validation_note'  => 'Text extracted from an in-process Elementor render (no HTTP round trip) — this is the Elementor content only, not the surrounding theme header/footer.',
-				'render_method'    => 'internal_elementor',
+				'validation_note'  => 'internal_elementor' === $method
+					? 'Text from an in-process Elementor render (no HTTP round trip) — Elementor content only, not the surrounding theme header/footer.'
+					: 'Text from an in-process content render (no HTTP round trip) — post content only, not the surrounding theme header/footer.',
+				'render_method'    => $method,
 			)
 		);
+	}
+
+	/**
+	 * Whether a post is built with Elementor.
+	 *
+	 * Uses Elementor's canonical edit-mode flag first (set even when the parent
+	 * post's _elementor_data is briefly empty on a fresh draft), then falls back
+	 * to the presence of stored Elementor data.
+	 *
+	 * @param int $post_id Post ID.
+	 * @return bool
+	 */
+	private function is_elementor_built( $post_id ) {
+		if ( 'builder' === get_post_meta( $post_id, '_elementor_edit_mode', true ) ) {
+			return true;
+		}
+		return '' !== (string) get_post_meta( $post_id, '_elementor_data', true );
 	}
 
 	/**
