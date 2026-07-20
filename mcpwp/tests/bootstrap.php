@@ -1242,6 +1242,22 @@ function update_post_meta($post_id, $key, $value)
     return true;
 }
 
+if (! function_exists('get_page_template_slug')) {
+    // Mirrors WP core: '' when unset/'default', else the stored template slug.
+    function get_page_template_slug($post = null)
+    {
+        $post = is_object($post) ? $post : get_post($post);
+        if (! $post) {
+            return false;
+        }
+        $template = get_post_meta($post->ID, '_wp_page_template', true);
+        if (! $template || 'default' === $template) {
+            return '';
+        }
+        return $template;
+    }
+}
+
 function sanitize_html_class($class)
 {
     return preg_replace('/[^a-zA-Z0-9_\-]/', '', (string) $class);
