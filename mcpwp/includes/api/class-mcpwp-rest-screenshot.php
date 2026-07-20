@@ -95,13 +95,25 @@ class Mcpwp_REST_Screenshot extends Mcpwp_REST_API {
 		$url         = $request->get_param( 'url' );
 		$webhook_url = $request->get_param( 'webhook_url' );
 		$inline      = rest_sanitize_boolean( $request->get_param( 'inline' ) );
-		$args        = array(
-			'width'         => $request->get_param( 'width' ),
-			'height'        => $request->get_param( 'height' ),
+
+		// Only DEFAULT save_to_media when the caller didn't pass it at all —
+		// never clobber an explicit save_to_media=false (#677). get_params()
+		// reflects what the caller actually sent, unlike get_param(), which
+		// would report the schema default even when the param was absent.
+		$save_to_media_supplied = array_key_exists( 'save_to_media', $request->get_params() );
+		if ( $save_to_media_supplied ) {
+			$save_to_media = $request->get_param( 'save_to_media' );
+		} else {
 			// URL-by-default: without inline, the image must land in the
 			// media library so the response can carry a URL instead of
 			// 500KB+ of base64 (#560).
-			'save_to_media' => $inline ? $request->get_param( 'save_to_media' ) : true,
+			$save_to_media = ! $inline;
+		}
+
+		$args = array(
+			'width'         => $request->get_param( 'width' ),
+			'height'        => $request->get_param( 'height' ),
+			'save_to_media' => $save_to_media,
 			'title'         => $request->get_param( 'title' ),
 		);
 
