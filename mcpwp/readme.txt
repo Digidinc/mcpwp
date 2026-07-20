@@ -6,7 +6,7 @@ Requires at least: 6.1
 Tested up to: 7.0
 Requires PHP: 7.4
 <!-- x-release-please-start-version -->
-Stable tag: 3.6.2
+Stable tag: 3.6.3
 <!-- x-release-please-end -->
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -152,6 +152,9 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 4. Integrations and Chat — connected services plus safety-first agent workflow
 
 == Changelog ==
+
+= 3.6.3 =
+* fix: **security:** close a content-disclosure gap where a read-scoped API key could read or enumerate non-public (draft, pending, private) content — titles, URLs, bodies, excerpts, and SEO/approval metadata — across the Elementor, blocks, pages, posts, SEO, content-graph, approvals, and signals read surfaces. Non-public content now requires write scope, enforced at a shared model chokepoint so no read endpoint can reopen the gap ([#683](https://github.com/Mumega-com/mcpwp/issues/683))
 
 = 3.6.2 =
 * fix: **menus:** `wp_add_menu_item` / `wp_create_menu` now honor the documented `taxonomy` and `post_type` item types (with `object` + `object_id`) instead of silently storing a blank custom link; `wp_create_menu` reports per-item failures instead of returning a partially-broken menu ([#676](https://github.com/Mumega-com/mcpwp/issues/676))
