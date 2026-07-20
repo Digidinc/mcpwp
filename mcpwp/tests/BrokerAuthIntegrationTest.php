@@ -407,4 +407,108 @@ final class BrokerAuthIntegrationTest extends TestCase {
 
 		$this->assertArrayNotHasKey( 'WWW-Authenticate', $headers );
 	}
+
+	// ── Finding 2: local API key sent as Bearer must resolve LOCALLY (no egress) ──
+
+	/**
+	 * A VALID scoped API key sent via `Authorization: Bearer mcpwp_<key>` (no
+	 * X-API-Key) on an ENROLLED site must authenticate through the LOCAL key
+	 * path — NEVER shipped to mumcp.com as a broker token. The plugin accepts
+	 * API keys via the Bearer header (get_api_key_from_request), so broker
+	 * introspection must be a fallback that runs ONLY after no local key matched.
+	 */
+	public function test_local_api_key_via_bearer_header_resolves_locally_no_egress(): void {
+		$this->enroll();
+		$captured = $this->mockIntrospection( $this->activeResponse() );
+
+		$auth    = new Mcpwp_Broker_Integration_Auth_Harness();
+		$created = $auth->create_scoped_api_key( 'writer', array( 'write' ) );
+
+		// Real API key on the Authorization: Bearer header, NO X-API-Key header.
+		$request = new WP_REST_Request(
+			'GET',
+			'/mcpwp/v1/site-info',
+			array(),
+			array( 'Authorization' => 'Bearer ' . $created['key'] )
+		);
+
+		$result = $auth->verify_api_key( $request );
+
+		$this->assertTrue( $result, 'A real API key on the Bearer header must authenticate locally on an enrolled site.' );
+		$this->assertCount( 0, $captured, 'A valid local key must NEVER be sent to the broker as a token (no secret egress).' );
+
+		$record = $auth->get_current_api_key_record();
+		$this->assertSame( $created['id'], $record['id'], 'The matched scoped API key must be used, not a broker principal.' );
+		$this->assertNotSame( 'broker', $record['type'] ?? '' );
+		$this->assertContains( 'read', $record['scopes'] );
+		$this->assertContains( 'write', $record['scopes'] );
+	}
+
+	// ── Finding 1: anonymous introspection floods are throttled before the network ──
+
+	/**
+	 * Repeated invalid Bearer tokens from one IP must be rate-limited BEFORE the
+	 * outbound introspection network call. Once throttled, no further
+	 * wp_remote_post is made — bounding worker exhaustion + amplification against
+	 * the broker.
+	 */
+	public function test_anonymous_bearer_attempts_are_rate_limited_before_network(): void {
+		$this->enroll();
+
+		// Tight burst limit so the third attempt from one IP is throttled.
+		update_option(
+			'mcpwp_rate_limit_settings',
+			array(
+				'enabled'             => true,
+				'requests_per_minute' => 100,
+				'requests_per_hour'   => 1000,
+				'burst_limit'         => 2,
+				'whitelist'           => array(),
+			)
+		);
+		$this->resetRateLimiterSingleton();
+
+		// Invalid token (active:false) — each accepted attempt makes one network call.
+		$captured = $this->mockIntrospection(
+			array(
+				'response' => array( 'code' => 200 ),
+				'body'     => wp_json_encode( array( 'active' => false ) ),
+			)
+		);
+
+		$auth = new Mcpwp_Broker_Integration_Auth_Harness();
+
+		$make = function () use ( $auth ) {
+			return $auth->verify_api_key(
+				new WP_REST_Request(
+					'POST',
+					'/mcpwp/v1/posts',
+					array(),
+					array( 'Authorization' => 'Bearer invalid-token' )
+				)
+			);
+		};
+
+		$r1 = $make();
+		$r2 = $make();
+		$calls_before_throttle = count( $captured );
+		$r3 = $make();
+
+		$this->assertSame( 2, $calls_before_throttle, 'First two attempts should each introspect once.' );
+		$this->assertCount( 2, $captured, 'Once throttled, no further introspection network call may be made.' );
+
+		$this->assertInstanceOf( WP_Error::class, $r3 );
+		$this->assertSame( 'rate_limit_exceeded', $r3->get_error_code(), 'The throttled attempt must return the rate-limit error without a network call.' );
+
+		// The first two attempts fail-closed on the invalid token (not a rate-limit error).
+		$this->assertInstanceOf( WP_Error::class, $r1 );
+		$this->assertSame( 'broker_token_invalid', $r1->get_error_code() );
+	}
+
+	private function resetRateLimiterSingleton(): void {
+		$ref  = new ReflectionClass( Mcpwp_Rate_Limiter::class );
+		$prop = $ref->getProperty( 'instance' );
+		$prop->setAccessible( true );
+		$prop->setValue( null, null );
+	}
 }

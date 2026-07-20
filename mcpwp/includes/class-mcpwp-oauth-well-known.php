@@ -250,15 +250,31 @@ class Mcpwp_OAuth_Well_Known {
 	/**
 	 * Whether this site is enrolled with the mumcp.com broker.
 	 *
-	 * Enrollment is considered active when the `mcpwp_broker_enrollment`
-	 * option is a non-empty array containing a `site_id`. An empty array
-	 * (never enrolled, or disconnected) does not count.
+	 * Enrollment is only "active" when the site can actually complete a broker
+	 * introspection: it needs a `site_id`, a `site_credential`, AND an
+	 * `audience`. A half-enrolled site (e.g. `site_id` written but no
+	 * credential/audience yet) must NOT advertise the broker discovery chain
+	 * (401 WWW-Authenticate header, protected-resource metadata) it cannot
+	 * complete. This deliberately delegates to — and stays byte-identical with —
+	 * Mcpwp_Broker_Auth::is_enrolled(), the same predicate the auth chokepoint
+	 * uses before it will attempt introspection, so the "advertise" and "accept"
+	 * gates can never disagree.
 	 *
 	 * @return bool
 	 */
 	public static function is_broker_enrolled() {
+		if ( class_exists( 'Mcpwp_Broker_Auth' ) ) {
+			$broker_auth = new Mcpwp_Broker_Auth();
+			return $broker_auth->is_enrolled();
+		}
+
+		// Fallback when Mcpwp_Broker_Auth is not loaded: replicate its exact
+		// three-field check rather than the looser site_id-only test.
 		$enrollment = get_option( 'mcpwp_broker_enrollment', array() );
-		return is_array( $enrollment ) && ! empty( $enrollment['site_id'] );
+		return is_array( $enrollment )
+			&& ! empty( $enrollment['site_id'] )
+			&& ! empty( $enrollment['site_credential'] )
+			&& ! empty( $enrollment['audience'] );
 	}
 
 	// -------------------------------------------------------------------------

@@ -170,25 +170,6 @@ trait Mcpwp_Api_Auth {
 			return $this->authenticate_oauth_access_token( $api_key, $request );
 		}
 
-		// mumcp.com broker OAuth Bearer token — alternative to X-API-Key, the
-		// integration that makes claude.ai sign-in work. Only ever attempted
-		// when the credential arrived via the Authorization: Bearer header
-		// (never the X-API-Key header, never the ?api_key= query fallback) and
-		// only when the site is actively enrolled with the broker — the
-		// kill-switch inside Mcpwp_Broker_Auth::is_enrolled() means an
-		// unenrolled/disabled site makes NO network call for a bearer token and
-		// falls straight through to the unchanged invalid-key handling below.
-		$auth_header        = method_exists( $request, 'get_header' ) ? $request->get_header( 'Authorization' ) : null;
-		$has_bearer_header   = ! empty( $auth_header ) && 0 === strpos( (string) $auth_header, 'Bearer ' );
-		$has_api_key_header  = method_exists( $request, 'get_header' ) && ! empty( $request->get_header( 'X-API-Key' ) );
-
-		if ( $has_bearer_header && ! $has_api_key_header && class_exists( 'Mcpwp_Broker_Auth' ) ) {
-			$broker_auth = new Mcpwp_Broker_Auth();
-			if ( $broker_auth->is_enrolled() ) {
-				return $this->authenticate_broker_bearer_token( $api_key, $request, $broker_auth );
-			}
-		}
-
 		$matched_key = $this->find_scoped_api_key( $api_key );
 		$legacy_key  = get_option( 'mcpwp_api_key' );
 
@@ -212,6 +193,32 @@ trait Mcpwp_Api_Auth {
 		}
 
 		if ( ! $matched_key ) {
+			// mumcp.com broker OAuth Bearer token — FALLBACK only, reached ONLY
+			// after no local API key (scoped, legacy mcpwp_, or bridged spai_)
+			// matched the presented credential. Ordering matters for two reasons:
+			//   1. Secret egress: the plugin also accepts API keys on the
+			//      Authorization: Bearer header (get_api_key_from_request), so a
+			//      real API key must be resolved locally above and NEVER shipped
+			//      to mumcp.com as an introspection token.
+			//   2. Correctness: a valid local key must authenticate, not be
+			//      rejected because introspection intercepted it first.
+			// Only ever attempted for a genuine Authorization: Bearer header with
+			// no X-API-Key header (never the ?api_key= query fallback), and only
+			// when the site is actively enrolled — the kill-switch inside
+			// Mcpwp_Broker_Auth::is_enrolled() means an unenrolled/disabled site
+			// makes NO network call and falls straight through to the unchanged
+			// invalid-key handling below.
+			$auth_header        = method_exists( $request, 'get_header' ) ? $request->get_header( 'Authorization' ) : null;
+			$has_bearer_header  = ! empty( $auth_header ) && 0 === strpos( (string) $auth_header, 'Bearer ' );
+			$has_api_key_header = method_exists( $request, 'get_header' ) && ! empty( $request->get_header( 'X-API-Key' ) );
+
+			if ( $has_bearer_header && ! $has_api_key_header && class_exists( 'Mcpwp_Broker_Auth' ) ) {
+				$broker_auth = new Mcpwp_Broker_Auth();
+				if ( $broker_auth->is_enrolled() ) {
+					return $this->authenticate_broker_bearer_token( $api_key, $request, $broker_auth );
+				}
+			}
+
 			$has_configured_keys = $this->has_configured_api_keys( $legacy_key );
 			$rate_identifier     = $has_configured_keys ? 'invalid:' . $this->get_client_ip() : 'unconfigured:' . $this->get_client_ip();
 			$rate_limit_check    = $this->check_rate_limit( $rate_identifier, $http_method );
@@ -687,6 +694,19 @@ trait Mcpwp_Api_Auth {
 	 * @return bool|WP_Error True when valid, error otherwise.
 	 */
 	protected function authenticate_broker_bearer_token( $token, $request, $broker_auth ) {
+		// DoS guard: throttle anonymous introspection attempts per client IP
+		// BEFORE the outbound network call, mirroring the invalid-key limiter
+		// ('invalid:'.$ip). Without this a Bearer token that is not a local key
+		// would trigger one unthrottled wp_remote_post (HTTP_TIMEOUT) per attempt
+		// — worker exhaustion locally and amplification against the broker. This
+		// bucket is keyed on IP (not the token) so rotating tokens can't evade it,
+		// and it runs ahead of validate_token()'s own per-token 'broker:' bucket.
+		$http_method      = method_exists( $request, 'get_method' ) ? $request->get_method() : 'POST';
+		$attempt_limit    = $this->check_rate_limit( 'broker-attempt:' . $this->get_client_ip(), $http_method );
+		if ( is_wp_error( $attempt_limit ) ) {
+			return $attempt_limit;
+		}
+
 		$result = $broker_auth->validate_token( $token );
 		if ( is_wp_error( $result ) ) {
 			// Fail-closed: not enrolled (kill-switch), transport error, non-200,
