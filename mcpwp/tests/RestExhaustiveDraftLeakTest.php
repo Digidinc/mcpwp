@@ -484,6 +484,62 @@ final class RestExhaustiveDraftLeakTest extends TestCase {
 		$this->assertSame( 'SECRET draft title', $seo[0]['entity_title'] );
 	}
 
+	// POST /signals/refresh → Mcpwp_REST_Signals::refresh_signals. This handler
+	// had ZERO coverage. It called Mcpwp_Signals::compute() (which returns the
+	// freshly-computed signals RAW, unredacted) and returned that value directly
+	// — bypassing the get_signals() read chokepoint that GET /signals passes
+	// through. Two layers protect the draft seo_issue title now:
+	//
+	//   (1) PRIMARY: /signals/refresh is a POST, so the scope gate requires
+	//       'write' scope — a read-only key is denied at auth (403) and never
+	//       reaches the handler at all.
+	//   (2) DEFENSE-IN-DEPTH: the handler itself now reads the refreshed cache
+	//       back through get_signals() gated on requester_can_see_non_public(),
+	//       so an unprivileged caller (no write scope) is redacted at the SAME
+	//       single chokepoint every other signal read passes. Reverting to
+	//       `return compute()` re-opens the leak and fails the direct-invocation
+	//       negative below — the TDD bite.
+
+	public function test_refresh_signals_read_key_scope_denied(): void {
+		$this->assertReadKeyScopeDenied( new Mcpwp_REST_Signals(), 'POST', '/mcpwp/v1/signals/refresh', 'write' );
+	}
+
+	public function test_refresh_signals_unprivileged_caller_redacts_seo_issue_title(): void {
+		$this->seed_stored_issues();
+		$c = new Mcpwp_REST_Signals();
+		// Invoke the handler directly with NO privileged context (no key record
+		// set → requester_can_see_non_public() === false), exercising the
+		// in-handler redaction chokepoint independently of the route scope gate.
+		$r    = new WP_REST_Request( 'POST', '/mcpwp/v1/signals/refresh', array( 'types' => 'seo_issue' ) );
+		$resp = $c->refresh_signals( $r );
+		$this->assertInstanceOf( WP_REST_Response::class, $resp );
+		$this->assertSame( 200, $resp->get_status() );
+		$data = $resp->get_data();
+		// The freshly-computed seo_issue signal references a DRAFT post — the
+		// draft title/detail must not appear anywhere in the response.
+		$this->assertNoSecret( $data );
+		$seo = array_values(
+			array_filter( $data['signals'], static fn( $s ) => ( $s['type'] ?? '' ) === 'seo_issue' )
+		);
+		$this->assertNotEmpty( $seo, 'seo_issue signal should be present but redacted' );
+		$this->assertSame( '', $seo[0]['entity_title'], 'unprivileged caller must not receive the draft entity title' );
+		$this->assertTrue( ! empty( $seo[0]['redacted'] ), 'the draft-derived signal is flagged redacted' );
+	}
+
+	public function test_refresh_signals_write_key_sees_seo_issue_title(): void {
+		$this->seed_stored_issues();
+		$c = new Mcpwp_REST_Signals();
+		$r = $this->authed( $c, 'POST', '/mcpwp/v1/signals/refresh', array( 'types' => 'seo_issue' ), array( 'write' ) );
+		$resp = $c->refresh_signals( $r );
+		$this->assertSame( 200, $resp->get_status() );
+		$data = $resp->get_data();
+		$seo = array_values(
+			array_filter( $data['signals'], static fn( $s ) => ( $s['type'] ?? '' ) === 'seo_issue' )
+		);
+		$this->assertNotEmpty( $seo );
+		$this->assertSame( 'SECRET draft title', $seo[0]['entity_title'], 'write key sees the real draft source title' );
+	}
+
 	// GET /seo/autofix-plan → Mcpwp_SEO_Autofix::get_plan (list_issues); the
 	// plan's actions[] embed each issue title/url.
 
