@@ -111,6 +111,14 @@ trait Mcpwp_Admin_Setup_Trait {
 
 		$scoped_keys = $this->list_scoped_api_keys( true );
 
+		// mumcp.com broker connection status for the Connections UI.
+		$broker_enrolled   = class_exists( 'Mcpwp_Broker_Auth' ) && ( new Mcpwp_Broker_Auth() )->is_enrolled();
+		$broker_enrollment = get_option( 'mcpwp_broker_enrollment', array() );
+		$broker_audience   = ( is_array( $broker_enrollment ) && ! empty( $broker_enrollment['audience'] ) )
+			? (string) $broker_enrollment['audience']
+			: '';
+		$broker_notice     = isset( $_GET['broker'] ) ? sanitize_key( wp_unslash( $_GET['broker'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only display flag, no state change.
+
 		include MCPWP_PLUGIN_DIR . 'admin/partials/mcpwp-setup-display.php';
 	}
 

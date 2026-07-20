@@ -101,7 +101,13 @@ class Mcpwp_Broker_Auth {
 		$enrollment = get_option( 'mcpwp_broker_enrollment', array() );
 
 		// 2. Cache — serve a prior positive result within its TTL window.
-		$cache_key = self::CACHE_PREFIX . hash( 'sha256', (string) $token );
+		// The key binds the token to THIS enrollment's site_id + audience (not
+		// just the token), so a re-enrollment (new site_id/audience — e.g.
+		// disconnect + reconnect, or the broker re-issuing under a different
+		// audience) can never serve a cached positive minted under the old
+		// enrollment; the cache key itself changes and the old entry is simply
+		// orphaned (it will expire on its own within MAX_CACHE_TTL regardless).
+		$cache_key = self::CACHE_PREFIX . hash( 'sha256', $token . '|' . $enrollment['site_id'] . '|' . $enrollment['audience'] );
 		$cached    = get_transient( $cache_key );
 		if ( is_array( $cached ) ) {
 			return $cached;

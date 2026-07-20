@@ -149,7 +149,7 @@ final class BrokerAuthTest extends TestCase {
 		$this->assertSame( 'site-123', $result['site_id'] );
 		$this->assertSame( 'https://example.test', $result['aud'] );
 
-		$key = 'mcpwp_bt_' . hash( 'sha256', 'opaque-token' );
+		$key = 'mcpwp_bt_' . hash( 'sha256', 'opaque-token|site-123|https://example.test' );
 		$this->assertIsArray( get_transient( $key ), 'A positive result must be cached.' );
 	}
 
@@ -172,7 +172,7 @@ final class BrokerAuthTest extends TestCase {
 		$auth = new Mcpwp_Broker_Auth();
 		$auth->validate_token( 'opaque-token' );
 
-		$key  = 'mcpwp_bt_' . hash( 'sha256', 'opaque-token' );
+		$key  = 'mcpwp_bt_' . hash( 'sha256', 'opaque-token|site-123|https://example.test' );
 		$item = $GLOBALS['mcpwp_test_transients'][ $key ];
 		$this->assertLessThanOrEqual( time() + 60, $item['expires'] );
 		$this->assertGreaterThan( time(), $item['expires'] );
@@ -187,7 +187,7 @@ final class BrokerAuthTest extends TestCase {
 		$result = $auth->validate_token( 'opaque-token' );
 
 		$this->assertIsArray( $result );
-		$key  = 'mcpwp_bt_' . hash( 'sha256', 'opaque-token' );
+		$key  = 'mcpwp_bt_' . hash( 'sha256', 'opaque-token|site-123|https://example.test' );
 		$item = $GLOBALS['mcpwp_test_transients'][ $key ];
 		$this->assertGreaterThanOrEqual( time(), $item['expires'] );
 	}
@@ -210,7 +210,7 @@ final class BrokerAuthTest extends TestCase {
 		$this->assertSame( 'broker_token_invalid', $result->get_error_code() );
 		$this->assertSame( 401, $result->get_error_data()['status'] );
 
-		$key = 'mcpwp_bt_' . hash( 'sha256', 'opaque-token' );
+		$key = 'mcpwp_bt_' . hash( 'sha256', 'opaque-token|site-123|https://example.test' );
 		$this->assertFalse( get_transient( $key ), 'Negative results must never be cached.' );
 	}
 
@@ -230,7 +230,7 @@ final class BrokerAuthTest extends TestCase {
 		$this->assertSame( 'broker_token_invalid', $result->get_error_code() );
 		$this->assertSame( 401, $result->get_error_data()['status'] );
 
-		$key = 'mcpwp_bt_' . hash( 'sha256', 'opaque-token' );
+		$key = 'mcpwp_bt_' . hash( 'sha256', 'opaque-token|site-123|https://example.test' );
 		$this->assertFalse( get_transient( $key ) );
 	}
 
@@ -245,7 +245,7 @@ final class BrokerAuthTest extends TestCase {
 		$this->assertSame( 'broker_token_invalid', $result->get_error_code() );
 		$this->assertSame( 401, $result->get_error_data()['status'] );
 
-		$key = 'mcpwp_bt_' . hash( 'sha256', 'opaque-token' );
+		$key = 'mcpwp_bt_' . hash( 'sha256', 'opaque-token|site-123|https://example.test' );
 		$this->assertFalse( get_transient( $key ) );
 	}
 
@@ -278,7 +278,7 @@ final class BrokerAuthTest extends TestCase {
 		$this->assertSame( 'broker_audience_mismatch', $result->get_error_code() );
 		$this->assertSame( 403, $result->get_error_data()['status'] );
 
-		$key = 'mcpwp_bt_' . hash( 'sha256', 'opaque-token' );
+		$key = 'mcpwp_bt_' . hash( 'sha256', 'opaque-token|site-123|https://example.test' );
 		$this->assertFalse( get_transient( $key ), 'An audience mismatch must not be cached as valid.' );
 	}
 

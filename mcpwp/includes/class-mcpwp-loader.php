@@ -65,6 +65,7 @@ class Mcpwp_Loader {
 		$settings = new Mcpwp_Settings();
 		$integrations_admin = new Mcpwp_Integrations_Admin();
 		$tools_admin = new Mcpwp_Tools_Admin();
+		$broker_admin = new Mcpwp_Broker_Admin();
 
 		// Admin menu
 		$this->add_action( 'admin_menu', $admin, 'add_admin_menu' );
@@ -106,6 +107,10 @@ class Mcpwp_Loader {
 		$this->add_action( 'admin_post_mcpwp_figma_oauth_start', $integrations_admin, 'handle_figma_oauth_start' );
 		$this->add_action( 'admin_post_mcpwp_figma_oauth_callback', $integrations_admin, 'handle_figma_oauth_callback' );
 		$this->add_action( 'admin_post_nopriv_mcpwp_figma_oauth_callback', $integrations_admin, 'handle_figma_oauth_callback' );
+
+		// mumcp.com broker — admin Connect / Disconnect browser legs.
+		$this->add_action( 'admin_post_mcpwp_broker_connect', $broker_admin, 'handle_connect' );
+		$this->add_action( 'admin_post_mcpwp_broker_disconnect', $broker_admin, 'handle_disconnect' );
 
 		// Plugin action links.
 		$this->add_filter( 'plugin_action_links_' . MCPWP_PLUGIN_BASENAME, $admin, 'add_action_links', 100 );
