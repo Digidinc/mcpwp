@@ -1479,6 +1479,34 @@
 	height: 14px;
 }
 
+/* Connect method cards — Setup page "Connect Your AI" tab, disambiguates
+ * the working API-key URL from the not-yet-live OAuth sign-in URL so users
+ * don't copy the keyless one expecting it to authenticate today. */
+.mcpwp-connect-method {
+	border: 1px solid var(--mcpwp-border);
+	border-radius: var(--mcpwp-radius-md);
+	padding: 14px 16px;
+	margin-bottom: 16px;
+}
+
+.mcpwp-connect-method:last-of-type {
+	margin-bottom: 0;
+}
+
+.mcpwp-connect-method__title {
+	align-items: center;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin: 0 0 6px;
+}
+
+.mcpwp-connect-method__hint {
+	color: var(--mcpwp-text-muted);
+	font-size: 12px;
+	margin: 8px 0 0;
+}
+
 /* Connector Fields Table */
 .mcpwp-connector-fields {
 	border-collapse: collapse;
@@ -1644,6 +1672,12 @@
 .mcpwp-status-inactive {
 	background: #f0f0f1;
 	color: var(--mcpwp-text-muted);
+}
+
+/* Neutral/informational variant — e.g. "coming soon" method badges */
+.mcpwp-status-info {
+	background: var(--mcpwp-slate-100);
+	color: var(--mcpwp-blue-dark);
 }
 
 .mcpwp-badge {

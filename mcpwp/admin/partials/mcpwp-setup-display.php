@@ -454,26 +454,52 @@ $last_activity_time = ! empty( $recent_activity[0]['created_at'] ) ? $recent_act
 
 			<!-- Claude Desktop -->
 			<div class="mcpwp-inner-tab-content" id="mcpwp-tab-claude-desktop" style="display:none;">
-				<p>
-					<?php esc_html_e( 'Fastest method: in Claude Desktop go to Settings → Connectors → Add custom connector and paste the MCP URL:', 'mcpwp' ); ?>
-				</p>
-				<div class="mcpwp-code-wrapper">
-					<pre class="mcpwp-code-block" id="mcpwp-claude-desktop-url"><?php echo esc_url( add_query_arg( 'api_key', ( $is_hidden ? 'YOUR_API_KEY' : $display_key ), $mcp_url ) ); ?></pre>
-					<button type="button" class="button mcpwp-copy-code-btn" data-target="mcpwp-claude-desktop-url">
-						<span class="dashicons dashicons-clipboard"></span>
-						<?php esc_html_e( 'Copy URL', 'mcpwp' ); ?>
-					</button>
+
+				<!-- Method 1: API key — works today -->
+				<div class="mcpwp-connect-method">
+					<h4 class="mcpwp-connect-method__title">
+						<?php esc_html_e( 'API key', 'mcpwp' ); ?>
+						<span class="mcpwp-status mcpwp-status-active"><?php esc_html_e( 'Works today · Accepted', 'mcpwp' ); ?></span>
+					</h4>
+					<p>
+						<?php esc_html_e( 'In Claude Desktop go to Settings → Connectors → Add custom connector and paste this URL. Your API key is embedded, so the connection works immediately:', 'mcpwp' ); ?>
+					</p>
+					<div class="mcpwp-code-wrapper">
+						<pre class="mcpwp-code-block" id="mcpwp-claude-desktop-url"><?php echo esc_url( add_query_arg( 'api_key', ( $is_hidden ? 'YOUR_API_KEY' : $display_key ), $mcp_url ) ); ?></pre>
+						<button type="button" class="button button-primary mcpwp-copy-code-btn" data-target="mcpwp-claude-desktop-url">
+							<span class="dashicons dashicons-clipboard"></span>
+							<?php esc_html_e( 'Copy URL', 'mcpwp' ); ?>
+						</button>
+					</div>
+					<?php if ( $is_hidden ) : ?>
+					<p class="description">
+						<?php esc_html_e( 'This shows a placeholder because your real key was only visible in the session it was generated. Regenerate a key above to get a working, key-filled URL.', 'mcpwp' ); ?>
+					</p>
+					<?php else : ?>
+					<div class="notice notice-warning inline" style="margin:10px 0 0;">
+						<p>
+							<strong><?php esc_html_e( 'This link contains a secret — treat it like a password.', 'mcpwp' ); ?></strong>
+							<?php esc_html_e( 'Use a role-scoped key for this connector and revoke it above if it ever leaks.', 'mcpwp' ); ?>
+						</p>
+					</div>
+					<?php endif; ?>
+					<p class="mcpwp-connect-method__hint">
+						<?php esc_html_e( 'Prefer the key to never appear in a URL? The Claude Code and Cursor tabs send it as a request header instead — the safer option when your client supports it.', 'mcpwp' ); ?>
+					</p>
 				</div>
-				<p>
-					<?php esc_html_e( 'Prefer signing in instead of pasting a key? Enable OAuth under Settings, then add the plain MCP URL as the connector — Claude will open your WordPress login to authorize:', 'mcpwp' ); ?>
-				</p>
-				<div class="mcpwp-code-wrapper">
-					<pre class="mcpwp-code-block" id="mcpwp-claude-desktop-oauth-url"><?php echo esc_url( $mcp_url ); ?></pre>
-					<button type="button" class="button mcpwp-copy-code-btn" data-target="mcpwp-claude-desktop-oauth-url">
-						<span class="dashicons dashicons-clipboard"></span>
-						<?php esc_html_e( 'Copy URL', 'mcpwp' ); ?>
-					</button>
+
+				<!-- Method 2: OAuth sign-in — more secure, not yet live -->
+				<div class="mcpwp-connect-method">
+					<h4 class="mcpwp-connect-method__title">
+						<?php esc_html_e( 'OAuth sign-in', 'mcpwp' ); ?>
+						<span class="mcpwp-status mcpwp-status-active"><?php esc_html_e( 'Recommended · More secure', 'mcpwp' ); ?></span>
+						<span class="mcpwp-status mcpwp-status-info"><?php esc_html_e( 'Coming soon · via mumcp.com', 'mcpwp' ); ?></span>
+					</h4>
+					<p class="description">
+						<?php esc_html_e( 'Signs in with your WordPress account — no API key ever rides in the URL. This is the direction we\'re headed, but it is not live yet: full sign-in from Claude Desktop/claude.ai needs the mumcp.com sign-in broker, currently in development. Use the API key method above until it ships.', 'mcpwp' ); ?>
+					</p>
 				</div>
+
 				<p><?php esc_html_e( 'Or add to claude_desktop_config.json (Claude Desktop config supports only command-based servers, so the URL goes through the mcp-remote bridge):', 'mcpwp' ); ?></p>
 				<div class="mcpwp-code-wrapper">
 					<pre class="mcpwp-code-block" id="mcpwp-claude-desktop-cfg">{
