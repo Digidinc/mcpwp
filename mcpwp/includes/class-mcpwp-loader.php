@@ -342,6 +342,11 @@ class Mcpwp_Loader {
 			( new Mcpwp_REST_OAuth() )->register_routes();
 		}
 
+		// mumcp.com broker — enrollment handshake (enroll-callback + enroll-confirm).
+		if ( class_exists( 'Mcpwp_REST_Broker' ) ) {
+			( new Mcpwp_REST_Broker() )->register_routes();
+		}
+
 		// Batch
 		$batch_controller = new Mcpwp_REST_Batch();
 		$batch_controller->register_routes();

@@ -330,6 +330,7 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-cloudflare.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-figma.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-oauth.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-broker.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-oauth-well-known.php';
 
 	// Load admin
