@@ -6,7 +6,7 @@ Requires at least: 6.1
 Tested up to: 7.0
 Requires PHP: 7.4
 <!-- x-release-please-start-version -->
-Stable tag: 3.6.3
+Stable tag: 3.6.4
 <!-- x-release-please-end -->
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -152,6 +152,12 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 4. Integrations and Chat — connected services plus safety-first agent workflow
 
 == Changelog ==
+
+= 3.6.4 =
+* fix: **seo:** `wp_validate_seo_readiness` no longer reports a sitewide robots.txt block when the site only disallows sub-paths (e.g. `/wp-admin/`, WooCommerce cart URLs). It now parses robots.txt by user-agent group and flags a root block only on an exact `Disallow: /` ([#680](https://github.com/Mumega-com/mcpwp/issues/680))
+* fix: **seo:** readiness checks (H1, word count, headings, image alts) now source from the live rendered page for server-rendered template pages whose stored content is empty, instead of falsely reporting `missing_h1` / `thin_content` ([#681](https://github.com/Mumega-com/mcpwp/issues/681))
+* fix: **media:** `wp_screenshot_url` now honors an explicit `save_to_media=false` instead of always creating a media item when `inline` is off ([#677](https://github.com/Mumega-com/mcpwp/issues/677))
+* new: **setup:** the Setup page now separates the two Claude Desktop connect methods — "API key · works today" (with a treat-this-link-as-a-secret warning) and "OAuth sign-in · more secure · coming soon via mumcp.com" — so the working configuration is unmistakable
 
 = 3.6.3 =
 * fix: **security:** close a content-disclosure gap where a read-scoped API key could read or enumerate non-public (draft, pending, private) content — titles, URLs, bodies, excerpts, and SEO/approval metadata — across the Elementor, blocks, pages, posts, SEO, content-graph, approvals, and signals read surfaces. Non-public content now requires write scope, enforced at a shared model chokepoint so no read endpoint can reopen the gap ([#683](https://github.com/Mumega-com/mcpwp/issues/683))
