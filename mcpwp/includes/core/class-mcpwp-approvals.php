@@ -99,11 +99,25 @@ class Mcpwp_Approvals {
 	/**
 	 * List approval requests.
 	 *
-	 * @param string $status Status filter.
-	 * @param int    $limit  Maximum records.
+	 * Fail-closed chokepoint: EVERY read of the approval list flows through here,
+	 * so the source-leak redaction lives here rather than on each REST consumer
+	 * (prior passes gated one consumer and left siblings — /site-state and the
+	 * control room both read this list). Unless the caller proves it may see
+	 * non-public content ($reveal_non_public === true), every returned record
+	 * whose source post is draft/pending/private is run through
+	 * redact_source_for_unprivileged() so a read-only key can never harvest a
+	 * hidden title, URL, status, or the 40-word body excerpt a privileged key
+	 * queued for review. The reveal flag is threaded from the REST handler via
+	 * requester_can_see_non_public(); the admin Control Room passes true because
+	 * it renders under activate_plugins, not a read API key.
+	 *
+	 * @param string $status            Status filter.
+	 * @param int    $limit             Maximum records.
+	 * @param bool   $reveal_non_public When true, return full records; when false
+	 *                                  (default, SAFE) redact non-public sources.
 	 * @return array Requests.
 	 */
-	public static function list_requests( $status = '', $limit = 50 ) {
+	public static function list_requests( $status = '', $limit = 50, $reveal_non_public = false ) {
 		$items  = array_values( self::get_all() );
 		$status = sanitize_key( (string) $status );
 		$limit  = min( 100, max( 1, (int) $limit ) );
@@ -126,7 +140,13 @@ class Mcpwp_Approvals {
 			);
 		}
 
-		return array_map( array( __CLASS__, 'public_record' ), array_slice( $items, 0, $limit ) );
+		$records = array_map( array( __CLASS__, 'public_record' ), array_slice( $items, 0, $limit ) );
+
+		if ( ! $reveal_non_public ) {
+			$records = array_map( array( __CLASS__, 'redact_source_for_unprivileged' ), $records );
+		}
+
+		return $records;
 	}
 
 	/**

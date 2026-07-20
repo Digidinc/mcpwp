@@ -840,8 +840,9 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 					'run_id'   => $request->get_param( 'run_id' ),
 					'limit'    => $request->get_param( 'limit' ),
 					// A read-only key must not read stored draft/private issue
-					// titles/urls that a write-key audit run persisted.
-					'exclude_non_public' => ! $this->requester_can_see_non_public(),
+					// titles/urls that a write-key audit run persisted. The model
+					// is fail-closed by default; only a privileged caller reveals.
+					'reveal_non_public' => $this->requester_can_see_non_public(),
 				)
 			)
 		);
@@ -1193,6 +1194,9 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 				'run_id'   => $request->get_param( 'run_id' ),
 				'issue_id' => $request->get_param( 'issue_id' ),
 				'limit'    => $request->get_param( 'limit' ),
+				// A read-only key must not pull draft/private issue titles/urls
+				// into the plan's actions[]. Threaded to the fail-closed model.
+				'reveal_non_public' => $this->requester_can_see_non_public(),
 			)
 		) : array(
 			'schema_version' => '2026-05-20',

@@ -54,12 +54,16 @@ class Mcpwp_Signals {
 	/**
 	 * Retrieve stored signals, optionally filtered.
 	 *
-	 * @param array  $types  Signal type filter.
-	 * @param string $since  ISO timestamp — return signals detected after this time.
-	 * @param int    $limit  Max results.
+	 * @param array  $types             Signal type filter.
+	 * @param string $since             ISO timestamp — return signals detected after this time.
+	 * @param int    $limit             Max results.
+	 * @param bool   $reveal_non_public When false (default, SAFE) any signal that
+	 *                                  references a non-public/missing post has its
+	 *                                  entity title + detail stripped; when true the
+	 *                                  full signal is returned.
 	 * @return array
 	 */
-	public static function get_signals( array $types = array(), string $since = '', int $limit = 50 ): array {
+	public static function get_signals( array $types = array(), string $since = '', int $limit = 50, bool $reveal_non_public = false ): array {
 		$all = self::load();
 
 		$results = array();
@@ -86,7 +90,52 @@ class Mcpwp_Signals {
 			}
 		);
 
-		return array_slice( $results, 0, max( 1, $limit ) );
+		$results = array_slice( $results, 0, max( 1, $limit ) );
+
+		if ( ! $reveal_non_public ) {
+			$results = array_map( array( __CLASS__, 'redact_signal_for_unprivileged' ), $results );
+		}
+
+		return $results;
+	}
+
+	/**
+	 * Strip a signal's source-derived fields when it references a non-public post
+	 * and the reader is unprivileged.
+	 *
+	 * The signal feed is API-key gated but not write-scope gated, so a read-only
+	 * key can list it. A seo_issue signal carries the stored issue title (which
+	 * may be a draft/private post's), and a draft_accumulation signal carries a
+	 * draft post's title outright. Both leak unpublished content. Non-public
+	 * status is resolved from the LIVE post (a post unpublished after compute is
+	 * still protected) and fails closed (missing post → treated as non-public).
+	 * Signals with no post reference (entity_id <= 0) or non-post entities
+	 * (e.g. plugin updates) are untouched.
+	 *
+	 * @param array $signal Stored signal.
+	 * @return array Signal with source fields stripped when protected.
+	 */
+	private static function redact_signal_for_unprivileged( array $signal ): array {
+		$entity_id = (int) ( $signal['entity_id'] ?? 0 );
+		if ( $entity_id <= 0 || 'plugin' === ( $signal['entity_type'] ?? '' ) ) {
+			return $signal;
+		}
+
+		$post = get_post( $entity_id );
+		if ( $post ) {
+			$status_obj = get_post_status_object( (string) $post->post_status );
+			if ( $status_obj && ! empty( $status_obj->public ) ) {
+				return $signal;
+			}
+		}
+
+		$signal['entity_title'] = '';
+		if ( isset( $signal['detail'] ) ) {
+			$signal['detail'] = '';
+		}
+		$signal['redacted'] = true;
+
+		return $signal;
 	}
 
 	/**
@@ -440,11 +489,18 @@ class Mcpwp_Signals {
 		}
 
 		// Stored-issue severities are error/warning/info; surface open errors.
+		// The signal feed is a SHARED, persisted cache read by every caller, so
+		// the reveal decision cannot be threaded through compute (whoever computes
+		// first would poison the cache for the next reader). Instead the cache
+		// stores the FULL set — mirroring how the SEO store persists non-public
+		// titles — and get_signals() redacts per-caller at READ time. Hence
+		// reveal_non_public=true here; the read chokepoint is get_signals().
 		$issues = Mcpwp_SEO_Audit_Store::list_issues(
 			array(
 				'status'   => 'open',
 				'severity' => 'error',
 				'limit'    => 10,
+				'reveal_non_public' => true,
 			)
 		);
 		if ( empty( $issues['issues'] ) ) {

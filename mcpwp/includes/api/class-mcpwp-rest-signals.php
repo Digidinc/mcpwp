@@ -104,7 +104,9 @@ class Mcpwp_REST_Signals extends Mcpwp_REST_API {
 		$since = $request->get_param( 'since' ) ?? '';
 		$limit = (int) $request->get_param( 'limit' );
 
-		$signals = Mcpwp_Signals::get_signals( $types, $since, $limit );
+		// Fail-closed at read: a read-only key never receives a signal's
+		// draft/private source title or detail; only a privileged caller reveals.
+		$signals = Mcpwp_Signals::get_signals( $types, $since, $limit, $this->requester_can_see_non_public() );
 
 		$counts = array();
 		foreach ( $signals as $s ) {

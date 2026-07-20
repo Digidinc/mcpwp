@@ -31,6 +31,15 @@ require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-content-graph.
 require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-seo-audit.php';
 require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-blocks.php';
 require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-approvals.php';
+require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-seo-audit-store.php';
+require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-seo-autofix.php';
+require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-site-state.php';
+require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-signals.php';
+require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-core.php';
+require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-media.php';
+require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-design-references.php';
+require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-site-info.php';
+require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-signals.php';
 
 final class RestExhaustiveDraftLeakTest extends TestCase {
 
@@ -406,5 +415,94 @@ final class RestExhaustiveDraftLeakTest extends TestCase {
 		$resp = $c->get_seo_issues( $r );
 		$ids = array_column( $resp->get_data()['issues'], 'id' );
 		$this->assertContains( 'draft_issue', $ids );
+	}
+
+	// ── FIX PASS 4: the three UNGATED read surfaces the model chokepoints now
+	// protect. These routes had ZERO coverage, which is why the leak survived
+	// three passes that gated siblings. Each proves READ key → no non-public
+	// source; WRITE key → full data (regression guard). ─────────────────────
+
+	// GET /site-state → Mcpwp_Site_State::get_approval_summary (list_requests)
+	//                 + get_seo_summary (list_issues).
+
+	public function test_site_state_read_key_redacts_draft_approval_and_seo(): void {
+		$this->seed_draft_approval();
+		$this->seed_stored_issues();
+		$c = new Mcpwp_REST_Site_Info();
+		$r = $this->authed( $c, 'GET', '/mcpwp/v1/site-state', array(), array( 'read' ) );
+		$resp = $c->get_site_state( $r );
+		$this->assertInstanceOf( WP_REST_Response::class, $resp );
+		$data = $resp->get_data();
+		$this->assertNoSecret( $data['approvals'] );
+		$this->assertNoSecret( $data['seo'] );
+		// The published SEO issue still surfaces; only the draft is dropped.
+		$issue_ids = array_column( $data['seo']['top_issues'], 'id' );
+		$this->assertNotContains( 'draft_issue', $issue_ids );
+		$this->assertContains( 'pub_issue', $issue_ids );
+	}
+
+	public function test_site_state_write_key_sees_draft_approval_and_seo(): void {
+		$this->seed_draft_approval();
+		$this->seed_stored_issues();
+		$c = new Mcpwp_REST_Site_Info();
+		$r = $this->authed( $c, 'GET', '/mcpwp/v1/site-state', array(), array( 'write' ) );
+		$data = $c->get_site_state( $r )->get_data();
+		$issue_ids = array_column( $data['seo']['top_issues'], 'id' );
+		$this->assertContains( 'draft_issue', $issue_ids, 'write key must see the draft SEO issue' );
+		$this->assertSame(
+			'SECRET draft title',
+			$data['approvals']['pending_items'][0]['resource']['title'],
+			'write key must see the real draft approval source title'
+		);
+	}
+
+	// GET /signals → Mcpwp_Signals::get_signals read-time redaction (the shared
+	// cache is populated full via compute_seo_issues; read redacts per caller).
+
+	public function test_signals_read_key_redacts_seo_issue_title(): void {
+		$this->seed_stored_issues();
+		$c = new Mcpwp_REST_Signals();
+		$r = $this->authed( $c, 'GET', '/mcpwp/v1/signals', array(), array( 'read' ) );
+		$data = $c->get_signals( $r )->get_data();
+		$this->assertNoSecret( $data['signals'] );
+		$seo = array_values(
+			array_filter( $data['signals'], static fn( $s ) => ( $s['type'] ?? '' ) === 'seo_issue' )
+		);
+		$this->assertNotEmpty( $seo, 'seo_issue signal should be present but redacted' );
+		$this->assertSame( '', $seo[0]['entity_title'] );
+	}
+
+	public function test_signals_write_key_sees_seo_issue_title(): void {
+		$this->seed_stored_issues();
+		$c = new Mcpwp_REST_Signals();
+		$r = $this->authed( $c, 'GET', '/mcpwp/v1/signals', array(), array( 'write' ) );
+		$data = $c->get_signals( $r )->get_data();
+		$seo = array_values(
+			array_filter( $data['signals'], static fn( $s ) => ( $s['type'] ?? '' ) === 'seo_issue' )
+		);
+		$this->assertNotEmpty( $seo );
+		$this->assertSame( 'SECRET draft title', $seo[0]['entity_title'] );
+	}
+
+	// GET /seo/autofix-plan → Mcpwp_SEO_Autofix::get_plan (list_issues); the
+	// plan's actions[] embed each issue title/url.
+
+	public function test_autofix_plan_read_key_redacts_draft_issue(): void {
+		$this->seed_stored_issues();
+		$c = new Mcpwp_REST_SEO_Audit();
+		$r = $this->authed( $c, 'GET', '/mcpwp/v1/seo/autofix-plan', array( 'limit' => 10 ), array( 'read' ) );
+		$data = $c->get_seo_autofix_plan( $r )->get_data();
+		$this->assertNoSecret( $data );
+		$titles = array_column( $data['actions'], 'title' );
+		$this->assertNotContains( 'SECRET draft title', $titles );
+	}
+
+	public function test_autofix_plan_write_key_sees_draft_issue(): void {
+		$this->seed_stored_issues();
+		$c = new Mcpwp_REST_SEO_Audit();
+		$r = $this->authed( $c, 'GET', '/mcpwp/v1/seo/autofix-plan', array( 'limit' => 10 ), array( 'write' ) );
+		$data = $c->get_seo_autofix_plan( $r )->get_data();
+		$titles = array_column( $data['actions'], 'title' );
+		$this->assertContains( 'SECRET draft title', $titles );
 	}
 }

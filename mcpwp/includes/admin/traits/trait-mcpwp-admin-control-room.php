@@ -174,7 +174,10 @@ trait Mcpwp_Admin_Control_Room_Trait {
 	 * @return array
 	 */
 	public function get_control_room_data() {
-		$approvals = class_exists( 'Mcpwp_Approvals' ) ? Mcpwp_Approvals::list_requests( '', 100 ) : array();
+		// Control Room renders under render_control_room_page(), which requires
+		// current_user_can( 'activate_plugins' ) — a genuine admin, not a read API
+		// key — so it legitimately reveals full non-public approval/issue data.
+		$approvals = class_exists( 'Mcpwp_Approvals' ) ? Mcpwp_Approvals::list_requests( '', 100, true ) : array();
 		$seo_filters   = $this->get_control_room_seo_filters();
 		$event_filters = $this->get_control_room_event_filters();
 		$approval_counts = array(
@@ -196,7 +199,7 @@ trait Mcpwp_Admin_Control_Room_Trait {
 			? Mcpwp_SEO_Audit_Store::list_issues(
 				array_merge(
 					$seo_filters,
-					array( 'limit' => 8 )
+					array( 'limit' => 8, 'reveal_non_public' => true )
 				)
 			)
 			: array(
@@ -205,7 +208,7 @@ trait Mcpwp_Admin_Control_Room_Trait {
 			);
 
 		$seo_all = class_exists( 'Mcpwp_SEO_Audit_Store' )
-			? Mcpwp_SEO_Audit_Store::list_issues( array( 'limit' => 1 ) )
+			? Mcpwp_SEO_Audit_Store::list_issues( array( 'limit' => 1, 'reveal_non_public' => true ) )
 			: $seo_open;
 
 		$recent_activity = $this->get_recent_activity_rows( 8 );
@@ -213,8 +216,8 @@ trait Mcpwp_Admin_Control_Room_Trait {
 
 		$data = array(
 			'approval_counts'  => $approval_counts,
-			'pending_approvals' => class_exists( 'Mcpwp_Approvals' ) ? Mcpwp_Approvals::list_requests( 'pending', 5 ) : array(),
-			'approved_approvals' => class_exists( 'Mcpwp_Approvals' ) ? Mcpwp_Approvals::list_requests( 'approved', 5 ) : array(),
+			'pending_approvals' => class_exists( 'Mcpwp_Approvals' ) ? Mcpwp_Approvals::list_requests( 'pending', 5, true ) : array(),
+			'approved_approvals' => class_exists( 'Mcpwp_Approvals' ) ? Mcpwp_Approvals::list_requests( 'approved', 5, true ) : array(),
 			'rollback_ready'   => array_slice(
 				array_values(
 					array_filter(

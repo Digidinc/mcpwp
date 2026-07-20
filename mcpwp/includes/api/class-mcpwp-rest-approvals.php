@@ -86,20 +86,14 @@ class Mcpwp_REST_Approvals extends Mcpwp_REST_API {
 	public function list_approvals( $request ) {
 		$this->log_activity( 'list_approvals', $request );
 
+		// Read-only keys must not harvest draft/private source bodies that a
+		// privileged key queued for review. The redaction now lives inside
+		// list_requests() (fail-closed chokepoint); we only prove privilege here.
 		$approvals = Mcpwp_Approvals::list_requests(
 			(string) $request->get_param( 'status' ),
-			(int) $request->get_param( 'limit' )
+			(int) $request->get_param( 'limit' ),
+			$this->requester_can_see_non_public()
 		);
-
-		// Read-only keys must not harvest draft/private source bodies that a
-		// privileged key queued for review. Redact source fields for non-public
-		// resources unless the caller carries write scope (or trusted admin-AJAX).
-		if ( ! $this->requester_can_see_non_public() ) {
-			$approvals = array_map(
-				array( 'Mcpwp_Approvals', 'redact_source_for_unprivileged' ),
-				$approvals
-			);
-		}
 
 		return $this->success_response(
 			array(

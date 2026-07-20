@@ -803,6 +803,9 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 					// pull draft/private nodes into the site-state graph snapshot.
 					'include_drafts'  => rest_sanitize_boolean( $request->get_param( 'include_drafts' ) ) && $this->requester_can_see_non_public(),
 					'include_plugins' => rest_sanitize_boolean( $request->get_param( 'include_plugins' ) ),
+					// Approval + SEO summaries carry source-derived title/url/status/
+					// excerpt fields; only a privileged caller sees non-public ones.
+					'reveal_non_public' => $this->requester_can_see_non_public(),
 				)
 			)
 			: array();

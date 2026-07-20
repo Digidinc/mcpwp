@@ -7,6 +7,21 @@ final class SeoAutofixTest extends TestCase
     protected function setUp(): void
     {
         $GLOBALS['mcpwp_test_options'] = array();
+
+        // Stored issues reference real published posts. list_issues() is now
+        // fail-closed by default (get_plan passes no reveal flag), so an issue
+        // whose post is missing/non-public is excluded. Seed the referenced
+        // posts as published so these plan-mapping cases exercise the include
+        // path; the exclude path is covered in RestExhaustiveDraftLeakTest.
+        $GLOBALS['_mcpwp_test_posts'] = array();
+        foreach (array( 10, 11, 12 ) as $pid) {
+            $GLOBALS['_mcpwp_test_posts'][ $pid ] = (object) array(
+                'ID'          => $pid,
+                'post_type'   => 'page',
+                'post_status' => 'publish',
+                'post_title'  => 'Published page ' . $pid,
+            );
+        }
     }
 
     public function test_plan_maps_stored_issues_to_approval_safe_actions(): void
