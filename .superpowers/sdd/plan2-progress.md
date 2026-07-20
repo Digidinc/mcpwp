@@ -48,3 +48,7 @@ Baseline: 502 phpunit tests. Test cmd: cd mcpwp && docker run --rm -v "$(pwd):/a
 
 - Batched minors: T2 nonce regex {8,150}; T3 cache key fold site_id|audience.
 - Then: final adversarial+correctness whole-branch review; PR (do NOT auto-release).
+
+## T5 result
+- [x] T5: enrollment lifecycle (commits fd13941 + 38d8f4c, 573 tests). CSRF `state` gate, confirm→store state machine, enroll-store credential receiver (encrypted, log-leak fixed), Disconnect kill-switch, Connections UI. All load-bearing props CONFIRMED. FIXED: host-lock enroll-store issuer/introspection_endpoint to mumcp.com (credential-exfil poisoning). Batched minors done (nonce {8,150}, cache key fold).
+- Broker patch built (mumcp-broker 1eca586, 110 tests): state relay + enroll-store S2S push + rollback. NOT YET DEPLOYED (plugin is hard dep — deploy broker only when plugin ships).
