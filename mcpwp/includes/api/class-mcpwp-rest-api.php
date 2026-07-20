@@ -670,6 +670,66 @@ abstract class Mcpwp_REST_API {
 	}
 
 	/**
+	 * Whether a post is built with Elementor.
+	 *
+	 * Uses Elementor's canonical edit-mode flag first (set even when the parent
+	 * post's _elementor_data is briefly empty on a fresh draft), then falls back
+	 * to the presence of stored Elementor data.
+	 *
+	 * Shared by the rendered-copy surface (class-mcpwp-rest-site-content.php)
+	 * and the SEO readiness validator (class-mcpwp-rest-seo-audit.php) — both
+	 * need to know whether a post's real content lives outside post_content.
+	 *
+	 * @param int $post_id Post ID.
+	 * @return bool
+	 */
+	protected function is_elementor_built( $post_id ) {
+		if ( 'builder' === get_post_meta( $post_id, '_elementor_edit_mode', true ) ) {
+			return true;
+		}
+		return '' !== (string) get_post_meta( $post_id, '_elementor_data', true );
+	}
+
+	/**
+	 * Render a post's body HTML in-process (no HTTP round trip) — the same
+	 * approach class-mcpwp-rest-site-content.php's rendered-copy surface uses
+	 * for draft/pending/private posts that a loopback fetch can't reach.
+	 *
+	 * Tries an Elementor render first when the post is Elementor-built, then
+	 * falls back to `the_content`-filtered post_content (which is how a
+	 * server-rendered PHP page template's own markup — not just the stored
+	 * post_content — ends up represented here, since `the_content` output for
+	 * an empty post_content still reflects theme/template filters registered
+	 * on that hook).
+	 *
+	 * Safe to call for any post status — callers are responsible for gating
+	 * who may see the result (see requester_can_see_non_public()).
+	 *
+	 * @param WP_Post $post Post object.
+	 * @return array{html: string, method: string} Rendered HTML and the render method used.
+	 */
+	protected function render_post_html_in_process( $post ) {
+		$post_id = (int) $post->ID;
+		$html    = '';
+		$method  = 'internal_content';
+
+		if ( $this->is_elementor_built( $post_id ) && class_exists( '\Elementor\Plugin' ) ) {
+			$html   = \Elementor\Plugin::$instance->frontend->get_builder_content_for_display( $post_id, true );
+			$method = 'internal_elementor';
+		}
+
+		if ( '' === trim( (string) $html ) ) {
+			$html   = apply_filters( 'the_content', $post->post_content );
+			$method = 'internal_content';
+		}
+
+		return array(
+			'html'   => (string) $html,
+			'method' => $method,
+		);
+	}
+
+	/**
 	 * Extract raw anchor links from content.
 	 *
 	 * @param string $content Post content.

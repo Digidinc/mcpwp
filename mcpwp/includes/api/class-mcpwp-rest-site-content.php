@@ -932,22 +932,10 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 	 * @return WP_REST_Response
 	 */
 	private function get_rendered_copy_in_process( $post, $include_chrome ) {
-		$post_id = (int) $post->ID;
-		$html    = '';
-		$method  = 'internal_content';
-
-		if ( $this->is_elementor_built( $post_id ) && class_exists( '\Elementor\Plugin' ) ) {
-			$html   = \Elementor\Plugin::$instance->frontend->get_builder_content_for_display( $post_id, true );
-			$method = 'internal_elementor';
-		}
-
-		if ( '' === trim( (string) $html ) ) {
-			// Classic/Gutenberg content — or an Elementor render that produced
-			// nothing — render the stored content through the_content so the copy
-			// is still auditable before publish.
-			$html   = apply_filters( 'the_content', $post->post_content );
-			$method = 'internal_content';
-		}
+		$post_id  = (int) $post->ID;
+		$rendered = $this->render_post_html_in_process( $post );
+		$html     = $rendered['html'];
+		$method   = $rendered['method'];
 
 		$sections = $this->parse_visible_text( $html, $include_chrome );
 		$all_text = implode( ' ', array_column( $sections, 'text' ) );
@@ -968,23 +956,6 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 				'render_method'    => $method,
 			)
 		);
-	}
-
-	/**
-	 * Whether a post is built with Elementor.
-	 *
-	 * Uses Elementor's canonical edit-mode flag first (set even when the parent
-	 * post's _elementor_data is briefly empty on a fresh draft), then falls back
-	 * to the presence of stored Elementor data.
-	 *
-	 * @param int $post_id Post ID.
-	 * @return bool
-	 */
-	private function is_elementor_built( $post_id ) {
-		if ( 'builder' === get_post_meta( $post_id, '_elementor_edit_mode', true ) ) {
-			return true;
-		}
-		return '' !== (string) get_post_meta( $post_id, '_elementor_data', true );
 	}
 
 	/**

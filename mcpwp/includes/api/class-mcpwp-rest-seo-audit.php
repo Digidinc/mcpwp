@@ -423,13 +423,61 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 
 		$this->log_activity( 'validate_seo_readiness', $request, array( 'post_id' => $post_id ) );
 
-		$issues       = array();
-		$content      = (string) $post->post_content;
-		$text_content = trim( wp_strip_all_tags( $content ) );
-		$title        = trim( get_the_title( $post ) );
-		$headings     = $this->extract_heading_texts( $content );
-		$h1_count     = 0;
-		$last_level   = 0;
+		$issues             = array();
+		$content            = (string) $post->post_content;
+		$text_content       = trim( wp_strip_all_tags( $content ) );
+		$title              = trim( get_the_title( $post ) );
+		$headings           = $this->extract_heading_texts( $content );
+		$h1_count           = 0;
+		$last_level         = 0;
+		$body_validation_basis = 'post_content';
+
+		// (#681) A server-rendered template page (a custom PHP page template, or
+		// an Elementor page whose native content lives in postmeta rather than
+		// post_content — e.g. the Motion editorial homepage) can have an empty
+		// or near-empty post_content while the live page has a full H1 and body
+		// copy. Reading only post_content then reports false missing_h1,
+		// thin_content, and schema_hint_missing failures on a page that reads
+		// fine to a visitor and to Google. When raw content looks too thin to
+		// be the real page AND the post is known to render its body from
+		// outside post_content, source these body checks from the actual
+		// rendered output instead — reusing the same machinery already used
+		// elsewhere in this class/plugin rather than adding a new fetcher:
+		//   - published: fetch_rendered_html_body() (the live-page fetch this
+		//     class already uses for structured-data render-truth) — the only
+		//     way to see markup a custom page template outputs independent of
+		//     the_content.
+		//   - not yet public (write-scope caller only): render_post_html_in_process()
+		//     (the in-process Elementor/the_content render the rendered-copy
+		//     surface already uses for pre-publish QA), since a loopback fetch
+		//     of a draft/private URL is not reliably reachable.
+		// Skipped during a bulk site audit for the same speed/timeout reasons
+		// the live HTTP render pass is skipped there.
+		$raw_word_count      = str_word_count( $text_content );
+		$templated_rendering = '' !== (string) get_page_template_slug( $post ) || $this->is_elementor_built( $post_id );
+
+		if ( $raw_word_count < 80 && $templated_rendering && ! $this->bulk_audit_mode
+			&& ( 'publish' === $post->post_status || $this->requester_can_see_non_public() )
+		) {
+			$rendered_html = null;
+
+			if ( 'publish' === $post->post_status ) {
+				$rendered_html = $this->fetch_rendered_html_body( (string) get_permalink( $post ) );
+			}
+
+			if ( null === $rendered_html || '' === trim( (string) $rendered_html ) ) {
+				$rendered_html = $this->render_post_html_in_process( $post )['html'];
+			}
+
+			$rendered_text = trim( wp_strip_all_tags( (string) $rendered_html ) );
+
+			if ( str_word_count( $rendered_text ) > $raw_word_count ) {
+				$content               = (string) $rendered_html;
+				$text_content          = $rendered_text;
+				$headings              = $this->extract_heading_texts( $content );
+				$body_validation_basis = 'rendered_html';
+			}
+		}
 
 		if ( '' === $title ) {
 			$issues[] = $this->make_seo_readiness_issue( 'missing_title', 'error', __( 'Post title is missing.', 'mcpwp' ), __( 'Add a clear, descriptive title.', 'mcpwp' ) );
@@ -518,7 +566,7 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 		}
 
 		$robots_txt = $this->get_robots_txt();
-		if ( false !== stripos( $robots_txt, 'Disallow: /' ) ) {
+		if ( $this->robots_txt_disallows_root( $robots_txt ) ) {
 			$issues[] = $this->make_seo_readiness_issue( 'robots_disallow_root', 'error', __( 'robots.txt appears to disallow the whole site.', 'mcpwp' ), __( 'Review robots.txt before publishing search-facing content.', 'mcpwp' ) );
 		}
 
@@ -575,6 +623,10 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 				'validation_note'  => 'rendered_html' === $validation_basis
 					? 'Issues reconciled against the live rendered <head>. Values shown are what the public page actually outputs.'
 					: 'Issues based on stored post meta only (page is not published). Rendered output may differ once live — re-validate after publishing.',
+				'body_validation_basis' => $body_validation_basis,
+				'body_validation_note'  => 'rendered_html' === $body_validation_basis
+					? 'post_content was empty/too thin to be the real page, so word count, headings, and the schema-hint check ran against an in-process render of the page body instead (custom page template or Elementor content) — not raw post_content.'
+					: 'Word count, headings, and the schema-hint check ran against stored post_content.',
 				'rendered_head'    => $rendered_head,
 				'workflow' => array(
 					'read'  => 'Use before publishing or after major agent edits.',
@@ -2412,6 +2464,108 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 		}
 
 		return (string) apply_filters( 'robots_txt', $output, $public );
+	}
+
+	/**
+	 * Parse a robots.txt document into per-user-agent group directives.
+	 *
+	 * Minimal, dependency-free robots.txt parser: splits into lines, strips
+	 * comments, and groups directives under the User-agent line(s) that
+	 * immediately precede them (consecutive User-agent lines share the
+	 * following directives, and a new User-agent line after a directive
+	 * starts a fresh group — both per the de-facto robots.txt spec). This is
+	 * only used to answer "does the applicable group contain a true sitewide
+	 * Disallow: /" — it is not a general-purpose crawl-permission engine.
+	 *
+	 * @param string $robots_txt Raw robots.txt content.
+	 * @return array<string,array<int,array{directive:string,value:string}>> Lowercased user-agent => ordered directive list.
+	 */
+	private function parse_robots_txt_groups( $robots_txt ) {
+		$groups         = array();
+		$current_agents = array();
+		$group_started  = false; // True once a non-UA directive has been seen since the last UA line.
+
+		foreach ( preg_split( '/\r\n|\r|\n/', (string) $robots_txt ) as $line ) {
+			// Strip comments (whole-line or inline), then trim.
+			$hash = strpos( $line, '#' );
+			if ( false !== $hash ) {
+				$line = substr( $line, 0, $hash );
+			}
+			$line = trim( $line );
+
+			if ( '' === $line ) {
+				continue;
+			}
+
+			$colon = strpos( $line, ':' );
+			if ( false === $colon ) {
+				continue;
+			}
+
+			$field = strtolower( trim( substr( $line, 0, $colon ) ) );
+			$value = trim( substr( $line, $colon + 1 ) );
+
+			if ( 'user-agent' === $field ) {
+				if ( $group_started ) {
+					// A new User-agent line after directives starts a fresh group.
+					$current_agents = array();
+					$group_started  = false;
+				}
+
+				$agent = strtolower( $value );
+				if ( '' !== $agent ) {
+					$current_agents[ $agent ] = true;
+					if ( ! isset( $groups[ $agent ] ) ) {
+						$groups[ $agent ] = array();
+					}
+				}
+				continue;
+			}
+
+			if ( empty( $current_agents ) ) {
+				// Directive with no preceding User-agent — malformed/orphaned, ignore.
+				continue;
+			}
+
+			$group_started = true;
+
+			foreach ( array_keys( $current_agents ) as $agent ) {
+				$groups[ $agent ][] = array(
+					'directive' => $field,
+					'value'     => $value,
+				);
+			}
+		}
+
+		return $groups;
+	}
+
+	/**
+	 * Whether robots.txt truly disallows the entire site for a given
+	 * user-agent group — a bare "Disallow: /" with no path suffix — not any
+	 * Disallow line that merely starts with "/" (e.g. "Disallow: /wp-admin/",
+	 * a WooCommerce-style "Disallow: /*?add-to-cart="). (#680)
+	 *
+	 * Falls back to the "*" (all crawlers) group when no group explicitly
+	 * names $user_agent, matching standard robots.txt precedence.
+	 *
+	 * @param string $robots_txt Raw robots.txt content.
+	 * @param string $user_agent User agent to evaluate (default "*").
+	 * @return bool True when the applicable group has an exact "Disallow: /".
+	 */
+	protected function robots_txt_disallows_root( $robots_txt, $user_agent = '*' ) {
+		$groups = $this->parse_robots_txt_groups( $robots_txt );
+		$agent  = strtolower( $user_agent );
+
+		$directives = isset( $groups[ $agent ] ) ? $groups[ $agent ] : ( isset( $groups['*'] ) ? $groups['*'] : array() );
+
+		foreach ( $directives as $directive ) {
+			if ( 'disallow' === $directive['directive'] && '/' === trim( $directive['value'] ) ) {
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 	/**
