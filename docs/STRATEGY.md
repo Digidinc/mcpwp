@@ -4,7 +4,7 @@
 > the taxation/numbers detail; the [mupot repo](https://github.com/Mumega-com/mupot) is the substrate code.
 > When those disagree with this doc, this doc is the intent.
 >
-> **Last updated:** 2026-07-16 (§11 added — see below).
+> **Last updated:** 2026-07-21 (§12 added — see below; OAuth keystone status corrected).
 
 ---
 
@@ -203,7 +203,7 @@ sell flows + recipes + rent, never compute.
 | **M1** | v2.8.x | **On-ramp launch** | Free plugin + cheap Pro (adoption toll). Admin UI ✅. Gates on Hadi: pricing (T87), privacy, install test, WAF. |
 | **M1.3** | v2.9 | **Agent representation & Fleet** | Connect-time MCP questionnaire (`identity·represents·scope·goal`) → owner-facing admin Fleet page → scope-as-enforcement **second security layer** + audit. (§4b — sensitive surface: adversarial-gate the build.) |
 | **M1.5** | v2.9 | **Distribution + feedback build** | News sitemap + NewsArticle schema + image/E-E-A-T emitters; GSC/PostHog/Woo ingestion; Cloudflare edge A/B engine; blocking originality gate; two-speed agent cadence (§4b). |
-| **M2** | v2.9 | **Auth keystone** (OAuth 2.1 + DCR) | Opens the OAuth fleet — ChatGPT Business + Claude Managed. Bearer fleet (Hermes/openclaw/Codex) connects now. |
+| **M2** | v2.9 | **Auth keystone** (broker OAuth, not per-site DCR) | Opens the OAuth fleet — ChatGPT Business + Claude Managed. Bearer fleet (Hermes/openclaw/Codex) connects now. **Built, not yet shipped** — see §12. |
 | **M3** | v2.9 | **Distribution channels** | WP.org · MCP registries · ChatGPT GPT/App · Claude Connector. |
 | **M4** | v3.x | **The marketplace** | Storefront for addons + snapshots; the cut; performance-ranking from observability; `mcpwp_register_tools` + `register_skill` made first-class. **This is the revenue engine.** |
 | **M5** | v4.0 | **Composition layer** | Snapshots as curated addon-mixes; the recipe builder; data-validated loadouts. |
@@ -227,7 +227,7 @@ store.** Everything else is supporting cast until that happens.
 | On-brand content, SEO, content-graph, images, approvals/rollback, brand-crystal, Woo SEO, blueprints, keyword research, PostHog (outbound) | ✅ built | now |
 | Metered/capped/gated loop, squad-packs, harness-pack contract, MCP ResourceRef seam, `mcpwp_register_tools`, bus `register_skill` | ✅ built | now |
 | News sitemap + NewsArticle schema, image/E-E-A-T emitters, GSC/PostHog ingestion, edge A/B, blocking originality gate | 🔶 to build | v2.9 |
-| OAuth 2.1 + DCR, streamable-http on the bus | 🔶 to build | v2.9 |
+| Broker OAuth sign-in (claude.ai/ChatGPT → mumcp.com → any site), streamable-http on the bus | 🔶 built + adversarial-gated, **PR open, not merged/released** | now (pending human ship) |
 | Marketplace storefront + cut + performance-ranking · snapshot composition layer | 🔶 primitives exist, not productized | v3.x–v4.0 |
 
 Launch each promise on what is built. Later-phase items are "included as they ship," never live today.
@@ -263,3 +263,40 @@ Handed a concrete project (2026-07-16): one domain fully on Cloudflare (Inkwell 
 - **One literal admin agent, not a swarm** — avoids the exact coordination-deadlock failure mode the agent-comms doc already learned the hard way.
 
 **Blocking, unresolved as of this writing:** no concrete access yet (domain names, Cloudflare zone ID/token, WP admin URL, Freemius product ID, Stripe account) — nothing above is executable until that's handed over. **"Inkwell" itself is still ambiguous** — is it a real, currently-running WordPress/Cloudflare instance to activate mumcp on, or the not-yet-built brand-brain product referenced in `docs/squad/GTM-DESIGN-THINKING.md` (`inkwell↔MCPWP SYNC` — brand brain → WP publish, separate MCP-to-MCP track)? Resolve before acting.
+
+---
+
+## 12. The M2 auth keystone — resolved as a broker, not per-site DCR (2026-07-21)
+
+§11's open DCR question is answered by **not building DCR at all.** Instead: one OAuth broker
+Worker on `mumcp.com` (repo `Mumega-com/mumcp-broker`) issues tokens; every MCPWP site validates
+them via RFC 7662 introspection (`.well-known/oauth-protected-resource`, RFC 9728) instead of
+running its own per-site OAuth server. This is a straight instance of §3's "mumcp.com = broader
+MCP-shop pivot" — the broker makes mumcp.com the **identity layer** for the whole fleet, not just
+a future storefront.
+
+**Design constraints that came out of adversarial review (parallel gate per §4b's governance
+pattern, not sequential):** a broker token is capped at read/write — **`admin` scope is never
+grantable over OAuth**, only via a local API key. Local API keys resolve before the broker is
+ever consulted (no key egress). Introspection is cached ≤60s, positive-only, and **fails closed**
+on any broker error. Tokens are audience-bound to the enrolling site (`home_url()`) — a token
+minted for site A is refused by site B. A local kill-switch (Disconnect) rejects all broker
+tokens instantly with no network round-trip. Enrollment credentials are delivered server-to-server
+(nonce-authenticated `POST /broker/enroll-store`), never through a browser URL, and stored
+encrypted.
+
+**Current state (accurate as of 2026-07-21, corrects §9/§10 above):**
+- Broker Worker: **deployed and live** on mumcp.com.
+- Plugin-side integration (`Mcpwp_Broker_Auth`, enrollment UI, bearer-auth path): **built, TDD'd
+  (580 phpunit), adversarially reviewed clear (no P0), smoke-tested against a real WordPress
+  site** — but shipped as **PR #686 only, deliberately not auto-merged/released** because it
+  touches the live auth path. `main` is still at 3.6.5; the broker-enabled build is 3.7.0 and
+  needs an explicit human merge + `release_freemius.sh` + `publish_update_release.sh` pass before
+  any site actually gets it.
+- Outstanding before this can carry real traffic: the broker's magic-link account path
+  (`sendMagicLink`) is still a console stub — needs a real email provider wired in before
+  non-technical owners can complete enrollment unassisted.
+
+**How to apply:** don't describe OAuth/DCR as "to build" (v2.9, future) anywhere in positioning —
+the keystone itself is done. Describe it as "reviewed, ready, awaiting a ship decision." Treat the
+merge of PR #686 as the actual remaining M2 gate, not a build task.
