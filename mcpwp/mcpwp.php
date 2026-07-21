@@ -15,7 +15,7 @@
  * Plugin URI:        https://mcpwp.net/
  * Description:       Connect WordPress to AI assistants via the Model Context Protocol (MCP). Manage posts, pages, media, and Elementor through natural language.
  * x-release-please-start-version
- * Version:           3.6.5
+ * Version:           3.7.0
  * x-release-please-end
  * Requires at least: 6.1
  * Requires PHP:      7.4
@@ -35,7 +35,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 /**
  * Plugin version.
  */
-define( 'MCPWP_VERSION', '3.6.5' ); // x-release-please-version
+define( 'MCPWP_VERSION', '3.7.0' ); // x-release-please-version
 
 /**
  * Whether custom MCP tool scope filtering is supported.
@@ -330,6 +330,8 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-cloudflare.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-figma.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-oauth.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-broker.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-broker-auth.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-oauth-well-known.php';
 
 	// Load admin
@@ -344,6 +346,7 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/admin/class-mcpwp-activity-log.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/admin/class-mcpwp-settings.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/admin/class-mcpwp-integrations-admin.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/admin/class-mcpwp-broker-admin.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/admin/class-mcpwp-tools-admin.php';
 
 	// Bridge migration: copy spai_* options + tables → mcpwp_* (idempotent).

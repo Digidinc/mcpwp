@@ -488,16 +488,50 @@ $last_activity_time = ! empty( $recent_activity[0]['created_at'] ) ? $recent_act
 					</p>
 				</div>
 
-				<!-- Method 2: OAuth sign-in — more secure, not yet live -->
+				<!-- Method 2: OAuth sign-in — via the mumcp.com sign-in broker -->
 				<div class="mcpwp-connect-method">
 					<h4 class="mcpwp-connect-method__title">
 						<?php esc_html_e( 'OAuth sign-in', 'mcpwp' ); ?>
 						<span class="mcpwp-status mcpwp-status-active"><?php esc_html_e( 'Recommended · More secure', 'mcpwp' ); ?></span>
-						<span class="mcpwp-status mcpwp-status-info"><?php esc_html_e( 'Coming soon · via mumcp.com', 'mcpwp' ); ?></span>
+						<?php if ( $broker_enrolled ) : ?>
+							<span class="mcpwp-status mcpwp-status-active"><?php esc_html_e( 'Connected', 'mcpwp' ); ?></span>
+						<?php else : ?>
+							<span class="mcpwp-status mcpwp-status-info"><?php esc_html_e( 'Via mumcp.com', 'mcpwp' ); ?></span>
+						<?php endif; ?>
 					</h4>
 					<p class="description">
-						<?php esc_html_e( 'Signs in with your WordPress account — no API key ever rides in the URL. This is the direction we\'re headed, but it is not live yet: full sign-in from Claude Desktop/claude.ai needs the mumcp.com sign-in broker, currently in development. Use the API key method above until it ships.', 'mcpwp' ); ?>
+						<?php esc_html_e( 'Signs in with your WordPress account — no API key ever rides in the URL. Connect this site to the mumcp.com sign-in broker to enable OAuth sign-in for Claude Desktop, claude.ai, and other connectors.', 'mcpwp' ); ?>
 					</p>
+
+					<?php if ( 'connected' === $broker_notice ) : ?>
+						<div class="notice notice-success inline" style="margin:10px 0;">
+							<p><?php esc_html_e( 'Connected to mumcp.com. OAuth sign-in is now available for this site.', 'mcpwp' ); ?></p>
+						</div>
+					<?php elseif ( 'disconnected' === $broker_notice ) : ?>
+						<div class="notice notice-success inline" style="margin:10px 0;">
+							<p><?php esc_html_e( 'Disconnected from mumcp.com.', 'mcpwp' ); ?></p>
+						</div>
+					<?php endif; ?>
+
+					<?php if ( $broker_enrolled ) : ?>
+						<p>
+							<strong><?php esc_html_e( 'Connected', 'mcpwp' ); ?></strong>
+							<?php if ( '' !== $broker_audience ) : ?>
+								&middot; <code><?php echo esc_html( $broker_audience ); ?></code>
+							<?php endif; ?>
+						</p>
+						<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
+							<input type="hidden" name="action" value="mcpwp_broker_disconnect" />
+							<?php wp_nonce_field( 'mcpwp_broker_disconnect', 'mcpwp_broker_nonce' ); ?>
+							<button type="submit" class="button"><?php esc_html_e( 'Disconnect', 'mcpwp' ); ?></button>
+						</form>
+					<?php else : ?>
+						<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
+							<input type="hidden" name="action" value="mcpwp_broker_connect" />
+							<?php wp_nonce_field( 'mcpwp_broker_connect', 'mcpwp_broker_nonce' ); ?>
+							<button type="submit" class="button button-primary"><?php esc_html_e( 'Connect to mumcp.com', 'mcpwp' ); ?></button>
+						</form>
+					<?php endif; ?>
 				</div>
 
 				<p><?php esc_html_e( 'Or add to claude_desktop_config.json (Claude Desktop config supports only command-based servers, so the URL goes through the mcp-remote bridge):', 'mcpwp' ); ?></p>

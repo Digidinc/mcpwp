@@ -6,7 +6,7 @@ Requires at least: 6.1
 Tested up to: 7.0
 Requires PHP: 7.4
 <!-- x-release-please-start-version -->
-Stable tag: 3.6.5
+Stable tag: 3.7.0
 <!-- x-release-please-end -->
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -152,6 +152,12 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 4. Integrations and Chat — connected services plus safety-first agent workflow
 
 == Changelog ==
+
+= 3.7.0 =
+* new: **connect:** claude.ai and ChatGPT can now sign into your site over OAuth via the mumcp.com broker — WP Admin → MCPWP → Setup → "Connect to mumcp.com". No per-site OAuth server: the sign-in, Dynamic Client Registration, and consent are hosted once on mumcp.com; your site validates the resulting tokens by cached introspection.
+* new: **connect:** Connections UI with one-click Connect / Disconnect. Disconnect is a local kill-switch — it rejects all broker tokens instantly with no network call.
+* security: broker tokens are capped at read/write scope — **admin capability is never grantable over OAuth** and stays on the deliberate `X-API-Key` path. Token validation is fail-closed, audience-bound (a token minted for another site is refused), and the per-site introspection credential is stored encrypted and never leaves the site in a browser response.
+* note: Claude Desktop / Cursor / Windsurf are unchanged — they keep connecting via `X-API-Key`.
 
 = 3.6.5 =
 * new: **admin:** redesigned admin UI — warm cream/antique-gold palette, Newsreader/Instrument Sans/IBM Plex Mono typography, and refreshed cards, stat tiles, badges, and buttons across Setup, Control Room, Chat, Library, Integrations, Tools, and Settings. Visual only — no endpoints, data, or JS behavior changed.
