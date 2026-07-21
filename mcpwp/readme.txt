@@ -6,7 +6,7 @@ Requires at least: 6.1
 Tested up to: 7.0
 Requires PHP: 7.4
 <!-- x-release-please-start-version -->
-Stable tag: 3.6.4
+Stable tag: 3.6.5
 <!-- x-release-please-end -->
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -152,6 +152,10 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 4. Integrations and Chat — connected services plus safety-first agent workflow
 
 == Changelog ==
+
+= 3.6.5 =
+* new: **admin:** redesigned admin UI — warm cream/antique-gold palette, Newsreader/Instrument Sans/IBM Plex Mono typography, and refreshed cards, stat tiles, badges, and buttons across Setup, Control Room, Chat, Library, Integrations, Tools, and Settings. Visual only — no endpoints, data, or JS behavior changed.
+* new: **control-room:** pending approvals now show a "View before / after" disclosure with the change's existing before/after excerpt, so a reviewer can see what an approval actually changes without leaving the queue.
 
 = 3.6.4 =
 * fix: **seo:** `wp_validate_seo_readiness` no longer reports a sitewide robots.txt block when the site only disallows sub-paths (e.g. `/wp-admin/`, WooCommerce cart URLs). It now parses robots.txt by user-agent group and flags a root block only on an exact `Disallow: /` ([#680](https://github.com/Mumega-com/mcpwp/issues/680))

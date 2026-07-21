@@ -207,10 +207,23 @@ class Mcpwp_Admin {
 			return;
 		}
 
+		// $ver is deliberately null, not MCPWP_VERSION: WP_Styles::do_item() only
+		// runs add_query_arg('ver', ...) when $ver is truthy, and add_query_arg()
+		// round-trips the query string through parse_str()/http_build_query() —
+		// which collapses repeated same-name query keys (Google Fonts css2 needs
+		// multiple &family= params) down to the last one. null skips that path
+		// entirely, same fix WP core themes use for Google Fonts enqueues.
+		wp_enqueue_style(
+			'mcpwp-admin-fonts',
+			'https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400;1,6..72,500&family=Instrument+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap',
+			array(),
+			null
+		);
+
 		wp_enqueue_style(
 			'mcpwp-admin',
 			MCPWP_PLUGIN_URL . 'admin/css/mcpwp-admin.css',
-			array(),
+			array( 'mcpwp-admin-fonts' ),
 			MCPWP_VERSION
 		);
 	}
