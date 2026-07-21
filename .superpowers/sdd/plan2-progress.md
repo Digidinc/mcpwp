@@ -52,3 +52,9 @@ Baseline: 502 phpunit tests. Test cmd: cd mcpwp && docker run --rm -v "$(pwd):/a
 ## T5 result
 - [x] T5: enrollment lifecycle (commits fd13941 + 38d8f4c, 573 tests). CSRF `state` gate, confirm→store state machine, enroll-store credential receiver (encrypted, log-leak fixed), Disconnect kill-switch, Connections UI. All load-bearing props CONFIRMED. FIXED: host-lock enroll-store issuer/introspection_endpoint to mumcp.com (credential-exfil poisoning). Batched minors done (nonce {8,150}, cache key fold).
 - Broker patch built (mumcp-broker 1eca586, 110 tests): state relay + enroll-store S2S push + rollback. NOT YET DEPLOYED (plugin is hard dep — deploy broker only when plugin ships).
+
+## FINAL (2026-07-21)
+- [x] T6: bump 3.7.0 (4 files) + changelog.
+- Final adversarial gate (opus): CLEAR-AFTER → all fixes landed (commit 274d209): enroll-callback public+state-gated (fixed broken happy path — REST cookie-nonce 403), audience pinned to home_url(), introspection_endpoint pinned to full URL, no public log-amplification.
+- 580 phpunit tests green. All core security props CONFIRMED (admin-never-via-broker, fail-closed, kill-switch, credential-at-rest, CSRF state, host-locks).
+- Broker patch (mumcp-broker 1eca586): DEPLOY coordinated with plugin.
