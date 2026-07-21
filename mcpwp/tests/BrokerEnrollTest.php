@@ -78,55 +78,58 @@ final class BrokerEnrollTest extends TestCase {
 		$confirm_entry = isset( $confirm_args[0] ) ? $confirm_args[0] : $confirm_args;
 		$this->assertSame( '__return_true', $confirm_entry['permission_callback'] );
 
-		// enroll-callback must NOT be publicly callable — it is gated on
-		// current_user_can('manage_options') via check_admin_permission().
+		// enroll-callback must ALSO be publicly callable: it is reached by the
+		// broker's top-level browser 302 with no X-WP-Nonce header, so a
+		// manage_options gate would always 403 in production. The single-use
+		// `state` param is the admin-initiation proof instead (see
+		// handle_enroll_callback()). Both the READABLE and CREATABLE variants
+		// must be public.
 		$callback_args = $routes['/broker/enroll-callback'];
-		$callback_entry = isset( $callback_args[0] ) ? $callback_args[0] : $callback_args;
-		$this->assertNotSame( '__return_true', $callback_entry['permission_callback'] );
+		$this->assertIsArray( $callback_args );
+		foreach ( $callback_args as $callback_entry ) {
+			$this->assertSame( '__return_true', $callback_entry['permission_callback'] );
+		}
 	}
 
-	// ── GET /broker/enroll-callback — admin gate ────────────────────────────
+	// ── GET /broker/enroll-callback — public + state-gated (Fix 1) ──────────
 
-	public function test_callback_without_admin_is_denied_and_writes_no_pending_transient(): void {
+	/**
+	 * Fix 1 (CORRECTNESS): the callback is PUBLIC. It must work with a valid
+	 * `state` even when NO admin cookie is present (current_user_id == 0) —
+	 * exactly the production reality of a top-level browser 302 with no
+	 * X-WP-Nonce header. This is the happy path that the old manage_options
+	 * gate broke.
+	 */
+	public function test_callback_public_with_valid_state_and_no_admin_sets_pending_and_redirects(): void {
+		// No admin session — mirrors the real cookie-without-nonce 302 context.
 		$GLOBALS['mcpwp_test_current_user'] = 0;
+		// The state was minted earlier by the admin-gated Connect flow (keyed to
+		// user 1); the browser hitting the callback carries no user context.
+		$state = $this->mint_state( 1 );
 
 		$ctrl    = $this->controller();
 		$request = $this->make_request( 'GET', array(
-			'nonce'  => 'abc123XYZ789',
+			'nonce'  => 'publicPathNonce',
 			'return' => 'https://mumcp.com/enroll/complete',
+			'state'  => $state,
 		) );
 
-		$permission = $ctrl->check_admin_permission( $request );
+		$response = $ctrl->handle_enroll_callback( $request );
 
-		$this->assertNotTrue( $permission, 'A non-admin (or logged-out) caller must not pass the callback permission gate.' );
-		$this->assertInstanceOf( WP_Error::class, $permission );
-		$data = $permission->get_error_data();
-		$this->assertContains( $data['status'], array( 401, 403 ) );
+		$this->assertInstanceOf( WP_REST_Response::class, $response, 'A valid state must produce a 302 even with no admin cookie.' );
+		$this->assertSame( 302, $response->get_status() );
 
-		// Since permission failed, WordPress never invokes the handler — the
-		// pending transient must not exist.
-		$this->assertFalse( get_transient( 'mcpwp_broker_enroll_abc123XYZ789' ) );
+		$entry = get_transient( 'mcpwp_broker_enroll_publicPathNonce' );
+		$this->assertIsArray( $entry, 'A valid state-gated callback must record the nonce as pending — with no admin session.' );
+		$this->assertSame( 'pending', $entry['state'] );
+
+		// Single-use state consumed.
+		$this->assertFalse( get_transient( 'mcpwp_broker_state_' . $state ) );
 	}
 
-	public function test_callback_with_non_admin_caps_is_denied(): void {
-		$GLOBALS['mcpwp_test_current_user']        = 5;
-		$GLOBALS['mcpwp_test_user_caps'][5]        = array( 'manage_options' => false );
+	// ── GET /broker/enroll-callback — valid return ──────────────────────────
 
-		$ctrl    = $this->controller();
-		$request = $this->make_request( 'GET', array(
-			'nonce'  => 'abc123XYZ789',
-			'return' => 'https://mumcp.com/enroll/complete',
-		) );
-
-		$permission = $ctrl->check_admin_permission( $request );
-
-		$this->assertInstanceOf( WP_Error::class, $permission );
-		$this->assertFalse( get_transient( 'mcpwp_broker_enroll_abc123XYZ789' ) );
-	}
-
-	// ── GET /broker/enroll-callback — admin, valid return ───────────────────
-
-	public function test_callback_with_admin_and_valid_return_sets_pending_and_redirects(): void {
+	public function test_callback_with_valid_state_and_return_sets_pending_and_redirects(): void {
 		$GLOBALS['mcpwp_test_current_user'] = 1;
 		$state = $this->mint_state( 1 );
 
@@ -136,8 +139,6 @@ final class BrokerEnrollTest extends TestCase {
 			'return' => 'https://mumcp.com/enroll/complete',
 			'state'  => $state,
 		) );
-
-		$this->assertTrue( $ctrl->check_admin_permission( $request ) );
 
 		$response = $ctrl->handle_enroll_callback( $request );
 
@@ -191,23 +192,58 @@ final class BrokerEnrollTest extends TestCase {
 		$this->assertFalse( get_transient( 'mcpwp_broker_enroll_badStateNonce02' ) );
 	}
 
-	public function test_callback_state_belonging_to_another_user_is_rejected(): void {
-		// State was minted for user 5, but user 1 (the current admin) presents it.
+	public function test_callback_state_is_not_bound_to_a_user_id(): void {
+		// Fix 1: the callback no longer compares the state to the current user
+		// id — current_user is 0 in the real cookie-without-nonce 302 context,
+		// so a user-id match is unenforceable. A valid, unconsumed state is
+		// accepted regardless of which session presents it; its unguessability +
+		// single-use consumption is the CSRF guarantee. Here the state was minted
+		// for user 5 but is presented with no session at all.
 		$state = $this->mint_state( 5 );
-		$GLOBALS['mcpwp_test_current_user'] = 1;
+		$GLOBALS['mcpwp_test_current_user'] = 0;
 
 		$ctrl    = $this->controller();
 		$request = $this->make_request( 'GET', array(
-			'nonce'  => 'wrongUserNonce03',
+			'nonce'  => 'anyUserNonce03',
 			'return' => 'https://mumcp.com/enroll/complete',
 			'state'  => $state,
 		) );
 
 		$response = $ctrl->handle_enroll_callback( $request );
 
-		$this->assertTrue( is_wp_error( $response ), 'A state minted for a different user must be rejected.' );
-		$this->assertSame( 403, $response->get_error_data()['status'] );
-		$this->assertFalse( get_transient( 'mcpwp_broker_enroll_wrongUserNonce03' ) );
+		$this->assertInstanceOf( WP_REST_Response::class, $response );
+		$this->assertSame( 302, $response->get_status() );
+		$entry = get_transient( 'mcpwp_broker_enroll_anyUserNonce03' );
+		$this->assertIsArray( $entry );
+		$this->assertSame( 'pending', $entry['state'] );
+		$this->assertFalse( get_transient( 'mcpwp_broker_state_' . $state ), 'The state must be consumed single-use.' );
+	}
+
+	public function test_callback_consumed_state_cannot_be_replayed(): void {
+		// A state is single-use: once a callback consumes it, a second callback
+		// presenting the same state is rejected (unknown/expired) → 403, no
+		// pending stored.
+		$state = $this->mint_state( 1 );
+		$GLOBALS['mcpwp_test_current_user'] = 0;
+
+		$ctrl = $this->controller();
+
+		$first = $ctrl->handle_enroll_callback( $this->make_request( 'GET', array(
+			'nonce'  => 'replayNonceA',
+			'return' => 'https://mumcp.com/enroll/complete',
+			'state'  => $state,
+		) ) );
+		$this->assertInstanceOf( WP_REST_Response::class, $first );
+
+		$second = $ctrl->handle_enroll_callback( $this->make_request( 'GET', array(
+			'nonce'  => 'replayNonceB',
+			'return' => 'https://mumcp.com/enroll/complete',
+			'state'  => $state,
+		) ) );
+
+		$this->assertTrue( is_wp_error( $second ), 'A consumed state must not be replayable.' );
+		$this->assertSame( 403, $second->get_error_data()['status'] );
+		$this->assertFalse( get_transient( 'mcpwp_broker_enroll_replayNonceB' ) );
 	}
 
 	public function test_callback_missing_nonce_is_rejected(): void {

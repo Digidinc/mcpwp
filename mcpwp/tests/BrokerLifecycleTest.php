@@ -290,7 +290,7 @@ final class BrokerLifecycleTest extends TestCase {
 			array(
 				'nonce'                   => 'storeNonce1',
 				'site_id'                 => 'site-abc',
-				'audience'                => 'https://example.test',
+				'audience'                => 'https://example.com',
 				'issuer'                  => 'https://mumcp.com',
 				'introspection_endpoint'  => 'https://mumcp.com/oauth/introspect',
 				'site_credential'         => 'plaintext-super-secret',
@@ -304,7 +304,7 @@ final class BrokerLifecycleTest extends TestCase {
 		$enrollment = get_option( 'mcpwp_broker_enrollment' );
 		$this->assertIsArray( $enrollment );
 		$this->assertSame( 'site-abc', $enrollment['site_id'] );
-		$this->assertSame( 'https://example.test', $enrollment['audience'] );
+		$this->assertSame( 'https://example.com', $enrollment['audience'] );
 		$this->assertSame( 'https://mumcp.com', $enrollment['issuer'] );
 		$this->assertSame( 'https://mumcp.com/oauth/introspect', $enrollment['introspection_endpoint'] );
 
@@ -326,7 +326,7 @@ final class BrokerLifecycleTest extends TestCase {
 			array(
 				'nonce'           => 'storeNonce2',
 				'site_id'         => 'site-abc',
-				'audience'        => 'https://example.test',
+				'audience'        => 'https://example.com',
 				'issuer'          => 'https://mumcp.com',
 				'site_credential' => 'plaintext-super-secret',
 			)
@@ -343,7 +343,7 @@ final class BrokerLifecycleTest extends TestCase {
 			array(
 				'nonce'           => 'never-issued-store-nonce',
 				'site_id'         => 'site-abc',
-				'audience'        => 'https://example.test',
+				'audience'        => 'https://example.com',
 				'site_credential' => 'plaintext-super-secret',
 			)
 		);
@@ -360,7 +360,7 @@ final class BrokerLifecycleTest extends TestCase {
 		$params  = array(
 			'nonce'                  => 'storeNonce3',
 			'site_id'                => 'site-abc',
-			'audience'               => 'https://example.test',
+			'audience'               => 'https://example.com',
 			'issuer'                 => 'https://mumcp.com',
 			'introspection_endpoint' => 'https://mumcp.com/oauth/introspect',
 			'site_credential'        => 'plaintext-super-secret',
@@ -381,7 +381,7 @@ final class BrokerLifecycleTest extends TestCase {
 			$this->storeRequest(
 				array(
 					'nonce'    => 'storeNonce4',
-					'audience' => 'https://example.test',
+					'audience' => 'https://example.com',
 					// site_id and site_credential deliberately missing.
 				)
 			)
@@ -402,7 +402,7 @@ final class BrokerLifecycleTest extends TestCase {
 				array(
 					'nonce'                  => 'hostLockNonce1',
 					'site_id'                => 'site-abc',
-					'audience'               => 'https://example.test',
+					'audience'               => 'https://example.com',
 					'issuer'                 => 'https://mumcp.com',
 					'introspection_endpoint' => 'https://evil.example/x',
 					'site_credential'        => 'plaintext-super-secret',
@@ -423,7 +423,7 @@ final class BrokerLifecycleTest extends TestCase {
 				array(
 					'nonce'                  => 'hostLockNonce2',
 					'site_id'                => 'site-abc',
-					'audience'               => 'https://example.test',
+					'audience'               => 'https://example.com',
 					'issuer'                 => 'https://evil.com',
 					'introspection_endpoint' => 'https://mumcp.com/oauth/introspect',
 					'site_credential'        => 'plaintext-super-secret',
@@ -444,7 +444,7 @@ final class BrokerLifecycleTest extends TestCase {
 				array(
 					'nonce'           => 'hostLockNonce3',
 					'site_id'         => 'site-abc',
-					'audience'        => 'https://example.test',
+					'audience'        => 'https://example.com',
 					'issuer'          => 'https://mumcp.com',
 					'site_credential' => 'plaintext-super-secret',
 					// introspection_endpoint deliberately omitted.
@@ -465,7 +465,7 @@ final class BrokerLifecycleTest extends TestCase {
 				array(
 					'nonce'                  => 'hostLockNonce4',
 					'site_id'                => 'site-abc',
-					'audience'               => 'https://example.test',
+					'audience'               => 'https://example.com',
 					'issuer'                 => 'https://mumcp.com',
 					'introspection_endpoint' => 'https://mumcp.com/oauth/introspect',
 					'site_credential'        => 'plaintext-super-secret',
@@ -475,6 +475,102 @@ final class BrokerLifecycleTest extends TestCase {
 
 		$this->assertTrue( $response->get_data()['stored'], 'A legitimate https://mumcp.com issuer + introspection_endpoint must still be accepted.' );
 		$this->assertIsArray( get_option( 'mcpwp_broker_enrollment', false ) );
+	}
+
+	// ── Audience-lock — must equal this site's home_url() (Fix 2 / P1) ──────
+
+	public function test_store_rejects_audience_not_matching_home_url(): void {
+		// home_url() (bootstrap stub) is https://example.com. An audience naming
+		// any other site must be rejected — the attacker must not control the
+		// field that validate_token()'s later aud check relies on.
+		$this->confirmedEnrollment( 'audienceNonce1' );
+
+		$ctrl     = $this->broker();
+		$response = $ctrl->handle_enroll_store(
+			$this->storeRequest(
+				array(
+					'nonce'                  => 'audienceNonce1',
+					'site_id'                => 'site-abc',
+					'audience'               => 'https://attacker.example',
+					'issuer'                 => 'https://mumcp.com',
+					'introspection_endpoint' => 'https://mumcp.com/oauth/introspect',
+					'site_credential'        => 'plaintext-super-secret',
+				)
+			)
+		);
+
+		$this->assertFalse( $response->get_data()['stored'], 'An audience that is not this site\'s home_url() must be rejected.' );
+		$this->assertFalse( get_option( 'mcpwp_broker_enrollment', false ) );
+	}
+
+	public function test_store_accepts_audience_equal_to_home_url_ignoring_trailing_slash(): void {
+		// untrailingslashit() on both sides — a trailing slash difference is not a
+		// mismatch. home_url() == https://example.com, posted with a trailing slash.
+		$this->confirmedEnrollment( 'audienceNonce2' );
+
+		$ctrl     = $this->broker();
+		$response = $ctrl->handle_enroll_store(
+			$this->storeRequest(
+				array(
+					'nonce'                  => 'audienceNonce2',
+					'site_id'                => 'site-abc',
+					'audience'               => 'https://example.com/',
+					'issuer'                 => 'https://mumcp.com',
+					'introspection_endpoint' => 'https://mumcp.com/oauth/introspect',
+					'site_credential'        => 'plaintext-super-secret',
+				)
+			)
+		);
+
+		$this->assertTrue( $response->get_data()['stored'], 'home_url() with a trailing slash must still match.' );
+	}
+
+	// ── introspection_endpoint pinned to the EXACT full URL (Fix 3 / P2) ────
+
+	public function test_store_rejects_mumcp_introspection_endpoint_with_wrong_path(): void {
+		// Host is mumcp.com (would pass a host-only lock) but the path is not the
+		// pinned /oauth/introspect — must be rejected now that the full URL is
+		// pinned, closing any attacker-chosen path within the mumcp.com origin.
+		$this->confirmedEnrollment( 'introPathNonce1' );
+
+		$ctrl     = $this->broker();
+		$response = $ctrl->handle_enroll_store(
+			$this->storeRequest(
+				array(
+					'nonce'                  => 'introPathNonce1',
+					'site_id'                => 'site-abc',
+					'audience'               => 'https://example.com',
+					'issuer'                 => 'https://mumcp.com',
+					'introspection_endpoint' => 'https://mumcp.com/evil',
+					'site_credential'        => 'plaintext-super-secret',
+				)
+			)
+		);
+
+		$this->assertFalse( $response->get_data()['stored'], 'A mumcp.com host with a non-/oauth/introspect path must be rejected.' );
+		$this->assertFalse( get_option( 'mcpwp_broker_enrollment', false ) );
+	}
+
+	public function test_store_accepts_exact_pinned_introspection_endpoint(): void {
+		$this->confirmedEnrollment( 'introPathNonce2' );
+
+		$ctrl     = $this->broker();
+		$response = $ctrl->handle_enroll_store(
+			$this->storeRequest(
+				array(
+					'nonce'                  => 'introPathNonce2',
+					'site_id'                => 'site-abc',
+					'audience'               => 'https://example.com',
+					'issuer'                 => 'https://mumcp.com',
+					'introspection_endpoint' => 'https://mumcp.com/oauth/introspect',
+					'site_credential'        => 'plaintext-super-secret',
+				)
+			)
+		);
+
+		$this->assertTrue( $response->get_data()['stored'], 'The exact pinned introspection endpoint must be accepted.' );
+		$enrollment = get_option( 'mcpwp_broker_enrollment' );
+		$this->assertSame( 'https://mumcp.com/oauth/introspect', $enrollment['introspection_endpoint'] );
 	}
 
 	/**
@@ -489,7 +585,7 @@ final class BrokerLifecycleTest extends TestCase {
 				array(
 					'nonce'                  => 'hostLockNonce_' . md5( $spoofed_endpoint ),
 					'site_id'                => 'site-abc',
-					'audience'               => 'https://example.test',
+					'audience'               => 'https://example.com',
 					'issuer'                 => 'https://mumcp.com',
 					'introspection_endpoint' => $spoofed_endpoint,
 					'site_credential'        => 'plaintext-super-secret',
@@ -523,7 +619,7 @@ final class BrokerLifecycleTest extends TestCase {
 					array(
 						'nonce'                  => 'logSafeNonce1',
 						'site_id'                => 'site-abc',
-						'audience'               => 'https://example.test',
+						'audience'               => 'https://example.com',
 						'issuer'                 => 'https://mumcp.com',
 						'introspection_endpoint' => 'https://mumcp.com/oauth/introspect',
 						'site_credential'        => 'super-secret-plaintext-value',
@@ -546,6 +642,76 @@ final class BrokerLifecycleTest extends TestCase {
 		}
 	}
 
+	// ── Public endpoints must not amplify the activity log (Fix 4 / P2) ─────
+
+	/**
+	 * Run $fn with a $wpdb insert-spy in place; return the captured rows.
+	 */
+	private function withLogSpy( callable $fn ): array {
+		update_option( 'mcpwp_settings', array( 'enable_logging' => true ) );
+		$spy             = new Mcpwp_Test_WPDB_Log_Spy();
+		$previous_wpdb   = $GLOBALS['wpdb'];
+		$GLOBALS['wpdb'] = $spy;
+		try {
+			$fn();
+		} finally {
+			$GLOBALS['wpdb'] = $previous_wpdb;
+		}
+		return $spy->captured;
+	}
+
+	public function test_confirm_miss_path_writes_no_activity_log_row(): void {
+		$GLOBALS['mcpwp_test_current_user'] = 0;
+		$ctrl = $this->broker();
+
+		$captured = $this->withLogSpy( function () use ( $ctrl ) {
+			$response = $ctrl->handle_enroll_confirm(
+				new WP_REST_Request( 'POST', '/mcpwp/v1/broker/enroll-confirm', array( 'nonce' => 'never-issued-confirm' ) )
+			);
+			$this->assertFalse( $response->get_data()['confirmed'] );
+		} );
+
+		$this->assertSame( array(), $captured, 'A confirm MISS on a public endpoint must not write an activity-log row (no anonymous log amplification).' );
+	}
+
+	public function test_confirm_success_path_still_writes_activity_log_row(): void {
+		$this->pendingEnrollment( 'confirmLogNonce' );
+		$GLOBALS['mcpwp_test_current_user'] = 0;
+		$ctrl = $this->broker();
+
+		$captured = $this->withLogSpy( function () use ( $ctrl ) {
+			$response = $ctrl->handle_enroll_confirm(
+				new WP_REST_Request( 'POST', '/mcpwp/v1/broker/enroll-confirm', array( 'nonce' => 'confirmLogNonce' ) )
+			);
+			$this->assertTrue( $response->get_data()['confirmed'] );
+		} );
+
+		$this->assertNotEmpty( $captured, 'The success transition must still be logged.' );
+	}
+
+	public function test_store_miss_path_writes_no_activity_log_row(): void {
+		$GLOBALS['mcpwp_test_current_user'] = 0;
+		$ctrl = $this->broker();
+
+		$captured = $this->withLogSpy( function () use ( $ctrl ) {
+			$response = $ctrl->handle_enroll_store(
+				$this->storeRequest(
+					array(
+						'nonce'                  => 'never-issued-store',
+						'site_id'                => 'site-abc',
+						'audience'               => 'https://example.com',
+						'issuer'                 => 'https://mumcp.com',
+						'introspection_endpoint' => 'https://mumcp.com/oauth/introspect',
+						'site_credential'        => 'plaintext-super-secret',
+					)
+				)
+			);
+			$this->assertFalse( $response->get_data()['stored'] );
+		} );
+
+		$this->assertSame( array(), $captured, 'A store MISS on a public endpoint must not write an activity-log row.' );
+	}
+
 	// ── 5. Disconnect — admin_post_mcpwp_broker_disconnect ──────────────────
 
 	public function test_disconnect_as_admin_deletes_enrollment_and_kills_switch(): void {
@@ -554,7 +720,7 @@ final class BrokerLifecycleTest extends TestCase {
 			array(
 				'issuer'                 => 'https://mumcp.com',
 				'site_id'                => 'site-abc',
-				'audience'               => 'https://example.test',
+				'audience'               => 'https://example.com',
 				'introspection_endpoint' => 'https://mumcp.com/oauth/introspect',
 				'site_credential'        => Mcpwp_Encryption::get_instance()->encrypt( 'cred' ),
 			)
@@ -585,7 +751,7 @@ final class BrokerLifecycleTest extends TestCase {
 			'mcpwp_broker_enrollment',
 			array(
 				'site_id'         => 'site-abc',
-				'audience'        => 'https://example.test',
+				'audience'        => 'https://example.com',
 				'site_credential' => Mcpwp_Encryption::get_instance()->encrypt( 'cred' ),
 			)
 		);
@@ -621,6 +787,9 @@ final class BrokerLifecycleTest extends TestCase {
 		$state = $params['state'];
 
 		// 2. Callback — the broker 302s the admin's browser back with the state.
+		// The callback is now PUBLIC (Fix 1) — the browser 302 hitting it carries
+		// no admin session; the single-use `state` is the admin-initiation proof.
+		$GLOBALS['mcpwp_test_current_user'] = 0;
 		$broker  = $this->broker();
 		$request = new WP_REST_Request(
 			'GET',
@@ -631,7 +800,6 @@ final class BrokerLifecycleTest extends TestCase {
 				'state'  => $state,
 			)
 		);
-		$this->assertTrue( $broker->check_admin_permission( $request ) );
 		$callback_response = $broker->handle_enroll_callback( $request );
 		$this->assertSame( 302, $callback_response->get_status() );
 

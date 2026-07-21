@@ -10,14 +10,17 @@
  *   POST     /wp-json/mcpwp/v1/broker/enroll-confirm
  *
  * Flow:
- *   1. The broker 302s the admin's browser to enroll-callback with a random
- *      `nonce` and a `return` URL (always on mumcp.com) to send the browser
- *      back to once the site has recorded the nonce.
- *   2. enroll-callback is gated on `current_user_can('manage_options')` —
- *      THIS is the site-control proof: only a request carrying a valid,
- *      authenticated wp-admin session cookie can pass. It records the nonce
- *      as PENDING (single-use, 5-minute TTL) and 302-redirects the browser
- *      back to `return`.
+ *   1. The admin clicks "Connect" (admin-gated: manage_options + WP nonce),
+ *      which mints a single-use `state` token and 302s the browser to the
+ *      broker. The broker 302s the admin's browser to enroll-callback with a
+ *      random `nonce`, a `return` URL (always on mumcp.com), and the `state`.
+ *   2. enroll-callback is PUBLIC (permission_callback => __return_true): it is
+ *      reached by a top-level browser 302 with no X-WP-Nonce header, so REST
+ *      cookie auth cannot establish the logged-in user and a manage_options
+ *      gate would always 403 in production. The single-use `state` IS the
+ *      admin-initiation proof — minted only by the admin-gated Connect flow,
+ *      unguessable, single-use, 600s TTL. The callback records the nonce as
+ *      PENDING (single-use, 5-minute TTL) and 302-redirects to `return`.
  *   3. The broker then calls enroll-confirm server-to-server (no WordPress
  *      session exists for that call — the site has no broker credential yet
  *      at this point in the handshake). enroll-confirm's permission_callback
@@ -25,20 +28,24 @@
  *      single-use pending-nonce match, not from WordPress auth.
  *
  * Security properties:
- *  - enroll-callback: admin-only (manage_options), `return` restricted to an
- *    https://mumcp.com/... URL (prevents this endpoint being used as an open
- *    redirect / phishing vector for an attacker-chosen destination).
+ *  - enroll-callback: public, but gated on a valid single-use `state` (the
+ *    CSRF token / admin-initiation proof, minted only by the admin-gated
+ *    Connect flow); `return` restricted to an https://mumcp.com/... URL
+ *    (prevents this endpoint being used as an open redirect / phishing vector
+ *    for an attacker-chosen destination).
  *  - enroll-confirm: single-use — the pending transient is deleted BEFORE the
  *    success response is built, so a raced or replayed confirm can only ever
  *    win once. A miss (unknown, expired, or already-consumed nonce) returns a
  *    clean `{confirmed:false}`, never a 500 and never a distinguishing error
- *    code, so the response leaks nothing about why it failed.
- *  - enroll-store: `issuer` and `introspection_endpoint` are host-locked to
- *    https://mumcp.com (same check as `return`, see is_allowed_mumcp_url()) —
- *    Mcpwp_Broker_Auth::validate_token() sends the decrypted site credential
- *    to whatever `introspection_endpoint` this endpoint stores, so an
- *    unvalidated value here would be a credential-exfiltration / auth-bypass
- *    vector, not just an open redirect.
+ *    code, so the response leaks nothing about why it failed. Only the success
+ *    transition is logged, so an anonymous caller cannot amplify the log.
+ *  - enroll-store: `audience` is bound to this site's own home_url(); `issuer`
+ *    is host-locked to https://mumcp.com and `introspection_endpoint` is pinned
+ *    to the exact full URL — Mcpwp_Broker_Auth::validate_token() sends the
+ *    decrypted site credential to whatever `introspection_endpoint` this
+ *    endpoint stores, so an unvalidated value here would be a credential-
+ *    exfiltration / auth-bypass vector, not just an open redirect. Only the
+ *    success transition is logged (never the credential).
  *
  * @package MCPWP
  * @since   3.7.0
@@ -99,6 +106,17 @@ class Mcpwp_REST_Broker extends Mcpwp_REST_API {
 	const ALLOWED_RETURN_HOST = 'mumcp.com';
 
 	/**
+	 * The exact, full introspection endpoint this site will accept from an
+	 * enroll-store call. Pinned to the complete path (not just the host) because
+	 * Mcpwp_Broker_Auth::validate_token() POSTs the decrypted site credential
+	 * straight to whatever value is stored here — the tightest possible lock
+	 * removes any attacker latitude within the mumcp.com origin.
+	 *
+	 * @var string
+	 */
+	const ALLOWED_INTROSPECTION_ENDPOINT = 'https://mumcp.com/oauth/introspect';
+
+	/**
 	 * Register routes.
 	 */
 	public function register_routes() {
@@ -109,12 +127,27 @@ class Mcpwp_REST_Broker extends Mcpwp_REST_API {
 				array(
 					'methods'             => WP_REST_Server::READABLE,
 					'callback'            => array( $this, 'handle_enroll_callback' ),
-					'permission_callback' => array( $this, 'check_admin_permission' ),
+					// Intentionally public: this endpoint is reached by the broker's
+					// top-level browser 302 navigation, which carries NO X-WP-Nonce
+					// header. WordPress REST cookie auth (rest_cookie_check_errors)
+					// does not establish the logged-in user for a cookie request
+					// without a valid wp_rest nonce, so a manage_options gate here
+					// would ALWAYS 403 in production and the pending nonce would
+					// never be stored — the feature simply would not work. The
+					// single-use `state` param IS the proof of admin initiation:
+					// it is minted only by the admin-gated handle_connect()
+					// (manage_options + WP nonce), is unguessable
+					// (wp_generate_password(32)), single-use, and 600s TTL — an
+					// attacker cannot forge or obtain it, so a CSRF'd navigation
+					// without a valid state is rejected. See handle_enroll_callback().
+					'permission_callback' => '__return_true',
 				),
 				array(
 					'methods'             => WP_REST_Server::CREATABLE,
 					'callback'            => array( $this, 'handle_enroll_callback' ),
-					'permission_callback' => array( $this, 'check_admin_permission' ),
+					// Public for the same reason as the READABLE variant above —
+					// the state param is the admin-initiation proof.
+					'permission_callback' => '__return_true',
 				),
 			)
 		);
@@ -153,69 +186,36 @@ class Mcpwp_REST_Broker extends Mcpwp_REST_API {
 	}
 
 	// -------------------------------------------------------------------------
-	// Permission callback — proves an admin's browser session initiated this.
-	// -------------------------------------------------------------------------
-
-	/**
-	 * Whether the current request carries an authenticated admin session.
-	 *
-	 * This is the site-control proof: only a request with a valid,
-	 * authenticated wp-admin session cookie (an admin logged in to THIS site)
-	 * can pass. Returns the boolean straight from current_user_can() on
-	 * success so the contract matches "a method returning
-	 * current_user_can('manage_options')" exactly; on failure it returns a
-	 * WP_Error carrying a proper 401 (no session) or 403 (session, wrong
-	 * role) status instead of a bare false, so REST clients get an
-	 * informative response rather than WordPress's generic default.
-	 *
-	 * @param WP_REST_Request $request Request object.
-	 * @return true|WP_Error
-	 */
-	public function check_admin_permission( $request ) {
-		if ( current_user_can( 'manage_options' ) ) {
-			return true;
-		}
-
-		return new WP_Error(
-			'rest_forbidden',
-			__( 'This endpoint requires an authenticated WordPress administrator session.', 'mcpwp' ),
-			array( 'status' => 0 !== get_current_user_id() ? 403 : 401 )
-		);
-	}
-
-	// -------------------------------------------------------------------------
 	// GET|POST /broker/enroll-callback
 	// -------------------------------------------------------------------------
 
 	/**
 	 * Record the broker's nonce as pending and redirect the browser back to it.
 	 *
-	 * Only reachable once check_admin_permission() has already passed (wired
-	 * as this route's permission_callback) — re-checked here too as a cheap
-	 * defense-in-depth belt-and-suspenders against a future registration
-	 * mistake, since this handler's side effect (minting a pending
-	 * enrollment) is exactly what the admin gate exists to protect.
+	 * PUBLIC endpoint (permission_callback => __return_true). This handler is
+	 * reached by the broker's top-level browser 302 navigation, which carries
+	 * NO X-WP-Nonce header — so WordPress REST cookie auth never establishes a
+	 * logged-in user here (current_user_can()/get_current_user_id() are not
+	 * reliably available). A manage_options gate would therefore ALWAYS fail in
+	 * production and the feature could never complete. The single-use `state`
+	 * param is the admin-initiation proof instead:
 	 *
-	 * CSRF defense (Plan 2 / Task 5): the admin session cookie alone proves
-	 * "an admin's browser hit this URL" but not "this admin's browser chose
-	 * to start THIS enrollment" — a logged-in admin could be tricked into
-	 * loading this URL cross-site with an attacker-supplied nonce/return.
-	 * The `state` param closes that gap: it was minted and stored server-side
-	 * by Mcpwp_Broker_Admin::handle_connect() only when the admin themselves
-	 * clicked "Connect" (with its own WP nonce check), keyed to their user id.
-	 * A request lacking a state transient that matches BOTH the token and the
-	 * current user is rejected — the state is consumed (deleted) before any
-	 * further processing either way, so it can never be replayed.
+	 *   - `state` is REQUIRED and must match an existing
+	 *     mcpwp_broker_state_<state> transient. That transient is minted ONLY by
+	 *     Mcpwp_Broker_Admin::handle_connect(), which is itself admin-gated
+	 *     (manage_options + a WordPress nonce). Its mere existence proves an
+	 *     admin on THIS site initiated this specific flow.
+	 *   - It is unguessable (wp_generate_password(32)), single-use (consumed
+	 *     below before the pending nonce is stored), and expires in STATE_TTL
+	 *     (600s). An attacker cannot forge or obtain it, so a CSRF'd navigation
+	 *     that lacks a valid state is rejected with 403 — the state is the CSRF
+	 *     token, now that the callback itself cannot check the session cookie.
 	 *
 	 * @param WP_REST_Request $request Request object.
 	 * @return WP_REST_Response|WP_Error 302 redirect on success, WP_Error on
 	 *                                   invalid input.
 	 */
 	public function handle_enroll_callback( $request ) {
-		if ( ! current_user_can( 'manage_options' ) ) {
-			return $this->error_response( 'forbidden', __( 'Administrator session required.', 'mcpwp' ), 403 );
-		}
-
 		$nonce = $this->sanitize_broker_nonce( $request->get_param( 'nonce' ) );
 		if ( '' === $nonce ) {
 			return $this->error_response( 'invalid_nonce', __( 'A valid nonce parameter is required.', 'mcpwp' ), 400 );
@@ -235,17 +235,17 @@ class Mcpwp_REST_Broker extends Mcpwp_REST_API {
 			return $this->error_response( 'invalid_state', __( 'A valid state parameter is required.', 'mcpwp' ), 403 );
 		}
 
-		$state_key       = self::STATE_TRANSIENT_PREFIX . $state;
-		$state_user_id   = get_transient( $state_key );
-		$current_user_id = get_current_user_id();
-		if ( false === $state_user_id || (int) $state_user_id !== (int) $current_user_id ) {
-			// Delete on a mismatch too — a state value that's floating around
-			// mismatched is not worth keeping alive for a second attempt.
-			delete_transient( $state_key );
-			return $this->error_response( 'invalid_state', __( 'The state parameter did not match this session.', 'mcpwp' ), 403 );
+		// The state is the admin-initiation proof (see method docblock). It must
+		// match a live transient minted by the admin-gated handle_connect(). We
+		// do NOT compare it to the current user id: current_user is not reliably
+		// available in this cookie-without-nonce REST context. Existence +
+		// unguessability + single-use is the CSRF guarantee.
+		$state_key = self::STATE_TRANSIENT_PREFIX . $state;
+		if ( false === get_transient( $state_key ) ) {
+			return $this->error_response( 'invalid_state', __( 'The state parameter is unknown or has expired.', 'mcpwp' ), 403 );
 		}
-		// Single-use — consume the CSRF token now that it has proven this
-		// browser session initiated the connect flow.
+		// Single-use — consume the CSRF token now that it has proven an admin
+		// initiated this connect flow.
 		delete_transient( $state_key );
 
 		set_transient( self::ENROLL_TRANSIENT_PREFIX . $nonce, array( 'state' => 'pending' ), self::PENDING_TTL );
@@ -291,7 +291,13 @@ class Mcpwp_REST_Broker extends Mcpwp_REST_API {
 			}
 		}
 
-		$this->log_activity( 'broker_enroll_confirm', $request, array( 'confirmed' => $confirmed ) );
+		// This endpoint is public and unauthenticated, so it is trivially
+		// reachable by anyone. Log ONLY the meaningful success transition — a
+		// row per negative hit (unknown/expired/already-confirmed nonce) would
+		// let an anonymous caller amplify the activity log at will.
+		if ( $confirmed ) {
+			$this->log_activity( 'broker_enroll_confirm', $request, array( 'confirmed' => true ) );
+		}
 
 		return $this->success_response( array( 'confirmed' => $confirmed ) );
 	}
@@ -357,19 +363,33 @@ class Mcpwp_REST_Broker extends Mcpwp_REST_API {
 			return $this->success_response( array( 'stored' => false ) );
 		}
 
-		// Host-lock: `issuer` and `introspection_endpoint` are the only two
+		// Audience-lock (P1): the broker contract defines `audience` as THIS
+		// site's own canonical URL — the very value handle_connect() sent to the
+		// broker as `site_url` (home_url()). Mcpwp_Broker_Auth::validate_token()
+		// later rejects any introspected token whose `aud` does not equal the
+		// stored `audience`, so if the attacker controlled what got stored here,
+		// they would also control the check that is supposed to constrain them.
+		// Binding `audience` to home_url() removes that latitude: an enroll-store
+		// call that does not name this exact site is rejected, nothing written.
+		if ( untrailingslashit( $audience ) !== untrailingslashit( home_url() ) ) {
+			return $this->success_response( array( 'stored' => false ) );
+		}
+
+		// URL-lock: `issuer` and `introspection_endpoint` are the only two
 		// enrollment fields later used to make an authenticated, credential-
 		// bearing request (Mcpwp_Broker_Auth::validate_token() POSTs the
 		// decrypted site_credential, Basic-auth-encoded, to whatever
-		// `introspection_endpoint` says). A poisoned S2S enroll-store call
-		// with an attacker-controlled `introspection_endpoint` would make this
-		// site exfiltrate its own broker credential (and every bearer token it
-		// is ever asked to validate) to that attacker host on every request.
-		// Both must resolve to the same https://mumcp.com origin the `return`
-		// URL is already locked to — same helper, same rejection shape as
-		// every other malformed-input path here: a clean `{stored:false}`,
-		// nothing written, nothing distinguishing why.
-		if ( ! $this->is_allowed_mumcp_url( $issuer ) || ! $this->is_allowed_mumcp_url( $introspection_endpoint ) ) {
+		// `introspection_endpoint` says). A poisoned S2S enroll-store call with
+		// an attacker-controlled `introspection_endpoint` would make this site
+		// exfiltrate its own broker credential (and every bearer token it is
+		// ever asked to validate) to that attacker host on every request.
+		//   - `issuer` is host-locked to the https://mumcp.com origin.
+		//   - `introspection_endpoint` is pinned to the EXACT full URL
+		//     (self::ALLOWED_INTROSPECTION_ENDPOINT) — not merely host-locked —
+		//     so no attacker-chosen path within mumcp.com is accepted either.
+		// Same rejection shape as every other malformed-input path here: a clean
+		// `{stored:false}`, nothing written, nothing distinguishing why.
+		if ( ! $this->is_allowed_mumcp_url( $issuer ) || self::ALLOWED_INTROSPECTION_ENDPOINT !== $introspection_endpoint ) {
 			return $this->success_response( array( 'stored' => false ) );
 		}
 
