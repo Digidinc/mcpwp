@@ -159,6 +159,10 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 * security: broker tokens are capped at read/write scope — **admin capability is never grantable over OAuth** and stays on the deliberate `X-API-Key` path. Token validation is fail-closed, audience-bound (a token minted for another site is refused), and the per-site introspection credential is stored encrypted and never leaves the site in a browser response.
 * note: Claude Desktop / Cursor / Windsurf are unchanged — they keep connecting via `X-API-Key`.
 
+= 3.6.5 =
+* new: **admin:** redesigned admin UI — warm cream/antique-gold palette, Newsreader/Instrument Sans/IBM Plex Mono typography, and refreshed cards, stat tiles, badges, and buttons across Setup, Control Room, Chat, Library, Integrations, Tools, and Settings. Visual only — no endpoints, data, or JS behavior changed.
+* new: **control-room:** pending approvals now show a "View before / after" disclosure with the change's existing before/after excerpt, so a reviewer can see what an approval actually changes without leaving the queue.
+
 = 3.6.4 =
 * fix: **seo:** `wp_validate_seo_readiness` no longer reports a sitewide robots.txt block when the site only disallows sub-paths (e.g. `/wp-admin/`, WooCommerce cart URLs). It now parses robots.txt by user-agent group and flags a root block only on an exact `Disallow: /` ([#680](https://github.com/Mumega-com/mcpwp/issues/680))
 * fix: **seo:** readiness checks (H1, word count, headings, image alts) now source from the live rendered page for server-rendered template pages whose stored content is empty, instead of falsely reporting `missing_h1` / `thin_content` ([#681](https://github.com/Mumega-com/mcpwp/issues/681))

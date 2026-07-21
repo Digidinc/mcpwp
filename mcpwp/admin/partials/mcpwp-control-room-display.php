@@ -136,6 +136,9 @@ $event_escalated_count = (int) ( $event_summary['escalated'] ?? 0 );
 						$res_type     = ! empty( $resource['type'] ) ? $resource['type'] : '';
 						$res_id       = ! empty( $resource['id'] ) ? (string) $resource['id'] : '';
 						$res_label    = trim( $res_type . ( $res_id ? ' #' . $res_id : '' ) );
+						$item_diff    = isset( $item['diff'] ) && is_array( $item['diff'] ) ? $item['diff'] : array();
+						$diff_before  = isset( $item_diff['before_excerpt'] ) ? (string) $item_diff['before_excerpt'] : '';
+						$diff_after   = isset( $item_diff['after_excerpt'] ) ? (string) $item_diff['after_excerpt'] : '';
 						$short_desc   = ! empty( $item['description'] ) ? $item['description'] : ( ! empty( $item['detail'] ) ? $item['detail'] : '' );
 						$short_desc   = $short_desc ? wp_html_excerpt( $short_desc, 120, '…' ) : '';
 						?>
@@ -152,6 +155,21 @@ $event_escalated_count = (int) ( $event_summary['escalated'] ?? 0 );
 										<?php echo esc_html( $short_desc ); ?>
 									<?php endif; ?>
 								</span>
+							<?php endif; ?>
+							<?php if ( '' !== $diff_before || '' !== $diff_after ) : ?>
+								<details class="mcpwp-approval-diff">
+									<summary><?php esc_html_e( 'View before / after', 'mcpwp' ); ?></summary>
+									<div class="mcpwp-approval-diff__grid">
+										<div class="mcpwp-approval-diff__pane mcpwp-approval-diff__pane--before">
+											<span class="mcpwp-approval-diff__label"><?php esc_html_e( 'Before', 'mcpwp' ); ?></span>
+											<pre><?php echo esc_html( $diff_before ); ?></pre>
+										</div>
+										<div class="mcpwp-approval-diff__pane mcpwp-approval-diff__pane--after">
+											<span class="mcpwp-approval-diff__label"><?php esc_html_e( 'After', 'mcpwp' ); ?></span>
+											<pre><?php echo esc_html( $diff_after ); ?></pre>
+										</div>
+									</div>
+								</details>
 							<?php endif; ?>
 							<div class="mcpwp-control-actions">
 								<form method="post">
