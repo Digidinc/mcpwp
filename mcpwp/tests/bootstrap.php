@@ -220,6 +220,25 @@ function sanitize_textarea_field($value)
     return trim((string) $value);
 }
 
+function wp_create_nonce($action = -1)
+{
+    return 'test-nonce';
+}
+
+function wp_verify_nonce($nonce, $action = -1)
+{
+    return 'test-nonce' === $nonce ? 1 : false;
+}
+
+function wp_nonce_field($action = -1, $name = '_wpnonce', $referer = true, $echo = true)
+{
+    $field = '<input type="hidden" name="' . $name . '" value="test-nonce" />';
+    if ($echo) {
+        echo $field;
+    }
+    return $field;
+}
+
 function sanitize_key($value)
 {
     $value = strtolower((string) $value);
@@ -251,6 +270,27 @@ function absint($value)
 function esc_url_raw($value)
 {
     return filter_var((string) $value, FILTER_SANITIZE_URL);
+}
+
+if (! function_exists('esc_html')) {
+    function esc_html($text)
+    {
+        return htmlspecialchars((string) $text, ENT_QUOTES, 'UTF-8');
+    }
+}
+
+if (! function_exists('esc_attr')) {
+    function esc_attr($text)
+    {
+        return htmlspecialchars((string) $text, ENT_QUOTES, 'UTF-8');
+    }
+}
+
+if (! function_exists('esc_html_e')) {
+    function esc_html_e($text, $domain = 'default')
+    {
+        echo esc_html($text);
+    }
 }
 
 function is_email($value)
