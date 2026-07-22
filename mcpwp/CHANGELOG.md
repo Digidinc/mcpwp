@@ -5,6 +5,71 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.7.1](https://github.com/Mumega-com/mcpwp/compare/v3.7.0...v3.7.1) (2026-07-22)
+
+
+### Features
+
+* **admin:** redesign admin UI to Claude Design Control Room mockup (3.6.5) ([0612fda](https://github.com/Mumega-com/mcpwp/commit/0612fdaa6fe8eda05c74e77cbabf95d1d8bcc018))
+* allow extensions to raise custom MCP tool scope ([#654](https://github.com/Mumega-com/mcpwp/issues/654)) ([bbae9aa](https://github.com/Mumega-com/mcpwp/commit/bbae9aaba28220b002069584f7ca352bf6d2175e))
+* **broker-plugin:** cached introspection validator (fail-closed, audience-checked, kill-switch) ([5b526a7](https://github.com/Mumega-com/mcpwp/commit/5b526a7793dd4a4b2ce57449b2282da1a1f1e46d))
+* **broker-plugin:** claude.ai/ChatGPT OAuth sign-in via mumcp.com broker (v3.7.0) ([c523253](https://github.com/Mumega-com/mcpwp/commit/c523253063c378963591098f36e9458281b837a4))
+* **broker-plugin:** enrollment callback + confirm endpoints (site-control proof) ([dc171b5](https://github.com/Mumega-com/mcpwp/commit/dc171b578384ccefa228a3daccdbdb45d6232cf8))
+* **broker-plugin:** enrollment lifecycle — connect/state/confirm/store/disconnect + Connections UI ([fd13941](https://github.com/Mumega-com/mcpwp/commit/fd1394160812946a395b2a031dc4be91b451a42c))
+* **broker-plugin:** point .well-known/oauth-protected-resource at mumcp.com when enrolled ([0147df0](https://github.com/Mumega-com/mcpwp/commit/0147df0e4ef7dfb5c5eaba0fdcd8c61aea11aeb6))
+* **broker-plugin:** validate broker Bearer tokens in verify_api_key() (read|write, never admin) + 401 discovery header ([2355944](https://github.com/Mumega-com/mcpwp/commit/2355944a10a6c2c290212c2bcf848a29a39b215b))
+* **cloudflare:** cloudflare integration — bot-fix, cache purge, speed/CWV signals ([#632](https://github.com/Mumega-com/mcpwp/issues/632)) ([f2d9f72](https://github.com/Mumega-com/mcpwp/commit/f2d9f7289ba2d590c9e02563f689f53dafbd0a45))
+* **elementor:** idempotent, named Kit CSS blocks ([#645](https://github.com/Mumega-com/mcpwp/issues/645)) ([b3b5519](https://github.com/Mumega-com/mcpwp/commit/b3b551932cffce0fcf5d2b5eb630b0990df40c70))
+* **elementor:** validate Atomic Elements props against real schema + document the feature ([1ffbff9](https://github.com/Mumega-com/mcpwp/commit/1ffbff916c50af63384371c0b7994cb12da311c7))
+* **integrations:** self-service Cloudflare Bot Fight Mode fix in wp-admin ([ddb4e6b](https://github.com/Mumega-com/mcpwp/commit/ddb4e6b79ab700d6b17b40429d276f1813d44b5f))
+* **seo:** classify deprecated schema.org rich-result types ([#615](https://github.com/Mumega-com/mcpwp/issues/615)) ([b16ccfb](https://github.com/Mumega-com/mcpwp/commit/b16ccfbcd4329cf589c2e90ead3f3903682d382c))
+* **seo:** experimental opt-in GEO/AI-citability score ([#617](https://github.com/Mumega-com/mcpwp/issues/617)) ([21bc3ee](https://github.com/Mumega-com/mcpwp/commit/21bc3ee3e5d090eb5e50dd301f6912a12bf29c4d))
+* **seo:** schema-placement check + explicit E-E-A-T rubric ([#616](https://github.com/Mumega-com/mcpwp/issues/616)) ([bd98a7d](https://github.com/Mumega-com/mcpwp/commit/bd98a7df3eae0d2ac2127da4d160ce85ed73bca8))
+* support trusted custom tool callbacks ([#657](https://github.com/Mumega-com/mcpwp/issues/657)) ([9503424](https://github.com/Mumega-com/mcpwp/commit/95034246c02deff858761eaa08661be60e3f728b))
+
+
+### Bug Fixes
+
+* **broker-plugin:** host-lock enroll-store issuer/introspection_endpoint to mumcp.com (prevent credential-exfil poisoning) ([38d8f4c](https://github.com/Mumega-com/mcpwp/commit/38d8f4c0f90dd6a2e96715b369f0f71cbe290f67))
+* **broker-plugin:** introspect only as fallback after local key + rate-limit anonymous bearer attempts (no key egress, no DoS) ([8396f62](https://github.com/Mumega-com/mcpwp/commit/8396f62a3304c759bb60c9285d9f9932ac84bfb2))
+* **broker-plugin:** public state-gated enroll-callback + pin audience to home_url + pin introspection URL + no public log-amplification ([274d209](https://github.com/Mumega-com/mcpwp/commit/274d209afe4396d65a84ed737c22c0d84ef21106))
+* **ci:** scope proxy-worker audit to runtime deps + bump hono ([#692](https://github.com/Mumega-com/mcpwp/issues/692)) ([9894fef](https://github.com/Mumega-com/mcpwp/commit/9894fef6ec775220705b3fe7013735713afd4b16))
+* **elementor:** accept create-side param names on archetype/part list tools ([#640](https://github.com/Mumega-com/mcpwp/issues/640)) ([5de3176](https://github.com/Mumega-com/mcpwp/commit/5de3176583b459b4b03f8be5ea116a6f928caf2d))
+* **elementor:** correct destructive annotations and elementor_data round-trip typing ([#642](https://github.com/Mumega-com/mcpwp/issues/642)) ([55252ec](https://github.com/Mumega-com/mcpwp/commit/55252ec251968065117f3e4f65747ff3c7233fab))
+* **elementor:** stop silent data loss on section/container/atomic layout mismatches ([3356719](https://github.com/Mumega-com/mcpwp/commit/33567199ca9b4e92dffee6582ed1d08ecd430e39))
+* **freemius:** soft-gate first activation instead of hard license wall ([#646](https://github.com/Mumega-com/mcpwp/issues/646)) ([3ad18bc](https://github.com/Mumega-com/mcpwp/commit/3ad18bc5ab8a7725da86a4a7e40f2b8da338d643))
+* **license:** close reconnect-link render-time gap + notify on blocked updates ([589fb36](https://github.com/Mumega-com/mcpwp/commit/589fb361cb8bc3fea1aaf2df21c19caba3e964e7))
+* **license:** detect wrong-package downgrade + warn loudly ([#656](https://github.com/Mumega-com/mcpwp/issues/656)) ([c2e9492](https://github.com/Mumega-com/mcpwp/commit/c2e9492849365239743fdc100db871de8db29068))
+* **license:** reconnect flow no longer forces skip-mode (found the actual bug) ([00a5e8a](https://github.com/Mumega-com/mcpwp/commit/00a5e8aaf851949c3c0aa9f47adf404bfc076b0d))
+* **license:** reconnect Freemius when a site is stuck anonymous/pending ([#633](https://github.com/Mumega-com/mcpwp/issues/633)) ([3fe334a](https://github.com/Mumega-com/mcpwp/commit/3fe334aaa7c12bd53406665d51372a50eb8afc9b))
+* **license:** update vendored Freemius SDK 2.13.0 -&gt; 2.13.4 ([d3fb7cf](https://github.com/Mumega-com/mcpwp/commit/d3fb7cf2f6a8fb7d46579255ae8c77045ca9677f))
+* **license:** use Freemius's install-linked checkout URL, not marketing site ([9e7b070](https://github.com/Mumega-com/mcpwp/commit/9e7b070de59920e2411186b4308b515c07038323))
+* **mcp:** draft rendered-copy 404/502 + expose unlicensed-reason code ([4b7f8ef](https://github.com/Mumega-com/mcpwp/commit/4b7f8ef637f0d82f81926674402715430ae5ffd5))
+* menu taxonomy contract, AIOSEO persistence, draft rendered-copy (3.6.2) ([#682](https://github.com/Mumega-com/mcpwp/issues/682)) ([528d096](https://github.com/Mumega-com/mcpwp/commit/528d096a824aa8d4c51bcbe78a546d716617d0c6))
+* **oauth:** discovery docs broken on subdirectory installs + widen CF fix ([57bf027](https://github.com/Mumega-com/mcpwp/commit/57bf027c41970d0eafbbd88c9ef61cf9bfb4b9fa))
+* **oauth:** serve consent screen off the REST API so browser sign-in works ([#695](https://github.com/Mumega-com/mcpwp/issues/695)) ([ca61c68](https://github.com/Mumega-com/mcpwp/commit/ca61c68b798e5ca982ec1bb03deeba2a0b832480))
+* **pages:** support excerpt on wp_create_page/wp_update_page ([#697](https://github.com/Mumega-com/mcpwp/issues/697)) ([6a5efa5](https://github.com/Mumega-com/mcpwp/commit/6a5efa577e367a828727af37c33ba1accbf55f10))
+* **release:** release_freemius.sh never defined MCPWP_FREEMIUS_BUILD ([673f943](https://github.com/Mumega-com/mcpwp/commit/673f94384723c07e38144e4660fd8657811341d8))
+* **rendered-html:** render draft/private Elementor content in-process, not via loopback ([#644](https://github.com/Mumega-com/mcpwp/issues/644)) ([7b94091](https://github.com/Mumega-com/mcpwp/commit/7b940919e30561987c19aebadc7a05c1231509cf))
+* **security:** block secret option stores from /option and admin-gate /plugin-settings ([094e472](https://github.com/Mumega-com/mcpwp/commit/094e472e3fe3f0bf7467869d4ad1e4b2d11d9178))
+* **security:** block secret option stores from /option and admin-gate /plugin-settings ([3b30a37](https://github.com/Mumega-com/mcpwp/commit/3b30a37960769cb6c2ba31c94d215314758ea107))
+* **security:** close draft/private content disclosure to read-scoped API keys ([#683](https://github.com/Mumega-com/mcpwp/issues/683)) ([e6051c9](https://github.com/Mumega-com/mcpwp/commit/e6051c90585d2aeae6ec4340c36c0c9b1f915805))
+* **security:** harden feedback-relay rate limiting and Figma OAuth callback ([#649](https://github.com/Mumega-com/mcpwp/issues/649)) ([a1040c9](https://github.com/Mumega-com/mcpwp/commit/a1040c959d8a8a07352cd67034d4a56c176de55d))
+* **security:** harden REST/MCP scope matrix and self-approval gate ([3959a13](https://github.com/Mumega-com/mcpwp/commit/3959a13ec7304d8cba0003e87627ba66279f1549))
+* **security:** harden REST/MCP scope matrix and self-approval gate ([aadd238](https://github.com/Mumega-com/mcpwp/commit/aadd2388dfd1eeff0f806696205cc18b6f8e94e5))
+* **security:** require admin scope to bypass content-approval gate ([172fd28](https://github.com/Mumega-com/mcpwp/commit/172fd2803cfa0fa48c7907e4b8c6e2c08cb01f4b))
+* **security:** require admin scope to bypass content-approval gate ([b27591b](https://github.com/Mumega-com/mcpwp/commit/b27591bb83de625eea5f916b834140dc7a34eb81))
+* **security:** restrict Elementor globals writes to an allowlist and admin-gate kit CSS ([#603](https://github.com/Mumega-com/mcpwp/issues/603)) ([01d79f6](https://github.com/Mumega-com/mcpwp/commit/01d79f6d3942d50addf9494038b2aaf99f148ed3))
+* **security:** restrict non-public content reads to write-scoped keys ([#601](https://github.com/Mumega-com/mcpwp/issues/601)) ([ea27690](https://github.com/Mumega-com/mcpwp/commit/ea2769065bb8c1430ac9f78de1490087abb737bd))
+* **seo:** 3.6.4 — readiness false-positives, screenshot save_to_media, setup-page connect clarity ([#685](https://github.com/Mumega-com/mcpwp/issues/685)) ([f975375](https://github.com/Mumega-com/mcpwp/commit/f975375b3b996d067528f5c7fb3a21579e53d1c5))
+* **seo:** stop /seo/audit fatal and per-post self-fetch storm ([9a60782](https://github.com/Mumega-com/mcpwp/commit/9a607829f60cfe0d73a30336b135754b4c0706be))
+* **seo:** stop /seo/audit fatal and per-post self-fetch storm ([c4c4ec5](https://github.com/Mumega-com/mcpwp/commit/c4c4ec55d94fa8fcda75289ec1923faf0f6bc3da))
+
+
+### Miscellaneous Chores
+
+* record 3.7.0 as released and cut the next release as 3.7.1 ([ccc86dd](https://github.com/Mumega-com/mcpwp/commit/ccc86dd60160b9b117c87006aa1678efedfe3d25))
+
 ## [3.6.0](https://github.com/Mumega-com/mcpwp/compare/v3.5.0...v3.6.0) (2026-07-17)
 
 
