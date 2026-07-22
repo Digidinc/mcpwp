@@ -1,5 +1,12 @@
 # Rebrand Game Plan — everything → MCPWP
 
+> ⚠️ **SUPERSEDED (2026-07-22) by [`DECISIONS.md`](DECISIONS.md) ADR-001.** The "one name everywhere → MCPWP"
+> direction below rested on *"there is NO external contract."* That premise expired: wp.org accepted the
+> free plugin under the permanent slug `mumega-mcp`, creating a real external contract. Current direction:
+> **mumcp** = the product brand (public surfaces only), **mcpwp** = the media site; the internal `mcpwp/v1`
+> wire contract is **frozen, not re-churned.** Read ADR-001 before acting on anything below. The mechanical
+> rename history here is still useful reference; the *goal* is not current.
+
 > **Goal:** one name everywhere — **MCPWP**. Eliminate `site-pilot-ai`, `spai`/`Spai_`/`SPAI_`,
 > `mumcp`, `mumega-mcp`, `MumegaMCP`, and the repo/dir name `wp-ai-operator`. Forcing function: the
 > Freemius slug is now `MCPWP`.
