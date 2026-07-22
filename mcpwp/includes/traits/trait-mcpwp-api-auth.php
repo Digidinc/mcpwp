@@ -499,6 +499,21 @@ trait Mcpwp_Api_Auth {
 			);
 		}
 
+		// Site-administrator tool-category toggle, same as the full verify_api_key()
+		// tail. This function is the batch / MCP sub-request fast path
+		// (Mcpwp_REST_Batch::$is_batch_sub_request), and it skipped the gate
+		// entirely — so /batch with an operation targeting a disabled category
+		// succeeded even though the identical call to the same route as a top-level
+		// request returned 403. Wrapping a blocked route in a batch envelope must
+		// not launder it.
+		//
+		// Only rate limiting is legitimately skipped on this path (already counted
+		// on the outer request); authorisation decisions are not.
+		$category_check = $this->check_disabled_category_for_route( $request );
+		if ( is_wp_error( $category_check ) ) {
+			return $category_check;
+		}
+
 		return true;
 	}
 
@@ -664,6 +679,25 @@ trait Mcpwp_Api_Auth {
 				__( 'API user context is not configured. Re-activate MCPWP to provision the service account.', 'mcpwp' ),
 				array( 'status' => 500 )
 			);
+		}
+
+		// Site-administrator tool-category toggle — the same gate the X-API-Key
+		// path applies at the end of verify_api_key() and the broker path applies
+		// at the end of authenticate_broker_bearer_token().
+		//
+		// Without it, an OAuth bearer principal could reach a disabled category by
+		// calling the REST route directly: the MCP layer refuses the equivalent
+		// tool with -32003, so the toggle *looked* effective while the raw route
+		// stayed wide open. A toggle that only holds on one of two entry points is
+		// not a control.
+		//
+		// Placement is deliberate: after the token lookup, the rate-limit check and
+		// the scope check. Running it earlier would let an unauthenticated caller
+		// tell 403 "category disabled" apart from 401 and enumerate the site's
+		// disabled categories without presenting a credential.
+		$category_check = $this->check_disabled_category_for_route( $request );
+		if ( is_wp_error( $category_check ) ) {
+			return $category_check;
 		}
 
 		return true;
@@ -1826,11 +1860,27 @@ trait Mcpwp_Api_Auth {
 		$settings = get_option( 'mcpwp_settings', array() );
 		$settings = is_array( $settings ) ? $settings : array();
 
+		// Ceiling for the client_credentials grant (machine tokens). Resolved
+		// through an explicit allow-list, NOT through sanitize_scopes():
+		// sanitize_scopes() fails open to read+write+admin, so a typo'd or
+		// truncated stored value would silently promote the ceiling to admin.
+		// An unrecognised or absent value falls back to 'write' — the documented
+		// default. That fallback is a two-sided guarantee: it stops a bad value
+		// widening the ceiling, and it stops an unset option narrowing every
+		// machine client to read and breaking existing integrations.
+		$cc_max_scope = isset( $settings['oauth_client_credentials_max_scope'] )
+			? sanitize_key( (string) $settings['oauth_client_credentials_max_scope'] )
+			: '';
+		if ( ! in_array( $cc_max_scope, array( 'read', 'write', 'admin' ), true ) ) {
+			$cc_max_scope = 'write';
+		}
+
 		return array(
-			'oauth_enabled'            => ! empty( $settings['oauth_enabled'] ),
-			'oauth_client_id'          => isset( $settings['oauth_client_id'] ) ? sanitize_key( (string) $settings['oauth_client_id'] ) : 'site_pilot_ai',
-			'oauth_client_secret_hash' => isset( $settings['oauth_client_secret_hash'] ) ? (string) $settings['oauth_client_secret_hash'] : '',
-			'oauth_token_ttl'          => isset( $settings['oauth_token_ttl'] ) ? max( 300, min( 86400, absint( $settings['oauth_token_ttl'] ) ) ) : 3600,
+			'oauth_enabled'                      => ! empty( $settings['oauth_enabled'] ),
+			'oauth_client_id'                    => isset( $settings['oauth_client_id'] ) ? sanitize_key( (string) $settings['oauth_client_id'] ) : 'site_pilot_ai',
+			'oauth_client_secret_hash'           => isset( $settings['oauth_client_secret_hash'] ) ? (string) $settings['oauth_client_secret_hash'] : '',
+			'oauth_token_ttl'                    => isset( $settings['oauth_token_ttl'] ) ? max( 300, min( 86400, absint( $settings['oauth_token_ttl'] ) ) ) : 3600,
+			'oauth_client_credentials_max_scope' => $cc_max_scope,
 		);
 	}
 
