@@ -182,6 +182,80 @@ final class MupotConnectorTest extends TestCase
         $this->assertSame('mumcp-core', $connector->get_squad(self::USER_ID));
     }
 
+    public function test_get_task_board_returns_squad_not_configured_on_400(): void
+    {
+        // Spec: a 400 invalid_args from task_board (mupot rejecting the
+        // squad_id it was sent) should be treated the same as "no squad
+        // stored" — not fall through to a generic "unavailable" error.
+        $connector = new Mcpwp_Mupot_Connector();
+        $connector->save_token(self::USER_ID, 'test-member-token');
+        $connector->save_squad(self::USER_ID, 'some-squad');
+        $this->mockHttp(400, array( 'error' => 'invalid_args' ));
+
+        $result = $connector->get_task_board(self::USER_ID);
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertSame('mupot_squad_not_configured', $result->get_error_code());
+    }
+
+    public function test_get_status_returns_unavailable_on_other_non_200_codes(): void
+    {
+        // Confirms the 400 special-case is scoped to task_board only —
+        // status should keep falling through to the generic error.
+        $connector = new Mcpwp_Mupot_Connector();
+        $connector->save_token(self::USER_ID, 'test-member-token');
+        $this->mockHttp(400, array( 'error' => 'invalid_args' ));
+
+        $result = $connector->get_status(self::USER_ID);
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertSame('mupot_unavailable', $result->get_error_code());
+    }
+
+    public function test_clear_cache_removes_status_and_task_board_transients(): void
+    {
+        $connector = new Mcpwp_Mupot_Connector();
+        $connector->save_token(self::USER_ID, 'test-member-token');
+        $connector->save_squad(self::USER_ID, 'mumcp-core');
+
+        $this->mockHttp(200, array( 'result' => array( 'member_id' => 'm-1' ) ));
+        $connector->get_status(self::USER_ID);
+        $connector->get_task_board(self::USER_ID);
+
+        // Both results are now cached — sanity-check the exact key format
+        // clear_cache() must reproduce.
+        $this->assertNotFalse(get_transient('mcpwp_mupot_status_' . self::USER_ID));
+        $this->assertNotFalse(get_transient('mcpwp_mupot_task_board_' . self::USER_ID));
+
+        $connector->clear_cache(self::USER_ID);
+
+        $this->assertFalse(get_transient('mcpwp_mupot_status_' . self::USER_ID));
+        $this->assertFalse(get_transient('mcpwp_mupot_task_board_' . self::USER_ID));
+    }
+
+    public function test_clear_cache_forces_a_fresh_call_after_invalidation(): void
+    {
+        $connector = new Mcpwp_Mupot_Connector();
+        $connector->save_token(self::USER_ID, 'test-member-token');
+
+        $calls = 0;
+        add_filter('pre_http_request', function () use (&$calls) {
+            $calls++;
+            return array(
+                'response' => array( 'code' => 200 ),
+                'body'     => wp_json_encode(array( 'result' => array( 'member_id' => 'm-' . $calls ) )),
+            );
+        }, 10, 3);
+
+        $first = $connector->get_status(self::USER_ID);
+        $connector->clear_cache(self::USER_ID);
+        $second = $connector->get_status(self::USER_ID);
+
+        $this->assertSame('m-1', $first['member_id']);
+        $this->assertSame('m-2', $second['member_id']);
+        $this->assertSame(2, $calls);
+    }
+
     public function test_get_status_ignores_non_https_configured_url_and_uses_default(): void
     {
         $connector = new Mcpwp_Mupot_Connector();

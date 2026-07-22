@@ -87,6 +87,23 @@ class Mcpwp_Mupot_Connector {
 	}
 
 	/**
+	 * Clear this user's cached status + task_board results.
+	 *
+	 * Call after a Profile-screen save that actually changes the stored
+	 * token or squad id, so Control Room doesn't keep showing a previous
+	 * identity's status or a previous squad's task board for up to
+	 * CACHE_TTL seconds. Reuses the same cache-key construction as
+	 * call_cached() — must stay in sync with it.
+	 *
+	 * @param int $wp_user_id WordPress user ID.
+	 * @return void
+	 */
+	public function clear_cache( $wp_user_id ) {
+		delete_transient( 'mcpwp_mupot_status_' . (int) $wp_user_id );
+		delete_transient( 'mcpwp_mupot_task_board_' . (int) $wp_user_id );
+	}
+
+	/**
 	 * Encrypt and store a user's personal mupot member token.
 	 *
 	 * @param int    $wp_user_id WordPress user ID.
@@ -251,6 +268,17 @@ class Mcpwp_Mupot_Connector {
 		}
 
 		$code = (int) wp_remote_retrieve_response_code( $response );
+
+		// A 400 invalid_args on task_board means mupot rejected the call
+		// because no (or an unusable) squad_id was sent — treat it the
+		// same as "no squad stored" so the UI re-shows the squad-not-
+		// configured prompt instead of a generic "unavailable" message.
+		if ( 400 === $code && 'task_board' === $tool ) {
+			return new WP_Error(
+				'mupot_squad_not_configured',
+				__( 'Add your mupot squad id in your profile to see your task board.', 'mcpwp' )
+			);
+		}
 
 		if ( 401 === $code || 403 === $code ) {
 			if ( 'task_board' === $tool ) {

@@ -92,4 +92,40 @@ final class MupotControlRoomTest extends TestCase
         $this->assertNull($data['status']);
         $this->assertNotEmpty($data['error']);
     }
+
+    public function test_board_error_does_not_hide_already_successful_status(): void
+    {
+        // Regression for the finding: a task_board-only failure (e.g. wrong
+        // squad id -> 403) must not wipe out a status call that already
+        // succeeded. status and board_error are distinct fields; task_board
+        // must stay null; the top-level error must stay null too (status
+        // itself did not fail).
+        $connector = new Mcpwp_Mupot_Connector();
+        $connector->save_token(self::USER_ID, 'test-token');
+        $connector->save_squad(self::USER_ID, 'not-my-squad');
+
+        $call = 0;
+        add_filter('pre_http_request', function () use (&$call) {
+            $call++;
+            if (1 === $call) {
+                // First call is `status` — succeeds.
+                return array(
+                    'response' => array( 'code' => 200 ),
+                    'body'     => wp_json_encode(array( 'result' => array( 'member_id' => 'm-1' ) )),
+                );
+            }
+            // Second call is `task_board` — forbidden for this squad.
+            return array( 'response' => array( 'code' => 403 ), 'body' => '{}' );
+        }, 10, 3);
+
+        $data = $this->host()->get_control_room_mupot_data();
+
+        $this->assertTrue($data['connected']);
+        $this->assertTrue($data['has_squad']);
+        $this->assertIsArray($data['status']);
+        $this->assertSame('m-1', $data['status']['member_id']);
+        $this->assertNull($data['error']);
+        $this->assertNotEmpty($data['board_error']);
+        $this->assertNull($data['task_board']);
+    }
 }
