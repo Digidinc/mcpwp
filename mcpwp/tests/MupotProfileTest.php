@@ -105,4 +105,76 @@ final class MupotProfileTest extends TestCase
 
         unset($_POST['mcpwp_mupot_member_token'], $_POST['mcpwp_mupot_squad_id'], $_POST['mcpwp_mupot_profile_nonce']);
     }
+
+    public function test_save_fields_clears_cache_when_token_changes(): void
+    {
+        $connector = new Mcpwp_Mupot_Connector();
+        $connector->save_token(self::USER_ID, 'original-token');
+        set_transient('mcpwp_mupot_status_' . self::USER_ID, array( 'member_id' => 'stale' ), 60);
+        set_transient('mcpwp_mupot_task_board_' . self::USER_ID, array( 'columns' => array() ), 60);
+
+        $_POST['mcpwp_mupot_member_token']  = 'new-token-value';
+        $_POST['mcpwp_mupot_squad_id']      = '';
+        $_POST['mcpwp_mupot_profile_nonce'] = 'test-nonce';
+
+        $profile = new Mcpwp_Mupot_Profile();
+        $profile->save_fields(self::USER_ID);
+
+        $this->assertFalse(get_transient('mcpwp_mupot_status_' . self::USER_ID));
+        $this->assertFalse(get_transient('mcpwp_mupot_task_board_' . self::USER_ID));
+
+        unset($_POST['mcpwp_mupot_member_token'], $_POST['mcpwp_mupot_squad_id'], $_POST['mcpwp_mupot_profile_nonce']);
+    }
+
+    public function test_save_fields_clears_cache_when_squad_changes(): void
+    {
+        $connector = new Mcpwp_Mupot_Connector();
+        $connector->save_squad(self::USER_ID, 'old-squad');
+        set_transient('mcpwp_mupot_task_board_' . self::USER_ID, array( 'columns' => array() ), 60);
+
+        $_POST['mcpwp_mupot_member_token']  = '';
+        $_POST['mcpwp_mupot_squad_id']      = 'new-squad';
+        $_POST['mcpwp_mupot_profile_nonce'] = 'test-nonce';
+
+        $profile = new Mcpwp_Mupot_Profile();
+        $profile->save_fields(self::USER_ID);
+
+        $this->assertSame('new-squad', $connector->get_squad(self::USER_ID));
+        $this->assertFalse(get_transient('mcpwp_mupot_task_board_' . self::USER_ID));
+
+        unset($_POST['mcpwp_mupot_member_token'], $_POST['mcpwp_mupot_squad_id'], $_POST['mcpwp_mupot_profile_nonce']);
+    }
+
+    public function test_save_fields_does_not_clear_cache_when_nothing_changed(): void
+    {
+        // Guards against invalidating the cache on every profile save
+        // regardless of whether the mupot fields actually changed.
+        $connector = new Mcpwp_Mupot_Connector();
+        $connector->save_squad(self::USER_ID, 'same-squad');
+        set_transient('mcpwp_mupot_task_board_' . self::USER_ID, array( 'columns' => array() ), 60);
+
+        $_POST['mcpwp_mupot_member_token']  = '';
+        $_POST['mcpwp_mupot_squad_id']      = 'same-squad';
+        $_POST['mcpwp_mupot_profile_nonce'] = 'test-nonce';
+
+        $profile = new Mcpwp_Mupot_Profile();
+        $profile->save_fields(self::USER_ID);
+
+        $this->assertNotFalse(get_transient('mcpwp_mupot_task_board_' . self::USER_ID));
+
+        unset($_POST['mcpwp_mupot_member_token'], $_POST['mcpwp_mupot_squad_id'], $_POST['mcpwp_mupot_profile_nonce']);
+    }
+
+    public function test_render_fields_hints_at_token_and_squad_source(): void
+    {
+        // Finding #4: first-time users get a clue where to obtain these
+        // values instead of two bare description lines.
+        $profile = new Mcpwp_Mupot_Profile();
+        ob_start();
+        $profile->render_fields((object) array( 'ID' => self::USER_ID ));
+        $output = ob_get_clean();
+
+        $this->assertStringContainsString('mupot.mumega.com', $output);
+        $this->assertStringContainsString('dashboard', $output);
+    }
 }

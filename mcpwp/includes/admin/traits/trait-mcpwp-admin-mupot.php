@@ -18,19 +18,27 @@ trait Mcpwp_Admin_Mupot_Trait {
 	/**
 	 * Assemble the "My mupot" Control Room section data for the current user.
 	 *
-	 * @return array{enabled: bool, connected: bool, has_squad: bool, status: array|null, task_board: array|null, error: string|null}
+	 * `error` and `board_error` are deliberately distinct: `error` means the
+	 * `status` call itself failed (e.g. invalid/revoked token) — nothing
+	 * useful can be shown, so callers should treat it as a short-circuit.
+	 * `board_error` means `status` already succeeded but the separate
+	 * `task_board` call failed (e.g. wrong squad id, 403) — the status view
+	 * should still render, with the board error shown underneath it.
+	 *
+	 * @return array{enabled: bool, connected: bool, has_squad: bool, status: array|null, task_board: array|null, error: string|null, board_error: string|null}
 	 */
 	public function get_control_room_mupot_data() {
 		$settings = get_option( 'mcpwp_settings', array() );
 		$enabled  = ! empty( $settings['mupot_enabled'] );
 
 		$data = array(
-			'enabled'    => $enabled,
-			'connected'  => false,
-			'has_squad'  => false,
-			'status'     => null,
-			'task_board' => null,
-			'error'      => null,
+			'enabled'     => $enabled,
+			'connected'   => false,
+			'has_squad'   => false,
+			'status'      => null,
+			'task_board'  => null,
+			'error'       => null,
+			'board_error' => null,
 		);
 
 		if ( ! $enabled ) {
@@ -56,7 +64,7 @@ trait Mcpwp_Admin_Mupot_Trait {
 		if ( $data['has_squad'] ) {
 			$board = $connector->get_task_board( $user_id );
 			if ( is_wp_error( $board ) ) {
-				$data['error'] = $board->get_error_message();
+				$data['board_error'] = $board->get_error_message();
 			} else {
 				$data['task_board'] = $board;
 			}

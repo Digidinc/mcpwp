@@ -650,7 +650,9 @@ $event_escalated_count = (int) ( $event_summary['escalated'] ?? 0 );
 				<code><?php echo esc_html( wp_json_encode( $mupot['status'] ) ); ?></code>
 			</div>
 		<?php endif; ?>
-		<?php if ( empty( $mupot['has_squad'] ) ) : ?>
+		<?php if ( ! empty( $mupot['board_error'] ) ) : ?>
+			<p style="padding:0 1rem 1rem;color:#c0392b"><?php echo esc_html( $mupot['board_error'] ); ?></p>
+		<?php elseif ( empty( $mupot['has_squad'] ) ) : ?>
 			<p style="padding:0 1rem 1rem;color:#666">
 				<?php
 				printf(
