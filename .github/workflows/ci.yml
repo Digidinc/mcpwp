@@ -39,5 +39,10 @@ jobs:
         run: cd mcpwp-agency-proxy && npm ci
       - name: Run tests
         run: cd mcpwp-agency-proxy && npm test
-      - name: Audit dependencies
-        run: cd mcpwp-agency-proxy && npm audit --audit-level=high
+      - name: Audit dependencies (runtime only)
+        # Only runtime deps ship to the Cloudflare Worker edge; build tooling
+        # (wrangler/miniflare/sharp) never reaches production, so gating merges
+        # on its advisories blocks product code over unreachable CVEs. Audit
+        # what actually ships. Dev-tooling advisories are tracked upstream and
+        # patched when wrangler bumps. See #691.
+        run: cd mcpwp-agency-proxy && npm audit --omit=dev --audit-level=high
