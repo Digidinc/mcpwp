@@ -232,6 +232,11 @@ trait Mcpwp_Free_Tools_Content_Trait {
 					'description' => 'Page body (HTML or Gutenberg block markup). Omit for Elementor pages — set layout via wp_set_elementor after creation.',
 					'default'     => '',
 				),
+				'excerpt'    => array(
+					'type'        => 'string',
+					'description' => 'Page excerpt/deck. Some templates render this as hero subtitle copy (e.g. a page-templates/editorial-home.php deck).',
+					'default'     => '',
+				),
 				'status'     => array(
 					'type'        => 'string',
 					'description' => 'Publication status: "draft" (default, not publicly visible), "publish" (immediately live), "pending", "private"',
@@ -272,6 +277,10 @@ trait Mcpwp_Free_Tools_Content_Trait {
 				'content'    => array(
 					'type'        => 'string',
 					'description' => 'Page body (HTML or Gutenberg). For Elementor pages, use wp_set_elementor / wp_edit_widget instead.',
+				),
+				'excerpt'    => array(
+					'type'        => 'string',
+					'description' => 'Page excerpt/deck. Some templates render this as hero subtitle copy (e.g. a page-templates/editorial-home.php deck).',
 				),
 				'status'     => array(
 					'type'        => 'string',

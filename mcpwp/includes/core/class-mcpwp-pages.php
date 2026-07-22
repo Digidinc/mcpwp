@@ -92,6 +92,7 @@ class Mcpwp_Pages {
 			'post_type'    => 'page',
 			'post_title'   => isset( $data['title'] ) ? sanitize_text_field( $data['title'] ) : '',
 			'post_content' => isset( $data['content'] ) ? wp_kses_post( $data['content'] ) : '',
+			'post_excerpt' => isset( $data['excerpt'] ) ? sanitize_textarea_field( $data['excerpt'] ) : '',
 			'post_status'  => isset( $data['status'] ) ? sanitize_key( $data['status'] ) : 'draft',
 		);
 
@@ -161,6 +162,7 @@ class Mcpwp_Pages {
 		// Snapshot fields that might change for before/after diff.
 		$before = array(
 			'title'      => $page->post_title,
+			'excerpt'    => $page->post_excerpt ?? '',
 			'status'     => $page->post_status,
 			'slug'       => $page->post_name,
 			'parent'     => (int) $page->post_parent,
@@ -179,6 +181,10 @@ class Mcpwp_Pages {
 
 		if ( isset( $data['content'] ) ) {
 			$page_data['post_content'] = wp_kses_post( $data['content'] );
+		}
+
+		if ( isset( $data['excerpt'] ) ) {
+			$page_data['post_excerpt'] = sanitize_textarea_field( $data['excerpt'] );
 		}
 
 		if ( isset( $data['status'] ) ) {
@@ -254,6 +260,7 @@ class Mcpwp_Pages {
 		if ( is_array( $page_result ) ) {
 			$after = array(
 				'title'      => $page_result['title'],
+				'excerpt'    => $page_result['excerpt'],
 				'status'     => $page_result['status'],
 				'slug'       => $page_result['slug'],
 				'parent'     => (int) $page_result['parent'],
@@ -335,6 +342,7 @@ class Mcpwp_Pages {
 		$data = array(
 			'id'           => $page->ID,
 			'title'        => $page->post_title,
+			'excerpt'      => $page->post_excerpt ?? '',
 			'slug'         => $page->post_name,
 			'status'       => $page->post_status,
 			'date'         => $page->post_date,

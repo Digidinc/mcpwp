@@ -215,6 +215,11 @@ function sanitize_text_field($value)
     return trim((string) $value);
 }
 
+function sanitize_textarea_field($value)
+{
+    return trim((string) $value);
+}
+
 function sanitize_key($value)
 {
     $value = strtolower((string) $value);
