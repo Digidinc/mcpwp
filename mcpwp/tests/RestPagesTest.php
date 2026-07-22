@@ -92,4 +92,41 @@ final class RestPagesTest extends TestCase {
 		$this->assertSame( 2, $data['pages'][0]['id'] );
 		$this->assertSame( 'Download', $data['pages'][0]['title'] );
 	}
+
+	public function test_create_page_accepts_and_returns_excerpt(): void {
+		$controller = new Mcpwp_REST_Pages();
+		$request    = new WP_REST_Request(
+			'POST',
+			'/mcpwp/v1/pages',
+			array(
+				'title'   => 'New page',
+				'excerpt' => 'A short deck.',
+			)
+		);
+
+		$response = $controller->create_page( $request );
+		$data     = $response->get_data();
+
+		$this->assertSame( 'A short deck.', $data['excerpt'] );
+	}
+
+	public function test_update_page_sets_excerpt_and_reports_it_in_changes(): void {
+		$controller = new Mcpwp_REST_Pages();
+		$request    = new WP_REST_Request(
+			'PUT',
+			'/mcpwp/v1/pages/1',
+			array(
+				'id'      => 1,
+				'excerpt' => 'Updated deck copy.',
+			)
+		);
+
+		$response = $controller->update_page( $request );
+		$data     = $response->get_data();
+
+		$this->assertSame( 'Updated deck copy.', $data['excerpt'] );
+
+		$changed_fields = array_column( $data['changes'], 'field' );
+		$this->assertContains( 'excerpt', $changed_fields );
+	}
 }

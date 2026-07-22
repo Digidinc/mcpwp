@@ -79,6 +79,11 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 							'type'        => 'string',
 							'default'     => '',
 						),
+						'excerpt'  => array(
+							'description' => __( 'Page excerpt (used as the hero deck on some templates).', 'mcpwp' ),
+							'type'        => 'string',
+							'default'     => '',
+						),
 						'status'   => array(
 							'description' => __( 'Page status.', 'mcpwp' ),
 							'type'        => 'string',
