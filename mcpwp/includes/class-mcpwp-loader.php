@@ -87,6 +87,13 @@ class Mcpwp_Loader {
 		// Settings
 		$this->add_action( 'admin_init', $settings, 'register_settings' );
 
+		// mupot Profile screen connect fields
+		$mupot_profile = new Mcpwp_Mupot_Profile();
+		$this->add_action( 'show_user_profile', $mupot_profile, 'render_fields' );
+		$this->add_action( 'edit_user_profile', $mupot_profile, 'render_fields' );
+		$this->add_action( 'personal_options_update', $mupot_profile, 'save_fields' );
+		$this->add_action( 'edit_user_profile_update', $mupot_profile, 'save_fields' );
+
 		// Admin notices
 		$this->add_action( 'admin_notices', $admin, 'admin_notices' );
 
