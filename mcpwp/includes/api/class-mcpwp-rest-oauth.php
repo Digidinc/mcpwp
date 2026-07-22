@@ -6,8 +6,20 @@
  *
  *   GET  /.well-known/oauth-protected-resource   (RFC 9728, served at domain root)
  *   GET  /.well-known/oauth-authorization-server (RFC 8414, served at domain root)
- *   GET  /wp-json/mcpwp/v1/oauth/authorize       (interactive consent — WP REST)
+ *   GET  /mcpwp-oauth/authorize                  (consent screen — front channel)
+ *   POST /mcpwp-oauth/authorize                  (consent submission — front channel)
  *   POST /wp-json/mcpwp/v1/oauth/token           (token exchange — WP REST)
+ *
+ * The consent endpoint is deliberately NOT a REST route.  WordPress core's
+ * rest_cookie_check_errors() calls wp_set_current_user( 0 ) for any cookie-
+ * authenticated REST request carrying no X-WP-Nonce, and a browser following
+ * an OAuth redirect can never send one — so is_user_logged_in() was always
+ * false inside the handler and the login redirect pointed straight back at the
+ * same nonce-less URL (infinite wp-login loop).  It is served instead through
+ * the do_parse_request interceptor in Mcpwp_OAuth_Well_Known, where cookie
+ * auth is already resolved.  The old REST route stays registered and
+ * 307-redirects to the front channel so clients that cached the previous
+ * authorization_endpoint keep working.
  *
  * The token backend (issue_oauth_access_token, authenticate_oauth_access_token,
  * get_oauth_settings, verify_oauth_client_credentials) lives in trait-mcpwp-api-auth.php
@@ -56,18 +68,23 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 	 * the raw request params in handle_token_authorization_code().
 	 */
 	public function register_routes() {
+		// Back-compat only.  The interactive endpoint now lives on the front
+		// channel (Mcpwp_OAuth_Well_Known::get_front_channel_authorize_url());
+		// this route is kept registered so a client that cached the old
+		// authorization_endpoint is redirected there instead of looping on
+		// wp-login.  It never renders consent itself.
 		register_rest_route(
 			$this->namespace,
 			'/oauth/authorize',
 			array(
 				array(
 					'methods'             => WP_REST_Server::READABLE,
-					'callback'            => array( $this, 'handle_authorize_get' ),
+					'callback'            => array( $this, 'handle_authorize_legacy_redirect' ),
 					'permission_callback' => '__return_true',
 				),
 				array(
 					'methods'             => WP_REST_Server::CREATABLE,
-					'callback'            => array( $this, 'handle_authorize_post' ),
+					'callback'            => array( $this, 'handle_authorize_legacy_redirect' ),
 					'permission_callback' => '__return_true',
 				),
 			)
@@ -93,13 +110,17 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 	// -------------------------------------------------------------------------
 
 	/**
-	 * Handle GET /oauth/authorize.
+	 * Handle GET of the authorize endpoint (front channel).
 	 *
-	 * Validates parameters, forces WP login if user is not authenticated, then
-	 * renders a minimal consent screen.
+	 * Validates parameters, forces WP login if the user is not authenticated,
+	 * then returns the consent screen.
+	 *
+	 * Never echoes and never exits: the caller
+	 * (Mcpwp_REST_OAuth::serve_front_channel_authorize()) emits the returned
+	 * response.  That keeps this whole path unit-testable.
 	 *
 	 * @param WP_REST_Request $request Request object.
-	 * @return WP_REST_Response|void May redirect (wp_redirect + exit).
+	 * @return WP_REST_Response Consent HTML (200), redirect (302 + Location), or an OAuth error.
 	 */
 	public function handle_authorize_get( $request ) {
 		if ( ! $this->is_oauth_enabled() ) {
@@ -112,20 +133,26 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 			return $this->wpe_to_response( $validate_err );
 		}
 
-		// Require logged-in WP user.
+		// Require logged-in WP user.  Send them back to the FRONT-CHANNEL URL
+		// after login — the REST route would see them as logged out again
+		// (core strips cookie auth on REST requests without an X-WP-Nonce),
+		// which is the wp-login loop this endpoint moved to escape.
 		if ( ! function_exists( 'is_user_logged_in' ) || ! is_user_logged_in() ) {
-			$callback_url = add_query_arg( $params, rest_url( $this->namespace . '/oauth/authorize' ) );
-			$login_url    = wp_login_url( $callback_url );
-			wp_redirect( $login_url );
-			exit;
+			$callback_url = add_query_arg( $params, Mcpwp_OAuth_Well_Known::get_front_channel_authorize_url() );
+			return $this->oauth_redirect_response( wp_login_url( $callback_url ) );
 		}
 
 		// Clamp scope to what the current user is actually capable of before
 		// rendering the consent screen so users only see what they can get.
-		$params['scope'] = $this->clamp_scope_to_user_capability( $params['scope'] );
+		//
+		// clamp_scope_to_user_capability() returns string[].  $params['scope']
+		// MUST stay a space-separated STRING from here on: it is echoed into
+		// the consent screen's hidden field and posted straight back, and a
+		// bare array collapses to the literal "Array", which re-parses to
+		// ['read'] and silently downgrades every browser-issued token.
+		$params['scope'] = implode( ' ', $this->clamp_scope_to_user_capability( $params['scope'] ) );
 
-		$this->render_consent_screen( $params );
-		exit;
+		return $this->consent_response( $params );
 	}
 
 	// -------------------------------------------------------------------------
@@ -133,10 +160,16 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 	// -------------------------------------------------------------------------
 
 	/**
-	 * Handle POST /oauth/authorize (consent form submission).
+	 * Handle POST of the authorize endpoint (consent form submission).
+	 *
+	 * Never echoes and never exits — see handle_authorize_get().
+	 *
+	 * The wp_nonce check below is the ONLY CSRF defence on this endpoint:
+	 * serving it outside /wp-json removed core's X-WP-Nonce check, so it must
+	 * never be relaxed, made conditional, or moved after any state change.
 	 *
 	 * @param WP_REST_Request $request Request object.
-	 * @return WP_REST_Response|void May redirect (wp_redirect + exit).
+	 * @return WP_REST_Response Redirect (302 + Location) or an OAuth error.
 	 */
 	public function handle_authorize_post( $request ) {
 		if ( ! $this->is_oauth_enabled() ) {
@@ -159,9 +192,15 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 			return $this->wpe_to_response( $validate_err );
 		}
 
-		// Denial path — redirect with error.
+		// Consent outcome.  Anything that is not an EXPLICIT approval is a
+		// denial: this endpoint mints an authorization code, so an absent,
+		// misspelled or attacker-truncated `action` must collapse toward
+		// refusing access, never toward granting it.  (The previous
+		// `if ( 'deny' === $action )` test fell through to the approval path
+		// for every value other than the exact string "deny", including the
+		// empty string.)
 		$action = sanitize_key( (string) $request->get_param( 'action' ) );
-		if ( 'deny' === $action ) {
+		if ( 'approve' !== $action ) {
 			$redirect = add_query_arg(
 				array(
 					'error'             => 'access_denied',
@@ -170,8 +209,7 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 				),
 				$params['redirect_uri']
 			);
-			wp_redirect( $redirect );
-			exit;
+			return $this->oauth_redirect_response( $redirect );
 		}
 
 		// P0-A: Clamp the requested scope to the logged-in user's capability.
@@ -204,8 +242,7 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 			$params['redirect_uri']
 		);
 
-		wp_redirect( $redirect );
-		exit;
+		return $this->oauth_redirect_response( $redirect );
 	}
 
 	// -------------------------------------------------------------------------
@@ -518,38 +555,82 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 	// -------------------------------------------------------------------------
 
 	/**
-	 * Render the minimal HTML consent screen and exit.
+	 * Normalise an authorize parameter to a string for HTML output.
 	 *
-	 * All OAuth parameters are embedded as hidden fields.
-	 * CSRF nonce is generated fresh per render.
+	 * Defence in depth for the scope round trip: clamp_scope_to_user_capability()
+	 * returns string[], and an array used in string context collapses to the
+	 * literal "Array", which sanitize_key()s to 'array', fails the
+	 * read|write|admin allow-list, and silently re-parses to ['read'] — i.e.
+	 * every browser-issued token gets downgraded to read-only no matter what
+	 * the user approved.
 	 *
-	 * @param array $params Validated authorize parameters (scope already clamped).
+	 * @param mixed $value Parameter value.
+	 * @return string
 	 */
-	private function render_consent_screen( $params ) {
+	private function stringify_param_value( $value ) {
+		if ( is_array( $value ) ) {
+			return implode( ' ', array_map( 'strval', $value ) );
+		}
+
+		return (string) $value;
+	}
+
+	/**
+	 * Wrap the consent screen in a response carrying its security headers.
+	 *
+	 * The page embeds a live per-user CSRF nonce and mints an access token on
+	 * Approve, so it must never be frameable (clickjacking → token theft) and
+	 * must never be cached (nonce + username leak).
+	 *
+	 * @param array $params Validated authorize parameters (scope already clamped to a string).
+	 * @return WP_REST_Response
+	 */
+	private function consent_response( $params ) {
+		$response = new WP_REST_Response( $this->build_consent_screen_html( $params ), 200 );
+		$response->header( 'Content-Type', 'text/html; charset=utf-8' );
+		$response->header( 'X-Frame-Options', 'DENY' );
+		$response->header( 'Content-Security-Policy', "frame-ancestors 'none'" );
+		$response->header( 'Cache-Control', 'no-store, private' );
+		$response->header( 'Pragma', 'no-cache' );
+		$response->header( 'Referrer-Policy', 'no-referrer' );
+
+		return $response;
+	}
+
+	/**
+	 * Build the minimal HTML consent screen.
+	 *
+	 * All OAuth parameters are embedded as hidden fields.  The CSRF nonce is
+	 * generated fresh per render and is the sole CSRF defence on the consent
+	 * POST — see handle_authorize_post().
+	 *
+	 * @param array $params Validated authorize parameters (scope already clamped to a string).
+	 * @return string HTML document.
+	 */
+	public function build_consent_screen_html( $params ) {
 		$nonce       = wp_create_nonce( 'mcpwp_oauth_consent' );
 		$site_name   = function_exists( 'get_bloginfo' ) ? esc_html( get_bloginfo( 'name' ) ) : 'this site';
 		$client_id   = esc_html( $params['client_id'] );
-		$scope_label = esc_html( $params['scope'] ? $params['scope'] : 'read' );
+		$scope_value = $this->stringify_param_value( isset( $params['scope'] ) ? $params['scope'] : '' );
+		$scope_label = esc_html( '' !== $scope_value ? $scope_value : 'read' );
 		$user_login  = '';
 		if ( function_exists( 'wp_get_current_user' ) ) {
 			$current_user = wp_get_current_user();
 			$user_login   = esc_html( $current_user->user_login );
 		}
 
-		$post_url = esc_url( rest_url( $this->namespace . '/oauth/authorize' ) );
+		$post_url = esc_url( Mcpwp_OAuth_Well_Known::get_front_channel_authorize_url() );
 
 		$hidden_fields = '';
 		foreach ( $params as $key => $value ) {
 			$hidden_fields .= sprintf(
 				'<input type="hidden" name="%s" value="%s">',
 				esc_attr( $key ),
-				esc_attr( $value )
+				esc_attr( $this->stringify_param_value( $value ) )
 			);
 		}
 
-		header( 'Content-Type: text/html; charset=utf-8' );
-		// phpcs:disable WordPress.Security.EscapeOutput.OutputNotEscaped
-		echo '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
+		return '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
 		   . '<meta name="viewport" content="width=device-width,initial-scale=1">'
 		   . '<title>Authorize &mdash; ' . $site_name . '</title>'
 		   . '<style>body{font-family:system-ui,sans-serif;max-width:480px;margin:60px auto;padding:0 16px}'
@@ -568,7 +649,6 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 		   . '<button type="submit" name="action" value="approve" class="btn btn-allow">Approve</button>'
 		   . '<button type="submit" name="action" value="deny" class="btn btn-deny">Deny</button>'
 		   . '</form></body></html>';
-		// phpcs:enable WordPress.Security.EscapeOutput.OutputNotEscaped
 	}
 
 	// -------------------------------------------------------------------------
@@ -892,5 +972,131 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 		$data   = $error->get_error_data();
 		$status = is_array( $data ) && isset( $data['status'] ) ? (int) $data['status'] : 400;
 		return $this->oauth_error_response( $error->get_error_code(), $error->get_error_message(), $status );
+	}
+
+	/**
+	 * Build a redirect response.
+	 *
+	 * Returned rather than emitted so the authorize handlers stay side-effect
+	 * free and unit-testable.  serve_front_channel_authorize() turns this into
+	 * a real redirect on the front channel; the WP REST server sends the
+	 * Location header + status verbatim on the legacy route.
+	 *
+	 * @param string $location Absolute URL to redirect to.
+	 * @param int    $status   HTTP status code (302 by default).
+	 * @return WP_REST_Response
+	 */
+	public function oauth_redirect_response( $location, $status = 302 ) {
+		$response = new WP_REST_Response( null, $status );
+		$response->header( 'Location', $location );
+		$response->header( 'Cache-Control', 'no-store' );
+
+		return $response;
+	}
+
+	/**
+	 * Back-compat shim for the old REST authorize route.
+	 *
+	 * A client that cached authorization_endpoint = /wp-json/mcpwp/v1/oauth/authorize
+	 * still works: it is bounced to the front channel, where cookie auth is
+	 * honoured.  307 (not 302) so a stale consent POST keeps its method and
+	 * body.
+	 *
+	 * @param WP_REST_Request $request Request object.
+	 * @return WP_REST_Response
+	 */
+	public function handle_authorize_legacy_redirect( $request ) {
+		if ( ! $this->is_oauth_enabled() ) {
+			return $this->oauth_error_response( 'server_error', 'OAuth is not enabled on this site.', 501 );
+		}
+
+		$target = Mcpwp_OAuth_Well_Known::get_front_channel_authorize_url();
+
+		// Carry the query string across for GET.  A POST keeps its body under
+		// 307, so re-appending its fields to the URL would only duplicate them
+		// (and put state/code_challenge in a Referer-visible place).
+		if ( 'POST' !== strtoupper( (string) $request->get_method() ) ) {
+			$params = array_filter( $this->extract_authorize_params( $request ) );
+			if ( ! empty( $params ) ) {
+				$target = add_query_arg( $params, $target );
+			}
+		}
+
+		return $this->oauth_redirect_response( $target, 307 );
+	}
+
+	// -------------------------------------------------------------------------
+	// Front-channel authorize (served outside /wp-json)
+	// -------------------------------------------------------------------------
+
+	/**
+	 * Serve the front-channel authorize endpoint and exit.
+	 *
+	 * Called from Mcpwp_OAuth_Well_Known::maybe_serve_well_known() on the
+	 * do_parse_request filter — i.e. from inside wp(), long after
+	 * wp-settings.php ran $GLOBALS['wp']->init(), so the current user is
+	 * established and is_user_logged_in() is reliable here (unlike on the REST
+	 * route, where core zeroes it out without an X-WP-Nonce).
+	 *
+	 * Never returns.
+	 */
+	public static function serve_front_channel_authorize() {
+		$method = isset( $_SERVER['REQUEST_METHOD'] )
+			? strtoupper( sanitize_text_field( wp_unslash( $_SERVER['REQUEST_METHOD'] ) ) )
+			: 'GET';
+
+		$request = new WP_REST_Request( $method, '/mcpwp/v1/oauth/authorize' );
+
+		// phpcs:disable WordPress.Security.NonceVerification -- Front-channel OAuth entry point; the consent POST carries its own CSRF nonce, verified in handle_authorize_post(). Every value is sanitized in extract_authorize_params().
+		$request->set_query_params( wp_unslash( $_GET ) );
+		if ( 'POST' === $method ) {
+			$request->set_body_params( wp_unslash( $_POST ) );
+		}
+		// phpcs:enable WordPress.Security.NonceVerification
+
+		$controller = new self();
+		$response   = ( 'POST' === $method )
+			? $controller->handle_authorize_post( $request )
+			: $controller->handle_authorize_get( $request );
+
+		self::emit_front_channel_response( $response );
+		exit;
+	}
+
+	/**
+	 * Emit a WP_REST_Response outside the REST server.
+	 *
+	 * @param WP_REST_Response $response Response to emit.
+	 */
+	private static function emit_front_channel_response( $response ) {
+		// Discard anything a theme or plugin already buffered.
+		while ( ob_get_level() > 0 ) {
+			ob_end_clean();
+		}
+
+		$status  = $response->get_status();
+		$headers = $response->get_headers();
+
+		if ( ! empty( $headers['Location'] ) ) {
+			wp_redirect( $headers['Location'], $status );
+			return;
+		}
+
+		status_header( $status );
+		foreach ( $headers as $name => $value ) {
+			header( $name . ': ' . $value );
+		}
+
+		$data = $response->get_data();
+		if ( is_string( $data ) ) {
+			// Consent markup, already escaped field-by-field in build_consent_screen_html().
+			// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+			echo $data;
+			return;
+		}
+
+		header( 'Content-Type: application/json; charset=utf-8' );
+		// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+		echo wp_json_encode( $data );
 	}
 }

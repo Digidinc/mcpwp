@@ -177,6 +177,7 @@ final class OAuthServerTest extends TestCase {
 		$GLOBALS['_mcpwp_test_redirected_to']  = null;
 		$GLOBALS['_mcpwp_test_valid_nonces']   = array();
 		$GLOBALS['mcpwp_test_user_caps']       = array();
+		$_GET                                  = array();
 
 		// Enable OAuth with a known client ID and redirect URI.
 		update_option( 'mcpwp_settings', array(
@@ -266,19 +267,10 @@ final class OAuthServerTest extends TestCase {
 	// ── RFC 8414 Authorization Server Metadata ────────────────────────────
 
 	public function test_authorization_server_metadata_required_fields(): void {
-		$origin    = Mcpwp_OAuth_Well_Known::get_site_origin();
-		$rest_base = rest_url( 'mcpwp/v1' );
+		update_option( 'permalink_structure', '/%postname%/' );
 
-		$metadata = array(
-			'issuer'                                => $origin,
-			'authorization_endpoint'                => $rest_base . '/oauth/authorize',
-			'token_endpoint'                        => $rest_base . '/oauth/token',
-			'response_types_supported'              => array( 'code' ),
-			'grant_types_supported'                 => array( 'authorization_code', 'refresh_token' ),
-			'code_challenge_methods_supported'      => array( 'S256' ),
-			'token_endpoint_auth_methods_supported' => array( 'none', 'client_secret_post' ),
-			'scopes_supported'                      => array( 'read', 'write', 'admin' ),
-		);
+		$origin   = Mcpwp_OAuth_Well_Known::get_site_origin();
+		$metadata = Mcpwp_OAuth_Well_Known::build_authorization_server_metadata();
 
 		// RFC 8414 required fields.
 		$this->assertArrayHasKey( 'issuer', $metadata );
@@ -293,8 +285,16 @@ final class OAuthServerTest extends TestCase {
 
 		// Endpoints must use the correct site origin.
 		$this->assertStringStartsWith( $origin, $metadata['issuer'] );
-		$this->assertStringContainsString( '/oauth/authorize', $metadata['authorization_endpoint'] );
 		$this->assertStringContainsString( '/oauth/token', $metadata['token_endpoint'] );
+
+		// authorization_endpoint must NOT be the REST route — core treats a
+		// cookie-authenticated REST request with no X-WP-Nonce as logged out,
+		// which trapped browsers in a wp-login redirect loop.
+		$this->assertSame(
+			Mcpwp_OAuth_Well_Known::get_front_channel_authorize_url( $origin ),
+			$metadata['authorization_endpoint']
+		);
+		$this->assertStringNotContainsString( '/wp-json/', $metadata['authorization_endpoint'] );
 	}
 
 	// ── Authorize parameter validation ────────────────────────────────────
@@ -600,11 +600,12 @@ final class OAuthServerTest extends TestCase {
 
 	/**
 	 * P0-A: Scope is clamped at clamp_scope_to_user_capability and results in
-	 * only 'read' for a subscriber — tested at the clamping layer rather than
-	 * via handle_authorize_post (which calls exit() after wp_redirect).
+	 * only 'read' for a subscriber.
 	 *
-	 * The full authorize-POST→transient path is covered by the token exchange
-	 * tests that seed transients directly.
+	 * This is the unit-level assertion on the clamp helper.  The real
+	 * GET→consent→POST→transient round trip is covered separately by
+	 * test_consent_round_trip_* below (the handlers no longer exit, so they
+	 * can be called directly).
 	 */
 	public function test_scope_clamped_at_clamp_layer_for_subscriber(): void {
 		// Current user is a subscriber with no caps.
@@ -1217,5 +1218,383 @@ final class OAuthServerTest extends TestCase {
 
 		// Confirm the error is NOT about a missing client_secret parameter.
 		$this->assertNotSame( 'rest_missing_callback_param', $data['error'] ?? '' );
+	}
+
+	// ── Front-channel authorize endpoint ───────────────────────────────────
+
+	/**
+	 * Log the given user in with an explicit capability set.
+	 *
+	 * bootstrap.php's current_user_can() grants every capability when a user
+	 * has no entry in mcpwp_test_user_caps, so the array must always be set.
+	 *
+	 * @param int   $user_id User ID.
+	 * @param array $caps    Capability map, e.g. array( 'edit_posts' => true ).
+	 */
+	private function login_as( int $user_id, array $caps ): void {
+		$GLOBALS['mcpwp_test_current_user']          = $user_id;
+		$GLOBALS['mcpwp_test_user_caps'][ $user_id ] = $caps;
+	}
+
+	/**
+	 * Extract every hidden input from rendered consent HTML, exactly as a
+	 * browser would submit them.
+	 *
+	 * This is the point of the round-trip tests: the POST is driven by what
+	 * the renderer actually emitted, so a regression that writes "Array" into
+	 * the scope field fails the assertion instead of silently downgrading.
+	 *
+	 * @param string $html Consent screen HTML.
+	 * @return array<string,string>
+	 */
+	private function hidden_fields_from( string $html ): array {
+		$fields = array();
+		preg_match_all( '/<input type="hidden" name="([^"]+)" value="([^"]*)">/', $html, $matches, PREG_SET_ORDER );
+		foreach ( $matches as $match ) {
+			$fields[ $match[1] ] = html_entity_decode( $match[2], ENT_QUOTES, 'UTF-8' );
+		}
+
+		return $fields;
+	}
+
+	/**
+	 * Render the consent screen for a logged-in user and return its HTML.
+	 *
+	 * @param Mcpwp_OAuth_Test_Controller $ctrl   Controller.
+	 * @param string                      $scope  Requested scope.
+	 * @return string
+	 */
+	private function render_consent( Mcpwp_OAuth_Test_Controller $ctrl, string $scope ): string {
+		$params          = $this->base_authorize_params();
+		$params['scope'] = $scope;
+
+		$response = $ctrl->handle_authorize_get(
+			$this->make_request( 'GET', '/mcpwp/v1/oauth/authorize', $params )
+		);
+
+		$this->assertSame( 200, $response->get_status() );
+
+		return (string) $response->get_data();
+	}
+
+	public function test_front_channel_authorize_path_honors_home_path(): void {
+		$this->assertSame(
+			'/mcpwp-oauth/authorize',
+			Mcpwp_OAuth_Well_Known::build_front_channel_authorize_path( 'https://example.com/' )
+		);
+
+		// Subdirectory install keeps its path prefix.
+		$this->assertSame(
+			'/staging/5707/mcpwp-oauth/authorize',
+			Mcpwp_OAuth_Well_Known::build_front_channel_authorize_path( 'https://example.com/staging/5707/' )
+		);
+	}
+
+	public function test_front_channel_authorize_url_is_not_under_wp_json(): void {
+		update_option( 'permalink_structure', '/%postname%/' );
+
+		$url = Mcpwp_OAuth_Well_Known::get_front_channel_authorize_url( 'https://example.com' );
+
+		$this->assertSame( 'https://example.com/mcpwp-oauth/authorize', $url );
+		$this->assertStringNotContainsString( '/wp-json/', $url );
+	}
+
+	public function test_front_channel_authorize_url_falls_back_to_query_var_without_rewrites(): void {
+		// No permalink structure means no rewrite rules, so a pretty path would
+		// 404 at the web server before WordPress ever loads.
+		update_option( 'permalink_structure', '' );
+
+		$this->assertSame(
+			'https://example.com/?mcpwp_oauth=authorize',
+			Mcpwp_OAuth_Well_Known::get_front_channel_authorize_url( 'https://example.com' )
+		);
+	}
+
+	public function test_interceptor_matches_front_channel_path_and_query_var(): void {
+		$this->assertTrue( Mcpwp_OAuth_Well_Known::is_front_channel_authorize_request( '/mcpwp-oauth/authorize' ) );
+		$this->assertTrue( Mcpwp_OAuth_Well_Known::is_front_channel_authorize_request( '/mcpwp-oauth/authorize/' ) );
+		$this->assertFalse( Mcpwp_OAuth_Well_Known::is_front_channel_authorize_request( '/mcpwp-oauth/authorize-not' ) );
+		$this->assertFalse( Mcpwp_OAuth_Well_Known::is_front_channel_authorize_request( '/' ) );
+
+		$_GET = array( 'mcpwp_oauth' => 'authorize' );
+		$this->assertTrue( Mcpwp_OAuth_Well_Known::is_front_channel_authorize_request( '/' ) );
+
+		$_GET = array( 'mcpwp_oauth' => 'something-else' );
+		$this->assertFalse( Mcpwp_OAuth_Well_Known::is_front_channel_authorize_request( '/' ) );
+
+		$_GET = array();
+	}
+
+	public function test_authorize_get_logged_out_redirects_to_login_on_front_channel(): void {
+		update_option( 'permalink_structure', '/%postname%/' );
+		$GLOBALS['mcpwp_test_current_user'] = 0;
+
+		$response = $this->controller()->handle_authorize_get(
+			$this->make_request( 'GET', '/mcpwp/v1/oauth/authorize', $this->base_authorize_params() )
+		);
+
+		$this->assertSame( 302, $response->get_status() );
+
+		$headers = $response->get_headers();
+		$this->assertArrayHasKey( 'Location', $headers );
+
+		$prefix = 'https://example.com/wp-login.php?redirect_to=';
+		$this->assertStringStartsWith( $prefix, $headers['Location'] );
+
+		// The post-login target must be the front channel.  Pointing it back
+		// at /wp-json is the loop — core logs the browser out again.
+		$redirect_to = rawurldecode( substr( $headers['Location'], strlen( $prefix ) ) );
+		$this->assertStringStartsWith( 'https://example.com/mcpwp-oauth/authorize', $redirect_to );
+		$this->assertStringNotContainsString( '/wp-json/', $redirect_to );
+		$this->assertStringContainsString( 'code_challenge=', $redirect_to );
+	}
+
+	public function test_consent_screen_hidden_scope_field_is_the_clamped_string_not_array(): void {
+		update_option( 'permalink_structure', '/%postname%/' );
+		$this->login_as( 7, array( 'edit_posts' => true ) ); // Editor: ceiling is write.
+
+		$html = $this->render_consent( $this->controller(), 'read write admin' );
+
+		// The clamped scope array must never be stringified into the form.
+		$this->assertStringNotContainsString( 'Array', $html );
+		$this->assertStringContainsString( '<input type="hidden" name="scope" value="read write">', $html );
+
+		// The form must post back to the front channel, not the REST route.
+		$this->assertStringContainsString( 'action="https://example.com/mcpwp-oauth/authorize"', $html );
+		$this->assertStringNotContainsString( '/wp-json/', $html );
+
+		// CSRF nonce is the only remaining CSRF defence — it must be rendered.
+		$this->assertStringContainsString( 'name="_mcpwp_oauth_nonce"', $html );
+	}
+
+	public function test_consent_screen_never_stringifies_an_array_scope(): void {
+		update_option( 'permalink_structure', '/%postname%/' );
+		$this->login_as( 7, array( 'edit_posts' => true ) );
+
+		// Defence in depth: even handed the raw string[] that
+		// clamp_scope_to_user_capability() returns, the renderer must emit real
+		// scope names.  A bare array collapses to the literal "Array", which
+		// re-parses to ['read'] on the consent POST.
+		$params          = $this->base_authorize_params();
+		$params['scope'] = array( 'read', 'write' );
+
+		$html = $this->controller()->build_consent_screen_html( $params );
+
+		$this->assertStringContainsString( '<input type="hidden" name="scope" value="read write">', $html );
+		$this->assertStringNotContainsString( 'Array', $html );
+	}
+
+	public function test_consent_response_sends_clickjacking_and_cache_headers(): void {
+		$this->login_as( 7, array( 'edit_posts' => true ) );
+
+		$response = $this->controller()->handle_authorize_get(
+			$this->make_request( 'GET', '/mcpwp/v1/oauth/authorize', $this->base_authorize_params() )
+		);
+
+		$headers = $response->get_headers();
+		$this->assertSame( 'DENY', $headers['X-Frame-Options'] );
+		$this->assertSame( "frame-ancestors 'none'", $headers['Content-Security-Policy'] );
+		$this->assertStringContainsString( 'no-store', $headers['Cache-Control'] );
+		$this->assertStringContainsString( 'text/html', $headers['Content-Type'] );
+	}
+
+	public function test_consent_round_trip_preserves_clamped_scope_in_auth_code(): void {
+		update_option( 'permalink_structure', '/%postname%/' );
+		$this->login_as( 7, array( 'edit_posts' => true ) ); // Editor: ceiling is write.
+
+		$ctrl = $this->controller();
+		$html = $this->render_consent( $ctrl, 'read write admin' );
+
+		$post_params           = $this->hidden_fields_from( $html );
+		$post_params['action'] = 'approve';
+
+		$response = $ctrl->handle_authorize_post(
+			$this->make_request( 'POST', '/mcpwp/v1/oauth/authorize', $post_params )
+		);
+
+		$this->assertSame( 302, $response->get_status() );
+
+		$location = $response->get_headers()['Location'];
+		$this->assertStringStartsWith( 'https://client.example.com/callback?', $location );
+
+		parse_str( (string) wp_parse_url( $location, PHP_URL_QUERY ), $query );
+		$this->assertArrayHasKey( 'code', $query );
+		$this->assertSame( 'test_state_xyz', $query['state'] );
+
+		$stored = get_transient( 'mcpwp_oauth_code_' . $query['code'] );
+		$this->assertIsArray( $stored );
+		$this->assertSame(
+			'read write',
+			$stored['scope'],
+			'The approved (clamped) scope must survive the consent round trip — "Array" would collapse it to read.'
+		);
+		$this->assertSame( 7, $stored['user_id'] );
+		$this->assertSame( 'test_client', $stored['client_id'] );
+	}
+
+	public function test_consent_round_trip_clamps_admin_request_for_subscriber(): void {
+		$this->login_as( 10, array() ); // Subscriber: ceiling is read.
+
+		$ctrl = $this->controller();
+		$html = $this->render_consent( $ctrl, 'admin' );
+
+		$post_params           = $this->hidden_fields_from( $html );
+		$post_params['action'] = 'approve';
+
+		$response = $ctrl->handle_authorize_post(
+			$this->make_request( 'POST', '/mcpwp/v1/oauth/authorize', $post_params )
+		);
+
+		parse_str( (string) wp_parse_url( $response->get_headers()['Location'], PHP_URL_QUERY ), $query );
+		$stored = get_transient( 'mcpwp_oauth_code_' . $query['code'] );
+
+		$this->assertSame( 'read', $stored['scope'] );
+	}
+
+	public function test_consent_deny_issues_no_code(): void {
+		$this->login_as( 7, array( 'edit_posts' => true ) );
+
+		$ctrl = $this->controller();
+		$html = $this->render_consent( $ctrl, 'read write' );
+
+		$post_params           = $this->hidden_fields_from( $html );
+		$post_params['action'] = 'deny';
+
+		$response = $ctrl->handle_authorize_post(
+			$this->make_request( 'POST', '/mcpwp/v1/oauth/authorize', $post_params )
+		);
+
+		$this->assertSame( 302, $response->get_status() );
+
+		parse_str( (string) wp_parse_url( $response->get_headers()['Location'], PHP_URL_QUERY ), $query );
+		$this->assertSame( 'access_denied', $query['error'] );
+		$this->assertArrayNotHasKey( 'code', $query );
+
+		foreach ( array_keys( $GLOBALS['mcpwp_test_transients'] ) as $key ) {
+			$this->assertStringStartsNotWith( 'mcpwp_oauth_code_', (string) $key );
+		}
+	}
+
+	/**
+	 * A missing or unrecognised consent action must fail CLOSED.
+	 *
+	 * This endpoint mints an authorization code, so an absent, misspelled or
+	 * attacker-truncated `action` has to collapse toward refusing access.  The
+	 * earlier `if ( 'deny' === $action )` test fell through to the approval
+	 * path for every value other than the exact string "deny" — including the
+	 * empty string — which handed out a code nobody consented to.
+	 */
+	public function test_consent_post_without_action_denies_and_issues_no_code(): void {
+		$this->login_as( 7, array( 'edit_posts' => true ) );
+
+		$ctrl = $this->controller();
+		$html = $this->render_consent( $ctrl, 'read write' );
+
+		// Everything a browser would submit EXCEPT the action button value.
+		$post_params = $this->hidden_fields_from( $html );
+		$this->assertArrayNotHasKey( 'action', $post_params );
+
+		$response = $ctrl->handle_authorize_post(
+			$this->make_request( 'POST', '/mcpwp/v1/oauth/authorize', $post_params )
+		);
+
+		$this->assertSame( 302, $response->get_status() );
+
+		parse_str( (string) wp_parse_url( $response->get_headers()['Location'], PHP_URL_QUERY ), $query );
+		$this->assertArrayNotHasKey( 'code', $query, 'An ambiguous consent must never mint an authorization code.' );
+		$this->assertArrayHasKey( 'error', $query );
+		$this->assertSame( 'access_denied', $query['error'] );
+
+		// No authorization code may exist anywhere after an ambiguous consent.
+		foreach ( array_keys( $GLOBALS['mcpwp_test_transients'] ) as $key ) {
+			$this->assertStringStartsNotWith( 'mcpwp_oauth_code_', (string) $key );
+		}
+	}
+
+	/**
+	 * Same fail-closed rule for an action value that is neither approve nor deny.
+	 */
+	public function test_consent_post_with_unknown_action_denies_and_issues_no_code(): void {
+		$this->login_as( 7, array( 'edit_posts' => true ) );
+
+		$ctrl = $this->controller();
+		$html = $this->render_consent( $ctrl, 'read write' );
+
+		$post_params           = $this->hidden_fields_from( $html );
+		$post_params['action'] = 'approv';
+
+		$response = $ctrl->handle_authorize_post(
+			$this->make_request( 'POST', '/mcpwp/v1/oauth/authorize', $post_params )
+		);
+
+		$this->assertSame( 302, $response->get_status() );
+
+		parse_str( (string) wp_parse_url( $response->get_headers()['Location'], PHP_URL_QUERY ), $query );
+		$this->assertArrayNotHasKey( 'code', $query, 'An unrecognised consent action must never mint an authorization code.' );
+		$this->assertArrayHasKey( 'error', $query );
+		$this->assertSame( 'access_denied', $query['error'] );
+
+		foreach ( array_keys( $GLOBALS['mcpwp_test_transients'] ) as $key ) {
+			$this->assertStringStartsNotWith( 'mcpwp_oauth_code_', (string) $key );
+		}
+	}
+
+	public function test_consent_post_rejects_bad_nonce_and_issues_no_code(): void {
+		$this->login_as( 7, array( 'edit_posts' => true ) );
+
+		$params                       = $this->base_authorize_params();
+		$params['action']             = 'approve';
+		$params['_mcpwp_oauth_nonce'] = 'not-the-nonce';
+
+		$response = $this->controller()->handle_authorize_post(
+			$this->make_request( 'POST', '/mcpwp/v1/oauth/authorize', $params )
+		);
+
+		$this->assertSame( 400, $response->get_status() );
+		$this->assertSame( 'invalid_request', $response->get_data()['error'] );
+		$this->assertSame( array(), $GLOBALS['mcpwp_test_transients'] );
+	}
+
+	public function test_consent_post_requires_login(): void {
+		$GLOBALS['mcpwp_test_current_user'] = 0;
+
+		$params           = $this->base_authorize_params();
+		$params['action'] = 'approve';
+
+		$response = $this->controller()->handle_authorize_post(
+			$this->make_request( 'POST', '/mcpwp/v1/oauth/authorize', $params )
+		);
+
+		$this->assertSame( 401, $response->get_status() );
+		$this->assertSame( 'access_denied', $response->get_data()['error'] );
+		$this->assertSame( array(), $GLOBALS['mcpwp_test_transients'] );
+	}
+
+	public function test_legacy_rest_authorize_route_redirects_to_front_channel(): void {
+		update_option( 'permalink_structure', '/%postname%/' );
+
+		$response = $this->controller()->handle_authorize_legacy_redirect(
+			$this->make_request( 'GET', '/mcpwp/v1/oauth/authorize', $this->base_authorize_params() )
+		);
+
+		$this->assertSame( 307, $response->get_status() );
+
+		$location = $response->get_headers()['Location'];
+		$this->assertStringStartsWith( 'https://example.com/mcpwp-oauth/authorize', $location );
+		$this->assertStringNotContainsString( '/wp-json/', $location );
+
+		parse_str( (string) wp_parse_url( $location, PHP_URL_QUERY ), $query );
+		$this->assertSame( 'test_client', $query['client_id'] );
+		$this->assertSame( 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM', $query['code_challenge'] );
+	}
+
+	public function test_legacy_rest_authorize_route_gated_when_oauth_disabled(): void {
+		update_option( 'mcpwp_settings', array( 'oauth_enabled' => false ) );
+
+		$response = $this->controller()->handle_authorize_legacy_redirect(
+			$this->make_request( 'GET', '/mcpwp/v1/oauth/authorize', array() )
+		);
+
+		$this->assertSame( 501, $response->get_status() );
 	}
 }
