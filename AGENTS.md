@@ -103,10 +103,29 @@ curl -s -X POST http://localhost:8080/wp-json/mcpwp/v1/mcp \
 ## What NOT to Do
 
 - Do NOT add `var_dump()`, `error_log()`, or `print_r()` debug statements
-- Do NOT bump the version (maintainer handles version bumps)
+- Do NOT bump the version — release-please owns it (see [Releases](#releases))
 - Do NOT add tools to the wrong tier file (check `docs/FREE_PRO_SPLIT.md`)
 - Do NOT create new files for individual tools — add to the existing class
 - Do NOT skip the `sanitize_text_field()` / `intval()` / `absint()` sanitization on inputs
+
+## Releases
+
+release-please owns versioning. Write Conventional Commits (`fix:` → patch, `feat:` → minor); it
+opens a release PR that bumps all six version artefacts together and tags on merge. Never hand-edit
+one of them — that desynchronises the set.
+
+Three traps, each hit for real:
+
+- **Tagging is not shipping.** Sites update from `updates.mcpwp.net/version.json`. A tag reaches
+  nobody until `scripts/publish_update_release.sh` runs.
+- **Never reuse a version already on the channel.** Check
+  `curl -s https://updates.mcpwp.net/version.json | jq -r .version` first. The updater compares
+  version strings, so re-publishing an installed version number strands those sites on old code.
+- **`Release-As: X.Y.Z` must ride a commit that changes a real file.** `exclude-paths` makes
+  release-please drop commits touching no files, so the documented `--allow-empty` trick is silently
+  ignored here — the run still reports success. Verify the release PR title actually changed.
+
+Release PRs get no CI (GitHub doesn't trigger workflows for `GITHUB_TOKEN`-created PRs). Expected.
 
 ## Key Constants
 

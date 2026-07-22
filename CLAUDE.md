@@ -99,25 +99,37 @@ Download latest agency build: `https://updates.mcpwp.net/mcpwp-agency-3.3.3.zip`
 
 ### Release a New Version
 
+**release-please owns versioning — never hand-bump.** Land Conventional Commits on `main`
+(`fix:` → patch, `feat:` → minor); release-please opens/updates a release PR that bumps all six
+version artefacts, writes the changelog, tags, and creates the GitHub Release when a human merges it.
+
 ```bash
-# 1. Bump version in 3 places
-#    - mcpwp.php: header Version + MCPWP_VERSION constant
-#    - readme.txt: Stable tag + changelog entry
-#    - version.json: version + changelog
-
-# 2. Build all three distribution zips
+# 1. Merge the release PR (chore(main): release X.Y.Z) -> tags vX.Y.Z
+# 2. Build the three distribution zips
 bash mcpwp/scripts/build-all.sh
-
-# 3. Upload agency zip to R2 (makes it downloadable)
+# 3. Upload agency zip to R2
 npx wrangler r2 object put mumcp-updates/mcpwp-agency-X.Y.Z.zip \
   --file mcpwp/scripts/mcpwp-agency-X.Y.Z.zip --remote
-
-# 4. Publish canonical release artifacts (mumega.com static + R2)
+# 4. Publish canonical release artifacts
 bash scripts/publish_update_release.sh --build
-
-# 5. Commit & push
-git add -A && git commit -m "Bump version to X.Y.Z" && git push origin main
 ```
+
+**Tagging is not shipping.** Sites update from whatever `updates.mcpwp.net/version.json` serves;
+until step 4 runs, a new tag reaches nobody.
+
+**Before cutting a release, check what the channel already serves:**
+`curl -s https://updates.mcpwp.net/version.json | jq -r .version`. If that version is >= the one
+about to be tagged, pick a higher one — the updater compares version strings, so re-publishing a
+version number that is already installed leaves those sites permanently on the old code. (This bit
+us: a 3.7.0 build was live on the channel while the repo was about to tag a *different* 3.7.0, which
+would have stranded two security fixes. Released as 3.7.1 instead.)
+
+**To force a version:** put `Release-As: X.Y.Z` in a commit footer — but it **must ride a commit that
+changes a real file**. `exclude-paths` in `release-please-config.json` makes release-please filter out
+commits touching no files, so the documented `--allow-empty` trick is silently dropped here. The run
+still reports success; verify by checking the release PR title actually changed.
+
+Release PRs get **no CI** — GitHub does not trigger workflows for `GITHUB_TOKEN`-created PRs. Expected.
 
 ### How the Updater Works
 1. Checks `mcpwp_update_info` WP option first
@@ -489,21 +501,14 @@ container → container(s) → widget(s)  # Flexbox layout (check elementor_layo
 
 ## Version Bumping
 
-When changing plugin code, bump version in **3 files**:
-1. `mcpwp.php` — header `Version:` AND `MCPWP_VERSION` constant
-2. `readme.txt` — `Stable tag:` AND add changelog entry under `== Changelog ==`
-3. `version.json` — `version` field AND prepend changelog HTML fragment
+**Do not bump versions by hand.** release-please owns all six artefacts and moves them together:
+`.release-please-manifest.json`, `mcpwp/VERSION`, `mcpwp/mcpwp.php` (header + `MCPWP_VERSION`),
+`mcpwp/readme.txt` (`Stable tag`), `version.json`, `mcpwp/CHANGELOG.md`. Hand-editing any one of them
+desynchronises the set — that is how the repo ended up with a manifest on 3.6.0 while every other file
+said 3.7.0.
 
-Current version: **3.5.0** <!-- maintained by release-please; source of truth is mcpwp/VERSION -->
-
-Then build and deploy:
-```bash
-bash mcpwp/scripts/build-all.sh                                    # all three zips
-npx wrangler r2 object put mumcp-updates/mcpwp-agency-X.Y.Z.zip \
-  --file mcpwp/scripts/mcpwp-agency-X.Y.Z.zip --remote      # agency download
-FREEMIUS_BEARER_TOKEN=... bash scripts/release_freemius.sh --version X.Y.Z --skip-bump
-bash scripts/publish_update_release.sh --build
-```
+Just write Conventional Commits (`fix:` → patch, `feat:` → minor) and merge the release PR.
+See [Release a New Version](#release-a-new-version) for the publish steps and the traps.
 
 ## Analytics (v2.8.45+)
 
