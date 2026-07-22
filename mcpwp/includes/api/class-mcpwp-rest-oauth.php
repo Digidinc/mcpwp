@@ -1015,10 +1015,23 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 		// Carry the query string across for GET.  A POST keeps its body under
 		// 307, so re-appending its fields to the URL would only duplicate them
 		// (and put state/code_challenge in a Referer-visible place).
+		//
+		// Values are percent-encoded first: add_query_arg() deliberately does
+		// not encode what it is handed, and these values legitimately contain
+		// characters that may not appear raw in a URI — `scope` is a
+		// space-separated list and `redirect_uri` is itself a full URL.  Left
+		// raw they would produce a Location header that is not a valid
+		// URI-reference.  urlencode() (space -> "+") is the encoding OAuth 2.0
+		// specifies for these parameters (RFC 6749 §3.1, application/
+		// x-www-form-urlencoded).
 		if ( 'POST' !== strtoupper( (string) $request->get_method() ) ) {
 			$params = array_filter( $this->extract_authorize_params( $request ) );
 			if ( ! empty( $params ) ) {
-				$target = add_query_arg( $params, $target );
+				$encoded = array();
+				foreach ( $params as $key => $value ) {
+					$encoded[ $key ] = urlencode( (string) $value );
+				}
+				$target = add_query_arg( $encoded, $target );
 			}
 		}
 

@@ -1588,6 +1588,35 @@ final class OAuthServerTest extends TestCase {
 		$this->assertSame( 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM', $query['code_challenge'] );
 	}
 
+	/**
+	 * A Location header must carry a valid URI-reference, and a URI may not
+	 * contain a raw space (RFC 3986).  add_query_arg() does not encode the
+	 * values it is handed, so the space-separated `scope` list and the full-URL
+	 * `redirect_uri` have to be percent-encoded before they are appended.
+	 */
+	public function test_legacy_rest_authorize_redirect_percent_encodes_query_values(): void {
+		update_option( 'permalink_structure', '/%postname%/' );
+
+		$response = $this->controller()->handle_authorize_legacy_redirect(
+			$this->make_request( 'GET', '/mcpwp/v1/oauth/authorize', $this->base_authorize_params() )
+		);
+
+		$location = $response->get_headers()['Location'];
+
+		// No raw space anywhere in the header value.
+		$this->assertStringNotContainsString( ' ', $location );
+
+		// The reserved characters inside redirect_uri are escaped rather than
+		// terminating the parameter early.
+		$this->assertStringNotContainsString( 'redirect_uri=https://', $location );
+
+		// ...and it all still decodes back to the original values.
+		parse_str( (string) wp_parse_url( $location, PHP_URL_QUERY ), $query );
+		$this->assertSame( 'read write', $query['scope'] );
+		$this->assertSame( 'https://client.example.com/callback', $query['redirect_uri'] );
+		$this->assertSame( 'test_state_xyz', $query['state'] );
+	}
+
 	public function test_legacy_rest_authorize_route_gated_when_oauth_disabled(): void {
 		update_option( 'mcpwp_settings', array( 'oauth_enabled' => false ) );
 
