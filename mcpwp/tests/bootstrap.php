@@ -215,23 +215,29 @@ function sanitize_text_field($value)
     return trim((string) $value);
 }
 
-function wp_create_nonce($action = -1)
-{
-    return 'test-nonce';
-}
-
-function wp_verify_nonce($nonce, $action = -1)
-{
-    return 'test-nonce' === $nonce ? 1 : false;
-}
-
-function wp_nonce_field($action = -1, $name = '_wpnonce', $referer = true, $echo = true)
-{
-    $field = '<input type="hidden" name="' . $name . '" value="test-nonce" />';
-    if ($echo) {
-        echo $field;
+if (! function_exists('wp_create_nonce')) {
+    function wp_create_nonce($action = -1)
+    {
+        return 'test-nonce';
     }
-    return $field;
+}
+
+if (! function_exists('wp_verify_nonce')) {
+    function wp_verify_nonce($nonce, $action = -1)
+    {
+        return 'test-nonce' === $nonce ? 1 : false;
+    }
+}
+
+if (! function_exists('wp_nonce_field')) {
+    function wp_nonce_field($action = -1, $name = '_wpnonce', $referer = true, $echo = true)
+    {
+        $field = '<input type="hidden" name="' . $name . '" value="test-nonce" />';
+        if ($echo) {
+            echo $field;
+        }
+        return $field;
+    }
 }
 
 function sanitize_key($value)
