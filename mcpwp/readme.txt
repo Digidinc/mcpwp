@@ -153,6 +153,58 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 
 == Changelog ==
 
+= 3.7.1 =
+* feat: **admin:** redesign admin UI to Claude Design Control Room mockup (3.6.5)
+* feat: allow extensions to raise custom MCP tool scope ([#654](https://github.com/Mumega-com/mcpwp/issues/654))
+* feat: **broker-plugin:** cached introspection validator (fail-closed, audience-checked, kill-switch)
+* feat: **broker-plugin:** claude.ai/ChatGPT OAuth sign-in via mumcp.com broker (v3.7.0)
+* feat: **broker-plugin:** enrollment callback + confirm endpoints (site-control proof)
+* feat: **broker-plugin:** enrollment lifecycle — connect/state/confirm/store/disconnect + Connections UI
+* feat: **broker-plugin:** point .well-known/oauth-protected-resource at mumcp.com when enrolled
+* feat: **broker-plugin:** validate broker Bearer tokens in verify_api_key() (read|write, never admin) + 401 discovery header
+* feat: **cloudflare:** cloudflare integration — bot-fix, cache purge, speed/CWV signals ([#632](https://github.com/Mumega-com/mcpwp/issues/632))
+* feat: **elementor:** idempotent, named Kit CSS blocks ([#645](https://github.com/Mumega-com/mcpwp/issues/645))
+* feat: **elementor:** validate Atomic Elements props against real schema + document the feature
+* feat: **integrations:** self-service Cloudflare Bot Fight Mode fix in wp-admin
+* feat: **seo:** classify deprecated schema.org rich-result types ([#615](https://github.com/Mumega-com/mcpwp/issues/615))
+* feat: **seo:** experimental opt-in GEO/AI-citability score ([#617](https://github.com/Mumega-com/mcpwp/issues/617))
+* feat: **seo:** schema-placement check + explicit E-E-A-T rubric ([#616](https://github.com/Mumega-com/mcpwp/issues/616))
+* feat: support trusted custom tool callbacks ([#657](https://github.com/Mumega-com/mcpwp/issues/657))
+* fix: **broker-plugin:** host-lock enroll-store issuer/introspection_endpoint to mumcp.com (prevent credential-exfil poisoning)
+* fix: **broker-plugin:** introspect only as fallback after local key + rate-limit anonymous bearer attempts (no key egress, no DoS)
+* fix: **broker-plugin:** public state-gated enroll-callback + pin audience to home_url + pin introspection URL + no public log-amplification
+* fix: **ci:** scope proxy-worker audit to runtime deps + bump hono ([#692](https://github.com/Mumega-com/mcpwp/issues/692))
+* fix: **elementor:** accept create-side param names on archetype/part list tools ([#640](https://github.com/Mumega-com/mcpwp/issues/640))
+* fix: **elementor:** correct destructive annotations and elementor_data round-trip typing ([#642](https://github.com/Mumega-com/mcpwp/issues/642))
+* fix: **elementor:** stop silent data loss on section/container/atomic layout mismatches
+* fix: **freemius:** soft-gate first activation instead of hard license wall ([#646](https://github.com/Mumega-com/mcpwp/issues/646))
+* fix: **license:** close reconnect-link render-time gap + notify on blocked updates
+* fix: **license:** detect wrong-package downgrade + warn loudly ([#656](https://github.com/Mumega-com/mcpwp/issues/656))
+* fix: **license:** reconnect flow no longer forces skip-mode (found the actual bug)
+* fix: **license:** reconnect Freemius when a site is stuck anonymous/pending ([#633](https://github.com/Mumega-com/mcpwp/issues/633))
+* fix: **license:** update vendored Freemius SDK 2.13.0 -&gt; 2.13.4
+* fix: **license:** use Freemius's install-linked checkout URL, not marketing site
+* fix: **mcp:** draft rendered-copy 404/502 + expose unlicensed-reason code
+* fix: menu taxonomy contract, AIOSEO persistence, draft rendered-copy (3.6.2) ([#682](https://github.com/Mumega-com/mcpwp/issues/682))
+* fix: **oauth:** discovery docs broken on subdirectory installs + widen CF fix
+* fix: **oauth:** serve consent screen off the REST API so browser sign-in works ([#695](https://github.com/Mumega-com/mcpwp/issues/695))
+* fix: **pages:** support excerpt on wp_create_page/wp_update_page ([#697](https://github.com/Mumega-com/mcpwp/issues/697))
+* fix: **release:** release_freemius.sh never defined MCPWP_FREEMIUS_BUILD
+* fix: **rendered-html:** render draft/private Elementor content in-process, not via loopback ([#644](https://github.com/Mumega-com/mcpwp/issues/644))
+* fix: **security:** block secret option stores from /option and admin-gate /plugin-settings
+* fix: **security:** block secret option stores from /option and admin-gate /plugin-settings
+* fix: **security:** close draft/private content disclosure to read-scoped API keys ([#683](https://github.com/Mumega-com/mcpwp/issues/683))
+* fix: **security:** harden feedback-relay rate limiting and Figma OAuth callback ([#649](https://github.com/Mumega-com/mcpwp/issues/649))
+* fix: **security:** harden REST/MCP scope matrix and self-approval gate
+* fix: **security:** harden REST/MCP scope matrix and self-approval gate
+* fix: **security:** require admin scope to bypass content-approval gate
+* fix: **security:** require admin scope to bypass content-approval gate
+* fix: **security:** restrict Elementor globals writes to an allowlist and admin-gate kit CSS ([#603](https://github.com/Mumega-com/mcpwp/issues/603))
+* fix: **security:** restrict non-public content reads to write-scoped keys ([#601](https://github.com/Mumega-com/mcpwp/issues/601))
+* fix: **seo:** 3.6.4 — readiness false-positives, screenshot save_to_media, setup-page connect clarity ([#685](https://github.com/Mumega-com/mcpwp/issues/685))
+* fix: **seo:** stop /seo/audit fatal and per-post self-fetch storm
+* fix: **seo:** stop /seo/audit fatal and per-post self-fetch storm
+
 = 3.7.0 =
 * new: **connect:** claude.ai and ChatGPT can now sign into your site over OAuth via the mumcp.com broker — WP Admin → MCPWP → Setup → "Connect to mumcp.com". No per-site OAuth server: the sign-in, Dynamic Client Registration, and consent are hosted once on mumcp.com; your site validates the resulting tokens by cached introspection.
 * new: **connect:** Connections UI with one-click Connect / Disconnect. Disconnect is a local kill-switch — it rejects all broker tokens instantly with no network call.
