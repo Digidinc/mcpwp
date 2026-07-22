@@ -1,5 +1,7 @@
 # MCPWP - WordPress MCP Plugin
 
+> 📍 **Start at [`TRUTH.md`](TRUTH.md)** for project topology, naming, and decisions (mumcp = product · mcpwp = media). This file = plugin internals.
+
 ## Local Development (Primary)
 
 ### Local WordPress
