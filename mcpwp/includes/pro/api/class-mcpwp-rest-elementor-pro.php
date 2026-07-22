@@ -1768,13 +1768,24 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			return $this->error_response( 'elementor_not_active', __( 'Elementor is not active.', 'mcpwp' ), 400 );
 		}
 
+		// Read the JSON body first. The MCP tool and /batch dispatch pass their
+		// arguments in the POST body bucket with no JSON content-type, so
+		// get_json_params() is null on those paths — fall back to get_body_params()
+		// (the POST bucket only; it excludes URL/query params, so the former
+		// query-string smuggling vector stays closed).
 		$params = $request->get_json_params();
-		if ( empty( $params ) ) {
-			$params = $request->get_params();
+		if ( empty( $params ) || ! is_array( $params ) ) {
+			$params = $request->get_body_params();
 		}
+		$allowed = self::allowed_global_setting_types();
 
 		if ( empty( $params ) || ! is_array( $params ) ) {
-			return $this->error_response( 'missing_params', __( 'Globals data is required.', 'mcpwp' ), 400 );
+			return $this->error_response(
+				'missing_params',
+				__( 'Globals data is required: send a JSON object with one or more supported kit setting keys.', 'mcpwp' ),
+				400,
+				array( 'supported_keys' => array_keys( $allowed ) )
+			);
 		}
 
 		// Get the active kit
@@ -1783,14 +1794,91 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			return $this->error_response( 'no_kit', __( 'No active Elementor kit found.', 'mcpwp' ), 500 );
 		}
 
-		$kit_id       = $kit->get_id();
-		$existing     = get_post_meta( $kit_id, '_elementor_page_settings', true );
+		$kit_id   = $kit->get_id();
+		$existing = get_post_meta( $kit_id, '_elementor_page_settings', true );
 		if ( ! is_array( $existing ) ) {
 			$existing = array();
 		}
 
-		// Merge provided settings
-		$updated = array_replace_recursive( $existing, $params );
+		// custom_css renders sitewide, so writing it requires admin scope (the
+		// route itself stays write-scope for the design-token surface). OAuth
+		// callers carry a null key record → treated as non-admin (fails closed).
+		$record   = $this->get_current_api_key_record();
+		$is_admin = is_array( $record ) && $this->key_has_scope( $record, 'admin' );
+
+		// Allowlist: only the documented kit-setting keys may be written. Every
+		// other key is ignored, so a write-scoped key cannot mass-overwrite
+		// arbitrary kit settings or corrupt the kit's shape with wrong-typed
+		// values. Each allowed key fully replaces its prior value (the intended
+		// "set" semantic) rather than being recursively deep-merged.
+		$updated      = $existing;
+		$applied      = array();
+		$ignored      = array();
+		$scope_denied = array();
+		$warnings     = array();
+
+		foreach ( $params as $key => $value ) {
+			if ( ! is_string( $key ) || ! isset( $allowed[ $key ] ) ) {
+				$ignored[] = is_string( $key ) ? $key : (string) $key;
+				continue;
+			}
+
+			// Admin-gate custom_css.
+			if ( 'custom_css' === $key && ! $is_admin ) {
+				$scope_denied[] = $key;
+				continue;
+			}
+
+			$expected = $allowed[ $key ];
+
+			if ( 'array' === $expected ) {
+				if ( ! is_array( $value ) ) {
+					$warnings[] = sprintf( 'Ignored "%s": expected an array/object value.', $key );
+					continue;
+				}
+			} elseif ( 'number' === $expected ) {
+				if ( ! is_numeric( $value ) ) {
+					$warnings[] = sprintf( 'Ignored "%s": expected a numeric value.', $key );
+					continue;
+				}
+				$value = 0 + $value;
+			} else { // 'string'
+				$value = is_scalar( $value ) ? (string) $value : '';
+			}
+
+			if ( 'custom_css' === $key ) {
+				$value = $this->sanitize_kit_custom_css( (string) $value, $warnings );
+			} elseif ( 'string' === $expected ) {
+				$value = sanitize_text_field( $value );
+			}
+
+			$updated[ $key ] = $value;
+			$applied[]       = $key;
+		}
+
+		// Nothing applied, and the only rejected key was admin-gated → say so
+		// plainly instead of a misleading "no supported keys".
+		if ( empty( $applied ) && ! empty( $scope_denied ) ) {
+			return $this->error_response(
+				'insufficient_scope',
+				__( 'Writing custom_css requires an admin-scoped API key.', 'mcpwp' ),
+				403
+			);
+		}
+
+		if ( empty( $applied ) ) {
+			return $this->error_response(
+				'no_supported_keys',
+				__( 'No supported kit setting keys were provided.', 'mcpwp' ),
+				400,
+				array( 'supported_keys' => array_keys( $allowed ) )
+			);
+		}
+
+		// Applied some keys but custom_css was admin-gated — save the rest, warn.
+		if ( ! empty( $scope_denied ) ) {
+			$warnings[] = __( 'custom_css was not applied: writing kit CSS requires an admin-scoped API key. Other settings were saved.', 'mcpwp' );
+		}
 
 		update_post_meta( $kit_id, '_elementor_page_settings', $updated );
 
@@ -1799,31 +1887,110 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			\Elementor\Plugin::$instance->files_manager->clear_cache();
 		}
 
-		// Warn about unscoped CSS selectors that could break header/footer templates (#205).
-		$warnings = array();
-		$custom_css = isset( $updated['custom_css'] ) ? $updated['custom_css'] : '';
-		if ( $custom_css ) {
-			$bare_selectors = array( 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'body', 'p', 'a', 'ul', 'ol', 'li', 'img', 'div', 'span', 'section', 'header', 'footer', 'nav', 'main' );
-			foreach ( $bare_selectors as $sel ) {
-				if ( preg_match( '/(?:^|\n)\s*' . preg_quote( $sel, '/' ) . '\s*\{/m', $custom_css ) ) {
-					$warnings[] = sprintf(
-						'Kit CSS contains unscoped "%s" selector — this will affect header/footer templates. Scope it to .site-main or .elementor to avoid breaking theme builder templates.',
-						$sel
-					);
-				}
-			}
+		if ( ! empty( $ignored ) ) {
+			$warnings[] = sprintf(
+				/* translators: 1: comma-separated ignored keys, 2: comma-separated supported keys. */
+				__( 'Ignored unsupported field(s): %1$s. Supported kit settings: %2$s.', 'mcpwp' ),
+				implode( ', ', $ignored ),
+				implode( ', ', array_keys( $allowed ) )
+			);
 		}
 
 		$response = array(
 			'kit_id'   => $kit_id,
+			'applied'  => $applied,
 			'settings' => $updated,
 			'message'  => __( 'Elementor globals updated.', 'mcpwp' ),
 		);
+		if ( ! empty( $ignored ) ) {
+			$response['ignored'] = $ignored;
+		}
+		if ( ! empty( $scope_denied ) ) {
+			$response['requires_admin'] = $scope_denied;
+		}
 		if ( ! empty( $warnings ) ) {
 			$response['warnings'] = $warnings;
 		}
 
 		return $this->success_response( $response );
+	}
+
+	/**
+	 * Allowlist of writable Elementor kit setting keys → expected value type.
+	 *
+	 * Only these documented keys may be written via set_globals(); any other key
+	 * in the request body is ignored. This bounds a write-scoped key to the
+	 * advertised design-token / layout surface and blocks arbitrary
+	 * mass-assignment into the sitewide kit.
+	 *
+	 * @return array<string,string> key => 'array'|'string'|'number'.
+	 */
+	private static function allowed_global_setting_types() {
+		return array(
+			'system_colors'               => 'array',
+			'custom_colors'               => 'array',
+			'system_typography'           => 'array',
+			'custom_typography'           => 'array',
+			'custom_css'                  => 'string',
+			'container_width'             => 'array',
+			'space_between_widgets'       => 'array',
+			'page_title_selector'         => 'string',
+			'stretched_section_container' => 'string',
+			'default_generic_fonts'       => 'string',
+			'viewport_md'                 => 'number',
+			'viewport_lg'                 => 'number',
+		);
+	}
+
+	/**
+	 * Sanitize kit-level custom CSS before it is stored and rendered sitewide.
+	 *
+	 * A write-scoped key can reach this endpoint, so the CSS cannot be trusted
+	 * like admin-authored theme CSS. Strip HTML / style-context breakouts
+	 * (e.g. `</style><script>`) and neutralize the CSS constructs that load or
+	 * execute code (@import, expression(), behavior/-moz-binding, javascript:
+	 * URLs). Ordinary styling — including background url() — is preserved.
+	 * Unscoped bare-tag selectors (which bleed into header/footer templates) are
+	 * reported as warnings.
+	 *
+	 * @param string $css      Raw CSS.
+	 * @param array  $warnings Warnings collector (by reference).
+	 * @return string Sanitized CSS.
+	 */
+	private function sanitize_kit_custom_css( $css, &$warnings ) {
+		$css = (string) $css;
+
+		// Remove HTML tag sequences (style/script-context breakouts).
+		$css = preg_replace( '#</?[a-z][^>]*>#i', '', $css );
+		$css = str_ireplace( array( '</style', '<style', '<script', '</script' ), '', (string) $css );
+
+		// Neutralize dangerous CSS directives (case-insensitive).
+		$patterns = array(
+			'/@import\b/i'          => '/* import-removed */',
+			'/\bexpression\s*\(/i'  => 'expression-removed(',
+			'/\bbehavior\s*:/i'     => 'behavior-removed:',
+			'/-moz-binding\s*:/i'   => '-moz-binding-removed:',
+			'/javascript\s*:/i'     => 'javascript-removed:',
+		);
+		$before = (string) $css;
+		$result = preg_replace( array_keys( $patterns ), array_values( $patterns ), $before );
+		$css    = ( null === $result ) ? $before : $result;
+		if ( $css !== $before ) {
+			$warnings[] = __( 'Kit custom CSS was sanitized: @import / expression() / behavior / -moz-binding / javascript: constructs were neutralized.', 'mcpwp' );
+		}
+
+		// Warn about unscoped bare selectors that leak into header/footer templates (#205).
+		$bare_selectors = array( 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'body', 'p', 'a', 'ul', 'ol', 'li', 'img', 'div', 'span', 'section', 'header', 'footer', 'nav', 'main' );
+		foreach ( $bare_selectors as $sel ) {
+			if ( preg_match( '/(?:^|\n)\s*' . preg_quote( $sel, '/' ) . '\s*\{/m', $css ) ) {
+				$warnings[] = sprintf(
+					'Kit CSS contains unscoped "%s" selector — this will affect header/footer templates. Scope it to .site-main or .elementor to avoid breaking theme builder templates.',
+					$sel
+				);
+			}
+		}
+
+		return $css;
 	}
 
 	/**
