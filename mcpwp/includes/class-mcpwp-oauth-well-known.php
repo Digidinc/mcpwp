@@ -8,11 +8,20 @@
  *
  *   GET /.well-known/oauth-protected-resource   — RFC 9728
  *   GET /.well-known/oauth-authorization-server — RFC 8414
+ *   GET|POST /mcpwp-oauth/authorize             — interactive consent screen
  *
  * WordPress's REST API is mounted at /wp-json, so these root-level paths are
  * served via a `do_parse_request` filter (priority 1) which intercepts the
  * request before WordPress's own rewrite engine processes it.  When the path
  * matches, we emit JSON + exit immediately.
+ *
+ * The consent screen rides the same interceptor for a different reason: core
+ * treats a cookie-authenticated REST request with no X-WP-Nonce as logged out
+ * (rest_cookie_check_errors → wp_set_current_user( 0 )), and a browser
+ * following an OAuth redirect can never send that header — so on /wp-json the
+ * consent handler bounced the user to wp-login forever.  Here, cookie auth is
+ * already resolved: wp-settings.php sets up the current user before wp() calls
+ * WP::parse_request().
  *
  * The oauth-authorization-server document remains gated on the legacy
  * `oauth_enabled` setting alone.  The oauth-protected-resource document is
@@ -41,6 +50,24 @@ if ( ! defined( 'ABSPATH' ) ) {
  * Handles /.well-known/oauth-* at the WordPress domain root.
  */
 class Mcpwp_OAuth_Well_Known {
+
+	/**
+	 * Path segment of the front-channel authorization endpoint.
+	 *
+	 * @var string
+	 */
+	const FRONT_CHANNEL_AUTHORIZE_SLUG = '/mcpwp-oauth/authorize';
+
+	/**
+	 * Query var that reaches the same endpoint on sites without rewrite rules.
+	 *
+	 * A plain-permalink site has no rewrite rules, so a pretty path 404s at the
+	 * web server before WordPress ever loads.  This is the same accommodation
+	 * core makes for the REST API with ?rest_route=.
+	 *
+	 * @var string
+	 */
+	const FRONT_CHANNEL_QUERY_VAR = 'mcpwp_oauth';
 
 	/**
 	 * Register WordPress hooks.
@@ -169,7 +196,56 @@ class Mcpwp_OAuth_Well_Known {
 			exit;
 		}
 
+		if ( self::is_front_channel_authorize_request( $path_only ) ) {
+			// Same gate as the AS metadata document: this endpoint only exists
+			// for this site's own self-issued AS.  A broker-enrolled site never
+			// sends users here (mumcp.com is the AS).  When the gate is closed
+			// the request falls through to WordPress and behaves exactly as any
+			// other unknown request would — no new surface is exposed.
+			if ( ! self::is_legacy_oauth_enabled() || ! class_exists( 'Mcpwp_REST_OAuth' ) ) {
+				return $do_parse;
+			}
+			Mcpwp_REST_OAuth::serve_front_channel_authorize();
+			exit;
+		}
+
 		return $do_parse;
+	}
+
+	/**
+	 * Whether this request targets the front-channel authorize endpoint.
+	 *
+	 * Matches three shapes:
+	 *   - <home path prefix>/mcpwp-oauth/authorize   (what we advertise)
+	 *   - <site path prefix>/mcpwp-oauth/authorize   (defensive: subdirectory
+	 *     installs where home_url() and site_url() disagree)
+	 *   - any path carrying ?mcpwp_oauth=authorize   (sites without rewrites)
+	 *
+	 * @param string $path_only Request path with a leading slash, query stripped.
+	 * @return bool
+	 */
+	public static function is_front_channel_authorize_request( $path_only ) {
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Public OAuth front-channel entry point; the consent POST carries its own CSRF nonce, verified in handle_authorize_post().
+		$query_var = isset( $_GET[ self::FRONT_CHANNEL_QUERY_VAR ] ) ? sanitize_key( wp_unslash( $_GET[ self::FRONT_CHANNEL_QUERY_VAR ] ) ) : '';
+		if ( 'authorize' === $query_var ) {
+			return true;
+		}
+
+		// Cheap reject before touching options.  This method runs on EVERY
+		// front-end request via do_parse_request, and building the candidate
+		// list below costs two option reads (home_url() + get_site_url()).
+		if ( false === strpos( (string) $path_only, self::FRONT_CHANNEL_AUTHORIZE_SLUG ) ) {
+			return false;
+		}
+
+		$candidates = array_unique(
+			array(
+				self::get_front_channel_authorize_path(),
+				self::get_site_path_prefix() . self::FRONT_CHANNEL_AUTHORIZE_SLUG,
+			)
+		);
+
+		return in_array( untrailingslashit( (string) $path_only ), $candidates, true );
 	}
 
 	// -------------------------------------------------------------------------
@@ -297,21 +373,37 @@ class Mcpwp_OAuth_Well_Known {
 	 *   - scopes_supported
 	 */
 	private static function serve_authorization_server_metadata() {
-		$origin           = self::get_site_origin();
-		$rest_base        = rest_url( 'mcpwp/v1' );
+		self::emit_json( self::build_authorization_server_metadata() );
+	}
 
-		$body = array(
-			'issuer'                                 => $origin . self::get_site_path_prefix(),
-			'authorization_endpoint'                 => $rest_base . '/oauth/authorize',
-			'token_endpoint'                         => $rest_base . '/oauth/token',
-			'response_types_supported'               => array( 'code' ),
-			'grant_types_supported'                  => array( 'authorization_code', 'refresh_token' ),
-			'code_challenge_methods_supported'       => array( 'S256' ),
-			'token_endpoint_auth_methods_supported'  => array( 'none', 'client_secret_post' ),
-			'scopes_supported'                       => array( 'read', 'write', 'admin' ),
+	/**
+	 * Build the RFC 8414 oauth-authorization-server metadata array.
+	 *
+	 * Split out from serve_authorization_server_metadata() so unit tests can
+	 * assert on the exact shape without going through emit_json()'s exit(),
+	 * mirroring build_protected_resource_metadata().
+	 *
+	 * authorization_endpoint points at the front-channel consent URL, NOT at
+	 * the /wp-json REST route: core treats a cookie-authenticated REST request
+	 * without an X-WP-Nonce as logged out, so a browser sent to the REST route
+	 * can never satisfy is_user_logged_in() and loops on wp-login forever.
+	 *
+	 * @return array RFC 8414 metadata.
+	 */
+	public static function build_authorization_server_metadata() {
+		$origin    = self::get_site_origin();
+		$rest_base = rest_url( 'mcpwp/v1' );
+
+		return array(
+			'issuer'                                => $origin . self::get_site_path_prefix(),
+			'authorization_endpoint'                => self::get_front_channel_authorize_url( $origin ),
+			'token_endpoint'                        => $rest_base . '/oauth/token',
+			'response_types_supported'              => array( 'code' ),
+			'grant_types_supported'                 => array( 'authorization_code', 'refresh_token' ),
+			'code_challenge_methods_supported'      => array( 'S256' ),
+			'token_endpoint_auth_methods_supported' => array( 'none', 'client_secret_post' ),
+			'scopes_supported'                      => array( 'read', 'write', 'admin' ),
 		);
-
-		self::emit_json( $body );
 	}
 
 	// -------------------------------------------------------------------------
@@ -399,5 +491,70 @@ class Mcpwp_OAuth_Well_Known {
 		$parsed = wp_parse_url( get_site_url() );
 		$path   = isset( $parsed['path'] ) ? rtrim( $parsed['path'], '/' ) : '';
 		return $path;
+	}
+
+	/**
+	 * Path component of home_url(), without a trailing slash.
+	 *
+	 * The front channel is a front-end request, so it is routed by home_url(),
+	 * not site_url() — only requests under the home base reach index.php (and
+	 * therefore the do_parse_request interceptor).  Empty for a root install.
+	 *
+	 * @param string|null $home_url Optional home URL (pure/testable); defaults to home_url( '/' ).
+	 * @return string Path prefix with a leading slash, or '' for a root install.
+	 */
+	public static function get_home_path_prefix( $home_url = null ) {
+		if ( null === $home_url ) {
+			$home_url = function_exists( 'home_url' ) ? home_url( '/' ) : '/';
+		}
+
+		$parsed = wp_parse_url( (string) $home_url );
+		$path   = isset( $parsed['path'] ) ? (string) $parsed['path'] : '/';
+
+		return rtrim( $path, '/' );
+	}
+
+	/**
+	 * Build the front-channel authorize path from a home URL (pure, testable).
+	 *
+	 * @param string|null $home_url Site home URL (may include a subdirectory path).
+	 * @return string Path beginning with '/'.
+	 */
+	public static function build_front_channel_authorize_path( $home_url ) {
+		return self::get_home_path_prefix( $home_url ) . self::FRONT_CHANNEL_AUTHORIZE_SLUG;
+	}
+
+	/**
+	 * Path of the front-channel authorization endpoint (no origin, no query).
+	 *
+	 * @return string Path beginning with '/', honouring subdirectory installs.
+	 */
+	public static function get_front_channel_authorize_path() {
+		return self::build_front_channel_authorize_path( null );
+	}
+
+	/**
+	 * Absolute URL of the front-channel authorization endpoint.
+	 *
+	 * Advertised in the RFC 8414 document, used as the consent form action and
+	 * as the post-login redirect target — one builder so all three can never
+	 * disagree.
+	 *
+	 * On a site with no permalink structure there are no rewrite rules, so a
+	 * pretty path would 404 at the web server before WordPress loads; emit the
+	 * query-var form instead (same degradation rest_url() already performs).
+	 *
+	 * @param string $origin Optional issuer origin (defaults to get_site_origin()).
+	 * @return string
+	 */
+	public static function get_front_channel_authorize_url( $origin = '' ) {
+		$origin    = '' !== $origin ? $origin : self::get_site_origin();
+		$permalink = function_exists( 'get_option' ) ? (string) get_option( 'permalink_structure', '' ) : '';
+
+		if ( '' === $permalink ) {
+			return $origin . self::get_home_path_prefix() . '/?' . self::FRONT_CHANNEL_QUERY_VAR . '=authorize';
+		}
+
+		return $origin . self::get_front_channel_authorize_path();
 	}
 }
