@@ -372,6 +372,28 @@ function delete_transient($name)
     return true;
 }
 
+function get_user_meta($user_id, $key = '', $single = false)
+{
+    $user_id = (int) $user_id;
+    if ('' === $key) {
+        return isset($GLOBALS['mcpwp_test_user_meta'][ $user_id ]) ? $GLOBALS['mcpwp_test_user_meta'][ $user_id ] : array();
+    }
+    $value = isset($GLOBALS['mcpwp_test_user_meta'][ $user_id ][ $key ]) ? $GLOBALS['mcpwp_test_user_meta'][ $user_id ][ $key ] : '';
+    return $single ? $value : array( $value );
+}
+
+function update_user_meta($user_id, $key, $value)
+{
+    $GLOBALS['mcpwp_test_user_meta'][ (int) $user_id ][ $key ] = $value;
+    return true;
+}
+
+function delete_user_meta($user_id, $key)
+{
+    unset($GLOBALS['mcpwp_test_user_meta'][ (int) $user_id ][ $key ]);
+    return true;
+}
+
 // -------------------------------------------------------------------------
 // Minimal hooks system (filters/actions) for unit tests.
 // -------------------------------------------------------------------------
