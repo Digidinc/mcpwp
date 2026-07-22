@@ -204,6 +204,31 @@ class Mcpwp_Settings {
 			'mcpwp_general_section'
 		);
 
+		add_settings_field(
+			'mupot_enabled',
+			__( 'mupot Connector', 'mcpwp' ),
+			array( $this, 'render_checkbox_field' ),
+			'mcpwp_settings',
+			'mcpwp_general_section',
+			array(
+				'id'          => 'mupot_enabled',
+				'description' => __( 'Let connected WP staff see their own mupot task board in Control Room.', 'mcpwp' ),
+			)
+		);
+
+		add_settings_field(
+			'mupot_instance_url',
+			__( 'mupot Instance URL', 'mcpwp' ),
+			array( $this, 'render_text_field' ),
+			'mcpwp_settings',
+			'mcpwp_general_section',
+			array(
+				'id'          => 'mupot_instance_url',
+				'description' => __( 'Your mupot deployment. Leave default unless self-hosting a fork.', 'mcpwp' ),
+				'placeholder' => 'https://mupot.mumega.com',
+			)
+		);
+
 		// Allowed origins (CORS)
 		add_settings_field(
 			'allowed_origins',
@@ -548,6 +573,8 @@ class Mcpwp_Settings {
 			'alerts_5xx_threshold'    => 5,
 			'alerts_auth_threshold'   => 10,
 			'analytics_enabled'       => false,
+			'mupot_enabled'           => false,
+			'mupot_instance_url'      => 'https://mupot.mumega.com',
 		);
 	}
 
@@ -667,6 +694,10 @@ class Mcpwp_Settings {
 			: 10;
 
 		$sanitized['analytics_enabled'] = ! empty( $input['analytics_enabled'] );
+
+		$sanitized['mupot_enabled'] = ! empty( $input['mupot_enabled'] );
+		$mupot_url = isset( $input['mupot_instance_url'] ) ? trim( (string) $input['mupot_instance_url'] ) : '';
+		$sanitized['mupot_instance_url'] = '' !== $mupot_url ? esc_url_raw( $mupot_url ) : 'https://mupot.mumega.com';
 
 		// Screenshot worker (legacy — now managed via Integrations page, preserved for backward compat).
 		$sanitized['screenshot_worker_url'] = isset( $current['screenshot_worker_url'] ) ? $current['screenshot_worker_url'] : '';
