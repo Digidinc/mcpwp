@@ -181,4 +181,31 @@ final class MupotConnectorTest extends TestCase
         $this->assertTrue($connector->has_squad(self::USER_ID));
         $this->assertSame('mumcp-core', $connector->get_squad(self::USER_ID));
     }
+
+    public function test_get_status_ignores_non_https_configured_url_and_uses_default(): void
+    {
+        $connector = new Mcpwp_Mupot_Connector();
+        $connector->save_token(self::USER_ID, 'test-member-token');
+
+        // Set a non-HTTPS configured instance URL (should be ignored).
+        $GLOBALS['mcpwp_test_options']['mcpwp_settings'] = array(
+            'mupot_instance_url' => 'http://insecure.example.com',
+        );
+
+        $captured = new ArrayObject();
+        add_filter('pre_http_request', function ($preempt, $args, $url) use ($captured) {
+            $captured[] = array( 'url' => $url );
+            return array(
+                'response' => array( 'code' => 200 ),
+                'body'     => wp_json_encode(array( 'result' => array( 'member_id' => 'm-1' ) )),
+            );
+        }, 10, 3);
+
+        $result = $connector->get_status(self::USER_ID);
+
+        $this->assertIsArray($result);
+        // Assert that the actual call went to the default HTTPS URL, not the insecure one.
+        $this->assertSame('https://mupot.mumega.com/mcp', $captured[0]['url']);
+        $this->assertNotSame('http://insecure.example.com/mcp', $captured[0]['url']);
+    }
 }

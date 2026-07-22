@@ -161,11 +161,22 @@ class Mcpwp_Mupot_Connector {
 	/**
 	 * Get the configured mupot instance URL.
 	 *
+	 * Enforces HTTPS: any non-empty configured URL that does not start with
+	 * https:// (case-insensitive) is treated as invalid and falls back to the
+	 * default. Defense-in-depth to prevent accidental bearer token leakage
+	 * over insecure connections.
+	 *
 	 * @return string
 	 */
 	private function get_instance_url() {
 		$settings = get_option( 'mcpwp_settings', array() );
 		$url      = isset( $settings['mupot_instance_url'] ) ? trim( (string) $settings['mupot_instance_url'] ) : '';
+
+		// Enforce HTTPS: reject any configured URL that isn't HTTPS.
+		if ( '' !== $url && 0 !== stripos( $url, 'https://' ) ) {
+			return self::DEFAULT_INSTANCE_URL;
+		}
+
 		return '' !== $url ? untrailingslashit( $url ) : self::DEFAULT_INSTANCE_URL;
 	}
 
