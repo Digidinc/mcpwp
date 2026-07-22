@@ -258,6 +258,9 @@ trait Mcpwp_Admin_Control_Room_Trait {
 			}
 		}
 
+		// mupot connector (#689 read-first slice).
+		$data['mupot'] = $this->get_control_room_mupot_data();
+
 		return $data;
 	}
 
