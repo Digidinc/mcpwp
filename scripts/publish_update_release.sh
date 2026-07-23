@@ -13,6 +13,7 @@ STATIC_MANIFEST="$STATIC_DIR/version.json"
 
 BUILD=0
 VERIFY_ONLY=0
+R2_ONLY=0
 
 usage() {
 	cat <<'EOF'
@@ -22,12 +23,18 @@ Usage:
 Options:
   --build          Build the ZIP before publishing
   --verify-only    Run consistency and live artifact checks without publishing
+  --r2-only        Publish to the mumcp-updates R2 bucket only — skip the
+                    /var/www/mcp-updates static copy (requires VPS filesystem
+                    access this flag doesn't have, e.g. from GitHub Actions)
   -h, --help       Show help
 
 Notes:
   - The canonical updater source is https://mumega.com/mcp-updates/version.json
   - This channel serves the self-hosted package with the legacy updater included
   - The worker is optional and no longer part of the critical path
+  - --r2-only updates updates.mcpwp.net immediately; mumega.com/mcp-updates/*
+    (legacy, un-migrated 2.8.56 sites) still needs a manual publish from a host
+    with /var/www/mcp-updates access until that channel is retired
 EOF
 }
 
@@ -46,6 +53,10 @@ while [[ $# -gt 0 ]]; do
 		;;
 	--verify-only)
 		VERIFY_ONLY=1
+		shift
+		;;
+	--r2-only)
+		R2_ONLY=1
 		shift
 		;;
 	-h | --help)
@@ -112,18 +123,22 @@ if [[ "$UPDATER_COUNT" -eq 0 ]]; then
 fi
 
 if [[ "$VERIFY_ONLY" -eq 0 ]]; then
-	# Copy to a versioned file and point mcpwp-latest.zip at it (resolves #339).
-	# Never cp to $STATIC_ZIP then ln -sf the same path — that produces a
-	# self-referencing symlink and breaks every later publish.
-	STATIC_VERSIONED_ZIP="$STATIC_DIR/mcpwp-$VERSION.zip"
-	sudo -n cp "$ZIP_PATH" "$STATIC_VERSIONED_ZIP"
-	sudo -n cp "$MANIFEST_FILE" "$STATIC_MANIFEST"
-	sudo -n ln -sfn "$STATIC_VERSIONED_ZIP" "$STATIC_ZIP"
+	if [[ "$R2_ONLY" -eq 0 ]]; then
+		# Copy to a versioned file and point mcpwp-latest.zip at it (resolves #339).
+		# Never cp to $STATIC_ZIP then ln -sf the same path — that produces a
+		# self-referencing symlink and breaks every later publish.
+		STATIC_VERSIONED_ZIP="$STATIC_DIR/mcpwp-$VERSION.zip"
+		sudo -n cp "$ZIP_PATH" "$STATIC_VERSIONED_ZIP"
+		sudo -n cp "$MANIFEST_FILE" "$STATIC_MANIFEST"
+		sudo -n ln -sfn "$STATIC_VERSIONED_ZIP" "$STATIC_ZIP"
+	fi
 
 	# Upload to Cloudflare R2 — CF Worker (spai-updates) serves mumega.com/mcp-updates/*
 	# from the mumcp-updates bucket, not from the nginx alias.
 	# --remote targets production R2; without it wrangler writes to local miniflare.
-	WORKER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/mcpwp-updates-worker"
+	# MCPWP_WORKER_DIR overrides the default sibling-checkout assumption — needed
+	# in CI, where mcpwp-updates-worker isn't checked out next to this repo.
+	WORKER_DIR="${MCPWP_WORKER_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/mcpwp-updates-worker}"
 	if [[ ! -d "$WORKER_DIR" ]]; then
 		echo "ERROR: worker dir not found ($WORKER_DIR) — R2 not updated, live manifest stays stale" >&2
 		exit 1
@@ -145,11 +160,16 @@ if [[ "$VERIFY_ONLY" -eq 0 ]]; then
 	echo "  R2 upload: version.json + mcpwp-latest.zip → mumcp-updates bucket"
 fi
 
-LIVE_STATIC_JSON="$(curl -fsSL https://mumega.com/mcp-updates/version.json)" || true
+if [[ "$R2_ONLY" -eq 1 ]]; then
+	LIVE_CHECK_URL="https://updates.mcpwp.net/version.json"
+else
+	LIVE_CHECK_URL="https://mumega.com/mcp-updates/version.json"
+fi
+LIVE_STATIC_JSON="$(curl -fsSL "$LIVE_CHECK_URL")" || true
 LIVE_STATIC_VERSION="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])' <<<"$LIVE_STATIC_JSON" 2>/dev/null || echo "unknown")"
 
 if [[ "$LIVE_STATIC_VERSION" != "$VERSION" ]]; then
-	echo "Note: live manifest still shows $LIVE_STATIC_VERSION (R2 upload may have failed or CF propagation in progress)" >&2
+	echo "Note: live manifest ($LIVE_CHECK_URL) still shows $LIVE_STATIC_VERSION (R2 upload may have failed or CF propagation in progress)" >&2
 fi
 
 # Verify the ACTUAL download_url advertised in the manifest resolves — not a
@@ -164,5 +184,12 @@ if [[ -n "$DOWNLOAD_URL" ]]; then
 fi
 
 echo "Published MCPWP $VERSION"
-echo "  static manifest: https://mumega.com/mcp-updates/version.json"
-echo "  static zip:      https://mumega.com/mcp-updates/mcpwp-latest.zip"
+if [[ "$R2_ONLY" -eq 1 ]]; then
+	echo "  canonical manifest: https://updates.mcpwp.net/version.json"
+	echo "  canonical zip:      https://updates.mcpwp.net/mcpwp-latest.zip"
+	echo "  NOTE: legacy mumega.com/mcp-updates/* was NOT touched (--r2-only) —"
+	echo "        still needs a manual publish from a host with VPS filesystem access"
+else
+	echo "  static manifest: https://mumega.com/mcp-updates/version.json"
+	echo "  static zip:      https://mumega.com/mcp-updates/mcpwp-latest.zip"
+fi

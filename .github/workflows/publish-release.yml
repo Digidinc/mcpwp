@@ -1,0 +1,38 @@
+name: Publish Release (Canonical R2)
+
+# Manual, explicit trigger — publishes whatever version is on the dispatched
+# ref (main, after a release-please release PR is merged) to the canonical
+# updates.mcpwp.net channel (Cloudflare Worker + R2 bucket mumcp-updates).
+#
+# Does NOT touch the legacy mumega.com/mcp-updates/* channel — that's served
+# by a plain nginx alias to local disk on the VPS and needs VPS filesystem
+# access (sudo cp), which this workflow doesn't have. Un-migrated legacy
+# sites still need a manual publish from a host with that access until the
+# legacy channel is retired (see CLAUDE.md).
+on:
+  workflow_dispatch: {}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: mumcp
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Publish to canonical R2 channel
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: "e39eaf94f33092c4efd029d94ae1e9dd"
+          MCPWP_WORKER_DIR: ${{ github.workspace }}
+        run: bash scripts/publish_update_release.sh --build --r2-only
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "### Publish to updates.mcpwp.net" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Ref:** ${{ github.ref_name }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Commit:** ${{ github.sha }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Legacy mumega.com/mcp-updates/* NOT updated by this run — needs VPS access separately" >> "$GITHUB_STEP_SUMMARY"
