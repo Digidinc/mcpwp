@@ -1,0 +1,19 @@
+name: Test R2 Token
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    environment: mumcp
+
+    steps:
+      - name: List mumcp-updates bucket
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: "e39eaf94f33092c4efd029d94ae1e9dd"
+        run: |
+          npx -y wrangler@latest r2 object get mumcp-updates/version.json --remote --pipe > /tmp/version.json
+          echo "--- version.json (first 20 lines) ---"
+          head -20 /tmp/version.json
