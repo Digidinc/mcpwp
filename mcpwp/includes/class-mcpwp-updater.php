@@ -67,9 +67,47 @@ class Mcpwp_Updater {
 	private $cache_duration = 43200;
 
 	/**
+	 * Why the last manifest resolution failed, for operator-facing diagnostics.
+	 *
+	 * One of: version_url_not_https, manifest_fetch_failed, manifest_invalid,
+	 * package_host_not_trusted. Null when the last resolution succeeded.
+	 *
+	 * @var string|null
+	 */
+	private $last_manifest_error = null;
+
+	/**
+	 * Shared instance.
+	 *
+	 * @var Mcpwp_Updater|null
+	 */
+	private static $instance = null;
+
+	/**
+	 * Shared updater instance.
+	 *
+	 * Callers that only want to read update state must use this rather than
+	 * constructing their own — the constructor registers hooks, so a second
+	 * instance would double-register them.
+	 *
+	 * @return Mcpwp_Updater
+	 */
+	public static function instance() {
+		if ( null === self::$instance ) {
+			self::$instance = new self();
+		}
+
+		return self::$instance;
+	}
+
+	/**
 	 * Initialize the updater.
 	 */
 	public function __construct() {
+		if ( null === self::$instance ) {
+			self::$instance = $this;
+		}
+
 		$this->plugin_basename = MCPWP_PLUGIN_BASENAME;
 		$this->current_version = MCPWP_VERSION;
 
@@ -100,6 +138,7 @@ class Mcpwp_Updater {
 		}
 
 		if ( ! is_array( $data ) || empty( $data['version'] ) || empty( $data['download_url'] ) ) {
+			$this->last_manifest_error = 'manifest_invalid';
 			return false;
 		}
 
@@ -110,6 +149,7 @@ class Mcpwp_Updater {
 		// option manifest and the remote manifest. Self-hosted update channels
 		// extend the allowlist via the mcpwp_trusted_package_hosts filter.
 		if ( ! Mcpwp_Security::is_trusted_package_url( $data['download_url'] ) ) {
+			$this->last_manifest_error = 'package_host_not_trusted';
 			return false;
 		}
 
@@ -154,6 +194,7 @@ class Mcpwp_Updater {
 		// update servers keep working as long as they are HTTPS — the host is
 		// intentionally not allowlisted here so legitimate custom servers work.
 		if ( ! Mcpwp_Security::is_https_url( $url ) ) {
+			$this->last_manifest_error = 'version_url_not_https';
 			return false;
 		}
 
@@ -168,6 +209,7 @@ class Mcpwp_Updater {
 		);
 
 		if ( is_wp_error( $response ) || 200 !== wp_remote_retrieve_response_code( $response ) ) {
+			$this->last_manifest_error = 'manifest_fetch_failed';
 			return false;
 		}
 
@@ -255,6 +297,110 @@ class Mcpwp_Updater {
 	}
 
 	/**
+	 * Property marking a transient entry as a deliberate, caller-forced install.
+	 *
+	 * Entries carrying it are owned by the caller (a package_url install, or a
+	 * manifest-driven injection made when core never populated the transient) and
+	 * must survive check_for_update().
+	 *
+	 * @var string
+	 */
+	const FORCED_PACKAGE_FLAG = 'mcpwp_forced_package';
+
+	/**
+	 * Whether the transient already carries a forced entry for this plugin.
+	 *
+	 * @param object $transient Update transient data.
+	 * @return bool True when a caller-owned entry is present.
+	 */
+	private function has_forced_package( $transient ) {
+		if ( ! isset( $transient->response ) || ! is_array( $transient->response ) ) {
+			return false;
+		}
+
+		if ( ! isset( $transient->response[ $this->plugin_basename ] ) ) {
+			return false;
+		}
+
+		$entry = $transient->response[ $this->plugin_basename ];
+
+		return is_object( $entry ) && ! empty( $entry->{self::FORCED_PACKAGE_FLAG} );
+	}
+
+	/**
+	 * Build a transient entry that installs a specific package.
+	 *
+	 * @param string $package     Package zip URL (already host-pinned by the caller).
+	 * @param string $new_version Version the package delivers.
+	 * @return object Update entry flagged as caller-owned.
+	 */
+	public function build_forced_entry( $package, $new_version ) {
+		$entry              = new stdClass();
+		$entry->slug        = $this->plugin_slug;
+		$entry->plugin      = $this->plugin_basename;
+		$entry->new_version = (string) $new_version;
+		$entry->package     = $package;
+
+		$entry->{self::FORCED_PACKAGE_FLAG} = true;
+
+		return $entry;
+	}
+
+	/**
+	 * Resolve the authoritative update state from this plugin's own channel.
+	 *
+	 * Single source of truth for "is there an update, and what would we install".
+	 * Both /update endpoints read this instead of inferring the answer from
+	 * WordPress's update_plugins transient, which is only populated when core's
+	 * own request to api.wordpress.org succeeds — an unrelated dependency that
+	 * used to strand sites on outdated releases (#716).
+	 *
+	 * @param bool $force_refresh Bypass the manifest cache.
+	 * @return array{
+	 *     current_version:string, selected_version:string|null, remote_version:string|null,
+	 *     option_version:string|null, source:string|null, package:string|null,
+	 *     update_available:bool, reason:string|null
+	 * }
+	 */
+	public function get_update_state( $force_refresh = false ) {
+		$state = array(
+			'current_version'  => $this->current_version,
+			'selected_version' => null,
+			'remote_version'   => null,
+			'option_version'   => null,
+			'source'           => null,
+			'package'          => null,
+			'update_available' => false,
+			'reason'           => null,
+		);
+
+		$this->last_manifest_error = null;
+
+		$data = $this->get_remote_data( $force_refresh );
+
+		if ( false === $data ) {
+			$state['reason'] = null !== $this->last_manifest_error
+				? $this->last_manifest_error
+				: 'manifest_unavailable';
+			return $state;
+		}
+
+		$state['selected_version'] = $data->version;
+		$state['remote_version']   = isset( $data->_remote_version ) ? $data->_remote_version : null;
+		$state['option_version']   = isset( $data->_option_version ) ? $data->_option_version : null;
+		$state['source']           = isset( $data->_source ) ? $data->_source : null;
+		$state['package']          = $data->download_url;
+
+		if ( version_compare( $this->current_version, $data->version, '<' ) ) {
+			$state['update_available'] = true;
+		} else {
+			$state['reason'] = 'already_current';
+		}
+
+		return $state;
+	}
+
+	/**
 	 * Check for plugin updates.
 	 *
 	 * Hooks into pre_set_site_transient_update_plugins.
@@ -263,14 +409,38 @@ class Mcpwp_Updater {
 	 * @return object Modified transient data.
 	 */
 	public function check_for_update( $transient ) {
-		if ( empty( $transient->checked ) ) {
+		if ( ! is_object( $transient ) ) {
 			return $transient;
 		}
 
+		// Deliberately NOT gated on $transient->checked. When core's request to
+		// api.wordpress.org fails, wp_update_plugins() still fires this filter but
+		// hands over a transient with no `checked` property at all. Gating on it
+		// meant a self-hosted manifest we had already fetched successfully was
+		// discarded, and the site reported "no update available" while sitting on
+		// an outdated (in one case, security-patched) release. This plugin's
+		// update channel does not depend on wordpress.org, so neither should the
+		// decision. See #716.
 		$remote = $this->get_remote_data();
 
 		if ( false === $remote ) {
 			return $transient;
+		}
+
+		// A caller-supplied package_url install injects its own response entry and
+		// then re-saves the transient, which re-enters this filter. Leave that
+		// entry alone or the forced install silently reverts to the manifest
+		// version. (Before #716 the `checked` guard masked this by accident.)
+		if ( $this->has_forced_package( $transient ) ) {
+			return $transient;
+		}
+
+		if ( ! isset( $transient->response ) || ! is_array( $transient->response ) ) {
+			$transient->response = array();
+		}
+
+		if ( ! isset( $transient->no_update ) || ! is_array( $transient->no_update ) ) {
+			$transient->no_update = array();
 		}
 
 		if ( version_compare( $this->current_version, $remote->version, '<' ) ) {

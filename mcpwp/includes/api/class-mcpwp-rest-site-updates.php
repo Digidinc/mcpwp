@@ -160,108 +160,63 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 
 		$this->log_activity( 'check_update', $request );
 
-		$current_version = defined( 'MCPWP_VERSION' ) ? MCPWP_VERSION : '0.0.0';
-		$option_version  = null;
-		$option_package  = null;
-		$remote_version  = null;
-		$remote_package  = null;
-		$selected_source = null;
+		$state = Mcpwp_Updater::instance()->get_update_state( true );
 
-		$option_data = get_option( 'mcpwp_update_info' );
-		if ( is_string( $option_data ) ) {
-			$option_data = json_decode( $option_data, true );
-		}
-		if ( is_array( $option_data ) && ! empty( $option_data['version'] ) ) {
-			$option_version = (string) $option_data['version'];
-			if ( ! empty( $option_data['download_url'] ) ) {
-				$option_package = esc_url_raw( $option_data['download_url'] );
-			}
-		}
-
-		$version_url = get_option( 'mcpwp_version_url', 'https://mumega.com/mcp-updates/version.json' );
-		if ( empty( $version_url ) ) {
-			$version_url = 'https://mumega.com/mcp-updates/version.json';
-		}
-		// Never fetch a version manifest over plain HTTP — mirrors the guard already
-		// applied in Mcpwp_Updater::get_remote_manifest() (class-mcpwp-updater.php:153).
-		// A non-HTTPS mcpwp_version_url is an SSRF/downgrade vector for the updater.
-		$remote_response = Mcpwp_Security::is_https_url( $version_url )
-			? wp_remote_get(
-				$version_url,
-				array(
-					'timeout' => 10,
-					'headers' => array(
-						'Accept' => 'application/json',
-					),
-				)
-			)
-			: new WP_Error( 'insecure_version_url', __( 'mcpwp_version_url must be HTTPS.', 'mcpwp' ) );
-		if ( ! is_wp_error( $remote_response ) && 200 === wp_remote_retrieve_response_code( $remote_response ) ) {
-			$remote_body = json_decode( wp_remote_retrieve_body( $remote_response ), true );
-			if ( is_array( $remote_body ) && ! empty( $remote_body['version'] ) ) {
-				$remote_version = (string) $remote_body['version'];
-				if ( ! empty( $remote_body['download_url'] ) ) {
-					$remote_package = esc_url_raw( $remote_body['download_url'] );
-				}
-			}
-		}
-
-		// Clear update caches and force a fresh check.
+		// Refresh WordPress's own view so the Plugins screen agrees with what we
+		// just resolved. Advisory only — our answer comes from the manifest, not
+		// from the transient, which stays empty whenever core cannot reach
+		// api.wordpress.org (#716).
+		// get_update_state( true ) already refreshed the manifest cache, so leave it
+		// in place for wp_update_plugins() to reuse rather than refetching.
 		delete_site_transient( 'update_plugins' );
-		delete_transient( 'mcpwp_update_check' );
-
 		if ( function_exists( 'wp_update_plugins' ) ) {
 			wp_update_plugins();
 		}
 
-		$update_plugins = get_site_transient( 'update_plugins' );
-		$plugin_file    = defined( 'MCPWP_PLUGIN_BASENAME' ) ? MCPWP_PLUGIN_BASENAME : 'mcpwp/mcpwp.php';
-
-		$update_available = false;
-		$new_version      = null;
-		$package          = null;
-
-		if ( ! empty( $update_plugins->response[ $plugin_file ] ) ) {
-			$plugin_update    = $update_plugins->response[ $plugin_file ];
-			$new_version      = is_object( $plugin_update ) ? $plugin_update->new_version : null;
-			$package          = is_object( $plugin_update ) ? $plugin_update->package : null;
-			$update_available = ! empty( $new_version ) && version_compare( $new_version, $current_version, '>' );
-		}
-
-		if ( ! empty( $new_version ) ) {
-			if ( ! empty( $remote_version ) && version_compare( $new_version, $remote_version, '=' ) ) {
-				$selected_source = 'remote';
-			} elseif ( ! empty( $option_version ) && version_compare( $new_version, $option_version, '=' ) ) {
-				$selected_source = 'option';
-			}
-		} elseif ( ! empty( $remote_version ) || ! empty( $option_version ) ) {
-			if ( ! empty( $remote_version ) && ( empty( $option_version ) || version_compare( $remote_version, $option_version, '>=' ) ) ) {
-				$selected_source = 'remote';
-			} else {
-				$selected_source = 'option';
-			}
-		}
-
-		$selected_package = $package;
-		if ( empty( $selected_package ) ) {
-			if ( 'remote' === $selected_source ) {
-				$selected_package = $remote_package;
-			} elseif ( 'option' === $selected_source ) {
-				$selected_package = $option_package;
-			}
-		}
-
 		return $this->success_response(
 			array(
-				'current_version'  => $current_version,
-				'update_available' => $update_available,
-				'new_version'      => $new_version,
-				'has_package'      => ! empty( $selected_package ),
-				'source'           => $selected_source,
-				'option_version'   => $option_version,
-				'remote_version'   => $remote_version,
+				'current_version'  => $state['current_version'],
+				'update_available' => $state['update_available'],
+				'new_version'      => $state['update_available'] ? $state['selected_version'] : null,
+				'has_package'      => ! empty( $state['package'] ),
+				'source'           => $state['source'],
+				'option_version'   => $state['option_version'],
+				'remote_version'   => $state['remote_version'],
+				'reason'           => $state['reason'],
 			)
 		);
+	}
+
+	/**
+	 * Explain why no update is being installed.
+	 *
+	 * "No update available" is the same sentence whether the site is genuinely
+	 * current or the manifest was unreachable or rejected — which made #716
+	 * impossible to diagnose from the response alone.
+	 *
+	 * @param array $state Update state from Mcpwp_Updater::get_update_state().
+	 * @return string Human-readable explanation.
+	 */
+	private function describe_no_update( array $state ) {
+		switch ( $state['reason'] ) {
+			case 'already_current':
+				return __( 'Already running the latest version.', 'mcpwp' );
+
+			case 'version_url_not_https':
+				return __( 'The configured mcpwp_version_url is not HTTPS, so the update manifest was not fetched.', 'mcpwp' );
+
+			case 'manifest_fetch_failed':
+				return __( 'The update manifest could not be fetched. Check outbound HTTPS access from this site.', 'mcpwp' );
+
+			case 'manifest_invalid':
+				return __( 'The update manifest is missing a version or download_url.', 'mcpwp' );
+
+			case 'package_host_not_trusted':
+				return __( 'The manifest download_url host is not in the trusted update allowlist, so the package was rejected.', 'mcpwp' );
+
+			default:
+				return __( 'No update available.', 'mcpwp' );
+		}
 	}
 
 	public function trigger_update( $request ) {
@@ -330,12 +285,13 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 				return $this->error_response( 'untrusted_package', __( 'The package_url host is not in the trusted update allowlist.', 'mcpwp' ), 400 );
 			}
 
-			$inject              = new stdClass();
-			$inject->slug        = 'mcpwp';
-			$inject->plugin      = $plugin_file;
-			$inject->new_version = '999.0.0';
-			$inject->package     = esc_url_raw( $package_url );
-			$update_plugins->response[ $plugin_file ] = $inject;
+			// Flagged as caller-owned so Mcpwp_Updater::check_for_update() — which
+			// re-enters on set_site_transient() — does not overwrite this forced
+			// entry with the manifest version.
+			$update_plugins->response[ $plugin_file ] = Mcpwp_Updater::instance()->build_forced_entry(
+				esc_url_raw( $package_url ),
+				'999.0.0'
+			);
 			set_site_transient( 'update_plugins', $update_plugins );
 
 			$upgrader = new Plugin_Upgrader( new Automatic_Upgrader_Skin() );
@@ -364,34 +320,55 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 			);
 		}
 
-		// Standard flow: check for updates via WP transient.
+		// Standard flow. The manifest is authoritative — WordPress's transient is
+		// only populated when core's own api.wordpress.org request succeeds, and
+		// depending on it stranded sites on outdated releases (#716).
 		delete_site_transient( 'update_plugins' );
 		delete_transient( 'mcpwp_update_check' );
+
+		$updater = Mcpwp_Updater::instance();
+		$state   = $updater->get_update_state( true );
 
 		if ( function_exists( 'wp_update_plugins' ) ) {
 			wp_update_plugins();
 		}
 
-		$update_plugins = get_site_transient( 'update_plugins' );
-
-		if ( empty( $update_plugins->response[ $plugin_file ] ) ) {
+		if ( ! $state['update_available'] ) {
 			return $this->success_response(
 				array(
-					'updated' => false,
-					'message' => __( 'No update available.', 'mcpwp' ),
-					'version' => defined( 'MCPWP_VERSION' ) ? MCPWP_VERSION : null,
+					'updated'        => false,
+					'message'        => $this->describe_no_update( $state ),
+					'reason'         => $state['reason'],
+					'version'        => $state['current_version'],
+					'remote_version' => $state['remote_version'],
 				)
 			);
 		}
 
-		$plugin_update = $update_plugins->response[ $plugin_file ];
-		if ( empty( $plugin_update->package ) ) {
+		if ( empty( $state['package'] ) ) {
 			return $this->error_response(
 				'no_package',
 				__( 'Update package URL is not available.', 'mcpwp' ),
 				400
 			);
 		}
+
+		// Core may have left the transient without an entry for this plugin (its
+		// own update request can fail independently of ours). Plugin_Upgrader
+		// reads the package from that transient, so seed it from the manifest.
+		$update_plugins = get_site_transient( 'update_plugins' );
+		if ( ! is_object( $update_plugins ) ) {
+			$update_plugins = new stdClass();
+		}
+		if ( ! isset( $update_plugins->response ) || ! is_array( $update_plugins->response ) ) {
+			$update_plugins->response = array();
+		}
+
+		$update_plugins->response[ $plugin_file ] = $updater->build_forced_entry(
+			$state['package'],
+			$state['selected_version']
+		);
+		set_site_transient( 'update_plugins', $update_plugins );
 
 		$upgrader = new Plugin_Upgrader( new Automatic_Upgrader_Skin() );
 		$result   = $upgrader->upgrade( $plugin_file );

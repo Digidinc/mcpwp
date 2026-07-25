@@ -448,7 +448,7 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 
 	// Self-hosted update checker (excluded from WP.org builds).
 	if ( class_exists( 'Mcpwp_Updater' ) ) {
-		new Mcpwp_Updater();
+		Mcpwp_Updater::instance();
 	}
 
 	}
