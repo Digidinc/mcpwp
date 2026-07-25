@@ -153,6 +153,11 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 
 == Changelog ==
 
+= 3.8.0 =
+* feat: **updater:** make update-channel failures loud at every layer ([#719](https://github.com/Mumega-com/mcpwp/issues/719))
+* fix: tool schema item types ([#707](https://github.com/Mumega-com/mcpwp/issues/707)) and staging environment detection ([#710](https://github.com/Mumega-com/mcpwp/issues/710)) ([#713](https://github.com/Mumega-com/mcpwp/issues/713))
+* fix: **updater:** resolve updates from the plugin manifest, not the WP.org transient ([#718](https://github.com/Mumega-com/mcpwp/issues/718))
+
 = 3.7.2 =
 * fix: **security:** fold route case before every authorization decision ([#711](https://github.com/Mumega-com/mcpwp/issues/711))
 
