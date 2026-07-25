@@ -138,6 +138,20 @@ Release PRs get **no CI** — GitHub does not trigger workflows for `GITHUB_TOKE
 4. Downloads zip from `download_url` and installs via `Plugin_Upgrader`
 5. `wp_trigger_update` also accepts `package_url` param for forced installs
 
+**The manifest is authoritative — never WordPress's `update_plugins` transient.**
+`Mcpwp_Updater::get_update_state()` is the single source of truth for "is there an update", and both
+`/update` endpoints read it. Core only populates that transient when *its own* request to
+api.wordpress.org succeeds; when that fails it still fires
+`pre_set_site_transient_update_plugins` but with no `checked` property at all. Inferring the answer
+from the transient therefore stranded sites on outdated releases — including a security patch (#716).
+
+A declined update now returns a `reason` (`already_current`, `manifest_fetch_failed`,
+`version_url_not_https`, `manifest_invalid`, `package_host_not_trusted`) instead of a bare
+"No update available", which is otherwise indistinguishable from a broken channel.
+
+Transient entries this plugin owns carry `Mcpwp_Updater::FORCED_PACKAGE_FLAG`; `check_for_update()`
+leaves those alone so a `package_url` install is not reverted to the manifest version.
+
 ### Update Notes
 
 - Canonical release sources are the `mumega.com` static manifest and ZIP
