@@ -153,6 +153,9 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 
 == Changelog ==
 
+= 3.7.2 =
+* fix: **security:** fold route case before every authorization decision ([#711](https://github.com/Mumega-com/mcpwp/issues/711))
+
 = 3.7.1 =
 * feat: **admin:** redesign admin UI to Claude Design Control Room mockup (3.6.5)
 * feat: allow extensions to raise custom MCP tool scope ([#654](https://github.com/Mumega-com/mcpwp/issues/654))
