@@ -136,18 +136,22 @@ trait Mcpwp_Free_Tools_Site_Trait {
 				'tags' => array(
 					'type'        => 'array',
 					'description' => 'Array of short tags.',
+					'items'       => array( 'type' => 'string' ),
 				),
 				'must_keep' => array(
 					'type'        => 'array',
 					'description' => 'Array of elements that should be preserved.',
+					'items'       => array( 'type' => 'string' ),
 				),
 				'avoid' => array(
 					'type'        => 'array',
 					'description' => 'Array of design choices to avoid when recreating this reference.',
+					'items'       => array( 'type' => 'string' ),
 				),
 				'section_outline' => array(
 					'type'        => 'array',
 					'description' => 'Ordered list of sections inferred from the design.',
+					'items'       => array( 'type' => 'string' ),
 				),
 				'source_type' => array(
 					'type'        => 'string',
@@ -192,26 +196,32 @@ trait Mcpwp_Free_Tools_Site_Trait {
 				'tags' => array(
 					'type'        => 'array',
 					'description' => 'Array of short tags.',
+					'items'       => array( 'type' => 'string' ),
 				),
 				'must_keep' => array(
 					'type'        => 'array',
 					'description' => 'Array of design requirements to preserve.',
+					'items'       => array( 'type' => 'string' ),
 				),
 				'avoid' => array(
 					'type'        => 'array',
 					'description' => 'Array of design constraints to avoid.',
+					'items'       => array( 'type' => 'string' ),
 				),
 				'section_outline' => array(
 					'type'        => 'array',
 					'description' => 'Ordered section list.',
+					'items'       => array( 'type' => 'string' ),
 				),
 				'linked_archetype_ids' => array(
 					'type'        => 'array',
 					'description' => 'Array of related Elementor archetype template IDs.',
+					'items'       => array( 'type' => 'integer' ),
 				),
 				'linked_part_ids' => array(
 					'type'        => 'array',
 					'description' => 'Array of related Elementor part template IDs.',
+					'items'       => array( 'type' => 'integer' ),
 				),
 			)
 		);
@@ -733,6 +743,19 @@ trait Mcpwp_Free_Tools_Site_Trait {
 					'type'        => 'array',
 					'description' => 'Rows with date, url or page, query, clicks, impressions, ctr, and position.',
 					'required'    => true,
+					'items'       => array(
+						'type'       => 'object',
+						'properties' => array(
+							'date'        => array( 'type' => 'string', 'description' => 'Row date (any parseable date format).' ),
+							'url'         => array( 'type' => 'string', 'description' => 'Page URL. Either url or page is required.' ),
+							'page'        => array( 'type' => 'string', 'description' => 'Alternate key for the page URL, used if url is absent.' ),
+							'query'       => array( 'type' => 'string', 'description' => 'Search query text.' ),
+							'clicks'      => array( 'type' => 'integer', 'description' => 'Click count.' ),
+							'impressions' => array( 'type' => 'integer', 'description' => 'Impression count.' ),
+							'ctr'         => array( 'type' => 'number', 'description' => 'Click-through rate (0-1). Derived from clicks/impressions if omitted.' ),
+							'position'    => array( 'type' => 'number', 'description' => 'Average search position.' ),
+						),
+					),
 				),
 			)
 		);
@@ -1082,6 +1105,15 @@ trait Mcpwp_Free_Tools_Site_Trait {
 					'type'        => 'array',
 					'description' => 'Array of {id, position, parent_id} objects',
 					'required'    => true,
+					'items'       => array(
+						'type'       => 'object',
+						'properties' => array(
+							'id'        => array( 'type' => 'integer', 'description' => 'Menu item ID to update.' ),
+							'position'  => array( 'type' => 'integer', 'description' => 'New menu order position.' ),
+							'parent_id' => array( 'type' => 'integer', 'description' => 'New parent menu item ID (0 for top level).' ),
+						),
+						'required'   => array( 'id' ),
+					),
 				),
 			)
 		);

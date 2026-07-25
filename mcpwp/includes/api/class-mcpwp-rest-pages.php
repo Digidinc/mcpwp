@@ -566,8 +566,11 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 			return $this->error_response( 'too_many_pages', __( 'Maximum 50 pages per batch.', 'mcpwp' ), 400 );
 		}
 
+		$normalized = $this->normalize_bulk_items( $pages_data, 'page' );
+		$pages_data = $normalized['items'];
+
 		$created = array();
-		$errors  = array();
+		$errors  = $normalized['errors'];
 
 		foreach ( $pages_data as $index => $page_item ) {
 			if ( empty( $page_item['title'] ) ) {
@@ -620,8 +623,11 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 			return $this->error_response( 'too_many_pages', __( 'Maximum 50 pages per batch.', 'mcpwp' ), 400 );
 		}
 
+		$normalized = $this->normalize_bulk_items( $pages_data, 'page' );
+		$pages_data = $normalized['items'];
+
 		$updated = array();
-		$errors  = array();
+		$errors  = $normalized['errors'];
 
 		foreach ( $pages_data as $index => $page_item ) {
 			if ( empty( $page_item['id'] ) ) {

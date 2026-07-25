@@ -46,6 +46,7 @@ trait Mcpwp_Free_Tools_Blocks_Trait {
 				'blocks' => array(
 					'type'        => 'array',
 					'description' => 'Array of block objects with blockName, attrs, innerBlocks, and innerContent',
+					'items'       => array( 'type' => 'object' ),
 				),
 				'content' => array(
 					'type'        => 'string',
@@ -87,6 +88,7 @@ trait Mcpwp_Free_Tools_Blocks_Trait {
 				'blocks' => array(
 					'type'        => 'array',
 					'description' => 'Replacement section as parsed block objects.',
+					'items'       => array( 'type' => 'object' ),
 				),
 				'approval_required' => array(
 					'type'        => 'boolean',
@@ -131,6 +133,7 @@ trait Mcpwp_Free_Tools_Blocks_Trait {
 					'type'        => 'array',
 					'description' => 'Array of parsed block objects with blockName, attrs, innerBlocks, innerHTML, and innerContent.',
 					'required'    => true,
+					'items'       => array( 'type' => 'object' ),
 				),
 			)
 		);
@@ -146,6 +149,7 @@ trait Mcpwp_Free_Tools_Blocks_Trait {
 				'blocks' => array(
 					'type'        => 'array',
 					'description' => 'Array of parsed block objects to serialize and validate.',
+					'items'       => array( 'type' => 'object' ),
 				),
 			)
 		);

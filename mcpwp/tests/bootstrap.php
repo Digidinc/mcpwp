@@ -456,7 +456,27 @@ function current_time($type)
 
 function get_site_url()
 {
-    return 'https://example.com';
+    return isset($GLOBALS['mcpwp_test_site_url']) && '' !== $GLOBALS['mcpwp_test_site_url']
+        ? $GLOBALS['mcpwp_test_site_url']
+        : 'https://example.com';
+}
+
+if (! function_exists('wp_get_environment_type')) {
+    function wp_get_environment_type()
+    {
+        $env = '';
+
+        if (defined('WP_ENVIRONMENT_TYPE') && '' !== (string) constant('WP_ENVIRONMENT_TYPE')) {
+            $env = (string) constant('WP_ENVIRONMENT_TYPE');
+        } elseif (false !== getenv('WP_ENVIRONMENT_TYPE')) {
+            $env = (string) getenv('WP_ENVIRONMENT_TYPE');
+        }
+
+        // Mirrors core: anything outside the known set falls back to production.
+        return in_array($env, array('local', 'development', 'staging', 'production'), true)
+            ? $env
+            : 'production';
+    }
 }
 
 if (! function_exists('home_url')) {

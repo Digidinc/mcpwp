@@ -94,6 +94,7 @@ trait Mcpwp_Free_Tools_Elementor_Trait {
 				'delete_settings' => array(
 					'type'        => 'array',
 					'description' => 'Setting keys to remove from the element',
+					'items'       => array( 'type' => 'string' ),
 				),
 			)
 		);
@@ -119,6 +120,7 @@ trait Mcpwp_Free_Tools_Elementor_Trait {
 				'delete_settings' => array(
 					'type'        => 'array',
 					'description' => 'Setting keys to remove from the widget',
+					'items'       => array( 'type' => 'string' ),
 				),
 			)
 		);
@@ -196,6 +198,26 @@ trait Mcpwp_Free_Tools_Elementor_Trait {
 					'type'        => 'array',
 					'description' => 'Array of operations. Each: {op: "add"|"remove"|"replace"|"settings", element_id: "...", element: {...}, position: "...", settings: {...}, delete_settings: [...]}',
 					'required'    => true,
+					'items'       => array(
+						'type'       => 'object',
+						'properties' => array(
+							'op'              => array(
+								'type'        => 'string',
+								'description' => 'Operation type',
+								'enum'        => array( 'add', 'remove', 'replace', 'settings' ),
+							),
+							'element_id'      => array( 'type' => 'string', 'description' => 'Target element ID (required for remove, replace, settings)' ),
+							'element'         => array( 'type' => 'object', 'description' => 'New/replacement element object (required for add, replace)' ),
+							'position'        => array( 'type' => 'string', 'description' => 'Insert position for add: start, end, before:{id}, after:{id}' ),
+							'settings'        => array( 'type' => 'object', 'description' => 'Settings to merge (for settings op)' ),
+							'delete_settings' => array(
+								'type'        => 'array',
+								'description' => 'Setting keys to remove (for settings op)',
+								'items'       => array( 'type' => 'string' ),
+							),
+						),
+						'required'   => array( 'op' ),
+					),
 				),
 			)
 		);

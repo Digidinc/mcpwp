@@ -21,6 +21,27 @@ if ( ! defined( 'ABSPATH' ) ) {
 abstract class Mcpwp_MCP_Tool_Registry {
 
 	/**
+	 * JSON Schema constraint keys copied verbatim from a tool's parameter
+	 * definition into the emitted inputSchema.
+	 *
+	 * `type`, `description`, `default` and `required` are handled separately
+	 * because they are not pass-through.
+	 *
+	 * @var string[]
+	 */
+	const SCHEMA_CONSTRAINT_KEYS = array(
+		'items',
+		'enum',
+		'properties',
+		'format',
+		'minimum',
+		'maximum',
+		'minItems',
+		'maxItems',
+		'additionalProperties',
+	);
+
+	/**
 	 * Get tool definitions.
 	 *
 	 * Subclasses must implement this to return an array of tool definitions.
@@ -58,6 +79,16 @@ abstract class Mcpwp_MCP_Tool_Registry {
 
 			if ( isset( $prop_def['default'] ) ) {
 				$properties[ $prop_name ]['default'] = $prop_def['default'];
+			}
+
+			// Carry the remaining JSON Schema constraints through verbatim. Dropping
+			// them here made every authored `items`/`enum` invisible to clients, so an
+			// array parameter advertised no item type and callers sent whatever they
+			// liked — see #707, where JSON strings reached a handler expecting objects.
+			foreach ( self::SCHEMA_CONSTRAINT_KEYS as $constraint ) {
+				if ( isset( $prop_def[ $constraint ] ) ) {
+					$properties[ $prop_name ][ $constraint ] = $prop_def[ $constraint ];
+				}
 			}
 
 			if ( ! empty( $prop_def['required'] ) ) {

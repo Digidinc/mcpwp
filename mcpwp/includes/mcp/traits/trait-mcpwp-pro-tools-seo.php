@@ -25,6 +25,7 @@ trait Mcpwp_Pro_Tools_Seo_Trait {
 			array(
 				'urls'   => array(
 					'type'        => 'array',
+					'items'       => array( 'type' => 'string' ),
 					'description' => 'Array of URLs to submit for indexing',
 					'required'    => true,
 				),
@@ -242,10 +243,42 @@ trait Mcpwp_Pro_Tools_Seo_Trait {
 			array(
 				'updates' => array(
 					'type'        => 'array',
+					'items'       => array(
+						'type'       => 'object',
+						'properties' => array(
+							'id'                  => array( 'type' => 'integer', 'description' => 'Post/page ID' ),
+							'title'               => array( 'type' => 'string', 'description' => 'SEO title' ),
+							'description'         => array( 'type' => 'string', 'description' => 'SEO meta description' ),
+							'focus_keyword'       => array( 'type' => 'string', 'description' => 'Focus keyword' ),
+							'canonical_url'       => array( 'type' => 'string', 'description' => 'Canonical URL' ),
+							'noindex'             => array( 'type' => 'boolean', 'description' => 'Set to true to add noindex meta robots tag' ),
+							'nofollow'            => array( 'type' => 'boolean', 'description' => 'Set to true to add nofollow meta robots tag' ),
+							'og_title'            => array( 'type' => 'string', 'description' => 'Open Graph title' ),
+							'og_description'      => array( 'type' => 'string', 'description' => 'Open Graph description' ),
+							'og_image'            => array( 'type' => 'string', 'description' => 'Open Graph image URL' ),
+						),
+						'required'   => array( 'id' ),
+					),
 					'description' => 'Array of objects. Each must have id (post/page ID) plus any SEO fields: title, description, focus_keyword, canonical_url, noindex (bool), nofollow (bool), og_title, og_description, og_image',
 				),
 				'items' => array(
 					'type'        => 'array',
+					'items'       => array(
+						'type'       => 'object',
+						'properties' => array(
+							'id'                  => array( 'type' => 'integer', 'description' => 'Post/page ID' ),
+							'title'               => array( 'type' => 'string', 'description' => 'SEO title' ),
+							'description'         => array( 'type' => 'string', 'description' => 'SEO meta description' ),
+							'focus_keyword'       => array( 'type' => 'string', 'description' => 'Focus keyword' ),
+							'canonical_url'       => array( 'type' => 'string', 'description' => 'Canonical URL' ),
+							'noindex'             => array( 'type' => 'boolean', 'description' => 'Set to true to add noindex meta robots tag' ),
+							'nofollow'            => array( 'type' => 'boolean', 'description' => 'Set to true to add nofollow meta robots tag' ),
+							'og_title'            => array( 'type' => 'string', 'description' => 'Open Graph title' ),
+							'og_description'      => array( 'type' => 'string', 'description' => 'Open Graph description' ),
+							'og_image'            => array( 'type' => 'string', 'description' => 'Open Graph image URL' ),
+						),
+						'required'   => array( 'id' ),
+					),
 					'description' => 'Alias for updates. Accepted for compatibility with the SEO guide examples.',
 				),
 			)

@@ -162,10 +162,12 @@ trait Mcpwp_Pro_Tools_Commerce_Trait {
 				),
 				'categories' => array(
 					'type'        => 'array',
+					'items'       => array( 'type' => array( 'integer', 'string' ) ),
 					'description' => 'Default categories',
 				),
 				'tags' => array(
 					'type'        => 'array',
+					'items'       => array( 'type' => array( 'integer', 'string' ) ),
 					'description' => 'Default tags',
 				),
 				'virtual' => array(
@@ -218,10 +220,12 @@ trait Mcpwp_Pro_Tools_Commerce_Trait {
 				),
 				'categories' => array(
 					'type'        => 'array',
+					'items'       => array( 'type' => array( 'integer', 'string' ) ),
 					'description' => 'Optional category override',
 				),
 				'tags' => array(
 					'type'        => 'array',
+					'items'       => array( 'type' => array( 'integer', 'string' ) ),
 					'description' => 'Optional tag override',
 				),
 			)
@@ -278,10 +282,12 @@ trait Mcpwp_Pro_Tools_Commerce_Trait {
 				),
 				'categories'        => array(
 					'type'        => 'array',
+					'items'       => array( 'type' => array( 'integer', 'string' ) ),
 					'description' => 'Category names or IDs (auto-creates if name not found)',
 				),
 				'tags'              => array(
 					'type'        => 'array',
+					'items'       => array( 'type' => array( 'integer', 'string' ) ),
 					'description' => 'Tag names or IDs (auto-creates if name not found)',
 				),
 				'weight'            => array(
@@ -306,6 +312,7 @@ trait Mcpwp_Pro_Tools_Commerce_Trait {
 				),
 				'gallery_image_ids' => array(
 					'type'        => 'array',
+					'items'       => array( 'type' => 'integer' ),
 					'description' => 'Gallery image attachment IDs',
 				),
 				'virtual'           => array(
@@ -370,10 +377,12 @@ trait Mcpwp_Pro_Tools_Commerce_Trait {
 				),
 				'categories'        => array(
 					'type'        => 'array',
+					'items'       => array( 'type' => array( 'integer', 'string' ) ),
 					'description' => 'Category names or IDs (replaces existing)',
 				),
 				'tags'              => array(
 					'type'        => 'array',
+					'items'       => array( 'type' => array( 'integer', 'string' ) ),
 					'description' => 'Tag names or IDs (replaces existing)',
 				),
 				'weight'            => array(
@@ -386,6 +395,7 @@ trait Mcpwp_Pro_Tools_Commerce_Trait {
 				),
 				'gallery_image_ids' => array(
 					'type'        => 'array',
+					'items'       => array( 'type' => 'integer' ),
 					'description' => 'Gallery image attachment IDs',
 				),
 				'virtual'           => array(
@@ -710,18 +720,27 @@ trait Mcpwp_Pro_Tools_Commerce_Trait {
 				),
 				'requirements'     => array(
 					'type'        => 'array',
+					'items'       => array( 'type' => 'string' ),
 					'description' => 'Array of prerequisite strings',
 				),
 				'target_audiences' => array(
 					'type'        => 'array',
+					'items'       => array( 'type' => 'string' ),
 					'description' => 'Array of target audience strings',
 				),
 				'key_features'     => array(
 					'type'        => 'array',
+					'items'       => array( 'type' => 'string' ),
 					'description' => 'Array of key feature strings',
 				),
 				'faqs'             => array(
 					'type'        => 'array',
+					'items'       => array(
+						'type'     => 'array',
+						'items'    => array( 'type' => 'string' ),
+						'minItems' => 2,
+						'maxItems' => 2,
+					),
 					'description' => 'Array of [question, answer] pairs',
 				),
 				'featured_review'  => array(
@@ -730,6 +749,7 @@ trait Mcpwp_Pro_Tools_Commerce_Trait {
 				),
 				'categories'       => array(
 					'type'        => 'array',
+					'items'       => array( 'type' => array( 'integer', 'string' ) ),
 					'description' => 'Array of category names or IDs',
 				),
 			)
@@ -778,18 +798,27 @@ trait Mcpwp_Pro_Tools_Commerce_Trait {
 				),
 				'requirements'     => array(
 					'type'        => 'array',
+					'items'       => array( 'type' => 'string' ),
 					'description' => 'Array of prerequisite strings',
 				),
 				'target_audiences' => array(
 					'type'        => 'array',
+					'items'       => array( 'type' => 'string' ),
 					'description' => 'Array of target audience strings',
 				),
 				'key_features'     => array(
 					'type'        => 'array',
+					'items'       => array( 'type' => 'string' ),
 					'description' => 'Array of key feature strings',
 				),
 				'faqs'             => array(
 					'type'        => 'array',
+					'items'       => array(
+						'type'     => 'array',
+						'items'    => array( 'type' => 'string' ),
+						'minItems' => 2,
+						'maxItems' => 2,
+					),
 					'description' => 'Array of [question, answer] pairs',
 				),
 				'featured_review'  => array(
@@ -798,6 +827,7 @@ trait Mcpwp_Pro_Tools_Commerce_Trait {
 				),
 				'categories'       => array(
 					'type'        => 'array',
+					'items'       => array( 'type' => array( 'integer', 'string' ) ),
 					'description' => 'Array of category names or IDs',
 				),
 			)
@@ -826,6 +856,25 @@ trait Mcpwp_Pro_Tools_Commerce_Trait {
 				),
 				'sections' => array(
 					'type'        => 'array',
+					'items'       => array(
+						'type'       => 'object',
+						'properties' => array(
+							'name'        => array( 'type' => 'string', 'description' => 'Section name' ),
+							'description' => array( 'type' => 'string', 'description' => 'Section description' ),
+							'items'       => array(
+								'type'        => 'array',
+								'description' => 'Lesson/quiz items in this section',
+								'items'       => array(
+									'type'       => 'object',
+									'properties' => array(
+										'id'   => array( 'type' => 'integer', 'description' => 'Lesson or quiz post ID' ),
+										'type' => array( 'type' => 'string', 'description' => 'Item type: lp_lesson or lp_quiz' ),
+									),
+									'required'   => array( 'id' ),
+								),
+							),
+						),
+					),
 					'description' => 'Array of section objects: {name, description, items: [{id, type: "lp_lesson"|"lp_quiz"}]}',
 					'required'    => true,
 				),

@@ -6,6 +6,7 @@
       <file>./unit/test-staging-scope.php</file>
       <file>./unit/test-staging-self-approval.php</file>
       <file>./unit/test-route-case-authorization.php</file>
+      <file>./unit/test-staging-environment-detection.php</file>
       <file>./unit/test-admin-scope-matrix.php</file>
       <file>./unit/test-user-meta-denylist.php</file>
     </testsuite>
