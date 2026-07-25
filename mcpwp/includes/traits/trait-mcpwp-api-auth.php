@@ -409,7 +409,7 @@ trait Mcpwp_Api_Auth {
 			return true;
 		}
 
-		$route    = method_exists( $request, 'get_route' ) ? (string) $request->get_route() : '';
+		$route    = $this->normalize_route_for_authorization( method_exists( $request, 'get_route' ) ? (string) $request->get_route() : '' );
 		$category = $this->get_category_for_route( $route );
 
 		// Route is not category-gated — always allow.
@@ -1023,7 +1023,7 @@ trait Mcpwp_Api_Auth {
 	 * @return string Scope name: read|write|admin.
 	 */
 	protected function get_required_scope_for_request( $request ) {
-		$route    = method_exists( $request, 'get_route' ) ? (string) $request->get_route() : '';
+		$route    = $this->normalize_route_for_authorization( method_exists( $request, 'get_route' ) ? (string) $request->get_route() : '' );
 		$method   = method_exists( $request, 'get_method' ) ? strtoupper( (string) $request->get_method() ) : 'GET';
 		$is_write = ! in_array( $method, array( 'GET', 'HEAD', 'OPTIONS' ), true );
 
@@ -1036,21 +1036,21 @@ trait Mcpwp_Api_Auth {
 		// scope so a plain write key cannot approve/apply its own pending request.
 		// Listing/reading approvals stays read; creating one (via the
 		// blocks/content-graph/staging controllers) stays at the write default.
-		if ( preg_match( '#^/mcpwp/v1/approvals/[^/]+/(approve|reject|apply|rollback)(/|$)#', $route ) ) {
+		if ( preg_match( '#^/mcpwp/v1/approvals/[^/]+/(approve|reject|apply|rollback)(/|$)#i', $route ) ) {
 			return 'admin';
 		}
 
 		// Deploying a stored site blueprint replays a full page/menu/option set onto
 		// the live site — a destructive, high-blast-radius op. Require admin; saving,
 		// listing, and extracting blueprints stay at their read/write defaults.
-		if ( preg_match( '#^/mcpwp/v1/site-blueprints/[^/]+/deploy(/|$)#', $route ) ) {
+		if ( preg_match( '#^/mcpwp/v1/site-blueprints/[^/]+/deploy(/|$)#i', $route ) ) {
 			return 'admin';
 		}
 
 		// Figma design-token sync makes an external Figma API call and overwrites
 		// the cached mcpwp_figma_design_tokens option (read by a companion theme) —
 		// require admin. Reading the cached tokens stays at the read default.
-		if ( preg_match( '#^/mcpwp/v1/figma/design-tokens/sync(/|$)#', $route ) ) {
+		if ( preg_match( '#^/mcpwp/v1/figma/design-tokens/sync(/|$)#i', $route ) ) {
 			return 'admin';
 		}
 
@@ -1062,7 +1062,7 @@ trait Mcpwp_Api_Auth {
 				$this->route_matches( $route, '/mcpwp/v1/integrations/configure' )
 				|| $this->route_matches( $route, '/mcpwp/v1/integrations/remove' )
 				|| $this->route_matches( $route, '/mcpwp/v1/integrations/test' )
-				|| preg_match( '#^/mcpwp/v1/integrations/providers/[^/]+/(key|test)(/|$)#', $route )
+				|| preg_match( '#^/mcpwp/v1/integrations/providers/[^/]+/(key|test)(/|$)#i', $route )
 			) {
 				return 'admin';
 			}
@@ -1152,6 +1152,33 @@ trait Mcpwp_Api_Auth {
 	 */
 	protected function route_matches( $route, $prefix ) {
 		return $route === $prefix || 0 === strpos( $route, $prefix . '/' );
+	}
+
+	/**
+	 * Fold a request route to the form the authorization tables are written in.
+	 *
+	 * WordPress compiles route patterns with `@^…$@i` and never rewrites
+	 * $request->get_route(), so `POST /mcpwp/v1/Api-Keys` dispatches to the
+	 * `/api-keys` handler while every case-sensitive comparison in this trait
+	 * misses it. A route that misses the admin table falls through to the
+	 * write/read default, which is how a write-scoped credential reached an
+	 * admin-only endpoint. Every route that feeds an authorization decision
+	 * must come through here first.
+	 *
+	 * The fold is ASCII-only on purpose: strtolower() consults the C locale
+	 * below PHP 8.2, and this plugin supports 7.4. Under a Turkish LC_CTYPE it
+	 * maps "I" to a dotless "ı", which would match none of the prefixes below
+	 * and reopen exactly this hole.
+	 *
+	 * @param string $route Raw request route.
+	 * @return string Route folded to lower case.
+	 */
+	protected function normalize_route_for_authorization( $route ) {
+		return strtr(
+			(string) $route,
+			'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
+			'abcdefghijklmnopqrstuvwxyz'
+		);
 	}
 
 	/**
