@@ -548,6 +548,7 @@ class Mcpwp_Settings {
 			'alerts_5xx_threshold'    => 5,
 			'alerts_auth_threshold'   => 10,
 			'analytics_enabled'       => false,
+			'environment_type'        => 'auto',
 		);
 	}
 
@@ -667,6 +668,22 @@ class Mcpwp_Settings {
 			: 10;
 
 		$sanitized['analytics_enabled'] = ! empty( $input['analytics_enabled'] );
+
+		// Environment declaration. 'auto' lets Mcpwp_Staging_Adapter_Generic work it
+		// out from WP_ENVIRONMENT_TYPE and then, as a labelled guess, the site URL.
+		// Declaring it here is what makes the answer authoritative — and an
+		// authoritative 'staging' is the only thing that lowers the push-to-live
+		// approval gate, so an absent key must keep the operator's stored choice
+		// rather than silently reverting to 'auto'.
+		$environment_type = isset( $input['environment_type'] )
+			? (string) $input['environment_type']
+			: ( isset( $current['environment_type'] ) ? (string) $current['environment_type'] : 'auto' );
+
+		$sanitized['environment_type'] = in_array(
+			$environment_type,
+			array( 'auto', 'production', 'staging', 'development', 'local' ),
+			true
+		) ? $environment_type : 'auto';
 
 		// Screenshot worker (legacy — now managed via Integrations page, preserved for backward compat).
 		$sanitized['screenshot_worker_url'] = isset( $current['screenshot_worker_url'] ) ? $current['screenshot_worker_url'] : '';

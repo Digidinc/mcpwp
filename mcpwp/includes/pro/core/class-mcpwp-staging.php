@@ -538,17 +538,168 @@ class Mcpwp_Staging_Adapter_Generic implements Mcpwp_Staging_Adapter_Interface {
 		return true;
 	}
 
+	/**
+	 * URL segments that mark an environment as non-production.
+	 *
+	 * Matched against whole segments only — "developers.example.com" is not a
+	 * dev environment and must not be flagged as one.
+	 *
+	 * @var string[]
+	 */
+	const NON_PRODUCTION_URL_MARKERS = array(
+		'staging',
+		'stage',
+		'stg',
+		'dev',
+		'development',
+		'test',
+		'testing',
+		'qa',
+		'uat',
+		'sandbox',
+		'preprod',
+		'demo',
+		'local',
+	);
+
+	/**
+	 * Work out what kind of environment this install actually is.
+	 *
+	 * A generic host tells us nothing directly, so this walks three sources in
+	 * descending order of trust. Only the first two are authoritative; the URL
+	 * heuristic is a guess and is labelled as one, because
+	 * Mcpwp_Staging::is_production_env() refuses to lower the push-approval
+	 * gate on a guess.
+	 *
+	 * @return array{type:string,environment_type:string,source:string,authoritative:bool,warning:string}
+	 */
+	public function detect_environment_type(): array {
+		// 1. Operator override in MCPWP settings — always wins.
+		$settings = get_option( 'mcpwp_settings', array() );
+		$override = is_array( $settings ) && ! empty( $settings['environment_type'] )
+			? (string) $settings['environment_type']
+			: 'auto';
+
+		if ( 'auto' !== $override ) {
+			return $this->environment_result( $override, 'setting_override', true, '' );
+		}
+
+		// 2. WordPress' own environment type, but only when it was actually set.
+		//    wp_get_environment_type() answers "production" for an unconfigured
+		//    site, which is indistinguishable from a deliberate declaration.
+		if ( $this->wp_environment_type_is_declared() && function_exists( 'wp_get_environment_type' ) ) {
+			return $this->environment_result( (string) wp_get_environment_type(), 'wp_environment_type', true, '' );
+		}
+
+		// 3. Guess from the site URL. Catches the common path- and subdomain-based
+		//    clones (example.com/staging/5707, staging.example.com) that generic
+		//    hosting gives no other signal for.
+		$marker = $this->non_production_url_marker( (string) get_site_url() );
+
+		if ( '' !== $marker ) {
+			return $this->environment_result(
+				'staging',
+				'url_heuristic',
+				false,
+				sprintf(
+					'Detected from the site URL segment "%s". This is a guess — set WP_ENVIRONMENT_TYPE, or the MCPWP environment_type setting, to declare it. Pushes to this environment are still gated by approval until it is declared.',
+					$marker
+				)
+			);
+		}
+
+		return $this->environment_result( 'production', 'default', false, '' );
+	}
+
+	/**
+	 * Has someone explicitly declared WP_ENVIRONMENT_TYPE?
+	 *
+	 * @return bool
+	 */
+	private function wp_environment_type_is_declared(): bool {
+		if ( defined( 'WP_ENVIRONMENT_TYPE' ) && '' !== (string) constant( 'WP_ENVIRONMENT_TYPE' ) ) {
+			return true;
+		}
+
+		return '' !== (string) getenv( 'WP_ENVIRONMENT_TYPE' );
+	}
+
+	/**
+	 * Find the first non-production marker in a URL's host or path.
+	 *
+	 * @param string $url Site URL.
+	 * @return string The matching marker, or '' when none matches.
+	 */
+	private function non_production_url_marker( string $url ): string {
+		$parts = wp_parse_url( $url );
+		$host  = isset( $parts['host'] ) ? strtolower( (string) $parts['host'] ) : '';
+		$path  = isset( $parts['path'] ) ? strtolower( (string) $parts['path'] ) : '';
+
+		// Hosts split on dots and dashes ("staging-site.example.com"), paths only
+		// on slashes. Splitting path segments on dashes too would read "staging"
+		// out of a perfectly ordinary /dev-tools-category/ product URL.
+		$host_segments = preg_split( '/[.\-_]+/', $host, -1, PREG_SPLIT_NO_EMPTY );
+		$path_segments = preg_split( '#/+#', $path, -1, PREG_SPLIT_NO_EMPTY );
+
+		$segments = array_merge(
+			is_array( $host_segments ) ? $host_segments : array(),
+			is_array( $path_segments ) ? $path_segments : array()
+		);
+
+		foreach ( $segments as $segment ) {
+			if ( in_array( $segment, self::NON_PRODUCTION_URL_MARKERS, true ) ) {
+				return $segment;
+			}
+		}
+
+		return '';
+	}
+
+	/**
+	 * Normalise a raw environment name into the reported shape.
+	 *
+	 * `type` stays in the production|staging vocabulary the other adapters use;
+	 * the precise value (local/development/staging) is kept alongside it.
+	 *
+	 * @param string $raw           Raw environment name.
+	 * @param string $source        How it was determined.
+	 * @param bool   $authoritative Whether the source is an explicit declaration.
+	 * @param string $warning       Warning to surface to the caller.
+	 * @return array{type:string,environment_type:string,source:string,authoritative:bool,warning:string}
+	 */
+	private function environment_result( string $raw, string $source, bool $authoritative, string $warning ): array {
+		$raw = in_array( $raw, array( 'local', 'development', 'staging', 'production' ), true ) ? $raw : 'production';
+
+		return array(
+			'type'             => 'production' === $raw ? 'production' : 'staging',
+			'environment_type' => $raw,
+			'source'           => $source,
+			'authoritative'    => $authoritative,
+			'warning'          => $warning,
+		);
+	}
+
 	/** {@inheritdoc} */
 	public function list_environments(): array {
-		// Generic host has no staging concept — return only the current environment.
-		return array(
-			array(
-				'id'   => 'current',
-				'name' => 'Current environment',
-				'type' => 'production',
-				'url'  => get_site_url(),
-			),
+		$detected = $this->detect_environment_type();
+
+		$environment = array(
+			'id'                 => 'current',
+			'name'               => 'Current environment',
+			'type'               => $detected['type'],
+			'url'                => get_site_url(),
+			'environment_type'   => $detected['environment_type'],
+			'type_source'        => $detected['source'],
+			'type_authoritative' => $detected['authoritative'],
 		);
+
+		if ( '' !== $detected['warning'] ) {
+			$environment['warning'] = $detected['warning'];
+		}
+
+		// Generic hosting exposes no sibling environments — this install is the
+		// only one we can see.
+		return array( $environment );
 	}
 
 	/** {@inheritdoc} */
@@ -747,7 +898,14 @@ class Mcpwp_Staging {
 	}
 
 	/**
-	 * Determine whether a given environment ID is of production type.
+	 * Determine whether a given environment ID must be treated as production.
+	 *
+	 * This is the push-to-live approval gate (see Mcpwp_REST_Staging::push()),
+	 * so it fails closed: an environment only escapes the gate when we are
+	 * *told* it is not production. A heuristic guess — the generic adapter
+	 * reading "staging" out of the site URL — reports type 'staging' for the
+	 * benefit of callers, but still gates, because a wrong guess would silently
+	 * remove a human from a destructive push.
 	 *
 	 * @param array  $environments Environment list from list_environments().
 	 * @param string $env_id       Environment ID to check.
@@ -755,11 +913,20 @@ class Mcpwp_Staging {
 	 */
 	public function is_production_env( array $environments, string $env_id ): bool {
 		foreach ( $environments as $env ) {
-			if ( isset( $env['id'] ) && $env['id'] === $env_id ) {
-				return isset( $env['type'] ) && 'production' === $env['type'];
+			if ( ! isset( $env['id'] ) || $env['id'] !== $env_id ) {
+				continue;
 			}
+
+			if ( ! isset( $env['type'] ) || 'production' === $env['type'] ) {
+				return true;
+			}
+
+			// Non-production by an unconfirmed guess — keep the gate.
+			return array_key_exists( 'type_authoritative', $env ) && ! $env['type_authoritative'];
 		}
-		return false;
+
+		// Unrecognised destination: gate it rather than wave it through.
+		return true;
 	}
 
 	/**
