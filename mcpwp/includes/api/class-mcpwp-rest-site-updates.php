@@ -198,25 +198,7 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 	 * @return string Human-readable explanation.
 	 */
 	private function describe_no_update( array $state ) {
-		switch ( $state['reason'] ) {
-			case 'already_current':
-				return __( 'Already running the latest version.', 'mcpwp' );
-
-			case 'version_url_not_https':
-				return __( 'The configured mcpwp_version_url is not HTTPS, so the update manifest was not fetched.', 'mcpwp' );
-
-			case 'manifest_fetch_failed':
-				return __( 'The update manifest could not be fetched. Check outbound HTTPS access from this site.', 'mcpwp' );
-
-			case 'manifest_invalid':
-				return __( 'The update manifest is missing a version or download_url.', 'mcpwp' );
-
-			case 'package_host_not_trusted':
-				return __( 'The manifest download_url host is not in the trusted update allowlist, so the package was rejected.', 'mcpwp' );
-
-			default:
-				return __( 'No update available.', 'mcpwp' );
-		}
+		return Mcpwp_Updater::describe_reason( isset( $state['reason'] ) ? $state['reason'] : null );
 	}
 
 	public function trigger_update( $request ) {

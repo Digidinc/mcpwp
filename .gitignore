@@ -46,6 +46,7 @@ scripts/*.sh
 !scripts/site-sync.sh
 !scripts/build-wporg.sh
 !scripts/publish_update_release.sh
+!scripts/verify_update_channel.sh
 
 # Test caches
 mcpwp/tests/.phpunit.result.cache

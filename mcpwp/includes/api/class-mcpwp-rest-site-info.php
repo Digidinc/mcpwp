@@ -985,6 +985,12 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 					'items' => $no_thumb,
 				),
 				'active_plugins'          => $plugins_list,
+				// Whether this site can still receive plugin releases. Health
+				// reports that omit it read as green while security updates
+				// are silently unreachable (#716).
+				'update_channel'          => class_exists( 'Mcpwp_Update_Channel_Health' )
+					? Mcpwp_Update_Channel_Health::get_status()
+					: null,
 				'wp_version'              => get_bloginfo( 'version' ),
 				'php_version'             => PHP_VERSION,
 				'permalink_structure'     => get_option( 'permalink_structure' ),

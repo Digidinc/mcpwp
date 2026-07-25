@@ -1,0 +1,121 @@
+name: Update Channel Canary
+
+# The update channel is the only path a security fix has to reach live sites,
+# and every way it breaks is silent from the outside: a stale manifest, a ZIP
+# that 404s, a manifest advertising a version the served package does not
+# contain. Nothing watched it until #716 showed what an undetected break costs.
+#
+# This runs the same verification the publish script runs, on a schedule, and
+# files an issue the moment a channel stops being able to deliver.
+on:
+  schedule:
+    # 06:20 UTC daily — offset off the hour so it is not queued behind the
+    # GitHub-wide cron stampede.
+    - cron: "20 6 * * *"
+  workflow_dispatch: {}
+  pull_request:
+    paths:
+      - "scripts/verify_update_channel.sh"
+      - ".github/workflows/update-channel-canary.yml"
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        channel:
+          - name: canonical
+            url: https://updates.mcpwp.net/version.json
+          - name: legacy
+            url: https://mumega.com/mcp-updates/version.json
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify ${{ matrix.channel.name }} channel
+        id: verify
+        run: |
+          bash scripts/verify_update_channel.sh \
+            --manifest-url "${{ matrix.channel.url }}" \
+            --retries 3 --delay 30 \
+            2>&1 | tee /tmp/verify.log
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### ${{ matrix.channel.name }} — ${{ matrix.channel.url }}"
+            echo ""
+            echo '```'
+            cat /tmp/verify.log 2>/dev/null || echo "(no output)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Only on the scheduled run: a PR or manual run failing is already
+      # visible to whoever triggered it and does not need an issue.
+      - name: File an issue on failure
+        if: failure() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CHANNEL_NAME: ${{ matrix.channel.name }}
+          CHANNEL_URL: ${{ matrix.channel.url }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          export TITLE="Update channel down: ${CHANNEL_NAME} (${CHANNEL_URL})"
+
+          # One issue per channel, reopened and re-commented rather than
+          # duplicated every morning until someone fixes it. gh's --jq takes an
+          # expression only (no --arg), so the title crosses over via env.
+          EXISTING="$(gh issue list --state all --limit 100 \
+            --search '"Update channel down" in:title' \
+            --json number,title \
+            --jq '[.[] | select(.title == env.TITLE)] | first | .number // empty')"
+
+          BODY="$(cat <<EOF
+          The scheduled canary could not verify that this channel can deliver an update.
+
+          **Channel:** \`${CHANNEL_URL}\`
+          **Run:** ${RUN_URL}
+
+          \`\`\`
+          $(cat /tmp/verify.log 2>/dev/null || echo "(no output captured)")
+          \`\`\`
+
+          Until this is green, sites on this channel cannot receive any release,
+          including security releases. Reproduce locally with:
+
+          \`\`\`bash
+          bash scripts/verify_update_channel.sh --manifest-url ${CHANNEL_URL}
+          \`\`\`
+          EOF
+          )"
+
+          if [ -n "$EXISTING" ]; then
+            gh issue reopen "$EXISTING" 2>/dev/null || true
+            gh issue comment "$EXISTING" --body "$BODY"
+          else
+            gh issue create --title "$TITLE" --body "$BODY" --label bug
+          fi
+
+      - name: Close the channel issue when green again
+        if: success() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CHANNEL_NAME: ${{ matrix.channel.name }}
+          CHANNEL_URL: ${{ matrix.channel.url }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          export TITLE="Update channel down: ${CHANNEL_NAME} (${CHANNEL_URL})"
+          OPEN="$(gh issue list --state open --limit 100 \
+            --search '"Update channel down" in:title' \
+            --json number,title \
+            --jq '[.[] | select(.title == env.TITLE)] | first | .number // empty')"
+          if [ -n "$OPEN" ]; then
+            gh issue close "$OPEN" --comment "Canary is green again — ${RUN_URL}"
+          fi

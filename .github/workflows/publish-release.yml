@@ -9,8 +9,18 @@ name: Publish Release (Canonical R2)
 # access (sudo cp), which this workflow doesn't have. Un-migrated legacy
 # sites still need a manual publish from a host with that access until the
 # legacy channel is retired (see CLAUDE.md).
+# Called automatically by release-please.yml the moment a release is cut, so a
+# tagged version cannot sit unpublished — tagging is not shipping, and #716
+# showed what an undelivered security release costs. Still dispatchable by hand
+# for a re-publish.
 on:
   workflow_dispatch: {}
+  workflow_call:
+    inputs:
+      ref:
+        description: "Ref to publish from. Defaults to the triggering ref."
+        required: false
+        type: string
 
 jobs:
   publish:
@@ -20,6 +30,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
 
       - name: Publish to canonical R2 channel
         env:
