@@ -5,6 +5,19 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.8.0](https://github.com/Mumega-com/mcpwp/compare/v3.7.2...v3.8.0) (2026-07-25)
+
+
+### Features
+
+* **updater:** make update-channel failures loud at every layer ([#719](https://github.com/Mumega-com/mcpwp/issues/719)) ([b961485](https://github.com/Mumega-com/mcpwp/commit/b961485c3c1e62679c0243ea703ecec53ebeeac6))
+
+
+### Bug Fixes
+
+* tool schema item types ([#707](https://github.com/Mumega-com/mcpwp/issues/707)) and staging environment detection ([#710](https://github.com/Mumega-com/mcpwp/issues/710)) ([#713](https://github.com/Mumega-com/mcpwp/issues/713)) ([483e3af](https://github.com/Mumega-com/mcpwp/commit/483e3aff567e381c4019056ce62085ce68a09ada))
+* **updater:** resolve updates from the plugin manifest, not the WP.org transient ([#718](https://github.com/Mumega-com/mcpwp/issues/718)) ([dfe007f](https://github.com/Mumega-com/mcpwp/commit/dfe007f3aa130163887091cf4166989c7b58db03))
+
 ## [3.7.2](https://github.com/Mumega-com/mcpwp/compare/v3.7.1...v3.7.2) (2026-07-25)
 
 
