@@ -210,6 +210,11 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	if ( file_exists( MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-updater.php' ) ) {
 		require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-updater.php';
 	}
+	// Guarded the same way as the updater: distribution builds prune files by
+	// pattern, and a pruned require would be a fatal on activation.
+	if ( file_exists( MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-update-channel-health.php' ) ) {
+		require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-update-channel-health.php';
+	}
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-ai-presence.php';
 
 	// Load core functionality
@@ -449,6 +454,13 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	// Self-hosted update checker (excluded from WP.org builds).
 	if ( class_exists( 'Mcpwp_Updater' ) ) {
 		Mcpwp_Updater::instance();
+	}
+
+	// Report the update channel's state where a human or an agent will see it.
+	// A channel that cannot deliver is otherwise indistinguishable from a site
+	// that is simply up to date (#716).
+	if ( class_exists( 'Mcpwp_Update_Channel_Health' ) ) {
+		Mcpwp_Update_Channel_Health::init();
 	}
 
 	}

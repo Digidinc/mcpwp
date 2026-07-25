@@ -362,6 +362,42 @@ class Mcpwp_Updater {
 	 *     update_available:bool, reason:string|null
 	 * }
 	 */
+	/**
+	 * Human-readable explanation of a get_update_state() reason code.
+	 *
+	 * Lives here rather than at each call site so the REST responses, the Site
+	 * Health test and the admin notice cannot drift apart in what they claim a
+	 * given reason means.
+	 *
+	 * @param string|null $reason Reason code from get_update_state().
+	 * @return string Translated explanation.
+	 */
+	public static function describe_reason( $reason ) {
+		switch ( $reason ) {
+			case 'already_current':
+				return __( 'Already running the latest version.', 'mcpwp' );
+
+			case 'version_url_not_https':
+				return __( 'The configured mcpwp_version_url is not HTTPS, so the update manifest was not fetched.', 'mcpwp' );
+
+			case 'manifest_fetch_failed':
+			case 'manifest_unavailable':
+				return __( 'The update manifest could not be fetched. Check outbound HTTPS access from this site.', 'mcpwp' );
+
+			case 'manifest_invalid':
+				return __( 'The update manifest is missing a version or download_url.', 'mcpwp' );
+
+			case 'package_host_not_trusted':
+				return __( 'The manifest download_url host is not in the trusted update allowlist, so the package was rejected.', 'mcpwp' );
+
+			case 'not_applicable':
+				return __( 'This build does not use the self-hosted update channel.', 'mcpwp' );
+
+			default:
+				return __( 'No update available.', 'mcpwp' );
+		}
+	}
+
 	public function get_update_state( $force_refresh = false ) {
 		$state = array(
 			'current_version'  => $this->current_version,

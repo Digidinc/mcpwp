@@ -160,27 +160,35 @@ if [[ "$VERIFY_ONLY" -eq 0 ]]; then
 	echo "  R2 upload: version.json + mcpwp-latest.zip → mumcp-updates bucket"
 fi
 
-if [[ "$R2_ONLY" -eq 1 ]]; then
-	LIVE_CHECK_URL="https://updates.mcpwp.net/version.json"
-else
-	LIVE_CHECK_URL="https://mumega.com/mcp-updates/version.json"
-fi
-LIVE_STATIC_JSON="$(curl -fsSL "$LIVE_CHECK_URL")" || true
-LIVE_STATIC_VERSION="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])' <<<"$LIVE_STATIC_JSON" 2>/dev/null || echo "unknown")"
-
-if [[ "$LIVE_STATIC_VERSION" != "$VERSION" ]]; then
-	echo "Note: live manifest ($LIVE_CHECK_URL) still shows $LIVE_STATIC_VERSION (R2 upload may have failed or CF propagation in progress)" >&2
-fi
-
-# Verify the ACTUAL download_url advertised in the manifest resolves — not a
-# hardcoded name. The two diverged once (manifest said mcpwp-latest.zip while only
-# mcpwp-latest.zip was uploaded to R2), silently 404ing every site's download.
-DOWNLOAD_URL="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("download_url",""))' <<<"$LIVE_STATIC_JSON" 2>/dev/null || echo "")"
-if [[ -n "$DOWNLOAD_URL" ]]; then
-	ZIP_STATUS="$(curl -o /dev/null -s -w '%{http_code}' "$DOWNLOAD_URL" 2>/dev/null || echo "000")"
-	if [[ "$ZIP_STATUS" != "200" ]]; then
-		echo "Note: manifest download_url ($DOWNLOAD_URL) returned $ZIP_STATUS (CF cache, or the R2 key does not match download_url)" >&2
+# Prove the channel can actually deliver what we just published, and FAIL the
+# publish if it cannot. These checks used to print "Note: ..." and exit 0, so a
+# half-published release — manifest bumped, ZIP missing or stale — reported
+# success and nobody found out until a site asked for an update and got
+# nothing. Both hosts are served from the same R2 bucket by CF Workers, so a
+# successful upload should be visible on either; the retries absorb CDN
+# propagation, not a failed upload.
+#
+# Every published channel is verified, not just the one this run wrote to: if
+# they have drifted apart, the release is not shipped and we want to know now.
+VERIFY_SCRIPT="$ROOT_DIR/scripts/verify_update_channel.sh"
+VERIFY_FAILED=0
+for CHANNEL_URL in \
+	"https://updates.mcpwp.net/version.json" \
+	"https://mumega.com/mcp-updates/version.json"; do
+	if ! bash "$VERIFY_SCRIPT" \
+		--manifest-url "$CHANNEL_URL" \
+		--expect-version "$VERSION" \
+		--retries 4 \
+		--delay 20; then
+		VERIFY_FAILED=1
 	fi
+done
+
+if [[ "$VERIFY_FAILED" -eq 1 ]]; then
+	echo "" >&2
+	echo "ERROR: MCPWP $VERSION is NOT shipped — at least one channel cannot deliver it." >&2
+	echo "       The artifacts above are what live sites will actually receive." >&2
+	exit 1
 fi
 
 echo "Published MCPWP $VERSION"

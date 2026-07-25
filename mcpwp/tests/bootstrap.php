@@ -1504,3 +1504,29 @@ require_once dirname(__DIR__) . '/includes/class-mcpwp-oauth-well-known.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-encryption.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-integration-manager.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-encryption-migration.php';
+
+// Escaping helpers — no-ops for tests, but required by any class that renders
+// output (Site Health results, admin notices).
+if (!function_exists('esc_html')) {
+    function esc_html($text)
+    {
+        return htmlspecialchars((string) $text, ENT_QUOTES, 'UTF-8');
+    }
+}
+if (!function_exists('esc_html__')) {
+    function esc_html__($text, $domain = 'default')
+    {
+        return esc_html($text);
+    }
+}
+if (!function_exists('esc_attr')) {
+    function esc_attr($text)
+    {
+        return esc_html($text);
+    }
+}
+
+// Update channel health (#716 follow-up) — depends on the updater above.
+require_once dirname(__DIR__) . '/includes/class-mcpwp-security.php';
+require_once dirname(__DIR__) . '/includes/class-mcpwp-updater.php';
+require_once dirname(__DIR__) . '/includes/class-mcpwp-update-channel-health.php';

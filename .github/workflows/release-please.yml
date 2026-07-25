@@ -86,3 +86,20 @@ jobs:
             git commit -m "chore: sync WP.org changelog for ${{ needs.release-please.outputs.tag_name }}"
             git push origin main
           fi
+
+  # A release nobody published reaches no site. This ran as a remembered
+  # manual step until #716 made the cost of forgetting concrete: the fix for a
+  # security release could not be delivered because the channel it travels on
+  # was never checked. Publishing is now part of releasing, and the publish
+  # script fails the job if the channel cannot actually serve the new version.
+  #
+  # Runs after the changelog sync so the manifest we upload carries the final
+  # changelog text, and checks out main rather than the triggering SHA to pick
+  # that commit up.
+  publish-canonical-channel:
+    needs: [release-please, sync-wporg-changelog]
+    if: needs.release-please.outputs.release_created == 'true'
+    uses: ./.github/workflows/publish-release.yml
+    with:
+      ref: main
+    secrets: inherit

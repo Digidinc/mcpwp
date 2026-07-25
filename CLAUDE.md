@@ -105,17 +105,23 @@ version artefacts, writes the changelog, tags, and creates the GitHub Release wh
 
 ```bash
 # 1. Merge the release PR (chore(main): release X.Y.Z) -> tags vX.Y.Z
-# 2. Build the three distribution zips
-bash mcpwp/scripts/build-all.sh
-# 3. Upload agency zip to R2
+#    release-please then publishes to updates.mcpwp.net automatically
+#    (publish-canonical-channel job) and FAILS if the channel cannot serve it.
+# 2. Upload the agency zip to R2 — not part of the canonical channel
 npx wrangler r2 object put mumcp-updates/mcpwp-agency-X.Y.Z.zip \
   --file mcpwp/scripts/mcpwp-agency-X.Y.Z.zip --remote
-# 4. Publish canonical release artifacts
+```
+
+Re-publish by hand if that job failed, or to push a build outside a release:
+
+```bash
 bash scripts/publish_update_release.sh --build
 ```
 
-**Tagging is not shipping.** Sites update from whatever `updates.mcpwp.net/version.json` serves;
-until step 4 runs, a new tag reaches nobody.
+**Tagging is not shipping.** Sites update from whatever `updates.mcpwp.net/version.json` serves.
+Publishing used to be a remembered manual step; it is now part of the release, and the publish
+script exits non-zero unless the live channel actually serves the new version. Watch the
+`publish-canonical-channel` job — green there means sites can receive the release.
 
 **Before cutting a release, check what the channel already serves:**
 `curl -s https://updates.mcpwp.net/version.json | jq -r .version`. If that version is >= the one
@@ -151,6 +157,31 @@ A declined update now returns a `reason` (`already_current`, `manifest_fetch_fai
 
 Transient entries this plugin owns carry `Mcpwp_Updater::FORCED_PACKAGE_FLAG`; `check_for_update()`
 leaves those alone so a `package_url` install is not reverted to the manifest version.
+
+`Mcpwp_Updater::describe_reason()` owns the reason → sentence mapping. REST responses, the Site
+Health test and the admin notice all call it, so they cannot disagree about what a reason means.
+
+### Update Channel Durability
+
+Every layer of the delivery path now fails loudly instead of silently. #716 was invisible because
+each of them was quiet:
+
+| Guard | Where | Catches |
+|-------|-------|---------|
+| Release publishes itself | `release-please.yml` → `publish-release.yml` (`workflow_call`) | A tagged release nobody remembered to publish |
+| Publish is fatal on a bad channel | `scripts/publish_update_release.sh` | Manifest bumped but ZIP stale/missing/404 — these were `Note:` lines that exited 0 |
+| End-to-end channel check | `scripts/verify_update_channel.sh` | Manifest advertising a version the served ZIP does not contain; untrusted `download_url` host; package shipped without the updater |
+| Daily canary | `update-channel-canary.yml` | A channel that rots after publish; files/reopens one issue per channel |
+| On-site visibility | `Mcpwp_Update_Channel_Health` | A site whose channel is unreachable — Site Health "critical", admin notice, `update_channel` in `/site-health` |
+
+Check any channel by hand, no build required:
+
+```bash
+bash scripts/verify_update_channel.sh --manifest-url https://updates.mcpwp.net/version.json
+```
+
+A site that cannot reach its channel can still be updated directly: `wp_trigger_update` with an
+explicit `package_url` bypasses the manifest and the transient entirely.
 
 ### Update Notes
 

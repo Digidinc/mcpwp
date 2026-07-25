@@ -10,6 +10,7 @@
       <file>./unit/test-admin-scope-matrix.php</file>
       <file>./unit/test-user-meta-denylist.php</file>
       <file>./unit/test-updater-independent-of-wporg.php</file>
+      <file>./unit/test-update-channel-health.php</file>
     </testsuite>
   </testsuites>
 </phpunit>
