@@ -255,6 +255,65 @@ trait Mcpwp_Sanitization {
 	}
 
 	/**
+	 * Normalize a bulk-operation item list into per-item arrays.
+	 *
+	 * The MCP tool schemas used to advertise these parameters as a bare array
+	 * with no item type (#707), so clients reasonably sent an array of JSON
+	 * *strings*. Reading `$item['id']` off a string yields nothing, every item
+	 * failed its required-field check, and the caller got "0 updated" with an
+	 * error that described the wrong problem.
+	 *
+	 * The schemas now declare object items. This stays as the honest fallback:
+	 * decode what is decodable, and for anything else say what was actually
+	 * received instead of blaming a missing field.
+	 *
+	 * @param array  $items    Raw items from the request.
+	 * @param string $singular Item label for error messages, e.g. 'page'.
+	 * @return array Two keys: 'items' (index-preserving array of arrays) and
+	 *               'errors' (list of array{index:int,message:string}).
+	 */
+	protected function normalize_bulk_items( $items, $singular ) {
+		$normalized = array();
+		$errors     = array();
+
+		foreach ( (array) $items as $index => $item ) {
+			if ( is_array( $item ) ) {
+				$normalized[ $index ] = $item;
+				continue;
+			}
+
+			if ( is_object( $item ) ) {
+				$normalized[ $index ] = (array) $item;
+				continue;
+			}
+
+			if ( is_string( $item ) ) {
+				$decoded = json_decode( $item, true );
+
+				if ( is_array( $decoded ) ) {
+					$normalized[ $index ] = $decoded;
+					continue;
+				}
+			}
+
+			$errors[] = array(
+				'index'   => $index,
+				'message' => sprintf(
+					/* translators: 1: item label e.g. "page", 2: PHP type received. */
+					__( 'Each %1$s must be an object; received %2$s.', 'mcpwp' ),
+					$singular,
+					gettype( $item )
+				),
+			);
+		}
+
+		return array(
+			'items'  => $normalized,
+			'errors' => $errors,
+		);
+	}
+
+	/**
 	 * Sanitize filename.
 	 *
 	 * @param string $filename Filename.

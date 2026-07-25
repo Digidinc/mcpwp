@@ -416,6 +416,19 @@ trait Mcpwp_Free_Tools_Content_Trait {
 					'type'        => 'array',
 					'description' => 'Array of operation objects. Each must have: method (GET/POST/PUT/DELETE), path (relative to /mcpwp/v1/, e.g. "/pages/42"), body (optional object — used as request body for POST/PUT, query params for GET/DELETE)',
 					'required'    => true,
+					'items'       => array(
+						'type'       => 'object',
+						'properties' => array(
+							'method' => array(
+								'type'        => 'string',
+								'description' => 'HTTP method for this operation.',
+								'enum'        => array( 'GET', 'POST', 'PUT', 'DELETE' ),
+							),
+							'path'   => array( 'type' => 'string', 'description' => 'Path relative to /mcpwp/v1/, e.g. "/pages/42".' ),
+							'body'   => array( 'type' => 'object', 'description' => 'Request body for POST/PUT, or query params for GET/DELETE.' ),
+						),
+						'required'   => array( 'method', 'path' ),
+					),
 				),
 			)
 		);
@@ -560,6 +573,18 @@ trait Mcpwp_Free_Tools_Content_Trait {
 					'type'        => 'array',
 					'description' => 'Array of page objects with: title (required), content, status (default: draft), slug, parent, template',
 					'required'    => true,
+					'items'       => array(
+						'type'       => 'object',
+						'properties' => array(
+							'title'    => array( 'type' => 'string', 'description' => 'Page title.' ),
+							'content'  => array( 'type' => 'string', 'description' => 'Page body (HTML or Gutenberg block markup).' ),
+							'status'   => array( 'type' => 'string', 'description' => 'Publication status (default: draft).' ),
+							'slug'     => array( 'type' => 'string', 'description' => 'URL path segment.' ),
+							'parent'   => array( 'type' => 'integer', 'description' => 'Parent page ID.' ),
+							'template' => array( 'type' => 'string', 'description' => 'Page template slug.' ),
+						),
+						'required'   => array( 'title' ),
+					),
 				),
 			)
 		);
@@ -581,6 +606,20 @@ trait Mcpwp_Free_Tools_Content_Trait {
 					'type'        => 'array',
 					'description' => 'Array of post objects with: title (required), content, status (default: draft), categories (array of IDs), tags (array of strings), excerpt, slug, post_type',
 					'required'    => true,
+					'items'       => array(
+						'type'       => 'object',
+						'properties' => array(
+							'title'      => array( 'type' => 'string', 'description' => 'Post title.' ),
+							'content'    => array( 'type' => 'string', 'description' => 'Post body (HTML or Gutenberg block markup).' ),
+							'status'     => array( 'type' => 'string', 'description' => 'Publication status (default: draft).' ),
+							'categories' => array( 'type' => 'array', 'description' => 'Category IDs to assign.', 'items' => array( 'type' => 'integer' ) ),
+							'tags'       => array( 'type' => 'array', 'description' => 'Tag slugs or names to assign.', 'items' => array( 'type' => 'string' ) ),
+							'excerpt'    => array( 'type' => 'string', 'description' => 'Short summary.' ),
+							'slug'       => array( 'type' => 'string', 'description' => 'URL path segment.' ),
+							'post_type'  => array( 'type' => 'string', 'description' => 'Post type. Default "post".' ),
+						),
+						'required'   => array( 'title' ),
+					),
 				),
 			)
 		);
@@ -602,6 +641,20 @@ trait Mcpwp_Free_Tools_Content_Trait {
 					'type'        => 'array',
 					'description' => 'Array of post objects with: id (required), title, content, status, excerpt, slug, categories, tags',
 					'required'    => true,
+					'items'       => array(
+						'type'       => 'object',
+						'properties' => array(
+							'id'         => array( 'type' => 'integer', 'description' => 'Post ID to update.' ),
+							'title'      => array( 'type' => 'string', 'description' => 'Post title.' ),
+							'content'    => array( 'type' => 'string', 'description' => 'Post body (HTML).' ),
+							'status'     => array( 'type' => 'string', 'description' => 'Publication status.' ),
+							'excerpt'    => array( 'type' => 'string', 'description' => 'Short summary.' ),
+							'slug'       => array( 'type' => 'string', 'description' => 'URL path segment.' ),
+							'categories' => array( 'type' => 'array', 'description' => 'Category IDs. Replaces all current categories.', 'items' => array( 'type' => 'integer' ) ),
+							'tags'       => array( 'type' => 'array', 'description' => 'Tag slugs or names. Replaces all current tags.', 'items' => array( 'type' => 'string' ) ),
+						),
+						'required'   => array( 'id' ),
+					),
 				),
 			)
 		);
@@ -623,6 +676,19 @@ trait Mcpwp_Free_Tools_Content_Trait {
 					'type'        => 'array',
 					'description' => 'Array of page objects with: id (required), title, content, status, slug, parent, template',
 					'required'    => true,
+					'items'       => array(
+						'type'       => 'object',
+						'properties' => array(
+							'id'       => array( 'type' => 'integer', 'description' => 'Page ID to update.' ),
+							'title'    => array( 'type' => 'string', 'description' => 'Page title.' ),
+							'content'  => array( 'type' => 'string', 'description' => 'Page body (HTML).' ),
+							'status'   => array( 'type' => 'string', 'description' => 'Publication status.' ),
+							'slug'     => array( 'type' => 'string', 'description' => 'URL path segment.' ),
+							'parent'   => array( 'type' => 'integer', 'description' => 'Parent page ID.' ),
+							'template' => array( 'type' => 'string', 'description' => 'Page template slug.' ),
+						),
+						'required'   => array( 'id' ),
+					),
 				),
 			)
 		);

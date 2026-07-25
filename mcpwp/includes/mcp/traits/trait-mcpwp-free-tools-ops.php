@@ -50,10 +50,18 @@ trait Mcpwp_Free_Tools_Ops_Trait {
 				'tool_categories' => array(
 					'type'        => 'array',
 					'description' => 'Tool categories to allow (only for custom role). Options: content, media, taxonomy, elementor, gutenberg, seo, forms, site, admin, webhooks',
+					'items'       => array(
+						'type' => 'string',
+						'enum' => array( 'content', 'media', 'taxonomy', 'elementor', 'gutenberg', 'seo', 'forms', 'site', 'admin', 'webhooks' ),
+					),
 				),
 				'scopes' => array(
 					'type'        => 'array',
 					'description' => 'Key scopes (read, write, admin). Auto-set for non-admin roles.',
+					'items'       => array(
+						'type' => 'string',
+						'enum' => array( 'read', 'write', 'admin' ),
+					),
 				),
 			)
 		);
@@ -108,6 +116,7 @@ trait Mcpwp_Free_Tools_Ops_Trait {
 				'whitelist'           => array(
 					'type'        => 'array',
 					'description' => 'Identifiers to bypass rate limiting',
+					'items'       => array( 'type' => 'string' ),
 				),
 			)
 		);
@@ -427,6 +436,7 @@ trait Mcpwp_Free_Tools_Ops_Trait {
 					'type'        => 'array',
 					'description' => 'Events to subscribe to',
 					'required'    => true,
+					'items'       => array( 'type' => 'string' ),
 				),
 				'secret' => array(
 					'type'        => 'string',
@@ -455,6 +465,7 @@ trait Mcpwp_Free_Tools_Ops_Trait {
 				'events' => array(
 					'type'        => 'array',
 					'description' => 'Updated event list',
+					'items'       => array( 'type' => 'string' ),
 				),
 				'status' => array(
 					'type'        => 'string',

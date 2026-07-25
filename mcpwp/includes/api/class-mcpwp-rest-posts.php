@@ -342,8 +342,11 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 			return $this->error_response( 'too_many_posts', __( 'Maximum 50 posts per batch.', 'mcpwp' ), 400 );
 		}
 
+		$normalized = $this->normalize_bulk_items( $posts_data, 'post' );
+		$posts_data = $normalized['items'];
+
 		$created = array();
-		$errors  = array();
+		$errors  = $normalized['errors'];
 
 		foreach ( $posts_data as $index => $post_item ) {
 			if ( empty( $post_item['title'] ) ) {
@@ -396,8 +399,11 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 			return $this->error_response( 'too_many_posts', __( 'Maximum 50 posts per batch.', 'mcpwp' ), 400 );
 		}
 
+		$normalized = $this->normalize_bulk_items( $posts_data, 'post' );
+		$posts_data = $normalized['items'];
+
 		$updated = array();
-		$errors  = array();
+		$errors  = $normalized['errors'];
 
 		foreach ( $posts_data as $index => $post_item ) {
 			if ( empty( $post_item['id'] ) ) {

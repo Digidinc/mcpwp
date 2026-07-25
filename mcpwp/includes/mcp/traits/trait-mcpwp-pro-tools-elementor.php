@@ -54,6 +54,7 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 				'elementor_data' => array(
 					'type'        => 'array',
 					'description' => 'Optional Elementor data JSON (array). If omitted, Elementor creates a blank template.',
+					'items'       => array( 'type' => 'object' ),
 				),
 			)
 		);
@@ -74,6 +75,7 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 				'elementor_data' => array(
 					'type'        => 'array',
 					'description' => 'Optional Elementor data JSON (array)',
+					'items'       => array( 'type' => 'object' ),
 				),
 			)
 		);
@@ -167,6 +169,7 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 				'elementor_data' => array(
 					'type'        => 'array',
 					'description' => 'Optional Elementor data JSON for the archetype',
+					'items'       => array( 'type' => 'object' ),
 				),
 				'type' => array(
 					'type'        => 'string',
@@ -233,6 +236,7 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 				'part_tags' => array(
 					'type'        => 'array',
 					'description' => 'Alias of tag, matching wp_create_elementor_part\'s parameter name. Filters by the first tag in the list.',
+					'items'       => array( 'type' => 'string' ),
 				),
 				'search' => array(
 					'type'        => 'string',
@@ -266,6 +270,7 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 					'type'        => 'array',
 					'description' => 'Elementor data JSON for the part',
 					'required'    => true,
+					'items'       => array( 'type' => 'object' ),
 				),
 				'type'           => array(
 					'type'        => 'string',
@@ -282,6 +287,7 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 				'part_tags'      => array(
 					'type'        => 'array',
 					'description' => 'Optional list of part tags',
+					'items'       => array( 'type' => 'string' ),
 				),
 			)
 		);
@@ -315,6 +321,7 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 				'part_tags'  => array(
 					'type'        => 'array',
 					'description' => 'Optional list of part tags',
+					'items'       => array( 'type' => 'string' ),
 				),
 			)
 		);
@@ -392,6 +399,16 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 					'type'        => 'array',
 					'description' => 'Array of section objects. Each has "type" plus type-specific params. Hero: heading, subheading, cta_text, cta_url, background (color/#hex/gradient), image_url. Features: heading, columns, items[{icon, title, desc}]. CTA: heading, subheading, button_text, button_url, background. Pricing: heading, plans[{title, price, period, features[], button_text, button_url}]. FAQ: heading, items[{question, answer}]. Testimonials: heading, items[{text, name, title, image}]. Text: heading, content. Gallery: heading, images[], columns. Contact_form: heading, subheading, form_id, plugin (wpforms/cf7/gravity). Map: heading, address, zoom (1-20), height. Countdown: heading, due_date (YYYY-MM-DD HH:MM), subheading. Stats: heading, columns, items[{number, title, suffix}]. Logo_grid: heading, columns, items[{image, url}]. Video: heading, url (YouTube/Vimeo/hosted mp4), subheading.',
 					'required'    => true,
+					'items'       => array(
+						'type'       => 'object',
+						'properties' => array(
+							'type' => array(
+								'type'        => 'string',
+								'description' => 'Section blueprint type: hero, features, cta, pricing, faq, testimonials, text, gallery, contact_form, map, countdown, stats, logo_grid, video',
+							),
+						),
+						'required'   => array( 'type' ),
+					),
 				),
 				'status' => array(
 					'type'        => 'string',
@@ -425,10 +442,28 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 				'background'  => array( 'type' => 'string', 'description' => 'Color hex or "gradient" (hero/cta)' ),
 				'image_url'   => array( 'type' => 'string', 'description' => 'Background image URL (hero)' ),
 				'columns'     => array( 'type' => 'integer', 'description' => 'Number of columns (features/stats/gallery/logo_grid)' ),
-				'items'       => array( 'type' => 'array', 'description' => 'Array of items (type-specific, see wp_list_blueprints for schemas)' ),
-				'plans'       => array( 'type' => 'array', 'description' => 'Pricing plans array (pricing type)' ),
+				'items'       => array( 'type' => 'array', 'description' => 'Array of items (type-specific, see wp_list_blueprints for schemas)', 'items' => array( 'type' => 'object' ) ),
+				'plans'       => array(
+					'type'        => 'array',
+					'description' => 'Pricing plans array (pricing type)',
+					'items'       => array(
+						'type'       => 'object',
+						'properties' => array(
+							'title'       => array( 'type' => 'string', 'description' => 'Plan title/name' ),
+							'price'       => array( 'type' => 'string', 'description' => 'Plan price' ),
+							'period'      => array( 'type' => 'string', 'description' => 'Billing period, e.g. /mo' ),
+							'features'    => array(
+								'type'        => 'array',
+								'description' => 'List of feature strings for this plan',
+								'items'       => array( 'type' => 'string' ),
+							),
+							'button_text' => array( 'type' => 'string', 'description' => 'Plan CTA button text' ),
+							'button_url'  => array( 'type' => 'string', 'description' => 'Plan CTA button URL' ),
+						),
+					),
+				),
 				'content'     => array( 'type' => 'string', 'description' => 'HTML content (text type)' ),
-				'images'      => array( 'type' => 'array', 'description' => 'Image URLs array (gallery type)' ),
+				'images'      => array( 'type' => 'array', 'description' => 'Image URLs array (gallery type)', 'items' => array( 'type' => 'string' ) ),
 				'url'         => array( 'type' => 'string', 'description' => 'Video URL (video type)' ),
 				'address'     => array( 'type' => 'string', 'description' => 'Address (map type)' ),
 				'due_date'    => array( 'type' => 'string', 'description' => 'YYYY-MM-DD HH:MM (countdown type)' ),
@@ -471,18 +506,54 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 				'system_colors' => array(
 					'type'        => 'array',
 					'description' => 'Array of {_id, title, color} objects for global colors',
+					'items'       => array(
+						'type'       => 'object',
+						'properties' => array(
+							'_id'   => array( 'type' => 'string', 'description' => 'Color slot ID' ),
+							'title' => array( 'type' => 'string', 'description' => 'Color label' ),
+							'color' => array( 'type' => 'string', 'description' => 'Hex color value' ),
+						),
+					),
 				),
 				'custom_colors' => array(
 					'type'        => 'array',
 					'description' => 'Array of {_id, title, color} objects for custom colors',
+					'items'       => array(
+						'type'       => 'object',
+						'properties' => array(
+							'_id'   => array( 'type' => 'string', 'description' => 'Color slot ID' ),
+							'title' => array( 'type' => 'string', 'description' => 'Color label' ),
+							'color' => array( 'type' => 'string', 'description' => 'Hex color value' ),
+						),
+					),
 				),
 				'system_typography' => array(
 					'type'        => 'array',
 					'description' => 'Array of typography objects with font_family, font_size, font_weight, etc.',
+					'items'       => array(
+						'type'       => 'object',
+						'properties' => array(
+							'_id'         => array( 'type' => 'string', 'description' => 'Typography slot ID' ),
+							'title'       => array( 'type' => 'string', 'description' => 'Typography label' ),
+							'font_family' => array( 'type' => 'string', 'description' => 'Font family name' ),
+							'font_size'   => array( 'type' => 'object', 'description' => 'Font size, e.g. {"size":16,"unit":"px"}' ),
+							'font_weight' => array( 'type' => 'string', 'description' => 'Font weight' ),
+						),
+					),
 				),
 				'custom_typography' => array(
 					'type'        => 'array',
 					'description' => 'Array of custom typography definitions',
+					'items'       => array(
+						'type'       => 'object',
+						'properties' => array(
+							'_id'         => array( 'type' => 'string', 'description' => 'Typography slot ID' ),
+							'title'       => array( 'type' => 'string', 'description' => 'Typography label' ),
+							'font_family' => array( 'type' => 'string', 'description' => 'Font family name' ),
+							'font_size'   => array( 'type' => 'object', 'description' => 'Font size, e.g. {"size":16,"unit":"px"}' ),
+							'font_weight' => array( 'type' => 'string', 'description' => 'Font weight' ),
+						),
+					),
 				),
 				'custom_css' => array(
 					'type'        => 'string',
@@ -581,6 +652,15 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 				'conditions' => array(
 					'type'        => 'array',
 					'description' => 'Display conditions. Default is entire site: [{"type":"include","name":"general"}]. Exclusions use type=exclude.',
+					'items'       => array(
+						'type'       => 'object',
+						'properties' => array(
+							'type'     => array( 'type' => 'string', 'description' => 'include or exclude', 'enum' => array( 'include', 'exclude' ) ),
+							'name'     => array( 'type' => 'string', 'description' => 'Condition name, e.g. general, singular, archive' ),
+							'sub_name' => array( 'type' => 'string', 'description' => 'Condition sub-name, e.g. post type or taxonomy' ),
+							'sub_id'   => array( 'type' => 'string', 'description' => 'Condition sub-ID' ),
+						),
+					),
 				),
 				'dry_run'    => array(
 					'type'        => 'boolean',
@@ -618,6 +698,15 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 				'conditions' => array(
 					'type'        => 'array',
 					'description' => 'Display conditions, e.g. [{"type":"include","name":"general"}].',
+					'items'       => array(
+						'type'       => 'object',
+						'properties' => array(
+							'type'     => array( 'type' => 'string', 'description' => 'include or exclude', 'enum' => array( 'include', 'exclude' ) ),
+							'name'     => array( 'type' => 'string', 'description' => 'Condition name, e.g. general, singular, archive' ),
+							'sub_name' => array( 'type' => 'string', 'description' => 'Condition sub-name, e.g. post type or taxonomy' ),
+							'sub_id'   => array( 'type' => 'string', 'description' => 'Condition sub-ID' ),
+						),
+					),
 				),
 				'dry_run'    => array(
 					'type'        => 'boolean',
@@ -714,6 +803,10 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 					'type'        => 'array',
 					'description' => 'Array of condition arrays, e.g. [["include","general","singular","post"],["exclude","general","singular","page"]]',
 					'required'    => true,
+					'items'       => array(
+						'type'  => 'array',
+						'items' => array( 'type' => 'string' ),
+					),
 				),
 			)
 		);
@@ -739,6 +832,7 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 				'post_ids' => array(
 					'type'        => 'array',
 					'description' => 'Array of post IDs for specific_posts scope',
+					'items'       => array( 'type' => 'integer' ),
 				),
 			)
 		);
@@ -760,6 +854,7 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 				'elementor_data' => array(
 					'type'        => 'array',
 					'description' => 'Optional Elementor JSON data for the template content',
+					'items'       => array( 'type' => 'object' ),
 				),
 				'scope' => array(
 					'type'        => 'string',
@@ -773,6 +868,7 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 				'post_ids' => array(
 					'type'        => 'array',
 					'description' => 'Array of post IDs for specific_posts scope',
+					'items'       => array( 'type' => 'integer' ),
 				),
 			)
 		);
@@ -922,6 +1018,7 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 					'type'        => 'array',
 					'description' => 'Ordered array of widget IDs',
 					'required'    => true,
+					'items'       => array( 'type' => 'string' ),
 				),
 			)
 		);

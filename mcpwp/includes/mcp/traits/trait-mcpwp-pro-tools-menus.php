@@ -47,6 +47,19 @@ trait Mcpwp_Pro_Tools_Menus_Trait {
 				'items' => array(
 					'type'        => 'array',
 					'description' => 'Initial menu items to add (array of {title, url, type, object, object_id} objects)',
+					'items'       => array(
+						'type'       => 'object',
+						'properties' => array(
+							'title'     => array( 'type' => 'string', 'description' => 'Menu item label' ),
+							'url'       => array( 'type' => 'string', 'description' => 'URL for custom links (type=custom)' ),
+							'type'      => array(
+								'type'        => 'string',
+								'description' => 'Item type: custom, post_type, taxonomy (legacy aliases: post, page, category, tag)',
+							),
+							'object'    => array( 'type' => 'string', 'description' => 'Object slug for post_type/taxonomy items, e.g. page, category' ),
+							'object_id' => array( 'type' => 'integer', 'description' => 'Object ID for post_type/taxonomy items' ),
+						),
+					),
 				),
 			)
 		);
