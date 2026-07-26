@@ -1,14 +1,14 @@
 name: Publish Release (Canonical R2)
 
 # Manual, explicit trigger — publishes whatever version is on the dispatched
-# ref (main, after a release-please release PR is merged) to the canonical
-# updates.mcpwp.net channel (Cloudflare Worker + R2 bucket mumcp-updates).
+# ref (main, after a release-please release PR is merged) to the R2 bucket
+# mumcp-updates that backs the update channel.
 #
-# Does NOT touch the legacy mumega.com/mcp-updates/* channel — that's served
-# by a plain nginx alias to local disk on the VPS and needs VPS filesystem
-# access (sudo cp), which this workflow doesn't have. Un-migrated legacy
-# sites still need a manual publish from a host with that access until the
-# legacy channel is retired (see CLAUDE.md).
+# Both public channels — updates.mcpwp.net and mumega.com/mcp-updates/* — are
+# Cloudflare Workers reading that one bucket, so this single upload updates all
+# of them. No VPS filesystem access is involved (the old /var/www/mcp-updates
+# static copy was a write nothing served and has been removed).
+#
 # Called automatically by release-please.yml the moment a release is cut, so a
 # tagged version cannot sit unpublished — tagging is not shipping, and #716
 # showed what an undelivered security release costs. Still dispatchable by hand
@@ -47,4 +47,4 @@ jobs:
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Ref:** ${{ github.ref_name }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Commit:** ${{ github.sha }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Legacy mumega.com/mcp-updates/* NOT updated by this run — needs VPS access separately" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Both channels (updates.mcpwp.net + mumega.com/mcp-updates) are R2-backed and updated by this run" >> "$GITHUB_STEP_SUMMARY"
