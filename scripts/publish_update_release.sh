@@ -7,13 +7,11 @@ PLUGIN_MAIN="$PLUGIN_DIR/mcpwp.php"
 README_FILE="$PLUGIN_DIR/readme.txt"
 MANIFEST_FILE="$ROOT_DIR/version.json"
 BUILD_SCRIPT="$PLUGIN_DIR/scripts/build-selfhosted.sh"
-STATIC_DIR="/var/www/mcp-updates"
-STATIC_ZIP="$STATIC_DIR/mcpwp-latest.zip"
-STATIC_MANIFEST="$STATIC_DIR/version.json"
+AGENCY_BUILD_SCRIPT="$PLUGIN_DIR/scripts/build-agency.sh"
 
 BUILD=0
 VERIFY_ONLY=0
-R2_ONLY=0
+ALLOW_REPUBLISH=0
 
 usage() {
 	cat <<'EOF'
@@ -21,20 +19,23 @@ Usage:
   scripts/publish_update_release.sh [options]
 
 Options:
-  --build          Build the ZIP before publishing
-  --verify-only    Run consistency and live artifact checks without publishing
-  --r2-only        Publish to the mumcp-updates R2 bucket only — skip the
-                    /var/www/mcp-updates static copy (requires VPS filesystem
-                    access this flag doesn't have, e.g. from GitHub Actions)
-  -h, --help       Show help
+  --build            Build the ZIPs before publishing
+  --verify-only      Run consistency and live artifact checks without publishing
+  --allow-republish  Publish even if the channel already serves this version or
+                     a newer one. Default: refuse, because re-publishing an
+                     equal-or-older version is a no-op for sites already on it.
+  --r2-only          Deprecated no-op, accepted for backward compatibility.
+                     Uploading to the R2 bucket is now the only publish mode;
+                     there is no longer a VPS static copy to skip.
+  -h, --help         Show help
 
 Notes:
-  - The canonical updater source is https://mumega.com/mcp-updates/version.json
-  - This channel serves the self-hosted package with the legacy updater included
-  - The worker is optional and no longer part of the critical path
-  - --r2-only updates updates.mcpwp.net immediately; mumega.com/mcp-updates/*
-    (legacy, un-migrated 2.8.56 sites) still needs a manual publish from a host
-    with /var/www/mcp-updates access until that channel is retired
+  - Publishing uploads version.json + the self-hosted ZIP + the agency ZIP to
+    the R2 bucket mumcp-updates. Both public channels — updates.mcpwp.net and
+    mumega.com/mcp-updates/* — are Cloudflare Workers backed by that one bucket,
+    so a single upload updates all of them. No VPS filesystem access is involved.
+  - The canonical manifest is https://updates.mcpwp.net/version.json
+  - The self-hosted package bundles the updater so sites can self-update
 EOF
 }
 
@@ -55,8 +56,13 @@ while [[ $# -gt 0 ]]; do
 		VERIFY_ONLY=1
 		shift
 		;;
+	--allow-republish)
+		ALLOW_REPUBLISH=1
+		shift
+		;;
 	--r2-only)
-		R2_ONLY=1
+		# Deprecated no-op: R2 is now the only publish target — there is no VPS
+		# static copy left to skip. Accepted so existing callers do not break.
 		shift
 		;;
 	-h | --help)
@@ -97,13 +103,27 @@ fi
 
 VERSION="$PLUGIN_VERSION"
 ZIP_PATH="$PLUGIN_DIR/scripts/mcpwp-selfhosted-$VERSION.zip"
+AGENCY_ZIP="$PLUGIN_DIR/scripts/mcpwp-agency-$VERSION.zip"
 
 if [[ "$BUILD" -eq 1 ]]; then
 	bash "$BUILD_SCRIPT" --version "$VERSION"
+	# The agency build is a separate distribution served from the same bucket
+	# (updates.mcpwp.net/mcpwp-agency-<version>.zip). Build it here so its
+	# download URL exists for every release instead of relying on a remembered
+	# manual wrangler upload.
+	bash "$AGENCY_BUILD_SCRIPT" --version "$VERSION"
 fi
 
 if [[ ! -f "$ZIP_PATH" ]]; then
 	echo "Missing ZIP artifact: $ZIP_PATH" >&2
+	echo "Run with --build or build it first." >&2
+	exit 1
+fi
+
+# Fail before any upload if a publish is asked for without the agency ZIP —
+# a partial publish (canonical up, agency missing) would 404 the agency URL.
+if [[ "$VERIFY_ONLY" -eq 0 && ! -f "$AGENCY_ZIP" ]]; then
+	echo "Missing agency ZIP artifact: $AGENCY_ZIP" >&2
 	echo "Run with --build or build it first." >&2
 	exit 1
 fi
@@ -123,18 +143,55 @@ if [[ "$UPDATER_COUNT" -eq 0 ]]; then
 fi
 
 if [[ "$VERIFY_ONLY" -eq 0 ]]; then
-	if [[ "$R2_ONLY" -eq 0 ]]; then
-		# Copy to a versioned file and point mcpwp-latest.zip at it (resolves #339).
-		# Never cp to $STATIC_ZIP then ln -sf the same path — that produces a
-		# self-referencing symlink and breaks every later publish.
-		STATIC_VERSIONED_ZIP="$STATIC_DIR/mcpwp-$VERSION.zip"
-		sudo -n cp "$ZIP_PATH" "$STATIC_VERSIONED_ZIP"
-		sudo -n cp "$MANIFEST_FILE" "$STATIC_MANIFEST"
-		sudo -n ln -sfn "$STATIC_VERSIONED_ZIP" "$STATIC_ZIP"
+	# Refuse to publish a version the channel already serves (or a downgrade).
+	# The updater compares version strings, so re-publishing an equal-or-older
+	# version is a silent no-op for every site already on it — this is exactly
+	# how publishing 3.7.0 over an existing 3.7.0 once stranded two security
+	# fixes. Fail-open: if the live version can't be read (channel/CDN down),
+	# warn and proceed — a channel outage must never block a real release, and
+	# the post-publish verify below is the backstop. --allow-republish overrides.
+	if [[ "$ALLOW_REPUBLISH" -eq 0 ]]; then
+		LIVE_JSON="$(curl -fsSL "https://updates.mcpwp.net/version.json" 2>/dev/null || true)"
+		GUARD="$(VERSION="$VERSION" python3 - "$LIVE_JSON" <<'PY'
+import json, os, sys
+
+raw = sys.argv[1] if len(sys.argv) > 1 else ""
+target = os.environ["VERSION"]
+try:
+    live = str(json.loads(raw)["version"]).strip()
+except Exception:
+    print("unknown")
+    sys.exit(0)
+
+
+def parse(v):
+    return [int(x) for x in v.split(".") if x.isdigit()]
+
+
+a, b = parse(live), parse(target)
+n = max(len(a), len(b))
+a += [0] * (n - len(a))
+b += [0] * (n - len(b))
+print(f"block {live}" if a >= b else f"ok {live}")
+PY
+)"
+		case "$GUARD" in
+		unknown)
+			echo "  WARNING: could not read the live channel version — publishing without the already-published guard." >&2
+			;;
+		block\ *)
+			LIVE_VERSION="${GUARD#block }"
+			echo "ERROR: the channel already serves $LIVE_VERSION; refusing to publish $VERSION (equal or older)." >&2
+			echo "       Sites already on $LIVE_VERSION would see this as a no-op update." >&2
+			echo "       If this re-publish is intentional (e.g. fixing a broken upload), pass --allow-republish." >&2
+			exit 1
+			;;
+		esac
 	fi
 
-	# Upload to Cloudflare R2 — CF Worker (spai-updates) serves mumega.com/mcp-updates/*
-	# from the mumcp-updates bucket, not from the nginx alias.
+	# Upload to Cloudflare R2. Both public channels (updates.mcpwp.net and
+	# mumega.com/mcp-updates/*) are Cloudflare Workers backed by this one bucket,
+	# so a single upload updates every channel — no VPS filesystem write.
 	# --remote targets production R2; without it wrangler writes to local miniflare.
 	# MCPWP_WORKER_DIR overrides the default sibling-checkout assumption — needed
 	# in CI, where mcpwp-updates-worker isn't checked out next to this repo.
@@ -157,7 +214,12 @@ if [[ "$VERIFY_ONLY" -eq 0 ]]; then
 	# The manifest's download_url is mcpwp-latest.zip — this key MUST exist in R2 or downloads 404.
 	CLOUDFLARE_API_TOKEN="$CF_TOKEN" npx --prefix "$WORKER_DIR" wrangler r2 object put mumcp-updates/mcpwp-latest.zip \
 		--file="$ZIP_PATH" --content-type="application/zip" --remote
-	echo "  R2 upload: version.json + mcpwp-latest.zip → mumcp-updates bucket"
+	# Versioned agency package. CLAUDE.md documents its download URL
+	# (updates.mcpwp.net/mcpwp-agency-<version>.zip); shipping it here means that
+	# URL exists for every release without a separate manual upload step.
+	CLOUDFLARE_API_TOKEN="$CF_TOKEN" npx --prefix "$WORKER_DIR" wrangler r2 object put "mumcp-updates/mcpwp-agency-$VERSION.zip" \
+		--file="$AGENCY_ZIP" --content-type="application/zip" --remote
+	echo "  R2 upload: version.json + mcpwp-latest.zip + mcpwp-agency-$VERSION.zip → mumcp-updates bucket"
 fi
 
 # Prove the channel can actually deliver what we just published, and FAIL the
@@ -192,12 +254,7 @@ if [[ "$VERIFY_FAILED" -eq 1 ]]; then
 fi
 
 echo "Published MCPWP $VERSION"
-if [[ "$R2_ONLY" -eq 1 ]]; then
-	echo "  canonical manifest: https://updates.mcpwp.net/version.json"
-	echo "  canonical zip:      https://updates.mcpwp.net/mcpwp-latest.zip"
-	echo "  NOTE: legacy mumega.com/mcp-updates/* was NOT touched (--r2-only) —"
-	echo "        still needs a manual publish from a host with VPS filesystem access"
-else
-	echo "  static manifest: https://mumega.com/mcp-updates/version.json"
-	echo "  static zip:      https://mumega.com/mcp-updates/mcpwp-latest.zip"
-fi
+echo "  canonical manifest: https://updates.mcpwp.net/version.json"
+echo "  canonical zip:      https://updates.mcpwp.net/mcpwp-latest.zip"
+echo "  agency zip:         https://updates.mcpwp.net/mcpwp-agency-$VERSION.zip"
+echo "  mirror (same R2):   https://mumega.com/mcp-updates/version.json"

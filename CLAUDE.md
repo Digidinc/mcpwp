@@ -103,14 +103,11 @@ Download latest agency build: `https://updates.mcpwp.net/mcpwp-agency-3.3.3.zip`
 (`fix:` → patch, `feat:` → minor); release-please opens/updates a release PR that bumps all six
 version artefacts, writes the changelog, tags, and creates the GitHub Release when a human merges it.
 
-```bash
-# 1. Merge the release PR (chore(main): release X.Y.Z) -> tags vX.Y.Z
-#    release-please then publishes to updates.mcpwp.net automatically
-#    (publish-canonical-channel job) and FAILS if the channel cannot serve it.
-# 2. Upload the agency zip to R2 — not part of the canonical channel
-npx wrangler r2 object put mumcp-updates/mcpwp-agency-X.Y.Z.zip \
-  --file mcpwp/scripts/mcpwp-agency-X.Y.Z.zip --remote
-```
+Merge the release PR (`chore(main): release X.Y.Z`) → tags `vX.Y.Z`. release-please then publishes
+automatically (`publish-canonical-channel` job): it uploads `version.json` + the self-hosted ZIP +
+the agency ZIP (`mcpwp-agency-X.Y.Z.zip`) to the `mumcp-updates` R2 bucket — which backs both
+`updates.mcpwp.net` and `mumega.com/mcp-updates` — and FAILS the release if the channel cannot
+actually serve the new version. No manual `wrangler` upload and no VPS access is needed.
 
 Re-publish by hand if that job failed, or to push a build outside a release:
 
@@ -128,7 +125,10 @@ script exits non-zero unless the live channel actually serves the new version. W
 about to be tagged, pick a higher one — the updater compares version strings, so re-publishing a
 version number that is already installed leaves those sites permanently on the old code. (This bit
 us: a 3.7.0 build was live on the channel while the repo was about to tag a *different* 3.7.0, which
-would have stranded two security fixes. Released as 3.7.1 instead.)
+would have stranded two security fixes. Released as 3.7.1 instead.) `publish_update_release.sh` now
+enforces this automatically — it refuses to publish a version the channel already serves or a
+downgrade (`--allow-republish` overrides an intentional same-version re-push) — but picking a higher
+version up front is still the right fix.
 
 **To force a version:** put `Release-As: X.Y.Z` in a commit footer — but it **must ride a commit that
 changes a real file**. `exclude-paths` in `release-please-config.json` makes release-please filter out

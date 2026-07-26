@@ -50,38 +50,33 @@ Expected output:
 
 ## Publish
 
-### 1. Publish release artifacts
+Publishing is **automatic**: when the release-please release PR is merged, the
+`publish-canonical-channel` job in `release-please.yml` calls the publish
+workflow, which uploads the artifacts to the R2 bucket `mumcp-updates` and fails
+the release if the channel cannot actually serve the new version. Tagging is not
+shipping — this is the step that ships.
 
-Preferred:
+### Manual / re-publish
+
+To publish by hand (the release job failed, or you are pushing a build outside a
+release), from a checkout of the tagged ref with `CLOUDFLARE_API_TOKEN` set:
 
 ```bash
 bash scripts/publish_update_release.sh --build
 ```
 
-This does all of the following:
+This:
 
 - verifies version consistency across plugin header, `MCPWP_VERSION`, `readme.txt`, and `version.json`
-- builds `mcpwp-X.Y.Z.zip`
-- publishes the ZIP to `/var/www/mcp-updates/mcpwp-latest.zip`
-- publishes `version.json` to `/var/www/mcp-updates/version.json`
-- verifies the live `mumega.com` artifact URLs
+- builds the self-hosted and agency ZIPs
+- refuses to publish a version the channel already serves, or a downgrade (pass `--allow-republish` to force an intentional same-version re-push)
+- uploads `version.json`, `mcpwp-latest.zip`, and `mcpwp-agency-X.Y.Z.zip` to the R2 bucket `mumcp-updates`
+- verifies both live channels (`updates.mcpwp.net` and `mumega.com/mcp-updates`) can deliver the new version, and fails if not
 
-Manual fallback:
+Both public channels are Cloudflare Workers backed by that one R2 bucket, so the
+single upload updates both. No VPS filesystem access is involved.
 
-```bash
-sudo cp scripts/mcpwp-X.Y.Z.zip /var/www/mcp-updates/mcpwp-latest.zip
-sudo cp version.json /var/www/mcp-updates/version.json
-```
-
-### 2. Optional: Sync the legacy worker
-
-```bash
-bash scripts/publish_update_release.sh --deploy-worker --verify-only
-```
-
-The worker is no longer part of the critical update path. Only sync it if you still want the legacy worker URL to mirror the static manifest.
-
-### 3. Commit and push repo changes
+### Commit and push repo changes
 
 ```bash
 git add -A
