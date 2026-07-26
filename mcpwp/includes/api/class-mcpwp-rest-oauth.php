@@ -399,10 +399,13 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 	 * Tokens are bound to user_id.
 	 *
 	 * Scope handling matches handle_token_authorization_code() exactly:
-	 * - The stored scope list is resolved with parse_oauth_scope_string(), NOT
-	 *   sanitize_scopes(), because sanitize_scopes() fails OPEN.
+	 * - The stored scope list is resolved with parse_oauth_scope_string(), which
+	 *   falls back to array( 'read' ) on an empty or unrecognised set.
 	 * - The result is re-clamped to the stored user's CURRENT capabilities on
 	 *   every refresh, unconditionally.
+	 * sanitize_scopes() itself now also fails closed to array( 'read' ), so using
+	 * parse_oauth_scope_string() here is defense-in-depth, not a workaround for a
+	 * fail-open helper.
 	 *
 	 * @param WP_REST_Request $request Request.
 	 * @return WP_REST_Response
@@ -430,18 +433,16 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 		}
 
 		// P0-B parity with the authorization_code path: resolve the stored scope
-		// list WITHOUT sanitize_scopes(). sanitize_scopes() fails OPEN — anything
-		// that sanitises to an empty set returns get_default_api_key_scopes(),
-		// which is array( 'read', 'write', 'admin' ). A refresh record holding an
-		// unrecognised scope list (corrupted option/transient, hand-seeded value,
-		// or a value written by future code) therefore minted a FULL-ADMIN access
-		// token from a record that granted nothing. parse_oauth_scope_string()
-		// falls back to array( 'read' ) instead, so the same corruption now
-		// degrades to the least privilege rather than the most.
+		// list with parse_oauth_scope_string(), which falls back to array( 'read' )
+		// on an empty or unrecognised set. A refresh record holding an unrecognised
+		// scope list (corrupted option/transient, hand-seeded value, or a value
+		// written by future code) therefore degrades to the least privilege rather
+		// than the most.
 		//
-		// The global fail-open default in sanitize_scopes() is deliberately left
-		// alone here: normalize_api_key_record() depends on it and changing it
-		// would re-scope existing stored API keys. That is a separate phase.
+		// sanitize_scopes() now also fails closed to array( 'read' ) on an empty
+		// result, so this is defense-in-depth rather than a workaround for a
+		// fail-open helper: even if the resolver here were changed, that record
+		// still could not mint a full-admin token from scopes it never granted.
 		$stored_scopes = isset( $record['scopes'] ) ? (array) $record['scopes'] : array();
 		$stored_scopes = array_filter( $stored_scopes, 'is_string' );
 		$scopes        = $this->parse_oauth_scope_string( implode( ' ', $stored_scopes ) );

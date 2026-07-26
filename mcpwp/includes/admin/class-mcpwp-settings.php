@@ -671,13 +671,13 @@ class Mcpwp_Settings {
 			: 3600;
 
 		// Scope ceiling for the client_credentials (machine token) grant.
-		// Allow-list, deliberately NOT sanitize_scopes(): that helper fails OPEN to
-		// read+write+admin on an unrecognised value, which would turn a typo into a
-		// silent admin ceiling. Anything unknown or absent resolves to 'write' — the
-		// safe direction is always down. The same allow-list is applied again on the
-		// read side in Mcpwp_Api_Auth::get_oauth_settings(), because this option can
-		// also be written by WP-CLI, a migration, or a direct DB edit that never
-		// passes through this callback.
+		// Validate the ceiling against an explicit allow-list (read/write/admin)
+		// with a 'write' fallback: anything unknown or absent resolves to 'write' —
+		// the safe direction is always down. sanitize_scopes() is intentionally not
+		// used here. The same allow-list is applied again on the read side in
+		// Mcpwp_Api_Auth::get_oauth_settings(), because this option can also be
+		// written by WP-CLI, a migration, or a direct DB edit that never passes
+		// through this callback.
 		$cc_max_scope = isset( $input['oauth_client_credentials_max_scope'] )
 			? sanitize_key( (string) $input['oauth_client_credentials_max_scope'] )
 			: '';

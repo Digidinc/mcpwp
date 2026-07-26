@@ -316,11 +316,29 @@ trait Mcpwp_Api_Auth {
 	/**
 	 * Map a REST route to the tool-category it belongs to.
 	 *
-	 * Returns an empty string when the route is not governed by any category
-	 * (e.g. /mcp, /site-info, /settings) — those are always accessible.
+	 * INVARIANT (enforced by CategoryTaxonomyInvariantTest): every category this
+	 * classifier can return MUST exist in Mcpwp_Tools_Admin::get_category_meta().
+	 * A category the map emits but the admin UI cannot toggle is un-gateable — the
+	 * route can never be blocked by any configuration, which is a silent net-widening
+	 * of the gate. Best-effort second property (NOT test-enforced): where a route IS
+	 * category-gated, its category SHOULD match the MCP tool-category of the tool that
+	 * dispatches to it (free + pro registries, defaulting to 'site' for a tool in
+	 * neither), because MCP tools dispatch through rest_do_request() and pass through
+	 * this gate — if the two taxonomies disagree the MCP layer says "callable" while
+	 * this gate answers 403, indistinguishable from a broken endpoint. This alignment
+	 * is intentionally partial: many routes return '' (ungated) here — e.g. /settings,
+	 * /site-info, /menus, /users — and are governed only by their MCP-tool category, so
+	 * a returned category matching the tool taxonomy is a goal, not a guarantee. When
+	 * adding a route, add its prefix here, finer prefixes BEFORE coarser ones (first
+	 * match wins, iteration is insertion order).
 	 *
-	 * The mapping mirrors the tool-category assignments in
-	 * Mcpwp_MCP_Free_Tools::get_tool_categories().
+	 * NOTE on /events: the free event-store endpoints (GET /events, GET /events/schema)
+	 * are classified 'webhooks' at the REST layer. The Pro events tools keep the 'events'
+	 * MCP-tool category — a first-class toggle present in get_category_meta() that hides
+	 * them from tools/list when disabled. One REST prefix cannot serve two taxonomies, so
+	 * the split (REST '/events' => 'webhooks' vs the 'events' MCP-tool category) is
+	 * deliberate, not drift. The Pro plugin does register its own /events and /events/{id}
+	 * routes; those fall under the same '/events' prefix and are gated as 'webhooks' here.
 	 *
 	 * @param string $route Full REST route, e.g. /mcpwp/v1/pages.
 	 * @return string Category slug, or '' if not category-gated.
@@ -329,61 +347,176 @@ trait Mcpwp_Api_Auth {
 		$base = '/mcpwp/v1';
 		$path = ( 0 === strpos( $route, $base ) ) ? substr( $route, strlen( $base ) ) : $route;
 
-		// Ordered from most-specific to least-specific so that longer prefixes win.
-		$route_category_map = array(
-			// Elementor info (status, widget schemas) — check before generic /elementor.
-			'/elementor/status'                        => 'elementor-info',
-			'/elementor/widgets'                       => 'elementor-info',
-			'/elementor/widget-help'                   => 'elementor-info',
-			'/elementor/regenerate-css'                => 'elementor-info',
+		// Path-parameter routes whose category cannot be expressed as a leading prefix.
+		foreach ( $this->get_route_pattern_map() as $pattern => $pattern_category ) {
+			if ( preg_match( $pattern, $path ) ) {
+				return $pattern_category;
+			}
+		}
 
-			// Elementor build (read/write page data).
-			'/elementor'                               => 'elementor',
-
-			// Gutenberg blocks.
-			'/blocks'                                  => 'gutenberg',
-
-			// Content: pages, posts, generic content.
-			'/pages'                                   => 'content',
-			'/posts'                                   => 'content',
-			'/content'                                 => 'content',
-			'/drafts'                                  => 'content',
-			'/batch'                                   => 'content',
-			'/post-meta'                               => 'content',
-
-			// Media.
-			'/media'                                   => 'media',
-			'/screenshot'                              => 'media',
-
-			// Taxonomy.
-			'/categories'                              => 'taxonomy',
-			'/tags'                                    => 'taxonomy',
-			'/terms'                                   => 'taxonomy',
-
-			// SEO.
-			'/seo'                                     => 'seo',
-			'/content-coherence'                       => 'seo',
-
-			// Webhooks.
-			'/webhooks'                                => 'webhooks',
-			'/events'                                  => 'webhooks',
-
-			// Admin — approvals, api-keys handled here; settings/options are
-			// intentionally not gated since they are protected by the 'admin' scope.
-			'/approvals'                               => 'admin',
-			'/api-keys'                                => 'admin',
-			'/rate-limit'                              => 'admin',
-			'/integrations'                            => 'admin',
-			'/feedback'                                => 'admin',
-		);
-
-		foreach ( $route_category_map as $prefix => $category ) {
+		// Longest/most-specific prefixes first; first match wins.
+		foreach ( $this->get_route_category_map() as $prefix => $category ) {
 			if ( 0 === strpos( $path, $prefix ) ) {
 				return $category;
 			}
 		}
 
 		return ''; // Not governed by any category toggle.
+	}
+
+	/**
+	 * Regex route→category tier, checked before the prefix map. For routes whose
+	 * distinguishing segment follows a path parameter (e.g. /pages/{id}/template).
+	 *
+	 * @return array<string,string> Regex pattern => category slug.
+	 */
+	protected function get_route_pattern_map() {
+		return array(
+			// wp_update_page_template is a 'site' tool (Mcpwp_MCP_Free_Tools), but its
+			// route lives under /pages/{id}/ which the prefix map would claim as 'content'.
+			// The id segment is restricted to digits so this only claims the numeric-id
+			// template route (/pages/5/template). Non-numeric segments such as
+			// /pages/by-slug/template are a content read and must fall through to
+			// /pages => 'content' rather than being mis-gated as 'site'.
+			'#^/pages/\d+/template(/|$)#' => 'site',
+		);
+	}
+
+	/**
+	 * Prefix route→category map. Ordered most-specific first.
+	 *
+	 * @return array<string,string> Route prefix => category slug.
+	 */
+	protected function get_route_category_map() {
+		return array(
+			// Elementor info (status, widget schemas). Before generic /elementor.
+			'/elementor/status'                     => 'elementor-info',
+			'/elementor/widgets'                    => 'elementor-info',
+			'/elementor/widget-help'                => 'elementor-info',
+			'/elementor/regenerate-css'             => 'elementor-info',
+
+			// Elementor templates, archetypes, reusable parts (Pro).
+			'/elementor/templates'                  => 'elementor-templates',
+			'/elementor/archetypes'                 => 'elementor-templates',
+			'/elementor/parts'                      => 'elementor-templates',
+
+			// Elementor page-building helpers (Pro).
+			'/elementor/blueprints'                 => 'elementor-build',
+			'/elementor/build-page'                 => 'elementor-build',
+			'/elementor/clone'                      => 'elementor-build',
+			'/elementor/globals'                    => 'elementor-build',
+			'/elementor/landing-page'               => 'elementor-build',
+			'/elementor/save-section-as-template'   => 'elementor-build',
+
+			// Elementor theme builder / custom code (Pro).
+			'/elementor/custom-code'                => 'elementor-theme',
+
+			// Elementor build (read/write page data) — catch-all; stays below every
+			// finer /elementor prefix above.
+			'/elementor'                            => 'elementor',
+
+			// Block utilities absent from the MCP tool-category map (default 'site' at
+			// the MCP layer). They must resolve 'site' here too, or disabling Gutenberg
+			// would 403 tools that tools/list still advertises under Site.
+			'/blocks/design-system'                 => 'site',
+			'/blocks/parse'                         => 'site',
+			'/blocks/serialize'                     => 'site',
+			'/blocks/validate'                      => 'site',
+
+			// Gutenberg blocks.
+			'/blocks'                               => 'gutenberg',
+
+			// SEO. /content-coherence MUST precede /content, which would otherwise
+			// swallow it and gate an SEO tool behind the Content toggle.
+			'/content-coherence'                    => 'seo',
+			'/seo'                                  => 'seo',
+
+			// Content.
+			'/pages'                                => 'content',
+			'/posts'                                => 'content',
+			'/content'                              => 'content',
+			'/drafts'                               => 'content',
+			'/batch'                                => 'content',
+			'/post-meta'                            => 'content',
+
+			// Media.
+			'/media'                                => 'media',
+			'/screenshot'                           => 'media',
+
+			// Taxonomy.
+			'/categories'                           => 'taxonomy',
+			'/tags'                                 => 'taxonomy',
+			'/terms'                                => 'taxonomy',
+
+			// Webhooks + MCP event store (see /events note in the method docblock).
+			'/webhooks'                             => 'webhooks',
+			'/events'                               => 'webhooks',
+
+			// AI generation / stock-photo routes live under /integrations/*
+			// but are MCP category 'ai', NOT integration management. They must resolve
+			// 'ai' here, ahead of the generic /integrations => 'admin' below, so the REST
+			// gate agrees with the tool taxonomy. All are still gateable ('ai' is in
+			// get_category_meta()), so this realignment does not net-widen — it removes a
+			// mismatch, not a control.
+			'/integrations/stock-photos'            => 'ai',
+			'/integrations/generate-image'          => 'ai',
+			'/integrations/generate-featured-image' => 'ai',
+			'/integrations/generate-alt-text'       => 'ai',
+			'/integrations/describe-image'          => 'ai',
+			'/integrations/generate-excerpt'        => 'ai',
+			'/integrations/text-to-speech'          => 'ai',
+
+			// Admin. Integration MANAGEMENT (status/configure/remove/test) stays 'admin';
+			// settings/options are intentionally not gated (they carry the 'admin' scope).
+			'/approvals'                            => 'admin',
+			'/api-keys'                             => 'admin',
+			'/rate-limit'                           => 'admin',
+			'/integrations'                         => 'admin',
+			'/feedback'                             => 'admin',
+
+			// Granular plugin/admin families that the admin UI can toggle (all present
+			// in get_category_meta()) but whose REST routes previously classified as ''
+			// (ungated) — so disabling e.g. WooCommerce still let a direct call to
+			// /woocommerce/* through. Each category here matches the dispatching MCP
+			// tool's category, so the REST gate and tools/list agree. None of these
+			// prefixes is a prefix of another and none shadows a finer route above, so
+			// placing them at the end keeps the existing first-match ordering intact.
+			'/woocommerce'                          => 'woocommerce',
+			'/learnpress'                           => 'learnpress',
+			'/network'                              => 'multisite',
+			'/staging'                              => 'staging',
+			'/theme-builder'                        => 'elementor-theme',
+			'/forms'                                => 'forms',
+			'/keyword-research'                     => 'seo',
+
+			// wp_search is a 'content' tool; wp_list_block_types / wp_list_block_patterns
+			// are 'gutenberg'. /block-types and /block-patterns do NOT begin with the
+			// /blocks prefix above, so they need their own entries.
+			'/search'                               => 'content',
+			'/block-types'                          => 'gutenberg',
+			'/block-patterns'                       => 'gutenberg',
+
+			// Figma tools and wp_list_page_templates are 'site' tools.
+			'/figma'                                => 'site',
+			'/templates/page'                       => 'site',
+		);
+	}
+
+	/**
+	 * Codomain of get_category_for_route(): every category it can emit, from the same
+	 * two maps the classifier uses (single source of truth for the invariant test).
+	 *
+	 * @return string[] Distinct category slugs the route classifier can return.
+	 */
+	protected function get_all_route_categories() {
+		return array_values(
+			array_unique(
+				array_merge(
+					array_values( $this->get_route_pattern_map() ),
+					array_values( $this->get_route_category_map() )
+				)
+			)
+		);
 	}
 
 	/**
@@ -1437,6 +1570,17 @@ trait Mcpwp_Api_Auth {
 		$plain_key = $this->generate_api_key();
 		$key_id    = function_exists( 'wp_generate_uuid4' ) ? wp_generate_uuid4() : uniqid( 'mcpwp_', true );
 		$now       = current_time( 'mysql' );
+		// Capture whether the caller supplied any recognisable scope BEFORE
+		// sanitize_scopes() runs. It now fails CLOSED to array('read') on empty input,
+		// which would otherwise mask "no scopes requested" as "read requested" and
+		// demote an admin-role key created without explicit scopes to read-only. Key
+		// CREATION is the sanctioned place to default UP to the role ceiling.
+		$requested_scopes = array_values(
+			array_intersect(
+				array_map( 'sanitize_key', (array) $scopes ),
+				array( 'read', 'write', 'admin' )
+			)
+		);
 		$scopes    = $this->sanitize_scopes( $scopes );
 		$role      = sanitize_key( (string) $role );
 
@@ -1456,7 +1600,9 @@ trait Mcpwp_Api_Auth {
 			? array( 'read', 'write', 'admin' )
 			: array( 'read', 'write' );
 		$scopes = array_values( array_intersect( $scopes, $allowed_ceiling ) );
-		if ( empty( $scopes ) ) {
+		if ( empty( $requested_scopes ) || empty( $scopes ) ) {
+			// No explicit scopes requested (or all exceeded the ceiling) → grant the
+			// role's full ceiling. The ONLY sanctioned "default up".
 			$scopes = $allowed_ceiling;
 		}
 
@@ -1670,7 +1816,7 @@ trait Mcpwp_Api_Auth {
 			'id'              => isset( $record['id'] ) ? sanitize_key( (string) $record['id'] ) : '',
 			'label'           => isset( $record['label'] ) ? sanitize_text_field( (string) $record['label'] ) : __( 'API Key', 'mcpwp' ),
 			'hash'            => isset( $record['hash'] ) ? (string) $record['hash'] : '',
-			'scopes'          => $this->sanitize_scopes( isset( $record['scopes'] ) ? (array) $record['scopes'] : array() ),
+			'scopes'          => $this->normalize_record_scopes( $record, $role ),
 			'role'            => $role,
 			'tool_categories' => $tool_categories,
 			'rate_limits'     => $this->sanitize_rate_limits( isset( $record['rate_limits'] ) ? $record['rate_limits'] : null ),
@@ -1678,6 +1824,28 @@ trait Mcpwp_Api_Auth {
 			'last_used_at'    => isset( $record['last_used_at'] ) ? (string) $record['last_used_at'] : null,
 			'revoked_at'      => isset( $record['revoked_at'] ) ? (string) $record['revoked_at'] : null,
 		);
+	}
+
+	/**
+	 * Resolve a stored key record's scopes, now that sanitize_scopes() fails closed.
+	 *
+	 * - 'scopes' key ENTIRELY ABSENT → a legacy record predating scoped keys; these were
+	 *   effectively their role's full grant. Derive from the (already validated) role so
+	 *   the fail-closed change does not silently demote every legacy admin key to read.
+	 * - 'scopes' PRESENT but empties out (corrupt/hand-seeded) → genuinely ambiguous;
+	 *   fail closed to array('read') via sanitize_scopes().
+	 *
+	 * @param array  $record Raw key record.
+	 * @param string $role   Already-validated role slug (normalize coerces unknown→'admin').
+	 * @return array Scope list.
+	 */
+	protected function normalize_record_scopes( $record, $role ) {
+		if ( ! array_key_exists( 'scopes', $record ) ) {
+			return ( 'admin' === $role )
+				? array( 'read', 'write', 'admin' )
+				: array( 'read', 'write' );
+		}
+		return $this->sanitize_scopes( (array) $record['scopes'] );
 	}
 
 	/**
@@ -1718,7 +1886,16 @@ trait Mcpwp_Api_Auth {
 		$scopes  = array_values( array_intersect( $scopes, $allowed ) );
 
 		if ( empty( $scopes ) ) {
-			return $this->get_default_api_key_scopes();
+			// Fail CLOSED. Empty/unrecognised stored scopes are ambiguous data, not a
+			// grant — return the minimum privilege. get_default_api_key_scopes()
+			// (read+write+admin) is reserved for the explicit key-CREATION path
+			// (create_scoped_api_key) and legacy-key migration, never for runtime
+			// validation of stored scopes. This is the canonical null-collapse-to-trusted
+			// this repo had: key_has_scope(), issue_oauth_access_token() and
+			// authenticate_oauth_access_token() all re-run this on every gated request.
+			// normalize_api_key_record() preserves legacy scopeless admin keys without
+			// this fallback (see normalize_record_scopes()).
+			return array( 'read' );
 		}
 
 		if ( in_array( 'admin', $scopes, true ) ) {
@@ -1785,20 +1962,26 @@ trait Mcpwp_Api_Auth {
 	 */
 	public static function get_all_tool_category_labels() {
 		return array(
-			'content'    => __( 'Content', 'mcpwp' ),
-			'media'      => __( 'Media', 'mcpwp' ),
-			'taxonomy'   => __( 'Taxonomy', 'mcpwp' ),
+			'content'             => __( 'Content', 'mcpwp' ),
+			'media'               => __( 'Media', 'mcpwp' ),
+			'taxonomy'            => __( 'Taxonomy', 'mcpwp' ),
 			'elementor'           => __( 'Elementor', 'mcpwp' ),
 			'elementor-build'     => __( 'Elementor Build', 'mcpwp' ),
 			'elementor-templates' => __( 'Elementor Templates', 'mcpwp' ),
 			'elementor-theme'     => __( 'Elementor Theme', 'mcpwp' ),
 			'elementor-info'      => __( 'Elementor Info', 'mcpwp' ),
-			'gutenberg'  => __( 'Gutenberg', 'mcpwp' ),
-			'seo'        => __( 'SEO', 'mcpwp' ),
-			'forms'      => __( 'Forms', 'mcpwp' ),
-			'site'       => __( 'Site', 'mcpwp' ),
-			'admin'      => __( 'Admin', 'mcpwp' ),
-			'webhooks'   => __( 'Webhooks', 'mcpwp' ),
+			'gutenberg'           => __( 'Gutenberg', 'mcpwp' ),
+			'seo'                 => __( 'SEO', 'mcpwp' ),
+			'forms'               => __( 'Forms', 'mcpwp' ),
+			'site'                => __( 'Site', 'mcpwp' ),
+			'admin'               => __( 'Admin', 'mcpwp' ),
+			'webhooks'            => __( 'Webhooks', 'mcpwp' ),
+			'ai'                  => __( 'AI', 'mcpwp' ),
+			'woocommerce'         => __( 'WooCommerce', 'mcpwp' ),
+			'learnpress'          => __( 'LearnPress', 'mcpwp' ),
+			'events'              => __( 'Events', 'mcpwp' ),
+			'multisite'           => __( 'Multisite', 'mcpwp' ),
+			'staging'             => __( 'Staging', 'mcpwp' ),
 		);
 	}
 
@@ -1861,10 +2044,9 @@ trait Mcpwp_Api_Auth {
 		$settings = is_array( $settings ) ? $settings : array();
 
 		// Ceiling for the client_credentials grant (machine tokens). Resolved
-		// through an explicit allow-list, NOT through sanitize_scopes():
-		// sanitize_scopes() fails open to read+write+admin, so a typo'd or
-		// truncated stored value would silently promote the ceiling to admin.
-		// An unrecognised or absent value falls back to 'write' — the documented
+		// through an explicit allow-list (read/write/admin) rather than through the
+		// scope helpers, so its semantics are self-contained and cannot drift with
+		// them. An unrecognised or absent value falls back to 'write' — the documented
 		// default. That fallback is a two-sided guarantee: it stops a bad value
 		// widening the ceiling, and it stops an unset option narrowing every
 		// machine client to read and breaking existing integrations.

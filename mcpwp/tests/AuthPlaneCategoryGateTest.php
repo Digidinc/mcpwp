@@ -30,6 +30,11 @@ class Mcpwp_Auth_Category_Gate_Harness {
 	public function oauth_settings(): array {
 		return $this->get_oauth_settings();
 	}
+
+	/** Public proxy to the protected route→category classifier. */
+	public function category_for_route( string $route ): string {
+		return $this->get_category_for_route( $route );
+	}
 }
 
 final class AuthPlaneCategoryGateTest extends TestCase {
@@ -197,5 +202,70 @@ final class AuthPlaneCategoryGateTest extends TestCase {
 		);
 
 		$this->assertSame( 'admin', $this->harness()->oauth_settings()['oauth_client_credentials_max_scope'] );
+	}
+
+	// ── AI-generation routes live under /integrations/* but are the ──
+	// 'ai' tool-category, NOT integration management. The REST gate must classify
+	// them 'ai' so it agrees with the MCP tool taxonomy; integration MANAGEMENT
+	// (configure/test/status/remove) stays 'admin'.
+
+	public function test_ai_generation_routes_classify_as_ai_not_admin(): void {
+		$auth = $this->harness();
+
+		$this->assertSame( 'ai', $auth->category_for_route( '/mcpwp/v1/integrations/generate-image' ) );
+		$this->assertSame( 'ai', $auth->category_for_route( '/mcpwp/v1/integrations/text-to-speech' ) );
+		$this->assertSame( 'ai', $auth->category_for_route( '/mcpwp/v1/integrations/stock-photos' ) );
+	}
+
+	public function test_integration_management_routes_stay_admin(): void {
+		$auth = $this->harness();
+
+		$this->assertSame( 'admin', $auth->category_for_route( '/mcpwp/v1/integrations/configure' ) );
+		$this->assertSame( 'admin', $auth->category_for_route( '/mcpwp/v1/integrations/test' ) );
+	}
+
+	// ── The free /events endpoints classify as 'webhooks' at the REST ──
+	// layer (one prefix cannot serve two taxonomies). Classification is deliberately
+	// unchanged; the Pro 'events' category remains a first-class MCP-tool toggle.
+
+	public function test_events_routes_classify_as_webhooks(): void {
+		$auth = $this->harness();
+
+		$this->assertSame( 'webhooks', $auth->category_for_route( '/mcpwp/v1/events' ) );
+		$this->assertSame( 'webhooks', $auth->category_for_route( '/mcpwp/v1/events/schema' ) );
+	}
+
+	// ── Granular plugin/admin families that ARE toggleable in WP Admin > Tools ──
+	// but whose REST routes previously classified as '' (ungated). Each REST prefix
+	// must resolve to the SAME category as its dispatching MCP tool, so disabling the
+	// category in the admin UI actually blocks the raw route too.
+
+	public function test_granular_family_routes_classify_to_their_tool_category(): void {
+		$auth = $this->harness();
+
+		$this->assertSame( 'woocommerce', $auth->category_for_route( '/mcpwp/v1/woocommerce/orders/123' ) );
+		$this->assertSame( 'learnpress', $auth->category_for_route( '/mcpwp/v1/learnpress/courses' ) );
+		$this->assertSame( 'multisite', $auth->category_for_route( '/mcpwp/v1/network/switch' ) );
+		$this->assertSame( 'staging', $auth->category_for_route( '/mcpwp/v1/staging/push' ) );
+		$this->assertSame( 'elementor-theme', $auth->category_for_route( '/mcpwp/v1/theme-builder/templates' ) );
+		$this->assertSame( 'forms', $auth->category_for_route( '/mcpwp/v1/forms' ) );
+		$this->assertSame( 'seo', $auth->category_for_route( '/mcpwp/v1/keyword-research' ) );
+		$this->assertSame( 'content', $auth->category_for_route( '/mcpwp/v1/search' ) );
+		$this->assertSame( 'gutenberg', $auth->category_for_route( '/mcpwp/v1/block-types' ) );
+		$this->assertSame( 'gutenberg', $auth->category_for_route( '/mcpwp/v1/block-patterns' ) );
+		$this->assertSame( 'site', $auth->category_for_route( '/mcpwp/v1/figma/file' ) );
+		$this->assertSame( 'site', $auth->category_for_route( '/mcpwp/v1/templates/page' ) );
+	}
+
+	/**
+	 * The template pattern must claim ONLY the numeric-id route (/pages/5/template =>
+	 * 'site'). A non-numeric segment such as /pages/by-slug/template is a content read
+	 * and must fall through to /pages => 'content', not be mis-gated as 'site'.
+	 */
+	public function test_page_template_pattern_only_matches_numeric_ids(): void {
+		$auth = $this->harness();
+
+		$this->assertSame( 'site', $auth->category_for_route( '/mcpwp/v1/pages/5/template' ) );
+		$this->assertSame( 'content', $auth->category_for_route( '/mcpwp/v1/pages/by-slug/template' ) );
 	}
 }
