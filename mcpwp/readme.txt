@@ -153,6 +153,9 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 
 == Changelog ==
 
+= 3.9.3 =
+* fix: **security:** granular tool-category gate on all auth paths, fail-closed OAuth scopes ([#700](https://github.com/Mumega-com/mcpwp/issues/700))
+
 = 3.9.2 =
 * fix: **release:** publish and watch the Freemius channel like the self-hosted one ([#726](https://github.com/Mumega-com/mcpwp/issues/726))
 
@@ -765,6 +768,9 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 * Fix SQL escaping in activity log for WordPress.org scanner.
 
 == Upgrade Notice ==
+
+= 3.9.3 =
+AI image and alt-text generation is now governed by the **AI** tool toggle rather than **Admin**. If you disabled Admin specifically to block `/integrations/*` generation, it becomes reachable again on upgrade — AI is on by default. Disable the AI toggle to restore that block. This aligns the REST routes with the tool taxonomy the MCP layer has always used. Tool-category toggles now hold on the REST entry point as well as the MCP one. A toggle you previously set expecting MCP-only enforcement — WooCommerce, LearnPress, Multisite, Staging, Forms, Elementor Theme — will now also block the matching REST routes.
 
 = 3.4.1 =
 Security fix: plugin self-update and update-control options now require admin scope; update package URLs are restricted to HTTPS + trusted hosts (closes a write-scope-to-RCE chain).
