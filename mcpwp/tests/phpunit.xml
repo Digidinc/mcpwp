@@ -11,6 +11,15 @@
       <file>./unit/test-user-meta-denylist.php</file>
       <file>./unit/test-updater-independent-of-wporg.php</file>
       <file>./unit/test-update-channel-health.php</file>
+      <file>./unit/test-dataforseo-provider.php</file>
+      <file>./unit/test-dataforseo-registration.php</file>
+      <file>./unit/test-seo-visibility.php</file>
+      <file>./unit/test-keyword-enrichment.php</file>
+      <file>./unit/test-seo-opportunities.php</file>
+      <file>./unit/test-seo-cache.php</file>
+      <file>./unit/test-seo-market-debounce.php</file>
+      <file>./unit/test-seo-market-opportunities.php</file>
+      <file>./unit/test-rest-seo-audit-keyword-enrichment.php</file>
     </testsuite>
   </testsuites>
 </phpunit>

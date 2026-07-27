@@ -816,7 +816,7 @@ trait Mcpwp_Free_Tools_Site_Trait {
 
 		$tools[] = $this->define_tool(
 			'wp_keyword_research',
-			'Discover related searches, long-tail keywords, and question clusters for any seed phrase using Google Suggest autocomplete (keyless — no API key required). Returns a deduplicated keyword set and grouped questions to fuel SEO topic expansion, content ideas, blog post planning, and autonomous content-marketing loops. Similar to AnswerThePublic. Does not require a paid provider.',
+			'Discover related searches, long-tail keywords, and question clusters for any seed phrase using Google Suggest autocomplete. Keyless and free by default — no API key required, no cost, safe to call repeatedly in an autonomous content-marketing loop. Returns a deduplicated keyword set and grouped questions to fuel SEO topic expansion, content ideas, and blog post planning. Similar to AnswerThePublic. Pass enrich=true to also attach DataForSEO market metrics (search volume, CPC, competition, keyword difficulty) when DataForSEO is configured — that spends DataForSEO credit, so call it explicitly per topic you actually intend to act on, not from inside a loop over every candidate.',
 			array(
 				'seed' => array(
 					'type'        => 'string',
@@ -826,15 +826,19 @@ trait Mcpwp_Free_Tools_Site_Trait {
 				),
 				'hl'   => array(
 					'type'        => 'string',
-					'description' => 'Language code for Google Suggest (default: en).',
+					'description' => 'Language code for Google Suggest, and (when enrich=true) the DataForSEO language_code (default: en).',
 				),
 				'gl'   => array(
 					'type'        => 'string',
-					'description' => 'Country code for Google Suggest (default: us).',
+					'description' => 'Country code for Google Suggest (default: us). When enrich=true, only "us" currently maps to a DataForSEO location — any other value returns enrichment_reason "locale_not_supported" rather than mismatched market data.',
 				),
 				'max'  => array(
 					'type'        => 'number',
 					'description' => 'Overall cap on returned suggestion items, 1-500. Defaults to 100.',
+				),
+				'enrich' => array(
+					'type'        => 'boolean',
+					'description' => 'When true and DataForSEO is configured, attach market metrics (search volume, CPC, competition, keyword difficulty) to each result. Spends DataForSEO credit — call explicitly per topic, not in a loop. Defaults to false (keyless, free, autocomplete-only).',
 				),
 			)
 		);

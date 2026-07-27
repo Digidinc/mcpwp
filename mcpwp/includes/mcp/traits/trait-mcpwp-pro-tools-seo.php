@@ -316,6 +316,32 @@ trait Mcpwp_Pro_Tools_Seo_Trait {
 			)
 		);
 
+		// SEO Market Data (DataForSEO). Read-only visibility + a separate,
+		// explicit refresh — never on a timer, so an agent loop cannot quietly
+		// spend the customer's DataForSEO credit overnight.
+		$pro_tools[] = $this->define_tool(
+			'wp_seo_visibility',
+			'Get the last stored search visibility snapshot for this site: ranked keywords, position, search volume, and difficulty. Does not fetch fresh data — call wp_refresh_seo_visibility for that. Returns reason "never_fetched" if no snapshot exists yet, or "no_rankings" if the last fetch found no ranked keywords.',
+			array()
+		);
+
+		$pro_tools[] = $this->define_tool(
+			'wp_refresh_seo_visibility',
+			'Fetch a fresh search visibility snapshot from DataForSEO for this site and store it, replacing the previous snapshot. Spends DataForSEO credit — call explicitly, not in a loop. Requires the DataForSEO integration to be configured; returns an error naming the reason (not configured, credentials rejected, out of credit, or provider unreachable) otherwise. Debounced to one fetch per 5 minutes: a call inside that window does not spend credit and instead returns the existing snapshot with reason "refresh_debounced" and a "retry_after" seconds count — rankings do not move that fast, so nothing is lost by waiting.',
+			array()
+		);
+
+		$pro_tools[] = $this->define_tool(
+			'wp_seo_opportunities',
+			'Get a ranked list of the highest-value SEO opportunities, using the stored visibility snapshot and (when a seed is given and no visibility data exists yet) fresh keyword suggestions. The "mode" field tells you which case applies: greenfield (no rankings yet, needs new content), emerging, or mature (page-two terms worth pushing). Each opportunity carries the evidence behind its score.',
+			array(
+				'seed' => array(
+					'type'        => 'string',
+					'description' => 'Seed keyword to look up fresh suggestions for when there is no stored visibility data yet (enables greenfield mode). Ignored once a visibility snapshot exists.',
+				),
+			)
+		);
+
 		return $pro_tools;
 	}
 }

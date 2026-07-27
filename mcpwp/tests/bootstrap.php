@@ -384,6 +384,9 @@ function update_option($name, $value, $autoload = null)
         return false;
     }
     $GLOBALS['mcpwp_test_options'][ $name ] = $value;
+    // Recorded so tests can assert a caller passed autoload=false explicitly
+    // (e.g. a large/rarely-read option that must not load on every request).
+    $GLOBALS['mcpwp_test_options_autoload'][ $name ] = $autoload;
     return true;
 }
 
@@ -398,6 +401,9 @@ function set_transient($name, $value, $expiration)
     $GLOBALS['mcpwp_test_transients'][ $name ] = array(
         'value'   => $value,
         'expires' => time() + (int) $expiration,
+        // Requested TTL, kept verbatim. 'expires' cannot be compared reliably
+        // when two writes land in the same second.
+        'ttl'     => (int) $expiration,
     );
     return true;
 }
@@ -1598,3 +1604,24 @@ if (!function_exists('esc_attr')) {
 require_once dirname(__DIR__) . '/includes/class-mcpwp-security.php';
 require_once dirname(__DIR__) . '/includes/class-mcpwp-updater.php';
 require_once dirname(__DIR__) . '/includes/class-mcpwp-update-channel-health.php';
+
+// DataForSEO market data provider.
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-provider-dataforseo.php';
+
+// Keyword research (autocomplete + DataForSEO enrichment).
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-keyword-research.php';
+
+// Search visibility snapshot store — market position, separate from
+// first-party Search Console performance (Mcpwp_Search_Performance above).
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-seo-visibility.php';
+
+// Maturity-aware opportunity ranker — fuses visibility, keyword metrics and
+// audit issues into a ranked list of SEO work worth doing.
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-seo-opportunities.php';
+
+if (!defined('MINUTE_IN_SECONDS')) {
+    define('MINUTE_IN_SECONDS', 60);
+}
+
+// Cache for paid SEO lookups — bounds agent-loop spend on DataForSEO credit.
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-seo-cache.php';

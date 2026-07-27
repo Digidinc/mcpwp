@@ -5,17 +5,37 @@
 ## Local Development (Primary)
 
 ### Local WordPress
+
+**Use `wp-rig-wp-dev`. It is the only container that mounts this plugin.**
+
 ```
-URL:      http://localhost:8080
-WP-CLI:   docker exec wp-test-wordpress-1 wp <command> --allow-root
-Compose:  ~/projects/themusicalunicorn/wp-test/docker-compose.yml
+URL:      http://localhost:8086
+WP-CLI:   docker exec wp-rig-wp-dev wp <command> --allow-root
+PHPUnit:  docker exec wp-rig-wp-dev bash -c 'cd /var/www/html/wp-content/plugins/mcpwp && vendor/bin/phpunit --configuration tests/phpunit.xml'
+Mount:    wp-ai-operator/mcpwp -> /var/www/html/wp-content/plugins/mcpwp
 ```
 
-**Plugin source is volume-mounted** — edits to `wp-ai-operator/mcpwp/` are live instantly. No deploy needed.
+Edits to `wp-ai-operator/mcpwp/` are live instantly there. No deploy needed.
+
+**`wp-test-wordpress-1` (port 8080) does NOT mount this plugin, and it lies convincingly.** It
+mounts `site-pilot-ai` and `site-pilot-ai-pro` — the pre-rename directories — and carries a stale,
+unmounted copy of `mcpwp` under its own volume.
+
+The trap: **it answers.** `http://localhost:8080/wp-json/` returns HTTP 200 and advertises the
+`mcpwp/v1` namespace, so it looks like a working dev site. It is running old code. A file added to
+`mcpwp/` today is simply absent there, and any test against it silently passes or fails on a
+version nobody is editing. This doc previously named it as the live-mounted dev container and gave
+port 8080, which cost two tasks real debugging time. Verify with:
+
+```bash
+docker inspect wp-rig-wp-dev --format '{{range .Mounts}}{{.Source}} -> {{.Destination}}{{"\n"}}{{end}}'
+```
+
+There is no PHP on the host — every PHP or WP-CLI command must run inside the container.
 
 ### Generate API Key
 ```bash
-docker exec wp-test-wordpress-1 bash -c 'php -r "
+docker exec wp-rig-wp-dev bash -c 'php -r "
 require_once \"/var/www/html/wp-load.php\";
 \$key = \"mcpwp_\" . bin2hex(random_bytes(24));
 update_option(\"mcpwp_api_key\", wp_hash_password(\$key));
@@ -28,14 +48,14 @@ echo \$key;
 KEY="mcpwp_..."  # from above
 
 # Site info
-curl -s http://localhost:8080/wp-json/mcpwp/v1/site-info -H "X-API-Key: $KEY" | jq
+curl -s http://localhost:8086/wp-json/mcpwp/v1/site-info -H "X-API-Key: $KEY" | jq
 
 # Create page + push Elementor data
-PAGE=$(curl -s -X POST http://localhost:8080/wp-json/mcpwp/v1/pages \
+PAGE=$(curl -s -X POST http://localhost:8086/wp-json/mcpwp/v1/pages \
   -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
   -d '{"title":"Test","status":"draft"}' | jq -r .id)
 
-curl -s -X POST "http://localhost:8080/wp-json/mcpwp/v1/elementor/$PAGE" \
+curl -s -X POST "http://localhost:8086/wp-json/mcpwp/v1/elementor/$PAGE" \
   -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
   -d '{"elementor_data":"[{\"id\":\"abc\",\"elType\":\"section\",\"settings\":{},\"elements\":[{\"id\":\"def\",\"elType\":\"column\",\"settings\":{\"_column_size\":100},\"elements\":[{\"id\":\"ghi\",\"elType\":\"widget\",\"widgetType\":\"heading\",\"settings\":{\"title\":\"Hello\"}}]}]}]"}' | jq
 ```
@@ -43,15 +63,15 @@ curl -s -X POST "http://localhost:8080/wp-json/mcpwp/v1/elementor/$PAGE" \
 ### WP-CLI Shortcuts
 ```bash
 # Plugin management
-docker exec wp-test-wordpress-1 wp plugin list --allow-root
-docker exec wp-test-wordpress-1 wp plugin install elementor --activate --allow-root
+docker exec wp-rig-wp-dev wp plugin list --allow-root
+docker exec wp-rig-wp-dev wp plugin install elementor --activate --allow-root
 
 # Database
-docker exec wp-test-wordpress-1 wp option get mcpwp_version --allow-root
-docker exec wp-test-wordpress-1 wp post list --post_type=page --allow-root
+docker exec wp-rig-wp-dev wp option get mcpwp_version --allow-root
+docker exec wp-rig-wp-dev wp post list --post_type=page --allow-root
 
 # Reset test environment
-docker exec wp-test-wordpress-1 wp post delete $(docker exec wp-test-wordpress-1 wp post list --post_type=page --format=ids --allow-root) --force --allow-root
+docker exec wp-rig-wp-dev wp post delete $(docker exec wp-rig-wp-dev wp post list --post_type=page --format=ids --allow-root) --force --allow-root
 ```
 
 ## Production Site
@@ -440,6 +460,9 @@ All endpoints require `X-API-Key` header. Namespace: `mcpwp/v1`.
 | `/content-graph/apply-link` | POST | Apply accepted link |
 | `/content-graph/validate-links` | POST | Validate all internal links |
 | `/seo/content-quality/{id}` | GET | Content quality score |
+| `/seo/visibility` | GET | Stored search visibility snapshot (DataForSEO) |
+| `/seo/visibility/refresh` | POST | Fetch a fresh visibility snapshot — debounced 5 min, spends DataForSEO credit |
+| `/seo/opportunities` | GET | Ranked SEO opportunity list, maturity-aware |
 
 ### Approvals & Safety
 | Endpoint | Method | Purpose |
@@ -518,6 +541,26 @@ Push to live always gates through the approval system — same key cannot approv
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
 | `/mcp` | POST | MCP tool dispatch (all tools via JSON-RPC) — methods: `initialize`, `tools/list`, `tools/call`, `resources/list`, `resources/read`, `prompts/list`, `prompts/get`, `ping` |
+
+## SEO Market Data (DataForSEO)
+
+Two data classes, deliberately in separate stores:
+
+- **Visibility** (`Mcpwp_SEO_Visibility`) — where the site ranks in the market. Position, volume,
+  difficulty. From DataForSEO.
+- **Performance** (`Mcpwp_Search_Performance`) — traffic actually received. Clicks, impressions,
+  CTR. Search Console only; still import-only until the broker OAuth work lands.
+
+They are not interchangeable. DataForSEO cannot supply clicks or impressions, and `position` means
+an impression-weighted average in Search Console but a scraped SERP rank in DataForSEO. Merging
+them produces a number nobody can interpret.
+
+`Mcpwp_SEO_Opportunities::rank()` adapts its signal to site maturity — `greenfield` (no rankings),
+`emerging` (ranks, but deep), `mature` (page-2 positions). Striking distance is a score multiplier,
+never an entry condition: a site ranking only at positions 64-91 must still get a ranked list.
+
+Credentials are BYO via WP Admin > Integrations > DataForSEO (login + password, HTTP Basic).
+Nothing runs on a timer — every lookup is an explicit user or agent action.
 
 ## Elementor Data Format
 

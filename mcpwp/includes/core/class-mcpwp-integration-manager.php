@@ -141,6 +141,24 @@ class Mcpwp_Integration_Manager {
 				),
 			),
 		),
+		'dataforseo' => array(
+			'name'        => 'DataForSEO',
+			'url'         => 'https://app.dataforseo.com/api-access',
+			'tier'        => 'pro',
+			'description' => 'Keyword search volume, difficulty and search visibility. You bring your own DataForSEO account; usage is billed to you directly.',
+			'fields'      => array(
+				'login'    => array(
+					'label'       => 'API Login',
+					'placeholder' => 'you@example.com',
+					'type'        => 'text',
+				),
+				'password' => array(
+					'label'       => 'API Password',
+					'placeholder' => '',
+					'type'        => 'password',
+				),
+			),
+		),
 		'wpengine_staging' => array(
 			'name'        => 'WP Engine Staging',
 			'url'         => 'https://developers.wpengine.com/',
@@ -434,6 +452,10 @@ class Mcpwp_Integration_Manager {
 			return $this->test_figma_provider();
 		}
 
+		if ( 'dataforseo' === $provider ) {
+			return $this->test_dataforseo_provider();
+		}
+
 		if ( 'cloudflare' === $provider ) {
 			return $this->test_cloudflare_provider();
 		}
@@ -577,6 +599,33 @@ class Mcpwp_Integration_Manager {
 		}
 
 		return $result;
+	}
+
+	/**
+	 * Verify DataForSEO credentials and surface the remaining credit.
+	 *
+	 * The balance is shown because every lookup spends the customer's money —
+	 * they should be able to see what is left without leaving WP admin.
+	 *
+	 * @return array{success:bool,message:string}
+	 */
+	private function test_dataforseo_provider() {
+		$config = $this->get_provider_config( 'dataforseo' );
+
+		if ( empty( $config['login'] ) || empty( $config['password'] ) ) {
+			return array(
+				'success' => false,
+				'message' => Mcpwp_Provider_Dataforseo::describe_reason( 'not_configured' ),
+			);
+		}
+
+		$provider = new Mcpwp_Provider_Dataforseo( $config['login'], $config['password'] );
+		$result   = $provider->test_connection();
+
+		return array(
+			'success' => (bool) $result['success'],
+			'message' => (string) $result['message'],
+		);
 	}
 
 	/**

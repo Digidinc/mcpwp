@@ -271,6 +271,10 @@ class Mcpwp_Loader {
 		$seo_audit_controller = new Mcpwp_REST_SEO_Audit();
 		$seo_audit_controller->register_routes();
 
+		// SEO market data — visibility and opportunities
+		$seo_market = new Mcpwp_REST_SEO_Market();
+		$seo_market->register_routes();
+
 		// Content quality
 		$content_quality_controller = new Mcpwp_REST_Content_Quality();
 		$content_quality_controller->register_routes();

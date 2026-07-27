@@ -214,6 +214,10 @@ trait Mcpwp_Admin_Control_Room_Trait {
 		$recent_activity = $this->get_recent_activity_rows( 8 );
 		$event_inbox     = $this->get_control_room_event_inbox( $event_filters );
 
+		$seo_visibility_latest = class_exists( 'Mcpwp_SEO_Visibility' )
+			? Mcpwp_SEO_Visibility::get_latest()
+			: array( 'rows' => array(), 'reason' => 'unavailable' );
+
 		$data = array(
 			'approval_counts'  => $approval_counts,
 			'pending_approvals' => class_exists( 'Mcpwp_Approvals' ) ? Mcpwp_Approvals::list_requests( 'pending', 5, true ) : array(),
@@ -232,6 +236,15 @@ trait Mcpwp_Admin_Control_Room_Trait {
 			),
 			'seo_summary'      => isset( $seo_all['summary'] ) && is_array( $seo_all['summary'] ) ? $seo_all['summary'] : array(),
 			'open_seo_issues'  => isset( $seo_open['issues'] ) && is_array( $seo_open['issues'] ) ? $seo_open['issues'] : array(),
+			'seo_visibility'    => $seo_visibility_latest,
+			'seo_opportunities' => class_exists( 'Mcpwp_SEO_Opportunities' ) && class_exists( 'Mcpwp_SEO_Visibility' )
+				? Mcpwp_SEO_Opportunities::rank(
+					$seo_visibility_latest['rows'],
+					array(),
+					isset( $seo_open['issues'] ) && is_array( $seo_open['issues'] ) ? $seo_open['issues'] : array(),
+					isset( $seo_visibility_latest['reason'] ) ? $seo_visibility_latest['reason'] : null
+				)
+				: array( 'mode' => 'unknown', 'opportunities' => array(), 'reason' => 'unavailable' ),
 			'seo_filters'      => $seo_filters,
 			'event_inbox'      => $event_inbox,
 			'event_filters'    => $event_filters,

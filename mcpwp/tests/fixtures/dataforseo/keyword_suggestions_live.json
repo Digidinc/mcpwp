@@ -1,0 +1,1179 @@
+{
+  "version": "0.1.20260717",
+  "status_code": 20000,
+  "status_message": "Ok.",
+  "time": "0.1219 sec.",
+  "cost": 0.0132,
+  "tasks_count": 1,
+  "tasks_error": 0,
+  "tasks": [
+    {
+      "id": "07270628-2163-0399-0000-8b2cc42a4d56",
+      "status_code": 20000,
+      "status_message": "Ok.",
+      "time": "0.0646 sec.",
+      "cost": 0.0132,
+      "result_count": 1,
+      "path": [
+        "v3",
+        "dataforseo_labs",
+        "google",
+        "keyword_suggestions",
+        "live"
+      ],
+      "data": {
+        "api": "dataforseo_labs",
+        "function": "keyword_suggestions",
+        "se_type": "google",
+        "keyword": "wordpress mcp",
+        "language_code": "en",
+        "location_code": 2840,
+        "limit": 10,
+        "include_serp_info": false
+      },
+      "result": [
+        {
+          "se_type": "google",
+          "seed_keyword": "wordpress mcp",
+          "seed_keyword_data": null,
+          "location_code": 2840,
+          "language_code": "en",
+          "total_count": 28,
+          "items_count": 10,
+          "offset": 0,
+          "offset_token": "eyJDdXJyZW50T2Zmc2V0IjoxMCwiUmVxdWVzdERhdGEiOnsia2V5d29yZCI6IndvcmRwcmVzcyBtY3AiLCJpbmNsdWRlX3NlZWRfa2V5d29yZCI6ZmFsc2UsImZ1bGxfbWF0Y2giOmZhbHNlLCJsb2FkX3NlcnBfaW5mbyI6ZmFsc2UsInNlYXJjaF9hZnRlcl90b2tlbiI6bnVsbCwiaWdub3JlX3N5bm9ueW1zIjpmYWxzZSwibGFuZ3VhZ2UiOiJlbiIsInNlYXJjaF9lbmdpbmUiOiJnb29nbGUiLCJsb2NhdGlvbiI6Mjg0MCwidXNlX25ld19jYXRlZ29yaWVzIjp0cnVlLCJvcmRlcl9ieSI6eyJvcmRlcl9maWVsZCI6ImtleXdvcmRfaW5mby5zZWFyY2hfdm9sdW1lIiwib3JkZXJfdHlwZSI6IkRlc2MiLCJuZXh0IjpudWxsfSwibGltaXQiOjEwLCJvZmZzZXQiOjAsImFpZCI6MjE2Mzg4LCJ1c2VfY2FjaGUiOnRydWUsInRhc2tfaWQiOiIwNzI3MDYyOC0yMTYzLTAzOTktMDAwMC04YjJjYzQyYTRkNTYiLCJmbGFncyI6bnVsbH0sIlJhd1F1ZXJ5IjpudWxsLCJJZCI6IjBiYTFkMzAzLTFkYWYtNDAxOS04ZGEyLThmMDc0MTMxZWVhZiIsIlNlYXJjaEFmdGVyRGF0YSI6WzEwLCIyOTMyM2U3NC1kMTE2LTE2YjAtZmM4Zi1hZTk1ZTRlNDBiZmMiXSwiRXhlY3V0b3IiOi05MTg0NDA1OTQwNDQ0NTE3NjMzfQ==",
+          "items": [
+            {
+              "se_type": "google",
+              "keyword": "wordpress mcp",
+              "location_code": 2840,
+              "language_code": "en",
+              "keyword_info": {
+                "se_type": "google",
+                "last_updated_time": "2026-07-10 20:46:39 +00:00",
+                "competition": 0.12,
+                "competition_level": "LOW",
+                "cpc": 14.45,
+                "search_volume": 720,
+                "low_top_of_page_bid": 3.78,
+                "high_top_of_page_bid": 15.42,
+                "categories": [
+                  10007,
+                  11494,
+                  13418
+                ],
+                "monthly_searches": [
+                  {
+                    "year": 2026,
+                    "month": 6,
+                    "search_volume": 1000
+                  },
+                  {
+                    "year": 2026,
+                    "month": 5,
+                    "search_volume": 1000
+                  },
+                  {
+                    "year": 2026,
+                    "month": 4,
+                    "search_volume": 1000
+                  },
+                  {
+                    "year": 2026,
+                    "month": 3,
+                    "search_volume": 1300
+                  },
+                  {
+                    "year": 2026,
+                    "month": 2,
+                    "search_volume": 880
+                  },
+                  {
+                    "year": 2026,
+                    "month": 1,
+                    "search_volume": 590
+                  },
+                  {
+                    "year": 2025,
+                    "month": 12,
+                    "search_volume": 480
+                  },
+                  {
+                    "year": 2025,
+                    "month": 11,
+                    "search_volume": 480
+                  },
+                  {
+                    "year": 2025,
+                    "month": 10,
+                    "search_volume": 590
+                  },
+                  {
+                    "year": 2025,
+                    "month": 9,
+                    "search_volume": 480
+                  },
+                  {
+                    "year": 2025,
+                    "month": 8,
+                    "search_volume": 480
+                  },
+                  {
+                    "year": 2025,
+                    "month": 7,
+                    "search_volume": 480
+                  }
+                ],
+                "search_volume_trend": {
+                  "monthly": 0,
+                  "quarterly": 0,
+                  "yearly": 156
+                }
+              },
+              "keyword_info_normalized_with_bing": null,
+              "keyword_info_normalized_with_clickstream": null,
+              "clickstream_keyword_info": null,
+              "keyword_properties": {
+                "se_type": "google",
+                "core_keyword": null,
+                "synonym_clustering_algorithm": null,
+                "keyword_difficulty": 27,
+                "detected_language": "en",
+                "is_another_language": false,
+                "words_count": 2
+              },
+              "serp_info": null,
+              "avg_backlinks_info": {
+                "se_type": "google",
+                "backlinks": 61.1,
+                "dofollow": 43.9,
+                "referring_pages": 51.5,
+                "referring_domains": 25.4,
+                "referring_main_domains": 24.8,
+                "rank": 126.1,
+                "main_domain_rank": 598.1,
+                "last_updated_time": "2026-07-01 00:42:01 +00:00"
+              },
+              "search_intent_info": {
+                "se_type": "google",
+                "main_intent": "navigational",
+                "foreign_intent": null,
+                "last_updated_time": "2026-05-02 19:36:08 +00:00"
+              }
+            },
+            {
+              "se_type": "google",
+              "keyword": "wordpress mcp server",
+              "location_code": 2840,
+              "language_code": "en",
+              "keyword_info": {
+                "se_type": "google",
+                "last_updated_time": "2026-07-12 09:50:52 +00:00",
+                "competition": 0.17,
+                "competition_level": "LOW",
+                "cpc": 9.49,
+                "search_volume": 210,
+                "low_top_of_page_bid": 2.44,
+                "high_top_of_page_bid": 14.87,
+                "categories": [
+                  10007,
+                  11504,
+                  13418
+                ],
+                "monthly_searches": [
+                  {
+                    "year": 2026,
+                    "month": 6,
+                    "search_volume": 170
+                  },
+                  {
+                    "year": 2026,
+                    "month": 5,
+                    "search_volume": 260
+                  },
+                  {
+                    "year": 2026,
+                    "month": 4,
+                    "search_volume": 260
+                  },
+                  {
+                    "year": 2026,
+                    "month": 3,
+                    "search_volume": 260
+                  },
+                  {
+                    "year": 2026,
+                    "month": 2,
+                    "search_volume": 260
+                  },
+                  {
+                    "year": 2026,
+                    "month": 1,
+                    "search_volume": 170
+                  },
+                  {
+                    "year": 2025,
+                    "month": 12,
+                    "search_volume": 110
+                  },
+                  {
+                    "year": 2025,
+                    "month": 11,
+                    "search_volume": 140
+                  },
+                  {
+                    "year": 2025,
+                    "month": 10,
+                    "search_volume": 210
+                  },
+                  {
+                    "year": 2025,
+                    "month": 9,
+                    "search_volume": 170
+                  },
+                  {
+                    "year": 2025,
+                    "month": 8,
+                    "search_volume": 170
+                  },
+                  {
+                    "year": 2025,
+                    "month": 7,
+                    "search_volume": 210
+                  }
+                ],
+                "search_volume_trend": {
+                  "monthly": -35,
+                  "quarterly": -35,
+                  "yearly": 0
+                }
+              },
+              "keyword_info_normalized_with_bing": null,
+              "keyword_info_normalized_with_clickstream": null,
+              "clickstream_keyword_info": null,
+              "keyword_properties": {
+                "se_type": "google",
+                "core_keyword": null,
+                "synonym_clustering_algorithm": "text_processing",
+                "keyword_difficulty": 8,
+                "detected_language": "en",
+                "is_another_language": false,
+                "words_count": 3
+              },
+              "serp_info": null,
+              "avg_backlinks_info": {
+                "se_type": "google",
+                "backlinks": 59.5,
+                "dofollow": 42.2,
+                "referring_pages": 50,
+                "referring_domains": 25.6,
+                "referring_main_domains": 25.1,
+                "rank": 85.7,
+                "main_domain_rank": 572.2,
+                "last_updated_time": "2026-07-06 21:33:34 +00:00"
+              },
+              "search_intent_info": {
+                "se_type": "google",
+                "main_intent": "navigational",
+                "foreign_intent": null,
+                "last_updated_time": "2026-05-07 14:57:46 +00:00"
+              }
+            },
+            {
+              "se_type": "google",
+              "keyword": "wordpress mcp plugin",
+              "location_code": 2840,
+              "language_code": "en",
+              "keyword_info": {
+                "se_type": "google",
+                "last_updated_time": "2026-07-11 02:30:29 +00:00",
+                "competition": 0.21,
+                "competition_level": "LOW",
+                "cpc": 6.27,
+                "search_volume": 110,
+                "low_top_of_page_bid": 2.14,
+                "high_top_of_page_bid": 13.71,
+                "categories": [
+                  10007,
+                  11494,
+                  13418
+                ],
+                "monthly_searches": [
+                  {
+                    "year": 2026,
+                    "month": 6,
+                    "search_volume": 140
+                  },
+                  {
+                    "year": 2026,
+                    "month": 5,
+                    "search_volume": 140
+                  },
+                  {
+                    "year": 2026,
+                    "month": 4,
+                    "search_volume": 210
+                  },
+                  {
+                    "year": 2026,
+                    "month": 3,
+                    "search_volume": 260
+                  },
+                  {
+                    "year": 2026,
+                    "month": 2,
+                    "search_volume": 140
+                  },
+                  {
+                    "year": 2026,
+                    "month": 1,
+                    "search_volume": 70
+                  },
+                  {
+                    "year": 2025,
+                    "month": 12,
+                    "search_volume": 70
+                  },
+                  {
+                    "year": 2025,
+                    "month": 11,
+                    "search_volume": 70
+                  },
+                  {
+                    "year": 2025,
+                    "month": 10,
+                    "search_volume": 70
+                  },
+                  {
+                    "year": 2025,
+                    "month": 9,
+                    "search_volume": 50
+                  },
+                  {
+                    "year": 2025,
+                    "month": 8,
+                    "search_volume": 50
+                  },
+                  {
+                    "year": 2025,
+                    "month": 7,
+                    "search_volume": 40
+                  }
+                ],
+                "search_volume_trend": {
+                  "monthly": 0,
+                  "quarterly": -33,
+                  "yearly": 250
+                }
+              },
+              "keyword_info_normalized_with_bing": null,
+              "keyword_info_normalized_with_clickstream": null,
+              "clickstream_keyword_info": null,
+              "keyword_properties": {
+                "se_type": "google",
+                "core_keyword": null,
+                "synonym_clustering_algorithm": null,
+                "keyword_difficulty": 14,
+                "detected_language": "en",
+                "is_another_language": false,
+                "words_count": 3
+              },
+              "serp_info": null,
+              "avg_backlinks_info": {
+                "se_type": "google",
+                "backlinks": 75.1,
+                "dofollow": 48.7,
+                "referring_pages": 57.8,
+                "referring_domains": 32.1,
+                "referring_main_domains": 27.4,
+                "rank": 104.4,
+                "main_domain_rank": 623.1,
+                "last_updated_time": "2026-07-12 04:23:33 +00:00"
+              },
+              "search_intent_info": {
+                "se_type": "google",
+                "main_intent": "navigational",
+                "foreign_intent": [
+                  "informational",
+                  "commercial"
+                ],
+                "last_updated_time": "2026-05-04 03:43:37 +00:00"
+              }
+            },
+            {
+              "se_type": "google",
+              "keyword": "wordpress mcp adapter",
+              "location_code": 2840,
+              "language_code": "en",
+              "keyword_info": {
+                "se_type": "google",
+                "last_updated_time": "2026-07-13 13:50:27 +00:00",
+                "competition": 0.1,
+                "competition_level": "LOW",
+                "cpc": 11.97,
+                "search_volume": 90,
+                "low_top_of_page_bid": 4.71,
+                "high_top_of_page_bid": 18.07,
+                "categories": [
+                  10007,
+                  11494,
+                  13418
+                ],
+                "monthly_searches": [
+                  {
+                    "year": 2026,
+                    "month": 6,
+                    "search_volume": 210
+                  },
+                  {
+                    "year": 2026,
+                    "month": 5,
+                    "search_volume": 260
+                  },
+                  {
+                    "year": 2026,
+                    "month": 4,
+                    "search_volume": 260
+                  },
+                  {
+                    "year": 2026,
+                    "month": 3,
+                    "search_volume": 170
+                  },
+                  {
+                    "year": 2026,
+                    "month": 2,
+                    "search_volume": 90
+                  },
+                  {
+                    "year": 2026,
+                    "month": 1,
+                    "search_volume": 30
+                  },
+                  {
+                    "year": 2025,
+                    "month": 12,
+                    "search_volume": 50
+                  },
+                  {
+                    "year": 2025,
+                    "month": 11,
+                    "search_volume": 30
+                  },
+                  {
+                    "year": 2025,
+                    "month": 10,
+                    "search_volume": 30
+                  },
+                  {
+                    "year": 2025,
+                    "month": 9,
+                    "search_volume": 30
+                  },
+                  {
+                    "year": 2025,
+                    "month": 8,
+                    "search_volume": 0
+                  },
+                  {
+                    "year": 2025,
+                    "month": 7,
+                    "search_volume": 0
+                  }
+                ],
+                "search_volume_trend": {
+                  "monthly": -19,
+                  "quarterly": -19,
+                  "yearly": null
+                }
+              },
+              "keyword_info_normalized_with_bing": null,
+              "keyword_info_normalized_with_clickstream": null,
+              "clickstream_keyword_info": null,
+              "keyword_properties": {
+                "se_type": "google",
+                "core_keyword": null,
+                "synonym_clustering_algorithm": "text_processing",
+                "keyword_difficulty": 16,
+                "detected_language": "en",
+                "is_another_language": false,
+                "words_count": 3
+              },
+              "serp_info": null,
+              "avg_backlinks_info": {
+                "se_type": "google",
+                "backlinks": 67.7,
+                "dofollow": 49,
+                "referring_pages": 59.1,
+                "referring_domains": 31.6,
+                "referring_main_domains": 30.8,
+                "rank": 112.5,
+                "main_domain_rank": 650.7,
+                "last_updated_time": "2026-07-14 10:51:24 +00:00"
+              },
+              "search_intent_info": {
+                "se_type": "google",
+                "main_intent": "navigational",
+                "foreign_intent": null,
+                "last_updated_time": "2026-05-02 23:04:59 +00:00"
+              }
+            },
+            {
+              "se_type": "google",
+              "keyword": "claude wordpress mcp",
+              "location_code": 2840,
+              "language_code": "en",
+              "keyword_info": {
+                "se_type": "google",
+                "last_updated_time": "2026-07-16 07:14:44 +00:00",
+                "competition": 0.16,
+                "competition_level": "LOW",
+                "cpc": 33.74,
+                "search_volume": 40,
+                "low_top_of_page_bid": 3.39,
+                "high_top_of_page_bid": 13.09,
+                "categories": [
+                  10008
+                ],
+                "monthly_searches": [
+                  {
+                    "year": 2026,
+                    "month": 6,
+                    "search_volume": 70
+                  },
+                  {
+                    "year": 2026,
+                    "month": 5,
+                    "search_volume": 90
+                  },
+                  {
+                    "year": 2026,
+                    "month": 4,
+                    "search_volume": 90
+                  },
+                  {
+                    "year": 2026,
+                    "month": 3,
+                    "search_volume": 90
+                  },
+                  {
+                    "year": 2026,
+                    "month": 2,
+                    "search_volume": 50
+                  },
+                  {
+                    "year": 2026,
+                    "month": 1,
+                    "search_volume": 20
+                  },
+                  {
+                    "year": 2025,
+                    "month": 12,
+                    "search_volume": 10
+                  },
+                  {
+                    "year": 2025,
+                    "month": 11,
+                    "search_volume": 10
+                  },
+                  {
+                    "year": 2025,
+                    "month": 10,
+                    "search_volume": 20
+                  },
+                  {
+                    "year": 2025,
+                    "month": 9,
+                    "search_volume": 10
+                  },
+                  {
+                    "year": 2025,
+                    "month": 8,
+                    "search_volume": 20
+                  },
+                  {
+                    "year": 2025,
+                    "month": 7,
+                    "search_volume": 10
+                  }
+                ],
+                "search_volume_trend": {
+                  "monthly": -22,
+                  "quarterly": -22,
+                  "yearly": 600
+                }
+              },
+              "keyword_info_normalized_with_bing": null,
+              "keyword_info_normalized_with_clickstream": null,
+              "clickstream_keyword_info": null,
+              "keyword_properties": {
+                "se_type": "google",
+                "core_keyword": null,
+                "synonym_clustering_algorithm": "text_processing",
+                "keyword_difficulty": null,
+                "detected_language": "en",
+                "is_another_language": false,
+                "words_count": 3
+              },
+              "serp_info": null,
+              "avg_backlinks_info": null,
+              "search_intent_info": {
+                "se_type": "google",
+                "main_intent": "navigational",
+                "foreign_intent": null,
+                "last_updated_time": "2026-05-08 04:36:19 +00:00"
+              }
+            },
+            {
+              "se_type": "google",
+              "keyword": "wordpress mcp claude",
+              "location_code": 2840,
+              "language_code": "en",
+              "keyword_info": {
+                "se_type": "google",
+                "last_updated_time": "2026-07-10 22:11:19 +00:00",
+                "competition": 0.31,
+                "competition_level": "LOW",
+                "cpc": 1.24,
+                "search_volume": 20,
+                "low_top_of_page_bid": 3.07,
+                "high_top_of_page_bid": 15.68,
+                "categories": [
+                  10008
+                ],
+                "monthly_searches": [
+                  {
+                    "year": 2026,
+                    "month": 6,
+                    "search_volume": 50
+                  },
+                  {
+                    "year": 2026,
+                    "month": 5,
+                    "search_volume": 50
+                  },
+                  {
+                    "year": 2026,
+                    "month": 4,
+                    "search_volume": 50
+                  },
+                  {
+                    "year": 2026,
+                    "month": 3,
+                    "search_volume": 40
+                  },
+                  {
+                    "year": 2026,
+                    "month": 2,
+                    "search_volume": 30
+                  },
+                  {
+                    "year": 2026,
+                    "month": 1,
+                    "search_volume": 10
+                  },
+                  {
+                    "year": 2025,
+                    "month": 12,
+                    "search_volume": 10
+                  },
+                  {
+                    "year": 2025,
+                    "month": 11,
+                    "search_volume": 10
+                  },
+                  {
+                    "year": 2025,
+                    "month": 10,
+                    "search_volume": 10
+                  },
+                  {
+                    "year": 2025,
+                    "month": 9,
+                    "search_volume": 10
+                  },
+                  {
+                    "year": 2025,
+                    "month": 8,
+                    "search_volume": 10
+                  },
+                  {
+                    "year": 2025,
+                    "month": 7,
+                    "search_volume": 10
+                  }
+                ],
+                "search_volume_trend": {
+                  "monthly": 0,
+                  "quarterly": 0,
+                  "yearly": 400
+                }
+              },
+              "keyword_info_normalized_with_bing": null,
+              "keyword_info_normalized_with_clickstream": null,
+              "clickstream_keyword_info": null,
+              "keyword_properties": {
+                "se_type": "google",
+                "core_keyword": "claude wordpress mcp",
+                "synonym_clustering_algorithm": "text_processing",
+                "keyword_difficulty": null,
+                "detected_language": "en",
+                "is_another_language": false,
+                "words_count": 3
+              },
+              "serp_info": null,
+              "avg_backlinks_info": null,
+              "search_intent_info": {
+                "se_type": "google",
+                "main_intent": "navigational",
+                "foreign_intent": null,
+                "last_updated_time": "2026-05-05 06:01:34 +00:00"
+              }
+            },
+            {
+              "se_type": "google",
+              "keyword": "github wordpress mcp",
+              "location_code": 2840,
+              "language_code": "en",
+              "keyword_info": {
+                "se_type": "google",
+                "last_updated_time": "2026-07-14 04:21:35 +00:00",
+                "competition": 0.03,
+                "competition_level": "LOW",
+                "cpc": null,
+                "search_volume": 10,
+                "low_top_of_page_bid": null,
+                "high_top_of_page_bid": null,
+                "categories": [
+                  10019,
+                  10019,
+                  10168,
+                  10168,
+                  10885,
+                  10885,
+                  12197,
+                  12197,
+                  13642,
+                  13750
+                ],
+                "monthly_searches": [
+                  {
+                    "year": 2026,
+                    "month": 6,
+                    "search_volume": 20
+                  },
+                  {
+                    "year": 2026,
+                    "month": 5,
+                    "search_volume": 20
+                  },
+                  {
+                    "year": 2026,
+                    "month": 4,
+                    "search_volume": 30
+                  },
+                  {
+                    "year": 2026,
+                    "month": 3,
+                    "search_volume": 20
+                  },
+                  {
+                    "year": 2026,
+                    "month": 2,
+                    "search_volume": 10
+                  },
+                  {
+                    "year": 2026,
+                    "month": 1,
+                    "search_volume": 10
+                  },
+                  {
+                    "year": 2025,
+                    "month": 12,
+                    "search_volume": 10
+                  },
+                  {
+                    "year": 2025,
+                    "month": 11,
+                    "search_volume": 10
+                  },
+                  {
+                    "year": 2025,
+                    "month": 10,
+                    "search_volume": 10
+                  },
+                  {
+                    "year": 2025,
+                    "month": 9,
+                    "search_volume": 10
+                  },
+                  {
+                    "year": 2025,
+                    "month": 8,
+                    "search_volume": 10
+                  },
+                  {
+                    "year": 2025,
+                    "month": 7,
+                    "search_volume": 0
+                  }
+                ],
+                "search_volume_trend": {
+                  "monthly": 0,
+                  "quarterly": -33,
+                  "yearly": null
+                }
+              },
+              "keyword_info_normalized_with_bing": null,
+              "keyword_info_normalized_with_clickstream": null,
+              "clickstream_keyword_info": null,
+              "keyword_properties": {
+                "se_type": "google",
+                "core_keyword": "wordpress mcp github",
+                "synonym_clustering_algorithm": "text_processing",
+                "keyword_difficulty": null,
+                "detected_language": "id",
+                "is_another_language": true,
+                "words_count": 3
+              },
+              "serp_info": null,
+              "avg_backlinks_info": null,
+              "search_intent_info": {
+                "se_type": "google",
+                "main_intent": "navigational",
+                "foreign_intent": null,
+                "last_updated_time": "2026-05-05 16:40:09 +00:00"
+              }
+            },
+            {
+              "se_type": "google",
+              "keyword": "wordpress elementor mcp",
+              "location_code": 2840,
+              "language_code": "en",
+              "keyword_info": {
+                "se_type": "google",
+                "last_updated_time": "2026-07-13 17:49:26 +00:00",
+                "competition": 0.12,
+                "competition_level": "LOW",
+                "cpc": null,
+                "search_volume": 10,
+                "low_top_of_page_bid": null,
+                "high_top_of_page_bid": null,
+                "categories": [
+                  10007,
+                  11494,
+                  13418
+                ],
+                "monthly_searches": [
+                  {
+                    "year": 2026,
+                    "month": 6,
+                    "search_volume": 10
+                  },
+                  {
+                    "year": 2026,
+                    "month": 5,
+                    "search_volume": 10
+                  },
+                  {
+                    "year": 2026,
+                    "month": 4,
+                    "search_volume": 10
+                  },
+                  {
+                    "year": 2026,
+                    "month": 3,
+                    "search_volume": 10
+                  },
+                  {
+                    "year": 2026,
+                    "month": 2,
+                    "search_volume": 10
+                  },
+                  {
+                    "year": 2026,
+                    "month": 1,
+                    "search_volume": 10
+                  },
+                  {
+                    "year": 2025,
+                    "month": 12,
+                    "search_volume": 10
+                  },
+                  {
+                    "year": 2025,
+                    "month": 11,
+                    "search_volume": 10
+                  },
+                  {
+                    "year": 2025,
+                    "month": 10,
+                    "search_volume": 10
+                  },
+                  {
+                    "year": 2025,
+                    "month": 9,
+                    "search_volume": 10
+                  },
+                  {
+                    "year": 2025,
+                    "month": 8,
+                    "search_volume": 10
+                  },
+                  {
+                    "year": 2025,
+                    "month": 7,
+                    "search_volume": 10
+                  }
+                ],
+                "search_volume_trend": {
+                  "monthly": 0,
+                  "quarterly": 0,
+                  "yearly": 0
+                }
+              },
+              "keyword_info_normalized_with_bing": null,
+              "keyword_info_normalized_with_clickstream": null,
+              "clickstream_keyword_info": null,
+              "keyword_properties": {
+                "se_type": "google",
+                "core_keyword": "wordpress mcp elementor",
+                "synonym_clustering_algorithm": "text_processing",
+                "keyword_difficulty": null,
+                "detected_language": "en",
+                "is_another_language": false,
+                "words_count": 3
+              },
+              "serp_info": null,
+              "avg_backlinks_info": null,
+              "search_intent_info": {
+                "se_type": "google",
+                "main_intent": "navigational",
+                "foreign_intent": null,
+                "last_updated_time": "2026-05-02 17:39:43 +00:00"
+              }
+            },
+            {
+              "se_type": "google",
+              "keyword": "automattic mcp-wordpress-remote",
+              "location_code": 2840,
+              "language_code": "en",
+              "keyword_info": {
+                "se_type": "google",
+                "last_updated_time": "2026-07-15 22:37:30 +00:00",
+                "competition": 0.03,
+                "competition_level": "LOW",
+                "cpc": null,
+                "search_volume": 10,
+                "low_top_of_page_bid": null,
+                "high_top_of_page_bid": null,
+                "categories": [
+                  10007,
+                  11494,
+                  13418
+                ],
+                "monthly_searches": [
+                  {
+                    "year": 2026,
+                    "month": 6,
+                    "search_volume": 20
+                  },
+                  {
+                    "year": 2026,
+                    "month": 5,
+                    "search_volume": 10
+                  },
+                  {
+                    "year": 2026,
+                    "month": 4,
+                    "search_volume": 20
+                  },
+                  {
+                    "year": 2026,
+                    "month": 3,
+                    "search_volume": 20
+                  },
+                  {
+                    "year": 2026,
+                    "month": 2,
+                    "search_volume": 10
+                  },
+                  {
+                    "year": 2026,
+                    "month": 1,
+                    "search_volume": 10
+                  },
+                  {
+                    "year": 2025,
+                    "month": 12,
+                    "search_volume": 10
+                  },
+                  {
+                    "year": 2025,
+                    "month": 11,
+                    "search_volume": 10
+                  },
+                  {
+                    "year": 2025,
+                    "month": 10,
+                    "search_volume": 0
+                  },
+                  {
+                    "year": 2025,
+                    "month": 9,
+                    "search_volume": 10
+                  },
+                  {
+                    "year": 2025,
+                    "month": 8,
+                    "search_volume": 10
+                  },
+                  {
+                    "year": 2025,
+                    "month": 7,
+                    "search_volume": 10
+                  }
+                ],
+                "search_volume_trend": {
+                  "monthly": 100,
+                  "quarterly": 0,
+                  "yearly": null
+                }
+              },
+              "keyword_info_normalized_with_bing": null,
+              "keyword_info_normalized_with_clickstream": null,
+              "clickstream_keyword_info": null,
+              "keyword_properties": {
+                "se_type": "google",
+                "core_keyword": null,
+                "synonym_clustering_algorithm": "text_processing",
+                "keyword_difficulty": null,
+                "detected_language": "en",
+                "is_another_language": false,
+                "words_count": 2
+              },
+              "serp_info": null,
+              "avg_backlinks_info": null,
+              "search_intent_info": {
+                "se_type": "google",
+                "main_intent": "navigational",
+                "foreign_intent": null,
+                "last_updated_time": "2026-05-06 01:16:47 +00:00"
+              }
+            },
+            {
+              "se_type": "google",
+              "keyword": "wordpress mcp claude code",
+              "location_code": 2840,
+              "language_code": "en",
+              "keyword_info": {
+                "se_type": "google",
+                "last_updated_time": "2026-07-12 18:41:49 +00:00",
+                "competition": 0.15,
+                "competition_level": "LOW",
+                "cpc": null,
+                "search_volume": 10,
+                "low_top_of_page_bid": null,
+                "high_top_of_page_bid": null,
+                "categories": [
+                  10019,
+                  10168,
+                  10885,
+                  12197,
+                  12211
+                ],
+                "monthly_searches": [
+                  {
+                    "year": 2026,
+                    "month": 6,
+                    "search_volume": 10
+                  },
+                  {
+                    "year": 2026,
+                    "month": 5,
+                    "search_volume": 20
+                  },
+                  {
+                    "year": 2026,
+                    "month": 4,
+                    "search_volume": 40
+                  },
+                  {
+                    "year": 2026,
+                    "month": 3,
+                    "search_volume": 30
+                  },
+                  {
+                    "year": 2026,
+                    "month": 2,
+                    "search_volume": 10
+                  },
+                  {
+                    "year": 2026,
+                    "month": 1,
+                    "search_volume": 10
+                  },
+                  {
+                    "year": 2025,
+                    "month": 12,
+                    "search_volume": 10
+                  },
+                  {
+                    "year": 2025,
+                    "month": 11,
+                    "search_volume": 10
+                  },
+                  {
+                    "year": 2025,
+                    "month": 10,
+                    "search_volume": 10
+                  },
+                  {
+                    "year": 2025,
+                    "month": 9,
+                    "search_volume": 10
+                  },
+                  {
+                    "year": 2025,
+                    "month": 8,
+                    "search_volume": 0
+                  },
+                  {
+                    "year": 2025,
+                    "month": 7,
+                    "search_volume": 0
+                  }
+                ],
+                "search_volume_trend": {
+                  "monthly": -50,
+                  "quarterly": -75,
+                  "yearly": null
+                }
+              },
+              "keyword_info_normalized_with_bing": null,
+              "keyword_info_normalized_with_clickstream": null,
+              "clickstream_keyword_info": null,
+              "keyword_properties": {
+                "se_type": "google",
+                "core_keyword": null,
+                "synonym_clustering_algorithm": "text_processing",
+                "keyword_difficulty": null,
+                "detected_language": "en",
+                "is_another_language": false,
+                "words_count": 4
+              },
+              "serp_info": null,
+              "avg_backlinks_info": null,
+              "search_intent_info": {
+                "se_type": "google",
+                "main_intent": "navigational",
+                "foreign_intent": null,
+                "last_updated_time": "2026-05-07 17:03:45 +00:00"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
