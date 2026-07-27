@@ -892,11 +892,21 @@ if (! function_exists('get_post_type')) {
 }
 
 if (! function_exists('wp_http_validate_url')) {
-    // Mirror WP closely enough for link classification: an absolute http(s)
-    // URL with a host validates; a relative path or other scheme does not.
-    // Callers use the false return to decide whether to resolve against
-    // home_url(), so getting relative paths wrong here would silently change
-    // which links count as internal.
+    // Mirror the parts of WP's wp_http_validate_url() that change a caller's
+    // answer — including the ones that make it return false for reasons
+    // unrelated to the URL being absolute.
+    //
+    // An earlier stub validated any absolute http(s) URL and stopped there.
+    // That made a test assert the opposite of production: real WP runs
+    // gethostbyname() on a foreign host and `return false`s when it does not
+    // resolve, so `https://another-site.test/other/` — a reserved TLD that
+    // never resolves — validates here and fails there. A caller that treats
+    // false as "relative" then resolved it against home_url() and decided an
+    // external link was internal. The test was green and wrong.
+    //
+    // No DNS is performed here. Hosts under the reserved .test/.invalid TLDs
+    // (RFC 6761) are treated as unresolvable, which is what they are, so a
+    // fixture using them exercises the real false branch.
     function wp_http_validate_url($url)
     {
         $url = trim((string) $url);
@@ -909,6 +919,15 @@ if (! function_exists('wp_http_validate_url')) {
         }
         if (! in_array(strtolower($parsed['scheme']), array( 'http', 'https' ), true)) {
             return false;
+        }
+        // WP rejects credentials in the URL.
+        if (isset($parsed['user']) || isset($parsed['pass'])) {
+            return false;
+        }
+        $home = parse_url(home_url());
+        $same = ! empty($home['host']) && strtolower($home['host']) === strtolower($parsed['host']);
+        if (! $same && preg_match('/\.(test|invalid)$/i', $parsed['host'])) {
+            return false; // gethostbyname() error condition in real WP.
         }
         return $url;
     }

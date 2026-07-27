@@ -906,17 +906,50 @@ abstract class Mcpwp_REST_API {
 	protected function is_same_host_href( $href ) {
 		$href = trim( (string) $href );
 
-		// A fragment jumps within the page; mailto/tel/sms/javascript are not
-		// navigation to another document. None is an internal outbound link.
-		if ( '' === $href || 0 === strpos( $href, '#' ) || preg_match( '/^(mailto|tel|sms|javascript):/i', $href ) ) {
+		// A fragment jumps within the page; a non-navigational scheme is not a
+		// link to another document. Neither is an internal outbound link.
+		// data: is included — it embeds content rather than pointing anywhere.
+		if ( '' === $href || 0 === strpos( $href, '#' )
+			|| preg_match( '/^(mailto|tel|sms|javascript|data):/i', $href ) ) {
 			return false;
 		}
 
-		$absolute = wp_http_validate_url( $href ) ? $href : home_url( $href );
-		$home     = wp_parse_url( home_url() );
-		$target   = wp_parse_url( $absolute );
+		$home = wp_parse_url( home_url() );
+		if ( empty( $home['host'] ) ) {
+			return false;
+		}
 
-		if ( empty( $target['host'] ) || empty( $home['host'] ) ) {
+		// Classify by the URL's own shape. An earlier version asked
+		// wp_http_validate_url() whether the href was absolute and fell back to
+		// home_url( $href ) when it said no — which is wrong in a way that
+		// inverts this function's answer.
+		//
+		// wp_http_validate_url() returns false for reasons that have nothing to
+		// do with being absolute: it runs gethostbyname() on the host and
+		// `return false`s when the lookup fails (wp-includes/http.php), and it
+		// rejects userinfo and private/loopback targets. home_url() then appends
+		// the whole absolute URL as a path — home_url('https://other.test/x')
+		// is 'https://example.com/https://other.test/x', whose parsed host is
+		// OUR host. Every unresolvable external link counted as internal, and on
+		// a host with no outbound DNS that meant all of them, silencing
+		// no_internal_outbound_links exactly as #717 complained.
+		//
+		// It also blocked per-href DNS lookups inside the bulk audit loop.
+		// Determining whether a URL points at our own host needs no network.
+		if ( 0 === strpos( $href, '//' ) ) {
+			// Protocol-relative: inherits our scheme, carries its own host.
+			$target = wp_parse_url( 'https:' . $href );
+		} elseif ( preg_match( '#^[a-z][a-z0-9+.\-]*:#i', $href ) ) {
+			// Any other scheme — absolute. Parse as-is; a scheme we do not
+			// navigate with was already rejected above.
+			$target = wp_parse_url( $href );
+		} else {
+			// No scheme and no leading '//' — a site-relative path or a bare
+			// filename. Internal by construction.
+			return true;
+		}
+
+		if ( empty( $target['host'] ) ) {
 			return false;
 		}
 

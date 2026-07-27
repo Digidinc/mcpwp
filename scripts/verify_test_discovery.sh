@@ -39,8 +39,14 @@ while IFS= read -r file; do
 		continue
 	fi
 
-	# Otherwise it must be named explicitly in the config.
-	if grep -qF "$rel" "$CONFIG" || grep -qF "$base" "$CONFIG"; then
+	# Otherwise it must be named explicitly in the config, by its path relative
+	# to tests/ — matched as a whole <file> value.
+	#
+	# An earlier version also accepted a bare-basename substring match, which
+	# made the guard lie: tests/unit/test-elementor-basic.php would be reported
+	# reachable because tests/phpunit.xml happens to list ./test-elementor-basic.php
+	# at the top level. Same filename, different file, never collected.
+	if grep -qE "<file>\./${rel//\//\\/}</file>" "$CONFIG"; then
 		continue
 	fi
 
