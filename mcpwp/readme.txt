@@ -153,6 +153,9 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 
 == Changelog ==
 
+= 3.10.1 =
+* fix: clear the open bug backlog — [#717](https://github.com/Mumega-com/mcpwp/issues/717), [#720](https://github.com/Mumega-com/mcpwp/issues/720), [#678](https://github.com/Mumega-com/mcpwp/issues/678), and the honesty half of [#729](https://github.com/Mumega-com/mcpwp/issues/729) ([#734](https://github.com/Mumega-com/mcpwp/issues/734))
+
 = 3.10.0 =
 * feat: **seo:** market data via DataForSEO — visibility, opportunities, and an agent loop ([#730](https://github.com/Mumega-com/mcpwp/issues/730))
 
