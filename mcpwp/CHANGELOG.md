@@ -5,6 +5,13 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.9.2](https://github.com/Mumega-com/mcpwp/compare/v3.9.1...v3.9.2) (2026-07-27)
+
+
+### Bug Fixes
+
+* **release:** publish and watch the Freemius channel like the self-hosted one ([#726](https://github.com/Mumega-com/mcpwp/issues/726)) ([6cb37d2](https://github.com/Mumega-com/mcpwp/commit/6cb37d2923300c1a9a9ac4739229f44465747842))
+
 ## [3.9.1](https://github.com/Mumega-com/mcpwp/compare/v3.9.0...v3.9.1) (2026-07-27)
 
 
