@@ -67,6 +67,7 @@ class Mcpwp_Admin {
 	use Mcpwp_Admin_Library_Trait;
 	use Mcpwp_Admin_Settings_Trait;
 	use Mcpwp_Admin_Activity_Trait;
+	use Mcpwp_Admin_Mupot_Trait;
 
 	public function add_admin_menu() {
 		// Top-level menu + default submenu (Setup) share the same slug so

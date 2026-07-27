@@ -28,6 +28,7 @@ $event_summary   = isset( $event_inbox['summary'] ) && is_array( $event_inbox['s
 $event_items     = isset( $event_inbox['events'] ) && is_array( $event_inbox['events'] ) ? $event_inbox['events'] : array();
 $signals         = isset( $control_room['signals'] ) && is_array( $control_room['signals'] ) ? $control_room['signals'] : array();
 $memory_count    = (int) ( $control_room['memory_count'] ?? 0 );
+$mupot = isset( $control_room['mupot'] ) && is_array( $control_room['mupot'] ) ? $control_room['mupot'] : array();
 
 $pending_count  = (int) ( $approval_counts['pending'] ?? 0 );
 $approved_count = (int) ( $approval_counts['approved'] ?? 0 );
@@ -87,6 +88,9 @@ $event_escalated_count = (int) ( $event_summary['escalated'] ?? 0 );
 		<a class="nav-tab" href="#mcpwp-section-events"><?php esc_html_e( 'Events', 'mcpwp' ); ?></a>
 		<a class="nav-tab" href="#mcpwp-section-activity"><?php esc_html_e( 'Activity', 'mcpwp' ); ?></a>
 		<a class="nav-tab" href="#mcpwp-section-signals"><?php esc_html_e( 'Signals', 'mcpwp' ); ?></a>
+		<?php if ( ! empty( $mupot['enabled'] ) ) : ?>
+		<a class="nav-tab" href="#mcpwp-section-mupot"><?php esc_html_e( 'My mupot', 'mcpwp' ); ?></a>
+		<?php endif; ?>
 	</nav>
 
 	<div class="mcpwp-control-grid">
@@ -618,3 +622,54 @@ $event_escalated_count = (int) ( $event_summary['escalated'] ?? 0 );
 	</p>
 	<?php endif; ?>
 </div>
+
+<?php if ( ! empty( $mupot['enabled'] ) ) : ?>
+<div class="mcpwp-card" id="mcpwp-section-mupot" style="margin-top:1.5rem">
+	<div class="mcpwp-control-card-header">
+		<h2 class="mcpwp-control-card-title"><?php esc_html_e( 'My mupot', 'mcpwp' ); ?></h2>
+	</div>
+	<?php if ( empty( $mupot['connected'] ) ) : ?>
+		<p style="padding:1rem;color:#666">
+			<?php
+			printf(
+				/* translators: %s: link to the user's own Profile screen */
+				wp_kses(
+					__( 'Not connected. <a href="%s">Add your mupot member token in your profile</a> to see your task board here.', 'mcpwp' ),
+					array( 'a' => array( 'href' => array() ) )
+				),
+				esc_url( admin_url( 'profile.php' ) )
+			);
+			?>
+		</p>
+	<?php elseif ( ! empty( $mupot['error'] ) ) : ?>
+		<p style="padding:1rem;color:#c0392b"><?php echo esc_html( $mupot['error'] ); ?></p>
+	<?php else : ?>
+		<?php if ( is_array( $mupot['status'] ) ) : ?>
+			<div style="padding:0 1rem 1rem">
+				<strong><?php esc_html_e( 'Status', 'mcpwp' ); ?>:</strong>
+				<code><?php echo esc_html( wp_json_encode( $mupot['status'] ) ); ?></code>
+			</div>
+		<?php endif; ?>
+		<?php if ( ! empty( $mupot['board_error'] ) ) : ?>
+			<p style="padding:0 1rem 1rem;color:#c0392b"><?php echo esc_html( $mupot['board_error'] ); ?></p>
+		<?php elseif ( empty( $mupot['has_squad'] ) ) : ?>
+			<p style="padding:0 1rem 1rem;color:#666">
+				<?php
+				printf(
+					wp_kses(
+						__( 'Add your mupot squad id in <a href="%s">your profile</a> to see your task board.', 'mcpwp' ),
+						array( 'a' => array( 'href' => array() ) )
+					),
+					esc_url( admin_url( 'profile.php' ) )
+				);
+				?>
+			</p>
+		<?php elseif ( is_array( $mupot['task_board'] ) ) : ?>
+			<div style="padding:0 1rem 1rem">
+				<strong><?php esc_html_e( 'Task Board', 'mcpwp' ); ?>:</strong>
+				<code><?php echo esc_html( wp_json_encode( $mupot['task_board'] ) ); ?></code>
+			</div>
+		<?php endif; ?>
+	<?php endif; ?>
+</div>
+<?php endif; ?>

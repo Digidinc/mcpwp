@@ -220,6 +220,31 @@ function sanitize_textarea_field($value)
     return trim((string) $value);
 }
 
+if (! function_exists('wp_create_nonce')) {
+    function wp_create_nonce($action = -1)
+    {
+        return 'test-nonce';
+    }
+}
+
+if (! function_exists('wp_verify_nonce')) {
+    function wp_verify_nonce($nonce, $action = -1)
+    {
+        return 'test-nonce' === $nonce ? 1 : false;
+    }
+}
+
+if (! function_exists('wp_nonce_field')) {
+    function wp_nonce_field($action = -1, $name = '_wpnonce', $referer = true, $echo = true)
+    {
+        $field = '<input type="hidden" name="' . $name . '" value="test-nonce" />';
+        if ($echo) {
+            echo $field;
+        }
+        return $field;
+    }
+}
+
 function sanitize_key($value)
 {
     $value = strtolower((string) $value);
@@ -251,6 +276,27 @@ function absint($value)
 function esc_url_raw($value)
 {
     return filter_var((string) $value, FILTER_SANITIZE_URL);
+}
+
+if (! function_exists('esc_html')) {
+    function esc_html($text)
+    {
+        return htmlspecialchars((string) $text, ENT_QUOTES, 'UTF-8');
+    }
+}
+
+if (! function_exists('esc_attr')) {
+    function esc_attr($text)
+    {
+        return htmlspecialchars((string) $text, ENT_QUOTES, 'UTF-8');
+    }
+}
+
+if (! function_exists('esc_html_e')) {
+    function esc_html_e($text, $domain = 'default')
+    {
+        echo esc_html($text);
+    }
 }
 
 function is_email($value)
@@ -374,6 +420,28 @@ function get_transient($name)
 function delete_transient($name)
 {
     unset($GLOBALS['mcpwp_test_transients'][ $name ]);
+    return true;
+}
+
+function get_user_meta($user_id, $key = '', $single = false)
+{
+    $user_id = (int) $user_id;
+    if ('' === $key) {
+        return isset($GLOBALS['mcpwp_test_user_meta'][ $user_id ]) ? $GLOBALS['mcpwp_test_user_meta'][ $user_id ] : array();
+    }
+    $value = isset($GLOBALS['mcpwp_test_user_meta'][ $user_id ][ $key ]) ? $GLOBALS['mcpwp_test_user_meta'][ $user_id ][ $key ] : '';
+    return $single ? $value : array( $value );
+}
+
+function update_user_meta($user_id, $key, $value)
+{
+    $GLOBALS['mcpwp_test_user_meta'][ (int) $user_id ][ $key ] = $value;
+    return true;
+}
+
+function delete_user_meta($user_id, $key)
+{
+    unset($GLOBALS['mcpwp_test_user_meta'][ (int) $user_id ][ $key ]);
     return true;
 }
 

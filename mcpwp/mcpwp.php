@@ -251,6 +251,7 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-woocommerce-seo.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-keyword-research.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-figma.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-mupot-connector.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-provider-openai.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-provider-gemini.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-provider-elevenlabs.php';
@@ -347,9 +348,11 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/admin/traits/trait-mcpwp-admin-library.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/admin/traits/trait-mcpwp-admin-settings.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/admin/traits/trait-mcpwp-admin-activity.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/admin/traits/trait-mcpwp-admin-mupot.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/admin/class-mcpwp-admin.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/admin/class-mcpwp-activity-log.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/admin/class-mcpwp-settings.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/admin/class-mcpwp-mupot-profile.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/admin/class-mcpwp-integrations-admin.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/admin/class-mcpwp-broker-admin.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/admin/class-mcpwp-tools-admin.php';
