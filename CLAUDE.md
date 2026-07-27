@@ -9,6 +9,7 @@
 **Use `wp-rig-wp-dev`. It is the only container that mounts this plugin.**
 
 ```
+URL:      http://localhost:8086
 WP-CLI:   docker exec wp-rig-wp-dev wp <command> --allow-root
 PHPUnit:  docker exec wp-rig-wp-dev bash -c 'cd /var/www/html/wp-content/plugins/mcpwp && vendor/bin/phpunit --configuration tests/phpunit.xml'
 Mount:    wp-ai-operator/mcpwp -> /var/www/html/wp-content/plugins/mcpwp
@@ -16,11 +17,15 @@ Mount:    wp-ai-operator/mcpwp -> /var/www/html/wp-content/plugins/mcpwp
 
 Edits to `wp-ai-operator/mcpwp/` are live instantly there. No deploy needed.
 
-**`wp-test-wordpress-1` does NOT mount this plugin.** It mounts `site-pilot-ai` and
-`site-pilot-ai-pro` — the pre-rename directories — and carries a stale, unmounted copy of `mcpwp`
-under its own volume. Commands run against it silently exercise old code: a file added to
-`mcpwp/` today is simply absent there. This doc previously named it as the live-mounted dev
-container, which cost a task real debugging time. Verify with:
+**`wp-test-wordpress-1` (port 8080) does NOT mount this plugin, and it lies convincingly.** It
+mounts `site-pilot-ai` and `site-pilot-ai-pro` — the pre-rename directories — and carries a stale,
+unmounted copy of `mcpwp` under its own volume.
+
+The trap: **it answers.** `http://localhost:8080/wp-json/` returns HTTP 200 and advertises the
+`mcpwp/v1` namespace, so it looks like a working dev site. It is running old code. A file added to
+`mcpwp/` today is simply absent there, and any test against it silently passes or fails on a
+version nobody is editing. This doc previously named it as the live-mounted dev container and gave
+port 8080, which cost two tasks real debugging time. Verify with:
 
 ```bash
 docker inspect wp-rig-wp-dev --format '{{range .Mounts}}{{.Source}} -> {{.Destination}}{{"\n"}}{{end}}'
@@ -43,14 +48,14 @@ echo \$key;
 KEY="mcpwp_..."  # from above
 
 # Site info
-curl -s http://localhost:8080/wp-json/mcpwp/v1/site-info -H "X-API-Key: $KEY" | jq
+curl -s http://localhost:8086/wp-json/mcpwp/v1/site-info -H "X-API-Key: $KEY" | jq
 
 # Create page + push Elementor data
-PAGE=$(curl -s -X POST http://localhost:8080/wp-json/mcpwp/v1/pages \
+PAGE=$(curl -s -X POST http://localhost:8086/wp-json/mcpwp/v1/pages \
   -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
   -d '{"title":"Test","status":"draft"}' | jq -r .id)
 
-curl -s -X POST "http://localhost:8080/wp-json/mcpwp/v1/elementor/$PAGE" \
+curl -s -X POST "http://localhost:8086/wp-json/mcpwp/v1/elementor/$PAGE" \
   -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
   -d '{"elementor_data":"[{\"id\":\"abc\",\"elType\":\"section\",\"settings\":{},\"elements\":[{\"id\":\"def\",\"elType\":\"column\",\"settings\":{\"_column_size\":100},\"elements\":[{\"id\":\"ghi\",\"elType\":\"widget\",\"widgetType\":\"heading\",\"settings\":{\"title\":\"Hello\"}}]}]}]"}' | jq
 ```
