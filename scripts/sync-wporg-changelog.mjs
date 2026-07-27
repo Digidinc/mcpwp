@@ -169,20 +169,36 @@ const notice = upgradeNotes.length > 0
 const newestTag = bullets.length > 0
   ? `${notice}<strong>${version}</strong> — ${joined}`
   : `${notice}<strong>${version}</strong>`;
-// Both tests below have to tolerate a leading <p>…</p> notice: anchoring them
-// on "^<strong>" would re-prepend this version on every re-run (breaking
-// idempotency) and would leave the previous entry bolded (two "newest" entries).
-const alreadyNewest = new RegExp(`^(?:<p>.*?</p>)?<strong>${version.replace(/\./g, '\\.')}</strong>`);
-if (!alreadyNewest.test(vjson.changelog)) {
-  // Demote the previous newest <strong>…</strong> to <h4>…</h4>, then prepend.
-  const demoted = vjson.changelog.replace(
-    /^((?:<p>.*?<\/p>)?)<strong>(.*?)<\/strong>/,
-    '$1<h4>$2</h4>'
-  );
-  vjson.changelog = `${newestTag}${demoted}`;
+// Exactly one entry may be <strong> — the newest. Everything older is <h4>.
+//
+// This used to demote only the immediately-previous entry, which silently
+// assumed the rest of the blob was already correct. It was not: entries written
+// before the demote step existed stayed bold forever, so by 3.9.3 the update
+// modal presented sixteen versions as "newest". Repairing only the data would
+// have left the next stale entry to accumulate again, so the pass below
+// re-derives the whole invariant on every run and is self-healing.
+//
+// It targets ONLY version headers — <strong> wrapping a bare version number.
+// A blanket demote would also eat the inline bold inside entry text, since
+// mdToHtml() renders "**security:**" as <strong>security:</strong>.
+const VERSION_HEADER = /<strong>(\d+\.\d+\.\d+)<\/strong>/g;
+
+const beforeDemote = vjson.changelog;
+vjson.changelog = vjson.changelog.replace(VERSION_HEADER, '<h4>$1</h4>');
+const staleDemoted = (beforeDemote.match(VERSION_HEADER) || []).length;
+
+const escaped = version.replace(/\./g, '\\.');
+const alreadyPresent = new RegExp(`<h4>${escaped}</h4>`).test(vjson.changelog);
+if (!alreadyPresent) {
+  vjson.changelog = `${newestTag}${vjson.changelog}`;
   console.log(`version.json: prepended ${version} changelog entry`);
 } else {
-  console.log(`version.json: ${version} already newest, skipped changelog`);
+  // Already recorded — promote it back to the single bold entry.
+  vjson.changelog = vjson.changelog.replace(`<h4>${version}</h4>`, `<strong>${version}</strong>`);
+  console.log(`version.json: ${version} already present, kept as newest`);
+}
+if (staleDemoted > 1) {
+  console.log(`version.json: demoted ${staleDemoted - 1} stale <strong> version header(s)`);
 }
 if (tested && vjson.tested !== tested) {
   vjson.tested = tested;
