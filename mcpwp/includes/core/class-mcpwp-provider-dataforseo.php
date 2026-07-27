@@ -272,6 +272,12 @@ class Mcpwp_Provider_Dataforseo {
 			return new WP_Error( $reason, self::describe_reason( $reason ) );
 		}
 
+		// A missing or malformed task is a malformed response, not success —
+		// it must never read the same as a genuinely empty result set.
+		if ( ! isset( $response['tasks'][0] ) || ! is_array( $response['tasks'][0] ) ) {
+			return new WP_Error( 'provider_unavailable', self::describe_reason( 'provider_unavailable' ) );
+		}
+
 		// A task can fail while the envelope reports success.
 		$task_status = isset( $response['tasks'][0]['status_code'] ) ? (int) $response['tasks'][0]['status_code'] : self::STATUS_OK;
 		if ( self::STATUS_OK !== $task_status ) {

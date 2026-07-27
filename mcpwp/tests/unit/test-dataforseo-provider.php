@@ -96,6 +96,38 @@ class DataforseoProviderTest extends TestCase {
 		$this->assertSame( 'auth_rejected', $result->get_error_code() );
 	}
 
+	public function test_missing_tasks_on_ok_envelope_returns_error_not_empty_array() {
+		$p          = new FixtureDataforseoProvider( 'user@example.com', 'secret' );
+		$p->fixture = array( 'status_code' => 20000, 'status_message' => 'Ok.' );
+
+		$result = $p->keyword_suggestions( 'anything' );
+
+		// A truncated/malformed response must never look like "no keywords found".
+		$this->assertInstanceOf( 'WP_Error', $result );
+		$this->assertSame( 'provider_unavailable', $result->get_error_code() );
+	}
+
+	public function test_well_formed_response_with_empty_items_returns_empty_array() {
+		$p          = new FixtureDataforseoProvider( 'user@example.com', 'secret' );
+		$p->fixture = array(
+			'status_code' => 20000,
+			'tasks'       => array(
+				array(
+					'status_code' => 20000,
+					'result'      => array(
+						array( 'items' => array() ),
+					),
+				),
+			),
+		);
+
+		$result = $p->keyword_suggestions( 'anything' );
+
+		// A genuinely empty result set is a valid answer, not an error.
+		$this->assertIsArray( $result );
+		$this->assertSame( array(), $result );
+	}
+
 	public function test_request_caps_keywords_sent_for_enrichment() {
 		$p          = new FixtureDataforseoProvider( 'user@example.com', 'secret' );
 		$p->fixture = $this->fixture( 'keyword_suggestions_live' );
