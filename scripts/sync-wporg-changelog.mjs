@@ -162,13 +162,21 @@ function mdToHtml(s) {
 const vjson = JSON.parse(readFileSync(VERSION_JSON, 'utf8'));
 const joined = bullets.map(mdToHtml).join('; ');
 // Self-hosted sites render this blob in the update-details modal — it is the
-// only place they see release notes at all, so an upgrade notice leads.
+// only place they see release notes at all, so upgrade notices belong here.
+//
+// The notice goes AFTER its version header, never before it. Leading with it
+// read better for exactly one release: entries are concatenated with no
+// delimiter, so the next release prepends in front of the notice and the
+// notice silently becomes the newest entry's. That happened on the live
+// manifest — 3.9.3's "AI toggle" notice ended up under the 3.10.0 heading,
+// attributing a posture change to the wrong version. Anchored behind the
+// header it travels with the release it describes.
 const notice = upgradeNotes.length > 0
   ? `<p><strong>Heads up:</strong> ${upgradeNotes.map(mdToHtml).join(' ')}</p>`
   : '';
 const newestTag = bullets.length > 0
-  ? `${notice}<strong>${version}</strong> — ${joined}`
-  : `${notice}<strong>${version}</strong>`;
+  ? `<strong>${version}</strong> — ${joined}${notice}`
+  : `<strong>${version}</strong>${notice}`;
 // Exactly one entry may be <strong> — the newest. Everything older is <h4>.
 //
 // This used to demote only the immediately-previous entry, which silently
