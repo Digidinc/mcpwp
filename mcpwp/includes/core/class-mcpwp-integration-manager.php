@@ -85,7 +85,7 @@ class Mcpwp_Integration_Manager {
 			'url'         => 'https://console.cloud.google.com/apis/credentials',
 			'key_prefix'  => '',
 			'tier'        => 'pro',
-			'description' => 'Submit URLs to Google for indexing via the Indexing API. Requires a service account with Indexing API access.',
+			'description' => 'Submit URLs to the Google Indexing API. Google only crawls submissions for pages with JobPosting structured data, or BroadcastEvent inside a VideoObject — ordinary pages and posts are accepted and then ignored. For general content, use a sitemap and Search Console. Setup requires a Google Cloud project with the Indexing API enabled, a service account, a downloaded JSON key, and that service account granted access in Search Console.',
 			'fields'      => array(
 				'service_account_json' => array(
 					'label'       => 'Service Account JSON',

@@ -21,7 +21,7 @@ trait Mcpwp_Pro_Tools_Seo_Trait {
 		// Google Indexing API Tools.
 		$pro_tools[] = $this->define_tool(
 			'wp_submit_to_google_index',
-			'Submit one or more URLs to Google for indexing via the Indexing API. Requires Google Indexing API integration to be configured. Use action URL_UPDATED for new/updated pages and URL_DELETED for removed pages. Limited to 200 URLs per day by Google.',
+			'Submit URLs to the Google Indexing API. IMPORTANT: Google only crawls submissions for pages carrying JobPosting structured data, or BroadcastEvent embedded in a VideoObject — "The Indexing API can only be used to crawl pages with either JobPosting or BroadcastEvent embedded in a VideoObject" (developers.google.com/search/apis/indexing-api). Submitting an ordinary page or blog post returns HTTP 200 and is then ignored, so a successful response here is NOT evidence the URL will be indexed. For general content use a sitemap and Search Console instead. Requires the google_indexing integration (a Google Cloud service-account JSON key). Use URL_UPDATED for new/updated pages, URL_DELETED for removed ones. Google caps this at 200 URLs per day.',
 			array(
 				'urls'   => array(
 					'type'        => 'array',
