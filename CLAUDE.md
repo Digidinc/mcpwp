@@ -460,6 +460,9 @@ All endpoints require `X-API-Key` header. Namespace: `mcpwp/v1`.
 | `/content-graph/apply-link` | POST | Apply accepted link |
 | `/content-graph/validate-links` | POST | Validate all internal links |
 | `/seo/content-quality/{id}` | GET | Content quality score |
+| `/seo/visibility` | GET | Stored search visibility snapshot (DataForSEO) |
+| `/seo/visibility/refresh` | POST | Fetch a fresh visibility snapshot — debounced 5 min, spends DataForSEO credit |
+| `/seo/opportunities` | GET | Ranked SEO opportunity list, maturity-aware |
 
 ### Approvals & Safety
 | Endpoint | Method | Purpose |
@@ -538,6 +541,26 @@ Push to live always gates through the approval system — same key cannot approv
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
 | `/mcp` | POST | MCP tool dispatch (all tools via JSON-RPC) — methods: `initialize`, `tools/list`, `tools/call`, `resources/list`, `resources/read`, `prompts/list`, `prompts/get`, `ping` |
+
+## SEO Market Data (DataForSEO)
+
+Two data classes, deliberately in separate stores:
+
+- **Visibility** (`Mcpwp_SEO_Visibility`) — where the site ranks in the market. Position, volume,
+  difficulty. From DataForSEO.
+- **Performance** (`Mcpwp_Search_Performance`) — traffic actually received. Clicks, impressions,
+  CTR. Search Console only; still import-only until the broker OAuth work lands.
+
+They are not interchangeable. DataForSEO cannot supply clicks or impressions, and `position` means
+an impression-weighted average in Search Console but a scraped SERP rank in DataForSEO. Merging
+them produces a number nobody can interpret.
+
+`Mcpwp_SEO_Opportunities::rank()` adapts its signal to site maturity — `greenfield` (no rankings),
+`emerging` (ranks, but deep), `mature` (page-2 positions). Striking distance is a score multiplier,
+never an entry condition: a site ranking only at positions 64-91 must still get a ranked list.
+
+Credentials are BYO via WP Admin > Integrations > DataForSEO (login + password, HTTP Basic).
+Nothing runs on a timer — every lookup is an explicit user or agent action.
 
 ## Elementor Data Format
 
