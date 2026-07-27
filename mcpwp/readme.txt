@@ -153,6 +153,9 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 
 == Changelog ==
 
+= 3.9.0 =
+* feat: **mupot:** read-first WordPress connector — status + task board in Control Room ([#715](https://github.com/Mumega-com/mcpwp/issues/715)) ([8a06c11](https://github.com/Mumega-com/mcpwp/commit/8a06c11593f62c7de1b873d4d79ed09f014ed71c)), closes [#689](https://github.com/Mumega-com/mcpwp/issues/689)
+
 = 3.8.0 =
 * feat: **updater:** make update-channel failures loud at every layer ([#719](https://github.com/Mumega-com/mcpwp/issues/719))
 * fix: tool schema item types ([#707](https://github.com/Mumega-com/mcpwp/issues/707)) and staging environment detection ([#710](https://github.com/Mumega-com/mcpwp/issues/710)) ([#713](https://github.com/Mumega-com/mcpwp/issues/713))
