@@ -870,6 +870,50 @@ if (! function_exists('get_post_status_object')) {
     }
 }
 
+if (! function_exists('wp_cache_delete')) {
+    function wp_cache_delete($key, $group = '')
+    {
+        return true;
+    }
+}
+
+if (! function_exists('get_post_type')) {
+    function get_post_type($post = null)
+    {
+        if (is_object($post) && isset($post->post_type)) {
+            return $post->post_type;
+        }
+        $id = is_object($post) ? (int) $post->ID : (int) $post;
+        if (isset($GLOBALS['_mcpwp_test_posts'][$id]->post_type)) {
+            return $GLOBALS['_mcpwp_test_posts'][$id]->post_type;
+        }
+        return false;
+    }
+}
+
+if (! function_exists('wp_http_validate_url')) {
+    // Mirror WP closely enough for link classification: an absolute http(s)
+    // URL with a host validates; a relative path or other scheme does not.
+    // Callers use the false return to decide whether to resolve against
+    // home_url(), so getting relative paths wrong here would silently change
+    // which links count as internal.
+    function wp_http_validate_url($url)
+    {
+        $url = trim((string) $url);
+        if ('' === $url || 0 !== strpos($url, 'http')) {
+            return false;
+        }
+        $parsed = parse_url($url);
+        if (empty($parsed['host']) || empty($parsed['scheme'])) {
+            return false;
+        }
+        if (! in_array(strtolower($parsed['scheme']), array( 'http', 'https' ), true)) {
+            return false;
+        }
+        return $url;
+    }
+}
+
 if (! function_exists('url_to_postid')) {
     // Mirror WP: resolve the plain-permalink query vars (?p=ID / ?page_id=ID)
     // regardless of post status; pretty draft slugs fall through to path lookup.
@@ -1337,7 +1381,15 @@ function get_post_meta($post_id, $key = '', $single = false)
 
 function update_post_meta($post_id, $key, $value)
 {
-    $GLOBALS['_mcpwp_test_meta'][ (int) $post_id ][ $key ] = $value;
+    // Mirror WP core, which unslashes on write (update_metadata() calls
+    // wp_unslash on the value) so get_post_meta() returns clean data.
+    //
+    // Storing the slashed value verbatim meant every _elementor_data write in
+    // tests read back as un-decodable JSON, so set_elementor_data()'s
+    // readback verification always failed with meta_write_truncated. Nothing
+    // caught it because the one test file covering that path was itself never
+    // registered in phpunit.xml.
+    $GLOBALS['_mcpwp_test_meta'][ (int) $post_id ][ $key ] = wp_unslash($value);
     return true;
 }
 
@@ -1563,6 +1615,9 @@ require_once dirname(__DIR__) . '/includes/core/traits/trait-mcpwp-elementor-rea
 require_once dirname(__DIR__) . '/includes/core/traits/trait-mcpwp-elementor-writer.php';
 require_once dirname(__DIR__) . '/includes/core/traits/trait-mcpwp-elementor-validator.php';
 require_once dirname(__DIR__) . '/includes/core/traits/trait-mcpwp-elementor-css.php';
+// The validator resolves valid control keys through the widget registry, so a
+// save that reaches widget-level validation fatals without it.
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-widgets.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-basic.php';
 require_once dirname(__DIR__) . '/includes/pro/api/class-mcpwp-rest-elementor-pro.php';
 require_once dirname(__DIR__) . '/includes/class-mcpwp-license.php';

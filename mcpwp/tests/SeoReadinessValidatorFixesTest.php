@@ -283,4 +283,94 @@ final class SeoReadinessValidatorFixesTest extends TestCase {
 		$this->assertInstanceOf( WP_Error::class, $resp );
 		$this->assertSame( 'not_found', $resp->get_error_code() );
 	}
+
+	// ── #717 — no_internal_outbound_links false negative ───────────────────
+	//
+	// The flag was decided from the content graph's resolved outbound_count: a
+	// link only counted once it resolved to a node in the graph sample. Two
+	// real conditions defeat that while the page plainly carries the link:
+	//
+	//   1. The href is same-host but not resolvable to a post on THIS install
+	//      — the case reported on DME page 5774, where the copy links to
+	//      https://digitalmarketingexperts.ca/privacy-policy/ while the staging
+	//      install serves that page at /staging/5707/privacy-policy/.
+	//   2. The target is a real post outside the graph's 100-post window.
+	//
+	// Both rendered as "No internal outbound links found" — "we could not
+	// resolve it" reported as "there isn't one".
+
+	public function test_same_host_link_that_resolves_to_no_post_still_counts(): void {
+		// Verbatim shape of the DME text-editor widget copy that was flagged.
+		$GLOBALS['_mcpwp_test_posts'][ self::PUB_ID ]->post_content =
+			'<h1>Snapshot</h1><p>See our <a href="' . home_url( '/privacy-policy/' ) . '">Privacy Policy</a>.</p>';
+
+		$resp = $this->readiness( self::PUB_ID );
+		$this->assertInstanceOf( WP_REST_Response::class, $resp );
+		$this->assertNotContains(
+			'no_internal_outbound_links',
+			$this->issueCodes( $resp ),
+			'a same-host link is an internal link even when it resolves to no post in this install'
+		);
+	}
+
+	public function test_page_with_no_links_at_all_is_still_flagged(): void {
+		// The guard against over-correcting: the check must still fire.
+		$GLOBALS['_mcpwp_test_posts'][ self::PUB_ID ]->post_content = '<h1>Snapshot</h1><p>No links here at all.</p>';
+
+		$resp = $this->readiness( self::PUB_ID );
+		$this->assertInstanceOf( WP_REST_Response::class, $resp );
+		$this->assertContains( 'no_internal_outbound_links', $this->issueCodes( $resp ) );
+	}
+
+	public function test_external_and_fragment_only_links_do_not_count_as_internal(): void {
+		// A page whose only links leave the site or jump within it has no
+		// internal outbound links. Fragments matter here: DME page 5774's
+		// buttons link to "#request-your-snapshot", and counting those would
+		// have masked the bug rather than fixed it.
+		$GLOBALS['_mcpwp_test_posts'][ self::PUB_ID ]->post_content =
+			// NOT example.com — the test bootstrap's home_url() is
+			// https://example.com, so a link there is same-host and would make
+			// this guard pass for the wrong reason.
+			'<h1>Snapshot</h1><p><a href="https://another-site.test/other/">Out</a>'
+			. ' <a href="#request-your-snapshot">Jump</a>'
+			. ' <a href="mailto:hi@another-site.test">Mail</a></p>';
+
+		$resp = $this->readiness( self::PUB_ID );
+		$this->assertInstanceOf( WP_REST_Response::class, $resp );
+		$this->assertContains( 'no_internal_outbound_links', $this->issueCodes( $resp ) );
+	}
+
+	public function test_internal_link_inside_elementor_widget_settings_counts(): void {
+		// post_content is empty on an Elementor page — the link lives only in
+		// _elementor_data, which is where the DME link actually was.
+		$GLOBALS['_mcpwp_test_posts'][ self::PUB_ID ]->post_content = '<h1>Snapshot</h1><p>' . str_repeat( 'word ', 200 ) . '</p>';
+		$GLOBALS['_mcpwp_test_meta'][ self::PUB_ID ]['_elementor_data'] = wp_json_encode(
+			array(
+				array(
+					'id'       => 'sec1',
+					'elType'   => 'section',
+					'elements' => array(
+						array(
+							'id'       => 'col1',
+							'elType'   => 'column',
+							'elements' => array(
+								array(
+									'id'         => 'w1',
+									'elType'     => 'widget',
+									'widgetType' => 'text-editor',
+									'settings'   => array(
+										'editor' => '<p>See our <a href="' . home_url( '/privacy-policy/' ) . '">Privacy Policy</a>.</p>',
+									),
+								),
+							),
+						),
+					),
+				),
+			)
+		);
+
+		$resp = $this->readiness( self::PUB_ID );
+		$this->assertInstanceOf( WP_REST_Response::class, $resp );
+		$this->assertNotContains( 'no_internal_outbound_links', $this->issueCodes( $resp ) );
+	}
 }

@@ -90,13 +90,27 @@ class AioseoSeoPersistenceTest extends PHPUnit\Framework\TestCase {
 	private $wpdb;
 	private $post_id = 5781;
 
+	/** @var mixed */
+	private $previous_wpdb;
+
 	protected function setUp(): void {
 		$this->seo  = new Mcpwp_SEO();
 		$this->wpdb = new Mcpwp_Test_Aioseo_Wpdb();
+
+		// Swapping a global without restoring it leaks into every test that
+		// runs after this file. This double implements only the AIOSEO surface,
+		// so anything later touching $wpdb->postmeta fataled — visible only in
+		// a full-suite run and never when the affected file ran alone.
+		$this->previous_wpdb = $GLOBALS['wpdb'] ?? null;
 		$GLOBALS['wpdb'] = $this->wpdb;
+
 		$GLOBALS['_mcpwp_test_posts'] = array(
 			$this->post_id => (object) array( 'ID' => $this->post_id, 'post_type' => 'page', 'post_status' => 'draft' ),
 		);
+	}
+
+	protected function tearDown(): void {
+		$GLOBALS['wpdb'] = $this->previous_wpdb;
 	}
 
 	private function set_seo( array $data ) {

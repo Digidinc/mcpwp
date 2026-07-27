@@ -107,8 +107,16 @@ jobs:
             exit 1
           fi
 
-          if [ "${MANIFEST_URL}" != "https://mumega.com/mcp-updates/mcpwp-latest.zip" ]; then
-            echo "::error::version.json download_url must point at the canonical mumega.com ZIP"
+          # The canonical channel is updates.mcpwp.net (since 2026-06-11); the
+          # mumega.com host is the legacy one, kept alive only until every
+          # un-migrated site repoints. This check previously required the
+          # legacy URL and called it canonical, which is what kept the
+          # canonical channel depending on the host it is meant to replace
+          # (#720). Pointing it at the right host is the fix; the check itself
+          # is still the guard that stops the manifest drifting elsewhere.
+          if [ "${MANIFEST_URL}" != "https://updates.mcpwp.net/mcpwp-latest.zip" ]; then
+            echo "::error::version.json download_url must be https://updates.mcpwp.net/mcpwp-latest.zip (got: ${MANIFEST_URL})"
+            echo "::error::That is the canonical channel and the key publish_update_release.sh writes to R2."
             exit 1
           fi
 

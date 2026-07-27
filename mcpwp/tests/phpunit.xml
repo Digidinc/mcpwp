@@ -3,6 +3,9 @@
   <testsuites>
     <testsuite name="MCPWP Tests">
       <directory>./</directory>
+      <file>./test-elementor-basic.php</file>
+      <file>./test-mcp-free-tools.php</file>
+      <file>./test-rest-menus.php</file>
       <file>./unit/test-staging-scope.php</file>
       <file>./unit/test-staging-self-approval.php</file>
       <file>./unit/test-route-case-authorization.php</file>

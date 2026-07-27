@@ -889,6 +889,78 @@ abstract class Mcpwp_REST_API {
 	}
 
 	/**
+	 * Whether an href points at this site, regardless of whether it resolves
+	 * to a post.
+	 *
+	 * resolve_internal_graph_link() answers a narrower question — "which node
+	 * does this link point to" — and returns null when no node matches. That
+	 * is right for building graph edges and wrong for asking "does this page
+	 * link anywhere internal at all", because a link can be unmistakably
+	 * internal and still resolve to nothing here: an absolute URL carrying a
+	 * different path prefix (a staging install serving the same host), or a
+	 * target outside the graph's sampled window.
+	 *
+	 * @param string $href Raw href value.
+	 * @return bool
+	 */
+	protected function is_same_host_href( $href ) {
+		$href = trim( (string) $href );
+
+		// A fragment jumps within the page; mailto/tel/sms/javascript are not
+		// navigation to another document. None is an internal outbound link.
+		if ( '' === $href || 0 === strpos( $href, '#' ) || preg_match( '/^(mailto|tel|sms|javascript):/i', $href ) ) {
+			return false;
+		}
+
+		$absolute = wp_http_validate_url( $href ) ? $href : home_url( $href );
+		$home     = wp_parse_url( home_url() );
+		$target   = wp_parse_url( $absolute );
+
+		if ( empty( $target['host'] ) || empty( $home['host'] ) ) {
+			return false;
+		}
+
+		return strtolower( $target['host'] ) === strtolower( $home['host'] );
+	}
+
+	/**
+	 * Count links on a post that point at this site.
+	 *
+	 * Reads both surfaces a link can live on: post_content, and Elementor
+	 * widget settings for pages whose post_content is empty by construction.
+	 *
+	 * @param WP_Post $post Post object.
+	 * @return int Number of distinct same-host hrefs.
+	 */
+	protected function count_same_host_outbound_links( $post ) {
+		$hrefs = array();
+
+		if ( preg_match_all( '/<a\s[^>]*href=["\']([^"\']+)["\'][^>]*>/i', (string) $post->post_content, $matches ) ) {
+			foreach ( $matches[1] as $href ) {
+				$hrefs[] = $href;
+			}
+		}
+
+		$raw = get_post_meta( (int) $post->ID, '_elementor_data', true );
+		if ( ! empty( $raw ) && is_string( $raw ) ) {
+			$data = json_decode( $raw, true );
+			if ( is_array( $data ) ) {
+				$this->collect_elementor_link_hrefs( $data, $hrefs );
+			}
+		}
+
+		$count = 0;
+		foreach ( array_unique( $hrefs ) as $href ) {
+			$href = trim( html_entity_decode( $href, ENT_QUOTES, 'UTF-8' ) );
+			if ( $this->is_same_host_href( $href ) ) {
+				$count++;
+			}
+		}
+
+		return $count;
+	}
+
+	/**
 	 * Resolve an href to an internal post link, or null if external/non-content.
 	 *
 	 * @param string $href      Raw href value.

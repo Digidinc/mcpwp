@@ -38,17 +38,21 @@ mcpwp-*.zip
 mcpwp-premium-*.zip
 mcpwp-pro-*.zip
 
-# Local tooling scratch (keep the real release script)
+# Local tooling scratch.
+#
+# scripts/*.sh used to be ignored with an allowlist of the real ones. Every new
+# committed script then depended on someone remembering to add a negation, and
+# three times they did not — most recently verify_test_discovery.sh, which CI
+# invoked on a file that was never pushed ("No such file or directory", exit
+# 127). A shell script referenced by a workflow is not scratch.
+#
+# Inverted: shell scripts are tracked by default and the genuinely local ones
+# are named. The failure mode is now "committed a local helper" — visible in
+# review and harmless — instead of "CI calls a file that does not exist".
 scripts/*.py
 scripts/*.php
-scripts/*.sh
-!scripts/release_freemius.sh
-!scripts/site-sync.sh
-!scripts/build-wporg.sh
-!scripts/publish_update_release.sh
-!scripts/verify_update_channel.sh
-!scripts/verify_distignore_refs.sh
-!scripts/verify_freemius_channel.sh
+scripts/update-github-assets.sh
+scripts/validate-workflows.sh
 
 # Test caches
 mcpwp/tests/.phpunit.result.cache

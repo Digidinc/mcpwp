@@ -559,7 +559,15 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 			}
 		}
 
-		if ( $node && 0 === (int) $node['outbound_count'] ) {
+		// #717: decided from the post's own links, not from the graph's resolved
+		// edge count. A link is internal when it points at this host; whether it
+		// also resolves to a node here is a different question, and answering it
+		// in the negative used to be reported as "this page has no internal
+		// links" — the reported case linked to /privacy-policy/ while the
+		// install served that page under a /staging/<id>/ prefix. Deciding here
+		// also covers a post outside the graph's sampled window, which was
+		// skipped entirely when $node was null.
+		if ( 0 === $this->count_same_host_outbound_links( $post ) ) {
 			$issues[] = $this->make_seo_readiness_issue( 'no_internal_outbound_links', 'warning', __( 'No internal outbound links found.', 'mcpwp' ), __( 'Add relevant internal links from the content graph where useful.', 'mcpwp' ) );
 		}
 
