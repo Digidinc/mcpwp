@@ -164,6 +164,22 @@ class Mcpwp_OAuth_Test_Controller extends Mcpwp_REST_OAuth {
 	// get_allowed_redirect_uris, oauth_error_response, clamp_scope_to_user_capability,
 	// parse_oauth_scope_string, clamp_scope_array_to_user_id,
 	// get_oauth_refresh_token_transient_key).
+
+	/**
+	 * Public proxy to the protected access-token transient key builder.
+	 *
+	 * Scope assertions read the STORED token record rather than the response's
+	 * scope string, so a fix that formats the response correctly while persisting
+	 * a wider scope still fails. Proxying the real method (instead of hardcoding
+	 * 'mcpwp_oauth_token_' . md5( $t )) keeps the tests honest if the key format
+	 * ever changes.
+	 *
+	 * @param string $token Access token.
+	 * @return string Transient key.
+	 */
+	public function access_token_transient_key( $token ) {
+		return $this->get_oauth_token_transient_key( $token );
+	}
 }
 
 // ── Test suite ─────────────────────────────────────────────────────────────
@@ -235,6 +251,68 @@ final class OAuthServerTest extends TestCase {
 		set_transient( 'mcpwp_oauth_code_' . $code, array_merge( $defaults, $overrides ), 60 );
 
 		return array( 'code' => $code, 'verifier' => $verifier );
+	}
+
+	/**
+	 * Seed a refresh-token transient directly.
+	 *
+	 * @param string[] $scopes  Stored scope list (may deliberately be junk).
+	 * @param int      $user_id Bound user id (0 = none).
+	 * @return string Refresh token.
+	 */
+	private function seed_refresh_token( array $scopes, int $user_id ): string {
+		$ctrl  = $this->controller();
+		$token = 'mcpwp_rt_' . bin2hex( random_bytes( 16 ) );
+
+		set_transient(
+			$ctrl->get_oauth_refresh_token_transient_key( $token ),
+			array(
+				'scopes'     => $scopes,
+				'user_id'    => $user_id,
+				'created_at' => time(),
+				'expires_at' => time() + HOUR_IN_SECONDS,
+			),
+			HOUR_IN_SECONDS
+		);
+
+		return $token;
+	}
+
+	/** Scopes actually persisted for an issued access token. */
+	private function stored_access_token_scopes( string $access_token ): array {
+		$record = get_transient( $this->controller()->access_token_transient_key( $access_token ) );
+		$this->assertIsArray( $record, 'Issued access token must have a stored record' );
+		return $record['scopes'];
+	}
+
+	/** Scopes actually persisted for an issued refresh token. */
+	private function stored_refresh_token_scopes( string $refresh_token ): array {
+		$record = get_transient( $this->controller()->get_oauth_refresh_token_transient_key( $refresh_token ) );
+		$this->assertIsArray( $record, 'Issued refresh token must have a stored record' );
+		return $record['scopes'];
+	}
+
+	/** Turn on the client_credentials grant, optionally setting the ceiling. */
+	private function enable_client_credentials( $max_scope = null ): void {
+		$settings                             = get_option( 'mcpwp_settings', array() );
+		$settings['oauth_client_secret_hash'] = wp_hash_password( 'cc_secret' );
+		if ( null !== $max_scope ) {
+			$settings['oauth_client_credentials_max_scope'] = $max_scope;
+		}
+		update_option( 'mcpwp_settings', $settings );
+	}
+
+	private function client_credentials_request( string $scope ): WP_REST_Request {
+		return $this->make_request(
+			'POST',
+			'/mcpwp/v1/oauth/token',
+			array(
+				'grant_type'    => 'client_credentials',
+				'client_id'     => 'test_client',
+				'client_secret' => 'cc_secret',
+				'scope'         => $scope,
+			)
+		);
 	}
 
 	// ── RFC 9728 Protected Resource Metadata ──────────────────────────────
@@ -1625,5 +1703,253 @@ final class OAuthServerTest extends TestCase {
 		);
 
 		$this->assertSame( 501, $response->get_status() );
+	}
+
+	// ── Refresh grant re-clamps to current capabilities ───────────────────
+
+	/**
+	 * A user demoted after consent must not keep refreshing an admin token.
+	 * user_id 30 is an editor: edit_posts yes, manage_options no.
+	 */
+	public function test_refresh_token_reclamps_to_current_user_capability(): void {
+		$GLOBALS['mcpwp_test_user_caps'][30] = array( 'edit_posts' => true, 'manage_options' => false );
+		$refresh                             = $this->seed_refresh_token( array( 'read', 'write', 'admin' ), 30 );
+
+		$response = $this->controller()->handle_token(
+			$this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
+				'grant_type'    => 'refresh_token',
+				'refresh_token' => $refresh,
+			) )
+		);
+
+		$this->assertSame( 200, $response->get_status() );
+		$data = $response->get_data();
+		$this->assertSame( 'read write', $data['scope'], 'Editor must not refresh into admin scope' );
+		$this->assertSame( array( 'read', 'write' ), $this->stored_access_token_scopes( $data['access_token'] ) );
+	}
+
+	/** The clamp must ratchet: the NEW refresh token cannot carry the old, wider scope. */
+	public function test_refresh_token_rotation_does_not_carry_forward_stale_scope(): void {
+		$GLOBALS['mcpwp_test_user_caps'][31] = array( 'edit_posts' => true, 'manage_options' => false );
+		$refresh                             = $this->seed_refresh_token( array( 'read', 'write', 'admin' ), 31 );
+
+		$data = $this->controller()->handle_token(
+			$this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
+				'grant_type'    => 'refresh_token',
+				'refresh_token' => $refresh,
+			) )
+		)->get_data();
+
+		$this->assertSame(
+			array( 'read', 'write' ),
+			$this->stored_refresh_token_scopes( $data['refresh_token'] ),
+			'A demoted user must not be able to refresh back up to admin on the next round'
+		);
+	}
+
+	/** Subscriber-equivalent: no caps at all clamps to read. */
+	public function test_refresh_token_reclamps_capless_user_to_read(): void {
+		$GLOBALS['mcpwp_test_user_caps'][32] = array();
+		$refresh                             = $this->seed_refresh_token( array( 'read', 'write', 'admin' ), 32 );
+
+		$data = $this->controller()->handle_token(
+			$this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
+				'grant_type'    => 'refresh_token',
+				'refresh_token' => $refresh,
+			) )
+		)->get_data();
+
+		$this->assertSame( 'read', $data['scope'] );
+		$this->assertSame( array( 'read' ), $this->stored_access_token_scopes( $data['access_token'] ) );
+	}
+
+	/**
+	 * The re-clamp is UNCONDITIONAL — a record with no bound user gets read only.
+	 * This test exists specifically to fail if someone reintroduces a
+	 * `if ( $user_id > 0 )` guard around the clamp.
+	 */
+	public function test_refresh_token_without_user_id_clamps_to_read(): void {
+		$refresh = $this->seed_refresh_token( array( 'read', 'write', 'admin' ), 0 );
+
+		$data = $this->controller()->handle_token(
+			$this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
+				'grant_type'    => 'refresh_token',
+				'refresh_token' => $refresh,
+			) )
+		)->get_data();
+
+		$this->assertSame( 'read', $data['scope'], 'A user-less refresh record must clamp to read' );
+	}
+
+	// ── Refresh grant must not fail open on a junk scope list ─────────────
+
+	/**
+	 * The bound user IS an administrator, so the capability clamp is a no-op and
+	 * cannot mask the bug. Two independent guards keep ['bogus'] from becoming
+	 * ['read','write','admin']: the refresh path resolves the stored scopes with
+	 * parse_oauth_scope_string() (empty/unrecognised => ['read']) and re-clamps to
+	 * the user's current caps, and sanitize_scopes() itself now fails closed to
+	 * ['read'] as well — so the guarantee is defense-in-depth. If this test passes
+	 * while the others pass, both halves of the refresh fix are really in place.
+	 */
+	public function test_refresh_token_with_unrecognised_scopes_does_not_fail_open(): void {
+		$GLOBALS['mcpwp_test_user_caps'][33] = array( 'edit_posts' => true, 'manage_options' => true );
+		$refresh                             = $this->seed_refresh_token( array( 'bogus' ), 33 );
+
+		$response = $this->controller()->handle_token(
+			$this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
+				'grant_type'    => 'refresh_token',
+				'refresh_token' => $refresh,
+			) )
+		);
+
+		$this->assertSame( 200, $response->get_status() );
+		$data = $response->get_data();
+		$this->assertSame( 'read', $data['scope'], 'An unrecognised stored scope list must fail closed to read' );
+		$this->assertSame( array( 'read' ), $this->stored_access_token_scopes( $data['access_token'] ) );
+	}
+
+	/** A legitimate admin refresh still works — the fix must not clamp everyone to read. */
+	public function test_refresh_token_admin_user_keeps_admin_scope(): void {
+		$GLOBALS['mcpwp_test_user_caps'][34] = array( 'edit_posts' => true, 'manage_options' => true );
+		$refresh                             = $this->seed_refresh_token( array( 'read', 'write', 'admin' ), 34 );
+
+		$data = $this->controller()->handle_token(
+			$this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
+				'grant_type'    => 'refresh_token',
+				'refresh_token' => $refresh,
+			) )
+		)->get_data();
+
+		$this->assertSame( 'read write admin', $data['scope'] );
+	}
+
+	// ── Refresh grant scope-list shape handling ───────────────────────────
+
+	/**
+	 * The stored scope list is hardened with array_filter( …, 'is_string' ): a
+	 * corrupt or foreign refresh record whose 'scopes' holds nested arrays,
+	 * integers or nulls must never reach implode()/sanitize_key(). A non-string
+	 * member triggers an "Array to string conversion" warning (which PHPUnit turns
+	 * into a failure) and sanitize_key() on a non-string is a type error. The bound
+	 * user IS an administrator, so the capability clamp is a no-op and cannot mask
+	 * the resolver: only the string member 'admin' survives the filter, so the
+	 * grant is exactly the admin scope it implies.
+	 */
+	public function test_refresh_token_filters_non_string_scope_members(): void {
+		$GLOBALS['mcpwp_test_user_caps'][35] = array( 'edit_posts' => true, 'manage_options' => true );
+		$refresh                             = $this->seed_refresh_token( array( array( 'admin' ), 5, null, 'admin' ), 35 );
+
+		$response = $this->controller()->handle_token(
+			$this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
+				'grant_type'    => 'refresh_token',
+				'refresh_token' => $refresh,
+			) )
+		);
+
+		$this->assertSame( 200, $response->get_status() );
+		$data = $response->get_data();
+		$this->assertSame(
+			'read write admin',
+			$data['scope'],
+			'Only the string scope member "admin" may survive the is_string filter'
+		);
+		$this->assertSame( array( 'read', 'write', 'admin' ), $this->stored_access_token_scopes( $data['access_token'] ) );
+	}
+
+	/**
+	 * A refresh record may store its scopes as a bare space-separated STRING rather
+	 * than an array (legacy or hand-seeded records). The (array) cast wraps the
+	 * whole string into a single member, is_string keeps it, and
+	 * parse_oauth_scope_string() splits it back into read+write+admin. Seeded
+	 * directly because the typed seed_refresh_token() helper only accepts an array.
+	 * The bound user is an administrator so the clamp is a no-op.
+	 */
+	public function test_refresh_token_accepts_a_plain_string_scope_list(): void {
+		$GLOBALS['mcpwp_test_user_caps'][36] = array( 'edit_posts' => true, 'manage_options' => true );
+
+		$ctrl  = $this->controller();
+		$token = 'mcpwp_rt_' . bin2hex( random_bytes( 16 ) );
+		set_transient(
+			$ctrl->get_oauth_refresh_token_transient_key( $token ),
+			array(
+				'scopes'     => 'read write admin', // Bare string, not an array.
+				'user_id'    => 36,
+				'created_at' => time(),
+				'expires_at' => time() + HOUR_IN_SECONDS,
+			),
+			HOUR_IN_SECONDS
+		);
+
+		$response = $ctrl->handle_token(
+			$this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
+				'grant_type'    => 'refresh_token',
+				'refresh_token' => $token,
+			) )
+		);
+
+		$this->assertSame( 200, $response->get_status() );
+		$data = $response->get_data();
+		$this->assertSame(
+			'read write admin',
+			$data['scope'],
+			'A bare-string stored scope list must parse to read+write+admin'
+		);
+		$this->assertSame( array( 'read', 'write', 'admin' ), $this->stored_access_token_scopes( $data['access_token'] ) );
+	}
+
+	// ── client_credentials server-side scope ceiling ──────────────────────
+
+	/** Default ceiling is 'write': scope=admin is downgraded, not honoured. */
+	public function test_client_credentials_default_ceiling_downgrades_admin_request(): void {
+		$this->enable_client_credentials();
+
+		$response = $this->controller()->handle_token( $this->client_credentials_request( 'admin' ) );
+
+		$this->assertSame( 200, $response->get_status() );
+		$data = $response->get_data();
+		$this->assertSame( 'read write', $data['scope'] );
+		$this->assertSame(
+			array( 'read', 'write' ),
+			$this->stored_access_token_scopes( $data['access_token'] ),
+			'The PERSISTED scopes are what the auth layer reads — they must be clamped too'
+		);
+	}
+
+	/** An administrator can deliberately raise the ceiling to admin. */
+	public function test_client_credentials_ceiling_admin_allows_admin_scope(): void {
+		$this->enable_client_credentials( 'admin' );
+
+		$data = $this->controller()->handle_token( $this->client_credentials_request( 'admin' ) )->get_data();
+
+		$this->assertSame( 'read write admin', $data['scope'] );
+		$this->assertSame( array( 'read', 'write', 'admin' ), $this->stored_access_token_scopes( $data['access_token'] ) );
+	}
+
+	/** The ceiling can also be lowered to read. */
+	public function test_client_credentials_ceiling_read_downgrades_write_request(): void {
+		$this->enable_client_credentials( 'read' );
+
+		$data = $this->controller()->handle_token( $this->client_credentials_request( 'write' ) )->get_data();
+
+		$this->assertSame( 'read', $data['scope'] );
+	}
+
+	/** A junk stored ceiling must resolve to the documented default, not to admin. */
+	public function test_client_credentials_invalid_ceiling_setting_falls_back_to_write(): void {
+		$this->enable_client_credentials( 'superadmin' );
+
+		$data = $this->controller()->handle_token( $this->client_credentials_request( 'admin' ) )->get_data();
+
+		$this->assertSame( 'read write', $data['scope'] );
+	}
+
+	/** Requesting below the ceiling is never inflated up to it. */
+	public function test_client_credentials_read_request_stays_read_under_write_ceiling(): void {
+		$this->enable_client_credentials( 'write' );
+
+		$data = $this->controller()->handle_token( $this->client_credentials_request( 'read' ) )->get_data();
+
+		$this->assertSame( 'read', $data['scope'] );
 	}
 }

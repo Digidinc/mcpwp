@@ -295,6 +295,24 @@ class Mcpwp_Settings {
 			)
 		);
 
+		add_settings_field(
+			'oauth_client_credentials_max_scope',
+			__( 'Machine Token Max Scope', 'mcpwp' ),
+			array( $this, 'render_select_field' ),
+			'mcpwp_settings',
+			'mcpwp_general_section',
+			array(
+				'id'          => 'oauth_client_credentials_max_scope',
+				'label_for'   => 'oauth_client_credentials_max_scope',
+				'options'     => array(
+					'read'  => __( 'Read only', 'mcpwp' ),
+					'write' => __( 'Read and write (recommended)', 'mcpwp' ),
+					'admin' => __( 'Full admin', 'mcpwp' ),
+				),
+				'description' => __( 'Highest scope a client_credentials (machine-to-machine) token can be granted, no matter what scope it requests. A request above this ceiling is downgraded, not refused. "Full admin" lets any holder of the client secret manage settings, API keys, and approvals — grant it only to a credential you control.', 'mcpwp' ),
+			)
+		);
+
 		// GitHub Integration.
 		add_settings_field(
 			'github_token',
@@ -567,6 +585,12 @@ class Mcpwp_Settings {
 			'oauth_client_id'    => 'site_pilot_ai',
 			'oauth_client_secret_hash' => '',
 			'oauth_token_ttl'    => 3600,
+			// Ceiling for machine (client_credentials) tokens. 'write' by default:
+			// a machine credential should be able to publish content without being
+			// able to rewrite plugin settings, rotate API keys, or approve its own
+			// staging pushes. Raising this to 'admin' is an explicit administrator
+			// choice made in WP Admin > MCPWP > Settings.
+			'oauth_client_credentials_max_scope' => 'write',
 			'alerts_enabled'          => false,
 			'alerts_window_minutes'   => 5,
 			'alerts_cooldown_minutes' => 15,
@@ -672,6 +696,21 @@ class Mcpwp_Settings {
 		$sanitized['oauth_token_ttl'] = isset( $input['oauth_token_ttl'] )
 			? min( 86400, max( 300, absint( $input['oauth_token_ttl'] ) ) )
 			: 3600;
+
+		// Scope ceiling for the client_credentials (machine token) grant.
+		// Validate the ceiling against an explicit allow-list (read/write/admin)
+		// with a 'write' fallback: anything unknown or absent resolves to 'write' —
+		// the safe direction is always down. sanitize_scopes() is intentionally not
+		// used here. The same allow-list is applied again on the read side in
+		// Mcpwp_Api_Auth::get_oauth_settings(), because this option can also be
+		// written by WP-CLI, a migration, or a direct DB edit that never passes
+		// through this callback.
+		$cc_max_scope = isset( $input['oauth_client_credentials_max_scope'] )
+			? sanitize_key( (string) $input['oauth_client_credentials_max_scope'] )
+			: '';
+		$sanitized['oauth_client_credentials_max_scope'] = in_array( $cc_max_scope, array( 'read', 'write', 'admin' ), true )
+			? $cc_max_scope
+			: 'write';
 
 		$new_secret = isset( $input['oauth_client_secret'] ) ? trim( (string) $input['oauth_client_secret'] ) : '';
 		if ( '' !== $new_secret ) {
@@ -899,6 +938,44 @@ class Mcpwp_Settings {
 			esc_attr( $value ),
 			esc_attr( $args['placeholder'] ?? '' )
 		);
+
+		if ( ! empty( $args['description'] ) ) {
+			printf( '<p class="description">%s</p>', esc_html( $args['description'] ) );
+		}
+	}
+
+	/**
+	 * Render select field.
+	 *
+	 * The rendered value is never trusted on the way back in: sanitize_settings()
+	 * re-checks the submitted value against its own allow-list, and the auth layer
+	 * clamps again at read time. This renderer only decides what is offered.
+	 *
+	 * @param array $args Field arguments. Requires 'id' and 'options' (value => label).
+	 */
+	public function render_select_field( $args ) {
+		$settings    = $this->get_option_settings( $args );
+		$value       = isset( $settings[ $args['id'] ] ) ? (string) $settings[ $args['id'] ] : '';
+		$option_name = isset( $args['option_name'] ) ? $args['option_name'] : self::OPTION_NAME;
+		$options     = isset( $args['options'] ) && is_array( $args['options'] ) ? $args['options'] : array();
+
+		printf(
+			'<select name="%s[%s]" id="%s">',
+			esc_attr( $option_name ),
+			esc_attr( $args['id'] ),
+			esc_attr( $args['id'] )
+		);
+
+		foreach ( $options as $option_value => $option_label ) {
+			printf(
+				'<option value="%s"%s>%s</option>',
+				esc_attr( $option_value ),
+				selected( $value, (string) $option_value, false ),
+				esc_html( $option_label )
+			);
+		}
+
+		echo '</select>';
 
 		if ( ! empty( $args['description'] ) ) {
 			printf( '<p class="description">%s</p>', esc_html( $args['description'] ) );

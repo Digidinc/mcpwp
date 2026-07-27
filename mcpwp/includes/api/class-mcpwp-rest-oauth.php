@@ -398,6 +398,15 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 	 * use and a brand-new one is issued.  The old token cannot be reused.
 	 * Tokens are bound to user_id.
 	 *
+	 * Scope handling matches handle_token_authorization_code() exactly:
+	 * - The stored scope list is resolved with parse_oauth_scope_string(), which
+	 *   falls back to array( 'read' ) on an empty or unrecognised set.
+	 * - The result is re-clamped to the stored user's CURRENT capabilities on
+	 *   every refresh, unconditionally.
+	 * sanitize_scopes() itself now also fails closed to array( 'read' ), so using
+	 * parse_oauth_scope_string() here is defense-in-depth, not a workaround for a
+	 * fail-open helper.
+	 *
 	 * @param WP_REST_Request $request Request.
 	 * @return WP_REST_Response
 	 */
@@ -423,8 +432,39 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 			return $this->oauth_error_response( 'invalid_grant', 'Refresh token is invalid or has expired.', 400 );
 		}
 
-		$scopes  = $this->sanitize_scopes( (array) $record['scopes'] );
+		// P0-B parity with the authorization_code path: resolve the stored scope
+		// list with parse_oauth_scope_string(), which falls back to array( 'read' )
+		// on an empty or unrecognised set. A refresh record holding an unrecognised
+		// scope list (corrupted option/transient, hand-seeded value, or a value
+		// written by future code) therefore degrades to the least privilege rather
+		// than the most.
+		//
+		// sanitize_scopes() now also fails closed to array( 'read' ) on an empty
+		// result, so this is defense-in-depth rather than a workaround for a
+		// fail-open helper: even if the resolver here were changed, that record
+		// still could not mint a full-admin token from scopes it never granted.
+		$stored_scopes = isset( $record['scopes'] ) ? (array) $record['scopes'] : array();
+		$stored_scopes = array_filter( $stored_scopes, 'is_string' );
+		$scopes        = $this->parse_oauth_scope_string( implode( ' ', $stored_scopes ) );
+
 		$user_id = isset( $record['user_id'] ) ? (int) $record['user_id'] : 0;
+
+		// P0-A parity: re-clamp to the stored user's CURRENT capabilities on every
+		// refresh. A refresh token outlives the consent that minted it (up to 30
+		// days, per issue_oauth_access_token_with_user()), so without this a user
+		// demoted from administrator to subscriber keeps renewing an admin-scoped
+		// access token for the rest of the refresh chain — the demotion never takes
+		// effect. Because the new refresh token is minted from $scopes as well, the
+		// clamp also ratchets: a downgrade cannot be undone by refreshing again.
+		//
+		// Unconditional by design — there is deliberately NO user_id === 0 branch.
+		// looks_like_oauth_refresh_token() accepts only the mcpwp_rt_ prefix, so no
+		// legacy population exists, and any user_id === 0 record can only already
+		// hold array( 'read' ) because the auth-code exchange clamped it before the
+		// refresh token was minted. clamp_scope_array_to_user_id() returns
+		// array( 'read' ) for user_id <= 0, which is exactly right for a record
+		// with no bound user.
+		$scopes = $this->clamp_scope_array_to_user_id( $scopes, $user_id );
 
 		$oauth_settings = $this->get_oauth_settings();
 		$ttl            = (int) $oauth_settings['oauth_token_ttl'];
@@ -448,9 +488,13 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 	 * Security notes:
 	 * - Both client_id and client_secret are REQUIRED for this grant (enforced
 	 *   in the handler, not as route-level args, so public PKCE flows are unaffected).
-	 * - Scopes are NOT user-clamped — there is no WP user in a machine flow.
-	 *   However, empty/absent scope defaults to ['read'] (same as authorization_code).
-	 *   The caller must explicitly request write or admin.
+	 * - There is no WP user in a machine flow, so no user-capability clamp applies.
+	 *   Instead the granted scope is capped by a SERVER-SIDE ceiling — the
+	 *   'oauth_client_credentials_max_scope' setting, default 'write' — applied via
+	 *   apply_scope_ceiling(). Requesting a scope above the ceiling is silently
+	 *   downgraded to the ceiling, never refused and never honoured. Only a site
+	 *   administrator can raise the ceiling to 'admin'; the token request cannot.
+	 * - Empty/absent scope still defaults to ['read'] (same as authorization_code).
 	 * - No refresh token is issued (parity with legacy behavior).
 	 *
 	 * @param WP_REST_Request $request Request.
@@ -480,7 +524,23 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 		$scope_string   = (string) $request->get_param( 'scope' );
 		$scopes         = $this->parse_oauth_scope_string( $scope_string );
 		$oauth_settings = $this->get_oauth_settings();
-		$token_data     = $this->issue_oauth_access_token( $scopes, $oauth_settings['oauth_token_ttl'], array( 'client_id' => $client_id ) );
+
+		// Server-side ceiling. Every other issuance path clamps the requested scope
+		// against something the caller does not control: the authorization_code path
+		// clamps to the consenting user's capabilities, the broker path can never
+		// produce 'admin' at all. This path clamped against nothing — whoever held
+		// the client secret could ask for scope=admin and be handed
+		// ['read','write','admin'], self-granting full administrative reach over the
+		// site's REST surface from a machine credential that was never intended to
+		// carry it.
+		//
+		// The ceiling is a site setting, not a request parameter, so raising it to
+		// 'admin' is a deliberate administrator action recorded in wp_options.
+		// get_oauth_settings() resolves it through a strict allow-list with a
+		// 'write' fallback, so a malformed stored value cannot widen the ceiling.
+		$scopes = $this->apply_scope_ceiling( $scopes, $oauth_settings['oauth_client_credentials_max_scope'] );
+
+		$token_data = $this->issue_oauth_access_token( $scopes, $oauth_settings['oauth_token_ttl'], array( 'client_id' => $client_id ) );
 
 		return new WP_REST_Response( $token_data, 200 );
 	}
