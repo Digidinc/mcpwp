@@ -153,12 +153,52 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 		);
 	}
 
+	/**
+	 * Whether this build ships the self-hosted update channel.
+	 *
+	 * `.distignore` prunes class-mcpwp-updater.php from the Freemius build,
+	 * where the license provider owns updates instead. Every entry point that
+	 * reaches for Mcpwp_Updater has to ask first — calling it unguarded is a
+	 * fatal on every premium install, not a degraded response (#723).
+	 *
+	 * @return bool
+	 */
+	private function has_self_hosted_updater() {
+		return class_exists( 'Mcpwp_Updater' );
+	}
+
+	/**
+	 * Response for builds whose updates are managed outside this plugin.
+	 *
+	 * Not an error: the site is working as designed, so this reports the same
+	 * shape check_update() always returns rather than a failure the caller has
+	 * to special-case.
+	 *
+	 * @return array
+	 */
+	private function externally_managed_state() {
+		return array(
+			'current_version'  => defined( 'MCPWP_VERSION' ) ? MCPWP_VERSION : null,
+			'update_available' => false,
+			'new_version'      => null,
+			'has_package'      => false,
+			'source'           => null,
+			'option_version'   => null,
+			'remote_version'   => null,
+			'reason'           => 'not_applicable',
+		);
+	}
+
 	public function check_update( $request ) {
 		if ( defined( 'MCPWP_WPORG_BUILD' ) ) {
 			return $this->error_response( 'not_available', __( 'Update check is not available in the WordPress.org build.', 'mcpwp' ), 404 );
 		}
 
 		$this->log_activity( 'check_update', $request );
+
+		if ( ! $this->has_self_hosted_updater() ) {
+			return $this->success_response( $this->externally_managed_state() );
+		}
 
 		$state = Mcpwp_Updater::instance()->get_update_state( true );
 
@@ -198,6 +238,10 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 	 * @return string Human-readable explanation.
 	 */
 	private function describe_no_update( array $state ) {
+		if ( ! $this->has_self_hosted_updater() ) {
+			return __( 'This build does not use the self-hosted update channel.', 'mcpwp' );
+		}
+
 		return Mcpwp_Updater::describe_reason( isset( $state['reason'] ) ? $state['reason'] : null );
 	}
 
@@ -269,11 +313,23 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 
 			// Flagged as caller-owned so Mcpwp_Updater::check_for_update() — which
 			// re-enters on set_site_transient() — does not overwrite this forced
-			// entry with the manifest version.
-			$update_plugins->response[ $plugin_file ] = Mcpwp_Updater::instance()->build_forced_entry(
-				esc_url_raw( $package_url ),
-				'999.0.0'
-			);
+			// entry with the manifest version. Builds without the self-hosted
+			// updater have nothing to re-enter, so the plain entry is enough and
+			// a forced install still works there (#723).
+			if ( $this->has_self_hosted_updater() ) {
+				$update_plugins->response[ $plugin_file ] = Mcpwp_Updater::instance()->build_forced_entry(
+					esc_url_raw( $package_url ),
+					'999.0.0'
+				);
+			} else {
+				$forced              = new stdClass();
+				$forced->slug        = 'mcpwp';
+				$forced->plugin      = $plugin_file;
+				$forced->new_version = '999.0.0';
+				$forced->package     = esc_url_raw( $package_url );
+
+				$update_plugins->response[ $plugin_file ] = $forced;
+			}
 			set_site_transient( 'update_plugins', $update_plugins );
 
 			$upgrader = new Plugin_Upgrader( new Automatic_Upgrader_Skin() );
@@ -307,6 +363,21 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 		// depending on it stranded sites on outdated releases (#716).
 		delete_site_transient( 'update_plugins' );
 		delete_transient( 'mcpwp_update_check' );
+
+		// No self-hosted channel to consult on this build — the license provider
+		// installs updates through its own updater, so there is nothing for this
+		// endpoint to resolve (#723).
+		if ( ! $this->has_self_hosted_updater() ) {
+			return $this->success_response(
+				array(
+					'updated'        => false,
+					'message'        => $this->describe_no_update( array() ),
+					'reason'         => 'not_applicable',
+					'version'        => defined( 'MCPWP_VERSION' ) ? MCPWP_VERSION : null,
+					'remote_version' => null,
+				)
+			);
+		}
 
 		$updater = Mcpwp_Updater::instance();
 		$state   = $updater->get_update_state( true );

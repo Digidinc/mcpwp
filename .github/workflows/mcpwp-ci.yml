@@ -35,5 +35,11 @@ jobs:
           find mcpwp -path 'mcpwp/vendor' -prune -o -name '*.php' -print0 \
             | xargs -0 -n1 php -l
 
+      # Lint and unit tests both load the whole tree, so neither sees a class
+      # that only a distribution build removes. #723 shipped a fatal to every
+      # premium install through that gap.
+      - name: Pruned-class Guard Check
+        run: bash scripts/verify_distignore_refs.sh
+
       - name: Unit Tests
         run: mcpwp/vendor/bin/phpunit --configuration mcpwp/tests/phpunit.xml
