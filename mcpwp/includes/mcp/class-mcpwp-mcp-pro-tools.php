@@ -79,6 +79,9 @@ class Mcpwp_MCP_Pro_Tools extends Mcpwp_MCP_Tool_Registry {
 			'wp_set_noindex'                     => 'seo',
 			'wp_seo_scan'                        => 'seo',
 			'wp_seo_report'                      => 'seo',
+			'wp_seo_visibility'                  => 'seo',
+			'wp_refresh_seo_visibility'          => 'seo',
+			'wp_seo_opportunities'               => 'seo',
 
 			// Forms
 			'wp_list_forms'                      => 'forms',
@@ -413,6 +416,18 @@ class Mcpwp_MCP_Pro_Tools extends Mcpwp_MCP_Tool_Registry {
 			'wp_seo_report'                  => array(
 				'method' => 'GET',
 				'route'  => '/seo/report',
+			),
+			'wp_seo_visibility'         => array(
+				'method' => 'GET',
+				'route'  => '/seo/visibility',
+			),
+			'wp_refresh_seo_visibility' => array(
+				'method' => 'POST',
+				'route'  => '/seo/visibility/refresh',
+			),
+			'wp_seo_opportunities'      => array(
+				'method' => 'GET',
+				'route'  => '/seo/opportunities',
 			),
 
 			// Forms
