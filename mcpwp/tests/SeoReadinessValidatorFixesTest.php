@@ -340,6 +340,46 @@ final class SeoReadinessValidatorFixesTest extends TestCase {
 		$this->assertContains( 'no_internal_outbound_links', $this->issueCodes( $resp ) );
 	}
 
+	public function test_unresolvable_external_host_is_not_counted_as_internal(): void {
+		// Adversarial review, 2026-07-27. The first version of this fix asked
+		// wp_http_validate_url() whether an href was absolute and resolved
+		// against home_url() when it said no. Real WP returns false whenever
+		// gethostbyname() fails on the host, so an unreachable external link
+		// became home_url('https://x.test/y') = 'https://example.com/https://x.test/y'
+		// — our own host — and counted as internal. On a server without
+		// outbound DNS that silenced this check for every external link.
+		//
+		// The original guard test used exactly such a host and passed only
+		// because the stub did no DNS.
+		$GLOBALS['_mcpwp_test_posts'][ self::PUB_ID ]->post_content =
+			'<h1>Snapshot</h1><p><a href="https://never-resolves.invalid/page/">Out</a></p>';
+
+		$resp = $this->readiness( self::PUB_ID );
+		$this->assertInstanceOf( WP_REST_Response::class, $resp );
+		$this->assertContains( 'no_internal_outbound_links', $this->issueCodes( $resp ) );
+	}
+
+	public function test_protocol_relative_external_link_is_not_counted_as_internal(): void {
+		// '//evil.example/page' has no scheme, so a naive "starts with http"
+		// test calls it relative and home_url() makes it ours.
+		$GLOBALS['_mcpwp_test_posts'][ self::PUB_ID ]->post_content =
+			'<h1>Snapshot</h1><p><a href="//another-site.invalid/page/">Out</a></p>';
+
+		$resp = $this->readiness( self::PUB_ID );
+		$this->assertInstanceOf( WP_REST_Response::class, $resp );
+		$this->assertContains( 'no_internal_outbound_links', $this->issueCodes( $resp ) );
+	}
+
+	public function test_site_relative_path_counts_as_internal(): void {
+		// The other direction: a bare path is internal and must still count.
+		$GLOBALS['_mcpwp_test_posts'][ self::PUB_ID ]->post_content =
+			'<h1>Snapshot</h1><p><a href="/privacy-policy/">Privacy</a></p>';
+
+		$resp = $this->readiness( self::PUB_ID );
+		$this->assertInstanceOf( WP_REST_Response::class, $resp );
+		$this->assertNotContains( 'no_internal_outbound_links', $this->issueCodes( $resp ) );
+	}
+
 	public function test_internal_link_inside_elementor_widget_settings_counts(): void {
 		// post_content is empty on an Elementor page — the link lives only in
 		// _elementor_data, which is where the DME link actually was.

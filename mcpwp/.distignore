@@ -24,3 +24,7 @@ CHANGELOG.md
 /assets/*.png
 /assets/*.svg
 /includes/class-mcpwp-updater.php
+
+# Never ship local Cloudflare/wrangler state (account id + name).
+.wrangler
+.wrangler/*

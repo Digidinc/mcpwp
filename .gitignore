@@ -67,3 +67,8 @@ site-pilot-ai/
 
 # graphify knowledge graph output (regenerated locally; hook rewrites graph.json per commit)
 graphify-out/
+
+# Wrangler local state — Cloudflare account id/name cache and local R2 blobs.
+# mcpwp/.wrangler/cache/wrangler-account.json reached the published plugin ZIP
+# on 3.10.0/3.10.1 via a repo-root "git add -A". Never distributable.
+.wrangler/

@@ -45,10 +45,18 @@ const HEADING_TO_PREFIX = {
   'Reverts': 'revert',
 };
 
+// JavaScript has no \Z. In a regex it is an identity escape for the literal
+// letter Z, so `(?=^## \[|\Z)` terminated a lazy body at the next section
+// heading OR at the first capital Z in the text — whichever came first. On the
+// real readme that silently truncated the Changelog body by 1,167 characters.
+// `(?![\s\S])` is the actual end-of-input assertion and, unlike `$`, is not
+// weakened to end-of-line by the `m` flag.
+const END_OF_INPUT = '(?![\\s\\S])';
+
 // 1. Extract the "## [X.Y.Z] ..." section from CHANGELOG.md (until next "## [" or EOF).
 function extractSection(md, ver) {
   const escaped = ver.replace(/\./g, '\\.');
-  const re = new RegExp(`^## \\[${escaped}\\][^\\n]*\\n([\\s\\S]*?)(?=^## \\[|\\Z)`, 'm');
+  const re = new RegExp(`^## \\[${escaped}\\][^\\n]*\\n([\\s\\S]*?)(?=^## \\[|${END_OF_INPUT})`, 'm');
   const m = md.match(re);
   return m ? m[1].trim() : null;
 }
@@ -113,12 +121,21 @@ const readmeBlockHeader = `= ${version} =`;
 // A whole-file includes() check would let whichever section synced first
 // suppress the other, silently and only for releases that carry both.
 function sectionBody(txt, heading) {
-  const m = txt.match(new RegExp(`^== ${heading} ==\\n\\n([\\s\\S]*?)(?=^== |\\Z)`, 'm'));
+  const m = txt.match(new RegExp(`^== ${heading} ==\\n\\n([\\s\\S]*?)(?=^== |${END_OF_INPUT})`, 'm'));
   return m ? m[1] : '';
 }
 
 function insertIntoSection(txt, heading, entry) {
-  return txt.replace(new RegExp(`(== ${heading} ==\\n\\n)`), `$1${entry}`);
+  // String.replace returns the input unchanged when nothing matches. Returning
+  // that silently, while the caller logs "inserted", would drop an upgrade
+  // notice on any readme whose section header is missing or differently spaced
+  // — the exact silent-omission failure this whole block exists to prevent.
+  const out = txt.replace(new RegExp(`(== ${heading} ==\\n\\n)`), `$1${entry}`);
+  if (out === txt) {
+    console.error(`FAIL: readme.txt has no "== ${heading} ==" section — nothing was inserted.`);
+    process.exit(1);
+  }
+  return out;
 }
 
 if (bullets.length > 0) {
@@ -155,7 +172,14 @@ const tested = testedMatch ? testedMatch[1] : null;
 function mdToHtml(s) {
   return s
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
-    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    // Inline bold renders as <b>, NOT <strong>. Version headers are the only
+    // <strong> in this blob, and the demote pass identifies them by
+    // <strong>x.y.z</strong>. A bullet reading "restore behaviour removed in
+    // **3.9.2**" would otherwise produce a byte-identical string mid-sentence:
+    // the next demote turns it into a block <h4> inside a paragraph, and the
+    // already-present check then sees <h4>3.9.2</h4> and skips writing the real
+    // 3.9.2 entry entirely. Same glyph on screen, unambiguous to the parser.
+    .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
     .replace(/`([^`]+)`/g, '<code>$1</code>');
 }
 
