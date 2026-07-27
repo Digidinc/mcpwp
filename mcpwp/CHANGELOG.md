@@ -5,6 +5,13 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0](https://github.com/Mumega-com/mcpwp/compare/v3.9.3...v3.10.0) (2026-07-27)
+
+
+### Features
+
+* **seo:** market data via DataForSEO — visibility, opportunities, and an agent loop ([#730](https://github.com/Mumega-com/mcpwp/issues/730)) ([b126bf7](https://github.com/Mumega-com/mcpwp/commit/b126bf7933165cb7075a76c81975f2afba000342))
+
 ## [3.9.3](https://github.com/Mumega-com/mcpwp/compare/v3.9.2...v3.9.3) (2026-07-27)
 
 
