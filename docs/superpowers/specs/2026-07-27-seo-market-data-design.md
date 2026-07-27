@@ -129,13 +129,38 @@ render a fabricated zero into them.
 
 ### Opportunities
 
-`Mcpwp_SEO_Opportunities` ranks work by fusing all three sources. The headline signal is
-**striking distance**: pages ranking 11–20 with meaningful volume are the cheapest real wins. Each
-opportunity carries the evidence that produced it and a `reason`, matching the autofix convention.
+`Mcpwp_SEO_Opportunities` ranks work by fusing all three sources. Each opportunity carries the
+evidence that produced it and a `reason`, matching the autofix convention.
+
+**The ranker must work across site maturity.** An early draft used *striking distance*
+(positions 11–20 × volume) as the entry condition. Testing against a real domain falsified it: a
+young site ranked for six keywords, all at positions 64–91, so a striking-distance filter returned
+an empty list — reporting "no opportunities" to precisely the site with the most work available.
+Most installs will be sites with thin or zero rankings. Handling them is the primary case, not a
+fallback.
+
+The ranker therefore selects its signal from what the site actually has:
+
+| Site state | Signal | Opportunity reads as |
+|---|---|---|
+| No / very few rankings | Keyword research + existing content + audit issues | "You have a page about X; these are winnable terms for it" |
+| Some rankings, deep positions | `search_volume ÷ keyword_difficulty`, weighted by having any position at all | "You are on the board for X at 75 and difficulty is 8 — push it" |
+| Mature, page-2 positions | Striking distance as a bonus multiplier | "Page 2, nudge it to page 1" |
+
+Striking distance survives as a *multiplier*, never as a gate. A site with no rankings must still
+receive a ranked, actionable list.
+
+**An empty opportunity list means "nothing to do," and must be distinguishable from "we could not
+compute one."** Same rule as everywhere else in this spec.
 
 ## Cost safety
 
-Every call spends the customer's money. This is a design constraint, not an afterthought.
+Measured against the live API: **$0.012 per request + $0.00012 per result.** A 50-keyword
+enrichment costs under 2¢, and a ranked-keywords fetch cost $0.0127.
+
+So no single call is expensive. The risk is an unbounded agent loop making ten thousand cheap
+calls against a customer's account. The caps below exist for that, not because any one lookup
+is costly — sizing them as if calls were expensive would cripple the feature for no benefit.
 
 - Results cached in transients keyed by seed + locale, 24h TTL
 - At most **50 keywords** sent for enrichment per request, batched into a single DataForSEO call.

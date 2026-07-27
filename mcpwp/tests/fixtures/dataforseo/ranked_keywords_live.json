@@ -1,0 +1,1265 @@
+{
+  "version": "0.1.20260717",
+  "status_code": 20000,
+  "status_message": "Ok.",
+  "time": "0.3230 sec.",
+  "cost": 0.01272,
+  "tasks_count": 1,
+  "tasks_error": 0,
+  "tasks": [
+    {
+      "id": "07270626-2163-0381-0000-47db84ec7ea2",
+      "status_code": 20000,
+      "status_message": "Ok.",
+      "time": "0.2429 sec.",
+      "cost": 0.01272,
+      "result_count": 1,
+      "path": [
+        "v3",
+        "dataforseo_labs",
+        "google",
+        "ranked_keywords",
+        "live"
+      ],
+      "data": {
+        "api": "dataforseo_labs",
+        "function": "ranked_keywords",
+        "se_type": "google",
+        "target": "mcpwp.net",
+        "language_code": "en",
+        "location_code": 2840,
+        "limit": 20,
+        "order_by": [
+          "ranked_serp_element.serp_item.rank_group,asc"
+        ]
+      },
+      "result": [
+        {
+          "se_type": "google",
+          "target": "mcpwp.net",
+          "location_code": 2840,
+          "language_code": "en",
+          "total_count": 6,
+          "items_count": 6,
+          "metrics": {
+            "organic": {
+              "pos_1": 0,
+              "pos_2_3": 0,
+              "pos_4_10": 0,
+              "pos_11_20": 0,
+              "pos_21_30": 0,
+              "pos_31_40": 0,
+              "pos_41_50": 0,
+              "pos_51_60": 0,
+              "pos_61_70": 1,
+              "pos_71_80": 3,
+              "pos_81_90": 1,
+              "pos_91_100": 1,
+              "etv": 3.6330000683665276,
+              "count": 6,
+              "estimated_paid_traffic_cost": 37.67315983772278,
+              "is_new": 6,
+              "is_up": 0,
+              "is_down": 0,
+              "is_lost": 0,
+              "clickstream_etv": null,
+              "clickstream_gender_distribution": null,
+              "clickstream_age_distribution": null
+            },
+            "paid": {
+              "pos_1": 0,
+              "pos_2_3": 0,
+              "pos_4_10": 0,
+              "pos_11_20": 0,
+              "pos_21_30": 0,
+              "pos_31_40": 0,
+              "pos_41_50": 0,
+              "pos_51_60": 0,
+              "pos_61_70": 0,
+              "pos_71_80": 0,
+              "pos_81_90": 0,
+              "pos_91_100": 0,
+              "etv": 0,
+              "count": 0,
+              "estimated_paid_traffic_cost": 0,
+              "is_new": 0,
+              "is_up": 0,
+              "is_down": 0,
+              "is_lost": 0,
+              "clickstream_etv": null,
+              "clickstream_gender_distribution": null,
+              "clickstream_age_distribution": null
+            },
+            "featured_snippet": null,
+            "local_pack": null,
+            "ai_overview_reference": null
+          },
+          "metrics_absolute": null,
+          "items": [
+            {
+              "se_type": "google",
+              "keyword_data": {
+                "se_type": "google",
+                "keyword": "claude desktop config json",
+                "location_code": 2840,
+                "language_code": "en",
+                "keyword_info": {
+                  "se_type": "google",
+                  "last_updated_time": "2026-07-14 11:57:37 +00:00",
+                  "competition": 0.029999999329447746,
+                  "competition_level": "LOW",
+                  "cpc": null,
+                  "search_volume": 70,
+                  "low_top_of_page_bid": null,
+                  "high_top_of_page_bid": null,
+                  "categories": [
+                    10019,
+                    10168,
+                    10885,
+                    12197,
+                    12211
+                  ],
+                  "monthly_searches": [
+                    {
+                      "year": 2026,
+                      "month": 6,
+                      "search_volume": 70
+                    },
+                    {
+                      "year": 2026,
+                      "month": 5,
+                      "search_volume": 90
+                    },
+                    {
+                      "year": 2026,
+                      "month": 4,
+                      "search_volume": 110
+                    },
+                    {
+                      "year": 2026,
+                      "month": 3,
+                      "search_volume": 110
+                    },
+                    {
+                      "year": 2026,
+                      "month": 2,
+                      "search_volume": 70
+                    },
+                    {
+                      "year": 2026,
+                      "month": 1,
+                      "search_volume": 40
+                    },
+                    {
+                      "year": 2025,
+                      "month": 12,
+                      "search_volume": 40
+                    },
+                    {
+                      "year": 2025,
+                      "month": 11,
+                      "search_volume": 40
+                    },
+                    {
+                      "year": 2025,
+                      "month": 10,
+                      "search_volume": 40
+                    },
+                    {
+                      "year": 2025,
+                      "month": 9,
+                      "search_volume": 70
+                    },
+                    {
+                      "year": 2025,
+                      "month": 8,
+                      "search_volume": 50
+                    },
+                    {
+                      "year": 2025,
+                      "month": 7,
+                      "search_volume": 110
+                    }
+                  ],
+                  "search_volume_trend": {
+                    "monthly": -22,
+                    "quarterly": -36,
+                    "yearly": -50
+                  }
+                },
+                "keyword_info_normalized_with_bing": null,
+                "keyword_info_normalized_with_clickstream": null,
+                "clickstream_keyword_info": null,
+                "keyword_properties": {
+                  "se_type": "google",
+                  "core_keyword": null,
+                  "synonym_clustering_algorithm": null,
+                  "keyword_difficulty": 14,
+                  "detected_language": "en",
+                  "is_another_language": false
+                },
+                "serp_info": {
+                  "se_type": "google",
+                  "check_url": "https://www.google.com/search?q=claude%20desktop%20config%20json&hl=en&gl=US&ie=UTF-8&uule=w+CAIQIFISCQs2MuSEtepUEUK33kOSuTsc",
+                  "serp_item_types": [
+                    "ai_overview",
+                    "organic",
+                    "video",
+                    "discussions_and_forums",
+                    "related_searches"
+                  ],
+                  "se_results_count": 95,
+                  "last_updated_time": "2026-07-20 16:18:59 +00:00",
+                  "previous_updated_time": "2026-05-08 02:08:11 +00:00"
+                },
+                "avg_backlinks_info": {
+                  "se_type": "google",
+                  "backlinks": 435.5,
+                  "dofollow": 173.89999389648438,
+                  "referring_pages": 380.20001220703125,
+                  "referring_domains": 103.5,
+                  "referring_main_domains": 93.69999694824219,
+                  "rank": 99.30000305175781,
+                  "main_domain_rank": 599,
+                  "last_updated_time": "2026-07-20 16:19:00 +00:00"
+                },
+                "search_intent_info": {
+                  "se_type": "google",
+                  "main_intent": "navigational",
+                  "foreign_intent": null,
+                  "last_updated_time": "2026-05-08 01:34:00 +00:00"
+                }
+              },
+              "ranked_serp_element": {
+                "se_type": "google",
+                "serp_item": {
+                  "se_type": "google",
+                  "type": "organic",
+                  "rank_group": 64,
+                  "rank_absolute": 73,
+                  "position": "left",
+                  "xpath": "/html[1]/body[1]/div[3]/div[1]/div[12]/div[1]/div[2]/div[2]/div[1]/div[1]/div[7]/div[1]/div[1]",
+                  "domain": "docs.mcpwp.net",
+                  "title": "Claude Desktop | MCPWP",
+                  "url": "https://docs.mcpwp.net/connect/claude-desktop/",
+                  "breadcrumb": "https://docs.mcpwp.net › connect › claude-desktop",
+                  "website_name": "mcpwp.net",
+                  "is_image": false,
+                  "is_video": false,
+                  "is_featured_snippet": false,
+                  "is_malicious": false,
+                  "description": "Windows: %APPDATA%\\Claude\\claude_desktop_config.json. Add the MCPWP server: {. \"mcpServers ... Read more",
+                  "pre_snippet": null,
+                  "extended_snippet": null,
+                  "amp_version": false,
+                  "rating": null,
+                  "highlighted": [
+                    "Claude",
+                    "claude_desktop_config",
+                    "json"
+                  ],
+                  "links": null,
+                  "about_this_result": null,
+                  "main_domain": "mcpwp.net",
+                  "relative_url": "/connect/claude-desktop/",
+                  "etv": 0.1469999998807907,
+                  "estimated_paid_traffic_cost": null,
+                  "clickstream_etv": null,
+                  "rank_changes": {
+                    "previous_rank_absolute": null,
+                    "is_new": true,
+                    "is_up": false,
+                    "is_down": false
+                  },
+                  "backlinks_info": null,
+                  "rank_info": {
+                    "page_rank": 0,
+                    "main_domain_rank": 252
+                  }
+                },
+                "check_url": "https://www.google.com/search?q=claude%20desktop%20config%20json&hl=en&gl=US&ie=UTF-8&uule=w+CAIQIFISCQs2MuSEtepUEUK33kOSuTsc",
+                "serp_item_types": [
+                  "ai_overview",
+                  "organic",
+                  "video",
+                  "discussions_and_forums",
+                  "related_searches"
+                ],
+                "se_results_count": 95,
+                "keyword_difficulty": 14,
+                "is_lost": false,
+                "last_updated_time": "2026-07-20 16:18:59 +00:00",
+                "previous_updated_time": "2026-05-08 02:08:11 +00:00"
+              }
+            },
+            {
+              "se_type": "google",
+              "keyword_data": {
+                "se_type": "google",
+                "keyword": "claude desktop mcp",
+                "location_code": 2840,
+                "language_code": "en",
+                "keyword_info": {
+                  "se_type": "google",
+                  "last_updated_time": "2026-07-11 12:07:04 +00:00",
+                  "competition": 0.05999999865889549,
+                  "competition_level": "LOW",
+                  "cpc": 7.510000228881836,
+                  "search_volume": 590,
+                  "low_top_of_page_bid": 3.3399999141693115,
+                  "high_top_of_page_bid": 12,
+                  "categories": [
+                    10019,
+                    10168,
+                    10883,
+                    12193
+                  ],
+                  "monthly_searches": [
+                    {
+                      "year": 2026,
+                      "month": 6,
+                      "search_volume": 480
+                    },
+                    {
+                      "year": 2026,
+                      "month": 5,
+                      "search_volume": 390
+                    },
+                    {
+                      "year": 2026,
+                      "month": 4,
+                      "search_volume": 480
+                    },
+                    {
+                      "year": 2026,
+                      "month": 3,
+                      "search_volume": 590
+                    },
+                    {
+                      "year": 2026,
+                      "month": 2,
+                      "search_volume": 480
+                    },
+                    {
+                      "year": 2026,
+                      "month": 1,
+                      "search_volume": 390
+                    },
+                    {
+                      "year": 2025,
+                      "month": 12,
+                      "search_volume": 320
+                    },
+                    {
+                      "year": 2025,
+                      "month": 11,
+                      "search_volume": 390
+                    },
+                    {
+                      "year": 2025,
+                      "month": 10,
+                      "search_volume": 480
+                    },
+                    {
+                      "year": 2025,
+                      "month": 9,
+                      "search_volume": 720
+                    },
+                    {
+                      "year": 2025,
+                      "month": 8,
+                      "search_volume": 1000
+                    },
+                    {
+                      "year": 2025,
+                      "month": 7,
+                      "search_volume": 1600
+                    }
+                  ],
+                  "search_volume_trend": {
+                    "monthly": 23,
+                    "quarterly": 0,
+                    "yearly": -70
+                  }
+                },
+                "keyword_info_normalized_with_bing": null,
+                "keyword_info_normalized_with_clickstream": null,
+                "clickstream_keyword_info": null,
+                "keyword_properties": {
+                  "se_type": "google",
+                  "core_keyword": null,
+                  "synonym_clustering_algorithm": "text_processing",
+                  "keyword_difficulty": 14,
+                  "detected_language": "en",
+                  "is_another_language": false
+                },
+                "serp_info": {
+                  "se_type": "google",
+                  "check_url": "https://www.google.com/search?q=claude%20desktop%20mcp&hl=en&gl=US&ie=UTF-8&uule=w+CAIQIFISCQs2MuSEtepUEUK33kOSuTsc",
+                  "serp_item_types": [
+                    "ai_overview",
+                    "organic",
+                    "video",
+                    "discussions_and_forums",
+                    "perspectives",
+                    "related_searches",
+                    "images"
+                  ],
+                  "se_results_count": 161,
+                  "last_updated_time": "2026-07-01 04:07:50 +00:00",
+                  "previous_updated_time": "2026-03-16 05:01:38 +00:00"
+                },
+                "avg_backlinks_info": {
+                  "se_type": "google",
+                  "backlinks": 378.6000061035156,
+                  "dofollow": 78.9000015258789,
+                  "referring_pages": 360.20001220703125,
+                  "referring_domains": 74.5,
+                  "referring_main_domains": 62.099998474121094,
+                  "rank": 119.69999694824219,
+                  "main_domain_rank": 515.5999755859375,
+                  "last_updated_time": "2026-07-01 04:08:49 +00:00"
+                },
+                "search_intent_info": {
+                  "se_type": "google",
+                  "main_intent": "navigational",
+                  "foreign_intent": null,
+                  "last_updated_time": "2026-04-27 11:34:44 +00:00"
+                }
+              },
+              "ranked_serp_element": {
+                "se_type": "google",
+                "serp_item": {
+                  "se_type": "google",
+                  "type": "organic",
+                  "rank_group": 72,
+                  "rank_absolute": 83,
+                  "position": "left",
+                  "xpath": "/html[1]/body[1]/div[3]/div[1]/div[12]/div[1]/div[2]/div[2]/div[1]/div[1]/div[6]/div[1]/div[1]",
+                  "domain": "docs.mcpwp.net",
+                  "title": "Claude Desktop | MCPWP",
+                  "url": "https://docs.mcpwp.net/connect/claude-desktop/",
+                  "breadcrumb": "https://docs.mcpwp.net › connect › claude-desktop",
+                  "website_name": "mcpwp.net",
+                  "is_image": false,
+                  "is_video": false,
+                  "is_featured_snippet": false,
+                  "is_malicious": false,
+                  "description": "Windows: %APPDATA%\\Claude\\claude_desktop_config.json. Add the MCPWP server: {. \"mcpServers ... Read more",
+                  "pre_snippet": null,
+                  "extended_snippet": null,
+                  "amp_version": false,
+                  "rating": null,
+                  "highlighted": [
+                    "Claude",
+                    "claude_desktop_config",
+                    "mcpServers"
+                  ],
+                  "links": null,
+                  "about_this_result": null,
+                  "main_domain": "mcpwp.net",
+                  "relative_url": "/connect/claude-desktop/",
+                  "etv": 1.2389999628067017,
+                  "estimated_paid_traffic_cost": 9.304889678955078,
+                  "clickstream_etv": null,
+                  "rank_changes": {
+                    "previous_rank_absolute": null,
+                    "is_new": true,
+                    "is_up": false,
+                    "is_down": false
+                  },
+                  "backlinks_info": null,
+                  "rank_info": {
+                    "page_rank": 0,
+                    "main_domain_rank": 252
+                  }
+                },
+                "check_url": "https://www.google.com/search?q=claude%20desktop%20mcp&hl=en&gl=US&ie=UTF-8&uule=w+CAIQIFISCQs2MuSEtepUEUK33kOSuTsc",
+                "serp_item_types": [
+                  "ai_overview",
+                  "organic",
+                  "video",
+                  "discussions_and_forums",
+                  "perspectives",
+                  "related_searches",
+                  "images"
+                ],
+                "se_results_count": 161,
+                "keyword_difficulty": 14,
+                "is_lost": false,
+                "last_updated_time": "2026-07-01 04:07:50 +00:00",
+                "previous_updated_time": "2026-03-16 05:01:38 +00:00"
+              }
+            },
+            {
+              "se_type": "google",
+              "keyword_data": {
+                "se_type": "google",
+                "keyword": "wordpress mcp",
+                "location_code": 2840,
+                "language_code": "en",
+                "keyword_info": {
+                  "se_type": "google",
+                  "last_updated_time": "2026-07-10 23:46:39 +00:00",
+                  "competition": 0.11999999731779099,
+                  "competition_level": "LOW",
+                  "cpc": 14.449999809265137,
+                  "search_volume": 720,
+                  "low_top_of_page_bid": 3.7799999713897705,
+                  "high_top_of_page_bid": 15.420000076293945,
+                  "categories": [
+                    10007,
+                    11494,
+                    13418
+                  ],
+                  "monthly_searches": [
+                    {
+                      "year": 2026,
+                      "month": 6,
+                      "search_volume": 1000
+                    },
+                    {
+                      "year": 2026,
+                      "month": 5,
+                      "search_volume": 1000
+                    },
+                    {
+                      "year": 2026,
+                      "month": 4,
+                      "search_volume": 1000
+                    },
+                    {
+                      "year": 2026,
+                      "month": 3,
+                      "search_volume": 1300
+                    },
+                    {
+                      "year": 2026,
+                      "month": 2,
+                      "search_volume": 880
+                    },
+                    {
+                      "year": 2026,
+                      "month": 1,
+                      "search_volume": 590
+                    },
+                    {
+                      "year": 2025,
+                      "month": 12,
+                      "search_volume": 480
+                    },
+                    {
+                      "year": 2025,
+                      "month": 11,
+                      "search_volume": 480
+                    },
+                    {
+                      "year": 2025,
+                      "month": 10,
+                      "search_volume": 590
+                    },
+                    {
+                      "year": 2025,
+                      "month": 9,
+                      "search_volume": 480
+                    },
+                    {
+                      "year": 2025,
+                      "month": 8,
+                      "search_volume": 480
+                    },
+                    {
+                      "year": 2025,
+                      "month": 7,
+                      "search_volume": 480
+                    }
+                  ],
+                  "search_volume_trend": {
+                    "monthly": 0,
+                    "quarterly": 0,
+                    "yearly": 156
+                  }
+                },
+                "keyword_info_normalized_with_bing": null,
+                "keyword_info_normalized_with_clickstream": null,
+                "clickstream_keyword_info": null,
+                "keyword_properties": {
+                  "se_type": "google",
+                  "core_keyword": null,
+                  "synonym_clustering_algorithm": null,
+                  "keyword_difficulty": 27,
+                  "detected_language": "en",
+                  "is_another_language": false
+                },
+                "serp_info": {
+                  "se_type": "google",
+                  "check_url": "https://www.google.com/search?q=wordpress%20mcp&hl=en&gl=US&ie=UTF-8&uule=w+CAIQIFISCQs2MuSEtepUEUK33kOSuTsc",
+                  "serp_item_types": [
+                    "ai_overview",
+                    "organic",
+                    "video",
+                    "related_searches",
+                    "images"
+                  ],
+                  "se_results_count": 105,
+                  "last_updated_time": "2026-07-01 03:41:10 +00:00",
+                  "previous_updated_time": "2026-04-20 23:04:01 +00:00"
+                },
+                "avg_backlinks_info": {
+                  "se_type": "google",
+                  "backlinks": 61.099998474121094,
+                  "dofollow": 43.900001525878906,
+                  "referring_pages": 51.5,
+                  "referring_domains": 25.399999618530273,
+                  "referring_main_domains": 24.799999237060547,
+                  "rank": 126.0999984741211,
+                  "main_domain_rank": 598.0999755859375,
+                  "last_updated_time": "2026-07-01 03:42:01 +00:00"
+                },
+                "search_intent_info": {
+                  "se_type": "google",
+                  "main_intent": "navigational",
+                  "foreign_intent": null,
+                  "last_updated_time": "2026-05-02 22:36:08 +00:00"
+                }
+              },
+              "ranked_serp_element": {
+                "se_type": "google",
+                "serp_item": {
+                  "se_type": "google",
+                  "type": "organic",
+                  "rank_group": 75,
+                  "rank_absolute": 85,
+                  "position": "left",
+                  "xpath": "/html[1]/body[1]/div[3]/div[1]/div[12]/div[1]/div[2]/div[2]/div[1]/div[1]/div[8]/div[1]/div[1]",
+                  "domain": "docs.mcpwp.net",
+                  "title": "Get Started | MCPWP",
+                  "url": "https://docs.mcpwp.net/get-started/",
+                  "breadcrumb": "https://docs.mcpwp.net › get-started",
+                  "website_name": "mcpwp.net",
+                  "is_image": false,
+                  "is_video": false,
+                  "is_featured_snippet": false,
+                  "is_malicious": false,
+                  "description": "MCPWP turns any WordPress site into an MCP server. Once connected, AI agents (Claude, Cursor, ChatGPT, and others) can manage your entire site through ... Read more",
+                  "pre_snippet": null,
+                  "extended_snippet": null,
+                  "amp_version": false,
+                  "rating": null,
+                  "highlighted": [
+                    "WordPress",
+                    "MCP"
+                  ],
+                  "links": null,
+                  "about_this_result": null,
+                  "main_domain": "mcpwp.net",
+                  "relative_url": "/get-started/",
+                  "etv": 1.5120000839233398,
+                  "estimated_paid_traffic_cost": 21.848400115966797,
+                  "clickstream_etv": null,
+                  "rank_changes": {
+                    "previous_rank_absolute": null,
+                    "is_new": true,
+                    "is_up": false,
+                    "is_down": false
+                  },
+                  "backlinks_info": null,
+                  "rank_info": {
+                    "page_rank": 0,
+                    "main_domain_rank": 252
+                  }
+                },
+                "check_url": "https://www.google.com/search?q=wordpress%20mcp&hl=en&gl=US&ie=UTF-8&uule=w+CAIQIFISCQs2MuSEtepUEUK33kOSuTsc",
+                "serp_item_types": [
+                  "ai_overview",
+                  "organic",
+                  "video",
+                  "related_searches",
+                  "images"
+                ],
+                "se_results_count": 105,
+                "keyword_difficulty": 27,
+                "is_lost": false,
+                "last_updated_time": "2026-07-01 03:41:10 +00:00",
+                "previous_updated_time": "2026-04-20 23:04:01 +00:00"
+              }
+            },
+            {
+              "se_type": "google",
+              "keyword_data": {
+                "se_type": "google",
+                "keyword": "wordpress mcp server",
+                "location_code": 2840,
+                "language_code": "en",
+                "keyword_info": {
+                  "se_type": "google",
+                  "last_updated_time": "2026-07-12 12:50:52 +00:00",
+                  "competition": 0.17000000178813934,
+                  "competition_level": "LOW",
+                  "cpc": 9.489999771118164,
+                  "search_volume": 210,
+                  "low_top_of_page_bid": 2.440000057220459,
+                  "high_top_of_page_bid": 14.869999885559082,
+                  "categories": [
+                    10007,
+                    11504,
+                    13418
+                  ],
+                  "monthly_searches": [
+                    {
+                      "year": 2026,
+                      "month": 6,
+                      "search_volume": 170
+                    },
+                    {
+                      "year": 2026,
+                      "month": 5,
+                      "search_volume": 260
+                    },
+                    {
+                      "year": 2026,
+                      "month": 4,
+                      "search_volume": 260
+                    },
+                    {
+                      "year": 2026,
+                      "month": 3,
+                      "search_volume": 260
+                    },
+                    {
+                      "year": 2026,
+                      "month": 2,
+                      "search_volume": 260
+                    },
+                    {
+                      "year": 2026,
+                      "month": 1,
+                      "search_volume": 170
+                    },
+                    {
+                      "year": 2025,
+                      "month": 12,
+                      "search_volume": 110
+                    },
+                    {
+                      "year": 2025,
+                      "month": 11,
+                      "search_volume": 140
+                    },
+                    {
+                      "year": 2025,
+                      "month": 10,
+                      "search_volume": 210
+                    },
+                    {
+                      "year": 2025,
+                      "month": 9,
+                      "search_volume": 170
+                    },
+                    {
+                      "year": 2025,
+                      "month": 8,
+                      "search_volume": 170
+                    },
+                    {
+                      "year": 2025,
+                      "month": 7,
+                      "search_volume": 210
+                    }
+                  ],
+                  "search_volume_trend": {
+                    "monthly": -35,
+                    "quarterly": -35,
+                    "yearly": 0
+                  }
+                },
+                "keyword_info_normalized_with_bing": null,
+                "keyword_info_normalized_with_clickstream": null,
+                "clickstream_keyword_info": null,
+                "keyword_properties": {
+                  "se_type": "google",
+                  "core_keyword": null,
+                  "synonym_clustering_algorithm": "text_processing",
+                  "keyword_difficulty": 8,
+                  "detected_language": "en",
+                  "is_another_language": false
+                },
+                "serp_info": {
+                  "se_type": "google",
+                  "check_url": "https://www.google.com/search?q=wordpress%20mcp%20server&hl=en&gl=US&ie=UTF-8&uule=w+CAIQIFISCQs2MuSEtepUEUK33kOSuTsc",
+                  "serp_item_types": [
+                    "organic",
+                    "ai_overview",
+                    "video",
+                    "perspectives",
+                    "related_searches"
+                  ],
+                  "se_results_count": 129,
+                  "last_updated_time": "2026-07-07 00:32:14 +00:00",
+                  "previous_updated_time": "2026-04-29 23:29:40 +00:00"
+                },
+                "avg_backlinks_info": {
+                  "se_type": "google",
+                  "backlinks": 59.5,
+                  "dofollow": 42.20000076293945,
+                  "referring_pages": 50,
+                  "referring_domains": 25.600000381469727,
+                  "referring_main_domains": 25.100000381469727,
+                  "rank": 85.69999694824219,
+                  "main_domain_rank": 572.2000122070312,
+                  "last_updated_time": "2026-07-07 00:33:34 +00:00"
+                },
+                "search_intent_info": {
+                  "se_type": "google",
+                  "main_intent": "navigational",
+                  "foreign_intent": null,
+                  "last_updated_time": "2026-05-07 17:57:46 +00:00"
+                }
+              },
+              "ranked_serp_element": {
+                "se_type": "google",
+                "serp_item": {
+                  "se_type": "google",
+                  "type": "organic",
+                  "rank_group": 79,
+                  "rank_absolute": 90,
+                  "position": "left",
+                  "xpath": "/html[1]/body[1]/div[3]/div[1]/div[12]/div[1]/div[2]/div[2]/div[1]/div[1]/div[2]/div[1]/div[1]",
+                  "domain": "docs.mcpwp.net",
+                  "title": "Get Started | MCPWP",
+                  "url": "https://docs.mcpwp.net/get-started/",
+                  "breadcrumb": "https://docs.mcpwp.net › get-started",
+                  "website_name": "mcpwp.net",
+                  "is_image": false,
+                  "is_video": false,
+                  "is_featured_snippet": false,
+                  "is_malicious": false,
+                  "description": "MCPWP turns any WordPress site into an MCP server. Once connected, AI agents (Claude, Cursor, ChatGPT, and others) can manage your entire site through ... Read more",
+                  "pre_snippet": null,
+                  "extended_snippet": null,
+                  "amp_version": false,
+                  "rating": null,
+                  "highlighted": [
+                    "WordPress",
+                    "MCP server"
+                  ],
+                  "links": null,
+                  "about_this_result": null,
+                  "main_domain": "mcpwp.net",
+                  "relative_url": "/get-started/",
+                  "etv": 0.4410000145435333,
+                  "estimated_paid_traffic_cost": 4.185090065002441,
+                  "clickstream_etv": null,
+                  "rank_changes": {
+                    "previous_rank_absolute": null,
+                    "is_new": true,
+                    "is_up": false,
+                    "is_down": false
+                  },
+                  "backlinks_info": null,
+                  "rank_info": {
+                    "page_rank": 0,
+                    "main_domain_rank": 252
+                  }
+                },
+                "check_url": "https://www.google.com/search?q=wordpress%20mcp%20server&hl=en&gl=US&ie=UTF-8&uule=w+CAIQIFISCQs2MuSEtepUEUK33kOSuTsc",
+                "serp_item_types": [
+                  "organic",
+                  "ai_overview",
+                  "video",
+                  "perspectives",
+                  "related_searches"
+                ],
+                "se_results_count": 129,
+                "keyword_difficulty": 8,
+                "is_lost": false,
+                "last_updated_time": "2026-07-07 00:32:14 +00:00",
+                "previous_updated_time": "2026-04-29 23:29:40 +00:00"
+              }
+            },
+            {
+              "se_type": "google",
+              "keyword_data": {
+                "se_type": "google",
+                "keyword": "mcp unlimited",
+                "location_code": 2840,
+                "language_code": "en",
+                "keyword_info": {
+                  "se_type": "google",
+                  "last_updated_time": "2026-07-10 03:23:37 +00:00",
+                  "competition": 0,
+                  "competition_level": "LOW",
+                  "cpc": null,
+                  "search_volume": 110,
+                  "low_top_of_page_bid": null,
+                  "high_top_of_page_bid": null,
+                  "categories": [
+                    10007,
+                    10878,
+                    11511,
+                    12764,
+                    13419
+                  ],
+                  "monthly_searches": [
+                    {
+                      "year": 2026,
+                      "month": 6,
+                      "search_volume": 110
+                    },
+                    {
+                      "year": 2026,
+                      "month": 5,
+                      "search_volume": 90
+                    },
+                    {
+                      "year": 2026,
+                      "month": 4,
+                      "search_volume": 140
+                    },
+                    {
+                      "year": 2026,
+                      "month": 3,
+                      "search_volume": 140
+                    },
+                    {
+                      "year": 2026,
+                      "month": 2,
+                      "search_volume": 140
+                    },
+                    {
+                      "year": 2026,
+                      "month": 1,
+                      "search_volume": 170
+                    },
+                    {
+                      "year": 2025,
+                      "month": 12,
+                      "search_volume": 170
+                    },
+                    {
+                      "year": 2025,
+                      "month": 11,
+                      "search_volume": 140
+                    },
+                    {
+                      "year": 2025,
+                      "month": 10,
+                      "search_volume": 140
+                    },
+                    {
+                      "year": 2025,
+                      "month": 9,
+                      "search_volume": 90
+                    },
+                    {
+                      "year": 2025,
+                      "month": 8,
+                      "search_volume": 70
+                    },
+                    {
+                      "year": 2025,
+                      "month": 7,
+                      "search_volume": 70
+                    }
+                  ],
+                  "search_volume_trend": {
+                    "monthly": 22,
+                    "quarterly": -21,
+                    "yearly": -21
+                  }
+                },
+                "keyword_info_normalized_with_bing": null,
+                "keyword_info_normalized_with_clickstream": null,
+                "clickstream_keyword_info": null,
+                "keyword_properties": {
+                  "se_type": "google",
+                  "core_keyword": null,
+                  "synonym_clustering_algorithm": null,
+                  "keyword_difficulty": 8,
+                  "detected_language": "en",
+                  "is_another_language": false
+                },
+                "serp_info": {
+                  "se_type": "google",
+                  "check_url": "https://www.google.com/search?q=mcp%20unlimited&hl=en&gl=US&ie=UTF-8&uule=w+CAIQIFISCQs2MuSEtepUEUK33kOSuTsc",
+                  "serp_item_types": [
+                    "organic",
+                    "related_searches"
+                  ],
+                  "se_results_count": 110,
+                  "last_updated_time": "2026-07-13 05:52:13 +00:00",
+                  "previous_updated_time": "2026-05-01 20:15:23 +00:00"
+                },
+                "avg_backlinks_info": {
+                  "se_type": "google",
+                  "backlinks": 69.0999984741211,
+                  "dofollow": 43.900001525878906,
+                  "referring_pages": 58.099998474121094,
+                  "referring_domains": 39.599998474121094,
+                  "referring_main_domains": 38.5,
+                  "rank": 98.9000015258789,
+                  "main_domain_rank": 439.3999938964844,
+                  "last_updated_time": "2026-07-13 05:52:16 +00:00"
+                },
+                "search_intent_info": {
+                  "se_type": "google",
+                  "main_intent": "commercial",
+                  "foreign_intent": [
+                    "informational"
+                  ],
+                  "last_updated_time": "2026-04-29 19:02:46 +00:00"
+                }
+              },
+              "ranked_serp_element": {
+                "se_type": "google",
+                "serp_item": {
+                  "se_type": "google",
+                  "type": "organic",
+                  "rank_group": 90,
+                  "rank_absolute": 99,
+                  "position": "left",
+                  "xpath": "/html[1]/body[1]/div[3]/div[1]/div[12]/div[1]/div[2]/div[2]/div[1]/div[1]/div[3]/div[1]/div[1]",
+                  "domain": "mcpwp.net",
+                  "title": "MCPWP Pricing | AI Site Operations for WordPress",
+                  "url": "https://mcpwp.net/pricing/",
+                  "breadcrumb": "https://mcpwp.net › pricing",
+                  "website_name": "mcpwp.net",
+                  "is_image": false,
+                  "is_video": false,
+                  "is_featured_snippet": false,
+                  "is_malicious": false,
+                  "description": "Simple per-site licensing. Safety included everywhere. · A controlled operating layer for WordPress. · From pricing decision to first successful MCP call. Read more",
+                  "pre_snippet": null,
+                  "extended_snippet": null,
+                  "amp_version": false,
+                  "rating": null,
+                  "highlighted": [
+                    "MCP"
+                  ],
+                  "links": null,
+                  "about_this_result": null,
+                  "main_domain": "mcpwp.net",
+                  "relative_url": "/pricing/",
+                  "etv": 0.23100000619888306,
+                  "estimated_paid_traffic_cost": null,
+                  "clickstream_etv": null,
+                  "rank_changes": {
+                    "previous_rank_absolute": null,
+                    "is_new": true,
+                    "is_up": false,
+                    "is_down": false
+                  },
+                  "backlinks_info": null,
+                  "rank_info": {
+                    "page_rank": 0,
+                    "main_domain_rank": 252
+                  }
+                },
+                "check_url": "https://www.google.com/search?q=mcp%20unlimited&hl=en&gl=US&ie=UTF-8&uule=w+CAIQIFISCQs2MuSEtepUEUK33kOSuTsc",
+                "serp_item_types": [
+                  "organic",
+                  "related_searches"
+                ],
+                "se_results_count": 110,
+                "keyword_difficulty": 8,
+                "is_lost": false,
+                "last_updated_time": "2026-07-13 05:52:13 +00:00",
+                "previous_updated_time": "2026-05-01 20:15:23 +00:00"
+              }
+            },
+            {
+              "se_type": "google",
+              "keyword_data": {
+                "se_type": "google",
+                "keyword": "mcp pricing",
+                "location_code": 2840,
+                "language_code": "en",
+                "keyword_info": {
+                  "se_type": "google",
+                  "last_updated_time": "2026-07-10 15:48:28 +00:00",
+                  "competition": 0.029999999329447746,
+                  "competition_level": "LOW",
+                  "cpc": 37.060001373291016,
+                  "search_volume": 30,
+                  "low_top_of_page_bid": null,
+                  "high_top_of_page_bid": null,
+                  "categories": [
+                    10002,
+                    10028,
+                    10222
+                  ],
+                  "monthly_searches": [
+                    {
+                      "year": 2026,
+                      "month": 6,
+                      "search_volume": 40
+                    },
+                    {
+                      "year": 2026,
+                      "month": 5,
+                      "search_volume": 40
+                    },
+                    {
+                      "year": 2026,
+                      "month": 4,
+                      "search_volume": 50
+                    },
+                    {
+                      "year": 2026,
+                      "month": 3,
+                      "search_volume": 40
+                    },
+                    {
+                      "year": 2026,
+                      "month": 2,
+                      "search_volume": 30
+                    },
+                    {
+                      "year": 2026,
+                      "month": 1,
+                      "search_volume": 30
+                    },
+                    {
+                      "year": 2025,
+                      "month": 12,
+                      "search_volume": 40
+                    },
+                    {
+                      "year": 2025,
+                      "month": 11,
+                      "search_volume": 20
+                    },
+                    {
+                      "year": 2025,
+                      "month": 10,
+                      "search_volume": 30
+                    },
+                    {
+                      "year": 2025,
+                      "month": 9,
+                      "search_volume": 30
+                    },
+                    {
+                      "year": 2025,
+                      "month": 8,
+                      "search_volume": 40
+                    },
+                    {
+                      "year": 2025,
+                      "month": 7,
+                      "search_volume": 30
+                    }
+                  ],
+                  "search_volume_trend": {
+                    "monthly": 0,
+                    "quarterly": -20,
+                    "yearly": 0
+                  }
+                },
+                "keyword_info_normalized_with_bing": null,
+                "keyword_info_normalized_with_clickstream": null,
+                "clickstream_keyword_info": null,
+                "keyword_properties": {
+                  "se_type": "google",
+                  "core_keyword": null,
+                  "synonym_clustering_algorithm": "text_processing",
+                  "keyword_difficulty": 9,
+                  "detected_language": "en",
+                  "is_another_language": false
+                },
+                "serp_info": {
+                  "se_type": "google",
+                  "check_url": "https://www.google.com/search?q=mcp%20pricing&hl=en&gl=US&ie=UTF-8&uule=w+CAIQIFISCQs2MuSEtepUEUK33kOSuTsc",
+                  "serp_item_types": [
+                    "ai_overview",
+                    "organic",
+                    "people_also_ask",
+                    "related_searches"
+                  ],
+                  "se_results_count": 127,
+                  "last_updated_time": "2026-06-15 16:30:21 +00:00",
+                  "previous_updated_time": null
+                },
+                "avg_backlinks_info": {
+                  "se_type": "google",
+                  "backlinks": 33.099998474121094,
+                  "dofollow": 22.5,
+                  "referring_pages": 27.600000381469727,
+                  "referring_domains": 19.200000762939453,
+                  "referring_main_domains": 18.600000381469727,
+                  "rank": 81.5,
+                  "main_domain_rank": 627,
+                  "last_updated_time": "2026-06-15 16:30:27 +00:00"
+                },
+                "search_intent_info": {
+                  "se_type": "google",
+                  "main_intent": "commercial",
+                  "foreign_intent": null,
+                  "last_updated_time": "2026-06-06 04:19:00 +00:00"
+                }
+              },
+              "ranked_serp_element": {
+                "se_type": "google",
+                "serp_item": {
+                  "se_type": "google",
+                  "type": "organic",
+                  "rank_group": 91,
+                  "rank_absolute": 102,
+                  "position": "left",
+                  "xpath": "/html[1]/body[1]/div[3]/div[1]/div[12]/div[1]/div[2]/div[2]/div[1]/div[1]/div[2]/div[1]/div[1]",
+                  "domain": "mcpwp.net",
+                  "title": "MCPWP Pricing | AI Site Operations for WordPress",
+                  "url": "https://mcpwp.net/pricing/",
+                  "breadcrumb": "https://mcpwp.net › pricing",
+                  "website_name": "mcpwp.net",
+                  "is_image": false,
+                  "is_video": false,
+                  "is_featured_snippet": false,
+                  "is_malicious": false,
+                  "description": "Choose how much AI control your WordPress site needs. Start with a scoped MCP connection, then expand into builder, SEO, commerce and multi-site workflows when ... Read more",
+                  "pre_snippet": null,
+                  "extended_snippet": null,
+                  "amp_version": false,
+                  "rating": null,
+                  "highlighted": [
+                    "MCP"
+                  ],
+                  "links": null,
+                  "about_this_result": null,
+                  "main_domain": "mcpwp.net",
+                  "relative_url": "/pricing/",
+                  "etv": 0.06300000101327896,
+                  "estimated_paid_traffic_cost": 2.334779977798462,
+                  "clickstream_etv": null,
+                  "rank_changes": {
+                    "previous_rank_absolute": null,
+                    "is_new": true,
+                    "is_up": false,
+                    "is_down": false
+                  },
+                  "backlinks_info": null,
+                  "rank_info": {
+                    "page_rank": 0,
+                    "main_domain_rank": 252
+                  }
+                },
+                "check_url": "https://www.google.com/search?q=mcp%20pricing&hl=en&gl=US&ie=UTF-8&uule=w+CAIQIFISCQs2MuSEtepUEUK33kOSuTsc",
+                "serp_item_types": [
+                  "ai_overview",
+                  "organic",
+                  "people_also_ask",
+                  "related_searches"
+                ],
+                "se_results_count": 127,
+                "keyword_difficulty": 9,
+                "is_lost": false,
+                "last_updated_time": "2026-06-15 16:30:21 +00:00",
+                "previous_updated_time": null
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
