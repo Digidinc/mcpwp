@@ -333,7 +333,7 @@ trait Mcpwp_Pro_Tools_Seo_Trait {
 
 		$pro_tools[] = $this->define_tool(
 			'wp_seo_opportunities',
-			'Get a ranked list of the highest-value SEO opportunities, fusing the stored visibility snapshot, open SEO audit issues, and (when a seed is given and no visibility data exists yet) fresh keyword suggestions. The "mode" field tells you which case applies: greenfield (no rankings yet, needs new content), emerging, or mature (page-two terms worth pushing). Each opportunity carries the evidence behind its score.',
+			'Get a ranked list of the highest-value SEO opportunities, using the stored visibility snapshot and (when a seed is given and no visibility data exists yet) fresh keyword suggestions. The "mode" field tells you which case applies: greenfield (no rankings yet, needs new content), emerging, or mature (page-two terms worth pushing). Each opportunity carries the evidence behind its score.',
 			array(
 				'seed' => array(
 					'type'        => 'string',

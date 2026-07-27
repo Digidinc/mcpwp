@@ -37,6 +37,10 @@ class Mcpwp_SEO_Cache {
 
 		$cached = get_transient( $transient_key );
 		if ( is_array( $cached ) && isset( $cached['is_error'] ) ) {
+			// Only code/message survive a replay — any add_data() payload on the
+			// original WP_Error (e.g. retry_after, hints) is dropped here. If a
+			// future caller needs structured error data to survive a cache hit,
+			// it must be stored and rebuilt explicitly; it is not preserved today.
 			return $cached['is_error']
 				? new WP_Error( $cached['code'], $cached['message'] )
 				: $cached['data'];
@@ -68,5 +72,23 @@ class Mcpwp_SEO_Cache {
 		);
 
 		return $result;
+	}
+
+	/**
+	 * Whether a value is already cached for this key (success or failure),
+	 * without triggering a fetch.
+	 *
+	 * Used by callers that need to know, before calling remember(), whether
+	 * the call is about to replay a cached answer (free) or actually spend
+	 * money (a cache miss) — e.g. a per-site cost budget that must only be
+	 * charged for real provider calls, never for cache hits.
+	 *
+	 * @param string $key Cache key.
+	 * @return bool
+	 */
+	public static function has( $key ) {
+		$transient_key = self::PREFIX . md5( (string) $key );
+
+		return false !== get_transient( $transient_key );
 	}
 }

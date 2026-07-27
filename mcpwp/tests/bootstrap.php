@@ -384,6 +384,9 @@ function update_option($name, $value, $autoload = null)
         return false;
     }
     $GLOBALS['mcpwp_test_options'][ $name ] = $value;
+    // Recorded so tests can assert a caller passed autoload=false explicitly
+    // (e.g. a large/rarely-read option that must not load on every request).
+    $GLOBALS['mcpwp_test_options_autoload'][ $name ] = $autoload;
     return true;
 }
 

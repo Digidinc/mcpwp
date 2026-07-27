@@ -135,4 +135,71 @@ class SeoOpportunitiesTest extends TestCase {
 		$this->assertSame( 'no_inputs', $result['reason'] );
 		$this->assertSame( 'unknown', $result['mode'] );
 	}
+
+	// ─────────────────────────────────────────────────────────────────────
+	// Carried Minor #1 — deterministic tie-break.
+	// ─────────────────────────────────────────────────────────────────────
+
+	/**
+	 * 100/10 and 200/20 both score 10 — PHP's usort() is only stable from 8.0,
+	 * and the plugin floor is 7.4, so without an explicit tie-break two
+	 * identical requests could return a different top-N ordering.
+	 */
+	public function test_tied_scores_are_ordered_deterministically() {
+		$rows = array(
+			array( 'keyword' => 'zeta term',  'position' => 50, 'search_volume' => 200, 'keyword_difficulty' => 20, 'ranking_url' => 'https://example.com/z' ),
+			array( 'keyword' => 'alpha term', 'position' => 50, 'search_volume' => 100, 'keyword_difficulty' => 10, 'ranking_url' => 'https://example.com/a' ),
+		);
+
+		$first  = Mcpwp_SEO_Opportunities::rank( $rows, array(), array() );
+		$second = Mcpwp_SEO_Opportunities::rank( $rows, array(), array() );
+
+		$this->assertSame( 10.0, $first['opportunities'][0]['score'] );
+		$this->assertSame( 10.0, $first['opportunities'][1]['score'] );
+
+		// Deterministic: same tie-break every time, and it must be alphabetical
+		// (strcmp on keyword), not insertion order.
+		$this->assertSame( 'alpha term', $first['opportunities'][0]['keyword'] );
+		$this->assertSame( 'zeta term', $first['opportunities'][1]['keyword'] );
+		$this->assertSame(
+			array_column( $first['opportunities'], 'keyword' ),
+			array_column( $second['opportunities'], 'keyword' ),
+			'Two identical requests must return the same ordering for tied scores.'
+		);
+	}
+
+	// ─────────────────────────────────────────────────────────────────────
+	// Carried Minor #2 — striking distance is 11-20, not 1-20.
+	// ─────────────────────────────────────────────────────────────────────
+
+	/**
+	 * A site ranking #2 for its own brand name has already won that keyword.
+	 * It must not flip the whole site into 'mature' mode, and that row must
+	 * not receive the striking-distance boost meant for near-miss terms.
+	 */
+	public function test_position_within_top_ten_gets_no_boost_and_no_mature_flip() {
+		$rows = array(
+			array( 'keyword' => 'brand name', 'position' => 2, 'search_volume' => 500, 'keyword_difficulty' => 20, 'ranking_url' => 'https://example.com/brand' ),
+		);
+
+		$result = Mcpwp_SEO_Opportunities::rank( $rows, array(), array() );
+
+		$this->assertSame( 'emerging', $result['mode'], 'Position 1-10 must not flip the site into mature mode.' );
+
+		$expected_score = (float) ( 500 / 20 ); // No STRIKING_DISTANCE_BOOST applied.
+		$this->assertSame( $expected_score, $result['opportunities'][0]['score'] );
+	}
+
+	public function test_position_eleven_still_gets_the_striking_distance_boost() {
+		$rows = array(
+			array( 'keyword' => 'edge case term', 'position' => 11, 'search_volume' => 500, 'keyword_difficulty' => 20, 'ranking_url' => 'https://example.com/edge' ),
+		);
+
+		$result = Mcpwp_SEO_Opportunities::rank( $rows, array(), array() );
+
+		$this->assertSame( 'mature', $result['mode'] );
+
+		$expected_score = ( 500 / 20 ) * Mcpwp_SEO_Opportunities::STRIKING_DISTANCE_BOOST;
+		$this->assertSame( $expected_score, $result['opportunities'][0]['score'] );
+	}
 }

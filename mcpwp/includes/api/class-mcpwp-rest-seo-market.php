@@ -30,6 +30,44 @@ class Mcpwp_REST_SEO_Market extends Mcpwp_REST_API {
 	const REFRESH_DEBOUNCE = 5 * MINUTE_IN_SECONDS;
 
 	/**
+	 * Maximum accepted length for a caller-supplied seed keyword.
+	 *
+	 * Unlike keyword_research() this route had no bound at all before — a read
+	 * scoped key could submit an arbitrarily long string as the cache key input.
+	 */
+	const MAX_SEED_LENGTH = 200;
+
+	/**
+	 * Per-site ceiling on distinct paid keyword lookups this route can trigger
+	 * in one window.
+	 *
+	 * get_opportunities() is a READABLE (GET) route driven entirely by a
+	 * caller-supplied seed, and the natural reading of the playbook is
+	 * "brainstorm candidate seeds" — every distinct seed that misses
+	 * Mcpwp_SEO_Cache is a real DataForSEO charge ($0.012/request +
+	 * $0.00012/result). Left unguarded, ~2,000 distinct seeds cost roughly $36.
+	 * This budget is independent of the generic rate limiter, which throttles
+	 * request counts, not spend, and is keyed to a read-scoped key even though
+	 * this is the expensive call.
+	 */
+	const LOOKUP_BUDGET_MAX = 200;
+
+	/**
+	 * Rolling window for the lookup budget above.
+	 */
+	const LOOKUP_BUDGET_WINDOW = DAY_IN_SECONDS;
+
+	/**
+	 * Transient key for the lookup-budget counter.
+	 */
+	const LOOKUP_BUDGET_TRANSIENT = 'mcpwp_seo_lookup_budget';
+
+	/**
+	 * Reason slug returned when the lookup budget above is exhausted.
+	 */
+	const REASON_LOOKUP_BUDGET_EXHAUSTED = 'lookup_budget_exhausted';
+
+	/**
 	 * Register routes.
 	 */
 	public function register_routes() {
@@ -157,25 +195,71 @@ class Mcpwp_REST_SEO_Market extends Mcpwp_REST_API {
 		// nothing) or 'no_inputs' (never fetched) — never a misleading empty
 		// list that reads the same for both cases.
 		$metrics = array();
-		$seed    = (string) $request->get_param( 'seed' );
+		$seed    = sanitize_text_field( (string) $request->get_param( 'seed' ) );
+		$seed    = mb_substr( $seed, 0, self::MAX_SEED_LENGTH );
 
 		if ( empty( $visibility['rows'] ) && '' !== $seed ) {
 			$provider = $this->get_dataforseo_provider();
 
-			if ( null !== $provider ) {
-				$fetched = Mcpwp_SEO_Cache::remember(
-					'suggestions|' . $seed,
-					function () use ( $provider, $seed ) {
-						return $provider->keyword_suggestions( $seed );
-					}
+			// Credentials absent must never collapse into "no seed given" — the
+			// caller supplied one; the gap is that nobody was ever asked.
+			if ( null === $provider ) {
+				return $this->error_response(
+					'not_configured',
+					Mcpwp_Provider_Dataforseo::describe_reason( 'not_configured' ),
+					400
 				);
-
-				if ( is_wp_error( $fetched ) ) {
-					return $this->error_response( $fetched->get_error_code(), $fetched->get_error_message(), 502 );
-				}
-
-				$metrics = $fetched;
 			}
+
+			// "seed|en|2840" matches Mcpwp_SEO_Cache's own documented key shape
+			// and the provider's actual (currently fixed) defaults — locale is
+			// never varied today, but the key must already carry it so a future
+			// caller that does vary it cannot silently hit the wrong cache entry.
+			$cache_key = 'suggestions|' . $seed . '|en|2840';
+
+			// The budget only ever guards a real spend — a cache hit replays a
+			// prior answer for free and must not be charged against it.
+			if ( ! Mcpwp_SEO_Cache::has( $cache_key ) ) {
+				$budget = $this->consume_lookup_budget();
+
+				if ( is_wp_error( $budget ) ) {
+					$budget_data = $budget->get_error_data();
+
+					return $this->success_response(
+						array(
+							'mode'          => 'unknown',
+							'opportunities' => array(),
+							'reason'        => self::REASON_LOOKUP_BUDGET_EXHAUSTED,
+							'retry_after'   => isset( $budget_data['retry_after'] ) ? (int) $budget_data['retry_after'] : self::LOOKUP_BUDGET_WINDOW,
+						)
+					);
+				}
+			}
+
+			$fetched = Mcpwp_SEO_Cache::remember(
+				$cache_key,
+				function () use ( $provider, $seed ) {
+					return $provider->keyword_suggestions( $seed );
+				}
+			);
+
+			if ( is_wp_error( $fetched ) ) {
+				return $this->error_response( $fetched->get_error_code(), $fetched->get_error_message(), 502 );
+			}
+
+			// A genuine zero-result answer for a real seed lookup is a different
+			// claim than "no seed was given" and must carry its own reason.
+			if ( empty( $fetched ) ) {
+				return $this->success_response(
+					array(
+						'mode'          => 'greenfield',
+						'opportunities' => array(),
+						'reason'        => Mcpwp_SEO_Opportunities::REASON_SEED_NO_SUGGESTIONS,
+					)
+				);
+			}
+
+			$metrics = $fetched;
 		}
 
 		$result = Mcpwp_SEO_Opportunities::rank(
@@ -189,24 +273,38 @@ class Mcpwp_REST_SEO_Market extends Mcpwp_REST_API {
 	}
 
 	/**
-	 * Build a configured provider, or null when credentials are absent.
+	 * Consume one slot from the daily paid-lookup budget.
 	 *
-	 * Protected (not private) so tests can inject a stub provider without
-	 * calling the live API — see tests/unit/test-seo-market-debounce.php.
+	 * Must only be called on a Mcpwp_SEO_Cache miss — see get_opportunities().
+	 * A fixed-window counter, same shape as Mcpwp_Rate_Limiter's windows: the
+	 * window resets itself the first time it is read after expiring, rather
+	 * than sliding on every write.
 	 *
-	 * @return Mcpwp_Provider_Dataforseo|null
+	 * @return true|WP_Error True if a slot was consumed; WP_Error (with
+	 *                       'retry_after' seconds in its data) if exhausted.
 	 */
-	protected function get_dataforseo_provider() {
-		if ( ! class_exists( 'Mcpwp_Integration_Manager' ) || ! class_exists( 'Mcpwp_Provider_Dataforseo' ) ) {
-			return null;
+	protected function consume_lookup_budget() {
+		$now    = time();
+		$window = get_transient( self::LOOKUP_BUDGET_TRANSIENT );
+
+		if ( ! is_array( $window ) || ! isset( $window['count'], $window['reset'] ) || (int) $window['reset'] <= $now ) {
+			$window = array(
+				'count' => 0,
+				'reset' => $now + self::LOOKUP_BUDGET_WINDOW,
+			);
 		}
 
-		$config = Mcpwp_Integration_Manager::get_instance()->get_provider_config( 'dataforseo' );
-
-		if ( empty( $config['login'] ) || empty( $config['password'] ) ) {
-			return null;
+		if ( (int) $window['count'] >= self::LOOKUP_BUDGET_MAX ) {
+			return new WP_Error(
+				'lookup_budget_exhausted',
+				__( 'Daily budget for paid keyword lookups on this site has been reached.', 'mcpwp' ),
+				array( 'retry_after' => max( 0, (int) $window['reset'] - $now ) )
+			);
 		}
 
-		return new Mcpwp_Provider_Dataforseo( $config['login'], $config['password'] );
+		$window['count']++;
+		set_transient( self::LOOKUP_BUDGET_TRANSIENT, $window, max( 1, (int) $window['reset'] - $now ) );
+
+		return true;
 	}
 }

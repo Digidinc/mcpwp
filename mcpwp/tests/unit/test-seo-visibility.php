@@ -5,7 +5,8 @@ use PHPUnit\Framework\TestCase;
 class SeoVisibilityTest extends TestCase {
 
 	protected function setUp(): void {
-		$GLOBALS['mcpwp_test_options'] = array();
+		$GLOBALS['mcpwp_test_options']          = array();
+		$GLOBALS['mcpwp_test_options_autoload'] = array();
 	}
 
 	private function rows() {
@@ -73,5 +74,19 @@ class SeoVisibilityTest extends TestCase {
 
 		$this->assertSame( 75, $latest['rows'][0]['position'] );
 		$this->assertSame( 91, $latest['rows'][1]['position'] );
+	}
+
+	/**
+	 * IMPORTANT 4 — a snapshot can hold up to 1000 rows (~150KB serialized) and
+	 * is read on two admin screens and two REST routes, not on every
+	 * front-end/admin request. Autoloading it would unserialise that payload
+	 * on every page load forever. Siblings Mcpwp_Approvals and
+	 * Mcpwp_Event_Store both pass autoload=false for the same reason.
+	 */
+	public function test_snapshot_is_stored_with_autoload_disabled() {
+		Mcpwp_SEO_Visibility::store_snapshot( $this->rows(), 'mcpwp.net' );
+
+		$this->assertArrayHasKey( Mcpwp_SEO_Visibility::OPTION_NAME, $GLOBALS['mcpwp_test_options_autoload'] );
+		$this->assertFalse( $GLOBALS['mcpwp_test_options_autoload'][ Mcpwp_SEO_Visibility::OPTION_NAME ] );
 	}
 }

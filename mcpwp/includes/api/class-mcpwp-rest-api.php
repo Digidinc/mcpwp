@@ -110,6 +110,31 @@ abstract class Mcpwp_REST_API {
 	}
 
 	/**
+	 * Build a configured DataForSEO provider, or null when credentials are absent.
+	 *
+	 * Shared by every controller that spends DataForSEO credit (SEO market data,
+	 * keyword research enrichment) so credential-reading logic exists in exactly
+	 * one place. Protected (not private) so tests can inject a stub provider
+	 * without calling the live API — see tests/unit/test-seo-market-debounce.php
+	 * and tests/unit/test-rest-seo-audit-keyword-enrichment.php.
+	 *
+	 * @return Mcpwp_Provider_Dataforseo|null
+	 */
+	protected function get_dataforseo_provider() {
+		if ( ! class_exists( 'Mcpwp_Integration_Manager' ) || ! class_exists( 'Mcpwp_Provider_Dataforseo' ) ) {
+			return null;
+		}
+
+		$config = Mcpwp_Integration_Manager::get_instance()->get_provider_config( 'dataforseo' );
+
+		if ( empty( $config['login'] ) || empty( $config['password'] ) ) {
+			return null;
+		}
+
+		return new Mcpwp_Provider_Dataforseo( $config['login'], $config['password'] );
+	}
+
+	/**
 	 * Prepare success response.
 	 *
 	 * @param mixed $data Response data.

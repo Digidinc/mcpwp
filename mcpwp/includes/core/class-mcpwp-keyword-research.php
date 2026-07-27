@@ -270,9 +270,21 @@ class Mcpwp_Keyword_Research {
 	 *
 	 * @param array                          $grouped  Result of group().
 	 * @param Mcpwp_Provider_Dataforseo|null $provider Configured provider, or null.
+	 * @param array|WP_Error|null            $metrics  Optional pre-fetched result
+	 *                                                 (array of rows or WP_Error).
+	 *                                                 When given, the provider is
+	 *                                                 NOT called again — pass the
+	 *                                                 result of a lookup already
+	 *                                                 routed through
+	 *                                                 Mcpwp_SEO_Cache::remember()
+	 *                                                 here so this method can
+	 *                                                 never become a second,
+	 *                                                 uncached paid call. Omit
+	 *                                                 (or pass null) to keep the
+	 *                                                 old direct-call behavior.
 	 * @return array Grouped result plus 'metrics' and 'enrichment_reason'.
 	 */
-	public static function enrich( array $grouped, $provider ) {
+	public static function enrich( array $grouped, $provider, $metrics = null ) {
 		$grouped['metrics']           = array();
 		$grouped['enrichment_reason'] = 'not_configured';
 
@@ -280,8 +292,11 @@ class Mcpwp_Keyword_Research {
 			return $grouped;
 		}
 
-		$seed    = isset( $grouped['seed'] ) ? (string) $grouped['seed'] : '';
-		$metrics = $provider->keyword_suggestions( $seed );
+		$seed = isset( $grouped['seed'] ) ? (string) $grouped['seed'] : '';
+
+		if ( null === $metrics ) {
+			$metrics = $provider->keyword_suggestions( $seed );
+		}
 
 		if ( is_wp_error( $metrics ) ) {
 			$grouped['enrichment_reason'] = $metrics->get_error_code();

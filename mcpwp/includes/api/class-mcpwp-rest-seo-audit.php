@@ -1405,6 +1405,29 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 			return $this->error_response( $result->get_error_code(), $result->get_error_message(), 400 );
 		}
 
+		// A Pro customer with valid DataForSEO credentials must see the numbers
+		// they configured — not the free-tier apology that tells them to
+		// integrate the provider they just integrated. get_dataforseo_provider()
+		// is the same shared factory /seo/opportunities uses (Mcpwp_REST_API).
+		$provider = $this->get_dataforseo_provider();
+
+		if ( null === $provider ) {
+			$result = Mcpwp_Keyword_Research::enrich( $result, null );
+		} else {
+			// Route through the same paid-lookup cache /seo/opportunities uses —
+			// enrich() calls the provider directly when given no pre-fetched
+			// metrics, which would otherwise make this a second, uncached paid
+			// path. "seed|en|2840" matches Mcpwp_SEO_Cache's documented key shape.
+			$metrics = Mcpwp_SEO_Cache::remember(
+				'suggestions|' . $seed . '|en|2840',
+				function () use ( $provider, $seed ) {
+					return $provider->keyword_suggestions( $seed );
+				}
+			);
+
+			$result = Mcpwp_Keyword_Research::enrich( $result, $provider, $metrics );
+		}
+
 		return $this->success_response( $result );
 	}
 

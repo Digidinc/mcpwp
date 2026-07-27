@@ -21,7 +21,15 @@ if ( ! defined( 'ABSPATH' ) ) {
 class Mcpwp_SEO_Opportunities {
 
 	/**
-	 * Below this position a site is treated as still emerging.
+	 * Lower bound of striking distance (page two). A keyword already ranking
+	 * above this position has already been won — it must not flip a site into
+	 * 'mature' mode or receive the boost meant for near-miss terms.
+	 */
+	const STRIKING_DISTANCE_MIN = 11;
+
+	/**
+	 * Upper bound of striking distance (page two). Below this position a site
+	 * is treated as still emerging.
 	 */
 	const STRIKING_DISTANCE_MAX = 20;
 
@@ -49,6 +57,14 @@ class Mcpwp_SEO_Opportunities {
 	 * should be pointed at seeding a keyword, not at connecting a provider.
 	 */
 	const REASON_NO_RANKINGS_NEEDS_SEED = 'no_rankings_needs_seed';
+
+	/**
+	 * A seed keyword was supplied and a paid lookup actually ran, but the
+	 * provider genuinely returned zero suggestions for it. Distinct from
+	 * REASON_NO_RANKINGS_NEEDS_SEED — that reason means no seed was given yet;
+	 * this one means a seed was given and answered with nothing.
+	 */
+	const REASON_SEED_NO_SUGGESTIONS = 'seed_no_suggestions';
 
 	/**
 	 * Expected value of the incoming $visibility_reason when
@@ -112,7 +128,7 @@ class Mcpwp_SEO_Opportunities {
 	private static function detect_mode( array $rows ) {
 		foreach ( $rows as $row ) {
 			$position = isset( $row['position'] ) ? (int) $row['position'] : 0;
-			if ( $position > 0 && $position <= self::STRIKING_DISTANCE_MAX ) {
+			if ( $position >= self::STRIKING_DISTANCE_MIN && $position <= self::STRIKING_DISTANCE_MAX ) {
 				return 'mature';
 			}
 		}
@@ -141,7 +157,7 @@ class Mcpwp_SEO_Opportunities {
 
 			$score = $volume / max( self::MIN_DIFFICULTY, $difficulty );
 
-			$striking = ( $position > 0 && $position <= self::STRIKING_DISTANCE_MAX );
+			$striking = ( $position >= self::STRIKING_DISTANCE_MIN && $position <= self::STRIKING_DISTANCE_MAX );
 			if ( $striking ) {
 				$score *= self::STRIKING_DISTANCE_BOOST;
 			}
@@ -221,7 +237,12 @@ class Mcpwp_SEO_Opportunities {
 			$scored,
 			function ( $a, $b ) {
 				if ( $a['score'] === $b['score'] ) {
-					return 0;
+					// PHP's sort is only stable from 8.0; the floor here is 7.4,
+					// and tied scores are common (e.g. 100/10 and 200/20 both
+					// score 10). Without an explicit tie-break, two identical
+					// requests can return a different top-N ordering with no
+					// underlying data change.
+					return strcmp( $a['keyword'], $b['keyword'] );
 				}
 				return ( $a['score'] < $b['score'] ) ? 1 : -1;
 			}

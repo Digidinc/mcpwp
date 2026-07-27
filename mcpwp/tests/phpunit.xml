@@ -18,6 +18,8 @@
       <file>./unit/test-seo-opportunities.php</file>
       <file>./unit/test-seo-cache.php</file>
       <file>./unit/test-seo-market-debounce.php</file>
+      <file>./unit/test-seo-market-opportunities.php</file>
+      <file>./unit/test-rest-seo-audit-keyword-enrichment.php</file>
     </testsuite>
   </testsuites>
 </phpunit>

@@ -59,4 +59,40 @@ class SeoCacheTest extends TestCase {
 		$this->assertInstanceOf( 'WP_Error', $second );
 		$this->assertSame( 'insufficient_credits', $second->get_error_code() );
 	}
+
+	// ─────────────────────────────────────────────────────────────────────
+	// has() — used by callers (e.g. a paid-lookup budget) that must know
+	// whether a call is about to replay a cached answer (free) or actually
+	// spend money (a miss), without triggering the fetch themselves.
+	// ─────────────────────────────────────────────────────────────────────
+
+	public function test_has_is_false_before_any_fetch() {
+		$this->assertFalse( Mcpwp_SEO_Cache::has( 'seed|en' ) );
+	}
+
+	public function test_has_is_true_after_a_successful_fetch_without_triggering_another() {
+		Mcpwp_SEO_Cache::remember(
+			'seed|en',
+			function () {
+				return array( 'value' => 'x' );
+			}
+		);
+
+		$this->assertTrue( Mcpwp_SEO_Cache::has( 'seed|en' ) );
+	}
+
+	public function test_has_is_true_after_a_cached_failure() {
+		Mcpwp_SEO_Cache::remember(
+			'seed|en',
+			function () {
+				return new WP_Error( 'auth_rejected', 'nope' );
+			}
+		);
+
+		$this->assertTrue(
+			Mcpwp_SEO_Cache::has( 'seed|en' ),
+			'A cached failure still means "this call will not reach the provider again."'
+		);
+	}
+
 }

@@ -326,6 +326,20 @@ $event_escalated_count = (int) ( $event_summary['escalated'] ?? 0 );
 			<?php endif; ?>
 
 			<h3><?php esc_html_e( 'Search opportunities', 'mcpwp' ); ?></h3>
+			<?php if ( ! empty( $seo_visibility['captured_at'] ) ) : ?>
+				<p class="description">
+					<?php
+					printf(
+						/* translators: 1: target domain the snapshot describes, 2: human-readable time since capture */
+						esc_html__( 'Visibility snapshot for %1$s — captured %2$s ago.', 'mcpwp' ),
+						esc_html( (string) ( $seo_visibility['target'] ?? '' ) ),
+						esc_html( human_time_diff( (int) $seo_visibility['captured_at'] ) )
+					);
+					?>
+				</p>
+			<?php else : ?>
+				<p class="description"><?php esc_html_e( 'No visibility snapshot has been fetched yet.', 'mcpwp' ); ?></p>
+			<?php endif; ?>
 			<?php if ( ! empty( $seo_opportunities['opportunities'] ) ) : ?>
 				<table class="widefat striped">
 					<thead>
@@ -359,6 +373,10 @@ $event_escalated_count = (int) ( $event_summary['escalated'] ?? 0 );
 						esc_html_e( 'No search data yet. Connect DataForSEO under Integrations, then refresh visibility.', 'mcpwp' );
 					} elseif ( 'no_rankings_needs_seed' === $seo_opportunities_reason ) {
 						esc_html_e( 'This site does not rank for anything yet. Add a seed keyword to find terms worth targeting.', 'mcpwp' );
+					} elseif ( 'seed_no_suggestions' === $seo_opportunities_reason ) {
+						esc_html_e( 'No suggestions were found for that seed keyword. Try a different seed.', 'mcpwp' );
+					} elseif ( 'lookup_budget_exhausted' === $seo_opportunities_reason ) {
+						esc_html_e( 'The daily budget for paid keyword lookups on this site has been reached. Try again later.', 'mcpwp' );
 					} elseif ( 'unavailable' === $seo_opportunities_reason ) {
 						esc_html_e( 'Search opportunity analysis is not available in this build.', 'mcpwp' );
 					} else {

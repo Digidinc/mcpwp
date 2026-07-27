@@ -56,6 +56,10 @@ class Mcpwp_SEO_Visibility {
 			}
 		);
 
+		// Not autoloaded: a snapshot can hold up to 1000 rows (~150KB serialized),
+		// and this option is read on two admin screens and two REST routes, not
+		// on every front-end/admin request. Siblings Mcpwp_Approvals and
+		// Mcpwp_Event_Store make the same call for the same reason.
 		update_option(
 			self::OPTION_NAME,
 			array(
@@ -63,7 +67,8 @@ class Mcpwp_SEO_Visibility {
 				'captured_at' => $captured_at,
 				'target'      => sanitize_text_field( (string) $target ),
 				'rows'        => $clean,
-			)
+			),
+			false
 		);
 
 		return array(
