@@ -1598,3 +1598,6 @@ if (!function_exists('esc_attr')) {
 require_once dirname(__DIR__) . '/includes/class-mcpwp-security.php';
 require_once dirname(__DIR__) . '/includes/class-mcpwp-updater.php';
 require_once dirname(__DIR__) . '/includes/class-mcpwp-update-channel-health.php';
+
+// DataForSEO market data provider.
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-provider-dataforseo.php';
