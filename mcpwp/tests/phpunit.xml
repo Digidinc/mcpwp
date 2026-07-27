@@ -12,6 +12,7 @@
       <file>./unit/test-updater-independent-of-wporg.php</file>
       <file>./unit/test-update-channel-health.php</file>
       <file>./unit/test-dataforseo-provider.php</file>
+      <file>./unit/test-dataforseo-registration.php</file>
     </testsuite>
   </testsuites>
 </phpunit>
