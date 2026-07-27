@@ -1602,6 +1602,9 @@ require_once dirname(__DIR__) . '/includes/class-mcpwp-update-channel-health.php
 // DataForSEO market data provider.
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-provider-dataforseo.php';
 
+// Keyword research (autocomplete + DataForSEO enrichment).
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-keyword-research.php';
+
 // Search visibility snapshot store — market position, separate from
 // first-party Search Console performance (Mcpwp_Search_Performance above).
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-seo-visibility.php';

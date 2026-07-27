@@ -14,6 +14,7 @@
       <file>./unit/test-dataforseo-provider.php</file>
       <file>./unit/test-dataforseo-registration.php</file>
       <file>./unit/test-seo-visibility.php</file>
+      <file>./unit/test-keyword-enrichment.php</file>
     </testsuite>
   </testsuites>
 </phpunit>

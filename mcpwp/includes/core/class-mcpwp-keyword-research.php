@@ -260,4 +260,40 @@ class Mcpwp_Keyword_Research {
 
 		return $result;
 	}
+
+	/**
+	 * Attach market metrics to a grouped autocomplete result.
+	 *
+	 * Autocomplete supplies the ideas; DataForSEO supplies the numbers. With no
+	 * provider the result is exactly what this class returned before enrichment
+	 * existed, so the free tier degrades rather than breaking.
+	 *
+	 * @param array                          $grouped  Result of group().
+	 * @param Mcpwp_Provider_Dataforseo|null $provider Configured provider, or null.
+	 * @return array Grouped result plus 'metrics' and 'enrichment_reason'.
+	 */
+	public static function enrich( array $grouped, $provider ) {
+		$grouped['metrics']           = array();
+		$grouped['enrichment_reason'] = 'not_configured';
+
+		if ( null === $provider ) {
+			return $grouped;
+		}
+
+		$seed    = isset( $grouped['seed'] ) ? (string) $grouped['seed'] : '';
+		$metrics = $provider->keyword_suggestions( $seed );
+
+		if ( is_wp_error( $metrics ) ) {
+			$grouped['enrichment_reason'] = $metrics->get_error_code();
+			return $grouped;
+		}
+
+		$grouped['metrics']           = is_array( $metrics ) ? $metrics : array();
+		$grouped['enrichment_reason'] = null;
+
+		// The apology only applies to an unenriched result.
+		unset( $grouped['note'] );
+
+		return $grouped;
+	}
 }
