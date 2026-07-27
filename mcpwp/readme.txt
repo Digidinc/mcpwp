@@ -153,6 +153,9 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 
 == Changelog ==
 
+= 3.9.2 =
+* fix: **release:** publish and watch the Freemius channel like the self-hosted one ([#726](https://github.com/Mumega-com/mcpwp/issues/726))
+
 = 3.9.1 =
 * fix: **update:** guard Mcpwp_Updater use on builds that prune it ([#724](https://github.com/Mumega-com/mcpwp/issues/724))
 
