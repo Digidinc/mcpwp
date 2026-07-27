@@ -246,6 +246,38 @@ trait Mcpwp_Elementor_Validator_Trait {
 				$errors[] = "{$path}: widget element missing widgetType";
 			}
 
+			// --- 4b. Rename css_id → _element_id on ANY element (#678) ---
+			//
+			// Elementor renders the wrapper id from `_element_id`, in
+			// Element_Base's shared render path:
+			//
+			//   if ( ! empty( $settings['_element_id'] ) ) {
+			//       $this->add_render_attribute( '_wrapper', 'id', trim( ... ) );
+			//   }
+			//
+			// Element_Base is the parent of Section, Column, Container and
+			// Widget, so `_element_id` is the ID control for all of them.
+			// `css_id` is not an Elementor control on any of them — it stores
+			// and round-trips perfectly through get/set while the rendered
+			// element carries no id at all, so hash links have no target.
+			//
+			// The rename below is deliberately NOT limited to widgets, unlike
+			// the $control_renames pass: the reported case (#678) was a
+			// top-level section, which that pass cannot reach because it keys
+			// off widgetType.
+			//
+			// Note the asymmetry that makes `css_id` a natural mistake: the
+			// CLASSES control really is `css_classes` on section/column/
+			// container (and `_css_classes` on widgets), so `css_classes`
+			// works. Renaming that too would break every element currently
+			// styled correctly — it is left alone on purpose.
+			if ( isset( $el['settings']['css_id'] ) && ! isset( $el['settings']['_element_id'] ) ) {
+				$el['settings']['_element_id'] = $el['settings']['css_id'];
+				unset( $el['settings']['css_id'] );
+				$fixes[] = "{$path}: renamed 'css_id' -> '_element_id' (Elementor renders the element id from _element_id; css_id is stored but never rendered)";
+				$changed = true;
+			}
+
 			// --- 5. Rename known wrong control keys ---
 			if ( '' !== $widget_type && isset( self::$control_renames[ $widget_type ] ) ) {
 				$renames = self::$control_renames[ $widget_type ];

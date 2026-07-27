@@ -130,4 +130,119 @@ class Test_Elementor_Basic extends PHPUnit\Framework\TestCase {
 		$this->assertInstanceOf( WP_Error::class, $result );
 		$this->assertSame( 'no_data', $result->get_error_code() );
 	}
+
+	// ── #678 — section css_id never reaches the front end ──────────────────
+	//
+	// Elementor reads the wrapper id from `_element_id` in Element_Base's
+	// shared render path (element-base.php: `if ( ! empty( $settings
+	// ['_element_id'] ) ) { add_render_attribute( '_wrapper', 'id', ... ) }` ),
+	// so `_element_id` is the ID control for sections, columns, containers and
+	// widgets alike. `css_id` is not an Elementor control on any of them.
+	//
+	// Setting it therefore persisted and round-tripped perfectly through
+	// wp_set_elementor / wp_get_elementor while the rendered section carried no
+	// id at all — reported on DME sections a26captr and 7b550aa4, where the
+	// existing hash links had no target.
+	//
+	// Note the asymmetry that made this easy to get wrong: the CLASSES control
+	// really is `css_classes` on section/column/container (and `_css_classes`
+	// on widgets), so `css_classes` works and `css_id` looks like it should.
+
+	private function setElementorData( array $elements ): array {
+		if ( ! defined( 'ELEMENTOR_VERSION' ) ) {
+			define( 'ELEMENTOR_VERSION', '3.20.0' );
+		}
+
+		$GLOBALS['_mcpwp_test_posts'][5] = (object) array( 'ID' => 5, 'post_type' => 'page', 'post_title' => 'Test Page' );
+
+		$this->elementor->set_elementor_data( 5, array( 'elementor_data' => wp_json_encode( $elements ) ) );
+
+		return json_decode( $GLOBALS['_mcpwp_test_meta'][5]['_elementor_data'], true );
+	}
+
+	public function test_section_css_id_is_renamed_to_element_id() {
+		$saved = $this->setElementorData(
+			array(
+				array(
+					'id'       => 'a26captr',
+					'elType'   => 'section',
+					'settings' => array( 'css_id' => 'request-your-snapshot' ),
+					'elements' => array(),
+				),
+			)
+		);
+
+		$this->assertSame( 'request-your-snapshot', $saved[0]['settings']['_element_id'], 'the ID must land on the key Elementor renders from' );
+		$this->assertArrayNotHasKey( 'css_id', $saved[0]['settings'], 'the inert key must not be left behind' );
+	}
+
+	public function test_css_id_is_renamed_on_columns_containers_and_widgets_too() {
+		$saved = $this->setElementorData(
+			array(
+				array(
+					'id'       => 'sec1',
+					'elType'   => 'section',
+					'settings' => array(),
+					'elements' => array(
+						array(
+							'id'       => 'col1',
+							'elType'   => 'column',
+							'settings' => array( '_column_size' => 100, 'css_id' => 'col-anchor' ),
+							'elements' => array(
+								array(
+									'id'         => 'w1',
+									'elType'     => 'widget',
+									'widgetType' => 'heading',
+									'settings'   => array( 'title' => 'Hi', 'css_id' => 'widget-anchor' ),
+									'elements'   => array(),
+								),
+							),
+						),
+					),
+				),
+			)
+		);
+
+		$column = $saved[0]['elements'][0];
+		$widget = $column['elements'][0];
+
+		$this->assertSame( 'col-anchor', $column['settings']['_element_id'] );
+		$this->assertSame( 'widget-anchor', $widget['settings']['_element_id'] );
+	}
+
+	public function test_existing_element_id_is_not_overwritten_by_css_id() {
+		// Never clobber a value that already works — same rule the widget
+		// control_renames pass follows.
+		$saved = $this->setElementorData(
+			array(
+				array(
+					'id'       => 'sec1',
+					'elType'   => 'section',
+					'settings' => array( 'css_id' => 'stale', '_element_id' => 'real-anchor' ),
+					'elements' => array(),
+				),
+			)
+		);
+
+		$this->assertSame( 'real-anchor', $saved[0]['settings']['_element_id'] );
+	}
+
+	public function test_css_classes_is_left_alone_on_a_section() {
+		// The guard against over-correcting by symmetry: css_classes IS the
+		// real control on section/column/container. Renaming it would break
+		// every section that currently styles correctly.
+		$saved = $this->setElementorData(
+			array(
+				array(
+					'id'       => 'sec1',
+					'elType'   => 'section',
+					'settings' => array( 'css_classes' => 'dme-official-system' ),
+					'elements' => array(),
+				),
+			)
+		);
+
+		$this->assertSame( 'dme-official-system', $saved[0]['settings']['css_classes'] );
+		$this->assertArrayNotHasKey( '_css_classes', $saved[0]['settings'] );
+	}
 }

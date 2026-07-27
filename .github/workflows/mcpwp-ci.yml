@@ -41,5 +41,11 @@ jobs:
       - name: Pruned-class Guard Check
         run: bash scripts/verify_distignore_refs.sh
 
+      # A test file collected by no rule in phpunit.xml runs zero times while
+      # looking like coverage. Three were in that state until 2026-07-27, one
+      # of them covering the Elementor save path where #678 lived.
+      - name: Test Discovery Check
+        run: bash scripts/verify_test_discovery.sh
+
       - name: Unit Tests
         run: mcpwp/vendor/bin/phpunit --configuration mcpwp/tests/phpunit.xml
