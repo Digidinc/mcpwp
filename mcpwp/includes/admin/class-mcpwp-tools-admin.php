@@ -48,6 +48,26 @@ class Mcpwp_Tools_Admin {
 				'description' => __( 'Get/set page data, templates, globals, widgets, CSS', 'mcpwp' ),
 				'icon'        => 'dashicons-editor-kitchensink',
 			),
+			'elementor-info'      => array(
+				'name'        => __( 'Elementor Info', 'mcpwp' ),
+				'description' => __( 'Elementor status, widget schemas, CSS regeneration', 'mcpwp' ),
+				'icon'        => 'dashicons-info-outline',
+			),
+			'elementor-templates' => array(
+				'name'        => __( 'Elementor Templates', 'mcpwp' ),
+				'description' => __( 'Saved templates, archetypes, reusable parts', 'mcpwp' ),
+				'icon'        => 'dashicons-layout',
+			),
+			'elementor-build'     => array(
+				'name'        => __( 'Elementor Build', 'mcpwp' ),
+				'description' => __( 'Landing pages, page builder helpers, globals, cloning', 'mcpwp' ),
+				'icon'        => 'dashicons-welcome-add-page',
+			),
+			'elementor-theme'     => array(
+				'name'        => __( 'Elementor Theme', 'mcpwp' ),
+				'description' => __( 'Theme builder, custom code', 'mcpwp' ),
+				'icon'        => 'dashicons-admin-appearance',
+			),
 			'seo'        => array(
 				'name'        => __( 'SEO', 'mcpwp' ),
 				'description' => __( 'Meta titles, descriptions, analysis, noindex', 'mcpwp' ),
@@ -87,6 +107,31 @@ class Mcpwp_Tools_Admin {
 				'name'        => __( 'AI', 'mcpwp' ),
 				'description' => __( 'Stock photos, image generation, alt text, TTS', 'mcpwp' ),
 				'icon'        => 'dashicons-lightbulb',
+			),
+			'woocommerce'         => array(
+				'name'        => __( 'WooCommerce', 'mcpwp' ),
+				'description' => __( 'Products, orders, customers, store analytics', 'mcpwp' ),
+				'icon'        => 'dashicons-cart',
+			),
+			'learnpress'          => array(
+				'name'        => __( 'LearnPress', 'mcpwp' ),
+				'description' => __( 'Courses, lessons, quizzes, curriculum', 'mcpwp' ),
+				'icon'        => 'dashicons-welcome-learn-more',
+			),
+			'events'              => array(
+				'name'        => __( 'Events', 'mcpwp' ),
+				'description' => __( 'Events-plugin listings and CRUD', 'mcpwp' ),
+				'icon'        => 'dashicons-calendar-alt',
+			),
+			'multisite'           => array(
+				'name'        => __( 'Multisite', 'mcpwp' ),
+				'description' => __( 'Network sites, switching, network stats', 'mcpwp' ),
+				'icon'        => 'dashicons-networking',
+			),
+			'staging'             => array(
+				'name'        => __( 'Staging', 'mcpwp' ),
+				'description' => __( 'Staging environments, push to staging/live', 'mcpwp' ),
+				'icon'        => 'dashicons-migrate',
 			),
 		);
 	}

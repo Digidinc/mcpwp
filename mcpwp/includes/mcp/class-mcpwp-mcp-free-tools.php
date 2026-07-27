@@ -196,6 +196,15 @@ class Mcpwp_MCP_Free_Tools extends Mcpwp_MCP_Tool_Registry {
 			'wp_patch_block_section'     => 'gutenberg',
 			'wp_list_block_types'        => 'gutenberg',
 			'wp_list_block_patterns'     => 'gutenberg',
+
+			// Block utilities — categorized 'site' to match their REST route
+			// classification (/blocks/parse|serialize|validate|design-system),
+			// so the disabled-category gate agrees between the MCP and REST layers.
+			'wp_parse_blocks'            => 'site',
+			'wp_serialize_blocks'        => 'site',
+			'wp_validate_blocks'         => 'site',
+			'wp_get_block_design_system' => 'site',
+
 			'wp_list_approvals'          => 'admin',
 			'wp_get_approval'            => 'admin',
 			'wp_approve_request'         => 'admin',

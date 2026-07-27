@@ -54,6 +54,7 @@ Multisite gets an additional `add_menu_page()` call in `add_network_admin_menu()
 | `analytics_enabled` | `false` | PostHog server-side MCP analytics opt-in |
 | `alerts_enabled` | `false` | Error-spike email alerts |
 | `oauth_enabled` | `false` | OAuth 2.0 token auth |
+| `oauth_client_credentials_max_scope` | `'write'` | Ceiling for machine (client_credentials) tokens; a request for a higher scope is downgraded, never honoured. Allowed: `read`, `write`, `admin` |
 | `allowed_origins` | `''` | CORS origin allowlist |
 
 **Secondary option keys registered separately:**
