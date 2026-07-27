@@ -5,6 +5,13 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.9.1](https://github.com/Mumega-com/mcpwp/compare/v3.9.0...v3.9.1) (2026-07-27)
+
+
+### Bug Fixes
+
+* **update:** guard Mcpwp_Updater use on builds that prune it ([#724](https://github.com/Mumega-com/mcpwp/issues/724)) ([564bc9a](https://github.com/Mumega-com/mcpwp/commit/564bc9a8d9858563099a0424a7168b14ef545c19))
+
 ## [3.9.0](https://github.com/Mumega-com/mcpwp/compare/v3.8.0...v3.9.0) (2026-07-27)
 
 
