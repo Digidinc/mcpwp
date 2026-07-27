@@ -5,17 +5,32 @@
 ## Local Development (Primary)
 
 ### Local WordPress
+
+**Use `wp-rig-wp-dev`. It is the only container that mounts this plugin.**
+
 ```
-URL:      http://localhost:8080
-WP-CLI:   docker exec wp-test-wordpress-1 wp <command> --allow-root
-Compose:  ~/projects/themusicalunicorn/wp-test/docker-compose.yml
+WP-CLI:   docker exec wp-rig-wp-dev wp <command> --allow-root
+PHPUnit:  docker exec wp-rig-wp-dev bash -c 'cd /var/www/html/wp-content/plugins/mcpwp && vendor/bin/phpunit --configuration tests/phpunit.xml'
+Mount:    wp-ai-operator/mcpwp -> /var/www/html/wp-content/plugins/mcpwp
 ```
 
-**Plugin source is volume-mounted** — edits to `wp-ai-operator/mcpwp/` are live instantly. No deploy needed.
+Edits to `wp-ai-operator/mcpwp/` are live instantly there. No deploy needed.
+
+**`wp-test-wordpress-1` does NOT mount this plugin.** It mounts `site-pilot-ai` and
+`site-pilot-ai-pro` — the pre-rename directories — and carries a stale, unmounted copy of `mcpwp`
+under its own volume. Commands run against it silently exercise old code: a file added to
+`mcpwp/` today is simply absent there. This doc previously named it as the live-mounted dev
+container, which cost a task real debugging time. Verify with:
+
+```bash
+docker inspect wp-rig-wp-dev --format '{{range .Mounts}}{{.Source}} -> {{.Destination}}{{"\n"}}{{end}}'
+```
+
+There is no PHP on the host — every PHP or WP-CLI command must run inside the container.
 
 ### Generate API Key
 ```bash
-docker exec wp-test-wordpress-1 bash -c 'php -r "
+docker exec wp-rig-wp-dev bash -c 'php -r "
 require_once \"/var/www/html/wp-load.php\";
 \$key = \"mcpwp_\" . bin2hex(random_bytes(24));
 update_option(\"mcpwp_api_key\", wp_hash_password(\$key));
@@ -43,15 +58,15 @@ curl -s -X POST "http://localhost:8080/wp-json/mcpwp/v1/elementor/$PAGE" \
 ### WP-CLI Shortcuts
 ```bash
 # Plugin management
-docker exec wp-test-wordpress-1 wp plugin list --allow-root
-docker exec wp-test-wordpress-1 wp plugin install elementor --activate --allow-root
+docker exec wp-rig-wp-dev wp plugin list --allow-root
+docker exec wp-rig-wp-dev wp plugin install elementor --activate --allow-root
 
 # Database
-docker exec wp-test-wordpress-1 wp option get mcpwp_version --allow-root
-docker exec wp-test-wordpress-1 wp post list --post_type=page --allow-root
+docker exec wp-rig-wp-dev wp option get mcpwp_version --allow-root
+docker exec wp-rig-wp-dev wp post list --post_type=page --allow-root
 
 # Reset test environment
-docker exec wp-test-wordpress-1 wp post delete $(docker exec wp-test-wordpress-1 wp post list --post_type=page --format=ids --allow-root) --force --allow-root
+docker exec wp-rig-wp-dev wp post delete $(docker exec wp-rig-wp-dev wp post list --post_type=page --format=ids --allow-root) --force --allow-root
 ```
 
 ## Production Site
