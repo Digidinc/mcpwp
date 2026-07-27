@@ -111,6 +111,30 @@ class Mcpwp_Provider_Dataforseo {
 	}
 
 	/**
+	 * Map a two-letter country code to a DataForSEO `location_code`.
+	 *
+	 * Deliberately small — only the locale this class has always actually
+	 * queried with — rather than a large invented table that could attach the
+	 * wrong location_code to a real, billed lookup. An unmapped code must fail
+	 * explicitly (the caller should report 'locale_not_supported') and never
+	 * fall back to this default silently: pairing a caller's real request
+	 * (e.g. French keywords) with US market data under a reason that claims
+	 * clean success is the bug this guards against.
+	 *
+	 * @param string $gl Two-letter country code, e.g. 'us'.
+	 * @return int|null DataForSEO location_code, or null if unmapped.
+	 */
+	public static function location_code_for_country( $gl ) {
+		$map = array(
+			'us' => 2840,
+		);
+
+		$gl = strtolower( trim( (string) $gl ) );
+
+		return isset( $map[ $gl ] ) ? $map[ $gl ] : null;
+	}
+
+	/**
 	 * Keyword suggestions with market metrics.
 	 *
 	 * @param string $seed Seed keyword.

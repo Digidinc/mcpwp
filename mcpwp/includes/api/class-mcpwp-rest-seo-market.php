@@ -38,36 +38,6 @@ class Mcpwp_REST_SEO_Market extends Mcpwp_REST_API {
 	const MAX_SEED_LENGTH = 200;
 
 	/**
-	 * Per-site ceiling on distinct paid keyword lookups this route can trigger
-	 * in one window.
-	 *
-	 * get_opportunities() is a READABLE (GET) route driven entirely by a
-	 * caller-supplied seed, and the natural reading of the playbook is
-	 * "brainstorm candidate seeds" — every distinct seed that misses
-	 * Mcpwp_SEO_Cache is a real DataForSEO charge ($0.012/request +
-	 * $0.00012/result). Left unguarded, ~2,000 distinct seeds cost roughly $36.
-	 * This budget is independent of the generic rate limiter, which throttles
-	 * request counts, not spend, and is keyed to a read-scoped key even though
-	 * this is the expensive call.
-	 */
-	const LOOKUP_BUDGET_MAX = 200;
-
-	/**
-	 * Rolling window for the lookup budget above.
-	 */
-	const LOOKUP_BUDGET_WINDOW = DAY_IN_SECONDS;
-
-	/**
-	 * Transient key for the lookup-budget counter.
-	 */
-	const LOOKUP_BUDGET_TRANSIENT = 'mcpwp_seo_lookup_budget';
-
-	/**
-	 * Reason slug returned when the lookup budget above is exhausted.
-	 */
-	const REASON_LOOKUP_BUDGET_EXHAUSTED = 'lookup_budget_exhausted';
-
-	/**
 	 * Register routes.
 	 */
 	public function register_routes() {
@@ -219,6 +189,8 @@ class Mcpwp_REST_SEO_Market extends Mcpwp_REST_API {
 
 			// The budget only ever guards a real spend — a cache hit replays a
 			// prior answer for free and must not be charged against it.
+			$budget_consumed = false;
+
 			if ( ! Mcpwp_SEO_Cache::has( $cache_key ) ) {
 				$budget = $this->consume_lookup_budget();
 
@@ -234,6 +206,8 @@ class Mcpwp_REST_SEO_Market extends Mcpwp_REST_API {
 						)
 					);
 				}
+
+				$budget_consumed = true;
 			}
 
 			$fetched = Mcpwp_SEO_Cache::remember(
@@ -244,6 +218,13 @@ class Mcpwp_REST_SEO_Market extends Mcpwp_REST_API {
 			);
 
 			if ( is_wp_error( $fetched ) ) {
+				// A miss that resolves to a failure (e.g. a rejected credential)
+				// must not permanently cost the budget slot it consumed above —
+				// see Mcpwp_REST_API::refund_lookup_budget() for why.
+				if ( $budget_consumed ) {
+					$this->refund_lookup_budget();
+				}
+
 				return $this->error_response( $fetched->get_error_code(), $fetched->get_error_message(), 502 );
 			}
 
@@ -272,39 +253,9 @@ class Mcpwp_REST_SEO_Market extends Mcpwp_REST_API {
 		return $this->success_response( $result );
 	}
 
-	/**
-	 * Consume one slot from the daily paid-lookup budget.
-	 *
-	 * Must only be called on a Mcpwp_SEO_Cache miss — see get_opportunities().
-	 * A fixed-window counter, same shape as Mcpwp_Rate_Limiter's windows: the
-	 * window resets itself the first time it is read after expiring, rather
-	 * than sliding on every write.
-	 *
-	 * @return true|WP_Error True if a slot was consumed; WP_Error (with
-	 *                       'retry_after' seconds in its data) if exhausted.
-	 */
-	protected function consume_lookup_budget() {
-		$now    = time();
-		$window = get_transient( self::LOOKUP_BUDGET_TRANSIENT );
-
-		if ( ! is_array( $window ) || ! isset( $window['count'], $window['reset'] ) || (int) $window['reset'] <= $now ) {
-			$window = array(
-				'count' => 0,
-				'reset' => $now + self::LOOKUP_BUDGET_WINDOW,
-			);
-		}
-
-		if ( (int) $window['count'] >= self::LOOKUP_BUDGET_MAX ) {
-			return new WP_Error(
-				'lookup_budget_exhausted',
-				__( 'Daily budget for paid keyword lookups on this site has been reached.', 'mcpwp' ),
-				array( 'retry_after' => max( 0, (int) $window['reset'] - $now ) )
-			);
-		}
-
-		$window['count']++;
-		set_transient( self::LOOKUP_BUDGET_TRANSIENT, $window, max( 1, (int) $window['reset'] - $now ) );
-
-		return true;
-	}
+	// consume_lookup_budget() and the LOOKUP_BUDGET_* constants live on the
+	// shared base Mcpwp_REST_API — keyword_research() (Mcpwp_REST_SEO_Audit)
+	// is a second caller spending the same DataForSEO credit through the same
+	// cache, so one per-site budget lives in one place. Inherited here as-is;
+	// see Mcpwp_REST_API::consume_lookup_budget() / refund_lookup_budget().
 }

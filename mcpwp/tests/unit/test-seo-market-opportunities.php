@@ -217,4 +217,33 @@ class SeoMarketOpportunitiesTest extends TestCase {
 
 		$this->assertNotSame( Mcpwp_REST_SEO_Market::REASON_LOOKUP_BUDGET_EXHAUSTED, $data['reason'] );
 	}
+
+	/**
+	 * Minor (feat/seo-market-data fix pass) — a permanently-broken credential
+	 * must not exhaust the (now-shared, Mcpwp_REST_API-hoisted) daily budget.
+	 * Mcpwp_SEO_Cache::TTL_FAIL is only 5 minutes, so retrying the same
+	 * failing lookup on a natural cadence would otherwise burn a budget slot
+	 * every 5 minutes — up to 288/day against a 200-slot ceiling.
+	 */
+	public function test_wp_error_fetch_does_not_consume_the_shared_budget() {
+		$provider         = new Mcpwp_Test_Stub_Dataforseo_Suggestions_Provider();
+		$provider->result = new WP_Error( 'auth_rejected', 'bad credentials' );
+
+		$controller                = new Mcpwp_REST_SEO_Market_Opportunities_Testable();
+		$controller->stub_provider = $provider;
+
+		// Distinct seeds force a fresh cache miss each time without waiting on
+		// Mcpwp_SEO_Cache::TTL_FAIL's clock — the point under test is whether a
+		// *miss that fails* spends the budget, not the cache TTL itself.
+		for ( $i = 0; $i < Mcpwp_REST_SEO_Market::LOOKUP_BUDGET_MAX + 5; $i++ ) {
+			$response = $controller->get_opportunities( $this->make_request( 'broken-seed-' . $i ) );
+			$this->assertInstanceOf( WP_Error::class, $response );
+		}
+
+		$this->assertSame(
+			Mcpwp_REST_SEO_Market::LOOKUP_BUDGET_MAX + 5,
+			$provider->calls,
+			'Every failing miss must still reach the provider — a WP_Error must not be served from a stale exhausted-budget state.'
+		);
+	}
 }

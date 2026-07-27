@@ -140,4 +140,26 @@ class DataforseoProviderTest extends TestCase {
 			'An unbounded limit must be clamped so an agent loop cannot spend without bound.'
 		);
 	}
+
+	// ─────────────────────────────────────────────────────────────────────
+	// location_code_for_country() — deliberately small map. An unmapped
+	// country must return null, never a guessed/default location_code that
+	// would silently attach the wrong market's data to a real request.
+	// ─────────────────────────────────────────────────────────────────────
+
+	public function test_location_code_for_country_maps_us() {
+		$this->assertSame( 2840, Mcpwp_Provider_Dataforseo::location_code_for_country( 'us' ) );
+	}
+
+	public function test_location_code_for_country_is_case_and_whitespace_insensitive() {
+		$this->assertSame( 2840, Mcpwp_Provider_Dataforseo::location_code_for_country( ' US ' ) );
+	}
+
+	public function test_location_code_for_country_returns_null_for_unmapped_country() {
+		$this->assertNull( Mcpwp_Provider_Dataforseo::location_code_for_country( 'fr' ) );
+	}
+
+	public function test_location_code_for_country_returns_null_for_empty_string() {
+		$this->assertNull( Mcpwp_Provider_Dataforseo::location_code_for_country( '' ) );
+	}
 }

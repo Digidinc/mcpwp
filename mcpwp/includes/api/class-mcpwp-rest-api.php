@@ -26,6 +26,38 @@ abstract class Mcpwp_REST_API {
 	protected $namespace = 'mcpwp/v1';
 
 	/**
+	 * Per-site ceiling on distinct paid DataForSEO keyword lookups any route on
+	 * this base class can trigger in one window.
+	 *
+	 * Originally lived only on Mcpwp_REST_SEO_Market (get_opportunities() is a
+	 * READABLE (GET) route driven entirely by a caller-supplied seed, and every
+	 * distinct seed that misses Mcpwp_SEO_Cache is a real DataForSEO charge —
+	 * $0.012/request + $0.00012/result; ~2,000 distinct seeds cost roughly $36).
+	 * Hoisted here once keyword_research() (Mcpwp_REST_SEO_Audit) became a
+	 * second caller spending the same credit via the same shared cache — one
+	 * per-site ceiling, not two independently-tracked ones. This budget is
+	 * independent of the generic rate limiter, which throttles request counts,
+	 * not spend, and is keyed to a read-scoped key even though this is the
+	 * expensive call.
+	 */
+	const LOOKUP_BUDGET_MAX = 200;
+
+	/**
+	 * Rolling window for the lookup budget above.
+	 */
+	const LOOKUP_BUDGET_WINDOW = DAY_IN_SECONDS;
+
+	/**
+	 * Transient key for the lookup-budget counter.
+	 */
+	const LOOKUP_BUDGET_TRANSIENT = 'mcpwp_seo_lookup_budget';
+
+	/**
+	 * Reason slug returned when the lookup budget above is exhausted.
+	 */
+	const REASON_LOOKUP_BUDGET_EXHAUSTED = 'lookup_budget_exhausted';
+
+	/**
 	 * Register routes.
 	 */
 	abstract public function register_routes();
@@ -132,6 +164,73 @@ abstract class Mcpwp_REST_API {
 		}
 
 		return new Mcpwp_Provider_Dataforseo( $config['login'], $config['password'] );
+	}
+
+	/**
+	 * Consume one slot from the daily paid-lookup budget.
+	 *
+	 * Must only be called on a Mcpwp_SEO_Cache miss, immediately before the
+	 * fetch that miss triggers — see get_opportunities() and keyword_research().
+	 * A fixed-window counter, same shape as Mcpwp_Rate_Limiter's windows: the
+	 * window resets itself the first time it is read after expiring, rather
+	 * than sliding on every write.
+	 *
+	 * A slot consumed here for a fetch that turns out to fail (WP_Error) must
+	 * be handed back via refund_lookup_budget() — see that method's docblock.
+	 *
+	 * @return true|WP_Error True if a slot was consumed; WP_Error (with
+	 *                       'retry_after' seconds in its data) if exhausted.
+	 */
+	protected function consume_lookup_budget() {
+		$now    = time();
+		$window = get_transient( self::LOOKUP_BUDGET_TRANSIENT );
+
+		if ( ! is_array( $window ) || ! isset( $window['count'], $window['reset'] ) || (int) $window['reset'] <= $now ) {
+			$window = array(
+				'count' => 0,
+				'reset' => $now + self::LOOKUP_BUDGET_WINDOW,
+			);
+		}
+
+		if ( (int) $window['count'] >= self::LOOKUP_BUDGET_MAX ) {
+			return new WP_Error(
+				'lookup_budget_exhausted',
+				__( 'Daily budget for paid keyword lookups on this site has been reached.', 'mcpwp' ),
+				array( 'retry_after' => max( 0, (int) $window['reset'] - $now ) )
+			);
+		}
+
+		$window['count']++;
+		set_transient( self::LOOKUP_BUDGET_TRANSIENT, $window, max( 1, (int) $window['reset'] - $now ) );
+
+		return true;
+	}
+
+	/**
+	 * Hand back a lookup-budget slot consumed by consume_lookup_budget() for a
+	 * fetch that resolved to a WP_Error.
+	 *
+	 * Mcpwp_SEO_Cache::TTL_FAIL is only five minutes, so a permanently-rejected
+	 * credential retried on a natural cadence would otherwise re-consume a slot
+	 * every five minutes — up to 288 charges/day against a 200-slot ceiling —
+	 * and lock out legitimate lookups for a failure that was never going to
+	 * succeed. Only ever called for the same miss that just consumed a slot
+	 * (callers track that with a local flag); a cache-hit replay of a cached
+	 * error never reaches here and never charged in the first place.
+	 *
+	 * If the window has already rolled over since the matching consume, there
+	 * is nothing to give back — a fresh window starts at zero regardless.
+	 */
+	protected function refund_lookup_budget() {
+		$now    = time();
+		$window = get_transient( self::LOOKUP_BUDGET_TRANSIENT );
+
+		if ( ! is_array( $window ) || ! isset( $window['count'], $window['reset'] ) || (int) $window['reset'] <= $now ) {
+			return;
+		}
+
+		$window['count'] = max( 0, (int) $window['count'] - 1 );
+		set_transient( self::LOOKUP_BUDGET_TRANSIENT, $window, max( 1, (int) $window['reset'] - $now ) );
 	}
 
 	/**

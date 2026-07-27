@@ -387,6 +387,17 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 							'maximum'           => 500,
 							'sanitize_callback' => 'absint',
 						),
+						'enrich' => array(
+							// This route is the free-tier, keyless keyword tool —
+							// enrichment must stay explicit opt-in so a configured
+							// site is never billed by a default/unattended call.
+							// See keyword_research() and Mcpwp_SEO_Cache/lookup
+							// budget guards below.
+							'description'       => __( 'When true and DataForSEO is configured, attach market metrics (search volume, CPC, competition, keyword difficulty). Spends DataForSEO credit — defaults to false (keyless, no spend).', 'mcpwp' ),
+							'type'              => 'boolean',
+							'default'           => false,
+							'sanitize_callback' => 'rest_sanitize_boolean',
+						),
 					),
 				),
 			)
@@ -1392,11 +1403,14 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 
 		$this->log_activity( 'keyword_research', $request, array( 'seed' => $seed ) );
 
+		$hl = sanitize_key( (string) $request->get_param( 'hl' ) );
+		$gl = sanitize_key( (string) $request->get_param( 'gl' ) );
+
 		$result = Mcpwp_Keyword_Research::research(
 			$seed,
 			array(
-				'hl'  => sanitize_key( (string) $request->get_param( 'hl' ) ),
-				'gl'  => sanitize_key( (string) $request->get_param( 'gl' ) ),
+				'hl'  => $hl,
+				'gl'  => $gl,
 				'max' => absint( $request->get_param( 'max' ) ),
 			)
 		);
@@ -1405,28 +1419,101 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 			return $this->error_response( $result->get_error_code(), $result->get_error_message(), 400 );
 		}
 
-		// A Pro customer with valid DataForSEO credentials must see the numbers
-		// they configured — not the free-tier apology that tells them to
-		// integrate the provider they just integrated. get_dataforseo_provider()
-		// is the same shared factory /seo/opportunities uses (Mcpwp_REST_API).
+		// Enrichment is opt-in. This is the free tier's keyless keyword tool —
+		// its advertised contract (see wp_keyword_research's description) is
+		// "no API key required, no spend" by default. A configured Pro site
+		// must only be billed when the caller explicitly asks for numbers, not
+		// on every call this tool makes, including inside an unattended
+		// content-marketing loop.
+		if ( ! rest_sanitize_boolean( $request->get_param( 'enrich' ) ) ) {
+			return $this->success_response( $result );
+		}
+
+		// A Pro customer with valid DataForSEO credentials and enrich=true must
+		// see the numbers they configured — not the free-tier apology that
+		// tells them to integrate the provider they just integrated.
+		// get_dataforseo_provider() is the same shared factory /seo/opportunities
+		// uses (Mcpwp_REST_API).
 		$provider = $this->get_dataforseo_provider();
 
 		if ( null === $provider ) {
 			$result = Mcpwp_Keyword_Research::enrich( $result, null );
-		} else {
-			// Route through the same paid-lookup cache /seo/opportunities uses —
-			// enrich() calls the provider directly when given no pre-fetched
-			// metrics, which would otherwise make this a second, uncached paid
-			// path. "seed|en|2840" matches Mcpwp_SEO_Cache's documented key shape.
-			$metrics = Mcpwp_SEO_Cache::remember(
-				'suggestions|' . $seed . '|en|2840',
-				function () use ( $provider, $seed ) {
-					return $provider->keyword_suggestions( $seed );
-				}
-			);
-
-			$result = Mcpwp_Keyword_Research::enrich( $result, $provider, $metrics );
+			return $this->success_response( $result );
 		}
+
+		// Mirror the REST route's own registered defaults ('en'/'us') here
+		// rather than relying solely on the REST arg schema to supply them —
+		// this method is also called directly (bypassing WP_REST_Server, and
+		// its schema defaults, entirely) by the MCP callback-tool path and by
+		// tests.
+		$enrich_hl = '' !== $hl ? $hl : 'en';
+		$enrich_gl = '' !== $gl ? $gl : 'us';
+
+		// hl passes straight through as DataForSEO's language_code (a free-form
+		// string param, no lookup needed). gl requires a real location_code —
+		// only 'us' is mapped (see Mcpwp_Provider_Dataforseo::location_code_for_country()) —
+		// so a caller asking for a locale we cannot honor gets an explicit
+		// reason, never US market data silently attached to their request.
+		$location_code = Mcpwp_Provider_Dataforseo::location_code_for_country( $enrich_gl );
+
+		if ( null === $location_code ) {
+			$result['metrics']           = array();
+			$result['enrichment_reason'] = 'locale_not_supported';
+			unset( $result['note'] );
+
+			return $this->success_response( $result );
+		}
+
+		// Route through the same paid-lookup cache /seo/opportunities uses —
+		// enrich() calls the provider directly when given no pre-fetched
+		// metrics, which would otherwise make this a second, uncached paid
+		// path. Locale is folded into the key so varying hl/gl can never
+		// collide with, or be silently served, a different locale's cached
+		// answer.
+		$cache_key = 'suggestions|' . $seed . '|' . $enrich_hl . '|' . $location_code;
+
+		// The budget only ever guards a real spend — a cache hit replays a
+		// prior answer for free and must not be charged against it.
+		$budget_consumed = false;
+
+		if ( ! Mcpwp_SEO_Cache::has( $cache_key ) ) {
+			$budget = $this->consume_lookup_budget();
+
+			if ( is_wp_error( $budget ) ) {
+				$budget_data = $budget->get_error_data();
+
+				$result['metrics']           = array();
+				$result['enrichment_reason'] = self::REASON_LOOKUP_BUDGET_EXHAUSTED;
+				$result['retry_after']       = isset( $budget_data['retry_after'] ) ? (int) $budget_data['retry_after'] : self::LOOKUP_BUDGET_WINDOW;
+				unset( $result['note'] );
+
+				return $this->success_response( $result );
+			}
+
+			$budget_consumed = true;
+		}
+
+		$metrics = Mcpwp_SEO_Cache::remember(
+			$cache_key,
+			function () use ( $provider, $seed, $enrich_hl, $location_code ) {
+				return $provider->keyword_suggestions(
+					$seed,
+					array(
+						'language_code' => $enrich_hl,
+						'location_code' => $location_code,
+					)
+				);
+			}
+		);
+
+		// A miss that resolves to a failure (e.g. a rejected credential) must
+		// not permanently cost the budget slot it consumed above — see
+		// Mcpwp_REST_API::refund_lookup_budget() for why.
+		if ( is_wp_error( $metrics ) && $budget_consumed ) {
+			$this->refund_lookup_budget();
+		}
+
+		$result = Mcpwp_Keyword_Research::enrich( $result, $provider, $metrics );
 
 		return $this->success_response( $result );
 	}
