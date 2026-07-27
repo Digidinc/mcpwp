@@ -103,3 +103,42 @@ jobs:
     with:
       ref: main
     secrets: inherit
+
+  # The premium build updates through Freemius, not through updates.mcpwp.net,
+  # so publishing the canonical channel ships nothing to a paying customer.
+  # This was a manual step, and on 2026-07-27 Freemius turned out to have been
+  # stuck on 3.7.0 since 2026-07-21 — 3.7.1, 3.7.2, 3.8.0 and 3.9.0 never
+  # reached a paid install, including the #716 updater fix. Same lesson as
+  # publish-canonical-channel, one channel over: releasing has to publish.
+  #
+  # Separate job so a Freemius outage cannot hold up the self-hosted channel.
+  publish-freemius:
+    needs: [release-please, sync-wporg-changelog]
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Publish to Freemius
+        env:
+          FREEMIUS_BEARER_TOKEN: ${{ secrets.FREEMIUS_BEARER_TOKEN }}
+          VERSION: ${{ needs.release-please.outputs.version }}
+        run: |
+          if [ -z "$FREEMIUS_BEARER_TOKEN" ]; then
+            echo "::error::FREEMIUS_BEARER_TOKEN is not configured — the premium build cannot be published."
+            echo "Paying customers stay on the previous release until this secret exists."
+            exit 1
+          fi
+          # --skip-bump: release-please already wrote every version artefact,
+          # and letting the script rewrite them would desynchronise the set.
+          bash scripts/release_freemius.sh --version "$VERSION" --skip-bump
+
+      - name: Verify Freemius serves the new version
+        env:
+          FREEMIUS_BEARER_TOKEN: ${{ secrets.FREEMIUS_BEARER_TOKEN }}
+          VERSION: ${{ needs.release-please.outputs.version }}
+        run: |
+          bash scripts/verify_freemius_channel.sh \
+            --expect-version "$VERSION" --retries 4 --delay 20
