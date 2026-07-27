@@ -173,6 +173,30 @@ each of them was quiet:
 | End-to-end channel check | `scripts/verify_update_channel.sh` | Manifest advertising a version the served ZIP does not contain; untrusted `download_url` host; package shipped without the updater |
 | Daily canary | `update-channel-canary.yml` | A channel that rots after publish; files/reopens one issue per channel |
 | On-site visibility | `Mcpwp_Update_Channel_Health` | A site whose channel is unreachable — Site Health "critical", admin notice, `update_channel` in `/site-health` |
+| Freemius publishes itself | `release-please.yml` → `publish-freemius` | A release that reached the self-hosted channel but never the paid fleet |
+| Freemius channel check | `scripts/verify_freemius_channel.sh` | Freemius serving an older version than the latest tag; a build left in `pending`/`beta` rather than `released` |
+| Pruned-class guard | `scripts/verify_distignore_refs.sh` (MCPWP CI) | Shipped code calling a class that `.distignore` removes from a build — a fatal only that build sees (#723) |
+
+**There are two fleets, not one.** `updates.mcpwp.net` serves self-hosted and agency installs; the
+premium build updates through **Freemius** and ignores that manifest entirely. Publishing one ships
+nothing to the other. Freemius sat on 3.7.0 from 2026-07-21 to 2026-07-27 while the self-hosted
+channel moved through 3.7.1, 3.7.2, 3.8.0 and 3.9.0 — four releases, including the #716 updater fix,
+that no paying customer could install. Both are now published by the release and watched daily.
+
+Freemius needs `FREEMIUS_BEARER_TOKEN` (repo secret, and in `~/.env.secrets` locally). The verifier
+treats a missing token as a **failure**, not a skip — "could not check the paid channel" and "the
+paid channel is fine" must never print the same thing.
+
+```bash
+bash scripts/verify_freemius_channel.sh --expect-version 3.9.1
+```
+
+**The premium build's plugin directory is `mcpwp-premium/`, but every published ZIP unpacks to
+`mcpwp/`.** So `Plugin_Upgrader::upgrade('mcpwp-premium/mcpwp.php')` fails by construction, and a
+`package_url` forced install cannot rescue a premium site. Update those through Freemius — pull the
+signed package with `mcpwp_fs()->get_update( false, true )`, inject it into the `update_plugins`
+transient under the real basename, then run `Plugin_Upgrader`. Freemius' own updater does not hook
+that transient under WP-CLI, so `wp plugin update` reports "no update" on a site that has one.
 
 Check any channel by hand, no build required:
 

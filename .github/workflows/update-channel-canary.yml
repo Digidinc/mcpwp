@@ -16,6 +16,7 @@ on:
   pull_request:
     paths:
       - "scripts/verify_update_channel.sh"
+      - "scripts/verify_freemius_channel.sh"
       - ".github/workflows/update-channel-canary.yml"
 
 permissions:
@@ -112,6 +113,99 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           export TITLE="Update channel down: ${CHANNEL_NAME} (${CHANNEL_URL})"
+          OPEN="$(gh issue list --state open --limit 100 \
+            --search '"Update channel down" in:title' \
+            --json number,title \
+            --jq '[.[] | select(.title == env.TITLE)] | first | .number // empty')"
+          if [ -n "$OPEN" ]; then
+            gh issue close "$OPEN" --comment "Canary is green again — ${RUN_URL}"
+          fi
+
+  # The premium fleet updates through Freemius, which the checks above never
+  # touch. It drifted four releases behind unnoticed because publishing there
+  # was manual and nothing compared it to the latest tag. This does.
+  freemius:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Latest released tag
+        id: tag
+        run: |
+          TAG="$(git tag -l 'v*' --sort=-v:refname | head -1)"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          echo "Latest tag: $TAG"
+
+      - name: Verify Freemius serves it
+        env:
+          FREEMIUS_BEARER_TOKEN: ${{ secrets.FREEMIUS_BEARER_TOKEN }}
+        run: |
+          bash scripts/verify_freemius_channel.sh \
+            --expect-version "${{ steps.tag.outputs.version }}" \
+            --retries 3 --delay 30 \
+            2>&1 | tee /tmp/freemius.log
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Freemius (premium fleet)"
+            echo ""
+            echo '```'
+            cat /tmp/freemius.log 2>/dev/null || echo "(no output)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: File an issue on failure
+        if: failure() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EXPECTED: ${{ steps.tag.outputs.version }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          export TITLE="Update channel down: freemius (premium fleet)"
+
+          EXISTING="$(gh issue list --state all --limit 100 \
+            --search '"Update channel down" in:title' \
+            --json number,title \
+            --jq '[.[] | select(.title == env.TITLE)] | first | .number // empty')"
+
+          BODY="$(cat <<EOF
+          Freemius is not serving the latest released version, so **paying customers cannot get it**.
+
+          **Expected:** \`${EXPECTED}\`
+          **Run:** ${RUN_URL}
+
+          \`\`\`
+          $(cat /tmp/freemius.log 2>/dev/null || echo "(no output captured)")
+          \`\`\`
+
+          Publish it:
+
+          \`\`\`bash
+          FREEMIUS_BEARER_TOKEN=... bash scripts/release_freemius.sh --version ${EXPECTED} --skip-bump
+          bash scripts/verify_freemius_channel.sh --expect-version ${EXPECTED}
+          \`\`\`
+          EOF
+          )"
+
+          if [ -n "$EXISTING" ]; then
+            gh issue reopen "$EXISTING" 2>/dev/null || true
+            gh issue comment "$EXISTING" --body "$BODY"
+          else
+            gh issue create --title "$TITLE" --body "$BODY" --label bug
+          fi
+
+      - name: Close the issue when green again
+        if: success() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          export TITLE="Update channel down: freemius (premium fleet)"
           OPEN="$(gh issue list --state open --limit 100 \
             --search '"Update channel down" in:title' \
             --json number,title \
