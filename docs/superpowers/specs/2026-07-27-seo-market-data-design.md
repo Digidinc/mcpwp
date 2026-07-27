@@ -223,5 +223,26 @@ audit issues.
 1. **This spec** — DataForSEO provider, keyword enrichment, visibility snapshot, opportunities.
    No cron, no recurring spend.
 2. **Next** — Google Search Console into the existing performance store. Free, first-party, and the
-   half DataForSEO structurally cannot provide. Together they are a complete picture.
+   half DataForSEO structurally cannot provide. **Must use OAuth brokered through `mumcp-broker`,
+   not service-account JSON.**
+
+   Investigated on 2026-07-27. The obvious path was to reuse `Mcpwp_Google_Indexing`'s existing
+   service-account flow (RS256 JWT → `oauth2.googleapis.com/token`) with a different scope. Two
+   findings killed it:
+
+   - Creating a service-account key is blocked by the org policy
+     `constraints/iam.disableServiceAccountKeyCreation`. That policy is correct and should stay.
+   - More importantly, service-account JSON is the wrong onboarding for this product. It requires
+     every customer to create a GCP project, enable an API, mint a key, download JSON and paste it
+     in. Agencies buying a WordPress plugin will not complete that. `google_indexing` already
+     demands exactly this and appears never to have been exercised — the Indexing API is not even
+     enabled on the project its credentials would come from.
+
+   `mumcp-broker` already solves this shape of problem for claude.ai→MCPWP sign-in: it can hold one
+   Google OAuth client and broker per-site tokens, which removes the redirect-URI problem that
+   otherwise makes OAuth painful for self-hosted WordPress. Customer clicks "Connect Search
+   Console", consents, done.
+
+   The Search Console API is already enabled on `mumegaproject`.
+
 3. **Later** — rank tracking over time, once real usage and spend patterns are known.
