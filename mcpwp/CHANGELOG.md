@@ -5,6 +5,19 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.9.3](https://github.com/Mumega-com/mcpwp/compare/v3.9.2...v3.9.3) (2026-07-27)
+
+
+### Bug Fixes
+
+* **security:** granular tool-category gate on all auth paths, fail-closed OAuth scopes ([#700](https://github.com/Mumega-com/mcpwp/issues/700)) ([8694169](https://github.com/Mumega-com/mcpwp/commit/86941696481ab28375992d6d04a38eaf4a06ac9e))
+
+
+### Upgrade Notes
+
+* AI image and alt-text generation is now governed by the **AI** tool toggle rather than **Admin**. If you disabled Admin specifically to block `/integrations/*` generation, it becomes reachable again on upgrade — AI is on by default. Disable the AI toggle to restore that block. This aligns the REST routes with the tool taxonomy the MCP layer has always used.
+* Tool-category toggles now hold on the REST entry point as well as the MCP one. A toggle you previously set expecting MCP-only enforcement — WooCommerce, LearnPress, Multisite, Staging, Forms, Elementor Theme — will now also block the matching REST routes.
+
 ## [3.9.2](https://github.com/Mumega-com/mcpwp/compare/v3.9.1...v3.9.2) (2026-07-27)
 
 
