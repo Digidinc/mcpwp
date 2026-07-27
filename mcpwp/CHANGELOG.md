@@ -5,6 +5,13 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.9.0](https://github.com/Mumega-com/mcpwp/compare/v3.8.0...v3.9.0) (2026-07-27)
+
+
+### Features
+
+* **mupot:** read-first WordPress connector — status + task board in Control Room ([#715](https://github.com/Mumega-com/mcpwp/issues/715)) ([8a06c11](https://github.com/Mumega-com/mcpwp/commit/8a06c11593f62c7de1b873d4d79ed09f014ed71c)), closes [#689](https://github.com/Mumega-com/mcpwp/issues/689)
+
 ## [3.8.0](https://github.com/Mumega-com/mcpwp/compare/v3.7.2...v3.8.0) (2026-07-25)
 
 
