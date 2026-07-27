@@ -870,6 +870,29 @@ if (! function_exists('get_post_status_object')) {
     }
 }
 
+if (! function_exists('wp_http_validate_url')) {
+    // Mirror WP closely enough for link classification: an absolute http(s)
+    // URL with a host validates; a relative path or other scheme does not.
+    // Callers use the false return to decide whether to resolve against
+    // home_url(), so getting relative paths wrong here would silently change
+    // which links count as internal.
+    function wp_http_validate_url($url)
+    {
+        $url = trim((string) $url);
+        if ('' === $url || 0 !== strpos($url, 'http')) {
+            return false;
+        }
+        $parsed = parse_url($url);
+        if (empty($parsed['host']) || empty($parsed['scheme'])) {
+            return false;
+        }
+        if (! in_array(strtolower($parsed['scheme']), array( 'http', 'https' ), true)) {
+            return false;
+        }
+        return $url;
+    }
+}
+
 if (! function_exists('url_to_postid')) {
     // Mirror WP: resolve the plain-permalink query vars (?p=ID / ?page_id=ID)
     // regardless of post status; pretty draft slugs fall through to path lookup.
