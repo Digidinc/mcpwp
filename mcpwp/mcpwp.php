@@ -259,6 +259,7 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-provider-cloudflare.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-provider-dataforseo.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-seo-visibility.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-seo-opportunities.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-cloudflare-cache-sync.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-analytics.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-white-label.php';

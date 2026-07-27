@@ -1608,3 +1608,7 @@ require_once dirname(__DIR__) . '/includes/core/class-mcpwp-keyword-research.php
 // Search visibility snapshot store — market position, separate from
 // first-party Search Console performance (Mcpwp_Search_Performance above).
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-seo-visibility.php';
+
+// Maturity-aware opportunity ranker — fuses visibility, keyword metrics and
+// audit issues into a ranked list of SEO work worth doing.
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-seo-opportunities.php';
