@@ -19,6 +19,8 @@ $pending_items   = isset( $control_room['pending_approvals'] ) && is_array( $con
 $approved_items  = isset( $control_room['approved_approvals'] ) && is_array( $control_room['approved_approvals'] ) ? $control_room['approved_approvals'] : array();
 $rollback_items  = isset( $control_room['rollback_ready'] ) && is_array( $control_room['rollback_ready'] ) ? $control_room['rollback_ready'] : array();
 $seo_issues      = isset( $control_room['open_seo_issues'] ) && is_array( $control_room['open_seo_issues'] ) ? $control_room['open_seo_issues'] : array();
+$seo_visibility    = isset( $control_room['seo_visibility'] ) && is_array( $control_room['seo_visibility'] ) ? $control_room['seo_visibility'] : array();
+$seo_opportunities = isset( $control_room['seo_opportunities'] ) && is_array( $control_room['seo_opportunities'] ) ? $control_room['seo_opportunities'] : array();
 $seo_filters     = isset( $control_room['seo_filters'] ) && is_array( $control_room['seo_filters'] ) ? $control_room['seo_filters'] : array();
 $event_inbox     = isset( $control_room['event_inbox'] ) && is_array( $control_room['event_inbox'] ) ? $control_room['event_inbox'] : array();
 $event_filters   = isset( $control_room['event_filters'] ) && is_array( $control_room['event_filters'] ) ? $control_room['event_filters'] : array();
@@ -321,6 +323,47 @@ $event_escalated_count = (int) ( $event_summary['escalated'] ?? 0 );
 						</li>
 					<?php endforeach; ?>
 				</ul>
+			<?php endif; ?>
+
+			<h3><?php esc_html_e( 'Search opportunities', 'mcpwp' ); ?></h3>
+			<?php if ( ! empty( $seo_opportunities['opportunities'] ) ) : ?>
+				<table class="widefat striped">
+					<thead>
+						<tr>
+							<th><?php esc_html_e( 'Keyword', 'mcpwp' ); ?></th>
+							<th><?php esc_html_e( 'Position', 'mcpwp' ); ?></th>
+							<th><?php esc_html_e( 'Volume', 'mcpwp' ); ?></th>
+							<th><?php esc_html_e( 'Difficulty', 'mcpwp' ); ?></th>
+							<th><?php esc_html_e( 'Why', 'mcpwp' ); ?></th>
+						</tr>
+					</thead>
+					<tbody>
+					<?php foreach ( $seo_opportunities['opportunities'] as $opp ) : ?>
+						<tr>
+							<td><?php echo esc_html( $opp['keyword'] ?? '' ); ?></td>
+							<td><?php echo isset( $opp['position'] ) && $opp['position'] > 0 ? esc_html( (string) $opp['position'] ) : '&mdash;'; ?></td>
+							<td><?php echo esc_html( (string) ( $opp['search_volume'] ?? 0 ) ); ?></td>
+							<td><?php echo esc_html( (string) ( $opp['keyword_difficulty'] ?? 0 ) ); ?></td>
+							<td><?php echo esc_html( $opp['reason'] ?? '' ); ?></td>
+						</tr>
+					<?php endforeach; ?>
+					</tbody>
+				</table>
+			<?php else : ?>
+				<p>
+					<?php
+					// "Not configured" and "nothing to do" are different answers
+					// and must not render as the same empty table.
+					$seo_opportunities_reason = isset( $seo_opportunities['reason'] ) ? (string) $seo_opportunities['reason'] : '';
+					if ( 'no_inputs' === $seo_opportunities_reason ) {
+						esc_html_e( 'No search data yet. Connect DataForSEO under Integrations, then refresh visibility.', 'mcpwp' );
+					} elseif ( 'unavailable' === $seo_opportunities_reason ) {
+						esc_html_e( 'Search opportunity analysis is not available in this build.', 'mcpwp' );
+					} else {
+						esc_html_e( 'No opportunities outstanding.', 'mcpwp' );
+					}
+					?>
+				</p>
 			<?php endif; ?>
 		</div>
 

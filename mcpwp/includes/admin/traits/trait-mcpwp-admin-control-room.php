@@ -232,6 +232,16 @@ trait Mcpwp_Admin_Control_Room_Trait {
 			),
 			'seo_summary'      => isset( $seo_all['summary'] ) && is_array( $seo_all['summary'] ) ? $seo_all['summary'] : array(),
 			'open_seo_issues'  => isset( $seo_open['issues'] ) && is_array( $seo_open['issues'] ) ? $seo_open['issues'] : array(),
+			'seo_visibility'    => class_exists( 'Mcpwp_SEO_Visibility' )
+				? Mcpwp_SEO_Visibility::get_latest()
+				: array( 'rows' => array(), 'reason' => 'unavailable' ),
+			'seo_opportunities' => class_exists( 'Mcpwp_SEO_Opportunities' ) && class_exists( 'Mcpwp_SEO_Visibility' )
+				? Mcpwp_SEO_Opportunities::rank(
+					Mcpwp_SEO_Visibility::get_latest()['rows'],
+					array(),
+					isset( $seo_open['issues'] ) && is_array( $seo_open['issues'] ) ? $seo_open['issues'] : array()
+				)
+				: array( 'mode' => 'unknown', 'opportunities' => array(), 'reason' => 'unavailable' ),
 			'seo_filters'      => $seo_filters,
 			'event_inbox'      => $event_inbox,
 			'event_filters'    => $event_filters,
