@@ -357,6 +357,8 @@ $event_escalated_count = (int) ( $event_summary['escalated'] ?? 0 );
 					$seo_opportunities_reason = isset( $seo_opportunities['reason'] ) ? (string) $seo_opportunities['reason'] : '';
 					if ( 'no_inputs' === $seo_opportunities_reason ) {
 						esc_html_e( 'No search data yet. Connect DataForSEO under Integrations, then refresh visibility.', 'mcpwp' );
+					} elseif ( 'no_rankings_needs_seed' === $seo_opportunities_reason ) {
+						esc_html_e( 'This site does not rank for anything yet. Add a seed keyword to find terms worth targeting.', 'mcpwp' );
 					} elseif ( 'unavailable' === $seo_opportunities_reason ) {
 						esc_html_e( 'Search opportunity analysis is not available in this build.', 'mcpwp' );
 					} else {

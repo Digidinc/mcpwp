@@ -89,4 +89,50 @@ class SeoOpportunitiesTest extends TestCase {
 		$this->assertNotEmpty( $result['opportunities'] );
 		$this->assertIsFloat( $result['opportunities'][0]['score'] );
 	}
+
+	/**
+	 * Regression guard for the "unavailable source == empty result" defect.
+	 *
+	 * A site that connected DataForSEO, fetched, and genuinely ranks for
+	 * nothing must not be told the same thing as a site that never connected.
+	 * Mcpwp_SEO_Visibility::get_latest() distinguishes 'no_rankings' (fetched,
+	 * ranks for nothing) from 'never_fetched' (nobody ever fetched); rank()
+	 * must fan that distinction back out through its own reason.
+	 */
+	public function test_fetched_but_no_rankings_yields_greenfield_needs_seed() {
+		$result = Mcpwp_SEO_Opportunities::rank( array(), array(), array(), 'no_rankings' );
+
+		$this->assertSame( array(), $result['opportunities'] );
+		$this->assertSame( 'greenfield', $result['mode'] );
+		$this->assertSame( 'no_rankings_needs_seed', $result['reason'] );
+	}
+
+	public function test_never_fetched_yields_no_inputs() {
+		$result = Mcpwp_SEO_Opportunities::rank( array(), array(), array(), 'never_fetched' );
+
+		$this->assertSame( 'no_inputs', $result['reason'] );
+	}
+
+	public function test_no_rankings_and_never_fetched_reasons_differ() {
+		$fetched_empty = Mcpwp_SEO_Opportunities::rank( array(), array(), array(), 'no_rankings' );
+		$never_fetched = Mcpwp_SEO_Opportunities::rank( array(), array(), array(), 'never_fetched' );
+
+		// The whole point of this fix: these must never collapse to the same
+		// value again. Assert the inequality directly so a future change that
+		// re-merges them fails loudly, not silently.
+		$this->assertNotSame(
+			$never_fetched['reason'],
+			$fetched_empty['reason'],
+			'An unavailable source and an empty-but-fetched result must never produce the same reason.'
+		);
+	}
+
+	public function test_omitting_visibility_reason_preserves_backward_compatible_no_inputs() {
+		// Existing three-argument call sites must keep behaving exactly as
+		// before: no fourth argument at all, not even null.
+		$result = Mcpwp_SEO_Opportunities::rank( array(), array(), array() );
+
+		$this->assertSame( 'no_inputs', $result['reason'] );
+		$this->assertSame( 'unknown', $result['mode'] );
+	}
 }

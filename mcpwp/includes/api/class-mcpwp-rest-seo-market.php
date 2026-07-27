@@ -152,8 +152,10 @@ class Mcpwp_REST_SEO_Market extends Mcpwp_REST_API {
 			: array();
 
 		// A site that ranks for nothing has no visibility rows to score. Without
-		// a seed there is genuinely nothing to rank, and the ranker says so with
-		// reason 'no_inputs' rather than returning a misleading empty list.
+		// a seed there is genuinely nothing to rank yet, and the ranker says so
+		// with reason 'no_rankings_needs_seed' (site was fetched, ranks for
+		// nothing) or 'no_inputs' (never fetched) — never a misleading empty
+		// list that reads the same for both cases.
 		$metrics = array();
 		$seed    = (string) $request->get_param( 'seed' );
 
@@ -176,7 +178,12 @@ class Mcpwp_REST_SEO_Market extends Mcpwp_REST_API {
 			}
 		}
 
-		$result = Mcpwp_SEO_Opportunities::rank( $visibility['rows'], $metrics, $issues );
+		$result = Mcpwp_SEO_Opportunities::rank(
+			$visibility['rows'],
+			$metrics,
+			$issues,
+			isset( $visibility['reason'] ) ? $visibility['reason'] : null
+		);
 
 		return $this->success_response( $result );
 	}

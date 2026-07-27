@@ -38,19 +38,51 @@ class Mcpwp_SEO_Opportunities {
 	const MAX_OPPORTUNITIES = 20;
 
 	/**
+	 * No visibility snapshot exists yet and no keyword metrics were supplied —
+	 * genuinely unknown, not an answer.
+	 */
+	const REASON_NO_INPUTS = 'no_inputs';
+
+	/**
+	 * A visibility snapshot exists (the site was fetched) but it ranks for
+	 * nothing. A real answer, distinct from REASON_NO_INPUTS — the caller
+	 * should be pointed at seeding a keyword, not at connecting a provider.
+	 */
+	const REASON_NO_RANKINGS_NEEDS_SEED = 'no_rankings_needs_seed';
+
+	/**
+	 * Expected value of the incoming $visibility_reason when
+	 * Mcpwp_SEO_Visibility::get_latest() fetched successfully and the site
+	 * ranks for nothing. Owned by Mcpwp_SEO_Visibility's own reason enum;
+	 * named here so the branch below never compares against a bare literal.
+	 */
+	const INPUT_REASON_NO_RANKINGS = 'no_rankings';
+
+	/**
 	 * Rank the work worth doing.
 	 *
-	 * @param array $visibility_rows Rows from Mcpwp_SEO_Visibility.
-	 * @param array $keyword_metrics Rows from keyword enrichment.
-	 * @param array $audit_issues    Open issues from Mcpwp_SEO_Audit_Store.
+	 * @param array       $visibility_rows   Rows from Mcpwp_SEO_Visibility.
+	 * @param array       $keyword_metrics   Rows from keyword enrichment.
+	 * @param array       $audit_issues      Open issues from Mcpwp_SEO_Audit_Store.
+	 * @param string|null $visibility_reason Reason from Mcpwp_SEO_Visibility::get_latest(),
+	 *                                       e.g. 'never_fetched' or 'no_rankings'. Optional —
+	 *                                       omitting it preserves prior behavior.
 	 * @return array{mode:string,opportunities:array,reason:string|null}
 	 */
-	public static function rank( array $visibility_rows, array $keyword_metrics, array $audit_issues ) {
+	public static function rank( array $visibility_rows, array $keyword_metrics, array $audit_issues, $visibility_reason = null ) {
 		if ( empty( $visibility_rows ) && empty( $keyword_metrics ) ) {
+			if ( self::INPUT_REASON_NO_RANKINGS === $visibility_reason ) {
+				return array(
+					'mode'          => 'greenfield',
+					'opportunities' => array(),
+					'reason'        => self::REASON_NO_RANKINGS_NEEDS_SEED,
+				);
+			}
+
 			return array(
 				'mode'          => 'unknown',
 				'opportunities' => array(),
-				'reason'        => 'no_inputs',
+				'reason'        => self::REASON_NO_INPUTS,
 			);
 		}
 
