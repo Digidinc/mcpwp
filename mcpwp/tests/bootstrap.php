@@ -398,6 +398,9 @@ function set_transient($name, $value, $expiration)
     $GLOBALS['mcpwp_test_transients'][ $name ] = array(
         'value'   => $value,
         'expires' => time() + (int) $expiration,
+        // Requested TTL, kept verbatim. 'expires' cannot be compared reliably
+        // when two writes land in the same second.
+        'ttl'     => (int) $expiration,
     );
     return true;
 }
@@ -1612,3 +1615,10 @@ require_once dirname(__DIR__) . '/includes/core/class-mcpwp-seo-visibility.php';
 // Maturity-aware opportunity ranker — fuses visibility, keyword metrics and
 // audit issues into a ranked list of SEO work worth doing.
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-seo-opportunities.php';
+
+if (!defined('MINUTE_IN_SECONDS')) {
+    define('MINUTE_IN_SECONDS', 60);
+}
+
+// Cache for paid SEO lookups — bounds agent-loop spend on DataForSEO credit.
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-seo-cache.php';
