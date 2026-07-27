@@ -17,6 +17,7 @@
       <file>./unit/test-keyword-enrichment.php</file>
       <file>./unit/test-seo-opportunities.php</file>
       <file>./unit/test-seo-cache.php</file>
+      <file>./unit/test-seo-market-debounce.php</file>
     </testsuite>
   </testsuites>
 </phpunit>

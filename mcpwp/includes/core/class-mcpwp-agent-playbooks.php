@@ -125,7 +125,6 @@ class Mcpwp_Agent_Playbooks {
 				'description'      => __( 'Find and act on the highest-value search opportunities for this site.', 'mcpwp' ),
 				'risk_level'       => 'medium',
 				'mutates'          => true,
-				'goal'             => __( 'Find and act on the highest-value search opportunities for this site.', 'mcpwp' ),
 				'required_tools'   => array( 'wp_get_site_state', 'wp_get_site_context', 'wp_seo_opportunities', 'wp_seo_visibility', 'wp_keyword_research', 'wp_validate_seo_readiness', 'wp_list_approvals' ),
 				'steps'            => array(
 					__( 'Read wp_get_site_state and wp_get_site_context before proposing anything.', 'mcpwp' ),

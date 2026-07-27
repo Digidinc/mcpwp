@@ -327,7 +327,7 @@ trait Mcpwp_Pro_Tools_Seo_Trait {
 
 		$pro_tools[] = $this->define_tool(
 			'wp_refresh_seo_visibility',
-			'Fetch a fresh search visibility snapshot from DataForSEO for this site and store it, replacing the previous snapshot. Spends DataForSEO credit — call explicitly, not in a loop. Requires the DataForSEO integration to be configured; returns an error naming the reason (not configured, credentials rejected, out of credit, or provider unreachable) otherwise.',
+			'Fetch a fresh search visibility snapshot from DataForSEO for this site and store it, replacing the previous snapshot. Spends DataForSEO credit — call explicitly, not in a loop. Requires the DataForSEO integration to be configured; returns an error naming the reason (not configured, credentials rejected, out of credit, or provider unreachable) otherwise. Debounced to one fetch per 5 minutes: a call inside that window does not spend credit and instead returns the existing snapshot with reason "refresh_debounced" and a "retry_after" seconds count — rankings do not move that fast, so nothing is lost by waiting.',
 			array()
 		);
 
