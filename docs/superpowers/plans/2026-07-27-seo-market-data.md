@@ -1909,7 +1909,7 @@ In `mcpwp/includes/class-mcpwp-loader.php`, where the other REST controllers are
 - [ ] **Step 3: Verify the routes exist**
 
 ```bash
-docker exec wp-test-wordpress-1 wp eval 'print_r( array_values( array_filter( array_keys( rest_get_server()->get_routes() ), function( $r ) { return false !== strpos( $r, "seo/visibility" ) || false !== strpos( $r, "seo/opportunities" ); } ) ) );' --allow-root
+docker exec wp-rig-wp-dev wp eval 'print_r( array_values( array_filter( array_keys( rest_get_server()->get_routes() ), function( $r ) { return false !== strpos( $r, "seo/visibility" ) || false !== strpos( $r, "seo/opportunities" ); } ) ) );' --allow-root
 ```
 
 Expected: the three routes listed.
@@ -1967,7 +1967,7 @@ In `mcpwp/includes/core/class-mcpwp-agent-playbooks.php`, inside `definitions()`
 - [ ] **Step 7: Verify the routes and tools exist**
 
 ```bash
-docker exec wp-test-wordpress-1 wp eval 'print_r( array_values( array_filter( array_keys( rest_get_server()->get_routes() ), function( $r ) { return false !== strpos( $r, "seo/visibility" ) || false !== strpos( $r, "seo/opportunities" ); } ) ) );' --allow-root
+docker exec wp-rig-wp-dev wp eval 'print_r( array_values( array_filter( array_keys( rest_get_server()->get_routes() ), function( $r ) { return false !== strpos( $r, "seo/visibility" ) || false !== strpos( $r, "seo/opportunities" ); } ) ) );' --allow-root
 ```
 
 Expected: the three routes listed.
@@ -2077,8 +2077,8 @@ Load `http://localhost:8080/wp-admin/admin.php?page=mcpwp-control-room` and conf
 - [ ] **Step 4: Check for PHP notices**
 
 ```bash
-docker exec wp-test-wordpress-1 wp eval 'echo "ok\n";' --allow-root
-docker logs wp-test-wordpress-1 --tail 30 2>&1 | grep -iE "notice|warning|fatal" || echo "no PHP notices"
+docker exec wp-rig-wp-dev wp eval 'echo "ok\n";' --allow-root
+docker logs wp-rig-wp-dev --tail 30 2>&1 | grep -iE "notice|warning|fatal" || echo "no PHP notices"
 ```
 
 Expected: `no PHP notices`.
@@ -2104,7 +2104,7 @@ git commit -m "feat(seo): render search opportunities in Control Room"
 - [ ] **Step 1: Configure credentials on the local site**
 
 ```bash
-docker exec wp-test-wordpress-1 wp eval '
+docker exec wp-rig-wp-dev wp eval '
 $m = Mcpwp_Integration_Manager::get_instance();
 $m->set_provider_config( "dataforseo", array( "login" => getenv("DFS_LOGIN"), "password" => getenv("DFS_PASS") ) );
 print_r( $m->test_provider( "dataforseo" ) );
@@ -2116,7 +2116,7 @@ Expected: `success => 1` and a message naming the remaining credit.
 - [ ] **Step 2: Confirm an unconfigured site degrades rather than breaking**
 
 ```bash
-docker exec wp-test-wordpress-1 wp eval '
+docker exec wp-rig-wp-dev wp eval '
 Mcpwp_Integration_Manager::get_instance()->remove_provider_key( "dataforseo" );
 $r = Mcpwp_Keyword_Research::enrich( Mcpwp_Keyword_Research::group( "test", array( "test one" ) ), null );
 echo $r["enrichment_reason"] . "\n";
@@ -2130,7 +2130,7 @@ Expected: `not_configured` — and no fatal.
 Re-add credentials, then:
 
 ```bash
-docker exec wp-test-wordpress-1 wp eval '
+docker exec wp-rig-wp-dev wp eval '
 $c = Mcpwp_Integration_Manager::get_instance()->get_provider_config( "dataforseo" );
 $p = new Mcpwp_Provider_Dataforseo( $c["login"], $c["password"] );
 $rows = $p->ranked_keywords( "mcpwp.net" );
