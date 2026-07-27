@@ -1565,24 +1565,34 @@ Add to `mcpwp/tests/phpunit.xml`:
       <file>./unit/test-seo-cache.php</file>
 ```
 
-Append to `mcpwp/tests/bootstrap.php` (the transient stub must record the TTL so the test can assert on it):
+**Modify the existing `set_transient` stub** at `mcpwp/tests/bootstrap.php:396`. It currently records only `value` and `expires` (an absolute timestamp), so a test cannot read back the TTL that was requested. Add one key — this is additive and no existing test reads `ttl`:
+
+```php
+function set_transient($name, $value, $expiration)
+{
+    $GLOBALS['mcpwp_test_transients'][ $name ] = array(
+        'value'   => $value,
+        'expires' => time() + (int) $expiration,
+        // Requested TTL, kept verbatim. 'expires' cannot be compared reliably
+        // when two writes land in the same second.
+        'ttl'     => (int) $expiration,
+    );
+    return true;
+}
+```
+
+> **Do NOT add a second `function set_transient`.** PHP binds function declarations at first load, so a competing definition is a fatal — edit the existing one in place.
+
+Then append to `mcpwp/tests/bootstrap.php`:
 
 ```php
 if (!defined('MINUTE_IN_SECONDS')) { define('MINUTE_IN_SECONDS', 60); }
 if (!defined('DAY_IN_SECONDS')) { define('DAY_IN_SECONDS', 86400); }
 
-if (!function_exists('mcpwp_test_set_transient_with_ttl')) {
-    function mcpwp_test_set_transient_with_ttl($key, $value, $ttl)
-    {
-        $GLOBALS['mcpwp_test_transients'][$key] = array('value' => $value, 'ttl' => $ttl);
-        return true;
-    }
-}
-
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-seo-cache.php';
 ```
 
-> **Note for the implementer:** `bootstrap.php` already defines `set_transient`/`get_transient` stubs for the update-channel tests. Do **not** redefine them. Instead make the new stub above the one `Mcpwp_SEO_Cache` calls, by having the class call `set_transient()` and extending the existing stub to also record `ttl` into `$GLOBALS['mcpwp_test_transients']`. Read the existing stub first and extend it in place rather than adding a competing definition — PHP binds function declarations at first load, so a second `function set_transient` would fatal.
+> **Check first:** if `MINUTE_IN_SECONDS`/`DAY_IN_SECONDS` are already defined earlier in `bootstrap.php`, skip those two lines rather than duplicating them.
 
 - [ ] **Step 2: Run it and confirm it fails**
 
