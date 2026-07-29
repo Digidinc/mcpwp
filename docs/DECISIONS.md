@@ -44,3 +44,30 @@ Flow: mupot capability check → authorizes → mumcp tool executes → receipt.
 3. **Move only the PUBLIC brand → mumcp** (readme H1, Plugin Name header, display strings, Freemius slug, marketing). **FREEZE the internal wire contract** — `Mcpwp_` classes, `mcpwp/v1` REST namespace, `mcpwp_` prefix, DB tables stay. wp.org polices only slug/text-domain/readme, not these; re-churning a live client contract for zero brand gain violates durability-over-churn.
 
 **Consequences.** ~95% of brand consolidation for ~5% of churn. Repo rename `Mumega-com/mcpwp` → `mumcp` pending; dedicated repo for mcpwp.net media pending. Superseding note to be appended to `REBRAND-PLAN.md`. Full scope + out-of-scope: `Mumega-com/mcpwp#688`.
+
+---
+
+## ADR-004 — One MCPWP publication entrypoint in the theme repository
+**Date:** 2026-07-29 · **Status:** accepted · **Supersedes:** ADR-001's
+undecided “content/ops own repo pending” destination
+
+**Context.** The MCPWP publication already has its reusable theme, homepage
+designs, strict editorial contract, formats, roles, rules, and generated agent
+context in `Mumega-com/mumega-motion-theme`. Public content and revisions live
+in WordPress; task state and approvals belong in Mupot. Creating another
+documentation repository would add a fourth copy of the same strategy and
+recreate the drift ADR-003 prohibited.
+
+**Decision.** `Mumega-com/mumega-motion-theme/TRUTH.md` is the single entrypoint
+for the MCPWP publication. Its canonical content operating system owns the
+market loop, content graph, partnerships, conversion paths, cadence, and
+measurement design. The theme repository continues to own the reusable
+editorial contract and presentation implementation. WordPress remains the
+public-content source of truth; Mupot remains the work and approval
+source-of-truth. This MumCP product repository links to that entrypoint and does
+not mirror the publication strategy.
+
+**Consequences.** Agents can enter the publication from one graph without
+confusing MCPWP media work with MumCP product/release work. A future repository
+split may move the entrypoint only through a new ADR and link-preserving
+migration; it must not create a second active copy.

@@ -1,7 +1,8 @@
 # Project topology
 
 > Canonical map of what is what. Referenced by [`/TRUTH.md`](../TRUTH.md).
-> **Last updated:** 2026-07-22 · decision recorded in [`DECISIONS.md`](DECISIONS.md) ADR-001.
+> **Last updated:** 2026-07-29 · decisions recorded in
+> [`DECISIONS.md`](DECISIONS.md) ADR-001 and ADR-004.
 
 ## The two projects
 
@@ -11,7 +12,7 @@ There are **two separate projects** that accidentally shared the name "MCPWP." T
 |---|---|---|
 | **What it is** | the MCP **product / company** — "MCP for platforms" (WordPress is the first platform; others can follow) | the **media publication** — the intersection of MCP, WordPress, and AI |
 | **Domain** | mumcp.com — product, docs, sell, OAuth broker | mcpwp.net — editorial (V2 / ASTER) |
-| **Primary repos** | `Mumega-com/mcpwp` (the product plugin — rename → `mumcp` pending), `Mumega-com/mumcp-broker`, future `mumcp-<platform>` | `Mumega-com/mumega-motion-theme` (theme) + mcpwp.net content/ops (own repo) |
+| **Primary repos** | `Mumega-com/mcpwp` (the product plugin — rename → `mumcp` pending), `Mumega-com/mumcp-broker`, future `mumcp-<platform>` | `Mumega-com/mumega-motion-theme` owns the publication entrypoint, strategy, editorial contract, and theme; WordPress owns public content; Mupot owns operational work |
 | **GitHub** | its own repos | its own repos — **not shared with mumcp** |
 | **pot project** | existing project (slug `mumcp`) — rescope to the product line | **new** media project (pending; needs admin capability) |
 
@@ -40,3 +41,8 @@ This proves both theses at once: **MCP gives WordPress new power** (the site run
 - **mupot** — the AI operations layer / governed runtime (`/home/mumega/mupot`, deployed `mupot.mumega.com`). The governance spine for all of the above. Canonical for ops/tasks/identity.
 - **Hermes** — IM (Telegram) relay connector into mupot; the "mouth & ears."
 - **mumega-motion** — the reusable editorial WordPress theme powering mcpwp.net (generic; site-specific content lives in WP, not the theme).
+
+Publication documentation starts at
+[`Mumega-com/mumega-motion-theme/TRUTH.md`](https://github.com/Mumega-com/mumega-motion-theme/blob/master/TRUTH.md).
+It links the durable strategy and editorial contract while preserving WordPress
+as the public-content source and Mupot as the task-of-record.
