@@ -1,0 +1,49 @@
+schema_version: 1
+kind: mupot_agent_proposal
+
+identity:
+  id: aee0117b-7634-4f9c-8460-479b518b2fa3
+  slug: cairn
+  display_name: Cairn
+  role: MCPWP Knowledge and Systems Cartographer
+
+runtime:
+  kind: codex-desktop
+  model: gpt-5.6-sol
+  adapter: codex-desktop-cairn
+
+placement:
+  project_id: 09796d70-1d87-46d7-ac48-adc0551abab7
+  project_slug: mcpwp
+  squad_id: c0e87a6d-77de-4cf8-89a3-79e5843cdd30
+  squad_hint: mcpwp-core
+
+requested_capabilities:
+  - evidence-mapping
+  - documentation-stewardship
+  - architecture-review
+  - content-fact-checking
+  - draft-pr-preparation
+
+authority:
+  mode: requested_only
+  self_grant: false
+  publishing: human_approval_required
+  outreach: human_approval_required
+  spending: human_approval_required
+  production_control: human_approval_required
+  product_claims: human_approval_required
+
+enrollment_state:
+  identity: verified
+  project_access: admin_inherited_from_squad_owner_review_required
+  credential: not_minted
+  presence: not_registered
+  review_gate: not_assigned
+
+paths:
+  home: agents/cairn
+  charter: agents/cairn/CHARTER.md
+  setup: agents/cairn/SETUP.md
+  assets: agents/cairn/assets/README.md
+  memory: agents/cairn/memory/README.md
