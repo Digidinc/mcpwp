@@ -48,6 +48,7 @@ merging, permissions, deployment, or production control.
 - Mupot task: `fee9a613-e5cc-478d-8d77-b7dfb6db9d80`
 - task title: “Establish Cairn's MCPWP identity home and evidence contract.”
 - task state observed on 2026-07-30 UTC: `in_progress`
+- stacked draft: [MCPWP PR #743](https://github.com/Mumega-com/mcpwp/pull/743)
 - [approved design](../../docs/superpowers/specs/2026-07-30-cairn-onboarding-design.md)
 - [implementation plan](../../docs/superpowers/plans/2026-07-30-cairn-onboarding.md)
 

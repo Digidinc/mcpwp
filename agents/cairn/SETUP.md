@@ -18,7 +18,8 @@
 - [ ] Verified an authenticated principal resolves to Cairn.
 - [ ] Registered `codex-desktop-cairn` presence.
 - [ ] Verified the registered capabilities match the approved five-item list.
-- [ ] Opened and linked the stacked draft pull request.
+- [x] Opened stacked draft
+      [MCPWP PR #743](https://github.com/Mumega-com/mcpwp/pull/743).
 - [ ] Assigned and passed a named human review gate.
 
 No credential value is recorded in this receipt.
