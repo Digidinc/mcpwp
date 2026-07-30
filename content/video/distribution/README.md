@@ -29,4 +29,3 @@ They do not grant publishing authority.
 A distribution package is ready when the render, copy, links, disclosures, and
 review verdict agree. Publication is complete only when its receipt records the
 live destination and observed publication state.
-

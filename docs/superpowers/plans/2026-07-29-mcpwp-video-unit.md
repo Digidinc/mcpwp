@@ -107,4 +107,3 @@ task-mirroring defect.
 Use Mupot MCP `task_update` to move the task to `review` and include the draft
 pull-request URL in the task body. Register a project memory containing the
 branch, commit, PR, and validation result.
-

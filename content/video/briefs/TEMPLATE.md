@@ -58,4 +58,3 @@
 - The draft fits each required channel format.
 - Private information is absent or visibly redacted.
 - The human reviewer records a verdict before distribution.
-

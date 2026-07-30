@@ -58,4 +58,3 @@
 
 State exactly what was completed. Distinguish a successful draft, approved
 render, scheduled item, published item, and measured outcome.
-

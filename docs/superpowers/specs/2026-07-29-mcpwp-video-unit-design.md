@@ -89,4 +89,3 @@ The initial change is documentation-only. Validation requires:
 - no credentials or binary media are added;
 - only the intended `content/video/` and design/plan files are staged;
 - a draft pull request is opened for human review.
-

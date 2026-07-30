@@ -30,4 +30,3 @@ and restrained bronze details are identity invariants. New renders must be
 reviewed against the canonical character sheet before promotion to Approved.
 Binary character files should enter through a dedicated asset pull request so
 their provenance and repository impact can be reviewed separately.
-

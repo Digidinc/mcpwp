@@ -50,4 +50,3 @@ claims.
 - A successful render is not publication proof.
 - Name working files `YYYY-MM-DD-topic-purpose.md` so Mupot tasks and Git
   history can identify them consistently.
-

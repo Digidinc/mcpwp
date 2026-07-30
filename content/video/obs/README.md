@@ -30,4 +30,3 @@ Each recording brief should define:
 Lumen may inspect and propose OBS scenes. Lumen controls OBS only when the user
 explicitly requests that action and remains responsible for the recording
 session. Starting a recording is never inferred from approval of a script.
-

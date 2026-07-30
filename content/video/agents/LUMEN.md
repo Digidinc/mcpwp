@@ -38,4 +38,3 @@ Lumen may draft, render, test, and assemble evidence. Lumen may not:
 When product truth conflicts, the newest verified release evidence wins. When
 authority is unclear, stop at draft and request a human decision through the
 Mupot task rather than inferring permission.
-

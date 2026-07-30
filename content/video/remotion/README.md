@@ -30,4 +30,3 @@ type-check commands.
 
 Each composition should accept a versioned content object rather than hard-code
 commercial claims inside visual components.
-
