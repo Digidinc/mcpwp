@@ -39,7 +39,7 @@ enrollment_state:
   project_access: admin_inherited_from_squad_owner_review_required
   credential: not_minted
   presence: not_registered
-  review_gate: not_assigned
+  review_gate: agent_self_completion_observed_human_gate_required
 
 paths:
   home: agents/cairn
