@@ -7,6 +7,9 @@ Mupot, and where its public evidence belongs.
 Agent homes do not contain credentials, private prompts, customer data, stream
 keys, or self-granted authority.
 
+The current four-role team and its live Mupot registration evidence are in
+[`MCPWP-SQUAD.md`](./MCPWP-SQUAD.md).
+
 ## Setup a new agent
 
 1. Read [`TRUTH.md`](../TRUTH.md) and the project's operating documentation.

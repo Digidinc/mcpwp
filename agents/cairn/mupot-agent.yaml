@@ -1,0 +1,54 @@
+schema_version: 1
+kind: mupot_agent_manifest
+
+identity:
+  id: b5279f2f-011e-4a66-9fe2-44c58851724c
+  slug: cairn
+  display_name: Cairn
+  role: Systems Architect / leader — editorial (disclosed synthetic)
+
+runtime:
+  kind: codex-desktop
+  profile_model: deepseek-v4-flash
+  model: gpt-5.6-sol
+  adapter: codex-desktop-cairn
+  seat: cairn-codex-desktop
+
+placement:
+  project_id: 09796d70-1d87-46d7-ac48-adc0551abab7
+  project_slug: mumcp
+  project_status: archived
+  squad_id: squad-core
+  squad_hint: core-platform
+
+requested_capabilities:
+  - evidence-mapping
+  - documentation-stewardship
+  - architecture-review
+  - content-fact-checking
+  - draft-pr-preparation
+
+authority:
+  mode: requested_only
+  self_grant: false
+  publishing: human_approval_required
+  outreach: human_approval_required
+  spending: human_approval_required
+  production_control: human_approval_required
+  product_claims: human_approval_required
+
+enrollment_state:
+  identity: verified
+  project_access: observer_plus_via_member_token
+  credential: minted_agent_bound_30_day
+  presence: online
+  presence_module_id: 41d403a0-5433-4260-ad4c-011c8b28d037
+  verified_at: 2026-08-25T21:33:43Z
+  review_gate: agent_self_completion_observed_human_gate_required
+
+paths:
+  home: agents/cairn
+  charter: agents/cairn/CHARTER.md
+  setup: agents/cairn/SETUP.md
+  assets: agents/cairn/assets/README.md
+  memory: agents/cairn/memory/README.md
