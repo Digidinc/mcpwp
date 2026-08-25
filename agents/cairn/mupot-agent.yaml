@@ -1,22 +1,25 @@
 schema_version: 1
-kind: mupot_agent_proposal
+kind: mupot_agent_manifest
 
 identity:
-  id: aee0117b-7634-4f9c-8460-479b518b2fa3
+  id: b5279f2f-011e-4a66-9fe2-44c58851724c
   slug: cairn
   display_name: Cairn
-  role: MCPWP Knowledge and Systems Cartographer
+  role: Systems Architect / leader — editorial (disclosed synthetic)
 
 runtime:
   kind: codex-desktop
+  profile_model: deepseek-v4-flash
   model: gpt-5.6-sol
   adapter: codex-desktop-cairn
+  seat: cairn-codex-desktop
 
 placement:
   project_id: 09796d70-1d87-46d7-ac48-adc0551abab7
-  project_slug: mcpwp
-  squad_id: c0e87a6d-77de-4cf8-89a3-79e5843cdd30
-  squad_hint: mcpwp-core
+  project_slug: mumcp
+  project_status: archived
+  squad_id: squad-core
+  squad_hint: core-platform
 
 requested_capabilities:
   - evidence-mapping
@@ -36,9 +39,11 @@ authority:
 
 enrollment_state:
   identity: verified
-  project_access: admin_inherited_from_squad_owner_review_required
-  credential: not_minted
-  presence: not_registered
+  project_access: observer_plus_via_member_token
+  credential: minted_agent_bound_30_day
+  presence: online
+  presence_module_id: 41d403a0-5433-4260-ad4c-011c8b28d037
+  verified_at: 2026-08-25T21:33:43Z
   review_gate: agent_self_completion_observed_human_gate_required
 
 paths:

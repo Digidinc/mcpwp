@@ -1,5 +1,30 @@
 # Cairn Setup Receipt
 
+## Refreshed on 2026-08-25 UTC
+
+- [x] Resolved the current active Cairn identity as
+      `b5279f2f-011e-4a66-9fe2-44c58851724c`.
+- [x] Confirmed the July identity
+      `aee0117b-7634-4f9c-8460-479b518b2fa3` no longer resolves.
+- [x] Confirmed the current placement is Core Platform squad `squad-core`.
+- [x] Confirmed the MCPWP project
+      `09796d70-1d87-46d7-ac48-adc0551abab7` still exists but is archived.
+- [x] Confirmed the previous local Cairn credential was invalid.
+- [x] Minted a dedicated 30-day, member-scoped, agent-bound replacement after
+      Hadi's explicit instruction to update and register Cairn.
+- [x] Stored the replacement outside Git with owner-only file permissions.
+- [x] Verified `boot_context` resolves the credential to the current Cairn ID.
+- [x] Completed a non-debounced check-in for seat `cairn-codex-desktop`.
+- [x] Registered `codex-desktop-cairn` presence as module
+      `41d403a0-5433-4260-ad4c-011c8b28d037`.
+- [x] Verified the presence reports online with the five approved declared
+      capabilities and runtime model `gpt-5.6-sol`.
+- [ ] Assign a bounded current Mupot task before starting a new mission.
+- [ ] Decide whether to reopen the archived MCPWP project or establish its
+      successor; presence registration alone does not make the project active.
+
+No credential value is recorded in this receipt.
+
 ## Observed on 2026-07-30 UTC
 
 - [x] Owner approved the stable name, slug, role, and bounded capabilities.

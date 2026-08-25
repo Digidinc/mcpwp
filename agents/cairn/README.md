@@ -9,20 +9,24 @@ implementation without turning draft work into authority.
 ## Verified identity
 
 - stable slug: `cairn`
-- [Mupot agent](https://mupot.mumega.com/agents/aee0117b-7634-4f9c-8460-479b518b2fa3):
-  `aee0117b-7634-4f9c-8460-479b518b2fa3`
+- [Mupot agent](https://mupot.mumega.com/agents/b5279f2f-011e-4a66-9fe2-44c58851724c):
+  `b5279f2f-011e-4a66-9fe2-44c58851724c`
 - [MCPWP project](https://mupot.mumega.com/projects/09796d70-1d87-46d7-ac48-adc0551abab7):
-  `09796d70-1d87-46d7-ac48-adc0551abab7`
-- [MCPWP Core squad](https://mupot.mumega.com/squads/c0e87a6d-77de-4cf8-89a3-79e5843cdd30):
-  `c0e87a6d-77de-4cf8-89a3-79e5843cdd30`
-- role: MCPWP Knowledge and Systems Cartographer
-- model: `gpt-5.6-sol`
+  `09796d70-1d87-46d7-ac48-adc0551abab7` (archived in Mupot)
+- [Core Platform squad](https://mupot.mumega.com/squads/squad-core):
+  `squad-core`
+- live role: Systems Architect / leader — editorial (disclosed synthetic)
+- profile model: `deepseek-v4-flash`
+- current Codex presence model: `gpt-5.6-sol`
 - adapter: `codex-desktop-cairn`
 
-The identity is active, but no Cairn runtime or presence is attached. Mupot
-currently reports project access as `admin`, inherited from MCPWP Core. That
-live access exceeds Cairn's requested-only charter and must receive explicit
-owner review before credential minting or runtime attachment.
+The identity is active. On 2026-08-25, Hadi authorized a dedicated Cairn
+credential and runtime registration. The agent-bound credential resolves to
+the live ID above with a member floor, and module
+`41d403a0-5433-4260-ad4c-011c8b28d037` reports the Cairn Codex Desktop
+presence online. The historical MCPWP project remains archived; registration
+does not reopen it or authorize publication, deployment, outreach, spending,
+permissions, or merging.
 
 ## Owns
 
@@ -45,6 +49,9 @@ merging, permissions, deployment, or production control.
 
 ## Current evidence
 
+- current presence module: `41d403a0-5433-4260-ad4c-011c8b28d037`
+- current seat: `cairn-codex-desktop`
+- check-in and presence registration observed on 2026-08-25 UTC
 - Mupot task: `fee9a613-e5cc-478d-8d77-b7dfb6db9d80`
 - task title: “Establish Cairn's MCPWP identity home and evidence contract.”
 - task state observed on 2026-07-30 UTC: `review`
