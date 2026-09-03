@@ -41,16 +41,35 @@ class Mcpwp_REST_Batch extends Mcpwp_REST_API {
 	 * being shared. Version-agnostic and case-insensitive, because WordPress
 	 * matches REST routes case-insensitively.
 	 *
+	 * The route may end at a slash, a query string, a fragment, or the end of
+	 * the string. Matching only "/" or end-of-string would let "/batch?x=1"
+	 * slip past this check; WordPress' anchored route matcher happens to
+	 * reject that form today, but this constant must not depend on a
+	 * downstream accident for its own correctness.
+	 *
+	 * Delimited with "~" rather than the house "#" precisely because "#" is
+	 * one of the terminators: a "#" inside the pattern ends it even within a
+	 * character class, and the resulting compile failure makes preg_match()
+	 * return false, which would fail open.
+	 *
 	 * @var string
 	 */
-	const DENIED_OPERATION_ROUTE_PATTERN = '#^/mcpwp/v[0-9]+/(?:batch|mcp)(?:/|$)#i';
+	const DENIED_OPERATION_ROUTE_PATTERN = '~^/mcpwp/v[0-9]+/(?:batch|mcp)(?:[/?#]|$)~i';
 
 	/**
 	 * PHP-internal flag set while a batch sub-request is being dispatched.
 	 *
 	 * The auth/rate-limit layer reads this property instead of checking an
-	 * HTTP header, which any external caller could forge.  It is reset to
-	 * false immediately after each sub-request returns.
+	 * HTTP header, which any external caller could forge.
+	 *
+	 * Each dispatch saves the flag's current value, sets it true, and restores
+	 * that saved value in a finally block — it is NOT reset to false. The MCP
+	 * tool dispatcher sets this same flag around every tools/call, and one of
+	 * its tools maps to this endpoint, so a dispatch here can legitimately
+	 * begin with the flag already true; writing false unconditionally would
+	 * clear an outer caller's state while it is still live. Restoring rather
+	 * than resetting also means a throwing sub-request cannot leave rate
+	 * limiting switched off for the remainder of the PHP process.
 	 *
 	 * @var bool
 	 */

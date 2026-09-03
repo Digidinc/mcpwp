@@ -56,6 +56,14 @@ final class BatchOperationPathTest extends TestCase {
 			'mcp upper'            => array( '/MCP' ),
 			'mcp trailing slash'   => array( '/mcp/' ),
 			'mcp no slash'         => array( 'mcp' ),
+			// A query string or fragment terminates the route just as a slash
+			// does. WordPress' anchored matcher rejects these forms today, but
+			// the denial must not lean on that downstream accident.
+			'batch query'          => array( '/batch?x=1' ),
+			'batch query upper'    => array( '/Batch?x=1' ),
+			'batch fragment'       => array( '/batch#f' ),
+			'mcp query'            => array( '/mcp?a=b' ),
+			'mcp fragment'         => array( '/mcp#frag' ),
 		);
 	}
 
@@ -86,6 +94,9 @@ final class BatchOperationPathTest extends TestCase {
 			'seo audit'  => array( '/seo/audit' ),
 			'batchelor'  => array( '/batchelor' ),
 			'mcp server' => array( '/mcp-server' ),
+			// Hyphenated siblings must survive the terminator, which is why it
+			// is an explicit set and not a word boundary.
+			'batch status' => array( '/batch-status' ),
 		);
 	}
 
@@ -183,5 +194,33 @@ final class BatchOperationPathTest extends TestCase {
 		$this->assertSame( 1, preg_match( $pattern, '/mcpwp/v2/batch' ) );
 		$this->assertSame( 1, preg_match( $pattern, '/mcpwp/v10/mcp' ) );
 		$this->assertSame( 0, preg_match( $pattern, '/mcpwp/v1/posts' ) );
+	}
+
+	/**
+	 * A pattern that fails to compile makes preg_match() return false, and a
+	 * falsy result here means the operation is dispatched — this guard fails
+	 * open, so its compilation is itself worth asserting. The delimiter must
+	 * not be one of the characters the pattern matches.
+	 */
+	public function test_denial_pattern_compiles(): void {
+		$this->assertSame(
+			1,
+			@preg_match( Mcpwp_REST_Batch::DENIED_OPERATION_ROUTE_PATTERN, '/mcpwp/v1/batch' ),
+			'The denial pattern must compile; a compile failure would fail open.'
+		);
+		$this->assertSame( PREG_NO_ERROR, preg_last_error() );
+	}
+
+	/**
+	 * The terminator is an explicit character set rather than a word boundary,
+	 * so hyphenated and longer sibling routes must still be reachable even
+	 * when they carry a query string.
+	 */
+	public function test_near_miss_routes_are_not_denied(): void {
+		$pattern = Mcpwp_REST_Batch::DENIED_OPERATION_ROUTE_PATTERN;
+
+		foreach ( array( '/mcpwp/v1/batch-status', '/mcpwp/v1/mcp-server', '/mcpwp/v1/batchelor', '/mcpwp/v1/posts?x=1' ) as $route ) {
+			$this->assertSame( 0, preg_match( $pattern, $route ), $route . ' must not be denied.' );
+		}
 	}
 }
