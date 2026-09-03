@@ -33,7 +33,8 @@ The `mcpwp_at_` bearer tokens issued carry only the granted scopes.
 - **redirect_uri exact-match allow-list** — no open redirect.
 - **Refresh tokens** rotate on use and are user-bound.
 - **Metadata origin** comes from `get_site_url()` (not a spoofable `Host` header); `X-Forwarded-Proto` honored only behind `MCPWP_TRUST_PROXY_HEADERS`.
-- **Client-IP resolution** for rate limiting and the auth-failure throttle uses `REMOTE_ADDR` by default; proxy headers (`CF-Connecting-IP`, `X-Forwarded-For`, `X-Real-IP`) are trusted only behind the same `MCPWP_TRUST_PROXY_HEADERS` opt-in, so a caller can't spoof them to evade the throttle or forge a whitelisted IP. Set the constant only when the site sits behind a trusted proxy that overwrites these headers.
+- **Client-IP resolution** for rate limiting, the auth-failure throttle and the public feedback relay uses `REMOTE_ADDR` by default; proxy headers (`CF-Connecting-IP`, `X-Forwarded-For`, `X-Real-IP`) are trusted only behind the same `MCPWP_TRUST_PROXY_HEADERS` opt-in, so a caller can't spoof them to evade the throttle or forge a whitelisted IP. A resolved value must parse as an IP address; anything else is discarded rather than used as a throttle key. Set the constant only when the site sits behind a trusted proxy that overwrites these headers.
+- **Public feedback relay** (`POST /feedback/relay`) carries a second, site-wide ceiling on top of its per-IP limit, because a per-IP throttle bounds one source but not a flood spread across many genuine addresses.
 
 ## Which auth to use
 

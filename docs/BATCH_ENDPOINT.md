@@ -39,6 +39,7 @@ Uses the same `X-API-Key` header as other endpoints. The API key is forwarded to
 - Operations execute sequentially (not in parallel)
 - Each operation inherits authentication from the batch request
 - If one operation fails, remaining operations still execute
+- An operation may **not** target `/batch` or `/mcp`. Those endpoints dispatch internally, and allowing one inside the other would let a single counted request fan out into an unbounded tree of uncounted ones. Such an operation returns `forbidden_path` with status `400`; the rest of the batch still runs.
 
 ## Response Format
 

@@ -1,0 +1,187 @@
+<?php
+/**
+ * Regression coverage for batch operation-path denial.
+ *
+ * /batch and /mcp both mark their internal dispatches so the auth layer skips
+ * rate counting. An operation targeting either of them turns one counted
+ * request into a tree of uncounted ones, with the per-call operation ceiling
+ * re-applying fresh at every level. Operations must therefore be refused when
+ * their resolved route lands on those endpoints — and refused individually,
+ * without aborting the rest of the batch.
+ *
+ * The static sub-request flag is shared with the MCP tool dispatcher, which
+ * sets it around every tools/call — including the built-in tool that maps to
+ * /batch. Guarding on that flag would break every legitimate batch invoked
+ * over MCP, so the guard is path-based and the flag is saved and restored
+ * rather than reset. Both properties are pinned below.
+ *
+ * @package MCPWP
+ */
+
+use PHPUnit\Framework\TestCase;
+
+require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-batch.php';
+
+final class BatchOperationPathTest extends TestCase {
+
+	private Mcpwp_REST_Batch $controller;
+
+	protected function setUp(): void {
+		$GLOBALS['mcpwp_test_options']          = array();
+		$GLOBALS['mcpwp_test_transients']       = array();
+		Mcpwp_REST_Batch::$is_batch_sub_request = false;
+		$this->controller                       = new Mcpwp_REST_Batch();
+	}
+
+	protected function tearDown(): void {
+		Mcpwp_REST_Batch::$is_batch_sub_request = false;
+	}
+
+	private function run_operation( array $operation, int $index = 0 ): array {
+		$reflection = new ReflectionMethod( Mcpwp_REST_Batch::class, 'execute_operation' );
+		$reflection->setAccessible( true );
+		return $reflection->invokeArgs( $this->controller, array( $operation, $index, 'test-key' ) );
+	}
+
+	public function denied_path_provider(): array {
+		return array(
+			'batch'                => array( '/batch' ),
+			'batch upper'          => array( '/Batch' ),
+			'batch mixed'          => array( '/bAtCh' ),
+			'batch no slash'       => array( 'batch' ),
+			'batch double slash'   => array( '//batch' ),
+			'batch trailing slash' => array( '/batch/' ),
+			'batch child'          => array( '/batch/anything' ),
+			'mcp'                  => array( '/mcp' ),
+			'mcp upper'            => array( '/MCP' ),
+			'mcp trailing slash'   => array( '/mcp/' ),
+			'mcp no slash'         => array( 'mcp' ),
+		);
+	}
+
+	/**
+	 * @dataProvider denied_path_provider
+	 */
+	public function test_denied_operation_paths_are_rejected_without_dispatch( string $path ): void {
+		$result = $this->run_operation(
+			array(
+				'method' => 'POST',
+				'path'   => $path,
+			)
+		);
+
+		$this->assertSame( 400, $result['status'] );
+		$this->assertSame( 'forbidden_path', $result['data']['code'] );
+		$this->assertFalse(
+			Mcpwp_REST_Batch::$is_batch_sub_request,
+			'A rejected operation must never mark a sub-request as in flight.'
+		);
+	}
+
+	public function allowed_path_provider(): array {
+		return array(
+			'posts'      => array( '/posts' ),
+			'page by id' => array( '/pages/12' ),
+			'site info'  => array( '/site-info' ),
+			'seo audit'  => array( '/seo/audit' ),
+			'batchelor'  => array( '/batchelor' ),
+			'mcp server' => array( '/mcp-server' ),
+		);
+	}
+
+	/**
+	 * @dataProvider allowed_path_provider
+	 */
+	public function test_legitimate_operation_paths_still_dispatch( string $path ): void {
+		$result = $this->run_operation(
+			array(
+				'method' => 'GET',
+				'path'   => $path,
+			)
+		);
+
+		$this->assertSame( 200, $result['status'] );
+		$this->assertArrayNotHasKey( 'code', (array) $result['data'] );
+	}
+
+	public function test_sub_request_flag_is_restored_to_its_previous_value(): void {
+		// Simulates the MCP tool dispatcher, which sets this flag around every
+		// tools/call — including the built-in tool that maps to /batch.
+		Mcpwp_REST_Batch::$is_batch_sub_request = true;
+
+		$this->run_operation(
+			array(
+				'method' => 'GET',
+				'path'   => '/site-info',
+			)
+		);
+
+		$this->assertTrue(
+			Mcpwp_REST_Batch::$is_batch_sub_request,
+			'Dispatching an operation must not clear an outer caller\'s sub-request flag.'
+		);
+	}
+
+	public function test_batch_still_runs_when_the_sub_request_flag_is_already_set(): void {
+		// The built-in wp_batch_update tool reaches this controller with the
+		// flag already true. Rejecting on that flag would break every such call.
+		Mcpwp_REST_Batch::$is_batch_sub_request = true;
+
+		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/batch' );
+		$request->set_param(
+			'operations',
+			array(
+				array(
+					'method' => 'GET',
+					'path'   => '/site-info',
+				),
+				array(
+					'method' => 'GET',
+					'path'   => '/posts',
+				),
+			)
+		);
+
+		$response = $this->controller->handle_batch( $request );
+
+		$this->assertInstanceOf( WP_REST_Response::class, $response );
+		$data = $response->get_data();
+		$this->assertSame( 2, $data['total'] );
+		$this->assertSame( 200, $data['results'][0]['status'] );
+		$this->assertSame( 200, $data['results'][1]['status'] );
+		$this->assertTrue( Mcpwp_REST_Batch::$is_batch_sub_request );
+	}
+
+	public function test_a_denied_operation_does_not_abort_the_batch(): void {
+		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/batch' );
+		$request->set_param(
+			'operations',
+			array(
+				array(
+					'method' => 'POST',
+					'path'   => '/batch',
+				),
+				array(
+					'method' => 'GET',
+					'path'   => '/site-info',
+				),
+			)
+		);
+
+		$response = $this->controller->handle_batch( $request );
+		$data     = $response->get_data();
+
+		$this->assertSame( 2, $data['total'] );
+		$this->assertSame( 400, $data['results'][0]['status'] );
+		$this->assertSame( 'forbidden_path', $data['results'][0]['data']['code'] );
+		$this->assertSame( 200, $data['results'][1]['status'] );
+	}
+
+	public function test_denial_pattern_is_version_agnostic(): void {
+		$pattern = Mcpwp_REST_Batch::DENIED_OPERATION_ROUTE_PATTERN;
+
+		$this->assertSame( 1, preg_match( $pattern, '/mcpwp/v2/batch' ) );
+		$this->assertSame( 1, preg_match( $pattern, '/mcpwp/v10/mcp' ) );
+		$this->assertSame( 0, preg_match( $pattern, '/mcpwp/v1/posts' ) );
+	}
+}
