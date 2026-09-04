@@ -167,6 +167,20 @@ class WP_REST_Request
         $this->headers[ $name ] = $value;
     }
 
+    public function set_body_params($params)
+    {
+        if (is_array($params)) {
+            $this->params = array_merge($this->params, $params);
+        }
+    }
+
+    public function set_query_params($params)
+    {
+        if (is_array($params)) {
+            $this->params = array_merge($this->params, $params);
+        }
+    }
+
     public function get_json_params()
     {
         return $this->json_params;

@@ -15,6 +15,69 @@ if ( ! defined( 'ABSPATH' ) ) {
 class Mcpwp_REST_Feedback extends Mcpwp_REST_API {
 
 	/**
+	 * Per-IP ceiling on relay submissions inside RELAY_RATE_WINDOW.
+	 *
+	 * @var int
+	 */
+	const RELAY_RATE_MAX = 10;
+
+	/**
+	 * Window for the per-IP relay ceiling above, in seconds.
+	 *
+	 * Tumbling, not sliding — see relay_ip_transient_key(). A per-IP bucket
+	 * is frequently shared (any origin that does not restore real client
+	 * addresses puts every visitor behind one proxy address), so a bucket
+	 * whose TTL is pushed forward by each accepted request can be held at
+	 * the ceiling indefinitely by one abusive source, locking out everyone
+	 * sharing it. A fixed boundary caps that at the current window.
+	 *
+	 * @var int
+	 */
+	const RELAY_RATE_WINDOW = 60;
+
+	/**
+	 * Transient key prefix for the per-IP relay counter.
+	 *
+	 * @var string
+	 */
+	const RELAY_IP_TRANSIENT_PREFIX = 'mcpwp_relay_';
+
+	/**
+	 * Site-wide ceiling on relay submissions inside RELAY_GLOBAL_WINDOW,
+	 * counted across every caller regardless of source address.
+	 *
+	 * Each accepted relay request spends this site's own GitHub token: a
+	 * search call plus, usually, an issue-creation call. 200 per hour is
+	 * roughly 400 GitHub API calls per hour, comfortably inside GitHub's
+	 * 5,000/hour authenticated primary limit and its content-creation
+	 * secondary limit, while sitting about two orders of magnitude above any
+	 * plausible volume of genuine bug reports arriving from the installed
+	 * fleet in one hour. It therefore never fires for real traffic, and it
+	 * caps a flood spread across many real source addresses, which the
+	 * per-IP counter above cannot see at all.
+	 *
+	 * @var int
+	 */
+	const RELAY_GLOBAL_MAX = 200;
+
+	/**
+	 * Rolling window for the site-wide relay ceiling above, in seconds.
+	 *
+	 * One hour is the coarsest window that still recovers on its own inside
+	 * a normal support cycle.
+	 *
+	 * @var int
+	 */
+	const RELAY_GLOBAL_WINDOW = HOUR_IN_SECONDS;
+
+	/**
+	 * Transient key prefix for the site-wide relay counter.
+	 *
+	 * @var string
+	 */
+	const RELAY_GLOBAL_TRANSIENT_PREFIX = 'mcpwp_relay_global_';
+
+	/**
 	 * Register routes.
 	 */
 	public function register_routes() {
@@ -179,18 +242,37 @@ class Mcpwp_REST_Feedback extends Mcpwp_REST_API {
 	 * @return WP_REST_Response|WP_Error
 	 */
 	public function relay_feedback( $request ) {
-		// Basic rate limiting by IP — max 10 relay requests per minute.
+		// Per-IP throttle: no single source may exceed RELAY_RATE_MAX
+		// submissions inside RELAY_RATE_WINDOW seconds.
 		$ip        = $this->get_relay_client_ip();
-		$transient = 'mcpwp_relay_' . md5( $ip );
+		$transient = $this->relay_ip_transient_key( $ip );
 		$count     = (int) get_transient( $transient );
-		if ( $count >= 10 ) {
+		if ( $count >= self::RELAY_RATE_MAX ) {
 			return new WP_Error(
 				'rate_limited',
 				__( 'Too many feedback submissions. Please try again later.', 'mcpwp' ),
 				array( 'status' => 429 )
 			);
 		}
-		set_transient( $transient, $count + 1, 60 );
+
+		// Site-wide backstop, counted across every caller regardless of source
+		// address. The per-IP bucket above bounds one source and does nothing
+		// against a flood spread over many real addresses, while every accepted
+		// request here spends this site's own GitHub token on behalf of an
+		// unauthenticated caller. Checked before either counter is incremented,
+		// so a refused request consumes no budget.
+		$global_transient = $this->relay_global_transient_key();
+		$global_count     = (int) get_transient( $global_transient );
+		if ( $global_count >= self::RELAY_GLOBAL_MAX ) {
+			return new WP_Error(
+				'rate_limited',
+				__( 'Too many feedback submissions. Please try again later.', 'mcpwp' ),
+				array( 'status' => 429 )
+			);
+		}
+
+		set_transient( $transient, $count + 1, self::RELAY_RATE_WINDOW );
+		set_transient( $global_transient, $global_count + 1, self::RELAY_GLOBAL_WINDOW );
 
 		$data = array(
 			'type'           => $request->get_param( 'type' ),
@@ -228,28 +310,96 @@ class Mcpwp_REST_Feedback extends Mcpwp_REST_API {
 	 * Get client IP address for relay rate limiting.
 	 *
 	 * This gates an unauthenticated, privileged action (creating a GitHub
-	 * issue with the site's own token) — the rate limit is the ONLY control,
-	 * so the IP it keys on must not be attacker-choosable. X-Forwarded-For
-	 * and X-Real-IP are set by the client itself unless a trusted proxy
-	 * overwrites them, and WordPress has no reliable way to confirm that
-	 * here — trusting them let any caller reset their own rate-limit bucket
-	 * on every request by sending a different fake value. CF-Connecting-IP
-	 * is safe: only Cloudflare's edge sets that specific header, so its mere
-	 * presence means Cloudflare (not the client) supplied it. Otherwise fall
-	 * straight to REMOTE_ADDR — the actual TCP peer, which the HTTP client
-	 * cannot forge (note: if the origin's own web server is configured to
-	 * rewrite REMOTE_ADDR from a client-supplied header, that trust must be
-	 * fixed at the proxy/nginx layer — no application code can distinguish
-	 * a forged REMOTE_ADDR from a real one once the web server already
-	 * rewrote it).
+	 * issue with the site's own token), so the IP it keys on must not be
+	 * attacker-choosable. CF-Connecting-IP is only meaningful when Cloudflare
+	 * really is in front of this origin; a caller who reaches the origin
+	 * directly can set that header themselves and mint a fresh rate-limit
+	 * bucket on every request, which removes the throttle entirely. Honour it
+	 * only behind the explicit MCPWP_TRUST_PROXY_HEADERS opt-in — the same
+	 * gate the rate limiter, the auth trait and the OAuth well-known scheme
+	 * check use; otherwise fall straight to REMOTE_ADDR, the actual TCP peer,
+	 * which the HTTP client cannot forge. (If the origin's own web server is
+	 * configured to rewrite REMOTE_ADDR from a client-supplied header, that
+	 * trust must be fixed at the proxy/nginx layer — no application code can
+	 * distinguish a forged REMOTE_ADDR from a real one once the web server
+	 * already rewrote it.)
 	 *
 	 * @return string
 	 */
 	private function get_relay_client_ip() {
-		if ( ! empty( $_SERVER['HTTP_CF_CONNECTING_IP'] ) ) {
-			return sanitize_text_field( wp_unslash( $_SERVER['HTTP_CF_CONNECTING_IP'] ) );
+		$trust_proxy = defined( 'MCPWP_TRUST_PROXY_HEADERS' ) && MCPWP_TRUST_PROXY_HEADERS;
+
+		return $this->resolve_relay_client_ip( $trust_proxy );
+	}
+
+	/**
+	 * Resolve the relay bucket key from $_SERVER for a given trust decision.
+	 *
+	 * Split out from get_relay_client_ip() so both branches are reachable from
+	 * tests: a PHP constant cannot be undefined once set, so a single-process
+	 * suite can never exercise both sides of the constant check itself.
+	 *
+	 * Values that are not valid IP addresses are discarded rather than used as
+	 * a bucket key — an unvalidated header value is an unlimited supply of
+	 * distinct keys, which is the same evasion by another route.
+	 *
+	 * @param bool $trust_proxy Whether proxy-supplied headers may be believed.
+	 * @return string Validated IP address, or '0.0.0.0' when none is usable.
+	 */
+	private function resolve_relay_client_ip( $trust_proxy ) {
+		$ip_keys = $trust_proxy
+			? array(
+				'HTTP_CF_CONNECTING_IP', // Cloudflare.
+				'REMOTE_ADDR',           // Standard.
+			)
+			: array( 'REMOTE_ADDR' );
+
+		foreach ( $ip_keys as $key ) {
+			if ( ! empty( $_SERVER[ $key ] ) ) {
+				$ip = sanitize_text_field( wp_unslash( $_SERVER[ $key ] ) );
+				if ( filter_var( $ip, FILTER_VALIDATE_IP ) ) {
+					return $ip;
+				}
+			}
 		}
-		return ! empty( $_SERVER['REMOTE_ADDR'] ) ? sanitize_text_field( wp_unslash( $_SERVER['REMOTE_ADDR'] ) ) : '0.0.0.0';
+
+		return '0.0.0.0';
+	}
+
+	/**
+	 * Transient key for one source address's relay counter.
+	 *
+	 * Carries the window index for the same reason the site-wide key does:
+	 * without it, every accepted request rewrites the transient's TTL and an
+	 * abusive source can hold the bucket at the ceiling indefinitely by
+	 * submitting once per window. That matters more here than for the
+	 * site-wide counter, because this bucket is not always one caller — on
+	 * any origin that does not restore real client addresses, every visitor
+	 * behind the proxy shares it, and the lockout would fall on them.
+	 *
+	 * @param string   $ip  Source address.
+	 * @param int|null $now Timestamp to derive the window from. Defaults to
+	 *                      the current time; taken as an argument so a test
+	 *                      can cross a window boundary without sleeping.
+	 * @return string
+	 */
+	private function relay_ip_transient_key( $ip, $now = null ) {
+		$now = null === $now ? time() : (int) $now;
+		return self::RELAY_IP_TRANSIENT_PREFIX . md5( $ip ) . '_' . (int) floor( $now / self::RELAY_RATE_WINDOW );
+	}
+
+	/**
+	 * Transient key for the site-wide relay counter.
+	 *
+	 * The key carries the window index, so the ceiling tumbles on a fixed
+	 * wall-clock boundary instead of being pushed forward every time an
+	 * abusive request refreshes the transient's TTL. A sustained flood cannot
+	 * keep legitimate submissions locked out past the current window.
+	 *
+	 * @return string
+	 */
+	private function relay_global_transient_key() {
+		return self::RELAY_GLOBAL_TRANSIENT_PREFIX . (int) floor( time() / self::RELAY_GLOBAL_WINDOW );
 	}
 
 	/**

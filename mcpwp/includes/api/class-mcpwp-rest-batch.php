@@ -31,11 +31,45 @@ class Mcpwp_REST_Batch extends Mcpwp_REST_API {
 	const MAX_OPERATIONS = 25;
 
 	/**
+	 * Routes a batch operation may never target.
+	 *
+	 * Both the batch endpoint and the MCP dispatch endpoint mark their own
+	 * internal sub-requests so the auth layer skips rate counting for them.
+	 * Letting one of them appear as an operation inside the other means a
+	 * single counted request fans out into a tree of uncounted ones, with the
+	 * per-call operation ceiling re-applying fresh at every level instead of
+	 * being shared. Version-agnostic and case-insensitive, because WordPress
+	 * matches REST routes case-insensitively.
+	 *
+	 * The route may end at a slash, a query string, a fragment, or the end of
+	 * the string. Matching only "/" or end-of-string would let "/batch?x=1"
+	 * slip past this check; WordPress' anchored route matcher happens to
+	 * reject that form today, but this constant must not depend on a
+	 * downstream accident for its own correctness.
+	 *
+	 * Delimited with "~" rather than the house "#" precisely because "#" is
+	 * one of the terminators: a "#" inside the pattern ends it even within a
+	 * character class, and the resulting compile failure makes preg_match()
+	 * return false, which would fail open.
+	 *
+	 * @var string
+	 */
+	const DENIED_OPERATION_ROUTE_PATTERN = '~^/mcpwp/v[0-9]+/(?:batch|mcp)(?:[/?#]|$)~i';
+
+	/**
 	 * PHP-internal flag set while a batch sub-request is being dispatched.
 	 *
 	 * The auth/rate-limit layer reads this property instead of checking an
-	 * HTTP header, which any external caller could forge.  It is reset to
-	 * false immediately after each sub-request returns.
+	 * HTTP header, which any external caller could forge.
+	 *
+	 * Each dispatch saves the flag's current value, sets it true, and restores
+	 * that saved value in a finally block — it is NOT reset to false. The MCP
+	 * tool dispatcher sets this same flag around every tools/call, and one of
+	 * its tools maps to this endpoint, so a dispatch here can legitimately
+	 * begin with the flag already true; writing false unconditionally would
+	 * clear an outer caller's state while it is still live. Restoring rather
+	 * than resetting also means a throwing sub-request cannot leave rate
+	 * limiting switched off for the remainder of the PHP process.
 	 *
 	 * @var bool
 	 */
@@ -193,6 +227,25 @@ class Mcpwp_REST_Batch extends Mcpwp_REST_API {
 		// Build full route
 		$route = '/mcpwp/v1' . $path;
 
+		// Collapse repeated slashes and drop a trailing one before matching:
+		// "//batch" and "/batch/" reach the same handler as "/batch", so the
+		// check has to see the same string WordPress will.
+		$normalized_route = '/' . trim( preg_replace( '#/+#', '/', $route ), '/' );
+
+		// Refuse to dispatch back into the batch or MCP entry points. Rejecting
+		// only this operation, not the whole batch, matches how every other
+		// per-operation validation failure behaves here.
+		if ( preg_match( self::DENIED_OPERATION_ROUTE_PATTERN, $normalized_route ) ) {
+			return array(
+				'index'  => $index,
+				'status' => 400,
+				'data'   => array(
+					'code'    => 'forbidden_path',
+					'message' => __( 'Operations may not target the batch or MCP dispatch endpoints.', 'mcpwp' ),
+				),
+			);
+		}
+
 		// Create internal REST request
 		$internal_request = new WP_REST_Request( $method, $route );
 
@@ -221,9 +274,23 @@ class Mcpwp_REST_Batch extends Mcpwp_REST_API {
 		// auth/rate-limit layer can skip rate counting for sub-requests.
 		// A static property cannot be forged by an external HTTP caller,
 		// unlike an HTTP header.
+		//
+		// Save and restore the previous value rather than hard-resetting to
+		// false. This dispatch may itself already be running inside another
+		// internal dispatch — the MCP tool dispatcher sets the same flag around
+		// every tools/call, and one of its tools maps to this very endpoint —
+		// so writing false unconditionally would clear a caller's state that is
+		// still live. try/finally guarantees the restore even if the
+		// sub-request throws, so one failing operation cannot leave rate
+		// limiting switched off for the rest of the PHP process.
+		$previous_sub_request       = self::$is_batch_sub_request;
 		self::$is_batch_sub_request = true;
-		$response                   = rest_do_request( $internal_request );
-		self::$is_batch_sub_request = false;
+
+		try {
+			$response = rest_do_request( $internal_request );
+		} finally {
+			self::$is_batch_sub_request = $previous_sub_request;
+		}
 
 		// Extract response data
 		$status = $response->get_status();
