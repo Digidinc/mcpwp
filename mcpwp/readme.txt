@@ -153,6 +153,9 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 
 == Changelog ==
 
+= 3.10.3 =
+* fix: **security:** bind relay throttle to a trusted client IP and block self-recursive batch operations ([#744](https://github.com/Mumega-com/mcpwp/issues/744))
+
 = 3.10.2 =
 * fix: adversarial review findings — two defects already live in 3.10.1 ([#736](https://github.com/Mumega-com/mcpwp/issues/736))
 
