@@ -223,14 +223,43 @@ final class RelayRateLimitTest extends TestCase {
 		);
 	}
 
-	public function test_refuses_when_global_counter_write_fails(): void {
+	public function test_refuses_when_global_hour_counter_write_fails(): void {
 		$_SERVER['REMOTE_ADDR'] = '203.0.113.11';
 
-		// Only the global bucket's write fails; the per-IP write succeeds.
-		// The relay must still refuse — a slightly over-counted per-IP
-		// bucket left behind is the safe direction, per the fix design.
+		// Only the hourly bucket's write fails; the per-IP and per-minute
+		// writes succeed. The relay must still refuse — an over-counted
+		// earlier bucket is the safe direction, per the fix design.
+		//
+		// The prefix test must EXCLUDE the per-minute key. Writes happen in
+		// the order per-IP, per-minute, hourly, and the per-minute prefix
+		// ('mcpwp_relay_global_min_') begins with the hourly prefix
+		// ('mcpwp_relay_global_'), so a plain substring match trips on the
+		// per-minute write and returns before the hourly write is ever
+		// attempted — leaving this path, the one the test is named for,
+		// completely uncovered.
 		$GLOBALS['mcpwp_test_transient_write_fails'] = static function ( $name ) {
-			return false !== strpos( (string) $name, 'mcpwp_relay_global_' );
+			$name = (string) $name;
+			return 0 === strpos( $name, Mcpwp_REST_Feedback::RELAY_GLOBAL_TRANSIENT_PREFIX )
+				&& 0 !== strpos( $name, Mcpwp_REST_Feedback::RELAY_GLOBAL_MINUTE_TRANSIENT_PREFIX );
+		};
+
+		$result = $this->controller->relay_feedback( $this->relay_request() );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'relay_unavailable', $result->get_error_code() );
+		$this->assertSame( 503, $result->get_error_data()['status'] );
+	}
+
+	public function test_refuses_when_global_minute_counter_write_fails(): void {
+		$_SERVER['REMOTE_ADDR'] = '203.0.113.12';
+
+		// Only the per-minute bucket's write fails. Each of the three
+		// counters needs its own write-failure case: a ceiling whose write
+		// silently evaporates is not a ceiling, and the per-minute one is
+		// the tightest of the three against GitHub's 30/min search and
+		// 80/min content-creation limits.
+		$GLOBALS['mcpwp_test_transient_write_fails'] = static function ( $name ) {
+			return 0 === strpos( (string) $name, Mcpwp_REST_Feedback::RELAY_GLOBAL_MINUTE_TRANSIENT_PREFIX );
 		};
 
 		$result = $this->controller->relay_feedback( $this->relay_request() );
