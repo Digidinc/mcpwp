@@ -431,9 +431,26 @@ class Mcpwp_Feedback {
 			)
 		);
 
-		if ( ! is_wp_error( $search_response ) ) {
+		// A non-WP_Error response with a non-2xx status (403 rate-limited, 422,
+		// 5xx) or a body without a `total_count` key is a *successful* HTTP
+		// transaction carrying an error, not "zero matches". Treating it as
+		// "no duplicate exists" is what let a GitHub-side rate limit silently
+		// turn every subsequent relay into a duplicate-issue generator (#748),
+		// so that outcome is classified and flagged explicitly instead of
+		// falling through to issue creation unmarked.
+		$dedupe_unavailable_reason = null;
+
+		if ( is_wp_error( $search_response ) ) {
+			$dedupe_unavailable_reason = 'the search request failed (' . $search_response->get_error_message() . ')';
+		} else {
+			$search_code = wp_remote_retrieve_response_code( $search_response );
 			$search_data = json_decode( wp_remote_retrieve_body( $search_response ), true );
-			if ( isset( $search_data['total_count'] ) && $search_data['total_count'] > 0 ) {
+
+			if ( $search_code < 200 || $search_code >= 300 ) {
+				$dedupe_unavailable_reason = "GitHub search returned HTTP {$search_code}";
+			} elseif ( ! is_array( $search_data ) || ! isset( $search_data['total_count'] ) ) {
+				$dedupe_unavailable_reason = "GitHub search returned HTTP {$search_code} with an unusable response body";
+			} elseif ( $search_data['total_count'] > 0 ) {
 				$existing_url = isset( $search_data['items'][0]['html_url'] ) ? $search_data['items'][0]['html_url'] : '';
 				if ( ! empty( $existing_url ) ) {
 					return array(
@@ -443,6 +460,10 @@ class Mcpwp_Feedback {
 					);
 				}
 			}
+		}
+
+		if ( null !== $dedupe_unavailable_reason ) {
+			$body .= "\n\n**Duplicate detection unavailable:** this issue was created without checking for duplicates because {$dedupe_unavailable_reason}. Please check manually for an existing report before acting on it.";
 		}
 
 		$response = wp_remote_post(
