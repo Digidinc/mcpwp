@@ -440,7 +440,7 @@ class Mcpwp_REST_Feedback extends Mcpwp_REST_API {
 	 * one bucket.
 	 *
 	 * @param bool $trust_proxy Whether proxy-supplied headers may be believed.
-	 * @return string Validated IP address, or '0.0.0.0' when none is usable.
+	 * @return string Validated IP address, or 'unknown' when none is usable.
 	 */
 	private function resolve_relay_client_ip( $trust_proxy ) {
 		$ip_keys = $trust_proxy
@@ -465,7 +465,7 @@ class Mcpwp_REST_Feedback extends Mcpwp_REST_API {
 			}
 		}
 
-		return '0.0.0.0';
+		return 'unknown';
 	}
 
 	/**

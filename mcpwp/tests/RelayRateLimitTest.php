@@ -109,7 +109,7 @@ final class RelayRateLimitTest extends TestCase {
 	public function test_unusable_remote_addr_falls_back_to_placeholder(): void {
 		$_SERVER['REMOTE_ADDR'] = 'garbage';
 
-		$this->assertSame( '0.0.0.0', $this->call_private( 'resolve_relay_client_ip', array( false ) ) );
+		$this->assertSame( 'unknown', $this->call_private( 'resolve_relay_client_ip', array( false ) ) );
 	}
 
 	public function test_rotating_cf_headers_share_one_bucket_by_default(): void {
