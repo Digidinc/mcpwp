@@ -244,6 +244,14 @@ class Mcpwp_REST_Feedback extends Mcpwp_REST_API {
 	public function relay_feedback( $request ) {
 		// Per-IP throttle: no single source may exceed RELAY_RATE_MAX
 		// submissions inside RELAY_RATE_WINDOW seconds.
+		//
+		// Note deliberately not "fixed" on the read side: get_transient()
+		// returns false for both "no requests yet" and "the backend cannot
+		// answer right now", and there is no reliable way through the WP
+		// transient API to tell those apart here. That is fine — the write
+		// check below catches a dead backend before any GitHub call is
+		// made, which is the only place it matters on this credential-
+		// spending path.
 		$ip        = $this->get_relay_client_ip();
 		$transient = $this->relay_ip_transient_key( $ip );
 		$count     = (int) get_transient( $transient );
@@ -271,8 +279,30 @@ class Mcpwp_REST_Feedback extends Mcpwp_REST_API {
 			);
 		}
 
-		set_transient( $transient, $count + 1, self::RELAY_RATE_WINDOW );
-		set_transient( $global_transient, $global_count + 1, self::RELAY_GLOBAL_WINDOW );
+		// A failed write means the ceiling checked above cannot be enforced
+		// for the next request — this bucket will read back as zero no
+		// matter how many requests actually land, and the site's GitHub
+		// token would be spent on every one of them. Refuse rather than
+		// spend it. Both writes happen before any GitHub call, so refusing
+		// here never lets a request through to create an issue. If the
+		// per-IP write above succeeds but the global write below fails, we
+		// still refuse — the per-IP bucket is left slightly over-counted
+		// rather than rolled back, which is the safe direction.
+		if ( false === set_transient( $transient, $count + 1, self::RELAY_RATE_WINDOW ) ) {
+			return new WP_Error(
+				'relay_unavailable',
+				__( 'Feedback relay is temporarily unavailable. Please try again later.', 'mcpwp' ),
+				array( 'status' => 503 )
+			);
+		}
+
+		if ( false === set_transient( $global_transient, $global_count + 1, self::RELAY_GLOBAL_WINDOW ) ) {
+			return new WP_Error(
+				'relay_unavailable',
+				__( 'Feedback relay is temporarily unavailable. Please try again later.', 'mcpwp' ),
+				array( 'status' => 503 )
+			);
+		}
 
 		$data = array(
 			'type'           => $request->get_param( 'type' ),

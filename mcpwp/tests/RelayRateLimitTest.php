@@ -32,8 +32,9 @@ final class RelayRateLimitTest extends TestCase {
 	private Mcpwp_REST_Feedback $controller;
 
 	protected function setUp(): void {
-		$GLOBALS['mcpwp_test_options']    = array();
-		$GLOBALS['mcpwp_test_transients'] = array();
+		$GLOBALS['mcpwp_test_options']                = array();
+		$GLOBALS['mcpwp_test_transients']              = array();
+		$GLOBALS['mcpwp_test_transient_write_fails']   = false;
 
 		foreach ( array( 'HTTP_CF_CONNECTING_IP', 'REMOTE_ADDR' ) as $key ) {
 			$this->saved_server[ $key ] = $_SERVER[ $key ] ?? null;
@@ -51,7 +52,8 @@ final class RelayRateLimitTest extends TestCase {
 				$_SERVER[ $key ] = $value;
 			}
 		}
-		$GLOBALS['mcpwp_test_transients'] = array();
+		$GLOBALS['mcpwp_test_transients']            = array();
+		$GLOBALS['mcpwp_test_transient_write_fails'] = false;
 	}
 
 	/** Call a private method on the controller. */
@@ -198,6 +200,44 @@ final class RelayRateLimitTest extends TestCase {
 			$this->call_private( 'relay_ip_transient_key', array( '203.0.113.10', $base + 60 ) ),
 			'The per-IP bucket must not survive its window boundary.'
 		);
+	}
+
+	public function test_refuses_when_per_ip_counter_write_fails(): void {
+		$_SERVER['REMOTE_ADDR'] = '203.0.113.10';
+
+		// Every set_transient() call fails, simulating an unreachable
+		// transient backend (dropped external object cache, read-only
+		// options table). The per-IP write is attempted first, so this
+		// must be caught before the relay ever calls GitHub.
+		$GLOBALS['mcpwp_test_transient_write_fails'] = true;
+
+		$result = $this->controller->relay_feedback( $this->relay_request() );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'relay_unavailable', $result->get_error_code() );
+		$this->assertSame( 503, $result->get_error_data()['status'] );
+		$this->assertSame(
+			array(),
+			$this->ip_bucket_keys(),
+			'A failed write must not appear to have persisted anything.'
+		);
+	}
+
+	public function test_refuses_when_global_counter_write_fails(): void {
+		$_SERVER['REMOTE_ADDR'] = '203.0.113.11';
+
+		// Only the global bucket's write fails; the per-IP write succeeds.
+		// The relay must still refuse — a slightly over-counted per-IP
+		// bucket left behind is the safe direction, per the fix design.
+		$GLOBALS['mcpwp_test_transient_write_fails'] = static function ( $name ) {
+			return false !== strpos( (string) $name, 'mcpwp_relay_global_' );
+		};
+
+		$result = $this->controller->relay_feedback( $this->relay_request() );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'relay_unavailable', $result->get_error_code() );
+		$this->assertSame( 503, $result->get_error_data()['status'] );
 	}
 
 	public function test_per_ip_buckets_stay_separate_per_address_within_a_window(): void {
