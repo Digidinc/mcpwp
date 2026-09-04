@@ -134,8 +134,13 @@ class Mcpwp_Custom_Tool_Registry extends Mcpwp_MCP_Tool_Registry {
 				return false;
 			}
 		}
-		// Deny MCPWP privileged surfaces (key/license/update/settings management).
-		if ( preg_match( '#^/mcpwp/v[0-9]+/(api-keys|oauth|update|settings|options|option|integrations|rate-limit|favicon)\b#i', $path ) ) {
+		// Deny MCPWP privileged surfaces (key/license/update/settings management)
+		// and the self-dispatch surfaces (batch/mcp) that would otherwise let a
+		// registration recurse into the gateway's own JSON-RPC/batch fan-out with
+		// no bound on nesting depth. The terminator is `(?:/|$)`, not `\b` — `\b`
+		// also matches before a hyphen, which would wrongly deny a future route
+		// shaped like `/mcpwp/v1/rate-limit-status`.
+		if ( preg_match( '#^/mcpwp/v[0-9]+/(api-keys|oauth|update|settings|options|option|integrations|rate-limit|favicon|batch|mcp)(?:/|$)#i', $path ) ) {
 			return false;
 		}
 		return true;

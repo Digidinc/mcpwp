@@ -207,14 +207,27 @@ final class GatewayContractTest extends TestCase {
 				array( 'name' => 'proto_rel', 'description' => 'x', 'rest_path' => '//evil.example/x' ),
 				array( 'name' => 'traversal', 'description' => 'x', 'rest_path' => '/digid/v1/../../wp/v2/users' ),
 				array( 'name' => 'query_smuggle', 'description' => 'x', 'rest_path' => '/digid/v1/x?context=edit' ),
+				// #749: batch/mcp are self-dispatch surfaces with unbounded recursion —
+				// must be denied exactly like the other privileged surfaces above.
+				array( 'name' => 'priv_batch', 'description' => 'x', 'rest_path' => '/mcpwp/v1/batch' ),
+				array( 'name' => 'priv_mcp', 'description' => 'x', 'rest_path' => '/mcpwp/v1/mcp' ),
+				// #749: exact-match regression guard for the pre-existing rate-limit denial.
+				array( 'name' => 'priv_rate_limit', 'description' => 'x', 'rest_path' => '/mcpwp/v1/rate-limit' ),
+				// #749: \b wrongly matches before a hyphen, so a hyphen-suffixed sibling
+				// route must NOT be caught by the same denial as the exact segment above.
+				array( 'name' => 'legit_rate_limit_sibling', 'description' => 'x', 'rest_path' => '/mcpwp/v1/rate-limit-status' ),
 				array( 'name' => 'legit_addon', 'description' => 'x', 'rest_path' => '/digid/v1/listings' ),
 			)
 		);
 		$reg   = new Mcpwp_Custom_Tool_Registry();
 		$names = array_map( fn( $t ) => $t['name'], $reg->get_tools() );
 
-		$this->assertSame( array( 'legit_addon' ), $names, 'Only the safely-namespaced addon route survives.' );
-		$this->assertSame( 7, $reg->get_rejected_count() );
+		$this->assertSame(
+			array( 'legit_rate_limit_sibling', 'legit_addon' ),
+			$names,
+			'Only the safely-namespaced addon route and the hyphen-suffixed sibling survive.'
+		);
+		$this->assertSame( 10, $reg->get_rejected_count() );
 	}
 
 	public function test_registration_cannot_shadow_a_reserved_builtin_name(): void {
