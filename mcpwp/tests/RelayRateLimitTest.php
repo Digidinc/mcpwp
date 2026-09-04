@@ -249,4 +249,68 @@ final class RelayRateLimitTest extends TestCase {
 			'Adding the window index must not collapse distinct sources into one bucket.'
 		);
 	}
+
+	public function test_global_per_minute_ceiling_trips_independently_of_hourly_ceiling(): void {
+		$_SERVER['REMOTE_ADDR'] = '203.0.113.50';
+
+		$minute_key = $this->call_private( 'relay_global_minute_transient_key' );
+		set_transient(
+			$minute_key,
+			Mcpwp_REST_Feedback::RELAY_GLOBAL_MAX_PER_MINUTE,
+			60
+		);
+
+		$result = $this->controller->relay_feedback( $this->relay_request() );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'rate_limited', $result->get_error_code() );
+		$this->assertSame( 429, $result->get_error_data()['status'] );
+
+		// The hourly ceiling is nowhere near tripped on its own — only the
+		// per-minute component is responsible for refusing this request.
+		$hourly_count = (int) get_transient( $this->call_private( 'relay_global_transient_key' ) );
+		$this->assertLessThan( Mcpwp_REST_Feedback::RELAY_GLOBAL_MAX, $hourly_count );
+	}
+
+	public function test_global_minute_bucket_key_tumbles_at_the_window_boundary(): void {
+		$base = 1758000000; // Divisible by 60: start of a minute.
+
+		$this->assertNotSame(
+			$this->call_private( 'relay_global_minute_transient_key', array( $base + 59 ) ),
+			$this->call_private( 'relay_global_minute_transient_key', array( $base + 60 ) ),
+			'The site-wide per-minute bucket must not survive its window boundary.'
+		);
+	}
+
+	public function test_request_refused_by_per_minute_ceiling_consumes_no_other_budget(): void {
+		$_SERVER['REMOTE_ADDR'] = '203.0.113.51';
+
+		$minute_key = $this->call_private( 'relay_global_minute_transient_key' );
+		set_transient(
+			$minute_key,
+			Mcpwp_REST_Feedback::RELAY_GLOBAL_MAX_PER_MINUTE,
+			60
+		);
+
+		$result = $this->controller->relay_feedback( $this->relay_request() );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'rate_limited', $result->get_error_code() );
+		$this->assertSame(
+			array(),
+			$this->ip_bucket_keys(),
+			'A request refused by the per-minute ceiling must not consume per-IP budget.'
+		);
+		$this->assertSame(
+			0,
+			(int) get_transient( $this->call_private( 'relay_global_transient_key' ) ),
+			'A request refused by the per-minute ceiling must not consume the hourly budget.'
+		);
+		$this->assertSame(
+			Mcpwp_REST_Feedback::RELAY_GLOBAL_MAX_PER_MINUTE,
+			(int) get_transient( $minute_key ),
+			'The per-minute bucket itself must not be incremented past the ceiling by a refused request.'
+		);
+	}
+
 }
