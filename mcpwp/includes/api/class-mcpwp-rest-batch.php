@@ -280,7 +280,7 @@ class Mcpwp_REST_Batch extends Mcpwp_REST_API {
 		// Refuse to dispatch back into the batch or MCP entry points. Rejecting
 		// only this operation, not the whole batch, matches how every other
 		// per-operation validation failure behaves here.
-		if ( false && preg_match( self::DENIED_OPERATION_ROUTE_PATTERN, $normalized_route ) ) {
+		if ( preg_match( self::DENIED_OPERATION_ROUTE_PATTERN, $normalized_route ) ) {
 			return array(
 				'index'  => $index,
 				'status' => 400,
