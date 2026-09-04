@@ -27,14 +27,16 @@ final class BatchOperationPathTest extends TestCase {
 	private Mcpwp_REST_Batch $controller;
 
 	protected function setUp(): void {
-		$GLOBALS['mcpwp_test_options']          = array();
-		$GLOBALS['mcpwp_test_transients']       = array();
-		Mcpwp_REST_Batch::$is_batch_sub_request = false;
-		$this->controller                       = new Mcpwp_REST_Batch();
+		$GLOBALS['mcpwp_test_options']            = array();
+		$GLOBALS['mcpwp_test_transients']         = array();
+		$GLOBALS['mcpwp_test_dispatched_routes']  = array();
+		Mcpwp_REST_Batch::$is_batch_sub_request   = false;
+		$this->controller                         = new Mcpwp_REST_Batch();
 	}
 
 	protected function tearDown(): void {
-		Mcpwp_REST_Batch::$is_batch_sub_request = false;
+		Mcpwp_REST_Batch::$is_batch_sub_request  = false;
+		$GLOBALS['mcpwp_test_dispatched_routes'] = array();
 	}
 
 	private function run_operation( array $operation, int $index = 0 ): array {
@@ -84,6 +86,11 @@ final class BatchOperationPathTest extends TestCase {
 			Mcpwp_REST_Batch::$is_batch_sub_request,
 			'A rejected operation must never mark a sub-request as in flight.'
 		);
+		$this->assertSame(
+			array(),
+			$GLOBALS['mcpwp_test_dispatched_routes'],
+			'A denied operation must never reach rest_do_request() — zero dispatches, not merely a denial response.'
+		);
 	}
 
 	public function allowed_path_provider(): array {
@@ -113,6 +120,11 @@ final class BatchOperationPathTest extends TestCase {
 
 		$this->assertSame( 200, $result['status'] );
 		$this->assertArrayNotHasKey( 'code', (array) $result['data'] );
+		$this->assertContains(
+			'/mcpwp/v1' . $path,
+			$GLOBALS['mcpwp_test_dispatched_routes'],
+			'A non-denied operation must actually reach rest_do_request(), not merely avoid the denial branch.'
+		);
 	}
 
 	public function test_sub_request_flag_is_restored_to_its_previous_value(): void {
@@ -161,6 +173,11 @@ final class BatchOperationPathTest extends TestCase {
 		$this->assertSame( 200, $data['results'][0]['status'] );
 		$this->assertSame( 200, $data['results'][1]['status'] );
 		$this->assertTrue( Mcpwp_REST_Batch::$is_batch_sub_request );
+		$this->assertSame(
+			array( '/mcpwp/v1/site-info', '/mcpwp/v1/posts' ),
+			$GLOBALS['mcpwp_test_dispatched_routes'],
+			'Both sub-operations must actually dispatch even when the sub-request flag is already set on entry.'
+		);
 	}
 
 	public function test_a_denied_operation_does_not_abort_the_batch(): void {

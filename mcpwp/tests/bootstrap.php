@@ -29,6 +29,10 @@ if (! defined('HOUR_IN_SECONDS')) {
 $GLOBALS['mcpwp_test_options'] = array();
 $GLOBALS['mcpwp_test_transients'] = array();
 $GLOBALS['mcpwp_test_current_user'] = 0;
+// Dispatch spy for rest_do_request() below — records the route of every
+// internal REST dispatch so tests can assert fan-out actually happened
+// (or did not), not merely infer it from a stubbed response shape.
+$GLOBALS['mcpwp_test_dispatched_routes'] = array();
 // Per-user capability overrides for OAuth scope-clamping tests.
 // Key: user_id (int), Value: array of capability => bool.
 // When empty (or user_id not present), current_user_can() grants all caps.
@@ -681,8 +685,11 @@ function register_rest_route($namespace = '', $route = '', $args = array())
     return true;
 }
 
-function rest_do_request()
+function rest_do_request($request = null)
 {
+    if (is_object($request) && method_exists($request, 'get_route')) {
+        $GLOBALS['mcpwp_test_dispatched_routes'][] = $request->get_route();
+    }
     return new WP_REST_Response(array( 'ok' => true ), 200);
 }
 
