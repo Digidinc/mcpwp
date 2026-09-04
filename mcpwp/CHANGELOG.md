@@ -5,6 +5,13 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.3](https://github.com/Mumega-com/mcpwp/compare/v3.10.2...v3.10.3) (2026-09-04)
+
+
+### Bug Fixes
+
+* **security:** bind relay throttle to a trusted client IP and block self-recursive batch operations ([#744](https://github.com/Mumega-com/mcpwp/issues/744)) ([1931f92](https://github.com/Mumega-com/mcpwp/commit/1931f92863f517bf9262e6ace620e40091bbba60))
+
 ## [3.10.2](https://github.com/Mumega-com/mcpwp/compare/v3.10.1...v3.10.2) (2026-07-27)
 
 
