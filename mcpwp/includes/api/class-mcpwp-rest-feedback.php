@@ -431,6 +431,14 @@ class Mcpwp_REST_Feedback extends Mcpwp_REST_API {
 	 * a bucket key — an unvalidated header value is an unlimited supply of
 	 * distinct keys, which is the same evasion by another route.
 	 *
+	 * Header list and comma-splitting deliberately match the two siblings
+	 * (Mcpwp_Rate_Limiter::get_client_identifier(),
+	 * Mcpwp_API_Auth::get_client_ip()) — see #753. A shorter list here had no
+	 * stated rationale and left an operator behind a non-Cloudflare proxy
+	 * (nginx/Varnish setting X-Real-IP, no CF-Connecting-IP) falling to
+	 * REMOTE_ADDR — the proxy's own address — collapsing every caller into
+	 * one bucket.
+	 *
 	 * @param bool $trust_proxy Whether proxy-supplied headers may be believed.
 	 * @return string Validated IP address, or '0.0.0.0' when none is usable.
 	 */
@@ -438,6 +446,8 @@ class Mcpwp_REST_Feedback extends Mcpwp_REST_API {
 		$ip_keys = $trust_proxy
 			? array(
 				'HTTP_CF_CONNECTING_IP', // Cloudflare.
+				'HTTP_X_FORWARDED_FOR',  // Proxy.
+				'HTTP_X_REAL_IP',        // Nginx.
 				'REMOTE_ADDR',           // Standard.
 			)
 			: array( 'REMOTE_ADDR' );
@@ -445,6 +455,10 @@ class Mcpwp_REST_Feedback extends Mcpwp_REST_API {
 		foreach ( $ip_keys as $key ) {
 			if ( ! empty( $_SERVER[ $key ] ) ) {
 				$ip = sanitize_text_field( wp_unslash( $_SERVER[ $key ] ) );
+				// Handle comma-separated IPs (X-Forwarded-For).
+				if ( strpos( $ip, ',' ) !== false ) {
+					$ip = trim( explode( ',', $ip )[0] );
+				}
 				if ( filter_var( $ip, FILTER_VALIDATE_IP ) ) {
 					return $ip;
 				}

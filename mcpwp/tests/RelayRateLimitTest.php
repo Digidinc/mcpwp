@@ -36,7 +36,7 @@ final class RelayRateLimitTest extends TestCase {
 		$GLOBALS['mcpwp_test_transients']              = array();
 		$GLOBALS['mcpwp_test_transient_write_fails']   = false;
 
-		foreach ( array( 'HTTP_CF_CONNECTING_IP', 'REMOTE_ADDR' ) as $key ) {
+		foreach ( array( 'HTTP_CF_CONNECTING_IP', 'HTTP_X_FORWARDED_FOR', 'HTTP_X_REAL_IP', 'REMOTE_ADDR' ) as $key ) {
 			$this->saved_server[ $key ] = $_SERVER[ $key ] ?? null;
 			unset( $_SERVER[ $key ] );
 		}
@@ -313,4 +313,26 @@ final class RelayRateLimitTest extends TestCase {
 		);
 	}
 
+	public function test_trusted_mode_honours_x_real_ip_when_no_cf_connecting_ip(): void {
+		$_SERVER['HTTP_X_REAL_IP'] = '198.51.100.20';
+		$_SERVER['REMOTE_ADDR']    = '203.0.113.10';
+
+		$this->assertSame( '198.51.100.20', $this->call_private( 'resolve_relay_client_ip', array( true ) ) );
+	}
+
+	public function test_trusted_mode_honours_comma_list_x_forwarded_for(): void {
+		$_SERVER['HTTP_X_FORWARDED_FOR'] = '198.51.100.30, 10.0.0.1, 10.0.0.2';
+		$_SERVER['REMOTE_ADDR']          = '203.0.113.10';
+
+		$this->assertSame( '198.51.100.30', $this->call_private( 'resolve_relay_client_ip', array( true ) ) );
+	}
+
+	public function test_untrusted_default_ignores_all_proxy_headers(): void {
+		$_SERVER['HTTP_CF_CONNECTING_IP'] = '198.51.100.7';
+		$_SERVER['HTTP_X_FORWARDED_FOR']  = '198.51.100.30';
+		$_SERVER['HTTP_X_REAL_IP']        = '198.51.100.20';
+		$_SERVER['REMOTE_ADDR']           = '203.0.113.10';
+
+		$this->assertSame( '203.0.113.10', $this->call_private( 'resolve_relay_client_ip', array( false ) ) );
+	}
 }
