@@ -22,7 +22,14 @@ class Mcpwp_REST_Feedback extends Mcpwp_REST_API {
 	const RELAY_RATE_MAX = 10;
 
 	/**
-	 * Rolling window for the per-IP relay ceiling above, in seconds.
+	 * Window for the per-IP relay ceiling above, in seconds.
+	 *
+	 * Tumbling, not sliding — see relay_ip_transient_key(). A per-IP bucket
+	 * is frequently shared (any origin that does not restore real client
+	 * addresses puts every visitor behind one proxy address), so a bucket
+	 * whose TTL is pushed forward by each accepted request can be held at
+	 * the ceiling indefinitely by one abusive source, locking out everyone
+	 * sharing it. A fixed boundary caps that at the current window.
 	 *
 	 * @var int
 	 */
@@ -238,7 +245,7 @@ class Mcpwp_REST_Feedback extends Mcpwp_REST_API {
 		// Per-IP throttle: no single source may exceed RELAY_RATE_MAX
 		// submissions inside RELAY_RATE_WINDOW seconds.
 		$ip        = $this->get_relay_client_ip();
-		$transient = self::RELAY_IP_TRANSIENT_PREFIX . md5( $ip );
+		$transient = $this->relay_ip_transient_key( $ip );
 		$count     = (int) get_transient( $transient );
 		if ( $count >= self::RELAY_RATE_MAX ) {
 			return new WP_Error(
@@ -357,6 +364,28 @@ class Mcpwp_REST_Feedback extends Mcpwp_REST_API {
 		}
 
 		return '0.0.0.0';
+	}
+
+	/**
+	 * Transient key for one source address's relay counter.
+	 *
+	 * Carries the window index for the same reason the site-wide key does:
+	 * without it, every accepted request rewrites the transient's TTL and an
+	 * abusive source can hold the bucket at the ceiling indefinitely by
+	 * submitting once per window. That matters more here than for the
+	 * site-wide counter, because this bucket is not always one caller — on
+	 * any origin that does not restore real client addresses, every visitor
+	 * behind the proxy shares it, and the lockout would fall on them.
+	 *
+	 * @param string   $ip  Source address.
+	 * @param int|null $now Timestamp to derive the window from. Defaults to
+	 *                      the current time; taken as an argument so a test
+	 *                      can cross a window boundary without sleeping.
+	 * @return string
+	 */
+	private function relay_ip_transient_key( $ip, $now = null ) {
+		$now = null === $now ? time() : (int) $now;
+		return self::RELAY_IP_TRANSIENT_PREFIX . md5( $ip ) . '_' . (int) floor( $now / self::RELAY_RATE_WINDOW );
 	}
 
 	/**

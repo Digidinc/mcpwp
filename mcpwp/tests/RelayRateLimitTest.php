@@ -77,7 +77,7 @@ final class RelayRateLimitTest extends TestCase {
 			array_filter(
 				$keys,
 				static function ( $key ) {
-					return 1 === preg_match( '/^mcpwp_relay_[0-9a-f]{32}$/', (string) $key );
+					return 1 === preg_match( '/^mcpwp_relay_[0-9a-f]{32}_[0-9]+$/', (string) $key );
 				}
 			)
 		);
@@ -168,7 +168,7 @@ final class RelayRateLimitTest extends TestCase {
 
 		$this->assertSame(
 			1,
-			(int) get_transient( Mcpwp_REST_Feedback::RELAY_IP_TRANSIENT_PREFIX . md5( '203.0.113.10' ) )
+			(int) get_transient( $this->call_private( 'relay_ip_transient_key', array( '203.0.113.10' ) ) )
 		);
 		$this->assertSame(
 			1,
@@ -176,9 +176,37 @@ final class RelayRateLimitTest extends TestCase {
 		);
 	}
 
-	public function test_per_ip_limit_behaviour_is_unchanged(): void {
-		$this->assertSame( 10, Mcpwp_REST_Feedback::RELAY_RATE_MAX );
-		$this->assertSame( 60, Mcpwp_REST_Feedback::RELAY_RATE_WINDOW );
-		$this->assertSame( 'mcpwp_relay_', Mcpwp_REST_Feedback::RELAY_IP_TRANSIENT_PREFIX );
+	public function test_per_ip_bucket_key_is_stable_inside_one_window(): void {
+		$base = 1758000000; // Divisible by RELAY_RATE_WINDOW: start of a window.
+
+		$this->assertSame(
+			$this->call_private( 'relay_ip_transient_key', array( '203.0.113.10', $base ) ),
+			$this->call_private( 'relay_ip_transient_key', array( '203.0.113.10', $base + 59 ) ),
+			'Two requests inside one window must share a bucket, or the ceiling never trips.'
+		);
+	}
+
+	public function test_per_ip_bucket_key_tumbles_at_the_window_boundary(): void {
+		$base = 1758000000;
+
+		// A sliding window keys on the address alone, so these are equal and
+		// one source holding the bucket at the ceiling locks out everyone
+		// sharing it indefinitely. A tumbling window cannot outlive its own
+		// boundary regardless of how many writes refresh the TTL.
+		$this->assertNotSame(
+			$this->call_private( 'relay_ip_transient_key', array( '203.0.113.10', $base + 59 ) ),
+			$this->call_private( 'relay_ip_transient_key', array( '203.0.113.10', $base + 60 ) ),
+			'The per-IP bucket must not survive its window boundary.'
+		);
+	}
+
+	public function test_per_ip_buckets_stay_separate_per_address_within_a_window(): void {
+		$base = 1758000000;
+
+		$this->assertNotSame(
+			$this->call_private( 'relay_ip_transient_key', array( '203.0.113.10', $base ) ),
+			$this->call_private( 'relay_ip_transient_key', array( '198.51.100.7', $base ) ),
+			'Adding the window index must not collapse distinct sources into one bucket.'
+		);
 	}
 }
