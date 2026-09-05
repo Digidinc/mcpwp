@@ -18,9 +18,20 @@
  * exists precisely for "Document::save() did not work" sits AFTER that call,
  * so it never ran and nothing was written.
  *
- * These tests do not assert WHICH Throwable Elementor 4.x raises; that is
- * environment-specific and still unconfirmed against the live stack. They
- * assert the property that must hold for any of them: a throwing
+ * The real one is now known. Reproduced 2026-09-05 on PHP 8.4.25 with real
+ * Elementor 4.2.4: its content-sanitizer module hooks
+ * elementor/document/save/data and so runs inside Document::save(), and its
+ * is_target_widget() reads $element['widgetType'] unguarded
+ * (modules/content-sanitizer/module.php:45) across every element — sections,
+ * columns and containers have none. The sanitizer early-returns for anyone
+ * with manage_options, so a browser admin never hits it and an API-key
+ * request always does. Unpatched, the throw escaped at
+ * trait-mcpwp-elementor-writer.php:384; patched, the save fell back to
+ * meta_direct and the data persisted.
+ *
+ * These tests still do not pin that specific Throwable, because the upstream
+ * detail may change between Elementor releases. They assert the property that
+ * must hold for any of them: a throwing
  * Document::save() degrades to the verified raw-meta path instead of losing
  * the write, and the degradation is reported rather than swallowed.
  *

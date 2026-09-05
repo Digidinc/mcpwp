@@ -29,6 +29,23 @@ trait Mcpwp_Elementor_Writer_Trait {
 	 * Elementor 4.2.4 + Pro 4.2.3): dry-run clean, real save 500, readback
 	 * empty, while Elementor's own editor saved the same post fine.
 	 *
+	 * Root cause, reproduced 2026-09-05 on PHP 8.4.25 + Elementor 4.2.4:
+	 * Elementor's own content-sanitizer hooks elementor/document/save/data,
+	 * so it runs INSIDE Document::save(). Its is_target_widget() reads
+	 * $element['widgetType'] unguarded (modules/content-sanitizer/module.php
+	 * line 45) while iterating every element — and sections, columns and
+	 * containers have no widgetType. That is an undefined-key warning per
+	 * non-widget element, which is fatal wherever warnings are promoted to
+	 * exceptions.
+	 *
+	 * Crucially the sanitizer early-returns for anyone with manage_options.
+	 * A logged-in admin in the browser never reaches it; an API-key request
+	 * (no manage_options) always does. That, not the document type, is why
+	 * Elementor's own editor saved the same page that MCPWP could not.
+	 *
+	 * The upstream defect is Elementor's. This guard is what keeps our write
+	 * path alive through it, and what reports it instead of a blank 500.
+	 *
 	 * A caught Throwable is recorded under "<label>_exception" and MUST leave
 	 * its caller on the degraded path. It is never converted into a success:
 	 * an Elementor API that could not be called and one that worked must not
