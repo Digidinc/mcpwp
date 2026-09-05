@@ -5,6 +5,15 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.4](https://github.com/Mumega-com/mcpwp/compare/v3.10.3...v3.10.4) (2026-09-05)
+
+
+### Bug Fixes
+
+* close the eight adversarial-review follow-ups from [#744](https://github.com/Mumega-com/mcpwp/issues/744) ([#746](https://github.com/Mumega-com/mcpwp/issues/746)-[#753](https://github.com/Mumega-com/mcpwp/issues/753)) ([#754](https://github.com/Mumega-com/mcpwp/issues/754)) ([b2b3c3f](https://github.com/Mumega-com/mcpwp/commit/b2b3c3f76b0fcf809c66c014ad31a8de9c134596))
+* **elementor:** store Kit CSS byte-for-byte, repairing a host that escapes it ([#761](https://github.com/Mumega-com/mcpwp/issues/761)) ([73f8f12](https://github.com/Mumega-com/mcpwp/commit/73f8f12c319c95e67d0dab40a91e2b4eded9e3bc))
+* **elementor:** survive a Throwable from Elementor's own Document::save() ([#760](https://github.com/Mumega-com/mcpwp/issues/760)) ([e855060](https://github.com/Mumega-com/mcpwp/commit/e855060bfadbff9b68017dc618da1d01b246b882))
+
 ## [3.10.3](https://github.com/Mumega-com/mcpwp/compare/v3.10.2...v3.10.3) (2026-09-04)
 
 
