@@ -1445,6 +1445,42 @@ function update_post_meta($post_id, $key, $value)
     return true;
 }
 
+if (! function_exists('wp_rand')) {
+    function wp_rand($min = 0, $max = 0)
+    {
+        if (0 === $min && 0 === $max) {
+            $max = PHP_INT_MAX;
+        }
+        return random_int((int) $min, (int) $max);
+    }
+}
+
+if (! function_exists('wp_upload_dir')) {
+    // Minimal shape: the writer trait reads ['basedir'] to report generated
+    // CSS file size after a save. A temp dir keeps that read harmless.
+    function wp_upload_dir($time = null, $create_dir = true, $refresh_cache = false)
+    {
+        $base = sys_get_temp_dir() . '/mcpwp-test-uploads';
+        return array(
+            'path'    => $base,
+            'url'     => 'http://example.test/wp-content/uploads',
+            'subdir'  => '',
+            'basedir' => $base,
+            'baseurl' => 'http://example.test/wp-content/uploads',
+            'error'   => false,
+        );
+    }
+}
+
+function delete_post_meta($post_id, $key, $value = '')
+{
+    if (! isset($GLOBALS['_mcpwp_test_meta'][ (int) $post_id ][ $key ])) {
+        return false;
+    }
+    unset($GLOBALS['_mcpwp_test_meta'][ (int) $post_id ][ $key ]);
+    return true;
+}
+
 if (! function_exists('get_page_template_slug')) {
     // Mirrors WP core: '' when unset/'default', else the stored template slug.
     function get_page_template_slug($post = null)
