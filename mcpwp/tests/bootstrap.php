@@ -223,6 +223,20 @@ if (! function_exists('maybe_serialize')) {
     }
 }
 
+if (! function_exists('maybe_unserialize')) {
+    function maybe_unserialize($data)
+    {
+        if (is_string($data)) {
+            $trimmed = trim($data);
+            if (preg_match('/^[aOs]:[0-9]+:/', $trimmed) || 'b:0;' === $trimmed || 'b:1;' === $trimmed || 'N;' === $trimmed) {
+                $out = @unserialize($trimmed);
+                return (false === $out && 'b:0;' !== $trimmed) ? $data : $out;
+            }
+        }
+        return $data;
+    }
+}
+
 function is_wp_error($value)
 {
     return $value instanceof WP_Error;
@@ -1441,8 +1455,27 @@ function update_post_meta($post_id, $key, $value)
     // readback verification always failed with meta_write_truncated. Nothing
     // caught it because the one test file covering that path was itself never
     // registered in phpunit.xml.
+    // A host that HTML-escapes meta on write can be simulated for tests that
+    // need it (see KitCssChildCombinatorTest). Off by default so no existing
+    // test changes behaviour.
+    if (! empty($GLOBALS['mcpwp_test_meta_escapes_html'])) {
+        $value = mcpwp_test_escape_meta_deep($value);
+    }
     $GLOBALS['_mcpwp_test_meta'][ (int) $post_id ][ $key ] = wp_unslash($value);
     return true;
+}
+
+function mcpwp_test_escape_meta_deep($value)
+{
+    if (is_string($value)) {
+        return str_replace(array( '&', '<', '>' ), array( '&amp;', '&lt;', '&gt;' ), $value);
+    }
+    if (is_array($value)) {
+        foreach ($value as $k => $v) {
+            $value[ $k ] = mcpwp_test_escape_meta_deep($v);
+        }
+    }
+    return $value;
 }
 
 if (! function_exists('wp_rand')) {
