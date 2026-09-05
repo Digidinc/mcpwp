@@ -1,0 +1,162 @@
+# MCPWP Roadmap — near term
+
+Written 2026-09-05, the day 3.10.4 shipped. Covers **3.10.x → 3.11 → 4.0**.
+
+The long-form 4.0 architecture plan lives in [ROADMAP-4.0.md](ROADMAP-4.0.md) and is
+still the authority on workstreams A–F and T. This document is the shorter question:
+what ships next, in which version, and what has to be true before 4.0 is cut.
+
+---
+
+## Where we are
+
+**3.10.4** (2026-09-05) is live on the canonical and legacy channels and published to
+Freemius. It carries three things:
+
+| | |
+|---|---|
+| Eight adversarial-review follow-ups from #744 | #754 |
+| Elementor `Document::save()` Throwable guard | #760 |
+| Kit CSS byte-for-byte integrity | #761 |
+
+930 tests, 4852 assertions, green on PHP 8.3 and 8.4, production files parse on 7.4.
+
+---
+
+## What the last two releases actually taught us
+
+Worth writing down, because it changes what 3.11 should contain more than any feature
+request does.
+
+### One defect class produced most of the damage
+
+> **An unavailable source and an empty result must never produce the same output.**
+
+Every one of these was the same shape, found in one week:
+
+- the relay throttle read `(int) get_transient()`, so "backend down" and "zero requests
+  so far" were both `0` — and the output was permission to spend the site's GitHub token
+- a GitHub `403` was indistinguishable from "no duplicate exists", so a rate-limited
+  relay silently became a duplicate-issue generator
+- a batch route that could not be normalised fell through to being dispatched raw
+- `ci-watch` returned exit 0 having observed two checks and neither publish job
+- a shell pipeline reported a clean residue sweep because a filter errored mid-pipe and
+  the final `grep` read empty input as "nothing found"
+
+The last two are not plugin code, which is the point: **this is a habit of mind, not a
+module.** It shows up wherever a failure and an absence share a return value.
+
+### Corruption that protects itself is the expensive kind
+
+The Kit CSS defect stored escaped bytes while keeping the marker hash of the *correct*
+bytes. So the operator's natural response — re-upsert the same CSS — returned `skipped`
+and left it broken. A bug that makes the obvious fix a no-op costs far more than a bug
+that simply fails.
+
+### Tests can pass for the wrong reason
+
+Three separate cases: a test asserting three constants equalled the literals declared
+beside them; a batch denial test that could not observe a dispatch because the stub took
+no arguments; and a write-failure test whose selector matched a newly-added prefix and
+so stopped exercising the path it was named for. All green. All proving nothing.
+
+**Consequence for 3.11: a new test must be shown to fail against unpatched source
+before it counts.** That is now the standing rule, not a nicety.
+
+### The environment is part of the diagnosis
+
+Two staging defects were invisible locally until the environment matched: one needed
+PHP 8.4 *plus* a handler promoting warnings to exceptions; the other needed a request
+whose user lacks `unfiltered_html`. A local rig that differs from production in those
+axes will keep producing confident false negatives.
+
+---
+
+## 3.10.5 — in flight
+
+Backlog cleanup, no new surface. Currently on `fix/backlog-3-10-5`:
+
+- **#762** Kit CSS blocks corrupted before 3.10.4 stay corrupted, and idempotency hides
+  them. Detection (`hash_mismatch` per block) plus making a corrupt block un-skippable,
+  so the retry an operator would naturally attempt becomes the repair.
+- **#755** Relay dedupe marker skipped when GitHub reports a duplicate with no
+  `html_url` — the fourth state #748 did not classify. Plus escaping the embedded error
+  text that crosses into a GitHub issue body.
+- **#756** Custom-tool dispatch ignores placeholder substitution when `rest_path` is
+  set, so every such tool is silently broken with a misleading `rest_no_route`.
+
+## 3.11 — proposed
+
+Theme: **make the failure modes above structurally impossible, and finish the debt that
+3.10.x deliberately deferred.**
+
+1. **Fail-closed audit (#752 F6, F9).** The relay counters are still a non-atomic
+   read-modify-write across three ceilings, and one rate-counted request can still drive
+   ~12,500 writes through nested fan-out. F6 needs a storage decision (`wp_cache_incr`
+   does not compose cleanly with the transient API); F9 needs a spend bound, not a
+   sub-request count bound.
+2. **Test-order integrity (#757).** The suite is green only in declaration order;
+   `--order-by=random` fails on Elementor constant leakage. Isolate the
+   constant-dependent cases, then add `--order-by=random` to CI so it cannot return.
+3. **Upstream Elementor defects.** #759 (`content-sanitizer/module.php:45` reads
+   `widgetType` unguarded) is a one-line fix on their side that affects every plugin
+   writing Elementor data as a non-admin. Report it; keep our guard regardless.
+4. **Environment parity for the local rig.** PHP 8.4 and an Elementor install are now
+   available locally; make that the default test target rather than an ad-hoc container,
+   and add a non-admin request path to the harness.
+5. **Release-verification honesty.** `verify_freemius_channel.sh` cannot run without a
+   token and correctly exits 1 — but the release currently completes without it. Wire
+   the token into the release environment so all three channels are *verified*, not two
+   verified and one asserted by a workflow's own exit code.
+
+Explicitly **not** in 3.11: new tool surface. The tool count is not the constraint.
+
+## 4.0 — when, and what gates it
+
+**Target: when workstreams A and C are done, not on a date.** Best estimate on current
+velocity is **Q4 2026**, and that estimate is only honest if the two gates below hold.
+
+4.0 is a major version because it changes contracts, not because it adds features
+([ROADMAP-4.0.md §Why 4.0](ROADMAP-4.0.md)):
+
+| Gate | Epic | Why it is a 4.0 blocker |
+|---|---|---|
+| **A — Release engineering** | #661 | Channel divergence is hand-assembled today. A packaging bug of the 3.5.x class must become structurally impossible before the extension contract changes underneath it. |
+| **C — Gateway architecture** | #663 | ADR 0001's Gateway + Modular Monolith changes internal structure and the addon contract. That *is* the major-version event. |
+
+Already delivered and no longer gating: **B — Zero-Touch Connect** (#662) landed as a
+hosted broker rather than per-site OAuth.
+
+Adjacent but not gating 4.0: **T — Mumega Motion** (#664), **wp.org round 5** (#665),
+**agency gateway custody** (#549), **accessibility** (#671).
+
+### The honest risk
+
+The near-term backlog is small and well-specified; the 4.0 gates are large and mostly
+unstarted. The failure mode is spending every cycle on tractable 3.10.x items — which
+feel productive and are individually justified — while A and C never start. If two more
+patch releases ship without a commit against #661 or #663, that is the signal, and the
+right response is to stop taking backlog items for one cycle.
+
+---
+
+## Working rules earned the hard way
+
+These are not style preferences. Each one is here because its absence cost real time.
+
+1. **A new test must be shown to fail against unpatched source.** Green proves nothing
+   on its own.
+2. **A caught error is reported, never swallowed.** An API that could not be called and
+   one that worked must not produce the same response.
+3. **Adversarial review runs in parallel** on auth, rate-limit, credential-spending and
+   external-facing surfaces — 3.10.1 shipped two P0s past four self-review passes.
+4. **Never `git add -A`.** Path-scoped commits only; repo-root state has reached a
+   published artifact before.
+5. **Never rewrite shared history to fix your own mistake.** Fix forward. A `reset` in a
+   shared tree can destroy someone else's commit.
+6. **Parallel agents in one working tree share an index.** Path-scoped commits protect
+   against foreign *files*, not foreign *edits to your own file* — `git commit -- path`
+   commits that file's current on-disk content. Give agents disjoint files, and never
+   make a temporary edit to a file you do not own.
+7. **Re-verify CI against the live API before an irreversible action.** A watcher's exit
+   code is a wake-up, not authority.
