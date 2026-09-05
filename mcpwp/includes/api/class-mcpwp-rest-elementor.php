@@ -1192,9 +1192,86 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 		$settings['custom_css'] = $css;
 		update_post_meta( $kit_id, '_elementor_page_settings', $settings );
 
+		// Verify the exact bytes landed, and repair them if they did not.
+		//
+		// CSS is not HTML. A child combinator (".a>.b") is ordinary, valid CSS,
+		// but somewhere in WordPress's meta write path it can be stored
+		// HTML-escaped as ".a&gt;.b" — reproduced on WP 7.0.2 / Elementor 4.2.4
+		// for a request whose user lacks unfiltered_html, which is every
+		// API-key request. That is silent data corruption, not a safety
+		// control: the escaped text is no longer the stylesheet the caller
+		// wrote, the selector stops matching, and the stored block no longer
+		// hashes to the hash recorded in its own marker — so a later idempotent
+		// upsert reports "skipped" over content that is already broken.
+		//
+		// Escaping is not reversed blindly here: a caller may legitimately
+		// write a literal "&gt;" and that must survive untouched. Instead the
+		// exact bytes we intended are compared against what the row actually
+		// holds, and only a mismatch is repaired, by writing the row directly.
+		$repaired = false;
+		$stored   = $this->read_kit_css_from_db( $kit_id );
+
+		if ( null !== $stored && $stored !== $css ) {
+			global $wpdb;
+
+			$settings['custom_css'] = $css;
+
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+			$wpdb->update(
+				$wpdb->postmeta,
+				array( 'meta_value' => maybe_serialize( $settings ) ),
+				array(
+					'post_id'  => $kit_id,
+					'meta_key' => '_elementor_page_settings',
+				)
+			);
+
+			wp_cache_delete( $kit_id, 'post_meta' );
+			clean_post_cache( $kit_id );
+
+			$stored   = $this->read_kit_css_from_db( $kit_id );
+			$repaired = true;
+		}
+
 		if ( method_exists( \Elementor\Plugin::$instance->files_manager, 'clear_cache' ) ) {
 			\Elementor\Plugin::$instance->files_manager->clear_cache();
 		}
+
+		return array(
+			'verified' => ( null !== $stored && $stored === $css ),
+			'repaired' => $repaired,
+		);
+	}
+
+	/**
+	 * Read the Kit's custom_css straight from the postmeta row.
+	 *
+	 * Deliberately bypasses get_post_meta(): a persistent object cache can be
+	 * populated optimistically with the value we asked to write, independent of
+	 * what the underlying row actually holds, which would make the round-trip
+	 * check above agree with itself and prove nothing.
+	 *
+	 * @param int $kit_id Kit post ID.
+	 * @return string|null Stored CSS, or null when the row cannot be read.
+	 */
+	private function read_kit_css_from_db( $kit_id ) {
+		global $wpdb;
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		$raw = $wpdb->get_var(
+			$wpdb->prepare(
+				"SELECT meta_value FROM {$wpdb->postmeta} WHERE post_id = %d AND meta_key = '_elementor_page_settings' ORDER BY meta_id DESC LIMIT 1",
+				$kit_id
+			)
+		);
+
+		if ( null === $raw ) {
+			return null;
+		}
+
+		$settings = maybe_unserialize( $raw );
+
+		return is_array( $settings ) && isset( $settings['custom_css'] ) ? (string) $settings['custom_css'] : null;
 	}
 
 	/**
@@ -1343,18 +1420,34 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 			$action      = 'created';
 		}
 
-		$this->set_kit_css_raw( $raw['kit_id'], $updated_css );
+		$write = $this->set_kit_css_raw( $raw['kit_id'], $updated_css );
 
-		return $this->success_response(
-			array(
-				'name'            => $name,
-				'action'          => $action,
-				'old_hash'        => $existing ? $existing['hash'] : null,
-				'new_hash'        => $new_hash,
-				'bytes'           => strlen( $css ),
-				'total_kit_bytes' => strlen( $updated_css ),
-			)
+		if ( ! $write['verified'] ) {
+			return $this->error_response(
+				'kit_css_write_unverified',
+				__( 'The Kit CSS was written but did not read back byte-for-byte, so the stored stylesheet cannot be trusted. Nothing was reported as saved.', 'mcpwp' ),
+				500
+			);
+		}
+
+		$response = array(
+			'name'            => $name,
+			'action'          => $action,
+			'old_hash'        => $existing ? $existing['hash'] : null,
+			'new_hash'        => $new_hash,
+			'bytes'           => strlen( $css ),
+			'total_kit_bytes' => strlen( $updated_css ),
+			'verified'        => true,
 		);
+
+		if ( $write['repaired'] ) {
+			// Surfaced rather than swallowed: the host mangled the first write,
+			// which is worth knowing even though the stored bytes are now correct.
+			$response['storage_repaired'] = true;
+			$response['storage_note']     = 'The first write was altered by the host (HTML-escaped) and was rewritten directly so the stored CSS matches what you sent.';
+		}
+
+		return $this->success_response( $response );
 	}
 
 	/**
