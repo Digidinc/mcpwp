@@ -153,6 +153,9 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 
 == Changelog ==
 
+= 3.10.5 =
+* fix: backlog cleanup for 3.10.5 ([#762](https://github.com/Mumega-com/mcpwp/issues/762), [#755](https://github.com/Mumega-com/mcpwp/issues/755), [#756](https://github.com/Mumega-com/mcpwp/issues/756)) + near-term roadmap ([#763](https://github.com/Mumega-com/mcpwp/issues/763))
+
 = 3.10.4 =
 * fix: close the eight adversarial-review follow-ups from [#744](https://github.com/Mumega-com/mcpwp/issues/744) ([#746](https://github.com/Mumega-com/mcpwp/issues/746)-[#753](https://github.com/Mumega-com/mcpwp/issues/753)) ([#754](https://github.com/Mumega-com/mcpwp/issues/754))
 * fix: **elementor:** store Kit CSS byte-for-byte, repairing a host that escapes it ([#761](https://github.com/Mumega-com/mcpwp/issues/761))
