@@ -533,6 +533,52 @@ function apply_filters($tag, $value)
     return $value;
 }
 
+function remove_filter($tag, $callback, $priority = 10)
+{
+    $priority = (int) $priority;
+    if (empty($GLOBALS['mcpwp_test_filters'][ $tag ][ $priority ])) {
+        return false;
+    }
+
+    $removed = false;
+    foreach ($GLOBALS['mcpwp_test_filters'][ $tag ][ $priority ] as $index => $item) {
+        if ($item['callback'] === $callback) {
+            unset($GLOBALS['mcpwp_test_filters'][ $tag ][ $priority ][ $index ]);
+            $removed = true;
+        }
+    }
+
+    if (empty($GLOBALS['mcpwp_test_filters'][ $tag ][ $priority ])) {
+        unset($GLOBALS['mcpwp_test_filters'][ $tag ][ $priority ]);
+    }
+
+    return $removed;
+}
+
+/**
+ * Count the callbacks registered on a filter — lets a test assert that a
+ * scoped filter was actually removed again, not merely added.
+ */
+function mcpwp_test_filter_count($tag)
+{
+    $count = 0;
+    foreach ($GLOBALS['mcpwp_test_filters'][ $tag ] ?? array() as $callbacks) {
+        $count += count($callbacks);
+    }
+    return $count;
+}
+
+/**
+ * Stand-in for wp_kses_allowed_html(). $GLOBALS['mcpwp_test_allowed_html'] is
+ * the "core" allow-list; the filter runs over it exactly as in WordPress.
+ */
+function wp_kses_allowed_html($context = '')
+{
+    $tags = $GLOBALS['mcpwp_test_allowed_html'] ?? array();
+
+    return apply_filters('wp_kses_allowed_html', $tags, $context);
+}
+
 function add_action($tag, $callback, $priority = 10, $accepted_args = 1)
 {
     $GLOBALS['mcpwp_test_actions'][ $tag ][ (int) $priority ][] = array(
