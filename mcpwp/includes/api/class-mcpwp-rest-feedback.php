@@ -47,14 +47,16 @@ class Mcpwp_REST_Feedback extends Mcpwp_REST_API {
 	 * counted across every caller regardless of source address.
 	 *
 	 * Each accepted relay request spends this site's own GitHub token: a
-	 * search call plus, usually, an issue-creation call. 200 per hour is
-	 * roughly 400 GitHub API calls per hour, comfortably inside GitHub's
-	 * 5,000/hour authenticated primary limit and its content-creation
-	 * secondary limit, while sitting about two orders of magnitude above any
-	 * plausible volume of genuine bug reports arriving from the installed
-	 * fleet in one hour. It therefore never fires for real traffic, and it
-	 * caps a flood spread across many real source addresses, which the
-	 * per-IP counter above cannot see at all.
+	 * search call (dedupe, against GitHub's search-specific limit of
+	 * 30 requests/minute) plus, usually, an issue-creation call (against
+	 * GitHub's content-creation secondary limit of 80/minute and 500/hour).
+	 * Neither is the 5,000/hour authenticated primary limit — that limit is
+	 * never the binding constraint here. At 200/hour, a saturated hour spends
+	 * 200 of the 500/hour content-creation budget: 40% of it, not the two
+	 * orders of magnitude of headroom once claimed. That is a reasonable
+	 * hourly figure on its own, but nothing here spreads it across the hour —
+	 * see RELAY_GLOBAL_MAX_PER_MINUTE below for the bound that actually
+	 * protects the per-minute limits.
 	 *
 	 * @var int
 	 */
@@ -76,6 +78,36 @@ class Mcpwp_REST_Feedback extends Mcpwp_REST_API {
 	 * @var string
 	 */
 	const RELAY_GLOBAL_TRANSIENT_PREFIX = 'mcpwp_relay_global_';
+
+	/**
+	 * Site-wide ceiling on relay submissions inside RELAY_GLOBAL_MINUTE_WINDOW,
+	 * counted across every caller regardless of source address.
+	 *
+	 * RELAY_GLOBAL_MAX alone permits the entire hour's budget to be spent in
+	 * a single minute: the per-IP counter allows RELAY_RATE_MAX per source, so
+	 * 20 distinct sources at that rate land all 200 inside one minute — 200
+	 * search calls against GitHub's 30/minute search limit, 200 issue
+	 * creations against its 80/minute content-creation limit. 20/minute keeps
+	 * both satisfied (20 <= 30, 20 <= 80) while still reaching the 200/hour
+	 * ceiling in ten minutes for a sustained flood.
+	 *
+	 * @var int
+	 */
+	const RELAY_GLOBAL_MAX_PER_MINUTE = 20;
+
+	/**
+	 * Window for the site-wide per-minute relay ceiling above, in seconds.
+	 *
+	 * @var int
+	 */
+	const RELAY_GLOBAL_MINUTE_WINDOW = 60;
+
+	/**
+	 * Transient key prefix for the site-wide per-minute relay counter.
+	 *
+	 * @var string
+	 */
+	const RELAY_GLOBAL_MINUTE_TRANSIENT_PREFIX = 'mcpwp_relay_global_min_';
 
 	/**
 	 * Register routes.
@@ -244,6 +276,14 @@ class Mcpwp_REST_Feedback extends Mcpwp_REST_API {
 	public function relay_feedback( $request ) {
 		// Per-IP throttle: no single source may exceed RELAY_RATE_MAX
 		// submissions inside RELAY_RATE_WINDOW seconds.
+		//
+		// Note deliberately not "fixed" on the read side: get_transient()
+		// returns false for both "no requests yet" and "the backend cannot
+		// answer right now", and there is no reliable way through the WP
+		// transient API to tell those apart here. That is fine — the write
+		// check below catches a dead backend before any GitHub call is
+		// made, which is the only place it matters on this credential-
+		// spending path.
 		$ip        = $this->get_relay_client_ip();
 		$transient = $this->relay_ip_transient_key( $ip );
 		$count     = (int) get_transient( $transient );
@@ -255,12 +295,30 @@ class Mcpwp_REST_Feedback extends Mcpwp_REST_API {
 			);
 		}
 
-		// Site-wide backstop, counted across every caller regardless of source
-		// address. The per-IP bucket above bounds one source and does nothing
-		// against a flood spread over many real addresses, while every accepted
-		// request here spends this site's own GitHub token on behalf of an
-		// unauthenticated caller. Checked before either counter is incremented,
-		// so a refused request consumes no budget.
+		// Site-wide per-minute backstop, counted across every caller regardless
+		// of source address. RELAY_GLOBAL_MAX alone does not spread the hour's
+		// budget across it — many distinct sources, each within their own
+		// per-IP ceiling, can otherwise land the whole hourly budget inside one
+		// minute and trip GitHub's per-minute limits (search, content
+		// creation) while the hourly counter still reads as un-tripped.
+		// Checked before any counter is incremented, so a refused request
+		// consumes no budget.
+		$global_minute_transient = $this->relay_global_minute_transient_key();
+		$global_minute_count     = (int) get_transient( $global_minute_transient );
+		if ( $global_minute_count >= self::RELAY_GLOBAL_MAX_PER_MINUTE ) {
+			return new WP_Error(
+				'rate_limited',
+				__( 'Too many feedback submissions. Please try again later.', 'mcpwp' ),
+				array( 'status' => 429 )
+			);
+		}
+
+		// Site-wide hourly backstop, counted across every caller regardless of
+		// source address. The per-IP bucket above bounds one source and does
+		// nothing against a flood spread over many real addresses, while every
+		// accepted request here spends this site's own GitHub token on behalf
+		// of an unauthenticated caller. Checked before either counter is
+		// incremented, so a refused request consumes no budget.
 		$global_transient = $this->relay_global_transient_key();
 		$global_count     = (int) get_transient( $global_transient );
 		if ( $global_count >= self::RELAY_GLOBAL_MAX ) {
@@ -271,8 +329,38 @@ class Mcpwp_REST_Feedback extends Mcpwp_REST_API {
 			);
 		}
 
-		set_transient( $transient, $count + 1, self::RELAY_RATE_WINDOW );
-		set_transient( $global_transient, $global_count + 1, self::RELAY_GLOBAL_WINDOW );
+		// A failed write means the ceiling checked above cannot be enforced
+		// for the next request — this bucket will read back as zero no
+		// matter how many requests actually land, and the site's GitHub
+		// token would be spent on every one of them. Refuse rather than
+		// spend it. All writes happen before any GitHub call, so refusing
+		// here never lets a request through to create an issue. If an
+		// earlier write above succeeds but a later write below fails, we
+		// still refuse — the earlier bucket is left slightly over-counted
+		// rather than rolled back, which is the safe direction.
+		if ( false === set_transient( $transient, $count + 1, self::RELAY_RATE_WINDOW ) ) {
+			return new WP_Error(
+				'relay_unavailable',
+				__( 'Feedback relay is temporarily unavailable. Please try again later.', 'mcpwp' ),
+				array( 'status' => 503 )
+			);
+		}
+
+		if ( false === set_transient( $global_minute_transient, $global_minute_count + 1, self::RELAY_GLOBAL_MINUTE_WINDOW ) ) {
+			return new WP_Error(
+				'relay_unavailable',
+				__( 'Feedback relay is temporarily unavailable. Please try again later.', 'mcpwp' ),
+				array( 'status' => 503 )
+			);
+		}
+
+		if ( false === set_transient( $global_transient, $global_count + 1, self::RELAY_GLOBAL_WINDOW ) ) {
+			return new WP_Error(
+				'relay_unavailable',
+				__( 'Feedback relay is temporarily unavailable. Please try again later.', 'mcpwp' ),
+				array( 'status' => 503 )
+			);
+		}
 
 		$data = array(
 			'type'           => $request->get_param( 'type' ),
@@ -343,13 +431,23 @@ class Mcpwp_REST_Feedback extends Mcpwp_REST_API {
 	 * a bucket key — an unvalidated header value is an unlimited supply of
 	 * distinct keys, which is the same evasion by another route.
 	 *
+	 * Header list and comma-splitting deliberately match the two siblings
+	 * (Mcpwp_Rate_Limiter::get_client_identifier(),
+	 * Mcpwp_API_Auth::get_client_ip()) — see #753. A shorter list here had no
+	 * stated rationale and left an operator behind a non-Cloudflare proxy
+	 * (nginx/Varnish setting X-Real-IP, no CF-Connecting-IP) falling to
+	 * REMOTE_ADDR — the proxy's own address — collapsing every caller into
+	 * one bucket.
+	 *
 	 * @param bool $trust_proxy Whether proxy-supplied headers may be believed.
-	 * @return string Validated IP address, or '0.0.0.0' when none is usable.
+	 * @return string Validated IP address, or 'unknown' when none is usable.
 	 */
 	private function resolve_relay_client_ip( $trust_proxy ) {
 		$ip_keys = $trust_proxy
 			? array(
 				'HTTP_CF_CONNECTING_IP', // Cloudflare.
+				'HTTP_X_FORWARDED_FOR',  // Proxy.
+				'HTTP_X_REAL_IP',        // Nginx.
 				'REMOTE_ADDR',           // Standard.
 			)
 			: array( 'REMOTE_ADDR' );
@@ -357,13 +455,17 @@ class Mcpwp_REST_Feedback extends Mcpwp_REST_API {
 		foreach ( $ip_keys as $key ) {
 			if ( ! empty( $_SERVER[ $key ] ) ) {
 				$ip = sanitize_text_field( wp_unslash( $_SERVER[ $key ] ) );
+				// Handle comma-separated IPs (X-Forwarded-For).
+				if ( strpos( $ip, ',' ) !== false ) {
+					$ip = trim( explode( ',', $ip )[0] );
+				}
 				if ( filter_var( $ip, FILTER_VALIDATE_IP ) ) {
 					return $ip;
 				}
 			}
 		}
 
-		return '0.0.0.0';
+		return 'unknown';
 	}
 
 	/**
@@ -400,6 +502,23 @@ class Mcpwp_REST_Feedback extends Mcpwp_REST_API {
 	 */
 	private function relay_global_transient_key() {
 		return self::RELAY_GLOBAL_TRANSIENT_PREFIX . (int) floor( time() / self::RELAY_GLOBAL_WINDOW );
+	}
+
+	/**
+	 * Transient key for the site-wide per-minute relay counter.
+	 *
+	 * Tumbling for the same reason as relay_global_transient_key() and
+	 * relay_ip_transient_key() above: a fixed wall-clock boundary, not a
+	 * TTL pushed forward by each accepted request.
+	 *
+	 * @param int|null $now Timestamp to derive the window from. Defaults to
+	 *                      the current time; taken as an argument so a test
+	 *                      can cross a window boundary without sleeping.
+	 * @return string
+	 */
+	private function relay_global_minute_transient_key( $now = null ) {
+		$now = null === $now ? time() : (int) $now;
+		return self::RELAY_GLOBAL_MINUTE_TRANSIENT_PREFIX . (int) floor( $now / self::RELAY_GLOBAL_MINUTE_WINDOW );
 	}
 
 	/**

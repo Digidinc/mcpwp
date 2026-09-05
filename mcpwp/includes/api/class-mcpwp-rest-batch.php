@@ -171,6 +171,24 @@ class Mcpwp_REST_Batch extends Mcpwp_REST_API {
 	}
 
 	/**
+	 * Finish normalising a route from the result of the slash-collapsing
+	 * preg_replace() call in execute_operation().
+	 *
+	 * Split out so the null-from-preg_replace guard is independently testable
+	 * via reflection, since '#/+#' cannot itself be made to fail from a test —
+	 * it is anchored to no backtracking and always compiles.
+	 *
+	 * @param string|null $collapsed_route Result of preg_replace( '#/+#', '/', $route ).
+	 * @return string|null Normalised route, or null if it could not be normalised.
+	 */
+	private static function finish_normalizing_route( $collapsed_route ) {
+		if ( ! is_string( $collapsed_route ) ) {
+			return null;
+		}
+		return '/' . trim( $collapsed_route, '/' );
+	}
+
+	/**
 	 * Execute a single operation.
 	 *
 	 * @param array  $operation Operation details.
@@ -230,7 +248,34 @@ class Mcpwp_REST_Batch extends Mcpwp_REST_API {
 		// Collapse repeated slashes and drop a trailing one before matching:
 		// "//batch" and "/batch/" reach the same handler as "/batch", so the
 		// check has to see the same string WordPress will.
-		$normalized_route = '/' . trim( preg_replace( '#/+#', '/', $route ), '/' );
+		$collapsed_route  = preg_replace( '#/+#', '/', $route );
+		$normalized_route = self::finish_normalizing_route( $collapsed_route );
+
+		// preg_replace() returns null (not false) on a PCRE engine failure —
+		// backtrack limit, recursion limit, or another internal error — rather
+		// than throwing. Passing that null through trim() would coerce it to
+		// '', $normalized_route would become '/', the denial check below would
+		// not fire, and the ORIGINAL, un-normalised $route (built below) would
+		// still be the one dispatched. That is the classic parser-differential
+		// bug this file's own DENIED_OPERATION_ROUTE_PATTERN docblock warns
+		// about one line up: check the normalised value, dispatch the raw one.
+		// Refuse to dispatch a route this code could not itself normalise,
+		// rather than fail open into dispatching it unchecked.
+		//
+		// Not reachable today: '#/+#' is anchored to no backtracking and
+		// always compiles, so preg_replace() cannot fail against it. This
+		// guard removes the dependency on that fact rather than fixing a live
+		// bug.
+		if ( null === $normalized_route ) {
+			return array(
+				'index'  => $index,
+				'status' => 400,
+				'data'   => array(
+					'code'    => 'forbidden_path',
+					'message' => __( 'Operation path could not be safely normalised.', 'mcpwp' ),
+				),
+			);
+		}
 
 		// Refuse to dispatch back into the batch or MCP entry points. Rejecting
 		// only this operation, not the whole batch, matches how every other

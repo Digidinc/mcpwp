@@ -1338,12 +1338,29 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			// Mark as internal sub-request via a PHP static property so rate limiting
 			// is not double-counted. Using a static flag (not an HTTP header) prevents
 			// external callers from forging this bypass.
-			if ( class_exists( 'Mcpwp_REST_Batch' ) ) {
+			//
+			// Save and restore the previous value rather than hard-resetting to
+			// false. This dispatch may itself already be running inside another
+			// internal dispatch — a batch operation's route can map back into this
+			// very tool dispatcher — so writing false unconditionally could clear
+			// an outer caller's flag while it is still live. try/finally guarantees
+			// the restore even if the sub-request throws, so one failing tool call
+			// cannot leave rate limiting switched off for the rest of the PHP
+			// process. (Not reachable today — nothing in this call path throws —
+			// this removes the dependency on that fact rather than fixing a live
+			// bug; see Mcpwp_REST_Batch::execute_operation() for the sibling this
+			// mirrors.)
+			$batch_class_exists    = class_exists( 'Mcpwp_REST_Batch' );
+			$previous_sub_request  = $batch_class_exists ? Mcpwp_REST_Batch::$is_batch_sub_request : null;
+			if ( $batch_class_exists ) {
 				Mcpwp_REST_Batch::$is_batch_sub_request = true;
 			}
-			$response = rest_do_request( $internal_request );
-			if ( class_exists( 'Mcpwp_REST_Batch' ) ) {
-				Mcpwp_REST_Batch::$is_batch_sub_request = false;
+			try {
+				$response = rest_do_request( $internal_request );
+			} finally {
+				if ( $batch_class_exists ) {
+					Mcpwp_REST_Batch::$is_batch_sub_request = $previous_sub_request;
+				}
 			}
 		}
 		$data   = $response->get_data();

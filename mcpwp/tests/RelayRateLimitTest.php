@@ -32,10 +32,11 @@ final class RelayRateLimitTest extends TestCase {
 	private Mcpwp_REST_Feedback $controller;
 
 	protected function setUp(): void {
-		$GLOBALS['mcpwp_test_options']    = array();
-		$GLOBALS['mcpwp_test_transients'] = array();
+		$GLOBALS['mcpwp_test_options']                = array();
+		$GLOBALS['mcpwp_test_transients']              = array();
+		$GLOBALS['mcpwp_test_transient_write_fails']   = false;
 
-		foreach ( array( 'HTTP_CF_CONNECTING_IP', 'REMOTE_ADDR' ) as $key ) {
+		foreach ( array( 'HTTP_CF_CONNECTING_IP', 'HTTP_X_FORWARDED_FOR', 'HTTP_X_REAL_IP', 'REMOTE_ADDR' ) as $key ) {
 			$this->saved_server[ $key ] = $_SERVER[ $key ] ?? null;
 			unset( $_SERVER[ $key ] );
 		}
@@ -51,7 +52,8 @@ final class RelayRateLimitTest extends TestCase {
 				$_SERVER[ $key ] = $value;
 			}
 		}
-		$GLOBALS['mcpwp_test_transients'] = array();
+		$GLOBALS['mcpwp_test_transients']            = array();
+		$GLOBALS['mcpwp_test_transient_write_fails'] = false;
 	}
 
 	/** Call a private method on the controller. */
@@ -107,7 +109,7 @@ final class RelayRateLimitTest extends TestCase {
 	public function test_unusable_remote_addr_falls_back_to_placeholder(): void {
 		$_SERVER['REMOTE_ADDR'] = 'garbage';
 
-		$this->assertSame( '0.0.0.0', $this->call_private( 'resolve_relay_client_ip', array( false ) ) );
+		$this->assertSame( 'unknown', $this->call_private( 'resolve_relay_client_ip', array( false ) ) );
 	}
 
 	public function test_rotating_cf_headers_share_one_bucket_by_default(): void {
@@ -200,6 +202,73 @@ final class RelayRateLimitTest extends TestCase {
 		);
 	}
 
+	public function test_refuses_when_per_ip_counter_write_fails(): void {
+		$_SERVER['REMOTE_ADDR'] = '203.0.113.10';
+
+		// Every set_transient() call fails, simulating an unreachable
+		// transient backend (dropped external object cache, read-only
+		// options table). The per-IP write is attempted first, so this
+		// must be caught before the relay ever calls GitHub.
+		$GLOBALS['mcpwp_test_transient_write_fails'] = true;
+
+		$result = $this->controller->relay_feedback( $this->relay_request() );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'relay_unavailable', $result->get_error_code() );
+		$this->assertSame( 503, $result->get_error_data()['status'] );
+		$this->assertSame(
+			array(),
+			$this->ip_bucket_keys(),
+			'A failed write must not appear to have persisted anything.'
+		);
+	}
+
+	public function test_refuses_when_global_hour_counter_write_fails(): void {
+		$_SERVER['REMOTE_ADDR'] = '203.0.113.11';
+
+		// Only the hourly bucket's write fails; the per-IP and per-minute
+		// writes succeed. The relay must still refuse — an over-counted
+		// earlier bucket is the safe direction, per the fix design.
+		//
+		// The prefix test must EXCLUDE the per-minute key. Writes happen in
+		// the order per-IP, per-minute, hourly, and the per-minute prefix
+		// ('mcpwp_relay_global_min_') begins with the hourly prefix
+		// ('mcpwp_relay_global_'), so a plain substring match trips on the
+		// per-minute write and returns before the hourly write is ever
+		// attempted — leaving this path, the one the test is named for,
+		// completely uncovered.
+		$GLOBALS['mcpwp_test_transient_write_fails'] = static function ( $name ) {
+			$name = (string) $name;
+			return 0 === strpos( $name, Mcpwp_REST_Feedback::RELAY_GLOBAL_TRANSIENT_PREFIX )
+				&& 0 !== strpos( $name, Mcpwp_REST_Feedback::RELAY_GLOBAL_MINUTE_TRANSIENT_PREFIX );
+		};
+
+		$result = $this->controller->relay_feedback( $this->relay_request() );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'relay_unavailable', $result->get_error_code() );
+		$this->assertSame( 503, $result->get_error_data()['status'] );
+	}
+
+	public function test_refuses_when_global_minute_counter_write_fails(): void {
+		$_SERVER['REMOTE_ADDR'] = '203.0.113.12';
+
+		// Only the per-minute bucket's write fails. Each of the three
+		// counters needs its own write-failure case: a ceiling whose write
+		// silently evaporates is not a ceiling, and the per-minute one is
+		// the tightest of the three against GitHub's 30/min search and
+		// 80/min content-creation limits.
+		$GLOBALS['mcpwp_test_transient_write_fails'] = static function ( $name ) {
+			return 0 === strpos( (string) $name, Mcpwp_REST_Feedback::RELAY_GLOBAL_MINUTE_TRANSIENT_PREFIX );
+		};
+
+		$result = $this->controller->relay_feedback( $this->relay_request() );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'relay_unavailable', $result->get_error_code() );
+		$this->assertSame( 503, $result->get_error_data()['status'] );
+	}
+
 	public function test_per_ip_buckets_stay_separate_per_address_within_a_window(): void {
 		$base = 1758000000;
 
@@ -208,5 +277,91 @@ final class RelayRateLimitTest extends TestCase {
 			$this->call_private( 'relay_ip_transient_key', array( '198.51.100.7', $base ) ),
 			'Adding the window index must not collapse distinct sources into one bucket.'
 		);
+	}
+
+	public function test_global_per_minute_ceiling_trips_independently_of_hourly_ceiling(): void {
+		$_SERVER['REMOTE_ADDR'] = '203.0.113.50';
+
+		$minute_key = $this->call_private( 'relay_global_minute_transient_key' );
+		set_transient(
+			$minute_key,
+			Mcpwp_REST_Feedback::RELAY_GLOBAL_MAX_PER_MINUTE,
+			60
+		);
+
+		$result = $this->controller->relay_feedback( $this->relay_request() );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'rate_limited', $result->get_error_code() );
+		$this->assertSame( 429, $result->get_error_data()['status'] );
+
+		// The hourly ceiling is nowhere near tripped on its own — only the
+		// per-minute component is responsible for refusing this request.
+		$hourly_count = (int) get_transient( $this->call_private( 'relay_global_transient_key' ) );
+		$this->assertLessThan( Mcpwp_REST_Feedback::RELAY_GLOBAL_MAX, $hourly_count );
+	}
+
+	public function test_global_minute_bucket_key_tumbles_at_the_window_boundary(): void {
+		$base = 1758000000; // Divisible by 60: start of a minute.
+
+		$this->assertNotSame(
+			$this->call_private( 'relay_global_minute_transient_key', array( $base + 59 ) ),
+			$this->call_private( 'relay_global_minute_transient_key', array( $base + 60 ) ),
+			'The site-wide per-minute bucket must not survive its window boundary.'
+		);
+	}
+
+	public function test_request_refused_by_per_minute_ceiling_consumes_no_other_budget(): void {
+		$_SERVER['REMOTE_ADDR'] = '203.0.113.51';
+
+		$minute_key = $this->call_private( 'relay_global_minute_transient_key' );
+		set_transient(
+			$minute_key,
+			Mcpwp_REST_Feedback::RELAY_GLOBAL_MAX_PER_MINUTE,
+			60
+		);
+
+		$result = $this->controller->relay_feedback( $this->relay_request() );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'rate_limited', $result->get_error_code() );
+		$this->assertSame(
+			array(),
+			$this->ip_bucket_keys(),
+			'A request refused by the per-minute ceiling must not consume per-IP budget.'
+		);
+		$this->assertSame(
+			0,
+			(int) get_transient( $this->call_private( 'relay_global_transient_key' ) ),
+			'A request refused by the per-minute ceiling must not consume the hourly budget.'
+		);
+		$this->assertSame(
+			Mcpwp_REST_Feedback::RELAY_GLOBAL_MAX_PER_MINUTE,
+			(int) get_transient( $minute_key ),
+			'The per-minute bucket itself must not be incremented past the ceiling by a refused request.'
+		);
+	}
+
+	public function test_trusted_mode_honours_x_real_ip_when_no_cf_connecting_ip(): void {
+		$_SERVER['HTTP_X_REAL_IP'] = '198.51.100.20';
+		$_SERVER['REMOTE_ADDR']    = '203.0.113.10';
+
+		$this->assertSame( '198.51.100.20', $this->call_private( 'resolve_relay_client_ip', array( true ) ) );
+	}
+
+	public function test_trusted_mode_honours_comma_list_x_forwarded_for(): void {
+		$_SERVER['HTTP_X_FORWARDED_FOR'] = '198.51.100.30, 10.0.0.1, 10.0.0.2';
+		$_SERVER['REMOTE_ADDR']          = '203.0.113.10';
+
+		$this->assertSame( '198.51.100.30', $this->call_private( 'resolve_relay_client_ip', array( true ) ) );
+	}
+
+	public function test_untrusted_default_ignores_all_proxy_headers(): void {
+		$_SERVER['HTTP_CF_CONNECTING_IP'] = '198.51.100.7';
+		$_SERVER['HTTP_X_FORWARDED_FOR']  = '198.51.100.30';
+		$_SERVER['HTTP_X_REAL_IP']        = '198.51.100.20';
+		$_SERVER['REMOTE_ADDR']           = '203.0.113.10';
+
+		$this->assertSame( '203.0.113.10', $this->call_private( 'resolve_relay_client_ip', array( false ) ) );
 	}
 }

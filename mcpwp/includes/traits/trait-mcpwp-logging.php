@@ -141,18 +141,46 @@ trait Mcpwp_Logging {
 	/**
 	 * Get client IP address.
 	 *
+	 * Proxy-supplied client-IP headers are spoofable; trusting them
+	 * unconditionally would let an anonymous caller write an arbitrary
+	 * address into the activity log by setting a header, corrupting the
+	 * audit trail in exactly the incident where it would be consulted.
+	 * Honour them only behind the explicit MCPWP_TRUST_PROXY_HEADERS
+	 * opt-in — the same gate used by the rate limiter, the auth trait, and
+	 * the feedback relay throttle.
+	 *
 	 * Note: This method may also be defined in Mcpwp_Api_Auth trait.
 	 * When both traits are used, PHP will use one of them.
 	 *
 	 * @return string IP address.
 	 */
 	protected function get_client_ip_for_logging() {
-		$ip_keys = array(
-			'HTTP_CF_CONNECTING_IP',
-			'HTTP_X_FORWARDED_FOR',
-			'HTTP_X_REAL_IP',
-			'REMOTE_ADDR',
-		);
+		$trust_proxy = defined( 'MCPWP_TRUST_PROXY_HEADERS' ) && MCPWP_TRUST_PROXY_HEADERS;
+
+		return $this->resolve_logging_client_ip( $trust_proxy );
+	}
+
+	/**
+	 * Resolve the client IP for the activity log under an explicit trust flag.
+	 *
+	 * Split from get_client_ip_for_logging() so tests can exercise both the
+	 * trusted and untrusted branches without define()-ing
+	 * MCPWP_TRUST_PROXY_HEADERS — a PHP constant cannot be undefined once
+	 * set, and this suite runs in a single process, so defining it here
+	 * would permanently poison every later test.
+	 *
+	 * @param bool $trust_proxy Whether proxy-supplied headers may be believed.
+	 * @return string IP address, or 'unknown' if none could be resolved.
+	 */
+	private function resolve_logging_client_ip( $trust_proxy ) {
+		$ip_keys = $trust_proxy
+			? array(
+				'HTTP_CF_CONNECTING_IP',
+				'HTTP_X_FORWARDED_FOR',
+				'HTTP_X_REAL_IP',
+				'REMOTE_ADDR',
+			)
+			: array( 'REMOTE_ADDR' );
 
 		foreach ( $ip_keys as $key ) {
 			if ( ! empty( $_SERVER[ $key ] ) ) {
