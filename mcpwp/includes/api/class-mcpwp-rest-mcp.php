@@ -1268,11 +1268,39 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		}
 
 		// Substitute path parameters (e.g., {id})
+		//
+		// A placeholder fills exactly one path SEGMENT. is_safe_rest_path() ran
+		// at registration time against the template, while the braces were still
+		// in it — so it never saw this value, and substitution is the one place
+		// caller-supplied text enters an already-validated route.
+		//
+		// A value containing "/" would therefore add segments the allowlist never
+		// approved. That is not exploitable today: WordPress matches REST routes
+		// with an anchored pattern and does not resolve "..", so a smuggled path
+		// simply fails to route (verified against WP 7.0.2 — every traversal form
+		// tried matched NO ROUTE). But that is a negative property of someone
+		// else's matcher, and this file already carries two fixes whose whole
+		// point was removing exactly that kind of dependency (#752 F7/F11).
+		// Refuse the segment instead of relying on the router to save us.
 		if ( ! $is_callback ) {
 			foreach ( $arguments as $key => $value ) {
 				$placeholder = '{' . $key . '}';
 				if ( false !== strpos( $route, $placeholder ) ) {
-					$route = str_replace( $placeholder, $value, $route );
+					$value_str = (string) $value;
+
+					if ( false !== strpos( $value_str, '/' ) ) {
+						$this->fire_tool_called( $tool_name, $start, 'invalid_path_parameter' );
+						return $this->jsonrpc_error(
+							$id,
+							-32602,
+							sprintf( 'Path parameter "%s" may not contain "/".', $key ),
+							array(
+								'hint' => 'A path placeholder fills one route segment. Pass the bare value (for example an ID or slug) without any path separators.',
+							)
+						);
+					}
+
+					$route = str_replace( $placeholder, $value_str, $route );
 					unset( $arguments[ $key ] );
 				}
 			}
@@ -1312,10 +1340,14 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			);
 		} else {
 			// Build internal REST request.
-			// Custom tools (mcpwp_register_tools) store 'rest_path' as the full WP REST route.
-			// Built-in tools store a relative path that is prefixed with the MCPWP namespace.
+			// Custom tools (mcpwp_register_tools) store 'rest_path' as the full WP REST
+			// route; built-in tools store a relative path that is prefixed with the
+			// MCPWP namespace. Both cases read from $route — never from
+			// $mapping['rest_path'] directly — because $route is the one variable the
+			// placeholder-substitution loop above actually writes into. Reading the raw
+			// mapping here would silently skip substitution for custom tools (#756).
 			$full_route = isset( $mapping['rest_path'] )
-				? $mapping['rest_path']
+				? $route
 				: '/mcpwp/v1' . $route;
 			$internal_request = new WP_REST_Request( $method, $full_route );
 

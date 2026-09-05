@@ -1,10 +1,17 @@
 # MCPWP v4.0 Roadmap
 
-Status: **DRAFT v1** — written 2026-07-18, before the 3.4.13 wp.org security/stability
-audit results. Section 7 will be revised once the audit workflow completes.
+Status: **DRAFT v1** — written 2026-07-18. Section 7 was revised after the audit.
 
-Owner: Hadi. Baseline: MCPWP 3.6.1 (Freemius + self-hosted), mumega-mcp 3.4.13
-(wp.org, in review round 4), ADR 0001 accepted (Gateway + Modular Monolith, PR #487).
+> **Currency note (2026-09-05):** the baseline below is stale — shipping is now
+> **3.10.4**, not 3.6.1. Workstream **B is delivered** (hosted broker, see the status
+> note in that section). Workstreams **A** (#661) and **C** (#663) remain the two gates
+> on cutting 4.0. For the near-term version plan (3.10.x → 3.11 → 4.0) and the current
+> estimate, see [ROADMAP.md](ROADMAP.md). This document stays the authority on the
+> workstream content itself.
+
+Owner: Hadi. Baseline at time of writing: MCPWP 3.6.1 (Freemius + self-hosted),
+mumega-mcp 3.4.13 (wp.org, in review round 4), ADR 0001 accepted (Gateway + Modular
+Monolith, PR #487).
 
 ---
 
