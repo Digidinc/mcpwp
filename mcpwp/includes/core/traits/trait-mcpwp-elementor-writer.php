@@ -14,6 +14,52 @@ if ( ! defined( 'ABSPATH' ) ) {
 trait Mcpwp_Elementor_Writer_Trait {
 
 	/**
+	 * Run one call into Elementor's own API and survive a Throwable from it.
+	 *
+	 * Every Document::save() call below already handled a RETURNED WP_Error.
+	 * None of them handled a THROWN error, so anything Elementor raised
+	 * internally — a TypeError against a changed signature, an Error from a
+	 * class removed between majors — propagated out of the REST request and
+	 * became an HTTP 500. That mattered far more than an ordinary crash,
+	 * because the raw-meta fallback that exists precisely for "Document::save()
+	 * did not work" sits after the call: a throw skipped the fallback entirely
+	 * and the write was lost, while the response carried no explanation.
+	 *
+	 * Observed on staging 2026-09-05 (MCPWP 3.10.3, WP 7.1, PHP 8.4.25,
+	 * Elementor 4.2.4 + Pro 4.2.3): dry-run clean, real save 500, readback
+	 * empty, while Elementor's own editor saved the same post fine.
+	 *
+	 * A caught Throwable is recorded under "<label>_exception" and MUST leave
+	 * its caller on the degraded path. It is never converted into a success:
+	 * an Elementor API that could not be called and one that worked must not
+	 * produce the same response.
+	 *
+	 * @param callable $call   The Elementor call to attempt.
+	 * @param array    $debug  Debug bag, written by reference on failure.
+	 * @param string   $label  Key prefix for the debug entry.
+	 * @return array{ok:bool,value:mixed} ok=false when the call threw.
+	 */
+	private function attempt_elementor_call( callable $call, array &$debug, $label ) {
+		try {
+			return array(
+				'ok'    => true,
+				'value' => $call(),
+			);
+		} catch ( \Throwable $e ) {
+			$debug[ $label . '_exception' ] = array(
+				'class'   => get_class( $e ),
+				'message' => $e->getMessage(),
+				'at'      => basename( $e->getFile() ) . ':' . $e->getLine(),
+			);
+
+			return array(
+				'ok'    => false,
+				'value' => null,
+			);
+		}
+	}
+
+	/**
 	 * Set Elementor data for a page.
 	 *
 	 * @param int   $page_id  Page ID.
@@ -381,9 +427,19 @@ trait Mcpwp_Elementor_Writer_Trait {
 
 				$document = $documents_manager->get( $page_id, false );
 				if ( $document && method_exists( $document, 'save' ) ) {
-					$save_result = $document->save( array( 'elements' => $post_validation_decoded ) );
+					// A throw here must fall through to the raw-meta fallback
+					// below, not abort the request — see attempt_elementor_call().
+					$attempt = $this->attempt_elementor_call(
+						static function () use ( $document, $post_validation_decoded ) {
+							return $document->save( array( 'elements' => $post_validation_decoded ) );
+						},
+						$save_debug,
+						'document_save'
+					);
 
-					if ( ! is_wp_error( $save_result ) ) {
+					$save_result = $attempt['value'];
+
+					if ( $attempt['ok'] && ! is_wp_error( $save_result ) ) {
 						// (#198) Always overwrite raw meta after Document::save() to
 						// prevent revision/cache divergence on subsequent reads.
 						update_post_meta( $page_id, '_elementor_data', wp_slash( $elementor_json ) );
@@ -408,9 +464,13 @@ trait Mcpwp_Elementor_Writer_Trait {
 								'sections_saved'    => $stored_after_count,
 							);
 						}
-					} else {
+					} elseif ( is_wp_error( $save_result ) ) {
 						$save_debug['document_save_error'] = $save_result->get_error_message();
 					}
+					// When the call threw, $save_result is null and the throw is
+					// already recorded as document_save_exception. There is no else
+					// branch on purpose: get_error_message() on null would replace
+					// one fatal with another.
 				}
 			}
 		}
@@ -496,8 +556,15 @@ trait Mcpwp_Elementor_Writer_Trait {
 
 		if ( $elementor_ok ) {
 			if ( ! empty( \Elementor\Plugin::$instance->files_manager ) ) {
-				\Elementor\Plugin::$instance->files_manager->clear_cache();
-				$save_debug['cache_cleared'] = true;
+				$cleared = $this->attempt_elementor_call(
+					static function () {
+						\Elementor\Plugin::$instance->files_manager->clear_cache();
+						return true;
+					},
+					$save_debug,
+					'cache_clear'
+				);
+				$save_debug['cache_cleared'] = $cleared['ok'];
 			}
 
 			delete_post_meta( $page_id, '_elementor_css' );
@@ -515,8 +582,23 @@ trait Mcpwp_Elementor_Writer_Trait {
 						// as 1). Verified against a live install: this happens in practice.
 						$pre_rebuild_total = $this->count_elements_recursive( $fresh_elements );
 
-						$fresh_doc->save( array( 'elements' => $fresh_elements ) );
-						$save_debug['html_cache_rebuilt'] = true;
+						// The data is already persisted and verified at this point, so a
+						// throw here costs only the rendering cache — it must never turn a
+						// completed save into an HTTP 500.
+						$rebuild = $this->attempt_elementor_call(
+							static function () use ( $fresh_doc, $fresh_elements ) {
+								return $fresh_doc->save( array( 'elements' => $fresh_elements ) );
+							},
+							$save_debug,
+							'html_cache_rebuild'
+						);
+						$save_debug['html_cache_rebuilt'] = $rebuild['ok'];
+						if ( ! $rebuild['ok'] ) {
+							// Elementor may have partially written before throwing. Restore
+							// our known-good bytes, exactly as the corruption guard below does.
+							update_post_meta( $page_id, '_elementor_data', wp_slash( $elementor_json ) );
+							wp_cache_delete( $page_id, 'post_meta' );
+						}
 
 						// (#612, #618) This is Elementor's own save path, not ours — if its
 						// internal element registry silently drops anything (e.g. element
@@ -545,9 +627,18 @@ trait Mcpwp_Elementor_Writer_Trait {
 			}
 
 			if ( class_exists( '\Elementor\Core\Files\CSS\Post' ) ) {
-				$css_file = \Elementor\Core\Files\CSS\Post::create( $page_id );
-				$css_file->update();
-				$save_debug['css_regenerated'] = true;
+				// Same Elementor API surface as the saves above: an unguarded throw
+				// here would still 500 a request whose data is already persisted.
+				$css_regen = $this->attempt_elementor_call(
+					static function () use ( $page_id ) {
+						$css_file = \Elementor\Core\Files\CSS\Post::create( $page_id );
+						$css_file->update();
+						return true;
+					},
+					$save_debug,
+					'css_regeneration'
+				);
+				$save_debug['css_regenerated'] = $css_regen['ok'];
 			}
 		}
 
@@ -1113,8 +1204,18 @@ trait Mcpwp_Elementor_Writer_Trait {
 
 				$document = $documents_manager->get( $page_id, false );
 				if ( $document && method_exists( $document, 'save' ) ) {
-					$save_result = $document->save( array( 'elements' => $post_val ) );
-					if ( ! is_wp_error( $save_result ) ) {
+					// Shared by six surgical operations (add/remove/replace/patch/edit/
+					// strip). Same contract as the full-set path: a throw degrades to
+					// the raw-meta fallback below rather than aborting the request.
+					$attempt = $this->attempt_elementor_call(
+						static function () use ( $document, $post_val ) {
+							return $document->save( array( 'elements' => $post_val ) );
+						},
+						$debug,
+						'document_save'
+					);
+					$save_result = $attempt['value'];
+					if ( $attempt['ok'] && ! is_wp_error( $save_result ) ) {
 						// (#198) Always do a direct meta overwrite after Document::save()
 						// to guarantee the raw _elementor_data meta matches what we sent.
 						// Document::save() may create revisions or write to internal caches
@@ -1142,9 +1243,11 @@ trait Mcpwp_Elementor_Writer_Trait {
 								'sections_saved'    => $stored_after_count,
 							);
 						}
-					} else {
+					} elseif ( is_wp_error( $save_result ) ) {
 						$debug['document_save_error'] = $save_result->get_error_message();
 					}
+					// No else: a thrown call leaves $save_result null and is already
+					// recorded as document_save_exception.
 				}
 			}
 		}
@@ -1185,7 +1288,14 @@ trait Mcpwp_Elementor_Writer_Trait {
 		// our meta overwrite, leaving post_content (HTML cache) stale.
 		if ( $elementor_ok ) {
 			if ( ! empty( \Elementor\Plugin::$instance->files_manager ) ) {
-				\Elementor\Plugin::$instance->files_manager->clear_cache();
+				$cleared = $this->attempt_elementor_call(
+					static function () {
+						\Elementor\Plugin::$instance->files_manager->clear_cache();
+						return true;
+					},
+					$debug,
+					'cache_clear'
+				);
 			}
 			delete_post_meta( $page_id, '_elementor_css' );
 
@@ -1195,16 +1305,35 @@ trait Mcpwp_Elementor_Writer_Trait {
 				if ( $fresh_doc && method_exists( $fresh_doc, 'save' ) ) {
 					$fresh_elements = json_decode( get_post_meta( $page_id, '_elementor_data', true ), true );
 					if ( is_array( $fresh_elements ) && ! empty( $fresh_elements ) ) {
-						$fresh_doc->save( array( 'elements' => $fresh_elements ) );
-						$debug['html_cache_rebuilt'] = true;
+						$rebuild = $this->attempt_elementor_call(
+							static function () use ( $fresh_doc, $fresh_elements ) {
+								return $fresh_doc->save( array( 'elements' => $fresh_elements ) );
+							},
+							$debug,
+							'html_cache_rebuild'
+						);
+						$debug['html_cache_rebuilt'] = $rebuild['ok'];
+						if ( ! $rebuild['ok'] ) {
+							update_post_meta( $page_id, '_elementor_data', wp_slash( $elementor_json ) );
+							wp_cache_delete( $page_id, 'post_meta' );
+						}
 					}
 				}
 			}
 
 			if ( class_exists( '\Elementor\Core\Files\CSS\Post' ) ) {
-				$css_file = \Elementor\Core\Files\CSS\Post::create( $page_id );
-				$css_file->update();
-				$debug['css_regenerated'] = true;
+				// Same Elementor API surface as the saves above: an unguarded throw
+				// here would still 500 a request whose data is already persisted.
+				$css_regen = $this->attempt_elementor_call(
+					static function () use ( $page_id ) {
+						$css_file = \Elementor\Core\Files\CSS\Post::create( $page_id );
+						$css_file->update();
+						return true;
+					},
+					$debug,
+					'css_regeneration'
+				);
+				$debug['css_regenerated'] = $css_regen['ok'];
 			}
 		}
 
