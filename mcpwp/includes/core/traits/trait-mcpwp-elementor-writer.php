@@ -101,7 +101,8 @@ trait Mcpwp_Elementor_Writer_Trait {
 	}
 
 	/**
-	 * Give every tag in a 'post'-context KSES allow-list an array of attributes.
+	 * Give supported bare-tag entries in a 'post'-context KSES allow-list an
+	 * array of attributes Elementor can inspect.
 	 *
 	 * `'tag' => true` is a shorthand WordPress core supports and acts on
 	 * deliberately: wp_kses_attr() tests `true === $allowed_html[ $element_low ]`
@@ -116,10 +117,13 @@ trait Mcpwp_Elementor_Writer_Trait {
 	 * on every MCPWP API-key write, and never in an admin's own browser — so one
 	 * unrelated plugin's filter takes down the whole Elementor write path (#765).
 	 *
-	 * Rewriting `true` to `array()` is the array spelling of the same rule, not a
-	 * relaxation of it: wp_kses_attr()'s `empty()` branch and its `true` branch
-	 * return the identical bare tag. Nothing is newly allowed, and no attribute
-	 * that was being stripped stops being stripped.
+	 * Rewriting `true` and other non-null empty values to `array()` is the array
+	 * spelling of the same rule, not a relaxation of it: wp_kses_attr()'s
+	 * `empty()` branch and its `true` branch return the identical bare tag. A
+	 * null value is different: wp_kses_split2() rejects that tag at its earlier
+	 * isset() gate, so the key must be removed to preserve the denial. Unsupported
+	 * non-empty scalar and object values remain unchanged so the render failure
+	 * stays observable instead of silently allowing a tag WordPress would reject.
 	 *
 	 * Only the 'post' context is touched. Other contexts carry differently shaped
 	 * arrays — 'entities' is a flat list of entity-name strings — and rewriting
@@ -131,7 +135,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 	 *
 	 * @param mixed  $tags    Allowed-HTML map from the wp_kses_allowed_html filter.
 	 * @param string $context KSES context.
-	 * @return mixed The map, with non-array 'post'-context tag values as array().
+	 * @return mixed The semantically equivalent map in an Elementor-safe shape.
 	 */
 	public static function normalize_kses_allowed_html( $tags, $context = '' ) {
 		if ( 'post' !== $context || ! is_array( $tags ) ) {
@@ -139,7 +143,12 @@ trait Mcpwp_Elementor_Writer_Trait {
 		}
 
 		foreach ( $tags as $tag => $attributes ) {
-			if ( ! is_array( $attributes ) ) {
+			if ( null === $attributes ) {
+				unset( $tags[ $tag ] );
+				continue;
+			}
+
+			if ( ! is_array( $attributes ) && ( true === $attributes || empty( $attributes ) ) ) {
 				$tags[ $tag ] = array();
 			}
 		}

@@ -29,10 +29,10 @@
  *
  * Two properties are asserted here:
  *
- * 1. The allow-list Elementor sees during an MCPWP write has no non-array
- *    value, so an unrelated plugin's filter cannot fatal our save. The rewrite
- *    is `true` -> array(), the array spelling of the same core rule: wp_kses_attr()
- *    returns the identical bare tag for both. Nothing is newly allowed.
+ * 1. Every WordPress-supported bare-tag value Elementor sees during an MCPWP
+ *    write has an array shape, so an unrelated plugin's valid filter cannot
+ *    fatal our save. Null stays denied, and unsupported non-empty values stay
+ *    observable rather than becoming newly allowed tags.
  * 2. When an Elementor call throws anyway — which this cannot prevent in
  *    general — the response says so at the top level. A page whose data
  *    persisted but whose render pipeline died is not a delivered page, and
@@ -92,6 +92,52 @@ final class KsesAllowedHtmlNormalizationTest extends TestCase {
 
 		$this->assertSame( array(), $normalized['my-embed'], '`true` is core shorthand for "no attributes"; array() is its array spelling.' );
 		$this->assertSame( array(), $normalized['strong'], 'An already-empty array must survive unchanged.' );
+	}
+
+	/**
+	 * @dataProvider non_array_tag_value_provider
+	 *
+	 * @param mixed $value            Filter-provided value for one tag.
+	 * @param bool  $expected_present Whether the normalized map should retain the tag.
+	 * @param mixed $expected_value   Expected value when the tag remains present.
+	 */
+	public function test_non_array_tag_values_preserve_wordpress_tag_semantics( $value, $expected_present, $expected_value ): void {
+		$normalized = Mcpwp_Elementor_Basic::normalize_kses_allowed_html(
+			array( 'my-embed' => $value ),
+			'post'
+		);
+
+		$this->assertSame( $expected_present, array_key_exists( 'my-embed', $normalized ) );
+
+		if ( $expected_present ) {
+			$this->assertSame( $expected_value, $normalized['my-embed'] );
+		}
+	}
+
+	/**
+	 * WordPress rejects a null-valued tag at wp_kses_split2()'s isset() gate.
+	 * True and other non-null empty values reach wp_kses_attr()'s bare-tag
+	 * branch. Unsupported non-empty values must remain observable instead of
+	 * being silently changed into an allowed bare tag.
+	 *
+	 * @return array<string,array{0:mixed,1:bool,2:mixed}>
+	 */
+	public function non_array_tag_value_provider(): array {
+		$invalid_object = (object) array( 'attribute' => true );
+
+		return array(
+			'true shorthand'     => array( true, true, array() ),
+			'false empty'        => array( false, true, array() ),
+			'integer zero'       => array( 0, true, array() ),
+			'float zero'         => array( 0.0, true, array() ),
+			'empty string'       => array( '', true, array() ),
+			'string zero'        => array( '0', true, array() ),
+			'null denied'        => array( null, false, null ),
+			'non-empty string'   => array( 'attributes', true, 'attributes' ),
+			'non-zero integer'   => array( 1, true, 1 ),
+			'non-zero float'     => array( 1.5, true, 1.5 ),
+			'unsupported object' => array( $invalid_object, true, $invalid_object ),
+		);
 	}
 
 	public function test_attribute_maps_are_returned_untouched(): void {
