@@ -153,7 +153,7 @@ final class CustomToolPlaceholderTest extends TestCase {
 	 * is never satisfied by WordPress's stub responder as if it reached a
 	 * distinct, more-privileged route.
 	 */
-	public function test_placeholder_value_cannot_smuggle_a_denied_path(): void {
+	public function test_placeholder_value_containing_a_slash_is_refused(): void {
 		$this->register_tool(
 			array(
 				'name'        => 'digid_get_listing_hostile',
@@ -165,18 +165,43 @@ final class CustomToolPlaceholderTest extends TestCase {
 		$hostile = '../../mcpwp/v1/api-keys';
 		$data    = $this->call_tool( 'digid_get_listing_hostile', array( 'id' => $hostile ) );
 
-		$this->assertArrayHasKey( 'result', $data );
+		// A placeholder fills exactly one path segment. is_safe_rest_path() ran
+		// at registration, while the braces were still in the template, so it
+		// never saw this value — substitution is where caller text enters an
+		// already-approved route. A value carrying "/" adds segments nobody
+		// approved, so it is refused rather than substituted.
+		//
+		// It is refused even though it would not route today: WordPress matches
+		// REST routes with an anchored pattern and does not resolve "..", so the
+		// smuggled path fails to match anything (verified against WP 7.0.2).
+		// Depending on that would make our safety a property of someone else's
+		// matcher — the exact dependency #752 F7 and F11 existed to remove.
+		$this->assertArrayHasKey( 'error', $data, 'A slash-bearing path parameter must be refused.' );
+		$this->assertSame( -32602, $data['error']['code'] );
+		$this->assertStringContainsString( 'may not contain', $data['error']['message'] );
+
+		$this->assertSame(
+			array(),
+			$GLOBALS['mcpwp_test_dispatched_routes'],
+			'A refused path parameter must never reach dispatch.'
+		);
+	}
+
+	public function test_ordinary_placeholder_values_are_still_substituted(): void {
+		$this->register_tool(
+			array(
+				'name'        => 'digid_get_listing_ok',
+				'description' => 'Get one listing by id.',
+				'rest_path'   => '/digid/v1/listings/{id}',
+			)
+		);
+
+		// The guard rejects separators, not punctuation: slugs, dots and dashes
+		// are ordinary segment content and must keep working.
+		$this->call_tool( 'digid_get_listing_ok', array( 'id' => 'my-listing.v2' ) );
 
 		$dispatched = $GLOBALS['mcpwp_test_dispatched_routes'];
 		$this->assertNotEmpty( $dispatched );
-		$actual = end( $dispatched );
-
-		// The hostile value is substituted literally into the placeholder's
-		// position — it never escapes into forming a distinct route such as
-		// the denied /mcpwp/v1/api-keys surface. The registered template's
-		// own namespace prefix (/digid/v1/listings/) is preserved verbatim.
-		$this->assertSame( '/digid/v1/listings/' . $hostile, $actual );
-		$this->assertStringStartsWith( '/digid/v1/listings/', $actual );
-		$this->assertNotSame( '/mcpwp/v1/api-keys', $actual );
+		$this->assertSame( '/digid/v1/listings/my-listing.v2', end( $dispatched ) );
 	}
 }
