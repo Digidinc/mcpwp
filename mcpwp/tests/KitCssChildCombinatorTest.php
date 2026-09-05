@@ -112,6 +112,45 @@ final class KitCssChildCombinatorTest extends TestCase {
 		return $response instanceof WP_REST_Response ? $response->get_data() : $response;
 	}
 
+	private function list_blocks() {
+		$controller = new Mcpwp_REST_Elementor();
+
+		$request = new WP_REST_Request( 'GET', '/mcpwp/v1/elementor/kit-css/blocks' );
+
+		return $controller->list_kit_css_blocks( $request );
+	}
+
+	/**
+	 * Seed a block directly into the meta store whose stored body does NOT
+	 * hash to the hash recorded in its own marker — the exact shape a
+	 * pre-3.10.4 write left behind on an escaping host: the marker still
+	 * carries the hash of the original, correct bytes, while the body on
+	 * disk is the mangled ones.
+	 *
+	 * Deliberately bypasses upsert_kit_css_block(): driving the escaping host
+	 * through the real write path now gets repaired by the 73f8f12 fix before
+	 * it ever lands, so it can no longer produce this shape. Writing the row
+	 * directly is the only way left to construct it.
+	 *
+	 * @param string $name        Block name.
+	 * @param string $correct_css The CSS the marker's hash actually describes.
+	 * @param string $stored_css  The (corrupted) bytes actually on disk.
+	 */
+	private function seed_corrupt_block( string $name, string $correct_css, string $stored_css ): void {
+		$hash  = substr( hash( 'sha256', $correct_css ), 0, 16 );
+		$block = sprintf(
+			"/* mcpwp:block:start name=\"%s\" hash=\"%s\" */\n%s\n/* mcpwp:block:end name=\"%s\" */",
+			$name,
+			$hash,
+			$stored_css,
+			$name
+		);
+
+		$GLOBALS['_mcpwp_test_meta'][ self::KIT_ID ]['_elementor_page_settings'] = array(
+			'custom_css' => $block,
+		);
+	}
+
 	/**
 	 * The reported defect, at its smallest.
 	 *
@@ -225,6 +264,111 @@ final class KitCssChildCombinatorTest extends TestCase {
 		$this->assertTrue(
 			$written['storage_repaired'],
 			'The caller must be told the host altered the first write.'
+		);
+	}
+
+	/**
+	 * Part B of #762: re-upserting the correct CSS over a block whose stored
+	 * body does not hash to its own marker must NOT return "skipped" — that
+	 * is precisely the natural operator retry that the bug makes a no-op over
+	 * already-broken content. It must rewrite, and a readback must return the
+	 * correct bytes.
+	 *
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_reupserting_correct_css_over_a_hash_corrupt_block_rewrites_instead_of_skipping(): void {
+		$this->install( true );
+
+		$correct_css = '.a>.b{color:red}';
+		$stored_css  = '.a&gt;.b{color:red}';
+		$this->seed_corrupt_block( 'corrupt', $correct_css, $stored_css );
+
+		$written = $this->data( $this->upsert( 'corrupt', $correct_css ) );
+
+		$this->assertNotInstanceOf( WP_Error::class, $written );
+		$this->assertNotSame(
+			'skipped',
+			$written['action'],
+			'A hash match against a corrupt existing block must not be treated as "nothing to do".'
+		);
+		$this->assertTrue(
+			$written['corrupt_block_rewritten'],
+			'The response must say a corrupt block was rewritten, not just report an ordinary update.'
+		);
+
+		$read = $this->data( $this->read_block( 'corrupt' ) );
+		$this->assertSame(
+			$correct_css,
+			$read['css'],
+			'The readback after repair must return the correct bytes, not the corrupted ones that were on disk.'
+		);
+	}
+
+	/**
+	 * Part A of #762: list_kit_css_blocks() must flag a block whose stored
+	 * body does not hash to its own marker.
+	 *
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_list_flags_a_hash_corrupt_block(): void {
+		$this->install( true );
+
+		$correct_css = '.nav>.item{display:block}';
+		$stored_css  = '.nav&gt;.item{display:block}';
+		$this->seed_corrupt_block( 'flagged', $correct_css, $stored_css );
+
+		$blocks = $this->data( $this->list_blocks() )['blocks'];
+
+		$this->assertCount( 1, $blocks );
+		$this->assertTrue(
+			$blocks[0]['hash_mismatch'],
+			'A block whose stored body does not hash to its marker must be reported as mismatched.'
+		);
+	}
+
+	/**
+	 * The idempotency guarantee (#641) must survive #762's fix: an identical
+	 * re-upsert over a healthy block is still a genuine no-op.
+	 *
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_healthy_block_still_reports_skipped_on_identical_reupsert(): void {
+		$this->install( true );
+
+		$css = '.healthy{color:blue}';
+		$this->upsert( 'healthy', $css );
+
+		$second = $this->data( $this->upsert( 'healthy', $css ) );
+
+		$this->assertSame( 'skipped', $second['action'] );
+		$this->assertArrayNotHasKey(
+			'corrupt_block_rewritten',
+			$second,
+			'A healthy block must not be reported as a corrupt-block repair.'
+		);
+	}
+
+	/**
+	 * A healthy block — stored bytes that do hash to their own marker — must
+	 * not be flagged as mismatched.
+	 *
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_list_does_not_flag_a_healthy_block(): void {
+		$this->install( true );
+
+		$this->upsert( 'healthy', '.healthy{color:blue}' );
+
+		$blocks = $this->data( $this->list_blocks() )['blocks'];
+
+		$this->assertCount( 1, $blocks );
+		$this->assertFalse(
+			$blocks[0]['hash_mismatch'],
+			'A block whose stored body matches its own marker must not be flagged.'
 		);
 	}
 }

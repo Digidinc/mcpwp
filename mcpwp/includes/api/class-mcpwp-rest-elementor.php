@@ -1156,6 +1156,23 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 	}
 
 	/**
+	 * Whether a parsed block's stored body actually hashes to the hash
+	 * recorded in its own marker (#762).
+	 *
+	 * A block written before 3.10.4 on a host that HTML-escapes meta on write
+	 * can hold corrupted bytes while its marker still records the hash of the
+	 * original, correct CSS — the hash that was true when the block was
+	 * written, not the hash of what is actually stored now. That mismatch is
+	 * exact and cheap to detect: re-hash the stored body and compare.
+	 *
+	 * @param array{name:string,hash:string,css:string,raw:string} $block Parsed block.
+	 * @return bool True when the stored body does not match its own marker hash.
+	 */
+	private function kit_css_block_hash_mismatch( $block ) {
+		return substr( hash( 'sha256', $block['css'] ), 0, 16 ) !== $block['hash'];
+	}
+
+	/**
 	 * Get the current Kit custom_css value and its kit ID.
 	 *
 	 * @return array{kit_id:int,css:string}|WP_Error
@@ -1299,13 +1316,7 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 		}
 
 		$blocks = array_values( array_map(
-			function ( $block ) {
-				return array(
-					'name'  => $block['name'],
-					'hash'  => $block['hash'],
-					'bytes' => strlen( $block['css'] ),
-				);
-			},
+			array( $this, 'describe_kit_css_block_for_list' ),
 			$this->parse_kit_css_blocks( $raw['css'] )
 		) );
 
@@ -1314,6 +1325,22 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 				'blocks' => $blocks,
 				'total'  => count( $blocks ),
 			)
+		);
+	}
+
+	/**
+	 * Build one block's summary row for list_kit_css_blocks(), including the
+	 * hash_mismatch flag (#762).
+	 *
+	 * @param array{name:string,hash:string,css:string,raw:string} $block Parsed block.
+	 * @return array{name:string,hash:string,bytes:int,hash_mismatch:bool}
+	 */
+	private function describe_kit_css_block_for_list( $block ) {
+		return array(
+			'name'          => $block['name'],
+			'hash'          => $block['hash'],
+			'bytes'         => strlen( $block['css'] ),
+			'hash_mismatch' => $this->kit_css_block_hash_mismatch( $block ),
 		);
 	}
 
@@ -1398,7 +1425,15 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 			);
 		}
 
-		if ( $existing && $existing['hash'] === $new_hash ) {
+		// A block whose stored body does not hash to its own marker is corrupt
+		// (#762) — most likely a pre-3.10.4 write that an escaping host
+		// mangled after the correct hash was recorded. Skipping it because the
+		// incoming hash "matches" would compare against a hash that describes
+		// bytes which are no longer what is stored, silently preserving the
+		// corruption forever. Fall through and rewrite instead.
+		$existing_corrupt = null !== $existing && $this->kit_css_block_hash_mismatch( $existing );
+
+		if ( $existing && $existing['hash'] === $new_hash && ! $existing_corrupt ) {
 			return $this->success_response(
 				array(
 					'name'    => $name,
@@ -1445,6 +1480,16 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 			// which is worth knowing even though the stored bytes are now correct.
 			$response['storage_repaired'] = true;
 			$response['storage_note']     = 'The first write was altered by the host (HTML-escaped) and was rewritten directly so the stored CSS matches what you sent.';
+		}
+
+		if ( $existing_corrupt ) {
+			// Distinguish this from an ordinary content update: the incoming
+			// content hash may equal the block's own marker hash, which is
+			// exactly the case that used to return "skipped" over already-
+			// broken CSS (#762). A silent repair and a genuine no-op must not
+			// look identical to the caller.
+			$response['corrupt_block_rewritten'] = true;
+			$response['corrupt_block_note']      = 'The existing block\'s stored bytes did not hash to its own marker (pre-3.10.4 corruption) — it was rewritten rather than left in place, even though the incoming content hash matched the marker.';
 		}
 
 		return $this->success_response( $response );
