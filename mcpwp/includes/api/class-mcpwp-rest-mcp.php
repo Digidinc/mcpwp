@@ -1312,10 +1312,14 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			);
 		} else {
 			// Build internal REST request.
-			// Custom tools (mcpwp_register_tools) store 'rest_path' as the full WP REST route.
-			// Built-in tools store a relative path that is prefixed with the MCPWP namespace.
+			// Custom tools (mcpwp_register_tools) store 'rest_path' as the full WP REST
+			// route; built-in tools store a relative path that is prefixed with the
+			// MCPWP namespace. Both cases read from $route — never from
+			// $mapping['rest_path'] directly — because $route is the one variable the
+			// placeholder-substitution loop above actually writes into. Reading the raw
+			// mapping here would silently skip substitution for custom tools (#756).
 			$full_route = isset( $mapping['rest_path'] )
-				? $mapping['rest_path']
+				? $route
 				: '/mcpwp/v1' . $route;
 			$internal_request = new WP_REST_Request( $method, $full_route );
 
