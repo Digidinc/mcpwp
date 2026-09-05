@@ -153,6 +153,11 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 
 == Changelog ==
 
+= 3.10.4 =
+* fix: close the eight adversarial-review follow-ups from [#744](https://github.com/Mumega-com/mcpwp/issues/744) ([#746](https://github.com/Mumega-com/mcpwp/issues/746)-[#753](https://github.com/Mumega-com/mcpwp/issues/753)) ([#754](https://github.com/Mumega-com/mcpwp/issues/754))
+* fix: **elementor:** store Kit CSS byte-for-byte, repairing a host that escapes it ([#761](https://github.com/Mumega-com/mcpwp/issues/761))
+* fix: **elementor:** survive a Throwable from Elementor's own Document::save() ([#760](https://github.com/Mumega-com/mcpwp/issues/760))
+
 = 3.10.3 =
 * fix: **security:** bind relay throttle to a trusted client IP and block self-recursive batch operations ([#744](https://github.com/Mumega-com/mcpwp/issues/744))
 
