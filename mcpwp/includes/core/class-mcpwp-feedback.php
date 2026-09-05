@@ -441,7 +441,12 @@ class Mcpwp_Feedback {
 		$dedupe_unavailable_reason = null;
 
 		if ( is_wp_error( $search_response ) ) {
-			$dedupe_unavailable_reason = 'the search request failed (' . $search_response->get_error_message() . ')';
+			// WP's own HTTP-stack error text is not attacker-controlled, but it
+			// is still crossing unescaped into an external Markdown document —
+			// strip any tags and collapse whitespace/newlines so it cannot break
+			// out of its single-line parenthetical or inject extra structure (#755).
+			$search_error_message = preg_replace( '/\s+/', ' ', wp_strip_all_tags( $search_response->get_error_message() ) );
+			$dedupe_unavailable_reason = 'the search request failed (' . trim( (string) $search_error_message ) . ')';
 		} else {
 			$search_code = wp_remote_retrieve_response_code( $search_response );
 			$search_data = json_decode( wp_remote_retrieve_body( $search_response ), true );
@@ -459,6 +464,12 @@ class Mcpwp_Feedback {
 						'message'          => 'Duplicate issue found, returning existing.',
 					);
 				}
+
+				// GitHub genuinely reported a match (total_count > 0) but gave no
+				// usable URL to confirm or link it — a fourth outcome #748 did not
+				// classify. Treat it as dedupe-unavailable, not "no duplicate",
+				// so the marker below still fires (#755).
+				$dedupe_unavailable_reason = "GitHub search reported {$search_data['total_count']} matching issue(s) but returned no usable html_url to confirm one";
 			}
 		}
 

@@ -188,4 +188,109 @@ final class FeedbackDedupeTest extends TestCase {
 			'A clean zero-match search must not be flagged as unavailable.'
 		);
 	}
+
+	public function test_200_with_match_but_missing_html_url_is_treated_as_unavailable(): void {
+		$search_response = array(
+			'response' => array( 'code' => 200 ),
+			'body'     => wp_json_encode(
+				array(
+					'total_count' => 1,
+					'items'       => array(
+						array( 'number' => 7 ),
+					),
+				)
+			),
+		);
+		$create_response = array(
+			'response' => array( 'code' => 201 ),
+			'body'     => wp_json_encode( array( 'html_url' => 'https://github.com/acme/widget/issues/104' ) ),
+		);
+
+		$create_request = array();
+		$this->mock_http( $search_response, $create_response, $create_request );
+
+		$result = Mcpwp_Feedback::create_github_issue_from_relay( $this->relay_data() );
+
+		$this->assertTrue( $result['success'] );
+		$this->assertSame( 'https://github.com/acme/widget/issues/104', $result['github_issue_url'] );
+
+		$this->assertNotEmpty(
+			$create_request,
+			'A total_count > 0 result with no usable html_url must not silently short-circuit; it must fall through to issue creation with a marker.'
+		);
+		$payload = json_decode( $create_request['body'], true );
+		$this->assertMatchesRegularExpression(
+			'/duplicate.{0,40}unavailable|unavailable.{0,40}duplicate/i',
+			$payload['body'],
+			'A confirmed match with no usable html_url must be flagged as dedupe-unavailable, not created silently.'
+		);
+	}
+
+	public function test_200_with_match_and_empty_html_url_is_treated_as_unavailable(): void {
+		$search_response = array(
+			'response' => array( 'code' => 200 ),
+			'body'     => wp_json_encode(
+				array(
+					'total_count' => 1,
+					'items'       => array(
+						array( 'html_url' => '' ),
+					),
+				)
+			),
+		);
+		$create_response = array(
+			'response' => array( 'code' => 201 ),
+			'body'     => wp_json_encode( array( 'html_url' => 'https://github.com/acme/widget/issues/105' ) ),
+		);
+
+		$create_request = array();
+		$this->mock_http( $search_response, $create_response, $create_request );
+
+		$result = Mcpwp_Feedback::create_github_issue_from_relay( $this->relay_data() );
+
+		$this->assertTrue( $result['success'] );
+		$this->assertSame( 'https://github.com/acme/widget/issues/105', $result['github_issue_url'] );
+
+		$this->assertNotEmpty( $create_request );
+		$payload = json_decode( $create_request['body'], true );
+		$this->assertMatchesRegularExpression(
+			'/duplicate.{0,40}unavailable|unavailable.{0,40}duplicate/i',
+			$payload['body'],
+			'An empty-string html_url must be treated the same as a missing one.'
+		);
+	}
+
+	public function test_search_error_message_is_sanitized_in_issue_body(): void {
+		$search_response = new WP_Error(
+			'http_request_failed',
+			"cURL error 6: Could not resolve host <script>alert('x')</script>\nsecond line"
+		);
+		$create_response = array(
+			'response' => array( 'code' => 201 ),
+			'body'     => wp_json_encode( array( 'html_url' => 'https://github.com/acme/widget/issues/106' ) ),
+		);
+
+		$create_request = array();
+		$this->mock_http( $search_response, $create_response, $create_request );
+
+		$result = Mcpwp_Feedback::create_github_issue_from_relay( $this->relay_data() );
+
+		$this->assertTrue( $result['success'] );
+		$this->assertNotEmpty( $create_request );
+		$payload = json_decode( $create_request['body'], true );
+
+		$this->assertStringNotContainsString( '<script>', $payload['body'], 'Raw HTTP-stack error text must not carry tags into the issue body unescaped.' );
+
+		$this->assertMatchesRegularExpression(
+			'/the search request failed \(([^)]*)\)/',
+			$payload['body'],
+			'The marker sentence with the embedded error text must be present and confined to a single parenthetical.'
+		);
+		preg_match( '/the search request failed \(([^)]*)\)/', $payload['body'], $matches );
+		$this->assertStringNotContainsString(
+			"\n",
+			$matches[1],
+			'The embedded error text must not inject raw newlines into the marker line.'
+		);
+	}
 }
