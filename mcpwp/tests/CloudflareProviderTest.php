@@ -23,6 +23,19 @@ final class CloudflareProviderTest extends TestCase
         $instance->setValue(null, null);
     }
 
+    /**
+     * mockHttp() leaves a pre_http_request closure registered, and setUp alone
+     * does not undo it — nothing clears it after this class's last test. The
+     * next class to make any HTTP call then hit the Cloudflare mock, which reads
+     * $args['body'] unconditionally and raised "Undefined array key body" from a
+     * file unrelated to the failing test. #757 again: state cleaned on the way
+     * IN is not cleaned after the last test that set it.
+     */
+    protected function tearDown(): void
+    {
+        $GLOBALS['mcpwp_test_filters'] = array();
+    }
+
     private function configure(): void
     {
         Mcpwp_Integration_Manager::get_instance()->set_provider_config('cloudflare', array(

@@ -223,6 +223,9 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-pages.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-media.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-drafts.php';
+	// Loaded before the traits and every _elementor_data write path that calls
+	// it — the single definition of which settings keys Elementor ignores.
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-elementor-element-keys.php';
 	// Elementor engine verb traits (mixed into Mcpwp_Elementor_Basic — G4 split).
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/traits/trait-mcpwp-elementor-reader.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/traits/trait-mcpwp-elementor-writer.php';

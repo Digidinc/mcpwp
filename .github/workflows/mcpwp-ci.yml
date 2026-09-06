@@ -49,3 +49,14 @@ jobs:
 
       - name: Unit Tests
         run: mcpwp/vendor/bin/phpunit --configuration mcpwp/tests/phpunit.xml
+
+      # A suite that only passes in declaration order is not a passing suite:
+      # it means one test is setting process state another test depends on, and
+      # which one broke is decided by the order the files happen to be read in.
+      # Four such couplings were live at once — a constant, a sabotage switch, a
+      # cron-mode flag and a leaked HTTP mock (#757). Random order is what makes
+      # the next one fail here rather than months later somewhere unrelated.
+      # PHPUnit prints the seed it used, so a failure is reproducible with
+      # --random-order-seed=<that value>.
+      - name: Unit Tests (random order)
+        run: mcpwp/vendor/bin/phpunit --configuration mcpwp/tests/phpunit.xml --order-by=random

@@ -9,6 +9,18 @@ final class MupotConnectorTest extends TestCase
 {
     private const USER_ID = 42;
 
+    /**
+     * This class registers a pre_http_request mock. Cleaning it up in setUp
+     * alone leaves it live after the class's last test, so the next class to
+     * make any HTTP call gets answered by this mock — which reads keys the
+     * other caller never sent. #757: state cleaned on the way IN is not state
+     * cleaned after the last test that set it.
+     */
+    protected function tearDown(): void
+    {
+        $GLOBALS['mcpwp_test_filters'] = array();
+    }
+
     protected function setUp(): void
     {
         $GLOBALS['mcpwp_test_options']    = array();
