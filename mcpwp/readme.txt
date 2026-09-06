@@ -6,7 +6,7 @@ Requires at least: 6.1
 Tested up to: 7.0
 Requires PHP: 7.4
 <!-- x-release-please-start-version -->
-Stable tag: 3.10.5
+Stable tag: 3.10.6
 <!-- x-release-please-end -->
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -152,6 +152,14 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 4. Integrations and Chat — connected services plus safety-first agent workflow
 
 == Changelog ==
+
+= 3.10.6 =
+* fix: **elementor:** close remaining render verdict gaps ([#768](https://github.com/Mumega-com/mcpwp/issues/768))
+* fix: **elementor:** normalise element-id keys at every _elementor_data write ([#774](https://github.com/Mumega-com/mcpwp/issues/774))
+* fix: **elementor:** preserve repeat-insert renders ([#770](https://github.com/Mumega-com/mcpwp/issues/770))
+* fix: **elementor:** stop Elementor rewriting the tree it is asked to render ([#772](https://github.com/Mumega-com/mcpwp/issues/772))
+* fix: **elementor:** survive a `'tag' => true` KSES allow-list, and report a dead render ([#765](https://github.com/Mumega-com/mcpwp/issues/765)) ([#766](https://github.com/Mumega-com/mcpwp/issues/766))
+* fix: **seo:** say which stored copy a stale internal link came from ([#775](https://github.com/Mumega-com/mcpwp/issues/775))
 
 = 3.10.5 =
 * fix: backlog cleanup for 3.10.5 ([#762](https://github.com/Mumega-com/mcpwp/issues/762), [#755](https://github.com/Mumega-com/mcpwp/issues/755), [#756](https://github.com/Mumega-com/mcpwp/issues/756)) + near-term roadmap ([#763](https://github.com/Mumega-com/mcpwp/issues/763))

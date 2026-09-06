@@ -41,6 +41,21 @@ $GLOBALS['mcpwp_test_users'] = array(
     (object) array( 'ID' => 2, 'roles' => array( 'mcpwp_api_agent' ) ),
 );
 
+/**
+ * Minimal stand-in for WP_User. Production code identifies the user a
+ * capability check is running for by `$user instanceof WP_User`, so the class
+ * has to exist for a user_has_cap filter to be testable at all.
+ */
+class WP_User
+{
+    public $ID;
+
+    public function __construct($id = 0)
+    {
+        $this->ID = (int) $id;
+    }
+}
+
 class WP_Error
 {
     private $code;
@@ -394,13 +409,49 @@ function current_user_can($capability)
         $caps = $GLOBALS['mcpwp_test_user_caps'][ $user_id ];
         // Explicit true/false per capability key.
         if (array_key_exists($capability, $caps)) {
-            return (bool) $caps[ $capability ];
+            if ($caps[ $capability ]) {
+                return true;
+            }
+            return mcpwp_test_cap_filters_grant($capability, $user_id);
         }
-        // If the caps array exists but the key is absent, deny the cap.
-        return false;
+        // If the caps array exists but the key is absent, deny the cap unless a
+        // scoped filter grants it.
+        return mcpwp_test_cap_filters_grant($capability, $user_id);
     }
 
     // Default: grant all capabilities to any logged-in user (original behaviour).
+    return true;
+}
+
+/**
+ * Run the map_meta_cap / user_has_cap filters the way WordPress does, for a
+ * capability the static cap map denied.
+ *
+ * Deliberately additive: it can only turn a denial into a grant, never the
+ * reverse, so adding it cannot change the verdict of any test that passed
+ * before these filters existed. It is what lets a test observe a *scoped*
+ * capability grant actually taking effect rather than merely being registered.
+ */
+function mcpwp_test_cap_filters_grant($capability, $user_id)
+{
+    $caps = apply_filters('map_meta_cap', array( $capability ), $capability, $user_id, array());
+
+    if (! is_array($caps) || in_array('do_not_allow', $caps, true)) {
+        return false;
+    }
+
+    $allcaps = apply_filters('user_has_cap', array(), $caps, array( $capability ), new WP_User($user_id));
+
+    if (! is_array($allcaps)) {
+        return false;
+    }
+
+    foreach ($caps as $cap) {
+        if (empty($allcaps[ $cap ])) {
+            return false;
+        }
+    }
+
     return true;
 }
 
@@ -553,6 +604,23 @@ function remove_filter($tag, $callback, $priority = 10)
     }
 
     return $removed;
+}
+
+function has_filter($tag, $callback = false)
+{
+    if (false === $callback) {
+        return ! empty($GLOBALS['mcpwp_test_filters'][ $tag ]);
+    }
+
+    foreach ($GLOBALS['mcpwp_test_filters'][ $tag ] ?? array() as $priority => $callbacks) {
+        foreach ($callbacks as $item) {
+            if ($item['callback'] === $callback) {
+                return (int) $priority;
+            }
+        }
+    }
+
+    return false;
 }
 
 /**
