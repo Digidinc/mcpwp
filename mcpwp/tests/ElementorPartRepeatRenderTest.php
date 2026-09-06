@@ -115,9 +115,9 @@ final class ElementorPartRepeatRenderTest extends TestCase {
 		);
 	}
 
-	private function part( string $root_id, bool $include_default_fields, bool $omit_widget_elements = false ): array {
+	private function part( string $root_id, bool $include_default_fields, bool $omit_widget_elements = false, string $widget_id = '' ): array {
 		$column_id = substr( md5( $root_id . ':column' ), 0, 8 );
-		$widget_id = substr( md5( $root_id . ':widget' ), 0, 8 );
+		$widget_id = '' !== $widget_id ? $widget_id : substr( md5( $root_id . ':widget' ), 0, 8 );
 		$section = array(
 			'id'       => $root_id,
 			'elType'   => 'section',
@@ -198,7 +198,7 @@ final class ElementorPartRepeatRenderTest extends TestCase {
 		$pro = new Mcpwp_Repeat_Insert_Pro_Double(
 			array(
 				399477 => $this->part( '41c3ee18', true ),
-				399478 => $this->part( 'hnext0sec', false, true ),
+				399478 => $this->part( 'hnext0sec', false, true, 'hbev1d' ),
 			),
 			new Mcpwp_Elementor_Basic()
 		);
@@ -254,21 +254,24 @@ final class ElementorPartRepeatRenderTest extends TestCase {
 				array( 'id' => 'leaf0001', 'elType' => 'widget', 'widgetType' => 'heading', 'settings' => array() ),
 				array( 'id' => 'leaf0002', 'elType' => 'widget', 'widgetType' => 'heading', 'settings' => array(), 'elements' => array() ),
 			),
-			'seven-character non-hex id is not native' => array(
-				array( 'id' => 'zzzzzzz', 'elType' => 'widget', 'widgetType' => 'heading', 'settings' => array() ),
-				array( 'id' => 'zzzzzzz', 'elType' => 'widget', 'widgetType' => 'heading', 'settings' => array(), 'elements' => array() ),
+			'empty id is malformed' => array(
+				array( 'id' => '', 'elType' => 'widget', 'widgetType' => 'heading', 'settings' => array() ),
+				array( 'id' => '', 'elType' => 'widget', 'widgetType' => 'heading', 'settings' => array(), 'elements' => array() ),
 			),
-			'nine-character id is outside both formats' => array(
-				array( 'id' => 'leaf00001', 'elType' => 'widget', 'widgetType' => 'heading', 'settings' => array() ),
-				array( 'id' => 'leaf00001', 'elType' => 'widget', 'widgetType' => 'heading', 'settings' => array(), 'elements' => array() ),
+			'punctuated id is malformed' => array(
+				array( 'id' => 'leaf-001', 'elType' => 'widget', 'widgetType' => 'heading', 'settings' => array() ),
+				array( 'id' => 'leaf-001', 'elType' => 'widget', 'widgetType' => 'heading', 'settings' => array(), 'elements' => array() ),
 			),
 		);
 	}
 
-	public function test_native_seven_character_hex_widget_id_accepts_empty_elements_materialization(): void {
+	/**
+	 * @dataProvider accepted_leaf_widget_id_provider
+	 */
+	public function test_existing_leaf_widget_ids_accept_empty_elements_materialization( string $widget_id ): void {
 		$expected = array(
 			array(
-				'id'         => '5412776',
+				'id'         => $widget_id,
 				'elType'     => 'widget',
 				'widgetType' => 'heading',
 				'settings'   => array( 'title' => 'Native Elementor widget' ),
@@ -281,6 +284,16 @@ final class ElementorPartRepeatRenderTest extends TestCase {
 		$method->setAccessible( true );
 
 		$this->assertTrue( $method->invoke( new Mcpwp_Elementor_Basic(), $expected, $actual ) );
+	}
+
+	public function accepted_leaf_widget_id_provider(): array {
+		return array(
+			'native seven-character hex'       => array( '5412776' ),
+			'Upcoming Dates six-character ID'  => array( 'hbev1d' ),
+			'Partners nine-character ID'       => array( 'hpartmi01' ),
+			'Closing CTA ten-character ID'     => array( 'hclo0secb1' ),
+			'Closing CTA eleven-character ID'  => array( 'hclo0seceye' ),
+		);
 	}
 
 	public function test_empty_elements_is_not_normalized_inside_arbitrary_settings_maps(): void {
