@@ -23,6 +23,20 @@ final class SignalsTest extends TestCase {
 		$GLOBALS['mcpwp_test_update_plugins_called'] = false;
 	}
 
+	/**
+	 * One test here flips the harness into "this is a cron run", and setUp alone
+	 * does not undo it — nothing clears it after this class's last test. The next
+	 * class then computed signals down a cron-only path and its seeded seo_issue
+	 * never appeared, failing RestExhaustiveDraftLeakTest's redaction tests. That
+	 * is #757 in its third form: a leaked MODE switch rather than a leaked
+	 * constant, and like the others it is invisible in declaration order.
+	 */
+	protected function tearDown(): void {
+		$GLOBALS['mcpwp_test_doing_cron']            = false;
+		$GLOBALS['mcpwp_test_plugin_updates']        = array();
+		$GLOBALS['mcpwp_test_update_plugins_called'] = false;
+	}
+
 	private function seed_page_drafts( int $count ): void {
 		for ( $i = 1; $i <= $count; $i++ ) {
 			$GLOBALS['_mcpwp_test_posts'][ 100 + $i ] = (object) array(

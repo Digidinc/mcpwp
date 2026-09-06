@@ -2,6 +2,22 @@
 /**
  * Tests for Mcpwp_Elementor_Basic.
  *
+ * Runs entirely in separate processes. This is the only file that defines
+ * ELEMENTOR_VERSION in what would otherwise be the shared run, and a constant
+ * cannot be undefined again — so once it ran, every later test in the process
+ * saw an "Elementor is installed" world. That silently changed at least three
+ * unrelated files: RestElementorDraftLeakTest's absence codes, Mcpwp_Signals'
+ * compute_broken_elementor() (which stops short-circuiting and issues a real
+ * query), and RestExhaustiveDraftLeakTest's signal set. The suite passed in
+ * declaration order and failed under --order-by=random (#757).
+ *
+ * Every other file that needs the constant already confines it to a
+ * separate-process test, so isolating this one keeps ELEMENTOR_VERSION out of
+ * the shared process entirely rather than making its absence a matter of luck.
+ *
+ * @runTestsInSeparateProcesses
+ * @preserveGlobalState disabled
+ *
  * @package SitePilotAI\Tests
  */
 
@@ -59,7 +75,19 @@ class Test_Elementor_Basic extends PHPUnit\Framework\TestCase {
 
 	// ── get_elementor_data ─────────────────────────────────────
 
+	/**
+	 * The only test in this file that needs ELEMENTOR_VERSION to be UNDEFINED,
+	 * while every other test here defines it. In a shared process that made it
+	 * pass only while it happened to be ordered first. The class-level process
+	 * isolation is what lets it state its precondition instead of inheriting
+	 * one, so the assertion below is the guard, not a comment.
+	 */
 	public function test_get_elementor_data_returns_error_when_not_active() {
+		$this->assertFalse(
+			defined( 'ELEMENTOR_VERSION' ),
+			'This test is about the absent-Elementor path; if the constant is set the process is not clean.'
+		);
+
 		$result = $this->elementor->get_elementor_data( 1 );
 
 		$this->assertInstanceOf( WP_Error::class, $result );

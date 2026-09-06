@@ -25,6 +25,22 @@ final class EncryptionMigrationTest extends TestCase
         $this->resetEncryptionSingleton();
     }
 
+    /**
+     * This class is the only one that makes update_option() fail on purpose,
+     * and setUp alone does not undo it — nothing clears the flag after the
+     * class's last test. A later test class that stores an encrypted provider
+     * config then had its key write silently refused, so the config came back
+     * empty and the provider returned a WP_Error where an array was expected.
+     * That is #757 in its second form: not a leaked constant, a leaked sabotage
+     * switch, visible only under --order-by=random.
+     */
+    protected function tearDown(): void
+    {
+        $GLOBALS['mcpwp_test_update_option_fail'] = array();
+
+        $this->resetEncryptionSingleton();
+    }
+
     // ── Helper ──────────────────────────────────────────────────────────────
 
     /**
