@@ -24,6 +24,45 @@ trait Mcpwp_Elementor_Writer_Trait {
 	private static $kses_normalizer_depth = 0;
 
 	/**
+	 * How many content-bearing Elementor calls are in flight under this trait.
+	 *
+	 * Guards the scoped `unfiltered_html` grant exactly the way
+	 * $kses_normalizer_depth guards the allow-list normaliser: installed on the
+	 * way into the outermost content-bearing call, removed on the way out of it.
+	 *
+	 * @var int
+	 */
+	private static $unfiltered_html_depth = 0;
+
+	/**
+	 * The one user the scoped `unfiltered_html` grant applies to.
+	 *
+	 * Captured when the grant is installed, so a capability check performed for
+	 * some OTHER user during the same call — a revision author, a notification
+	 * recipient, a hook that walks users — cannot pick the grant up.
+	 *
+	 * @var int
+	 */
+	private static $unfiltered_html_user = 0;
+
+	/**
+	 * The Elementor calls that hand our element tree to Elementor.
+	 *
+	 * Only these get the scoped grant. A cache clear and a CSS regeneration
+	 * carry no caller content, so they have no reason to touch capabilities.
+	 *
+	 * @var string[]
+	 */
+	private static $content_bearing_labels = array( 'document_save', 'html_cache_rebuild' );
+
+	/**
+	 * Elementor's content-sanitizer callback while it is unhooked, or null.
+	 *
+	 * @var callable|null
+	 */
+	private static $suspended_content_sanitizer = null;
+
+	/**
 	 * Run one call into Elementor's own API and survive a Throwable from it.
 	 *
 	 * Every Document::save() call below already handled a RETURNED WP_Error.
@@ -75,6 +114,25 @@ trait Mcpwp_Elementor_Writer_Trait {
 		}
 		++self::$kses_normalizer_depth;
 
+		// Scoped `unfiltered_html` for the calls that carry our element tree.
+		// grant_unfiltered_html_cap() carries the reasoning; #769 is what it
+		// repairs. Depth-counted for the same reason as the normaliser above.
+		$grants_unfiltered_html = in_array( $label, self::$content_bearing_labels, true ) && get_current_user_id() > 0;
+
+		if ( $grants_unfiltered_html ) {
+			if ( 0 === self::$unfiltered_html_depth ) {
+				self::$unfiltered_html_user = get_current_user_id();
+				add_filter( 'map_meta_cap', array( __CLASS__, 'map_unfiltered_html_cap' ), PHP_INT_MAX, 3 );
+				add_filter( 'user_has_cap', array( __CLASS__, 'grant_unfiltered_html_cap' ), PHP_INT_MAX, 4 );
+				self::$suspended_content_sanitizer = self::suspend_elementor_content_sanitizer();
+
+				if ( null !== self::$suspended_content_sanitizer ) {
+					$debug['content_sanitizer_suspended'] = true;
+				}
+			}
+			++self::$unfiltered_html_depth;
+		}
+
 		try {
 			$value = $call();
 
@@ -108,7 +166,168 @@ trait Mcpwp_Elementor_Writer_Trait {
 			if ( 0 === self::$kses_normalizer_depth ) {
 				remove_filter( 'wp_kses_allowed_html', array( __CLASS__, 'normalize_kses_allowed_html' ), PHP_INT_MAX );
 			}
+
+			if ( $grants_unfiltered_html ) {
+				--self::$unfiltered_html_depth;
+
+				if ( 0 === self::$unfiltered_html_depth ) {
+					remove_filter( 'map_meta_cap', array( __CLASS__, 'map_unfiltered_html_cap' ), PHP_INT_MAX );
+					remove_filter( 'user_has_cap', array( __CLASS__, 'grant_unfiltered_html_cap' ), PHP_INT_MAX );
+					self::$unfiltered_html_user = 0;
+
+					if ( null !== self::$suspended_content_sanitizer ) {
+						add_filter( 'elementor/document/save/data', self::$suspended_content_sanitizer, 10, 2 );
+						self::$suspended_content_sanitizer = null;
+					}
+				}
+			}
 		}
+	}
+
+	/**
+	 * Grant `unfiltered_html` to the writing user, for the duration of one
+	 * Elementor call that we hand our own element tree to.
+	 *
+	 * Elementor's Document::save() runs the whole payload through
+	 * Utils::kses_post_deep() whenever the current user lacks `unfiltered_html`
+	 * (core/base/document.php). Every MCPWP write is such a request — the API
+	 * key maps onto the mcpwp_api_agent role, which has no such capability —
+	 * so Elementor rewrote the caller's settings on the way in: `style=` and
+	 * `<script>` stripped out of widget settings, among others. Reproduced on
+	 * WP 7.1 / Elementor 4.2.4 (#769).
+	 *
+	 * That mattered because MCPWP calls save() a second time purely to rebuild
+	 * the render cache. The rebuild wrote back a semantically different tree
+	 * with an IDENTICAL element count, our integrity check correctly refused
+	 * it, restored the known-good bytes, and reported render_verified=false on
+	 * a page that had in fact been written correctly. Content with a style
+	 * attribute could therefore never come back verified.
+	 *
+	 * This grants nothing that was not already true of the request:
+	 *
+	 * - What is STORED does not change. MCPWP writes _elementor_data itself,
+	 *   from the caller's bytes, before Elementor is called at all, and
+	 *   restores those bytes over any rebuild that disagrees. The kses pass
+	 *   never reached the stored row.
+	 * - What is SERVED does not change. Elementor's frontend builds from
+	 *   _elementor_data at render time; post_content holds only the plain-text
+	 *   fallback. The unfiltered content already rendered.
+	 *
+	 * So the pass was not a safety control here — it was the sole cause of a
+	 * disagreement between what we store and what Elementor renders. What
+	 * governs whether a caller may write raw HTML at all remains the API key,
+	 * its role scope and the plugin's own validation, exactly as before.
+	 *
+	 * Deliberately narrow: one capability, one user, one call, removed in a
+	 * `finally` so a Throwable cannot leave it installed.
+	 *
+	 * @param array    $allcaps All capabilities of the user being tested.
+	 * @param string[] $caps    Required primitive capabilities.
+	 * @param array    $args    Arguments of the check.
+	 * @param \WP_User $user    The user being tested.
+	 * @return array Capabilities, possibly with the scoped grant added.
+	 */
+	public static function grant_unfiltered_html_cap( $allcaps, $caps = array(), $args = array(), $user = null ) {
+		if ( self::$unfiltered_html_depth < 1 || ! is_array( $allcaps ) ) {
+			return $allcaps;
+		}
+
+		$user_id = ( $user instanceof \WP_User ) ? (int) $user->ID : 0;
+
+		if ( $user_id < 1 || $user_id !== self::$unfiltered_html_user ) {
+			return $allcaps;
+		}
+
+		$allcaps['unfiltered_html'] = true;
+
+		return $allcaps;
+	}
+
+	/**
+	 * Keep `unfiltered_html` reachable for the scoped grant above.
+	 *
+	 * On multisite, map_meta_cap() rewrites `unfiltered_html` to `do_not_allow`
+	 * for anyone who is not a super admin, before user_has_cap is consulted at
+	 * all. Without this the grant would be a silent no-op there — a single-site
+	 * fix that reports success on multisite and changes nothing, which is the
+	 * failure shape this codebase keeps paying for.
+	 *
+	 * @param string[] $caps    Primitive capabilities the check was mapped to.
+	 * @param string   $cap     Capability being checked.
+	 * @param int      $user_id User the check is for.
+	 * @return string[] Mapped capabilities.
+	 */
+	/**
+	 * Unhook Elementor's content-sanitizer for the duration of one of our saves.
+	 *
+	 * The sanitizer (modules/content-sanitizer/module.php) hooks
+	 * elementor/document/save/data and rewrites the `title` of every heading
+	 * widget through wp_kses() with an allow-list it builds itself. Two things
+	 * make that fatal for an API writer:
+	 *
+	 * 1. It early-returns for anyone with `manage_options`, so it runs on every
+	 *    MCPWP write and never in an admin's own browser — the same asymmetry
+	 *    behind #759 and #765.
+	 * 2. Its own attribute filter is inverted: `! substr( $a, 0, 5 ) === 'data-'`
+	 *    parses as `( ! substr(...) ) === 'data-'`, which is always false, so
+	 *    array_filter() keeps nothing and EVERY attribute is stripped from every
+	 *    tag — `style`, `class`, `href`, all of it. Verified against 4.2.4.
+	 *
+	 * So a heading whose title contains any markup with an attribute came back
+	 * from Elementor changed, with an identical element count. Our integrity
+	 * check then correctly refused the rebuild, restored the caller's bytes and
+	 * reported render_verified=false on a page that had been written correctly
+	 * (#769).
+	 *
+	 * Suspending it changes nothing that reaches a visitor: MCPWP has already
+	 * written and verified _elementor_data from the caller's bytes, restores
+	 * them over any rebuild that disagrees, and Elementor's frontend renders
+	 * from that meta. The sanitizer's output only ever reached the render cache
+	 * we are rebuilding — which is exactly the copy that must agree with what
+	 * we stored.
+	 *
+	 * Returns the callback so the caller can hook it straight back on. Returns
+	 * null when the module is not present or not hooked, in which case nothing
+	 * was changed and nothing needs restoring.
+	 *
+	 * @return callable|null The removed callback, or null if nothing was removed.
+	 */
+	private static function suspend_elementor_content_sanitizer() {
+		if ( ! class_exists( '\Elementor\Plugin' ) || empty( \Elementor\Plugin::$instance->modules_manager ) ) {
+			return null;
+		}
+
+		try {
+			$module = \Elementor\Plugin::$instance->modules_manager->get_modules( 'content-sanitizer' );
+		} catch ( \Throwable $e ) {
+			return null;
+		}
+
+		if ( ! is_object( $module ) || ! method_exists( $module, 'sanitize_content' ) ) {
+			return null;
+		}
+
+		$callback = array( $module, 'sanitize_content' );
+
+		if ( ! remove_filter( 'elementor/document/save/data', $callback, 10 ) ) {
+			return null;
+		}
+
+		return $callback;
+	}
+
+	public static function map_unfiltered_html_cap( $caps, $cap = '', $user_id = 0 ) {
+		if ( self::$unfiltered_html_depth < 1 || 'unfiltered_html' !== $cap ) {
+			return $caps;
+		}
+
+		$user_id = (int) $user_id;
+
+		if ( $user_id < 1 || $user_id !== self::$unfiltered_html_user ) {
+			return $caps;
+		}
+
+		return array( 'unfiltered_html' );
 	}
 
 	/**
