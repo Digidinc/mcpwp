@@ -555,11 +555,21 @@ class Mcpwp_REST_Content_Graph extends Mcpwp_REST_API {
 
 		$error_count   = 0;
 		$warning_count = 0;
+		$by_source     = array(
+			'post_content' => 0,
+			'elementor'    => 0,
+		);
+
 		foreach ( $issues as $issue ) {
 			if ( 'error' === $issue['severity'] ) {
 				$error_count++;
 			} elseif ( 'warning' === $issue['severity'] ) {
 				$warning_count++;
+			}
+
+			$issue_source = isset( $issue['source'] ) ? (string) $issue['source'] : 'post_content';
+			if ( isset( $by_source[ $issue_source ] ) ) {
+				$by_source[ $issue_source ]++;
 			}
 		}
 
@@ -571,10 +581,11 @@ class Mcpwp_REST_Content_Graph extends Mcpwp_REST_API {
 					'error_count'   => $error_count,
 					'warning_count' => $warning_count,
 					'node_count'    => count( $nodes_by_id ),
+					'by_source'     => $by_source,
 				),
 				'issues'           => $issues,
 				'validation_basis' => 'stored_content_and_elementor_data',
-				'validation_note'  => 'Links verified against stored post_content and Elementor widget data (_elementor_data). Rendered-HTML link crawl (catching JS-rendered or theme-injected links) is not performed — reachability issues caused by JS rendering or server-side redirects will not appear here.',
+				'validation_note'  => 'Links verified against stored post_content and Elementor widget data (_elementor_data), read live on every call — nothing here is cached. Each issue carries the "source" it was read from, and summary.by_source counts them: the two copies are edited by different tools, so a repair applied to one leaves the other reporting the same link. Rendered-HTML link crawl (catching JS-rendered or theme-injected links) is not performed — reachability issues caused by JS rendering or server-side redirects will not appear here.',
 				'workflow' => array(
 					'read'  => 'Use before publishing or applying internal link suggestions.',
 					'fix'   => 'Use approval-first Gutenberg edits to fix accepted issues.',
@@ -877,6 +888,10 @@ class Mcpwp_REST_Content_Graph extends Mcpwp_REST_API {
 				$links[] = array(
 					'href'   => trim( html_entity_decode( $match[1], ENT_QUOTES, get_bloginfo( 'charset' ) ) ),
 					'anchor' => trim( wp_strip_all_tags( $match[2] ) ),
+					// Tagged so a reported issue can say WHICH stored copy holds
+					// the link. The two are edited by different tools, and a
+					// repair to one leaves the other untouched (#728).
+					'source' => 'post_content',
 				);
 			}
 		}
@@ -960,6 +975,14 @@ class Mcpwp_REST_Content_Graph extends Mcpwp_REST_API {
 				'target_id'         => (int) $target_id,
 				'url'               => (string) $link['href'],
 				'anchor'            => (string) $link['anchor'],
+				// Which stored copy the link was read from: 'post_content' or
+				// 'elementor'. Without it the report cannot be acted on. An
+				// operator who repairs _elementor_data and re-runs the check
+				// sees the same issue again, verifies with wp_get_elementor
+				// that the old string is gone, and has no way to learn the
+				// remaining copy is in post_content — reported as a stale-cache
+				// bug precisely because the report could not say (#728).
+				'source'            => isset( $link['source'] ) && 'elementor' === $link['source'] ? 'elementor' : 'post_content',
 				'recommendation'    => $recommendation,
 				'approval_required' => true,
 			),
