@@ -244,17 +244,18 @@ trait Mcpwp_Elementor_Writer_Trait {
 	}
 
 	/**
-	 * Return only fixed Elementor structural keys or numeric list indices.
+	 * Return only context-proven Elementor structural keys or numeric list indices.
 	 *
 	 * Settings/control maps can use arbitrary strings as associative keys,
 	 * including customer identifiers or credentials. A shape/length check is not
 	 * enough to make those safe to return, so every non-structural string is
 	 * redacted even when it looks like an ordinary identifier.
 	 *
-	 * @param int|string|null $key Array key at the mismatch.
+	 * @param int|string|null $key     Array key at the mismatch.
+	 * @param string          $context Parent traversal context for the key.
 	 * @return string Safe key label.
 	 */
-	private function elementor_safe_mismatch_key( $key ) {
+	private function elementor_safe_mismatch_key( $key, $context = 'value' ) {
 		if ( null === $key ) {
 			return '$';
 		}
@@ -273,7 +274,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 			'widgetType',
 			'htmlCache',
 		);
-		if ( in_array( $key, $safe_keys, true ) ) {
+		if ( 'element' === $context && in_array( $key, $safe_keys, true ) ) {
 			return $key;
 		}
 
@@ -283,12 +284,13 @@ trait Mcpwp_Elementor_Writer_Trait {
 	/**
 	 * Append one safe segment to a bounded JSON-like path.
 	 *
-	 * @param string          $path Parent path.
-	 * @param int|string|null $key  Child key.
+	 * @param string          $path    Parent path.
+	 * @param int|string|null $key     Child key.
+	 * @param string          $context Parent traversal context for the key.
 	 * @return string Bounded safe path.
 	 */
-	private function elementor_mismatch_path( $path, $key ) {
-		$safe_key = $this->elementor_safe_mismatch_key( $key );
+	private function elementor_mismatch_path( $path, $key, $context = 'value' ) {
+		$safe_key = $this->elementor_safe_mismatch_key( $key, $context );
 		$next     = is_int( $key ) ? $path . '[' . $safe_key . ']' : $path . '.' . $safe_key;
 
 		return strlen( $next ) > 512 ? substr( $next, 0, 509 ) . '...' : $next;
@@ -305,16 +307,17 @@ trait Mcpwp_Elementor_Writer_Trait {
 	 * @param mixed           $actual         Actual value; never copied to output.
 	 * @param bool            $expected_exists Whether the expected value exists.
 	 * @param bool            $actual_exists   Whether the actual value exists.
+	 * @param string          $key_context     Parent traversal context for the key.
 	 * @return void
 	 */
-	private function record_elementor_mismatch( &$first_mismatch, $path, $key, $difference, $expected, $actual, $expected_exists = true, $actual_exists = true ) {
+	private function record_elementor_mismatch( &$first_mismatch, $path, $key, $difference, $expected, $actual, $expected_exists = true, $actual_exists = true, $key_context = 'value' ) {
 		if ( null !== $first_mismatch ) {
 			return;
 		}
 
 		$first_mismatch = array(
 			'path'                 => $path,
-			'key'                  => $this->elementor_safe_mismatch_key( $key ),
+			'key'                  => $this->elementor_safe_mismatch_key( $key, $key_context ),
 			'difference'           => $difference,
 			'expected_type'        => $this->elementor_mismatch_type( $expected, $expected_exists ),
 			'actual_type'          => $this->elementor_mismatch_type( $actual, $actual_exists ),
@@ -338,9 +341,10 @@ trait Mcpwp_Elementor_Writer_Trait {
 	 * @param array|null $first_mismatch First safe mismatch descriptor, by reference.
 	 * @param string     $path           Safe JSON-like path for diagnostics.
 	 * @param mixed      $key            Key at the current path.
+	 * @param string     $key_context    Parent traversal context for the key.
 	 * @return bool Whether both values are semantically identical.
 	 */
-	private function elementor_values_match( $expected, $actual, $context = 'elements', &$first_mismatch = null, $path = '$', $key = null ) {
+	private function elementor_values_match( $expected, $actual, $context = 'elements', &$first_mismatch = null, $path = '$', $key = null, $key_context = 'value' ) {
 		if ( ! is_array( $expected ) || ! is_array( $actual ) ) {
 			if ( $expected === $actual ) {
 				return true;
@@ -349,7 +353,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 			$difference = $this->elementor_mismatch_type( $expected ) === $this->elementor_mismatch_type( $actual )
 				? 'value_mismatch'
 				: 'type_mismatch';
-			$this->record_elementor_mismatch( $first_mismatch, $path, $key, $difference, $expected, $actual );
+			$this->record_elementor_mismatch( $first_mismatch, $path, $key, $difference, $expected, $actual, true, true, $key_context );
 
 			return false;
 		}
@@ -360,7 +364,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 			|| array_keys( $actual ) === range( 0, count( $actual ) - 1 );
 
 		if ( $expected_is_list !== $actual_is_list ) {
-			$this->record_elementor_mismatch( $first_mismatch, $path, $key, 'array_shape_mismatch', $expected, $actual );
+			$this->record_elementor_mismatch( $first_mismatch, $path, $key, 'array_shape_mismatch', $expected, $actual, true, true, $key_context );
 			return false;
 		}
 
@@ -393,7 +397,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 
 		if ( count( $expected ) !== count( $actual ) ) {
 			if ( $expected_is_list && $actual_is_list ) {
-				$this->record_elementor_mismatch( $first_mismatch, $path, $key, 'array_size_mismatch', $expected, $actual );
+				$this->record_elementor_mismatch( $first_mismatch, $path, $key, 'array_size_mismatch', $expected, $actual, true, true, $key_context );
 				return false;
 			}
 
@@ -401,13 +405,14 @@ trait Mcpwp_Elementor_Writer_Trait {
 				if ( ! array_key_exists( $expected_key, $actual ) ) {
 					$this->record_elementor_mismatch(
 						$first_mismatch,
-						$this->elementor_mismatch_path( $path, $expected_key ),
+						$this->elementor_mismatch_path( $path, $expected_key, $context ),
 						$expected_key,
 						'missing_key',
 						$expected_value,
 						null,
 						true,
-						false
+						false,
+						$context
 					);
 					return false;
 				}
@@ -416,19 +421,20 @@ trait Mcpwp_Elementor_Writer_Trait {
 				if ( ! array_key_exists( $actual_key, $expected ) ) {
 					$this->record_elementor_mismatch(
 						$first_mismatch,
-						$this->elementor_mismatch_path( $path, $actual_key ),
+						$this->elementor_mismatch_path( $path, $actual_key, $context ),
 						$actual_key,
 						'unexpected_key',
 						null,
 						$actual_value,
 						false,
-						true
+						true,
+						$context
 					);
 					return false;
 				}
 			}
 
-			$this->record_elementor_mismatch( $first_mismatch, $path, $key, 'array_size_mismatch', $expected, $actual );
+			$this->record_elementor_mismatch( $first_mismatch, $path, $key, 'array_size_mismatch', $expected, $actual, true, true, $key_context );
 			return false;
 		}
 
@@ -440,13 +446,13 @@ trait Mcpwp_Elementor_Writer_Trait {
 				$child_context = 'elements';
 			}
 
-			$child_path = $this->elementor_mismatch_path( $path, $key );
+			$child_path = $this->elementor_mismatch_path( $path, $key, $context );
 			if ( ! array_key_exists( $key, $actual ) ) {
-				$this->record_elementor_mismatch( $first_mismatch, $child_path, $key, 'missing_key', $value, null, true, false );
+				$this->record_elementor_mismatch( $first_mismatch, $child_path, $key, 'missing_key', $value, null, true, false, $context );
 				return false;
 			}
 
-			if ( ! $this->elementor_values_match( $value, $actual[ $key ], $child_context, $first_mismatch, $child_path, $key ) ) {
+			if ( ! $this->elementor_values_match( $value, $actual[ $key ], $child_context, $first_mismatch, $child_path, $key, $context ) ) {
 				return false;
 			}
 		}

@@ -131,6 +131,90 @@ final class ElementorPartRepeatRenderTest extends TestCase {
 		);
 	}
 
+	/**
+	 * A settings map is customer-controlled, even when one of its keys happens
+	 * to have the same spelling as an Elementor structural field.
+	 *
+	 * @dataProvider settings_diagnostic_key_provider
+	 */
+	public function test_diagnostic_redacts_all_settings_map_keys( string $private_key ): void {
+		$expected = array(
+			array(
+				'id'         => 'root0001',
+				'elType'     => 'widget',
+				'widgetType' => 'heading',
+				'settings'   => array( $private_key => 'before-secret-content' ),
+				'elements'   => array(),
+			),
+		);
+		$actual = $expected;
+		$actual[0]['settings'][ $private_key ] = 'after-secret-content';
+
+		list( $matches, $mismatch ) = $this->compare_with_mismatch( $expected, $actual );
+		$encoded = wp_json_encode( $mismatch );
+
+		$this->assertFalse( $matches );
+		$this->assertSame( '[redacted-key]', $mismatch['key'] );
+		$this->assertSame( '$[0].settings.[redacted-key]', $mismatch['path'] );
+		$this->assertStringNotContainsString( $private_key, $encoded );
+		$this->assertStringNotContainsString( 'before-secret-content', $encoded );
+		$this->assertStringNotContainsString( 'after-secret-content', $encoded );
+	}
+
+	public function settings_diagnostic_key_provider(): array {
+		return array(
+			'framework id collision'         => array( 'id' ),
+			'framework widget type collision' => array( 'widgetType' ),
+			'customer identifier'             => array( 'customer_acme_private_api_token' ),
+			'credential shape'                => array( 'sk_live_51NXmZAbCDEFGHIJKLMNOPQRSTUVWXYZ123456' ),
+		);
+	}
+
+	public function test_diagnostic_preserves_numeric_settings_list_indices_without_values(): void {
+		$expected = array(
+			array(
+				'id'       => 'root0001',
+				'elType'   => 'widget',
+				'settings' => array( 'before-secret-content' ),
+				'elements' => array(),
+			),
+		);
+		$actual = $expected;
+		$actual[0]['settings'][0] = 'after-secret-content';
+
+		list( $matches, $mismatch ) = $this->compare_with_mismatch( $expected, $actual );
+		$encoded = wp_json_encode( $mismatch );
+
+		$this->assertFalse( $matches );
+		$this->assertSame( '0', $mismatch['key'] );
+		$this->assertSame( '$[0].settings[0]', $mismatch['path'] );
+		$this->assertStringNotContainsString( 'before-secret-content', $encoded );
+		$this->assertStringNotContainsString( 'after-secret-content', $encoded );
+	}
+
+	public function test_diagnostic_does_not_emit_object_class_names_from_settings_values(): void {
+		$expected = array(
+			array(
+				'id'       => 'root0001',
+				'elType'   => 'widget',
+				'settings' => array( 'id' => new stdClass() ),
+				'elements' => array(),
+			),
+		);
+		$actual = $expected;
+		$actual[0]['settings']['id'] = new stdClass();
+
+		list( $matches, $mismatch ) = $this->compare_with_mismatch( $expected, $actual );
+		$encoded = wp_json_encode( $mismatch );
+
+		$this->assertFalse( $matches );
+		$this->assertSame( '[redacted-key]', $mismatch['key'] );
+		$this->assertSame( '$[0].settings.[redacted-key]', $mismatch['path'] );
+		$this->assertSame( 'object', $mismatch['expected_value_class'] );
+		$this->assertSame( 'object', $mismatch['actual_value_class'] );
+		$this->assertStringNotContainsString( 'stdClass', $encoded );
+	}
+
 	public function test_array_size_mismatch_reports_only_safe_lengths(): void {
 		$expected = array(
 			array(
