@@ -452,6 +452,13 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 		// Copy Elementor data.
 		$elementor_data = get_post_meta( $page_id, '_elementor_data', true );
 		if ( $elementor_data ) {
+			// Cloning copies meta byte for byte, so a source page still holding
+			// the pre-#678 `css_id` produced a new page that never passes
+			// through the validator either (#737).
+			if ( class_exists( 'Mcpwp_Elementor_Element_Keys' ) ) {
+				$elementor_data = Mcpwp_Elementor_Element_Keys::normalize_json( $elementor_data );
+			}
+
 			update_post_meta( $new_page_id, '_elementor_data', wp_slash( $elementor_data ) );
 			update_post_meta( $new_page_id, '_elementor_edit_mode', 'builder' );
 
