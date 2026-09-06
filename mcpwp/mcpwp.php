@@ -33,6 +33,42 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 /**
+ * Refuse to bootstrap twice.
+ *
+ * Two copies of this plugin can be active at once — most often `mcpwp/` and
+ * `mcpwp-premium/`, which ship the same constants under different basenames.
+ * When that happened the second load re-ran every bare define() below, and PHP
+ * emitted "already defined" warnings on a request that had not yet sent its
+ * headers. The REST response then went out as HTTP 200 text/html — warning
+ * markup, including absolute server paths, followed by the JSON that was
+ * supposed to be a clean 401. A permission check that correctly denied the call
+ * was delivered as a success (#660).
+ *
+ * Guarding each define() individually would silence the warnings and leave the
+ * real problem — a second, partial bootstrap registering hooks over the first —
+ * running unobserved. So the whole file is a no-op on a second load instead,
+ * first copy wins, and the fact is recorded rather than swallowed: a site
+ * running two copies must be able to find out, which is the whole reason this
+ * cost a live incident. `mcpwp_double_load` holds the losing basename and when
+ * it was last seen.
+ */
+if ( defined( 'MCPWP_VERSION' ) ) {
+	if ( function_exists( 'update_option' ) ) {
+		update_option(
+			'mcpwp_double_load',
+			array(
+				'ignored_basename' => plugin_basename( __FILE__ ),
+				'active_version'   => MCPWP_VERSION,
+				'last_seen'        => time(),
+			),
+			false
+		);
+	}
+
+	return;
+}
+
+/**
  * Plugin version.
  */
 define( 'MCPWP_VERSION', '3.10.6' ); // x-release-please-version
