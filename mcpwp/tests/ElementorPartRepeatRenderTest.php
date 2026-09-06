@@ -115,7 +115,7 @@ final class ElementorPartRepeatRenderTest extends TestCase {
 		);
 	}
 
-	private function part( string $root_id, bool $include_default_fields ): array {
+	private function part( string $root_id, bool $include_default_fields, bool $omit_widget_elements = false ): array {
 		$column_id = substr( md5( $root_id . ':column' ), 0, 8 );
 		$widget_id = substr( md5( $root_id . ':widget' ), 0, 8 );
 		$section = array(
@@ -143,6 +143,9 @@ final class ElementorPartRepeatRenderTest extends TestCase {
 		if ( $include_default_fields ) {
 			$section['isInner']                = false;
 			$section['elements'][0]['isInner'] = false;
+		}
+		if ( $omit_widget_elements ) {
+			unset( $section['elements'][0]['elements'][0]['elements'] );
 		}
 
 		return array( 'elementor_data' => array( $section ) );
@@ -177,5 +180,106 @@ final class ElementorPartRepeatRenderTest extends TestCase {
 		$this->assertCount( 2, $stored );
 		$this->assertSame( false, $stored[1]['isInner'], 'The harmless Elementor normal form remains stored instead of being rolled back.' );
 		$this->assertSame( false, $stored[1]['elements'][0]['isInner'] );
+	}
+
+	/**
+	 * Exact live shape from staging canary 399825 (#769): the saved part omitted
+	 * `elements` on a heading widget and Elementor 4.2.4 materialized an empty
+	 * list during the second save. The recursive element count stayed 44 -> 44,
+	 * but the strict comparator restored meta and reported render_verified=false.
+	 *
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_second_part_insert_accepts_empty_elements_materialized_on_a_leaf_widget(): void {
+		$this->install_elementor();
+		$this->install_reflecting_wpdb();
+
+		$pro = new Mcpwp_Repeat_Insert_Pro_Double(
+			array(
+				399477 => $this->part( '41c3ee18', true ),
+				399478 => $this->part( 'hnext0sec', false, true ),
+			),
+			new Mcpwp_Elementor_Basic()
+		);
+
+		$first  = $pro->insert_part_into_page( 399477, self::PAGE_ID, 'end' );
+		$second = $pro->insert_part_into_page( 399478, self::PAGE_ID, 'end' );
+
+		$this->assertTrue( $first['last_operation']['render_verified'] );
+		$this->assertTrue( $second['last_operation']['debug']['html_cache_rebuilt'] );
+		$this->assertFalse( $second['last_operation']['debug']['html_rebuild_corrupted_data'] ?? false );
+		$this->assertTrue( $second['last_operation']['render_verified'] );
+		$this->assertSame( array( '41c3ee18', 'hnext0sec' ), $GLOBALS['mcpwp_test_rendered_root_ids'] );
+
+		$stored = json_decode( $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'], true );
+		$this->assertSame( array(), $stored[1]['elements'][0]['elements'][0]['elements'] );
+	}
+
+	/**
+	 * @dataProvider unsafe_empty_elements_normalization_provider
+	 */
+	public function test_empty_elements_is_not_normalized_outside_a_strict_leaf_widget( array $expected, array $actual ): void {
+		$method = new ReflectionMethod( Mcpwp_Elementor_Basic::class, 'elementor_values_match' );
+		$method->setAccessible( true );
+
+		$this->assertFalse( $method->invoke( new Mcpwp_Elementor_Basic(), array( $expected ), array( $actual ) ) );
+	}
+
+	public function unsafe_empty_elements_normalization_provider(): array {
+		return array(
+			'container is not a leaf' => array(
+				array( 'id' => 'root0001', 'elType' => 'section', 'settings' => array() ),
+				array( 'id' => 'root0001', 'elType' => 'section', 'settings' => array(), 'elements' => array() ),
+			),
+			'widget without widgetType is malformed' => array(
+				array( 'id' => 'leaf0001', 'elType' => 'widget', 'settings' => array() ),
+				array( 'id' => 'leaf0001', 'elType' => 'widget', 'settings' => array(), 'elements' => array() ),
+			),
+			'non-empty children are meaningful' => array(
+				array( 'id' => 'leaf0001', 'elType' => 'widget', 'widgetType' => 'heading', 'settings' => array() ),
+				array(
+					'id'         => 'leaf0001',
+					'elType'     => 'widget',
+					'widgetType' => 'heading',
+					'settings'   => array(),
+					'elements'   => array( array( 'id' => 'child001' ) ),
+				),
+			),
+			'content still differs' => array(
+				array( 'id' => 'leaf0001', 'elType' => 'widget', 'widgetType' => 'heading', 'settings' => array( 'title' => 'Expected' ) ),
+				array( 'id' => 'leaf0001', 'elType' => 'widget', 'widgetType' => 'heading', 'settings' => array( 'title' => 'Changed' ), 'elements' => array() ),
+			),
+			'identity still differs' => array(
+				array( 'id' => 'leaf0001', 'elType' => 'widget', 'widgetType' => 'heading', 'settings' => array() ),
+				array( 'id' => 'leaf0002', 'elType' => 'widget', 'widgetType' => 'heading', 'settings' => array(), 'elements' => array() ),
+			),
+		);
+	}
+
+	public function test_empty_elements_is_not_normalized_inside_arbitrary_settings_maps(): void {
+		$expected = array(
+			array(
+				'id'         => 'leaf0001',
+				'elType'     => 'widget',
+				'widgetType' => 'heading',
+				'settings'   => array(
+					'payload' => array(
+						'id'         => 'fake0001',
+						'elType'     => 'widget',
+						'widgetType' => 'heading',
+						'settings'   => array(),
+					),
+				),
+				'elements' => array(),
+			),
+		);
+		$actual = $expected;
+		$actual[0]['settings']['payload']['elements'] = array();
+
+		$method = new ReflectionMethod( Mcpwp_Elementor_Basic::class, 'elementor_values_match' );
+		$method->setAccessible( true );
+
+		$this->assertFalse( $method->invoke( new Mcpwp_Elementor_Basic(), $expected, $actual ) );
 	}
 }

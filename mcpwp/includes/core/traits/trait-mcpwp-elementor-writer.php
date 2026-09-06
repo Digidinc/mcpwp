@@ -168,6 +168,34 @@ trait Mcpwp_Elementor_Writer_Trait {
 	}
 
 	/**
+	 * Whether a decoded value is a strict legacy Elementor leaf widget.
+	 *
+	 * Elementor 4.2.4 may materialize an omitted `elements` field as an empty
+	 * list while rebuilding a widget. That is harmless only on a recognizable
+	 * leaf: containers can carry children, malformed objects must stay visible,
+	 * and element-shaped values inside arbitrary settings maps are not elements.
+	 *
+	 * @param mixed $element Candidate decoded element.
+	 * @return bool Whether the value is a strict leaf widget.
+	 */
+	private function is_strict_elementor_leaf_widget( $element ) {
+		if ( ! is_array( $element )
+			|| ! isset( $element['id'], $element['elType'], $element['widgetType'], $element['settings'] )
+			|| ! is_string( $element['id'] )
+			|| 1 !== preg_match( '/^[A-Za-z0-9]{8}$/', $element['id'] )
+			|| 'widget' !== $element['elType']
+			|| ! is_string( $element['widgetType'] )
+			|| '' === $element['widgetType']
+			|| ! is_array( $element['settings'] )
+		) {
+			return false;
+		}
+
+		return ! array_key_exists( 'elements', $element )
+			|| ( is_array( $element['elements'] ) && empty( $element['elements'] ) );
+	}
+
+	/**
 	 * Compare decoded Elementor values while preserving list order and ignoring
 	 * associative-object key order.
 	 *
@@ -188,6 +216,22 @@ trait Mcpwp_Elementor_Writer_Trait {
 
 		if ( $expected_is_list !== $actual_is_list ) {
 			return false;
+		}
+
+		// Elementor 4.2.4 can add `elements: []` to a leaf widget during
+		// Document::save(). Treat the absent and empty spellings as equivalent only
+		// for two strict element-list nodes. The traversal context prevents a
+		// lookalike object inside a widget setting from receiving this exception.
+		if ( 'element' === $context
+			&& $this->is_strict_elementor_leaf_widget( $expected )
+			&& $this->is_strict_elementor_leaf_widget( $actual )
+		) {
+			if ( ! array_key_exists( 'elements', $expected ) ) {
+				$expected['elements'] = array();
+			}
+			if ( ! array_key_exists( 'elements', $actual ) ) {
+				$actual['elements'] = array();
+			}
 		}
 
 		// Elementor's Element_Base::get_raw_data() materializes an omitted
