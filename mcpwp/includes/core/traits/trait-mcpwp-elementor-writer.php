@@ -180,16 +180,37 @@ trait Mcpwp_Elementor_Writer_Trait {
 			return $expected === $actual;
 		}
 
-		if ( count( $expected ) !== count( $actual ) ) {
-			return false;
-		}
-
 		$expected_is_list = empty( $expected )
 			|| array_keys( $expected ) === range( 0, count( $expected ) - 1 );
 		$actual_is_list   = empty( $actual )
 			|| array_keys( $actual ) === range( 0, count( $actual ) - 1 );
 
 		if ( $expected_is_list !== $actual_is_list ) {
+			return false;
+		}
+
+		// Elementor's Element_Base::get_raw_data() materializes an omitted
+		// `isInner` default as boolean false. Widget_Base removes the field again.
+		// Both shapes describe the same element, and a saved library part can carry
+		// either one. Normalize only that framework-owned default on recognizable
+		// element objects; IDs, types, order, settings, content and true inner-state
+		// remain exact integrity checks.
+		if ( ! $expected_is_list
+			&& isset( $expected['id'], $expected['elType'], $actual['id'], $actual['elType'] )
+			&& array_key_exists( 'settings', $expected )
+			&& array_key_exists( 'elements', $expected )
+			&& array_key_exists( 'settings', $actual )
+			&& array_key_exists( 'elements', $actual )
+		) {
+			if ( ! array_key_exists( 'isInner', $expected ) ) {
+				$expected['isInner'] = false;
+			}
+			if ( ! array_key_exists( 'isInner', $actual ) ) {
+				$actual['isInner'] = false;
+			}
+		}
+
+		if ( count( $expected ) !== count( $actual ) ) {
 			return false;
 		}
 

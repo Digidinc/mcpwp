@@ -27,6 +27,38 @@ namespace Elementor {
 	 */
 	class Mcpwp_Fake_Document {
 
+		/**
+		 * Mirror the default-field normalization performed by Elementor's
+		 * Element_Base::get_raw_data() and Widget_Base::get_raw_data().
+		 *
+		 * Non-widget elements gain the default `isInner: false` when the field
+		 * was omitted. Widgets omit `isInner` from their stored representation.
+		 * The element tree and every meaningful value remain unchanged.
+		 *
+		 * @param array $elements Elementor elements.
+		 * @return array Normalized elements.
+		 */
+		private function normalize_default_element_fields( array $elements ): array {
+			foreach ( $elements as &$element ) {
+				if ( ! is_array( $element ) ) {
+					continue;
+				}
+
+				if ( 'widget' === ( $element['elType'] ?? '' ) ) {
+					unset( $element['isInner'] );
+				} elseif ( ! array_key_exists( 'isInner', $element ) ) {
+					$element['isInner'] = false;
+				}
+
+				if ( isset( $element['elements'] ) && is_array( $element['elements'] ) ) {
+					$element['elements'] = $this->normalize_default_element_fields( $element['elements'] );
+				}
+			}
+			unset( $element );
+
+			return $elements;
+		}
+
 		public function save( $data ) {
 			$GLOBALS['mcpwp_test_save_calls'] = isset( $GLOBALS['mcpwp_test_save_calls'] )
 				? $GLOBALS['mcpwp_test_save_calls'] + 1
@@ -57,6 +89,12 @@ namespace Elementor {
 				$mutated = $data['elements'];
 				$mutated[0]['elements'][0]['elements'][0]['settings']['title'] = 'MUTATED AFTER SAVE';
 				\update_post_meta( $GLOBALS['mcpwp_test_corrupt_page_id'], '_elementor_data', \wp_json_encode( $mutated ) );
+			}
+
+			if ( ! empty( $GLOBALS['mcpwp_test_normalize_default_fields'] ) ) {
+				$normalized = $this->normalize_default_element_fields( $data['elements'] );
+				\update_post_meta( $GLOBALS['mcpwp_test_corrupt_page_id'], '_elementor_data', \wp_json_encode( $normalized ) );
+				$GLOBALS['mcpwp_test_rendered_root_ids'] = array_column( $normalized, 'id' );
 			}
 
 			$allowed_tags = $GLOBALS['mcpwp_test_allow_list_seen'];
