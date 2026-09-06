@@ -5,6 +5,14 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.7](https://github.com/Mumega-com/mcpwp/compare/v3.10.6...v3.10.7) (2026-09-06)
+
+
+### Bug Fixes
+
+* close the batch route-terminator gap and the scripts credential-commit path ([#778](https://github.com/Mumega-com/mcpwp/issues/778)) ([571a862](https://github.com/Mumega-com/mcpwp/commit/571a86257990e7327755b205e8423ffbf18cd807))
+* make a second plugin copy a no-op instead of corrupting every REST response ([#782](https://github.com/Mumega-com/mcpwp/issues/782)) ([139ae42](https://github.com/Mumega-com/mcpwp/commit/139ae4299794a144cc515e37cd93c316202fb82c))
+
 ## [3.10.6](https://github.com/Mumega-com/mcpwp/compare/v3.10.5...v3.10.6) (2026-09-06)
 
 
