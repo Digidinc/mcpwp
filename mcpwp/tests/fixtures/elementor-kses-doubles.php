@@ -28,6 +28,10 @@ namespace Elementor {
 	class Mcpwp_Fake_Document {
 
 		public function save( $data ) {
+			$GLOBALS['mcpwp_test_save_calls'] = isset( $GLOBALS['mcpwp_test_save_calls'] )
+				? $GLOBALS['mcpwp_test_save_calls'] + 1
+				: 1;
+
 			// Recorded before any throw: a test needs to see the allow-list as it
 			// looked INSIDE the call, which is the only place the normaliser is
 			// meant to be installed.
@@ -35,6 +39,10 @@ namespace Elementor {
 
 			if ( ! empty( $GLOBALS['mcpwp_test_force_throw'] ) ) {
 				throw new \RuntimeException( 'synthetic Elementor failure' );
+			}
+
+			if ( ! empty( $GLOBALS['mcpwp_test_fail_first_save_only'] ) && 1 === $GLOBALS['mcpwp_test_save_calls'] ) {
+				throw new \RuntimeException( 'synthetic first-save failure' );
 			}
 
 			if ( ! empty( $GLOBALS['mcpwp_test_force_wp_error'] ) ) {

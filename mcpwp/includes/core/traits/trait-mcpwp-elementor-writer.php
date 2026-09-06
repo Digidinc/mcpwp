@@ -173,15 +173,22 @@ trait Mcpwp_Elementor_Writer_Trait {
 	 * attempt_elementor_call() records each caught Throwable under
 	 * "<label>_exception" and each returned WP_Error under "<label>_error".
 	 * This turns those entries into flat, readable strings so a caller sees what
-	 * failed without digging through debug.
+	 * failed without digging through debug. A successful final HTML-cache rebuild
+	 * supersedes an initial document-save failure because the later save proves
+	 * the persisted elements reached Elementor's render pipeline.
 	 *
 	 * @param array $debug Debug bag from a write.
 	 * @return string[] One entry per Elementor call that threw; empty when none did.
 	 */
 	private function collect_render_errors( array $debug ) {
-		$errors = array();
+		$errors                    = array();
+		$initial_save_was_recovered = true === ( $debug['html_cache_rebuilt'] ?? false );
 
 		foreach ( $debug as $key => $value ) {
+			if ( $initial_save_was_recovered && in_array( $key, array( 'document_save_exception', 'document_save_error' ), true ) ) {
+				continue;
+			}
+
 			if ( '_exception' === substr( (string) $key, -10 ) ) {
 				if ( ! is_array( $value ) || ! isset( $value['class'], $value['message'], $value['at'] ) ) {
 					continue;
