@@ -47,8 +47,24 @@ mcpwp-pro-*.zip
 # 127). A shell script referenced by a workflow is not scratch.
 #
 # Inverted: shell scripts are tracked by default and the genuinely local ones
-# are named. The failure mode is now "committed a local helper" — visible in
-# review and harmless — instead of "CI calls a file that does not exist".
+# are named.
+#
+# That trade was originally described as swapping "CI calls a file that does not
+# exist" for "committed a local helper — visible in review, harmless". Both
+# halves of that were wrong (#738). `.sh` is exactly where credentials get
+# typed: CLAUDE.md documents `FREEMIUS_BEARER_TOKEN=… bash
+# scripts/release_freemius.sh`, so `export TOKEN=…` in a local helper is the
+# expected shape. And "visible in review" does not hold for agent-authored
+# commits — `git add -A` is routine, and is how .wrangler account state reached
+# a published ZIP in 3.10.0/3.10.1. A leaked credential is not recoverable by
+# reverting.
+#
+# The default stays, and both failure modes are now caught in CI instead of
+# traded against each other:
+#   scripts/verify_workflow_scripts.sh      — a workflow naming a file git does
+#                                             not track fails the build
+#   scripts/verify_no_committed_secrets.sh  — a tracked script carrying a
+#                                             credential-shaped literal fails it
 scripts/*.py
 scripts/*.php
 scripts/update-github-assets.sh

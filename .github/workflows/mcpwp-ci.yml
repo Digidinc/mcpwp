@@ -47,6 +47,20 @@ jobs:
       - name: Test Discovery Check
         run: bash scripts/verify_test_discovery.sh
 
+      # The defect #734 actually had: CI invoked verify_test_discovery.sh on a
+      # file nobody had pushed, exit 127. Checking it here fixes that at its own
+      # chokepoint, independently of what .gitignore happens to say.
+      - name: Workflow Script Tracking Check
+        run: bash scripts/verify_workflow_scripts.sh
+
+      # .sh is where credentials get typed, and shell scripts are tracked by
+      # default since #734. An agent running `git add -A` commits a local helper
+      # with no human in the loop — that is how .wrangler account state reached
+      # a published ZIP — and a leaked credential is not recoverable by
+      # reverting (#738).
+      - name: Committed Credential Check
+        run: bash scripts/verify_no_committed_secrets.sh
+
       - name: Unit Tests
         run: mcpwp/vendor/bin/phpunit --configuration mcpwp/tests/phpunit.xml
 
