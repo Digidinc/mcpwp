@@ -14,6 +14,16 @@ if ( ! defined( 'ABSPATH' ) ) {
 trait Mcpwp_Elementor_Writer_Trait {
 
 	/**
+	 * How many Elementor calls are currently in flight under this trait.
+	 *
+	 * Guards the scoped wp_kses_allowed_html normaliser: it is installed on the
+	 * way into the outermost call and removed only on the way out of it.
+	 *
+	 * @var int
+	 */
+	private static $kses_normalizer_depth = 0;
+
+	/**
 	 * Run one call into Elementor's own API and survive a Throwable from it.
 	 *
 	 * Every Document::save() call below already handled a RETURNED WP_Error.
@@ -46,21 +56,40 @@ trait Mcpwp_Elementor_Writer_Trait {
 	 * The upstream defect is Elementor's. This guard is what keeps our write
 	 * path alive through it, and what reports it instead of a blank 500.
 	 *
-	 * A caught Throwable is recorded under "<label>_exception" and MUST leave
-	 * its caller on the degraded path. It is never converted into a success:
-	 * an Elementor API that could not be called and one that worked must not
-	 * produce the same response.
+	 * A caught Throwable is recorded under "<label>_exception"; a returned
+	 * WP_Error is recorded under "<label>_error". Both MUST leave the caller on
+	 * the degraded path. An Elementor API that failed and one that worked must
+	 * not produce the same response.
 	 *
 	 * @param callable $call   The Elementor call to attempt.
 	 * @param array    $debug  Debug bag, written by reference on failure.
 	 * @param string   $label  Key prefix for the debug entry.
-	 * @return array{ok:bool,value:mixed} ok=false when the call threw.
+	 * @return array{ok:bool,value:mixed} ok=false when the call threw or returned WP_Error.
 	 */
 	private function attempt_elementor_call( callable $call, array &$debug, $label ) {
+		// Depth-counted so a nested call cannot tear the filter out from under
+		// the call that installed it. Nothing nests today; a future edit that
+		// starts to would otherwise silently reopen #765 with no failing test.
+		if ( 0 === self::$kses_normalizer_depth ) {
+			add_filter( 'wp_kses_allowed_html', array( __CLASS__, 'normalize_kses_allowed_html' ), PHP_INT_MAX, 2 );
+		}
+		++self::$kses_normalizer_depth;
+
 		try {
+			$value = $call();
+
+			if ( is_wp_error( $value ) ) {
+				$debug[ $label . '_error' ] = $value->get_error_message();
+
+				return array(
+					'ok'    => false,
+					'value' => $value,
+				);
+			}
+
 			return array(
 				'ok'    => true,
-				'value' => $call(),
+				'value' => $value,
 			);
 		} catch ( \Throwable $e ) {
 			$debug[ $label . '_exception' ] = array(
@@ -73,7 +102,169 @@ trait Mcpwp_Elementor_Writer_Trait {
 				'ok'    => false,
 				'value' => null,
 			);
+		} finally {
+			--self::$kses_normalizer_depth;
+
+			if ( 0 === self::$kses_normalizer_depth ) {
+				remove_filter( 'wp_kses_allowed_html', array( __CLASS__, 'normalize_kses_allowed_html' ), PHP_INT_MAX );
+			}
 		}
+	}
+
+	/**
+	 * Give supported bare-tag entries in a 'post'-context KSES allow-list an
+	 * array of attributes Elementor can inspect.
+	 *
+	 * `'tag' => true` is a shorthand WordPress core supports and acts on
+	 * deliberately: wp_kses_attr() tests `true === $allowed_html[ $element_low ]`
+	 * and returns the bare tag, meaning "this tag is allowed, none of its
+	 * attributes are". Third-party `wp_kses_allowed_html` filters use it, and
+	 * core has no objection.
+	 *
+	 * Elementor 4.2.4 does. Widget_Heading::sanitize() (includes/widgets/heading.php)
+	 * walks the same allow-list and hands each value straight to array_filter(),
+	 * so a single `true` entry is a TypeError. The content-sanitizer module calls
+	 * that method on every heading saved by a user without manage_options — i.e.
+	 * on every MCPWP API-key write, and never in an admin's own browser — so one
+	 * unrelated plugin's filter takes down the whole Elementor write path (#765).
+	 *
+	 * Rewriting `true` and other non-null empty values to `array()` is the array
+	 * spelling of the same rule, not a relaxation of it: wp_kses_attr()'s
+	 * `empty()` branch and its `true` branch return the identical bare tag. A
+	 * null value is different: wp_kses_split2() rejects that tag at its earlier
+	 * isset() gate, so the key must be removed to preserve the denial. Unsupported
+	 * non-empty scalar and object values remain unchanged so the render failure
+	 * stays observable instead of silently allowing a tag WordPress would reject.
+	 *
+	 * Only the 'post' context is touched. Other contexts carry differently shaped
+	 * arrays — 'entities' is a flat list of entity-name strings — and rewriting
+	 * those would corrupt them.
+	 *
+	 * Installed for the duration of one Elementor call by attempt_elementor_call()
+	 * and removed in its `finally`, so it never alters KSES for anything else in
+	 * the request.
+	 *
+	 * @param mixed  $tags    Allowed-HTML map from the wp_kses_allowed_html filter.
+	 * @param string $context KSES context.
+	 * @return mixed The semantically equivalent map in an Elementor-safe shape.
+	 */
+	public static function normalize_kses_allowed_html( $tags, $context = '' ) {
+		if ( 'post' !== $context || ! is_array( $tags ) ) {
+			return $tags;
+		}
+
+		foreach ( $tags as $tag => $attributes ) {
+			if ( null === $attributes ) {
+				unset( $tags[ $tag ] );
+				continue;
+			}
+
+			if ( ! is_array( $attributes ) && ( true === $attributes || empty( $attributes ) ) ) {
+				$tags[ $tag ] = array();
+			}
+		}
+
+		return $tags;
+	}
+
+	/**
+	 * List the Elementor calls that threw or returned WP_Error during a write.
+	 *
+	 * attempt_elementor_call() records each caught Throwable under
+	 * "<label>_exception" and each returned WP_Error under "<label>_error".
+	 * This turns those entries into flat, readable strings so a caller sees what
+	 * failed without digging through debug. A successful final HTML-cache rebuild
+	 * supersedes an initial document-save failure because the later save proves
+	 * the persisted elements reached Elementor's render pipeline.
+	 *
+	 * @param array $debug Debug bag from a write.
+	 * @return string[] One entry per Elementor call that threw; empty when none did.
+	 */
+	private function collect_render_errors( array $debug ) {
+		$errors                    = array();
+		$initial_save_was_recovered = true === ( $debug['html_cache_rebuilt'] ?? false );
+
+		if ( ! empty( $debug['html_rebuild_corrupted_data'] ) ) {
+			$errors[] = sprintf(
+				'html_cache_rebuild: Elementor rendered a truncated tree (%d of %d elements); the restored meta has not been rendered.',
+				isset( $debug['html_rebuild_elements_after'] ) ? (int) $debug['html_rebuild_elements_after'] : 0,
+				isset( $debug['html_rebuild_elements_before'] ) ? (int) $debug['html_rebuild_elements_before'] : 0
+			);
+		}
+
+		foreach ( $debug as $key => $value ) {
+			if ( $initial_save_was_recovered && in_array( $key, array( 'document_save_exception', 'document_save_error' ), true ) ) {
+				continue;
+			}
+
+			if ( '_exception' === substr( (string) $key, -10 ) ) {
+				if ( ! is_array( $value ) || ! isset( $value['class'], $value['message'], $value['at'] ) ) {
+					continue;
+				}
+
+				$errors[] = sprintf(
+					'%s: %s: %s at %s',
+					substr( (string) $key, 0, -10 ),
+					$value['class'],
+					$value['message'],
+					$value['at']
+				);
+				continue;
+			}
+
+			if ( '_error' === substr( (string) $key, -6 ) && is_string( $value ) && '' !== $value ) {
+				$errors[] = sprintf(
+					'%s: WP_Error: %s',
+					substr( (string) $key, 0, -6 ),
+					$value
+				);
+			}
+		}
+
+		return $errors;
+	}
+
+	/**
+	 * State, at the top level of a write response, whether the page actually renders.
+	 *
+	 * Persisting _elementor_data and rendering the page are separate outcomes, and
+	 * before this they collapsed into one `success: true`. A page whose data is on
+	 * disk but whose Elementor render pipeline threw is not a delivered page: it
+	 * has no HTML cache, and depending on which call failed it may not display as
+	 * an Elementor layout at all. Reporting that as an unqualified success is the
+	 * same defect class as an unavailable source returning an empty result (#765).
+	 *
+	 * `success` stays true because the data really was written and verified — the
+	 * caller must not be told to retry a completed write. `render_verified` is the
+	 * field that says whether the result is usable.
+	 *
+	 * @param array $result Response being built.
+	 * @param array $debug  Debug bag from the write.
+	 * @return array $result with render_verified, render_errors and a warning.
+	 */
+	private function decorate_render_status( array $result, array $debug ) {
+		$render_errors = $this->collect_render_errors( $debug );
+
+		$result['render_verified'] = empty( $render_errors );
+
+		if ( empty( $render_errors ) ) {
+			return $result;
+		}
+
+		$result['render_errors'] = $render_errors;
+
+		$warning = sprintf(
+			/* translators: %s: semicolon-separated list of Elementor errors. */
+			__( 'Elementor could not complete the render pipeline, so this page is saved but may not display as an Elementor layout. Verify it before treating the change as delivered. Errors: %s', 'mcpwp' ),
+			implode( '; ', $render_errors )
+		);
+
+		$warnings   = isset( $result['warnings'] ) && is_array( $result['warnings'] ) ? $result['warnings'] : array();
+		$warnings[] = $warning;
+
+		$result['warnings'] = $warnings;
+
+		return $result;
 	}
 
 	/**
@@ -742,7 +933,9 @@ trait Mcpwp_Elementor_Writer_Trait {
 		$result = array(
 			'success'            => true,
 			'page_id'            => (int) $page_id,
-			'message'            => __( 'Elementor data updated.', 'mcpwp' ),
+			'message'            => empty( $this->collect_render_errors( $save_debug ) )
+				? __( 'Elementor data updated.', 'mcpwp' )
+				: __( 'Elementor data saved, but the page did not finish rendering — see render_errors.', 'mcpwp' ),
 			'sections_saved'     => $save_debug['sections_saved'],
 			'sections_submitted' => $save_debug['sections_submitted'],
 			'save_method'        => $save_method,
@@ -763,6 +956,8 @@ trait Mcpwp_Elementor_Writer_Trait {
 		if ( ! empty( $all_warnings ) ) {
 			$result['warnings'] = $all_warnings;
 		}
+
+		$result = $this->decorate_render_status( $result, $save_debug );
 
 		return $result;
 	}
@@ -1007,6 +1202,8 @@ trait Mcpwp_Elementor_Writer_Trait {
 			$result['warnings'] = $all_warnings;
 		}
 
+		$result = $this->decorate_render_status( $result, $save_debug );
+
 		return $result;
 	}
 
@@ -1171,6 +1368,8 @@ trait Mcpwp_Elementor_Writer_Trait {
 		if ( ! empty( $all_warnings ) ) {
 			$result['warnings'] = $all_warnings;
 		}
+
+		$result = $this->decorate_render_status( $result, $save_debug );
 
 		return $result;
 	}
@@ -1469,6 +1668,8 @@ trait Mcpwp_Elementor_Writer_Trait {
 			$result['warnings'] = $all_warnings;
 		}
 
+		$result = $this->decorate_render_status( $result, $debug );
+
 		return $result;
 	}
 
@@ -1542,6 +1743,8 @@ trait Mcpwp_Elementor_Writer_Trait {
 		if ( ! empty( $all_warnings ) ) {
 			$result['warnings'] = $all_warnings;
 		}
+
+		$result = $this->decorate_render_status( $result, $debug );
 
 		return $result;
 	}
@@ -1653,6 +1856,8 @@ trait Mcpwp_Elementor_Writer_Trait {
 		if ( ! empty( $all_warnings ) ) {
 			$result['warnings'] = $all_warnings;
 		}
+
+		$result = $this->decorate_render_status( $result, $debug );
 
 		return $result;
 	}
@@ -1875,6 +2080,8 @@ trait Mcpwp_Elementor_Writer_Trait {
 		if ( ! empty( $all_warnings ) ) {
 			$result['warnings'] = $all_warnings;
 		}
+
+		$result = $this->decorate_render_status( $result, $debug );
 
 		return $result;
 	}

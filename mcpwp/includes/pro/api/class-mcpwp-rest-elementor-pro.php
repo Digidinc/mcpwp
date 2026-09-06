@@ -1637,17 +1637,92 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 
 		$this->log_activity( 'apply_part', $request );
 
-		return $this->success_response(
-			array(
-				'applied'  => true,
-				'part_id'  => $part_id,
-				'page_id'  => $page_id,
-				'mode'     => $mode,
-				'position' => 'insert' === $mode ? $position : null,
-				'details'  => $result,
-				'edit_url' => admin_url( 'post.php?post=' . $page_id . '&action=elementor' ),
-			)
+		$response = array(
+			'applied'  => true,
+			'part_id'  => $part_id,
+			'page_id'  => $page_id,
+			'mode'     => $mode,
+			'position' => 'insert' === $mode ? $position : null,
+			'details'  => $result,
+			'edit_url' => admin_url( 'post.php?post=' . $page_id . '&action=elementor' ),
 		);
+
+		// `applied` only says the part's data reached the page. Whether Elementor
+		// then rendered it is a separate outcome that used to be reachable only by
+		// digging through nested debug, so a part that saved and a part that saved
+		// and rendered returned the same top-level response (#765). Lift the
+		// writer's verdict to where a caller will actually read it.
+		$response = $this->lift_render_status( $response, $result );
+
+		return $this->success_response( $response );
+	}
+
+	/**
+	 * Surface a nested write's render verdict at the top level of a response.
+	 *
+	 * The writer records render_verified / render_errors on each save result. A
+	 * part insert wraps one or more of those, so without this the verdict is
+	 * buried under details.last_operation and an unusable page is indistinguishable
+	 * from a delivered one.
+	 *
+	 * Absence of the field is not treated as success: it means the nested result
+	 * predates this reporting or came from a path that does not save, so nothing
+	 * is claimed either way and the response is returned untouched.
+	 *
+	 * @param array $response Response being built.
+	 * @param mixed $details  Nested write result, possibly wrapping others.
+	 * @return array Response with render_verified/render_errors when known.
+	 */
+	private function lift_render_status( array $response, $details ) {
+		$verdicts = array();
+		$errors   = array();
+
+		$this->collect_nested_render_status( $details, $verdicts, $errors );
+
+		if ( empty( $verdicts ) ) {
+			return $response;
+		}
+
+		// Any one failed render makes the whole operation unverified.
+		$response['render_verified'] = ! in_array( false, $verdicts, true );
+
+		if ( ! $response['render_verified'] ) {
+			$response['render_errors'] = array_values( array_unique( $errors ) );
+			$response['message']       = __( 'The part was written to the page, but Elementor did not finish rendering it. The page may not display as an Elementor layout — verify it before treating this as delivered.', 'mcpwp' );
+		}
+
+		return $response;
+	}
+
+	/**
+	 * Walk a nested write result, gathering every render verdict it contains.
+	 *
+	 * @param mixed $node     Result node.
+	 * @param array $verdicts Collected render_verified booleans, by reference.
+	 * @param array $errors   Collected render_errors strings, by reference.
+	 * @return void
+	 */
+	private function collect_nested_render_status( $node, array &$verdicts, array &$errors ) {
+		if ( ! is_array( $node ) ) {
+			return;
+		}
+
+		if ( array_key_exists( 'render_verified', $node ) ) {
+			$verdicts[] = (bool) $node['render_verified'];
+
+			if ( ! empty( $node['render_errors'] ) && is_array( $node['render_errors'] ) ) {
+				foreach ( $node['render_errors'] as $error ) {
+					$errors[] = (string) $error;
+				}
+			}
+		}
+
+		foreach ( $node as $key => $child ) {
+			if ( 'render_errors' === $key || ! is_array( $child ) ) {
+				continue;
+			}
+			$this->collect_nested_render_status( $child, $verdicts, $errors );
+		}
 	}
 
 	/**
