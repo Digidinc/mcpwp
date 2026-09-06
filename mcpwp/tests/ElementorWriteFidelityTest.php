@@ -51,6 +51,19 @@ final class ElementorWriteFidelityTest extends TestCase {
 			self::OTHER_ID  => array( 'unfiltered_html' => false ),
 		);
 		$GLOBALS['mcpwp_test_sanitizer_ran']   = 0;
+
+		$this->install_core_post_content_kses_gate();
+	}
+
+	/**
+	 * WordPress hooks wp_filter_post_kses onto content_save_pre in kses_init(),
+	 * once per request, for any user without `unfiltered_html`. Everything below
+	 * depends on that being the state of the request — it is what keeps
+	 * post_content filtered while the scoped grant is active, and the writer
+	 * treats its presence as a precondition for granting at all.
+	 */
+	private function install_core_post_content_kses_gate(): void {
+		add_filter( 'content_save_pre', 'wp_filter_post_kses', 10, 1 );
 	}
 
 	protected function tearDown(): void {
@@ -247,6 +260,35 @@ final class ElementorWriteFidelityTest extends TestCase {
 		);
 
 		$this->assertSame( array( 'unfiltered_html' ), $mapped );
+	}
+
+	public function test_the_grant_is_declined_when_core_stops_filtering_post_content(): void {
+		// Elementor's save writes post_content from caller markup while the
+		// grant is active, and it is core's latched content_save_pre filter —
+		// not anything in this plugin — that keeps that write filtered. Without
+		// it the grant would be the only thing standing between an API caller
+		// and stored markup, so it is refused rather than assumed.
+		remove_filter( 'content_save_pre', 'wp_filter_post_kses', 10 );
+
+		$seen  = null;
+		$debug = array();
+
+		$this->attempt(
+			static function () use ( &$seen ) {
+				$seen = current_user_can( 'unfiltered_html' );
+				return true;
+			},
+			'document_save',
+			$debug
+		);
+
+		$this->assertFalse( $seen, 'No core gate means no grant — #769 returns as an honest failed verdict instead.' );
+		$this->assertSame(
+			'core content_save_pre KSES gate is not installed',
+			$debug['unfiltered_html_grant_declined'] ?? null,
+			'Declining must be visible: "we chose not to" cannot look like "there was nothing to do".'
+		);
+		$this->assertSame( 0, mcpwp_test_filter_count( 'user_has_cap' ) );
 	}
 
 	public function test_an_unrelated_capability_is_never_granted(): void {

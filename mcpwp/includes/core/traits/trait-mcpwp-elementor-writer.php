@@ -117,7 +117,23 @@ trait Mcpwp_Elementor_Writer_Trait {
 		// Scoped `unfiltered_html` for the calls that carry our element tree.
 		// grant_unfiltered_html_cap() carries the reasoning; #769 is what it
 		// repairs. Depth-counted for the same reason as the normaliser above.
-		$grants_unfiltered_html = in_array( $label, self::$content_bearing_labels, true ) && get_current_user_id() > 0;
+		//
+		// core_post_content_kses_gate_installed() is a precondition, not a
+		// nicety: Elementor's save writes post_content from caller markup while
+		// this grant is active, and it is WordPress's own latched
+		// content_save_pre filter — not anything here — that keeps that write
+		// filtered. If that gate is missing we decline to grant, and #769 comes
+		// back as an honest render_verified=false instead of being fixed by
+		// quietly widening what a write can store.
+		$is_content_bearing     = in_array( $label, self::$content_bearing_labels, true ) && get_current_user_id() > 0;
+		$grants_unfiltered_html = $is_content_bearing && self::core_post_content_kses_gate_installed();
+
+		if ( $is_content_bearing && ! $grants_unfiltered_html ) {
+			// Never silent: the caller is about to get a render verdict that
+			// depends on this, and "we chose not to" must not look like "there
+			// was nothing to do".
+			$debug['unfiltered_html_grant_declined'] = 'core content_save_pre KSES gate is not installed';
+		}
 
 		if ( $grants_unfiltered_html ) {
 			if ( 0 === self::$unfiltered_html_depth ) {
@@ -244,19 +260,55 @@ trait Mcpwp_Elementor_Writer_Trait {
 	}
 
 	/**
-	 * Keep `unfiltered_html` reachable for the scoped grant above.
+	 * Whether WordPress's own post_content KSES gate is installed for this request.
 	 *
-	 * On multisite, map_meta_cap() rewrites `unfiltered_html` to `do_not_allow`
-	 * for anyone who is not a super admin, before user_has_cap is consulted at
-	 * all. Without this the grant would be a silent no-op there — a single-site
-	 * fix that reports success on multisite and changes nothing, which is the
-	 * failure shape this codebase keeps paying for.
+	 * This is the precondition for granting `unfiltered_html` at all, and the
+	 * reason the grant cannot widen what lands in wp_posts.post_content.
 	 *
-	 * @param string[] $caps    Primitive capabilities the check was mapped to.
-	 * @param string   $cap     Capability being checked.
-	 * @param int      $user_id User the check is for.
-	 * @return string[] Mapped capabilities.
+	 * Elementor's Document::save() does more than write our meta: save_elements()
+	 * calls DB::save_plain_text(), which wp_update_post()s a post_content built
+	 * from each widget's render_plain_content(). That is NOT plain text — the
+	 * default implementation is render_content(), and Widget_Text_Editor echoes
+	 * its setting unescaped by design. So post_content is written from caller
+	 * markup, inside the window where this grant is active.
+	 *
+	 * What protects it is core, not us. kses_init() decides ONCE, on `init` /
+	 * `set_current_user`, whether to hook wp_filter_post_kses onto
+	 * content_save_pre, and that decision is latched: a capability granted later
+	 * in the request does not un-hook it. MCPWP's API user is resolved during the
+	 * REST permission_callback, long before any Elementor call, so by the time we
+	 * grant anything the gate is already installed and stays installed.
+	 *
+	 * Verified on the rig (WP 7.0.2, Elementor 4.2.4, mcpwp_api_agent user):
+	 * a text-editor setting of `<p>Hello <img src="x" onerror="alert(1)"> world</p>`
+	 * saved through this path leaves post_content as
+	 * `<p>Hello <img src="x"> world</p>` — the executable attribute is gone, with
+	 * the grant active. has_filter( 'content_save_pre', 'wp_filter_post_kses' )
+	 * reads 10 before the grant, during it, and after it.
+	 *
+	 * The two states are therefore exhaustive, and neither is made worse here:
+	 *
+	 * - gate installed → the user lacked `unfiltered_html` at kses_init, so
+	 *   post_content is filtered whatever we grant afterwards
+	 * - gate absent    → the user already had `unfiltered_html` at kses_init, so
+	 *   post_content was never filtered for them and this grant adds nothing
+	 *
+	 * Requiring the gate turns that from a fortunate ordering into a stated
+	 * precondition. If some other plugin has removed core's gate while our user
+	 * still lacks the capability, we decline to grant: #769 comes back as an
+	 * honest render_verified=false rather than being fixed by quietly widening
+	 * what a write can store.
+	 *
+	 * @return bool Whether core's content_save_pre KSES filter is installed.
 	 */
+	private static function core_post_content_kses_gate_installed() {
+		if ( ! function_exists( 'has_filter' ) ) {
+			return false;
+		}
+
+		return false !== has_filter( 'content_save_pre', 'wp_filter_post_kses' );
+	}
+
 	/**
 	 * Unhook Elementor's content-sanitizer for the duration of one of our saves.
 	 *
@@ -316,6 +368,20 @@ trait Mcpwp_Elementor_Writer_Trait {
 		return $callback;
 	}
 
+	/**
+	 * Keep `unfiltered_html` reachable for the scoped grant above.
+	 *
+	 * On multisite, map_meta_cap() rewrites `unfiltered_html` to `do_not_allow`
+	 * for anyone who is not a super admin, before user_has_cap is consulted at
+	 * all. Without this the grant would be a silent no-op there — a single-site
+	 * fix that reports success on multisite and changes nothing, which is the
+	 * failure shape this codebase keeps paying for.
+	 *
+	 * @param string[] $caps    Primitive capabilities the check was mapped to.
+	 * @param string   $cap     Capability being checked.
+	 * @param int      $user_id User the check is for.
+	 * @return string[] Mapped capabilities.
+	 */
 	public static function map_unfiltered_html_cap( $caps, $cap = '', $user_id = 0 ) {
 		if ( self::$unfiltered_html_depth < 1 || 'unfiltered_html' !== $cap ) {
 			return $caps;
