@@ -289,6 +289,8 @@ final class ElementorPartRepeatRenderTest extends TestCase {
 		if ( $include_default_fields ) {
 			$section['isInner']                = false;
 			$section['elements'][0]['isInner'] = false;
+		} else {
+			unset( $section['elements'][0]['elements'][0]['elements'] );
 		}
 
 		return array( 'elementor_data' => array( $section ) );
@@ -315,7 +317,7 @@ final class ElementorPartRepeatRenderTest extends TestCase {
 
 		$this->assertTrue( $first['last_operation']['render_verified'], 'The already-normalized first part establishes a clean rendered page.' );
 		$this->assertTrue( $second['last_operation']['debug']['html_cache_rebuilt'], 'Elementor completed the second render call.' );
-		$this->assertFalse( $second['last_operation']['debug']['html_rebuild_corrupted_data'] ?? false, 'Adding default false fields must not be classified as data corruption.' );
+		$this->assertFalse( $second['last_operation']['debug']['html_rebuild_corrupted_data'] ?? false, 'Materializing framework-owned leaf defaults must not be classified as data corruption.' );
 		$this->assertTrue( $second['last_operation']['render_verified'], 'A successful normalized second insert is a verified render.' );
 		$this->assertSame( array( '41c3ee18', 'hnext0sec' ), $GLOBALS['mcpwp_test_rendered_root_ids'], 'The rebuilt HTML tree contains both inserted roots in order.' );
 
@@ -323,5 +325,6 @@ final class ElementorPartRepeatRenderTest extends TestCase {
 		$this->assertCount( 2, $stored );
 		$this->assertSame( false, $stored[1]['isInner'], 'The harmless Elementor normal form remains stored instead of being rolled back.' );
 		$this->assertSame( false, $stored[1]['elements'][0]['isInner'] );
+		$this->assertSame( array(), $stored[1]['elements'][0]['elements'][0]['elements'], 'Elementor may materialize an omitted empty child list on a leaf widget.' );
 	}
 }

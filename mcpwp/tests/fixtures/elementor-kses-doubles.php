@@ -31,9 +31,10 @@ namespace Elementor {
 		 * Mirror the default-field normalization performed by Elementor's
 		 * Element_Base::get_raw_data() and Widget_Base::get_raw_data().
 		 *
-		 * Non-widget elements gain the default `isInner: false` when the field
-		 * was omitted. Widgets omit `isInner` from their stored representation.
-		 * The element tree and every meaningful value remain unchanged.
+		 * Every element gains an empty `elements` list when the field was omitted.
+		 * Non-widget elements also gain the default `isInner: false`; widgets omit
+		 * `isInner` from their stored representation. The tree and every meaningful
+		 * value remain unchanged.
 		 *
 		 * @param array $elements Elementor elements.
 		 * @return array Normalized elements.
@@ -50,7 +51,11 @@ namespace Elementor {
 					$element['isInner'] = false;
 				}
 
-				if ( isset( $element['elements'] ) && is_array( $element['elements'] ) ) {
+				if ( ! array_key_exists( 'elements', $element ) ) {
+					$element['elements'] = array();
+				}
+
+				if ( is_array( $element['elements'] ) ) {
 					$element['elements'] = $this->normalize_default_element_fields( $element['elements'] );
 				}
 			}

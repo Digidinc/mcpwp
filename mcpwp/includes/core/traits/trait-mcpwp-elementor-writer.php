@@ -368,23 +368,45 @@ trait Mcpwp_Elementor_Writer_Trait {
 			return false;
 		}
 
-		// Elementor's Element_Base::get_raw_data() materializes an omitted
-		// `isInner` default as boolean false. Widget_Base removes the field again.
-		// Both shapes describe the same element, and a saved library part can carry
-		// either one. Normalize only that framework-owned default on recognizable
-		// element objects; IDs, types, order, settings, content and true inner-state
-		// remain exact integrity checks.
-		if ( 'element' === $context
+		$strict_element_pair = 'element' === $context
 			&& ! $expected_is_list
 			&& isset( $expected['id'], $expected['elType'], $actual['id'], $actual['elType'] )
 			&& is_string( $expected['id'] )
 			&& is_string( $expected['elType'] )
 			&& is_string( $actual['id'] )
 			&& is_string( $actual['elType'] )
-			&& isset( $expected['settings'], $expected['elements'], $actual['settings'], $actual['elements'] )
+			&& $expected['id'] === $actual['id']
+			&& $expected['elType'] === $actual['elType']
+			&& isset( $expected['settings'], $actual['settings'] )
 			&& is_array( $expected['settings'] )
-			&& is_array( $expected['elements'] )
 			&& is_array( $actual['settings'] )
+			&& ( 'widget' !== $expected['elType']
+				|| ( isset( $expected['widgetType'], $actual['widgetType'] )
+					&& is_string( $expected['widgetType'] )
+					&& $expected['widgetType'] === $actual['widgetType'] ) );
+
+		// Element_Base::get_raw_data() always materializes an empty `elements`
+		// list. A library part can omit it on a leaf node, so missing and [] are
+		// equivalent only for the strict same-identity element pair above. A
+		// non-empty child list, malformed node, or arbitrary settings map remains
+		// an exact mismatch.
+		if ( $strict_element_pair ) {
+			$expected_has_elements = array_key_exists( 'elements', $expected );
+			$actual_has_elements   = array_key_exists( 'elements', $actual );
+
+			if ( ! $expected_has_elements && $actual_has_elements && is_array( $actual['elements'] ) && empty( $actual['elements'] ) ) {
+				$expected['elements'] = array();
+			} elseif ( $expected_has_elements && ! $actual_has_elements && is_array( $expected['elements'] ) && empty( $expected['elements'] ) ) {
+				$actual['elements'] = array();
+			}
+		}
+
+		// Element_Base also materializes an omitted `isInner` default as false;
+		// Widget_Base removes that field again. Normalize only that framework-owned
+		// default after both values have proven to be strict element nodes.
+		if ( $strict_element_pair
+			&& isset( $expected['elements'], $actual['elements'] )
+			&& is_array( $expected['elements'] )
 			&& is_array( $actual['elements'] )
 		) {
 			if ( ! array_key_exists( 'isInner', $expected ) ) {
