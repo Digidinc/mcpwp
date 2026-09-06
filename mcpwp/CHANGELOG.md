@@ -5,6 +5,18 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.6](https://github.com/Mumega-com/mcpwp/compare/v3.10.5...v3.10.6) (2026-09-06)
+
+
+### Bug Fixes
+
+* **elementor:** close remaining render verdict gaps ([#768](https://github.com/Mumega-com/mcpwp/issues/768)) ([c946dd1](https://github.com/Mumega-com/mcpwp/commit/c946dd159f0767478cf03201ba886b948be724e9))
+* **elementor:** normalise element-id keys at every _elementor_data write ([#774](https://github.com/Mumega-com/mcpwp/issues/774)) ([466e97b](https://github.com/Mumega-com/mcpwp/commit/466e97b1ed3cb9b60457b1a11269b9fc637d0bf8))
+* **elementor:** preserve repeat-insert renders ([#770](https://github.com/Mumega-com/mcpwp/issues/770)) ([6d2ec13](https://github.com/Mumega-com/mcpwp/commit/6d2ec133966011b750c5fbf686372fb86f94da48))
+* **elementor:** stop Elementor rewriting the tree it is asked to render ([#772](https://github.com/Mumega-com/mcpwp/issues/772)) ([16474e9](https://github.com/Mumega-com/mcpwp/commit/16474e9cb9d7a11271e4e10953e23b0f63bdfdc1))
+* **elementor:** survive a `'tag' => true` KSES allow-list, and report a dead render ([#765](https://github.com/Mumega-com/mcpwp/issues/765)) ([#766](https://github.com/Mumega-com/mcpwp/issues/766)) ([85eb3c9](https://github.com/Mumega-com/mcpwp/commit/85eb3c9297e126db33ff770afc485b3554117355))
+* **seo:** say which stored copy a stale internal link came from ([#775](https://github.com/Mumega-com/mcpwp/issues/775)) ([a891fd2](https://github.com/Mumega-com/mcpwp/commit/a891fd283f57c20cc0b5f12340f47cd4698694b5))
+
 ## [3.10.5](https://github.com/Mumega-com/mcpwp/compare/v3.10.4...v3.10.5) (2026-09-05)
 
 
