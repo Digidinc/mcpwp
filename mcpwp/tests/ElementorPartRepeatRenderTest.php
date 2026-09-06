@@ -90,6 +90,68 @@ final class ElementorPartRepeatRenderTest extends TestCase {
 	}
 
 	/**
+	 * Invoke the private comparator while retaining its by-reference diagnostic.
+	 *
+	 * @param mixed $expected Expected value.
+	 * @param mixed $actual   Actual value.
+	 * @return array{0:bool,1:array|null} Match verdict and first mismatch.
+	 */
+	private function compare_with_mismatch( $expected, $actual ): array {
+		$method = new ReflectionMethod( Mcpwp_Elementor_Basic::class, 'elementor_values_match' );
+		$method->setAccessible( true );
+		$mismatch = null;
+		$args     = array( $expected, $actual, 'elements', &$mismatch );
+		$matches  = $method->invokeArgs( new Mcpwp_Elementor_Basic(), $args );
+
+		return array( $matches, $mismatch );
+	}
+
+	/**
+	 * @dataProvider private_diagnostic_key_provider
+	 */
+	public function test_diagnostic_redacts_credential_and_customer_shaped_keys( string $private_key ): void {
+		$expected = array( $private_key => 'before-secret-content' );
+		$actual   = array( $private_key => 'after-secret-content' );
+
+		list( $matches, $mismatch ) = $this->compare_with_mismatch( $expected, $actual );
+		$encoded = wp_json_encode( $mismatch );
+
+		$this->assertFalse( $matches );
+		$this->assertSame( '[redacted-key]', $mismatch['key'] );
+		$this->assertSame( '$.[redacted-key]', $mismatch['path'] );
+		$this->assertStringNotContainsString( $private_key, $encoded );
+		$this->assertStringNotContainsString( 'before-secret-content', $encoded );
+		$this->assertStringNotContainsString( 'after-secret-content', $encoded );
+	}
+
+	public function private_diagnostic_key_provider(): array {
+		return array(
+			'customer identifier' => array( 'customer_acme_private_api_token' ),
+			'credential shape'    => array( 'sk_live_51NXmZAbCDEFGHIJKLMNOPQRSTUVWXYZ123456' ),
+		);
+	}
+
+	public function test_array_size_mismatch_reports_only_safe_lengths(): void {
+		$expected = array(
+			array(
+				'id'       => 'root0001',
+				'elType'   => 'section',
+				'settings' => array(),
+				'elements' => array(),
+			),
+		);
+
+		list( $matches, $mismatch ) = $this->compare_with_mismatch( $expected, array() );
+
+		$this->assertFalse( $matches );
+		$this->assertSame( 'array_size_mismatch', $mismatch['difference'] );
+		$this->assertSame( 1, $mismatch['expected_length'] );
+		$this->assertSame( 0, $mismatch['actual_length'] );
+		$this->assertSame( 'list', $mismatch['expected_value_class'] );
+		$this->assertSame( 'list', $mismatch['actual_value_class'] );
+	}
+
+	/**
 	 * `isInner` has no special meaning inside widget settings. A settings value
 	 * can coincidentally use Elementor-like key names and must still be compared
 	 * exactly.

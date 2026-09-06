@@ -495,8 +495,8 @@ final class KsesAllowedHtmlNormalizationTest extends TestCase {
 		$this->assertFalse( $result['render_verified'] );
 		$this->assertSame(
 			array(
-				'path'                 => '$[0].elements[0].elements[0].settings.title',
-				'key'                  => 'title',
+				'path'                 => '$[0].elements[0].elements[0].settings.[redacted-key]',
+				'key'                  => '[redacted-key]',
 				'difference'           => 'value_mismatch',
 				'expected_type'        => 'string',
 				'actual_type'          => 'string',

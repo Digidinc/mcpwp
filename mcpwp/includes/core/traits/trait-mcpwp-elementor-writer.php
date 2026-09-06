@@ -244,7 +244,12 @@ trait Mcpwp_Elementor_Writer_Trait {
 	}
 
 	/**
-	 * Keep diagnostic keys useful while refusing content-like key strings.
+	 * Return only fixed Elementor structural keys or numeric list indices.
+	 *
+	 * Settings/control maps can use arbitrary strings as associative keys,
+	 * including customer identifiers or credentials. A shape/length check is not
+	 * enough to make those safe to return, so every non-structural string is
+	 * redacted even when it looks like an ordinary identifier.
 	 *
 	 * @param int|string|null $key Array key at the mismatch.
 	 * @return string Safe key label.
@@ -258,7 +263,17 @@ trait Mcpwp_Elementor_Writer_Trait {
 		}
 
 		$key = (string) $key;
-		if ( 1 === preg_match( '/^[A-Za-z_][A-Za-z0-9_:-]{0,79}$/D', $key ) ) {
+		static $safe_keys = array(
+			'id',
+			'elType',
+			'settings',
+			'elements',
+			'isInner',
+			'isLocked',
+			'widgetType',
+			'htmlCache',
+		);
+		if ( in_array( $key, $safe_keys, true ) ) {
 			return $key;
 		}
 
@@ -306,6 +321,11 @@ trait Mcpwp_Elementor_Writer_Trait {
 			'expected_value_class' => $this->elementor_mismatch_value_class( $expected, $expected_exists ),
 			'actual_value_class'   => $this->elementor_mismatch_value_class( $actual, $actual_exists ),
 		);
+
+		if ( 'array_size_mismatch' === $difference && is_array( $expected ) && is_array( $actual ) ) {
+			$first_mismatch['expected_length'] = count( $expected );
+			$first_mismatch['actual_length']   = count( $actual );
+		}
 	}
 
 	/**
@@ -372,6 +392,11 @@ trait Mcpwp_Elementor_Writer_Trait {
 		}
 
 		if ( count( $expected ) !== count( $actual ) ) {
+			if ( $expected_is_list && $actual_is_list ) {
+				$this->record_elementor_mismatch( $first_mismatch, $path, $key, 'array_size_mismatch', $expected, $actual );
+				return false;
+			}
+
 			foreach ( $expected as $expected_key => $expected_value ) {
 				if ( ! array_key_exists( $expected_key, $actual ) ) {
 					$this->record_elementor_mismatch(
