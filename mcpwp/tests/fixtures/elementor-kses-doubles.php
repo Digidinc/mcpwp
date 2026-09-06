@@ -49,6 +49,10 @@ namespace Elementor {
 				return new \WP_Error( 'synthetic_elementor_error', 'synthetic returned Elementor failure' );
 			}
 
+			if ( ! empty( $GLOBALS['mcpwp_test_corrupt_rebuild'] ) && 2 === $GLOBALS['mcpwp_test_save_calls'] ) {
+				\update_post_meta( $GLOBALS['mcpwp_test_corrupt_page_id'], '_elementor_data', '[]' );
+			}
+
 			$allowed_tags = $GLOBALS['mcpwp_test_allow_list_seen'];
 
 			foreach ( $allowed_tags as $tag => $attributes ) {

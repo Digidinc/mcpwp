@@ -57,6 +57,8 @@ final class KsesAllowedHtmlNormalizationTest extends TestCase {
 		$GLOBALS['mcpwp_test_force_throw']  = false;
 		$GLOBALS['mcpwp_test_force_wp_error'] = false;
 		$GLOBALS['mcpwp_test_fail_first_save_only'] = false;
+		$GLOBALS['mcpwp_test_corrupt_rebuild'] = false;
+		$GLOBALS['mcpwp_test_corrupt_page_id'] = self::PAGE_ID;
 		$GLOBALS['mcpwp_test_save_calls']   = 0;
 		$GLOBALS['mcpwp_test_allowed_html'] = $this->core_allow_list();
 	}
@@ -67,6 +69,8 @@ final class KsesAllowedHtmlNormalizationTest extends TestCase {
 		$GLOBALS['mcpwp_test_force_throw']  = false;
 		$GLOBALS['mcpwp_test_force_wp_error'] = false;
 		$GLOBALS['mcpwp_test_fail_first_save_only'] = false;
+		$GLOBALS['mcpwp_test_corrupt_rebuild'] = false;
+		$GLOBALS['mcpwp_test_corrupt_page_id'] = self::PAGE_ID;
 		$GLOBALS['mcpwp_test_save_calls']   = 0;
 	}
 
@@ -394,6 +398,28 @@ final class KsesAllowedHtmlNormalizationTest extends TestCase {
 		$this->assertTrue( $result['debug']['html_cache_rebuilt'], 'The second save is the final render attempt and must succeed.' );
 		$this->assertTrue( $result['render_verified'], 'A successful final rebuild proves the persisted page rendered.' );
 		$this->assertArrayNotHasKey( 'render_errors', $result );
+	}
+
+	/**
+	 * Elementor may return success after building HTML from a truncated tree.
+	 *
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_a_corrupt_successful_rebuild_is_not_render_verified(): void {
+		$this->install_elementor();
+		$this->install_reflecting_wpdb();
+		$this->seed_page();
+
+		$GLOBALS['mcpwp_test_corrupt_rebuild'] = true;
+
+		$basic  = new Mcpwp_Elementor_Basic();
+		$result = $basic->set_elementor_data( self::PAGE_ID, array( 'elementor_data' => $this->heading_payload() ) );
+
+		$this->assertTrue( $result['debug']['html_cache_rebuilt'], 'Elementor returned success from the rebuild call.' );
+		$this->assertTrue( $result['debug']['html_rebuild_corrupted_data'], 'The recursive count guard must detect and restore the truncated tree.' );
+		$this->assertFalse( $result['render_verified'], 'Restored meta is correct, but Elementor never rendered that restored tree.' );
+		$this->assertStringContainsString( 'truncated', implode( ' ', $result['render_errors'] ) );
 	}
 
 	/**

@@ -184,6 +184,14 @@ trait Mcpwp_Elementor_Writer_Trait {
 		$errors                    = array();
 		$initial_save_was_recovered = true === ( $debug['html_cache_rebuilt'] ?? false );
 
+		if ( ! empty( $debug['html_rebuild_corrupted_data'] ) ) {
+			$errors[] = sprintf(
+				'html_cache_rebuild: Elementor rendered a truncated tree (%d of %d elements); the restored meta has not been rendered.',
+				isset( $debug['html_rebuild_elements_after'] ) ? (int) $debug['html_rebuild_elements_after'] : 0,
+				isset( $debug['html_rebuild_elements_before'] ) ? (int) $debug['html_rebuild_elements_before'] : 0
+			);
+		}
+
 		foreach ( $debug as $key => $value ) {
 			if ( $initial_save_was_recovered && in_array( $key, array( 'document_save_exception', 'document_save_error' ), true ) ) {
 				continue;
