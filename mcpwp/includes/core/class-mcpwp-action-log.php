@@ -434,7 +434,17 @@ class Mcpwp_Action_Log {
 				if ( empty( $snap['post_id'] ) ) {
 					return new WP_Error( 'invalid_snap', __( 'Snapshot missing post_id.', 'mcpwp' ), array( 'status' => 500 ) );
 				}
-				update_post_meta( (int) $snap['post_id'], '_elementor_data', isset( $snap['elementor_data'] ) ? $snap['elementor_data'] : '' );
+				// A snapshot taken before #678 holds `css_id`, which Elementor
+				// stores and never renders. Restoring it verbatim silently
+				// un-applied that fix and the section's anchor stopped working,
+				// while the rollback reported success (#737).
+				$snap_data = isset( $snap['elementor_data'] ) ? $snap['elementor_data'] : '';
+
+				if ( class_exists( 'Mcpwp_Elementor_Element_Keys' ) ) {
+					$snap_data = Mcpwp_Elementor_Element_Keys::normalize_json( $snap_data );
+				}
+
+				update_post_meta( (int) $snap['post_id'], '_elementor_data', $snap_data );
 				delete_post_meta( (int) $snap['post_id'], '_elementor_css' );
 				return true;
 

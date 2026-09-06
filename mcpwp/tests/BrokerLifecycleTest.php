@@ -164,6 +164,15 @@ class Mcpwp_Broker_Admin_Test_Double extends Mcpwp_Broker_Admin {
 
 final class BrokerLifecycleTest extends TestCase {
 
+	/**
+	 * Leaves no pre_http_request mock behind for the next class. See #757 —
+	 * cleaning up only in setUp leaves the last test's mock live for whoever
+	 * runs next, which under --order-by=random is a different file each run.
+	 */
+	protected function tearDown(): void {
+		$GLOBALS['mcpwp_test_filters'] = array();
+	}
+
 	protected function setUp(): void {
 		$GLOBALS['mcpwp_test_options']              = array();
 		$GLOBALS['mcpwp_test_transients']            = array();
