@@ -46,6 +46,9 @@ namespace Elementor {
 
 				if ( 'widget' === ( $element['elType'] ?? '' ) ) {
 					unset( $element['isInner'] );
+					if ( ! array_key_exists( 'elements', $element ) ) {
+						$element['elements'] = array();
+					}
 				} elseif ( ! array_key_exists( 'isInner', $element ) ) {
 					$element['isInner'] = false;
 				}
