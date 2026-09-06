@@ -81,13 +81,55 @@ final class RestElementorDraftLeakTest extends TestCase {
 
 	/**
 	 * The request passed the gate and reached the handler. In this harness the
-	 * handler then reports Elementor is inactive — a benign, non-404 outcome
-	 * that a genuine draft-block would never produce.
+	 * handler then reports that Elementor is unavailable — a benign, non-404
+	 * outcome that a genuine draft-block would never produce.
+	 *
+	 * What the handler then says is incidental to what these tests are for, and
+	 * depends on process state this file does not own: `elementor_not_active`
+	 * when ELEMENTOR_VERSION is undefined, `elementor_not_loaded` when it is
+	 * defined but \Elementor\Plugin is not declared, and an ordinary success
+	 * response when the constant is defined and the handler does not need the
+	 * class. Pinning one of those made this file depend on whether some OTHER
+	 * file had already defined that constant in the shared process: the suite
+	 * passed in declaration order and failed under --order-by=random (#757).
+	 *
+	 * The gate verdict is what is asserted, and it stays exact — the error set
+	 * is closed, so a genuinely different failure still fails the test.
 	 */
 	private function assertPassedGate( $resp ): void {
-		$this->assertInstanceOf( WP_Error::class, $resp );
-		$this->assertNotSame( 'not_found', $resp->get_error_code() );
-		$this->assertSame( 'elementor_not_active', $resp->get_error_code() );
+		if ( $resp instanceof WP_Error ) {
+			$this->assertNotSame(
+				'not_found',
+				$resp->get_error_code(),
+				'This is the gate rejecting the request — the exact leak these tests exist to catch.'
+			);
+			$this->assertContains(
+				$resp->get_error_code(),
+				array( 'elementor_not_active', 'elementor_not_loaded' ),
+				'Past the gate, the only expected failure here is that Elementor is unavailable in this harness.'
+			);
+			return;
+		}
+
+		$this->assertInstanceOf( WP_REST_Response::class, $resp );
+	}
+
+	/**
+	 * The bulk equivalent: this id reached normal processing rather than being
+	 * dropped by the gate. Whether it then succeeded or reported an unavailable
+	 * Elementor is process state, not the property under test.
+	 */
+	private function assertBulkPassedGate( array $data, int $id ): void {
+		if ( array_key_exists( $id, $data['errors'] ) ) {
+			$this->assertNotSame(
+				'Post not found or unsupported type.',
+				$data['errors'][ $id ],
+				'That is the gate message — this id was blocked, not processed.'
+			);
+			return;
+		}
+
+		$this->assertArrayHasKey( $id, $data['results'] );
 	}
 
 	// ── GET /elementor/{id} ──────────────────────────────────────────────
@@ -159,8 +201,7 @@ final class RestElementorDraftLeakTest extends TestCase {
 		$this->assertArrayHasKey( self::DRAFT_ID, $data['errors'] );
 		$this->assertSame( 'Post not found or unsupported type.', $data['errors'][ self::DRAFT_ID ] );
 		// Published id was NOT gate-blocked: it reached normal processing.
-		$this->assertArrayHasKey( self::PUBLISHED_ID, $data['errors'] );
-		$this->assertNotSame( 'Post not found or unsupported type.', $data['errors'][ self::PUBLISHED_ID ] );
+		$this->assertBulkPassedGate( $data, self::PUBLISHED_ID );
 	}
 
 	/**
@@ -173,7 +214,6 @@ final class RestElementorDraftLeakTest extends TestCase {
 		[ $c, $r ] = $this->authed( '/mcpwp/v1/elementor/bulk', array( 'ids' => $ids ), array( 'write' ) );
 		$data      = $c->get_elementor_data_bulk( $r )->get_data();
 
-		$this->assertArrayHasKey( self::DRAFT_ID, $data['errors'] );
-		$this->assertNotSame( 'Post not found or unsupported type.', $data['errors'][ self::DRAFT_ID ] );
+		$this->assertBulkPassedGate( $data, self::DRAFT_ID );
 	}
 }

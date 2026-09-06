@@ -11,6 +11,31 @@ final class GatewayContractTest extends TestCase {
 
 	protected function setUp(): void {
 		$GLOBALS['mcpwp_test_filters'] = array();
+
+		$this->establish_free_tier();
+	}
+
+	/**
+	 * State the free-tier precondition instead of inheriting it.
+	 *
+	 * The tier gate is `class_exists( 'Mcpwp_License' ) && ...->is_pro()`. This
+	 * file used to rely on Mcpwp_License simply never having been loaded — true
+	 * only while no license test had run first. Under --order-by=random one had,
+	 * bringing both the class and a paying entitlement with it, and the pro-tier
+	 * tool became visible (#757). Clearing the entitlement inputs here makes the
+	 * precondition a fact of this test rather than of the run order.
+	 */
+	private function establish_free_tier(): void {
+		$GLOBALS['mcpwp_test_options'] = array();
+		$GLOBALS['mcpwp_test_fs']      = null;
+
+		if ( ! class_exists( 'Mcpwp_License' ) ) {
+			return;
+		}
+
+		$instance = ( new ReflectionClass( 'Mcpwp_License' ) )->getProperty( 'instance' );
+		$instance->setAccessible( true );
+		$instance->setValue( null, null );
 	}
 
 	private function register( array $tools ): void {
