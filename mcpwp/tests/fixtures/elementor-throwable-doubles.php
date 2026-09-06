@@ -40,6 +40,12 @@ namespace Elementor {
 				\update_post_meta( $GLOBALS['mcpwp_test_corrupt_page_id'], '_elementor_data', \wp_json_encode( $corrupted ) );
 			}
 
+			if ( ! empty( $GLOBALS['mcpwp_test_mutate_rebuild'] ) && ! $is_first ) {
+				$mutated = $data['elements'];
+				$mutated[0]['elements'][0]['elements'][0]['id'] = 'changed1';
+				\update_post_meta( $GLOBALS['mcpwp_test_corrupt_page_id'], '_elementor_data', \wp_json_encode( $mutated ) );
+			}
+
 			return true;
 		}
 	}

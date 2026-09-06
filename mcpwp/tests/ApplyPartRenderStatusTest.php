@@ -220,6 +220,8 @@ final class ApplyPartRenderStatusTest extends TestCase {
 
 		$this->assertFalse( $data['render_verified'] );
 		$this->assertSame( $service->result['render_errors'], $data['render_errors'] );
+		$this->assertStringContainsString( 'Elementor content', $data['message'] );
+		$this->assertStringNotContainsString( 'part', strtolower( $data['message'] ) );
 	}
 
 	public function test_archetype_apply_surfaces_a_failed_render_verdict(): void {

@@ -168,6 +168,41 @@ trait Mcpwp_Elementor_Writer_Trait {
 	}
 
 	/**
+	 * Compare decoded Elementor values while preserving list order and ignoring
+	 * associative-object key order.
+	 *
+	 * @param mixed $expected Submitted Elementor value.
+	 * @param mixed $actual   Value Elementor wrote back.
+	 * @return bool Whether both values are semantically identical.
+	 */
+	private function elementor_values_match( $expected, $actual ) {
+		if ( ! is_array( $expected ) || ! is_array( $actual ) ) {
+			return $expected === $actual;
+		}
+
+		if ( count( $expected ) !== count( $actual ) ) {
+			return false;
+		}
+
+		$expected_is_list = empty( $expected )
+			|| array_keys( $expected ) === range( 0, count( $expected ) - 1 );
+		$actual_is_list   = empty( $actual )
+			|| array_keys( $actual ) === range( 0, count( $actual ) - 1 );
+
+		if ( $expected_is_list !== $actual_is_list ) {
+			return false;
+		}
+
+		foreach ( $expected as $key => $value ) {
+			if ( ! array_key_exists( $key, $actual ) || ! $this->elementor_values_match( $value, $actual[ $key ] ) ) {
+				return false;
+			}
+		}
+
+		return true;
+	}
+
+	/**
 	 * List the Elementor calls that threw or returned WP_Error during a write.
 	 *
 	 * attempt_elementor_call() records each caught Throwable under
@@ -186,7 +221,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 
 		if ( ! empty( $debug['html_rebuild_corrupted_data'] ) ) {
 			$errors[] = sprintf(
-				'html_cache_rebuild: Elementor rendered a truncated tree (%d of %d elements); the restored meta has not been rendered.',
+				'html_cache_rebuild: Elementor rendered a truncated or otherwise changed tree (%d of %d elements); the restored meta has not been rendered.',
 				isset( $debug['html_rebuild_elements_after'] ) ? (int) $debug['html_rebuild_elements_after'] : 0,
 				isset( $debug['html_rebuild_elements_before'] ) ? (int) $debug['html_rebuild_elements_before'] : 0
 			);
@@ -257,6 +292,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 		}
 
 		$result['render_errors'] = $render_errors;
+		$result['message']       = __( 'Elementor data saved, but the page did not finish rendering — see render_errors.', 'mcpwp' );
 
 		$warning = sprintf(
 			/* translators: %s: semicolon-separated list of Elementor errors. */
@@ -788,11 +824,9 @@ trait Mcpwp_Elementor_Writer_Trait {
 				if ( $fresh_doc && method_exists( $fresh_doc, 'save' ) ) {
 					$fresh_elements = json_decode( get_post_meta( $page_id, '_elementor_data', true ), true );
 					if ( is_array( $fresh_elements ) && ! empty( $fresh_elements ) ) {
-						// (#618) Recursive total, not just top-level count — a shallow count
-						// missed nested atomic content silently stripped by this exact save
-						// call while the top-level array length stayed unchanged (e.g. a
-						// container's children emptied but the container itself still counts
-						// as 1). Verified against a live install: this happens in practice.
+						// Keep the recursive total for diagnostics. The semantic comparison
+						// below also catches same-size changes to IDs, types, order, settings,
+						// and content.
 						$pre_rebuild_total = $this->count_elements_recursive( $fresh_elements );
 
 						// The data is already persisted and verified at this point, so a
@@ -828,7 +862,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 						);
 						$post_rebuild_decoded = $post_rebuild ? json_decode( $post_rebuild, true ) : null;
 						$post_rebuild_total    = is_array( $post_rebuild_decoded ) ? $this->count_elements_recursive( $post_rebuild_decoded ) : 0;
-						if ( $post_rebuild_total !== $pre_rebuild_total ) {
+						if ( ! $this->elementor_values_match( $fresh_elements, $post_rebuild_decoded ) ) {
 							update_post_meta( $page_id, '_elementor_data', wp_slash( $elementor_json ) );
 							wp_cache_delete( $page_id, 'post_meta' );
 							$save_debug['html_rebuild_corrupted_data'] = true;
@@ -1559,8 +1593,8 @@ trait Mcpwp_Elementor_Writer_Trait {
 							wp_cache_delete( $page_id, 'post_meta' );
 						}
 
-						// Mirror the full-set save's recursive integrity guard. Elementor can
-						// return success after silently dropping nested content, leaving the
+						// Mirror the full-set save's semantic integrity guard. Elementor can
+						// return success after silently changing nested content, leaving the
 						// HTML cache inconsistent with the exact meta restored below.
 						global $wpdb;
 						$post_rebuild = $wpdb->get_var(
@@ -1571,7 +1605,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 						);
 						$post_rebuild_decoded = $post_rebuild ? json_decode( $post_rebuild, true ) : null;
 						$post_rebuild_total    = is_array( $post_rebuild_decoded ) ? $this->count_elements_recursive( $post_rebuild_decoded ) : 0;
-						if ( $post_rebuild_total !== $pre_rebuild_total ) {
+						if ( ! $this->elementor_values_match( $fresh_elements, $post_rebuild_decoded ) ) {
 							update_post_meta( $page_id, '_elementor_data', wp_slash( $elementor_json ) );
 							wp_cache_delete( $page_id, 'post_meta' );
 							$debug['html_rebuild_corrupted_data'] = true;

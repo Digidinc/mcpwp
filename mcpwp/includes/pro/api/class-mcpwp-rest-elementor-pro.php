@@ -1690,7 +1690,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 
 		if ( ! $response['render_verified'] ) {
 			$response['render_errors'] = array_values( array_unique( $errors ) );
-			$response['message']       = __( 'The part was written to the page, but Elementor did not finish rendering it. The page may not display as an Elementor layout — verify it before treating this as delivered.', 'mcpwp' );
+			$response['message']       = __( 'The Elementor content was written to the page, but Elementor did not finish rendering it. The page may not display as an Elementor layout — verify it before treating this as delivered.', 'mcpwp' );
 		}
 
 		return $response;

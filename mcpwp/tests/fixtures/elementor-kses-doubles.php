@@ -53,6 +53,12 @@ namespace Elementor {
 				\update_post_meta( $GLOBALS['mcpwp_test_corrupt_page_id'], '_elementor_data', '[]' );
 			}
 
+			if ( ! empty( $GLOBALS['mcpwp_test_mutate_rebuild'] ) && 2 === $GLOBALS['mcpwp_test_save_calls'] ) {
+				$mutated = $data['elements'];
+				$mutated[0]['elements'][0]['elements'][0]['settings']['title'] = 'MUTATED AFTER SAVE';
+				\update_post_meta( $GLOBALS['mcpwp_test_corrupt_page_id'], '_elementor_data', \wp_json_encode( $mutated ) );
+			}
+
 			$allowed_tags = $GLOBALS['mcpwp_test_allow_list_seen'];
 
 			foreach ( $allowed_tags as $tag => $attributes ) {

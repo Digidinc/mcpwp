@@ -58,6 +58,7 @@ final class KsesAllowedHtmlNormalizationTest extends TestCase {
 		$GLOBALS['mcpwp_test_force_wp_error'] = false;
 		$GLOBALS['mcpwp_test_fail_first_save_only'] = false;
 		$GLOBALS['mcpwp_test_corrupt_rebuild'] = false;
+		$GLOBALS['mcpwp_test_mutate_rebuild'] = false;
 		$GLOBALS['mcpwp_test_corrupt_page_id'] = self::PAGE_ID;
 		$GLOBALS['mcpwp_test_reflect_page_id'] = self::PAGE_ID;
 		$GLOBALS['mcpwp_test_save_calls']   = 0;
@@ -71,6 +72,7 @@ final class KsesAllowedHtmlNormalizationTest extends TestCase {
 		$GLOBALS['mcpwp_test_force_wp_error'] = false;
 		$GLOBALS['mcpwp_test_fail_first_save_only'] = false;
 		$GLOBALS['mcpwp_test_corrupt_rebuild'] = false;
+		$GLOBALS['mcpwp_test_mutate_rebuild'] = false;
 		$GLOBALS['mcpwp_test_corrupt_page_id'] = self::PAGE_ID;
 		$GLOBALS['mcpwp_test_reflect_page_id'] = self::PAGE_ID;
 		$GLOBALS['mcpwp_test_save_calls']   = 0;
@@ -444,6 +446,7 @@ final class KsesAllowedHtmlNormalizationTest extends TestCase {
 		$this->assertTrue( $result['success'], 'The raw meta write remains a successful persistence outcome.' );
 		$this->assertFalse( $result['render_verified'], 'No completed Document::save() means there is no render evidence.' );
 		$this->assertStringContainsString( 'No completed Elementor render', implode( ' ', $result['render_errors'] ) );
+		$this->assertStringContainsString( 'did not finish rendering', $result['message'] );
 	}
 
 	/**
@@ -471,6 +474,27 @@ final class KsesAllowedHtmlNormalizationTest extends TestCase {
 		$this->assertFalse( $result['render_verified'], 'The outer create response must retain the failed render verdict.' );
 		$this->assertNotEmpty( $result['render_errors'] );
 		$this->assertNotEmpty( $result['warnings'] );
+	}
+
+	/**
+	 * Equal element counts do not prove Elementor preserved IDs or settings.
+	 *
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_a_same_count_full_rebuild_mutation_is_restored_and_unverified(): void {
+		$this->install_elementor();
+		$this->install_reflecting_wpdb();
+		$this->seed_page();
+		$GLOBALS['mcpwp_test_mutate_rebuild'] = true;
+
+		$basic  = new Mcpwp_Elementor_Basic();
+		$result = $basic->set_elementor_data( self::PAGE_ID, array( 'elementor_data' => $this->heading_payload() ) );
+
+		$this->assertTrue( $result['debug']['html_rebuild_corrupted_data'] ?? false, 'A settings mutation with the same tree size must fail integrity verification.' );
+		$this->assertFalse( $result['render_verified'] );
+		$stored = json_decode( $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'], true );
+		$this->assertSame( 'Close CTA', $stored[0]['elements'][0]['elements'][0]['settings']['title'] );
 	}
 
 	/**
