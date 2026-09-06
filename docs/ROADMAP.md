@@ -21,6 +21,10 @@ Freemius. It carries three things:
 
 930 tests, 4852 assertions, green on PHP 8.3 and 8.4, production files parse on 7.4.
 
+**3.10.5** (2026-09-05) followed with the backlog items listed below. `main` has since
+moved past it — see 3.10.6, in flight. As of 2026-09-06 the suite stands at 990 tests
+and 5022 assertions, green in declaration order *and* under `--order-by=random`.
+
 ---
 
 ## What the last two releases actually taught us
@@ -72,9 +76,46 @@ axes will keep producing confident false negatives.
 
 ---
 
-## 3.10.5 — in flight
+## 3.10.6 — in flight
 
-Backlog cleanup, no new surface. Currently on `fix/backlog-3-10-5`:
+Everything below landed on `main` on 2026-09-06 and is waiting on the release PR.
+
+| | |
+|---|---|
+| `'tag' => true` KSES allow-list no longer fatals a write; a dead render is reported | #765 → #766, #768 |
+| Repeat part-insert: `isInner` materialised as `false` no longer reads as corruption | #769 → #770 |
+| Suite is order-independent; CI runs it `--order-by=random` | #757 → #773 |
+| `css_id` → `_element_id` normalised at every `_elementor_data` write, not just the validated ones | #737 → #774 |
+| Internal-link issues name the stored copy they came from | #728 → #775 |
+
+**Still open on the branch:** #772, which stops Elementor rewriting the tree it is
+asked to render (the remaining half of #769). It grants a scoped `unfiltered_html`
+and suspends Elementor's content-sanitizer for our own `Document::save()` calls, so
+it is an adversarial-gate surface and does not merge on CI alone.
+
+### What #769 turned out to be
+
+Worth recording, because two separate reviews read it as a shape normalisation and
+it is not. Elementor rewrites the **content** during the HTML-cache rebuild, by two
+paths that both run for an API-key request and neither of which runs for an admin in
+the browser:
+
+- `Document::save()` runs the payload through `Utils::kses_post_deep()` whenever the
+  user lacks `unfiltered_html` — which the `mcpwp_api_agent` role never has
+- the content-sanitizer rewrites every heading `title` through `wp_kses()`, and its
+  own attribute filter is inverted (`! substr( $a, 0, 5 ) === 'data-'` parses as
+  `( ! substr(...) ) === 'data-'`, always false), so **every attribute is stripped
+  from every tag**
+
+Neither was protecting anything: MCPWP already stores the caller's raw bytes and
+Elementor's frontend renders from that meta. They only ever reached the render cache
+— the one copy that has to agree with what we stored. The `manage_options` gate on
+that sanitizer is the same asymmetry behind #759 and #765, and is now three defects
+deep; it belongs at the top of the upstream report.
+
+## 3.10.5 — shipped 2026-09-05
+
+Backlog cleanup, no new surface:
 
 - **#762** Kit CSS blocks corrupted before 3.10.4 stay corrupted, and idempotency hides
   them. Detection (`hash_mismatch` per block) plus making a corrupt block un-skippable,
@@ -95,9 +136,12 @@ Theme: **make the failure modes above structurally impossible, and finish the de
    ~12,500 writes through nested fan-out. F6 needs a storage decision (`wp_cache_incr`
    does not compose cleanly with the transient API); F9 needs a spend bound, not a
    sub-request count bound.
-2. **Test-order integrity (#757).** The suite is green only in declaration order;
-   `--order-by=random` fails on Elementor constant leakage. Isolate the
-   constant-dependent cases, then add `--order-by=random` to CI so it cannot return.
+2. ~~**Test-order integrity (#757).**~~ **Done (#773).** Four live couplings, not one:
+   a leaked `ELEMENTOR_VERSION`, a leaked `update_option()` sabotage switch, a leaked
+   cron-mode flag, and six classes leaking `pre_http_request` mocks. Three of the four
+   were the same mistake — state cleaned up on the way *in* is not state cleaned up
+   after the last test that set it. CI now runs `--order-by=random` as a second pass,
+   so the next one fails here rather than months later somewhere unrelated.
 3. **Upstream Elementor defects.** #759 (`content-sanitizer/module.php:45` reads
    `widgetType` unguarded) is a one-line fix on their side that affects every plugin
    writing Elementor data as a non-admin. Report it; keep our guard regardless.
