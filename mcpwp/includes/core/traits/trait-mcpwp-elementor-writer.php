@@ -168,17 +168,170 @@ trait Mcpwp_Elementor_Writer_Trait {
 	}
 
 	/**
+	 * Return a content-free PHP type label for a mismatch operand.
+	 *
+	 * @param mixed $value  Value being classified.
+	 * @param bool  $exists Whether the value exists at this path.
+	 * @return string Safe type label.
+	 */
+	private function elementor_mismatch_type( $value, $exists = true ) {
+		if ( ! $exists ) {
+			return 'missing';
+		}
+		if ( null === $value ) {
+			return 'null';
+		}
+		if ( is_bool( $value ) ) {
+			return 'boolean';
+		}
+		if ( is_int( $value ) ) {
+			return 'integer';
+		}
+		if ( is_float( $value ) ) {
+			return 'float';
+		}
+		if ( is_string( $value ) ) {
+			return 'string';
+		}
+		if ( is_array( $value ) ) {
+			return 'array';
+		}
+		if ( is_object( $value ) ) {
+			return 'object';
+		}
+		if ( is_resource( $value ) ) {
+			return 'resource';
+		}
+
+		return 'unknown';
+	}
+
+	/**
+	 * Return a coarse value class without returning the value itself.
+	 *
+	 * @param mixed $value  Value being classified.
+	 * @param bool  $exists Whether the value exists at this path.
+	 * @return string Safe value-class label.
+	 */
+	private function elementor_mismatch_value_class( $value, $exists = true ) {
+		if ( ! $exists ) {
+			return 'missing';
+		}
+		if ( is_array( $value ) ) {
+			$is_list = empty( $value ) || array_keys( $value ) === range( 0, count( $value ) - 1 );
+			return $is_list ? 'list' : 'map';
+		}
+		if ( is_string( $value ) ) {
+			return '' === $value ? 'empty_string' : 'non_empty_string';
+		}
+		if ( is_int( $value ) || is_float( $value ) ) {
+			return 'number';
+		}
+		if ( is_bool( $value ) ) {
+			return 'boolean';
+		}
+		if ( null === $value ) {
+			return 'null';
+		}
+		if ( is_object( $value ) ) {
+			return 'object';
+		}
+		if ( is_resource( $value ) ) {
+			return 'resource';
+		}
+
+		return 'unknown';
+	}
+
+	/**
+	 * Keep diagnostic keys useful while refusing content-like key strings.
+	 *
+	 * @param int|string|null $key Array key at the mismatch.
+	 * @return string Safe key label.
+	 */
+	private function elementor_safe_mismatch_key( $key ) {
+		if ( null === $key ) {
+			return '$';
+		}
+		if ( is_int( $key ) ) {
+			return (string) $key;
+		}
+
+		$key = (string) $key;
+		if ( 1 === preg_match( '/^[A-Za-z_][A-Za-z0-9_:-]{0,79}$/D', $key ) ) {
+			return $key;
+		}
+
+		return '[redacted-key]';
+	}
+
+	/**
+	 * Append one safe segment to a bounded JSON-like path.
+	 *
+	 * @param string          $path Parent path.
+	 * @param int|string|null $key  Child key.
+	 * @return string Bounded safe path.
+	 */
+	private function elementor_mismatch_path( $path, $key ) {
+		$safe_key = $this->elementor_safe_mismatch_key( $key );
+		$next     = is_int( $key ) ? $path . '[' . $safe_key . ']' : $path . '.' . $safe_key;
+
+		return strlen( $next ) > 512 ? substr( $next, 0, 509 ) . '...' : $next;
+	}
+
+	/**
+	 * Record the first mismatch without retaining values or content.
+	 *
+	 * @param array|null      $first_mismatch Diagnostic, written once by reference.
+	 * @param string          $path           Safe JSON-like path.
+	 * @param int|string|null $key            Key at the mismatch.
+	 * @param string          $difference     Controlled mismatch category.
+	 * @param mixed           $expected       Expected value; never copied to output.
+	 * @param mixed           $actual         Actual value; never copied to output.
+	 * @param bool            $expected_exists Whether the expected value exists.
+	 * @param bool            $actual_exists   Whether the actual value exists.
+	 * @return void
+	 */
+	private function record_elementor_mismatch( &$first_mismatch, $path, $key, $difference, $expected, $actual, $expected_exists = true, $actual_exists = true ) {
+		if ( null !== $first_mismatch ) {
+			return;
+		}
+
+		$first_mismatch = array(
+			'path'                 => $path,
+			'key'                  => $this->elementor_safe_mismatch_key( $key ),
+			'difference'           => $difference,
+			'expected_type'        => $this->elementor_mismatch_type( $expected, $expected_exists ),
+			'actual_type'          => $this->elementor_mismatch_type( $actual, $actual_exists ),
+			'expected_value_class' => $this->elementor_mismatch_value_class( $expected, $expected_exists ),
+			'actual_value_class'   => $this->elementor_mismatch_value_class( $actual, $actual_exists ),
+		);
+	}
+
+	/**
 	 * Compare decoded Elementor values while preserving list order and ignoring
 	 * associative-object key order.
 	 *
 	 * @param mixed  $expected Submitted Elementor value.
 	 * @param mixed  $actual   Value Elementor wrote back.
-	 * @param string $context  Traversal context: elements, element, or value.
+	 * @param string     $context        Traversal context: elements, element, or value.
+	 * @param array|null $first_mismatch First safe mismatch descriptor, by reference.
+	 * @param string     $path           Safe JSON-like path for diagnostics.
+	 * @param mixed      $key            Key at the current path.
 	 * @return bool Whether both values are semantically identical.
 	 */
-	private function elementor_values_match( $expected, $actual, $context = 'elements' ) {
+	private function elementor_values_match( $expected, $actual, $context = 'elements', &$first_mismatch = null, $path = '$', $key = null ) {
 		if ( ! is_array( $expected ) || ! is_array( $actual ) ) {
-			return $expected === $actual;
+			if ( $expected === $actual ) {
+				return true;
+			}
+
+			$difference = $this->elementor_mismatch_type( $expected ) === $this->elementor_mismatch_type( $actual )
+				? 'value_mismatch'
+				: 'type_mismatch';
+			$this->record_elementor_mismatch( $first_mismatch, $path, $key, $difference, $expected, $actual );
+
+			return false;
 		}
 
 		$expected_is_list = empty( $expected )
@@ -187,6 +340,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 			|| array_keys( $actual ) === range( 0, count( $actual ) - 1 );
 
 		if ( $expected_is_list !== $actual_is_list ) {
+			$this->record_elementor_mismatch( $first_mismatch, $path, $key, 'array_shape_mismatch', $expected, $actual );
 			return false;
 		}
 
@@ -218,6 +372,38 @@ trait Mcpwp_Elementor_Writer_Trait {
 		}
 
 		if ( count( $expected ) !== count( $actual ) ) {
+			foreach ( $expected as $expected_key => $expected_value ) {
+				if ( ! array_key_exists( $expected_key, $actual ) ) {
+					$this->record_elementor_mismatch(
+						$first_mismatch,
+						$this->elementor_mismatch_path( $path, $expected_key ),
+						$expected_key,
+						'missing_key',
+						$expected_value,
+						null,
+						true,
+						false
+					);
+					return false;
+				}
+			}
+			foreach ( $actual as $actual_key => $actual_value ) {
+				if ( ! array_key_exists( $actual_key, $expected ) ) {
+					$this->record_elementor_mismatch(
+						$first_mismatch,
+						$this->elementor_mismatch_path( $path, $actual_key ),
+						$actual_key,
+						'unexpected_key',
+						null,
+						$actual_value,
+						false,
+						true
+					);
+					return false;
+				}
+			}
+
+			$this->record_elementor_mismatch( $first_mismatch, $path, $key, 'array_size_mismatch', $expected, $actual );
 			return false;
 		}
 
@@ -229,7 +415,13 @@ trait Mcpwp_Elementor_Writer_Trait {
 				$child_context = 'elements';
 			}
 
-			if ( ! array_key_exists( $key, $actual ) || ! $this->elementor_values_match( $value, $actual[ $key ], $child_context ) ) {
+			$child_path = $this->elementor_mismatch_path( $path, $key );
+			if ( ! array_key_exists( $key, $actual ) ) {
+				$this->record_elementor_mismatch( $first_mismatch, $child_path, $key, 'missing_key', $value, null, true, false );
+				return false;
+			}
+
+			if ( ! $this->elementor_values_match( $value, $actual[ $key ], $child_context, $first_mismatch, $child_path, $key ) ) {
 				return false;
 			}
 		}
@@ -897,7 +1089,9 @@ trait Mcpwp_Elementor_Writer_Trait {
 						);
 						$post_rebuild_decoded = $post_rebuild ? json_decode( $post_rebuild, true ) : null;
 						$post_rebuild_total    = is_array( $post_rebuild_decoded ) ? $this->count_elements_recursive( $post_rebuild_decoded ) : 0;
-						if ( ! $this->elementor_values_match( $fresh_elements, $post_rebuild_decoded ) ) {
+						$rebuild_mismatch      = null;
+						if ( ! $this->elementor_values_match( $fresh_elements, $post_rebuild_decoded, 'elements', $rebuild_mismatch ) ) {
+							$save_debug['html_rebuild_first_mismatch'] = $rebuild_mismatch;
 							update_post_meta( $page_id, '_elementor_data', wp_slash( $elementor_json ) );
 							wp_cache_delete( $page_id, 'post_meta' );
 							$save_debug['html_rebuild_corrupted_data'] = true;
@@ -1640,7 +1834,9 @@ trait Mcpwp_Elementor_Writer_Trait {
 						);
 						$post_rebuild_decoded = $post_rebuild ? json_decode( $post_rebuild, true ) : null;
 						$post_rebuild_total    = is_array( $post_rebuild_decoded ) ? $this->count_elements_recursive( $post_rebuild_decoded ) : 0;
-						if ( ! $this->elementor_values_match( $fresh_elements, $post_rebuild_decoded ) ) {
+						$rebuild_mismatch      = null;
+						if ( ! $this->elementor_values_match( $fresh_elements, $post_rebuild_decoded, 'elements', $rebuild_mismatch ) ) {
+							$debug['html_rebuild_first_mismatch'] = $rebuild_mismatch;
 							update_post_meta( $page_id, '_elementor_data', wp_slash( $elementor_json ) );
 							wp_cache_delete( $page_id, 'post_meta' );
 							$debug['html_rebuild_corrupted_data'] = true;

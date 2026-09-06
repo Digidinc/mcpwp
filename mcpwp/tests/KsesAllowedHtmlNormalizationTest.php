@@ -493,6 +493,21 @@ final class KsesAllowedHtmlNormalizationTest extends TestCase {
 
 		$this->assertTrue( $result['debug']['html_rebuild_corrupted_data'] ?? false, 'A settings mutation with the same tree size must fail integrity verification.' );
 		$this->assertFalse( $result['render_verified'] );
+		$this->assertSame(
+			array(
+				'path'                 => '$[0].elements[0].elements[0].settings.title',
+				'key'                  => 'title',
+				'difference'           => 'value_mismatch',
+				'expected_type'        => 'string',
+				'actual_type'          => 'string',
+				'expected_value_class' => 'non_empty_string',
+				'actual_value_class'   => 'non_empty_string',
+			),
+			$result['debug']['html_rebuild_first_mismatch'] ?? null,
+			'The full-set path must expose the same safe first-mismatch diagnostic as surgical writes.'
+		);
+		$this->assertStringNotContainsString( 'Close CTA', wp_json_encode( $result['debug']['html_rebuild_first_mismatch'] ?? array() ) );
+		$this->assertStringNotContainsString( 'MUTATED AFTER SAVE', wp_json_encode( $result['debug']['html_rebuild_first_mismatch'] ?? array() ) );
 		$stored = json_decode( $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'], true );
 		$this->assertSame( 'Close CTA', $stored[0]['elements'][0]['elements'][0]['settings']['title'] );
 	}

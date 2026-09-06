@@ -354,6 +354,21 @@ final class ElementorSaveThrowableTest extends TestCase {
 
 		$this->assertTrue( $result['debug']['html_rebuild_corrupted_data'] ?? false, 'An ID mutation with the same recursive count must fail integrity verification.' );
 		$this->assertFalse( $result['render_verified'] );
+		$this->assertSame(
+			array(
+				'path'                 => '$[0].elements[0].elements[0].id',
+				'key'                  => 'id',
+				'difference'           => 'value_mismatch',
+				'expected_type'        => 'string',
+				'actual_type'          => 'string',
+				'expected_value_class' => 'non_empty_string',
+				'actual_value_class'   => 'non_empty_string',
+			),
+			$result['debug']['html_rebuild_first_mismatch'] ?? null,
+			'The diagnostic must locate and classify the first mismatch without including either value.'
+		);
+		$this->assertStringNotContainsString( 'wid00001', wp_json_encode( $result['debug']['html_rebuild_first_mismatch'] ?? array() ) );
+		$this->assertStringNotContainsString( 'changed1', wp_json_encode( $result['debug']['html_rebuild_first_mismatch'] ?? array() ) );
 		$stored = $this->stored_elements();
 		$this->assertSame( 'wid00001', $stored[0]['elements'][0]['elements'][0]['id'] );
 	}
