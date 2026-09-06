@@ -171,17 +171,14 @@ trait Mcpwp_Elementor_Writer_Trait {
 	 * Compare decoded Elementor values while preserving list order and ignoring
 	 * associative-object key order.
 	 *
-	 * @param mixed $expected Submitted Elementor value.
-	 * @param mixed $actual   Value Elementor wrote back.
+	 * @param mixed  $expected Submitted Elementor value.
+	 * @param mixed  $actual   Value Elementor wrote back.
+	 * @param string $context  Traversal context: elements, element, or value.
 	 * @return bool Whether both values are semantically identical.
 	 */
-	private function elementor_values_match( $expected, $actual ) {
+	private function elementor_values_match( $expected, $actual, $context = 'elements' ) {
 		if ( ! is_array( $expected ) || ! is_array( $actual ) ) {
 			return $expected === $actual;
-		}
-
-		if ( count( $expected ) !== count( $actual ) ) {
-			return false;
 		}
 
 		$expected_is_list = empty( $expected )
@@ -193,8 +190,46 @@ trait Mcpwp_Elementor_Writer_Trait {
 			return false;
 		}
 
+		// Elementor's Element_Base::get_raw_data() materializes an omitted
+		// `isInner` default as boolean false. Widget_Base removes the field again.
+		// Both shapes describe the same element, and a saved library part can carry
+		// either one. Normalize only that framework-owned default on recognizable
+		// element objects; IDs, types, order, settings, content and true inner-state
+		// remain exact integrity checks.
+		if ( 'element' === $context
+			&& ! $expected_is_list
+			&& isset( $expected['id'], $expected['elType'], $actual['id'], $actual['elType'] )
+			&& is_string( $expected['id'] )
+			&& is_string( $expected['elType'] )
+			&& is_string( $actual['id'] )
+			&& is_string( $actual['elType'] )
+			&& isset( $expected['settings'], $expected['elements'], $actual['settings'], $actual['elements'] )
+			&& is_array( $expected['settings'] )
+			&& is_array( $expected['elements'] )
+			&& is_array( $actual['settings'] )
+			&& is_array( $actual['elements'] )
+		) {
+			if ( ! array_key_exists( 'isInner', $expected ) ) {
+				$expected['isInner'] = false;
+			}
+			if ( ! array_key_exists( 'isInner', $actual ) ) {
+				$actual['isInner'] = false;
+			}
+		}
+
+		if ( count( $expected ) !== count( $actual ) ) {
+			return false;
+		}
+
 		foreach ( $expected as $key => $value ) {
-			if ( ! array_key_exists( $key, $actual ) || ! $this->elementor_values_match( $value, $actual[ $key ] ) ) {
+			$child_context = 'value';
+			if ( 'elements' === $context && $expected_is_list ) {
+				$child_context = 'element';
+			} elseif ( 'element' === $context && 'elements' === $key ) {
+				$child_context = 'elements';
+			}
+
+			if ( ! array_key_exists( $key, $actual ) || ! $this->elementor_values_match( $value, $actual[ $key ], $child_context ) ) {
 				return false;
 			}
 		}
