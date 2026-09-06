@@ -37,6 +37,10 @@ namespace Elementor {
 				throw new \RuntimeException( 'synthetic Elementor failure' );
 			}
 
+			if ( ! empty( $GLOBALS['mcpwp_test_force_wp_error'] ) ) {
+				return new \WP_Error( 'synthetic_elementor_error', 'synthetic returned Elementor failure' );
+			}
+
 			$allowed_tags = $GLOBALS['mcpwp_test_allow_list_seen'];
 
 			foreach ( $allowed_tags as $tag => $attributes ) {

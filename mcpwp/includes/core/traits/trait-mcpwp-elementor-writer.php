@@ -56,15 +56,15 @@ trait Mcpwp_Elementor_Writer_Trait {
 	 * The upstream defect is Elementor's. This guard is what keeps our write
 	 * path alive through it, and what reports it instead of a blank 500.
 	 *
-	 * A caught Throwable is recorded under "<label>_exception" and MUST leave
-	 * its caller on the degraded path. It is never converted into a success:
-	 * an Elementor API that could not be called and one that worked must not
-	 * produce the same response.
+	 * A caught Throwable is recorded under "<label>_exception"; a returned
+	 * WP_Error is recorded under "<label>_error". Both MUST leave the caller on
+	 * the degraded path. An Elementor API that failed and one that worked must
+	 * not produce the same response.
 	 *
 	 * @param callable $call   The Elementor call to attempt.
 	 * @param array    $debug  Debug bag, written by reference on failure.
 	 * @param string   $label  Key prefix for the debug entry.
-	 * @return array{ok:bool,value:mixed} ok=false when the call threw.
+	 * @return array{ok:bool,value:mixed} ok=false when the call threw or returned WP_Error.
 	 */
 	private function attempt_elementor_call( callable $call, array &$debug, $label ) {
 		// Depth-counted so a nested call cannot tear the filter out from under
@@ -76,9 +76,20 @@ trait Mcpwp_Elementor_Writer_Trait {
 		++self::$kses_normalizer_depth;
 
 		try {
+			$value = $call();
+
+			if ( is_wp_error( $value ) ) {
+				$debug[ $label . '_error' ] = $value->get_error_message();
+
+				return array(
+					'ok'    => false,
+					'value' => $value,
+				);
+			}
+
 			return array(
 				'ok'    => true,
-				'value' => $call(),
+				'value' => $value,
 			);
 		} catch ( \Throwable $e ) {
 			$debug[ $label . '_exception' ] = array(
@@ -157,11 +168,12 @@ trait Mcpwp_Elementor_Writer_Trait {
 	}
 
 	/**
-	 * List the Elementor calls that threw during a write, from the debug bag.
+	 * List the Elementor calls that threw or returned WP_Error during a write.
 	 *
 	 * attempt_elementor_call() records each caught Throwable under
-	 * "<label>_exception". This turns those entries into flat, readable strings
-	 * so a caller sees what failed without digging through debug.
+	 * "<label>_exception" and each returned WP_Error under "<label>_error".
+	 * This turns those entries into flat, readable strings so a caller sees what
+	 * failed without digging through debug.
 	 *
 	 * @param array $debug Debug bag from a write.
 	 * @return string[] One entry per Elementor call that threw; empty when none did.
@@ -170,20 +182,28 @@ trait Mcpwp_Elementor_Writer_Trait {
 		$errors = array();
 
 		foreach ( $debug as $key => $value ) {
-			if ( '_exception' !== substr( (string) $key, -10 ) ) {
-				continue;
-			}
-			if ( ! is_array( $value ) || ! isset( $value['class'], $value['message'], $value['at'] ) ) {
+			if ( '_exception' === substr( (string) $key, -10 ) ) {
+				if ( ! is_array( $value ) || ! isset( $value['class'], $value['message'], $value['at'] ) ) {
+					continue;
+				}
+
+				$errors[] = sprintf(
+					'%s: %s: %s at %s',
+					substr( (string) $key, 0, -10 ),
+					$value['class'],
+					$value['message'],
+					$value['at']
+				);
 				continue;
 			}
 
-			$errors[] = sprintf(
-				'%s: %s: %s at %s',
-				substr( (string) $key, 0, -10 ),
-				$value['class'],
-				$value['message'],
-				$value['at']
-			);
+			if ( '_error' === substr( (string) $key, -6 ) && is_string( $value ) && '' !== $value ) {
+				$errors[] = sprintf(
+					'%s: WP_Error: %s',
+					substr( (string) $key, 0, -6 ),
+					$value
+				);
+			}
 		}
 
 		return $errors;

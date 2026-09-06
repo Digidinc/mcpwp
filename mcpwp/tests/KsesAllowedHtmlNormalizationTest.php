@@ -55,6 +55,7 @@ final class KsesAllowedHtmlNormalizationTest extends TestCase {
 		$GLOBALS['_mcpwp_test_meta']        = array();
 		$GLOBALS['mcpwp_test_filters']      = array();
 		$GLOBALS['mcpwp_test_force_throw']  = false;
+		$GLOBALS['mcpwp_test_force_wp_error'] = false;
 		$GLOBALS['mcpwp_test_allowed_html'] = $this->core_allow_list();
 	}
 
@@ -62,6 +63,7 @@ final class KsesAllowedHtmlNormalizationTest extends TestCase {
 		$GLOBALS['mcpwp_test_filters']      = array();
 		$GLOBALS['mcpwp_test_allowed_html'] = array();
 		$GLOBALS['mcpwp_test_force_throw']  = false;
+		$GLOBALS['mcpwp_test_force_wp_error'] = false;
 	}
 
 	/**
@@ -344,6 +346,28 @@ final class KsesAllowedHtmlNormalizationTest extends TestCase {
 			implode( ' ', $result['warnings'] ),
 			'The failure has to reach warnings, where callers already look.'
 		);
+	}
+
+	/**
+	 * A returned WP_Error is a failed Elementor call just as surely as a throw.
+	 *
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_a_returned_wp_error_is_reported_as_a_failed_render(): void {
+		$this->install_elementor();
+		$this->install_reflecting_wpdb();
+		$this->seed_page();
+
+		$GLOBALS['mcpwp_test_force_wp_error'] = true;
+
+		$basic  = new Mcpwp_Elementor_Basic();
+		$result = $basic->set_elementor_data( self::PAGE_ID, array( 'elementor_data' => $this->heading_payload() ) );
+
+		$this->assertIsArray( $result );
+		$this->assertFalse( $result['render_verified'] );
+		$this->assertFalse( $result['debug']['html_cache_rebuilt'] );
+		$this->assertStringContainsString( 'synthetic returned Elementor failure', implode( ' ', $result['render_errors'] ) );
 	}
 
 	/**

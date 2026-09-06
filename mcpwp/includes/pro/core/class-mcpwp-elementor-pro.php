@@ -732,6 +732,7 @@ class Mcpwp_Elementor_Pro {
 			'position'        => $position,
 			'inserted_count'  => count( $results ),
 			'inserted_ids'    => wp_list_pluck( $results, 'element_id' ),
+			'operations'      => $results,
 			'last_operation'  => end( $results ),
 		);
 	}
@@ -1116,7 +1117,7 @@ class Mcpwp_Elementor_Pro {
 	 *
 	 * @param int $page_id     Target page ID.
 	 * @param int $template_id Template ID.
-	 * @return bool|WP_Error True on success, error on failure.
+	 * @return array|WP_Error Save result, or error on failure.
 	 */
 	public function apply_template_to_page( $page_id, $template_id ) {
 		$template = get_post( $template_id );
@@ -1153,7 +1154,7 @@ class Mcpwp_Elementor_Pro {
 			return $save_result;
 		}
 
-		return true;
+		return $save_result;
 	}
 
 	/**
