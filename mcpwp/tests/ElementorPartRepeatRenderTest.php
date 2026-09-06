@@ -89,6 +89,32 @@ final class ElementorPartRepeatRenderTest extends TestCase {
 		return self::PAGE_ID;
 	}
 
+	/**
+	 * `isInner` has no special meaning inside widget settings. A settings value
+	 * can coincidentally use Elementor-like key names and must still be compared
+	 * exactly.
+	 */
+	public function test_is_inner_default_is_not_normalized_inside_arbitrary_settings_maps(): void {
+		$expected = array(
+			'setting_payload' => array(
+				'id'       => 'not-an-element',
+				'elType'   => 'custom-setting-value',
+				'settings' => 'scalar',
+				'elements' => 'scalar',
+			),
+		);
+		$actual = $expected;
+		$actual['setting_payload']['isInner'] = false;
+
+		$method = new ReflectionMethod( Mcpwp_Elementor_Basic::class, 'elementor_values_match' );
+		$method->setAccessible( true );
+
+		$this->assertFalse(
+			$method->invoke( new Mcpwp_Elementor_Basic(), $expected, $actual ),
+			'Only nodes reached through the root element list or an element children list may normalize `isInner`.'
+		);
+	}
+
 	private function part( string $root_id, bool $include_default_fields ): array {
 		$column_id = substr( md5( $root_id . ':column' ), 0, 8 );
 		$widget_id = substr( md5( $root_id . ':widget' ), 0, 8 );
