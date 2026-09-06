@@ -66,6 +66,21 @@ final class BatchOperationPathTest extends TestCase {
 			'batch fragment'       => array( '/batch#f' ),
 			'mcp query'            => array( '/mcp?a=b' ),
 			'mcp fragment'         => array( '/mcp#frag' ),
+			// #752 F12: the terminator is "not a route-name character", not a
+			// list of three. An enumerated list has to be right about every
+			// character an attacker might append, and the previous one was not
+			// — each of these was inert only because WordPress' route matcher
+			// is anchored, which is the downstream accident this denial is
+			// explicitly not allowed to lean on.
+			'batch path parameter' => array( '/batch;p=1' ),
+			'mcp path parameter'   => array( '/mcp;p=1' ),
+			'batch nul byte'       => array( "/batch\0" ),
+			'batch backslash'      => array( '/batch\\x' ),
+			'batch extension'      => array( '/batch.json' ),
+			'batch encoded slash'  => array( '/batch%2Fx' ),
+			'batch trailing space' => array( '/batch ' ),
+			'batch leading space'  => array( ' /batch' ),
+			'mcp leading tab'      => array( "\t/mcp" ),
 		);
 	}
 

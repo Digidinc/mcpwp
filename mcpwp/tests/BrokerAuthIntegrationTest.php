@@ -32,6 +32,19 @@ final class BrokerAuthIntegrationTest extends TestCase {
 	 */
 	protected function tearDown(): void {
 		$GLOBALS['mcpwp_test_filters'] = array();
+
+		// This class also lowers the rate limits mid-test and caches them in the
+		// limiter singleton; leaving either behind hands the next class a
+		// limiter frozen at a burst limit of 2 instead of the default 30 (#757's
+		// family — see RateLimiterTest::tearDown for where this was found).
+		$GLOBALS['mcpwp_test_options']    = array();
+		$GLOBALS['mcpwp_test_transients'] = array();
+
+		if ( class_exists( 'Mcpwp_Rate_Limiter' ) ) {
+			$instance = ( new ReflectionClass( Mcpwp_Rate_Limiter::class ) )->getProperty( 'instance' );
+			$instance->setAccessible( true );
+			$instance->setValue( null );
+		}
 	}
 
 	protected function setUp(): void {

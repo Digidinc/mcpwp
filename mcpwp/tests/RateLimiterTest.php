@@ -94,6 +94,23 @@ final class RateLimiterTest extends TestCase {
 		$this->assertSame( array( '127.0.0.1', 'key:test' ), $settings['whitelist'] );
 	}
 
+	/**
+	 * This class lowers the rate limits and caches them in the limiter
+	 * singleton. setUp alone does not undo that — nothing clears it after the
+	 * class's last test, so the next class inherits a limiter frozen at a burst
+	 * limit of 2 instead of the default 30, and any test that makes more than a
+	 * couple of requests starts getting 429s for reasons of its own.
+	 *
+	 * Found while writing the #670 pre-auth invariant, whose probe loop tripped
+	 * on exactly this. Same family as #757: state cleaned on the way IN is not
+	 * state cleaned after the last test that set it.
+	 */
+	protected function tearDown(): void {
+		$GLOBALS['mcpwp_test_options']    = array();
+		$GLOBALS['mcpwp_test_transients'] = array();
+		$this->resetLimiterSingleton();
+	}
+
 	private function resetLimiterSingleton(): void {
 		$ref  = new ReflectionClass( Mcpwp_Rate_Limiter::class );
 		$prop = $ref->getProperty( 'instance' );

@@ -41,20 +41,35 @@ class Mcpwp_REST_Batch extends Mcpwp_REST_API {
 	 * being shared. Version-agnostic and case-insensitive, because WordPress
 	 * matches REST routes case-insensitively.
 	 *
-	 * The route may end at a slash, a query string, a fragment, or the end of
-	 * the string. Matching only "/" or end-of-string would let "/batch?x=1"
-	 * slip past this check; WordPress' anchored route matcher happens to
-	 * reject that form today, but this constant must not depend on a
-	 * downstream accident for its own correctness.
+	 * The route name must END here — anything that is not a route-name
+	 * character terminates it. Stated as a negative lookahead rather than a set
+	 * of terminators on purpose (#752 F12): an enumerated set has to be right
+	 * about every character an attacker might append, and the previous one
+	 * ("/", "?", "#") was not. It left ";p=1", a NUL byte, a backslash and
+	 * trailing whitespace uncovered — all inert today only because WordPress'
+	 * route matcher is anchored, which is exactly the downstream accident the
+	 * paragraph below says this constant must not lean on. Either the principle
+	 * covers all of them or "?" and "#" never needed special-casing.
 	 *
-	 * Delimited with "~" rather than the house "#" precisely because "#" is
-	 * one of the terminators: a "#" inside the pattern ends it even within a
-	 * character class, and the resulting compile failure makes preg_match()
-	 * return false, which would fail open.
+	 * The lookahead inverts the burden: a hyphenated or longer sibling
+	 * ("/batch-status", "/batchelor", "/mcp-server") continues the name and is
+	 * allowed, and everything else is a terminator without having to be listed.
+	 * Where the two differ, this one denies — the safe direction for a denial
+	 * list, and no shipped route is affected because the only routes under this
+	 * prefix are exactly "/batch" and "/mcp".
+	 *
+	 * Version-agnostic and case-insensitive, because WordPress matches REST
+	 * routes case-insensitively.
+	 *
+	 * Delimited with "~" rather than the house "#" so the pattern stays legible
+	 * next to its history: "#" used to appear inside it as a terminator, where
+	 * it would have closed the pattern early even inside a character class, and
+	 * the resulting compile failure would make preg_match() return false —
+	 * failing open on a denial check.
 	 *
 	 * @var string
 	 */
-	const DENIED_OPERATION_ROUTE_PATTERN = '~^/mcpwp/v[0-9]+/(?:batch|mcp)(?:[/?#]|$)~i';
+	const DENIED_OPERATION_ROUTE_PATTERN = '~^/mcpwp/v[0-9]+/(?:batch|mcp)(?![A-Za-z0-9_-])~i';
 
 	/**
 	 * PHP-internal flag set while a batch sub-request is being dispatched.
@@ -236,6 +251,15 @@ class Mcpwp_REST_Batch extends Mcpwp_REST_API {
 				),
 			);
 		}
+
+		// Strip surrounding whitespace and control bytes (trim() covers NUL,
+		// tab, CR/LF and vertical tab) before anything reads this path. A
+		// leading space turned "/batch" into a route the denial pattern could
+		// not recognise and WordPress would not route either — inert, but inert
+		// for the downstream reason this file has twice decided not to rely on
+		// (#752 F12). Normalising here means the denial check and the dispatch
+		// below see the same string.
+		$path = trim( $path );
 
 		// Ensure path starts with /
 		if ( '/' !== substr( $path, 0, 1 ) ) {
