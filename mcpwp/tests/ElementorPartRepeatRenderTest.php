@@ -254,7 +254,33 @@ final class ElementorPartRepeatRenderTest extends TestCase {
 				array( 'id' => 'leaf0001', 'elType' => 'widget', 'widgetType' => 'heading', 'settings' => array() ),
 				array( 'id' => 'leaf0002', 'elType' => 'widget', 'widgetType' => 'heading', 'settings' => array(), 'elements' => array() ),
 			),
+			'seven-character non-hex id is not native' => array(
+				array( 'id' => 'zzzzzzz', 'elType' => 'widget', 'widgetType' => 'heading', 'settings' => array() ),
+				array( 'id' => 'zzzzzzz', 'elType' => 'widget', 'widgetType' => 'heading', 'settings' => array(), 'elements' => array() ),
+			),
+			'nine-character id is outside both formats' => array(
+				array( 'id' => 'leaf00001', 'elType' => 'widget', 'widgetType' => 'heading', 'settings' => array() ),
+				array( 'id' => 'leaf00001', 'elType' => 'widget', 'widgetType' => 'heading', 'settings' => array(), 'elements' => array() ),
+			),
 		);
+	}
+
+	public function test_native_seven_character_hex_widget_id_accepts_empty_elements_materialization(): void {
+		$expected = array(
+			array(
+				'id'         => '5412776',
+				'elType'     => 'widget',
+				'widgetType' => 'heading',
+				'settings'   => array( 'title' => 'Native Elementor widget' ),
+			),
+		);
+		$actual = $expected;
+		$actual[0]['elements'] = array();
+
+		$method = new ReflectionMethod( Mcpwp_Elementor_Basic::class, 'elementor_values_match' );
+		$method->setAccessible( true );
+
+		$this->assertTrue( $method->invoke( new Mcpwp_Elementor_Basic(), $expected, $actual ) );
 	}
 
 	public function test_empty_elements_is_not_normalized_inside_arbitrary_settings_maps(): void {

@@ -467,7 +467,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 		if ( ! is_array( $element )
 			|| ! isset( $element['id'], $element['elType'], $element['widgetType'], $element['settings'] )
 			|| ! is_string( $element['id'] )
-			|| 1 !== preg_match( '/^[A-Za-z0-9]{8}$/', $element['id'] )
+			|| 1 !== preg_match( '/^(?:[a-f0-9]{1,7}|[A-Za-z0-9]{8})$/', $element['id'] )
 			|| 'widget' !== $element['elType']
 			|| ! is_string( $element['widgetType'] )
 			|| '' === $element['widgetType']
