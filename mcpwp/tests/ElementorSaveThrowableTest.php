@@ -52,6 +52,9 @@ final class ElementorSaveThrowableTest extends TestCase {
 	protected function setUp(): void {
 		$GLOBALS['_mcpwp_test_posts'] = array();
 		$GLOBALS['_mcpwp_test_meta']  = array();
+		$GLOBALS['mcpwp_test_corrupt_rebuild'] = false;
+		$GLOBALS['mcpwp_test_mutate_rebuild'] = false;
+		$GLOBALS['mcpwp_test_corrupt_page_id'] = self::PAGE_ID;
 	}
 
 	/**
@@ -287,5 +290,71 @@ final class ElementorSaveThrowableTest extends TestCase {
 		$this->assertIsArray( $stored );
 		$this->assertCount( 2, $stored, 'The appended section must persist through the fallback.' );
 		$this->assertSame( 'sec00002', $stored[1]['id'] );
+	}
+
+	/**
+	 * A successful surgical rebuild can still truncate nested elements.
+	 *
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_surgical_rebuild_restores_a_silently_truncated_tree_and_fails_render_verification(): void {
+		$this->install_elementor( 'never' );
+		$this->install_reflecting_wpdb();
+		$this->seed_page();
+		$GLOBALS['mcpwp_test_corrupt_rebuild'] = true;
+
+		$GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'] = wp_json_encode( $this->minimal_section() );
+
+		$basic  = new Mcpwp_Elementor_Basic();
+		$result = $basic->add_section(
+			self::PAGE_ID,
+			array(
+				'element' => array(
+					'id'       => 'sec00002',
+					'elType'   => 'section',
+					'settings' => array(),
+					'elements' => array(),
+				),
+			)
+		);
+
+		$this->assertTrue( $result['debug']['html_rebuild_corrupted_data'] ?? false, 'The recursive guard must detect the nested-element loss.' );
+		$this->assertFalse( $result['render_verified'], 'The restored tree has not been rendered.' );
+		$stored = $this->stored_elements();
+		$this->assertSame( 'wid00001', $stored[0]['elements'][0]['elements'][0]['id'], 'The exact submitted tree must be restored.' );
+	}
+
+	/**
+	 * Recursive count equality must not hide same-size tree mutations.
+	 *
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_surgical_rebuild_restores_a_same_count_id_mutation(): void {
+		$this->install_elementor( 'never' );
+		$this->install_reflecting_wpdb();
+		$this->seed_page();
+		$GLOBALS['mcpwp_test_mutate_rebuild'] = true;
+
+		$GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'] = wp_json_encode( $this->minimal_section() );
+
+		$basic  = new Mcpwp_Elementor_Basic();
+		$result = $basic->add_section(
+			self::PAGE_ID,
+			array(
+				'element' => array(
+					'id'       => 'sec00002',
+					'elType'   => 'section',
+					'settings' => array(),
+					'elements' => array(),
+				),
+			)
+		);
+
+		$this->assertTrue( $result['debug']['html_rebuild_corrupted_data'] ?? false, 'An ID mutation with the same recursive count must fail integrity verification.' );
+		$this->assertFalse( $result['render_verified'] );
+		$stored = $this->stored_elements();
+		$this->assertSame( 'wid00001', $stored[0]['elements'][0]['elements'][0]['id'] );
 	}
 }

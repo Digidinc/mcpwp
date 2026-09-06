@@ -1259,12 +1259,14 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 
 		$this->log_activity( 'apply_template', $request );
 
-		return $this->success_response( array(
+		$response = array(
 			'applied'     => true,
 			'template_id' => $template_id,
 			'page_id'     => $page_id,
 			'edit_url'    => admin_url( 'post.php?post=' . $page_id . '&action=elementor' ),
-		) );
+		);
+
+		return $this->success_response( $this->lift_render_status( $response, $result ) );
 	}
 
 	/**
@@ -1404,14 +1406,14 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 
 		$this->log_activity( 'apply_archetype', $request );
 
-		return $this->success_response(
-			array(
-				'applied'      => true,
-				'archetype_id' => $archetype_id,
-				'page_id'      => $page_id,
-				'edit_url'     => admin_url( 'post.php?post=' . $page_id . '&action=elementor' ),
-			)
+		$response = array(
+			'applied'      => true,
+			'archetype_id' => $archetype_id,
+			'page_id'      => $page_id,
+			'edit_url'     => admin_url( 'post.php?post=' . $page_id . '&action=elementor' ),
 		);
+
+		return $this->success_response( $this->lift_render_status( $response, $result ) );
 	}
 
 	/**
@@ -1688,7 +1690,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 
 		if ( ! $response['render_verified'] ) {
 			$response['render_errors'] = array_values( array_unique( $errors ) );
-			$response['message']       = __( 'The part was written to the page, but Elementor did not finish rendering it. The page may not display as an Elementor layout — verify it before treating this as delivered.', 'mcpwp' );
+			$response['message']       = __( 'The Elementor content was written to the page, but Elementor did not finish rendering it. The page may not display as an Elementor layout — verify it before treating this as delivered.', 'mcpwp' );
 		}
 
 		return $response;
