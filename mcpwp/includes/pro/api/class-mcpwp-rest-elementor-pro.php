@@ -1259,12 +1259,14 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 
 		$this->log_activity( 'apply_template', $request );
 
-		return $this->success_response( array(
+		$response = array(
 			'applied'     => true,
 			'template_id' => $template_id,
 			'page_id'     => $page_id,
 			'edit_url'    => admin_url( 'post.php?post=' . $page_id . '&action=elementor' ),
-		) );
+		);
+
+		return $this->success_response( $this->lift_render_status( $response, $result ) );
 	}
 
 	/**
@@ -1404,14 +1406,14 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 
 		$this->log_activity( 'apply_archetype', $request );
 
-		return $this->success_response(
-			array(
-				'applied'      => true,
-				'archetype_id' => $archetype_id,
-				'page_id'      => $page_id,
-				'edit_url'     => admin_url( 'post.php?post=' . $page_id . '&action=elementor' ),
-			)
+		$response = array(
+			'applied'      => true,
+			'archetype_id' => $archetype_id,
+			'page_id'      => $page_id,
+			'edit_url'     => admin_url( 'post.php?post=' . $page_id . '&action=elementor' ),
 		);
+
+		return $this->success_response( $this->lift_render_status( $response, $result ) );
 	}
 
 	/**

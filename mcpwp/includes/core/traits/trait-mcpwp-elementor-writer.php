@@ -243,7 +243,12 @@ trait Mcpwp_Elementor_Writer_Trait {
 	 * @return array $result with render_verified, render_errors and a warning.
 	 */
 	private function decorate_render_status( array $result, array $debug ) {
-		$render_errors = $this->collect_render_errors( $debug );
+		$render_errors    = $this->collect_render_errors( $debug );
+		$render_completed = ! empty( $debug['document_save'] ) || true === ( $debug['html_cache_rebuilt'] ?? false );
+
+		if ( empty( $render_errors ) && ! $render_completed ) {
+			$render_errors[] = 'render_pipeline: No completed Elementor render call was observed; the data is saved but its rendered output is unverified.';
+		}
 
 		$result['render_verified'] = empty( $render_errors );
 
@@ -999,20 +1004,22 @@ trait Mcpwp_Elementor_Writer_Trait {
 			update_post_meta( $page_id, '_elementor_version', ELEMENTOR_VERSION );
 		}
 
+		$save_result = null;
+
 		// Set initial Elementor data if provided
 		if ( ! empty( $data['elementor_data'] ) || ! empty( $data['elementor_json'] ) ) {
-			$result = $this->set_elementor_data( $page_id, $data );
-			if ( is_wp_error( $result ) ) {
+			$save_result = $this->set_elementor_data( $page_id, $data );
+			if ( is_wp_error( $save_result ) ) {
 				// Clean up page on error
 				wp_delete_post( $page_id, true );
-				return $result;
+				return $save_result;
 			}
 		} else {
 			// Set empty Elementor data
 			update_post_meta( $page_id, '_elementor_data', '[]' );
 		}
 
-		return array(
+		$response = array(
 			'success'  => true,
 			'page_id'  => (int) $page_id,
 			'title'    => $page_data['post_title'],
@@ -1020,6 +1027,22 @@ trait Mcpwp_Elementor_Writer_Trait {
 			'url'      => get_permalink( $page_id ),
 			'edit_url' => admin_url( "post.php?post={$page_id}&action=elementor" ),
 		);
+
+		if ( is_array( $save_result ) ) {
+			$response = array_merge(
+				$response,
+				array_intersect_key(
+					$save_result,
+					array(
+						'render_verified' => true,
+						'render_errors'   => true,
+						'warnings'        => true,
+					)
+				)
+			);
+		}
+
+		return $response;
 	}
 
 	/**
@@ -1451,8 +1474,9 @@ trait Mcpwp_Elementor_Writer_Trait {
 						$stored_after_count     = is_array( $decoded_after_document ) ? count( $decoded_after_document ) : 0;
 
 						if ( $stored_after_count === $input_count ) {
-							$document_saved       = true;
-							$debug['save_method'] = 'document_save_with_meta_overwrite';
+							$document_saved         = true;
+							$debug['document_save'] = true;
+							$debug['save_method']   = 'document_save_with_meta_overwrite';
 						} else {
 							$debug['document_save_persist_mismatch'] = array(
 								'sections_expected' => $input_count,
@@ -1521,6 +1545,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 				if ( $fresh_doc && method_exists( $fresh_doc, 'save' ) ) {
 					$fresh_elements = json_decode( get_post_meta( $page_id, '_elementor_data', true ), true );
 					if ( is_array( $fresh_elements ) && ! empty( $fresh_elements ) ) {
+						$pre_rebuild_total = $this->count_elements_recursive( $fresh_elements );
 						$rebuild = $this->attempt_elementor_call(
 							static function () use ( $fresh_doc, $fresh_elements ) {
 								return $fresh_doc->save( array( 'elements' => $fresh_elements ) );
@@ -1532,6 +1557,26 @@ trait Mcpwp_Elementor_Writer_Trait {
 						if ( ! $rebuild['ok'] ) {
 							update_post_meta( $page_id, '_elementor_data', wp_slash( $elementor_json ) );
 							wp_cache_delete( $page_id, 'post_meta' );
+						}
+
+						// Mirror the full-set save's recursive integrity guard. Elementor can
+						// return success after silently dropping nested content, leaving the
+						// HTML cache inconsistent with the exact meta restored below.
+						global $wpdb;
+						$post_rebuild = $wpdb->get_var(
+							$wpdb->prepare(
+								"SELECT meta_value FROM {$wpdb->postmeta} WHERE post_id = %d AND meta_key = '_elementor_data' ORDER BY meta_id DESC LIMIT 1",
+								$page_id
+							)
+						);
+						$post_rebuild_decoded = $post_rebuild ? json_decode( $post_rebuild, true ) : null;
+						$post_rebuild_total    = is_array( $post_rebuild_decoded ) ? $this->count_elements_recursive( $post_rebuild_decoded ) : 0;
+						if ( $post_rebuild_total !== $pre_rebuild_total ) {
+							update_post_meta( $page_id, '_elementor_data', wp_slash( $elementor_json ) );
+							wp_cache_delete( $page_id, 'post_meta' );
+							$debug['html_rebuild_corrupted_data'] = true;
+							$debug['html_rebuild_elements_before'] = $pre_rebuild_total;
+							$debug['html_rebuild_elements_after']  = $post_rebuild_total;
 						}
 					}
 				}

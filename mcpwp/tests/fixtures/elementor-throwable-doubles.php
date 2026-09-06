@@ -34,6 +34,12 @@ namespace Elementor {
 				throw new \TypeError( 'Elementor\Core\Base\Document::save(): Argument #1 must be of type array, string given' );
 			}
 
+			if ( ! empty( $GLOBALS['mcpwp_test_corrupt_rebuild'] ) && ! $is_first ) {
+				$corrupted = $data['elements'];
+				$corrupted[0]['elements'][0]['elements'] = array();
+				\update_post_meta( $GLOBALS['mcpwp_test_corrupt_page_id'], '_elementor_data', \wp_json_encode( $corrupted ) );
+			}
+
 			return true;
 		}
 	}

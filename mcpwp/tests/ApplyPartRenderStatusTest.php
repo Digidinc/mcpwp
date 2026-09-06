@@ -43,6 +43,20 @@ final class Mcpwp_Apply_Part_Pro_Double extends Mcpwp_Elementor_Pro {
 	}
 }
 
+final class Mcpwp_Apply_Route_Service_Double {
+
+	/** @var array|WP_Error */
+	public $result;
+
+	public function apply_template_to_page( $page_id, $template_id ) {
+		return $this->result;
+	}
+
+	public function apply_archetype_to_page( $archetype_id, $page_id ) {
+		return $this->result;
+	}
+}
+
 final class ApplyPartRenderStatusTest extends TestCase {
 
 	private function pro_with_basic( Mcpwp_Apply_Part_Basic_Double $basic ): Mcpwp_Apply_Part_Pro_Double {
@@ -188,6 +202,42 @@ final class ApplyPartRenderStatusTest extends TestCase {
 		$this->assertIsArray( $result, 'Returning literal true discards the render verdict needed by the REST response.' );
 		$this->assertFalse( $result['render_verified'] );
 		$this->assertSame( $basic->save_result['render_errors'], $result['render_errors'] );
+	}
+
+	public function test_direct_template_apply_surfaces_a_failed_render_verdict(): void {
+		$service = new Mcpwp_Apply_Route_Service_Double();
+		$service->result = array(
+			'success'         => true,
+			'render_verified' => false,
+			'render_errors'   => array( 'html_cache_rebuild: RuntimeException: template failed at x.php:1' ),
+		);
+		$controller = new Mcpwp_REST_Elementor_Pro( $service );
+
+		$response = $controller->apply_template(
+			new WP_REST_Request( 'POST', '/', array( 'id' => 95, 'page_id' => 96 ) )
+		);
+		$data = $response->get_data();
+
+		$this->assertFalse( $data['render_verified'] );
+		$this->assertSame( $service->result['render_errors'], $data['render_errors'] );
+	}
+
+	public function test_archetype_apply_surfaces_a_failed_render_verdict(): void {
+		$service = new Mcpwp_Apply_Route_Service_Double();
+		$service->result = array(
+			'success'         => true,
+			'render_verified' => false,
+			'render_errors'   => array( 'document_save: RuntimeException: archetype failed at x.php:1' ),
+		);
+		$controller = new Mcpwp_REST_Elementor_Pro( $service );
+
+		$response = $controller->apply_archetype(
+			new WP_REST_Request( 'POST', '/', array( 'id' => 97, 'page_id' => 98 ) )
+		);
+		$data = $response->get_data();
+
+		$this->assertFalse( $data['render_verified'] );
+		$this->assertSame( $service->result['render_errors'], $data['render_errors'] );
 	}
 
 	/**

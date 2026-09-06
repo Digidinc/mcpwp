@@ -59,6 +59,7 @@ final class KsesAllowedHtmlNormalizationTest extends TestCase {
 		$GLOBALS['mcpwp_test_fail_first_save_only'] = false;
 		$GLOBALS['mcpwp_test_corrupt_rebuild'] = false;
 		$GLOBALS['mcpwp_test_corrupt_page_id'] = self::PAGE_ID;
+		$GLOBALS['mcpwp_test_reflect_page_id'] = self::PAGE_ID;
 		$GLOBALS['mcpwp_test_save_calls']   = 0;
 		$GLOBALS['mcpwp_test_allowed_html'] = $this->core_allow_list();
 	}
@@ -71,6 +72,7 @@ final class KsesAllowedHtmlNormalizationTest extends TestCase {
 		$GLOBALS['mcpwp_test_fail_first_save_only'] = false;
 		$GLOBALS['mcpwp_test_corrupt_rebuild'] = false;
 		$GLOBALS['mcpwp_test_corrupt_page_id'] = self::PAGE_ID;
+		$GLOBALS['mcpwp_test_reflect_page_id'] = self::PAGE_ID;
 		$GLOBALS['mcpwp_test_save_calls']   = 0;
 	}
 
@@ -195,7 +197,8 @@ final class KsesAllowedHtmlNormalizationTest extends TestCase {
 		$GLOBALS['wpdb'] = new class() extends Mcpwp_Test_WPDB {
 			public function get_var( $query = '', $x = 0, $y = 0 ) {
 				if ( false !== strpos( (string) $query, '_elementor_data' ) ) {
-					return $GLOBALS['_mcpwp_test_meta'][ KsesAllowedHtmlNormalizationTest::page_id() ]['_elementor_data'] ?? null;
+					$page_id = $GLOBALS['mcpwp_test_reflect_page_id'] ?? KsesAllowedHtmlNormalizationTest::page_id();
+					return $GLOBALS['_mcpwp_test_meta'][ $page_id ]['_elementor_data'] ?? null;
 				}
 				return null;
 			}
@@ -420,6 +423,54 @@ final class KsesAllowedHtmlNormalizationTest extends TestCase {
 		$this->assertTrue( $result['debug']['html_rebuild_corrupted_data'], 'The recursive count guard must detect and restore the truncated tree.' );
 		$this->assertFalse( $result['render_verified'], 'Restored meta is correct, but Elementor never rendered that restored tree.' );
 		$this->assertStringContainsString( 'truncated', implode( ' ', $result['render_errors'] ) );
+	}
+
+	/**
+	 * Direct meta persistence is not evidence that Elementor rendered the page.
+	 *
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_a_save_with_no_render_capability_is_not_render_verified(): void {
+		if ( ! defined( 'ELEMENTOR_VERSION' ) ) {
+			define( 'ELEMENTOR_VERSION', '4.2.4' );
+		}
+		$this->install_reflecting_wpdb();
+		$this->seed_page();
+
+		$basic  = new Mcpwp_Elementor_Basic();
+		$result = $basic->set_elementor_data( self::PAGE_ID, array( 'elementor_data' => $this->heading_payload() ) );
+
+		$this->assertTrue( $result['success'], 'The raw meta write remains a successful persistence outcome.' );
+		$this->assertFalse( $result['render_verified'], 'No completed Document::save() means there is no render evidence.' );
+		$this->assertStringContainsString( 'No completed Elementor render', implode( ' ', $result['render_errors'] ) );
+	}
+
+	/**
+	 * Page creation must preserve a nested save's render verdict.
+	 *
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_create_page_surfaces_a_failed_initial_render(): void {
+		$this->install_elementor();
+		$this->install_reflecting_wpdb();
+		$GLOBALS['mcpwp_test_reflect_page_id'] = 1;
+		$GLOBALS['mcpwp_test_force_throw']     = true;
+
+		$basic  = new Mcpwp_Elementor_Basic();
+		$result = $basic->create_elementor_page(
+			array(
+				'title'          => 'Created with failed render',
+				'status'         => 'draft',
+				'elementor_data' => $this->heading_payload(),
+			)
+		);
+
+		$this->assertTrue( $result['success'], 'The page and its Elementor meta were created.' );
+		$this->assertFalse( $result['render_verified'], 'The outer create response must retain the failed render verdict.' );
+		$this->assertNotEmpty( $result['render_errors'] );
+		$this->assertNotEmpty( $result['warnings'] );
 	}
 
 	/**
