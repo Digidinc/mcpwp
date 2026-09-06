@@ -271,11 +271,21 @@ trait Mcpwp_Elementor_Validator_Trait {
 			// container (and `_css_classes` on widgets), so `css_classes`
 			// works. Renaming that too would break every element currently
 			// styled correctly — it is left alone on purpose.
-			if ( isset( $el['settings']['css_id'] ) && ! isset( $el['settings']['_element_id'] ) ) {
-				$el['settings']['_element_id'] = $el['settings']['css_id'];
-				unset( $el['settings']['css_id'] );
-				$fixes[] = "{$path}: renamed 'css_id' -> '_element_id' (Elementor renders the element id from _element_id; css_id is stored but never rendered)";
-				$changed = true;
+			// The rule itself lives in Mcpwp_Elementor_Element_Keys so the four
+			// write paths that never reach this validator apply the identical
+			// rename (#737). Only the per-element reporting is local.
+			if ( isset( $el['settings'] ) && is_array( $el['settings'] ) && class_exists( 'Mcpwp_Elementor_Element_Keys' ) ) {
+				$key_result = Mcpwp_Elementor_Element_Keys::rename_settings( $el['settings'] );
+
+				if ( $el['settings'] !== $key_result['settings'] ) {
+					$el['settings'] = $key_result['settings'];
+					$changed        = true;
+				}
+
+				foreach ( $key_result['renamed'] as $wrong_key ) {
+					$right_key = Mcpwp_Elementor_Element_Keys::SETTINGS_RENAMES[ $wrong_key ];
+					$fixes[]   = "{$path}: renamed '{$wrong_key}' -> '{$right_key}' (Elementor renders the element id from _element_id; css_id is stored but never rendered)";
+				}
 			}
 
 			// --- 5. Rename known wrong control keys ---

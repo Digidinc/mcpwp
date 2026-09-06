@@ -496,6 +496,14 @@ class Mcpwp_Theme_Builder {
 				$elements = array();
 			}
 
+			// Normalised before both the Document::save() below and the raw meta
+			// write, so Elementor renders the same tree we store. This path
+			// never reaches validate_and_fix_elements(), so a theme template
+			// carrying `css_id` kept an id Elementor never renders (#737).
+			if ( class_exists( 'Mcpwp_Elementor_Element_Keys' ) ) {
+				$elements = Mcpwp_Elementor_Element_Keys::normalize_tree( $elements );
+			}
+
 			$json         = wp_json_encode( $elements );
 			$elementor_ok = class_exists( '\Elementor\Plugin' ) && ! empty( \Elementor\Plugin::$instance->documents );
 

@@ -995,7 +995,13 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 			);
 		}
 
-		// Save updated data.
+		// Save updated data. Normalised first: this path never reaches
+		// validate_and_fix_elements(), so a find/replace over a page still
+		// carrying `css_id` used to write it straight back (#737).
+		if ( class_exists( 'Mcpwp_Elementor_Element_Keys' ) ) {
+			$updated = Mcpwp_Elementor_Element_Keys::normalize_json( $updated );
+		}
+
 		update_post_meta( $page_id, '_elementor_data', wp_slash( $updated ) );
 
 		// Clear Elementor CSS cache for this post.
