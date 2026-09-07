@@ -146,7 +146,7 @@ trait Mcpwp_Elementor_Css_Trait {
 						add_query_arg( 'mcpwp_prime_css', wp_rand(), $permalink ),
 						array(
 							'timeout'   => 15,
-							'sslverify' => false,
+							'sslverify' => ! ( defined( 'WP_DEBUG' ) && WP_DEBUG ),
 							'blocking'  => false,
 						)
 					);
@@ -273,7 +273,7 @@ trait Mcpwp_Elementor_Css_Trait {
 								add_query_arg( 'mcpwp_prime_css', wp_rand(), $permalink ),
 								array(
 									'timeout'   => 15,
-									'sslverify' => false,
+									'sslverify' => ! ( defined( 'WP_DEBUG' ) && WP_DEBUG ),
 									'blocking'  => false,
 								)
 							);
