@@ -199,7 +199,7 @@ class Mcpwp_REST_Site_Custom_Css extends Mcpwp_REST_API {
 			add_query_arg( 'nocache', wp_rand(), home_url( '/' ) ),
 			array(
 				'timeout'   => 5,
-				'sslverify' => false,
+				'sslverify' => ! ( defined( 'WP_DEBUG' ) && WP_DEBUG ),
 			)
 		);
 
