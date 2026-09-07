@@ -164,6 +164,15 @@ trait Mcpwp_Sanitization {
 
 		if ( isset( $args['search'] ) ) {
 			$sanitized['s'] = sanitize_text_field( $args['search'] );
+
+			// WP_Query searches post_title, post_excerpt and post_content —
+			// never post_name. A caller checking "does a page with this slug
+			// already exist?" got an empty result and created a duplicate
+			// (#785). Opt simple single-token searches into slug matching.
+			if ( class_exists( 'Mcpwp_Slug_Search' )
+				&& Mcpwp_Slug_Search::should_match_slug( $sanitized['s'] ) ) {
+				$sanitized[ Mcpwp_Slug_Search::QUERY_VAR ] = true;
+			}
 		}
 
 		if ( isset( $args['post_type'] ) ) {

@@ -266,6 +266,10 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 				'post_type'           => $post_types,
 				'post_status'         => $status,
 				's'                   => $query,
+				// wp_search is the tool a caller reaches for to check whether
+				// a slug is taken, so it needs slug matching more than the
+				// listings do (#785).
+				Mcpwp_Slug_Search::QUERY_VAR => Mcpwp_Slug_Search::should_match_slug( $query ),
 				'posts_per_page'      => $per_page,
 				'paged'               => $page,
 				'ignore_sticky_posts' => true,

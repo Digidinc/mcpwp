@@ -283,7 +283,11 @@ class Mcpwp_REST_Theme_Builder extends Mcpwp_REST_API {
 
 		return $this->success_response( array(
 			'template_id' => $template_id,
-			'conditions'  => $result,
+			'conditions'  => $result['conditions'],
+			// Conditions the caller sent that could not be understood. A
+			// template bound to fewer conditions than were requested, reported
+			// as a bare updated:true, is how #785 went unnoticed on the site.
+			'warnings'    => $result['warnings'],
 			'updated'     => true,
 		) );
 	}
@@ -372,7 +376,14 @@ class Mcpwp_REST_Theme_Builder extends Mcpwp_REST_API {
 		return $this->success_response( array(
 			'template_id' => $template_id,
 			'scope'       => $scope,
-			'conditions'  => $result,
+			// assign_to_location() ends in set_template_conditions(), whose
+			// return shape changed with #785. Reading $result straight into
+			// 'conditions' would nest it — result.conditions[0].name becomes
+			// undefined and result.conditions.length becomes 2 regardless of
+			// how many conditions were bound. That is the silent-shape defect
+			// this issue exists to fix, one function over.
+			'conditions'  => $result['conditions'],
+			'warnings'    => $result['warnings'],
 			'assigned'    => true,
 		) );
 	}

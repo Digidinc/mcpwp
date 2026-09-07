@@ -196,8 +196,11 @@ trait Mcpwp_Free_Tools_Elementor_Trait {
 				),
 				'operations' => array(
 					'type'        => 'array',
-					'description' => 'Array of operations. Each: {op: "add"|"remove"|"replace"|"settings", element_id: "...", element: {...}, position: "...", settings: {...}, delete_settings: [...]}',
+					'description' => 'Array of operations (maximum ' . Mcpwp_Elementor_Basic::MAX_PATCH_OPERATIONS . '). Each: {op: "add"|"remove"|"replace"|"settings", element_id: "...", element: {...}, position: "...", settings: {...}, delete_settings: [...]}',
 					'required'    => true,
+					// Machine-readable, so a client can refuse an over-long
+					// batch before spending a round trip on it (#785).
+					'maxItems'    => Mcpwp_Elementor_Basic::MAX_PATCH_OPERATIONS,
 					'items'       => array(
 						'type'       => 'object',
 						'properties' => array(

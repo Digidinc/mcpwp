@@ -168,8 +168,30 @@ trait Mcpwp_Elementor_Validator_Trait {
 		$errors            = array();
 		$changed           = false;
 		$seen_ids          = array();
-		$registered        = $this->get_registered_widgets();
+		// Elementor's own registry is the truth about what will render here.
+		// The hardcoded lists stand in for it when Elementor cannot be asked;
+		// they do not overrule it when it can. Merging the two, as this used
+		// to, let `archive-title` — renamed to `theme-archive-title` in
+		// Elementor Pro 3.0 and no longer registered anywhere — save clean
+		// with an empty warnings array and render nothing (#785).
+		$live       = Mcpwp_Elementor_Registry::live_types();
+		$registered = null === $live ? $this->get_registered_widgets() : $live;
+
 		$registered_lookup = array_flip( $registered );
+
+		// Kept separate so the warning can say which of the two situations it
+		// is: a name Elementor has never heard of, or a real Pro widget on a
+		// site where Pro is not active. Those need different actions. (Same
+		// class as the reader trait after the G4 split, so its reference lists
+		// are reachable directly.)
+		$known_pro_lookup = array_flip( self::$known_pro_widgets );
+
+		// find_closest_widget() is private to this class; the registry helper
+		// lives outside it, so it gets a closure rather than a method array,
+		// which is_callable() would reject from that scope.
+		$fuzzy = function ( $input, $candidates ) {
+			return $this->find_closest_widget( $input, $candidates );
+		};
 
 		/**
 		 * Walk a single element recursively.
@@ -180,7 +202,7 @@ trait Mcpwp_Elementor_Validator_Trait {
 		 */
 		$walk = function ( &$el, $path = '', $parent_type = '' ) use (
 			&$walk, &$warnings, &$fixes, &$errors, &$changed, &$seen_ids,
-			$registered, $registered_lookup
+			$registered, $registered_lookup, $known_pro_lookup, $fuzzy
 		) {
 			$el_type     = isset( $el['elType'] ) ? $el['elType'] : '';
 			$widget_type = isset( $el['widgetType'] ) ? $el['widgetType'] : '';
@@ -235,9 +257,19 @@ trait Mcpwp_Elementor_Validator_Trait {
 			// --- 4. Validate widget type ---
 			if ( 'widget' === $el_type && '' !== $widget_type ) {
 				if ( ! isset( $registered_lookup[ $widget_type ] ) ) {
-					$suggestion = $this->find_closest_widget( $widget_type, $registered );
+					$suggestion = Mcpwp_Elementor_Registry::suggest(
+						$widget_type,
+						$registered,
+						$fuzzy
+					);
+
 					if ( $suggestion ) {
 						$warnings[] = "{$path}: unknown widget '{$widget_type}' (did you mean '{$suggestion}'?)";
+					} elseif ( isset( $known_pro_lookup[ $widget_type ] ) ) {
+						// A real Elementor Pro widget name that this site does
+						// not register. Saying "unknown widget type" would send
+						// the caller hunting for a typo that is not there.
+						$warnings[] = "{$path}: widget '{$widget_type}' is an Elementor Pro widget and is not registered on this site — it will render nothing";
 					} else {
 						$warnings[] = "{$path}: unknown widget type '{$widget_type}'";
 					}

@@ -870,7 +870,37 @@ if (! isset($GLOBALS['wpdb'])) {
 
         public function prepare($query, ...$args)
         {
-            return $query;
+            // Substitute, like the real one. Returning the template verbatim
+            // meant every query built through prepare() still carried %d/%s
+            // when it reached get_var() below, so a double that wanted to
+            // answer a query could not recognise one — and, more importantly,
+            // any test asserting on generated SQL was asserting on a string
+            // the search term never entered.
+            if (empty($args)) {
+                return $query;
+            }
+
+            if (isset($args[0]) && is_array($args[0]) && 1 === count($args)) {
+                $args = $args[0];
+            }
+
+            return preg_replace_callback(
+                '/%[dfs]/',
+                function ($m) use (&$args) {
+                    if (! $args) {
+                        return $m[0];
+                    }
+                    $value = array_shift($args);
+                    if ('%d' === $m[0]) {
+                        return (string) (int) $value;
+                    }
+                    if ('%f' === $m[0]) {
+                        return (string) (float) $value;
+                    }
+                    return "'" . str_replace("'", "\\'", (string) $value) . "'";
+                },
+                $query
+            );
         }
         public function get_results($query = '', $output = ARRAY_A)
         {
@@ -882,6 +912,29 @@ if (! isset($GLOBALS['wpdb'])) {
         }
         public function get_var($query = '', $x = 0, $y = 0)
         {
+            // Answer the one query the Elementor writer depends on.
+            //
+            // set_elementor_data() verifies its own write by reading the raw
+            // postmeta row through $wpdb rather than get_post_meta(), on
+            // purpose (#612: a persistent object cache can report a value the
+            // DB never committed). A double that answers null for that read
+            // makes the writer conclude 0 sections were stored and return
+            // meta_write_truncated, so the whole method was untestable and
+            // therefore untested — which is how a builder-flag defect reached
+            // the busiest write tool in the plugin (#785).
+            //
+            // Deliberately narrow: only this exact shape is served from the
+            // meta store, and everything else still answers null as before.
+            if (preg_match(
+                "/SELECT meta_value FROM \\S*postmeta WHERE post_id = (\\d+) AND meta_key = '([^']+)'/",
+                (string) $query,
+                $m
+            )) {
+                $value = $GLOBALS['_mcpwp_test_meta'][ (int) $m[1] ][ $m[2] ] ?? null;
+
+                return is_scalar($value) ? (string) $value : $value;
+            }
+
             return null;
         }
         public function get_col($query = '', $x = 0)
@@ -1575,6 +1628,15 @@ function update_post_meta($post_id, $key, $value)
     if (! empty($GLOBALS['mcpwp_test_meta_escapes_html'])) {
         $value = mcpwp_test_escape_meta_deep($value);
     }
+
+    // A meta write that silently does nothing — a host with a broken object
+    // cache, a filter that vetoes the write. Code that trusts its own write
+    // without reading it back cannot tell this apart from success (#785).
+    if (! empty($GLOBALS['mcpwp_test_meta_write_fails'])
+        && in_array($key, (array) $GLOBALS['mcpwp_test_meta_write_fails'], true)) {
+        return false;
+    }
+
     $GLOBALS['_mcpwp_test_meta'][ (int) $post_id ][ $key ] = wp_unslash($value);
     return true;
 }
@@ -1848,6 +1910,8 @@ require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-pages.php';
 require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-menus.php';
 // The single definition of which Elementor settings keys are wrong. Loaded
 // before the validator and before every _elementor_data write path (#737).
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-slug-search.php';
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-registry.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-element-keys.php';
 require_once dirname(__DIR__) . '/includes/core/traits/trait-mcpwp-elementor-reader.php';
 require_once dirname(__DIR__) . '/includes/core/traits/trait-mcpwp-elementor-writer.php';
@@ -1858,6 +1922,9 @@ require_once dirname(__DIR__) . '/includes/core/traits/trait-mcpwp-elementor-css
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-widgets.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-basic.php';
 require_once dirname(__DIR__) . '/includes/pro/api/class-mcpwp-rest-elementor-pro.php';
+// Theme Builder: display-condition parsing is pure and unit-testable even
+// though the save path needs Elementor Pro (#785).
+require_once dirname(__DIR__) . '/includes/pro/core/class-mcpwp-theme-builder.php';
 require_once dirname(__DIR__) . '/includes/class-mcpwp-license.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-core.php';
 require_once dirname(__DIR__) . '/includes/pro/class-mcpwp-pro-bootstrap.php';
