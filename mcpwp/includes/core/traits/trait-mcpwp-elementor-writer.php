@@ -2364,8 +2364,12 @@ trait Mcpwp_Elementor_Writer_Trait {
 			return new WP_Error( 'no_operations', 'operations array is required.', array( 'status' => 400 ) );
 		}
 
-		if ( count( $operations ) > 20 ) {
-			return new WP_Error( 'too_many_ops', 'Maximum 20 operations per patch.', array( 'status' => 400 ) );
+		if ( count( $operations ) > self::MAX_PATCH_OPERATIONS ) {
+			return new WP_Error(
+				'too_many_ops',
+				sprintf( 'Maximum %d operations per patch.', self::MAX_PATCH_OPERATIONS ),
+				array( 'status' => 400 )
+			);
 		}
 
 		$raw      = get_post_meta( $page_id, '_elementor_data', true );

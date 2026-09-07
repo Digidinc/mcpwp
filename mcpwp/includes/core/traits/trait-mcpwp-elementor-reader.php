@@ -495,16 +495,14 @@ trait Mcpwp_Elementor_Reader_Trait {
 	 */
 	private function get_registered_widgets() {
 		// Start with live registry if available.
-		$widgets = array();
-		if ( class_exists( '\Elementor\Plugin' ) && ! empty( \Elementor\Plugin::$instance->widgets_manager ) ) {
-			$manager = \Elementor\Plugin::$instance->widgets_manager;
-			if ( method_exists( $manager, 'get_widget_types' ) ) {
-				$types = $manager->get_widget_types();
-				if ( ! empty( $types ) && is_array( $types ) ) {
-					$widgets = array_keys( $types );
-				}
-			}
-		}
+		//
+		// Read through the registry helper rather than reaching into
+		// Elementor here: this call site used to invoke get_widget_types()
+		// with no try/catch, so a third-party widget whose registration threw
+		// took the whole save down with it. The helper turns that into "could
+		// not read", which is what the merge below is already built to handle.
+		$live    = Mcpwp_Elementor_Registry::live_types();
+		$widgets = null === $live ? array() : $live;
 
 		// Always merge both hardcoded lists so known widgets never trigger false warnings.
 		// Pro widgets are harmless to allow — they simply won't render without Pro.
@@ -543,20 +541,12 @@ trait Mcpwp_Elementor_Reader_Trait {
 	 * @return array Setting key names.
 	 */
 	private function get_valid_widget_keys( $widget_type ) {
-		$keys = array();
-
-		if ( class_exists( '\Elementor\Plugin' ) && ! empty( \Elementor\Plugin::$instance->widgets_manager ) ) {
-			$manager = \Elementor\Plugin::$instance->widgets_manager;
-			if ( method_exists( $manager, 'get_widget_types' ) ) {
-				$types = $manager->get_widget_types();
-				if ( isset( $types[ $widget_type ] ) && method_exists( $types[ $widget_type ], 'get_controls' ) ) {
-					$controls = $types[ $widget_type ]->get_controls();
-					if ( is_array( $controls ) ) {
-						$keys = array_keys( $controls );
-					}
-				}
-			}
-		}
+		// Via the registry helper, which catches a throwing registry. This was
+		// the second of two unguarded get_widget_types() calls on the save
+		// path; either one turned a misbehaving third-party widget into a
+		// fatal on every Elementor write.
+		$live = Mcpwp_Elementor_Registry::live_control_keys( $widget_type );
+		$keys = is_array( $live ) ? $live : array();
 
 		// Always merge in our static reference schema — it may know about keys
 		// that the live widget registry doesn't expose via get_controls() (e.g.

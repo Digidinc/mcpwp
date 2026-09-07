@@ -261,6 +261,8 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-drafts.php';
 	// Loaded before the traits and every _elementor_data write path that calls
 	// it — the single definition of which settings keys Elementor ignores.
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-slug-search.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-elementor-registry.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-elementor-element-keys.php';
 	// Elementor engine verb traits (mixed into Mcpwp_Elementor_Basic — G4 split).
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/traits/trait-mcpwp-elementor-reader.php';
@@ -425,6 +427,11 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	// key → dedicated MCPWP key (non-destructive, idempotent, runs once).
 	// Registered here (class already required above); fires on plugins_loaded prio 20.
 	Mcpwp_Encryption_Migration::register();
+
+	// Slug matching for simple listing searches. Gated per-query on a query
+	// var, so hooking it globally changes nothing for queries that did not ask
+	// (#785).
+	Mcpwp_Slug_Search::register();
 
 	// Check if database needs updating
 	$installed_db_version = get_option( 'mcpwp_db_version', '0' );

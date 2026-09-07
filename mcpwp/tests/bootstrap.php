@@ -1848,6 +1848,8 @@ require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-pages.php';
 require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-menus.php';
 // The single definition of which Elementor settings keys are wrong. Loaded
 // before the validator and before every _elementor_data write path (#737).
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-slug-search.php';
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-registry.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-element-keys.php';
 require_once dirname(__DIR__) . '/includes/core/traits/trait-mcpwp-elementor-reader.php';
 require_once dirname(__DIR__) . '/includes/core/traits/trait-mcpwp-elementor-writer.php';
@@ -1858,6 +1860,9 @@ require_once dirname(__DIR__) . '/includes/core/traits/trait-mcpwp-elementor-css
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-widgets.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-basic.php';
 require_once dirname(__DIR__) . '/includes/pro/api/class-mcpwp-rest-elementor-pro.php';
+// Theme Builder: display-condition parsing is pure and unit-testable even
+// though the save path needs Elementor Pro (#785).
+require_once dirname(__DIR__) . '/includes/pro/core/class-mcpwp-theme-builder.php';
 require_once dirname(__DIR__) . '/includes/class-mcpwp-license.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-core.php';
 require_once dirname(__DIR__) . '/includes/pro/class-mcpwp-pro-bootstrap.php';

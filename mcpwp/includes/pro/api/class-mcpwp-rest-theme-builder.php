@@ -283,7 +283,11 @@ class Mcpwp_REST_Theme_Builder extends Mcpwp_REST_API {
 
 		return $this->success_response( array(
 			'template_id' => $template_id,
-			'conditions'  => $result,
+			'conditions'  => $result['conditions'],
+			// Conditions the caller sent that could not be understood. A
+			// template bound to fewer conditions than were requested, reported
+			// as a bare updated:true, is how #785 went unnoticed on the site.
+			'warnings'    => $result['warnings'],
 			'updated'     => true,
 		) );
 	}

@@ -261,11 +261,97 @@ class Mcpwp_Theme_Builder {
 			return new WP_Error( 'not_found', __( 'Template not found.', 'mcpwp' ) );
 		}
 
-		// Validate and format conditions.
-		// Accept both object form: {"type":"include","name":"singular","sub_name":"product"}
-		// and positional array form: ["include", "singular", "product"] (#210).
+		$parsed               = self::format_conditions( (array) $conditions );
+		$formatted_conditions = $parsed['conditions'];
+		$warnings             = $parsed['warnings'];
+
+		// Every condition was unusable. Saving an empty set here would detach
+		// the template from everything it currently matches and report
+		// updated:true while doing it — the destructive version of the bug
+		// this method was fixed for.
+		if ( empty( $formatted_conditions ) && ! empty( $warnings ) ) {
+			return new WP_Error(
+				'invalid_conditions',
+				__( 'No usable display condition was given, so the template\'s conditions were left unchanged.', 'mcpwp' ),
+				array(
+					'status'   => 400,
+					'warnings' => $warnings,
+					'expected' => 'Either {"type":"include","name":"singular","sub_name":"post"} or the string "include/singular/post".',
+				)
+			);
+		}
+
+		// Save conditions via Elementor's conditions manager.
+		$conditions_manager = \ElementorPro\Modules\ThemeBuilder\Module::instance()->get_conditions_manager();
+		$conditions_manager->save_conditions( $template_id, $formatted_conditions );
+
+		// Ensure the global conditions index is updated.
+		// Elementor Pro reads elementor_pro_theme_builder_conditions at runtime
+		// to decide which templates to load. The per-post meta alone is not enough.
+		$this->update_global_conditions_index( $template_id, $formatted_conditions );
+
+		// Clear cache.
+		$conditions_manager->get_cache()->regenerate();
+
+		// Always the same shape, warnings or not. A response that changes
+		// structure depending on whether anything went wrong is the same trap
+		// in a new place: the caller that only ever sees the happy shape never
+		// writes the branch that reads the warnings.
+		return array(
+			'conditions' => $this->get_template_conditions( $template_id ),
+			'warnings'   => $warnings,
+		);
+	}
+
+	/**
+	 * Normalise every accepted condition form into Elementor's stored shape.
+	 *
+	 * Split out of set_template_conditions() so the dispatch — which form did
+	 * this input take? — is reachable without Elementor Pro loaded. The defect
+	 * this fixes was in the dispatch, not in any one branch: a string satisfied
+	 * a test written to recognise a positional array, so it was never routed to
+	 * a parser at all.
+	 *
+	 * @param array $conditions Raw conditions as supplied by the caller.
+	 * @return array{conditions:array,warnings:array}
+	 */
+	private static function format_conditions( array $conditions ) {
+		// Accept object form: {"type":"include","name":"singular","sub_name":"product"},
+		// positional array form: ["include", "singular", "product"] (#210),
+		// and Elementor's own slash string form: "include/singular/post" (#785).
 		$formatted_conditions = array();
+		$warnings             = array();
+
 		foreach ( $conditions as $condition ) {
+			if ( is_string( $condition ) ) {
+				// A string used to fall into the positional branch below,
+				// because PHP answers isset($str[0]) with true (string offset)
+				// and isset($str['type']) with false. So "include/singular/post"
+				// was read one character at a time and stored as
+				// {"type":"include","name":"n","sub_name":"c","sub_id":"l"} —
+				// returned as updated:true, bound to nothing (#785).
+				//
+				// This is the format Elementor itself stores and parses, so it
+				// is the natural thing for a caller to send.
+				$formatted = self::parse_condition_string( $condition );
+
+				if ( null === $formatted ) {
+					$warnings[] = sprintf(
+						'Ignored condition "%s": expected type/name[/sub_name[/sub_id]], e.g. "include/singular/post".',
+						$condition
+					);
+					continue;
+				}
+
+				$formatted_conditions[] = $formatted;
+				continue;
+			}
+
+			if ( ! is_array( $condition ) ) {
+				$warnings[] = sprintf( 'Ignored condition of type %s: expected an object, an array or a "type/name" string.', gettype( $condition ) );
+				continue;
+			}
+
 			if ( isset( $condition[0] ) && ! isset( $condition['type'] ) ) {
 				// Positional array: [type, name, sub_name, sub_id].
 				$formatted = array(
@@ -286,19 +372,62 @@ class Mcpwp_Theme_Builder {
 			$formatted_conditions[] = $formatted;
 		}
 
-		// Save conditions via Elementor's conditions manager.
-		$conditions_manager = \ElementorPro\Modules\ThemeBuilder\Module::instance()->get_conditions_manager();
-		$conditions_manager->save_conditions( $template_id, $formatted_conditions );
+		return array(
+			'conditions' => $formatted_conditions,
+			'warnings'   => $warnings,
+		);
+	}
 
-		// Ensure the global conditions index is updated.
-		// Elementor Pro reads elementor_pro_theme_builder_conditions at runtime
-		// to decide which templates to load. The per-post meta alone is not enough.
-		$this->update_global_conditions_index( $template_id, $formatted_conditions );
+	/**
+	 * Parse Elementor's own slash-delimited condition string.
+	 *
+	 * `include/singular/post` — the format Elementor stores and parses
+	 * internally, and the one a caller reaching for a compact form will write.
+	 *
+	 * Returns null rather than a partial guess when the string cannot be a
+	 * condition. A condition nobody can read is better refused than stored: a
+	 * malformed one binds the template to nothing while reporting success,
+	 * which is exactly how this was found.
+	 *
+	 * @param string $condition Condition string.
+	 * @return array|null Formatted condition, or null when unparseable.
+	 */
+	private static function parse_condition_string( $condition ) {
+		$condition = trim( (string) $condition );
 
-		// Clear cache.
-		$conditions_manager->get_cache()->regenerate();
+		if ( '' === $condition ) {
+			return null;
+		}
 
-		return $this->get_template_conditions( $template_id );
+		$parts = array_map( 'trim', explode( '/', $condition ) );
+
+		// A bare name is a condition Elementor understands ("general"), so a
+		// single segment is allowed — but it must not be the type on its own,
+		// which is the most likely way to write half a condition.
+		if ( 1 === count( $parts ) ) {
+			if ( in_array( $parts[0], array( 'include', 'exclude' ), true ) ) {
+				return null;
+			}
+
+			$parts = array( 'include', $parts[0] );
+		}
+
+		list( $type, $name, $sub_name, $sub_id ) = array_pad( $parts, 4, '' );
+
+		if ( ! in_array( $type, array( 'include', 'exclude' ), true ) ) {
+			return null;
+		}
+
+		if ( '' === $name ) {
+			return null;
+		}
+
+		return array(
+			'type'     => $type,
+			'name'     => sanitize_text_field( $name ),
+			'sub_name' => sanitize_text_field( $sub_name ),
+			'sub_id'   => sanitize_text_field( $sub_id ),
+		);
 	}
 
 	/**

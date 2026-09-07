@@ -1679,16 +1679,86 @@ class Mcpwp_Elementor_Widgets {
 			);
 		}
 
-		// Widget not found — suggest closest matches.
+		// No curated guide. That is not the same as no such widget, and this
+		// used to report it as if it were: asked about `theme-archive-title`
+		// — which exists on the site, renders, and is the correct spelling of
+		// the widget the caller got wrong — it answered `unknown_widget` with
+		// no suggestions and a 52-name list that did not contain the answer,
+		// actively pointing away from the right name (#785).
+		//
+		// So ask Elementor before saying no.
+		$live_types = Mcpwp_Elementor_Registry::live_types();
+
+		if ( null !== $live_types && in_array( $widget_type, $live_types, true ) ) {
+			$meta = Mcpwp_Elementor_Registry::live_widget_meta( $widget_type );
+			$keys = Mcpwp_Elementor_Registry::live_control_keys( $widget_type );
+
+			return array(
+				'widget_type' => $widget_type,
+				'source'      => 'live_registry',
+				'description' => ( $meta && '' !== $meta['title'] )
+					? $meta['title'] . ' (registered on this site; no curated guide is written for it yet).'
+					: 'Registered on this site; no curated guide is written for it yet.',
+				'category'    => ( $meta && '' !== $meta['category'] ) ? $meta['category'] : '',
+				'valid_keys'  => is_array( $keys ) ? $keys : array(),
+				'note'        => 'Keys come from the live Elementor controls, not from this plugin\'s reference data, so they are exactly what this installation accepts.',
+				'tips'        => array(
+					'Every element needs a unique 8-char alphanumeric "id" field.',
+					'Always set "elType" to "widget" and "widgetType" to "' . $widget_type . '".',
+					'Use wp_get_widget_schema for the full control definitions including types and defaults.',
+					'Use dry_run=true when setting Elementor data to validate without saving.',
+				),
+			);
+		}
+
+		// Genuinely not found. Suggest, and be explicit that all_widgets is
+		// this plugin's curated reference list rather than the site's registry
+		// — reading it as the registry is what sent the last caller wrong.
 		$suggestions = self::find_closest( $widget_type, 5 );
 		$all_types   = self::get_known_types();
 
-		return array(
-			'error'       => 'unknown_widget',
-			'message'     => sprintf( "Unknown widget type '%s'.", $widget_type ),
-			'suggestions' => $suggestions,
-			'all_widgets' => $all_types,
-			'tip'         => 'Use wp_get_elementor_widgets to see all available widgets on this site, including third-party widgets.',
+		if ( empty( $suggestions ) && null !== $live_types ) {
+			$live_suggestion = Mcpwp_Elementor_Registry::suggest(
+				$widget_type,
+				$live_types,
+				function ( $input, $candidates ) {
+					$best     = null;
+					$distance = PHP_INT_MAX;
+					foreach ( $candidates as $candidate ) {
+						$this_distance = levenshtein( $input, $candidate );
+						if ( $this_distance < $distance && $this_distance <= 3 ) {
+							$distance = $this_distance;
+							$best     = $candidate;
+						}
+					}
+					return $best;
+				}
+			);
+
+			if ( $live_suggestion ) {
+				$suggestions = array( $live_suggestion );
+			}
+		}
+
+		$response = array(
+			'error'               => 'unknown_widget',
+			'message'             => sprintf( "Unknown widget type '%s'.", $widget_type ),
+			'suggestions'         => $suggestions,
+			'all_widgets'         => $all_types,
+			'all_widgets_is'      => 'curated reference list, not this site\'s widget registry',
+			'tip'                 => 'Use wp_get_elementor_widgets to see all available widgets on this site, including third-party widgets.',
 		);
+
+		// Say which question was actually answered. Without this, "Elementor
+		// says no" and "Elementor could not be asked" read identically.
+		$response['registry_checked'] = null !== $live_types;
+
+		if ( null !== $live_types ) {
+			$response['registered_widget_count'] = count( $live_types );
+		} else {
+			$response['registry_note'] = 'Elementor\'s live registry could not be read, so this answer comes only from the curated list. The widget may still exist on the site.';
+		}
+
+		return $response;
 	}
 }
