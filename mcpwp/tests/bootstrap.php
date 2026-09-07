@@ -1575,6 +1575,15 @@ function update_post_meta($post_id, $key, $value)
     if (! empty($GLOBALS['mcpwp_test_meta_escapes_html'])) {
         $value = mcpwp_test_escape_meta_deep($value);
     }
+
+    // A meta write that silently does nothing — a host with a broken object
+    // cache, a filter that vetoes the write. Code that trusts its own write
+    // without reading it back cannot tell this apart from success (#785).
+    if (! empty($GLOBALS['mcpwp_test_meta_write_fails'])
+        && in_array($key, (array) $GLOBALS['mcpwp_test_meta_write_fails'], true)) {
+        return false;
+    }
+
     $GLOBALS['_mcpwp_test_meta'][ (int) $post_id ][ $key ] = wp_unslash($value);
     return true;
 }

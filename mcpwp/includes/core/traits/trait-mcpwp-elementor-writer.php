@@ -629,6 +629,59 @@ trait Mcpwp_Elementor_Writer_Trait {
 	}
 
 	/**
+	 * Flag a post as built with Elementor, so Elementor renders its data.
+	 *
+	 * The flag is the `_elementor_edit_mode` meta, read through
+	 * Document::is_built_with_elementor(). Elementor's frontend checks it
+	 * before rendering anything, and Document::save() does not set it — only
+	 * the editor does. Writing data without it produces a page that stores
+	 * everything correctly and displays none of it.
+	 *
+	 * Prefers Elementor's own setter so the meaning of the flag stays
+	 * Elementor's to define, and falls back to the meta write when the
+	 * document API is unavailable — which is the same situation in which the
+	 * rest of this class falls back to raw meta.
+	 *
+	 * @param int $page_id Post ID.
+	 * @return bool True when the post is flagged after this call.
+	 */
+	private function mark_built_with_elementor( $page_id ) {
+		if ( class_exists( '\Elementor\Plugin' ) && ! empty( \Elementor\Plugin::$instance->documents ) ) {
+			// attempt_elementor_call() takes the debug bag by reference; this
+			// one is local because a failure here is reported through the
+			// return value, which the caller records as built_with_elementor.
+			$flag_debug = array();
+
+			$attempt = $this->attempt_elementor_call(
+				static function () use ( $page_id ) {
+					$document = \Elementor\Plugin::$instance->documents->get( $page_id, false );
+
+					if ( ! $document || ! method_exists( $document, 'set_is_built_with_elementor' ) ) {
+						return false;
+					}
+
+					$document->set_is_built_with_elementor( true );
+
+					return true;
+				},
+				$flag_debug,
+				'builder_flag'
+			);
+
+			if ( $attempt['ok'] && true === $attempt['value'] ) {
+				return 'builder' === get_post_meta( $page_id, '_elementor_edit_mode', true );
+			}
+		}
+
+		update_post_meta( $page_id, '_elementor_edit_mode', 'builder' );
+
+		// Read it back rather than trusting update_post_meta's return, which
+		// is false both when the write failed and when the value was already
+		// what we asked for.
+		return 'builder' === get_post_meta( $page_id, '_elementor_edit_mode', true );
+	}
+
+	/**
 	 * State, at the top level of a write response, whether the page actually renders.
 	 *
 	 * Persisting _elementor_data and rendering the page are separate outcomes, and
@@ -652,6 +705,22 @@ trait Mcpwp_Elementor_Writer_Trait {
 
 		if ( empty( $render_errors ) && ! $render_completed ) {
 			$render_errors[] = 'render_pipeline: No completed Elementor render call was observed; the data is saved but its rendered output is unverified.';
+		}
+
+		// Whether Elementor will render this page at all.
+		//
+		// Everything above is about calls that did not throw. That is not the
+		// same as output existing, and the gap was reported: a page answered
+		// render_verified:true while Elementor produced zero bytes for it,
+		// because the document was never flagged as built with Elementor
+		// (#785). A verification that cannot fail on a page rendering nothing
+		// is not a verification.
+		if ( array_key_exists( 'built_with_elementor', $debug ) ) {
+			$result['renders_via_elementor'] = (bool) $debug['built_with_elementor'];
+
+			if ( ! $debug['built_with_elementor'] ) {
+				$render_errors[] = 'builder_flag: The post is not marked as built with Elementor, so Elementor will not render its data — the content will appear as unstyled HTML.';
+			}
 		}
 
 		$result['render_verified'] = empty( $render_errors );
@@ -1999,6 +2068,39 @@ trait Mcpwp_Elementor_Writer_Trait {
 				);
 				$debug['css_regenerated'] = $css_regen['ok'];
 			}
+		}
+
+		// Mark the post as built with Elementor.
+		//
+		// Elementor's frontend renders _elementor_data only for a document
+		// whose is_built_with_elementor() is true, and that flag is the
+		// _elementor_edit_mode meta. Document::save() does NOT set it —
+		// only Elementor's own editor does (editor.php calls
+		// set_is_built_with_elementor). So a page written entirely through
+		// this API and never opened in the editor had its data on disk,
+		// answered document_save:true, html_cache_rebuilt:true and
+		// render_verified:true, and rendered ZERO bytes of Elementor
+		// output: the plain-text post_content that Document::save() wrote
+		// went out as bare HTML directly in <body>, with no section
+		// wrappers and no styling (#785 defect 4, #784).
+		//
+		// set_elementor_data() and create_elementor_page() already did
+		// this. Every surgical operation that routes through here —
+		// add/remove/replace/patch/edit, and therefore
+		// wp_apply_elementor_part — did not.
+		//
+		// Outside the `$elementor_ok` branch on purpose. The flag is plain
+		// post meta and it belongs with the data wherever that data was
+		// written; making it conditional on Elementor being loaded at write
+		// time would leave the same page unrenderable through the raw-meta
+		// fallback path this method already has.
+		//
+		// Only when there are elements: writing an empty array is how a
+		// page gets cleared, and flagging that would hand an empty
+		// Elementor document control of a page that renders fine without
+		// it.
+		if ( ! empty( $post_val ) ) {
+			$debug['built_with_elementor'] = $this->mark_built_with_elementor( $page_id );
 		}
 
 		// Prime CSS if still empty.
