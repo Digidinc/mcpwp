@@ -870,7 +870,37 @@ if (! isset($GLOBALS['wpdb'])) {
 
         public function prepare($query, ...$args)
         {
-            return $query;
+            // Substitute, like the real one. Returning the template verbatim
+            // meant every query built through prepare() still carried %d/%s
+            // when it reached get_var() below, so a double that wanted to
+            // answer a query could not recognise one — and, more importantly,
+            // any test asserting on generated SQL was asserting on a string
+            // the search term never entered.
+            if (empty($args)) {
+                return $query;
+            }
+
+            if (isset($args[0]) && is_array($args[0]) && 1 === count($args)) {
+                $args = $args[0];
+            }
+
+            return preg_replace_callback(
+                '/%[dfs]/',
+                function ($m) use (&$args) {
+                    if (! $args) {
+                        return $m[0];
+                    }
+                    $value = array_shift($args);
+                    if ('%d' === $m[0]) {
+                        return (string) (int) $value;
+                    }
+                    if ('%f' === $m[0]) {
+                        return (string) (float) $value;
+                    }
+                    return "'" . str_replace("'", "\\'", (string) $value) . "'";
+                },
+                $query
+            );
         }
         public function get_results($query = '', $output = ARRAY_A)
         {
@@ -882,6 +912,29 @@ if (! isset($GLOBALS['wpdb'])) {
         }
         public function get_var($query = '', $x = 0, $y = 0)
         {
+            // Answer the one query the Elementor writer depends on.
+            //
+            // set_elementor_data() verifies its own write by reading the raw
+            // postmeta row through $wpdb rather than get_post_meta(), on
+            // purpose (#612: a persistent object cache can report a value the
+            // DB never committed). A double that answers null for that read
+            // makes the writer conclude 0 sections were stored and return
+            // meta_write_truncated, so the whole method was untestable and
+            // therefore untested — which is how a builder-flag defect reached
+            // the busiest write tool in the plugin (#785).
+            //
+            // Deliberately narrow: only this exact shape is served from the
+            // meta store, and everything else still answers null as before.
+            if (preg_match(
+                "/SELECT meta_value FROM \\S*postmeta WHERE post_id = (\\d+) AND meta_key = '([^']+)'/",
+                (string) $query,
+                $m
+            )) {
+                $value = $GLOBALS['_mcpwp_test_meta'][ (int) $m[1] ][ $m[2] ] ?? null;
+
+                return is_scalar($value) ? (string) $value : $value;
+            }
+
             return null;
         }
         public function get_col($query = '', $x = 0)

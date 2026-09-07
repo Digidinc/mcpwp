@@ -53,7 +53,16 @@ final class ElementorBuilderFlagTest extends TestCase {
 
 	private const PAGE_ID = 9100;
 
+	/** @var array */
+	private $meta_before = array();
+
+	/** @var array */
+	private $posts_before = array();
+
 	protected function setUp(): void {
+		$this->meta_before  = $GLOBALS['_mcpwp_test_meta'] ?? array();
+		$this->posts_before = $GLOBALS['_mcpwp_test_posts'] ?? array();
+
 		$GLOBALS['_mcpwp_test_meta'] = array();
 		unset( $GLOBALS['mcpwp_test_meta_write_fails'] );
 
@@ -71,15 +80,29 @@ final class ElementorBuilderFlagTest extends TestCase {
 	}
 
 	protected function tearDown(): void {
-		// Not only setUp: the failure switch below would otherwise follow this
-		// class out and break whatever runs next (#757's family).
-		$GLOBALS['_mcpwp_test_meta']  = array();
-		$GLOBALS['_mcpwp_test_posts'] = array();
+		// Restore what was found, rather than emptying shared fixture state.
+		// Wiping is harmless while every other class seeds its own posts in
+		// setUp, but it is #757's shape: the day one seeds them in
+		// setUpBeforeClass or at bootstrap, this class deletes them for
+		// whatever runs next.
+		$GLOBALS['_mcpwp_test_meta']  = $this->meta_before;
+		$GLOBALS['_mcpwp_test_posts'] = $this->posts_before;
+
 		unset( $GLOBALS['mcpwp_test_meta_write_fails'] );
 	}
 
 	private function writer(): Mcpwp_Elementor_Basic {
 		return ( new ReflectionClass( Mcpwp_Elementor_Basic::class ) )->newInstanceWithoutConstructor();
+	}
+
+	/**
+	 * Satisfy Mcpwp_Elementor_Basic::is_active(), which is just
+	 * `defined( 'ELEMENTOR_VERSION' )`. Callers must be in a separate process.
+	 */
+	private function pretend_elementor_is_installed(): void {
+		if ( ! defined( 'ELEMENTOR_VERSION' ) ) {
+			define( 'ELEMENTOR_VERSION', '4.2.4' );
+		}
 	}
 
 	private function invoke( string $method, array $args ) {
@@ -291,10 +314,78 @@ final class ElementorBuilderFlagTest extends TestCase {
 		// completed and collect_render_errors() says so. Asserting it true
 		// would be asserting something this environment cannot show. What this
 		// test owns is that the builder flag is not among the complaints.
-		$this->assertStringNotContainsString(
-			'builder_flag',
-			implode( "\n", $result['render_errors'] ?? array() )
+		$this->assertArrayHasKey(
+			'render_errors',
+			$result,
+			'Elementor is not loaded in this process, so collect_render_errors() always contributes one; without this the next assertion could pass over an absent key.'
 		);
+		$this->assertStringNotContainsString( 'builder_flag', implode( "\n", $result['render_errors'] ) );
+	}
+
+	/**
+	 * set_elementor_data() early-returns unless ELEMENTOR_VERSION is defined,
+	 * and defining it in the shared run changes the behaviour of every
+	 * Elementor-sensitive test that follows (#757). Separate process.
+	 *
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_set_elementor_data_flags_the_page_and_reports_it(): void {
+		$this->pretend_elementor_is_installed();
+
+		// wp_set_elementor is the most-used write tool. It wrote the flag but
+		// recorded nothing, so decorate_render_status()'s check — keyed on the
+		// debug key being present — was skipped for it entirely: the surgical
+		// paths were fixed while the busiest one was not.
+		$result = $this->writer()->set_elementor_data(
+			self::PAGE_ID,
+			array( 'elementor_data' => wp_json_encode( array( $this->section() ) ) )
+		);
+
+		$this->assertNotInstanceOf( WP_Error::class, $result );
+		$this->assertTrue( $result['renders_via_elementor'] );
+		$this->assertSame( 'builder', get_post_meta( self::PAGE_ID, '_elementor_edit_mode', true ) );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_set_elementor_data_reports_false_when_the_flag_cannot_be_written(): void {
+		$this->pretend_elementor_is_installed();
+
+		$GLOBALS['mcpwp_test_meta_write_fails'] = array( '_elementor_edit_mode' );
+
+		$result = $this->writer()->set_elementor_data(
+			self::PAGE_ID,
+			array( 'elementor_data' => wp_json_encode( array( $this->section() ) ) )
+		);
+
+		$this->assertNotInstanceOf( WP_Error::class, $result );
+		$this->assertFalse( $result['renders_via_elementor'] );
+		$this->assertFalse( $result['render_verified'] );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_set_elementor_data_does_not_claim_a_page_it_is_clearing(): void {
+		$this->pretend_elementor_is_installed();
+
+		// Writing an empty list is how a page is cleared. This flagged
+		// unconditionally, so wp_set_elementor(id, "[]") handed the page to
+		// Elementor while removing its last section through wp_remove_section
+		// did not — one operation, two tools, opposite semantics, and the one
+		// breaking the rule was the one without a test.
+		$result = $this->writer()->set_elementor_data(
+			self::PAGE_ID,
+			array( 'elementor_data' => '[]' )
+		);
+
+		$this->assertNotInstanceOf( WP_Error::class, $result );
+		$this->assertArrayNotHasKey( 'renders_via_elementor', $result );
+		$this->assertSame( '', get_post_meta( self::PAGE_ID, '_elementor_edit_mode', true ) );
 	}
 
 	public function test_add_section_reports_false_when_the_flag_cannot_be_written(): void {

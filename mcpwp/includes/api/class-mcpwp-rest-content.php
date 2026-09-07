@@ -116,6 +116,13 @@ class Mcpwp_REST_Content extends Mcpwp_REST_API {
 				'post_type'           => $post_type,
 				'post_status'         => $status,
 				's'                   => $search,
+				// Match slugs as well as title/excerpt/content, the same as
+				// the pages and posts listings. This query is built by hand
+				// rather than through sanitize_query_args(), so it needs the
+				// opt-in explicitly — without it wp_list_content(search: "<a
+				// slug>") still answers with the empty result that made a
+				// caller create a duplicate page (#785).
+				Mcpwp_Slug_Search::QUERY_VAR => Mcpwp_Slug_Search::should_match_slug( $search ),
 				'posts_per_page'      => $per_page,
 				'paged'               => $page,
 				'ignore_sticky_posts' => true,

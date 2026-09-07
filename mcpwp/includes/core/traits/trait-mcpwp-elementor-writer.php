@@ -645,13 +645,21 @@ trait Mcpwp_Elementor_Writer_Trait {
 	 * @param int $page_id Post ID.
 	 * @return bool True when the post is flagged after this call.
 	 */
-	private function mark_built_with_elementor( $page_id ) {
-		if ( class_exists( '\Elementor\Plugin' ) && ! empty( \Elementor\Plugin::$instance->documents ) ) {
-			// attempt_elementor_call() takes the debug bag by reference; this
-			// one is local because a failure here is reported through the
-			// return value, which the caller records as built_with_elementor.
-			$flag_debug = array();
+	private function mark_built_with_elementor( $page_id, array &$debug = null ) {
+		// A local bag only when the caller did not offer one. Everywhere else
+		// in this file attempt_elementor_call() gets the shared $debug, and
+		// its contract is that a caught Throwable lands under
+		// <label>_exception — "an Elementor API that failed and one that
+		// worked must not produce the same response". Discarding the bag here
+		// meant a documents->get() that throws (the Elementor 4.2.4 / PHP 8.4
+		// case this file documents) fell through to the raw meta write, that
+		// write succeeded, and the response said renders_via_elementor:true
+		// with no trace that Elementor's document API is broken.
+		if ( null === $debug ) {
+			$debug = array();
+		}
 
+		if ( class_exists( '\Elementor\Plugin' ) && ! empty( \Elementor\Plugin::$instance->documents ) ) {
 			$attempt = $this->attempt_elementor_call(
 				static function () use ( $page_id ) {
 					$document = \Elementor\Plugin::$instance->documents->get( $page_id, false );
@@ -664,12 +672,18 @@ trait Mcpwp_Elementor_Writer_Trait {
 
 					return true;
 				},
-				$flag_debug,
+				$debug,
 				'builder_flag'
 			);
 
-			if ( $attempt['ok'] && true === $attempt['value'] ) {
-				return 'builder' === get_post_meta( $page_id, '_elementor_edit_mode', true );
+			// Fall through to the raw write rather than returning, when the
+			// setter ran but the value did not land. Elementor's setter
+			// ignores update_meta()'s return value, so its closure reports
+			// success regardless — meaning the one failure mode the closure
+			// cannot see would otherwise be the only one with no retry.
+			if ( $attempt['ok'] && true === $attempt['value']
+				&& 'builder' === get_post_meta( $page_id, '_elementor_edit_mode', true ) ) {
+				return true;
 			}
 		}
 
@@ -1032,8 +1046,26 @@ trait Mcpwp_Elementor_Writer_Trait {
 			update_post_meta( $page_id, '_wp_page_template', 'elementor_header_footer' );
 		}
 
-		// Edit mode must be 'builder'.
-		update_post_meta( $page_id, '_elementor_edit_mode', 'builder' );
+		// Edit mode must be 'builder', and the result has to be recorded.
+		//
+		// This was a bare write whose return nobody looked at and which put
+		// nothing in the debug bag, so decorate_render_status()'s check —
+		// keyed on `built_with_elementor` being present — was skipped for
+		// wp_set_elementor, the most-used write tool of all. On a host where
+		// the meta write silently no-ops it answered render_verified:true for
+		// a page rendering zero bytes: the same defect the surgical paths were
+		// just fixed for, on the busier path.
+		//
+		// Only when there is something to render. Flagging an empty write
+		// would contradict the rule the surgical paths follow, and leave
+		// wp_set_elementor(id, "[]") claiming a page for Elementor while
+		// removing its last section does not — one operation, two tools,
+		// opposite semantics.
+		$incoming_elements = json_decode( $elementor_json, true );
+
+		if ( is_array( $incoming_elements ) && ! empty( $incoming_elements ) ) {
+			$save_debug['built_with_elementor'] = $this->mark_built_with_elementor( $page_id, $save_debug );
+		}
 
 		// Template type — required for frontend rendering.
 		$template_type = get_post_meta( $page_id, '_elementor_template_type', true );
@@ -1469,7 +1501,12 @@ trait Mcpwp_Elementor_Writer_Trait {
 		}
 
 		// Enable Elementor with all required meta keys (#88).
-		update_post_meta( $page_id, '_elementor_edit_mode', 'builder' );
+		//
+		// Through the helper so a host that vetoes the meta write is visible
+		// rather than assumed away — a page created here and reported as
+		// created is a page the caller will write content into next.
+		$builder_flag_debug = array();
+		$built_with_elementor = $this->mark_built_with_elementor( $page_id, $builder_flag_debug );
 		update_post_meta( $page_id, '_wp_page_template', 'elementor_header_footer' );
 		update_post_meta( $page_id, '_elementor_template_type', 'wp-page' );
 		if ( defined( 'ELEMENTOR_VERSION' ) ) {
@@ -1492,26 +1529,40 @@ trait Mcpwp_Elementor_Writer_Trait {
 		}
 
 		$response = array(
-			'success'  => true,
-			'page_id'  => (int) $page_id,
-			'title'    => $page_data['post_title'],
-			'status'   => $page_data['post_status'],
-			'url'      => get_permalink( $page_id ),
-			'edit_url' => admin_url( "post.php?post={$page_id}&action=elementor" ),
+			'success'               => true,
+			'page_id'               => (int) $page_id,
+			'title'                 => $page_data['post_title'],
+			'status'                => $page_data['post_status'],
+			'url'                   => get_permalink( $page_id ),
+			'edit_url'              => admin_url( "post.php?post={$page_id}&action=elementor" ),
+			// A created page that Elementor will not render is not a usable
+			// page, and the caller is about to write content into it.
+			'renders_via_elementor' => $built_with_elementor,
 		);
 
+		if ( ! $built_with_elementor ) {
+			$response['warnings'] = array(
+				__( 'The page was created, but it could not be marked as built with Elementor, so Elementor will not render its content. Check whether something on this site blocks writes to the _elementor_edit_mode post meta.', 'mcpwp' ),
+			);
+		}
+
 		if ( is_array( $save_result ) ) {
-			$response = array_merge(
-				$response,
-				array_intersect_key(
-					$save_result,
-					array(
-						'render_verified' => true,
-						'render_errors'   => true,
-						'warnings'        => true,
-					)
+			$merged = array_intersect_key(
+				$save_result,
+				array(
+					'render_verified' => true,
+					'render_errors'   => true,
+					'warnings'        => true,
 				)
 			);
+
+			// Merge rather than overwrite, so the creation warning above is
+			// not dropped by a save that had warnings of its own.
+			if ( isset( $merged['warnings'], $response['warnings'] ) ) {
+				$merged['warnings'] = array_merge( $response['warnings'], (array) $merged['warnings'] );
+			}
+
+			$response = array_merge( $response, $merged );
 		}
 
 		return $response;
@@ -2100,7 +2151,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 		// Elementor document control of a page that renders fine without
 		// it.
 		if ( ! empty( $post_val ) ) {
-			$debug['built_with_elementor'] = $this->mark_built_with_elementor( $page_id );
+			$debug['built_with_elementor'] = $this->mark_built_with_elementor( $page_id, $debug );
 		}
 
 		// Prime CSS if still empty.

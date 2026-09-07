@@ -230,6 +230,67 @@ final class ThemeBuilderConditionStringTest extends TestCase {
 		$this->assertStringContainsString( 'Ignored condition "include"', $result['warnings'][0] );
 	}
 
+	// ---------------------------------------------------------------
+	// The object and positional forms had the same coercions the string
+	// form was hardened against. Fixing one input shape of three left
+	// the other two able to do worse than the reported bug.
+	// ---------------------------------------------------------------
+
+	public function test_a_typo_in_an_object_type_does_not_invert_the_caller_intent(): void {
+		// Every branch used to coerce anything that was not the literal
+		// 'exclude' to 'include'. One transposed pair of letters therefore
+		// turned "keep this template off posts" into "put it on posts", and
+		// reported success.
+		$result = $this->format(
+			array(
+				array( 'type' => 'exlcude', 'name' => 'singular', 'sub_name' => 'post' ),
+			)
+		);
+
+		$this->assertSame( array(), $result['conditions'] );
+		$this->assertCount( 1, $result['warnings'] );
+	}
+
+	public function test_an_object_with_no_name_does_not_become_the_entire_site(): void {
+		// A missing name became 'general' — Elementor's ENTIRE SITE condition
+		// — and save_conditions() replaces the whole set, so this detached a
+		// header from everything it matched and rebound it site-wide under
+		// updated:true.
+		$result = $this->format( array( array( 'type' => 'include' ) ) );
+
+		$this->assertSame( array(), $result['conditions'] );
+		$this->assertStringContainsString( 'name must not be empty', $result['warnings'][0] );
+	}
+
+	public function test_a_positional_array_with_no_name_is_refused_too(): void {
+		$result = $this->format( array( array( 'include' ) ) );
+
+		$this->assertSame( array(), $result['conditions'] );
+		$this->assertCount( 1, $result['warnings'] );
+	}
+
+	public function test_an_omitted_type_still_defaults_to_include(): void {
+		// The one coercion worth keeping: silence has a single reading, and
+		// callers listing conditions without a type mean include. A type that
+		// is PRESENT but wrong has a second reading, which is why that one is
+		// refused instead.
+		$result = $this->format( array( array( 'name' => 'singular', 'sub_name' => 'post' ) ) );
+
+		$this->assertSame( array(), $result['warnings'] );
+		$this->assertSame( 'include', $result['conditions'][0]['type'] );
+		$this->assertSame( 'singular', $result['conditions'][0]['name'] );
+	}
+
+	public function test_a_numeric_sub_id_survives_normalisation(): void {
+		$result = $this->format(
+			array(
+				array( 'type' => 'include', 'name' => 'singular', 'sub_name' => 'page', 'sub_id' => 42 ),
+			)
+		);
+
+		$this->assertSame( '42', $result['conditions'][0]['sub_id'] );
+	}
+
 	public function test_a_non_string_non_array_condition_is_reported(): void {
 		$result = $this->format( array( 42 ) );
 

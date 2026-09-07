@@ -1662,14 +1662,29 @@ class Mcpwp_Elementor_Widgets {
 
 		if ( $schema ) {
 			$valid_keys = array_keys( $schema['settings'] );
-			return array(
+
+			// A curated guide is not evidence the widget exists here.
+			//
+			// The live-registry consultation was first added only to the
+			// negative branch below, which left the more common half of #785
+			// defect 2 untouched: `form`, `posts`, `portfolio` and
+			// `search-form` are all curated entries, so on an Elementor FREE
+			// site this returned a complete guide — description, valid_keys,
+			// a working example — for a widget that is not registered and will
+			// render nothing, with nothing in the response saying so.
+			$live_types  = Mcpwp_Elementor_Registry::live_types();
+			$registered  = null === $live_types ? null : in_array( $widget_type, $live_types, true );
+
+			$response = array(
 				'widget_type'     => $widget_type,
+				'source'          => 'curated_reference',
 				'description'     => $schema['description'],
 				'category'        => $schema['category'],
 				'valid_keys'      => $valid_keys,
 				'settings'        => $schema['settings'],
 				'example'         => $schema['example'],
 				'common_mistakes' => $schema['common_mistakes'],
+				'registry_checked' => null !== $live_types,
 				'tips'            => array(
 					'Every element needs a unique 8-char alphanumeric "id" field.',
 					'Always set "elType" to "widget" and "widgetType" to "' . $widget_type . '".',
@@ -1677,6 +1692,21 @@ class Mcpwp_Elementor_Widgets {
 					'Use dry_run=true when setting Elementor data to validate without saving.',
 				),
 			);
+
+			if ( null !== $registered ) {
+				$response['registered_on_this_site'] = $registered;
+
+				if ( ! $registered ) {
+					$response['warning'] = sprintf(
+						"This guide describes '%s', but Elementor does not have it registered on this site — it is most likely an Elementor Pro widget on an installation without Pro. Using it will save cleanly and render nothing.",
+						$widget_type
+					);
+				}
+			} else {
+				$response['registry_note'] = 'Elementor\'s live registry could not be read, so whether this widget is actually available here is unknown.';
+			}
+
+			return $response;
 		}
 
 		// No curated guide. That is not the same as no such widget, and this
