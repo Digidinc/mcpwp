@@ -20,6 +20,21 @@ Chosen over "switch template back to theme default so Gutenberg renders" because
 
 A clean 3-tier reference page was built + verified on the rig (`http://127.0.0.1:8086/mcpwp-pricing-ref/`, page 20): HTTP 200, 19/19 render checks pass, no Gutenberg bleed. Export its `_elementor_data` as the production payload.
 
+> **The rig page is gone (2026-09-07).** I force-deleted it while cleaning up
+> probe pages from an unrelated task: my filter matched titles starting with
+> `MCPWP `, and this page's title started with `MCPWP `. It was `wp_delete_post(
+> $id, true )`, so it bypassed the trash; the rig has no binlog and no dump from
+> after it was built, and the sibling rig containers never had a copy. It is not
+> recoverable.
+>
+> Nothing in production was touched, and the recipe below is unchanged — but
+> **step 1 has no source payload any more.** The reference build has to be
+> redone on the rig before this runbook can be followed. What survives: page 18
+> (`BUG-REPRO: Pricing (Gutenberg content, canvas template)`) still reproduces
+> the original bug, and the design brief is the three tiers described here.
+> The 19 render checks were not written down, so a rebuild needs its own
+> acceptance list.
+
 ### Production recipe (gated)
 
 ```
