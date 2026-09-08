@@ -629,6 +629,98 @@ trait Mcpwp_Elementor_Writer_Trait {
 	}
 
 	/**
+	 * Carry an explicit conversion opt-in from a request payload to the save.
+	 *
+	 * The surgical operations receive the whole request as $data, so `convert`
+	 * arrives there; save_elements_to_page() reads it from $options. Without
+	 * this the guard below could refuse a write and offer an override the
+	 * caller had no way to reach.
+	 *
+	 * @param array $data Request payload.
+	 * @return array Options for save_elements_to_page().
+	 */
+	private function conversion_options( $data ) {
+		return array( 'convert' => ! empty( $data['convert'] ) );
+	}
+
+	/**
+	 * Stop a write that would convert a page built with something else.
+	 *
+	 * The surgical operations accept any post ID that get_post() resolves.
+	 * There is no post-type check and, until now, nothing that asked whether
+	 * the page was built with Elementor at all. On a Gutenberg or classic
+	 * page `_elementor_data` decodes to nothing, the element list starts
+	 * empty, the new content is appended, and the write proceeds — and the
+	 * page's original content does not survive it. The fallback branch blanks
+	 * `post_content` outright; the document branch has Elementor rewrite it to
+	 * its own plain-text render. Either way the blocks are gone, and the
+	 * response reported success.
+	 *
+	 * That was true before the builder flag landed. What the flag changed is
+	 * that the conversion now completes visibly — the page renders the
+	 * Elementor tree rather than rendering blank — which is more honest and
+	 * makes the missing precondition worth enforcing rather than describing.
+	 *
+	 * The condition is deliberately narrow: content that exists, and no
+	 * Elementor data to explain it. A page with Elementor data is already an
+	 * Elementor page, and an empty page has nothing to lose — which keeps the
+	 * common cases (a fresh draft, an existing Elementor layout) untouched.
+	 *
+	 * Callers that mean it pass `convert => true`. Elementor itself treats
+	 * this flag as the same switch, setting it to false to hand a page back to
+	 * the block editor.
+	 *
+	 * @param int   $page_id  Post ID.
+	 * @param array $elements Elements about to be written.
+	 * @param array $options  Write options; `convert` opts in.
+	 * @return true|WP_Error True when the write may proceed.
+	 */
+	private function guard_content_conversion( $page_id, $elements, array $options ) {
+		if ( ! empty( $options['convert'] ) ) {
+			return true;
+		}
+
+		// Writing an empty list is clearing, not converting.
+		if ( empty( $elements ) ) {
+			return true;
+		}
+
+		$existing = get_post_meta( $page_id, '_elementor_data', true );
+		$decoded  = is_string( $existing ) && '' !== $existing ? json_decode( $existing, true ) : null;
+
+		// Already an Elementor page.
+		if ( is_array( $decoded ) && ! empty( $decoded ) ) {
+			return true;
+		}
+
+		$post = get_post( $page_id );
+
+		// Read the property defensively: get_post() can hand back an object
+		// without it (a filtered post, a stub), and a guard that fatals on the
+		// shape of the thing it is protecting protects nothing. No readable
+		// content means nothing to lose, which is the permissive answer.
+		$content = ( is_object( $post ) && isset( $post->post_content ) ) ? (string) $post->post_content : '';
+
+		if ( '' === trim( $content ) ) {
+			return true;
+		}
+
+		return new WP_Error(
+			'would_convert_existing_content',
+			sprintf(
+				/* translators: %d: post ID. */
+				__( 'Post %d has existing non-Elementor content and no Elementor data. Writing Elementor data here converts the page and its current content will not survive. Pass convert=true if that is intended.', 'mcpwp' ),
+				(int) $page_id
+			),
+			array(
+				'status'               => 409,
+				'existing_content_bytes' => strlen( $content ),
+				'hint'                 => 'Read the page first (wp_get_page / wp_get_blocks). To convert deliberately, repeat the call with convert=true.',
+			)
+		);
+	}
+
+	/**
 	 * Flag a post as built with Elementor, so Elementor renders its data.
 	 *
 	 * The flag is the `_elementor_edit_mode` meta, read through
@@ -1027,6 +1119,21 @@ trait Mcpwp_Elementor_Writer_Trait {
 			);
 
 			return $result;
+		}
+
+		// Same conversion guard the surgical operations get (#788). This path
+		// writes its own meta rather than going through save_elements_to_page,
+		// so it needs the check explicitly — and it is the tool most likely to
+		// be pointed at a page the caller has not read first.
+		$decoded_for_guard = json_decode( $elementor_json, true );
+		$conversion        = $this->guard_content_conversion(
+			$page_id,
+			is_array( $decoded_for_guard ) ? $decoded_for_guard : array(),
+			array( 'convert' => ! empty( $data['convert'] ) )
+		);
+
+		if ( is_wp_error( $conversion ) ) {
+			return $conversion;
 		}
 
 		// Capture current structure for before/after diff.
@@ -1700,7 +1807,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 			);
 		}
 
-		$save_debug = $this->save_elements_to_page( $page_id, $elements );
+		$save_debug = $this->save_elements_to_page( $page_id, $elements, $this->conversion_options( $args ) );
 		if ( is_wp_error( $save_debug ) ) {
 			return $save_debug;
 		}
@@ -1874,7 +1981,9 @@ trait Mcpwp_Elementor_Writer_Trait {
 			}
 		}
 
-		$save_debug = $this->save_elements_to_page( $page_id, $elements );
+		// No request payload here, and a widget edit on a page with no widgets
+		// cannot be a deliberate conversion — so this path never opts in.
+		$save_debug = $this->save_elements_to_page( $page_id, $elements, array() );
 		if ( is_wp_error( $save_debug ) ) {
 			return $save_debug;
 		}
@@ -1933,6 +2042,14 @@ trait Mcpwp_Elementor_Writer_Trait {
 	 * @return array|WP_Error Debug info array or WP_Error on failure.
 	 */
 	protected function save_elements_to_page( $page_id, $elements, $options = array() ) {
+		// Refuse to silently convert a page that already has non-Elementor
+		// content (#788).
+		$conversion = $this->guard_content_conversion( $page_id, $elements, $options );
+
+		if ( is_wp_error( $conversion ) ) {
+			return $conversion;
+		}
+
 		$debug = array();
 		$elementor_json = wp_json_encode( $elements );
 
@@ -2247,7 +2364,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 		}
 
 		// Save.
-		$debug = $this->save_elements_to_page( $page_id, $elements );
+		$debug = $this->save_elements_to_page( $page_id, $elements, $this->conversion_options( $data ?? array() ) );
 		if ( is_wp_error( $debug ) ) {
 			return $debug;
 		}
@@ -2323,7 +2440,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 			return new WP_Error( 'not_found', "Element '$element_id' not found.", array( 'status' => 404 ) );
 		}
 
-		$debug = $this->save_elements_to_page( $page_id, $elements );
+		$debug = $this->save_elements_to_page( $page_id, $elements, $this->conversion_options( $data ?? array() ) );
 		if ( is_wp_error( $debug ) ) {
 			return $debug;
 		}
@@ -2436,7 +2553,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 			return new WP_Error( 'not_found', "Element '$element_id' not found.", array( 'status' => 404 ) );
 		}
 
-		$debug = $this->save_elements_to_page( $page_id, $elements );
+		$debug = $this->save_elements_to_page( $page_id, $elements, $this->conversion_options( $data ?? array() ) );
 		if ( is_wp_error( $debug ) ) {
 			return $debug;
 		}
@@ -2665,7 +2782,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 		}
 
 		// Save once.
-		$debug = $this->save_elements_to_page( $page_id, $elements );
+		$debug = $this->save_elements_to_page( $page_id, $elements, $this->conversion_options( $data ?? array() ) );
 		if ( is_wp_error( $debug ) ) {
 			return $debug;
 		}
