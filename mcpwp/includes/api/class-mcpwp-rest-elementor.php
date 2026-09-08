@@ -718,6 +718,17 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 			return $result;
 		}
 
+		// A preview is rendered from inside WordPress. Whether a visitor can
+		// reach the same thing is a separate question, and on a gated staging
+		// site the answers differ (#693).
+		if ( is_array( $result ) ) {
+			$result['public_route'] = Mcpwp_Public_Route::check( $page_id );
+
+			if ( ! empty( $result['public_route']['warning'] ) ) {
+				$result['warning'] = $result['public_route']['warning'];
+			}
+		}
+
 		return $this->success_response( $result );
 	}
 

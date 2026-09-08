@@ -1933,6 +1933,7 @@ require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-pages.php';
 require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-menus.php';
 // The single definition of which Elementor settings keys are wrong. Loaded
 // before the validator and before every _elementor_data write path (#737).
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-public-route.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-page-settings.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-slug-search.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-registry.php';

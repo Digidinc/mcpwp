@@ -770,19 +770,30 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			$truncated = true;
 		}
 
-		return $this->success_response(
-			array(
-				'url'            => add_query_arg( 'elementor-preview', $post_id, get_permalink( $post_id ) ),
-				'status_code'    => 200,
-				'html'           => $html,
-				'length'         => strlen( $html ),
-				'truncated'      => $truncated,
-				'selector_used'  => $selector_used,
-				'selector_found' => $selector_found,
-				'render_method'  => 'internal_elementor',
-				'render_note'    => 'Rendered in-process from Elementor data — this is the Elementor content only, not the surrounding theme header/footer, and did not require an HTTP round trip to the site.',
-			)
+		$result = array(
+			'url'            => add_query_arg( 'elementor-preview', $post_id, get_permalink( $post_id ) ),
+			'status_code'    => 200,
+			'html'           => $html,
+			'length'         => strlen( $html ),
+			'truncated'      => $truncated,
+			'selector_used'  => $selector_used,
+			'selector_found' => $selector_found,
+			'render_method'  => 'internal_elementor',
+			'render_note'    => 'Rendered in-process from Elementor data — this is the Elementor content only, not the surrounding theme header/footer, and did not require an HTTP round trip to the site.',
 		);
+
+		// This method exists BECAUSE host-level gates intercept a loopback
+		// fetch — the branch that chooses it says so. Working around a gate and
+		// not mentioning it hands the caller a confident answer to a question
+		// they did not ask: a form was QA'd as working here while the public
+		// URL served a Coming Soon page with a 404 (#693).
+		$result['public_route'] = Mcpwp_Public_Route::check( $post_id );
+
+		if ( ! empty( $result['public_route']['warning'] ) ) {
+			$result['warning'] = $result['public_route']['warning'];
+		}
+
+		return $this->success_response( $result );
 	}
 
 	private function extract_html_by_selector( $html, $selector ) {
