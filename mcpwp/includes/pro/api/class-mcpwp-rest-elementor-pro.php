@@ -1126,14 +1126,38 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			'type'     => $request->get_param( 'type' ),
 		);
 
-		$templates = $this->elementor_pro->get_templates( $args );
+		$args['include_summary'] = (bool) $request->get_param( 'include_summary' );
 
-		$this->log_activity( 'get_templates', $request, $templates );
+		$page = $this->elementor_pro->get_templates_page( $args );
 
-		return $this->success_response( array(
-			'templates' => $templates,
-			'total'     => count( $templates ),
-		) );
+		$this->log_activity( 'get_templates', $request, $page['items'] );
+
+		return $this->success_response( $this->paged_library_response( 'templates', $page ) );
+	}
+
+	/**
+	 * Shape a paged library listing.
+	 *
+	 * `total` used to be count() of the rows just returned — the caller's own
+	 * page size restated as if it were the size of the library. A client
+	 * paginating on it stopped after the first page believing it had seen
+	 * everything. It now comes from WP_Query's found_posts, and `pages` and
+	 * `has_more` are stated so nobody has to infer them.
+	 *
+	 * @param string $key  Response key for the items.
+	 * @param array  $page Envelope from the Pro layer.
+	 * @return array
+	 */
+	private function paged_library_response( $key, array $page ) {
+		return array(
+			$key        => $page['items'],
+			'total'     => $page['total'],
+			'page'      => $page['page'],
+			'per_page'  => $page['per_page'],
+			'pages'     => $page['pages'],
+			'returned'  => count( $page['items'] ),
+			'has_more'  => $page['page'] < $page['pages'],
+		);
 	}
 
 	/**
@@ -1289,16 +1313,13 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			'search'          => $request->get_param( 'search' ),
 		);
 
-		$archetypes = $this->elementor_pro->get_archetypes( $args );
+		$args['include_summary'] = (bool) $request->get_param( 'include_summary' );
 
-		$this->log_activity( 'get_archetypes', $request, $archetypes );
+		$page = $this->elementor_pro->get_archetypes_page( $args );
 
-		return $this->success_response(
-			array(
-				'archetypes' => $archetypes,
-				'total'      => count( $archetypes ),
-			)
-		);
+		$this->log_activity( 'get_archetypes', $request, $page['items'] );
+
+		return $this->success_response( $this->paged_library_response( 'archetypes', $page ) );
 	}
 
 	/**
@@ -1452,16 +1473,13 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			'search'   => $request->get_param( 'search' ),
 		);
 
-		$parts = $this->elementor_pro->get_parts( $args );
+		$args['include_summary'] = (bool) $request->get_param( 'include_summary' );
 
-		$this->log_activity( 'get_parts', $request, $parts );
+		$page = $this->elementor_pro->get_parts_page( $args );
 
-		return $this->success_response(
-			array(
-				'parts' => $parts,
-				'total' => count( $parts ),
-			)
-		);
+		$this->log_activity( 'get_parts', $request, $page['items'] );
+
+		return $this->success_response( $this->paged_library_response( 'parts', $page ) );
 	}
 
 	/**

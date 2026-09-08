@@ -1023,6 +1023,16 @@ if (! function_exists('clean_post_cache')) {
     }
 }
 
+function did_action($hook)
+{
+    // Real WP counts how many times an action has fired. Tests that need a
+    // hook to look "already fired" set the count; everything else reads 0,
+    // which is what an unbooted plugin genuinely looks like.
+    return isset($GLOBALS['mcpwp_test_did_action'][ $hook ])
+        ? (int) $GLOBALS['mcpwp_test_did_action'][ $hook ]
+        : 0;
+}
+
 function get_posts($args = array())
 {
     $posts = array_values($GLOBALS['_mcpwp_test_posts']);
@@ -1349,7 +1359,20 @@ class WP_Query
         }));
 
         $this->found_posts = count($posts);
-        $per_page = isset($args['posts_per_page']) ? max(1, (int) $args['posts_per_page']) : count($posts);
+
+        $per_page = isset($args['posts_per_page']) ? (int) $args['posts_per_page'] : count($posts);
+
+        // -1 means unlimited in real WP_Query, and clamping it to 1 made this
+        // double disagree with WordPress on the one value internal callers use
+        // to mean "everything" — a test could pass against the double and the
+        // code still truncate a library in production, or vice versa.
+        if ($per_page < 0) {
+            $this->max_num_pages = $this->found_posts > 0 ? 1 : 0;
+            $this->posts         = $posts;
+            return;
+        }
+
+        $per_page = max(1, $per_page);
         $paged = isset($args['paged']) ? max(1, (int) $args['paged']) : 1;
         $this->max_num_pages = $per_page > 0 ? (int) ceil($this->found_posts / $per_page) : 0;
         $this->posts = array_slice($posts, ($paged - 1) * $per_page, $per_page);
