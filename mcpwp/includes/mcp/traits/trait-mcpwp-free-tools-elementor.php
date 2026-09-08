@@ -96,6 +96,11 @@ trait Mcpwp_Free_Tools_Elementor_Trait {
 					'description' => 'Setting keys to remove from the element',
 					'items'       => array( 'type' => 'string' ),
 				),
+				'convert'    => array(
+					'type'        => 'boolean',
+					'description' => 'Set true to convert a page that has existing non-Elementor content. Without it the write is refused rather than destroying that content (#788).',
+					'default'     => false,
+				),
 			)
 		);
 
@@ -143,6 +148,11 @@ trait Mcpwp_Free_Tools_Elementor_Trait {
 					'type'        => 'string',
 					'description' => 'Where to insert: "start", "end" (default), "before:{element_id}", "after:{element_id}"',
 				),
+				'convert'    => array(
+					'type'        => 'boolean',
+					'description' => 'Set true to convert a page that has existing non-Elementor content. Without it the write is refused rather than destroying that content (#788).',
+					'default'     => false,
+				),
 			)
 		);
 
@@ -181,6 +191,11 @@ trait Mcpwp_Free_Tools_Elementor_Trait {
 					'type'        => 'object',
 					'description' => 'The replacement section/container element',
 					'required'    => true,
+				),
+				'convert'    => array(
+					'type'        => 'boolean',
+					'description' => 'Set true to convert a page that has existing non-Elementor content. Without it the write is refused rather than destroying that content (#788).',
+					'default'     => false,
 				),
 			)
 		);
@@ -222,6 +237,11 @@ trait Mcpwp_Free_Tools_Elementor_Trait {
 						'required'   => array( 'op' ),
 					),
 				),
+				'convert'    => array(
+					'type'        => 'boolean',
+					'description' => 'Set true to convert a page that has existing non-Elementor content. Without it the write is refused rather than destroying that content (#788).',
+					'default'     => false,
+				),
 			)
 		);
 
@@ -245,6 +265,11 @@ trait Mcpwp_Free_Tools_Elementor_Trait {
 				'dry_run'        => array(
 					'type'        => 'boolean',
 					'description' => 'If true, validate only — no changes are saved. Returns warnings and fixes without writing to database.',
+					'default'     => false,
+				),
+				'convert'    => array(
+					'type'        => 'boolean',
+					'description' => 'Set true to convert a page that has existing non-Elementor content. Without it the write is refused rather than destroying that content (#788).',
 					'default'     => false,
 				),
 			)

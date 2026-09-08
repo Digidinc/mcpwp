@@ -200,8 +200,23 @@ class Mcpwp_Elementor_Widgets {
 					'icon_align'                => array( 'type' => 'select', 'default' => 'left', 'options' => array( 'left', 'right' ), 'description' => 'Icon position' ),
 					'icon_indent'               => array( 'type' => 'slider', 'default' => '', 'description' => 'Space between icon and text' ),
 					'button_css_id'             => array( 'type' => 'text', 'default' => '', 'description' => 'Custom CSS ID for the button' ),
-					'background_color'          => array( 'type' => 'color', 'default' => '', 'description' => 'Button background color' ),
-					'button_background_color'   => array( 'type' => 'color', 'default' => '', 'description' => 'Button background color (Pro variant key)' ),
+					'background_color'          => array( 'type' => 'color', 'default' => '', 'description' => 'Button background color (normal state)' ),
+					// `button_background_color` used to be declared here as a
+					// "Pro variant key". It is not a control on the button
+					// widget at all — declaring it made the validator accept
+					// it, so 19 buttons were styled with it, every call
+					// returned success with no warning, and Elementor emitted
+					// no background rule: they all fell through to the global
+					// Kit accent (#789). Measured on the rig against real CSS
+					// generation:
+					//
+					//   background_color         CSS emits the colour   YES
+					//   button_background_color  CSS emits the colour   NO
+					//
+					// The key IS real on the `form` widget, where it styles
+					// the submit button — which is presumably how it reached
+					// this schema. It is per-widget, so it stays there and is
+					// gone from here.
 					'button_text_color'         => array( 'type' => 'color', 'default' => '', 'description' => 'Button text color' ),
 					'border_radius'             => array( 'type' => 'dimensions', 'default' => '', 'description' => 'Border radius' ),
 					'hover_color'               => array( 'type' => 'color', 'default' => '', 'description' => 'Text color on hover' ),
@@ -223,6 +238,7 @@ class Mcpwp_Elementor_Widgets {
 					'Using "label" or "title" instead of "text"',
 					'Passing link as a string instead of {"url":"..."} object',
 					'Using "color" instead of "button_text_color" or "background_color"',
+					'Using "button_background_color" for the normal-state background — that is the form widget\'s key; on button it is "background_color"',
 				),
 			),
 

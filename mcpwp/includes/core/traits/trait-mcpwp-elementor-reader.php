@@ -381,6 +381,15 @@ trait Mcpwp_Elementor_Reader_Trait {
 			'dropdown_color'   => 'color_dropdown_item',
 			'dropdown_hover'   => 'color_dropdown_item_hover',
 		),
+		'button' => array(
+			// Not a button control at all — it belongs to the `form` widget,
+			// where it styles the submit button. On `button` it stored
+			// cleanly, produced no CSS, and left every button falling through
+			// to the global Kit accent colour (#789). Renamed rather than only
+			// warned, because the caller's intent is unambiguous and the
+			// correct key is known.
+			'button_background_color' => 'background_color',
+		),
 		'posts' => array(
 			'post_type'      => 'posts_post_type',
 			'columns'        => 'classic_columns',
