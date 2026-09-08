@@ -261,6 +261,7 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-drafts.php';
 	// Loaded before the traits and every _elementor_data write path that calls
 	// it — the single definition of which settings keys Elementor ignores.
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-elementor-page-settings.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-slug-search.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-elementor-registry.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-elementor-element-keys.php';

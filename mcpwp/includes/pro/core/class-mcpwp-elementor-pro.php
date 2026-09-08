@@ -552,10 +552,59 @@ class Mcpwp_Elementor_Pro {
 			}
 		}
 
+		// Page settings — the document half of a full-page template. Without
+		// this a "full-page" template carried the layout and lost the frame:
+		// canvas choice, hide-title, body background, page CSS (#638).
+		$settings_report = $this->store_template_page_settings( $template_id, $data );
+
 		$this->save_part_metadata( $template_id, $data );
 		$this->save_archetype_metadata( $template_id, $data );
 
-		return $this->get_template( $template_id );
+		$created = $this->get_template( $template_id );
+
+		if ( is_array( $created ) && null !== $settings_report ) {
+			$created['page_settings_result'] = $settings_report;
+		}
+
+		return $created;
+	}
+
+	/**
+	 * Store submitted page settings on a template, reporting what was kept.
+	 *
+	 * Returns null when the caller sent none, so "no settings submitted" and
+	 * "settings submitted and all refused" do not read the same.
+	 *
+	 * @param int   $template_id Template ID.
+	 * @param array $data        Submitted payload.
+	 * @return array|null Report, or null when nothing was submitted.
+	 */
+	private function store_template_page_settings( $template_id, $data ) {
+		if ( ! isset( $data['page_settings'] ) || ! is_array( $data['page_settings'] ) || empty( $data['page_settings'] ) ) {
+			return null;
+		}
+
+		$normalized = Mcpwp_Elementor_Page_Settings::normalize( $data['page_settings'] );
+		$written    = Mcpwp_Elementor_Page_Settings::write( $template_id, $normalized['settings'] );
+
+		$report = array(
+			// The keys actually stored, not the keys submitted. The previous
+			// page-settings write reported the caller's own list back to them,
+			// so a dropped key was indistinguishable from an applied one.
+			'applied' => array_keys( $normalized['settings'] ),
+			'skipped' => $normalized['skipped'],
+			'written' => $written,
+		);
+
+		if ( ! empty( $normalized['skipped'] ) ) {
+			$report['note'] = 'Skipped settings are not recognised Elementor document settings and were not stored.';
+		}
+
+		if ( ! $written ) {
+			$report['warning'] = 'The page settings could not be stored on this template.';
+		}
+
+		return $report;
 	}
 
 	/**
@@ -588,10 +637,18 @@ class Mcpwp_Elementor_Pro {
 			}
 		}
 
+		$settings_report = $this->store_template_page_settings( $template_id, $data );
+
 		$this->save_part_metadata( $template_id, $data );
 		$this->save_archetype_metadata( $template_id, $data );
 
-		return $this->get_template( $template_id );
+		$updated = $this->get_template( $template_id );
+
+		if ( is_array( $updated ) && null !== $settings_report ) {
+			$updated['page_settings_result'] = $settings_report;
+		}
+
+		return $updated;
 	}
 
 	/**
@@ -672,13 +729,13 @@ class Mcpwp_Elementor_Pro {
 	 * @param int $page_id      Target page ID.
 	 * @return bool|WP_Error
 	 */
-	public function apply_archetype_to_page( $archetype_id, $page_id ) {
+	public function apply_archetype_to_page( $archetype_id, $page_id, $page_settings_mode = 'preserve' ) {
 		$archetype = $this->get_archetype( $archetype_id );
 		if ( is_wp_error( $archetype ) ) {
 			return $archetype;
 		}
 
-		return $this->apply_template_to_page( $page_id, $archetype_id );
+		return $this->apply_template_to_page( $page_id, $archetype_id, $page_settings_mode );
 	}
 
 	/**
@@ -1119,7 +1176,7 @@ class Mcpwp_Elementor_Pro {
 	 * @param int $template_id Template ID.
 	 * @return array|WP_Error Save result, or error on failure.
 	 */
-	public function apply_template_to_page( $page_id, $template_id ) {
+	public function apply_template_to_page( $page_id, $template_id, $page_settings_mode = 'preserve' ) {
 		$template = get_post( $template_id );
 
 		if ( ! $template || 'elementor_library' !== $template->post_type ) {
@@ -1152,6 +1209,23 @@ class Mcpwp_Elementor_Pro {
 		$save_result = $this->save_elementor_data( $page_id, $template_data );
 		if ( is_wp_error( $save_result ) ) {
 			return $save_result;
+		}
+
+		// Carry the template's document settings too, under an explicit mode.
+		// Applying the layout without them left a full-page template producing
+		// the right sections inside the wrong frame (#638).
+		//
+		// `preserve` is the default on purpose: applying a template should not
+		// silently restyle a page's canvas, title visibility or page CSS. A
+		// caller who does want the whole document says so.
+		$settings_report = Mcpwp_Elementor_Page_Settings::apply(
+			$page_id,
+			Mcpwp_Elementor_Page_Settings::read( $template_id ),
+			$page_settings_mode
+		);
+
+		if ( is_array( $save_result ) ) {
+			$save_result['page_settings'] = $settings_report;
 		}
 
 		return $save_result;
