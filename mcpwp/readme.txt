@@ -153,6 +153,11 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 
 == Changelog ==
 
+= 3.10.8 =
+* fix: close the silent-success class reported in [#785](https://github.com/Mumega-com/mcpwp/issues/785) and [#784](https://github.com/Mumega-com/mcpwp/issues/784) ([#787](https://github.com/Mumega-com/mcpwp/issues/787))
+* fix: **elementor:** accept empty children on strict leaf widgets ([#777](https://github.com/Mumega-com/mcpwp/issues/777))
+* fix: stop the CSS loopbacks from hard-disabling TLS verification ([#786](https://github.com/Mumega-com/mcpwp/issues/786))
+
 = 3.10.7 =
 * fix: close the batch route-terminator gap and the scripts credential-commit path ([#778](https://github.com/Mumega-com/mcpwp/issues/778))
 * fix: make a second plugin copy a no-op instead of corrupting every REST response ([#782](https://github.com/Mumega-com/mcpwp/issues/782))
