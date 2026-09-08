@@ -5,6 +5,15 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.8](https://github.com/Mumega-com/mcpwp/compare/v3.10.7...v3.10.8) (2026-09-07)
+
+
+### Bug Fixes
+
+* close the silent-success class reported in [#785](https://github.com/Mumega-com/mcpwp/issues/785) and [#784](https://github.com/Mumega-com/mcpwp/issues/784) ([#787](https://github.com/Mumega-com/mcpwp/issues/787)) ([44d223e](https://github.com/Mumega-com/mcpwp/commit/44d223e09077801ee6dc186fd72ced2a0ee256a8))
+* **elementor:** accept empty children on strict leaf widgets ([#777](https://github.com/Mumega-com/mcpwp/issues/777)) ([9a54c79](https://github.com/Mumega-com/mcpwp/commit/9a54c79db5b2a1a579e308a3cb36b33fc50970a7))
+* stop the CSS loopbacks from hard-disabling TLS verification ([#786](https://github.com/Mumega-com/mcpwp/issues/786)) ([e18e3e1](https://github.com/Mumega-com/mcpwp/commit/e18e3e1104ef8eed27a7100a710ab39d04e6eae8))
+
 ## [3.10.7](https://github.com/Mumega-com/mcpwp/compare/v3.10.6...v3.10.7) (2026-09-06)
 
 
