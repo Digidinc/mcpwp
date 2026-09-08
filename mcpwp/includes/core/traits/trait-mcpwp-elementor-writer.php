@@ -589,11 +589,33 @@ trait Mcpwp_Elementor_Writer_Trait {
 		$initial_save_was_recovered = true === ( $debug['html_cache_rebuilt'] ?? false );
 
 		if ( ! empty( $debug['html_rebuild_corrupted_data'] ) ) {
-			$errors[] = sprintf(
-				'html_cache_rebuild: Elementor rendered a truncated or otherwise changed tree (%d of %d elements); the restored meta has not been rendered.',
-				isset( $debug['html_rebuild_elements_after'] ) ? (int) $debug['html_rebuild_elements_after'] : 0,
-				isset( $debug['html_rebuild_elements_before'] ) ? (int) $debug['html_rebuild_elements_before'] : 0
-			);
+			$before = isset( $debug['html_rebuild_elements_before'] ) ? (int) $debug['html_rebuild_elements_before'] : 0;
+			$after  = isset( $debug['html_rebuild_elements_after'] ) ? (int) $debug['html_rebuild_elements_after'] : 0;
+
+			// Say which kind of corruption it was. The comparator is a
+			// semantic one — it fires when the tree CHANGED, which is not the
+			// same as the tree SHRANK. Reporting both cases with an element
+			// count produced "a truncated or otherwise changed tree (32 of 32
+			// elements)", which reads as nothing being wrong and invites the
+			// reader to dismiss a real warning (#612).
+			if ( $before === $after ) {
+				$errors[] = sprintf(
+					'html_cache_rebuild: Elementor changed the CONTENT of the tree while rendering it — the structure still has all %d elements, but settings inside them differ. The exact submitted data has been restored to the database; the rendered output was built from the changed version.',
+					$before
+				);
+			} else {
+				$errors[] = sprintf(
+					'html_cache_rebuild: Elementor dropped elements while rendering (%d of %d survived). The exact submitted data has been restored to the database; the rendered output was built from the truncated version.',
+					$after,
+					$before
+				);
+			}
+
+			// Name the cause when it is known. Without this the caller is told
+			// their content changed and given no way to act on it.
+			if ( ! empty( $debug['unfiltered_html_grant_declined'] ) ) {
+				$errors[] = 'sanitizer: The request user does not have unfiltered_html and core\'s content_save_pre KSES gate is not installed on this site, so MCPWP declined to elevate and Elementor sanitized the content it rendered. Markup WordPress strips by default — iframes, data-* attributes, script — will be missing from the rendered page even though the stored data is intact.';
+			}
 		}
 
 		foreach ( $debug as $key => $value ) {
