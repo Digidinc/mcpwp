@@ -261,19 +261,94 @@ class Mcpwp_Elementor_Pro {
 	 * @return array Templates list.
 	 */
 	public function get_templates( $args = array() ) {
-		if ( ! $this->is_elementor_active() ) {
-			return array();
-		}
+		$page = $this->get_templates_page( $args );
 
-		$defaults = array(
-			'post_type'      => 'elementor_library',
-			'posts_per_page' => 50,
-			'post_status'    => 'publish',
-			'orderby'        => 'title',
-			'order'          => 'ASC',
+		// Still a plain list. The paged envelope is a separate method so the
+		// admin library screens and every existing caller keep the shape they
+		// were written against — changing a return shape under callers is how
+		// wp_assign_template started answering nonsense earlier in this
+		// release.
+		return $page['items'];
+	}
+
+	/**
+	 * List templates with real pagination and an honest total.
+	 *
+	 * Two things were wrong before this existed, and both looked like they
+	 * worked:
+	 *
+	 *   - The REST layer accepted `per_page` and `page` and passed them
+	 *     straight through to get_posts(), which reads `posts_per_page` and
+	 *     `paged`. The parameters were advertised, accepted, and inert: every
+	 *     request returned the same first 50 rows.
+	 *
+	 *   - `total` was `count( $templates )` — the number of rows on the page
+	 *     just returned, not the number that exist. With 60 templates and
+	 *     per_page 25 it reported 25, so a caller paginating on it stopped
+	 *     after page one believing it had seen everything.
+	 *
+	 * WP_Query is used rather than get_posts() precisely for `found_posts`,
+	 * which is the only source of a total that is not a restatement of the
+	 * caller's own page size.
+	 *
+	 * @param array $args Query arguments; accepts page/per_page and include_summary.
+	 * @return array{items:array,total:int,page:int,per_page:int,pages:int}
+	 */
+	public function get_templates_page( $args = array() ) {
+		$empty = array(
+			'items'    => array(),
+			'total'    => 0,
+			'page'     => 1,
+			'per_page' => 0,
+			'pages'    => 0,
 		);
 
-		// Filter by template type if specified.
+		if ( ! $this->is_elementor_active() ) {
+			return $empty;
+		}
+
+		$args = is_array( $args ) ? $args : array();
+
+		$include_summary = ! empty( $args['include_summary'] );
+		unset( $args['include_summary'] );
+
+		// Accept both spellings. `per_page`/`page` is what the REST and MCP
+		// surfaces speak; `posts_per_page`/`paged` is what WP_Query speaks and
+		// what internal callers already pass.
+		$per_page = 50;
+
+		if ( isset( $args['per_page'] ) ) {
+			$per_page = (int) $args['per_page'];
+		} elseif ( isset( $args['posts_per_page'] ) ) {
+			$per_page = (int) $args['posts_per_page'];
+		}
+
+		// -1 means "everything", which internal callers rely on. Otherwise
+		// clamp: an unbounded per_page from a caller is how a list response
+		// grows past what anything can read.
+		if ( -1 !== $per_page ) {
+			$per_page = max( 1, min( 100, $per_page ) );
+		}
+
+		$page = 1;
+
+		if ( isset( $args['page'] ) ) {
+			$page = (int) $args['page'];
+		} elseif ( isset( $args['paged'] ) ) {
+			$page = (int) $args['paged'];
+		}
+
+		$page = max( 1, $page );
+
+		unset( $args['per_page'], $args['page'] );
+
+		$defaults = array(
+			'post_type'   => 'elementor_library',
+			'post_status' => 'publish',
+			'orderby'     => 'title',
+			'order'       => 'ASC',
+		);
+
 		if ( ! empty( $args['type'] ) ) {
 			$defaults['meta_query'] = array(
 				array(
@@ -283,15 +358,113 @@ class Mcpwp_Elementor_Pro {
 			);
 		}
 
-		$query_args = wp_parse_args( $args, $defaults );
-		$templates  = get_posts( $query_args );
+		$query_args                   = wp_parse_args( $args, $defaults );
+		$query_args['posts_per_page'] = $per_page;
+		$query_args['paged']          = $page;
+		$query_args['no_found_rows']  = false;
 
-		$result = array();
-		foreach ( $templates as $template ) {
-			$result[] = $this->format_template( $template );
+		$query = new WP_Query( $query_args );
+
+		$items = array();
+
+		foreach ( $query->posts as $template ) {
+			$item = $this->format_template( $template );
+
+			if ( $include_summary ) {
+				$item['summary'] = $this->summarize_template_data( $template->ID );
+			}
+
+			$items[] = $item;
 		}
 
-		return $result;
+		return array(
+			'items'    => $items,
+			'total'    => (int) $query->found_posts,
+			'page'     => $page,
+			'per_page' => $per_page,
+			'pages'    => (int) $query->max_num_pages,
+		);
+	}
+
+	/**
+	 * Structural summary of a template, without returning its data.
+	 *
+	 * Verifying a 13-item library previously meant listing it and then making
+	 * 13 separate get calls, decoding each one's Elementor JSON and counting
+	 * widgets by hand — an N+1 that grows with the library. These are the
+	 * numbers that answer "which one do I want" without transferring the
+	 * layouts to find out.
+	 *
+	 * @param int $template_id Template ID.
+	 * @return array
+	 */
+	private function summarize_template_data( $template_id ) {
+		$raw = get_post_meta( (int) $template_id, '_elementor_data', true );
+
+		$summary = array(
+			'section_count' => 0,
+			'widget_count'  => 0,
+			'top_level_ids' => array(),
+			'data_bytes'    => is_string( $raw ) ? strlen( $raw ) : 0,
+		);
+
+		if ( ! is_string( $raw ) || '' === $raw ) {
+			// No data at all is a fact worth stating: a template that stores
+			// nothing and one whose data could not be read are different
+			// problems.
+			$summary['has_data'] = false;
+
+			return $summary;
+		}
+
+		$decoded = json_decode( $raw, true );
+
+		if ( ! is_array( $decoded ) ) {
+			$summary['has_data']    = true;
+			$summary['unreadable']  = true;
+			$summary['note']        = 'The stored Elementor data could not be decoded, so the counts below are unknown rather than zero.';
+
+			return $summary;
+		}
+
+		$summary['has_data']      = true;
+		$summary['section_count'] = count( $decoded );
+
+		foreach ( $decoded as $element ) {
+			if ( is_array( $element ) && ! empty( $element['id'] ) ) {
+				$summary['top_level_ids'][] = (string) $element['id'];
+			}
+		}
+
+		$summary['widget_count'] = $this->count_widgets_recursive( $decoded );
+
+		return $summary;
+	}
+
+	/**
+	 * Count widget elements anywhere in a tree.
+	 *
+	 * @param array $elements Elements.
+	 * @return int
+	 */
+	private function count_widgets_recursive( $elements ) {
+		$count = 0;
+
+		foreach ( (array) $elements as $element ) {
+			if ( ! is_array( $element ) ) {
+				continue;
+			}
+
+			if ( isset( $element['elType'] ) && 'widget' === $element['elType'] ) {
+				$count++;
+			}
+
+			if ( ! empty( $element['elements'] ) ) {
+				$count += $this->count_widgets_recursive( $element['elements'] );
+			}
+		}
+
+		return $count;
 	}
 
 	/**
@@ -300,7 +473,7 @@ class Mcpwp_Elementor_Pro {
 	 * @param array $args Query arguments.
 	 * @return array Parts list.
 	 */
-	public function get_parts( $args = array() ) {
+	private function build_parts_query_args( $args = array() ) {
 		$args = is_array( $args ) ? $args : array();
 
 		$meta_query = array(
@@ -344,7 +517,27 @@ class Mcpwp_Elementor_Pro {
 		unset( $args['kind'], $args['style'], $args['tag'] );
 		$args['meta_query'] = $meta_query;
 
-		return $this->get_templates( $args );
+		return $args;
+	}
+
+	/**
+	 * List reusable Elementor parts.
+	 *
+	 * @param array $args Query arguments.
+	 * @return array Parts list.
+	 */
+	public function get_parts( $args = array() ) {
+		return $this->get_parts_page( $args )['items'];
+	}
+
+	/**
+	 * List reusable Elementor parts, with pagination and an honest total.
+	 *
+	 * @param array $args Query arguments.
+	 * @return array{items:array,total:int,page:int,per_page:int,pages:int}
+	 */
+	public function get_parts_page( $args = array() ) {
+		return $this->get_templates_page( $this->build_parts_query_args( $args ) );
 	}
 
 	/**
@@ -353,7 +546,7 @@ class Mcpwp_Elementor_Pro {
 	 * @param array $args Query arguments.
 	 * @return array Archetypes list.
 	 */
-	public function get_archetypes( $args = array() ) {
+	private function build_archetypes_query_args( $args = array() ) {
 		$args = is_array( $args ) ? $args : array();
 
 		$meta_query = array(
@@ -388,7 +581,27 @@ class Mcpwp_Elementor_Pro {
 		unset( $args['scope'], $args['archetype_class'], $args['style'] );
 		$args['meta_query'] = $meta_query;
 
-		return $this->get_templates( $args );
+		return $args;
+	}
+
+	/**
+	 * List reusable Elementor archetypes.
+	 *
+	 * @param array $args Query arguments.
+	 * @return array Archetypes list.
+	 */
+	public function get_archetypes( $args = array() ) {
+		return $this->get_archetypes_page( $args )['items'];
+	}
+
+	/**
+	 * List archetypes, with pagination and an honest total.
+	 *
+	 * @param array $args Query arguments.
+	 * @return array{items:array,total:int,page:int,per_page:int,pages:int}
+	 */
+	public function get_archetypes_page( $args = array() ) {
+		return $this->get_templates_page( $this->build_archetypes_query_args( $args ) );
 	}
 
 	/**

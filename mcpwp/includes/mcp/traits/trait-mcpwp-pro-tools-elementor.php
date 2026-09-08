@@ -22,7 +22,23 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 		$pro_tools[] = $this->define_tool(
 			'wp_list_elementor_templates',
 			'List all saved Elementor templates (page, section, header, footer, popup). Use to find template IDs before applying.',
-			array()
+			array(
+				'page'     => array(
+					'type'        => 'number',
+					'default'     => 1,
+					'description' => 'Page number. The response reports total, pages and has_more, so paginate on those rather than on how many items came back.',
+				),
+				'per_page' => array(
+					'type'        => 'number',
+					'default'     => 50,
+					'description' => 'Items per page (1-100).',
+				),
+				'include_summary' => array(
+					'type'        => 'boolean',
+					'default'     => false,
+					'description' => 'Include a structural summary per item — section_count, widget_count, top_level_ids, data_bytes — so a library can be verified without a get call per item (#635).',
+				),
+			)
 		);
 
 		$pro_tools[] = $this->define_tool(
@@ -156,6 +172,21 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 					'type'        => 'string',
 					'description' => 'Optional text search over archetype titles',
 				),
+				'page'     => array(
+					'type'        => 'number',
+					'default'     => 1,
+					'description' => 'Page number. The response reports total, pages and has_more, so paginate on those rather than on how many items came back.',
+				),
+				'per_page' => array(
+					'type'        => 'number',
+					'default'     => 50,
+					'description' => 'Items per page (1-100).',
+				),
+				'include_summary' => array(
+					'type'        => 'boolean',
+					'default'     => false,
+					'description' => 'Include a structural summary per item — section_count, widget_count, top_level_ids, data_bytes — so a library can be verified without a get call per item (#635).',
+				),
 			)
 		);
 
@@ -265,6 +296,21 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 				'search' => array(
 					'type'        => 'string',
 					'description' => 'Optional text search over part titles',
+				),
+				'page'     => array(
+					'type'        => 'number',
+					'default'     => 1,
+					'description' => 'Page number. The response reports total, pages and has_more, so paginate on those rather than on how many items came back.',
+				),
+				'per_page' => array(
+					'type'        => 'number',
+					'default'     => 50,
+					'description' => 'Items per page (1-100).',
+				),
+				'include_summary' => array(
+					'type'        => 'boolean',
+					'default'     => false,
+					'description' => 'Include a structural summary per item — section_count, widget_count, top_level_ids, data_bytes — so a library can be verified without a get call per item (#635).',
 				),
 			)
 		);
