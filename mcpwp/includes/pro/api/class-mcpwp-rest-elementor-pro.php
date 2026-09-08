@@ -1250,7 +1250,11 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			return $this->error_response( 'missing_page_id', __( 'Page ID is required.', 'mcpwp' ), 400 );
 		}
 
-		$result = $this->elementor_pro->apply_template_to_page( $page_id, $template_id );
+		$result = $this->elementor_pro->apply_template_to_page(
+			$page_id,
+			$template_id,
+			(string) ( $request->get_param( 'page_settings_mode' ) ?: 'preserve' )
+		);
 
 		if ( is_wp_error( $result ) ) {
 			$this->log_activity( 'apply_template', $request, null, 400 );
@@ -1397,7 +1401,11 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			return $this->error_response( 'missing_page_id', __( 'Page ID is required.', 'mcpwp' ), 400 );
 		}
 
-		$result = $this->elementor_pro->apply_archetype_to_page( $archetype_id, $page_id );
+		$result = $this->elementor_pro->apply_archetype_to_page(
+			$archetype_id,
+			$page_id,
+			(string) ( $request->get_param( 'page_settings_mode' ) ?: 'preserve' )
+		);
 
 		if ( is_wp_error( $result ) ) {
 			$this->log_activity( 'apply_archetype', $request, null, 400 );

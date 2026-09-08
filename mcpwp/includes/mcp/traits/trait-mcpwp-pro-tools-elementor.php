@@ -56,6 +56,10 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 					'description' => 'Optional Elementor data JSON (array). If omitted, Elementor creates a blank template.',
 					'items'       => array( 'type' => 'object' ),
 				),
+				'page_settings' => array(
+					'type'        => 'object',
+					'description' => 'Elementor document settings to store with the template: template (canvas/header-footer), hide_title, background_*, padding, custom_css. A full-page template without these carries the layout and loses the frame (#638). Unrecognised keys are reported in page_settings_result.skipped rather than dropped silently.',
+				),
 			)
 		);
 
@@ -76,6 +80,10 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 					'type'        => 'array',
 					'description' => 'Optional Elementor data JSON (array)',
 					'items'       => array( 'type' => 'object' ),
+				),
+				'page_settings' => array(
+					'type'        => 'object',
+					'description' => 'Elementor document settings to store with the template: template (canvas/header-footer), hide_title, background_*, padding, custom_css. A full-page template without these carries the layout and loses the frame (#638). Unrecognised keys are reported in page_settings_result.skipped rather than dropped silently.',
 				),
 			)
 		);
@@ -110,6 +118,12 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 					'type'        => 'number',
 					'description' => 'Page ID to apply template to',
 					'required'    => true,
+				),
+				'page_settings_mode' => array(
+					'type'        => 'string',
+					'enum'        => array( 'preserve', 'replace', 'merge' ),
+					'default'     => 'preserve',
+					'description' => 'How the template\'s document settings meet the target page\'s. preserve (default): the page keeps every setting it already has, and only gains ones it lacks — applying a template never silently restyles a page\'s canvas, title visibility or page CSS. replace: the page takes the template\'s document wholesale. merge: the template wins per key, the page keeps what the template does not mention. The response reports applied / preserved / skipped by name.',
 				),
 			)
 		);
@@ -189,6 +203,10 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 					'type'        => 'string',
 					'description' => 'Optional archetype style or variant label',
 				),
+				'page_settings' => array(
+					'type'        => 'object',
+					'description' => 'Elementor document settings to store with the template: template (canvas/header-footer), hide_title, background_*, padding, custom_css. A full-page template without these carries the layout and loses the frame (#638). Unrecognised keys are reported in page_settings_result.skipped rather than dropped silently.',
+				),
 			)
 		);
 
@@ -205,6 +223,12 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 					'type'        => 'number',
 					'description' => 'Target page ID',
 					'required'    => true,
+				),
+				'page_settings_mode' => array(
+					'type'        => 'string',
+					'enum'        => array( 'preserve', 'replace', 'merge' ),
+					'default'     => 'preserve',
+					'description' => 'How the template\'s document settings meet the target page\'s. preserve (default): the page keeps every setting it already has, and only gains ones it lacks — applying a template never silently restyles a page\'s canvas, title visibility or page CSS. replace: the page takes the template\'s document wholesale. merge: the template wins per key, the page keeps what the template does not mention. The response reports applied / preserved / skipped by name.',
 				),
 			)
 		);
