@@ -62,10 +62,7 @@ final class ElementorDryRunParityTest extends TestCase {
 		if ( ! defined( 'ELEMENTOR_PRO_VERSION' ) ) {
 			define( 'ELEMENTOR_PRO_VERSION', '4.2.3' );
 		}
-		if ( ! class_exists( '\ElementorPro\Modules\ThemeBuilder\Module' ) ) {
-			// phpcs:ignore Squiz.PHP.Eval.Discouraged -- a class declared in a child process only.
-			eval( 'namespace ElementorPro\Modules\ThemeBuilder; class Module {}' );
-		}
+		require_once __DIR__ . '/fixtures/elementor-pro-theme-builder-module-stub.php';
 		require_once dirname( __DIR__ ) . '/includes/pro/core/class-mcpwp-theme-builder.php';
 	}
 
