@@ -112,7 +112,7 @@ class Mcpwp_Pages {
 		if ( is_wp_error( $resolved_terms ) ) {
 			return $resolved_terms;
 		}
-		$clean_meta = Mcpwp_Post_Fields::validate_meta( isset( $data['meta'] ) ? $data['meta'] : null );
+		$clean_meta = Mcpwp_Post_Fields::validate_meta( isset( $data['meta'] ) ? $data['meta'] : null, false, 'page' );
 		if ( is_wp_error( $clean_meta ) ) {
 			return $clean_meta;
 		}

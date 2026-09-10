@@ -316,7 +316,7 @@ class Mcpwp_Posts {
 		if ( is_wp_error( $resolved_terms ) ) {
 			return $resolved_terms;
 		}
-		$clean_meta = Mcpwp_Post_Fields::validate_meta( isset( $data['meta'] ) ? $data['meta'] : null );
+		$clean_meta = Mcpwp_Post_Fields::validate_meta( isset( $data['meta'] ) ? $data['meta'] : null, false, $post_type );
 		if ( is_wp_error( $clean_meta ) ) {
 			return $clean_meta;
 		}
@@ -429,7 +429,7 @@ class Mcpwp_Posts {
 		if ( is_wp_error( $resolved_terms ) ) {
 			return $resolved_terms;
 		}
-		$clean_meta = Mcpwp_Post_Fields::validate_meta( isset( $data['meta'] ) ? $data['meta'] : null );
+		$clean_meta = Mcpwp_Post_Fields::validate_meta( isset( $data['meta'] ) ? $data['meta'] : null, false, $post->post_type );
 		if ( is_wp_error( $clean_meta ) ) {
 			return $clean_meta;
 		}

@@ -659,4 +659,54 @@ final class PostTermsMetaTest extends TestCase {
 		$this->assertSame( 'meta_value_too_large', $err->get_error_code() );
 		$this->assertGreaterThan( 65536, strlen( wp_kses_post( '<' . str_repeat( '&', 20000 ) ) ), 'Premise: the double amplifies like core.' );
 	}
+
+	// ---------------------------------------------------------------
+	// Round 6 residuals.
+	// ---------------------------------------------------------------
+
+	public function test_the_bound_is_measured_through_the_registered_sanitiser_when_there_is_one(): void {
+		$this->seed( 40, 'post' );
+		$GLOBALS['_mcpwp_test_registered_meta']['reg_txt']  = array( 'object_subtype' => 'post', 'sanitize_callback' => 'strval' );
+		$GLOBALS['_mcpwp_test_registered_meta']['reg_kses'] = array( 'object_subtype' => 'post', 'sanitize_callback' => 'wp_kses_post' );
+
+		// strval stores 20,008 bytes: under the bound, accepted.
+		$ok = $this->posts()->update_post( 40, array( 'meta' => array( 'reg_txt' => '<b>x</b>' . str_repeat( '&', 20000 ) ) ) );
+		$this->assertNotInstanceOf( WP_Error::class, $ok, is_wp_error( $ok ) ? $ok->get_error_message() : '' );
+
+		// kses stores ~300,000: refused, although as sent it is 60,000.
+		$err = $this->posts()->update_post( 40, array( 'meta' => array( 'reg_kses' => str_repeat( '&', 60000 ) ) ) );
+		$this->assertSame( 'meta_value_too_large', $err->get_error_code() );
+	}
+
+	public function test_internal_keys_stay_closed_on_both_routes_and_case_does_not_open_a_read(): void {
+		$this->seed( 40, 'post' );
+		$GLOBALS['_mcpwp_test_posts'][40] = new WP_Post( (array) $GLOBALS['_mcpwp_test_posts'][40] );
+		foreach ( array( '_menu_item_url', '_menu_item_object_id', '_pingme', '_encloseme', '_transient_x', '_customize_changeset_uuid', '_downloadable_files' ) as $key ) {
+			$this->assertInstanceOf( WP_Error::class, $this->set_meta( 40, $key, 'x' ), $key );
+		}
+
+		$content = new ReflectionMethod( Mcpwp_REST_Site_Content::class, 'is_blocked_meta_key' );
+		$content->setAccessible( true );
+		foreach ( array( '_WP_ATTACHED_FILE', '_Wp_old_slug', '_ELEMENTOR_data', '_EDIT_LOCK', '_Menu_Item_url' ) as $key ) {
+			$this->assertTrue( $content->invoke( new Mcpwp_REST_Site_Content(), $key ), $key . ' is blocked whatever its case.' );
+		}
+	}
+
+	public function test_a_nul_byte_in_a_nested_key_is_refused(): void {
+		$this->seed( 40, 'post' );
+		$err = $this->posts()->update_post( 40, array( 'meta' => array( 'smc_x' => array( "a\0b" => 'v' ) ) ) );
+		$this->assertInstanceOf( WP_Error::class, $err );
+		$this->assertSame( 'invalid_meta_value', $err->get_error_code() );
+		$err = $this->posts()->update_post( 40, array( 'meta' => array( "smc\0y" => 'v' ) ) );
+		$this->assertSame( 'invalid_meta_key', $err->get_error_code() );
+	}
+
+	public function test_the_key_family_of_credential_names_is_detected(): void {
+		foreach ( array( 'license_key', 'licence_key', 'consumer_key', 'encryption_key', 'master_key', 'signing_key', 'kms_key', 'ssh_key', 'gpg_key', 'htpasswd', 'keystore', 'account_sid', 'activation_code', 'p12', 'pem', 'consumer_secret' ) as $key ) {
+			$this->assertTrue( Mcpwp_Post_Fields::is_secret_shaped_key( $key ), $key );
+		}
+		foreach ( array( 'meta_key', 'cache_key', 'sort_key', 'key_visual', 'pemberton', 'keystone_id' ) as $key ) {
+			$this->assertFalse( Mcpwp_Post_Fields::is_secret_shaped_key( $key ), $key );
+		}
+	}
 }

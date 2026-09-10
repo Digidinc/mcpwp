@@ -585,7 +585,7 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 		// The same policy as meta on a post write (#797): one answer to "can
 		// this key be written, and how is the value treated". The two core
 		// keys this route has always accepted stay accepted here.
-		$clean = Mcpwp_Post_Fields::validate_meta( array( $key => $value ), true );
+		$clean = Mcpwp_Post_Fields::validate_meta( array( $key => $value ), true, (string) $post->post_type );
 		if ( is_wp_error( $clean ) ) {
 			return $clean;
 		}
@@ -620,8 +620,16 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			return true;
 		}
 
+		// Case-insensitive, like the write side: wp_postmeta.meta_key
+		// collates case-insensitively, so _WP_ATTACHED_FILE is _wp_attached_file.
+		$lower = strtolower( (string) $meta_key );
 		foreach ( $blocked_prefixes as $prefix ) {
-			if ( 0 === strpos( $meta_key, $prefix ) ) {
+			if ( 0 === strpos( $lower, strtolower( $prefix ) ) ) {
+				return true;
+			}
+		}
+		foreach ( array( '_menu_item_', '_transient', '_site_transient', '_customize_changeset', '_pingme', '_encloseme', '_downloadable_files' ) as $prefix ) {
+			if ( 0 === strpos( $lower, $prefix ) ) {
 				return true;
 			}
 		}

@@ -36,7 +36,7 @@ class Mcpwp_Post_Fields {
 	 *
 	 * @var array
 	 */
-	private static $blocked_prefixes = array( '_wp_', '_elementor', '_edit_', 'mcpwp_', '_mcpwp_', '_oembed_' );
+	private static $blocked_prefixes = array( '_wp_', '_elementor', '_edit_', 'mcpwp_', '_mcpwp_', '_oembed_', '_menu_item_', '_transient', '_site_transient', '_customize_changeset', '_pingme', '_encloseme', '_downloadable_files' );
 
 	/**
 	 * Meta keys never writable through a post write, whatever the prefix rule
@@ -113,7 +113,7 @@ class Mcpwp_Post_Fields {
 		$split = str_replace( array( '-', '.', ':', ' ' ), '_', $split );
 
 		// Word-boundary stems: a credential NAMED, not merely mentioned.
-		if ( preg_match( '/(^|_)(api_?key|apikey|access_?key(_id)?|secret_?key|sk|pass|passwd|password|passcode|pwd|passphrase|secret|secrets|token|tokens|credential|credentials|bearer|jwt|priv_?key|private_?key|privkey|session_?id|session_?token|session_?key|totp|otp|cvv|recovery_?codes?|seed_?phrase|dsn)\d*(_|$)/i', $split ) ) {
+		if ( preg_match( '/(^|_)(api_?key|apikey|access_?key(_id)?|secret_?key|sk|pass|passwd|password|passcode|pwd|passphrase|secret|secrets|token|tokens|credential|credentials|bearer|jwt|priv_?key|private_?key|privkey|session_?id|session_?token|session_?key|totp|otp|cvv|recovery_?codes?|seed_?phrase|dsn|licen[cs]e_?key|consumer_?key|encryption_?key|master_?key|signing_?key|kms_?key|ssh_?key|gpg_?key|htpasswd|keystore|account_?sid|activation_?code|p12|pem)\d*(_|$)/i', $split ) ) {
 			return true;
 		}
 
@@ -394,7 +394,7 @@ class Mcpwp_Post_Fields {
 	 * @param mixed $meta Submitted {key: value}.
 	 * @return array|WP_Error Cleaned {key: value} or the first refusal.
 	 */
-	public static function validate_meta( $meta, $allow_core_keys = false ) {
+	public static function validate_meta( $meta, $allow_core_keys = false, $post_type = '' ) {
 		if ( null === $meta ) {
 			return array();
 		}
@@ -423,6 +423,16 @@ class Mcpwp_Post_Fields {
 
 		foreach ( $meta as $key => $value ) {
 			$key = is_string( $key ) ? trim( $key ) : '';
+
+			// A key with a NUL or a bad byte is refused like a value with one;
+			// the character class below would refuse it anyway, but by name.
+			if ( '' !== $key && null !== self::first_invalid_utf8_path( $key ) ) {
+				return new WP_Error(
+					'invalid_meta_key',
+					__( 'A meta key carries a NUL byte or invalid UTF-8. Nothing was written.', 'mcpwp' ),
+					array( 'status' => 400 )
+				);
+			}
 
 			if ( '' === $key || strlen( $key ) > 255 || ! preg_match( '/^[A-Za-z0-9_\-.:]+$/', $key ) ) {
 				return new WP_Error(
@@ -494,9 +504,17 @@ class Mcpwp_Post_Fields {
 				);
 			}
 
-			// Measured as sent AND as it would be stored: kses entity
-			// normalisation can grow a value ~6x past the bound (#797 round 5).
-			$stored_size = null !== $value ? strlen( (string) wp_json_encode( self::reduce_unregistered( $value ) ) ) : 0;
+			// Measured as sent AND as it would be stored — through the
+			// registered sanitiser when there is one, through the fallback
+			// reduction when there is not (#797 rounds 5–6). kses entity
+			// normalisation can grow a value ~6x past the bound.
+			$as_stored   = null;
+			if ( null !== $value ) {
+				$as_stored = ( '' !== $post_type && self::has_registered_sanitizer( $key, $post_type ) && function_exists( 'sanitize_meta' ) )
+					? sanitize_meta( $key, $value, 'post', $post_type )
+					: self::reduce_unregistered( $value );
+			}
+			$stored_size = null !== $as_stored ? strlen( (string) wp_json_encode( $as_stored ) ) : 0;
 			if ( null !== $value && max( strlen( (string) $encoded ), $stored_size ) > self::MAX_META_VALUE_BYTES ) {
 				return new WP_Error(
 					'meta_value_too_large',
@@ -576,7 +594,12 @@ class Mcpwp_Post_Fields {
 
 		if ( is_array( $value ) ) {
 			foreach ( $value as $k => $v ) {
-				$found = self::first_invalid_utf8_path( $v, '' === $path ? (string) $k : $path . '.' . $k );
+				$here = '' === $path ? (string) $k : $path . '.' . $k;
+				// Keys are bytes too (#797 round 6).
+				if ( is_string( $k ) && null !== self::first_invalid_utf8_path( $k ) ) {
+					return $here;
+				}
+				$found = self::first_invalid_utf8_path( $v, $here );
 				if ( null !== $found ) {
 					return $found;
 				}
