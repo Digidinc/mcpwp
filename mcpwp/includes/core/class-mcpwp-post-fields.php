@@ -97,14 +97,13 @@ class Mcpwp_Post_Fields {
 			return false;
 		}
 
-		// The plugin-wide detector, when it is the plugin's own class — a
-		// third-party class of the same name must not take over the read
-		// blocklist and the write refusal (#797 round 4). Union, never
-		// replacement: the local rule always applies too.
-		if ( self::plugin_option_access_available() && Mcpwp_Option_Access::is_secret_field( $key ) ) {
-			return true;
-		}
-
+		// Post meta keys have their own detector, deliberately NOT unioned
+		// with the option-name detector: option names carry stems (key,
+		// salt, nonce, pin, license, signature) that are ordinary in meta —
+		// meta_key, cache_key, license_url, nonce_field, pin_code — and the
+		// union refused all of them on a real install while the harness,
+		// which never defined MCPWP_PLUGIN_DIR, never exercised it (#797
+		// follow-up).
 		// camelCase is split and every separator the key sanitiser admits
 		// (- . :) reads as _, so apiKey, x-api-key, api.key and api:key all
 		// match like api_key. A numeric suffix is still the same name
@@ -125,31 +124,6 @@ class Mcpwp_Post_Fields {
 		return (bool) preg_match( '/(password|credential|secret|token|auth(?!or(?:s|ed|ing|ity|ship|_|$)))/i', $split );
 	}
 
-	/**
-	 * Whether Mcpwp_Option_Access is loaded AND is this plugin's own class.
-	 *
-	 * @return bool
-	 */
-	private static function plugin_option_access_available() {
-		static $available = null;
-
-		if ( null !== $available ) {
-			return $available;
-		}
-
-		$available = false;
-		if ( class_exists( 'Mcpwp_Option_Access' ) && method_exists( 'Mcpwp_Option_Access', 'is_secret_field' ) && defined( 'MCPWP_PLUGIN_DIR' ) ) {
-			try {
-				$file      = ( new ReflectionClass( 'Mcpwp_Option_Access' ) )->getFileName();
-				$norm      = function ( $path ) { return rtrim( str_replace( '\\', '/', (string) $path ), '/' ) . '/'; };
-				$available = is_string( $file ) && 0 === strpos( $norm( $file ), $norm( MCPWP_PLUGIN_DIR ) );
-			} catch ( ReflectionException $e ) {
-				$available = false;
-			}
-		}
-
-		return $available;
-	}
 
 	/**
 	 * Resolve `terms` against the registry without writing anything.

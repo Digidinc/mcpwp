@@ -709,4 +709,51 @@ final class PostTermsMetaTest extends TestCase {
 			$this->assertFalse( Mcpwp_Post_Fields::is_secret_shaped_key( $key ), $key );
 		}
 	}
+
+	public function test_no_shipped_code_branches_on_the_plugin_dir_constant(): void {
+		// The harness leaves MCPWP_PLUGIN_DIR undefined on purpose (the
+		// double-load test probes its absence), so any behaviour gated on
+		// defined('MCPWP_PLUGIN_DIR') runs one way under test and another
+		// on a site — which is how the meta detector's delegation shipped
+		// untested and over-blocked on real installs (#797 follow-up).
+		$plugin = dirname( __DIR__ );
+		$files  = array( $plugin . '/mcpwp.php' );
+		foreach ( array( '/includes', '/admin' ) as $dir ) {
+			foreach ( new RecursiveIteratorIterator( new RecursiveDirectoryIterator( $plugin . $dir ) ) as $file ) {
+				if ( 'php' === $file->getExtension() ) {
+					$files[] = $file->getPathname();
+				}
+			}
+		}
+		$hits = array();
+		foreach ( $files as $path ) {
+			if ( preg_match( '/\b(defined|constant)\s*\(\s*["\']MCPWP_PLUGIN_DIR["\']\s*\)/', file_get_contents( $path ) ) ) {
+				$hits[] = substr( $path, strlen( $plugin ) + 1 );
+			}
+		}
+		$this->assertSame( array(), $hits, 'Use the constant; never branch on whether it exists.' );
+		$this->assertFalse( defined( 'MCPWP_PLUGIN_DIR' ), 'Premise of this guard.' );
+	}
+
+	public function test_meta_reads_hide_bearer_values_by_name_and_by_shape(): void {
+		$this->seed( 40, 'post' );
+		$GLOBALS['_mcpwp_test_posts'][40] = new WP_Post( (array) $GLOBALS['_mcpwp_test_posts'][40] );
+		update_post_meta( 40, 'webhook_url', 'https://hooks.slack.com/services/T000/B000/XXXXXXXXXXXXXXXXXXXXXXXX' );
+		update_post_meta( 40, 'paypal_api_signature', 'AiPC9BjkCyDFQXbSkoZcgqH3hpacAW' );
+		update_post_meta( 40, 'pin_code', '4242' );
+		update_post_meta( 40, 'note', 'sk_live_AbCdEf12345678' );
+		update_post_meta( 40, 'smc_role', 'Founder' );
+
+		$request = new WP_REST_Request( 'GET', '/mcpwp/v1/content/40/meta' );
+		$request->set_param( 'id', 40 );
+		$data = wp_json_encode( ( new Mcpwp_REST_Site_Content() )->get_post_meta_handler( $request )->get_data() );
+		$this->assertStringNotContainsString( 'hooks.slack.com', $data );
+		$this->assertStringNotContainsString( 'AiPC9Bjk', $data );
+		$this->assertStringNotContainsString( '4242', $data );
+		$this->assertStringNotContainsString( 'sk_live', $data, 'A credential by shape is masked whatever the key.' );
+		$this->assertStringContainsString( 'Founder', $data );
+
+		// Writing those names is still allowed: they are ordinary to store.
+		$this->assertInstanceOf( WP_REST_Response::class, $this->set_meta( 40, 'pin_code', '1234' ) );
+	}
 }
