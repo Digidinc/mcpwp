@@ -961,6 +961,18 @@ class Mcpwp_Elementor_Pro {
 	/**
 	 * Insert a reusable part into an existing page without replacing all content.
 	 *
+	 * Every call inserts a fresh copy (#826): each element id in the copy is a
+	 * new 7-character id no element on the page already has, references inside
+	 * the part follow the new ids, and the response maps old ids to the ids the
+	 * copy was saved with. The part's stored ids used to be copied verbatim, so
+	 * a second copy collided with the first and the save renamed one of them —
+	 * for an insert at the start, the element already on the page. There is no
+	 * implicit de-duplication: to make a retried call safe, send the tool call
+	 * with params._meta.request_id, which replays the first result.
+	 *
+	 * All of the part's top-level elements are inserted in one write, so a part
+	 * that cannot be inserted leaves the page as it was.
+	 *
 	 * @param int    $part_id   Part/template ID.
 	 * @param int    $page_id   Target page ID.
 	 * @param string $position  Insert position: start, end, before:{id}, after:{id}.
@@ -995,36 +1007,56 @@ class Mcpwp_Elementor_Pro {
 			return new WP_Error( 'empty_part', __( 'Reusable part has no Elementor elements.', 'mcpwp' ) );
 		}
 
-		$basic   = $this->get_basic_handler();
-		$results = array();
-
-		foreach ( array_values( $elements ) as $index => $element ) {
-			$current_position = ( 0 === $index ) ? $position : 'end';
-			$result           = $basic->add_section(
-				$page_id,
-				array(
-					'element'  => $element,
-					'position' => $current_position,
-				)
-			);
-
-			if ( is_wp_error( $result ) ) {
-				return $result;
-			}
-
-			$results[] = $result;
+		// The ids already on the page, so the copy avoids every one of them.
+		$stored = Mcpwp_Elementor_Stored_Tree::of_post( $page_id );
+		if ( Mcpwp_Elementor_Stored_Tree::is_unusable( $stored ) ) {
+			return Mcpwp_Elementor_Stored_Tree::refusal( $stored );
 		}
 
-		return array(
-			'inserted'        => true,
-			'part_id'         => (int) $part_id,
-			'page_id'         => (int) $page_id,
-			'position'        => $position,
-			'inserted_count'  => count( $results ),
-			'inserted_ids'    => wp_list_pluck( $results, 'element_id' ),
-			'operations'      => $results,
-			'last_operation'  => end( $results ),
+		$copy   = Mcpwp_Elementor_Element_Ids::fresh_copy( array_values( $elements ), Mcpwp_Elementor_Element_Ids::ids( (array) $stored['elements'] ) );
+		$result = $this->get_basic_handler()->insert_elements( $page_id, $copy['elements'], $position );
+
+		if ( is_wp_error( $result ) ) {
+			return $result;
+		}
+
+		$warnings = isset( $result['warnings'] ) && is_array( $result['warnings'] ) ? $result['warnings'] : array();
+		foreach ( $copy['possible_references'] as $mention ) {
+			$warnings[] = sprintf(
+				"%s: setting %s still names the part's element id '%s'; in this copy that element is '%s'. It was left as the part stores it (custom CSS, links and other text are never rewritten) — update it if it should target this copy.",
+				$mention['path'],
+				$mention['key'],
+				$mention['id'],
+				isset( $copy['mapping'][ $mention['id'] ] ) ? $copy['mapping'][ $mention['id'] ] : '?'
+			);
+		}
+
+		$inserted_ids = isset( $result['inserted_ids'] ) && is_array( $result['inserted_ids'] ) ? $result['inserted_ids'] : array();
+
+		$response = array(
+			'inserted'             => true,
+			'part_id'              => (int) $part_id,
+			'page_id'              => (int) $page_id,
+			'position'             => $position,
+			'inserted_count'       => count( $inserted_ids ),
+			'inserted_ids'         => $inserted_ids,
+			// An object in JSON whether empty or not.
+			'id_map'               => (object) $copy['mapping'],
+			'references_repointed' => $copy['references_repointed'],
+			'possible_references'  => $copy['possible_references'],
+			'sections_before'      => isset( $result['sections_before'] ) ? $result['sections_before'] : null,
+			'sections_after'       => isset( $result['sections_after'] ) ? $result['sections_after'] : null,
+			// One write carries every section; kept as a list so the render
+			// verdict is lifted the same way it always was.
+			'operations'           => array( $result ),
+			'last_operation'       => $result,
 		);
+
+		if ( ! empty( $warnings ) ) {
+			$response['warnings'] = $warnings;
+		}
+
+		return $response;
 	}
 
 	/**

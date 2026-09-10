@@ -28,6 +28,14 @@ final class Mcpwp_Apply_Part_Basic_Double {
 		return array_shift( $this->add_results );
 	}
 
+	/** @var array<int,array> What insert_elements() was handed, per call. */
+	public $inserted = array();
+
+	public function insert_elements( $page_id, $elements, $position = 'end' ) {
+		$this->inserted[] = $elements;
+		return array_shift( $this->add_results );
+	}
+
 	public function set_elementor_data( $page_id, $payload ) {
 		return $this->save_result;
 	}
@@ -139,17 +147,19 @@ final class ApplyPartRenderStatusTest extends TestCase {
 		$this->assertSame( array( 'html_cache_rebuild: RuntimeException: boom at x.php:1' ), $response['render_errors'] );
 	}
 
-	public function test_multi_section_insert_returns_every_save_verdict_for_aggregation(): void {
+	/**
+	 * A multi-section part is inserted in one write (#826), so there is one
+	 * verdict for the whole part. It is still returned in operations[], which
+	 * is what the REST layer aggregates, and a failed render in it fails the
+	 * operation.
+	 */
+	public function test_multi_section_insert_is_one_save_whose_verdict_is_returned_for_aggregation(): void {
 		$basic = new Mcpwp_Apply_Part_Basic_Double();
 		$basic->add_results = array(
 			array(
-				'element_id'      => 'first001',
+				'inserted_ids'    => array( 'first01', 'second1' ),
 				'render_verified' => false,
 				'render_errors'   => array( 'document_save: RuntimeException: first failed at x.php:1' ),
-			),
-			array(
-				'element_id'      => 'second01',
-				'render_verified' => true,
 			),
 		);
 
@@ -163,9 +173,11 @@ final class ApplyPartRenderStatusTest extends TestCase {
 
 		$result = $pro->insert_part_into_page( 91, 92, 'end' );
 
-		$this->assertCount( 2, $result['operations'], 'Dropping earlier operations makes a later clean save hide an earlier render failure.' );
+		$this->assertCount( 1, $basic->inserted, 'Both sections go to the page in one write.' );
+		$this->assertCount( 2, $basic->inserted[0] );
+		$this->assertCount( 1, $result['operations'] );
 		$this->assertFalse( $result['operations'][0]['render_verified'] );
-		$this->assertTrue( $result['operations'][1]['render_verified'] );
+		$this->assertFalse( $this->lift( array( 'applied' => true ), $result )['render_verified'] );
 	}
 
 	public function test_replace_mode_returns_the_actual_save_verdict(): void {

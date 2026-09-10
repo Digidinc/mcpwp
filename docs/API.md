@@ -1136,6 +1136,20 @@ POST /elementor/templates/{id}/apply
 }
 ```
 
+#### Apply Reusable Part
+
+```http
+POST /elementor/parts/{id}/apply
+```
+
+MCP tool: `wp_apply_elementor_part`. Body: `page_id` (required), `mode` (`insert`, the default, or `replace`) and, for `insert`, `position`: `start`, `end` (default), `before:{id}` or `after:{id}`, where `{id}` is a top-level element of the page.
+
+`mode=insert` inserts a **fresh copy** of the part on every call (#826). Every element id in the copy is a new 7-character id that no element on the page already has, so applying one part twice gives two copies with different ids, and an element already on the page is never renamed. All of the part's top-level elements are inserted in one write: a position or element that is refused leaves the page as it was, and a write whose section count does not read back as before + inserted is an error (`insert_not_verified`), not a success. There is no implicit de-duplication. To make a retried call safe, send the tool call with `params._meta.request_id` (see *Idempotent tool calls* above); a re-send replays the first result instead of inserting again.
+
+The response's `details` carries `inserted_ids` (the id each top-level element was saved with), `id_map` (every part element id → its id in this copy, in tree order), `references_repointed` (Taxonomy Filter `selected_element` and Off-canvas links inside the part, now pointing into the copy), `possible_references` (settings in the copy that still mention an old part id — custom CSS such as `.elementor-element-<id>`, links — left unchanged and also listed in `warnings`), `sections_before` and `sections_after`. Kit CSS, page-level custom CSS and other pages are not searched for old ids.
+
+`mode=replace` destructively replaces the page's content with the part as stored, ids unchanged.
+
 #### Clone Page
 
 ```http

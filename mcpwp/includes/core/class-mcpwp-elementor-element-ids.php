@@ -414,43 +414,9 @@ class Mcpwp_Elementor_Element_Ids {
 			}
 		);
 
-		$repointed = array();
-		$possible  = array();
-
-		if ( ! empty( $mapping ) ) {
-			$lookup = self::mention_lookup( array_keys( $mapping ) );
-
-			self::walk(
-				$elements,
-				'',
-				function ( array &$el, $path ) use ( $mapping, $lookup, &$repointed, &$possible ) {
-					if ( empty( $el['settings'] ) || ! is_array( $el['settings'] ) ) {
-						return;
-					}
-
-					foreach ( $el['settings'] as $key => &$value ) {
-						$key = (string) $key;
-
-						if ( isset( self::REFERENCE_KEYS[ $key ] ) && is_string( $value ) && isset( $mapping[ $value ] ) ) {
-							$repointed[] = array(
-								'path' => $path,
-								'key'  => $key,
-								'from' => $value,
-								'to'   => $mapping[ $value ],
-							);
-							$value       = $mapping[ $value ];
-							continue;
-						}
-
-						// Encoded references first, so a repointed one is not
-						// also reported as a mention of the old id.
-						$value = self::repoint_encoded( $value, $key, $path, $mapping, $repointed );
-						self::collect_mentions( $value, $key, $path, $lookup, $possible );
-					}
-					unset( $value );
-				}
-			);
-		}
+		$followed  = self::repoint_references( $elements, $mapping );
+		$repointed = $followed['repointed'];
+		$possible  = $followed['possible'];
 
 		$count = count( $rewritten );
 
@@ -473,6 +439,114 @@ class Mcpwp_Elementor_Element_Ids {
 		return array(
 			'elements' => $elements,
 			'report'   => $report,
+		);
+	}
+
+	/**
+	 * Copy a tree with every element id replaced by a fresh one (#826).
+	 *
+	 * For inserting stored elements — a reusable part — into a page, as many
+	 * times as asked. Every id in the copy is new, 7 characters, and absent
+	 * from $taken (the ids already on the page), so the save has nothing to
+	 * de-duplicate. De-duplication renamed whichever of two equal ids it met
+	 * second: the second copy of a part, or — for an insert at the start — the
+	 * element that was already on the page, which CSS and other widgets name.
+	 *
+	 * References Elementor resolves are repointed inside the copy, as repair()
+	 * does. Other settings that mention an old id (custom CSS, links) are
+	 * reported in possible_references and left as they are.
+	 *
+	 * Random, not derived: a derived id is the same for the same seed every
+	 * time, and two copies of one part on one page must differ.
+	 *
+	 * @param array $elements Tree to copy.
+	 * @param array $taken    Ids already in use, as id => true.
+	 * @return array{elements:array,mapping:array,references_repointed:array,possible_references:array}
+	 *         `mapping` old id => new id, first holder of an old id, in tree order.
+	 */
+	public static function fresh_copy( array $elements, array $taken = array() ) {
+		$mapping = array();
+
+		self::walk(
+			$elements,
+			'',
+			function ( array &$el ) use ( &$taken, &$mapping ) {
+				$new           = self::generate( $taken );
+				$taken[ $new ] = true;
+
+				$old = array_key_exists( 'id', $el ) && ( is_string( $el['id'] ) || is_int( $el['id'] ) ) ? (string) $el['id'] : '';
+				if ( '' !== $old && ! isset( $mapping[ $old ] ) ) {
+					$mapping[ $old ] = $new;
+				}
+
+				$el['id'] = $new;
+			}
+		);
+
+		$followed = self::repoint_references( $elements, $mapping );
+
+		return array(
+			'elements'             => $elements,
+			'mapping'              => $mapping,
+			'references_repointed' => $followed['repointed'],
+			'possible_references'  => $followed['possible'],
+		);
+	}
+
+	/**
+	 * Repoint every reference to a rewritten id, and list other mentions.
+	 *
+	 * @param array $elements Tree, modified in place.
+	 * @param array $mapping  Old id => new id.
+	 * @return array{repointed:array,possible:array}
+	 */
+	private static function repoint_references( array &$elements, array $mapping ) {
+		$repointed = array();
+		$possible  = array();
+
+		if ( empty( $mapping ) ) {
+			return array(
+				'repointed' => $repointed,
+				'possible'  => $possible,
+			);
+		}
+
+		$lookup = self::mention_lookup( array_keys( $mapping ) );
+
+		self::walk(
+			$elements,
+			'',
+			function ( array &$el, $path ) use ( $mapping, $lookup, &$repointed, &$possible ) {
+				if ( empty( $el['settings'] ) || ! is_array( $el['settings'] ) ) {
+					return;
+				}
+
+				foreach ( $el['settings'] as $key => &$value ) {
+					$key = (string) $key;
+
+					if ( isset( self::REFERENCE_KEYS[ $key ] ) && is_string( $value ) && isset( $mapping[ $value ] ) ) {
+						$repointed[] = array(
+							'path' => $path,
+							'key'  => $key,
+							'from' => $value,
+							'to'   => $mapping[ $value ],
+						);
+						$value       = $mapping[ $value ];
+						continue;
+					}
+
+					// Encoded references first, so a repointed one is not
+					// also reported as a mention of the old id.
+					$value = self::repoint_encoded( $value, $key, $path, $mapping, $repointed );
+					self::collect_mentions( $value, $key, $path, $lookup, $possible );
+				}
+				unset( $value );
+			}
+		);
+
+		return array(
+			'repointed' => $repointed,
+			'possible'  => $possible,
 		);
 	}
 

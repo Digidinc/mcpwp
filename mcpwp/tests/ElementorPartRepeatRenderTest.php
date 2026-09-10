@@ -174,7 +174,8 @@ final class ElementorPartRepeatRenderTest extends TestCase {
 		$this->assertTrue( $second['last_operation']['debug']['html_cache_rebuilt'], 'Elementor completed the second render call.' );
 		$this->assertFalse( $second['last_operation']['debug']['html_rebuild_corrupted_data'] ?? false, 'Adding default false fields must not be classified as data corruption.' );
 		$this->assertTrue( $second['last_operation']['render_verified'], 'A successful normalized second insert is a verified render.' );
-		$this->assertSame( array( '41c3ee18', 'hnext0sec' ), $GLOBALS['mcpwp_test_rendered_root_ids'], 'The rebuilt HTML tree contains both inserted roots in order.' );
+		// Each insert is a fresh copy with new ids (#826); the ones it reports are the ones rendered.
+		$this->assertSame( array( $first['inserted_ids'][0], $second['inserted_ids'][0] ), $GLOBALS['mcpwp_test_rendered_root_ids'], 'The rebuilt HTML tree contains both inserted roots in order.' );
 
 		$stored = json_decode( $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'], true );
 		$this->assertCount( 2, $stored );
@@ -210,7 +211,7 @@ final class ElementorPartRepeatRenderTest extends TestCase {
 		$this->assertTrue( $second['last_operation']['debug']['html_cache_rebuilt'] );
 		$this->assertFalse( $second['last_operation']['debug']['html_rebuild_corrupted_data'] ?? false );
 		$this->assertTrue( $second['last_operation']['render_verified'] );
-		$this->assertSame( array( '41c3ee18', 'hnext0sec' ), $GLOBALS['mcpwp_test_rendered_root_ids'] );
+		$this->assertSame( array( $first['inserted_ids'][0], $second['inserted_ids'][0] ), $GLOBALS['mcpwp_test_rendered_root_ids'] );
 
 		$stored = json_decode( $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'], true );
 		$this->assertSame( array(), $stored[1]['elements'][0]['elements'][0]['elements'] );

@@ -398,7 +398,7 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 
 		$pro_tools[] = $this->define_tool(
 			'wp_apply_elementor_part',
-			'Apply a reusable Elementor part to a page. Use mode=\"insert\" (default) to append/insert the part into an existing page without touching other top-level sections, or mode=\"replace\" to DESTRUCTIVELY replace all existing page content with the part.',
+			'Apply a reusable Elementor part to a page. mode=\"insert\" (default) inserts a fresh copy of the part without touching other sections: every element id in the copy is a new 7-character id that no element on the page already has, references inside the part (Taxonomy Filter, Off-canvas) follow the new ids, and the response lists inserted_ids and id_map (part id -> saved id). Applying the same part again inserts another copy; there is no implicit de-duplication — to make a retried call safe, send it with params._meta.request_id, which replays the first result. Settings inside the part that still name an old id (custom_css, links) are reported in warnings and possible_references, not rewritten. mode=\"replace\" DESTRUCTIVELY replaces all existing page content with the part as stored.',
 			array(
 				'id'      => array(
 					'type'        => 'number',
@@ -417,7 +417,7 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 				),
 				'position' => array(
 					'type'        => 'string',
-					'description' => 'For mode=insert: start, end, before:{section_id}, after:{section_id}',
+					'description' => 'For mode=insert: start, end, before:{section_id}, after:{section_id} (a top-level element of the page). The whole part is inserted in one write; a position that does not exist is refused and the page is left as it was.',
 					'default'     => 'end',
 				),
 			)

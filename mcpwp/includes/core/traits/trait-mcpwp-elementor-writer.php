@@ -2496,6 +2496,145 @@ trait Mcpwp_Elementor_Writer_Trait {
 	}
 
 	/**
+	 * Insert several top-level elements at one position, in one write (#826).
+	 *
+	 * What wp_apply_elementor_part inserts through: all of a part's sections
+	 * land together or not at all. Inserting them one add_section() at a time
+	 * saved the first before the second could be refused.
+	 *
+	 * The response only claims what the save verified: when the stored section
+	 * count is not the count before plus the elements inserted, it is an error,
+	 * not a success with an unchanged page.
+	 *
+	 * @param int    $page_id  Page/post ID.
+	 * @param array  $elements Elements to insert, in order; each needs elType.
+	 * @param string $position 'start', 'end', 'before:{id}' or 'after:{id}' — a top-level element.
+	 * @param array  $options  Write options (`convert`).
+	 * @return array|WP_Error
+	 */
+	public function insert_elements( $page_id, array $elements, $position = 'end', array $options = array() ) {
+		$post = get_post( $page_id );
+		if ( ! $post ) {
+			return new WP_Error( 'invalid_page', 'Page not found.', array( 'status' => 404 ) );
+		}
+
+		// In whatever form it is stored (#845); data that cannot be a tree is
+		// refused rather than replaced by the inserted elements.
+		$stored = Mcpwp_Elementor_Stored_Tree::of_post( $page_id );
+		if ( Mcpwp_Elementor_Stored_Tree::is_unusable( $stored ) ) {
+			return Mcpwp_Elementor_Stored_Tree::refusal( $stored );
+		}
+		$tree = is_array( $stored['elements'] ) ? $stored['elements'] : array();
+
+		$elements = array_values( $elements );
+		if ( empty( $elements ) ) {
+			return new WP_Error( 'no_elements', 'There are no elements to insert. Nothing was written.', array( 'status' => 400 ) );
+		}
+
+		foreach ( $elements as $i => $element ) {
+			if ( ! is_array( $element ) || empty( $element['elType'] ) ) {
+				return new WP_Error(
+					'invalid_element',
+					sprintf( 'Element %d to insert is not an object with elType. Nothing was written.', $i ),
+					array(
+						'status'        => 400,
+						'element_index' => $i,
+					)
+				);
+			}
+			if ( empty( $element['id'] ) ) {
+				$elements[ $i ]['id'] = $this->generate_element_id();
+			}
+		}
+
+		$position        = is_string( $position ) && '' !== $position ? $position : 'end';
+		$sections_before = count( $tree );
+
+		if ( 'start' === $position ) {
+			$at = 0;
+		} elseif ( 'end' === $position ) {
+			$at = $sections_before;
+		} elseif ( preg_match( '/^(before|after):(.+)$/', $position, $m ) ) {
+			$at = null;
+			foreach ( $tree as $idx => $el ) {
+				if ( is_array( $el ) && isset( $el['id'] ) && (string) $el['id'] === $m[2] ) {
+					$at = ( 'after' === $m[1] ) ? $idx + 1 : $idx;
+					break;
+				}
+			}
+			if ( null === $at ) {
+				return new WP_Error( 'ref_not_found', "Reference element '{$m[2]}' not found in top-level sections. Nothing was written.", array( 'status' => 404 ) );
+			}
+		} else {
+			return new WP_Error( 'invalid_position', "Invalid position '{$position}'. Use: start, end, before:{id}, after:{id}. Nothing was written.", array( 'status' => 400 ) );
+		}
+
+		array_splice( $tree, $at, 0, $elements );
+
+		$debug = $this->save_elements_to_page( $page_id, $tree, $this->conversion_options( $options ) );
+		if ( is_wp_error( $debug ) ) {
+			return $debug;
+		}
+
+		$sections_after = isset( $debug['sections_saved'] ) ? (int) $debug['sections_saved'] : null;
+		if ( empty( $debug['meta_verified'] ) || $sections_after !== $sections_before + count( $elements ) ) {
+			return new WP_Error(
+				'insert_not_verified',
+				sprintf(
+					'The page had %1$d top-level sections and %2$d were inserted, but %3$s were read back after the write, so the insert cannot be reported as done.',
+					$sections_before,
+					count( $elements ),
+					null === $sections_after ? 'none' : (string) $sections_after
+				),
+				array(
+					'status'          => 500,
+					'sections_before' => $sections_before,
+					'sections_after'  => $sections_after,
+					'debug'           => $debug,
+				)
+			);
+		}
+
+		// The ids the inserted elements were saved with, read by position from
+		// the tree this save wrote.
+		$saved        = $this->last_saved_elements;
+		$inserted_ids = array();
+		$verified     = true;
+		foreach ( $elements as $i => $element ) {
+			if ( is_array( $saved ) && isset( $saved[ $at + $i ]['id'] ) ) {
+				$inserted_ids[] = (string) $saved[ $at + $i ]['id'];
+			} else {
+				$inserted_ids[] = null;
+				$verified       = false;
+			}
+		}
+
+		$all_warnings = array_merge(
+			isset( $debug['validation_warnings'] ) ? $debug['validation_warnings'] : array(),
+			isset( $debug['validation_fixes'] ) ? $debug['validation_fixes'] : array()
+		);
+
+		$result = array(
+			'success'         => true,
+			'page_id'         => (int) $page_id,
+			'position'        => $position,
+			'inserted_ids'    => $inserted_ids,
+			'sections_before' => $sections_before,
+			'sections_after'  => $sections_after,
+			'section_count'   => count( $tree ),
+			'debug'           => $debug,
+		);
+		if ( ! $verified ) {
+			$result['inserted_ids_verified'] = false;
+		}
+		if ( ! empty( $all_warnings ) ) {
+			$result['warnings'] = $all_warnings;
+		}
+
+		return $this->decorate_render_status( $result, $debug );
+	}
+
+	/**
 	 * Remove a section/container/widget by element ID.
 	 *
 	 * Searches top-level first, then recursively in nested elements.
