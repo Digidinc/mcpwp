@@ -11,6 +11,7 @@
 - [Authentication](#authentication)
 - [Error Handling](#error-handling)
 - [Rate Limiting](#rate-limiting)
+- [Destructive Operations](#destructive-operations)
 - [Endpoints](#endpoints)
   - [Site Info](#site-info)
   - [Posts](#posts)
@@ -205,6 +206,20 @@ curl "https://your-site.com/wp-json/mcpwp/v1/mcp?api_key=mcpwp_your_api_key_here
 | `invalid_param` | 400 | Invalid parameter value |
 | `missing_required` | 400 | Required parameter missing |
 | `permission_denied` | 403 | Insufficient permissions |
+| `rate_limit_exceeded` | 429 | Over the rate-limit budget; nothing ran. See [Rate Limiting](#rate-limiting) |
+| `batch_exceeds_limit` | 413 | The call is heavier than the whole window; split it |
+| `forbidden_option` | 403 | The option policy refused the key; `data.rule` names the rule |
+| `invalid_option_name` | 400 | Option names are 1–191 characters of letters, digits, `_ - . :` |
+| `secret_write_refused` | 409 | The write would set or overwrite a secret; resend with `allow_secrets: true` if intended |
+| `active_markup_requires_admin` | 403 | The value carries script, an event handler or a `javascript:` URL; needs an admin-scoped key |
+| `mask_in_write` | 409 | The value contains `***` from a read; send the real value or omit the field |
+| `option_type_mismatch` | 409 | A plain string would replace a stored array or object; send JSON or pass `force_type_change` |
+| `read_failed` | 500 | A plugin hook threw while reading; nothing is reported as empty |
+| `forbidden_meta_key` | 403 | The meta key is internal or credential-shaped and cannot be read |
+| `invalid_meta_key` | 400 | The meta key has characters outside `[A-Za-z0-9_-.:]`; nothing was written |
+| `use_elementor_endpoint` | 400 | Elementor meta is written through the Elementor tools |
+| `invalid_target` | 400 | A destructive operation named a target it cannot act on; nothing was queued |
+| `destructive_id_mismatch` | 409 | The route id and the body id disagree; nothing was queued |
 
 ---
 
@@ -302,6 +317,49 @@ Errors: `-32602` (invalid id, or the id was used with different arguments), `-32
 ### IP Whitelisting
 
 Configure trusted IPs in WordPress settings to bypass rate limiting
+
+---
+
+## Destructive Operations
+
+Since 3.11.0, an operation with no undo does not run directly. It becomes an approval request, and the call returns `202 Accepted` with nothing changed:
+
+```json
+{
+  "approval_required": true,
+  "approval_id": "<id>",
+  "status": "pending",
+  "operation": "delete_post",
+  "message": "delete_post is a destructive operation and this site requires approval for it. Nothing was changed. ...",
+  "hint": "Approval is the default for operations with no undo ..."
+}
+```
+
+**Gated operations:** `delete_page`, `delete_post`, `delete_content`, `delete_media`, `delete_product`, `delete_elementor_template`, `delete_widget`, `delete_course_category`, `delete_all_drafts`, and `delete_user` (REST only).
+
+**When a post-type delete counts as permanent**, and is therefore gated:
+
+| Case | Gated |
+|------|-------|
+| `force=true` | Yes |
+| The post is already in the trash | Yes |
+| Media, unless the site defines `MEDIA_TRASH` | Yes |
+| Any type other than post, page or product (templates, blocks, custom types) | Yes |
+| Post, page or product when `EMPTY_TRASH_DAYS` is `0` | Yes |
+| Post, page or product moved to the trash | No, runs immediately |
+
+Widgets, course categories and users have no trash, so deleting them is always gated. Purging all drafts follows the post rule: gated with `force=true` or when `EMPTY_TRASH_DAYS` is `0`, otherwise the drafts are trashed immediately.
+
+**Approving.** A reviewer other than the requester approves (`wp_approve_request`, `POST /approvals/{id}/approve`) and applies (`wp_apply_approval`, `POST /approvals/{id}/apply`). A WordPress administrator can do both from the Control Room. The target is fingerprinted when the request is made. If it changed before apply — title, status or modified date of a post, the set of drafts, a term, widget or user — apply is refused with `409` and the response shows what was reviewed next to what is there now.
+
+**Refused before queueing:**
+
+- A caller that could not perform the delete itself is refused, not queued.
+- `destructive_id_mismatch` (`409`) when the route id and the body id disagree.
+- `invalid_target` (`400`) when the target cannot be identified.
+- A requester may hold 20 pending requests; API keys together may hold 100.
+
+**Exemptions** are set by an administrator in wp-admin only: the site-wide switch in MCPWP Settings, or `allow_destructive` on a single API key when it is created there. An `allow_destructive` sent through the API is ignored and reported under `ignored`.
 
 ---
 
@@ -427,9 +485,16 @@ POST /posts
   "title": "My New Post",
   "content": "<p>This is the post content.</p>",
   "status": "publish",
-  "excerpt": "A brief summary"
+  "excerpt": "A brief summary",
+  "terms": { "genre": ["fiction", 12] },
+  "meta": { "subtitle": "A short line under the title" }
 }
 ```
+
+`terms` and `meta` are accepted on create and update of posts, pages and custom post types.
+
+- **`terms`** is `{taxonomy: [ids, slugs or names]}` and replaces that taxonomy's current set. An integer is an id; a string is a slug or a name, even when it is all digits. An unknown taxonomy or term is refused before anything is written. Use `categories` and `tags` for the built-in taxonomies; naming one twice is refused.
+- **`meta`** is `{key: value}`. Registered meta runs through its registered sanitize callback; unregistered strings are reduced to post-safe HTML. Keys with a leading underscore, `_elementor_*`, `mcpwp_*` and secret-shaped keys (password, token, secret, credential, auth) are refused here. Write underscore keys through [Set Post Meta](#set-post-meta).
 
 **Response:** Returns the created post object with `201 Created` status.
 
@@ -465,6 +530,8 @@ DELETE /posts/{id}
 | Name | Type | Default | Description |
 |------|------|---------|-------------|
 | `force` | boolean | false | Permanently delete (bypass trash) |
+
+> A delete with no undo is queued for approval by default. See [Destructive Operations](#destructive-operations).
 
 ---
 
@@ -522,6 +589,8 @@ DELETE /pages/{id}
 |------|------|---------|-------------|
 | `force` | boolean | false | Permanently delete (bypass trash) |
 
+> A delete with no undo is queued for approval by default. See [Destructive Operations](#destructive-operations).
+
 #### List Page Templates
 
 ```http
@@ -549,26 +618,23 @@ GET /templates/page
 
 ```http
 GET /post-meta/{id}
+GET /post-meta/{id}?key=subtitle
 ```
 
-Returns all public meta fields for a post or page. Blocked keys (e.g. `_edit_lock`, `_wp_old_slug`, internal Elementor keys) are excluded for safety.
+Returns a post's meta, or one key. Meta on a draft, pending or private post needs write scope; anyone else gets `404`.
 
-**Parameters:**
-
-| Name | Type | Description |
-|------|------|-------------|
-| `id` | integer | Post or page ID |
+Some keys are never returned: `_wp_*`, `_edit_lock`, `_edit_last`, `_thumbnail_id`, `_elementor_*`, transients, menu-item internals, and keys named like a credential — password, secret, token, credential, auth, webhook URL, API signature, serial, PIN or license. Asking for one by name returns `403 forbidden_meta_key`. A value shaped like a credential is masked whatever its key is called.
 
 **Response:**
 
 ```json
-{
-  "post_id": 123,
-  "meta": {
-    "custom_field": "value",
-    "another_field": "value2"
-  }
-}
+{ "id": 123, "meta": { "subtitle": "value", "rating": "4" } }
+```
+
+With `key`:
+
+```json
+{ "id": 123, "key": "subtitle", "value": "value" }
 ```
 
 #### Set Post Meta
@@ -577,33 +643,27 @@ Returns all public meta fields for a post or page. Blocked keys (e.g. `_edit_loc
 POST /post-meta/{id}
 ```
 
-Set one or more meta fields on a post or page. Blocked keys are rejected with an error.
+Writes one key. A JSON object or array sent as a string is stored as a structure. A `null` value deletes the key.
 
 **Body:**
 
 ```json
-{
-  "meta": {
-    "custom_field": "new value",
-    "another_field": "new value2"
-  }
-}
+{ "key": "subtitle", "value": "A short line under the title" }
 ```
 
-**Response:**
+**Response:** the value reported is the one WordPress stored, read back after the write.
 
 ```json
-{
-  "success": true,
-  "post_id": 123,
-  "updated": ["custom_field", "another_field"],
-  "blocked": []
-}
+{ "id": 123, "key": "subtitle", "value": "A short line under the title", "updated": true, "deleted": false }
 ```
 
-**Blocked Keys:**
+**Rules:**
 
-Internal WordPress and plugin keys are blocked to prevent accidental corruption. These include `_edit_lock`, `_edit_last`, `_wp_old_slug`, `_encloseme`, and internal Elementor meta keys. Attempting to set a blocked key returns an error listing the blocked key names.
+- A key with characters outside `[A-Za-z0-9_-.:]` is refused with `400 invalid_meta_key`, never rewritten onto another key.
+- Leading-underscore keys are accepted on this route. `_thumbnail_id` must be a media attachment id.
+- `_elementor_*` keys are refused with `400 use_elementor_endpoint`; use the Elementor tools.
+- Secret-shaped keys are refused before anything is written.
+- Registered meta runs through its registered sanitize callback; unregistered strings are reduced to post-safe HTML.
 
 ---
 
@@ -714,12 +774,12 @@ Upload multiple images in a single request (max 20).
 DELETE /media/{id}
 ```
 
-Delete a media attachment (move to trash or permanently delete).
+Delete a media attachment. WordPress trashes media only when the site defines `MEDIA_TRASH`; otherwise every media delete is permanent and is queued for approval by default. See [Destructive Operations](#destructive-operations).
 
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
 | `id` | integer | *(required)* | Attachment ID |
-| `force` | boolean | `false` | `true` = permanent delete, `false` = move to trash |
+| `force` | boolean | `false` | `true` = permanent delete. `false` = move to trash, only when `MEDIA_TRASH` is defined |
 
 **Example:**
 
@@ -1488,6 +1548,8 @@ DELETE /users/{id}
 |------|------|-------------|
 | `reassign` | integer | User ID to reassign posts to |
 
+> A delete with no undo is queued for approval by default. See [Destructive Operations](#destructive-operations).
+
 #### Get User Stats
 
 ```http
@@ -1719,32 +1781,22 @@ PUT /options
 #### Get Single Option
 
 ```http
-GET /option
+GET /option?key=blogname
 ```
 
-Retrieve a single WordPress option by key. Only whitelisted keys are allowed.
+One policy decides which options an API caller may read or write, and what is masked on the way out.
 
-**Parameters:**
-
-| Name | Type | Description |
-|------|------|-------------|
-| `key` | string | Option name (must be whitelisted) |
-
-**Example:**
-
-```bash
-curl -H "X-API-Key: mcpwp_xxx" \
-  "https://example.com/wp-json/mcpwp/v1/option?key=blogname"
-```
+- **Reachable:** WordPress core settings, the settings of recognised plugins, and these MCPWP keys: `mcpwp_site_context`, `mcpwp_site_context_updated`, `mcpwp_design_references`, `mcpwp_site_profile`, `mcpwp_wc_product_archetypes`, `mcpwp_action_log_retention_days`.
+- **Never reachable**, for any scope: salts and keys, user roles, active plugins, cron, transients, sessions, private and encryption keys, and MCPWP's own state and credentials.
+- **Masked:** a value under a secret-shaped name at any depth, or shaped like a credential, reads back as `***`. `redacted` lists the paths. An option stored as a JSON or serialised string is decoded, masked and reported with `decoded_from`.
 
 **Response:**
 
 ```json
-{
-  "key": "blogname",
-  "value": "My Website"
-}
+{ "key": "blogname", "value": "My Website", "redacted": [], "rule": "core_key" }
 ```
+
+A refusal is `403 forbidden_option` with `data.rule` and `data.hint`. A malformed name is `400 invalid_option_name`.
 
 #### Update Single Option
 
@@ -1752,28 +1804,42 @@ curl -H "X-API-Key: mcpwp_xxx" \
 POST /option
 ```
 
-Update a single WordPress option. Only whitelisted keys are allowed.
-
 **Body:**
 
 ```json
-{
-  "key": "blogname",
-  "value": "New Site Title"
-}
+{ "key": "blogname", "value": "New Site Title" }
 ```
 
-**Response:**
+| Name | Type | Description |
+|------|------|-------------|
+| `key` | string | Option name |
+| `value` | any | New value |
+| `allow_secrets` | boolean | Required to set or overwrite a secret-shaped field |
+| `force_type_change` | boolean | Required to overwrite a stored array or object with a plain string that is not JSON |
+
+**Response:** reports what WordPress stored, not what was sent.
 
 ```json
 {
-  "success": true,
   "key": "blogname",
-  "value": "New Site Title"
+  "value": "New Site Title",
+  "old_value": "My Website",
+  "redacted": [],
+  "preserved": [],
+  "warnings": [],
+  "updated": true,
+  "rule": "core_key"
 }
 ```
 
-**Whitelisted Keys:** Only safe, non-sensitive options are allowed. These include site identity options (`blogname`, `blogdescription`), reading settings (`show_on_front`, `page_on_front`, `page_for_posts`, `posts_per_page`), site context keys (`mcpwp_site_context`, `mcpwp_site_context_updated`), and other general settings. Attempting to read or write a non-whitelisted key returns a `permission_denied` error.
+**Rules:**
+
+- Omit a secret field to keep what is stored; `preserved` lists the fields kept. A value containing `***` anywhere is refused with `409 mask_in_write`, because it is a redaction marker from a read, not data.
+- Setting or overwriting a secret-shaped field without `allow_secrets: true` is refused with `409 secret_write_refused` and `data.secret_paths`. So is `force_type_change` over a stored value that holds secrets.
+- A plain string over a stored array or object is decoded when it is JSON, and otherwise refused with `409 option_type_mismatch` unless `force_type_change` is set.
+- `widget_*`, `sidebars_*` and `auto_update_*` options are not writable here. Use the widget tools.
+- A key without admin scope cannot store script, event handlers, `javascript:` URLs or embedded frames: `403 active_markup_requires_admin`.
+- `warnings` says when WordPress altered the value on store, or when a plugin hook threw after the write landed.
 
 ---
 

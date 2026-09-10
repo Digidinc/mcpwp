@@ -73,6 +73,14 @@ Issues in WordPress, Elementor, and hosting environments that MCPWP works around
 - **Impact:** Tools need to detect which plugin is active and use correct keys
 - **Workaround:** MCPWP's `wp_get_seo` / `wp_set_seo` auto-detect the active SEO plugin and normalize keys
 
+## Freemius
+
+### Premium update fails with "Download failed. Forbidden"
+- **Behavior:** Clicking Update on a premium site fails with `Download failed. Forbidden` while the release is published and other sites update fine.
+- **Cause:** WordPress stores the Freemius package URL when it checks for updates. The URL is signed with a timestamp, so it goes stale if the update runs long after the check, or if the server clock is wrong.
+- **Workaround:** Dashboard, Updates, **Check again**, then update straight away. If it still fails, compare the server's `date -u` with real UTC, and check that the host allows outbound requests to `api.freemius.com` and `s3-us-west-2.amazonaws.com`. Last resort: download the ZIP from the Freemius customer dashboard and upload it under Plugins, Add New.
+- **Ruling out the release first:** with the developer token, check the tag is `released`, the license is not expired or cancelled, and `GET /v1/products/{product}/installs/{install}/updates/{tag}.zip?is_premium=true` redirects to a ZIP. Follow that redirect **without** the Authorization header; `curl -L` forwards it to S3, which answers `SignatureDoesNotMatch`, and that 403 is a test artefact, not the customer's problem.
+
 ## Contributing
 
 Found a platform bug we should work around? [File an issue](https://github.com/Mumega-com/mcp-for-wp/issues/new?template=bug_report.md) with the label `platform-bug`.

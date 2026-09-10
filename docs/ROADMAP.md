@@ -1,6 +1,7 @@
 # MCPWP Roadmap — near term
 
-Written 2026-09-05, the day 3.10.4 shipped. Covers **3.10.x → 3.11 → 4.0**.
+Written 2026-09-05, the day 3.10.4 shipped. Updated 2026-09-10, the day 3.11.0 shipped.
+Covers **3.10.x → 3.11 → 4.0**.
 
 The long-form 4.0 architecture plan lives in [ROADMAP-4.0.md](ROADMAP-4.0.md) and is
 still the authority on workstreams A–F and T. This document is the shorter question:
@@ -10,8 +11,21 @@ what ships next, in which version, and what has to be true before 4.0 is cut.
 
 ## Where we are
 
-**3.10.4** (2026-09-05) is live on the canonical and legacy channels and published to
-Freemius. It carries three things:
+**3.11.0** (2026-09-10) is live on `updates.mcpwp.net`, the legacy `mumega.com` routes and
+Freemius; the release job verified both channels. It is the first release of the
+**Truth & Reliability** milestone: batch-weighted rate limits, idempotent tool calls, an
+option-access policy with secret-preserving writes, terms and meta on post writes, and
+approval by default for deletes with no undo. Suite: 1502 tests.
+
+What remains of 3.11 is planned in [ROADMAP-3.11.md](ROADMAP-3.11.md) as three releases:
+**3.11.1** security and debt, **3.12** Elementor write contract, **3.13** response
+contract and data model.
+
+The history below is kept because the lessons still apply.
+
+### 3.10.4 (2026-09-05)
+
+Live on the canonical and legacy channels and published to Freemius. It carried three things:
 
 | | |
 |---|---|
@@ -20,10 +34,6 @@ Freemius. It carries three things:
 | Kit CSS byte-for-byte integrity | #761 |
 
 930 tests, 4852 assertions, green on PHP 8.3 and 8.4, production files parse on 7.4.
-
-**3.10.5** (2026-09-05) followed with the backlog items listed below. `main` has since
-moved past it — see 3.10.6, in flight. As of 2026-09-06 the suite stands at 990 tests
-and 5022 assertions, green in declaration order *and* under `--order-by=random`.
 
 ---
 
@@ -76,9 +86,9 @@ axes will keep producing confident false negatives.
 
 ---
 
-## 3.10.6 — in flight
+## 3.10.6 — shipped 2026-09-06
 
-Everything below landed on `main` on 2026-09-06 and is waiting on the release PR.
+Everything below landed on `main` on 2026-09-06. 3.10.7 and 3.10.8 followed within two days.
 
 | | |
 |---|---|
@@ -88,7 +98,7 @@ Everything below landed on `main` on 2026-09-06 and is waiting on the release PR
 | `css_id` → `_element_id` normalised at every `_elementor_data` write, not just the validated ones | #737 → #774 |
 | Internal-link issues name the stored copy they came from | #728 → #775 |
 
-**Still open on the branch:** #772, which stops Elementor rewriting the tree it is
+**Merged in 3.10.6 after adversarial review:** #772, which stops Elementor rewriting the tree it is
 asked to render (the remaining half of #769). It grants a scoped `unfiltered_html`
 and suspends Elementor's content-sanitizer for our own `Document::save()` calls, so
 it is an adversarial-gate surface and does not merge on CI alone.
@@ -126,12 +136,15 @@ Backlog cleanup, no new surface:
 - **#756** Custom-tool dispatch ignores placeholder substitution when `rest_path` is
   set, so every such tool is silently broken with a misleading `rest_no_route`.
 
-## 3.11 — proposed
+## 3.11 — as first proposed
+
+**Superseded by [ROADMAP-3.11.md](ROADMAP-3.11.md)**, which took this list plus the September
+dogfood audit. Status of each item is marked.
 
 Theme: **make the failure modes above structurally impossible, and finish the debt that
 3.10.x deliberately deferred.**
 
-1. **Fail-closed audit (#752 F6, F9).** The relay counters are still a non-atomic
+1. **Fail-closed audit (#752 F6, F9).** *Scheduled for 3.11.1.* The relay counters are still a non-atomic
    read-modify-write across three ceilings, and one rate-counted request can still drive
    ~12,500 writes through nested fan-out. F6 needs a storage decision (`wp_cache_incr`
    does not compose cleanly with the transient API); F9 needs a spend bound, not a
@@ -148,7 +161,8 @@ Theme: **make the failure modes above structurally impossible, and finish the de
 4. **Environment parity for the local rig.** PHP 8.4 and an Elementor install are now
    available locally; make that the default test target rather than an ad-hoc container,
    and add a non-admin request path to the harness.
-5. **Release-verification honesty.** `verify_freemius_channel.sh` cannot run without a
+5. ~~**Release-verification honesty.**~~ **Done.** The release job now fails unless
+   `verify_freemius_channel.sh` confirms Freemius serves the new version. Originally: `verify_freemius_channel.sh` cannot run without a
    token and correctly exits 1 — but the release currently completes without it. Wire
    the token into the release environment so all three channels are *verified*, not two
    verified and one asserted by a workflow's own exit code.
