@@ -193,6 +193,21 @@ final class FigmaProGateTest extends TestCase
         $this->assertTrue($status['pro_required'], 'and, separately, as needing Pro');
     }
 
+    /**
+     * Review r2 M32: the HTTP chokepoint refuses on its own, so a future
+     * method that forgets its own check still cannot reach Figma on Free.
+     */
+    public function test_the_request_chokepoint_refuses_on_free_for_any_caller(): void
+    {
+        $this->configure(array('personal_access_token' => 'figd_token', 'default_file_key' => 'FILE123'));
+
+        $request = new ReflectionMethod(Mcpwp_Figma::class, 'request');
+        $request->setAccessible(true);
+
+        $this->assertProRequired($request->invoke(new Mcpwp_Figma(), '/files/FILE123/styles'), 'request()');
+        $this->assertCount(0, $this->http, 'no Figma request on Free');
+    }
+
     public function test_pro_keeps_the_scheduled_sync_and_figma_access(): void
     {
         $this->setTier(true);
