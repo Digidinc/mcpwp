@@ -276,6 +276,7 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 			'alerts_auth_threshold'   => 'int:1:10000',
 			'github_token'            => 'secret',
 			'github_repo'             => 'text',
+			'option_allowlist'        => 'allowlist',
 		);
 
 		foreach ( $allowed as $key => $rule ) {
@@ -287,6 +288,32 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 
 			if ( 'bool' === $rule ) {
 				$current[ $key ] = (bool) $value;
+			} elseif ( 'allowlist' === $rule ) {
+				// Exact keys or "prefix_*"; a blocked key cannot be allowlisted
+				// and is reported by name instead of dropped.
+				$entries = is_array( $value ) ? $value : array();
+				$clean   = array();
+				$refused = array();
+				foreach ( $entries as $entry ) {
+					$ok = Mcpwp_Option_Access::sanitize_allowlist_entry( $entry );
+					if ( '' === $ok ) {
+						$refused[] = is_scalar( $entry ) ? (string) $entry : gettype( $entry );
+						continue;
+					}
+					$clean[] = $ok;
+				}
+				if ( ! empty( $refused ) ) {
+					return $this->error_response(
+						'invalid_allowlist_entry',
+						sprintf(
+							/* translators: %s: entries */
+							__( 'These allowlist entries are not usable: %s. Entries are exact option names or "prefix_*"; credential, entitlement and updater-control keys cannot be allowlisted.', 'mcpwp' ),
+							implode( ', ', $refused )
+						),
+						400
+					);
+				}
+				$current[ $key ] = array_values( array_unique( array_slice( $clean, 0, 200 ) ) );
 			} elseif ( 'text' === $rule ) {
 				$current[ $key ] = sanitize_text_field( (string) $value );
 			} elseif ( 'key' === $rule ) {
@@ -444,23 +471,45 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 	public function get_option_handler( $request ) {
 		$this->log_activity( 'get_option', $request );
 
-		$key = sanitize_key( (string) $request->get_param( 'key' ) );
+		$key      = Mcpwp_Option_Access::sanitize_option_name( $request->get_param( 'key' ) );
+		$decision = Mcpwp_Option_Access::decide( $key );
 
-		if ( ! $this->is_option_allowed( $key ) ) {
-			return $this->error_response(
-				'forbidden_option',
-				/* translators: %s: option key */
-				sprintf( __( 'Option "%s" is not accessible via API. Allowed: core WP options and prefixes: elementor_*, wpseo_*, rank_math_*, astra_*, theme_mods_*, widget_*, woocommerce_*, mcpwp_*. Sensitive keys (passwords, tokens, secrets) are always blocked.', 'mcpwp' ), $key ),
-				403
-			);
+		if ( ! $decision['allowed'] ) {
+			return $this->forbidden_option( $key, $decision );
 		}
 
-		$value = get_option( $key );
+		$masked = Mcpwp_Option_Access::redact( $key, get_option( $key ) );
 
 		return $this->success_response(
 			array(
-				'key'   => $key,
-				'value' => $value,
+				'key'      => $key,
+				'value'    => $masked['value'],
+				'redacted' => $masked['redacted'],
+				'rule'     => $decision['rule'],
+			)
+		);
+	}
+
+	/**
+	 * A refusal that names the rule that refused it (#800).
+	 *
+	 * @param string $key      Option name.
+	 * @param array  $decision From Mcpwp_Option_Access::decide().
+	 * @return WP_Error
+	 */
+	private function forbidden_option( $key, array $decision ) {
+		return new WP_Error(
+			'forbidden_option',
+			sprintf(
+				/* translators: 1: option key 2: the rule */
+				__( 'Option "%1$s" is not accessible via the option API (rule: %2$s).', 'mcpwp' ),
+				$key,
+				$decision['rule']
+			),
+			array(
+				'status' => 403,
+				'rule'   => $decision['rule'],
+				'hint'   => isset( $decision['hint'] ) ? $decision['hint'] : '',
 			)
 		);
 	}
@@ -468,16 +517,12 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 	public function update_option_handler( $request ) {
 		$this->log_activity( 'update_option', $request );
 
-		$key   = sanitize_key( (string) $request->get_param( 'key' ) );
-		$value = $request->get_param( 'value' );
+		$key      = Mcpwp_Option_Access::sanitize_option_name( $request->get_param( 'key' ) );
+		$value    = $request->get_param( 'value' );
+		$decision = Mcpwp_Option_Access::decide( $key );
 
-		if ( ! $this->is_option_allowed( $key ) ) {
-			return $this->error_response(
-				'forbidden_option',
-				/* translators: %s: option key */
-				sprintf( __( 'Option "%s" is not accessible via API. Allowed: core WP options and prefixes: elementor_*, wpseo_*, rank_math_*, astra_*, theme_mods_*, widget_*, woocommerce_*, mcpwp_*. Sensitive keys (passwords, tokens, secrets) are always blocked.', 'mcpwp' ), $key ),
-				403
-			);
+		if ( ! $decision['allowed'] ) {
+			return $this->forbidden_option( $key, $decision );
 		}
 
 		$old_value = get_option( $key );
@@ -535,140 +580,33 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 			}
 		}
 
+		// Writes may set a secret; reads never return one.
+		$new = Mcpwp_Option_Access::redact( $key, get_option( $key ) );
+		$old = Mcpwp_Option_Access::redact( $key, $old_value );
+
 		return $this->success_response(
 			array(
 				'key'       => $key,
-				'value'     => get_option( $key ),
-				'old_value' => $old_value,
+				'value'     => $new['value'],
+				'old_value' => $old['value'],
+				'redacted'  => array_values( array_unique( array_merge( $new['redacted'], $old['redacted'] ) ) ),
 				'updated'   => true,
+				'rule'      => $decision['rule'],
 			)
 		);
 	}
 
+	/**
+	 * Kept for callers outside this file; the policy lives in
+	 * Mcpwp_Option_Access (#800).
+	 *
+	 * @param string $key Option name.
+	 * @return bool
+	 */
 	private function is_option_allowed( $key ) {
-		// Exact match always wins.
-		if ( in_array( $key, $this->get_allowed_option_keys(), true ) ) {
-			return true;
-		}
+		$decision = Mcpwp_Option_Access::decide( $key );
 
-		// Check blocked patterns first — these override prefix matches.
-		$lower_key = strtolower( $key );
-		foreach ( $this->get_blocked_option_patterns() as $pattern ) {
-			if ( false !== strpos( $lower_key, $pattern ) ) {
-				return false;
-			}
-		}
-
-		// Check allowed prefixes.
-		foreach ( $this->get_allowed_option_prefixes() as $prefix ) {
-			if ( 0 === strpos( $key, $prefix ) ) {
-				return true;
-			}
-		}
-
-		return false;
-	}
-
-	private function get_allowed_option_keys() {
-		return array(
-			// WordPress core.
-			'blogname',
-			'blogdescription',
-			'siteurl',
-			'home',
-			'admin_email',
-			'timezone_string',
-			'date_format',
-			'time_format',
-			'WPLANG',
-			'posts_per_page',
-			'posts_per_rss',
-			'show_on_front',
-			'page_on_front',
-			'page_for_posts',
-			'blog_public',
-			'permalink_structure',
-			'default_category',
-			'default_post_format',
-			'thumbnail_size_w',
-			'thumbnail_size_h',
-			'medium_size_w',
-			'medium_size_h',
-			'large_size_w',
-			'large_size_h',
-			'site_icon',
-			// Theme settings (hyphenated keys that don't match prefix rules).
-			'astra-settings',
-			'generate_settings',
-			// MCPWP.
-			'mcpwp_site_context',
-			'mcpwp_site_context_updated',
-			// Elementor.
-			'elementor_pro_theme_builder_conditions',
-		);
-	}
-
-	private function get_allowed_option_prefixes() {
-		return array(
-			'elementor_',
-			'wpseo_',
-			'rank_math_',
-			'astra_',
-			'ocean_',
-			'theme_mods_',
-			'widget_',
-			'nav_menu_',
-			'sidebars_',
-			'mcpwp_',
-			'woocommerce_',
-			'wp_page_for_privacy_policy',
-		);
-	}
-
-	private function get_blocked_option_patterns() {
-		return array(
-			'password',
-			'secret',
-			'token',
-			'auth_key',
-			'auth_salt',
-			'logged_in_key',
-			'logged_in_salt',
-			'nonce_key',
-			'nonce_salt',
-			'secure_auth',
-			'credential',
-			'api_key',
-			'private_key',
-			'license_key',
-			'stripe_',
-			'paypal_',
-			'_session',
-			// Entitlement / bridge surfaces — must never be settable through the
-			// options API. The licensing bridge (issue #505) reads legacy spai_ originals
-			// only; block the writable mcpwp_ copies + the migration flag too,
-			// as defence in depth against entitlement forgery (Warden 3.1.0 P0).
-			'pro_license',
-			'trial_started',
-			'migrated_from',
-			// Update-control options steer the self-updater (manifest + package
-			// source). Writing mcpwp_update_info / mcpwp_version_url through the
-			// options API is a write-scope→RCE / SSRF path — block both here.
-			'update_info',
-			'version_url',
-			// Secret-bearing internal stores. No scope (including admin) should be
-			// able to read or write these through the generic /option API — the
-			// dedicated /plugin-settings and /integrations routes are the only
-			// intended surface:
-			//   mcpwp_settings      → holds oauth_client_secret_hash / github_token
-			//   mcpwp_integrations  → encrypted provider blobs
-			//   mcpwp_encryption_key→ sodium key that decrypts the blobs above
-			// Full option names used as substrings (not bare 'settings'/'integrations')
-			// to avoid over-blocking astra-settings / generate_settings / *_settings.
-			'mcpwp_settings',
-			'integrations',
-			'encryption',
-		);
+		return ! empty( $decision['allowed'] );
 	}
 
 	public function get_favicon( $request ) {

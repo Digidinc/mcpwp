@@ -218,6 +218,11 @@ class WP_REST_Request
     {
         return $this->json_params;
     }
+
+    public function get_body_params()
+    {
+        return $this->params;
+    }
 }
 
 class WP_REST_Server
@@ -2147,6 +2152,7 @@ require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-page-setti
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-slug-search.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-idempotency-claim.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-post-fields.php';
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-option-access.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-registry.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-element-keys.php';
 require_once dirname(__DIR__) . '/includes/core/traits/trait-mcpwp-elementor-reader.php';
