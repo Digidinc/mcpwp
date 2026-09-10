@@ -517,7 +517,19 @@ function add_option($name, $value = '', $deprecated = '', $autoload = 'yes')
 
 function is_serialized($data, $strict = true)
 {
-    return is_string($data) && (bool) preg_match('/^(a|O|s|i|d|b):/', $data) && ';' === substr(rtrim($data), -1) || (is_string($data) && '}' === substr(rtrim($data), -1) && (bool) preg_match('/^a:/', $data));
+    // Core: a:/O: end in '}', scalars in ';', 'N;' is null.
+    if (! is_string($data)) {
+        return false;
+    }
+    $data = trim($data);
+    if ('N;' === $data) {
+        return true;
+    }
+    if (! preg_match('/^([adObis]):/', $data, $m)) {
+        return false;
+    }
+    $last = substr($data, -1);
+    return in_array($m[1], array('a', 'O'), true) ? '}' === $last : ';' === $last;
 }
 
 function delete_option($name)

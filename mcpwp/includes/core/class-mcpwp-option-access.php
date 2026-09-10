@@ -350,7 +350,7 @@ class Mcpwp_Option_Access {
 		// ever sees plain trees. That is the one fix for the family of
 		// "correct one encoding level deep" defects (#800 round 4).
 		$forms    = array();
-		$expanded = self::expand( $tree, array(), $forms );
+		$expanded = self::expand( $tree, array(), $forms, 'native' !== $form );
 		$paths    = array();
 		$walked   = self::redact_tree( $expanded, array(), $root, $paths );
 
@@ -358,19 +358,25 @@ class Mcpwp_Option_Access {
 			$redacted[] = implode( '.', $segments );
 		}
 
-		$out['value']    = self::collapse( $walked, array(), $forms, $paths );
+		$closed = self::collapse( $walked, array(), $forms );
 		$out['redacted'] = $redacted;
 
+		// Opaque blobs are reported: "not walked" must never read as "clean".
+		$opaque = array();
+		self::collect_opaque_paths( $walked, array(), $opaque );
+		if ( ! empty( $opaque ) ) {
+			$out['unwalked'] = $opaque;
+		}
+
 		if ( 'json' === $form ) {
-			if ( ! empty( $redacted ) ) {
-				$out['value'] = wp_json_encode( $out['value'] );
-			} else {
-				$out['value'] = $value;
-			}
+			$out['value']        = empty( $redacted ) ? $value : wp_json_encode( self::root_is_object( $value ) ? (object) $closed : $closed, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE );
 			$out['decoded_from'] = 'json';
 		} elseif ( 'serialized' === $form ) {
 			// Returned as a structure, never as an unwalked blob.
+			$out['value']        = $closed;
 			$out['decoded_from'] = 'serialized';
+		} else {
+			$out['value'] = is_object( $value ) ? (object) $closed : $closed;
 		}
 
 		return $out;
@@ -400,13 +406,31 @@ class Mcpwp_Option_Access {
 				continue;
 			}
 
-			if ( is_string( $v ) && ( ( $secret && self::looks_like_secret_value( $v ) ) || self::looks_like_credential( $v ) ) ) {
+			if ( is_string( $v ) && ( ( $secret && ( self::looks_like_secret_value( $v ) || self::is_opaque_serialized( $v ) ) ) || self::looks_like_credential( $v ) ) ) {
 				$tree[ $k ] = self::MASK;
 				$redacted[] = $here;
 			}
 		}
 
 		return $tree;
+	}
+
+	/**
+	 * Paths of serialised blobs the walker refused to open.
+	 *
+	 * @param array $tree  Expanded tree.
+	 * @param array $path  Segments.
+	 * @param array $paths Collected dotted paths (by reference).
+	 */
+	private static function collect_opaque_paths( array $tree, array $path, array &$paths ) {
+		foreach ( $tree as $k => $v ) {
+			$here = array_merge( $path, array( $k ) );
+			if ( is_array( $v ) ) {
+				self::collect_opaque_paths( $v, $here, $paths );
+			} elseif ( self::is_opaque_serialized( $v ) ) {
+				$paths[] = implode( '.', $here );
+			}
+		}
 	}
 
 	/**
@@ -440,15 +464,21 @@ class Mcpwp_Option_Access {
 			return null;
 		}
 
-		$decoded = self::decode_json_tree( $value );
-		if ( null !== $decoded ) {
-			$form = 'json';
-			return $decoded;
+		$trimmed = ltrim( $value );
+		if ( '' !== $trimmed && ( '{' === $trimmed[0] || '[' === $trimmed[0] ) ) {
+			// Decoded as OBJECTS so a {} with numeric keys, or an empty {},
+			// is remembered as an object and closes as one (#800 round 5).
+			$decoded = json_decode( $value );
+			if ( is_array( $decoded ) || $decoded instanceof stdClass ) {
+				$form = 'json';
+				return $decoded;
+			}
+			return null;
 		}
 
 		if ( function_exists( 'is_serialized' ) && is_serialized( $value ) ) {
-			$unserialized = @unserialize( $value, array( 'allowed_classes' => false ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.serialize_unserialize -- classes disallowed.
-			if ( is_array( $unserialized ) ) {
+			$unserialized = @unserialize( $value, array( 'allowed_classes' => array( 'stdClass' ) ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.serialize_unserialize -- only stdClass is ever revived.
+			if ( ( is_array( $unserialized ) || $unserialized instanceof stdClass ) && ! self::has_incomplete_class( $unserialized ) ) {
 				$form = 'serialized';
 				return $unserialized;
 			}
@@ -458,12 +488,52 @@ class Mcpwp_Option_Access {
 	}
 
 	/**
+	 * A serialised string that revives a class this plugin will not
+	 * instantiate is opaque: never walked, never re-encoded.
+	 *
+	 * @param mixed $value Value.
+	 * @return bool
+	 */
+	private static function has_incomplete_class( $value ) {
+		if ( $value instanceof __PHP_Incomplete_Class ) {
+			return true;
+		}
+		if ( is_object( $value ) ) {
+			$value = (array) $value;
+		}
+		if ( is_array( $value ) ) {
+			foreach ( $value as $v ) {
+				if ( self::has_incomplete_class( $v ) ) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Whether a string is a serialised value this plugin refuses to open —
+	 * an object of a class other than stdClass. Such a blob may hold a
+	 * credential; every gate treats it as one.
+	 *
+	 * @param mixed $value Value.
+	 * @return bool
+	 */
+	public static function is_opaque_serialized( $value ) {
+		if ( ! is_string( $value ) || ! function_exists( 'is_serialized' ) || ! is_serialized( $value ) ) {
+			return false;
+		}
+		$form = null;
+		return null === self::decode_leaf( $value, $form ) && false !== strpos( $value, 'O:' );
+	}
+
+	/**
 	 * @param array  $tree Tree.
 	 * @param string $form json|serialized.
 	 * @return string
 	 */
-	private static function encode_leaf( array $tree, $form ) {
-		return 'serialized' === $form ? serialize( $tree ) : wp_json_encode( $tree ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.serialize_serialize -- the value was stored serialised; it goes back the same way.
+	private static function encode_leaf( $tree, $form ) {
+		return 'serialized' === $form ? serialize( $tree ) : wp_json_encode( $tree, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.serialize_serialize -- the value was stored serialised; it goes back the same way.
 	}
 
 	/**
@@ -476,24 +546,41 @@ class Mcpwp_Option_Access {
 	 * @param array $forms Collected by reference: json-path => {form, raw}.
 	 * @return array
 	 */
-	private static function expand( array $tree, array $path, array &$forms ) {
+	private static function expand( array $tree, array $path, array &$forms, $inside_encoded = false ) {
 		foreach ( $tree as $k => $v ) {
 			$here = array_merge( $path, array( $k ) );
 
-			if ( is_object( $v ) ) {
+			if ( $v instanceof stdClass ) {
+				// An object is remembered as one only where its shape is
+				// bytes — inside an encoded leaf or an encoded root. In a
+				// native option tree WordPress code reads arrays.
+				if ( $inside_encoded ) {
+					$forms[ wp_json_encode( $here ) ] = array( 'form' => 'object' );
+				}
 				$v = (array) $v;
+			} elseif ( is_object( $v ) ) {
+				// Not something this walker opens; left exactly as it is.
+				continue;
 			}
 
 			if ( is_array( $v ) ) {
-				$tree[ $k ] = self::expand( $v, $here, $forms );
+				$tree[ $k ] = self::expand( $v, $here, $forms, $inside_encoded );
 				continue;
 			}
 
 			$form    = null;
 			$decoded = self::decode_leaf( $v, $form );
 			if ( null !== $decoded ) {
-				$forms[ wp_json_encode( $here ) ] = array( 'form' => $form, 'raw' => $v );
-				$tree[ $k ]                       = self::expand( $decoded, $here, $forms );
+				$id = wp_json_encode( $here );
+				if ( $decoded instanceof stdClass ) {
+					$decoded = (array) $decoded;
+					$root_object = true;
+				} else {
+					$root_object = false;
+				}
+				$opened       = self::expand( $decoded, $here, $forms, true );
+				$forms[ $id ] = array( 'form' => $form, 'raw' => $v, 'tree' => $opened, 'object' => $root_object );
+				$tree[ $k ]   = $opened;
 			}
 		}
 
@@ -511,25 +598,37 @@ class Mcpwp_Option_Access {
 	 * @param array $touched Segment arrays of every leaf that was changed.
 	 * @return array|string
 	 */
-	private static function collapse( array $tree, array $path, array $forms, array $touched ) {
+	private static function collapse( array $tree, array $path, array $forms, array $touched = array() ) {
+		// What the walker saw here, before anything below is closed: this is
+		// what an untouched leaf is compared against.
+		$plain = $tree;
+
 		foreach ( $tree as $k => $v ) {
 			if ( is_array( $v ) ) {
-				$tree[ $k ] = self::collapse( $v, array_merge( $path, array( $k ) ), $forms, $touched );
+				$tree[ $k ] = self::collapse( $v, array_merge( $path, array( $k ) ), $forms );
 			}
 		}
 
-		$id = wp_json_encode( $path );
-		if ( empty( $path ) || ! isset( $forms[ $id ] ) ) {
+		$id   = wp_json_encode( $path );
+		$info = isset( $forms[ $id ] ) ? $forms[ $id ] : null;
+
+		if ( null === $info ) {
 			return $tree;
 		}
 
-		foreach ( $touched as $segments ) {
-			if ( array_slice( $segments, 0, count( $path ) ) === $path ) {
-				return self::encode_leaf( $tree, $forms[ $id ]['form'] );
-			}
+		if ( 'object' === $info['form'] ) {
+			return (object) $tree;
 		}
 
-		return $forms[ $id ]['raw'];
+		// Byte-identical when nothing under it changed; otherwise re-encoded
+		// in the form it had, as the object or list it was (#800 round 5:
+		// "touched" meant "a secret was preserved here", and every ordinary
+		// edit inside an encoded leaf was thrown away).
+		if ( $plain === $info['tree'] ) {
+			return $info['raw'];
+		}
+
+		return self::encode_leaf( ! empty( $info['object'] ) ? (object) $tree : $tree, $info['form'] );
 	}
 
 	/**
@@ -543,7 +642,7 @@ class Mcpwp_Option_Access {
 	 * @param bool  $under_secret An ancestor was secret-named.
 	 * @return mixed
 	 */
-	public static function redact_for_log( $data, array $keys, $under_secret = false ) {
+	public static function redact_for_log( $data, array $keys, $under_secret = false, $depth = 0 ) {
 		if ( is_object( $data ) ) {
 			$data = (array) $data;
 		}
@@ -552,9 +651,10 @@ class Mcpwp_Option_Access {
 			$form    = null;
 			$decoded = self::decode_leaf( $data, $form );
 			if ( null === $decoded ) {
-				return ( $under_secret && self::looks_like_secret_value( $data ) ) || self::looks_like_credential( $data ) ? '[redacted]' : $data;
+				return ( $under_secret && self::looks_like_secret_value( $data ) ) || self::looks_like_credential( $data ) || self::is_opaque_serialized( $data ) ? '[redacted]' : $data;
 			}
-			$walked = self::redact_for_log( $decoded, $keys, $under_secret );
+			$decoded = $decoded instanceof stdClass ? (array) $decoded : $decoded;
+			$walked  = self::redact_for_log( $decoded, $keys, $under_secret, $depth + 1 );
 			return $walked === $decoded ? $data : self::encode_leaf( $walked, $form );
 		}
 
@@ -566,12 +666,15 @@ class Mcpwp_Option_Access {
 		// says the value is a secret even when the value's own shape does not.
 		$value_is_secret = isset( $data['key'] ) && is_string( $data['key'] ) && self::is_secret_field( $data['key'] );
 
-		$names_an_option = isset( $data['key'] ) && is_string( $data['key'] ) && array_key_exists( 'value', $data );
+		// In the TOP row of a request, `key` is the option name — the thing
+		// an audit needs to see. Deeper down, a field called `key` is a
+		// field called key (#800 round 5, P1-1).
+		$names_an_option = 0 === $depth && isset( $data['key'] ) && is_string( $data['key'] ) && array_key_exists( 'value', $data ) && ! self::looks_like_credential( $data['key'] );
 
 		$out = array();
 		foreach ( $data as $k => $v ) {
 			if ( $value_is_secret && 'value' === $k ) {
-				$out[ $k ] = is_array( $v ) || is_object( $v ) ? self::redact_for_log( $v, $keys, true ) : '[redacted]';
+				$out[ $k ] = is_array( $v ) || is_object( $v ) ? self::redact_for_log( $v, $keys, true, $depth + 1 ) : '[redacted]';
 				continue;
 			}
 
@@ -581,8 +684,6 @@ class Mcpwp_Option_Access {
 				continue;
 			}
 
-			// In a {key, value} row the `key` is an option NAME — the thing
-			// an audit needs to see — not a secret-named field.
 			if ( $names_an_option && 'key' === $k ) {
 				$out[ $k ] = $v;
 				continue;
@@ -595,10 +696,64 @@ class Mcpwp_Option_Access {
 				continue;
 			}
 
-			$out[ $k ] = self::redact_for_log( $v, $keys, $secret );
+			$out[ $k ] = self::redact_for_log( $v, $keys, $secret, $depth + 1 );
 		}
 
 		return $out;
+	}
+
+	/**
+	 * Apply a callback to every string leaf of a value, through every
+	 * encoding level, and hand the value back in the encodings it arrived
+	 * in — byte-identical wherever the callback changed nothing. The
+	 * handler's sanitiser uses this so GET → POST is idempotent (#800
+	 * round 5, P2-3).
+	 *
+	 * @param mixed    $value    Value.
+	 * @param callable $callback string → string.
+	 * @return mixed
+	 */
+	public static function map_string_leaves( $value, $callback ) {
+		if ( is_int( $value ) || is_float( $value ) || is_bool( $value ) || null === $value ) {
+			return $value;
+		}
+
+		$form = 'native';
+		$tree = self::as_tree( $value, $form );
+
+		if ( null === $tree ) {
+			return is_string( $value ) ? call_user_func( $callback, $value ) : $value;
+		}
+
+		$forms  = array();
+		$opened = self::expand( $tree, array(), $forms, 'native' !== $form );
+		$mapped = self::map_leaves_in( $opened, $callback );
+		$closed = self::collapse( $mapped, array(), $forms );
+
+		if ( 'json' === $form ) {
+			return $mapped === $opened ? $value : wp_json_encode( self::root_is_object( $value ) ? (object) $closed : $closed, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE );
+		}
+		if ( 'serialized' === $form ) {
+			return $mapped === $opened ? $value : serialize( self::root_is_object( $value ) ? (object) $closed : $closed ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.serialize_serialize -- same form it arrived in.
+		}
+
+		return is_object( $value ) ? (object) $closed : $closed;
+	}
+
+	/**
+	 * @param array    $tree     Expanded tree.
+	 * @param callable $callback string → string.
+	 * @return array
+	 */
+	private static function map_leaves_in( array $tree, $callback ) {
+		foreach ( $tree as $k => $v ) {
+			if ( is_array( $v ) ) {
+				$tree[ $k ] = self::map_leaves_in( $v, $callback );
+			} elseif ( is_string( $v ) && ! self::is_opaque_serialized( $v ) ) {
+				$tree[ $k ] = call_user_func( $callback, $v );
+			}
+		}
+		return $tree;
 	}
 
 	/**
@@ -756,13 +911,11 @@ class Mcpwp_Option_Access {
 		// a serialised array is a leaf like any other from here on.
 		$old_forms = array();
 		$new_forms = array();
-		$old_x     = self::expand( $old_tree, array(), $old_forms );
-		$new_x     = self::expand( $new_tree, array(), $new_forms );
+		$old_x     = self::expand( $old_tree, array(), $old_forms, 'native' !== $old_form );
+		$new_x     = self::expand( $new_tree, array(), $new_forms, 'native' !== $old_form );
 
 		$old_secret_paths = array();
 		self::collect_secret_paths_including_masked( $old_x, array(), self::is_secret_field( $key ), $old_secret_paths );
-
-		$touched = array();
 
 		foreach ( $old_secret_paths as $segments ) {
 			$old_leaf = self::path_get( $old_x, $segments, $old_exists );
@@ -787,28 +940,33 @@ class Mcpwp_Option_Access {
 			// intentional clear.
 			if ( ! $exists || $is_mask || ( ! $is_replace && ! $allow_secrets ) ) {
 				$new_x       = self::path_set( $new_x, $segments, $old_leaf );
-				$touched[]   = $segments;
 				$preserved[] = implode( '.', $segments );
 			}
 		}
 
-		// Encoded leaves close in the form the STORED value gave them; a leaf
-		// only the submission had keeps the submission's form.
-		$forms = $new_forms;
-		foreach ( $old_forms as $id => $info ) {
+		// Encoded leaves close in the form the SUBMISSION gave them — the
+		// caller's bytes are the ones that must land — and a leaf only the
+		// stored value had (restored by a preserve) closes in the stored
+		// form. An untouched leaf comes back byte-identical to what was
+		// submitted, a changed one is re-encoded (#800 round 5).
+		$forms = $old_forms;
+		foreach ( $new_forms as $id => $info ) {
 			$forms[ $id ] = $info;
 		}
-		$value = self::collapse( $new_x, array(), $forms, $touched );
+		$value = self::collapse( $new_x, array(), $forms );
 
 		// The stored value keeps its own top-level form: a JSON-string option
 		// goes back as a JSON string, a serialised-string option as the
 		// serialised string get_option() handed out (WordPress serialises a
 		// serialised string a second time, so what was read as a string is
-		// written as a string).
+		// written as a string). An object root stays an object.
+		$object_root = self::root_is_object( $old ) || self::root_is_object( $new );
 		if ( 'json' === $old_form ) {
-			$value = wp_json_encode( $value );
+			$value = wp_json_encode( $object_root ? (object) $value : $value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE );
 		} elseif ( 'serialized' === $old_form ) {
-			$value = serialize( $value ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.serialize_serialize -- stored form.
+			$value = serialize( $object_root ? (object) $value : $value ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.serialize_serialize -- stored form.
+		} elseif ( is_object( $old ) ) {
+			$value = (object) $value;
 		}
 
 		return array( 'value' => $value, 'preserved' => $preserved, 'form' => $old_form );
@@ -829,28 +987,40 @@ class Mcpwp_Option_Access {
 		}
 
 		if ( is_object( $value ) ) {
-			return (array) $value;
+			return $value instanceof stdClass ? (array) $value : null;
 		}
 
 		if ( ! is_string( $value ) ) {
 			return null;
 		}
 
-		$decoded = self::decode_json_tree( $value );
-		if ( null !== $decoded ) {
-			$form = 'json';
-			return $decoded;
+		$leaf_form = null;
+		$decoded   = self::decode_leaf( $value, $leaf_form );
+		if ( null === $decoded ) {
+			return null;
 		}
 
-		if ( function_exists( 'is_serialized' ) && is_serialized( $value ) ) {
-			$unserialized = @unserialize( $value, array( 'allowed_classes' => false ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.serialize_unserialize -- classes disallowed.
-			if ( is_array( $unserialized ) ) {
-				$form = 'serialized';
-				return $unserialized;
-			}
-		}
+		$form = $leaf_form;
+		return $decoded instanceof stdClass ? (array) $decoded : $decoded;
+	}
 
-		return null;
+	/**
+	 * Whether a value's root was an object (a JSON {} or a serialised
+	 * stdClass) rather than a list — kept so it closes as one.
+	 *
+	 * @param mixed $value Value.
+	 * @return bool
+	 */
+	private static function root_is_object( $value ) {
+		if ( is_object( $value ) ) {
+			return true;
+		}
+		if ( ! is_string( $value ) ) {
+			return false;
+		}
+		$form    = null;
+		$decoded = self::decode_leaf( $value, $form );
+		return $decoded instanceof stdClass;
 	}
 
 	/**
@@ -865,7 +1035,7 @@ class Mcpwp_Option_Access {
 		$tree = self::as_tree( $value, $form );
 
 		if ( null === $tree ) {
-			return is_string( $value ) && self::MASK === trim( $value );
+			return is_string( $value ) && ( self::MASK === trim( $value ) || ( self::is_opaque_serialized( $value ) && false !== strpos( $value, '"' . self::MASK . '"' ) ) );
 		}
 
 		$forms = array();
@@ -884,7 +1054,7 @@ class Mcpwp_Option_Access {
 				}
 				continue;
 			}
-			if ( is_string( $v ) && self::MASK === trim( $v ) ) {
+			if ( is_string( $v ) && ( self::MASK === trim( $v ) || ( self::is_opaque_serialized( $v ) && false !== strpos( $v, '"' . self::MASK . '"' ) ) ) ) {
 				return true;
 			}
 		}
@@ -988,7 +1158,7 @@ class Mcpwp_Option_Access {
 			return $paths;
 		}
 
-		if ( is_string( $value ) && ( ( $root && self::looks_like_secret_value( $value ) ) || self::looks_like_credential( $value ) ) ) {
+		if ( is_string( $value ) && ( ( $root && self::looks_like_secret_value( $value ) ) || self::looks_like_credential( $value ) || self::is_opaque_serialized( $value ) ) ) {
 			$paths[] = '';
 		}
 
@@ -1011,7 +1181,7 @@ class Mcpwp_Option_Access {
 				continue;
 			}
 
-			if ( is_string( $v ) && ( ( $secret && self::looks_like_secret_value( $v ) ) || self::looks_like_credential( $v ) ) ) {
+			if ( is_string( $v ) && ( ( $secret && self::looks_like_secret_value( $v ) ) || self::looks_like_credential( $v ) || self::is_opaque_serialized( $v ) ) ) {
 				$paths[] = $here;
 			} elseif ( ( is_int( $v ) || is_float( $v ) ) && $secret ) {
 				$paths[] = $here;

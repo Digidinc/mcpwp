@@ -913,4 +913,131 @@ final class OptionAccessTest extends TestCase {
 		$this->assertSame( $raw, $value['cfg'] );
 		$this->assertSame( '***', $value['api_key'] );
 	}
+
+	// ---------------------------------------------------------------
+	// Round 6: edits inside encoded leaves land; shapes survive.
+	// ---------------------------------------------------------------
+
+	public function test_an_ordinary_edit_inside_an_encoded_leaf_is_written(): void {
+		// Round-5 P0-1: "touched" meant "a secret was preserved here", so
+		// every plain edit inside an encoded blob was thrown away with
+		// updated:true.
+		$old = array( 'blob' => wp_json_encode( array( 'colour' => 'red' ) ) );
+		$new = array( 'blob' => wp_json_encode( array( 'colour' => 'blue' ) ) );
+		$this->assertSame( '{"colour":"blue"}', Mcpwp_Option_Access::merge_preserving_secrets( 'elementor_x', $old, $new )['value']['blob'] );
+
+		// A credential rotation inside the blob, confirmed, lands.
+		$o = array( 'blob' => wp_json_encode( array( 'pass' => 'OLD_LEAKED_KEY_abc123456' ) ) );
+		$n = array( 'blob' => wp_json_encode( array( 'pass' => 'NEW_ROTATED_KEY_xyz98765' ) ) );
+		$this->assertStringContainsString( 'NEW_ROTATED_KEY_xyz98765', Mcpwp_Option_Access::merge_preserving_secrets( 'elementor_x', $o, $n, true )['value']['blob'] );
+
+		// Unconfirmed: the handler's gate refuses the rotation by name — the
+		// merge itself only folds back what is NOT a credential-shaped value.
+		update_option( 'elementor_probe', $o );
+		$refused = $this->write( 'elementor_probe', $n );
+		$this->assertSame( 'secret_write_refused', $refused->get_error_code() );
+		$this->assertSame( array( 'blob.pass' ), $refused->get_error_data()['secret_paths'] );
+		$this->assertStringContainsString( 'OLD_LEAKED_KEY_abc123456', get_option( 'elementor_probe' )['blob'] );
+
+		// Through the handler, the round-5 live repro.
+		update_option( 'elementor_probe', array( 'blob' => '{"colour":"BLUE","pass":"S3cretPassw0rdLong"}' ) );
+		$written = $this->write( 'elementor_probe', array( 'blob' => '{"colour":"GREEN","pass":"ROTATED_NEW_KEY_9876543"}' ), array( 'allow_secrets' => true ) );
+		$this->assertInstanceOf( WP_REST_Response::class, $written, is_wp_error( $written ) ? $written->get_error_message() : '' );
+		$stored = json_decode( get_option( 'elementor_probe' )['blob'], true );
+		$this->assertSame( 'GREEN', $stored['colour'] );
+		$this->assertSame( 'ROTATED_NEW_KEY_9876543', $stored['pass'] );
+		$this->assertSame( array(), $written->get_data()['preserved'] );
+
+		update_option( 'elementor_probe', array( 'blob' => '{"colour":"red","size":3}' ) );
+		$this->write( 'elementor_probe', array( 'blob' => '{"colour":"blue","size":4}' ) );
+		$this->assertSame( '{"colour":"blue","size":4}', get_option( 'elementor_probe' )['blob'], 'The submitted bytes land unchanged.' );
+	}
+
+	public function test_objects_inside_encoded_leaves_keep_their_shape(): void {
+		// Round-5 P1-2 and P2-2: a serialised stdClass came back as an array
+		// carrying an incomplete-class key; a JSON object with numeric keys
+		// came back as a list.
+		$gw       = new stdClass();
+		$gw->pin  = '12345678';
+		$gw->live = true;
+		$in       = serialize( array( 'gw' => $gw ) ); // phpcs:ignore
+
+		$out = Mcpwp_Option_Access::redact( 'elementor_probe', array( 'cfg' => $in ) );
+		$this->assertSame( array( 'cfg.gw.pin' ), $out['redacted'] );
+		$back = unserialize( $out['value']['cfg'], array( 'allowed_classes' => array( 'stdClass' ) ) ); // phpcs:ignore
+		$this->assertInstanceOf( stdClass::class, $back['gw'] );
+		$this->assertSame( '***', $back['gw']->pin );
+		$this->assertTrue( $back['gw']->live );
+		$this->assertStringNotContainsString( 'Incomplete', $out['value']['cfg'] );
+
+		$json = '{"0":{"a":1},"1":{"a":2}}';
+		$out  = Mcpwp_Option_Access::redact( 'elementor_probe', array( 'map' => $json, 'api_key' => 'sk_live_AbCdEf12345678' ) );
+		$this->assertSame( $json, $out['value']['map'], 'Untouched: byte-identical.' );
+
+		$merged = Mcpwp_Option_Access::merge_preserving_secrets( 'elementor_probe', array( 'map' => $json ), array( 'map' => '{"0":{"a":9},"1":{"a":2}}' ) );
+		$this->assertStringStartsWith( '{"0":', $merged['value']['map'], 'A changed object with numeric keys closes as an object, not a list.' );
+
+		$this->assertSame( '{}', Mcpwp_Option_Access::merge_preserving_secrets( 'elementor_probe', array( 'e' => '{"x":1}' ), array( 'e' => '{}' ) )['value']['e'] );
+		$this->assertSame( '[]', Mcpwp_Option_Access::merge_preserving_secrets( 'elementor_probe', array( 'e' => '[1]' ), array( 'e' => '[]' ) )['value']['e'] );
+	}
+
+	public function test_a_serialised_object_of_another_class_is_opaque_and_treated_as_a_secret(): void {
+		// Round-5 P2-1: an O: string of a class this plugin will not revive
+		// bypassed every gate as an unwalked blob.
+		$blob = 'O:8:"Whatever":1:{s:3:"pin";s:8:"12345678";}';
+		$this->assertTrue( Mcpwp_Option_Access::is_opaque_serialized( $blob ) );
+		$this->assertSame( array( 'cfg' ), Mcpwp_Option_Access::secret_paths_in_write( 'elementor_probe', array( 'cfg' => $blob ) ) );
+		$this->assertSame( array( '' ), Mcpwp_Option_Access::secret_paths_in_write( 'elementor_probe', $blob ) );
+		$this->assertTrue( Mcpwp_Option_Access::contains_mask( 'O:8:"Whatever":1:{s:3:"pin";s:3:"***";}' ) );
+
+		$out = Mcpwp_Option_Access::redact( 'elementor_probe', array( 'cfg' => $blob, 'label' => 'x' ) );
+		$this->assertSame( array( 'cfg' ), $out['unwalked'], 'Not walked is reported, never mistaken for clean.' );
+		$this->assertSame( '***', Mcpwp_Option_Access::redact( 'elementor_probe', array( 'secret_cfg' => $blob ) )['value']['secret_cfg'], 'Under a secret name the blob is masked whole.' );
+
+		$refused = $this->write( 'elementor_probe', array( 'cfg' => $blob ) );
+		$this->assertSame( 'secret_write_refused', $refused->get_error_code() );
+
+		// A stdClass IS revived and walked.
+		$this->assertFalse( Mcpwp_Option_Access::is_opaque_serialized( 'O:8:"stdClass":1:{s:3:"pin";s:8:"12345678";}' ) );
+	}
+
+	public function test_a_nested_field_called_key_is_redacted_like_any_other(): void {
+		// Round-5 P1-1: the option-name exemption applied at any depth.
+		$keys = array();
+		$out  = Mcpwp_Option_Access::redact_for_log( array( 'credentials' => array( 'key' => 'sk-live-AbCd1234EfGh5678IjKl', 'value' => 1 ) ), $keys );
+		$this->assertSame( '[redacted]', $out['credentials']['key'] );
+		$out = Mcpwp_Option_Access::redact_for_log( array( 'headers' => array( array( 'key' => 'ghp_AbCd1234EfGh5678IjKlMnOp', 'value' => 'x' ) ) ), $keys );
+		$this->assertSame( '[redacted]', $out['headers'][0]['key'] );
+
+		// The top row keeps the option name — unless the "name" is itself a credential.
+		$this->assertSame( 'woocommerce_api_key', Mcpwp_Option_Access::redact_for_log( array( 'key' => 'woocommerce_api_key', 'value' => 'x' ), $keys )['key'] );
+		$this->assertSame( '[redacted]', Mcpwp_Option_Access::redact_for_log( array( 'key' => 'sk-live-AbCd1234EfGh5678IjKl', 'value' => 'x' ), $keys )['key'] );
+	}
+
+	public function test_sanitising_a_submission_is_idempotent_and_type_preserving(): void {
+		// Round-5 P2-3: the tree sanitiser turned ints into strings, escaped
+		// slashes and unicode, and collapsed newlines.
+		$sanitize = new ReflectionMethod( Mcpwp_REST_Site_Settings::class, 'sanitize_submitted_option_value' );
+		$sanitize->setAccessible( true );
+		$ctl = new Mcpwp_REST_Site_Settings();
+
+		$verbatim = '{"a":"b","n":1,"url":"https://x/a","t":"café ✓","css":"a{\n  color: red;\n}","o":{}}';
+		$this->assertSame( $verbatim, $sanitize->invoke( $ctl, 'elementor_probe', $verbatim ), 'Nothing to sanitise: the bytes are returned as sent.' );
+
+		$s = serialize( array( 'i' => 1, 'b' => true, 'css' => "a{\n}" ) ); // phpcs:ignore
+		$this->assertSame( $s, $sanitize->invoke( $ctl, 'elementor_probe', $s ) );
+
+		$tree = array( 'n' => 1, 'b' => false, 'css' => "a{\n  color: red;\n}", 'name' => '  padded  ' );
+		$out  = $sanitize->invoke( $ctl, 'elementor_probe', $tree );
+		$this->assertSame( 1, $out['n'] );
+		$this->assertFalse( $out['b'] );
+		$this->assertStringContainsString( "\n", $out['css'] );
+		$this->assertSame( 'padded', $out['name'] );
+
+		// GET → POST round trip through the handler leaves the stored bytes alone.
+		update_option( 'elementor_probe', array( 'blob' => $verbatim ) );
+		$read = $this->read( 'elementor_probe' )->get_data()['value'];
+		$this->write( 'elementor_probe', $read );
+		$this->assertSame( $verbatim, get_option( 'elementor_probe' )['blob'] );
+	}
 }

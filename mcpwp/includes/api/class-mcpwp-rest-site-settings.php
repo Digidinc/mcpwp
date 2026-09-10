@@ -688,30 +688,16 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 	 * @return mixed
 	 */
 	private function sanitize_submitted_option_value( $key, $value ) {
-		if ( is_array( $value ) || is_object( $value ) ) {
-			return map_deep( (array) $value, 'sanitize_text_field' );
-		}
-
-		if ( ! is_string( $value ) ) {
-			return $value;
-		}
-
-		$trimmed = ltrim( $value );
-		if ( '' !== $trimmed && ( '{' === $trimmed[0] || '[' === $trimmed[0] ) ) {
-			$decoded = json_decode( $value, true );
-			if ( is_array( $decoded ) ) {
-				return wp_json_encode( map_deep( $decoded, 'sanitize_text_field' ) );
+		// String leaves only — an int stays an int, an object stays an
+		// object, a JSON string stays the JSON string it was when the
+		// sanitiser changes nothing — and newlines survive, because option
+		// values hold CSS, templates and keys (#800 round 5, P2-3).
+		return Mcpwp_Option_Access::map_string_leaves(
+			$value,
+			function ( $leaf ) {
+				return sanitize_textarea_field( $leaf );
 			}
-		}
-
-		if ( is_serialized( $value ) ) {
-			$unserialized = @unserialize( $value, array( 'allowed_classes' => false ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.serialize_unserialize -- classes disallowed.
-			if ( is_array( $unserialized ) ) {
-				return serialize( map_deep( $unserialized, 'sanitize_text_field' ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.serialize_serialize -- same form it arrived in.
-			}
-		}
-
-		return sanitize_text_field( $value );
+		);
 	}
 
 	public function get_favicon( $request ) {
