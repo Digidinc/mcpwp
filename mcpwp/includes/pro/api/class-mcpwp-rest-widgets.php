@@ -303,6 +303,11 @@ class Mcpwp_REST_Widgets extends Mcpwp_REST_API {
 	public function delete_widget( $request ) {
 		$widget_id = sanitize_text_field( $request->get_param( 'id' ) );
 
+		// A widget's settings are gone with it: approval by default (#536 round 2).
+		if ( class_exists( 'Mcpwp_Destructive_Gate' ) && Mcpwp_Destructive_Gate::should_gate( $this->get_current_api_key_record() ) ) {
+			return $this->defer_destructive( 'delete_widget', $request, array( 'type' => 'widget', 'id' => $widget_id, 'title' => $widget_id ), sprintf( 'Permanently delete widget %s', $widget_id ) );
+		}
+
 		$result = $this->widgets->delete_widget( $widget_id );
 
 		if ( is_wp_error( $result ) ) {

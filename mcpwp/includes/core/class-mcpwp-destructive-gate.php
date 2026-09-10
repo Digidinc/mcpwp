@@ -45,7 +45,47 @@ class Mcpwp_Destructive_Gate {
 	 * menus, webhooks) or incident response (revoke, reset) — see the test
 	 * that ties the two lists together.
 	 */
-	const GATED = array( 'delete_page', 'delete_post', 'delete_content', 'delete_all_drafts', 'delete_media' );
+	const GATED = array( 'delete_page', 'delete_post', 'delete_content', 'delete_all_drafts', 'delete_media', 'delete_product', 'delete_course_category', 'delete_widget' );
+
+	/**
+	 * The one route (method + path) each gated operation may replay. A stored
+	 * payload whose route is not the operation's route is a forgery, whatever
+	 * the record's summary says (#536 round 2, P0-2).
+	 */
+	const OPERATION_ROUTES = array(
+		'delete_page'            => array( 'DELETE', '#^/mcpwp/v1/pages/\d+$#' ),
+		'delete_post'            => array( 'DELETE', '#^/mcpwp/v1/posts/\d+$#' ),
+		'delete_content'         => array( 'DELETE', '#^/mcpwp/v1/content/[A-Za-z0-9_\-]+/\d+$#' ),
+		'delete_all_drafts'      => array( 'POST', '#^/mcpwp/v1/drafts/delete-all$#' ),
+		'delete_media'           => array( 'DELETE', '#^/mcpwp/v1/media/\d+$#' ),
+		'delete_product'         => array( 'DELETE', '#^/mcpwp/v1/products/\d+$#' ),
+		'delete_course_category' => array( 'DELETE', '#^/mcpwp/v1/(lms|learnpress)/(course-)?categories/\d+$#' ),
+		'delete_widget'          => array( 'DELETE', '#^/mcpwp/v1/widgets/[A-Za-z0-9_\-]+$#' ),
+	);
+
+	/**
+	 * Declared-destructive tools that are deliberately not gated, each with
+	 * the reason. The invariant test walks BOTH tool registries against
+	 * GATED + this list; a new destructive tool with neither fails it.
+	 */
+	const EXEMPT_WITH_REASON = array(
+		'wp_delete_menu'               => 'reversible: a menu is rebuilt from its items',
+		'wp_delete_menu_item'          => 'reversible',
+		'wp_delete_webhook'            => 'reversible: re-register',
+		'wp_reset_rate_limit'          => 'incident response, no data loss',
+		'wp_revoke_api_key'            => 'incident response: gating it would favour whoever holds the key',
+		'wp_push_to_live'              => 'already an approval request of its own (staging_push)',
+		'wp_apply_elementor_template'  => 'content replacement with a rollback: the action log snapshots _elementor_data before every Elementor write tool',
+		'wp_apply_elementor_archetype' => 'content replacement with a rollback: the action log snapshots _elementor_data before every Elementor write tool',
+		'wp_apply_elementor_part'      => 'content replacement with a rollback: the action log snapshots _elementor_data before every Elementor write tool',
+	);
+
+	/**
+	 * Pending destructive requests one site holds at most, across every
+	 * requester. The per-requester cap alone is bypassed by minting keys
+	 * (#536 round 2, P1-3).
+	 */
+	const MAX_PENDING_TOTAL = 100;
 
 	/**
 	 * How many pending requests one principal may hold. A flood of gated
@@ -120,7 +160,54 @@ class Mcpwp_Destructive_Gate {
 	 * @return bool
 	 */
 	public static function is_api_principal( $key_record ) {
-		return is_array( $key_record ) && ! empty( $key_record['id'] );
+		// Any key record — with or without an id — is an API principal. The
+		// only non-API principals are proven positively: an administrator an
+		// approved apply is running as, or a logged-in administrator in
+		// wp-admin. Trust is never inferred from a missing field (#536
+		// round 2, P1-1).
+		if ( is_array( $key_record ) ) {
+			return true;
+		}
+
+		return ! self::in_admin_context();
+	}
+
+	/**
+	 * Positive proof of a WordPress administrator acting from wp-admin.
+	 *
+	 * @return bool
+	 */
+	public static function in_admin_context() {
+		if ( self::applying_as_admin() > 0 ) {
+			return true;
+		}
+
+		if ( function_exists( 'is_admin' ) && is_admin() && function_exists( 'current_user_can' ) && current_user_can( 'activate_plugins' ) ) {
+			return true;
+		}
+
+		return false;
+	}
+
+	/**
+	 * Who to record as the requester of a deferred operation.
+	 *
+	 * @param array|null $key_record Current key record.
+	 * @return string Key id, 'wp-user:N' for an administrator, or ''.
+	 */
+	public static function requester_id( $key_record ) {
+		if ( is_array( $key_record ) && isset( $key_record['id'] ) && '' !== (string) $key_record['id'] ) {
+			return (string) $key_record['id'];
+		}
+
+		// The admin chat authenticates with no key record; the ledger still
+		// has to name who asked, and the two-person rule has to bind them
+		// (#536 round 2, P2-1).
+		if ( self::in_admin_context() && function_exists( 'get_current_user_id' ) && get_current_user_id() > 0 ) {
+			return 'wp-user:' . get_current_user_id();
+		}
+
+		return '';
 	}
 
 	/**
@@ -162,6 +249,17 @@ class Mcpwp_Destructive_Gate {
 
 		unset( $params['_locale'], $params['_wpnonce'], $params['rest_route'], $params['_method'] );
 
+		// Only a route the operation owns is ever stored.
+		$bound = self::route_matches_operation( $operation, $method, $route );
+		if ( is_wp_error( $bound ) ) {
+			return $bound;
+		}
+
+		// The set a purge would remove is part of the target.
+		if ( 'drafts' === $resource['type'] ) {
+			$resource['post_type'] = isset( $params['type'] ) && is_string( $params['type'] ) ? $params['type'] : 'all';
+		}
+
 		$approval = Mcpwp_Approvals::create_destructive_request(
 			$operation,
 			array(
@@ -173,7 +271,7 @@ class Mcpwp_Destructive_Gate {
 			$resource,
 			array(
 				'title'               => $summary,
-				'requested_by_key_id' => is_array( $key_record ) && isset( $key_record['id'] ) ? (string) $key_record['id'] : '',
+				'requested_by_key_id' => self::requester_id( $key_record ),
 			)
 		);
 
@@ -239,7 +337,15 @@ class Mcpwp_Destructive_Gate {
 	 * @return array
 	 */
 	public static function fingerprint( array $resource ) {
-		if ( empty( $resource['id'] ) || ! is_numeric( $resource['id'] ) || in_array( $resource['type'], array( 'api_key', 'drafts' ), true ) ) {
+		// A purge of every draft is fingerprinted as the SET it would remove:
+		// between review and apply the set can only stay the same or the
+		// apply is refused (#536 round 2, P2-4).
+		if ( isset( $resource['type'] ) && 'drafts' === $resource['type'] ) {
+			return self::fingerprint_drafts( isset( $resource['post_type'] ) ? (string) $resource['post_type'] : 'all' );
+		}
+
+		// Not post-like: nothing to fingerprint by post id.
+		if ( empty( $resource['id'] ) || ! is_numeric( $resource['id'] ) || in_array( $resource['type'], array( 'api_key', 'term', 'widget' ), true ) ) {
 			return array();
 		}
 
@@ -258,6 +364,78 @@ class Mcpwp_Destructive_Gate {
 		);
 	}
 
+	/**
+	 * The ids a delete-all-drafts run would remove, as a fingerprint.
+	 *
+	 * @param string $post_type post|page|all.
+	 * @return array
+	 */
+	public static function fingerprint_drafts( $post_type = 'all' ) {
+		$types = in_array( $post_type, array( 'post', 'page' ), true ) ? array( $post_type ) : array( 'post', 'page' );
+
+		$ids = array();
+		if ( class_exists( 'WP_Query' ) ) {
+			$query = new WP_Query(
+				array(
+					'post_type'      => $types,
+					'post_status'    => 'draft',
+					'posts_per_page' => -1,
+					'fields'         => 'ids',
+					'no_found_rows'  => true,
+				)
+			);
+			foreach ( is_array( $query->posts ) ? $query->posts : array() as $p ) {
+				$ids[] = is_object( $p ) ? (int) $p->ID : (int) $p;
+			}
+		}
+		sort( $ids );
+
+		return array(
+			'exists'    => true,
+			'type'      => 'drafts',
+			'post_type' => implode( ',', $types ),
+			'count'     => count( $ids ),
+			'ids'       => array_slice( $ids, 0, 200 ),
+			'hash'      => hash( 'sha256', implode( ',', $ids ) ),
+			'title'     => sprintf( '%d draft(s)', count( $ids ) ),
+			'status'    => 'draft',
+			'modified'  => '',
+		);
+	}
+
+	/**
+	 * Whether a route belongs to an operation.
+	 *
+	 * @param string $operation Operation.
+	 * @param string $method    HTTP method.
+	 * @param string $route     Route.
+	 * @return true|WP_Error
+	 */
+	public static function route_matches_operation( $operation, $method, $route ) {
+		$operation = sanitize_key( (string) $operation );
+
+		if ( ! isset( self::OPERATION_ROUTES[ $operation ] ) ) {
+			return new WP_Error( 'destructive_operation_unknown', sprintf( 'Unknown destructive operation "%s".', $operation ), array( 'status' => 400 ) );
+		}
+
+		list( $want_method, $pattern ) = self::OPERATION_ROUTES[ $operation ];
+		if ( strtoupper( (string) $method ) !== $want_method || ! preg_match( $pattern, (string) $route ) ) {
+			return new WP_Error(
+				'destructive_route_mismatch',
+				sprintf(
+					/* translators: 1: operation 2: method 3: route */
+					__( 'Operation %1$s does not replay %2$s %3$s. The stored request does not match the operation it was reviewed as; nothing was applied.', 'mcpwp' ),
+					$operation,
+					strtoupper( (string) $method ),
+					(string) $route
+				),
+				array( 'status' => 409 )
+			);
+		}
+
+		return true;
+	}
+
 	// ---------------------------------------------------------------
 	// Apply.
 	// ---------------------------------------------------------------
@@ -274,9 +452,17 @@ class Mcpwp_Destructive_Gate {
 	 * @param array $context {api_key?: string, admin_user?: int}.
 	 * @return array|WP_Error Response data or error.
 	 */
-	public static function replay( array $payload, array $context = array() ) {
+	public static function replay( array $payload, array $context = array(), $operation = '' ) {
 		if ( empty( $payload['route'] ) || ! function_exists( 'rest_do_request' ) ) {
 			return new WP_Error( 'destructive_replay_unavailable', __( 'The stored operation cannot be replayed.', 'mcpwp' ), array( 'status' => 500 ) );
+		}
+
+		// What the reviewer consented to is the operation on the record. A
+		// payload that names any other route is not applied, whoever stored
+		// it and whatever its summary says.
+		$bound = self::route_matches_operation( $operation, isset( $payload['method'] ) ? $payload['method'] : 'DELETE', $payload['route'] );
+		if ( is_wp_error( $bound ) ) {
+			return $bound;
 		}
 
 		$api_key    = isset( $context['api_key'] ) ? (string) $context['api_key'] : '';
@@ -352,6 +538,27 @@ class Mcpwp_Destructive_Gate {
 			return true;
 		}
 
+		if ( isset( $target['type'] ) && 'drafts' === $target['type'] ) {
+			$now = self::fingerprint_drafts( isset( $payload['params']['type'] ) && is_string( $payload['params']['type'] ) ? $payload['params']['type'] : 'all' );
+			if ( $now['hash'] !== $target['hash'] ) {
+				return new WP_Error(
+					'target_changed',
+					sprintf(
+						/* translators: 1: reviewed count 2: current count */
+						__( 'The set of drafts changed after this request was reviewed (%1$d → %2$d). Nothing was applied. Review it again with a new request.', 'mcpwp' ),
+						isset( $target['count'] ) ? (int) $target['count'] : 0,
+						$now['count']
+					),
+					array(
+						'status'   => 409,
+						'reviewed' => array( 'count' => isset( $target['count'] ) ? (int) $target['count'] : 0, 'ids' => isset( $target['ids'] ) ? $target['ids'] : array() ),
+						'current'  => array( 'count' => $now['count'], 'ids' => $now['ids'] ),
+					)
+				);
+			}
+			return true;
+		}
+
 		$id = 0;
 		if ( isset( $payload['params']['id'] ) ) {
 			$id = (int) $payload['params']['id'];
@@ -367,7 +574,9 @@ class Mcpwp_Destructive_Gate {
 			return true; // Already gone; the route will answer 404.
 		}
 
-		if ( $now['hash'] !== $target['hash'] || $now['type'] !== $target['type'] ) {
+		// Hash, type AND status: a draft approved for deletion that has since
+		// been published is a different thing (#536 round 2, P2-3).
+		if ( $now['hash'] !== $target['hash'] || $now['type'] !== $target['type'] || ( isset( $target['status'] ) && $now['status'] !== $target['status'] ) ) {
 			return new WP_Error(
 				'target_changed',
 				sprintf(

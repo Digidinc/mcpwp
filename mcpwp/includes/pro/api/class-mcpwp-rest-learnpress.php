@@ -603,7 +603,18 @@ class Mcpwp_REST_LearnPress extends Mcpwp_REST_API {
 	 * @return WP_REST_Response|WP_Error
 	 */
 	public function delete_category( $request ) {
-		$result = $this->handler->delete_course_category( $request->get_param( 'id' ) );
+		$id = absint( $request->get_param( 'id' ) );
+
+		// wp_delete_term() has no undo: approval by default (#536 round 2).
+		if ( class_exists( 'Mcpwp_Destructive_Gate' ) && Mcpwp_Destructive_Gate::should_gate( $this->get_current_api_key_record() ) ) {
+			$term = function_exists( 'get_term' ) ? get_term( $id, 'course_category' ) : null;
+			if ( ! $term || is_wp_error( $term ) ) {
+				return $this->error_response( 'not_found', __( 'Category not found.', 'mcpwp' ), 404, array( 'id' => $id ) );
+			}
+			return $this->defer_destructive( 'delete_course_category', $request, array( 'type' => 'term', 'id' => $id, 'title' => (string) $term->name ), sprintf( 'Permanently delete course category #%d', $id ) );
+		}
+
+		$result = $this->handler->delete_course_category( $id );
 
 		if ( is_wp_error( $result ) ) {
 			return $result;

@@ -1320,7 +1320,10 @@ trait Mcpwp_Api_Auth {
 			}
 
 			if ( $this->is_api_key_match( $api_key, $key['hash'] ) ) {
-				return $this->normalize_api_key_record( $key );
+				$record = $this->normalize_api_key_record( $key );
+				// A record with no id cannot be named in a ledger or bound by
+				// the two-person rule; it is not a principal (#536 round 2).
+				return '' === $record['id'] ? null : $record;
 			}
 		}
 
@@ -1365,7 +1368,8 @@ trait Mcpwp_Api_Auth {
 					continue;
 				}
 				if ( $this->is_api_key_match( $api_key, $key['hash'] ) ) {
-					return $this->normalize_api_key_record( $key );
+					$record = $this->normalize_api_key_record( $key );
+					return '' === $record['id'] ? null : $record;
 				}
 			}
 		}

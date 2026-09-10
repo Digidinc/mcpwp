@@ -106,12 +106,16 @@ final class StableHardeningTest extends TestCase {
 
 		$response = $this->update_option_via_api(
 			'theme_mods_probe_option',
+		update_option( 'elementor_some_array_option', array( 'a' => 1 ) );
+
+			'elementor_some_array_option',
 			'plain string on purpose',
 			array( 'force_type_change' => true )
 		);
 
 		$this->assertSame( 200, $response->get_status() );
 		$this->assertSame( 'plain string on purpose', get_option( 'theme_mods_probe_option' ) );
+		$this->assertSame( 'plain string on purpose', get_option( 'elementor_some_array_option' ) );
 	}
 
 	public function test_plain_string_option_updates_unchanged(): void {

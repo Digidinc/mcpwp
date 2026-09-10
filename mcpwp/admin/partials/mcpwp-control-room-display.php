@@ -162,6 +162,20 @@ $event_escalated_count = (int) ( $event_summary['escalated'] ?? 0 );
 									<?php endif; ?>
 								</span>
 							<?php endif; ?>
+							<?php
+							// A destructive record replays a stored call. The reviewer
+							// consents to THAT call, so it is shown verbatim next to the
+							// summary (#536 round 2, P0-2).
+							$item_payload = isset( $item['payload'] ) && is_array( $item['payload'] ) ? $item['payload'] : array();
+							if ( isset( $item['action'] ) && 'destructive_operation' === $item['action'] && ! empty( $item_payload['route'] ) ) :
+								?>
+								<details class="mcpwp-approval-diff" open>
+									<summary><?php esc_html_e( 'The exact call this approval will run', 'mcpwp' ); ?></summary>
+									<pre><?php echo esc_html( ( isset( $item_payload['method'] ) ? (string) $item_payload['method'] : 'DELETE' ) . ' ' . (string) $item_payload['route'] ); ?></pre>
+									<pre><?php echo esc_html( (string) wp_json_encode( isset( $item_payload['params'] ) ? $item_payload['params'] : array(), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES ) ); ?></pre>
+									<p><?php echo esc_html( sprintf( /* translators: %s: operation */ __( 'Operation: %s. Only this operation\'s own route can be applied; a mismatch is refused at apply.', 'mcpwp' ), isset( $item['operation'] ) ? (string) $item['operation'] : '' ) ); ?></p>
+								</details>
+							<?php endif; ?>
 							<?php if ( '' !== $diff_before || '' !== $diff_after ) : ?>
 								<details class="mcpwp-approval-diff">
 									<summary><?php esc_html_e( 'View before / after', 'mcpwp' ); ?></summary>

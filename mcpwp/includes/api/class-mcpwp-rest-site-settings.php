@@ -781,6 +781,122 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 				}
 				return $leaf;
 			}
+		}
+
+		// Check allowed prefixes.
+		foreach ( $this->get_allowed_option_prefixes() as $prefix ) {
+			if ( 0 === strpos( $key, $prefix ) ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	private function get_allowed_option_keys() {
+		return array(
+			// WordPress core.
+			'blogname',
+			'blogdescription',
+			'siteurl',
+			'home',
+			'admin_email',
+			'timezone_string',
+			'date_format',
+			'time_format',
+			'WPLANG',
+			'posts_per_page',
+			'posts_per_rss',
+			'show_on_front',
+			'page_on_front',
+			'page_for_posts',
+			'blog_public',
+			'permalink_structure',
+			'default_category',
+			'default_post_format',
+			'thumbnail_size_w',
+			'thumbnail_size_h',
+			'medium_size_w',
+			'medium_size_h',
+			'large_size_w',
+			'large_size_h',
+			'site_icon',
+			// Theme settings (hyphenated keys that don't match prefix rules).
+			'astra-settings',
+			'generate_settings',
+			// MCPWP.
+			'mcpwp_site_context',
+			'mcpwp_site_context_updated',
+			// Elementor.
+			'elementor_pro_theme_builder_conditions',
+		);
+	}
+
+	private function get_allowed_option_prefixes() {
+		return array(
+			'elementor_',
+			'wpseo_',
+			'rank_math_',
+			'astra_',
+			'ocean_',
+			'theme_mods_',
+			'widget_',
+			'nav_menu_',
+			'sidebars_',
+			// NOT 'mcpwp_': the plugin's own namespace holds the approval
+			// store, the API keys, the tool switches and the rate limits —
+			// every veto surface the API is subject to. A blocklist over
+			// one's own namespace fails open on every option added after it
+			// was written (#536 round 2). The two mcpwp_ options legitimately
+			// written here are exact-listed above.
+			'woocommerce_',
+			'wp_page_for_privacy_policy',
+		);
+	}
+
+	private function get_blocked_option_patterns() {
+		return array(
+			'password',
+			'secret',
+			'token',
+			'auth_key',
+			'auth_salt',
+			'logged_in_key',
+			'logged_in_salt',
+			'nonce_key',
+			'nonce_salt',
+			'secure_auth',
+			'credential',
+			'api_key',
+			'private_key',
+			'license_key',
+			'stripe_',
+			'paypal_',
+			'_session',
+			// Entitlement / bridge surfaces — must never be settable through the
+			// options API. The licensing bridge (issue #505) reads legacy spai_ originals
+			// only; block the writable mcpwp_ copies + the migration flag too,
+			// as defence in depth against entitlement forgery (Warden 3.1.0 P0).
+			'pro_license',
+			'trial_started',
+			'migrated_from',
+			// Update-control options steer the self-updater (manifest + package
+			// source). Writing mcpwp_update_info / mcpwp_version_url through the
+			// options API is a write-scope→RCE / SSRF path — block both here.
+			'update_info',
+			'version_url',
+			// Secret-bearing internal stores. No scope (including admin) should be
+			// able to read or write these through the generic /option API — the
+			// dedicated /plugin-settings and /integrations routes are the only
+			// intended surface:
+			//   mcpwp_settings      → holds oauth_client_secret_hash / github_token
+			//   mcpwp_integrations  → encrypted provider blobs
+			//   mcpwp_encryption_key→ sodium key that decrypts the blobs above
+			// Full option names used as substrings (not bare 'settings'/'integrations')
+			// to avoid over-blocking astra-settings / generate_settings / *_settings.
+			'mcpwp_settings',
+			'integrations',
+			'encryption',
 		);
 	}
 

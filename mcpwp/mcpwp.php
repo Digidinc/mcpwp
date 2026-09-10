@@ -460,6 +460,15 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 		Mcpwp_Activator::migrate_identity_less_approvals();
 	}
 
+	// One-time reset of the destructive-approval switch. An early build of
+	// the gate exposed destructive_requires_approval through the settings
+	// API; a principal that flipped it off then would keep the gate off after
+	// upgrade, silently. Own flag, same reasoning as the purge above.
+	if ( ! get_option( 'mcpwp_destructive_switch_reset' ) ) {
+		require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-activator.php';
+		Mcpwp_Activator::reset_destructive_switch();
+	}
+
 	// Initialize the plugin
 	$loader = new Mcpwp_Loader();
 	$loader->run();

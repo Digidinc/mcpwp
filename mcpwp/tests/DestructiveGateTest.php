@@ -41,6 +41,7 @@ final class DestructiveGateTest extends TestCase {
 	}
 
 	protected function tearDown(): void {
+		$GLOBALS['mcpwp_test_is_admin']  = false;
 		$GLOBALS['mcpwp_test_options']   = array();
 		$GLOBALS['_mcpwp_test_posts']    = array();
 		$GLOBALS['mcpwp_test_user_caps'] = array();
@@ -179,7 +180,9 @@ final class DestructiveGateTest extends TestCase {
 	}
 
 	public function test_an_administrator_in_wp_admin_can_mint_an_exempt_key(): void {
-		// No API principal on the request: the trusted admin context.
+		// No API principal on the request AND positive proof of wp-admin:
+		// an absent record alone no longer means administrator (round 2).
+		$GLOBALS['mcpwp_test_is_admin'] = true;
 		$controller = new Mcpwp_REST_Site_Updates();
 		$request    = new WP_REST_Request( 'POST', '/mcpwp/v1/api-keys', array( 'label' => 'job', 'scopes' => array( 'admin' ), 'role' => 'admin', 'allow_destructive' => true ) );
 		$created    = $controller->create_api_key( $request )->get_data();
@@ -364,5 +367,292 @@ final class DestructiveGateTest extends TestCase {
 		$this->delete_page( 11, true ); // triggers upsert → eviction
 
 		$this->assertIsArray( Mcpwp_Approvals::get_request( $approval_id ), 'A pending request is someone\'s unfinished review; it is never evicted.' );
+	}
+
+	// ---------------------------------------------------------------
+	// Round 2: the gate's own state is out of reach, the replay is bound
+	// to the reviewed operation, trust is proven, the queue is bounded.
+	// ---------------------------------------------------------------
+
+	public function test_every_option_the_gate_reads_is_unreachable_through_the_options_api(): void {
+		// P0-1: the approval store, the keys, the switches — all in the
+		// plugin's own namespace, which a prefix allowlist opened wholesale.
+		$allowed = new ReflectionMethod( Mcpwp_REST_Site_Settings::class, 'is_option_allowed' );
+		$allowed->setAccessible( true );
+		$settings = new Mcpwp_REST_Site_Settings();
+
+		foreach ( array( Mcpwp_Approvals::OPTION_NAME, 'mcpwp_settings', 'mcpwp_api_keys', 'mcpwp_api_key', 'mcpwp_disabled_tool_categories', 'mcpwp_rate_limit_settings', 'mcpwp_anything_added_later' ) as $option ) {
+			$this->assertFalse( $allowed->invoke( $settings, $option ), $option );
+		}
+		foreach ( array( 'mcpwp_site_context', 'mcpwp_site_context_updated' ) as $option ) {
+			$this->assertTrue( $allowed->invoke( $settings, $option ), $option . ' is exact-listed and stays writable.' );
+		}
+
+		// The forge from the review, end to end: refused, store untouched.
+		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/option', array( 'key' => Mcpwp_Approvals::OPTION_NAME, 'value' => array( 'apr_forged' => array( 'status' => 'approved' ) ) ) );
+		$result  = $this->authed( $settings, $request )->update_option_handler( $request );
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( array(), Mcpwp_Approvals::list_requests( '', 50, true ) );
+	}
+
+	public function test_a_stored_payload_whose_route_is_not_the_operations_route_is_never_applied(): void {
+		// P0-2: the reviewer consents to the operation on the record, not to
+		// whatever route the payload happens to name.
+		$forged = array(
+			'id'                  => 'apr_forged',
+			'status'              => 'approved',
+			'action'              => 'destructive_operation',
+			'operation'           => 'delete_page',
+			'title'               => 'Permanently delete page #12',
+			'resource'            => array( 'type' => 'page', 'id' => 12, 'title' => 'x' ),
+			'payload'             => array( 'route' => '/mcpwp/v1/api-keys', 'method' => 'POST', 'params' => array( 'label' => 'x', 'allow_destructive' => true ), 'target' => array() ),
+			'requested_by_key_id' => 'someone-else',
+			'created_at'          => '2026-09-10T00:00:00+00:00',
+			'updated_at'          => '2026-09-10T00:00:00+00:00',
+		);
+		update_option( Mcpwp_Approvals::OPTION_NAME, array( 'apr_forged' => $forged ) );
+
+		$refused = Mcpwp_Approvals::apply_request( 'apr_forged', array( 'admin_user' => 7, 'actor' => 'wp-user:7' ) );
+		$this->assertInstanceOf( WP_Error::class, $refused );
+		$this->assertSame( 'destructive_route_mismatch', $refused->get_error_code() );
+		$this->assertSame( array(), $GLOBALS['mcpwp_test_dispatched_routes'], 'Nothing ran.' );
+
+		// Every operation is bound to exactly one route shape.
+		foreach ( Mcpwp_Destructive_Gate::GATED as $op ) {
+			$this->assertArrayHasKey( $op, Mcpwp_Destructive_Gate::OPERATION_ROUTES, $op );
+		}
+		$this->assertTrue( Mcpwp_Destructive_Gate::route_matches_operation( 'delete_page', 'DELETE', '/mcpwp/v1/pages/12' ) );
+		$this->assertInstanceOf( WP_Error::class, Mcpwp_Destructive_Gate::route_matches_operation( 'delete_page', 'DELETE', '/mcpwp/v1/posts/12' ) );
+		$this->assertInstanceOf( WP_Error::class, Mcpwp_Destructive_Gate::route_matches_operation( 'delete_page', 'POST', '/mcpwp/v1/pages/12' ) );
+		$this->assertInstanceOf( WP_Error::class, Mcpwp_Destructive_Gate::route_matches_operation( 'delete_page', 'DELETE', '/mcpwp/v1/pages/12/../../api-keys' ) );
+	}
+
+	public function test_a_record_with_no_requester_can_be_neither_created_nor_actioned(): void {
+		// A destructive record names its requester or the two-person rule
+		// has nothing to bind. The '' clause in guard_actor is not a pass.
+		$refused = Mcpwp_Approvals::create_destructive_request( 'delete_page', array( 'route' => '/mcpwp/v1/pages/1', 'method' => 'DELETE', 'params' => array(), 'target' => array() ), array( 'type' => 'page', 'id' => 1, 'title' => 'x' ), array( 'requested_by_key_id' => '' ) );
+		$this->assertInstanceOf( WP_Error::class, $refused );
+		$this->assertSame( 'unidentified_requester', $refused->get_error_code() );
+
+		$orphan = array( 'id' => 'apr_orphan', 'status' => 'pending', 'action' => 'destructive_operation', 'operation' => 'delete_page', 'resource' => array( 'type' => 'page', 'id' => 1 ), 'payload' => array( 'route' => '/mcpwp/v1/pages/1', 'method' => 'DELETE', 'params' => array(), 'target' => array() ), 'requested_by_key_id' => '', 'created_at' => '2026-09-10T00:00:00+00:00', 'updated_at' => '2026-09-10T00:00:00+00:00' );
+		update_option( Mcpwp_Approvals::OPTION_NAME, array( 'apr_orphan' => $orphan ) );
+		$this->assertSame( 'unidentified_requester', Mcpwp_Approvals::approve_request( 'apr_orphan', '', array( 'actor' => 'reviewer' ) )->get_error_code() );
+		$this->assertSame( 'unidentified_requester', Mcpwp_Approvals::apply_request( 'apr_orphan', array( 'actor' => 'reviewer', 'api_key' => 'x' ) )->get_error_code() );
+	}
+
+	public function test_trust_is_a_positive_proof_never_an_absent_field(): void {
+		// P1-1: a null record outside wp-admin is an API principal; so is a
+		// record without an id; only proven admin context is not.
+		$GLOBALS['mcpwp_test_is_admin'] = false;
+		$this->assertTrue( Mcpwp_Destructive_Gate::is_api_principal( null ) );
+		$this->assertTrue( Mcpwp_Destructive_Gate::is_api_principal( array( 'id' => '', 'scopes' => array( 'admin' ) ) ) );
+		$this->assertTrue( Mcpwp_Destructive_Gate::is_api_principal( array( 'id' => 'k1' ) ) );
+
+		$GLOBALS['mcpwp_test_is_admin'] = true;
+		$this->assertFalse( Mcpwp_Destructive_Gate::is_api_principal( null ) );
+		$this->assertTrue( Mcpwp_Destructive_Gate::is_api_principal( array( 'id' => 'k1' ) ), 'A key is a key even from wp-admin.' );
+		$GLOBALS['mcpwp_test_is_admin'] = false;
+
+		// An id-less stored record never authenticates.
+		$keys = get_option( 'mcpwp_api_keys', array() );
+		$plain = 'mcpwp_' . str_repeat( 'b', 48 );
+		$keys[] = array( 'label' => 'seeded', 'hash' => wp_hash_password( $plain ), 'scopes' => array( 'read', 'write', 'admin' ), 'role' => 'admin' );
+		update_option( 'mcpwp_api_keys', $keys );
+		$controller = new Mcpwp_REST_Pages();
+		$request    = new WP_REST_Request( 'DELETE', '/mcpwp/v1/pages/10', array( 'id' => 10, 'force' => true ) );
+		$request->set_header( 'X-API-Key', $plain );
+		if ( method_exists( 'Mcpwp_REST_MCP', 'reset_verdict_memo' ) ) {
+			Mcpwp_REST_MCP::reset_verdict_memo();
+		}
+		$this->assertInstanceOf( WP_Error::class, $controller->verify_api_key( $request ), 'A record with no id is not a principal.' );
+	}
+
+	public function test_the_target_fingerprint_is_not_in_the_public_record(): void {
+		// P1-2: the fingerprint carried the private page's exact title and a
+		// hash of its body past the redaction.
+		$this->seed( 10, 'page', 'private' );
+		$GLOBALS['_mcpwp_test_posts'][10]->post_title = 'Secret launch plan';
+		$this->delete_page( 10, true );
+
+		$record = Mcpwp_Approvals::list_requests( '', 50, false )[0];
+		$this->assertArrayNotHasKey( 'title', $record['payload']['target'] );
+		$this->assertArrayNotHasKey( 'hash', $record['payload']['target'] );
+		$this->assertArrayNotHasKey( 'modified', $record['payload']['target'] );
+		$this->assertStringNotContainsString( 'Secret launch plan', wp_json_encode( Mcpwp_Approvals::redact_source_for_unprivileged( $record ) ) );
+
+		// drift() still has the full fingerprint (private record).
+		$reviewer = ( new Mcpwp_REST_Pages() )->create_scoped_api_key( 'reviewer', array( 'admin' ) );
+		Mcpwp_Approvals::approve_request( $record['id'], '', array( 'actor' => $reviewer['id'] ) );
+		$GLOBALS['_mcpwp_test_posts'][10]->post_title = 'Renamed';
+		$this->assertSame( 'target_changed', Mcpwp_Approvals::apply_request( $record['id'], array( 'api_key' => $reviewer['key'], 'actor' => $reviewer['id'] ) )->get_error_code() );
+	}
+
+	public function test_the_queue_is_bounded_across_requesters_not_only_per_requester(): void {
+		// P1-3: N minted keys × 20 slots was unbounded.
+		for ( $i = 1; $i <= Mcpwp_Destructive_Gate::MAX_PENDING_TOTAL; $i++ ) {
+			$ok = Mcpwp_Approvals::create_destructive_request( 'delete_page', array( 'route' => '/mcpwp/v1/pages/' . $i, 'method' => 'DELETE', 'params' => array(), 'target' => array() ), array( 'type' => 'page', 'id' => $i, 'title' => 'p' ), array( 'requested_by_key_id' => 'minted-' . (int) ceil( $i / 10 ) ) );
+			$this->assertNotInstanceOf( WP_Error::class, $ok, 'request ' . $i );
+		}
+		$full = Mcpwp_Approvals::create_destructive_request( 'delete_page', array( 'route' => '/mcpwp/v1/pages/999', 'method' => 'DELETE', 'params' => array(), 'target' => array() ), array( 'type' => 'page', 'id' => 999, 'title' => 'p' ), array( 'requested_by_key_id' => 'minted-fresh' ) );
+		$this->assertInstanceOf( WP_Error::class, $full );
+		$this->assertSame( 'approval_queue_full', $full->get_error_code() );
+		$this->assertCount( Mcpwp_Destructive_Gate::MAX_PENDING_TOTAL, Mcpwp_Approvals::list_requests( 'pending', 1000, true ) );
+	}
+
+	public function test_both_tool_registries_are_gated_or_exempt_with_a_reason(): void {
+		// P1-4: the invariant test reflected one registry and certified both.
+		$declared = array();
+		foreach ( array( Mcpwp_MCP_Free_Tools::class, Mcpwp_MCP_Pro_Tools::class ) as $class ) {
+			$method = new ReflectionMethod( $class, 'get_destructive_tools' );
+			$method->setAccessible( true );
+			$declared = array_merge( $declared, $method->invoke( ( new ReflectionClass( $class ) )->newInstanceWithoutConstructor() ) );
+		}
+		$this->assertContains( 'wc_delete_product', $declared, 'Premise: the pro registry was read.' );
+
+		$gated = array();
+		foreach ( Mcpwp_Destructive_Gate::GATED as $op ) {
+			$gated[] = 'wp_' . $op;
+			$gated[] = 'wc_' . $op;
+		}
+		foreach ( $declared as $tool ) {
+			$this->assertTrue(
+				in_array( $tool, $gated, true ) || isset( Mcpwp_Destructive_Gate::EXEMPT_WITH_REASON[ $tool ] ),
+				$tool . ' is declared destructive and is neither gated nor exempt with a reason.'
+			);
+		}
+		foreach ( Mcpwp_Destructive_Gate::EXEMPT_WITH_REASON as $tool => $reason ) {
+			$this->assertNotEmpty( $reason, $tool );
+		}
+	}
+
+	public function test_pro_deletes_are_deferred_like_every_other_permanent_delete(): void {
+		foreach ( array( 'includes/pro/api/class-mcpwp-rest-woocommerce.php', 'includes/pro/api/class-mcpwp-rest-widgets.php' ) as $file ) {
+			require_once dirname( __DIR__ ) . '/' . $file;
+		}
+		if ( ! function_exists( 'rest_ensure_response' ) ) {
+			function rest_ensure_response( $r ) { return $r instanceof WP_REST_Response ? $r : new WP_REST_Response( $r ); }
+		}
+		$never = new class() {
+			public $calls = 0;
+			public function __call( $name, $args ) { $this->calls++; return true; }
+		};
+
+		$this->seed( 50, 'product' );
+		$wc      = new Mcpwp_REST_WooCommerce( $never );
+		$request = new WP_REST_Request( 'DELETE', '/mcpwp/v1/products/50', array( 'id' => 50, 'force' => true ) );
+		$response = $this->authed( $wc, $request )->delete_product( $request );
+		$this->assertSame( 202, $response->get_status() );
+		$this->assertSame( 'delete_product', $response->get_data()['operation'] );
+		$this->assertSame( 0, $never->calls, 'The product was not touched.' );
+
+		$widgets  = new Mcpwp_REST_Widgets( $never );
+		$request  = new WP_REST_Request( 'DELETE', '/mcpwp/v1/widgets/text-3', array( 'id' => 'text-3' ) );
+		$response = $this->authed( $widgets, $request )->delete_widget( $request );
+		$this->assertSame( 202, $response->get_status() );
+		$this->assertSame( 0, $never->calls );
+
+		// Trashing a product is still one call.
+		$request = new WP_REST_Request( 'DELETE', '/mcpwp/v1/products/50', array( 'id' => 50, 'force' => false ) );
+		$this->assertSame( 200, $this->authed( $wc, $request )->delete_product( $request )->get_status() );
+		$this->assertSame( 1, $never->calls );
+	}
+
+	public function test_the_admin_chat_requester_is_named_and_bound_by_the_two_person_rule(): void {
+		// P2-1: a null record from the admin chat records wp-user:N, so the
+		// same human cannot approve their own request from the Control Room.
+		$GLOBALS['mcpwp_test_is_admin'] = true;
+		$this->assertSame( 'wp-user:2', Mcpwp_Destructive_Gate::requester_id( null ) );
+		$this->seed( 10 );
+		$controller = new Mcpwp_REST_Pages();
+		$request    = new WP_REST_Request( 'DELETE', '/mcpwp/v1/pages/10', array( 'id' => 10, 'force' => true ) );
+		$approval   = $controller->delete_page( $request )->get_data();
+		$this->assertTrue( $approval['approval_required'] );
+		$this->assertSame( 'wp-user:2', Mcpwp_Approvals::get_request( $approval['approval_id'] )['requested_by_key_id'] );
+
+		$self = Mcpwp_Approvals::approve_request( $approval['approval_id'], '', array( 'admin_user' => 2, 'actor' => 'wp-user:2' ) );
+		$this->assertSame( 'self_approval_forbidden', $self->get_error_code() );
+		$this->assertNotInstanceOf( WP_Error::class, Mcpwp_Approvals::approve_request( $approval['approval_id'], '', array( 'admin_user' => 7, 'actor' => 'wp-user:7' ) ) );
+		$GLOBALS['mcpwp_test_is_admin'] = false;
+	}
+
+	public function test_a_target_whose_status_changed_is_not_applied(): void {
+		// P2-3: title and body untouched, but the draft was published (and
+		// could now be the homepage).
+		$this->seed( 10, 'page', 'draft' );
+		$approval_id = $this->delete_page( 10, true )->get_data()['approval_id'];
+		$reviewer    = ( new Mcpwp_REST_Pages() )->create_scoped_api_key( 'reviewer', array( 'admin' ) );
+		Mcpwp_Approvals::approve_request( $approval_id, 'ok', array( 'actor' => $reviewer['id'] ) );
+
+		$GLOBALS['_mcpwp_test_posts'][10]->post_status = 'publish';
+
+		$refused = Mcpwp_Approvals::apply_request( $approval_id, array( 'api_key' => $reviewer['key'], 'actor' => $reviewer['id'] ) );
+		$this->assertSame( 'target_changed', $refused->get_error_code() );
+		$this->assertSame( 'publish', $refused->get_error_data()['current']['status'] );
+	}
+
+	public function test_delete_all_drafts_is_approved_for_a_set_not_for_whatever_exists_at_apply(): void {
+		// P2-4: the reviewer saw "3 drafts"; a fourth created after review
+		// must not ride the same approval.
+		foreach ( array( 21, 22, 23 ) as $id ) {
+			$this->seed( $id, 'post', 'draft' );
+		}
+		$controller = new Mcpwp_REST_Posts();
+		$request    = new WP_REST_Request( 'POST', '/mcpwp/v1/drafts/delete-all', array( 'type' => 'all', 'force' => true ) );
+		$approval   = $this->authed( $controller, $request )->delete_all_drafts( $request )->get_data();
+		$record     = Mcpwp_Approvals::get_request( $approval['approval_id'] );
+		$this->assertSame( 3, $record['payload']['target']['count'] );
+
+		$reviewer = ( new Mcpwp_REST_Pages() )->create_scoped_api_key( 'reviewer', array( 'admin' ) );
+		Mcpwp_Approvals::approve_request( $approval['approval_id'], '', array( 'actor' => $reviewer['id'] ) );
+		$this->seed( 24, 'post', 'draft' );
+
+		$refused = Mcpwp_Approvals::apply_request( $approval['approval_id'], array( 'api_key' => $reviewer['key'], 'actor' => $reviewer['id'] ) );
+		$this->assertSame( 'target_changed', $refused->get_error_code() );
+		$this->assertSame( 4, $refused->get_error_data()['current']['count'] );
+		$this->assertArrayHasKey( 24, $GLOBALS['_mcpwp_test_posts'], 'Nothing was deleted.' );
+	}
+
+	public function test_a_stored_false_switch_from_the_early_build_is_reset_once(): void {
+		require_once dirname( __DIR__ ) . '/includes/class-mcpwp-activator.php';
+		update_option( 'mcpwp_settings', array( 'destructive_requires_approval' => false, 'enable_logging' => true ) );
+		delete_option( 'mcpwp_destructive_switch_reset' );
+
+		Mcpwp_Activator::reset_destructive_switch();
+		$this->assertTrue( Mcpwp_Destructive_Gate::enabled_for_site() );
+		$this->assertTrue( (bool) get_option( 'mcpwp_settings' )['enable_logging'], 'Only the switch is touched.' );
+
+		// Once: an administrator turning it off afterwards is respected.
+		update_option( 'mcpwp_settings', array( 'destructive_requires_approval' => false ) );
+		Mcpwp_Activator::reset_destructive_switch();
+		$this->assertFalse( Mcpwp_Destructive_Gate::enabled_for_site() );
+	}
+
+	public function test_sanitize_params_bounds_depth_and_key_count(): void {
+		// P2-6: the bounds that protect a reviewer who may be another model.
+		$deep = array( 'a' => array( 'b' => array( 'c' => array( 'd' => array( 'e' => array( 'f' => 'too deep' ) ) ) ) ) );
+		$out  = Mcpwp_Destructive_Gate::sanitize_params( $deep );
+		$this->assertNull( $out['a']['b']['c']['d']['e'] );
+
+		$wide = array();
+		for ( $i = 1; $i <= 60; $i++ ) {
+			$wide[ 'k' . $i ] = $i;
+		}
+		$this->assertCount( 50, Mcpwp_Destructive_Gate::sanitize_params( $wide ) );
+		$this->assertSame( array( 'ok' => 'x', 'badkey' => 'y' ), Mcpwp_Destructive_Gate::sanitize_params( array( 'ok' => 'x', '<bad key>' => 'y' ) ), 'Keys are reduced to a safe charset; a key nothing survives of is dropped.' );
+		$this->assertSame( array(), Mcpwp_Destructive_Gate::sanitize_params( array( '<>' => 'y' ) ) );
+	}
+
+	public function test_only_an_approved_request_is_applied(): void {
+		$this->seed( 10 );
+		$approval_id = $this->delete_page( 10, true )->get_data()['approval_id'];
+		$reviewer    = ( new Mcpwp_REST_Pages() )->create_scoped_api_key( 'reviewer', array( 'admin' ) );
+
+		$pending = Mcpwp_Approvals::apply_request( $approval_id, array( 'api_key' => $reviewer['key'], 'actor' => $reviewer['id'] ) );
+		$this->assertSame( 'approval_not_ready', $pending->get_error_code() );
+
+		Mcpwp_Approvals::reject_request( $approval_id, 'no' );
+		$rejected = Mcpwp_Approvals::apply_request( $approval_id, array( 'api_key' => $reviewer['key'], 'actor' => $reviewer['id'] ) );
+		$this->assertSame( 'approval_not_ready', $rejected->get_error_code() );
+		$this->assertArrayHasKey( 10, $GLOBALS['_mcpwp_test_posts'] );
 	}
 }
