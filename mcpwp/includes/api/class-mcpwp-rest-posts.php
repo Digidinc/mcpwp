@@ -330,7 +330,7 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 				return $this->error_response( 'not_found', __( 'Post not found.', 'mcpwp' ), 404, array( 'id' => $post_id ) );
 			}
 		}
-		if ( isset( $post ) && $post && Mcpwp_Destructive_Gate::delete_is_permanent( $post->post_type, $force ) && Mcpwp_Destructive_Gate::should_gate( $this->get_current_api_key_record() ) ) {
+		if ( isset( $post ) && $post && Mcpwp_Destructive_Gate::delete_is_permanent( $post->post_type, $force, (string) $post->post_status ) && Mcpwp_Destructive_Gate::should_gate( $this->get_current_api_key_record() ) ) {
 			return $this->defer_destructive( 'delete_post', $request, array( 'type' => (string) $post->post_type, 'id' => $post_id, 'title' => (string) $post->post_title ), sprintf( 'Permanently delete post #%d', $post_id ) );
 		}
 
@@ -591,7 +591,9 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 		);
 
 		// Purging every draft permanently has no undo: approval by default (#536).
-		if ( $args['force'] && Mcpwp_Destructive_Gate::should_gate( $this->get_current_api_key_record() ) ) {
+		// Drafts are post/page only (Mcpwp_Drafts), so this is permanent on
+		// force, or on a site with EMPTY_TRASH_DAYS = 0.
+		if ( Mcpwp_Destructive_Gate::delete_is_permanent( 'post', $args['force'] ) && Mcpwp_Destructive_Gate::should_gate( $this->get_current_api_key_record() ) ) {
 			return $this->defer_destructive( 'delete_all_drafts', $request, array( 'type' => 'drafts', 'id' => null, 'title' => 'all drafts' ), 'Permanently delete all drafts' );
 		}
 

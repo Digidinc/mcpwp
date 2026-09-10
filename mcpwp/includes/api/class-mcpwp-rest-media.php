@@ -480,9 +480,9 @@ class Mcpwp_REST_Media extends Mcpwp_REST_API {
 		// Deleting media removes files from disk: approval by default (#536).
 		// Without MEDIA_TRASH (off by default) force=false deletes outright,
 		// so the flag alone is not the question (#536 round 5).
-		if ( Mcpwp_Destructive_Gate::delete_is_permanent( 'attachment', $force ) && Mcpwp_Destructive_Gate::should_gate( $this->get_current_api_key_record() ) ) {
-			$attachment = get_post( $attachment_id );
-			if ( ! $attachment || 'attachment' !== $attachment->post_type ) {
+		$attachment = Mcpwp_Destructive_Gate::should_gate( $this->get_current_api_key_record() ) ? get_post( $attachment_id ) : null;
+		if ( $attachment && Mcpwp_Destructive_Gate::delete_is_permanent( 'attachment', $force, (string) $attachment->post_status ) ) {
+			if ( 'attachment' !== $attachment->post_type ) {
 				return $this->error_response( 'not_found', __( 'Media not found.', 'mcpwp' ), 404, array( 'id' => $attachment_id ) );
 			}
 			return $this->defer_destructive( 'delete_media', $request, array( 'type' => 'attachment', 'id' => $attachment_id, 'title' => (string) $attachment->post_title ), sprintf( 'Permanently delete media #%d', $attachment_id ) );

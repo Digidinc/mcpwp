@@ -693,6 +693,9 @@ final class DestructiveGateTest extends TestCase {
 			'delete_elementor_template' => 'wp_delete_elementor_template',
 		);
 		foreach ( Mcpwp_Destructive_Gate::OPERATION_ROUTES as $op => $spec ) {
+			if ( in_array( $op, Mcpwp_Destructive_Gate::REST_ONLY_OPERATIONS, true ) ) {
+				continue;
+			}
 			$this->assertArrayHasKey( $op, $tools, $op );
 			$tool = $tools[ $op ];
 			$this->assertArrayHasKey( $tool, $maps, $tool . ' is in a tool map.' );
@@ -949,5 +952,73 @@ final class DestructiveGateTest extends TestCase {
 	public function test_a_post_like_target_with_no_usable_id_is_tagged_not_empty(): void {
 		$this->assertTrue( Mcpwp_Destructive_Gate::fingerprint( array( 'type' => 'page', 'id' => '12abc' ) )['unparseable'] );
 		$this->assertTrue( Mcpwp_Destructive_Gate::fingerprint( array( 'type' => 'page', 'id' => 0 ) )['unparseable'] );
+	}
+
+	// ---------------------------------------------------------------
+	// Round 6: an already-trashed post is permanent; users are gated; the
+	// oracle walks REST controllers, not only tool names.
+	// ---------------------------------------------------------------
+
+	public function test_force_false_on_an_already_trashed_post_is_permanent_and_gated(): void {
+		$this->assertTrue( Mcpwp_Destructive_Gate::delete_is_permanent( 'post', false, 'trash' ) );
+		$this->assertFalse( Mcpwp_Destructive_Gate::delete_is_permanent( 'post', false, 'publish' ) );
+		$this->assertFalse( Mcpwp_Destructive_Gate::delete_is_permanent( 'product', false ), 'WooCommerce trashes a product on force=false.' );
+
+		$this->seed( 7, 'post', 'trash' );
+		$posts   = new Mcpwp_REST_Posts();
+		$request = new WP_REST_Request( 'DELETE', '/mcpwp/v1/posts/7', array( 'id' => 7 ) );
+		$this->assertSame( 202, $this->authed( $posts, $request )->delete_post( $request )->get_status() );
+		$this->assertArrayHasKey( 7, $GLOBALS['_mcpwp_test_posts'] );
+
+		$GLOBALS['mcpwp_test_public_post_types'] = array( 'page' );
+		$this->seed( 8, 'page', 'trash' );
+		$content = new Mcpwp_REST_Content();
+		$request = new WP_REST_Request( 'DELETE', '/mcpwp/v1/content/page/8', array( 'post_type' => 'page', 'id' => 8 ) );
+		$this->assertSame( 202, $this->authed( $content, $request )->delete_content( $request )->get_status() );
+		$this->assertArrayHasKey( 8, $GLOBALS['_mcpwp_test_posts'] );
+		unset( $GLOBALS['mcpwp_test_public_post_types'] );
+	}
+
+	public function test_deleting_a_user_is_deferred(): void {
+		require_once dirname( __DIR__ ) . '/includes/pro/api/class-mcpwp-rest-users.php';
+		$never = new class() { public $calls = 0; public function __call( $n, $a ) { $this->calls++; return true; } };
+		$ctl   = new Mcpwp_REST_Users( $never );
+		if ( ! function_exists( 'get_user_by' ) ) {
+			function get_user_by( $field, $value ) {
+				return 42 === (int) $value ? (object) array( 'ID' => 42, 'user_login' => 'alice', 'user_email' => 'a@x.test', 'roles' => array( 'editor' ) ) : false;
+			}
+		}
+		$request = new WP_REST_Request( 'DELETE', '/mcpwp/v1/users/42', array( 'id' => 42 ) );
+		$response = $this->authed( $ctl, $request )->delete_user( $request );
+		$this->assertSame( 202, $response->get_status(), is_wp_error( $response ) ? $response->get_error_message() : '' );
+		$this->assertSame( 'delete_user', $response->get_data()['operation'] );
+		$this->assertSame( 0, $never->calls );
+
+		$fp = Mcpwp_Destructive_Gate::fingerprint( array( 'type' => 'user', 'id' => 42 ) );
+		$this->assertTrue( $fp['exists'] );
+		$this->assertSame( 'alice', $fp['title'] );
+		$this->assertTrue( Mcpwp_Destructive_Gate::fingerprint_user( 0 )['unparseable'] );
+	}
+
+	public function test_every_controller_registering_a_delete_route_is_gated_or_listed_with_a_reason(): void {
+		// Round-6 P0-2: the name-shaped oracle could not see a REST-only
+		// delete (users). This one walks the controllers themselves.
+		$root  = dirname( __DIR__ ) . '/includes';
+		$files = array_merge( glob( $root . '/api/*.php' ), glob( $root . '/pro/api/*.php' ) );
+		$seen  = 0;
+		foreach ( $files as $file ) {
+			$src = file_get_contents( $file );
+			if ( false === strpos( $src, 'WP_REST_Server::DELETABLE' ) ) {
+				continue;
+			}
+			$seen++;
+			$name = basename( $file );
+			$this->assertTrue(
+				false !== strpos( $src, 'Mcpwp_Destructive_Gate' ) || isset( Mcpwp_Destructive_Gate::UNGATED_DELETE_CONTROLLERS[ $name ] ),
+				$name . ' registers a DELETE route and is neither gated nor listed as ungated with a reason.'
+			);
+		}
+		$this->assertGreaterThan( 10, $seen, 'Premise: the controllers were read.' );
+		$this->assertArrayHasKey( 'class-mcpwp-rest-users.php', array_flip( array_map( 'basename', $files ) ) );
 	}
 }

@@ -232,6 +232,16 @@ class Mcpwp_REST_Users extends Mcpwp_REST_API {
 		$user_id = absint( $request->get_param( 'id' ) );
 		$reassign = $request->get_param( 'reassign' );
 
+		// Deleting a user destroys an identity and reassigns or destroys
+		// everything they own: approval by default (#536 round 6).
+		if ( class_exists( 'Mcpwp_Destructive_Gate' ) && Mcpwp_Destructive_Gate::should_gate( $this->get_current_api_key_record() ) ) {
+			$user = function_exists( 'get_user_by' ) ? get_user_by( 'ID', $user_id ) : null;
+			if ( ! $user ) {
+				return $this->error_response( 'not_found', __( 'User not found.', 'mcpwp' ), 404, array( 'id' => $user_id ) );
+			}
+			return $this->defer_destructive( 'delete_user', $request, array( 'type' => 'user', 'id' => $user_id, 'title' => (string) $user->user_login ), sprintf( 'Permanently delete user #%d (%s)', $user_id, (string) $user->user_login ) );
+		}
+
 		$result = $this->users->delete_user( $user_id, $reassign ? absint( $reassign ) : null );
 
 		if ( is_wp_error( $result ) ) {

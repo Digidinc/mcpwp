@@ -680,7 +680,7 @@ class Mcpwp_REST_WooCommerce extends Mcpwp_REST_API {
 		// Permanently deleting a product is revenue-bearing data with no
 		// undo: approval by default (#536 round 2). Only for a product that
 		// exists — a deferral is not a way to manufacture records.
-		if ( $force && class_exists( 'Mcpwp_Destructive_Gate' ) && Mcpwp_Destructive_Gate::should_gate( $this->get_current_api_key_record() ) ) {
+		if ( class_exists( 'Mcpwp_Destructive_Gate' ) && Mcpwp_Destructive_Gate::delete_is_permanent( 'product', $force ) && Mcpwp_Destructive_Gate::should_gate( $this->get_current_api_key_record() ) ) {
 			$product = get_post( $id );
 			if ( ! $product || 'product' !== $product->post_type ) {
 				return $this->error_response( 'not_found', __( 'Product not found.', 'mcpwp' ), 404, array( 'id' => $id ) );

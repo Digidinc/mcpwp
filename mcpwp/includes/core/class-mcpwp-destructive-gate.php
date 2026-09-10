@@ -45,7 +45,32 @@ class Mcpwp_Destructive_Gate {
 	 * menus, webhooks) or incident response (revoke, reset) — see the test
 	 * that ties the two lists together.
 	 */
-	const GATED = array( 'delete_page', 'delete_post', 'delete_content', 'delete_all_drafts', 'delete_media', 'delete_product', 'delete_course_category', 'delete_widget', 'delete_elementor_template' );
+	const GATED = array( 'delete_page', 'delete_post', 'delete_content', 'delete_all_drafts', 'delete_media', 'delete_product', 'delete_course_category', 'delete_widget', 'delete_elementor_template', 'delete_user' );
+
+	/**
+	 * Gated operations with no MCP tool: reachable through REST only. The
+	 * route-map invariant test skips the tool-map half for these.
+	 */
+	const REST_ONLY_OPERATIONS = array( 'delete_user' );
+
+	/**
+	 * REST controllers that register a DELETE route without the gate, each
+	 * with the reason. The coverage oracle walks every controller file that
+	 * registers WP_REST_Server::DELETABLE; one that is neither gated nor
+	 * listed here fails it (#536 round 6).
+	 */
+	const UNGATED_DELETE_CONTROLLERS = array(
+		'class-mcpwp-rest-menus.php'           => 'menus and items are re-creatable; declared exempt as tools',
+		'class-mcpwp-rest-site-manager.php'    => 'menu items (pro alias); re-creatable',
+		'class-mcpwp-rest-webhooks.php'        => 'a webhook is re-registered',
+		'class-mcpwp-rest-site-taxonomy.php'   => 'terms: content kept, term re-creatable by name (wp_delete_term exempt)',
+		'class-mcpwp-rest-site-settings.php'   => 'favicon: removes the site icon assignment, the attachment stays',
+		'class-mcpwp-rest-theme-builder.php'   => 'theme-builder conditions/custom code: option-backed text, re-creatable',
+		'class-mcpwp-rest-site-memory.php'     => 'memory entries, re-creatable with wp_remember',
+		'class-mcpwp-rest-site-blueprints.php' => 'a stored blueprint export, re-creatable by extracting again',
+		'class-mcpwp-rest-site-custom-css.php' => 'a text block, re-creatable',
+		'class-mcpwp-rest-elementor.php'       => 'kit CSS blocks and sections: text/JSON edits with the action-log snapshot',
+	);
 
 	/**
 	 * The one route (method + path) each gated operation may replay. A stored
@@ -62,6 +87,7 @@ class Mcpwp_Destructive_Gate {
 		'delete_course_category' => array( 'DELETE', '#^/mcpwp/v1/learnpress/categories/\d+$#' ),
 		'delete_widget'          => array( 'DELETE', '#^/mcpwp/v1/widgets/[A-Za-z0-9_\-]+$#' ),
 		'delete_elementor_template' => array( 'DELETE', '#^/mcpwp/v1/elementor/templates/\d+$#' ),
+		'delete_user'               => array( 'DELETE', '#^/mcpwp/v1/users/\d+$#' ),
 	);
 
 	/**
@@ -240,14 +266,21 @@ class Mcpwp_Destructive_Gate {
 	 * @param bool   $force     The caller's force flag.
 	 * @return bool
 	 */
-	public static function delete_is_permanent( $post_type, $force ) {
+	public static function delete_is_permanent( $post_type, $force, $status = '' ) {
 		if ( $force ) {
+			return true;
+		}
+		// Core's trash branch is skipped for a post that is ALREADY in the
+		// trash: force=false on it deletes permanently (#536 round 6).
+		if ( 'trash' === (string) $status ) {
 			return true;
 		}
 		if ( 'attachment' === $post_type ) {
 			return ! ( defined( 'MEDIA_TRASH' ) && MEDIA_TRASH );
 		}
-		if ( ! in_array( (string) $post_type, array( 'post', 'page' ), true ) ) {
+		// post and page trash under EMPTY_TRASH_DAYS; WooCommerce's data
+		// store trashes a product on force=false as well.
+		if ( ! in_array( (string) $post_type, array( 'post', 'page', 'product' ), true ) ) {
 			return true;
 		}
 		return defined( 'EMPTY_TRASH_DAYS' ) && ! EMPTY_TRASH_DAYS;
@@ -431,6 +464,10 @@ class Mcpwp_Destructive_Gate {
 			return self::fingerprint_widget( isset( $resource['id'] ) ? (string) $resource['id'] : '' );
 		}
 
+		if ( isset( $resource['type'] ) && 'user' === $resource['type'] ) {
+			return self::fingerprint_user( isset( $resource['id'] ) ? (int) $resource['id'] : 0 );
+		}
+
 		if ( 'api_key' === $resource['type'] ) {
 			return array();
 		}
@@ -484,6 +521,36 @@ class Mcpwp_Destructive_Gate {
 			'title'    => (string) $term->name,
 			'count'    => isset( $term->count ) ? (int) $term->count : 0,
 			'hash'     => hash( 'sha256', (string) $term->name . "\0" . (string) $term->slug . "\0" . (string) $taxonomy . "\0" . ( isset( $term->parent ) ? (int) $term->parent : 0 ) ),
+		);
+	}
+
+	/**
+	 * A user, as a fingerprint: login, e-mail and roles. Renamed, re-mailed
+	 * or promoted between review and apply is a different person to delete.
+	 *
+	 * @param int $user_id User id.
+	 * @return array
+	 */
+	public static function fingerprint_user( $user_id ) {
+		if ( $user_id < 1 ) {
+			return array( 'exists' => false, 'unparseable' => true );
+		}
+		if ( ! function_exists( 'get_user_by' ) ) {
+			return array( 'exists' => false );
+		}
+		$user = get_user_by( 'ID', $user_id );
+		if ( ! $user ) {
+			return array( 'exists' => false );
+		}
+		$roles = isset( $user->roles ) && is_array( $user->roles ) ? $user->roles : array();
+		sort( $roles );
+		return array(
+			'exists'   => true,
+			'type'     => 'user',
+			'status'   => '',
+			'modified' => '',
+			'title'    => (string) $user->user_login,
+			'hash'     => hash( 'sha256', (string) $user->user_login . "\0" . (string) $user->user_email . "\0" . implode( ',', $roles ) ),
 		);
 	}
 
@@ -725,14 +792,18 @@ class Mcpwp_Destructive_Gate {
 			return true;
 		}
 
-		if ( isset( $target['type'] ) && in_array( $target['type'], array( 'term', 'widget' ), true ) ) {
+		if ( isset( $target['type'] ) && in_array( $target['type'], array( 'term', 'widget', 'user' ), true ) ) {
 			$raw_id = isset( $payload['params']['id'] ) ? $payload['params']['id'] : '';
 			if ( '' === (string) $raw_id && preg_match( '#/([^/]+)/?$#', (string) $payload['route'], $m ) ) {
 				$raw_id = $m[1];
 			}
-			$now = 'term' === $target['type']
-				? self::fingerprint_term( (int) $raw_id, isset( $target['taxonomy'] ) ? (string) $target['taxonomy'] : '' )
-				: self::fingerprint_widget( (string) $raw_id );
+			if ( 'term' === $target['type'] ) {
+				$now = self::fingerprint_term( (int) $raw_id, isset( $target['taxonomy'] ) ? (string) $target['taxonomy'] : '' );
+			} elseif ( 'user' === $target['type'] ) {
+				$now = self::fingerprint_user( (int) $raw_id );
+			} else {
+				$now = self::fingerprint_widget( (string) $raw_id );
+			}
 			if ( empty( $now['exists'] ) ) {
 				return true; // Already gone; the route will answer 404.
 			}
