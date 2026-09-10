@@ -491,4 +491,42 @@ final class WebhookLogRedactionTest extends TestCase {
 		$this->assertStringNotContainsString( 'rcv_9f8e7d6c5b4a3f2e1d0c', $result['response_body'] );
 		$this->assertSame( '[redacted]', json_decode( $result['response_body'], true )['session_token'] );
 	}
+
+	// -----------------------------------------------------------------
+	// Review r3 R3-3: Go's encoding/json and Rails' to_json escape only
+	// < > & (as lower-case \u003c \u003e \u0026), writing quotes as \",
+	// apostrophes and non-ASCII as they are; .NET writes lower-case %xx.
+	// -----------------------------------------------------------------
+
+	private static function go_json( string $value ): string {
+		$plain = substr( json_encode( $value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE ), 1, -1 );
+		return str_replace( array( '<', '>', '&' ), array( '\u003c', '\u003e', '\u0026' ), $plain );
+	}
+
+	public function test_go_and_rails_html_safe_json_with_a_quote_an_apostrophe_or_non_ascii_is_scrubbed(): void {
+		foreach ( array( 'ab"cd&ef<gh', "it's&secret<1>", 'pä&sswörd<x>' ) as $secret ) {
+			$go = self::go_json( $secret );
+			$this->assertStringContainsString( '\u0026', $go, 'Fixture: the Go/Rails form.' );
+
+			$stored = $this->scrubbed_response_for( array( $secret ), '{"k":"' . $go . '"}' );
+			$this->assertStringNotContainsString( $go, $stored, $secret );
+			$this->assertSame( '{"k":"[redacted]"}', $stored, $secret );
+		}
+	}
+
+	public function test_lower_case_percent_encoding_is_scrubbed(): void {
+		$secret = 'p@ss w/rd+1';
+		$lower  = static function ( $m ) {
+			return strtolower( $m[0] );
+		};
+		$raw    = preg_replace_callback( '/%[0-9A-F]{2}/', $lower, rawurlencode( $secret ) );
+		$form   = preg_replace_callback( '/%[0-9A-F]{2}/', $lower, urlencode( $secret ) );
+		$this->assertSame( 'p%40ss%20w%2frd%2b1', $raw, 'Fixture: RFC 3986, lower-case hex.' );
+		$this->assertSame( 'p%40ss+w%2frd%2b1', $form, 'Fixture: .NET HttpUtility.UrlEncode.' );
+
+		$stored = $this->scrubbed_response_for( array( $secret ), 'error=invalid&token=' . $raw . '&echo=' . $form );
+		$this->assertStringNotContainsString( $raw, $stored );
+		$this->assertStringNotContainsString( $form, $stored );
+		$this->assertSame( 'error=invalid&token=[redacted]&echo=[redacted]', $stored );
+	}
 }

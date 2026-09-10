@@ -719,12 +719,17 @@ class Mcpwp_Webhooks {
 	/**
 	 * The ways one value comes back inside a response body.
 	 *
-	 * - As sent, and URL-encoded (RFC 3986 and form encoding).
+	 * - As sent, and URL-encoded (RFC 3986 and form encoding), with the hex
+	 *   digits in upper case (PHP) and lower case (.NET HttpUtility.UrlEncode).
 	 * - JSON string content: PHP's default; unescaped slashes and/or unicode;
-	 *   HTML-safe (JSON_HEX_* — also what Go's encoding/json writes); each
-	 *   with \uXXXX in both letter cases (PHP writes some upper case, Go and
-	 *   Python lower case — Python's ensure_ascii is the escaped-unicode,
+	 *   PHP's fully HTML-safe form (JSON_HEX_*); each with \uXXXX in both
+	 *   letter cases (PHP writes JSON_HEX_* escapes upper case, Go and Python
+	 *   lower case — Python's ensure_ascii is the escaped-unicode,
 	 *   unescaped-slash form).
+	 * - Go's encoding/json and Rails' to_json, which no PHP flag set produces:
+	 *   only < > & escaped (\u003c \u003e \u0026) plus U+2028/U+2029,
+	 *   quotes as \", apostrophes and non-ASCII left as they are (review r3
+	 *   R3-3); with and without escaped slashes.
 	 * - Each JSON form escaped again (a JSON document carried in a string).
 	 * - HTML: the value and every JSON form with & < > escaped, and quotes
 	 *   left as they are or written as any common entity (ENT_QUOTES,
@@ -757,6 +762,16 @@ class Mcpwp_Webhooks {
 			$json[ (string) preg_replace_callback( '/\\\\u([0-9A-Fa-f]{4})/', $upper, $inner ) ] = true;
 		}
 
+		$plain_json = wp_json_encode( $value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE );
+		if ( is_string( $plain_json ) && strlen( $plain_json ) >= 2 ) {
+			$go = str_replace( array( '<', '>', '&' ), array( '\\u003c', '\\u003e', '\\u0026' ), substr( $plain_json, 1, -1 ) );
+			$go = str_replace( array( "\u{2028}", "\u{2029}" ), array( '\\u2028', '\\u2029' ), $go );
+			foreach ( array( $go, str_replace( '/', '\\/', $go ) ) as $go_form ) {
+				$json[ $go_form ] = true;
+				$json[ (string) preg_replace_callback( '/\\\\u([0-9A-Fa-f]{4})/', $upper, $go_form ) ] = true;
+			}
+		}
+
 		foreach ( array_keys( $json ) as $inner ) {
 			foreach ( array( 0, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE ) as $flags ) {
 				$twice = wp_json_encode( (string) $inner, $flags );
@@ -766,11 +781,17 @@ class Mcpwp_Webhooks {
 			}
 		}
 
-		$forms = array(
-			$value               => true,
-			rawurlencode( $value ) => true,
-			urlencode( $value )    => true,
-		) + $json;
+		$forms = array( $value => true ) + $json;
+		foreach ( array( rawurlencode( $value ), urlencode( $value ) ) as $url_form ) {
+			$forms[ $url_form ] = true;
+			$forms[ (string) preg_replace_callback(
+				'/%[0-9A-F]{2}/',
+				static function ( $m ) {
+					return strtolower( $m[0] );
+				},
+				$url_form
+			) ] = true;
+		}
 
 		foreach ( array_merge( array( $value ), array_map( 'strval', array_keys( $json ) ) ) as $plain ) {
 			$base = htmlspecialchars( $plain, ENT_NOQUOTES, 'UTF-8' );
