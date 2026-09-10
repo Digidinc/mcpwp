@@ -637,6 +637,16 @@ class Mcpwp_WooCommerce {
 			'date_modified'     => $product->get_date_modified() ? $product->get_date_modified()->format( 'c' ) : null,
 		);
 
+		// Whether WooCommerce would sell it, and where the catalog shows it
+		// (#843). A fact that cannot be computed says 'unknown' and why, in
+		// unknown_reasons — a null here read as "no" to every client.
+		$unknown                    = array();
+		$data['purchasable']        = $this->product_fact( $product, 'is_purchasable', 'purchasable', $unknown );
+		$data['catalog_visibility'] = $this->product_fact( $product, 'get_catalog_visibility', 'catalog_visibility', $unknown );
+		if ( ! empty( $unknown ) ) {
+			$data['unknown_reasons'] = $unknown;
+		}
+
 		if ( $detailed ) {
 			$data['description']       = $product->get_description();
 			$data['short_description'] = $product->get_short_description();
@@ -664,6 +674,41 @@ class Mcpwp_WooCommerce {
 		}
 
 		return $data;
+	}
+
+	/**
+	 * Read one product fact, or record why it could not be read.
+	 *
+	 * @param WC_Product $product Product object.
+	 * @param string     $method  WC_Product method: is_purchasable or get_catalog_visibility.
+	 * @param string     $field   Response field the fact is reported under.
+	 * @param array      $unknown Collected by reference: field => reason.
+	 * @return bool|string The fact, or 'unknown'.
+	 */
+	private function product_fact( $product, $method, $field, array &$unknown ) {
+		if ( ! is_object( $product ) || ! method_exists( $product, $method ) ) {
+			$unknown[ $field ] = sprintf( 'WC_Product::%s() is not available on %s.', $method, is_object( $product ) ? get_class( $product ) : gettype( $product ) );
+			return 'unknown';
+		}
+
+		try {
+			$value = $product->$method();
+		} catch ( Throwable $e ) {
+			$unknown[ $field ] = sprintf( 'WC_Product::%s() threw %s: %s', $method, get_class( $e ), $e->getMessage() );
+			return 'unknown';
+		}
+
+		if ( 'is_purchasable' === $method ) {
+			// WooCommerce itself tests this for truthiness before selling.
+			return (bool) $value;
+		}
+
+		if ( ! is_string( $value ) || '' === $value ) {
+			$unknown[ $field ] = sprintf( 'WC_Product::%s() returned no value.', $method );
+			return 'unknown';
+		}
+
+		return $value;
 	}
 
 	/**
