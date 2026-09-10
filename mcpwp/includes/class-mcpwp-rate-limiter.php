@@ -289,6 +289,25 @@ class Mcpwp_Rate_Limiter {
 	}
 
 	/**
+	 * The budget left for the caller metered on this request, for in-band
+	 * reporting (#802). Null when nothing was metered yet.
+	 *
+	 * @return array|null {limit, remaining, reset_in, window}
+	 */
+	public function get_budget() {
+		if ( empty( $this->current_data ) ) {
+			return null;
+		}
+
+		return array(
+			'limit'     => (int) $this->current_data['limit'],
+			'remaining' => max( 0, (int) $this->current_data['remaining'] ),
+			'reset_in'  => max( 0, (int) $this->current_data['reset'] - time() ),
+			'window'    => (string) $this->current_data['window'],
+		);
+	}
+
+	/**
 	 * Get client identifier.
 	 *
 	 * @return string Client identifier (IP address).

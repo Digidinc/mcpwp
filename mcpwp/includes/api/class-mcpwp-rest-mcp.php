@@ -542,8 +542,16 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				$response = $this->process_single_request( $single_request, $request );
 				// Notifications return null, don't include in response
 				if ( $response !== null ) {
-					$responses[] = $response;
+					$responses[] = $this->attach_rate_limit_meta( $response );
 				}
+			}
+
+			// A batch of nothing but notifications has no response body. An
+			// empty 200 is the shape a client cannot tell from a server that
+			// returned nothing (#802), so say 204 like the single-notification
+			// path does.
+			if ( empty( $responses ) ) {
+				return $this->prepare_mcp_response( new WP_REST_Response( null, 204 ) );
 			}
 
 			$rest_response = new WP_REST_Response( array_values( $responses ), 200 );
@@ -559,8 +567,116 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			return $this->prepare_mcp_response( $rest_response );
 		}
 
-		$rest_response = new WP_REST_Response( $response, 200 );
+		$rest_response = new WP_REST_Response( $this->attach_rate_limit_meta( $response ), 200 );
 		return $this->prepare_mcp_response( $rest_response );
+	}
+
+	/**
+	 * JSON-RPC methods that only ask about the session, never change the site.
+	 *
+	 * @var array
+	 */
+	private static $diagnostic_methods = array( 'initialize', 'ping' );
+
+	/**
+	 * Tools that only answer "may I continue, and when" (#802).
+	 *
+	 * @var array
+	 */
+	private static $diagnostic_tools = array( 'wp_rate_limit_status', 'wp_site_info' );
+
+	/**
+	 * Whether every operation in this request is diagnostic (#802).
+	 *
+	 * The body is inspected, not trusted: a parse failure or an unknown method
+	 * is not diagnostic, and one write anywhere in a batch makes the whole
+	 * request a write. The decision only picks a rate-limit bucket — auth
+	 * has already been checked by the time this runs.
+	 *
+	 * @param WP_REST_Request $request Request.
+	 * @return bool
+	 */
+	protected function is_diagnostic_request( $request ) {
+		$body = method_exists( $request, 'get_json_params' ) ? $request->get_json_params() : null;
+
+		if ( ! is_array( $body ) || empty( $body ) ) {
+			return false;
+		}
+
+		$operations = isset( $body[0] ) ? $body : array( $body );
+
+		foreach ( $operations as $operation ) {
+			if ( ! is_array( $operation ) || ! $this->is_diagnostic_operation( $operation ) ) {
+				return false;
+			}
+		}
+
+		return true;
+	}
+
+	/**
+	 * @param array $operation One JSON-RPC request.
+	 * @return bool
+	 */
+	private function is_diagnostic_operation( array $operation ) {
+		$method = isset( $operation['method'] ) && is_string( $operation['method'] ) ? $operation['method'] : '';
+
+		if ( '' === $method ) {
+			return false;
+		}
+
+		if ( in_array( $method, self::$diagnostic_methods, true ) || 0 === strpos( $method, 'notifications/' ) ) {
+			return true;
+		}
+
+		if ( 'tools/call' !== $method ) {
+			return false;
+		}
+
+		$name = isset( $operation['params']['name'] ) ? $operation['params']['name'] : '';
+
+		return is_string( $name ) && in_array( $name, self::$diagnostic_tools, true );
+	}
+
+	/**
+	 * Put the caller's remaining budget on a result so a client can pace
+	 * itself before the wall instead of learning about it from a 429 (#802).
+	 *
+	 * Errors are left alone: JSON-RPC error objects have no _meta, and a 429
+	 * already carries its budget in its data.
+	 *
+	 * @param array $response JSON-RPC response.
+	 * @return array
+	 */
+	private function attach_rate_limit_meta( $response ) {
+		if ( ! is_array( $response ) || ! isset( $response['result'] ) || ! is_array( $response['result'] ) ) {
+			return $response;
+		}
+
+		$budget = $this->current_rate_limit_budget();
+
+		if ( null === $budget ) {
+			return $response;
+		}
+
+		if ( ! isset( $response['result']['_meta'] ) || ! is_array( $response['result']['_meta'] ) ) {
+			$response['result']['_meta'] = array();
+		}
+
+		$response['result']['_meta']['rate_limit'] = $budget;
+
+		return $response;
+	}
+
+	/**
+	 * @return array|null
+	 */
+	private function current_rate_limit_budget() {
+		if ( ! class_exists( 'Mcpwp_Rate_Limiter' ) ) {
+			return null;
+		}
+
+		return Mcpwp_Rate_Limiter::get_instance()->get_budget();
 	}
 
 	/**
@@ -651,6 +767,15 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			$server_info['role']            = $role;
 			$server_info['tool_categories'] = $allowed_categories;
 		}
+
+		// What a bulk client needs before it starts (#802): the plugin version
+		// so a swap under a running job is detectable, the budget so it can
+		// pace itself, and how many lanes the host can be expected to carry.
+		$server_info['plugin_version']   = $this->server_version;
+		$server_info['wp_version']       = function_exists( 'get_bloginfo' ) ? (string) get_bloginfo( 'version' ) : '';
+		$server_info['site_url']         = function_exists( 'home_url' ) ? (string) home_url( '/' ) : '';
+		$server_info['concurrency_hint'] = max( 1, (int) apply_filters( 'mcpwp_concurrency_hint', 2 ) );
+		$server_info['rate_limit']       = $this->describe_rate_limit();
 
 		$result = array(
 			'protocolVersion' => $this->protocol_version,
@@ -1939,6 +2064,53 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 * @param WP_REST_Response $response Response object.
 	 */
 	/**
+	 * The configured limits plus what is left for this caller, for initialize.
+	 *
+	 * @return array
+	 */
+	private function describe_rate_limit() {
+		if ( ! class_exists( 'Mcpwp_Rate_Limiter' ) ) {
+			return array( 'enabled' => false );
+		}
+
+		$limiter  = Mcpwp_Rate_Limiter::get_instance();
+		$settings = $limiter->get_settings();
+		$key      = $this->get_current_api_key_record();
+		$limits   = array(
+			'requests_per_minute' => (int) $settings['requests_per_minute'],
+			'requests_per_hour'   => (int) $settings['requests_per_hour'],
+			'burst_limit'         => (int) $settings['burst_limit'],
+		);
+
+		// A key with its own ceilings reports its own ceilings.
+		if ( is_array( $key ) && ! empty( $key['rate_limits'] ) && is_array( $key['rate_limits'] ) ) {
+			$map = array(
+				'per_minute' => 'requests_per_minute',
+				'per_hour'   => 'requests_per_hour',
+				'burst'      => 'burst_limit',
+			);
+			foreach ( $map as $from => $to ) {
+				if ( isset( $key['rate_limits'][ $from ] ) && (int) $key['rate_limits'][ $from ] > 0 ) {
+					$limits[ $to ] = (int) $key['rate_limits'][ $from ];
+				}
+			}
+		}
+
+		$described = array_merge( array( 'enabled' => (bool) $limiter->is_enabled() ), $limits );
+		$budget    = $limiter->get_budget();
+
+		if ( null !== $budget ) {
+			$described['remaining'] = $budget['remaining'];
+			$described['reset_in']  = $budget['reset_in'];
+			$described['window']    = $budget['window'];
+		}
+
+		$described['diagnostics'] = 'initialize, wp_rate_limit_status and wp_site_info are metered separately and stay reachable while the limit is exhausted. Honour Retry-After on 429; treat 502/503/504 like 429 with backoff; keep in-flight calls at or below concurrency_hint.';
+
+		return $described;
+	}
+
+	/**
 	 * Prepare MCP response with proper headers.
 	 *
 	 * Ensures correct Content-Type, no-cache headers, rate limit headers,
@@ -1952,6 +2124,10 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 
 		// Force correct content type for JSON-RPC responses.
 		$response->header( 'Content-Type', 'application/json; charset=UTF-8' );
+
+		// Every response names the plugin that produced it, so a client can
+		// notice the plugin being replaced under a running job (#802).
+		$response->header( 'X-MCPWP-Version', $this->server_version );
 
 		// Prevent caching of API responses.
 		$response->header( 'Cache-Control', 'no-cache, no-store, must-revalidate' );

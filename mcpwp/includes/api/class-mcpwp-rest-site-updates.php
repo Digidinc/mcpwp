@@ -458,6 +458,19 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 		);
 	}
 
+	/**
+	 * GET /rate-limit is the REST spelling of "when may I resume" (#802).
+	 *
+	 * @param WP_REST_Request $request Request.
+	 * @return bool
+	 */
+	protected function is_diagnostic_request( $request ) {
+		$method = method_exists( $request, 'get_method' ) ? strtoupper( (string) $request->get_method() ) : 'POST';
+		$route  = method_exists( $request, 'get_route' ) ? (string) $request->get_route() : '';
+
+		return 'GET' === $method && '/rate-limit' === substr( $route, -11 );
+	}
+
 	public function get_rate_limit_status( $request ) {
 		$this->log_activity( 'rate_limit_status', $request );
 

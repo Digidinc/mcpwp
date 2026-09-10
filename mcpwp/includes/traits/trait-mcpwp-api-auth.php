@@ -254,7 +254,19 @@ trait Mcpwp_Api_Auth {
 			? 'key:' . sanitize_key( $matched_key['id'] )
 			: 'key:' . hash( 'sha256', $api_key );
 
-		$rate_limit_check = $this->check_rate_limit( $rate_identifier, $http_method, $matched_key );
+		// Diagnostics — initialize, rate-limit status, site info — are metered
+		// in their own bucket at read limits (#802). They are how a client
+		// learns when to resume, so they cannot sit behind the write budget
+		// they are asking about; and they stay bounded, so an authenticated
+		// caller cannot spam them without limit either. Only a request whose
+		// every operation is diagnostic qualifies (see is_diagnostic_request).
+		$rate_method = $http_method;
+		if ( $this->is_diagnostic_request( $request ) ) {
+			$rate_identifier .= ':diag';
+			$rate_method      = 'GET';
+		}
+
+		$rate_limit_check = $this->check_rate_limit( $rate_identifier, $rate_method, $matched_key );
 		if ( is_wp_error( $rate_limit_check ) ) {
 			return $rate_limit_check;
 		}
@@ -657,6 +669,22 @@ trait Mcpwp_Api_Auth {
 	 * @param string $method     HTTP method (GET requests get higher limits).
 	 * @return bool|WP_Error True if allowed, error if rate limited.
 	 */
+	/**
+	 * Whether a request is purely diagnostic and belongs in the diagnostic
+	 * rate-limit bucket rather than the caller's write bucket (#802).
+	 *
+	 * Default: nothing is. Controllers that own a diagnostic surface override
+	 * this and must answer true only when EVERY operation in the request is
+	 * diagnostic — one write beside an initialize makes the whole request a
+	 * write, or the exemption is a bypass.
+	 *
+	 * @param WP_REST_Request $request Request.
+	 * @return bool
+	 */
+	protected function is_diagnostic_request( $request ) {
+		return false;
+	}
+
 	protected function check_rate_limit( $identifier = null, $method = 'POST', $key_record = null ) {
 		if ( ! class_exists( 'Mcpwp_Rate_Limiter' ) ) {
 			return true;
