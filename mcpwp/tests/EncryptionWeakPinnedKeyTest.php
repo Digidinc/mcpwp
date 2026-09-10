@@ -73,6 +73,16 @@ final class EncryptionWeakPinnedKeyTest extends TestCase
             // define( 'MCPWP_ENCRYPTION_KEY', getenv( 'MCPWP_ENCRYPTION_KEY' ) ) with the variable unset.
             'getenv() of an unset variable' => array(false),
             'null'                          => array(null),
+            // Review r2 P3-C: the checks run on the trimmed value, and short
+            // periodic patterns are refused.
+            '16 repeated bytes and a newline'  => array("aaaaaaaaaaaaaaaa\n"),
+            'repeated bytes inside spaces'     => array(' ' . str_repeat('a', 20) . ' '),
+            'two-byte pattern'                 => array('abababababababab'),
+            'three-byte pattern'               => array(str_repeat('abc', 8)),
+            'three-byte pattern in whitespace' => array(' ' . str_repeat('abc', 8) . "\n"),
+            'four-byte pattern'                => array(str_repeat('abcd', 6)),
+            'eight-byte pattern'               => array('passwordpassword'),
+            '32 bytes of an eight-byte pattern' => array(str_repeat('k3Y!pinN', 4)),
         );
     }
 
@@ -132,8 +142,9 @@ final class EncryptionWeakPinnedKeyTest extends TestCase
     }
 
     /**
-     * The floor is deliberately simple: a 16-byte dictionary phrase passes it.
-     * It stops the empty/unset/placeholder mistakes, not a bad passphrase.
+     * The floor is deliberately simple: a 16-byte phrase with no short repeat
+     * passes it. It stops empty, unset, placeholder and patterned values, not
+     * a bad passphrase.
      *
      * @runInSeparateProcess
      * @preserveGlobalState disabled
@@ -150,5 +161,94 @@ final class EncryptionWeakPinnedKeyTest extends TestCase
         $this->assertSame('pinned-secret', $enc->decrypt($blob));
         $this->assertSame('', $enc->get_last_error());
         $this->assertSame('', $this->noticeHtml());
+    }
+
+    /**
+     * Random keys in every common encoding must never be refused. 4000 of each;
+     * the false-positive odds per key are below 1e-8 for the shortest form.
+     */
+    public function test_random_keys_in_common_encodings_are_never_classified_weak(): void
+    {
+        $isWeak = new ReflectionMethod(Mcpwp_Encryption::class, 'pinned_key_is_weak');
+        $isWeak->setAccessible(true);
+
+        $forms = array(
+            'raw 32 bytes'                   => static function (): string { return random_bytes(32); },
+            'hex, 64 chars'                  => static function (): string { return bin2hex(random_bytes(32)); },
+            'base64, 44 chars'               => static function (): string { return base64_encode(random_bytes(32)); },
+            'hex, 16 chars'                  => static function (): string { return bin2hex(random_bytes(8)); },
+            'raw with NUL and newline edges' => static function (): string { return "\0" . random_bytes(30) . "\n"; },
+        );
+
+        foreach ($forms as $label => $make) {
+            $refused = 0;
+            for ($i = 0; $i < 4000; $i++) {
+                if ($isWeak->invoke(null, $make())) {
+                    $refused++;
+                }
+            }
+            $this->assertSame(0, $refused, $label . ': a random key was classified weak');
+        }
+    }
+
+    /**
+     * Review r2 M28: once the constant is fixed or removed, the stale
+     * "will not encrypt or decrypt anything" notice goes away.
+     */
+    public function test_a_stale_weak_pin_alert_clears_once_the_constant_is_fixed_or_removed(): void
+    {
+        if (defined('MCPWP_ENCRYPTION_KEY')) {
+            $this->markTestSkipped('MCPWP_ENCRYPTION_KEY already defined in this process');
+        }
+
+        $prevUser = $GLOBALS['mcpwp_test_current_user'];
+        $prevCaps = $GLOBALS['mcpwp_test_user_caps'];
+        $GLOBALS['mcpwp_test_options']         = array();
+        $GLOBALS['mcpwp_test_wpdb_read_fails'] = false;
+        $GLOBALS['mcpwp_test_user_caps']       = array();
+        $key                                   = base64_encode(random_bytes(SODIUM_CRYPTO_SECRETBOX_KEYBYTES));
+        $GLOBALS['mcpwp_test_wpdb_options']['mcpwp_encryption_key'] = $key;
+
+        try {
+            update_option(Mcpwp_Encryption::ALERTS_OPTION, array(
+                Mcpwp_Encryption::REASON_PINNED_KEY_WEAK => array('first_seen' => time() - 120, 'last_seen' => time() - 60),
+            ));
+
+            $html = $this->noticeHtml();
+
+            $this->assertStringNotContainsString('MCPWP_ENCRYPTION_KEY', $html);
+            $this->assertArrayNotHasKey(Mcpwp_Encryption::REASON_PINNED_KEY_WEAK, (array) get_option(Mcpwp_Encryption::ALERTS_OPTION, array()));
+        } finally {
+            unset($GLOBALS['mcpwp_test_wpdb_options']['mcpwp_encryption_key']);
+            $GLOBALS['mcpwp_test_current_user'] = $prevUser;
+            $GLOBALS['mcpwp_test_user_caps']    = $prevCaps;
+        }
+    }
+
+    /**
+     * Review r2 M20: a weak pin stops the AUTH_SALT migration — no flag, no
+     * failures — so it runs once the constant is fixed.
+     *
+     * @runInSeparateProcess
+     * @preserveGlobalState disabled
+     */
+    public function test_a_weak_pin_stops_the_migration_without_a_flag_or_failures(): void
+    {
+        $this->cleanProcess();
+
+        $blob = $this->legacyBlob('sk-legacy', Mcpwp_Encryption::get_instance()->get_legacy_auth_salt_key());
+        update_option(Mcpwp_Integration_Manager::OPTION_NAME, array(
+            'openai' => array('key_encrypted' => $blob, 'configured_at' => '2026-01-01 00:00:00'),
+        ));
+
+        define('MCPWP_ENCRYPTION_KEY', 'weak');
+        $this->restartEncryption();
+
+        Mcpwp_Encryption_Migration::run();
+
+        $this->assertFalse(get_option(Mcpwp_Encryption_Migration::MIGRATED_FLAG));
+        $this->assertFalse(get_option(Mcpwp_Encryption_Migration::FAILURES_OPTION), 'a key problem is not a blob failure');
+        $this->assertSame($blob, get_option(Mcpwp_Integration_Manager::OPTION_NAME)['openai']['key_encrypted']);
+        $this->assertArrayNotHasKey('mcpwp_encryption_key', $GLOBALS['mcpwp_test_wpdb_options']);
     }
 }

@@ -18,9 +18,11 @@
  *     re-read and whatever is stored is used, so concurrent first writers
  *     converge on one key.
  *   - decrypt() never creates a key.
- *   - A pinned MCPWP_ENCRYPTION_KEY that is empty, blank, shorter than
- *     PINNED_KEY_MIN_BYTES once trimmed, or one repeated byte would derive a
- *     key anyone can compute. It fails closed (REASON_PINNED_KEY_WEAK) for
+ *   - A pinned MCPWP_ENCRYPTION_KEY that is empty, blank, or — once trimmed —
+ *     shorter than PINNED_KEY_MIN_BYTES, made of fewer than
+ *     PINNED_KEY_MIN_DISTINCT_BYTES distinct bytes, or a unit of at most
+ *     PINNED_KEY_MAX_PERIOD bytes repeated, would derive a key anyone can
+ *     guess. It fails closed (REASON_PINNED_KEY_WEAK) for
  *     encrypt and decrypt alike, with no fallback to the option key.
  *
  * BLOB FORMATS
@@ -94,6 +96,16 @@ class Mcpwp_Encryption {
 	 * Shortest pinned constant accepted, in bytes after trimming whitespace.
 	 */
 	const PINNED_KEY_MIN_BYTES = 16;
+
+	/**
+	 * Fewest distinct bytes a pinned constant may use once trimmed ("abab…" has 2).
+	 */
+	const PINNED_KEY_MIN_DISTINCT_BYTES = 4;
+
+	/**
+	 * Longest repeating unit refused ("passwordpassword" repeats an 8-byte unit).
+	 */
+	const PINNED_KEY_MAX_PERIOD = 8;
 
 	/**
 	 * Warning (get_last_warnings()): the value decrypted, but only with the
@@ -752,7 +764,7 @@ class Mcpwp_Encryption {
 			case self::REASON_UNSUPPORTED_VERSION:
 				return __( 'Some stored secrets use an encryption format newer than this version of MCPWP, which usually means the plugin was downgraded. Update MCPWP, or re-enter the affected provider keys and connections.', 'mcpwp' );
 			case self::REASON_PINNED_KEY_WEAK:
-				return __( 'MCPWP_ENCRYPTION_KEY is defined in wp-config.php but is empty or too weak (fewer than 16 bytes once whitespace is trimmed, or a single repeated character), so a key derived from it could be guessed. MCPWP will not encrypt or decrypt anything until it is fixed. Replace it with a long random value, or remove the constant to use the stored option key. Secrets saved under an earlier weak value must be re-entered.', 'mcpwp' );
+				return __( 'MCPWP_ENCRYPTION_KEY is defined in wp-config.php but is empty or too weak (once whitespace is trimmed: fewer than 16 bytes, fewer than 4 different characters, or a short repeating pattern), so a key derived from it could be guessed. MCPWP will not encrypt or decrypt anything until it is fixed. Replace it with a long random value, or remove the constant to use the stored option key. Secrets saved under an earlier weak value must be re-entered.', 'mcpwp' );
 			case self::WARNING_PINNED_KEY_DIFFERS:
 				return __( 'MCPWP_ENCRYPTION_KEY is defined in wp-config.php, but some secrets are still encrypted with the stored option key (mcpwp_encryption_key). They still decrypt. Re-save those provider keys and connections to move them to the pinned key, and do not delete the mcpwp_encryption_key option before then.', 'mcpwp' );
 		}
@@ -875,19 +887,38 @@ class Mcpwp_Encryption {
 	/**
 	 * Whether a pinned constant is too weak to derive a key from.
 	 *
-	 * Empty, whitespace (trim() also strips NUL), fewer than
-	 * PINNED_KEY_MIN_BYTES once trimmed, or a single repeated byte. This is a
-	 * floor against obviously guessable values, not an entropy estimate.
+	 * Every check runs on the trimmed value (trim() also strips NUL), so a
+	 * trailing newline from a secrets file cannot disguise a placeholder:
+	 *   - fewer than PINNED_KEY_MIN_BYTES bytes (empty and blank included);
+	 *   - fewer than PINNED_KEY_MIN_DISTINCT_BYTES distinct bytes ("aaaa…", "abab…");
+	 *   - a unit of at most PINNED_KEY_MAX_PERIOD bytes repeated end to end
+	 *     ("abcdabcd…", "passwordpassword").
+	 * A floor against guessable values, not an entropy estimate. Random keys
+	 * in raw, hex or base64 form essentially never trip it (for a 16-char hex
+	 * string the odds are below 1e-8).
 	 *
 	 * @param string $raw Constant value.
 	 * @return bool
 	 */
 	private static function pinned_key_is_weak( $raw ) {
-		if ( strlen( trim( $raw ) ) < self::PINNED_KEY_MIN_BYTES ) {
+		$trimmed = trim( (string) $raw );
+		$length  = strlen( $trimmed );
+
+		if ( $length < self::PINNED_KEY_MIN_BYTES ) {
 			return true;
 		}
 
-		return 1 === strlen( count_chars( $raw, 3 ) );
+		if ( strlen( count_chars( $trimmed, 3 ) ) < self::PINNED_KEY_MIN_DISTINCT_BYTES ) {
+			return true;
+		}
+
+		for ( $period = 1; $period <= self::PINNED_KEY_MAX_PERIOD; $period++ ) {
+			if ( substr( $trimmed, $period ) === substr( $trimmed, 0, $length - $period ) ) {
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 	/**

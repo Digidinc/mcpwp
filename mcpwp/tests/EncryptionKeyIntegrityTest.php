@@ -53,6 +53,9 @@ final class EncryptionKeyIntegrityTest extends TestCase
         $GLOBALS['mcpwp_test_wpdb_insert_fails']  = false;
         $GLOBALS['mcpwp_test_wpdb_before_insert'] = null;
         $GLOBALS['mcpwp_test_option_store_hook']  = null;
+        $GLOBALS['mcpwp_test_wpdb_update_fails']  = false;
+        $GLOBALS['mcpwp_test_wpdb_before_update'] = null;
+        $GLOBALS['mcpwp_test_wpdb_after_update']  = null;
 
         foreach (array(self::KEY_OPTION, self::LOCK_OPTION) as $name) {
             unset($GLOBALS['mcpwp_test_wpdb_options'][ $name ]);
@@ -372,12 +375,15 @@ final class EncryptionKeyIntegrityTest extends TestCase
         $this->seedIntegrations(array('openai' => $this->authSaltBlob('sk-legacy')));
 
         $lockSeenAtWrite = null;
-        $GLOBALS['mcpwp_test_option_store_hook'] = function ($name, $value) use (&$lockSeenAtWrite) {
-            if (Mcpwp_Integration_Manager::OPTION_NAME === $name) {
-                $lockSeenAtWrite = array_key_exists(self::LOCK_OPTION, $GLOBALS['mcpwp_test_wpdb_options'] ?? array());
+        $hook            = null;
+        $hook            = function (string $name) use (&$lockSeenAtWrite, &$hook): void {
+            if (Mcpwp_Integration_Manager::OPTION_NAME !== $name) {
+                $GLOBALS['mcpwp_test_wpdb_before_update'] = $hook;
+                return;
             }
-            return $value;
+            $lockSeenAtWrite = array_key_exists(self::LOCK_OPTION, $GLOBALS['mcpwp_test_wpdb_options'] ?? array());
         };
+        $GLOBALS['mcpwp_test_wpdb_before_update'] = $hook;
 
         Mcpwp_Encryption_Migration::run();
 
@@ -416,13 +422,16 @@ final class EncryptionKeyIntegrityTest extends TestCase
     {
         $this->seedIntegrations(array('openai' => $this->authSaltBlob('sk-legacy')));
 
-        // A pre_update_option filter (or anything else) alters what is stored.
-        $GLOBALS['mcpwp_test_option_store_hook'] = function ($name, $value) {
-            if (Mcpwp_Integration_Manager::OPTION_NAME === $name && is_array($value) && isset($value['openai'])) {
-                $value['openai']['key_encrypted'] = 'altered-on-the-way-in';
+        // What is stored differs from what was written by the time it is read back.
+        $hook = null;
+        $hook = function (string $name) use (&$hook): void {
+            if (Mcpwp_Integration_Manager::OPTION_NAME !== $name) {
+                $GLOBALS['mcpwp_test_wpdb_after_update'] = $hook;
+                return;
             }
-            return $value;
+            $GLOBALS['mcpwp_test_options'][ Mcpwp_Integration_Manager::OPTION_NAME ]['openai']['key_encrypted'] = 'altered-after-the-write';
         };
+        $GLOBALS['mcpwp_test_wpdb_after_update'] = $hook;
 
         Mcpwp_Encryption_Migration::run();
 

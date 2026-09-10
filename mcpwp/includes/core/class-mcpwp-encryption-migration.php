@@ -196,8 +196,18 @@ class Mcpwp_Encryption_Migration {
 		$encryption = Mcpwp_Encryption::get_instance();
 		$old_key    = $encryption->get_legacy_auth_salt_key();
 
-		$data = get_option( Mcpwp_Integration_Manager::OPTION_NAME, array() );
-		if ( ! is_array( $data ) || empty( $data ) ) {
+		// Read the row itself: a failed read is a reason to retry, never
+		// "nothing to migrate" (get_option() would answer its default and set
+		// the flag over blobs that were never looked at).
+		$snapshot = self::read_integrations_row();
+		if ( ! $snapshot['ok'] ) {
+			self::debug_log( 'provider records unreadable — will retry.' );
+			self::defer_retry();
+			return;
+		}
+
+		$data = $snapshot['records'];
+		if ( empty( $data ) ) {
 			// Nothing to migrate.
 			update_option( self::MIGRATED_FLAG, '1' );
 			return;
@@ -279,13 +289,15 @@ class Mcpwp_Encryption_Migration {
 		// admin saving, replacing or removing a provider while this ran, and
 		// writing the snapshot back would silently revert that. Only blobs whose
 		// stored value is still exactly the one re-encrypted are swapped;
-		// anything else is newer than this run and is left alone.
-		$latest = self::read_integrations_uncached();
-		if ( ! is_array( $latest ) ) {
-			self::debug_log( 'integration option unreadable before write — will retry.' );
+		// anything else is newer than this run and is left alone. A failed
+		// re-read is not "every provider was removed".
+		$latest_row = self::read_integrations_row();
+		if ( ! $latest_row['ok'] ) {
+			self::debug_log( 'provider records unreadable before write — will retry.' );
 			self::defer_retry();
 			return;
 		}
+		$latest = $latest_row['records'];
 
 		$to_verify = array();
 		foreach ( $re_encrypted as $provider => $digest ) {
@@ -298,11 +310,11 @@ class Mcpwp_Encryption_Migration {
 		}
 
 		if ( ! empty( $to_verify ) ) {
-			// update_option() returns false on a DB error or when the value is
-			// unchanged; it cannot be unchanged here (fresh nonces), so false is
-			// a failed write. Retry later.
-			if ( false === update_option( Mcpwp_Integration_Manager::OPTION_NAME, $latest ) ) {
-				self::debug_log( 'integration option write failed — will retry.' );
+			// Compare-and-swap on the exact row that was re-read: a change landing
+			// between that read and this write makes it miss instead of being
+			// overwritten. A miss or a failed write retries later.
+			if ( ! self::compare_and_swap_integrations( $latest_row['raw'], $latest ) ) {
+				self::debug_log( 'provider records changed since the re-read, or the write failed — will retry.' );
 				self::defer_retry();
 				return;
 			}
@@ -335,10 +347,11 @@ class Mcpwp_Encryption_Migration {
 	 * @return bool
 	 */
 	private static function verify_written( array $digests ) {
-		$stored = get_option( Mcpwp_Integration_Manager::OPTION_NAME, array() );
-		if ( ! is_array( $stored ) ) {
+		$stored_row = self::read_integrations_row();
+		if ( ! $stored_row['ok'] ) {
 			return false;
 		}
+		$stored = $stored_row['records'];
 
 		$encryption = Mcpwp_Encryption::get_instance();
 
@@ -371,20 +384,80 @@ class Mcpwp_Encryption_Migration {
 	}
 
 	/**
-	 * Read the provider records past this request's option caches.
+	 * Read the provider records straight from their row, past every cache.
 	 *
-	 * mcpwp_integrations is autoloaded, so the per-request alloptions copy is
-	 * dropped too; this runs once per migration write, never on a hot path.
-	 *
-	 * @return mixed
+	 * @return array{ok: bool, raw: string|null, records: array}
+	 *   ok false when the read failed — never reported as an empty store.
+	 *   raw is the stored value (null when no row exists), for compare-and-swap.
+	 *   A row that does not unserialize to an array holds no provider records.
 	 */
-	private static function read_integrations_uncached() {
+	private static function read_integrations_row() {
+		$row = Mcpwp_Encryption::read_option_row( Mcpwp_Integration_Manager::OPTION_NAME );
+
+		if ( Mcpwp_Encryption::ROW_ERROR === $row['state'] ) {
+			return array(
+				'ok'      => false,
+				'raw'     => null,
+				'records' => array(),
+			);
+		}
+
+		if ( Mcpwp_Encryption::ROW_ABSENT === $row['state'] ) {
+			return array(
+				'ok'      => true,
+				'raw'     => null,
+				'records' => array(),
+			);
+		}
+
+		$records = maybe_unserialize( $row['value'] );
+
+		return array(
+			'ok'      => true,
+			'raw'     => $row['value'],
+			'records' => is_array( $records ) ? $records : array(),
+		);
+	}
+
+	/**
+	 * Replace the provider records only if the row still holds $expected_raw.
+	 *
+	 * @param string|null $expected_raw Stored value the new records were built from.
+	 * @param array       $records      New provider records.
+	 * @return bool True when exactly this row was updated.
+	 */
+	private static function compare_and_swap_integrations( $expected_raw, array $records ) {
+		global $wpdb;
+
+		if ( null === $expected_raw || ! is_object( $wpdb ) || ! method_exists( $wpdb, 'update' ) || empty( $wpdb->options ) ) {
+			return false;
+		}
+
+		$suppressed = method_exists( $wpdb, 'suppress_errors' ) ? $wpdb->suppress_errors( true ) : null;
+
+		$rows = $wpdb->update(
+			$wpdb->options,
+			array( 'option_value' => maybe_serialize( $records ) ),
+			array(
+				'option_name'  => Mcpwp_Integration_Manager::OPTION_NAME,
+				'option_value' => $expected_raw,
+			),
+			array( '%s' ),
+			array( '%s', '%s' )
+		);
+
+		if ( null !== $suppressed ) {
+			$wpdb->suppress_errors( $suppressed );
+		}
+
+		// Written behind the options API: drop the cached copies (the option is
+		// autoloaded, so the alloptions copy too).
+		Mcpwp_Encryption::clean_option_cache( Mcpwp_Integration_Manager::OPTION_NAME );
 		if ( function_exists( 'wp_cache_delete' ) ) {
-			wp_cache_delete( Mcpwp_Integration_Manager::OPTION_NAME, 'options' );
 			wp_cache_delete( 'alloptions', 'options' );
 		}
 
-		return get_option( Mcpwp_Integration_Manager::OPTION_NAME, array() );
+		return 1 === (int) $rows;
 	}
 
 	/**

@@ -1102,9 +1102,19 @@ if (! isset($GLOBALS['wpdb'])) {
                     $this->last_error = 'WordPress database error: Lost connection to MySQL server during query';
                     return null;
                 }
+                // One table in real WordPress: a row written through the options
+                // API (update_option() double) is visible to the probe too,
+                // serialized as WordPress stores it. A raw row wins when both exist.
+                if (array_key_exists($m[1], $GLOBALS['mcpwp_test_wpdb_options'] ?? array())) {
+                    $value = $GLOBALS['mcpwp_test_wpdb_options'][ $m[1] ];
+                } elseif (array_key_exists($m[1], $GLOBALS['mcpwp_test_options'] ?? array())) {
+                    $value = maybe_serialize($GLOBALS['mcpwp_test_options'][ $m[1] ]);
+                } else {
+                    $value = null;
+                }
                 $row = array(
                     'mcpwp_probe'  => '1',
-                    'option_value' => $GLOBALS['mcpwp_test_wpdb_options'][ $m[1] ] ?? null,
+                    'option_value' => $value,
                 );
                 return ARRAY_A === $output ? $row : (object) $row;
             }
@@ -1237,14 +1247,36 @@ if (! isset($GLOBALS['wpdb'])) {
                     $GLOBALS['mcpwp_test_wpdb_before_update'] = null;
                     $hook($name);
                 }
-                $current = $GLOBALS['mcpwp_test_wpdb_options'][ $name ] ?? null;
-                if (null === $current) {
+                $fails = $GLOBALS['mcpwp_test_wpdb_update_fails'] ?? false;
+                if (is_callable($fails) ? (bool) $fails($name) : (bool) $fails) {
+                    $this->last_error = 'WordPress database error: Lock wait timeout exceeded';
+                    return false;
+                }
+                // Same one-table view as the probe: a raw row, else the options-API value.
+                if (array_key_exists($name, $GLOBALS['mcpwp_test_wpdb_options'] ?? array())) {
+                    $current = (string) $GLOBALS['mcpwp_test_wpdb_options'][ $name ];
+                    $in_rows = true;
+                } elseif (array_key_exists($name, $GLOBALS['mcpwp_test_options'] ?? array())) {
+                    $current = (string) maybe_serialize($GLOBALS['mcpwp_test_options'][ $name ]);
+                    $in_rows = false;
+                } else {
                     return 0;
                 }
                 if (isset($where['option_value']) && (string) $where['option_value'] !== $current) {
                     return 0; // compare-and-swap miss
                 }
-                $GLOBALS['mcpwp_test_wpdb_options'][ $name ] = (string) $data['option_value'];
+                if ($in_rows) {
+                    $GLOBALS['mcpwp_test_wpdb_options'][ $name ] = (string) $data['option_value'];
+                } else {
+                    $GLOBALS['mcpwp_test_options'][ $name ] = maybe_unserialize((string) $data['option_value']);
+                }
+                // One-shot hook after a successful write, so a test can alter
+                // what was stored before the caller reads it back.
+                if (isset($GLOBALS['mcpwp_test_wpdb_after_update']) && is_callable($GLOBALS['mcpwp_test_wpdb_after_update'])) {
+                    $hook = $GLOBALS['mcpwp_test_wpdb_after_update'];
+                    $GLOBALS['mcpwp_test_wpdb_after_update'] = null;
+                    $hook($name);
+                }
                 return 1;
             }
             return 1;

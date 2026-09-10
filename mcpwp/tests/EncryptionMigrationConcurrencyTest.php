@@ -13,6 +13,11 @@ use PHPUnit\Framework\TestCase;
  *   P3-3 a provider saved or removed during the run is not reverted by it.
  *   P3-5 a rotated-salt upgrade with no key row raises no "key missing" alert.
  *   P3-6 the row probe reads the first inserted row even without a UNIQUE index.
+ *
+ * Review r2:
+ *   P3-A a failed read of the provider records is never "empty"; the write is a
+ *        compare-and-swap, so a change after the re-read is not reverted.
+ *   M16  failures drop providers removed while the run was in flight.
  */
 final class EncryptionMigrationConcurrencyTest extends TestCase
 {
@@ -47,6 +52,8 @@ final class EncryptionMigrationConcurrencyTest extends TestCase
         $GLOBALS['mcpwp_test_wpdb_insert_fails']  = false;
         $GLOBALS['mcpwp_test_wpdb_before_insert'] = null;
         $GLOBALS['mcpwp_test_wpdb_before_update'] = null;
+        $GLOBALS['mcpwp_test_wpdb_after_update']  = null;
+        $GLOBALS['mcpwp_test_wpdb_update_fails']  = false;
         $GLOBALS['mcpwp_test_option_store_hook']  = null;
 
         foreach (array(self::KEY_OPTION, self::LOCK_OPTION, self::FLAG_OPTION) as $name) {
@@ -97,6 +104,23 @@ final class EncryptionMigrationConcurrencyTest extends TestCase
         return (array) get_option(Mcpwp_Integration_Manager::OPTION_NAME, array());
     }
 
+    /**
+     * Arms a before-update hook that fires $then when the row $name is about
+     * to be updated, re-arming itself past updates of other rows.
+     */
+    private function beforeUpdateOf(string $name, callable $then): void
+    {
+        $hook = null;
+        $hook = function (string $updated) use (&$hook, $name, $then): void {
+            if ($name !== $updated) {
+                $GLOBALS['mcpwp_test_wpdb_before_update'] = $hook;
+                return;
+            }
+            $then();
+        };
+        $GLOBALS['mcpwp_test_wpdb_before_update'] = $hook;
+    }
+
     // ── M2 ───────────────────────────────────────────────────────────────
 
     public function test_two_takeovers_of_one_stale_lock_let_only_one_run(): void
@@ -128,12 +152,9 @@ final class EncryptionMigrationConcurrencyTest extends TestCase
         $this->seedIntegrations(array('openai' => $this->authSaltBlob('sk-legacy')));
 
         $other = (time() + 100) . '|took-over-while-we-ran';
-        $GLOBALS['mcpwp_test_option_store_hook'] = function ($name, $value) use ($other) {
-            if (Mcpwp_Integration_Manager::OPTION_NAME === $name) {
-                $GLOBALS['mcpwp_test_wpdb_options'][ self::LOCK_OPTION ] = $other;
-            }
-            return $value;
-        };
+        $this->beforeUpdateOf(Mcpwp_Integration_Manager::OPTION_NAME, function () use ($other): void {
+            $GLOBALS['mcpwp_test_wpdb_options'][ self::LOCK_OPTION ] = $other;
+        });
 
         Mcpwp_Encryption_Migration::run();
 
@@ -147,12 +168,9 @@ final class EncryptionMigrationConcurrencyTest extends TestCase
         $this->seedIntegrations(array('openai' => $this->authSaltBlob('sk-legacy')));
 
         // The stored key changes after this request cached its key (a restore, say).
-        $GLOBALS['mcpwp_test_option_store_hook'] = function ($name, $value) {
-            if (Mcpwp_Integration_Manager::OPTION_NAME === $name) {
-                $GLOBALS['mcpwp_test_wpdb_options'][ self::KEY_OPTION ] = base64_encode(random_bytes(SODIUM_CRYPTO_SECRETBOX_KEYBYTES));
-            }
-            return $value;
-        };
+        $this->beforeUpdateOf(Mcpwp_Integration_Manager::OPTION_NAME, function (): void {
+            $GLOBALS['mcpwp_test_wpdb_options'][ self::KEY_OPTION ] = base64_encode(random_bytes(SODIUM_CRYPTO_SECRETBOX_KEYBYTES));
+        });
 
         Mcpwp_Encryption_Migration::run();
 
@@ -262,6 +280,97 @@ final class EncryptionMigrationConcurrencyTest extends TestCase
         $this->assertSame('v2:re-entered-meanwhile', $data['openai']['key_encrypted'], 'a newer value is never overwritten by the migration snapshot');
         $this->assertArrayNotHasKey('gemini', $data, 'a removed provider must not reappear');
         $this->assertSame('sk-pexels', $this->restartEncryption()->decrypt($data['pexels']['key_encrypted']));
+        $this->assertNotEmpty(get_option(self::FLAG_OPTION));
+    }
+
+    // ── M16 ──────────────────────────────────────────────────────────────
+
+    public function test_failures_drop_a_provider_removed_during_the_run(): void
+    {
+        $this->seedIntegrations(array(
+            'openai' => $this->authSaltBlob('sk-openai'),
+            'gemini' => $this->legacyBlob('rotated-salt', random_bytes(SODIUM_CRYPTO_SECRETBOX_KEYBYTES)),
+        ));
+
+        $this->duringKeyCreation(function (): void {
+            unset($GLOBALS['mcpwp_test_options'][ Mcpwp_Integration_Manager::OPTION_NAME ]['gemini']);
+        });
+
+        Mcpwp_Encryption_Migration::run();
+
+        $this->assertNotEmpty(get_option(self::FLAG_OPTION));
+        $this->assertFalse(
+            get_option(Mcpwp_Encryption_Migration::FAILURES_OPTION),
+            'a provider removed meanwhile has nothing left to re-enter; the notice must not name it'
+        );
+    }
+
+    // ── P3-A (review r2) ─────────────────────────────────────────────────
+
+    public function test_a_failed_read_of_the_provider_records_is_not_an_empty_store(): void
+    {
+        $blob = $this->authSaltBlob('sk-legacy');
+        $this->seedIntegrations(array('openai' => $blob));
+
+        $GLOBALS['mcpwp_test_wpdb_read_fails'] = static function (string $name): bool {
+            return Mcpwp_Integration_Manager::OPTION_NAME === $name;
+        };
+
+        Mcpwp_Encryption_Migration::run();
+
+        $this->assertFalse(get_option(self::FLAG_OPTION), 'an unreadable store must not be taken for "nothing to migrate"');
+        $this->assertArrayNotHasKey(self::KEY_OPTION, $GLOBALS['mcpwp_test_wpdb_options'], 'the run stops at the failed read, before any re-encryption');
+        $this->assertFalse(get_option(Mcpwp_Encryption_Migration::FAILURES_OPTION));
+        $this->assertSame($blob, $this->integrations()['openai']['key_encrypted']);
+        $this->assertNotFalse(get_transient(Mcpwp_Encryption_Migration::RETRY_TRANSIENT), 'the run is retried later');
+    }
+
+    public function test_a_failed_re_read_before_writing_defers_the_run(): void
+    {
+        $blob = $this->authSaltBlob('sk-legacy');
+        $this->seedIntegrations(array('openai' => $blob));
+
+        // The first read of the provider records answers; the re-read before writing fails.
+        $reads = 0;
+        $GLOBALS['mcpwp_test_wpdb_read_fails'] = function (string $name) use (&$reads): bool {
+            if (Mcpwp_Integration_Manager::OPTION_NAME !== $name) {
+                return false;
+            }
+            $reads++;
+            return $reads > 1;
+        };
+
+        Mcpwp_Encryption_Migration::run();
+
+        $this->assertFalse(get_option(self::FLAG_OPTION), 'a failed re-read is not "every provider was removed"');
+        $this->assertFalse(get_option(Mcpwp_Encryption_Migration::FAILURES_OPTION));
+        $this->assertSame($blob, $this->integrations()['openai']['key_encrypted']);
+    }
+
+    public function test_a_change_after_the_re_read_is_not_reverted_and_the_run_retries(): void
+    {
+        $this->seedIntegrations(array('openai' => $this->authSaltBlob('sk-legacy')));
+
+        // An admin saves another provider in the gap between the re-read and the write.
+        $this->beforeUpdateOf(Mcpwp_Integration_Manager::OPTION_NAME, function (): void {
+            $GLOBALS['mcpwp_test_options'][ Mcpwp_Integration_Manager::OPTION_NAME ]['gemini'] = $this->record('v2:saved-in-the-gap');
+        });
+
+        Mcpwp_Encryption_Migration::run();
+
+        $data = $this->integrations();
+        $this->assertSame('v2:saved-in-the-gap', $data['gemini']['key_encrypted'] ?? null, 'the compare-and-swap must miss, not overwrite');
+        $this->assertFalse(Mcpwp_Encryption::is_versioned_blob($data['openai']['key_encrypted']), 'nothing was written by the run that missed');
+        $this->assertFalse(get_option(self::FLAG_OPTION));
+
+        // After the backoff the next run migrates on top of the newer records.
+        delete_transient(Mcpwp_Encryption_Migration::RETRY_TRANSIENT);
+        $this->restartEncryption();
+        Mcpwp_Encryption_Migration::run();
+
+        $data = $this->integrations();
+        $this->assertSame('v2:saved-in-the-gap', $data['gemini']['key_encrypted']);
+        $this->assertSame('sk-legacy', $this->restartEncryption()->decrypt($data['openai']['key_encrypted']));
         $this->assertNotEmpty(get_option(self::FLAG_OPTION));
     }
 

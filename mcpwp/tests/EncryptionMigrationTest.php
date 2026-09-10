@@ -32,6 +32,7 @@ final class EncryptionMigrationTest extends TestCase
     {
         $GLOBALS['mcpwp_test_wpdb_insert_fails'] = false;
         $GLOBALS['mcpwp_test_wpdb_read_fails']   = false;
+        $GLOBALS['mcpwp_test_wpdb_update_fails'] = false;
         unset(
             $GLOBALS['mcpwp_test_wpdb_options']['mcpwp_encryption_key'],
             $GLOBALS['mcpwp_test_wpdb_options']['mcpwp_encryption_migration_lock']
@@ -342,8 +343,11 @@ final class EncryptionMigrationTest extends TestCase
             ),
         ));
 
-        // Simulate DB write failure for the integrations option.
-        $GLOBALS['mcpwp_test_update_option_fail'][ Mcpwp_Integration_Manager::OPTION_NAME ] = true;
+        // Simulate a DB write failure for the integrations row (the migration
+        // writes it with a compare-and-swap $wpdb->update, #564 r2).
+        $GLOBALS['mcpwp_test_wpdb_update_fails'] = static function (string $name): bool {
+            return Mcpwp_Integration_Manager::OPTION_NAME === $name;
+        };
 
         Mcpwp_Encryption_Migration::run();
 
