@@ -828,9 +828,34 @@ function wp_check_password($password, $hash)
     return hash_equals($hash, (string) $password);
 }
 
+function wp_check_invalid_utf8($text, $strip = false)
+{
+    $text = (string) $text;
+    if ('' === $text) {
+        return '';
+    }
+    return mb_check_encoding($text, 'UTF-8') ? $text : '';
+}
+
 function wp_json_encode($value, $flags = 0)
 {
-    return json_encode($value, $flags);
+    // Core: encode; on failure sanitise every string and retry once.
+    $encoded = json_encode($value, $flags);
+    if (false !== $encoded) {
+        return $encoded;
+    }
+    $sanitise = function ($v) use (&$sanitise) {
+        if (is_string($v)) {
+            return wp_check_invalid_utf8($v);
+        }
+        if (is_array($v)) {
+            foreach ($v as $k => $item) {
+                $v[ $k ] = $sanitise($item);
+            }
+        }
+        return $v;
+    };
+    return json_encode($sanitise($value), $flags);
 }
 
 function wp_parse_args($args, $defaults = array())
@@ -1793,7 +1818,15 @@ function get_post_meta($post_id, $key = '', $single = false)
 {
     $post_id = (int) $post_id;
     if ('' === $key) {
-        return isset($GLOBALS['_mcpwp_test_meta'][ $post_id ]) ? $GLOBALS['_mcpwp_test_meta'][ $post_id ] : array();
+        // Core returns every key as a LIST of values (get_post_custom shape),
+        // not key => value; a double that flattened it hid a count() on a
+        // string in the meta listing (#797 round 4).
+        $all = isset($GLOBALS['_mcpwp_test_meta'][ $post_id ]) ? $GLOBALS['_mcpwp_test_meta'][ $post_id ] : array();
+        $out = array();
+        foreach ($all as $k => $v) {
+            $out[ $k ] = array($v);
+        }
+        return $out;
     }
     if (isset($GLOBALS['_mcpwp_test_meta'][ $post_id ][ $key ])) {
         return $GLOBALS['_mcpwp_test_meta'][ $post_id ][ $key ];

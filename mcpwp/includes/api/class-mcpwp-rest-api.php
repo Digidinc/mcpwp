@@ -339,7 +339,28 @@ abstract class Mcpwp_REST_API {
 				'type'        => 'string',
 				'default'     => '',
 			),
+			'terms'   => array(
+				'description' => __( 'Taxonomy terms as {taxonomy: [ids, slugs or names]}. Not alongside categories/tags for the same taxonomy.', 'mcpwp' ),
+				'type'        => 'object',
+			),
+			'meta'    => array(
+				'description' => __( 'Post meta as {key: value}; null deletes. Credential-shaped, reserved and Elementor keys are refused.', 'mcpwp' ),
+				'type'        => 'object',
+			),
 		);
+	}
+
+	/**
+	 * The same schema for an update: nothing is required.
+	 *
+	 * @return array
+	 */
+	protected function get_post_update_args() {
+		$args = $this->get_post_args();
+		foreach ( $args as $name => $schema ) {
+			unset( $args[ $name ]['required'], $args[ $name ]['default'] );
+		}
+		return $args;
 	}
 
 	// -------------------------------------------------------------------------

@@ -68,7 +68,8 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 					'methods'             => WP_REST_Server::CREATABLE,
 					'callback'            => array( $this, 'create_page' ),
 					'permission_callback' => array( $this, 'check_permission' ),
-					'args'                => array(
+					'args'                => array_merge(
+						array(
 						'title'    => array(
 							'description' => __( 'Page title.', 'mcpwp' ),
 							'type'        => 'string',
@@ -98,6 +99,8 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 							'description' => __( 'Page template.', 'mcpwp' ),
 							'type'        => 'string',
 						),
+						),
+						array_intersect_key( $this->get_post_args(), array( 'terms' => 1, 'meta' => 1 ) )
 					),
 				),
 			)
@@ -117,6 +120,7 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 					'methods'             => WP_REST_Server::EDITABLE,
 					'callback'            => array( $this, 'update_page' ),
 					'permission_callback' => array( $this, 'check_permission' ),
+					'args'                => $this->get_post_update_args(),
 				),
 				array(
 					'methods'             => WP_REST_Server::DELETABLE,

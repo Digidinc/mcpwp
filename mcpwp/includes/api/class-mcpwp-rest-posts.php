@@ -99,6 +99,7 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 					'methods'             => WP_REST_Server::EDITABLE,
 					'callback'            => array( $this, 'update_post' ),
 					'permission_callback' => array( $this, 'check_permission' ),
+					'args'                => $this->get_post_update_args(),
 				),
 				array(
 					'methods'             => WP_REST_Server::DELETABLE,

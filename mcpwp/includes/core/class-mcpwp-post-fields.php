@@ -93,12 +93,57 @@ class Mcpwp_Post_Fields {
 	public static function is_secret_shaped_key( $key ) {
 		$key = (string) $key;
 
-		if ( class_exists( 'Mcpwp_Option_Access' ) && method_exists( 'Mcpwp_Option_Access', 'is_secret_field' ) ) {
-			return (bool) Mcpwp_Option_Access::is_secret_field( $key );
+		if ( '' === $key ) {
+			return false;
 		}
 
-		return (bool) preg_match( '/(^|[_\-.\s])(api_?key|apikey|pass|passwd|password|passcode|pwd|passphrase|secret|secrets|token|tokens|credential|credentials|auth|bearer|jwt|private_?key|license|licence|dsn|salt)([_\-.\s]|$)/i', $key )
-			|| (bool) preg_match( '/(password|secret|token|credential)/i', $key );
+		// The plugin-wide detector, when it is the plugin's own class — a
+		// third-party class of the same name must not take over the read
+		// blocklist and the write refusal (#797 round 4). Union, never
+		// replacement: the local rule always applies too.
+		if ( self::plugin_option_access_available() && Mcpwp_Option_Access::is_secret_field( $key ) ) {
+			return true;
+		}
+
+		// camelCase is split so apiKey / myPwd / sessionId match like
+		// api_key / my_pwd / session_id.
+		$split = preg_replace( '/([a-z0-9])([A-Z])/', '$1_$2', $key );
+
+		// Word-boundary stems: a credential NAMED, not merely mentioned.
+		if ( preg_match( '/(^|[_\-.\s])(api_?key|apikey|access_?key(_id)?|secret_?key|pass|passwd|password|passcode|pwd|passphrase|secret|secrets|token|tokens|credential|credentials|bearer|jwt|priv_?key|private_?key|privkey|session_?id|session_?token|session_?key|pin|nonce|signature|totp|otp|cvv|recovery_?codes?|seed_?phrase|dsn)([_\-.\s]|$)/i', $split ) ) {
+			return true;
+		}
+
+		// Substring stems that are credentials wherever they appear —
+		// password, credential, and auth (authorization, oauth_*, reauth,
+		// authenticator) but not the word author.
+		return (bool) preg_match( '/(password|credential|auth(?!or(?:s|ed|_|\b)))/i', $split );
+	}
+
+	/**
+	 * Whether Mcpwp_Option_Access is loaded AND is this plugin's own class.
+	 *
+	 * @return bool
+	 */
+	private static function plugin_option_access_available() {
+		static $available = null;
+
+		if ( null !== $available ) {
+			return $available;
+		}
+
+		$available = false;
+		if ( class_exists( 'Mcpwp_Option_Access' ) && method_exists( 'Mcpwp_Option_Access', 'is_secret_field' ) && defined( 'MCPWP_PLUGIN_DIR' ) ) {
+			try {
+				$file      = ( new ReflectionClass( 'Mcpwp_Option_Access' ) )->getFileName();
+				$norm      = function ( $path ) { return rtrim( str_replace( '\\', '/', (string) $path ), '/' ) . '/'; };
+				$available = is_string( $file ) && 0 === strpos( $norm( $file ), $norm( MCPWP_PLUGIN_DIR ) );
+			} catch ( ReflectionException $e ) {
+				$available = false;
+			}
+		}
+
+		return $available;
 	}
 
 	/**
@@ -142,7 +187,21 @@ class Mcpwp_Post_Fields {
 		// terms["category."] cannot slip past it (#797 round 3, P2-A).
 		$normalised = array();
 		foreach ( array_keys( $terms ) as $raw ) {
-			$normalised[ sanitize_key( (string) $raw ) ] = true;
+			$clean = sanitize_key( (string) $raw );
+			if ( isset( $normalised[ $clean ] ) ) {
+				// Two spellings of one taxonomy: the later would silently win
+				// (#797 round 4, P2-837a).
+				return new WP_Error(
+					'conflicting_terms',
+					sprintf(
+						/* translators: %s: taxonomy */
+						__( 'terms names taxonomy "%s" more than once under different spellings. Send it once. Nothing was written.', 'mcpwp' ),
+						$clean
+					),
+					array( 'status' => 400 )
+				);
+			}
+			$normalised[ $clean ] = true;
 		}
 
 		// categories/tags and terms.category/terms.post_tag write the same
@@ -401,7 +460,36 @@ class Mcpwp_Post_Fields {
 				);
 			}
 
-			if ( null !== $value && strlen( (string) wp_json_encode( $value ) ) > self::MAX_META_VALUE_BYTES ) {
+			if ( null !== $value ) {
+				$bad = self::first_invalid_utf8_path( $value );
+				if ( null !== $bad ) {
+					return new WP_Error(
+						'invalid_meta_value',
+						sprintf(
+							/* translators: 1: key 2: path */
+							__( 'Meta "%1$s" carries invalid UTF-8 at %2$s. Nothing was written.', 'mcpwp' ),
+							$key,
+							'' === $bad ? '(value)' : $bad
+						),
+						array( 'status' => 400, 'key' => $key )
+					);
+				}
+			}
+
+			$encoded = null !== $value ? wp_json_encode( $value ) : '';
+			if ( false === $encoded ) {
+				return new WP_Error(
+					'invalid_meta_value',
+					sprintf(
+						/* translators: %s: key */
+						__( 'Meta "%s" cannot be encoded. Nothing was written.', 'mcpwp' ),
+						$key
+					),
+					array( 'status' => 400, 'key' => $key )
+				);
+			}
+
+			if ( null !== $value && strlen( (string) $encoded ) > self::MAX_META_VALUE_BYTES ) {
 				return new WP_Error(
 					'meta_value_too_large',
 					sprintf(
@@ -460,6 +548,33 @@ class Mcpwp_Post_Fields {
 		}
 
 		return $written;
+	}
+
+	/**
+	 * Path of the first string in a value that is not valid UTF-8, or null.
+	 * wp_check_invalid_utf8() turns such a string into '' — which would then
+	 * be stored and reported as written (#797 round 4, P2-837c).
+	 *
+	 * @param mixed  $value Value.
+	 * @param string $path  Path so far.
+	 * @return string|null
+	 */
+	private static function first_invalid_utf8_path( $value, $path = '' ) {
+		if ( is_string( $value ) ) {
+			$valid = function_exists( 'mb_check_encoding' ) ? mb_check_encoding( $value, 'UTF-8' ) : ( false !== @iconv( 'UTF-8', 'UTF-8//IGNORE', $value ) && @iconv( 'UTF-8', 'UTF-8//IGNORE', $value ) === $value );
+			return $valid ? null : $path;
+		}
+
+		if ( is_array( $value ) ) {
+			foreach ( $value as $k => $v ) {
+				$found = self::first_invalid_utf8_path( $v, '' === $path ? (string) $k : $path . '.' . $k );
+				if ( null !== $found ) {
+					return $found;
+				}
+			}
+		}
+
+		return null;
 	}
 
 	/**

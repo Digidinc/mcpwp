@@ -501,4 +501,102 @@ final class PostTermsMetaTest extends TestCase {
 			$this->assertSame( 'conflicting_terms', $err->get_error_code(), $spelling );
 		}
 	}
+
+	// ---------------------------------------------------------------
+	// Round 4: the read side is never looser than before; the detector is
+	// asserted in both directions; duplicates and bad bytes are refused.
+	// ---------------------------------------------------------------
+
+	public function test_the_read_blocklist_still_covers_every_name_the_old_regex_did(): void {
+		$content = new ReflectionMethod( Mcpwp_REST_Site_Content::class, 'is_blocked_meta_key' );
+		$content->setAccessible( true );
+		$ctl = new Mcpwp_REST_Site_Content();
+
+		// Round-4 P1-837: these were filtered on main and had become readable.
+		foreach ( array( 'authorization', 'oauth_refresh', 'oauth_code', 'oauth_state', '_oauth_verifier', 'xauth_key', 'authenticator', 'reauth', 'authorized_by' ) as $key ) {
+			$this->assertTrue( $content->invoke( $ctl, $key ), $key . ' must stay blocked on read.' );
+			$this->assertTrue( Mcpwp_Post_Fields::is_secret_shaped_key( $key ), $key . ' is refused on write too.' );
+		}
+
+		// And a real post is not dumped with them: the no-key listing filters.
+		$this->seed( 40, 'post' );
+		$GLOBALS['_mcpwp_test_posts'][40] = new WP_Post( (array) $GLOBALS['_mcpwp_test_posts'][40] );
+		update_post_meta( 40, 'authorization', 'Bearer abc.def.ghi' );
+		update_post_meta( 40, 'smc_role', 'Founder' );
+		$request = new WP_REST_Request( 'GET', '/mcpwp/v1/content/40/meta' );
+		$request->set_param( 'id', 40 );
+		$listed = ( new Mcpwp_REST_Site_Content() )->get_post_meta_handler( $request );
+		$this->assertStringNotContainsString( 'Bearer abc', wp_json_encode( $listed->get_data() ) );
+		$this->assertStringContainsString( 'Founder', wp_json_encode( $listed->get_data() ) );
+	}
+
+	public function test_the_secret_detector_in_both_directions(): void {
+		$secret = array(
+			'stripe_secret_key', 'api_token', 'user_password', 'oauth_credential', 'basic_auth', 'apiKey', 'myPwd', 'sessionId', 'session_id',
+			'privkey', 'ssh_privkey', 'private_key', 'card_pin', 'pin', 'nonce', 'signature', 'recovery_codes', 'seed_phrase', 'totp',
+			'aws_access_key_id', 'access_key', 'PASSWORD', 'client_secret', 'refresh_token', 'x-auth', 'authorization',
+		);
+		foreach ( $secret as $key ) {
+			$this->assertTrue( Mcpwp_Post_Fields::is_secret_shaped_key( $key ), $key . ' names a credential.' );
+		}
+
+		$ordinary = array(
+			'author', 'author_note', 'authors', 'authored_by', 'license', 'license_url', 'license_name', 'salt_grams', 'secretary_name', 'tokenizer',
+			'smc_role', 'smc_page_count', 'pinned', 'pinterest_url', 'session_count',
+		);
+		foreach ( $ordinary as $key ) {
+			$this->assertFalse( Mcpwp_Post_Fields::is_secret_shaped_key( $key ), $key . ' is an ordinary field.' );
+		}
+	}
+
+	public function test_two_spellings_of_one_taxonomy_in_terms_are_refused(): void {
+		$this->seed( 40, 'post' );
+
+		$err = $this->posts()->update_post( 40, array( 'terms' => array( 'Category' => array( 'a' ), 'category' => array( 'b' ), 'category.' => array( 'c' ) ) ) );
+		$this->assertInstanceOf( WP_Error::class, $err );
+		$this->assertSame( 'conflicting_terms', $err->get_error_code() );
+		$this->assertSame( array(), $GLOBALS['_mcpwp_test_object_terms'][40] ?? array(), 'Nothing was written.' );
+	}
+
+	public function test_invalid_utf8_in_a_meta_value_is_refused_not_stored_as_an_empty_string(): void {
+		$this->seed( 40, 'post' );
+
+		$err = $this->posts()->update_post( 40, array( 'meta' => array( 'smc_blob' => "\xFF" . str_repeat( 'x', 70000 ) ) ) );
+		$this->assertInstanceOf( WP_Error::class, $err );
+		$this->assertSame( 'invalid_meta_value', $err->get_error_code() );
+		$this->assertArrayNotHasKey( 'smc_blob', $GLOBALS['_mcpwp_test_meta'][40] ?? array() );
+
+		$err = $this->posts()->update_post( 40, array( 'meta' => array( 'smc_list' => array( 'ok', array( 'deep' => "\xC3\x28" ) ) ) ) );
+		$this->assertSame( 'invalid_meta_value', $err->get_error_code() );
+		$this->assertStringContainsString( '1.deep', $err->get_error_message() );
+
+		// A valid string round-trips byte-identical.
+		$this->assertNotInstanceOf( WP_Error::class, $this->posts()->update_post( 40, array( 'meta' => array( 'smc_note' => "Founder & CEO — 東京" ) ) ) );
+		$this->assertSame( "Founder & CEO — 東京", get_post_meta( 40, 'smc_note', true ) );
+	}
+
+	public function test_meta_and_terms_are_visible_in_the_route_schema(): void {
+		$GLOBALS['_mcpwp_test_registered_routes'] = array();
+		( new Mcpwp_REST_Posts() )->register_routes();
+		( new Mcpwp_REST_Pages() )->register_routes();
+
+		$seen = 0;
+		foreach ( $GLOBALS['_mcpwp_test_registered_routes'] as $route ) {
+			if ( ! in_array( $route['route'], array( '/posts', '/pages', '/posts/(?P<id>\d+)', '/pages/(?P<id>\d+)' ), true ) ) {
+				continue;
+			}
+			foreach ( $route['args'] as $handler ) {
+				if ( ! isset( $handler['methods'] ) || 'GET' === $handler['methods'] || false !== strpos( (string) $handler['methods'], 'DELETE' ) || ! isset( $handler['args'] ) ) {
+					continue;
+				}
+				$this->assertArrayHasKey( 'meta', $handler['args'], $route['route'] );
+				$this->assertArrayHasKey( 'terms', $handler['args'], $route['route'] );
+				if ( false !== strpos( $route['route'], 'id' ) ) {
+					$this->assertArrayNotHasKey( 'required', $handler['args']['title'], 'An update requires nothing.' );
+				}
+				$seen++;
+			}
+		}
+		$this->assertSame( 4, $seen );
+	}
 }

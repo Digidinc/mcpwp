@@ -626,7 +626,8 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			}
 		}
 
-		// Secret-looking keys: one detector for read and write.
+		// Secret-looking keys: the shared detector. The write side may be
+		// stricter than the read side, never looser (#797 round 4).
 		if ( Mcpwp_Post_Fields::is_secret_shaped_key( $meta_key ) ) {
 			return true;
 		}
