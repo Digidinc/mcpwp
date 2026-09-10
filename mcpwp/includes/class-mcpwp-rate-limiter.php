@@ -133,6 +133,28 @@ class Mcpwp_Rate_Limiter {
 		$minute_limit = $is_read ? $effective_limits['requests_per_minute'] * 2 : $effective_limits['requests_per_minute'];
 		$hour_limit   = $effective_limits['requests_per_hour'];
 
+		// A request heavier than a whole window can never fit, at any time.
+		// Saying "try again in N seconds" to it is a loop; say what it is.
+		$ceiling = min( $burst_limit, $minute_limit, $hour_limit );
+		if ( $weight > $ceiling ) {
+			return new WP_Error(
+				'batch_exceeds_limit',
+				sprintf(
+					/* translators: 1: operations requested 2: the smallest window ceiling */
+					__( 'This request carries %1$d operations but the rate limit allows at most %2$d per window. Waiting will not help; split it.', 'mcpwp' ),
+					$weight,
+					$ceiling
+				),
+				array(
+					'status'    => 413,
+					'requested' => $weight,
+					'limit'     => $ceiling,
+					'bucket'    => $bucket,
+					'hint'      => 'Send fewer operations per call (at most the smallest of burst_limit, requests_per_minute and requests_per_hour), or raise those limits for this key with wp_update_rate_limit / a key rate_limits override.',
+				)
+			);
+		}
+
 		$cache_key_minute = 'mcpwp_rate_' . md5( $identifier . '_minute' );
 		$cache_key_hour   = 'mcpwp_rate_' . md5( $identifier . '_hour' );
 		$cache_key_burst  = 'mcpwp_rate_' . md5( $identifier . '_burst' );
@@ -278,14 +300,17 @@ class Mcpwp_Rate_Limiter {
 		set_transient( $cache_key_hour, $hour_data, max( 1, $hour_data['reset'] - $now ) );
 		set_transient( $cache_key_burst, $burst_data, max( 1, $burst_data['reset'] - $now ) );
 
-		// Store current data for headers.
-		$this->current_data = array(
-			'limit'     => $minute_limit,
-			'remaining' => $minute_limit - $minute_data['count'],
-			'reset'     => $minute_data['reset'],
-			'window'    => 'minute',
-			'retry_after' => max( 0, $minute_data['reset'] - $now ),
-				'bucket'      => $bucket,
+		// Store current data for headers: the TIGHTEST window, so a key at
+		// 999/1000 on the hour is warned about the hour, not told it has 59
+		// minute-slots left.
+		$this->current_data = $this->tightest_window(
+			array(
+				'burst'  => array( $burst_limit, $burst_data ),
+				'minute' => array( $minute_limit, $minute_data ),
+				'hour'   => array( $hour_limit, $hour_data ),
+			),
+			$now,
+			$bucket
 		);
 
 		return true;
@@ -356,18 +381,51 @@ class Mcpwp_Rate_Limiter {
 	public function report_bucket( $identifier, $method = 'POST', $key_record = null ) {
 		$limits       = $this->get_effective_limits( $key_record );
 		$is_read      = in_array( strtoupper( (string) $method ), array( 'GET', 'HEAD', 'OPTIONS' ), true );
+		$burst_limit  = $is_read ? $limits['burst_limit'] * 2 : $limits['burst_limit'];
 		$minute_limit = $is_read ? $limits['requests_per_minute'] * 2 : $limits['requests_per_minute'];
+		$hour_limit   = $limits['requests_per_hour'];
 		$now          = time();
-		$minute_data  = $this->initialize_window_data( get_transient( 'mcpwp_rate_' . md5( $identifier . '_minute' ) ), 60, $now );
+		$burst_window = $this->get_burst_window();
 
-		$this->reported_data = array(
-			'limit'       => $minute_limit,
-			'remaining'   => max( 0, $minute_limit - (int) $minute_data['count'] ),
-			'reset'       => $minute_data['reset'],
-			'window'      => 'minute',
-			'retry_after' => max( 0, $minute_data['reset'] - $now ),
-			'bucket'      => 'write',
+		$this->reported_data = $this->tightest_window(
+			array(
+				'burst'  => array( $burst_limit, $this->initialize_window_data( get_transient( 'mcpwp_rate_' . md5( $identifier . '_burst' ) ), $burst_window, $now ) ),
+				'minute' => array( $minute_limit, $this->initialize_window_data( get_transient( 'mcpwp_rate_' . md5( $identifier . '_minute' ) ), 60, $now ) ),
+				'hour'   => array( $hour_limit, $this->initialize_window_data( get_transient( 'mcpwp_rate_' . md5( $identifier . '_hour' ) ), 3600, $now ) ),
+			),
+			$now,
+			'write'
 		);
+	}
+
+	/**
+	 * The window with the least room, as current_data / reported_data.
+	 *
+	 * @param array  $windows {name: [limit, data]}.
+	 * @param int    $now     Time.
+	 * @param string $bucket  Bucket label.
+	 * @return array
+	 */
+	private function tightest_window( array $windows, $now, $bucket ) {
+		$best = null;
+
+		foreach ( $windows as $name => $pair ) {
+			list( $limit, $data ) = $pair;
+			$remaining = max( 0, (int) $limit - (int) $data['count'] );
+
+			if ( null === $best || $remaining < $best['remaining'] ) {
+				$best = array(
+					'limit'       => (int) $limit,
+					'remaining'   => $remaining,
+					'reset'       => (int) $data['reset'],
+					'window'      => $name,
+					'retry_after' => max( 0, (int) $data['reset'] - $now ),
+					'bucket'      => $bucket,
+				);
+			}
+		}
+
+		return $best;
 	}
 
 	/**

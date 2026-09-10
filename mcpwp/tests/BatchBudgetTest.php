@@ -177,6 +177,70 @@ final class BatchBudgetTest extends TestCase {
 		$this->assertSame( 'batch_too_large', $response->get_error_code() );
 	}
 
+	private function batch_tool_request( int $n ): WP_REST_Request {
+		$ops = array();
+		for ( $i = 1; $i <= $n; $i++ ) {
+			$ops[] = array( 'method' => 'PUT', 'path' => '/posts/' . $i, 'body' => array( 'title' => 'T' ) );
+		}
+		return $this->mcp_request(
+			array(
+				'jsonrpc' => '2.0',
+				'id'      => 1,
+				'method'  => 'tools/call',
+				'params'  => array( 'name' => 'wp_batch_update', 'arguments' => array( 'operations' => $ops ) ),
+			)
+		);
+	}
+
+	public function test_a_batch_tool_inside_tools_call_is_charged_per_operation(): void {
+		// tools/call → wp_batch_update → /batch runs as an internal
+		// sub-request, which is exempt from metering. Without this the HTTP
+		// request costs one slot and carries a hundred writes.
+		$controller = new Mcpwp_REST_MCP();
+		$request    = $this->batch_tool_request( 4 );
+
+		$this->assertTrue( $controller->verify_api_key( $request ) );
+		$this->assertSame( 9, Mcpwp_Rate_Limiter::get_instance()->get_budget()['remaining'], 'The HTTP request itself.' );
+
+		$controller->handle_mcp( $request );
+
+		$this->assertSame( 6, Mcpwp_Rate_Limiter::get_instance()->get_budget()['remaining'], 'Plus the other three operations.' );
+	}
+
+	public function test_a_batch_tool_that_does_not_fit_is_refused_before_it_runs(): void {
+		$controller = new Mcpwp_REST_MCP();
+		$this->assertTrue( $controller->verify_api_key( $this->mcp_request( $this->rpc_batch( 3 ) ) ) ); // 7 left
+
+		Mcpwp_REST_MCP::reset_verdict_memo();
+		$request = $this->batch_tool_request( 8 );
+		$this->assertTrue( $controller->verify_api_key( $request ) ); // 6 left; needs 7 more
+		$data = $controller->handle_mcp( $request )->get_data();
+
+		$this->assertArrayHasKey( 'error', $data );
+		$this->assertSame( -32029, $data['error']['code'] );
+		$this->assertSame( 0, count( $GLOBALS['mcpwp_test_dispatched_routes'] ), 'Nothing ran.' );
+	}
+
+	public function test_a_request_heavier_than_a_whole_window_is_not_told_to_wait(): void {
+		$refused = Mcpwp_Rate_Limiter::get_instance()->check_limit( 'w4', 'POST', null, 11 );
+
+		$this->assertInstanceOf( WP_Error::class, $refused );
+		$this->assertSame( 'batch_exceeds_limit', $refused->get_error_code() );
+		$this->assertSame( 413, $refused->get_error_data()['status'] );
+	}
+
+	public function test_the_reported_budget_is_the_tightest_window(): void {
+		$limiter = Mcpwp_Rate_Limiter::get_instance();
+		$limiter->update_settings( array( 'requests_per_minute' => 100, 'burst_limit' => 100, 'requests_per_hour' => 1000 ) );
+		set_transient( 'mcpwp_rate_' . md5( 'w5_hour' ), array( 'count' => 999, 'reset' => time() + 1800 ), 1800 );
+
+		$limiter->check_limit( 'w5', 'POST' );
+		$budget = $limiter->get_budget();
+
+		$this->assertSame( 'hour', $budget['window'] );
+		$this->assertSame( 0, $budget['remaining'] );
+	}
+
 	public function test_a_rest_batch_reports_how_many_succeeded_and_failed(): void {
 		$controller = new Mcpwp_REST_Batch();
 		$response   = $controller->handle_batch( $this->rest_batch_request( 3 ) );

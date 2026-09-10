@@ -44,6 +44,8 @@ final class IdempotentToolCallTest extends TestCase {
 		$GLOBALS['mcpwp_test_current_user']      = 2;
 		$GLOBALS['mcpwp_test_dispatched_routes'] = array();
 		$GLOBALS['mcpwp_test_filters']           = array();
+		$GLOBALS['mcpwp_test_wpdb_options']      = array();
+		$GLOBALS['mcpwp_test_wpdb_insert_fails'] = false;
 		Mcpwp_REST_MCP::reset_verdict_memo();
 
 		$this->key = ( new Mcpwp_REST_MCP() )->create_scoped_api_key( 'lane a', array( 'admin' ) );
@@ -279,10 +281,60 @@ final class IdempotentToolCallTest extends TestCase {
 	// Concurrency and abandoned claims.
 	// ---------------------------------------------------------------
 
+	public function test_the_claim_primitive_is_the_unique_index_not_add_option(): void {
+		// add_option() is a cached read-then-write over INSERT ... ON
+		// DUPLICATE KEY UPDATE: two concurrent add_option() calls BOTH return
+		// true. The first cut used it and shipped a race that the harness
+		// double had encoded as correct. A plain INSERT is arbitrated by the
+		// UNIQUE index: exactly one of two wins.
+		$this->assertSame( Mcpwp_Idempotency_Claim::ACQUIRED, Mcpwp_Idempotency_Claim::acquire( 'mcpwp_idem_x_lease', time(), 'h' ) );
+		$this->assertSame( Mcpwp_Idempotency_Claim::HELD, Mcpwp_Idempotency_Claim::acquire( 'mcpwp_idem_x_lease', time(), 'h' ) );
+
+		Mcpwp_Idempotency_Claim::release( 'mcpwp_idem_x_lease' );
+		$this->assertSame( Mcpwp_Idempotency_Claim::ACQUIRED, Mcpwp_Idempotency_Claim::acquire( 'mcpwp_idem_x_lease', time(), 'h' ) );
+	}
+
+	public function test_a_stale_claim_is_taken_over_by_compare_and_swap_so_only_one_retry_wins(): void {
+		Mcpwp_Idempotency_Claim::acquire( 'mcpwp_idem_y_lease', 1000, 'h' );
+		$seen = Mcpwp_Idempotency_Claim::read( 'mcpwp_idem_y_lease' );
+
+		$this->assertTrue( Mcpwp_Idempotency_Claim::take_over( 'mcpwp_idem_y_lease', $seen['raw'], 2000, 'h' ) );
+		$this->assertFalse( Mcpwp_Idempotency_Claim::take_over( 'mcpwp_idem_y_lease', $seen['raw'], 2001, 'h' ), 'The second racer saw the same stale value and must lose.' );
+	}
+
+	public function test_an_unavailable_claim_store_runs_the_call_and_says_it_was_not_protected(): void {
+		$GLOBALS['mcpwp_test_wpdb_insert_fails'] = true;
+
+		$data = $this->call( 'wp_create_page', array( 'title' => 'A' ), 'r1' );
+
+		$this->assertArrayHasKey( 'result', $data );
+		$this->assertSame( 'not_stored', $data['result']['_meta']['idempotency'] );
+		$this->assertSame( 1, $this->dispatches() );
+	}
+
+	public function test_the_lease_outlives_the_done_record_write(): void {
+		// Releasing the lease before the record exists is a duplicate window:
+		// a retry in that gap sees no lease and no record. Observed through
+		// the record write: it must happen while the lease is still held.
+		$store_key                                    = $this->store_key( 'r1' );
+		$order                                        = array();
+		$GLOBALS['mcpwp_test_transient_write_fails'] = function ( $name ) use ( $store_key, &$order ) {
+			if ( $name === $store_key ) {
+				$order[] = isset( $GLOBALS['mcpwp_test_wpdb_options'][ $store_key . '_lease' ] ) ? 'lease-held' : 'lease-gone';
+			}
+			return false;
+		};
+
+		$this->call( 'wp_create_page', array( 'title' => 'A' ), 'r1' );
+
+		$this->assertSame( array( 'lease-held' ), $order );
+		$this->assertArrayNotHasKey( $store_key . '_lease', $GLOBALS['mcpwp_test_wpdb_options'], 'And released afterwards.' );
+	}
+
 	public function test_two_concurrent_identical_retries_run_exactly_once(): void {
 		// The first attempt is mid-execution on another worker: it holds the
-		// claim, nothing is stored yet. add_option() is the atomic primitive.
-		add_option( $this->store_key( 'r1' ) . '_lease', array( 'at' => time() ), '', 'no' );
+		// claim row, nothing is stored yet.
+		Mcpwp_Idempotency_Claim::acquire( $this->store_key( 'r1' ) . '_lease', time(), '' );
 
 		$data = $this->call( 'wp_create_page', array( 'title' => 'A' ), 'r1' );
 
@@ -293,12 +345,7 @@ final class IdempotentToolCallTest extends TestCase {
 	}
 
 	public function test_a_claim_abandoned_by_a_fatal_expires_instead_of_locking_the_id_for_a_day(): void {
-		add_option(
-			$this->store_key( 'r1' ) . '_lease',
-			array( 'at' => time() - Mcpwp_REST_MCP::IDEMPOTENCY_LEASE_SECONDS - 1 ),
-			'',
-			'no'
-		);
+		Mcpwp_Idempotency_Claim::acquire( $this->store_key( 'r1' ) . '_lease', time() - Mcpwp_REST_MCP::IDEMPOTENCY_LEASE_SECONDS - 1, '' );
 
 		$data = $this->call( 'wp_create_page', array( 'title' => 'A' ), 'r1' );
 
@@ -308,12 +355,69 @@ final class IdempotentToolCallTest extends TestCase {
 
 	public function test_the_claim_is_released_after_the_call_whatever_happened(): void {
 		$this->call( 'wp_create_page', array( 'title' => 'A' ), 'r1' );
-		$this->assertFalse( get_option( $this->store_key( 'r1' ) . '_lease' ) );
+		$this->assertNull( Mcpwp_Idempotency_Claim::read( $this->store_key( 'r1' ) . '_lease' ) );
 
 		update_option( 'mcpwp_disabled_tool_categories', array( 'content' ) );
 		Mcpwp_REST_MCP::reset_verdict_memo();
 		$this->call( 'wp_create_page', array( 'title' => 'B' ), 'r2' );
-		$this->assertFalse( get_option( $this->store_key( 'r2' ) . '_lease' ) );
+		$this->assertNull( Mcpwp_Idempotency_Claim::read( $this->store_key( 'r2' ) . '_lease' ) );
+	}
+
+	public function test_a_corrupt_done_record_is_an_error_not_a_second_write(): void {
+		set_transient( $this->store_key( 'r1' ), array( 'state' => 'done', 'args_hash' => 'x' ), 60 );
+
+		$data = $this->call( 'wp_create_page', array( 'title' => 'A' ), 'r1' );
+
+		$this->assertArrayHasKey( 'error', $data );
+		$this->assertSame( -32010, $data['error']['code'] );
+		$this->assertSame( 0, $this->dispatches() );
+	}
+
+	public function test_a_tool_outside_the_built_in_map_says_it_was_not_pinned(): void {
+		$data = $this->call( 'custom_hook_tool', array(), 'r1' );
+
+		if ( isset( $data['result'] ) ) {
+			$this->assertSame( 'not_applicable', $data['result']['_meta']['idempotency'] );
+		} else {
+			$this->assertArrayHasKey( 'error', $data );
+		}
+	}
+
+	public function test_a_tool_that_cannot_prove_completion_opts_out_of_pinning(): void {
+		$first = $this->call( 'wp_deploy_site_blueprint', array( 'id' => 1 ), 'r1' );
+		$this->call( 'wp_deploy_site_blueprint', array( 'id' => 1 ), 'r1' );
+
+		$this->assertSame( 2, $this->dispatches(), 'A deploy whose 200 absorbs failed steps must never be replayed as complete.' );
+		$this->assertSame( 'not_applicable', $first['result']['_meta']['idempotency'] );
+	}
+
+	public function test_a_result_reporting_unreadable_items_is_partial(): void {
+		// The site-wide find/replace reports pages it could not read under
+		// 'unreadable', never 'errors'. Pinning that would replay "done" over
+		// the pages it skipped. Modelled on a bulk tool that needs no plugin.
+		$GLOBALS['mcpwp_test_rest_response_override'] = array( 'updated' => array(), 'errors' => array(), 'unreadable' => array( array( 'id' => 5 ) ) );
+
+		$first = $this->call( 'wp_bulk_update_pages', array( 'pages' => array( array( 'id' => 5, 'title' => 'x' ) ) ), 'r1' );
+		unset( $GLOBALS['mcpwp_test_rest_response_override'] );
+
+		$this->assertArrayHasKey( 'result', $first, isset( $first['error'] ) ? wp_json_encode( $first['error'] ) : '' );
+		$this->assertSame( 'not_stored', $first['result']['_meta']['idempotency'] );
+	}
+
+	public function test_a_validation_tool_finding_errors_is_not_a_partial_failure(): void {
+		$GLOBALS['mcpwp_test_rest_response_override'] = array( 'valid' => false, 'errors' => array( 'block 3: missing attribute' ) );
+
+		$first = $this->call( 'wp_validate_blocks', array( 'blocks' => array() ), 'r1' );
+		unset( $GLOBALS['mcpwp_test_rest_response_override'] );
+
+		$this->assertSame( 'stored', $first['result']['_meta']['idempotency'], 'Finding errors is what a validator is for.' );
+	}
+
+	public function test_an_oauth_client_id_without_a_user_is_not_a_principal(): void {
+		$this->assertSame( '', Mcpwp_REST_MCP::principal_scope( array( 'id' => 'oauth-client:site_pilot_ai' ) ) );
+		$this->assertSame( 'oauth-user:7', Mcpwp_REST_MCP::principal_scope( array( 'id' => 'oauth-user:7' ) ) );
+		$this->assertSame( 'broker:abc', Mcpwp_REST_MCP::principal_scope( array( 'id' => 'broker:abc' ) ) );
+		$this->assertSame( '', Mcpwp_REST_MCP::principal_scope( array( 'id' => 'anon' ) ) );
 	}
 
 	// ---------------------------------------------------------------

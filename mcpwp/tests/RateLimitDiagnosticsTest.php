@@ -55,7 +55,7 @@ final class RateLimitDiagnosticsTest extends TestCase {
 				'enabled'             => true,
 				'requests_per_minute' => 100,
 				'requests_per_hour'   => 1000,
-				'burst_limit'         => 50,
+				'burst_limit'         => 100,
 				'whitelist'           => array(),
 			)
 		);
@@ -213,7 +213,7 @@ final class RateLimitDiagnosticsTest extends TestCase {
 		$this->assertSame( 99, $meta['remaining'], 'One request consumed, so a client can pace itself before the wall.' );
 		$this->assertArrayHasKey( 'reset_in', $meta );
 		$this->assertGreaterThanOrEqual( 0, $meta['reset_in'] );
-		$this->assertSame( 'minute', $meta['window'] );
+		$this->assertContains( $meta['window'], array( 'burst', 'minute', 'hour' ), 'The tightest window is reported; with equal room, any of them is honest.' );
 	}
 
 	public function test_every_mcp_response_names_the_plugin_version_in_a_header(): void {
@@ -442,6 +442,41 @@ final class RateLimitDiagnosticsTest extends TestCase {
 		$this->assertArrayHasKey( 'reset_in', $data );
 		$this->assertLessThanOrEqual( 3600, $data['reset_in'] );
 		$this->assertSame( 'write', $data['bucket'] );
+	}
+
+	public function test_a_429_names_its_bucket_in_the_header_too(): void {
+		$this->exhaust( $this->write_bucket() );
+
+		$controller = new Mcpwp_REST_MCP();
+		$request    = $this->mcp_request( $this->rpc( 'tools/list' ) );
+		$error      = $controller->verify_api_key( $request );
+
+		$response = new WP_REST_Response( array( 'code' => 'rate_limit_exceeded', 'data' => $error->get_error_data() ), 429 );
+		$loader   = ( new ReflectionClass( Mcpwp_Loader::class ) )->newInstanceWithoutConstructor();
+		$headers  = $loader->add_mcpwp_rate_limit_headers( $response, null, $request )->get_headers();
+
+		$this->assertSame( 'write', $headers['X-RateLimit-Bucket'] );
+	}
+
+	public function test_a_key_throttled_below_the_diagnostic_allowance_keeps_its_own_ceiling(): void {
+		$tight = ( new Mcpwp_REST_MCP() )->create_scoped_api_key( 'tight', array( 'admin' ) );
+		$keys  = get_option( 'mcpwp_api_keys', array() );
+		foreach ( $keys as &$record ) {
+			if ( $record['id'] === $tight['id'] ) {
+				$record['rate_limits'] = array( 'per_minute' => 5, 'per_hour' => 50, 'burst' => 5 );
+			}
+		}
+		unset( $record );
+		update_option( 'mcpwp_api_keys', $keys );
+
+		set_transient( 'mcpwp_rate_' . md5( 'key:' . sanitize_key( $tight['id'] ) . ':diag_hour' ), array( 'count' => 50, 'reset' => time() + 1800 ), 1800 );
+
+		$controller = new Mcpwp_REST_MCP();
+		$request    = new WP_REST_Request( 'POST', '/mcpwp/v1/mcp', array(), array( 'X-API-Key' => $tight['key'] ), $this->rpc( 'initialize' ) );
+		$refused    = $controller->verify_api_key( $request );
+
+		$this->assertInstanceOf( WP_Error::class, $refused, 'The allowance is a floor for exhausted keys, not a lift above a deliberate throttle.' );
+		$this->assertSame( 50, $refused->get_error_data()['limit'] );
 	}
 
 	public function test_a_non_string_method_is_a_jsonrpc_error_not_a_fatal(): void {

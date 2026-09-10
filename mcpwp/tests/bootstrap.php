@@ -475,8 +475,9 @@ function update_option($name, $value, $autoload = null)
 
 function add_option($name, $value = '', $deprecated = '', $autoload = 'yes')
 {
-    // Same semantics as WordPress: the UNIQUE index on option_name makes
-    // add_option() the one atomic claim primitive; false when the row exists.
+    // NOT an atomic primitive, and not one in WordPress either: core's
+    // add_option() is a cached read-then-write over INSERT ... ON DUPLICATE
+    // KEY UPDATE. Claims go through Mcpwp_Idempotency_Claim / $wpdb->insert.
     if (array_key_exists($name, $GLOBALS['mcpwp_test_options'] ?? array())) {
         return false;
     }
@@ -931,6 +932,9 @@ if (! isset($GLOBALS['wpdb'])) {
         }
         public function get_var($query = '', $x = 0, $y = 0)
         {
+            if (preg_match("/SELECT option_value FROM \\S*options WHERE option_name = '([^']+)'/", (string) $query, $m)) {
+                return $GLOBALS['mcpwp_test_wpdb_options'][ $m[1] ] ?? null;
+            }
             // Answer the one query the Elementor writer depends on.
             //
             // set_elementor_data() verifies its own write by reading the raw
@@ -966,14 +970,54 @@ if (! isset($GLOBALS['wpdb'])) {
         }
         public function insert($table, $data, $format = null)
         {
+            // The options table has a UNIQUE index on option_name. A plain
+            // INSERT of an existing name fails with a duplicate-key error —
+            // that failure is the atomic-claim primitive (#802), so the
+            // double reproduces it exactly. add_option() does NOT behave
+            // like this (it uses ON DUPLICATE KEY UPDATE); the earlier
+            // add_option() double claiming otherwise is why a race shipped.
+            if ($table === $this->options && isset($data['option_name'])) {
+                if (! empty($GLOBALS['mcpwp_test_wpdb_insert_fails'])) {
+                    $this->last_error = 'WordPress database error: connection lost';
+                    return false;
+                }
+                $name = (string) $data['option_name'];
+                if (array_key_exists($name, $GLOBALS['mcpwp_test_wpdb_options'] ?? array())) {
+                    $this->last_error = "Duplicate entry '" . $name . "' for key 'option_name'";
+                    return false;
+                }
+                $GLOBALS['mcpwp_test_wpdb_options'][ $name ] = (string) $data['option_value'];
+                $this->last_error = '';
+                return 1;
+            }
             return 1;
         }
         public function update($table, $data, $where, $f = null, $wf = null)
         {
+            if ($table === $this->options && isset($where['option_name'])) {
+                $name    = (string) $where['option_name'];
+                $current = $GLOBALS['mcpwp_test_wpdb_options'][ $name ] ?? null;
+                if (null === $current) {
+                    return 0;
+                }
+                if (isset($where['option_value']) && (string) $where['option_value'] !== $current) {
+                    return 0; // compare-and-swap miss
+                }
+                $GLOBALS['mcpwp_test_wpdb_options'][ $name ] = (string) $data['option_value'];
+                return 1;
+            }
             return 1;
         }
         public function delete($table, $where, $where_format = null)
         {
+            if ($table === $this->options && isset($where['option_name'])) {
+                $name = (string) $where['option_name'];
+                if (array_key_exists($name, $GLOBALS['mcpwp_test_wpdb_options'] ?? array())) {
+                    unset($GLOBALS['mcpwp_test_wpdb_options'][ $name ]);
+                    return 1;
+                }
+                return 0;
+            }
             return 1;
         }
         public function replace($table, $data, $format = null)
@@ -1958,6 +2002,7 @@ require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-menus.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-public-route.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-page-settings.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-slug-search.php';
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-idempotency-claim.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-registry.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-element-keys.php';
 require_once dirname(__DIR__) . '/includes/core/traits/trait-mcpwp-elementor-reader.php';

@@ -142,7 +142,11 @@ trait Mcpwp_Api_Auth {
 			$verdict = $this->compute_api_key_verdict( $request );
 
 			// Holding the request keeps its object id from being reused for
-			// another request within this process.
+			// another request within this process. Bounded: a long-lived
+			// worker looping rest_do_request() must not retain every body.
+			if ( count( self::$mcpwp_verdicts ) >= 64 ) {
+				array_shift( self::$mcpwp_verdicts );
+			}
 			self::$mcpwp_verdicts[ $memo_id ] = array( $request, $verdict );
 
 			return $verdict;
@@ -172,14 +176,55 @@ trait Mcpwp_Api_Auth {
 	 *
 	 * @return array
 	 */
-	protected function diagnostic_rate_limits() {
-		return array(
-			'rate_limits' => array(
-				'burst'      => 15,
-				'per_minute' => 30,
-				'per_hour'   => 300,
-			),
+	protected function diagnostic_rate_limits( $key_record = null ) {
+		$limits = array(
+			'burst'      => 15,
+			'per_minute' => 30,
+			'per_hour'   => 300,
 		);
+
+		// A key deliberately throttled below the diagnostic allowance keeps
+		// its own ceiling: the allowance is a floor for exhausted keys, not
+		// a lift for restricted ones.
+		if ( is_array( $key_record ) && ! empty( $key_record['rate_limits'] ) && is_array( $key_record['rate_limits'] ) ) {
+			foreach ( $limits as $name => $value ) {
+				if ( isset( $key_record['rate_limits'][ $name ] ) && (int) $key_record['rate_limits'][ $name ] > 0 ) {
+					$limits[ $name ] = min( $value, (int) $key_record['rate_limits'][ $name ] );
+				}
+			}
+		}
+
+		return array( 'rate_limits' => $limits );
+	}
+
+	/**
+	 * Identifier, method and key record of the last meter_request() call.
+	 *
+	 * @var array|null
+	 */
+	private $mcpwp_metered = null;
+
+	/**
+	 * Charge slots on top of the one the HTTP request already paid (#802).
+	 *
+	 * @param int $slots How many more.
+	 * @return true|WP_Error
+	 */
+	protected function charge_additional_slots( $slots ) {
+		$slots = (int) $slots;
+
+		if ( $slots < 1 ) {
+			return true;
+		}
+
+		if ( ! is_array( $this->mcpwp_metered ) ) {
+			// Never metered (internal dispatch, admin chat): nothing to charge against.
+			return true;
+		}
+
+		list( $identifier, $method, $key_record ) = $this->mcpwp_metered;
+
+		return $this->check_rate_limit( $identifier, $method, $key_record, $slots );
 	}
 
 	/**
@@ -198,11 +243,15 @@ trait Mcpwp_Api_Auth {
 	protected function meter_request( $request, $identifier, $http_method = 'POST', $key_record = null ) {
 		$weight = $this->request_rate_weight( $request );
 
+		// Remembered so a tool that turns out to carry N operations can be
+		// charged the other N-1 before it runs (charge_additional_slots).
+		$this->mcpwp_metered = array( $identifier, $http_method, $key_record );
+
 		if ( ! $this->is_diagnostic_request( $request ) ) {
 			return $this->check_rate_limit( $identifier, $http_method, $key_record, $weight );
 		}
 
-		$check = $this->check_rate_limit( $identifier . ':diag', 'POST', $this->diagnostic_rate_limits(), $weight );
+		$check = $this->check_rate_limit( $identifier . ':diag', 'POST', $this->diagnostic_rate_limits( $key_record ), $weight );
 
 		// The budget the caller is asking about is the write budget, not the
 		// diagnostic slot just spent. Report that one.
