@@ -250,24 +250,50 @@ for CHANNEL_URL in \
 	fi
 done
 
-# An agency build must never be downloadable without a token, from either host
-# (#852). A 200 on any of these URLs fails the release even if everything else
-# shipped: a public Pro-unlocked build is worse than a late release.
+# An agency build must never be downloadable without a token (#852). Two ways it
+# could be: a Worker serving it (checked by requesting it without a token), or
+# the private bucket itself being exposed (public r2.dev URL, custom domain) —
+# which no Worker request can see, so the bucket's own settings are checked.
+# Only an explicit refusal passes: 401 or 404. Anything else — 200, a redirect,
+# a challenge page, a 5xx, no response — is retried and then fails the release,
+# because "could not tell" must never read as "not public".
 AGENCY_LEAK=0
 for LEAK_URL in \
 	"https://updates.mcpwp.net/agency/mcpwp-agency-$VERSION.zip" \
 	"https://updates.mcpwp.net/mcpwp-agency-$VERSION.zip" \
 	"https://mumega.com/mcp-updates/agency/mcpwp-agency-$VERSION.zip" \
 	"https://mumega.com/mcp-updates/mcpwp-agency-$VERSION.zip"; do
-	LEAK_CODE="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 "$LEAK_URL" 2>/dev/null || echo "000")"
-	if [[ "$LEAK_CODE" == "200" ]]; then
-		echo "ERROR: agency build is publicly downloadable without a token: $LEAK_URL" >&2
-		AGENCY_LEAK=1
-	elif [[ "$LEAK_CODE" == "000" ]]; then
-		echo "ERROR: could not check $LEAK_URL for a public agency build (no response)" >&2
+	LEAK_CODE=""
+	for LEAK_TRY in 1 2 3; do
+		# HEAD, no redirects followed, one status line only: curl prints 000 itself
+		# on no response, so nothing is appended to the code.
+		LEAK_CODE="$(curl -sS -I -o /dev/null -w '%{http_code}' --max-time 30 "$LEAK_URL" 2>/dev/null)"
+		[[ "$LEAK_CODE" == "401" || "$LEAK_CODE" == "404" ]] && break
+		sleep 5
+	done
+	if [[ "$LEAK_CODE" != "401" && "$LEAK_CODE" != "404" ]]; then
+		echo "ERROR: agency build check did not get an explicit refusal (HTTP ${LEAK_CODE:-none}): $LEAK_URL" >&2
 		AGENCY_LEAK=1
 	fi
 done
+
+if [[ "$VERIFY_ONLY" -eq 0 ]]; then
+	# The private bucket must have no public r2.dev URL and no custom domain.
+	AGENCY_DEV_URL="$(CLOUDFLARE_API_TOKEN="$CF_TOKEN" npx --prefix "$WORKER_DIR" wrangler r2 bucket dev-url get mcpwp-agency-builds 2>&1 || true)"
+	if ! printf '%s' "$AGENCY_DEV_URL" | grep -q "Public access via the r2.dev URL is disabled"; then
+		echo "ERROR: could not confirm the r2.dev URL of mcpwp-agency-builds is disabled:" >&2
+		printf '%s\n' "$AGENCY_DEV_URL" | tail -3 >&2
+		AGENCY_LEAK=1
+	fi
+	AGENCY_DOMAINS="$(CLOUDFLARE_API_TOKEN="$CF_TOKEN" npx --prefix "$WORKER_DIR" wrangler r2 bucket domain list mcpwp-agency-builds 2>&1 || true)"
+	# Pass only on wrangler's explicit "none" answer; any other output (a listed
+	# domain, an auth error, a changed message) fails closed.
+	if ! printf '%s' "$AGENCY_DOMAINS" | grep -q "There are no custom domains connected to this bucket"; then
+		echo "ERROR: could not confirm mcpwp-agency-builds has no custom domain:" >&2
+		printf '%s\n' "$AGENCY_DOMAINS" | tail -5 >&2
+		AGENCY_LEAK=1
+	fi
+fi
 
 if [[ "$AGENCY_LEAK" -eq 1 ]]; then
 	echo "" >&2
