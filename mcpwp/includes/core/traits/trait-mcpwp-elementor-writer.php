@@ -688,41 +688,9 @@ trait Mcpwp_Elementor_Writer_Trait {
 	 *         `elements` is a list ([] for no data), or null when unusable.
 	 */
 	private function read_stored_tree( $raw ) {
-		$stored_as = gettype( $raw );
-
-		if ( '' === $raw || null === $raw || false === $raw ) {
-			return array( 'elements' => array(), 'unusable' => '', 'stored_as' => $stored_as );
-		}
-
-		if ( is_string( $raw ) ) {
-			$decoded = json_decode( $raw, true );
-
-			if ( null === $decoded && JSON_ERROR_NONE !== json_last_error() ) {
-				return array( 'elements' => null, 'unusable' => 'is stored as text that does not decode to an element list (' . json_last_error_msg() . ')', 'stored_as' => $stored_as );
-			}
-			if ( null === $decoded ) {
-				return array( 'elements' => array(), 'unusable' => '', 'stored_as' => $stored_as );
-			}
-			if ( ! is_array( $decoded ) ) {
-				return array( 'elements' => null, 'unusable' => 'is stored as JSON text that decodes to ' . gettype( $decoded ) . ', not an element list', 'stored_as' => $stored_as );
-			}
-
-			$list = $this->element_list( $decoded );
-
-			return null === $list
-				? array( 'elements' => null, 'unusable' => 'is stored as JSON text that is not a list of elements', 'stored_as' => $stored_as )
-				: array( 'elements' => $list, 'unusable' => '', 'stored_as' => $stored_as );
-		}
-
-		if ( is_array( $raw ) ) {
-			$list = $this->element_list( $raw );
-
-			return null === $list
-				? array( 'elements' => null, 'unusable' => 'is stored as an array that is not a list of elements', 'stored_as' => $stored_as )
-				: array( 'elements' => $list, 'unusable' => '', 'stored_as' => $stored_as );
-		}
-
-		return array( 'elements' => null, 'unusable' => 'is stored as ' . $stored_as . ', which is neither JSON text nor an element array', 'stored_as' => $stored_as );
+		// Moved unchanged to the shared reader, so every class that reads a
+		// stored tree gets the same answer (#845).
+		return Mcpwp_Elementor_Stored_Tree::read( $raw );
 	}
 
 	/**
@@ -735,13 +703,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 	 * @return array|null
 	 */
 	private function element_list( array $elements ) {
-		foreach ( $elements as $key => $element ) {
-			if ( ! is_int( $key ) || ! is_array( $element ) ) {
-				return null;
-			}
-		}
-
-		return array_values( $elements );
+		return Mcpwp_Elementor_Stored_Tree::element_list( $elements );
 	}
 
 	/**
@@ -803,12 +765,15 @@ trait Mcpwp_Elementor_Writer_Trait {
 			return true;
 		}
 
-		$existing = get_post_meta( $page_id, '_elementor_data', true );
-		// Array-stored data is the tree itself (review r2 N3); text is decoded.
-		$decoded  = is_array( $existing ) ? $existing : ( is_string( $existing ) && '' !== $existing ? json_decode( $existing, true ) : null );
+		// Read in whatever form it is stored (#845). Only a readable, non-empty
+		// tree makes this "already an Elementor page". Data that cannot be a
+		// tree — text or, now equally, an array — is an unavailable source and
+		// must not produce the same answer as a positive one, so the content
+		// check below still applies (ContentConversionGuardTest).
+		$stored = Mcpwp_Elementor_Stored_Tree::of_post( $page_id );
 
 		// Already an Elementor page.
-		if ( is_array( $decoded ) && ! empty( $decoded ) ) {
+		if ( ! empty( $stored['elements'] ) ) {
 			return true;
 		}
 
@@ -1405,7 +1370,9 @@ trait Mcpwp_Elementor_Writer_Trait {
 						}
 
 						$stored_after_document = get_post_meta( $page_id, '_elementor_data', true );
-						$decoded_after_document = json_decode( $stored_after_document, true );
+						// In whatever form is stored (#845): a vetoed overwrite
+						// leaves the array that was there before.
+						$decoded_after_document = Mcpwp_Elementor_Stored_Tree::read( $stored_after_document )['elements'];
 						$stored_after_count     = is_array( $decoded_after_document ) ? count( $decoded_after_document ) : 0;
 
 						if ( $stored_after_count === $input_count ) {
@@ -1527,7 +1494,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 			if ( ! empty( \Elementor\Plugin::$instance->documents ) ) {
 				$fresh_doc = \Elementor\Plugin::$instance->documents->get( $page_id, false );
 				if ( $fresh_doc && method_exists( $fresh_doc, 'save' ) ) {
-					$fresh_elements = json_decode( get_post_meta( $page_id, '_elementor_data', true ), true );
+					$fresh_elements = Mcpwp_Elementor_Stored_Tree::of_post( $page_id )['elements'];
 					if ( is_array( $fresh_elements ) && ! empty( $fresh_elements ) ) {
 						// Keep the recursive total for diagnostics. The semantic comparison
 						// below also catches same-size changes to IDs, types, order, settings,
@@ -1846,21 +1813,19 @@ trait Mcpwp_Elementor_Writer_Trait {
 			return $page;
 		}
 
-		$elementor_data = get_post_meta( $page_id, '_elementor_data', true );
-		if ( empty( $elementor_data ) ) {
+		// Read in whatever form it is stored (#845): an array is the tree, and
+		// data that cannot be a tree is refused — never edited as a page.
+		$stored = Mcpwp_Elementor_Stored_Tree::of_post( $page_id );
+		if ( Mcpwp_Elementor_Stored_Tree::is_unusable( $stored ) ) {
+			return Mcpwp_Elementor_Stored_Tree::refusal( $stored );
+		}
+
+		$elements = $stored['elements'];
+		if ( empty( $elements ) ) {
 			return new WP_Error(
 				'no_elementor_data',
 				__( 'This page has no Elementor data.', 'mcpwp' ),
 				array( 'status' => 404 )
-			);
-		}
-
-		$elements = json_decode( $elementor_data, true );
-		if ( ! is_array( $elements ) ) {
-			return new WP_Error(
-				'invalid_elementor_data',
-				__( 'Elementor data is not valid JSON.', 'mcpwp' ),
-				array( 'status' => 500 )
 			);
 		}
 
@@ -1940,8 +1905,8 @@ trait Mcpwp_Elementor_Writer_Trait {
 		}
 
 		// Re-read the saved element to return its final state.
-		$saved_data = get_post_meta( $page_id, '_elementor_data', true );
-		$saved_elements = json_decode( $saved_data, true );
+		// A vetoed write leaves whatever form was stored before (#845).
+		$saved_elements = (array) Mcpwp_Elementor_Stored_Tree::of_post( $page_id )['elements'];
 		$saved_path = '';
 		$saved_element = null;
 
@@ -2030,21 +1995,19 @@ trait Mcpwp_Elementor_Writer_Trait {
 			);
 		}
 
-		$elementor_data = get_post_meta( $page_id, '_elementor_data', true );
-		if ( empty( $elementor_data ) ) {
+		// Read in whatever form it is stored (#845): an array is the tree, and
+		// data that cannot be a tree is refused — never edited as a page.
+		$stored = Mcpwp_Elementor_Stored_Tree::of_post( $page_id );
+		if ( Mcpwp_Elementor_Stored_Tree::is_unusable( $stored ) ) {
+			return Mcpwp_Elementor_Stored_Tree::refusal( $stored );
+		}
+
+		$elements = $stored['elements'];
+		if ( empty( $elements ) ) {
 			return new WP_Error(
 				'no_elementor_data',
 				__( 'This page has no Elementor data.', 'mcpwp' ),
 				array( 'status' => 404 )
-			);
-		}
-
-		$elements = json_decode( $elementor_data, true );
-		if ( ! is_array( $elements ) ) {
-			return new WP_Error(
-				'invalid_elementor_data',
-				__( 'Elementor data is not valid JSON.', 'mcpwp' ),
-				array( 'status' => 500 )
 			);
 		}
 
@@ -2116,8 +2079,8 @@ trait Mcpwp_Elementor_Writer_Trait {
 		}
 
 		// Re-read the widget to return its final state.
-		$saved_data     = get_post_meta( $page_id, '_elementor_data', true );
-		$saved_elements = json_decode( $saved_data, true );
+		// A vetoed write leaves whatever form was stored before (#845).
+		$saved_elements = (array) Mcpwp_Elementor_Stored_Tree::of_post( $page_id )['elements'];
 		$saved_widget   = $this->find_element_by_id_readonly( $saved_elements, (string) $widget_id );
 
 		$result = array(
@@ -2244,7 +2207,9 @@ trait Mcpwp_Elementor_Writer_Trait {
 						}
 
 						$stored_after_document = get_post_meta( $page_id, '_elementor_data', true );
-						$decoded_after_document = json_decode( $stored_after_document, true );
+						// In whatever form is stored (#845): a vetoed overwrite
+						// leaves the array that was there before.
+						$decoded_after_document = Mcpwp_Elementor_Stored_Tree::read( $stored_after_document )['elements'];
 						$stored_after_count     = is_array( $decoded_after_document ) ? count( $decoded_after_document ) : 0;
 
 						if ( $stored_after_count === $input_count ) {
@@ -2291,8 +2256,11 @@ trait Mcpwp_Elementor_Writer_Trait {
 
 		// Verify.
 		wp_cache_delete( $page_id, 'post_meta' );
+		// Read back in whatever form is stored (#845): a vetoed write leaves
+		// the array that was already there, and json_decode() on it was a
+		// TypeError.
 		$stored         = get_post_meta( $page_id, '_elementor_data', true );
-		$stored_decoded = json_decode( $stored, true );
+		$stored_decoded = Mcpwp_Elementor_Stored_Tree::read( $stored )['elements'];
 		$stored_count   = is_array( $stored_decoded ) ? count( $stored_decoded ) : 0;
 		$debug['sections_saved'] = $stored_count;
 		$debug['meta_verified']  = ( $stored_count === $input_count );
@@ -2317,7 +2285,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 			if ( ! empty( \Elementor\Plugin::$instance->documents ) ) {
 				$fresh_doc = \Elementor\Plugin::$instance->documents->get( $page_id, false );
 				if ( $fresh_doc && method_exists( $fresh_doc, 'save' ) ) {
-					$fresh_elements = json_decode( get_post_meta( $page_id, '_elementor_data', true ), true );
+					$fresh_elements = Mcpwp_Elementor_Stored_Tree::of_post( $page_id )['elements'];
 					if ( is_array( $fresh_elements ) && ! empty( $fresh_elements ) ) {
 						$pre_rebuild_total = $this->count_elements_recursive( $fresh_elements );
 						$rebuild = $this->attempt_elementor_call(
@@ -2451,12 +2419,14 @@ trait Mcpwp_Elementor_Writer_Trait {
 			return new WP_Error( 'invalid_page', 'Page not found.', array( 'status' => 404 ) );
 		}
 
-		// Get current elements.
-		$raw      = get_post_meta( $page_id, '_elementor_data', true );
-		$elements = json_decode( $raw, true );
-		if ( ! is_array( $elements ) ) {
-			$elements = array();
+		// Get current elements, in whatever form they are stored (#845). Data
+		// that cannot be a tree is refused: read as an empty page, the write
+		// replaced the whole page with the one section it added.
+		$stored = Mcpwp_Elementor_Stored_Tree::of_post( $page_id );
+		if ( Mcpwp_Elementor_Stored_Tree::is_unusable( $stored ) ) {
+			return Mcpwp_Elementor_Stored_Tree::refusal( $stored );
 		}
+		$elements = $stored['elements'];
 
 		// Validate new element.
 		$new_element = isset( $data['element'] ) ? $data['element'] : null;
@@ -2547,9 +2517,14 @@ trait Mcpwp_Elementor_Writer_Trait {
 			return new WP_Error( 'missing_id', 'element_id is required.', array( 'status' => 400 ) );
 		}
 
-		$raw      = get_post_meta( $page_id, '_elementor_data', true );
-		$elements = json_decode( $raw, true );
-		if ( ! is_array( $elements ) ) {
+		// In whatever form it is stored (#845). Data that cannot be a tree is
+		// refused, not reported as a page with no Elementor data.
+		$stored = Mcpwp_Elementor_Stored_Tree::of_post( $page_id );
+		if ( Mcpwp_Elementor_Stored_Tree::is_unusable( $stored ) ) {
+			return Mcpwp_Elementor_Stored_Tree::refusal( $stored );
+		}
+		$elements = $stored['elements'];
+		if ( empty( $elements ) ) {
 			return new WP_Error( 'no_data', 'Page has no Elementor data.', array( 'status' => 404 ) );
 		}
 
@@ -2661,9 +2636,14 @@ trait Mcpwp_Elementor_Writer_Trait {
 			$new_element['id'] = $element_id; // keep same ID by default.
 		}
 
-		$raw      = get_post_meta( $page_id, '_elementor_data', true );
-		$elements = json_decode( $raw, true );
-		if ( ! is_array( $elements ) ) {
+		// In whatever form it is stored (#845). Data that cannot be a tree is
+		// refused, not reported as a page with no Elementor data.
+		$stored = Mcpwp_Elementor_Stored_Tree::of_post( $page_id );
+		if ( Mcpwp_Elementor_Stored_Tree::is_unusable( $stored ) ) {
+			return Mcpwp_Elementor_Stored_Tree::refusal( $stored );
+		}
+		$elements = $stored['elements'];
+		if ( empty( $elements ) ) {
 			return new WP_Error( 'no_data', 'Page has no Elementor data.', array( 'status' => 404 ) );
 		}
 
@@ -2789,14 +2769,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 		// and numerically keyed trees are trees: Elementor renders them, and
 		// the save writes them back as a JSON list (review r2).
 		if ( null === $elements ) {
-			return new WP_Error(
-				'invalid_elementor_data',
-				"This page's Elementor data {$stored['unusable']}, so nothing was changed. Replace it with a clean tree through wp_set_elementor.",
-				array(
-					'status'    => 422,
-					'stored_as' => $stored['stored_as'],
-				)
-			);
+			return Mcpwp_Elementor_Stored_Tree::refusal( $stored );
 		}
 
 		if ( empty( $operations ) ) {

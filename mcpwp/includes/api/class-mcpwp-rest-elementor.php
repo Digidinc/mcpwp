@@ -1042,14 +1042,13 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 		// and '/' as \/, so any search containing HTML tags or URL slashes never matches
 		// the raw string even when the text is plainly present. Replacing on the raw JSON
 		// string would also corrupt serialization, so the decode is required regardless.
-		$decoded = json_decode( $raw, true );
-		if ( JSON_ERROR_NONE !== json_last_error() ) {
-			return $this->error_response(
-				'invalid_json',
-				__( 'Could not decode existing Elementor data. The stored data may be corrupt.', 'mcpwp' ),
-				500
-			);
+		// In whatever form it is stored (#845): an array is the tree, and data
+		// that cannot be a tree is refused before anything is replaced in it.
+		$stored = Mcpwp_Elementor_Stored_Tree::read( $raw );
+		if ( Mcpwp_Elementor_Stored_Tree::is_unusable( $stored ) ) {
+			return Mcpwp_Elementor_Stored_Tree::refusal( $stored, "This post's Elementor data" );
 		}
+		$decoded = $stored['elements'];
 
 		$count           = 0;
 		$updated_decoded = $this->recursive_str_replace( $search, $replace, $decoded, $count );
@@ -1273,23 +1272,29 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 				continue;
 			}
 
+			// In whatever form it is stored (#845): an array is scanned like
+			// text rather than skipped as empty, and data that cannot be a
+			// tree is unreadable whatever its form.
 			$raw = get_post_meta( $post_id, '_elementor_data', true );
 
-			if ( empty( $raw ) || ! is_string( $raw ) ) {
+			if ( empty( $raw ) ) {
 				$empty++;
 				continue;
 			}
 
 			$scanned++;
 
-			$decoded = json_decode( $raw, true );
-			if ( JSON_ERROR_NONE !== json_last_error() || ! is_array( $decoded ) ) {
+			$stored = Mcpwp_Elementor_Stored_Tree::read( $raw );
+			if ( Mcpwp_Elementor_Stored_Tree::is_unusable( $stored ) ) {
 				$unreadable[] = array(
-					'id'    => $post_id,
-					'title' => get_the_title( $post_id ),
+					'id'        => $post_id,
+					'title'     => get_the_title( $post_id ),
+					'stored_as' => $stored['stored_as'],
 				);
 				continue;
 			}
+
+			$decoded = $stored['elements'];
 
 			$count   = 0;
 			$updated = $this->recursive_str_replace( $search, $replace, $decoded, $count );
@@ -1351,7 +1356,8 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 					$reason = 'not_found';
 				} elseif ( ! in_array( $post->post_type, $scope['post_types'], true ) ) {
 					$reason = 'type_not_supported';
-				} elseif ( '' === (string) get_post_meta( $wanted, '_elementor_data', true ) ) {
+				} elseif ( empty( get_post_meta( $wanted, '_elementor_data', true ) ) ) {
+					// empty(), not a (string) cast: array-stored data is data (#845).
 					$reason = 'no_elementor_data';
 				} else {
 					$reason = 'no_match';

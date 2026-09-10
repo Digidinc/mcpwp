@@ -405,10 +405,11 @@ class Mcpwp_Elementor_Pro {
 			'section_count' => 0,
 			'widget_count'  => 0,
 			'top_level_ids' => array(),
-			'data_bytes'    => is_string( $raw ) ? strlen( $raw ) : 0,
+			// An array-stored template's bytes are those of the JSON it is written as.
+			'data_bytes'    => is_string( $raw ) ? strlen( $raw ) : ( is_array( $raw ) ? strlen( (string) wp_json_encode( $raw ) ) : 0 ),
 		);
 
-		if ( ! is_string( $raw ) || '' === $raw ) {
+		if ( '' === $raw || null === $raw || false === $raw || array() === $raw ) {
 			// No data at all is a fact worth stating: a template that stores
 			// nothing and one whose data could not be read are different
 			// problems.
@@ -417,7 +418,9 @@ class Mcpwp_Elementor_Pro {
 			return $summary;
 		}
 
-		$decoded = json_decode( $raw, true );
+		// In whatever form it is stored (#845): an array-stored template
+		// stores data, and data that cannot be a tree is unreadable.
+		$decoded = Mcpwp_Elementor_Stored_Tree::read( $raw )['elements'];
 
 		if ( ! is_array( $decoded ) ) {
 			$summary['has_data']    = true;
@@ -704,11 +707,15 @@ class Mcpwp_Elementor_Pro {
 			// Parse into the same array/object shapes wp_get_elementor returns and
 			// wp_create_elementor_*/wp_update_elementor_* accept — the raw JSON
 			// string form broke direct read -> modify -> write round trips (#636).
-			$raw_data          = get_post_meta( $template->ID, '_elementor_data', true );
 			$raw_page_settings = get_post_meta( $template->ID, '_elementor_page_settings', true );
 
-			$decoded_data           = $raw_data ? json_decode( $raw_data, true ) : array();
-			$data['elementor_data'] = is_array( $decoded_data ) ? $decoded_data : array();
+			// In whatever form it is stored (#845). Data that cannot be read
+			// is null with the reason beside it: [] claimed an empty template.
+			$stored_tree            = Mcpwp_Elementor_Stored_Tree::of_post( $template->ID );
+			$data['elementor_data'] = $stored_tree['elements'];
+			if ( Mcpwp_Elementor_Stored_Tree::is_unusable( $stored_tree ) ) {
+				$data['elementor_data_error'] = Mcpwp_Elementor_Stored_Tree::read_error( $stored_tree );
+			}
 
 			if ( empty( $raw_page_settings ) ) {
 				$data['page_settings'] = null;
@@ -963,6 +970,19 @@ class Mcpwp_Elementor_Pro {
 		$part = $this->get_part( $part_id );
 		if ( is_wp_error( $part ) ) {
 			return $part;
+		}
+
+		// A part whose data cannot be read is refused as unreadable (#845):
+		// "has no Elementor elements" described a different problem.
+		if ( ! empty( $part['elementor_data_error'] ) ) {
+			return new WP_Error(
+				'invalid_elementor_data',
+				$part['elementor_data_error']['message'],
+				array(
+					'status'    => 422,
+					'stored_as' => $part['elementor_data_error']['stored_as'],
+				)
+			);
 		}
 
 		$elements = $part['elementor_data'];
@@ -1396,11 +1416,24 @@ class Mcpwp_Elementor_Pro {
 			return new WP_Error( 'not_found', __( 'Template not found.', 'mcpwp' ) );
 		}
 
-		// Get template data.
+		// Get template data, in whatever form it is stored (#845).
 		$template_data = get_post_meta( $template_id, '_elementor_data', true );
 
 		if ( empty( $template_data ) ) {
 			return new WP_Error( 'empty_template', __( 'Template has no content.', 'mcpwp' ) );
+		}
+
+		// Data that cannot be a tree is refused before the page is switched
+		// to Elementor below.
+		$template_tree = Mcpwp_Elementor_Stored_Tree::read( $template_data );
+		if ( Mcpwp_Elementor_Stored_Tree::is_unusable( $template_tree ) ) {
+			return Mcpwp_Elementor_Stored_Tree::refusal( $template_tree, "The template's Elementor data" );
+		}
+
+		// Text is handed on as stored, exactly as before; an array-stored tree
+		// is handed on as the list it normalises to.
+		if ( is_array( $template_data ) ) {
+			$template_data = $template_tree['elements'];
 		}
 
 		// Set required meta for frontend rendering.
@@ -1506,9 +1539,14 @@ class Mcpwp_Elementor_Pro {
 			return new WP_Error( 'invalid_page', 'Page not found.', array( 'status' => 404 ) );
 		}
 
-		$raw      = get_post_meta( $page_id, '_elementor_data', true );
-		$elements = json_decode( $raw, true );
-		if ( ! is_array( $elements ) ) {
+		// In whatever form it is stored (#845). Data that cannot be read is
+		// refused as unreadable, not reported as a page with no data.
+		$stored = Mcpwp_Elementor_Stored_Tree::of_post( $page_id );
+		if ( Mcpwp_Elementor_Stored_Tree::is_unusable( $stored ) ) {
+			return Mcpwp_Elementor_Stored_Tree::unreadable( $stored );
+		}
+		$elements = $stored['elements'];
+		if ( empty( $elements ) ) {
 			return new WP_Error( 'no_elementor_data', 'Page has no Elementor data.', array( 'status' => 400 ) );
 		}
 

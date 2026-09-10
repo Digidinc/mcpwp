@@ -979,9 +979,9 @@ trait Mcpwp_Admin_Library_Trait {
 			return array();
 		}
 
-		$raw_elements = get_post_meta( $page_id, '_elementor_data', true );
-		$elements     = json_decode( $raw_elements, true );
-		if ( ! is_array( $elements ) || empty( $elements ) ) {
+		// In whatever form it is stored (#845).
+		$elements = Mcpwp_Elementor_Stored_Tree::of_post( $page_id )['elements'];
+		if ( empty( $elements ) ) {
 			return array();
 		}
 

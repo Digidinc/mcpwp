@@ -68,7 +68,11 @@ trait Mcpwp_Elementor_Reader_Trait {
 
 		$page_settings = get_post_meta( $page_id, '_elementor_page_settings', true );
 
-		$decoded = $elementor_data ? json_decode( $elementor_data, true ) : null;
+		// Read in whatever form it is stored (#845): an array is the tree, and
+		// data that cannot be a tree is reported as unreadable below — never
+		// left to look like a page with no Elementor data.
+		$stored  = Mcpwp_Elementor_Stored_Tree::read( $elementor_data );
+		$decoded = empty( $elementor_data ) ? null : $stored['elements'];
 
 		// Strip default widget settings to reduce payload size.
 		if ( ! empty( $data['strip_defaults'] ) && is_array( $decoded ) ) {
@@ -86,10 +90,17 @@ trait Mcpwp_Elementor_Reader_Trait {
 			'edit_url'       => admin_url( "post.php?post={$page_id}&action=elementor" ),
 		);
 
+		if ( Mcpwp_Elementor_Stored_Tree::is_unusable( $stored ) ) {
+			$response['elementor_data_error'] = Mcpwp_Elementor_Stored_Tree::read_error( $stored );
+		}
+
 		// The raw JSON string duplicates elementor_data byte-for-byte and
-		// doubles the payload on large pages — include only on request.
+		// doubles the payload on large pages — include only on request. It is
+		// JSON text whatever the stored form: an array is encoded as stored.
 		if ( ! empty( $data['include_raw'] ) ) {
-			$response['elementor_json'] = $elementor_data ?: null;
+			$response['elementor_json'] = empty( $elementor_data )
+				? null
+				: ( is_string( $elementor_data ) ? $elementor_data : wp_json_encode( $elementor_data ) );
 		}
 
 		return $response;
@@ -156,15 +167,14 @@ trait Mcpwp_Elementor_Reader_Trait {
 			);
 		}
 
-		$elements = json_decode( $elementor_data, true );
-		if ( ! is_array( $elements ) ) {
-			return array(
-				'page_id'       => (int) $page_id,
-				'title'         => $page->post_title,
-				'has_elementor' => false,
-				'sections'      => array(),
-			);
+		// Read in whatever form it is stored (#845). Data that cannot be read
+		// is refused: summarised as "no Elementor data" it looked like a page
+		// with nothing on it.
+		$stored = Mcpwp_Elementor_Stored_Tree::read( $elementor_data );
+		if ( Mcpwp_Elementor_Stored_Tree::is_unusable( $stored ) ) {
+			return Mcpwp_Elementor_Stored_Tree::unreadable( $stored );
 		}
+		$elements = $stored['elements'];
 
 		$sections      = array();
 		$widget_count  = 0;
@@ -906,7 +916,23 @@ trait Mcpwp_Elementor_Reader_Trait {
 	 * @return array Stats array with sections, columns, widgets, widget_types, word_count.
 	 */
 	private function compute_element_stats( $elementor_data_raw ) {
-		$elements = json_decode( $elementor_data_raw, true );
+		// In whatever form it is stored (#845).
+		$stored   = Mcpwp_Elementor_Stored_Tree::read( $elementor_data_raw );
+		$elements = $stored['elements'];
+
+		if ( Mcpwp_Elementor_Stored_Tree::is_unusable( $stored ) ) {
+			// Zero counts for data that could not be read would describe an
+			// empty page. Unknown is said as unknown.
+			return array(
+				'sections'     => null,
+				'columns'      => null,
+				'widgets'      => null,
+				'widget_types' => null,
+				'word_count'   => null,
+				'unreadable'   => true,
+				'stored_as'    => $stored['stored_as'],
+			);
+		}
 
 		$stats = array(
 			'sections'     => 0,
@@ -915,10 +941,6 @@ trait Mcpwp_Elementor_Reader_Trait {
 			'widget_types' => array(),
 			'word_count'   => 0,
 		);
-
-		if ( ! is_array( $elements ) ) {
-			return $stats;
-		}
 
 		$all_text = '';
 		$this->walk_elements_for_stats( $elements, $stats, $all_text );
@@ -1017,7 +1039,8 @@ trait Mcpwp_Elementor_Reader_Trait {
 	 * @return string Extracted text.
 	 */
 	private function extract_text_from_elementor_json( $elementor_data_raw ) {
-		$elements = json_decode( $elementor_data_raw, true );
+		// In whatever form it is stored (#845).
+		$elements = Mcpwp_Elementor_Stored_Tree::read( $elementor_data_raw )['elements'];
 		if ( ! is_array( $elements ) ) {
 			return '';
 		}

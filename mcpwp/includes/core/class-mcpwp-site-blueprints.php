@@ -231,10 +231,16 @@ class Mcpwp_Site_Blueprints {
 				'sections' => array(),
 			);
 
-			// Detect Elementor section types if present.
+			// Detect Elementor section types if present, in whatever form the
+			// tree is stored (#845). Data that cannot be read is flagged: an
+			// empty section list would claim the page has none.
 			$elementor_data = get_post_meta( $post->ID, '_elementor_data', true );
 			if ( $elementor_data ) {
-				$decoded = json_decode( $elementor_data, true );
+				$stored  = Mcpwp_Elementor_Stored_Tree::read( $elementor_data );
+				$decoded = $stored['elements'];
+				if ( Mcpwp_Elementor_Stored_Tree::is_unusable( $stored ) ) {
+					$entry['elementor_unreadable'] = true;
+				}
 				if ( is_array( $decoded ) ) {
 					foreach ( $decoded as $section ) {
 						if ( isset( $section['elements'] ) ) {

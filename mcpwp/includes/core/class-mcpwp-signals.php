@@ -354,12 +354,18 @@ class Mcpwp_Signals {
 
 		foreach ( $results as $row ) {
 			$raw = get_post_meta( (int) $row['ID'], '_elementor_data', true );
-			if ( ! is_string( $raw ) || '' === $raw ) {
+			if ( '' === $raw || null === $raw || false === $raw ) {
 				continue;
 			}
-			$decoded = json_decode( $raw, true );
+			// In whatever form it is stored (#845). Text is decoded once here
+			// (these blobs are large); an array-stored tree renders and is
+			// healthy, and an array that is not a tree is as broken as text
+			// that is not one.
+			$is_text    = is_string( $raw );
+			$decoded    = $is_text ? json_decode( $raw, true ) : $raw;
+			$json_error = $is_text && JSON_ERROR_NONE !== json_last_error();
 			unset( $raw );
-			if ( json_last_error() !== JSON_ERROR_NONE ) {
+			if ( $json_error ) {
 				$signals[] = array(
 					'type'         => 'broken_elementor',
 					'severity'     => 'high',
@@ -369,7 +375,7 @@ class Mcpwp_Signals {
 					'detail'       => 'Elementor data contains invalid JSON — page may render broken.',
 					'action_hint'  => 'Use wp_get_elementor then wp_set_elementor to rebuild the page data.',
 				);
-			} elseif ( ! is_array( $decoded ) ) {
+			} elseif ( Mcpwp_Elementor_Stored_Tree::is_unusable( Mcpwp_Elementor_Stored_Tree::read( $decoded ) ) ) {
 				$signals[] = array(
 					'type'         => 'broken_elementor',
 					'severity'     => 'medium',

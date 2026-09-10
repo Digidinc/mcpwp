@@ -924,7 +924,8 @@ abstract class Mcpwp_REST_API {
 		if ( 'builder' === get_post_meta( $post_id, '_elementor_edit_mode', true ) ) {
 			return true;
 		}
-		return '' !== (string) get_post_meta( $post_id, '_elementor_data', true );
+		// empty(), not a (string) cast: array-stored data is data (#845).
+		return ! empty( get_post_meta( $post_id, '_elementor_data', true ) );
 	}
 
 	/**
@@ -1087,12 +1088,10 @@ abstract class Mcpwp_REST_API {
 			}
 		}
 
-		$raw = get_post_meta( (int) $post->ID, '_elementor_data', true );
-		if ( ! empty( $raw ) && is_string( $raw ) ) {
-			$data = json_decode( $raw, true );
-			if ( is_array( $data ) ) {
-				$this->collect_elementor_link_hrefs( $data, $hrefs );
-			}
+		// In whatever form it is stored (#845): an array-stored tree has links too.
+		$data = Mcpwp_Elementor_Stored_Tree::of_post( (int) $post->ID )['elements'];
+		if ( ! empty( $data ) ) {
+			$this->collect_elementor_link_hrefs( $data, $hrefs );
 		}
 
 		$count = 0;
@@ -1157,13 +1156,9 @@ abstract class Mcpwp_REST_API {
 	 * @return array Links.
 	 */
 	protected function extract_elementor_links_from_postmeta( $post_id, $url_to_id ) {
-		$raw = get_post_meta( $post_id, '_elementor_data', true );
-		if ( empty( $raw ) || ! is_string( $raw ) ) {
-			return array();
-		}
-
-		$data = json_decode( $raw, true );
-		if ( ! is_array( $data ) ) {
+		// In whatever form it is stored (#845): an array-stored tree has links too.
+		$data = Mcpwp_Elementor_Stored_Tree::of_post( $post_id )['elements'];
+		if ( empty( $data ) ) {
 			return array();
 		}
 

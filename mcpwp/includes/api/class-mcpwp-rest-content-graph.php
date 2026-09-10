@@ -1166,12 +1166,9 @@ class Mcpwp_REST_Content_Graph extends Mcpwp_REST_API {
 	 * @return array[] Array of {href, anchor, source} records.
 	 */
 	protected function extract_raw_links_from_elementor( $post_id ) {
-		$raw = get_post_meta( $post_id, '_elementor_data', true );
-		if ( empty( $raw ) || ! is_string( $raw ) ) {
-			return array();
-		}
-		$data = json_decode( $raw, true );
-		if ( ! is_array( $data ) ) {
+		// In whatever form it is stored (#845): an array-stored tree has links too.
+		$data = Mcpwp_Elementor_Stored_Tree::of_post( $post_id )['elements'];
+		if ( empty( $data ) ) {
 			return array();
 		}
 
