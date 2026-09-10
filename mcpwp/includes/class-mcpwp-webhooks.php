@@ -498,14 +498,18 @@ class Mcpwp_Webhooks {
 		$response_code = is_wp_error( $response ) ? 0 : wp_remote_retrieve_response_code( $response );
 		$response_body = is_wp_error( $response ) ? $response->get_error_message() : wp_remote_retrieve_body( $response );
 
+		// The receiver was sent the real payload above. The log keeps a
+		// redacted copy of what went out and what came back, through the one
+		// log redactor every other log uses — redacted before truncation, so
+		// a cut never leaves a secret in JSON the redactor can no longer open.
 		$wpdb->insert(
 			$log_table,
 			array(
 				'webhook_id'    => $webhook['id'],
 				'event'         => $event,
-				'payload'       => $body,
+				'payload'       => self::redact_log_copy( $body ),
 				'response_code' => $response_code,
-				'response_body' => substr( $response_body, 0, 65535 ),
+				'response_body' => substr( self::redact_log_copy( (string) $response_body ), 0, 65535 ),
 				'duration'      => $duration,
 			),
 			array( '%d', '%s', '%s', '%d', '%s', '%f' )
@@ -536,6 +540,30 @@ class Mcpwp_Webhooks {
 				array( '%d' )
 			);
 		}
+	}
+
+	/**
+	 * The copy of a delivery body kept in mcpwp_webhook_logs.
+	 *
+	 * Mcpwp_Option_Access::redact_for_log() decodes a JSON (or serialised)
+	 * body, redacts it by the site's log_redaction_keys and the plugin-wide
+	 * secret detectors, and re-encodes it — byte-identical when nothing was
+	 * secret; a body it cannot decode goes through its string handling (a
+	 * credential-shaped string is redacted, plain text kept). When the
+	 * redactor is not loaded the body is not logged and the row says so: an
+	 * unredacted copy is never the fallback.
+	 *
+	 * @param string $text Body as sent or as received.
+	 * @return string
+	 */
+	private static function redact_log_copy( $text ) {
+		if ( ! class_exists( 'Mcpwp_Option_Access' ) || ! method_exists( 'Mcpwp_Option_Access', 'redact_for_log' ) ) {
+			return '[not logged: log redaction unavailable]';
+		}
+
+		$redacted = Mcpwp_Option_Access::redact_for_log( (string) $text, Mcpwp_Option_Access::log_redaction_keys() );
+
+		return is_string( $redacted ) ? $redacted : (string) wp_json_encode( $redacted );
 	}
 
 	/**
@@ -572,6 +600,16 @@ class Mcpwp_Webhooks {
 		$total = $wpdb->get_var(
 			$wpdb->prepare( "SELECT COUNT(*) FROM {$log_table} WHERE webhook_id = %d", $webhook_id )
 		);
+
+		// Rows written before delivery logs were redacted hold the raw bytes.
+		// Already-redacted rows come back unchanged.
+		foreach ( (array) $logs as $i => $log ) {
+			foreach ( array( 'payload', 'response_body' ) as $column ) {
+				if ( is_array( $log ) && isset( $log[ $column ] ) ) {
+					$logs[ $i ][ $column ] = self::redact_log_copy( $log[ $column ] );
+				}
+			}
+		}
 
 		return array(
 			'logs'  => $logs,
