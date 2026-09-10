@@ -500,6 +500,13 @@ class Mcpwp_Action_Log {
 		$safe_args = $arguments;
 		unset( $safe_args['api_key'], $safe_args['X-API-Key'] );
 
+		// The arguments column is display-only (rollback reads the
+		// snapshots); a credential inside them — a wp_update_option value,
+		// an integration key — must not sit in the table (#800 round 6).
+		if ( class_exists( 'Mcpwp_Option_Access' ) && method_exists( 'Mcpwp_Option_Access', 'redact_for_log' ) ) {
+			$safe_args = Mcpwp_Option_Access::redact_for_log( $safe_args, array( 'api_key', 'x-api-key', 'authorization', 'password', 'secret', 'token' ) );
+		}
+
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
 		$wpdb->insert(
 			$wpdb->prefix . self::TABLE,

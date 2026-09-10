@@ -350,7 +350,7 @@ class Mcpwp_Option_Access {
 		// ever sees plain trees. That is the one fix for the family of
 		// "correct one encoding level deep" defects (#800 round 4).
 		$forms    = array();
-		$expanded = self::expand( $tree, array(), $forms, 'native' !== $form );
+		$expanded = self::expand( $tree, array(), $forms, true );
 		$paths    = array();
 		$walked   = self::redact_tree( $expanded, array(), $root, $paths );
 
@@ -524,7 +524,7 @@ class Mcpwp_Option_Access {
 			return false;
 		}
 		$form = null;
-		return null === self::decode_leaf( $value, $form ) && false !== strpos( $value, 'O:' );
+		return null === self::decode_leaf( $value, $form ) && (bool) preg_match( '/(^|[;{])O:\d+:"/', $value );
 	}
 
 	/**
@@ -546,15 +546,16 @@ class Mcpwp_Option_Access {
 	 * @param array $forms Collected by reference: json-path => {form, raw}.
 	 * @return array
 	 */
-	private static function expand( array $tree, array $path, array &$forms, $inside_encoded = false ) {
+	private static function expand( array $tree, array $path, array &$forms, $mark_objects = true ) {
 		foreach ( $tree as $k => $v ) {
 			$here = array_merge( $path, array( $k ) );
 
 			if ( $v instanceof stdClass ) {
-				// An object is remembered as one only where its shape is
-				// bytes — inside an encoded leaf or an encoded root. In a
-				// native option tree WordPress code reads arrays.
-				if ( $inside_encoded ) {
+				// A stored stdClass stays a stdClass; a {} the caller sent as
+				// JSON into a native array option becomes an array, which is
+				// what WordPress code reads. Inside an encoded leaf the shape
+				// is bytes and is always kept.
+				if ( $mark_objects ) {
 					$forms[ wp_json_encode( $here ) ] = array( 'form' => 'object' );
 				}
 				$v = (array) $v;
@@ -564,7 +565,7 @@ class Mcpwp_Option_Access {
 			}
 
 			if ( is_array( $v ) ) {
-				$tree[ $k ] = self::expand( $v, $here, $forms, $inside_encoded );
+				$tree[ $k ] = self::expand( $v, $here, $forms, $mark_objects );
 				continue;
 			}
 
@@ -666,10 +667,14 @@ class Mcpwp_Option_Access {
 		// says the value is a secret even when the value's own shape does not.
 		$value_is_secret = isset( $data['key'] ) && is_string( $data['key'] ) && self::is_secret_field( $data['key'] );
 
-		// In the TOP row of a request, `key` is the option name — the thing
-		// an audit needs to see. Deeper down, a field called `key` is a
-		// field called key (#800 round 5, P1-1).
-		$names_an_option = 0 === $depth && isset( $data['key'] ) && is_string( $data['key'] ) && array_key_exists( 'value', $data ) && ! self::looks_like_credential( $data['key'] );
+		// In a {key, value} row — the REST body, an MCP tool's arguments, a
+		// batch item — `key` is the option NAME, the thing an audit needs to
+		// see. It stays only when it is shaped like an option name and not
+		// like a credential (#800 rounds 5–6).
+		$names_an_option = isset( $data['key'] ) && is_string( $data['key'] ) && array_key_exists( 'value', $data )
+			&& self::sanitize_option_name( $data['key'] ) === $data['key']
+			&& ! self::looks_like_credential( $data['key'] )
+			&& ! ( $under_secret && self::looks_like_secret_value( $data['key'] ) );
 
 		$out = array();
 		foreach ( $data as $k => $v ) {
@@ -726,7 +731,7 @@ class Mcpwp_Option_Access {
 		}
 
 		$forms  = array();
-		$opened = self::expand( $tree, array(), $forms, 'native' !== $form );
+		$opened = self::expand( $tree, array(), $forms, true );
 		$mapped = self::map_leaves_in( $opened, $callback );
 		$closed = self::collapse( $mapped, array(), $forms );
 
@@ -911,19 +916,75 @@ class Mcpwp_Option_Access {
 		// a serialised array is a leaf like any other from here on.
 		$old_forms = array();
 		$new_forms = array();
-		$old_x     = self::expand( $old_tree, array(), $old_forms, 'native' !== $old_form );
-		$new_x     = self::expand( $new_tree, array(), $new_forms, 'native' !== $old_form );
+		$old_x     = self::expand( $old_tree, array(), $old_forms, true );
+		$new_x     = self::expand( $new_tree, array(), $new_forms, 'native' === $new_form || 'native' !== $old_form );
 
 		$old_secret_paths = array();
 		self::collect_secret_paths_including_masked( $old_x, array(), self::is_secret_field( $key ), $old_secret_paths );
 
+		$refused  = array();
+		$restored = array();
+		$warnings = array();
+
+		// A leaf whose encoding changed between what is stored and what was
+		// sent lands as sent — and the caller is told, since a consumer
+		// that unserialises it will get false.
+		foreach ( $new_forms as $id => $info ) {
+			if ( isset( $old_forms[ $id ] ) && 'object' !== $info['form'] && 'object' !== $old_forms[ $id ]['form'] && $old_forms[ $id ]['form'] !== $info['form'] ) {
+				$warnings[] = sprintf( '%s: stored %s, submitted %s; stored as submitted', implode( '.', json_decode( $id, true ) ), $old_forms[ $id ]['form'] === 'serialized' ? 'serialised' : $old_forms[ $id ]['form'], $info['form'] === 'serialized' ? 'serialised' : $info['form'] );
+			}
+		}
+
 		foreach ( $old_secret_paths as $segments ) {
 			$old_leaf = self::path_get( $old_x, $segments, $old_exists );
-			$new_leaf = self::path_get( $new_x, $segments, $exists );
 
 			if ( ! $old_exists ) {
 				continue;
 			}
+
+			// Walk the submission down the secret's path. The first ancestor
+			// the submission does not carry is restored WHOLE from the stored
+			// value: an omitted subtree means "keep what is stored", never
+			// "keep only the credential and drop its siblings" (#800 round 6).
+			// An ancestor the submission replaced with a scalar is a refusal
+			// unless the caller confirmed: the stored structure holds a
+			// credential and the caller's scalar would silently destroy it.
+			$node  = $new_x;
+			$stop  = null;
+			$stops = null;
+			for ( $d = 0; $d < count( $segments ) - 1; $d++ ) {
+				$seg = $segments[ $d ];
+				if ( ! is_array( $node ) || ! array_key_exists( $seg, $node ) ) {
+					$stop  = 'missing';
+					$stops = array_slice( $segments, 0, $d + 1 );
+					break;
+				}
+				if ( ! is_array( $node[ $seg ] ) ) {
+					$stop  = 'scalar';
+					$stops = array_slice( $segments, 0, $d + 1 );
+					break;
+				}
+				$node = $node[ $seg ];
+			}
+
+			if ( 'missing' === $stop ) {
+				$id = wp_json_encode( $stops );
+				if ( ! isset( $restored[ $id ] ) ) {
+					$new_x           = self::path_set( $new_x, $stops, self::path_get( $old_x, $stops ) );
+					$restored[ $id ] = true;
+					$preserved[]     = implode( '.', $stops );
+				}
+				continue;
+			}
+
+			if ( 'scalar' === $stop ) {
+				if ( ! $allow_secrets ) {
+					$refused[] = implode( '.', $segments );
+				}
+				continue;
+			}
+
+			$new_leaf = self::path_get( $new_x, $segments, $exists );
 
 			$is_mask    = is_string( $new_leaf ) && self::MASK === trim( $new_leaf );
 			$is_replace = ( is_string( $new_leaf ) && ( self::looks_like_secret_value( $new_leaf ) || self::looks_like_credential( $new_leaf ) ) )
@@ -943,6 +1004,8 @@ class Mcpwp_Option_Access {
 				$preserved[] = implode( '.', $segments );
 			}
 		}
+
+		$preserved = array_values( array_unique( $preserved ) );
 
 		// Encoded leaves close in the form the SUBMISSION gave them — the
 		// caller's bytes are the ones that must land — and a leaf only the
@@ -969,7 +1032,7 @@ class Mcpwp_Option_Access {
 			$value = (object) $value;
 		}
 
-		return array( 'value' => $value, 'preserved' => $preserved, 'form' => $old_form );
+		return array( 'value' => $value, 'preserved' => $preserved, 'form' => $old_form, 'refused' => array_values( array_unique( $refused ) ), 'warnings' => $warnings );
 	}
 
 	/**

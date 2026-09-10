@@ -2803,7 +2803,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				'status_code'  => 200,
 				'ip_address'   => $this->get_client_ip_for_logging(),
 				'user_agent'   => isset( $_SERVER['HTTP_USER_AGENT'] ) ? sanitize_text_field( wp_unslash( $_SERVER['HTTP_USER_AGENT'] ) ) : '',
-				'request_data' => wp_json_encode( $context ),
+				'request_data' => wp_json_encode( $this->redact_log_data( $context, $this->get_log_redaction_keys() ) ),
 				'created_at'   => current_time( 'mysql' ),
 			),
 			array( '%s', '%s', '%s', '%d', '%s', '%s', '%s', '%s' )

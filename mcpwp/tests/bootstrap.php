@@ -864,6 +864,7 @@ function wp_check_invalid_utf8($text, $strip = false)
         return '';
     }
     return mb_check_encoding($text, 'UTF-8') ? $text : '';
+    return '' === $text || mb_check_encoding($text, 'UTF-8') ? $text : '';
 }
 
 function wp_json_encode($value, $flags = 0)

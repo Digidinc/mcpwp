@@ -566,6 +566,19 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 		$merged        = Mcpwp_Option_Access::merge_preserving_secrets( $key, $old_value, $submitted, $allow_secrets );
 		$value         = $merged['value'];
 
+		if ( ! empty( $merged['refused'] ) ) {
+			$this->log_activity( 'update_option_refused', $request, array( 'option' => $key, 'rule' => 'secret_overwrite_refused', 'secret_paths' => $merged['refused'] ), 409 );
+			return new WP_Error(
+				'secret_write_refused',
+				sprintf(
+					/* translators: %s: paths */
+					__( 'The submitted value replaces a stored structure that holds credential-shaped field(s): %s. Nothing was written. Send the structure with the field omitted (it is preserved), or pass allow_secrets=true to confirm you mean to discard it.', 'mcpwp' ),
+					implode( ', ', $merged['refused'] )
+				),
+				array( 'status' => 409, 'secret_paths' => $merged['refused'] )
+			);
+		}
+
 		// A write that would set a credential — a gateway passcode, a licence
 		// key, an SMTP password — is payment redirection or lockout when it
 		// is wrong, and an agent cannot tell from a masked response that it
@@ -671,6 +684,7 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 				'old_value' => $old['value'],
 				'redacted'  => array_values( array_unique( array_merge( $new['redacted'], $old['redacted'] ) ) ),
 				'preserved' => $merged['preserved'],
+				'warnings'  => isset( $merged['warnings'] ) ? $merged['warnings'] : array(),
 				'updated'   => true,
 				'rule'      => $decision['rule'],
 			)
@@ -688,14 +702,25 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 	 * @return mixed
 	 */
 	private function sanitize_submitted_option_value( $key, $value ) {
-		// String leaves only — an int stays an int, an object stays an
-		// object, a JSON string stays the JSON string it was when the
-		// sanitiser changes nothing — and newlines survive, because option
-		// values hold CSS, templates and keys (#800 round 5, P2-3).
+		// Options hold HTML templates, e-mail footers, CSS, %-encoded URLs,
+		// keys. A text-field sanitiser destroys all of those and made every
+		// GET → POST round trip lossy (#800 round 6). What is removed here
+		// is only what can never be data: NUL bytes and invalid UTF-8.
+		// Type-specific keys (emails, integers, flags) are handled after
+		// the merge; whether HTML may be stored is decided by the option's
+		// own allowlisting, not rewritten byte by byte.
 		return Mcpwp_Option_Access::map_string_leaves(
 			$value,
 			function ( $leaf ) {
-				return sanitize_textarea_field( $leaf );
+				$leaf = str_replace( "\0", '', (string) $leaf );
+				if ( function_exists( 'wp_check_invalid_utf8' ) ) {
+					$checked = wp_check_invalid_utf8( $leaf );
+					if ( '' === $checked && '' !== $leaf ) {
+						return '';
+					}
+					$leaf = $checked;
+				}
+				return $leaf;
 			}
 		);
 	}
