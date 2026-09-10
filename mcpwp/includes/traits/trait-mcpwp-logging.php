@@ -51,7 +51,7 @@ trait Mcpwp_Logging {
 	 * @param array $redaction_keys Keys to redact.
 	 * @return mixed
 	 */
-	protected function redact_log_data( $data, $redaction_keys ) {
+	protected function redact_log_data( $data, $redaction_keys, $under_secret = false ) {
 		if ( is_array( $data ) ) {
 			$out = array();
 			foreach ( $data as $key => $value ) {
@@ -60,7 +60,15 @@ trait Mcpwp_Logging {
 					$out[ $key ] = '[redacted]';
 					continue;
 				}
-				$out[ $key ] = $this->redact_log_data( $value, $redaction_keys );
+				// One detector for the whole plugin (#800): any secret-shaped
+				// field name, anywhere in the tree, marks everything beneath it;
+				// a credential-shaped value is redacted whatever it is called.
+				$secret = $under_secret || ( is_string( $key ) && class_exists( 'Mcpwp_Option_Access' ) && Mcpwp_Option_Access::is_secret_field( $key ) );
+				if ( is_string( $value ) && class_exists( 'Mcpwp_Option_Access' ) && ( ( $secret && Mcpwp_Option_Access::looks_like_secret_value( $value ) ) || Mcpwp_Option_Access::looks_like_credential( $value ) ) ) {
+					$out[ $key ] = '[redacted]';
+					continue;
+				}
+				$out[ $key ] = $this->redact_log_data( $value, $redaction_keys, $secret );
 			}
 			return $out;
 		}

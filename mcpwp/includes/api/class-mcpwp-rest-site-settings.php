@@ -529,25 +529,33 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 	}
 
 	public function update_option_handler( $request ) {
-		$this->log_activity( 'update_option', $request );
-
+		// Logged after the gate, never before: a refused write must not put
+		// the credential it refused into the activity log.
 		$key = Mcpwp_Option_Access::sanitize_option_name( $request->get_param( 'key' ) );
 		if ( '' === $key ) {
 			return $this->error_response( 'invalid_option_name', __( 'Option names are 1–191 characters of letters, digits, _ - . and :.', 'mcpwp' ), 400 );
 		}
 
 		$value    = $request->get_param( 'value' );
-		$decision = Mcpwp_Option_Access::decide( $key );
+		$decision = Mcpwp_Option_Access::decide( $key, 'write' );
 
 		if ( ! $decision['allowed'] ) {
 			return $this->forbidden_option( $key, $decision );
 		}
 
+		// A masked read echoed back, or a tree sent without its credential
+		// field, must never destroy the stored secret. The gate below looks at
+		// what the caller SUBMITTED: a preserved field is not one being set.
+		$submitted = $value;
+		$old_value = get_option( $key );
+		$merged    = Mcpwp_Option_Access::merge_preserving_secrets( $key, $old_value, $value );
+		$value     = $merged['value'];
+
 		// A write that would set a credential — a gateway passcode, a licence
 		// key, an SMTP password — is payment redirection or lockout when it
 		// is wrong, and an agent cannot tell from a masked response that it
 		// just broke checkout. It has to be asked for by name.
-		$secret_paths = Mcpwp_Option_Access::secret_paths_in_write( $key, $value );
+		$secret_paths = Mcpwp_Option_Access::secret_paths_in_write( $key, $submitted );
 		if ( ! empty( $secret_paths ) && ! rest_sanitize_boolean( $request->get_param( 'allow_secrets' ) ) ) {
 			return new WP_Error(
 				'secret_write_refused',
@@ -564,7 +572,7 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 			);
 		}
 
-		$old_value = get_option( $key );
+		$this->log_activity( 'update_option', $request );
 
 		// Type-preserving guard: when the stored option is an array/object,
 		// a plain-string overwrite is almost always an accident (string-typed
@@ -629,6 +637,7 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 				'value'     => $new['value'],
 				'old_value' => $old['value'],
 				'redacted'  => array_values( array_unique( array_merge( $new['redacted'], $old['redacted'] ) ) ),
+				'preserved' => $merged['preserved'],
 				'updated'   => true,
 				'rule'      => $decision['rule'],
 			)

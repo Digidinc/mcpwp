@@ -1106,6 +1106,9 @@ if (! isset($GLOBALS['wpdb'])) {
                 $this->last_error = '';
                 return 1;
             }
+            // Captured so a test can assert what was — and was not — persisted
+            // (activity log rows, for one).
+            $GLOBALS['mcpwp_test_wpdb_rows'][ (string) $table ][] = $data;
             return 1;
         }
         public function update($table, $data, $where, $f = null, $wf = null)

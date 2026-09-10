@@ -395,17 +395,8 @@ class Mcpwp_Activity_Log_Page {
 	 */
 	private function redact_sensitive( $data ) {
 		$sensitive_keys = array(
-			'api_key',
-			'x-api-key',
-			'authorization',
-			'bearer',
-			'secret',
-			'password',
-			'token',
-			'access_token',
-			'refresh_token',
-			'client_secret',
-			'private_key',
+			'api_key', 'x-api-key', 'authorization', 'bearer', 'secret', 'password', 'token',
+			'access_token', 'refresh_token', 'client_secret', 'private_key',
 		);
 
 		$settings = get_option( 'mcpwp_settings', array() );
@@ -415,30 +406,46 @@ class Mcpwp_Activity_Log_Page {
 				$custom = preg_split( '/[\r\n,]+/', $custom );
 			}
 			if ( is_array( $custom ) ) {
-				foreach ( $custom as $item ) {
-					$item = strtolower( trim( sanitize_text_field( (string) $item ) ) );
-					if ( '' === $item ) {
-						continue;
-					}
-					$sensitive_keys[] = $item;
-				}
-				$sensitive_keys = array_values( array_unique( $sensitive_keys ) );
+				$sensitive_keys = array_merge( $sensitive_keys, array_map( 'strtolower', array_filter( array_map( 'trim', $custom ) ) ) );
 			}
 		}
 
-		if ( is_array( $data ) ) {
-			$out = array();
-			foreach ( $data as $key => $value ) {
-				$key_normalized = is_string( $key ) ? strtolower( $key ) : $key;
-				if ( is_string( $key_normalized ) && in_array( $key_normalized, $sensitive_keys, true ) ) {
-					$out[ $key ] = '[redacted]';
-					continue;
-				}
-				$out[ $key ] = $this->redact_sensitive( $value );
-			}
-			return $out;
+		return $this->redact_tree( $data, $sensitive_keys, false );
+	}
+
+	/**
+	 * Same detector as the logging trait and the option API (#800): field
+	 * names by pattern, anywhere in the tree, and values by shape.
+	 *
+	 * @param mixed $data         Tree.
+	 * @param array $keys         Exact keys always redacted.
+	 * @param bool  $under_secret An ancestor was secret-named.
+	 * @return mixed
+	 */
+	private function redact_tree( $data, array $keys, $under_secret ) {
+		if ( is_object( $data ) ) {
+			$data = (array) $data;
 		}
 
-		return $data;
+		if ( ! is_array( $data ) ) {
+			return $data;
+		}
+
+		$out = array();
+		foreach ( $data as $key => $value ) {
+			$key_norm = is_string( $key ) ? strtolower( $key ) : '';
+			if ( '' !== $key_norm && in_array( $key_norm, $keys, true ) ) {
+				$out[ $key ] = '[redacted]';
+				continue;
+			}
+			$secret = $under_secret || ( is_string( $key ) && class_exists( 'Mcpwp_Option_Access' ) && Mcpwp_Option_Access::is_secret_field( $key ) );
+			if ( is_string( $value ) && class_exists( 'Mcpwp_Option_Access' ) && ( ( $secret && Mcpwp_Option_Access::looks_like_secret_value( $value ) ) || Mcpwp_Option_Access::looks_like_credential( $value ) ) ) {
+				$out[ $key ] = '[redacted]';
+				continue;
+			}
+			$out[ $key ] = $this->redact_tree( $value, $keys, $secret );
+		}
+
+		return $out;
 	}
 }

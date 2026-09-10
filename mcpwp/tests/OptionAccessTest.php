@@ -263,12 +263,162 @@ final class OptionAccessTest extends TestCase {
 		$this->assertSame( '***', $confirmed->get_data()['old_value']['passcode'] );
 	}
 
-	public function test_a_write_that_only_touches_non_secret_fields_needs_no_confirmation(): void {
+	public function test_a_write_that_only_touches_non_secret_fields_needs_no_confirmation_and_keeps_the_secret(): void {
 		update_option( 'woocommerce_bambora_settings', array( 'passcode' => 'old-secret-1', 'title' => 'Card' ) );
 
 		$written = $this->write( 'woocommerce_bambora_settings', array( 'title' => 'Credit card', 'enabled' => 'yes' ) );
 
 		$this->assertInstanceOf( WP_REST_Response::class, $written, is_wp_error( $written ) ? $written->get_error_message() : '' );
+		// The whole-value replace used to drop the omitted credential. Found
+		// by review: a "touch one setting" edit blanked the gateway.
+		$this->assertSame( 'old-secret-1', get_option( 'woocommerce_bambora_settings' )['passcode'] );
+		$this->assertSame( 'Credit card', get_option( 'woocommerce_bambora_settings' )['title'] );
+		$this->assertSame( array( 'passcode' ), $written->get_data()['preserved'] );
+	}
+
+	public function test_a_masked_read_echoed_back_never_overwrites_the_secret(): void {
+		update_option( 'woocommerce_bambora_settings', array( 'passcode' => 'old-secret-1', 'enabled' => 'yes' ) );
+		$read = $this->read( 'woocommerce_bambora_settings' )->get_data()['value'];
+		$this->assertSame( '***', $read['passcode'] );
+
+		// The ordinary agent loop: read, edit, write back.
+		$read['enabled'] = 'no';
+		$written         = $this->write( 'woocommerce_bambora_settings', $read );
+
+		$this->assertInstanceOf( WP_REST_Response::class, $written, is_wp_error( $written ) ? $written->get_error_message() : '' );
+		$this->assertSame( 'old-secret-1', get_option( 'woocommerce_bambora_settings' )['passcode'], 'MASK is never a value that can be written.' );
+		$this->assertSame( 'no', get_option( 'woocommerce_bambora_settings' )['enabled'] );
+		$this->assertSame( array( 'passcode' ), $written->get_data()['preserved'] );
+
+		// Even with allow_secrets, *** is folded back — it is not a secret.
+		$this->write( 'woocommerce_bambora_settings', array( 'passcode' => '***', 'enabled' => 'yes' ), array( 'allow_secrets' => true ) );
+		$this->assertSame( 'old-secret-1', get_option( 'woocommerce_bambora_settings' )['passcode'] );
+
+		update_option( 'woocommerce_api_key', 'sk_live_abcdefghijklmnop' );
+		$this->write( 'woocommerce_api_key', '***' );
+		$this->assertSame( 'sk_live_abcdefghijklmnop', get_option( 'woocommerce_api_key' ), 'A scalar option too.' );
+	}
+
+	public function test_a_refused_write_leaves_no_trace_of_the_secret_in_the_activity_log(): void {
+		$GLOBALS['mcpwp_test_wpdb_rows'] = array();
+		update_option( 'mcpwp_settings', array( 'enable_logging' => true ) );
+		update_option( 'woocommerce_bambora_settings', array( 'passcode' => 'old' ) );
+
+		$refused = $this->write( 'woocommerce_bambora_settings', array( 'passcode' => 'live-4f8a-NEW' ) );
+		$this->assertSame( 'secret_write_refused', $refused->get_error_code() );
+
+		$this->assertStringNotContainsString( 'live-4f8a-NEW', wp_json_encode( $GLOBALS['mcpwp_test_wpdb_rows'] ), '"Nothing was written" includes the log.' );
+
+		$this->write( 'woocommerce_bambora_settings', array( 'passcode' => 'live-4f8a-NEW' ), array( 'allow_secrets' => true ) );
+		$this->assertStringNotContainsString( 'live-4f8a-NEW', wp_json_encode( $GLOBALS['mcpwp_test_wpdb_rows'] ), 'An accepted write is logged with the credential redacted.' );
+	}
+
+	public function test_the_roles_floor_holds_for_any_table_prefix(): void {
+		foreach ( array( 'wp_user_roles', 'wp_2_user_roles', 'acmewp_user_roles' ) as $key ) {
+			$this->assertInstanceOf( WP_Error::class, $this->read( $key ), $key );
+			$this->assertSame( '', Mcpwp_Option_Access::sanitize_allowlist_entry( $key ), $key );
+		}
+		// A wildcard may be entered; the floor is applied at decision time,
+		// so the key it would cover is still refused.
+		update_option( 'mcpwp_settings', array( 'option_allowlist' => array( 'wp_2_us*' ) ) );
+		$this->assertStringStartsWith( 'blocked:', $this->read( 'wp_2_user_roles' )->get_error_data()['rule'] );
+	}
+
+	public function test_control_surfaces_are_readable_but_never_writable_nor_allowlistable(): void {
+		update_option( 'siteurl', 'https://example.com' );
+		$this->assertSame( 'https://example.com', $this->read( 'siteurl' )->get_data()['value'] );
+
+		foreach ( array( 'siteurl', 'home', 'admin_email', 'template', 'stylesheet', 'upload_path', 'auto_update_plugins', 'mailserver_pass', 'rewrite_rules' ) as $key ) {
+			$error = $this->write( $key, 'x' );
+			$this->assertInstanceOf( WP_Error::class, $error, $key );
+			$this->assertStringStartsWith( 'write_protected:', $error->get_error_data()['rule'], $key );
+			$this->assertSame( '', Mcpwp_Option_Access::sanitize_allowlist_entry( $key ), $key . ' allowlist' );
+		}
+	}
+
+	public function test_a_url_that_carries_its_credential_is_masked_and_a_plain_url_is_not(): void {
+		update_option(
+			'elementor_probe',
+			array(
+				'slack'  => 'https://hooks.slack.com/services/T000/B000/XXXXXXXXXXXXXXXXXXXXXXXX',
+				'sentry' => 'https://0123456789abcdef0123456789abcdef@o1.ingest.sentry.io/456',
+				'mirror' => 'https://admin:S3cretP4ss@backup.example.com/sync',
+				'feed'   => 'https://api.example.com/feed?format=json&key=AbCdEfGh123456',
+				'site'   => 'https://example.com/about/',
+				'docs'   => 'https://example.com/?p=42',
+			)
+		);
+
+		$value = $this->read( 'elementor_probe' )->get_data()['value'];
+
+		foreach ( array( 'slack', 'sentry', 'mirror', 'feed' ) as $k ) {
+			$this->assertSame( '***', $value[ $k ], $k );
+		}
+		$this->assertSame( 'https://example.com/about/', $value['site'] );
+		$this->assertSame( 'https://example.com/?p=42', $value['docs'] );
+	}
+
+	public function test_descriptive_fields_that_merely_mention_a_secret_are_not_masked(): void {
+		update_option(
+			'elementor_probe',
+			array(
+				'license_status'   => 'valid',
+				'license_expires'  => '2027-01-31',
+				'access_level'     => 'manage_options',
+				'auth_type'        => 'login',
+				'refresh_interval' => '3600',
+				'serial_display'   => 'Model A',
+				'sid_label'        => 'North America',
+				'connect_id'       => '550E8400-E29B-41D4-A716-446655440000',
+				'license_key'      => 'ABCD-EFGH-IJKL-MNOP',
+			)
+		);
+
+		$value = $this->read( 'elementor_probe' )->get_data()['value'];
+
+		foreach ( array( 'license_status' => 'valid', 'license_expires' => '2027-01-31', 'access_level' => 'manage_options', 'auth_type' => 'login', 'refresh_interval' => '3600', 'serial_display' => 'Model A', 'sid_label' => 'North America', 'connect_id' => '550E8400-E29B-41D4-A716-446655440000' ) as $k => $v ) {
+			$this->assertSame( $v, $value[ $k ], $k );
+		}
+		$this->assertSame( '***', $value['license_key'] );
+	}
+
+	public function test_the_extra_field_names_from_review_are_masked(): void {
+		$fields = array( 'pin', 'otp', 'cvv', 'dsn', 'pw', 'nonce', 'webhook_url', 'ssl_cert', 'pem' );
+		$tree   = array();
+		foreach ( $fields as $f ) {
+			$tree[ $f ] = 'value-for-' . $f;
+		}
+		update_option( 'woocommerce_probe_settings', $tree );
+
+		$value = $this->read( 'woocommerce_probe_settings' )->get_data()['value'];
+		foreach ( $fields as $f ) {
+			$this->assertSame( '***', $value[ $f ], $f );
+		}
+	}
+
+	public function test_a_serialized_write_payload_cannot_smuggle_a_secret_past_the_gate(): void {
+		update_option( 'theme_mods_probe', array( 'color' => 'teal' ) );
+
+		$refused = $this->write( 'theme_mods_probe', serialize( array( 'api_key' => 'live-4f8a-NEW1', 'color' => 'teal' ) ) ); // phpcs:ignore
+
+		$this->assertInstanceOf( WP_Error::class, $refused );
+		$this->assertSame( 'secret_write_refused', $refused->get_error_code() );
+	}
+
+	public function test_the_logging_redactor_uses_the_same_detector(): void {
+		$harness = new class {
+			use Mcpwp_Logging;
+			public function scrub( $data ) {
+				return $this->redact_log_data( $data, array( 'api_key' ) );
+			}
+		};
+
+		$out = $harness->scrub( array( 'key' => 'woocommerce_bambora_settings', 'value' => array( 'passcode' => 'live-4f8a', 'smtp' => array( 'pass' => 'Sup3r' ), 'title' => 'Card' ), 'note' => 'sk_live_4eC39HqLyjWDarjtT1zdp7dc' ) );
+
+		$this->assertSame( '[redacted]', $out['value']['passcode'] );
+		$this->assertSame( '[redacted]', $out['value']['smtp']['pass'] );
+		$this->assertSame( '[redacted]', $out['note'], 'Credential-shaped values are redacted whatever the field is called.' );
+		$this->assertSame( 'Card', $out['value']['title'] );
 	}
 
 	public function test_a_licence_key_option_cannot_be_overwritten_by_accident(): void {

@@ -98,7 +98,37 @@ class Mcpwp_Option_Access {
 	 *
 	 * @var array
 	 */
-	private static $blocked_fragments = array( '_session', 'encryption_key', 'private_key', '_salt' );
+	private static $blocked_fragments = array( '_session', 'encryption_key', 'private_key', '_salt', 'user_roles' );
+
+	/**
+	 * Readable but never writable through the generic option API: a write
+	 * here is a site takeover, a lockout or a file-write location, and none
+	 * of them is a "setting" an agent edits. Also never allowlistable.
+	 *
+	 * @var array
+	 */
+	private static $write_protected = array(
+		'siteurl', 'home', 'admin_email', 'new_admin_email', 'template', 'stylesheet', 'upload_path',
+		'upload_url_path', 'rewrite_rules', 'mailserver_login', 'mailserver_pass', 'mailserver_url',
+		'mailserver_port', 'ping_sites', 'theme_switched', 'wp_force_deactivated_plugins',
+		'https_detection_errors', 'recovery_keys', 'fresh_site',
+	);
+
+	/**
+	 * Write-protected prefixes.
+	 *
+	 * @var array
+	 */
+	private static $write_protected_prefixes = array( 'auto_update_' );
+
+	/**
+	 * Field-name suffixes that describe a secret without being one: a
+	 * licence STATUS, an access LEVEL, an auth TYPE. Bounded matching on
+	 * `license`/`access`/`auth` would otherwise mask 'valid' and 'login'.
+	 *
+	 * @var string
+	 */
+	const NOT_SECRET_SUFFIX_PATTERN = '/(_status|_expires|_expiry|_expiration|_level|_type|_interval|_label|_note|_display|_mode|_count|_enabled|_date|_at|_id|_name|_title|_version|_ttl|_length|_format|_placement)$/i';
 
 	/**
 	 * A path segment (option name, array key, or any ancestor key) that marks
@@ -107,7 +137,7 @@ class Mcpwp_Option_Access {
 	 *
 	 * @var string
 	 */
-	const SECRET_FIELD_PATTERN = '/(^|[_\-.\s])(api_?key|apikey|key|keys|pass|passwd|password|passcode|pwd|pswd|passphrase|secret|secrets|token|tokens|credential|credentials|signature|sig|salt|sid|serial|private|privatekey|license|licence|auth|bearer|jwt|refresh|access)([_\-.\s]|$)/i';
+	const SECRET_FIELD_PATTERN = '/(^|[_\-.\s])(api_?key|apikey|key|keys|pass|passwd|password|passcode|pwd|pw|pswd|passphrase|pin|otp|cvv|secret|secrets|token|tokens|credential|credentials|signature|sig|salt|sid|serial|private|privatekey|license|licence|auth|bearer|jwt|refresh|access|dsn|nonce|webhook|webhook_url|cert|pem)([_\-.\s]|$)/i';
 
 	/**
 	 * Values that are flags or identifiers, never secrets, whatever the field
@@ -186,11 +216,22 @@ class Mcpwp_Option_Access {
 	 * @param string $key Option name (case preserved).
 	 * @return array {allowed: bool, rule: string, hint?: string}
 	 */
-	public static function decide( $key ) {
+	public static function decide( $key, $mode = 'read' ) {
 		$key = (string) $key;
 
 		if ( '' === $key ) {
 			return array( 'allowed' => false, 'rule' => 'empty_key' );
+		}
+
+		if ( 'write' === $mode ) {
+			$protected = self::write_protected_rule( $key );
+			if ( null !== $protected ) {
+				return array(
+					'allowed' => false,
+					'rule'    => $protected,
+					'hint'    => 'This option is readable but a write to it is a site takeover, a lockout or a file-write location, so the generic option API never writes it. Change it in WP Admin.',
+				);
+			}
 		}
 
 		if ( in_array( $key, self::$own_allowed_keys, true ) ) {
@@ -231,6 +272,26 @@ class Mcpwp_Option_Access {
 			'rule'    => 'not_allowlisted',
 			'hint'    => 'Not a core key, not under a known plugin namespace for a plugin that is active here, and not on this site\'s allowlist. A site administrator can add it in WP Admin or via wp_update_plugin_settings {option_allowlist: [...]}; security material and control surfaces cannot be added.',
 		);
+	}
+
+	/**
+	 * @param string $key Option name.
+	 * @return string|null
+	 */
+	private static function write_protected_rule( $key ) {
+		$lower = strtolower( $key );
+
+		if ( in_array( $lower, self::$write_protected, true ) ) {
+			return 'write_protected:' . $lower;
+		}
+
+		foreach ( self::$write_protected_prefixes as $prefix ) {
+			if ( 0 === strpos( $lower, $prefix ) ) {
+				return 'write_protected:' . $prefix;
+			}
+		}
+
+		return null;
 	}
 
 	/**
@@ -379,6 +440,10 @@ class Mcpwp_Option_Access {
 		// camelCase is split so licenseKey / siteKey / clientSecret count.
 		$field = preg_replace( '/([a-z0-9])([A-Z])/', '$1_$2', (string) $field );
 
+		if ( preg_match( self::NOT_SECRET_SUFFIX_PATTERN, $field ) ) {
+			return false;
+		}
+
 		return (bool) preg_match( self::SECRET_FIELD_PATTERN, $field );
 	}
 
@@ -409,7 +474,21 @@ class Mcpwp_Option_Access {
 	public static function looks_like_credential( $value ) {
 		$value = trim( (string) $value );
 
-		if ( strlen( $value ) < 16 || false !== strpos( $value, ' ' ) || false !== strpos( $value, '://' ) || false !== strpos( $value, '@' ) ) {
+		// A URL that carries its credential IS the credential: user:pass@host,
+		// a Sentry DSN, a Slack/Discord webhook, ?key=…/&token=….
+		if ( false !== strpos( $value, '://' ) ) {
+			return (bool) preg_match( '#://[^/@\s]+:[^/@\s]+@#', $value )
+				|| (bool) preg_match( '#://[0-9a-f]{16,}@#i', $value )
+				|| (bool) preg_match( '#hooks\.slack\.com/services/|discord(app)?\.com/api/webhooks/#i', $value )
+				|| (bool) preg_match( '#[?&](api_?key|key|token|secret|sig|signature|access_token|auth)=[^&]{6,}#i', $value );
+		}
+
+		if ( strlen( $value ) < 16 || false !== strpos( $value, ' ' ) || false !== strpos( $value, '@' ) ) {
+			return false;
+		}
+
+		// A UUID in any case is an identifier, not a credential.
+		if ( preg_match( '/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $value ) ) {
 			return false;
 		}
 
@@ -432,6 +511,111 @@ class Mcpwp_Option_Access {
 	}
 
 	/**
+	 * Merge a submitted value over the stored one so no secret is destroyed
+	 * by accident (#800 round 2).
+	 *
+	 * Two ways a credential died silently before this: the caller echoed a
+	 * redacted read back (`passcode: "***"`), or edited one setting and sent
+	 * the tree without the credential field, which a whole-value replace
+	 * then dropped. Both are folded back to the stored value and reported
+	 * under `preserved`. MASK is never a value that can be written.
+	 *
+	 * @param string $key   Option name.
+	 * @param mixed  $old   Stored value.
+	 * @param mixed  $new   Submitted value.
+	 * @return array {value: mixed, preserved: string[]}
+	 */
+	public static function merge_preserving_secrets( $key, $old, $new ) {
+		$preserved = array();
+
+		if ( is_string( $new ) && self::MASK === trim( $new ) ) {
+			return array( 'value' => $old, 'preserved' => array( '' ) );
+		}
+
+		if ( ! is_array( $old ) || ! is_array( $new ) ) {
+			return array( 'value' => $new, 'preserved' => $preserved );
+		}
+
+		$old_secret_paths = array();
+		self::collect_secret_paths_including_masked( $old, '', self::is_secret_field( $key ), $old_secret_paths );
+
+		foreach ( $old_secret_paths as $path ) {
+			$segments  = explode( '.', $path );
+			$old_leaf  = self::path_get( $old, $segments );
+			$new_leaf  = self::path_get( $new, $segments, $exists );
+
+			if ( ! $exists || ( is_string( $new_leaf ) && self::MASK === trim( $new_leaf ) ) ) {
+				$new         = self::path_set( $new, $segments, $old_leaf );
+				$preserved[] = $path;
+			}
+		}
+
+		return array( 'value' => $new, 'preserved' => $preserved );
+	}
+
+	/**
+	 * Like collect_secret_paths() but treats any leaf under a secret-named
+	 * path as a secret whatever its shape — the stored value may already be
+	 * short, and it still must not be dropped.
+	 *
+	 * @param array  $tree         Tree.
+	 * @param string $path         Path so far.
+	 * @param bool   $under_secret Ancestor marked.
+	 * @param array  $paths        Collected (by reference).
+	 */
+	private static function collect_secret_paths_including_masked( array $tree, $path, $under_secret, array &$paths ) {
+		foreach ( $tree as $k => $v ) {
+			$here   = '' === $path ? (string) $k : $path . '.' . $k;
+			$secret = $under_secret || ( is_string( $k ) && self::is_secret_field( $k ) );
+
+			if ( is_array( $v ) || is_object( $v ) ) {
+				self::collect_secret_paths_including_masked( (array) $v, $here, $secret, $paths );
+				continue;
+			}
+
+			if ( is_string( $v ) && '' !== $v && ( $secret || self::looks_like_credential( $v ) ) ) {
+				$paths[] = $here;
+			}
+		}
+	}
+
+	/**
+	 * @param array $tree     Tree.
+	 * @param array $segments Path segments.
+	 * @param bool  $exists   Whether the path exists (by reference).
+	 * @return mixed
+	 */
+	private static function path_get( array $tree, array $segments, &$exists = null ) {
+		$node   = $tree;
+		$exists = true;
+		foreach ( $segments as $segment ) {
+			if ( ! is_array( $node ) || ! array_key_exists( $segment, $node ) ) {
+				$exists = false;
+				return null;
+			}
+			$node = $node[ $segment ];
+		}
+		return $node;
+	}
+
+	/**
+	 * @param array $tree     Tree.
+	 * @param array $segments Path segments.
+	 * @param mixed $value    Value to set.
+	 * @return array
+	 */
+	private static function path_set( array $tree, array $segments, $value ) {
+		$segment = array_shift( $segments );
+		if ( empty( $segments ) ) {
+			$tree[ $segment ] = $value;
+			return $tree;
+		}
+		$child = isset( $tree[ $segment ] ) && is_array( $tree[ $segment ] ) ? $tree[ $segment ] : array();
+		$tree[ $segment ] = self::path_set( $child, $segments, $value );
+		return $tree;
+	}
+
+	/**
 	 * Paths in a submitted value that would set a secret-shaped field.
 	 *
 	 * @param string $key   Option name.
@@ -449,6 +633,10 @@ class Mcpwp_Option_Access {
 
 		if ( is_string( $value ) ) {
 			$decoded = self::decode_json_tree( $value );
+			if ( null === $decoded && function_exists( 'is_serialized' ) && is_serialized( $value ) ) {
+				$unserialized = @unserialize( $value, array( 'allowed_classes' => false ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.serialize_unserialize -- classes disallowed; inspection only.
+				$decoded      = is_array( $unserialized ) ? $unserialized : null;
+			}
 			if ( null !== $decoded ) {
 				self::collect_secret_paths( $decoded, '', $root, $paths );
 				return $paths;
@@ -603,7 +791,7 @@ class Mcpwp_Option_Access {
 			return '';
 		}
 
-		if ( null !== self::blocked_rule( $probe ) ) {
+		if ( null !== self::blocked_rule( $probe ) || null !== self::write_protected_rule( $probe ) ) {
 			return '';
 		}
 
