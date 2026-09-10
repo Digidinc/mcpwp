@@ -277,8 +277,9 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-elementor-element-ids.php';
 	// The one reader of a stored `_elementor_data` tree, whatever its form (#845).
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-elementor-stored-tree.php';
-	// Setting keys against Elementor's live controls (#824).
+	// Setting keys against Elementor's live controls (#824); undo on WordPress revisions (#820).
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-elementor-setting-keys.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-elementor-revisions.php';
 	// Elementor engine verb traits (mixed into Mcpwp_Elementor_Basic — G4 split).
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/traits/trait-mcpwp-elementor-reader.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/traits/trait-mcpwp-elementor-writer.php';
@@ -381,6 +382,7 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-menus.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-content.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-elementor.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-elementor-revisions.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-webhooks.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-screenshot.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-feedback.php';

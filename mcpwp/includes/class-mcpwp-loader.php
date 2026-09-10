@@ -303,6 +303,10 @@ class Mcpwp_Loader {
 		$elementor_controller = new Mcpwp_REST_Elementor();
 		$elementor_controller->register_routes();
 
+		// Elementor revision history and revert (#820)
+		$elementor_revisions_controller = new Mcpwp_REST_Elementor_Revisions();
+		$elementor_revisions_controller->register_routes();
+
 		// Webhooks
 		$webhooks_controller = new Mcpwp_REST_Webhooks();
 		$webhooks_controller->register_routes();

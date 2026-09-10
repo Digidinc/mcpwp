@@ -1081,6 +1081,8 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 			$updated = Mcpwp_Elementor_Element_Keys::normalize_json( $updated );
 		}
 
+		// A direct meta write, so it keeps its own undo (#820).
+		$revision_token = Mcpwp_Elementor_Revisions::begin( $page_id );
 		update_post_meta( $page_id, '_elementor_data', wp_slash( $updated ) );
 
 		// Clear Elementor CSS cache for this post.
@@ -1091,12 +1093,15 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 			}
 		}
 
+		$revision = Mcpwp_Elementor_Revisions::commit( $revision_token );
+
 		return $this->success_response(
 			array(
 				'replacements' => $count,
 				'post_id'      => $page_id,
 				'search'       => $search,
 				'replace'      => $replace,
+				'revision'     => $revision,
 			)
 		);
 	}
@@ -1322,6 +1327,7 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 				if ( class_exists( 'Mcpwp_Elementor_Element_Keys' ) ) {
 					$encoded = Mcpwp_Elementor_Element_Keys::normalize_json( $encoded );
 				}
+				$revision_token = Mcpwp_Elementor_Revisions::begin( $post_id );
 				update_post_meta( $post_id, '_elementor_data', wp_slash( $encoded ) );
 				if ( class_exists( '\Elementor\Plugin' ) ) {
 					$post_css = \Elementor\Core\Files\CSS\Post::create( $post_id );
@@ -1329,7 +1335,8 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 						$post_css->delete();
 					}
 				}
-				$entry['written'] = true;
+				$entry['written']  = true;
+				$entry['revision'] = Mcpwp_Elementor_Revisions::commit( $revision_token );
 			}
 
 			$matched[] = $entry;
@@ -1599,7 +1606,10 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 			$settings['custom_css'] = $new_css;
 		}
 
+		// Kit CSS is the kit post's page settings: same undo as any Elementor write (#820).
+		$revision_token = Mcpwp_Elementor_Revisions::begin( $kit_id );
 		update_post_meta( $kit_id, '_elementor_page_settings', $settings );
+		$revision = Mcpwp_Elementor_Revisions::commit( $revision_token );
 
 		// Clear Elementor CSS cache so the new kit CSS is regenerated.
 		if ( method_exists( \Elementor\Plugin::$instance->files_manager, 'clear_cache' ) ) {
@@ -1612,6 +1622,7 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 				'custom_css' => $settings['custom_css'],
 				'length'     => strlen( $settings['custom_css'] ),
 				'mode'       => $mode,
+				'revision'   => $revision,
 			)
 		);
 	}
@@ -1719,6 +1730,8 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 	 * @return void
 	 */
 	private function set_kit_css_raw( $kit_id, $css ) {
+		// Kit CSS blocks write through here; same undo as any Elementor write (#820).
+		$revision_token         = Mcpwp_Elementor_Revisions::begin( $kit_id );
 		$settings               = get_post_meta( $kit_id, '_elementor_page_settings', true );
 		$settings               = is_array( $settings ) ? $settings : array();
 		$settings['custom_css'] = $css;
@@ -1772,6 +1785,8 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 		return array(
 			'verified' => ( null !== $stored && $stored === $css ),
 			'repaired' => $repaired,
+			// After the repair above, so the revision holds the bytes that stayed.
+			'revision' => Mcpwp_Elementor_Revisions::commit( $revision_token ),
 		);
 	}
 

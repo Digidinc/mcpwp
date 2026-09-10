@@ -1993,7 +1993,11 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			$warnings[] = __( 'custom_css was not applied: writing kit CSS requires an admin-scoped API key. Other settings were saved.', 'mcpwp' );
 		}
 
+		// Kit globals are the kit post's page settings: same undo as any
+		// Elementor write (#820).
+		$revision_token = Mcpwp_Elementor_Revisions::begin( $kit_id );
 		update_post_meta( $kit_id, '_elementor_page_settings', $updated );
+		$revision = Mcpwp_Elementor_Revisions::commit( $revision_token );
 
 		// Clear Elementor caches
 		if ( method_exists( \Elementor\Plugin::$instance->files_manager, 'clear_cache' ) ) {
@@ -2013,6 +2017,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			'kit_id'   => $kit_id,
 			'applied'  => $applied,
 			'settings' => $updated,
+			'revision' => $revision,
 			'message'  => __( 'Elementor globals updated.', 'mcpwp' ),
 		);
 		if ( ! empty( $ignored ) ) {

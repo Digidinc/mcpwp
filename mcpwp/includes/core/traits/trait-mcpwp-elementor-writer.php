@@ -913,9 +913,9 @@ trait Mcpwp_Elementor_Writer_Trait {
 			}
 		}
 
-		// The setting-key report belongs on every write result, not only
-		// inside debug (#824).
-		foreach ( array( 'settings_check' ) as $surfaced ) {
+		// The undo handle and the setting-key report belong on every write
+		// result, not only inside debug (#820, #824).
+		foreach ( array( 'revision', 'settings_check' ) as $surfaced ) {
 			if ( isset( $debug[ $surfaced ] ) ) {
 				$result[ $surfaced ] = $debug[ $surfaced ];
 			}
@@ -1235,6 +1235,10 @@ trait Mcpwp_Elementor_Writer_Trait {
 		if ( is_wp_error( $conversion ) ) {
 			return $conversion;
 		}
+
+		// Undo (#820): keep the state being replaced as a revision; commit()
+		// below makes one revision hold what is stored. Mcpwp_Elementor_Revisions.
+		$revision_token = Mcpwp_Elementor_Revisions::begin( $page_id );
 
 		// Capture current structure for before/after diff.
 		$existing_raw      = get_post_meta( $page_id, '_elementor_data', true );
@@ -1641,6 +1645,8 @@ trait Mcpwp_Elementor_Writer_Trait {
 				$save_debug['rtl_warnings'] = $rtl_warnings;
 			}
 		}
+
+		$save_debug['revision'] = Mcpwp_Elementor_Revisions::commit( $revision_token );
 
 		// Build top-level warnings from validation results.
 		$all_warnings = array();
@@ -2186,6 +2192,9 @@ trait Mcpwp_Elementor_Writer_Trait {
 		}
 		$this->last_saved_elements = $post_val;
 
+		// Undo (#820) — the same helper as the full-set path.
+		$revision_token = Mcpwp_Elementor_Revisions::begin( $page_id );
+
 		// Save via Elementor Document API (preferred) or meta fallback.
 		$document_saved = false;
 		$elementor_ok   = class_exists( '\Elementor\Plugin' );
@@ -2412,6 +2421,8 @@ trait Mcpwp_Elementor_Writer_Trait {
 				}
 			}
 		}
+
+		$debug['revision'] = Mcpwp_Elementor_Revisions::commit( $revision_token );
 
 		$this->purge_page_cache( $page_id );
 

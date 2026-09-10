@@ -26,7 +26,7 @@ class Mcpwp_Action_Log {
 	private static $elementor_write_tools = array(
 		'wp_set_elementor', 'wp_edit_section', 'wp_add_section',
 		'wp_remove_section', 'wp_edit_widget', 'wp_replace_section',
-		'wp_patch_elementor',
+		'wp_patch_elementor', 'wp_revert_elementor',
 	);
 
 	private static $write_prefixes = array(
@@ -34,7 +34,7 @@ class Mcpwp_Action_Log {
 		'wp_add_', 'wp_remove_', 'wp_replace_', 'wp_edit_',
 		'wp_bulk_', 'wp_patch_', 'wp_flush_', 'wp_trigger_',
 		'wp_apply_', 'wp_assign_', 'wp_setup_', 'wp_configure_',
-		'wp_import_', 'wp_regenerate_', 'wp_revoke_',
+		'wp_import_', 'wp_regenerate_', 'wp_revoke_', 'wp_revert_',
 	);
 
 	private static $pending = array();
@@ -480,8 +480,14 @@ class Mcpwp_Action_Log {
 				// Slashed: update_post_meta() unslashes what it stores, and
 				// Elementor JSON escapes every quote inside a setting. Restored
 				// unslashed, the page could not be decoded (#845).
+				// A rollback is an Elementor write too: it keeps the state it
+				// replaces as a WordPress revision (#820).
+				$revision_token = class_exists( 'Mcpwp_Elementor_Revisions' ) ? Mcpwp_Elementor_Revisions::begin( (int) $snap['post_id'] ) : null;
 				update_post_meta( (int) $snap['post_id'], '_elementor_data', wp_slash( $snap_data ) );
 				delete_post_meta( (int) $snap['post_id'], '_elementor_css' );
+				if ( null !== $revision_token ) {
+					Mcpwp_Elementor_Revisions::commit( $revision_token );
+				}
 				return true;
 
 			case 'option':

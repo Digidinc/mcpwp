@@ -285,6 +285,53 @@ trait Mcpwp_Free_Tools_Elementor_Trait {
 		);
 
 		$tools[] = $this->define_tool(
+			'wp_list_elementor_revisions',
+			'List the saved revisions of an Elementor page, post or template (the Elementor kit included — kit CSS and global colors/fonts are its page settings): the undo history for Elementor writes. Each entry has id, date, author, whether it carries Elementor data, section/widget counts, and whether it matches what the post holds now. Every MCPWP Elementor write keeps the state it replaced and the state it stored as WordPress revisions; a write response\'s revision.previous_revision_id is the id that undoes it with wp_revert_elementor. When revisions are disabled or limited on the site (WP_POST_REVISIONS), `note` says so — an empty list then does not mean the post has no history.',
+			array(
+				'id'       => array(
+					'type'        => 'number',
+					'description' => 'Page, post or Elementor template ID',
+					'required'    => true,
+				),
+				'per_page' => array(
+					'type'        => 'number',
+					'description' => 'Revisions per page, newest first (1-100, default 20)',
+				),
+				'page'     => array(
+					'type'        => 'number',
+					'description' => 'Page number (default 1)',
+				),
+			)
+		);
+
+		$tools[] = $this->define_tool(
+			'wp_revert_elementor',
+			'Restore an Elementor page, post or template — or the kit\'s settings — from one of its revisions (from wp_list_elementor_revisions, or a write response\'s revision.previous_revision_id). The element tree goes back through the normal write path (validation, id normalisation, CSS regeneration, render check), and the current state is kept as a revision first, so a revert can itself be reverted: undo.revision_id in the response undoes it. Refused, with nothing changed: a revision of another post, an id that is not a revision, a revision with no Elementor data, a revision the post already matches, or any revert while revisions are disabled on the site. Pass dry_run=true to see what would change without writing.',
+			array(
+				'id'          => array(
+					'type'        => 'number',
+					'description' => 'Page, post or Elementor template ID',
+					'required'    => true,
+				),
+				'revision_id' => array(
+					'type'        => 'number',
+					'description' => 'Revision ID to restore',
+					'required'    => true,
+				),
+				'dry_run'     => array(
+					'type'        => 'boolean',
+					'description' => 'Report what would change (sections, widgets, top-level elements added/removed, validation warnings) without writing',
+					'default'     => false,
+				),
+				'convert'     => array(
+					'type'        => 'boolean',
+					'description' => 'Set true to restore Elementor data over a post that now has non-Elementor content. Without it that write is refused rather than destroying the content (#788).',
+					'default'     => false,
+				),
+			)
+		);
+
+		$tools[] = $this->define_tool(
 			'wp_elementor_status',
 			'Check if Elementor is active and get Elementor status information',
 			array()

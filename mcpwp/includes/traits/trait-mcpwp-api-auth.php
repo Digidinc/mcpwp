@@ -1709,7 +1709,7 @@ trait Mcpwp_Api_Auth {
 
 		if ( in_array( $tool_name, $admin_tools, true ) ) {
 			$required_scope = 'admin';
-		} elseif ( preg_match( '/^wp_(create|update|delete|set|upload|bulk|generate|download)/', $tool_name ) ) {
+		} elseif ( preg_match( '/^wp_(create|update|delete|set|upload|bulk|generate|download|revert)/', $tool_name ) ) {
 			$required_scope = 'write';
 		} else {
 			$required_scope = 'read';

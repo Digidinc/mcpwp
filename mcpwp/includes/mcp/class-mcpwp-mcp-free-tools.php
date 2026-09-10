@@ -177,6 +177,8 @@ class Mcpwp_MCP_Free_Tools extends Mcpwp_MCP_Tool_Registry {
 			'wp_set_elementor'           => 'elementor',
 			'wp_preview_elementor'       => 'elementor',
 			'wp_bulk_find_replace'       => 'elementor',
+			'wp_list_elementor_revisions' => 'elementor',
+			'wp_revert_elementor'        => 'elementor',
 
 			// Elementor kit CSS — global CSS injection, free tier (no Elementor Pro needed)
 			'wp_get_kit_css'             => 'elementor',
@@ -311,6 +313,8 @@ class Mcpwp_MCP_Free_Tools extends Mcpwp_MCP_Tool_Registry {
 			'wp_elementor_status'         => 'elementor',
 			'wp_regenerate_elementor_css' => 'elementor',
 			'wp_bulk_find_replace'        => 'elementor',
+			'wp_list_elementor_revisions' => 'elementor',
+			'wp_revert_elementor'         => 'elementor',
 			'wp_get_kit_css'              => 'elementor',
 			'wp_set_kit_css'              => 'elementor',
 			'wp_list_kit_css_blocks'      => 'elementor',
@@ -801,6 +805,14 @@ class Mcpwp_MCP_Free_Tools extends Mcpwp_MCP_Tool_Registry {
 			'wp_set_elementor'         => array(
 				'method' => 'POST',
 				'route'  => '/elementor/{id}',
+			),
+			'wp_list_elementor_revisions' => array(
+				'method' => 'GET',
+				'route'  => '/elementor/{id}/revisions',
+			),
+			'wp_revert_elementor'      => array(
+				'method' => 'POST',
+				'route'  => '/elementor/{id}/revert',
 			),
 			'wp_elementor_status'      => array(
 				'method' => 'GET',
