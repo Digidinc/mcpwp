@@ -36,6 +36,13 @@ class Mcpwp_Rate_Limiter {
 	private $current_data;
 
 	/**
+	 * Bucket reported to the caller when it differs from the one metered.
+	 *
+	 * @var array
+	 */
+	private $reported_data = array();
+
+	/**
 	 * Get singleton instance.
 	 *
 	 * @return Mcpwp_Rate_Limiter
@@ -100,6 +107,8 @@ class Mcpwp_Rate_Limiter {
 		// it does not fit — running part of a batch and then 429ing is the
 		// mid-write corruption that issue opens with.
 		$weight = max( 1, (int) $weight );
+		$bucket = ':diag' === substr( (string) $identifier, -5 ) ? 'diagnostic' : 'write';
+		$this->reported_data = array();
 
 		if ( ! $this->is_enabled() ) {
 			return true;
@@ -109,8 +118,9 @@ class Mcpwp_Rate_Limiter {
 			$identifier = $this->get_client_identifier();
 		}
 
-		// Check whitelist.
-		if ( $this->is_whitelisted( $identifier ) ) {
+		// Check whitelist. A key whitelisted as key:<id> is whitelisted for its
+		// diagnostics too — the ':diag' suffix is a bucket, not an identity.
+		if ( $this->is_whitelisted( preg_replace( '/:diag$/', '', (string) $identifier ) ) ) {
 			return true;
 		}
 
@@ -148,6 +158,7 @@ class Mcpwp_Rate_Limiter {
 				'remaining'   => max( 0, $burst_limit - $burst_data['count'] ),
 				'reset'       => $burst_data['reset'],
 				'window'      => 'burst',
+				'bucket'      => $bucket,
 				'retry_after' => $retry_after,
 			);
 
@@ -163,6 +174,8 @@ class Mcpwp_Rate_Limiter {
 				array(
 					'status'           => 429,
 					'retry_after'      => $retry_after,
+					'reset_in'         => $retry_after,
+					'bucket'           => $bucket,
 					'limit'            => $burst_limit,
 					'remaining'        => max( 0, $burst_limit - $burst_data['count'] ),
 					'requested'        => $weight,
@@ -186,6 +199,7 @@ class Mcpwp_Rate_Limiter {
 				'remaining' => max( 0, $minute_limit - $minute_data['count'] ),
 				'reset'     => $minute_data['reset'],
 				'window'    => 'minute',
+				'bucket'      => $bucket,
 				'retry_after' => $retry_after,
 			);
 
@@ -200,6 +214,8 @@ class Mcpwp_Rate_Limiter {
 				array(
 					'status'           => 429,
 					'retry_after'      => $retry_after,
+					'reset_in'         => $retry_after,
+					'bucket'           => $bucket,
 					'limit'            => $minute_limit,
 					'remaining'        => max( 0, $minute_limit - $minute_data['count'] ),
 					'requested'        => $weight,
@@ -222,6 +238,7 @@ class Mcpwp_Rate_Limiter {
 				'remaining' => max( 0, $hour_limit - $hour_data['count'] ),
 				'reset'     => $hour_data['reset'],
 				'window'    => 'hour',
+				'bucket'      => $bucket,
 				'retry_after' => $retry_after,
 			);
 
@@ -236,6 +253,8 @@ class Mcpwp_Rate_Limiter {
 				array(
 					'status'           => 429,
 					'retry_after'      => $retry_after,
+					'reset_in'         => $retry_after,
+					'bucket'           => $bucket,
 					'limit'            => $hour_limit,
 					'remaining'        => max( 0, $hour_limit - $hour_data['count'] ),
 					'requested'        => $weight,
@@ -266,6 +285,7 @@ class Mcpwp_Rate_Limiter {
 			'reset'     => $minute_data['reset'],
 			'window'    => 'minute',
 			'retry_after' => max( 0, $minute_data['reset'] - $now ),
+				'bucket'      => $bucket,
 		);
 
 		return true;
@@ -277,20 +297,23 @@ class Mcpwp_Rate_Limiter {
 	 * @return array Headers array.
 	 */
 	public function get_headers() {
-		if ( empty( $this->current_data ) ) {
+		$data = ! empty( $this->reported_data ) ? $this->reported_data : $this->current_data;
+
+		if ( empty( $data ) ) {
 			return array();
 		}
 
 		$now = time();
 
 		$headers = array(
-			'X-RateLimit-Limit'     => $this->current_data['limit'],
-			'X-RateLimit-Remaining' => max( 0, $this->current_data['remaining'] ),
-			'X-RateLimit-Reset'     => max( 0, $this->current_data['reset'] - $now ),
+			'X-RateLimit-Limit'     => $data['limit'],
+			'X-RateLimit-Remaining' => max( 0, $data['remaining'] ),
+			'X-RateLimit-Reset'     => max( 0, $data['reset'] - $now ),
+			'X-RateLimit-Bucket'    => isset( $data['bucket'] ) ? $data['bucket'] : 'write',
 		);
 
-		if ( isset( $this->current_data['retry_after'] ) && $this->current_data['remaining'] <= 0 ) {
-			$headers['Retry-After'] = max( 0, (int) $this->current_data['retry_after'] );
+		if ( isset( $data['retry_after'] ) && $data['remaining'] <= 0 ) {
+			$headers['Retry-After'] = max( 0, (int) $data['retry_after'] );
 		}
 
 		return $headers;
@@ -303,15 +326,47 @@ class Mcpwp_Rate_Limiter {
 	 * @return array|null {limit, remaining, reset_in, window}
 	 */
 	public function get_budget() {
-		if ( empty( $this->current_data ) ) {
+		$data = ! empty( $this->reported_data ) ? $this->reported_data : $this->current_data;
+
+		if ( empty( $data ) ) {
 			return null;
 		}
 
 		return array(
-			'limit'     => (int) $this->current_data['limit'],
-			'remaining' => max( 0, (int) $this->current_data['remaining'] ),
-			'reset_in'  => max( 0, (int) $this->current_data['reset'] - time() ),
-			'window'    => (string) $this->current_data['window'],
+			'limit'     => (int) $data['limit'],
+			'remaining' => max( 0, (int) $data['remaining'] ),
+			'reset_in'  => max( 0, (int) $data['reset'] - time() ),
+			'window'    => (string) $data['window'],
+			'bucket'    => isset( $data['bucket'] ) ? (string) $data['bucket'] : 'write',
+		);
+	}
+
+	/**
+	 * Report a bucket other than the one just metered (#802).
+	 *
+	 * A diagnostic request is metered in its own bucket, but the budget a
+	 * client wants to know about is the WRITE budget it is about to spend.
+	 * This peeks at that bucket without charging it, and get_budget() /
+	 * get_headers() answer from it for the rest of the request.
+	 *
+	 * @param string     $identifier Bucket identifier (no ':diag' suffix).
+	 * @param string     $method     HTTP method the writes would use.
+	 * @param array|null $key_record Key record, for per-key ceilings.
+	 */
+	public function report_bucket( $identifier, $method = 'POST', $key_record = null ) {
+		$limits       = $this->get_effective_limits( $key_record );
+		$is_read      = in_array( strtoupper( (string) $method ), array( 'GET', 'HEAD', 'OPTIONS' ), true );
+		$minute_limit = $is_read ? $limits['requests_per_minute'] * 2 : $limits['requests_per_minute'];
+		$now          = time();
+		$minute_data  = $this->initialize_window_data( get_transient( 'mcpwp_rate_' . md5( $identifier . '_minute' ) ), 60, $now );
+
+		$this->reported_data = array(
+			'limit'       => $minute_limit,
+			'remaining'   => max( 0, $minute_limit - (int) $minute_data['count'] ),
+			'reset'       => $minute_data['reset'],
+			'window'      => 'minute',
+			'retry_after' => max( 0, $minute_data['reset'] - $now ),
+			'bucket'      => 'write',
 		);
 	}
 

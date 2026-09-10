@@ -504,7 +504,9 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 */
 	public function handle_options( $request ) {
 		$response = new WP_REST_Response( null, 200 );
-		return $this->prepare_mcp_response( $response );
+		// No version on the pre-auth path: OPTIONS is open, and an exact
+		// version on an open route is a scanner's oracle.
+		return $this->prepare_mcp_response( $response, false );
 	}
 
 	/**
@@ -608,6 +610,20 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	private static $diagnostic_tools = array( 'wp_rate_limit_status', 'wp_site_info' );
 
 	/**
+	 * @return array Tool names metered as diagnostics.
+	 */
+	public static function diagnostic_tools() {
+		return self::$diagnostic_tools;
+	}
+
+	/**
+	 * @return array JSON-RPC methods metered as diagnostics.
+	 */
+	public static function diagnostic_methods() {
+		return self::$diagnostic_methods;
+	}
+
+	/**
 	 * Whether every operation in this request is diagnostic (#802).
 	 *
 	 * The body is inspected, not trusted: a parse failure or an unknown method
@@ -709,7 +725,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 * @return array|null Response array or null for notifications.
 	 */
 	private function process_single_request( $body, $request ) {
-		$method = isset( $body['method'] ) ? $body['method'] : '';
+		$method = isset( $body['method'] ) && is_string( $body['method'] ) ? $body['method'] : '';
 		$id     = isset( $body['id'] ) ? $body['id'] : null;
 		$params = isset( $body['params'] ) ? $body['params'] : array();
 
@@ -794,10 +810,16 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		// so a swap under a running job is detectable, the budget so it can
 		// pace itself, and how many lanes the host can be expected to carry.
 		$server_info['plugin_version']   = $this->server_version;
-		$server_info['wp_version']       = function_exists( 'get_bloginfo' ) ? (string) get_bloginfo( 'version' ) : '';
-		$server_info['site_url']         = function_exists( 'home_url' ) ? (string) home_url( '/' ) : '';
 		$server_info['concurrency_hint'] = max( 1, (int) apply_filters( 'mcpwp_concurrency_hint', 2 ) );
-		$server_info['rate_limit']       = $this->describe_rate_limit();
+		$server_info['rate_limit']       = $this->describe_rate_limit( 'admin' === $role );
+
+		// Site posture is for admin keys only, like role/tool_categories
+		// above: a read-only key does not need the core version or the
+		// origin hostname to pace itself.
+		if ( 'admin' === $role ) {
+			$server_info['wp_version'] = function_exists( 'get_bloginfo' ) ? (string) get_bloginfo( 'version' ) : '';
+			$server_info['site_url']   = function_exists( 'home_url' ) ? (string) home_url( '/' ) : '';
+		}
 
 		$result = array(
 			'protocolVersion' => $this->protocol_version,
@@ -2090,7 +2112,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 *
 	 * @return array
 	 */
-	private function describe_rate_limit() {
+	private function describe_rate_limit( $include_config = true ) {
 		if ( ! class_exists( 'Mcpwp_Rate_Limiter' ) ) {
 			return array( 'enabled' => false );
 		}
@@ -2118,13 +2140,17 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			}
 		}
 
-		$described = array_merge( array( 'enabled' => (bool) $limiter->is_enabled() ), $limits );
+		// Whether the throttle is on, and its tuning, is site posture: admin
+		// keys only. Every caller gets its own remaining budget.
+		$described = $include_config ? array_merge( array( 'enabled' => (bool) $limiter->is_enabled() ), $limits ) : array();
 		$budget    = $limiter->get_budget();
 
 		if ( null !== $budget ) {
+			$described['limit']     = $budget['limit'];
 			$described['remaining'] = $budget['remaining'];
 			$described['reset_in']  = $budget['reset_in'];
 			$described['window']    = $budget['window'];
+			$described['bucket']    = $budget['bucket'];
 		}
 
 		$described['diagnostics'] = 'initialize, wp_rate_limit_status and wp_site_info are metered separately and stay reachable while the limit is exhausted. Honour Retry-After on 429; treat 502/503/504 like 429 with backoff; keep in-flight calls at or below concurrency_hint.';
@@ -2141,15 +2167,18 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 * @param WP_REST_Response $response Response object.
 	 * @return WP_REST_Response Prepared response.
 	 */
-	private function prepare_mcp_response( $response ) {
+	private function prepare_mcp_response( $response, $with_version = true ) {
 		$this->clean_mcp_output_buffers();
 
 		// Force correct content type for JSON-RPC responses.
 		$response->header( 'Content-Type', 'application/json; charset=UTF-8' );
 
-		// Every response names the plugin that produced it, so a client can
-		// notice the plugin being replaced under a running job (#802).
-		$response->header( 'X-MCPWP-Version', $this->server_version );
+		// Every authenticated response names the plugin that produced it, so
+		// a client can notice the plugin being replaced under a running job
+		// (#802). Never on the open OPTIONS path.
+		if ( $with_version ) {
+			$response->header( 'X-MCPWP-Version', $this->server_version );
+		}
 
 		// Prevent caching of API responses.
 		$response->header( 'Cache-Control', 'no-cache, no-store, must-revalidate' );

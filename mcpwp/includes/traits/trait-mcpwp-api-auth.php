@@ -127,6 +127,99 @@ trait Mcpwp_Api_Auth {
 	 * @return bool|WP_Error True if valid, error otherwise.
 	 */
 	public function verify_api_key( $request ) {
+		// WordPress core re-runs every handler's permission_callback on the
+		// matched route to build the Allow header (rest_send_allow_header on
+		// rest_post_dispatch). /mcp has three handlers, so this ran three
+		// times per request and charged three rate-limit slots — the
+		// advertised 1000/hour was really ~333 (#802). The verdict for one
+		// request object is computed once and reused.
+		if ( is_object( $request ) ) {
+			$memo_id = spl_object_id( $request );
+			if ( isset( self::$mcpwp_verdicts[ $memo_id ] ) && self::$mcpwp_verdicts[ $memo_id ][0] === $request ) {
+				return self::$mcpwp_verdicts[ $memo_id ][1];
+			}
+
+			$verdict = $this->compute_api_key_verdict( $request );
+
+			// Holding the request keeps its object id from being reused for
+			// another request within this process.
+			self::$mcpwp_verdicts[ $memo_id ] = array( $request, $verdict );
+
+			return $verdict;
+		}
+
+		return $this->compute_api_key_verdict( $request );
+	}
+
+	/**
+	 * Memoised verdicts, keyed by request object id.
+	 *
+	 * @var array<int, array{0:object,1:mixed}>
+	 */
+	private static $mcpwp_verdicts = array();
+
+	/**
+	 * Forget memoised verdicts. Tests only; a real process serves one request.
+	 */
+	public static function reset_verdict_memo() {
+		self::$mcpwp_verdicts = array();
+	}
+
+	/**
+	 * Diagnostic bucket ceilings (#802): small and absolute. Diagnostics stay
+	 * reachable while the write budget is exhausted, and cannot be used to
+	 * double a key's throughput.
+	 *
+	 * @return array
+	 */
+	protected function diagnostic_rate_limits() {
+		return array(
+			'rate_limits' => array(
+				'burst'      => 15,
+				'per_minute' => 30,
+				'per_hour'   => 300,
+			),
+		);
+	}
+
+	/**
+	 * Meter one authenticated request (#802).
+	 *
+	 * The single place that decides which bucket a request is charged to and
+	 * how much. Every authentication path — API key, OAuth token, broker
+	 * token — goes through here so they cannot drift.
+	 *
+	 * @param WP_REST_Request $request     Request.
+	 * @param string          $identifier  Caller's bucket identifier.
+	 * @param string          $http_method HTTP method.
+	 * @param array|null      $key_record  Key record with optional per-key ceilings.
+	 * @return bool|WP_Error
+	 */
+	protected function meter_request( $request, $identifier, $http_method = 'POST', $key_record = null ) {
+		$weight = $this->request_rate_weight( $request );
+
+		if ( ! $this->is_diagnostic_request( $request ) ) {
+			return $this->check_rate_limit( $identifier, $http_method, $key_record, $weight );
+		}
+
+		$check = $this->check_rate_limit( $identifier . ':diag', 'POST', $this->diagnostic_rate_limits(), $weight );
+
+		// The budget the caller is asking about is the write budget, not the
+		// diagnostic slot just spent. Report that one.
+		if ( ! is_wp_error( $check ) && class_exists( 'Mcpwp_Rate_Limiter' ) ) {
+			Mcpwp_Rate_Limiter::get_instance()->report_bucket( $identifier, $http_method, $key_record );
+		}
+
+		return $check;
+	}
+
+	/**
+	 * The actual verification. See verify_api_key() for why it is wrapped.
+	 *
+	 * @param WP_REST_Request $request Request object.
+	 * @return bool|WP_Error
+	 */
+	private function compute_api_key_verdict( $request ) {
 		// Bypass for internal server-side requests (Chat tab tool execution).
 		// Requires: admin context + activate_plugins cap + AJAX request +
 		// a valid nonce tied to a known admin action (prevents filter-hook abuse).
@@ -254,19 +347,7 @@ trait Mcpwp_Api_Auth {
 			? 'key:' . sanitize_key( $matched_key['id'] )
 			: 'key:' . hash( 'sha256', $api_key );
 
-		// Diagnostics — initialize, rate-limit status, site info — are metered
-		// in their own bucket at read limits (#802). They are how a client
-		// learns when to resume, so they cannot sit behind the write budget
-		// they are asking about; and they stay bounded, so an authenticated
-		// caller cannot spam them without limit either. Only a request whose
-		// every operation is diagnostic qualifies (see is_diagnostic_request).
-		$rate_method = $http_method;
-		if ( $this->is_diagnostic_request( $request ) ) {
-			$rate_identifier .= ':diag';
-			$rate_method      = 'GET';
-		}
-
-		$rate_limit_check = $this->check_rate_limit( $rate_identifier, $rate_method, $matched_key, $this->request_rate_weight( $request ) );
+		$rate_limit_check = $this->meter_request( $request, $rate_identifier, $http_method, $matched_key );
 		if ( is_wp_error( $rate_limit_check ) ) {
 			return $rate_limit_check;
 		}
@@ -806,7 +887,7 @@ trait Mcpwp_Api_Auth {
 			);
 		}
 
-		$rate_limit_check = $this->check_rate_limit( 'oauth:' . substr( hash( 'sha256', (string) $token ), 0, 16 ) );
+		$rate_limit_check = $this->meter_request( $request, 'oauth:' . substr( hash( 'sha256', (string) $token ), 0, 16 ), method_exists( $request, 'get_method' ) ? $request->get_method() : 'POST' );
 		if ( is_wp_error( $rate_limit_check ) ) {
 			return $rate_limit_check;
 		}
@@ -924,7 +1005,7 @@ trait Mcpwp_Api_Auth {
 			return $result;
 		}
 
-		$rate_limit_check = $this->check_rate_limit( 'broker:' . substr( hash( 'sha256', (string) $token ), 0, 16 ) );
+		$rate_limit_check = $this->meter_request( $request, 'broker:' . substr( hash( 'sha256', (string) $token ), 0, 16 ), method_exists( $request, 'get_method' ) ? $request->get_method() : 'POST' );
 		if ( is_wp_error( $rate_limit_check ) ) {
 			return $rate_limit_check;
 		}

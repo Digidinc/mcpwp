@@ -226,7 +226,8 @@ All API responses include rate limit headers:
 ```
 X-RateLimit-Limit: 60
 X-RateLimit-Remaining: 45
-X-RateLimit-Reset: 1699574400
+X-RateLimit-Reset: 42          # seconds until the window resets (not an epoch)
+X-RateLimit-Bucket: write      # or "diagnostic" for initialize / wp_rate_limit_status / wp_site_info
 ```
 
 ### Check Rate Limit Status
