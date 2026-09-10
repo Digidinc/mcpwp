@@ -35,7 +35,8 @@ Pro is for teams that use AI to operate a site repeatedly, not just connect to i
 - Page and product archetypes.
 - Design references from screenshots, mockups, and approved source material.
 - Agent workflows that turn design references and archetypes into draft pages, product pages, sections, and reusable parts.
-- Figma OAuth and Figma design intake.
+- Figma OAuth and Figma design intake (REST `/figma/*` answers 403 `pro_required` on Free; the Figma MCP tools are listed only with Pro).
+- SEO market data from DataForSEO: visibility snapshots, refresh, and opportunities (REST `/seo/visibility`, `/seo/visibility/refresh`, `/seo/opportunities` answer 403 `pro_required` on Free).
 - Google Indexing.
 - AI provider integrations: OpenAI, Gemini, ElevenLabs, Pexels, screenshot worker.
 - Agency, multisite, dashboard, monitoring, and centralized key management workflows.
