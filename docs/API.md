@@ -995,6 +995,48 @@ POST /elementor/{id}
 }
 ```
 
+**Response additions (3.12).** Every Elementor write — `POST /elementor/{id}`, the section, widget and patch edits, find/replace, template apply, part insert, kit CSS, kit CSS blocks and globals — returns a `revision` object, and every validated write (including `dry_run`) returns `settings_check`.
+
+`revision` is the undo handle, recorded as WordPress revisions (#820):
+
+```json
+"revision": {
+  "revisions_enabled": true,
+  "limit": -1,
+  "revision_id": 1532,
+  "previous_revision_id": 1531,
+  "created": true
+}
+```
+
+`revision_id` holds the state this write stored. `previous_revision_id` holds the state it replaced: pass it to `POST /elementor/{id}/revert` to undo the write. It is `null` when the post had no Elementor state before. When revisions are disabled (`WP_POST_REVISIONS` false or 0, or a `wp_revisions_to_keep` filter returning 0) `revisions_enabled` is `false`, `reason` says why, nothing is recorded, and the write cannot be undone. With a limit, `limit` is how many revisions WordPress keeps; if the limit has already deleted the replaced state, `previous_revision_id` is `null` and `note` says so.
+
+MCPWP records these revisions itself. API requests run as the `mcpwp_bot` user, and Elementor's `Document::save()` does not save a published page for that role, so WordPress never made a revision for an API write; where Elementor does save (a draft), the revision it makes holds Elementor's copy of the tree from before MCPWP's final write. Each write now keeps the replaced state as a revision (unless the newest revision already holds it) and makes exactly one revision hold what was stored. A write that changes nothing adds no revision.
+
+`settings_check` reports widget setting keys checked against Elementor's live control definitions (#824):
+
+```json
+"settings_check": {
+  "source": "live_registry",
+  "live_unavailable_reason": null,
+  "widgets_checked": 3,
+  "widgets_not_checked": [
+    {"widget_type": "form", "reason": "Elementor Pro promotion placeholder: ...", "count": 1}
+  ],
+  "unknown_settings": [
+    {"widget_type": "heading", "key": "title_typography_font_family", "in": null, "path": "section[0].column[0].widget[0]", "count": 1, "suggestion": "typography_font_family", "source": "live_registry"},
+    {"widget_type": "icon-list", "key": "icon_text", "in": "icon_list", "path": "section[0].column[0].widget[1].icon_list[1]", "count": 1, "suggestion": "text", "source": "live_registry"}
+  ],
+  "unknown_settings_total": 2
+}
+```
+
+Every setting key of every legacy widget is checked, including repeater row fields and the keys inside `__globals__` and `__dynamic__`. Accepted without a control of their own: a responsive device suffix on a known key (`_widescreen`, `_laptop`, `_tablet_extra`, `_tablet`, `_mobile_extra`, `_mobile`, whether or not that breakpoint is active), a repeater row's `_id`, `_title` and `__fa4_migrated`.
+
+An unknown key produces a warning such as `section[0].column[0].widget[0]: unknown setting 'title_typography_font_family' on heading widget — Elementor registers no such control for this widget, so the value is stored but has no effect — did you mean 'typography_font_family'?`, or `unknown field 'icon_text' in repeater 'icon_list'` for a repeater row. The key is **never removed and the save is never refused**. Repeats of one key on one widget type fold into one warning (`(same key in N more places)`); at most 25 unknown-key warnings are listed, followed by `... and N more unknown setting keys`. `unknown_settings` lists every finding, up to 200, with the full count in `unknown_settings_total`.
+
+`source` is `live_registry` when Elementor's controls were used and `static_reference` when they could not be. `live_unavailable_reason` then says why: Elementor is not loaded, its registry could not be read, or the request is not a REST, admin or preview request (Elementor leaves style controls out of widget definitions there). Static-reference warnings read `unknown key '...' on ... widget — not in MCPWP's static widget reference ... so it may still be a real control`. `none` means no widget could be checked. `widgets_not_checked` lists widgets that could not be checked at all, including Elementor Pro widget names that free Elementor registers only as promotion placeholders; those render nothing, and the save warns about them.
+
 #### Create Elementor Page
 
 ```http
@@ -1052,6 +1094,88 @@ GET /elementor/{id}/summary
 ```
 
 Key display settings are extracted per widget type (e.g., `title` for headings, `url` for images, `text` for buttons). Full settings are not included — use `GET /elementor/{id}` when you need the complete data.
+
+#### List Elementor Revisions
+
+```http
+GET /elementor/{id}/revisions?per_page=20&page=1
+```
+
+*New in 3.12 (#820).* MCP tool: `wp_list_elementor_revisions` (read scope). The undo history of a page, post or Elementor template, newest first. The kit is an Elementor template too: kit CSS and global colors and fonts live in its page settings, so its history works the same way.
+
+```json
+{
+  "post_id": 12,
+  "post_type": "page",
+  "revisions_enabled": true,
+  "limit": -1,
+  "total": 2,
+  "page": 1,
+  "per_page": 20,
+  "pages": 1,
+  "current": {"has_elementor_data": true, "has_page_settings": false, "sections": 1, "widgets": 1, "matching_revision_id": 14},
+  "revisions": [
+    {"id": 14, "date": "...", "date_gmt": "...", "author": {"id": 2, "name": "MCPWP"}, "type": "revision", "has_elementor_data": true, "has_page_settings": false, "sections": 1, "widgets": 1, "matches_current": true},
+    {"id": 13, "date": "...", "date_gmt": "...", "author": {"id": 2, "name": "MCPWP"}, "type": "revision", "has_elementor_data": true, "has_page_settings": false, "sections": 1, "widgets": 1, "matches_current": false}
+  ],
+  "revert_with": "wp_revert_elementor(id, revision_id) — pass dry_run=true first to see what would change."
+}
+```
+
+`note` is present when revisions are disabled — revisions recorded before that are still listed, and an empty list then means no history is being kept, not that the post never changed — or limited, with `limit` the number WordPress keeps. `has_elementor_data: false` marks a revision recorded before the post used Elementor; it cannot be a revert target. An unsupported post type answers `404 not_found`.
+
+#### Revert Elementor Data
+
+```http
+POST /elementor/{id}/revert
+```
+
+*New in 3.12 (#820).* MCP tool: `wp_revert_elementor` (write scope).
+
+| Param | Type | Notes |
+|---|---|---|
+| `revision_id` | integer, required | A revision of this post, from the list or a write's `revision.previous_revision_id` |
+| `dry_run` | boolean | Report what would change; nothing is written |
+| `convert` | boolean | Allow restoring over non-Elementor content (#788) |
+
+The element tree goes back through the normal write path (`POST /elementor/{id}`: validation, id normalisation, CSS regeneration, render verdict), and the state being replaced is kept as a revision first, so a revert can itself be reverted with `undo.revision_id`. Page settings are restored exactly, including their absence; for the kit this restores kit CSS and globals and clears Elementor's CSS cache.
+
+```json
+{
+  "success": true,
+  "post_id": 12,
+  "reverted_to_revision_id": 13,
+  "restored": {"elementor_data": true, "page_settings": null},
+  "restored_exactly": true,
+  "revision": {"revisions_enabled": true, "limit": -1, "revision_id": 15, "previous_revision_id": 14, "created": true},
+  "undo": {"tool": "wp_revert_elementor", "id": 12, "revision_id": 14},
+  "write": {"render_verified": true, "css_regenerated": true, "save_method": "document_save_with_meta_overwrite"},
+  "message": "Post 12 restored from revision 13."
+}
+```
+
+`restored_exactly: false`, with a warning, means the write path adjusted the restored tree (id or key normalisation), so the stored data is not byte-for-byte the revision. A dry run returns `would_change`, section and widget counts for `current` and `revision`, `top_level_elements` added and removed, and `validation.warnings`.
+
+Refused, with nothing written:
+
+| Code | Status | When |
+|---|---|---|
+| `revision_not_found` | 404 | No post with that id |
+| `not_a_revision` | 400 | The id is a page or post, not a revision |
+| `revision_of_another_post` | 400 | The revision belongs to a different post |
+| `revision_has_no_elementor_data` | 422 | The revision has no Elementor data (for the kit: no page settings either) |
+| `revision_data_unusable` | 422 | The revision's data cannot be read as an element tree |
+| `revert_no_change` | 409 | The post already holds that revision's Elementor data |
+| `revisions_disabled` | 409 | Revisions are off, so the replaced state could not be kept |
+| `revert_not_applied` | 500 | The write path reported success but the post does not hold the revision's data afterwards |
+
+#### Widget Help
+
+```http
+GET /elementor/widget-help/{widget_type}
+```
+
+MCP tool: `wp_elementor_widget_help`. Since 3.12 (#824) it answers from Elementor's live registry whenever that can be read. `valid_keys` are the widget's own controls on this site (`valid_keys_source: "live_registry"`); curated-guide keys the widget does not have are listed in `curated_keys_not_in_live`. For an unknown type, `all_widgets` is the site's registry without Pro placeholders, `all_widgets_is` names which list it is (the curated list is returned only when the registry cannot be read), and `curated_guides` lists the curated guides. An Elementor Pro widget on free Elementor, which registers it only as a promotion placeholder, answers `registered_on_this_site: false` with a warning, and `GET /elementor/widgets` marks such entries `pro_placeholder: true`. The curated Basic Gallery guide is `image-gallery`, with its images in `wp_gallery`.
 
 ---
 
@@ -3852,6 +3976,8 @@ Claude Code connects directly via the Streamable HTTP transport — no proxy or 
 | `wp_get_elementor_summary` | Get lightweight structural summary (<1K tokens vs 64K+ for full data) |
 | `wp_edit_section` | Surgically edit a single element by ID, index, or search criteria — no full JSON round-trip needed |
 | `wp_set_elementor` | Set Elementor page data (with validation, auto-fix, CSS regen) |
+| `wp_list_elementor_revisions` | Undo history of an Elementor page, post, template or the kit (WordPress revisions) |
+| `wp_revert_elementor` | Restore Elementor data from a revision through the normal write path; revertible via `undo.revision_id` |
 | `wp_elementor_status` | Check Elementor status |
 | `wp_regenerate_elementor_css` | Regenerate CSS after API edits |
 | `wp_bulk_find_replace` | Search/replace in Elementor JSON |
