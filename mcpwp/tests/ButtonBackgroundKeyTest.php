@@ -55,17 +55,20 @@ final class ButtonBackgroundKeyTest extends TestCase {
 		$json = wp_json_encode(
 			array(
 				array(
-					'id'       => 'sec00001',
+					// 7 characters: Elementor Pro's AJAX endpoints reject any other
+					// length, and the validator now warns about it (#842). This test
+					// asserts silence for a different reason, so its ids must conform.
+					'id'       => 'sec0001',
 					'elType'   => 'section',
 					'settings' => array(),
 					'elements' => array(
 						array(
-							'id'       => 'col00001',
+							'id'       => 'col0001',
 							'elType'   => 'column',
 							'settings' => array( '_column_size' => 100 ),
 							'elements' => array(
 								array(
-									'id'         => 'wid00001',
+									'id'         => 'wid0001',
 									'elType'     => 'widget',
 									'widgetType' => $widget_type,
 									'settings'   => $settings,

@@ -2418,7 +2418,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				$lines[] = '- Columns need `"_column_size"` that sums to 100. Multi-column sections need a `"structure"` value (20=2col, 30=3col).';
 			}
 
-			$lines[] = '- Every element **must** have a unique `"id"` (8 alphanumeric chars). The plugin auto-generates missing IDs.';
+			$lines[] = '- Every element **must** have a unique `"id"` of exactly 7 alphanumeric characters (`a-z`, `A-Z`, `0-9`). Elementor Pro\'s AJAX widgets (Search live results, Taxonomy Filter on a Loop Grid) reject any other length and fail silently. The plugin auto-generates missing IDs, warns about non-conforming ones, and rewrites them when you pass `repair_ids=true` to `wp_patch_elementor` or `wp_set_elementor`. Details: `wp_get_guide(topic="elementor")`.';
 			$lines[] = '- Use `wp_get_elementor` to read current data, `wp_set_elementor` to save. The response includes validation warnings.';
 			$lines[] = '- Use `wp_get_widget_schema` to check correct widget settings keys before building.';
 			$lines[] = '- After changing templates or global styles, call `wp_regenerate_elementor_css`.';

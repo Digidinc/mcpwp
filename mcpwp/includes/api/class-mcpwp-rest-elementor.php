@@ -111,6 +111,11 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 							'type'        => 'boolean',
 							'default'     => false,
 						),
+						'repair_ids' => array(
+							'description' => __( 'Rewrite element ids that are not exactly 7 alphanumeric characters and repoint the references Elementor resolves to them (#842).', 'mcpwp' ),
+							'type'        => 'boolean',
+							'default'     => false,
+						),
 					),
 				),
 			)
@@ -284,9 +289,13 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 							'type'     => 'integer',
 						),
 						'operations' => array(
-							'description' => __( 'Array of patch operations: {op, element_id, element, position, settings, delete_settings}.', 'mcpwp' ),
-							'required'    => true,
+							'description' => __( 'Array of patch operations: {op, element_id, element, position, settings, delete_settings}. Required unless repair_ids is true.', 'mcpwp' ),
 							'type'        => 'array',
+						),
+						'repair_ids' => array(
+							'description' => __( 'Rewrite element ids that are not exactly 7 alphanumeric characters and repoint the references Elementor resolves to them (#842).', 'mcpwp' ),
+							'type'        => 'boolean',
+							'default'     => false,
 						),
 					),
 				),
@@ -304,7 +313,7 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
 						'widget_id'       => array(
-							'description' => __( 'Elementor widget element ID (8-char alphanumeric).', 'mcpwp' ),
+							'description' => __( 'Elementor widget element ID.', 'mcpwp' ),
 							'type'        => 'string',
 							'required'    => true,
 						),
@@ -806,6 +815,7 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 			'elementor_data'        => $request->get_param( 'elementor_data' ),
 			'elementor_json'        => $request->get_param( 'elementor_json' ),
 			'elementor_data_base64' => $request->get_param( 'elementor_data_base64' ),
+			'repair_ids'            => rest_sanitize_boolean( $request->get_param( 'repair_ids' ) ),
 		);
 
 		$result = $this->elementor->set_elementor_data( $page_id, $data, $dry_run );

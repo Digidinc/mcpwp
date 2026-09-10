@@ -111,7 +111,7 @@ class Mcpwp_Elementor_Widgets {
 					'size'                      => array( 'type' => 'select', 'default' => 'default', 'options' => array( 'default', 'small', 'medium', 'large', 'xl', 'xxl' ), 'description' => 'Predefined heading size' ),
 				),
 				'example'     => array(
-					'id'         => 'abc12345',
+					'id'         => 'abc1245',
 					'elType'     => 'widget',
 					'widgetType' => 'heading',
 					'settings'   => array(
@@ -141,7 +141,7 @@ class Mcpwp_Elementor_Widgets {
 					'typography_font_size'       => array( 'type' => 'slider', 'default' => '', 'description' => 'Font size' ),
 				),
 				'example'     => array(
-					'id'         => 'abc12346',
+					'id'         => 'abc1246',
 					'elType'     => 'widget',
 					'widgetType' => 'text-editor',
 					'settings'   => array(
@@ -171,7 +171,7 @@ class Mcpwp_Elementor_Widgets {
 					'hover_animation'           => array( 'type' => 'select', 'default' => '', 'description' => 'CSS hover animation effect' ),
 				),
 				'example'     => array(
-					'id'         => 'abc12347',
+					'id'         => 'abc1247',
 					'elType'     => 'widget',
 					'widgetType' => 'image',
 					'settings'   => array(
@@ -224,7 +224,7 @@ class Mcpwp_Elementor_Widgets {
 					'hover_animation'           => array( 'type' => 'select', 'default' => '', 'description' => 'CSS hover animation' ),
 				),
 				'example'     => array(
-					'id'         => 'abc12348',
+					'id'         => 'abc1248',
 					'elType'     => 'widget',
 					'widgetType' => 'button',
 					'settings'   => array(
@@ -257,7 +257,7 @@ class Mcpwp_Elementor_Widgets {
 					'hover_animation'           => array( 'type' => 'select', 'default' => '', 'description' => 'Hover animation effect' ),
 				),
 				'example'     => array(
-					'id'         => 'abc12349',
+					'id'         => 'abc1249',
 					'elType'     => 'widget',
 					'widgetType' => 'icon',
 					'settings'   => array(
@@ -280,7 +280,7 @@ class Mcpwp_Elementor_Widgets {
 					'space'                     => array( 'type' => 'slider', 'default' => array( 'size' => 50, 'unit' => 'px' ), 'description' => 'Space height: {"size":50,"unit":"px"}' ),
 				),
 				'example'     => array(
-					'id'         => 'abc12350',
+					'id'         => 'abc1250',
 					'elType'     => 'widget',
 					'widgetType' => 'spacer',
 					'settings'   => array(
@@ -308,7 +308,7 @@ class Mcpwp_Elementor_Widgets {
 					'icon'                      => array( 'type' => 'icons', 'default' => '', 'description' => 'Icon on divider (when look is "line_icon")' ),
 				),
 				'example'     => array(
-					'id'         => 'abc12351',
+					'id'         => 'abc1251',
 					'elType'     => 'widget',
 					'widgetType' => 'divider',
 					'settings'   => array(
@@ -341,7 +341,7 @@ class Mcpwp_Elementor_Widgets {
 					'aspect_ratio'              => array( 'type' => 'select', 'default' => '169', 'options' => array( '169', '219', '43', '32', '11', '916' ), 'description' => 'Video aspect ratio' ),
 				),
 				'example'     => array(
-					'id'         => 'abc12352',
+					'id'         => 'abc1252',
 					'elType'     => 'widget',
 					'widgetType' => 'video',
 					'settings'   => array(
@@ -375,7 +375,7 @@ class Mcpwp_Elementor_Widgets {
 					'title_typography_font_size'  => array( 'type' => 'slider', 'default' => '', 'description' => 'Title font size: {"size":18,"unit":"px"}' ),
 				),
 				'example'     => array(
-					'id'         => 'abc12353',
+					'id'         => 'abc1253',
 					'elType'     => 'widget',
 					'widgetType' => 'icon-box',
 					'settings'   => array(
@@ -407,7 +407,7 @@ class Mcpwp_Elementor_Widgets {
 					'description_color'         => array( 'type' => 'color', 'default' => '', 'description' => 'Description color' ),
 				),
 				'example'     => array(
-					'id'         => 'abc12354',
+					'id'         => 'abc1254',
 					'elType'     => 'widget',
 					'widgetType' => 'image-box',
 					'settings'   => array(
@@ -431,7 +431,7 @@ class Mcpwp_Elementor_Widgets {
 					'height'                    => array( 'type' => 'slider', 'default' => array( 'size' => 300, 'unit' => 'px' ), 'description' => 'Map height' ),
 				),
 				'example'     => array(
-					'id'         => 'abc12355',
+					'id'         => 'abc1255',
 					'elType'     => 'widget',
 					'widgetType' => 'google_maps',
 					'settings'   => array(
@@ -468,7 +468,7 @@ class Mcpwp_Elementor_Widgets {
 					'title_typography_font_weight'       => array( 'type' => 'select', 'default' => '', 'description' => 'Title font weight' ),
 				),
 				'example'     => array(
-					'id'         => 'abc12356',
+					'id'         => 'abc1256',
 					'elType'     => 'widget',
 					'widgetType' => 'counter',
 					'settings'   => array(
@@ -497,7 +497,7 @@ class Mcpwp_Elementor_Widgets {
 					'title_color'               => array( 'type' => 'color', 'default' => '', 'description' => 'Title color' ),
 				),
 				'example'     => array(
-					'id'         => 'abc12357',
+					'id'         => 'abc1257',
 					'elType'     => 'widget',
 					'widgetType' => 'progress',
 					'settings'   => array(
@@ -526,7 +526,7 @@ class Mcpwp_Elementor_Widgets {
 					'job_color'                 => array( 'type' => 'color', 'default' => '', 'description' => 'Job title color' ),
 				),
 				'example'     => array(
-					'id'         => 'abc12358',
+					'id'         => 'abc1258',
 					'elType'     => 'widget',
 					'widgetType' => 'testimonial',
 					'settings'   => array(
@@ -553,7 +553,7 @@ class Mcpwp_Elementor_Widgets {
 					'content_color'             => array( 'type' => 'color', 'default' => '', 'description' => 'Content text color' ),
 				),
 				'example'     => array(
-					'id'         => 'abc12359',
+					'id'         => 'abc1259',
 					'elType'     => 'widget',
 					'widgetType' => 'tabs',
 					'settings'   => array(
@@ -582,7 +582,7 @@ class Mcpwp_Elementor_Widgets {
 					'icon_color'                => array( 'type' => 'color', 'default' => '', 'description' => 'Icon color' ),
 				),
 				'example'     => array(
-					'id'         => 'abc12360',
+					'id'         => 'abc1260',
 					'elType'     => 'widget',
 					'widgetType' => 'accordion',
 					'settings'   => array(
@@ -609,7 +609,7 @@ class Mcpwp_Elementor_Widgets {
 					'content_color'             => array( 'type' => 'color', 'default' => '', 'description' => 'Content color' ),
 				),
 				'example'     => array(
-					'id'         => 'abc12361',
+					'id'         => 'abc1261',
 					'elType'     => 'widget',
 					'widgetType' => 'toggle',
 					'settings'   => array(
@@ -637,7 +637,7 @@ class Mcpwp_Elementor_Widgets {
 					'icon_size'                 => array( 'type' => 'slider', 'default' => '', 'description' => 'Icon size' ),
 				),
 				'example'     => array(
-					'id'         => 'abc12362',
+					'id'         => 'abc1262',
 					'elType'     => 'widget',
 					'widgetType' => 'social-icons',
 					'settings'   => array(
@@ -669,7 +669,7 @@ class Mcpwp_Elementor_Widgets {
 					'show_dismiss'              => array( 'type' => 'select', 'default' => 'show', 'options' => array( 'show', 'hide' ), 'description' => 'Show dismiss button' ),
 				),
 				'example'     => array(
-					'id'         => 'abc12363',
+					'id'         => 'abc1263',
 					'elType'     => 'widget',
 					'widgetType' => 'alert',
 					'settings'   => array(
@@ -692,7 +692,7 @@ class Mcpwp_Elementor_Widgets {
 					'html'                      => array( 'type' => 'code', 'default' => '', 'description' => 'Raw HTML content' ),
 				),
 				'example'     => array(
-					'id'         => 'abc12364',
+					'id'         => 'abc1264',
 					'elType'     => 'widget',
 					'widgetType' => 'html',
 					'settings'   => array(
@@ -711,7 +711,7 @@ class Mcpwp_Elementor_Widgets {
 					'shortcode'                 => array( 'type' => 'text', 'default' => '', 'description' => 'WordPress shortcode string, e.g. [contact-form-7 id="123"]' ),
 				),
 				'example'     => array(
-					'id'         => 'abc12365',
+					'id'         => 'abc1265',
 					'elType'     => 'widget',
 					'widgetType' => 'shortcode',
 					'settings'   => array(
@@ -730,7 +730,7 @@ class Mcpwp_Elementor_Widgets {
 					'anchor'                    => array( 'type' => 'text', 'default' => '', 'description' => 'Anchor ID (used in links as #anchor-id)' ),
 				),
 				'example'     => array(
-					'id'         => 'abc12366',
+					'id'         => 'abc1266',
 					'elType'     => 'widget',
 					'widgetType' => 'menu-anchor',
 					'settings'   => array(
@@ -750,7 +750,7 @@ class Mcpwp_Elementor_Widgets {
 					'sidebar'                   => array( 'type' => 'select', 'default' => '', 'description' => 'Sidebar ID to display' ),
 				),
 				'example'     => array(
-					'id'         => 'abc12367',
+					'id'         => 'abc1267',
 					'elType'     => 'widget',
 					'widgetType' => 'sidebar',
 					'settings'   => array(
@@ -775,7 +775,7 @@ class Mcpwp_Elementor_Widgets {
 					'text_indent'               => array( 'type' => 'slider', 'default' => '', 'description' => 'Space between icon and text' ),
 				),
 				'example'     => array(
-					'id'         => 'abc12368',
+					'id'         => 'abc1268',
 					'elType'     => 'widget',
 					'widgetType' => 'icon-list',
 					'settings'   => array(
@@ -811,7 +811,7 @@ class Mcpwp_Elementor_Widgets {
 					'stars_unmarked_color'      => array( 'type' => 'color', 'default' => '', 'description' => 'Unmarked star color' ),
 				),
 				'example'     => array(
-					'id'         => 'abc12369',
+					'id'         => 'abc1269',
 					'elType'     => 'widget',
 					'widgetType' => 'star-rating',
 					'settings'   => array(
@@ -835,7 +835,7 @@ class Mcpwp_Elementor_Widgets {
 					'open_lightbox'             => array( 'type' => 'select', 'default' => 'default', 'options' => array( 'default', 'yes', 'no' ), 'description' => 'Open in lightbox' ),
 				),
 				'example'     => array(
-					'id'         => 'abc12370',
+					'id'         => 'abc1270',
 					'elType'     => 'widget',
 					'widgetType' => 'basic-gallery',
 					'settings'   => array(
@@ -870,7 +870,7 @@ class Mcpwp_Elementor_Widgets {
 					'caption_type'              => array( 'type' => 'select', 'default' => '', 'options' => array( '', 'title', 'caption', 'description' ), 'description' => 'Show image caption' ),
 				),
 				'example'     => array(
-					'id'         => 'abc12371',
+					'id'         => 'abc1271',
 					'elType'     => 'widget',
 					'widgetType' => 'image-carousel',
 					'settings'   => array(
@@ -919,7 +919,7 @@ class Mcpwp_Elementor_Widgets {
 					'required_message'          => array( 'type' => 'text', 'default' => 'This field is required.', 'description' => 'Required field message' ),
 				),
 				'example'     => array(
-					'id'         => 'abc12372',
+					'id'         => 'abc1272',
 					'elType'     => 'widget',
 					'widgetType' => 'form',
 					'settings'   => array(
@@ -955,7 +955,7 @@ class Mcpwp_Elementor_Widgets {
 					'content_animation'         => array( 'type' => 'select', 'default' => 'fadeInUp', 'description' => 'Content entrance animation' ),
 				),
 				'example'     => array(
-					'id'         => 'abc12373',
+					'id'         => 'abc1273',
 					'elType'     => 'widget',
 					'widgetType' => 'slides',
 					'settings'   => array(
@@ -999,7 +999,7 @@ class Mcpwp_Elementor_Widgets {
 					'toggle_size'                       => array( 'type' => 'slider', 'default' => '', 'description' => 'Mobile hamburger icon size with unit, e.g. {"size":22,"unit":"px"}' ),
 				),
 				'example'     => array(
-					'id'         => 'abc12374',
+					'id'         => 'abc1274',
 					'elType'     => 'widget',
 					'widgetType' => 'nav-menu',
 					'settings'   => array(
@@ -1028,7 +1028,7 @@ class Mcpwp_Elementor_Widgets {
 					'link'                      => array( 'type' => 'url', 'default' => '', 'description' => 'Link URL' ),
 				),
 				'example'     => array(
-					'id'         => 'abc12375',
+					'id'         => 'abc1275',
 					'elType'     => 'widget',
 					'widgetType' => 'animated-headline',
 					'settings'   => array(
@@ -1055,7 +1055,7 @@ class Mcpwp_Elementor_Widgets {
 					'description_color'         => array( 'type' => 'color', 'default' => '', 'description' => 'Description color' ),
 				),
 				'example'     => array(
-					'id'         => 'abc12376',
+					'id'         => 'abc1276',
 					'elType'     => 'widget',
 					'widgetType' => 'price-list',
 					'settings'   => array(
@@ -1091,7 +1091,7 @@ class Mcpwp_Elementor_Widgets {
 					'header_bg_color'           => array( 'type' => 'color', 'default' => '', 'description' => 'Header background color' ),
 				),
 				'example'     => array(
-					'id'         => 'abc12377',
+					'id'         => 'abc1277',
 					'elType'     => 'widget',
 					'widgetType' => 'price-table',
 					'settings'   => array(
@@ -1133,7 +1133,7 @@ class Mcpwp_Elementor_Widgets {
 					'background_color_b'        => array( 'type' => 'color', 'default' => '', 'description' => 'Back background color' ),
 				),
 				'example'     => array(
-					'id'         => 'abc12378',
+					'id'         => 'abc1278',
 					'elType'     => 'widget',
 					'widgetType' => 'flip-box',
 					'settings'   => array(
@@ -1167,7 +1167,7 @@ class Mcpwp_Elementor_Widgets {
 					'description_color'         => array( 'type' => 'color', 'default' => '', 'description' => 'Description color' ),
 				),
 				'example'     => array(
-					'id'         => 'abc12379',
+					'id'         => 'abc1279',
 					'elType'     => 'widget',
 					'widgetType' => 'call-to-action',
 					'settings'   => array(
@@ -1196,7 +1196,7 @@ class Mcpwp_Elementor_Widgets {
 					'infinite'                  => array( 'type' => 'switcher', 'default' => 'yes', 'description' => 'Infinite loop' ),
 				),
 				'example'     => array(
-					'id'         => 'abc12380',
+					'id'         => 'abc1280',
 					'elType'     => 'widget',
 					'widgetType' => 'media-carousel',
 					'settings'   => array(
@@ -1235,7 +1235,7 @@ class Mcpwp_Elementor_Widgets {
 					'pagination_type'               => array( 'type' => 'select', 'default' => '', 'options' => array( '', 'numbers', 'prev_next', 'numbers_and_prev_next', 'load_more_on_click', 'load_more_infinite_scroll' ), 'description' => 'Pagination type' ),
 				),
 				'example'     => array(
-					'id'         => 'abc12381',
+					'id'         => 'abc1281',
 					'elType'     => 'widget',
 					'widgetType' => 'posts',
 					'settings'   => array(
@@ -1265,7 +1265,7 @@ class Mcpwp_Elementor_Widgets {
 					'masonry'                   => array( 'type' => 'switcher', 'default' => '', 'description' => 'Enable masonry layout' ),
 				),
 				'example'     => array(
-					'id'         => 'abc12382',
+					'id'         => 'abc1282',
 					'elType'     => 'widget',
 					'widgetType' => 'portfolio',
 					'settings'   => array(
@@ -1294,7 +1294,7 @@ class Mcpwp_Elementor_Widgets {
 					'expire_actions'            => array( 'type' => 'select', 'default' => '', 'description' => 'Action when countdown expires' ),
 				),
 				'example'     => array(
-					'id'         => 'abc12383',
+					'id'         => 'abc1283',
 					'elType'     => 'widget',
 					'widgetType' => 'countdown',
 					'settings'   => array(
@@ -1319,7 +1319,7 @@ class Mcpwp_Elementor_Widgets {
 					'columns'                   => array( 'type' => 'select', 'default' => '0', 'description' => 'Number of columns (0 = auto)' ),
 				),
 				'example'     => array(
-					'id'         => 'abc12384',
+					'id'         => 'abc1284',
 					'elType'     => 'widget',
 					'widgetType' => 'share-buttons',
 					'settings'   => array(
@@ -1349,7 +1349,7 @@ class Mcpwp_Elementor_Widgets {
 					'content_color'             => array( 'type' => 'color', 'default' => '', 'description' => 'Content color' ),
 				),
 				'example'     => array(
-					'id'         => 'abc12385',
+					'id'         => 'abc1285',
 					'elType'     => 'widget',
 					'widgetType' => 'blockquote',
 					'settings'   => array(
@@ -1371,7 +1371,7 @@ class Mcpwp_Elementor_Widgets {
 					'template_id'               => array( 'type' => 'select', 'default' => '', 'description' => 'Saved template ID to embed' ),
 				),
 				'example'     => array(
-					'id'         => 'abc12386',
+					'id'         => 'abc1286',
 					'elType'     => 'widget',
 					'widgetType' => 'template',
 					'settings'   => array(
@@ -1397,7 +1397,7 @@ class Mcpwp_Elementor_Widgets {
 					'custom_link'               => array( 'type' => 'url', 'default' => '', 'description' => 'Custom link URL' ),
 				),
 				'example'     => array(
-					'id'         => 'abc12387',
+					'id'         => 'abc1287',
 					'elType'     => 'widget',
 					'widgetType' => 'lottie',
 					'settings'   => array(
@@ -1417,7 +1417,7 @@ class Mcpwp_Elementor_Widgets {
 				'category'    => 'pro-theme-builder',
 				'settings'    => array(),
 				'example'     => array(
-					'id'         => 'abc12388',
+					'id'         => 'abc1288',
 					'elType'     => 'widget',
 					'widgetType' => 'theme-post-content',
 					'settings'   => array(),
@@ -1441,7 +1441,7 @@ class Mcpwp_Elementor_Widgets {
 					'typography_font_size'       => array( 'type' => 'slider', 'default' => '', 'description' => 'Font size with unit' ),
 				),
 				'example'     => array(
-					'id'         => 'abc12389',
+					'id'         => 'abc1289',
 					'elType'     => 'widget',
 					'widgetType' => 'theme-post-title',
 					'settings'   => array(
@@ -1466,7 +1466,7 @@ class Mcpwp_Elementor_Widgets {
 					'link'                      => array( 'type' => 'url', 'default' => '', 'description' => 'Custom link URL (when link_to is "custom")' ),
 				),
 				'example'     => array(
-					'id'         => 'abc12390',
+					'id'         => 'abc1290',
 					'elType'     => 'widget',
 					'widgetType' => 'theme-site-logo',
 					'settings'   => array(
@@ -1495,7 +1495,7 @@ class Mcpwp_Elementor_Widgets {
 					'link'                      => array( 'type' => 'url', 'default' => '', 'description' => 'Custom link URL' ),
 				),
 				'example'     => array(
-					'id'         => 'abc12391',
+					'id'         => 'abc1291',
 					'elType'     => 'widget',
 					'widgetType' => 'theme-site-title',
 					'settings'   => array(
@@ -1523,7 +1523,7 @@ class Mcpwp_Elementor_Widgets {
 					'pagination_type'           => array( 'type' => 'select', 'default' => '', 'options' => array( '', 'numbers', 'prev_next', 'numbers_and_prev_next', 'load_more_on_click', 'load_more_infinite_scroll' ), 'description' => 'Pagination type' ),
 				),
 				'example'     => array(
-					'id'         => 'abc12392',
+					'id'         => 'abc1292',
 					'elType'     => 'widget',
 					'widgetType' => 'loop-grid',
 					'settings'   => array(
@@ -1554,7 +1554,7 @@ class Mcpwp_Elementor_Widgets {
 					'overlay_background'        => array( 'type' => 'color', 'default' => '', 'description' => 'Hover overlay background color' ),
 				),
 				'example'     => array(
-					'id'         => 'abc12393',
+					'id'         => 'abc1293',
 					'elType'     => 'widget',
 					'widgetType' => 'gallery',
 					'settings'   => array(
@@ -1587,7 +1587,7 @@ class Mcpwp_Elementor_Widgets {
 					'sticky'                    => array( 'type' => 'switcher', 'default' => '', 'description' => 'Make TOC sticky on scroll' ),
 				),
 				'example'     => array(
-					'id'         => 'abc12394',
+					'id'         => 'abc1294',
 					'elType'     => 'widget',
 					'widgetType' => 'table-of-contents',
 					'settings'   => array(
@@ -1614,7 +1614,7 @@ class Mcpwp_Elementor_Widgets {
 					'tooltip_position'          => array( 'type' => 'select', 'default' => 'top', 'options' => array( 'top', 'bottom', 'left', 'right' ), 'description' => 'Tooltip position relative to hotspot' ),
 				),
 				'example'     => array(
-					'id'         => 'abc12395',
+					'id'         => 'abc1295',
 					'elType'     => 'widget',
 					'widgetType' => 'hotspot',
 					'settings'   => array(
@@ -1647,7 +1647,7 @@ class Mcpwp_Elementor_Widgets {
 					'size'                      => array( 'type' => 'select', 'default' => 'sm', 'options' => array( 'xs', 'sm', 'md', 'lg', 'xl' ), 'description' => 'Input field size' ),
 				),
 				'example'     => array(
-					'id'         => 'abc12396',
+					'id'         => 'abc1296',
 					'elType'     => 'widget',
 					'widgetType' => 'search-form',
 					'settings'   => array(
@@ -1702,7 +1702,7 @@ class Mcpwp_Elementor_Widgets {
 				'common_mistakes' => $schema['common_mistakes'],
 				'registry_checked' => null !== $live_types,
 				'tips'            => array(
-					'Every element needs a unique 8-char alphanumeric "id" field.',
+					'Every element needs a unique "id" of exactly 7 alphanumeric characters — Elementor Pro\'s AJAX widgets reject any other length.',
 					'Always set "elType" to "widget" and "widgetType" to "' . $widget_type . '".',
 					'Use wp_get_widget_schema tool for live controls data from the actual Elementor installation.',
 					'Use dry_run=true when setting Elementor data to validate without saving.',
@@ -1749,7 +1749,7 @@ class Mcpwp_Elementor_Widgets {
 				'valid_keys'  => is_array( $keys ) ? $keys : array(),
 				'note'        => 'Keys come from the live Elementor controls, not from this plugin\'s reference data, so they are exactly what this installation accepts.',
 				'tips'        => array(
-					'Every element needs a unique 8-char alphanumeric "id" field.',
+					'Every element needs a unique "id" of exactly 7 alphanumeric characters — Elementor Pro\'s AJAX widgets reject any other length.',
 					'Always set "elType" to "widget" and "widgetType" to "' . $widget_type . '".',
 					'Use wp_get_widget_schema for the full control definitions including types and defaults.',
 					'Use dry_run=true when setting Elementor data to validate without saving.',
