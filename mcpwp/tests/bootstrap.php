@@ -28,6 +28,15 @@ if (! defined('HOUR_IN_SECONDS')) {
 
 $GLOBALS['mcpwp_test_options'] = array();
 $GLOBALS['mcpwp_test_transients'] = array();
+// Persistent object cache double (#752 F6). Off by default, so every test that
+// does not opt in sees WordPress without an object-cache drop-in — the state
+// the suite was written against. See wp_using_ext_object_cache() below.
+$GLOBALS['mcpwp_test_ext_object_cache'] = false;
+$GLOBALS['mcpwp_test_object_cache'] = array();
+// Redis semantics for the double below: incr/decr on a missing key create it
+// (from zero, no expiry) and values may go negative. Off = core/memcached.
+$GLOBALS['mcpwp_test_object_cache_incr_creates'] = false;
+$GLOBALS['mcpwp_test_cache_addition_suspended'] = false;
 $GLOBALS['mcpwp_test_current_user'] = 0;
 // Dispatch spy for rest_do_request() below — records the route of every
 // internal REST dispatch so tests can assert fan-out actually happened
@@ -1418,6 +1427,150 @@ if (! function_exists('wp_cache_delete')) {
     function wp_cache_delete($key, $group = '')
     {
         return true;
+    }
+}
+
+/*
+ * Persistent object cache double with atomic add/incr/decr (#752 F6).
+ *
+ * Models what a Redis or Memcached drop-in guarantees across requests: one
+ * shared store, `add` that succeeds only when the key is absent, and
+ * `incr`/`decr` that apply in a single step, so the value `incr` returns
+ * already includes every other caller's increment. Semantics follow core's
+ * WP_Object_Cache: `incr`/`decr` on a missing key return false, a result
+ * below zero is floored at zero, and an expiry of 0 means "never expires".
+ * `mcpwp_test_object_cache_incr_creates` switches incr/decr to Redis
+ * semantics instead: a missing key is created with no expiry, and values may
+ * go negative. `add` honours wp_suspend_cache_addition(), as core does.
+ *
+ * `mcpwp_test_object_cache_hook` lets a test answer one operation
+ * differently from the store — a backend failure, an eviction between
+ * `add` and `incr`, a drop-in returning a non-count — without a real broken
+ * backend: fn($op, $key, $group) returning null passes through; any other
+ * value is returned instead and the store is left untouched.
+ */
+if (! function_exists('wp_using_ext_object_cache')) {
+    function wp_using_ext_object_cache($using = null)
+    {
+        $current = ! empty($GLOBALS['mcpwp_test_ext_object_cache']);
+        if (null !== $using) {
+            $GLOBALS['mcpwp_test_ext_object_cache'] = (bool) $using;
+        }
+        return $current;
+    }
+}
+
+if (! function_exists('mcpwp_test_object_cache_hook')) {
+    function mcpwp_test_object_cache_hook($op, $key, $group)
+    {
+        $hook = $GLOBALS['mcpwp_test_object_cache_hook'] ?? null;
+        return is_callable($hook) ? call_user_func($hook, $op, $key, $group) : null;
+    }
+}
+
+if (! function_exists('mcpwp_test_object_cache_live')) {
+    /** The live entry for group:key, dropping it first if it has expired. */
+    function mcpwp_test_object_cache_live($id)
+    {
+        if (! isset($GLOBALS['mcpwp_test_object_cache'][ $id ])) {
+            return null;
+        }
+        $item = $GLOBALS['mcpwp_test_object_cache'][ $id ];
+        if (0 !== $item['expires'] && $item['expires'] <= time()) {
+            unset($GLOBALS['mcpwp_test_object_cache'][ $id ]);
+            return null;
+        }
+        return $item;
+    }
+}
+
+if (! function_exists('wp_suspend_cache_addition')) {
+    function wp_suspend_cache_addition($suspend = null)
+    {
+        if (is_bool($suspend)) {
+            $GLOBALS['mcpwp_test_cache_addition_suspended'] = $suspend;
+        }
+        return ! empty($GLOBALS['mcpwp_test_cache_addition_suspended']);
+    }
+}
+
+if (! function_exists('wp_cache_add')) {
+    function wp_cache_add($key, $data, $group = '', $expire = 0)
+    {
+        $answer = mcpwp_test_object_cache_hook('add', $key, $group);
+        if (null !== $answer) {
+            return $answer;
+        }
+        // Core and Redis Object Cache: add is a no-op while addition is suspended.
+        if (wp_suspend_cache_addition()) {
+            return false;
+        }
+        $id = (string) $group . ':' . (string) $key;
+        if (null !== mcpwp_test_object_cache_live($id)) {
+            return false;
+        }
+        $GLOBALS['mcpwp_test_object_cache'][ $id ] = array(
+            'value'   => $data,
+            'expires' => (int) $expire > 0 ? time() + (int) $expire : 0,
+            'ttl'     => (int) $expire,
+        );
+        return true;
+    }
+}
+
+if (! function_exists('wp_cache_get')) {
+    function wp_cache_get($key, $group = '', $force = false, &$found = null)
+    {
+        $answer = mcpwp_test_object_cache_hook('get', $key, $group);
+        if (null !== $answer) {
+            $found = false !== $answer;
+            return $answer;
+        }
+        $item  = mcpwp_test_object_cache_live((string) $group . ':' . (string) $key);
+        $found = null !== $item;
+        return $found ? $item['value'] : false;
+    }
+}
+
+if (! function_exists('mcpwp_test_object_cache_step')) {
+    function mcpwp_test_object_cache_step($op, $key, $offset, $group)
+    {
+        $answer = mcpwp_test_object_cache_hook($op, $key, $group);
+        if (null !== $answer) {
+            return $answer;
+        }
+        $id         = (string) $group . ':' . (string) $key;
+        $item       = mcpwp_test_object_cache_live($id);
+        $redis_like = ! empty($GLOBALS['mcpwp_test_object_cache_incr_creates']);
+        if (null === $item) {
+            if (! $redis_like) {
+                return false;
+            }
+            // Redis INCRBY/DECRBY: a missing key is created from zero, with no expiry.
+            $item = array('value' => 0, 'expires' => 0, 'ttl' => 0);
+            $GLOBALS['mcpwp_test_object_cache'][ $id ] = $item;
+        }
+        $value = is_numeric($item['value']) ? (int) $item['value'] : 0;
+        $value = 'incr' === $op ? $value + (int) $offset : $value - (int) $offset;
+        if ($value < 0 && ! $redis_like) {
+            $value = 0;
+        }
+        $GLOBALS['mcpwp_test_object_cache'][ $id ]['value'] = $value;
+        return $value;
+    }
+}
+
+if (! function_exists('wp_cache_incr')) {
+    function wp_cache_incr($key, $offset = 1, $group = '')
+    {
+        return mcpwp_test_object_cache_step('incr', $key, $offset, $group);
+    }
+}
+
+if (! function_exists('wp_cache_decr')) {
+    function wp_cache_decr($key, $offset = 1, $group = '')
+    {
+        return mcpwp_test_object_cache_step('decr', $key, $offset, $group);
     }
 }
 

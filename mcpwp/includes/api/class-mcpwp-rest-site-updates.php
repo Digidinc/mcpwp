@@ -476,9 +476,12 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 
 		if ( ! class_exists( 'Mcpwp_Rate_Limiter' ) ) {
 			return $this->success_response(
-				array(
-					'enabled' => false,
-					'message' => __( 'Rate limiting is not available.', 'mcpwp' ),
+				array_merge(
+					array(
+						'enabled' => false,
+						'message' => __( 'Rate limiting is not available.', 'mcpwp' ),
+					),
+					$this->relay_admission_status()
 				)
 			);
 		}
@@ -501,15 +504,55 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 		$usage = $limiter->get_usage( $rate_identifier );
 
 		return $this->success_response(
-			array(
-				'enabled' => $settings['enabled'],
-				'limits'  => array(
-					'burst'      => $settings['burst_limit'],
-					'per_minute' => $settings['requests_per_minute'],
-					'per_hour'   => $settings['requests_per_hour'],
+			array_merge(
+				array(
+					'enabled' => $settings['enabled'],
+					'limits'  => array(
+						'burst'      => $settings['burst_limit'],
+						'per_minute' => $settings['requests_per_minute'],
+						'per_hour'   => $settings['requests_per_hour'],
+					),
+					'usage'   => $usage,
 				),
-				'usage'   => $usage,
+				$this->relay_admission_status()
 			)
+		);
+	}
+
+	/**
+	 * How the public feedback relay's ceilings are enforced on this site (#752 F6).
+	 *
+	 * Reported here, beside the API limits, because this is where a caller
+	 * looks for "what is being limited, and how". GET /rate-limit needs read
+	 * scope (only its writes need admin), so any read-scope API key or OAuth
+	 * token sees this. What it learns: the relay's ceilings — constants in the
+	 * plugin's published source — and how this site's object cache enforces
+	 * them. That is deliberately not put on the public relay endpoint, where an
+	 * unauthenticated caller would learn which sites a concurrent burst can
+	 * overshoot; an authenticated caller of this site is a different audience.
+	 *
+	 * The mode and its basis come from Mcpwp_REST_Feedback::relay_admission_decision(),
+	 * the same decision relay admission uses. 'unavailable' is a sixth answer
+	 * for when the relay controller is not loaded and nothing can be said;
+	 * it carries no limits, because those of a controller that is not loaded
+	 * are not known.
+	 *
+	 * @return array{relay_admission: string, relay_admission_basis: string, relay_limits?: array}
+	 */
+	private function relay_admission_status() {
+		if ( ! class_exists( 'Mcpwp_REST_Feedback' ) ) {
+			return array(
+				'relay_admission'       => 'unavailable',
+				'relay_admission_basis' => 'relay_controller_not_loaded',
+			);
+		}
+
+		$decision = Mcpwp_REST_Feedback::relay_admission_decision();
+
+		return array(
+			'relay_admission'       => $decision['mode'],
+			'relay_admission_basis' => $decision['basis'],
+			'relay_limits'          => Mcpwp_REST_Feedback::relay_limits(),
 		);
 	}
 
