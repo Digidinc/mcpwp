@@ -107,10 +107,10 @@ AGENCY_ZIP="$PLUGIN_DIR/scripts/mcpwp-agency-$VERSION.zip"
 
 if [[ "$BUILD" -eq 1 ]]; then
 	bash "$BUILD_SCRIPT" --version "$VERSION"
-	# The agency build is a separate distribution served from the same bucket
-	# (updates.mcpwp.net/mcpwp-agency-<version>.zip). Build it here so its
-	# download URL exists for every release instead of relying on a remembered
-	# manual wrangler upload.
+	# The agency build (MCPWP_PRO=true) is a separate, token-gated distribution
+	# stored under the agency/ prefix of the same bucket (#852). Build it here so
+	# it exists for every release instead of relying on a remembered manual
+	# wrangler upload.
 	bash "$AGENCY_BUILD_SCRIPT" --version "$VERSION"
 fi
 
@@ -121,7 +121,8 @@ if [[ ! -f "$ZIP_PATH" ]]; then
 fi
 
 # Fail before any upload if a publish is asked for without the agency ZIP —
-# a partial publish (canonical up, agency missing) would 404 the agency URL.
+# a partial publish (canonical up, agency missing) would leave agencies without
+# the new version.
 if [[ "$VERIFY_ONLY" -eq 0 && ! -f "$AGENCY_ZIP" ]]; then
 	echo "Missing agency ZIP artifact: $AGENCY_ZIP" >&2
 	echo "Run with --build or build it first." >&2
@@ -214,12 +215,12 @@ PY
 	# The manifest's download_url is mcpwp-latest.zip — this key MUST exist in R2 or downloads 404.
 	CLOUDFLARE_API_TOKEN="$CF_TOKEN" npx --prefix "$WORKER_DIR" wrangler r2 object put mumcp-updates/mcpwp-latest.zip \
 		--file="$ZIP_PATH" --content-type="application/zip" --remote
-	# Versioned agency package. CLAUDE.md documents its download URL
-	# (updates.mcpwp.net/mcpwp-agency-<version>.zip); shipping it here means that
-	# URL exists for every release without a separate manual upload step.
-	CLOUDFLARE_API_TOKEN="$CF_TOKEN" npx --prefix "$WORKER_DIR" wrangler r2 object put "mumcp-updates/mcpwp-agency-$VERSION.zip" \
+	# Versioned agency package, never at a public key (#852): the Worker serves
+	# agency/ only to a request carrying a download token, and refuses any other
+	# key that names an agency build.
+	CLOUDFLARE_API_TOKEN="$CF_TOKEN" npx --prefix "$WORKER_DIR" wrangler r2 object put "mumcp-updates/agency/mcpwp-agency-$VERSION.zip" \
 		--file="$AGENCY_ZIP" --content-type="application/zip" --remote
-	echo "  R2 upload: version.json + mcpwp-latest.zip + mcpwp-agency-$VERSION.zip → mumcp-updates bucket"
+	echo "  R2 upload: version.json + mcpwp-latest.zip + agency/mcpwp-agency-$VERSION.zip → mumcp-updates bucket"
 fi
 
 # Prove the channel can actually deliver what we just published, and FAIL the
@@ -256,5 +257,5 @@ fi
 echo "Published MCPWP $VERSION"
 echo "  canonical manifest: https://updates.mcpwp.net/version.json"
 echo "  canonical zip:      https://updates.mcpwp.net/mcpwp-latest.zip"
-echo "  agency zip:         https://updates.mcpwp.net/mcpwp-agency-$VERSION.zip"
+echo "  agency zip:         https://updates.mcpwp.net/agency/mcpwp-agency-$VERSION.zip (download token required)"
 echo "  mirror (same R2):   https://mumega.com/mcp-updates/version.json"

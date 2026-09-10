@@ -55,5 +55,5 @@ https://github.com/Mumega-com/mcpwp
 https://mcpwp.net
 
 ## Install
-Plugin zip: https://updates.mcpwp.net/mcpwp-agency-latest.zip
+Plugin zip: https://updates.mcpwp.net/mcpwp-latest.zip
 Docs: https://docs.mcpwp.net
