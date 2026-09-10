@@ -1,6 +1,6 @@
 # MCPWP 3.11 — Truth & Reliability
 
-Status: **3.11.0 shipped 2026-09-10.** Remaining scope ships as 3.11.1, 3.12 and 3.13, below. Precedes 4.0 (`ROADMAP-4.0.md`). GitHub milestone 14 tracks every item.
+Status: **3.11.0 shipped 2026-09-10. 3.11.1 cut 2026-09-10** (contents below). Remaining scope ships as 3.12 and 3.13. Precedes 4.0 (`ROADMAP-4.0.md`). GitHub milestone 14 tracks every item.
 
 ## Why 3.11 before 4.0
 
@@ -24,6 +24,19 @@ Every PR passed an adversarial review loop before merge. #838 took nine rounds a
 
 Behaviour changes are listed under **Upgrade Notes** in `mcpwp/CHANGELOG.md` and reach both update screens.
 
+## Shipped in 3.11.1
+
+| Change | Issue | PR |
+|---|---|---|
+| Elementor element ids are 7 characters; other lengths warned on save; opt-in `repair_ids` repoints Taxonomy Filter and Off-canvas references | #842 | #847 |
+| `wp_batch` tool, `plugin_version` in every result `_meta`, per-request spend budget across the whole fan-out tree, fixed weights for bulk find/replace and delete-all-drafts | #802, #752 F9 | #848 |
+| Feedback relay admission is atomic on a recognised persistent object cache, re-checked before the GitHub call, and the mode is reported on `/rate-limit` | #752 F6 | #844 |
+| Encryption key never regenerated while a key row exists; versioned `v2:` blobs with key fingerprint; migration lock and compare-and-swap; weak pinned key refused; Figma and DataForSEO market data gated on Pro everywhere | #564 | #849 |
+| WooCommerce `purchasable` / `catalog_visibility` reported; webhook log redaction; settings checkboxes kept on partial writes; analytics on Free needs an explicit choice; Freemius verification downloads the premium ZIP; canary workflow fails when the verifier fails | #843 and review follow-ups | #846 |
+| Test isolation: rate-limiter singleton reset between test classes | — | #850 |
+
+Every PR went through adversarial review until it passed (the relay and follow-ups lanes took three rounds each) and was checked over HTTP on the local rig. Deferred findings from these lanes are tracked in #845. Distribution of the agency build (published with Pro forced on) is an open owner decision tracked in #852.
+
 ## Principle for what remains: wrap before build
 
 Where WordPress core, Elementor or a common plugin already does the job, MCPWP exposes it instead of building a second copy. A second copy drifts, and drift is how the plugin ends up reporting things that are not true.
@@ -42,7 +55,7 @@ The issues genuinely MCPWP's own are #802's remaining gaps, #825, #826, #828, #8
 
 ## Release plan
 
-### 3.11.1 — security and debt
+### 3.11.1 — security and debt (shipped, see above)
 
 - **#564 P0.** Harden the REST Pro gate. Stored keys are encrypted with a key derived from `AUTH_SALT`, so rotating salts makes them unreadable; move to sodium with a dedicated key. Adversarial review required.
 - **#752.** Residual findings F6, F7, F9–F12 from the #744 review: non-atomic relay counters, and a spend bound for nested fan-out.

@@ -633,7 +633,7 @@ Server-side MCP tool usage tracked via PostHog when enabled.
 - **Free tier:** off by default (opt-in). **Paid tier:** on by default (opt-out)
 - **UUID:** `mcpwp_site_uuid` in wp_options — random, never reveals site domain
 - **Event:** `mcp_tool_called` with `tool`, `category`, `success`, `duration_ms`, `error_code`, plugin/WP/PHP version
-- **Error codes (enum):** `''` success, `tool_not_found`, `category_disabled`, `scope_denied`, `execution_error`, `pro_required` (v3.2.2+: Pro tool called on Free install — upsell telemetry), `rate_limited` (3.11: refused over budget, nothing ran), `replayed` (3.11: an idempotent re-send served from the stored result — counted as `success: true`, it is the feature's happy path)
+- **Error codes (enum):** `''` success, `tool_not_found`, `category_disabled`, `scope_denied`, `execution_error`, `pro_required` (v3.2.2+: Pro tool called on Free install — upsell telemetry), `rate_limited` (3.11: refused over budget, nothing ran), `replayed` (3.11: an idempotent re-send served from the stored result — counted as `success: true`, it is the feature's happy path), `spend_budget_exceeded` (3.11.1: the call was priced over this request's spend budget and refused whole; nothing ran), `spend_budget_exhausted` (3.11.1: an operation priced at dispatch no longer fit; it and every later operation in the request did not run). A tool whose route answers with a REST error reports that error's `code`; `tool_error` when it carries none.
 
 ## Admin Pages
 
