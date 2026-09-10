@@ -70,7 +70,8 @@ bash scripts/release_freemius.sh --version X.Y.Z --skip-bump
 - verifies version consistency across plugin header, `MCPWP_VERSION`, `readme.txt`, and `version.json`
 - builds the self-hosted and agency ZIPs
 - refuses to publish a version the channel already serves, or a downgrade (pass `--allow-republish` to force an intentional same-version re-push)
-- uploads `version.json`, `mcpwp-latest.zip`, and `mcpwp-agency-X.Y.Z.zip` to the R2 bucket `mumcp-updates`
+- uploads `version.json` and `mcpwp-latest.zip` to the R2 bucket `mumcp-updates`, and `mcpwp-agency-X.Y.Z.zip` to the private bucket `mcpwp-agency-builds` (served only with an agency download token in the `Authorization` header, #852)
+- fails the release if an agency build answers 200 without a token on either host
 - verifies both live channels can deliver the new version, and fails if not
 
 Both public self-hosted channels are Cloudflare Workers backed by that one R2 bucket, so the single upload updates both.

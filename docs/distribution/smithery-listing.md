@@ -58,5 +58,5 @@ wordpress, cms, content-management, elementor, seo, page-builder, mcp-server
 ## Links
 - Homepage: https://mcpwp.net
 - Docs: https://docs.mcpwp.net
-- Install: https://updates.mcpwp.net/mcpwp-agency-latest.zip
+- Install: https://updates.mcpwp.net/mcpwp-latest.zip
 - GitHub: https://github.com/Mumega-com/mcpwp

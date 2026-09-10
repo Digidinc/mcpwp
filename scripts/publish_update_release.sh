@@ -107,10 +107,10 @@ AGENCY_ZIP="$PLUGIN_DIR/scripts/mcpwp-agency-$VERSION.zip"
 
 if [[ "$BUILD" -eq 1 ]]; then
 	bash "$BUILD_SCRIPT" --version "$VERSION"
-	# The agency build is a separate distribution served from the same bucket
-	# (updates.mcpwp.net/mcpwp-agency-<version>.zip). Build it here so its
-	# download URL exists for every release instead of relying on a remembered
-	# manual wrangler upload.
+	# The agency build (MCPWP_PRO=true) is a separate, token-gated distribution
+	# stored under the agency/ prefix of the same bucket (#852). Build it here so
+	# it exists for every release instead of relying on a remembered manual
+	# wrangler upload.
 	bash "$AGENCY_BUILD_SCRIPT" --version "$VERSION"
 fi
 
@@ -121,7 +121,8 @@ if [[ ! -f "$ZIP_PATH" ]]; then
 fi
 
 # Fail before any upload if a publish is asked for without the agency ZIP —
-# a partial publish (canonical up, agency missing) would 404 the agency URL.
+# a partial publish (canonical up, agency missing) would leave agencies without
+# the new version.
 if [[ "$VERIFY_ONLY" -eq 0 && ! -f "$AGENCY_ZIP" ]]; then
 	echo "Missing agency ZIP artifact: $AGENCY_ZIP" >&2
 	echo "Run with --build or build it first." >&2
@@ -214,12 +215,15 @@ PY
 	# The manifest's download_url is mcpwp-latest.zip — this key MUST exist in R2 or downloads 404.
 	CLOUDFLARE_API_TOKEN="$CF_TOKEN" npx --prefix "$WORKER_DIR" wrangler r2 object put mumcp-updates/mcpwp-latest.zip \
 		--file="$ZIP_PATH" --content-type="application/zip" --remote
-	# Versioned agency package. CLAUDE.md documents its download URL
-	# (updates.mcpwp.net/mcpwp-agency-<version>.zip); shipping it here means that
-	# URL exists for every release without a separate manual upload step.
-	CLOUDFLARE_API_TOKEN="$CF_TOKEN" npx --prefix "$WORKER_DIR" wrangler r2 object put "mumcp-updates/mcpwp-agency-$VERSION.zip" \
+	# Versioned agency package (MCPWP_PRO=true), never in the public bucket
+	# (#852): the legacy spai-updates Worker reads mumcp-updates without auth.
+	# It goes to the private mcpwp-agency-builds bucket, which only the
+	# mcpwp-updates Worker can read, and only for a request carrying a download
+	# token. If that bucket does not exist this upload fails, and so does the
+	# release: loud, never public.
+	CLOUDFLARE_API_TOKEN="$CF_TOKEN" npx --prefix "$WORKER_DIR" wrangler r2 object put "mcpwp-agency-builds/mcpwp-agency-$VERSION.zip" \
 		--file="$AGENCY_ZIP" --content-type="application/zip" --remote
-	echo "  R2 upload: version.json + mcpwp-latest.zip + mcpwp-agency-$VERSION.zip → mumcp-updates bucket"
+	echo "  R2 upload: version.json + mcpwp-latest.zip → mumcp-updates; mcpwp-agency-$VERSION.zip → mcpwp-agency-builds (private)"
 fi
 
 # Prove the channel can actually deliver what we just published, and FAIL the
@@ -246,6 +250,57 @@ for CHANNEL_URL in \
 	fi
 done
 
+# An agency build must never be downloadable without a token (#852). Two ways it
+# could be: a Worker serving it (checked by requesting it without a token), or
+# the private bucket itself being exposed (public r2.dev URL, custom domain) —
+# which no Worker request can see, so the bucket's own settings are checked.
+# Only an explicit refusal passes: 401 or 404. Anything else — 200, a redirect,
+# a challenge page, a 5xx, no response — is retried and then fails the release,
+# because "could not tell" must never read as "not public".
+AGENCY_LEAK=0
+for LEAK_URL in \
+	"https://updates.mcpwp.net/agency/mcpwp-agency-$VERSION.zip" \
+	"https://updates.mcpwp.net/mcpwp-agency-$VERSION.zip" \
+	"https://mumega.com/mcp-updates/agency/mcpwp-agency-$VERSION.zip" \
+	"https://mumega.com/mcp-updates/mcpwp-agency-$VERSION.zip"; do
+	LEAK_CODE=""
+	for LEAK_TRY in 1 2 3; do
+		# HEAD, no redirects followed, one status line only: curl prints 000 itself
+		# on no response, so nothing is appended to the code.
+		LEAK_CODE="$(curl -sS -I -o /dev/null -w '%{http_code}' --max-time 30 "$LEAK_URL" 2>/dev/null)"
+		[[ "$LEAK_CODE" == "401" || "$LEAK_CODE" == "404" ]] && break
+		sleep 5
+	done
+	if [[ "$LEAK_CODE" != "401" && "$LEAK_CODE" != "404" ]]; then
+		echo "ERROR: agency build check did not get an explicit refusal (HTTP ${LEAK_CODE:-none}): $LEAK_URL" >&2
+		AGENCY_LEAK=1
+	fi
+done
+
+if [[ "$VERIFY_ONLY" -eq 0 ]]; then
+	# The private bucket must have no public r2.dev URL and no custom domain.
+	AGENCY_DEV_URL="$(CLOUDFLARE_API_TOKEN="$CF_TOKEN" npx --prefix "$WORKER_DIR" wrangler r2 bucket dev-url get mcpwp-agency-builds 2>&1 || true)"
+	if ! printf '%s' "$AGENCY_DEV_URL" | grep -q "Public access via the r2.dev URL is disabled"; then
+		echo "ERROR: could not confirm the r2.dev URL of mcpwp-agency-builds is disabled:" >&2
+		printf '%s\n' "$AGENCY_DEV_URL" | tail -3 >&2
+		AGENCY_LEAK=1
+	fi
+	AGENCY_DOMAINS="$(CLOUDFLARE_API_TOKEN="$CF_TOKEN" npx --prefix "$WORKER_DIR" wrangler r2 bucket domain list mcpwp-agency-builds 2>&1 || true)"
+	# Pass only on wrangler's explicit "none" answer; any other output (a listed
+	# domain, an auth error, a changed message) fails closed.
+	if ! printf '%s' "$AGENCY_DOMAINS" | grep -q "There are no custom domains connected to this bucket"; then
+		echo "ERROR: could not confirm mcpwp-agency-builds has no custom domain:" >&2
+		printf '%s\n' "$AGENCY_DOMAINS" | tail -5 >&2
+		AGENCY_LEAK=1
+	fi
+fi
+
+if [[ "$AGENCY_LEAK" -eq 1 ]]; then
+	echo "" >&2
+	echo "ERROR: MCPWP $VERSION is NOT shipped — an agency build is (or may be) public." >&2
+	exit 1
+fi
+
 if [[ "$VERIFY_FAILED" -eq 1 ]]; then
 	echo "" >&2
 	echo "ERROR: MCPWP $VERSION is NOT shipped — at least one channel cannot deliver it." >&2
@@ -256,5 +311,5 @@ fi
 echo "Published MCPWP $VERSION"
 echo "  canonical manifest: https://updates.mcpwp.net/version.json"
 echo "  canonical zip:      https://updates.mcpwp.net/mcpwp-latest.zip"
-echo "  agency zip:         https://updates.mcpwp.net/mcpwp-agency-$VERSION.zip"
+echo "  agency zip:         https://updates.mcpwp.net/agency/mcpwp-agency-$VERSION.zip (Authorization: Bearer <agency token> required)"
 echo "  mirror (same R2):   https://mumega.com/mcp-updates/version.json"
