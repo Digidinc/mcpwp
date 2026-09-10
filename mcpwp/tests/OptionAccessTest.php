@@ -1,17 +1,14 @@
 <?php
 /**
- * Coverage for #800 — the option allowlist was wrong both ways.
+ * Coverage for #800 — the option allowlist was wrong both ways, and the
+ * first replacement was still wrong in ways an adversarial review found:
+ * redaction by a leaf's own name missed `smtp.pass`, a secret stored as the
+ * VALUE of a non-secret key, a list under a numeric index, and any option
+ * that keeps its settings as a JSON string; a self-serve allowlist at the
+ * same scope as the gate it lifts was not a gate; "writes may set secrets"
+ * let an agent replace a live gateway credential and read `updated: true`.
  *
- * Too strict: whole plugin namespaces the site plainly runs (`megamenu_*`,
- * `gtm4wp-options`, `wp_mail_smtp`) were unreachable, and a boolean named
- * `woocommerce_registration_generate_password` was refused because its name
- * contains "password". Too loose: `woocommerce_<gateway>_settings` returned
- * the merchant's live API passcode in plaintext to a read-only audit.
- *
- * Pinned here: access is an allowlist grown by active plugins and by an
- * admin-maintained per-site list, minus exact keys that are never reachable;
- * secrets are masked on read by field name and value shape, wherever they
- * sit; flags are never secrets; a refusal names its rule.
+ * Pinned here, mutation by mutation.
  *
  * @package MCPWP
  */
@@ -39,9 +36,14 @@ final class OptionAccessTest extends TestCase {
 		return ( new Mcpwp_REST_Site_Settings() )->get_option_handler( $request );
 	}
 
-	private function write( string $key, $value ) {
-		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/option', array( 'key' => $key, 'value' => $value ) );
+	private function write( string $key, $value, array $extra = array() ) {
+		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/option', array_merge( array( 'key' => $key, 'value' => $value ), $extra ) );
 		return ( new Mcpwp_REST_Site_Settings() )->update_option_handler( $request );
+	}
+
+	private function allowlist( $entries ) {
+		$request = new WP_REST_Request( 'PUT', '/mcpwp/v1/plugin-settings', array( 'option_allowlist' => $entries ) );
+		return ( new Mcpwp_REST_Site_Settings() )->update_plugin_settings( $request );
 	}
 
 	// ---------------------------------------------------------------
@@ -52,24 +54,50 @@ final class OptionAccessTest extends TestCase {
 		update_option( 'megamenu_settings', array( 'primary' => 'header' ) );
 
 		$refused = $this->read( 'megamenu_settings' );
-		$this->assertInstanceOf( WP_Error::class, $refused, 'Not active: not reachable.' );
+		$this->assertInstanceOf( WP_Error::class, $refused );
 		$this->assertSame( 'not_allowlisted', $refused->get_error_data()['rule'] );
 
 		$this->activate( 'megamenu/megamenu.php' );
 		$allowed = $this->read( 'megamenu_settings' );
-
-		$this->assertInstanceOf( WP_REST_Response::class, $allowed );
 		$this->assertSame( 'plugin:megamenu', $allowed->get_data()['rule'] );
 		$this->assertSame( array( 'primary' => 'header' ), $allowed->get_data()['value'] );
 	}
 
-	public function test_hyphenated_and_exact_plugin_keys_are_covered(): void {
-		$this->activate( 'duracelltomi-google-tag-manager/duracelltomi-google-tag-manager-for-wordpress.php', 'wp-mail-smtp/wp_mail_smtp.php' );
-		update_option( 'gtm4wp-options', array( 'gtm-code' => 'GTM-XYZ' ) );
-		update_option( 'wp_mail_smtp', array( 'mail' => array( 'from_email' => 'hello@example.com' ) ) );
+	public function test_every_matrix_entry_unlocks_its_namespace_and_only_when_active(): void {
+		$matrix = ( new ReflectionClass( Mcpwp_Option_Access::class ) )->getProperty( 'plugin_matrix' );
+		$matrix->setAccessible( true );
 
-		$this->assertSame( 'GTM-XYZ', $this->read( 'gtm4wp-options' )->get_data()['value']['gtm-code'] );
-		$this->assertSame( 'hello@example.com', $this->read( 'wp_mail_smtp' )->get_data()['value']['mail']['from_email'] );
+		foreach ( $matrix->getValue() as $dir => $rules ) {
+			$probe = ! empty( $rules['keys'] ) ? $rules['keys'][0] : $rules['prefixes'][0] . 'probe';
+			$GLOBALS['mcpwp_test_options'] = array();
+			update_option( $probe, 'v' );
+
+			$this->assertInstanceOf( WP_Error::class, $this->read( $probe ), $dir . ' inactive' );
+			$this->activate( $dir . '/' . $dir . '.php' );
+			$this->assertSame( 'plugin:' . $dir, $this->read( $probe )->get_data()['rule'], $dir . ' active' );
+		}
+	}
+
+	public function test_network_activated_plugins_count(): void {
+		$GLOBALS['mcpwp_test_is_multisite'] = true;
+		update_option( 'active_plugins', array() );
+		$GLOBALS['mcpwp_test_site_options']['active_sitewide_plugins'] = array( 'megamenu/megamenu.php' => 1 );
+
+		$this->assertContains( 'megamenu', Mcpwp_Option_Access::active_plugin_dirs() );
+		unset( $GLOBALS['mcpwp_test_is_multisite'], $GLOBALS['mcpwp_test_site_options'] );
+	}
+
+	public function test_every_core_prefix_and_core_key_is_reachable(): void {
+		$ref = new ReflectionClass( Mcpwp_Option_Access::class );
+		foreach ( array( 'core_prefixes', 'core_keys', 'own_allowed_keys' ) as $prop ) {
+			$p = $ref->getProperty( $prop );
+			$p->setAccessible( true );
+			foreach ( $p->getValue() as $entry ) {
+				$key = 'core_prefixes' === $prop ? $entry . 'probe' : $entry;
+				update_option( $key, 'v' );
+				$this->assertInstanceOf( WP_REST_Response::class, $this->read( $key ), $key );
+			}
+		}
 	}
 
 	public function test_a_flag_whose_name_contains_password_is_readable_and_writable(): void {
@@ -78,37 +106,31 @@ final class OptionAccessTest extends TestCase {
 		$this->assertSame( 'no', $this->read( 'woocommerce_registration_generate_password' )->get_data()['value'] );
 
 		$written = $this->write( 'woocommerce_registration_generate_password', 'yes' );
-		$this->assertInstanceOf( WP_REST_Response::class, $written );
-		$this->assertSame( 'yes', get_option( 'woocommerce_registration_generate_password' ) );
-		$this->assertSame( 'yes', $written->get_data()['value'], 'A flag is shown, not masked.' );
+		$this->assertInstanceOf( WP_REST_Response::class, $written, is_wp_error( $written ) ? $written->get_error_message() : '' );
+		$this->assertSame( 'yes', $written->get_data()['value'] );
 	}
 
-	public function test_core_keys_keep_their_case(): void {
-		// sanitize_key() lowercased WPLANG, an allowed core key, into an
-		// unreachable one.
+	public function test_every_flag_value_is_exempt_from_masking(): void {
+		$flags = ( new ReflectionClass( Mcpwp_Option_Access::class ) )->getProperty( 'flag_values' );
+		$flags->setAccessible( true );
+		foreach ( $flags->getValue() as $flag ) {
+			$this->assertFalse( Mcpwp_Option_Access::looks_like_secret_value( $flag ), var_export( $flag, true ) );
+		}
+		$this->assertTrue( Mcpwp_Option_Access::looks_like_secret_value( 'abcd' ), 'Four characters is the floor.' );
+		$this->assertFalse( Mcpwp_Option_Access::looks_like_secret_value( 'abc' ) );
+	}
+
+	public function test_core_keys_keep_their_case_and_bad_names_are_refused_not_coerced(): void {
 		update_option( 'WPLANG', 'de_DE' );
-
 		$this->assertSame( 'de_DE', $this->read( 'WPLANG' )->get_data()['value'] );
-	}
 
-	public function test_an_admin_can_extend_the_allowlist_per_site(): void {
-		update_option( 'acme_widget_settings', array( 'colour' => 'teal' ) );
-		$this->assertInstanceOf( WP_Error::class, $this->read( 'acme_widget_settings' ) );
-
-		$request = new WP_REST_Request( 'PUT', '/mcpwp/v1/plugin-settings', array( 'option_allowlist' => array( 'acme_widget_settings', 'acme_*' ) ) );
-		$saved   = ( new Mcpwp_REST_Site_Settings() )->update_plugin_settings( $request );
-		$this->assertInstanceOf( WP_REST_Response::class, $saved, is_wp_error( $saved ) ? $saved->get_error_message() : '' );
-
-		$read = $this->read( 'acme_widget_settings' );
-		$this->assertInstanceOf( WP_REST_Response::class, $read );
-		$this->assertSame( 'site_allowlist:acme_widget_settings', $read->get_data()['rule'] );
-
-		update_option( 'acme_other', 1 );
-		$this->assertSame( 'site_allowlist:acme_*', $this->read( 'acme_other' )->get_data()['rule'] );
+		$bad = $this->read( 'widget_custom_html!' );
+		$this->assertInstanceOf( WP_Error::class, $bad );
+		$this->assertSame( 'invalid_option_name', $bad->get_error_code(), 'Stripping the ! would silently target a different option.' );
 	}
 
 	// ---------------------------------------------------------------
-	// Too loose, fixed.
+	// Redaction by path and by shape.
 	// ---------------------------------------------------------------
 
 	public function test_secrets_inside_an_allowed_array_are_masked_and_listed(): void {
@@ -118,7 +140,7 @@ final class OptionAccessTest extends TestCase {
 				'enabled'     => 'yes',
 				'title'       => 'Credit card',
 				'merchant_id' => '300200100',
-				'api_key'     => 'live-4f8a…',
+				'api_key'     => 'live-4f8a',
 				'passcode'    => 'AbCdEf123456',
 				'advanced'    => array( 'webhook_key' => 'whk_secret', 'debug' => 'no' ),
 			)
@@ -131,58 +153,207 @@ final class OptionAccessTest extends TestCase {
 		$this->assertSame( '***', $data['value']['advanced']['webhook_key'] );
 		$this->assertSame( 'yes', $data['value']['enabled'] );
 		$this->assertSame( 'Credit card', $data['value']['title'] );
-		$this->assertSame( '300200100', $data['value']['merchant_id'], 'An id is not a secret.' );
+		$this->assertSame( '300200100', $data['value']['merchant_id'] );
 		$this->assertSame( array( 'api_key', 'passcode', 'advanced.webhook_key' ), $data['redacted'] );
 	}
 
-	public function test_a_secret_scalar_option_is_masked_but_a_secret_flag_is_not(): void {
+	public function test_the_field_names_the_review_listed_are_all_masked(): void {
+		// smtp.pass, api_signature, api_transaction_key, consumer_key,
+		// object-pswd, connect_site_key, rg_gforms_key, passphrase …
+		$fields = array( 'pass', 'pwd', 'pswd', 'passphrase', 'api_signature', 'api_transaction_key', 'consumer_key', 'consumer_secret', 'site_key', 'client_key', 'shared_key', 'signing_key', 'object-pswd', 'rg_gforms_key', 'connect_site_key', 'license_key', 'licence', 'auth_token', 'refresh_token', 'access_token', 'private_key', 'sid', 'serial', 'credentials', 'bearer' );
+		$tree   = array();
+		foreach ( $fields as $f ) {
+			$tree[ $f ] = 'value-' . $f;
+		}
+		update_option( 'woocommerce_probe_settings', $tree );
+
+		$data = $this->read( 'woocommerce_probe_settings' )->get_data();
+
+		foreach ( $fields as $f ) {
+			$this->assertSame( '***', $data['value'][ $f ], $f );
+		}
+		$this->assertCount( count( $fields ), $data['redacted'] );
+	}
+
+	public function test_a_secret_in_value_position_and_under_a_numeric_index_is_masked(): void {
+		$this->activate( 'contact-form-7/wp-contact-form-7.php' );
+		// reCAPTCHA stores [ site_key => secret_key ]: the array KEY is the
+		// site key, the VALUE is the secret.
+		update_option( 'wpcf7_recaptcha', array( '6LcSiteKeyXYZabc' => '6LcSecretKeyABCxyz-987654321' ) );
+		update_option( 'woocommerce_kp_settings', array( 'api_keys' => array( 'sk_live_11111111111111', 'sk_live_22222222222222' ), 'label' => 'Keys' ) );
+
+		$captcha = $this->read( 'wpcf7_recaptcha' )->get_data();
+		$this->assertSame( array( '6LcSiteKeyXYZabc' => '***' ), $captcha['value'], 'The value is the secret; the key name never matched.' );
+
+		$keys = $this->read( 'woocommerce_kp_settings' )->get_data();
+		$this->assertSame( array( '***', '***' ), $keys['value']['api_keys'], 'Everything under a secret-named parent is secret, numeric index or not.' );
+		$this->assertSame( 'Keys', $keys['value']['label'] );
+		$this->assertSame( array( 'api_keys.0', 'api_keys.1' ), $keys['redacted'] );
+	}
+
+	public function test_an_smtp_password_under_a_plugin_namespace_is_masked(): void {
+		$this->activate( 'wp-mail-smtp/wp_mail_smtp.php' );
+		update_option( 'wp_mail_smtp', array( 'mail' => array( 'from_email' => 'hello@example.com' ), 'smtp' => array( 'host' => 'smtp.example.com', 'user' => 'hello', 'pass' => 'Sup3rSecr3t!' ) ) );
+
+		$data = $this->read( 'wp_mail_smtp' )->get_data();
+
+		$this->assertSame( 'hello@example.com', $data['value']['mail']['from_email'] );
+		$this->assertSame( 'smtp.example.com', $data['value']['smtp']['host'] );
+		$this->assertSame( '***', $data['value']['smtp']['pass'] );
+	}
+
+	public function test_a_credential_is_masked_by_its_shape_whatever_the_field_is_called(): void {
+		update_option( 'elementor_probe', array( 'connect' => 'sk_live_4eC39HqLyjWDarjtT1zdp7dc', 'jwt' => 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abc', 'slug' => 'my-nice-page', 'title' => 'Hello World' ) );
+
+		$data = $this->read( 'elementor_probe' )->get_data();
+
+		$this->assertSame( '***', $data['value']['connect'] );
+		$this->assertSame( '***', $data['value']['jwt'] );
+		$this->assertSame( 'my-nice-page', $data['value']['slug'] );
+		$this->assertSame( 'Hello World', $data['value']['title'] );
+	}
+
+	public function test_an_option_stored_as_a_json_string_is_walked(): void {
+		$this->activate( 'all-in-one-seo-pack/all_in_one_seo_pack.php' );
+		update_option( 'aioseo_options', wp_json_encode( array( 'general' => array( 'licenseKey' => 'AIO-1234-5678-ABCD', 'siteName' => 'Acme' ) ) ) );
+
+		$data = $this->read( 'aioseo_options' )->get_data();
+
+		$this->assertSame( 'json', $data['decoded_from'] );
+		$decoded = json_decode( $data['value'], true );
+		$this->assertSame( '***', $decoded['general']['licenseKey'] );
+		$this->assertSame( 'Acme', $decoded['general']['siteName'] );
+		$this->assertSame( array( 'general.licenseKey' ), $data['redacted'] );
+	}
+
+	public function test_an_option_stored_serialized_is_returned_as_a_walked_structure(): void {
+		update_option( 'theme_mods_probe', serialize( array( 'api_key' => 'live-4f8a-secret', 'color' => 'teal' ) ) ); // phpcs:ignore
+
+		$data = $this->read( 'theme_mods_probe' )->get_data();
+
+		$this->assertSame( 'serialized', $data['decoded_from'] );
+		$this->assertSame( array( 'api_key' => '***', 'color' => 'teal' ), $data['value'] );
+	}
+
+	public function test_a_secret_scalar_option_is_masked(): void {
+		update_option( 'elementor_connect_site_key', 'abc123def456ghi789');
 		update_option( 'woocommerce_api_key', 'sk_live_abcdef' );
-		update_option( 'woocommerce_require_password', 'yes' );
 
-		$this->assertSame( '***', $this->read( 'woocommerce_api_key' )->get_data()['value'] );
+		$this->assertSame( '***', $this->read( 'elementor_connect_site_key' )->get_data()['value'] );
 		$this->assertSame( array( '' ), $this->read( 'woocommerce_api_key' )->get_data()['redacted'] );
-		$this->assertSame( 'yes', $this->read( 'woocommerce_require_password' )->get_data()['value'] );
-	}
-
-	public function test_a_write_may_set_a_secret_but_the_response_never_returns_it(): void {
-		update_option( 'woocommerce_bambora_settings', array( 'passcode' => 'old-secret-1' ) );
-
-		$written = $this->write( 'woocommerce_bambora_settings', array( 'passcode' => 'new-secret-2', 'enabled' => 'yes' ) );
-		$data    = $written->get_data();
-
-		$this->assertSame( 'new-secret-2', get_option( 'woocommerce_bambora_settings' )['passcode'], 'The write landed.' );
-		$this->assertSame( '***', $data['value']['passcode'] );
-		$this->assertSame( '***', $data['old_value']['passcode'] );
-		$this->assertContains( 'passcode', $data['redacted'] );
 	}
 
 	// ---------------------------------------------------------------
-	// Never reachable, and said so.
+	// Writes that would set a secret are asked for by name.
 	// ---------------------------------------------------------------
 
-	public function test_entitlement_and_updater_controls_stay_blocked_for_everyone_and_name_the_rule(): void {
-		foreach ( array( 'mcpwp_update_info', 'mcpwp_version_url', 'mcpwp_pro_license', 'mcpwp_api_keys', 'mcpwp_integrations', 'mcpwp_settings', 'mcpwp_encryption_key', 'stripe_secret', 'auth_key' ) as $key ) {
+	public function test_a_write_that_would_replace_a_credential_is_refused_unless_confirmed(): void {
+		update_option( 'woocommerce_bambora_settings', array( 'passcode' => 'old-secret-1', 'enabled' => 'yes' ) );
+
+		$refused = $this->write( 'woocommerce_bambora_settings', array( 'passcode' => 'new-secret-2', 'enabled' => 'yes' ) );
+		$this->assertInstanceOf( WP_Error::class, $refused );
+		$this->assertSame( 'secret_write_refused', $refused->get_error_code() );
+		$this->assertSame( array( 'passcode' ), $refused->get_error_data()['secret_paths'] );
+		$this->assertSame( 'old-secret-1', get_option( 'woocommerce_bambora_settings' )['passcode'], 'Nothing written.' );
+
+		$confirmed = $this->write( 'woocommerce_bambora_settings', array( 'passcode' => 'new-secret-2', 'enabled' => 'yes' ), array( 'allow_secrets' => true ) );
+		$this->assertInstanceOf( WP_REST_Response::class, $confirmed );
+		$this->assertSame( 'new-secret-2', get_option( 'woocommerce_bambora_settings' )['passcode'] );
+		$this->assertSame( '***', $confirmed->get_data()['value']['passcode'], 'Even a confirmed write never echoes the secret.' );
+		$this->assertSame( '***', $confirmed->get_data()['old_value']['passcode'] );
+	}
+
+	public function test_a_write_that_only_touches_non_secret_fields_needs_no_confirmation(): void {
+		update_option( 'woocommerce_bambora_settings', array( 'passcode' => 'old-secret-1', 'title' => 'Card' ) );
+
+		$written = $this->write( 'woocommerce_bambora_settings', array( 'title' => 'Credit card', 'enabled' => 'yes' ) );
+
+		$this->assertInstanceOf( WP_REST_Response::class, $written, is_wp_error( $written ) ? $written->get_error_message() : '' );
+	}
+
+	public function test_a_licence_key_option_cannot_be_overwritten_by_accident(): void {
+		update_option( 'elementor_pro_license_key', 'abcdef0123456789abcdef0123456789' );
+
+		$refused = $this->write( 'elementor_pro_license_key', 'zzzz' );
+
+		$this->assertSame( 'secret_write_refused', $refused->get_error_code(), 'Blanking a licence deactivates Elementor Pro site-wide.' );
+	}
+
+	// ---------------------------------------------------------------
+	// The floor: never reachable, never allowlistable.
+	// ---------------------------------------------------------------
+
+	public function test_every_blocked_prefix_and_fragment_is_refused_and_names_the_rule(): void {
+		$ref = new ReflectionClass( Mcpwp_Option_Access::class );
+		$p   = $ref->getProperty( 'blocked_prefixes' );
+		$p->setAccessible( true );
+		foreach ( $p->getValue() as $prefix ) {
+			$key   = $prefix . ( '_' === substr( $prefix, -1 ) ? 'probe' : '' );
 			$error = $this->read( $key );
 			$this->assertInstanceOf( WP_Error::class, $error, $key );
-			$this->assertStringStartsWith( 'blocked:', $error->get_error_data()['rule'], $key );
+			$this->assertSame( 'blocked:' . $prefix, $error->get_error_data()['rule'], $key );
 			$this->assertInstanceOf( WP_Error::class, $this->write( $key, 'x' ), $key . ' write' );
+		}
+		$f = $ref->getProperty( 'blocked_fragments' );
+		$f->setAccessible( true );
+		foreach ( $f->getValue() as $fragment ) {
+			$key = 'elementor_probe' . $fragment . '_x';
+			$this->assertStringStartsWith( 'blocked:*', $this->read( $key )->get_error_data()['rule'], $key );
 		}
 	}
 
-	public function test_a_blocked_key_cannot_be_allowlisted(): void {
-		$request = new WP_REST_Request( 'PUT', '/mcpwp/v1/plugin-settings', array( 'option_allowlist' => array( 'acme_ok', 'mcpwp_update_info', 'mcpwp_*' ) ) );
-		$result  = ( new Mcpwp_REST_Site_Settings() )->update_plugin_settings( $request );
+	public function test_the_plugins_own_state_is_closed_except_the_named_keys(): void {
+		foreach ( array( 'mcpwp_chat_secret', 'mcpwp_chat_endpoint', 'mcpwp_chat_history_1', 'mcpwp_rate_limit_settings', 'mcpwp_disabled_tool_categories', 'mcpwp_double_load', 'mcpwp_version', 'mcpwp_update_info', 'mcpwp_api_keys', 'spai_settings' ) as $key ) {
+			$this->assertInstanceOf( WP_Error::class, $this->read( $key ), $key );
+			$this->assertInstanceOf( WP_Error::class, $this->write( $key, 'x' ), $key );
+		}
+		update_option( 'mcpwp_site_context', '# Brand' );
+		$this->assertSame( '# Brand', $this->read( 'mcpwp_site_context' )->get_data()['value'] );
+	}
+
+	public function test_nothing_on_the_floor_can_be_allowlisted(): void {
+		foreach ( array( 'auth_salt', 'nonce_salt', 'wp_user_roles', 'active_plugins', 'cron', 'default_role', '_transient_*', '_site_transient_mcpwp', 'mcpwp_update_info', 'mcpwp_*', 'w*', 'auth*', 'mcpw*', 'foo_private_key', 'x_session_y', '*' ) as $entry ) {
+			$this->assertSame( '', Mcpwp_Option_Access::sanitize_allowlist_entry( $entry ), $entry );
+		}
+		$this->assertSame( 'acme_widget_*', Mcpwp_Option_Access::sanitize_allowlist_entry( 'acme_widget_*' ) );
+		$this->assertSame( 'gtm4wp-options', Mcpwp_Option_Access::sanitize_allowlist_entry( 'gtm4wp-options' ) );
+	}
+
+	public function test_allowlisting_the_floor_is_refused_at_write_time_and_saves_nothing(): void {
+		$result = $this->allowlist( array( 'acme_ok', 'auth_salt', 'w*' ) );
 
 		$this->assertInstanceOf( WP_Error::class, $result );
 		$this->assertSame( 'invalid_allowlist_entry', $result->get_error_code() );
-		$this->assertStringContainsString( 'mcpwp_update_info', $result->get_error_message() );
-		$this->assertSame( array(), Mcpwp_Option_Access::site_allowlist(), 'Nothing saved from a refused list.' );
+		$this->assertStringContainsString( 'auth_salt', $result->get_error_message() );
+		$this->assertSame( array(), Mcpwp_Option_Access::site_allowlist() );
 	}
 
-	public function test_the_refusal_says_how_to_lift_it(): void {
+	public function test_a_stringified_allowlist_is_refused_instead_of_erasing_the_list(): void {
+		$this->assertInstanceOf( WP_REST_Response::class, $this->allowlist( array( 'acme_widget_settings' ) ) );
+
+		$result = $this->allowlist( '["acme_widget_settings"]' );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'invalid_allowlist', $result->get_error_code() );
+		$this->assertSame( array( 'acme_widget_settings' ), Mcpwp_Option_Access::site_allowlist(), 'The list survived.' );
+	}
+
+	public function test_an_admin_can_extend_the_allowlist_per_site(): void {
+		update_option( 'acme_widget_settings', array( 'colour' => 'teal' ) );
+		$this->assertInstanceOf( WP_Error::class, $this->read( 'acme_widget_settings' ) );
+
+		$this->assertInstanceOf( WP_REST_Response::class, $this->allowlist( array( 'acme_widget_settings', 'acme_widget_*', 'acme_widget_settings' ) ) );
+		$this->assertSame( array( 'acme_widget_settings', 'acme_widget_*' ), Mcpwp_Option_Access::site_allowlist(), 'Deduplicated.' );
+
+		$this->assertSame( 'site_allowlist:acme_widget_settings', $this->read( 'acme_widget_settings' )->get_data()['rule'] );
+		update_option( 'acme_widget_other', 1 );
+		$this->assertSame( 'site_allowlist:acme_widget_*', $this->read( 'acme_widget_other' )->get_data()['rule'] );
+	}
+
+	public function test_the_refusal_names_its_rule(): void {
 		$error = $this->read( 'some_plugin_option' );
 
 		$this->assertSame( 'not_allowlisted', $error->get_error_data()['rule'] );
-		$this->assertStringContainsString( 'option_allowlist', $error->get_error_data()['hint'] );
+		$this->assertStringContainsString( 'allowlist', $error->get_error_data()['hint'] );
 	}
 }

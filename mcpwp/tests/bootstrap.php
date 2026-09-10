@@ -515,6 +515,11 @@ function add_option($name, $value = '', $deprecated = '', $autoload = 'yes')
     return true;
 }
 
+function is_serialized($data, $strict = true)
+{
+    return is_string($data) && (bool) preg_match('/^(a|O|s|i|d|b):/', $data) && ';' === substr(rtrim($data), -1) || (is_string($data) && '}' === substr(rtrim($data), -1) && (bool) preg_match('/^a:/', $data));
+}
+
 function delete_option($name)
 {
     unset($GLOBALS['mcpwp_test_options'][ $name ]);
@@ -811,7 +816,14 @@ function get_bloginfo($show = '')
 
 function is_multisite()
 {
-    return false;
+    return ! empty($GLOBALS['mcpwp_test_is_multisite']);
+}
+
+if (! function_exists('get_site_option')) {
+    function get_site_option($name, $default = false)
+    {
+        return $GLOBALS['mcpwp_test_site_options'][ $name ] ?? $default;
+    }
 }
 
 function wp_generate_uuid4()

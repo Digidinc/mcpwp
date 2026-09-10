@@ -291,7 +291,14 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 			} elseif ( 'allowlist' === $rule ) {
 				// Exact keys or "prefix_*"; a blocked key cannot be allowlisted
 				// and is reported by name instead of dropped.
-				$entries = is_array( $value ) ? $value : array();
+				if ( ! is_array( $value ) ) {
+					return $this->error_response(
+						'invalid_allowlist',
+						__( 'option_allowlist must be a JSON array of option names or "prefix_*" entries. A string would silently erase the list, so it is refused.', 'mcpwp' ),
+						400
+					);
+				}
+				$entries = $value;
 				$clean   = array();
 				$refused = array();
 				foreach ( $entries as $entry ) {
@@ -313,7 +320,7 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 						400
 					);
 				}
-				$current[ $key ] = array_values( array_unique( array_slice( $clean, 0, 200 ) ) );
+				$current[ $key ] = array_slice( array_values( array_unique( $clean ) ), 0, 200 );
 			} elseif ( 'text' === $rule ) {
 				$current[ $key ] = sanitize_text_field( (string) $value );
 			} elseif ( 'key' === $rule ) {
@@ -471,7 +478,11 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 	public function get_option_handler( $request ) {
 		$this->log_activity( 'get_option', $request );
 
-		$key      = Mcpwp_Option_Access::sanitize_option_name( $request->get_param( 'key' ) );
+		$key = Mcpwp_Option_Access::sanitize_option_name( $request->get_param( 'key' ) );
+		if ( '' === $key ) {
+			return $this->error_response( 'invalid_option_name', __( 'Option names are 1–191 characters of letters, digits, _ - . and :.', 'mcpwp' ), 400 );
+		}
+
 		$decision = Mcpwp_Option_Access::decide( $key );
 
 		if ( ! $decision['allowed'] ) {
@@ -480,14 +491,17 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 
 		$masked = Mcpwp_Option_Access::redact( $key, get_option( $key ) );
 
-		return $this->success_response(
-			array(
-				'key'      => $key,
-				'value'    => $masked['value'],
-				'redacted' => $masked['redacted'],
-				'rule'     => $decision['rule'],
-			)
+		$body = array(
+			'key'      => $key,
+			'value'    => $masked['value'],
+			'redacted' => $masked['redacted'],
+			'rule'     => $decision['rule'],
 		);
+		if ( isset( $masked['decoded_from'] ) ) {
+			$body['decoded_from'] = $masked['decoded_from'];
+		}
+
+		return $this->success_response( $body );
 	}
 
 	/**
@@ -517,12 +531,37 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 	public function update_option_handler( $request ) {
 		$this->log_activity( 'update_option', $request );
 
-		$key      = Mcpwp_Option_Access::sanitize_option_name( $request->get_param( 'key' ) );
+		$key = Mcpwp_Option_Access::sanitize_option_name( $request->get_param( 'key' ) );
+		if ( '' === $key ) {
+			return $this->error_response( 'invalid_option_name', __( 'Option names are 1–191 characters of letters, digits, _ - . and :.', 'mcpwp' ), 400 );
+		}
+
 		$value    = $request->get_param( 'value' );
 		$decision = Mcpwp_Option_Access::decide( $key );
 
 		if ( ! $decision['allowed'] ) {
 			return $this->forbidden_option( $key, $decision );
+		}
+
+		// A write that would set a credential — a gateway passcode, a licence
+		// key, an SMTP password — is payment redirection or lockout when it
+		// is wrong, and an agent cannot tell from a masked response that it
+		// just broke checkout. It has to be asked for by name.
+		$secret_paths = Mcpwp_Option_Access::secret_paths_in_write( $key, $value );
+		if ( ! empty( $secret_paths ) && ! rest_sanitize_boolean( $request->get_param( 'allow_secrets' ) ) ) {
+			return new WP_Error(
+				'secret_write_refused',
+				sprintf(
+					/* translators: %s: paths */
+					__( 'This write would set credential-shaped field(s): %s. Nothing was written. Pass allow_secrets=true to confirm you mean to replace them.', 'mcpwp' ),
+					implode( ', ', array_map( function ( $p ) { return '' === $p ? '(value)' : $p; }, $secret_paths ) )
+				),
+				array(
+					'status'       => 409,
+					'secret_paths' => $secret_paths,
+					'hint'         => 'Replacing a gateway passcode, licence key or SMTP password by accident is payment redirection or lockout, and a masked response cannot tell you it happened. Re-send with allow_secrets=true if that is the intent.',
+				)
+			);
 		}
 
 		$old_value = get_option( $key );
@@ -594,19 +633,6 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 				'rule'      => $decision['rule'],
 			)
 		);
-	}
-
-	/**
-	 * Kept for callers outside this file; the policy lives in
-	 * Mcpwp_Option_Access (#800).
-	 *
-	 * @param string $key Option name.
-	 * @return bool
-	 */
-	private function is_option_allowed( $key ) {
-		$decision = Mcpwp_Option_Access::decide( $key );
-
-		return ! empty( $decision['allowed'] );
 	}
 
 	public function get_favicon( $request ) {

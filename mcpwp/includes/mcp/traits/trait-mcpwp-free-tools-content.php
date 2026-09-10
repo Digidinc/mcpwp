@@ -585,6 +585,10 @@ trait Mcpwp_Free_Tools_Content_Trait {
 					'description' => 'New value for the option',
 					'required'    => true,
 				),
+				'allow_secrets' => array(
+					'type'        => 'boolean',
+					'description' => 'Confirm a write that sets credential-shaped fields (passcodes, API keys, licence keys). Refused with secret_write_refused otherwise.',
+				),
 			)
 		);
 
