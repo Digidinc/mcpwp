@@ -234,6 +234,7 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-activator.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-deactivator.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-rate-limiter.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-operation-weights.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-error-hints.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-security.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-webhooks.php';

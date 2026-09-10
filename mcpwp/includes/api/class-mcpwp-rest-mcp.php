@@ -1200,43 +1200,18 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	}
 
 	/**
-	 * How many operations a tool call carries when its arguments hold a list
-	 * of items to act on. One when it does not.
+	 * How many rate-limit slots a tool call costs: the items its list
+	 * arguments carry, or the tool's fixed weight when it acts on many posts
+	 * without carrying a list (wp_bulk_find_replace, wp_delete_all_drafts).
+	 * One when neither applies. Mcpwp_Operation_Weights holds the lists and the
+	 * per-tool map, so there is one place to price a tool.
 	 *
-	 * @param array $arguments Tool arguments.
+	 * @param array  $arguments Tool arguments.
+	 * @param string $tool_name Tool name ('' prices the lists alone).
 	 * @return int
 	 */
-	private function nested_operation_count( $arguments ) {
-		if ( ! is_array( $arguments ) ) {
-			return 1;
-		}
-
-		// Aliases of one list (urls beside items, items beside updates) are
-		// charged once — the largest; genuinely different lists (pages
-		// beside posts) are charged each — the sum (#802 rounds 4–5).
-		$groups = array(
-			array( 'operations' ),
-			array( 'updates', 'items', 'urls', 'files', 'media' ),
-			array( 'pages' ),
-			array( 'posts' ),
-			array( 'page_ids', 'post_ids' ),
-			array( 'rows' ),
-			array( 'widgets' ),
-			array( 'sections' ),
-		);
-
-		$count = 0;
-		foreach ( $groups as $group ) {
-			$largest = 0;
-			foreach ( $group as $key ) {
-				if ( isset( $arguments[ $key ] ) && is_array( $arguments[ $key ] ) ) {
-					$largest = max( $largest, count( $arguments[ $key ] ) );
-				}
-			}
-			$count += $largest;
-		}
-
-		return max( 1, $count );
+	private function nested_operation_count( $arguments, $tool_name = '' ) {
+		return Mcpwp_Operation_Weights::tool_weight( $tool_name, $arguments );
 	}
 
 	/**
@@ -1963,7 +1938,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		// here, before dispatch, and refused whole when they do not fit —
 		// otherwise wp_batch_update inside tools/call is a 100:1 bypass of
 		// the weighted limiter.
-		$nested = $this->nested_operation_count( $arguments );
+		$nested = $this->nested_operation_count( $arguments, $tool_name );
 		if ( $nested > 1 ) {
 			$charge = $this->charge_additional_slots( $nested - 1 );
 			if ( is_wp_error( $charge ) ) {

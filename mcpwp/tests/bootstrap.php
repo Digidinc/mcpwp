@@ -2231,6 +2231,7 @@ require_once dirname(__DIR__) . '/includes/traits/trait-mcpwp-api-auth.php';
 require_once dirname(__DIR__) . '/includes/traits/trait-mcpwp-sanitization.php';
 require_once dirname(__DIR__) . '/includes/traits/trait-mcpwp-logging.php';
 require_once dirname(__DIR__) . '/includes/class-mcpwp-rate-limiter.php';
+require_once dirname(__DIR__) . '/includes/class-mcpwp-operation-weights.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-event-store.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-site-state.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-agent-playbooks.php';
