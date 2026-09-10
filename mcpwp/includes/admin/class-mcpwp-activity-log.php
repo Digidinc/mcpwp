@@ -394,26 +394,12 @@ class Mcpwp_Activity_Log_Page {
 	 * @return mixed Redacted data.
 	 */
 	private function redact_sensitive( $data ) {
-		$sensitive_keys = array(
-			'api_key', 'x-api-key', 'authorization', 'bearer', 'secret', 'password', 'token',
-			'access_token', 'refresh_token', 'client_secret', 'private_key',
-		);
-
-		$settings = get_option( 'mcpwp_settings', array() );
-		if ( isset( $settings['log_redaction_keys'] ) ) {
-			$custom = $settings['log_redaction_keys'];
-			if ( is_string( $custom ) ) {
-				$custom = preg_split( '/[\r\n,]+/', $custom );
-			}
-			if ( is_array( $custom ) ) {
-				$sensitive_keys = array_merge( $sensitive_keys, array_map( 'strtolower', array_filter( array_map( 'trim', $custom ) ) ) );
-			}
-		}
-
+		// One walker and one key list for every redactor (#800 rounds 5–8).
 		if ( class_exists( 'Mcpwp_Option_Access' ) && method_exists( 'Mcpwp_Option_Access', 'redact_for_log' ) ) {
-			return Mcpwp_Option_Access::redact_for_log( $data, array_map( 'strtolower', $sensitive_keys ), false );
+			return Mcpwp_Option_Access::redact_for_log( $data, Mcpwp_Option_Access::log_redaction_keys(), false );
 		}
 
+		$sensitive_keys = array( 'api_key', 'x-api-key', 'authorization', 'bearer', 'secret', 'password', 'token', 'access_token', 'refresh_token', 'client_secret', 'private_key' );
 		return $this->redact_tree( $data, $sensitive_keys, false );
 	}
 

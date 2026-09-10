@@ -564,12 +564,18 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 		$allow_secrets = rest_sanitize_boolean( $request->get_param( 'allow_secrets' ) );
 
 		// Markup that executes — script, event handlers, javascript: URLs,
-		// frames — is stored only by an administrator-scoped principal.
-		// Options render in wp-admin and on the front end; a designer- or
-		// editor-scoped key must not be able to plant it (#800 round 7).
+		// frames — is stored only by an administrator. Today every path to
+		// this handler is already admin: the /option route table and the
+		// wp_update_option tool both require admin scope, and a request with
+		// no key record is the in-process admin context (chat, an approved
+		// apply). So this cannot fire for a live principal; it is the
+		// belt-and-braces that holds if the route-level rule is ever relaxed
+		// for a lesser scope — which is the change it exists to survive
+		// (#800 rounds 7–8). The write-protection of widget_/sidebars_ is
+		// what closed the rendered-raw case.
 		if ( Mcpwp_Option_Access::contains_active_markup( $submitted ) ) {
 			$record = $this->get_current_api_key_record();
-			if ( ! is_array( $record ) || ! $this->key_has_scope( $record, 'admin' ) ) {
+			if ( is_array( $record ) && ! $this->key_has_scope( $record, 'admin' ) ) {
 				$this->log_activity( 'update_option_refused', $request, array( 'option' => $key, 'rule' => 'active_markup_requires_admin' ), 403 );
 				return new WP_Error(
 					'active_markup_requires_admin',
@@ -672,9 +678,12 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 			$value = $value ? 1 : 0;
 		}
 
-		// Core text keys are trimmed, as WordPress's own settings screen
-		// trims them; every other value is stored as sent.
-		if ( is_string( $value ) && in_array( $key, array( 'blogname', 'blogdescription', 'timezone_string', 'date_format', 'time_format', 'WPLANG', 'siteurl', 'home' ), true ) ) {
+		// Core text keys are trimmed, as WordPress's own settings screens
+		// trim them; every other value is stored as sent. permalink_structure,
+		// category_base and tag_base are the ones where a stray space breaks
+		// every URL on the site (sanitize_option() encodes it as %20) — #800
+		// round 8.
+		if ( is_string( $value ) && in_array( $key, array( 'blogname', 'blogdescription', 'timezone_string', 'date_format', 'time_format', 'WPLANG', 'permalink_structure', 'category_base', 'tag_base' ), true ) ) {
 			$value = trim( $value );
 		}
 
@@ -702,7 +711,16 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 				null !== $threw ? 500 : 409
 			);
 		}
-		$altered = null !== $threw || $stored != $value; // phpcs:ignore WordPress.PHP.StrictComparisons.LooseComparison
+		// Two different facts, two different warnings: the store changed the
+		// bytes (worth acting on), or a hook threw after the write landed
+		// (worth knowing, not the same thing) — #800 round 8.
+		$write_warnings = array();
+		if ( $stored != $value ) { // phpcs:ignore WordPress.PHP.StrictComparisons.LooseComparison
+			$write_warnings[] = 'WordPress altered the value on store (its own sanitize_option); the value reported is what was stored.';
+		}
+		if ( null !== $threw ) {
+			$write_warnings[] = 'A plugin hook threw after the write landed: ' . $threw->getMessage();
+		}
 
 		// Writes may set a secret; reads never return one.
 		$new = Mcpwp_Option_Access::redact( $key, get_option( $key ) );
@@ -715,7 +733,7 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 				'old_value' => $old['value'],
 				'redacted'  => array_values( array_unique( array_merge( $new['redacted'], $old['redacted'] ) ) ),
 				'preserved' => $merged['preserved'],
-				'warnings'  => array_merge( isset( $merged['warnings'] ) ? $merged['warnings'] : array(), $altered ? array( 'WordPress altered the value on store (its own sanitize_option); the value reported is what was stored.' ) : array() ),
+				'warnings'  => array_merge( isset( $merged['warnings'] ) ? $merged['warnings'] : array(), $write_warnings ),
 				'updated'   => true,
 				'rule'      => $decision['rule'],
 			)

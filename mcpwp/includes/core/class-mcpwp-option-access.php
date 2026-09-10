@@ -634,8 +634,9 @@ class Mcpwp_Option_Access {
 
 	/**
 	 * The exact key names every log redactor removes: the site's configured
-	 * list, or the installed default. One list for the activity log, the
-	 * MCP activity log, the action log and the admin renderer (#800 round 7).
+	 * list, plus the installed default. One list for the activity log, the
+	 * MCP activity log, the action log and the admin renderer (#800
+	 * rounds 7–8) — each of those calls this, none keeps its own.
 	 *
 	 * @return string[] Lower-cased.
 	 */
@@ -697,16 +698,67 @@ class Mcpwp_Option_Access {
 	 */
 	public static function contains_active_markup( $value ) {
 		$found = false;
-		self::map_string_leaves(
-			$value,
-			function ( $leaf ) use ( &$found ) {
-				if ( ! $found && preg_match( '#<\s*(script|iframe|object|embed|meta|link|base)\b|\bon[a-z]+\s*=|javascript\s*:|\bsrcdoc\s*=|data:text/html#i', $leaf ) ) {
-					$found = true;
-				}
-				return $leaf;
+		$check = function ( $leaf ) use ( &$found ) {
+			if ( ! $found && self::string_has_active_markup( $leaf ) ) {
+				$found = true;
 			}
-		);
+			return $leaf;
+		};
+		self::map_string_leaves( $value, $check );
+
+		// Opaque serialised blobs are not walked by the mapper; their raw
+		// bytes are checked as text (#800 round 8).
+		if ( ! $found ) {
+			self::walk_raw_strings( $value, $check );
+		}
+
 		return $found;
+	}
+
+	/**
+	 * The markup test on one string, after the normalisations a browser
+	 * applies before it decides what executes: entities decoded, and the
+	 * control characters a scheme may be padded with removed.
+	 *
+	 * @param string $leaf String.
+	 * @return bool
+	 */
+	private static function string_has_active_markup( $leaf ) {
+		$leaf = (string) $leaf;
+		if ( '' === $leaf ) {
+			return false;
+		}
+		$decoded  = html_entity_decode( $leaf, ENT_QUOTES | ENT_HTML5, 'UTF-8' );
+		$squashed = preg_replace( '/[\x00-\x20]+/', '', $decoded );
+
+		foreach ( array( $leaf, $decoded, $squashed ) as $candidate ) {
+			if ( preg_match( '#<\s*(script|iframe|object|embed|meta|link|base|svg|math|form|style)\b|\bon[a-z]+\s*=|(javascript|vbscript|livescript)\s*:|\bsrcdoc\s*=|data:text/html|data:image/svg\+xml|expression\s*\(|behavior\s*:|-moz-binding|@import#i', $candidate ) ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Apply a callback to every string in a value, opaque blobs included,
+	 * without decoding anything.
+	 *
+	 * @param mixed    $value    Value.
+	 * @param callable $callback string → mixed.
+	 */
+	private static function walk_raw_strings( $value, $callback ) {
+		if ( is_string( $value ) ) {
+			call_user_func( $callback, $value );
+			return;
+		}
+		if ( is_object( $value ) ) {
+			$value = (array) $value;
+		}
+		if ( is_array( $value ) ) {
+			foreach ( $value as $v ) {
+				self::walk_raw_strings( $v, $callback );
+			}
+		}
 	}
 
 	/**

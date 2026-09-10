@@ -505,6 +505,9 @@ function update_option($name, $value, $autoload = null)
     // Recorded so tests can assert a caller passed autoload=false explicitly
     // (e.g. a large/rarely-read option that must not load on every request).
     $GLOBALS['mcpwp_test_options_autoload'][ $name ] = $autoload;
+    if (isset($GLOBALS['mcpwp_test_option_store_after_hook']) && is_callable($GLOBALS['mcpwp_test_option_store_after_hook'])) {
+        call_user_func($GLOBALS['mcpwp_test_option_store_after_hook'], $name, $value);
+    }
     return true;
 }
 

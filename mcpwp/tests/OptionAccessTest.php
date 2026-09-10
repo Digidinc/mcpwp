@@ -1333,4 +1333,88 @@ final class OptionAccessTest extends TestCase {
 		Mcpwp_Action_Log::complete( $log_id, 1, true, '' );
 		$this->assertStringNotContainsString( '4242', wp_json_encode( $GLOBALS['mcpwp_test_wpdb_rows'] ) );
 	}
+
+	// ---------------------------------------------------------------
+	// Round 9.
+	// ---------------------------------------------------------------
+
+	public function test_permalink_keys_are_trimmed_and_the_dead_entries_are_gone(): void {
+		// Round-8 P1-1: "  /%postname%/  " became /%postname%/%20%20 and
+		// every URL on the site 404'd.
+		foreach ( array( 'permalink_structure' => '  /%postname%/  ', 'category_base' => ' topics  ', 'tag_base' => '  labels ' ) as $key => $value ) {
+			$written = $this->write( $key, $value );
+			$this->assertInstanceOf( WP_REST_Response::class, $written, $key . ': ' . ( is_wp_error( $written ) ? $written->get_error_message() : '' ) );
+			$this->assertSame( trim( $value ), get_option( $key ), $key );
+		}
+		$src = file_get_contents( dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-site-settings.php' );
+		$this->assertStringNotContainsString( "'WPLANG', 'siteurl', 'home'", $src, 'siteurl/home are write-protected: dead entries in a trim list.' );
+	}
+
+	public function test_the_markup_gate_is_belt_and_braces_never_a_false_refusal_for_the_in_process_admin(): void {
+		// Round-8 P1-2: with no key record (chat / an approved apply — the
+		// in-process admin), the gate used to refuse. It binds a lesser-
+		// scoped key only, if one ever reaches this handler.
+		$controller = new Mcpwp_REST_Site_Settings();
+		$request    = new WP_REST_Request( 'POST', '/mcpwp/v1/option', array( 'key' => 'elementor_probe', 'value' => array( 'js' => '<script>x</script>' ) ) );
+		$this->assertInstanceOf( WP_REST_Response::class, $controller->update_option_handler( $request ), 'No record = in-process admin context.' );
+	}
+
+	public function test_the_markup_detector_sees_through_browser_normalisations(): void {
+		// Round-8 P2-3.
+		foreach ( array(
+			"<a href=\"java\nscript:alert(1)\">x</a>",
+			'<a href="java&#9;script:alert(1)">x</a>',
+			'<a href="vbscript:msgbox(1)">x</a>',
+			'<div style="width:expression(alert(1))">x</div>',
+			'<div style="behavior:url(x.htc)">x</div>',
+			'&lt;script&gt;alert(1)&lt;/script&gt;',
+			'<img src="data:image/svg+xml;base64,PHN2Zz48c2NyaXB0Pg==">',
+			'<svg onload=alert(1)>',
+			'<SCRIPT>x</SCRIPT>',
+			'<style>@import url(x)</style>',
+		) as $payload ) {
+			$this->assertTrue( Mcpwp_Option_Access::contains_active_markup( $payload ), $payload );
+		}
+		foreach ( array( '<p>Hi <b>there</b></p>', 'https://x.test/?r=a%2Fb', 'Hello & goodbye', 'content: "on"', 'javascriptural notes' ) as $benign ) {
+			$this->assertFalse( Mcpwp_Option_Access::contains_active_markup( $benign ), $benign );
+		}
+
+		// An opaque serialised blob is checked as raw text.
+		$opaque = serialize( array( 'x' => 'O:8:"Whatever":1:{s:1:"a";s:25:"<script>alert(1)</script>";}' ) ); // phpcs:ignore
+		$this->assertTrue( Mcpwp_Option_Access::contains_active_markup( $opaque ) );
+	}
+
+	public function test_the_two_write_warnings_are_separate_facts(): void {
+		// Round-8 P2-4: a throwing hook used to be reported as "altered".
+		update_option( 'blogname', 'Old' );
+		$GLOBALS['mcpwp_test_option_store_hook'] = function ( $name, $value ) { throw new RuntimeException( 'Access denied.' ); };
+		$written = $this->write( 'blogname', 'New' );
+		unset( $GLOBALS['mcpwp_test_option_store_hook'] );
+		$this->assertInstanceOf( WP_Error::class, $written, 'Threw before storing: nothing landed, so it is a failure.' );
+
+		$GLOBALS['mcpwp_test_option_store_after_hook'] = function ( $name, $value ) { throw new RuntimeException( 'Access denied.' ); };
+		$written = $this->write( 'blogname', 'Newer' );
+		unset( $GLOBALS['mcpwp_test_option_store_after_hook'] );
+		$this->assertInstanceOf( WP_REST_Response::class, $written, is_wp_error( $written ) ? $written->get_error_message() : '' );
+		$this->assertSame( 'Newer', get_option( 'blogname' ) );
+		$this->assertCount( 1, $written->get_data()['warnings'] );
+		$this->assertStringContainsString( 'hook threw', $written->get_data()['warnings'][0] );
+		$this->assertStringNotContainsString( 'altered', $written->get_data()['warnings'][0] );
+
+		$plain = $this->write( 'blogname', 'Plain' );
+		$this->assertSame( array(), $plain->get_data()['warnings'], 'Nothing altered, nothing threw: no warning.' );
+	}
+
+	public function test_the_admin_renderer_honours_the_sites_redaction_keys(): void {
+		// Round-8 P2-5.
+		update_option( 'mcpwp_settings', array( 'log_redaction_keys' => array( 'customer_pin' ) ) );
+		if ( ! class_exists( 'Mcpwp_Activity_Log_Page' ) ) {
+			require_once dirname( __DIR__ ) . '/includes/admin/class-mcpwp-activity-log.php';
+		}
+		$admin = new ReflectionMethod( Mcpwp_Activity_Log_Page::class, 'redact_sensitive' );
+		$admin->setAccessible( true );
+		$shown = $admin->invoke( ( new ReflectionClass( Mcpwp_Activity_Log_Page::class ) )->newInstanceWithoutConstructor(), array( 'customer_pin' => '4242', 'label' => 'x' ) );
+		$this->assertSame( '[redacted]', $shown['customer_pin'] );
+		$this->assertSame( 'x', $shown['label'] );
+	}
 }
