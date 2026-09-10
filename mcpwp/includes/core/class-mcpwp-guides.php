@@ -821,11 +821,56 @@ class Mcpwp_Guides {
 	}
 
 	/**
+	 * Number lines "1. …" to "n. …", one per line.
+	 *
+	 * @param string[] $lines Lines, in order.
+	 * @return string
+	 */
+	private static function numbered_lines( array $lines ) {
+		$numbered = array();
+
+		foreach ( array_values( $lines ) as $index => $line ) {
+			$numbered[] = ( $index + 1 ) . '. ' . $line;
+		}
+
+		return implode( "\n", $numbered );
+	}
+
+	/**
 	 * MCP onboarding guide.
 	 *
 	 * @return array Guide content.
 	 */
 	public static function guide_onboarding() {
+		// Figma tools are Pro (#564): on Free they are neither listed nor
+		// callable, so the guide never names them there (#845). The same
+		// entitlement check the Figma gate uses.
+		$figma = class_exists( 'Mcpwp_Figma' ) && Mcpwp_Figma::is_entitled();
+
+		$startup = array_filter(
+			array(
+				'`wp_introspect()` — discover capabilities, enabled plugins, layout mode, and available tools',
+				'`wp_get_site_context()` — read the site\'s operating brief, design system, and content rules',
+				'`wp_get_guide(topic="workflows")` — inspect the available structured workflows',
+				$figma ? 'If Figma is configured, call `wp_figma_status()` and then pull the approved file/frame with `wp_get_figma_file()` or `wp_get_figma_node()`' : '',
+				'If the human supplied a screenshot or design image, store it with `wp_upload_design_reference()` and inspect it with `wp_get_design_reference()`',
+				'If working with Elementor, read `wp_get_guide(topic="elementor")`',
+				'If working with products, read `wp_get_guide(topic="woocommerce")`',
+			)
+		);
+
+		$rules = array_filter(
+			array(
+				'Read the site context before building or editing pages/products.',
+				$figma ? 'If an approved Figma source exists, inspect it before choosing structure.' : '',
+				'If an approved design image exists, store it as a design reference before building.',
+				'Choose the correct archetype before writing structure.',
+				'Reuse existing Elementor parts before creating new ones.',
+				'Save strong new reusable sections back into Elementor parts before finishing.',
+				'Default new content to draft unless explicitly asked to publish.',
+			)
+		);
+
 		return array(
 			'topic'    => 'onboarding',
 			'title'    => 'MCP Onboarding Guide',
@@ -833,13 +878,7 @@ class Mcpwp_Guides {
 				array(
 					'heading' => 'Startup Sequence',
 					'content' => "When a new model connects through MCP, follow this order:\n"
-						. "1. `wp_introspect()` — discover capabilities, enabled plugins, layout mode, and available tools\n"
-						. "2. `wp_get_site_context()` — read the site's operating brief, design system, and content rules\n"
-						. "3. `wp_get_guide(topic=\"workflows\")` — inspect the available structured workflows\n"
-						. "4. If Figma is configured, call `wp_figma_status()` and then pull the approved file/frame with `wp_get_figma_file()` or `wp_get_figma_node()`\n"
-						. "5. If the human supplied a screenshot or design image, store it with `wp_upload_design_reference()` and inspect it with `wp_get_design_reference()`\n"
-						. "6. If working with Elementor, read `wp_get_guide(topic=\"elementor\")`\n"
-						. "7. If working with products, read `wp_get_guide(topic=\"woocommerce\")`\n\n"
+						. self::numbered_lines( $startup ) . "\n\n"
 						. "Do not start building blind. Introspect first, then follow the relevant guide.",
 				),
 				array(
@@ -853,21 +892,16 @@ class Mcpwp_Guides {
 				),
 				array(
 					'heading' => 'Required Rules',
-					'content' => "Always follow these rules:\n"
-						. "1. Read the site context before building or editing pages/products.\n"
-						. "2. If an approved Figma source exists, inspect it before choosing structure.\n"
-						. "3. If an approved design image exists, store it as a design reference before building.\n"
-						. "4. Choose the correct archetype before writing structure.\n"
-						. "5. Reuse existing Elementor parts before creating new ones.\n"
-						. "6. Save strong new reusable sections back into Elementor parts before finishing.\n"
-						. "7. Default new content to draft unless explicitly asked to publish.",
+					'content' => "Always follow these rules:\n" . self::numbered_lines( $rules ),
 				),
 				array(
 					'heading' => 'Useful Tools',
 					'content' => "- `wp_introspect()` — startup capability check\n"
 						. "- `wp_get_site_context()` — site-level brief and rules\n"
-						. "- `wp_figma_status()` — verify whether design context is available from Figma\n"
-						. "- `wp_get_figma_file()` / `wp_get_figma_node()` — inspect approved Figma structure before building\n"
+						. ( $figma
+							? "- `wp_figma_status()` — verify whether design context is available from Figma\n"
+								. "- `wp_get_figma_file()` / `wp_get_figma_node()` — inspect approved Figma structure before building\n"
+							: '' )
 						. "- `wp_upload_design_reference()` / `wp_get_design_reference()` — preserve approved screenshots and design images as reusable site assets\n"
 						. "- `wp_get_guide(topic)` — detailed domain guide\n"
 						. "- `wp_get_workflow(name)` — structured task flow\n"

@@ -424,4 +424,27 @@ final class EncryptionMigrationConcurrencyTest extends TestCase
             'without the UNIQUE index a name can have two rows; the first inserted one must always win'
         );
     }
+
+    // ── #845 review round 2: byte-exact compare-and-swap ─────────────────
+
+    /**
+     * The swap compared option_value with the column's collation, which is
+     * case-insensitive and ignores trailing spaces on WordPress tables. A
+     * concurrent save whose value differed from the re-read only in letter
+     * case matched it, and the migration's copy overwrote the save.
+     */
+    public function test_a_concurrent_change_differing_only_in_case_is_not_overwritten_by_the_migration(): void
+    {
+        $this->seedIntegrations(array('openai' => $this->authSaltBlob('sk-legacy'), 'gemini' => 'v2:gemini-blob-abc'));
+
+        $this->beforeUpdateOf(Mcpwp_Integration_Manager::OPTION_NAME, function (): void {
+            $GLOBALS['mcpwp_test_options'][ Mcpwp_Integration_Manager::OPTION_NAME ]['gemini']['key_encrypted'] = 'v2:GEMINI-BLOB-ABC';
+        });
+
+        Mcpwp_Encryption_Migration::run();
+
+        $data = $this->integrations();
+        $this->assertSame('v2:GEMINI-BLOB-ABC', $data['gemini']['key_encrypted'], 'the concurrent save survived a case-insensitive column compare');
+        $this->assertFalse(get_option(self::FLAG_OPTION), 'the swap missed, so the run is not marked done');
+    }
 }

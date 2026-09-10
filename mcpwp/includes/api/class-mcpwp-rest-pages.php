@@ -445,6 +445,14 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 			$title = sprintf( __( '%s (Copy)', 'mcpwp' ), $page->post_title );
 		}
 
+		// Read the source tree first, in whatever form it is stored (#845). Data
+		// that cannot be a tree is refused before a clone exists, so no
+		// half-made page is left behind and nothing unreadable is duplicated.
+		$source_tree = Mcpwp_Elementor_Stored_Tree::of_post( $page_id );
+		if ( Mcpwp_Elementor_Stored_Tree::is_unusable( $source_tree ) ) {
+			return Mcpwp_Elementor_Stored_Tree::refusal( $source_tree, "The source page's Elementor data" );
+		}
+
 		// Create the clone.
 		$new_page_id = wp_insert_post(
 			array(
@@ -468,8 +476,12 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 			update_post_meta( $new_page_id, '_wp_page_template', $template );
 		}
 
-		// Copy Elementor data.
+		// Copy Elementor data. Text is copied byte for byte; an array-stored
+		// tree is written as JSON text, the form every write stores (#845).
 		$elementor_data = get_post_meta( $page_id, '_elementor_data', true );
+		if ( is_array( $elementor_data ) ) {
+			$elementor_data = empty( $source_tree['elements'] ) ? '' : (string) wp_json_encode( $source_tree['elements'] );
+		}
 		if ( $elementor_data ) {
 			// Cloning copies meta byte for byte, so a source page still holding
 			// the pre-#678 `css_id` produced a new page that never passes

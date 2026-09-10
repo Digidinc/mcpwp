@@ -135,7 +135,8 @@ class Mcpwp_Page_Builder {
 		// Final verification: confirm data is in the database.
 		wp_cache_delete( $page_id, 'post_meta' );
 		$final_stored  = get_post_meta( $page_id, '_elementor_data', true );
-		$final_decoded = json_decode( $final_stored, true );
+		// In whatever form is stored (#845): a stale cache can still hold an array.
+		$final_decoded = Mcpwp_Elementor_Stored_Tree::read( $final_stored )['elements'];
 		$final_count   = is_array( $final_decoded ) ? count( $final_decoded ) : 0;
 		$meta_verified = ( $final_count === count( $elements ) );
 

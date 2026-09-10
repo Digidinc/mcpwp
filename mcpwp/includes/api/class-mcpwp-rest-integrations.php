@@ -343,6 +343,9 @@ class Mcpwp_REST_Integrations extends Mcpwp_REST_API {
 		$result  = $manager->set_provider_key( $provider, $key );
 
 		if ( ! $result ) {
+			if ( 'integration_write_failed' === $manager->get_last_save_error() ) {
+				return $this->integration_write_failed( __( 'The API key could not be saved: the stored integrations changed or could not be read while saving, so nothing was written. Try again.', 'mcpwp' ) );
+			}
 			return $this->error_response( 'store_failed', __( 'Failed to store API key.', 'mcpwp' ) );
 		}
 
@@ -369,15 +372,33 @@ class Mcpwp_REST_Integrations extends Mcpwp_REST_API {
 	public function remove_key( $request ) {
 		$provider = sanitize_key( $request->get_param( 'provider' ) );
 		$manager  = Mcpwp_Integration_Manager::get_instance();
-		$manager->remove_provider_key( $provider );
+		$outcome  = $manager->remove_provider_record( $provider );
+
+		// A lost removal leaves the key stored and in use (#845 review).
+		if ( Mcpwp_Integration_Manager::WRITE_FAILED === $outcome ) {
+			return $this->integration_write_failed( __( 'The API key could not be removed: the stored integrations changed or could not be read while saving. It is still stored. Try again.', 'mcpwp' ) );
+		}
 
 		$this->log_activity( 'integrations_remove_key', $request, array( 'provider' => $provider ) );
 		return $this->success_response(
 			array(
 				'success'  => true,
 				'provider' => $provider,
+				'removed'  => Mcpwp_Integration_Manager::WRITE_STORED === $outcome,
 			)
 		);
+	}
+
+	/**
+	 * The error every provider write returns when the write was lost: the
+	 * stored integrations changed under every attempt, or could not be read.
+	 * Never a success (#845 review).
+	 *
+	 * @param string $message What was not saved or removed.
+	 * @return WP_Error integration_write_failed, 503.
+	 */
+	private function integration_write_failed( $message ) {
+		return $this->error_response( 'integration_write_failed', $message, 503 );
 	}
 
 	/**
@@ -450,6 +471,9 @@ class Mcpwp_REST_Integrations extends Mcpwp_REST_API {
 		}
 
 		if ( ! $result ) {
+			if ( 'integration_write_failed' === $manager->get_last_save_error() ) {
+				return $this->integration_write_failed( 'The configuration could not be saved: the stored integrations changed or could not be read while saving, so nothing was written. Try again.' );
+			}
 			return $this->error_response( 'configure_failed', 'Failed to save configuration.' );
 		}
 
@@ -502,12 +526,23 @@ class Mcpwp_REST_Integrations extends Mcpwp_REST_API {
 			);
 		}
 
-		$manager->remove_provider_key( $provider );
+		$outcome = $manager->remove_provider_record( $provider );
+		$name    = Mcpwp_Integration_Manager::PROVIDERS[ $provider ]['name'];
+
+		// A lost removal leaves the key stored and in use (#845 review).
+		if ( Mcpwp_Integration_Manager::WRITE_FAILED === $outcome ) {
+			return $this->integration_write_failed( sprintf( '%s configuration could not be removed: the stored integrations changed or could not be read while saving. It is still stored. Try again.', $name ) );
+		}
+
+		$removed = Mcpwp_Integration_Manager::WRITE_STORED === $outcome;
 		$this->log_activity( 'integrations_remove_mcp', $request, array( 'provider' => $provider ) );
 		return $this->success_response( array(
 			'success'  => true,
 			'provider' => $provider,
-			'message'  => sprintf( '%s configuration removed.', Mcpwp_Integration_Manager::PROVIDERS[ $provider ]['name'] ),
+			'removed'  => $removed,
+			'message'  => $removed
+				? sprintf( '%s configuration removed.', $name )
+				: sprintf( '%s was not configured; nothing to remove.', $name ),
 		) );
 	}
 

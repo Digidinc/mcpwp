@@ -463,11 +463,24 @@ class Mcpwp_Action_Log {
 				// while the rollback reported success (#737).
 				$snap_data = isset( $snap['elementor_data'] ) ? $snap['elementor_data'] : '';
 
+				// A snapshot of an array-stored tree is restored as JSON text,
+				// the form every write stores (#845). Anything that is not a
+				// tree is restored exactly as it was: that is what the page held.
+				if ( is_array( $snap_data ) && class_exists( 'Mcpwp_Elementor_Stored_Tree' ) ) {
+					$snap_tree = Mcpwp_Elementor_Stored_Tree::read( $snap_data );
+					if ( is_array( $snap_tree['elements'] ) ) {
+						$snap_data = (string) wp_json_encode( $snap_tree['elements'] );
+					}
+				}
+
 				if ( class_exists( 'Mcpwp_Elementor_Element_Keys' ) ) {
 					$snap_data = Mcpwp_Elementor_Element_Keys::normalize_json( $snap_data );
 				}
 
-				update_post_meta( (int) $snap['post_id'], '_elementor_data', $snap_data );
+				// Slashed: update_post_meta() unslashes what it stores, and
+				// Elementor JSON escapes every quote inside a setting. Restored
+				// unslashed, the page could not be decoded (#845).
+				update_post_meta( (int) $snap['post_id'], '_elementor_data', wp_slash( $snap_data ) );
 				delete_post_meta( (int) $snap['post_id'], '_elementor_css' );
 				return true;
 

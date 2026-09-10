@@ -104,6 +104,14 @@ class Mcpwp_Integrations_Admin {
 
 		if ( $result ) {
 			wp_send_json_success( array( 'message' => __( 'Configuration saved.', 'mcpwp' ) ) );
+		} elseif ( 'integration_write_failed' === $manager->get_last_save_error() ) {
+			// The store was the problem, not the input (#845 review).
+			wp_send_json_error(
+				array(
+					'message' => __( 'The configuration could not be saved: the stored integrations changed or could not be read while saving, so nothing was written. Try again.', 'mcpwp' ),
+					'code'    => 'integration_write_failed',
+				)
+			);
 		} else {
 			wp_send_json_error( array( 'message' => __( 'Failed to save configuration.', 'mcpwp' ) ) );
 		}
@@ -125,9 +133,25 @@ class Mcpwp_Integrations_Admin {
 		}
 
 		$manager = Mcpwp_Integration_Manager::get_instance();
-		$manager->remove_provider_key( $provider );
+		$outcome = $manager->remove_provider_record( $provider );
 
-		wp_send_json_success( array( 'message' => __( 'API key removed.', 'mcpwp' ) ) );
+		// A lost removal leaves the key stored and in use (#845 review).
+		if ( Mcpwp_Integration_Manager::WRITE_FAILED === $outcome ) {
+			wp_send_json_error(
+				array(
+					'message' => __( 'The API key could not be removed: the stored integrations changed or could not be read while saving. It is still stored. Try again.', 'mcpwp' ),
+					'code'    => 'integration_write_failed',
+				)
+			);
+		}
+
+		$removed = Mcpwp_Integration_Manager::WRITE_STORED === $outcome;
+		wp_send_json_success(
+			array(
+				'message' => $removed ? __( 'API key removed.', 'mcpwp' ) : __( 'No key was stored for this provider; nothing to remove.', 'mcpwp' ),
+				'removed' => $removed,
+			)
+		);
 	}
 
 	/**
@@ -147,6 +171,12 @@ class Mcpwp_Integrations_Admin {
 
 		$manager = Mcpwp_Integration_Manager::get_instance();
 		$result  = $manager->test_provider( $provider );
+
+		// The notice shows the message: a status that could not be recorded
+		// is said there too (#845 review).
+		if ( ! empty( $result['status_error']['message'] ) ) {
+			$result['message'] = trim( ( isset( $result['message'] ) ? $result['message'] : '' ) . ' ' . $result['status_error']['message'] );
+		}
 
 		if ( $result['success'] ) {
 			wp_send_json_success( $result );
