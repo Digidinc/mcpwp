@@ -278,7 +278,7 @@ final class Mcpwp_Spend_Budget {
 			'status'    => self::HTTP_STATUS,
 			'remaining' => (int) $remaining,
 			'limit'     => (int) $limit,
-			'hint'      => 'This operation did not run, and neither will any later operation in this request. The budget belongs to one HTTP request, so waiting does not help: send the refused operations in a new request. AI generation, text-to-speech, image description and URL imports cost 25 units each (per URL in /media/bulk); a bulk route costs the items it processes; everything else costs 1.',
+			'hint'      => 'This operation did not run, and neither will any later operation in this request. The budget belongs to one HTTP request, so waiting does not help: send the refused operations in a new request. An operation that spends a site credential or fetches a caller-chosen URL costs 25 units (AI generation, stock photos, screenshots, URL imports — per URL in /media/bulk — Cloudflare, Figma, SEO data providers, webhook tests); a bulk route costs the items it processes; everything else costs 1.',
 		);
 
 		if ( null !== $weight ) {

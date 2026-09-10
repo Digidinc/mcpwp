@@ -343,8 +343,12 @@ Default: **1000 units** per request. Prices:
 | Bulk route (`/posts/bulk`, `/pages/bulk`, `/seo/bulk`, `/elementor/bulk`, any route given a list) | the number of items it processes |
 | `wp_bulk_find_replace` (`POST /elementor/find-replace`), `wp_delete_all_drafts` (`DELETE /drafts/delete-all`) | 10, or the `ids` list length if longer |
 | `/integrations/generate-image`, `/integrations/generate-featured-image`, `/integrations/text-to-speech`, `/integrations/describe-image`, `/integrations/generate-alt-text`, `/integrations/generate-excerpt`, `/media/from-url` | 25 per call |
+| `/screenshot`; `/integrations/stock-photos` and `/integrations/stock-photos/download` (Pexels); `/integrations/test`, `/integrations/providers/{provider}/test`; every `/cloudflare/*`, `/figma/*`, `/google-indexing/*` and `/staging*` route; `/keyword-research`, `/seo/visibility/refresh`, `/seo/opportunities` (DataForSEO); `/seo/audit` (Cloudflare analytics); `/webhooks/{id}/test`; `/feedback/relay` | 25 per call |
+| Writes to `/feedback` (GitHub), `/favicon` (from a URL), `/update` (package download), `/design-references` and `/design-references/{id}` (image import from a URL). Their GET is a local read and costs 1 | 25 per call |
 | `/media/bulk` | 25 per URL |
 | The `/batch` or `/mcp` container itself (its operations are priced one by one) | 0 |
+
+The 25-unit rows are every route that makes an outbound request with a site credential or to a caller-chosen URL. `/fetch` is not one (it resolves a URL to a local post), nor are the same-host loopbacks to the site's own permalinks (`/rendered-html`, `/rendered-copy`, `/seo/readiness/{id}`, `/seo/structured-data/{id}`, `/elementor/{id}/preview`, `/custom-css`): they cost 1.
 
 Routes are priced however they are spelled (case, repeated or trailing slashes, a query string). With the defaults, one request can run 1000 ordinary operations, or 40 image generations.
 

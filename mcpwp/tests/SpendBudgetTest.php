@@ -218,6 +218,88 @@ final class SpendBudgetTest extends TestCase {
 		}
 	}
 
+	public function credential_or_caller_url_route_provider(): array {
+		return array(
+			'screenshot (worker token, caller URL)'   => array( 'POST', '/screenshot', array( 'url' => 'https://example.com/' ) ),
+			'stock photo search (Pexels quota)'       => array( 'GET', '/integrations/stock-photos', array( 'query' => 'sea' ) ),
+			'stock photo download (Pexels + fetch)'   => array( 'POST', '/integrations/stock-photos/download', array( 'photo_id' => 1 ) ),
+			'integration test (stored credentials)'   => array( 'POST', '/integrations/test', array( 'provider' => 'openai' ) ),
+			'provider test'                           => array( 'POST', '/integrations/providers/openai/test', array() ),
+			'cloudflare status'                       => array( 'GET', '/cloudflare/status', array() ),
+			'cloudflare purge'                        => array( 'POST', '/cloudflare/purge-cache', array() ),
+			'cloudflare fix access'                   => array( 'POST', '/cloudflare/fix-mcp-access', array() ),
+			'cloudflare speed read'                   => array( 'GET', '/cloudflare/speed-settings', array() ),
+			'cloudflare speed write'                  => array( 'POST', '/cloudflare/speed-settings', array() ),
+			'figma status (may refresh OAuth)'        => array( 'GET', '/figma/status', array() ),
+			'figma file'                              => array( 'GET', '/figma/file', array() ),
+			'figma node'                              => array( 'GET', '/figma/node', array() ),
+			'figma tokens'                            => array( 'GET', '/figma/design-tokens', array() ),
+			'figma sync'                              => array( 'POST', '/figma/design-tokens/sync', array() ),
+			'google indexing submit'                  => array( 'POST', '/google-indexing/submit', array() ),
+			'google indexing status'                  => array( 'GET', '/google-indexing/status', array() ),
+			'staging environments'                    => array( 'GET', '/staging', array() ),
+			'staging push'                            => array( 'POST', '/staging/push', array() ),
+			'staging status'                          => array( 'GET', '/staging/status/abc', array() ),
+			'keyword research (Suggest + DataForSEO)' => array( 'GET', '/keyword-research', array( 'query' => 'x' ) ),
+			'visibility refresh (DataForSEO)'         => array( 'POST', '/seo/visibility/refresh', array() ),
+			'opportunities seed lookup (DataForSEO)'  => array( 'GET', '/seo/opportunities', array( 'seed' => 'x' ) ),
+			'site audit (Cloudflare when configured)' => array( 'GET', '/seo/audit', array() ),
+			'webhook test (caller-chosen URL)'        => array( 'POST', '/webhooks/5/test', array() ),
+			'feedback (GitHub token)'                 => array( 'POST', '/feedback', array( 'title' => 't' ) ),
+			'feedback relay (GitHub token)'           => array( 'POST', '/feedback/relay', array() ),
+			'favicon from URL'                        => array( 'POST', '/favicon', array( 'url' => 'https://example.com/i.png' ) ),
+			'favicon from URL, PUT'                   => array( 'PUT', '/favicon', array( 'url' => 'https://example.com/i.png' ) ),
+			'update from package URL'                 => array( 'POST', '/update', array( 'package_url' => 'https://example.com/p.zip' ) ),
+			'design reference from image URL'         => array( 'POST', '/design-references', array( 'image_url' => 'https://example.com/i.png' ) ),
+			'design reference update from image URL'  => array( 'PUT', '/design-references/ref_1', array( 'image_url' => 'https://example.com/i.png' ) ),
+			'spelled differently'                     => array( 'POST', '/Webhooks//5/Test/', array() ),
+			'spelled differently, prefix'             => array( 'POST', '/CLOUDFLARE/purge-cache?x=1', array() ),
+		);
+	}
+
+	/**
+	 * Every route that makes an outbound request with a site credential or to a
+	 * caller-chosen URL costs 25, like the AI and URL-import routes.
+	 *
+	 * @dataProvider credential_or_caller_url_route_provider
+	 */
+	public function test_every_route_that_spends_a_credential_or_fetches_a_caller_url_costs_twenty_five( string $method, string $path, array $body ): void {
+		$this->assertSame( 25, $this->spent( array( $this->op( $method, $path, $body ) ) ), $method . ' ' . $path );
+	}
+
+	public function test_a_matched_route_pattern_is_priced_like_the_route_it_matched(): void {
+		// Core hands rest_dispatch_request the registered pattern, not the path.
+		foreach ( array( '/mcpwp/v1/webhooks/(?P<id>\\d+)/test', '/mcpwp/v1/integrations/providers/(?P<provider>[a-z]+)/test', '/mcpwp/v1/staging/status/(?P<id>[a-zA-Z0-9_\\-]+)', '/mcpwp/v1/design-references/(?P<id>[A-Za-z0-9_-]+)' ) as $pattern ) {
+			$this->assertSame( 25, Mcpwp_Operation_Weights::spend_weight( 'POST', $pattern, array() ), $pattern );
+		}
+		$this->assertSame( 25, Mcpwp_Operation_Weights::spend_weight( 'HEAD', '/integrations/stock-photos', array() ), 'HEAD runs the GET handler.' );
+		$this->assertSame( 25, Mcpwp_Operation_Weights::spend_weight( '', '/favicon', array() ), 'A method that cannot be read is priced as the write.' );
+	}
+
+	public function test_local_reads_and_same_host_loopbacks_stay_ordinary(): void {
+		$local = array(
+			// /fetch resolves a URL to a local post (url_to_postid / get_page_by_path); it makes no request.
+			array( 'GET', '/fetch', array( 'url' => 'https://example.com/elsewhere' ) ),
+			// Same path, local read handler.
+			array( 'GET', '/favicon', array() ),
+			array( 'GET', '/feedback', array() ),
+			array( 'GET', '/design-references', array() ),
+			array( 'GET', '/design-references/ref_1', array() ),
+			array( 'GET', '/webhooks/5/logs', array() ),
+			array( 'GET', '/seo/visibility', array() ),
+			array( 'POST', '/integrations/configure', array() ),
+			// Loopbacks to this site's own permalinks behind a same-host guard.
+			array( 'GET', '/rendered-html', array( 'id' => 5 ) ),
+			array( 'GET', '/rendered-copy', array( 'id' => 5 ) ),
+			array( 'GET', '/seo/readiness/5', array() ),
+			array( 'GET', '/seo/structured-data/5', array() ),
+			array( 'GET', '/elementor/5/preview', array() ),
+		);
+		foreach ( $local as $case ) {
+			$this->assertSame( 1, $this->spent( array( $this->op( $case[0], $case[1], $case[2] ) ) ), $case[0] . ' ' . $case[1] );
+		}
+	}
+
 	public function test_an_ordinary_operation_costs_one(): void {
 		$operations = array();
 		for ( $i = 1; $i <= 100; $i++ ) {

@@ -71,6 +71,56 @@ final class Mcpwp_Operation_Weights {
 	);
 
 	/**
+	 * Every other route that makes an outbound request with a site credential
+	 * or to a caller-chosen URL, by pattern against the normalised route, with
+	 * the methods that do: 'any', or 'write' where the same path's GET is a
+	 * local read (anything but GET, HEAD and OPTIONS — an unreadable method is
+	 * priced as the write).
+	 *
+	 * Patterns match both a request path ("/webhooks/5/test") and the route
+	 * pattern core matched ("/webhooks/(?p<id>\d+)/test"). Not listed, because
+	 * they spend no credential and cannot be pointed elsewhere: /fetch (resolves
+	 * a URL to a local post), and the same-host loopbacks to this site's own
+	 * permalinks (/rendered-html, /rendered-copy, /seo/readiness,
+	 * /seo/structured-data, /elementor/{id}/preview, /custom-css).
+	 *
+	 * @var array<string,string>
+	 */
+	const SPEND_EGRESS_PATTERNS = array(
+		// Cloudflare screenshot worker token; the URL is the caller's.
+		'#^/screenshot$#'                            => 'any',
+		// Pexels key: search spends quota, download also fetches the image.
+		'#^/integrations/stock-photos(/download)?$#' => 'any',
+		// Probes stored provider credentials.
+		'#^/integrations/test$#'                     => 'any',
+		'#^/integrations/providers/[^/]+/test$#'     => 'any',
+		// Cloudflare API token.
+		'#^/cloudflare(/|$)#'                        => 'any',
+		// Figma token; status may refresh an OAuth token.
+		'#^/figma(/|$)#'                             => 'any',
+		// Google service account.
+		'#^/google-indexing(/|$)#'                   => 'any',
+		// Hosting provider API credentials.
+		'#^/staging(/|$)#'                           => 'any',
+		// Google Suggest, plus DataForSEO enrichment.
+		'#^/keyword-research$#'                      => 'any',
+		// DataForSEO.
+		'#^/seo/visibility/refresh$#'                => 'any',
+		'#^/seo/opportunities$#'                     => 'any',
+		// Cloudflare analytics when a Cloudflare token is configured.
+		'#^/seo/audit$#'                             => 'any',
+		// Delivers to the webhook's URL, which the caller chose.
+		'#^/webhooks/[^/]+/test$#'                   => 'any',
+		// GitHub token (issue relay).
+		'#^/feedback/relay$#'                        => 'any',
+		'#^/feedback$#'                              => 'write',
+		// Downloads from a caller-supplied URL.
+		'#^/favicon$#'                               => 'write',
+		'#^/update$#'                                => 'write',
+		'#^/design-references(/[^/]+)?$#'            => 'write',
+	);
+
+	/**
 	 * Routes that fetch one URL per item, and the arguments the items arrive
 	 * in. The larger list is the price, whichever one the handler reads.
 	 *
@@ -201,7 +251,8 @@ final class Mcpwp_Operation_Weights {
 	 * Spend units one dispatched operation costs (#752 F9).
 	 *
 	 * - a container (/batch, /mcp): 0 — its operations are charged one by one;
-	 * - a credential-spending or egress route: 25;
+	 * - a credential-spending or egress route: 25 (SPEND_EGRESS_ROUTES and
+	 *   SPEND_EGRESS_PATTERNS);
 	 * - /media/bulk: 25 per URL item;
 	 * - /elementor/bulk: one per id it reads;
 	 * - a route a TOOL_WEIGHTS tool dispatches: that tool's weight;
@@ -218,7 +269,8 @@ final class Mcpwp_Operation_Weights {
 	public static function spend_weight( $method, $route, $params ) {
 		$path    = self::normalize_route( $route );
 		$params  = is_array( $params ) ? $params : array();
-		$default = self::default_spend_weight( $path, $params );
+		$method  = is_string( $method ) ? strtoupper( trim( $method ) ) : '';
+		$default = self::default_spend_weight( $path, $method, $params );
 
 		if ( ! function_exists( 'apply_filters' ) ) {
 			return $default;
@@ -237,7 +289,7 @@ final class Mcpwp_Operation_Weights {
 		 * @param string $method Upper-case HTTP method.
 		 * @param array  $params Request parameters.
 		 */
-		$filtered = apply_filters( 'mcpwp_spend_weight', $default, $path, is_string( $method ) ? strtoupper( $method ) : '', $params );
+		$filtered = apply_filters( 'mcpwp_spend_weight', $default, $path, $method, $params );
 
 		return self::read_amount( $filtered, $default, 0 );
 	}
@@ -246,16 +298,24 @@ final class Mcpwp_Operation_Weights {
 	 * The unfiltered price of a normalised route.
 	 *
 	 * @param string $path   Normalised route.
+	 * @param string $method Upper-case HTTP method ('' when unreadable).
 	 * @param array  $params Request parameters.
 	 * @return int
 	 */
-	private static function default_spend_weight( $path, array $params ) {
+	private static function default_spend_weight( $path, $method, array $params ) {
 		if ( in_array( $path, self::SPEND_CONTAINER_ROUTES, true ) ) {
 			return 0;
 		}
 
 		if ( in_array( $path, self::SPEND_EGRESS_ROUTES, true ) ) {
 			return self::SPEND_EGRESS_WEIGHT;
+		}
+
+		$is_read = in_array( $method, array( 'GET', 'HEAD', 'OPTIONS' ), true );
+		foreach ( self::SPEND_EGRESS_PATTERNS as $pattern => $methods ) {
+			if ( 1 === preg_match( $pattern, $path ) && ( 'any' === $methods || ! $is_read ) ) {
+				return self::SPEND_EGRESS_WEIGHT;
+			}
 		}
 
 		if ( array_key_exists( $path, self::SPEND_URL_ITEM_ROUTES ) ) {
@@ -326,7 +386,15 @@ final class Mcpwp_Operation_Weights {
 		}
 
 		$route = strtolower( trim( $route ) );
-		$route = substr( $route, 0, strcspn( $route, '?#' ) );
+		// Cut a query string or fragment — but not the "(?" of a named group:
+		// core hands rest_dispatch_request the registered route pattern, e.g.
+		// "/webhooks/(?P<id>\d+)/test", and cutting there would price it as "/webhooks/(".
+		$route = preg_replace( '/(?<!\()[?#].*$/s', '', $route );
+
+		if ( ! is_string( $route ) ) {
+			return '';
+		}
+
 		$route = preg_replace( '#/+#', '/', $route );
 
 		if ( ! is_string( $route ) ) {
