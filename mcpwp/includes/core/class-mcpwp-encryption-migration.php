@@ -344,6 +344,7 @@ class Mcpwp_Encryption_Migration {
 				Mcpwp_Encryption::REASON_KEY_CORRUPT,
 				Mcpwp_Encryption::REASON_KEY_WRITE_FAILED,
 				Mcpwp_Encryption::REASON_SODIUM_UNAVAILABLE,
+				Mcpwp_Encryption::REASON_PINNED_KEY_WEAK,
 			),
 			true
 		);

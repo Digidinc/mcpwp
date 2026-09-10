@@ -100,7 +100,7 @@ final class EncryptionPinnedKeyTest extends TestCase
         $blob = Mcpwp_Encryption::get_instance()->encrypt('under-the-option-key');
         $this->assertNotFalse($blob);
 
-        define('MCPWP_ENCRYPTION_KEY', str_repeat('k', SODIUM_CRYPTO_SECRETBOX_KEYBYTES));
+        define('MCPWP_ENCRYPTION_KEY', substr(hash('sha256', 'a pinned 32-byte test key'), 0, SODIUM_CRYPTO_SECRETBOX_KEYBYTES));
         $enc = $this->restartEncryption();
 
         // The fallback key cannot be read: that is "unavailable", not "wrong key".

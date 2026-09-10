@@ -18,6 +18,10 @@
  *     re-read and whatever is stored is used, so concurrent first writers
  *     converge on one key.
  *   - decrypt() never creates a key.
+ *   - A pinned MCPWP_ENCRYPTION_KEY that is empty, blank, shorter than
+ *     PINNED_KEY_MIN_BYTES once trimmed, or one repeated byte would derive a
+ *     key anyone can compute. It fails closed (REASON_PINNED_KEY_WEAK) for
+ *     encrypt and decrypt alike, with no fallback to the option key.
  *
  * BLOB FORMATS
  *   - v2 (written since 3.11.1): "v2:" . base64( version(1) || key id(4) ||
@@ -84,6 +88,12 @@ class Mcpwp_Encryption {
 	const REASON_TAMPERED            = 'tampered';
 	const REASON_UNDECRYPTABLE       = 'undecryptable';
 	const REASON_ENCRYPT_FAILED      = 'encrypt_failed';
+	const REASON_PINNED_KEY_WEAK     = 'pinned_key_weak';
+
+	/**
+	 * Shortest pinned constant accepted, in bytes after trimming whitespace.
+	 */
+	const PINNED_KEY_MIN_BYTES = 16;
 
 	/**
 	 * Warning (get_last_warnings()): the value decrypted, but only with the
@@ -247,6 +257,11 @@ class Mcpwp_Encryption {
 
 		$primary = $this->resolve_primary_key( false );
 		$pinned  = self::pinned_key_defined();
+
+		// A weak pin is a misconfiguration to fix, never a reason to try another key.
+		if ( self::REASON_PINNED_KEY_WEAK === $primary['reason'] ) {
+			return $this->fail( self::REASON_PINNED_KEY_WEAK );
+		}
 
 		if ( 'v2' === $blob['format'] ) {
 			if ( '' === $primary['reason'] && hash_equals( self::fingerprint( $primary['key'] ), $blob['fingerprint'] ) ) {
@@ -520,6 +535,16 @@ class Mcpwp_Encryption {
 			}
 		}
 
+		// A weak pin is judged from the constant itself, so the notice shows
+		// even with no recorded alert, and clears once the constant is fixed
+		// or removed.
+		if ( self::pinned_key_defined() && null === self::pinned_key() ) {
+			$live = self::REASON_PINNED_KEY_WEAK;
+		} elseif ( isset( $alerts[ self::REASON_PINNED_KEY_WEAK ] ) ) {
+			unset( $alerts[ self::REASON_PINNED_KEY_WEAK ] );
+			$changed = true;
+		}
+
 		// Key-state alerts follow the row itself: a repaired key clears them,
 		// and a corrupt one shows even when recording the alert failed.
 		if ( ! self::pinned_key_defined() ) {
@@ -604,6 +629,7 @@ class Mcpwp_Encryption {
 			self::REASON_TAMPERED,
 			self::REASON_UNDECRYPTABLE,
 			self::REASON_UNSUPPORTED_VERSION,
+			self::REASON_PINNED_KEY_WEAK,
 		);
 
 		if ( in_array( $reason, $alertable, true ) ) {
@@ -691,6 +717,8 @@ class Mcpwp_Encryption {
 				return __( 'Some stored secrets failed their integrity check and were not used; they may have been altered in the database. Re-enter the affected provider keys and connections.', 'mcpwp' );
 			case self::REASON_UNSUPPORTED_VERSION:
 				return __( 'Some stored secrets use an encryption format newer than this version of MCPWP, which usually means the plugin was downgraded. Update MCPWP, or re-enter the affected provider keys and connections.', 'mcpwp' );
+			case self::REASON_PINNED_KEY_WEAK:
+				return __( 'MCPWP_ENCRYPTION_KEY is defined in wp-config.php but is empty or too weak (fewer than 16 bytes once whitespace is trimmed, or a single repeated character), so a key derived from it could be guessed. MCPWP will not encrypt or decrypt anything until it is fixed. Replace it with a long random value, or remove the constant to use the stored option key. Secrets saved under an earlier weak value must be re-entered.', 'mcpwp' );
 			case self::WARNING_PINNED_KEY_DIFFERS:
 				return __( 'MCPWP_ENCRYPTION_KEY is defined in wp-config.php, but some secrets are still encrypted with the stored option key (mcpwp_encryption_key). They still decrypt. Re-save those provider keys and connections to move them to the pinned key, and do not delete the mcpwp_encryption_key option before then.', 'mcpwp' );
 		}
@@ -709,8 +737,11 @@ class Mcpwp_Encryption {
 			return self::resolved( $this->key );
 		}
 
-		$pinned = self::pinned_key();
-		if ( null !== $pinned ) {
+		if ( self::pinned_key_defined() ) {
+			$pinned = self::pinned_key();
+			if ( null === $pinned ) {
+				return self::unresolved( self::REASON_PINNED_KEY_WEAK );
+			}
 			$this->key = $pinned;
 			return self::resolved( $pinned );
 		}
@@ -782,10 +813,11 @@ class Mcpwp_Encryption {
 	}
 
 	/**
-	 * The pinned key, or null when none is defined.
+	 * The pinned key, or null when none is defined or the constant is weak.
 	 *
 	 * The constant may be exactly 32 raw bytes, or any passphrase, which is
-	 * hashed to the key length (unchanged from 3.2.4).
+	 * hashed to the key length (unchanged from 3.2.4). A weak constant yields
+	 * no key at all: hashing it would give a key anyone can recompute.
 	 *
 	 * @return string|null
 	 */
@@ -794,12 +826,34 @@ class Mcpwp_Encryption {
 			return null;
 		}
 
-		$raw = (string) MCPWP_ENCRYPTION_KEY;
+		$raw = is_scalar( MCPWP_ENCRYPTION_KEY ) ? (string) MCPWP_ENCRYPTION_KEY : '';
+		if ( self::pinned_key_is_weak( $raw ) ) {
+			return null;
+		}
+
 		if ( SODIUM_CRYPTO_SECRETBOX_KEYBYTES !== strlen( $raw ) ) {
 			$raw = sodium_crypto_generichash( $raw, '', SODIUM_CRYPTO_SECRETBOX_KEYBYTES );
 		}
 
 		return $raw;
+	}
+
+	/**
+	 * Whether a pinned constant is too weak to derive a key from.
+	 *
+	 * Empty, whitespace (trim() also strips NUL), fewer than
+	 * PINNED_KEY_MIN_BYTES once trimmed, or a single repeated byte. This is a
+	 * floor against obviously guessable values, not an entropy estimate.
+	 *
+	 * @param string $raw Constant value.
+	 * @return bool
+	 */
+	private static function pinned_key_is_weak( $raw ) {
+		if ( strlen( trim( $raw ) ) < self::PINNED_KEY_MIN_BYTES ) {
+			return true;
+		}
+
+		return 1 === strlen( count_chars( $raw, 3 ) );
 	}
 
 	/**
