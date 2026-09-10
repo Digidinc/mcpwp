@@ -26,14 +26,15 @@ if ( ! class_exists( 'Mcpwp_Test_WC_Product_Without_Facts' ) ) {
 		/** @var array */
 		public $o;
 		public function __construct( array $o = array() ) {
-			$this->o = $o + array( 'id' => 336313, 'type' => 'simple' );
+			$this->o = $o + array( 'id' => 336313, 'type' => 'simple', 'status' => 'publish', 'parent_id' => 0 );
 		}
 		public function get_id() { return $this->o['id']; }
 		public function get_name() { return 'STEAM Hub course'; }
 		public function get_slug() { return 'steam-hub-course'; }
 		public function get_type() { return $this->o['type']; }
 		public function is_type( $t ) { return $t === $this->o['type']; }
-		public function get_status() { return 'publish'; }
+		public function get_status() { return $this->o['status']; }
+		public function get_parent_id() { return $this->o['parent_id']; }
 		public function get_sku() { return 'STEAM-1'; }
 		public function get_price() { return '49'; }
 		public function get_regular_price() { return '49'; }
@@ -83,6 +84,7 @@ final class WooCommerceProductFormatTest extends TestCase {
 	protected function setUp(): void {
 		$GLOBALS['mcpwp_test_options']       = array();
 		$GLOBALS['_mcpwp_test_object_terms'] = array();
+		$GLOBALS['_mcpwp_test_posts']        = array();
 	}
 
 	private function format( $product, $detailed = true ): array {
@@ -129,7 +131,8 @@ final class WooCommerceProductFormatTest extends TestCase {
 		$this->assertSame( 'visible', $out['catalog_visibility'], 'One failure does not blank the other fact.' );
 		$this->assertArrayHasKey( 'purchasable', $out['unknown_reasons'] );
 		$this->assertStringContainsString( 'is_purchasable', $out['unknown_reasons']['purchasable'] );
-		$this->assertStringContainsString( 'add-on plugin exploded', $out['unknown_reasons']['purchasable'] );
+		$this->assertStringContainsString( 'RuntimeException', $out['unknown_reasons']['purchasable'] );
+		$this->assertStringNotContainsString( 'add-on plugin exploded', $out['unknown_reasons']['purchasable'], 'A third-party exception message is not echoed to the API caller.' );
 		$this->assertArrayNotHasKey( 'catalog_visibility', $out['unknown_reasons'] );
 	}
 
@@ -172,8 +175,53 @@ final class WooCommerceProductFormatTest extends TestCase {
 						$this->assertArrayNotHasKey( $field, $reasons, "$field: a real value carries no reason." );
 					}
 				}
-				$this->assertIsBool( $out['purchasable'] ?? false );
+				if ( null !== $out['purchasable'] ) {
+					$this->assertIsBool( $out['purchasable'] );
+				}
 			}
 		}
+	}
+
+	public function test_an_exception_message_with_paths_or_keys_is_not_echoed(): void {
+		$out = $this->format(
+			new Mcpwp_Test_WC_Product_With_Facts(
+				array(
+					'purchasable'        => new RuntimeException( 'SQLSTATE[42S02] in /var/www/html/wp-content/plugins/x/y.php, see https://api.example.com/v1?key=abcdef1234567890' ),
+					'catalog_visibility' => 'visible',
+				)
+			)
+		);
+
+		$reason = $out['unknown_reasons']['purchasable'];
+		$this->assertStringNotContainsString( '/var/www', $reason );
+		$this->assertStringNotContainsString( 'abcdef1234567890', $reason );
+		$this->assertStringNotContainsString( 'SQLSTATE', $reason );
+		$this->assertLessThanOrEqual( 200, strlen( $reason ) );
+	}
+
+	public function test_a_product_customers_cannot_see_is_not_purchasable_whoever_asks(): void {
+		// WooCommerce answers is_purchasable() true for a draft when the
+		// current user can edit it — the admin chat, an approval replay.
+		// The response promises what a customer can buy.
+		foreach ( array( 'draft', 'pending', 'private', 'future' ) as $status ) {
+			$out = $this->format( new Mcpwp_Test_WC_Product_With_Facts( array( 'purchasable' => true, 'catalog_visibility' => 'visible', 'status' => $status ) ) );
+			$this->assertFalse( $out['purchasable'], "$status: not purchasable by a customer." );
+			$this->assertArrayNotHasKey( 'unknown_reasons', $out, "$status: a known no, not an unknown." );
+		}
+
+		$out = $this->format( new Mcpwp_Test_WC_Product_With_Facts( array( 'purchasable' => true, 'catalog_visibility' => 'visible', 'status' => 'publish' ) ) );
+		$this->assertTrue( $out['purchasable'] );
+	}
+
+	public function test_a_variation_is_purchasable_only_under_a_published_parent(): void {
+		$GLOBALS['_mcpwp_test_posts'][50] = (object) array( 'ID' => 50, 'post_type' => 'product', 'post_status' => 'draft' );
+		$variation = array( 'purchasable' => true, 'catalog_visibility' => 'visible', 'type' => 'variation', 'parent_id' => 50, 'id' => 51 );
+
+		$this->assertFalse( $this->format( new Mcpwp_Test_WC_Product_With_Facts( $variation ) )['purchasable'], 'Draft parent.' );
+
+		$GLOBALS['_mcpwp_test_posts'][50]->post_status = 'publish';
+		$this->assertTrue( $this->format( new Mcpwp_Test_WC_Product_With_Facts( $variation ) )['purchasable'], 'Published parent, enabled variation.' );
+
+		$this->assertFalse( $this->format( new Mcpwp_Test_WC_Product_With_Facts( array( 'status' => 'private' ) + $variation ) )['purchasable'], 'A disabled variation is private.' );
 	}
 }

@@ -637,8 +637,7 @@ class Mcpwp_WooCommerce {
 			'date_modified'     => $product->get_date_modified() ? $product->get_date_modified()->format( 'c' ) : null,
 		);
 
-		// Whether WooCommerce would sell it, and where the catalog shows it
-		// (#843). A fact that cannot be computed is null, and unknown_reasons
+		// Whether a customer can buy it, and where the catalog shows it (#843). A fact that cannot be computed is null, and unknown_reasons
 		// names the field and why — so it is told apart from a real false, and
 		// a client that tests the field for truthiness fails safe instead of
 		// building a buy link for a product nobody verified.
@@ -695,8 +694,13 @@ class Mcpwp_WooCommerce {
 
 		try {
 			$value = $product->$method();
+			if ( 'is_purchasable' === $method && $value ) {
+				$value = $this->published_for_customers( $product );
+			}
 		} catch ( Throwable $e ) {
-			$unknown[ $field ] = sprintf( 'WC_Product::%s() threw %s: %s', $method, get_class( $e ), $e->getMessage() );
+			// The class only: a message from a third-party filter can carry
+			// file paths, SQL or a keyed URL, and this goes to the API caller.
+			$unknown[ $field ] = sprintf( 'WC_Product::%s() threw %s.', $method, get_class( $e ) );
 			return null;
 		}
 
@@ -711,6 +715,33 @@ class Mcpwp_WooCommerce {
 		}
 
 		return $value;
+	}
+
+	/**
+	 * Whether customers can reach the product at all.
+	 *
+	 * WooCommerce answers is_purchasable() for the CURRENT user: a draft,
+	 * pending or private product is purchasable to someone who can edit it —
+	 * the admin chat, an approval replayed as the reviewer. This response says
+	 * what a customer can buy, so the product must be published, and a
+	 * variation's parent too (a disabled variation is private). External and
+	 * grouped products are never purchasable in WooCommerce — they link out,
+	 * or hold other products — and that is reported as its answer, false.
+	 *
+	 * @param WC_Product $product Product object.
+	 * @return bool
+	 */
+	private function published_for_customers( $product ) {
+		if ( ! method_exists( $product, 'get_status' ) || 'publish' !== $product->get_status() ) {
+			return false;
+		}
+
+		if ( method_exists( $product, 'is_type' ) && $product->is_type( 'variation' ) ) {
+			$parent = method_exists( $product, 'get_parent_id' ) ? get_post( (int) $product->get_parent_id() ) : null;
+			return is_object( $parent ) && isset( $parent->post_status ) && 'publish' === $parent->post_status;
+		}
+
+		return true;
 	}
 
 	/**
