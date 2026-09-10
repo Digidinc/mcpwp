@@ -46,6 +46,14 @@ class Mcpwp_Post_Fields {
 	 */
 	private static $blocked_keys = array( '_thumbnail_id', '_wp_page_template', '_edit_lock', '_edit_last' );
 
+	/**
+	 * Core keys the dedicated meta route may set on request (it has always
+	 * allowed these two). A post write uses featured_image / template instead.
+	 *
+	 * @var array
+	 */
+	private static $core_keys_by_request = array( '_thumbnail_id', '_wp_page_template' );
+
 	// ---------------------------------------------------------------
 	// Terms.
 	// ---------------------------------------------------------------
@@ -197,12 +205,12 @@ class Mcpwp_Post_Fields {
 	 * @return object|null
 	 */
 	private static function find_term( $ref, $taxonomy ) {
-		if ( is_int( $ref ) || ( is_string( $ref ) && ctype_digit( $ref ) ) ) {
-			$term = get_term( (int) $ref, $taxonomy );
-			if ( $term && ! is_wp_error( $term ) ) {
-				return $term;
-			}
-			return null;
+		// An integer is an id. A string is a slug or a name — even when it
+		// is all digits: a "2024" year slug must not silently resolve to
+		// whichever term happens to carry id 2024.
+		if ( is_int( $ref ) ) {
+			$term = get_term( $ref, $taxonomy );
+			return ( $term && ! is_wp_error( $term ) ) ? $term : null;
 		}
 
 		if ( ! is_string( $ref ) || '' === $ref ) {
@@ -227,7 +235,7 @@ class Mcpwp_Post_Fields {
 	 * @param mixed $meta Submitted {key: value}.
 	 * @return array|WP_Error Cleaned {key: value} or the first refusal.
 	 */
-	public static function validate_meta( $meta ) {
+	public static function validate_meta( $meta, $allow_core_keys = false ) {
 		if ( null === $meta ) {
 			return array();
 		}
@@ -257,7 +265,7 @@ class Mcpwp_Post_Fields {
 				);
 			}
 
-			$reason = self::refusal_reason( $key );
+			$reason = ( $allow_core_keys && in_array( $key, self::$core_keys_by_request, true ) ) ? null : self::refusal_reason( $key );
 			if ( null !== $reason ) {
 				return new WP_Error(
 					'forbidden_meta_key',
@@ -310,10 +318,12 @@ class Mcpwp_Post_Fields {
 		$written = array();
 
 		foreach ( $meta as $key => $value ) {
-			$registered = function_exists( 'registered_meta_key_exists' )
-				&& ( registered_meta_key_exists( 'post', $key, $post_type ) || registered_meta_key_exists( 'post', $key ) );
-
-			if ( ! $registered ) {
+			// "Registered" only buys raw storage when the registration brought
+			// its own sanitize_callback: that is the plugin asking to own the
+			// value. A key registered for show_in_rest with no callback would
+			// otherwise store <script> verbatim while post_content in the same
+			// request is kses'd.
+			if ( ! self::has_registered_sanitizer( $key, $post_type ) ) {
 				$value = self::reduce_unregistered( $value );
 			}
 
@@ -327,6 +337,36 @@ class Mcpwp_Post_Fields {
 		}
 
 		return $written;
+	}
+
+	/**
+	 * Case-preserving key sanitiser: registered meta keys are case-sensitive.
+	 *
+	 * @param mixed $key Raw key.
+	 * @return string
+	 */
+	public static function sanitize_meta_key( $key ) {
+		return trim( preg_replace( '/[^A-Za-z0-9_\-.:]/', '', (string) $key ) );
+	}
+
+	/**
+	 * @param string $key       Meta key.
+	 * @param string $post_type Post type (registrations are per subtype).
+	 * @return bool
+	 */
+	public static function has_registered_sanitizer( $key, $post_type ) {
+		if ( ! function_exists( 'get_registered_meta_keys' ) ) {
+			return false;
+		}
+
+		foreach ( array( (string) $post_type, '' ) as $subtype ) {
+			$keys = get_registered_meta_keys( 'post', $subtype );
+			if ( is_array( $keys ) && isset( $keys[ $key ] ) && is_array( $keys[ $key ] ) && ! empty( $keys[ $key ]['sanitize_callback'] ) ) {
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 	/**

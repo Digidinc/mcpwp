@@ -532,59 +532,49 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			return $this->error_response( 'not_found', __( 'Post not found.', 'mcpwp' ), 404 );
 		}
 
-		$key   = sanitize_key( (string) $request->get_param( 'key' ) );
+		$key   = Mcpwp_Post_Fields::sanitize_meta_key( $request->get_param( 'key' ) );
 		$value = $request->get_param( 'value' );
 
 		if ( '' === $key ) {
 			return $this->error_response( 'missing_key', __( 'Meta key is required.', 'mcpwp' ), 400 );
 		}
 
-		if ( $this->is_blocked_meta_key( $key ) ) {
-			// Provide specific guidance for Elementor meta keys.
-			if ( '_elementor_data' === $key ) {
-				return $this->error_response(
-					'use_elementor_endpoint',
-					__( 'Use wp_set_elementor (POST /elementor/{id}) to set Elementor page data.', 'mcpwp' ),
-					400
-				);
-			}
-			if ( '_elementor_page_settings' === $key ) {
-				return $this->error_response(
-					'use_elementor_endpoint',
-					__( 'Use wp_set_elementor with the page_settings parameter to update Elementor page settings.', 'mcpwp' ),
-					400
-				);
-			}
-			if ( 0 === strpos( $key, '_elementor' ) ) {
-				return $this->error_response(
-					'use_elementor_endpoint',
-					__( 'Elementor meta keys cannot be set via wp_set_post_meta. Use the /elementor/{id} endpoints instead.', 'mcpwp' ),
-					400
-				);
-			}
-			return $this->error_response( 'forbidden_meta_key', __( 'This meta key is not accessible via API.', 'mcpwp' ), 403 );
+		// Elementor keys have their own tools; say which.
+		if ( '_elementor_data' === $key ) {
+			return $this->error_response( 'use_elementor_endpoint', __( 'Use wp_set_elementor (POST /elementor/{id}) to set Elementor page data.', 'mcpwp' ), 400 );
+		}
+		if ( '_elementor_page_settings' === $key ) {
+			return $this->error_response( 'use_elementor_endpoint', __( 'Use wp_set_elementor with the page_settings parameter to update Elementor page settings.', 'mcpwp' ), 400 );
+		}
+		if ( 0 === strpos( $key, '_elementor' ) ) {
+			return $this->error_response( 'use_elementor_endpoint', __( 'Elementor meta keys cannot be set via wp_set_post_meta. Use the /elementor/{id} endpoints instead.', 'mcpwp' ), 400 );
 		}
 
-		// Sanitize value — decode JSON objects/arrays to PHP arrays so WordPress
-		// serializes them properly (instead of storing raw JSON strings).
+		// A JSON object/array sent as a string is meant as a structure.
 		if ( is_string( $value ) ) {
 			$trimmed = ltrim( $value );
 			if ( ( '{' === substr( $trimmed, 0, 1 ) || '[' === substr( $trimmed, 0, 1 ) ) && null !== json_decode( $value ) ) {
-				// Decode JSON to a PHP array — WordPress will auto-serialize it.
 				$value = json_decode( $value, true );
-			} else {
-				$value = sanitize_text_field( $value );
 			}
 		}
 
-		$result = update_post_meta( $post_id, $key, $value );
+		// The same policy as meta on a post write (#797): one answer to "can
+		// this key be written, and how is the value treated". The two core
+		// keys this route has always accepted stay accepted here.
+		$clean = Mcpwp_Post_Fields::validate_meta( array( $key => $value ), true );
+		if ( is_wp_error( $clean ) ) {
+			return $clean;
+		}
+
+		Mcpwp_Post_Fields::apply_meta( $post_id, $post->post_type, $clean );
+		$stored = get_post_meta( $post_id, $key, true );
 
 		return $this->success_response(
 			array(
 				'id'      => $post_id,
 				'key'     => $key,
-				'value'   => $value,
-				'updated' => false !== $result,
+				'value'   => $stored,
+				'updated' => true,
 			)
 		);
 	}

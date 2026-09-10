@@ -1813,6 +1813,13 @@ function update_post_meta($post_id, $key, $value)
     // A host that HTML-escapes meta on write can be simulated for tests that
     // need it (see KitCssChildCombinatorTest). Off by default so no existing
     // test changes behaviour.
+    // Core's update_metadata() runs sanitize_meta(), which applies a
+    // registered key's sanitize_callback. Without this the harness could not
+    // tell whether a callback ran.
+    if (function_exists('sanitize_meta')) {
+        $post = get_post((int) $post_id);
+        $value = sanitize_meta($key, $value, 'post', ($post && isset($post->post_type)) ? $post->post_type : '');
+    }
     if (! empty($GLOBALS['mcpwp_test_meta_escapes_html'])) {
         $value = mcpwp_test_escape_meta_deep($value);
     }
@@ -2315,6 +2322,19 @@ if (! function_exists('registered_meta_key_exists')) {
             return false;
         }
         return '' === ($reg['object_subtype'] ?? '') || $reg['object_subtype'] === $object_subtype;
+    }
+}
+if (! function_exists('get_registered_meta_keys')) {
+    function get_registered_meta_keys($object_type, $object_subtype = '')
+    {
+        $out = array();
+        foreach ($GLOBALS['_mcpwp_test_registered_meta'] ?? array() as $key => $reg) {
+            $sub = $reg['object_subtype'] ?? '';
+            if ('' === $sub || $sub === $object_subtype) {
+                $out[ $key ] = array( 'sanitize_callback' => $reg['sanitize_callback'] ?? null );
+            }
+        }
+        return $out;
     }
 }
 if (! function_exists('is_protected_meta')) {

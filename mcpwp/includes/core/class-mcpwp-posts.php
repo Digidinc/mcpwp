@@ -44,6 +44,16 @@ class Mcpwp_Posts {
 	private $safe_nonpublic_types = array( 'elementor_snippet', 'elementor_library' );
 
 	/**
+	 * Whether a post type is one this plugin never writes to.
+	 *
+	 * @param string $type Post type.
+	 * @return bool
+	 */
+	public static function is_blocked_post_type( $type ) {
+		return in_array( (string) $type, array( 'attachment', 'revision', 'nav_menu_item', 'custom_css', 'customize_changeset', 'oembed_cache', 'wp_global_styles', 'wp_navigation', 'wp_template', 'wp_template_part' ), true );
+	}
+
+	/**
 	 * Fields update_post() acts on. Anything else is refused by name (#803):
 	 * a field that is accepted and ignored is a 200 that did nothing.
 	 *

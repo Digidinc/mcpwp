@@ -55,6 +55,7 @@ final class PostTermsMetaTest extends TestCase {
 		$GLOBALS['_mcpwp_test_object_terms']  = array();
 		$GLOBALS['_mcpwp_test_taxonomies']    = array();
 		$GLOBALS['_mcpwp_test_registered_meta'] = array();
+		unset( $GLOBALS['mcpwp_test_post_type_supports'] );
 	}
 
 	private function seed( int $id, string $type ): void {
@@ -180,6 +181,64 @@ final class PostTermsMetaTest extends TestCase {
 		$this->assertSame( array( 'smc_cta_url', 'smc_role', 'smc_links' ), $result['meta_applied'] );
 	}
 
+	public function test_a_registered_callback_actually_runs(): void {
+		// The harness now runs sanitize_meta() on write like core does, so
+		// this can only pass if the callback executed.
+		$GLOBALS['_mcpwp_test_registered_meta']['smc_code'] = array(
+			'object_subtype'    => 'post',
+			'sanitize_callback' => 'strtoupper',
+		);
+		$this->seed( 40, 'post' );
+
+		$this->posts()->update_post( 40, array( 'meta' => array( 'smc_code' => 'abc' ) ) );
+
+		$this->assertSame( 'ABC', get_post_meta( 40, 'smc_code', true ) );
+	}
+
+	public function test_registered_meta_without_a_sanitizer_is_still_reduced_when_it_carries_tags(): void {
+		// register_post_meta( 'post', 'subtitle', [ show_in_rest => true ] ) with
+		// no sanitize_callback is the common case. "Registered" is not a
+		// licence to store <script> while post_content in the same request
+		// is kses'd.
+		$GLOBALS['_mcpwp_test_registered_meta']['subtitle'] = array( 'object_subtype' => 'post', 'sanitize_callback' => null );
+		$this->seed( 40, 'post' );
+
+		$this->posts()->update_post( 40, array( 'meta' => array( 'subtitle' => '<em>Hi</em><script>alert(1)</script>' ) ) );
+
+		$stored = get_post_meta( 40, 'subtitle', true );
+		$this->assertStringContainsString( '<em>Hi</em>', $stored );
+		$this->assertStringNotContainsString( '<script', $stored );
+	}
+
+	public function test_an_all_digit_slug_is_a_slug_not_a_term_id(): void {
+		// A "2024" year slug must not resolve to whichever term carries id
+		// 2024. Only an integer is an id.
+		$GLOBALS['_mcpwp_test_taxonomies']['sm_year'] = array(
+			'object_type' => array( 'post' ),
+			'terms'       => array(
+				2024 => array( 'slug' => 'widgets', 'name' => 'Widgets' ),
+				77   => array( 'slug' => '2024', 'name' => '2024' ),
+			),
+		);
+		$this->seed( 40, 'post' );
+
+		$this->posts()->update_post( 40, array( 'terms' => array( 'sm_year' => array( '2024' ) ) ) );
+		$this->assertSame( array( 77 ), $GLOBALS['_mcpwp_test_object_terms'][40]['sm_year'], 'The string resolved as a slug.' );
+
+		$this->posts()->update_post( 40, array( 'terms' => array( 'sm_year' => array( 2024 ) ) ) );
+		$this->assertSame( array( 2024 ), $GLOBALS['_mcpwp_test_object_terms'][40]['sm_year'], 'The integer resolved as an id.' );
+	}
+
+	public function test_clearing_a_taxonomy_is_visible_in_the_response(): void {
+		$this->seed( 40, 'post' );
+		$GLOBALS['_mcpwp_test_object_terms'][40]['sm_audience'] = array( 1522 );
+
+		$result = $this->posts()->update_post( 40, array( 'terms' => array( 'sm_audience' => array() ) ) );
+
+		$this->assertSame( array(), $GLOBALS['_mcpwp_test_object_terms'][40]['sm_audience'] );
+		$this->assertSame( array( 'sm_audience' => array() ), $result['terms'], 'An emptied taxonomy is reported, not dropped from the echo.' );
+	}
+
 	public function test_unregistered_meta_keeps_percent_encoding(): void {
 		$this->seed( 40, 'post' );
 
@@ -231,6 +290,39 @@ final class PostTermsMetaTest extends TestCase {
 	}
 
 	// ---------------------------------------------------------------
+	// The dedicated meta route answers with the same policy.
+	// ---------------------------------------------------------------
+
+	private function set_meta( int $post_id, string $key, $value ) {
+		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/posts/' . $post_id . '/meta' );
+		$request->set_param( 'id', $post_id );
+		$request->set_param( 'key', $key );
+		$request->set_param( 'value', $value );
+		return ( new Mcpwp_REST_Site_Content() )->set_post_meta_handler( $request );
+	}
+
+	public function test_the_meta_route_uses_the_same_policy_as_a_post_write(): void {
+		$this->seed( 40, 'post' );
+		// The route checks `instanceof WP_Post`; the plain seed is a stdClass.
+		$GLOBALS['_mcpwp_test_posts'][40] = new WP_Post( (array) $GLOBALS['_mcpwp_test_posts'][40] );
+
+		$ok = $this->set_meta( 40, 'smc_role', 'Founder & CEO' );
+		$this->assertInstanceOf( WP_REST_Response::class, $ok );
+		$this->assertSame( 'Founder & CEO', get_post_meta( 40, 'smc_role', true ), 'No sanitize_text_field: the ampersand survives here too.' );
+
+		$blocked = $this->set_meta( 40, 'mcpwp_api_key', 'x' );
+		$this->assertInstanceOf( WP_Error::class, $blocked );
+		$this->assertSame( 'forbidden_meta_key', $blocked->get_error_code() );
+
+		$elementor = $this->set_meta( 40, '_elementor_data', '[]' );
+		$this->assertSame( 'use_elementor_endpoint', $elementor->get_error_code() );
+
+		// The two core keys this route has always accepted still are.
+		$this->assertInstanceOf( WP_REST_Response::class, $this->set_meta( 40, '_thumbnail_id', 51 ) );
+		$this->assertInstanceOf( WP_REST_Response::class, $this->set_meta( 40, '_wp_page_template', 'default' ) );
+	}
+
+	// ---------------------------------------------------------------
 	// Featured image on any type that supports it.
 	// ---------------------------------------------------------------
 
@@ -250,6 +342,17 @@ final class PostTermsMetaTest extends TestCase {
 
 		$this->assertInstanceOf( WP_REST_Response::class, $response, is_wp_error( $response ) ? $response->get_error_message() : '' );
 		$this->assertSame( 51, (int) get_post_meta( 50, '_thumbnail_id', true ) );
+	}
+
+	public function test_a_blocked_type_is_not_found_even_if_it_claims_thumbnail_support(): void {
+		$this->seed( 50, 'revision' );
+		$this->seed( 51, 'attachment' );
+		$GLOBALS['mcpwp_test_post_type_supports'] = array( 'revision' => array( 'thumbnail' ) );
+
+		$error = $this->featured( 50, 51 );
+
+		$this->assertInstanceOf( WP_Error::class, $error );
+		$this->assertSame( 'not_found', $error->get_error_code() );
 	}
 
 	public function test_a_type_without_thumbnail_support_is_told_why(): void {
