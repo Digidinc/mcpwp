@@ -489,6 +489,14 @@ function get_option($name, $default = false)
 
 function update_option($name, $value, $autoload = null)
 {
+    // Test-only: mimic WordPress's sanitize_option() — a hook may alter the
+    // value before storage, or refuse it (null = refused, nothing stored).
+    if (isset($GLOBALS['mcpwp_test_option_store_hook']) && is_callable($GLOBALS['mcpwp_test_option_store_hook'])) {
+        $value = call_user_func($GLOBALS['mcpwp_test_option_store_hook'], $name, $value);
+        if (null === $value) {
+            return false;
+        }
+    }
     // Allow tests to simulate DB write failures for specific option names.
     if (! empty($GLOBALS['mcpwp_test_update_option_fail'][ $name ])) {
         return false;

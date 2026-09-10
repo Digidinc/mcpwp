@@ -504,7 +504,7 @@ class Mcpwp_Action_Log {
 		// snapshots); a credential inside them — a wp_update_option value,
 		// an integration key — must not sit in the table (#800 round 6).
 		if ( class_exists( 'Mcpwp_Option_Access' ) && method_exists( 'Mcpwp_Option_Access', 'redact_for_log' ) ) {
-			$safe_args = Mcpwp_Option_Access::redact_for_log( $safe_args, array( 'api_key', 'x-api-key', 'authorization', 'password', 'secret', 'token' ) );
+			$safe_args = Mcpwp_Option_Access::redact_for_log( $safe_args, Mcpwp_Option_Access::log_redaction_keys() );
 		}
 
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery

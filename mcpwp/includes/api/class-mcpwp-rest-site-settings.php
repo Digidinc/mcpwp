@@ -562,6 +562,22 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 		// which a '<' or '%' would otherwise silently mutate (round-4 P2-2).
 		$submitted     = $this->sanitize_submitted_option_value( $key, $value );
 		$allow_secrets = rest_sanitize_boolean( $request->get_param( 'allow_secrets' ) );
+
+		// Markup that executes — script, event handlers, javascript: URLs,
+		// frames — is stored only by an administrator-scoped principal.
+		// Options render in wp-admin and on the front end; a designer- or
+		// editor-scoped key must not be able to plant it (#800 round 7).
+		if ( Mcpwp_Option_Access::contains_active_markup( $submitted ) ) {
+			$record = $this->get_current_api_key_record();
+			if ( ! is_array( $record ) || ! $this->key_has_scope( $record, 'admin' ) ) {
+				$this->log_activity( 'update_option_refused', $request, array( 'option' => $key, 'rule' => 'active_markup_requires_admin' ), 403 );
+				return new WP_Error(
+					'active_markup_requires_admin',
+					__( 'The value carries script, an event handler, a javascript: URL or an embedded frame. Storing that in an option needs an admin-scoped key. Nothing was written.', 'mcpwp' ),
+					array( 'status' => 403, 'rule' => 'active_markup_requires_admin' )
+				);
+			}
+		}
 		$old_value     = get_option( $key );
 		$merged        = Mcpwp_Option_Access::merge_preserving_secrets( $key, $old_value, $submitted, $allow_secrets );
 		$value         = $merged['value'];
@@ -656,22 +672,37 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 			$value = $value ? 1 : 0;
 		}
 
+		// Core text keys are trimmed, as WordPress's own settings screen
+		// trims them; every other value is stored as sent.
+		if ( is_string( $value ) && in_array( $key, array( 'blogname', 'blogdescription', 'timezone_string', 'date_format', 'time_format', 'WPLANG', 'siteurl', 'home' ), true ) ) {
+			$value = trim( $value );
+		}
+
 		// Wrap in try/catch: plugins like Elementor hook into update_option
 		// and may throw exceptions in REST context (e.g. AJAX auth checks).
+		// The verdict is the STORED state, not the exception: WordPress's own
+		// sanitize_option() may alter a value (strip tags from blogname) and
+		// still store it, and a hook may throw after the write landed. A
+		// write that changed the stored value is reported as applied, with
+		// what was stored; one that left it untouched is a refusal
+		// (#800 round 7, P1-5).
+		$threw = null;
 		try {
 			update_option( $key, $value );
 		} catch ( \Exception $e ) {
-			// Option was likely still updated before the hook threw.
-			// Verify by re-reading.
-			$current = get_option( $key );
-			if ( $current !== $value ) {
-				return $this->error_response(
-					'update_failed',
-					$e->getMessage(),
-					500
-				);
-			}
+			$threw = $e;
 		}
+
+		$stored  = get_option( $key );
+		$landed  = $stored == $value || $stored != $old_value; // phpcs:ignore WordPress.PHP.StrictComparisons.LooseComparison -- serialisation may retype scalars.
+		if ( ! $landed ) {
+			return $this->error_response(
+				'update_failed',
+				null !== $threw ? $threw->getMessage() : __( 'The option was not changed: WordPress refused the value.', 'mcpwp' ),
+				null !== $threw ? 500 : 409
+			);
+		}
+		$altered = null !== $threw || $stored != $value; // phpcs:ignore WordPress.PHP.StrictComparisons.LooseComparison
 
 		// Writes may set a secret; reads never return one.
 		$new = Mcpwp_Option_Access::redact( $key, get_option( $key ) );
@@ -684,7 +715,7 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 				'old_value' => $old['value'],
 				'redacted'  => array_values( array_unique( array_merge( $new['redacted'], $old['redacted'] ) ) ),
 				'preserved' => $merged['preserved'],
-				'warnings'  => isset( $merged['warnings'] ) ? $merged['warnings'] : array(),
+				'warnings'  => array_merge( isset( $merged['warnings'] ) ? $merged['warnings'] : array(), $altered ? array( 'WordPress altered the value on store (its own sanitize_option); the value reported is what was stored.' ) : array() ),
 				'updated'   => true,
 				'rule'      => $decision['rule'],
 			)

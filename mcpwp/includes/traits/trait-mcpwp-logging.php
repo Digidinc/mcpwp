@@ -20,6 +20,10 @@ trait Mcpwp_Logging {
 	 * @return array
 	 */
 	protected function get_log_redaction_keys() {
+		if ( class_exists( 'Mcpwp_Option_Access' ) && method_exists( 'Mcpwp_Option_Access', 'log_redaction_keys' ) ) {
+			return Mcpwp_Option_Access::log_redaction_keys();
+		}
+
 		$defaults = array( 'api_key', 'x-api-key', 'authorization', 'password', 'secret', 'token' );
 		$settings = get_option( 'mcpwp_settings', array() );
 		$keys = isset( $settings['log_redaction_keys'] ) ? $settings['log_redaction_keys'] : $defaults;
@@ -123,10 +127,20 @@ trait Mcpwp_Logging {
 			'created_at'  => current_time( 'mysql' ),
 		);
 
-		// Optionally log request data (excluding sensitive info)
+		// Redacted FIRST, truncated second: a truncated JSON string no longer
+		// decodes, and a walker that cannot open it cannot redact what is
+		// inside (#800 round 7, P0-3).
 		$request_data = $this->get_loggable_request_data( $request );
 		if ( ! empty( $request_data ) ) {
-			$data['request_data'] = wp_json_encode( $this->redact_log_data( $request_data, $redaction_keys ) );
+			$redacted = $this->redact_log_data( $request_data, $redaction_keys );
+			if ( is_array( $redacted ) ) {
+				foreach ( $redacted as $key => $value ) {
+					if ( is_string( $value ) && strlen( $value ) > 500 ) {
+						$redacted[ $key ] = substr( $value, 0, 500 ) . '...[truncated]';
+					}
+				}
+			}
+			$data['request_data'] = wp_json_encode( $redacted );
 		}
 
 		// Log response size if available
@@ -154,16 +168,8 @@ trait Mcpwp_Logging {
 	 * @return array Loggable data.
 	 */
 	protected function get_loggable_request_data( $request ) {
-		$params = $request->get_params();
-
-		// Truncate large fields
-		foreach ( $params as $key => $value ) {
-			if ( is_string( $value ) && strlen( $value ) > 500 ) {
-				$params[ $key ] = substr( $value, 0, 500 ) . '...[truncated]';
-			}
-		}
-
-		return $params;
+		// Returned whole: truncation happens after redaction, in log_activity().
+		return $request->get_params();
 	}
 
 	/**

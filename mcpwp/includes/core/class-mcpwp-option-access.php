@@ -119,7 +119,7 @@ class Mcpwp_Option_Access {
 	 *
 	 * @var array
 	 */
-	private static $write_protected_prefixes = array( 'auto_update_' );
+	private static $write_protected_prefixes = array( 'auto_update_', 'widget_', 'sidebars_' );
 
 	/**
 	 * Field-name suffixes that describe a secret without being one: a
@@ -633,6 +633,83 @@ class Mcpwp_Option_Access {
 	}
 
 	/**
+	 * The exact key names every log redactor removes: the site's configured
+	 * list, or the installed default. One list for the activity log, the
+	 * MCP activity log, the action log and the admin renderer (#800 round 7).
+	 *
+	 * @return string[] Lower-cased.
+	 */
+	public static function log_redaction_keys() {
+		$defaults = array( 'api_key', 'x-api-key', 'authorization', 'bearer', 'password', 'secret', 'token', 'access_token', 'refresh_token', 'client_secret', 'private_key' );
+		$settings = get_option( 'mcpwp_settings', array() );
+		$keys     = isset( $settings['log_redaction_keys'] ) ? $settings['log_redaction_keys'] : array();
+
+		if ( is_string( $keys ) ) {
+			$keys = preg_split( '/[\r\n,]+/', $keys );
+		}
+		if ( ! is_array( $keys ) ) {
+			$keys = array();
+		}
+
+		$out = array();
+		foreach ( array_merge( $defaults, $keys ) as $key ) {
+			$key = strtolower( trim( (string) $key ) );
+			if ( '' !== $key ) {
+				$out[ $key ] = true;
+			}
+		}
+
+		return array_keys( $out );
+	}
+
+	/**
+	 * Whether a string names an option — as opposed to being a credential
+	 * that happens to be a valid option name. Option names are words joined
+	 * by underscores (or one of a few core names without one); a bare
+	 * token, a hex string or a UUID is not one (#800 round 7).
+	 *
+	 * @param string $name Candidate.
+	 * @return bool
+	 */
+	public static function is_option_name_shaped( $name ) {
+		if ( ! is_string( $name ) || self::sanitize_option_name( $name ) !== $name ) {
+			return false;
+		}
+		if ( self::looks_like_credential( $name ) ) {
+			return false;
+		}
+		if ( in_array( strtolower( $name ), array( 'blogname', 'blogdescription', 'siteurl', 'home', 'wplang', 'template', 'stylesheet' ), true ) ) {
+			return true;
+		}
+		if ( preg_match( '/^[0-9a-f]+$/i', $name ) || preg_match( '/^[0-9a-f-]{32,}$/i', $name ) ) {
+			return false;
+		}
+		return (bool) preg_match( '/^[a-z][a-z0-9]*(?:[_\-.:][a-z0-9]+)+$/i', $name );
+	}
+
+	/**
+	 * Whether a value carries markup that executes: script, event handlers,
+	 * javascript: URLs, frames and embeds. Storing such a value is an
+	 * administrator's decision; a lesser key is refused (#800 round 7).
+	 *
+	 * @param mixed $value Value, any encoding.
+	 * @return bool
+	 */
+	public static function contains_active_markup( $value ) {
+		$found = false;
+		self::map_string_leaves(
+			$value,
+			function ( $leaf ) use ( &$found ) {
+				if ( ! $found && preg_match( '#<\s*(script|iframe|object|embed|meta|link|base)\b|\bon[a-z]+\s*=|javascript\s*:|\bsrcdoc\s*=|data:text/html#i', $leaf ) ) {
+					$found = true;
+				}
+				return $leaf;
+			}
+		);
+		return $found;
+	}
+
+	/**
 	 * Redact a log payload: exact key names from the site's list, the
 	 * {key: '<secret option>', value: …} rule, and the plugin-wide name and
 	 * shape detectors — through every encoding level, so a credential inside
@@ -672,8 +749,7 @@ class Mcpwp_Option_Access {
 		// see. It stays only when it is shaped like an option name and not
 		// like a credential (#800 rounds 5–6).
 		$names_an_option = isset( $data['key'] ) && is_string( $data['key'] ) && array_key_exists( 'value', $data )
-			&& self::sanitize_option_name( $data['key'] ) === $data['key']
-			&& ! self::looks_like_credential( $data['key'] )
+			&& self::is_option_name_shaped( $data['key'] )
 			&& ! ( $under_secret && self::looks_like_secret_value( $data['key'] ) );
 
 		$out = array();
@@ -759,6 +835,37 @@ class Mcpwp_Option_Access {
 			}
 		}
 		return $tree;
+	}
+
+	/**
+	 * Whether a stored leaf is a credential (as opposed to a flag or label
+	 * under a secret-ish name).
+	 *
+	 * @param mixed $leaf Leaf.
+	 * @return bool
+	 */
+	private static function leaf_is_credential( $leaf ) {
+		if ( is_int( $leaf ) || is_float( $leaf ) ) {
+			return true;
+		}
+		if ( ! is_string( $leaf ) || '' === $leaf ) {
+			return false;
+		}
+		return self::MASK === trim( $leaf ) || self::looks_like_secret_value( $leaf ) || self::looks_like_credential( $leaf ) || self::is_opaque_serialized( $leaf );
+	}
+
+	/**
+	 * @param mixed $value Value.
+	 * @return bool
+	 */
+	private static function is_list( $value ) {
+		// An empty array is a map here: {} and [] decode the same, and a
+		// caller sending {} where a map was stored means "keep what is
+		// stored", not "replace it with a list".
+		if ( ! is_array( $value ) || empty( $value ) ) {
+			return false;
+		}
+		return array_keys( $value ) === range( 0, count( $value ) - 1 );
 	}
 
 	/**
@@ -908,8 +1015,29 @@ class Mcpwp_Option_Access {
 			return array( 'value' => $new, 'preserved' => array(), 'form' => 'scalar' );
 		}
 
+		// A scalar (or plain string) sent over a STORED structure: the
+		// structure's credentials would go with it. Refused unless the caller
+		// confirmed — the root is an ancestor like any other (#800 round 7).
+		if ( null !== $old_tree && null === $new_tree ) {
+			$old_forms = array();
+			$old_x     = self::expand( $old_tree, array(), $old_forms, true );
+			$paths     = array();
+			self::collect_secret_paths_including_masked( $old_x, array(), self::is_secret_field( $key ), $paths );
+			$refused = array();
+			foreach ( $paths as $segments ) {
+				$leaf = self::path_get( $old_x, $segments, $exists );
+				if ( $exists && self::leaf_is_credential( $leaf ) ) {
+					$refused[] = implode( '.', $segments );
+				}
+			}
+			if ( ! empty( $refused ) && ! $allow_secrets ) {
+				return array( 'value' => $old, 'preserved' => array(), 'form' => $old_form, 'refused' => $refused, 'warnings' => array() );
+			}
+			return array( 'value' => $new, 'preserved' => array(), 'form' => $new_form, 'refused' => array(), 'warnings' => array() );
+		}
+
 		if ( null === $old_tree || null === $new_tree ) {
-			return array( 'value' => $new, 'preserved' => array(), 'form' => $new_form );
+			return array( 'value' => $new, 'preserved' => array(), 'form' => $new_form, 'refused' => array(), 'warnings' => array() );
 		}
 
 		// Both sides fully opened: a credential inside a JSON string inside
@@ -959,7 +1087,9 @@ class Mcpwp_Option_Access {
 					$stops = array_slice( $segments, 0, $d + 1 );
 					break;
 				}
-				if ( ! is_array( $node[ $seg ] ) ) {
+				if ( ! is_array( $node[ $seg ] ) || ( self::is_list( $node[ $seg ] ) && ! self::is_list( self::path_get( $old_x, array_slice( $segments, 0, $d + 1 ) ) ) ) ) {
+					// A scalar, or a list where a map was stored: the caller
+					// replaced the structure (#800 round 7, P2-9).
 					$stop  = 'scalar';
 					$stops = array_slice( $segments, 0, $d + 1 );
 					break;
@@ -978,7 +1108,9 @@ class Mcpwp_Option_Access {
 			}
 
 			if ( 'scalar' === $stop ) {
-				if ( ! $allow_secrets ) {
+				// A flag under a secret-ish name is not a credential; the
+				// structure holding only flags may be replaced.
+				if ( ! $allow_secrets && self::leaf_is_credential( $old_leaf ) ) {
 					$refused[] = implode( '.', $segments );
 				}
 				continue;
