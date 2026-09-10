@@ -121,24 +121,6 @@ trait Mcpwp_Elementor_Validator_Trait {
 	}
 
 	/**
-	 * Check whether a setting key is a valid responsive variant of a base control.
-	 *
-	 * Elementor commonly expands responsive controls into suffixed keys such as
-	 * `_tablet` and `_mobile` even when the base control name is the canonical one.
-	 *
-	 * @param string $key        Candidate setting key.
-	 * @param array  $valid_keys Known valid base keys.
-	 * @return bool True if the key is a recognized responsive variant.
-	 */
-	private function is_valid_responsive_setting_key( $key, $valid_keys ) {
-		if ( ! preg_match( '/^(.+?)_(mobile|mobile_extra|tablet|tablet_extra|laptop|widescreen)$/', $key, $matches ) ) {
-			return false;
-		}
-
-		return in_array( $matches[1], $valid_keys, true );
-	}
-
-	/**
 	 * Validate and fix element tree.
 	 *
 	 * Performs 5 validation passes:
@@ -220,6 +202,10 @@ trait Mcpwp_Elementor_Validator_Trait {
 			return $this->find_closest_widget( $input, $candidates );
 		};
 
+		// Setting keys are checked against Elementor's live controls, with the
+		// static reference only as a labelled fallback (#824).
+		$setting_keys = new Mcpwp_Elementor_Setting_Keys();
+
 		/**
 		 * Walk a single element recursively.
 		 *
@@ -229,7 +215,7 @@ trait Mcpwp_Elementor_Validator_Trait {
 		 */
 		$walk = function ( &$el, $path = '', $parent_type = '' ) use (
 			&$walk, &$warnings, &$fixes, &$errors, &$changed, &$seen_ids,
-			$registered, $registered_lookup, $known_pro_lookup, $fuzzy, $new_id
+			$registered, $registered_lookup, $known_pro_lookup, $fuzzy, $new_id, $setting_keys
 		) {
 			$el_type     = isset( $el['elType'] ) ? $el['elType'] : '';
 			$widget_type = isset( $el['widgetType'] ) ? $el['widgetType'] : '';
@@ -387,33 +373,12 @@ trait Mcpwp_Elementor_Validator_Trait {
 				}
 			}
 
-			if ( ! $is_atomic && 'widget' === $el_type && '' !== $widget_type && ! empty( $el['settings'] ) && is_array( $el['settings'] ) ) {
-				$valid_keys = $this->get_valid_widget_keys( $widget_type );
-				if ( ! empty( $valid_keys ) ) {
-					// Common Elementor internal prefixes that should not trigger warnings.
-					$internal_prefixes = array( '_', 'motion_fx_', '__', 'hide_', 'responsive_', 'custom_css' );
-					foreach ( array_keys( $el['settings'] ) as $key ) {
-						// Skip known valid keys.
-						if ( in_array( $key, $valid_keys, true ) || $this->is_valid_responsive_setting_key( $key, $valid_keys ) ) {
-							continue;
-						}
-						// Skip internal/advanced keys.
-						$skip = false;
-						foreach ( $internal_prefixes as $prefix ) {
-							if ( 0 === strpos( $key, $prefix ) ) {
-								$skip = true;
-								break;
-							}
-						}
-						if ( $skip ) {
-							continue;
-						}
-						// Flag unknown key with valid alternatives.
-						$valid_list = implode( ', ', array_slice( $valid_keys, 0, 15 ) );
-						$suffix     = count( $valid_keys ) > 15 ? ', ...' : '';
-						$warnings[] = "{$path}: unknown key '{$key}' on {$widget_type} widget — valid keys: {$valid_list}{$suffix}";
-					}
-				}
+			// Legacy widgets: every setting key, repeater rows and global/dynamic
+			// references included, against the controls Elementor registers for
+			// the widget — see Mcpwp_Elementor_Setting_Keys. It warns; it never
+			// removes a key or refuses the save (#824).
+			if ( ! $is_atomic && 'widget' === $el_type && '' !== $widget_type ) {
+				$setting_keys->check( $path, $widget_type, ( isset( $el['settings'] ) && is_array( $el['settings'] ) ) ? $el['settings'] : array() );
 			}
 
 			// --- 7. Validate elements array ---
@@ -469,6 +434,7 @@ trait Mcpwp_Elementor_Validator_Trait {
 
 		$warnings = array_merge(
 			$warnings,
+			$setting_keys->warnings(),
 			Mcpwp_Elementor_Element_Ids::warnings( Mcpwp_Elementor_Element_Ids::audit( $elements ) )
 		);
 
@@ -478,9 +444,13 @@ trait Mcpwp_Elementor_Validator_Trait {
 		}
 
 		$result = array(
-			'warnings' => $warnings,
-			'fixes'    => $fixes,
-			'errors'   => $errors,
+			'warnings'       => $warnings,
+			'fixes'          => $fixes,
+			'errors'         => $errors,
+			// Which source the setting keys were checked against, what could
+			// not be checked, and every unknown key — "could not check" must
+			// never read as "valid" (#824).
+			'settings_check' => $setting_keys->report(),
 		);
 
 		// Present only when asked for, and then always — "asked, nothing to

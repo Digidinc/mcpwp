@@ -913,6 +913,14 @@ trait Mcpwp_Elementor_Writer_Trait {
 			}
 		}
 
+		// The setting-key report belongs on every write result, not only
+		// inside debug (#824).
+		foreach ( array( 'settings_check' ) as $surfaced ) {
+			if ( isset( $debug[ $surfaced ] ) ) {
+				$result[ $surfaced ] = $debug[ $surfaced ];
+			}
+		}
+
 		$result['render_verified'] = empty( $render_errors );
 
 		if ( empty( $render_errors ) ) {
@@ -1206,6 +1214,10 @@ trait Mcpwp_Elementor_Writer_Trait {
 				$result['id_repair'] = $validation['id_repair'];
 			}
 
+			if ( isset( $validation['settings_check'] ) ) {
+				$result['settings_check'] = $validation['settings_check'];
+			}
+
 			return $result;
 		}
 
@@ -1307,6 +1319,9 @@ trait Mcpwp_Elementor_Writer_Trait {
 		}
 		if ( isset( $validation['id_repair'] ) ) {
 			$save_debug['id_repair'] = $validation['id_repair'];
+		}
+		if ( isset( $validation['settings_check'] ) ) {
+			$save_debug['settings_check'] = $validation['settings_check'];
 		}
 
 		// Safety check: ensure validation did not corrupt or truncate the data.
@@ -2157,6 +2172,9 @@ trait Mcpwp_Elementor_Writer_Trait {
 		}
 		$debug['validation_fixes']    = $validation['fixes'];
 		$debug['validation_warnings'] = $validation['warnings'];
+		if ( isset( $validation['settings_check'] ) ) {
+			$debug['settings_check'] = $validation['settings_check'];
+		}
 		if ( isset( $validation['id_repair'] ) ) {
 			$debug['id_repair'] = $validation['id_repair'];
 		}

@@ -196,7 +196,7 @@ class Mcpwp_Elementor_Widgets {
 					'align'                     => array( 'type' => 'choose', 'default' => '', 'options' => array( 'left', 'center', 'right', 'justify' ), 'description' => 'Button alignment' ),
 					'size'                      => array( 'type' => 'select', 'default' => 'sm', 'options' => array( 'xs', 'sm', 'md', 'lg', 'xl' ), 'description' => 'Button size' ),
 					'button_type'               => array( 'type' => 'select', 'default' => '', 'options' => array( '', 'info', 'success', 'warning', 'danger' ), 'description' => 'Button type/color scheme' ),
-					'icon'                      => array( 'type' => 'icons', 'default' => '', 'description' => 'Button icon: {"value":"fas fa-arrow-right","library":"fa-solid"}' ),
+					'selected_icon'             => array( 'type' => 'icons', 'default' => '', 'description' => 'Button icon: {"value":"fas fa-arrow-right","library":"fa-solid"}' ),
 					'icon_align'                => array( 'type' => 'select', 'default' => 'left', 'options' => array( 'left', 'right' ), 'description' => 'Icon position' ),
 					'icon_indent'               => array( 'type' => 'slider', 'default' => '', 'description' => 'Space between icon and text' ),
 					'button_css_id'             => array( 'type' => 'text', 'default' => '', 'description' => 'Custom CSS ID for the button' ),
@@ -246,7 +246,7 @@ class Mcpwp_Elementor_Widgets {
 				'description' => 'Display a single icon from Font Awesome or other icon libraries.',
 				'category'    => 'basic',
 				'settings'    => array(
-					'selected_icon'             => array( 'type' => 'icons', 'default' => '', 'description' => 'Icon: {"value":"fas fa-star","library":"fa-solid"}' ),
+					'selected_icon'    => array( 'type' => 'icons', 'default' => '', 'description' => 'Icon: {"value":"fas fa-star","library":"fa-solid"}' ),
 					'view'                      => array( 'type' => 'select', 'default' => 'default', 'options' => array( 'default', 'stacked', 'framed' ), 'description' => 'Icon view style' ),
 					'shape'                     => array( 'type' => 'select', 'default' => 'circle', 'options' => array( 'circle', 'square' ), 'description' => 'Background shape (when view is stacked/framed)' ),
 					'align'                     => array( 'type' => 'choose', 'default' => '', 'options' => array( 'left', 'center', 'right' ), 'description' => 'Icon alignment' ),
@@ -359,12 +359,12 @@ class Mcpwp_Elementor_Widgets {
 				'description' => 'Icon with a heading and description text, commonly used for feature lists.',
 				'category'    => 'basic',
 				'settings'    => array(
-					'selected_icon'             => array( 'type' => 'icons', 'default' => '', 'description' => 'Icon: {"value":"fas fa-star","library":"fa-solid"}' ),
+					'selected_icon'    => array( 'type' => 'icons', 'default' => '', 'description' => 'Icon: {"value":"fas fa-star","library":"fa-solid"}' ),
 					'title_text'                => array( 'type' => 'text', 'default' => 'This is the heading', 'description' => 'Title text' ),
 					'description_text'          => array( 'type' => 'textarea', 'default' => '', 'description' => 'Description text' ),
 					'link'                      => array( 'type' => 'url', 'default' => '', 'description' => 'Link URL object' ),
 					'position'                    => array( 'type' => 'choose', 'default' => 'top', 'options' => array( 'top', 'left', 'right' ), 'description' => 'Icon position relative to content' ),
-					'align'                       => array( 'type' => 'choose', 'default' => 'center', 'options' => array( 'left', 'center', 'right' ), 'description' => 'Horizontal alignment of icon and text' ),
+					'text_align'                  => array( 'type' => 'choose', 'default' => 'center', 'options' => array( 'left', 'center', 'right' ), 'description' => 'Horizontal alignment of icon and text' ),
 					'title_size'                  => array( 'type' => 'select', 'default' => 'h3', 'options' => array( 'h1', 'h2', 'h3', 'h4', 'h5', 'h6' ), 'description' => 'Title HTML tag' ),
 					'primary_color'               => array( 'type' => 'color', 'default' => '', 'description' => 'Icon color' ),
 					'icon_space'                  => array( 'type' => 'slider', 'default' => '', 'description' => 'Space between icon and content' ),
@@ -459,13 +459,13 @@ class Mcpwp_Elementor_Widgets {
 					'thousand_separator_char'            => array( 'type' => 'select', 'default' => ',', 'options' => array( ',', '.', ' ' ), 'description' => 'Separator character' ),
 					'number_color'                       => array( 'type' => 'color', 'default' => '', 'description' => 'Number color' ),
 					'title_color'                        => array( 'type' => 'color', 'default' => '', 'description' => 'Title color' ),
-					'typography_typography'              => array( 'type' => 'switcher', 'default' => '', 'description' => 'Enable custom number typography' ),
-					'typography_font_size'               => array( 'type' => 'slider', 'default' => '', 'description' => 'Number font size: {"size":48,"unit":"px"}' ),
-					'typography_font_weight'             => array( 'type' => 'select', 'default' => '', 'options' => array( '100', '200', '300', '400', '500', '600', '700', '800', '900' ), 'description' => 'Number font weight' ),
-					'typography_font_family'             => array( 'type' => 'font', 'default' => '', 'description' => 'Number font family' ),
-					'title_typography_typography'        => array( 'type' => 'switcher', 'default' => '', 'description' => 'Enable custom title typography' ),
-					'title_typography_font_size'         => array( 'type' => 'slider', 'default' => '', 'description' => 'Title font size' ),
-					'title_typography_font_weight'       => array( 'type' => 'select', 'default' => '', 'description' => 'Title font weight' ),
+					'typography_number_typography'       => array( 'type' => 'switcher', 'default' => '', 'description' => 'Enable custom number typography' ),
+					'typography_number_font_size'        => array( 'type' => 'slider', 'default' => '', 'description' => 'Number font size: {"size":48,"unit":"px"}' ),
+					'typography_number_font_weight'      => array( 'type' => 'select', 'default' => '', 'options' => array( '100', '200', '300', '400', '500', '600', '700', '800', '900' ), 'description' => 'Number font weight' ),
+					'typography_number_font_family'      => array( 'type' => 'font', 'default' => '', 'description' => 'Number font family' ),
+					'typography_title_typography'        => array( 'type' => 'switcher', 'default' => '', 'description' => 'Enable custom title typography' ),
+					'typography_title_font_size'         => array( 'type' => 'slider', 'default' => '', 'description' => 'Title font size' ),
+					'typography_title_font_weight'       => array( 'type' => 'select', 'default' => '', 'description' => 'Title font weight' ),
 				),
 				'example'     => array(
 					'id'         => 'abc1256',
@@ -521,9 +521,9 @@ class Mcpwp_Elementor_Widgets {
 					'testimonial_job'           => array( 'type' => 'text', 'default' => 'Designer', 'description' => 'Author job title' ),
 					'testimonial_image_position' => array( 'type' => 'select', 'default' => 'aside', 'options' => array( 'aside', 'top' ), 'description' => 'Image position' ),
 					'testimonial_alignment'     => array( 'type' => 'choose', 'default' => 'center', 'options' => array( 'left', 'center', 'right' ), 'description' => 'Content alignment' ),
-					'content_color'             => array( 'type' => 'color', 'default' => '', 'description' => 'Content text color' ),
-					'name_color'                => array( 'type' => 'color', 'default' => '', 'description' => 'Name color' ),
-					'job_color'                 => array( 'type' => 'color', 'default' => '', 'description' => 'Job title color' ),
+					'content_content_color'     => array( 'type' => 'color', 'default' => '', 'description' => 'Content text color' ),
+					'name_text_color'           => array( 'type' => 'color', 'default' => '', 'description' => 'Name color' ),
+					'job_text_color'            => array( 'type' => 'color', 'default' => '', 'description' => 'Job title color' ),
 				),
 				'example'     => array(
 					'id'         => 'abc1258',
@@ -548,7 +548,7 @@ class Mcpwp_Elementor_Widgets {
 				'settings'    => array(
 					'tabs'                      => array( 'type' => 'repeater', 'default' => '', 'description' => 'Array of tab items: [{"tab_title":"Tab 1","tab_content":"Content 1"}, ...]' ),
 					'type'                      => array( 'type' => 'select', 'default' => 'horizontal', 'options' => array( 'horizontal', 'vertical' ), 'description' => 'Tab orientation' ),
-					'tab_text_color'            => array( 'type' => 'color', 'default' => '', 'description' => 'Tab title color' ),
+					'tab_color'            => array( 'type' => 'color', 'default' => '', 'description' => 'Tab title color' ),
 					'tab_active_color'          => array( 'type' => 'color', 'default' => '', 'description' => 'Active tab color' ),
 					'content_color'             => array( 'type' => 'color', 'default' => '', 'description' => 'Content text color' ),
 				),
@@ -574,7 +574,7 @@ class Mcpwp_Elementor_Widgets {
 				'category'    => 'basic',
 				'settings'    => array(
 					'tabs'                      => array( 'type' => 'repeater', 'default' => '', 'description' => 'Array of accordion items: [{"tab_title":"Section 1","tab_content":"Content 1"}, ...]' ),
-					'selected_icon'             => array( 'type' => 'icons', 'default' => '', 'description' => 'Closed state icon' ),
+					'selected_icon'    => array( 'type' => 'icons', 'default' => '', 'description' => 'Closed state icon' ),
 					'selected_active_icon'      => array( 'type' => 'icons', 'default' => '', 'description' => 'Open/active state icon' ),
 					'title_color'               => array( 'type' => 'color', 'default' => '', 'description' => 'Title color' ),
 					'content_color'             => array( 'type' => 'color', 'default' => '', 'description' => 'Content color' ),
@@ -603,7 +603,7 @@ class Mcpwp_Elementor_Widgets {
 				'category'    => 'basic',
 				'settings'    => array(
 					'tabs'                      => array( 'type' => 'repeater', 'default' => '', 'description' => 'Array of toggle items: [{"tab_title":"Section 1","tab_content":"Content 1"}, ...]' ),
-					'selected_icon'             => array( 'type' => 'icons', 'default' => '', 'description' => 'Closed state icon' ),
+					'selected_icon'    => array( 'type' => 'icons', 'default' => '', 'description' => 'Closed state icon' ),
 					'selected_active_icon'      => array( 'type' => 'icons', 'default' => '', 'description' => 'Open state icon' ),
 					'title_color'               => array( 'type' => 'color', 'default' => '', 'description' => 'Title color' ),
 					'content_color'             => array( 'type' => 'color', 'default' => '', 'description' => 'Content color' ),
@@ -824,11 +824,11 @@ class Mcpwp_Elementor_Widgets {
 				),
 			),
 
-			'basic-gallery'   => array(
+			'image-gallery'   => array(
 				'description' => 'Simple image gallery grid.',
 				'category'    => 'basic',
 				'settings'    => array(
-					'gallery'                   => array( 'type' => 'gallery', 'default' => '', 'description' => 'Array of image objects: [{"id":123,"url":"https://..."}]' ),
+					'wp_gallery'                => array( 'type' => 'gallery', 'default' => '', 'description' => 'Array of image objects: [{"id":123,"url":"https://..."}]' ),
 					'gallery_columns'           => array( 'type' => 'select', 'default' => '4', 'options' => array( '1', '2', '3', '4', '5', '6', '7', '8', '9', '10' ), 'description' => 'Number of columns' ),
 					'gallery_link'              => array( 'type' => 'select', 'default' => 'file', 'options' => array( 'file', 'attachment', 'none' ), 'description' => 'Link images to' ),
 					'gallery_rand'              => array( 'type' => 'select', 'default' => '', 'options' => array( '', 'rand' ), 'description' => 'Randomize order' ),
@@ -837,9 +837,9 @@ class Mcpwp_Elementor_Widgets {
 				'example'     => array(
 					'id'         => 'abc1270',
 					'elType'     => 'widget',
-					'widgetType' => 'basic-gallery',
+					'widgetType' => 'image-gallery',
 					'settings'   => array(
-						'gallery'         => array(
+						'wp_gallery'      => array(
 							array( 'id' => '', 'url' => 'https://example.com/img1.jpg' ),
 							array( 'id' => '', 'url' => 'https://example.com/img2.jpg' ),
 						),
@@ -847,7 +847,8 @@ class Mcpwp_Elementor_Widgets {
 					),
 				),
 				'common_mistakes' => array(
-					'Using "images" instead of "gallery"',
+					'Using "images" or "gallery" instead of "wp_gallery"',
+					'Using "basic-gallery" as the widget type — the Basic Gallery widget is registered as "image-gallery"',
 					'Using "columns" instead of "gallery_columns"',
 				),
 			),
@@ -1121,7 +1122,7 @@ class Mcpwp_Elementor_Widgets {
 					'title_text_a'              => array( 'type' => 'text', 'default' => 'This is the heading', 'description' => 'Front side title' ),
 					'description_text_a'        => array( 'type' => 'textarea', 'default' => '', 'description' => 'Front side description' ),
 					'graphic_element'           => array( 'type' => 'select', 'default' => 'icon', 'options' => array( 'none', 'image', 'icon' ), 'description' => 'Front graphic type' ),
-					'selected_icon'             => array( 'type' => 'icons', 'default' => '', 'description' => 'Front icon' ),
+					'selected_icon'    => array( 'type' => 'icons', 'default' => '', 'description' => 'Front icon' ),
 					'image'                     => array( 'type' => 'media', 'default' => '', 'description' => 'Front image' ),
 					'title_text_b'              => array( 'type' => 'text', 'default' => 'This is the heading', 'description' => 'Back side title' ),
 					'description_text_b'        => array( 'type' => 'textarea', 'default' => '', 'description' => 'Back side description' ),
@@ -1667,41 +1668,44 @@ class Mcpwp_Elementor_Widgets {
 	/**
 	 * Get widget help data for a specific widget type.
 	 *
-	 * Returns full schema, example, common mistakes, and valid keys.
-	 * If widget is not found, suggests closest matches.
+	 * The curated guide supplies descriptions, an example and common mistakes.
+	 * Which keys are valid, and whether the widget exists here at all, come
+	 * from Elementor's live registry whenever it can be asked (#824): the
+	 * curated key lists had drifted from Elementor in both directions, and
+	 * callers trusted them over the site.
 	 *
 	 * @param string $widget_type Widget type name.
 	 * @return array Help data or error info with suggestions.
 	 */
 	public static function get_widget_help( $widget_type ) {
-		$schema = self::get( $widget_type );
+		$widget_type = (string) $widget_type;
+		$schema      = self::get( $widget_type );
+
+		// A curated guide is not evidence the widget exists here, and neither
+		// is a name in Elementor's registry: Elementor free registers Pro
+		// widget names as promotion placeholders that render nothing.
+		$live_types  = Mcpwp_Elementor_Registry::live_types();
+		$in_registry = null !== $live_types && in_array( $widget_type, $live_types, true );
+		$placeholder = $in_registry && true === Mcpwp_Elementor_Registry::is_promotion_placeholder( $widget_type );
+		$registered  = null === $live_types ? null : ( $in_registry && ! $placeholder );
+		$unreliable  = $registered ? Mcpwp_Elementor_Setting_Keys::unavailable_reason() : null;
+		$live_keys   = ( $registered && null === $unreliable ) ? Mcpwp_Elementor_Registry::live_setting_keys( $widget_type ) : null;
 
 		if ( $schema ) {
-			$valid_keys = array_keys( $schema['settings'] );
-
-			// A curated guide is not evidence the widget exists here.
-			//
-			// The live-registry consultation was first added only to the
-			// negative branch below, which left the more common half of #785
-			// defect 2 untouched: `form`, `posts`, `portfolio` and
-			// `search-form` are all curated entries, so on an Elementor FREE
-			// site this returned a complete guide — description, valid_keys,
-			// a working example — for a widget that is not registered and will
-			// render nothing, with nothing in the response saying so.
-			$live_types  = Mcpwp_Elementor_Registry::live_types();
-			$registered  = null === $live_types ? null : in_array( $widget_type, $live_types, true );
+			$curated_keys = array_keys( $schema['settings'] );
 
 			$response = array(
-				'widget_type'     => $widget_type,
-				'source'          => 'curated_reference',
-				'description'     => $schema['description'],
-				'category'        => $schema['category'],
-				'valid_keys'      => $valid_keys,
-				'settings'        => $schema['settings'],
-				'example'         => $schema['example'],
-				'common_mistakes' => $schema['common_mistakes'],
-				'registry_checked' => null !== $live_types,
-				'tips'            => array(
+				'widget_type'       => $widget_type,
+				'source'            => 'curated_reference',
+				'description'       => $schema['description'],
+				'category'          => $schema['category'],
+				'valid_keys'        => $curated_keys,
+				'valid_keys_source' => 'curated_reference',
+				'settings'          => $schema['settings'],
+				'example'           => $schema['example'],
+				'common_mistakes'   => $schema['common_mistakes'],
+				'registry_checked'  => null !== $live_types,
+				'tips'              => array(
 					'Every element needs a unique "id" of exactly 7 alphanumeric characters — Elementor Pro\'s AJAX widgets reject any other length.',
 					'Always set "elType" to "widget" and "widgetType" to "' . $widget_type . '".',
 					'Use wp_get_widget_schema tool for live controls data from the actual Elementor installation.',
@@ -1709,10 +1713,38 @@ class Mcpwp_Elementor_Widgets {
 				),
 			);
 
+			if ( is_array( $live_keys ) && ! empty( $live_keys ) ) {
+				$index   = Mcpwp_Elementor_Setting_Keys::index_from_controls( (array) Mcpwp_Elementor_Registry::live_controls( $widget_type ) );
+				$missing = array();
+
+				foreach ( $curated_keys as $key ) {
+					if ( ! Mcpwp_Elementor_Setting_Keys::index_has( $index, $key ) ) {
+						$missing[] = $key;
+					}
+				}
+
+				$response['source']            = 'curated_reference+live_registry';
+				$response['valid_keys']        = $live_keys;
+				$response['valid_keys_source'] = 'live_registry';
+				$response['valid_keys_note']   = 'valid_keys are this widget\'s own controls as Elementor registers them on this site. The Advanced-tab controls every widget shares (_margin, _padding, _element_id, _css_classes, ...) are accepted too — wp_get_widget_schema lists them all.';
+
+				if ( ! empty( $missing ) ) {
+					$response['curated_keys_not_in_live'] = $missing;
+					$response['curated_note']             = 'These keys appear in MCPWP\'s curated guide (settings, example) but are not controls of this widget on this site. Elementor stores and ignores them — use valid_keys.';
+				}
+			} elseif ( $registered && null !== $unreliable ) {
+				$response['valid_keys_note'] = sprintf( 'Elementor\'s live controls could not be used (%s), so valid_keys comes from MCPWP\'s curated guide and may be wrong for this site.', $unreliable );
+			}
+
 			if ( null !== $registered ) {
 				$response['registered_on_this_site'] = $registered;
 
-				if ( ! $registered ) {
+				if ( $placeholder ) {
+					$response['warning'] = sprintf(
+						"This guide describes '%s', an Elementor Pro widget. This site only has Elementor's promotion placeholder for it (Elementor Pro is not active), so using it will save cleanly and render nothing.",
+						$widget_type
+					);
+				} elseif ( ! $registered ) {
 					$response['warning'] = sprintf(
 						"This guide describes '%s', but Elementor does not have it registered on this site — it is most likely an Elementor Pro widget on an installation without Pro. Using it will save cleanly and render nothing.",
 						$widget_type
@@ -1725,48 +1757,52 @@ class Mcpwp_Elementor_Widgets {
 			return $response;
 		}
 
-		// No curated guide. That is not the same as no such widget, and this
-		// used to report it as if it were: asked about `theme-archive-title`
-		// — which exists on the site, renders, and is the correct spelling of
-		// the widget the caller got wrong — it answered `unknown_widget` with
-		// no suggestions and a 52-name list that did not contain the answer,
-		// actively pointing away from the right name (#785).
-		//
-		// So ask Elementor before saying no.
-		$live_types = Mcpwp_Elementor_Registry::live_types();
-
-		if ( null !== $live_types && in_array( $widget_type, $live_types, true ) ) {
+		// No curated guide. That is not the same as no such widget: asked about
+		// `theme-archive-title` — registered and rendering — this used to answer
+		// `unknown_widget` and point away from the right name (#785).
+		if ( $registered ) {
 			$meta = Mcpwp_Elementor_Registry::live_widget_meta( $widget_type );
-			$keys = Mcpwp_Elementor_Registry::live_control_keys( $widget_type );
+			$keys = is_array( $live_keys ) ? $live_keys : Mcpwp_Elementor_Registry::live_control_keys( $widget_type );
 
-			return array(
-				'widget_type' => $widget_type,
-				'source'      => 'live_registry',
-				'description' => ( $meta && '' !== $meta['title'] )
+			$response = array(
+				'widget_type'       => $widget_type,
+				'source'            => 'live_registry',
+				'description'       => ( $meta && '' !== $meta['title'] )
 					? $meta['title'] . ' (registered on this site; no curated guide is written for it yet).'
 					: 'Registered on this site; no curated guide is written for it yet.',
-				'category'    => ( $meta && '' !== $meta['category'] ) ? $meta['category'] : '',
-				'valid_keys'  => is_array( $keys ) ? $keys : array(),
-				'note'        => 'Keys come from the live Elementor controls, not from this plugin\'s reference data, so they are exactly what this installation accepts.',
-				'tips'        => array(
+				'category'          => ( $meta && '' !== $meta['category'] ) ? $meta['category'] : '',
+				'valid_keys'        => is_array( $keys ) ? $keys : array(),
+				'valid_keys_source' => 'live_registry',
+				'note'              => 'Keys come from the live Elementor controls, not from this plugin\'s reference data, so they are exactly what this installation accepts.',
+				'tips'              => array(
 					'Every element needs a unique "id" of exactly 7 alphanumeric characters — Elementor Pro\'s AJAX widgets reject any other length.',
 					'Always set "elType" to "widget" and "widgetType" to "' . $widget_type . '".',
 					'Use wp_get_widget_schema for the full control definitions including types and defaults.',
 					'Use dry_run=true when setting Elementor data to validate without saving.',
 				),
 			);
+
+			if ( null !== $unreliable ) {
+				$response['valid_keys_note'] = sprintf( 'Elementor\'s live controls are incomplete in this request (%s); style keys may be missing from valid_keys.', $unreliable );
+			}
+
+			return $response;
 		}
 
-		// Genuinely not found. Suggest, and be explicit that all_widgets is
-		// this plugin's curated reference list rather than the site's registry
-		// — reading it as the registry is what sent the last caller wrong.
+		// Not a widget this site can render. Suggest, and say which list the
+		// caller is being shown — the site's registry when it could be read.
 		$suggestions = self::find_closest( $widget_type, 5 );
-		$all_types   = self::get_known_types();
 
-		if ( empty( $suggestions ) && null !== $live_types ) {
+		$response = array(
+			'error'   => 'unknown_widget',
+			'message' => sprintf( "Unknown widget type '%s'.", $widget_type ),
+		);
+
+		if ( null !== $live_types ) {
+			$pickable        = self::pickable_live_types( $live_types );
 			$live_suggestion = Mcpwp_Elementor_Registry::suggest(
 				$widget_type,
-				$live_types,
+				$pickable,
 				function ( $input, $candidates ) {
 					$best     = null;
 					$distance = PHP_INT_MAX;
@@ -1781,30 +1817,56 @@ class Mcpwp_Elementor_Widgets {
 				}
 			);
 
-			if ( $live_suggestion ) {
-				$suggestions = array( $live_suggestion );
+			if ( $live_suggestion && ! in_array( $live_suggestion, $suggestions, true ) ) {
+				array_unshift( $suggestions, $live_suggestion );
 			}
-		}
 
-		$response = array(
-			'error'               => 'unknown_widget',
-			'message'             => sprintf( "Unknown widget type '%s'.", $widget_type ),
-			'suggestions'         => $suggestions,
-			'all_widgets'         => $all_types,
-			'all_widgets_is'      => 'curated reference list, not this site\'s widget registry',
-			'tip'                 => 'Use wp_get_elementor_widgets to see all available widgets on this site, including third-party widgets.',
-		);
-
-		// Say which question was actually answered. Without this, "Elementor
-		// says no" and "Elementor could not be asked" read identically.
-		$response['registry_checked'] = null !== $live_types;
-
-		if ( null !== $live_types ) {
+			$response['suggestions']             = $suggestions;
+			$response['all_widgets']             = $pickable;
+			$response['all_widgets_is']          = 'this site\'s live Elementor widget registry (Elementor Pro promotion placeholders left out)';
+			$response['curated_guides']          = self::get_known_types();
+			$response['registry_checked']        = true;
 			$response['registered_widget_count'] = count( $live_types );
+
+			if ( $placeholder ) {
+				$response['pro_placeholder'] = true;
+				$response['message']         = sprintf( "'%s' is an Elementor Pro widget. This site only has Elementor's promotion placeholder for it (Elementor Pro is not active), so it renders nothing.", $widget_type );
+			}
 		} else {
-			$response['registry_note'] = 'Elementor\'s live registry could not be read, so this answer comes only from the curated list. The widget may still exist on the site.';
+			$response['suggestions']      = $suggestions;
+			$response['all_widgets']      = self::get_known_types();
+			$response['all_widgets_is']   = 'curated reference list, not this site\'s widget registry';
+			$response['registry_checked'] = false;
+			$response['registry_note']    = 'Elementor\'s live registry could not be read, so this answer comes only from the curated list. The widget may still exist on the site.';
 		}
+
+		$response['tip'] = 'Use wp_get_elementor_widgets to see all available widgets on this site, including third-party widgets.';
 
 		return $response;
+	}
+
+	/**
+	 * Live widget types a caller can actually use: no Pro placeholders, no
+	 * Elementor-internal common stacks.
+	 *
+	 * @param array $live_types Registered type names.
+	 * @return array
+	 */
+	private static function pickable_live_types( array $live_types ) {
+		$out = array();
+
+		foreach ( $live_types as $type ) {
+			if ( in_array( $type, array( 'common', 'common-base', 'common-optimized' ), true ) ) {
+				continue;
+			}
+
+			if ( true === Mcpwp_Elementor_Registry::is_promotion_placeholder( $type ) ) {
+				continue;
+			}
+
+			$out[] = $type;
+		}
+
+		return $out;
 	}
 }

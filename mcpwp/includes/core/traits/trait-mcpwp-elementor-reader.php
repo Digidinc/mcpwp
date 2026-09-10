@@ -468,7 +468,7 @@ trait Mcpwp_Elementor_Reader_Trait {
 		'spacer', 'google_maps', 'icon', 'image-box', 'icon-box', 'icon-list',
 		'counter', 'progress', 'testimonial', 'tabs', 'accordion', 'toggle',
 		'social-icons', 'alert', 'html', 'shortcode', 'menu-anchor',
-		'sidebar', 'read-more', 'star-rating', 'basic-gallery', 'image-carousel',
+		'sidebar', 'read-more', 'star-rating', 'image-gallery', 'image-carousel',
 		'wp-widget-pages', 'wp-widget-calendar', 'wp-widget-archives',
 		'wp-widget-media_audio', 'wp-widget-media_image', 'wp-widget-media_gallery',
 		'wp-widget-media_video', 'wp-widget-meta', 'wp-widget-search',
@@ -552,31 +552,6 @@ trait Mcpwp_Elementor_Reader_Trait {
 	}
 
 	/**
-	 * Get valid widget setting keys, preferring the live Elementor widget schema.
-	 *
-	 * Falls back to the static reference registry when live controls are unavailable.
-	 *
-	 * @param string $widget_type Widget type name.
-	 * @return array Setting key names.
-	 */
-	private function get_valid_widget_keys( $widget_type ) {
-		// Via the registry helper, which catches a throwing registry. This was
-		// the second of two unguarded get_widget_types() calls on the save
-		// path; either one turned a misbehaving third-party widget into a
-		// fatal on every Elementor write.
-		$live = Mcpwp_Elementor_Registry::live_control_keys( $widget_type );
-		$keys = is_array( $live ) ? $live : array();
-
-		// Always merge in our static reference schema — it may know about keys
-		// that the live widget registry doesn't expose via get_controls() (e.g.
-		// responsive base keys like 'align' on icon-box).
-		$static_keys = Mcpwp_Elementor_Widgets::get_valid_keys( $widget_type );
-		$keys = array_merge( $keys, $static_keys );
-
-		return array_values( array_unique( $keys ) );
-	}
-
-	/**
 	 * Get the controls schema for a specific widget type.
 	 *
 	 * @param string $widget_type Widget type name (e.g. 'heading', 'image').
@@ -611,6 +586,11 @@ trait Mcpwp_Elementor_Reader_Trait {
 					'title' => $widget->get_title(),
 					'icon'  => $widget->get_icon(),
 				);
+				// Elementor free registers Pro widget names as placeholders that
+				// render nothing (#824); say so rather than list them as usable.
+				if ( Mcpwp_Elementor_Registry::is_placeholder_widget( $widget ) ) {
+					$entry['pro_placeholder'] = true;
+				}
 				$ref = Mcpwp_Elementor_Widgets::get( $name );
 				if ( $ref ) {
 					$entry['description']   = $ref['description'];

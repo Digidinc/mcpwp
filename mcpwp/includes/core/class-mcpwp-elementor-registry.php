@@ -57,6 +57,11 @@ class Mcpwp_Elementor_Registry {
 	private static $rename_prefixes = array( 'theme-' );
 
 	/**
+	 * Control types that lay out the panel and store no setting.
+	 */
+	const UI_CONTROL_TYPES = array( 'section', 'tabs', 'tab', 'heading', 'raw_html', 'divider', 'deprecated_notice', 'alert', 'notice', 'button' );
+
+	/**
 	 * Widget types Elementor reports as registered on this site.
 	 *
 	 * @return array|null Type names, or null when Elementor cannot be asked.
@@ -245,5 +250,147 @@ class Mcpwp_Elementor_Registry {
 		}
 
 		return null;
+	}
+
+	/**
+	 * The registered widget object for a type.
+	 *
+	 * @param string $widget_type Widget type name.
+	 * @return object|null Null when not registered or Elementor cannot be asked.
+	 */
+	public static function live_widget( $widget_type ) {
+		if ( ! class_exists( '\Elementor\Plugin' ) ) {
+			return null;
+		}
+
+		$instance = \Elementor\Plugin::$instance;
+
+		if ( empty( $instance ) || empty( $instance->widgets_manager ) ) {
+			return null;
+		}
+
+		try {
+			$types = $instance->widgets_manager->get_widget_types();
+		} catch ( \Throwable $e ) {
+			return null;
+		}
+
+		if ( ! is_array( $types ) || ! isset( $types[ $widget_type ] ) || ! is_object( $types[ $widget_type ] ) ) {
+			return null;
+		}
+
+		return $types[ $widget_type ];
+	}
+
+	/**
+	 * Whether a registered widget is Elementor's placeholder for a Pro widget.
+	 *
+	 * Elementor free registers the names of Pro widgets (`form`, `posts`,
+	 * `nav-menu`, `loop-grid`, ...) as Modules\Promotions\Widgets\Pro_Widget_Promotion
+	 * so the editor panel can advertise them. Observed on Elementor 4.2.4: the
+	 * name is in get_widget_types(), the widget has no controls, and it renders
+	 * nothing. "Registered" is not "available" for these.
+	 *
+	 * @param object $widget Widget object.
+	 * @return bool
+	 */
+	public static function is_placeholder_widget( $widget ) {
+		if ( ! is_object( $widget ) ) {
+			return false;
+		}
+
+		if ( is_a( $widget, 'Elementor\Modules\Promotions\Widgets\Pro_Widget_Promotion' ) ) {
+			return true;
+		}
+
+		$class = get_class( $widget );
+
+		return 'Pro_Widget_Promotion' === substr( $class, -strlen( 'Pro_Widget_Promotion' ) );
+	}
+
+	/**
+	 * Whether a widget type is registered only as a Pro placeholder.
+	 *
+	 * @param string $widget_type Widget type name.
+	 * @return bool|null Null when the type is not registered or Elementor cannot be asked.
+	 */
+	public static function is_promotion_placeholder( $widget_type ) {
+		$widget = self::live_widget( $widget_type );
+
+		return null === $widget ? null : self::is_placeholder_widget( $widget );
+	}
+
+	/**
+	 * Every control of a registered widget, as Elementor defines it.
+	 *
+	 * Includes the common Advanced-tab controls. Outside REST, admin and
+	 * preview requests Elementor omits style controls — see
+	 * Mcpwp_Elementor_Setting_Keys::unavailable_reason().
+	 *
+	 * @param string $widget_type Widget type name.
+	 * @return array|null Controls keyed by name, or null when unavailable.
+	 */
+	public static function live_controls( $widget_type ) {
+		$widget = self::live_widget( $widget_type );
+
+		if ( null === $widget || ! method_exists( $widget, 'get_controls' ) ) {
+			return null;
+		}
+
+		try {
+			$controls = $widget->get_controls();
+		} catch ( \Throwable $e ) {
+			return null;
+		}
+
+		return is_array( $controls ) ? $controls : null;
+	}
+
+	/**
+	 * The setting keys a widget itself defines — its own controls without the
+	 * shared Advanced-tab ones, and without controls that only lay out the panel.
+	 *
+	 * @param string $widget_type Widget type name.
+	 * @return array|null Key names, or null when unavailable.
+	 */
+	public static function live_setting_keys( $widget_type ) {
+		$widget = self::live_widget( $widget_type );
+
+		if ( null === $widget ) {
+			return null;
+		}
+
+		$controls = null;
+
+		try {
+			if ( method_exists( $widget, 'get_stack' ) ) {
+				$stack    = $widget->get_stack( false );
+				$controls = ( is_array( $stack ) && isset( $stack['controls'] ) && is_array( $stack['controls'] ) ) ? $stack['controls'] : null;
+			}
+
+			if ( null === $controls && method_exists( $widget, 'get_controls' ) ) {
+				$controls = $widget->get_controls();
+			}
+		} catch ( \Throwable $e ) {
+			return null;
+		}
+
+		if ( ! is_array( $controls ) ) {
+			return null;
+		}
+
+		$keys = array();
+
+		foreach ( $controls as $name => $control ) {
+			$type = ( is_array( $control ) && isset( $control['type'] ) ) ? (string) $control['type'] : '';
+
+			if ( in_array( $type, self::UI_CONTROL_TYPES, true ) ) {
+				continue;
+			}
+
+			$keys[] = ( is_array( $control ) && isset( $control['name'] ) && is_string( $control['name'] ) ) ? $control['name'] : (string) $name;
+		}
+
+		return $keys;
 	}
 }
