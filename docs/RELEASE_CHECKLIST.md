@@ -35,7 +35,7 @@ bash scripts/verify_update_channel.sh
 FREEMIUS_BEARER_TOKEN=... bash scripts/verify_freemius_channel.sh --expect-version X.Y.Z
 ```
 
-`verify_freemius_channel.sh` checks the release flag only. When a customer reports a failed premium update, see *Freemius* in `docs/KNOWN_ISSUES.md`.
+`verify_freemius_channel.sh` checks the release flag and downloads the premium ZIP (following Freemius's redirect to storage without the bearer header), failing unless it is a valid archive whose `mcpwp-premium/mcpwp.php` carries the expected `Version:` and which ships `mcpwp-premium/freemius/start.php`. When a customer reports a failed premium update, see *Freemius* in `docs/KNOWN_ISSUES.md`.
 
 ## Manual / re-publish
 
