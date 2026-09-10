@@ -95,7 +95,12 @@ class Mcpwp_Rate_Limiter {
 	 * @param array|null $key_record Optional scoped API key record with per-key rate_limits overrides.
 	 * @return bool|WP_Error True if allowed, WP_Error if rate limited.
 	 */
-	public function check_limit( $identifier = null, $method = 'POST', $key_record = null ) {
+	public function check_limit( $identifier = null, $method = 'POST', $key_record = null, $weight = 1 ) {
+		// A batch is charged one slot per operation (#802). Refused whole when
+		// it does not fit — running part of a batch and then 429ing is the
+		// mid-write corruption that issue opens with.
+		$weight = max( 1, (int) $weight );
+
 		if ( ! $this->is_enabled() ) {
 			return true;
 		}
@@ -135,12 +140,12 @@ class Mcpwp_Rate_Limiter {
 		$burst_data  = $this->initialize_window_data( $burst_data, $burst_window, $now );
 
 		// Check short burst limit first.
-		if ( $burst_data['count'] >= $burst_limit ) {
+		if ( $burst_data['count'] + $weight > $burst_limit ) {
 			$retry_after = max( 0, $burst_data['reset'] - $now );
 
 			$this->current_data = array(
 				'limit'       => $burst_limit,
-				'remaining'   => 0,
+				'remaining'   => max( 0, $burst_limit - $burst_data['count'] ),
 				'reset'       => $burst_data['reset'],
 				'window'      => 'burst',
 				'retry_after' => $retry_after,
@@ -159,7 +164,8 @@ class Mcpwp_Rate_Limiter {
 					'status'           => 429,
 					'retry_after'      => $retry_after,
 					'limit'            => $burst_limit,
-					'remaining'        => 0,
+					'remaining'        => max( 0, $burst_limit - $burst_data['count'] ),
+					'requested'        => $weight,
 					'reset'            => $burst_data['reset'],
 					'hint'             => sprintf(
 						'Burst rate limit exceeded (%d/%ds). Wait %d seconds before retrying. To increase limits, the site admin can adjust settings in WP Admin > MCPWP > Settings, or create a key with custom rate_limits.',
@@ -172,12 +178,12 @@ class Mcpwp_Rate_Limiter {
 		}
 
 		// Check minute limit.
-		if ( $minute_data['count'] >= $minute_limit ) {
+		if ( $minute_data['count'] + $weight > $minute_limit ) {
 			$retry_after = max( 0, $minute_data['reset'] - $now );
 
 			$this->current_data = array(
 				'limit'     => $minute_limit,
-				'remaining' => 0,
+				'remaining' => max( 0, $minute_limit - $minute_data['count'] ),
 				'reset'     => $minute_data['reset'],
 				'window'    => 'minute',
 				'retry_after' => $retry_after,
@@ -195,7 +201,8 @@ class Mcpwp_Rate_Limiter {
 					'status'           => 429,
 					'retry_after'      => $retry_after,
 					'limit'            => $minute_limit,
-					'remaining'        => 0,
+					'remaining'        => max( 0, $minute_limit - $minute_data['count'] ),
+					'requested'        => $weight,
 					'reset'            => $minute_data['reset'],
 					'hint'             => sprintf(
 						'Per-minute rate limit exceeded (%d/min). Wait %d seconds before retrying. To increase limits, the site admin can adjust rate limit settings or create a key with custom rate_limits.',
@@ -207,12 +214,12 @@ class Mcpwp_Rate_Limiter {
 		}
 
 		// Check hour limit.
-		if ( $hour_data['count'] >= $hour_limit ) {
+		if ( $hour_data['count'] + $weight > $hour_limit ) {
 			$retry_after = max( 0, $hour_data['reset'] - $now );
 
 			$this->current_data = array(
 				'limit'     => $hour_limit,
-				'remaining' => 0,
+				'remaining' => max( 0, $hour_limit - $hour_data['count'] ),
 				'reset'     => $hour_data['reset'],
 				'window'    => 'hour',
 				'retry_after' => $retry_after,
@@ -230,7 +237,8 @@ class Mcpwp_Rate_Limiter {
 					'status'           => 429,
 					'retry_after'      => $retry_after,
 					'limit'            => $hour_limit,
-					'remaining'        => 0,
+					'remaining'        => max( 0, $hour_limit - $hour_data['count'] ),
+					'requested'        => $weight,
 					'reset'            => $hour_data['reset'],
 					'hint'             => sprintf(
 						'Hourly rate limit exceeded (%d/hr). Wait %d seconds before retrying. To increase limits, the site admin can adjust rate limit settings or create a key with custom rate_limits.',
@@ -242,9 +250,9 @@ class Mcpwp_Rate_Limiter {
 		}
 
 		// Increment counts.
-		$minute_data['count']++;
-		$hour_data['count']++;
-		$burst_data['count']++;
+		$minute_data['count'] += $weight;
+		$hour_data['count']   += $weight;
+		$burst_data['count']  += $weight;
 
 		// Store updated counts using remaining window TTL (fixed window, no sliding expiration).
 		set_transient( $cache_key_minute, $minute_data, max( 1, $minute_data['reset'] - $now ) );

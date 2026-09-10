@@ -266,7 +266,7 @@ trait Mcpwp_Api_Auth {
 			$rate_method      = 'GET';
 		}
 
-		$rate_limit_check = $this->check_rate_limit( $rate_identifier, $rate_method, $matched_key );
+		$rate_limit_check = $this->check_rate_limit( $rate_identifier, $rate_method, $matched_key, $this->request_rate_weight( $request ) );
 		if ( is_wp_error( $rate_limit_check ) ) {
 			return $rate_limit_check;
 		}
@@ -685,13 +685,27 @@ trait Mcpwp_Api_Auth {
 		return false;
 	}
 
-	protected function check_rate_limit( $identifier = null, $method = 'POST', $key_record = null ) {
+	/**
+	 * How many rate-limit slots this request costs (#802).
+	 *
+	 * One, unless a controller carries several operations in one HTTP
+	 * request — the JSON-RPC batch and REST /batch override this to charge
+	 * per operation, so a bigger batch cap does not make the budget fiction.
+	 *
+	 * @param WP_REST_Request $request Request.
+	 * @return int
+	 */
+	protected function request_rate_weight( $request ) {
+		return 1;
+	}
+
+	protected function check_rate_limit( $identifier = null, $method = 'POST', $key_record = null, $weight = 1 ) {
 		if ( ! class_exists( 'Mcpwp_Rate_Limiter' ) ) {
 			return true;
 		}
 
 		$limiter = Mcpwp_Rate_Limiter::get_instance();
-		return $limiter->check_limit( $identifier, $method, $key_record );
+		return $limiter->check_limit( $identifier, $method, $key_record, $weight );
 	}
 
 	/**

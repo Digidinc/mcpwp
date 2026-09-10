@@ -528,7 +528,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 
 		// Handle batch requests (array of requests) — limit batch size to prevent abuse.
 		if ( isset( $body[0] ) ) {
-			$max_batch = 10;
+			$max_batch = self::MAX_BATCH_REQUESTS;
 			if ( count( $body ) > $max_batch ) {
 				return $this->jsonrpc_error_response(
 					null,
@@ -569,6 +569,28 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 
 		$rest_response = new WP_REST_Response( $this->attach_rate_limit_meta( $response ), 200 );
 		return $this->prepare_mcp_response( $rest_response );
+	}
+
+	/**
+	 * JSON-RPC batch cap. A bulk job needs one round trip per hundred
+	 * operations (#802); each operation is charged one rate-limit slot.
+	 */
+	const MAX_BATCH_REQUESTS = 100;
+
+	/**
+	 * A JSON-RPC batch costs one slot per request in it (#802).
+	 *
+	 * @param WP_REST_Request $request Request.
+	 * @return int
+	 */
+	protected function request_rate_weight( $request ) {
+		$body = method_exists( $request, 'get_json_params' ) ? $request->get_json_params() : null;
+
+		if ( is_array( $body ) && isset( $body[0] ) ) {
+			return max( 1, count( $body ) );
+		}
+
+		return 1;
 	}
 
 	/**
