@@ -215,12 +215,15 @@ PY
 	# The manifest's download_url is mcpwp-latest.zip — this key MUST exist in R2 or downloads 404.
 	CLOUDFLARE_API_TOKEN="$CF_TOKEN" npx --prefix "$WORKER_DIR" wrangler r2 object put mumcp-updates/mcpwp-latest.zip \
 		--file="$ZIP_PATH" --content-type="application/zip" --remote
-	# Versioned agency package, never at a public key (#852): the Worker serves
-	# agency/ only to a request carrying a download token, and refuses any other
-	# key that names an agency build.
-	CLOUDFLARE_API_TOKEN="$CF_TOKEN" npx --prefix "$WORKER_DIR" wrangler r2 object put "mumcp-updates/agency/mcpwp-agency-$VERSION.zip" \
+	# Versioned agency package (MCPWP_PRO=true), never in the public bucket
+	# (#852): the legacy spai-updates Worker reads mumcp-updates without auth.
+	# It goes to the private mcpwp-agency-builds bucket, which only the
+	# mcpwp-updates Worker can read, and only for a request carrying a download
+	# token. If that bucket does not exist this upload fails, and so does the
+	# release: loud, never public.
+	CLOUDFLARE_API_TOKEN="$CF_TOKEN" npx --prefix "$WORKER_DIR" wrangler r2 object put "mcpwp-agency-builds/mcpwp-agency-$VERSION.zip" \
 		--file="$AGENCY_ZIP" --content-type="application/zip" --remote
-	echo "  R2 upload: version.json + mcpwp-latest.zip + agency/mcpwp-agency-$VERSION.zip → mumcp-updates bucket"
+	echo "  R2 upload: version.json + mcpwp-latest.zip → mumcp-updates; mcpwp-agency-$VERSION.zip → mcpwp-agency-builds (private)"
 fi
 
 # Prove the channel can actually deliver what we just published, and FAIL the
@@ -247,6 +250,31 @@ for CHANNEL_URL in \
 	fi
 done
 
+# An agency build must never be downloadable without a token, from either host
+# (#852). A 200 on any of these URLs fails the release even if everything else
+# shipped: a public Pro-unlocked build is worse than a late release.
+AGENCY_LEAK=0
+for LEAK_URL in \
+	"https://updates.mcpwp.net/agency/mcpwp-agency-$VERSION.zip" \
+	"https://updates.mcpwp.net/mcpwp-agency-$VERSION.zip" \
+	"https://mumega.com/mcp-updates/agency/mcpwp-agency-$VERSION.zip" \
+	"https://mumega.com/mcp-updates/mcpwp-agency-$VERSION.zip"; do
+	LEAK_CODE="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 "$LEAK_URL" 2>/dev/null || echo "000")"
+	if [[ "$LEAK_CODE" == "200" ]]; then
+		echo "ERROR: agency build is publicly downloadable without a token: $LEAK_URL" >&2
+		AGENCY_LEAK=1
+	elif [[ "$LEAK_CODE" == "000" ]]; then
+		echo "ERROR: could not check $LEAK_URL for a public agency build (no response)" >&2
+		AGENCY_LEAK=1
+	fi
+done
+
+if [[ "$AGENCY_LEAK" -eq 1 ]]; then
+	echo "" >&2
+	echo "ERROR: MCPWP $VERSION is NOT shipped — an agency build is (or may be) public." >&2
+	exit 1
+fi
+
 if [[ "$VERIFY_FAILED" -eq 1 ]]; then
 	echo "" >&2
 	echo "ERROR: MCPWP $VERSION is NOT shipped — at least one channel cannot deliver it." >&2
@@ -257,5 +285,5 @@ fi
 echo "Published MCPWP $VERSION"
 echo "  canonical manifest: https://updates.mcpwp.net/version.json"
 echo "  canonical zip:      https://updates.mcpwp.net/mcpwp-latest.zip"
-echo "  agency zip:         https://updates.mcpwp.net/agency/mcpwp-agency-$VERSION.zip (download token required)"
+echo "  agency zip:         https://updates.mcpwp.net/agency/mcpwp-agency-$VERSION.zip (Authorization: Bearer <agency token> required)"
 echo "  mirror (same R2):   https://mumega.com/mcp-updates/version.json"

@@ -115,7 +115,7 @@ bash mcpwp/scripts/build-all.sh
 
 Agency build injects `MCPWP_PRO=true` at build time — no wp-config.php changes, no license prompt. Includes self-update channel (`updates.mcpwp.net`).
 
-Agency builds are **not public** (#852): anyone holding one has every Pro feature. They are stored at `agency/mcpwp-agency-X.Y.Z.zip` in the `mumcp-updates` bucket and served by `updates.mcpwp.net` only with a download token (`Authorization: Bearer <token>` or `?token=`), configured in the `mcpwp-updates` Worker secret `AGENCY_DOWNLOAD_TOKENS` (one per agency, comma-separated). Never publish an agency ZIP at a public key or paste a token into docs. Note: an agency site's built-in updater follows the public manifest to `mcpwp-latest.zip`, which is the Free build.
+Agency builds are **not public** (#852): anyone holding one has every Pro feature. They are stored in the private R2 bucket `mcpwp-agency-builds` (never in `mumcp-updates`, which the legacy `mumega.com` Worker reads without auth) and served only by `updates.mcpwp.net/agency/mcpwp-agency-X.Y.Z.zip` to a request with `Authorization: Bearer <token>` — tokens are never accepted in a URL. Tokens are the `mcpwp-updates` Worker secret `AGENCY_DOWNLOAD_TOKENS` (one per agency, comma-separated, 32+ chars). Never upload an agency ZIP to a public bucket or paste a token into docs, a `package_url` or a script. The release fails if an agency build answers 200 without a token on either host. Note: an agency site's built-in updater follows the public manifest to `mcpwp-latest.zip`, which is the Free build.
 
 ### Release a New Version
 
@@ -125,7 +125,7 @@ version artefacts, writes the changelog, tags, and creates the GitHub Release wh
 
 Merge the release PR (`chore(main): release X.Y.Z`) → tags `vX.Y.Z`. release-please then publishes
 automatically (`publish-canonical-channel` job): it uploads `version.json` + the self-hosted ZIP +
-the token-gated agency ZIP (`agency/mcpwp-agency-X.Y.Z.zip`) to the `mumcp-updates` R2 bucket — which backs both
+the public files to the `mumcp-updates` R2 bucket and the agency ZIP to the private `mcpwp-agency-builds` bucket — which backs both
 `updates.mcpwp.net` and `mumega.com/mcp-updates` — and FAILS the release if the channel cannot
 actually serve the new version. No manual `wrangler` upload and no VPS access is needed.
 
