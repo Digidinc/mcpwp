@@ -133,7 +133,7 @@ final class DestructiveGateTest extends TestCase {
 		$cases = array(
 			array( new Mcpwp_REST_Posts(), 'delete_post', new WP_REST_Request( 'DELETE', '/mcpwp/v1/posts/11', array( 'id' => 11, 'force' => true ) ) ),
 			array( new Mcpwp_REST_Content(), 'delete_content', new WP_REST_Request( 'DELETE', '/mcpwp/v1/content/post/11', array( 'post_type' => 'post', 'id' => 11, 'force' => true ) ) ),
-			array( new Mcpwp_REST_Posts(), 'delete_all_drafts', new WP_REST_Request( 'POST', '/mcpwp/v1/drafts/delete-all', array( 'force' => true ) ) ),
+			array( new Mcpwp_REST_Posts(), 'delete_all_drafts', new WP_REST_Request( 'DELETE', '/mcpwp/v1/drafts/delete-all', array( 'force' => true ) ) ),
 			array( new Mcpwp_REST_Media(), 'delete_media', new WP_REST_Request( 'DELETE', '/mcpwp/v1/media/12', array( 'id' => 12, 'force' => true ) ) ),
 		);
 
