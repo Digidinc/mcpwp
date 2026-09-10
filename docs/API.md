@@ -274,9 +274,25 @@ GET /rate-limit
       "remaining": 850,
       "reset": 1699577400
     }
+  },
+  "relay_admission": "atomic",
+  "relay_limits": {
+    "per_ip": { "limit": 10, "window_seconds": 60 },
+    "global_per_minute": { "limit": 20, "window_seconds": 60 },
+    "global_per_hour": { "limit": 200, "window_seconds": 3600 }
   }
 }
 ```
+
+`relay_admission` and `relay_limits` describe the public feedback relay (`POST /feedback/relay`), not the API limits above. The relay is unauthenticated and spends the site's GitHub token, so it has three ceilings of its own: per source address, site-wide per minute, and site-wide per hour.
+
+| `relay_admission` | Meaning |
+|---|---|
+| `atomic` | A persistent object cache (an object-cache drop-in such as Redis or Memcached) is present. Admission is decided on the cache's atomic increment, so concurrent requests cannot push a ceiling past its limit. It is only as strong as the drop-in's `wp_cache_add` / `wp_cache_incr`, and needs the `mcpwp_relay_admission` cache group to be persistent. |
+| `approximate` | No persistent object cache. Admission is a transient read-then-write, so a burst of concurrent requests can pass a ceiling by roughly the size of the burst. The ceilings still hold for sequential traffic. |
+| `unavailable` | The relay controller is not loaded, so the mode could not be determined. `relay_limits` is omitted. |
+
+In both modes, a request refused at one ceiling uses up no budget in the others. If a relay counter cannot be read or written, the relay answers `503 relay_unavailable` and does not create an issue. The mode is reported only here, and not on the public relay endpoint.
 
 ### Rate Limit Exceeded Response
 

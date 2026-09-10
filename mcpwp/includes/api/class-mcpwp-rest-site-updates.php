@@ -476,9 +476,12 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 
 		if ( ! class_exists( 'Mcpwp_Rate_Limiter' ) ) {
 			return $this->success_response(
-				array(
-					'enabled' => false,
-					'message' => __( 'Rate limiting is not available.', 'mcpwp' ),
+				array_merge(
+					array(
+						'enabled' => false,
+						'message' => __( 'Rate limiting is not available.', 'mcpwp' ),
+					),
+					$this->relay_admission_status()
 				)
 			);
 		}
@@ -501,15 +504,45 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 		$usage = $limiter->get_usage( $rate_identifier );
 
 		return $this->success_response(
-			array(
-				'enabled' => $settings['enabled'],
-				'limits'  => array(
-					'burst'      => $settings['burst_limit'],
-					'per_minute' => $settings['requests_per_minute'],
-					'per_hour'   => $settings['requests_per_hour'],
+			array_merge(
+				array(
+					'enabled' => $settings['enabled'],
+					'limits'  => array(
+						'burst'      => $settings['burst_limit'],
+						'per_minute' => $settings['requests_per_minute'],
+						'per_hour'   => $settings['requests_per_hour'],
+					),
+					'usage'   => $usage,
 				),
-				'usage'   => $usage,
+				$this->relay_admission_status()
 			)
+		);
+	}
+
+	/**
+	 * How the public feedback relay's ceilings are enforced on this site (#752 F6).
+	 *
+	 * Reported here, beside the API limits, because this is where an operator
+	 * looks for "what is being limited, and how". Not reported on the public
+	 * relay endpoint itself: telling an unauthenticated caller that a site's
+	 * admission is approximate tells them which sites a concurrent burst can
+	 * overshoot.
+	 *
+	 * Three answers, never collapsed into two: 'atomic', 'approximate', or
+	 * 'unavailable' when the relay controller is not loaded and the mode
+	 * cannot be determined. 'unavailable' carries no limits, because the
+	 * limits of a controller that is not loaded are not known.
+	 *
+	 * @return array{relay_admission: string, relay_limits?: array}
+	 */
+	private function relay_admission_status() {
+		if ( ! class_exists( 'Mcpwp_REST_Feedback' ) ) {
+			return array( 'relay_admission' => 'unavailable' );
+		}
+
+		return array(
+			'relay_admission' => Mcpwp_REST_Feedback::relay_admission_mode(),
+			'relay_limits'    => Mcpwp_REST_Feedback::relay_limits(),
 		);
 	}
 

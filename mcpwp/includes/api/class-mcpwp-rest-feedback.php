@@ -110,6 +110,33 @@ class Mcpwp_REST_Feedback extends Mcpwp_REST_API {
 	const RELAY_GLOBAL_MINUTE_TRANSIENT_PREFIX = 'mcpwp_relay_global_min_';
 
 	/**
+	 * Object-cache group holding the atomic admission counters (#752 F6).
+	 *
+	 * The gate is only as persistent as this group. A site that lists it as
+	 * non-persistent (WP_REDIS_IGNORED_GROUPS, wp_cache_add_non_persistent_groups())
+	 * hands every request a fresh counter; the transient pre-check in
+	 * relay_feedback() still bounds such a site at the approximate level.
+	 *
+	 * @var string
+	 */
+	const RELAY_ADMISSION_CACHE_GROUP = 'mcpwp_relay_admission';
+
+	/**
+	 * Admission mode: decided on the object cache's atomic increment.
+	 *
+	 * @var string
+	 */
+	const RELAY_ADMISSION_ATOMIC = 'atomic';
+
+	/**
+	 * Admission mode: decided on a transient read-then-write, which concurrent
+	 * requests can overshoot by roughly their concurrency.
+	 *
+	 * @var string
+	 */
+	const RELAY_ADMISSION_APPROXIMATE = 'approximate';
+
+	/**
 	 * Register routes.
 	 */
 	public function register_routes() {
@@ -274,6 +301,20 @@ class Mcpwp_REST_Feedback extends Mcpwp_REST_API {
 	 * @return WP_REST_Response|WP_Error
 	 */
 	public function relay_feedback( $request ) {
+		// One timestamp for every counter key, so a request that lands on a
+		// window boundary is charged to one consistent set of windows.
+		$now = time();
+
+		// Stage 1 — the accounting record. All three transient counters are
+		// read and tested before anything is incremented, in either admission
+		// mode. In atomic mode this is not redundant: it refuses a saturated
+		// window without taking and handing back a slot, and it keeps the
+		// ceiling at the approximate level on a site whose object cache is
+		// present but not persisting the admission group (see
+		// RELAY_ADMISSION_CACHE_GROUP). It can never refuse a request the
+		// atomic gate would admit: a read-then-write record only ever
+		// under-counts.
+		//
 		// Per-IP throttle: no single source may exceed RELAY_RATE_MAX
 		// submissions inside RELAY_RATE_WINDOW seconds.
 		//
@@ -285,7 +326,7 @@ class Mcpwp_REST_Feedback extends Mcpwp_REST_API {
 		// made, which is the only place it matters on this credential-
 		// spending path.
 		$ip        = $this->get_relay_client_ip();
-		$transient = $this->relay_ip_transient_key( $ip );
+		$transient = $this->relay_ip_transient_key( $ip, $now );
 		$count     = (int) get_transient( $transient );
 		if ( $count >= self::RELAY_RATE_MAX ) {
 			return new WP_Error(
@@ -303,7 +344,7 @@ class Mcpwp_REST_Feedback extends Mcpwp_REST_API {
 		// creation) while the hourly counter still reads as un-tripped.
 		// Checked before any counter is incremented, so a refused request
 		// consumes no budget.
-		$global_minute_transient = $this->relay_global_minute_transient_key();
+		$global_minute_transient = $this->relay_global_minute_transient_key( $now );
 		$global_minute_count     = (int) get_transient( $global_minute_transient );
 		if ( $global_minute_count >= self::RELAY_GLOBAL_MAX_PER_MINUTE ) {
 			return new WP_Error(
@@ -319,7 +360,7 @@ class Mcpwp_REST_Feedback extends Mcpwp_REST_API {
 		// accepted request here spends this site's own GitHub token on behalf
 		// of an unauthenticated caller. Checked before either counter is
 		// incremented, so a refused request consumes no budget.
-		$global_transient = $this->relay_global_transient_key();
+		$global_transient = $this->relay_global_transient_key( $now );
 		$global_count     = (int) get_transient( $global_transient );
 		if ( $global_count >= self::RELAY_GLOBAL_MAX ) {
 			return new WP_Error(
@@ -329,6 +370,29 @@ class Mcpwp_REST_Feedback extends Mcpwp_REST_API {
 			);
 		}
 
+		// Stage 2 — atomic admission (#752 F6). The reads above and the writes
+		// below are not one step: N requests that all read before any of them
+		// writes all see the same count and all pass, so each ceiling
+		// overshoots by roughly the concurrency level. Where a persistent
+		// object cache makes an atomic increment available, the decision is
+		// taken on that increment instead. Where it does not, there is no
+		// cross-request atomic primitive to use; admission stays approximate
+		// and GET /rate-limit says so (relay_admission_mode()).
+		if ( self::RELAY_ADMISSION_ATOMIC === self::relay_admission_mode() ) {
+			$refusal = $this->admit_relay_atomically(
+				array(
+					array( $transient, self::RELAY_RATE_MAX, self::RELAY_RATE_WINDOW ),
+					array( $global_minute_transient, self::RELAY_GLOBAL_MAX_PER_MINUTE, self::RELAY_GLOBAL_MINUTE_WINDOW ),
+					array( $global_transient, self::RELAY_GLOBAL_MAX, self::RELAY_GLOBAL_WINDOW ),
+				)
+			);
+			if ( null !== $refusal ) {
+				return $refusal;
+			}
+		}
+
+		// Stage 3 — write the accounting record.
+		//
 		// A failed write means the ceiling checked above cannot be enforced
 		// for the next request — this bucket will read back as zero no
 		// matter how many requests actually land, and the site's GitHub
@@ -337,7 +401,9 @@ class Mcpwp_REST_Feedback extends Mcpwp_REST_API {
 		// here never lets a request through to create an issue. If an
 		// earlier write above succeeds but a later write below fails, we
 		// still refuse — the earlier bucket is left slightly over-counted
-		// rather than rolled back, which is the safe direction.
+		// rather than rolled back, which is the safe direction. In atomic mode
+		// the slots taken in stage 2 are likewise kept on a 503 here, for the
+		// same reason.
 		if ( false === set_transient( $transient, $count + 1, self::RELAY_RATE_WINDOW ) ) {
 			return new WP_Error(
 				'relay_unavailable',
@@ -498,10 +564,13 @@ class Mcpwp_REST_Feedback extends Mcpwp_REST_API {
 	 * abusive request refreshes the transient's TTL. A sustained flood cannot
 	 * keep legitimate submissions locked out past the current window.
 	 *
+	 * @param int|null $now Timestamp to derive the window from. Defaults to
+	 *                      the current time.
 	 * @return string
 	 */
-	private function relay_global_transient_key() {
-		return self::RELAY_GLOBAL_TRANSIENT_PREFIX . (int) floor( time() / self::RELAY_GLOBAL_WINDOW );
+	private function relay_global_transient_key( $now = null ) {
+		$now = null === $now ? time() : (int) $now;
+		return self::RELAY_GLOBAL_TRANSIENT_PREFIX . (int) floor( $now / self::RELAY_GLOBAL_WINDOW );
 	}
 
 	/**
@@ -519,6 +588,174 @@ class Mcpwp_REST_Feedback extends Mcpwp_REST_API {
 	private function relay_global_minute_transient_key( $now = null ) {
 		$now = null === $now ? time() : (int) $now;
 		return self::RELAY_GLOBAL_MINUTE_TRANSIENT_PREFIX . (int) floor( $now / self::RELAY_GLOBAL_MINUTE_WINDOW );
+	}
+
+	/**
+	 * Which admission mode the relay ceilings run in on this site (#752 F6).
+	 *
+	 * 'atomic' when a persistent object cache is present. wp_cache_incr() is
+	 * then a single operation on the backend (Redis INCRBY, Memcached incr),
+	 * shared by every request, and admit_relay_atomically() decides on the
+	 * value it returns.
+	 *
+	 * 'approximate' otherwise. Without an object-cache drop-in the cache
+	 * lives for one request, so an increment in it counts nothing across
+	 * requests. Admission then rests on the transient read-then-write alone,
+	 * which concurrent requests can overshoot by roughly their concurrency.
+	 * Failing closed to a lower ceiling was considered and rejected: it would
+	 * punish small sites for load they cannot receive. Saying which mode is
+	 * in force is the part that is not optional — "the guard is exact" and
+	 * "the guard is approximate" must never look the same to an operator.
+	 *
+	 * 'atomic' names the code path. It is exactly as strong as the drop-in's
+	 * add and incr; the Redis and Memcached drop-ins implement both as single
+	 * backend operations.
+	 *
+	 * @return string self::RELAY_ADMISSION_ATOMIC or self::RELAY_ADMISSION_APPROXIMATE.
+	 */
+	public static function relay_admission_mode() {
+		if (
+			function_exists( 'wp_using_ext_object_cache' )
+			&& wp_using_ext_object_cache()
+			&& function_exists( 'wp_cache_add' )
+			&& function_exists( 'wp_cache_incr' )
+			&& function_exists( 'wp_cache_decr' )
+		) {
+			return self::RELAY_ADMISSION_ATOMIC;
+		}
+
+		return self::RELAY_ADMISSION_APPROXIMATE;
+	}
+
+	/**
+	 * The relay's ceilings, for reporting beside relay_admission_mode().
+	 *
+	 * @return array<string, array{limit: int, window_seconds: int}>
+	 */
+	public static function relay_limits() {
+		return array(
+			'per_ip'            => array(
+				'limit'          => self::RELAY_RATE_MAX,
+				'window_seconds' => self::RELAY_RATE_WINDOW,
+			),
+			'global_per_minute' => array(
+				'limit'          => self::RELAY_GLOBAL_MAX_PER_MINUTE,
+				'window_seconds' => self::RELAY_GLOBAL_MINUTE_WINDOW,
+			),
+			'global_per_hour'   => array(
+				'limit'          => self::RELAY_GLOBAL_MAX,
+				'window_seconds' => self::RELAY_GLOBAL_WINDOW,
+			),
+		);
+	}
+
+	/**
+	 * Atomic admission gate for the relay ceilings (#752 F6).
+	 *
+	 * Counters are taken in charge order — per-IP, site-wide per minute,
+	 * site-wide per hour. Each window key is initialised at zero with
+	 * wp_cache_add() and then incremented with wp_cache_incr(), and the value
+	 * the increment returns is the decision. On a shared atomic backend that
+	 * value already includes every concurrent request's increment, so two
+	 * requests can never both be the one that fits under a ceiling.
+	 * wp_cache_add()'s own result is not consulted: false means both "already
+	 * exists" (the normal case) and "backend failed", and the increment that
+	 * follows is what tells those apart.
+	 *
+	 * Deciding on an increment means incrementing before the answer is known,
+	 * so this is a pre-increment with rollback, not the check-then-write the
+	 * transient record uses. A request refused at any ceiling hands back
+	 * every slot it took, including the one that refused it, so a refusal
+	 * consumes no budget in either direction: refused at the per-IP ceiling,
+	 * it never reaches the site-wide counters; refused at a site-wide ceiling,
+	 * its per-IP (and per-minute) slots are released. Two consequences, both
+	 * in the safe direction and neither able to admit past a ceiling:
+	 *  - between a refused request's increment and its rollback, a concurrent
+	 *    request can observe the inflated count and be refused one slot early;
+	 *  - a rollback that fails (backend lost mid-request) leaves its slot taken
+	 *    until the window tumbles: over-counted, never under.
+	 *
+	 * An increment that does not return a positive integer refuses with 503.
+	 * Core's cache and Memcached return false for an incr on a missing key —
+	 * evicted between the add and the incr — and every backend returns false
+	 * on failure. Neither is "count 0": treating it as one would admit an
+	 * unbounded stream while the backend is unhealthy. Slots already taken
+	 * are released first, since their increments are known to have applied.
+	 *
+	 * @param array<int, array{0: string, 1: int, 2: int}> $ceilings Each entry is
+	 *        [ key, ceiling, window seconds ], in charge order.
+	 * @return WP_Error|null The refusal, or null when every ceiling admits.
+	 */
+	private function admit_relay_atomically( array $ceilings ) {
+		$taken = array();
+
+		foreach ( $ceilings as $ceiling ) {
+			list( $key, $max, $window ) = $ceiling;
+
+			// The TTL is the whole window and never 0, which every object-cache
+			// backend reads as "never expires". The key carries its window
+			// index, so a key created late in its window is simply not used
+			// after the boundary and has expired one window later.
+			wp_cache_add( $key, 0, self::RELAY_ADMISSION_CACHE_GROUP, max( 1, (int) $window ) );
+			$count = self::relay_admission_count( wp_cache_incr( $key, 1, self::RELAY_ADMISSION_CACHE_GROUP ) );
+
+			if ( $count < 1 ) {
+				$this->release_relay_admission_slots( $taken );
+				return new WP_Error(
+					'relay_unavailable',
+					__( 'Feedback relay is temporarily unavailable. Please try again later.', 'mcpwp' ),
+					array( 'status' => 503 )
+				);
+			}
+
+			$taken[] = $key;
+
+			if ( $count > (int) $max ) {
+				$this->release_relay_admission_slots( $taken );
+				return new WP_Error(
+					'rate_limited',
+					__( 'Too many feedback submissions. Please try again later.', 'mcpwp' ),
+					array( 'status' => 429 )
+				);
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * Hand back admission slots, most recent first.
+	 *
+	 * Best effort by design: a decrement that fails leaves the slot taken,
+	 * which over-counts until the window tumbles and cannot admit anything.
+	 *
+	 * @param string[] $keys Counter keys whose increment applied.
+	 */
+	private function release_relay_admission_slots( array $keys ) {
+		foreach ( array_reverse( $keys ) as $key ) {
+			wp_cache_decr( $key, 1, self::RELAY_ADMISSION_CACHE_GROUP );
+		}
+	}
+
+	/**
+	 * Read a wp_cache_incr() result as a count.
+	 *
+	 * Only a positive integer, or a string of digits (some drop-ins hand back
+	 * the backend's reply verbatim), is a count. Everything else — false,
+	 * null, a float, a negative, a non-numeric string — returns 0, which the
+	 * gate refuses.
+	 *
+	 * @param mixed $value Value returned by wp_cache_incr().
+	 * @return int
+	 */
+	private static function relay_admission_count( $value ) {
+		if ( is_int( $value ) ) {
+			return $value > 0 ? $value : 0;
+		}
+		if ( is_string( $value ) && 1 === preg_match( '/^[0-9]{1,18}$/', $value ) ) {
+			return (int) $value;
+		}
+		return 0;
 	}
 
 	/**
