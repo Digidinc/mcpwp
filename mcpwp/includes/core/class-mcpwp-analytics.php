@@ -135,7 +135,9 @@ class Mcpwp_Analytics {
 			array(
 				'tool'        => (string) $tool_name,
 				'category'    => (string) $category,
-				'success'     => '' === $error_code,
+				// A replay is the feature's happy path, not a failed call: it
+				// must not poison the tool error rate (#802 round 4).
+				'success'     => in_array( (string) $error_code, array( '', 'replayed' ), true ),
 				'duration_ms' => (int) $duration_ms,
 				'error_code'  => (string) $error_code,
 			)

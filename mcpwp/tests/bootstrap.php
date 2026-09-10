@@ -520,6 +520,15 @@ function set_transient($name, $value, $expiration)
 
 function get_transient($name)
 {
+    // Test-only: a hook that can answer a read differently from the store —
+    // an object cache that flaps between consecutive reads (#802 round 4).
+    if (isset($GLOBALS['mcpwp_test_transient_hook']) && is_callable($GLOBALS['mcpwp_test_transient_hook'])) {
+        $answer = call_user_func($GLOBALS['mcpwp_test_transient_hook'], $name);
+        if (null !== $answer) {
+            return $answer;
+        }
+    }
+
     if (! isset($GLOBALS['mcpwp_test_transients'][ $name ])) {
         return false;
     }
@@ -975,6 +984,25 @@ if (! isset($GLOBALS['wpdb'])) {
         public function query($query)
         {
             $this->queries[] = (string) $query;
+
+            // The one statement the claim store issues: the lease sweep. It
+            // is evaluated against the options rows so a test can assert
+            // WHICH rows survive, not only what the SQL looked like.
+            if (preg_match("/^DELETE FROM \\S*options WHERE option_name LIKE '([^']*)' AND option_value < '([^']*)'$/", trim((string) $query), $m)) {
+                $pattern = '/^' . str_replace(array('\\%', '\\_'), array('%', '_'), preg_quote($m[1], '/')) . '$/';
+                // Un-escaped % and _ are wildcards; escaped ones were made literal by preg_quote above.
+                $pattern = preg_replace_callback('/(?<!\\\\)%/', function () { return '.*'; }, $pattern);
+                $pattern = str_replace('\\%', '%', $pattern);
+                $deleted = 0;
+                foreach (array_keys($GLOBALS['mcpwp_test_wpdb_options'] ?? array()) as $name) {
+                    if (preg_match($pattern, $name) && strcmp((string) $GLOBALS['mcpwp_test_wpdb_options'][ $name ], $m[2]) < 0) {
+                        unset($GLOBALS['mcpwp_test_wpdb_options'][ $name ]);
+                        $deleted++;
+                    }
+                }
+                return $deleted;
+            }
+
             return 0;
         }
         public function insert($table, $data, $format = null)
@@ -1036,7 +1064,8 @@ if (! isset($GLOBALS['wpdb'])) {
         }
         public function esc_like($text)
         {
-            return (string) $text;
+            // Core: backslash-escape the LIKE metacharacters.
+            return addcslashes((string) $text, '_%\\');
         }
     }
 

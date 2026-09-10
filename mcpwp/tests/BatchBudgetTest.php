@@ -276,4 +276,33 @@ final class BatchBudgetTest extends TestCase {
 		$this->assertSame( $data['total'], $data['succeeded'] + $data['failed'] );
 		$this->assertCount( 3, $data['results'] );
 	}
+
+	// ---------------------------------------------------------------
+	// Round 4: weight binds at the burst window; one list, one price.
+	// ---------------------------------------------------------------
+
+	public function test_weight_is_enforced_at_the_burst_window_not_only_per_minute(): void {
+		// Round-4 M14: burst < minute; a 25-op call must be refused by burst.
+		Mcpwp_Rate_Limiter::get_instance()->update_settings(
+			array( 'enabled' => true, 'requests_per_minute' => 60, 'requests_per_hour' => 1000, 'burst_limit' => 20, 'whitelist' => array() )
+		);
+		$limiter = Mcpwp_Rate_Limiter::get_instance();
+		$this->assertTrue( $limiter->check_limit( 'b', 'POST', null, 15 ) );
+		$refused = $limiter->check_limit( 'b', 'POST', null, 10 );
+		$this->assertInstanceOf( WP_Error::class, $refused, '15 + 10 > 20 at the burst window.' );
+		$this->assertSame( 'burst', $refused->get_error_data()['window'] );
+	}
+
+	public function test_two_spellings_of_one_list_are_charged_once(): void {
+		// Round-4 P2-2: urls beside items, or items beside updates, summed.
+		$count = new ReflectionMethod( Mcpwp_REST_MCP::class, 'nested_operation_count' );
+		$count->setAccessible( true );
+		$controller = new Mcpwp_REST_MCP();
+
+		$this->assertSame( 5, $count->invoke( $controller, array( 'urls' => range( 1, 5 ), 'items' => range( 1, 5 ) ) ) );
+		$this->assertSame( 7, $count->invoke( $controller, array( 'items' => range( 1, 7 ), 'updates' => range( 1, 3 ) ) ), 'The larger list is the price.' );
+		foreach ( array( 'post_ids', 'rows', 'widgets', 'sections' ) as $key ) {
+			$this->assertSame( 500, $count->invoke( $controller, array( $key => range( 1, 500 ) ) ), $key . ' fans out and is counted.' );
+		}
+	}
 }

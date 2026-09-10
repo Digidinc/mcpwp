@@ -281,6 +281,24 @@ When rate limited, the API returns `429 Too Many Requests`:
 }
 ```
 
+### Batches and weight
+
+A call that carries a list of operations is a batch by another name and is charged one slot per operation: a JSON-RPC batch, `POST /batch`, and any tool whose arguments carry `operations`, `updates`, `pages`, `posts`, `items`, `urls`, `files`, `media`, `page_ids`, `post_ids`, `rows`, `widgets` or `sections` (the largest list is the price; two spellings of one list are not summed). A call that does not fit the remaining budget is refused whole before anything runs (`429`, or `-32029` inside MCP). A call heavier than the whole window (`batch_exceeds_limit`, `413`) is refused with the ceiling: waiting will not help, split it.
+
+The reachable ceiling is the tightest window: `min(burst, per-minute, per-hour)`. At the defaults (burst 30, 60/min, 1000/h) that is **30 operations per call**, whatever the per-endpoint maximum says; raise `burst_limit` to use larger batches.
+
+### Idempotent tool calls (`params._meta.request_id`)
+
+Any `tools/call` with side effects (every non-GET tool) may carry `params._meta.request_id` (1–128 chars of `[A-Za-z0-9_-:.]`, unique per intended write and per agent). The first completed result is stored for 24 hours under the principal + id; a re-send with the same id and arguments returns the stored result with `result._meta.replayed: true` and `replayed_at`, and the write does not run again. Two concurrent identical sends: exactly one runs (`-32009 in_progress` for the other, with `retry_after`).
+
+| `result._meta.idempotency` | Meaning |
+|---|---|
+| `stored` | pinned; a re-send replays |
+| `not_applicable` | read tool, unknown tool, or a tool that opts out (`reason` says which) |
+| `not_stored` | the call ran but is NOT protected — partial failure, result too large, no per-user principal, or the claim store could not arbitrate (`reason` says which) |
+
+Errors: `-32602` (invalid id, or the id was used with different arguments), `-32009` (in progress), `-32010` (stored record unreadable — not re-run), `-32029` (over budget, nothing ran). A partial failure (a batch with any failed operation) is never pinned: a retry re-runs the operations that succeeded, so retry only the failed ones, each under its own `request_id`. Ids are scoped to the principal; two clients acting as the same user or sharing one key share the namespace — make ids unique per agent.
+
 ### IP Whitelisting
 
 Configure trusted IPs in WordPress settings to bypass rate limiting

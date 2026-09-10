@@ -502,4 +502,95 @@ final class RateLimitDiagnosticsTest extends TestCase {
 		$this->assertArrayHasKey( 'error', $data );
 		$this->assertSame( -32601, $data['error']['code'] );
 	}
+
+	// ---------------------------------------------------------------
+	// Round 4: the memo carries its side effects; the harness guards.
+	// ---------------------------------------------------------------
+
+	public function test_a_memo_hit_on_another_instance_carries_the_principal_and_the_metered_bucket(): void {
+		// Round-4 P2-3: a hit returned the cached boolean only, so a second
+		// controller instance saw no key record — no tool-category
+		// restriction, no principal scope, no nested charging.
+		$request = $this->mcp_request( $this->rpc( 'tools/list' ) );
+		$a = new Mcpwp_REST_MCP();
+		$this->assertTrue( $a->verify_api_key( $request ) );
+		$this->assertNotNull( $a->get_current_api_key_record() );
+
+		$b = new Mcpwp_REST_MCP();
+		$this->assertTrue( $b->verify_api_key( $request ) );
+		$this->assertSame( $a->get_current_api_key_record()['id'], $b->get_current_api_key_record()['id'] );
+
+		$metered = new ReflectionProperty( Mcpwp_REST_API::class, 'mcpwp_metered' );
+		$metered->setAccessible( true );
+		$this->assertSame( $metered->getValue( $a ), $metered->getValue( $b ) );
+		$this->assertIsArray( $metered->getValue( $b ) );
+	}
+
+	public function test_a_refused_request_leaves_no_metered_bucket_behind(): void {
+		// Round-4 M7: in a persistent process a later nested charge landed
+		// on the previous request's bucket.
+		$controller = new Mcpwp_REST_MCP();
+		$this->assertTrue( $controller->verify_api_key( $this->mcp_request( $this->rpc( 'tools/list' ) ) ) );
+		$metered = new ReflectionProperty( Mcpwp_REST_API::class, 'mcpwp_metered' );
+		$metered->setAccessible( true );
+		$this->assertIsArray( $metered->getValue( $controller ) );
+
+		$anonymous = new WP_REST_Request( 'POST', '/mcpwp/v1/mcp', array(), array(), $this->rpc( 'tools/list' ) );
+		$this->assertInstanceOf( WP_Error::class, $controller->verify_api_key( $anonymous ) );
+		$this->assertNull( $metered->getValue( $controller ), 'The refused request cleared it.' );
+
+		$charge = new ReflectionMethod( Mcpwp_REST_API::class, 'charge_additional_slots' );
+		$charge->setAccessible( true );
+		$before = Mcpwp_Rate_Limiter::get_instance()->get_budget();
+		$this->assertTrue( $charge->invoke( $controller, 5 ) );
+		$this->assertSame( $before, Mcpwp_Rate_Limiter::get_instance()->get_budget(), 'Nothing was charged to the earlier bucket.' );
+	}
+
+	public function test_the_memo_is_bounded_and_evicts_the_oldest_without_renumbering(): void {
+		// Round-4 M8/M16: array_shift() renumbers object-id keys; a hit must
+		// be for the SAME request object, never a reused id.
+		$verdicts = new ReflectionProperty( Mcpwp_REST_API::class, 'mcpwp_verdicts' );
+		$verdicts->setAccessible( true );
+		Mcpwp_REST_MCP::reset_verdict_memo();
+
+		$controller = new Mcpwp_REST_MCP();
+		$held       = array();
+		for ( $i = 0; $i < 70; $i++ ) {
+			$held[] = $this->mcp_request( $this->rpc( 'tools/list', array(), $i ) );
+			$controller->verify_api_key( end( $held ) );
+		}
+		$memo = $verdicts->getValue();
+		$this->assertCount( 64, $memo );
+		foreach ( $memo as $id => $entry ) {
+			$this->assertSame( spl_object_id( $entry[0] ), $id, 'Keys are the object ids, not renumbered indexes.' );
+		}
+		$this->assertArrayNotHasKey( spl_object_id( $held[0] ), $memo, 'The oldest was evicted.' );
+		$this->assertArrayHasKey( spl_object_id( $held[69] ), $memo );
+
+		// Two distinct request objects are two verdicts (two slots), one object is one.
+		$GLOBALS['mcpwp_test_transients'] = array();
+		Mcpwp_REST_MCP::reset_verdict_memo();
+		$r1 = $this->mcp_request( $this->rpc( 'tools/list' ) );
+		$r2 = $this->mcp_request( $this->rpc( 'tools/list' ) );
+		$controller->verify_api_key( $r1 );
+		$before = Mcpwp_Rate_Limiter::get_instance()->get_budget()['remaining'];
+		$controller->verify_api_key( $r1 );
+		$this->assertSame( $before, Mcpwp_Rate_Limiter::get_instance()->get_budget()['remaining'], 'The repeat on the same object was free.' );
+		$controller->verify_api_key( $r2 );
+		$this->assertSame( $before - 1, Mcpwp_Rate_Limiter::get_instance()->get_budget()['remaining'], 'A different object is a different verdict.' );
+	}
+
+	public function test_a_429_names_its_window_in_the_header_too(): void {
+		// Round-4 M10.
+		$this->exhaust( $this->write_bucket() );
+		$controller = new Mcpwp_REST_MCP();
+		$request    = $this->mcp_request( $this->rpc( 'tools/list' ) );
+		$error      = $controller->verify_api_key( $request );
+
+		$response = new WP_REST_Response( array( 'code' => 'rate_limit_exceeded', 'data' => $error->get_error_data() ), 429 );
+		$loader   = ( new ReflectionClass( Mcpwp_Loader::class ) )->newInstanceWithoutConstructor();
+		$headers  = $loader->add_mcpwp_rate_limit_headers( $response, null, $request )->get_headers();
+
+		$this->assertSame( 'hour', $headers['X-RateLimit-Window'] );
+	}
 }

@@ -136,6 +136,12 @@ trait Mcpwp_Api_Auth {
 		if ( is_object( $request ) ) {
 			$memo_id = spl_object_id( $request );
 			if ( isset( self::$mcpwp_verdicts[ $memo_id ] ) && self::$mcpwp_verdicts[ $memo_id ][0] === $request ) {
+				// The verdict's side effects travel with it: a hit on another
+				// controller instance must see the same principal and the
+				// same metered bucket, or its scope checks and nested
+				// charging silently switch off (#802 round 4).
+				$this->current_api_key_record = self::$mcpwp_verdicts[ $memo_id ][2];
+				$this->mcpwp_metered          = self::$mcpwp_verdicts[ $memo_id ][3];
 				return self::$mcpwp_verdicts[ $memo_id ][1];
 			}
 
@@ -148,7 +154,7 @@ trait Mcpwp_Api_Auth {
 				// Not array_shift(): it renumbers the object-id keys.
 				unset( self::$mcpwp_verdicts[ array_key_first( self::$mcpwp_verdicts ) ] );
 			}
-			self::$mcpwp_verdicts[ $memo_id ] = array( $request, $verdict );
+			self::$mcpwp_verdicts[ $memo_id ] = array( $request, $verdict, $this->current_api_key_record, $this->mcpwp_metered );
 
 			return $verdict;
 		}

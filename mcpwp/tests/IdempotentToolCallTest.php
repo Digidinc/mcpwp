@@ -526,4 +526,205 @@ final class IdempotentToolCallTest extends TestCase {
 
 		$this->assertSame( array( 'wp_create_page', 'wp_create_page' ), $seen, 'N re-sends are N API calls in the audit trail, even though the site changed once.' );
 	}
+
+	// ---------------------------------------------------------------
+	// Round 4: the guard's own gates, the sweep, the lease, the store.
+	// ---------------------------------------------------------------
+
+	public function test_a_tool_with_no_category_is_never_re_run_by_the_replay_gate(): void {
+		// Round-4 P1: the replay gate invented 'site' for a tool absent from
+		// the category map; the handler enforces '' — so a refused replay
+		// was sent back into the handler and the write ran again, with no
+		// idempotency note on the response.
+		$first = $this->call( 'wp_update_menu_item_auto', array( 'item_id' => 5, 'title' => 'X' ), 'r1' );
+		$this->assertSame( 1, $this->dispatches() );
+		$this->assertSame( 'stored', $first['result']['_meta']['idempotency'] );
+
+		update_option( 'mcpwp_disabled_tool_categories', array( 'site' ) );
+		Mcpwp_REST_MCP::reset_verdict_memo();
+		$second = $this->call( 'wp_update_menu_item_auto', array( 'item_id' => 5, 'title' => 'X' ), 'r1' );
+
+		$this->assertSame( 1, $this->dispatches(), 'The write did not run again.' );
+		$this->assertSame( -32003, $second['error']['code'], 'Both _auto tools are in the category map now, so the kill switch binds them.' );
+
+		// And the two gates read one resolver: a name in neither map has no
+		// category on either side, so the replay gate cannot invent one.
+		$permitted = new ReflectionMethod( Mcpwp_REST_MCP::class, 'tool_currently_permitted' );
+		$permitted->setAccessible( true );
+		$this->assertTrue( $permitted->invoke( new Mcpwp_REST_MCP(), 'wp_no_such_tool', null ), 'No category, no refusal — exactly what the handler does.' );
+	}
+
+	public function test_every_pinned_tool_has_a_category(): void {
+		// The replay gate depends on the category map; a pinned tool missing
+		// from it is the round-4 hole in a new coat.
+		$controller = new Mcpwp_REST_MCP();
+		$map        = new ReflectionMethod( $controller, 'get_all_tool_map' );
+		$map->setAccessible( true );
+		$cats = new ReflectionMethod( $controller, 'get_all_tool_categories' );
+		$cats->setAccessible( true );
+		$categories = $cats->invoke( $controller );
+
+		foreach ( $map->invoke( $controller ) as $tool => $entry ) {
+			$method = isset( $entry['method'] ) ? strtoupper( (string) $entry['method'] ) : 'POST';
+			if ( 'GET' === $method ) {
+				continue;
+			}
+			$this->assertArrayHasKey( $tool, $categories, $tool . ' is pinned and must be in the category map.' );
+		}
+	}
+
+	public function test_the_sweep_deletes_only_leases_older_than_the_cutoff(): void {
+		// Round-4 M1: inverting the comparison deleted every live lease and
+		// kept the stale ones, and the suite stayed green because nothing
+		// looked at which rows survived.
+		$now = time();
+		$GLOBALS['mcpwp_test_wpdb_options'] = array(
+			'mcpwp_idem_stale_lease' => ( $now - 2 * DAY_IN_SECONDS ) . '|' . str_repeat( 'a', 64 ),
+			'mcpwp_idem_live_lease'  => ( $now - 30 ) . '|' . str_repeat( 'b', 64 ),
+			'mcpwp_idem_edge_lease'  => ( $now - DAY_IN_SECONDS ) . '|' . str_repeat( 'c', 64 ),
+			'mcpwp_idem_done_record' => 'not a lease',
+			'other_option'           => '1',
+		);
+
+		Mcpwp_Idempotency_Claim::sweep( $now );
+
+		$this->assertArrayNotHasKey( 'mcpwp_idem_stale_lease', $GLOBALS['mcpwp_test_wpdb_options'] );
+		$this->assertArrayHasKey( 'mcpwp_idem_live_lease', $GLOBALS['mcpwp_test_wpdb_options'] );
+		$this->assertArrayHasKey( 'mcpwp_idem_edge_lease', $GLOBALS['mcpwp_test_wpdb_options'], 'Exactly the cutoff is kept: option_value < cutoff|.' );
+		$this->assertArrayHasKey( 'mcpwp_idem_done_record', $GLOBALS['mcpwp_test_wpdb_options'], 'Only _lease rows.' );
+		$this->assertArrayHasKey( 'other_option', $GLOBALS['mcpwp_test_wpdb_options'] );
+
+		global $wpdb;
+		$this->assertStringContainsString( "LIKE 'mcpwp\\_idem\\_%\\_lease'", end( $wpdb->queries ), 'What production emits: LIKE metacharacters escaped.' );
+	}
+
+	public function test_an_unavailable_store_that_then_shows_a_done_record_replays_instead_of_re_running(): void {
+		// Round-4 M5: the branch that answers a flapping store from the done
+		// record was never executed by its own test.
+		$first = $this->call( 'wp_create_page', array( 'title' => 'A' ), 'r1' );
+		$this->assertSame( 1, $this->dispatches() );
+		$record = $GLOBALS['mcpwp_test_transients'][ $this->store_key( 'r1' ) ]['value'];
+
+		// The store cannot arbitrate the claim, and the first read of the
+		// done record misses; the branch's own read hits.
+		$GLOBALS['mcpwp_test_wpdb_insert_fails'] = true;
+		$reads = 0;
+		$key   = $this->store_key( 'r1' );
+		$GLOBALS['mcpwp_test_transient_hook'] = function ( $name ) use ( &$reads, $key, $record ) {
+			if ( $name !== $key ) {
+				return null;
+			}
+			$reads++;
+			return 1 === $reads ? false : $record;
+		};
+		Mcpwp_REST_MCP::reset_verdict_memo();
+		$second = $this->call( 'wp_create_page', array( 'title' => 'A' ), 'r1' );
+		unset( $GLOBALS['mcpwp_test_transient_hook'] );
+		$GLOBALS['mcpwp_test_wpdb_insert_fails'] = false;
+
+		$this->assertSame( 1, $this->dispatches(), 'Replayed from the record, not run unprotected.' );
+		$this->assertTrue( $second['result']['_meta']['replayed'] );
+	}
+
+	public function test_a_store_that_never_settles_runs_the_call_once_unprotected_and_says_so(): void {
+		// Depth bound: a store answering "done" on one read and nothing on
+		// the next must not recurse without end.
+		$this->call( 'wp_create_page', array( 'title' => 'A' ), 'r1' );
+		$record = $GLOBALS['mcpwp_test_transients'][ $this->store_key( 'r1' ) ]['value'];
+		$GLOBALS['mcpwp_test_wpdb_insert_fails'] = true;
+		$key   = $this->store_key( 'r1' );
+		$reads = 0;
+		$GLOBALS['mcpwp_test_transient_hook'] = function ( $name ) use ( &$reads, $key, $record ) {
+			if ( $name !== $key ) {
+				return null;
+			}
+			$reads++;
+			return 0 === $reads % 2 ? $record : false; // flaps forever
+		};
+		Mcpwp_REST_MCP::reset_verdict_memo();
+		$data = $this->call( 'wp_create_page', array( 'title' => 'A' ), 'r1' );
+		unset( $GLOBALS['mcpwp_test_transient_hook'] );
+		$GLOBALS['mcpwp_test_wpdb_insert_fails'] = false;
+
+		$this->assertSame( 2, $this->dispatches() );
+		$this->assertSame( 'not_stored', $data['result']['_meta']['idempotency'] );
+		$this->assertStringContainsString( 'inconsistent', $data['result']['_meta']['idempotency_reason'] );
+	}
+
+	public function test_the_lease_length_governs_takeover_and_a_future_lease_is_abandoned(): void {
+		// Round-4 M20 and P2-10.
+		$lease = Mcpwp_REST_MCP::idempotency_lease_name( $this->store_key( 'r1' ) );
+		$hash  = hash( 'sha256', 'wp_create_page|' . wp_json_encode( array( 'title' => 'A' ) ) );
+
+		// Held 5 s ago: in progress under the default 120 s.
+		$GLOBALS['mcpwp_test_wpdb_options'][ $lease ] = ( time() - 5 ) . '|' . $hash;
+		$data = $this->call( 'wp_create_page', array( 'title' => 'A' ), 'r1' );
+		$this->assertSame( -32009, $data['error']['code'] );
+		$this->assertSame( 0, $this->dispatches() );
+
+		// Lower the lease to 3 s: the same 5 s old lease is abandoned and taken over.
+		$GLOBALS['mcpwp_test_filters'] = array();
+		add_filter( 'mcpwp_idempotency_lease_seconds', function () { return 3; } );
+		Mcpwp_REST_MCP::reset_verdict_memo();
+		$data = $this->call( 'wp_create_page', array( 'title' => 'A' ), 'r1' );
+		$this->assertArrayHasKey( 'result', $data );
+		$this->assertSame( 1, $this->dispatches() );
+		$GLOBALS['mcpwp_test_filters'] = array();
+
+		// A lease stamped in the future (clock corrected backwards) is abandoned, not held forever.
+		$GLOBALS['mcpwp_test_transients'] = array();
+		$GLOBALS['mcpwp_test_wpdb_options'][ $lease ] = ( time() + 3600 ) . '|' . $hash;
+		Mcpwp_REST_MCP::reset_verdict_memo();
+		$data = $this->call( 'wp_create_page', array( 'title' => 'A' ), 'r1' );
+		$this->assertArrayHasKey( 'result', $data, 'Not -32009 for the next hour.' );
+		$this->assertSame( 2, $this->dispatches() );
+		$this->assertSame( 1, Mcpwp_REST_MCP::lease_seconds() >= 1 ? 1 : 0 );
+	}
+
+	public function test_a_replay_is_reported_with_its_own_code_and_counted_as_a_success(): void {
+		// Round-4 M18 and P2-4.
+		$seen = array();
+		$GLOBALS['mcpwp_test_actions'] = array();
+		add_action( 'mcpwp_tool_called', function ( $tool, $category, $ms, $code ) use ( &$seen ) { $seen[] = $code; }, 10, 4 );
+
+		$this->call( 'wp_create_page', array( 'title' => 'A' ), 'r1' );
+		Mcpwp_REST_MCP::reset_verdict_memo();
+		$this->call( 'wp_create_page', array( 'title' => 'A' ), 'r1' );
+		$GLOBALS['mcpwp_test_actions'] = array();
+
+		$this->assertSame( array( '', 'replayed' ), $seen );
+
+		$captured = array();
+		$GLOBALS['mcpwp_test_filters'] = array();
+		add_filter( 'mcpwp_analytics_capture', function ( $event ) use ( &$captured ) { $captured[] = $event; return $event; } );
+		if ( ! class_exists( 'Mcpwp_Analytics' ) ) {
+			require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-analytics.php';
+		}
+		$this->assertTrue( ( new ReflectionMethod( Mcpwp_Analytics::class, 'on_tool_called' ) )->isStatic() );
+		$props = $this->analytics_props( 'replayed' );
+		$this->assertTrue( $props['success'], 'A safe replay is the happy path, not an error.' );
+		$this->assertFalse( $this->analytics_props( 'execution_error' )['success'] );
+		$GLOBALS['mcpwp_test_filters'] = array();
+	}
+
+	/**
+	 * The properties Mcpwp_Analytics::on_tool_called() would capture.
+	 */
+	private function analytics_props( string $code ): array {
+		$src = file_get_contents( dirname( __DIR__ ) . '/includes/core/class-mcpwp-analytics.php' );
+		// success is defined by one expression in on_tool_called(); evaluate it here.
+		$this->assertMatchesRegularExpression( "/'success'\\s*=>\\s*in_array\\( \\(string\\) \\\$error_code, array\\( '', 'replayed' \\), true \\)/", $src );
+		return array( 'success' => in_array( $code, array( '', 'replayed' ), true ) );
+	}
+
+	public function test_a_partial_failure_note_warns_that_a_retry_re_runs_what_succeeded(): void {
+		// Round-4 P2-7: the old hint recommended the duplicating action.
+		$GLOBALS['mcpwp_test_rest_response_override'] = array( 'success' => true, 'succeeded' => 1, 'failed' => 1, 'results' => array() );
+		$data = $this->call( 'wp_batch_update', array( 'operations' => array( array( 'method' => 'GET', 'path' => '/posts/1' ), array( 'method' => 'GET', 'path' => '/posts/2' ) ) ), 'r1' );
+		unset( $GLOBALS['mcpwp_test_rest_response_override'] );
+
+		$this->assertSame( 'not_stored', $data['result']['_meta']['idempotency'] );
+		$this->assertStringContainsString( 'NOT protected', $data['result']['_meta']['idempotency_reason'] );
+		$this->assertStringContainsString( 'own request_id', $data['result']['_meta']['idempotency_reason'] );
+	}
 }

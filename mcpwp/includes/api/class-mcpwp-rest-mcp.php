@@ -720,6 +720,18 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	const IDEMPOTENCY_LEASE_SECONDS = 120;
 
 	/**
+	 * The lease length in force: the constant, filterable so a host with a
+	 * shorter PHP time limit can lower it — and so the takeover branch is
+	 * reachable under test rather than dead code.
+	 *
+	 * @return int At least 1.
+	 */
+	public static function lease_seconds() {
+		$seconds = apply_filters( 'mcpwp_idempotency_lease_seconds', self::IDEMPOTENCY_LEASE_SECONDS );
+		return max( 1, (int) $seconds );
+	}
+
+	/**
 	 * Largest result that is pinned. Beyond this a replay would cost more than
 	 * it protects, and wp_options is not a blob store.
 	 */
@@ -733,7 +745,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 * @return string
 	 */
 	public static function idempotency_key( $key_scope, $request_id ) {
-		return 'mcpwp_idem_' . md5( (string) $key_scope . '|' . (string) $request_id );
+		return 'mcpwp_idem_' . hash( 'sha256', (string) $key_scope . '|' . (string) $request_id );
 	}
 
 	/**
@@ -747,7 +759,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 * @param string $store_key From idempotency_key().
 	 * @return string
 	 */
-	private static function idempotency_lease_name( $store_key ) {
+	public static function idempotency_lease_name( $store_key ) {
 		return $store_key . '_lease';
 	}
 
@@ -770,11 +782,18 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 * @param WP_REST_Request $request Request.
 	 * @return array
 	 */
-	private function handle_tools_call_idempotent( $id, $params, $request ) {
+	private function handle_tools_call_idempotent( $id, $params, $request, $depth = 0 ) {
 		$request_id = isset( $params['_meta']['request_id'] ) ? $params['_meta']['request_id'] : null;
 
 		if ( null === $request_id ) {
 			return $this->handle_tools_call( $id, $params, $request );
+		}
+
+		// Two re-entries at most: a store that answers differently on
+		// consecutive reads must not turn into unbounded recursion. Past
+		// that, the call runs unprotected and says so.
+		if ( $depth >= 2 ) {
+			return $this->with_idempotency_note( $this->handle_tools_call( $id, $params, $request ), 'not_stored', 'claim store inconsistent' );
 		}
 
 		if ( ! is_string( $request_id ) || '' === $request_id || strlen( $request_id ) > 128 || ! preg_match( '/^[A-Za-z0-9_\-:.]+$/', $request_id ) ) {
@@ -791,9 +810,10 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		$tool_map  = $this->get_all_tool_map();
 
 		// Only a tool with side effects is pinned. A GET has nothing to
-		// protect, and a pinned read goes stale for a day. A tool this
-		// dispatcher does not know (a hook-registered custom tool) cannot be
-		// classified, so it is not pinned — and the client is told.
+		// protect, and a pinned read goes stale for a day. A name the merged
+		// tool map (built-in, pro, integrations and hook-registered custom
+		// tools alike) does not know cannot be classified, so it is not
+		// pinned — and the client is told.
 		if ( '' === $tool_name || ! isset( $tool_map[ $tool_name ] ) ) {
 			return $this->with_idempotency_note( $this->handle_tools_call( $id, $params, $request ), 'not_applicable', 'tool not in the built-in map' );
 		}
@@ -821,7 +841,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		}
 
 		$store_key = self::idempotency_key( $scope, $request_id );
-		$args_hash = md5( $tool_name . '|' . wp_json_encode( self::canonicalize( $arguments ) ) );
+		$args_hash = hash( 'sha256', $tool_name . '|' . wp_json_encode( self::canonicalize( $arguments ) ) );
 		$existing  = get_transient( $store_key );
 
 		if ( is_array( $existing ) && isset( $existing['state'] ) && 'done' === $existing['state'] ) {
@@ -889,7 +909,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			// runs; only then is the call run unprotected, and said so.
 			$done = get_transient( $store_key );
 			if ( is_array( $done ) && isset( $done['state'] ) && 'done' === $done['state'] ) {
-				return $this->handle_tools_call_idempotent( $id, $params, $request );
+				return $this->handle_tools_call_idempotent( $id, $params, $request, $depth + 1 );
 			}
 
 			return $this->with_idempotency_note( $this->handle_tools_call( $id, $params, $request ), 'not_stored', 'claim store unavailable' );
@@ -903,16 +923,19 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			if ( null === $lease ) {
 				$done = get_transient( $store_key );
 				if ( is_array( $done ) && isset( $done['state'] ) && 'done' === $done['state'] ) {
-					return $this->handle_tools_call_idempotent( $id, $params, $request );
+					return $this->handle_tools_call_idempotent( $id, $params, $request, $depth + 1 );
 				}
 				$claim = Mcpwp_Idempotency_Claim::acquire( $lease_name, $now, $args_hash );
 				if ( Mcpwp_Idempotency_Claim::ACQUIRED !== $claim ) {
 					return $this->in_progress_error( $id, $request_id, 1 );
 				}
 			} else {
-				$age = $now - (int) $lease['at'];
+				$age   = $now - (int) $lease['at'];
+				$lease_seconds = self::lease_seconds();
 
-				if ( $age < self::IDEMPOTENCY_LEASE_SECONDS ) {
+				// A lease from the future (the clock was corrected backwards)
+				// is abandoned, not held forever (#802 round 4).
+				if ( $age >= 0 && $age < $lease_seconds ) {
 					if ( '' !== $lease['args_hash'] && $lease['args_hash'] !== $args_hash ) {
 						return $this->jsonrpc_error(
 							$id,
@@ -922,7 +945,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 						);
 					}
 
-					return $this->in_progress_error( $id, $request_id, max( 1, self::IDEMPOTENCY_LEASE_SECONDS - $age ) );
+					return $this->in_progress_error( $id, $request_id, max( 1, $lease_seconds - $age ) );
 				}
 
 				// Abandoned by a timeout or fatal. Take it over with a
@@ -950,7 +973,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			// A 200 that carries its own failure list is not complete either —
 			// pinning it would turn the reporter's duplicate into a silent drop.
 			if ( $this->result_reports_partial_failure( $response['result'], $tool_map[ $tool_name ] ) ) {
-				return $this->with_idempotency_note( $response, 'not_stored', 'partial failure; retry may complete it' );
+				return $this->with_idempotency_note( $response, 'not_stored', 'partial failure: a retry is NOT protected and re-runs the operations that succeeded; retry only the failed ones, each under its own request_id' );
 			}
 
 			$encoded = wp_json_encode( $response );
@@ -1056,11 +1079,13 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 * @return bool
 	 */
 	private function tool_currently_permitted( $tool_name, $key_record ) {
-		$all_categories = $this->get_all_tool_categories();
-		$tool_category  = isset( $all_categories[ $tool_name ] ) ? $all_categories[ $tool_name ] : 'site';
+		// The same resolver the handler uses. Inventing a category here that
+		// the handler does not enforce sent a refused replay back INTO the
+		// handler, which ran the write again (#802 round 4).
+		$tool_category = $this->tool_category_for( $tool_name );
 
 		$disabled = get_option( 'mcpwp_disabled_tool_categories', array() );
-		if ( is_array( $disabled ) && in_array( $tool_category, $disabled, true ) ) {
+		if ( '' !== $tool_category && is_array( $disabled ) && in_array( $tool_category, $disabled, true ) ) {
 			return false;
 		}
 
@@ -1072,6 +1097,18 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		}
 
 		return true;
+	}
+
+	/**
+	 * The category a tool is enforced under, or '' when it has none. One
+	 * function, so the handler's gate and the replay's gate cannot disagree.
+	 *
+	 * @param string $tool_name Tool.
+	 * @return string
+	 */
+	private function tool_category_for( $tool_name ) {
+		$all_categories = $this->get_all_tool_categories();
+		return isset( $all_categories[ $tool_name ] ) ? (string) $all_categories[ $tool_name ] : '';
 	}
 
 	/**
@@ -1163,10 +1200,13 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			return 1;
 		}
 
+		// The LARGEST list, not the sum: urls beside items, or items beside
+		// updates, are spellings of one list and must not double-bill
+		// (#802 round 4).
 		$count = 0;
-		foreach ( array( 'operations', 'updates', 'pages', 'posts', 'items', 'urls', 'files', 'media', 'page_ids' ) as $key ) {
+		foreach ( array( 'operations', 'updates', 'pages', 'posts', 'items', 'urls', 'files', 'media', 'page_ids', 'post_ids', 'rows', 'widgets', 'sections' ) as $key ) {
 			if ( isset( $arguments[ $key ] ) && is_array( $arguments[ $key ] ) ) {
-				$count += count( $arguments[ $key ] );
+				$count = max( $count, count( $arguments[ $key ] ) );
 			}
 		}
 
@@ -1796,9 +1836,8 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		// Check if the tool's category has been disabled by the site administrator.
 		$disabled_categories = get_option( 'mcpwp_disabled_tool_categories', array() );
 		if ( ! empty( $disabled_categories ) && is_array( $disabled_categories ) ) {
-			$all_categories = $this->get_all_tool_categories();
-			$tool_category  = isset( $all_categories[ $tool_name ] ) ? $all_categories[ $tool_name ] : '';
-			if ( $tool_category && in_array( $tool_category, $disabled_categories, true ) ) {
+			$tool_category = $this->tool_category_for( $tool_name );
+			if ( '' !== $tool_category && in_array( $tool_category, $disabled_categories, true ) ) {
 				$this->fire_tool_called( $tool_name, $start, 'category_disabled' );
 				return $this->jsonrpc_error(
 					$id,
@@ -1896,7 +1935,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 					-32029,
 					$charge->get_error_message(),
 					array(
-						'hint'        => sprintf( 'This call carries %d operations and each costs one rate-limit slot. Nothing ran. Send fewer per call, wait for the window, or raise the key\'s limits.', $nested ),
+						'hint'        => sprintf( 'This call carries %d operations and each costs one rate-limit slot. Nothing ran. If it exceeds the ceiling (batch_exceeds_limit) waiting will not help: split it. Otherwise wait for the window or raise the key\'s limits.', $nested ),
 						'retry_after' => isset( $data['retry_after'] ) ? (int) $data['retry_after'] : null,
 						'remaining'   => isset( $data['remaining'] ) ? (int) $data['remaining'] : null,
 						'limit'       => isset( $data['limit'] ) ? (int) $data['limit'] : null,
