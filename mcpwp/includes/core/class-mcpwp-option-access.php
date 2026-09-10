@@ -539,8 +539,10 @@ class Mcpwp_Option_Access {
 			return array( 'value' => $old, 'preserved' => array( '' ) );
 		}
 
-		// A scalar secret option replaced by a non-secret-shaped value.
-		if ( is_string( $old ) && '' !== $old && ! is_array( $new ) && self::is_secret_field( $key ) && ! $allow_secrets ) {
+		// A scalar secret option replaced by a non-secret-shaped value. Only
+		// when what is stored IS a secret: a flag under a secret-ish name
+		// (…_generate_password = "no") is a flag and may be flipped.
+		if ( is_string( $old ) && ! is_array( $new ) && self::is_secret_field( $key ) && ! $allow_secrets && ( self::looks_like_secret_value( $old ) || self::looks_like_credential( $old ) ) ) {
 			$candidate = is_scalar( $new ) ? (string) $new : '';
 			if ( ! self::looks_like_secret_value( $candidate ) && ! self::looks_like_credential( $candidate ) ) {
 				return array( 'value' => $old, 'preserved' => array( '' ) );
@@ -561,6 +563,11 @@ class Mcpwp_Option_Access {
 
 			$is_mask    = is_string( $new_leaf ) && self::MASK === trim( $new_leaf );
 			$is_replace = is_string( $new_leaf ) && ( self::looks_like_secret_value( $new_leaf ) || self::looks_like_credential( $new_leaf ) );
+
+			// The stored leaf is a flag, not a secret: nothing to preserve.
+			if ( ! $is_mask && is_string( $old_leaf ) && ! self::looks_like_secret_value( $old_leaf ) && ! self::looks_like_credential( $old_leaf ) ) {
+				continue;
+			}
 
 			// Missing, masked, or not a credential-shaped replacement: keep
 			// the stored secret — unless the caller said allow_secrets, in
