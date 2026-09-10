@@ -143,6 +143,9 @@ class WP_REST_Request
         $this->method     = strtoupper($method);
         $this->route      = $route;
         $this->params     = is_array($params) ? $params : array();
+        // Constructor params model the request body (what a POST/PUT carries);
+        // query params are added with set_query_params().
+        $this->body_params = $this->params;
         $this->headers    = is_array($headers) ? $headers : array();
         $this->json_params = $json_params;
     }
@@ -219,10 +222,6 @@ class WP_REST_Request
         return $this->json_params;
     }
 
-    public function get_body_params()
-    {
-        return $this->params;
-    }
 }
 
 class WP_REST_Server
@@ -875,7 +874,6 @@ function wp_check_invalid_utf8($text, $strip = false)
         return '';
     }
     return mb_check_encoding($text, 'UTF-8') ? $text : '';
-    return '' === $text || mb_check_encoding($text, 'UTF-8') ? $text : '';
 }
 
 function wp_json_encode($value, $flags = 0)
