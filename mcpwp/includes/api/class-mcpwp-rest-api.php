@@ -73,6 +73,77 @@ abstract class Mcpwp_REST_API {
 	}
 
 	/**
+	 * Permission callback for Pro-tier routes: authentication first, then the tier.
+	 *
+	 * Runs on every dispatch path that reaches a route through the REST server —
+	 * direct HTTP, POST /batch and MCP tools/call (both use rest_do_request()) —
+	 * so a Pro route cannot be reached on Free by picking a different path.
+	 *
+	 * @param WP_REST_Request $request Request object.
+	 * @return bool|WP_Error True when authenticated and entitled.
+	 */
+	public function check_pro_permission( $request ) {
+		$auth = $this->check_permission( $request );
+		if ( true !== $auth ) {
+			return $auth;
+		}
+
+		return $this->require_pro();
+	}
+
+	/**
+	 * Require a Pro entitlement.
+	 *
+	 * @return true|WP_Error 403 pro_required when not entitled.
+	 */
+	protected function require_pro() {
+		if ( self::is_pro_entitled() ) {
+			return true;
+		}
+
+		return $this->error_response(
+			'pro_required',
+			__( 'This feature requires MCPWP Pro. Upgrade at https://mcpwp.net/pricing/', 'mcpwp' ),
+			403,
+			array( 'upgrade_url' => 'https://mcpwp.net/pricing/' )
+		);
+	}
+
+	/**
+	 * Whether this install holds a Pro entitlement.
+	 *
+	 * The one shared tier check for REST gates and gated MCP integrations. It
+	 * fails closed: a WP.org build, a license class that is not loaded, or an
+	 * answer that is not literally true is "not entitled" — an entitlement that
+	 * cannot be read is not an entitlement.
+	 *
+	 * @return bool
+	 */
+	public static function is_pro_entitled() {
+		return self::entitlement_from_license_class( 'Mcpwp_License' );
+	}
+
+	/**
+	 * Read the entitlement from a license class.
+	 *
+	 * @param string $license_class License class name.
+	 * @return bool
+	 */
+	private static function entitlement_from_license_class( $license_class ) {
+		if ( defined( 'MCPWP_WPORG_BUILD' ) ) {
+			return false;
+		}
+
+		if ( ! class_exists( $license_class, false ) || ! method_exists( $license_class, 'get_instance' ) ) {
+			return false;
+		}
+
+		$license = call_user_func( array( $license_class, 'get_instance' ) );
+
+		return is_object( $license ) && method_exists( $license, 'is_pro' ) && true === $license->is_pro();
+	}
+
+	/**
 	 * Current requester's API key id, or '' when none (admin-AJAX / cookie context).
 	 *
 	 * Used to stamp approval requests with their creator so the same key cannot

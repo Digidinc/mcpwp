@@ -11,6 +11,9 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 /**
  * Exposes read-only Figma design intake routes.
+ *
+ * Figma design intake is a Pro capability (docs/FREE_PRO_SPLIT.md). Every
+ * route answers 403 pro_required on Free, on every dispatch path (#564).
  */
 class Mcpwp_REST_Figma extends Mcpwp_REST_API {
 
@@ -40,7 +43,7 @@ class Mcpwp_REST_Figma extends Mcpwp_REST_API {
 			array(
 				'methods'             => WP_REST_Server::READABLE,
 				'callback'            => array( $this, 'get_status' ),
-				'permission_callback' => array( $this, 'check_permission' ),
+				'permission_callback' => array( $this, 'check_pro_permission' ),
 			)
 		);
 
@@ -50,7 +53,7 @@ class Mcpwp_REST_Figma extends Mcpwp_REST_API {
 			array(
 				'methods'             => WP_REST_Server::READABLE,
 				'callback'            => array( $this, 'get_file' ),
-				'permission_callback' => array( $this, 'check_permission' ),
+				'permission_callback' => array( $this, 'check_pro_permission' ),
 				'args'                => array(
 					'file_key' => array(
 						'type'        => 'string',
@@ -71,7 +74,7 @@ class Mcpwp_REST_Figma extends Mcpwp_REST_API {
 			array(
 				'methods'             => WP_REST_Server::READABLE,
 				'callback'            => array( $this, 'get_node' ),
-				'permission_callback' => array( $this, 'check_permission' ),
+				'permission_callback' => array( $this, 'check_pro_permission' ),
 				'args'                => array(
 					'file_key' => array(
 						'type'        => 'string',
@@ -97,7 +100,7 @@ class Mcpwp_REST_Figma extends Mcpwp_REST_API {
 			array(
 				'methods'             => WP_REST_Server::READABLE,
 				'callback'            => array( $this, 'get_design_tokens' ),
-				'permission_callback' => array( $this, 'check_permission' ),
+				'permission_callback' => array( $this, 'check_pro_permission' ),
 			)
 		);
 
@@ -107,7 +110,7 @@ class Mcpwp_REST_Figma extends Mcpwp_REST_API {
 			array(
 				'methods'             => WP_REST_Server::CREATABLE,
 				'callback'            => array( $this, 'sync_design_tokens' ),
-				'permission_callback' => array( $this, 'check_permission' ),
+				'permission_callback' => array( $this, 'check_pro_permission' ),
 				'args'                => array(
 					'file_key' => array(
 						'type'        => 'string',

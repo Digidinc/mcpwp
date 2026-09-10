@@ -111,6 +111,20 @@ abstract class Mcpwp_Integration extends Mcpwp_MCP_Tool_Registry {
 	}
 
 	/**
+	 * Whether this install holds a Pro entitlement (fails closed).
+	 *
+	 * For integrations whose tools are Pro: return no tools and no tool map
+	 * when this is false, so they are absent from tools/list and tools/call
+	 * cannot route to them. Keep get_tool_categories() unconditional so the
+	 * names stay reserved against custom-tool shadowing.
+	 *
+	 * @return bool
+	 */
+	protected function is_mcpwp_pro_active() {
+		return class_exists( 'Mcpwp_REST_API', false ) && Mcpwp_REST_API::is_pro_entitled();
+	}
+
+	/**
 	 * Resolve all registered integrations.
 	 *
 	 * Fires the mcpwp_integrations filter, instantiates class name strings,
