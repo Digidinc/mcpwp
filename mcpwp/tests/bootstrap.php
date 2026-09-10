@@ -518,7 +518,33 @@ function mcpwp_test_cap_filters_grant($capability, $user_id)
 
 function get_option($name, $default = false)
 {
-    return array_key_exists($name, $GLOBALS['mcpwp_test_options']) ? $GLOBALS['mcpwp_test_options'][ $name ] : $default;
+    if (array_key_exists($name, $GLOBALS['mcpwp_test_options'])) {
+        return $GLOBALS['mcpwp_test_options'][ $name ];
+    }
+    // One options table in real WordPress: a row created behind the options
+    // API (a first-writer-wins INSERT, #845) is what get_option() returns for
+    // a name the options API has not stored. The options-API value still wins
+    // when both exist, so every test that seeds through it reads what it seeded.
+    if (array_key_exists($name, $GLOBALS['mcpwp_test_wpdb_options'] ?? array())) {
+        return maybe_unserialize($GLOBALS['mcpwp_test_wpdb_options'][ $name ]);
+    }
+    return $default;
+}
+
+if (interface_exists('PHPUnit\Runner\AfterTestHook')) {
+    /**
+     * The provider records can now be created as a raw row (#845). Without
+     * this, a row created by one test would shadow the records a later test
+     * seeds through the options API — the row probe prefers the raw row — and
+     * the suite would depend on its order (#757's family).
+     */
+    final class Mcpwp_Test_Raw_Option_Row_Reset implements \PHPUnit\Runner\AfterTestHook
+    {
+        public function executeAfterTest(string $test, float $time): void
+        {
+            unset($GLOBALS['mcpwp_test_wpdb_options']['mcpwp_integrations']);
+        }
+    }
 }
 
 function update_option($name, $value, $autoload = null)

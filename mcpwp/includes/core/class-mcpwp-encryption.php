@@ -498,14 +498,16 @@ class Mcpwp_Encryption {
 	 *
 	 * A plain INSERT against the UNIQUE option_name index: it cannot
 	 * overwrite, unlike add_option()/update_option(), which issue
-	 * INSERT … ON DUPLICATE KEY UPDATE. Autoload is off.
+	 * INSERT … ON DUPLICATE KEY UPDATE. Autoload is off unless asked for.
 	 *
-	 * @param string $name  Option name.
-	 * @param string $value Raw value.
+	 * @param string $name     Option name.
+	 * @param string $value    Raw value.
+	 * @param string $autoload 'no' (default) or 'yes' for a row read on most
+	 *                         requests, as update_option() would store it.
 	 * @return bool True when this call inserted the row. False does not say
 	 *              why — callers re-read the row.
 	 */
-	public static function insert_option_row_if_absent( $name, $value ) {
+	public static function insert_option_row_if_absent( $name, $value, $autoload = 'no' ) {
 		global $wpdb;
 
 		if ( ! is_object( $wpdb ) || ! method_exists( $wpdb, 'insert' ) || empty( $wpdb->options ) ) {
@@ -521,7 +523,7 @@ class Mcpwp_Encryption {
 			array(
 				'option_name'  => $name,
 				'option_value' => $value,
-				'autoload'     => 'no',
+				'autoload'     => 'yes' === $autoload ? 'yes' : 'no',
 			),
 			array( '%s', '%s', '%s' )
 		);
