@@ -5,6 +5,29 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.11.0](https://github.com/Mumega-com/mcpwp/compare/v3.10.8...v3.11.0) (2026-09-10)
+
+
+### Features
+
+* **approvals:** destructive operations need approval by default ([#536](https://github.com/Mumega-com/mcpwp/issues/536)) ([#839](https://github.com/Mumega-com/mcpwp/issues/839)) ([a64d4fd](https://github.com/Mumega-com/mcpwp/commit/a64d4fd1d06115b17fb2341efdafa1f96faa4c49))
+* carry Elementor page settings through templates and archetypes ([#638](https://github.com/Mumega-com/mcpwp/issues/638)) ([#794](https://github.com/Mumega-com/mcpwp/issues/794)) ([13b9606](https://github.com/Mumega-com/mcpwp/commit/13b9606af2c91d170853188738da59f808eeaec2))
+* **mcp:** idempotent tool calls via _meta.request_id ([#802](https://github.com/Mumega-com/mcpwp/issues/802)) ([#835](https://github.com/Mumega-com/mcpwp/issues/835)) ([665a276](https://github.com/Mumega-com/mcpwp/commit/665a2763bc4dc7f143465171b6e15e37c821e1d5))
+* paginate Elementor library lists and summarise items in place ([#635](https://github.com/Mumega-com/mcpwp/issues/635)) ([#795](https://github.com/Mumega-com/mcpwp/issues/795)) ([b0d327c](https://github.com/Mumega-com/mcpwp/commit/b0d327c939ff2c425ec67e9c498505321b84e929))
+* **posts:** terms and meta on create/update, featured image for any thumbnail-capable type ([#797](https://github.com/Mumega-com/mcpwp/issues/797)) ([#837](https://github.com/Mumega-com/mcpwp/issues/837)) ([6c7f1b4](https://github.com/Mumega-com/mcpwp/commit/6c7f1b492bca24ce5a3124f59fbaae3339542ae1))
+* tell the caller when a rendered page is not what a visitor sees ([#693](https://github.com/Mumega-com/mcpwp/issues/693)) ([#796](https://github.com/Mumega-com/mcpwp/issues/796)) ([b9cd06c](https://github.com/Mumega-com/mcpwp/commit/b9cd06c999f043a15b3059a50f2a21e9f7b3c0af))
+
+
+### Bug Fixes
+
+* **elementor:** bulk shapes — find/replace scopes, bulk updates alias, wide-run gate ([#803](https://github.com/Mumega-com/mcpwp/issues/803)) ([#836](https://github.com/Mumega-com/mcpwp/issues/836)) ([b1d98b8](https://github.com/Mumega-com/mcpwp/commit/b1d98b8b0587e872af6bb24ca542feca041d5ece))
+* **mcp:** batch weight, diagnostic bucket, per-request verdict memo ([#802](https://github.com/Mumega-com/mcpwp/issues/802)) ([#833](https://github.com/Mumega-com/mcpwp/issues/833)) ([3b6eb1d](https://github.com/Mumega-com/mcpwp/commit/3b6eb1d6b9933fdb63b31c4549b3d60c2856e4bf))
+* **options:** option access floor, secret-preserving writes, redacted logs ([#800](https://github.com/Mumega-com/mcpwp/issues/800)) ([#838](https://github.com/Mumega-com/mcpwp/issues/838)) ([76faea6](https://github.com/Mumega-com/mcpwp/commit/76faea66d844a3981760f5fcfddd9fcec4a475e3))
+* **posts:** meta detector stands alone, meta reads hide bearers by name and shape ([#797](https://github.com/Mumega-com/mcpwp/issues/797) follow-up) ([#840](https://github.com/Mumega-com/mcpwp/issues/840)) ([a97e36e](https://github.com/Mumega-com/mcpwp/commit/a97e36ef02867142e3e69420d442e62c3ed398e2))
+* refuse a second installed MCPWP copy, surface double load ([#802](https://github.com/Mumega-com/mcpwp/issues/802)) ([#834](https://github.com/Mumega-com/mcpwp/issues/834)) ([335e13a](https://github.com/Mumega-com/mcpwp/commit/335e13a192084c57e620fa89d09395893fc8626a))
+* say what changed and why when Elementor alters a tree it rendered ([#612](https://github.com/Mumega-com/mcpwp/issues/612)) ([#793](https://github.com/Mumega-com/mcpwp/issues/793)) ([f97523d](https://github.com/Mumega-com/mcpwp/commit/f97523d7f7459efdd908eb89ebe88a0080e22b5e))
+* stop two more silent Elementor failures ([#789](https://github.com/Mumega-com/mcpwp/issues/789), [#788](https://github.com/Mumega-com/mcpwp/issues/788)) ([#791](https://github.com/Mumega-com/mcpwp/issues/791)) ([7223768](https://github.com/Mumega-com/mcpwp/commit/72237688768bcb01bc7a515dcbff2e269abc03df))
+
 ## [3.10.8](https://github.com/Mumega-com/mcpwp/compare/v3.10.7...v3.10.8) (2026-09-07)
 
 
