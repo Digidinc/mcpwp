@@ -11,6 +11,17 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 /**
  * Lightweight client for Figma design intake.
+ *
+ * Figma design intake is Pro, and the tier is enforced here, at the
+ * capability, not per entry point (#564 review r1). Every method that calls
+ * Figma or writes Figma-derived data refuses on Free with a 403 pro_required
+ * WP_Error, fail-closed, and the two HTTP chokepoints (request(),
+ * refresh_oauth_token()) refuse as well. REST, MCP, WP-Cron, the Integrations
+ * page (test connection, OAuth) and site-info status all inherit it.
+ *
+ * Storing Figma credentials on Free is allowed: with every use refused, a
+ * stored token unlocks nothing. get_status() reports it as configured and,
+ * separately, as needing Pro.
  */
 class Mcpwp_Figma {
 
@@ -78,7 +89,36 @@ class Mcpwp_Figma {
 	}
 
 	/**
+	 * Whether this install may use Figma (Pro). Fails closed.
+	 *
+	 * @return bool
+	 */
+	public static function is_entitled() {
+		return class_exists( 'Mcpwp_REST_API', false ) && Mcpwp_REST_API::is_pro_entitled();
+	}
+
+	/**
+	 * The refusal every Figma use returns on Free.
+	 *
+	 * @return WP_Error
+	 */
+	private static function pro_required_error() {
+		return new WP_Error(
+			'pro_required',
+			__( 'Figma design intake requires MCPWP Pro. Upgrade at https://mcpwp.net/pricing/', 'mcpwp' ),
+			array(
+				'status'      => 403,
+				'upgrade_url' => 'https://mcpwp.net/pricing/',
+			)
+		);
+	}
+
+	/**
 	 * Get Figma integration status.
+	 *
+	 * Never calls Figma on Free: an expired OAuth token is not refreshed
+	 * (refresh_oauth_token() refuses), so a Free site with only OAuth tokens
+	 * can report configured => false together with pro_required => true.
 	 *
 	 * @return array
 	 */
@@ -87,6 +127,7 @@ class Mcpwp_Figma {
 		$access = $this->get_access_token();
 
 		return array(
+			'pro_required'     => ! self::is_entitled(),
 			'configured'       => ! is_wp_error( $access ),
 			'auth_mode'        => ! empty( $config['personal_access_token'] ) ? 'personal_token' : ( ! empty( $config['access_token'] ) || ! empty( $config['refresh_token'] ) ? 'oauth' : 'unconfigured' ),
 			'oauth_ready'      => ! empty( $config['oauth_client_id'] ) && ! empty( $config['oauth_client_secret'] ),
@@ -103,6 +144,13 @@ class Mcpwp_Figma {
 	 * @return array{success: bool, message: string}
 	 */
 	public function test_connection() {
+		if ( ! self::is_entitled() ) {
+			return array(
+				'success' => false,
+				'message' => self::pro_required_error()->get_error_message(),
+			);
+		}
+
 		$config = $this->get_raw_config();
 		$access = $this->get_access_token();
 		if ( is_wp_error( $access ) ) {
@@ -177,6 +225,10 @@ class Mcpwp_Figma {
 	 * @return string|WP_Error
 	 */
 	public function get_oauth_authorize_url() {
+		if ( ! self::is_entitled() ) {
+			return self::pro_required_error();
+		}
+
 		$config = $this->get_raw_config();
 		if ( empty( $config['oauth_client_id'] ) || empty( $config['oauth_client_secret'] ) ) {
 			return new WP_Error( 'figma_oauth_not_ready', __( 'Figma OAuth requires both a client ID and client secret.', 'mcpwp' ) );
@@ -211,6 +263,10 @@ class Mcpwp_Figma {
 	 * @return array|WP_Error
 	 */
 	public function exchange_oauth_code( $code, $state ) {
+		if ( ! self::is_entitled() ) {
+			return self::pro_required_error();
+		}
+
 		$config = $this->get_raw_config();
 		if ( empty( $config['oauth_client_id'] ) || empty( $config['oauth_client_secret'] ) ) {
 			return new WP_Error( 'figma_oauth_not_ready', __( 'Figma OAuth credentials are missing.', 'mcpwp' ) );
@@ -274,6 +330,10 @@ class Mcpwp_Figma {
 	 * @return array|WP_Error
 	 */
 	public function get_file( $file_key = '', $depth = 2 ) {
+		if ( ! self::is_entitled() ) {
+			return self::pro_required_error();
+		}
+
 		$file_key = $this->resolve_file_key( $file_key );
 		if ( is_wp_error( $file_key ) ) {
 			return $file_key;
@@ -318,6 +378,10 @@ class Mcpwp_Figma {
 	 * @return array|WP_Error
 	 */
 	public function get_node( $file_key, $node_id, $depth = 2 ) {
+		if ( ! self::is_entitled() ) {
+			return self::pro_required_error();
+		}
+
 		$file_key = $this->resolve_file_key( $file_key );
 		if ( is_wp_error( $file_key ) ) {
 			return $file_key;
@@ -376,6 +440,10 @@ class Mcpwp_Figma {
 	 * @return array|WP_Error Tokens payload (see DESIGN_TOKENS_OPTION docblock), or WP_Error on failure.
 	 */
 	public function sync_design_tokens( $file_key = null ) {
+		if ( ! self::is_entitled() ) {
+			return self::pro_required_error();
+		}
+
 		$resolved_key = $this->resolve_file_key( (string) $file_key );
 		if ( is_wp_error( $resolved_key ) ) {
 			return $resolved_key;
@@ -495,8 +563,16 @@ class Mcpwp_Figma {
 
 	/**
 	 * Schedule the recurring design-token sync cron event, if not already scheduled.
+	 *
+	 * On Free nothing is scheduled, and an event left from a Pro period is
+	 * cleared.
 	 */
 	public static function schedule() {
+		if ( ! self::is_entitled() ) {
+			self::unschedule();
+			return;
+		}
+
 		if ( ! wp_next_scheduled( self::CRON_HOOK ) ) {
 			wp_schedule_event( time(), self::CRON_INTERVAL, self::CRON_HOOK );
 		}
@@ -506,6 +582,11 @@ class Mcpwp_Figma {
 	 * Remove the scheduled design-token sync cron event.
 	 */
 	public static function unschedule() {
+		if ( function_exists( 'wp_clear_scheduled_hook' ) ) {
+			wp_clear_scheduled_hook( self::CRON_HOOK );
+			return;
+		}
+
 		$timestamp = wp_next_scheduled( self::CRON_HOOK );
 		if ( $timestamp ) {
 			wp_unschedule_event( $timestamp, self::CRON_HOOK );
@@ -519,6 +600,12 @@ class Mcpwp_Figma {
 	 * background sync must not surface to the WP-Cron scheduler.
 	 */
 	public static function cron_sync_design_tokens() {
+		// A no-op on Free, and the event is removed so it stops firing.
+		if ( ! self::is_entitled() ) {
+			self::unschedule();
+			return;
+		}
+
 		$figma  = new self();
 		$status = $figma->get_status();
 
@@ -633,6 +720,11 @@ class Mcpwp_Figma {
 	 * @return array|WP_Error
 	 */
 	private function refresh_oauth_token( $config ) {
+		// HTTP chokepoint: a token refresh calls Figma and writes new tokens.
+		if ( ! self::is_entitled() ) {
+			return self::pro_required_error();
+		}
+
 		if ( empty( $config['oauth_client_id'] ) || empty( $config['oauth_client_secret'] ) || empty( $config['refresh_token'] ) ) {
 			return new WP_Error( 'figma_refresh_unavailable', __( 'Figma OAuth refresh is unavailable because credentials or refresh token are missing.', 'mcpwp' ) );
 		}
@@ -690,6 +782,11 @@ class Mcpwp_Figma {
 	 * @return array|WP_Error
 	 */
 	private function request( $path, $query = array() ) {
+		// HTTP chokepoint for every Figma API read.
+		if ( ! self::is_entitled() ) {
+			return self::pro_required_error();
+		}
+
 		$config = $this->get_config();
 		if ( is_wp_error( $config ) ) {
 			return $config;

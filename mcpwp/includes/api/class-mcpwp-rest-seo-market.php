@@ -11,6 +11,10 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 /**
  * Visibility and opportunity endpoints.
+ *
+ * SEO market data (DataForSEO) is Pro, as in the MCP tool map. The routes
+ * answer 403 pro_required on Free — including through POST /batch, which
+ * dispatches through the REST server and so runs this permission callback (#564).
  */
 class Mcpwp_REST_SEO_Market extends Mcpwp_REST_API {
 
@@ -48,7 +52,7 @@ class Mcpwp_REST_SEO_Market extends Mcpwp_REST_API {
 				array(
 					'methods'             => WP_REST_Server::READABLE,
 					'callback'            => array( $this, 'get_visibility' ),
-					'permission_callback' => array( $this, 'check_permission' ),
+					'permission_callback' => array( $this, 'check_pro_permission' ),
 				),
 			)
 		);
@@ -60,7 +64,7 @@ class Mcpwp_REST_SEO_Market extends Mcpwp_REST_API {
 				array(
 					'methods'             => WP_REST_Server::CREATABLE,
 					'callback'            => array( $this, 'refresh_visibility' ),
-					'permission_callback' => array( $this, 'check_permission' ),
+					'permission_callback' => array( $this, 'check_pro_permission' ),
 				),
 			)
 		);
@@ -72,7 +76,7 @@ class Mcpwp_REST_SEO_Market extends Mcpwp_REST_API {
 				array(
 					'methods'             => WP_REST_Server::READABLE,
 					'callback'            => array( $this, 'get_opportunities' ),
-					'permission_callback' => array( $this, 'check_permission' ),
+					'permission_callback' => array( $this, 'check_pro_permission' ),
 				),
 			)
 		);

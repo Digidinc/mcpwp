@@ -1143,6 +1143,46 @@ if (! isset($GLOBALS['wpdb'])) {
         }
         public function get_row($query = '', $output = OBJECT, $y = 0)
         {
+            // The direct option-row probe (Mcpwp_Encryption::read_option_row,
+            // #564). A select with no FROM always yields exactly one row when
+            // the query ran, so the real wpdb answers null here only when the
+            // read failed — never for "no such option". The double keeps that
+            // contract and lets a test fail the read two ways:
+            //   true     — null plus last_error, like a lost connection mid-query;
+            //   'silent' — null with an empty last_error, which is what the real
+            //              wpdb returns when a reconnect fails after
+            //              template_redirect (check_connection() returns false
+            //              without recording an error).
+            // A callable receives the option name and answers true/'silent'/false.
+            if (preg_match("/^SELECT 1 AS mcpwp_probe, \\(SELECT option_value FROM \\S*options WHERE option_name = '([^']+)'(?: ORDER BY option_id ASC)? LIMIT 1\\) AS option_value$/", trim((string) $query), $m)) {
+                $this->last_error = '';
+                $fails            = $GLOBALS['mcpwp_test_wpdb_read_fails'] ?? false;
+                if (is_callable($fails)) {
+                    $fails = $fails($m[1]);
+                }
+                if ('silent' === $fails) {
+                    return null;
+                }
+                if (true === $fails) {
+                    $this->last_error = 'WordPress database error: Lost connection to MySQL server during query';
+                    return null;
+                }
+                // One table in real WordPress: a row written through the options
+                // API (update_option() double) is visible to the probe too,
+                // serialized as WordPress stores it. A raw row wins when both exist.
+                if (array_key_exists($m[1], $GLOBALS['mcpwp_test_wpdb_options'] ?? array())) {
+                    $value = $GLOBALS['mcpwp_test_wpdb_options'][ $m[1] ];
+                } elseif (array_key_exists($m[1], $GLOBALS['mcpwp_test_options'] ?? array())) {
+                    $value = maybe_serialize($GLOBALS['mcpwp_test_options'][ $m[1] ]);
+                } else {
+                    $value = null;
+                }
+                $row = array(
+                    'mcpwp_probe'  => '1',
+                    'option_value' => $value,
+                );
+                return ARRAY_A === $output ? $row : (object) $row;
+            }
             return null;
         }
         public function get_var($query = '', $x = 0, $y = 0)
@@ -1234,6 +1274,14 @@ if (! isset($GLOBALS['wpdb'])) {
             // like this (it uses ON DUPLICATE KEY UPDATE); the earlier
             // add_option() double claiming otherwise is why a race shipped.
             if ($table === $this->options && isset($data['option_name'])) {
+                // One-shot hook that runs between a caller's read and its
+                // insert, so a test can land a concurrent writer's row first
+                // (the first-creation race in #564).
+                if (isset($GLOBALS['mcpwp_test_wpdb_before_insert']) && is_callable($GLOBALS['mcpwp_test_wpdb_before_insert'])) {
+                    $hook = $GLOBALS['mcpwp_test_wpdb_before_insert'];
+                    $GLOBALS['mcpwp_test_wpdb_before_insert'] = null;
+                    $hook((string) $data['option_name']);
+                }
                 if (! empty($GLOBALS['mcpwp_test_wpdb_insert_fails'])) {
                     $this->last_error = 'WordPress database error: connection lost';
                     return false;
@@ -1256,15 +1304,44 @@ if (! isset($GLOBALS['wpdb'])) {
         public function update($table, $data, $where, $f = null, $wf = null)
         {
             if ($table === $this->options && isset($where['option_name'])) {
-                $name    = (string) $where['option_name'];
-                $current = $GLOBALS['mcpwp_test_wpdb_options'][ $name ] ?? null;
-                if (null === $current) {
+                $name = (string) $where['option_name'];
+                // One-shot hook between a caller's read and its compare-and-swap,
+                // so a test can land a concurrent writer's value first.
+                if (isset($GLOBALS['mcpwp_test_wpdb_before_update']) && is_callable($GLOBALS['mcpwp_test_wpdb_before_update'])) {
+                    $hook = $GLOBALS['mcpwp_test_wpdb_before_update'];
+                    $GLOBALS['mcpwp_test_wpdb_before_update'] = null;
+                    $hook($name);
+                }
+                $fails = $GLOBALS['mcpwp_test_wpdb_update_fails'] ?? false;
+                if (is_callable($fails) ? (bool) $fails($name) : (bool) $fails) {
+                    $this->last_error = 'WordPress database error: Lock wait timeout exceeded';
+                    return false;
+                }
+                // Same one-table view as the probe: a raw row, else the options-API value.
+                if (array_key_exists($name, $GLOBALS['mcpwp_test_wpdb_options'] ?? array())) {
+                    $current = (string) $GLOBALS['mcpwp_test_wpdb_options'][ $name ];
+                    $in_rows = true;
+                } elseif (array_key_exists($name, $GLOBALS['mcpwp_test_options'] ?? array())) {
+                    $current = (string) maybe_serialize($GLOBALS['mcpwp_test_options'][ $name ]);
+                    $in_rows = false;
+                } else {
                     return 0;
                 }
                 if (isset($where['option_value']) && (string) $where['option_value'] !== $current) {
                     return 0; // compare-and-swap miss
                 }
-                $GLOBALS['mcpwp_test_wpdb_options'][ $name ] = (string) $data['option_value'];
+                if ($in_rows) {
+                    $GLOBALS['mcpwp_test_wpdb_options'][ $name ] = (string) $data['option_value'];
+                } else {
+                    $GLOBALS['mcpwp_test_options'][ $name ] = maybe_unserialize((string) $data['option_value']);
+                }
+                // One-shot hook after a successful write, so a test can alter
+                // what was stored before the caller reads it back.
+                if (isset($GLOBALS['mcpwp_test_wpdb_after_update']) && is_callable($GLOBALS['mcpwp_test_wpdb_after_update'])) {
+                    $hook = $GLOBALS['mcpwp_test_wpdb_after_update'];
+                    $GLOBALS['mcpwp_test_wpdb_after_update'] = null;
+                    $hook($name);
+                }
                 return 1;
             }
             return 1;
@@ -1274,6 +1351,11 @@ if (! isset($GLOBALS['wpdb'])) {
             if ($table === $this->options && isset($where['option_name'])) {
                 $name = (string) $where['option_name'];
                 if (array_key_exists($name, $GLOBALS['mcpwp_test_wpdb_options'] ?? array())) {
+                    // Like the real DELETE ... WHERE option_value = %s: a
+                    // compare-and-delete that misses removes nothing.
+                    if (isset($where['option_value']) && (string) $where['option_value'] !== (string) $GLOBALS['mcpwp_test_wpdb_options'][ $name ]) {
+                        return 0;
+                    }
                     unset($GLOBALS['mcpwp_test_wpdb_options'][ $name ]);
                     return 1;
                 }
@@ -1283,6 +1365,11 @@ if (! isset($GLOBALS['wpdb'])) {
         }
         public function replace($table, $data, $format = null)
         {
+            // REPLACE overwrites an existing row, as in MySQL. A no-op here would
+            // let a key-creation path that overwrites look as safe as INSERT.
+            if ($table === $this->options && isset($data['option_name'])) {
+                $GLOBALS['mcpwp_test_wpdb_options'][ (string) $data['option_name'] ] = (string) $data['option_value'];
+            }
             return 1;
         }
         public function esc_like($text)
@@ -1420,6 +1507,47 @@ if (! function_exists('get_post_status_object')) {
             'name'   => (string) $status,
             'public' => ! empty($public[ (string) $status ]),
         );
+    }
+}
+
+if (! function_exists('wp_generate_password')) {
+    function wp_generate_password($length = 12, $special_chars = true, $extra_special_chars = false)
+    {
+        return substr(bin2hex(random_bytes(max(1, (int) $length))), 0, (int) $length);
+    }
+}
+
+// ── WP-Cron doubles ──────────────────────────────────────────────────────
+// One timestamp per hook in $GLOBALS['mcpwp_test_cron'], enough to assert
+// whether an event is scheduled.
+if (! function_exists('wp_next_scheduled')) {
+    function wp_next_scheduled($hook, $args = array())
+    {
+        return $GLOBALS['mcpwp_test_cron'][ $hook ] ?? false;
+    }
+}
+if (! function_exists('wp_schedule_event')) {
+    function wp_schedule_event($timestamp, $recurrence, $hook, $args = array(), $wp_error = false)
+    {
+        $GLOBALS['mcpwp_test_cron'][ $hook ] = (int) $timestamp;
+        return true;
+    }
+}
+if (! function_exists('wp_unschedule_event')) {
+    function wp_unschedule_event($timestamp, $hook, $args = array(), $wp_error = false)
+    {
+        if (isset($GLOBALS['mcpwp_test_cron'][ $hook ]) && (int) $timestamp === $GLOBALS['mcpwp_test_cron'][ $hook ]) {
+            unset($GLOBALS['mcpwp_test_cron'][ $hook ]);
+        }
+        return true;
+    }
+}
+if (! function_exists('wp_clear_scheduled_hook')) {
+    function wp_clear_scheduled_hook($hook, $args = array(), $wp_error = false)
+    {
+        $had = isset($GLOBALS['mcpwp_test_cron'][ $hook ]) ? 1 : 0;
+        unset($GLOBALS['mcpwp_test_cron'][ $hook ]);
+        return $had;
     }
 }
 

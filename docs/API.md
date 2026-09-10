@@ -3168,7 +3168,7 @@ if (hash_equals($expected, $signature)) {
 
 *New in v1.1.0.* Third-party AI services and design sources (OpenAI, Gemini, ElevenLabs, Pexels, Figma) integrate directly into MCPWP. Configure API keys via **WP Admin → MCPWP → Integrations**. Generated assets are auto-uploaded to the WordPress media library, while Figma is used as approved design context for archetypes and reusable parts.
 
-**Tier gating:** Stock photo search is available as a core integration. AI generation tools require a paid plan or trial.
+**Tier gating:** Stock photo search is available as a core integration. AI generation tools require a paid plan or trial. Figma design intake (`/figma/*` routes, the Figma MCP tools, the hourly design-token cron, Figma OAuth and test connection; storing a Figma token is allowed and unlocks nothing) and SEO market data (`/seo/visibility`, `/seo/visibility/refresh`, `/seo/opportunities`) also require Pro: on Free those routes answer `403 pro_required` on every path, including `POST /batch`, and the Figma tools are not listed.
 
 #### Provider Management (Admin)
 
@@ -3237,6 +3237,16 @@ POST /integrations/providers/{provider}/key
 ```
 
 Keys are encrypted at rest using Sodium (libsodium).
+
+**Encryption behaviour (v3.11.1+).**
+
+- **Key.** Secrets are encrypted under a dedicated 32-byte key: the `MCPWP_ENCRYPTION_KEY` constant when defined in `wp-config.php` (32 raw bytes, or any passphrase, which is hashed), otherwise the `mcpwp_encryption_key` option. The option row is read straight from the options table, bypassing the object cache.
+- **Key creation.** A key is created only when no row exists, and only with a plain `INSERT` that cannot overwrite (no `INSERT IGNORE`, `ON DUPLICATE KEY UPDATE` or `FOR UPDATE`, so the same statements run on MySQL, MariaDB and the SQLite Database Integration driver). Every request then uses whatever row is stored, so concurrent first writers converge on one key.
+- **Failures.** If the row cannot be read, or holds something that is not a valid key, encryption and decryption fail closed. The key is never regenerated or replaced.
+- **Blob format.** New secrets are stored as `v2:` + base64(version byte `0x02` ‖ 4-byte key id ‖ 24-byte nonce ‖ secretbox ciphertext). Blobs written before 3.11.1 (plain base64, no prefix) still decrypt. Downgrading below 3.11.1 makes any secret saved since then unreadable, so re-enter it after a downgrade.
+- **Weak pinned constant.** An `MCPWP_ENCRYPTION_KEY` that is empty, whitespace, or — once trimmed — shorter than 16 bytes, made of fewer than 4 distinct bytes, or a unit of up to 8 bytes repeated (`abab…`, `passwordpassword`) is refused, because a key derived from it could be guessed. Encryption and decryption fail closed with reason `pinned_key_weak`, with no fallback to the option key, and the **MCPWP encryption** admin notice names the constant (never its value).
+- **Pinning after secrets exist.** When `MCPWP_ENCRYPTION_KEY` is defined after secrets were stored under the option key, those secrets still decrypt with the option key, and an admin warning asks you to re-save them. Do not delete the `mcpwp_encryption_key` option until they have been re-saved.
+- **Undecryptable keys.** A stored provider key that cannot be decrypted is reported as `provider_key_unreadable` (HTTP 500, with the reason in the message), not as `provider_not_configured`. The reason is one of `key_unavailable`, `key_corrupt`, `key_missing`, `wrong_key`, `tampered`, `undecryptable`, `unsupported_version`, or `pinned_key_weak`. The same condition raises an **MCPWP encryption** notice for administrators.
 
 ##### Remove Provider Key
 

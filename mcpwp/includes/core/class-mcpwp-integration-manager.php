@@ -307,7 +307,7 @@ class Mcpwp_Integration_Manager {
 			'test_status'   => null,
 		);
 
-		return update_option( self::OPTION_NAME, $data );
+		return $this->save_providers( $provider, $data );
 	}
 
 	/**
@@ -341,7 +341,7 @@ class Mcpwp_Integration_Manager {
 			'multi_field'   => true,
 		);
 
-		return update_option( self::OPTION_NAME, $data );
+		return $this->save_providers( $provider, $data );
 	}
 
 	/**
@@ -417,7 +417,28 @@ class Mcpwp_Integration_Manager {
 		}
 
 		unset( $data[ $provider ] );
-		return update_option( self::OPTION_NAME, $data );
+		return $this->save_providers( $provider, $data );
+	}
+
+	/**
+	 * Write the provider records after one provider changed.
+	 *
+	 * A provider whose key was just re-entered or removed no longer needs
+	 * re-entering, so its encryption-migration failure is cleared — only when
+	 * the write succeeded (#564 P3-8).
+	 *
+	 * @param string $provider Provider slug that changed.
+	 * @param array  $data     All provider records.
+	 * @return bool True on success.
+	 */
+	private function save_providers( $provider, array $data ) {
+		$saved = update_option( self::OPTION_NAME, $data );
+
+		if ( $saved && class_exists( 'Mcpwp_Encryption_Migration' ) ) {
+			Mcpwp_Encryption_Migration::clear_provider_failure( $provider );
+		}
+
+		return $saved;
 	}
 
 	/**

@@ -21,8 +21,22 @@ final class EncryptionMigrationTest extends TestCase
         $GLOBALS['mcpwp_test_options']              = array();
         $GLOBALS['mcpwp_test_transients']           = array();
         $GLOBALS['mcpwp_test_update_option_fail']   = array();
+        // The key and the migration lock are rows read and written straight
+        // through $wpdb (#564), so they live in the $wpdb double's rows.
+        $this->resetKeyRows();
         // Reset the encryption singleton so each test gets a fresh key.
         $this->resetEncryptionSingleton();
+    }
+
+    private function resetKeyRows(): void
+    {
+        $GLOBALS['mcpwp_test_wpdb_insert_fails'] = false;
+        $GLOBALS['mcpwp_test_wpdb_read_fails']   = false;
+        $GLOBALS['mcpwp_test_wpdb_update_fails'] = false;
+        unset(
+            $GLOBALS['mcpwp_test_wpdb_options']['mcpwp_encryption_key'],
+            $GLOBALS['mcpwp_test_wpdb_options']['mcpwp_encryption_migration_lock']
+        );
     }
 
     /**
@@ -37,6 +51,7 @@ final class EncryptionMigrationTest extends TestCase
     protected function tearDown(): void
     {
         $GLOBALS['mcpwp_test_update_option_fail'] = array();
+        $this->resetKeyRows();
 
         $this->resetEncryptionSingleton();
     }
@@ -259,9 +274,9 @@ final class EncryptionMigrationTest extends TestCase
 
         $this->assertNotFalse($encrypted, 'encrypt() must succeed');
 
-        // Option must now be set (base64, correct length when decoded).
-        $stored_b64 = get_option('mcpwp_encryption_key', '');
-        $this->assertNotEmpty($stored_b64, 'mcpwp_encryption_key option must be set after first use');
+        // The key row must now exist (base64, correct length when decoded).
+        $stored_b64 = $GLOBALS['mcpwp_test_wpdb_options']['mcpwp_encryption_key'] ?? '';
+        $this->assertNotEmpty($stored_b64, 'mcpwp_encryption_key row must be set after first use');
         $raw = base64_decode($stored_b64, true);
         $this->assertNotFalse($raw, 'Stored value must be valid base64');
         $this->assertSame(SODIUM_CRYPTO_SECRETBOX_KEYBYTES, strlen($raw), 'Stored key must be correct length');
@@ -286,9 +301,10 @@ final class EncryptionMigrationTest extends TestCase
             $this->markTestSkipped('MCPWP_ENCRYPTION_KEY constant is defined — constant takes precedence');
         }
 
-        // Pre-store a known key.
+        // Pre-store a known key (options table row, as WordPress stores it).
         $known_key = random_bytes(SODIUM_CRYPTO_SECRETBOX_KEYBYTES);
         update_option('mcpwp_encryption_key', base64_encode($known_key));
+        $GLOBALS['mcpwp_test_wpdb_options']['mcpwp_encryption_key'] = base64_encode($known_key);
 
         $enc       = Mcpwp_Encryption::get_instance();
         $plaintext = 'option-key-test';
@@ -298,8 +314,8 @@ final class EncryptionMigrationTest extends TestCase
         $decrypted = $enc->decrypt_with_key($encrypted, $known_key);
         $this->assertSame($plaintext, $decrypted, 'Encryption must use the key from the stored option');
 
-        // No NEW key must have been generated (option must still be the known key).
-        $stored = get_option('mcpwp_encryption_key', '');
+        // No NEW key must have been generated (the row must still be the known key).
+        $stored = $GLOBALS['mcpwp_test_wpdb_options']['mcpwp_encryption_key'] ?? '';
         $this->assertSame(base64_encode($known_key), $stored, 'Option must not be overwritten');
     }
 
@@ -327,8 +343,11 @@ final class EncryptionMigrationTest extends TestCase
             ),
         ));
 
-        // Simulate DB write failure for the integrations option.
-        $GLOBALS['mcpwp_test_update_option_fail'][ Mcpwp_Integration_Manager::OPTION_NAME ] = true;
+        // Simulate a DB write failure for the integrations row (the migration
+        // writes it with a compare-and-swap $wpdb->update, #564 r2).
+        $GLOBALS['mcpwp_test_wpdb_update_fails'] = static function (string $name): bool {
+            return Mcpwp_Integration_Manager::OPTION_NAME === $name;
+        };
 
         Mcpwp_Encryption_Migration::run();
 
@@ -364,10 +383,9 @@ final class EncryptionMigrationTest extends TestCase
             $this->markTestSkipped('MCPWP_ENCRYPTION_KEY constant defined — generation path not reached');
         }
 
-        // No stored key, no constant → get_key() will try to generate + persist.
-        // Simulate the option write failing AND the readback returning empty.
-        $GLOBALS['mcpwp_test_update_option_fail']['mcpwp_encryption_key'] = true;
-        // Do NOT pre-populate mcpwp_encryption_key so the readback also returns ''.
+        // No stored key, no constant → encrypt() will try to create the key row.
+        // Simulate the insert failing, so the re-read still finds no row.
+        $GLOBALS['mcpwp_test_wpdb_insert_fails'] = true;
 
         $enc    = Mcpwp_Encryption::get_instance();
         $result = $enc->encrypt('should-fail');

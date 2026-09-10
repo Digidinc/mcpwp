@@ -847,23 +847,6 @@ class Mcpwp_REST_Integrations extends Mcpwp_REST_API {
 	}
 
 	/**
-	 * Require Pro license for endpoint.
-	 *
-	 * @return true|WP_Error
-	 */
-	private function require_pro() {
-		if ( class_exists( 'Mcpwp_License' ) && ! Mcpwp_License::get_instance()->is_pro() ) {
-			return $this->error_response(
-				'pro_required',
-				__( 'This feature requires MCPWP Pro. Upgrade at https://mcpwp.net/pricing/', 'mcpwp' ),
-				403,
-				array( 'upgrade_url' => 'https://mcpwp.net/pricing/' )
-			);
-		}
-		return true;
-	}
-
-	/**
 	 * Require a provider key.
 	 *
 	 * @param string $provider Provider slug.
@@ -877,6 +860,24 @@ class Mcpwp_REST_Integrations extends Mcpwp_REST_API {
 			$name = isset( Mcpwp_Integration_Manager::PROVIDERS[ $provider ]['name'] )
 				? Mcpwp_Integration_Manager::PROVIDERS[ $provider ]['name']
 				: $provider;
+
+			// A key that is stored but cannot be decrypted is not "not configured":
+			// re-entering it may not help (the site's encryption key is the problem),
+			// and the caller must be able to tell the two apart (#564).
+			if ( $manager->has_provider_key( $provider ) ) {
+				$reason = class_exists( 'Mcpwp_Encryption' ) ? Mcpwp_Encryption::get_instance()->get_last_error() : '';
+
+				return $this->error_response(
+					'provider_key_unreadable',
+					sprintf(
+						/* translators: 1: Provider name, 2: machine-readable reason */
+						__( '%1$s API key is stored but could not be decrypted (%2$s). See the MCPWP encryption notice in WP Admin.', 'mcpwp' ),
+						$name,
+						'' !== $reason ? $reason : 'unknown'
+					),
+					500
+				);
+			}
 
 			return $this->error_response(
 				'provider_not_configured',

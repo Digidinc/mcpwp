@@ -56,6 +56,13 @@ final class IdempotentToolCallTest extends TestCase {
 		$GLOBALS['mcpwp_test_transients']             = array();
 		$GLOBALS['mcpwp_test_dispatched_routes']      = array();
 		$GLOBALS['mcpwp_test_transient_write_fails']  = false;
+		// setUp resets this too, but only for this class. Several tests switch
+		// inserts off and one of them may run last, which leaves every later
+		// class unable to insert an option row — including the encryption key,
+		// which is created with a plain $wpdb->insert (#564). Under
+		// --order-by=random that surfaced as broker/mupot encryption failures
+		// far from here (#757 pattern: a leaked sabotage switch).
+		$GLOBALS['mcpwp_test_wpdb_insert_fails']      = false;
 	}
 
 	private function request( string $tool, array $arguments, $request_id = null, $rpc_id = 7, $key = null ): WP_REST_Request {

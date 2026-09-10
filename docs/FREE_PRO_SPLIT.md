@@ -60,7 +60,9 @@ Require active Freemius license. Loaded only when `mcpwp_license()->is_pro()` is
 
 **Translation:** wp_get_translations, wp_create_translation, wp_set_language, wp_languages
 
-**Figma:** wp_figma_status, wp_get_figma_file, wp_get_figma_node
+**Figma:** wp_figma_status, wp_get_figma_file, wp_get_figma_node, wp_get_figma_design_tokens, wp_sync_figma_design_tokens (v3.11.1: gated at the capability. `Mcpwp_Figma` refuses every Figma call and every write of Figma-derived data on Free, fail-closed. So on Free: the `/figma/*` REST routes answer 403 `pro_required`; the Figma MCP tools are not listed; the hourly design-token cron is not scheduled and an existing event is cleared; Integrations "Test connection" and the Figma OAuth flow refuse; and an expired OAuth token is never refreshed. **Storing** a Figma personal token or OAuth app on Free is allowed, because with every use refused it unlocks nothing. Status reports it as configured and, separately, as `pro_required`.)
+
+**SEO market data (DataForSEO):** wp_seo_visibility, wp_refresh_seo_visibility, wp_seo_opportunities (v3.11.1: `GET /seo/visibility`, `POST /seo/visibility/refresh` and `GET /seo/opportunities` answer 403 `pro_required` on Free, including through `POST /batch`). Open tier question: the free `wp_keyword_research` enrichment also spends DataForSEO credit when credentials are configured.
 
 **Cache:** wp_flush_cache (v3.3.3 — flushes WP page cache: W3TC, WP Super Cache, LiteSpeed, WP Rocket, Cache Enabler, Breeze, Cloudflare; optional `url` param for per-URL flush, omit for site-wide)
 
@@ -77,11 +79,19 @@ The Freemius/paid build includes all files and loads Pro tools conditionally via
 
 ## Gating Pattern
 
+REST routes that belong to a Pro capability use the shared permission callback on `Mcpwp_REST_API`, so the tier is enforced on every path that reaches the route (direct HTTP, `POST /batch`, and MCP `tools/call`, which all dispatch through the REST server):
+
 ```php
-// In REST handler:
-if ( ! mcpwp_license()->is_pro() ) {
-    return new WP_Error( 'pro_required', 'This feature requires MCPWP Pro.', array( 'status' => 403 ) );
-}
+register_rest_route( $this->namespace, '/my-pro-route', array(
+    'methods'             => WP_REST_Server::READABLE,
+    'callback'            => array( $this, 'handle' ),
+    'permission_callback' => array( $this, 'check_pro_permission' ), // auth first, then 403 pro_required
+) );
+
+// Or inside a handler shared by Free and Pro routes:
+$pro = $this->require_pro(); // true|WP_Error pro_required (403)
 ```
 
-MCP tools in class-mcpwp-mcp-pro-tools.php are only registered when `mcpwp_license()->is_pro()` is true, so they don't appear in `tools/list` for free users.
+The check behind both, `Mcpwp_REST_API::is_pro_entitled()`, fails closed: a WP.org build, a license class that is not loaded, or any answer other than `true` is "not entitled". Do not write `class_exists( 'Mcpwp_License' ) && ! is_pro()` as a deny condition — it allows when the class is missing.
+
+MCP tools in class-mcpwp-mcp-pro-tools.php are only registered when the license is Pro, so they don't appear in `tools/list` for free users (a call answers JSON-RPC -32004). A built-in `Mcpwp_Integration` whose tools are Pro returns no tools and no tool map without Pro (`is_mcpwp_pro_active()`), and keeps its tool categories so the names stay reserved.

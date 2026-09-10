@@ -38,11 +38,16 @@ class Mcpwp_MCP_Figma_Integration extends Mcpwp_Integration {
 		return array(
 			'figma'                  => ! empty( $status['configured'] ),
 			'figma_default_file_key' => isset( $status['default_file_key'] ) ? (string) $status['default_file_key'] : '',
+			// Configured and entitled are different facts; never fold one into the other.
+			'figma_pro_required'     => ! $this->is_mcpwp_pro_active(),
 		);
 	}
 
 	/**
 	 * Tool categories.
+	 *
+	 * Unconditional on purpose: the names stay reserved on Free so a custom
+	 * tool cannot claim them.
 	 *
 	 * @return array
 	 */
@@ -57,11 +62,19 @@ class Mcpwp_MCP_Figma_Integration extends Mcpwp_Integration {
 	}
 
 	/**
-	 * Tool definitions.
+	 * Tool definitions — Pro only.
+	 *
+	 * Figma design intake is Pro (docs/FREE_PRO_SPLIT.md). On Free the tools
+	 * are not listed and not mapped, and the /figma/* routes answer 403
+	 * pro_required as well (#564).
 	 *
 	 * @return array
 	 */
 	public function get_tools() {
+		if ( ! $this->is_mcpwp_pro_active() ) {
+			return array();
+		}
+
 		return array(
 			$this->define_tool(
 				'wp_figma_status',
@@ -122,11 +135,15 @@ class Mcpwp_MCP_Figma_Integration extends Mcpwp_Integration {
 	}
 
 	/**
-	 * Tool map.
+	 * Tool map — Pro only (see get_tools()).
 	 *
 	 * @return array
 	 */
 	public function get_tool_map() {
+		if ( ! $this->is_mcpwp_pro_active() ) {
+			return array();
+		}
+
 		return array(
 			'wp_figma_status'             => array(
 				'route'  => '/figma/status',
