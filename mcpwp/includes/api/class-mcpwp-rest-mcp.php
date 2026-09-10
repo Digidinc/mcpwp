@@ -266,8 +266,12 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 */
 	public function get_introspection_data() {
 		$core = class_exists( 'Mcpwp_Core' ) ? new Mcpwp_Core() : null;
-		$figma_status = class_exists( 'Mcpwp_Figma' ) ? ( new Mcpwp_Figma() )->get_status() : array();
-		$figma_configured = ! empty( $figma_status['configured'] );
+		// Figma is Pro (#564): on Free its tools are neither listed nor
+		// callable, and a stored token (allowed on every tier) must not send an
+		// agent to them (#845). The same entitlement check the Figma gate uses.
+		$figma_entitled   = class_exists( 'Mcpwp_Figma' ) && Mcpwp_Figma::is_entitled();
+		$figma_status     = $figma_entitled ? ( new Mcpwp_Figma() )->get_status() : array();
+		$figma_configured = $figma_entitled && ! empty( $figma_status['configured'] );
 
 		$site_info = is_object( $core ) && method_exists( $core, 'get_site_info' )
 			? $core->get_site_info()
