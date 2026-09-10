@@ -378,6 +378,50 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 			)
 		);
 
+		// Find/replace across the site, a post type, a list of ids, or one id (#803).
+		register_rest_route(
+			$this->namespace,
+			'/elementor/find-replace',
+			array(
+				array(
+					'methods'             => WP_REST_Server::CREATABLE,
+					'callback'            => array( $this, 'find_replace_many' ),
+					'permission_callback' => array( $this, 'check_permission' ),
+					'args'                => array(
+						'search'    => array(
+							'description' => __( 'Text to search for.', 'mcpwp' ),
+							'type'        => 'string',
+							'required'    => true,
+							'minLength'   => 1,
+						),
+						'replace'   => array(
+							'description' => __( 'Replacement text.', 'mcpwp' ),
+							'type'        => 'string',
+							'required'    => true,
+						),
+						'id'        => array(
+							'description' => __( 'One post ID.', 'mcpwp' ),
+							'type'        => 'integer',
+						),
+						'ids'       => array(
+							'description' => __( 'Post IDs to limit the run to.', 'mcpwp' ),
+							'type'        => 'array',
+							'items'       => array( 'type' => 'integer' ),
+						),
+						'post_type' => array(
+							'description' => __( 'Limit to one post type.', 'mcpwp' ),
+							'type'        => 'string',
+						),
+						'dry_run'   => array(
+							'description' => __( 'Report without writing.', 'mcpwp' ),
+							'type'        => 'boolean',
+							'default'     => false,
+						),
+					),
+				),
+			)
+		);
+
 		// Widget schema — list all widget types.
 		register_rest_route(
 			$this->namespace,
@@ -1029,6 +1073,129 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 				'post_id'      => $page_id,
 				'search'       => $search,
 				'replace'      => $replace,
+			)
+		);
+	}
+
+	/**
+	 * Find/replace across many posts (#803).
+	 *
+	 * Scope is `id`, then `ids`, then `post_type`, then every post that has
+	 * Elementor data. `dry_run` reports per-post counts without writing.
+	 * Three things are kept apart in the response because a caller acts on
+	 * them differently: nothing scanned, nothing matched, and data that could
+	 * not be read.
+	 *
+	 * @param WP_REST_Request $request Request.
+	 * @return WP_REST_Response|WP_Error
+	 */
+	public function find_replace_many( $request ) {
+		$this->log_activity( 'elementor_find_replace_many', $request );
+
+		$search  = (string) $request->get_param( 'search' );
+		$replace = (string) $request->get_param( 'replace' );
+		$dry_run = (bool) $request->get_param( 'dry_run' );
+
+		if ( '' === $search ) {
+			return $this->error_response( 'missing_search', __( 'search is required.', 'mcpwp' ), 400 );
+		}
+
+		$ids = array();
+		if ( $request->get_param( 'id' ) ) {
+			$ids = array( absint( $request->get_param( 'id' ) ) );
+		} elseif ( is_array( $request->get_param( 'ids' ) ) ) {
+			$ids = array_values( array_filter( array_map( 'absint', $request->get_param( 'ids' ) ) ) );
+		}
+
+		$post_type = sanitize_key( (string) $request->get_param( 'post_type' ) );
+
+		$query_args = array(
+			'post_type'      => '' !== $post_type ? $post_type : 'any',
+			'post_status'    => 'any',
+			'posts_per_page' => -1,
+			'fields'         => 'ids',
+			'meta_key'       => '_elementor_data', // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_key -- scoped to one meta key; this is the whole point of the query.
+			'no_found_rows'  => true,
+		);
+		if ( ! empty( $ids ) ) {
+			$query_args['post__in'] = $ids;
+		}
+
+		$query = new WP_Query( $query_args );
+		$found = is_array( $query->posts ) ? $query->posts : array();
+
+		$matched    = array();
+		$unreadable = array();
+		$scanned    = 0;
+		$total      = 0;
+
+		foreach ( $found as $candidate ) {
+			$post_id = is_object( $candidate ) ? (int) $candidate->ID : (int) $candidate;
+			$raw     = get_post_meta( $post_id, '_elementor_data', true );
+
+			if ( empty( $raw ) || ! is_string( $raw ) ) {
+				continue;
+			}
+
+			$scanned++;
+
+			$decoded = json_decode( $raw, true );
+			if ( JSON_ERROR_NONE !== json_last_error() || ! is_array( $decoded ) ) {
+				$unreadable[] = array(
+					'id'    => $post_id,
+					'title' => get_the_title( $post_id ),
+				);
+				continue;
+			}
+
+			$count   = 0;
+			$updated = $this->recursive_str_replace( $search, $replace, $decoded, $count );
+
+			if ( 0 === $count ) {
+				continue;
+			}
+
+			$entry = array(
+				'id'           => $post_id,
+				'title'        => get_the_title( $post_id ),
+				'post_type'    => get_post_type( $post_id ),
+				'replacements' => $count,
+			);
+
+			if ( ! $dry_run ) {
+				$encoded = wp_json_encode( $updated );
+				if ( false === $encoded ) {
+					$entry['written'] = false;
+					$entry['error']   = 'json_encode_failed';
+					$matched[]        = $entry;
+					continue;
+				}
+				if ( class_exists( 'Mcpwp_Elementor_Element_Keys' ) ) {
+					$encoded = Mcpwp_Elementor_Element_Keys::normalize_json( $encoded );
+				}
+				update_post_meta( $post_id, '_elementor_data', wp_slash( $encoded ) );
+				if ( class_exists( '\Elementor\Plugin' ) ) {
+					$post_css = \Elementor\Core\Files\CSS\Post::create( $post_id );
+					if ( $post_css ) {
+						$post_css->delete();
+					}
+				}
+				$entry['written'] = true;
+			}
+
+			$total    += $count;
+			$matched[] = $entry;
+		}
+
+		return $this->success_response(
+			array(
+				'dry_run'            => $dry_run,
+				'search'             => $search,
+				'replace'            => $replace,
+				'scanned'            => $scanned,
+				'matched'            => $matched,
+				'unreadable'         => $unreadable,
+				'total_replacements' => $total,
 			)
 		);
 	}

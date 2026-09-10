@@ -1340,7 +1340,7 @@ class WP_Query
         $statuses = isset($args['post_status']) ? (array) $args['post_status'] : array();
 
         $posts = array_values(array_filter($posts, function ($post) use ($types, $statuses, $args) {
-            if (! empty($types) && ! in_array($post->post_type, $types, true)) {
+            if (! empty($types) && ! in_array('any', $types, true) && ! in_array($post->post_type, $types, true)) {
                 return false;
             }
             if (! empty($statuses) && ! in_array('any', $statuses, true) && ! in_array($post->post_status, $statuses, true)) {

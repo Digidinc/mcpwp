@@ -43,6 +43,68 @@ class Mcpwp_Posts {
 	 */
 	private $safe_nonpublic_types = array( 'elementor_snippet', 'elementor_library' );
 
+	/**
+	 * Fields update_post() acts on. Anything else is refused by name (#803):
+	 * a field that is accepted and ignored is a 200 that did nothing.
+	 *
+	 * @var array
+	 */
+	public static $update_fields = array( 'title', 'content', 'status', 'excerpt', 'slug', 'categories', 'tags', 'featured_image' );
+
+	/**
+	 * Fields create_post() acts on.
+	 *
+	 * @var array
+	 */
+	public static $create_fields = array( 'title', 'content', 'status', 'excerpt', 'slug', 'categories', 'tags', 'featured_image', 'post_type', 'elementor_location' );
+
+	/**
+	 * Parameters the transport adds that are not the caller's fields.
+	 *
+	 * @var array
+	 */
+	public static $transport_params = array( 'id', 'context', '_locale', '_fields', '_embed', '_envelope', '_method', '_wpnonce', 'rest_route' );
+
+	/**
+	 * Refuse fields the writer does not act on (#803).
+	 *
+	 * @param mixed $data  Submitted fields.
+	 * @param array $known Fields the writer acts on.
+	 * @return true|WP_Error
+	 */
+	public static function unsupported_fields( $data, array $known ) {
+		if ( ! is_array( $data ) ) {
+			return true;
+		}
+
+		$unsupported = array();
+		foreach ( array_keys( $data ) as $field ) {
+			if ( ! is_string( $field ) || in_array( $field, $known, true ) || in_array( $field, self::$transport_params, true ) ) {
+				continue;
+			}
+			$unsupported[] = $field;
+		}
+
+		if ( empty( $unsupported ) ) {
+			return true;
+		}
+
+		return new WP_Error(
+			'unsupported_fields',
+			sprintf(
+				/* translators: %s: comma-separated field names */
+				__( 'Unsupported field(s): %s. Nothing was written.', 'mcpwp' ),
+				implode( ', ', $unsupported )
+			),
+			array(
+				'status'      => 400,
+				'unsupported' => $unsupported,
+				'supported'   => array_values( $known ),
+				'hint'        => 'This writer acts only on the listed supported fields. A field it does not know used to be accepted and silently dropped; it is now refused so a 200 always means every field landed.',
+			)
+		);
+	}
+
 	private function validate_post_type( $type ) {
 		$type = sanitize_key( $type );
 
@@ -173,6 +235,11 @@ class Mcpwp_Posts {
 	 * @return array|WP_Error Created post data or error.
 	 */
 	public function create_post( $data ) {
+		$unsupported = self::unsupported_fields( $data, self::$create_fields );
+		if ( is_wp_error( $unsupported ) ) {
+			return $unsupported;
+		}
+
 		$post_type = 'post';
 		if ( ! empty( $data['post_type'] ) ) {
 			$validated = $this->validate_post_type( $data['post_type'] );
@@ -246,6 +313,11 @@ class Mcpwp_Posts {
 	 * @return array|WP_Error Updated post data or error.
 	 */
 	public function update_post( $post_id, $data ) {
+		$unsupported = self::unsupported_fields( $data, self::$update_fields );
+		if ( is_wp_error( $unsupported ) ) {
+			return $unsupported;
+		}
+
 		$post = get_post( absint( $post_id ) );
 
 		if ( ! $post || 'page' === $post->post_type || is_wp_error( $this->validate_post_type( $post->post_type ) ) ) {

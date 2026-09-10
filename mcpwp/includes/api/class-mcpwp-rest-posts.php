@@ -140,7 +140,12 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 						'posts' => array(
 							'description' => __( 'Array of post objects to update. Each must have id.', 'mcpwp' ),
 							'type'        => 'array',
-							'required'    => true,
+							'required'    => false,
+						'updates' => array(
+							'description' => __( 'Array of objects to update (alias of posts). Each carries id plus the fields to change.', 'mcpwp' ),
+							'type'        => 'array',
+							'required'    => false,
+						),
 						),
 					),
 				),
@@ -391,8 +396,14 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 
 		$posts_data = $request->get_param( 'posts' );
 
+		// `updates` is what the tool name promises; `posts` is the original
+		// spelling. Either is fine, and the error names both (#803).
 		if ( ! is_array( $posts_data ) || empty( $posts_data ) ) {
-			return $this->error_response( 'invalid_posts', __( 'Posts must be a non-empty array.', 'mcpwp' ), 400 );
+			$posts_data = $request->get_param( 'updates' );
+		}
+
+		if ( ! is_array( $posts_data ) || empty( $posts_data ) ) {
+			return $this->error_response( 'invalid_posts', __( 'Pass the items to update as `updates` (or `posts`): a non-empty array of objects, each with an id.', 'mcpwp' ), 400 );
 		}
 
 		if ( count( $posts_data ) > 50 ) {

@@ -87,7 +87,26 @@ class Mcpwp_Pages {
 	 * @param array $data Page data.
 	 * @return array|WP_Error Created page data or error.
 	 */
+	/**
+	 * Fields update_page() acts on; anything else is refused by name (#803).
+	 *
+	 * @var array
+	 */
+	public static $update_fields = array( 'title', 'content', 'excerpt', 'status', 'parent', 'menu_order', 'slug', 'template', 'featured_image' );
+
+	/**
+	 * Fields create_page() acts on.
+	 *
+	 * @var array
+	 */
+	public static $create_fields = array( 'title', 'content', 'excerpt', 'status', 'parent', 'menu_order', 'slug', 'template', 'featured_image' );
+
 	public function create_page( $data ) {
+		$unsupported = Mcpwp_Posts::unsupported_fields( $data, self::$create_fields );
+		if ( is_wp_error( $unsupported ) ) {
+			return $unsupported;
+		}
+
 		$page_data = array(
 			'post_type'    => 'page',
 			'post_title'   => isset( $data['title'] ) ? sanitize_text_field( $data['title'] ) : '',
@@ -149,6 +168,11 @@ class Mcpwp_Pages {
 	 * @return array|WP_Error Updated page data or error.
 	 */
 	public function update_page( $page_id, $data ) {
+		$unsupported = Mcpwp_Posts::unsupported_fields( $data, self::$update_fields );
+		if ( is_wp_error( $unsupported ) ) {
+			return $unsupported;
+		}
+
 		$page = get_post( absint( $page_id ) );
 
 		if ( ! $page || 'page' !== $page->post_type ) {

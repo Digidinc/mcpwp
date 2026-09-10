@@ -1176,12 +1176,24 @@ trait Mcpwp_Free_Tools_Site_Trait {
 
 		$tools[] = $this->define_tool(
 			'wp_bulk_find_replace',
-			'Search and replace text in Elementor data for a given post or page. Replacement is performed on the decoded element tree (not the raw JSON string) to prevent JSON corruption. Safe to use for URLs and text values.',
+			'Search and replace text in Elementor data across the site, a post type, a list of ids, or one post. Replacement is performed on the decoded element tree (not the raw JSON string) to prevent JSON corruption. Safe for URLs and text. Use dry_run first: it reports per-post match counts without writing.',
 			array(
-				'id'      => array(
+				'id'        => array(
 					'type'        => 'number',
-					'description' => 'Post or page ID',
-					'required'    => true,
+					'description' => 'One post or page ID. Omit to scope by post_type / ids, or to run site-wide.',
+				),
+				'ids'       => array(
+					'type'        => 'array',
+					'description' => 'Post IDs to limit the run to.',
+					'items'       => array( 'type' => 'integer' ),
+				),
+				'post_type' => array(
+					'type'        => 'string',
+					'description' => 'Limit to one post type (e.g. post, page, or a custom type). Default: every type with Elementor data.',
+				),
+				'dry_run'   => array(
+					'type'        => 'boolean',
+					'description' => 'Report what would change, per post, without writing. Default false.',
 				),
 				'search'  => array(
 					'type'        => 'string',
