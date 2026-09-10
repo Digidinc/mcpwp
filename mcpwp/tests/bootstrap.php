@@ -560,6 +560,8 @@ function is_serialized($data, $strict = true)
     }
     $last = substr($data, -1);
     return in_array($m[1], array('a', 'O'), true) ? '}' === $last : ';' === $last;
+}
+
 function wp_delete_post($post_id, $force_delete = false)
 {
     $post_id = (int) $post_id;

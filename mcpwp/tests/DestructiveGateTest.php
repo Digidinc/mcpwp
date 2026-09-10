@@ -377,15 +377,14 @@ final class DestructiveGateTest extends TestCase {
 	public function test_every_option_the_gate_reads_is_unreachable_through_the_options_api(): void {
 		// P0-1: the approval store, the keys, the switches — all in the
 		// plugin's own namespace, which a prefix allowlist opened wholesale.
-		$allowed = new ReflectionMethod( Mcpwp_REST_Site_Settings::class, 'is_option_allowed' );
-		$allowed->setAccessible( true );
+		// The option floor (#800) is the gate's guarantee now: the plugin's
+		// own namespace is closed except the exact-listed keys.
 		$settings = new Mcpwp_REST_Site_Settings();
-
 		foreach ( array( Mcpwp_Approvals::OPTION_NAME, 'mcpwp_settings', 'mcpwp_api_keys', 'mcpwp_api_key', 'mcpwp_disabled_tool_categories', 'mcpwp_rate_limit_settings', 'mcpwp_anything_added_later' ) as $option ) {
-			$this->assertFalse( $allowed->invoke( $settings, $option ), $option );
+			$this->assertFalse( Mcpwp_Option_Access::decide( $option, 'write' )['allowed'], $option );
 		}
 		foreach ( array( 'mcpwp_site_context', 'mcpwp_site_context_updated' ) as $option ) {
-			$this->assertTrue( $allowed->invoke( $settings, $option ), $option . ' is exact-listed and stays writable.' );
+			$this->assertTrue( Mcpwp_Option_Access::decide( $option, 'write' )['allowed'], $option . ' is exact-listed and stays writable.' );
 		}
 
 		// The forge from the review, end to end: refused, store untouched.
