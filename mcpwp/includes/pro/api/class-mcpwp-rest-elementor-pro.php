@@ -1247,9 +1247,9 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 
 		// A delete of a template has no undo whatever the flag: WordPress
 		// never trashes elementor_library (#536 round 5). Approval by default.
-		if ( class_exists( 'Mcpwp_Destructive_Gate' ) && Mcpwp_Destructive_Gate::delete_is_permanent( 'elementor_library', $force ) && Mcpwp_Destructive_Gate::should_gate( $this->get_current_api_key_record() ) ) {
-			$template = get_post( $template_id );
-			if ( ! $template || 'elementor_library' !== $template->post_type ) {
+		$template = class_exists( 'Mcpwp_Destructive_Gate' ) && Mcpwp_Destructive_Gate::should_gate( $this->get_current_api_key_record() ) ? get_post( $template_id ) : null;
+		if ( $template && Mcpwp_Destructive_Gate::delete_is_permanent( 'elementor_library', $force, (string) $template->post_status ) ) {
+			if ( 'elementor_library' !== $template->post_type ) {
 				return $this->error_response( 'not_found', __( 'Template not found.', 'mcpwp' ), 404, array( 'id' => $template_id ) );
 			}
 			return $this->defer_destructive( 'delete_elementor_template', $request, array( 'type' => 'elementor_library', 'id' => $template_id, 'title' => (string) $template->post_title ), sprintf( 'Permanently delete Elementor template #%d', $template_id ) );

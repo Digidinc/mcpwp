@@ -70,6 +70,8 @@ class Mcpwp_Destructive_Gate {
 		'class-mcpwp-rest-site-blueprints.php' => 'a stored blueprint export, re-creatable by extracting again',
 		'class-mcpwp-rest-site-custom-css.php' => 'a text block, re-creatable',
 		'class-mcpwp-rest-elementor.php'       => 'kit CSS blocks and sections: text/JSON edits with the action-log snapshot',
+		'class-mcpwp-rest-integrations.php'    => 'removes a provider key that is re-enterable; registered with a DELETE string, not the constant',
+		'class-mcpwp-rest-site-updates.php'    => 'revoke of an API key: incident response, deliberately ungated (see EXEMPT_WITH_REASON)',
 	);
 
 	/**

@@ -981,14 +981,28 @@ final class DestructiveGateTest extends TestCase {
 
 	public function test_deleting_a_user_is_deferred(): void {
 		require_once dirname( __DIR__ ) . '/includes/pro/api/class-mcpwp-rest-users.php';
-		$never = new class() { public $calls = 0; public function __call( $n, $a ) { $this->calls++; return true; } };
+		$never = new class() {
+			public $calls = 0;
+			public $may   = true;
+			public function current_principal_may_delete( $id ) { return $this->may; }
+			public function __call( $n, $a ) { $this->calls++; return true; }
+		};
 		$ctl   = new Mcpwp_REST_Users( $never );
 		if ( ! function_exists( 'get_user_by' ) ) {
 			function get_user_by( $field, $value ) {
 				return 42 === (int) $value ? (object) array( 'ID' => 42, 'user_login' => 'alice', 'user_email' => 'a@x.test', 'roles' => array( 'editor' ) ) : false;
 			}
 		}
+		// The principal must already be allowed to delete the user, or the
+		// gate never sees it (round 7): a 400 stays a 400.
+		$never->may = false;
 		$request = new WP_REST_Request( 'DELETE', '/mcpwp/v1/users/42', array( 'id' => 42 ) );
+		$refused = $this->authed( $ctl, $request )->delete_user( $request );
+		$this->assertInstanceOf( WP_Error::class, $refused );
+		$this->assertSame( 'cannot_delete', $refused->get_error_code() );
+		$this->assertSame( array(), Mcpwp_Approvals::list_requests( '', 50, true ), 'No approval was manufactured.' );
+
+		$never->may = true;
 		$response = $this->authed( $ctl, $request )->delete_user( $request );
 		$this->assertSame( 202, $response->get_status(), is_wp_error( $response ) ? $response->get_error_message() : '' );
 		$this->assertSame( 'delete_user', $response->get_data()['operation'] );
@@ -1008,13 +1022,18 @@ final class DestructiveGateTest extends TestCase {
 		$seen  = 0;
 		foreach ( $files as $file ) {
 			$src = file_get_contents( $file );
-			if ( false === strpos( $src, 'WP_REST_Server::DELETABLE' ) ) {
+			// The constant, or the method registered as a string (round 7).
+			if ( ! preg_match( "/WP_REST_Server::DELETABLE|'methods'\s*=>\s*(?:array\(\s*)?'DELETE'/", $src ) ) {
 				continue;
 			}
 			$seen++;
 			$name = basename( $file );
+			// File granularity, knowingly: a controller that gates one DELETE
+			// and forgets another passes here. The per-route half of the
+			// invariant is test_every_gated_operation_defers… and the
+			// UNGATED list names each controller's ungated routes by reason.
 			$this->assertTrue(
-				false !== strpos( $src, 'Mcpwp_Destructive_Gate' ) || isset( Mcpwp_Destructive_Gate::UNGATED_DELETE_CONTROLLERS[ $name ] ),
+				false !== strpos( $src, 'Mcpwp_Destructive_Gate::should_gate' ) || isset( Mcpwp_Destructive_Gate::UNGATED_DELETE_CONTROLLERS[ $name ] ),
 				$name . ' registers a DELETE route and is neither gated nor listed as ungated with a reason.'
 			);
 		}
