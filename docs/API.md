@@ -995,6 +995,8 @@ POST /elementor/{id}
 }
 ```
 
+**Dry run (`dry_run: true`).** Runs the preparation the write runs — the content-conversion guard (a page with non-Elementor content and no Elementor data needs `convert: true`), validation and its data-loss checks, id repair — and refuses a payload the write would refuse, with the same error code. Nothing is persisted: no meta of any kind, no post update, no cache or CSS work. The response carries `dry_run: true`, `persisted: false` and `would_write` (`sections_before`, `sections_after`, `widgets_before`, `widgets_after`, `was_empty`, `meta_keys` the write would set, `save_method`, `css_regeneration`). Elementor's own `Document::save()`, the HTML-cache rebuild and CSS regeneration write to the database and files, so a dry run cannot run them; they are listed in `not_exercised`, and a real write reports their failures as `render_errors`.
+
 #### Create Elementor Page
 
 ```http
@@ -2457,6 +2459,8 @@ POST /theme-builder/templates
 
 *New in v1.1.3.* Create a Theme Builder template, set its type, optionally populate with Elementor data, and assign display conditions — all in one call.
 
+**All or nothing (#828).** The template type, `elementor_data` (a non-empty list of elements, each with an `elType`) and the display scope are checked before anything is created. The post is created as a draft; Elementor's save runs next, and a throw or error from it fails the call instead of producing a critical-error page; the stored `_elementor_data` is read back; the post is published; then the display conditions are bound. If any step fails, the post is deleted and the error carries `rolled_back: true` and `failed_step` (`meta`, `document_save`, `data_write`, `publish` or `conditions`); if the post could not be deleted, `rolled_back: false` and `orphan_post_id` name it. A failed condition binding is no longer answered with a created template and `conditions_error`. With `dry_run: true` the same checks run, nothing is created, and the response carries `dry_run: true`, `persisted: false` and `would_create` (`post_type`, `post_status`, `template_type`, `elements`, `meta_keys`, `conditions`, `css_regeneration`); a payload the create would refuse is refused with the same error code.
+
 **Body:**
 
 ```json
@@ -2474,6 +2478,7 @@ POST /theme-builder/templates
 | `type` | string | *(required)* | `header`, `footer`, `single`, or `archive` |
 | `elementor_data` | array | - | Optional Elementor JSON to populate the template |
 | `scope` | string | `entire_site` | Display condition scope |
+| `dry_run` | boolean | `false` | Run every check the create runs and report `would_create`; nothing is created |
 
 **Response:**
 

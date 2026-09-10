@@ -322,6 +322,8 @@ class Mcpwp_REST_Theme_Builder extends Mcpwp_REST_API {
 	 * @return WP_REST_Response|WP_Error Response.
 	 */
 	public function create_theme_template( $request ) {
+		$dry_run = $request->get_param( 'dry_run' );
+
 		$data = array(
 			'title'          => $request->get_param( 'title' ),
 			'type'           => $request->get_param( 'type' ),
@@ -329,19 +331,33 @@ class Mcpwp_REST_Theme_Builder extends Mcpwp_REST_API {
 			'scope'          => $request->get_param( 'scope' ),
 			'post_type'      => $request->get_param( 'post_type' ),
 			'post_ids'       => $request->get_param( 'post_ids' ),
+			// Forwarded (#828). It was dropped here, so dry_run=true through the
+			// tool created — and published — the template it was asked to check.
+			'dry_run'        => function_exists( 'rest_sanitize_boolean' ) ? (bool) rest_sanitize_boolean( $dry_run ) : (bool) $dry_run,
 		);
 
 		$result = $this->theme_builder->create_theme_template( $data );
 
 		if ( is_wp_error( $result ) ) {
-			return $this->error_response( $result->get_error_code(), $result->get_error_message(), 400 );
+			// Keep what the failure reported — rolled_back, the step that failed
+			// — rather than flattening it to a bare 400.
+			$details = $result->get_error_data();
+			$details = is_array( $details ) ? $details : array();
+			$status  = isset( $details['status'] ) ? (int) $details['status'] : 400;
+			$error   = $this->error_response( $result->get_error_code(), $result->get_error_message(), $status );
+			$merged  = $error->get_error_data();
+			$error->add_data( array_merge( is_array( $merged ) ? $merged : array(), $details, array( 'status' => $status ) ) );
+
+			return $error;
 		}
 
-		$this->log_activity( 'create_theme_template', $request, array(
-			'template_id' => $result['id'] ?? null,
-			'type'        => $data['type'],
-			'scope'       => $data['scope'] ?? 'entire_site',
-		) );
+		if ( empty( $data['dry_run'] ) ) {
+			$this->log_activity( 'create_theme_template', $request, array(
+				'template_id' => $result['id'] ?? null,
+				'type'        => $data['type'],
+				'scope'       => $data['scope'] ?? 'entire_site',
+			) );
+		}
 
 		return $this->success_response( $result );
 	}

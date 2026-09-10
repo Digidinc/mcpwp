@@ -516,6 +516,23 @@ class Mcpwp_Theme_Builder {
 	 * @return array|WP_Error Result.
 	 */
 	public function assign_to_location( $template_id, $location, $scope = 'entire_site', $options = array() ) {
+		$conditions = $this->location_conditions( $scope, $options );
+		if ( is_wp_error( $conditions ) ) {
+			return $conditions;
+		}
+
+		return $this->set_template_conditions( $template_id, $conditions );
+	}
+
+	/**
+	 * The display conditions a scope stands for. Builds, never saves — so the
+	 * create path can refuse a bad scope before it creates anything (#828).
+	 *
+	 * @param string $scope   Scope (entire_site, singular, archive, specific, ...).
+	 * @param array  $options Additional options (post_type, post_ids, archive_type).
+	 * @return array|WP_Error Conditions.
+	 */
+	private function location_conditions( $scope, $options = array() ) {
 		$conditions = array();
 
 		// Normalize scope aliases to canonical names.
@@ -601,7 +618,7 @@ class Mcpwp_Theme_Builder {
 			);
 		}
 
-		return $this->set_template_conditions( $template_id, $conditions );
+		return $conditions;
 	}
 
 	/**
@@ -640,117 +657,14 @@ class Mcpwp_Theme_Builder {
 		}
 
 		$valid_types = array( 'header', 'footer', 'single', 'archive' );
-			if ( ! in_array( $type, $valid_types, true ) ) {
-				return new WP_Error( 'invalid_type', sprintf(
-					/* translators: %s: comma-separated list of valid template types */
-					__( 'Invalid template type. Must be one of: %s', 'mcpwp' ),
-					implode( ', ', $valid_types )
-				) );
-		}
-
-		// Dry run: validate params without creating anything.
-		if ( $dry_run ) {
-			$result = array(
-				'dry_run'  => true,
-				'valid'    => true,
-				'title'    => $title,
-				'type'     => $type,
-				'scope'    => $scope,
-				'message'  => __( 'Validation passed — no template created.', 'mcpwp' ),
-			);
-			if ( ! empty( $data['elementor_data'] ) ) {
-				$elements = $data['elementor_data'];
-				if ( is_string( $elements ) ) {
-					$elements = json_decode( $elements, true );
-				}
-				if ( ! is_array( $elements ) || empty( $elements ) ) {
-					$result['valid']  = false;
-					$result['errors'] = array( 'elementor_data must be a non-empty JSON array' );
-				} else {
-					$result['element_count'] = count( $elements );
-				}
-			}
-			return $result;
-		}
-
-		// Create the template post.
-		$post_data = array(
-			'post_title'  => $title,
-			'post_status' => 'publish',
-			'post_type'   => 'elementor_library',
-		);
-
-		$template_id = wp_insert_post( $post_data );
-		if ( is_wp_error( $template_id ) ) {
-			return $template_id;
-		}
-
-		// Set all required Elementor meta for Theme Builder templates to render.
-		update_post_meta( $template_id, '_elementor_template_type', $type );
-		update_post_meta( $template_id, '_elementor_edit_mode', 'builder' );
-		update_post_meta( $template_id, '_elementor_version', defined( 'ELEMENTOR_VERSION' ) ? ELEMENTOR_VERSION : '' );
-		update_post_meta( $template_id, '_wp_page_template', 'elementor_header_footer' );
-
-		// Set Elementor data if provided — use document_save_with_meta_overwrite pattern.
-		if ( ! empty( $data['elementor_data'] ) ) {
-			$elements = $data['elementor_data'];
-			if ( is_string( $elements ) ) {
-				$elements = json_decode( $elements, true );
-			}
-			if ( ! is_array( $elements ) ) {
-				$elements = array();
-			}
-
-			// Normalised before both the Document::save() below and the raw meta
-			// write, so Elementor renders the same tree we store. This path
-			// never reaches validate_and_fix_elements(), so a theme template
-			// carrying `css_id` kept an id Elementor never renders (#737).
-			if ( class_exists( 'Mcpwp_Elementor_Element_Keys' ) ) {
-				$elements = Mcpwp_Elementor_Element_Keys::normalize_tree( $elements );
-			}
-
-			$json         = wp_json_encode( $elements );
-			$elementor_ok = class_exists( '\Elementor\Plugin' ) && ! empty( \Elementor\Plugin::$instance->documents );
-
-			// Try Document::save() first for proper Elementor initialization.
-			if ( $elementor_ok ) {
-				wp_cache_delete( $template_id, 'post_meta' );
-				clean_post_cache( $template_id );
-				$document = \Elementor\Plugin::$instance->documents->get( $template_id, false );
-				if ( $document && method_exists( $document, 'save' ) ) {
-					$document->save( array( 'elements' => $elements ) );
-				}
-			}
-
-			// Always overwrite raw meta — Document::save() may silently fail or
-			// write to revision cache instead of post meta (#198).
-			update_post_meta( $template_id, '_elementor_data', wp_slash( $json ) );
-
-			// Clear post_content so Elementor owns the rendering.
-			wp_update_post( array(
-				'ID'           => $template_id,
-				'post_content' => '',
+		if ( ! in_array( $type, $valid_types, true ) ) {
+			return new WP_Error( 'invalid_type', sprintf(
+				/* translators: %s: comma-separated list of valid template types */
+				__( 'Invalid template type. Must be one of: %s', 'mcpwp' ),
+				implode( ', ', $valid_types )
 			) );
-
-			// Flush caches so Elementor reads the new data.
-			wp_cache_delete( $template_id, 'post_meta' );
-			clean_post_cache( $template_id );
-			if ( $elementor_ok ) {
-				\Elementor\Plugin::$instance->documents->get( $template_id, false );
-				if ( function_exists( 'wp_cache_flush_group' ) ) {
-					wp_cache_flush_group( 'post_meta' );
-				}
-			}
-
-			// Regenerate CSS.
-			delete_post_meta( $template_id, '_elementor_css' );
-			if ( class_exists( '\Elementor\Core\Files\CSS\Post' ) ) {
-				$css_file = \Elementor\Core\Files\CSS\Post::create( $template_id );
-				$css_file->update();
-			}
 		}
 
-		// Build options for assign_to_location.
 		$assign_options = array();
 		if ( ! empty( $data['post_type'] ) ) {
 			$assign_options['post_type'] = sanitize_text_field( $data['post_type'] );
@@ -759,25 +673,306 @@ class Mcpwp_Theme_Builder {
 			$assign_options['post_ids'] = array_map( 'absint', (array) $data['post_ids'] );
 		}
 
-		// Assign to location. The type maps to the Elementor location name.
-		$result = $this->assign_to_location( $template_id, $type, $scope, $assign_options );
-		if ( is_wp_error( $result ) ) {
-			// Template was created but conditions failed — still return the template.
-			$template = $this->get_template( $template_id );
-			if ( is_wp_error( $template ) ) {
-				return $template;
+		// Everything the write checks is checked here, before anything exists,
+		// and a dry run is exactly this preparation stopped before the first
+		// write (#828). The dry run used to count the elements it was given and
+		// call any non-empty array valid.
+		$elements = null;
+		if ( ! empty( $data['elementor_data'] ) ) {
+			$elements = $this->prepare_template_elements( $data['elementor_data'] );
+			if ( is_wp_error( $elements ) ) {
+				return $elements;
 			}
-			$template['conditions_error'] = $result->get_error_message();
-			return $template;
+		}
+
+		$conditions = $this->location_conditions( $scope, $assign_options );
+		if ( is_wp_error( $conditions ) ) {
+			return $conditions;
+		}
+
+		$meta = array(
+			'_elementor_template_type' => $type,
+			'_elementor_edit_mode'     => 'builder',
+			'_elementor_version'       => defined( 'ELEMENTOR_VERSION' ) ? ELEMENTOR_VERSION : '',
+			'_wp_page_template'        => 'elementor_header_footer',
+		);
+
+		if ( $dry_run ) {
+			$result = array(
+				'dry_run'      => true,
+				'persisted'    => false,
+				'valid'        => true,
+				'title'        => $title,
+				'type'         => $type,
+				'scope'        => $scope,
+				'message'      => __( 'Validation passed — nothing was created. would_create describes what the same call without dry_run creates.', 'mcpwp' ),
+				'would_create' => array(
+					'post_type'        => 'elementor_library',
+					'post_status'      => 'publish',
+					'template_type'    => $type,
+					'elements'         => null === $elements ? 0 : count( $elements ),
+					'meta_keys'        => array_merge( array_keys( $meta ), null === $elements ? array() : array( '_elementor_data' ) ),
+					'conditions'       => $conditions,
+					'css_regeneration' => null !== $elements,
+				),
+			);
+			if ( null !== $elements ) {
+				$result['element_count'] = count( $elements );
+			}
+			return $result;
+		}
+
+		// Created as a draft and published only after its data is stored and
+		// read back; its conditions are bound after that. Any failure deletes
+		// the post: a failed call used to leave a published template behind,
+		// which then showed up in wp_list_theme_templates (#828).
+		$template_id = wp_insert_post(
+			array(
+				'post_title'  => $title,
+				'post_status' => 'draft',
+				'post_type'   => 'elementor_library',
+			),
+			true
+		);
+		if ( is_wp_error( $template_id ) ) {
+			return $template_id;
+		}
+		$template_id = (int) $template_id;
+		if ( $template_id < 1 ) {
+			return new WP_Error( 'template_not_created', __( 'The template post could not be created. Nothing was written.', 'mcpwp' ), array( 'status' => 500 ) );
+		}
+
+		foreach ( $meta as $key => $value ) {
+			update_post_meta( $template_id, $key, $value );
+		}
+		if ( (string) get_post_meta( $template_id, '_elementor_template_type', true ) !== $type ) {
+			return $this->roll_back_template(
+				$template_id,
+				new WP_Error( 'template_meta_not_saved', __( 'The template type could not be stored, so Elementor Pro would not treat the post as a Theme Builder template.', 'mcpwp' ), array( 'status' => 500 ) ),
+				'meta'
+			);
+		}
+
+		$warnings = array();
+
+		if ( null !== $elements ) {
+			$json         = wp_json_encode( $elements );
+			$elementor_ok = class_exists( '\Elementor\Plugin' ) && ! empty( \Elementor\Plugin::$instance->documents );
+
+			// Document::save() first, for Elementor's own initialisation. A
+			// throw or WP_Error is the create failing — Elementor 4.2.4 fataled
+			// here during #759 — and is reported, not left as a critical-error
+			// page over a published orphan.
+			if ( $elementor_ok ) {
+				wp_cache_delete( $template_id, 'post_meta' );
+				clean_post_cache( $template_id );
+
+				try {
+					$document = \Elementor\Plugin::$instance->documents->get( $template_id, false );
+					$saved    = ( $document && method_exists( $document, 'save' ) ) ? $document->save( array( 'elements' => $elements ) ) : null;
+				} catch ( \Throwable $e ) {
+					return $this->roll_back_template(
+						$template_id,
+						new WP_Error(
+							'elementor_save_failed',
+							sprintf(
+								/* translators: 1: exception class, 2: message, 3: file, 4: line */
+								__( 'Elementor could not save the template data: %1$s: %2$s (at %3$s:%4$d).', 'mcpwp' ),
+								get_class( $e ),
+								$e->getMessage(),
+								basename( $e->getFile() ),
+								$e->getLine()
+							),
+							array( 'status' => 500 )
+						),
+						'document_save'
+					);
+				}
+
+				if ( is_wp_error( $saved ) ) {
+					return $this->roll_back_template( $template_id, $saved, 'document_save' );
+				}
+			}
+
+			// Always overwrite raw meta — Document::save() may silently fail or
+			// write to revision cache instead of post meta (#198).
+			update_post_meta( $template_id, '_elementor_data', wp_slash( $json ) );
+			wp_cache_delete( $template_id, 'post_meta' );
+			clean_post_cache( $template_id );
+
+			$stored     = Mcpwp_Elementor_Stored_Tree::of_post( $template_id );
+			$read_count = is_array( $stored['elements'] ) ? count( $stored['elements'] ) : 0;
+			if ( Mcpwp_Elementor_Stored_Tree::is_unusable( $stored ) || $read_count !== count( $elements ) ) {
+				return $this->roll_back_template(
+					$template_id,
+					new WP_Error(
+						'template_data_not_saved',
+						sprintf(
+							/* translators: 1: elements sent, 2: elements read back */
+							__( 'The template\'s Elementor data did not persist: %1$d top-level elements were sent and %2$d were read back.', 'mcpwp' ),
+							count( $elements ),
+							$read_count
+						),
+						array( 'status' => 500 )
+					),
+					'data_write'
+				);
+			}
+		}
+
+		// Publish; clear post_content so Elementor owns the rendering.
+		$update = array(
+			'ID'          => $template_id,
+			'post_status' => 'publish',
+		);
+		if ( null !== $elements ) {
+			$update['post_content'] = '';
+		}
+		$published = wp_update_post( $update, true );
+		if ( is_wp_error( $published ) || ! $published ) {
+			return $this->roll_back_template(
+				$template_id,
+				is_wp_error( $published ) ? $published : new WP_Error( 'template_not_published', __( 'The template could not be published.', 'mcpwp' ), array( 'status' => 500 ) ),
+				'publish'
+			);
+		}
+
+		if ( null !== $elements ) {
+			wp_cache_delete( $template_id, 'post_meta' );
+			clean_post_cache( $template_id );
+			if ( class_exists( '\Elementor\Plugin' ) && ! empty( \Elementor\Plugin::$instance->documents ) ) {
+				\Elementor\Plugin::$instance->documents->get( $template_id, false );
+				if ( function_exists( 'wp_cache_flush_group' ) ) {
+					wp_cache_flush_group( 'post_meta' );
+				}
+			}
+
+			// The data is stored; CSS is rebuilt on the next render if this
+			// fails, so a failure here is a warning, not a rollback.
+			delete_post_meta( $template_id, '_elementor_css' );
+			if ( class_exists( '\Elementor\Core\Files\CSS\Post' ) ) {
+				try {
+					$css_file = \Elementor\Core\Files\CSS\Post::create( $template_id );
+					$css_file->update();
+				} catch ( \Throwable $e ) {
+					$warnings[] = sprintf( 'CSS regeneration failed (%s: %s); Elementor rebuilds it on the next render.', get_class( $e ), $e->getMessage() );
+				}
+			}
+		}
+
+		// Bind the display conditions. A template that cannot be assigned was
+		// not created as asked ("create and assign in one step"), so it is
+		// rolled back too, instead of answering success with conditions_error.
+		try {
+			$assigned = $this->set_template_conditions( $template_id, $conditions );
+		} catch ( \Throwable $e ) {
+			$assigned = new WP_Error( 'conditions_failed', sprintf( 'Setting display conditions failed: %s: %s', get_class( $e ), $e->getMessage() ), array( 'status' => 500 ) );
+		}
+		if ( is_wp_error( $assigned ) ) {
+			return $this->roll_back_template( $template_id, $assigned, 'conditions' );
+		}
+		if ( ! empty( $assigned['warnings'] ) ) {
+			$warnings = array_merge( $warnings, (array) $assigned['warnings'] );
 		}
 
 		$template = $this->get_template( $template_id );
 		if ( is_wp_error( $template ) ) {
-			return $template;
+			// Created and assigned; only the read for the response failed. Say
+			// that, rather than an error for a template that exists.
+			$template = array(
+				'id'         => $template_id,
+				'title'      => $title,
+				'type'       => $type,
+				'read_error' => $template->get_error_message(),
+			);
 		}
 
 		$template['assigned'] = true;
+		if ( ! empty( $warnings ) ) {
+			$template['warnings'] = $warnings;
+		}
+
 		return $template;
+	}
+
+	/**
+	 * Validate and normalise a template's elementor_data before anything is
+	 * created — the one preparation both the dry run and the write use (#828).
+	 *
+	 * @param mixed $raw elementor_data as received (list or JSON text).
+	 * @return array|WP_Error A list of elements.
+	 */
+	private function prepare_template_elements( $raw ) {
+		$elements = $raw;
+		if ( is_string( $elements ) ) {
+			$elements = json_decode( $elements, true );
+		}
+
+		$list = is_array( $elements ) ? Mcpwp_Elementor_Stored_Tree::element_list( $elements ) : null;
+
+		if ( null === $list || empty( $list ) ) {
+			return new WP_Error(
+				'invalid_elementor_data',
+				__( 'elementor_data must be a non-empty JSON list of Elementor element objects. Nothing was created.', 'mcpwp' ),
+				array( 'status' => 400 )
+			);
+		}
+
+		foreach ( $list as $i => $element ) {
+			if ( empty( $element['elType'] ) ) {
+				return new WP_Error(
+					'invalid_elementor_data',
+					sprintf(
+						/* translators: %d: element index */
+						__( 'Element %d in elementor_data has no elType. Nothing was created.', 'mcpwp' ),
+						$i
+					),
+					array( 'status' => 400 )
+				);
+			}
+		}
+
+		// Normalised before both the Document::save() and the raw meta write,
+		// so Elementor renders the same tree we store. This path never reaches
+		// validate_and_fix_elements(), so a theme template carrying `css_id`
+		// kept an id Elementor never renders (#737).
+		if ( class_exists( 'Mcpwp_Elementor_Element_Keys' ) ) {
+			$list = Mcpwp_Elementor_Element_Keys::normalize_tree( $list );
+		}
+
+		return $list;
+	}
+
+	/**
+	 * Delete a template post a failed create made, and say so in the error.
+	 *
+	 * @param int      $template_id Post the create inserted.
+	 * @param WP_Error $error       Why the create failed.
+	 * @param string   $step        Step that failed.
+	 * @return WP_Error
+	 */
+	private function roll_back_template( $template_id, WP_Error $error, $step ) {
+		$deleted = wp_delete_post( $template_id, true );
+
+		$details = $error->get_error_data();
+		$details = is_array( $details ) ? $details : array();
+
+		$details['status']      = isset( $details['status'] ) ? $details['status'] : 500;
+		$details['failed_step'] = $step;
+		$details['rolled_back'] = (bool) $deleted;
+
+		if ( $deleted ) {
+			$message = $error->get_error_message() . ' ' . __( 'The template post this call had created was deleted; nothing was left behind.', 'mcpwp' );
+		} else {
+			$details['orphan_post_id'] = (int) $template_id;
+			$message = $error->get_error_message() . ' ' . sprintf(
+				/* translators: %d: post id */
+				__( 'The draft template post this call had created (%d) could not be deleted; remove it with wp_delete_elementor_template.', 'mcpwp' ),
+				(int) $template_id
+			);
+		}
+
+		return new WP_Error( $error->get_error_code(), $message, $details );
 	}
 
 	/**

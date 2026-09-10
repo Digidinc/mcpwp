@@ -909,7 +909,7 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 
 		$pro_tools[] = $this->define_tool(
 			'wp_create_theme_template',
-			'Create a Theme Builder template (header, footer, single, archive) and assign it to a display scope in one step',
+			'Create a Theme Builder template (header, footer, single, archive) and assign it to a display scope in one step. All or nothing: the post is created as a draft and published only after its Elementor data is stored and read back; if saving the data or binding the conditions fails, the post is deleted and the error carries rolled_back and failed_step. Use dry_run=true to run the same checks without creating anything.',
 			array(
 				'title' => array(
 					'type'        => 'string',
@@ -939,6 +939,11 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 					'type'        => 'array',
 					'description' => 'Array of post IDs for specific_posts scope',
 					'items'       => array( 'type' => 'integer' ),
+				),
+				'dry_run' => array(
+					'type'        => 'boolean',
+					'description' => 'Run every check the create runs (template type, elementor_data shape, display scope) and report would_create, without creating a post, writing meta or regenerating CSS. A payload the create would refuse is refused the same way.',
+					'default'     => false,
 				),
 			)
 		);

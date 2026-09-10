@@ -1159,78 +1159,28 @@ trait Mcpwp_Elementor_Writer_Trait {
 			}
 		}
 
-		// --- Dry-run mode: validate only, no DB writes ---
+		// --- The write's preparation, shared with dry_run (#828) ---
+		// Everything that can refuse this write runs here, before any meta is
+		// touched: the content-conversion guard, validation, and its data-loss
+		// checks. A dry run is this preparation stopped before the first write.
+		// It used to return before the conversion guard, so it passed payloads
+		// the write then refused; and validation used to run after the template,
+		// edit-mode and version meta were written, so a refused payload left
+		// those behind.
+		$prepared = $this->prepare_elementor_write( $page_id, $elementor_json, $data );
+		if ( is_wp_error( $prepared ) ) {
+			return $prepared;
+		}
+
 		if ( $dry_run ) {
-			$dry_json   = $elementor_json; // work on a copy
-			$validation = $this->validate_and_fix_elements( $dry_json, $this->id_repair_options( $data, $page_id ) );
-
-			if ( ! empty( $validation['errors'] ) ) {
-				return new WP_Error(
-					'invalid_elementor_structure',
-					implode( ' | ', $validation['errors'] ),
-					array(
-						'status'            => 400,
-						'validation_errors' => $validation['errors'],
-					)
-				);
-			}
-
-			$all_warnings = array_merge(
-				$validation['warnings'],
-				$validation['fixes']
-			);
-
-			// Check RTL issues if site is RTL.
-			if ( function_exists( 'is_rtl' ) && is_rtl() ) {
-				$rtl_warnings = $this->check_rtl_issues( $dry_json );
-				$all_warnings = array_merge( $all_warnings, $rtl_warnings );
-			}
-
-			$result = array(
-				'success'  => true,
-				'dry_run'  => true,
-				'page_id'  => (int) $page_id,
-				'message'  => __( 'Validation complete — no changes saved.', 'mcpwp' ),
-			);
-
-			if ( ! empty( $all_warnings ) ) {
-				$result['warnings'] = $all_warnings;
-			}
-
-			$result['debug'] = array(
-				'validation_fixes'    => $validation['fixes'],
-				'validation_warnings' => $validation['warnings'],
-			);
-
-			if ( isset( $validation['id_repair'] ) ) {
-				$result['id_repair'] = $validation['id_repair'];
-			}
-
-			return $result;
+			return $this->elementor_dry_run_report( $page_id, $data, $prepared );
 		}
 
-		// Same conversion guard the surgical operations get (#788). This path
-		// writes its own meta rather than going through save_elements_to_page,
-		// so it needs the check explicitly — and it is the tool most likely to
-		// be pointed at a page the caller has not read first.
-		$decoded_for_guard = json_decode( $elementor_json, true );
-		$conversion        = $this->guard_content_conversion(
-			$page_id,
-			is_array( $decoded_for_guard ) ? $decoded_for_guard : array(),
-			array( 'convert' => ! empty( $data['convert'] ) )
-		);
-
-		if ( is_wp_error( $conversion ) ) {
-			return $conversion;
-		}
-
-		// Capture current structure for before/after diff.
-		$existing_raw      = get_post_meta( $page_id, '_elementor_data', true );
-		// json_decode() on array-stored data was a TypeError on PHP 8, and the
-		// 422 for unusable data sends callers here (review r2 N3).
-		$existing_decoded  = $this->read_stored_tree( $existing_raw )['elements'];
-		$sections_before   = is_array( $existing_decoded ) ? count( $existing_decoded ) : 0;
-		$widgets_before    = is_array( $existing_decoded ) ? $this->count_elementor_widgets( $existing_decoded ) : 0;
+		$elementor_json          = $prepared['json'];
+		$post_validation_decoded = $prepared['elements'];
+		$input_count             = $prepared['input_count'];
+		$sections_before         = $prepared['sections_before'];
+		$widgets_before          = $prepared['widgets_before'];
 
 		$save_debug    = array();
 		$elementor_ok  = class_exists( '\Elementor\Plugin' );
@@ -1285,51 +1235,15 @@ trait Mcpwp_Elementor_Writer_Trait {
 			$save_debug['elementor_pro_version'] = ELEMENTOR_PRO_VERSION;
 		}
 
-		// --- 2. Validate and fix element tree BEFORE writing ---
+		// --- 2. The validated tree, from the preparation above ---
 
-		$input_count = count( json_decode( $elementor_json, true ) ?: array() );
 		$save_debug['sections_submitted'] = $input_count;
-
-		$validation = $this->validate_and_fix_elements( $elementor_json, $this->id_repair_options( $data, $page_id ) );
-		if ( ! empty( $validation['errors'] ) ) {
-			return new WP_Error(
-				'invalid_elementor_structure',
-				implode( ' | ', $validation['errors'] ),
-				array(
-					'status'            => 400,
-					'validation_errors' => $validation['errors'],
-				)
-			);
+		if ( ! empty( $prepared['validation']['fixes'] ) || ! empty( $prepared['validation']['warnings'] ) ) {
+			$save_debug['validation_fixes']    = $prepared['validation']['fixes'];
+			$save_debug['validation_warnings'] = $prepared['validation']['warnings'];
 		}
-		if ( ! empty( $validation['fixes'] ) || ! empty( $validation['warnings'] ) ) {
-			$save_debug['validation_fixes']    = $validation['fixes'];
-			$save_debug['validation_warnings'] = $validation['warnings'];
-		}
-		if ( isset( $validation['id_repair'] ) ) {
-			$save_debug['id_repair'] = $validation['id_repair'];
-		}
-
-		// Safety check: ensure validation did not corrupt or truncate the data.
-		$post_validation_decoded = json_decode( $elementor_json, true );
-		if ( ! is_array( $post_validation_decoded ) ) {
-			return new WP_Error(
-				'validation_corrupted',
-				__( 'Elementor data was corrupted during validation. Please retry with elementor_data_base64.', 'mcpwp' ),
-				array( 'status' => 500, 'sections_submitted' => $input_count )
-			);
-		}
-		$post_validation_count = count( $post_validation_decoded );
-		if ( $post_validation_count !== $input_count ) {
-				return new WP_Error(
-					'validation_data_loss',
-					sprintf(
-						/* translators: 1: submitted section count, 2: section count after validation */
-						__( 'Validation changed section count from %1$d to %2$d. Aborting to prevent data loss.', 'mcpwp' ),
-						$input_count,
-						$post_validation_count
-					),
-				array( 'status' => 500, 'sections_submitted' => $input_count, 'sections_after_validation' => $post_validation_count )
-			);
+		if ( isset( $prepared['validation']['id_repair'] ) ) {
+			$save_debug['id_repair'] = $prepared['validation']['id_repair'];
 		}
 
 		// --- 3. Save via Elementor Document API (preferred) or meta fallback ---
@@ -1673,6 +1587,163 @@ trait Mcpwp_Elementor_Writer_Trait {
 		}
 
 		$result = $this->decorate_render_status( $result, $save_debug );
+
+		return $result;
+	}
+
+	/**
+	 * Everything wp_set_elementor checks before it writes (#828).
+	 *
+	 * The real write and dry_run both call this, so a dry run cannot pass a
+	 * payload the write refuses for any reason this method knows about.
+	 *
+	 * @param int    $page_id        Page ID.
+	 * @param string $elementor_json Decoded-and-re-encoded payload.
+	 * @param array  $data           Request payload (convert, repair_ids).
+	 * @return array|WP_Error {json, elements, input_count, validation, sections_before, widgets_before}.
+	 */
+	private function prepare_elementor_write( $page_id, $elementor_json, $data ) {
+		$incoming = json_decode( $elementor_json, true );
+
+		// Same conversion guard the surgical operations get (#788) — this is
+		// the tool most likely to be pointed at a page the caller has not read.
+		$conversion = $this->guard_content_conversion(
+			$page_id,
+			is_array( $incoming ) ? $incoming : array(),
+			array( 'convert' => ! empty( $data['convert'] ) )
+		);
+		if ( is_wp_error( $conversion ) ) {
+			return $conversion;
+		}
+
+		// Current structure, for the before/after diff. json_decode() on
+		// array-stored data was a TypeError on PHP 8, and the 422 for unusable
+		// data sends callers here (review r2 N3).
+		$existing_decoded = $this->read_stored_tree( get_post_meta( $page_id, '_elementor_data', true ) )['elements'];
+
+		$input_count = count( is_array( $incoming ) ? $incoming : array() );
+
+		$validation = $this->validate_and_fix_elements( $elementor_json, $this->id_repair_options( $data, $page_id ) );
+		if ( ! empty( $validation['errors'] ) ) {
+			return new WP_Error(
+				'invalid_elementor_structure',
+				implode( ' | ', $validation['errors'] ),
+				array(
+					'status'            => 400,
+					'validation_errors' => $validation['errors'],
+				)
+			);
+		}
+
+		// Safety check: ensure validation did not corrupt or truncate the data.
+		$decoded = json_decode( $elementor_json, true );
+		if ( ! is_array( $decoded ) ) {
+			return new WP_Error(
+				'validation_corrupted',
+				__( 'Elementor data was corrupted during validation. Please retry with elementor_data_base64.', 'mcpwp' ),
+				array( 'status' => 500, 'sections_submitted' => $input_count )
+			);
+		}
+		if ( count( $decoded ) !== $input_count ) {
+			return new WP_Error(
+				'validation_data_loss',
+				sprintf(
+					/* translators: 1: submitted section count, 2: section count after validation */
+					__( 'Validation changed section count from %1$d to %2$d. Aborting to prevent data loss.', 'mcpwp' ),
+					$input_count,
+					count( $decoded )
+				),
+				array( 'status' => 500, 'sections_submitted' => $input_count, 'sections_after_validation' => count( $decoded ) )
+			);
+		}
+
+		return array(
+			'json'            => $elementor_json,
+			'elements'        => $decoded,
+			'input_count'     => $input_count,
+			'validation'      => $validation,
+			'sections_before' => is_array( $existing_decoded ) ? count( $existing_decoded ) : 0,
+			'widgets_before'  => is_array( $existing_decoded ) ? $this->count_elementor_widgets( $existing_decoded ) : 0,
+		);
+	}
+
+	/**
+	 * What a wp_set_elementor write would do, from its preparation. Writes
+	 * nothing: no meta, no post update, no cache or CSS work.
+	 *
+	 * @param int   $page_id  Page ID.
+	 * @param array $data     Request payload.
+	 * @param array $prepared Result of prepare_elementor_write().
+	 * @return array
+	 */
+	private function elementor_dry_run_report( $page_id, $data, array $prepared ) {
+		$validation   = $prepared['validation'];
+		$all_warnings = array_merge( $validation['warnings'], $validation['fixes'] );
+
+		if ( function_exists( 'is_rtl' ) && is_rtl() ) {
+			$all_warnings = array_merge( $all_warnings, $this->check_rtl_issues( $prepared['json'] ) );
+		}
+
+		// The same conditions the write uses to decide which keys it sets.
+		$meta_keys = array( '_elementor_data' );
+		if ( ! empty( $prepared['elements'] ) ) {
+			$meta_keys[] = '_elementor_edit_mode';
+		}
+		$current_template = get_post_meta( $page_id, '_wp_page_template', true );
+		if ( ! $current_template || 'default' === $current_template ) {
+			$meta_keys[] = '_wp_page_template';
+		}
+		if ( empty( get_post_meta( $page_id, '_elementor_template_type', true ) ) ) {
+			$meta_keys[] = '_elementor_template_type';
+		}
+		if ( defined( 'ELEMENTOR_VERSION' ) ) {
+			$meta_keys[] = '_elementor_version';
+		}
+		if ( defined( 'ELEMENTOR_PRO_VERSION' ) ) {
+			$meta_keys[] = '_elementor_pro_version';
+		}
+		if ( ! empty( $data['page_settings'] ) && is_array( $data['page_settings'] ) ) {
+			$meta_keys[] = '_elementor_page_settings';
+		}
+
+		$elementor_loaded = class_exists( '\Elementor\Plugin' );
+
+		$result = array(
+			'success'       => true,
+			'dry_run'       => true,
+			'persisted'     => false,
+			'page_id'       => (int) $page_id,
+			'message'       => __( 'Dry run: the payload passed the preparation the write runs (conversion guard, validation, data-loss checks). Nothing was saved; would_write describes the write.', 'mcpwp' ),
+			'would_write'   => array(
+				'sections_before'  => $prepared['sections_before'],
+				'sections_after'   => count( $prepared['elements'] ),
+				'widgets_before'   => $prepared['widgets_before'],
+				'widgets_after'    => $this->count_elementor_widgets( $prepared['elements'] ),
+				'was_empty'        => 0 === $prepared['sections_before'],
+				'meta_keys'        => $meta_keys,
+				'save_method'      => $elementor_loaded ? 'document_save_with_meta_overwrite' : 'meta_direct',
+				'css_regeneration' => $elementor_loaded,
+			),
+			// Said, not implied: these write to the database and the CSS files,
+			// so a dry run cannot run them and take them back. The write reports
+			// their failures as render_errors rather than a 500.
+			'not_exercised' => $elementor_loaded
+				? array( 'Elementor Document::save()', 'HTML cache rebuild', 'CSS regeneration' )
+				: array(),
+		);
+
+		if ( ! empty( $all_warnings ) ) {
+			$result['warnings'] = $all_warnings;
+		}
+
+		$result['debug'] = array(
+			'validation_fixes'    => $validation['fixes'],
+			'validation_warnings' => $validation['warnings'],
+		);
+
+		if ( isset( $validation['id_repair'] ) ) {
+			$result['id_repair'] = $validation['id_repair'];
+		}
 
 		return $result;
 	}

@@ -274,7 +274,7 @@ trait Mcpwp_Free_Tools_Elementor_Trait {
 				),
 				'dry_run'        => array(
 					'type'        => 'boolean',
-					'description' => 'If true, validate only — no changes are saved. Returns warnings and fixes without writing to database.',
+					'description' => 'Run the checks the write runs — the conversion guard (a page with non-Elementor content), validation and its data-loss checks, id repair — and report would_write (sections and widgets before/after, meta keys it would set), without saving anything. A payload the write refuses is refused the same way. Elementor\'s own Document::save() and CSS regeneration are not run (listed in not_exercised).',
 					'default'     => false,
 				),
 				'repair_ids'     => array(
