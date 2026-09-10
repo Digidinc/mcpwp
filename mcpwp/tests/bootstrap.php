@@ -33,6 +33,12 @@ $GLOBALS['mcpwp_test_current_user'] = 0;
 // internal REST dispatch so tests can assert fan-out actually happened
 // (or did not), not merely infer it from a stubbed response shape.
 $GLOBALS['mcpwp_test_dispatched_routes'] = array();
+// Routes a rest_dispatch_request filter refused before their callback ran.
+$GLOBALS['mcpwp_test_refused_routes'] = array();
+// Route-matching emulation for rest_do_request() (see there).
+$GLOBALS['mcpwp_test_route_patterns'] = array();
+$GLOBALS['mcpwp_test_route_permission_denied'] = array();
+$GLOBALS['mcpwp_test_denied_routes'] = array();
 // Per-user capability overrides for OAuth scope-clamping tests.
 // Key: user_id (int), Value: array of capability => bool.
 // When empty (or user_id not present), current_user_can() grants all caps.
@@ -979,6 +985,56 @@ function register_rest_route($namespace = '', $route = '', $args = array())
 
 function rest_do_request($request = null)
 {
+    // Core's order in WP_REST_Server::respond_to_request(): match the route,
+    // run the permission callback, then the rest_dispatch_request filter, then
+    // the handler. A test can emulate the first two:
+    //  - mcpwp_test_route_permission_denied: regexes of routes whose permission
+    //    callback refuses (403) — nothing after it runs;
+    //  - mcpwp_test_route_patterns: regex => the registered pattern core matched,
+    //    handed to the filter as $route (default: the requested route).
+    if (is_object($request) && method_exists($request, 'get_route')) {
+        foreach ($GLOBALS['mcpwp_test_route_permission_denied'] ?? array() as $denied) {
+            if (preg_match($denied, $request->get_route())) {
+                $GLOBALS['mcpwp_test_denied_routes'][] = $request->get_route();
+                return new WP_REST_Response(
+                    array( 'code' => 'rest_forbidden', 'message' => 'Sorry, you are not allowed to do that.', 'data' => array( 'status' => 403 ) ),
+                    403
+                );
+            }
+        }
+    }
+    // A non-null filter value replaces the handler's answer, and a WP_Error
+    // becomes the response core builds from it (error_to_response). A refused
+    // route is recorded separately — its callback never ran, so it does not
+    // count as dispatched.
+    if (is_object($request) && method_exists($request, 'get_route') && ! empty($GLOBALS['mcpwp_test_filters']['rest_dispatch_request'])) {
+        $matched = $request->get_route();
+        foreach ($GLOBALS['mcpwp_test_route_patterns'] ?? array() as $regex => $pattern) {
+            if (preg_match($regex, $request->get_route())) {
+                $matched = $pattern;
+                break;
+            }
+        }
+        $pre = apply_filters('rest_dispatch_request', null, $request, $matched, array());
+        if ($pre instanceof WP_Error) {
+            $GLOBALS['mcpwp_test_refused_routes'][] = $request->get_route();
+            $error_data = $pre->get_error_data();
+            $status     = is_array($error_data) && isset($error_data['status']) ? (int) $error_data['status'] : 500;
+            return new WP_REST_Response(
+                array(
+                    'code'    => $pre->get_error_code(),
+                    'message' => $pre->get_error_message(),
+                    'data'    => $error_data,
+                ),
+                $status
+            );
+        }
+        if (null !== $pre) {
+            $GLOBALS['mcpwp_test_dispatched_routes'][]   = $request->get_route();
+            $GLOBALS['mcpwp_test_dispatched_requests'][] = $request;
+            return $pre instanceof WP_REST_Response ? $pre : new WP_REST_Response($pre, 200);
+        }
+    }
     if (is_object($request) && method_exists($request, 'get_route')) {
         $GLOBALS['mcpwp_test_dispatched_routes'][]   = $request->get_route();
         $GLOBALS['mcpwp_test_dispatched_requests'][] = $request;
@@ -2203,6 +2259,8 @@ require_once dirname(__DIR__) . '/includes/traits/trait-mcpwp-api-auth.php';
 require_once dirname(__DIR__) . '/includes/traits/trait-mcpwp-sanitization.php';
 require_once dirname(__DIR__) . '/includes/traits/trait-mcpwp-logging.php';
 require_once dirname(__DIR__) . '/includes/class-mcpwp-rate-limiter.php';
+require_once dirname(__DIR__) . '/includes/class-mcpwp-operation-weights.php';
+require_once dirname(__DIR__) . '/includes/class-mcpwp-spend-budget.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-event-store.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-site-state.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-agent-playbooks.php';

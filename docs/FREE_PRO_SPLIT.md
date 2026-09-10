@@ -14,7 +14,7 @@ Source of truth for what tools are available on Free vs Pro. Updated when tools 
 
 Available on all installs. Gated only by API key scope.
 
-**Content:** wp_list_pages, wp_create_page, wp_update_page, wp_delete_page, wp_clone_page, wp_bulk_create_pages, wp_bulk_update_pages, wp_list_posts, wp_create_post, wp_update_post, wp_delete_post, wp_bulk_create_posts, wp_bulk_update_posts, wp_list_content, wp_search, wp_list_drafts, wp_delete_all_drafts, wp_batch_update
+**Content:** wp_list_pages, wp_create_page, wp_update_page, wp_delete_page, wp_clone_page, wp_bulk_create_pages, wp_bulk_update_pages, wp_list_posts, wp_create_post, wp_update_post, wp_delete_post, wp_bulk_create_posts, wp_bulk_update_posts, wp_list_content, wp_search, wp_list_drafts, wp_delete_all_drafts, wp_batch_update, wp_batch
 
 **Elementor (basic):** wp_get_elementor, wp_set_elementor, wp_get_elementor_bulk, wp_get_elementor_summary, wp_edit_section, wp_edit_widget, wp_add_section, wp_remove_section, wp_replace_section, wp_patch_elementor, wp_preview_elementor, wp_bulk_find_replace, wp_elementor_status, wp_get_widget_schema, wp_elementor_widget_help, wp_regenerate_elementor_css
 

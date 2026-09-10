@@ -51,7 +51,7 @@
 Direct JSON-RPC 2.0 MCP endpoint. Supports `initialize`, `tools/list`, `tools/call`, `resources/list`, `resources/read`, and batch requests.
 
 **Authentication:** `X-API-Key` header, `Authorization: Bearer` header, or `?api_key=` query parameter
-**Batch limit:** 10 requests per call
+**Batch limit:** 100 requests per call, answered in order — see [Batches and weight](#batches-and-weight) and [Spend budget](#spend-budget-per-request)
 
 ### Recommended Model Startup Sequence
 
@@ -95,7 +95,7 @@ curl -X POST "https://your-site.com/wp-json/mcpwp/v1/mcp" \
 - `prompts/list` - List 5 named prompt templates (audit-seo, build-page, refresh-content, onboard, design-match)
 - `prompts/get` - Get filled prompt with interpolated arguments, returns `messages[]`
 - `ping` - Health check
-- Batch requests - Execute up to 10 requests in parallel
+- Batch requests - Up to 100 requests in one call, run in order; a request with an `id` is always answered, notifications are not
 
 ### Tool Categories
 
@@ -220,6 +220,8 @@ curl "https://your-site.com/wp-json/mcpwp/v1/mcp?api_key=mcpwp_your_api_key_here
 | `use_elementor_endpoint` | 400 | Elementor meta is written through the Elementor tools |
 | `invalid_target` | 400 | A destructive operation named a target it cannot act on; nothing was queued |
 | `destructive_id_mismatch` | 409 | The route id and the body id disagree; nothing was queued |
+| `spend_budget_exceeded` | 413 | The whole call (a batch, a JSON-RPC batch, one tool call) costs more than is left of the request's spend budget; nothing in it ran (`-32030` inside MCP) |
+| `spend_budget_exhausted` | 413 | An operation's price, known only at dispatch, did not fit; it did not run, nor will any later operation in the same request (`-32030` inside MCP) |
 
 ---
 
@@ -298,9 +300,95 @@ When rate limited, the API returns `429 Too Many Requests`:
 
 ### Batches and weight
 
-A call that carries a list of operations is a batch by another name and is charged one slot per operation: a JSON-RPC batch, `POST /batch`, and any tool whose arguments carry `operations`, `updates`, `pages`, `posts`, `items`, `urls`, `files`, `media`, `page_ids`, `post_ids`, `rows`, `widgets` or `sections` (the largest list is the price; two spellings of one list are not summed). A call that does not fit the remaining budget is refused whole before anything runs (`429`, or `-32029` inside MCP). A call heavier than the whole window (`batch_exceeds_limit`, `413`) is refused with the ceiling: waiting will not help, split it.
+A call that carries a list of operations is a batch by another name and is charged one slot per operation: a JSON-RPC batch, `POST /batch`, `wp_batch` / `wp_batch_update`, and any tool whose arguments carry `operations`, `updates`, `pages`, `posts`, `items`, `urls`, `files`, `media`, `page_ids`, `post_ids`, `rows`, `widgets` or `sections` (the largest list is the price; two spellings of one list are not summed). A call that does not fit the remaining budget is refused whole before anything runs (`429`, or `-32029` inside MCP). A call heavier than the whole window (`batch_exceeds_limit`, `413`) is refused with the ceiling: waiting will not help, split it.
+
+Two tools act on many posts without carrying a list, and cost a fixed weight instead: `wp_bulk_find_replace` and `wp_delete_all_drafts` cost **10** slots each, or the length of an explicit `ids` list when that is longer. The weight of any tool can be changed with the `mcpwp_tool_operation_weight` filter (`$weight, $tool_name, $arguments`); a filter cannot price a call below the lists it carries, and a value that is not a whole number of at least 1 is ignored (the default applies).
 
 The reachable ceiling is the tightest window: `min(burst, per-minute, per-hour)`. At the defaults (burst 30, 60/min, 1000/h) that is **30 operations per call**, whatever the per-endpoint maximum says; raise `burst_limit` to use larger batches.
+
+#### `wp_batch`
+
+`wp_batch(operations=[{method, path, body}])` runs up to 100 REST operations in one MCP round trip. It is the `POST /batch` controller under an MCP name (the same controller as `wp_batch_update`), so everything in [BATCH_ENDPOINT.md](BATCH_ENDPOINT.md) applies unchanged:
+
+- `path` is relative to `/mcpwp/v1`; `body` is the request body for POST/PUT and query parameters for GET/DELETE.
+- Operations run in order. A failed or refused operation does not stop the rest, and nothing is rolled back.
+- An operation may not target `/batch` or `/mcp` (`forbidden_path`), so a batch cannot contain another batch.
+- Each operation is authorised on its own route, with the caller's key. The tool itself needs an admin-scoped key, like `wp_batch_update`.
+- Cost: one rate-limit slot per operation, plus each operation's price in the request's [spend budget](#spend-budget-per-request).
+- With `params._meta.request_id`, a batch in which any operation failed is not pinned (`_meta.idempotency: not_stored`): retry only the failed operations. A batch whose **only** failures are spend-budget refusals **is** pinned (`stored`, with an `idempotency_reason`): a replay returns the stored result — refused operations still listed in `spend_budget.refused` — without running anything, so resend the refused operations under a new `request_id`.
+
+The tool result's text is the controller's response:
+
+```json
+{
+  "results": [
+    { "index": 0, "status": 200, "data": { "id": 42, "title": "New title" } },
+    { "index": 1, "status": 413, "data": { "code": "spend_budget_exhausted", "message": "Spend budget exhausted: this operation costs 25 units and 10 of this request's 1000 remain.", "data": { "status": 413, "weight": 25, "remaining": 10, "limit": 1000, "hint": "…" } } }
+  ],
+  "total": 2,
+  "succeeded": 1,
+  "failed": 1,
+  "spend_budget": { "limit": 1000, "spent": 990, "remaining": 10, "exhausted": true, "refused": [1] }
+}
+```
+
+### Spend budget (per request)
+
+The rate limiter bounds how many requests a caller sends. The spend budget bounds what **one** HTTP request can make the site do, however it fans out: a JSON-RPC batch of `wp_batch` calls, each carrying 100 operations, each a bulk route or a paid generation. Every top-level `POST /mcp` or `POST /batch` gets one budget, shared by everything it dispatches — tool calls, the operations of a nested `wp_batch`, `resources/read`. A nested batch joins the budget of the request it runs in; it never starts a fresh one. The budget is separate from the rate limiter and applies with the limiter switched off or the key whitelisted.
+
+Default: **1000 units** per request. Prices:
+
+| Operation | Units |
+|---|---|
+| Ordinary read or write | 1 |
+| Bulk route (`/posts/bulk`, `/pages/bulk`, `/seo/bulk`, `/elementor/bulk`, any route given a list) | the number of items it processes |
+| `wp_bulk_find_replace` (`POST /elementor/find-replace`), `wp_delete_all_drafts` (`DELETE /drafts/delete-all`) | 10, or the `ids` list length if longer |
+| `/integrations/generate-image`, `/integrations/generate-featured-image`, `/integrations/text-to-speech`, `/integrations/describe-image`, `/integrations/generate-alt-text`, `/integrations/generate-excerpt`, `/media/from-url` | 25 per call |
+| `/screenshot`; `/integrations/stock-photos` and `/integrations/stock-photos/download` (Pexels); `/integrations/test`, `/integrations/providers/{provider}/test`; every `/cloudflare/*`, `/figma/*`, `/google-indexing/*` and `/staging*` route; `/keyword-research`, `/seo/visibility/refresh`, `/seo/opportunities` (DataForSEO); `/seo/audit` (Cloudflare analytics); `/webhooks/{id}/test`; `/feedback/relay` | 25 per call |
+| Writes to `/feedback` (GitHub), `/favicon` (from a URL), `/update` (package download), `/design-references` and `/design-references/{id}` (image import from a URL). Their GET is a local read and costs 1 | 25 per call |
+| `/media/bulk`, `/google-indexing/submit` | 25 per URL |
+| The `/batch` or `/mcp` container itself (its operations are priced one by one) | 0 |
+
+The 25-unit rows are every route that makes an outbound request with a site credential or to a caller-chosen URL; one given a list costs at least the items in it. `/fetch` is not one (it resolves a URL to a local post), nor are the same-host loopbacks to the site's own permalinks (`/rendered-html`, `/rendered-copy`, `/seo/readiness/{id}`, `/seo/structured-data/{id}`, `/elementor/{id}/preview`, `/custom-css`): they cost 1.
+
+Routes are priced however they are spelled (case, repeated or trailing slashes, a query string). With the defaults, one request can run 1000 ordinary operations, or 40 image generations.
+
+**When a call does not fit**, it is refused **whole, before anything in it runs** — the same shape as the rate limiter's refuse-whole. The price is computed from the call as sent: a `POST /batch` or `wp_batch` costs its operations, a JSON-RPC batch costs its tool calls (a call that will be answered from a stored `request_id` result costs nothing), one tool call costs its route. Nothing ran, so there is nothing to undo or retry: split the call.
+
+- `POST /batch`: HTTP `413` with code `spend_budget_exceeded` and `data.{status, weight, remaining, limit, hint}` — `weight` is the price of the whole batch. The request has already been charged its rate-limit weight (one slot per operation) when the refusal is made: that charge happens when the request is authenticated, before the batch is read.
+- JSON-RPC batch: every request in it is answered with error `-32030`, `error.data.{code: "spend_budget_exceeded", status: 413, weight, remaining, limit, hint}`; notifications are not answered. As with `/batch`, the HTTP request has already paid its rate-limit weight (one slot per message).
+- One tool call (including `wp_batch`): error `-32030` with the same data. This is the one path refused before rate-limit slots are charged — the call's extra per-item slots (one per operation or list item beyond the first); the HTTP request's own slot is already spent. A `wp_batch` over 100 operations is refused `-32602 batch_too_large` the same way, and costs nothing in the spend budget.
+
+The price as sent is a lower bound: at dispatch an operation is also priced from the route pattern WordPress matched and from its sanitised parameters. **When an operation's price only shows at dispatch and does not fit**, that operation is refused and does not run, and **every later operation in the same request is refused too**. Inside a batch the controller refuses them without dispatching — even ones that would have failed for another reason — so `spend_budget.refused` is exactly the tail to resend. Nothing that already ran is undone.
+
+- In `POST /batch` / `wp_batch`: the operation's result is `status: 413` with `data.code: "spend_budget_exhausted"` and `data.data.{weight, remaining, limit, hint}`.
+- In a JSON-RPC batch: the tool call answers with error `-32030` and `error.data.{code: "spend_budget_exhausted", status: 413, weight, remaining, limit, hint}` (`weight` is absent for a call refused because an earlier one was). Methods that dispatch nothing (`initialize`, `tools/list`, `ping`) are not charged and still answer.
+- With `params._meta.request_id`, a batch whose only failures are these refusals is pinned; see [wp_batch](#wp_batch).
+
+**Where to read it:** `spend_budget: {limit, spent, remaining, exhausted}` on every MCP result's `_meta`, and on every `/batch` response (with `refused`).
+
+**Filters** (site code only — nothing a client sends changes either number):
+
+- `mcpwp_request_spend_budget` (`$budget, $request`) — the budget of a request, read once when it opens. A value that is not a whole number of at least 0 is ignored and the default applies; it never means "unlimited".
+- `mcpwp_spend_weight` (`$weight, $route, $method, $params`) — the price of one operation; `$route` is normalised (`/integrations/generate-image`). A value that is not a whole number of at least 0 is ignored. May run twice for one dispatch (matched route pattern and requested route); the larger price is charged.
+
+A single top-level REST call to any other route (for example `POST /media/bulk` on its own) is not budgeted; the rate limiter applies to it as usual.
+
+### Result `_meta` and transport
+
+Every JSON-RPC **result** carries server-owned `_meta` (error objects do not):
+
+| Key | Meaning |
+|---|---|
+| `plugin_version` | Version of the plugin that produced this result. Compare it across calls: a change means the plugin was replaced mid-session. A replayed result names the plugin answering now. Every response, errors included, also carries the `X-MCPWP-Version` header. |
+| `rate_limit` | `{limit, remaining, reset_in, window, bucket}` for the caller's write budget. Absent when nothing was metered — never reported as unlimited. |
+| `spend_budget` | This request's spend budget after this message — see above. |
+| `idempotency`, `idempotency_reason`, `replayed`, `replayed_at` | See [Idempotent tool calls](#idempotent-tool-calls-params_metarequest_id). |
+
+Transport guarantees for `POST /mcp`:
+
+- Every answer is `Content-Type: application/json`, whatever the `Accept` header asks for. The endpoint never streams (no `text/event-stream`); `GET /mcp` returns server info as JSON.
+- A `200` always has a body. A body-less `204` is returned only when the request contained nothing but notifications (messages without an `id`). A message **with** an `id` is always answered, even under a `notifications/*` method name.
 
 ### Idempotent tool calls (`params._meta.request_id`)
 
@@ -312,7 +400,7 @@ Any `tools/call` with side effects (every non-GET tool) may carry `params._meta.
 | `not_applicable` | read tool, unknown tool, or a tool that opts out (`reason` says which) |
 | `not_stored` | the call ran but is NOT protected — partial failure, result too large, no per-user principal, or the claim store could not arbitrate (`reason` says which) |
 
-Errors: `-32602` (invalid id, or the id was used with different arguments), `-32009` (in progress), `-32010` (stored record unreadable — not re-run), `-32029` (over budget, nothing ran). A partial failure (a batch with any failed operation) is never pinned: a retry re-runs the operations that succeeded, so retry only the failed ones, each under its own `request_id`. Ids are scoped to the principal; two clients acting as the same user or sharing one key share the namespace — make ids unique per agent.
+Errors: `-32602` (invalid id, or the id was used with different arguments), `-32009` (in progress), `-32010` (stored record unreadable — not re-run), `-32029` (over the rate limit, nothing ran), `-32030` (over the request's spend budget, that call did not run). A partial failure (a batch with any failed operation) is not pinned: a retry re-runs the operations that succeeded, so retry only the failed ones, each under its own `request_id`. The one exception is a batch whose only failures are spend-budget refusals (status `413` with code `spend_budget_exhausted`): it is pinned, because those operations did not run and the stored result names them in `spend_budget.refused`. A replay returns that result with its `idempotency_reason` and runs nothing; resend the refused operations under a new `request_id`. Ids are scoped to the principal; two clients acting as the same user or sharing one key share the namespace — make ids unique per agent.
 
 ### IP Whitelisting
 

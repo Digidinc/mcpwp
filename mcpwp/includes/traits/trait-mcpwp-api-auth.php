@@ -1638,6 +1638,8 @@ trait Mcpwp_Api_Auth {
 			'wp_delete_menu',
 			'wp_assign_menu_location',
 			'wp_batch_update',
+			// Same route and controller as wp_batch_update (#802), same scope.
+			'wp_batch',
 			'wp_list_content',
 			'wp_delete_content',
 			'wp_languages',
