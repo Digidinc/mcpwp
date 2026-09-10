@@ -584,7 +584,11 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 				);
 			}
 		}
-		$old_value     = get_option( $key );
+		try {
+			$old_value = get_option( $key );
+		} catch ( \Throwable $e ) {
+			return $this->error_response( 'read_failed', sprintf( 'A plugin hook threw while reading "%s": %s', $key, $e->getMessage() ), 500 );
+		}
 		$merged        = Mcpwp_Option_Access::merge_preserving_secrets( $key, $old_value, $submitted, $allow_secrets );
 		$value         = $merged['value'];
 
@@ -698,11 +702,17 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 		$threw = null;
 		try {
 			update_option( $key, $value );
-		} catch ( \Exception $e ) {
+		} catch ( \Throwable $e ) { // \Error too: a TypeError in a hook is still "the write may have landed".
 			$threw = $e;
 		}
 
-		$stored  = get_option( $key );
+		// A hook that throws on READ (pre_option_*/option_*) must be a
+		// reported failure, never an uncaught fatal (#800 round 9).
+		try {
+			$stored = get_option( $key );
+		} catch ( \Throwable $e ) {
+			return $this->error_response( 'read_failed', sprintf( 'A plugin hook threw while reading "%s" after the write: %s', $key, $e->getMessage() ), 500 );
+		}
 		$landed  = $stored == $value || $stored != $old_value; // phpcs:ignore WordPress.PHP.StrictComparisons.LooseComparison -- serialisation may retype scalars.
 		if ( ! $landed ) {
 			return $this->error_response(
@@ -723,7 +733,7 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 		}
 
 		// Writes may set a secret; reads never return one.
-		$new = Mcpwp_Option_Access::redact( $key, get_option( $key ) );
+		$new = Mcpwp_Option_Access::redact( $key, $stored );
 		$old = Mcpwp_Option_Access::redact( $key, $old_value );
 
 		return $this->success_response(

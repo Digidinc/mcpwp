@@ -1346,8 +1346,10 @@ final class OptionAccessTest extends TestCase {
 			$this->assertInstanceOf( WP_REST_Response::class, $written, $key . ': ' . ( is_wp_error( $written ) ? $written->get_error_message() : '' ) );
 			$this->assertSame( trim( $value ), get_option( $key ), $key );
 		}
-		$src = file_get_contents( dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-site-settings.php' );
-		$this->assertStringNotContainsString( "'WPLANG', 'siteurl', 'home'", $src, 'siteurl/home are write-protected: dead entries in a trim list.' );
+		// siteurl/home are write-protected, so no trim rule can ever apply to them.
+		foreach ( array( 'siteurl', 'home' ) as $key ) {
+			$this->assertSame( 'forbidden_option', $this->write( $key, ' https://x.test ' )->get_error_code(), $key );
+		}
 	}
 
 	public function test_the_markup_gate_is_belt_and_braces_never_a_false_refusal_for_the_in_process_admin(): void {
@@ -1403,6 +1405,14 @@ final class OptionAccessTest extends TestCase {
 
 		$plain = $this->write( 'blogname', 'Plain' );
 		$this->assertSame( array(), $plain->get_data()['warnings'], 'Nothing altered, nothing threw: no warning.' );
+
+		// An \Error from a hook is the same fact as an \Exception (round 9).
+		$GLOBALS['mcpwp_test_option_store_after_hook'] = function ( $name, $value ) { throw new TypeError( 'bad hook' ); };
+		$written = $this->write( 'blogname', 'Typed' );
+		unset( $GLOBALS['mcpwp_test_option_store_after_hook'] );
+		$this->assertInstanceOf( WP_REST_Response::class, $written );
+		$this->assertSame( 'Typed', get_option( 'blogname' ) );
+		$this->assertStringContainsString( 'hook threw', $written->get_data()['warnings'][0] );
 	}
 
 	public function test_the_admin_renderer_honours_the_sites_redaction_keys(): void {
