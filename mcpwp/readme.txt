@@ -153,6 +153,21 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 
 == Changelog ==
 
+= 3.11.0 =
+* feat: **approvals:** destructive operations need approval by default ([#536](https://github.com/Mumega-com/mcpwp/issues/536)) ([#839](https://github.com/Mumega-com/mcpwp/issues/839))
+* feat: carry Elementor page settings through templates and archetypes ([#638](https://github.com/Mumega-com/mcpwp/issues/638)) ([#794](https://github.com/Mumega-com/mcpwp/issues/794))
+* feat: **mcp:** idempotent tool calls via _meta.request_id ([#802](https://github.com/Mumega-com/mcpwp/issues/802)) ([#835](https://github.com/Mumega-com/mcpwp/issues/835))
+* feat: paginate Elementor library lists and summarise items in place ([#635](https://github.com/Mumega-com/mcpwp/issues/635)) ([#795](https://github.com/Mumega-com/mcpwp/issues/795))
+* feat: **posts:** terms and meta on create/update, featured image for any thumbnail-capable type ([#797](https://github.com/Mumega-com/mcpwp/issues/797)) ([#837](https://github.com/Mumega-com/mcpwp/issues/837))
+* feat: tell the caller when a rendered page is not what a visitor sees ([#693](https://github.com/Mumega-com/mcpwp/issues/693)) ([#796](https://github.com/Mumega-com/mcpwp/issues/796))
+* fix: **elementor:** bulk shapes — find/replace scopes, bulk updates alias, wide-run gate ([#803](https://github.com/Mumega-com/mcpwp/issues/803)) ([#836](https://github.com/Mumega-com/mcpwp/issues/836))
+* fix: **mcp:** batch weight, diagnostic bucket, per-request verdict memo ([#802](https://github.com/Mumega-com/mcpwp/issues/802)) ([#833](https://github.com/Mumega-com/mcpwp/issues/833))
+* fix: **options:** option access floor, secret-preserving writes, redacted logs ([#800](https://github.com/Mumega-com/mcpwp/issues/800)) ([#838](https://github.com/Mumega-com/mcpwp/issues/838))
+* fix: **posts:** meta detector stands alone, meta reads hide bearers by name and shape ([#797](https://github.com/Mumega-com/mcpwp/issues/797) follow-up) ([#840](https://github.com/Mumega-com/mcpwp/issues/840))
+* fix: refuse a second installed MCPWP copy, surface double load ([#802](https://github.com/Mumega-com/mcpwp/issues/802)) ([#834](https://github.com/Mumega-com/mcpwp/issues/834))
+* fix: say what changed and why when Elementor alters a tree it rendered ([#612](https://github.com/Mumega-com/mcpwp/issues/612)) ([#793](https://github.com/Mumega-com/mcpwp/issues/793))
+* fix: stop two more silent Elementor failures ([#789](https://github.com/Mumega-com/mcpwp/issues/789), [#788](https://github.com/Mumega-com/mcpwp/issues/788)) ([#791](https://github.com/Mumega-com/mcpwp/issues/791))
+
 = 3.10.8 =
 * fix: close the silent-success class reported in [#785](https://github.com/Mumega-com/mcpwp/issues/785) and [#784](https://github.com/Mumega-com/mcpwp/issues/784) ([#787](https://github.com/Mumega-com/mcpwp/issues/787))
 * fix: **elementor:** accept empty children on strict leaf widgets ([#777](https://github.com/Mumega-com/mcpwp/issues/777))
