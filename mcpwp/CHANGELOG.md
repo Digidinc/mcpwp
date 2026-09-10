@@ -5,6 +5,36 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.11.1](https://github.com/Mumega-com/mcpwp/compare/v3.11.0...v3.11.1) (2026-09-10)
+
+
+### Features
+
+* **mcp:** wp_batch, per-request spend budget, fixed bulk weights, plugin_version in _meta ([#802](https://github.com/Mumega-com/mcpwp/issues/802), [#752](https://github.com/Mumega-com/mcpwp/issues/752) F9) ([#848](https://github.com/Mumega-com/mcpwp/issues/848)) ([bcc16a5](https://github.com/Mumega-com/mcpwp/commit/bcc16a53479d9a1dd36615a7b3df049f9ad59f41))
+
+
+### Bug Fixes
+
+* 3.11.1 follow-ups — WooCommerce product facts, webhook log redaction, settings checkboxes, Freemius ZIP verify ([#846](https://github.com/Mumega-com/mcpwp/issues/846)) ([9aa6465](https://github.com/Mumega-com/mcpwp/commit/9aa64658d23f65cd911e5014ae481c1f3b19ba98))
+* **elementor:** 7-character element ids, warn on the rest, opt-in repair ([#842](https://github.com/Mumega-com/mcpwp/issues/842)) ([#847](https://github.com/Mumega-com/mcpwp/issues/847)) ([29bc110](https://github.com/Mumega-com/mcpwp/commit/29bc110db172d6c8941ee672c955b926b214d935))
+* **feedback:** atomic relay admission on a persistent object cache, mode reported ([#752](https://github.com/Mumega-com/mcpwp/issues/752) F6) ([#844](https://github.com/Mumega-com/mcpwp/issues/844)) ([2e7ba33](https://github.com/Mumega-com/mcpwp/commit/2e7ba33ee205f3b0e73ad17b4915662e8c5c6518))
+* **security:** encryption key never regenerated, versioned blobs, migration lock; Pro gate on Figma and SEO market data ([#564](https://github.com/Mumega-com/mcpwp/issues/564)) ([#849](https://github.com/Mumega-com/mcpwp/issues/849)) ([7fcf9d3](https://github.com/Mumega-com/mcpwp/commit/7fcf9d35598a0f5f2128f700f4af6a977b361a35))
+
+
+### Documentation
+
+* how to pin a release version, and the squash-body trap ([#854](https://github.com/Mumega-com/mcpwp/issues/854)) ([42e2a26](https://github.com/Mumega-com/mcpwp/commit/42e2a2609e72c4b9aec32776a5a94199c201da65))
+
+
+### Upgrade Notes
+
+* **Stored provider keys use a new format.** Keys saved or re-saved by 3.11.1 cannot be read by 3.11.0 or earlier. If you downgrade, re-enter your provider keys in MCPWP Integrations.
+* **A weak `MCPWP_ENCRYPTION_KEY` is now refused.** If wp-config.php defines it as empty, very short or trivially repetitive, encryption stops and an admin notice explains why. Set a strong value (32 random bytes or a long passphrase) and re-enter the affected keys.
+* **Figma and SEO market data are Pro everywhere.** The Figma design-token sync no longer runs on Free sites, including self-hosted installs; a companion theme keeps the last tokens it received. The DataForSEO visibility and opportunities routes now require Pro over REST as well as MCP.
+* **Element ids are 7 characters.** Elementor Pro's live search, taxonomy filter and loop widgets only accept 7-character ids. MCPWP now generates 7-character ids and warns about other lengths on save; pass `repair_ids: true` to `wp_patch_elementor` or `wp_set_elementor` to rewrite them. Update any custom CSS that names an old id.
+* **Batches have a spend budget.** One request, including everything it fans out to, may spend 1000 units: an ordinary operation costs 1, a route that spends a site credential or reaches a caller-chosen URL costs 25 per item. A batch priced over the budget is refused whole with `spend_budget_exceeded` before anything runs; split it. `wp_bulk_find_replace` and `wp_delete_all_drafts` now count as 10 operations against the rate limit.
+* **Analytics on Free needs an explicit choice.** A Free site that opted in before 3.11.1 stops sending anonymous usage data until an administrator confirms the setting under MCPWP Settings; a one-time notice asks. Paid sites are unchanged.
+
 ## [3.11.0](https://github.com/Mumega-com/mcpwp/compare/v3.10.8...v3.11.0) (2026-09-10)
 
 
