@@ -514,6 +514,18 @@ final class DestructiveGateTest extends TestCase {
 			$gated[] = 'wp_' . $op;
 			$gated[] = 'wc_' . $op;
 		}
+
+		// The wider oracle: every tool NAMED like a delete, whether or not
+		// its registry declared it destructive (#536 round 4, P2-4).
+		foreach ( array( Mcpwp_MCP_Free_Tools::class, Mcpwp_MCP_Pro_Tools::class ) as $class ) {
+			foreach ( array_keys( ( new ReflectionClass( $class ) )->newInstanceWithoutConstructor()->get_tool_map() ) as $name ) {
+				if ( preg_match( '/^(wp|wc)_(delete_|forget)/', $name ) ) {
+					$declared[] = $name;
+				}
+			}
+		}
+		$declared = array_values( array_unique( $declared ) );
+
 		foreach ( $declared as $tool ) {
 			$this->assertTrue(
 				in_array( $tool, $gated, true ) || isset( Mcpwp_Destructive_Gate::EXEMPT_WITH_REASON[ $tool ] ),
@@ -670,14 +682,15 @@ final class DestructiveGateTest extends TestCase {
 			$maps = array_merge( $maps, ( new ReflectionClass( $class ) )->newInstanceWithoutConstructor()->get_tool_map() );
 		}
 		$tools = array(
-			'delete_page'            => 'wp_delete_page',
-			'delete_post'            => 'wp_delete_post',
-			'delete_all_drafts'      => 'wp_delete_all_drafts',
-			'delete_media'           => 'wp_delete_media',
-			'delete_product'         => 'wc_delete_product',
-			'delete_course_category' => 'wp_delete_course_category',
-			'delete_widget'          => 'wp_delete_widget',
-			'delete_content'         => 'wp_delete_content',
+			'delete_page'               => 'wp_delete_page',
+			'delete_post'               => 'wp_delete_post',
+			'delete_all_drafts'         => 'wp_delete_all_drafts',
+			'delete_media'              => 'wp_delete_media',
+			'delete_product'            => 'wc_delete_product',
+			'delete_course_category'    => 'wp_delete_course_category',
+			'delete_widget'             => 'wp_delete_widget',
+			'delete_content'            => 'wp_delete_content',
+			'delete_elementor_template' => 'wp_delete_elementor_template',
 		);
 		foreach ( Mcpwp_Destructive_Gate::OPERATION_ROUTES as $op => $spec ) {
 			$this->assertArrayHasKey( $op, $tools, $op );
@@ -735,7 +748,7 @@ final class DestructiveGateTest extends TestCase {
 		$this->assertSame( 'target_changed', $refused->get_error_code() );
 
 		$this->assertSame( array( 'exists' => false ), Mcpwp_Destructive_Gate::fingerprint( array( 'type' => 'widget', 'id' => 'text-9' ) ) );
-		$this->assertSame( array(), Mcpwp_Destructive_Gate::fingerprint( array( 'type' => 'widget', 'id' => 'not a widget id' ) ) );
+		$this->assertTrue( Mcpwp_Destructive_Gate::fingerprint( array( 'type' => 'widget', 'id' => 'not a widget id' ) )['unparseable'], 'Not "no drift check": named as unparseable.' );
 	}
 
 	public function test_the_drafts_fingerprint_is_an_exact_count_and_a_bounded_id_list(): void {
@@ -756,14 +769,104 @@ final class DestructiveGateTest extends TestCase {
 		$settings = ( new ReflectionClass( Mcpwp_Settings::class ) )->newInstanceWithoutConstructor();
 		$this->assertTrue( $settings->get_defaults()['destructive_requires_approval'] );
 
-		$off = $settings->sanitize_settings( array( 'enable_logging' => '1' ) );
-		$this->assertFalse( $off['destructive_requires_approval'], 'Unchecked in the form = off.' );
-		$on = $settings->sanitize_settings( array( 'enable_logging' => '1', 'destructive_requires_approval' => '1' ) );
+		$off = $settings->sanitize_settings( array( 'enable_logging' => '1', '__present' => array( 'destructive_requires_approval' ) ) );
+		$this->assertFalse( $off['destructive_requires_approval'], 'Unchecked in the form (marker present) = off.' );
+		$on = $settings->sanitize_settings( array( 'enable_logging' => '1', '__present' => array( 'destructive_requires_approval' ), 'destructive_requires_approval' => '1' ) );
 		$this->assertTrue( $on['destructive_requires_approval'] );
 
 		update_option( 'mcpwp_settings', $off );
 		$this->assertFalse( Mcpwp_Destructive_Gate::enabled_for_site() );
 		update_option( 'mcpwp_settings', $on );
 		$this->assertTrue( Mcpwp_Destructive_Gate::enabled_for_site() );
+	}
+
+	// ---------------------------------------------------------------
+	// Round 4: the switch moves only from its form; every id shape is
+	// checked; a target the gate cannot fingerprint is not deferred.
+	// ---------------------------------------------------------------
+
+	public function test_the_switch_changes_only_when_its_form_was_posted(): void {
+		// Round-4 P1-1: sanitize_settings runs on EVERY update_option of
+		// mcpwp_settings; an absent checkbox turned the gate off.
+		if ( ! class_exists( 'Mcpwp_Settings' ) ) {
+			require_once dirname( __DIR__ ) . '/includes/admin/class-mcpwp-settings.php';
+		}
+		$settings = ( new ReflectionClass( Mcpwp_Settings::class ) )->newInstanceWithoutConstructor();
+
+		// A write from anywhere but the form (the settings API, the admin
+		// chat): no marker, no key in the input → the stored choice stays.
+		update_option( 'mcpwp_settings', array( 'enable_logging' => true ) );
+		update_option( 'mcpwp_settings', $settings->sanitize_settings( array( 'enable_logging' => '1' ) ) );
+		$this->assertTrue( Mcpwp_Destructive_Gate::enabled_for_site(), 'Only the form turns the gate off.' );
+		$stored = get_option( 'mcpwp_settings' );
+		$this->assertNotSame( false, isset( $stored['destructive_requires_approval'] ) ? $stored['destructive_requires_approval'] : null, 'No stored choice is never written as a stored false.' );
+
+		update_option( 'mcpwp_settings', array( 'destructive_requires_approval' => false ) );
+		update_option( 'mcpwp_settings', $settings->sanitize_settings( array( 'enable_logging' => '1' ) ) );
+		$this->assertFalse( Mcpwp_Destructive_Gate::enabled_for_site(), 'And an explicit off is kept, not flipped on.' );
+
+		// The form, with the checkbox unchecked: its marker is present → off.
+		$off = $settings->sanitize_settings( array( 'enable_logging' => '1', '__present' => array( 'destructive_requires_approval' ) ) );
+		$this->assertFalse( $off['destructive_requires_approval'] );
+		$on = $settings->sanitize_settings( array( 'enable_logging' => '1', '__present' => array( 'destructive_requires_approval' ), 'destructive_requires_approval' => '1' ) );
+		$this->assertTrue( $on['destructive_requires_approval'] );
+
+		// The renderer emits the marker.
+		if ( ! function_exists( 'checked' ) ) {
+			function checked( $checked, $current = true, $echo = true ) { return $checked == $current ? 'checked=\'checked\'' : ''; } // phpcs:ignore
+		}
+		ob_start();
+		$settings->render_checkbox_field( array( 'id' => 'destructive_requires_approval', 'description' => 'x' ) );
+		$html = ob_get_clean();
+		$this->assertStringContainsString( 'name="mcpwp_settings[__present][]" value="destructive_requires_approval"', $html );
+	}
+
+	public function test_a_string_id_in_the_route_and_a_different_one_in_the_body_are_refused(): void {
+		// Round-4 P2-1.
+		require_once dirname( __DIR__ ) . '/includes/pro/api/class-mcpwp-rest-widgets.php';
+		$never   = new class() { public function __call( $n, $a ) { return true; } };
+		$widgets = new Mcpwp_REST_Widgets( $never );
+		update_option( 'widget_text', array( 3 => array( 'text' => 'x' ), 9 => array( 'text' => 'y' ), '_multiwidget' => 1 ) );
+		$request = new WP_REST_Request( 'DELETE', '/mcpwp/v1/widgets/text-3', array( 'id' => 'text-9' ) );
+		$result  = $this->authed( $widgets, $request )->delete_widget( $request );
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'destructive_id_mismatch', $result->get_error_code() );
+
+		$request = new WP_REST_Request( 'DELETE', '/mcpwp/v1/widgets/text-3', array( 'id' => 'text-3' ) );
+		$this->assertSame( 202, $this->authed( $widgets, $request )->delete_widget( $request )->get_status() );
+	}
+
+	public function test_a_target_the_gate_cannot_fingerprint_is_not_deferred(): void {
+		// Round-4 P2-2: an empty fingerprint used to mean "no drift check"
+		// and the apply proceeded unchecked.
+		require_once dirname( __DIR__ ) . '/includes/pro/api/class-mcpwp-rest-widgets.php';
+		$never   = new class() { public function __call( $n, $a ) { return true; } };
+		$widgets = new Mcpwp_REST_Widgets( $never );
+		$request = new WP_REST_Request( 'DELETE', '/mcpwp/v1/widgets/my_single_widget', array( 'id' => 'my_single_widget' ) );
+		$result  = $this->authed( $widgets, $request )->delete_widget( $request );
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'invalid_target', $result->get_error_code() );
+		$this->assertSame( array(), Mcpwp_Approvals::list_requests( '', 50, true ) );
+
+		$this->assertTrue( Mcpwp_Destructive_Gate::fingerprint_term( 0, 'course_category' )['unparseable'] );
+		$this->assertTrue( Mcpwp_Destructive_Gate::fingerprint_widget( 'my_single_widget' )['unparseable'] );
+	}
+
+	public function test_a_forced_template_delete_is_deferred_and_a_trash_is_not(): void {
+		require_once dirname( __DIR__ ) . '/includes/pro/api/class-mcpwp-rest-elementor-pro.php';
+		$never = new class() { public $calls = 0; public function __call( $n, $a ) { $this->calls++; return true; } };
+		$this->seed( 70, 'elementor_library' );
+		$ctl = ( new ReflectionClass( Mcpwp_REST_Elementor_Pro::class ) )->newInstanceWithoutConstructor();
+		$prop = new ReflectionProperty( Mcpwp_REST_Elementor_Pro::class, 'elementor_pro' );
+		$prop->setAccessible( true );
+		$prop->setValue( $ctl, $never );
+
+		$request = new WP_REST_Request( 'DELETE', '/mcpwp/v1/elementor/templates/70', array( 'id' => 70, 'force' => true ) );
+		$this->assertSame( 202, $this->authed( $ctl, $request )->delete_template( $request )->get_status() );
+		$this->assertSame( 0, $never->calls );
+
+		$request = new WP_REST_Request( 'DELETE', '/mcpwp/v1/elementor/templates/70', array( 'id' => 70, 'force' => false ) );
+		$this->assertSame( 200, $this->authed( $ctl, $request )->delete_template( $request )->get_status() );
+		$this->assertSame( 1, $never->calls );
 	}
 }

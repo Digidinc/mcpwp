@@ -669,8 +669,16 @@ class Mcpwp_Settings {
 
 		$sanitized['enable_logging'] = ! empty( $input['enable_logging'] );
 
-		// Absent from the form means unchecked, like every checkbox here.
-		$sanitized['destructive_requires_approval'] = ! empty( $input['destructive_requires_approval'] );
+		// The gate's switch changes only when the form that carries it was
+		// posted (its presence marker proves that). Any other write of the
+		// option — the settings API, the admin chat, a plugin — keeps the
+		// stored choice, and no stored choice means on (#536 round 4).
+		$present = isset( $input['__present'] ) && is_array( $input['__present'] ) ? array_map( 'strval', $input['__present'] ) : array();
+		if ( in_array( 'destructive_requires_approval', $present, true ) ) {
+			$sanitized['destructive_requires_approval'] = ! empty( $input['destructive_requires_approval'] );
+		} elseif ( isset( $current['destructive_requires_approval'] ) ) {
+			$sanitized['destructive_requires_approval'] = (bool) $current['destructive_requires_approval'];
+		}
 
 		$sanitized['log_retention_days'] = isset( $input['log_retention_days'] )
 			? min( 365, max( 1, absint( $input['log_retention_days'] ) ) )
@@ -863,8 +871,12 @@ class Mcpwp_Settings {
 		$value = isset( $settings[ $args['id'] ] ) ? $settings[ $args['id'] ] : false;
 		$option_name = isset( $args['option_name'] ) ? $args['option_name'] : self::OPTION_NAME;
 
+		// A hidden marker proves the form RENDERED this checkbox. Without it,
+		// "absent from the input" would mean "unchecked" on every write of
+		// the option — and sanitize_settings runs on every update_option(),
+		// not only on a form post (#536 round 4).
 		printf(
-			'<label><input type="checkbox" name="%s[%s]" value="1" %s /> %s</label>',
+			'<input type="hidden" name="%1$s[__present][]" value="%2$s" /><label><input type="checkbox" name="%1$s[%2$s]" value="1" %3$s /> %4$s</label>',
 			esc_attr( $option_name ),
 			esc_attr( $args['id'] ),
 			checked( $value, true, false ),

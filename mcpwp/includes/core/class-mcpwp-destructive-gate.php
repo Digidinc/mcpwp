@@ -45,7 +45,7 @@ class Mcpwp_Destructive_Gate {
 	 * menus, webhooks) or incident response (revoke, reset) — see the test
 	 * that ties the two lists together.
 	 */
-	const GATED = array( 'delete_page', 'delete_post', 'delete_content', 'delete_all_drafts', 'delete_media', 'delete_product', 'delete_course_category', 'delete_widget' );
+	const GATED = array( 'delete_page', 'delete_post', 'delete_content', 'delete_all_drafts', 'delete_media', 'delete_product', 'delete_course_category', 'delete_widget', 'delete_elementor_template' );
 
 	/**
 	 * The one route (method + path) each gated operation may replay. A stored
@@ -61,6 +61,7 @@ class Mcpwp_Destructive_Gate {
 		'delete_product'         => array( 'DELETE', '#^/mcpwp/v1/woocommerce/products/\d+$#' ),
 		'delete_course_category' => array( 'DELETE', '#^/mcpwp/v1/learnpress/categories/\d+$#' ),
 		'delete_widget'          => array( 'DELETE', '#^/mcpwp/v1/widgets/[A-Za-z0-9_\-]+$#' ),
+		'delete_elementor_template' => array( 'DELETE', '#^/mcpwp/v1/elementor/templates/\d+$#' ),
 	);
 
 	/**
@@ -71,6 +72,7 @@ class Mcpwp_Destructive_Gate {
 	const EXEMPT_WITH_REASON = array(
 		'wp_delete_menu'               => 'reversible: a menu is rebuilt from its items',
 		'wp_delete_menu_item'          => 'reversible',
+		'wp_delete_menu_item_auto'     => 'reversible',
 		'wp_delete_webhook'            => 'reversible: re-register',
 		'wp_reset_rate_limit'          => 'incident response, no data loss',
 		'wp_revoke_api_key'            => 'incident response: gating it would favour whoever holds the key',
@@ -78,6 +80,11 @@ class Mcpwp_Destructive_Gate {
 		'wp_apply_elementor_template'  => 'content replacement with a rollback: the action log snapshots _elementor_data before every Elementor write tool',
 		'wp_apply_elementor_archetype' => 'content replacement with a rollback: the action log snapshots _elementor_data before every Elementor write tool',
 		'wp_apply_elementor_part'      => 'content replacement with a rollback: the action log snapshots _elementor_data before every Elementor write tool',
+		// Named by the wider oracle (every wp_delete_*/wc_delete_*/wp_forget tool), #536 round 4:
+		'wp_delete_term'               => 'detaches posts from a term; no post content is lost and the term is re-creatable by name',
+		'wp_delete_custom_css'         => 'a text block, re-creatable; the activity log records the request',
+		'wp_delete_kit_css_block'      => 'a named, hash-tagged text block, re-creatable by upserting it again',
+		'wp_forget'                    => 'a memory entry, re-creatable with wp_remember',
 	);
 
 	/**
@@ -268,15 +275,20 @@ class Mcpwp_Destructive_Gate {
 		// The id in the route, the id in the body and the id the handler
 		// resolved must be one id: the reviewer reads the route line as
 		// "the exact call" (#536 round 3, P2-1).
-		if ( isset( $resource['id'] ) && is_numeric( $resource['id'] ) ) {
-			$ids = array( (int) $resource['id'] );
-			if ( preg_match( '#/(\d+)/?$#', $route, $m ) ) {
-				$ids[] = (int) $m[1];
+		if ( isset( $resource['id'] ) && '' !== (string) $resource['id'] && null !== $resource['id'] ) {
+			$ids = array( (string) $resource['id'] );
+			if ( preg_match( '#/([^/]+)/?$#', $route, $m ) && ( is_numeric( $resource['id'] ) ? is_numeric( $m[1] ) : $m[1] !== basename( $route ) || true ) ) {
+				// The trailing route segment names the target on every gated
+				// route that carries one (numeric or a widget id).
+				if ( is_numeric( $resource['id'] ) || preg_match( '/^[a-z0-9_\-]+$/i', $m[1] ) ) {
+					$ids[] = (string) $m[1];
+				}
 			}
-			if ( isset( $params['id'] ) && is_numeric( $params['id'] ) ) {
-				$ids[] = (int) $params['id'];
+			if ( isset( $params['id'] ) && ( is_numeric( $params['id'] ) || is_string( $params['id'] ) ) ) {
+				$ids[] = (string) $params['id'];
 			}
-			if ( count( array_unique( $ids ) ) > 1 ) {
+			$ids = array_values( array_unique( array_map( function ( $v ) { return is_numeric( $v ) ? (string) (int) $v : (string) $v; }, $ids ) ) );
+			if ( count( $ids ) > 1 && ! in_array( $operation, array( 'delete_all_drafts' ), true ) ) {
 				return new WP_Error(
 					'destructive_id_mismatch',
 					__( 'The id in the route and the id in the body disagree. Nothing was queued; send one id.', 'mcpwp' ),
@@ -290,13 +302,24 @@ class Mcpwp_Destructive_Gate {
 			$resource['post_type'] = isset( $params['type'] ) && is_string( $params['type'] ) ? $params['type'] : 'all';
 		}
 
+		// A target this gate cannot fingerprint is not deferred: "no drift
+		// check" must never read as "no drift" (#536 round 4, P2-2).
+		$target = self::fingerprint( $resource );
+		if ( ! empty( $target['unparseable'] ) ) {
+			return new WP_Error(
+				'invalid_target',
+				__( 'The target id is not one this operation can act on. Nothing was queued.', 'mcpwp' ),
+				array( 'status' => 400, 'id' => isset( $resource['id'] ) ? $resource['id'] : null )
+			);
+		}
+
 		$approval = Mcpwp_Approvals::create_destructive_request(
 			$operation,
 			array(
 				'route'  => $route,
 				'method' => $method,
 				'params' => self::sanitize_params( $params ),
-				'target' => self::fingerprint( $resource ),
+				'target' => $target,
 			),
 			$resource,
 			array(
@@ -411,8 +434,11 @@ class Mcpwp_Destructive_Gate {
 	 * @return array
 	 */
 	public static function fingerprint_term( $term_id, $taxonomy ) {
-		if ( $term_id < 1 || ! function_exists( 'get_term' ) ) {
-			return array();
+		if ( $term_id < 1 || '' === $taxonomy ) {
+			return array( 'exists' => false, 'unparseable' => true );
+		}
+		if ( ! function_exists( 'get_term' ) ) {
+			return array( 'exists' => false );
 		}
 		$term = get_term( $term_id, $taxonomy );
 		if ( ! $term || is_wp_error( $term ) ) {
@@ -438,7 +464,7 @@ class Mcpwp_Destructive_Gate {
 	 */
 	public static function fingerprint_widget( $widget_id ) {
 		if ( ! preg_match( '/^([a-z0-9_\-]+?)-(\d+)$/i', (string) $widget_id, $m ) ) {
-			return array();
+			return array( 'exists' => false, 'unparseable' => true );
 		}
 		$instances = get_option( 'widget_' . $m[1], array() );
 		if ( ! is_array( $instances ) || ! isset( $instances[ (int) $m[2] ] ) ) {
@@ -457,6 +483,11 @@ class Mcpwp_Destructive_Gate {
 	/**
 	 * The ids a delete-all-drafts run would remove, as a fingerprint. The
 	 * count is exact and cheap (wp_count_posts); the id list is bounded.
+	 *
+	 * What the bound trades away, stated: past DRAFTS_FINGERPRINT_IDS drafts
+	 * only the count is compared, so a draft REPLACED beyond the window
+	 * (one deleted, one created) is not detected; any addition or removal
+	 * still is.
 	 *
 	 * @param string $post_type post|page|all.
 	 * @return array
