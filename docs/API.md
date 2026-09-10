@@ -1055,6 +1055,40 @@ Key display settings are extracted per widget type (e.g., `title` for headings, 
 
 ---
 
+#### Patch Page Elementor Data
+
+```http
+POST /elementor/{id}/patch
+```
+
+MCP tool: `wp_patch_elementor`. Applies up to **20 operations per call** (advertised as `maxItems` on the tool's `operations` schema) to the page's stored tree, in order, then saves once.
+
+**All-or-nothing.** A patch with more than 20 operations is refused before the page is read: `too_many_ops` (HTTP 400) with `max_operations`, `operations_received` and `written: false` — split it into batches. If any operation cannot be applied exactly as asked, no operation is applied and nothing is written: `patch_operation_failed` with `failed_operation` (its index), `operations` (a row per operation; those after the failure are marked `skipped`) and `written: false`. The status is 404 when an element, parent or position reference does not exist, 400 otherwise.
+
+**Body:**
+
+```json
+{
+  "operations": [
+    {"op": "add", "parent_id": "col1234", "position": "after:hed1234", "element": {"elType": "widget", "widgetType": "heading", "settings": {"title": "Hi"}}},
+    {"op": "settings", "element_id": "btn1234", "settings": {"text": "Go"}, "unset": ["button_background_color", "tabs.0.junk"]},
+    {"op": "remove", "element_id": "old1234"},
+    {"op": "replace", "element_id": "sec1234", "element": {"elType": "section", "settings": {}, "elements": []}}
+  ],
+  "repair_ids": false,
+  "convert": false
+}
+```
+
+| Operation | Fields | Behaviour |
+|-----------|--------|-----------|
+| `add` | `element` (required), `parent_id`, `position` | Without `parent_id`, inserts at the top level. With `parent_id`, inserts into that element's `elements`. `position` is `start`, `end` (default), `before:{id}` or `after:{id}`, and `{id}` must be one of that list's elements. Refused — never placed somewhere else: an unknown parent; a parent that cannot hold the element's `elType` (a column or container holds widgets; a section holds columns; a widget holds nothing); an element added into a parent without an `elType`; an unrecognised or unmatched position. A missing `id` is generated (7 characters). |
+| `remove` | `element_id` | Removes the element wherever it is in the tree. |
+| `replace` | `element_id`, `element` | Replaces the element wherever it is; the replacement keeps `element_id` when it carries no `id`. |
+| `settings` | `element_id`, `settings`, `unset` | Merges `settings`, then removes each key in `unset` (`delete_settings`, the older name, is still accepted). A dotted path reaches into nested values (`tabs.0.tab_title`); removing a list item keeps the list a list. Refused when it carries neither settings nor keys. |
+
+**Response:** one row per operation in `operations[]` with `op`, `index`, `success` and `element_id`. `add` rows add `position` and `parent_id`; when the save de-duplicated or repaired an added element's id — nested adds included — `element_id` is the id it was saved with and `element_id_submitted` the one sent. `settings` rows that carried `unset` add `removed_keys` and `keys_not_present`: a key that was not there is reported as not present, never as removed. `repair_ids=true` with no operations rewrites non-conforming element ids only (see `id_repair`).
+
 ### Elementor Pro
 
 *Requires Pro license*

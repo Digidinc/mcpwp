@@ -2723,17 +2723,25 @@ trait Mcpwp_Elementor_Writer_Trait {
 	/**
 	 * Batch patch Elementor data: add, remove, replace, or update settings in one request.
 	 *
-	 * Applies up to 20 operations sequentially, then saves once.
+	 * Applies up to MAX_PATCH_OPERATIONS operations to the stored tree in
+	 * order, then saves once. The patch is all-or-nothing (#825): a patch over
+	 * the cap, or one with an operation that cannot be applied exactly as asked,
+	 * is refused before anything is written, and the refusal names the cap or
+	 * the operation. It used to save whatever operations had worked and answer
+	 * success, and an `add` naming a parent it ignored landed at the top level.
 	 *
 	 * @param int   $page_id Page/post ID.
 	 * @param array $data    {
-	 *     @type array $operations Array of operations, each with:
-	 *         @type string $op             Operation type: 'add', 'remove', 'replace', 'settings'.
-	 *         @type string $element_id     Target element ID (for remove, replace, settings).
-	 *         @type array  $element        New element (for add, replace).
-	 *         @type string $position       Insert position (for add): 'start', 'end', 'before:{id}', 'after:{id}'.
-	 *         @type array  $settings       Settings to merge (for settings op).
-	 *         @type array  $delete_settings Setting keys to remove (for settings op).
+	 *     @type array $operations Operations, each with:
+	 *         @type string $op              'add', 'remove', 'replace' or 'settings'.
+	 *         @type string $element_id      Target element id (remove, replace, settings).
+	 *         @type array  $element         New element (add, replace).
+	 *         @type string $parent_id       add: insert into this element's children, not the top level.
+	 *         @type string $position        add: 'start', 'end' (default), 'before:{id}' or 'after:{id}',
+	 *                                       among the parent's children (the top level without parent_id).
+	 *         @type array  $settings        settings: keys to merge.
+	 *         @type array  $unset           settings: keys to remove; a dotted path reaches into nested values.
+	 *         @type array  $delete_settings settings: the older name for unset.
 	 * }
 	 * @return array|WP_Error Result with per-operation results, or error.
 	 */
@@ -2752,11 +2760,25 @@ trait Mcpwp_Elementor_Writer_Trait {
 			return new WP_Error( 'no_operations', 'operations array is required (or pass repair_ids=true to rewrite non-conforming element ids without other changes).', array( 'status' => 400 ) );
 		}
 
-		if ( count( $operations ) > self::MAX_PATCH_OPERATIONS ) {
+		$operations = array_values( $operations );
+		$max        = self::MAX_PATCH_OPERATIONS;
+
+		// Refused whole, before the page is read: applying the first N and
+		// dropping the rest would be a partial apply the caller cannot see.
+		if ( count( $operations ) > $max ) {
 			return new WP_Error(
 				'too_many_ops',
-				sprintf( 'Maximum %d operations per patch.', self::MAX_PATCH_OPERATIONS ),
-				array( 'status' => 400 )
+				sprintf(
+					'This patch has %1$d operations; wp_patch_elementor accepts at most %2$d per call (max_operations). Nothing was written. Split the operations into batches of %2$d or fewer.',
+					count( $operations ),
+					$max
+				),
+				array(
+					'status'              => 400,
+					'max_operations'      => $max,
+					'operations_received' => count( $operations ),
+					'written'             => false,
+				)
 			);
 		}
 
@@ -2797,151 +2819,53 @@ trait Mcpwp_Elementor_Writer_Trait {
 		}
 
 		$results = array();
+		$failed  = null;
 
 		foreach ( $operations as $i => $op ) {
-			$type   = isset( $op['op'] ) ? $op['op'] : '';
-			$el_id  = isset( $op['element_id'] ) ? $op['element_id'] : '';
-			$result = array(
-				'op'    => $type,
-				'index' => $i,
-			);
-
-			switch ( $type ) {
-				case 'add':
-					$new_el = isset( $op['element'] ) ? $op['element'] : null;
-					if ( ! is_array( $new_el ) ) {
-						$result['error'] = 'element required';
-						break;
-					}
-					if ( empty( $new_el['id'] ) ) {
-						$new_el['id'] = $this->generate_element_id();
-					}
-					$position = isset( $op['position'] ) ? $op['position'] : 'end';
-					// Found again after every operation has run, so the result
-					// can name the id this element was saved with (review r2
-					// N4). Stripped before the save.
-					$new_el['_mcpwp_add_op'] = count( $results );
-					if ( 'start' === $position ) {
-						array_unshift( $elements, $new_el );
-					} elseif ( 'end' === $position ) {
-						$elements[] = $new_el;
-					} elseif ( preg_match( '/^(before|after):(.+)$/', $position, $m ) ) {
-						$found_ref = false;
-						foreach ( $elements as $idx => $el ) {
-							if ( isset( $el['id'] ) && $el['id'] === $m[2] ) {
-								$insert_at = ( 'after' === $m[1] ) ? $idx + 1 : $idx;
-								array_splice( $elements, $insert_at, 0, array( $new_el ) );
-								$found_ref = true;
-								break;
-							}
-						}
-						if ( ! $found_ref ) {
-							$result['error'] = "ref '{$m[2]}' not found";
-							break;
-						}
-					}
-					$result['success']    = true;
-					$result['element_id'] = $new_el['id'];
-					break;
-
-				case 'remove':
-					if ( empty( $el_id ) ) {
-						$result['error'] = 'element_id required';
-						break;
-					}
-					$removed = null;
-					foreach ( $elements as $idx => $el ) {
-						if ( isset( $el['id'] ) && $el['id'] === $el_id ) {
-							$removed = $el;
-							array_splice( $elements, $idx, 1 );
-							break;
-						}
-					}
-					if ( ! $removed ) {
-						$removed = $this->remove_nested_element( $elements, $el_id );
-					}
-					if ( $removed ) {
-						$result['success'] = true;
-					} else {
-						$result['error'] = "element '$el_id' not found";
-					}
-					break;
-
-				case 'replace':
-					if ( empty( $el_id ) ) {
-						$result['error'] = 'element_id required';
-						break;
-					}
-					$new_el = isset( $op['element'] ) ? $op['element'] : null;
-					if ( ! is_array( $new_el ) ) {
-						$result['error'] = 'element required';
-						break;
-					}
-					if ( empty( $new_el['id'] ) ) {
-						$new_el['id'] = $el_id;
-					}
-					$op_replaced = false;
-					foreach ( $elements as $idx => $el ) {
-						if ( isset( $el['id'] ) && $el['id'] === $el_id ) {
-							$elements[ $idx ] = $new_el;
-							$op_replaced = true;
-							break;
-						}
-					}
-					if ( ! $op_replaced ) {
-						$op_replaced = $this->replace_nested_element( $elements, $el_id, $new_el );
-					}
-					$result['success'] = $op_replaced;
-					if ( ! $op_replaced ) {
-						$result['error'] = "element '$el_id' not found";
-					}
-					break;
-
-				case 'settings':
-					if ( empty( $el_id ) ) {
-						$result['error'] = 'element_id required';
-						break;
-					}
-					$dummy_path = '';
-					$target     =& $this->find_element_by_id( $elements, $el_id, $dummy_path );
-					if ( null === $target ) {
-						$result['error'] = "element '$el_id' not found";
-						break;
-					}
-					if ( ! isset( $target['settings'] ) || ! is_array( $target['settings'] ) ) {
-						$target['settings'] = array();
-					}
-					if ( ! empty( $op['settings'] ) && is_array( $op['settings'] ) ) {
-						foreach ( $op['settings'] as $k => $v ) {
-							$target['settings'][ $k ] = $v;
-						}
-					}
-					if ( ! empty( $op['delete_settings'] ) && is_array( $op['delete_settings'] ) ) {
-						foreach ( $op['delete_settings'] as $k ) {
-							unset( $target['settings'][ $k ] );
-						}
-					}
-					unset( $target );
-					$result['success'] = true;
-					break;
-
-				default:
-					$result['error'] = "unknown op '$type' — use: add, remove, replace, settings";
-					break;
-			}
-
+			$result    = $this->apply_patch_operation( $elements, is_array( $op ) ? $op : array(), $i );
 			$results[] = $result;
-		}
 
-		// Where each added element ended up once every operation has run; the
-		// marker never reaches the saved data.
-		$added_at = array();
-		foreach ( $elements as $idx => $el ) {
-			if ( is_array( $el ) && array_key_exists( '_mcpwp_add_op', $el ) ) {
-				$added_at[ (int) $el['_mcpwp_add_op'] ] = $idx;
-				unset( $elements[ $idx ]['_mcpwp_add_op'] );
+			if ( isset( $result['error'] ) ) {
+				$failed = $i;
+				break;
 			}
 		}
+
+		if ( null !== $failed ) {
+			$failure = $results[ $failed ];
+			$status  = isset( $failure['status'] ) ? (int) $failure['status'] : 400;
+			unset( $results[ $failed ]['status'] );
+
+			for ( $j = $failed + 1, $n = count( $operations ); $j < $n; $j++ ) {
+				$results[] = array(
+					'op'      => is_array( $operations[ $j ] ) && isset( $operations[ $j ]['op'] ) ? $operations[ $j ]['op'] : '',
+					'index'   => $j,
+					'skipped' => sprintf( 'not run: operation %d failed', $failed ),
+				);
+			}
+
+			return new WP_Error(
+				'patch_operation_failed',
+				sprintf(
+					'Operation %1$d (%2$s) failed: %3$s The patch is all-or-nothing, so no operation was applied. Nothing was written.',
+					$failed,
+					'' !== $failure['op'] ? $failure['op'] : 'no op',
+					rtrim( $failure['error'], '.' ) . '.'
+				),
+				array(
+					'status'           => $status,
+					'written'          => false,
+					'failed_operation' => $failed,
+					'operations'       => $results,
+				)
+			);
+		}
+
+		// Where each added element ended up once every operation has run, as a
+		// path of positions from the top of the tree — an add can land inside
+		// a parent (#825). The marker never reaches the saved data.
+		$added_at = array();
+		$this->collect_patch_add_markers( $elements, array(), $added_at );
 
 		// Save once.
 		$debug = $this->save_elements_to_page(
@@ -2964,16 +2888,28 @@ trait Mcpwp_Elementor_Writer_Trait {
 		// kept or was mapped from that id is the other one (review r1 P3-3,
 		// r2 N4). Read by position from the tree this save wrote.
 		$saved_tree = $this->last_saved_elements;
-		foreach ( $added_at as $op_index => $idx ) {
+		foreach ( $added_at as $op_index => $path ) {
 			if ( ! isset( $results[ $op_index ]['element_id'] ) ) {
 				continue;
 			}
-			if ( ! is_array( $saved_tree ) || ! isset( $saved_tree[ $idx ]['id'] ) ) {
+
+			$saved = null;
+			$list  = $saved_tree;
+			foreach ( $path as $position ) {
+				if ( ! is_array( $list ) || ! isset( $list[ $position ] ) || ! is_array( $list[ $position ] ) ) {
+					$saved = null;
+					break;
+				}
+				$saved = $list[ $position ];
+				$list  = isset( $saved['elements'] ) ? $saved['elements'] : null;
+			}
+
+			if ( ! is_array( $saved ) || ! isset( $saved['id'] ) ) {
 				$results[ $op_index ]['element_id_verified'] = false;
 				continue;
 			}
 
-			$saved_id = (string) $saved_tree[ $idx ]['id'];
+			$saved_id = (string) $saved['id'];
 			if ( $saved_id !== (string) $results[ $op_index ]['element_id'] ) {
 				$results[ $op_index ]['element_id_submitted'] = $results[ $op_index ]['element_id'];
 				$results[ $op_index ]['element_id']           = $saved_id;
@@ -2997,6 +2933,348 @@ trait Mcpwp_Elementor_Writer_Trait {
 		$result = $this->decorate_render_status( $result, $debug );
 
 		return $result;
+	}
+
+	/**
+	 * Apply one patch operation to the tree, or say exactly why it cannot be.
+	 *
+	 * Nothing is changed when an error is returned: every check runs before
+	 * the tree is touched, so the caller can refuse the whole patch.
+	 *
+	 * @param array $elements Tree, modified in place on success.
+	 * @param array $op       The operation.
+	 * @param int   $index    Its position in the patch.
+	 * @return array Result row; `error` (and `status`) set on failure.
+	 */
+	private function apply_patch_operation( array &$elements, array $op, $index ) {
+		$type   = isset( $op['op'] ) && is_string( $op['op'] ) ? $op['op'] : '';
+		$el_id  = isset( $op['element_id'] ) && ( is_string( $op['element_id'] ) || is_int( $op['element_id'] ) ) ? (string) $op['element_id'] : '';
+		$result = array(
+			'op'    => $type,
+			'index' => $index,
+		);
+
+		switch ( $type ) {
+			case 'add':
+				return $this->apply_patch_add( $elements, $op, $result, $index );
+
+			case 'remove':
+				if ( '' === $el_id ) {
+					return $this->patch_operation_error( $result, 'element_id required' );
+				}
+				$removed = null;
+				foreach ( $elements as $idx => $el ) {
+					if ( isset( $el['id'] ) && (string) $el['id'] === $el_id ) {
+						$removed = $el;
+						array_splice( $elements, $idx, 1 );
+						break;
+					}
+				}
+				if ( ! $removed ) {
+					$removed = $this->remove_nested_element( $elements, $el_id );
+				}
+				if ( ! $removed ) {
+					return $this->patch_operation_error( $result, "element '{$el_id}' not found", 404 );
+				}
+				$result['success'] = true;
+				return $result;
+
+			case 'replace':
+				if ( '' === $el_id ) {
+					return $this->patch_operation_error( $result, 'element_id required' );
+				}
+				$new_el = isset( $op['element'] ) ? $op['element'] : null;
+				if ( ! is_array( $new_el ) ) {
+					return $this->patch_operation_error( $result, 'element required' );
+				}
+				if ( empty( $new_el['id'] ) ) {
+					$new_el['id'] = $el_id;
+				}
+				$replaced = false;
+				foreach ( $elements as $idx => $el ) {
+					if ( isset( $el['id'] ) && (string) $el['id'] === $el_id ) {
+						$elements[ $idx ] = $new_el;
+						$replaced         = true;
+						break;
+					}
+				}
+				if ( ! $replaced ) {
+					$replaced = $this->replace_nested_element( $elements, $el_id, $new_el );
+				}
+				if ( ! $replaced ) {
+					return $this->patch_operation_error( $result, "element '{$el_id}' not found", 404 );
+				}
+				$result['success'] = true;
+				return $result;
+
+			case 'settings':
+				return $this->apply_patch_settings( $elements, $op, $result, $el_id );
+
+			default:
+				return $this->patch_operation_error( $result, "unknown op '{$type}' — use: add, remove, replace, settings" );
+		}
+	}
+
+	/**
+	 * The `add` operation: at the top level, or into `parent_id`'s children.
+	 *
+	 * @param array  $elements Tree, modified in place on success.
+	 * @param array  $op       The operation.
+	 * @param array  $result   Result row so far.
+	 * @param int    $index    Operation index, stamped on the element so its saved id can be found.
+	 * @return array Result row.
+	 */
+	private function apply_patch_add( array &$elements, array $op, array $result, $index ) {
+		$new_el = isset( $op['element'] ) ? $op['element'] : null;
+		if ( ! is_array( $new_el ) ) {
+			return $this->patch_operation_error( $result, 'element required' );
+		}
+		if ( empty( $new_el['id'] ) ) {
+			$new_el['id'] = $this->generate_element_id();
+		}
+
+		$position  = isset( $op['position'] ) && is_string( $op['position'] ) && '' !== $op['position'] ? $op['position'] : 'end';
+		$parent_id = isset( $op['parent_id'] ) && ( is_string( $op['parent_id'] ) || is_int( $op['parent_id'] ) ) ? (string) $op['parent_id'] : '';
+
+		if ( 'start' !== $position && 'end' !== $position && ! preg_match( '/^(before|after):(.+)$/', $position ) ) {
+			return $this->patch_operation_error( $result, "invalid position '{$position}' — use start, end, before:{id} or after:{id}" );
+		}
+
+		if ( '' === $parent_id ) {
+			$siblings =& $elements;
+		} else {
+			$path   = '';
+			$parent =& $this->find_element_by_id( $elements, $parent_id, $path );
+
+			// Never a fallback to the top level: that is the silent misplacement
+			// this contract exists to end (#825).
+			if ( null === $parent ) {
+				unset( $parent );
+				return $this->patch_operation_error( $result, "parent '{$parent_id}' not found on this page; the element was not placed anywhere else", 404 );
+			}
+
+			$parent_type = isset( $parent['elType'] ) && is_string( $parent['elType'] ) ? $parent['elType'] : '';
+			$child_type  = isset( $new_el['elType'] ) && is_string( $new_el['elType'] ) ? $new_el['elType'] : '';
+
+			if ( '' === $child_type ) {
+				unset( $parent );
+				return $this->patch_operation_error( $result, "an element added into parent '{$parent_id}' needs an elType, so it can be checked against what that parent holds" );
+			}
+
+			if ( ! isset( self::$nesting_rules[ $parent_type ] ) || ! in_array( $child_type, self::$nesting_rules[ $parent_type ], true ) ) {
+				$holds = isset( self::$nesting_rules[ $parent_type ] ) ? implode( ', ', self::$nesting_rules[ $parent_type ] ) : 'no child elements';
+				unset( $parent );
+				return $this->patch_operation_error(
+					$result,
+					sprintf( "'%s' cannot be placed inside a '%s' (parent '%s' holds: %s)", $child_type, '' !== $parent_type ? $parent_type : 'element without elType', $parent_id, $holds )
+				);
+			}
+
+			if ( ! isset( $parent['elements'] ) || ! is_array( $parent['elements'] ) ) {
+				$parent['elements'] = array();
+			}
+			$siblings =& $parent['elements'];
+			unset( $parent );
+		}
+
+		$siblings  = array_values( $siblings );
+		$insert_at = count( $siblings );
+
+		if ( 'start' === $position ) {
+			$insert_at = 0;
+		} elseif ( preg_match( '/^(before|after):(.+)$/', $position, $m ) ) {
+			$insert_at = null;
+			foreach ( $siblings as $idx => $el ) {
+				if ( is_array( $el ) && isset( $el['id'] ) && (string) $el['id'] === $m[2] ) {
+					$insert_at = ( 'after' === $m[1] ) ? $idx + 1 : $idx;
+					break;
+				}
+			}
+			if ( null === $insert_at ) {
+				unset( $siblings );
+				return $this->patch_operation_error(
+					$result,
+					'' === $parent_id
+						? "position reference '{$m[2]}' is not a top-level element (pass parent_id to insert among a parent's children)"
+						: "position reference '{$m[2]}' is not a child of '{$parent_id}'",
+					404
+				);
+			}
+		}
+
+		// Found again after every operation has run, so the result can name
+		// the id this element was saved with (review r2 N4). Stripped before
+		// the save.
+		$new_el['_mcpwp_add_op'] = $index;
+		array_splice( $siblings, $insert_at, 0, array( $new_el ) );
+		unset( $siblings );
+
+		$result['success']    = true;
+		$result['element_id'] = (string) $new_el['id'];
+		$result['position']   = $position;
+		if ( '' !== $parent_id ) {
+			$result['parent_id'] = $parent_id;
+		}
+
+		return $result;
+	}
+
+	/**
+	 * The `settings` operation: merge `settings`, remove `unset` keys.
+	 *
+	 * @param array  $elements Tree, modified in place on success.
+	 * @param array  $op       The operation.
+	 * @param array  $result   Result row so far.
+	 * @param string $el_id    Target element id.
+	 * @return array Result row.
+	 */
+	private function apply_patch_settings( array &$elements, array $op, array $result, $el_id ) {
+		if ( '' === $el_id ) {
+			return $this->patch_operation_error( $result, 'element_id required' );
+		}
+
+		$merge = isset( $op['settings'] ) && is_array( $op['settings'] ) ? $op['settings'] : array();
+
+		// `unset` is the documented name; `delete_settings` is what this op
+		// accepted before and keeps working.
+		$unset = array();
+		foreach ( array( 'unset', 'delete_settings' ) as $field ) {
+			if ( empty( $op[ $field ] ) ) {
+				continue;
+			}
+			foreach ( (array) $op[ $field ] as $key ) {
+				if ( ( is_string( $key ) || is_int( $key ) ) && '' !== (string) $key && ! in_array( (string) $key, $unset, true ) ) {
+					$unset[] = (string) $key;
+				}
+			}
+		}
+
+		if ( empty( $merge ) && empty( $unset ) ) {
+			return $this->patch_operation_error( $result, "the settings op for '{$el_id}' has neither settings to merge nor keys to unset" );
+		}
+
+		$dummy_path = '';
+		$target     =& $this->find_element_by_id( $elements, $el_id, $dummy_path );
+		if ( null === $target ) {
+			unset( $target );
+			return $this->patch_operation_error( $result, "element '{$el_id}' not found", 404 );
+		}
+
+		if ( ! isset( $target['settings'] ) || ! is_array( $target['settings'] ) ) {
+			$target['settings'] = array();
+		}
+		foreach ( $merge as $k => $v ) {
+			$target['settings'][ $k ] = $v;
+		}
+
+		$removed = array();
+		$absent  = array();
+		foreach ( $unset as $key ) {
+			if ( self::unset_setting_path( $target['settings'], $key ) ) {
+				$removed[] = $key;
+			} else {
+				$absent[] = $key;
+			}
+		}
+		unset( $target );
+
+		$result['success']    = true;
+		$result['element_id'] = $el_id;
+		if ( ! empty( $unset ) ) {
+			// Said separately: a key that was not there was not "removed".
+			$result['removed_keys']     = $removed;
+			$result['keys_not_present'] = $absent;
+		}
+
+		return $result;
+	}
+
+	/**
+	 * Remove one setting by key, or by a dotted path into nested values
+	 * (`tabs.0.tab_title`). A literal key containing dots wins over the path.
+	 *
+	 * @param array  $settings Settings, modified in place.
+	 * @param string $path     Key or dotted path.
+	 * @return bool Whether something was removed.
+	 */
+	private static function unset_setting_path( array &$settings, $path ) {
+		if ( array_key_exists( $path, $settings ) ) {
+			unset( $settings[ $path ] );
+			return true;
+		}
+
+		$parts = explode( '.', $path );
+		if ( count( $parts ) < 2 ) {
+			return false;
+		}
+
+		$last = array_pop( $parts );
+		$node =& $settings;
+		foreach ( $parts as $part ) {
+			if ( ! is_array( $node ) || ! array_key_exists( $part, $node ) ) {
+				unset( $node );
+				return false;
+			}
+			$node =& $node[ $part ];
+		}
+
+		if ( ! is_array( $node ) || ! array_key_exists( $last, $node ) ) {
+			unset( $node );
+			return false;
+		}
+
+		$was_list = array_values( $node ) === $node;
+		unset( $node[ $last ] );
+		if ( $was_list ) {
+			// Removing a repeater item keeps the rest a list, not a JSON object.
+			$node = array_values( $node );
+		}
+		unset( $node );
+
+		return true;
+	}
+
+	/**
+	 * Mark a result row as failed.
+	 *
+	 * @param array  $result  Result row.
+	 * @param string $message What went wrong.
+	 * @param int    $status  HTTP status the whole patch is refused with.
+	 * @return array
+	 */
+	private function patch_operation_error( array $result, $message, $status = 400 ) {
+		$result['success'] = false;
+		$result['error']   = $message;
+		$result['status']  = (int) $status;
+
+		return $result;
+	}
+
+	/**
+	 * Find (and strip) the markers `add` stamped on the elements it inserted.
+	 *
+	 * @param array $elements Tree, modified in place.
+	 * @param int[] $path     Positions from the top to this list.
+	 * @param array $found    Operation index => path of positions.
+	 */
+	private function collect_patch_add_markers( array &$elements, array $path, array &$found ) {
+		foreach ( $elements as $idx => &$el ) {
+			if ( ! is_array( $el ) ) {
+				continue;
+			}
+
+			$here = array_merge( $path, array( $idx ) );
+
+			if ( array_key_exists( '_mcpwp_add_op', $el ) ) {
+				$found[ (int) $el['_mcpwp_add_op'] ] = $here;
+				unset( $el['_mcpwp_add_op'] );
+			}
+
+			if ( ! empty( $el['elements'] ) && is_array( $el['elements'] ) ) {
+				$this->collect_patch_add_markers( $el['elements'], $here, $found );
+			}
+		}
+		unset( $el );
 	}
 
 	/**

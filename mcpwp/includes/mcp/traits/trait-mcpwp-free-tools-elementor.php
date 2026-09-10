@@ -202,7 +202,7 @@ trait Mcpwp_Free_Tools_Elementor_Trait {
 
 		$tools[] = $this->define_tool(
 			'wp_patch_elementor',
-			'Apply multiple operations to an Elementor page in a single read-write cycle (max 20 ops). More efficient than calling add/remove/replace individually. Operations: add, remove, replace, settings. Get element IDs from wp_get_elementor_summary first. Pass repair_ids=true (operations optional) to rewrite element ids that are not exactly 7 alphanumeric characters — Elementor Pro\'s Search live results and Taxonomy Filter/Loop Grid AJAX reject them — and repoint the references Elementor resolves (Taxonomy Filter selected_element, Off-canvas links); the response\'s id_repair lists every old -> new id. Like any validated write, it also applies the validator\'s standard fixes, reported in warnings.',
+			'Apply multiple operations to an Elementor page in a single read-write cycle (max ' . Mcpwp_Elementor_Basic::MAX_PATCH_OPERATIONS . ' ops per call; a longer patch is refused with nothing written — split it into batches). All-or-nothing: if any operation cannot be applied exactly as asked (unknown element, parent or position reference), nothing is written and the error names the operation. Operations: add (at the top level, or into parent_id\'s children at position), remove, replace, settings (merge settings and/or remove keys with unset). Get element IDs from wp_get_elementor_summary first. Pass repair_ids=true (operations optional) to rewrite element ids that are not exactly 7 alphanumeric characters — Elementor Pro\'s Search live results and Taxonomy Filter/Loop Grid AJAX reject them — and repoint the references Elementor resolves (Taxonomy Filter selected_element, Off-canvas links); the response\'s id_repair lists every old -> new id. Like any validated write, it also applies the validator\'s standard fixes, reported in warnings.',
 			array(
 				'page_id'    => array(
 					'type'        => 'integer',
@@ -211,7 +211,7 @@ trait Mcpwp_Free_Tools_Elementor_Trait {
 				),
 				'operations' => array(
 					'type'        => 'array',
-					'description' => 'Array of operations (maximum ' . Mcpwp_Elementor_Basic::MAX_PATCH_OPERATIONS . '). Each: {op: "add"|"remove"|"replace"|"settings", element_id: "...", element: {...}, position: "...", settings: {...}, delete_settings: [...]}. Required unless repair_ids is true.',
+					'description' => 'Array of operations (maximum ' . Mcpwp_Elementor_Basic::MAX_PATCH_OPERATIONS . ' per call). Each: {op: "add"|"remove"|"replace"|"settings", element_id: "...", element: {...}, parent_id: "...", position: "...", settings: {...}, unset: [...]}. Applied in order, all-or-nothing: if one cannot be applied, none is and Nothing is written. Required unless repair_ids is true.',
 					// Machine-readable, so a client can refuse an over-long
 					// batch before spending a round trip on it (#785).
 					'maxItems'    => Mcpwp_Elementor_Basic::MAX_PATCH_OPERATIONS,
@@ -225,11 +225,17 @@ trait Mcpwp_Free_Tools_Elementor_Trait {
 							),
 							'element_id'      => array( 'type' => 'string', 'description' => 'Target element ID (required for remove, replace, settings)' ),
 							'element'         => array( 'type' => 'object', 'description' => 'New/replacement element object (required for add, replace)' ),
-							'position'        => array( 'type' => 'string', 'description' => 'Insert position for add: start, end, before:{id}, after:{id}' ),
+							'parent_id'       => array( 'type' => 'string', 'description' => 'For add: insert into this element\'s children instead of the top level (a widget into a column or container). A parent that does not exist, or cannot hold that elType (a widget into a section), is refused — the element is never placed at the top level instead.' ),
+							'position'        => array( 'type' => 'string', 'description' => 'Insert position for add, among the parent\'s children (the top level without parent_id): start, end (default), before:{id}, after:{id}. The {id} must be one of those children.' ),
 							'settings'        => array( 'type' => 'object', 'description' => 'Settings to merge (for settings op)' ),
+							'unset'           => array(
+								'type'        => 'array',
+								'description' => 'For settings: setting keys to remove from the element. A dotted path reaches into nested values (tabs.0.tab_title). The result lists removed_keys and keys_not_present.',
+								'items'       => array( 'type' => 'string' ),
+							),
 							'delete_settings' => array(
 								'type'        => 'array',
-								'description' => 'Setting keys to remove (for settings op)',
+								'description' => 'Older name for unset; still accepted.',
 								'items'       => array( 'type' => 'string' ),
 							),
 						),

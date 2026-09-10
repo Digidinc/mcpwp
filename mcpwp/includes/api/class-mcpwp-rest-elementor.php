@@ -289,7 +289,7 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 							'type'     => 'integer',
 						),
 						'operations' => array(
-							'description' => __( 'Array of patch operations: {op, element_id, element, position, settings, delete_settings}. Required unless repair_ids is true.', 'mcpwp' ),
+							'description' => __( 'Array of patch operations, at most 20 per call: {op, element_id, element, parent_id, position, settings, unset}. All-or-nothing: a patch over the limit, or with an operation that cannot be applied, is refused and nothing is written. Required unless repair_ids is true.', 'mcpwp' ),
 							'type'        => 'array',
 						),
 						'repair_ids' => array(
