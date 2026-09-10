@@ -637,6 +637,17 @@ class Mcpwp_WooCommerce {
 			'date_modified'     => $product->get_date_modified() ? $product->get_date_modified()->format( 'c' ) : null,
 		);
 
+		// Whether a customer can buy it, and where the catalog shows it (#843). A fact that cannot be computed is null, and unknown_reasons
+		// names the field and why — so it is told apart from a real false, and
+		// a client that tests the field for truthiness fails safe instead of
+		// building a buy link for a product nobody verified.
+		$unknown                    = array();
+		$data['purchasable']        = $this->product_fact( $product, 'is_purchasable', 'purchasable', $unknown );
+		$data['catalog_visibility'] = $this->product_fact( $product, 'get_catalog_visibility', 'catalog_visibility', $unknown );
+		if ( ! empty( $unknown ) ) {
+			$data['unknown_reasons'] = $unknown;
+		}
+
 		if ( $detailed ) {
 			$data['description']       = $product->get_description();
 			$data['short_description'] = $product->get_short_description();
@@ -664,6 +675,79 @@ class Mcpwp_WooCommerce {
 		}
 
 		return $data;
+	}
+
+	/**
+	 * Read one product fact, or record why it could not be read.
+	 *
+	 * @param WC_Product $product Product object.
+	 * @param string     $method  WC_Product method: is_purchasable or get_catalog_visibility.
+	 * @param string     $field   Response field the fact is reported under.
+	 * @param array      $unknown Collected by reference: field => reason.
+	 * @return bool|string|null The fact, or null when it could not be computed.
+	 */
+	private function product_fact( $product, $method, $field, array &$unknown ) {
+		if ( ! is_object( $product ) || ! method_exists( $product, $method ) ) {
+			$unknown[ $field ] = sprintf( 'WC_Product::%s() is not available on %s.', $method, is_object( $product ) ? get_class( $product ) : gettype( $product ) );
+			return null;
+		}
+
+		try {
+			$value = $product->$method();
+			if ( 'is_purchasable' === $method && $value ) {
+				$value = $this->published_for_customers( $product );
+			}
+		} catch ( Throwable $e ) {
+			// The class only: a message from a third-party filter can carry
+			// file paths, SQL or a keyed URL, and this goes to the API caller.
+			$unknown[ $field ] = sprintf( 'WC_Product::%s() threw %s.', $method, get_class( $e ) );
+			return null;
+		}
+
+		if ( 'is_purchasable' === $method ) {
+			// WooCommerce itself tests this for truthiness before selling.
+			return (bool) $value;
+		}
+
+		if ( ! is_string( $value ) || '' === $value ) {
+			$unknown[ $field ] = sprintf( 'WC_Product::%s() returned no value.', $method );
+			return null;
+		}
+
+		return $value;
+	}
+
+	/**
+	 * Whether customers can reach the product at all.
+	 *
+	 * WooCommerce answers is_purchasable() for the CURRENT user: a draft,
+	 * pending or private product is purchasable to someone who can edit it —
+	 * the admin chat, an approval replayed as the reviewer. This response says
+	 * what a customer can buy, so the product must be published, and a
+	 * variation's parent too (a disabled variation is private). External and
+	 * grouped products are never purchasable in WooCommerce — they link out,
+	 * or hold other products — and that is reported as its answer, false.
+	 *
+	 * Not closed: restrictions a plugin applies through the
+	 * woocommerce_is_purchasable filter (wholesale, B2B, members-only) are
+	 * evaluated for the CALLING user. Under an administrator — the admin chat,
+	 * an approval applied by a reviewer — a published product such a plugin
+	 * limits to one role can read true (review r2 P3-E).
+	 *
+	 * @param WC_Product $product Product object.
+	 * @return bool
+	 */
+	private function published_for_customers( $product ) {
+		if ( ! method_exists( $product, 'get_status' ) || 'publish' !== $product->get_status() ) {
+			return false;
+		}
+
+		if ( method_exists( $product, 'is_type' ) && $product->is_type( 'variation' ) ) {
+			$parent = method_exists( $product, 'get_parent_id' ) ? get_post( (int) $product->get_parent_id() ) : null;
+			return is_object( $parent ) && isset( $parent->post_status ) && 'publish' === $parent->post_status;
+		}
+
+		return true;
 	}
 
 	/**

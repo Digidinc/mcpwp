@@ -123,6 +123,34 @@ class Mcpwp_Activator {
 		update_option( 'mcpwp_destructive_switch_reset', 1, false );
 	}
 
+	/**
+	 * Label analytics opt-ins stored before 3.11.1, once.
+	 *
+	 * A true stored before 3.11.1 proves nothing about who chose it: the
+	 * settings form wrote it, but so could any API key — the generic option
+	 * tool accepted spai_settings in 2.8.x and mcpwp_settings until v3.4.2
+	 * (review r2 N1). Such a value is labelled analytics_choice = legacy.
+	 * Mcpwp_Analytics counts only "explicit" as consent on Free, so a legacy
+	 * true is off there until an administrator ticks the box in Settings (a
+	 * notice asks); a paying site keeps its plan default. Own flag: a true
+	 * written later without a recorded choice is never labelled.
+	 */
+	public static function stamp_analytics_choice() {
+		if ( get_option( 'mcpwp_analytics_choice_stamped' ) ) {
+			return;
+		}
+
+		$settings = get_option( 'mcpwp_settings', array() );
+		if ( is_array( $settings ) && array_key_exists( 'analytics_enabled', $settings )
+			&& in_array( $settings['analytics_enabled'], array( true, 1, '1' ), true )
+			&& ! isset( $settings['analytics_choice'] ) ) {
+			$settings['analytics_choice'] = 'legacy';
+			update_option( 'mcpwp_settings', $settings );
+		}
+
+		update_option( 'mcpwp_analytics_choice_stamped', 1, false );
+	}
+
 	public static function migrate_identity_less_approvals() {
 		if ( get_option( 'mcpwp_approvals_identity_migrated' ) ) {
 			return;

@@ -250,7 +250,10 @@ class Mcpwp_Admin {
 			true
 		);
 
-		$posthog       = Mcpwp_Integration_Manager::get_instance()->get_posthog_config();
+		// PostHog loads in the browser only on the consent decision server-side
+		// capture uses (review r2 N3): without it there is no token, and
+		// mcpwp-admin.js does not initialise PostHog.
+		$posthog       = class_exists( 'Mcpwp_Analytics' ) ? Mcpwp_Analytics::browser_config() : array( 'token' => '', 'host' => '' );
 		$posthog_token = $posthog['token'];
 		$posthog_host  = $posthog['host'];
 

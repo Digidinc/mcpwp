@@ -297,7 +297,13 @@ class Mcpwp_Migrate {
 				$mcpwp_settings_existing = get_option( 'mcpwp_settings', false );
 				if ( false === $mcpwp_settings_existing ) {
 					// mcpwp_settings not yet written — simple copy.
-					update_option( 'mcpwp_settings', $spai_settings_raw );
+					// A consent label is recorded only by this version's settings
+					// form; one found in spai_settings is never copied (review r3
+					// R3-2). The 2.8 value itself is labelled legacy below.
+					$copy = $spai_settings_raw;
+					unset( $copy['analytics_choice'] );
+					update_option( 'mcpwp_settings', $copy );
+					self::restamp_if_analytics_copied( $copy );
 					$log['copied'][] = 'spai_settings → mcpwp_settings (direct copy)';
 				} else {
 					// mcpwp_settings already exists (written by activator) — deep-merge.
@@ -308,6 +314,18 @@ class Mcpwp_Migrate {
 
 					foreach ( $spai_settings_raw as $sub_key => $customer_value ) {
 						if ( ! is_string( $sub_key ) || '' === $sub_key ) {
+							continue;
+						}
+						// Analytics consent is not a customer value to carry
+						// over. A label is never copied from spai_settings, and a
+						// choice already recorded here (explicit or legacy)
+						// outranks an unattributable 2.8 value in either
+						// direction — this merge re-runs on every request while
+						// a table migration keeps failing (review r3 R3-1, R3-2).
+						if ( 'analytics_choice' === $sub_key ) {
+							continue;
+						}
+						if ( 'analytics_enabled' === $sub_key && isset( $base['analytics_choice'] ) ) {
 							continue;
 						}
 						// Only overlay scalar and simple-array values that differ from
@@ -321,6 +339,9 @@ class Mcpwp_Migrate {
 
 					if ( ! empty( $applied ) ) {
 						update_option( 'mcpwp_settings', $merged );
+						if ( in_array( 'analytics_enabled', $applied, true ) ) {
+							self::restamp_if_analytics_copied( $merged );
+						}
 						$log['copied'][] = 'spai_settings → mcpwp_settings (deep-merge; overlaid: ' . implode( ', ', $applied ) . ')';
 					} else {
 						$log['skipped_existing'][] = 'spai_settings (all sub-keys already match mcpwp_settings)';
@@ -665,6 +686,24 @@ class Mcpwp_Migrate {
 	 *
 	 * @return array|null
 	 */
+	/**
+	 * A 2.8 analytics opt-in cannot be attributed — any API key could write
+	 * spai_settings — so it must be labelled legacy, which is not consent on
+	 * Free (see Mcpwp_Activator::stamp_analytics_choice()). The copied settings
+	 * are left exactly as they were; clearing the stamp flag makes the stamp —
+	 * which runs after this migration on plugin load — label it, even on a
+	 * site that stamped before.
+	 *
+	 * @param array $settings Settings just written.
+	 */
+	private static function restamp_if_analytics_copied( array $settings ) {
+		if ( array_key_exists( 'analytics_enabled', $settings )
+			&& in_array( $settings['analytics_enabled'], array( true, 1, '1' ), true )
+			&& ! isset( $settings['analytics_choice'] ) ) {
+			delete_option( 'mcpwp_analytics_choice_stamped' );
+		}
+	}
+
 	public static function get_log() {
 		$log = get_option( self::LOG_OPTION, null );
 		return is_array( $log ) ? $log : null;

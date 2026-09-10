@@ -872,6 +872,18 @@ if (! function_exists('get_nav_menu_locations')) {
     }
 }
 
+if (! function_exists('get_the_terms')) {
+    // Terms attached to an object, seeded per test in
+    // $GLOBALS['_mcpwp_test_object_terms'][ $post_id ][ $taxonomy ]. Core
+    // answers false when nothing is attached, and so does this.
+    function get_the_terms($post, $taxonomy)
+    {
+        $id    = is_object($post) ? (int) ($post->ID ?? 0) : (int) $post;
+        $terms = $GLOBALS['_mcpwp_test_object_terms'][ $id ][ $taxonomy ] ?? array();
+        return empty($terms) ? false : $terms;
+    }
+}
+
 if (! function_exists('wp_list_pluck')) {
     function wp_list_pluck($list, $field, $index_key = null)
     {

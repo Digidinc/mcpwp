@@ -17,13 +17,46 @@ on:
     paths:
       - "scripts/verify_update_channel.sh"
       - "scripts/verify_freemius_channel.sh"
+      - "scripts/tests/verify_freemius_channel_test.sh"
+      - "scripts/tests/verify_canary_workflow_test.sh"
       - ".github/workflows/update-channel-canary.yml"
 
 permissions:
   contents: read
   issues: write
 
+# Every run block is bash with -eo pipefail. The verify steps pipe the
+# verifier into tee; under GitHub's default `bash -e` the step took tee's
+# status, always 0, so an outage never filed an issue and the close step shut
+# open ones while the channel was down (review r2 N2). Pinned by
+# scripts/tests/verify_canary_workflow_test.sh.
+defaults:
+  run:
+    shell: bash
+
 jobs:
+  # The verifier's exit codes are the whole contract the jobs below rely on,
+  # and a live run only ever exercises the branch reality happens to be in.
+  # This drives every branch offline — no secrets, no network.
+  freemius-verifier-contract:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Freemius verifier contract test
+        run: bash scripts/tests/verify_freemius_channel_test.sh
+
+      - name: Canary workflow contract test
+        run: bash scripts/tests/verify_canary_workflow_test.sh
+
+      # The contract test must reject every way of silencing the canary, not
+      # only pass the workflow as it is today (review r3 R3-4).
+      - name: Canary workflow contract self-test
+        run: bash scripts/tests/verify_canary_workflow_test.sh --self-test
+
   verify:
     runs-on: ubuntu-latest
     strategy:
@@ -105,7 +138,7 @@ jobs:
           fi
 
       - name: Close the channel issue when green again
-        if: success() && github.event_name == 'schedule'
+        if: success() && steps.verify.outcome == 'success' && github.event_name == 'schedule'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CHANNEL_NAME: ${{ matrix.channel.name }}
@@ -140,6 +173,7 @@ jobs:
           echo "Latest tag: $TAG"
 
       - name: Verify Freemius serves it
+        id: verify
         env:
           FREEMIUS_BEARER_TOKEN: ${{ secrets.FREEMIUS_BEARER_TOKEN }}
         run: |
@@ -200,7 +234,7 @@ jobs:
           fi
 
       - name: Close the issue when green again
-        if: success() && github.event_name == 'schedule'
+        if: success() && steps.verify.outcome == 'success' && github.event_name == 'schedule'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
