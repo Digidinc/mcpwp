@@ -54,25 +54,27 @@ class Mcpwp_Elementor_Element_Ids {
 	/**
 	 * Widget types whose OWN id is sent to a validating Pro endpoint.
 	 *
-	 * Confirmed against Elementor Pro 4.1.1 source: `search`
-	 * (modules/search, refresh-search) and `loop-grid` (modules/loop-builder,
-	 * the refresh-loop target). `loop-carousel` is deliberately absent: the
-	 * Taxonomy Filter cannot target it and it sends no widget_id to either
-	 * endpoint. Loop Grid "load more" and AJAX pagination fetch the next page's
-	 * URL, not a REST endpoint, so they do not depend on the id either.
+	 * Confirmed against Elementor Pro 4.1.1 source: only `search`
+	 * (modules/search, refresh-search, for live results). A `loop-grid`'s id
+	 * reaches refresh-loop only when a Taxonomy Filter targets it, so it is
+	 * handled through REFERENCE_KEYS rather than listed here. `loop-carousel`
+	 * is absent: the Taxonomy Filter cannot target it and it sends no
+	 * widget_id to either endpoint. Loop Grid "load more" and AJAX pagination
+	 * fetch the next page's URL, not a REST endpoint.
 	 *
 	 * @var array<string,array{endpoint:string,feature:string}>
 	 */
-	const REST_BACKED_WIDGETS = array(
-		'search'    => array(
+	const OWN_ID_WIDGETS = array(
+		'search' => array(
 			'endpoint' => 'refresh-search',
 			'feature'  => 'its live search results',
 		),
-		'loop-grid' => array(
-			'endpoint' => 'refresh-loop',
-			'feature'  => 'Taxonomy Filter filtering of this grid',
-		),
 	);
+
+	/**
+	 * How many folded ids the summary warning names as a sample.
+	 */
+	const SUMMARY_SAMPLE = 5;
 
 	/**
 	 * Settings keys whose value is another element's id, and which Elementor
@@ -130,27 +132,36 @@ class Mcpwp_Elementor_Element_Ids {
 	}
 
 	/**
-	 * Find non-conforming ids and references to them. Does not modify the tree.
+	 * Find non-conforming ids and what depends on them. Does not modify the tree.
 	 *
 	 * Paths use the validator's format — `section[0].column[0].widget[2]` — so
 	 * these findings read the same as every other validation warning.
 	 *
 	 * @param array $elements Element tree.
-	 * @return array{checked:int,invalid:array,references:array}
+	 * @return array{checked:int,ids:array,invalid:array,targets:array,references:array}
+	 *         `ids` every id present (string => true); `targets` every
+	 *         reference value => referrers; `references` referrers whose value
+	 *         is itself not a valid id.
 	 */
 	public static function audit( array $elements ) {
 		$checked    = 0;
+		$ids        = array();
 		$invalid    = array();
+		$targets    = array();
 		$references = array();
 
 		self::walk(
 			$elements,
 			'',
-			function ( array &$el, $path ) use ( &$checked, &$invalid, &$references ) {
+			function ( array &$el, $path ) use ( &$checked, &$ids, &$invalid, &$targets, &$references ) {
 				$widget_type = isset( $el['widgetType'] ) && is_string( $el['widgetType'] ) ? $el['widgetType'] : '';
 
 				if ( array_key_exists( 'id', $el ) ) {
 					++$checked;
+
+					if ( is_string( $el['id'] ) || is_int( $el['id'] ) ) {
+						$ids[ (string) $el['id'] ] = true;
+					}
 
 					if ( ! self::is_valid( $el['id'] ) ) {
 						$invalid[] = array(
@@ -166,15 +177,21 @@ class Mcpwp_Elementor_Element_Ids {
 				}
 
 				foreach ( self::REFERENCE_KEYS as $key => $unused ) {
-					if ( isset( $el['settings'][ $key ] ) && is_string( $el['settings'][ $key ] )
-						&& '' !== $el['settings'][ $key ] && ! self::is_valid( $el['settings'][ $key ] )
-					) {
-						$references[] = array(
-							'path'        => $path,
-							'key'         => $key,
-							'target'      => $el['settings'][ $key ],
-							'widget_type' => $widget_type,
-						);
+					if ( ! isset( $el['settings'][ $key ] ) || ! is_string( $el['settings'][ $key ] ) || '' === $el['settings'][ $key ] ) {
+						continue;
+					}
+
+					$referrer = array(
+						'path'        => $path,
+						'key'         => $key,
+						'target'      => $el['settings'][ $key ],
+						'widget_type' => $widget_type,
+					);
+
+					$targets[ $el['settings'][ $key ] ][] = $referrer;
+
+					if ( ! self::is_valid( $el['settings'][ $key ] ) ) {
+						$references[] = $referrer;
 					}
 				}
 			}
@@ -182,7 +199,9 @@ class Mcpwp_Elementor_Element_Ids {
 
 		return array(
 			'checked'    => $checked,
+			'ids'        => $ids,
 			'invalid'    => $invalid,
+			'targets'    => $targets,
 			'references' => $references,
 		);
 	}
@@ -190,21 +209,26 @@ class Mcpwp_Elementor_Element_Ids {
 	/**
 	 * Turn an audit into validation warnings.
 	 *
-	 * One line per non-conforming id (path + id), one per reference that
-	 * points at one, and — when there are any — one closing line that says
-	 * why and what to do, so the explanation is not repeated on every line.
+	 * Its own line only where the id feeds a live AJAX feature: a Search
+	 * widget, an element a Taxonomy Filter targets, and a filter whose target
+	 * is a bad id not present in the data. Every other non-conforming id —
+	 * which renders fine and breaks nothing today — is folded into ONE
+	 * summary line with a count and a sample. A page built by an earlier
+	 * version carries a bad id on every element; one line each would bury
+	 * the warnings that matter and teach callers to ignore the array.
 	 *
 	 * @param array $audit Result of audit().
 	 * @return string[]
 	 */
 	public static function warnings( array $audit ) {
 		$warnings = array();
+		$folded   = array();
 
 		foreach ( $audit['invalid'] as $finding ) {
 			$type = $finding['widget_type'];
 
-			if ( isset( self::REST_BACKED_WIDGETS[ $type ] ) ) {
-				$rest       = self::REST_BACKED_WIDGETS[ $type ];
+			if ( isset( self::OWN_ID_WIDGETS[ $type ] ) ) {
+				$rest       = self::OWN_ID_WIDGETS[ $type ];
 				$warnings[] = sprintf(
 					"%s: element id '%s' on this %s widget is not %d alphanumeric characters — Elementor Pro's %s endpoint rejects it (400 rest_invalid_param: widget_id), so %s will fail silently on the front end. Rewrite it with repair_ids=true on wp_patch_elementor or wp_set_elementor.",
 					$finding['path'],
@@ -217,34 +241,63 @@ class Mcpwp_Elementor_Element_Ids {
 				continue;
 			}
 
-			$warnings[] = sprintf(
-				"%s: element id '%s' is not %d alphanumeric characters",
-				$finding['path'],
-				$finding['id'],
-				self::LENGTH
-			);
+			if ( isset( $audit['targets'][ $finding['id'] ] ) ) {
+				$referrer   = $audit['targets'][ $finding['id'] ][0];
+				$rest       = self::REFERENCE_KEYS[ $referrer['key'] ];
+				$warnings[] = sprintf(
+					"%s: element id '%s' on this %s is not %d alphanumeric characters, and the %s at %s points at it through %s — Elementor Pro's %s endpoint rejects it (400 rest_invalid_param: widget_id), so %s of this element will fail silently on the front end. repair_ids=true on wp_patch_elementor or wp_set_elementor rewrites it and repoints %s.",
+					$finding['path'],
+					$finding['id'],
+					'' !== $type ? $type . ' widget' : 'element',
+					self::LENGTH,
+					'' !== $referrer['widget_type'] ? $referrer['widget_type'] : 'element',
+					$referrer['path'],
+					$referrer['key'],
+					$rest['endpoint'],
+					$rest['feature'],
+					$referrer['key']
+				);
+				continue;
+			}
+
+			$folded[] = $finding;
 		}
 
+		// A bad reference whose target IS in the data is already reported on
+		// the target above. One that points nowhere still breaks the filter.
 		foreach ( $audit['references'] as $reference ) {
+			if ( isset( $audit['ids'][ $reference['target'] ] ) ) {
+				continue;
+			}
+
 			$rest       = self::REFERENCE_KEYS[ $reference['key'] ];
 			$warnings[] = sprintf(
-				"%s: %s %s points at '%s', which is not a %d-character alphanumeric id — Elementor Pro's %s endpoint rejects it, so %s will fail silently on the front end. repair_ids=true rewrites the target id and repoints this setting.",
+				"%s: %s %s points at '%s', which is not a %d-character alphanumeric id and was not found in this data — Elementor Pro's %s endpoint rejects it, so %s will fail silently on the front end. Point it at an element whose id is %d alphanumeric characters.",
 				$reference['path'],
 				'' !== $reference['widget_type'] ? $reference['widget_type'] : 'element',
 				$reference['key'],
 				$reference['target'],
 				self::LENGTH,
 				$rest['endpoint'],
-				$rest['feature']
+				$rest['feature'],
+				self::LENGTH
 			);
 		}
 
-		$count = count( $audit['invalid'] );
+		$count = count( $folded );
 		if ( $count > 0 ) {
+			$sample = array();
+			foreach ( array_slice( $folded, 0, self::SUMMARY_SAMPLE ) as $finding ) {
+				$sample[] = "{$finding['path']} '{$finding['id']}'";
+			}
+			$more = $count > self::SUMMARY_SAMPLE ? sprintf( '; and %d more', $count - self::SUMMARY_SAMPLE ) : '';
+
 			$warnings[] = sprintf(
-				'%1$d element id(s) are not exactly %2$d alphanumeric characters. They render and were left unchanged, but Elementor Pro\'s AJAX endpoints (Search live results; Taxonomy Filter refreshing a Loop Grid) accept only %2$d-character ids. repair_ids=true on wp_patch_elementor (no operations needed) or wp_set_elementor rewrites them and repoints selected_element; custom CSS that names an old id must then be updated by hand.',
+				'%1$d element id(s) are not exactly %2$d alphanumeric characters (sample: %3$s%4$s). No AJAX feature in this data uses them and they render fine, but Elementor Pro\'s AJAX widgets (Search live results; a Loop Grid refreshed by a Taxonomy Filter) reject them if one is ever used there. repair_ids=true on wp_patch_elementor (no operations needed) or wp_set_elementor rewrites them; custom CSS that names an old id must then be updated by hand.',
 				$count,
-				self::LENGTH
+				self::LENGTH,
+				implode( ', ', $sample ),
+				$more
 			);
 		}
 

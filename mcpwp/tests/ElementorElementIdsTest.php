@@ -239,9 +239,53 @@ final class ElementorElementIdsTest extends TestCase {
 
 	// ---------------------------------------------------------------------
 	// Warning without rewriting.
+	//
+	// Per-element lines only where the id feeds a live AJAX feature; every
+	// other non-conforming id is folded into one summary line per write, so
+	// a legacy page does not bury its real warnings under one line per
+	// element.
 	// ---------------------------------------------------------------------
 
-	public function test_a_non_conforming_id_warns_with_its_path_and_is_left_unchanged(): void {
+	/** Id-related warnings only (the other validation passes also warn). */
+	private function id_warnings( array $result ): array {
+		return array_values(
+			array_filter(
+				$result['warnings'],
+				function ( $warning ) {
+					return false !== strpos( $warning, 'alphanumeric' );
+				}
+			)
+		);
+	}
+
+	/** The summary line, or '' when there is none. */
+	private function summary( array $id_warnings ): string {
+		foreach ( $id_warnings as $warning ) {
+			if ( preg_match( '/^\d+ element id/', $warning ) ) {
+				return $warning;
+			}
+		}
+		return '';
+	}
+
+	/**
+	 * A page built by an earlier MCPWP: 150 elements, all 8-character ids.
+	 * Two depend on their id — a Search widget and the Loop Grid a Taxonomy
+	 * Filter targets. The filter's own id does not reach any endpoint.
+	 */
+	private function legacy_page(): array {
+		$widgets = array();
+		for ( $i = 0; $i < 145; $i++ ) {
+			$widgets[] = $this->widget( sprintf( 'h%07d', $i ), 'heading', array( 'title' => 'Row ' . $i ) );
+		}
+		$widgets[] = $this->widget( 'srch0001', 'search', array( 'live_results' => 'yes' ) );
+		$widgets[] = $this->widget( 'loop0001', 'loop-grid' );
+		$widgets[] = $this->widget( 'filt0001', 'taxonomy-filter', array( 'selected_element' => 'loop0001' ) );
+
+		return array( $this->section( 'legacy01', $widgets, 'legacyc1' ) );
+	}
+
+	public function test_ids_no_ajax_feature_depends_on_fold_into_one_summary_and_are_left_unchanged(): void {
 		$tree = array(
 			$this->section(
 				'sec00001',
@@ -251,58 +295,107 @@ final class ElementorElementIdsTest extends TestCase {
 		);
 
 		$out  = $this->validate( $tree );
-		$text = $this->warnings_text( $out['result'] );
+		$ids  = $this->id_warnings( $out['result'] );
 
-		$this->assertStringContainsString( "section[0]: element id 'sec00001'", $text );
-		$this->assertStringContainsString( "section[0].column[0].widget[0]: element id 'hd1'", $text );
-		$this->assertStringNotContainsString( "'col0001'", $text, 'A conforming id must not warn.' );
+		$this->assertCount( 1, $ids, 'No AJAX feature depends on these ids, so they get one summary line, not one line each.' );
+		$this->assertStringStartsWith( '2 element id', $ids[0] );
+		$this->assertStringContainsString( "section[0] 'sec00001'", $ids[0] );
+		$this->assertStringContainsString( "section[0].column[0].widget[0] 'hd1'", $ids[0] );
+		$this->assertStringNotContainsString( "'col0001'", $ids[0], 'A conforming id is not part of the sample.' );
+		$this->assertStringContainsString( 'render fine', $ids[0] );
+		$this->assertStringContainsString( 'repair_ids', $ids[0] );
+		$this->assertStringContainsString( 'CSS', $ids[0] );
 
 		$this->assertSame( array( 'sec00001', 'col0001', 'hd1' ), $this->ids( $out['tree'] ), 'Ids are referenced from CSS and other widgets; the default path must never rewrite them.' );
 		$this->assertStringNotContainsString( 'sec00001', implode( "\n", $out['result']['fixes'] ) );
 		$this->assertArrayNotHasKey( 'id_repair', $out['result'], 'No repair was asked for, so none is reported.' );
 	}
 
-	public function test_seven_characters_that_are_not_alphanumeric_also_warn(): void {
+	public function test_seven_characters_that_are_not_alphanumeric_also_count(): void {
 		$tree = array( $this->section( 'sec0001', array( $this->widget( 'ab-cd_e', 'heading', array( 'title' => 'x' ) ) ) ) );
 
-		$text = $this->warnings_text( $this->validate( $tree )['result'] );
+		$ids = $this->id_warnings( $this->validate( $tree )['result'] );
 
-		$this->assertStringContainsString( "element id 'ab-cd_e'", $text );
+		$this->assertCount( 1, $ids );
+		$this->assertStringStartsWith( '1 element id', $ids[0] );
+		$this->assertStringContainsString( "'ab-cd_e'", $ids[0] );
 	}
 
-	/**
-	 * @dataProvider rest_backed_widgets
-	 */
-	public function test_a_rest_backed_widget_warning_says_its_ajax_features_will_fail( string $widget_type, string $endpoint ): void {
-		$tree = array( $this->section( 'sec0001', array( $this->widget( 'wid00001', $widget_type ) ) ) );
+	public function test_a_search_widget_gets_its_own_line_saying_live_results_will_fail(): void {
+		$tree = array( $this->section( 'sec0001', array( $this->widget( 'wid00001', 'search' ) ) ) );
 
-		$warnings = $this->validate( $tree )['result']['warnings'];
-		$line     = '';
-		foreach ( $warnings as $warning ) {
-			if ( 0 === strpos( $warning, "section[0].column[0].widget[0]: element id 'wid00001'" ) ) {
+		$ids = $this->id_warnings( $this->validate( $tree )['result'] );
+
+		$this->assertCount( 1, $ids, 'The only bad id is the search widget\'s; there is nothing left to summarise.' );
+		$this->assertStringStartsWith( "section[0].column[0].widget[0]: element id 'wid00001'", $ids[0] );
+		$this->assertStringContainsString( 'search', $ids[0] );
+		$this->assertStringContainsString( 'refresh-search', $ids[0] );
+		$this->assertStringContainsString( 'will fail', $ids[0] );
+		$this->assertStringContainsString( 'repair_ids', $ids[0], 'The warning must name the way out.' );
+	}
+
+	public function test_a_loop_grid_a_taxonomy_filter_targets_gets_its_own_line_naming_the_filter(): void {
+		$ids  = $this->id_warnings( $this->validate( $this->staging_tree() )['result'] );
+		$line = '';
+		foreach ( $ids as $warning ) {
+			if ( 0 === strpos( $warning, "section[0].column[0].widget[0]: element id 'indstreams'" ) ) {
 				$line = $warning;
 			}
 		}
 
-		$this->assertNotSame( '', $line, 'The widget must get its own warning line.' );
-		$this->assertStringContainsString( $widget_type, $line );
-		$this->assertStringContainsString( $endpoint, $line );
+		$this->assertNotSame( '', $line, 'The loop grid behind a filter must get its own line.' );
+		$this->assertStringContainsString( 'loop-grid', $line );
+		$this->assertStringContainsString( 'selected_element', $line );
+		$this->assertStringContainsString( 'section[0].column[0].widget[1]', $line, 'Name the filter that will stop working.' );
+		$this->assertStringContainsString( 'refresh-loop', $line );
 		$this->assertStringContainsString( 'will fail', $line );
-		$this->assertStringContainsString( 'repair_ids', $line, 'The warning must name the way out.' );
 	}
 
-	public static function rest_backed_widgets(): array {
-		return array(
-			'search live results'      => array( 'search', 'refresh-search' ),
-			'loop grid behind filters' => array( 'loop-grid', 'refresh-loop' ),
+	public function test_a_loop_grid_no_filter_targets_is_folded_into_the_summary(): void {
+		$tree = array( $this->section( 'sec0001', array( $this->widget( 'lg000001', 'loop-grid' ) ) ) );
+
+		$ids = $this->id_warnings( $this->validate( $tree )['result'] );
+
+		$this->assertCount( 1, $ids );
+		$this->assertStringStartsWith( '1 element id', $ids[0] );
+		$this->assertStringContainsString( "'lg000001'", $ids[0] );
+	}
+
+	public function test_a_taxonomy_filter_pointing_at_a_bad_id_that_is_not_on_the_page_is_flagged_on_the_filter(): void {
+		$tree = array(
+			$this->section(
+				'sec0001',
+				array( $this->widget( 'tf00001', 'taxonomy-filter', array( 'selected_element' => 'gone0001' ) ) )
+			),
 		);
+
+		$ids = $this->id_warnings( $this->validate( $tree )['result'] );
+
+		$this->assertCount( 1, $ids );
+		$this->assertStringStartsWith( 'section[0].column[0].widget[0]:', $ids[0] );
+		$this->assertStringContainsString( "'gone0001'", $ids[0] );
+		$this->assertStringContainsString( 'not found in this data', $ids[0] );
+		$this->assertStringContainsString( 'will fail', $ids[0] );
 	}
 
-	public function test_a_taxonomy_filter_pointing_at_a_non_conforming_loop_grid_is_flagged(): void {
-		$text = $this->warnings_text( $this->validate( $this->staging_tree() )['result'] );
+	public function test_a_150_element_legacy_page_yields_one_summary_plus_lines_only_for_ajax_dependent_ids(): void {
+		$ids = $this->id_warnings( $this->validate( $this->legacy_page() )['result'] );
 
-		$this->assertStringContainsString( 'section[0].column[0].widget[1]', $text );
-		$this->assertMatchesRegularExpression( "/widget\\[1\\][^\n]*selected_element[^\n]*'indstreams'[^\n]*will fail/", $text );
+		$this->assertCount( 3, $ids, 'One summary for the 148 ids nothing depends on, one line each for the search widget and the filtered loop grid.' );
+
+		$summary = $this->summary( $ids );
+		$this->assertStringStartsWith( '148 element id', $summary );
+		foreach ( array( "section[0] 'legacy01'", "section[0].column[0] 'legacyc1'", "section[0].column[0].widget[0] 'h0000000'", "section[0].column[0].widget[1] 'h0000001'", "section[0].column[0].widget[2] 'h0000002'" ) as $sample ) {
+			$this->assertStringContainsString( $sample, $summary );
+		}
+		$this->assertStringNotContainsString( "'h0000003'", $summary, 'The sample is the first five, not the whole list.' );
+		$this->assertStringContainsString( '143 more', $summary );
+		$this->assertStringNotContainsString( "'srch0001'", $summary, 'AJAX-dependent ids have their own lines and are not double-counted.' );
+		$this->assertStringNotContainsString( "'loop0001'", $summary );
+
+		$text = implode( "\n", $ids );
+		$this->assertStringContainsString( "section[0].column[0].widget[145]: element id 'srch0001'", $text );
+		$this->assertStringContainsString( "section[0].column[0].widget[146]: element id 'loop0001'", $text );
 	}
 
 	// ---------------------------------------------------------------------
@@ -418,6 +511,27 @@ final class ElementorElementIdsTest extends TestCase {
 		$this->assertArrayHasKey( 'id_repair', $result );
 		$this->assertCount( 3, $result['id_repair']['mapping'] );
 		$this->assertArrayNotHasKey( '_elementor_data', $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ] ?? array() );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_set_elementor_dry_run_folds_the_same_way(): void {
+		if ( ! defined( 'ELEMENTOR_VERSION' ) ) {
+			define( 'ELEMENTOR_VERSION', '4.2.4' );
+		}
+
+		$result = $this->writer()->set_elementor_data(
+			self::PAGE_ID,
+			array( 'elementor_data' => wp_json_encode( $this->legacy_page() ) ),
+			true
+		);
+
+		$this->assertNotInstanceOf( WP_Error::class, $result );
+		$ids = $this->id_warnings( $result );
+		$this->assertCount( 3, $ids );
+		$this->assertStringStartsWith( '148 element id', $this->summary( $ids ) );
 	}
 
 	// ---------------------------------------------------------------------
