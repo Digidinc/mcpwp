@@ -130,7 +130,7 @@ run_case() {
 
 	local output code
 	output="$(env PATH="$WORK/bin:$PATH" SHIM_DIR="$WORK" TMPDIR="$tmp" SHIM_ZIP=3.11.0.zip \
-		FREEMIUS_BEARER_TOKEN=tok-SECRET-value "${envs[@]}" bash "$SCRIPT" "$@" 2>&1)"
+		FREEMIUS_BEARER_TOKEN=tok-SECRET-value "${envs[@]}" bash "$SCRIPT" "$@" 2>&1)"  # secret-scan: allow fake fixture token for the contract test, never a real credential
 	code=$?
 
 	local problems=""
