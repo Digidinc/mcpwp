@@ -1931,6 +1931,8 @@ require_once dirname(__DIR__) . '/includes/mcp/class-mcpwp-integration.php';
 require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-mcp.php';
 require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-pages.php';
 require_once dirname(__DIR__) . '/includes/class-mcpwp-duplicate-copy.php';
+require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-site-updates.php';
+require_once dirname(__DIR__) . '/includes/class-mcpwp-loader.php';
 require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-menus.php';
 // The single definition of which Elementor settings keys are wrong. Loaded
 // before the validator and before every _elementor_data write path (#737).

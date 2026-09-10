@@ -35,7 +35,7 @@ Uses the same `X-API-Key` header as other endpoints. The API key is forwarded to
 
 ### Limits
 
-- Maximum **25 operations** per batch
+- Maximum **100 operations** per batch; each operation costs one rate-limit slot, and a batch that does not fit the remaining budget is refused whole (429) before anything runs
 - Operations execute sequentially (not in parallel)
 - Each operation inherits authentication from the batch request
 - If one operation fails, remaining operations still execute

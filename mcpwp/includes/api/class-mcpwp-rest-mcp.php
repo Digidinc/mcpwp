@@ -504,7 +504,9 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 */
 	public function handle_options( $request ) {
 		$response = new WP_REST_Response( null, 200 );
-		return $this->prepare_mcp_response( $response );
+		// No version on the pre-auth path: OPTIONS is open, and an exact
+		// version on an open route is a scanner's oracle.
+		return $this->prepare_mcp_response( $response, false );
 	}
 
 	/**
@@ -528,7 +530,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 
 		// Handle batch requests (array of requests) — limit batch size to prevent abuse.
 		if ( isset( $body[0] ) ) {
-			$max_batch = 10;
+			$max_batch = self::MAX_BATCH_REQUESTS;
 			if ( count( $body ) > $max_batch ) {
 				return $this->jsonrpc_error_response(
 					null,
@@ -542,8 +544,16 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				$response = $this->process_single_request( $single_request, $request );
 				// Notifications return null, don't include in response
 				if ( $response !== null ) {
-					$responses[] = $response;
+					$responses[] = $this->attach_rate_limit_meta( $response );
 				}
+			}
+
+			// A batch of nothing but notifications has no response body. An
+			// empty 200 is the shape a client cannot tell from a server that
+			// returned nothing (#802), so say 204 like the single-notification
+			// path does.
+			if ( empty( $responses ) ) {
+				return $this->prepare_mcp_response( new WP_REST_Response( null, 204 ) );
 			}
 
 			$rest_response = new WP_REST_Response( array_values( $responses ), 200 );
@@ -559,8 +569,152 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			return $this->prepare_mcp_response( $rest_response );
 		}
 
-		$rest_response = new WP_REST_Response( $response, 200 );
+		$rest_response = new WP_REST_Response( $this->attach_rate_limit_meta( $response ), 200 );
 		return $this->prepare_mcp_response( $rest_response );
+	}
+
+	/**
+	 * JSON-RPC batch cap. A bulk job needs one round trip per hundred
+	 * operations (#802); each operation is charged one rate-limit slot.
+	 */
+	const MAX_BATCH_REQUESTS = 100;
+
+	/**
+	 * A JSON-RPC batch costs one slot per request in it (#802).
+	 *
+	 * @param WP_REST_Request $request Request.
+	 * @return int
+	 */
+	protected function request_rate_weight( $request ) {
+		$body = method_exists( $request, 'get_json_params' ) ? $request->get_json_params() : null;
+
+		if ( is_array( $body ) && isset( $body[0] ) ) {
+			return max( 1, count( $body ) );
+		}
+
+		return 1;
+	}
+
+	/**
+	 * JSON-RPC methods that only ask about the session, never change the site.
+	 *
+	 * @var array
+	 */
+	private static $diagnostic_methods = array( 'initialize', 'ping' );
+
+	/**
+	 * Tools that only answer "may I continue, and when" (#802).
+	 *
+	 * @var array
+	 */
+	private static $diagnostic_tools = array( 'wp_rate_limit_status', 'wp_site_info' );
+
+	/**
+	 * @return array Tool names metered as diagnostics.
+	 */
+	public static function diagnostic_tools() {
+		return self::$diagnostic_tools;
+	}
+
+	/**
+	 * @return array JSON-RPC methods metered as diagnostics.
+	 */
+	public static function diagnostic_methods() {
+		return self::$diagnostic_methods;
+	}
+
+	/**
+	 * Whether every operation in this request is diagnostic (#802).
+	 *
+	 * The body is inspected, not trusted: a parse failure or an unknown method
+	 * is not diagnostic, and one write anywhere in a batch makes the whole
+	 * request a write. The decision only picks a rate-limit bucket — auth
+	 * has already been checked by the time this runs.
+	 *
+	 * @param WP_REST_Request $request Request.
+	 * @return bool
+	 */
+	protected function is_diagnostic_request( $request ) {
+		$body = method_exists( $request, 'get_json_params' ) ? $request->get_json_params() : null;
+
+		if ( ! is_array( $body ) || empty( $body ) ) {
+			return false;
+		}
+
+		$operations = isset( $body[0] ) ? $body : array( $body );
+
+		foreach ( $operations as $operation ) {
+			if ( ! is_array( $operation ) || ! $this->is_diagnostic_operation( $operation ) ) {
+				return false;
+			}
+		}
+
+		return true;
+	}
+
+	/**
+	 * @param array $operation One JSON-RPC request.
+	 * @return bool
+	 */
+	private function is_diagnostic_operation( array $operation ) {
+		$method = isset( $operation['method'] ) && is_string( $operation['method'] ) ? $operation['method'] : '';
+
+		if ( '' === $method ) {
+			return false;
+		}
+
+		if ( in_array( $method, self::$diagnostic_methods, true ) || 0 === strpos( $method, 'notifications/' ) ) {
+			return true;
+		}
+
+		if ( 'tools/call' !== $method ) {
+			return false;
+		}
+
+		$name = isset( $operation['params']['name'] ) ? $operation['params']['name'] : '';
+
+		return is_string( $name ) && in_array( $name, self::$diagnostic_tools, true );
+	}
+
+	/**
+	 * Put the caller's remaining budget on a result so a client can pace
+	 * itself before the wall instead of learning about it from a 429 (#802).
+	 *
+	 * Errors are left alone: JSON-RPC error objects have no _meta, and a 429
+	 * already carries its budget in its data.
+	 *
+	 * @param array $response JSON-RPC response.
+	 * @return array
+	 */
+	private function attach_rate_limit_meta( $response ) {
+		if ( ! is_array( $response ) || ! isset( $response['result'] ) || ! is_array( $response['result'] ) ) {
+			return $response;
+		}
+
+		$budget = $this->current_rate_limit_budget();
+
+		if ( null === $budget ) {
+			return $response;
+		}
+
+		if ( ! isset( $response['result']['_meta'] ) || ! is_array( $response['result']['_meta'] ) ) {
+			$response['result']['_meta'] = array();
+		}
+
+		$response['result']['_meta']['rate_limit'] = $budget;
+
+		return $response;
+	}
+
+	/**
+	 * @return array|null
+	 */
+	private function current_rate_limit_budget() {
+		if ( ! class_exists( 'Mcpwp_Rate_Limiter' ) ) {
+			return null;
+		}
+
+		return Mcpwp_Rate_Limiter::get_instance()->get_budget();
 	}
 
 	/**
@@ -571,7 +725,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 * @return array|null Response array or null for notifications.
 	 */
 	private function process_single_request( $body, $request ) {
-		$method = isset( $body['method'] ) ? $body['method'] : '';
+		$method = isset( $body['method'] ) && is_string( $body['method'] ) ? $body['method'] : '';
 		$id     = isset( $body['id'] ) ? $body['id'] : null;
 		$params = isset( $body['params'] ) ? $body['params'] : array();
 
@@ -650,6 +804,21 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		if ( 'admin' !== $role ) {
 			$server_info['role']            = $role;
 			$server_info['tool_categories'] = $allowed_categories;
+		}
+
+		// What a bulk client needs before it starts (#802): the plugin version
+		// so a swap under a running job is detectable, the budget so it can
+		// pace itself, and how many lanes the host can be expected to carry.
+		$server_info['plugin_version']   = $this->server_version;
+		$server_info['concurrency_hint'] = max( 1, (int) apply_filters( 'mcpwp_concurrency_hint', 2 ) );
+		$server_info['rate_limit']       = $this->describe_rate_limit( 'admin' === $role );
+
+		// Site posture is for admin keys only, like role/tool_categories
+		// above: a read-only key does not need the core version or the
+		// origin hostname to pace itself.
+		if ( 'admin' === $role ) {
+			$server_info['wp_version'] = function_exists( 'get_bloginfo' ) ? (string) get_bloginfo( 'version' ) : '';
+			$server_info['site_url']   = function_exists( 'home_url' ) ? (string) home_url( '/' ) : '';
 		}
 
 		$result = array(
@@ -1939,6 +2108,57 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 * @param WP_REST_Response $response Response object.
 	 */
 	/**
+	 * The configured limits plus what is left for this caller, for initialize.
+	 *
+	 * @return array
+	 */
+	private function describe_rate_limit( $include_config = true ) {
+		if ( ! class_exists( 'Mcpwp_Rate_Limiter' ) ) {
+			return array( 'enabled' => false );
+		}
+
+		$limiter  = Mcpwp_Rate_Limiter::get_instance();
+		$settings = $limiter->get_settings();
+		$key      = $this->get_current_api_key_record();
+		$limits   = array(
+			'requests_per_minute' => (int) $settings['requests_per_minute'],
+			'requests_per_hour'   => (int) $settings['requests_per_hour'],
+			'burst_limit'         => (int) $settings['burst_limit'],
+		);
+
+		// A key with its own ceilings reports its own ceilings.
+		if ( is_array( $key ) && ! empty( $key['rate_limits'] ) && is_array( $key['rate_limits'] ) ) {
+			$map = array(
+				'per_minute' => 'requests_per_minute',
+				'per_hour'   => 'requests_per_hour',
+				'burst'      => 'burst_limit',
+			);
+			foreach ( $map as $from => $to ) {
+				if ( isset( $key['rate_limits'][ $from ] ) && (int) $key['rate_limits'][ $from ] > 0 ) {
+					$limits[ $to ] = (int) $key['rate_limits'][ $from ];
+				}
+			}
+		}
+
+		// Whether the throttle is on, and its tuning, is site posture: admin
+		// keys only. Every caller gets its own remaining budget.
+		$described = $include_config ? array_merge( array( 'enabled' => (bool) $limiter->is_enabled() ), $limits ) : array();
+		$budget    = $limiter->get_budget();
+
+		if ( null !== $budget ) {
+			$described['limit']     = $budget['limit'];
+			$described['remaining'] = $budget['remaining'];
+			$described['reset_in']  = $budget['reset_in'];
+			$described['window']    = $budget['window'];
+			$described['bucket']    = $budget['bucket'];
+		}
+
+		$described['diagnostics'] = 'initialize, wp_rate_limit_status and wp_site_info are metered separately and stay reachable while the limit is exhausted. Honour Retry-After on 429; treat 502/503/504 like 429 with backoff; keep in-flight calls at or below concurrency_hint.';
+
+		return $described;
+	}
+
+	/**
 	 * Prepare MCP response with proper headers.
 	 *
 	 * Ensures correct Content-Type, no-cache headers, rate limit headers,
@@ -1947,11 +2167,18 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 * @param WP_REST_Response $response Response object.
 	 * @return WP_REST_Response Prepared response.
 	 */
-	private function prepare_mcp_response( $response ) {
+	private function prepare_mcp_response( $response, $with_version = true ) {
 		$this->clean_mcp_output_buffers();
 
 		// Force correct content type for JSON-RPC responses.
 		$response->header( 'Content-Type', 'application/json; charset=UTF-8' );
+
+		// Every authenticated response names the plugin that produced it, so
+		// a client can notice the plugin being replaced under a running job
+		// (#802). Never on the open OPTIONS path.
+		if ( $with_version ) {
+			$response->header( 'X-MCPWP-Version', $this->server_version );
+		}
 
 		// Prevent caching of API responses.
 		$response->header( 'Cache-Control', 'no-cache, no-store, must-revalidate' );

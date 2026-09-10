@@ -28,7 +28,7 @@ class Mcpwp_REST_Batch extends Mcpwp_REST_API {
 	 *
 	 * @var int
 	 */
-	const MAX_OPERATIONS = 25;
+	const MAX_OPERATIONS = 100;
 
 	/**
 	 * Routes a batch operation may never target.
@@ -139,6 +139,19 @@ class Mcpwp_REST_Batch extends Mcpwp_REST_API {
 	 * @param WP_REST_Request $request Request object.
 	 * @return WP_REST_Response|WP_Error Response.
 	 */
+	/**
+	 * A batch costs one rate-limit slot per operation (#802); the sub-requests
+	 * themselves are exempt, so nothing is charged twice.
+	 *
+	 * @param WP_REST_Request $request Request.
+	 * @return int
+	 */
+	protected function request_rate_weight( $request ) {
+		$operations = method_exists( $request, 'get_param' ) ? $request->get_param( 'operations' ) : null;
+
+		return is_array( $operations ) ? max( 1, count( $operations ) ) : 1;
+	}
+
 	public function handle_batch( $request ) {
 		$this->log_activity( 'batch_request', $request );
 
@@ -177,10 +190,19 @@ class Mcpwp_REST_Batch extends Mcpwp_REST_API {
 			$results[] = $result;
 		}
 
+		$failed = 0;
+		foreach ( $results as $result ) {
+			if ( ! isset( $result['status'] ) || (int) $result['status'] >= 400 ) {
+				$failed++;
+			}
+		}
+
 		return $this->success_response(
 			array(
-				'results' => $results,
-				'total'   => count( $results ),
+				'results'   => $results,
+				'total'     => count( $results ),
+				'succeeded' => count( $results ) - $failed,
+				'failed'    => $failed,
 			)
 		);
 	}

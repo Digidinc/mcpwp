@@ -464,7 +464,10 @@ class Mcpwp_Loader {
 			}
 
 			if ( isset( $data['data']['reset'] ) ) {
-				$response->header( 'X-RateLimit-Reset', (int) $data['data']['reset'] );
+				// data.reset is an epoch; the header is seconds-until-reset on
+				// every 200 (Mcpwp_Rate_Limiter::get_headers), so a 429 must
+				// not switch units on the client (#802).
+				$response->header( 'X-RateLimit-Reset', max( 0, (int) $data['data']['reset'] - time() ) );
 			}
 		}
 
