@@ -60,7 +60,7 @@ human verdict → MCPWP fires.** No exceptions on customer sites.
 | KPI | Event source | Target |
 |-----|-------------|--------|
 | Download → first successful tool call | `mcp_tool_called` first-per-site + site UUID | < 10 min median (post 720's conversion event) |
-| Tool error rate | `mcp_tool_called.error_code` | < 2% weekly |
+| Tool error rate | `mcp_tool_called.success = false` (error_code non-empty, excluding `replayed` — a safe idempotent re-send is the feature working) | < 2% weekly |
 | Customer fleet version lag | manifest checks | 100% on supported version within 2 releases |
 | Paying sites | Freemius | first stranger-payment, then 10% of installs |
 | Coherence incidents (broken customer site) | alerts + audit log | 0 |

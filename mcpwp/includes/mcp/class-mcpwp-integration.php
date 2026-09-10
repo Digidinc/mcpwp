@@ -118,6 +118,14 @@ abstract class Mcpwp_Integration extends Mcpwp_MCP_Tool_Registry {
 	 *
 	 * @return Mcpwp_Integration[] Available integrations.
 	 */
+	/**
+	 * Forget the resolved integrations so the filter runs again. A test
+	 * seam; production resolves once per request.
+	 */
+	public static function reset_resolved() {
+		self::$resolved = null;
+	}
+
 	public static function resolve_all() {
 		if ( null !== self::$resolved ) {
 			return self::$resolved;

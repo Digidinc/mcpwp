@@ -728,7 +728,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 */
 	public static function lease_seconds() {
 		$seconds = apply_filters( 'mcpwp_idempotency_lease_seconds', self::IDEMPOTENCY_LEASE_SECONDS );
-		return max( 1, (int) $seconds );
+		return (int) min( self::IDEMPOTENCY_TTL, max( 1, (int) $seconds ) );
 	}
 
 	/**
@@ -1018,7 +1018,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			-32009,
 			sprintf( 'A call with request_id "%s" is still in progress.', $request_id ),
 			array(
-				'hint'        => sprintf( 'The first attempt has not finished. Wait and re-send with the same request_id; if it completes you get its result, not a second write. A claim older than %d seconds is treated as abandoned and the retry runs.', self::IDEMPOTENCY_LEASE_SECONDS ),
+				'hint'        => sprintf( 'The first attempt has not finished. Wait and re-send with the same request_id; if it completes you get its result, not a second write. A claim older than %d seconds is treated as abandoned and the retry runs.', self::lease_seconds() ),
 				'retry_after' => (int) $retry_after,
 			)
 		);
@@ -1091,7 +1091,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 
 		if ( $key_record ) {
 			$allowed = $this->resolve_key_tool_categories( $key_record );
-			if ( ! empty( $allowed ) && ! in_array( $tool_category, $allowed, true ) ) {
+			if ( ! empty( $allowed ) && ( '' === $tool_category || ! in_array( $tool_category, $allowed, true ) ) ) {
 				return false;
 			}
 		}
@@ -1200,14 +1200,29 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			return 1;
 		}
 
-		// The LARGEST list, not the sum: urls beside items, or items beside
-		// updates, are spellings of one list and must not double-bill
-		// (#802 round 4).
+		// Aliases of one list (urls beside items, items beside updates) are
+		// charged once — the largest; genuinely different lists (pages
+		// beside posts) are charged each — the sum (#802 rounds 4–5).
+		$groups = array(
+			array( 'operations' ),
+			array( 'updates', 'items', 'urls', 'files', 'media' ),
+			array( 'pages' ),
+			array( 'posts' ),
+			array( 'page_ids', 'post_ids' ),
+			array( 'rows' ),
+			array( 'widgets' ),
+			array( 'sections' ),
+		);
+
 		$count = 0;
-		foreach ( array( 'operations', 'updates', 'pages', 'posts', 'items', 'urls', 'files', 'media', 'page_ids', 'post_ids', 'rows', 'widgets', 'sections' ) as $key ) {
-			if ( isset( $arguments[ $key ] ) && is_array( $arguments[ $key ] ) ) {
-				$count = max( $count, count( $arguments[ $key ] ) );
+		foreach ( $groups as $group ) {
+			$largest = 0;
+			foreach ( $group as $key ) {
+				if ( isset( $arguments[ $key ] ) && is_array( $arguments[ $key ] ) ) {
+					$largest = max( $largest, count( $arguments[ $key ] ) );
+				}
 			}
+			$count += $largest;
 		}
 
 		return max( 1, $count );
@@ -1857,9 +1872,12 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		if ( $key_record ) {
 			$allowed_categories = $this->resolve_key_tool_categories( $key_record );
 			if ( ! empty( $allowed_categories ) ) {
-				$all_categories = $this->get_all_tool_categories();
-				$tool_category  = isset( $all_categories[ $tool_name ] ) ? $all_categories[ $tool_name ] : 'site';
-				if ( ! in_array( $tool_category, $allowed_categories, true ) ) {
+				// The same resolver as every other gate. A tool with no
+				// category is not "site" — under a category-restricted key it
+				// is denied, fail-closed, and the replay gate says the same
+				// (#802 round 5).
+				$tool_category = $this->tool_category_for( $tool_name );
+				if ( '' === $tool_category || ! in_array( $tool_category, $allowed_categories, true ) ) {
 					$role = isset( $key_record['role'] ) ? $key_record['role'] : 'unknown';
 					$this->fire_tool_called( $tool_name, $start, 'scope_denied' );
 					return $this->jsonrpc_error(
@@ -1868,7 +1886,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 						sprintf(
 							'This API key (role: %s) does not have access to %s tools. Allowed categories: %s.',
 							$role,
-							$tool_category,
+							'' === $tool_category ? 'uncategorised' : $tool_category,
 							implode( ', ', $allowed_categories )
 						),
 						array(

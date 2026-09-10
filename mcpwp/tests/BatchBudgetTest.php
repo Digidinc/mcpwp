@@ -300,7 +300,8 @@ final class BatchBudgetTest extends TestCase {
 		$controller = new Mcpwp_REST_MCP();
 
 		$this->assertSame( 5, $count->invoke( $controller, array( 'urls' => range( 1, 5 ), 'items' => range( 1, 5 ) ) ) );
-		$this->assertSame( 7, $count->invoke( $controller, array( 'items' => range( 1, 7 ), 'updates' => range( 1, 3 ) ) ), 'The larger list is the price.' );
+		$this->assertSame( 7, $count->invoke( $controller, array( 'items' => range( 1, 7 ), 'updates' => range( 1, 3 ) ) ), 'Aliases: the larger list is the price.' );
+		$this->assertSame( 20, $count->invoke( $controller, array( 'pages' => range( 1, 10 ), 'posts' => range( 1, 10 ) ) ), 'Different lists: each is charged (round 5).' );
 		foreach ( array( 'post_ids', 'rows', 'widgets', 'sections' ) as $key ) {
 			$this->assertSame( 500, $count->invoke( $controller, array( $key => range( 1, 500 ) ) ), $key . ' fans out and is counted.' );
 		}

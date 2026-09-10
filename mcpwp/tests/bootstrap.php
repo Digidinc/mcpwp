@@ -989,10 +989,24 @@ if (! isset($GLOBALS['wpdb'])) {
             // is evaluated against the options rows so a test can assert
             // WHICH rows survive, not only what the SQL looked like.
             if (preg_match("/^DELETE FROM \\S*options WHERE option_name LIKE '([^']*)' AND option_value < '([^']*)'$/", trim((string) $query), $m)) {
-                $pattern = '/^' . str_replace(array('\\%', '\\_'), array('%', '_'), preg_quote($m[1], '/')) . '$/';
-                // Un-escaped % and _ are wildcards; escaped ones were made literal by preg_quote above.
-                $pattern = preg_replace_callback('/(?<!\\\\)%/', function () { return '.*'; }, $pattern);
-                $pattern = str_replace('\\%', '%', $pattern);
+                // LIKE → regex, as MySQL reads it with the default ESCAPE '\':
+                // an escaped \% or \_ is literal; a bare % is any run and a
+                // bare _ is any one character.
+                $like    = $m[1];
+                $pattern = '';
+                for ($i = 0, $n = strlen($like); $i < $n; $i++) {
+                    $ch = $like[ $i ];
+                    if ('\\' === $ch && $i + 1 < $n) {
+                        $pattern .= preg_quote($like[ ++$i ], '/');
+                    } elseif ('%' === $ch) {
+                        $pattern .= '.*';
+                    } elseif ('_' === $ch) {
+                        $pattern .= '.';
+                    } else {
+                        $pattern .= preg_quote($ch, '/');
+                    }
+                }
+                $pattern = '/^' . $pattern . '$/';
                 $deleted = 0;
                 foreach (array_keys($GLOBALS['mcpwp_test_wpdb_options'] ?? array()) as $name) {
                     if (preg_match($pattern, $name) && strcmp((string) $GLOBALS['mcpwp_test_wpdb_options'][ $name ], $m[2]) < 0) {

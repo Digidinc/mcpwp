@@ -727,4 +727,76 @@ final class IdempotentToolCallTest extends TestCase {
 		$this->assertStringContainsString( 'NOT protected', $data['result']['_meta']['idempotency_reason'] );
 		$this->assertStringContainsString( 'own request_id', $data['result']['_meta']['idempotency_reason'] );
 	}
+
+	// ---------------------------------------------------------------
+	// Round 5: every gate resolves a category the same way.
+	// ---------------------------------------------------------------
+
+	public function test_an_integration_tool_with_no_category_is_gated_the_same_way_on_every_path(): void {
+		// Round-5 P1: the per-key branch still defaulted to 'site', so a
+		// replay the gate refused went back into the handler and the write
+		// ran again — through a third-party integration that supplied a tool
+		// map without categories.
+		$integration = new class() extends Mcpwp_Integration {
+			public function get_info() {
+				return array( 'id' => 'zz', 'name' => 'ZZ', 'version' => '1.0' );
+			}
+			public function get_tool_map() {
+				return array( 'zz_write_thing' => array( 'route' => '/mcpwp/v1/pages', 'method' => 'POST' ) );
+			}
+			public function get_tools() {
+				return array( array( 'name' => 'zz_write_thing', 'description' => 'writes a thing', 'inputSchema' => array( 'type' => 'object', 'properties' => array( 'title' => array( 'type' => 'string' ) ) ) ) );
+			}
+		};
+		$GLOBALS['mcpwp_test_filters'] = array();
+		add_filter( 'mcpwp_integrations', function () use ( $integration ) { return array( $integration ); } );
+		if ( method_exists( 'Mcpwp_Integration', 'reset_resolved' ) ) {
+			Mcpwp_Integration::reset_resolved();
+		}
+
+		// A category-restricted key: an uncategorised tool is denied — on
+		// the first call and on the retry, and nothing dispatches.
+		$restricted = ( new Mcpwp_REST_MCP() )->create_scoped_api_key( 'restricted', array( 'admin' ), 'custom', array( 'site' ) );
+		$first  = $this->call( 'zz_write_thing', array( 'title' => 'x' ), 'r1', 7, $restricted['key'] );
+		Mcpwp_REST_MCP::reset_verdict_memo();
+		$second = $this->call( 'zz_write_thing', array( 'title' => 'x' ), 'r1', 7, $restricted['key'] );
+		$this->assertSame( -32003, $first['error']['code'] );
+		$this->assertSame( -32003, $second['error']['code'] );
+		$this->assertSame( 0, $this->dispatches(), 'Denied on every path; never re-run.' );
+
+		// An unrestricted key: pinned and replayed like any built-in tool.
+		$GLOBALS['mcpwp_test_transients'] = array();
+		Mcpwp_REST_MCP::reset_verdict_memo();
+		$one = $this->call( 'zz_write_thing', array( 'title' => 'x' ), 'r2' );
+		Mcpwp_REST_MCP::reset_verdict_memo();
+		$two = $this->call( 'zz_write_thing', array( 'title' => 'x' ), 'r2' );
+		$this->assertSame( 'stored', $one['result']['_meta']['idempotency'] );
+		$this->assertTrue( $two['result']['_meta']['replayed'] );
+		$this->assertSame( 1, $this->dispatches() );
+
+		// The registry resolves the same way: no invented category.
+		$this->assertSame( '', $integration->get_tool_category( 'zz_write_thing' ) );
+		$GLOBALS['mcpwp_test_filters'] = array();
+		if ( method_exists( 'Mcpwp_Integration', 'reset_resolved' ) ) {
+			Mcpwp_Integration::reset_resolved();
+		}
+	}
+
+	public function test_the_in_progress_hint_names_the_lease_in_force_and_the_lease_is_clamped(): void {
+		$lease = Mcpwp_REST_MCP::idempotency_lease_name( $this->store_key( 'r1' ) );
+		$hash  = hash( 'sha256', 'wp_create_page|' . wp_json_encode( array( 'title' => 'A' ) ) );
+		$GLOBALS['mcpwp_test_wpdb_options'][ $lease ] = ( time() - 2 ) . '|' . $hash;
+
+		$GLOBALS['mcpwp_test_filters'] = array();
+		add_filter( 'mcpwp_idempotency_lease_seconds', function () { return 10; } );
+		$data = $this->call( 'wp_create_page', array( 'title' => 'A' ), 'r1' );
+		$this->assertSame( -32009, $data['error']['code'] );
+		$this->assertStringContainsString( '10 seconds', $data['error']['data']['hint'] );
+		$this->assertLessThanOrEqual( 8, $data['error']['data']['retry_after'] );
+
+		$GLOBALS['mcpwp_test_filters'] = array();
+		add_filter( 'mcpwp_idempotency_lease_seconds', function () { return PHP_INT_MAX; } );
+		$this->assertSame( Mcpwp_REST_MCP::IDEMPOTENCY_TTL, Mcpwp_REST_MCP::lease_seconds(), 'Never longer than the record itself lives.' );
+		$GLOBALS['mcpwp_test_filters'] = array();
+	}
 }
