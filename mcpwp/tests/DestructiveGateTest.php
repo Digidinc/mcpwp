@@ -558,10 +558,15 @@ final class DestructiveGateTest extends TestCase {
 		$this->assertSame( 0, $never->calls, 'The product was not touched.' );
 
 		$widgets  = new Mcpwp_REST_Widgets( $never );
+		update_option( 'widget_text', array( 3 => array( 'text' => 'x' ), '_multiwidget' => 1 ) );
 		$request  = new WP_REST_Request( 'DELETE', '/mcpwp/v1/widgets/text-3', array( 'id' => 'text-3' ) );
 		$response = $this->authed( $widgets, $request )->delete_widget( $request );
 		$this->assertSame( 202, $response->get_status() );
 		$this->assertSame( 0, $never->calls );
+
+		// A widget that does not exist is a 404, never a no-op to approve (round 8).
+		$request = new WP_REST_Request( 'DELETE', '/mcpwp/v1/widgets/text-9999', array( 'id' => 'text-9999' ) );
+		$this->assertSame( 'not_found', $this->authed( $widgets, $request )->delete_widget( $request )->get_error_code() );
 
 		// Trashing a product is still one call.
 		$request = new WP_REST_Request( 'DELETE', '/mcpwp/v1/woocommerce/products/50', array( 'id' => 50, 'force' => false ) );
@@ -1018,12 +1023,22 @@ final class DestructiveGateTest extends TestCase {
 		// Round-6 P0-2: the name-shaped oracle could not see a REST-only
 		// delete (users). This one walks the controllers themselves.
 		$root  = dirname( __DIR__ ) . '/includes';
-		$files = array_merge( glob( $root . '/api/*.php' ), glob( $root . '/pro/api/*.php' ) );
+		$files = array();
+		foreach ( new RecursiveIteratorIterator( new RecursiveDirectoryIterator( $root ) ) as $file ) {
+			if ( 'php' === $file->getExtension() ) {
+				$files[] = $file->getPathname();
+			}
+		}
 		$seen  = 0;
 		foreach ( $files as $file ) {
 			$src = file_get_contents( $file );
-			// The constant, or the method registered as a string (round 7).
-			if ( ! preg_match( "/WP_REST_Server::DELETABLE|'methods'\s*=>\s*(?:array\(\s*)?'DELETE'/", $src ) ) {
+			// Only files that register routes are controllers.
+			if ( false === strpos( $src, 'register_rest_route(' ) ) {
+				continue;
+			}
+			// Every spelling WP accepts: the constant, ALLMETHODS, a string, a
+			// comma list, or an array carrying DELETE anywhere in it.
+			if ( ! preg_match( '/WP_REST_Server::(DELETABLE|ALLMETHODS)|["\']methods["\']\s*=>\s*(?:array\s*\(|\[)?[^)\]\n]*["\']DELETE["\']|["\']methods["\']\s*=>\s*["\'][^"\']*DELETE/i', $src ) ) {
 				continue;
 			}
 			$seen++;

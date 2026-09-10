@@ -326,7 +326,9 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 		// trashes only post and page (#536 round 5).
 		if ( Mcpwp_Destructive_Gate::should_gate( $this->get_current_api_key_record() ) ) {
 			$post = get_post( $post_id );
-			if ( ! $post || 'page' === $post->post_type || Mcpwp_Posts::is_blocked_post_type( $post->post_type ) ) {
+			// The same type test the core method applies, so a type it would
+			// refuse is refused here and never queued (#536 round 8).
+			if ( ! $post || 'page' === $post->post_type || Mcpwp_Posts::is_blocked_post_type( $post->post_type ) || ( method_exists( 'Mcpwp_Posts', 'is_writable_post_type' ) && ! Mcpwp_Posts::is_writable_post_type( $post->post_type ) ) ) {
 				return $this->error_response( 'not_found', __( 'Post not found.', 'mcpwp' ), 404, array( 'id' => $post_id ) );
 			}
 		}

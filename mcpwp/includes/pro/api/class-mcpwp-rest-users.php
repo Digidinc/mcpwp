@@ -242,7 +242,8 @@ class Mcpwp_REST_Users extends Mcpwp_REST_API {
 			if ( ! $user ) {
 				return $this->error_response( 'not_found', __( 'User not found.', 'mcpwp' ), 404, array( 'id' => $user_id ) );
 			}
-			if ( method_exists( $this->users, 'current_principal_may_delete' ) && ! $this->users->current_principal_may_delete( $user_id ) ) {
+			// Fail closed: a users service without the check is a refusal.
+			if ( ! method_exists( $this->users, 'current_principal_may_delete' ) || ! $this->users->current_principal_may_delete( $user_id ) ) {
 				return $this->error_response( 'cannot_delete', __( 'You do not have permission to delete this user.', 'mcpwp' ), 400 );
 			}
 			return $this->defer_destructive( 'delete_user', $request, array( 'type' => 'user', 'id' => $user_id, 'title' => (string) $user->user_login ), sprintf( 'Permanently delete user #%d (%s)', $user_id, (string) $user->user_login ) );
