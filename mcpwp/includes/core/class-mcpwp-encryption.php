@@ -397,6 +397,10 @@ class Mcpwp_Encryption {
 	 * wpdb can return null with an empty last_error (a failed reconnect after
 	 * template_redirect), so the row shape — not last_error alone — decides.
 	 *
+	 * ORDER BY option_id: the UNIQUE index on option_name is what makes first
+	 * writer win. On a table that lost it (a broken import), two rows can share
+	 * a name; the first inserted one is then always the answer, never either.
+	 *
 	 * @param string $name Option name.
 	 * @return array{state: string, value: string|null}
 	 */
@@ -418,7 +422,7 @@ class Mcpwp_Encryption {
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- the cache is exactly what must be bypassed.
 		$row = $wpdb->get_row(
 			$wpdb->prepare(
-				"SELECT 1 AS mcpwp_probe, (SELECT option_value FROM {$wpdb->options} WHERE option_name = %s LIMIT 1) AS option_value",
+				"SELECT 1 AS mcpwp_probe, (SELECT option_value FROM {$wpdb->options} WHERE option_name = %s ORDER BY option_id ASC LIMIT 1) AS option_value",
 				$name
 			),
 			ARRAY_A
@@ -445,6 +449,36 @@ class Mcpwp_Encryption {
 			'state' => self::ROW_PRESENT,
 			'value' => (string) $row['option_value'],
 		);
+	}
+
+	/**
+	 * Whether the key new blobs would use can be resolved right now.
+	 *
+	 * Side-effect free: never creates, caches, or records an alert.
+	 *
+	 * @return string '' when usable, else a REASON_* constant (REASON_KEY_MISSING
+	 *                when no key row exists and no constant is pinned).
+	 */
+	public static function inspect_key() {
+		if ( ! self::is_available() ) {
+			return self::REASON_SODIUM_UNAVAILABLE;
+		}
+
+		if ( self::pinned_key_defined() ) {
+			return null === self::pinned_key() ? self::REASON_PINNED_KEY_WEAK : '';
+		}
+
+		$row = self::read_option_row( self::KEY_OPTION );
+
+		if ( self::ROW_ERROR === $row['state'] ) {
+			return self::REASON_KEY_UNAVAILABLE;
+		}
+
+		if ( self::ROW_ABSENT === $row['state'] ) {
+			return self::REASON_KEY_MISSING;
+		}
+
+		return null === self::decode_key( $row['value'] ) ? self::REASON_KEY_CORRUPT : '';
 	}
 
 	/**

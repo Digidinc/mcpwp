@@ -1089,7 +1089,7 @@ if (! isset($GLOBALS['wpdb'])) {
             //              template_redirect (check_connection() returns false
             //              without recording an error).
             // A callable receives the option name and answers true/'silent'/false.
-            if (preg_match("/^SELECT 1 AS mcpwp_probe, \\(SELECT option_value FROM \\S*options WHERE option_name = '([^']+)' LIMIT 1\\) AS option_value$/", trim((string) $query), $m)) {
+            if (preg_match("/^SELECT 1 AS mcpwp_probe, \\(SELECT option_value FROM \\S*options WHERE option_name = '([^']+)'(?: ORDER BY option_id ASC)? LIMIT 1\\) AS option_value$/", trim((string) $query), $m)) {
                 $this->last_error = '';
                 $fails            = $GLOBALS['mcpwp_test_wpdb_read_fails'] ?? false;
                 if (is_callable($fails)) {
@@ -1229,7 +1229,14 @@ if (! isset($GLOBALS['wpdb'])) {
         public function update($table, $data, $where, $f = null, $wf = null)
         {
             if ($table === $this->options && isset($where['option_name'])) {
-                $name    = (string) $where['option_name'];
+                $name = (string) $where['option_name'];
+                // One-shot hook between a caller's read and its compare-and-swap,
+                // so a test can land a concurrent writer's value first.
+                if (isset($GLOBALS['mcpwp_test_wpdb_before_update']) && is_callable($GLOBALS['mcpwp_test_wpdb_before_update'])) {
+                    $hook = $GLOBALS['mcpwp_test_wpdb_before_update'];
+                    $GLOBALS['mcpwp_test_wpdb_before_update'] = null;
+                    $hook($name);
+                }
                 $current = $GLOBALS['mcpwp_test_wpdb_options'][ $name ] ?? null;
                 if (null === $current) {
                     return 0;
@@ -1261,6 +1268,11 @@ if (! isset($GLOBALS['wpdb'])) {
         }
         public function replace($table, $data, $format = null)
         {
+            // REPLACE overwrites an existing row, as in MySQL. A no-op here would
+            // let a key-creation path that overwrites look as safe as INSERT.
+            if ($table === $this->options && isset($data['option_name'])) {
+                $GLOBALS['mcpwp_test_wpdb_options'][ (string) $data['option_name'] ] = (string) $data['option_value'];
+            }
             return 1;
         }
         public function esc_like($text)
@@ -1398,6 +1410,47 @@ if (! function_exists('get_post_status_object')) {
             'name'   => (string) $status,
             'public' => ! empty($public[ (string) $status ]),
         );
+    }
+}
+
+if (! function_exists('wp_generate_password')) {
+    function wp_generate_password($length = 12, $special_chars = true, $extra_special_chars = false)
+    {
+        return substr(bin2hex(random_bytes(max(1, (int) $length))), 0, (int) $length);
+    }
+}
+
+// ── WP-Cron doubles ──────────────────────────────────────────────────────
+// One timestamp per hook in $GLOBALS['mcpwp_test_cron'], enough to assert
+// whether an event is scheduled.
+if (! function_exists('wp_next_scheduled')) {
+    function wp_next_scheduled($hook, $args = array())
+    {
+        return $GLOBALS['mcpwp_test_cron'][ $hook ] ?? false;
+    }
+}
+if (! function_exists('wp_schedule_event')) {
+    function wp_schedule_event($timestamp, $recurrence, $hook, $args = array(), $wp_error = false)
+    {
+        $GLOBALS['mcpwp_test_cron'][ $hook ] = (int) $timestamp;
+        return true;
+    }
+}
+if (! function_exists('wp_unschedule_event')) {
+    function wp_unschedule_event($timestamp, $hook, $args = array(), $wp_error = false)
+    {
+        if (isset($GLOBALS['mcpwp_test_cron'][ $hook ]) && (int) $timestamp === $GLOBALS['mcpwp_test_cron'][ $hook ]) {
+            unset($GLOBALS['mcpwp_test_cron'][ $hook ]);
+        }
+        return true;
+    }
+}
+if (! function_exists('wp_clear_scheduled_hook')) {
+    function wp_clear_scheduled_hook($hook, $args = array(), $wp_error = false)
+    {
+        $had = isset($GLOBALS['mcpwp_test_cron'][ $hook ]) ? 1 : 0;
+        unset($GLOBALS['mcpwp_test_cron'][ $hook ]);
+        return $had;
     }
 }
 

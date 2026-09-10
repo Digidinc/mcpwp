@@ -70,6 +70,9 @@ final class EncryptionWeakPinnedKeyTest extends TestCase
             '15 bytes inside whitespace'    => array('   fifteen-bytes!!   '),
             'one repeated character'        => array(str_repeat('a', 32)),
             'all zero bytes'                => array(str_repeat("\0", 32)),
+            // define( 'MCPWP_ENCRYPTION_KEY', getenv( 'MCPWP_ENCRYPTION_KEY' ) ) with the variable unset.
+            'getenv() of an unset variable' => array(false),
+            'null'                          => array(null),
         );
     }
 
@@ -78,7 +81,7 @@ final class EncryptionWeakPinnedKeyTest extends TestCase
      * @runInSeparateProcess
      * @preserveGlobalState disabled
      */
-    public function test_a_weak_pinned_constant_fails_closed_and_is_surfaced(string $constant): void
+    public function test_a_weak_pinned_constant_fails_closed_and_is_surfaced($constant): void
     {
         $this->cleanProcess();
 
@@ -100,9 +103,10 @@ final class EncryptionWeakPinnedKeyTest extends TestCase
         $this->assertSame(array(), $enc->get_last_warnings());
 
         // A blob under the publicly derivable key is not honoured either.
-        $public = SODIUM_CRYPTO_SECRETBOX_KEYBYTES === strlen($constant)
-            ? $constant
-            : sodium_crypto_generichash($constant, '', SODIUM_CRYPTO_SECRETBOX_KEYBYTES);
+        $as_string = is_scalar($constant) ? (string) $constant : '';
+        $public    = SODIUM_CRYPTO_SECRETBOX_KEYBYTES === strlen($as_string)
+            ? $as_string
+            : sodium_crypto_generichash($as_string, '', SODIUM_CRYPTO_SECRETBOX_KEYBYTES);
         $this->assertFalse($enc->decrypt($this->legacyBlob('under-the-public-key', $public)));
         $this->assertSame(Mcpwp_Encryption::REASON_PINNED_KEY_WEAK, $enc->get_last_error());
 
@@ -117,8 +121,8 @@ final class EncryptionWeakPinnedKeyTest extends TestCase
         delete_option(Mcpwp_Encryption::ALERTS_OPTION);
         $html = $this->noticeHtml();
         $this->assertStringContainsString('MCPWP_ENCRYPTION_KEY', $html);
-        if ('' !== trim($constant)) {
-            $this->assertStringNotContainsString($constant, $html, 'the notice never echoes the constant');
+        if ('' !== trim($as_string)) {
+            $this->assertStringNotContainsString($as_string, $html, 'the notice never echoes the constant');
         }
 
         $GLOBALS['mcpwp_test_current_user'] = 0;
@@ -128,6 +132,9 @@ final class EncryptionWeakPinnedKeyTest extends TestCase
     }
 
     /**
+     * The floor is deliberately simple: a 16-byte dictionary phrase passes it.
+     * It stops the empty/unset/placeholder mistakes, not a bad passphrase.
+     *
      * @runInSeparateProcess
      * @preserveGlobalState disabled
      */

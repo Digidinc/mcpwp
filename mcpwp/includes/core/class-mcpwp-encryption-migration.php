@@ -203,6 +203,18 @@ class Mcpwp_Encryption_Migration {
 			return;
 		}
 
+		// Decide once, without side effects, whether a current key exists. A key
+		// problem stops the run here. With no key row at all (a <=3.2.3 site),
+		// no blob can be under a current key, so that probe is skipped rather
+		// than raising a misleading "key missing" alert for a key that never was.
+		$key_state = Mcpwp_Encryption::inspect_key();
+		if ( self::is_key_problem( $key_state ) ) {
+			self::debug_log( 'current key unusable (' . $key_state . ') — nothing written, will retry.' );
+			self::defer_retry();
+			return;
+		}
+		$probe_current_key = ( '' === $key_state );
+
 		$new_data     = array();
 		$failures     = array();
 		$re_encrypted = array(); // provider => BLAKE2b of the plaintext, for the read-back check.
@@ -225,16 +237,19 @@ class Mcpwp_Encryption_Migration {
 			if ( false === $plaintext ) {
 				// Not an AUTH_SALT blob. Already under the current key (a 3.2.4 –
 				// 3.11.0 write, or a re-run) is not a failure.
-				$current = $encryption->decrypt( $blob );
-				if ( false !== $current ) {
-					self::wipe( $current );
-					continue;
-				}
+				if ( $probe_current_key ) {
+					$current = $encryption->decrypt( $blob );
+					if ( false !== $current ) {
+						self::wipe( $current );
+						continue;
+					}
 
-				if ( self::is_key_problem( $encryption->get_last_error() ) ) {
-					self::debug_log( 'current key unusable (' . $encryption->get_last_error() . ') — nothing written, will retry.' );
-					self::defer_retry();
-					return;
+					// The key was readable a moment ago; a failure now is the key's.
+					if ( self::is_key_problem( $encryption->get_last_error() ) ) {
+						self::debug_log( 'current key unusable (' . $encryption->get_last_error() . ') — nothing written, will retry.' );
+						self::defer_retry();
+						return;
+					}
 				}
 
 				// Corrupt, or AUTH_SALT already rotated. Preserve the blob exactly.
@@ -260,22 +275,47 @@ class Mcpwp_Encryption_Migration {
 			$re_encrypted[ $provider ]              = $digest;
 		}
 
-		if ( ! empty( $re_encrypted ) ) {
+		// Re-read before writing. The lock keeps other migrations out, not an
+		// admin saving, replacing or removing a provider while this ran, and
+		// writing the snapshot back would silently revert that. Only blobs whose
+		// stored value is still exactly the one re-encrypted are swapped;
+		// anything else is newer than this run and is left alone.
+		$latest = self::read_integrations_uncached();
+		if ( ! is_array( $latest ) ) {
+			self::debug_log( 'integration option unreadable before write — will retry.' );
+			self::defer_retry();
+			return;
+		}
+
+		$to_verify = array();
+		foreach ( $re_encrypted as $provider => $digest ) {
+			if ( isset( $latest[ $provider ] ) && is_array( $latest[ $provider ] )
+				&& isset( $latest[ $provider ]['key_encrypted'] )
+				&& $latest[ $provider ]['key_encrypted'] === $data[ $provider ]['key_encrypted'] ) {
+				$latest[ $provider ]['key_encrypted'] = $new_data[ $provider ]['key_encrypted'];
+				$to_verify[ $provider ]               = $digest;
+			}
+		}
+
+		if ( ! empty( $to_verify ) ) {
 			// update_option() returns false on a DB error or when the value is
 			// unchanged; it cannot be unchanged here (fresh nonces), so false is
-			// a failed write. Retry on the next boot.
-			if ( false === update_option( Mcpwp_Integration_Manager::OPTION_NAME, $new_data ) ) {
+			// a failed write. Retry later.
+			if ( false === update_option( Mcpwp_Integration_Manager::OPTION_NAME, $latest ) ) {
 				self::debug_log( 'integration option write failed — will retry.' );
 				self::defer_retry();
 				return;
 			}
 
-			if ( ! self::verify_written( $re_encrypted ) ) {
+			if ( ! self::verify_written( $to_verify ) ) {
 				self::debug_log( 'integration option read-back did not verify — flag not set, will retry.' );
 				self::defer_retry();
 				return;
 			}
 		}
+
+		// A provider removed meanwhile has nothing left to re-enter.
+		$failures = array_values( array_intersect( $failures, array_map( 'sanitize_key', array_map( 'strval', array_keys( $latest ) ) ) ) );
 
 		if ( empty( $failures ) ) {
 			delete_option( self::FAILURES_OPTION );
@@ -328,6 +368,23 @@ class Mcpwp_Encryption_Migration {
 	 */
 	private static function defer_retry() {
 		set_transient( self::RETRY_TRANSIENT, time(), self::RETRY_DELAY );
+	}
+
+	/**
+	 * Read the provider records past this request's option caches.
+	 *
+	 * mcpwp_integrations is autoloaded, so the per-request alloptions copy is
+	 * dropped too; this runs once per migration write, never on a hot path.
+	 *
+	 * @return mixed
+	 */
+	private static function read_integrations_uncached() {
+		if ( function_exists( 'wp_cache_delete' ) ) {
+			wp_cache_delete( Mcpwp_Integration_Manager::OPTION_NAME, 'options' );
+			wp_cache_delete( 'alloptions', 'options' );
+		}
+
+		return get_option( Mcpwp_Integration_Manager::OPTION_NAME, array() );
 	}
 
 	/**
