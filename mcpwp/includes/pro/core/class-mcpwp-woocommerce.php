@@ -638,8 +638,10 @@ class Mcpwp_WooCommerce {
 		);
 
 		// Whether WooCommerce would sell it, and where the catalog shows it
-		// (#843). A fact that cannot be computed says 'unknown' and why, in
-		// unknown_reasons — a null here read as "no" to every client.
+		// (#843). A fact that cannot be computed is null, and unknown_reasons
+		// names the field and why — so it is told apart from a real false, and
+		// a client that tests the field for truthiness fails safe instead of
+		// building a buy link for a product nobody verified.
 		$unknown                    = array();
 		$data['purchasable']        = $this->product_fact( $product, 'is_purchasable', 'purchasable', $unknown );
 		$data['catalog_visibility'] = $this->product_fact( $product, 'get_catalog_visibility', 'catalog_visibility', $unknown );
@@ -683,19 +685,19 @@ class Mcpwp_WooCommerce {
 	 * @param string     $method  WC_Product method: is_purchasable or get_catalog_visibility.
 	 * @param string     $field   Response field the fact is reported under.
 	 * @param array      $unknown Collected by reference: field => reason.
-	 * @return bool|string The fact, or 'unknown'.
+	 * @return bool|string|null The fact, or null when it could not be computed.
 	 */
 	private function product_fact( $product, $method, $field, array &$unknown ) {
 		if ( ! is_object( $product ) || ! method_exists( $product, $method ) ) {
 			$unknown[ $field ] = sprintf( 'WC_Product::%s() is not available on %s.', $method, is_object( $product ) ? get_class( $product ) : gettype( $product ) );
-			return 'unknown';
+			return null;
 		}
 
 		try {
 			$value = $product->$method();
 		} catch ( Throwable $e ) {
 			$unknown[ $field ] = sprintf( 'WC_Product::%s() threw %s: %s', $method, get_class( $e ), $e->getMessage() );
-			return 'unknown';
+			return null;
 		}
 
 		if ( 'is_purchasable' === $method ) {
@@ -705,7 +707,7 @@ class Mcpwp_WooCommerce {
 
 		if ( ! is_string( $value ) || '' === $value ) {
 			$unknown[ $field ] = sprintf( 'WC_Product::%s() returned no value.', $method );
-			return 'unknown';
+			return null;
 		}
 
 		return $value;

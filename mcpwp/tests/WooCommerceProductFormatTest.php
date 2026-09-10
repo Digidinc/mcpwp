@@ -5,8 +5,10 @@
  * The product formatter never emitted either fact, so a client saw null for
  * both and read "not purchasable / no visibility" for a product WooCommerce
  * would happily sell. Pinned here: both come from WC_Product; when one cannot
- * be computed (method missing, or it throws) the field says 'unknown' and
- * names the reason — never a null that reads as "no".
+ * be computed (method missing, or it throws) the field is null and
+ * unknown_reasons names it and why. Never the string 'unknown': it is truthy,
+ * so `if (product.purchasable)` would build a buy link for a product nobody
+ * verified. null fails safe, and the reason tells it apart from false.
  *
  * @package MCPWP
  */
@@ -112,7 +114,7 @@ final class WooCommerceProductFormatTest extends TestCase {
 		$this->assertSame( 'catalog', $out['catalog_visibility'] );
 	}
 
-	public function test_a_fact_that_throws_is_unknown_with_its_reason_not_null(): void {
+	public function test_a_fact_that_throws_is_null_with_its_reason(): void {
 		$out = $this->format(
 			new Mcpwp_Test_WC_Product_With_Facts(
 				array(
@@ -122,8 +124,8 @@ final class WooCommerceProductFormatTest extends TestCase {
 			)
 		);
 
-		$this->assertSame( 'unknown', $out['purchasable'], 'An uncomputable fact must not read as "no".' );
-		$this->assertNotNull( $out['purchasable'] );
+		$this->assertArrayHasKey( 'purchasable', $out, 'The field is still reported.' );
+		$this->assertNull( $out['purchasable'], 'An uncomputable fact is null (fails safe), never a truthy placeholder.' );
 		$this->assertSame( 'visible', $out['catalog_visibility'], 'One failure does not blank the other fact.' );
 		$this->assertArrayHasKey( 'purchasable', $out['unknown_reasons'] );
 		$this->assertStringContainsString( 'is_purchasable', $out['unknown_reasons']['purchasable'] );
@@ -131,19 +133,47 @@ final class WooCommerceProductFormatTest extends TestCase {
 		$this->assertArrayNotHasKey( 'catalog_visibility', $out['unknown_reasons'] );
 	}
 
-	public function test_missing_methods_are_unknown_with_their_reason_not_null(): void {
+	public function test_missing_methods_are_null_with_their_reason(): void {
 		$out = $this->format( new Mcpwp_Test_WC_Product_Without_Facts() );
 
-		$this->assertSame( 'unknown', $out['purchasable'] );
-		$this->assertSame( 'unknown', $out['catalog_visibility'] );
+		$this->assertArrayHasKey( 'purchasable', $out );
+		$this->assertArrayHasKey( 'catalog_visibility', $out );
+		$this->assertNull( $out['purchasable'] );
+		$this->assertNull( $out['catalog_visibility'] );
 		$this->assertStringContainsString( 'is_purchasable', $out['unknown_reasons']['purchasable'] );
 		$this->assertStringContainsString( 'get_catalog_visibility', $out['unknown_reasons']['catalog_visibility'] );
 	}
 
-	public function test_an_empty_visibility_answer_is_unknown_not_blank(): void {
+	public function test_an_empty_visibility_answer_is_null_with_its_reason(): void {
 		$out = $this->format( new Mcpwp_Test_WC_Product_With_Facts( array( 'purchasable' => true, 'catalog_visibility' => '' ) ) );
 
-		$this->assertSame( 'unknown', $out['catalog_visibility'] );
+		$this->assertArrayHasKey( 'catalog_visibility', $out );
+		$this->assertNull( $out['catalog_visibility'] );
 		$this->assertArrayHasKey( 'catalog_visibility', $out['unknown_reasons'] );
+	}
+
+	public function test_a_null_fact_always_has_a_reason_and_a_known_one_never_does(): void {
+		$cases = array(
+			new Mcpwp_Test_WC_Product_With_Facts( array( 'purchasable' => true, 'catalog_visibility' => 'visible' ) ),
+			new Mcpwp_Test_WC_Product_With_Facts( array( 'purchasable' => false, 'catalog_visibility' => 'search' ) ),
+			new Mcpwp_Test_WC_Product_With_Facts( array( 'purchasable' => new RuntimeException( 'x' ), 'catalog_visibility' => new RuntimeException( 'y' ) ) ),
+			new Mcpwp_Test_WC_Product_Without_Facts(),
+		);
+		foreach ( $cases as $product ) {
+			foreach ( array( true, false ) as $detailed ) {
+				$out     = $this->format( $product, $detailed );
+				$reasons = $out['unknown_reasons'] ?? array();
+				foreach ( array( 'purchasable', 'catalog_visibility' ) as $field ) {
+					$this->assertArrayHasKey( $field, $out );
+					$this->assertNotSame( 'unknown', $out[ $field ], "$field: never the truthy 'unknown' string." );
+					if ( null === $out[ $field ] ) {
+						$this->assertArrayHasKey( $field, $reasons, "$field: null carries a reason." );
+					} else {
+						$this->assertArrayNotHasKey( $field, $reasons, "$field: a real value carries no reason." );
+					}
+				}
+				$this->assertIsBool( $out['purchasable'] ?? false );
+			}
+		}
 	}
 }
