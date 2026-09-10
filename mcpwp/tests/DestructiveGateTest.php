@@ -37,16 +37,6 @@ final class DestructiveGateTest extends TestCase {
 			Mcpwp_REST_MCP::reset_verdict_memo();
 		}
 
-		// The rate limiter is a singleton that reads its settings once. A test
-		// that tightened them earlier in the run (BatchBudgetTest sets a burst
-		// of 10 and does not reset the instance) left this class's flood test
-		// (25 requests) failing its auth premise with a 429 — only in random
-		// orders where nothing reset the instance in between. Start from the
-		// site's defaults, whatever ran before.
-		$limiter = new ReflectionProperty( Mcpwp_Rate_Limiter::class, 'instance' );
-		$limiter->setAccessible( true );
-		$limiter->setValue( null, null );
-
 		$this->key = ( new Mcpwp_REST_Pages() )->create_scoped_api_key( 'agent', array( 'admin' ) );
 	}
 
