@@ -378,6 +378,23 @@ class Mcpwp_Users {
 	 * @param WP_User $user Target user.
 	 * @return bool
 	 */
+	/**
+	 * Whether the CURRENT principal may delete this user — the same test
+	 * delete_user() applies, exposed so a gate can ask it before deferring
+	 * (#536 round 7): a deferral must never turn a refusal into an
+	 * approvable action.
+	 *
+	 * @param int $user_id User id.
+	 * @return bool
+	 */
+	public function current_principal_may_delete( $user_id ) {
+		$user = get_user_by( 'ID', $user_id );
+		if ( ! $user || get_current_user_id() === (int) $user_id ) {
+			return false;
+		}
+		return $this->can_modify_user( $user );
+	}
+
 	private function can_modify_user( $user ) {
 		// Can't modify if user has admin role and current user is not admin.
 		if ( in_array( 'administrator', $user->roles, true ) ) {

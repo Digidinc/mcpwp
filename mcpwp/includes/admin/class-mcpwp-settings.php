@@ -85,6 +85,20 @@ class Mcpwp_Settings {
 			)
 		);
 
+		// Destructive operations need approval (#536). Settable here and
+		// nowhere else: the settings API refuses it by design.
+		add_settings_field(
+			'destructive_requires_approval',
+			__( 'Approval for destructive operations', 'mcpwp' ),
+			array( $this, 'render_checkbox_field' ),
+			'mcpwp_settings',
+			'mcpwp_general_section',
+			array(
+				'id'          => 'destructive_requires_approval',
+				'description' => __( 'Permanent deletes requested through the API (pages, posts, media, products, all drafts …) wait for a second person to approve them. Trashing is never gated. Turning this off lets any admin-scoped key delete permanently in one call.', 'mcpwp' ),
+			)
+		);
+
 		// Log retention
 		add_settings_field(
 			'log_retention_days',
@@ -567,6 +581,7 @@ class Mcpwp_Settings {
 	public function get_defaults() {
 		return array(
 			'enable_logging'     => true,
+			'destructive_requires_approval' => true,
 			'log_retention_days' => 30,
 			'log_store_response_data' => true,
 			'log_redaction_keys' => array(
@@ -653,6 +668,17 @@ class Mcpwp_Settings {
 		$current   = $this->get_settings();
 
 		$sanitized['enable_logging'] = ! empty( $input['enable_logging'] );
+
+		// The gate's switch changes only when the form that carries it was
+		// posted (its presence marker proves that). Any other write of the
+		// option — the settings API, the admin chat, a plugin — keeps the
+		// stored choice, and no stored choice means on (#536 round 4).
+		$present = isset( $input['__present'] ) && is_array( $input['__present'] ) ? array_map( 'strval', $input['__present'] ) : array();
+		if ( in_array( 'destructive_requires_approval', $present, true ) ) {
+			$sanitized['destructive_requires_approval'] = ! empty( $input['destructive_requires_approval'] );
+		} elseif ( isset( $current['destructive_requires_approval'] ) ) {
+			$sanitized['destructive_requires_approval'] = (bool) $current['destructive_requires_approval'];
+		}
 
 		$sanitized['log_retention_days'] = isset( $input['log_retention_days'] )
 			? min( 365, max( 1, absint( $input['log_retention_days'] ) ) )
@@ -845,8 +871,12 @@ class Mcpwp_Settings {
 		$value = isset( $settings[ $args['id'] ] ) ? $settings[ $args['id'] ] : false;
 		$option_name = isset( $args['option_name'] ) ? $args['option_name'] : self::OPTION_NAME;
 
+		// A hidden marker proves the form RENDERED this checkbox. Without it,
+		// "absent from the input" would mean "unchecked" on every write of
+		// the option — and sanitize_settings runs on every update_option(),
+		// not only on a form post (#536 round 4).
 		printf(
-			'<label><input type="checkbox" name="%s[%s]" value="1" %s /> %s</label>',
+			'<input type="hidden" name="%1$s[__present][]" value="%2$s" /><label><input type="checkbox" name="%1$s[%2$s]" value="1" %3$s /> %4$s</label>',
 			esc_attr( $option_name ),
 			esc_attr( $args['id'] ),
 			checked( $value, true, false ),

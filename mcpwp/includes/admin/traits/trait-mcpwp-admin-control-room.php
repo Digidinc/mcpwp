@@ -104,7 +104,7 @@ trait Mcpwp_Admin_Control_Room_Trait {
 
 		switch ( $action ) {
 			case 'approve':
-				$result = Mcpwp_Approvals::approve_request( $approval_id );
+				$result = Mcpwp_Approvals::approve_request( $approval_id, '', array( 'admin_user' => get_current_user_id(), 'actor' => 'wp-user:' . get_current_user_id() ) );
 				$message = __( 'Approval request approved.', 'mcpwp' );
 				break;
 			case 'reject':
@@ -112,7 +112,7 @@ trait Mcpwp_Admin_Control_Room_Trait {
 				$message = __( 'Approval request rejected.', 'mcpwp' );
 				break;
 			case 'apply':
-				$result = Mcpwp_Approvals::apply_request( $approval_id );
+				$result = Mcpwp_Approvals::apply_request( $approval_id, array( 'admin_user' => get_current_user_id(), 'actor' => 'wp-user:' . get_current_user_id() ) );
 				$message = __( 'Approved change applied.', 'mcpwp' );
 				break;
 			case 'rollback':

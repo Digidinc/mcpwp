@@ -100,6 +100,29 @@ class Mcpwp_Activator {
 	 * leave an approved record applyable. Terminal records (applied, rejected,
 	 * rolled_back) are left untouched — they can't be re-actioned.
 	 */
+	/**
+	 * One-time reset of the destructive-approval switch (#536 round 2).
+	 *
+	 * An early build of the gate exposed destructive_requires_approval
+	 * through the settings API; a principal that flipped it off then would
+	 * keep the gate off after upgrade, silently. A stored false is removed
+	 * once (the default is on); an administrator can switch it off again
+	 * from wp-admin, which is the only place it is settable now.
+	 */
+	public static function reset_destructive_switch() {
+		if ( get_option( 'mcpwp_destructive_switch_reset' ) ) {
+			return;
+		}
+
+		$settings = get_option( 'mcpwp_settings', array() );
+		if ( is_array( $settings ) && array_key_exists( 'destructive_requires_approval', $settings ) && empty( $settings['destructive_requires_approval'] ) ) {
+			unset( $settings['destructive_requires_approval'] );
+			update_option( 'mcpwp_settings', $settings );
+		}
+
+		update_option( 'mcpwp_destructive_switch_reset', 1, false );
+	}
+
 	public static function migrate_identity_less_approvals() {
 		if ( get_option( 'mcpwp_approvals_identity_migrated' ) ) {
 			return;

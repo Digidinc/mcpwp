@@ -234,6 +234,27 @@ abstract class Mcpwp_REST_API {
 	}
 
 	/**
+	 * Turn a destructive call into a pending approval and answer 202 (#536).
+	 *
+	 * @param string          $operation Short name.
+	 * @param WP_REST_Request $request   Request.
+	 * @param array           $resource  {type, id, title}.
+	 * @param string          $summary   One line for the reviewer.
+	 * @return WP_REST_Response|WP_Error
+	 */
+	protected function defer_destructive( $operation, $request, array $resource, $summary ) {
+		$body = Mcpwp_Destructive_Gate::defer( $operation, $request, $resource, $summary, $this->get_current_api_key_record() );
+
+		if ( is_wp_error( $body ) ) {
+			return $body;
+		}
+
+		$this->log_activity( 'destructive_deferred', $request );
+
+		return $this->success_response( $body, 202 );
+	}
+
+	/**
 	 * Prepare success response.
 	 *
 	 * @param mixed $data Response data.

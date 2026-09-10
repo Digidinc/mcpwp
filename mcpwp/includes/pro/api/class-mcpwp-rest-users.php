@@ -232,6 +232,23 @@ class Mcpwp_REST_Users extends Mcpwp_REST_API {
 		$user_id = absint( $request->get_param( 'id' ) );
 		$reassign = $request->get_param( 'reassign' );
 
+		// Deleting a user destroys an identity and reassigns or destroys
+		// everything they own: approval by default (#536 round 6).
+		// The handler's own refusal comes FIRST: a principal that may not
+		// delete this user gets the same 400 it always got, never a 202 an
+		// administrator could later apply (#536 round 7).
+		if ( class_exists( 'Mcpwp_Destructive_Gate' ) && Mcpwp_Destructive_Gate::should_gate( $this->get_current_api_key_record() ) ) {
+			$user = function_exists( 'get_user_by' ) ? get_user_by( 'ID', $user_id ) : null;
+			if ( ! $user ) {
+				return $this->error_response( 'not_found', __( 'User not found.', 'mcpwp' ), 404, array( 'id' => $user_id ) );
+			}
+			// Fail closed: a users service without the check is a refusal.
+			if ( ! method_exists( $this->users, 'current_principal_may_delete' ) || ! $this->users->current_principal_may_delete( $user_id ) ) {
+				return $this->error_response( 'cannot_delete', __( 'You do not have permission to delete this user.', 'mcpwp' ), 400 );
+			}
+			return $this->defer_destructive( 'delete_user', $request, array( 'type' => 'user', 'id' => $user_id, 'title' => (string) $user->user_login ), sprintf( 'Permanently delete user #%d (%s)', $user_id, (string) $user->user_login ) );
+		}
+
 		$result = $this->users->delete_user( $user_id, $reassign ? absint( $reassign ) : null );
 
 		if ( is_wp_error( $result ) ) {

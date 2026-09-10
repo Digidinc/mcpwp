@@ -303,6 +303,17 @@ class Mcpwp_REST_Widgets extends Mcpwp_REST_API {
 	public function delete_widget( $request ) {
 		$widget_id = sanitize_text_field( $request->get_param( 'id' ) );
 
+		// A widget's settings are gone with it: approval by default (#536 round 2).
+		if ( class_exists( 'Mcpwp_Destructive_Gate' ) && Mcpwp_Destructive_Gate::should_gate( $this->get_current_api_key_record() ) ) {
+			// Resolve the target first, like every other gated site: a
+			// reviewer must never be handed a no-op to approve (#536 round 8).
+			$target = Mcpwp_Destructive_Gate::fingerprint_widget( $widget_id );
+			if ( empty( $target['exists'] ) && empty( $target['unparseable'] ) ) {
+				return $this->error_response( 'not_found', __( 'Widget not found.', 'mcpwp' ), 404, array( 'id' => $widget_id ) );
+			}
+			return $this->defer_destructive( 'delete_widget', $request, array( 'type' => 'widget', 'id' => $widget_id, 'title' => $widget_id ), sprintf( 'Permanently delete widget %s', $widget_id ) );
+		}
+
 		$result = $this->widgets->delete_widget( $widget_id );
 
 		if ( is_wp_error( $result ) ) {

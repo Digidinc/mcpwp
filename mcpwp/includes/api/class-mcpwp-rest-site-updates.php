@@ -654,7 +654,16 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 			$role = 'admin';
 		}
 
-		$created = $this->create_scoped_api_key( $label, $scopes, $role, $tool_categories );
+		// allow_destructive is an exemption from the destructive-operation gate
+		// (#536). It is honoured only from a trusted admin context — never from
+		// an API principal, which would let a gated key exempt a key it mints.
+		$wants_exempt      = rest_sanitize_boolean( $request->get_param( 'allow_destructive' ) );
+		$from_api          = Mcpwp_Destructive_Gate::is_api_principal( $this->get_current_api_key_record() );
+		$allow_destructive = $wants_exempt && ! $from_api;
+		$created           = $this->create_scoped_api_key( $label, $scopes, $role, $tool_categories, $allow_destructive );
+		if ( $wants_exempt && $from_api && is_array( $created ) ) {
+			$created['ignored'] = array( 'allow_destructive' => 'Exemption from the destructive-operation gate can only be granted by an administrator in wp-admin, not through the API.' );
+		}
 
 		return $this->success_response(
 			array(
@@ -675,7 +684,12 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 			);
 		}
 
-		$key_id  = (string) $request->get_param( 'id' );
+		$key_id = (string) $request->get_param( 'id' );
+
+		// Revocation is deliberately NOT gated (#536 review): it is the
+		// incident-response lever, and reversible in the sense that matters —
+		// a replacement can be minted. Slowing it down favours an attacker
+		// who already holds a key.
 		$revoked = $this->revoke_scoped_api_key( $key_id );
 
 		if ( ! $revoked ) {

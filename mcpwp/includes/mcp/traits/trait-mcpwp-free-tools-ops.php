@@ -63,6 +63,10 @@ trait Mcpwp_Free_Tools_Ops_Trait {
 						'enum' => array( 'read', 'write', 'admin' ),
 					),
 				),
+				'allow_destructive' => array(
+					'type'        => 'boolean',
+					'description' => 'Exempt this key from the destructive-operation approval gate. Honoured only when the key is created by an administrator in wp-admin; sent through the API it is ignored and reported under "ignored".',
+				),
 			)
 		);
 

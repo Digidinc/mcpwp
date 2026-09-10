@@ -317,8 +317,24 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 	public function delete_post( $request ) {
 		$this->log_activity( 'delete_post', $request );
 
-		$post_id = $request->get_param( 'id' );
-		$force   = $request->get_param( 'force' );
+		$post_id = absint( $request->get_param( 'id' ) );
+		$force   = rest_sanitize_boolean( $request->get_param( 'force' ) );
+
+		// A permanent delete has no undo: approval by default (#536). Only for
+		// a post that exists — a deferral is not a way to manufacture records.
+		// Permanent is decided by the TYPE, not the flag alone: WordPress
+		// trashes only post and page (#536 round 5).
+		if ( Mcpwp_Destructive_Gate::should_gate( $this->get_current_api_key_record() ) ) {
+			$post = get_post( $post_id );
+			// The same type test the core method applies, so a type it would
+			// refuse is refused here and never queued (#536 round 8).
+			if ( ! $post || 'page' === $post->post_type || Mcpwp_Posts::is_blocked_post_type( $post->post_type ) || ( method_exists( 'Mcpwp_Posts', 'is_writable_post_type' ) && ! Mcpwp_Posts::is_writable_post_type( $post->post_type ) ) ) {
+				return $this->error_response( 'not_found', __( 'Post not found.', 'mcpwp' ), 404, array( 'id' => $post_id ) );
+			}
+		}
+		if ( isset( $post ) && $post && Mcpwp_Destructive_Gate::delete_is_permanent( $post->post_type, $force, (string) $post->post_status ) && Mcpwp_Destructive_Gate::should_gate( $this->get_current_api_key_record() ) ) {
+			return $this->defer_destructive( 'delete_post', $request, array( 'type' => (string) $post->post_type, 'id' => $post_id, 'title' => (string) $post->post_title ), sprintf( 'Permanently delete post #%d', $post_id ) );
+		}
 
 		$result = $this->posts->delete_post( $post_id, $force );
 
@@ -573,8 +589,15 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 
 		$args = array(
 			'type'  => $request->get_param( 'type' ),
-			'force' => $request->get_param( 'force' ),
+			'force' => rest_sanitize_boolean( $request->get_param( 'force' ) ),
 		);
+
+		// Purging every draft permanently has no undo: approval by default (#536).
+		// Drafts are post/page only (Mcpwp_Drafts), so this is permanent on
+		// force, or on a site with EMPTY_TRASH_DAYS = 0.
+		if ( Mcpwp_Destructive_Gate::delete_is_permanent( 'post', $args['force'] ) && Mcpwp_Destructive_Gate::should_gate( $this->get_current_api_key_record() ) ) {
+			return $this->defer_destructive( 'delete_all_drafts', $request, array( 'type' => 'drafts', 'id' => null, 'title' => 'all drafts' ), 'Permanently delete all drafts' );
+		}
 
 		$result = $this->drafts->delete_all_drafts( $args );
 

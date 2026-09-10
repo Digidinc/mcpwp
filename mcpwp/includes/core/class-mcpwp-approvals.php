@@ -117,6 +117,113 @@ class Mcpwp_Approvals {
 	 *                                  (default, SAFE) redact non-public sources.
 	 * @return array Requests.
 	 */
+	/**
+	 * Store a destructive operation for review (#536).
+	 *
+	 * @param string $operation Short name (delete_page, revoke_api_key…).
+	 * @param array  $payload   {route, method, params} to re-dispatch on apply.
+	 * @param array  $resource  {type, id, title}.
+	 * @param array  $args      title, note, requested_by_key_id.
+	 * @return array|WP_Error Public record.
+	 */
+	public static function create_destructive_request( $operation, array $payload, array $resource, $args = array() ) {
+		$requester = isset( $args['requested_by_key_id'] ) ? sanitize_text_field( (string) $args['requested_by_key_id'] ) : '';
+
+		// A destructive record names its requester or it is not a record:
+		// the two-person rule cannot bind an anonymous request.
+		if ( '' === $requester ) {
+			return new WP_Error(
+				'unidentified_requester',
+				__( 'A destructive operation must be requested by an identified principal — an API key, or an administrator in wp-admin.', 'mcpwp' ),
+				array( 'status' => 403 )
+			);
+		}
+
+		// A flood of gated calls must not fill the queue other people review
+		// — from one principal, or from many minted for the purpose.
+		$pending_mine = 0;
+		$pending_api  = 0;
+		foreach ( self::get_all() as $existing ) {
+			if ( ! isset( $existing['status'] ) || 'pending' !== $existing['status'] ) {
+				continue;
+			}
+			$by = isset( $existing['requested_by_key_id'] ) ? (string) $existing['requested_by_key_id'] : '';
+			if ( 0 !== strpos( $by, 'wp-user:' ) ) {
+				$pending_api++;
+			}
+			if ( $by === $requester ) {
+				$pending_mine++;
+			}
+		}
+		$is_admin_requester = 0 === strpos( $requester, 'wp-user:' );
+		if ( $pending_mine >= Mcpwp_Destructive_Gate::MAX_PENDING_PER_REQUESTER ) {
+			return new WP_Error(
+				'too_many_pending',
+				sprintf(
+					/* translators: %d: cap */
+					__( 'This principal already has %d destructive requests pending review. Have them reviewed or rejected before requesting more.', 'mcpwp' ),
+					Mcpwp_Destructive_Gate::MAX_PENDING_PER_REQUESTER
+				),
+				array( 'status' => 429 )
+			);
+		}
+		if ( ! $is_admin_requester && $pending_api >= Mcpwp_Destructive_Gate::MAX_PENDING_TOTAL ) {
+			return new WP_Error(
+				'approval_queue_full',
+				sprintf(
+					/* translators: %d: cap */
+					__( 'This site already has %d destructive requests pending review. Nothing was queued; have the queue reviewed first.', 'mcpwp' ),
+					Mcpwp_Destructive_Gate::MAX_PENDING_TOTAL
+				),
+				array( 'status' => 429 )
+			);
+		}
+
+		$id  = self::generate_id();
+		$now = gmdate( 'c' );
+
+		$request = array(
+			'id'                  => $id,
+			'status'              => 'pending',
+			'action'              => 'destructive_operation',
+			'operation'           => sanitize_key( (string) $operation ),
+			'title'               => isset( $args['title'] ) ? sanitize_text_field( (string) $args['title'] ) : sprintf( 'Destructive: %s', sanitize_key( (string) $operation ) ),
+			'note'                => isset( $args['note'] ) ? sanitize_textarea_field( (string) $args['note'] ) : '',
+			'tool'                => sanitize_key( (string) $operation ),
+			'resource'            => array(
+				'type'  => isset( $resource['type'] ) ? sanitize_key( (string) $resource['type'] ) : 'unknown',
+				'id'    => isset( $resource['id'] ) ? $resource['id'] : null,
+				'title' => isset( $resource['title'] ) ? sanitize_text_field( (string) $resource['title'] ) : '',
+			),
+			'diff'                => array(
+				'summary' => __( 'No undo. Once applied, this cannot be rolled back.', 'mcpwp' ),
+			),
+			'payload'             => $payload,
+			'rollback'            => array(),
+			'metadata'            => array(),
+			'requested_by_key_id' => isset( $args['requested_by_key_id'] ) ? sanitize_text_field( (string) $args['requested_by_key_id'] ) : '',
+			'created_at'          => $now,
+			'updated_at'          => $now,
+			'approved_at'         => null,
+			'applied_at'          => null,
+			'rejected_at'         => null,
+			'rolled_back_at'      => null,
+		);
+
+		self::upsert( $request );
+		$public = self::public_record( $request );
+
+		self::emit_event(
+			'approval.created',
+			$public,
+			'pending',
+			'high',
+			__( 'Review a destructive operation before it runs.', 'mcpwp' )
+		);
+
+		return $public;
+	}
+
 	public static function list_requests( $status = '', $limit = 50, $reveal_non_public = false ) {
 		$items  = array_values( self::get_all() );
 		$status = sanitize_key( (string) $status );
@@ -173,8 +280,68 @@ class Mcpwp_Approvals {
 	 * @param string $note Approval note.
 	 * @return array|WP_Error Request.
 	 */
-	public static function approve_request( $id, $note = '' ) {
+	public static function approve_request( $id, $note = '', $context = array() ) {
+		$request = self::get_private_request( $id );
+		if ( is_wp_error( $request ) ) {
+			return $request;
+		}
+
+		// The actor guard binds destructive operations, on approve as on
+		// apply. Other actions keep their own check_self_approval() path.
+		if ( isset( $request['action'] ) && 'destructive_operation' === $request['action'] ) {
+			$guard = self::guard_actor( $id, $context );
+			if ( is_wp_error( $guard ) ) {
+				return $guard;
+			}
+		}
+
 		return self::transition_request( $id, 'approved', 'approved_at', $note );
+	}
+
+	/**
+	 * The two-person rule, enforced where the state changes (#536 review):
+	 * the principal that requested an operation cannot approve or apply it,
+	 * whichever door it comes through — REST, MCP or the Control Room.
+	 *
+	 * @param string $id      Approval id.
+	 * @param array  $context {actor?: string (key/principal id), admin_user?: int}.
+	 * @return true|WP_Error
+	 */
+	private static function guard_actor( $id, $context ) {
+		$context    = is_array( $context ) ? $context : array();
+		$actor      = isset( $context['actor'] ) ? (string) $context['actor'] : '';
+		$admin_user = isset( $context['admin_user'] ) ? (int) $context['admin_user'] : 0;
+
+		if ( '' === $actor && $admin_user < 1 ) {
+			return new WP_Error(
+				'unidentified_actor',
+				__( 'Approving or applying needs an identified actor: a different API principal, or an administrator in wp-admin.', 'mcpwp' ),
+				array( 'status' => 403 )
+			);
+		}
+
+		$request = self::get_private_request( $id );
+		if ( is_wp_error( $request ) ) {
+			return $request;
+		}
+
+		$requester = isset( $request['requested_by_key_id'] ) ? (string) $request['requested_by_key_id'] : '';
+		if ( '' === $requester ) {
+			return new WP_Error(
+				'unidentified_requester',
+				__( 'This destructive request names no requester, so the two-person rule cannot be applied to it. Reject it and request the operation again.', 'mcpwp' ),
+				array( 'status' => 409 )
+			);
+		}
+		if ( '' !== $actor && $actor === $requester ) {
+			return new WP_Error(
+				'self_approval_forbidden',
+				__( 'The principal that requested this operation cannot approve or apply it. A different admin key, or an administrator in wp-admin, has to.', 'mcpwp' ),
+				array( 'status' => 403 )
+			);
+		}
+
+		return true;
 	}
 
 	/**
@@ -194,17 +361,24 @@ class Mcpwp_Approvals {
 	 * @param string $id Request ID.
 	 * @return array|WP_Error Request.
 	 */
-	public static function apply_request( $id ) {
+	public static function apply_request( $id, $context = array() ) {
 		$request = self::get_private_request( $id );
 		if ( is_wp_error( $request ) ) {
 			return $request;
+		}
+
+		if ( isset( $request['action'] ) && 'destructive_operation' === $request['action'] ) {
+			$guard = self::guard_actor( $id, $context );
+			if ( is_wp_error( $guard ) ) {
+				return $guard;
+			}
 		}
 
 		if ( 'approved' !== $request['status'] ) {
 			return new WP_Error( 'approval_not_ready', __( 'Approval request must be approved before it can be applied.', 'mcpwp' ), array( 'status' => 409 ) );
 		}
 
-		$result = self::apply_payload( $request, 'payload' );
+		$result = self::apply_payload( $request, 'payload', is_array( $context ) ? $context : array() );
 		if ( is_wp_error( $result ) ) {
 			return $result;
 		}
@@ -360,10 +534,34 @@ class Mcpwp_Approvals {
 	 * @param string $field   Data field.
 	 * @return true|WP_Error True on success.
 	 */
-	private static function apply_payload( $request, $field ) {
+	private static function apply_payload( $request, $field, $context = array() ) {
 		// Staging push apply path.
 		if ( 'staging_push' === $request['action'] ) {
 			return self::apply_staging_push( $request, $field );
+		}
+
+		// A destructive operation replays the reviewed call once; there is
+		// nothing to roll back to.
+		if ( 'destructive_operation' === $request['action'] ) {
+			if ( 'rollback' === $field ) {
+				return new WP_Error(
+					'destructive_rollback_unavailable',
+					__( 'A destructive operation has no rollback: what it removed is gone. Restore from a backup.', 'mcpwp' ),
+					array( 'status' => 400 )
+				);
+			}
+
+			if ( ! class_exists( 'Mcpwp_Destructive_Gate' ) ) {
+				return new WP_Error( 'destructive_gate_unavailable', __( 'The destructive-operation gate is not loaded.', 'mcpwp' ), array( 'status' => 500 ) );
+			}
+
+			$result = Mcpwp_Destructive_Gate::replay(
+				isset( $request['payload'] ) && is_array( $request['payload'] ) ? $request['payload'] : array(),
+				is_array( $context ) ? $context : array(),
+				isset( $request['operation'] ) ? (string) $request['operation'] : ''
+			);
+
+			return is_wp_error( $result ) ? $result : true;
 		}
 
 		if ( 'post_content_update' !== $request['action'] || empty( $request['resource']['id'] ) ) {
@@ -429,6 +627,16 @@ class Mcpwp_Approvals {
 	 */
 	private static function public_record( $request ) {
 		unset( $request['payload']['after_content'], $request['rollback']['before_content'] );
+
+		// The target fingerprint is for drift(), which reads the private
+		// record. Publicly it would hand a read-scope key a private page's
+		// exact title, status, modification time and a hash that confirms
+		// guessed body text offline (#536 round 2, P1-2).
+		if ( isset( $request['payload']['target'] ) && is_array( $request['payload']['target'] ) ) {
+			$target = $request['payload']['target'];
+			$request['payload']['target'] = array_intersect_key( $target, array( 'exists' => 1, 'type' => 1, 'count' => 1 ) );
+		}
+
 		return $request;
 	}
 
@@ -460,7 +668,10 @@ class Mcpwp_Approvals {
 		}
 
 		$resource = $record['resource'];
-		if ( ( isset( $resource['type'] ) && 'post' !== $resource['type'] ) || empty( $resource['id'] ) ) {
+		// Any post-like resource (post, page, a custom type): a destructive
+		// request against a private page must not leak its title to a
+		// read-scope key through the approvals list.
+		if ( empty( $resource['id'] ) || ! is_numeric( $resource['id'] ) || ( isset( $resource['type'] ) && in_array( $resource['type'], array( 'api_key', 'drafts' ), true ) ) ) {
 			return $record;
 		}
 
@@ -505,7 +716,14 @@ class Mcpwp_Approvals {
 			}
 		);
 
-		$items = array_slice( $items, 0, self::MAX_ITEMS, true );
+		// Only closed records are evicted; a pending or approved request is
+		// someone's unfinished review and stays until it is decided.
+		if ( count( $items ) > self::MAX_ITEMS ) {
+			$open   = array_filter( $items, function ( $item ) { return isset( $item['status'] ) && in_array( $item['status'], array( 'pending', 'approved' ), true ); } );
+			$closed = array_filter( $items, function ( $item ) { return ! isset( $item['status'] ) || ! in_array( $item['status'], array( 'pending', 'approved' ), true ); } );
+			$closed = array_slice( $closed, 0, max( 0, self::MAX_ITEMS - count( $open ) ), true );
+			$items  = $open + $closed;
+		}
 		update_option( self::OPTION_NAME, $items, false );
 	}
 

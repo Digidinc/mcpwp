@@ -285,7 +285,12 @@ function is_wp_error($value)
 
 function sanitize_text_field($value)
 {
-    return trim((string) $value);
+        // Mirror core: tags stripped, control characters and surrounding
+        // whitespace removed. A passthrough here hid a stored-XSS class.
+        $value = is_scalar($value) ? (string) $value : '';
+        $value = strip_tags($value);
+        $value = preg_replace('/[\r\n\t ]+/', ' ', $value);
+        return trim($value);
 }
 
 function sanitize_textarea_field($value)
@@ -385,6 +390,21 @@ function wp_unslash($value)
 function wp_set_current_user($user_id)
 {
     $GLOBALS['mcpwp_test_current_user'] = (int) $user_id;
+}
+
+function user_can($user, $capability)
+{
+    // $GLOBALS['mcpwp_test_user_caps'][$id] is either a cap => bool map (the
+    // OAuth tests' convention) or a list of cap names. Unset means no caps.
+    $id   = is_object($user) ? (int) $user->ID : (int) $user;
+    $caps = $GLOBALS['mcpwp_test_user_caps'][ $id ] ?? array();
+    if ($id < 1 || ! is_array($caps)) {
+        return false;
+    }
+    if (array_key_exists($capability, $caps)) {
+        return (bool) $caps[ $capability ];
+    }
+    return in_array($capability, $caps, true);
 }
 
 function get_current_user_id()
@@ -540,6 +560,40 @@ function is_serialized($data, $strict = true)
     }
     $last = substr($data, -1);
     return in_array($m[1], array('a', 'O'), true) ? '}' === $last : ';' === $last;
+}
+
+function wp_delete_post($post_id, $force_delete = false)
+{
+    $post_id = (int) $post_id;
+    if (empty($GLOBALS['_mcpwp_test_posts'][ $post_id ])) {
+        return false;
+    }
+    $post = $GLOBALS['_mcpwp_test_posts'][ $post_id ];
+    // Core trashes on force=false ONLY for post and page (and only while
+    // EMPTY_TRASH_DAYS is set); every other type is deleted outright. A
+    // double that trashed everything hid an ungated permanent delete
+    // (#536 round 5).
+    $trashes = ! $force_delete && in_array($post->post_type, array('post', 'page'), true) && (! defined('EMPTY_TRASH_DAYS') || EMPTY_TRASH_DAYS);
+    if ($trashes && 'trash' !== $post->post_status) {
+        $post->post_status = 'trash';
+        return $post;
+    }
+    unset($GLOBALS['_mcpwp_test_posts'][ $post_id ], $GLOBALS['_mcpwp_test_meta'][ $post_id ]);
+    return $post;
+}
+
+if (! function_exists('wp_delete_attachment')) {
+    function wp_delete_attachment($post_id, $force_delete = false)
+    {
+        // Core trashes an attachment only when MEDIA_TRASH is on.
+        $force = $force_delete || ! (defined('MEDIA_TRASH') && MEDIA_TRASH);
+        return wp_delete_post($post_id, $force);
+    }
+}
+
+function wp_trash_post($post_id)
+{
+    return wp_delete_post($post_id, false);
 }
 
 function delete_option($name)
@@ -926,7 +980,8 @@ function register_rest_route($namespace = '', $route = '', $args = array())
 function rest_do_request($request = null)
 {
     if (is_object($request) && method_exists($request, 'get_route')) {
-        $GLOBALS['mcpwp_test_dispatched_routes'][] = $request->get_route();
+        $GLOBALS['mcpwp_test_dispatched_routes'][]   = $request->get_route();
+        $GLOBALS['mcpwp_test_dispatched_requests'][] = $request;
     }
     // A test may script the body the dispatched route answers with, e.g. a
     // 200 that carries its own errors[] (a partial success).
@@ -2178,8 +2233,9 @@ require_once dirname(__DIR__) . '/includes/mcp/class-mcpwp-mcp-pro-tools.php';
 require_once dirname(__DIR__) . '/includes/mcp/class-mcpwp-integration.php';
 require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-mcp.php';
 require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-pages.php';
-require_once dirname(__DIR__) . '/includes/class-mcpwp-duplicate-copy.php';
 require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-site-updates.php';
+require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-media.php';
+require_once dirname(__DIR__) . '/includes/class-mcpwp-duplicate-copy.php';
 require_once dirname(__DIR__) . '/includes/class-mcpwp-loader.php';
 require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-menus.php';
 // The single definition of which Elementor settings keys are wrong. Loaded
@@ -2190,6 +2246,7 @@ require_once dirname(__DIR__) . '/includes/core/class-mcpwp-slug-search.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-idempotency-claim.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-post-fields.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-option-access.php';
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-destructive-gate.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-registry.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-element-keys.php';
 require_once dirname(__DIR__) . '/includes/core/traits/trait-mcpwp-elementor-reader.php';

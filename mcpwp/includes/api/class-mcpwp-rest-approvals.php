@@ -159,7 +159,14 @@ class Mcpwp_REST_Approvals extends Mcpwp_REST_API {
 			return $self_approval_check;
 		}
 
-		$result = Mcpwp_Approvals::apply_request( $request->get_param( 'id' ) );
+		$record = $this->get_current_api_key_record();
+		$result = Mcpwp_Approvals::apply_request(
+			$request->get_param( 'id' ),
+			array(
+				'api_key' => (string) $this->get_api_key_from_request( $request ),
+				'actor'   => is_array( $record ) && ! empty( $record['id'] ) ? (string) $record['id'] : '',
+			)
+		);
 		if ( is_wp_error( $result ) ) {
 			return $result;
 		}
@@ -265,10 +272,19 @@ class Mcpwp_REST_Approvals extends Mcpwp_REST_API {
 	 * @return WP_REST_Response|WP_Error Response.
 	 */
 	private function approval_transition_response( $request, $method, $activity ) {
+		$record  = $this->get_current_api_key_record();
+		$context = array( 'actor' => is_array( $record ) && ! empty( $record['id'] ) ? (string) $record['id'] : '' );
+		// The wp-admin chat has no key record; its actor is the logged-in
+		// administrator, as it is from the Control Room (#536 round 8).
+		if ( '' === $context['actor'] && class_exists( 'Mcpwp_Destructive_Gate' ) && Mcpwp_Destructive_Gate::in_admin_context() && get_current_user_id() > 0 ) {
+			$context['actor']      = 'wp-user:' . get_current_user_id();
+			$context['admin_user'] = get_current_user_id();
+		}
 		$result = call_user_func(
 			array( 'Mcpwp_Approvals', $method ),
 			$request->get_param( 'id' ),
-			(string) $request->get_param( 'note' )
+			(string) $request->get_param( 'note' ),
+			$context
 		);
 
 		if ( is_wp_error( $result ) ) {

@@ -674,8 +674,19 @@ class Mcpwp_REST_WooCommerce extends Mcpwp_REST_API {
 	 * @return WP_REST_Response|WP_Error
 	 */
 	public function delete_product( $request ) {
-		$id    = $request->get_param( 'id' );
-		$force = $request->get_param( 'force' );
+		$id    = absint( $request->get_param( 'id' ) );
+		$force = rest_sanitize_boolean( $request->get_param( 'force' ) );
+
+		// Permanently deleting a product is revenue-bearing data with no
+		// undo: approval by default (#536 round 2). Only for a product that
+		// exists — a deferral is not a way to manufacture records.
+		$product = class_exists( 'Mcpwp_Destructive_Gate' ) && Mcpwp_Destructive_Gate::should_gate( $this->get_current_api_key_record() ) ? get_post( $id ) : null;
+		if ( $product && Mcpwp_Destructive_Gate::delete_is_permanent( 'product', $force, (string) $product->post_status ) ) {
+			if ( 'product' !== $product->post_type ) {
+				return $this->error_response( 'not_found', __( 'Product not found.', 'mcpwp' ), 404, array( 'id' => $id ) );
+			}
+			return $this->defer_destructive( 'delete_product', $request, array( 'type' => 'product', 'id' => $id, 'title' => (string) $product->post_title ), sprintf( 'Permanently delete product #%d', $id ) );
+		}
 
 		$result = $this->handler->delete_product( $id, $force );
 

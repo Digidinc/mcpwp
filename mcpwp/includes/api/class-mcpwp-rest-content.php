@@ -193,6 +193,13 @@ class Mcpwp_REST_Content extends Mcpwp_REST_API {
 			);
 		}
 
+		// A permanent delete has no undo: approval by default (#536). A custom
+		// type is never trashed by WordPress, so force=false is permanent too
+		// (#536 round 5).
+		if ( Mcpwp_Destructive_Gate::delete_is_permanent( $post_type, $force, (string) $post->post_status ) && Mcpwp_Destructive_Gate::should_gate( $this->get_current_api_key_record() ) ) {
+			return $this->defer_destructive( 'delete_content', $request, array( 'type' => $post_type, 'id' => $post_id, 'title' => get_the_title( $post_id ) ), sprintf( 'Permanently delete %s #%d', $post_type, $post_id ) );
+		}
+
 		$result = wp_delete_post( $post_id, $force );
 		if ( ! $result ) {
 			return $this->error_response(
