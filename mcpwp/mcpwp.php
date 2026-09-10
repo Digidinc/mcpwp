@@ -238,6 +238,7 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-security.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-webhooks.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-alerts.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-duplicate-copy.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-license.php';
 	if ( defined( 'MCPWP_FREEMIUS_BUILD' ) && MCPWP_FREEMIUS_BUILD && file_exists( MCPWP_PLUGIN_DIR . 'includes/freemius-init.php' ) ) {
 		require_once MCPWP_PLUGIN_DIR . 'includes/freemius-init.php';
@@ -458,6 +459,9 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	// Initialize the plugin
 	$loader = new Mcpwp_Loader();
 	$loader->run();
+
+	// Refuse a second installed copy and surface a double load (#802).
+	Mcpwp_Duplicate_Copy::register();
 
 	// Wire analytics: Mcpwp_Analytics listens on every MCP tool call.
 	add_action( 'mcpwp_tool_called', array( 'Mcpwp_Analytics', 'on_tool_called' ), 10, 4 );
