@@ -5,7 +5,7 @@
 <h1 align="center">MCPWP</h1>
 
 <p align="center">
-  <strong>WordPress MCP server. 120+ tools. Works with Claude, ChatGPT, OpenClaw, Hermes, Cursor, and any MCP client.</strong>
+  <strong>WordPress MCP server. 260+ tools (180+ on Free). Works with Claude, ChatGPT, OpenClaw, Hermes, Cursor, and any MCP client.</strong>
 </p>
 
 <p align="center">
@@ -20,7 +20,7 @@
 <p align="center">
   <a href="https://github.com/Mumega-com/mcpwp/stargazers"><img src="https://img.shields.io/github/stars/Mumega-com/mcpwp?style=flat-square" alt="Stars"></a>
   <a href="https://github.com/Mumega-com/mcpwp/releases"><img src="https://img.shields.io/github/v/release/Mumega-com/mcpwp?style=flat-square" alt="Release"></a>
-  <img src="https://img.shields.io/badge/tools-120%2B-blue?style=flat-square" alt="120+ tools">
+  <img src="https://img.shields.io/badge/tools-260%2B-blue?style=flat-square" alt="260+ tools">
   <img src="https://img.shields.io/badge/MCP-compatible-brightgreen?style=flat-square" alt="MCP">
   <img src="https://img.shields.io/badge/OpenClaw-skill%20available-orange?style=flat-square" alt="OpenClaw">
   <img src="https://img.shields.io/badge/WordPress-5.0%2B-21759b?style=flat-square" alt="WordPress">
@@ -85,7 +85,7 @@ graph LR
 ## Install
 
 ```bash
-wp plugin install https://mcpwp.net/download/mcpwp.zip --activate
+wp plugin install https://updates.mcpwp.net/mcpwp-latest.zip --activate
 ```
 
 Or download from [mcpwp.net](https://mcpwp.net) and upload via **WP Admin → Plugins → Add New**.
@@ -142,7 +142,7 @@ openclaw mcp add mcpwp \
 }
 ```
 
-Hermes auto-discovers all 120+ tools. With [Tool Search](https://hermes-agent.nousresearch.com/docs/user-guide/features/mcp) enabled, large tool catalogs see 25–50% accuracy gains on tool selection.
+Hermes auto-discovers every tool the site exposes. With [Tool Search](https://hermes-agent.nousresearch.com/docs/user-guide/features/mcp) enabled, large tool catalogs see 25–50% accuracy gains on tool selection.
 
 ### Cursor / Windsurf / Zed
 
@@ -299,58 +299,17 @@ Create keys via **WP Admin → MCPWP → Setup**, or `wp_create_api_key(label, r
 
 ## Roadmap
 
-### Shipped
+**Current release: v3.11.1** (2026-09-10). Full history in [`mcpwp/CHANGELOG.md`](mcpwp/CHANGELOG.md).
 
-**v3.3.3** (current)
-- [x] `wp_get_rendered_copy` (Free) — structured visible text from live rendered page: headings, paragraphs, button labels, list items, link text, image alts; ground truth for copy audits
-- [x] `wp_flush_cache` (Pro) — flush WP page cache: W3TC, WP Super Cache, LiteSpeed, WP Rocket, Cache Enabler, Breeze, Cloudflare; optional per-URL or site-wide
-- [x] All validators return `validation_basis` + `validation_note`; `validate_seo_readiness` fetches live `<head>`; `validate_internal_links` walks `_elementor_data`; `validate_structured_data` parses Yoast/AIOSEO `@graph`
-- [x] Security: batch sub-request bypass closed; `sslverify` defaults to `!(WP_DEBUG)`; SSRF redirect bypass closed via `redirection=0`
-- [x] `/onboard` returns `suggested_first_tools` (context-aware) and `quick_start` string
-- [x] Tool docs: `wp_create_page`/`wp_update_page` document `parent`, `template`, `menu_order`; `wp_create_post`/`wp_update_post` document `categories` and `tags`
+**3.11 "Truth & Reliability"** — the plugin must never report a change that did not happen:
+- **3.11.0:** batch-weighted rate limits, idempotent tool calls (`_meta.request_id`), option-access policy with secret-preserving writes, terms and meta on post writes, approval by default for deletes with no undo.
+- **3.11.1:** 7-character Elementor element ids with opt-in repair, `wp_batch` and a per-request spend budget, atomic feedback-relay admission, encryption key integrity and versioned secrets, Figma and SEO market data gated on Pro everywhere, WooCommerce purchasability, webhook log redaction, explicit analytics consent on Free.
 
-**v3.0.1**
-- [x] Signals fatal fix — `compute_seo_issues()` 502 on every compute resolved; time-budgeted compute with `partial`/`skipped_types` reporting
-- [x] `GET /signals` lazy-computes on first read — fixes empty feed on low-traffic hosts
-- [x] Freemius single source of truth — removed legacy local trial and parallel entitlement paths; canonical `get_license_info()` accessor
-- [x] G1–G5 modular monolith — split 4 monolithic files (REST Site 4531 lines, tool mega-files, Admin 3491 lines, Elementor Basic 3299 lines) into focused per-surface controllers; gateway hardening
+**Next:**
+- **3.12 "Elementor edits you can trust"** (in progress): undo through WordPress revisions, validation against Elementor's live controls, patch-operation fixes, dry runs that exercise the save path, cache purge and complete render verification.
+- **3.13:** consistent list/search responses, field projection on large reads, one parameter name per concept, better post-meta reads.
 
-**v3.0.0**
-- [x] Full rebrand — plugin folder, main file, classes, function/option prefixes, constants, text domain, REST namespace (`mcpwp/v1`). Clean break from `site-pilot-ai` / `spai_`.
-
-**v2.8.x**
-- [x] Server-side MCP tool analytics (PostHog, opt-in/opt-out)
-- [x] Agency multi-site proxy (Cloudflare Worker, hybrid MCP routing)
-- [x] AI action audit log + rollback (EU AI Act ready, Aug 2026)
-- [x] White-label branding + `[mcpwp_chat]` shortcode
-- [x] Dynamic site memory (`wp_remember` / `wp_recall` / `wp_forget`)
-- [x] Proactive signals (`wp_get_signals`)
-- [x] Site blueprint library (5 starters, deploy + extract)
-- [x] Chat excellence (multi-model: OpenAI GPT-4o mini, Gemini 2.5 Flash, Workers AI; SSE streaming; history)
-- [x] BM25-optimized tool descriptions (56 tools rewritten for accuracy)
-- [x] Keyword research (`wp_keyword_research` — keyless, no API required)
-
-### Next — v3.1 "Launch" train (toward Product Hunt)
-- [ ] Bridge release (2.8.57 → 3.1) — safe `site-pilot-ai/` → `mcpwp/` slug crossing + data migration + dual-prefix key auth (keystone; channel stays pinned at 2.8.56 until verified)
-- [ ] Freemius + connected Stripe checkout, signed pricing live (US-first)
-- [ ] Pricing page render fix + conversion surface (excerpts, internal links, email capture)
-- [ ] Local e2e test rig (dev / upgrade / multisite) + install matrix across runtimes
-- [ ] WordPress.org submission (free tier, GPL clean)
-- [ ] Privacy policy at mcpwp.net/privacy (blocks WP.org + ChatGPT App + Claude Connector)
-- [ ] MCP registry submissions (official registry, mcp.so, smithery.ai, glama.ai)
-- [ ] Claude Desktop Extension (`.mcpb` format, per-user URL + API key)
-
-### Auth Keystone
-- [ ] OAuth 2.1 + Dynamic Client Registration — unlocks ChatGPT Business connectors (mandate OAuth+DCR, no bearer) and Claude Managed Agents (OAuth Vaults)
-- [ ] ChatGPT native MCP Connector (120+ tools, live tool discovery)
-- [ ] Claude Connector directory listing
-
-### Platform
-- [ ] Per-site custom tool registry — add tools without modifying the plugin
-- [ ] Multi-agent handoffs — SEO + content + deploy agents in sequence
-- [ ] Hosted marketing agent (agent.mcpwp.net)
-
----
+Plans: [`docs/ROADMAP-3.11.md`](docs/ROADMAP-3.11.md) (3.11–3.13) and [`docs/ROADMAP-4.0.md`](docs/ROADMAP-4.0.md) (gateway architecture and release engineering).
 
 ## Contributing
 
