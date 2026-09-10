@@ -52,6 +52,11 @@ jobs:
       - name: Canary workflow contract test
         run: bash scripts/tests/verify_canary_workflow_test.sh
 
+      # The contract test must reject every way of silencing the canary, not
+      # only pass the workflow as it is today (review r3 R3-4).
+      - name: Canary workflow contract self-test
+        run: bash scripts/tests/verify_canary_workflow_test.sh --self-test
+
   verify:
     runs-on: ubuntu-latest
     strategy:
