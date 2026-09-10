@@ -2355,6 +2355,9 @@ function update_post_meta($post_id, $key, $value)
     // Core's update_metadata() runs sanitize_meta(), which applies a
     // registered key's sanitize_callback. Without this the harness could not
     // tell whether a callback ran.
+    // Core unslashes BEFORE sanitize_meta(), so a sanitizer sees the value
+    // the caller meant, not its slashed transport form.
+    $value = wp_unslash($value);
     if (function_exists('sanitize_meta')) {
         $post = get_post((int) $post_id);
         $value = sanitize_meta($key, $value, 'post', ($post && isset($post->post_type)) ? $post->post_type : '');
@@ -2371,7 +2374,7 @@ function update_post_meta($post_id, $key, $value)
         return false;
     }
 
-    $GLOBALS['_mcpwp_test_meta'][ (int) $post_id ][ $key ] = wp_unslash($value);
+    $GLOBALS['_mcpwp_test_meta'][ (int) $post_id ][ $key ] = $value;
     return true;
 }
 
@@ -2661,6 +2664,7 @@ require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-registry.p
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-element-keys.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-element-ids.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-stored-tree.php';
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-meta-write.php';
 require_once dirname(__DIR__) . '/includes/core/traits/trait-mcpwp-elementor-reader.php';
 require_once dirname(__DIR__) . '/includes/core/traits/trait-mcpwp-elementor-writer.php';
 require_once dirname(__DIR__) . '/includes/core/traits/trait-mcpwp-elementor-validator.php';
@@ -2892,11 +2896,33 @@ if (! function_exists('is_protected_meta')) {
 if (! function_exists('sanitize_meta')) {
     function sanitize_meta($meta_key, $meta_value, $object_type, $object_subtype = '')
     {
-        $reg = $GLOBALS['_mcpwp_test_registered_meta'][ $meta_key ] ?? null;
-        if ($reg && ! empty($reg['sanitize_callback']) && is_callable($reg['sanitize_callback'])) {
-            return call_user_func($reg['sanitize_callback'], $meta_value);
+        // Core's register_meta() hooks a sanitize_callback onto
+        // "sanitize_{type}_meta_{key}_for_{subtype}" at priority 10, and
+        // sanitize_meta() applies that filter (or the subtype-less one). The
+        // double used to call the callback directly, so nothing else hooked on
+        // those filters — a scoped capability grant, another plugin — could
+        // ever be observed around a sanitizer (#829: Elementor 4.2.x registers
+        // one on _elementor_data and _elementor_page_settings).
+        $reg      = $GLOBALS['_mcpwp_test_registered_meta'][ $meta_key ] ?? null;
+        $callback = ($reg && ! empty($reg['sanitize_callback']) && is_callable($reg['sanitize_callback'])) ? $reg['sanitize_callback'] : null;
+        $generic  = "sanitize_{$object_type}_meta_{$meta_key}";
+        $subtyped = '' !== (string) $object_subtype ? "{$generic}_for_{$object_subtype}" : '';
+        $hook     = '' !== $subtyped ? $subtyped : $generic;
+
+        if (null !== $callback) {
+            add_filter($hook, $callback, 10, 1);
         }
-        return $meta_value;
+
+        try {
+            if ('' !== $subtyped && has_filter($subtyped)) {
+                return apply_filters($subtyped, $meta_value, $meta_key, $object_type, $object_subtype);
+            }
+            return apply_filters($generic, $meta_value, $meta_key, $object_type);
+        } finally {
+            if (null !== $callback) {
+                remove_filter($hook, $callback, 10);
+            }
+        }
     }
 }
 if (! function_exists('set_post_thumbnail')) {

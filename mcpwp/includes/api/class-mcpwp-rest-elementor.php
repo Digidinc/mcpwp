@@ -1081,7 +1081,7 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 			$updated = Mcpwp_Elementor_Element_Keys::normalize_json( $updated );
 		}
 
-		update_post_meta( $page_id, '_elementor_data', wp_slash( $updated ) );
+		Mcpwp_Elementor_Meta_Write::update( $page_id, '_elementor_data', wp_slash( $updated ) );
 
 		// Clear Elementor CSS cache for this post.
 		if ( class_exists( '\Elementor\Plugin' ) ) {
@@ -1322,7 +1322,7 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 				if ( class_exists( 'Mcpwp_Elementor_Element_Keys' ) ) {
 					$encoded = Mcpwp_Elementor_Element_Keys::normalize_json( $encoded );
 				}
-				update_post_meta( $post_id, '_elementor_data', wp_slash( $encoded ) );
+				Mcpwp_Elementor_Meta_Write::update( $post_id, '_elementor_data', wp_slash( $encoded ) );
 				if ( class_exists( '\Elementor\Plugin' ) ) {
 					$post_css = \Elementor\Core\Files\CSS\Post::create( $post_id );
 					if ( $post_css ) {
@@ -1599,7 +1599,7 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 			$settings['custom_css'] = $new_css;
 		}
 
-		update_post_meta( $kit_id, '_elementor_page_settings', $settings );
+		Mcpwp_Elementor_Meta_Write::update( $kit_id, '_elementor_page_settings', $settings );
 
 		// Clear Elementor CSS cache so the new kit CSS is regenerated.
 		if ( method_exists( \Elementor\Plugin::$instance->files_manager, 'clear_cache' ) ) {
@@ -1722,29 +1722,33 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 		$settings               = get_post_meta( $kit_id, '_elementor_page_settings', true );
 		$settings               = is_array( $settings ) ? $settings : array();
 		$settings['custom_css'] = $css;
-		update_post_meta( $kit_id, '_elementor_page_settings', $settings );
+		Mcpwp_Elementor_Meta_Write::update( $kit_id, '_elementor_page_settings', $settings );
 
 		// Verify the exact bytes landed, and repair them if they did not.
 		//
 		// CSS is not HTML. A child combinator (".a>.b") is ordinary, valid CSS,
-		// but somewhere in WordPress's meta write path it can be stored
-		// HTML-escaped as ".a&gt;.b" — reproduced on WP 7.0.2 / Elementor 4.2.4
-		// for a request whose user lacks unfiltered_html, which is every
-		// API-key request. That is silent data corruption, not a safety
-		// control: the escaped text is no longer the stylesheet the caller
-		// wrote, the selector stops matching, and the stored block no longer
-		// hashes to the hash recorded in its own marker — so a later idempotent
-		// upsert reports "skipped" over content that is already broken.
+		// but a meta sanitizer can store it HTML-escaped as ".a&gt;.b". That is
+		// silent data corruption, not a safety control: the escaped text is no
+		// longer the stylesheet the caller wrote, the selector stops matching,
+		// and the stored block no longer hashes to the hash recorded in its own
+		// marker — so a later idempotent upsert reports "skipped" over content
+		// that is already broken.
 		//
-		// Escaping is not reversed blindly here: a caller may legitimately
-		// write a literal "&gt;" and that must survive untouched. Instead the
-		// exact bytes we intended are compared against what the row actually
-		// holds, and only a mismatch is repaired, by writing the row directly.
+		// The layer that did it on every API write was Elementor 4.2.x's own
+		// REST meta sanitizer (#829); the write above goes past it, so on a
+		// host with nothing else in the way the first write is exact and this
+		// check finds nothing. It stays for anything else that alters the row
+		// — another plugin's sanitizer, a host filter — and only a byte
+		// mismatch is repaired, by writing the row directly. Escaping is never
+		// reversed blindly: a caller may legitimately write a literal "&gt;".
 		$repaired = false;
+		$altered  = array();
 		$stored   = $this->read_kit_css_from_db( $kit_id );
 
 		if ( null !== $stored && $stored !== $css ) {
 			global $wpdb;
+
+			$altered = $this->escaped_characters( $css, $stored );
 
 			$settings['custom_css'] = $css;
 
@@ -1770,9 +1774,37 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 		}
 
 		return array(
-			'verified' => ( null !== $stored && $stored === $css ),
-			'repaired' => $repaired,
+			'verified'      => ( null !== $stored && $stored === $css ),
+			'repaired'      => $repaired,
+			'altered_chars' => $altered,
 		);
+	}
+
+	/**
+	 * Which characters a write stored as HTML entities that the caller did not
+	 * send as entities — so a repair can say what was altered.
+	 *
+	 * @param string $intended Bytes the caller sent.
+	 * @param string $stored   Bytes the row held.
+	 * @return string[] Characters, e.g. [">"]; empty when the difference was not escaping.
+	 */
+	private function escaped_characters( $intended, $stored ) {
+		$entities = array(
+			'>' => '&gt;',
+			'<' => '&lt;',
+			'&' => '&amp;',
+			'"' => '&quot;',
+			"'" => '&#039;',
+		);
+
+		$chars = array();
+		foreach ( $entities as $char => $entity ) {
+			if ( substr_count( $stored, $entity ) > substr_count( $intended, $entity ) ) {
+				$chars[] = $char;
+			}
+		}
+
+		return $chars;
 	}
 
 	/**
@@ -1991,10 +2023,15 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 		);
 
 		if ( $write['repaired'] ) {
-			// Surfaced rather than swallowed: the host mangled the first write,
-			// which is worth knowing even though the stored bytes are now correct.
-			$response['storage_repaired'] = true;
-			$response['storage_note']     = 'The first write was altered by the host (HTML-escaped) and was rewritten directly so the stored CSS matches what you sent.';
+			// Only when bytes really differed (#829): the flag used to be on for
+			// every write, because Elementor's own sanitizer escaped each one,
+			// so it carried no information. Now it means something else on this
+			// site altered the stored CSS, and says what.
+			$response['storage_repaired']      = true;
+			$response['storage_altered_chars'] = $write['altered_chars'];
+			$response['storage_note']          = empty( $write['altered_chars'] )
+				? 'The first write did not store the bytes you sent (something on this site altered them on the way into the database) and was rewritten directly so the stored CSS matches what you sent.'
+				: sprintf( 'The first write stored %s as HTML entities (a meta sanitizer or host filter on this site escaped them) and was rewritten directly so the stored CSS matches what you sent.', implode( ' ', $write['altered_chars'] ) );
 		}
 
 		if ( $existing_corrupt ) {

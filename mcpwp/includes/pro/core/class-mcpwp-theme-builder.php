@@ -796,7 +796,8 @@ class Mcpwp_Theme_Builder {
 
 			// Always overwrite raw meta — Document::save() may silently fail or
 			// write to revision cache instead of post meta (#198).
-			update_post_meta( $template_id, '_elementor_data', wp_slash( $json ) );
+			// Past Elementor 4.2.x's REST meta sanitizer, which kses-escapes it for the API user (#829).
+			Mcpwp_Elementor_Meta_Write::update( $template_id, '_elementor_data', wp_slash( $json ) );
 			wp_cache_delete( $template_id, 'post_meta' );
 			clean_post_cache( $template_id );
 

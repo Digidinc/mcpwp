@@ -277,6 +277,8 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-elementor-element-ids.php';
 	// The one reader of a stored `_elementor_data` tree, whatever its form (#845).
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-elementor-stored-tree.php';
+	// Stores _elementor_data / _elementor_page_settings as built, past Elementor's REST meta sanitizer (#829).
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-elementor-meta-write.php';
 	// Elementor engine verb traits (mixed into Mcpwp_Elementor_Basic — G4 split).
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/traits/trait-mcpwp-elementor-reader.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/traits/trait-mcpwp-elementor-writer.php';

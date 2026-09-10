@@ -1091,6 +1091,19 @@ MCP tool: `wp_patch_elementor`. Applies up to **20 operations per call** (advert
 
 **Response:** one row per operation in `operations[]` with `op`, `index`, `success` and `element_id`. `add` rows add `position` and `parent_id`; when the save de-duplicated or repaired an added element's id — nested adds included — `element_id` is the id it was saved with and `element_id_submitted` the one sent. `settings` rows that carried `unset` add `removed_keys` and `keys_not_present`: a key that was not there is reported as not present, never as removed. `repair_ids=true` with no operations rewrites non-conforming element ids only (see `id_repair`).
 
+#### Kit CSS Blocks
+
+```http
+GET    /elementor/kit-css/blocks
+POST   /elementor/kit-css/blocks
+GET    /elementor/kit-css/blocks/{name}
+DELETE /elementor/kit-css/blocks/{name}
+```
+
+MCP tools: `wp_list_kit_css_blocks`, `wp_upsert_kit_css_block` (`name`, `css`, optional `expected_hash`), `wp_get_kit_css_block`, `wp_delete_kit_css_block`. Named, hash-tagged blocks inside the active kit's custom CSS; re-upserting identical CSS answers `action: "skipped"`.
+
+**Stored byte-for-byte (#829).** Elementor 4.2.x registers `_elementor_page_settings` and `_elementor_data` with a sanitizer that runs `wp_kses_post()` over every string during REST requests when the user lacks `unfiltered_html` — every API-key request — which stored `.a>.b` as `.a&gt;.b`. MCPWP writes those keys (Kit CSS, page settings, every Elementor data write) past it: the writing user is granted `unfiltered_html` only while that key's sanitize filters run for that one write. Every upsert then reads the row back. `verified: true` means the stored block is exactly the CSS sent. `storage_repaired: true` appears only when the first write still stored different bytes — something else on the site altered them (another plugin's sanitizer, a host filter) — and the row was rewritten directly; `storage_altered_chars` then lists the characters stored as HTML entities (for example `[">"]`, empty when the difference was not escaping). A write that cannot be verified is an error (`kit_css_write_unverified`), not a success.
+
 ### Elementor Pro
 
 *Requires Pro license*

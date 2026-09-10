@@ -480,7 +480,7 @@ class Mcpwp_Action_Log {
 				// Slashed: update_post_meta() unslashes what it stores, and
 				// Elementor JSON escapes every quote inside a setting. Restored
 				// unslashed, the page could not be decoded (#845).
-				update_post_meta( (int) $snap['post_id'], '_elementor_data', wp_slash( $snap_data ) );
+				Mcpwp_Elementor_Meta_Write::update( (int) $snap['post_id'], '_elementor_data', wp_slash( $snap_data ) );
 				delete_post_meta( (int) $snap['post_id'], '_elementor_css' );
 				return true;
 
