@@ -5,6 +5,26 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.11.1](https://github.com/Mumega-com/mcpwp/compare/v3.11.0...v3.11.1) (2026-09-10)
+
+
+### Features
+
+* **mcp:** wp_batch, per-request spend budget, fixed bulk weights, plugin_version in _meta ([#802](https://github.com/Mumega-com/mcpwp/issues/802), [#752](https://github.com/Mumega-com/mcpwp/issues/752) F9) ([#848](https://github.com/Mumega-com/mcpwp/issues/848)) ([bcc16a5](https://github.com/Mumega-com/mcpwp/commit/bcc16a53479d9a1dd36615a7b3df049f9ad59f41))
+
+
+### Bug Fixes
+
+* 3.11.1 follow-ups — WooCommerce product facts, webhook log redaction, settings checkboxes, Freemius ZIP verify ([#846](https://github.com/Mumega-com/mcpwp/issues/846)) ([9aa6465](https://github.com/Mumega-com/mcpwp/commit/9aa64658d23f65cd911e5014ae481c1f3b19ba98))
+* **elementor:** 7-character element ids, warn on the rest, opt-in repair ([#842](https://github.com/Mumega-com/mcpwp/issues/842)) ([#847](https://github.com/Mumega-com/mcpwp/issues/847)) ([29bc110](https://github.com/Mumega-com/mcpwp/commit/29bc110db172d6c8941ee672c955b926b214d935))
+* **feedback:** atomic relay admission on a persistent object cache, mode reported ([#752](https://github.com/Mumega-com/mcpwp/issues/752) F6) ([#844](https://github.com/Mumega-com/mcpwp/issues/844)) ([2e7ba33](https://github.com/Mumega-com/mcpwp/commit/2e7ba33ee205f3b0e73ad17b4915662e8c5c6518))
+* **security:** encryption key never regenerated, versioned blobs, migration lock; Pro gate on Figma and SEO market data ([#564](https://github.com/Mumega-com/mcpwp/issues/564)) ([#849](https://github.com/Mumega-com/mcpwp/issues/849)) ([7fcf9d3](https://github.com/Mumega-com/mcpwp/commit/7fcf9d35598a0f5f2128f700f4af6a977b361a35))
+
+
+### Documentation
+
+* how to pin a release version, and the squash-body trap ([#854](https://github.com/Mumega-com/mcpwp/issues/854)) ([42e2a26](https://github.com/Mumega-com/mcpwp/commit/42e2a2609e72c4b9aec32776a5a94199c201da65))
+
 ## [3.11.0](https://github.com/Mumega-com/mcpwp/compare/v3.10.8...v3.11.0) (2026-09-10)
 
 
