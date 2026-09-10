@@ -214,4 +214,189 @@ final class WebhookLogRedactionTest extends TestCase {
 		$this->assertSame( 'Spring sale', json_decode( $row['payload'], true )['post']['title'] );
 		$this->assertSame( 1, $logs['total'] );
 	}
+
+	// -----------------------------------------------------------------
+	// Review r1 P2-B: a receiver can echo the payload back in a body the
+	// structural redactor cannot open. The site knows exactly which secret
+	// values it redacted from the payload, so those values are removed from
+	// the response body and error message in every common encoding.
+	// -----------------------------------------------------------------
+
+	private const SPECIAL_SECRET = 'p@ss/w0rd+&"x<y>z';
+
+	private function payload_with_secrets(): array {
+		return $this->payload() + array(
+			'client_secret' => self::SPECIAL_SECRET,
+			'token'         => 'abc12', // below the minimum scrub length (6)
+		);
+	}
+
+	private function deliver_payload( array $payload ): void {
+		$webhook = array(
+			'id'          => 7,
+			'url'         => 'https://93.184.216.34/hook',
+			'secret'      => 'whsec_signing_secret_value',
+			'retry_count' => 0,
+		);
+		$method  = new ReflectionMethod( Mcpwp_Webhooks::class, 'deliver' );
+		$method->setAccessible( true );
+		$method->invoke( $this->webhooks(), $webhook, 'post.updated', $payload );
+	}
+
+	private function answer_with( $body, int $code = 500 ): void {
+		$this->answer                    = array( 'response' => array( 'code' => $code ), 'body' => $body );
+		$GLOBALS['mcpwp_test_wpdb_rows'] = array();
+	}
+
+	private function assert_no_payload_secret( string $stored, string $shape ): void {
+		foreach ( array( 'mcpwp_0123456789abcdef0123456789abcdef', 'hunter2-hunter2', self::SPECIAL_SECRET ) as $secret ) {
+			$json = substr( json_encode( $secret ), 1, -1 );
+			$forms = array( $secret, rawurlencode( $secret ), urlencode( $secret ), htmlspecialchars( $secret, ENT_QUOTES ), $json, htmlspecialchars( $json, ENT_QUOTES ) );
+			foreach ( array_unique( $forms ) as $form ) {
+				$this->assertStringNotContainsString( $form, $stored, "$shape: a payload secret came back in the log as '$form'." );
+			}
+		}
+	}
+
+	private function stored_response_after( $body, string $shape ): string {
+		$this->answer_with( $body );
+		$this->deliver_payload( $this->payload_with_secrets() );
+		$row = $this->log_row();
+		$this->assert_no_payload_secret( $row['payload'], "$shape (payload column)" );
+		return $row['response_body'];
+	}
+
+	public function test_an_html_debug_page_echoing_the_body_is_scrubbed(): void {
+		$json = wp_json_encode( $this->payload_with_secrets() );
+
+		$raw = $this->stored_response_after( '<!DOCTYPE html><html><body><h1>ValueError at /hook</h1><pre>' . $json . '</pre></body></html>', 'HTML, raw echo' );
+		$this->assert_no_payload_secret( $raw, 'HTML, raw echo' );
+		$this->assertStringContainsString( 'ValueError at /hook', $raw, 'The rest of the page is kept.' );
+
+		$escaped = $this->stored_response_after( '<html><body><table><tr><td>POST</td><td>' . htmlspecialchars( $json, ENT_QUOTES ) . '</td></tr></table></body></html>', 'HTML, escaped echo' );
+		$this->assert_no_payload_secret( $escaped, 'HTML, escaped echo' );
+	}
+
+	public function test_a_form_encoded_echo_is_scrubbed(): void {
+		$stored = $this->stored_response_after( http_build_query( $this->payload_with_secrets() ), 'form-encoded' );
+		$this->assert_no_payload_secret( $stored, 'form-encoded' );
+	}
+
+	public function test_an_xml_echo_is_scrubbed(): void {
+		$body   = '<?xml version="1.0"?><request><api_key>mcpwp_0123456789abcdef0123456789abcdef</api_key><author><password>hunter2-hunter2</password></author><client_secret>' . htmlspecialchars( self::SPECIAL_SECRET, ENT_XML1 | ENT_QUOTES ) . '</client_secret></request>';
+		$stored = $this->stored_response_after( $body, 'XML' );
+		$this->assert_no_payload_secret( $stored, 'XML' );
+		$this->assertStringContainsString( '<request>', $stored );
+	}
+
+	public function test_a_bom_prefixed_json_body_is_opened_and_redacted(): void {
+		$stored = $this->stored_response_after( "\xEF\xBB\xBF" . '{"ok":false,"session_token":"rcv_9f8e7d6c5b4a3f2e1d0c"}', 'BOM JSON' );
+		$this->assertStringNotContainsString( 'rcv_9f8e7d6c5b4a3f2e1d0c', $stored, 'A receiver-issued token in BOM-prefixed JSON is redacted by key.' );
+		$decoded = json_decode( $stored, true );
+		$this->assertIsArray( $decoded );
+		$this->assertSame( '[redacted]', $decoded['session_token'] );
+
+		$echo = $this->stored_response_after( "\xEF\xBB\xBF" . wp_json_encode( array( 'received' => $this->payload_with_secrets() ) ), 'BOM JSON echo' );
+		$this->assert_no_payload_secret( $echo, 'BOM JSON echo' );
+	}
+
+	public function test_a_malformed_json_echo_is_scrubbed(): void {
+		$stored = $this->stored_response_after( '{"received":{"password":"hunter2-hunter2","api_key":"mcpwp_0123456789abcdef0123456789abcdef","client_secret":' . json_encode( self::SPECIAL_SECRET ) . ',},', 'malformed JSON' );
+		$this->assert_no_payload_secret( $stored, 'malformed JSON' );
+	}
+
+	public function test_a_plain_text_echo_and_an_error_message_are_scrubbed(): void {
+		$stored = $this->stored_response_after( 'Error: password=hunter2-hunter2 rejected; client_secret=' . self::SPECIAL_SECRET . ' is not valid', 'text' );
+		$this->assert_no_payload_secret( $stored, 'text' );
+		$this->assertStringContainsString( 'is not valid', $stored );
+
+		$this->answer                    = new WP_Error( 'http_request_failed', 'cURL error 22: 400 for body api_key=mcpwp_0123456789abcdef0123456789abcdef&password=hunter2-hunter2' );
+		$GLOBALS['mcpwp_test_wpdb_rows'] = array();
+		$this->deliver_payload( $this->payload_with_secrets() );
+		$this->assert_no_payload_secret( $this->log_row()['response_body'], 'WP_Error message' );
+	}
+
+	public function test_a_short_secret_below_the_minimum_length_is_not_scrubbed(): void {
+		// Values under 6 bytes are left alone: scrubbing "1", "ok" or a
+		// year would rewrite unrelated text across the whole body. The
+		// payload column still redacts them by key.
+		$stored = $this->stored_response_after( 'status abc12 accepted', 'short value' );
+		$this->assertSame( 'status abc12 accepted', $stored );
+	}
+
+	private function read_logs( array $row ): array {
+		$original        = $GLOBALS['wpdb'];
+		$GLOBALS['wpdb'] = new class( $row ) extends Mcpwp_Test_WPDB {
+			private $row;
+			public function __construct( array $row ) {
+				$this->row = $row;
+			}
+			public function get_results( $query = '', $output = ARRAY_A ) {
+				return array( $this->row );
+			}
+			public function get_var( $query = '', $x = 0, $y = 0 ) {
+				return 1;
+			}
+		};
+		try {
+			return $this->webhooks()->get_logs( 7 )['logs'][0];
+		} finally {
+			$GLOBALS['wpdb'] = $original;
+		}
+	}
+
+	public function test_a_legacy_row_is_scrubbed_on_read_from_its_own_payload(): void {
+		$payload = $this->payload_with_secrets();
+		$row     = $this->read_logs(
+			array(
+				'id'            => 3,
+				'webhook_id'    => 7,
+				'event'         => 'post.updated',
+				'payload'       => wp_json_encode( $payload ),
+				'response_code' => 500,
+				'response_body' => '<pre>' . htmlspecialchars( wp_json_encode( $payload ), ENT_QUOTES ) . '</pre> password=hunter2-hunter2',
+			)
+		);
+		$this->assert_no_payload_secret( $row['payload'], 'legacy payload' );
+		$this->assert_no_payload_secret( $row['response_body'], 'legacy response_body' );
+	}
+
+	public function test_a_legacy_row_cut_at_the_column_limit_is_not_shown(): void {
+		// <= 3.11.0 cut bodies at 65535 bytes; a cut JSON body can no longer
+		// be opened, so a secret in it is invisible to every redactor.
+		$cut = substr( '{"password":"hunter2hunter2","filler":"' . str_repeat( 'a b ', 20000 ), 0, 65535 );
+		$row = $this->read_logs(
+			array(
+				'id'            => 4,
+				'webhook_id'    => 7,
+				'event'         => 'post.updated',
+				'payload'       => '{"post":{"id":1}}',
+				'response_code' => 200,
+				'response_body' => $cut,
+			)
+		);
+		$this->assertStringNotContainsString( 'hunter2hunter2', $row['response_body'] );
+		$this->assertStringContainsString( 'not shown', $row['response_body'] );
+	}
+
+	public function test_a_new_row_cut_at_the_column_limit_is_marked_and_still_shown(): void {
+		$this->answer_with( str_repeat( 'x', 70000 ), 200 );
+		$this->deliver_payload( $this->payload() );
+		$stored = $this->log_row()['response_body'];
+
+		$this->assertLessThanOrEqual( 65535, strlen( $stored ) );
+		$this->assertStringEndsWith( '[truncated]', $stored );
+
+		$row = $this->read_logs(
+			array(
+				'id'            => 5,
+				'webhook_id'    => 7,
+				'event'         => 'post.updated',
+				'payload'       => '{"post":{"id":1}}',
+				'response_code' => 200,
+				'response_body' => $stored,
+			)
+		);
+		$this->assertSame( $stored, $row['response_body'], 'A row cut by this version is not mistaken for a legacy one.' );
+	}
 }

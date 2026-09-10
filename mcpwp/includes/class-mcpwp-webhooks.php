@@ -15,6 +15,25 @@ if ( ! defined( 'ABSPATH' ) ) {
 class Mcpwp_Webhooks {
 
 	/**
+	 * Bytes the log's response_body column holds (MySQL TEXT).
+	 */
+	const LOG_COLUMN_BYTES = 65535;
+
+	/**
+	 * Appended to a response body this version cut to fit the column, so a
+	 * reader can tell it from a row cut before 3.11.1, which cannot be
+	 * redacted reliably.
+	 */
+	const LOG_TRUNCATION_MARK = "\n[truncated]";
+
+	/**
+	 * Shortest payload secret removed by value from a logged response body.
+	 * Shorter values ("1", "ok", a year) would rewrite unrelated text across
+	 * the whole body; they are still redacted by key in the payload column.
+	 */
+	const SECRET_ECHO_MIN_BYTES = 6;
+
+	/**
 	 * Singleton instance.
 	 *
 	 * @var Mcpwp_Webhooks
@@ -500,16 +519,22 @@ class Mcpwp_Webhooks {
 
 		// The receiver was sent the real payload above. The log keeps a
 		// redacted copy of what went out and what came back, through the one
-		// log redactor every other log uses — redacted before truncation, so
-		// a cut never leaves a secret in JSON the redactor can no longer open.
+		// log redactor every other log uses. A receiver can echo the payload
+		// in a body that redactor cannot open (an HTML debug page, form
+		// encoding, XML, broken JSON), so the secret values it removed from the
+		// payload are also removed from the response by value. All of it runs
+		// before the cut to the column size.
+		$log_payload = self::redact_log_copy( $body );
+		$sent_values = self::replaced_values( $body, $log_payload );
+
 		$wpdb->insert(
 			$log_table,
 			array(
 				'webhook_id'    => $webhook['id'],
 				'event'         => $event,
-				'payload'       => self::redact_log_copy( $body ),
+				'payload'       => $log_payload,
 				'response_code' => $response_code,
-				'response_body' => substr( self::redact_log_copy( (string) $response_body ), 0, 65535 ),
+				'response_body' => self::fit_log_column( self::scrub_values( self::redact_log_copy( (string) $response_body ), $sent_values ) ),
 				'duration'      => $duration,
 			),
 			array( '%d', '%s', '%s', '%d', '%s', '%f' )
@@ -561,9 +586,179 @@ class Mcpwp_Webhooks {
 			return '[not logged: log redaction unavailable]';
 		}
 
-		$redacted = Mcpwp_Option_Access::redact_for_log( (string) $text, Mcpwp_Option_Access::log_redaction_keys() );
+		// A UTF-8 byte-order mark (some .NET and Windows receivers send one)
+		// would hide a JSON body from the decoder.
+		$text = (string) $text;
+		if ( 0 === strncmp( $text, "\xEF\xBB\xBF", 3 ) ) {
+			$text = (string) substr( $text, 3 );
+		}
+
+		$redacted = Mcpwp_Option_Access::redact_for_log( $text, Mcpwp_Option_Access::log_redaction_keys() );
 
 		return is_string( $redacted ) ? $redacted : (string) wp_json_encode( $redacted );
+	}
+
+	/**
+	 * The secret values redaction removed from a JSON payload.
+	 *
+	 * @param string $original The payload as sent.
+	 * @param string $redacted Its log copy.
+	 * @return array Values as keys.
+	 */
+	private static function replaced_values( $original, $redacted ) {
+		$values = array();
+		if ( ! is_string( $original ) || $original === $redacted ) {
+			return $values;
+		}
+
+		$before = json_decode( $original, true );
+		$after  = json_decode( (string) $redacted, true );
+		if ( is_array( $before ) && is_array( $after ) ) {
+			self::collect_replaced( $before, $after, $values, 0 );
+		} else {
+			// The whole copy was replaced (the redactor is unavailable).
+			self::collect_leaves( $original, $values, 0 );
+		}
+
+		return $values;
+	}
+
+	/**
+	 * Walk a payload and its redacted copy together; every leaf that differs
+	 * was a secret.
+	 *
+	 * @param mixed $before Original node.
+	 * @param mixed $after  Redacted node.
+	 * @param array $values Collected by reference, values as keys.
+	 * @param int   $depth  Recursion depth.
+	 */
+	private static function collect_replaced( $before, $after, array &$values, $depth ) {
+		if ( $depth > 64 || $before === $after ) {
+			return;
+		}
+
+		if ( is_array( $before ) && is_array( $after ) ) {
+			foreach ( $before as $k => $v ) {
+				if ( array_key_exists( $k, $after ) ) {
+					self::collect_replaced( $v, $after[ $k ], $values, $depth + 1 );
+				} else {
+					self::collect_leaves( $v, $values, $depth + 1 );
+				}
+			}
+			return;
+		}
+
+		// JSON inside a string is opened and re-encoded by the redactor.
+		if ( is_string( $before ) && is_string( $after ) && '[redacted]' !== $after ) {
+			$inner_before = json_decode( $before, true );
+			$inner_after  = json_decode( $after, true );
+			if ( is_array( $inner_before ) && is_array( $inner_after ) ) {
+				self::collect_replaced( $inner_before, $inner_after, $values, $depth + 1 );
+				return;
+			}
+		}
+
+		self::collect_leaves( $before, $values, $depth + 1 );
+	}
+
+	/**
+	 * Every scalar leaf of a node, long enough to scrub by value.
+	 *
+	 * @param mixed $node   Node.
+	 * @param array $values Collected by reference, values as keys.
+	 * @param int   $depth  Recursion depth.
+	 */
+	private static function collect_leaves( $node, array &$values, $depth ) {
+		if ( $depth > 64 ) {
+			return;
+		}
+		if ( is_array( $node ) ) {
+			foreach ( $node as $v ) {
+				self::collect_leaves( $v, $values, $depth + 1 );
+			}
+			return;
+		}
+		if ( is_string( $node ) || is_int( $node ) || is_float( $node ) ) {
+			$node = (string) $node;
+			if ( strlen( $node ) >= self::SECRET_ECHO_MIN_BYTES ) {
+				$values[ $node ] = true;
+			}
+		}
+	}
+
+	/**
+	 * Remove known secret values from text, in the encodings a receiver echoes
+	 * them in: as sent, JSON-escaped, URL-encoded (both forms), and
+	 * HTML-escaped (of the value and of its JSON form). Other encodings —
+	 * base64, hex — are not covered.
+	 *
+	 * @param string $text   Text to scrub.
+	 * @param array  $values Values as keys.
+	 * @return string
+	 */
+	private static function scrub_values( $text, array $values ) {
+		$text = (string) $text;
+		if ( '' === $text || empty( $values ) ) {
+			return $text;
+		}
+
+		$forms = array();
+		foreach ( array_keys( $values ) as $value ) {
+			$value = (string) $value;
+			$json  = array(
+				(string) substr( (string) wp_json_encode( $value ), 1, -1 ),
+				(string) substr( (string) wp_json_encode( $value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE ), 1, -1 ),
+			);
+
+			$candidates = array_merge( array( $value, rawurlencode( $value ), urlencode( $value ) ), $json );
+			foreach ( array_merge( array( $value ), $json ) as $plain ) {
+				$candidates[] = htmlspecialchars( $plain, ENT_QUOTES | ENT_HTML401, 'UTF-8' );
+				$candidates[] = htmlspecialchars( $plain, ENT_QUOTES | ENT_HTML5, 'UTF-8' );
+			}
+
+			foreach ( $candidates as $candidate ) {
+				$candidate = (string) $candidate;
+				if ( strlen( $candidate ) >= self::SECRET_ECHO_MIN_BYTES ) {
+					$forms[ $candidate ] = strlen( $candidate );
+				}
+			}
+		}
+
+		// Longest first, so a value inside a longer one is not replaced first.
+		arsort( $forms );
+
+		return str_replace( array_map( 'strval', array_keys( $forms ) ), '[redacted]', $text );
+	}
+
+	/**
+	 * Cut a response body to the column size, marking the cut.
+	 *
+	 * @param string $text Text.
+	 * @return string
+	 */
+	private static function fit_log_column( $text ) {
+		$text = (string) $text;
+		if ( strlen( $text ) < self::LOG_COLUMN_BYTES ) {
+			return $text;
+		}
+
+		$room = self::LOG_COLUMN_BYTES - strlen( self::LOG_TRUNCATION_MARK );
+		$cut  = function_exists( 'mb_strcut' ) ? mb_strcut( $text, 0, $room, 'UTF-8' ) : substr( $text, 0, $room );
+
+		return $cut . self::LOG_TRUNCATION_MARK;
+	}
+
+	/**
+	 * Whether a stored response body was cut at the column size before
+	 * 3.11.1: full length, and no mark. A cut JSON body cannot be opened, so
+	 * a secret inside it is invisible to every redactor.
+	 *
+	 * @param string $text Stored body.
+	 * @return bool
+	 */
+	private static function is_unmarked_cut( $text ) {
+		$mark = self::LOG_TRUNCATION_MARK;
+		return strlen( $text ) >= self::LOG_COLUMN_BYTES && substr( $text, -strlen( $mark ) ) !== $mark;
 	}
 
 	/**
@@ -601,13 +796,26 @@ class Mcpwp_Webhooks {
 			$wpdb->prepare( "SELECT COUNT(*) FROM {$log_table} WHERE webhook_id = %d", $webhook_id )
 		);
 
-		// Rows written before delivery logs were redacted hold the raw bytes.
-		// Already-redacted rows come back unchanged.
+		// Rows written before delivery logs were redacted hold the raw bytes:
+		// the same redaction and by-value scrub run on read, using the row's
+		// own payload. Already-redacted rows come back unchanged.
 		foreach ( (array) $logs as $i => $log ) {
-			foreach ( array( 'payload', 'response_body' ) as $column ) {
-				if ( is_array( $log ) && isset( $log[ $column ] ) ) {
-					$logs[ $i ][ $column ] = self::redact_log_copy( $log[ $column ] );
-				}
+			if ( ! is_array( $log ) ) {
+				continue;
+			}
+
+			$raw_payload = isset( $log['payload'] ) ? (string) $log['payload'] : '';
+			$log_payload = self::redact_log_copy( $raw_payload );
+			$sent_values = self::replaced_values( $raw_payload, $log_payload );
+
+			if ( isset( $log['payload'] ) ) {
+				$logs[ $i ]['payload'] = $log_payload;
+			}
+			if ( isset( $log['response_body'] ) ) {
+				$stored_body                 = (string) $log['response_body'];
+				$logs[ $i ]['response_body'] = self::is_unmarked_cut( $stored_body )
+					? '[not shown: this response was cut to fit the log before 3.11.1 and cannot be redacted reliably]'
+					: self::scrub_values( self::redact_log_copy( $stored_body ), $sent_values );
 			}
 		}
 
