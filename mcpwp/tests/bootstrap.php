@@ -1360,6 +1360,9 @@ class WP_Query
 
         $this->found_posts = count($posts);
 
+        if (! empty($args['offset'])) {
+            $posts = array_slice($posts, (int) $args['offset']);
+        }
         $per_page = isset($args['posts_per_page']) ? (int) $args['posts_per_page'] : count($posts);
 
         // -1 means unlimited in real WP_Query, and clamping it to 1 made this

@@ -167,7 +167,7 @@ final class BulkShapesTest extends TestCase {
 		$this->seed( 2, 'post', 'News', $this->elementor_with( 'old-brand and old-brand' ) );
 		$this->seed( 3, 'page', 'Clean', $this->elementor_with( 'nothing here' ) );
 
-		$data = $this->find_replace( array( 'search' => 'old-brand', 'replace' => 'new-brand', 'dry_run' => true ) )->get_data();
+		$data = $this->find_replace( array( 'search' => 'old-brand', 'replace' => 'new-brand', 'dry_run' => true, 'scope' => 'site' ) )->get_data();
 
 		$this->assertTrue( $data['dry_run'] );
 		$this->assertSame( 3, $data['total_replacements'] );
@@ -181,7 +181,7 @@ final class BulkShapesTest extends TestCase {
 		$this->seed( 3, 'page', 'Clean', $this->elementor_with( 'nothing here' ) );
 		$before_3 = get_post_meta( 3, '_elementor_data', true );
 
-		$data = $this->find_replace( array( 'search' => 'old-brand', 'replace' => 'new-brand' ) )->get_data();
+		$data = $this->find_replace( array( 'search' => 'old-brand', 'replace' => 'new-brand', 'scope' => 'site' ) )->get_data();
 
 		$this->assertFalse( $data['dry_run'] );
 		$this->assertStringContainsString( 'new-brand', get_post_meta( 1, '_elementor_data', true ) );
@@ -214,11 +214,11 @@ final class BulkShapesTest extends TestCase {
 	public function test_nothing_matched_and_nothing_scanned_are_different_answers(): void {
 		$this->seed( 3, 'page', 'Clean', $this->elementor_with( 'nothing here' ) );
 
-		$none = $this->find_replace( array( 'search' => 'old-brand', 'replace' => 'x', 'dry_run' => true ) )->get_data();
+		$none = $this->find_replace( array( 'search' => 'old-brand', 'replace' => 'x', 'dry_run' => true, 'scope' => 'site' ) )->get_data();
 		$this->assertSame( 1, $none['scanned'] );
 		$this->assertSame( 0, $none['total_replacements'] );
 
-		$empty = $this->find_replace( array( 'search' => 'old-brand', 'replace' => 'x', 'post_type' => 'product', 'dry_run' => true ) )->get_data();
+		$empty = $this->find_replace( array( 'search' => 'old-brand', 'replace' => 'x', 'post_type' => 'elementor_library', 'dry_run' => true ) )->get_data();
 		$this->assertSame( 0, $empty['scanned'], 'No Elementor content of that type is not the same as no match.' );
 	}
 
@@ -226,9 +226,126 @@ final class BulkShapesTest extends TestCase {
 		$this->seed( 1, 'page', 'Home', $this->elementor_with( 'old-brand' ) );
 		$this->seed( 5, 'page', 'Broken', '{not json' );
 
-		$data = $this->find_replace( array( 'search' => 'old-brand', 'replace' => 'x', 'dry_run' => true ) )->get_data();
+		$data = $this->find_replace( array( 'search' => 'old-brand', 'replace' => 'x', 'dry_run' => true, 'scope' => 'site' ) )->get_data();
 
 		$this->assertSame( array( 5 ), array_column( $data['unreadable'], 'id' ) );
+	}
+
+	// ---------------------------------------------------------------
+	// Scope is explicit. From the adversarial review: `ids: []` used to
+	// fall through to a site-wide rewrite — the single most likely shape an
+	// agent produces when its candidate list comes back empty.
+	// ---------------------------------------------------------------
+
+	public function test_an_empty_or_zero_id_list_is_refused_never_widened(): void {
+		$this->seed( 1, 'page', 'Home', $this->elementor_with( 'old-brand' ) );
+
+		foreach ( array( array( 'ids' => array() ), array( 'ids' => array( 0 ) ), array( 'ids' => array( 'abc' ) ), array( 'id' => 0 ) ) as $scope ) {
+			$result = $this->find_replace( array_merge( array( 'search' => 'old-brand', 'replace' => 'x' ), $scope ) );
+
+			$this->assertInstanceOf( WP_Error::class, $result, wp_json_encode( $scope ) );
+			$this->assertSame( 'invalid_ids', $result->get_error_code(), wp_json_encode( $scope ) );
+		}
+
+		$this->assertStringContainsString( 'old-brand', get_post_meta( 1, '_elementor_data', true ), 'Nothing was touched.' );
+	}
+
+	public function test_no_scope_is_refused_and_site_wide_is_opt_in(): void {
+		$this->seed( 1, 'page', 'Home', $this->elementor_with( 'old-brand' ) );
+
+		$none = $this->find_replace( array( 'search' => 'old-brand', 'replace' => 'x' ) );
+		$this->assertInstanceOf( WP_Error::class, $none );
+		$this->assertSame( 'missing_scope', $none->get_error_code() );
+
+		$both = $this->find_replace( array( 'search' => 'old-brand', 'replace' => 'x', 'ids' => array( 1 ), 'scope' => 'site' ) );
+		$this->assertSame( 'ambiguous_scope', $both->get_error_code() );
+
+		$this->assertStringContainsString( 'old-brand', get_post_meta( 1, '_elementor_data', true ) );
+	}
+
+	public function test_a_post_type_outside_elementor_content_is_refused(): void {
+		$this->seed( 9, 'revision', 'Rev', $this->elementor_with( 'old-brand' ) );
+
+		$result = $this->find_replace( array( 'search' => 'old-brand', 'replace' => 'x', 'post_type' => 'revision' ) );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'invalid_post_type', $result->get_error_code() );
+	}
+
+	public function test_drafts_and_private_posts_are_in_scope_trash_is_not(): void {
+		$this->seed( 1, 'page', 'Draft', $this->elementor_with( 'old-brand' ) );
+		$GLOBALS['_mcpwp_test_posts'][1]->post_status = 'draft';
+		$this->seed( 2, 'page', 'Private', $this->elementor_with( 'old-brand' ) );
+		$GLOBALS['_mcpwp_test_posts'][2]->post_status = 'private';
+		$this->seed( 3, 'page', 'Trashed', $this->elementor_with( 'old-brand' ) );
+		$GLOBALS['_mcpwp_test_posts'][3]->post_status = 'trash';
+
+		$data = $this->find_replace( array( 'search' => 'old-brand', 'replace' => 'x', 'scope' => 'site', 'dry_run' => true ) )->get_data();
+
+		$this->assertSame( array( 1, 2 ), array_column( $data['matched'], 'id' ) );
+	}
+
+	public function test_a_run_is_capped_and_says_where_to_resume(): void {
+		for ( $i = 1; $i <= Mcpwp_REST_Elementor::FIND_REPLACE_MAX_POSTS + 5; $i++ ) {
+			$this->seed( $i, 'page', 'P' . $i, $this->elementor_with( 'old-brand' ) );
+		}
+
+		$first = $this->find_replace( array( 'search' => 'old-brand', 'replace' => 'x', 'scope' => 'site', 'dry_run' => true ) )->get_data();
+
+		$this->assertTrue( $first['truncated'] );
+		$this->assertCount( Mcpwp_REST_Elementor::FIND_REPLACE_MAX_POSTS, $first['matched'] );
+		$this->assertSame( Mcpwp_REST_Elementor::FIND_REPLACE_MAX_POSTS, $first['next_offset'] );
+
+		$second = $this->find_replace( array( 'search' => 'old-brand', 'replace' => 'x', 'scope' => 'site', 'dry_run' => true, 'offset' => $first['next_offset'] ) )->get_data();
+
+		$this->assertFalse( $second['truncated'] );
+		$this->assertCount( 5, $second['matched'] );
+	}
+
+	public function test_present_but_empty_elementor_data_is_its_own_count(): void {
+		$this->seed( 1, 'page', 'Empty', '' );
+		$this->seed( 2, 'page', 'Home', $this->elementor_with( 'old-brand' ) );
+
+		$data = $this->find_replace( array( 'search' => 'old-brand', 'replace' => 'x', 'scope' => 'site', 'dry_run' => true ) )->get_data();
+
+		$this->assertSame( 1, $data['scanned'] );
+		$this->assertSame( 1, $data['skipped_empty'], 'Present-but-empty is neither scanned nor unreadable; it is reported as what it is.' );
+	}
+
+	public function test_the_bulk_routes_register_updates_as_a_top_level_argument(): void {
+		$GLOBALS['_mcpwp_test_registered_routes'] = array();
+		( new Mcpwp_REST_Pages() )->register_routes();
+		( new Mcpwp_REST_Posts() )->register_routes();
+
+		$seen = 0;
+		foreach ( $GLOBALS['_mcpwp_test_registered_routes'] as $route ) {
+			if ( ! in_array( $route['route'], array( '/pages/bulk', '/posts/bulk' ), true ) ) {
+				continue;
+			}
+			foreach ( $route['args'] as $handler ) {
+				if ( ! isset( $handler['args'] ) || ! isset( $handler['args']['updates'] ) ) {
+					continue;
+				}
+				$seen++;
+				$this->assertSame( 'array', $handler['args']['updates']['type'] );
+				foreach ( array( 'pages', 'posts' ) as $old ) {
+					if ( isset( $handler['args'][ $old ] ) ) {
+						$this->assertArrayNotHasKey( 'updates', $handler['args'][ $old ], 'updates must be a sibling of the old name, not nested inside it.' );
+					}
+				}
+			}
+		}
+
+		$this->assertSame( 2, $seen, 'Both bulk-update handlers declare updates at the top level.' );
+	}
+
+	public function test_elementor_location_is_accepted_on_update_as_on_create(): void {
+		$this->seed( 30, 'elementor_snippet', 'Snip' );
+
+		$result = ( new Mcpwp_Posts() )->update_post( 30, array( 'elementor_location' => 'body_end' ) );
+
+		$this->assertIsArray( $result, is_wp_error( $result ) ? $result->get_error_message() : '' );
+		$this->assertSame( 'body_end', get_post_meta( 30, '_elementor_location', true ) );
 	}
 
 	// ---------------------------------------------------------------

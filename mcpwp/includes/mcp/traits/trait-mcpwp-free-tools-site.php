@@ -1191,6 +1191,14 @@ trait Mcpwp_Free_Tools_Site_Trait {
 					'type'        => 'string',
 					'description' => 'Limit to one post type (e.g. post, page, or a custom type). Default: every type with Elementor data.',
 				),
+				'scope'     => array(
+					'type'        => 'string',
+					'description' => 'Pass "site" to run across every Elementor post. Site-wide is opt-in; an empty ids list is refused, never widened.',
+				),
+				'offset'    => array(
+					'type'        => 'integer',
+					'description' => 'Resume point (next_offset) from a truncated run. Runs touch at most 200 posts each.',
+				),
 				'dry_run'   => array(
 					'type'        => 'boolean',
 					'description' => 'Report what would change, per post, without writing. Default false.',

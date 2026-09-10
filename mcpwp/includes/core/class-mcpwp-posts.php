@@ -49,7 +49,7 @@ class Mcpwp_Posts {
 	 *
 	 * @var array
 	 */
-	public static $update_fields = array( 'title', 'content', 'status', 'excerpt', 'slug', 'categories', 'tags', 'featured_image' );
+	public static $update_fields = array( 'title', 'content', 'status', 'excerpt', 'slug', 'categories', 'tags', 'featured_image', 'elementor_location' );
 
 	/**
 	 * Fields create_post() acts on.
@@ -395,6 +395,15 @@ class Mcpwp_Posts {
 		if ( isset( $data['tags'] ) ) {
 			$tags = array_map( 'sanitize_text_field', (array) $data['tags'] );
 			wp_set_post_tags( $post_id, $tags );
+		}
+
+		// A snippet's location may change after creation too; refusing on
+		// update what create accepts breaks a client round-tripping payloads.
+		if ( isset( $data['elementor_location'] ) && 'elementor_snippet' === $post->post_type ) {
+			$location = sanitize_key( (string) $data['elementor_location'] );
+			if ( in_array( $location, array( 'head', 'body_start', 'body_end' ), true ) ) {
+				update_post_meta( $post_id, '_elementor_location', $location );
+			}
 		}
 
 		// Update featured image

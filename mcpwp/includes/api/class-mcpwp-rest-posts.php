@@ -141,11 +141,11 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 							'description' => __( 'Array of post objects to update. Each must have id.', 'mcpwp' ),
 							'type'        => 'array',
 							'required'    => false,
+						),
 						'updates' => array(
 							'description' => __( 'Array of objects to update (alias of posts). Each carries id plus the fields to change.', 'mcpwp' ),
 							'type'        => 'array',
 							'required'    => false,
-						),
 						),
 					),
 				),

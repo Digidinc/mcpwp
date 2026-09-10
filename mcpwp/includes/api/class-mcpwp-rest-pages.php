@@ -159,11 +159,11 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 							'description' => __( 'Array of page objects to update. Each must have id.', 'mcpwp' ),
 							'type'        => 'array',
 							'required'    => false,
+						),
 						'updates' => array(
 							'description' => __( 'Array of objects to update (alias of pages). Each carries id plus the fields to change.', 'mcpwp' ),
 							'type'        => 'array',
 							'required'    => false,
-						),
 						),
 					),
 				),

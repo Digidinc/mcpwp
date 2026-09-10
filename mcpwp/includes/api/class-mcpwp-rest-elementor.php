@@ -412,6 +412,16 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 							'description' => __( 'Limit to one post type.', 'mcpwp' ),
 							'type'        => 'string',
 						),
+						'scope'     => array(
+							'description' => __( 'Pass "site" to run across every Elementor post. Site-wide is opt-in, never a fallthrough.', 'mcpwp' ),
+							'type'        => 'string',
+							'enum'        => array( 'site' ),
+						),
+						'offset'    => array(
+							'description' => __( 'Resume point returned as next_offset by a truncated run.', 'mcpwp' ),
+							'type'        => 'integer',
+							'default'     => 0,
+						),
 						'dry_run'   => array(
 							'description' => __( 'Report without writing.', 'mcpwp' ),
 							'type'        => 'boolean',
@@ -1089,51 +1099,74 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 	 * @param WP_REST_Request $request Request.
 	 * @return WP_REST_Response|WP_Error
 	 */
+	/**
+	 * How many posts one find/replace run touches. A truncated run says so
+	 * and hands back next_offset; nothing silently stops mid-loop.
+	 */
+	const FIND_REPLACE_MAX_POSTS = 200;
+
 	public function find_replace_many( $request ) {
 		$this->log_activity( 'elementor_find_replace_many', $request );
 
 		$search  = (string) $request->get_param( 'search' );
 		$replace = (string) $request->get_param( 'replace' );
 		$dry_run = (bool) $request->get_param( 'dry_run' );
+		$offset  = max( 0, (int) $request->get_param( 'offset' ) );
 
 		if ( '' === $search ) {
 			return $this->error_response( 'missing_search', __( 'search is required.', 'mcpwp' ), 400 );
 		}
 
-		$ids = array();
-		if ( $request->get_param( 'id' ) ) {
-			$ids = array( absint( $request->get_param( 'id' ) ) );
-		} elseif ( is_array( $request->get_param( 'ids' ) ) ) {
-			$ids = array_values( array_filter( array_map( 'absint', $request->get_param( 'ids' ) ) ) );
+		// Scope is explicit: exactly one of id, ids, post_type, scope=site.
+		// A scope that resolves to nothing is a refusal, never a widening —
+		// `ids: []` from an agent whose candidate list came back empty must be
+		// a no-op, not a site-wide rewrite.
+		$scope = $this->resolve_find_replace_scope( $request );
+		if ( is_wp_error( $scope ) ) {
+			return $scope;
 		}
 
-		$post_type = sanitize_key( (string) $request->get_param( 'post_type' ) );
-
 		$query_args = array(
-			'post_type'      => '' !== $post_type ? $post_type : 'any',
-			'post_status'    => 'any',
-			'posts_per_page' => -1,
+			'post_type'      => $scope['post_types'],
+			'post_status'    => array( 'publish', 'draft', 'pending', 'private', 'future' ),
+			'posts_per_page' => self::FIND_REPLACE_MAX_POSTS + 1,
+			'offset'         => $offset,
+			'orderby'        => 'ID',
+			'order'          => 'ASC',
 			'fields'         => 'ids',
 			'meta_key'       => '_elementor_data', // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_key -- scoped to one meta key; this is the whole point of the query.
 			'no_found_rows'  => true,
 		);
-		if ( ! empty( $ids ) ) {
-			$query_args['post__in'] = $ids;
+		if ( ! empty( $scope['ids'] ) ) {
+			$query_args['post__in'] = $scope['ids'];
 		}
 
-		$query = new WP_Query( $query_args );
-		$found = is_array( $query->posts ) ? $query->posts : array();
+		$query     = new WP_Query( $query_args );
+		$found     = is_array( $query->posts ) ? $query->posts : array();
+		$truncated = count( $found ) > self::FIND_REPLACE_MAX_POSTS;
+		if ( $truncated ) {
+			$found = array_slice( $found, 0, self::FIND_REPLACE_MAX_POSTS );
+		}
 
 		$matched    = array();
 		$unreadable = array();
 		$scanned    = 0;
+		$empty      = 0;
 		$total      = 0;
 
 		foreach ( $found as $candidate ) {
 			$post_id = is_object( $candidate ) ? (int) $candidate->ID : (int) $candidate;
-			$raw     = get_post_meta( $post_id, '_elementor_data', true );
+
+			// The same gate the single-post route applies: never a type this
+			// plugin does not treat as Elementor content.
+			if ( ! in_array( get_post_type( $post_id ), $scope['post_types'], true ) ) {
+				continue;
+			}
+
+			$raw = get_post_meta( $post_id, '_elementor_data', true );
 
 			if ( empty( $raw ) || ! is_string( $raw ) ) {
+				$empty++;
 				continue;
 			}
 
@@ -1161,6 +1194,7 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 				'post_type'    => get_post_type( $post_id ),
 				'replacements' => $count,
 			);
+			$total += $count;
 
 			if ( ! $dry_run ) {
 				$encoded = wp_json_encode( $updated );
@@ -1183,20 +1217,142 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 				$entry['written'] = true;
 			}
 
-			$total    += $count;
 			$matched[] = $entry;
 		}
 
-		return $this->success_response(
-			array(
-				'dry_run'            => $dry_run,
-				'search'             => $search,
-				'replace'            => $replace,
-				'scanned'            => $scanned,
-				'matched'            => $matched,
-				'unreadable'         => $unreadable,
-				'total_replacements' => $total,
-			)
+		$response = array(
+			'dry_run'            => $dry_run,
+			'scope'              => $scope['label'],
+			'search'             => $search,
+			'replace'            => $replace,
+			'scanned'            => $scanned,
+			'skipped_empty'      => $empty,
+			'matched'            => $matched,
+			'unreadable'         => $unreadable,
+			'total_replacements' => $total,
+			'truncated'          => $truncated,
+		);
+
+		if ( $truncated ) {
+			$response['next_offset'] = $offset + self::FIND_REPLACE_MAX_POSTS;
+			$response['warning']     = sprintf(
+				/* translators: %d: post cap */
+				__( 'Only the first %d posts in scope were processed. Call again with offset = next_offset to continue.', 'mcpwp' ),
+				self::FIND_REPLACE_MAX_POSTS
+			);
+		}
+
+		return $this->success_response( $response );
+	}
+
+	/**
+	 * Post types a find/replace may touch: what the single-post route allows,
+	 * plus public custom types that are not blocked outright.
+	 *
+	 * @return array
+	 */
+	private function find_replace_allowed_types() {
+		$types = array( 'page', 'post', 'elementor_library', 'elementor_snippet' );
+
+		if ( function_exists( 'get_post_types' ) ) {
+			$blocked = array( 'attachment', 'revision', 'nav_menu_item', 'custom_css', 'customize_changeset', 'oembed_cache', 'wp_global_styles', 'wp_navigation', 'wp_template', 'wp_template_part' );
+			foreach ( (array) get_post_types( array( 'public' => true ), 'names' ) as $type ) {
+				if ( ! in_array( $type, $blocked, true ) ) {
+					$types[] = $type;
+				}
+			}
+		}
+
+		return array_values( array_unique( $types ) );
+	}
+
+	/**
+	 * @param WP_REST_Request $request Request.
+	 * @return array|WP_Error {ids, post_types, label}
+	 */
+	private function resolve_find_replace_scope( $request ) {
+		$allowed  = $this->find_replace_allowed_types();
+		$has_id   = null !== $request->get_param( 'id' ) && '' !== $request->get_param( 'id' );
+		$has_ids  = null !== $request->get_param( 'ids' );
+		$has_type = null !== $request->get_param( 'post_type' ) && '' !== $request->get_param( 'post_type' );
+		$has_site = 'site' === $request->get_param( 'scope' );
+
+		$given = (int) $has_id + (int) $has_ids + (int) $has_type + (int) $has_site;
+
+		if ( 0 === $given ) {
+			return $this->error_response(
+				'missing_scope',
+				__( 'Say what to touch: id, ids, post_type, or scope="site". A site-wide run is opt-in.', 'mcpwp' ),
+				400
+			);
+		}
+
+		if ( $given > 1 ) {
+			return $this->error_response(
+				'ambiguous_scope',
+				__( 'Pass exactly one of id, ids, post_type, or scope="site".', 'mcpwp' ),
+				400
+			);
+		}
+
+		if ( $has_id || $has_ids ) {
+			$raw = $has_id ? array( $request->get_param( 'id' ) ) : $request->get_param( 'ids' );
+			if ( ! is_array( $raw ) || empty( $raw ) ) {
+				return $this->error_response(
+					'invalid_ids',
+					__( 'ids must be a non-empty list of post IDs. An empty list is refused rather than widened to the whole site.', 'mcpwp' ),
+					400
+				);
+			}
+			$ids = array();
+			foreach ( $raw as $value ) {
+				if ( ! is_numeric( $value ) || (int) $value < 1 ) {
+					return $this->error_response(
+						'invalid_ids',
+						sprintf(
+							/* translators: %s: the offending value */
+							__( 'ids must be positive post IDs; "%s" is not.', 'mcpwp' ),
+							is_scalar( $value ) ? (string) $value : gettype( $value )
+						),
+						400
+					);
+				}
+				$ids[] = (int) $value;
+			}
+
+			return array(
+				'ids'        => array_values( array_unique( $ids ) ),
+				'post_types' => $allowed,
+				'label'      => $has_id ? 'id' : 'ids',
+			);
+		}
+
+		if ( $has_type ) {
+			$type = sanitize_key( (string) $request->get_param( 'post_type' ) );
+			if ( ! in_array( $type, $allowed, true ) ) {
+				return $this->error_response(
+					'invalid_post_type',
+					sprintf(
+						/* translators: 1: type 2: allowed list */
+						__( 'post_type "%1$s" is not an Elementor content type. Allowed: %2$s.', 'mcpwp' ),
+						$type,
+						implode( ', ', $allowed )
+					),
+					400
+				);
+			}
+
+			return array(
+				'ids'        => array(),
+				'post_types' => array( $type ),
+				'label'      => 'post_type:' . $type,
+			);
+		}
+
+		return array(
+			'ids'        => array(),
+			'post_types' => $allowed,
+			'label'      => 'site',
 		);
 	}
 
