@@ -69,6 +69,10 @@ https://storage.test/*)
 	if [[ "$mode" == flaky ]]; then
 		if [[ "$n" -eq 1 ]]; then mode=403; else mode=ok; fi
 	fi
+	# Refuse the first three requests — a whole failed attempt — then serve.
+	if [[ "$mode" == refuse-3 ]]; then
+		if [[ "$n" -le 3 ]]; then mode=403; else mode=ok; fi
+	fi
 	if [[ "$mode" == 403 ]]; then
 		echo '<Error><Code>SignatureDoesNotMatch</Code><StringToSign>SIGSECRET</StringToSign></Error>' | emit
 		printf 403
@@ -162,6 +166,8 @@ run_case storage-refuses      1 SHIM_MODE=403 -- --expect-version 3.11.0
 run_case storage-flaky        0 SHIM_MODE=flaky -- --expect-version 3.11.0
 run_case storage-flaky-strict 2 SHIM_MODE=flaky -- --expect-version 3.11.0 --strict-storage
 run_case missing-token        1 FREEMIUS_BEARER_TOKEN= -- --expect-version 3.11.0
+run_case retry-after-refusals 0 SHIM_MODE=refuse-3 -- --expect-version 3.11.0 --retries 2 --delay 0
+run_case strict-across-retries 2 SHIM_MODE=refuse-3 -- --expect-version 3.11.0 --retries 2 --delay 0 --strict-storage
 
 echo "$passed passed, $failed failed"
 [[ "$failed" -eq 0 ]]

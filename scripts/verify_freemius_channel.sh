@@ -41,6 +41,8 @@ EXPECT_VERSION=""
 RETRIES=1
 DELAY=10
 STRICT_STORAGE=""
+# Counted across every attempt, outer retries included: a refusal in an
+# attempt that failed is still a refusal a customer's updater would meet.
 STORAGE_REFUSALS=0
 
 while [[ $# -gt 0 ]]; do
@@ -194,7 +196,6 @@ verify_premium_zip() {
 }
 
 check_once() {
-	STORAGE_REFUSALS=0
 	echo "→ Freemius product: $PRODUCT_ID"
 
 	local response
