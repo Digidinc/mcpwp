@@ -49,14 +49,14 @@ class Mcpwp_Posts {
 	 *
 	 * @var array
 	 */
-	public static $update_fields = array( 'title', 'content', 'status', 'excerpt', 'slug', 'categories', 'tags', 'featured_image', 'elementor_location' );
+	public static $update_fields = array( 'title', 'content', 'status', 'excerpt', 'slug', 'categories', 'tags', 'featured_image', 'elementor_location', 'terms', 'meta' );
 
 	/**
 	 * Fields create_post() acts on.
 	 *
 	 * @var array
 	 */
-	public static $create_fields = array( 'title', 'content', 'status', 'excerpt', 'slug', 'categories', 'tags', 'featured_image', 'post_type', 'elementor_location' );
+	public static $create_fields = array( 'title', 'content', 'status', 'excerpt', 'slug', 'categories', 'tags', 'featured_image', 'post_type', 'elementor_location', 'terms', 'meta' );
 
 	/**
 	 * Parameters the transport adds that are not the caller's fields.
@@ -273,6 +273,16 @@ class Mcpwp_Posts {
 			$post_type = $validated;
 		}
 
+		// Validate terms and meta before anything is written (#797).
+		$resolved_terms = Mcpwp_Post_Fields::resolve_terms( isset( $data['terms'] ) ? $data['terms'] : null, $post_type );
+		if ( is_wp_error( $resolved_terms ) ) {
+			return $resolved_terms;
+		}
+		$clean_meta = Mcpwp_Post_Fields::validate_meta( isset( $data['meta'] ) ? $data['meta'] : null );
+		if ( is_wp_error( $clean_meta ) ) {
+			return $clean_meta;
+		}
+
 		$post_data = array(
 			'post_type'    => $post_type,
 			'post_title'   => isset( $data['title'] ) ? sanitize_text_field( $data['title'] ) : '',
@@ -326,7 +336,20 @@ class Mcpwp_Posts {
 			set_post_thumbnail( $post_id, absint( $data['featured_image'] ) );
 		}
 
-		return $this->get_post( $post_id );
+		$terms_applied = Mcpwp_Post_Fields::apply_terms( $post_id, $resolved_terms );
+		$meta_applied  = Mcpwp_Post_Fields::apply_meta( $post_id, $post_type, $clean_meta );
+
+		$created = $this->get_post( $post_id );
+		if ( is_array( $created ) ) {
+			if ( ! empty( $terms_applied ) ) {
+				$created['terms'] = $terms_applied;
+			}
+			if ( ! empty( $meta_applied ) ) {
+				$created['meta_applied'] = $meta_applied;
+			}
+		}
+
+		return $created;
 	}
 
 	/**
@@ -359,6 +382,16 @@ class Mcpwp_Posts {
 		}
 
 		// Snapshot fields that might change for before/after diff.
+		// Validate terms and meta before anything is written (#797).
+		$resolved_terms = Mcpwp_Post_Fields::resolve_terms( isset( $data['terms'] ) ? $data['terms'] : null, $post->post_type );
+		if ( is_wp_error( $resolved_terms ) ) {
+			return $resolved_terms;
+		}
+		$clean_meta = Mcpwp_Post_Fields::validate_meta( isset( $data['meta'] ) ? $data['meta'] : null );
+		if ( is_wp_error( $clean_meta ) ) {
+			return $clean_meta;
+		}
+
 		$before = array(
 			'title'  => $post->post_title,
 			'status' => $post->post_status,
@@ -439,7 +472,18 @@ class Mcpwp_Posts {
 			}
 		}
 
+		$terms_applied = Mcpwp_Post_Fields::apply_terms( $post_id, $resolved_terms );
+		$meta_applied  = Mcpwp_Post_Fields::apply_meta( $post_id, $post->post_type, $clean_meta );
+
 		$post_result = $this->get_post( $post_id );
+		if ( is_array( $post_result ) ) {
+			if ( ! empty( $terms_applied ) ) {
+				$post_result['terms'] = $terms_applied;
+			}
+			if ( ! empty( $meta_applied ) ) {
+				$post_result['meta_applied'] = $meta_applied;
+			}
+		}
 
 		// Build before/after change summary.
 		if ( is_array( $post_result ) ) {

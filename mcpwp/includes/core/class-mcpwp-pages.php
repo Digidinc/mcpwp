@@ -92,19 +92,29 @@ class Mcpwp_Pages {
 	 *
 	 * @var array
 	 */
-	public static $update_fields = array( 'title', 'content', 'excerpt', 'status', 'parent', 'menu_order', 'slug', 'template', 'featured_image' );
+	public static $update_fields = array( 'title', 'content', 'excerpt', 'status', 'parent', 'menu_order', 'slug', 'template', 'featured_image', 'terms', 'meta' );
 
 	/**
 	 * Fields create_page() acts on.
 	 *
 	 * @var array
 	 */
-	public static $create_fields = array( 'title', 'content', 'excerpt', 'status', 'parent', 'menu_order', 'slug', 'template', 'featured_image' );
+	public static $create_fields = array( 'title', 'content', 'excerpt', 'status', 'parent', 'menu_order', 'slug', 'template', 'featured_image', 'terms', 'meta' );
 
 	public function create_page( $data ) {
 		$unsupported = Mcpwp_Posts::unsupported_fields( $data, self::$create_fields );
 		if ( is_wp_error( $unsupported ) ) {
 			return $unsupported;
+		}
+
+		// Validate terms and meta before anything is written (#797).
+		$resolved_terms = Mcpwp_Post_Fields::resolve_terms( isset( $data['terms'] ) ? $data['terms'] : null, 'page' );
+		if ( is_wp_error( $resolved_terms ) ) {
+			return $resolved_terms;
+		}
+		$clean_meta = Mcpwp_Post_Fields::validate_meta( isset( $data['meta'] ) ? $data['meta'] : null );
+		if ( is_wp_error( $clean_meta ) ) {
+			return $clean_meta;
 		}
 
 		$page_data = array(
@@ -157,7 +167,20 @@ class Mcpwp_Pages {
 			set_post_thumbnail( $page_id, absint( $data['featured_image'] ) );
 		}
 
-		return $this->get_page( $page_id );
+		$terms_applied = Mcpwp_Post_Fields::apply_terms( $page_id, $resolved_terms );
+		$meta_applied  = Mcpwp_Post_Fields::apply_meta( $page_id, 'page', $clean_meta );
+
+		$created = $this->get_page( $page_id );
+		if ( is_array( $created ) ) {
+			if ( ! empty( $terms_applied ) ) {
+				$created['terms'] = $terms_applied;
+			}
+			if ( ! empty( $meta_applied ) ) {
+				$created['meta_applied'] = $meta_applied;
+			}
+		}
+
+		return $created;
 	}
 
 	/**
@@ -184,6 +207,16 @@ class Mcpwp_Pages {
 		}
 
 		// Snapshot fields that might change for before/after diff.
+		// Validate terms and meta before anything is written (#797).
+		$resolved_terms = Mcpwp_Post_Fields::resolve_terms( isset( $data['terms'] ) ? $data['terms'] : null, 'page' );
+		if ( is_wp_error( $resolved_terms ) ) {
+			return $resolved_terms;
+		}
+		$clean_meta = Mcpwp_Post_Fields::validate_meta( isset( $data['meta'] ) ? $data['meta'] : null );
+		if ( is_wp_error( $clean_meta ) ) {
+			return $clean_meta;
+		}
+
 		$before = array(
 			'title'      => $page->post_title,
 			'excerpt'    => $page->post_excerpt ?? '',
@@ -264,7 +297,18 @@ class Mcpwp_Pages {
 			}
 		}
 
+		$terms_applied = Mcpwp_Post_Fields::apply_terms( $page_id, $resolved_terms );
+		$meta_applied  = Mcpwp_Post_Fields::apply_meta( $page_id, 'page', $clean_meta );
+
 		$page_result = $this->get_page( $page_id );
+		if ( is_array( $page_result ) ) {
+			if ( ! empty( $terms_applied ) ) {
+				$page_result['terms'] = $terms_applied;
+			}
+			if ( ! empty( $meta_applied ) ) {
+				$page_result['meta_applied'] = $meta_applied;
+			}
+		}
 
 		// Warn when WordPress silently rewrote the requested slug (uniqueness collision,
 		// e.g. auto-drafts or trashed posts already hold the slug → WP appends -2, -3...).

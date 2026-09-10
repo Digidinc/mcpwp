@@ -113,6 +113,14 @@ trait Mcpwp_Free_Tools_Content_Trait {
 					'description' => 'For elementor_snippet posts only: where the code injects — "head" (default, before </head>), "body_start" (after <body>), "body_end" (before </body>).',
 					'default'     => 'head',
 				),
+				'terms'      => array(
+					'type'        => 'object',
+					'description' => 'Custom taxonomy terms to assign, as {taxonomy: [ids, slugs or names]}. Replaces each named taxonomy\'s current set. Unknown taxonomy or term is refused before any write. Use categories/tags for the built-in ones.',
+				),
+				'meta'       => array(
+					'type'        => 'object',
+					'description' => 'Post meta to write, as {key: value}. Registered meta runs through its registered sanitize callback; unregistered strings are reduced to post-safe HTML (URLs keep their %20). Protected/reserved keys (leading underscore, _elementor_*, mcpwp_*) are refused.',
+				),
 			)
 		);
 
@@ -154,6 +162,14 @@ trait Mcpwp_Free_Tools_Content_Trait {
 					'type'        => 'array',
 					'description' => 'Array of tag slugs or names. Replaces all current tags. Creates tags that don\'t exist.',
 					'items'       => array( 'type' => 'string' ),
+				),
+				'terms'      => array(
+					'type'        => 'object',
+					'description' => 'Custom taxonomy terms to assign, as {taxonomy: [ids, slugs or names]}. Replaces each named taxonomy\'s current set. Unknown taxonomy or term is refused before any write. Use categories/tags for the built-in ones.',
+				),
+				'meta'       => array(
+					'type'        => 'object',
+					'description' => 'Post meta to write, as {key: value}. Registered meta runs through its registered sanitize callback; unregistered strings are reduced to post-safe HTML (URLs keep their %20). Protected/reserved keys (leading underscore, _elementor_*, mcpwp_*) are refused.',
 				),
 			)
 		);
@@ -258,6 +274,14 @@ trait Mcpwp_Free_Tools_Content_Trait {
 					'type'        => 'integer',
 					'description' => 'Sort order among sibling pages (lower = first). Used by some themes and menus. Default 0.',
 				),
+				'terms'      => array(
+					'type'        => 'object',
+					'description' => 'Custom taxonomy terms to assign, as {taxonomy: [ids, slugs or names]}. Replaces each named taxonomy\'s current set. Unknown taxonomy or term is refused before any write. Use categories/tags for the built-in ones.',
+				),
+				'meta'       => array(
+					'type'        => 'object',
+					'description' => 'Post meta to write, as {key: value}. Registered meta runs through its registered sanitize callback; unregistered strings are reduced to post-safe HTML (URLs keep their %20). Protected/reserved keys (leading underscore, _elementor_*, mcpwp_*) are refused.',
+				),
 			)
 		);
 
@@ -301,6 +325,14 @@ trait Mcpwp_Free_Tools_Content_Trait {
 				'menu_order' => array(
 					'type'        => 'integer',
 					'description' => 'Sort order among sibling pages. Lower numbers appear first.',
+				),
+				'terms'      => array(
+					'type'        => 'object',
+					'description' => 'Custom taxonomy terms to assign, as {taxonomy: [ids, slugs or names]}. Replaces each named taxonomy\'s current set. Unknown taxonomy or term is refused before any write. Use categories/tags for the built-in ones.',
+				),
+				'meta'       => array(
+					'type'        => 'object',
+					'description' => 'Post meta to write, as {key: value}. Registered meta runs through its registered sanitize callback; unregistered strings are reduced to post-safe HTML (URLs keep their %20). Protected/reserved keys (leading underscore, _elementor_*, mcpwp_*) are refused.',
 				),
 			)
 		);

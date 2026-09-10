@@ -464,12 +464,32 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 		$media_id = absint( $request->get_param( 'media_id' ) );
 
 		$post = get_post( $post_id );
-		if ( ! $post || ! in_array( $post->post_type, array( 'post', 'page' ), true ) ) {
+		if ( ! $post || 'attachment' === $post->post_type || 'revision' === $post->post_type ) {
 			return $this->error_response(
 				'not_found',
 				__( 'Post not found.', 'mcpwp' ),
 				404,
 				array( 'id' => $post_id )
+			);
+		}
+
+		// Any type that declares thumbnail support, not only post and page
+		// (#797). A type without it is told so, rather than "not found" for a
+		// post that plainly exists.
+		if ( ! in_array( $post->post_type, array( 'post', 'page' ), true ) && ! post_type_supports( $post->post_type, 'thumbnail' ) ) {
+			return $this->error_response(
+				'thumbnails_unsupported',
+				sprintf(
+					/* translators: %s: post type */
+					__( 'Post type "%s" does not support featured images.', 'mcpwp' ),
+					$post->post_type
+				),
+				400,
+				array(
+					'id'        => $post_id,
+					'post_type' => $post->post_type,
+					'hint'      => 'The type was registered without "thumbnail" in its supports list. Add it in the plugin that registers the type, or store the attachment id in a meta field of your own.',
+				)
 			);
 		}
 
