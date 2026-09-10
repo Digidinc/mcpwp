@@ -63,6 +63,10 @@ trait Mcpwp_Free_Tools_Ops_Trait {
 						'enum' => array( 'read', 'write', 'admin' ),
 					),
 				),
+				'allow_destructive' => array(
+					'type'        => 'boolean',
+					'description' => 'Let this key run destructive operations (permanent deletes, purge drafts, delete media, revoke keys) without an approval request. Default false: they are deferred to the approval workflow.',
+				),
 			)
 		);
 

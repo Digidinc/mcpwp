@@ -1782,7 +1782,7 @@ trait Mcpwp_Api_Auth {
 	 * @param array  $tool_categories Tool category slugs (for custom role).
 	 * @return array Key creation result, including plaintext key once.
 	 */
-	public function create_scoped_api_key( $label = '', $scopes = array(), $role = 'admin', $tool_categories = array() ) {
+	public function create_scoped_api_key( $label = '', $scopes = array(), $role = 'admin', $tool_categories = array(), $allow_destructive = false ) {
 		$plain_key = $this->generate_api_key();
 		$key_id    = function_exists( 'wp_generate_uuid4' ) ? wp_generate_uuid4() : uniqid( 'mcpwp_', true );
 		$now       = current_time( 'mysql' );
@@ -1829,6 +1829,9 @@ trait Mcpwp_Api_Auth {
 			'scopes'          => $scopes,
 			'role'            => $role,
 			'tool_categories' => $tool_categories,
+			// Opt-out of the destructive-operation approval gate (#536): an
+			// unattended job may say so, once, on a record an admin created.
+			'allow_destructive' => (bool) $allow_destructive,
 			'created_at'      => $now,
 			'last_used_at'    => null,
 			'revoked_at'      => null,
@@ -2036,6 +2039,7 @@ trait Mcpwp_Api_Auth {
 			'role'            => $role,
 			'tool_categories' => $tool_categories,
 			'rate_limits'     => $this->sanitize_rate_limits( isset( $record['rate_limits'] ) ? $record['rate_limits'] : null ),
+			'allow_destructive' => ! empty( $record['allow_destructive'] ),
 			'created_at'      => isset( $record['created_at'] ) ? (string) $record['created_at'] : null,
 			'last_used_at'    => isset( $record['last_used_at'] ) ? (string) $record['last_used_at'] : null,
 			'revoked_at'      => isset( $record['revoked_at'] ) ? (string) $record['revoked_at'] : null,

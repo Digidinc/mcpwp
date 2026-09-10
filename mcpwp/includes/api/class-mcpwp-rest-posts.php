@@ -320,6 +320,11 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 		$post_id = $request->get_param( 'id' );
 		$force   = $request->get_param( 'force' );
 
+		// A permanent delete has no undo: approval by default (#536).
+		if ( rest_sanitize_boolean( $force ) && Mcpwp_Destructive_Gate::should_gate( $this->get_current_api_key_record() ) ) {
+			return $this->defer_destructive( 'delete_post', $request, array( 'type' => 'post', 'id' => (int) $post_id, 'title' => get_the_title( (int) $post_id ) ), sprintf( 'Permanently delete post #%d', (int) $post_id ) );
+		}
+
 		$result = $this->posts->delete_post( $post_id, $force );
 
 		if ( is_wp_error( $result ) ) {
@@ -575,6 +580,11 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 			'type'  => $request->get_param( 'type' ),
 			'force' => $request->get_param( 'force' ),
 		);
+
+		// Purging every draft permanently has no undo: approval by default (#536).
+		if ( rest_sanitize_boolean( $args['force'] ) && Mcpwp_Destructive_Gate::should_gate( $this->get_current_api_key_record() ) ) {
+			return $this->defer_destructive( 'delete_all_drafts', $request, array( 'type' => 'drafts', 'id' => null, 'title' => 'all drafts' ), 'Permanently delete all drafts' );
+		}
 
 		$result = $this->drafts->delete_all_drafts( $args );
 

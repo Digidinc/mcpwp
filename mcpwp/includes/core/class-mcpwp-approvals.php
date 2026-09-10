@@ -117,6 +117,61 @@ class Mcpwp_Approvals {
 	 *                                  (default, SAFE) redact non-public sources.
 	 * @return array Requests.
 	 */
+	/**
+	 * Store a destructive operation for review (#536).
+	 *
+	 * @param string $operation Short name (delete_page, revoke_api_key…).
+	 * @param array  $payload   {route, method, params} to re-dispatch on apply.
+	 * @param array  $resource  {type, id, title}.
+	 * @param array  $args      title, note, requested_by_key_id.
+	 * @return array|WP_Error Public record.
+	 */
+	public static function create_destructive_request( $operation, array $payload, array $resource, $args = array() ) {
+		$id  = self::generate_id();
+		$now = gmdate( 'c' );
+
+		$request = array(
+			'id'                  => $id,
+			'status'              => 'pending',
+			'action'              => 'destructive_operation',
+			'operation'           => sanitize_key( (string) $operation ),
+			'title'               => isset( $args['title'] ) ? sanitize_text_field( (string) $args['title'] ) : sprintf( 'Destructive: %s', sanitize_key( (string) $operation ) ),
+			'note'                => isset( $args['note'] ) ? sanitize_textarea_field( (string) $args['note'] ) : '',
+			'tool'                => sanitize_key( (string) $operation ),
+			'resource'            => array(
+				'type'  => isset( $resource['type'] ) ? sanitize_key( (string) $resource['type'] ) : 'unknown',
+				'id'    => isset( $resource['id'] ) ? $resource['id'] : null,
+				'title' => isset( $resource['title'] ) ? sanitize_text_field( (string) $resource['title'] ) : '',
+			),
+			'diff'                => array(
+				'summary' => __( 'No undo. Once applied, this cannot be rolled back.', 'mcpwp' ),
+			),
+			'payload'             => $payload,
+			'rollback'            => array(),
+			'metadata'            => array(),
+			'requested_by_key_id' => isset( $args['requested_by_key_id'] ) ? sanitize_text_field( (string) $args['requested_by_key_id'] ) : '',
+			'created_at'          => $now,
+			'updated_at'          => $now,
+			'approved_at'         => null,
+			'applied_at'          => null,
+			'rejected_at'         => null,
+			'rolled_back_at'      => null,
+		);
+
+		self::upsert( $request );
+		$public = self::public_record( $request );
+
+		self::emit_event(
+			'approval.created',
+			$public,
+			'pending',
+			'high',
+			__( 'Review a destructive operation before it runs.', 'mcpwp' )
+		);
+
+		return $public;
+	}
+
 	public static function list_requests( $status = '', $limit = 50, $reveal_non_public = false ) {
 		$items  = array_values( self::get_all() );
 		$status = sanitize_key( (string) $status );
@@ -194,7 +249,7 @@ class Mcpwp_Approvals {
 	 * @param string $id Request ID.
 	 * @return array|WP_Error Request.
 	 */
-	public static function apply_request( $id ) {
+	public static function apply_request( $id, $context = array() ) {
 		$request = self::get_private_request( $id );
 		if ( is_wp_error( $request ) ) {
 			return $request;
@@ -204,7 +259,7 @@ class Mcpwp_Approvals {
 			return new WP_Error( 'approval_not_ready', __( 'Approval request must be approved before it can be applied.', 'mcpwp' ), array( 'status' => 409 ) );
 		}
 
-		$result = self::apply_payload( $request, 'payload' );
+		$result = self::apply_payload( $request, 'payload', is_array( $context ) ? $context : array() );
 		if ( is_wp_error( $result ) ) {
 			return $result;
 		}
@@ -360,10 +415,33 @@ class Mcpwp_Approvals {
 	 * @param string $field   Data field.
 	 * @return true|WP_Error True on success.
 	 */
-	private static function apply_payload( $request, $field ) {
+	private static function apply_payload( $request, $field, $context = array() ) {
 		// Staging push apply path.
 		if ( 'staging_push' === $request['action'] ) {
 			return self::apply_staging_push( $request, $field );
+		}
+
+		// A destructive operation replays the reviewed call once; there is
+		// nothing to roll back to.
+		if ( 'destructive_operation' === $request['action'] ) {
+			if ( 'rollback' === $field ) {
+				return new WP_Error(
+					'destructive_rollback_unavailable',
+					__( 'A destructive operation has no rollback: what it removed is gone. Restore from a backup.', 'mcpwp' ),
+					array( 'status' => 400 )
+				);
+			}
+
+			if ( ! class_exists( 'Mcpwp_Destructive_Gate' ) ) {
+				return new WP_Error( 'destructive_gate_unavailable', __( 'The destructive-operation gate is not loaded.', 'mcpwp' ), array( 'status' => 500 ) );
+			}
+
+			$result = Mcpwp_Destructive_Gate::replay(
+				isset( $request['payload'] ) && is_array( $request['payload'] ) ? $request['payload'] : array(),
+				isset( $context['api_key'] ) ? (string) $context['api_key'] : ''
+			);
+
+			return is_wp_error( $result ) ? $result : true;
 		}
 
 		if ( 'post_content_update' !== $request['action'] || empty( $request['resource']['id'] ) ) {

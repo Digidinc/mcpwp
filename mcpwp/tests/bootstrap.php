@@ -540,6 +540,23 @@ function is_serialized($data, $strict = true)
     }
     $last = substr($data, -1);
     return in_array($m[1], array('a', 'O'), true) ? '}' === $last : ';' === $last;
+function wp_delete_post($post_id, $force_delete = false)
+{
+    $post_id = (int) $post_id;
+    if (empty($GLOBALS['_mcpwp_test_posts'][ $post_id ])) {
+    }
+    $post = $GLOBALS['_mcpwp_test_posts'][ $post_id ];
+    if (! $force_delete && 'trash' !== $post->post_status) {
+        $post->post_status = 'trash';
+        return $post;
+    }
+    unset($GLOBALS['_mcpwp_test_posts'][ $post_id ], $GLOBALS['_mcpwp_test_meta'][ $post_id ]);
+    return $post;
+}
+
+function wp_trash_post($post_id)
+{
+    return wp_delete_post($post_id, false);
 }
 
 function delete_option($name)
@@ -926,7 +943,8 @@ function register_rest_route($namespace = '', $route = '', $args = array())
 function rest_do_request($request = null)
 {
     if (is_object($request) && method_exists($request, 'get_route')) {
-        $GLOBALS['mcpwp_test_dispatched_routes'][] = $request->get_route();
+        $GLOBALS['mcpwp_test_dispatched_routes'][]   = $request->get_route();
+        $GLOBALS['mcpwp_test_dispatched_requests'][] = $request;
     }
     // A test may script the body the dispatched route answers with, e.g. a
     // 200 that carries its own errors[] (a partial success).
@@ -2178,6 +2196,7 @@ require_once dirname(__DIR__) . '/includes/mcp/class-mcpwp-mcp-pro-tools.php';
 require_once dirname(__DIR__) . '/includes/mcp/class-mcpwp-integration.php';
 require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-mcp.php';
 require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-pages.php';
+require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-site-updates.php';
 require_once dirname(__DIR__) . '/includes/class-mcpwp-duplicate-copy.php';
 require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-site-updates.php';
 require_once dirname(__DIR__) . '/includes/class-mcpwp-loader.php';
@@ -2190,6 +2209,7 @@ require_once dirname(__DIR__) . '/includes/core/class-mcpwp-slug-search.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-idempotency-claim.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-post-fields.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-option-access.php';
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-destructive-gate.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-registry.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-element-keys.php';
 require_once dirname(__DIR__) . '/includes/core/traits/trait-mcpwp-elementor-reader.php';

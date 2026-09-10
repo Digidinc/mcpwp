@@ -259,6 +259,7 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-idempotency-claim.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-post-fields.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-option-access.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-destructive-gate.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-posts.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-pages.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-media.php';

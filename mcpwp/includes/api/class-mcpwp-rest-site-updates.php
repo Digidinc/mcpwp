@@ -654,7 +654,7 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 			$role = 'admin';
 		}
 
-		$created = $this->create_scoped_api_key( $label, $scopes, $role, $tool_categories );
+		$created = $this->create_scoped_api_key( $label, $scopes, $role, $tool_categories, rest_sanitize_boolean( $request->get_param( 'allow_destructive' ) ) );
 
 		return $this->success_response(
 			array(
@@ -675,7 +675,13 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 			);
 		}
 
-		$key_id  = (string) $request->get_param( 'id' );
+		$key_id = (string) $request->get_param( 'id' );
+
+		// Revoking a key locks out whatever holds it: approval by default (#536).
+		if ( Mcpwp_Destructive_Gate::should_gate( $this->get_current_api_key_record() ) ) {
+			return $this->defer_destructive( 'revoke_api_key', $request, array( 'type' => 'api_key', 'id' => sanitize_key( $key_id ), 'title' => 'API key ' . sanitize_key( $key_id ) ), 'Revoke API key ' . sanitize_key( $key_id ) );
+		}
+
 		$revoked = $this->revoke_scoped_api_key( $key_id );
 
 		if ( ! $revoked ) {

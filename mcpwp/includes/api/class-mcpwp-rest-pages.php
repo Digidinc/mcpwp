@@ -350,6 +350,11 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 		$page_id = absint( $request->get_param( 'id' ) );
 		$force   = (bool) $request->get_param( 'force' );
 
+		// A permanent delete has no undo: approval by default (#536).
+		if ( $force && Mcpwp_Destructive_Gate::should_gate( $this->get_current_api_key_record() ) ) {
+			return $this->defer_destructive( 'delete_page', $request, array( 'type' => 'page', 'id' => $page_id, 'title' => get_the_title( $page_id ) ), sprintf( 'Permanently delete page #%d', $page_id ) );
+		}
+
 		$result = $this->pages->delete_page( $page_id, $force );
 
 		if ( is_wp_error( $result ) ) {
