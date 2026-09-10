@@ -66,6 +66,42 @@ class Mcpwp_Post_Fields {
 	const MAX_TERMS_PER_TAX   = 100;
 
 	/**
+	 * Bound on one meta value, measured as its JSON encoding. MAX_META_KEYS
+	 * counts top-level keys only; without this a single key could carry a
+	 * request-body-sized blob through a one-slot write (#797 round 3).
+	 */
+	const MAX_META_VALUE_BYTES = 65536;
+
+	/**
+	 * Bound on the taxonomies one write may touch. Each must exist and be
+	 * attached to the type, so this is belt-and-braces for MAX_TERMS_PER_TAX.
+	 */
+	const MAX_TAXONOMIES = 20;
+
+	/**
+	 * A meta key that names a credential. Post meta is not a secret store: it
+	 * is world-readable to every plugin, exported with the post, and shown in
+	 * the Custom Fields box. Refusing the write is the one place this can be
+	 * held for both routes (#797 round 3, P1-A).
+	 *
+	 * Delegates to the plugin-wide detector when it is loaded so the meta
+	 * surface and the option surface agree on what a secret is called.
+	 *
+	 * @param string $key Meta key.
+	 * @return bool
+	 */
+	public static function is_secret_shaped_key( $key ) {
+		$key = (string) $key;
+
+		if ( class_exists( 'Mcpwp_Option_Access' ) && method_exists( 'Mcpwp_Option_Access', 'is_secret_field' ) ) {
+			return (bool) Mcpwp_Option_Access::is_secret_field( $key );
+		}
+
+		return (bool) preg_match( '/(^|[_\-.\s])(api_?key|apikey|pass|passwd|password|passcode|pwd|passphrase|secret|secrets|token|tokens|credential|credentials|auth|bearer|jwt|private_?key|license|licence|dsn|salt)([_\-.\s]|$)/i', $key )
+			|| (bool) preg_match( '/(password|secret|token|credential)/i', $key );
+	}
+
+	/**
 	 * Resolve `terms` against the registry without writing anything.
 	 *
 	 * @param mixed  $terms     Submitted {taxonomy: [ids|slugs|names]}.
@@ -89,10 +125,30 @@ class Mcpwp_Post_Fields {
 
 		$resolved = array();
 
+		if ( count( $terms ) > self::MAX_TAXONOMIES ) {
+			return new WP_Error(
+				'too_many_taxonomies',
+				sprintf(
+					/* translators: %d: cap */
+					__( 'terms names more than %d taxonomies. Split the write.', 'mcpwp' ),
+					self::MAX_TAXONOMIES
+				),
+				array( 'status' => 400 )
+			);
+		}
+
+		// The overlap check looks at the NORMALISED taxonomy names — the
+		// same sanitize_key() the loop below applies — so terms.Category or
+		// terms["category."] cannot slip past it (#797 round 3, P2-A).
+		$normalised = array();
+		foreach ( array_keys( $terms ) as $raw ) {
+			$normalised[ sanitize_key( (string) $raw ) ] = true;
+		}
+
 		// categories/tags and terms.category/terms.post_tag write the same
 		// taxonomy; the later one would silently win. Refuse the overlap.
 		foreach ( array( 'categories' => 'category', 'tags' => 'post_tag' ) as $field => $tax ) {
-			if ( isset( $data[ $field ] ) && isset( $terms[ $tax ] ) ) {
+			if ( isset( $data[ $field ] ) && isset( $normalised[ $tax ] ) ) {
 				return new WP_Error(
 					'conflicting_terms',
 					sprintf(
@@ -345,6 +401,19 @@ class Mcpwp_Post_Fields {
 				);
 			}
 
+			if ( null !== $value && strlen( (string) wp_json_encode( $value ) ) > self::MAX_META_VALUE_BYTES ) {
+				return new WP_Error(
+					'meta_value_too_large',
+					sprintf(
+						/* translators: 1: key 2: byte cap */
+						__( 'Meta "%1$s" is larger than %2$d bytes. Store large data as an attachment or split it. Nothing was written.', 'mcpwp' ),
+						$key,
+						self::MAX_META_VALUE_BYTES
+					),
+					array( 'status' => 400, 'key' => $key )
+				);
+			}
+
 			$clean[ $key ] = $value;
 		}
 
@@ -366,7 +435,7 @@ class Mcpwp_Post_Fields {
 	 * @param array  $deleted   Keys removed (null values), by reference.
 	 * @return array Keys written, in order.
 	 */
-	public static function apply_meta( $post_id, $post_type, array $meta, array &$deleted = null ) {
+	public static function apply_meta( $post_id, $post_type, array $meta, ?array &$deleted = null ) {
 		$written = array();
 		$deleted = array();
 
@@ -446,6 +515,10 @@ class Mcpwp_Post_Fields {
 
 		if ( function_exists( 'is_protected_meta' ) && is_protected_meta( $key, 'post' ) ) {
 			return 'protected meta (leading underscore)';
+		}
+
+		if ( self::is_secret_shaped_key( $key ) ) {
+			return 'credential-shaped key; post meta is not a secret store';
 		}
 
 		return null;

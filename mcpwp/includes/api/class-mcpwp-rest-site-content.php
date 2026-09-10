@@ -626,8 +626,8 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			}
 		}
 
-		// Block secret-looking keys
-		if ( preg_match( '/(password|secret|token|auth|credential)/i', $meta_key ) ) {
+		// Secret-looking keys: one detector for read and write.
+		if ( Mcpwp_Post_Fields::is_secret_shaped_key( $meta_key ) ) {
 			return true;
 		}
 

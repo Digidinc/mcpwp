@@ -354,14 +354,20 @@ final class PostTermsMetaTest extends TestCase {
 	public function test_oversized_meta_and_term_lists_are_refused(): void {
 		$this->seed( 40, 'post' );
 
+		// Literals, not the constants: a test built from the constant passes
+		// for any cap value and pins nothing (round-3 P2-G).
 		$meta = array();
-		for ( $i = 0; $i <= Mcpwp_Post_Fields::MAX_META_KEYS; $i++ ) {
+		for ( $i = 1; $i <= 101; $i++ ) {
 			$meta[ 'k' . $i ] = 'v';
 		}
 		$this->assertSame( 'too_many_meta_keys', $this->posts()->update_post( 40, array( 'meta' => $meta ) )->get_error_code() );
+		unset( $meta['k101'] );
+		$this->assertNotInstanceOf( WP_Error::class, $this->posts()->update_post( 40, array( 'meta' => $meta ) ), '100 keys is the cap, not over it.' );
 
-		$terms = array_fill( 0, Mcpwp_Post_Fields::MAX_TERMS_PER_TAX + 1, 1522 );
+		$terms = array_fill( 0, 101, 1522 );
 		$this->assertSame( 'too_many_terms', $this->posts()->update_post( 40, array( 'terms' => array( 'sm_audience' => $terms ) ) )->get_error_code() );
+		$this->assertSame( 100, Mcpwp_Post_Fields::MAX_META_KEYS );
+		$this->assertSame( 100, Mcpwp_Post_Fields::MAX_TERMS_PER_TAX );
 	}
 
 	public function test_the_featured_image_gate_is_the_writable_type_allowlist(): void {
@@ -415,5 +421,84 @@ final class PostTermsMetaTest extends TestCase {
 
 		$this->assertInstanceOf( WP_Error::class, $error );
 		$this->assertSame( 'thumbnails_unsupported', $error->get_error_code() );
+	}
+
+	// ---------------------------------------------------------------
+	// Round 3: credential-shaped keys, value bounds, normalised overlap.
+	// ---------------------------------------------------------------
+
+	public function test_a_credential_shaped_meta_key_is_refused_on_both_routes(): void {
+		// P1-A: post meta is world-readable to every plugin and exported
+		// with the post. The old meta route refused these; the new post-write
+		// meta field never did, and the meta route lost the check.
+		$this->seed( 40, 'post' );
+		$GLOBALS['_mcpwp_test_posts'][40] = new WP_Post( (array) $GLOBALS['_mcpwp_test_posts'][40] );
+
+		foreach ( array( 'stripe_secret_key', 'api_token', 'user_password', 'oauth_credential', 'basic_auth', 'smc_api_key', 'PASSWORD' ) as $key ) {
+			$via_post = $this->posts()->update_post( 40, array( 'meta' => array( $key => 'sk_live_abcdefghijklmnop' ) ) );
+			$this->assertInstanceOf( WP_Error::class, $via_post, $key );
+			$this->assertSame( 'forbidden_meta_key', $via_post->get_error_code(), $key );
+			$this->assertStringContainsString( 'credential', $via_post->get_error_message(), $key );
+
+			$via_route = $this->set_meta( 40, $key, 'sk_live_abcdefghijklmnop' );
+			$this->assertInstanceOf( WP_Error::class, $via_route, $key );
+			$this->assertSame( 'forbidden_meta_key', $via_route->get_error_code(), $key );
+
+			$this->assertArrayNotHasKey( $key, $GLOBALS['_mcpwp_test_meta'][40] ?? array(), 'Nothing was written: ' . $key );
+		}
+
+		// Ordinary keys that merely resemble one are still fine.
+		foreach ( array( 'author_note', 'smc_role', 'smc_page_count' ) as $key ) {
+			$this->assertNotInstanceOf( WP_Error::class, $this->posts()->update_post( 40, array( 'meta' => array( $key => 'x' ) ) ), $key );
+		}
+	}
+
+	public function test_the_read_side_and_the_write_side_share_one_secret_detector(): void {
+		$this->assertTrue( Mcpwp_Post_Fields::is_secret_shaped_key( 'stripe_secret_key' ) );
+		$this->assertTrue( Mcpwp_Post_Fields::is_secret_shaped_key( 'apiKey' ) );
+		$this->assertFalse( Mcpwp_Post_Fields::is_secret_shaped_key( 'smc_role' ) );
+
+		$content = new ReflectionMethod( Mcpwp_REST_Site_Content::class, 'is_blocked_meta_key' );
+		$content->setAccessible( true );
+		$this->assertTrue( $content->invoke( new Mcpwp_REST_Site_Content(), 'stripe_secret_key' ) );
+		$this->assertFalse( $content->invoke( new Mcpwp_REST_Site_Content(), 'smc_role' ) );
+	}
+
+	public function test_a_single_oversized_meta_value_is_refused(): void {
+		$this->seed( 40, 'post' );
+
+		$big = str_repeat( 'x', 65537 );
+		$err = $this->posts()->update_post( 40, array( 'meta' => array( 'smc_blob' => $big ) ) );
+		$this->assertSame( 'meta_value_too_large', $err->get_error_code() );
+
+		$nested = array_fill( 0, 20000, 'abcd' );
+		$err    = $this->posts()->update_post( 40, array( 'meta' => array( 'smc_list' => $nested ) ) );
+		$this->assertSame( 'meta_value_too_large', $err->get_error_code(), 'An array is measured as a whole, not by its top-level count.' );
+
+		$this->assertNotInstanceOf( WP_Error::class, $this->posts()->update_post( 40, array( 'meta' => array( 'smc_blob' => str_repeat( 'x', 60000 ) ) ) ) );
+		$this->assertSame( 65536, Mcpwp_Post_Fields::MAX_META_VALUE_BYTES );
+	}
+
+	public function test_too_many_taxonomies_in_one_write_is_refused(): void {
+		$this->seed( 40, 'post' );
+
+		$terms = array();
+		for ( $i = 1; $i <= 21; $i++ ) {
+			$terms[ 'tax_' . $i ] = array( 1 );
+		}
+		$this->assertSame( 'too_many_taxonomies', $this->posts()->update_post( 40, array( 'terms' => $terms ) )->get_error_code() );
+		$this->assertSame( 20, Mcpwp_Post_Fields::MAX_TAXONOMIES );
+	}
+
+	public function test_the_overlap_check_sees_the_taxonomy_name_the_write_will_use(): void {
+		// P2-A: the loop normalises keys with sanitize_key(); the overlap
+		// check used the raw key, so terms.Category beside categories passed.
+		$this->seed( 40, 'post' );
+
+		foreach ( array( 'Category', 'category.', 'CATEGORY' ) as $spelling ) {
+			$err = $this->posts()->update_post( 40, array( 'categories' => array( 1 ), 'terms' => array( $spelling => array( 'news' ) ) ) );
+			$this->assertInstanceOf( WP_Error::class, $err, $spelling );
+			$this->assertSame( 'conflicting_terms', $err->get_error_code(), $spelling );
+		}
 	}
 }
