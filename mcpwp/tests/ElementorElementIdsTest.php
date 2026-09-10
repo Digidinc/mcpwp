@@ -722,11 +722,12 @@ final class ElementorElementIdsTest extends TestCase {
 	// ---------------------------------------------------------------------
 
 	/**
-	 * @dataProvider undecodable_meta
+	 * @dataProvider unusable_meta
 	 *
-	 * @param mixed $raw Stored meta.
+	 * @param mixed  $raw     Stored meta.
+	 * @param string $message What the refusal must say about the stored form.
 	 */
-	public function test_patch_operations_refuse_stored_data_that_cannot_be_decoded( $raw ): void {
+	public function test_patch_operations_refuse_stored_data_that_is_not_an_element_list( $raw, string $message ): void {
 		$GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'] = $raw;
 
 		$result = $this->writer()->patch_elementor(
@@ -736,14 +737,51 @@ final class ElementorElementIdsTest extends TestCase {
 
 		$this->assertInstanceOf( WP_Error::class, $result, 'Treating unreadable data as an empty page overwrote the whole page with the added section.' );
 		$this->assertSame( 'invalid_elementor_data', $result->get_error_code() );
+		$this->assertStringContainsString( $message, $result->get_error_message(), 'The refusal says which form the stored data is in and why it cannot be used.' );
 		$this->assertSame( $raw, $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'] );
 	}
 
-	public static function undecodable_meta(): array {
+	public static function unusable_meta(): array {
 		return array(
-			'corrupt json string' => array( '[{"id":"sec0001","elType":' ),
-			'array meta'          => array( array( array( 'id' => 'sec0001', 'elType' => 'section' ) ) ),
+			'corrupt json string'         => array( '[{"id":"sec0001","elType":', 'stored as text that does not decode to an element list' ),
+			'json string that is no list' => array( '"just a string"', 'stored as JSON text that decodes to string' ),
+			'array that is no list'       => array( array( 'title' => 'not an element' ), 'stored as an array that is not a list of elements' ),
 		);
+	}
+
+	/**
+	 * Imports and some plugins store `_elementor_data` as an array rather than
+	 * JSON text, and Elementor renders it. Refusing it (75ce90d) broke pages
+	 * that are fine; it is the decoded tree, and the write stores it back as
+	 * JSON text like every other write.
+	 */
+	public function test_patch_operations_use_array_stored_data_as_the_tree_and_round_trip_it(): void {
+		$original = array( $this->section( 'sec0001', array( $this->widget( 'hd00001', 'heading', array( 'title' => 'Kept' ) ) ) ) );
+		$GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'] = $original;
+
+		$result = $this->writer()->patch_elementor(
+			self::PAGE_ID,
+			array( 'operations' => array( array( 'op' => 'add', 'element' => $this->section( 'new0001', array() ) ) ) )
+		);
+
+		$this->assertNotInstanceOf( WP_Error::class, $result, 'Array-stored data is a valid tree.' );
+
+		$stored = $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'];
+		$this->assertIsString( $stored, 'Written back as JSON text, the format every other write uses.' );
+
+		$tree = json_decode( stripslashes( $stored ), true );
+		$this->assertCount( 2, $tree, 'The existing section survives; the added one follows it.' );
+		$this->assertSame( $original[0], $tree[0] );
+		$this->assertSame( 'new0001', $tree[1]['id'] );
+	}
+
+	public function test_a_repair_only_patch_works_on_array_stored_data(): void {
+		$GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'] = $this->staging_tree();
+
+		$result = $this->writer()->patch_elementor( self::PAGE_ID, array( 'repair_ids' => true ) );
+
+		$this->assertNotInstanceOf( WP_Error::class, $result );
+		$this->assertCount( 3, (array) $result['id_repair']['mapping'] );
 	}
 
 	public function test_patch_reports_the_repaired_id_of_an_element_it_added(): void {

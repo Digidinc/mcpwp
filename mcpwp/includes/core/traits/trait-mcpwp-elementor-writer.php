@@ -666,6 +666,25 @@ trait Mcpwp_Elementor_Writer_Trait {
 	}
 
 	/**
+	 * Whether a stored tree is a list of elements: sequential keys from 0,
+	 * every item an array. Anything else would be written back as a JSON
+	 * object Elementor cannot read.
+	 *
+	 * @param array $elements Candidate tree.
+	 * @return bool
+	 */
+	private function is_element_list( array $elements ) {
+		$expected = 0;
+		foreach ( $elements as $key => $element ) {
+			if ( $key !== $expected || ! is_array( $element ) ) {
+				return false;
+			}
+			++$expected;
+		}
+		return true;
+	}
+
+	/**
 	 * Carry an explicit id-repair opt-in (#842) from a request payload to the
 	 * validator, seeded with the post id so every id the validator generates
 	 * or repairs is deterministic for this page: a dry run and the write that
@@ -2698,13 +2717,42 @@ trait Mcpwp_Elementor_Writer_Trait {
 
 		$raw      = get_post_meta( $page_id, '_elementor_data', true );
 		$has_data = ! ( '' === $raw || null === $raw || false === $raw );
-		$elements = is_string( $raw ) && '' !== $raw ? json_decode( $raw, true ) : null;
+		$elements = null;
+		$unusable = '';
 
-		// Stored data that is present but cannot be read is refused for every
-		// patch. Treating it as an empty page ran the operations against
-		// nothing and overwrote the whole page with their result (review r1).
-		if ( $has_data && ! is_array( $elements ) ) {
-			return new WP_Error( 'invalid_elementor_data', 'This page\'s Elementor data could not be decoded, so nothing was changed. Replace it with a clean tree through wp_set_elementor.', array( 'status' => 422 ) );
+		if ( is_array( $raw ) ) {
+			// Imports and some plugins store the tree as an array rather than
+			// JSON text, and Elementor renders it. It is the decoded tree; the
+			// save below writes it back as JSON text, as every write does.
+			$elements = $raw;
+			if ( ! $this->is_element_list( $elements ) ) {
+				$unusable = 'is stored as an array that is not a list of elements';
+			}
+		} elseif ( is_string( $raw ) && '' !== $raw ) {
+			$elements = json_decode( $raw, true );
+			if ( null === $elements && JSON_ERROR_NONE !== json_last_error() ) {
+				$unusable = 'is stored as text that does not decode to an element list (' . json_last_error_msg() . ')';
+			} elseif ( ! is_array( $elements ) ) {
+				$unusable = 'is stored as JSON text that decodes to ' . gettype( $elements ) . ', not an element list';
+			} elseif ( ! $this->is_element_list( $elements ) ) {
+				$unusable = 'is stored as JSON text that is not a list of elements';
+			}
+		} elseif ( $has_data ) {
+			$unusable = 'is stored as ' . gettype( $raw ) . ', which is neither JSON text nor an element array';
+		}
+
+		// Stored data that is present but unusable is refused for every patch.
+		// Treating it as an empty page ran the operations against nothing and
+		// overwrote the whole page with their result (review r1).
+		if ( '' !== $unusable ) {
+			return new WP_Error(
+				'invalid_elementor_data',
+				"This page's Elementor data {$unusable}, so nothing was changed. Replace it with a clean tree through wp_set_elementor.",
+				array(
+					'status'    => 422,
+					'stored_as' => gettype( $raw ),
+				)
+			);
 		}
 
 		if ( empty( $operations ) ) {
