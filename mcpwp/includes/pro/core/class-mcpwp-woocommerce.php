@@ -728,6 +728,12 @@ class Mcpwp_WooCommerce {
 	 * grouped products are never purchasable in WooCommerce — they link out,
 	 * or hold other products — and that is reported as its answer, false.
 	 *
+	 * Not closed: restrictions a plugin applies through the
+	 * woocommerce_is_purchasable filter (wholesale, B2B, members-only) are
+	 * evaluated for the CALLING user. Under an administrator — the admin chat,
+	 * an approval applied by a reviewer — a published product such a plugin
+	 * limits to one role can read true (review r2 P3-E).
+	 *
 	 * @param WC_Product $product Product object.
 	 * @return bool
 	 */
