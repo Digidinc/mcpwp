@@ -184,25 +184,48 @@ class Mcpwp_REST_Batch extends Mcpwp_REST_API {
 
 		$results = array();
 
-		// Execute each operation sequentially
-		foreach ( $operations as $index => $operation ) {
-			$result    = $this->execute_operation( $operation, $index, $api_key );
-			$results[] = $result;
+		// One spend budget for the whole fan-out tree of this HTTP request
+		// (#752 F9). A top-level batch opens it; a batch reached from inside
+		// /mcp (wp_batch) joins the one that request opened, so nesting can
+		// never hand out a fresh budget. Operations are charged as they
+		// dispatch, and only the opener closes the budget — in finally, so a
+		// throwing operation cannot carry it into the next request.
+		$spend_token = Mcpwp_Spend_Budget::open( $request );
+
+		try {
+			// Execute each operation sequentially
+			foreach ( $operations as $index => $operation ) {
+				$result    = $this->execute_operation( $operation, $index, $api_key );
+				$results[] = $result;
+			}
+
+			$spend = Mcpwp_Spend_Budget::report();
+		} finally {
+			Mcpwp_Spend_Budget::close( $spend_token );
 		}
 
-		$failed = 0;
+		$failed  = 0;
+		$refused = array();
 		foreach ( $results as $result ) {
 			if ( ! isset( $result['status'] ) || (int) $result['status'] >= 400 ) {
 				$failed++;
 			}
+			if ( isset( $result['data']['code'] ) && Mcpwp_Spend_Budget::ERROR_CODE === $result['data']['code'] ) {
+				$refused[] = $result['index'];
+			}
 		}
+
+		// A refused operation is a failed one: it did not run, it is counted in
+		// `failed`, and a batch carrying one is never pinned by request_id.
+		$spend['refused'] = $refused;
 
 		return $this->success_response(
 			array(
-				'results'   => $results,
-				'total'     => count( $results ),
-				'succeeded' => count( $results ) - $failed,
-				'failed'    => $failed,
+				'results'      => $results,
+				'total'        => count( $results ),
+				'succeeded'    => count( $results ) - $failed,
+				'failed'       => $failed,
+				'spend_budget' => $spend,
 			)
 		);
 	}

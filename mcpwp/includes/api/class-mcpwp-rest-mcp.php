@@ -520,6 +520,27 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 * @return WP_REST_Response Response.
 	 */
 	public function handle_mcp( $request ) {
+		// One spend budget for the whole fan-out tree of this HTTP request
+		// (#752 F9): every tool call, nested batch operation and resource read
+		// below draws from it. Opened here, before anything dispatches, and
+		// closed in finally so it cannot outlive the request. When this runs
+		// inside a tree that already holds a budget it joins that one.
+		$spend_token = Mcpwp_Spend_Budget::open( $request );
+
+		try {
+			return $this->handle_mcp_messages( $request );
+		} finally {
+			Mcpwp_Spend_Budget::close( $spend_token );
+		}
+	}
+
+	/**
+	 * Answer the JSON-RPC message or batch of one /mcp request.
+	 *
+	 * @param WP_REST_Request $request Request object.
+	 * @return WP_REST_Response Response.
+	 */
+	private function handle_mcp_messages( $request ) {
 		$body = $request->get_json_params();
 
 		if ( empty( $body ) ) {
@@ -689,6 +710,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 * - `rate_limit`: the caller's remaining budget, so a client can pace
 	 *   itself before the wall instead of learning about it from a 429. Left
 	 *   out when nothing was metered — absent, never reported as unlimited.
+	 * - `spend_budget`: this request's spend budget (#752 F9) after this message.
 	 *
 	 * Errors are left alone: JSON-RPC error objects have no _meta, and a 429
 	 * already carries its budget in its data. The X-MCPWP-Version header
@@ -712,6 +734,15 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 
 		if ( null !== $budget ) {
 			$response['result']['_meta']['rate_limit'] = $budget;
+		}
+
+		// What is left of this request's spend budget after this message
+		// (#752 F9). Server-owned: anything a caller or a stored replay put
+		// under this key is replaced.
+		$spend = Mcpwp_Spend_Budget::report();
+
+		if ( null !== $spend ) {
+			$response['result']['_meta']['spend_budget'] = $spend;
 		}
 
 		return $response;
@@ -1933,6 +1964,15 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 
 		$mapping     = $tool_map[ $tool_name ];
 
+		// Once an earlier operation of this request was refused by the spend
+		// budget, every later one is refused too (#752 F9) — here, before it is
+		// charged rate-limit slots for work that will not run.
+		$spend_state = Mcpwp_Spend_Budget::refuse_if_exhausted();
+		if ( is_wp_error( $spend_state ) ) {
+			$this->fire_tool_called( $tool_name, $start, Mcpwp_Spend_Budget::ERROR_CODE );
+			return $this->spend_refusal( $id, $spend_state->get_error_message(), $spend_state->get_error_data() );
+		}
+
 		// A tool that carries a list of operations is a batch by another name
 		// (#802). The HTTP request was charged one slot; the rest are charged
 		// here, before dispatch, and refused whole when they do not fit —
@@ -2039,6 +2079,17 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				);
 			}
 
+			// A callback runs in-process and never passes rest_dispatch_request,
+			// where every routed operation is charged, so it is charged here.
+			$spend = Mcpwp_Spend_Budget::charge( Mcpwp_Operation_Weights::spend_weight( 'POST', 'callback:' . $tool_name, $arguments ) );
+			if ( is_wp_error( $spend ) ) {
+				if ( class_exists( 'Mcpwp_Action_Log' ) ) {
+					Mcpwp_Action_Log::complete( $audit_log_id, (int) round( ( microtime( true ) - $start ) * 1000 ), false, Mcpwp_Spend_Budget::ERROR_CODE );
+				}
+				$this->fire_tool_called( $tool_name, $start, Mcpwp_Spend_Budget::ERROR_CODE );
+				return $this->spend_refusal( $id, $spend->get_error_message(), $spend->get_error_data() );
+			}
+
 			$full_route = 'callback:' . $tool_name;
 			$response   = $this->normalize_custom_tool_callback_response(
 				call_user_func( $mapping['callback'], $arguments )
@@ -2119,6 +2170,15 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 
 			$error_code = isset( $data['code'] ) ? $data['code'] : 'tool_error';
 
+			// Refused by the spend budget before the handler ran (#752 F9).
+			if ( Mcpwp_Spend_Budget::ERROR_CODE === $error_code ) {
+				if ( class_exists( 'Mcpwp_Action_Log' ) ) {
+					Mcpwp_Action_Log::complete( $audit_log_id, (int) round( ( microtime( true ) - $start ) * 1000 ), false, Mcpwp_Spend_Budget::ERROR_CODE );
+				}
+				$this->fire_tool_called( $tool_name, $start, Mcpwp_Spend_Budget::ERROR_CODE );
+				return $this->spend_refusal( $id, $error_message, isset( $data['data'] ) ? $data['data'] : array() );
+			}
+
 			// Build error data, preserving hint/guide from REST response.
 			$error_data = array(
 				'code'   => $error_code,
@@ -2186,6 +2246,34 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				'isError' => false,
 			),
 		);
+	}
+
+	/**
+	 * A tool call the spend budget refused, as a JSON-RPC error (#752 F9).
+	 *
+	 * Its own code, so a client can tell "this request was too big — resend the
+	 * rest in a new one" from a rate limit (-32029, wait) and from a failing
+	 * handler (-32000). The operation did not run.
+	 *
+	 * @param mixed  $id      Request ID.
+	 * @param string $message Refusal message.
+	 * @param mixed  $data    Refusal data (weight, remaining, limit, hint).
+	 * @return array
+	 */
+	private function spend_refusal( $id, $message, $data ) {
+		$data  = is_array( $data ) ? $data : array();
+		$error = array(
+			'code'   => Mcpwp_Spend_Budget::ERROR_CODE,
+			'status' => Mcpwp_Spend_Budget::HTTP_STATUS,
+		);
+
+		foreach ( array( 'weight', 'remaining', 'limit', 'hint' ) as $field ) {
+			if ( isset( $data[ $field ] ) ) {
+				$error[ $field ] = $data[ $field ];
+			}
+		}
+
+		return $this->jsonrpc_error( $id, Mcpwp_Spend_Budget::JSONRPC_CODE, (string) $message, $error );
 	}
 
 	/**
