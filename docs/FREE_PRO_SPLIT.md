@@ -60,7 +60,7 @@ Require active Freemius license. Loaded only when `mcpwp_license()->is_pro()` is
 
 **Translation:** wp_get_translations, wp_create_translation, wp_set_language, wp_languages
 
-**Figma:** wp_figma_status, wp_get_figma_file, wp_get_figma_node, wp_get_figma_design_tokens, wp_sync_figma_design_tokens (v3.11.1: registered by the built-in Figma integration, which lists and maps them only with Pro; the `/figma/*` REST routes answer 403 `pro_required` on Free)
+**Figma:** wp_figma_status, wp_get_figma_file, wp_get_figma_node, wp_get_figma_design_tokens, wp_sync_figma_design_tokens (v3.11.1: gated at the capability. `Mcpwp_Figma` refuses every Figma call and every write of Figma-derived data on Free, fail-closed. So on Free: the `/figma/*` REST routes answer 403 `pro_required`; the Figma MCP tools are not listed; the hourly design-token cron is not scheduled and an existing event is cleared; Integrations "Test connection" and the Figma OAuth flow refuse; and an expired OAuth token is never refreshed. **Storing** a Figma personal token or OAuth app on Free is allowed, because with every use refused it unlocks nothing. Status reports it as configured and, separately, as `pro_required`.)
 
 **SEO market data (DataForSEO):** wp_seo_visibility, wp_refresh_seo_visibility, wp_seo_opportunities (v3.11.1: `GET /seo/visibility`, `POST /seo/visibility/refresh` and `GET /seo/opportunities` answer 403 `pro_required` on Free, including through `POST /batch`). Open tier question: the free `wp_keyword_research` enrichment also spends DataForSEO credit when credentials are configured.
 

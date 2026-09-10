@@ -3042,7 +3042,7 @@ if (hash_equals($expected, $signature)) {
 
 *New in v1.1.0.* Third-party AI services and design sources (OpenAI, Gemini, ElevenLabs, Pexels, Figma) integrate directly into MCPWP. Configure API keys via **WP Admin → MCPWP → Integrations**. Generated assets are auto-uploaded to the WordPress media library, while Figma is used as approved design context for archetypes and reusable parts.
 
-**Tier gating:** Stock photo search is available as a core integration. AI generation tools require a paid plan or trial. Figma design intake (`/figma/*` routes and the Figma MCP tools) and SEO market data (`/seo/visibility`, `/seo/visibility/refresh`, `/seo/opportunities`) also require Pro: on Free those routes answer `403 pro_required` on every path, including `POST /batch`, and the Figma tools are not listed.
+**Tier gating:** Stock photo search is available as a core integration. AI generation tools require a paid plan or trial. Figma design intake (`/figma/*` routes, the Figma MCP tools, the hourly design-token cron, Figma OAuth and test connection; storing a Figma token is allowed and unlocks nothing) and SEO market data (`/seo/visibility`, `/seo/visibility/refresh`, `/seo/opportunities`) also require Pro: on Free those routes answer `403 pro_required` on every path, including `POST /batch`, and the Figma tools are not listed.
 
 #### Provider Management (Admin)
 

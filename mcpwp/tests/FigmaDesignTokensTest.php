@@ -20,6 +20,20 @@ final class FigmaDesignTokensTest extends TestCase
     protected function tearDown(): void
     {
         $GLOBALS['mcpwp_test_filters'] = array();
+        $GLOBALS['mcpwp_test_fs']      = null;
+        $this->resetLicense();
+    }
+
+    /**
+     * Design-token sync is Pro (#564): every Figma call refuses without an
+     * entitlement, so this file states the Pro precondition instead of
+     * relying on whatever tier the previous test left behind.
+     */
+    private function resetLicense(): void
+    {
+        $ref = new ReflectionProperty(Mcpwp_License::class, 'instance');
+        $ref->setAccessible(true);
+        $ref->setValue(null, null);
     }
 
     protected function setUp(): void
@@ -28,6 +42,8 @@ final class FigmaDesignTokensTest extends TestCase
         $GLOBALS['mcpwp_test_filters']    = array();
         $GLOBALS['mcpwp_test_actions']    = array();
         $GLOBALS['mcpwp_test_transients'] = array();
+        $GLOBALS['mcpwp_test_fs']         = new Mcpwp_Test_Fs_Stub(true, true, false, 'pro');
+        $this->resetLicense();
 
         $ref      = new ReflectionClass(Mcpwp_Encryption::class);
         $instance = $ref->getProperty('instance');

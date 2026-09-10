@@ -35,7 +35,7 @@ Pro is for teams that use AI to operate a site repeatedly, not just connect to i
 - Page and product archetypes.
 - Design references from screenshots, mockups, and approved source material.
 - Agent workflows that turn design references and archetypes into draft pages, product pages, sections, and reusable parts.
-- Figma OAuth and Figma design intake (REST `/figma/*` answers 403 `pro_required` on Free; the Figma MCP tools are listed only with Pro).
+- Figma OAuth and Figma design intake, gated inside `Mcpwp_Figma` itself. On Free: no Figma call, no design-token write, no cron sync, no OAuth or test connection; REST `/figma/*` answers 403 `pro_required` and the Figma MCP tools are not listed. Saving a Figma token on Free is allowed and unlocks nothing.
 - SEO market data from DataForSEO: visibility snapshots, refresh, and opportunities (REST `/seo/visibility`, `/seo/visibility/refresh`, `/seo/opportunities` answer 403 `pro_required` on Free).
 - Google Indexing.
 - AI provider integrations: OpenAI, Gemini, ElevenLabs, Pexels, screenshot worker.
