@@ -123,6 +123,33 @@ class Mcpwp_Activator {
 		update_option( 'mcpwp_destructive_switch_reset', 1, false );
 	}
 
+	/**
+	 * Record analytics opt-ins stored before 3.11.1 as explicit choices, once.
+	 *
+	 * From 3.11.1, Mcpwp_Analytics::is_enabled() counts a stored true as
+	 * consent on Free only with analytics_choice = explicit. Before 3.11.1 the
+	 * only writers of analytics_enabled were the settings form — which showed
+	 * the stored value, "not set" as unchecked, so a stored true meant an
+	 * administrator ticked the box — and the 2.8 bridge copying such a value.
+	 * A true stored then is an explicit choice. Own flag: a true written later
+	 * without a recorded choice is never stamped.
+	 */
+	public static function stamp_analytics_choice() {
+		if ( get_option( 'mcpwp_analytics_choice_stamped' ) ) {
+			return;
+		}
+
+		$settings = get_option( 'mcpwp_settings', array() );
+		if ( is_array( $settings ) && array_key_exists( 'analytics_enabled', $settings )
+			&& in_array( $settings['analytics_enabled'], array( true, 1, '1' ), true )
+			&& ! isset( $settings['analytics_choice'] ) ) {
+			$settings['analytics_choice'] = 'explicit';
+			update_option( 'mcpwp_settings', $settings );
+		}
+
+		update_option( 'mcpwp_analytics_choice_stamped', 1, false );
+	}
+
 	public static function migrate_identity_less_approvals() {
 		if ( get_option( 'mcpwp_approvals_identity_migrated' ) ) {
 			return;

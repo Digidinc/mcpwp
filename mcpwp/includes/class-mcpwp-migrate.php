@@ -298,6 +298,7 @@ class Mcpwp_Migrate {
 				if ( false === $mcpwp_settings_existing ) {
 					// mcpwp_settings not yet written — simple copy.
 					update_option( 'mcpwp_settings', $spai_settings_raw );
+					self::restamp_if_analytics_copied( $spai_settings_raw );
 					$log['copied'][] = 'spai_settings → mcpwp_settings (direct copy)';
 				} else {
 					// mcpwp_settings already exists (written by activator) — deep-merge.
@@ -321,6 +322,9 @@ class Mcpwp_Migrate {
 
 					if ( ! empty( $applied ) ) {
 						update_option( 'mcpwp_settings', $merged );
+						if ( in_array( 'analytics_enabled', $applied, true ) ) {
+							self::restamp_if_analytics_copied( $merged );
+						}
 						$log['copied'][] = 'spai_settings → mcpwp_settings (deep-merge; overlaid: ' . implode( ', ', $applied ) . ')';
 					} else {
 						$log['skipped_existing'][] = 'spai_settings (all sub-keys already match mcpwp_settings)';
@@ -665,6 +669,24 @@ class Mcpwp_Migrate {
 	 *
 	 * @return array|null
 	 */
+	/**
+	 * A 2.8 analytics opt-in was an administrator ticking an unchecked box, so
+	 * it must be recorded as an explicit choice (see
+	 * Mcpwp_Analytics::has_explicit_consent()). The copied settings are left
+	 * exactly as they were; clearing the stamp flag makes
+	 * Mcpwp_Activator::stamp_analytics_choice() — which runs after this
+	 * migration on plugin load — record it, even on a site that stamped before.
+	 *
+	 * @param array $settings Settings just written.
+	 */
+	private static function restamp_if_analytics_copied( array $settings ) {
+		if ( array_key_exists( 'analytics_enabled', $settings )
+			&& in_array( $settings['analytics_enabled'], array( true, 1, '1' ), true )
+			&& ! isset( $settings['analytics_choice'] ) ) {
+			delete_option( 'mcpwp_analytics_choice_stamped' );
+		}
+	}
+
 	public static function get_log() {
 		$log = get_option( self::LOG_OPTION, null );
 		return is_array( $log ) ? $log : null;

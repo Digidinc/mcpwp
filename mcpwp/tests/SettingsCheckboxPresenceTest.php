@@ -63,7 +63,10 @@ final class SettingsCheckboxPresenceTest extends TestCase {
 	}
 
 	public function test_the_list_covers_every_boolean_the_sanitizer_writes(): void {
-		$input = array( '__present' => array_merge( array_keys( self::FLAGS ), array( 'destructive_requires_approval' ) ) );
+		$input = array(
+			'__present'  => array_merge( array_keys( self::FLAGS ), array( 'destructive_requires_approval' ) ),
+			'__rendered' => array( 'analytics_enabled' => '0' ),
+		);
 		foreach ( array_keys( self::FLAGS ) as $flag ) {
 			$input[ $flag ] = '1';
 		}
@@ -88,7 +91,7 @@ final class SettingsCheckboxPresenceTest extends TestCase {
 	public function test_a_form_post_with_the_box_checked_turns_it_on(): void {
 		foreach ( array_keys( self::FLAGS ) as $flag ) {
 			$this->store( $this->all( false ) );
-			$out = $this->settings()->sanitize_settings( array( '__present' => array( $flag ), $flag => '1' ) );
+			$out = $this->settings()->sanitize_settings( array( '__present' => array( $flag ), '__rendered' => array( $flag => '0' ), $flag => '1' ) );
 			$this->assertTrue( $out[ $flag ], "$flag: checked in the form = on." );
 		}
 	}

@@ -469,6 +469,14 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 		Mcpwp_Activator::reset_destructive_switch();
 	}
 
+	// One-time: record analytics opt-ins stored before 3.11.1 as explicit
+	// choices, so Mcpwp_Analytics::is_enabled() can require one on Free. Runs
+	// after the bridge migration above. Own flag, same reasoning.
+	if ( ! get_option( 'mcpwp_analytics_choice_stamped' ) ) {
+		require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-activator.php';
+		Mcpwp_Activator::stamp_analytics_choice();
+	}
+
 	// Initialize the plugin
 	$loader = new Mcpwp_Loader();
 	$loader->run();

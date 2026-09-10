@@ -770,13 +770,9 @@ class Mcpwp_Settings {
 			? min( 10000, max( 1, absint( $input['alerts_auth_threshold'] ) ) )
 			: 10;
 
-		// Nothing posted and nothing stored: write no value, so
-		// Mcpwp_Analytics::is_enabled() keeps applying the plan's default
-		// (opt-in on free, on for paying sites).
-		$analytics = $this->resolve_checkbox( $input, $present, $stored, 'analytics_enabled' );
-		if ( null !== $analytics ) {
-			$sanitized['analytics_enabled'] = $analytics;
-		}
+		// Analytics is consent, so it is stricter than the other boxes: see
+		// resolve_analytics_choice().
+		$this->resolve_analytics_choice( $input, $present, $stored, $sanitized );
 
 		// Environment declaration. 'auto' lets Mcpwp_Staging_Adapter_Generic work it
 		// out from WP_ENVIRONMENT_TYPE and then, as a labelled guess, the site URL.
@@ -846,6 +842,70 @@ class Mcpwp_Settings {
 			return (bool) $stored[ $key ];
 		}
 		return null;
+	}
+
+	/**
+	 * Resolve analytics_enabled, and the record that it was an explicit choice.
+	 *
+	 * A paying site with no stored choice is shown the box checked (the plan
+	 * default). Saving the form must not turn that default into a stored
+	 * opt-in, or it outlives the plan: after a downgrade to Free — or a
+	 * database cloned to a Free site — telemetry would run without consent
+	 * (review r1 P2-A). So the form posts the state it showed
+	 * (__rendered[analytics_enabled]) and a value is stored only when the
+	 * admin changed the box; it is then recorded as analytics_choice =
+	 * explicit, which is the only thing Mcpwp_Analytics::is_enabled() counts
+	 * as consent on Free.
+	 *
+	 * - Form posted, box left as shown: the stored value (and its record)
+	 *   stays; nothing stored stays nothing stored, so the plan default applies.
+	 * - Form posted, box changed: that value, recorded explicit.
+	 * - Form posted without the shown state: an uncheck is stored (off is
+	 *   always safe); a check is not, since no change can be proven.
+	 * - A write that names the key without the form (WordPress re-sanitizing
+	 *   its own output, the REST plugin-settings path writing the whole
+	 *   array): that value; the explicit record is kept only if the write
+	 *   carries it.
+	 * - Anything else: the stored value and its record stay.
+	 *
+	 * @param array    $input     Input values.
+	 * @param string[] $present   Checkbox ids the posted form rendered.
+	 * @param array    $stored    The option as stored before this write.
+	 * @param array    $sanitized Output, by reference.
+	 */
+	private function resolve_analytics_choice( array $input, array $present, array $stored, array &$sanitized ) {
+		$key   = 'analytics_enabled';
+		$write = null; // array( value, explicit? ), or null to keep what is stored.
+
+		if ( in_array( $key, $present, true ) ) {
+			$posted = ! empty( $input[ $key ] );
+			$shown  = isset( $input['__rendered'] ) && is_array( $input['__rendered'] ) && array_key_exists( $key, $input['__rendered'] )
+				? ! empty( $input['__rendered'][ $key ] )
+				: null;
+
+			if ( null === $shown ) {
+				$write = $posted ? null : array( false, true );
+			} elseif ( $posted !== $shown ) {
+				$write = array( $posted, true );
+			}
+		} elseif ( array_key_exists( $key, $input ) ) {
+			$write = array( ! empty( $input[ $key ] ), isset( $input['analytics_choice'] ) && 'explicit' === $input['analytics_choice'] );
+		}
+
+		if ( null === $write ) {
+			if ( array_key_exists( $key, $stored ) ) {
+				$sanitized[ $key ] = (bool) $stored[ $key ];
+				if ( isset( $stored['analytics_choice'] ) && 'explicit' === $stored['analytics_choice'] ) {
+					$sanitized['analytics_choice'] = 'explicit';
+				}
+			}
+			return;
+		}
+
+		$sanitized[ $key ] = $write[0];
+		if ( $write[1] ) {
+			$sanitized['analytics_choice'] = 'explicit';
+		}
 	}
 
 	/**
@@ -1172,13 +1232,15 @@ class Mcpwp_Settings {
 	 */
 	public function render_analytics_enabled_field() {
 		$settings = $this->get_settings();
-		// Show the state in force: with no stored choice a paying site is on,
-		// and a box shown unchecked would switch it off on the next save.
+		// Show the state in force: with no stored choice a paying site is on.
+		// The form also posts the state it showed, so saving without touching
+		// the box stores nothing (see resolve_analytics_choice()).
 		$enabled = class_exists( 'Mcpwp_Analytics' ) ? Mcpwp_Analytics::is_enabled() : ! empty( $settings['analytics_enabled'] );
 		$uuid    = class_exists( 'Mcpwp_Analytics' ) ? Mcpwp_Analytics::get_site_uuid() : '';
 		?>
-		<?php // Presence marker: see render_checkbox_field(). ?>
+		<?php // Presence marker (see render_checkbox_field()) and the state shown. ?>
 		<input type="hidden" name="<?php echo esc_attr( self::OPTION_NAME ); ?>[__present][]" value="analytics_enabled" />
+		<input type="hidden" name="<?php echo esc_attr( self::OPTION_NAME ); ?>[__rendered][analytics_enabled]" value="<?php echo $enabled ? '1' : '0'; ?>" />
 		<label>
 			<input
 				type="checkbox"

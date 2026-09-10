@@ -25,21 +25,20 @@ class Mcpwp_Analytics {
 	/**
 	 * Whether analytics is enabled for this site.
 	 *
-	 * Free tier: requires explicit opt-in via mcpwp_settings['analytics_enabled'].
-	 * Paid tier: defaults to true unless the user has explicitly set the flag to false.
+	 * Free tier: requires an explicit opt-in — a stored analytics_enabled true
+	 * recorded as analytics_choice = explicit (see has_explicit_consent()).
+	 * Paid tier: defaults to true unless analytics_enabled is stored false.
 	 *
 	 * @return bool
 	 */
 	public static function is_enabled() {
 		$settings = get_option( 'mcpwp_settings', array() );
+		if ( ! is_array( $settings ) ) {
+			$settings = array();
+		}
 
-		// null = not yet explicitly set; false = explicitly disabled; true = explicitly enabled.
-		$explicit = array_key_exists( 'analytics_enabled', $settings )
-			? (bool) $settings['analytics_enabled']
-			: null;
-
-		// Explicit disable always wins — free or paid.
-		if ( false === $explicit ) {
+		// A stored off always wins — free or paid.
+		if ( array_key_exists( 'analytics_enabled', $settings ) && ! $settings['analytics_enabled'] ) {
 			return false;
 		}
 
@@ -49,8 +48,27 @@ class Mcpwp_Analytics {
 			return true;
 		}
 
-		// Free sites: only if explicitly enabled.
-		return true === $explicit;
+		// Free sites: only consent the admin gave.
+		return self::has_explicit_consent( $settings );
+	}
+
+	/**
+	 * Whether the stored settings record an explicit analytics opt-in.
+	 *
+	 * A true alone is not consent: a paid plan's default carried into Free, a
+	 * cloned database or a programmatic write can all leave one behind (review
+	 * r1 P2-A). Consent is a true the settings form recorded as a change the
+	 * admin made (analytics_choice = explicit); opt-ins stored before 3.11.1
+	 * are stamped once by Mcpwp_Activator::stamp_analytics_choice().
+	 *
+	 * @param array $settings mcpwp_settings.
+	 * @return bool
+	 */
+	public static function has_explicit_consent( array $settings ) {
+		return array_key_exists( 'analytics_enabled', $settings )
+			&& in_array( $settings['analytics_enabled'], array( true, 1, '1' ), true )
+			&& isset( $settings['analytics_choice'] )
+			&& 'explicit' === $settings['analytics_choice'];
 	}
 
 	/**
