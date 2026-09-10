@@ -1337,6 +1337,16 @@ trait Mcpwp_Api_Auth {
 			return 'admin';
 		}
 
+		// A find/replace across a whole type or the whole site rewrites content
+		// the caller has not named. Gated here, in the route table, like every
+		// other high-blast-radius op — not only inside the handler (#803).
+		if ( $is_write && preg_match( '#^/mcpwp/v1/elementor/find-replace(/|$)#i', $route ) ) {
+			$params = method_exists( $request, 'get_params' ) ? $request->get_params() : array();
+			if ( is_array( $params ) && class_exists( 'Mcpwp_REST_Elementor' ) && Mcpwp_REST_Elementor::find_replace_is_wide( $params ) ) {
+				return 'admin';
+			}
+		}
+
 		// Figma design-token sync makes an external Figma API call and overwrites
 		// the cached mcpwp_figma_design_tokens option (read by a companion theme) —
 		// require admin. Reading the cached tokens stays at the read default.
@@ -1498,6 +1508,15 @@ trait Mcpwp_Api_Auth {
 			if ( 'tools/call' === $method ) {
 				$tool_name = isset( $message['params']['name'] ) ? (string) $message['params']['name'] : '';
 				$scope = $this->get_required_scope_for_tool_name( $tool_name );
+
+				// The same rule the REST route table applies: a wide
+				// find/replace is admin whichever door it comes through.
+				if ( 'wp_bulk_find_replace' === $tool_name && class_exists( 'Mcpwp_REST_Elementor' ) ) {
+					$args = isset( $message['params']['arguments'] ) && is_array( $message['params']['arguments'] ) ? $message['params']['arguments'] : array();
+					if ( Mcpwp_REST_Elementor::find_replace_is_wide( $args ) ) {
+						$scope = 'admin';
+					}
+				}
 			} elseif ( ! in_array( $method, array( 'initialize', 'tools/list', 'resources/list', 'resources/read', 'ping', 'notifications/initialized' ), true ) ) {
 				$scope = 'write';
 			}

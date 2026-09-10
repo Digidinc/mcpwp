@@ -640,7 +640,26 @@ trait Mcpwp_Free_Tools_Content_Trait {
 				'posts' => array(
 					'type'        => 'array',
 					'description' => 'Array of post objects with: id (required), title, content, status, excerpt, slug, categories, tags',
-					'required'    => true,
+					'required'    => false,
+					'items'       => array(
+						'type'       => 'object',
+						'properties' => array(
+							'id'         => array( 'type' => 'integer', 'description' => 'Post ID to update.' ),
+							'title'      => array( 'type' => 'string', 'description' => 'Post title.' ),
+							'content'    => array( 'type' => 'string', 'description' => 'Post body (HTML).' ),
+							'status'     => array( 'type' => 'string', 'description' => 'Publication status.' ),
+							'excerpt'    => array( 'type' => 'string', 'description' => 'Short summary.' ),
+							'slug'       => array( 'type' => 'string', 'description' => 'URL path segment.' ),
+							'categories' => array( 'type' => 'array', 'description' => 'Category IDs. Replaces all current categories.', 'items' => array( 'type' => 'integer' ) ),
+							'tags'       => array( 'type' => 'array', 'description' => 'Tag slugs or names. Replaces all current tags.', 'items' => array( 'type' => 'string' ) ),
+						),
+						'required'   => array( 'id' ),
+					),
+				),
+				'updates' => array(
+					'type'        => 'array',
+					'description' => 'Same as posts: the list of objects to update, each with id plus the fields to change. Pass one of the two.',
+					'required'    => false,
 					'items'       => array(
 						'type'       => 'object',
 						'properties' => array(
@@ -675,7 +694,25 @@ trait Mcpwp_Free_Tools_Content_Trait {
 				'pages' => array(
 					'type'        => 'array',
 					'description' => 'Array of page objects with: id (required), title, content, status, slug, parent, template',
-					'required'    => true,
+					'required'    => false,
+					'items'       => array(
+						'type'       => 'object',
+						'properties' => array(
+							'id'       => array( 'type' => 'integer', 'description' => 'Page ID to update.' ),
+							'title'    => array( 'type' => 'string', 'description' => 'Page title.' ),
+							'content'  => array( 'type' => 'string', 'description' => 'Page body (HTML).' ),
+							'status'   => array( 'type' => 'string', 'description' => 'Publication status.' ),
+							'slug'     => array( 'type' => 'string', 'description' => 'URL path segment.' ),
+							'parent'   => array( 'type' => 'integer', 'description' => 'Parent page ID.' ),
+							'template' => array( 'type' => 'string', 'description' => 'Page template slug.' ),
+						),
+						'required'   => array( 'id' ),
+					),
+				),
+				'updates' => array(
+					'type'        => 'array',
+					'description' => 'Same as pages: the list of objects to update, each with id plus the fields to change. Pass one of the two.',
+					'required'    => false,
 					'items'       => array(
 						'type'       => 'object',
 						'properties' => array(

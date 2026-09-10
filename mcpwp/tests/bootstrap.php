@@ -130,6 +130,8 @@ class WP_REST_Request
     private $params;
     private $headers;
     private $json_params;
+    private $query_params = array();
+    private $body_params = array();
 
     public function __construct(
         $method = 'GET',
@@ -189,15 +191,27 @@ class WP_REST_Request
     public function set_body_params($params)
     {
         if (is_array($params)) {
-            $this->params = array_merge($this->params, $params);
+            $this->body_params = array_merge($this->body_params, $params);
+            $this->params      = array_merge($this->params, $params);
         }
     }
 
     public function set_query_params($params)
     {
         if (is_array($params)) {
-            $this->params = array_merge($this->params, $params);
+            $this->query_params = array_merge($this->query_params, $params);
+            $this->params       = array_merge($this->params, $params);
         }
+    }
+
+    public function get_query_params()
+    {
+        return $this->query_params;
+    }
+
+    public function get_body_params()
+    {
+        return $this->body_params;
     }
 
     public function get_json_params()
@@ -1340,7 +1354,7 @@ class WP_Query
         $statuses = isset($args['post_status']) ? (array) $args['post_status'] : array();
 
         $posts = array_values(array_filter($posts, function ($post) use ($types, $statuses, $args) {
-            if (! empty($types) && ! in_array($post->post_type, $types, true)) {
+            if (! empty($types) && ! in_array('any', $types, true) && ! in_array($post->post_type, $types, true)) {
                 return false;
             }
             if (! empty($statuses) && ! in_array('any', $statuses, true) && ! in_array($post->post_status, $statuses, true)) {
@@ -1355,11 +1369,34 @@ class WP_Query
             if (! empty($args['s']) && false === stripos($post->post_title . ' ' . $post->post_content, (string) $args['s'])) {
                 return false;
             }
+            // meta_key alone is an EXISTS test in WP_Query: any row under that
+            // key, empty values included. A double that ignored it handed
+            // find/replace a candidate set production cannot produce.
+            if (! empty($args['meta_key'])) {
+                $meta = isset($GLOBALS['_mcpwp_test_meta'][ (int) $post->ID ]) ? $GLOBALS['_mcpwp_test_meta'][ (int) $post->ID ] : array();
+                if (! is_array($meta) || ! array_key_exists($args['meta_key'], $meta)) {
+                    return false;
+                }
+            }
             return true;
         }));
 
+        // orderby ID is the only ordering the offset/resume contract relies on;
+        // insertion order is not a guarantee production gives.
+        if (isset($args['orderby']) && 'ID' === $args['orderby']) {
+            usort($posts, function ($a, $b) {
+                return (int) $a->ID <=> (int) $b->ID;
+            });
+            if (isset($args['order']) && 'DESC' === strtoupper((string) $args['order'])) {
+                $posts = array_reverse($posts);
+            }
+        }
+
         $this->found_posts = count($posts);
 
+        if (! empty($args['offset'])) {
+            $posts = array_slice($posts, (int) $args['offset']);
+        }
         $per_page = isset($args['posts_per_page']) ? (int) $args['posts_per_page'] : count($posts);
 
         // -1 means unlimited in real WP_Query, and clamping it to 1 made this

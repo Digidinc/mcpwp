@@ -158,7 +158,12 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 						'pages' => array(
 							'description' => __( 'Array of page objects to update. Each must have id.', 'mcpwp' ),
 							'type'        => 'array',
-							'required'    => true,
+							'required'    => false,
+						),
+						'updates' => array(
+							'description' => __( 'Array of objects to update (alias of pages). Each carries id plus the fields to change.', 'mcpwp' ),
+							'type'        => 'array',
+							'required'    => false,
 						),
 					),
 				),
@@ -297,7 +302,7 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 	public function create_page( $request ) {
 		$this->log_activity( 'create_page', $request );
 
-		$data   = $request->get_params();
+		$data   = Mcpwp_Posts::body_fields( $request );
 		$result = $this->pages->create_page( $data );
 
 		if ( is_wp_error( $result ) ) {
@@ -317,7 +322,7 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 		$this->log_activity( 'update_page', $request );
 
 		$page_id = $request->get_param( 'id' );
-		$data    = $request->get_params();
+		$data    = Mcpwp_Posts::body_fields( $request );
 		unset( $data['id'] );
 
 		$result = $this->pages->update_page( $page_id, $data );
@@ -622,8 +627,14 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 
 		$pages_data = $request->get_param( 'pages' );
 
+		// `updates` is what the tool name promises; `pages` is the original
+		// spelling. Either is fine, and the error names both (#803).
 		if ( ! is_array( $pages_data ) || empty( $pages_data ) ) {
-			return $this->error_response( 'invalid_pages', __( 'Pages must be a non-empty array.', 'mcpwp' ), 400 );
+			$pages_data = $request->get_param( 'updates' );
+		}
+
+		if ( ! is_array( $pages_data ) || empty( $pages_data ) ) {
+			return $this->error_response( 'invalid_pages', __( 'Pass the items to update as `updates` (or `pages`): a non-empty array of objects, each with an id.', 'mcpwp' ), 400 );
 		}
 
 		if ( count( $pages_data ) > 50 ) {

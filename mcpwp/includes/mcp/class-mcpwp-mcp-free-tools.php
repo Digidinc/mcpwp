@@ -594,7 +594,7 @@ class Mcpwp_MCP_Free_Tools extends Mcpwp_MCP_Tool_Registry {
 			),
 			'wp_bulk_find_replace'   => array(
 				'method' => 'POST',
-				'route'  => '/elementor/{id}/find-replace',
+				'route'  => '/elementor/find-replace',
 			),
 			'wp_get_kit_css'         => array(
 				'method' => 'GET',
