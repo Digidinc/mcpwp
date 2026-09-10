@@ -487,6 +487,21 @@ function update_option($name, $value, $autoload = null)
     return true;
 }
 
+function add_option($name, $value = '', $deprecated = '', $autoload = 'yes')
+{
+    // NOT an atomic primitive, and not one in WordPress either: core's
+    // add_option() is a cached read-then-write over INSERT ... ON DUPLICATE
+    // KEY UPDATE. Claims go through Mcpwp_Idempotency_Claim / $wpdb->insert.
+    if (array_key_exists($name, $GLOBALS['mcpwp_test_options'] ?? array())) {
+        return false;
+    }
+    if (! empty($GLOBALS['mcpwp_test_update_option_fail'][ $name ])) {
+        return false;
+    }
+    $GLOBALS['mcpwp_test_options'][ $name ] = $value;
+    return true;
+}
+
 function delete_option($name)
 {
     unset($GLOBALS['mcpwp_test_options'][ $name ]);
@@ -519,6 +534,15 @@ function set_transient($name, $value, $expiration)
 
 function get_transient($name)
 {
+    // Test-only: a hook that can answer a read differently from the store —
+    // an object cache that flaps between consecutive reads (#802 round 4).
+    if (isset($GLOBALS['mcpwp_test_transient_hook']) && is_callable($GLOBALS['mcpwp_test_transient_hook'])) {
+        $answer = call_user_func($GLOBALS['mcpwp_test_transient_hook'], $name);
+        if (null !== $answer) {
+            return $answer;
+        }
+    }
+
     if (! isset($GLOBALS['mcpwp_test_transients'][ $name ])) {
         return false;
     }
@@ -832,6 +856,11 @@ function rest_do_request($request = null)
     if (is_object($request) && method_exists($request, 'get_route')) {
         $GLOBALS['mcpwp_test_dispatched_routes'][] = $request->get_route();
     }
+    // A test may script the body the dispatched route answers with, e.g. a
+    // 200 that carries its own errors[] (a partial success).
+    if (isset($GLOBALS['mcpwp_test_rest_response_override'])) {
+        return new WP_REST_Response($GLOBALS['mcpwp_test_rest_response_override'], 200);
+    }
     return new WP_REST_Response(array( 'ok' => true ), 200);
 }
 
@@ -926,6 +955,9 @@ if (! isset($GLOBALS['wpdb'])) {
         }
         public function get_var($query = '', $x = 0, $y = 0)
         {
+            if (preg_match("/SELECT option_value FROM \\S*options WHERE option_name = '([^']+)'/", (string) $query, $m)) {
+                return $GLOBALS['mcpwp_test_wpdb_options'][ $m[1] ] ?? null;
+            }
             // Answer the one query the Elementor writer depends on.
             //
             // set_elementor_data() verifies its own write by reading the raw
@@ -955,20 +987,103 @@ if (! isset($GLOBALS['wpdb'])) {
         {
             return array();
         }
+        public $suppressed = false;
+        public $queries    = array();
+        public function suppress_errors($suppress = true)
+        {
+            $prev = $this->suppressed;
+            $this->suppressed = (bool) $suppress;
+            return $prev;
+        }
         public function query($query)
         {
+            $this->queries[] = (string) $query;
+
+            // The one statement the claim store issues: the lease sweep. It
+            // is evaluated against the options rows so a test can assert
+            // WHICH rows survive, not only what the SQL looked like.
+            if (preg_match("/^DELETE FROM \\S*options WHERE option_name LIKE '([^']*)' AND option_value < '([^']*)'$/", trim((string) $query), $m)) {
+                // LIKE → regex, as MySQL reads it with the default ESCAPE '\':
+                // an escaped \% or \_ is literal; a bare % is any run and a
+                // bare _ is any one character.
+                $like    = $m[1];
+                $pattern = '';
+                for ($i = 0, $n = strlen($like); $i < $n; $i++) {
+                    $ch = $like[ $i ];
+                    if ('\\' === $ch && $i + 1 < $n) {
+                        $pattern .= preg_quote($like[ ++$i ], '/');
+                    } elseif ('%' === $ch) {
+                        $pattern .= '.*';
+                    } elseif ('_' === $ch) {
+                        $pattern .= '.';
+                    } else {
+                        $pattern .= preg_quote($ch, '/');
+                    }
+                }
+                $pattern = '/^' . $pattern . '$/';
+                $deleted = 0;
+                foreach (array_keys($GLOBALS['mcpwp_test_wpdb_options'] ?? array()) as $name) {
+                    if (preg_match($pattern, $name) && strcmp((string) $GLOBALS['mcpwp_test_wpdb_options'][ $name ], $m[2]) < 0) {
+                        unset($GLOBALS['mcpwp_test_wpdb_options'][ $name ]);
+                        $deleted++;
+                    }
+                }
+                return $deleted;
+            }
+
             return 0;
         }
         public function insert($table, $data, $format = null)
         {
+            // The options table has a UNIQUE index on option_name. A plain
+            // INSERT of an existing name fails with a duplicate-key error —
+            // that failure is the atomic-claim primitive (#802), so the
+            // double reproduces it exactly. add_option() does NOT behave
+            // like this (it uses ON DUPLICATE KEY UPDATE); the earlier
+            // add_option() double claiming otherwise is why a race shipped.
+            if ($table === $this->options && isset($data['option_name'])) {
+                if (! empty($GLOBALS['mcpwp_test_wpdb_insert_fails'])) {
+                    $this->last_error = 'WordPress database error: connection lost';
+                    return false;
+                }
+                $name = (string) $data['option_name'];
+                if (array_key_exists($name, $GLOBALS['mcpwp_test_wpdb_options'] ?? array())) {
+                    // A localized server or the SQLite driver word it differently.
+                    $this->last_error = $GLOBALS['mcpwp_test_wpdb_duplicate_message'] ?? ("Duplicate entry '" . $name . "' for key 'option_name'");
+                    return false;
+                }
+                $GLOBALS['mcpwp_test_wpdb_options'][ $name ] = (string) $data['option_value'];
+                $this->last_error = '';
+                return 1;
+            }
             return 1;
         }
         public function update($table, $data, $where, $f = null, $wf = null)
         {
+            if ($table === $this->options && isset($where['option_name'])) {
+                $name    = (string) $where['option_name'];
+                $current = $GLOBALS['mcpwp_test_wpdb_options'][ $name ] ?? null;
+                if (null === $current) {
+                    return 0;
+                }
+                if (isset($where['option_value']) && (string) $where['option_value'] !== $current) {
+                    return 0; // compare-and-swap miss
+                }
+                $GLOBALS['mcpwp_test_wpdb_options'][ $name ] = (string) $data['option_value'];
+                return 1;
+            }
             return 1;
         }
         public function delete($table, $where, $where_format = null)
         {
+            if ($table === $this->options && isset($where['option_name'])) {
+                $name = (string) $where['option_name'];
+                if (array_key_exists($name, $GLOBALS['mcpwp_test_wpdb_options'] ?? array())) {
+                    unset($GLOBALS['mcpwp_test_wpdb_options'][ $name ]);
+                    return 1;
+                }
+                return 0;
+            }
             return 1;
         }
         public function replace($table, $data, $format = null)
@@ -977,7 +1092,8 @@ if (! isset($GLOBALS['wpdb'])) {
         }
         public function esc_like($text)
         {
-            return (string) $text;
+            // Core: backslash-escape the LIKE metacharacters.
+            return addcslashes((string) $text, '_%\\');
         }
     }
 
@@ -1976,6 +2092,7 @@ require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-menus.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-public-route.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-page-settings.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-slug-search.php';
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-idempotency-claim.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-registry.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-element-keys.php';
 require_once dirname(__DIR__) . '/includes/core/traits/trait-mcpwp-elementor-reader.php';

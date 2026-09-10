@@ -183,9 +183,11 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				array_filter(
 					$tools,
 					function ( $tool ) use ( $disabled_categories, $all_categories ) {
+						// Same rule as the handler: an uncategorised tool is not
+						// hidden by a disabled category it does not belong to.
 						$name     = isset( $tool['name'] ) ? $tool['name'] : '';
-						$category = isset( $all_categories[ $name ] ) ? $all_categories[ $name ] : 'site';
-						return ! in_array( $category, $disabled_categories, true );
+						$category = isset( $all_categories[ $name ] ) ? (string) $all_categories[ $name ] : '';
+						return '' === $category || ! in_array( $category, $disabled_categories, true );
 					}
 				)
 			);
@@ -707,6 +709,477 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	}
 
 	/**
+	 * Idempotency record lifetime. Bulk jobs span hours; a retry a day later
+	 * is a new job.
+	 */
+	const IDEMPOTENCY_TTL = DAY_IN_SECONDS;
+
+	/**
+	 * How long a claim on a request_id is honoured while the first attempt
+	 * runs. PHP timeouts and fatals are the commonest way to lose a response,
+	 * so a stuck claim must expire quickly — after this a retry may run.
+	 */
+	const IDEMPOTENCY_LEASE_SECONDS = 120;
+
+	/**
+	 * The lease length in force: the constant, filterable so a host with a
+	 * shorter PHP time limit can lower it — and so the takeover branch is
+	 * reachable under test rather than dead code.
+	 *
+	 * @return int At least 1.
+	 */
+	public static function lease_seconds() {
+		$seconds = apply_filters( 'mcpwp_idempotency_lease_seconds', self::IDEMPOTENCY_LEASE_SECONDS );
+		return (int) min( self::IDEMPOTENCY_TTL, max( 1, (int) $seconds ) );
+	}
+
+	/**
+	 * Largest result that is pinned. Beyond this a replay would cost more than
+	 * it protects, and wp_options is not a blob store.
+	 */
+	const IDEMPOTENCY_MAX_BYTES = 65536;
+
+	/**
+	 * Storage key for one (principal, request_id) pair.
+	 *
+	 * @param string $key_scope  Principal id (API key id, OAuth/broker subject).
+	 * @param string $request_id Client-supplied id.
+	 * @return string
+	 */
+	public static function idempotency_key( $key_scope, $request_id ) {
+		return 'mcpwp_idem_' . hash( 'sha256', (string) $key_scope . '|' . (string) $request_id );
+	}
+
+	/**
+	 * Option name of the in-flight claim for a store key.
+	 *
+	 * Claims live in wp_options directly rather than transients because
+	 * add_option() is the one atomic primitive available on every host: the
+	 * UNIQUE index on option_name makes the second of two concurrent claims
+	 * fail. A transient cannot do that — get-then-set is the race.
+	 *
+	 * @param string $store_key From idempotency_key().
+	 * @return string
+	 */
+	public static function idempotency_lease_name( $store_key ) {
+		return $store_key . '_lease';
+	}
+
+	/**
+	 * tools/call with an idempotency key (#802).
+	 *
+	 * `params._meta.request_id` is opt-in. Without it, behaviour is exactly
+	 * handle_tools_call(). With it, the first COMPLETED result for
+	 * (principal, request_id) is stored for IDEMPOTENCY_TTL and a re-send
+	 * returns it without dispatching, marked `_meta.replayed`.
+	 *
+	 * Whether a tool is pinned is decided by the tool map's own HTTP method —
+	 * anything that is not a GET has side effects — never by the scope table,
+	 * which answers "how much privilege" and not "does it write". When a
+	 * request_id arrives and cannot be honoured, `_meta.idempotency` says why
+	 * rather than leaving the client to assume it was.
+	 *
+	 * @param mixed           $id      JSON-RPC id.
+	 * @param array           $params  tools/call params.
+	 * @param WP_REST_Request $request Request.
+	 * @return array
+	 */
+	private function handle_tools_call_idempotent( $id, $params, $request, $depth = 0 ) {
+		$request_id = isset( $params['_meta']['request_id'] ) ? $params['_meta']['request_id'] : null;
+
+		if ( null === $request_id ) {
+			return $this->handle_tools_call( $id, $params, $request );
+		}
+
+		// Two re-entries at most: a store that answers differently on
+		// consecutive reads must not turn into unbounded recursion. Past
+		// that, the call runs unprotected and says so.
+		if ( $depth >= 2 ) {
+			return $this->with_idempotency_note( $this->handle_tools_call( $id, $params, $request ), 'not_stored', 'claim store inconsistent' );
+		}
+
+		if ( ! is_string( $request_id ) || '' === $request_id || strlen( $request_id ) > 128 || ! preg_match( '/^[A-Za-z0-9_\-:.]+$/', $request_id ) ) {
+			return $this->jsonrpc_error(
+				$id,
+				-32602,
+				'Invalid _meta.request_id',
+				array( 'hint' => 'request_id is 1–128 characters from [A-Za-z0-9_-:.]. Make it unique per intended write and per agent — a UUID, or "<agent>:<job>:<step>" — since the namespace is shared by every client acting as the same principal.' )
+			);
+		}
+
+		$tool_name = isset( $params['name'] ) && is_string( $params['name'] ) ? $params['name'] : '';
+		$arguments = isset( $params['arguments'] ) && is_array( $params['arguments'] ) ? $params['arguments'] : array();
+		$tool_map  = $this->get_all_tool_map();
+
+		// Only a tool with side effects is pinned. A GET has nothing to
+		// protect, and a pinned read goes stale for a day. A name the merged
+		// tool map (built-in, pro, integrations and hook-registered custom
+		// tools alike) does not know cannot be classified, so it is not
+		// pinned — and the client is told.
+		if ( '' === $tool_name || ! isset( $tool_map[ $tool_name ] ) ) {
+			return $this->with_idempotency_note( $this->handle_tools_call( $id, $params, $request ), 'not_applicable', 'tool not in the built-in map' );
+		}
+
+		$tool_method = isset( $tool_map[ $tool_name ]['method'] ) ? strtoupper( (string) $tool_map[ $tool_name ]['method'] ) : 'POST';
+
+		if ( 'GET' === $tool_method ) {
+			return $this->with_idempotency_note( $this->handle_tools_call( $id, $params, $request ), 'not_applicable', 'read tool' );
+		}
+
+		// A tool whose result cannot prove completion (a deploy that absorbs
+		// failures into a success body) opts out in the map.
+		if ( isset( $tool_map[ $tool_name ]['pin'] ) && false === $tool_map[ $tool_name ]['pin'] ) {
+			return $this->with_idempotency_note( $this->handle_tools_call( $id, $params, $request ), 'not_applicable', 'result cannot prove completion' );
+		}
+
+		// No principal, no pinning. 'anon' would be a namespace shared by
+		// every id-less legacy key and the admin chat path; an OAuth client
+		// id without a user is shared by every user of that client.
+		$key_record = $this->get_current_api_key_record();
+		$scope      = self::principal_scope( $key_record );
+
+		if ( '' === $scope ) {
+			return $this->with_idempotency_note( $this->handle_tools_call( $id, $params, $request ), 'not_stored', 'no per-user principal id on this session' );
+		}
+
+		$store_key = self::idempotency_key( $scope, $request_id );
+		$args_hash = hash( 'sha256', $tool_name . '|' . wp_json_encode( self::canonicalize( $arguments ) ) );
+		$existing  = get_transient( $store_key );
+
+		if ( is_array( $existing ) && isset( $existing['state'] ) && 'done' === $existing['state'] ) {
+			// A done record without a readable response is corruption. Running
+			// the write again on the strength of a broken record is the one
+			// thing this feature must never do.
+			if ( ! isset( $existing['args_hash'], $existing['response'] ) || ! is_array( $existing['response'] ) ) {
+				return $this->jsonrpc_error(
+					$id,
+					-32010,
+					sprintf( 'The stored result for request_id "%s" is unreadable.', $request_id ),
+					array( 'hint' => 'The first attempt completed but its record is corrupt, so it cannot be replayed and will not be re-run. Verify the site state and use a new request_id if the work is still needed.' )
+				);
+			}
+
+			if ( $existing['args_hash'] !== $args_hash ) {
+				return $this->jsonrpc_error(
+					$id,
+					-32602,
+					sprintf( 'request_id "%s" was already used with different arguments.', $request_id ),
+					array( 'hint' => 'A request_id identifies one intended write. Use a new id for a different call.' )
+				);
+			}
+
+			// A replay skips the handler, so the handler's own gates are
+			// re-checked here: a category disabled or a key downgraded since
+			// the first call must not keep being served the old result.
+			if ( ! $this->tool_currently_permitted( $tool_name, $key_record ) ) {
+				return $this->handle_tools_call( $id, $params, $request );
+			}
+
+			if ( isset( $existing['response'] ) && is_array( $existing['response'] ) ) {
+				$response       = $existing['response'];
+				$response['id'] = $id;
+
+				if ( isset( $response['result'] ) && is_array( $response['result'] ) ) {
+					if ( ! isset( $response['result']['_meta'] ) || ! is_array( $response['result']['_meta'] ) ) {
+						$response['result']['_meta'] = array();
+					}
+					$response['result']['_meta']['replayed']    = true;
+					$response['result']['_meta']['replayed_at'] = isset( $existing['at'] ) ? (int) $existing['at'] : 0;
+				}
+
+				// A replay is API activity even though it is not site activity —
+				// and telemetry must be able to net it out, so it carries its
+				// own code rather than posing as a 0 ms success.
+				$this->log_mcp_activity( 'mcp_tool_replay', array( 'tool' => $tool_name, 'request_id' => $request_id ) );
+				$this->fire_tool_called( $tool_name, microtime( true ), 'replayed' );
+
+				return $response;
+			}
+		}
+
+		// Atomic claim (Mcpwp_Idempotency_Claim): two concurrent identical
+		// retries, exactly one runs. The lease is released only after the
+		// done-record is stored — never before.
+		$lease_name = self::idempotency_lease_name( $store_key );
+		$now        = time();
+		$claim      = Mcpwp_Idempotency_Claim::acquire( $lease_name, $now, $args_hash );
+
+		if ( Mcpwp_Idempotency_Claim::UNAVAILABLE === $claim ) {
+			// The store could not arbitrate — or the holder released between
+			// our refused insert and our read, which on a localized driver is
+			// indistinguishable. A completed record decides it before anything
+			// runs; only then is the call run unprotected, and said so.
+			$done = get_transient( $store_key );
+			if ( is_array( $done ) && isset( $done['state'] ) && 'done' === $done['state'] ) {
+				return $this->handle_tools_call_idempotent( $id, $params, $request, $depth + 1 );
+			}
+
+			return $this->with_idempotency_note( $this->handle_tools_call( $id, $params, $request ), 'not_stored', 'claim store unavailable' );
+		}
+
+		if ( Mcpwp_Idempotency_Claim::HELD === $claim ) {
+			$lease = Mcpwp_Idempotency_Claim::read( $lease_name );
+
+			// Released between our insert and this read: the first attempt
+			// just finished. Its record is the answer, so look again.
+			if ( null === $lease ) {
+				$done = get_transient( $store_key );
+				if ( is_array( $done ) && isset( $done['state'] ) && 'done' === $done['state'] ) {
+					return $this->handle_tools_call_idempotent( $id, $params, $request, $depth + 1 );
+				}
+				$claim = Mcpwp_Idempotency_Claim::acquire( $lease_name, $now, $args_hash );
+				if ( Mcpwp_Idempotency_Claim::ACQUIRED !== $claim ) {
+					return $this->in_progress_error( $id, $request_id, 1 );
+				}
+			} else {
+				$age   = $now - (int) $lease['at'];
+				$lease_seconds = self::lease_seconds();
+
+				// A lease from the future (the clock was corrected backwards)
+				// is abandoned, not held forever (#802 round 4).
+				if ( $age >= 0 && $age < $lease_seconds ) {
+					if ( '' !== $lease['args_hash'] && $lease['args_hash'] !== $args_hash ) {
+						return $this->jsonrpc_error(
+							$id,
+							-32602,
+							sprintf( 'request_id "%s" was already used with different arguments.', $request_id ),
+							array( 'hint' => 'A request_id identifies one intended write. Use a new id for a different call.' )
+						);
+					}
+
+					return $this->in_progress_error( $id, $request_id, max( 1, $lease_seconds - $age ) );
+				}
+
+				// Abandoned by a timeout or fatal. Take it over with a
+				// compare-and-swap so two retries racing for the same stale
+				// lease cannot both win.
+				if ( ! Mcpwp_Idempotency_Claim::take_over( $lease_name, $lease['raw'], $now, $args_hash ) ) {
+					return $this->in_progress_error( $id, $request_id, 1 );
+				}
+			}
+		}
+
+		$response = $this->handle_tools_call( $id, $params, $request );
+
+		try {
+			$completed = is_array( $response )
+				&& isset( $response['result'] )
+				&& is_array( $response['result'] )
+				&& empty( $response['result']['isError'] );
+
+			if ( ! $completed ) {
+				// Not pinned: the retry must be allowed to do the work.
+				return $response;
+			}
+
+			// A 200 that carries its own failure list is not complete either —
+			// pinning it would turn the reporter's duplicate into a silent drop.
+			if ( $this->result_reports_partial_failure( $response['result'], $tool_map[ $tool_name ] ) ) {
+				return $this->with_idempotency_note( $response, 'not_stored', 'partial failure: a retry is NOT protected and re-runs the operations that succeeded; retry only the failed ones, each under its own request_id' );
+			}
+
+			$encoded = wp_json_encode( $response );
+
+			if ( false === $encoded || strlen( $encoded ) > self::IDEMPOTENCY_MAX_BYTES ) {
+				return $this->with_idempotency_note( $response, 'not_stored', 'result too large to pin' );
+			}
+
+			$stored = set_transient(
+				$store_key,
+				array(
+					'state'     => 'done',
+					'args_hash' => $args_hash,
+					'at'        => $now,
+					'response'  => $response,
+				),
+				self::IDEMPOTENCY_TTL
+			);
+
+			if ( ! $stored ) {
+				// Say so. A client that believes it is protected and is not will
+				// retry into a duplicate.
+				return $this->with_idempotency_note( $response, 'not_stored', 'storage write failed' );
+			}
+
+			return $this->with_idempotency_note( $response, 'stored', null );
+		} finally {
+			// Only now. Releasing before the record exists is a duplicate window.
+			Mcpwp_Idempotency_Claim::release( $lease_name );
+		}
+	}
+
+	/**
+	 * @param mixed  $id          JSON-RPC id.
+	 * @param string $request_id  Client id.
+	 * @param int    $retry_after Seconds.
+	 * @return array
+	 */
+	private function in_progress_error( $id, $request_id, $retry_after ) {
+		return $this->jsonrpc_error(
+			$id,
+			-32009,
+			sprintf( 'A call with request_id "%s" is still in progress.', $request_id ),
+			array(
+				'hint'        => sprintf( 'The first attempt has not finished. Wait and re-send with the same request_id; if it completes you get its result, not a second write. A claim older than %d seconds is treated as abandoned and the retry runs.', self::lease_seconds() ),
+				'retry_after' => (int) $retry_after,
+			)
+		);
+	}
+
+	/**
+	 * The idempotency namespace for a principal, or '' when there is no
+	 * per-user principal to scope to.
+	 *
+	 * @param mixed $key_record Current key record.
+	 * @return string
+	 */
+	public static function principal_scope( $key_record ) {
+		if ( ! is_array( $key_record ) || empty( $key_record['id'] ) || ! is_string( $key_record['id'] ) ) {
+			return '';
+		}
+
+		$id = $key_record['id'];
+
+		// oauth-client:<client> is one namespace for every user of that
+		// client — a cross-user replay. Only user-scoped subjects qualify.
+		if ( 0 === strpos( $id, 'oauth-client:' ) || 'anon' === $id ) {
+			return '';
+		}
+
+		return $id;
+	}
+
+	/**
+	 * @param array       $response JSON-RPC response.
+	 * @param string      $state    stored|not_stored|not_applicable.
+	 * @param string|null $reason   Why, when not stored.
+	 * @return array
+	 */
+	private function with_idempotency_note( $response, $state, $reason ) {
+		if ( ! is_array( $response ) || ! isset( $response['result'] ) || ! is_array( $response['result'] ) ) {
+			return $response;
+		}
+
+		if ( ! isset( $response['result']['_meta'] ) || ! is_array( $response['result']['_meta'] ) ) {
+			$response['result']['_meta'] = array();
+		}
+
+		$response['result']['_meta']['idempotency'] = $state;
+
+		if ( null !== $reason ) {
+			$response['result']['_meta']['idempotency_reason'] = $reason;
+		}
+
+		return $response;
+	}
+
+	/**
+	 * Whether the handler's own gates would let this tool run right now.
+	 *
+	 * @param string     $tool_name  Tool.
+	 * @param array|null $key_record Current key record.
+	 * @return bool
+	 */
+	private function tool_currently_permitted( $tool_name, $key_record ) {
+		// The same resolver the handler uses. Inventing a category here that
+		// the handler does not enforce sent a refused replay back INTO the
+		// handler, which ran the write again (#802 round 4).
+		$tool_category = $this->tool_category_for( $tool_name );
+
+		$disabled = get_option( 'mcpwp_disabled_tool_categories', array() );
+		if ( '' !== $tool_category && is_array( $disabled ) && in_array( $tool_category, $disabled, true ) ) {
+			return false;
+		}
+
+		if ( $key_record ) {
+			$allowed = $this->resolve_key_tool_categories( $key_record );
+			if ( ! empty( $allowed ) && ( '' === $tool_category || ! in_array( $tool_category, $allowed, true ) ) ) {
+				return false;
+			}
+		}
+
+		return true;
+	}
+
+	/**
+	 * The category a tool is enforced under, or '' when it has none. One
+	 * function, so the handler's gate and the replay's gate cannot disagree.
+	 *
+	 * @param string $tool_name Tool.
+	 * @return string
+	 */
+	private function tool_category_for( $tool_name ) {
+		$all_categories = $this->get_all_tool_categories();
+		return isset( $all_categories[ $tool_name ] ) ? (string) $all_categories[ $tool_name ] : '';
+	}
+
+	/**
+	 * A tool result whose body carries a failure list is partial, not done.
+	 *
+	 * @param array $result JSON-RPC result.
+	 * @return bool
+	 */
+	private function result_reports_partial_failure( array $result, array $mapping = array() ) {
+		// A validation tool's job is to FIND errors; a non-empty errors[] is
+		// its success, not a partial failure.
+		if ( isset( $mapping['route'] ) && false !== strpos( (string) $mapping['route'], '/validate' ) ) {
+			return false;
+		}
+
+		if ( empty( $result['content'] ) || ! is_array( $result['content'] ) ) {
+			return false;
+		}
+
+		foreach ( $result['content'] as $block ) {
+			if ( empty( $block['text'] ) || ! is_string( $block['text'] ) ) {
+				continue;
+			}
+
+			$data = json_decode( $block['text'], true );
+
+			if ( ! is_array( $data ) ) {
+				continue;
+			}
+
+			foreach ( array( 'errors', 'unreadable', 'skipped', 'not_found' ) as $key ) {
+				if ( ! empty( $data[ $key ] ) && is_array( $data[ $key ] ) ) {
+					return true;
+				}
+			}
+
+			if ( isset( $data['failed'] ) && (int) $data['failed'] > 0 ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * Recursively key-sort so two SDKs' serialisations of the same arguments
+	 * hash the same.
+	 *
+	 * @param mixed $value Arguments.
+	 * @return mixed
+	 */
+	private static function canonicalize( $value ) {
+		if ( ! is_array( $value ) ) {
+			return $value;
+		}
+
+		foreach ( $value as $k => $v ) {
+			$value[ $k ] = self::canonicalize( $v );
+		}
+
+		// Lists keep their order; maps are sorted.
+		if ( array_keys( $value ) !== range( 0, count( $value ) - 1 ) ) {
+			ksort( $value, SORT_STRING );
+		}
+
+		return $value;
+	}
+
+	/**
 	 * @return array|null
 	 */
 	private function current_rate_limit_budget() {
@@ -715,6 +1188,46 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		}
 
 		return Mcpwp_Rate_Limiter::get_instance()->get_budget();
+	}
+
+	/**
+	 * How many operations a tool call carries when its arguments hold a list
+	 * of items to act on. One when it does not.
+	 *
+	 * @param array $arguments Tool arguments.
+	 * @return int
+	 */
+	private function nested_operation_count( $arguments ) {
+		if ( ! is_array( $arguments ) ) {
+			return 1;
+		}
+
+		// Aliases of one list (urls beside items, items beside updates) are
+		// charged once — the largest; genuinely different lists (pages
+		// beside posts) are charged each — the sum (#802 rounds 4–5).
+		$groups = array(
+			array( 'operations' ),
+			array( 'updates', 'items', 'urls', 'files', 'media' ),
+			array( 'pages' ),
+			array( 'posts' ),
+			array( 'page_ids', 'post_ids' ),
+			array( 'rows' ),
+			array( 'widgets' ),
+			array( 'sections' ),
+		);
+
+		$count = 0;
+		foreach ( $groups as $group ) {
+			$largest = 0;
+			foreach ( $group as $key ) {
+				if ( isset( $arguments[ $key ] ) && is_array( $arguments[ $key ] ) ) {
+					$largest = max( $largest, count( $arguments[ $key ] ) );
+				}
+			}
+			$count += $largest;
+		}
+
+		return max( 1, $count );
 	}
 
 	/**
@@ -747,7 +1260,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				return $this->handle_tools_list( $id, $params );
 
 			case 'tools/call':
-				return $this->handle_tools_call( $id, $params, $request );
+				return $this->handle_tools_call_idempotent( $id, $params, $request );
 
 			case 'resources/list':
 				return $this->handle_resources_list( $id );
@@ -931,9 +1444,12 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			array_filter(
 				$tools,
 				function ( $tool ) use ( $allowed_categories, $all_categories ) {
+					// Same rule as the handler's per-key gate: an uncategorised
+					// tool is denied to a category-restricted key, so it is not
+					// listed to it either (#802 round 6).
 					$name     = isset( $tool['name'] ) ? $tool['name'] : '';
-					$category = isset( $all_categories[ $name ] ) ? $all_categories[ $name ] : 'site';
-					return in_array( $category, $allowed_categories, true );
+					$category = isset( $all_categories[ $name ] ) ? (string) $all_categories[ $name ] : '';
+					return '' !== $category && in_array( $category, $allowed_categories, true );
 				}
 			)
 		);
@@ -1340,9 +1856,8 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		// Check if the tool's category has been disabled by the site administrator.
 		$disabled_categories = get_option( 'mcpwp_disabled_tool_categories', array() );
 		if ( ! empty( $disabled_categories ) && is_array( $disabled_categories ) ) {
-			$all_categories = $this->get_all_tool_categories();
-			$tool_category  = isset( $all_categories[ $tool_name ] ) ? $all_categories[ $tool_name ] : '';
-			if ( $tool_category && in_array( $tool_category, $disabled_categories, true ) ) {
+			$tool_category = $this->tool_category_for( $tool_name );
+			if ( '' !== $tool_category && in_array( $tool_category, $disabled_categories, true ) ) {
 				$this->fire_tool_called( $tool_name, $start, 'category_disabled' );
 				return $this->jsonrpc_error(
 					$id,
@@ -1362,9 +1877,12 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		if ( $key_record ) {
 			$allowed_categories = $this->resolve_key_tool_categories( $key_record );
 			if ( ! empty( $allowed_categories ) ) {
-				$all_categories = $this->get_all_tool_categories();
-				$tool_category  = isset( $all_categories[ $tool_name ] ) ? $all_categories[ $tool_name ] : 'site';
-				if ( ! in_array( $tool_category, $allowed_categories, true ) ) {
+				// The same resolver as every other gate. A tool with no
+				// category is not "site" — under a category-restricted key it
+				// is denied, fail-closed, and the replay gate says the same
+				// (#802 round 5).
+				$tool_category = $this->tool_category_for( $tool_name );
+				if ( '' === $tool_category || ! in_array( $tool_category, $allowed_categories, true ) ) {
 					$role = isset( $key_record['role'] ) ? $key_record['role'] : 'unknown';
 					$this->fire_tool_called( $tool_name, $start, 'scope_denied' );
 					return $this->jsonrpc_error(
@@ -1373,16 +1891,16 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 						sprintf(
 							'This API key (role: %s) does not have access to %s tools. Allowed categories: %s.',
 							$role,
-							$tool_category,
+							'' === $tool_category ? 'uncategorised' : $tool_category,
 							implode( ', ', $allowed_categories )
 						),
 						array(
 							'hint' => sprintf(
 								'Tool "%s" is in the "%s" category, but this key only has access to: %s. Request an admin key or a key with the "%s" category enabled.',
 								$tool_name,
-								$tool_category,
+								'' === $tool_category ? 'uncategorised' : $tool_category,
 								implode( ', ', $allowed_categories ),
-								$tool_category
+								'' === $tool_category ? 'uncategorised' : $tool_category
 							),
 						)
 					);
@@ -1423,6 +1941,33 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		}
 
 		$mapping     = $tool_map[ $tool_name ];
+
+		// A tool that carries a list of operations is a batch by another name
+		// (#802). The HTTP request was charged one slot; the rest are charged
+		// here, before dispatch, and refused whole when they do not fit —
+		// otherwise wp_batch_update inside tools/call is a 100:1 bypass of
+		// the weighted limiter.
+		$nested = $this->nested_operation_count( $arguments );
+		if ( $nested > 1 ) {
+			$charge = $this->charge_additional_slots( $nested - 1 );
+			if ( is_wp_error( $charge ) ) {
+				$this->fire_tool_called( $tool_name, $start, 'rate_limited' );
+				$data = $charge->get_error_data();
+				return $this->jsonrpc_error(
+					$id,
+					-32029,
+					$charge->get_error_message(),
+					array(
+						'hint'        => sprintf( 'This call carries %d operations and each costs one rate-limit slot. Nothing ran. If it exceeds the ceiling (batch_exceeds_limit) waiting will not help: split it. Otherwise wait for the window or raise the key\'s limits.', $nested ),
+						'retry_after' => isset( $data['retry_after'] ) ? (int) $data['retry_after'] : null,
+						'remaining'   => isset( $data['remaining'] ) ? (int) $data['remaining'] : null,
+						'limit'       => isset( $data['limit'] ) ? (int) $data['limit'] : null,
+						'requested'   => $nested,
+					)
+				);
+			}
+		}
+
 		$is_callback = isset( $mapping['callback'] ) && is_callable( $mapping['callback'] );
 		$route       = $is_callback ? '' : $mapping['route'];
 		$method      = $mapping['method'];

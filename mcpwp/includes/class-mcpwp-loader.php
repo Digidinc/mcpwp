@@ -469,6 +469,14 @@ class Mcpwp_Loader {
 				// not switch units on the client (#802).
 				$response->header( 'X-RateLimit-Reset', max( 0, (int) $data['data']['reset'] - time() ) );
 			}
+
+			if ( ! empty( $data['data']['bucket'] ) ) {
+				$response->header( 'X-RateLimit-Bucket', (string) $data['data']['bucket'] );
+			}
+
+			if ( ! empty( $data['data']['window'] ) ) {
+				$response->header( 'X-RateLimit-Window', (string) $data['data']['window'] );
+			}
 		}
 
 		return $response;

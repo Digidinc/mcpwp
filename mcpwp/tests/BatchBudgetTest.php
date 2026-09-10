@@ -177,6 +177,92 @@ final class BatchBudgetTest extends TestCase {
 		$this->assertSame( 'batch_too_large', $response->get_error_code() );
 	}
 
+	private function batch_tool_request( int $n ): WP_REST_Request {
+		$ops = array();
+		for ( $i = 1; $i <= $n; $i++ ) {
+			$ops[] = array( 'method' => 'PUT', 'path' => '/posts/' . $i, 'body' => array( 'title' => 'T' ) );
+		}
+		return $this->mcp_request(
+			array(
+				'jsonrpc' => '2.0',
+				'id'      => 1,
+				'method'  => 'tools/call',
+				'params'  => array( 'name' => 'wp_batch_update', 'arguments' => array( 'operations' => $ops ) ),
+			)
+		);
+	}
+
+	public function test_a_batch_tool_inside_tools_call_is_charged_per_operation(): void {
+		// tools/call → wp_batch_update → /batch runs as an internal
+		// sub-request, which is exempt from metering. Without this the HTTP
+		// request costs one slot and carries a hundred writes.
+		$controller = new Mcpwp_REST_MCP();
+		$request    = $this->batch_tool_request( 4 );
+
+		$this->assertTrue( $controller->verify_api_key( $request ) );
+		$this->assertSame( 9, Mcpwp_Rate_Limiter::get_instance()->get_budget()['remaining'], 'The HTTP request itself.' );
+
+		$controller->handle_mcp( $request );
+
+		$this->assertSame( 6, Mcpwp_Rate_Limiter::get_instance()->get_budget()['remaining'], 'Plus the other three operations.' );
+	}
+
+	public function test_every_list_argument_that_dispatches_writes_is_counted(): void {
+		// wp_bulk_upload_media takes urls OR items for the same 20 writes; the
+		// first cut counted only items, so the price depended on spelling.
+		$controller = new Mcpwp_REST_MCP();
+		foreach ( array( 'urls' => array( 'https://a/1.jpg', 'https://a/2.jpg', 'https://a/3.jpg' ), 'items' => array( array( 'url' => 'https://a/1.jpg' ), array( 'url' => 'https://a/2.jpg' ), array( 'url' => 'https://a/3.jpg' ) ) ) as $key => $list ) {
+			$GLOBALS['mcpwp_test_transients'] = array();
+			Mcpwp_REST_MCP::reset_verdict_memo();
+			$request = $this->mcp_request(
+				array(
+					'jsonrpc' => '2.0',
+					'id'      => 1,
+					'method'  => 'tools/call',
+					'params'  => array( 'name' => 'wp_bulk_upload_media', 'arguments' => array( $key => $list ) ),
+				)
+			);
+			$controller->verify_api_key( $request );
+			$controller->handle_mcp( $request );
+
+			$this->assertSame( 7, Mcpwp_Rate_Limiter::get_instance()->get_budget()['remaining'], $key . ': one request plus two more operations.' );
+		}
+	}
+
+	public function test_a_batch_tool_that_does_not_fit_is_refused_before_it_runs(): void {
+		$controller = new Mcpwp_REST_MCP();
+		$this->assertTrue( $controller->verify_api_key( $this->mcp_request( $this->rpc_batch( 3 ) ) ) ); // 7 left
+
+		Mcpwp_REST_MCP::reset_verdict_memo();
+		$request = $this->batch_tool_request( 8 );
+		$this->assertTrue( $controller->verify_api_key( $request ) ); // 6 left; needs 7 more
+		$data = $controller->handle_mcp( $request )->get_data();
+
+		$this->assertArrayHasKey( 'error', $data );
+		$this->assertSame( -32029, $data['error']['code'] );
+		$this->assertSame( 0, count( $GLOBALS['mcpwp_test_dispatched_routes'] ), 'Nothing ran.' );
+	}
+
+	public function test_a_request_heavier_than_a_whole_window_is_not_told_to_wait(): void {
+		$refused = Mcpwp_Rate_Limiter::get_instance()->check_limit( 'w4', 'POST', null, 11 );
+
+		$this->assertInstanceOf( WP_Error::class, $refused );
+		$this->assertSame( 'batch_exceeds_limit', $refused->get_error_code() );
+		$this->assertSame( 413, $refused->get_error_data()['status'] );
+	}
+
+	public function test_the_reported_budget_is_the_tightest_window(): void {
+		$limiter = Mcpwp_Rate_Limiter::get_instance();
+		$limiter->update_settings( array( 'requests_per_minute' => 100, 'burst_limit' => 100, 'requests_per_hour' => 1000 ) );
+		set_transient( 'mcpwp_rate_' . md5( 'w5_hour' ), array( 'count' => 999, 'reset' => time() + 1800 ), 1800 );
+
+		$limiter->check_limit( 'w5', 'POST' );
+		$budget = $limiter->get_budget();
+
+		$this->assertSame( 'hour', $budget['window'] );
+		$this->assertSame( 0, $budget['remaining'] );
+	}
+
 	public function test_a_rest_batch_reports_how_many_succeeded_and_failed(): void {
 		$controller = new Mcpwp_REST_Batch();
 		$response   = $controller->handle_batch( $this->rest_batch_request( 3 ) );
@@ -189,5 +275,35 @@ final class BatchBudgetTest extends TestCase {
 		$this->assertArrayHasKey( 'failed', $data );
 		$this->assertSame( $data['total'], $data['succeeded'] + $data['failed'] );
 		$this->assertCount( 3, $data['results'] );
+	}
+
+	// ---------------------------------------------------------------
+	// Round 4: weight binds at the burst window; one list, one price.
+	// ---------------------------------------------------------------
+
+	public function test_weight_is_enforced_at_the_burst_window_not_only_per_minute(): void {
+		// Round-4 M14: burst < minute; a 25-op call must be refused by burst.
+		Mcpwp_Rate_Limiter::get_instance()->update_settings(
+			array( 'enabled' => true, 'requests_per_minute' => 60, 'requests_per_hour' => 1000, 'burst_limit' => 20, 'whitelist' => array() )
+		);
+		$limiter = Mcpwp_Rate_Limiter::get_instance();
+		$this->assertTrue( $limiter->check_limit( 'b', 'POST', null, 15 ) );
+		$refused = $limiter->check_limit( 'b', 'POST', null, 10 );
+		$this->assertInstanceOf( WP_Error::class, $refused, '15 + 10 > 20 at the burst window.' );
+		$this->assertSame( 'burst', $refused->get_error_data()['window'] );
+	}
+
+	public function test_two_spellings_of_one_list_are_charged_once(): void {
+		// Round-4 P2-2: urls beside items, or items beside updates, summed.
+		$count = new ReflectionMethod( Mcpwp_REST_MCP::class, 'nested_operation_count' );
+		$count->setAccessible( true );
+		$controller = new Mcpwp_REST_MCP();
+
+		$this->assertSame( 5, $count->invoke( $controller, array( 'urls' => range( 1, 5 ), 'items' => range( 1, 5 ) ) ) );
+		$this->assertSame( 7, $count->invoke( $controller, array( 'items' => range( 1, 7 ), 'updates' => range( 1, 3 ) ) ), 'Aliases: the larger list is the price.' );
+		$this->assertSame( 20, $count->invoke( $controller, array( 'pages' => range( 1, 10 ), 'posts' => range( 1, 10 ) ) ), 'Different lists: each is charged (round 5).' );
+		foreach ( array( 'post_ids', 'rows', 'widgets', 'sections' ) as $key ) {
+			$this->assertSame( 500, $count->invoke( $controller, array( $key => range( 1, 500 ) ) ), $key . ' fans out and is counted.' );
+		}
 	}
 }

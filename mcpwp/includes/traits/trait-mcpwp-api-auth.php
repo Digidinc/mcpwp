@@ -136,14 +136,25 @@ trait Mcpwp_Api_Auth {
 		if ( is_object( $request ) ) {
 			$memo_id = spl_object_id( $request );
 			if ( isset( self::$mcpwp_verdicts[ $memo_id ] ) && self::$mcpwp_verdicts[ $memo_id ][0] === $request ) {
+				// The verdict's side effects travel with it: a hit on another
+				// controller instance must see the same principal and the
+				// same metered bucket, or its scope checks and nested
+				// charging silently switch off (#802 round 4).
+				$this->current_api_key_record = self::$mcpwp_verdicts[ $memo_id ][2];
+				$this->mcpwp_metered          = self::$mcpwp_verdicts[ $memo_id ][3];
 				return self::$mcpwp_verdicts[ $memo_id ][1];
 			}
 
 			$verdict = $this->compute_api_key_verdict( $request );
 
 			// Holding the request keeps its object id from being reused for
-			// another request within this process.
-			self::$mcpwp_verdicts[ $memo_id ] = array( $request, $verdict );
+			// another request within this process. Bounded: a long-lived
+			// worker looping rest_do_request() must not retain every body.
+			if ( count( self::$mcpwp_verdicts ) >= 64 ) {
+				// Not array_shift(): it renumbers the object-id keys.
+				unset( self::$mcpwp_verdicts[ array_key_first( self::$mcpwp_verdicts ) ] );
+			}
+			self::$mcpwp_verdicts[ $memo_id ] = array( $request, $verdict, $this->current_api_key_record, $this->mcpwp_metered );
 
 			return $verdict;
 		}
@@ -172,14 +183,68 @@ trait Mcpwp_Api_Auth {
 	 *
 	 * @return array
 	 */
-	protected function diagnostic_rate_limits() {
-		return array(
-			'rate_limits' => array(
-				'burst'      => 15,
-				'per_minute' => 30,
-				'per_hour'   => 300,
-			),
+	protected function diagnostic_rate_limits( $key_record = null ) {
+		$limits = array(
+			'burst'      => 15,
+			'per_minute' => 30,
+			'per_hour'   => 300,
 		);
+
+		// The allowance is a floor for exhausted keys, never a lift above a
+		// deliberate throttle — the key's own ceilings, or the site's.
+		$ceilings = array();
+		if ( class_exists( 'Mcpwp_Rate_Limiter' ) ) {
+			$site     = Mcpwp_Rate_Limiter::get_instance()->get_settings();
+			$ceilings = array(
+				'burst'      => isset( $site['burst_limit'] ) ? (int) $site['burst_limit'] : 0,
+				'per_minute' => isset( $site['requests_per_minute'] ) ? (int) $site['requests_per_minute'] : 0,
+				'per_hour'   => isset( $site['requests_per_hour'] ) ? (int) $site['requests_per_hour'] : 0,
+			);
+		}
+		if ( is_array( $key_record ) && ! empty( $key_record['rate_limits'] ) && is_array( $key_record['rate_limits'] ) ) {
+			foreach ( $key_record['rate_limits'] as $name => $value ) {
+				if ( (int) $value > 0 ) {
+					$ceilings[ $name ] = isset( $ceilings[ $name ] ) && $ceilings[ $name ] > 0 ? min( $ceilings[ $name ], (int) $value ) : (int) $value;
+				}
+			}
+		}
+		foreach ( $limits as $name => $value ) {
+			if ( ! empty( $ceilings[ $name ] ) ) {
+				$limits[ $name ] = min( $value, (int) $ceilings[ $name ] );
+			}
+		}
+
+		return array( 'rate_limits' => $limits );
+	}
+
+	/**
+	 * Identifier, method and key record of the last meter_request() call.
+	 *
+	 * @var array|null
+	 */
+	private $mcpwp_metered = null;
+
+	/**
+	 * Charge slots on top of the one the HTTP request already paid (#802).
+	 *
+	 * @param int $slots How many more.
+	 * @return true|WP_Error
+	 */
+	protected function charge_additional_slots( $slots ) {
+		$slots = (int) $slots;
+
+		if ( $slots < 1 ) {
+			return true;
+		}
+
+		if ( ! is_array( $this->mcpwp_metered ) ) {
+			// Never metered (internal dispatch, admin chat): nothing to charge against.
+			return true;
+		}
+
+		list( $identifier, $method, $key_record ) = $this->mcpwp_metered;
+
+		return $this->check_rate_limit( $identifier, $method, $key_record, $slots );
 	}
 
 	/**
@@ -198,11 +263,15 @@ trait Mcpwp_Api_Auth {
 	protected function meter_request( $request, $identifier, $http_method = 'POST', $key_record = null ) {
 		$weight = $this->request_rate_weight( $request );
 
+		// Remembered so a tool that turns out to carry N operations can be
+		// charged the other N-1 before it runs (charge_additional_slots).
+		$this->mcpwp_metered = array( $identifier, $http_method, $key_record );
+
 		if ( ! $this->is_diagnostic_request( $request ) ) {
 			return $this->check_rate_limit( $identifier, $http_method, $key_record, $weight );
 		}
 
-		$check = $this->check_rate_limit( $identifier . ':diag', 'POST', $this->diagnostic_rate_limits(), $weight );
+		$check = $this->check_rate_limit( $identifier . ':diag', 'POST', $this->diagnostic_rate_limits( $key_record ), $weight );
 
 		// The budget the caller is asking about is the write budget, not the
 		// diagnostic slot just spent. Report that one.
@@ -220,6 +289,11 @@ trait Mcpwp_Api_Auth {
 	 * @return bool|WP_Error
 	 */
 	private function compute_api_key_verdict( $request ) {
+		// A persistent process (WP-CLI, a rest_do_request() loop) reuses this
+		// instance across requests; a nested charge must never land on the
+		// previous request's bucket.
+		$this->mcpwp_metered = null;
+
 		// Bypass for internal server-side requests (Chat tab tool execution).
 		// Requires: admin context + activate_plugins cap + AJAX request +
 		// a valid nonce tied to a known admin action (prevents filter-hook abuse).

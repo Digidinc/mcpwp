@@ -213,11 +213,13 @@ abstract class Mcpwp_MCP_Tool_Registry {
 	 * Get the category for a specific tool.
 	 *
 	 * @param string $name Tool name.
-	 * @return string Category slug (defaults to 'site').
+	 * @return string Category slug, or '' when the tool has none. Never an
+	 *                invented 'site': every gate in the dispatcher resolves
+	 *                the same way (#802 round 5).
 	 */
 	public function get_tool_category( $name ) {
 		$categories = $this->get_tool_categories();
-		return isset( $categories[ $name ] ) ? $categories[ $name ] : 'site';
+		return isset( $categories[ $name ] ) ? (string) $categories[ $name ] : '';
 	}
 
 	/**

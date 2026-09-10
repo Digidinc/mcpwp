@@ -36,6 +36,7 @@ Uses the same `X-API-Key` header as other endpoints. The API key is forwarded to
 ### Limits
 
 - Maximum **100 operations** per batch; each operation costs one rate-limit slot, and a batch that does not fit the remaining budget is refused whole (429) before anything runs
+- The **reachable** ceiling is the tightest rate-limit window, `min(burst, per-minute, per-hour)` — **30 at the default settings** (burst 30). A batch above that is refused with `batch_exceeds_limit` (413): waiting will not help; split it or raise `burst_limit`
 - Operations execute sequentially (not in parallel)
 - Each operation inherits authentication from the batch request
 - If one operation fails, remaining operations still execute

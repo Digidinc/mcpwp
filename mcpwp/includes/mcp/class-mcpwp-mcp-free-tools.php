@@ -103,6 +103,8 @@ class Mcpwp_MCP_Free_Tools extends Mcpwp_MCP_Tool_Registry {
 			'wp_add_menu_item'           => 'site',
 			'wp_update_menu_item'        => 'site',
 			'wp_delete_menu_item'        => 'site',
+			'wp_update_menu_item_auto'   => 'site',
+			'wp_delete_menu_item_auto'   => 'site',
 			'wp_reorder_menu_items'      => 'site',
 			'wp_delete_menu'             => 'site',
 			'wp_assign_menu_location'    => 'site',
@@ -443,6 +445,7 @@ class Mcpwp_MCP_Free_Tools extends Mcpwp_MCP_Tool_Registry {
 			'wp_deploy_site_blueprint' => array(
 				'method' => 'POST',
 				'route'  => '/site-blueprints/{id}/deploy',
+				'pin'    => false, // its 200 absorbs failed steps; a replay could hide them (#802).
 			),
 			'wp_extract_site_blueprint' => array(
 				'method' => 'GET',
