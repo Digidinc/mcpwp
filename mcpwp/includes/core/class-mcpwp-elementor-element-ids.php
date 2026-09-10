@@ -466,7 +466,7 @@ class Mcpwp_Elementor_Element_Ids {
 				? sprintf( 'Rewrote %1$d of %2$d element ids to %3$d alphanumeric characters.', $count, $checked, self::LENGTH )
 				: sprintf( 'All %1$d element ids already are %2$d alphanumeric characters; nothing was rewritten.', $checked, self::LENGTH ),
 			'caution'              => $count > 0
-				? 'Element ids are also CSS selectors (.elementor-element-<id>). Repointed automatically: Taxonomy Filter selected_element settings, Off-canvas dynamic tags and off_canvas elementor-action links (plain or URL-encoded). Searched and listed in possible_references but not changed: every other setting value in this Elementor data, including URL-encoded text and base64 elementor-action settings — update those by hand. Not searched at all: page-level custom CSS, kit CSS, Custom Code, other pages, templates and popups — update any that name an old id. Purge page caches (wp_flush_cache) so visitors get the new data-id attributes; a cached page keeps sending old ids to Elementor Pro\'s endpoints.'
+				? 'Element ids are also CSS selectors (.elementor-element-<id>). Repointed automatically: Taxonomy Filter selected_element settings, Off-canvas dynamic tags and off_canvas elementor-action links (plain, URL-encoded once or twice). Searched and listed in possible_references but not changed: every other setting value in this Elementor data, including URL-encoded text and base64 elementor-action settings — update those by hand. Not searched at all: page-level custom CSS, kit CSS, Custom Code, WordPress menus (an Off-canvas link in a custom menu item), other pages, templates and popups — update any that name an old id. Purge page caches (wp_flush_cache) so visitors get the new data-id attributes; a cached page keeps sending old ids to Elementor Pro\'s endpoints.'
 				: '',
 		);
 
@@ -539,7 +539,7 @@ class Mcpwp_Elementor_Element_Ids {
 
 		if ( false !== stripos( $value, 'elementor-action' ) ) {
 			$replaced = preg_replace_callback(
-				'/(?:#|%23)elementor-action(?::|%3A)[^\s"\'<>]*/i',
+				'/(?:#|%23)elementor-action(?::|%3A|%253A)[^\s"\'<>]*/i',
 				function ( $match ) use ( $key, $path, $mapping, &$repointed ) {
 					return self::repoint_action_hash( $match[0], $key, $path, $mapping, $repointed );
 				},
@@ -601,7 +601,10 @@ class Mcpwp_Elementor_Element_Ids {
 	 * An off_canvas elementor-action link, in any of the three forms Elementor
 	 * produces or accepts: `#` + rawurlencode(body) (Frontend::
 	 * create_action_hash), encodeURIComponent('#' + body) (frontend JS), and
-	 * the plain body (hand-typed, possibly with &amp;). The body is
+	 * the plain body (hand-typed, possibly with &amp;) — plus a body encoded
+	 * twice after a literal `#`, which a migration or search-replace produces
+	 * and which still works because runAction does decodeURI then
+	 * decodeURIComponent (review r2 N1). The body is
 	 * `elementor-action:action=off_canvas:<action>&settings=<base64(json)>`.
 	 *
 	 * @param string $hash      Matched link text.
@@ -614,9 +617,27 @@ class Mcpwp_Elementor_Element_Ids {
 	private static function repoint_action_hash( $hash, $key, $path, array $mapping, array &$repointed ) {
 		$js_encoded = 0 === stripos( $hash, '%23' );
 		$body       = $js_encoded ? substr( $hash, 3 ) : substr( $hash, 1 );
-		$encoded    = $js_encoded || 0 === stripos( $body, 'elementor-action%3A' );
-		$decoded    = $encoded ? rawurldecode( $body ) : $body;
-		$entities   = ! $encoded && false !== strpos( $decoded, '&amp;' );
+
+		// How many times the body is URL-encoded.
+		if ( 0 === stripos( $body, 'elementor-action%253A' ) ) {
+			$depth = 2;
+		} elseif ( $js_encoded || 0 === stripos( $body, 'elementor-action%3A' ) ) {
+			$depth = 1;
+		} else {
+			$depth = 0;
+		}
+
+		// %23 followed by a twice-encoded body is not a form Elementor
+		// produces; leave it to possible_references rather than guess.
+		if ( $js_encoded && 2 === $depth ) {
+			return $hash;
+		}
+
+		$decoded = $body;
+		for ( $i = 0; $i < $depth; $i++ ) {
+			$decoded = rawurldecode( $decoded );
+		}
+		$entities = 0 === $depth && false !== strpos( $decoded, '&amp;' );
 
 		if ( $entities ) {
 			$decoded = str_replace( '&amp;', '&', $decoded );
@@ -650,10 +671,15 @@ class Mcpwp_Elementor_Element_Ids {
 		if ( $js_encoded ) {
 			return rawurlencode( '#' . $new_body );
 		}
-		if ( $encoded ) {
-			return '#' . rawurlencode( $new_body );
+		if ( $entities ) {
+			return '#' . str_replace( '&', '&amp;', $new_body );
 		}
-		return '#' . ( $entities ? str_replace( '&', '&amp;', $new_body ) : $new_body );
+
+		$out = $new_body;
+		for ( $i = 0; $i < $depth; $i++ ) {
+			$out = rawurlencode( $out );
+		}
+		return '#' . $out;
 	}
 
 	/**
@@ -708,17 +734,25 @@ class Mcpwp_Elementor_Element_Ids {
 	}
 
 	/**
-	 * The text itself, its URL-decoded form, and any base64 `settings=`
-	 * payload inside either.
+	 * The text itself, its URL-decoded forms (up to two levels, only those that
+	 * differ), and any base64 `settings=` payload inside them.
 	 *
 	 * @param string $text Setting text.
 	 * @return string[]
 	 */
 	private static function decoded_forms( $text ) {
-		$forms = array( $text );
+		$forms   = array( $text );
+		$current = $text;
 
-		if ( false !== strpos( $text, '%' ) ) {
-			$forms[] = rawurldecode( $text );
+		// Twice covers a body encoded twice (review r2 N1). A form identical to
+		// the previous one is not tokenised again (N7).
+		for ( $level = 0; $level < 2 && false !== strpos( $current, '%' ); $level++ ) {
+			$next = rawurldecode( $current );
+			if ( $next === $current ) {
+				break;
+			}
+			$forms[] = $next;
+			$current = $next;
 		}
 
 		$payloads = array();

@@ -14,6 +14,14 @@ if ( ! defined( 'ABSPATH' ) ) {
 trait Mcpwp_Elementor_Writer_Trait {
 
 	/**
+	 * The element list save_elements_to_page() last wrote, post-validation,
+	 * so a caller can report the ids elements were actually saved with.
+	 *
+	 * @var array|null
+	 */
+	private $last_saved_elements = null;
+
+	/**
 	 * How many Elementor calls are currently in flight under this trait.
 	 *
 	 * Guards the scoped wp_kses_allowed_html normaliser: it is installed on the
@@ -666,22 +674,74 @@ trait Mcpwp_Elementor_Writer_Trait {
 	}
 
 	/**
-	 * Whether a stored tree is a list of elements: sequential keys from 0,
-	 * every item an array. Anything else would be written back as a JSON
-	 * object Elementor cannot read.
+	 * Read a page's stored Elementor tree, whatever form it was stored in.
+	 *
+	 * Elementor renders `_elementor_data` stored as JSON text or as an array,
+	 * and a tree with numeric keys that are not 0..n (what a PHP tool writes
+	 * after unset() and re-encode). All of those are the tree; they are
+	 * normalised to a list, which is what every write stores. Missing, empty
+	 * and JSON `null` are an empty page. Only values that cannot be a tree
+	 * are unusable, and the reason says which form they are in.
+	 *
+	 * @param mixed $raw Value of get_post_meta( $id, '_elementor_data', true ).
+	 * @return array{elements:array|null,unusable:string,stored_as:string}
+	 *         `elements` is a list ([] for no data), or null when unusable.
+	 */
+	private function read_stored_tree( $raw ) {
+		$stored_as = gettype( $raw );
+
+		if ( '' === $raw || null === $raw || false === $raw ) {
+			return array( 'elements' => array(), 'unusable' => '', 'stored_as' => $stored_as );
+		}
+
+		if ( is_string( $raw ) ) {
+			$decoded = json_decode( $raw, true );
+
+			if ( null === $decoded && JSON_ERROR_NONE !== json_last_error() ) {
+				return array( 'elements' => null, 'unusable' => 'is stored as text that does not decode to an element list (' . json_last_error_msg() . ')', 'stored_as' => $stored_as );
+			}
+			if ( null === $decoded ) {
+				return array( 'elements' => array(), 'unusable' => '', 'stored_as' => $stored_as );
+			}
+			if ( ! is_array( $decoded ) ) {
+				return array( 'elements' => null, 'unusable' => 'is stored as JSON text that decodes to ' . gettype( $decoded ) . ', not an element list', 'stored_as' => $stored_as );
+			}
+
+			$list = $this->element_list( $decoded );
+
+			return null === $list
+				? array( 'elements' => null, 'unusable' => 'is stored as JSON text that is not a list of elements', 'stored_as' => $stored_as )
+				: array( 'elements' => $list, 'unusable' => '', 'stored_as' => $stored_as );
+		}
+
+		if ( is_array( $raw ) ) {
+			$list = $this->element_list( $raw );
+
+			return null === $list
+				? array( 'elements' => null, 'unusable' => 'is stored as an array that is not a list of elements', 'stored_as' => $stored_as )
+				: array( 'elements' => $list, 'unusable' => '', 'stored_as' => $stored_as );
+		}
+
+		return array( 'elements' => null, 'unusable' => 'is stored as ' . $stored_as . ', which is neither JSON text nor an element array', 'stored_as' => $stored_as );
+	}
+
+	/**
+	 * Normalise a stored tree to a list: integer keys in any order or with
+	 * gaps become 0..n, keeping their order. Null when a key is a string or an
+	 * item is not an array — written back, that would be a JSON object
+	 * Elementor cannot read.
 	 *
 	 * @param array $elements Candidate tree.
-	 * @return bool
+	 * @return array|null
 	 */
-	private function is_element_list( array $elements ) {
-		$expected = 0;
+	private function element_list( array $elements ) {
 		foreach ( $elements as $key => $element ) {
-			if ( $key !== $expected || ! is_array( $element ) ) {
-				return false;
+			if ( ! is_int( $key ) || ! is_array( $element ) ) {
+				return null;
 			}
-			++$expected;
 		}
-		return true;
+
+		return array_values( $elements );
 	}
 
 	/**
@@ -744,7 +804,8 @@ trait Mcpwp_Elementor_Writer_Trait {
 		}
 
 		$existing = get_post_meta( $page_id, '_elementor_data', true );
-		$decoded  = is_string( $existing ) && '' !== $existing ? json_decode( $existing, true ) : null;
+		// Array-stored data is the tree itself (review r2 N3); text is decoded.
+		$decoded  = is_array( $existing ) ? $existing : ( is_string( $existing ) && '' !== $existing ? json_decode( $existing, true ) : null );
 
 		// Already an Elementor page.
 		if ( is_array( $decoded ) && ! empty( $decoded ) ) {
@@ -1200,7 +1261,9 @@ trait Mcpwp_Elementor_Writer_Trait {
 
 		// Capture current structure for before/after diff.
 		$existing_raw      = get_post_meta( $page_id, '_elementor_data', true );
-		$existing_decoded  = $existing_raw ? json_decode( $existing_raw, true ) : null;
+		// json_decode() on array-stored data was a TypeError on PHP 8, and the
+		// 422 for unusable data sends callers here (review r2 N3).
+		$existing_decoded  = $this->read_stored_tree( $existing_raw )['elements'];
 		$sections_before   = is_array( $existing_decoded ) ? count( $existing_decoded ) : 0;
 		$widgets_before    = is_array( $existing_decoded ) ? $this->count_elementor_widgets( $existing_decoded ) : 0;
 
@@ -2116,8 +2179,9 @@ trait Mcpwp_Elementor_Writer_Trait {
 			return $conversion;
 		}
 
-		$debug = array();
-		$elementor_json = wp_json_encode( $elements );
+		$debug                     = array();
+		$this->last_saved_elements = null;
+		$elementor_json            = wp_json_encode( $elements );
 
 		// Count input.
 		$input_count = count( $elements );
@@ -2139,6 +2203,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 		if ( ! is_array( $post_val ) || count( $post_val ) !== $input_count ) {
 			return new WP_Error( 'validation_corrupted', 'Data corrupted during validation.', array( 'status' => 500 ) );
 		}
+		$this->last_saved_elements = $post_val;
 
 		// Save via Elementor Document API (preferred) or meta fallback.
 		$document_saved = false;
@@ -2715,50 +2780,30 @@ trait Mcpwp_Elementor_Writer_Trait {
 			);
 		}
 
-		$raw      = get_post_meta( $page_id, '_elementor_data', true );
-		$has_data = ! ( '' === $raw || null === $raw || false === $raw );
-		$elements = null;
-		$unusable = '';
+		$stored   = $this->read_stored_tree( get_post_meta( $page_id, '_elementor_data', true ) );
+		$elements = $stored['elements'];
 
-		if ( is_array( $raw ) ) {
-			// Imports and some plugins store the tree as an array rather than
-			// JSON text, and Elementor renders it. It is the decoded tree; the
-			// save below writes it back as JSON text, as every write does.
-			$elements = $raw;
-			if ( ! $this->is_element_list( $elements ) ) {
-				$unusable = 'is stored as an array that is not a list of elements';
-			}
-		} elseif ( is_string( $raw ) && '' !== $raw ) {
-			$elements = json_decode( $raw, true );
-			if ( null === $elements && JSON_ERROR_NONE !== json_last_error() ) {
-				$unusable = 'is stored as text that does not decode to an element list (' . json_last_error_msg() . ')';
-			} elseif ( ! is_array( $elements ) ) {
-				$unusable = 'is stored as JSON text that decodes to ' . gettype( $elements ) . ', not an element list';
-			} elseif ( ! $this->is_element_list( $elements ) ) {
-				$unusable = 'is stored as JSON text that is not a list of elements';
-			}
-		} elseif ( $has_data ) {
-			$unusable = 'is stored as ' . gettype( $raw ) . ', which is neither JSON text nor an element array';
-		}
-
-		// Stored data that is present but unusable is refused for every patch.
+		// Stored data that cannot be a tree is refused for every patch.
 		// Treating it as an empty page ran the operations against nothing and
-		// overwrote the whole page with their result (review r1).
-		if ( '' !== $unusable ) {
+		// overwrote the whole page with their result (review r1). Array meta
+		// and numerically keyed trees are trees: Elementor renders them, and
+		// the save writes them back as a JSON list (review r2).
+		if ( null === $elements ) {
 			return new WP_Error(
 				'invalid_elementor_data',
-				"This page's Elementor data {$unusable}, so nothing was changed. Replace it with a clean tree through wp_set_elementor.",
+				"This page's Elementor data {$stored['unusable']}, so nothing was changed. Replace it with a clean tree through wp_set_elementor.",
 				array(
 					'status'    => 422,
-					'stored_as' => gettype( $raw ),
+					'stored_as' => $stored['stored_as'],
 				)
 			);
 		}
 
 		if ( empty( $operations ) ) {
-			// Repair only. "No Elementor data" and "nothing to rewrite" are
+			// Repair only. "No Elementor data" — missing, empty or null, in
+			// whatever form it is stored — and "nothing to rewrite" are
 			// different answers, and neither is a write.
-			if ( ! $has_data ) {
+			if ( empty( $elements ) ) {
 				return new WP_Error( 'no_elementor_data', 'This page has no Elementor data, so there are no element ids to repair. Nothing was written.', array( 'status' => 404 ) );
 			}
 
@@ -2799,6 +2844,10 @@ trait Mcpwp_Elementor_Writer_Trait {
 						$new_el['id'] = $this->generate_element_id();
 					}
 					$position = isset( $op['position'] ) ? $op['position'] : 'end';
+					// Found again after every operation has run, so the result
+					// can name the id this element was saved with (review r2
+					// N4). Stripped before the save.
+					$new_el['_mcpwp_add_op'] = count( $results );
 					if ( 'start' === $position ) {
 						array_unshift( $elements, $new_el );
 					} elseif ( 'end' === $position ) {
@@ -2911,6 +2960,16 @@ trait Mcpwp_Elementor_Writer_Trait {
 			$results[] = $result;
 		}
 
+		// Where each added element ended up once every operation has run; the
+		// marker never reaches the saved data.
+		$added_at = array();
+		foreach ( $elements as $idx => $el ) {
+			if ( is_array( $el ) && array_key_exists( '_mcpwp_add_op', $el ) ) {
+				$added_at[ (int) $el['_mcpwp_add_op'] ] = $idx;
+				unset( $elements[ $idx ]['_mcpwp_add_op'] );
+			}
+		}
+
 		// Save once.
 		$debug = $this->save_elements_to_page(
 			$page_id,
@@ -2926,16 +2985,25 @@ trait Mcpwp_Elementor_Writer_Trait {
 			isset( $debug['validation_fixes'] ) ? $debug['validation_fixes'] : array()
 		);
 
-		// Report the id each operation's element carries now. An element the
-		// same call repaired would otherwise be named by an id that no longer
-		// exists, and a follow-up edit using it finds nothing (review r1).
-		if ( isset( $debug['id_repair'] ) ) {
-			$repaired = (array) $debug['id_repair']['mapping'];
-			foreach ( $results as $i => $op_result ) {
-				if ( isset( $op_result['element_id'] ) && is_scalar( $op_result['element_id'] ) && isset( $repaired[ (string) $op_result['element_id'] ] ) ) {
-					$results[ $i ]['element_id_before_repair'] = $op_result['element_id'];
-					$results[ $i ]['element_id']               = $repaired[ (string) $op_result['element_id'] ];
-				}
+		// Report the id each added element was actually saved with. An id
+		// repair or de-duplication in the same call can change it, and when
+		// the added element collided with an existing id, the element that
+		// kept or was mapped from that id is the other one (review r1 P3-3,
+		// r2 N4). Read by position from the tree this save wrote.
+		$saved_tree = $this->last_saved_elements;
+		foreach ( $added_at as $op_index => $idx ) {
+			if ( ! isset( $results[ $op_index ]['element_id'] ) ) {
+				continue;
+			}
+			if ( ! is_array( $saved_tree ) || ! isset( $saved_tree[ $idx ]['id'] ) ) {
+				$results[ $op_index ]['element_id_verified'] = false;
+				continue;
+			}
+
+			$saved_id = (string) $saved_tree[ $idx ]['id'];
+			if ( $saved_id !== (string) $results[ $op_index ]['element_id'] ) {
+				$results[ $op_index ]['element_id_submitted'] = $results[ $op_index ]['element_id'];
+				$results[ $op_index ]['element_id']           = $saved_id;
 			}
 		}
 

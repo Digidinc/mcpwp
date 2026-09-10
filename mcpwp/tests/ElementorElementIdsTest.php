@@ -798,7 +798,181 @@ final class ElementorElementIdsTest extends TestCase {
 		$this->assertNotInstanceOf( WP_Error::class, $result );
 		$map = (array) $result['id_repair']['mapping'];
 		$this->assertSame( $map['newsec01'], $result['operations'][0]['element_id'], 'A follow-up edit using the reported id must find the element.' );
-		$this->assertSame( 'newsec01', $result['operations'][0]['element_id_before_repair'] );
+		$this->assertSame( 'newsec01', $result['operations'][0]['element_id_submitted'] );
+	}
+
+	// ---------------------------------------------------------------------
+	// Review r2.
+	// ---------------------------------------------------------------------
+
+	/**
+	 * N2: a tree with numeric keys that are not 0..n — any PHP tool that
+	 * unset()s an element and re-encodes writes one — renders in Elementor and
+	 * patched on main. It is normalised to a list, not refused.
+	 */
+	public function test_patch_normalises_a_numerically_keyed_tree_to_a_list(): void {
+		$sections = array(
+			0 => $this->section( 'sec0001', array() ),
+			2 => $this->section( 'sec0003', array(), 'col0003' ),
+		);
+
+		foreach ( array( 'object-keyed JSON text' => wp_json_encode( $sections ), 'numerically keyed array' => $sections ) as $label => $raw ) {
+			$GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'] = $raw;
+
+			$result = $this->writer()->patch_elementor(
+				self::PAGE_ID,
+				array( 'operations' => array( array( 'op' => 'settings', 'element_id' => 'sec0001', 'settings' => array( 'a' => 1 ) ) ) )
+			);
+
+			$this->assertNotInstanceOf( WP_Error::class, $result, "{$label}: Elementor renders this tree and main patched it." );
+
+			$tree = json_decode( stripslashes( (string) $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'] ), true );
+			$this->assertSame( array( 0, 1 ), array_keys( $tree ), "{$label}: written back as a list." );
+			$this->assertSame( 'sec0001', $tree[0]['id'] );
+			$this->assertSame( 'sec0003', $tree[1]['id'] );
+			$this->assertSame( 1, $tree[0]['settings']['a'] );
+		}
+
+		// Normalising is for keys, not contents: a non-element item is still refused.
+		$GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'] = array( 0 => $this->section( 'sec0001', array() ), 3 => 'junk' );
+		$refused = $this->writer()->patch_elementor( self::PAGE_ID, array( 'operations' => array( array( 'op' => 'add', 'element' => $this->section( 'new0001', array() ) ) ) ) );
+		$this->assertInstanceOf( WP_Error::class, $refused );
+		$this->assertSame( 'invalid_elementor_data', $refused->get_error_code() );
+	}
+
+	public function test_a_repair_only_patch_on_an_empty_tree_answers_no_data_whatever_its_form(): void {
+		foreach ( array( 'missing' => '', 'empty array' => array(), 'json []' => '[]', 'json null' => 'null' ) as $label => $raw ) {
+			$GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'] = $raw;
+
+			$result = $this->writer()->patch_elementor( self::PAGE_ID, array( 'repair_ids' => true ) );
+
+			$this->assertInstanceOf( WP_Error::class, $result, "{$label}: an empty page is one answer, not three." );
+			$this->assertSame( 'no_elementor_data', $result->get_error_code(), $label );
+		}
+	}
+
+	public function test_json_null_is_an_empty_page_for_operations(): void {
+		$GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'] = 'null';
+
+		$result = $this->writer()->patch_elementor(
+			self::PAGE_ID,
+			array( 'operations' => array( array( 'op' => 'add', 'element' => $this->section( 'new0001', array() ) ) ) )
+		);
+
+		$this->assertNotInstanceOf( WP_Error::class, $result, 'Elementor renders "null" as an empty page.' );
+		$tree = json_decode( stripslashes( (string) $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'] ), true );
+		$this->assertCount( 1, $tree );
+	}
+
+	/**
+	 * N3: the 422 for unusable stored data sends callers to wp_set_elementor,
+	 * whose before/after count json_decode()d array meta — a TypeError on PHP 8.
+	 *
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_wp_set_elementor_works_on_a_page_whose_data_is_stored_as_an_array(): void {
+		if ( ! defined( 'ELEMENTOR_VERSION' ) ) {
+			define( 'ELEMENTOR_VERSION', '4.2.4' );
+		}
+
+		$GLOBALS['_mcpwp_test_posts'][ self::PAGE_ID ] = new WP_Post(
+			array(
+				'ID'           => self::PAGE_ID,
+				'post_type'    => 'page',
+				'post_title'   => 'Array meta',
+				'post_status'  => 'draft',
+				'post_content' => 'Kept rendering of the Elementor page.',
+			)
+		);
+		$GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'] = array(
+			$this->section( 'sec0001', array( $this->widget( 'hd00001', 'heading', array( 'title' => 'x' ) ) ) ),
+		);
+
+		try {
+			$result = $this->writer()->set_elementor_data(
+				self::PAGE_ID,
+				array( 'elementor_data' => wp_json_encode( array( $this->section( 'sec0002', array(), 'col0002' ) ) ) ),
+				false
+			);
+		} catch ( Throwable $e ) {
+			$this->fail( 'wp_set_elementor threw on array-stored data: ' . get_class( $e ) . ': ' . $e->getMessage() );
+		}
+
+		$this->assertNotInstanceOf( WP_Error::class, $result, 'Array-stored data is Elementor data: the write is neither a crash nor a refused "conversion".' );
+		$this->assertSame( 1, $result['structural_changes']['sections_before'], 'The stored array was read as the existing tree.' );
+		$this->assertSame( 1, $result['structural_changes']['widgets_before'] );
+	}
+
+	/**
+	 * N1: a link whose body was URL-encoded twice after a literal # still opens
+	 * the Off-canvas — Elementor's runAction does decodeURI then
+	 * decodeURIComponent.
+	 */
+	private function double_encoded_action_hash( string $target ): string {
+		return '#' . rawurlencode( rawurlencode( sprintf( 'elementor-action:action=%1$s&settings=%2$s', 'off_canvas:open', base64_encode( wp_json_encode( array( 'id' => $target, 'displayMode' => 'open' ) ) ) ) ) );
+	}
+
+	public function test_repair_repoints_a_double_encoded_off_canvas_link_in_its_own_form(): void {
+		$tree = array(
+			$this->section(
+				'sec0001',
+				array(
+					$this->widget( 'ocanvas1', 'off-canvas' ),
+					$this->widget( 'btn0001', 'button', array( 'text' => 'Menu', 'link' => array( 'url' => $this->double_encoded_action_hash( 'ocanvas1' ) ) ) ),
+				)
+			),
+		);
+
+		$out    = $this->validate( $tree, array( 'repair_ids' => true, 'id_seed' => (string) self::PAGE_ID ) );
+		$map    = (array) $out['result']['id_repair']['mapping'];
+		$url    = $out['tree'][0]['elements'][0]['elements'][1]['settings']['link']['url'];
+
+		$this->assertSame( $this->double_encoded_action_hash( $map['ocanvas1'] ), $url, 'Repointed, and still encoded twice.' );
+		$this->assertContains(
+			array(
+				'path' => 'section[0].column[0].widget[1]',
+				'key'  => 'link.url',
+				'from' => 'ocanvas1',
+				'to'   => $map['ocanvas1'],
+			),
+			$out['result']['id_repair']['references_repointed']
+		);
+	}
+
+	public function test_the_caution_names_wordpress_menus_as_not_searched(): void {
+		$this->assertStringContainsString( 'WordPress menus', $this->repair_off_canvas()['repair']['caution'], 'An "open the menu" custom link in Appearance > Menus is a common place for an Off-canvas trigger.' );
+	}
+
+	/**
+	 * N4: an add whose id collides with an existing element must report the
+	 * id the ADDED element was saved with, not the id the existing one got.
+	 *
+	 * @dataProvider duplicate_adds
+	 */
+	public function test_an_add_that_duplicates_an_existing_id_reports_the_added_elements_saved_id( string $id, bool $repair ): void {
+		$GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'] = wp_json_encode( array( $this->section( $id, array(), 'colold1' ) ) );
+
+		$data = array( 'operations' => array( array( 'op' => 'add', 'element' => $this->section( $id, array(), 'colnew1' ) ) ) );
+		if ( $repair ) {
+			$data['repair_ids'] = true;
+		}
+
+		$result = $this->writer()->patch_elementor( self::PAGE_ID, $data );
+		$this->assertNotInstanceOf( WP_Error::class, $result );
+
+		$tree = json_decode( stripslashes( (string) $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'] ), true );
+		$this->assertCount( 2, $tree );
+		$this->assertSame( 'colnew1', $tree[1]['elements'][0]['id'], 'The added section is second.' );
+		$this->assertSame( $tree[1]['id'], $result['operations'][0]['element_id'], 'A follow-up edit with the reported id must change the element that was added.' );
+		$this->assertSame( $id, $result['operations'][0]['element_id_submitted'] );
+	}
+
+	public static function duplicate_adds(): array {
+		return array(
+			'non-conforming id, repaired'  => array( 'dup88888', true ),
+			'conforming id, de-duplicated' => array( 'dup0001', false ),
+		);
 	}
 
 	// ---------------------------------------------------------------------
@@ -818,35 +992,30 @@ final class ElementorElementIdsTest extends TestCase {
 		$this->assertArrayHasKey( 'repair_ids', $defs['wp_set_elementor']['inputSchema']['properties'] );
 	}
 
-	public function test_no_shipped_string_still_tells_agents_to_use_eight_character_ids(): void {
+	/**
+	 * Scan roots for instructions that still say element ids have 8 characters.
+	 *
+	 * @param string[] $roots Files or directories.
+	 * @return array{found:string[],scanned:int}
+	 */
+	private function scan_for_eight_character_wording( array $roots ): array {
 		$patterns = array(
 			'/\b8[- ]char(acter)?s? alphanumeric/i',
 			'/\b8 alphanumeric/i',
 			'/\b8-char (Elementor )?(element )?id\b/i',
+			'/\b8[- ]char(acter)? (widget|element) id\b/i',
 			'/\(8[- ]char\b/i',
 			'/random 8-character element id/i',
-		);
-
-		$plugin = dirname( __DIR__ );
-		$roots  = array(
-			$plugin . '/includes',
-			$plugin . '/admin',
-			$plugin . '/readme.txt',
-			dirname( $plugin ) . '/docs',
-			dirname( $plugin ) . '/CLAUDE.md',
 		);
 
 		$found   = array();
 		$scanned = 0;
 		foreach ( $roots as $root ) {
-			if ( ! file_exists( $root ) ) {
-				continue;
-			}
 			$files = is_dir( $root )
 				? new RecursiveIteratorIterator( new RecursiveDirectoryIterator( $root, FilesystemIterator::SKIP_DOTS ) )
 				: array( new SplFileInfo( $root ) );
 			foreach ( $files as $file ) {
-				if ( ! in_array( $file->getExtension(), array( 'php', 'md', 'txt', 'js', 'json' ), true ) ) {
+				if ( ! in_array( strtolower( $file->getExtension() ), array( 'php', 'md', 'txt', 'js', 'json', 'yaml', 'yml' ), true ) ) {
 					continue;
 				}
 				++$scanned;
@@ -860,8 +1029,51 @@ final class ElementorElementIdsTest extends TestCase {
 			}
 		}
 
-		// Scanning nothing must not read as "nothing found".
-		$this->assertGreaterThan( 0, $scanned );
-		$this->assertSame( array(), $found, 'Elementor Pro accepts only 7-character ids; an agent following these strings builds broken widgets.' );
+		return array(
+			'found'   => $found,
+			'scanned' => $scanned,
+		);
+	}
+
+	public function test_plugin_files_do_not_tell_agents_to_use_eight_character_ids(): void {
+		$plugin = dirname( __DIR__ );
+		$roots  = array( $plugin . '/includes', $plugin . '/admin', $plugin . '/readme.txt' );
+
+		foreach ( $roots as $root ) {
+			$this->assertFileExists( $root, 'A plugin root that is missing would be scanned as "nothing found".' );
+		}
+
+		$scan = $this->scan_for_eight_character_wording( $roots );
+
+		$this->assertGreaterThan( 0, $scan['scanned'] );
+		$this->assertSame( array(), $scan['found'], 'Elementor Pro accepts only 7-character ids; an agent following these strings builds broken widgets.' );
+	}
+
+	/**
+	 * The repo-level docs sit beside the plugin, not inside it. The house test
+	 * command mounts only mcpwp/, where they cannot be reached, and failing
+	 * there would turn every local run red; so an unreachable root is a
+	 * visible skip locally and a failure in CI (which runs from the repo root,
+	 * mcpwp-ci.yml). It is never a silent pass.
+	 */
+	public function test_repo_docs_do_not_tell_agents_to_use_eight_character_ids(): void {
+		$repo    = dirname( dirname( __DIR__ ) );
+		$roots   = array( $repo . '/docs', $repo . '/CLAUDE.md' );
+		$missing = array_values( array_filter( $roots, function ( $root ) {
+			return ! file_exists( $root );
+		} ) );
+
+		if ( ! empty( $missing ) ) {
+			$reason = 'Repo-level docs are not reachable from this test root (' . implode( ', ', $missing ) . '); run from the repository root to scan them.';
+			if ( false !== getenv( 'CI' ) && '' !== getenv( 'CI' ) ) {
+				$this->fail( $reason );
+			}
+			$this->markTestSkipped( $reason );
+		}
+
+		$scan = $this->scan_for_eight_character_wording( $roots );
+
+		$this->assertGreaterThan( 0, $scan['scanned'] );
+		$this->assertSame( array(), $scan['found'], 'Elementor Pro accepts only 7-character ids; docs that say 8 teach agents to build broken widgets.' );
 	}
 }
