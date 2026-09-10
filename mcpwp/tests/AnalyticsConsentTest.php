@@ -454,4 +454,73 @@ final class AnalyticsConsentTest extends TestCase {
 			$this->assertSame( '', $this->notice(), wp_json_encode( $stored ) );
 		}
 	}
+
+	// -----------------------------------------------------------------
+	// Review r3 R3-1 / R3-2: the 2.8 bridge merge re-runs while a table
+	// migration keeps failing. It must never turn a recorded choice around,
+	// and never copy a consent label out of spai_settings.
+	// -----------------------------------------------------------------
+
+	private function bridge( array $mcpwp, array $spai ): void {
+		require_once dirname( __DIR__ ) . '/includes/class-mcpwp-migrate.php';
+		$GLOBALS['mcpwp_test_options']    = array();
+		$GLOBALS['mcpwp_test_transients'] = array();
+		Mcpwp_Migrate::reset_flag();
+		if ( ! empty( $mcpwp ) ) {
+			update_option( 'mcpwp_settings', $mcpwp );
+		}
+		update_option( 'spai_settings', $spai );
+		update_option( 'mcpwp_analytics_choice_stamped', 1 ); // this site already ran the stamp
+		Mcpwp_Migrate::run();
+		Mcpwp_Activator::stamp_analytics_choice(); // runs after the migration on plugin load
+	}
+
+	public function test_a_re_run_bridge_merge_never_turns_a_recorded_off_on(): void {
+		$this->free();
+		$this->bridge(
+			array( 'enable_logging' => true, 'analytics_enabled' => false, 'analytics_choice' => 'explicit' ),
+			array( 'enable_logging' => true, 'analytics_enabled' => true )
+		);
+
+		$this->assertFalse( $this->stored()['analytics_enabled'], 'The admin recorded off; an unattributable 2.8 value does not override it.' );
+		$this->assertSame( 'explicit', $this->stored()['analytics_choice'] ?? null );
+		$this->assertFalse( Mcpwp_Analytics::is_enabled() );
+		$this->paid();
+		$this->assertFalse( Mcpwp_Analytics::is_enabled(), 'Nor on a paying site.' );
+	}
+
+	public function test_a_re_run_bridge_merge_never_turns_a_recorded_choice_around_in_either_direction(): void {
+		$this->free();
+		$this->bridge(
+			array( 'analytics_enabled' => true, 'analytics_choice' => 'explicit' ),
+			array( 'analytics_enabled' => false )
+		);
+		$this->assertTrue( $this->stored()['analytics_enabled'] );
+		$this->assertSame( 'explicit', $this->stored()['analytics_choice'] ?? null );
+		$this->assertTrue( Mcpwp_Analytics::is_enabled() );
+
+		// A legacy label is a record too: spai does not rewrite that value.
+		$this->bridge(
+			array( 'analytics_enabled' => true, 'analytics_choice' => 'legacy' ),
+			array( 'analytics_enabled' => false )
+		);
+		$this->assertTrue( $this->stored()['analytics_enabled'] );
+		$this->assertSame( 'legacy', $this->stored()['analytics_choice'] ?? null );
+		$this->assertFalse( Mcpwp_Analytics::is_enabled() );
+	}
+
+	public function test_a_label_planted_in_spai_settings_is_never_copied(): void {
+		$this->free();
+
+		// Direct copy: no mcpwp_settings yet.
+		$this->bridge( array(), array( 'enable_logging' => true, 'analytics_enabled' => true, 'analytics_choice' => 'explicit' ) );
+		$this->assertTrue( $this->stored()['analytics_enabled'] );
+		$this->assertSame( 'legacy', $this->stored()['analytics_choice'] ?? null, 'Direct copy: the 2.8 value is labelled legacy, not the planted explicit.' );
+		$this->assertFalse( Mcpwp_Analytics::is_enabled() );
+
+		// Deep merge over settings with no label.
+		$this->bridge( array( 'enable_logging' => true ), array( 'enable_logging' => true, 'analytics_enabled' => true, 'analytics_choice' => 'explicit' ) );
+		$this->assertSame( 'legacy', $this->stored()['analytics_choice'] ?? null, 'Deep merge: the planted label is not copied.' );
+		$this->assertFalse( Mcpwp_Analytics::is_enabled() );
+	}
 }

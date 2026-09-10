@@ -297,8 +297,13 @@ class Mcpwp_Migrate {
 				$mcpwp_settings_existing = get_option( 'mcpwp_settings', false );
 				if ( false === $mcpwp_settings_existing ) {
 					// mcpwp_settings not yet written — simple copy.
-					update_option( 'mcpwp_settings', $spai_settings_raw );
-					self::restamp_if_analytics_copied( $spai_settings_raw );
+					// A consent label is recorded only by this version's settings
+					// form; one found in spai_settings is never copied (review r3
+					// R3-2). The 2.8 value itself is labelled legacy below.
+					$copy = $spai_settings_raw;
+					unset( $copy['analytics_choice'] );
+					update_option( 'mcpwp_settings', $copy );
+					self::restamp_if_analytics_copied( $copy );
 					$log['copied'][] = 'spai_settings → mcpwp_settings (direct copy)';
 				} else {
 					// mcpwp_settings already exists (written by activator) — deep-merge.
@@ -309,6 +314,18 @@ class Mcpwp_Migrate {
 
 					foreach ( $spai_settings_raw as $sub_key => $customer_value ) {
 						if ( ! is_string( $sub_key ) || '' === $sub_key ) {
+							continue;
+						}
+						// Analytics consent is not a customer value to carry
+						// over. A label is never copied from spai_settings, and a
+						// choice already recorded here (explicit or legacy)
+						// outranks an unattributable 2.8 value in either
+						// direction — this merge re-runs on every request while
+						// a table migration keeps failing (review r3 R3-1, R3-2).
+						if ( 'analytics_choice' === $sub_key ) {
+							continue;
+						}
+						if ( 'analytics_enabled' === $sub_key && isset( $base['analytics_choice'] ) ) {
 							continue;
 						}
 						// Only overlay scalar and simple-array values that differ from
