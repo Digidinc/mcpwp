@@ -688,9 +688,8 @@ class Mcpwp_Webhooks {
 
 	/**
 	 * Remove known secret values from text, in the encodings a receiver echoes
-	 * them in: as sent, JSON-escaped, URL-encoded (both forms), and
-	 * HTML-escaped (of the value and of its JSON form). Other encodings —
-	 * base64, hex — are not covered.
+	 * them in (see echo_forms()). Base64, hex and other transforms are not
+	 * covered.
 	 *
 	 * @param string $text   Text to scrub.
 	 * @param array  $values Values as keys.
@@ -704,20 +703,7 @@ class Mcpwp_Webhooks {
 
 		$forms = array();
 		foreach ( array_keys( $values ) as $value ) {
-			$value = (string) $value;
-			$json  = array(
-				(string) substr( (string) wp_json_encode( $value ), 1, -1 ),
-				(string) substr( (string) wp_json_encode( $value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE ), 1, -1 ),
-			);
-
-			$candidates = array_merge( array( $value, rawurlencode( $value ), urlencode( $value ) ), $json );
-			foreach ( array_merge( array( $value ), $json ) as $plain ) {
-				$candidates[] = htmlspecialchars( $plain, ENT_QUOTES | ENT_HTML401, 'UTF-8' );
-				$candidates[] = htmlspecialchars( $plain, ENT_QUOTES | ENT_HTML5, 'UTF-8' );
-			}
-
-			foreach ( $candidates as $candidate ) {
-				$candidate = (string) $candidate;
+			foreach ( self::echo_forms( (string) $value ) as $candidate ) {
 				if ( strlen( $candidate ) >= self::SECRET_ECHO_MIN_BYTES ) {
 					$forms[ $candidate ] = strlen( $candidate );
 				}
@@ -728,6 +714,77 @@ class Mcpwp_Webhooks {
 		arsort( $forms );
 
 		return str_replace( array_map( 'strval', array_keys( $forms ) ), '[redacted]', $text );
+	}
+
+	/**
+	 * The ways one value comes back inside a response body.
+	 *
+	 * - As sent, and URL-encoded (RFC 3986 and form encoding).
+	 * - JSON string content: PHP's default; unescaped slashes and/or unicode;
+	 *   HTML-safe (JSON_HEX_* — also what Go's encoding/json writes); each
+	 *   with \uXXXX in both letter cases (PHP writes some upper case, Go and
+	 *   Python lower case — Python's ensure_ascii is the escaped-unicode,
+	 *   unescaped-slash form).
+	 * - Each JSON form escaped again (a JSON document carried in a string).
+	 * - HTML: the value and every JSON form with & < > escaped, and quotes
+	 *   left as they are or written as any common entity (ENT_QUOTES,
+	 *   ENT_COMPAT, ENT_NOQUOTES; &quot; &#34; &#x22; &#039; &#39; &#x27; &apos;).
+	 *
+	 * @param string $value Secret value.
+	 * @return string[]
+	 */
+	private static function echo_forms( $value ) {
+		$value     = (string) $value;
+		$json      = array();
+		$hex_flags = JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT;
+		$flag_sets = array( 0, JSON_UNESCAPED_SLASHES, JSON_UNESCAPED_UNICODE, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE, $hex_flags, $hex_flags | JSON_UNESCAPED_SLASHES );
+
+		$lower = static function ( $m ) {
+			return '\\u' . strtolower( $m[1] );
+		};
+		$upper = static function ( $m ) {
+			return '\\u' . strtoupper( $m[1] );
+		};
+
+		foreach ( $flag_sets as $flags ) {
+			$encoded = wp_json_encode( $value, $flags );
+			if ( ! is_string( $encoded ) || strlen( $encoded ) < 2 ) {
+				continue;
+			}
+			$inner                 = substr( $encoded, 1, -1 );
+			$json[ $inner ]        = true;
+			$json[ (string) preg_replace_callback( '/\\\\u([0-9A-Fa-f]{4})/', $lower, $inner ) ] = true;
+			$json[ (string) preg_replace_callback( '/\\\\u([0-9A-Fa-f]{4})/', $upper, $inner ) ] = true;
+		}
+
+		foreach ( array_keys( $json ) as $inner ) {
+			foreach ( array( 0, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE ) as $flags ) {
+				$twice = wp_json_encode( (string) $inner, $flags );
+				if ( is_string( $twice ) && strlen( $twice ) >= 2 ) {
+					$json[ substr( $twice, 1, -1 ) ] = true;
+				}
+			}
+		}
+
+		$forms = array(
+			$value               => true,
+			rawurlencode( $value ) => true,
+			urlencode( $value )    => true,
+		) + $json;
+
+		foreach ( array_merge( array( $value ), array_map( 'strval', array_keys( $json ) ) ) as $plain ) {
+			$base = htmlspecialchars( $plain, ENT_NOQUOTES, 'UTF-8' );
+			if ( '' === $base ) {
+				continue;
+			}
+			foreach ( array( '"', '&quot;', '&#34;', '&#x22;' ) as $double ) {
+				foreach ( array( "'", '&#039;', '&#39;', '&#x27;', '&apos;' ) as $single ) {
+					$forms[ str_replace( array( '"', "'" ), array( $double, $single ), $base ) ] = true;
+				}
+			}
+		}
+
+		return array_map( 'strval', array_keys( $forms ) );
 	}
 
 	/**
@@ -883,10 +940,12 @@ class Mcpwp_Webhooks {
 
 		$duration = microtime( true ) - $start_time;
 
+		// What the receiver answered goes back to the caller and, through the
+		// REST layer, into the activity log: redacted like the delivery log.
 		if ( is_wp_error( $response ) ) {
 			return array(
 				'success'  => false,
-				'error'    => $response->get_error_message(),
+				'error'    => self::redact_log_copy( $response->get_error_message() ),
 				'duration' => round( $duration, 3 ),
 			);
 		}
@@ -896,7 +955,7 @@ class Mcpwp_Webhooks {
 		return array(
 			'success'       => $code >= 200 && $code < 300,
 			'response_code' => $code,
-			'response_body' => wp_remote_retrieve_body( $response ),
+			'response_body' => self::redact_log_copy( wp_remote_retrieve_body( $response ) ),
 			'duration'      => round( $duration, 3 ),
 		);
 	}

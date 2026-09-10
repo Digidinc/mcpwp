@@ -399,4 +399,96 @@ final class WebhookLogRedactionTest extends TestCase {
 		);
 		$this->assertSame( $stored, $row['response_body'], 'A row cut by this version is not mistaken for a legacy one.' );
 	}
+
+	// -----------------------------------------------------------------
+	// Review r2 P3-A: secrets with non-ASCII or & < > " ' characters come
+	// back in encodings beyond the first set — Python's ensure_ascii JSON,
+	// Go's HTML-safe JSON, HTML with only some characters escaped, and JSON
+	// escaped twice.
+	// -----------------------------------------------------------------
+
+	private function scrubbed_response_for( array $secrets, string $body ): string {
+		$payload = array( 'post' => array( 'id' => 9 ) );
+		foreach ( $secrets as $i => $secret ) {
+			$payload[ 'secret_' . $i ] = $secret;
+		}
+		$this->answer_with( $body );
+		$this->deliver_payload( $payload );
+		$row = $this->log_row();
+		foreach ( $secrets as $i => $secret ) {
+			$this->assertStringNotContainsString( $secret, $row['payload'] );
+		}
+		return $row['response_body'];
+	}
+
+	public function test_python_ensure_ascii_json_of_a_non_ascii_secret_is_scrubbed(): void {
+		$secret = 'pässwörd/secret1';
+		// json.dumps(secret): non-ASCII as lower-case \u escapes, slash kept.
+		$python = json_encode( $secret, JSON_UNESCAPED_SLASHES );
+		$this->assertStringContainsString( '\u00e4', $python, 'Fixture: the Python form.' );
+
+		$stored = $this->scrubbed_response_for( array( $secret ), '<html><pre>{"client_secret": ' . $python . '}</pre></html>' );
+		$this->assertStringNotContainsString( substr( $python, 1, -1 ), $stored );
+	}
+
+	public function test_go_html_safe_json_of_a_secret_is_scrubbed(): void {
+		$secret = 'abc&def<ghi>jk';
+		// encoding/json: & < > as lower-case \u0026 \u003c \u003e.
+		$go = str_replace( array( '&', '<', '>' ), array( '\u0026', '\u003c', '\u003e' ), $secret );
+
+		$stored = $this->scrubbed_response_for( array( $secret ), 'upstream rejected {"api_secret":"' . $go . '"} with 401' );
+		$this->assertStringNotContainsString( $go, $stored );
+		$this->assertStringNotContainsString( strtoupper( '\u003c' ), $stored );
+	}
+
+	public function test_html_escaping_without_quotes_is_scrubbed(): void {
+		$secret  = 'ab"cd&ef12';
+		$noquote = htmlspecialchars( json_encode( array( 'password' => $secret ) ), ENT_NOQUOTES );
+		$compat  = htmlspecialchars( $secret, ENT_COMPAT );
+		$apos    = str_replace( "'", '&#39;', htmlspecialchars( "it's-" . $secret, ENT_NOQUOTES ) );
+
+		$stored = $this->scrubbed_response_for( array( $secret, "it's-" . $secret ), '<pre>' . $noquote . '</pre><p>' . $compat . '</p><p>' . $apos . '</p>' );
+		$this->assertStringNotContainsString( 'ab\"cd&amp;ef12', $stored );
+		$this->assertStringNotContainsString( $compat, $stored );
+		$this->assertStringNotContainsString( 'it&#39;s-', $stored );
+	}
+
+	public function test_json_escaped_twice_is_scrubbed(): void {
+		$secret = 'ab"cd12efgh';
+		$twice  = json_encode( json_encode( array( 'password' => $secret ) ) );
+		$this->assertStringContainsString( 'ab\\\\\\"cd12efgh', $twice, 'Fixture: the doubly escaped form.' );
+
+		$stored = $this->scrubbed_response_for( array( $secret ), "b'" . $twice . "'" );
+		$this->assertStringNotContainsString( 'ab\\\\\\"cd12efgh', $stored );
+		$this->assertStringNotContainsString( 'cd12efgh', $stored );
+	}
+
+	public function test_the_test_endpoint_returns_the_receiver_body_redacted(): void {
+		// Review r2 P3-D: POST /webhooks/{id}/test returned — and the activity
+		// log stored — whatever the receiver answered.
+		$this->answer    = array( 'response' => array( 'code' => 200 ), 'body' => '{"ok":true,"session_token":"rcv_9f8e7d6c5b4a3f2e1d0c"}' );
+		$original        = $GLOBALS['wpdb'];
+		$GLOBALS['wpdb'] = new class() extends Mcpwp_Test_WPDB {
+			private function hook() {
+				return array( 'id' => 7, 'name' => 'hook', 'url' => 'https://93.184.216.34/hook', 'secret' => 'whsec_signing_secret_value', 'events' => '["post.updated"]', 'status' => 'active', 'retry_count' => 0 );
+			}
+			public function get_row( $query = '', $output = OBJECT, $y = 0 ) {
+				return ARRAY_A === $output ? $this->hook() : (object) $this->hook();
+			}
+			public function get_results( $query = '', $output = ARRAY_A ) {
+				return array( $this->hook() );
+			}
+		};
+		try {
+			$result = $this->webhooks()->test( 7 );
+		} finally {
+			$GLOBALS['wpdb'] = $original;
+		}
+
+		$this->assertIsArray( $result );
+		$this->assertCount( 1, $this->sent, 'The test delivery went out.' );
+		$this->assertSame( 200, $result['response_code'] );
+		$this->assertStringNotContainsString( 'rcv_9f8e7d6c5b4a3f2e1d0c', $result['response_body'] );
+		$this->assertSame( '[redacted]', json_decode( $result['response_body'], true )['session_token'] );
+	}
 }
