@@ -392,6 +392,13 @@ class Mcpwp_Option_Access {
 				continue;
 			}
 
+			// A numeric PIN/OTP/passcode is a secret too.
+			if ( ( is_int( $v ) || is_float( $v ) ) && $secret ) {
+				$tree[ $k ] = self::MASK;
+				$redacted[] = $here;
+				continue;
+			}
+
 			if ( ! is_string( $v ) ) {
 				continue;
 			}
@@ -440,7 +447,9 @@ class Mcpwp_Option_Access {
 		// camelCase is split so licenseKey / siteKey / clientSecret count.
 		$field = preg_replace( '/([a-z0-9])([A-Z])/', '$1_$2', (string) $field );
 
-		if ( preg_match( self::NOT_SECRET_SUFFIX_PATTERN, $field ) ) {
+		// A descriptive suffix exempts a name unless the name also carries a
+		// hard secret stem: password_at is not a timestamp anyone should read.
+		if ( preg_match( self::NOT_SECRET_SUFFIX_PATTERN, $field ) && ! preg_match( '/(^|[_\-.\s])(pass|passwd|password|passcode|secret|token|credential|private)([_\-.\s]|$)/i', $field ) ) {
 			return false;
 		}
 
@@ -477,10 +486,10 @@ class Mcpwp_Option_Access {
 		// A URL that carries its credential IS the credential: user:pass@host,
 		// a Sentry DSN, a Slack/Discord webhook, ?key=…/&token=….
 		if ( false !== strpos( $value, '://' ) ) {
-			return (bool) preg_match( '#://[^/@\s]+:[^/@\s]+@#', $value )
+			return (bool) preg_match( '#://[^/@\s]*:[^/@\s]+@#', $value )
 				|| (bool) preg_match( '#://[0-9a-f]{16,}@#i', $value )
 				|| (bool) preg_match( '#hooks\.slack\.com/services/|discord(app)?\.com/api/webhooks/#i', $value )
-				|| (bool) preg_match( '#[?&](api_?key|key|token|secret|sig|signature|access_token|auth)=[^&]{6,}#i', $value );
+				|| (bool) preg_match( '#[?&][A-Za-z0-9_\-]*(api_?key|apikey|key|token|secret|sig|signature|access_token|auth|password|passwd)=[^&]{6,}#i', $value );
 		}
 
 		if ( strlen( $value ) < 16 || false !== strpos( $value, ' ' ) || false !== strpos( $value, '@' ) ) {
@@ -512,57 +521,73 @@ class Mcpwp_Option_Access {
 
 	/**
 	 * Merge a submitted value over the stored one so no secret is destroyed
-	 * by accident (#800 round 2).
+	 * by accident (#800 rounds 2–3).
 	 *
 	 * Two ways a credential died silently before this: the caller echoed a
 	 * redacted read back (`passcode: "***"`), or edited one setting and sent
 	 * the tree without the credential field, which a whole-value replace
-	 * then dropped. Both are folded back to the stored value and reported
-	 * under `preserved`. MASK is never a value that can be written.
+	 * then dropped. A third, found in round 3: the option is stored as a JSON
+	 * or serialised STRING — the very form redact() hands back — and a string
+	 * walked past the merge untouched. Both sides are decoded here, merged as
+	 * trees, and re-encoded in the stored value's own form.
 	 *
-	 * A stored secret is replaced only by a real replacement: a value that
-	 * is itself secret-shaped. MASK, an empty string, 'no', a stray
-	 * character — none of those is a credential, and each would have been a
-	 * silent erase. Clearing a credential on purpose is `allow_secrets=true`
-	 * with an explicit empty value.
+	 * A stored secret is replaced only by a real replacement: a value that is
+	 * itself secret-shaped. MASK, an empty string, 'no', a stray character —
+	 * none of those is a credential. Clearing a credential on purpose is
+	 * `allow_secrets=true` with an explicit empty value.
+	 *
+	 * Paths are carried as segment arrays, never dot-joined strings, so a
+	 * key containing '.' and an object ancestor both round-trip.
 	 *
 	 * @param string $key           Option name.
 	 * @param mixed  $old           Stored value.
 	 * @param mixed  $new           Submitted value.
 	 * @param bool   $allow_secrets The caller confirmed it means to change credentials.
-	 * @return array {value: mixed, preserved: string[]}
+	 * @return array {value: mixed, preserved: string[], form: string}
 	 */
 	public static function merge_preserving_secrets( $key, $old, $new, $allow_secrets = false ) {
 		$preserved = array();
 
 		if ( is_string( $new ) && self::MASK === trim( $new ) ) {
-			return array( 'value' => $old, 'preserved' => array( '' ) );
+			return array( 'value' => $old, 'preserved' => array( '' ), 'form' => 'scalar' );
 		}
 
-		// A scalar secret option replaced by a non-secret-shaped value. Only
+		$old_form = 'native';
+		$old_tree = self::as_tree( $old, $old_form );
+		$new_form = 'native';
+		$new_tree = self::as_tree( $new, $new_form );
+
+		// Scalar secret option replaced by a non-secret-shaped value. Only
 		// when what is stored IS a secret: a flag under a secret-ish name
-		// (…_generate_password = "no") is a flag and may be flipped.
-		if ( is_string( $old ) && ! is_array( $new ) && self::is_secret_field( $key ) && ! $allow_secrets && ( self::looks_like_secret_value( $old ) || self::looks_like_credential( $old ) ) ) {
-			$candidate = is_scalar( $new ) ? (string) $new : '';
-			if ( ! self::looks_like_secret_value( $candidate ) && ! self::looks_like_credential( $candidate ) ) {
-				return array( 'value' => $old, 'preserved' => array( '' ) );
+		// (…_generate_password = "no") may be flipped.
+		if ( null === $old_tree && null === $new_tree ) {
+			if ( is_string( $old ) && self::is_secret_field( $key ) && ! $allow_secrets && ( self::looks_like_secret_value( $old ) || self::looks_like_credential( $old ) ) ) {
+				$candidate = is_scalar( $new ) ? (string) $new : '';
+				if ( ! self::looks_like_secret_value( $candidate ) && ! self::looks_like_credential( $candidate ) ) {
+					return array( 'value' => $old, 'preserved' => array( '' ), 'form' => 'scalar' );
+				}
 			}
+			return array( 'value' => $new, 'preserved' => array(), 'form' => 'scalar' );
 		}
 
-		if ( ! is_array( $old ) || ! is_array( $new ) ) {
-			return array( 'value' => $new, 'preserved' => $preserved );
+		if ( null === $old_tree || null === $new_tree ) {
+			return array( 'value' => $new, 'preserved' => array(), 'form' => $new_form );
 		}
 
 		$old_secret_paths = array();
-		self::collect_secret_paths_including_masked( $old, '', self::is_secret_field( $key ), $old_secret_paths );
+		self::collect_secret_paths_including_masked( $old_tree, array(), self::is_secret_field( $key ), $old_secret_paths );
 
-		foreach ( $old_secret_paths as $path ) {
-			$segments  = explode( '.', $path );
-			$old_leaf  = self::path_get( $old, $segments );
-			$new_leaf  = self::path_get( $new, $segments, $exists );
+		foreach ( $old_secret_paths as $segments ) {
+			$old_leaf = self::path_get( $old_tree, $segments, $old_exists );
+			$new_leaf = self::path_get( $new_tree, $segments, $exists );
+
+			if ( ! $old_exists ) {
+				continue;
+			}
 
 			$is_mask    = is_string( $new_leaf ) && self::MASK === trim( $new_leaf );
-			$is_replace = is_string( $new_leaf ) && ( self::looks_like_secret_value( $new_leaf ) || self::looks_like_credential( $new_leaf ) );
+			$is_replace = ( is_string( $new_leaf ) && ( self::looks_like_secret_value( $new_leaf ) || self::looks_like_credential( $new_leaf ) ) )
+				|| is_int( $new_leaf ) || is_float( $new_leaf );
 
 			// The stored leaf is a flag, not a secret: nothing to preserve.
 			if ( ! $is_mask && is_string( $old_leaf ) && ! self::looks_like_secret_value( $old_leaf ) && ! self::looks_like_credential( $old_leaf ) ) {
@@ -574,27 +599,103 @@ class Mcpwp_Option_Access {
 			// which case an explicit non-mask value (including '') is an
 			// intentional clear.
 			if ( ! $exists || $is_mask || ( ! $is_replace && ! $allow_secrets ) ) {
-				$new         = self::path_set( $new, $segments, $old_leaf );
-				$preserved[] = $path;
+				$new_tree    = self::path_set( $new_tree, $segments, $old_leaf );
+				$preserved[] = implode( '.', $segments );
 			}
 		}
 
-		return array( 'value' => $new, 'preserved' => $preserved );
+		// The stored value keeps its own form: a JSON-string option goes back
+		// as a JSON string, a serialised one as the array WordPress serialises.
+		$value = $new_tree;
+		if ( 'json' === $old_form ) {
+			$value = wp_json_encode( $new_tree );
+		}
+
+		return array( 'value' => $value, 'preserved' => $preserved, 'form' => $old_form );
+	}
+
+	/**
+	 * A value as a tree, whatever form it was stored or submitted in.
+	 *
+	 * @param mixed  $value Value.
+	 * @param string $form  Detected form, by reference: native|json|serialized.
+	 * @return array|null Null when the value is not a tree.
+	 */
+	private static function as_tree( $value, &$form ) {
+		$form = 'native';
+
+		if ( is_array( $value ) ) {
+			return $value;
+		}
+
+		if ( is_object( $value ) ) {
+			return (array) $value;
+		}
+
+		if ( ! is_string( $value ) ) {
+			return null;
+		}
+
+		$decoded = self::decode_json_tree( $value );
+		if ( null !== $decoded ) {
+			$form = 'json';
+			return $decoded;
+		}
+
+		if ( function_exists( 'is_serialized' ) && is_serialized( $value ) ) {
+			$unserialized = @unserialize( $value, array( 'allowed_classes' => false ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.serialize_unserialize -- classes disallowed.
+			if ( is_array( $unserialized ) ) {
+				$form = 'serialized';
+				return $unserialized;
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * Whether any leaf of a value, in any encoding, is the mask. Such a value
+	 * must never be stored: it is a redacted read, not data.
+	 *
+	 * @param mixed $value Value about to be written.
+	 * @return bool
+	 */
+	public static function contains_mask( $value ) {
+		$form = 'native';
+		$tree = self::as_tree( $value, $form );
+
+		if ( null === $tree ) {
+			return is_string( $value ) && self::MASK === trim( $value );
+		}
+
+		foreach ( $tree as $v ) {
+			if ( is_array( $v ) || is_object( $v ) || ( is_string( $v ) && null !== self::decode_json_tree( $v ) ) ) {
+				if ( self::contains_mask( $v ) ) {
+					return true;
+				}
+				continue;
+			}
+			if ( is_string( $v ) && self::MASK === trim( $v ) ) {
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 	/**
 	 * Like collect_secret_paths() but treats any leaf under a secret-named
 	 * path as a secret whatever its shape — the stored value may already be
-	 * short, and it still must not be dropped.
+	 * short, and it still must not be dropped. Paths are segment arrays.
 	 *
-	 * @param array  $tree         Tree.
-	 * @param string $path         Path so far.
-	 * @param bool   $under_secret Ancestor marked.
-	 * @param array  $paths        Collected (by reference).
+	 * @param array $tree         Tree.
+	 * @param array $path         Segments so far.
+	 * @param bool  $under_secret Ancestor marked.
+	 * @param array $paths        Collected (by reference).
 	 */
-	private static function collect_secret_paths_including_masked( array $tree, $path, $under_secret, array &$paths ) {
+	private static function collect_secret_paths_including_masked( array $tree, array $path, $under_secret, array &$paths ) {
 		foreach ( $tree as $k => $v ) {
-			$here   = '' === $path ? (string) $k : $path . '.' . $k;
+			$here   = array_merge( $path, array( $k ) );
 			$secret = $under_secret || ( is_string( $k ) && self::is_secret_field( $k ) );
 
 			if ( is_array( $v ) || is_object( $v ) ) {
@@ -602,7 +703,7 @@ class Mcpwp_Option_Access {
 				continue;
 			}
 
-			if ( is_string( $v ) && '' !== $v && ( $secret || self::looks_like_credential( $v ) ) ) {
+			if ( ( is_string( $v ) && '' !== $v && ( $secret || self::looks_like_credential( $v ) ) ) || ( ( is_int( $v ) || is_float( $v ) ) && $secret ) ) {
 				$paths[] = $here;
 			}
 		}
@@ -618,6 +719,9 @@ class Mcpwp_Option_Access {
 		$node   = $tree;
 		$exists = true;
 		foreach ( $segments as $segment ) {
+			if ( is_object( $node ) ) {
+				$node = (array) $node;
+			}
 			if ( ! is_array( $node ) || ! array_key_exists( $segment, $node ) ) {
 				$exists = false;
 				return null;
@@ -639,7 +743,13 @@ class Mcpwp_Option_Access {
 			$tree[ $segment ] = $value;
 			return $tree;
 		}
-		$child = isset( $tree[ $segment ] ) && is_array( $tree[ $segment ] ) ? $tree[ $segment ] : array();
+		$child = isset( $tree[ $segment ] ) ? $tree[ $segment ] : array();
+		if ( is_object( $child ) ) {
+			$child = (array) $child;
+		}
+		if ( ! is_array( $child ) ) {
+			$child = array();
+		}
 		$tree[ $segment ] = self::path_set( $child, $segments, $value );
 		return $tree;
 	}
@@ -695,6 +805,8 @@ class Mcpwp_Option_Access {
 			}
 
 			if ( is_string( $v ) && ( ( $secret && self::looks_like_secret_value( $v ) ) || self::looks_like_credential( $v ) ) ) {
+				$paths[] = $here;
+			} elseif ( ( is_int( $v ) || is_float( $v ) ) && $secret ) {
 				$paths[] = $here;
 			}
 		}

@@ -552,4 +552,183 @@ final class OptionAccessTest extends TestCase {
 		$this->assertSame( 'not_allowlisted', $error->get_error_data()['rule'] );
 		$this->assertStringContainsString( 'allowlist', $error->get_error_data()['hint'] );
 	}
+
+	// ---------------------------------------------------------------
+	// Round 3: the merge works on the STORED form, not only on arrays.
+	// ---------------------------------------------------------------
+
+	public function test_an_option_stored_as_a_json_string_keeps_its_secret_through_a_read_edit_write_loop(): void {
+		// P0-1: redact() hands a JSON-string option back as JSON; the merge
+		// used to see two strings and pass the mask straight through.
+		update_option( 'elementor_probe', wp_json_encode( array( 'api_key' => 'sk_live_abcdefghijklmnop', 'mode' => 'test' ) ) );
+
+		$read = json_decode( $this->read( 'elementor_probe' )->get_data()['value'], true );
+		$this->assertSame( '***', $read['api_key'] );
+
+		$read['mode'] = 'live';
+		$written      = $this->write( 'elementor_probe', wp_json_encode( $read ) );
+
+		$this->assertInstanceOf( WP_REST_Response::class, $written, is_wp_error( $written ) ? $written->get_error_message() : '' );
+		$stored = get_option( 'elementor_probe' );
+		$this->assertIsString( $stored, 'The stored form is kept: a JSON-string option stays a JSON string.' );
+		$decoded = json_decode( $stored, true );
+		$this->assertSame( 'sk_live_abcdefghijklmnop', $decoded['api_key'] );
+		$this->assertSame( 'live', $decoded['mode'] );
+		$this->assertSame( array( 'api_key' ), $written->get_data()['preserved'] );
+	}
+
+	public function test_an_option_stored_serialized_keeps_its_secret_when_the_caller_sends_a_tree(): void {
+		update_option( 'elementor_probe', serialize( array( 'password' => 'Hunter2!!xx', 'host' => 'smtp.old' ) ) ); // phpcs:ignore
+
+		$written = $this->write( 'elementor_probe', array( 'host' => 'smtp.new' ) );
+
+		$this->assertInstanceOf( WP_REST_Response::class, $written, is_wp_error( $written ) ? $written->get_error_message() : '' );
+		$stored = get_option( 'elementor_probe' );
+		$stored = is_string( $stored ) ? unserialize( $stored ) : $stored; // phpcs:ignore
+		$this->assertSame( 'Hunter2!!xx', $stored['password'] );
+		$this->assertSame( 'smtp.new', $stored['host'] );
+	}
+
+	public function test_a_mask_anywhere_in_the_final_value_is_refused_whatever_the_encoding(): void {
+		// The invariant behind the merge: '***' never reaches storage. A
+		// nested JSON string inside an array, and a key the stored value did
+		// not have, are the two ways a mask could still slip through.
+		update_option( 'elementor_probe', array( 'mode' => 'test' ) );
+
+		$refused = $this->write( 'elementor_probe', array( 'mode' => 'live', 'new_field' => '***' ) );
+		$this->assertSame( 'mask_in_write', $refused->get_error_code() );
+		$this->assertSame( array( 'mode' => 'test' ), get_option( 'elementor_probe' ), 'Nothing was written.' );
+
+		$refused = $this->write( 'elementor_probe', array( 'mode' => 'live', 'inner' => wp_json_encode( array( 'x' => '***' ) ) ) );
+		$this->assertSame( 'mask_in_write', $refused->get_error_code() );
+
+		$this->assertTrue( Mcpwp_Option_Access::contains_mask( '***' ) );
+		$this->assertTrue( Mcpwp_Option_Access::contains_mask( '{"a":{"b":"***"}}' ) );
+		$this->assertTrue( Mcpwp_Option_Access::contains_mask( array( 'a' => array( 'b' => ' *** ' ) ) ) );
+		$this->assertFalse( Mcpwp_Option_Access::contains_mask( array( 'a' => 'x***y' ) ) );
+	}
+
+	public function test_a_key_containing_a_dot_and_an_object_ancestor_both_round_trip(): void {
+		// P1-1: dotted-string paths broke on keys that contain '.', and a
+		// stdClass ancestor was invisible to the walk.
+		$old = array( 'smtp.example.com' => array( 'password' => 'Hunter2!!xx' ), 'label' => 'a' );
+		update_option( 'elementor_probe', $old );
+
+		$written = $this->write( 'elementor_probe', array( 'smtp.example.com' => array( 'password' => '***' ), 'label' => 'b' ) );
+		$this->assertInstanceOf( WP_REST_Response::class, $written, is_wp_error( $written ) ? $written->get_error_message() : '' );
+		$this->assertSame( 'Hunter2!!xx', get_option( 'elementor_probe' )['smtp.example.com']['password'] );
+		$this->assertSame( 'b', get_option( 'elementor_probe' )['label'] );
+
+		$obj           = new stdClass();
+		$obj->password = 'Hunter2!!xx';
+		$merged        = Mcpwp_Option_Access::merge_preserving_secrets( 'elementor_probe', array( 'smtp' => $obj ), array( 'smtp' => array( 'host' => 'x' ) ), false );
+		$this->assertSame( 'Hunter2!!xx', $merged['value']['smtp']['password'] );
+		$this->assertSame( array( 'smtp.password' ), $merged['preserved'] );
+	}
+
+	public function test_admin_email_is_refused_on_the_settings_surface_too(): void {
+		// P1-2: /settings had its own map and it still carried admin_email.
+		update_option( 'admin_email', 'owner@example.com' );
+		$request = new WP_REST_Request( 'PUT', '/mcpwp/v1/settings', array( 'title' => 'New', 'admin_email' => 'attacker@example.net' ) );
+		$result  = ( new Mcpwp_REST_Site_Settings() )->update_settings( $request );
+
+		$this->assertTrue( is_wp_error( $result ) );
+		$this->assertSame( 'forbidden_option', $result->get_error_code() );
+		$this->assertSame( 'write_protected:admin_email', $result->get_error_data()['rule'] );
+		$this->assertSame( 'owner@example.com', get_option( 'admin_email' ) );
+		$this->assertNotSame( 'New', get_option( 'blogname' ), 'A refused request writes nothing, not even the fields beside the refused one.' );
+	}
+
+	public function test_refused_writes_are_logged_with_their_rule_and_without_the_secret(): void {
+		// P1-3: a refusal is the event an audit needs most, and it was silent.
+		$GLOBALS['mcpwp_test_wpdb_rows'] = array();
+		update_option( 'mcpwp_settings', array( 'enable_logging' => true ) );
+		update_option( 'woocommerce_bambora_settings', array( 'passcode' => 'old' ) );
+
+		$this->write( 'woocommerce_bambora_settings', array( 'passcode' => 'live-4f8a-NEW' ) );
+		$this->write( 'siteurl', 'https://evil.example' );
+		$this->write( 'elementor_probe', array( 'fresh' => '***' ) );
+
+		$log = wp_json_encode( $GLOBALS['mcpwp_test_wpdb_rows'] );
+		$this->assertStringContainsString( 'update_option_refused', $log );
+		$this->assertStringContainsString( 'secret_write_refused', $log );
+		$this->assertStringContainsString( 'write_protected', $log );
+		$this->assertStringContainsString( 'mask_in_write', $log );
+		$this->assertStringNotContainsString( 'live-4f8a-NEW', $log );
+		$this->assertSame( 3, substr_count( $log, 'update_option_refused' ) );
+	}
+
+	public function test_force_type_change_needs_allow_secrets_when_the_stored_tree_holds_a_credential(): void {
+		update_option( 'elementor_probe', array( 'api_key' => 'sk_live_abcdefghijklmnop' ) );
+
+		$refused = $this->write( 'elementor_probe', 'plain', array( 'force_type_change' => true ) );
+		$this->assertSame( 'secret_write_refused', $refused->get_error_code() );
+		$this->assertSame( array( 'api_key' ), $refused->get_error_data()['secret_paths'] );
+		$this->assertSame( 'sk_live_abcdefghijklmnop', get_option( 'elementor_probe' )['api_key'] );
+
+		// Both confirmations: allowed.
+		$written = $this->write( 'elementor_probe', 'plain', array( 'force_type_change' => true, 'allow_secrets' => true ) );
+		$this->assertInstanceOf( WP_REST_Response::class, $written, is_wp_error( $written ) ? $written->get_error_message() : '' );
+		$this->assertSame( 'plain', get_option( 'elementor_probe' ) );
+
+		// No credential stored: the type override alone is enough, as before.
+		update_option( 'elementor_probe', array( 'mode' => 'test' ) );
+		$written = $this->write( 'elementor_probe', 'plain', array( 'force_type_change' => true ) );
+		$this->assertInstanceOf( WP_REST_Response::class, $written );
+	}
+
+	public function test_a_numeric_secret_is_masked_gated_and_preserved(): void {
+		update_option( 'elementor_probe', array( 'pin' => 483921, 'passcode' => 90210, 'label' => 'x' ) );
+
+		$read = $this->read( 'elementor_probe' )->get_data()['value'];
+		$this->assertSame( '***', $read['pin'] );
+		$this->assertSame( '***', $read['passcode'] );
+
+		$refused = $this->write( 'elementor_probe', array( 'pin' => 111111 ) );
+		$this->assertSame( 'secret_write_refused', $refused->get_error_code() );
+
+		$written = $this->write( 'elementor_probe', array( 'label' => 'y' ) );
+		$this->assertInstanceOf( WP_REST_Response::class, $written, is_wp_error( $written ) ? $written->get_error_message() : '' );
+		$this->assertEquals( 483921, get_option( 'elementor_probe' )['pin'] );
+	}
+
+	public function test_the_log_redacts_every_leaf_of_an_array_value_under_a_secret_option_name(): void {
+		$GLOBALS['mcpwp_test_wpdb_rows'] = array();
+		update_option( 'mcpwp_settings', array( 'enable_logging' => true ) );
+
+		$this->write( 'woocommerce_api_key', array( 'live' => 'plainword', 'nested' => array( 'v' => 'another' ) ), array( 'allow_secrets' => true ) );
+
+		$log = wp_json_encode( $GLOBALS['mcpwp_test_wpdb_rows'] );
+		$this->assertStringNotContainsString( 'plainword', $log );
+		$this->assertStringNotContainsString( 'another', $log );
+	}
+
+	public function test_url_credential_forms_the_review_listed_are_masked(): void {
+		update_option(
+			'elementor_probe',
+			array(
+				'nouser'  => 'https://:S3cretP4ss@backup.example.com/sync',
+				'prefix'  => 'https://api.example.com/x?client_secret=AbCdEfGh123456',
+				'pass'    => 'https://api.example.com/x?user=a&password=AbCdEfGh123456',
+				'plain'   => 'https://example.com/?page=2&sort=asc',
+			)
+		);
+
+		$value = $this->read( 'elementor_probe' )->get_data()['value'];
+		$this->assertSame( '***', $value['nouser'] );
+		$this->assertSame( '***', $value['prefix'] );
+		$this->assertSame( '***', $value['pass'] );
+		$this->assertSame( 'https://example.com/?page=2&sort=asc', $value['plain'] );
+	}
+
+	public function test_a_descriptive_suffix_does_not_exempt_a_hard_secret_stem(): void {
+		// password_at is not a timestamp anyone should read, token_type is
+		// not a type. The suffix exemption stops at hard stems.
+		foreach ( array( 'pass_id', 'password_at', 'secret_name', 'token_type' ) as $field ) {
+			$this->assertTrue( Mcpwp_Option_Access::is_secret_field( $field ), $field );
+		}
+		foreach ( array( 'key_name', 'auth_at', 'api_key_label', 'sig_count' ) as $field ) {
+			$this->assertFalse( Mcpwp_Option_Access::is_secret_field( $field ), $field );
+		}
+	}
 }

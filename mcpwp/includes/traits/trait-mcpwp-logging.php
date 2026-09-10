@@ -60,8 +60,11 @@ trait Mcpwp_Logging {
 
 			$out = array();
 			foreach ( $data as $key => $value ) {
-				if ( $value_is_secret && 'value' === $key && ! is_array( $value ) ) {
-					$out[ $key ] = '[redacted]';
+				if ( $value_is_secret && 'value' === $key ) {
+					// A secret option's value is redacted whatever its shape —
+					// an array under a secret name is walked with every leaf
+					// marked, not passed through because it is not a string.
+					$out[ $key ] = is_array( $value ) ? $this->redact_log_data( $value, $redaction_keys, true ) : '[redacted]';
 					continue;
 				}
 				$key_norm = is_string( $key ) ? strtolower( (string) $key ) : '';
@@ -122,7 +125,10 @@ trait Mcpwp_Logging {
 		}
 
 		// Log response size if available
-		if ( null !== $response && ! empty( $settings['log_store_response_data'] ) ) {
+		// A refusal's payload is the reason it was refused — small, redacted,
+		// and the one thing an audit needs. It is kept whatever the response
+		// storage setting says; success payloads still obey the setting.
+		if ( null !== $response && ( ! empty( $settings['log_store_response_data'] ) || $status_code >= 400 ) ) {
 			$redacted_response = $this->redact_log_data( $response, $redaction_keys );
 			$response_json = wp_json_encode( $redacted_response );
 			$data['response_data'] = strlen( $response_json ) > 1000 ? null : $response_json;

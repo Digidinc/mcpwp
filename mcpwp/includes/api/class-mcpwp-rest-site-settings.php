@@ -173,21 +173,27 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 			'timezone'       => 'timezone_string',
 			'date_format'    => 'date_format',
 			'time_format'    => 'time_format',
-			'admin_email'    => 'admin_email',
 			'posts_per_page' => 'posts_per_page',
 		);
+
+		// admin_email is write-protected on every surface, this one included:
+		// a direct write skips the confirmation email and repoints password
+		// resets. The refusal is by name so it is never mistaken for a
+		// successful no-op.
+		if ( isset( $params['admin_email'] ) ) {
+			return new WP_Error(
+				'forbidden_option',
+				__( 'admin_email is write-protected: a direct write skips the confirmation email and repoints password resets. Change it in WP Admin (rule: write_protected:admin_email).', 'mcpwp' ),
+				array( 'status' => 403, 'rule' => 'write_protected:admin_email' )
+			);
+		}
 
 		foreach ( $allowed as $key => $option ) {
 			if ( isset( $params[ $key ] ) ) {
 				$value = $params[ $key ];
 
 				// Sanitize based on type
-				if ( 'admin_email' === $key ) {
-					$value = sanitize_email( $value );
-					if ( ! is_email( $value ) ) {
-						continue;
-					}
-				} elseif ( 'posts_per_page' === $key ) {
+				if ( 'posts_per_page' === $key ) {
 					$value = absint( $value );
 				} else {
 					$value = sanitize_text_field( $value );
@@ -540,6 +546,10 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 		$decision = Mcpwp_Option_Access::decide( $key, 'write' );
 
 		if ( ! $decision['allowed'] ) {
+			// Refusals are audited too — the log is what gets consulted in
+			// exactly the incident where a caller was probing. The redactor
+			// makes the payload safe to keep.
+			$this->log_activity( 'update_option_refused', $request, array( 'option' => $key, 'rule' => $decision['rule'] ), 403 );
 			return $this->forbidden_option( $key, $decision );
 		}
 
@@ -558,6 +568,7 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 		// just broke checkout. It has to be asked for by name.
 		$secret_paths = Mcpwp_Option_Access::secret_paths_in_write( $key, $submitted );
 		if ( ! empty( $secret_paths ) && ! $allow_secrets ) {
+			$this->log_activity( 'update_option_refused', $request, array( 'option' => $key, 'rule' => 'secret_write_refused', 'secret_paths' => $secret_paths ), 409 );
 			return new WP_Error(
 				'secret_write_refused',
 				sprintf(
@@ -571,6 +582,32 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 					'hint'         => 'Replacing a gateway passcode, licence key or SMTP password by accident is payment redirection or lockout, and a masked response cannot tell you it happened. Re-send with allow_secrets=true if that is the intent.',
 				)
 			);
+		}
+
+		// A redacted read is not data. Whatever the encoding, '***' at any
+		// depth never reaches storage.
+		if ( Mcpwp_Option_Access::contains_mask( $value ) ) {
+			$this->log_activity( 'update_option_refused', $request, array( 'option' => $key, 'rule' => 'mask_in_write' ), 409 );
+			return new WP_Error(
+				'mask_in_write',
+				__( 'The value contains "***", which is a redaction marker from a read, not data. Nothing was written. Send the real value, or omit the field to keep what is stored.', 'mcpwp' ),
+				array( 'status' => 409 )
+			);
+		}
+
+		// Overriding the type guard must not become a way past the secret
+		// guard: replacing an array that holds credentials with a string
+		// needs the same confirmation as touching the credentials.
+		if ( rest_sanitize_boolean( $request->get_param( 'force_type_change' ) ) && ! $allow_secrets ) {
+			$stored_secrets = Mcpwp_Option_Access::secret_paths_in_write( $key, $old_value );
+			if ( ! empty( $stored_secrets ) ) {
+				$this->log_activity( 'update_option_refused', $request, array( 'option' => $key, 'rule' => 'force_type_change_over_secrets' ), 409 );
+				return new WP_Error(
+					'secret_write_refused',
+					__( 'force_type_change would discard credential-shaped fields the stored value holds. Pass allow_secrets=true as well if that is intended.', 'mcpwp' ),
+					array( 'status' => 409, 'secret_paths' => $stored_secrets )
+				);
+			}
 		}
 
 		$this->log_activity( 'update_option', $request );

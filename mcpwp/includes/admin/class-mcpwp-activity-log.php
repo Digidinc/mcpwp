@@ -431,8 +431,16 @@ class Mcpwp_Activity_Log_Page {
 			return $data;
 		}
 
+		// {key: '<secret option>', value: …} rows — including ones written
+		// before this rule existed — render masked.
+		$value_is_secret = isset( $data['key'] ) && is_string( $data['key'] ) && class_exists( 'Mcpwp_Option_Access' ) && Mcpwp_Option_Access::is_secret_field( $data['key'] );
+
 		$out = array();
 		foreach ( $data as $key => $value ) {
+			if ( $value_is_secret && 'value' === $key ) {
+				$out[ $key ] = is_array( $value ) || is_object( $value ) ? $this->redact_tree( $value, $keys, true ) : '[redacted]';
+				continue;
+			}
 			$key_norm = is_string( $key ) ? strtolower( $key ) : '';
 			if ( '' !== $key_norm && in_array( $key_norm, $keys, true ) ) {
 				$out[ $key ] = '[redacted]';
