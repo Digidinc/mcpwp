@@ -67,6 +67,14 @@ final class ToolOperationWeightTest extends TestCase {
 		$this->assertSame( 10, $this->weight( 'wp_bulk_find_replace', array( 'search' => 'a', 'replace' => 'b', 'ids' => range( 1, 3 ) ) ) );
 	}
 
+	public function test_a_comma_separated_id_list_is_counted_like_an_array(): void {
+		// Core sanitises the route's `ids` (type array) from "1,2,3" into a list,
+		// so the handler processes every id; the price must count them too.
+		$this->assertSame( 50, $this->weight( 'wp_bulk_find_replace', array( 'search' => 'a', 'replace' => 'b', 'ids' => implode( ',', range( 1, 50 ) ) ) ) );
+		$this->assertSame( 12, $this->weight( 'wp_bulk_find_replace', array( 'search' => 'a', 'replace' => 'b', 'ids' => ' 1, 2 ,3,4,5,6,7,8,9,10,11,12,, ' ) ) );
+		$this->assertSame( 10, $this->weight( 'wp_bulk_find_replace', array( 'search' => 'a', 'replace' => 'b', 'ids' => '1,2' ) ) );
+	}
+
 	public function test_the_weight_is_filterable_and_a_value_that_is_not_a_weight_keeps_the_default(): void {
 		add_filter(
 			'mcpwp_tool_operation_weight',

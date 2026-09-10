@@ -127,7 +127,9 @@ final class Mcpwp_Operation_Weights {
 	 * @var array<string,string[]>
 	 */
 	const SPEND_URL_ITEM_ROUTES = array(
-		'/media/bulk' => array( 'urls', 'items' ),
+		'/media/bulk'             => array( 'urls', 'items' ),
+		// One Indexing API request per URL (up to 200).
+		'/google-indexing/submit' => array( 'urls' ),
 	);
 
 	/**
@@ -240,8 +242,10 @@ final class Mcpwp_Operation_Weights {
 
 		$weight = max( $weight, $own );
 
-		if ( null !== $spec && isset( $arguments[ $spec['ids'] ] ) && is_array( $arguments[ $spec['ids'] ] ) ) {
-			$weight = max( $weight, count( $arguments[ $spec['ids'] ] ) );
+		// An id list may arrive as an array or as "1,2,3": core sanitises the
+		// route's `ids` into a list either way, and the handler runs every id.
+		if ( null !== $spec ) {
+			$weight = max( $weight, self::id_list_count( $arguments, $spec['ids'] ) );
 		}
 
 		return $weight;
@@ -253,7 +257,7 @@ final class Mcpwp_Operation_Weights {
 	 * - a container (/batch, /mcp): 0 — its operations are charged one by one;
 	 * - a credential-spending or egress route: 25 (SPEND_EGRESS_ROUTES and
 	 *   SPEND_EGRESS_PATTERNS);
-	 * - /media/bulk: 25 per URL item;
+	 * - /media/bulk and /google-indexing/submit: 25 per URL item;
 	 * - /elementor/bulk: one per id it reads;
 	 * - a route a TOOL_WEIGHTS tool dispatches: that tool's weight;
 	 * - anything else: the items its list arguments carry, at least 1.
@@ -307,17 +311,8 @@ final class Mcpwp_Operation_Weights {
 			return 0;
 		}
 
-		if ( in_array( $path, self::SPEND_EGRESS_ROUTES, true ) ) {
-			return self::SPEND_EGRESS_WEIGHT;
-		}
-
-		$is_read = in_array( $method, array( 'GET', 'HEAD', 'OPTIONS' ), true );
-		foreach ( self::SPEND_EGRESS_PATTERNS as $pattern => $methods ) {
-			if ( 1 === preg_match( $pattern, $path ) && ( 'any' === $methods || ! $is_read ) ) {
-				return self::SPEND_EGRESS_WEIGHT;
-			}
-		}
-
+		// Routes that make one outbound request per item come first: a flat
+		// price would make a 200-URL call as cheap as one.
 		if ( array_key_exists( $path, self::SPEND_URL_ITEM_ROUTES ) ) {
 			$items = 0;
 			foreach ( self::SPEND_URL_ITEM_ROUTES[ $path ] as $key ) {
@@ -326,6 +321,19 @@ final class Mcpwp_Operation_Weights {
 				}
 			}
 			return max( 1, $items ) * self::SPEND_EGRESS_WEIGHT;
+		}
+
+		// A paid route given a list costs at least the list, like any other
+		// route would.
+		if ( in_array( $path, self::SPEND_EGRESS_ROUTES, true ) ) {
+			return max( self::SPEND_EGRESS_WEIGHT, self::list_count( $params ) );
+		}
+
+		$is_read = in_array( $method, array( 'GET', 'HEAD', 'OPTIONS' ), true );
+		foreach ( self::SPEND_EGRESS_PATTERNS as $pattern => $methods ) {
+			if ( 1 === preg_match( $pattern, $path ) && ( 'any' === $methods || ! $is_read ) ) {
+				return max( self::SPEND_EGRESS_WEIGHT, self::list_count( $params ) );
+			}
 		}
 
 		if ( array_key_exists( $path, self::SPEND_ID_LIST_ROUTES ) ) {

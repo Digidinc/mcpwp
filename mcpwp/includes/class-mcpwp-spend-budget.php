@@ -23,10 +23,17 @@
  *   the handler runs. One chokepoint for every dispatch in the tree — batch
  *   operations, tool calls, resources/read — priced from the route WordPress is
  *   about to run, however the caller spelled it.
- * - An operation that does not fit is refused with `spend_budget_exhausted`
- *   and does not run. From the first refusal on, every later operation in the
- *   request is refused too, so the refused set is always the tail to resend.
- *   Nothing that already ran is undone.
+ * - A call whose price is known before it runs (a REST /batch, a JSON-RPC
+ *   batch, one tool call) and does not fit what is left is refused whole with
+ *   `spend_budget_exceeded` before anything runs (refuse_whole()). The price
+ *   is taken as sent, a lower bound of the charge, so a refusal here is never
+ *   wrong about the call not fitting.
+ * - An operation whose real price only shows at dispatch (the pattern core
+ *   matched) and does not fit is refused with `spend_budget_exhausted` and does
+ *   not run. From the first refusal on, every later operation in the request is
+ *   refused too; inside one batch the controller refuses them without
+ *   dispatching, so its refused set is exactly the tail to resend. Nothing that
+ *   already ran is undone.
  *
  * Nothing a caller sends can raise the budget: it is read from
  * `mcpwp_request_spend_budget` when the budget opens, and lives in this PHP
@@ -53,6 +60,11 @@ final class Mcpwp_Spend_Budget {
 	 * Error code of a refused operation.
 	 */
 	const ERROR_CODE = 'spend_budget_exhausted';
+
+	/**
+	 * Error code of a call refused whole before anything ran.
+	 */
+	const EXCEEDED_CODE = 'spend_budget_exceeded';
 
 	/**
 	 * HTTP status of a refused operation: the request is larger than the site
@@ -170,6 +182,58 @@ final class Mcpwp_Spend_Budget {
 		self::$frame['spent'] += $weight;
 
 		return true;
+	}
+
+	/**
+	 * Refuse a whole call up front when its price does not fit what is left.
+	 *
+	 * The refusal latches like a dispatch-time one: nothing later in the same
+	 * request runs either, so what was refused stays one contiguous tail.
+	 *
+	 * @param int $price Units the whole call costs as sent (a lower bound).
+	 * @return true|WP_Error
+	 */
+	public static function refuse_whole( $price ) {
+		if ( null === self::$frame ) {
+			return true;
+		}
+
+		$price = (int) $price;
+
+		if ( $price <= 0 ) {
+			return true;
+		}
+
+		$limit     = self::$frame['limit'];
+		$remaining = max( 0, $limit - self::$frame['spent'] );
+
+		if ( $price <= $remaining ) {
+			return true;
+		}
+
+		self::$frame['exhausted'] = true;
+
+		return new WP_Error(
+			self::EXCEEDED_CODE,
+			sprintf( 'Spend budget exceeded: this call costs %1$d units and %2$d of this request\'s %3$d remain. Nothing ran.', $price, $remaining, $limit ),
+			array(
+				'status'    => self::HTTP_STATUS,
+				'weight'    => $price,
+				'remaining' => (int) $remaining,
+				'limit'     => (int) $limit,
+				'hint'      => 'Nothing in this call ran, so nothing needs undoing. The budget belongs to one HTTP request and waiting does not help: split the call into requests that each cost no more than the limit. An operation that spends a site credential or fetches a caller-chosen URL costs 25 units (per URL where the route fetches one per item); a bulk route costs the items it processes; everything else costs 1.',
+			)
+		);
+	}
+
+	/**
+	 * Whether an error code is one of the budget's refusals.
+	 *
+	 * @param mixed $code Error code.
+	 * @return bool
+	 */
+	public static function is_refusal_code( $code ) {
+		return self::ERROR_CODE === $code || self::EXCEEDED_CODE === $code;
 	}
 
 	/**

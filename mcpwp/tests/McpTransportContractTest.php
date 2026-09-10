@@ -198,6 +198,16 @@ final class McpTransportContractTest extends TestCase {
 		$this->assertSame( 5, $batch->get_data()[0]['id'] );
 	}
 
+	public function test_an_answered_notification_method_has_an_object_result_before_any_decoration(): void {
+		// The wire shape must not depend on a later decorator adding _meta: an
+		// empty PHP array serialises as [], and MCP clients expect an object.
+		$process = new ReflectionMethod( Mcpwp_REST_MCP::class, 'process_single_request' );
+		$process->setAccessible( true );
+		$raw = $process->invoke( new Mcpwp_REST_MCP(), $this->rpc( 'notifications/initialized', 5 ), new WP_REST_Request( 'POST', '/mcpwp/v1/mcp' ) );
+
+		$this->assertSame( '{}', wp_json_encode( $raw['result'] ) );
+	}
+
 	public function test_the_get_health_check_is_json_too(): void {
 		$controller = new Mcpwp_REST_MCP();
 		$response   = $controller->handle_mcp_get( new WP_REST_Request( 'GET', '/mcpwp/v1/mcp', array(), array( 'Accept' => 'text/event-stream' ) ) );

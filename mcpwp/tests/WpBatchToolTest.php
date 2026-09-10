@@ -240,4 +240,16 @@ final class WpBatchToolTest extends TestCase {
 		$this->assertTrue( $again['result']['_meta']['replayed'] );
 		$this->assertSame( $ran, count( $this->operation_dispatches() ), 'A replayed batch runs nothing.' );
 	}
+
+	public function test_a_wp_batch_over_the_operation_cap_is_refused_before_rate_slots_are_charged(): void {
+		// The controller refuses 101 operations whole; the tool call must not
+		// charge 100 extra rate-limit slots first for work that cannot run.
+		$data = $this->call( 'wp_batch', array( 'operations' => $this->reads( 101 ) ) );
+
+		$this->assertArrayHasKey( 'error', $data );
+		$this->assertSame( -32602, $data['error']['code'] );
+		$this->assertSame( 'batch_too_large', $data['error']['data']['code'] );
+		$this->assertSame( 999, Mcpwp_Rate_Limiter::get_instance()->get_budget()['remaining'], 'Only the HTTP request itself was charged.' );
+		$this->assertSame( array(), $GLOBALS['mcpwp_test_dispatched_routes'] );
+	}
 }
