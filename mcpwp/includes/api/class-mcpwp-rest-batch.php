@@ -184,25 +184,62 @@ class Mcpwp_REST_Batch extends Mcpwp_REST_API {
 
 		$results = array();
 
-		// Execute each operation sequentially
-		foreach ( $operations as $index => $operation ) {
-			$result    = $this->execute_operation( $operation, $index, $api_key );
-			$results[] = $result;
+		// One spend budget for the whole fan-out tree of this HTTP request
+		// (#752 F9). A top-level batch opens it; a batch reached from inside
+		// /mcp (wp_batch) joins the one that request opened, so nesting can
+		// never hand out a fresh budget. Operations are charged as they
+		// dispatch, and only the opener closes the budget — in finally, so a
+		// throwing operation cannot carry it into the next request.
+		$spend_token = Mcpwp_Spend_Budget::open( $request );
+
+		try {
+			// A batch that cannot fit is refused whole, before anything runs
+			// (#752 F9 review r1): a partial run of an over-budget batch is not
+			// retryable as one call. The price is taken as sent, which is a
+			// lower bound of what dispatch will charge.
+			$whole = Mcpwp_Spend_Budget::refuse_whole( self::price( $operations ) );
+			if ( is_wp_error( $whole ) ) {
+				return $whole;
+			}
+
+			// Execute each operation sequentially
+			foreach ( $operations as $index => $operation ) {
+				$result    = $this->execute_operation( $operation, $index, $api_key );
+				$results[] = $result;
+			}
+
+			$spend = Mcpwp_Spend_Budget::report();
+		} finally {
+			Mcpwp_Spend_Budget::close( $spend_token );
 		}
 
-		$failed = 0;
+		$failed  = 0;
+		$refused = array();
 		foreach ( $results as $result ) {
 			if ( ! isset( $result['status'] ) || (int) $result['status'] >= 400 ) {
 				$failed++;
 			}
+			// A route may answer with object data; only an error body is an array
+			// with a code. Reading an object as an array would fatal here, after
+			// every operation has already run.
+			// Only the budget's own refusal — 413 with its code — did not run; a
+			// response that merely carries that code in its body ran (review r2 G2).
+			if ( isset( $result['status'], $result['data'] ) && Mcpwp_Spend_Budget::HTTP_STATUS === (int) $result['status'] && is_array( $result['data'] ) && isset( $result['data']['code'] ) && Mcpwp_Spend_Budget::ERROR_CODE === $result['data']['code'] ) {
+				$refused[] = $result['index'];
+			}
 		}
+
+		// A refused operation is a failed one: it did not run, it is counted in
+		// `failed`, and a batch carrying one is never pinned by request_id.
+		$spend['refused'] = $refused;
 
 		return $this->success_response(
 			array(
-				'results'   => $results,
-				'total'     => count( $results ),
-				'succeeded' => count( $results ) - $failed,
-				'failed'    => $failed,
+				'results'      => $results,
+				'total'        => count( $results ),
+				'succeeded'    => count( $results ) - $failed,
+				'failed'       => $failed,
+				'spend_budget' => $spend,
 			)
 		);
 	}
@@ -226,36 +263,33 @@ class Mcpwp_REST_Batch extends Mcpwp_REST_API {
 	}
 
 	/**
-	 * Execute a single operation.
+	 * Validate and normalise one operation as the controller will dispatch it.
 	 *
-	 * @param array  $operation Operation details.
-	 * @param int    $index     Operation index.
-	 * @param string $api_key   API key for authentication.
-	 * @return array Operation result.
+	 * Shared by execute_operation() and price(), so the price of a batch is
+	 * computed from exactly the routes that would dispatch.
+	 *
+	 * @param mixed $operation Operation details.
+	 * @return array{method:string,route:string,body:mixed}|array{error:array{code:string,message:string}}
 	 */
-	private function execute_operation( $operation, $index, $api_key ) {
+	private static function resolve_operation( $operation ) {
 		// Validate operation structure
 		if ( ! is_array( $operation ) ) {
 			return array(
-				'index'  => $index,
-				'status' => 400,
-				'data'   => array(
+				'error' => array(
 					'code'    => 'invalid_operation',
 					'message' => __( 'Operation must be an object.', 'mcpwp' ),
 				),
 			);
 		}
 
-		$method = isset( $operation['method'] ) ? strtoupper( $operation['method'] ) : '';
+		$method = isset( $operation['method'] ) && is_string( $operation['method'] ) ? strtoupper( $operation['method'] ) : '';
 		$path   = isset( $operation['path'] ) ? $operation['path'] : '';
 		$body   = isset( $operation['body'] ) ? $operation['body'] : array();
 
 		// Validate method
 		if ( ! in_array( $method, array( 'GET', 'POST', 'PUT', 'DELETE' ), true ) ) {
 			return array(
-				'index'  => $index,
-				'status' => 400,
-				'data'   => array(
+				'error' => array(
 					'code'    => 'invalid_method',
 					'message' => __( 'Method must be GET, POST, PUT, or DELETE.', 'mcpwp' ),
 				),
@@ -265,9 +299,7 @@ class Mcpwp_REST_Batch extends Mcpwp_REST_API {
 		// Validate path
 		if ( empty( $path ) || ! is_string( $path ) ) {
 			return array(
-				'index'  => $index,
-				'status' => 400,
-				'data'   => array(
+				'error' => array(
 					'code'    => 'invalid_path',
 					'message' => __( 'Path must be a non-empty string.', 'mcpwp' ),
 				),
@@ -314,9 +346,7 @@ class Mcpwp_REST_Batch extends Mcpwp_REST_API {
 		// bug.
 		if ( null === $normalized_route ) {
 			return array(
-				'index'  => $index,
-				'status' => 400,
-				'data'   => array(
+				'error' => array(
 					'code'    => 'forbidden_path',
 					'message' => __( 'Operation path could not be safely normalised.', 'mcpwp' ),
 				),
@@ -328,14 +358,90 @@ class Mcpwp_REST_Batch extends Mcpwp_REST_API {
 		// per-operation validation failure behaves here.
 		if ( preg_match( self::DENIED_OPERATION_ROUTE_PATTERN, $normalized_route ) ) {
 			return array(
-				'index'  => $index,
-				'status' => 400,
-				'data'   => array(
+				'error' => array(
 					'code'    => 'forbidden_path',
 					'message' => __( 'Operations may not target the batch or MCP dispatch endpoints.', 'mcpwp' ),
 				),
 			);
 		}
+
+		return array(
+			'method' => $method,
+			'route'  => $route,
+			'body'   => $body,
+		);
+	}
+
+	/**
+	 * Spend units a list of operations costs as sent (#752 F9).
+	 *
+	 * An operation the controller would refuse costs nothing, and so does a
+	 * batch the controller refuses whole — empty, or over MAX_OPERATIONS: it
+	 * runs nothing, and pricing it would refuse the calls beside it that fit
+	 * (review r2 G1). Checking the count first also keeps an oversized payload
+	 * from being priced operation by operation. The result is a lower bound: at
+	 * dispatch an operation is also priced from the route pattern core matched
+	 * and from its sanitised parameters.
+	 *
+	 * @param mixed $operations Operations.
+	 * @return int
+	 */
+	public static function price( $operations ) {
+		if ( ! is_array( $operations ) || empty( $operations ) || count( $operations ) > self::MAX_OPERATIONS || ! class_exists( 'Mcpwp_Operation_Weights' ) ) {
+			return 0;
+		}
+
+		$price = 0;
+		foreach ( $operations as $operation ) {
+			$resolved = self::resolve_operation( $operation );
+			if ( isset( $resolved['error'] ) ) {
+				continue;
+			}
+			$price += Mcpwp_Operation_Weights::spend_weight( $resolved['method'], $resolved['route'], is_array( $resolved['body'] ) ? $resolved['body'] : array() );
+		}
+
+		return $price;
+	}
+
+	/**
+	 * Execute a single operation.
+	 *
+	 * @param array  $operation Operation details.
+	 * @param int    $index     Operation index.
+	 * @param string $api_key   API key for authentication.
+	 * @return array Operation result.
+	 */
+	private function execute_operation( $operation, $index, $api_key ) {
+		// Once the spend budget refused an operation of this request, every
+		// later one is refused without dispatching — including one core or the
+		// checks below would have rejected for another reason — so the batch's
+		// refused set is exactly the tail to resend (#752 F9 review r1).
+		$latched = Mcpwp_Spend_Budget::refuse_if_exhausted();
+		if ( is_wp_error( $latched ) ) {
+			return array(
+				'index'  => $index,
+				'status' => Mcpwp_Spend_Budget::HTTP_STATUS,
+				'data'   => array(
+					'code'    => $latched->get_error_code(),
+					'message' => $latched->get_error_message(),
+					'data'    => $latched->get_error_data(),
+				),
+			);
+		}
+
+		$resolved = self::resolve_operation( $operation );
+
+		if ( isset( $resolved['error'] ) ) {
+			return array(
+				'index'  => $index,
+				'status' => 400,
+				'data'   => $resolved['error'],
+			);
+		}
+
+		$method = $resolved['method'];
+		$route  = $resolved['route'];
+		$body   = $resolved['body'];
 
 		// Create internal REST request
 		$internal_request = new WP_REST_Request( $method, $route );

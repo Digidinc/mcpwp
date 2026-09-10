@@ -147,13 +147,22 @@ trait Mcpwp_Elementor_Validator_Trait {
 	 * 3. Rename known wrong control keys
 	 * 4. Validate element structure and nesting
 	 * 5. Flag suspicious/unknown control keys
+	 * and, after the walk, flags element ids Elementor Pro's AJAX endpoints
+	 * reject — rewriting them only when `repair_ids` is set (#842).
 	 *
 	 * Modifies $elementor_json in-place (reference).
 	 *
 	 * @param string &$elementor_json JSON string (modified in-place).
-	 * @return array Associative array with 'warnings', 'fixes', and 'errors' arrays.
+	 * @param array  $options {
+	 *     @type bool   $repair_ids Rewrite ids that are not exactly 7 alphanumeric
+	 *                              characters and repoint references to them.
+	 *     @type string $id_seed    Makes generated and repaired ids deterministic
+	 *                              for this document (the writer passes the post id).
+	 * }
+	 * @return array Associative array with 'warnings', 'fixes', and 'errors'
+	 *               arrays, plus 'id_repair' when repair_ids was requested.
 	 */
-	private function validate_and_fix_elements( &$elementor_json ) {
+	private function validate_and_fix_elements( &$elementor_json, array $options = array() ) {
 		$elements = json_decode( $elementor_json, true );
 		if ( ! is_array( $elements ) ) {
 			return array(
@@ -168,6 +177,24 @@ trait Mcpwp_Elementor_Validator_Trait {
 		$errors            = array();
 		$changed           = false;
 		$seen_ids          = array();
+
+		// Ids a generated id must not collide with: every id already in the
+		// tree — not only those the walk has passed, which let a new id equal
+		// a later, conforming element's id and get that element renamed
+		// (review r1 P3-8c) — plus each id generated so far. With a seed (the
+		// writer passes the post id) generation is deterministic, so a dry run
+		// and the write that follows it produce the same tree (#842).
+		$all_ids = Mcpwp_Elementor_Element_Ids::ids( $elements );
+		$id_seed = isset( $options['id_seed'] ) && '' !== (string) $options['id_seed'] ? (string) $options['id_seed'] : null;
+		$new_id  = function ( $salt ) use ( &$all_ids, $id_seed ) {
+			$id = null === $id_seed
+				? Mcpwp_Elementor_Element_Ids::generate( $all_ids )
+				: Mcpwp_Elementor_Element_Ids::derive( $id_seed, $salt, $all_ids );
+
+			$all_ids[ $id ] = true;
+
+			return $id;
+		};
 		// Elementor's own registry is the truth about what will render here.
 		// The hardcoded lists stand in for it when Elementor cannot be asked;
 		// they do not overrule it when it can. Merging the two, as this used
@@ -202,14 +229,14 @@ trait Mcpwp_Elementor_Validator_Trait {
 		 */
 		$walk = function ( &$el, $path = '', $parent_type = '' ) use (
 			&$walk, &$warnings, &$fixes, &$errors, &$changed, &$seen_ids,
-			$registered, $registered_lookup, $known_pro_lookup, $fuzzy
+			$registered, $registered_lookup, $known_pro_lookup, $fuzzy, $new_id
 		) {
 			$el_type     = isset( $el['elType'] ) ? $el['elType'] : '';
 			$widget_type = isset( $el['widgetType'] ) ? $el['widgetType'] : '';
 
 			// --- 1. Auto-generate missing IDs ---
 			if ( empty( $el['id'] ) ) {
-				$el['id'] = $this->generate_element_id();
+				$el['id'] = $new_id( 'missing|' . $path );
 				$fixes[]  = "{$path}: auto-generated missing ID";
 				$changed  = true;
 			}
@@ -217,11 +244,8 @@ trait Mcpwp_Elementor_Validator_Trait {
 			// --- 1b. Deduplicate IDs ---
 			if ( isset( $seen_ids[ $el['id'] ] ) ) {
 				$old_id   = $el['id'];
-				$el['id'] = $this->generate_element_id();
-				// Ensure the new ID is also unique.
-				while ( isset( $seen_ids[ $el['id'] ] ) ) {
-					$el['id'] = $this->generate_element_id();
-				}
+				// Unique by construction: $new_id() avoids every id in the tree.
+				$el['id'] = $new_id( 'duplicate|' . $path . '|' . $old_id );
 				$fixes[]  = "{$path}: reassigned duplicate ID '{$old_id}' → '{$el['id']}'";
 				$changed  = true;
 			}
@@ -417,16 +441,55 @@ trait Mcpwp_Elementor_Validator_Trait {
 		}
 		unset( $el );
 
+		// --- 8. Element ids Elementor Pro's AJAX endpoints will accept (#842) ---
+		//
+		// After the walk, so ids it generated or de-duplicated are already in
+		// place. Rewriting is opt-in: ids are CSS selectors and other widgets
+		// point at them, so the default is to say which ones are wrong and
+		// leave them. The rule and the reasoning live in
+		// Mcpwp_Elementor_Element_Ids.
+		$id_repair = null;
+
+		if ( ! empty( $options['repair_ids'] ) ) {
+			$repaired  = Mcpwp_Elementor_Element_Ids::repair( $elements, null === $id_seed ? '' : $id_seed );
+			$id_repair = $repaired['report'];
+
+			if ( ! empty( $id_repair['rewritten'] ) ) {
+				$elements = $repaired['elements'];
+				$changed  = true;
+			}
+
+			foreach ( $id_repair['rewritten'] as $row ) {
+				$fixes[] = "{$row['path']}: rewrote id '{$row['from']}' -> '{$row['to']}' (Elementor Pro's AJAX endpoints accept only " . Mcpwp_Elementor_Element_Ids::LENGTH . '-character alphanumeric ids)';
+			}
+			foreach ( $id_repair['references_repointed'] as $row ) {
+				$fixes[] = "{$row['path']}: repointed {$row['key']} '{$row['from']}' -> '{$row['to']}'";
+			}
+		}
+
+		$warnings = array_merge(
+			$warnings,
+			Mcpwp_Elementor_Element_Ids::warnings( Mcpwp_Elementor_Element_Ids::audit( $elements ) )
+		);
+
 		// Re-encode if any fixes were applied.
 		if ( $changed ) {
 			$elementor_json = wp_json_encode( $elements );
 		}
 
-		return array(
+		$result = array(
 			'warnings' => $warnings,
 			'fixes'    => $fixes,
 			'errors'   => $errors,
 		);
+
+		// Present only when asked for, and then always — "asked, nothing to
+		// rewrite" carries a report saying so, never an absent key.
+		if ( null !== $id_repair ) {
+			$result['id_repair'] = $id_repair;
+		}
+
+		return $result;
 	}
 
 	/**

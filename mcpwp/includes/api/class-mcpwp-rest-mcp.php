@@ -520,6 +520,27 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 * @return WP_REST_Response Response.
 	 */
 	public function handle_mcp( $request ) {
+		// One spend budget for the whole fan-out tree of this HTTP request
+		// (#752 F9): every tool call, nested batch operation and resource read
+		// below draws from it. Opened here, before anything dispatches, and
+		// closed in finally so it cannot outlive the request. When this runs
+		// inside a tree that already holds a budget it joins that one.
+		$spend_token = Mcpwp_Spend_Budget::open( $request );
+
+		try {
+			return $this->handle_mcp_messages( $request );
+		} finally {
+			Mcpwp_Spend_Budget::close( $spend_token );
+		}
+	}
+
+	/**
+	 * Answer the JSON-RPC message or batch of one /mcp request.
+	 *
+	 * @param WP_REST_Request $request Request object.
+	 * @return WP_REST_Response Response.
+	 */
+	private function handle_mcp_messages( $request ) {
 		$body = $request->get_json_params();
 
 		if ( empty( $body ) ) {
@@ -541,12 +562,37 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				);
 			}
 
+			// A JSON-RPC batch that cannot fit this request's spend budget is
+			// refused whole before any of it runs (#752 F9 review r1): every
+			// request in it is answered with the refusal, notifications are not.
+			$price    = 0;
+			$tool_map = $this->get_all_tool_map();
+			foreach ( $body as $single_request ) {
+				$price += $this->message_spend_price( $single_request, $tool_map );
+			}
+			$whole = Mcpwp_Spend_Budget::refuse_whole( $price );
+			if ( is_wp_error( $whole ) ) {
+				$refusals = array();
+				foreach ( $body as $single_request ) {
+					$single_id     = is_array( $single_request ) && isset( $single_request['id'] ) ? $single_request['id'] : null;
+					$single_method = is_array( $single_request ) && isset( $single_request['method'] ) && is_string( $single_request['method'] ) ? $single_request['method'] : '';
+					if ( null === $single_id && 0 === strpos( $single_method, 'notifications/' ) ) {
+						continue;
+					}
+					$refusals[] = $this->spend_refusal( $single_id, $whole->get_error_message(), $whole->get_error_data(), $whole->get_error_code() );
+				}
+				if ( empty( $refusals ) ) {
+					return $this->prepare_mcp_response( new WP_REST_Response( null, 204 ) );
+				}
+				return $this->prepare_mcp_response( new WP_REST_Response( $refusals, 200 ) );
+			}
+
 			$responses = array();
 			foreach ( $body as $single_request ) {
 				$response = $this->process_single_request( $single_request, $request );
 				// Notifications return null, don't include in response
 				if ( $response !== null ) {
-					$responses[] = $this->attach_rate_limit_meta( $response );
+					$responses[] = $this->attach_result_meta( $response );
 				}
 			}
 
@@ -571,7 +617,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			return $this->prepare_mcp_response( $rest_response );
 		}
 
-		$rest_response = new WP_REST_Response( $this->attach_rate_limit_meta( $response ), 200 );
+		$rest_response = new WP_REST_Response( $this->attach_result_meta( $response ), 200 );
 		return $this->prepare_mcp_response( $rest_response );
 	}
 
@@ -679,23 +725,32 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	}
 
 	/**
-	 * Put the caller's remaining budget on a result so a client can pace
-	 * itself before the wall instead of learning about it from a 429 (#802).
+	 * Put the server's own facts on every result (#802).
+	 *
+	 * - `plugin_version`: the plugin that produced THIS answer, so a plugin
+	 *   replaced between two calls of a running job is visible without
+	 *   re-running initialize. Written over whatever the result already holds,
+	 *   so a replayed result names the plugin answering now, not the one that
+	 *   stored it.
+	 * - `rate_limit`: the caller's remaining budget, so a client can pace
+	 *   itself before the wall instead of learning about it from a 429. Left
+	 *   out when nothing was metered — absent, never reported as unlimited.
+	 * - `spend_budget`: this request's spend budget (#752 F9) after this message.
 	 *
 	 * Errors are left alone: JSON-RPC error objects have no _meta, and a 429
-	 * already carries its budget in its data.
+	 * already carries its budget in its data. The X-MCPWP-Version header
+	 * carries the version on every response, errors included.
 	 *
 	 * @param array $response JSON-RPC response.
 	 * @return array
 	 */
-	private function attach_rate_limit_meta( $response ) {
-		if ( ! is_array( $response ) || ! isset( $response['result'] ) || ! is_array( $response['result'] ) ) {
-			return $response;
+	private function attach_result_meta( $response ) {
+		// An empty result is an object on the wire (stdClass); decorate it as a map.
+		if ( is_array( $response ) && isset( $response['result'] ) && $response['result'] instanceof \stdClass ) {
+			$response['result'] = get_object_vars( $response['result'] );
 		}
 
-		$budget = $this->current_rate_limit_budget();
-
-		if ( null === $budget ) {
+		if ( ! is_array( $response ) || ! isset( $response['result'] ) || ! is_array( $response['result'] ) ) {
 			return $response;
 		}
 
@@ -703,7 +758,22 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			$response['result']['_meta'] = array();
 		}
 
-		$response['result']['_meta']['rate_limit'] = $budget;
+		$response['result']['_meta']['plugin_version'] = $this->server_version;
+
+		$budget = $this->current_rate_limit_budget();
+
+		if ( null !== $budget ) {
+			$response['result']['_meta']['rate_limit'] = $budget;
+		}
+
+		// What is left of this request's spend budget after this message
+		// (#752 F9). Server-owned: anything a caller or a stored replay put
+		// under this key is replaced.
+		$spend = Mcpwp_Spend_Budget::report();
+
+		if ( null !== $spend ) {
+			$response['result']['_meta']['spend_budget'] = $spend;
+		}
 
 		return $response;
 	}
@@ -885,6 +955,14 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 					}
 					$response['result']['_meta']['replayed']    = true;
 					$response['result']['_meta']['replayed_at'] = isset( $existing['at'] ) ? (int) $existing['at'] : 0;
+
+					// A pinned partial says so on every answer, not only the first
+					// one — the client that lost the first answer is the one
+					// replaying (review r2 G6).
+					$note = $this->budget_refusal_note( $response['result'] );
+					if ( null !== $note ) {
+						$response = $this->with_idempotency_note( $response, 'stored', $note );
+					}
 				}
 
 				// A replay is API activity even though it is not site activity —
@@ -1001,7 +1079,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				return $this->with_idempotency_note( $response, 'not_stored', 'storage write failed' );
 			}
 
-			return $this->with_idempotency_note( $response, 'stored', null );
+			return $this->with_idempotency_note( $response, 'stored', $this->budget_refusal_note( $response['result'] ) );
 		} finally {
 			// Only now. Releasing before the record exists is a duplicate window.
 			Mcpwp_Idempotency_Claim::release( $lease_name );
@@ -1147,12 +1225,78 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				}
 			}
 
-			if ( isset( $data['failed'] ) && (int) $data['failed'] > 0 ) {
+			// Operations the spend budget refused did not run: the ones that ran
+			// are done and the refused ones are named in the body, so a result
+			// whose only failures are those refusals is complete and is pinned.
+			// A replay returns it; the client resends the refused operations
+			// under a new request_id (#752 F9 review r1).
+			if ( isset( $data['failed'] ) && (int) $data['failed'] > 0 && (int) $data['failed'] !== self::budget_refusals_in( $data ) ) {
 				return true;
 			}
 		}
 
 		return false;
+	}
+
+	/**
+	 * How many operations of a batch body the spend budget refused.
+	 *
+	 * @param array $data Batch body.
+	 * @return int
+	 */
+	private static function budget_refusals_in( array $data ) {
+		if ( empty( $data['results'] ) || ! is_array( $data['results'] ) ) {
+			return 0;
+		}
+
+		$refused = 0;
+		foreach ( $data['results'] as $result ) {
+			// The budget's own refusal only: status 413 AND its code. A 200 that
+			// carries the code in its body ran, and counting it would pin a real
+			// failure beside it (review r2 G2).
+			if ( is_array( $result ) && isset( $result['status'], $result['data'] ) && Mcpwp_Spend_Budget::HTTP_STATUS === (int) $result['status'] && is_array( $result['data'] ) && isset( $result['data']['code'] ) && Mcpwp_Spend_Budget::ERROR_CODE === $result['data']['code'] ) {
+				++$refused;
+			}
+		}
+
+		return $refused;
+	}
+
+	/**
+	 * The idempotency reason for a pinned result that carries budget refusals,
+	 * or null when it carries none.
+	 *
+	 * @param array $result JSON-RPC result.
+	 * @return string|null
+	 */
+	private function budget_refusal_note( array $result ) {
+		$refused = $this->result_budget_refusals( $result );
+
+		return $refused > 0
+			? sprintf( 'stored with %d operation(s) refused by the spend budget: they did not run, and a replay of this request_id returns this result without running them. Resend the refused operations under a new request_id.', $refused )
+			: null;
+	}
+
+	/**
+	 * Operations refused by the spend budget in a tool result's batch body.
+	 *
+	 * @param array $result JSON-RPC result.
+	 * @return int
+	 */
+	private function result_budget_refusals( array $result ) {
+		if ( empty( $result['content'] ) || ! is_array( $result['content'] ) ) {
+			return 0;
+		}
+
+		$refused = 0;
+		foreach ( $result['content'] as $block ) {
+			$data = is_array( $block ) && isset( $block['text'] ) && is_string( $block['text'] ) ? json_decode( $block['text'], true ) : null;
+			if ( is_array( $data ) ) {
+				$refused += self::budget_refusals_in( $data );
+			}
+		}
+
+		return $refused;
 	}
 
 	/**
@@ -1191,43 +1335,18 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	}
 
 	/**
-	 * How many operations a tool call carries when its arguments hold a list
-	 * of items to act on. One when it does not.
+	 * How many rate-limit slots a tool call costs: the items its list
+	 * arguments carry, or the tool's fixed weight when it acts on many posts
+	 * without carrying a list (wp_bulk_find_replace, wp_delete_all_drafts).
+	 * One when neither applies. Mcpwp_Operation_Weights holds the lists and the
+	 * per-tool map, so there is one place to price a tool.
 	 *
-	 * @param array $arguments Tool arguments.
+	 * @param array  $arguments Tool arguments.
+	 * @param string $tool_name Tool name ('' prices the lists alone).
 	 * @return int
 	 */
-	private function nested_operation_count( $arguments ) {
-		if ( ! is_array( $arguments ) ) {
-			return 1;
-		}
-
-		// Aliases of one list (urls beside items, items beside updates) are
-		// charged once — the largest; genuinely different lists (pages
-		// beside posts) are charged each — the sum (#802 rounds 4–5).
-		$groups = array(
-			array( 'operations' ),
-			array( 'updates', 'items', 'urls', 'files', 'media' ),
-			array( 'pages' ),
-			array( 'posts' ),
-			array( 'page_ids', 'post_ids' ),
-			array( 'rows' ),
-			array( 'widgets' ),
-			array( 'sections' ),
-		);
-
-		$count = 0;
-		foreach ( $groups as $group ) {
-			$largest = 0;
-			foreach ( $group as $key ) {
-				if ( isset( $arguments[ $key ] ) && is_array( $arguments[ $key ] ) ) {
-					$largest = max( $largest, count( $arguments[ $key ] ) );
-				}
-			}
-			$count += $largest;
-		}
-
-		return max( 1, $count );
+	private function nested_operation_count( $arguments, $tool_name = '' ) {
+		return Mcpwp_Operation_Weights::tool_weight( $tool_name, $arguments );
 	}
 
 	/**
@@ -1253,8 +1372,15 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				return $this->handle_initialize( $id, $params );
 
 			case 'notifications/initialized':
-				// Acknowledged, no response needed
-				return null;
+				// Without an id this is a notification and was answered with
+				// nothing above. With an id it is a request, and JSON-RPC
+				// answers every request: dropping it leaves the client waiting
+				// on that id, and a lone one came back as a body-less 204 (#802).
+				return array(
+					'jsonrpc' => '2.0',
+					'id'      => $id,
+					'result'  => new \stdClass(),
+				);
 
 			case 'tools/list':
 				return $this->handle_tools_list( $id, $params );
@@ -1942,12 +2068,49 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 
 		$mapping     = $tool_map[ $tool_name ];
 
+		// Once an earlier operation of this request was refused by the spend
+		// budget, every later one is refused too (#752 F9) — here, before it is
+		// charged rate-limit slots for work that will not run.
+		$spend_state = Mcpwp_Spend_Budget::refuse_if_exhausted();
+		if ( is_wp_error( $spend_state ) ) {
+			$this->fire_tool_called( $tool_name, $start, Mcpwp_Spend_Budget::ERROR_CODE );
+			return $this->spend_refusal( $id, $spend_state->get_error_message(), $spend_state->get_error_data() );
+		}
+
+		$dispatch = $this->resolve_tool_dispatch( $mapping, $arguments );
+
+		// A batch over the controller's operation cap is refused by the
+		// controller anyway; refuse it here, before it is charged a rate-limit
+		// slot per operation for work that cannot run (#752 F9 review r1).
+		$batch_cap = class_exists( 'Mcpwp_REST_Batch' ) ? Mcpwp_REST_Batch::MAX_OPERATIONS : 100;
+		if ( $dispatch['is_batch'] && isset( $dispatch['arguments']['operations'] ) && is_array( $dispatch['arguments']['operations'] ) && count( $dispatch['arguments']['operations'] ) > $batch_cap ) {
+			$this->fire_tool_called( $tool_name, $start, 'execution_error' );
+			return $this->jsonrpc_error(
+				$id,
+				-32602,
+				sprintf( 'Batch contains too many operations. Maximum %d allowed.', $batch_cap ),
+				array(
+					'code' => 'batch_too_large',
+					'hint' => sprintf( 'Split the operations into calls of at most %d. Nothing ran and no rate-limit slots were charged for the operations.', $batch_cap ),
+				)
+			);
+		}
+
+		// A call whose price as sent does not fit what is left of this
+		// request's spend budget is refused whole, before it is charged
+		// rate-limit slots and before anything runs.
+		$spend_whole = Mcpwp_Spend_Budget::refuse_whole( $this->tool_call_spend_price( $mapping, $dispatch, $tool_name ) );
+		if ( is_wp_error( $spend_whole ) ) {
+			$this->fire_tool_called( $tool_name, $start, Mcpwp_Spend_Budget::EXCEEDED_CODE );
+			return $this->spend_refusal( $id, $spend_whole->get_error_message(), $spend_whole->get_error_data(), $spend_whole->get_error_code() );
+		}
+
 		// A tool that carries a list of operations is a batch by another name
 		// (#802). The HTTP request was charged one slot; the rest are charged
 		// here, before dispatch, and refused whole when they do not fit —
 		// otherwise wp_batch_update inside tools/call is a 100:1 bypass of
 		// the weighted limiter.
-		$nested = $this->nested_operation_count( $arguments );
+		$nested = $this->nested_operation_count( $arguments, $tool_name );
 		if ( $nested > 1 ) {
 			$charge = $this->charge_additional_slots( $nested - 1 );
 			if ( is_wp_error( $charge ) ) {
@@ -1969,55 +2132,24 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		}
 
 		$is_callback = isset( $mapping['callback'] ) && is_callable( $mapping['callback'] );
-		$route       = $is_callback ? '' : $mapping['route'];
 		$method      = $mapping['method'];
 
-		// Remap tool param names to REST endpoint param names where they differ.
-		$param_remap = isset( $mapping['param_remap'] ) ? $mapping['param_remap'] : array();
-		foreach ( $param_remap as $from => $to ) {
-			if ( array_key_exists( $from, $arguments ) ) {
-				$arguments[ $to ] = $arguments[ $from ];
-				unset( $arguments[ $from ] );
-			}
-		}
+		// Remap tool param names and substitute path parameters
+		// (resolve_tool_dispatch(), shared with the spend pricing so the price is
+		// computed from the route that will dispatch).
+		$arguments = $dispatch['arguments'];
+		$route     = $dispatch['route'];
 
-		// Substitute path parameters (e.g., {id})
-		//
-		// A placeholder fills exactly one path SEGMENT. is_safe_rest_path() ran
-		// at registration time against the template, while the braces were still
-		// in it — so it never saw this value, and substitution is the one place
-		// caller-supplied text enters an already-validated route.
-		//
-		// A value containing "/" would therefore add segments the allowlist never
-		// approved. That is not exploitable today: WordPress matches REST routes
-		// with an anchored pattern and does not resolve "..", so a smuggled path
-		// simply fails to route (verified against WP 7.0.2 — every traversal form
-		// tried matched NO ROUTE). But that is a negative property of someone
-		// else's matcher, and this file already carries two fixes whose whole
-		// point was removing exactly that kind of dependency (#752 F7/F11).
-		// Refuse the segment instead of relying on the router to save us.
-		if ( ! $is_callback ) {
-			foreach ( $arguments as $key => $value ) {
-				$placeholder = '{' . $key . '}';
-				if ( false !== strpos( $route, $placeholder ) ) {
-					$value_str = (string) $value;
-
-					if ( false !== strpos( $value_str, '/' ) ) {
-						$this->fire_tool_called( $tool_name, $start, 'invalid_path_parameter' );
-						return $this->jsonrpc_error(
-							$id,
-							-32602,
-							sprintf( 'Path parameter "%s" may not contain "/".', $key ),
-							array(
-								'hint' => 'A path placeholder fills one route segment. Pass the bare value (for example an ID or slug) without any path separators.',
-							)
-						);
-					}
-
-					$route = str_replace( $placeholder, $value_str, $route );
-					unset( $arguments[ $key ] );
-				}
-			}
+		if ( null !== $dispatch['bad_placeholder'] ) {
+			$this->fire_tool_called( $tool_name, $start, 'invalid_path_parameter' );
+			return $this->jsonrpc_error(
+				$id,
+				-32602,
+				sprintf( 'Path parameter "%s" may not contain "/".', $dispatch['bad_placeholder'] ),
+				array(
+					'hint' => 'A path placeholder fills one route segment. Pass the bare value (for example an ID or slug) without any path separators.',
+				)
+			);
 		}
 
 		// Capture before-state for audit log (no-op for non-write tools).
@@ -2046,6 +2178,17 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 					sprintf( 'Tool "%s" requires at least write scope.', $tool_name ),
 					array( 'hint' => 'Custom callback tools mutate state and require a write- or admin-scoped API key.' )
 				);
+			}
+
+			// A callback runs in-process and never passes rest_dispatch_request,
+			// where every routed operation is charged, so it is charged here.
+			$spend = Mcpwp_Spend_Budget::charge( Mcpwp_Operation_Weights::spend_weight( 'POST', 'callback:' . $tool_name, $arguments ) );
+			if ( is_wp_error( $spend ) ) {
+				if ( class_exists( 'Mcpwp_Action_Log' ) ) {
+					Mcpwp_Action_Log::complete( $audit_log_id, (int) round( ( microtime( true ) - $start ) * 1000 ), false, Mcpwp_Spend_Budget::ERROR_CODE );
+				}
+				$this->fire_tool_called( $tool_name, $start, Mcpwp_Spend_Budget::ERROR_CODE );
+				return $this->spend_refusal( $id, $spend->get_error_message(), $spend->get_error_data() );
 			}
 
 			$full_route = 'callback:' . $tool_name;
@@ -2128,6 +2271,15 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 
 			$error_code = isset( $data['code'] ) ? $data['code'] : 'tool_error';
 
+			// Refused by the spend budget before the handler ran (#752 F9).
+			if ( Mcpwp_Spend_Budget::is_refusal_code( $error_code ) ) {
+				if ( class_exists( 'Mcpwp_Action_Log' ) ) {
+					Mcpwp_Action_Log::complete( $audit_log_id, (int) round( ( microtime( true ) - $start ) * 1000 ), false, $error_code );
+				}
+				$this->fire_tool_called( $tool_name, $start, $error_code );
+				return $this->spend_refusal( $id, $error_message, isset( $data['data'] ) ? $data['data'] : array(), $error_code );
+			}
+
 			// Build error data, preserving hint/guide from REST response.
 			$error_data = array(
 				'code'   => $error_code,
@@ -2195,6 +2347,198 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				'isError' => false,
 			),
 		);
+	}
+
+	/**
+	 * A tool mapping applied to its arguments: param_remap, then path
+	 * placeholders substituted one segment each.
+	 *
+	 * @param array $mapping   Tool map entry.
+	 * @param array $arguments Tool arguments.
+	 * @return array{route:string,arguments:array,bad_placeholder:?string,full_route:string,is_batch:bool}
+	 */
+	private function resolve_tool_dispatch( $mapping, $arguments ) {
+		$arguments   = is_array( $arguments ) ? $arguments : array();
+		$is_callback = isset( $mapping['callback'] ) && is_callable( $mapping['callback'] );
+		$route       = $is_callback || ! isset( $mapping['route'] ) ? '' : (string) $mapping['route'];
+
+		// Remap tool param names to REST endpoint param names where they differ.
+		$param_remap = isset( $mapping['param_remap'] ) && is_array( $mapping['param_remap'] ) ? $mapping['param_remap'] : array();
+		foreach ( $param_remap as $from => $to ) {
+			if ( array_key_exists( $from, $arguments ) ) {
+				$arguments[ $to ] = $arguments[ $from ];
+				unset( $arguments[ $from ] );
+			}
+		}
+
+		// Substitute path parameters (e.g., {id})
+		//
+		// A placeholder fills exactly one path SEGMENT. is_safe_rest_path() ran
+		// at registration time against the template, while the braces were still
+		// in it — so it never saw this value, and substitution is the one place
+		// caller-supplied text enters an already-validated route.
+		//
+		// A value containing "/" would therefore add segments the allowlist never
+		// approved. That is not exploitable today: WordPress matches REST routes
+		// with an anchored pattern and does not resolve "..", so a smuggled path
+		// simply fails to route (verified against WP 7.0.2 — every traversal form
+		// tried matched NO ROUTE). But that is a negative property of someone
+		// else's matcher, and this file already carries two fixes whose whole
+		// point was removing exactly that kind of dependency (#752 F7/F11).
+		// Refuse the segment instead of relying on the router to save us.
+		$bad_placeholder = null;
+		if ( ! $is_callback ) {
+			foreach ( $arguments as $key => $value ) {
+				$placeholder = '{' . $key . '}';
+				if ( false !== strpos( $route, $placeholder ) ) {
+					$value_str = is_scalar( $value ) ? (string) $value : '';
+
+					if ( false !== strpos( $value_str, '/' ) ) {
+						$bad_placeholder = (string) $key;
+						break;
+					}
+
+					$route = str_replace( $placeholder, $value_str, $route );
+					unset( $arguments[ $key ] );
+				}
+			}
+		}
+
+		// Custom tools (mcpwp_register_tools) store 'rest_path' as the full WP
+		// REST route; built-in tools store a path relative to the namespace.
+		$full_route = isset( $mapping['rest_path'] ) ? $route : '/mcpwp/v1' . $route;
+
+		return array(
+			'route'           => $route,
+			'arguments'       => $arguments,
+			'bad_placeholder' => $bad_placeholder,
+			'full_route'      => $full_route,
+			'is_batch'        => ! $is_callback && class_exists( 'Mcpwp_Operation_Weights' ) && '/batch' === Mcpwp_Operation_Weights::normalize_route( $full_route ),
+		);
+	}
+
+	/**
+	 * Spend units one tool call costs as sent (#752 F9 review r1): what its
+	 * dispatch would be charged, before the pattern core matches is known —
+	 * a lower bound. A batch tool costs its operations.
+	 *
+	 * @param array  $mapping   Tool map entry.
+	 * @param array  $dispatch  resolve_tool_dispatch() result.
+	 * @param string $tool_name Tool name.
+	 * @return int
+	 */
+	private function tool_call_spend_price( $mapping, $dispatch, $tool_name ) {
+		if ( ! class_exists( 'Mcpwp_Operation_Weights' ) || null !== $dispatch['bad_placeholder'] ) {
+			return 0;
+		}
+
+		if ( isset( $mapping['callback'] ) && is_callable( $mapping['callback'] ) ) {
+			return Mcpwp_Operation_Weights::spend_weight( 'POST', 'callback:' . $tool_name, $dispatch['arguments'] );
+		}
+
+		if ( $dispatch['is_batch'] ) {
+			return class_exists( 'Mcpwp_REST_Batch' ) && isset( $dispatch['arguments']['operations'] )
+				? Mcpwp_REST_Batch::price( $dispatch['arguments']['operations'] )
+				: 0;
+		}
+
+		return Mcpwp_Operation_Weights::spend_weight( isset( $mapping['method'] ) ? $mapping['method'] : 'POST', $dispatch['full_route'], $dispatch['arguments'] );
+	}
+
+	/**
+	 * Spend units one JSON-RPC message of a batch costs as sent. A tool call
+	 * that will be answered from its stored result dispatches nothing and
+	 * costs nothing; a resource read dispatches one route; everything else
+	 * dispatches nothing.
+	 *
+	 * @param mixed $message  JSON-RPC message.
+	 * @param array $tool_map Merged tool map, built once for the whole batch.
+	 * @return int
+	 */
+	private function message_spend_price( $message, array $tool_map ) {
+		if ( ! is_array( $message ) || ! isset( $message['method'] ) || ! is_string( $message['method'] ) ) {
+			return 0;
+		}
+
+		if ( 'resources/read' === $message['method'] ) {
+			return 1;
+		}
+
+		if ( 'tools/call' !== $message['method'] ) {
+			return 0;
+		}
+
+		$params    = isset( $message['params'] ) && is_array( $message['params'] ) ? $message['params'] : array();
+		$tool_name = isset( $params['name'] ) && is_string( $params['name'] ) ? $params['name'] : '';
+		$arguments = isset( $params['arguments'] ) && is_array( $params['arguments'] ) ? $params['arguments'] : array();
+
+		if ( '' === $tool_name || ! isset( $tool_map[ $tool_name ] ) || $this->has_stored_result( $params, $tool_map ) ) {
+			return 0;
+		}
+
+		return $this->tool_call_spend_price( $tool_map[ $tool_name ], $this->resolve_tool_dispatch( $tool_map[ $tool_name ], $arguments ), $tool_name );
+	}
+
+	/**
+	 * Whether a tools/call carries a request_id whose completed result is
+	 * stored for this principal with the same arguments — i.e. it will be
+	 * replayed, not run.
+	 *
+	 * @param array $params   tools/call params.
+	 * @param array $tool_map Merged tool map.
+	 * @return bool
+	 */
+	private function has_stored_result( $params, $tool_map ) {
+		$request_id = isset( $params['_meta']['request_id'] ) ? $params['_meta']['request_id'] : null;
+		$tool_name  = isset( $params['name'] ) && is_string( $params['name'] ) ? $params['name'] : '';
+
+		if ( ! is_string( $request_id ) || '' === $request_id || strlen( $request_id ) > 128 || ! preg_match( '/^[A-Za-z0-9_\-:.]+$/', $request_id ) || ! isset( $tool_map[ $tool_name ] ) ) {
+			return false;
+		}
+
+		$scope = self::principal_scope( $this->get_current_api_key_record() );
+		if ( '' === $scope ) {
+			return false;
+		}
+
+		$arguments = isset( $params['arguments'] ) && is_array( $params['arguments'] ) ? $params['arguments'] : array();
+		$existing  = get_transient( self::idempotency_key( $scope, $request_id ) );
+
+		return is_array( $existing )
+			&& isset( $existing['state'], $existing['args_hash'], $existing['response'] )
+			&& 'done' === $existing['state']
+			&& is_array( $existing['response'] )
+			&& hash( 'sha256', $tool_name . '|' . wp_json_encode( self::canonicalize( $arguments ) ) ) === $existing['args_hash'];
+	}
+
+	/**
+	 * A tool call the spend budget refused, as a JSON-RPC error (#752 F9).
+	 *
+	 * Its own code, so a client can tell "this request was too big — resend the
+	 * rest in a new one" from a rate limit (-32029, wait) and from a failing
+	 * handler (-32000). The operation did not run.
+	 *
+	 * @param mixed  $id      Request ID.
+	 * @param string $message Refusal message.
+	 * @param mixed  $data    Refusal data (weight, remaining, limit, hint).
+	 * @param string $code    spend_budget_exhausted (this call, at dispatch) or
+	 *                        spend_budget_exceeded (the whole call, before it ran).
+	 * @return array
+	 */
+	private function spend_refusal( $id, $message, $data, $code = Mcpwp_Spend_Budget::ERROR_CODE ) {
+		$data  = is_array( $data ) ? $data : array();
+		$error = array(
+			'code'   => Mcpwp_Spend_Budget::is_refusal_code( $code ) ? $code : Mcpwp_Spend_Budget::ERROR_CODE,
+			'status' => Mcpwp_Spend_Budget::HTTP_STATUS,
+		);
+
+		foreach ( array( 'weight', 'remaining', 'limit', 'hint' ) as $field ) {
+			if ( isset( $data[ $field ] ) ) {
+				$error[ $field ] = $data[ $field ];
+			}
+		}
+
+		return $this->jsonrpc_error( $id, Mcpwp_Spend_Budget::JSONRPC_CODE, (string) $message, $error );
 	}
 
 	/**
@@ -2418,7 +2762,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				$lines[] = '- Columns need `"_column_size"` that sums to 100. Multi-column sections need a `"structure"` value (20=2col, 30=3col).';
 			}
 
-			$lines[] = '- Every element **must** have a unique `"id"` (8 alphanumeric chars). The plugin auto-generates missing IDs.';
+			$lines[] = '- Every element **must** have a unique `"id"` of exactly 7 alphanumeric characters (`a-z`, `A-Z`, `0-9`). Elementor Pro\'s AJAX widgets (Search live results, Taxonomy Filter on a Loop Grid) reject any other length and fail silently. The plugin auto-generates missing IDs, warns about non-conforming ones, and rewrites them when you pass `repair_ids=true` to `wp_patch_elementor` or `wp_set_elementor`. Details: `wp_get_guide(topic="elementor")`.';
 			$lines[] = '- Use `wp_get_elementor` to read current data, `wp_set_elementor` to save. The response includes validation warnings.';
 			$lines[] = '- Use `wp_get_widget_schema` to check correct widget settings keys before building.';
 			$lines[] = '- After changing templates or global styles, call `wp_regenerate_elementor_css`.';

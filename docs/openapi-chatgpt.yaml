@@ -1125,7 +1125,7 @@ paths:
               properties:
                 widget_id:
                   type: string
-                  description: 8-char widget ID from the Elementor data
+                  description: Elementor element ID of the widget, from the Elementor data (new ids are exactly 7 alphanumeric characters)
                 settings:
                   type: object
                   description: Widget settings to update

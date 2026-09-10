@@ -12,13 +12,13 @@ section/container (top-level)
     → widget
 ```
 
-Every element needs: `id` (8-char alphanumeric), `elType`, `settings`, `elements` (array, except widgets).
+Every element needs: `id` (exactly 7 alphanumeric characters — Elementor Pro's Search live results and Taxonomy Filter/Loop Grid AJAX reject any other length; see `wp_get_guide(topic="elementor")`), `elType`, `settings`, `elements` (array, except widgets). Missing ids are generated; non-conforming ones are warned about, and rewritten only when you pass `repair_ids=true` to `wp_patch_elementor` or `wp_set_elementor`.
 
 ## Section Settings
 
 ```json
 {
-  "id": "abc12345",
+  "id": "abc1234",
   "elType": "section",
   "settings": {
     "background_background": "classic",
@@ -41,7 +41,7 @@ Every element needs: `id` (8-char alphanumeric), `elType`, `settings`, `elements
 
 ```json
 {
-  "id": "col12345",
+  "id": "col1234",
   "elType": "column",
   "settings": {"_column_size": 50},
   "elements": [...]

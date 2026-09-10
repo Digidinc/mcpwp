@@ -37,6 +37,14 @@ final class DestructiveGateTest extends TestCase {
 			Mcpwp_REST_MCP::reset_verdict_memo();
 		}
 
+		// Not a rate-limit test: start from a limiter built from this test's
+		// (empty) settings, not whatever ceilings an earlier test left behind.
+		$GLOBALS['mcpwp_test_transients'] = array();
+		$ref  = new ReflectionClass( Mcpwp_Rate_Limiter::class );
+		$prop = $ref->getProperty( 'instance' );
+		$prop->setAccessible( true );
+		$prop->setValue( null );
+
 		$this->key = ( new Mcpwp_REST_Pages() )->create_scoped_api_key( 'agent', array( 'admin' ) );
 	}
 

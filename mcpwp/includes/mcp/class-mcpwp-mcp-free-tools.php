@@ -139,6 +139,7 @@ class Mcpwp_MCP_Free_Tools extends Mcpwp_MCP_Tool_Registry {
 			'wp_list_drafts'             => 'content',
 			'wp_delete_all_drafts'       => 'content',
 			'wp_batch_update'            => 'content',
+			'wp_batch'                   => 'content',
 			'wp_bulk_create_pages'       => 'content',
 			'wp_bulk_create_posts'       => 'content',
 			'wp_bulk_update_posts'       => 'content',
@@ -700,6 +701,10 @@ class Mcpwp_MCP_Free_Tools extends Mcpwp_MCP_Tool_Registry {
 				'route'  => '/tags',
 			),
 			'wp_batch_update'    => array(
+				'method' => 'POST',
+				'route'  => '/batch',
+			),
+			'wp_batch'           => array(
 				'method' => 'POST',
 				'route'  => '/batch',
 			),

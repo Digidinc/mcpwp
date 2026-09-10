@@ -186,7 +186,7 @@ class Mcpwp_Error_Hints {
 			),
 			'invalid_elementor_data' => array(
 				'hint'  => sprintf(
-					'Invalid Elementor data structure. This site uses %s layout mode. Use \'%s\' as the top-level elType. Each element needs a unique 8-char alphanumeric id. Call wp_introspect to verify layout mode.',
+					'Invalid Elementor data structure. This site uses %s layout mode. Use \'%s\' as the top-level elType. Each element needs a unique id of exactly 7 alphanumeric characters. Call wp_introspect to verify layout mode.',
 					$layout_mode ?: 'unknown',
 					$element_type
 				),

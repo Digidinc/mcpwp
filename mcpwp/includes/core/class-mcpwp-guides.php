@@ -181,25 +181,27 @@ class Mcpwp_Guides {
 				),
 				array(
 					'heading' => 'Element Structure',
-					'content' => "Every element MUST have an `id` (8-char alphanumeric). The plugin auto-generates missing IDs but it is best practice to provide them.\n\n"
+					'content' => "Every element MUST have a unique `id` of exactly 7 alphanumeric characters (`a-z`, `A-Z`, `0-9`). The plugin auto-generates missing IDs.\n\n"
+						. "**Why exactly 7.** Elementor Pro's REST endpoints check `widget_id` with `is_widget_id_valid()`: 7 characters, alphanumeric, nothing else. The Search widget sends its own id to `refresh-search` for live results, and a Taxonomy Filter sends the id of the Loop Grid named in its `selected_element` to `refresh-loop`. Any other id gets `400 rest_invalid_param` and the front end does nothing: the page renders, the results panel stays empty, the filter chips do not filter. Elementor's editor generates 7-character ids, but pages built by earlier MCPWP versions (which generated 8) or by other tools may carry other lengths.\n\n"
+						. "**What the plugin does about it.** Every Elementor write that validates the tree gives each non-conforming id an AJAX feature depends on (a Search widget, a Loop Grid a Taxonomy Filter targets) its own warning, with its path, saying that feature will fail. Every other non-conforming id renders fine, so they are folded into one summary warning with a count and a sample of paths. It does not rewrite existing ids on its own, because ids are CSS selectors (`.elementor-element-<id>`) and other widgets point at them. To rewrite them, call `wp_patch_elementor` with `repair_ids=true` (no operations needed; like any validated write it also applies the standard fixes listed in its warnings), or pass `repair_ids=true` to `wp_set_elementor` (with `dry_run=true` to preview). New ids are derived from the page and the old id, so the same data on the same page always gets the same ids and a preview is exactly what the write applies. The response's `id_repair` lists every old -> new id; the references it repointed (Taxonomy Filter `selected_element`, Off-canvas dynamic tags and `elementor-action` links); and `possible_references`: other settings in this page's data that mention an old id, including URL-encoded or base64 text, which were left alone. Page-level custom CSS, kit CSS, Custom Code and other pages are not searched: update any that name an old id by hand, and purge page caches so visitors get the new ids.\n\n"
 						. "**Section mode structure:**\n"
 						. "```json\n"
 						. "[{\n"
-						. "  \"id\": \"sec12345\", \"elType\": \"section\",\n"
+						. "  \"id\": \"sec1234\", \"elType\": \"section\",\n"
 						. "  \"settings\": {},\n"
 						. "  \"elements\": [{\n"
-						. "    \"id\": \"col12345\", \"elType\": \"column\",\n"
+						. "    \"id\": \"col1234\", \"elType\": \"column\",\n"
 						. "    \"settings\": {\"_column_size\": 100},\n"
-						. "    \"elements\": [{ \"id\": \"wid12345\", \"elType\": \"widget\", \"widgetType\": \"heading\", \"settings\": {\"title\": \"Hello\"} }]\n"
+						. "    \"elements\": [{ \"id\": \"wid1234\", \"elType\": \"widget\", \"widgetType\": \"heading\", \"settings\": {\"title\": \"Hello\"} }]\n"
 						. "  }]\n"
 						. "}]\n"
 						. "```\n\n"
 						. "**Container mode structure:**\n"
 						. "```json\n"
 						. "[{\n"
-						. "  \"id\": \"con12345\", \"elType\": \"container\",\n"
+						. "  \"id\": \"con1234\", \"elType\": \"container\",\n"
 						. "  \"settings\": {\"flex_direction\": \"row\"},\n"
-						. "  \"elements\": [{ \"id\": \"wid12345\", \"elType\": \"widget\", \"widgetType\": \"heading\", \"settings\": {\"title\": \"Hello\"} }]\n"
+						. "  \"elements\": [{ \"id\": \"wid1234\", \"elType\": \"widget\", \"widgetType\": \"heading\", \"settings\": {\"title\": \"Hello\"} }]\n"
 						. "}]\n"
 						. "```",
 				),
@@ -649,6 +651,7 @@ class Mcpwp_Guides {
 						. "- `wp_bulk_create_posts(posts=[...])` — Create multiple posts at once\n"
 						. "- `wp_bulk_update_pages(pages=[...])` — Update multiple pages\n"
 						. "- `wp_bulk_update_posts(posts=[...])` — Update multiple posts\n"
+						. "- `wp_batch(operations=[...])` — Up to 100 mixed REST operations in one call, per-operation status\n"
 						. "- `wp_batch_update(operations=[...])` — Mixed batch operations\n"
 						. "- `wp_delete_all_drafts()` — Clean up all draft posts and pages",
 				),

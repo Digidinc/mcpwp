@@ -1591,11 +1591,11 @@ class Mcpwp_Elementor_Pro {
 	}
 
 	/**
-	 * Generate unique element ID.
+	 * Generate an element ID Elementor Pro's AJAX endpoints accept (#842).
 	 *
-	 * @return string Element ID.
+	 * @return string Seven lowercase alphanumerics.
 	 */
 	private function generate_element_id() {
-		return substr( md5( uniqid( wp_rand(), true ) ), 0, 8 );
+		return Mcpwp_Elementor_Element_Ids::generate();
 	}
 }

@@ -48,18 +48,20 @@ final class BatchBudgetTest extends TestCase {
 	protected function tearDown(): void {
 		$GLOBALS['mcpwp_test_options']    = array();
 		$GLOBALS['mcpwp_test_transients'] = array();
+		$this->reset_rate_limiter();
+	}
 
-		// setUp lowers the limits on the limiter singleton (burst 10), which
-		// outlives the test. Left behind, the next class inherits a limiter
-		// frozen at that burst: under --order-by=random (seed 1789056569, once
-		// the suite grew) DestructiveGateTest's 25-request flood was refused
-		// with rate_limit_exceeded. Same family as BrokerAuthIntegrationTest's
-		// and RateLimiterTest's tearDown (#757).
-		if ( class_exists( 'Mcpwp_Rate_Limiter' ) ) {
-			$instance = ( new ReflectionClass( Mcpwp_Rate_Limiter::class ) )->getProperty( 'instance' );
-			$instance->setAccessible( true );
-			$instance->setValue( null, null );
-		}
+	/**
+	 * The limiter is a singleton that keeps the settings it was last given in
+	 * memory; clearing the options store does not reach it. Without this, the
+	 * next test inherits this test's ceilings (a random-order failure in
+	 * DestructiveGateTest was exactly that).
+	 */
+	private function reset_rate_limiter(): void {
+		$ref  = new ReflectionClass( Mcpwp_Rate_Limiter::class );
+		$prop = $ref->getProperty( 'instance' );
+		$prop->setAccessible( true );
+		$prop->setValue( null );
 	}
 
 	private function rpc_batch( int $n ): array {

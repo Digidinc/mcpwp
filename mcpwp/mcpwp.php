@@ -234,6 +234,8 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-activator.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-deactivator.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-rate-limiter.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-operation-weights.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-spend-budget.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-error-hints.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-security.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-webhooks.php';
@@ -271,6 +273,8 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-slug-search.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-elementor-registry.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-elementor-element-keys.php';
+	// The single definition of a valid Elementor element id (#842).
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-elementor-element-ids.php';
 	// Elementor engine verb traits (mixed into Mcpwp_Elementor_Basic — G4 split).
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/traits/trait-mcpwp-elementor-reader.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/traits/trait-mcpwp-elementor-writer.php';

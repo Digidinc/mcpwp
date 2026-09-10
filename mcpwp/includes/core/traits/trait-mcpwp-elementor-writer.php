@@ -14,6 +14,14 @@ if ( ! defined( 'ABSPATH' ) ) {
 trait Mcpwp_Elementor_Writer_Trait {
 
 	/**
+	 * The element list save_elements_to_page() last wrote, post-validation,
+	 * so a caller can report the ids elements were actually saved with.
+	 *
+	 * @var array|null
+	 */
+	private $last_saved_elements = null;
+
+	/**
 	 * How many Elementor calls are currently in flight under this trait.
 	 *
 	 * Guards the scoped wp_kses_allowed_html normaliser: it is installed on the
@@ -666,6 +674,94 @@ trait Mcpwp_Elementor_Writer_Trait {
 	}
 
 	/**
+	 * Read a page's stored Elementor tree, whatever form it was stored in.
+	 *
+	 * Elementor renders `_elementor_data` stored as JSON text or as an array,
+	 * and a tree with numeric keys that are not 0..n (what a PHP tool writes
+	 * after unset() and re-encode). All of those are the tree; they are
+	 * normalised to a list, which is what every write stores. Missing, empty
+	 * and JSON `null` are an empty page. Only values that cannot be a tree
+	 * are unusable, and the reason says which form they are in.
+	 *
+	 * @param mixed $raw Value of get_post_meta( $id, '_elementor_data', true ).
+	 * @return array{elements:array|null,unusable:string,stored_as:string}
+	 *         `elements` is a list ([] for no data), or null when unusable.
+	 */
+	private function read_stored_tree( $raw ) {
+		$stored_as = gettype( $raw );
+
+		if ( '' === $raw || null === $raw || false === $raw ) {
+			return array( 'elements' => array(), 'unusable' => '', 'stored_as' => $stored_as );
+		}
+
+		if ( is_string( $raw ) ) {
+			$decoded = json_decode( $raw, true );
+
+			if ( null === $decoded && JSON_ERROR_NONE !== json_last_error() ) {
+				return array( 'elements' => null, 'unusable' => 'is stored as text that does not decode to an element list (' . json_last_error_msg() . ')', 'stored_as' => $stored_as );
+			}
+			if ( null === $decoded ) {
+				return array( 'elements' => array(), 'unusable' => '', 'stored_as' => $stored_as );
+			}
+			if ( ! is_array( $decoded ) ) {
+				return array( 'elements' => null, 'unusable' => 'is stored as JSON text that decodes to ' . gettype( $decoded ) . ', not an element list', 'stored_as' => $stored_as );
+			}
+
+			$list = $this->element_list( $decoded );
+
+			return null === $list
+				? array( 'elements' => null, 'unusable' => 'is stored as JSON text that is not a list of elements', 'stored_as' => $stored_as )
+				: array( 'elements' => $list, 'unusable' => '', 'stored_as' => $stored_as );
+		}
+
+		if ( is_array( $raw ) ) {
+			$list = $this->element_list( $raw );
+
+			return null === $list
+				? array( 'elements' => null, 'unusable' => 'is stored as an array that is not a list of elements', 'stored_as' => $stored_as )
+				: array( 'elements' => $list, 'unusable' => '', 'stored_as' => $stored_as );
+		}
+
+		return array( 'elements' => null, 'unusable' => 'is stored as ' . $stored_as . ', which is neither JSON text nor an element array', 'stored_as' => $stored_as );
+	}
+
+	/**
+	 * Normalise a stored tree to a list: integer keys in any order or with
+	 * gaps become 0..n, keeping their order. Null when a key is a string or an
+	 * item is not an array — written back, that would be a JSON object
+	 * Elementor cannot read.
+	 *
+	 * @param array $elements Candidate tree.
+	 * @return array|null
+	 */
+	private function element_list( array $elements ) {
+		foreach ( $elements as $key => $element ) {
+			if ( ! is_int( $key ) || ! is_array( $element ) ) {
+				return null;
+			}
+		}
+
+		return array_values( $elements );
+	}
+
+	/**
+	 * Carry an explicit id-repair opt-in (#842) from a request payload to the
+	 * validator, seeded with the post id so every id the validator generates
+	 * or repairs is deterministic for this page: a dry run and the write that
+	 * follows it assign the same ids.
+	 *
+	 * @param mixed $data    Request payload.
+	 * @param int   $page_id Post ID.
+	 * @return array Options for validate_and_fix_elements() / save_elements_to_page().
+	 */
+	private function id_repair_options( $data, $page_id ) {
+		return array(
+			'repair_ids' => is_array( $data ) && ! empty( $data['repair_ids'] ),
+			'id_seed'    => (string) (int) $page_id,
+		);
+	}
+
+	/**
 	 * Stop a write that would convert a page built with something else.
 	 *
 	 * The surgical operations accept any post ID that get_post() resolves.
@@ -708,7 +804,8 @@ trait Mcpwp_Elementor_Writer_Trait {
 		}
 
 		$existing = get_post_meta( $page_id, '_elementor_data', true );
-		$decoded  = is_string( $existing ) && '' !== $existing ? json_decode( $existing, true ) : null;
+		// Array-stored data is the tree itself (review r2 N3); text is decoded.
+		$decoded  = is_array( $existing ) ? $existing : ( is_string( $existing ) && '' !== $existing ? json_decode( $existing, true ) : null );
 
 		// Already an Elementor page.
 		if ( is_array( $decoded ) && ! empty( $decoded ) ) {
@@ -909,7 +1006,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 				: 'This site uses classic layout mode. Use "section" > "column" > widget structure.';
 		}
 
-		$structure_hint = 'Elementor data must be a JSON array of element objects. Each element needs: id (8-char alphanumeric), elType ("section"/"column"/"widget" or "container"), settings (object), elements (array). ' . $layout_hint . ' Use wp_get_elementor on an existing page to see the expected format.';
+		$structure_hint = 'Elementor data must be a JSON array of element objects. Each element needs: id (exactly 7 alphanumeric characters), elType ("section"/"column"/"widget" or "container"), settings (object), elements (array). ' . $layout_hint . ' Use wp_get_elementor on an existing page to see the expected format.';
 
 		// Validate and encode data
 		$elementor_json = null;
@@ -1100,7 +1197,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 		// --- Dry-run mode: validate only, no DB writes ---
 		if ( $dry_run ) {
 			$dry_json   = $elementor_json; // work on a copy
-			$validation = $this->validate_and_fix_elements( $dry_json );
+			$validation = $this->validate_and_fix_elements( $dry_json, $this->id_repair_options( $data, $page_id ) );
 
 			if ( ! empty( $validation['errors'] ) ) {
 				return new WP_Error(
@@ -1140,6 +1237,10 @@ trait Mcpwp_Elementor_Writer_Trait {
 				'validation_warnings' => $validation['warnings'],
 			);
 
+			if ( isset( $validation['id_repair'] ) ) {
+				$result['id_repair'] = $validation['id_repair'];
+			}
+
 			return $result;
 		}
 
@@ -1160,7 +1261,9 @@ trait Mcpwp_Elementor_Writer_Trait {
 
 		// Capture current structure for before/after diff.
 		$existing_raw      = get_post_meta( $page_id, '_elementor_data', true );
-		$existing_decoded  = $existing_raw ? json_decode( $existing_raw, true ) : null;
+		// json_decode() on array-stored data was a TypeError on PHP 8, and the
+		// 422 for unusable data sends callers here (review r2 N3).
+		$existing_decoded  = $this->read_stored_tree( $existing_raw )['elements'];
 		$sections_before   = is_array( $existing_decoded ) ? count( $existing_decoded ) : 0;
 		$widgets_before    = is_array( $existing_decoded ) ? $this->count_elementor_widgets( $existing_decoded ) : 0;
 
@@ -1222,7 +1325,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 		$input_count = count( json_decode( $elementor_json, true ) ?: array() );
 		$save_debug['sections_submitted'] = $input_count;
 
-		$validation = $this->validate_and_fix_elements( $elementor_json );
+		$validation = $this->validate_and_fix_elements( $elementor_json, $this->id_repair_options( $data, $page_id ) );
 		if ( ! empty( $validation['errors'] ) ) {
 			return new WP_Error(
 				'invalid_elementor_structure',
@@ -1236,6 +1339,9 @@ trait Mcpwp_Elementor_Writer_Trait {
 		if ( ! empty( $validation['fixes'] ) || ! empty( $validation['warnings'] ) ) {
 			$save_debug['validation_fixes']    = $validation['fixes'];
 			$save_debug['validation_warnings'] = $validation['warnings'];
+		}
+		if ( isset( $validation['id_repair'] ) ) {
+			$save_debug['id_repair'] = $validation['id_repair'];
 		}
 
 		// Safety check: ensure validation did not corrupt or truncate the data.
@@ -1591,6 +1697,10 @@ trait Mcpwp_Elementor_Writer_Trait {
 			'next_step'          => sprintf( 'Call wp_get_elementor_summary(id=%d) to verify the page structure.', $page_id ),
 		);
 
+		if ( isset( $save_debug['id_repair'] ) ) {
+			$result['id_repair'] = $save_debug['id_repair'];
+		}
+
 		if ( ! empty( $all_warnings ) ) {
 			$result['warnings'] = $all_warnings;
 		}
@@ -1698,17 +1808,12 @@ trait Mcpwp_Elementor_Writer_Trait {
 	}
 
 	/**
-	 * Generate a random 8-character element ID matching Elementor's format.
+	 * Generate an element ID Elementor Pro's AJAX endpoints accept (#842).
 	 *
-	 * @return string Random ID.
+	 * @return string Seven lowercase alphanumerics.
 	 */
 	private function generate_element_id() {
-		$chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
-		$id    = '';
-		for ( $i = 0; $i < 8; $i++ ) {
-			$id .= $chars[ wp_rand( 0, 35 ) ];
-		}
-		return $id;
+		return Mcpwp_Elementor_Element_Ids::generate();
 	}
 
 	/**
@@ -1886,11 +1991,11 @@ trait Mcpwp_Elementor_Writer_Trait {
 	 * Edit a single widget's settings by widget ID.
 	 *
 	 * Lightweight alternative to edit_section that targets widgets specifically.
-	 * Loads current elementor_data, finds the widget by its 8-char ID, merges
+	 * Loads current elementor_data, finds the widget by its element ID, merges
 	 * new settings, and saves the updated data.
 	 *
 	 * @param int    $page_id   Page/post ID.
-	 * @param string $widget_id The 8-char Elementor element ID of the widget.
+	 * @param string $widget_id The Elementor element ID of the widget.
 	 * @param array  $settings  Settings to merge into the widget.
 	 * @param array  $delete_settings Optional setting keys to remove.
 	 * @return array|WP_Error Result with the modified widget, or error.
@@ -2060,7 +2165,9 @@ trait Mcpwp_Elementor_Writer_Trait {
 	 *
 	 * @param int   $page_id  Page/post ID.
 	 * @param array $elements Full top-level element array.
-	 * @param array $options  Reserved for future options.
+	 * @param array $options  `convert` opts in to converting non-Elementor
+	 *                        content (#788); `repair_ids` rewrites element ids
+	 *                        Elementor Pro's AJAX endpoints reject (#842).
 	 * @return array|WP_Error Debug info array or WP_Error on failure.
 	 */
 	protected function save_elements_to_page( $page_id, $elements, $options = array() ) {
@@ -2072,26 +2179,31 @@ trait Mcpwp_Elementor_Writer_Trait {
 			return $conversion;
 		}
 
-		$debug = array();
-		$elementor_json = wp_json_encode( $elements );
+		$debug                     = array();
+		$this->last_saved_elements = null;
+		$elementor_json            = wp_json_encode( $elements );
 
 		// Count input.
 		$input_count = count( $elements );
 		$debug['sections_submitted'] = $input_count;
 
 		// Validate and fix (before write).
-		$validation = $this->validate_and_fix_elements( $elementor_json );
+		$validation = $this->validate_and_fix_elements( $elementor_json, $this->id_repair_options( $options, $page_id ) );
 		if ( ! empty( $validation['errors'] ) ) {
 			return new WP_Error( 'invalid_elementor_structure', implode( ' | ', $validation['errors'] ), array( 'status' => 400, 'validation_errors' => $validation['errors'] ) );
 		}
 		$debug['validation_fixes']    = $validation['fixes'];
 		$debug['validation_warnings'] = $validation['warnings'];
+		if ( isset( $validation['id_repair'] ) ) {
+			$debug['id_repair'] = $validation['id_repair'];
+		}
 
 		// Safety check: validation didn't corrupt data.
 		$post_val = json_decode( $elementor_json, true );
 		if ( ! is_array( $post_val ) || count( $post_val ) !== $input_count ) {
 			return new WP_Error( 'validation_corrupted', 'Data corrupted during validation.', array( 'status' => 500 ) );
 		}
+		$this->last_saved_elements = $post_val;
 
 		// Save via Elementor Document API (preferred) or meta fallback.
 		$document_saved = false;
@@ -2651,9 +2763,13 @@ trait Mcpwp_Elementor_Writer_Trait {
 			return new WP_Error( 'invalid_page', 'Page not found.', array( 'status' => 404 ) );
 		}
 
+		// A repair-only patch (#842) carries no operations: it rewrites the
+		// page's non-conforming element ids. Like every validated write it
+		// also applies the validator's standard fixes, reported in warnings.
+		$repair_ids = is_array( $data ) && ! empty( $data['repair_ids'] );
 		$operations = isset( $data['operations'] ) ? $data['operations'] : array();
-		if ( empty( $operations ) || ! is_array( $operations ) ) {
-			return new WP_Error( 'no_operations', 'operations array is required.', array( 'status' => 400 ) );
+		if ( ! is_array( $operations ) || ( empty( $operations ) && ! $repair_ids ) ) {
+			return new WP_Error( 'no_operations', 'operations array is required (or pass repair_ids=true to rewrite non-conforming element ids without other changes).', array( 'status' => 400 ) );
 		}
 
 		if ( count( $operations ) > self::MAX_PATCH_OPERATIONS ) {
@@ -2664,8 +2780,45 @@ trait Mcpwp_Elementor_Writer_Trait {
 			);
 		}
 
-		$raw      = get_post_meta( $page_id, '_elementor_data', true );
-		$elements = json_decode( $raw, true );
+		$stored   = $this->read_stored_tree( get_post_meta( $page_id, '_elementor_data', true ) );
+		$elements = $stored['elements'];
+
+		// Stored data that cannot be a tree is refused for every patch.
+		// Treating it as an empty page ran the operations against nothing and
+		// overwrote the whole page with their result (review r1). Array meta
+		// and numerically keyed trees are trees: Elementor renders them, and
+		// the save writes them back as a JSON list (review r2).
+		if ( null === $elements ) {
+			return new WP_Error(
+				'invalid_elementor_data',
+				"This page's Elementor data {$stored['unusable']}, so nothing was changed. Replace it with a clean tree through wp_set_elementor.",
+				array(
+					'status'    => 422,
+					'stored_as' => $stored['stored_as'],
+				)
+			);
+		}
+
+		if ( empty( $operations ) ) {
+			// Repair only. "No Elementor data" — missing, empty or null, in
+			// whatever form it is stored — and "nothing to rewrite" are
+			// different answers, and neither is a write.
+			if ( empty( $elements ) ) {
+				return new WP_Error( 'no_elementor_data', 'This page has no Elementor data, so there are no element ids to repair. Nothing was written.', array( 'status' => 404 ) );
+			}
+
+			$preview = Mcpwp_Elementor_Element_Ids::repair( $elements, (string) (int) $page_id );
+			if ( empty( $preview['report']['rewritten'] ) ) {
+				return array(
+					'success'    => true,
+					'page_id'    => (int) $page_id,
+					'operations' => array(),
+					'written'    => false,
+					'id_repair'  => $preview['report'],
+				);
+			}
+		}
+
 		if ( ! is_array( $elements ) ) {
 			$elements = array();
 		}
@@ -2691,6 +2844,10 @@ trait Mcpwp_Elementor_Writer_Trait {
 						$new_el['id'] = $this->generate_element_id();
 					}
 					$position = isset( $op['position'] ) ? $op['position'] : 'end';
+					// Found again after every operation has run, so the result
+					// can name the id this element was saved with (review r2
+					// N4). Stripped before the save.
+					$new_el['_mcpwp_add_op'] = count( $results );
 					if ( 'start' === $position ) {
 						array_unshift( $elements, $new_el );
 					} elseif ( 'end' === $position ) {
@@ -2803,8 +2960,22 @@ trait Mcpwp_Elementor_Writer_Trait {
 			$results[] = $result;
 		}
 
+		// Where each added element ended up once every operation has run; the
+		// marker never reaches the saved data.
+		$added_at = array();
+		foreach ( $elements as $idx => $el ) {
+			if ( is_array( $el ) && array_key_exists( '_mcpwp_add_op', $el ) ) {
+				$added_at[ (int) $el['_mcpwp_add_op'] ] = $idx;
+				unset( $elements[ $idx ]['_mcpwp_add_op'] );
+			}
+		}
+
 		// Save once.
-		$debug = $this->save_elements_to_page( $page_id, $elements, $this->conversion_options( $data ?? array() ) );
+		$debug = $this->save_elements_to_page(
+			$page_id,
+			$elements,
+			array_merge( $this->conversion_options( $data ?? array() ), $this->id_repair_options( $data, $page_id ) )
+		);
 		if ( is_wp_error( $debug ) ) {
 			return $debug;
 		}
@@ -2813,6 +2984,28 @@ trait Mcpwp_Elementor_Writer_Trait {
 			isset( $debug['validation_warnings'] ) ? $debug['validation_warnings'] : array(),
 			isset( $debug['validation_fixes'] ) ? $debug['validation_fixes'] : array()
 		);
+
+		// Report the id each added element was actually saved with. An id
+		// repair or de-duplication in the same call can change it, and when
+		// the added element collided with an existing id, the element that
+		// kept or was mapped from that id is the other one (review r1 P3-3,
+		// r2 N4). Read by position from the tree this save wrote.
+		$saved_tree = $this->last_saved_elements;
+		foreach ( $added_at as $op_index => $idx ) {
+			if ( ! isset( $results[ $op_index ]['element_id'] ) ) {
+				continue;
+			}
+			if ( ! is_array( $saved_tree ) || ! isset( $saved_tree[ $idx ]['id'] ) ) {
+				$results[ $op_index ]['element_id_verified'] = false;
+				continue;
+			}
+
+			$saved_id = (string) $saved_tree[ $idx ]['id'];
+			if ( $saved_id !== (string) $results[ $op_index ]['element_id'] ) {
+				$results[ $op_index ]['element_id_submitted'] = $results[ $op_index ]['element_id'];
+				$results[ $op_index ]['element_id']           = $saved_id;
+			}
+		}
 
 		$result = array(
 			'success'       => true,
@@ -2823,6 +3016,9 @@ trait Mcpwp_Elementor_Writer_Trait {
 		);
 		if ( ! empty( $all_warnings ) ) {
 			$result['warnings'] = $all_warnings;
+		}
+		if ( isset( $debug['id_repair'] ) ) {
+			$result['id_repair'] = $debug['id_repair'];
 		}
 
 		$result = $this->decorate_render_status( $result, $debug );
