@@ -632,6 +632,8 @@ final class SpendBudgetTest extends TestCase {
 		$resend = $this->mcp( $call );
 		$this->assertTrue( $resend['result']['_meta']['replayed'] );
 		$this->assertSame( array( 2 ), $this->tool_body( $resend )['spend_budget']['refused'], 'The replay still says which operation did not run.' );
+		$this->assertSame( 'stored', $resend['result']['_meta']['idempotency'], 'A client that lost the first answer learns it from the replay.' );
+		$this->assertStringContainsString( 'new request_id', $resend['result']['_meta']['idempotency_reason'] );
 		$this->assertCount( 2, $this->operation_dispatches(), 'The resend paid for nothing.' );
 	}
 
@@ -791,5 +793,73 @@ final class SpendBudgetTest extends TestCase {
 	public function test_a_paid_route_given_a_long_list_costs_at_least_the_list(): void {
 		$this->assertSame( 30, $this->spent( array( $this->op( 'POST', '/cloudflare/purge-cache', array( 'files' => array_fill( 0, 30, 'https://example.com/x' ) ) ) ) ) );
 		$this->assertSame( 25, $this->spent( array( $this->op( 'POST', '/cloudflare/purge-cache', array( 'files' => array_fill( 0, 3, 'https://example.com/x' ) ) ) ) ) );
+	}
+
+	// ---------------------------------------------------------------
+	// Review r2.
+	// ---------------------------------------------------------------
+
+	public function test_a_wp_batch_over_the_cap_inside_a_json_rpc_batch_reaches_its_own_refusal(): void {
+		// It runs nothing, so it costs nothing: pricing it would refuse the
+		// calls beside it that fit.
+		$responses = $this->mcp(
+			array(
+				$this->tool( 'wp_batch', array( 'operations' => $this->times( 101, $this->image() ) ), 1 ),
+				$this->tool( 'wp_list_posts', array(), 2 ),
+			)
+		);
+
+		$this->assertSame( -32602, $responses[0]['error']['code'] );
+		$this->assertSame( 'batch_too_large', $responses[0]['error']['data']['code'] );
+		$this->assertArrayHasKey( 'result', $responses[1], 'The call that fits runs.' );
+		$this->assertSame( array( '/mcpwp/v1/posts' ), $GLOBALS['mcpwp_test_dispatched_routes'] );
+	}
+
+	public function test_pricing_a_batch_over_the_cap_does_no_per_operation_work(): void {
+		$priced = 0;
+		add_filter(
+			'mcpwp_spend_weight',
+			function ( $weight ) use ( &$priced ) {
+				++$priced;
+				return $weight;
+			}
+		);
+
+		$this->assertSame( 0, Mcpwp_REST_Batch::price( array_fill( 0, 100001, $this->image() ) ) );
+		$this->assertSame( 0, Mcpwp_REST_Batch::price( array() ) );
+		$this->assertSame( 0, $priced, 'A payload the controller refuses whole is not priced operation by operation.' );
+		$this->assertSame( 2500, Mcpwp_REST_Batch::price( $this->times( 100, $this->image() ) ) );
+	}
+
+	public function test_a_success_body_that_echoes_the_refusal_code_is_not_a_refusal(): void {
+		// Only the budget's own refusal — status 413 with its code — did not
+		// run. A 200 that happens to carry that code ran, and pinning beside a
+		// real failure would turn the failure into a silent drop.
+		$GLOBALS['mcpwp_test_route_permission_denied'][] = '#^/mcpwp/v1/posts/1$#';
+		$GLOBALS['mcpwp_test_rest_response_override']    = array( 'code' => 'spend_budget_exhausted', 'value' => 'stored by a user' );
+
+		$response = $this->mcp( $this->tool( 'wp_batch', array( 'operations' => array( $this->op( 'GET', '/posts/1' ), $this->op( 'GET', '/memory/x' ) ) ), 1, array( 'request_id' => 'job:echo' ) ) );
+		$body     = $this->tool_body( $response );
+
+		$this->assertSame( array( 403, 200 ), $this->statuses( $body ) );
+		$this->assertSame( 1, $body['failed'] );
+		$this->assertSame( array(), $body['spend_budget']['refused'] );
+		$this->assertSame( 'not_stored', $response['result']['_meta']['idempotency'] );
+	}
+
+	public function test_a_tool_call_that_cannot_fit_is_refused_before_its_extra_rate_slots_are_charged(): void {
+		Mcpwp_Rate_Limiter::get_instance()->update_settings( array( 'enabled' => true, 'requests_per_minute' => 1000, 'requests_per_hour' => 5000, 'burst_limit' => 1000 ) );
+
+		$batch = $this->mcp( $this->tool( 'wp_batch', array( 'operations' => $this->times( 50, $this->image() ) ) ) );
+		$this->assertSame( 'spend_budget_exceeded', $batch['error']['data']['code'] );
+		$this->assertSame( 999, Mcpwp_Rate_Limiter::get_instance()->get_budget()['remaining'], 'The HTTP request\'s own slot, and none of the 49 extra.' );
+
+		Mcpwp_REST_MCP::reset_verdict_memo();
+		$urls   = array_map( function ( $i ) { return 'https://example.com/' . $i . '.jpg'; }, range( 1, 41 ) );
+		$upload = $this->mcp( $this->tool( 'wp_bulk_upload_media', array( 'urls' => $urls ), 2 ) );
+		$this->assertSame( 'spend_budget_exceeded', $upload['error']['data']['code'], 'Refused whole as sent, not at dispatch.' );
+		$this->assertSame( 1025, $upload['error']['data']['weight'] );
+		$this->assertSame( 998, Mcpwp_Rate_Limiter::get_instance()->get_budget()['remaining'], 'Again only the HTTP slot, not 40 more for the URLs.' );
+		$this->assertSame( array(), $GLOBALS['mcpwp_test_dispatched_routes'] );
 	}
 }

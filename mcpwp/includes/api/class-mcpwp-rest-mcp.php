@@ -565,9 +565,10 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			// A JSON-RPC batch that cannot fit this request's spend budget is
 			// refused whole before any of it runs (#752 F9 review r1): every
 			// request in it is answered with the refusal, notifications are not.
-			$price = 0;
+			$price    = 0;
+			$tool_map = $this->get_all_tool_map();
 			foreach ( $body as $single_request ) {
-				$price += $this->message_spend_price( $single_request );
+				$price += $this->message_spend_price( $single_request, $tool_map );
 			}
 			$whole = Mcpwp_Spend_Budget::refuse_whole( $price );
 			if ( is_wp_error( $whole ) ) {
@@ -954,6 +955,14 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 					}
 					$response['result']['_meta']['replayed']    = true;
 					$response['result']['_meta']['replayed_at'] = isset( $existing['at'] ) ? (int) $existing['at'] : 0;
+
+					// A pinned partial says so on every answer, not only the first
+					// one — the client that lost the first answer is the one
+					// replaying (review r2 G6).
+					$note = $this->budget_refusal_note( $response['result'] );
+					if ( null !== $note ) {
+						$response = $this->with_idempotency_note( $response, 'stored', $note );
+					}
 				}
 
 				// A replay is API activity even though it is not site activity —
@@ -1070,15 +1079,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				return $this->with_idempotency_note( $response, 'not_stored', 'storage write failed' );
 			}
 
-			$refused = $this->result_budget_refusals( $response['result'] );
-
-			return $this->with_idempotency_note(
-				$response,
-				'stored',
-				$refused > 0
-					? sprintf( 'stored with %d operation(s) refused by the spend budget: they did not run, and a replay of this request_id returns this result without running them. Resend the refused operations under a new request_id.', $refused )
-					: null
-			);
+			return $this->with_idempotency_note( $response, 'stored', $this->budget_refusal_note( $response['result'] ) );
 		} finally {
 			// Only now. Releasing before the record exists is a duplicate window.
 			Mcpwp_Idempotency_Claim::release( $lease_name );
@@ -1250,12 +1251,30 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 
 		$refused = 0;
 		foreach ( $data['results'] as $result ) {
-			if ( is_array( $result ) && isset( $result['data'] ) && is_array( $result['data'] ) && isset( $result['data']['code'] ) && Mcpwp_Spend_Budget::ERROR_CODE === $result['data']['code'] ) {
+			// The budget's own refusal only: status 413 AND its code. A 200 that
+			// carries the code in its body ran, and counting it would pin a real
+			// failure beside it (review r2 G2).
+			if ( is_array( $result ) && isset( $result['status'], $result['data'] ) && Mcpwp_Spend_Budget::HTTP_STATUS === (int) $result['status'] && is_array( $result['data'] ) && isset( $result['data']['code'] ) && Mcpwp_Spend_Budget::ERROR_CODE === $result['data']['code'] ) {
 				++$refused;
 			}
 		}
 
 		return $refused;
+	}
+
+	/**
+	 * The idempotency reason for a pinned result that carries budget refusals,
+	 * or null when it carries none.
+	 *
+	 * @param array $result JSON-RPC result.
+	 * @return string|null
+	 */
+	private function budget_refusal_note( array $result ) {
+		$refused = $this->result_budget_refusals( $result );
+
+		return $refused > 0
+			? sprintf( 'stored with %d operation(s) refused by the spend budget: they did not run, and a replay of this request_id returns this result without running them. Resend the refused operations under a new request_id.', $refused )
+			: null;
 	}
 
 	/**
@@ -2432,10 +2451,11 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 * costs nothing; a resource read dispatches one route; everything else
 	 * dispatches nothing.
 	 *
-	 * @param mixed $message JSON-RPC message.
+	 * @param mixed $message  JSON-RPC message.
+	 * @param array $tool_map Merged tool map, built once for the whole batch.
 	 * @return int
 	 */
-	private function message_spend_price( $message ) {
+	private function message_spend_price( $message, array $tool_map ) {
 		if ( ! is_array( $message ) || ! isset( $message['method'] ) || ! is_string( $message['method'] ) ) {
 			return 0;
 		}
@@ -2451,7 +2471,6 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		$params    = isset( $message['params'] ) && is_array( $message['params'] ) ? $message['params'] : array();
 		$tool_name = isset( $params['name'] ) && is_string( $params['name'] ) ? $params['name'] : '';
 		$arguments = isset( $params['arguments'] ) && is_array( $params['arguments'] ) ? $params['arguments'] : array();
-		$tool_map  = $this->get_all_tool_map();
 
 		if ( '' === $tool_name || ! isset( $tool_map[ $tool_name ] ) || $this->has_stored_result( $params, $tool_map ) ) {
 			return 0;

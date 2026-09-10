@@ -222,7 +222,9 @@ class Mcpwp_REST_Batch extends Mcpwp_REST_API {
 			// A route may answer with object data; only an error body is an array
 			// with a code. Reading an object as an array would fatal here, after
 			// every operation has already run.
-			if ( isset( $result['data'] ) && is_array( $result['data'] ) && isset( $result['data']['code'] ) && Mcpwp_Spend_Budget::ERROR_CODE === $result['data']['code'] ) {
+			// Only the budget's own refusal — 413 with its code — did not run; a
+			// response that merely carries that code in its body ran (review r2 G2).
+			if ( isset( $result['status'], $result['data'] ) && Mcpwp_Spend_Budget::HTTP_STATUS === (int) $result['status'] && is_array( $result['data'] ) && isset( $result['data']['code'] ) && Mcpwp_Spend_Budget::ERROR_CODE === $result['data']['code'] ) {
 				$refused[] = $result['index'];
 			}
 		}
@@ -373,15 +375,19 @@ class Mcpwp_REST_Batch extends Mcpwp_REST_API {
 	/**
 	 * Spend units a list of operations costs as sent (#752 F9).
 	 *
-	 * An operation the controller would refuse costs nothing. The result is a
-	 * lower bound: at dispatch an operation is also priced from the route
-	 * pattern core matched and from its sanitised parameters.
+	 * An operation the controller would refuse costs nothing, and so does a
+	 * batch the controller refuses whole — empty, or over MAX_OPERATIONS: it
+	 * runs nothing, and pricing it would refuse the calls beside it that fit
+	 * (review r2 G1). Checking the count first also keeps an oversized payload
+	 * from being priced operation by operation. The result is a lower bound: at
+	 * dispatch an operation is also priced from the route pattern core matched
+	 * and from its sanitised parameters.
 	 *
 	 * @param mixed $operations Operations.
 	 * @return int
 	 */
 	public static function price( $operations ) {
-		if ( ! is_array( $operations ) || ! class_exists( 'Mcpwp_Operation_Weights' ) ) {
+		if ( ! is_array( $operations ) || empty( $operations ) || count( $operations ) > self::MAX_OPERATIONS || ! class_exists( 'Mcpwp_Operation_Weights' ) ) {
 			return 0;
 		}
 
