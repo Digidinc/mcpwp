@@ -1355,8 +1355,28 @@ class WP_Query
             if (! empty($args['s']) && false === stripos($post->post_title . ' ' . $post->post_content, (string) $args['s'])) {
                 return false;
             }
+            // meta_key alone is an EXISTS test in WP_Query: any row under that
+            // key, empty values included. A double that ignored it handed
+            // find/replace a candidate set production cannot produce.
+            if (! empty($args['meta_key'])) {
+                $meta = isset($GLOBALS['_mcpwp_test_meta'][ (int) $post->ID ]) ? $GLOBALS['_mcpwp_test_meta'][ (int) $post->ID ] : array();
+                if (! is_array($meta) || ! array_key_exists($args['meta_key'], $meta)) {
+                    return false;
+                }
+            }
             return true;
         }));
+
+        // orderby ID is the only ordering the offset/resume contract relies on;
+        // insertion order is not a guarantee production gives.
+        if (isset($args['orderby']) && 'ID' === $args['orderby']) {
+            usort($posts, function ($a, $b) {
+                return (int) $a->ID <=> (int) $b->ID;
+            });
+            if (isset($args['order']) && 'DESC' === strtoupper((string) $args['order'])) {
+                $posts = array_reverse($posts);
+            }
+        }
 
         $this->found_posts = count($posts);
 

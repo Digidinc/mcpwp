@@ -307,10 +307,13 @@ final class BulkShapesTest extends TestCase {
 		foreach ( array( array( 'scope' => 'site' ), array( 'post_type' => 'page' ) ) as $wide ) {
 			$controller = new Mcpwp_REST_Elementor();
 			$request    = new WP_REST_Request( 'POST', '/mcpwp/v1/elementor/find-replace', array_merge( array( 'search' => 'old-brand', 'replace' => 'x', 'dry_run' => true ), $wide ), array( 'X-API-Key' => $writer['key'] ) );
-			$this->assertTrue( $controller->verify_api_key( $request ) );
-			$result = $controller->find_replace_many( $request );
-			$this->assertInstanceOf( WP_Error::class, $result, wp_json_encode( $wide ) );
-			$this->assertSame( 'admin_scope_required', $result->get_error_code() );
+
+			// Round 3: the auth route table refuses a wide run before the
+			// handler, like every other high-blast-radius route.
+			$verdict = $controller->verify_api_key( $request );
+			$this->assertInstanceOf( WP_Error::class, $verdict, wp_json_encode( $wide ) );
+			$this->assertSame( 'insufficient_scope', $verdict->get_error_code() );
+			$this->assertSame( 'admin', $verdict->get_error_data()['required_scope'] );
 		}
 
 		$controller = new Mcpwp_REST_Elementor();
@@ -327,9 +330,13 @@ final class BulkShapesTest extends TestCase {
 	}
 
 	public function test_too_many_ids_is_refused_with_the_cap(): void {
-		$result = $this->find_replace( array( 'search' => 'a', 'replace' => 'b', 'ids' => range( 1, Mcpwp_REST_Elementor::FIND_REPLACE_MAX_POSTS + 1 ) ) );
+		// Literal, not the constant: a test built from the constant passes
+		// for any cap value and pins nothing (round-3 P2-G).
+		$result = $this->find_replace( array( 'search' => 'a', 'replace' => 'b', 'ids' => range( 1, 201 ) ) );
 
 		$this->assertSame( 'too_many_ids', $result->get_error_code() );
+		$this->assertSame( 200, Mcpwp_REST_Elementor::FIND_REPLACE_MAX_POSTS );
+		$this->assertInstanceOf( WP_REST_Response::class, $this->find_replace( array( 'search' => 'a', 'replace' => 'b', 'ids' => range( 1, 200 ), 'dry_run' => true ) ) );
 	}
 
 	public function test_a_post_type_outside_elementor_content_is_refused(): void {
@@ -475,5 +482,121 @@ final class BulkShapesTest extends TestCase {
 		$this->assertCount( 1, $data['errors'] );
 		$this->assertSame( 21, $data['errors'][0]['id'] );
 		$this->assertStringContainsString( 'sm_audience', $data['errors'][0]['message'] );
+	}
+
+	// ---------------------------------------------------------------
+	// Round 3: the time budget is live code, and the auth layer gates
+	// the wide run on every door.
+	// ---------------------------------------------------------------
+
+	public function test_running_out_of_time_stops_after_a_finished_post_and_resumes_exactly_there(): void {
+		for ( $i = 1; $i <= 4; $i++ ) {
+			$this->seed( $i, 'page', 'P' . $i, $this->elementor_with( 'old-brand' ) );
+		}
+		$GLOBALS['mcpwp_test_filters'] = array();
+		add_filter( 'mcpwp_find_replace_time_budget', function () { return 0; } );
+
+		$first = $this->find_replace( array( 'search' => 'old-brand', 'replace' => 'x', 'scope' => 'site', 'dry_run' => true ) )->get_data();
+
+		// A zero budget still makes progress: exactly one post per call, and
+		// the resume point is the post after it — never the one just done,
+		// never a negative number.
+		$this->assertTrue( $first['truncated'] );
+		$this->assertCount( 1, $first['matched'] );
+		$this->assertSame( 1, $first['matched'][0]['id'] );
+		$this->assertSame( 1, $first['next_offset'] );
+		$this->assertStringContainsString( 'Stopped after 0 seconds', $first['warning'] );
+
+		$second = $this->find_replace( array( 'search' => 'old-brand', 'replace' => 'x', 'scope' => 'site', 'dry_run' => true, 'offset' => $first['next_offset'] ) )->get_data();
+		$this->assertSame( 2, $second['matched'][0]['id'] );
+		$this->assertSame( 2, $second['next_offset'] );
+
+		// The last post in scope is not "out of time": a finished page is a
+		// finished run.
+		$last = $this->find_replace( array( 'search' => 'old-brand', 'replace' => 'x', 'scope' => 'site', 'dry_run' => true, 'offset' => 3 ) )->get_data();
+		$this->assertFalse( $last['truncated'] );
+		$this->assertArrayNotHasKey( 'next_offset', $last );
+
+		$GLOBALS['mcpwp_test_filters'] = array();
+		$this->assertSame( 20.0, Mcpwp_REST_Elementor::find_replace_time_budget() );
+	}
+
+	public function test_a_nonsense_budget_falls_back_to_the_default_and_a_negative_one_is_zero(): void {
+		$GLOBALS['mcpwp_test_filters'] = array();
+		add_filter( 'mcpwp_find_replace_time_budget', function () { return 'soon'; } );
+		$this->assertSame( 20.0, Mcpwp_REST_Elementor::find_replace_time_budget() );
+
+		$GLOBALS['mcpwp_test_filters'] = array();
+		add_filter( 'mcpwp_find_replace_time_budget', function () { return -5; } );
+		$this->assertSame( 0.0, Mcpwp_REST_Elementor::find_replace_time_budget() );
+		$GLOBALS['mcpwp_test_filters'] = array();
+	}
+
+	public function test_the_wide_run_is_admin_through_the_mcp_door_as_well(): void {
+		// The REST route table and the MCP tool dispatch resolve scope
+		// separately; a gate on one door only is a gate with a side entrance.
+		$controller = new Mcpwp_REST_Elementor();
+		$method     = new ReflectionMethod( $controller, 'get_required_scope_for_request' );
+		$method->setAccessible( true );
+
+		$wide  = new WP_REST_Request( 'POST', '/mcpwp/v1/elementor/find-replace', array( 'search' => 'a', 'replace' => 'b', 'scope' => 'site' ) );
+		$typed = new WP_REST_Request( 'POST', '/mcpwp/v1/elementor/find-replace', array( 'search' => 'a', 'replace' => 'b', 'post_type' => 'page' ) );
+		$named = new WP_REST_Request( 'POST', '/mcpwp/v1/elementor/find-replace', array( 'search' => 'a', 'replace' => 'b', 'ids' => array( 1 ) ) );
+		$one   = new WP_REST_Request( 'POST', '/mcpwp/v1/elementor/find-replace', array( 'search' => 'a', 'replace' => 'b', 'id' => 7 ) );
+		$this->assertSame( 'admin', $method->invoke( $controller, $wide ) );
+		$this->assertSame( 'admin', $method->invoke( $controller, $typed ) );
+		$this->assertSame( 'write', $method->invoke( $controller, $named ) );
+		$this->assertSame( 'write', $method->invoke( $controller, $one ) );
+
+		$mcp = new ReflectionMethod( $controller, 'get_required_scope_for_mcp_request' );
+		$mcp->setAccessible( true );
+		$call = function ( array $arguments ) {
+			return new WP_REST_Request( 'POST', '/mcpwp/v1/mcp', array(), array(), array( 'jsonrpc' => '2.0', 'id' => 1, 'method' => 'tools/call', 'params' => array( 'name' => 'wp_bulk_find_replace', 'arguments' => $arguments ) ) );
+		};
+		$this->assertSame( 'admin', $mcp->invoke( $controller, $call( array( 'search' => 'a', 'replace' => 'b', 'scope' => 'site' ) ) ) );
+		$this->assertSame( 'admin', $mcp->invoke( $controller, $call( array( 'search' => 'a', 'replace' => 'b', 'post_type' => 'post' ) ) ) );
+		$this->assertSame( 'write', $mcp->invoke( $controller, $call( array( 'search' => 'a', 'replace' => 'b', 'ids' => array( 3 ) ) ) ) );
+
+		// Both doors decide with the same predicate.
+		$this->assertTrue( Mcpwp_REST_Elementor::find_replace_is_wide( array( 'scope' => 'site', 'ids' => array() ) ) );
+		$this->assertFalse( Mcpwp_REST_Elementor::find_replace_is_wide( array( 'scope' => 'site', 'ids' => array( 1 ) ) ) );
+		$this->assertFalse( Mcpwp_REST_Elementor::find_replace_is_wide( array( 'id' => '0', 'scope' => '' ) ) );
+	}
+
+	public function test_query_string_auth_is_not_an_unsupported_field(): void {
+		// Round-3 P2-B: ?api_key= is a documented auth path; get_params()
+		// includes it, and it must not 400 a create.
+		$this->assertTrue( Mcpwp_Posts::unsupported_fields( array( 'title' => 'x', 'api_key' => 'mcpwp_abc', 'access_token' => 't' ), Mcpwp_Posts::$create_fields ) );
+		$refused = Mcpwp_Posts::unsupported_fields( array( 'title' => 'x', 'api_kee' => 'typo' ), Mcpwp_Posts::$create_fields );
+		$this->assertSame( 'unsupported_fields', $refused->get_error_code() );
+	}
+
+	public function test_only_posts_that_have_an_elementor_row_are_candidates(): void {
+		// The WP_Query double honours meta_key now (round-3 P2-H), so this
+		// is the candidate set production produces: a page with no
+		// _elementor_data row is not scanned, not skipped, not counted.
+		$this->seed( 1, 'page', 'Plain' );
+		$this->seed( 2, 'page', 'Home', $this->elementor_with( 'old-brand' ) );
+		$this->seed( 3, 'page', 'Empty', '' );
+
+		$data = $this->find_replace( array( 'search' => 'old-brand', 'replace' => 'x', 'scope' => 'site', 'dry_run' => true ) )->get_data();
+
+		$this->assertSame( 1, $data['scanned'] );
+		$this->assertSame( 1, $data['skipped_empty'] );
+		$this->assertSame( array( 2 ), array_column( $data['matched'], 'id' ) );
+	}
+
+	public function test_resume_order_is_by_id_not_by_insertion(): void {
+		foreach ( array( 30, 10, 20 ) as $id ) {
+			$this->seed( $id, 'page', 'P' . $id, $this->elementor_with( 'old-brand' ) );
+		}
+		$GLOBALS['mcpwp_test_filters'] = array();
+		add_filter( 'mcpwp_find_replace_time_budget', function () { return 0; } );
+
+		$first = $this->find_replace( array( 'search' => 'old-brand', 'replace' => 'x', 'scope' => 'site', 'dry_run' => true ) )->get_data();
+		$this->assertSame( 10, $first['matched'][0]['id'] );
+		$second = $this->find_replace( array( 'search' => 'old-brand', 'replace' => 'x', 'scope' => 'site', 'dry_run' => true, 'offset' => $first['next_offset'] ) )->get_data();
+		$this->assertSame( 20, $second['matched'][0]['id'] );
+		$GLOBALS['mcpwp_test_filters'] = array();
 	}
 }

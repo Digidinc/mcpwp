@@ -1106,6 +1106,39 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 	const FIND_REPLACE_TIME_BUDGET = 20;
 
 	/**
+	 * The time budget actually in force for a run, in seconds.
+	 *
+	 * Filterable so a host with a shorter PHP limit can lower it and so the
+	 * out-of-time branch is reachable under test — a branch that no test can
+	 * enter is dead code with a comment on it (#803 round 3).
+	 *
+	 * @return float Non-negative.
+	 */
+	public static function find_replace_time_budget() {
+		$budget = apply_filters( 'mcpwp_find_replace_time_budget', self::FIND_REPLACE_TIME_BUDGET );
+
+		return is_numeric( $budget ) ? max( 0.0, (float) $budget ) : (float) self::FIND_REPLACE_TIME_BUDGET;
+	}
+
+	/**
+	 * Whether a find/replace request is a wide run — a whole type or the whole
+	 * site — rather than a run over named posts. The auth route table and the
+	 * handler both ask this, so they cannot disagree.
+	 *
+	 * @param array $params Request params.
+	 * @return bool
+	 */
+	public static function find_replace_is_wide( array $params ) {
+		$named = ( isset( $params['ids'] ) && ! empty( $params['ids'] ) ) || ( isset( $params['id'] ) && '' !== (string) $params['id'] && 0 !== (int) $params['id'] );
+
+		if ( $named ) {
+			return false;
+		}
+
+		return ( isset( $params['scope'] ) && '' !== (string) $params['scope'] ) || ( isset( $params['post_type'] ) && '' !== (string) $params['post_type'] );
+	}
+
+	/**
 	 * Find/replace across many posts (#803).
 	 *
 	 * Scope is explicit: id, ids, post_type, or scope=site. `dry_run` reports
@@ -1152,6 +1185,9 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 		// caller has not named. That is the class of operation this plugin
 		// keeps behind admin scope (wp_deploy_site_blueprint, wp_push_to_live,
 		// wp_delete_all_drafts); a named-id run stays at write scope.
+		// The auth route table refuses this earlier for a scoped key (see
+		// get_required_scope_for_request); this is the same rule at the
+		// handler so a caller that reaches it another way meets it too.
 		if ( in_array( $scope['label'], array( 'site' ), true ) || 0 === strpos( $scope['label'], 'post_type:' ) ) {
 			$record = $this->get_current_api_key_record();
 			if ( is_array( $record ) && ! $this->key_has_scope( $record, 'admin' ) ) {
@@ -1190,12 +1226,18 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 		$scanned    = 0;
 		$empty      = 0;
 		$total      = 0;
-		$started    = microtime( true );
-		$processed  = 0;
+		$started     = microtime( true );
+		$budget      = self::find_replace_time_budget();
+		$processed   = 0;
 		$out_of_time = false;
+		$remaining   = count( $found );
 
 		foreach ( $found as $candidate ) {
-			if ( ( microtime( true ) - $started ) > self::FIND_REPLACE_TIME_BUDGET ) {
+			// The budget is checked after each post, never before the first:
+			// a run always makes progress, so next_offset = offset + processed
+			// can never point at the post that was just finished, and a
+			// budget of zero still processes exactly one post per call.
+			if ( $processed > 0 && $processed < $remaining && ( microtime( true ) - $started ) > $budget ) {
 				$out_of_time = true;
 				break;
 			}
@@ -1305,12 +1347,15 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 		);
 
 		if ( $truncated || $out_of_time ) {
-			$response['next_offset'] = $offset + ( $out_of_time ? $processed - 1 : self::FIND_REPLACE_MAX_POSTS );
+			// Out of time: every post up to $processed is finished (the check
+			// runs after a post, not before), so the resume point is exactly
+			// offset + processed. Capped: the full page was processed.
+			$response['next_offset'] = max( 0, $offset + ( $out_of_time ? $processed : self::FIND_REPLACE_MAX_POSTS ) );
 			$response['warning']     = $out_of_time
 				? sprintf(
-					/* translators: %d: seconds */
-					__( 'Stopped after %d seconds so the host timeout could not cut the run mid-way. Call again with the same scope and offset = next_offset to continue.', 'mcpwp' ),
-					self::FIND_REPLACE_TIME_BUDGET
+					/* translators: %s: seconds */
+					__( 'Stopped after %s seconds so the host timeout could not cut the run mid-way. Call again with the same scope and offset = next_offset to continue.', 'mcpwp' ),
+					rtrim( rtrim( number_format( $budget, 2, '.', '' ), '0' ), '.' )
 				)
 				: sprintf(
 					/* translators: %d: post cap */

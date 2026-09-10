@@ -63,7 +63,7 @@ class Mcpwp_Posts {
 	 *
 	 * @var array
 	 */
-	public static $transport_params = array( 'id', 'context', '_locale', '_fields', '_embed', '_envelope', '_method', '_wpnonce', 'rest_route' );
+	public static $transport_params = array( 'id', 'context', '_locale', '_fields', '_embed', '_envelope', '_method', '_wpnonce', 'rest_route', 'api_key', 'access_token' );
 
 	/**
 	 * Refuse fields the writer does not act on (#803).
