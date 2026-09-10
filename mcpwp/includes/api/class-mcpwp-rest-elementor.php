@@ -1129,13 +1129,23 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 	 * @return bool
 	 */
 	public static function find_replace_is_wide( array $params ) {
-		$named = ( isset( $params['ids'] ) && ! empty( $params['ids'] ) ) || ( isset( $params['id'] ) && '' !== (string) $params['id'] && 0 !== (int) $params['id'] );
+		// Unvalidated input: an array where a scalar is expected is "set",
+		// never cast (a cast emits a notice inside the permission callback).
+		$present = function ( $key ) use ( $params ) {
+			if ( ! isset( $params[ $key ] ) ) {
+				return false;
+			}
+			$v = $params[ $key ];
+			return is_array( $v ) ? ! empty( $v ) : ( is_scalar( $v ) && '' !== trim( (string) $v ) );
+		};
+
+		$named = $present( 'ids' ) || ( $present( 'id' ) && ( ! is_scalar( $params['id'] ) || 0 !== (int) $params['id'] ) );
 
 		if ( $named ) {
 			return false;
 		}
 
-		return ( isset( $params['scope'] ) && '' !== (string) $params['scope'] ) || ( isset( $params['post_type'] ) && '' !== (string) $params['post_type'] );
+		return $present( 'scope' ) || $present( 'post_type' );
 	}
 
 	/**
@@ -1226,11 +1236,12 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 		$scanned    = 0;
 		$empty      = 0;
 		$total      = 0;
-		$started     = microtime( true );
-		$budget      = self::find_replace_time_budget();
-		$processed   = 0;
-		$out_of_time = false;
-		$remaining   = count( $found );
+		$started       = microtime( true );
+		$budget        = self::find_replace_time_budget();
+		$processed     = 0;
+		$processed_ids = array();
+		$out_of_time   = false;
+		$remaining     = count( $found );
 
 		foreach ( $found as $candidate ) {
 			// The budget is checked after each post, never before the first:
@@ -1243,7 +1254,8 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 			}
 			$processed++;
 
-			$post_id = is_object( $candidate ) ? (int) $candidate->ID : (int) $candidate;
+			$post_id         = is_object( $candidate ) ? (int) $candidate->ID : (int) $candidate;
+			$processed_ids[] = $post_id;
 
 			// The same gate the single-post route applies: never a type this
 			// plugin does not treat as Elementor content.
@@ -1309,12 +1321,19 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 		}
 
 		// For a named-id scope, every id asked for and not touched is reported
-		// with why. A miss must never read as an empty success.
+		// with why. A miss must never read as an empty success — and a post
+		// the run never opened must never read as "no match" (#803 round 4):
+		// that is a claim about content that was not read.
 		$not_touched = array();
 		if ( ! empty( $scope['ids'] ) ) {
-			$touched = array_merge( array_column( $matched, 'id' ), array_column( $unreadable, 'id' ) );
+			$touched   = array_merge( array_column( $matched, 'id' ), array_column( $unreadable, 'id' ) );
+			$candidate = array_map( function ( $c ) { return is_object( $c ) ? (int) $c->ID : (int) $c; }, $found );
 			foreach ( $scope['ids'] as $wanted ) {
 				if ( in_array( $wanted, $touched, true ) ) {
+					continue;
+				}
+				if ( ( $out_of_time || $truncated ) && in_array( $wanted, $candidate, true ) && ! in_array( $wanted, $processed_ids, true ) ) {
+					$not_touched[] = array( 'id' => $wanted, 'reason' => 'not_processed' );
 					continue;
 				}
 				$post = get_post( $wanted );

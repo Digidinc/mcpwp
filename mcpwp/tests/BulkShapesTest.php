@@ -559,16 +559,70 @@ final class BulkShapesTest extends TestCase {
 
 		// Both doors decide with the same predicate.
 		$this->assertTrue( Mcpwp_REST_Elementor::find_replace_is_wide( array( 'scope' => 'site', 'ids' => array() ) ) );
-		$this->assertFalse( Mcpwp_REST_Elementor::find_replace_is_wide( array( 'scope' => 'site', 'ids' => array( 1 ) ) ) );
 		$this->assertFalse( Mcpwp_REST_Elementor::find_replace_is_wide( array( 'id' => '0', 'scope' => '' ) ) );
+
+		// scope + ids is "named" to the predicate ONLY because the handler
+		// refuses that pair outright; the two are one invariant, asserted
+		// together so they cannot drift apart (round-4 P2-836c).
+		$this->assertFalse( Mcpwp_REST_Elementor::find_replace_is_wide( array( 'scope' => 'site', 'ids' => array( 1 ) ) ) );
+		$this->seed( 1, 'page', 'Home', $this->elementor_with( 'old-brand' ) );
+		$paired = $this->find_replace( array( 'search' => 'old-brand', 'replace' => 'x', 'scope' => 'site', 'ids' => array( 1 ) ) );
+		$this->assertInstanceOf( WP_Error::class, $paired );
+		$this->assertSame( 'ambiguous_scope', $paired->get_error_code() );
+
+		// Array-valued scalars are "present", never cast (no notice).
+		set_error_handler( function ( $no, $str ) { throw new ErrorException( $str ); } );
+		try {
+			$this->assertTrue( Mcpwp_REST_Elementor::find_replace_is_wide( array( 'post_type' => array( 'page' ) ) ) );
+			$this->assertTrue( Mcpwp_REST_Elementor::find_replace_is_wide( array( 'scope' => array( 'site' ) ) ) );
+			$this->assertFalse( Mcpwp_REST_Elementor::find_replace_is_wide( array( 'scope' => 'site', 'ids' => array( array( 1 ) ) ) ) );
+			$this->assertFalse( Mcpwp_REST_Elementor::find_replace_is_wide( array( 'scope' => 'site', 'id' => array( 1 ) ) ) );
+		} finally {
+			restore_error_handler();
+		}
 	}
 
-	public function test_query_string_auth_is_not_an_unsupported_field(): void {
-		// Round-3 P2-B: ?api_key= is a documented auth path; get_params()
-		// includes it, and it must not 400 a create.
-		$this->assertTrue( Mcpwp_Posts::unsupported_fields( array( 'title' => 'x', 'api_key' => 'mcpwp_abc', 'access_token' => 't' ), Mcpwp_Posts::$create_fields ) );
+	public function test_query_string_auth_is_not_an_unsupported_field_but_a_body_field_named_like_it_is(): void {
+		// Round-3 P2-B / round-4 P2-836b: ?api_key= is a documented auth
+		// path and must not 400 a create; a BODY field named api_key (or
+		// access_token, which is not a transport at all) is still refused,
+		// so a 200 keeps meaning every field landed.
+		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/posts' );
+		$request->set_query_params( array( 'api_key' => 'mcpwp_abc' ) );
+		$request->set_body_params( array( 'title' => 'x' ) );
+		$this->assertSame( array( 'title' => 'x' ), Mcpwp_Posts::body_fields( $request ) );
+
+		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/posts' );
+		$request->set_body_params( array( 'title' => 'x', 'api_key' => 'mcpwp_abc' ) );
+		$this->assertArrayHasKey( 'api_key', Mcpwp_Posts::body_fields( $request ) );
+		$this->assertSame( 'unsupported_fields', Mcpwp_Posts::unsupported_fields( Mcpwp_Posts::body_fields( $request ), Mcpwp_Posts::$create_fields )->get_error_code() );
+
+		$this->assertSame( 'unsupported_fields', Mcpwp_Posts::unsupported_fields( array( 'title' => 'x', 'access_token' => 't' ), Mcpwp_Posts::$update_fields )->get_error_code() );
 		$refused = Mcpwp_Posts::unsupported_fields( array( 'title' => 'x', 'api_kee' => 'typo' ), Mcpwp_Posts::$create_fields );
 		$this->assertSame( 'unsupported_fields', $refused->get_error_code() );
+	}
+
+	public function test_a_post_the_run_never_opened_is_reported_as_not_processed_never_as_no_match(): void {
+		// Round-4 P1-836: after an out-of-time stop, ids past the resume
+		// point were classified no_match — a claim about content never read.
+		for ( $i = 1; $i <= 3; $i++ ) {
+			$this->seed( $i, 'page', 'P' . $i, $this->elementor_with( 'old-brand' ) );
+		}
+		$this->seed( 4, 'page', 'Plain' );
+		$GLOBALS['mcpwp_test_filters'] = array();
+		add_filter( 'mcpwp_find_replace_time_budget', function () { return 0; } );
+
+		$data = $this->find_replace( array( 'search' => 'old-brand', 'replace' => 'x', 'ids' => array( 1, 2, 3, 4, 999 ), 'dry_run' => true ) )->get_data();
+
+		$this->assertTrue( $data['truncated'] );
+		$this->assertSame( 1, $data['next_offset'] );
+		$reasons = array_column( $data['not_touched'], 'reason', 'id' );
+		$this->assertSame( 'not_processed', $reasons[2] );
+		$this->assertSame( 'not_processed', $reasons[3] );
+		$this->assertSame( 'no_elementor_data', $reasons[4], 'An id outside the candidate set is classified from what IS known about it.' );
+		$this->assertSame( 'not_found', $reasons[999] );
+		$this->assertNotContains( 'no_match', $reasons );
+		$GLOBALS['mcpwp_test_filters'] = array();
 	}
 
 	public function test_only_posts_that_have_an_elementor_row_are_candidates(): void {

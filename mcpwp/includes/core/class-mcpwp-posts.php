@@ -63,7 +63,31 @@ class Mcpwp_Posts {
 	 *
 	 * @var array
 	 */
-	public static $transport_params = array( 'id', 'context', '_locale', '_fields', '_embed', '_envelope', '_method', '_wpnonce', 'rest_route', 'api_key', 'access_token' );
+	public static $transport_params = array( 'id', 'context', '_locale', '_fields', '_embed', '_envelope', '_method', '_wpnonce', 'rest_route' );
+
+	/**
+	 * Drop the query-string auth parameter from a request's merged params so
+	 * it is not mistaken for a body field — and ONLY when it came on the
+	 * query string. A body field named api_key is still an unsupported
+	 * field, so a 200 keeps meaning every field landed (#803 round 4).
+	 *
+	 * @param WP_REST_Request $request Request.
+	 * @return array
+	 */
+	public static function body_fields( $request ) {
+		$data  = method_exists( $request, 'get_params' ) ? (array) $request->get_params() : array();
+		$query = method_exists( $request, 'get_query_params' ) ? (array) $request->get_query_params() : array();
+
+		if ( isset( $query['api_key'] ) && isset( $data['api_key'] ) ) {
+			$body = method_exists( $request, 'get_body_params' ) ? (array) $request->get_body_params() : array();
+			$json = method_exists( $request, 'get_json_params' ) ? $request->get_json_params() : null;
+			if ( ! isset( $body['api_key'] ) && ! ( is_array( $json ) && isset( $json['api_key'] ) ) ) {
+				unset( $data['api_key'] );
+			}
+		}
+
+		return $data;
+	}
 
 	/**
 	 * Refuse fields the writer does not act on (#803).

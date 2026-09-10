@@ -275,7 +275,7 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 	public function create_post( $request ) {
 		$this->log_activity( 'create_post', $request );
 
-		$data   = $request->get_params();
+		$data   = Mcpwp_Posts::body_fields( $request );
 		$result = $this->posts->create_post( $data );
 
 		if ( is_wp_error( $result ) ) {
@@ -295,7 +295,7 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 		$this->log_activity( 'update_post', $request );
 
 		$post_id = $request->get_param( 'id' );
-		$data    = $request->get_params();
+		$data    = Mcpwp_Posts::body_fields( $request );
 		unset( $data['id'] );
 
 		$result = $this->posts->update_post( $post_id, $data );

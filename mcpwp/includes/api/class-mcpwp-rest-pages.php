@@ -302,7 +302,7 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 	public function create_page( $request ) {
 		$this->log_activity( 'create_page', $request );
 
-		$data   = $request->get_params();
+		$data   = Mcpwp_Posts::body_fields( $request );
 		$result = $this->pages->create_page( $data );
 
 		if ( is_wp_error( $result ) ) {
@@ -322,7 +322,7 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 		$this->log_activity( 'update_page', $request );
 
 		$page_id = $request->get_param( 'id' );
-		$data    = $request->get_params();
+		$data    = Mcpwp_Posts::body_fields( $request );
 		unset( $data['id'] );
 
 		$result = $this->pages->update_page( $page_id, $data );

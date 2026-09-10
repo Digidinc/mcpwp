@@ -130,6 +130,8 @@ class WP_REST_Request
     private $params;
     private $headers;
     private $json_params;
+    private $query_params = array();
+    private $body_params = array();
 
     public function __construct(
         $method = 'GET',
@@ -189,15 +191,27 @@ class WP_REST_Request
     public function set_body_params($params)
     {
         if (is_array($params)) {
-            $this->params = array_merge($this->params, $params);
+            $this->body_params = array_merge($this->body_params, $params);
+            $this->params      = array_merge($this->params, $params);
         }
     }
 
     public function set_query_params($params)
     {
         if (is_array($params)) {
-            $this->params = array_merge($this->params, $params);
+            $this->query_params = array_merge($this->query_params, $params);
+            $this->params       = array_merge($this->params, $params);
         }
+    }
+
+    public function get_query_params()
+    {
+        return $this->query_params;
+    }
+
+    public function get_body_params()
+    {
+        return $this->body_params;
     }
 
     public function get_json_params()
