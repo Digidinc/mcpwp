@@ -322,11 +322,15 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 
 		// A permanent delete has no undo: approval by default (#536). Only for
 		// a post that exists — a deferral is not a way to manufacture records.
-		if ( $force && Mcpwp_Destructive_Gate::should_gate( $this->get_current_api_key_record() ) ) {
+		// Permanent is decided by the TYPE, not the flag alone: WordPress
+		// trashes only post and page (#536 round 5).
+		if ( Mcpwp_Destructive_Gate::should_gate( $this->get_current_api_key_record() ) ) {
 			$post = get_post( $post_id );
 			if ( ! $post || 'page' === $post->post_type || Mcpwp_Posts::is_blocked_post_type( $post->post_type ) ) {
 				return $this->error_response( 'not_found', __( 'Post not found.', 'mcpwp' ), 404, array( 'id' => $post_id ) );
 			}
+		}
+		if ( isset( $post ) && $post && Mcpwp_Destructive_Gate::delete_is_permanent( $post->post_type, $force ) && Mcpwp_Destructive_Gate::should_gate( $this->get_current_api_key_record() ) ) {
 			return $this->defer_destructive( 'delete_post', $request, array( 'type' => (string) $post->post_type, 'id' => $post_id, 'title' => (string) $post->post_title ), sprintf( 'Permanently delete post #%d', $post_id ) );
 		}
 

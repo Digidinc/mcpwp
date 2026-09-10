@@ -564,14 +564,29 @@ function wp_delete_post($post_id, $force_delete = false)
 {
     $post_id = (int) $post_id;
     if (empty($GLOBALS['_mcpwp_test_posts'][ $post_id ])) {
+        return false;
     }
     $post = $GLOBALS['_mcpwp_test_posts'][ $post_id ];
-    if (! $force_delete && 'trash' !== $post->post_status) {
+    // Core trashes on force=false ONLY for post and page (and only while
+    // EMPTY_TRASH_DAYS is set); every other type is deleted outright. A
+    // double that trashed everything hid an ungated permanent delete
+    // (#536 round 5).
+    $trashes = ! $force_delete && in_array($post->post_type, array('post', 'page'), true) && (! defined('EMPTY_TRASH_DAYS') || EMPTY_TRASH_DAYS);
+    if ($trashes && 'trash' !== $post->post_status) {
         $post->post_status = 'trash';
         return $post;
     }
     unset($GLOBALS['_mcpwp_test_posts'][ $post_id ], $GLOBALS['_mcpwp_test_meta'][ $post_id ]);
     return $post;
+}
+
+if (! function_exists('wp_delete_attachment')) {
+    function wp_delete_attachment($post_id, $force_delete = false)
+    {
+        // Core trashes an attachment only when MEDIA_TRASH is on.
+        $force = $force_delete || ! (defined('MEDIA_TRASH') && MEDIA_TRASH);
+        return wp_delete_post($post_id, $force);
+    }
 }
 
 function wp_trash_post($post_id)
@@ -2219,7 +2234,6 @@ require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-pages.php';
 require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-site-updates.php';
 require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-media.php';
 require_once dirname(__DIR__) . '/includes/class-mcpwp-duplicate-copy.php';
-require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-site-updates.php';
 require_once dirname(__DIR__) . '/includes/class-mcpwp-loader.php';
 require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-menus.php';
 // The single definition of which Elementor settings keys are wrong. Loaded

@@ -228,6 +228,32 @@ class Mcpwp_Destructive_Gate {
 	}
 
 	/**
+	 * Whether a delete of this post type with this force flag is permanent.
+	 *
+	 * WordPress trashes on force=false ONLY for post and page (and only
+	 * while EMPTY_TRASH_DAYS is set); every other type is deleted outright,
+	 * so for them force=false is the same call as force=true. Gating on
+	 * the flag alone left wp_block, elementor_library, every custom type
+	 * and every attachment ungated on their default path (#536 round 5).
+	 *
+	 * @param string $post_type Post type.
+	 * @param bool   $force     The caller's force flag.
+	 * @return bool
+	 */
+	public static function delete_is_permanent( $post_type, $force ) {
+		if ( $force ) {
+			return true;
+		}
+		if ( 'attachment' === $post_type ) {
+			return ! ( defined( 'MEDIA_TRASH' ) && MEDIA_TRASH );
+		}
+		if ( ! in_array( (string) $post_type, array( 'post', 'page' ), true ) ) {
+			return true;
+		}
+		return defined( 'EMPTY_TRASH_DAYS' ) && ! EMPTY_TRASH_DAYS;
+	}
+
+	/**
 	 * Decide whether a call must be turned into an approval request.
 	 *
 	 * @param array|null $key_record Current key record.
@@ -343,7 +369,7 @@ class Mcpwp_Destructive_Gate {
 				$operation,
 				$approval['id']
 			),
-			'hint'              => 'Approval is the default for operations with no undo: permanent deletes of pages, posts, other content and media, and purging all drafts. Trashing (force=false) is not gated. Exemptions (a key\'s allow_destructive, the site switch) are set by an administrator in wp-admin, not through the API.',
+			'hint'              => 'Approval is the default for operations with no undo: any delete that is permanent — force=true, or force=false on a type WordPress does not trash (media, blocks, templates, custom types) — and purging all drafts. A call that trashes a post or page is not gated. Exemptions (a key\'s allow_destructive, the site switch) are set by an administrator in wp-admin, not through the API.',
 		);
 	}
 
@@ -405,9 +431,14 @@ class Mcpwp_Destructive_Gate {
 			return self::fingerprint_widget( isset( $resource['id'] ) ? (string) $resource['id'] : '' );
 		}
 
-		// Not post-like: nothing to fingerprint by post id.
-		if ( empty( $resource['id'] ) || ! is_numeric( $resource['id'] ) || 'api_key' === $resource['type'] ) {
+		if ( 'api_key' === $resource['type'] ) {
 			return array();
+		}
+
+		// Post-like with an id this gate cannot use: tagged, never an empty
+		// fingerprint that reads as "no drift" (#536 round 5).
+		if ( empty( $resource['id'] ) || ! is_numeric( $resource['id'] ) || (int) $resource['id'] < 1 ) {
+			return array( 'exists' => false, 'unparseable' => true );
 		}
 
 		$post = get_post( (int) $resource['id'] );

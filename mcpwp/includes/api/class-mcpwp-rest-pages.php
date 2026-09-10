@@ -352,7 +352,7 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 
 		// A permanent delete has no undo: approval by default (#536). Only for
 		// a page that exists — a deferral is not a way to manufacture records.
-		if ( $force && Mcpwp_Destructive_Gate::should_gate( $this->get_current_api_key_record() ) ) {
+		if ( Mcpwp_Destructive_Gate::delete_is_permanent( 'page', $force ) && Mcpwp_Destructive_Gate::should_gate( $this->get_current_api_key_record() ) ) {
 			$page = get_post( $page_id );
 			if ( ! $page || 'page' !== $page->post_type ) {
 				return $this->error_response( 'not_found', __( 'Page not found.', 'mcpwp' ), 404, array( 'id' => $page_id ) );

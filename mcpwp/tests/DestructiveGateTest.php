@@ -852,7 +852,7 @@ final class DestructiveGateTest extends TestCase {
 		$this->assertTrue( Mcpwp_Destructive_Gate::fingerprint_widget( 'my_single_widget' )['unparseable'] );
 	}
 
-	public function test_a_forced_template_delete_is_deferred_and_a_trash_is_not(): void {
+	public function test_a_template_delete_is_deferred_whatever_the_flag(): void {
 		require_once dirname( __DIR__ ) . '/includes/pro/api/class-mcpwp-rest-elementor-pro.php';
 		$never = new class() { public $calls = 0; public function __call( $n, $a ) { $this->calls++; return true; } };
 		$this->seed( 70, 'elementor_library' );
@@ -865,8 +865,89 @@ final class DestructiveGateTest extends TestCase {
 		$this->assertSame( 202, $this->authed( $ctl, $request )->delete_template( $request )->get_status() );
 		$this->assertSame( 0, $never->calls );
 
+		// force=false is NOT a trash for elementor_library: WordPress deletes
+		// it outright, so it is deferred just the same (round 5).
 		$request = new WP_REST_Request( 'DELETE', '/mcpwp/v1/elementor/templates/70', array( 'id' => 70, 'force' => false ) );
-		$this->assertSame( 200, $this->authed( $ctl, $request )->delete_template( $request )->get_status() );
-		$this->assertSame( 1, $never->calls );
+		$this->assertSame( 202, $this->authed( $ctl, $request )->delete_template( $request )->get_status() );
+		$this->assertSame( 0, $never->calls );
+	}
+
+	// ---------------------------------------------------------------
+	// Round 5: "permanent" is decided by the type, not by the flag.
+	// ---------------------------------------------------------------
+
+	public function test_force_false_is_gated_wherever_wordpress_would_not_trash(): void {
+		// Round-5 P0-1: wp_block, custom types, templates and media are
+		// deleted outright on force=false; the gate rested on the flag.
+		$this->assertFalse( Mcpwp_Destructive_Gate::delete_is_permanent( 'post', false ) );
+		$this->assertFalse( Mcpwp_Destructive_Gate::delete_is_permanent( 'page', false ) );
+		$this->assertTrue( Mcpwp_Destructive_Gate::delete_is_permanent( 'page', true ) );
+		foreach ( array( 'wp_block', 'elementor_library', 'elementor_snippet', 'sm_team', 'attachment' ) as $type ) {
+			$this->assertTrue( Mcpwp_Destructive_Gate::delete_is_permanent( $type, false ), $type );
+		}
+
+		// Media, force omitted.
+		$this->seed( 12, 'attachment' );
+		$media   = new Mcpwp_REST_Media();
+		$request = new WP_REST_Request( 'DELETE', '/mcpwp/v1/media/12', array( 'id' => 12 ) );
+		$this->assertSame( 202, $this->authed( $media, $request )->delete_media( $request )->get_status() );
+		$this->assertArrayHasKey( 12, $GLOBALS['_mcpwp_test_posts'] );
+
+		// A block through /posts, force omitted.
+		$this->seed( 41, 'wp_block' );
+		$posts   = new Mcpwp_REST_Posts();
+		$request = new WP_REST_Request( 'DELETE', '/mcpwp/v1/posts/41', array( 'id' => 41 ) );
+		$this->assertSame( 202, $this->authed( $posts, $request )->delete_post( $request )->get_status() );
+		$this->assertArrayHasKey( 41, $GLOBALS['_mcpwp_test_posts'] );
+
+		// A custom type through /content, force omitted.
+		$GLOBALS['mcpwp_test_public_post_types'] = array( 'sm_team' );
+		$this->seed( 31, 'sm_team' );
+		$content = new Mcpwp_REST_Content();
+		$request = new WP_REST_Request( 'DELETE', '/mcpwp/v1/content/sm_team/31', array( 'post_type' => 'sm_team', 'id' => 31 ) );
+		$response = $this->authed( $content, $request )->delete_content( $request );
+		$this->assertSame( 202, $response->get_status(), is_wp_error( $response ) ? $response->get_error_message() : wp_json_encode( $response->get_data() ) );
+		$this->assertArrayHasKey( 31, $GLOBALS['_mcpwp_test_posts'] );
+		unset( $GLOBALS['mcpwp_test_public_post_types'] );
+
+		// A template, force omitted (round 4 gated only force=true).
+		require_once dirname( __DIR__ ) . '/includes/pro/api/class-mcpwp-rest-elementor-pro.php';
+		$never = new class() { public $calls = 0; public function __call( $n, $a ) { $this->calls++; return true; } };
+		$this->seed( 70, 'elementor_library' );
+		$ctl  = ( new ReflectionClass( Mcpwp_REST_Elementor_Pro::class ) )->newInstanceWithoutConstructor();
+		$prop = new ReflectionProperty( Mcpwp_REST_Elementor_Pro::class, 'elementor_pro' );
+		$prop->setAccessible( true );
+		$prop->setValue( $ctl, $never );
+		$request = new WP_REST_Request( 'DELETE', '/mcpwp/v1/elementor/templates/70', array( 'id' => 70 ) );
+		$this->assertSame( 202, $this->authed( $ctl, $request )->delete_template( $request )->get_status() );
+		$this->assertSame( 0, $never->calls );
+
+		// A post or page on force=false still trashes in one call.
+		$this->seed( 5, 'post' );
+		$request = new WP_REST_Request( 'DELETE', '/mcpwp/v1/posts/5', array( 'id' => 5, 'force' => false ) );
+		$this->assertSame( 200, $this->authed( $posts, $request )->delete_post( $request )->get_status() );
+		$this->assertSame( 'trash', $GLOBALS['_mcpwp_test_posts'][5]->post_status );
+
+		$this->assertCount( 4, Mcpwp_Approvals::list_requests( 'pending', 50, true ) );
+	}
+
+	public function test_the_delete_doubles_mirror_core(): void {
+		// Round-5 P1-1: the harness trashed every type on force=false, so no
+		// test could observe the bypass.
+		$this->seed( 41, 'wp_block' );
+		wp_delete_post( 41, false );
+		$this->assertArrayNotHasKey( 41, $GLOBALS['_mcpwp_test_posts'], 'A block is deleted outright on force=false, as in core.' );
+		$this->seed( 5, 'post' );
+		wp_delete_post( 5, false );
+		$this->assertSame( 'trash', $GLOBALS['_mcpwp_test_posts'][5]->post_status );
+		$this->assertFalse( wp_delete_post( 999999, false ), 'A missing post is false, as in core.' );
+		$this->seed( 12, 'attachment' );
+		wp_delete_attachment( 12, false );
+		$this->assertArrayNotHasKey( 12, $GLOBALS['_mcpwp_test_posts'], 'MEDIA_TRASH is off by default: an attachment is deleted outright.' );
+	}
+
+	public function test_a_post_like_target_with_no_usable_id_is_tagged_not_empty(): void {
+		$this->assertTrue( Mcpwp_Destructive_Gate::fingerprint( array( 'type' => 'page', 'id' => '12abc' ) )['unparseable'] );
+		$this->assertTrue( Mcpwp_Destructive_Gate::fingerprint( array( 'type' => 'page', 'id' => 0 ) )['unparseable'] );
 	}
 }
