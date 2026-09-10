@@ -473,6 +473,20 @@ function update_option($name, $value, $autoload = null)
     return true;
 }
 
+function add_option($name, $value = '', $deprecated = '', $autoload = 'yes')
+{
+    // Same semantics as WordPress: the UNIQUE index on option_name makes
+    // add_option() the one atomic claim primitive; false when the row exists.
+    if (array_key_exists($name, $GLOBALS['mcpwp_test_options'] ?? array())) {
+        return false;
+    }
+    if (! empty($GLOBALS['mcpwp_test_update_option_fail'][ $name ])) {
+        return false;
+    }
+    $GLOBALS['mcpwp_test_options'][ $name ] = $value;
+    return true;
+}
+
 function delete_option($name)
 {
     unset($GLOBALS['mcpwp_test_options'][ $name ]);
@@ -817,6 +831,11 @@ function rest_do_request($request = null)
 {
     if (is_object($request) && method_exists($request, 'get_route')) {
         $GLOBALS['mcpwp_test_dispatched_routes'][] = $request->get_route();
+    }
+    // A test may script the body the dispatched route answers with, e.g. a
+    // 200 that carries its own errors[] (a partial success).
+    if (isset($GLOBALS['mcpwp_test_rest_response_override'])) {
+        return new WP_REST_Response($GLOBALS['mcpwp_test_rest_response_override'], 200);
     }
     return new WP_REST_Response(array( 'ok' => true ), 200);
 }
