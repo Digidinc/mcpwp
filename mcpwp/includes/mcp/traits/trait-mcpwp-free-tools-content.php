@@ -442,12 +442,46 @@ trait Mcpwp_Free_Tools_Content_Trait {
 
 		$tools[] = $this->define_tool(
 			'wp_batch_update',
-			'Execute multiple REST API operations in a single request (max 25). Operations run sequentially and each returns {index, status, data}. Example: [{"method":"PUT","path":"/posts/42","body":{"title":"New Title"}}, {"method":"GET","path":"/pages"}]. Use this to reduce round-trips when making many changes.',
+			'Execute multiple REST API operations in a single request (max 100; wp_batch is the same call under the name bulk clients look for). Operations run sequentially and each returns {index, status, data}. Example: [{"method":"PUT","path":"/posts/42","body":{"title":"New Title"}}, {"method":"GET","path":"/pages"}]. Use this to reduce round-trips when making many changes.',
 			array(
 				'operations' => array(
 					'type'        => 'array',
 					'description' => 'Array of operation objects. Each must have: method (GET/POST/PUT/DELETE), path (relative to /mcpwp/v1/, e.g. "/pages/42"), body (optional object — used as request body for POST/PUT, query params for GET/DELETE)',
 					'required'    => true,
+					'items'       => array(
+						'type'       => 'object',
+						'properties' => array(
+							'method' => array(
+								'type'        => 'string',
+								'description' => 'HTTP method for this operation.',
+								'enum'        => array( 'GET', 'POST', 'PUT', 'DELETE' ),
+							),
+							'path'   => array( 'type' => 'string', 'description' => 'Path relative to /mcpwp/v1/, e.g. "/pages/42".' ),
+							'body'   => array( 'type' => 'object', 'description' => 'Request body for POST/PUT, or query params for GET/DELETE.' ),
+						),
+						'required'   => array( 'method', 'path' ),
+					),
+				),
+			)
+		);
+
+		// wp_batch (#802): the multi-op batch a bulk job asks for by name. Same
+		// route, same controller as wp_batch_update — every protection of
+		// Mcpwp_REST_Batch applies unchanged — with the cap stated in the schema
+		// so a client can refuse an oversized batch before spending slots on it.
+		$tools[] = $this->define_tool(
+			'wp_batch',
+			'Run up to 100 REST operations in one round trip. Operations run in order and each returns {index, status, data}; the response adds total, succeeded and failed. A failed operation does not stop the rest, and nothing is rolled back. Costs one rate-limit slot per operation. An operation may not target /batch or /mcp. With params._meta.request_id, a batch with any failed operation is not pinned: retry only the failed operations, each under its own request_id. Example: [{"method":"PUT","path":"/posts/42","body":{"title":"New title"}},{"method":"GET","path":"/pages"}].',
+			array(
+				'operations' => array(
+					'type'        => 'array',
+					'description' => 'Operations, in order. Each: method (GET/POST/PUT/DELETE), path relative to /mcpwp/v1/ (e.g. "/pages/42"), body (optional object — the request body for POST/PUT, query parameters for GET/DELETE).',
+					'required'    => true,
+					'minItems'    => 1,
+					// Mcpwp_REST_Batch::MAX_OPERATIONS; the controller may not be
+					// loaded when the registry is built, so the value is repeated
+					// and a test holds the two equal.
+					'maxItems'    => 100,
 					'items'       => array(
 						'type'       => 'object',
 						'properties' => array(

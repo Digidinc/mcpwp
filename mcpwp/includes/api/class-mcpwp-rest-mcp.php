@@ -546,7 +546,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				$response = $this->process_single_request( $single_request, $request );
 				// Notifications return null, don't include in response
 				if ( $response !== null ) {
-					$responses[] = $this->attach_rate_limit_meta( $response );
+					$responses[] = $this->attach_result_meta( $response );
 				}
 			}
 
@@ -571,7 +571,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			return $this->prepare_mcp_response( $rest_response );
 		}
 
-		$rest_response = new WP_REST_Response( $this->attach_rate_limit_meta( $response ), 200 );
+		$rest_response = new WP_REST_Response( $this->attach_result_meta( $response ), 200 );
 		return $this->prepare_mcp_response( $rest_response );
 	}
 
@@ -679,23 +679,26 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	}
 
 	/**
-	 * Put the caller's remaining budget on a result so a client can pace
-	 * itself before the wall instead of learning about it from a 429 (#802).
+	 * Put the server's own facts on every result (#802).
+	 *
+	 * - `plugin_version`: the plugin that produced THIS answer, so a plugin
+	 *   replaced between two calls of a running job is visible without
+	 *   re-running initialize. Written over whatever the result already holds,
+	 *   so a replayed result names the plugin answering now, not the one that
+	 *   stored it.
+	 * - `rate_limit`: the caller's remaining budget, so a client can pace
+	 *   itself before the wall instead of learning about it from a 429. Left
+	 *   out when nothing was metered — absent, never reported as unlimited.
 	 *
 	 * Errors are left alone: JSON-RPC error objects have no _meta, and a 429
-	 * already carries its budget in its data.
+	 * already carries its budget in its data. The X-MCPWP-Version header
+	 * carries the version on every response, errors included.
 	 *
 	 * @param array $response JSON-RPC response.
 	 * @return array
 	 */
-	private function attach_rate_limit_meta( $response ) {
+	private function attach_result_meta( $response ) {
 		if ( ! is_array( $response ) || ! isset( $response['result'] ) || ! is_array( $response['result'] ) ) {
-			return $response;
-		}
-
-		$budget = $this->current_rate_limit_budget();
-
-		if ( null === $budget ) {
 			return $response;
 		}
 
@@ -703,7 +706,13 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			$response['result']['_meta'] = array();
 		}
 
-		$response['result']['_meta']['rate_limit'] = $budget;
+		$response['result']['_meta']['plugin_version'] = $this->server_version;
+
+		$budget = $this->current_rate_limit_budget();
+
+		if ( null !== $budget ) {
+			$response['result']['_meta']['rate_limit'] = $budget;
+		}
 
 		return $response;
 	}
@@ -1253,8 +1262,15 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				return $this->handle_initialize( $id, $params );
 
 			case 'notifications/initialized':
-				// Acknowledged, no response needed
-				return null;
+				// Without an id this is a notification and was answered with
+				// nothing above. With an id it is a request, and JSON-RPC
+				// answers every request: dropping it leaves the client waiting
+				// on that id, and a lone one came back as a body-less 204 (#802).
+				return array(
+					'jsonrpc' => '2.0',
+					'id'      => $id,
+					'result'  => array(),
+				);
 
 			case 'tools/list':
 				return $this->handle_tools_list( $id, $params );

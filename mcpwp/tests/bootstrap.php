@@ -33,6 +33,8 @@ $GLOBALS['mcpwp_test_current_user'] = 0;
 // internal REST dispatch so tests can assert fan-out actually happened
 // (or did not), not merely infer it from a stubbed response shape.
 $GLOBALS['mcpwp_test_dispatched_routes'] = array();
+// Routes a rest_dispatch_request filter refused before their callback ran.
+$GLOBALS['mcpwp_test_refused_routes'] = array();
 // Per-user capability overrides for OAuth scope-clamping tests.
 // Key: user_id (int), Value: array of capability => bool.
 // When empty (or user_id not present), current_user_can() grants all caps.
@@ -979,6 +981,32 @@ function register_rest_route($namespace = '', $route = '', $args = array())
 
 function rest_do_request($request = null)
 {
+    // Core runs the rest_dispatch_request filter after matching a handler and
+    // before calling it: a non-null value replaces the handler's answer, and a
+    // WP_Error becomes the response core builds from it (error_to_response).
+    // A refused route is recorded separately — its callback never ran, so it
+    // does not count as dispatched.
+    if (is_object($request) && method_exists($request, 'get_route') && ! empty($GLOBALS['mcpwp_test_filters']['rest_dispatch_request'])) {
+        $pre = apply_filters('rest_dispatch_request', null, $request, $request->get_route(), array());
+        if ($pre instanceof WP_Error) {
+            $GLOBALS['mcpwp_test_refused_routes'][] = $request->get_route();
+            $error_data = $pre->get_error_data();
+            $status     = is_array($error_data) && isset($error_data['status']) ? (int) $error_data['status'] : 500;
+            return new WP_REST_Response(
+                array(
+                    'code'    => $pre->get_error_code(),
+                    'message' => $pre->get_error_message(),
+                    'data'    => $error_data,
+                ),
+                $status
+            );
+        }
+        if (null !== $pre) {
+            $GLOBALS['mcpwp_test_dispatched_routes'][]   = $request->get_route();
+            $GLOBALS['mcpwp_test_dispatched_requests'][] = $request;
+            return $pre instanceof WP_REST_Response ? $pre : new WP_REST_Response($pre, 200);
+        }
+    }
     if (is_object($request) && method_exists($request, 'get_route')) {
         $GLOBALS['mcpwp_test_dispatched_routes'][]   = $request->get_route();
         $GLOBALS['mcpwp_test_dispatched_requests'][] = $request;
