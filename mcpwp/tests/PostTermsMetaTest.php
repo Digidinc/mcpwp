@@ -709,4 +709,25 @@ final class PostTermsMetaTest extends TestCase {
 			$this->assertFalse( Mcpwp_Post_Fields::is_secret_shaped_key( $key ), $key );
 		}
 	}
+
+	public function test_no_shipped_code_branches_on_the_plugin_dir_constant(): void {
+		// The harness leaves MCPWP_PLUGIN_DIR undefined on purpose (the
+		// double-load test probes its absence), so any behaviour gated on
+		// defined('MCPWP_PLUGIN_DIR') runs one way under test and another
+		// on a site — which is how the meta detector's delegation shipped
+		// untested and over-blocked on real installs (#797 follow-up).
+		$root = dirname( __DIR__ ) . '/includes';
+		$it   = new RecursiveIteratorIterator( new RecursiveDirectoryIterator( $root ) );
+		$hits = array();
+		foreach ( $it as $file ) {
+			if ( 'php' !== $file->getExtension() ) {
+				continue;
+			}
+			if ( preg_match( "/defined\(\s*'MCPWP_PLUGIN_DIR'\s*\)/", file_get_contents( $file->getPathname() ) ) ) {
+				$hits[] = substr( $file->getPathname(), strlen( $root ) + 1 );
+			}
+		}
+		$this->assertSame( array(), $hits, 'Use the constant; never branch on whether it exists.' );
+		$this->assertFalse( defined( 'MCPWP_PLUGIN_DIR' ), 'Premise of this guard.' );
+	}
 }
