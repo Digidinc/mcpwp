@@ -53,8 +53,17 @@ trait Mcpwp_Logging {
 	 */
 	protected function redact_log_data( $data, $redaction_keys, $under_secret = false ) {
 		if ( is_array( $data ) ) {
+			// {key: 'woocommerce_api_key', value: 'Hunter2!!'} — the option
+			// name says the value is a secret even when the value's own shape
+			// does not.
+			$value_is_secret = isset( $data['key'] ) && is_string( $data['key'] ) && class_exists( 'Mcpwp_Option_Access' ) && Mcpwp_Option_Access::is_secret_field( $data['key'] );
+
 			$out = array();
 			foreach ( $data as $key => $value ) {
+				if ( $value_is_secret && 'value' === $key && ! is_array( $value ) ) {
+					$out[ $key ] = '[redacted]';
+					continue;
+				}
 				$key_norm = is_string( $key ) ? strtolower( (string) $key ) : '';
 				if ( '' !== $key_norm && in_array( $key_norm, $redaction_keys, true ) ) {
 					$out[ $key ] = '[redacted]';

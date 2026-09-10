@@ -546,17 +546,18 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 		// A masked read echoed back, or a tree sent without its credential
 		// field, must never destroy the stored secret. The gate below looks at
 		// what the caller SUBMITTED: a preserved field is not one being set.
-		$submitted = $value;
-		$old_value = get_option( $key );
-		$merged    = Mcpwp_Option_Access::merge_preserving_secrets( $key, $old_value, $value );
-		$value     = $merged['value'];
+		$submitted     = $value;
+		$allow_secrets = rest_sanitize_boolean( $request->get_param( 'allow_secrets' ) );
+		$old_value     = get_option( $key );
+		$merged        = Mcpwp_Option_Access::merge_preserving_secrets( $key, $old_value, $value, $allow_secrets );
+		$value         = $merged['value'];
 
 		// A write that would set a credential — a gateway passcode, a licence
 		// key, an SMTP password — is payment redirection or lockout when it
 		// is wrong, and an agent cannot tell from a masked response that it
 		// just broke checkout. It has to be asked for by name.
 		$secret_paths = Mcpwp_Option_Access::secret_paths_in_write( $key, $submitted );
-		if ( ! empty( $secret_paths ) && ! rest_sanitize_boolean( $request->get_param( 'allow_secrets' ) ) ) {
+		if ( ! empty( $secret_paths ) && ! $allow_secrets ) {
 			return new WP_Error(
 				'secret_write_refused',
 				sprintf(

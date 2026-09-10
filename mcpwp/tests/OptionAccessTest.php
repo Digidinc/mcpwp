@@ -299,6 +299,52 @@ final class OptionAccessTest extends TestCase {
 		$this->assertSame( 'sk_live_abcdefghijklmnop', get_option( 'woocommerce_api_key' ), 'A scalar option too.' );
 	}
 
+	public function test_a_non_credential_value_at_a_secret_path_never_erases_the_secret(): void {
+		// '' / 'no' / 'x' at a secret path are not replacements; each would
+		// have been a silent erase around the gate.
+		foreach ( array( '', 'no', 'x', '0' ) as $junk ) {
+			update_option( 'woocommerce_bambora_settings', array( 'passcode' => 'old-secret-1', 'enabled' => 'yes' ) );
+			$written = $this->write( 'woocommerce_bambora_settings', array( 'passcode' => $junk, 'enabled' => 'no' ) );
+			$this->assertInstanceOf( WP_REST_Response::class, $written, var_export( $junk, true ) );
+			$this->assertSame( 'old-secret-1', get_option( 'woocommerce_bambora_settings' )['passcode'], var_export( $junk, true ) );
+			$this->assertSame( array( 'passcode' ), $written->get_data()['preserved'] );
+		}
+
+		update_option( 'woocommerce_api_key', 'sk_live_abcdefghijklmnop' );
+		$this->write( 'woocommerce_api_key', '' );
+		$this->assertSame( 'sk_live_abcdefghijklmnop', get_option( 'woocommerce_api_key' ), 'A scalar secret option too.' );
+	}
+
+	public function test_a_credential_can_be_cleared_on_purpose_with_allow_secrets(): void {
+		update_option( 'woocommerce_bambora_settings', array( 'passcode' => 'old-secret-1', 'enabled' => 'yes' ) );
+
+		$written = $this->write( 'woocommerce_bambora_settings', array( 'passcode' => '', 'enabled' => 'yes' ), array( 'allow_secrets' => true ) );
+
+		$this->assertInstanceOf( WP_REST_Response::class, $written );
+		$this->assertSame( '', get_option( 'woocommerce_bambora_settings' )['passcode'], 'An explicit empty value with allow_secrets is an intentional clear.' );
+		$this->assertSame( array(), $written->get_data()['preserved'] );
+
+		// MASK stays folded back even then.
+		$this->write( 'woocommerce_bambora_settings', array( 'passcode' => 'real-secret-2', 'enabled' => 'yes' ), array( 'allow_secrets' => true ) );
+		$this->write( 'woocommerce_bambora_settings', array( 'passcode' => '***', 'enabled' => 'yes' ), array( 'allow_secrets' => true ) );
+		$this->assertSame( 'real-secret-2', get_option( 'woocommerce_bambora_settings' )['passcode'] );
+	}
+
+	public function test_the_log_redacts_a_scalar_secret_value_by_its_option_name(): void {
+		$harness = new class {
+			use Mcpwp_Logging;
+			public function scrub( $data ) {
+				return $this->redact_log_data( $data, array() );
+			}
+		};
+
+		$out = $harness->scrub( array( 'key' => 'woocommerce_api_key', 'value' => 'Hunter2!!', 'allow_secrets' => true ) );
+		$this->assertSame( '[redacted]', $out['value'], 'The option name says the value is a secret even when its shape does not.' );
+
+		$plain = $harness->scrub( array( 'key' => 'blogname', 'value' => 'Acme' ) );
+		$this->assertSame( 'Acme', $plain['value'] );
+	}
+
 	public function test_a_refused_write_leaves_no_trace_of_the_secret_in_the_activity_log(): void {
 		$GLOBALS['mcpwp_test_wpdb_rows'] = array();
 		update_option( 'mcpwp_settings', array( 'enable_logging' => true ) );

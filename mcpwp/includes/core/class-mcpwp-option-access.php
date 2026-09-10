@@ -520,16 +520,31 @@ class Mcpwp_Option_Access {
 	 * then dropped. Both are folded back to the stored value and reported
 	 * under `preserved`. MASK is never a value that can be written.
 	 *
-	 * @param string $key   Option name.
-	 * @param mixed  $old   Stored value.
-	 * @param mixed  $new   Submitted value.
+	 * A stored secret is replaced only by a real replacement: a value that
+	 * is itself secret-shaped. MASK, an empty string, 'no', a stray
+	 * character — none of those is a credential, and each would have been a
+	 * silent erase. Clearing a credential on purpose is `allow_secrets=true`
+	 * with an explicit empty value.
+	 *
+	 * @param string $key           Option name.
+	 * @param mixed  $old           Stored value.
+	 * @param mixed  $new           Submitted value.
+	 * @param bool   $allow_secrets The caller confirmed it means to change credentials.
 	 * @return array {value: mixed, preserved: string[]}
 	 */
-	public static function merge_preserving_secrets( $key, $old, $new ) {
+	public static function merge_preserving_secrets( $key, $old, $new, $allow_secrets = false ) {
 		$preserved = array();
 
 		if ( is_string( $new ) && self::MASK === trim( $new ) ) {
 			return array( 'value' => $old, 'preserved' => array( '' ) );
+		}
+
+		// A scalar secret option replaced by a non-secret-shaped value.
+		if ( is_string( $old ) && '' !== $old && ! is_array( $new ) && self::is_secret_field( $key ) && ! $allow_secrets ) {
+			$candidate = is_scalar( $new ) ? (string) $new : '';
+			if ( ! self::looks_like_secret_value( $candidate ) && ! self::looks_like_credential( $candidate ) ) {
+				return array( 'value' => $old, 'preserved' => array( '' ) );
+			}
 		}
 
 		if ( ! is_array( $old ) || ! is_array( $new ) ) {
@@ -544,7 +559,14 @@ class Mcpwp_Option_Access {
 			$old_leaf  = self::path_get( $old, $segments );
 			$new_leaf  = self::path_get( $new, $segments, $exists );
 
-			if ( ! $exists || ( is_string( $new_leaf ) && self::MASK === trim( $new_leaf ) ) ) {
+			$is_mask    = is_string( $new_leaf ) && self::MASK === trim( $new_leaf );
+			$is_replace = is_string( $new_leaf ) && ( self::looks_like_secret_value( $new_leaf ) || self::looks_like_credential( $new_leaf ) );
+
+			// Missing, masked, or not a credential-shaped replacement: keep
+			// the stored secret — unless the caller said allow_secrets, in
+			// which case an explicit non-mask value (including '') is an
+			// intentional clear.
+			if ( ! $exists || $is_mask || ( ! $is_replace && ! $allow_secrets ) ) {
 				$new         = self::path_set( $new, $segments, $old_leaf );
 				$preserved[] = $path;
 			}
