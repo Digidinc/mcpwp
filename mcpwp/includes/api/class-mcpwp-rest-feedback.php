@@ -129,7 +129,9 @@ class Mcpwp_REST_Feedback extends Mcpwp_REST_API {
 	/**
 	 * Admission mode: decided on an increment known to be atomic — a recognised
 	 * drop-in (Redis Object Cache without igbinary, Automattic memcached) whose
-	 * backend is reachable and which persists the admission group.
+	 * backend is reachable and which persists the admission group. A request
+	 * during which that stops holding is refused before anything is spent; see
+	 * relay_admission_drift().
 	 *
 	 * @var string
 	 */
@@ -154,10 +156,12 @@ class Mcpwp_REST_Feedback extends Mcpwp_REST_API {
 	const RELAY_ADMISSION_APPROXIMATE = 'approximate';
 
 	/**
-	 * Admission mode: no counter can outlast the request — a recognised drop-in
+	 * Admission mode: no counter can outlast the request — Redis Object Cache
 	 * reports its backend unreachable and keeps everything, transients
 	 * included, in memory for this request only — so the relay refuses every
-	 * request rather than run with no ceiling at all.
+	 * request rather than run with no ceiling at all. (Automattic memcached has
+	 * no in-memory fallback: a dead backend already fails every increment and
+	 * transient write, so it needs no pre-emptive refusal.)
 	 *
 	 * @var string
 	 */
@@ -427,6 +431,20 @@ class Mcpwp_REST_Feedback extends Mcpwp_REST_API {
 			if ( null !== $refusal ) {
 				return $refusal;
 			}
+
+			// The decision was read before the gate touched the cache, and a
+			// drop-in can lose its backend inside the gate. Redis Object Cache
+			// catches an exception thrown by wp_cache_add() — Redis refusing
+			// writes while serving reads: OOM under noeviction, READONLY after
+			// a failover, MISCONF, on a client that throws — marks itself
+			// disconnected and answers every later increment from a per-request
+			// array, where the first increment of any key is 1. Those "counts"
+			// just admitted this request without it being counted anywhere.
+			// Read the decision again before writing anything else.
+			$drift = self::relay_admission_drift( $decision );
+			if ( null !== $drift ) {
+				return $drift;
+			}
 		}
 
 		// Stage 3 — write the accounting record.
@@ -464,6 +482,17 @@ class Mcpwp_REST_Feedback extends Mcpwp_REST_API {
 				__( 'Feedback relay is temporarily unavailable. Please try again later.', 'mcpwp' ),
 				array( 'status' => 503 )
 			);
+		}
+
+		// Last check before the site's token is spent. The transient writes
+		// above can lose the backend the same way (and so can the stage 1
+		// reads, where a failed read counts as zero): with the drop-in now in
+		// memory every write "succeeds" and nothing was recorded. If the
+		// decision this request was admitted under no longer holds, spend
+		// nothing.
+		$drift = self::relay_admission_drift( $decision );
+		if ( null !== $drift ) {
+			return $drift;
 		}
 
 		$data = array(
@@ -649,16 +678,27 @@ class Mcpwp_REST_Feedback extends Mcpwp_REST_API {
 	 *  approximate  admission_group_not_persistent            no    no
 	 *  approximate  object_cache_incr_not_atomic              no    no
 	 *  approximate  object_cache_max_ttl_shorter_than_window  yes   no
+	 *  approximate  object_cache_pool_degraded                yes   no
 	 *  atomic       redis_object_cache                        yes   no
 	 *  atomic       memcached_object_cache                    yes   no
 	 *  unverified   unrecognised_object_cache                 yes   no
 	 *
 	 * - object_cache_backend_unreachable: Redis Object Cache's redis_status() is
-	 *   false (connection failed, or an exception this request), after which
-	 *   that drop-in keeps every group — transients included — in a per-request
-	 *   array; or Automattic memcached has recorded connection_errors. No
-	 *   counter can outlast the request, so the relay would be unlimited.
-	 *   Refusing is the only honest enforcement.
+	 *   false (connection failed, or an exception earlier in this request),
+	 *   after which that drop-in keeps every group — transients included — in a
+	 *   per-request array. No counter can outlast the request, so the relay
+	 *   would be unlimited. Refusing is the only honest enforcement. The same
+	 *   state can begin inside a request, after this decision was read; that is
+	 *   what relay_admission_drift() catches.
+	 * - object_cache_pool_degraded: Automattic memcached has recorded a
+	 *   connection error this request. The drop-in exposes no per-server health
+	 *   beyond that list, and one failed member of a pool is enough to fill it
+	 *   (every request probes each server for its flush number), while the pool
+	 *   itself rehashes to the live members — where a counter that lived on the
+	 *   failed server starts again from zero. So: gate on, ceilings approximate,
+	 *   no refusal. With every server down there is nothing to refuse
+	 *   pre-emptively either: this drop-in has no in-memory fallback, so the
+	 *   gate's increment returns false and the relay answers 503 regardless.
 	 * - cache_addition_suspended: wp_suspend_cache_addition() makes
 	 *   wp_cache_add() a no-op, so the gate's keys would be created by the
 	 *   increment — without a TTL on Redis, never on core or memcached (every
@@ -701,7 +741,7 @@ class Mcpwp_REST_Feedback extends Mcpwp_REST_API {
 		$redis     = self::is_redis_object_cache( $cache );
 		$memcached = ! $redis && self::is_memcached_object_cache( $cache );
 
-		if ( ( $redis && ! $cache->redis_status() ) || ( $memcached && ! empty( $cache->connection_errors ) ) ) {
+		if ( $redis && ! $cache->redis_status() ) {
 			return self::relay_admission_verdict( self::RELAY_ADMISSION_FAIL_CLOSED, 'object_cache_backend_unreachable', false, true );
 		}
 
@@ -724,6 +764,10 @@ class Mcpwp_REST_Feedback extends Mcpwp_REST_API {
 			return self::relay_admission_verdict( self::RELAY_ADMISSION_APPROXIMATE, 'object_cache_max_ttl_shorter_than_window', true );
 		}
 
+		if ( $memcached && ! empty( $cache->connection_errors ) ) {
+			return self::relay_admission_verdict( self::RELAY_ADMISSION_APPROXIMATE, 'object_cache_pool_degraded', true );
+		}
+
 		if ( $redis ) {
 			return self::relay_admission_verdict( self::RELAY_ADMISSION_ATOMIC, 'redis_object_cache', true );
 		}
@@ -733,6 +777,38 @@ class Mcpwp_REST_Feedback extends Mcpwp_REST_API {
 		}
 
 		return self::relay_admission_verdict( self::RELAY_ADMISSION_UNVERIFIED, 'unrecognised_object_cache', true );
+	}
+
+	/**
+	 * Refuse a request whose admission decision stopped holding while it ran (#752 F6).
+	 *
+	 * relay_admission_decision() is read once, at the start of the request, but
+	 * what it reads can change inside the request. A recognised drop-in that
+	 * loses its backend mid-request moves to in-memory storage, after which
+	 * its increments and the transient writes all succeed against memory and
+	 * nothing is counted. On a controller without the gate that state answers
+	 * 503 at the first transient write; the gate must never turn it into an
+	 * admission. So any change — a refusal, or a different mode or basis — means
+	 * the ceilings this request passed cannot be vouched for, and it is answered
+	 * 503. Slots already taken are kept: over-counted, the safe direction.
+	 * Re-reading costs no I/O; the decision reads drop-in state and constants.
+	 *
+	 * @param array{mode: string, basis: string, gate: bool, refuse: bool} $admitted_under
+	 *        The decision read at the start of the request.
+	 * @return WP_Error|null The refusal, or null when the decision still holds.
+	 */
+	private static function relay_admission_drift( array $admitted_under ) {
+		$now = self::relay_admission_decision();
+
+		if ( ! $now['refuse'] && $now['mode'] === $admitted_under['mode'] && $now['basis'] === $admitted_under['basis'] ) {
+			return null;
+		}
+
+		return new WP_Error(
+			'relay_unavailable',
+			__( 'Feedback relay is temporarily unavailable. Please try again later.', 'mcpwp' ),
+			array( 'status' => 503 )
+		);
 	}
 
 	/**

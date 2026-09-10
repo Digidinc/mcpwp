@@ -349,6 +349,7 @@ final class RelayAtomicAdmissionTest extends TestCase {
 		);
 		$outcomes[] = $this->outcome( $this->relay_from( $ip ) );
 
+		$this->assertTrue( $this->interleaved, 'Precondition: the second request ran inside the increment of the first.' );
 		$this->assertSame( 0, $this->count_of( $outcomes, 'admitted' ), wp_json_encode( $outcomes ) );
 		$this->assertSame( Mcpwp_REST_Feedback::RELAY_RATE_MAX - 1, $this->counter( $ip_key ) );
 		$this->assertSame( Mcpwp_REST_Feedback::RELAY_GLOBAL_MAX_PER_MINUTE, $this->counter( $minute_key ) );
@@ -580,6 +581,81 @@ final class RelayAtomicAdmissionTest extends TestCase {
 	}
 
 	// ---------------------------------------------------------------
+	// A backend lost inside the request is not an admission.
+	// ---------------------------------------------------------------
+
+	/**
+	 * Model Redis Object Cache losing its backend on the first $flip_op in the
+	 * admission group: that operation fails, redis_status() turns false, and
+	 * from then on the drop-in answers from a per-request array — where an
+	 * increment of a key it has never seen returns 1.
+	 */
+	private function lose_the_backend_on( string $flip_op ): void {
+		$GLOBALS['mcpwp_test_object_cache_hook'] = static function ( $op, $key, $group ) use ( $flip_op ) {
+			if ( self::GROUP !== $group ) {
+				return null;
+			}
+			$cache = $GLOBALS['wp_object_cache'];
+			if ( $cache->connected ) {
+				if ( $flip_op === $op ) {
+					$cache->connected = false;
+					return false;
+				}
+				return null;
+			}
+			if ( 'incr' === $op ) {
+				return 1;
+			}
+			if ( 'decr' === $op ) {
+				return 0;
+			}
+			return 'add' === $op ? true : null;
+		};
+	}
+
+	public function test_backend_lost_inside_the_gate_refuses_instead_of_admitting_from_memory(): void {
+		// Redis refusing writes while serving reads (OOM under noeviction,
+		// READONLY replica, MISCONF) on a client that throws: the gate's own
+		// add is where the drop-in loses its backend.
+		$this->lose_the_backend_on( 'add' );
+
+		$result = $this->relay_from( '203.0.113.80' );
+
+		$this->assertSame( 'relay_unavailable', $this->outcome( $result ), 'An increment answered from memory is not a count; the token must not be spent on it.' );
+		$this->assertSame( 503, $result->get_error_data()['status'] );
+		$this->assertSame( array(), $this->relay_transients(), 'Nothing is written once the backend is gone.' );
+		$this->assertSame( 'fail_closed', Mcpwp_REST_Feedback::relay_admission_decision()['mode'], 'Later requests are refused up front.' );
+	}
+
+	public function test_backend_lost_while_writing_the_accounting_record_refuses_before_any_spend(): void {
+		// The gate runs against a healthy backend; the loss happens on the
+		// first transient write, after which every write "succeeds" in memory.
+		$GLOBALS['mcpwp_test_transient_write_fails'] = static function () {
+			$GLOBALS['wp_object_cache']->connected = false;
+			return false;
+		};
+
+		$result = $this->relay_from( '203.0.113.81' );
+
+		$this->assertSame( 'relay_unavailable', $this->outcome( $result ), 'The decision must be read again before the token is spent.' );
+		$this->assertSame( 503, $result->get_error_data()['status'] );
+	}
+
+	public function test_admission_rests_on_the_value_the_increment_returned_not_on_a_re_read(): void {
+		$ip = '203.0.113.82';
+		$this->seed_counter( $this->ip_key( $ip ), Mcpwp_REST_Feedback::RELAY_RATE_MAX, Mcpwp_REST_Feedback::RELAY_RATE_WINDOW );
+
+		// Every read of a counter finds it gone, as if evicted between the
+		// increment and the read. Only the increment's own result is evidence.
+		$GLOBALS['mcpwp_test_object_cache_hook'] = static function ( $op, $key, $group ) {
+			return ( 'get' === $op && self::GROUP === $group ) ? false : null;
+		};
+
+		$this->assertSame( 'rate_limited', $this->outcome( $this->relay_from( $ip ) ) );
+		$this->assertSame( Mcpwp_REST_Feedback::RELAY_RATE_MAX, $this->counter( $this->ip_key( $ip ) ) );
+	}
+
+	// ---------------------------------------------------------------
 	// One decision: what is admitted is what is reported.
 	// ---------------------------------------------------------------
 
@@ -591,7 +667,7 @@ final class RelayAtomicAdmissionTest extends TestCase {
 			'redis object cache, admission group ignored'  => array( 'redis_group_ignored', 'approximate', 'admission_group_not_persistent', 'admitted', false ),
 			'cache addition suspended'                     => array( 'addition_suspended', 'approximate', 'cache_addition_suspended', 'admitted', false ),
 			'memcached object cache, connected'            => array( 'memcached', 'atomic', 'memcached_object_cache', 'admitted', true ),
-			'memcached object cache, connection errors'    => array( 'memcached_errors', 'fail_closed', 'object_cache_backend_unreachable', 'relay_unavailable', false ),
+			'memcached object cache, a pool member down'  => array( 'memcached_errors', 'approximate', 'object_cache_pool_degraded', 'admitted', true ),
 			'memcached object cache, group non-persistent' => array( 'memcached_group_non_persistent', 'approximate', 'admission_group_not_persistent', 'admitted', false ),
 			'unrecognised object-cache drop-in'            => array( 'unrecognised', 'unverified', 'unrecognised_object_cache', 'admitted', true ),
 		);
