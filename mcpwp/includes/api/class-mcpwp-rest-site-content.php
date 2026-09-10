@@ -493,7 +493,7 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 				return $this->error_response( 'forbidden_meta_key', __( 'This meta key is not accessible via API.', 'mcpwp' ), 403 );
 			}
 
-			$value = get_post_meta( $post_id, $key, true );
+			$value = $this->mask_credential_value( get_post_meta( $post_id, $key, true ) );
 
 			return $this->success_response(
 				array(
@@ -510,7 +510,7 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 
 		foreach ( $all_meta as $meta_key => $meta_values ) {
 			if ( ! $this->is_blocked_meta_key( $meta_key ) ) {
-				$safe_meta[ $meta_key ] = count( $meta_values ) === 1 ? $meta_values[0] : $meta_values;
+				$safe_meta[ $meta_key ] = $this->mask_credential_value( count( $meta_values ) === 1 ? $meta_values[0] : $meta_values );
 			}
 		}
 
@@ -642,7 +642,34 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			return true;
 		}
 
+		// Meta-specific names that carry a bearer on read even though they
+		// are ordinary enough to write (#797 follow-up): a Slack/Discord
+		// webhook URL is the credential, so is a PayPal signature.
+		if ( preg_match( '/(^|_)(webhook_?url|api_?signature|serial(_?number)?|pin_?code|(access|security|user)_?pin|licen[cs]e)(_|$)/i', str_replace( array( '-', '.', ':' ), '_', strtolower( (string) $meta_key ) ) ) ) {
+			return true;
+		}
+
 		return false;
+	}
+
+	/**
+	 * A meta VALUE that is a credential by shape is masked on read whatever
+	 * its key is called (#797 follow-up) — the same detector the option
+	 * surface uses.
+	 *
+	 * @param mixed $value Meta value.
+	 * @return mixed
+	 */
+	private function mask_credential_value( $value ) {
+		if ( is_string( $value ) && class_exists( 'Mcpwp_Option_Access' ) && Mcpwp_Option_Access::looks_like_credential( $value ) ) {
+			return '***';
+		}
+		if ( is_array( $value ) ) {
+			foreach ( $value as $k => $v ) {
+				$value[ $k ] = $this->mask_credential_value( $v );
+			}
+		}
+		return $value;
 	}
 
 	public function get_rendered_html( $request ) {
