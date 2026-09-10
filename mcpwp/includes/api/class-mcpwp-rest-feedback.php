@@ -487,9 +487,9 @@ class Mcpwp_REST_Feedback extends Mcpwp_REST_API {
 		// Last check before the site's token is spent. The transient writes
 		// above can lose the backend the same way (and so can the stage 1
 		// reads, where a failed read counts as zero): with the drop-in now in
-		// memory every write "succeeds" and nothing was recorded. If the
-		// decision this request was admitted under no longer holds, spend
-		// nothing.
+		// memory every write "succeeds" and nothing was recorded. This is the
+		// only defence when the gate is off. If the counts this request was
+		// admitted on may not have outlived it, spend nothing.
 		$drift = self::relay_admission_drift( $decision );
 		if ( null !== $drift ) {
 			return $drift;
@@ -699,6 +699,8 @@ class Mcpwp_REST_Feedback extends Mcpwp_REST_API {
 	 *   no refusal. With every server down there is nothing to refuse
 	 *   pre-emptively either: this drop-in has no in-memory fallback, so the
 	 *   gate's increment returns false and the relay answers 503 regardless.
+	 *   A failure reported after this decision was read does not refuse the
+	 *   request either; see relay_admission_drift().
 	 * - cache_addition_suspended: wp_suspend_cache_addition() makes
 	 *   wp_cache_add() a no-op, so the gate's keys would be created by the
 	 *   increment — without a TTL on Redis, never on core or memcached (every
@@ -780,17 +782,31 @@ class Mcpwp_REST_Feedback extends Mcpwp_REST_API {
 	}
 
 	/**
-	 * Refuse a request whose admission decision stopped holding while it ran (#752 F6).
+	 * Refuse a request whose counts may not have outlived it (#752 F6).
 	 *
 	 * relay_admission_decision() is read once, at the start of the request, but
-	 * what it reads can change inside the request. A recognised drop-in that
-	 * loses its backend mid-request moves to in-memory storage, after which
-	 * its increments and the transient writes all succeed against memory and
-	 * nothing is counted. On a controller without the gate that state answers
-	 * 503 at the first transient write; the gate must never turn it into an
-	 * admission. So any change — a refusal, or a different mode or basis — means
-	 * the ceilings this request passed cannot be vouched for, and it is answered
-	 * 503. Slots already taken are kept: over-counted, the safe direction.
+	 * what it reads can change inside the request. Two changes mean the counts
+	 * this request was admitted on may have gone to memory, and are refused:
+	 *  - the decision now refuses. Redis Object Cache caught an exception (Redis
+	 *    refusing writes, a read timeout) and answers every later operation —
+	 *    increments and transient writes alike — from a per-request array. A
+	 *    controller without the gate answers 503 at the first transient write
+	 *    in that state; the gate must never turn it into an admission.
+	 *  - the gate's on/off flag changed: the admission group was made
+	 *    non-persistent, or cache addition suspended, while the request ran, so
+	 *    the increments after that point counted nothing durable.
+	 *
+	 * Nothing else is refused, even when the mode or basis moved. The case that
+	 * matters is Automattic memcached reporting a pool member's failure during
+	 * the request (pecl memcache fires its failure callback on the first real
+	 * connect attempt), which moves the basis to object_cache_pool_degraded.
+	 * That drop-in has no in-memory fallback, so the counts just taken are real;
+	 * refusing would spend budget — this request's slots and its transient
+	 * writes — while protecting nothing. Mode and basis describe the report; the
+	 * refusal tracks durability.
+	 *
+	 * A refused request keeps the slots it took: those taken before the loss are
+	 * real and stay counted (the safe direction), those after it are in memory.
 	 * Re-reading costs no I/O; the decision reads drop-in state and constants.
 	 *
 	 * @param array{mode: string, basis: string, gate: bool, refuse: bool} $admitted_under
@@ -800,7 +816,7 @@ class Mcpwp_REST_Feedback extends Mcpwp_REST_API {
 	private static function relay_admission_drift( array $admitted_under ) {
 		$now = self::relay_admission_decision();
 
-		if ( ! $now['refuse'] && $now['mode'] === $admitted_under['mode'] && $now['basis'] === $admitted_under['basis'] ) {
+		if ( ! $now['refuse'] && $now['gate'] === $admitted_under['gate'] ) {
 			return null;
 		}
 

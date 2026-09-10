@@ -641,6 +641,73 @@ final class RelayAtomicAdmissionTest extends TestCase {
 		$this->assertSame( 503, $result->get_error_data()['status'] );
 	}
 
+	public function test_a_memcached_failure_reported_mid_request_does_not_refuse_counts_that_are_real(): void {
+		// A pool member's failure is reported during the request (pecl memcache
+		// fires its failure callback on the first real connect attempt), after
+		// the decision was read. That drop-in has no in-memory fallback: the
+		// counts just taken live on the surviving servers, so refusing would
+		// burn budget and protect nothing.
+		$GLOBALS['wp_object_cache']              = new Mcpwp_Test_Memcached_Object_Cache();
+		$GLOBALS['mcpwp_test_object_cache_hook'] = static function ( $op, $key, $group ) {
+			if ( 'incr' === $op && self::GROUP === $group && array() === $GLOBALS['wp_object_cache']->connection_errors ) {
+				$GLOBALS['wp_object_cache']->connection_errors[] = array(
+					'host' => '10.0.0.2',
+					'port' => 11211,
+				);
+			}
+			return null;
+		};
+		$ip = '203.0.113.83';
+
+		$this->assertSame( 'admitted', $this->outcome( $this->relay_from( $ip ) ), 'Counts that are real are not refused because the report changed.' );
+		$this->assertSame( 'object_cache_pool_degraded', Mcpwp_REST_Feedback::relay_admission_decision()['basis'], 'Precondition: the basis changed inside the request.' );
+		$this->assertSame( 1, $this->counter( $this->ip_key( $ip ) ) );
+	}
+
+	public function test_admission_group_made_non_persistent_mid_request_refuses_before_any_spend(): void {
+		// A plugin marks the admission group non-persistent while the gate
+		// runs, so Redis Object Cache sends that group's later operations to a
+		// per-request array. The backend is up and nothing refuses, but the
+		// gate stopped counting anything that outlives the request.
+		$GLOBALS['mcpwp_test_object_cache_hook'] = static function ( $op, $key, $group ) {
+			$cache = $GLOBALS['wp_object_cache'];
+			if ( 'incr' === $op && self::GROUP === $group && ! in_array( self::GROUP, $cache->ignored_groups, true ) ) {
+				$cache->ignored_groups[] = self::GROUP;
+			}
+			return null;
+		};
+
+		$result = $this->relay_from( '203.0.113.84' );
+
+		$this->assertSame( 'relay_unavailable', $this->outcome( $result ), 'A gate that stopped counting mid-request cannot vouch for this admission.' );
+		$this->assertSame( 503, $result->get_error_data()['status'] );
+		$decision = Mcpwp_REST_Feedback::relay_admission_decision();
+		$this->assertFalse( $decision['refuse'], 'Precondition: nothing refuses; only the gate flag changed.' );
+		$this->assertFalse( $decision['gate'] );
+	}
+
+	public function test_backend_lost_on_a_stage_one_read_with_the_gate_off_refuses_before_any_spend(): void {
+		// Gate off (the admission group is non-persistent), so the re-check
+		// before the GitHub call is the only defence. A relay counter read
+		// times out: the drop-in falls to memory, the read counts as zero and
+		// every write after it "succeeds".
+		$GLOBALS['wp_object_cache']->ignored_groups = array( self::GROUP );
+		$this->assertFalse( Mcpwp_REST_Feedback::relay_admission_decision()['gate'], 'Precondition: the gate does not run.' );
+
+		$GLOBALS['mcpwp_test_transient_hook'] = static function ( $name ) {
+			if ( 0 === strpos( (string) $name, 'mcpwp_relay_' ) ) {
+				$GLOBALS['wp_object_cache']->connected = false;
+			}
+			return null;
+		};
+
+		$result = $this->relay_from( '203.0.113.85' );
+
+		$this->assertSame( 'relay_unavailable', $this->outcome( $result ), 'With the gate off, the last re-check must still stop the spend.' );
+		$this->assertSame( 503, $result->get_error_data()['status'] );
+		$this->assertSame( array(), $this->admission_keys(), 'The gate did not run.' );
+	}
+
 	public function test_admission_rests_on_the_value_the_increment_returned_not_on_a_re_read(): void {
 		$ip = '203.0.113.82';
 		$this->seed_counter( $this->ip_key( $ip ), Mcpwp_REST_Feedback::RELAY_RATE_MAX, Mcpwp_REST_Feedback::RELAY_RATE_WINDOW );
