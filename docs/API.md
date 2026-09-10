@@ -222,6 +222,9 @@ curl "https://your-site.com/wp-json/mcpwp/v1/mcp?api_key=mcpwp_your_api_key_here
 | `destructive_id_mismatch` | 409 | The route id and the body id disagree; nothing was queued |
 | `spend_budget_exceeded` | 413 | The whole call (a batch, a JSON-RPC batch, one tool call) costs more than is left of the request's spend budget; nothing in it ran (`-32030` inside MCP) |
 | `spend_budget_exhausted` | 413 | An operation's price, known only at dispatch, did not fit; it did not run, nor will any later operation in the same request (`-32030` inside MCP) |
+| `invalid_elementor_data` | 422 | The page's stored Elementor data cannot be used as an element tree (`data.stored_as` names the stored form); nothing was written. Replace it through `wp_set_elementor` |
+| `integration_write_failed` | 503 | A provider key or config save, or a removal, did not land (the stored record changed concurrently or could not be read); nothing is reported as saved. Retry |
+| `unknown_provider` | 400 | The integration provider name is not one this site knows |
 
 ---
 
@@ -994,6 +997,10 @@ POST /elementor/{id}
   ]
 }
 ```
+
+**Element ids.** Elementor Pro's AJAX widgets (live search, taxonomy filter, loop filtering) accept only 7-character alphanumeric ids. Ids MCPWP generates are 7 characters. A save warns about other lengths: one line per element where the id reaches an endpoint, one summary line for the rest. It never rewrites them unless asked. Pass `"repair_ids": true` (also on `wp_patch_elementor`, and with `dry_run`) to rewrite non-conforming ids. The repair repoints Taxonomy Filter `selected_element` and Off-canvas references and returns the old→new mapping. Update any custom CSS that names an old id.
+
+**Stored forms.** Existing `_elementor_data` stored as JSON text or as a PHP array (as some imports store it) is read as the tree, and integer-keyed trees are renumbered. Data that cannot be a tree is refused with `422 invalid_elementor_data` on every write, so nothing is overwritten. Reads return `elementor_data: null` with `elementor_data_error`.
 
 #### Create Elementor Page
 
@@ -3253,6 +3260,8 @@ Keys are encrypted at rest using Sodium (libsodium).
 ```http
 DELETE /integrations/providers/{provider}/key
 ```
+
+Answers `removed: true` when a stored key was removed and `removed: false` when none was configured. A removal that did not land returns `503 integration_write_failed`; the key is still stored. Saves (`POST /integrations/configure`, store key) return the same error instead of success when the write is lost.
 
 ##### Test Provider Connection
 
