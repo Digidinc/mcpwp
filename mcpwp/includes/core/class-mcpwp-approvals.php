@@ -127,6 +127,29 @@ class Mcpwp_Approvals {
 	 * @return array|WP_Error Public record.
 	 */
 	public static function create_destructive_request( $operation, array $payload, array $resource, $args = array() ) {
+		$requester = isset( $args['requested_by_key_id'] ) ? sanitize_text_field( (string) $args['requested_by_key_id'] ) : '';
+
+		// A flood of gated calls must not fill the queue other people review.
+		if ( '' !== $requester ) {
+			$pending = 0;
+			foreach ( self::get_all() as $existing ) {
+				if ( isset( $existing['status'], $existing['requested_by_key_id'] ) && 'pending' === $existing['status'] && $existing['requested_by_key_id'] === $requester ) {
+					$pending++;
+				}
+			}
+			if ( $pending >= Mcpwp_Destructive_Gate::MAX_PENDING_PER_REQUESTER ) {
+				return new WP_Error(
+					'too_many_pending',
+					sprintf(
+						/* translators: %d: cap */
+						__( 'This principal already has %d destructive requests pending review. Have them reviewed or rejected before requesting more.', 'mcpwp' ),
+						Mcpwp_Destructive_Gate::MAX_PENDING_PER_REQUESTER
+					),
+					array( 'status' => 429 )
+				);
+			}
+		}
+
 		$id  = self::generate_id();
 		$now = gmdate( 'c' );
 
@@ -228,8 +251,52 @@ class Mcpwp_Approvals {
 	 * @param string $note Approval note.
 	 * @return array|WP_Error Request.
 	 */
-	public static function approve_request( $id, $note = '' ) {
+	public static function approve_request( $id, $note = '', $context = array() ) {
+		$guard = self::guard_actor( $id, $context );
+		if ( is_wp_error( $guard ) ) {
+			return $guard;
+		}
+
 		return self::transition_request( $id, 'approved', 'approved_at', $note );
+	}
+
+	/**
+	 * The two-person rule, enforced where the state changes (#536 review):
+	 * the principal that requested an operation cannot approve or apply it,
+	 * whichever door it comes through — REST, MCP or the Control Room.
+	 *
+	 * @param string $id      Approval id.
+	 * @param array  $context {actor?: string (key/principal id), admin_user?: int}.
+	 * @return true|WP_Error
+	 */
+	private static function guard_actor( $id, $context ) {
+		$context    = is_array( $context ) ? $context : array();
+		$actor      = isset( $context['actor'] ) ? (string) $context['actor'] : '';
+		$admin_user = isset( $context['admin_user'] ) ? (int) $context['admin_user'] : 0;
+
+		if ( '' === $actor && $admin_user < 1 ) {
+			return new WP_Error(
+				'unidentified_actor',
+				__( 'Approving or applying needs an identified actor: a different API principal, or an administrator in wp-admin.', 'mcpwp' ),
+				array( 'status' => 403 )
+			);
+		}
+
+		$request = self::get_private_request( $id );
+		if ( is_wp_error( $request ) ) {
+			return $request;
+		}
+
+		$requester = isset( $request['requested_by_key_id'] ) ? (string) $request['requested_by_key_id'] : '';
+		if ( '' !== $actor && '' !== $requester && $actor === $requester ) {
+			return new WP_Error(
+				'self_approval_forbidden',
+				__( 'The principal that requested this operation cannot approve or apply it. A different admin key, or an administrator in wp-admin, has to.', 'mcpwp' ),
+				array( 'status' => 403 )
+			);
+		}
+
+		return true;
 	}
 
 	/**
@@ -253,6 +320,13 @@ class Mcpwp_Approvals {
 		$request = self::get_private_request( $id );
 		if ( is_wp_error( $request ) ) {
 			return $request;
+		}
+
+		if ( isset( $request['action'] ) && 'destructive_operation' === $request['action'] ) {
+			$guard = self::guard_actor( $id, $context );
+			if ( is_wp_error( $guard ) ) {
+				return $guard;
+			}
 		}
 
 		if ( 'approved' !== $request['status'] ) {
@@ -438,7 +512,7 @@ class Mcpwp_Approvals {
 
 			$result = Mcpwp_Destructive_Gate::replay(
 				isset( $request['payload'] ) && is_array( $request['payload'] ) ? $request['payload'] : array(),
-				isset( $context['api_key'] ) ? (string) $context['api_key'] : ''
+				is_array( $context ) ? $context : array()
 			);
 
 			return is_wp_error( $result ) ? $result : true;
@@ -538,7 +612,10 @@ class Mcpwp_Approvals {
 		}
 
 		$resource = $record['resource'];
-		if ( ( isset( $resource['type'] ) && 'post' !== $resource['type'] ) || empty( $resource['id'] ) ) {
+		// Any post-like resource (post, page, a custom type): a destructive
+		// request against a private page must not leak its title to a
+		// read-scope key through the approvals list.
+		if ( empty( $resource['id'] ) || ! is_numeric( $resource['id'] ) || ( isset( $resource['type'] ) && in_array( $resource['type'], array( 'api_key', 'drafts' ), true ) ) ) {
 			return $record;
 		}
 
@@ -583,7 +660,14 @@ class Mcpwp_Approvals {
 			}
 		);
 
-		$items = array_slice( $items, 0, self::MAX_ITEMS, true );
+		// Only closed records are evicted; a pending or approved request is
+		// someone's unfinished review and stays until it is decided.
+		if ( count( $items ) > self::MAX_ITEMS ) {
+			$open   = array_filter( $items, function ( $item ) { return isset( $item['status'] ) && in_array( $item['status'], array( 'pending', 'approved' ), true ); } );
+			$closed = array_filter( $items, function ( $item ) { return ! isset( $item['status'] ) || ! in_array( $item['status'], array( 'pending', 'approved' ), true ); } );
+			$closed = array_slice( $closed, 0, max( 0, self::MAX_ITEMS - count( $open ) ), true );
+			$items  = $open + $closed;
+		}
 		update_option( self::OPTION_NAME, $items, false );
 	}
 

@@ -303,6 +303,15 @@ trait Mcpwp_Api_Auth {
 			return true;
 		}
 
+		// An approved destructive operation being applied by an administrator
+		// from wp-admin re-dispatches its route in-process. The lift is a PHP
+		// static set by the gate for that one dispatch and carries the admin
+		// user id; nothing a caller sends can set it.
+		if ( class_exists( 'Mcpwp_Destructive_Gate' ) && Mcpwp_Destructive_Gate::applying_as_admin() > 0 && function_exists( 'user_can' ) && user_can( Mcpwp_Destructive_Gate::applying_as_admin(), 'activate_plugins' ) ) {
+			wp_set_current_user( Mcpwp_Destructive_Gate::applying_as_admin() );
+			return true;
+		}
+
 		// Skip rate limiting for batch sub-requests (already counted on the outer request).
 		// Use a PHP static property — not an HTTP header — so external callers cannot
 		// forge this bypass.  The flag is set/cleared by Mcpwp_REST_Batch::execute_operation()

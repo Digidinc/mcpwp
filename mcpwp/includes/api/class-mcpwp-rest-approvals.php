@@ -159,9 +159,13 @@ class Mcpwp_REST_Approvals extends Mcpwp_REST_API {
 			return $self_approval_check;
 		}
 
+		$record = $this->get_current_api_key_record();
 		$result = Mcpwp_Approvals::apply_request(
 			$request->get_param( 'id' ),
-			array( 'api_key' => (string) $this->get_api_key_from_request( $request ) )
+			array(
+				'api_key' => (string) $this->get_api_key_from_request( $request ),
+				'actor'   => is_array( $record ) && ! empty( $record['id'] ) ? (string) $record['id'] : '',
+			)
 		);
 		if ( is_wp_error( $result ) ) {
 			return $result;
@@ -268,10 +272,12 @@ class Mcpwp_REST_Approvals extends Mcpwp_REST_API {
 	 * @return WP_REST_Response|WP_Error Response.
 	 */
 	private function approval_transition_response( $request, $method, $activity ) {
+		$record = $this->get_current_api_key_record();
 		$result = call_user_func(
 			array( 'Mcpwp_Approvals', $method ),
 			$request->get_param( 'id' ),
-			(string) $request->get_param( 'note' )
+			(string) $request->get_param( 'note' ),
+			array( 'actor' => is_array( $record ) && ! empty( $record['id'] ) ? (string) $record['id'] : '' )
 		);
 
 		if ( is_wp_error( $result ) ) {

@@ -475,7 +475,16 @@ class Mcpwp_REST_Media extends Mcpwp_REST_API {
 		$this->log_activity( 'delete_media', $request );
 
 		$attachment_id = absint( $request->get_param( 'id' ) );
-		$force         = (bool) $request->get_param( 'force' );
+		$force         = rest_sanitize_boolean( $request->get_param( 'force' ) );
+
+		// Deleting media removes files from disk: approval by default (#536).
+		if ( $force && Mcpwp_Destructive_Gate::should_gate( $this->get_current_api_key_record() ) ) {
+			$attachment = get_post( $attachment_id );
+			if ( ! $attachment || 'attachment' !== $attachment->post_type ) {
+				return $this->error_response( 'not_found', __( 'Media not found.', 'mcpwp' ), 404, array( 'id' => $attachment_id ) );
+			}
+			return $this->defer_destructive( 'delete_media', $request, array( 'type' => 'attachment', 'id' => $attachment_id, 'title' => (string) $attachment->post_title ), sprintf( 'Permanently delete media #%d', $attachment_id ) );
+		}
 
 		$result = $this->media->delete_media( $attachment_id, $force );
 

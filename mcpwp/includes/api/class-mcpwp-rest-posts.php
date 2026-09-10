@@ -317,12 +317,17 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 	public function delete_post( $request ) {
 		$this->log_activity( 'delete_post', $request );
 
-		$post_id = $request->get_param( 'id' );
-		$force   = $request->get_param( 'force' );
+		$post_id = absint( $request->get_param( 'id' ) );
+		$force   = rest_sanitize_boolean( $request->get_param( 'force' ) );
 
-		// A permanent delete has no undo: approval by default (#536).
-		if ( rest_sanitize_boolean( $force ) && Mcpwp_Destructive_Gate::should_gate( $this->get_current_api_key_record() ) ) {
-			return $this->defer_destructive( 'delete_post', $request, array( 'type' => 'post', 'id' => (int) $post_id, 'title' => get_the_title( (int) $post_id ) ), sprintf( 'Permanently delete post #%d', (int) $post_id ) );
+		// A permanent delete has no undo: approval by default (#536). Only for
+		// a post that exists — a deferral is not a way to manufacture records.
+		if ( $force && Mcpwp_Destructive_Gate::should_gate( $this->get_current_api_key_record() ) ) {
+			$post = get_post( $post_id );
+			if ( ! $post || 'page' === $post->post_type || Mcpwp_Posts::is_blocked_post_type( $post->post_type ) ) {
+				return $this->error_response( 'not_found', __( 'Post not found.', 'mcpwp' ), 404, array( 'id' => $post_id ) );
+			}
+			return $this->defer_destructive( 'delete_post', $request, array( 'type' => (string) $post->post_type, 'id' => $post_id, 'title' => (string) $post->post_title ), sprintf( 'Permanently delete post #%d', $post_id ) );
 		}
 
 		$result = $this->posts->delete_post( $post_id, $force );
@@ -578,11 +583,11 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 
 		$args = array(
 			'type'  => $request->get_param( 'type' ),
-			'force' => $request->get_param( 'force' ),
+			'force' => rest_sanitize_boolean( $request->get_param( 'force' ) ),
 		);
 
 		// Purging every draft permanently has no undo: approval by default (#536).
-		if ( rest_sanitize_boolean( $args['force'] ) && Mcpwp_Destructive_Gate::should_gate( $this->get_current_api_key_record() ) ) {
+		if ( $args['force'] && Mcpwp_Destructive_Gate::should_gate( $this->get_current_api_key_record() ) ) {
 			return $this->defer_destructive( 'delete_all_drafts', $request, array( 'type' => 'drafts', 'id' => null, 'title' => 'all drafts' ), 'Permanently delete all drafts' );
 		}
 

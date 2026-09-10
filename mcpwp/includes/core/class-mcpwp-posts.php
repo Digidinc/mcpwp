@@ -77,6 +77,7 @@ class Mcpwp_Posts {
 		return is_object( $object ) && ! empty( $object->public );
 	}
 
+
 	public static function is_blocked_post_type( $type ) {
 		return in_array( (string) $type, array( 'attachment', 'revision', 'nav_menu_item', 'custom_css', 'customize_changeset', 'oembed_cache', 'wp_global_styles', 'wp_navigation', 'wp_template', 'wp_template_part' ), true );
 	}
@@ -166,6 +167,7 @@ class Mcpwp_Posts {
 			)
 		);
 	}
+
 
 	private function validate_post_type( $type ) {
 		$type = sanitize_key( $type );

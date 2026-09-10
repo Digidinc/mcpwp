@@ -222,6 +222,10 @@ class WP_REST_Request
         return $this->json_params;
     }
 
+    public function get_body_params()
+    {
+        return $this->params;
+    }
 }
 
 class WP_REST_Server
@@ -285,7 +289,12 @@ function is_wp_error($value)
 
 function sanitize_text_field($value)
 {
-    return trim((string) $value);
+        // Mirror core: tags stripped, control characters and surrounding
+        // whitespace removed. A passthrough here hid a stored-XSS class.
+        $value = is_scalar($value) ? (string) $value : '';
+        $value = strip_tags($value);
+        $value = preg_replace('/[\r\n\t ]+/', ' ', $value);
+        return trim($value);
 }
 
 function sanitize_textarea_field($value)
@@ -385,6 +394,21 @@ function wp_unslash($value)
 function wp_set_current_user($user_id)
 {
     $GLOBALS['mcpwp_test_current_user'] = (int) $user_id;
+}
+
+function user_can($user, $capability)
+{
+    // $GLOBALS['mcpwp_test_user_caps'][$id] is either a cap => bool map (the
+    // OAuth tests' convention) or a list of cap names. Unset means no caps.
+    $id   = is_object($user) ? (int) $user->ID : (int) $user;
+    $caps = $GLOBALS['mcpwp_test_user_caps'][ $id ] ?? array();
+    if ($id < 1 || ! is_array($caps)) {
+        return false;
+    }
+    if (array_key_exists($capability, $caps)) {
+        return (bool) $caps[ $capability ];
+    }
+    return in_array($capability, $caps, true);
 }
 
 function get_current_user_id()
@@ -2197,6 +2221,7 @@ require_once dirname(__DIR__) . '/includes/mcp/class-mcpwp-integration.php';
 require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-mcp.php';
 require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-pages.php';
 require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-site-updates.php';
+require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-media.php';
 require_once dirname(__DIR__) . '/includes/class-mcpwp-duplicate-copy.php';
 require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-site-updates.php';
 require_once dirname(__DIR__) . '/includes/class-mcpwp-loader.php';

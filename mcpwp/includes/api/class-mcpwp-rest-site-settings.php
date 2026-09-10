@@ -277,7 +277,6 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 			'oauth_client_secret'     => 'secret',
 			'oauth_token_ttl'         => 'int:60:86400',
 			'alerts_enabled'          => 'bool',
-			'destructive_requires_approval' => 'bool',
 			'alerts_window_minutes'   => 'int:1:60',
 			'alerts_cooldown_minutes' => 'int:1:1440',
 			'alerts_5xx_threshold'    => 'int:1:10000',

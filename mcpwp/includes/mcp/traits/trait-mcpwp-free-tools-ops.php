@@ -65,7 +65,7 @@ trait Mcpwp_Free_Tools_Ops_Trait {
 				),
 				'allow_destructive' => array(
 					'type'        => 'boolean',
-					'description' => 'Let this key run destructive operations (permanent deletes, purge drafts, delete media, revoke keys) without an approval request. Default false: they are deferred to the approval workflow.',
+					'description' => 'Exempt this key from the destructive-operation approval gate. Honoured only when the key is created by an administrator in wp-admin; sent through the API it is ignored and reported under "ignored".',
 				),
 			)
 		);
