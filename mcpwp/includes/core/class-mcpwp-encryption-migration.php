@@ -427,28 +427,13 @@ class Mcpwp_Encryption_Migration {
 	 * @return bool True when exactly this row was updated.
 	 */
 	private static function compare_and_swap_integrations( $expected_raw, array $records ) {
-		global $wpdb;
-
-		if ( null === $expected_raw || ! is_object( $wpdb ) || ! method_exists( $wpdb, 'update' ) || empty( $wpdb->options ) ) {
-			return false;
-		}
-
-		$suppressed = method_exists( $wpdb, 'suppress_errors' ) ? $wpdb->suppress_errors( true ) : null;
-
-		$rows = $wpdb->update(
-			$wpdb->options,
-			array( 'option_value' => maybe_serialize( $records ) ),
-			array(
-				'option_name'  => Mcpwp_Integration_Manager::OPTION_NAME,
-				'option_value' => $expected_raw,
-			),
-			array( '%s' ),
-			array( '%s', '%s' )
+		// Byte-exact: a plain option_value = %s compares with the column's
+		// case-insensitive collation (#845 review).
+		$swapped = Mcpwp_Encryption::compare_and_swap_option_row(
+			Mcpwp_Integration_Manager::OPTION_NAME,
+			$expected_raw,
+			maybe_serialize( $records )
 		);
-
-		if ( null !== $suppressed ) {
-			$wpdb->suppress_errors( $suppressed );
-		}
 
 		// Written behind the options API: drop the cached copies (the option is
 		// autoloaded, so the alloptions copy too).
@@ -457,7 +442,7 @@ class Mcpwp_Encryption_Migration {
 			wp_cache_delete( 'alloptions', 'options' );
 		}
 
-		return 1 === (int) $rows;
+		return $swapped;
 	}
 
 	/**

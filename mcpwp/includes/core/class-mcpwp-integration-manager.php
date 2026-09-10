@@ -45,6 +45,15 @@ class Mcpwp_Integration_Manager {
 	const WRITE_FAILED    = 'failed';
 
 	/**
+	 * Why the last set_provider_key() / set_provider_config() returned false:
+	 * 'unknown_provider', 'encryption_failed' or 'integration_write_failed'
+	 * ('' after a save that succeeded).
+	 *
+	 * @var string
+	 */
+	private $last_save_error = '';
+
+	/**
 	 * Supported providers.
 	 *
 	 * @var array
@@ -298,13 +307,17 @@ class Mcpwp_Integration_Manager {
 	 * @return bool True on success.
 	 */
 	public function set_provider_key( $provider, $key ) {
+		$this->last_save_error = '';
+
 		if ( ! isset( self::PROVIDERS[ $provider ] ) ) {
+			$this->last_save_error = 'unknown_provider';
 			return false;
 		}
 
 		$encryption = Mcpwp_Encryption::get_instance();
 		$encrypted  = $encryption->encrypt( $key );
 		if ( false === $encrypted ) {
+			$this->last_save_error = 'encryption_failed';
 			return false;
 		}
 
@@ -327,13 +340,17 @@ class Mcpwp_Integration_Manager {
 	 * @return bool True on success.
 	 */
 	public function set_provider_config( $provider, $config ) {
+		$this->last_save_error = '';
+
 		if ( ! isset( self::PROVIDERS[ $provider ] ) ) {
+			$this->last_save_error = 'unknown_provider';
 			return false;
 		}
 
 		$encryption = Mcpwp_Encryption::get_instance();
 		$encrypted  = $encryption->encrypt( wp_json_encode( $config ) );
 		if ( false === $encrypted ) {
+			$this->last_save_error = 'encryption_failed';
 			return false;
 		}
 
@@ -416,7 +433,32 @@ class Mcpwp_Integration_Manager {
 	 * @return bool True on success.
 	 */
 	public function remove_provider_key( $provider ) {
-		return $this->save_provider_record( $provider, null );
+		return self::WRITE_STORED === $this->remove_provider_record( $provider );
+	}
+
+	/**
+	 * Remove a provider's record and say what happened (#845 review).
+	 *
+	 * A caller must tell "removed", "there was nothing to remove" and "the
+	 * write was lost, the key is still stored" apart: the last one must never
+	 * be reported as a removal.
+	 *
+	 * @param string $provider Provider slug.
+	 * @return string WRITE_STORED (removed), WRITE_UNCHANGED (nothing was
+	 *                stored for it) or WRITE_FAILED (it is still stored).
+	 */
+	public function remove_provider_record( $provider ) {
+		return $this->write_provider_record( $provider, null );
+	}
+
+	/**
+	 * Why the last set_provider_key() / set_provider_config() returned false.
+	 *
+	 * @return string 'unknown_provider', 'encryption_failed',
+	 *                'integration_write_failed', or '' after a save that succeeded.
+	 */
+	public function get_last_save_error() {
+		return $this->last_save_error;
 	}
 
 	/**
@@ -438,6 +480,21 @@ class Mcpwp_Integration_Manager {
 	 *              not be made, or there was no such provider to remove.
 	 */
 	private function save_provider_record( $provider, $record ) {
+		$saved = self::WRITE_STORED === $this->write_provider_record( $provider, $record );
+
+		$this->last_save_error = $saved ? '' : 'integration_write_failed';
+
+		return $saved;
+	}
+
+	/**
+	 * Write one provider's record (null removes it) and return the outcome.
+	 *
+	 * @param string     $provider Provider slug.
+	 * @param array|null $record   The provider's new record, or null to remove it.
+	 * @return string WRITE_STORED, WRITE_UNCHANGED or WRITE_FAILED.
+	 */
+	private function write_provider_record( $provider, $record ) {
 		$outcome = $this->write_records(
 			static function ( array $records ) use ( $provider, $record ) {
 				if ( null === $record ) {
@@ -456,13 +513,11 @@ class Mcpwp_Integration_Manager {
 			}
 		);
 
-		$saved = self::WRITE_STORED === $outcome;
-
-		if ( $saved && class_exists( 'Mcpwp_Encryption_Migration' ) ) {
+		if ( self::WRITE_STORED === $outcome && class_exists( 'Mcpwp_Encryption_Migration' ) ) {
 			Mcpwp_Encryption_Migration::clear_provider_failure( $provider );
 		}
 
-		return $saved;
+		return $outcome;
 	}
 
 	/**
@@ -514,6 +569,15 @@ class Mcpwp_Integration_Manager {
 			$result['test_status_saved'] = $recorded;
 		}
 
+		// Said, not only flagged: every caller returns this result, and a lost
+		// status write left out of it reads as recorded (#845 review).
+		if ( false === $recorded ) {
+			$result['status_error'] = array(
+				'code'    => 'integration_status_not_saved',
+				'message' => __( 'The connection test ran, but its result could not be recorded: the stored integrations changed or could not be read while saving. The status shown in Integrations is out of date.', 'mcpwp' ),
+			);
+		}
+
 		return $result;
 	}
 
@@ -552,16 +616,25 @@ class Mcpwp_Integration_Manager {
 
 			$value = maybe_serialize( $next );
 
-			if ( $present ) {
+			if ( $present && $value === $row['value'] ) {
 				// An UPDATE that changes nothing matches no row, which would
 				// read as a conflict; the value is already what was asked for.
-				if ( $value === $row['value'] || $this->compare_and_swap_records( $row['value'], $value ) ) {
-					return self::WRITE_STORED;
-				}
-			} elseif ( Mcpwp_Encryption::insert_option_row_if_absent( self::OPTION_NAME, $value, 'yes' ) ) {
+				return self::WRITE_STORED;
+			}
+
+			$written = $present
+				? $this->compare_and_swap_records( $row['value'], $value )
+				: Mcpwp_Encryption::insert_option_row_if_absent( self::OPTION_NAME, $value, 'yes' );
+
+			if ( $written ) {
 				self::forget_cached_records();
 
-				return self::WRITE_STORED;
+				// Stored means the row holds these bytes (#845 review). A value
+				// the column could not hold exactly, or a writer landing right
+				// after this one, is read again rather than reported as stored.
+				if ( $this->row_holds( $value ) ) {
+					return self::WRITE_STORED;
+				}
 			}
 
 			// The row changed, or was created, after it was read: read again.
@@ -578,32 +651,26 @@ class Mcpwp_Integration_Manager {
 	 * @return bool True when exactly this row was updated.
 	 */
 	private function compare_and_swap_records( $expected_raw, $value ) {
-		global $wpdb;
+		// Byte-exact (#845 review): a plain option_value = %s compares with
+		// the column's case-insensitive, pad-space collation.
+		$swapped = Mcpwp_Encryption::compare_and_swap_option_row( self::OPTION_NAME, $expected_raw, $value );
 
-		if ( ! is_object( $wpdb ) || ! method_exists( $wpdb, 'update' ) || empty( $wpdb->options ) ) {
-			return false;
-		}
-
-		$suppressed = method_exists( $wpdb, 'suppress_errors' ) ? $wpdb->suppress_errors( true ) : null;
-
-		$rows = $wpdb->update(
-			$wpdb->options,
-			array( 'option_value' => $value ),
-			array(
-				'option_name'  => self::OPTION_NAME,
-				'option_value' => $expected_raw,
-			),
-			array( '%s' ),
-			array( '%s', '%s' )
-		);
-
-		if ( null !== $suppressed ) {
-			$wpdb->suppress_errors( $suppressed );
-		}
-
+		// A miss can still have raced a write that landed; drop the caches.
 		self::forget_cached_records();
 
-		return 1 === (int) $rows;
+		return $swapped;
+	}
+
+	/**
+	 * Whether the records row holds exactly $value, read past every cache.
+	 *
+	 * @param string $value Serialized records.
+	 * @return bool
+	 */
+	private function row_holds( $value ) {
+		$row = Mcpwp_Encryption::read_option_row( self::OPTION_NAME );
+
+		return Mcpwp_Encryption::ROW_PRESENT === $row['state'] && $value === $row['value'];
 	}
 
 	/**

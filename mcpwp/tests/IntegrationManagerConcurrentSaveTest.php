@@ -298,6 +298,63 @@ final class IntegrationManagerConcurrentSaveTest extends TestCase
         $this->assertSame(array('gemini', 'openai'), $this->sorted_keys($this->records()));
     }
 
+    /**
+     * Review round 2, P3: WHERE option_value = %s compares with the column's
+     * collation, which is case-insensitive and ignores trailing spaces on
+     * WordPress tables. A concurrent change that differs from the value this
+     * save read only in letter case matched it, and the stale copy overwrote
+     * the change. The swap must compare bytes.
+     */
+    public function test_a_concurrent_change_that_differs_only_in_case_is_not_overwritten(): void
+    {
+        $this->seed(array('openai' => $this->record('v2:keyblob-abc')));
+
+        $writes = 0;
+        $GLOBALS['mcpwp_test_wpdb_update_fails'] = function (string $name) use (&$writes): bool {
+            if (self::OPTION === $name) {
+                $writes++;
+            }
+            return false;
+        };
+        $this->between_read_and_write(function (): void {
+            $GLOBALS['mcpwp_test_options'][ self::OPTION ]['openai']['key_encrypted'] = 'v2:KEYBLOB-ABC';
+        });
+
+        $this->assertTrue(Mcpwp_Integration_Manager::get_instance()->set_provider_key('gemini', 'g-key'));
+
+        $records = $this->records();
+        $this->assertSame('v2:KEYBLOB-ABC', $records['openai']['key_encrypted'], 'the concurrent change survived a case-insensitive column compare');
+        $this->assertArrayHasKey('gemini', $records);
+        $this->assertSame(2, $writes, 'the first swap missed on bytes and the retry landed');
+    }
+
+    /**
+     * Review round 2, P3: provider records are written behind the options
+     * API, so the cached copies — the option itself and the autoloaded
+     * alloptions entry — must be dropped, or get_option() keeps answering the
+     * records from before the write. Removing that invalidation passed every
+     * test, because nothing could observe it.
+     */
+    public function test_a_raw_write_drops_the_cached_copies_of_the_records(): void
+    {
+        foreach (array('existing row' => true, 'first save' => false) as $label => $row_exists) {
+            $this->resetState();
+            $this->assertNotFalse(Mcpwp_Encryption::get_instance()->encrypt('warm-up'));
+            if ($row_exists) {
+                $this->seed(array('pexels' => $this->record('v2:pexels-blob')));
+            }
+
+            $GLOBALS['mcpwp_test_object_cache'] = array();
+            $this->assertTrue(wp_cache_add(self::OPTION, array('stale' => $this->record('v2:stale')), 'options'));
+            $this->assertTrue(wp_cache_add('alloptions', array(self::OPTION => 'stale'), 'options'));
+
+            $this->assertTrue(Mcpwp_Integration_Manager::get_instance()->set_provider_key('openai', 'sk-key'), $label);
+
+            $this->assertFalse(wp_cache_get(self::OPTION, 'options'), "{$label}: the cached option is dropped");
+            $this->assertFalse(wp_cache_get('alloptions', 'options'), "{$label}: the cached autoloaded options are dropped");
+        }
+    }
+
     private function sorted_keys(array $records): array
     {
         $keys = array_keys($records);

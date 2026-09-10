@@ -1140,6 +1140,8 @@ if (! isset($GLOBALS['wpdb'])) {
         public $usermeta = 'wp_usermeta';
         public $last_error = '';
         public $insert_id  = 0;
+        /** Set while query() evaluates a byte-exact HEX(option_value) compare-and-swap. */
+        public $exact_option_value_compare = false;
 
         public function prepare($query, ...$args)
         {
@@ -1301,6 +1303,23 @@ if (! isset($GLOBALS['wpdb'])) {
                 return $deleted;
             }
 
+            // The byte-exact compare-and-swap on an options row (#845 review):
+            // HEX(option_value) is immune to the column's case-insensitive,
+            // pad-space collation. Evaluated through update(), so every
+            // concurrency hook a test arms still applies, with an exact compare.
+            if (preg_match("/^UPDATE (\\S*options) SET option_value = '((?:[^'\\\\]|\\\\.)*)' WHERE option_name = '((?:[^'\\\\]|\\\\.)*)' AND HEX\\(option_value\\) = '([0-9A-Fa-f]*)'$/s", trim((string) $query), $m)) {
+                $this->exact_option_value_compare = true;
+                try {
+                    return $this->update(
+                        $m[1],
+                        array('option_value' => str_replace("\\'", "'", $m[2])),
+                        array('option_name' => str_replace("\\'", "'", $m[3]), 'option_value' => (string) hex2bin($m[4]))
+                    );
+                } finally {
+                    $this->exact_option_value_compare = false;
+                }
+            }
+
             return 0;
         }
         public function insert($table, $data, $format = null)
@@ -1365,8 +1384,18 @@ if (! isset($GLOBALS['wpdb'])) {
                 } else {
                     return 0;
                 }
-                if (isset($where['option_value']) && (string) $where['option_value'] !== $current) {
-                    return 0; // compare-and-swap miss
+                // WHERE option_value = %s compares with the column collation,
+                // utf8mb4_*_ci on WordPress tables: case-insensitive, trailing
+                // spaces ignored (#845 review). A byte-exact compare is what
+                // the HEX(option_value) guard in query() asks for.
+                if (isset($where['option_value'])) {
+                    $expected = (string) $where['option_value'];
+                    $matches  = $this->exact_option_value_compare
+                        ? $expected === $current
+                        : 0 === strcasecmp(rtrim($expected, ' '), rtrim($current, ' '));
+                    if (! $matches) {
+                        return 0; // compare-and-swap miss
+                    }
                 }
                 if ($in_rows) {
                     $GLOBALS['mcpwp_test_wpdb_options'][ $name ] = (string) $data['option_value'];
@@ -1592,6 +1621,10 @@ if (! function_exists('wp_clear_scheduled_hook')) {
 if (! function_exists('wp_cache_delete')) {
     function wp_cache_delete($key, $group = '')
     {
+        // Deletes from the object cache double below, as core does. A no-op
+        // delete made every cache invalidation unobservable: removing one
+        // could not fail a test (#845 review).
+        unset($GLOBALS['mcpwp_test_object_cache'][ (string) $group . ':' . (string) $key ]);
         return true;
     }
 }

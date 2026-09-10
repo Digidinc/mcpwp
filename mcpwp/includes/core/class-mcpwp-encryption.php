@@ -538,6 +538,47 @@ class Mcpwp_Encryption {
 	}
 
 	/**
+	 * Replace an option row's value only if it still holds exactly $expected_raw.
+	 *
+	 * `WHERE option_value = %s` compares with the column collation —
+	 * utf8mb4_*_ci on WordPress tables, case-insensitive and blind to trailing
+	 * spaces — so a concurrent change differing only in letter case matched
+	 * and was overwritten (#845 review). HEX() compares the stored bytes, and
+	 * unlike BINARY it is a native function in MySQL, MariaDB and SQLite.
+	 * Callers drop the option caches themselves.
+	 *
+	 * @param string      $name         Option name.
+	 * @param string|null $expected_raw The exact stored value the change was built on.
+	 * @param string      $new_raw      The raw value to store.
+	 * @return bool True when exactly this row was updated.
+	 */
+	public static function compare_and_swap_option_row( $name, $expected_raw, $new_raw ) {
+		global $wpdb;
+
+		if ( null === $expected_raw || ! is_object( $wpdb ) || ! method_exists( $wpdb, 'query' ) || ! method_exists( $wpdb, 'prepare' ) || empty( $wpdb->options ) ) {
+			return false;
+		}
+
+		$suppressed = method_exists( $wpdb, 'suppress_errors' ) ? $wpdb->suppress_errors( true ) : null;
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- a compare-and-swap must bypass the options API and its caches.
+		$rows = $wpdb->query(
+			$wpdb->prepare(
+				"UPDATE {$wpdb->options} SET option_value = %s WHERE option_name = %s AND HEX(option_value) = %s",
+				(string) $new_raw,
+				(string) $name,
+				strtoupper( bin2hex( (string) $expected_raw ) )
+			)
+		);
+
+		if ( null !== $suppressed ) {
+			$wpdb->suppress_errors( $suppressed );
+		}
+
+		return 1 === (int) $rows;
+	}
+
+	/**
 	 * Drop cached copies of an option written or deleted behind the options API.
 	 *
 	 * @param string $name Option name.
