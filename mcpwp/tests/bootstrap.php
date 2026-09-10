@@ -222,10 +222,6 @@ class WP_REST_Request
         return $this->json_params;
     }
 
-    public function get_body_params()
-    {
-        return $this->params;
-    }
 }
 
 class WP_REST_Server
