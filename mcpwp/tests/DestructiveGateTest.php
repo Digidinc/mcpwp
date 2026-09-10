@@ -37,6 +37,16 @@ final class DestructiveGateTest extends TestCase {
 			Mcpwp_REST_MCP::reset_verdict_memo();
 		}
 
+		// A limiter built from this test's own (empty) options, not whatever
+		// limits the previous test class left in the singleton: the flood test
+		// makes 25 calls on one key and is about the approval cap, not rate
+		// limiting (random order exposed the inherited burst_limit of 10).
+		if ( class_exists( 'Mcpwp_Rate_Limiter' ) ) {
+			$limiter = ( new ReflectionClass( Mcpwp_Rate_Limiter::class ) )->getProperty( 'instance' );
+			$limiter->setAccessible( true );
+			$limiter->setValue( null, null );
+		}
+
 		$this->key = ( new Mcpwp_REST_Pages() )->create_scoped_api_key( 'agent', array( 'admin' ) );
 	}
 

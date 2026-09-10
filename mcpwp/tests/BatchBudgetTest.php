@@ -48,6 +48,20 @@ final class BatchBudgetTest extends TestCase {
 	protected function tearDown(): void {
 		$GLOBALS['mcpwp_test_options']    = array();
 		$GLOBALS['mcpwp_test_transients'] = array();
+		$this->reset_rate_limiter();
+	}
+
+	/**
+	 * Mcpwp_Rate_Limiter is a process singleton that caches its settings at
+	 * construction; update_settings() changes that cached copy. Left behind,
+	 * this class's limits become the next class's (#757 family): under a
+	 * random order DestructiveGateTest inherited burst_limit 10 and its
+	 * 25-call flood test was refused at call 11.
+	 */
+	private function reset_rate_limiter(): void {
+		$instance = ( new ReflectionClass( Mcpwp_Rate_Limiter::class ) )->getProperty( 'instance' );
+		$instance->setAccessible( true );
+		$instance->setValue( null, null );
 	}
 
 	private function rpc_batch( int $n ): array {
