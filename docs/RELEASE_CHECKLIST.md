@@ -21,6 +21,22 @@ Releases are cut by **release-please**. Do not bump versions by hand.
 
 A release is not shipped until both publish jobs are green. Each one fails the run if its channel cannot serve the new version.
 
+## Pinning the version
+
+release-please derives the next version from the commits since the last tag: any `feat:` means a minor bump. To ship a different version (for example a planned patch release that contains a small feature), land a commit on `main` whose message has a footer line, on its own line at the start:
+
+```
+Release-As: X.Y.Z
+```
+
+**Squash merges use the PR description as the commit body by default**, so a `Release-As` mentioned in the PR text is not a footer. Set the body explicitly when merging:
+
+```bash
+gh pr merge <N> --squash --body "Release-As: X.Y.Z"
+```
+
+Then confirm the release PR's title changed to the pinned version before merging it.
+
 ## Pre-merge checks for the release PR
 
 - [ ] Suite green locally and on CI, in declaration and random order
