@@ -1,6 +1,6 @@
 # MCPWP Roadmap — near term
 
-Written 2026-09-05, the day 3.10.4 shipped. Updated 2026-09-10, the day 3.11.0 shipped.
+Written 2026-09-05, the day 3.10.4 shipped. Updated 2026-09-10, the day 3.11.0 and 3.11.1 shipped.
 Covers **3.10.x → 3.11 → 4.0**.
 
 The long-form 4.0 architecture plan lives in [ROADMAP-4.0.md](ROADMAP-4.0.md) and is
@@ -11,15 +11,15 @@ what ships next, in which version, and what has to be true before 4.0 is cut.
 
 ## Where we are
 
-**3.11.0** (2026-09-10) is live on `updates.mcpwp.net`, the legacy `mumega.com` routes and
-Freemius; the release job verified both channels. It is the first release of the
-**Truth & Reliability** milestone: batch-weighted rate limits, idempotent tool calls, an
-option-access policy with secret-preserving writes, terms and meta on post writes, and
-approval by default for deletes with no undo. Suite: 1502 tests.
+**3.11.1** (2026-09-10) is live on `updates.mcpwp.net`, the legacy `mumega.com` routes and
+Freemius, verified on all three after the release job. It follows 3.11.0 the same day and
+completes the **Truth & Reliability** security and debt work: 7-character Elementor ids,
+`wp_batch` with a per-request spend budget, atomic feedback-relay admission, encryption key
+integrity, Pro gating for Figma and SEO market data, and explicit analytics consent on Free.
+Suite on main: 1895 tests.
 
-What remains of 3.11 is planned in [ROADMAP-3.11.md](ROADMAP-3.11.md) as three releases:
-**3.11.1** security and debt, **3.12** Elementor write contract, **3.13** response
-contract and data model.
+What remains is planned in [ROADMAP-3.11.md](ROADMAP-3.11.md): **3.12** makes Elementor
+edits reversible and validated (in progress), **3.13** makes responses consistent.
 
 The history below is kept because the lessons still apply.
 

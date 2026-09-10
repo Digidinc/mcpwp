@@ -1,6 +1,6 @@
 # MCPWP 3.11 — Truth & Reliability
 
-Status: **3.11.0 shipped 2026-09-10. 3.11.1 cut 2026-09-10** (contents below). Remaining scope ships as 3.12 and 3.13. Precedes 4.0 (`ROADMAP-4.0.md`). GitHub milestone 14 tracks every item.
+Status: **3.11.0 and 3.11.1 shipped 2026-09-10** (contents below). 3.12 is in progress; 3.13 follows. Precedes 4.0 (`ROADMAP-4.0.md`). GitHub milestone 14 tracks every item.
 
 ## Why 3.11 before 4.0
 
@@ -37,6 +37,21 @@ Behaviour changes are listed under **Upgrade Notes** in `mcpwp/CHANGELOG.md` and
 
 Every PR went through adversarial review until it passed (the relay and follow-ups lanes took three rounds each) and was checked over HTTP on the local rig. Deferred findings from these lanes are tracked in #845. Distribution of the agency build (published with Pro forced on) is an open owner decision tracked in #852.
 
+## On main since 3.11.1 (ships with the next release)
+
+| Change | Issue | PR |
+|---|---|---|
+| Array-stored `_elementor_data` read through one shared reader by every write and read path (no PHP 8 TypeError; unusable data refused with 422 `invalid_elementor_data`); rollback restores Elementor data with correct slashing | #845 | #857 |
+| Provider key saves and removes by byte-exact compare-and-swap; a lost write returns `integration_write_failed` instead of success | #845 | #857 |
+| Figma named in onboarding only on Pro-entitled sites | #845 | #857 |
+| Release uploads agency builds only to a private bucket and fails if one is downloadable without a token | #852 | #855 |
+
+**Infrastructure, deployed 2026-09-10 (#852):** agency builds (`MCPWP_PRO=true`) moved to the private R2 bucket `mcpwp-agency-builds`; the `mcpwp-updates` Worker serves them only with an agency token in the `Authorization` header. The legacy `mumega.com/mcp-updates` host still serves the old public agency objects until an owner decision removes them.
+
+**Open owner decisions:** delete the 32 public agency objects from `mumcp-updates`; whether the Free and Freemius builds should keep honouring `define('MCPWP_PRO', true)` (#852).
+
+**3.12 in progress:** undo through WordPress revisions and validation against Elementor's live controls (#820, #824); patch contract fixes (#825, #826, #828, #829); then verification (#568, #804).
+
 ## Principle for what remains: wrap before build
 
 Where WordPress core, Elementor or a common plugin already does the job, MCPWP exposes it instead of building a second copy. A second copy drifts, and drift is how the plugin ends up reporting things that are not true.
@@ -63,7 +78,7 @@ The issues genuinely MCPWP's own are #802's remaining gaps, #825, #826, #828, #8
 - **Reviewer follow-ups from 3.11.0:** the webhook delivery log stores payloads unredacted; `wp_bulk_find_replace` and `wp_delete_all_drafts` are charged one rate-limit slot; other settings checkboxes flip off when the form omits them.
 - **Freemius verification downloads the premium ZIP**, not only the release flag.
 
-### 3.12 — Elementor you can trust
+### 3.12 — Elementor you can trust (in progress)
 
 - **#820** Revision list and `wp_revert_elementor` over WordPress revisions, for pages, templates, kit CSS and globals.
 - **#824** Validate setting keys against Elementor's live controls; the static registry stays only as an offline fallback. `widget_help` correct both ways.
