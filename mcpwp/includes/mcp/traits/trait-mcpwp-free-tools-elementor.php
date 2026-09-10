@@ -202,7 +202,7 @@ trait Mcpwp_Free_Tools_Elementor_Trait {
 
 		$tools[] = $this->define_tool(
 			'wp_patch_elementor',
-			'Apply multiple operations to an Elementor page in a single read-write cycle (max 20 ops). More efficient than calling add/remove/replace individually. Operations: add, remove, replace, settings. Get element IDs from wp_get_elementor_summary first. Pass repair_ids=true (operations optional) to rewrite element ids that are not exactly 7 alphanumeric characters — Elementor Pro\'s Search live results and Taxonomy Filter/Loop Grid AJAX reject them — and repoint selected_element references; the response\'s id_repair lists every old -> new id.',
+			'Apply multiple operations to an Elementor page in a single read-write cycle (max 20 ops). More efficient than calling add/remove/replace individually. Operations: add, remove, replace, settings. Get element IDs from wp_get_elementor_summary first. Pass repair_ids=true (operations optional) to rewrite element ids that are not exactly 7 alphanumeric characters — Elementor Pro\'s Search live results and Taxonomy Filter/Loop Grid AJAX reject them — and repoint the references Elementor resolves (Taxonomy Filter selected_element, Off-canvas links); the response\'s id_repair lists every old -> new id. Like any validated write, it also applies the validator\'s standard fixes, reported in warnings.',
 			array(
 				'page_id'    => array(
 					'type'        => 'integer',
@@ -238,7 +238,7 @@ trait Mcpwp_Free_Tools_Elementor_Trait {
 				),
 				'repair_ids' => array(
 					'type'        => 'boolean',
-					'description' => 'Rewrite every element id on the page that is not exactly 7 alphanumeric characters to a fresh 7-character id, after the operations run, and repoint selected_element settings that referenced an old id. Existing ids are otherwise never rewritten, because CSS (.elementor-element-<id>) and other widgets refer to them; the response\'s id_repair lists old -> new ids and possible_references to update by hand.',
+					'description' => 'Rewrite every element id on the page that is not exactly 7 alphanumeric characters to a 7-character id derived from the page and the old id (the same page always gets the same ids), after the operations run, and repoint references Elementor resolves (selected_element, Off-canvas dynamic tags and links). Existing ids are otherwise never rewritten, because CSS (.elementor-element-<id>) and other widgets refer to them; the response\'s id_repair lists old -> new ids and possible_references to update by hand.',
 					'default'     => false,
 				),
 				'convert'    => array(
@@ -273,7 +273,7 @@ trait Mcpwp_Free_Tools_Elementor_Trait {
 				),
 				'repair_ids'     => array(
 					'type'        => 'boolean',
-					'description' => 'Rewrite element ids in the data you send that are not exactly 7 alphanumeric characters (Elementor Pro\'s Search and Taxonomy Filter/Loop Grid AJAX reject them) to fresh 7-character ids, repointing selected_element references. The response\'s id_repair lists old -> new ids and settings that may still name an old id. Combine with dry_run=true to preview.',
+					'description' => 'Rewrite element ids in the data you send that are not exactly 7 alphanumeric characters (Elementor Pro\'s Search and Taxonomy Filter/Loop Grid AJAX reject them) to 7-character ids derived from the page and the old id, repointing selected_element and Off-canvas references. The response\'s id_repair lists old -> new ids and settings that may still name an old id. Combine with dry_run=true to preview: the same data on the same page always gets the same ids, so the preview is what the write applies.',
 					'default'     => false,
 				),
 				'convert'    => array(

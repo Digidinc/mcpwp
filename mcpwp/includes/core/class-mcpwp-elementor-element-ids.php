@@ -37,6 +37,16 @@ if ( ! defined( 'ABSPATH' ) ) {
  * elements do not have — an 8-character id on a heading renders exactly as
  * well as a 7-character one. Rewriting is therefore opt-in (`repair_ids`), and
  * reports every change it made and every place it could not follow.
+ *
+ * Two properties the repair keeps (adversarial review r1):
+ *
+ *  - New ids are derived from (seed, old id), with a deterministic collision
+ *    step against the ids already in the tree. The writer seeds with the post
+ *    id, so the same data on the same page always maps to the same ids — a
+ *    dry run shows exactly what the write will apply.
+ *  - References are followed in the forms Elementor stores them in: a plain
+ *    `selected_element`, an Off-canvas dynamic tag (urlencoded JSON), and an
+ *    `off_canvas` elementor-action link (base64 JSON, plain or URL-encoded).
  */
 class Mcpwp_Elementor_Element_Ids {
 
@@ -111,6 +121,55 @@ class Mcpwp_Elementor_Element_Ids {
 		} while ( isset( $taken[ $id ] ) );
 
 		return $id;
+	}
+
+	/**
+	 * Derive an id deterministically.
+	 *
+	 * The same seed, salt and taken set always yield the same id. Random ids
+	 * made a dry-run mapping a guess: CSS updated from it named ids the write
+	 * then did not use.
+	 *
+	 * @param string $seed  Per-document seed (the writer passes the post id).
+	 * @param string $salt  What the id is for, e.g. the old id.
+	 * @param array  $taken Ids already in use, as id => true.
+	 * @return string Seven lowercase alphanumerics not present in $taken.
+	 */
+	public static function derive( $seed, $salt, array $taken ) {
+		$size = strlen( self::ALPHABET );
+
+		for ( $n = 0; ; $n++ ) {
+			$hash = md5( $seed . '|' . $salt . '|' . $n );
+			$id   = '';
+			for ( $i = 0; $i < self::LENGTH; $i++ ) {
+				$id .= self::ALPHABET[ hexdec( substr( $hash, $i * 2, 2 ) ) % $size ];
+			}
+			if ( ! isset( $taken[ $id ] ) ) {
+				return $id;
+			}
+		}
+	}
+
+	/**
+	 * Every id present in a tree.
+	 *
+	 * @param array $elements Element tree.
+	 * @return array id => true.
+	 */
+	public static function ids( array $elements ) {
+		$ids = array();
+
+		self::walk(
+			$elements,
+			'',
+			function ( array &$el ) use ( &$ids ) {
+				if ( isset( $el['id'] ) && ( is_string( $el['id'] ) || is_int( $el['id'] ) ) ) {
+					$ids[ (string) $el['id'] ] = true;
+				}
+			}
+		);
+
+		return $ids;
 	}
 
 	/**
@@ -293,7 +352,7 @@ class Mcpwp_Elementor_Element_Ids {
 			$more = $count > self::SUMMARY_SAMPLE ? sprintf( '; and %d more', $count - self::SUMMARY_SAMPLE ) : '';
 
 			$warnings[] = sprintf(
-				'%1$d element id(s) are not exactly %2$d alphanumeric characters (sample: %3$s%4$s). No AJAX feature in this data uses them and they render fine, but Elementor Pro\'s AJAX widgets (Search live results; a Loop Grid refreshed by a Taxonomy Filter) reject them if one is ever used there. repair_ids=true on wp_patch_elementor (no operations needed) or wp_set_elementor rewrites them; custom CSS that names an old id must then be updated by hand.',
+				'%1$d element id(s) are not exactly %2$d alphanumeric characters (sample: %3$s%4$s). No AJAX feature in this data uses them and they render fine, but Elementor Pro\'s AJAX widgets (Search live results; a Loop Grid refreshed by a Taxonomy Filter) reject them if one is ever used there. repair_ids=true on wp_patch_elementor (operations optional) or wp_set_elementor rewrites them and repoints the references Elementor resolves; custom CSS that names an old id must then be updated by hand.',
 				$count,
 				self::LENGTH,
 				implode( ', ', $sample ),
@@ -305,24 +364,16 @@ class Mcpwp_Elementor_Element_Ids {
 	}
 
 	/**
-	 * Rewrite every non-conforming id to a fresh one and repoint references.
+	 * Rewrite every non-conforming id and repoint the references to it.
 	 *
-	 * @param array $elements Element tree.
+	 * @param array  $elements Element tree.
+	 * @param string $seed     Per-document seed; the same tree and seed always
+	 *                         give the same mapping.
 	 * @return array{elements:array,report:array}
 	 */
-	public static function repair( array $elements ) {
-		// Every id already present, so a new one can never collide with it.
-		$taken = array();
-		self::walk(
-			$elements,
-			'',
-			function ( array &$el ) use ( &$taken ) {
-				if ( isset( $el['id'] ) && ( is_string( $el['id'] ) || is_int( $el['id'] ) ) ) {
-					$taken[ (string) $el['id'] ] = true;
-				}
-			}
-		);
-
+	public static function repair( array $elements, $seed = '' ) {
+		$seed      = (string) $seed;
+		$taken     = self::ids( $elements );
 		$checked   = 0;
 		$mapping   = array();
 		$rewritten = array();
@@ -330,7 +381,7 @@ class Mcpwp_Elementor_Element_Ids {
 		self::walk(
 			$elements,
 			'',
-			function ( array &$el, $path ) use ( &$taken, &$checked, &$mapping, &$rewritten ) {
+			function ( array &$el, $path ) use ( $seed, &$taken, &$checked, &$mapping, &$rewritten ) {
 				if ( ! array_key_exists( 'id', $el ) ) {
 					return;
 				}
@@ -341,14 +392,15 @@ class Mcpwp_Elementor_Element_Ids {
 					return;
 				}
 
-				$old          = self::printable( $el['id'] );
-				$new          = self::generate( $taken );
+				$old           = self::printable( $el['id'] );
+				$new           = self::derive( $seed, $old, $taken );
 				$taken[ $new ] = true;
-				$el['id']     = $new;
+				$el['id']      = $new;
 
 				// First holder wins the mapping; a repeated old id (possible
 				// when called outside the validator, which de-duplicates
-				// first) still gets its own fresh id and its own row below.
+				// first) still gets its own id — the collision step moves it
+				// on — and its own row below.
 				if ( ! isset( $mapping[ $old ] ) ) {
 					$mapping[ $old ] = $new;
 				}
@@ -366,21 +418,23 @@ class Mcpwp_Elementor_Element_Ids {
 		$possible  = array();
 
 		if ( ! empty( $mapping ) ) {
-			$token_patterns = self::token_patterns( array_keys( $mapping ) );
+			$lookup = self::mention_lookup( array_keys( $mapping ) );
 
 			self::walk(
 				$elements,
 				'',
-				function ( array &$el, $path ) use ( $mapping, $token_patterns, &$repointed, &$possible ) {
+				function ( array &$el, $path ) use ( $mapping, $lookup, &$repointed, &$possible ) {
 					if ( empty( $el['settings'] ) || ! is_array( $el['settings'] ) ) {
 						return;
 					}
 
 					foreach ( $el['settings'] as $key => &$value ) {
+						$key = (string) $key;
+
 						if ( isset( self::REFERENCE_KEYS[ $key ] ) && is_string( $value ) && isset( $mapping[ $value ] ) ) {
 							$repointed[] = array(
 								'path' => $path,
-								'key'  => (string) $key,
+								'key'  => $key,
 								'from' => $value,
 								'to'   => $mapping[ $value ],
 							);
@@ -388,7 +442,10 @@ class Mcpwp_Elementor_Element_Ids {
 							continue;
 						}
 
-						self::collect_mentions( $value, (string) $key, $path, $token_patterns, $possible );
+						// Encoded references first, so a repointed one is not
+						// also reported as a mention of the old id.
+						$value = self::repoint_encoded( $value, $key, $path, $mapping, $repointed );
+						self::collect_mentions( $value, $key, $path, $lookup, $possible );
 					}
 					unset( $value );
 				}
@@ -400,7 +457,8 @@ class Mcpwp_Elementor_Element_Ids {
 		$report = array(
 			'requested'            => true,
 			'checked'              => $checked,
-			'mapping'              => $mapping,
+			// An object in JSON whether empty or not: typed clients get one shape.
+			'mapping'              => (object) $mapping,
 			'rewritten'            => $rewritten,
 			'references_repointed' => $repointed,
 			'possible_references'  => $possible,
@@ -408,7 +466,7 @@ class Mcpwp_Elementor_Element_Ids {
 				? sprintf( 'Rewrote %1$d of %2$d element ids to %3$d alphanumeric characters.', $count, $checked, self::LENGTH )
 				: sprintf( 'All %1$d element ids already are %2$d alphanumeric characters; nothing was rewritten.', $checked, self::LENGTH ),
 			'caution'              => $count > 0
-				? 'Element ids are also CSS selectors (.elementor-element-<id>). Only selected_element settings on this page were repointed. Update by hand anything listed in possible_references, and any custom CSS, Custom Code, kit CSS or other page that names an old id — this page\'s tree is all that was searched.'
+				? 'Element ids are also CSS selectors (.elementor-element-<id>). Repointed automatically: Taxonomy Filter selected_element settings, Off-canvas dynamic tags and off_canvas elementor-action links (plain or URL-encoded). Searched and listed in possible_references but not changed: every other setting value in this Elementor data, including URL-encoded text and base64 elementor-action settings — update those by hand. Not searched at all: page-level custom CSS, kit CSS, Custom Code, other pages, templates and popups — update any that name an old id. Purge page caches (wp_flush_cache) so visitors get the new data-id attributes; a cached page keeps sending old ids to Elementor Pro\'s endpoints.'
 				: '',
 		);
 
@@ -444,18 +502,174 @@ class Mcpwp_Elementor_Element_Ids {
 	}
 
 	/**
-	 * Report (never rewrite) setting values that mention an old id as a whole token.
+	 * Repoint references stored in encoded forms, keeping each form.
 	 *
-	 * @param mixed  $value    Setting value; arrays are searched recursively.
-	 * @param string $key      Dotted key path so far.
-	 * @param string $path     Element path.
-	 * @param array  $patterns Regexes from token_patterns().
-	 * @param array  $found    Accumulator.
+	 * @param mixed  $value     Setting value; arrays are processed recursively.
+	 * @param string $key       Dotted key path so far.
+	 * @param string $path      Element path.
+	 * @param array  $mapping   Old id => new id.
+	 * @param array  $repointed Accumulator.
+	 * @return mixed The value, rewritten where a reference was found.
 	 */
-	private static function collect_mentions( $value, $key, $path, array $patterns, array &$found ) {
+	private static function repoint_encoded( $value, $key, $path, array $mapping, array &$repointed ) {
 		if ( is_array( $value ) ) {
 			foreach ( $value as $sub_key => $sub_value ) {
-				self::collect_mentions( $sub_value, $key . '.' . $sub_key, $path, $patterns, $found );
+				$value[ $sub_key ] = self::repoint_encoded( $sub_value, $key . '.' . $sub_key, $path, $mapping, $repointed );
+			}
+			return $value;
+		}
+
+		if ( ! is_string( $value ) || '' === $value ) {
+			return $value;
+		}
+
+		// Core's own tag pattern (Dynamic_Tags Manager::parse_tags_text).
+		if ( false !== strpos( $value, '[elementor-tag' ) ) {
+			$replaced = preg_replace_callback(
+				'/\[elementor-tag.+?(?=\])\]/',
+				function ( $match ) use ( $key, $path, $mapping, &$repointed ) {
+					return self::repoint_tag( $match[0], $key, $path, $mapping, $repointed );
+				},
+				$value
+			);
+			if ( null !== $replaced ) {
+				$value = $replaced;
+			}
+		}
+
+		if ( false !== stripos( $value, 'elementor-action' ) ) {
+			$replaced = preg_replace_callback(
+				'/(?:#|%23)elementor-action(?::|%3A)[^\s"\'<>]*/i',
+				function ( $match ) use ( $key, $path, $mapping, &$repointed ) {
+					return self::repoint_action_hash( $match[0], $key, $path, $mapping, $repointed );
+				},
+				$value
+			);
+			if ( null !== $replaced ) {
+				$value = $replaced;
+			}
+		}
+
+		return $value;
+	}
+
+	/**
+	 * An Off-canvas dynamic tag: `[elementor-tag id=".." name="off-canvas"
+	 * settings="<urlencode(json)>"]`, re-encoded as Manager::tag_to_text does.
+	 *
+	 * @param string $tag       Tag text.
+	 * @param string $key       Dotted key path.
+	 * @param string $path      Element path.
+	 * @param array  $mapping   Old id => new id.
+	 * @param array  $repointed Accumulator.
+	 * @return string
+	 */
+	private static function repoint_tag( $tag, $key, $path, array $mapping, array &$repointed ) {
+		if ( ! preg_match( '/name="(.*?(?="))"/', $tag, $name ) || 'off-canvas' !== $name[1] ) {
+			return $tag;
+		}
+		if ( ! preg_match( '/settings="(.*?(?="]))/', $tag, $encoded ) ) {
+			return $tag;
+		}
+
+		$settings = json_decode( urldecode( $encoded[1] ), true );
+		if ( ! is_array( $settings ) || ! isset( $settings['off_canvas'] ) || ! ( is_string( $settings['off_canvas'] ) || is_int( $settings['off_canvas'] ) ) ) {
+			return $tag;
+		}
+
+		$old = (string) $settings['off_canvas'];
+		if ( ! isset( $mapping[ $old ] ) ) {
+			return $tag;
+		}
+
+		$settings['off_canvas'] = $mapping[ $old ];
+		$repointed[]            = array(
+			'path' => $path,
+			'key'  => $key,
+			'from' => $old,
+			'to'   => $mapping[ $old ],
+		);
+
+		return str_replace(
+			'settings="' . $encoded[1] . '"]',
+			'settings="' . urlencode( wp_json_encode( $settings, JSON_FORCE_OBJECT ) ) . '"]',
+			$tag
+		);
+	}
+
+	/**
+	 * An off_canvas elementor-action link, in any of the three forms Elementor
+	 * produces or accepts: `#` + rawurlencode(body) (Frontend::
+	 * create_action_hash), encodeURIComponent('#' + body) (frontend JS), and
+	 * the plain body (hand-typed, possibly with &amp;). The body is
+	 * `elementor-action:action=off_canvas:<action>&settings=<base64(json)>`.
+	 *
+	 * @param string $hash      Matched link text.
+	 * @param string $key       Dotted key path.
+	 * @param string $path      Element path.
+	 * @param array  $mapping   Old id => new id.
+	 * @param array  $repointed Accumulator.
+	 * @return string
+	 */
+	private static function repoint_action_hash( $hash, $key, $path, array $mapping, array &$repointed ) {
+		$js_encoded = 0 === stripos( $hash, '%23' );
+		$body       = $js_encoded ? substr( $hash, 3 ) : substr( $hash, 1 );
+		$encoded    = $js_encoded || 0 === stripos( $body, 'elementor-action%3A' );
+		$decoded    = $encoded ? rawurldecode( $body ) : $body;
+		$entities   = ! $encoded && false !== strpos( $decoded, '&amp;' );
+
+		if ( $entities ) {
+			$decoded = str_replace( '&amp;', '&', $decoded );
+		}
+
+		if ( ! preg_match( '/^elementor-action:action=(off_canvas:[A-Za-z_]+)&settings=([A-Za-z0-9+\/]+={0,2})$/D', $decoded, $parts ) ) {
+			return $hash;
+		}
+
+		$settings = json_decode( (string) base64_decode( $parts[2], true ), true ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_decode
+		if ( ! is_array( $settings ) || ! isset( $settings['id'] ) || ! ( is_string( $settings['id'] ) || is_int( $settings['id'] ) ) ) {
+			return $hash;
+		}
+
+		$old = (string) $settings['id'];
+		if ( ! isset( $mapping[ $old ] ) ) {
+			return $hash;
+		}
+
+		$settings['id'] = $mapping[ $old ];
+		$repointed[]    = array(
+			'path' => $path,
+			'key'  => $key,
+			'from' => $old,
+			'to'   => $mapping[ $old ],
+		);
+
+		// phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_encode
+		$new_body = 'elementor-action:action=' . $parts[1] . '&settings=' . base64_encode( wp_json_encode( $settings ) );
+
+		if ( $js_encoded ) {
+			return rawurlencode( '#' . $new_body );
+		}
+		if ( $encoded ) {
+			return '#' . rawurlencode( $new_body );
+		}
+		return '#' . ( $entities ? str_replace( '&', '&amp;', $new_body ) : $new_body );
+	}
+
+	/**
+	 * Report (never rewrite) setting values that mention an old id as a whole
+	 * token — in the raw text, URL-decoded, or inside base64 `settings=`.
+	 *
+	 * @param mixed  $value  Setting value; arrays are searched recursively.
+	 * @param string $key    Dotted key path so far.
+	 * @param string $path   Element path.
+	 * @param array  $lookup Result of mention_lookup().
+	 * @param array  $found  Accumulator.
+	 */
+	private static function collect_mentions( $value, $key, $path, array $lookup, array &$found ) {
+		if ( is_array( $value ) ) {
+			foreach ( $value as $sub_key => $sub_value ) {
+				self::collect_mentions( $sub_value, $key . '.' . $sub_key, $path, $lookup, $found );
 			}
 			return;
 		}
@@ -464,38 +678,87 @@ class Mcpwp_Elementor_Element_Ids {
 			return;
 		}
 
-		foreach ( $patterns as $pattern ) {
-			if ( ! preg_match_all( $pattern, $value, $matches ) ) {
-				continue;
+		$ids = array();
+
+		foreach ( self::decoded_forms( $value ) as $text ) {
+			// One tokenising pass per string, then hash lookups: linear in the
+			// text, not in text x ids (review r1 P3-7).
+			if ( ! empty( $lookup['alnum'] ) && preg_match_all( '/[A-Za-z0-9]+/', $text, $tokens ) ) {
+				foreach ( $tokens[0] as $token ) {
+					if ( isset( $lookup['alnum'][ $token ] ) ) {
+						$ids[ $token ] = true;
+					}
+				}
 			}
-			foreach ( array_unique( $matches[0] ) as $id ) {
-				$found[] = array(
-					'path' => $path,
-					'key'  => $key,
-					'id'   => $id,
-				);
+
+			foreach ( $lookup['other'] as $id ) {
+				if ( false !== strpos( $text, $id ) && preg_match( '/(?<![A-Za-z0-9])' . preg_quote( $id, '/' ) . '(?![A-Za-z0-9])/', $text ) ) {
+					$ids[ $id ] = true;
+				}
 			}
+		}
+
+		foreach ( array_keys( $ids ) as $id ) {
+			$found[] = array(
+				'path' => $path,
+				'key'  => $key,
+				'id'   => (string) $id,
+			);
 		}
 	}
 
 	/**
-	 * Whole-token regexes for a set of ids, chunked to keep each pattern small.
+	 * The text itself, its URL-decoded form, and any base64 `settings=`
+	 * payload inside either.
 	 *
-	 * @param array $ids Old ids.
+	 * @param string $text Setting text.
 	 * @return string[]
 	 */
-	private static function token_patterns( array $ids ) {
-		$patterns = array();
+	private static function decoded_forms( $text ) {
+		$forms = array( $text );
 
-		foreach ( array_chunk( $ids, 100 ) as $chunk ) {
-			$quoted = array();
-			foreach ( $chunk as $id ) {
-				$quoted[] = preg_quote( (string) $id, '/' );
-			}
-			$patterns[] = '/(?<![A-Za-z0-9])(?:' . implode( '|', $quoted ) . ')(?![A-Za-z0-9])/';
+		if ( false !== strpos( $text, '%' ) ) {
+			$forms[] = rawurldecode( $text );
 		}
 
-		return $patterns;
+		$payloads = array();
+		foreach ( $forms as $form ) {
+			if ( preg_match_all( '/settings=([A-Za-z0-9+\/]+={0,2})/', $form, $matches ) ) {
+				foreach ( $matches[1] as $candidate ) {
+					$binary = base64_decode( $candidate, true ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_decode
+					if ( false !== $binary && '' !== $binary ) {
+						$payloads[] = $binary;
+					}
+				}
+			}
+		}
+
+		return array_merge( $forms, $payloads );
+	}
+
+	/**
+	 * Split old ids into those a token lookup can find and the rest.
+	 *
+	 * @param array $ids Old ids.
+	 * @return array{alnum:array,other:string[]}
+	 */
+	private static function mention_lookup( array $ids ) {
+		$alnum = array();
+		$other = array();
+
+		foreach ( $ids as $id ) {
+			$id = (string) $id;
+			if ( preg_match( '/^[A-Za-z0-9]+$/D', $id ) ) {
+				$alnum[ $id ] = true;
+			} else {
+				$other[] = $id;
+			}
+		}
+
+		return array(
+			'alnum' => $alnum,
+			'other' => $other,
+		);
 	}
 
 	/**

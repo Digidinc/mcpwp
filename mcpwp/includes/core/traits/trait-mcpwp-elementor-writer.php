@@ -666,13 +666,20 @@ trait Mcpwp_Elementor_Writer_Trait {
 	}
 
 	/**
-	 * Carry an explicit id-repair opt-in (#842) from a request payload to the validator.
+	 * Carry an explicit id-repair opt-in (#842) from a request payload to the
+	 * validator, seeded with the post id so every id the validator generates
+	 * or repairs is deterministic for this page: a dry run and the write that
+	 * follows it assign the same ids.
 	 *
-	 * @param mixed $data Request payload.
+	 * @param mixed $data    Request payload.
+	 * @param int   $page_id Post ID.
 	 * @return array Options for validate_and_fix_elements() / save_elements_to_page().
 	 */
-	private function id_repair_options( $data ) {
-		return array( 'repair_ids' => is_array( $data ) && ! empty( $data['repair_ids'] ) );
+	private function id_repair_options( $data, $page_id ) {
+		return array(
+			'repair_ids' => is_array( $data ) && ! empty( $data['repair_ids'] ),
+			'id_seed'    => (string) (int) $page_id,
+		);
 	}
 
 	/**
@@ -1110,7 +1117,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 		// --- Dry-run mode: validate only, no DB writes ---
 		if ( $dry_run ) {
 			$dry_json   = $elementor_json; // work on a copy
-			$validation = $this->validate_and_fix_elements( $dry_json, $this->id_repair_options( $data ) );
+			$validation = $this->validate_and_fix_elements( $dry_json, $this->id_repair_options( $data, $page_id ) );
 
 			if ( ! empty( $validation['errors'] ) ) {
 				return new WP_Error(
@@ -1236,7 +1243,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 		$input_count = count( json_decode( $elementor_json, true ) ?: array() );
 		$save_debug['sections_submitted'] = $input_count;
 
-		$validation = $this->validate_and_fix_elements( $elementor_json, $this->id_repair_options( $data ) );
+		$validation = $this->validate_and_fix_elements( $elementor_json, $this->id_repair_options( $data, $page_id ) );
 		if ( ! empty( $validation['errors'] ) ) {
 			return new WP_Error(
 				'invalid_elementor_structure',
@@ -2098,7 +2105,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 		$debug['sections_submitted'] = $input_count;
 
 		// Validate and fix (before write).
-		$validation = $this->validate_and_fix_elements( $elementor_json, $this->id_repair_options( $options ) );
+		$validation = $this->validate_and_fix_elements( $elementor_json, $this->id_repair_options( $options, $page_id ) );
 		if ( ! empty( $validation['errors'] ) ) {
 			return new WP_Error( 'invalid_elementor_structure', implode( ' | ', $validation['errors'] ), array( 'status' => 400, 'validation_errors' => $validation['errors'] ) );
 		}
@@ -2673,7 +2680,8 @@ trait Mcpwp_Elementor_Writer_Trait {
 		}
 
 		// A repair-only patch (#842) carries no operations: it rewrites the
-		// page's non-conforming element ids and changes nothing else.
+		// page's non-conforming element ids. Like every validated write it
+		// also applies the validator's standard fixes, reported in warnings.
 		$repair_ids = is_array( $data ) && ! empty( $data['repair_ids'] );
 		$operations = isset( $data['operations'] ) ? $data['operations'] : array();
 		if ( ! is_array( $operations ) || ( empty( $operations ) && ! $repair_ids ) ) {
@@ -2689,20 +2697,24 @@ trait Mcpwp_Elementor_Writer_Trait {
 		}
 
 		$raw      = get_post_meta( $page_id, '_elementor_data', true );
-		$elements = is_string( $raw ) ? json_decode( $raw, true ) : null;
+		$has_data = ! ( '' === $raw || null === $raw || false === $raw );
+		$elements = is_string( $raw ) && '' !== $raw ? json_decode( $raw, true ) : null;
+
+		// Stored data that is present but cannot be read is refused for every
+		// patch. Treating it as an empty page ran the operations against
+		// nothing and overwrote the whole page with their result (review r1).
+		if ( $has_data && ! is_array( $elements ) ) {
+			return new WP_Error( 'invalid_elementor_data', 'This page\'s Elementor data could not be decoded, so nothing was changed. Replace it with a clean tree through wp_set_elementor.', array( 'status' => 422 ) );
+		}
 
 		if ( empty( $operations ) ) {
-			// Repair only. "No Elementor data", "data that cannot be read"
-			// and "nothing to rewrite" are three different answers, and none
-			// of them is a write.
-			if ( ! is_string( $raw ) || '' === $raw ) {
+			// Repair only. "No Elementor data" and "nothing to rewrite" are
+			// different answers, and neither is a write.
+			if ( ! $has_data ) {
 				return new WP_Error( 'no_elementor_data', 'This page has no Elementor data, so there are no element ids to repair. Nothing was written.', array( 'status' => 404 ) );
 			}
-			if ( ! is_array( $elements ) ) {
-				return new WP_Error( 'invalid_elementor_data', 'This page\'s Elementor data could not be decoded, so its element ids could not be checked. Nothing was written.', array( 'status' => 422 ) );
-			}
 
-			$preview = Mcpwp_Elementor_Element_Ids::repair( $elements );
+			$preview = Mcpwp_Elementor_Element_Ids::repair( $elements, (string) (int) $page_id );
 			if ( empty( $preview['report']['rewritten'] ) ) {
 				return array(
 					'success'    => true,
@@ -2855,7 +2867,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 		$debug = $this->save_elements_to_page(
 			$page_id,
 			$elements,
-			array_merge( $this->conversion_options( $data ?? array() ), $this->id_repair_options( $data ) )
+			array_merge( $this->conversion_options( $data ?? array() ), $this->id_repair_options( $data, $page_id ) )
 		);
 		if ( is_wp_error( $debug ) ) {
 			return $debug;
@@ -2865,6 +2877,19 @@ trait Mcpwp_Elementor_Writer_Trait {
 			isset( $debug['validation_warnings'] ) ? $debug['validation_warnings'] : array(),
 			isset( $debug['validation_fixes'] ) ? $debug['validation_fixes'] : array()
 		);
+
+		// Report the id each operation's element carries now. An element the
+		// same call repaired would otherwise be named by an id that no longer
+		// exists, and a follow-up edit using it finds nothing (review r1).
+		if ( isset( $debug['id_repair'] ) ) {
+			$repaired = (array) $debug['id_repair']['mapping'];
+			foreach ( $results as $i => $op_result ) {
+				if ( isset( $op_result['element_id'] ) && is_scalar( $op_result['element_id'] ) && isset( $repaired[ (string) $op_result['element_id'] ] ) ) {
+					$results[ $i ]['element_id_before_repair'] = $op_result['element_id'];
+					$results[ $i ]['element_id']               = $repaired[ (string) $op_result['element_id'] ];
+				}
+			}
+		}
 
 		$result = array(
 			'success'       => true,

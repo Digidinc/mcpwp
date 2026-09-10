@@ -112,7 +112,7 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 							'default'     => false,
 						),
 						'repair_ids' => array(
-							'description' => __( 'Rewrite element ids that are not exactly 7 alphanumeric characters and repoint selected_element references (#842).', 'mcpwp' ),
+							'description' => __( 'Rewrite element ids that are not exactly 7 alphanumeric characters and repoint the references Elementor resolves to them (#842).', 'mcpwp' ),
 							'type'        => 'boolean',
 							'default'     => false,
 						),
@@ -293,7 +293,7 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 							'type'        => 'array',
 						),
 						'repair_ids' => array(
-							'description' => __( 'Rewrite element ids that are not exactly 7 alphanumeric characters and repoint selected_element references (#842).', 'mcpwp' ),
+							'description' => __( 'Rewrite element ids that are not exactly 7 alphanumeric characters and repoint the references Elementor resolves to them (#842).', 'mcpwp' ),
 							'type'        => 'boolean',
 							'default'     => false,
 						),
