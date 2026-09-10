@@ -318,6 +318,60 @@ final class ElementorStoredTreeConsumersTest extends TestCase {
 		);
 	}
 
+	/**
+	 * Review round 2, P2-1: the signal decoded the text once and handed the
+	 * decoded value to the shared reader, which decodes a string again and
+	 * calls false or "" an empty page. Double-encoded JSON, JSON false and
+	 * JSON "" were reported healthy while every edit tool refuses the same
+	 * pages with 422. The signal and the writers must agree.
+	 *
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_broken_elementor_signal_flags_text_the_writers_refuse(): void {
+		if ( ! defined( 'ELEMENTOR_VERSION' ) ) {
+			define( 'ELEMENTOR_VERSION', '4.2.4' );
+		}
+
+		$unusable = array(
+			8472 => wp_json_encode( wp_json_encode( self::tree() ) ), // double-encoded
+			8473 => 'false',
+			8474 => '""',
+		);
+		foreach ( $unusable as $id => $raw ) {
+			$this->page( $id, $raw );
+		}
+		$this->page( 8475, wp_json_encode( self::tree() ) );
+
+		$GLOBALS['wpdb'] = new class() extends Mcpwp_Test_WPDB {
+			public function get_results( $query = '', $output = ARRAY_A ) {
+				$rows = array();
+				foreach ( array( 8472, 8473, 8474, 8475 ) as $id ) {
+					$rows[] = array( 'ID' => $id, 'post_title' => 'Page ' . $id );
+				}
+				return $rows;
+			}
+		};
+
+		$method = new ReflectionMethod( Mcpwp_Signals::class, 'compute_broken_elementor' );
+		$method->setAccessible( true );
+
+		$by_id = array();
+		foreach ( $method->invoke( null ) as $signal ) {
+			$by_id[ $signal['entity_id'] ] = $signal['severity'];
+		}
+		ksort( $by_id );
+
+		$this->assertSame( array( 8472 => 'medium', 8473 => 'medium', 8474 => 'medium' ), $by_id, 'Text that decodes to something other than a tree is broken; well-formed JSON text is healthy.' );
+
+		foreach ( array_keys( $unusable ) as $id ) {
+			$this->assertTrue(
+				Mcpwp_Elementor_Stored_Tree::is_unusable( Mcpwp_Elementor_Stored_Tree::of_post( $id ) ),
+				"Page {$id}: the writers refuse it, so the signal must not call it healthy."
+			);
+		}
+	}
+
 	// ---------------------------------------------------------------------
 	// Design-reference parts (needs ELEMENTOR_VERSION: separate process).
 	// ---------------------------------------------------------------------

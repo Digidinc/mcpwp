@@ -37,45 +37,65 @@ final class Mcpwp_Elementor_Stored_Tree {
 	 * unusable, and the reason says which form they are in.
 	 *
 	 * @param mixed $raw Value of get_post_meta( $id, '_elementor_data', true ).
-	 * @return array{elements:array|null,unusable:string,stored_as:string}
+	 * @return array{elements:array|null,unusable:string,stored_as:string,invalid_json:bool}
 	 *         `elements` is a list ([] for no data), or null when unusable.
+	 *         `invalid_json` is true only for text that is not JSON at all,
+	 *         so a caller can grade that apart without decoding again.
 	 */
 	public static function read( $raw ) {
 		$stored_as = gettype( $raw );
 
 		if ( '' === $raw || null === $raw || false === $raw ) {
-			return array( 'elements' => array(), 'unusable' => '', 'stored_as' => $stored_as );
+			return self::result( array(), '', $stored_as );
 		}
 
 		if ( is_string( $raw ) ) {
 			$decoded = json_decode( $raw, true );
 
 			if ( null === $decoded && JSON_ERROR_NONE !== json_last_error() ) {
-				return array( 'elements' => null, 'unusable' => 'is stored as text that does not decode to an element list (' . json_last_error_msg() . ')', 'stored_as' => $stored_as );
+				return self::result( null, 'is stored as text that does not decode to an element list (' . json_last_error_msg() . ')', $stored_as, true );
 			}
 			if ( null === $decoded ) {
-				return array( 'elements' => array(), 'unusable' => '', 'stored_as' => $stored_as );
+				return self::result( array(), '', $stored_as );
 			}
 			if ( ! is_array( $decoded ) ) {
-				return array( 'elements' => null, 'unusable' => 'is stored as JSON text that decodes to ' . gettype( $decoded ) . ', not an element list', 'stored_as' => $stored_as );
+				return self::result( null, 'is stored as JSON text that decodes to ' . gettype( $decoded ) . ', not an element list', $stored_as );
 			}
 
 			$list = self::element_list( $decoded );
 
 			return null === $list
-				? array( 'elements' => null, 'unusable' => 'is stored as JSON text that is not a list of elements', 'stored_as' => $stored_as )
-				: array( 'elements' => $list, 'unusable' => '', 'stored_as' => $stored_as );
+				? self::result( null, 'is stored as JSON text that is not a list of elements', $stored_as )
+				: self::result( $list, '', $stored_as );
 		}
 
 		if ( is_array( $raw ) ) {
 			$list = self::element_list( $raw );
 
 			return null === $list
-				? array( 'elements' => null, 'unusable' => 'is stored as an array that is not a list of elements', 'stored_as' => $stored_as )
-				: array( 'elements' => $list, 'unusable' => '', 'stored_as' => $stored_as );
+				? self::result( null, 'is stored as an array that is not a list of elements', $stored_as )
+				: self::result( $list, '', $stored_as );
 		}
 
-		return array( 'elements' => null, 'unusable' => 'is stored as ' . $stored_as . ', which is neither JSON text nor an element array', 'stored_as' => $stored_as );
+		return self::result( null, 'is stored as ' . $stored_as . ', which is neither JSON text nor an element array', $stored_as );
+	}
+
+	/**
+	 * Shape one read() answer.
+	 *
+	 * @param array|null $elements     The list, or null when unusable.
+	 * @param string     $unusable     Why it is unusable ('' when usable).
+	 * @param string     $stored_as    gettype() of the stored value.
+	 * @param bool       $invalid_json Text that is not JSON at all.
+	 * @return array{elements:array|null,unusable:string,stored_as:string,invalid_json:bool}
+	 */
+	private static function result( $elements, $unusable, $stored_as, $invalid_json = false ) {
+		return array(
+			'elements'     => $elements,
+			'unusable'     => $unusable,
+			'stored_as'    => $stored_as,
+			'invalid_json' => (bool) $invalid_json,
+		);
 	}
 
 	/**

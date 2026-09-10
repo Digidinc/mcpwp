@@ -357,15 +357,14 @@ class Mcpwp_Signals {
 			if ( '' === $raw || null === $raw || false === $raw ) {
 				continue;
 			}
-			// In whatever form it is stored (#845). Text is decoded once here
-			// (these blobs are large); an array-stored tree renders and is
-			// healthy, and an array that is not a tree is as broken as text
-			// that is not one.
-			$is_text    = is_string( $raw );
-			$decoded    = $is_text ? json_decode( $raw, true ) : $raw;
-			$json_error = $is_text && JSON_ERROR_NONE !== json_last_error();
+			// Classified by the shared reader from the stored value itself, so
+			// this signal and every writer agree on what is unusable (#845):
+			// an array-stored tree is healthy; double-encoded JSON, JSON false
+			// or "" and an array that is not a tree are broken. The reader
+			// decodes text once (these blobs are large).
+			$stored = Mcpwp_Elementor_Stored_Tree::read( $raw );
 			unset( $raw );
-			if ( $json_error ) {
+			if ( $stored['invalid_json'] ) {
 				$signals[] = array(
 					'type'         => 'broken_elementor',
 					'severity'     => 'high',
@@ -375,7 +374,7 @@ class Mcpwp_Signals {
 					'detail'       => 'Elementor data contains invalid JSON — page may render broken.',
 					'action_hint'  => 'Use wp_get_elementor then wp_set_elementor to rebuild the page data.',
 				);
-			} elseif ( Mcpwp_Elementor_Stored_Tree::is_unusable( Mcpwp_Elementor_Stored_Tree::read( $decoded ) ) ) {
+			} elseif ( Mcpwp_Elementor_Stored_Tree::is_unusable( $stored ) ) {
 				$signals[] = array(
 					'type'         => 'broken_elementor',
 					'severity'     => 'medium',
