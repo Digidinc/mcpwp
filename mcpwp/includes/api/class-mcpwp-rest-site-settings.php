@@ -149,8 +149,6 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 	}
 
 	public function update_settings( $request ) {
-		$this->log_activity( 'update_settings', $request );
-
 		$params = $request->get_json_params();
 		if ( empty( $params ) ) {
 			$params = $request->get_params();
@@ -181,12 +179,15 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 		// resets. The refusal is by name so it is never mistaken for a
 		// successful no-op.
 		if ( isset( $params['admin_email'] ) ) {
+			$this->log_activity( 'update_settings_refused', $request, array( 'option' => 'admin_email', 'rule' => 'write_protected:admin_email' ), 403 );
 			return new WP_Error(
 				'forbidden_option',
 				__( 'admin_email is write-protected: a direct write skips the confirmation email and repoints password resets. Change it in WP Admin (rule: write_protected:admin_email).', 'mcpwp' ),
 				array( 'status' => 403, 'rule' => 'write_protected:admin_email' )
 			);
 		}
+
+		$this->log_activity( 'update_settings', $request );
 
 		foreach ( $allowed as $key => $option ) {
 			if ( isset( $params[ $key ] ) ) {
@@ -556,10 +557,13 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 		// A masked read echoed back, or a tree sent without its credential
 		// field, must never destroy the stored secret. The gate below looks at
 		// what the caller SUBMITTED: a preserved field is not one being set.
-		$submitted     = $value;
+		// Sanitised HERE, before the merge, so sanitisation only ever runs
+		// over what the caller sent — never over a preserved credential,
+		// which a '<' or '%' would otherwise silently mutate (round-4 P2-2).
+		$submitted     = $this->sanitize_submitted_option_value( $key, $value );
 		$allow_secrets = rest_sanitize_boolean( $request->get_param( 'allow_secrets' ) );
 		$old_value     = get_option( $key );
-		$merged        = Mcpwp_Option_Access::merge_preserving_secrets( $key, $old_value, $value, $allow_secrets );
+		$merged        = Mcpwp_Option_Access::merge_preserving_secrets( $key, $old_value, $submitted, $allow_secrets );
 		$value         = $merged['value'];
 
 		// A write that would set a credential — a gateway passcode, a licence
@@ -632,20 +636,11 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 			}
 		}
 
-		// Type-specific sanitization
-		if ( 'admin_email' === $key ) {
-			$value = sanitize_email( $value );
-			if ( ! is_email( $value ) ) {
-				return $this->error_response( 'invalid_email', __( 'Invalid email address.', 'mcpwp' ), 400 );
-			}
-		} elseif ( in_array( $key, array( 'posts_per_page', 'posts_per_rss', 'page_on_front', 'page_for_posts', 'default_category', 'thumbnail_size_w', 'thumbnail_size_h', 'medium_size_w', 'medium_size_h', 'large_size_w', 'large_size_h', 'site_icon' ), true ) ) {
+		// Core scalar keys with a fixed type.
+		if ( in_array( $key, array( 'posts_per_page', 'posts_per_rss', 'page_on_front', 'page_for_posts', 'default_category', 'thumbnail_size_w', 'thumbnail_size_h', 'medium_size_w', 'medium_size_h', 'large_size_w', 'large_size_h', 'site_icon' ), true ) ) {
 			$value = absint( $value );
 		} elseif ( 'blog_public' === $key ) {
 			$value = $value ? 1 : 0;
-		} elseif ( is_string( $value ) ) {
-			$value = sanitize_text_field( $value );
-		} elseif ( is_array( $value ) ) {
-			$value = map_deep( $value, 'sanitize_text_field' );
 		}
 
 		// Wrap in try/catch: plugins like Elementor hook into update_option
@@ -680,6 +675,43 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 				'rule'      => $decision['rule'],
 			)
 		);
+	}
+
+	/**
+	 * Sanitise what the caller submitted, in whatever encoding it came: a
+	 * tree leaf-by-leaf, an encoded string through its tree and back into
+	 * the same encoding, a plain string as text. Runs before the merge so a
+	 * preserved credential is never touched.
+	 *
+	 * @param string $key   Option name.
+	 * @param mixed  $value Submitted value.
+	 * @return mixed
+	 */
+	private function sanitize_submitted_option_value( $key, $value ) {
+		if ( is_array( $value ) || is_object( $value ) ) {
+			return map_deep( (array) $value, 'sanitize_text_field' );
+		}
+
+		if ( ! is_string( $value ) ) {
+			return $value;
+		}
+
+		$trimmed = ltrim( $value );
+		if ( '' !== $trimmed && ( '{' === $trimmed[0] || '[' === $trimmed[0] ) ) {
+			$decoded = json_decode( $value, true );
+			if ( is_array( $decoded ) ) {
+				return wp_json_encode( map_deep( $decoded, 'sanitize_text_field' ) );
+			}
+		}
+
+		if ( is_serialized( $value ) ) {
+			$unserialized = @unserialize( $value, array( 'allowed_classes' => false ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.serialize_unserialize -- classes disallowed.
+			if ( is_array( $unserialized ) ) {
+				return serialize( map_deep( $unserialized, 'sanitize_text_field' ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.serialize_serialize -- same form it arrived in.
+			}
+		}
+
+		return sanitize_text_field( $value );
 	}
 
 	public function get_favicon( $request ) {

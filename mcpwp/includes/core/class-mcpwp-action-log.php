@@ -334,8 +334,16 @@ class Mcpwp_Action_Log {
 		}
 
 		if ( in_array( $tool_name, array( 'wp_update_option', 'wp_update_plugin_settings', 'wp_update_rate_limit' ), true ) ) {
-			$key = isset( $arguments['option'] ) ? $arguments['option'] : ( isset( $arguments['option_key'] ) ? $arguments['option_key'] : '' );
-			return array( 'type' => 'option', 'id' => sanitize_key( (string) $key ) );
+			// The tool's argument is `key`; the older names are kept for
+			// callers that still send them.
+			$key = '';
+			foreach ( array( 'key', 'option', 'option_key' ) as $name ) {
+				if ( isset( $arguments[ $name ] ) && is_string( $arguments[ $name ] ) && '' !== $arguments[ $name ] ) {
+					$key = $arguments[ $name ];
+					break;
+				}
+			}
+			return array( 'type' => 'option', 'id' => class_exists( 'Mcpwp_Option_Access' ) ? Mcpwp_Option_Access::sanitize_option_name( $key ) : sanitize_key( (string) $key ) );
 		}
 
 		return array( 'type' => 'other', 'id' => '' );
@@ -393,10 +401,25 @@ class Mcpwp_Action_Log {
 		if ( ! $option_key ) {
 			return null;
 		}
+
+		$value = get_option( $option_key );
+
+		// The action log is readable by anyone who can read the log; a
+		// credential must never sit in it. An option that holds one is
+		// recorded as withheld and cannot be rolled back through this path.
+		if ( class_exists( 'Mcpwp_Option_Access' ) && ! empty( Mcpwp_Option_Access::secret_paths_in_write( $option_key, $value ) ) ) {
+			return wp_json_encode(
+				array(
+					'option_key' => $option_key,
+					'withheld'   => 'credential-shaped fields; rollback unavailable for this option',
+				)
+			);
+		}
+
 		return wp_json_encode(
 			array(
 				'option_key' => $option_key,
-				'value'      => get_option( $option_key ),
+				'value'      => $value,
 			)
 		);
 	}
@@ -452,7 +475,14 @@ class Mcpwp_Action_Log {
 				if ( empty( $snap['option_key'] ) ) {
 					return new WP_Error( 'invalid_snap', __( 'Snapshot missing option_key.', 'mcpwp' ), array( 'status' => 500 ) );
 				}
-				update_option( sanitize_key( $snap['option_key'] ), isset( $snap['value'] ) ? $snap['value'] : '' );
+				if ( ! array_key_exists( 'value', $snap ) ) {
+					return new WP_Error( 'snapshot_withheld', __( 'This option held credential-shaped fields, so its snapshot was withheld from the log. Rollback is not available; restore it in WP Admin.', 'mcpwp' ), array( 'status' => 409 ) );
+				}
+				$name = class_exists( 'Mcpwp_Option_Access' ) ? Mcpwp_Option_Access::sanitize_option_name( $snap['option_key'] ) : sanitize_key( $snap['option_key'] );
+				if ( '' === $name ) {
+					return new WP_Error( 'invalid_snap', __( 'Snapshot option_key is not a usable option name.', 'mcpwp' ), array( 'status' => 500 ) );
+				}
+				update_option( $name, $snap['value'] );
 				return true;
 
 			default:

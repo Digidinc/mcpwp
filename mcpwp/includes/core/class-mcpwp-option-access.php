@@ -334,42 +334,43 @@ class Mcpwp_Option_Access {
 		$root     = self::is_secret_field( $key );
 		$out      = array( 'value' => $value, 'redacted' => array() );
 
-		// A JSON string is a tree the walker would otherwise never see.
-		if ( is_string( $value ) ) {
-			$decoded = self::decode_json_tree( $value );
-			if ( null !== $decoded ) {
-				$walked = self::redact_tree( $decoded, '', $root, $redacted );
-				if ( ! empty( $redacted ) ) {
-					$out['value']        = wp_json_encode( $walked );
-					$out['decoded_from'] = 'json';
-				}
-				$out['redacted'] = $redacted;
-				return $out;
-			}
+		$form = 'native';
+		$tree = self::as_tree( $value, $form );
 
-			// A serialized string is a tree too; it is unserialized without
-			// classes and returned as a structure, never as an unwalked blob.
-			if ( function_exists( 'is_serialized' ) && is_serialized( $value ) ) {
-				$unserialized = @unserialize( $value, array( 'allowed_classes' => false ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.serialize_unserialize -- classes disallowed; read-only redaction.
-				if ( is_array( $unserialized ) ) {
-					$out['value']        = self::redact_tree( $unserialized, '', $root, $redacted );
-					$out['decoded_from'] = 'serialized';
-					$out['redacted']     = $redacted;
-					return $out;
-				}
-			}
-
-			if ( $root && self::looks_like_secret_value( $value ) || self::looks_like_credential( $value ) ) {
+		if ( null === $tree ) {
+			if ( is_string( $value ) && ( ( $root && self::looks_like_secret_value( $value ) ) || self::looks_like_credential( $value ) ) ) {
 				$out['value']    = self::MASK;
 				$out['redacted'] = array( '' );
 			}
-
 			return $out;
 		}
 
-		if ( is_array( $value ) || is_object( $value ) ) {
-			$out['value']    = self::redact_tree( (array) $value, '', $root, $redacted );
-			$out['redacted'] = $redacted;
+		// Every encoded string leaf — JSON or serialised, at any depth — is
+		// opened before the walk and closed after it, so the walker only
+		// ever sees plain trees. That is the one fix for the family of
+		// "correct one encoding level deep" defects (#800 round 4).
+		$forms    = array();
+		$expanded = self::expand( $tree, array(), $forms );
+		$paths    = array();
+		$walked   = self::redact_tree( $expanded, array(), $root, $paths );
+
+		foreach ( $paths as $segments ) {
+			$redacted[] = implode( '.', $segments );
+		}
+
+		$out['value']    = self::collapse( $walked, array(), $forms, $paths );
+		$out['redacted'] = $redacted;
+
+		if ( 'json' === $form ) {
+			if ( ! empty( $redacted ) ) {
+				$out['value'] = wp_json_encode( $out['value'] );
+			} else {
+				$out['value'] = $value;
+			}
+			$out['decoded_from'] = 'json';
+		} elseif ( 'serialized' === $form ) {
+			// Returned as a structure, never as an unwalked blob.
+			$out['decoded_from'] = 'serialized';
 		}
 
 		return $out;
@@ -382,9 +383,9 @@ class Mcpwp_Option_Access {
 	 * @param array  $redacted      Collected paths (by reference).
 	 * @return array
 	 */
-	private static function redact_tree( array $tree, $path, $under_secret, array &$redacted ) {
+	private static function redact_tree( array $tree, array $path, $under_secret, array &$redacted ) {
 		foreach ( $tree as $k => $v ) {
-			$here   = '' === $path ? (string) $k : $path . '.' . $k;
+			$here   = array_merge( $path, array( $k ) );
 			$secret = $under_secret || ( is_string( $k ) && self::is_secret_field( $k ) );
 
 			if ( is_array( $v ) || is_object( $v ) ) {
@@ -399,22 +400,7 @@ class Mcpwp_Option_Access {
 				continue;
 			}
 
-			if ( ! is_string( $v ) ) {
-				continue;
-			}
-
-			// A nested JSON string inside the tree is walked as well.
-			$nested = self::decode_json_tree( $v );
-			if ( null !== $nested ) {
-				$before = count( $redacted );
-				$walked = self::redact_tree( $nested, $here, $secret, $redacted );
-				if ( count( $redacted ) > $before ) {
-					$tree[ $k ] = wp_json_encode( $walked );
-				}
-				continue;
-			}
-
-			if ( ( $secret && self::looks_like_secret_value( $v ) ) || self::looks_like_credential( $v ) ) {
+			if ( is_string( $v ) && ( ( $secret && self::looks_like_secret_value( $v ) ) || self::looks_like_credential( $v ) ) ) {
 				$tree[ $k ] = self::MASK;
 				$redacted[] = $here;
 			}
@@ -440,6 +426,198 @@ class Mcpwp_Option_Access {
 	}
 
 	/**
+	 * Decode a string that carries a tree: a JSON object/array, or a PHP
+	 * serialised array (classes never allowed).
+	 *
+	 * @param mixed       $value Value.
+	 * @param string|null $form  Detected form by reference: json|serialized, or null.
+	 * @return array|null
+	 */
+	private static function decode_leaf( $value, &$form ) {
+		$form = null;
+
+		if ( ! is_string( $value ) ) {
+			return null;
+		}
+
+		$decoded = self::decode_json_tree( $value );
+		if ( null !== $decoded ) {
+			$form = 'json';
+			return $decoded;
+		}
+
+		if ( function_exists( 'is_serialized' ) && is_serialized( $value ) ) {
+			$unserialized = @unserialize( $value, array( 'allowed_classes' => false ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.serialize_unserialize -- classes disallowed.
+			if ( is_array( $unserialized ) ) {
+				$form = 'serialized';
+				return $unserialized;
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * @param array  $tree Tree.
+	 * @param string $form json|serialized.
+	 * @return string
+	 */
+	private static function encode_leaf( array $tree, $form ) {
+		return 'serialized' === $form ? serialize( $tree ) : wp_json_encode( $tree ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.serialize_serialize -- the value was stored serialised; it goes back the same way.
+	}
+
+	/**
+	 * Open every encoded string leaf in a tree, at any depth, so a walker
+	 * only ever sees plain arrays. The forms and the original strings are
+	 * kept, keyed by path, for collapse().
+	 *
+	 * @param array $tree  Tree.
+	 * @param array $path  Segments so far.
+	 * @param array $forms Collected by reference: json-path => {form, raw}.
+	 * @return array
+	 */
+	private static function expand( array $tree, array $path, array &$forms ) {
+		foreach ( $tree as $k => $v ) {
+			$here = array_merge( $path, array( $k ) );
+
+			if ( is_object( $v ) ) {
+				$v = (array) $v;
+			}
+
+			if ( is_array( $v ) ) {
+				$tree[ $k ] = self::expand( $v, $here, $forms );
+				continue;
+			}
+
+			$form    = null;
+			$decoded = self::decode_leaf( $v, $form );
+			if ( null !== $decoded ) {
+				$forms[ wp_json_encode( $here ) ] = array( 'form' => $form, 'raw' => $v );
+				$tree[ $k ]                       = self::expand( $decoded, $here, $forms );
+			}
+		}
+
+		return $tree;
+	}
+
+	/**
+	 * Close what expand() opened. A subtree nothing touched goes back as the
+	 * exact string it came from; one that was changed is re-encoded in the
+	 * form it had.
+	 *
+	 * @param array $tree    Expanded (and possibly modified) tree.
+	 * @param array $path    Segments so far.
+	 * @param array $forms   From expand().
+	 * @param array $touched Segment arrays of every leaf that was changed.
+	 * @return array|string
+	 */
+	private static function collapse( array $tree, array $path, array $forms, array $touched ) {
+		foreach ( $tree as $k => $v ) {
+			if ( is_array( $v ) ) {
+				$tree[ $k ] = self::collapse( $v, array_merge( $path, array( $k ) ), $forms, $touched );
+			}
+		}
+
+		$id = wp_json_encode( $path );
+		if ( empty( $path ) || ! isset( $forms[ $id ] ) ) {
+			return $tree;
+		}
+
+		foreach ( $touched as $segments ) {
+			if ( array_slice( $segments, 0, count( $path ) ) === $path ) {
+				return self::encode_leaf( $tree, $forms[ $id ]['form'] );
+			}
+		}
+
+		return $forms[ $id ]['raw'];
+	}
+
+	/**
+	 * Redact a log payload: exact key names from the site's list, the
+	 * {key: '<secret option>', value: …} rule, and the plugin-wide name and
+	 * shape detectors — through every encoding level, so a credential inside
+	 * a JSON string is not "a string" to the log (#800 round 4, P0-2).
+	 *
+	 * @param mixed $data         Payload.
+	 * @param array $keys         Lower-cased exact key names always redacted.
+	 * @param bool  $under_secret An ancestor was secret-named.
+	 * @return mixed
+	 */
+	public static function redact_for_log( $data, array $keys, $under_secret = false ) {
+		if ( is_object( $data ) ) {
+			$data = (array) $data;
+		}
+
+		if ( is_string( $data ) ) {
+			$form    = null;
+			$decoded = self::decode_leaf( $data, $form );
+			if ( null === $decoded ) {
+				return ( $under_secret && self::looks_like_secret_value( $data ) ) || self::looks_like_credential( $data ) ? '[redacted]' : $data;
+			}
+			$walked = self::redact_for_log( $decoded, $keys, $under_secret );
+			return $walked === $decoded ? $data : self::encode_leaf( $walked, $form );
+		}
+
+		if ( ! is_array( $data ) ) {
+			return $data;
+		}
+
+		// {key: 'woocommerce_api_key', value: 'Hunter2!!'} — the option name
+		// says the value is a secret even when the value's own shape does not.
+		$value_is_secret = isset( $data['key'] ) && is_string( $data['key'] ) && self::is_secret_field( $data['key'] );
+
+		$names_an_option = isset( $data['key'] ) && is_string( $data['key'] ) && array_key_exists( 'value', $data );
+
+		$out = array();
+		foreach ( $data as $k => $v ) {
+			if ( $value_is_secret && 'value' === $k ) {
+				$out[ $k ] = is_array( $v ) || is_object( $v ) ? self::redact_for_log( $v, $keys, true ) : '[redacted]';
+				continue;
+			}
+
+			$k_norm = is_string( $k ) ? strtolower( $k ) : '';
+			if ( '' !== $k_norm && in_array( $k_norm, $keys, true ) ) {
+				$out[ $k ] = '[redacted]';
+				continue;
+			}
+
+			// In a {key, value} row the `key` is an option NAME — the thing
+			// an audit needs to see — not a secret-named field.
+			if ( $names_an_option && 'key' === $k ) {
+				$out[ $k ] = $v;
+				continue;
+			}
+
+			$secret = $under_secret || ( is_string( $k ) && self::is_secret_field( $k ) );
+
+			if ( ( is_int( $v ) || is_float( $v ) ) && $secret ) {
+				$out[ $k ] = '[redacted]';
+				continue;
+			}
+
+			$out[ $k ] = self::redact_for_log( $v, $keys, $secret );
+		}
+
+		return $out;
+	}
+
+	/**
+	 * Whether a path (segment array) is inside a list of paths.
+	 *
+	 * @param array $needle Segments.
+	 * @param array $paths  Segment arrays.
+	 * @return bool
+	 */
+	private static function path_in( array $needle, array $paths ) {
+		foreach ( $paths as $p ) {
+			if ( $p === $needle ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
 	 * @param string $field Field or option name.
 	 * @return bool
 	 */
@@ -449,7 +627,7 @@ class Mcpwp_Option_Access {
 
 		// A descriptive suffix exempts a name unless the name also carries a
 		// hard secret stem: password_at is not a timestamp anyone should read.
-		if ( preg_match( self::NOT_SECRET_SUFFIX_PATTERN, $field ) && ! preg_match( '/(^|[_\-.\s])(pass|passwd|password|passcode|secret|token|credential|private)([_\-.\s]|$)/i', $field ) ) {
+		if ( preg_match( self::NOT_SECRET_SUFFIX_PATTERN, $field ) && ! preg_match( '/(^|[_\-.\s])(pass|passwd|password|passcode|secret|token|credential|private|api_?key|apikey|key|salt|pin|otp|cvv|signature|jwt|bearer)([_\-.\s]|$)/i', $field ) ) {
 			return false;
 		}
 
@@ -574,12 +752,21 @@ class Mcpwp_Option_Access {
 			return array( 'value' => $new, 'preserved' => array(), 'form' => $new_form );
 		}
 
+		// Both sides fully opened: a credential inside a JSON string inside
+		// a serialised array is a leaf like any other from here on.
+		$old_forms = array();
+		$new_forms = array();
+		$old_x     = self::expand( $old_tree, array(), $old_forms );
+		$new_x     = self::expand( $new_tree, array(), $new_forms );
+
 		$old_secret_paths = array();
-		self::collect_secret_paths_including_masked( $old_tree, array(), self::is_secret_field( $key ), $old_secret_paths );
+		self::collect_secret_paths_including_masked( $old_x, array(), self::is_secret_field( $key ), $old_secret_paths );
+
+		$touched = array();
 
 		foreach ( $old_secret_paths as $segments ) {
-			$old_leaf = self::path_get( $old_tree, $segments, $old_exists );
-			$new_leaf = self::path_get( $new_tree, $segments, $exists );
+			$old_leaf = self::path_get( $old_x, $segments, $old_exists );
+			$new_leaf = self::path_get( $new_x, $segments, $exists );
 
 			if ( ! $old_exists ) {
 				continue;
@@ -599,16 +786,29 @@ class Mcpwp_Option_Access {
 			// which case an explicit non-mask value (including '') is an
 			// intentional clear.
 			if ( ! $exists || $is_mask || ( ! $is_replace && ! $allow_secrets ) ) {
-				$new_tree    = self::path_set( $new_tree, $segments, $old_leaf );
+				$new_x       = self::path_set( $new_x, $segments, $old_leaf );
+				$touched[]   = $segments;
 				$preserved[] = implode( '.', $segments );
 			}
 		}
 
-		// The stored value keeps its own form: a JSON-string option goes back
-		// as a JSON string, a serialised one as the array WordPress serialises.
-		$value = $new_tree;
+		// Encoded leaves close in the form the STORED value gave them; a leaf
+		// only the submission had keeps the submission's form.
+		$forms = $new_forms;
+		foreach ( $old_forms as $id => $info ) {
+			$forms[ $id ] = $info;
+		}
+		$value = self::collapse( $new_x, array(), $forms, $touched );
+
+		// The stored value keeps its own top-level form: a JSON-string option
+		// goes back as a JSON string, a serialised-string option as the
+		// serialised string get_option() handed out (WordPress serialises a
+		// serialised string a second time, so what was read as a string is
+		// written as a string).
 		if ( 'json' === $old_form ) {
-			$value = wp_json_encode( $new_tree );
+			$value = wp_json_encode( $value );
+		} elseif ( 'serialized' === $old_form ) {
+			$value = serialize( $value ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.serialize_serialize -- stored form.
 		}
 
 		return array( 'value' => $value, 'preserved' => $preserved, 'form' => $old_form );
@@ -668,9 +868,18 @@ class Mcpwp_Option_Access {
 			return is_string( $value ) && self::MASK === trim( $value );
 		}
 
+		$forms = array();
+		return self::tree_has_mask( self::expand( $tree, array(), $forms ) );
+	}
+
+	/**
+	 * @param array $tree Expanded tree.
+	 * @return bool
+	 */
+	private static function tree_has_mask( array $tree ) {
 		foreach ( $tree as $v ) {
-			if ( is_array( $v ) || is_object( $v ) || ( is_string( $v ) && null !== self::decode_json_tree( $v ) ) ) {
-				if ( self::contains_mask( $v ) ) {
+			if ( is_array( $v ) || is_object( $v ) ) {
+				if ( self::tree_has_mask( (array) $v ) ) {
 					return true;
 				}
 				continue;
@@ -765,24 +974,22 @@ class Mcpwp_Option_Access {
 		$paths = array();
 		$root  = self::is_secret_field( $key );
 
-		if ( is_array( $value ) || is_object( $value ) ) {
-			self::collect_secret_paths( (array) $value, '', $root, $paths );
+		$form = 'native';
+		$tree = self::as_tree( $value, $form );
+
+		if ( null !== $tree ) {
+			$forms    = array();
+			$expanded = self::expand( $tree, array(), $forms );
+			$found    = array();
+			self::collect_secret_paths( $expanded, array(), $root, $found );
+			foreach ( $found as $segments ) {
+				$paths[] = implode( '.', $segments );
+			}
 			return $paths;
 		}
 
-		if ( is_string( $value ) ) {
-			$decoded = self::decode_json_tree( $value );
-			if ( null === $decoded && function_exists( 'is_serialized' ) && is_serialized( $value ) ) {
-				$unserialized = @unserialize( $value, array( 'allowed_classes' => false ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.serialize_unserialize -- classes disallowed; inspection only.
-				$decoded      = is_array( $unserialized ) ? $unserialized : null;
-			}
-			if ( null !== $decoded ) {
-				self::collect_secret_paths( $decoded, '', $root, $paths );
-				return $paths;
-			}
-			if ( ( $root && self::looks_like_secret_value( $value ) ) || self::looks_like_credential( $value ) ) {
-				$paths[] = '';
-			}
+		if ( is_string( $value ) && ( ( $root && self::looks_like_secret_value( $value ) ) || self::looks_like_credential( $value ) ) ) {
+			$paths[] = '';
 		}
 
 		return $paths;
@@ -794,9 +1001,9 @@ class Mcpwp_Option_Access {
 	 * @param bool   $under_secret Ancestor marked.
 	 * @param array  $paths        Collected (by reference).
 	 */
-	private static function collect_secret_paths( array $tree, $path, $under_secret, array &$paths ) {
+	private static function collect_secret_paths( array $tree, array $path, $under_secret, array &$paths ) {
 		foreach ( $tree as $k => $v ) {
-			$here   = '' === $path ? (string) $k : $path . '.' . $k;
+			$here   = array_merge( $path, array( $k ) );
 			$secret = $under_secret || ( is_string( $k ) && self::is_secret_field( $k ) );
 
 			if ( is_array( $v ) || is_object( $v ) ) {

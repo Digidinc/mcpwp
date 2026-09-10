@@ -724,11 +724,193 @@ final class OptionAccessTest extends TestCase {
 	public function test_a_descriptive_suffix_does_not_exempt_a_hard_secret_stem(): void {
 		// password_at is not a timestamp anyone should read, token_type is
 		// not a type. The suffix exemption stops at hard stems.
-		foreach ( array( 'pass_id', 'password_at', 'secret_name', 'token_type' ) as $field ) {
+		foreach ( array( 'pass_id', 'password_at', 'secret_name', 'token_type', 'key_name', 'api_key_label', 'salt_id', 'pin_at', 'jwt_type', 'bearer_name' ) as $field ) {
 			$this->assertTrue( Mcpwp_Option_Access::is_secret_field( $field ), $field );
 		}
-		foreach ( array( 'key_name', 'auth_at', 'api_key_label', 'sig_count' ) as $field ) {
+		// Marking a field secret only MASKS it when its value is secret-shaped
+		// and only GATES a write of a secret-shaped value, so a descriptive
+		// key_name = "Production" is still readable.
+		foreach ( array( 'auth_at', 'sig_count', 'access_level', 'license_status', 'serial_display' ) as $field ) {
 			$this->assertFalse( Mcpwp_Option_Access::is_secret_field( $field ), $field );
 		}
+	}
+
+	// ---------------------------------------------------------------
+	// Round 5: every walker opens every encoding level.
+	// ---------------------------------------------------------------
+
+	public function test_a_credential_inside_a_json_string_inside_the_tree_is_gated_preserved_and_masked(): void {
+		// Round-4 P0-1: only the redactor descended into a nested JSON
+		// string; the gate, the merge and the mask check did not.
+		$this->assertNotEmpty( Mcpwp_Option_Access::secret_paths_in_write( 'wp_mail_smtp', array( 'cfg' => '{"api_key":"sk_live_AbCdEf12345678"}' ) ) );
+		$this->assertSame( array( 'cfg.api_key' ), Mcpwp_Option_Access::secret_paths_in_write( 'wp_mail_smtp', array( 'cfg' => '{"api_key":"sk_live_AbCdEf12345678"}' ) ) );
+
+		$merged = Mcpwp_Option_Access::merge_preserving_secrets( 'wp_mail_smtp', array( 'cfg' => '{"smtp":{"pass":"Hunter2LiveSecret"}}' ), array( 'cfg' => '{"smtp":{}}' ), false );
+		$this->assertStringContainsString( 'Hunter2LiveSecret', $merged['value']['cfg'] );
+		$this->assertSame( array( 'cfg.smtp.pass' ), $merged['preserved'] );
+		$this->assertIsString( $merged['value']['cfg'], 'The leaf closes back into the JSON string it was.' );
+
+		// Live shape from the round-4 repro, through the handler.
+		update_option( 'elementor_probe', array( 'providers' => '{"secret_key":"sk_live_OLDVALUE99887766"}', 'mode' => 'test' ) );
+		$refused = $this->write( 'elementor_probe', array( 'providers' => '{"secret_key":"sk_live_ATTACKER99887766"}' ) );
+		$this->assertSame( 'secret_write_refused', $refused->get_error_code() );
+		$this->assertSame( array( 'providers.secret_key' ), $refused->get_error_data()['secret_paths'] );
+		$this->assertStringContainsString( 'OLDVALUE', get_option( 'elementor_probe' )['providers'] );
+
+		// Partial write of the nested string keeps the credential.
+		$written = $this->write( 'elementor_probe', array( 'providers' => '{}', 'mode' => 'live' ) );
+		$this->assertInstanceOf( WP_REST_Response::class, $written, is_wp_error( $written ) ? $written->get_error_message() : '' );
+		$this->assertStringContainsString( 'OLDVALUE', get_option( 'elementor_probe' )['providers'] );
+		$this->assertSame( 'live', get_option( 'elementor_probe' )['mode'] );
+		$this->assertSame( array( 'providers.secret_key' ), $written->get_data()['preserved'] );
+
+		// The read→edit→write loop works on this shape: the read masks the
+		// nested leaf, echoing it back folds the mask to the stored value.
+		$read = $this->read( 'elementor_probe' )->get_data()['value'];
+		$this->assertSame( '***', json_decode( $read['providers'], true )['secret_key'] );
+		$read['mode'] = 'test';
+		$written      = $this->write( 'elementor_probe', $read );
+		$this->assertInstanceOf( WP_REST_Response::class, $written, is_wp_error( $written ) ? $written->get_error_message() : '' );
+		$this->assertStringContainsString( 'OLDVALUE', get_option( 'elementor_probe' )['providers'] );
+
+		// force_type_change over a tree whose credential sits in a nested
+		// string needs allow_secrets too.
+		$refused = $this->write( 'elementor_probe', 'plain', array( 'force_type_change' => true ) );
+		$this->assertSame( 'secret_write_refused', $refused->get_error_code() );
+	}
+
+	public function test_the_log_never_holds_a_credential_from_a_string_encoded_value(): void {
+		// Round-4 P0-2: the MCP tool declares value as a string, so an
+		// encoded payload is the normal path — and the log walked it as text.
+		$keys = array( 'api_key', 'password', 'secret', 'token' );
+		$out  = Mcpwp_Option_Access::redact_for_log( array( 'key' => 'wp_mail_smtp', 'value' => '{"smtp":{"pass":"Hunter2LivePassword"}}' ), $keys );
+		$this->assertStringNotContainsString( 'Hunter2LivePassword', wp_json_encode( $out ) );
+
+		$out = Mcpwp_Option_Access::redact_for_log( array( 'key' => 'elementor_probe', 'value' => '{"api_key":"LEAKCANARY_abc123456789xyz"}' ), $keys );
+		$this->assertStringNotContainsString( 'LEAKCANARY', wp_json_encode( $out ) );
+		$this->assertSame( 'elementor_probe', $out['key'] );
+
+		$out = Mcpwp_Option_Access::redact_for_log( array( 'value' => serialize( array( 'cfg' => '{"password":"Hunter2LivePassword"}', 'host' => 'smtp.example' ) ) ), $keys ); // phpcs:ignore
+		$this->assertStringNotContainsString( 'Hunter2LivePassword', wp_json_encode( $out ) );
+		$this->assertStringContainsString( 'smtp.example', wp_json_encode( $out ), 'Only the credential goes; the rest of the row stays readable.' );
+
+		// A payload with nothing to hide is returned byte-identical.
+		$this->assertSame( '{"host":"smtp.example","port":587}', Mcpwp_Option_Access::redact_for_log( '{"host":"smtp.example","port":587}', $keys ) );
+
+		// End to end through the handler's own log call, both accepted and refused.
+		$GLOBALS['mcpwp_test_wpdb_rows'] = array();
+		update_option( 'mcpwp_settings', array( 'enable_logging' => true ) );
+		update_option( 'elementor_probe', array( 'mode' => 'test' ) );
+		$this->write( 'elementor_probe', '{"api_key":"LEAKCANARY_abc123456789xyz","mode":"live"}' );
+		$this->write( 'elementor_probe', '{"api_key":"LEAKCANARY_abc123456789xyz","mode":"live"}', array( 'allow_secrets' => true ) );
+		$this->assertStringNotContainsString( 'LEAKCANARY', wp_json_encode( $GLOBALS['mcpwp_test_wpdb_rows'] ) );
+
+		// The admin renderer uses the same walker.
+		if ( ! class_exists( 'Mcpwp_Activity_Log_Page' ) ) {
+			require_once dirname( __DIR__ ) . '/includes/admin/class-mcpwp-activity-log.php';
+		}
+		$admin  = new ReflectionMethod( Mcpwp_Activity_Log_Page::class, 'redact_sensitive' );
+		$admin->setAccessible( true );
+		$shown = $admin->invoke( ( new ReflectionClass( Mcpwp_Activity_Log_Page::class ) )->newInstanceWithoutConstructor(), array( 'key' => 'elementor_probe', 'value' => '{"cfg":"{\\"secret_key\\":\\"sk_live_AbCdEf12345678\\"}"}' ) );
+		$this->assertStringNotContainsString( 'sk_live', wp_json_encode( $shown ) );
+	}
+
+	public function test_a_nested_serialized_string_is_masked_on_read_and_a_mask_inside_it_is_refused(): void {
+		// Round-4 P1-1 and P1-3.
+		$out = Mcpwp_Option_Access::redact( 'wp_mail_smtp', array( 'cfg' => serialize( array( 'pass' => 'Hunter2Live!' ) ) ) ); // phpcs:ignore
+		$this->assertStringNotContainsString( 'Hunter2Live!', wp_json_encode( $out['value'] ) );
+		$this->assertSame( array( 'cfg.pass' ), $out['redacted'] );
+		$this->assertTrue( is_serialized( $out['value']['cfg'] ), 'Closed back into the encoding it had.' );
+
+		$this->assertTrue( Mcpwp_Option_Access::contains_mask( array( 'cfg' => serialize( array( 'pass' => '***' ) ) ) ) ); // phpcs:ignore
+		$this->assertTrue( Mcpwp_Option_Access::contains_mask( serialize( array( 'a' => '{"b":"***"}' ) ) ) ); // phpcs:ignore
+		$this->assertFalse( Mcpwp_Option_Access::contains_mask( array( 'cfg' => serialize( array( 'pass' => 'x' ) ) ) ) ); // phpcs:ignore
+	}
+
+	public function test_a_serialized_string_option_stays_a_string_after_the_merge(): void {
+		// Round-4 P1-2: WordPress serialises an already-serialised string a
+		// second time, so get_option() returned a string before the write
+		// and must return one after it.
+		$merged = Mcpwp_Option_Access::merge_preserving_secrets( 'wp_mail_smtp', serialize( array( 'host' => 'a', 'pass' => 'Hunter2LiveSecret' ) ), array( 'host' => 'b' ), false ); // phpcs:ignore
+		$this->assertIsString( $merged['value'] );
+		$this->assertTrue( is_serialized( $merged['value'] ) );
+		$back = unserialize( $merged['value'] ); // phpcs:ignore
+		$this->assertSame( 'Hunter2LiveSecret', $back['pass'] );
+		$this->assertSame( 'b', $back['host'] );
+	}
+
+	public function test_a_refused_settings_write_is_logged_as_a_refusal_not_a_success(): void {
+		// Round-4 P2-1.
+		$GLOBALS['mcpwp_test_wpdb_rows'] = array();
+		update_option( 'mcpwp_settings', array( 'enable_logging' => true ) );
+
+		$request = new WP_REST_Request( 'PUT', '/mcpwp/v1/settings', array( 'title' => 'New', 'admin_email' => 'attacker@example.net' ) );
+		( new Mcpwp_REST_Site_Settings() )->update_settings( $request );
+
+		$rows = $GLOBALS['mcpwp_test_wpdb_rows'];
+		$log  = wp_json_encode( $rows );
+		$this->assertStringContainsString( 'update_settings_refused', $log );
+		$this->assertStringNotContainsString( '"action":"update_settings"', $log );
+		$this->assertStringContainsString( '"status_code":403', $log );
+	}
+
+	public function test_a_preserved_credential_is_never_run_through_the_sanitizer(): void {
+		// Round-4 P2-2: map_deep(sanitize_text_field) over the merged value
+		// mutated a preserved secret containing '<' or '%'.
+		update_option( 'elementor_probe', array( 'api_key' => 'sk_live_<a%20b>AbCdEf12345678', 'mode' => 'test' ) );
+
+		$written = $this->write( 'elementor_probe', array( 'mode' => '  live  ' ) );
+		$this->assertInstanceOf( WP_REST_Response::class, $written, is_wp_error( $written ) ? $written->get_error_message() : '' );
+		$this->assertSame( 'sk_live_<a%20b>AbCdEf12345678', get_option( 'elementor_probe' )['api_key'] );
+		$this->assertSame( 'live', get_option( 'elementor_probe' )['mode'], 'The submission is still sanitised (the harness double trims).' );
+
+		// An encoded submission is sanitised through its tree and returned
+		// in its encoding — a JSON string does not come out as text with the
+		// braces stripped.
+		update_option( 'elementor_probe', '{"mode":"test"}' );
+		$this->write( 'elementor_probe', '{"mode":"  live  "}' );
+		$stored = json_decode( get_option( 'elementor_probe' ), true );
+		$this->assertIsArray( $stored );
+		$this->assertSame( 'live', $stored['mode'] );
+	}
+
+	public function test_the_action_log_snapshots_the_real_argument_and_withholds_credentials(): void {
+		// Round-4 P2-5: the tool's argument is `key`, the snapshot read
+		// `option` — so option rollbacks were never taken — and the snapshot
+		// would have stored get_option() unredacted once the names met.
+		$detect = new ReflectionMethod( Mcpwp_Action_Log::class, 'detect_resource' );
+		$detect->setAccessible( true );
+		$this->assertSame( array( 'type' => 'option', 'id' => 'elementor_probe' ), $detect->invoke( null, 'wp_update_option', array( 'key' => 'elementor_probe', 'value' => 'x' ) ) );
+
+		$snapshot = new ReflectionMethod( Mcpwp_Action_Log::class, 'snapshot_option' );
+		$snapshot->setAccessible( true );
+
+		update_option( 'elementor_probe', array( 'api_key' => 'sk_live_AbCdEf12345678', 'mode' => 'test' ) );
+		$snap = json_decode( $snapshot->invoke( null, 'elementor_probe' ), true );
+		$this->assertArrayNotHasKey( 'value', $snap );
+		$this->assertStringNotContainsString( 'sk_live', wp_json_encode( $snap ) );
+		$this->assertArrayHasKey( 'withheld', $snap );
+
+		update_option( 'elementor_probe', array( 'mode' => 'test' ) );
+		$snap = json_decode( $snapshot->invoke( null, 'elementor_probe' ), true );
+		$this->assertSame( array( 'mode' => 'test' ), $snap['value'] );
+
+		// Applying a withheld snapshot is a refusal, not an empty-string write.
+		$apply = new ReflectionMethod( Mcpwp_Action_Log::class, 'apply_snapshot' );
+		$apply->setAccessible( true );
+		$result = $apply->invoke( null, 'option', array( 'option_key' => 'elementor_probe', 'withheld' => 'x' ) );
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'snapshot_withheld', $result->get_error_code() );
+		$this->assertSame( array( 'mode' => 'test' ), get_option( 'elementor_probe' ) );
+	}
+
+	public function test_untouched_nested_strings_come_back_byte_identical(): void {
+		// A read that changes the formatting of a nested JSON string it did
+		// not redact would make every diff noisy and every hash wrong.
+		$raw = '{ "b": 1,   "a": [1, 2] }';
+		update_option( 'elementor_probe', array( 'cfg' => $raw, 'api_key' => 'sk_live_AbCdEf12345678' ) );
+		$value = $this->read( 'elementor_probe' )->get_data()['value'];
+		$this->assertSame( $raw, $value['cfg'] );
+		$this->assertSame( '***', $value['api_key'] );
 	}
 }

@@ -52,6 +52,11 @@ trait Mcpwp_Logging {
 	 * @return mixed
 	 */
 	protected function redact_log_data( $data, $redaction_keys, $under_secret = false ) {
+		// One walker for the whole plugin, through every encoding level.
+		if ( class_exists( 'Mcpwp_Option_Access' ) && method_exists( 'Mcpwp_Option_Access', 'redact_for_log' ) ) {
+			return Mcpwp_Option_Access::redact_for_log( $data, array_map( 'strtolower', array_map( 'strval', (array) $redaction_keys ) ), $under_secret );
+		}
+
 		if ( is_array( $data ) ) {
 			// {key: 'woocommerce_api_key', value: 'Hunter2!!'} — the option
 			// name says the value is a secret even when the value's own shape

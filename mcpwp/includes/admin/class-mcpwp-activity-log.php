@@ -410,6 +410,10 @@ class Mcpwp_Activity_Log_Page {
 			}
 		}
 
+		if ( class_exists( 'Mcpwp_Option_Access' ) && method_exists( 'Mcpwp_Option_Access', 'redact_for_log' ) ) {
+			return Mcpwp_Option_Access::redact_for_log( $data, array_map( 'strtolower', $sensitive_keys ), false );
+		}
+
 		return $this->redact_tree( $data, $sensitive_keys, false );
 	}
 
