@@ -276,6 +276,7 @@ GET /rate-limit
     }
   },
   "relay_admission": "atomic",
+  "relay_admission_basis": "redis_object_cache",
   "relay_limits": {
     "per_ip": { "limit": 10, "window_seconds": 60 },
     "global_per_minute": { "limit": 20, "window_seconds": 60 },
@@ -284,15 +285,35 @@ GET /rate-limit
 }
 ```
 
-`relay_admission` and `relay_limits` describe the public feedback relay (`POST /feedback/relay`), not the API limits above. The relay is unauthenticated and spends the site's GitHub token, so it has three ceilings of its own: per source address, site-wide per minute, and site-wide per hour.
+`relay_admission`, `relay_admission_basis` and `relay_limits` describe the public feedback relay (`POST /feedback/relay`), not the API limits above. The relay is unauthenticated and spends the site's GitHub token, so it has three ceilings of its own: per source address, site-wide per minute, and site-wide per hour.
+
+`GET /rate-limit` needs **read** scope (only `PUT`/`POST` need admin), so any read-scope API key or OAuth token for this site can see these fields. They reveal the relay's ceilings, which are constants in the plugin's published source, and how this site's object cache enforces them. None of it appears in the public relay's own responses.
 
 | `relay_admission` | Meaning |
 |---|---|
-| `atomic` | A persistent object cache (an object-cache drop-in such as Redis or Memcached) is present. Admission is decided on the cache's atomic increment, so concurrent requests cannot push a ceiling past its limit. It is only as strong as the drop-in's `wp_cache_add` / `wp_cache_incr`, and needs the `mcpwp_relay_admission` cache group to be persistent. |
-| `approximate` | No persistent object cache. Admission is a transient read-then-write, so a burst of concurrent requests can pass a ceiling by roughly the size of the burst. The ceilings still hold for sequential traffic. |
-| `unavailable` | The relay controller is not loaded, so the mode could not be determined. `relay_limits` is omitted. |
+| `atomic` | Admission is decided on an increment known to be atomic: a recognised object-cache drop-in (Redis Object Cache without igbinary, or Automattic memcached) with its backend reachable and the `mcpwp_relay_admission` group persistent. Concurrent requests cannot take a slot past a ceiling. |
+| `unverified` | An object-cache drop-in the plugin does not recognise. Admission is decided on its increment, but whether that increment is atomic, or whether the drop-in is currently persisting anything, cannot be determined. Treat it as no stronger than `approximate`. |
+| `approximate` | A burst of concurrent requests can pass a ceiling by roughly the size of the burst. Sequential traffic is still bounded. |
+| `fail_closed` | A recognised drop-in reports its backend unreachable, so no counter (transients included) can outlast a request. The relay refuses every request with `503 relay_unavailable` until the backend is back. |
+| `unavailable` | The relay controller is not loaded, so nothing can be determined. `relay_limits` is omitted. |
 
-In both modes, a request refused at one ceiling uses up no budget in the others. If a relay counter cannot be read or written, the relay answers `503 relay_unavailable` and does not create an issue. The mode is reported only here, and not on the public relay endpoint.
+| `relay_admission_basis` | Mode |
+|---|---|
+| `no_persistent_object_cache` | `approximate`: no object-cache drop-in, so the transient read-then-write decides |
+| `object_cache_api_incomplete` | `approximate`: `wp_cache_add` / `wp_cache_incr` / `wp_cache_decr` missing |
+| `object_cache_backend_unreachable` | `fail_closed`: Redis Object Cache `redis_status()` is false, or memcached has recorded connection errors |
+| `cache_addition_suspended` | `approximate`: `wp_suspend_cache_addition()` is on for the reporting request |
+| `admission_group_not_persistent` | `approximate`: `mcpwp_relay_admission` is in Redis `WP_REDIS_IGNORED_GROUPS` / non-persistent groups, or in memcached `no_mc_groups` |
+| `object_cache_incr_not_atomic` | `approximate`: Redis Object Cache with `WP_REDIS_IGBINARY` increments by read-then-write |
+| `object_cache_max_ttl_shorter_than_window` | `approximate`: `WP_REDIS_MAXTTL` is under an hour, so a counter can expire inside its own window |
+| `redis_object_cache` / `memcached_object_cache` | `atomic` |
+| `unrecognised_object_cache` | `unverified` |
+| `relay_controller_not_loaded` | `unavailable` |
+
+What the relay guarantees, precisely:
+
+- **429 refusals.** A request refused at a ceiling writes nothing to the transient record and hands back any increment it took. Until it hands that increment back, a concurrent request can be refused one slot early. If the hand-back itself fails, the slot stays counted until the window ends. Neither can admit a request past a ceiling.
+- **503 `relay_unavailable`.** Returned when a counter write fails, when an increment does not return a count, and in `fail_closed`. An unreadable transient counter is different: WordPress cannot tell "absent" from "unreadable", so it reads as zero. On an `approximate` site, that means an unreadable record admits.
 
 ### Rate Limit Exceeded Response
 

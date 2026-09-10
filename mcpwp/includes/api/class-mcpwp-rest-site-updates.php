@@ -522,27 +522,37 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 	/**
 	 * How the public feedback relay's ceilings are enforced on this site (#752 F6).
 	 *
-	 * Reported here, beside the API limits, because this is where an operator
-	 * looks for "what is being limited, and how". Not reported on the public
-	 * relay endpoint itself: telling an unauthenticated caller that a site's
-	 * admission is approximate tells them which sites a concurrent burst can
-	 * overshoot.
+	 * Reported here, beside the API limits, because this is where a caller
+	 * looks for "what is being limited, and how". GET /rate-limit needs read
+	 * scope (only its writes need admin), so any read-scope API key or OAuth
+	 * token sees this. What it learns: the relay's ceilings — constants in the
+	 * plugin's published source — and how this site's object cache enforces
+	 * them. That is deliberately not put on the public relay endpoint, where an
+	 * unauthenticated caller would learn which sites a concurrent burst can
+	 * overshoot; an authenticated caller of this site is a different audience.
 	 *
-	 * Three answers, never collapsed into two: 'atomic', 'approximate', or
-	 * 'unavailable' when the relay controller is not loaded and the mode
-	 * cannot be determined. 'unavailable' carries no limits, because the
-	 * limits of a controller that is not loaded are not known.
+	 * The mode and its basis come from Mcpwp_REST_Feedback::relay_admission_decision(),
+	 * the same decision relay admission uses. 'unavailable' is a sixth answer
+	 * for when the relay controller is not loaded and nothing can be said;
+	 * it carries no limits, because those of a controller that is not loaded
+	 * are not known.
 	 *
-	 * @return array{relay_admission: string, relay_limits?: array}
+	 * @return array{relay_admission: string, relay_admission_basis: string, relay_limits?: array}
 	 */
 	private function relay_admission_status() {
 		if ( ! class_exists( 'Mcpwp_REST_Feedback' ) ) {
-			return array( 'relay_admission' => 'unavailable' );
+			return array(
+				'relay_admission'       => 'unavailable',
+				'relay_admission_basis' => 'relay_controller_not_loaded',
+			);
 		}
 
+		$decision = Mcpwp_REST_Feedback::relay_admission_decision();
+
 		return array(
-			'relay_admission' => Mcpwp_REST_Feedback::relay_admission_mode(),
-			'relay_limits'    => Mcpwp_REST_Feedback::relay_limits(),
+			'relay_admission'       => $decision['mode'],
+			'relay_admission_basis' => $decision['basis'],
+			'relay_limits'          => Mcpwp_REST_Feedback::relay_limits(),
 		);
 	}
 

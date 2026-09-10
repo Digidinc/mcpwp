@@ -33,6 +33,10 @@ $GLOBALS['mcpwp_test_transients'] = array();
 // the suite was written against. See wp_using_ext_object_cache() below.
 $GLOBALS['mcpwp_test_ext_object_cache'] = false;
 $GLOBALS['mcpwp_test_object_cache'] = array();
+// Redis semantics for the double below: incr/decr on a missing key create it
+// (from zero, no expiry) and values may go negative. Off = core/memcached.
+$GLOBALS['mcpwp_test_object_cache_incr_creates'] = false;
+$GLOBALS['mcpwp_test_cache_addition_suspended'] = false;
 $GLOBALS['mcpwp_test_current_user'] = 0;
 // Dispatch spy for rest_do_request() below — records the route of every
 // internal REST dispatch so tests can assert fan-out actually happened
@@ -1379,6 +1383,9 @@ if (! function_exists('wp_cache_delete')) {
  * already includes every other caller's increment. Semantics follow core's
  * WP_Object_Cache: `incr`/`decr` on a missing key return false, a result
  * below zero is floored at zero, and an expiry of 0 means "never expires".
+ * `mcpwp_test_object_cache_incr_creates` switches incr/decr to Redis
+ * semantics instead: a missing key is created with no expiry, and values may
+ * go negative. `add` honours wp_suspend_cache_addition(), as core does.
  *
  * `mcpwp_test_object_cache_hook` lets a test answer one operation
  * differently from the store — a backend failure, an eviction between
@@ -1421,12 +1428,26 @@ if (! function_exists('mcpwp_test_object_cache_live')) {
     }
 }
 
+if (! function_exists('wp_suspend_cache_addition')) {
+    function wp_suspend_cache_addition($suspend = null)
+    {
+        if (is_bool($suspend)) {
+            $GLOBALS['mcpwp_test_cache_addition_suspended'] = $suspend;
+        }
+        return ! empty($GLOBALS['mcpwp_test_cache_addition_suspended']);
+    }
+}
+
 if (! function_exists('wp_cache_add')) {
     function wp_cache_add($key, $data, $group = '', $expire = 0)
     {
         $answer = mcpwp_test_object_cache_hook('add', $key, $group);
         if (null !== $answer) {
             return $answer;
+        }
+        // Core and Redis Object Cache: add is a no-op while addition is suspended.
+        if (wp_suspend_cache_addition()) {
+            return false;
         }
         $id = (string) $group . ':' . (string) $key;
         if (null !== mcpwp_test_object_cache_live($id)) {
@@ -1462,14 +1483,20 @@ if (! function_exists('mcpwp_test_object_cache_step')) {
         if (null !== $answer) {
             return $answer;
         }
-        $id   = (string) $group . ':' . (string) $key;
-        $item = mcpwp_test_object_cache_live($id);
+        $id         = (string) $group . ':' . (string) $key;
+        $item       = mcpwp_test_object_cache_live($id);
+        $redis_like = ! empty($GLOBALS['mcpwp_test_object_cache_incr_creates']);
         if (null === $item) {
-            return false;
+            if (! $redis_like) {
+                return false;
+            }
+            // Redis INCRBY/DECRBY: a missing key is created from zero, with no expiry.
+            $item = array('value' => 0, 'expires' => 0, 'ttl' => 0);
+            $GLOBALS['mcpwp_test_object_cache'][ $id ] = $item;
         }
         $value = is_numeric($item['value']) ? (int) $item['value'] : 0;
         $value = 'incr' === $op ? $value + (int) $offset : $value - (int) $offset;
-        if ($value < 0) {
+        if ($value < 0 && ! $redis_like) {
             $value = 0;
         }
         $GLOBALS['mcpwp_test_object_cache'][ $id ]['value'] = $value;

@@ -31,6 +31,7 @@ final class RelayAdmissionStatusUnavailableTest extends TestCase {
 
 		$this->assertArrayHasKey( 'relay_admission', $data );
 		$this->assertSame( 'unavailable', $data['relay_admission'] );
+		$this->assertSame( 'relay_controller_not_loaded', $data['relay_admission_basis'] ?? null );
 		$this->assertArrayNotHasKey( 'relay_limits', $data, 'Limits of a controller that is not loaded are not known.' );
 	}
 }

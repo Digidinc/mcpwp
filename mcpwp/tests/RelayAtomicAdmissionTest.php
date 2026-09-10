@@ -1,32 +1,27 @@
 <?php
 /**
  * #752 F6 — admission to the public feedback relay must be atomic wherever the
- * site can make it atomic, and must say which it is.
+ * site can make it atomic, and the report must claim no more than the code can
+ * see.
  *
  * The relay is unauthenticated and every request it admits spends this site's
  * own GitHub token. Its three ceilings (per-IP, site-wide per minute, site-wide
  * per hour) were enforced as get_transient() then set_transient(): N requests
  * that all read before any of them writes all see the same count, and all pass.
  *
- * Concurrency is simulated deterministically rather than with threads: the
- * transient read hook answers every relay counter read with the value the
- * store held *before the burst*, which is exactly what N truly concurrent
- * requests observe when every read lands before the first write. The object
- * cache double (tests/bootstrap.php) is shared and its incr is atomic, so
- * against it only a gate that decides on the incremented value holds the line.
+ * Two kinds of concurrency are simulated deterministically:
+ *  - bursts: every relay transient read returns the pre-burst value, which is
+ *    what N concurrent requests observe when all reads land before any write;
+ *  - interleaving: a second request runs to completion *inside* the first
+ *    request's increment on a chosen counter, before that increment applies.
+ *    A gate that checks a count and then increments (rather than deciding on
+ *    the increment's own result) admits both; these tests are what catch it.
  *
- * Properties pinned:
- *  - with a persistent object cache, no burst admits more than any ceiling;
- *  - a request refused by one ceiling holds no slot in any other (per-IP vs
- *    site-wide, both directions) — the pre-existing "a refused request
- *    consumes no budget" property, carried into the atomic path;
- *  - an incr that returns anything but a positive count (false after an
- *    eviction or a backend failure, a drop-in's non-count) refuses — it never
- *    reads as "count 0, admit";
- *  - counter keys expire with their window, and never with TTL 0 ("forever");
- *  - the atomic gate is never weaker than the transient record it sits beside;
- *  - GET /rate-limit reports which mode is in force, and the two modes never
- *    report identically.
+ * The object cache double (tests/bootstrap.php) is shared and its incr is
+ * atomic. The drop-in in $GLOBALS['wp_object_cache'] is a stand-in for the
+ * public API surface of Redis Object Cache or Automattic memcached
+ * (tests/fixtures/relay-object-cache-fakes.php) — the relay recognises a
+ * drop-in by that surface and claims "atomic" only for a recognised one.
  *
  * @package MCPWP
  */
@@ -35,6 +30,7 @@ use PHPUnit\Framework\TestCase;
 
 require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-feedback.php';
 require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-feedback.php';
+require_once __DIR__ . '/fixtures/relay-object-cache-fakes.php';
 
 final class RelayAtomicAdmissionTest extends TestCase {
 
@@ -50,6 +46,13 @@ final class RelayAtomicAdmissionTest extends TestCase {
 	 */
 	private array $saved_server = array();
 
+	private bool $had_object_cache = false;
+
+	/** @var mixed */
+	private $saved_object_cache = null;
+
+	private bool $interleaved = false;
+
 	private Mcpwp_REST_Feedback $controller;
 
 	protected function setUp(): void {
@@ -60,12 +63,19 @@ final class RelayAtomicAdmissionTest extends TestCase {
 			sleep( 60 - $into_minute );
 		}
 
-		$GLOBALS['mcpwp_test_options']               = array();
-		$GLOBALS['mcpwp_test_transients']            = array();
-		$GLOBALS['mcpwp_test_transient_write_fails'] = false;
-		$GLOBALS['mcpwp_test_object_cache']          = array();
-		$GLOBALS['mcpwp_test_ext_object_cache']      = true;
+		$GLOBALS['mcpwp_test_options']                   = array();
+		$GLOBALS['mcpwp_test_transients']                = array();
+		$GLOBALS['mcpwp_test_transient_write_fails']     = false;
+		$GLOBALS['mcpwp_test_object_cache']              = array();
+		$GLOBALS['mcpwp_test_ext_object_cache']          = true;
+		$GLOBALS['mcpwp_test_object_cache_incr_creates'] = false;
+		$GLOBALS['mcpwp_test_cache_addition_suspended']  = false;
 		unset( $GLOBALS['mcpwp_test_transient_hook'], $GLOBALS['mcpwp_test_object_cache_hook'] );
+
+		$this->had_object_cache     = array_key_exists( 'wp_object_cache', $GLOBALS );
+		$this->saved_object_cache   = $this->had_object_cache ? $GLOBALS['wp_object_cache'] : null;
+		$GLOBALS['wp_object_cache'] = new Mcpwp_Test_Redis_Object_Cache();
+		$this->interleaved          = false;
 
 		foreach ( array( 'HTTP_CF_CONNECTING_IP', 'HTTP_X_FORWARDED_FOR', 'HTTP_X_REAL_IP', 'REMOTE_ADDR' ) as $key ) {
 			$this->saved_server[ $key ] = $_SERVER[ $key ] ?? null;
@@ -83,10 +93,17 @@ final class RelayAtomicAdmissionTest extends TestCase {
 				$_SERVER[ $key ] = $value;
 			}
 		}
-		$GLOBALS['mcpwp_test_transients']            = array();
-		$GLOBALS['mcpwp_test_transient_write_fails'] = false;
-		$GLOBALS['mcpwp_test_object_cache']          = array();
-		$GLOBALS['mcpwp_test_ext_object_cache']      = false;
+		if ( $this->had_object_cache ) {
+			$GLOBALS['wp_object_cache'] = $this->saved_object_cache;
+		} else {
+			unset( $GLOBALS['wp_object_cache'] );
+		}
+		$GLOBALS['mcpwp_test_transients']                = array();
+		$GLOBALS['mcpwp_test_transient_write_fails']     = false;
+		$GLOBALS['mcpwp_test_object_cache']              = array();
+		$GLOBALS['mcpwp_test_ext_object_cache']          = false;
+		$GLOBALS['mcpwp_test_object_cache_incr_creates'] = false;
+		$GLOBALS['mcpwp_test_cache_addition_suspended']  = false;
 		unset( $GLOBALS['mcpwp_test_transient_hook'], $GLOBALS['mcpwp_test_object_cache_hook'] );
 	}
 
@@ -143,6 +160,21 @@ final class RelayAtomicAdmissionTest extends TestCase {
 		};
 	}
 
+	/**
+	 * Run $nested once, to completion, inside the next request's increment of
+	 * $trigger_key — after that request has taken every earlier decision and
+	 * before its own increment applies.
+	 */
+	private function interleave_at( string $trigger_key, callable $nested, array &$outcomes ): void {
+		$GLOBALS['mcpwp_test_object_cache_hook'] = function ( $op, $key ) use ( $trigger_key, $nested, &$outcomes ) {
+			if ( 'incr' === $op && $trigger_key === $key && ! $this->interleaved ) {
+				$this->interleaved = true;
+				$outcomes[]        = $nested();
+			}
+			return null;
+		};
+	}
+
 	private function ip_key( string $ip ): string {
 		return $this->call_private( 'relay_ip_transient_key', array( $ip ) );
 	}
@@ -175,6 +207,24 @@ final class RelayAtomicAdmissionTest extends TestCase {
 				}
 			)
 		);
+	}
+
+	/** Admission-group keys in the object cache — present only if the gate ran. */
+	private function admission_keys(): array {
+		return array_values(
+			array_filter(
+				array_keys( $GLOBALS['mcpwp_test_object_cache'] ),
+				static function ( $id ) {
+					return 0 === strpos( (string) $id, self::GROUP . ':' );
+				}
+			)
+		);
+	}
+
+	private function rate_limit_status(): array {
+		return ( new Mcpwp_REST_Site_Updates() )
+			->get_rate_limit_status( new WP_REST_Request( 'GET', '/mcpwp/v1/rate-limit' ) )
+			->get_data();
 	}
 
 	// ---------------------------------------------------------------
@@ -251,6 +301,82 @@ final class RelayAtomicAdmissionTest extends TestCase {
 			$this->counter( $this->minute_key() ),
 			'Requests refused at the hourly ceiling must hand their per-minute increment back.'
 		);
+	}
+
+	// ---------------------------------------------------------------
+	// Interleaving: a second request inside the first one's increment.
+	// ---------------------------------------------------------------
+
+	public function test_request_taking_the_last_per_ip_slot_inside_anothers_increment_leaves_that_one_refused(): void {
+		$ip     = '203.0.113.77';
+		$ip_key = $this->ip_key( $ip );
+		$this->seed_counter( $ip_key, Mcpwp_REST_Feedback::RELAY_RATE_MAX - 1, Mcpwp_REST_Feedback::RELAY_RATE_WINDOW );
+		$this->freeze_relay_counter_reads();
+
+		// A has seen one slot left; B takes it before A's increment applies.
+		$outcomes = array();
+		$this->interleave_at(
+			$ip_key,
+			function () use ( $ip ) {
+				return $this->outcome( $this->relay_from( $ip ) );
+			},
+			$outcomes
+		);
+		$outcomes[] = $this->outcome( $this->relay_from( $ip ) );
+
+		$this->assertTrue( $this->interleaved, 'Precondition: the second request ran inside the increment of the first.' );
+		$this->assertSame( 1, $this->count_of( $outcomes, 'admitted' ), 'One slot, one admission: ' . wp_json_encode( $outcomes ) );
+		$this->assertSame( Mcpwp_REST_Feedback::RELAY_RATE_MAX, $this->counter( $ip_key ) );
+	}
+
+	public function test_rollback_of_a_request_refused_at_the_minute_ceiling_is_exact_under_interleaving(): void {
+		$ip         = '203.0.113.78';
+		$ip_key     = $this->ip_key( $ip );
+		$minute_key = $this->minute_key();
+		$this->seed_counter( $ip_key, Mcpwp_REST_Feedback::RELAY_RATE_MAX - 1, Mcpwp_REST_Feedback::RELAY_RATE_WINDOW );
+		$this->seed_counter( $minute_key, Mcpwp_REST_Feedback::RELAY_GLOBAL_MAX_PER_MINUTE, Mcpwp_REST_Feedback::RELAY_GLOBAL_MINUTE_WINDOW );
+		$this->freeze_relay_counter_reads();
+
+		// A holds the last per-IP slot when B runs; A is then refused at the
+		// full minute ceiling. Both refusals must leave both counters as found.
+		$outcomes = array();
+		$this->interleave_at(
+			$minute_key,
+			function () use ( $ip ) {
+				return $this->outcome( $this->relay_from( $ip ) );
+			},
+			$outcomes
+		);
+		$outcomes[] = $this->outcome( $this->relay_from( $ip ) );
+
+		$this->assertSame( 0, $this->count_of( $outcomes, 'admitted' ), wp_json_encode( $outcomes ) );
+		$this->assertSame( Mcpwp_REST_Feedback::RELAY_RATE_MAX - 1, $this->counter( $ip_key ) );
+		$this->assertSame( Mcpwp_REST_Feedback::RELAY_GLOBAL_MAX_PER_MINUTE, $this->counter( $minute_key ) );
+	}
+
+	public function test_request_taking_the_last_hourly_slot_inside_anothers_increment_leaves_that_one_refused(): void {
+		$hour_key   = $this->hour_key();
+		$minute_key = $this->minute_key();
+		$this->seed_counter( $hour_key, Mcpwp_REST_Feedback::RELAY_GLOBAL_MAX - 1, Mcpwp_REST_Feedback::RELAY_GLOBAL_WINDOW );
+		$this->freeze_relay_counter_reads();
+
+		// A has passed its per-IP and per-minute counters and seen one hourly
+		// slot left; B, from another address, takes it first.
+		$outcomes = array();
+		$this->interleave_at(
+			$hour_key,
+			function () {
+				return $this->outcome( $this->relay_from( '198.51.100.9' ) );
+			},
+			$outcomes
+		);
+		$outcomes[] = $this->outcome( $this->relay_from( '198.51.100.8' ) );
+
+		$this->assertTrue( $this->interleaved, 'Precondition: the second request ran inside the increment of the first.' );
+		$this->assertSame( 1, $this->count_of( $outcomes, 'admitted' ), 'One slot, one admission: ' . wp_json_encode( $outcomes ) );
+		$this->assertSame( Mcpwp_REST_Feedback::RELAY_GLOBAL_MAX, $this->counter( $hour_key ) );
+		$this->assertSame( 1, $this->counter( $minute_key ), 'The refused request must hand back its per-minute slot.' );
+		$this->assertSame( 0, $this->counter( $this->ip_key( '198.51.100.8' ) ), 'The refused request must hand back its per-IP slot.' );
 	}
 
 	// ---------------------------------------------------------------
@@ -333,13 +459,13 @@ final class RelayAtomicAdmissionTest extends TestCase {
 		$this->assertSame( array(), $this->relay_transients() );
 	}
 
-	public function test_counter_evicted_between_add_and_incr_refuses_and_releases_earlier_slots(): void {
+	public function test_counter_evicted_between_add_and_incr_on_core_or_memcached_semantics_refuses_and_releases_earlier_slots(): void {
 		$ip         = '203.0.113.31';
 		$minute_key = $this->minute_key();
 
 		// The per-minute key vanishes between its add and its incr (LRU
-		// eviction under memory pressure), so the incr finds nothing: core,
-		// Memcached and this double all answer false.
+		// eviction under memory pressure). Core and memcached answer false for
+		// an incr on a missing key; Redis does not — see the TTL tests below.
 		$GLOBALS['mcpwp_test_object_cache_hook'] = static function ( $op, $key, $group ) use ( $minute_key ) {
 			if ( 'incr' === $op && $minute_key === $key ) {
 				unset( $GLOBALS['mcpwp_test_object_cache'][ $group . ':' . $key ] );
@@ -360,7 +486,7 @@ final class RelayAtomicAdmissionTest extends TestCase {
 	}
 
 	// ---------------------------------------------------------------
-	// Keys expire with their window; the gate is never weaker than the record.
+	// Keys expire with their window.
 	// ---------------------------------------------------------------
 
 	public function test_counter_keys_expire_with_their_window(): void {
@@ -369,9 +495,9 @@ final class RelayAtomicAdmissionTest extends TestCase {
 		$this->assertSame( 'admitted', $this->outcome( $this->relay_from( $ip ) ) );
 
 		$expected = array(
-			$this->ip_key( $ip )  => Mcpwp_REST_Feedback::RELAY_RATE_WINDOW,
-			$this->minute_key()   => Mcpwp_REST_Feedback::RELAY_GLOBAL_MINUTE_WINDOW,
-			$this->hour_key()     => Mcpwp_REST_Feedback::RELAY_GLOBAL_WINDOW,
+			$this->ip_key( $ip ) => Mcpwp_REST_Feedback::RELAY_RATE_WINDOW,
+			$this->minute_key()  => Mcpwp_REST_Feedback::RELAY_GLOBAL_MINUTE_WINDOW,
+			$this->hour_key()    => Mcpwp_REST_Feedback::RELAY_GLOBAL_WINDOW,
 		);
 		foreach ( $expected as $key => $window ) {
 			$id = self::GROUP . ':' . $key;
@@ -382,18 +508,69 @@ final class RelayAtomicAdmissionTest extends TestCase {
 		}
 	}
 
+	public function test_counter_recreated_by_a_redis_increment_after_eviction_gets_its_window_ttl_back(): void {
+		$GLOBALS['mcpwp_test_object_cache_incr_creates'] = true;
+		$minute_key                                      = $this->minute_key();
+
+		// Evicted between add and incr: Redis INCRBY recreates the key at 1
+		// with no expiry, and admits.
+		$GLOBALS['mcpwp_test_object_cache_hook'] = static function ( $op, $key, $group ) use ( $minute_key ) {
+			if ( 'incr' === $op && $minute_key === $key ) {
+				unset( $GLOBALS['mcpwp_test_object_cache'][ $group . ':' . $key ] );
+			}
+			return null;
+		};
+
+		$this->assertSame( 'admitted', $this->outcome( $this->relay_from( '203.0.113.70' ) ) );
+
+		$entry = $GLOBALS['mcpwp_test_object_cache'][ self::GROUP . ':' . $minute_key ] ?? null;
+		$this->assertNotNull( $entry );
+		$this->assertSame( 1, $entry['value'] );
+		$this->assertSame(
+			Mcpwp_REST_Feedback::RELAY_GLOBAL_MINUTE_WINDOW,
+			$entry['ttl'],
+			'A key recreated without expiry must get its window TTL back, or it lives forever.'
+		);
+	}
+
+	public function test_counter_recreated_by_a_redis_rollback_after_eviction_gets_its_window_ttl_back(): void {
+		$GLOBALS['mcpwp_test_object_cache_incr_creates'] = true;
+		$ip                                              = '203.0.113.71';
+		$ip_key                                          = $this->ip_key( $ip );
+		$this->seed_counter( $this->minute_key(), Mcpwp_REST_Feedback::RELAY_GLOBAL_MAX_PER_MINUTE, Mcpwp_REST_Feedback::RELAY_GLOBAL_MINUTE_WINDOW );
+
+		// Refused at the minute ceiling; its per-IP key is evicted before the
+		// rollback, so Redis DECRBY recreates it at -1 with no expiry.
+		$GLOBALS['mcpwp_test_object_cache_hook'] = static function ( $op, $key, $group ) use ( $ip_key ) {
+			if ( 'decr' === $op && $ip_key === $key ) {
+				unset( $GLOBALS['mcpwp_test_object_cache'][ $group . ':' . $key ] );
+			}
+			return null;
+		};
+
+		$this->assertSame( 'rate_limited', $this->outcome( $this->relay_from( $ip ) ) );
+
+		$entry = $GLOBALS['mcpwp_test_object_cache'][ self::GROUP . ':' . $ip_key ] ?? null;
+		$this->assertNotNull( $entry );
+		$this->assertSame( -1, $entry['value'] );
+		$this->assertSame( Mcpwp_REST_Feedback::RELAY_RATE_WINDOW, $entry['ttl'] );
+	}
+
+	// ---------------------------------------------------------------
+	// The gate is never weaker than the record.
+	// ---------------------------------------------------------------
+
 	public function test_gate_is_never_weaker_than_the_accounting_record_when_the_cache_does_not_persist(): void {
-		// A drop-in present but not persisting this group — marked
-		// non-persistent, or a Redis drop-in fallen back to its in-process
-		// array — hands every request a fresh counter. The transient record
-		// must still bound the source.
+		// A drop-in present but not persisting this group, undetectably, hands
+		// every request a fresh counter. The transient record must still bound
+		// the source.
 		$ip       = '203.0.113.41';
 		$outcomes = array();
 		for ( $i = 0; $i < Mcpwp_REST_Feedback::RELAY_RATE_MAX + 5; $i++ ) {
 			$GLOBALS['mcpwp_test_object_cache'] = array();
 			$outcome                            = $this->outcome( $this->relay_from( $ip ) );
 			if ( 'admitted' === $outcome ) {
-				$this->assertSame( 1, $this->counter( $this->ip_key( $ip ) ), 'Admission must have gone through the atomic gate.' );
+				$this->assertSame( 1, $this->counter( $this->ip_key( $ip ) ), 'Admission must have gone through the increment gate.' );
 			}
 			$outcomes[] = $outcome;
 		}
@@ -403,13 +580,101 @@ final class RelayAtomicAdmissionTest extends TestCase {
 	}
 
 	// ---------------------------------------------------------------
-	// The mode in force is reported, and never ambiguously.
+	// One decision: what is admitted is what is reported.
 	// ---------------------------------------------------------------
+
+	public static function admission_states(): array {
+		return array(
+			'no persistent object cache'                   => array( 'no_object_cache', 'approximate', 'no_persistent_object_cache', 'admitted', false ),
+			'redis object cache, connected'                => array( 'redis', 'atomic', 'redis_object_cache', 'admitted', true ),
+			'redis object cache, backend unreachable'      => array( 'redis_unreachable', 'fail_closed', 'object_cache_backend_unreachable', 'relay_unavailable', false ),
+			'redis object cache, admission group ignored'  => array( 'redis_group_ignored', 'approximate', 'admission_group_not_persistent', 'admitted', false ),
+			'cache addition suspended'                     => array( 'addition_suspended', 'approximate', 'cache_addition_suspended', 'admitted', false ),
+			'memcached object cache, connected'            => array( 'memcached', 'atomic', 'memcached_object_cache', 'admitted', true ),
+			'memcached object cache, connection errors'    => array( 'memcached_errors', 'fail_closed', 'object_cache_backend_unreachable', 'relay_unavailable', false ),
+			'memcached object cache, group non-persistent' => array( 'memcached_group_non_persistent', 'approximate', 'admission_group_not_persistent', 'admitted', false ),
+			'unrecognised object-cache drop-in'            => array( 'unrecognised', 'unverified', 'unrecognised_object_cache', 'admitted', true ),
+		);
+	}
+
+	private function arrange( string $state ): void {
+		switch ( $state ) {
+			case 'no_object_cache':
+				$GLOBALS['mcpwp_test_ext_object_cache'] = false;
+				unset( $GLOBALS['wp_object_cache'] );
+				break;
+			case 'redis':
+				break;
+			case 'redis_unreachable':
+				// What Redis Object Cache does after a failed connection or an
+				// exception: redis_status() false, everything kept in memory.
+				$GLOBALS['wp_object_cache']->connected = false;
+				break;
+			case 'redis_group_ignored':
+				$GLOBALS['wp_object_cache']->ignored_groups = array( 'counts', self::GROUP );
+				break;
+			case 'addition_suspended':
+				$GLOBALS['mcpwp_test_cache_addition_suspended'] = true;
+				break;
+			case 'memcached':
+				$GLOBALS['wp_object_cache'] = new Mcpwp_Test_Memcached_Object_Cache();
+				break;
+			case 'memcached_errors':
+				$GLOBALS['wp_object_cache']                    = new Mcpwp_Test_Memcached_Object_Cache();
+				$GLOBALS['wp_object_cache']->connection_errors = array(
+					array(
+						'host' => '127.0.0.1',
+						'port' => 11211,
+					),
+				);
+				break;
+			case 'memcached_group_non_persistent':
+				$GLOBALS['wp_object_cache']               = new Mcpwp_Test_Memcached_Object_Cache();
+				$GLOBALS['wp_object_cache']->no_mc_groups = array( self::GROUP );
+				// What that drop-in does with such a group: add() keeps the key
+				// in-process and reports success; incr() and decr() ask the
+				// server, which has never seen the key.
+				$GLOBALS['mcpwp_test_object_cache_hook'] = static function ( $op, $key, $group ) {
+					if ( self::GROUP !== $group ) {
+						return null;
+					}
+					if ( 'add' === $op ) {
+						return true;
+					}
+					return ( 'incr' === $op || 'decr' === $op ) ? false : null;
+				};
+				break;
+			case 'unrecognised':
+				$GLOBALS['wp_object_cache'] = new stdClass();
+				break;
+			default:
+				$this->fail( "Unknown state $state" );
+		}
+	}
+
+	/**
+	 * @dataProvider admission_states
+	 */
+	public function test_admission_and_report_follow_one_decision( string $state, string $mode, string $basis, string $outcome, bool $gate_runs ): void {
+		$this->arrange( $state );
+
+		$status = $this->rate_limit_status();
+		$this->assertSame( $mode, $status['relay_admission'] ?? null, 'Never claim more than the drop-in shows.' );
+		$this->assertSame( $basis, $status['relay_admission_basis'] ?? null, 'The report must say why, not only what.' );
+
+		$decision = Mcpwp_REST_Feedback::relay_admission_decision();
+		$this->assertSame( array( $mode, $basis ), array( $decision['mode'], $decision['basis'] ), 'Admission and the report must read one decision.' );
+
+		$result = $this->relay_from( '203.0.113.60' );
+		$this->assertSame( $outcome, $this->outcome( $result ) );
+		$this->assertSame( $gate_runs, array() !== $this->admission_keys(), $gate_runs ? 'The increment gate must run.' : 'The increment gate must not run.' );
+		if ( 'relay_unavailable' === $outcome ) {
+			$this->assertSame( array(), $this->relay_transients(), 'A relay that fails closed writes nothing.' );
+		}
+	}
 
 	public function test_approximate_mode_is_used_and_named_when_no_persistent_cache_is_present(): void {
 		$GLOBALS['mcpwp_test_ext_object_cache'] = false;
-
-		$this->assertSame( 'approximate', Mcpwp_REST_Feedback::relay_admission_mode() );
 
 		$outcomes = array();
 		for ( $i = 0; $i < Mcpwp_REST_Feedback::RELAY_RATE_MAX + 1; $i++ ) {
@@ -419,21 +684,21 @@ final class RelayAtomicAdmissionTest extends TestCase {
 		$this->assertSame( Mcpwp_REST_Feedback::RELAY_RATE_MAX, $this->count_of( $outcomes, 'admitted' ) );
 		$this->assertSame( 1, $this->count_of( $outcomes, 'rate_limited' ) );
 		$this->assertSame( array(), $GLOBALS['mcpwp_test_object_cache'], 'A per-request cache must not be mistaken for an admission gate.' );
+		$this->assertSame( 'approximate', Mcpwp_REST_Feedback::relay_admission_decision()['mode'] );
 	}
 
 	public function test_rate_limit_status_reports_the_relay_admission_mode_in_force(): void {
-		$controller = new Mcpwp_REST_Site_Updates();
-		$request    = new WP_REST_Request( 'GET', '/mcpwp/v1/rate-limit' );
-
-		$GLOBALS['mcpwp_test_ext_object_cache'] = true;
-		$atomic                                 = $controller->get_rate_limit_status( $request )->get_data();
+		$atomic = $this->rate_limit_status();
 
 		$GLOBALS['mcpwp_test_ext_object_cache'] = false;
-		$approximate                            = $controller->get_rate_limit_status( $request )->get_data();
+		$approximate                            = $this->rate_limit_status();
 
 		$this->assertSame( 'atomic', $atomic['relay_admission'] ?? null );
 		$this->assertSame( 'approximate', $approximate['relay_admission'] ?? null );
-		$this->assertNotSame( $atomic['relay_admission'], $approximate['relay_admission'] );
+		$this->assertNotSame(
+			array( $atomic['relay_admission'] ?? null, $atomic['relay_admission_basis'] ?? null ),
+			array( $approximate['relay_admission'] ?? null, $approximate['relay_admission_basis'] ?? null )
+		);
 
 		$expected_limits = array(
 			'per_ip'            => array(
