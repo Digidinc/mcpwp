@@ -564,12 +564,10 @@ final class IdempotentToolCallTest extends TestCase {
 		$cats->setAccessible( true );
 		$categories = $cats->invoke( $controller );
 
+		// Every tool, GET included: the per-key category gate applies to
+		// every method, not only to pinned ones.
 		foreach ( $map->invoke( $controller ) as $tool => $entry ) {
-			$method = isset( $entry['method'] ) ? strtoupper( (string) $entry['method'] ) : 'POST';
-			if ( 'GET' === $method ) {
-				continue;
-			}
-			$this->assertArrayHasKey( $tool, $categories, $tool . ' is pinned and must be in the category map.' );
+			$this->assertArrayHasKey( $tool, $categories, $tool . ' must be in the category map.' );
 		}
 	}
 
@@ -750,9 +748,7 @@ final class IdempotentToolCallTest extends TestCase {
 		};
 		$GLOBALS['mcpwp_test_filters'] = array();
 		add_filter( 'mcpwp_integrations', function () use ( $integration ) { return array( $integration ); } );
-		if ( method_exists( 'Mcpwp_Integration', 'reset_resolved' ) ) {
-			Mcpwp_Integration::reset_resolved();
-		}
+		Mcpwp_Integration::clear_cache();
 
 		// A category-restricted key: an uncategorised tool is denied — on
 		// the first call and on the retry, and nothing dispatches.
@@ -774,12 +770,18 @@ final class IdempotentToolCallTest extends TestCase {
 		$this->assertTrue( $two['result']['_meta']['replayed'] );
 		$this->assertSame( 1, $this->dispatches() );
 
-		// The registry resolves the same way: no invented category.
+		// The registry resolves the same way: no invented category — and the
+		// listing agrees with the gate: a restricted key is not shown a tool
+		// it cannot call (round-6 P2-1).
 		$this->assertSame( '', $integration->get_tool_category( 'zz_write_thing' ) );
+		$controller = new Mcpwp_REST_MCP();
+		$listing    = new WP_REST_Request( 'POST', '/mcpwp/v1/mcp', array(), array( 'X-API-Key' => $restricted['key'] ), array( 'jsonrpc' => '2.0', 'id' => 9, 'method' => 'tools/list' ) );
+		Mcpwp_REST_MCP::reset_verdict_memo();
+		$this->assertTrue( $controller->verify_api_key( $listing ) );
+		$names = array_column( $controller->handle_mcp( $listing )->get_data()['result']['tools'], 'name' );
+		$this->assertNotContains( 'zz_write_thing', $names );
 		$GLOBALS['mcpwp_test_filters'] = array();
-		if ( method_exists( 'Mcpwp_Integration', 'reset_resolved' ) ) {
-			Mcpwp_Integration::reset_resolved();
-		}
+		Mcpwp_Integration::clear_cache();
 	}
 
 	public function test_the_in_progress_hint_names_the_lease_in_force_and_the_lease_is_clamped(): void {

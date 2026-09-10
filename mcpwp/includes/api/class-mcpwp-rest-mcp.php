@@ -183,9 +183,11 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				array_filter(
 					$tools,
 					function ( $tool ) use ( $disabled_categories, $all_categories ) {
+						// Same rule as the handler: an uncategorised tool is not
+						// hidden by a disabled category it does not belong to.
 						$name     = isset( $tool['name'] ) ? $tool['name'] : '';
-						$category = isset( $all_categories[ $name ] ) ? $all_categories[ $name ] : 'site';
-						return ! in_array( $category, $disabled_categories, true );
+						$category = isset( $all_categories[ $name ] ) ? (string) $all_categories[ $name ] : '';
+						return '' === $category || ! in_array( $category, $disabled_categories, true );
 					}
 				)
 			);
@@ -1442,9 +1444,12 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			array_filter(
 				$tools,
 				function ( $tool ) use ( $allowed_categories, $all_categories ) {
+					// Same rule as the handler's per-key gate: an uncategorised
+					// tool is denied to a category-restricted key, so it is not
+					// listed to it either (#802 round 6).
 					$name     = isset( $tool['name'] ) ? $tool['name'] : '';
-					$category = isset( $all_categories[ $name ] ) ? $all_categories[ $name ] : 'site';
-					return in_array( $category, $allowed_categories, true );
+					$category = isset( $all_categories[ $name ] ) ? (string) $all_categories[ $name ] : '';
+					return '' !== $category && in_array( $category, $allowed_categories, true );
 				}
 			)
 		);
@@ -1893,9 +1898,9 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 							'hint' => sprintf(
 								'Tool "%s" is in the "%s" category, but this key only has access to: %s. Request an admin key or a key with the "%s" category enabled.',
 								$tool_name,
-								$tool_category,
+								'' === $tool_category ? 'uncategorised' : $tool_category,
 								implode( ', ', $allowed_categories ),
-								$tool_category
+								'' === $tool_category ? 'uncategorised' : $tool_category
 							),
 						)
 					);
