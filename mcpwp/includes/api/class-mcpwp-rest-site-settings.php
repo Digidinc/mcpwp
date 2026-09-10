@@ -149,8 +149,6 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 	}
 
 	public function update_settings( $request ) {
-		$this->log_activity( 'update_settings', $request );
-
 		$params = $request->get_json_params();
 		if ( empty( $params ) ) {
 			$params = $request->get_params();
@@ -173,21 +171,30 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 			'timezone'       => 'timezone_string',
 			'date_format'    => 'date_format',
 			'time_format'    => 'time_format',
-			'admin_email'    => 'admin_email',
 			'posts_per_page' => 'posts_per_page',
 		);
+
+		// admin_email is write-protected on every surface, this one included:
+		// a direct write skips the confirmation email and repoints password
+		// resets. The refusal is by name so it is never mistaken for a
+		// successful no-op.
+		if ( isset( $params['admin_email'] ) ) {
+			$this->log_activity( 'update_settings_refused', $request, array( 'option' => 'admin_email', 'rule' => 'write_protected:admin_email' ), 403 );
+			return new WP_Error(
+				'forbidden_option',
+				__( 'admin_email is write-protected: a direct write skips the confirmation email and repoints password resets. Change it in WP Admin (rule: write_protected:admin_email).', 'mcpwp' ),
+				array( 'status' => 403, 'rule' => 'write_protected:admin_email' )
+			);
+		}
+
+		$this->log_activity( 'update_settings', $request );
 
 		foreach ( $allowed as $key => $option ) {
 			if ( isset( $params[ $key ] ) ) {
 				$value = $params[ $key ];
 
 				// Sanitize based on type
-				if ( 'admin_email' === $key ) {
-					$value = sanitize_email( $value );
-					if ( ! is_email( $value ) ) {
-						continue;
-					}
-				} elseif ( 'posts_per_page' === $key ) {
+				if ( 'posts_per_page' === $key ) {
 					$value = absint( $value );
 				} else {
 					$value = sanitize_text_field( $value );
@@ -276,6 +283,7 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 			'alerts_auth_threshold'   => 'int:1:10000',
 			'github_token'            => 'secret',
 			'github_repo'             => 'text',
+			'option_allowlist'        => 'allowlist',
 		);
 
 		foreach ( $allowed as $key => $rule ) {
@@ -287,6 +295,39 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 
 			if ( 'bool' === $rule ) {
 				$current[ $key ] = (bool) $value;
+			} elseif ( 'allowlist' === $rule ) {
+				// Exact keys or "prefix_*"; a blocked key cannot be allowlisted
+				// and is reported by name instead of dropped.
+				if ( ! is_array( $value ) ) {
+					return $this->error_response(
+						'invalid_allowlist',
+						__( 'option_allowlist must be a JSON array of option names or "prefix_*" entries. A string would silently erase the list, so it is refused.', 'mcpwp' ),
+						400
+					);
+				}
+				$entries = $value;
+				$clean   = array();
+				$refused = array();
+				foreach ( $entries as $entry ) {
+					$ok = Mcpwp_Option_Access::sanitize_allowlist_entry( $entry );
+					if ( '' === $ok ) {
+						$refused[] = is_scalar( $entry ) ? (string) $entry : gettype( $entry );
+						continue;
+					}
+					$clean[] = $ok;
+				}
+				if ( ! empty( $refused ) ) {
+					return $this->error_response(
+						'invalid_allowlist_entry',
+						sprintf(
+							/* translators: %s: entries */
+							__( 'These allowlist entries are not usable: %s. Entries are exact option names or "prefix_*"; credential, entitlement and updater-control keys cannot be allowlisted.', 'mcpwp' ),
+							implode( ', ', $refused )
+						),
+						400
+					);
+				}
+				$current[ $key ] = array_slice( array_values( array_unique( $clean ) ), 0, 200 );
 			} elseif ( 'text' === $rule ) {
 				$current[ $key ] = sanitize_text_field( (string) $value );
 			} elseif ( 'key' === $rule ) {
@@ -444,43 +485,175 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 	public function get_option_handler( $request ) {
 		$this->log_activity( 'get_option', $request );
 
-		$key = sanitize_key( (string) $request->get_param( 'key' ) );
-
-		if ( ! $this->is_option_allowed( $key ) ) {
-			return $this->error_response(
-				'forbidden_option',
-				/* translators: %s: option key */
-				sprintf( __( 'Option "%s" is not accessible via API. Allowed: core WP options and prefixes: elementor_*, wpseo_*, rank_math_*, astra_*, theme_mods_*, widget_*, woocommerce_*, mcpwp_*. Sensitive keys (passwords, tokens, secrets) are always blocked.', 'mcpwp' ), $key ),
-				403
-			);
+		$key = Mcpwp_Option_Access::sanitize_option_name( $request->get_param( 'key' ) );
+		if ( '' === $key ) {
+			return $this->error_response( 'invalid_option_name', __( 'Option names are 1–191 characters of letters, digits, _ - . and :.', 'mcpwp' ), 400 );
 		}
 
-		$value = get_option( $key );
+		$decision = Mcpwp_Option_Access::decide( $key );
 
-		return $this->success_response(
+		if ( ! $decision['allowed'] ) {
+			return $this->forbidden_option( $key, $decision );
+		}
+
+		$masked = Mcpwp_Option_Access::redact( $key, get_option( $key ) );
+
+		$body = array(
+			'key'      => $key,
+			'value'    => $masked['value'],
+			'redacted' => $masked['redacted'],
+			'rule'     => $decision['rule'],
+		);
+		if ( isset( $masked['decoded_from'] ) ) {
+			$body['decoded_from'] = $masked['decoded_from'];
+		}
+
+		return $this->success_response( $body );
+	}
+
+	/**
+	 * A refusal that names the rule that refused it (#800).
+	 *
+	 * @param string $key      Option name.
+	 * @param array  $decision From Mcpwp_Option_Access::decide().
+	 * @return WP_Error
+	 */
+	private function forbidden_option( $key, array $decision ) {
+		return new WP_Error(
+			'forbidden_option',
+			sprintf(
+				/* translators: 1: option key 2: the rule */
+				__( 'Option "%1$s" is not accessible via the option API (rule: %2$s).', 'mcpwp' ),
+				$key,
+				$decision['rule']
+			),
 			array(
-				'key'   => $key,
-				'value' => $value,
+				'status' => 403,
+				'rule'   => $decision['rule'],
+				'hint'   => isset( $decision['hint'] ) ? $decision['hint'] : '',
 			)
 		);
 	}
 
 	public function update_option_handler( $request ) {
-		$this->log_activity( 'update_option', $request );
+		// Logged after the gate, never before: a refused write must not put
+		// the credential it refused into the activity log.
+		$key = Mcpwp_Option_Access::sanitize_option_name( $request->get_param( 'key' ) );
+		if ( '' === $key ) {
+			return $this->error_response( 'invalid_option_name', __( 'Option names are 1–191 characters of letters, digits, _ - . and :.', 'mcpwp' ), 400 );
+		}
 
-		$key   = sanitize_key( (string) $request->get_param( 'key' ) );
-		$value = $request->get_param( 'value' );
+		$value    = $request->get_param( 'value' );
+		$decision = Mcpwp_Option_Access::decide( $key, 'write' );
 
-		if ( ! $this->is_option_allowed( $key ) ) {
-			return $this->error_response(
-				'forbidden_option',
-				/* translators: %s: option key */
-				sprintf( __( 'Option "%s" is not accessible via API. Allowed: core WP options and prefixes: elementor_*, wpseo_*, rank_math_*, astra_*, theme_mods_*, widget_*, woocommerce_*, mcpwp_*. Sensitive keys (passwords, tokens, secrets) are always blocked.', 'mcpwp' ), $key ),
-				403
+		if ( ! $decision['allowed'] ) {
+			// Refusals are audited too — the log is what gets consulted in
+			// exactly the incident where a caller was probing. The redactor
+			// makes the payload safe to keep.
+			$this->log_activity( 'update_option_refused', $request, array( 'option' => $key, 'rule' => $decision['rule'] ), 403 );
+			return $this->forbidden_option( $key, $decision );
+		}
+
+		// A masked read echoed back, or a tree sent without its credential
+		// field, must never destroy the stored secret. The gate below looks at
+		// what the caller SUBMITTED: a preserved field is not one being set.
+		// Sanitised HERE, before the merge, so sanitisation only ever runs
+		// over what the caller sent — never over a preserved credential,
+		// which a '<' or '%' would otherwise silently mutate (round-4 P2-2).
+		$submitted     = $this->sanitize_submitted_option_value( $key, $value );
+		$allow_secrets = rest_sanitize_boolean( $request->get_param( 'allow_secrets' ) );
+
+		// Markup that executes — script, event handlers, javascript: URLs,
+		// frames — is stored only by an administrator. Today every path to
+		// this handler is already admin: the /option route table and the
+		// wp_update_option tool both require admin scope, and a request with
+		// no key record is the in-process admin context (chat, an approved
+		// apply). So this cannot fire for a live principal; it is the
+		// belt-and-braces that holds if the route-level rule is ever relaxed
+		// for a lesser scope — which is the change it exists to survive
+		// (#800 rounds 7–8). The write-protection of widget_/sidebars_ is
+		// what closed the rendered-raw case.
+		if ( Mcpwp_Option_Access::contains_active_markup( $submitted ) ) {
+			$record = $this->get_current_api_key_record();
+			if ( is_array( $record ) && ! $this->key_has_scope( $record, 'admin' ) ) {
+				$this->log_activity( 'update_option_refused', $request, array( 'option' => $key, 'rule' => 'active_markup_requires_admin' ), 403 );
+				return new WP_Error(
+					'active_markup_requires_admin',
+					__( 'The value carries script, an event handler, a javascript: URL or an embedded frame. Storing that in an option needs an admin-scoped key. Nothing was written.', 'mcpwp' ),
+					array( 'status' => 403, 'rule' => 'active_markup_requires_admin' )
+				);
+			}
+		}
+		try {
+			$old_value = get_option( $key );
+		} catch ( \Throwable $e ) {
+			return $this->error_response( 'read_failed', sprintf( 'A plugin hook threw while reading "%s": %s', $key, $e->getMessage() ), 500 );
+		}
+		$merged        = Mcpwp_Option_Access::merge_preserving_secrets( $key, $old_value, $submitted, $allow_secrets );
+		$value         = $merged['value'];
+
+		if ( ! empty( $merged['refused'] ) ) {
+			$this->log_activity( 'update_option_refused', $request, array( 'option' => $key, 'rule' => 'secret_overwrite_refused', 'secret_paths' => $merged['refused'] ), 409 );
+			return new WP_Error(
+				'secret_write_refused',
+				sprintf(
+					/* translators: %s: paths */
+					__( 'The submitted value replaces a stored structure that holds credential-shaped field(s): %s. Nothing was written. Send the structure with the field omitted (it is preserved), or pass allow_secrets=true to confirm you mean to discard it.', 'mcpwp' ),
+					implode( ', ', $merged['refused'] )
+				),
+				array( 'status' => 409, 'secret_paths' => $merged['refused'] )
 			);
 		}
 
-		$old_value = get_option( $key );
+		// A write that would set a credential — a gateway passcode, a licence
+		// key, an SMTP password — is payment redirection or lockout when it
+		// is wrong, and an agent cannot tell from a masked response that it
+		// just broke checkout. It has to be asked for by name.
+		$secret_paths = Mcpwp_Option_Access::secret_paths_in_write( $key, $submitted );
+		if ( ! empty( $secret_paths ) && ! $allow_secrets ) {
+			$this->log_activity( 'update_option_refused', $request, array( 'option' => $key, 'rule' => 'secret_write_refused', 'secret_paths' => $secret_paths ), 409 );
+			return new WP_Error(
+				'secret_write_refused',
+				sprintf(
+					/* translators: %s: paths */
+					__( 'This write would set credential-shaped field(s): %s. Nothing was written. Pass allow_secrets=true to confirm you mean to replace them.', 'mcpwp' ),
+					implode( ', ', array_map( function ( $p ) { return '' === $p ? '(value)' : $p; }, $secret_paths ) )
+				),
+				array(
+					'status'       => 409,
+					'secret_paths' => $secret_paths,
+					'hint'         => 'Replacing a gateway passcode, licence key or SMTP password by accident is payment redirection or lockout, and a masked response cannot tell you it happened. Re-send with allow_secrets=true if that is the intent.',
+				)
+			);
+		}
+
+		// A redacted read is not data. Whatever the encoding, '***' at any
+		// depth never reaches storage.
+		if ( Mcpwp_Option_Access::contains_mask( $value ) ) {
+			$this->log_activity( 'update_option_refused', $request, array( 'option' => $key, 'rule' => 'mask_in_write' ), 409 );
+			return new WP_Error(
+				'mask_in_write',
+				__( 'The value contains "***", which is a redaction marker from a read, not data. Nothing was written. Send the real value, or omit the field to keep what is stored.', 'mcpwp' ),
+				array( 'status' => 409 )
+			);
+		}
+
+		// Overriding the type guard must not become a way past the secret
+		// guard: replacing an array that holds credentials with a string
+		// needs the same confirmation as touching the credentials.
+		if ( rest_sanitize_boolean( $request->get_param( 'force_type_change' ) ) && ! $allow_secrets ) {
+			$stored_secrets = Mcpwp_Option_Access::secret_paths_in_write( $key, $old_value );
+			if ( ! empty( $stored_secrets ) ) {
+				$this->log_activity( 'update_option_refused', $request, array( 'option' => $key, 'rule' => 'force_type_change_over_secrets' ), 409 );
+				return new WP_Error(
+					'secret_write_refused',
+					__( 'force_type_change would discard credential-shaped fields the stored value holds. Pass allow_secrets=true as well if that is intended.', 'mcpwp' ),
+					array( 'status' => 409, 'secret_paths' => $stored_secrets )
+				);
+			}
+		}
+
+		$this->log_activity( 'update_option', $request );
 
 		// Type-preserving guard: when the stored option is an array/object,
 		// a plain-string overwrite is almost always an accident (string-typed
@@ -502,172 +675,112 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 			}
 		}
 
-		// Type-specific sanitization
-		if ( 'admin_email' === $key ) {
-			$value = sanitize_email( $value );
-			if ( ! is_email( $value ) ) {
-				return $this->error_response( 'invalid_email', __( 'Invalid email address.', 'mcpwp' ), 400 );
-			}
-		} elseif ( in_array( $key, array( 'posts_per_page', 'posts_per_rss', 'page_on_front', 'page_for_posts', 'default_category', 'thumbnail_size_w', 'thumbnail_size_h', 'medium_size_w', 'medium_size_h', 'large_size_w', 'large_size_h', 'site_icon' ), true ) ) {
+		// Core scalar keys with a fixed type.
+		if ( in_array( $key, array( 'posts_per_page', 'posts_per_rss', 'page_on_front', 'page_for_posts', 'default_category', 'thumbnail_size_w', 'thumbnail_size_h', 'medium_size_w', 'medium_size_h', 'large_size_w', 'large_size_h', 'site_icon' ), true ) ) {
 			$value = absint( $value );
 		} elseif ( 'blog_public' === $key ) {
 			$value = $value ? 1 : 0;
-		} elseif ( is_string( $value ) ) {
-			$value = sanitize_text_field( $value );
-		} elseif ( is_array( $value ) ) {
-			$value = map_deep( $value, 'sanitize_text_field' );
+		}
+
+		// Core text keys are trimmed, as WordPress's own settings screens
+		// trim them; every other value is stored as sent. permalink_structure,
+		// category_base and tag_base are the ones where a stray space breaks
+		// every URL on the site (sanitize_option() encodes it as %20) — #800
+		// round 8.
+		if ( is_string( $value ) && in_array( $key, array( 'blogname', 'blogdescription', 'timezone_string', 'date_format', 'time_format', 'WPLANG', 'permalink_structure', 'category_base', 'tag_base' ), true ) ) {
+			$value = trim( $value );
 		}
 
 		// Wrap in try/catch: plugins like Elementor hook into update_option
 		// and may throw exceptions in REST context (e.g. AJAX auth checks).
+		// The verdict is the STORED state, not the exception: WordPress's own
+		// sanitize_option() may alter a value (strip tags from blogname) and
+		// still store it, and a hook may throw after the write landed. A
+		// write that changed the stored value is reported as applied, with
+		// what was stored; one that left it untouched is a refusal
+		// (#800 round 7, P1-5).
+		$threw = null;
 		try {
 			update_option( $key, $value );
-		} catch ( \Exception $e ) {
-			// Option was likely still updated before the hook threw.
-			// Verify by re-reading.
-			$current = get_option( $key );
-			if ( $current !== $value ) {
-				return $this->error_response(
-					'update_failed',
-					$e->getMessage(),
-					500
-				);
-			}
+		} catch ( \Throwable $e ) { // \Error too: a TypeError in a hook is still "the write may have landed".
+			$threw = $e;
 		}
+
+		// A hook that throws on READ (pre_option_*/option_*) must be a
+		// reported failure, never an uncaught fatal (#800 round 9).
+		try {
+			$stored = get_option( $key );
+		} catch ( \Throwable $e ) {
+			return $this->error_response( 'read_failed', sprintf( 'A plugin hook threw while reading "%s" after the write: %s', $key, $e->getMessage() ), 500 );
+		}
+		$landed  = $stored == $value || $stored != $old_value; // phpcs:ignore WordPress.PHP.StrictComparisons.LooseComparison -- serialisation may retype scalars.
+		if ( ! $landed ) {
+			return $this->error_response(
+				'update_failed',
+				null !== $threw ? $threw->getMessage() : __( 'The option was not changed: WordPress refused the value.', 'mcpwp' ),
+				null !== $threw ? 500 : 409
+			);
+		}
+		// Two different facts, two different warnings: the store changed the
+		// bytes (worth acting on), or a hook threw after the write landed
+		// (worth knowing, not the same thing) — #800 round 8.
+		$write_warnings = array();
+		if ( $stored != $value ) { // phpcs:ignore WordPress.PHP.StrictComparisons.LooseComparison
+			$write_warnings[] = 'WordPress altered the value on store (its own sanitize_option); the value reported is what was stored.';
+		}
+		if ( null !== $threw ) {
+			$write_warnings[] = 'A plugin hook threw after the write landed: ' . $threw->getMessage();
+		}
+
+		// Writes may set a secret; reads never return one.
+		$new = Mcpwp_Option_Access::redact( $key, $stored );
+		$old = Mcpwp_Option_Access::redact( $key, $old_value );
 
 		return $this->success_response(
 			array(
 				'key'       => $key,
-				'value'     => get_option( $key ),
-				'old_value' => $old_value,
+				'value'     => $new['value'],
+				'old_value' => $old['value'],
+				'redacted'  => array_values( array_unique( array_merge( $new['redacted'], $old['redacted'] ) ) ),
+				'preserved' => $merged['preserved'],
+				'warnings'  => array_merge( isset( $merged['warnings'] ) ? $merged['warnings'] : array(), $write_warnings ),
 				'updated'   => true,
+				'rule'      => $decision['rule'],
 			)
 		);
 	}
 
-	private function is_option_allowed( $key ) {
-		// Exact match always wins.
-		if ( in_array( $key, $this->get_allowed_option_keys(), true ) ) {
-			return true;
-		}
-
-		// Check blocked patterns first — these override prefix matches.
-		$lower_key = strtolower( $key );
-		foreach ( $this->get_blocked_option_patterns() as $pattern ) {
-			if ( false !== strpos( $lower_key, $pattern ) ) {
-				return false;
+	/**
+	 * Sanitise what the caller submitted, in whatever encoding it came: a
+	 * tree leaf-by-leaf, an encoded string through its tree and back into
+	 * the same encoding, a plain string as text. Runs before the merge so a
+	 * preserved credential is never touched.
+	 *
+	 * @param string $key   Option name.
+	 * @param mixed  $value Submitted value.
+	 * @return mixed
+	 */
+	private function sanitize_submitted_option_value( $key, $value ) {
+		// Options hold HTML templates, e-mail footers, CSS, %-encoded URLs,
+		// keys. A text-field sanitiser destroys all of those and made every
+		// GET → POST round trip lossy (#800 round 6). What is removed here
+		// is only what can never be data: NUL bytes and invalid UTF-8.
+		// Type-specific keys (emails, integers, flags) are handled after
+		// the merge; whether HTML may be stored is decided by the option's
+		// own allowlisting, not rewritten byte by byte.
+		return Mcpwp_Option_Access::map_string_leaves(
+			$value,
+			function ( $leaf ) {
+				$leaf = str_replace( "\0", '', (string) $leaf );
+				if ( function_exists( 'wp_check_invalid_utf8' ) ) {
+					$checked = wp_check_invalid_utf8( $leaf );
+					if ( '' === $checked && '' !== $leaf ) {
+						return '';
+					}
+					$leaf = $checked;
+				}
+				return $leaf;
 			}
-		}
-
-		// Check allowed prefixes.
-		foreach ( $this->get_allowed_option_prefixes() as $prefix ) {
-			if ( 0 === strpos( $key, $prefix ) ) {
-				return true;
-			}
-		}
-
-		return false;
-	}
-
-	private function get_allowed_option_keys() {
-		return array(
-			// WordPress core.
-			'blogname',
-			'blogdescription',
-			'siteurl',
-			'home',
-			'admin_email',
-			'timezone_string',
-			'date_format',
-			'time_format',
-			'WPLANG',
-			'posts_per_page',
-			'posts_per_rss',
-			'show_on_front',
-			'page_on_front',
-			'page_for_posts',
-			'blog_public',
-			'permalink_structure',
-			'default_category',
-			'default_post_format',
-			'thumbnail_size_w',
-			'thumbnail_size_h',
-			'medium_size_w',
-			'medium_size_h',
-			'large_size_w',
-			'large_size_h',
-			'site_icon',
-			// Theme settings (hyphenated keys that don't match prefix rules).
-			'astra-settings',
-			'generate_settings',
-			// MCPWP.
-			'mcpwp_site_context',
-			'mcpwp_site_context_updated',
-			// Elementor.
-			'elementor_pro_theme_builder_conditions',
-		);
-	}
-
-	private function get_allowed_option_prefixes() {
-		return array(
-			'elementor_',
-			'wpseo_',
-			'rank_math_',
-			'astra_',
-			'ocean_',
-			'theme_mods_',
-			'widget_',
-			'nav_menu_',
-			'sidebars_',
-			'mcpwp_',
-			'woocommerce_',
-			'wp_page_for_privacy_policy',
-		);
-	}
-
-	private function get_blocked_option_patterns() {
-		return array(
-			'password',
-			'secret',
-			'token',
-			'auth_key',
-			'auth_salt',
-			'logged_in_key',
-			'logged_in_salt',
-			'nonce_key',
-			'nonce_salt',
-			'secure_auth',
-			'credential',
-			'api_key',
-			'private_key',
-			'license_key',
-			'stripe_',
-			'paypal_',
-			'_session',
-			// Entitlement / bridge surfaces — must never be settable through the
-			// options API. The licensing bridge (issue #505) reads legacy spai_ originals
-			// only; block the writable mcpwp_ copies + the migration flag too,
-			// as defence in depth against entitlement forgery (Warden 3.1.0 P0).
-			'pro_license',
-			'trial_started',
-			'migrated_from',
-			// Update-control options steer the self-updater (manifest + package
-			// source). Writing mcpwp_update_info / mcpwp_version_url through the
-			// options API is a write-scope→RCE / SSRF path — block both here.
-			'update_info',
-			'version_url',
-			// Secret-bearing internal stores. No scope (including admin) should be
-			// able to read or write these through the generic /option API — the
-			// dedicated /plugin-settings and /integrations routes are the only
-			// intended surface:
-			//   mcpwp_settings      → holds oauth_client_secret_hash / github_token
-			//   mcpwp_integrations  → encrypted provider blobs
-			//   mcpwp_encryption_key→ sodium key that decrypts the blobs above
-			// Full option names used as substrings (not bare 'settings'/'integrations')
-			// to avoid over-blocking astra-settings / generate_settings / *_settings.
-			'mcpwp_settings',
-			'integrations',
-			'encryption',
 		);
 	}
 

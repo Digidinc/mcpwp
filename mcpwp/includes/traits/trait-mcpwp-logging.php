@@ -20,6 +20,10 @@ trait Mcpwp_Logging {
 	 * @return array
 	 */
 	protected function get_log_redaction_keys() {
+		if ( class_exists( 'Mcpwp_Option_Access' ) && method_exists( 'Mcpwp_Option_Access', 'log_redaction_keys' ) ) {
+			return Mcpwp_Option_Access::log_redaction_keys();
+		}
+
 		$defaults = array( 'api_key', 'x-api-key', 'authorization', 'password', 'secret', 'token' );
 		$settings = get_option( 'mcpwp_settings', array() );
 		$keys = isset( $settings['log_redaction_keys'] ) ? $settings['log_redaction_keys'] : $defaults;
@@ -51,16 +55,41 @@ trait Mcpwp_Logging {
 	 * @param array $redaction_keys Keys to redact.
 	 * @return mixed
 	 */
-	protected function redact_log_data( $data, $redaction_keys ) {
+	protected function redact_log_data( $data, $redaction_keys, $under_secret = false ) {
+		// One walker for the whole plugin, through every encoding level.
+		if ( class_exists( 'Mcpwp_Option_Access' ) && method_exists( 'Mcpwp_Option_Access', 'redact_for_log' ) ) {
+			return Mcpwp_Option_Access::redact_for_log( $data, array_map( 'strtolower', array_map( 'strval', (array) $redaction_keys ) ), $under_secret );
+		}
+
 		if ( is_array( $data ) ) {
+			// {key: 'woocommerce_api_key', value: 'Hunter2!!'} — the option
+			// name says the value is a secret even when the value's own shape
+			// does not.
+			$value_is_secret = isset( $data['key'] ) && is_string( $data['key'] ) && class_exists( 'Mcpwp_Option_Access' ) && Mcpwp_Option_Access::is_secret_field( $data['key'] );
+
 			$out = array();
 			foreach ( $data as $key => $value ) {
+				if ( $value_is_secret && 'value' === $key ) {
+					// A secret option's value is redacted whatever its shape —
+					// an array under a secret name is walked with every leaf
+					// marked, not passed through because it is not a string.
+					$out[ $key ] = is_array( $value ) ? $this->redact_log_data( $value, $redaction_keys, true ) : '[redacted]';
+					continue;
+				}
 				$key_norm = is_string( $key ) ? strtolower( (string) $key ) : '';
 				if ( '' !== $key_norm && in_array( $key_norm, $redaction_keys, true ) ) {
 					$out[ $key ] = '[redacted]';
 					continue;
 				}
-				$out[ $key ] = $this->redact_log_data( $value, $redaction_keys );
+				// One detector for the whole plugin (#800): any secret-shaped
+				// field name, anywhere in the tree, marks everything beneath it;
+				// a credential-shaped value is redacted whatever it is called.
+				$secret = $under_secret || ( is_string( $key ) && class_exists( 'Mcpwp_Option_Access' ) && Mcpwp_Option_Access::is_secret_field( $key ) );
+				if ( is_string( $value ) && class_exists( 'Mcpwp_Option_Access' ) && ( ( $secret && Mcpwp_Option_Access::looks_like_secret_value( $value ) ) || Mcpwp_Option_Access::looks_like_credential( $value ) ) ) {
+					$out[ $key ] = '[redacted]';
+					continue;
+				}
+				$out[ $key ] = $this->redact_log_data( $value, $redaction_keys, $secret );
 			}
 			return $out;
 		}
@@ -98,14 +127,27 @@ trait Mcpwp_Logging {
 			'created_at'  => current_time( 'mysql' ),
 		);
 
-		// Optionally log request data (excluding sensitive info)
+		// Redacted FIRST, truncated second: a truncated JSON string no longer
+		// decodes, and a walker that cannot open it cannot redact what is
+		// inside (#800 round 7, P0-3).
 		$request_data = $this->get_loggable_request_data( $request );
 		if ( ! empty( $request_data ) ) {
-			$data['request_data'] = wp_json_encode( $this->redact_log_data( $request_data, $redaction_keys ) );
+			$redacted = $this->redact_log_data( $request_data, $redaction_keys );
+			if ( is_array( $redacted ) ) {
+				foreach ( $redacted as $key => $value ) {
+					if ( is_string( $value ) && strlen( $value ) > 500 ) {
+						$redacted[ $key ] = substr( $value, 0, 500 ) . '...[truncated]';
+					}
+				}
+			}
+			$data['request_data'] = wp_json_encode( $redacted );
 		}
 
 		// Log response size if available
-		if ( null !== $response && ! empty( $settings['log_store_response_data'] ) ) {
+		// A refusal's payload is the reason it was refused — small, redacted,
+		// and the one thing an audit needs. It is kept whatever the response
+		// storage setting says; success payloads still obey the setting.
+		if ( null !== $response && ( ! empty( $settings['log_store_response_data'] ) || $status_code >= 400 ) ) {
 			$redacted_response = $this->redact_log_data( $response, $redaction_keys );
 			$response_json = wp_json_encode( $redacted_response );
 			$data['response_data'] = strlen( $response_json ) > 1000 ? null : $response_json;
@@ -126,16 +168,8 @@ trait Mcpwp_Logging {
 	 * @return array Loggable data.
 	 */
 	protected function get_loggable_request_data( $request ) {
-		$params = $request->get_params();
-
-		// Truncate large fields
-		foreach ( $params as $key => $value ) {
-			if ( is_string( $value ) && strlen( $value ) > 500 ) {
-				$params[ $key ] = substr( $value, 0, 500 ) . '...[truncated]';
-			}
-		}
-
-		return $params;
+		// Returned whole: truncation happens after redaction, in log_activity().
+		return $request->get_params();
 	}
 
 	/**

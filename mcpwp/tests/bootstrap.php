@@ -143,6 +143,9 @@ class WP_REST_Request
         $this->method     = strtoupper($method);
         $this->route      = $route;
         $this->params     = is_array($params) ? $params : array();
+        // Constructor params model the request body (what a POST/PUT carries);
+        // query params are added with set_query_params().
+        $this->body_params = $this->params;
         $this->headers    = is_array($headers) ? $headers : array();
         $this->json_params = $json_params;
     }
@@ -218,6 +221,7 @@ class WP_REST_Request
     {
         return $this->json_params;
     }
+
 }
 
 class WP_REST_Server
@@ -484,6 +488,14 @@ function get_option($name, $default = false)
 
 function update_option($name, $value, $autoload = null)
 {
+    // Test-only: mimic WordPress's sanitize_option() — a hook may alter the
+    // value before storage, or refuse it (null = refused, nothing stored).
+    if (isset($GLOBALS['mcpwp_test_option_store_hook']) && is_callable($GLOBALS['mcpwp_test_option_store_hook'])) {
+        $value = call_user_func($GLOBALS['mcpwp_test_option_store_hook'], $name, $value);
+        if (null === $value) {
+            return false;
+        }
+    }
     // Allow tests to simulate DB write failures for specific option names.
     if (! empty($GLOBALS['mcpwp_test_update_option_fail'][ $name ])) {
         return false;
@@ -492,6 +504,9 @@ function update_option($name, $value, $autoload = null)
     // Recorded so tests can assert a caller passed autoload=false explicitly
     // (e.g. a large/rarely-read option that must not load on every request).
     $GLOBALS['mcpwp_test_options_autoload'][ $name ] = $autoload;
+    if (isset($GLOBALS['mcpwp_test_option_store_after_hook']) && is_callable($GLOBALS['mcpwp_test_option_store_after_hook'])) {
+        call_user_func($GLOBALS['mcpwp_test_option_store_after_hook'], $name, $value);
+    }
     return true;
 }
 
@@ -508,6 +523,23 @@ function add_option($name, $value = '', $deprecated = '', $autoload = 'yes')
     }
     $GLOBALS['mcpwp_test_options'][ $name ] = $value;
     return true;
+}
+
+function is_serialized($data, $strict = true)
+{
+    // Core: a:/O: end in '}', scalars in ';', 'N;' is null.
+    if (! is_string($data)) {
+        return false;
+    }
+    $data = trim($data);
+    if ('N;' === $data) {
+        return true;
+    }
+    if (! preg_match('/^([adObis]):/', $data, $m)) {
+        return false;
+    }
+    $last = substr($data, -1);
+    return in_array($m[1], array('a', 'O'), true) ? '}' === $last : ';' === $last;
 }
 
 function delete_option($name)
@@ -806,7 +838,14 @@ function get_bloginfo($show = '')
 
 function is_multisite()
 {
-    return false;
+    return ! empty($GLOBALS['mcpwp_test_is_multisite']);
+}
+
+if (! function_exists('get_site_option')) {
+    function get_site_option($name, $default = false)
+    {
+        return $GLOBALS['mcpwp_test_site_options'][ $name ] ?? $default;
+    }
 }
 
 function wp_generate_uuid4()
@@ -1089,6 +1128,9 @@ if (! isset($GLOBALS['wpdb'])) {
                 $this->last_error = '';
                 return 1;
             }
+            // Captured so a test can assert what was — and was not — persisted
+            // (activity log rows, for one).
+            $GLOBALS['mcpwp_test_wpdb_rows'][ (string) $table ][] = $data;
             return 1;
         }
         public function update($table, $data, $where, $f = null, $wf = null)
@@ -2147,6 +2189,7 @@ require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-page-setti
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-slug-search.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-idempotency-claim.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-post-fields.php';
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-option-access.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-registry.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-element-keys.php';
 require_once dirname(__DIR__) . '/includes/core/traits/trait-mcpwp-elementor-reader.php';

@@ -102,16 +102,16 @@ final class StableHardeningTest extends TestCase {
 	}
 
 	public function test_force_type_change_allows_explicit_string_overwrite(): void {
-		update_option( 'mcpwp_some_array_option', array( 'a' => 1 ) );
+		update_option( 'theme_mods_probe_option', array( 'a' => 1 ) );
 
 		$response = $this->update_option_via_api(
-			'mcpwp_some_array_option',
+			'theme_mods_probe_option',
 			'plain string on purpose',
 			array( 'force_type_change' => true )
 		);
 
 		$this->assertSame( 200, $response->get_status() );
-		$this->assertSame( 'plain string on purpose', get_option( 'mcpwp_some_array_option' ) );
+		$this->assertSame( 'plain string on purpose', get_option( 'theme_mods_probe_option' ) );
 	}
 
 	public function test_plain_string_option_updates_unchanged(): void {

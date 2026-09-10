@@ -561,7 +561,7 @@ trait Mcpwp_Free_Tools_Content_Trait {
 		// Option Management
 		$tools[] = $this->define_tool(
 			'wp_get_option',
-			'Get a single WordPress option by key. Supports core WP options (blogname, show_on_front, etc.) and plugin prefixes: elementor_*, wpseo_*, rank_math_*, astra_*, theme_mods_*, widget_*, woocommerce_*, mcpwp_*. Sensitive keys (passwords, tokens, secrets) are always blocked.',
+			'Get a single WordPress option by key. Reachable: core settings, builder/SEO/theme/commerce prefixes (elementor_*, wpseo_*, rank_math_*, theme_mods_*, widget_*, woocommerce_*, …), namespaces of plugins that are active here (Max Mega Menu, GTM4WP, WP Mail SMTP, Complianz, forms, caches, …), and this site\'s option_allowlist. Credential-shaped fields come back as *** with their paths under redacted; the plugin\'s own state, salts, roles, active plugins, cron and transients are never reachable. A refusal names its rule.',
 			array(
 				'key' => array(
 					'type'        => 'string',
@@ -573,7 +573,7 @@ trait Mcpwp_Free_Tools_Content_Trait {
 
 		$tools[] = $this->define_tool(
 			'wp_update_option',
-			'Update a single WordPress option by key. Supports core WP options and plugin prefixes: elementor_*, wpseo_*, rank_math_*, astra_*, theme_mods_*, widget_*, woocommerce_*, mcpwp_*. Sensitive keys (passwords, tokens, secrets) are always blocked.',
+			'Update a single WordPress option by key. Same reachability as wp_get_option, minus write-protected control surfaces (siteurl, home, admin_email, template, upload paths, …). A write that would set a credential-shaped field is refused (secret_write_refused) unless allow_secrets=true; a masked *** value or an omitted credential field is folded back to the stored value and reported under preserved, so a read→edit→write loop can never destroy a key.',
 			array(
 				'key' => array(
 					'type'        => 'string',
@@ -584,6 +584,14 @@ trait Mcpwp_Free_Tools_Content_Trait {
 					'type'        => 'string',
 					'description' => 'New value for the option',
 					'required'    => true,
+				),
+				'allow_secrets' => array(
+					'type'        => 'boolean',
+					'description' => 'Confirm a write that sets credential-shaped fields (passcodes, API keys, licence keys). Refused with secret_write_refused otherwise.',
+				),
+				'force_type_change' => array(
+					'type'        => 'boolean',
+					'description' => 'Confirm replacing an array/object option with a plain string (option_type_mismatch otherwise). When the stored value holds credential-shaped fields, allow_secrets=true is required as well.',
 				),
 			)
 		);
