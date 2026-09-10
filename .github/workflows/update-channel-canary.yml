@@ -17,6 +17,7 @@ on:
     paths:
       - "scripts/verify_update_channel.sh"
       - "scripts/verify_freemius_channel.sh"
+      - "scripts/tests/verify_freemius_channel_test.sh"
       - ".github/workflows/update-channel-canary.yml"
 
 permissions:
@@ -24,6 +25,18 @@ permissions:
   issues: write
 
 jobs:
+  # The verifier's exit codes are the whole contract the jobs below rely on,
+  # and a live run only ever exercises the branch reality happens to be in.
+  # This drives every branch offline — no secrets, no network.
+  freemius-verifier-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Freemius verifier contract test
+        run: bash scripts/tests/verify_freemius_channel_test.sh
+
   verify:
     runs-on: ubuntu-latest
     strategy:

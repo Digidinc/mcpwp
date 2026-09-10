@@ -15,10 +15,22 @@
 # redirect to signed storage, which is fetched WITHOUT the bearer header
 # (forwarding it makes S3 answer a misleading SignatureDoesNotMatch 403) — and
 # fails unless the archive is valid, carries mcpwp-premium/mcpwp.php with the
-# expected Version: header, and ships mcpwp-premium/freemius/start.php.
+# expected Version: header and MCPWP_VERSION constant, and ships
+# mcpwp-premium/freemius/start.php. When --expect-version names an older tag
+# that is still released, both it and the latest build are verified: the
+# latest is what the updater serves.
 #
 # Usage:
 #   scripts/verify_freemius_channel.sh [--expect-version X.Y.Z] [--product-id ID]
+#                                      [--retries N] [--delay S] [--strict-storage]
+#
+# Exit codes:
+#   0  Freemius delivers a valid build (storage refusals, if any, are WARNed)
+#   1  it does not, or it could not be checked
+#   2  --strict-storage: delivered, but storage refused a request first — an
+#      updater that does not retry would have failed
+#
+# Contract test: scripts/tests/verify_freemius_channel_test.sh
 #
 # Auth: FREEMIUS_BEARER_TOKEN in the environment.
 
@@ -28,6 +40,8 @@ PRODUCT_ID="${FREEMIUS_PRODUCT_ID:-23824}"
 EXPECT_VERSION=""
 RETRIES=1
 DELAY=10
+STRICT_STORAGE=""
+STORAGE_REFUSALS=0
 
 while [[ $# -gt 0 ]]; do
 	case "$1" in
@@ -46,6 +60,10 @@ while [[ $# -gt 0 ]]; do
 	--delay)
 		DELAY="${2:-10}"
 		shift 2
+		;;
+	--strict-storage)
+		STRICT_STORAGE=1
+		shift
 		;;
 	-h | --help)
 		grep '^#' "$0" | sed 's/^# \{0,1\}//'
@@ -136,6 +154,7 @@ verify_premium_zip() {
 		# echoes the signed request.
 		s3_code="$(grep -ao '<Code>[^<]*</Code>' "$zip" 2>/dev/null | head -1 | sed 's/<[^>]*>//g')"
 		echo "  WARN: storage answered HTTP ${storage_status:-000}${s3_code:+ ($s3_code)} for the $version premium ZIP (attempt $attempt/$max_attempts)" >&2
+		STORAGE_REFUSALS=$((STORAGE_REFUSALS + 1))
 		attempt=$((attempt + 1))
 	done
 
@@ -161,11 +180,21 @@ verify_premium_zip() {
 	[[ "$zip_version" == "$version" ]] ||
 		fail "the premium ZIP's mcpwp.php says Version: ${zip_version:-<none>}, expected $version" || return 1
 
+	# The header and the constant drift apart (the version-drift bug class):
+	# the runtime reports MCPWP_VERSION, so both must match.
+	local zip_constant
+	zip_constant="$(unzip -p "$zip" mcpwp-premium/mcpwp.php 2>/dev/null |
+		grep -m1 -E "define\([[:space:]]*['\"]MCPWP_VERSION['\"]" |
+		sed -E "s/.*define\([[:space:]]*['\"]MCPWP_VERSION['\"][[:space:]]*,[[:space:]]*['\"]([^'\"]*)['\"].*/\1/")"
+	[[ "$zip_constant" == "$version" ]] ||
+		fail "the premium ZIP's MCPWP_VERSION is ${zip_constant:-<none>}, expected $version (its Version: header says $zip_version)" || return 1
+
 	echo "  OK: premium ZIP is a valid $version build with the Freemius SDK"
 	return 0
 }
 
 check_once() {
+	STORAGE_REFUSALS=0
 	echo "→ Freemius product: $PRODUCT_ID"
 
 	local response
@@ -201,13 +230,12 @@ check_once() {
 		local newest
 		newest="$(printf '%s\n%s\n' "$latest" "$EXPECT_VERSION" | sort -V | tail -1)"
 		if [[ "$newest" == "$latest" ]]; then
-			# Verify the expected build when it is still a released tag;
-			# otherwise the build customers are actually offered.
-			local target="$latest"
+			# The expected build when it is still a released tag, and always
+			# the latest: that is the build the updater actually serves.
 			if echo "$response" | jq -e --arg v "$EXPECT_VERSION" 'any(.tags[]; .release_mode == "released" and .version == $v)' >/dev/null 2>&1; then
-				target="$EXPECT_VERSION"
+				verify_premium_zip "$response" "$EXPECT_VERSION" || return 1
 			fi
-			verify_premium_zip "$response" "$target" || return 1
+			verify_premium_zip "$response" "$latest" || return 1
 			echo "  OK: Freemius is on $latest, ahead of $EXPECT_VERSION"
 			return 0
 		fi
@@ -223,6 +251,10 @@ check_once() {
 attempt=1
 while true; do
 	if check_once; then
+		if [[ -n "$STRICT_STORAGE" && "$STORAGE_REFUSALS" -gt 0 ]]; then
+			echo "FAIL (--strict-storage): storage refused $STORAGE_REFUSALS request(s) before delivering — an updater that does not retry would have failed." >&2
+			exit 2
+		fi
 		exit 0
 	fi
 	if [[ "$attempt" -ge "$RETRIES" ]]; then
