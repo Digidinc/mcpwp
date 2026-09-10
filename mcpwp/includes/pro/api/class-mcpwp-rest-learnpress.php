@@ -611,7 +611,7 @@ class Mcpwp_REST_LearnPress extends Mcpwp_REST_API {
 			if ( ! $term || is_wp_error( $term ) ) {
 				return $this->error_response( 'not_found', __( 'Category not found.', 'mcpwp' ), 404, array( 'id' => $id ) );
 			}
-			return $this->defer_destructive( 'delete_course_category', $request, array( 'type' => 'term', 'id' => $id, 'title' => (string) $term->name ), sprintf( 'Permanently delete course category #%d', $id ) );
+			return $this->defer_destructive( 'delete_course_category', $request, array( 'type' => 'term', 'id' => $id, 'taxonomy' => 'course_category', 'title' => (string) $term->name ), sprintf( 'Permanently delete course category #%d', $id ) );
 		}
 
 		$result = $this->handler->delete_course_category( $id );

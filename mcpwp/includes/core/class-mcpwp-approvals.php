@@ -142,16 +142,20 @@ class Mcpwp_Approvals {
 		// A flood of gated calls must not fill the queue other people review
 		// — from one principal, or from many minted for the purpose.
 		$pending_mine = 0;
-		$pending_all  = 0;
+		$pending_api  = 0;
 		foreach ( self::get_all() as $existing ) {
 			if ( ! isset( $existing['status'] ) || 'pending' !== $existing['status'] ) {
 				continue;
 			}
-			$pending_all++;
-			if ( isset( $existing['requested_by_key_id'] ) && $existing['requested_by_key_id'] === $requester ) {
+			$by = isset( $existing['requested_by_key_id'] ) ? (string) $existing['requested_by_key_id'] : '';
+			if ( 0 !== strpos( $by, 'wp-user:' ) ) {
+				$pending_api++;
+			}
+			if ( $by === $requester ) {
 				$pending_mine++;
 			}
 		}
+		$is_admin_requester = 0 === strpos( $requester, 'wp-user:' );
 		if ( $pending_mine >= Mcpwp_Destructive_Gate::MAX_PENDING_PER_REQUESTER ) {
 			return new WP_Error(
 				'too_many_pending',
@@ -163,7 +167,7 @@ class Mcpwp_Approvals {
 				array( 'status' => 429 )
 			);
 		}
-		if ( $pending_all >= Mcpwp_Destructive_Gate::MAX_PENDING_TOTAL ) {
+		if ( ! $is_admin_requester && $pending_api >= Mcpwp_Destructive_Gate::MAX_PENDING_TOTAL ) {
 			return new WP_Error(
 				'approval_queue_full',
 				sprintf(

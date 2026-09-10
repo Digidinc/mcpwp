@@ -85,6 +85,20 @@ class Mcpwp_Settings {
 			)
 		);
 
+		// Destructive operations need approval (#536). Settable here and
+		// nowhere else: the settings API refuses it by design.
+		add_settings_field(
+			'destructive_requires_approval',
+			__( 'Approval for destructive operations', 'mcpwp' ),
+			array( $this, 'render_checkbox_field' ),
+			'mcpwp_settings',
+			'mcpwp_general_section',
+			array(
+				'id'          => 'destructive_requires_approval',
+				'description' => __( 'Permanent deletes requested through the API (pages, posts, media, products, all drafts …) wait for a second person to approve them. Trashing is never gated. Turning this off lets any admin-scoped key delete permanently in one call.', 'mcpwp' ),
+			)
+		);
+
 		// Log retention
 		add_settings_field(
 			'log_retention_days',
@@ -567,6 +581,7 @@ class Mcpwp_Settings {
 	public function get_defaults() {
 		return array(
 			'enable_logging'     => true,
+			'destructive_requires_approval' => true,
 			'log_retention_days' => 30,
 			'log_store_response_data' => true,
 			'log_redaction_keys' => array(
@@ -653,6 +668,9 @@ class Mcpwp_Settings {
 		$current   = $this->get_settings();
 
 		$sanitized['enable_logging'] = ! empty( $input['enable_logging'] );
+
+		// Absent from the form means unchecked, like every checkbox here.
+		$sanitized['destructive_requires_approval'] = ! empty( $input['destructive_requires_approval'] );
 
 		$sanitized['log_retention_days'] = isset( $input['log_retention_days'] )
 			? min( 365, max( 1, absint( $input['log_retention_days'] ) ) )

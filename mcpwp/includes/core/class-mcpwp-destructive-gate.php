@@ -56,10 +56,10 @@ class Mcpwp_Destructive_Gate {
 		'delete_page'            => array( 'DELETE', '#^/mcpwp/v1/pages/\d+$#' ),
 		'delete_post'            => array( 'DELETE', '#^/mcpwp/v1/posts/\d+$#' ),
 		'delete_content'         => array( 'DELETE', '#^/mcpwp/v1/content/[A-Za-z0-9_\-]+/\d+$#' ),
-		'delete_all_drafts'      => array( 'POST', '#^/mcpwp/v1/drafts/delete-all$#' ),
+		'delete_all_drafts'      => array( 'DELETE', '#^/mcpwp/v1/drafts/delete-all$#' ),
 		'delete_media'           => array( 'DELETE', '#^/mcpwp/v1/media/\d+$#' ),
-		'delete_product'         => array( 'DELETE', '#^/mcpwp/v1/products/\d+$#' ),
-		'delete_course_category' => array( 'DELETE', '#^/mcpwp/v1/(lms|learnpress)/(course-)?categories/\d+$#' ),
+		'delete_product'         => array( 'DELETE', '#^/mcpwp/v1/woocommerce/products/\d+$#' ),
+		'delete_course_category' => array( 'DELETE', '#^/mcpwp/v1/learnpress/categories/\d+$#' ),
 		'delete_widget'          => array( 'DELETE', '#^/mcpwp/v1/widgets/[A-Za-z0-9_\-]+$#' ),
 	);
 
@@ -81,11 +81,21 @@ class Mcpwp_Destructive_Gate {
 	);
 
 	/**
-	 * Pending destructive requests one site holds at most, across every
-	 * requester. The per-requester cap alone is bypassed by minting keys
-	 * (#536 round 2, P1-3).
+	 * Pending destructive requests API principals may hold at most, across
+	 * all of them. The per-requester cap alone is bypassed by minting keys
+	 * (#536 round 2, P1-3). Administrators in wp-admin (wp-user:N) are not
+	 * counted against it and are bound by the per-requester cap only, so
+	 * minted keys cannot close the destructive path to the people who
+	 * review it (#536 round 3, P1-2).
 	 */
 	const MAX_PENDING_TOTAL = 100;
+
+	/**
+	 * Ids a delete-all-drafts fingerprint lists at most. The count is
+	 * always exact; the id list is bounded so a site with thousands of
+	 * drafts does not hash them all inside a REST request.
+	 */
+	const DRAFTS_FINGERPRINT_IDS = 1000;
 
 	/**
 	 * How many pending requests one principal may hold. A flood of gated
@@ -255,6 +265,26 @@ class Mcpwp_Destructive_Gate {
 			return $bound;
 		}
 
+		// The id in the route, the id in the body and the id the handler
+		// resolved must be one id: the reviewer reads the route line as
+		// "the exact call" (#536 round 3, P2-1).
+		if ( isset( $resource['id'] ) && is_numeric( $resource['id'] ) ) {
+			$ids = array( (int) $resource['id'] );
+			if ( preg_match( '#/(\d+)/?$#', $route, $m ) ) {
+				$ids[] = (int) $m[1];
+			}
+			if ( isset( $params['id'] ) && is_numeric( $params['id'] ) ) {
+				$ids[] = (int) $params['id'];
+			}
+			if ( count( array_unique( $ids ) ) > 1 ) {
+				return new WP_Error(
+					'destructive_id_mismatch',
+					__( 'The id in the route and the id in the body disagree. Nothing was queued; send one id.', 'mcpwp' ),
+					array( 'status' => 409, 'ids' => array_values( array_unique( $ids ) ) )
+				);
+			}
+		}
+
 		// The set a purge would remove is part of the target.
 		if ( 'drafts' === $resource['type'] ) {
 			$resource['post_type'] = isset( $params['type'] ) && is_string( $params['type'] ) ? $params['type'] : 'all';
@@ -344,8 +374,16 @@ class Mcpwp_Destructive_Gate {
 			return self::fingerprint_drafts( isset( $resource['post_type'] ) ? (string) $resource['post_type'] : 'all' );
 		}
 
+		if ( isset( $resource['type'] ) && 'term' === $resource['type'] ) {
+			return self::fingerprint_term( isset( $resource['id'] ) ? (int) $resource['id'] : 0, isset( $resource['taxonomy'] ) ? (string) $resource['taxonomy'] : '' );
+		}
+
+		if ( isset( $resource['type'] ) && 'widget' === $resource['type'] ) {
+			return self::fingerprint_widget( isset( $resource['id'] ) ? (string) $resource['id'] : '' );
+		}
+
 		// Not post-like: nothing to fingerprint by post id.
-		if ( empty( $resource['id'] ) || ! is_numeric( $resource['id'] ) || in_array( $resource['type'], array( 'api_key', 'term', 'widget' ), true ) ) {
+		if ( empty( $resource['id'] ) || ! is_numeric( $resource['id'] ) || 'api_key' === $resource['type'] ) {
 			return array();
 		}
 
@@ -365,7 +403,60 @@ class Mcpwp_Destructive_Gate {
 	}
 
 	/**
-	 * The ids a delete-all-drafts run would remove, as a fingerprint.
+	 * A term, as a fingerprint: renamed or re-slugged between review and
+	 * apply is a different thing (#536 round 3, P2-4).
+	 *
+	 * @param int    $term_id  Term id.
+	 * @param string $taxonomy Taxonomy.
+	 * @return array
+	 */
+	public static function fingerprint_term( $term_id, $taxonomy ) {
+		if ( $term_id < 1 || ! function_exists( 'get_term' ) ) {
+			return array();
+		}
+		$term = get_term( $term_id, $taxonomy );
+		if ( ! $term || is_wp_error( $term ) ) {
+			return array( 'exists' => false );
+		}
+		return array(
+			'exists'   => true,
+			'type'     => 'term',
+			'taxonomy' => (string) $taxonomy,
+			'status'   => '',
+			'modified' => '',
+			'title'    => (string) $term->name,
+			'count'    => isset( $term->count ) ? (int) $term->count : 0,
+			'hash'     => hash( 'sha256', (string) $term->name . "\0" . (string) $term->slug . "\0" . (string) $taxonomy . "\0" . ( isset( $term->parent ) ? (int) $term->parent : 0 ) ),
+		);
+	}
+
+	/**
+	 * A widget instance, as a fingerprint of its settings.
+	 *
+	 * @param string $widget_id e.g. text-3.
+	 * @return array
+	 */
+	public static function fingerprint_widget( $widget_id ) {
+		if ( ! preg_match( '/^([a-z0-9_\-]+?)-(\d+)$/i', (string) $widget_id, $m ) ) {
+			return array();
+		}
+		$instances = get_option( 'widget_' . $m[1], array() );
+		if ( ! is_array( $instances ) || ! isset( $instances[ (int) $m[2] ] ) ) {
+			return array( 'exists' => false );
+		}
+		return array(
+			'exists'   => true,
+			'type'     => 'widget',
+			'status'   => '',
+			'modified' => '',
+			'title'    => (string) $widget_id,
+			'hash'     => hash( 'sha256', wp_json_encode( $instances[ (int) $m[2] ] ) ),
+		);
+	}
+
+	/**
+	 * The ids a delete-all-drafts run would remove, as a fingerprint. The
+	 * count is exact and cheap (wp_count_posts); the id list is bounded.
 	 *
 	 * @param string $post_type post|page|all.
 	 * @return array
@@ -373,13 +464,25 @@ class Mcpwp_Destructive_Gate {
 	public static function fingerprint_drafts( $post_type = 'all' ) {
 		$types = in_array( $post_type, array( 'post', 'page' ), true ) ? array( $post_type ) : array( 'post', 'page' );
 
+		$count = 0;
+		foreach ( $types as $type ) {
+			$counts = function_exists( 'wp_count_posts' ) ? wp_count_posts( $type ) : null;
+			if ( is_object( $counts ) && isset( $counts->draft ) ) {
+				$count += (int) $counts->draft;
+			} elseif ( is_array( $counts ) && isset( $counts['draft'] ) ) {
+				$count += (int) $counts['draft'];
+			}
+		}
+
 		$ids = array();
 		if ( class_exists( 'WP_Query' ) ) {
 			$query = new WP_Query(
 				array(
 					'post_type'      => $types,
 					'post_status'    => 'draft',
-					'posts_per_page' => -1,
+					'posts_per_page' => self::DRAFTS_FINGERPRINT_IDS,
+					'orderby'        => 'ID',
+					'order'          => 'ASC',
 					'fields'         => 'ids',
 					'no_found_rows'  => true,
 				)
@@ -389,15 +492,16 @@ class Mcpwp_Destructive_Gate {
 			}
 		}
 		sort( $ids );
+		$count = max( $count, count( $ids ) );
 
 		return array(
 			'exists'    => true,
 			'type'      => 'drafts',
 			'post_type' => implode( ',', $types ),
-			'count'     => count( $ids ),
+			'count'     => $count,
 			'ids'       => array_slice( $ids, 0, 200 ),
-			'hash'      => hash( 'sha256', implode( ',', $ids ) ),
-			'title'     => sprintf( '%d draft(s)', count( $ids ) ),
+			'hash'      => hash( 'sha256', $count . '|' . implode( ',', $ids ) ),
+			'title'     => sprintf( '%d draft(s)', $count ),
 			'status'    => 'draft',
 			'modified'  => '',
 		);
@@ -554,6 +658,32 @@ class Mcpwp_Destructive_Gate {
 						'reviewed' => array( 'count' => isset( $target['count'] ) ? (int) $target['count'] : 0, 'ids' => isset( $target['ids'] ) ? $target['ids'] : array() ),
 						'current'  => array( 'count' => $now['count'], 'ids' => $now['ids'] ),
 					)
+				);
+			}
+			return true;
+		}
+
+		if ( isset( $target['type'] ) && in_array( $target['type'], array( 'term', 'widget' ), true ) ) {
+			$raw_id = isset( $payload['params']['id'] ) ? $payload['params']['id'] : '';
+			if ( '' === (string) $raw_id && preg_match( '#/([^/]+)/?$#', (string) $payload['route'], $m ) ) {
+				$raw_id = $m[1];
+			}
+			$now = 'term' === $target['type']
+				? self::fingerprint_term( (int) $raw_id, isset( $target['taxonomy'] ) ? (string) $target['taxonomy'] : '' )
+				: self::fingerprint_widget( (string) $raw_id );
+			if ( empty( $now['exists'] ) ) {
+				return true; // Already gone; the route will answer 404.
+			}
+			if ( $now['hash'] !== $target['hash'] ) {
+				return new WP_Error(
+					'target_changed',
+					sprintf(
+						/* translators: 1: type 2: id */
+						__( 'The %1$s %2$s changed after this request was reviewed. Nothing was applied. Review it again with a new request.', 'mcpwp' ),
+						$target['type'],
+						(string) $raw_id
+					),
+					array( 'status' => 409, 'reviewed' => array( 'title' => $target['title'] ), 'current' => array( 'title' => $now['title'] ) )
 				);
 			}
 			return true;

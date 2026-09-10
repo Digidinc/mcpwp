@@ -539,7 +539,7 @@ final class DestructiveGateTest extends TestCase {
 
 		$this->seed( 50, 'product' );
 		$wc      = new Mcpwp_REST_WooCommerce( $never );
-		$request = new WP_REST_Request( 'DELETE', '/mcpwp/v1/products/50', array( 'id' => 50, 'force' => true ) );
+		$request = new WP_REST_Request( 'DELETE', '/mcpwp/v1/woocommerce/products/50', array( 'id' => 50, 'force' => true ) );
 		$response = $this->authed( $wc, $request )->delete_product( $request );
 		$this->assertSame( 202, $response->get_status() );
 		$this->assertSame( 'delete_product', $response->get_data()['operation'] );
@@ -552,7 +552,7 @@ final class DestructiveGateTest extends TestCase {
 		$this->assertSame( 0, $never->calls );
 
 		// Trashing a product is still one call.
-		$request = new WP_REST_Request( 'DELETE', '/mcpwp/v1/products/50', array( 'id' => 50, 'force' => false ) );
+		$request = new WP_REST_Request( 'DELETE', '/mcpwp/v1/woocommerce/products/50', array( 'id' => 50, 'force' => false ) );
 		$this->assertSame( 200, $this->authed( $wc, $request )->delete_product( $request )->get_status() );
 		$this->assertSame( 1, $never->calls );
 	}
@@ -597,7 +597,7 @@ final class DestructiveGateTest extends TestCase {
 			$this->seed( $id, 'post', 'draft' );
 		}
 		$controller = new Mcpwp_REST_Posts();
-		$request    = new WP_REST_Request( 'POST', '/mcpwp/v1/drafts/delete-all', array( 'type' => 'all', 'force' => true ) );
+		$request    = new WP_REST_Request( 'DELETE', '/mcpwp/v1/drafts/delete-all', array( 'type' => 'all', 'force' => true ) );
 		$approval   = $this->authed( $controller, $request )->delete_all_drafts( $request )->get_data();
 		$record     = Mcpwp_Approvals::get_request( $approval['approval_id'] );
 		$this->assertSame( 3, $record['payload']['target']['count'] );
@@ -654,5 +654,116 @@ final class DestructiveGateTest extends TestCase {
 		$rejected = Mcpwp_Approvals::apply_request( $approval_id, array( 'api_key' => $reviewer['key'], 'actor' => $reviewer['id'] ) );
 		$this->assertSame( 'approval_not_ready', $rejected->get_error_code() );
 		$this->assertArrayHasKey( 10, $GLOBALS['_mcpwp_test_posts'] );
+	}
+
+	// ---------------------------------------------------------------
+	// Round 3: routes match the tool map, admins are never starved, the
+	// printed call is the call, terms and widgets drift too.
+	// ---------------------------------------------------------------
+
+	public function test_every_operation_route_matches_the_route_its_own_tool_declares(): void {
+		// Round-3 P1-1: the product pattern named a route that does not
+		// exist, so the gate bricked wc_delete_product and the invariant
+		// test certified it as gated.
+		$maps = array();
+		foreach ( array( Mcpwp_MCP_Free_Tools::class, Mcpwp_MCP_Pro_Tools::class ) as $class ) {
+			$maps = array_merge( $maps, ( new ReflectionClass( $class ) )->newInstanceWithoutConstructor()->get_tool_map() );
+		}
+		$tools = array(
+			'delete_page'            => 'wp_delete_page',
+			'delete_post'            => 'wp_delete_post',
+			'delete_all_drafts'      => 'wp_delete_all_drafts',
+			'delete_media'           => 'wp_delete_media',
+			'delete_product'         => 'wc_delete_product',
+			'delete_course_category' => 'wp_delete_course_category',
+			'delete_widget'          => 'wp_delete_widget',
+			'delete_content'         => 'wp_delete_content',
+		);
+		foreach ( Mcpwp_Destructive_Gate::OPERATION_ROUTES as $op => $spec ) {
+			$this->assertArrayHasKey( $op, $tools, $op );
+			$tool = $tools[ $op ];
+			$this->assertArrayHasKey( $tool, $maps, $tool . ' is in a tool map.' );
+			$route  = '/mcpwp/v1' . preg_replace( '/\{[a-z_]+\}/', '1', $maps[ $tool ]['route'] );
+			$method = strtoupper( $maps[ $tool ]['method'] );
+			$this->assertTrue( Mcpwp_Destructive_Gate::route_matches_operation( $op, $method, $route ), $op . ' must match ' . $method . ' ' . $route );
+		}
+	}
+
+	public function test_minted_keys_cannot_close_the_destructive_path_to_administrators(): void {
+		// Round-3 P1-2: one pool of 100 let five minted keys lock every
+		// principal out, including the reviewers.
+		for ( $i = 1; $i <= Mcpwp_Destructive_Gate::MAX_PENDING_TOTAL; $i++ ) {
+			Mcpwp_Approvals::create_destructive_request( 'delete_page', array( 'route' => '/mcpwp/v1/pages/' . $i, 'method' => 'DELETE', 'params' => array(), 'target' => array() ), array( 'type' => 'page', 'id' => $i, 'title' => 'p' ), array( 'requested_by_key_id' => 'minted-' . (int) ceil( $i / 20 ) ) );
+		}
+		$api = Mcpwp_Approvals::create_destructive_request( 'delete_page', array( 'route' => '/mcpwp/v1/pages/999', 'method' => 'DELETE', 'params' => array(), 'target' => array() ), array( 'type' => 'page', 'id' => 999, 'title' => 'p' ), array( 'requested_by_key_id' => 'minted-fresh' ) );
+		$this->assertSame( 'approval_queue_full', $api->get_error_code() );
+
+		$admin = Mcpwp_Approvals::create_destructive_request( 'delete_page', array( 'route' => '/mcpwp/v1/pages/998', 'method' => 'DELETE', 'params' => array(), 'target' => array() ), array( 'type' => 'page', 'id' => 998, 'title' => 'p' ), array( 'requested_by_key_id' => 'wp-user:2' ) );
+		$this->assertNotInstanceOf( WP_Error::class, $admin, 'An administrator is outside the API pool.' );
+
+		// And bound by the per-requester cap like everyone else.
+		for ( $i = 1; $i < Mcpwp_Destructive_Gate::MAX_PENDING_PER_REQUESTER; $i++ ) {
+			Mcpwp_Approvals::create_destructive_request( 'delete_page', array( 'route' => '/mcpwp/v1/pages/' . ( 2000 + $i ), 'method' => 'DELETE', 'params' => array(), 'target' => array() ), array( 'type' => 'page', 'id' => 2000 + $i, 'title' => 'p' ), array( 'requested_by_key_id' => 'wp-user:2' ) );
+		}
+		$this->assertSame( 'too_many_pending', Mcpwp_Approvals::create_destructive_request( 'delete_page', array( 'route' => '/mcpwp/v1/pages/3000', 'method' => 'DELETE', 'params' => array(), 'target' => array() ), array( 'type' => 'page', 'id' => 3000, 'title' => 'p' ), array( 'requested_by_key_id' => 'wp-user:2' ) )->get_error_code() );
+	}
+
+	public function test_a_route_id_and_a_body_id_that_disagree_are_refused_at_defer(): void {
+		// Round-3 P2-1: the Control Room printed the route id while the
+		// replay deleted the body id.
+		$this->seed( 12 );
+		$this->seed( 999 );
+		$controller = new Mcpwp_REST_Pages();
+		$request    = new WP_REST_Request( 'DELETE', '/mcpwp/v1/pages/12', array( 'id' => 999, 'force' => true ) );
+		$result     = $this->authed( $controller, $request )->delete_page( $request );
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'destructive_id_mismatch', $result->get_error_code() );
+		$this->assertSame( array(), Mcpwp_Approvals::list_requests( '', 50, true ) );
+	}
+
+	public function test_a_widget_changed_after_review_is_not_deleted(): void {
+		// Round-3 P2-4.
+		update_option( 'widget_text', array( 3 => array( 'title' => 'Footer', 'text' => 'old' ), '_multiwidget' => 1 ) );
+		$before = Mcpwp_Destructive_Gate::fingerprint( array( 'type' => 'widget', 'id' => 'text-3' ) );
+		$this->assertTrue( $before['exists'] );
+
+		update_option( 'widget_text', array( 3 => array( 'title' => 'Footer', 'text' => 'new' ), '_multiwidget' => 1 ) );
+		$drift = new ReflectionMethod( Mcpwp_Destructive_Gate::class, 'drift' );
+		$drift->setAccessible( true );
+		$refused = $drift->invoke( null, array( 'route' => '/mcpwp/v1/widgets/text-3', 'method' => 'DELETE', 'params' => array( 'id' => 'text-3' ), 'target' => $before ) );
+		$this->assertInstanceOf( WP_Error::class, $refused );
+		$this->assertSame( 'target_changed', $refused->get_error_code() );
+
+		$this->assertSame( array( 'exists' => false ), Mcpwp_Destructive_Gate::fingerprint( array( 'type' => 'widget', 'id' => 'text-9' ) ) );
+		$this->assertSame( array(), Mcpwp_Destructive_Gate::fingerprint( array( 'type' => 'widget', 'id' => 'not a widget id' ) ) );
+	}
+
+	public function test_the_drafts_fingerprint_is_an_exact_count_and_a_bounded_id_list(): void {
+		foreach ( range( 21, 25 ) as $id ) {
+			$this->seed( $id, 'post', 'draft' );
+		}
+		$fp = Mcpwp_Destructive_Gate::fingerprint_drafts( 'post' );
+		$this->assertSame( 5, $fp['count'] );
+		$this->assertSame( array( 21, 22, 23, 24, 25 ), $fp['ids'] );
+		$this->assertSame( 1000, Mcpwp_Destructive_Gate::DRAFTS_FINGERPRINT_IDS );
+	}
+
+	public function test_the_switch_has_a_setter_in_wp_admin_and_defaults_on(): void {
+		// Round-3 P2-3: nothing wrote destructive_requires_approval.
+		if ( ! class_exists( 'Mcpwp_Settings' ) ) {
+			require_once dirname( __DIR__ ) . '/includes/admin/class-mcpwp-settings.php';
+		}
+		$settings = ( new ReflectionClass( Mcpwp_Settings::class ) )->newInstanceWithoutConstructor();
+		$this->assertTrue( $settings->get_defaults()['destructive_requires_approval'] );
+
+		$off = $settings->sanitize_settings( array( 'enable_logging' => '1' ) );
+		$this->assertFalse( $off['destructive_requires_approval'], 'Unchecked in the form = off.' );
+		$on = $settings->sanitize_settings( array( 'enable_logging' => '1', 'destructive_requires_approval' => '1' ) );
+		$this->assertTrue( $on['destructive_requires_approval'] );
+
+		update_option( 'mcpwp_settings', $off );
+		$this->assertFalse( Mcpwp_Destructive_Gate::enabled_for_site() );
+		update_option( 'mcpwp_settings', $on );
+		$this->assertTrue( Mcpwp_Destructive_Gate::enabled_for_site() );
 	}
 }
