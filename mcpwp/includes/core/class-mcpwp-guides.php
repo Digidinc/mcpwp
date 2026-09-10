@@ -649,6 +649,7 @@ class Mcpwp_Guides {
 						. "- `wp_bulk_create_posts(posts=[...])` — Create multiple posts at once\n"
 						. "- `wp_bulk_update_pages(pages=[...])` — Update multiple pages\n"
 						. "- `wp_bulk_update_posts(posts=[...])` — Update multiple posts\n"
+						. "- `wp_batch(operations=[...])` — Up to 100 mixed REST operations in one call, per-operation status\n"
 						. "- `wp_batch_update(operations=[...])` — Mixed batch operations\n"
 						. "- `wp_delete_all_drafts()` — Clean up all draft posts and pages",
 				),
