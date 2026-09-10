@@ -59,13 +59,22 @@ class Mcpwp_Post_Fields {
 	// ---------------------------------------------------------------
 
 	/**
+	 * Largest lists one write accepts. One request is one rate-limit slot;
+	 * a 2,000-key meta map or a 5,000-term list must not ride on it.
+	 */
+	const MAX_META_KEYS       = 100;
+	const MAX_TERMS_PER_TAX   = 100;
+
+	/**
 	 * Resolve `terms` against the registry without writing anything.
 	 *
 	 * @param mixed  $terms     Submitted {taxonomy: [ids|slugs|names]}.
 	 * @param string $post_type Post type the terms are for.
+	 * @param array  $data      The whole submitted field set, to refuse a
+	 *                          taxonomy named twice (categories + terms.category).
 	 * @return array|WP_Error {taxonomy: [term ids]} or the first refusal.
 	 */
-	public static function resolve_terms( $terms, $post_type ) {
+	public static function resolve_terms( $terms, $post_type, array $data = array() ) {
 		if ( null === $terms ) {
 			return array();
 		}
@@ -80,8 +89,38 @@ class Mcpwp_Post_Fields {
 
 		$resolved = array();
 
+		// categories/tags and terms.category/terms.post_tag write the same
+		// taxonomy; the later one would silently win. Refuse the overlap.
+		foreach ( array( 'categories' => 'category', 'tags' => 'post_tag' ) as $field => $tax ) {
+			if ( isset( $data[ $field ] ) && isset( $terms[ $tax ] ) ) {
+				return new WP_Error(
+					'conflicting_terms',
+					sprintf(
+						/* translators: 1: field 2: taxonomy */
+						__( '%1$s and terms.%2$s both set the same taxonomy. Send one of them. Nothing was written.', 'mcpwp' ),
+						$field,
+						$tax
+					),
+					array( 'status' => 400 )
+				);
+			}
+		}
+
 		foreach ( $terms as $taxonomy => $wanted ) {
 			$taxonomy = sanitize_key( (string) $taxonomy );
+
+			if ( is_array( $wanted ) && count( $wanted ) > self::MAX_TERMS_PER_TAX ) {
+				return new WP_Error(
+					'too_many_terms',
+					sprintf(
+						/* translators: 1: taxonomy 2: cap */
+						__( 'terms.%1$s lists more than %2$d entries. Split the write.', 'mcpwp' ),
+						$taxonomy,
+						self::MAX_TERMS_PER_TAX
+					),
+					array( 'status' => 400 )
+				);
+			}
 
 			if ( '' === $taxonomy || ! taxonomy_exists( $taxonomy ) ) {
 				return new WP_Error(
@@ -144,7 +183,7 @@ class Mcpwp_Post_Fields {
 						'status'   => 400,
 						'taxonomy' => $taxonomy,
 						'unknown'  => array_values( $unknown ),
-						'hint'     => 'Terms may be given as ids, slugs or names. Use wp_list_categories / wp_list_tags / the taxonomy listing tools to find them, or wp_create_term to create one.',
+						'hint'     => 'An id must be a JSON number; a quoted value is always a slug or a name (so "2024" is the slug "2024", never term id 2024). Use wp_list_categories / wp_list_tags / the taxonomy listing tools to find them, or wp_create_term to create one.',
 					)
 				);
 			}
@@ -248,6 +287,18 @@ class Mcpwp_Post_Fields {
 			);
 		}
 
+		if ( count( $meta ) > self::MAX_META_KEYS ) {
+			return new WP_Error(
+				'too_many_meta_keys',
+				sprintf(
+					/* translators: %d: cap */
+					__( 'meta carries more than %d keys. Split the write.', 'mcpwp' ),
+					self::MAX_META_KEYS
+				),
+				array( 'status' => 400 )
+			);
+		}
+
 		$clean = array();
 
 		foreach ( $meta as $key => $value ) {
@@ -312,10 +363,12 @@ class Mcpwp_Post_Fields {
 	 * @param int    $post_id   Post.
 	 * @param string $post_type Post type (registered meta is per subtype).
 	 * @param array  $meta      From validate_meta().
+	 * @param array  $deleted   Keys removed (null values), by reference.
 	 * @return array Keys written, in order.
 	 */
-	public static function apply_meta( $post_id, $post_type, array $meta ) {
+	public static function apply_meta( $post_id, $post_type, array $meta, array &$deleted = null ) {
 		$written = array();
+		$deleted = array();
 
 		foreach ( $meta as $key => $value ) {
 			// "Registered" only buys raw storage when the registration brought
@@ -329,10 +382,11 @@ class Mcpwp_Post_Fields {
 
 			if ( null === $value ) {
 				delete_post_meta( $post_id, $key );
-			} else {
-				update_post_meta( $post_id, $key, $value );
+				$deleted[] = $key;
+				continue;
 			}
 
+			update_post_meta( $post_id, $key, $value );
 			$written[] = $key;
 		}
 
@@ -378,8 +432,11 @@ class Mcpwp_Post_Fields {
 			return '_thumbnail_id' === $key ? 'use featured_image' : 'reserved by WordPress';
 		}
 
+		$lower = strtolower( $key );
 		foreach ( self::$blocked_prefixes as $prefix ) {
-			if ( 0 === strpos( $key, $prefix ) ) {
+			// Case-insensitive: wp_postmeta.meta_key collates case-insensitively,
+			// so MCPWP_x and mcpwp_x are one row.
+			if ( 0 === strpos( $lower, strtolower( $prefix ) ) ) {
 				if ( '_elementor' === $prefix ) {
 					return 'use the Elementor tools';
 				}

@@ -49,6 +49,34 @@ class Mcpwp_Posts {
 	 * @param string $type Post type.
 	 * @return bool
 	 */
+	/**
+	 * Whether a post type is one this plugin writes to: what validate_post_type()
+	 * admits (public, or the whitelisted non-public Elementor types), never a
+	 * blocked one. An allowlist, like every other write gate here.
+	 *
+	 * @param string $type Post type.
+	 * @return bool
+	 */
+	public static function is_writable_post_type( $type ) {
+		$type = (string) $type;
+
+		if ( '' === $type || self::is_blocked_post_type( $type ) ) {
+			return false;
+		}
+
+		if ( in_array( $type, array( 'post', 'page', 'elementor_snippet', 'elementor_library', 'wp_block' ), true ) ) {
+			return true;
+		}
+
+		if ( ! function_exists( 'get_post_type_object' ) ) {
+			return false;
+		}
+
+		$object = get_post_type_object( $type );
+
+		return is_object( $object ) && ! empty( $object->public );
+	}
+
 	public static function is_blocked_post_type( $type ) {
 		return in_array( (string) $type, array( 'attachment', 'revision', 'nav_menu_item', 'custom_css', 'customize_changeset', 'oembed_cache', 'wp_global_styles', 'wp_navigation', 'wp_template', 'wp_template_part' ), true );
 	}
@@ -284,7 +312,7 @@ class Mcpwp_Posts {
 		}
 
 		// Validate terms and meta before anything is written (#797).
-		$resolved_terms = Mcpwp_Post_Fields::resolve_terms( isset( $data['terms'] ) ? $data['terms'] : null, $post_type );
+		$resolved_terms = Mcpwp_Post_Fields::resolve_terms( isset( $data['terms'] ) ? $data['terms'] : null, $post_type, $data );
 		if ( is_wp_error( $resolved_terms ) ) {
 			return $resolved_terms;
 		}
@@ -347,7 +375,8 @@ class Mcpwp_Posts {
 		}
 
 		$terms_applied = Mcpwp_Post_Fields::apply_terms( $post_id, $resolved_terms );
-		$meta_applied  = Mcpwp_Post_Fields::apply_meta( $post_id, $post_type, $clean_meta );
+		$meta_deleted  = array();
+		$meta_applied  = Mcpwp_Post_Fields::apply_meta( $post_id, $post_type, $clean_meta, $meta_deleted );
 
 		$created = $this->get_post( $post_id );
 		if ( is_array( $created ) ) {
@@ -356,6 +385,9 @@ class Mcpwp_Posts {
 			}
 			if ( ! empty( $meta_applied ) ) {
 				$created['meta_applied'] = $meta_applied;
+			}
+			if ( ! empty( $meta_deleted ) ) {
+				$created['meta_deleted'] = $meta_deleted;
 			}
 		}
 
@@ -393,7 +425,7 @@ class Mcpwp_Posts {
 
 		// Snapshot fields that might change for before/after diff.
 		// Validate terms and meta before anything is written (#797).
-		$resolved_terms = Mcpwp_Post_Fields::resolve_terms( isset( $data['terms'] ) ? $data['terms'] : null, $post->post_type );
+		$resolved_terms = Mcpwp_Post_Fields::resolve_terms( isset( $data['terms'] ) ? $data['terms'] : null, $post->post_type, $data );
 		if ( is_wp_error( $resolved_terms ) ) {
 			return $resolved_terms;
 		}
@@ -483,7 +515,8 @@ class Mcpwp_Posts {
 		}
 
 		$terms_applied = Mcpwp_Post_Fields::apply_terms( $post_id, $resolved_terms );
-		$meta_applied  = Mcpwp_Post_Fields::apply_meta( $post_id, $post->post_type, $clean_meta );
+		$meta_deleted  = array();
+		$meta_applied  = Mcpwp_Post_Fields::apply_meta( $post_id, $post->post_type, $clean_meta, $meta_deleted );
 
 		$post_result = $this->get_post( $post_id );
 		if ( is_array( $post_result ) ) {
@@ -492,6 +525,9 @@ class Mcpwp_Posts {
 			}
 			if ( ! empty( $meta_applied ) ) {
 				$post_result['meta_applied'] = $meta_applied;
+			}
+			if ( ! empty( $meta_deleted ) ) {
+				$post_result['meta_deleted'] = $meta_deleted;
 			}
 		}
 

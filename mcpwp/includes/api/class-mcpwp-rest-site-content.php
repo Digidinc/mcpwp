@@ -532,11 +532,35 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			return $this->error_response( 'not_found', __( 'Post not found.', 'mcpwp' ), 404 );
 		}
 
-		$key   = Mcpwp_Post_Fields::sanitize_meta_key( $request->get_param( 'key' ) );
-		$value = $request->get_param( 'value' );
+		$raw_key = trim( (string) $request->get_param( 'key' ) );
+		$key     = Mcpwp_Post_Fields::sanitize_meta_key( $raw_key );
+		$value   = $request->get_param( 'value' );
 
 		if ( '' === $key ) {
 			return $this->error_response( 'missing_key', __( 'Meta key is required.', 'mcpwp' ), 400 );
+		}
+
+		// A key that does not survive the charset is refused, not rewritten
+		// onto a different key the caller never named.
+		if ( $key !== $raw_key ) {
+			return $this->error_response(
+				'invalid_meta_key',
+				sprintf(
+					/* translators: %s: key */
+					__( 'Meta key "%s" contains characters outside [A-Za-z0-9_-.:]. Nothing was written.', 'mcpwp' ),
+					$raw_key
+				),
+				400
+			);
+		}
+
+		// The featured image goes through the same check as the dedicated
+		// route: it has to be an attachment.
+		if ( '_thumbnail_id' === $key && ! empty( $value ) ) {
+			$attachment = get_post( absint( $value ) );
+			if ( ! $attachment || 'attachment' !== $attachment->post_type ) {
+				return $this->error_response( 'invalid_media', __( '_thumbnail_id must be the ID of a media attachment.', 'mcpwp' ), 400 );
+			}
 		}
 
 		// Elementor keys have their own tools; say which.
@@ -566,15 +590,17 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			return $clean;
 		}
 
-		Mcpwp_Post_Fields::apply_meta( $post_id, $post->post_type, $clean );
-		$stored = get_post_meta( $post_id, $key, true );
+		$deleted = array();
+		$written = Mcpwp_Post_Fields::apply_meta( $post_id, $post->post_type, $clean, $deleted );
+		$stored  = get_post_meta( $post_id, $key, true );
 
 		return $this->success_response(
 			array(
 				'id'      => $post_id,
 				'key'     => $key,
 				'value'   => $stored,
-				'updated' => true,
+				'updated' => in_array( $key, $written, true ),
+				'deleted' => in_array( $key, $deleted, true ),
 			)
 		);
 	}

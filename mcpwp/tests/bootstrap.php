@@ -1204,7 +1204,8 @@ function get_posts($args = array())
 function post_type_exists($post_type)
 {
     $known = array( 'post', 'page', 'wp_block', 'elementor_library', 'elementor_snippet' );
-    return in_array((string) $post_type, $known, true);
+    // Tests may register public custom types: $GLOBALS['mcpwp_test_public_post_types'] = array( 'sm_team' ).
+    return in_array((string) $post_type, $known, true) || in_array((string) $post_type, (array) ($GLOBALS['mcpwp_test_public_post_types'] ?? array()), true);
 }
 
 function post_type_supports($post_type, $feature)
@@ -1420,7 +1421,7 @@ function get_post_type_object($post_type)
     }
     return (object) array(
         'name'   => $post_type,
-        'public' => in_array((string) $post_type, array( 'post', 'page' ), true),
+        'public' => in_array((string) $post_type, array( 'post', 'page' ), true) || in_array((string) $post_type, (array) ($GLOBALS['mcpwp_test_public_post_types'] ?? array()), true),
     );
 }
 

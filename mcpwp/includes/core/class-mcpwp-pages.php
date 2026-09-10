@@ -108,7 +108,7 @@ class Mcpwp_Pages {
 		}
 
 		// Validate terms and meta before anything is written (#797).
-		$resolved_terms = Mcpwp_Post_Fields::resolve_terms( isset( $data['terms'] ) ? $data['terms'] : null, 'page' );
+		$resolved_terms = Mcpwp_Post_Fields::resolve_terms( isset( $data['terms'] ) ? $data['terms'] : null, 'page', $data );
 		if ( is_wp_error( $resolved_terms ) ) {
 			return $resolved_terms;
 		}
@@ -168,7 +168,8 @@ class Mcpwp_Pages {
 		}
 
 		$terms_applied = Mcpwp_Post_Fields::apply_terms( $page_id, $resolved_terms );
-		$meta_applied  = Mcpwp_Post_Fields::apply_meta( $page_id, 'page', $clean_meta );
+		$meta_deleted  = array();
+		$meta_applied  = Mcpwp_Post_Fields::apply_meta( $page_id, 'page', $clean_meta, $meta_deleted );
 
 		$created = $this->get_page( $page_id );
 		if ( is_array( $created ) ) {
@@ -177,6 +178,9 @@ class Mcpwp_Pages {
 			}
 			if ( ! empty( $meta_applied ) ) {
 				$created['meta_applied'] = $meta_applied;
+			}
+			if ( ! empty( $meta_deleted ) ) {
+				$created['meta_deleted'] = $meta_deleted;
 			}
 		}
 
@@ -208,7 +212,7 @@ class Mcpwp_Pages {
 
 		// Snapshot fields that might change for before/after diff.
 		// Validate terms and meta before anything is written (#797).
-		$resolved_terms = Mcpwp_Post_Fields::resolve_terms( isset( $data['terms'] ) ? $data['terms'] : null, 'page' );
+		$resolved_terms = Mcpwp_Post_Fields::resolve_terms( isset( $data['terms'] ) ? $data['terms'] : null, 'page', $data );
 		if ( is_wp_error( $resolved_terms ) ) {
 			return $resolved_terms;
 		}
@@ -298,7 +302,8 @@ class Mcpwp_Pages {
 		}
 
 		$terms_applied = Mcpwp_Post_Fields::apply_terms( $page_id, $resolved_terms );
-		$meta_applied  = Mcpwp_Post_Fields::apply_meta( $page_id, 'page', $clean_meta );
+		$meta_deleted  = array();
+		$meta_applied  = Mcpwp_Post_Fields::apply_meta( $page_id, 'page', $clean_meta, $meta_deleted );
 
 		$page_result = $this->get_page( $page_id );
 		if ( is_array( $page_result ) ) {
@@ -307,6 +312,9 @@ class Mcpwp_Pages {
 			}
 			if ( ! empty( $meta_applied ) ) {
 				$page_result['meta_applied'] = $meta_applied;
+			}
+			if ( ! empty( $meta_deleted ) ) {
+				$page_result['meta_deleted'] = $meta_deleted;
 			}
 		}
 

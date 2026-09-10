@@ -464,7 +464,7 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 		$media_id = absint( $request->get_param( 'media_id' ) );
 
 		$post = get_post( $post_id );
-		if ( ! $post || Mcpwp_Posts::is_blocked_post_type( $post->post_type ) ) {
+		if ( ! $post || ! Mcpwp_Posts::is_writable_post_type( $post->post_type ) ) {
 			return $this->error_response(
 				'not_found',
 				__( 'Post not found.', 'mcpwp' ),

@@ -55,7 +55,7 @@ final class PostTermsMetaTest extends TestCase {
 		$GLOBALS['_mcpwp_test_object_terms']  = array();
 		$GLOBALS['_mcpwp_test_taxonomies']    = array();
 		$GLOBALS['_mcpwp_test_registered_meta'] = array();
-		unset( $GLOBALS['mcpwp_test_post_type_supports'] );
+		unset( $GLOBALS['mcpwp_test_post_type_supports'], $GLOBALS['mcpwp_test_public_post_types'] );
 	}
 
 	private function seed( int $id, string $type ): void {
@@ -317,9 +317,58 @@ final class PostTermsMetaTest extends TestCase {
 		$elementor = $this->set_meta( 40, '_elementor_data', '[]' );
 		$this->assertSame( 'use_elementor_endpoint', $elementor->get_error_code() );
 
-		// The two core keys this route has always accepted still are.
+		// The two core keys this route has always accepted still are — and
+		// _thumbnail_id has to point at an attachment, as on the dedicated route.
+		$this->seed( 51, 'attachment' );
 		$this->assertInstanceOf( WP_REST_Response::class, $this->set_meta( 40, '_thumbnail_id', 51 ) );
+		$this->assertSame( 'invalid_media', $this->set_meta( 40, '_thumbnail_id', 40 )->get_error_code(), 'A page is not an attachment.' );
 		$this->assertInstanceOf( WP_REST_Response::class, $this->set_meta( 40, '_wp_page_template', 'default' ) );
+
+		// A key that does not survive the charset is refused, not rewritten.
+		$this->assertSame( 'invalid_meta_key', $this->set_meta( 40, 'my key/with stuff', 'v' )->get_error_code() );
+
+		// Blocked prefixes are case-insensitive: meta_key collates that way.
+		$this->assertSame( 'forbidden_meta_key', $this->set_meta( 40, 'MCPWP_api_key', 'x' )->get_error_code() );
+	}
+
+	public function test_setting_a_meta_key_to_null_deletes_it_and_says_so(): void {
+		$this->seed( 40, 'post' );
+		update_post_meta( 40, 'smc_old', 'v' );
+
+		$result = $this->posts()->update_post( 40, array( 'meta' => array( 'smc_old' => null, 'smc_new' => 'w' ) ) );
+
+		$this->assertSame( '', (string) get_post_meta( 40, 'smc_old', true ) );
+		$this->assertSame( array( 'smc_old' ), $result['meta_deleted'] );
+		$this->assertSame( array( 'smc_new' ), $result['meta_applied'], 'A deletion is not reported as a write.' );
+	}
+
+	public function test_categories_and_terms_category_together_are_refused(): void {
+		$this->seed( 40, 'post' );
+
+		$error = $this->posts()->update_post( 40, array( 'categories' => array( 1 ), 'terms' => array( 'category' => array( 1 ) ) ) );
+
+		$this->assertInstanceOf( WP_Error::class, $error );
+		$this->assertSame( 'conflicting_terms', $error->get_error_code(), 'Two fields writing one taxonomy: the later would silently win.' );
+	}
+
+	public function test_oversized_meta_and_term_lists_are_refused(): void {
+		$this->seed( 40, 'post' );
+
+		$meta = array();
+		for ( $i = 0; $i <= Mcpwp_Post_Fields::MAX_META_KEYS; $i++ ) {
+			$meta[ 'k' . $i ] = 'v';
+		}
+		$this->assertSame( 'too_many_meta_keys', $this->posts()->update_post( 40, array( 'meta' => $meta ) )->get_error_code() );
+
+		$terms = array_fill( 0, Mcpwp_Post_Fields::MAX_TERMS_PER_TAX + 1, 1522 );
+		$this->assertSame( 'too_many_terms', $this->posts()->update_post( 40, array( 'terms' => array( 'sm_audience' => $terms ) ) )->get_error_code() );
+	}
+
+	public function test_the_featured_image_gate_is_the_writable_type_allowlist(): void {
+		$this->assertTrue( Mcpwp_Posts::is_writable_post_type( 'post' ) );
+		$this->assertTrue( Mcpwp_Posts::is_writable_post_type( 'elementor_library' ) );
+		$this->assertFalse( Mcpwp_Posts::is_writable_post_type( 'revision' ) );
+		$this->assertFalse( Mcpwp_Posts::is_writable_post_type( 'sm_private' ), 'A type that is not public and not whitelisted is not writable, whatever it claims to support.' );
 	}
 
 	// ---------------------------------------------------------------
@@ -336,6 +385,7 @@ final class PostTermsMetaTest extends TestCase {
 	public function test_a_custom_post_type_that_supports_thumbnails_takes_a_featured_image(): void {
 		$this->seed( 50, 'sm_team' );
 		$this->seed( 51, 'attachment' );
+		$GLOBALS['mcpwp_test_public_post_types']  = array( 'sm_team' );
 		$GLOBALS['mcpwp_test_post_type_supports'] = array( 'sm_team' => array( 'thumbnail' ) );
 
 		$response = $this->featured( 50, 51 );
@@ -358,6 +408,7 @@ final class PostTermsMetaTest extends TestCase {
 	public function test_a_type_without_thumbnail_support_is_told_why(): void {
 		$this->seed( 50, 'sm_event' );
 		$this->seed( 51, 'attachment' );
+		$GLOBALS['mcpwp_test_public_post_types']  = array( 'sm_event' );
 		$GLOBALS['mcpwp_test_post_type_supports'] = array();
 
 		$error = $this->featured( 50, 51 );
