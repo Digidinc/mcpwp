@@ -25,6 +25,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 * how to pin a release version, and the squash-body trap ([#854](https://github.com/Mumega-com/mcpwp/issues/854)) ([42e2a26](https://github.com/Mumega-com/mcpwp/commit/42e2a2609e72c4b9aec32776a5a94199c201da65))
 
+
+### Upgrade Notes
+
+* **Stored provider keys use a new format.** Keys saved or re-saved by 3.11.1 cannot be read by 3.11.0 or earlier. If you downgrade, re-enter your provider keys in MCPWP Integrations.
+* **A weak `MCPWP_ENCRYPTION_KEY` is now refused.** If wp-config.php defines it as empty, very short or trivially repetitive, encryption stops and an admin notice explains why. Set a strong value (32 random bytes or a long passphrase) and re-enter the affected keys.
+* **Figma and SEO market data are Pro everywhere.** The Figma design-token sync no longer runs on Free sites, including self-hosted installs; a companion theme keeps the last tokens it received. The DataForSEO visibility and opportunities routes now require Pro over REST as well as MCP.
+* **Element ids are 7 characters.** Elementor Pro's live search, taxonomy filter and loop widgets only accept 7-character ids. MCPWP now generates 7-character ids and warns about other lengths on save; pass `repair_ids: true` to `wp_patch_elementor` or `wp_set_elementor` to rewrite them. Update any custom CSS that names an old id.
+* **Batches have a spend budget.** One request, including everything it fans out to, may spend 1000 units: an ordinary operation costs 1, a route that spends a site credential or reaches a caller-chosen URL costs 25 per item. A batch priced over the budget is refused whole with `spend_budget_exceeded` before anything runs; split it. `wp_bulk_find_replace` and `wp_delete_all_drafts` now count as 10 operations against the rate limit.
+* **Analytics on Free needs an explicit choice.** A Free site that opted in before 3.11.1 stops sending anonymous usage data until an administrator confirms the setting under MCPWP Settings; a one-time notice asks. Paid sites are unchanged.
+
 ## [3.11.0](https://github.com/Mumega-com/mcpwp/compare/v3.10.8...v3.11.0) (2026-09-10)
 
 
