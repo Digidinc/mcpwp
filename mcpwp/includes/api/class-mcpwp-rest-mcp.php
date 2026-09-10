@@ -707,6 +707,155 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	}
 
 	/**
+	 * Idempotency record lifetime. Bulk jobs span hours; a retry a day later
+	 * is a new job.
+	 */
+	const IDEMPOTENCY_TTL = DAY_IN_SECONDS;
+
+	/**
+	 * Largest result that is pinned. Beyond this a replay would cost more than
+	 * it protects, and the transient store has its own ceilings.
+	 */
+	const IDEMPOTENCY_MAX_BYTES = 524288;
+
+	/**
+	 * Storage key for one (api key, request_id) pair.
+	 *
+	 * @param string $key_scope  API key id, or 'anon'.
+	 * @param string $request_id Client-supplied id.
+	 * @return string
+	 */
+	public static function idempotency_key( $key_scope, $request_id ) {
+		return 'mcpwp_idem_' . md5( (string) $key_scope . '|' . (string) $request_id );
+	}
+
+	/**
+	 * tools/call with an idempotency key (#802).
+	 *
+	 * `params._meta.request_id` is opt-in. Without it, behaviour is exactly
+	 * handle_tools_call(). With it, the first COMPLETED result for (api key,
+	 * request_id) is stored for IDEMPOTENCY_TTL and a re-send returns it
+	 * without dispatching, marked `_meta.replayed`. A failed call is not
+	 * pinned: the retry must be allowed to do the work. The same id with
+	 * different arguments is refused rather than answered from the store,
+	 * because that is a client bug and a stale result would hide it. Read
+	 * tools are never pinned.
+	 *
+	 * @param mixed           $id      JSON-RPC id.
+	 * @param array           $params  tools/call params.
+	 * @param WP_REST_Request $request Request.
+	 * @return array
+	 */
+	private function handle_tools_call_idempotent( $id, $params, $request ) {
+		$request_id = isset( $params['_meta']['request_id'] ) ? $params['_meta']['request_id'] : null;
+
+		if ( null === $request_id ) {
+			return $this->handle_tools_call( $id, $params, $request );
+		}
+
+		if ( ! is_string( $request_id ) || '' === $request_id || strlen( $request_id ) > 128 || ! preg_match( '/^[A-Za-z0-9_\-:.]+$/', $request_id ) ) {
+			return $this->jsonrpc_error(
+				$id,
+				-32602,
+				'Invalid _meta.request_id',
+				array( 'hint' => 'request_id is 1–128 characters from [A-Za-z0-9_-:.]. Use something unique per intended write, e.g. "job-42:page:3".' )
+			);
+		}
+
+		$tool_name = isset( $params['name'] ) && is_string( $params['name'] ) ? $params['name'] : '';
+		$arguments = isset( $params['arguments'] ) && is_array( $params['arguments'] ) ? $params['arguments'] : array();
+
+		// Reads are not pinned: nothing to protect, and a pinned read goes stale.
+		if ( '' === $tool_name || 'read' === $this->get_required_scope_for_tool_name( $tool_name ) ) {
+			return $this->handle_tools_call( $id, $params, $request );
+		}
+
+		$key_record = $this->get_current_api_key_record();
+		$scope      = is_array( $key_record ) && ! empty( $key_record['id'] ) ? (string) $key_record['id'] : 'anon';
+		$store_key  = self::idempotency_key( $scope, $request_id );
+		$args_hash  = md5( $tool_name . '|' . wp_json_encode( $arguments ) );
+		$existing   = get_transient( $store_key );
+
+		if ( is_array( $existing ) && isset( $existing['state'] ) ) {
+			if ( 'in_progress' === $existing['state'] ) {
+				return $this->jsonrpc_error(
+					$id,
+					-32009,
+					sprintf( 'A call with request_id "%s" is still in progress.', $request_id ),
+					array( 'hint' => 'The first attempt has not finished. Wait and re-send with the same request_id; you will get its result, not a second write.' )
+				);
+			}
+
+			if ( isset( $existing['args_hash'] ) && $existing['args_hash'] !== $args_hash ) {
+				return $this->jsonrpc_error(
+					$id,
+					-32602,
+					sprintf( 'request_id "%s" was already used with different arguments.', $request_id ),
+					array( 'hint' => 'A request_id identifies one intended write. Use a new id for a different call.' )
+				);
+			}
+
+			if ( 'done' === $existing['state'] && isset( $existing['response'] ) && is_array( $existing['response'] ) ) {
+				$response       = $existing['response'];
+				$response['id'] = $id;
+
+				if ( isset( $response['result'] ) && is_array( $response['result'] ) ) {
+					if ( ! isset( $response['result']['_meta'] ) || ! is_array( $response['result']['_meta'] ) ) {
+						$response['result']['_meta'] = array();
+					}
+					$response['result']['_meta']['replayed']    = true;
+					$response['result']['_meta']['replayed_at'] = isset( $existing['at'] ) ? (int) $existing['at'] : 0;
+				}
+
+				return $response;
+			}
+		}
+
+		set_transient(
+			$store_key,
+			array(
+				'state'     => 'in_progress',
+				'args_hash' => $args_hash,
+				'at'        => time(),
+			),
+			self::IDEMPOTENCY_TTL
+		);
+
+		$response = $this->handle_tools_call( $id, $params, $request );
+
+		$completed = is_array( $response )
+			&& isset( $response['result'] )
+			&& is_array( $response['result'] )
+			&& empty( $response['result']['isError'] );
+
+		if ( ! $completed ) {
+			// Not pinned: the retry must be allowed to do the work.
+			delete_transient( $store_key );
+			return $response;
+		}
+
+		$encoded = wp_json_encode( $response );
+
+		if ( false === $encoded || strlen( $encoded ) > self::IDEMPOTENCY_MAX_BYTES ) {
+			delete_transient( $store_key );
+			return $response;
+		}
+
+		set_transient(
+			$store_key,
+			array(
+				'state'     => 'done',
+				'args_hash' => $args_hash,
+				'at'        => time(),
+				'response'  => $response,
+			),
+			self::IDEMPOTENCY_TTL
+		);
+
+		return $response;
+	}
+
+	/**
 	 * @return array|null
 	 */
 	private function current_rate_limit_budget() {
@@ -747,7 +896,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				return $this->handle_tools_list( $id, $params );
 
 			case 'tools/call':
-				return $this->handle_tools_call( $id, $params, $request );
+				return $this->handle_tools_call_idempotent( $id, $params, $request );
 
 			case 'resources/list':
 				return $this->handle_resources_list( $id );
