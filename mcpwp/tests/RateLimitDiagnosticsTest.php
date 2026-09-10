@@ -479,6 +479,23 @@ final class RateLimitDiagnosticsTest extends TestCase {
 		$this->assertSame( 50, $refused->get_error_data()['limit'] );
 	}
 
+	public function test_the_site_ceiling_also_bounds_the_diagnostic_allowance(): void {
+		Mcpwp_Rate_Limiter::get_instance()->update_settings( array( 'burst_limit' => 5, 'requests_per_minute' => 5, 'requests_per_hour' => 50 ) );
+		set_transient( 'mcpwp_rate_' . md5( $this->write_bucket() . ':diag_hour' ), array( 'count' => 50, 'reset' => time() + 1800 ), 1800 );
+
+		$refused = ( new Mcpwp_REST_MCP() )->verify_api_key( $this->mcp_request( $this->rpc( 'initialize' ) ) );
+
+		$this->assertInstanceOf( WP_Error::class, $refused, 'A site throttled to 50/hour does not hand diagnostics 300/hour.' );
+		$this->assertSame( 50, $refused->get_error_data()['limit'] );
+	}
+
+	public function test_headers_name_the_window_they_describe(): void {
+		$controller = new Mcpwp_REST_MCP();
+		$controller->verify_api_key( $this->mcp_request( $this->rpc( 'tools/list' ) ) );
+
+		$this->assertArrayHasKey( 'X-RateLimit-Window', Mcpwp_Rate_Limiter::get_instance()->get_headers() );
+	}
+
 	public function test_a_non_string_method_is_a_jsonrpc_error_not_a_fatal(): void {
 		$data = ( new Mcpwp_REST_MCP() )->handle_mcp( $this->mcp_request( array( 'jsonrpc' => '2.0', 'id' => 1, 'method' => array( 'x' ) ) ) )->get_data();
 

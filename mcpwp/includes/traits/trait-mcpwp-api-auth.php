@@ -145,7 +145,8 @@ trait Mcpwp_Api_Auth {
 			// another request within this process. Bounded: a long-lived
 			// worker looping rest_do_request() must not retain every body.
 			if ( count( self::$mcpwp_verdicts ) >= 64 ) {
-				array_shift( self::$mcpwp_verdicts );
+				// Not array_shift(): it renumbers the object-id keys.
+				unset( self::$mcpwp_verdicts[ array_key_first( self::$mcpwp_verdicts ) ] );
 			}
 			self::$mcpwp_verdicts[ $memo_id ] = array( $request, $verdict );
 
@@ -183,14 +184,27 @@ trait Mcpwp_Api_Auth {
 			'per_hour'   => 300,
 		);
 
-		// A key deliberately throttled below the diagnostic allowance keeps
-		// its own ceiling: the allowance is a floor for exhausted keys, not
-		// a lift for restricted ones.
+		// The allowance is a floor for exhausted keys, never a lift above a
+		// deliberate throttle — the key's own ceilings, or the site's.
+		$ceilings = array();
+		if ( class_exists( 'Mcpwp_Rate_Limiter' ) ) {
+			$site     = Mcpwp_Rate_Limiter::get_instance()->get_settings();
+			$ceilings = array(
+				'burst'      => isset( $site['burst_limit'] ) ? (int) $site['burst_limit'] : 0,
+				'per_minute' => isset( $site['requests_per_minute'] ) ? (int) $site['requests_per_minute'] : 0,
+				'per_hour'   => isset( $site['requests_per_hour'] ) ? (int) $site['requests_per_hour'] : 0,
+			);
+		}
 		if ( is_array( $key_record ) && ! empty( $key_record['rate_limits'] ) && is_array( $key_record['rate_limits'] ) ) {
-			foreach ( $limits as $name => $value ) {
-				if ( isset( $key_record['rate_limits'][ $name ] ) && (int) $key_record['rate_limits'][ $name ] > 0 ) {
-					$limits[ $name ] = min( $value, (int) $key_record['rate_limits'][ $name ] );
+			foreach ( $key_record['rate_limits'] as $name => $value ) {
+				if ( (int) $value > 0 ) {
+					$ceilings[ $name ] = isset( $ceilings[ $name ] ) && $ceilings[ $name ] > 0 ? min( $ceilings[ $name ], (int) $value ) : (int) $value;
 				}
+			}
+		}
+		foreach ( $limits as $name => $value ) {
+			if ( ! empty( $ceilings[ $name ] ) ) {
+				$limits[ $name ] = min( $value, (int) $ceilings[ $name ] );
 			}
 		}
 
@@ -269,6 +283,11 @@ trait Mcpwp_Api_Auth {
 	 * @return bool|WP_Error
 	 */
 	private function compute_api_key_verdict( $request ) {
+		// A persistent process (WP-CLI, a rest_do_request() loop) reuses this
+		// instance across requests; a nested charge must never land on the
+		// previous request's bucket.
+		$this->mcpwp_metered = null;
+
 		// Bypass for internal server-side requests (Chat tab tool execution).
 		// Requires: admin context + activate_plugins cap + AJAX request +
 		// a valid nonce tied to a known admin action (prevents filter-hook abuse).

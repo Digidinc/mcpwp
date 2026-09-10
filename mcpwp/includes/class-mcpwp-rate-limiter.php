@@ -198,6 +198,7 @@ class Mcpwp_Rate_Limiter {
 					'retry_after'      => $retry_after,
 					'reset_in'         => $retry_after,
 					'bucket'           => $bucket,
+					'window'           => 'burst',
 					'limit'            => $burst_limit,
 					'remaining'        => max( 0, $burst_limit - $burst_data['count'] ),
 					'requested'        => $weight,
@@ -238,6 +239,7 @@ class Mcpwp_Rate_Limiter {
 					'retry_after'      => $retry_after,
 					'reset_in'         => $retry_after,
 					'bucket'           => $bucket,
+					'window'           => 'minute',
 					'limit'            => $minute_limit,
 					'remaining'        => max( 0, $minute_limit - $minute_data['count'] ),
 					'requested'        => $weight,
@@ -277,6 +279,7 @@ class Mcpwp_Rate_Limiter {
 					'retry_after'      => $retry_after,
 					'reset_in'         => $retry_after,
 					'bucket'           => $bucket,
+					'window'           => 'hour',
 					'limit'            => $hour_limit,
 					'remaining'        => max( 0, $hour_limit - $hour_data['count'] ),
 					'requested'        => $weight,
@@ -335,6 +338,7 @@ class Mcpwp_Rate_Limiter {
 			'X-RateLimit-Remaining' => max( 0, $data['remaining'] ),
 			'X-RateLimit-Reset'     => max( 0, $data['reset'] - $now ),
 			'X-RateLimit-Bucket'    => isset( $data['bucket'] ) ? $data['bucket'] : 'write',
+			'X-RateLimit-Window'    => isset( $data['window'] ) ? $data['window'] : 'minute',
 		);
 
 		if ( isset( $data['retry_after'] ) && $data['remaining'] <= 0 ) {

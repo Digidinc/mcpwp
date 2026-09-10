@@ -58,6 +58,14 @@ class Mcpwp_Idempotency_Claim {
 
 		$wpdb->last_error = '';
 
+		// A duplicate-key refusal is the expected path on every retry. wpdb
+		// reports it through print_error(), which writes to error_log on every
+		// call and, with WP_DEBUG_DISPLAY, prints an HTML block ahead of the
+		// JSON body — the corrupted-response failure #802 opens with. Silence
+		// it for this one statement; the return value and last_error still
+		// tell us what happened.
+		$suppressed = method_exists( $wpdb, 'suppress_errors' ) ? $wpdb->suppress_errors( true ) : null;
+
 		$rows = $wpdb->insert(
 			$wpdb->options,
 			array(
@@ -68,6 +76,10 @@ class Mcpwp_Idempotency_Claim {
 			array( '%s', '%s', '%s' )
 		);
 
+		if ( null !== $suppressed ) {
+			$wpdb->suppress_errors( $suppressed );
+		}
+
 		if ( 1 === (int) $rows ) {
 			if ( 0 === wp_rand( 0, self::SWEEP_EVERY - 1 ) ) {
 				self::sweep( $now );
@@ -75,15 +87,22 @@ class Mcpwp_Idempotency_Claim {
 			return self::ACQUIRED;
 		}
 
-		// A duplicate-key refusal is the UNIQUE index doing its job. Anything
-		// else means the store cannot arbitrate, and saying so beats guessing.
-		if ( false !== stripos( (string) $wpdb->last_error, 'duplicate' ) ) {
+		// The UNIQUE index refused us: held. The message is driver- and
+		// locale-specific ("Duplicate entry", "Duplicata du champ", "UNIQUE
+		// constraint failed"), so the row itself is the authority and the
+		// message only a shortcut.
+		if ( preg_match( '/duplicat|unique/i', (string) $wpdb->last_error ) ) {
 			return self::HELD;
 		}
 
-		// Some drivers report a duplicate as a false with no message; treat a
-		// silent false as held only when the row can be seen.
-		return null !== self::read( $name ) ? self::HELD : self::UNAVAILABLE;
+		if ( null !== self::read( $name ) ) {
+			return self::HELD;
+		}
+
+		// No refusal we recognise and no row: the store could not arbitrate.
+		// The caller must not run unprotected on this answer without first
+		// checking for a completed record — see the consumer.
+		return self::UNAVAILABLE;
 	}
 
 	/**
@@ -173,12 +192,22 @@ class Mcpwp_Idempotency_Claim {
 
 		$cutoff = (int) $now - DAY_IN_SECONDS;
 
+		// Portable across MySQL, MariaDB and the SQLite integration: the
+		// value starts with the unix time, so a prefix comparison against the
+		// cutoff's digit count is enough (all leases in a plausible window
+		// share the same digit count until the year 2286).
+		$suppressed = method_exists( $wpdb, 'suppress_errors' ) ? $wpdb->suppress_errors( true ) : null;
+
 		$wpdb->query(
 			$wpdb->prepare(
-				"DELETE FROM {$wpdb->options} WHERE option_name LIKE %s AND CAST( SUBSTRING_INDEX( option_value, '|', 1 ) AS UNSIGNED ) < %d",
+				"DELETE FROM {$wpdb->options} WHERE option_name LIKE %s AND option_value < %s",
 				$wpdb->esc_like( 'mcpwp_idem_' ) . '%' . $wpdb->esc_like( '_lease' ),
-				$cutoff
+				(string) $cutoff . '|'
 			)
 		);
+
+		if ( null !== $suppressed ) {
+			$wpdb->suppress_errors( $suppressed );
+		}
 	}
 }

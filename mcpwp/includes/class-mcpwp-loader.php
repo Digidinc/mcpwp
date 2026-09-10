@@ -473,6 +473,10 @@ class Mcpwp_Loader {
 			if ( ! empty( $data['data']['bucket'] ) ) {
 				$response->header( 'X-RateLimit-Bucket', (string) $data['data']['bucket'] );
 			}
+
+			if ( ! empty( $data['data']['window'] ) ) {
+				$response->header( 'X-RateLimit-Window', (string) $data['data']['window'] );
+			}
 		}
 
 		return $response;

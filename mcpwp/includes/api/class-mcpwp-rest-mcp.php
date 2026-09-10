@@ -782,7 +782,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				$id,
 				-32602,
 				'Invalid _meta.request_id',
-				array( 'hint' => 'request_id is 1–128 characters from [A-Za-z0-9_-:.]. Use something unique per intended write, e.g. "job-42:page:3".' )
+				array( 'hint' => 'request_id is 1–128 characters from [A-Za-z0-9_-:.]. Make it unique per intended write and per agent — a UUID, or "<agent>:<job>:<step>" — since the namespace is shared by every client acting as the same principal.' )
 			);
 		}
 
@@ -865,9 +865,11 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 					$response['result']['_meta']['replayed_at'] = isset( $existing['at'] ) ? (int) $existing['at'] : 0;
 				}
 
-				// A replay is API activity even though it is not site activity.
+				// A replay is API activity even though it is not site activity —
+				// and telemetry must be able to net it out, so it carries its
+				// own code rather than posing as a 0 ms success.
 				$this->log_mcp_activity( 'mcp_tool_replay', array( 'tool' => $tool_name, 'request_id' => $request_id ) );
-				$this->fire_tool_called( $tool_name, microtime( true ), '' );
+				$this->fire_tool_called( $tool_name, microtime( true ), 'replayed' );
 
 				return $response;
 			}
@@ -881,8 +883,15 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		$claim      = Mcpwp_Idempotency_Claim::acquire( $lease_name, $now, $args_hash );
 
 		if ( Mcpwp_Idempotency_Claim::UNAVAILABLE === $claim ) {
-			// The store cannot arbitrate. Run, and say the call was not
-			// protected rather than pretend.
+			// The store could not arbitrate — or the holder released between
+			// our refused insert and our read, which on a localized driver is
+			// indistinguishable. A completed record decides it before anything
+			// runs; only then is the call run unprotected, and said so.
+			$done = get_transient( $store_key );
+			if ( is_array( $done ) && isset( $done['state'] ) && 'done' === $done['state'] ) {
+				return $this->handle_tools_call_idempotent( $id, $params, $request );
+			}
+
 			return $this->with_idempotency_note( $this->handle_tools_call( $id, $params, $request ), 'not_stored', 'claim store unavailable' );
 		}
 
@@ -1155,7 +1164,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		}
 
 		$count = 0;
-		foreach ( array( 'operations', 'updates', 'pages', 'posts', 'items' ) as $key ) {
+		foreach ( array( 'operations', 'updates', 'pages', 'posts', 'items', 'urls', 'files', 'media', 'page_ids' ) as $key ) {
 			if ( isset( $arguments[ $key ] ) && is_array( $arguments[ $key ] ) ) {
 				$count += count( $arguments[ $key ] );
 			}

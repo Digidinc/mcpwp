@@ -964,8 +964,17 @@ if (! isset($GLOBALS['wpdb'])) {
         {
             return array();
         }
+        public $suppressed = false;
+        public $queries    = array();
+        public function suppress_errors($suppress = true)
+        {
+            $prev = $this->suppressed;
+            $this->suppressed = (bool) $suppress;
+            return $prev;
+        }
         public function query($query)
         {
+            $this->queries[] = (string) $query;
             return 0;
         }
         public function insert($table, $data, $format = null)
@@ -983,7 +992,8 @@ if (! isset($GLOBALS['wpdb'])) {
                 }
                 $name = (string) $data['option_name'];
                 if (array_key_exists($name, $GLOBALS['mcpwp_test_wpdb_options'] ?? array())) {
-                    $this->last_error = "Duplicate entry '" . $name . "' for key 'option_name'";
+                    // A localized server or the SQLite driver word it differently.
+                    $this->last_error = $GLOBALS['mcpwp_test_wpdb_duplicate_message'] ?? ("Duplicate entry '" . $name . "' for key 'option_name'");
                     return false;
                 }
                 $GLOBALS['mcpwp_test_wpdb_options'][ $name ] = (string) $data['option_value'];

@@ -207,6 +207,28 @@ final class BatchBudgetTest extends TestCase {
 		$this->assertSame( 6, Mcpwp_Rate_Limiter::get_instance()->get_budget()['remaining'], 'Plus the other three operations.' );
 	}
 
+	public function test_every_list_argument_that_dispatches_writes_is_counted(): void {
+		// wp_bulk_upload_media takes urls OR items for the same 20 writes; the
+		// first cut counted only items, so the price depended on spelling.
+		$controller = new Mcpwp_REST_MCP();
+		foreach ( array( 'urls' => array( 'https://a/1.jpg', 'https://a/2.jpg', 'https://a/3.jpg' ), 'items' => array( array( 'url' => 'https://a/1.jpg' ), array( 'url' => 'https://a/2.jpg' ), array( 'url' => 'https://a/3.jpg' ) ) ) as $key => $list ) {
+			$GLOBALS['mcpwp_test_transients'] = array();
+			Mcpwp_REST_MCP::reset_verdict_memo();
+			$request = $this->mcp_request(
+				array(
+					'jsonrpc' => '2.0',
+					'id'      => 1,
+					'method'  => 'tools/call',
+					'params'  => array( 'name' => 'wp_bulk_upload_media', 'arguments' => array( $key => $list ) ),
+				)
+			);
+			$controller->verify_api_key( $request );
+			$controller->handle_mcp( $request );
+
+			$this->assertSame( 7, Mcpwp_Rate_Limiter::get_instance()->get_budget()['remaining'], $key . ': one request plus two more operations.' );
+		}
+	}
+
 	public function test_a_batch_tool_that_does_not_fit_is_refused_before_it_runs(): void {
 		$controller = new Mcpwp_REST_MCP();
 		$this->assertTrue( $controller->verify_api_key( $this->mcp_request( $this->rpc_batch( 3 ) ) ) ); // 7 left

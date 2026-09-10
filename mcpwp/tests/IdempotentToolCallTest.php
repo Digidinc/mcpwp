@@ -302,6 +302,55 @@ final class IdempotentToolCallTest extends TestCase {
 		$this->assertFalse( Mcpwp_Idempotency_Claim::take_over( 'mcpwp_idem_y_lease', $seen['raw'], 2001, 'h' ), 'The second racer saw the same stale value and must lose.' );
 	}
 
+	public function test_a_localized_duplicate_message_is_still_a_held_claim(): void {
+		// MySQL in French says "Duplicata du champ"; SQLite says "UNIQUE
+		// constraint failed". The row is the authority, not the wording.
+		$GLOBALS['mcpwp_test_wpdb_duplicate_message'] = "Duplicata du champ 'x' pour la clef 'option_name'";
+		Mcpwp_Idempotency_Claim::acquire( 'mcpwp_idem_z_lease', time(), 'h' );
+		$this->assertSame( Mcpwp_Idempotency_Claim::HELD, Mcpwp_Idempotency_Claim::acquire( 'mcpwp_idem_z_lease', time(), 'h' ) );
+
+		$GLOBALS['mcpwp_test_wpdb_duplicate_message'] = 'some driver-specific wording with no keyword';
+		$this->assertSame( Mcpwp_Idempotency_Claim::HELD, Mcpwp_Idempotency_Claim::acquire( 'mcpwp_idem_z_lease', time(), 'h' ), 'No keyword: the visible row decides.' );
+		unset( $GLOBALS['mcpwp_test_wpdb_duplicate_message'] );
+	}
+
+	public function test_an_unavailable_claim_store_still_replays_a_completed_record(): void {
+		// The holder released between our refused insert and our read, on a
+		// driver whose wording we do not recognise: the done record must win
+		// before anything runs unprotected.
+		$this->call( 'wp_create_page', array( 'title' => 'A' ), 'r1' );
+		$GLOBALS['mcpwp_test_wpdb_insert_fails'] = true;
+
+		$second = $this->call( 'wp_create_page', array( 'title' => 'A' ), 'r1' );
+
+		$this->assertTrue( $second['result']['_meta']['replayed'] );
+		$this->assertSame( 1, $this->dispatches() );
+	}
+
+	public function test_the_retry_path_never_prints_a_database_error(): void {
+		global $wpdb;
+		Mcpwp_Idempotency_Claim::acquire( 'mcpwp_idem_q_lease', time(), 'h' );
+		$wpdb->suppressed = false;
+
+		Mcpwp_Idempotency_Claim::acquire( 'mcpwp_idem_q_lease', time(), 'h' );
+
+		$this->assertFalse( $wpdb->suppressed, 'Suppression is restored after the statement.' );
+		$this->assertTrue( method_exists( $wpdb, 'suppress_errors' ) );
+	}
+
+	public function test_the_sweep_runs_a_portable_delete(): void {
+		global $wpdb;
+		$wpdb->queries = array();
+
+		Mcpwp_Idempotency_Claim::sweep( 1789000000 );
+
+		$this->assertCount( 1, $wpdb->queries );
+		$this->assertStringContainsString( 'mcpwp', $wpdb->queries[0] );
+		$this->assertStringContainsString( '_lease', $wpdb->queries[0] );
+		$this->assertStringNotContainsString( 'SUBSTRING_INDEX', $wpdb->queries[0], 'MySQL-only functions are unavailable on the SQLite integration.' );
+		$this->assertStringContainsString( "'1788913600|'", $wpdb->queries[0] );
+	}
+
 	public function test_an_unavailable_claim_store_runs_the_call_and_says_it_was_not_protected(): void {
 		$GLOBALS['mcpwp_test_wpdb_insert_fails'] = true;
 
@@ -402,6 +451,20 @@ final class IdempotentToolCallTest extends TestCase {
 
 		$this->assertArrayHasKey( 'result', $first, isset( $first['error'] ) ? wp_json_encode( $first['error'] ) : '' );
 		$this->assertSame( 'not_stored', $first['result']['_meta']['idempotency'] );
+	}
+
+	public function test_skipped_not_found_and_a_failed_count_are_partial_too(): void {
+		foreach ( array( array( 'skipped' => array( 3 ) ), array( 'not_found' => array( 9 ) ), array( 'failed' => 2, 'total' => 5 ) ) as $shape ) {
+			$GLOBALS['mcpwp_test_transients']              = array();
+			$GLOBALS['mcpwp_test_wpdb_options']            = array();
+			$GLOBALS['mcpwp_test_rest_response_override']  = array_merge( array( 'updated' => array() ), $shape );
+			Mcpwp_REST_MCP::reset_verdict_memo();
+
+			$first = $this->call( 'wp_bulk_update_pages', array( 'pages' => array( array( 'id' => 5, 'title' => 'x' ) ) ), 'r-' . key( $shape ) );
+
+			$this->assertSame( 'not_stored', $first['result']['_meta']['idempotency'], wp_json_encode( $shape ) );
+		}
+		unset( $GLOBALS['mcpwp_test_rest_response_override'] );
 	}
 
 	public function test_a_validation_tool_finding_errors_is_not_a_partial_failure(): void {
