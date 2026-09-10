@@ -626,9 +626,11 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			}
 		}
 
-		// Secret-looking keys: the shared detector. The write side may be
-		// stricter than the read side, never looser (#797 round 4).
-		if ( Mcpwp_Post_Fields::is_secret_shaped_key( $meta_key ) ) {
+		// Secret-looking keys: the shared detector, OR the substring set the
+		// read side has always filtered — the read side is never looser
+		// than it was (#797 rounds 4–5). author* is the one deliberate
+		// widening: it was a false positive of the old regex.
+		if ( Mcpwp_Post_Fields::is_secret_shaped_key( $meta_key ) || preg_match( '/(password|secret|token|credential|auth(?!or))/i', $meta_key ) ) {
 			return true;
 		}
 

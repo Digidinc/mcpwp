@@ -105,19 +105,24 @@ class Mcpwp_Post_Fields {
 			return true;
 		}
 
-		// camelCase is split so apiKey / myPwd / sessionId match like
-		// api_key / my_pwd / session_id.
-		$split = preg_replace( '/([a-z0-9])([A-Z])/', '$1_$2', $key );
+		// camelCase is split and every separator the key sanitiser admits
+		// (- . :) reads as _, so apiKey, x-api-key, api.key and api:key all
+		// match like api_key. A numeric suffix is still the same name
+		// (apikey2, token2).
+		$split = strtolower( preg_replace( '/([a-z0-9])([A-Z])/', '$1_$2', $key ) );
+		$split = str_replace( array( '-', '.', ':', ' ' ), '_', $split );
 
 		// Word-boundary stems: a credential NAMED, not merely mentioned.
-		if ( preg_match( '/(^|[_\-.\s])(api_?key|apikey|access_?key(_id)?|secret_?key|pass|passwd|password|passcode|pwd|passphrase|secret|secrets|token|tokens|credential|credentials|bearer|jwt|priv_?key|private_?key|privkey|session_?id|session_?token|session_?key|pin|nonce|signature|totp|otp|cvv|recovery_?codes?|seed_?phrase|dsn)([_\-.\s]|$)/i', $split ) ) {
+		if ( preg_match( '/(^|_)(api_?key|apikey|access_?key(_id)?|secret_?key|sk|pass|passwd|password|passcode|pwd|passphrase|secret|secrets|token|tokens|credential|credentials|bearer|jwt|priv_?key|private_?key|privkey|session_?id|session_?token|session_?key|totp|otp|cvv|recovery_?codes?|seed_?phrase|dsn)\d*(_|$)/i', $split ) ) {
 			return true;
 		}
 
-		// Substring stems that are credentials wherever they appear —
-		// password, credential, and auth (authorization, oauth_*, reauth,
-		// authenticator) but not the word author.
-		return (bool) preg_match( '/(password|credential|auth(?!or(?:s|ed|_|\b)))/i', $split );
+		// Substring stems that are credentials wherever they appear:
+		// password, credential, secret, token, and auth (authorization,
+		// oauth_*, reauth, authenticator) — but not author*, authoring,
+		// authority. This is the set the read side always filtered; the
+		// write side is never looser than it.
+		return (bool) preg_match( '/(password|credential|secret|token|auth(?!or(?:s|ed|ing|ity|ship|_|$)))/i', $split );
 	}
 
 	/**
@@ -431,7 +436,7 @@ class Mcpwp_Post_Fields {
 				);
 			}
 
-			$reason = ( $allow_core_keys && in_array( $key, self::$core_keys_by_request, true ) ) ? null : self::refusal_reason( $key );
+			$reason = ( $allow_core_keys && in_array( $key, self::$core_keys_by_request, true ) ) ? null : self::refusal_reason( $key, $allow_core_keys );
 			if ( null !== $reason ) {
 				return new WP_Error(
 					'forbidden_meta_key',
@@ -489,7 +494,10 @@ class Mcpwp_Post_Fields {
 				);
 			}
 
-			if ( null !== $value && strlen( (string) $encoded ) > self::MAX_META_VALUE_BYTES ) {
+			// Measured as sent AND as it would be stored: kses entity
+			// normalisation can grow a value ~6x past the bound (#797 round 5).
+			$stored_size = null !== $value ? strlen( (string) wp_json_encode( self::reduce_unregistered( $value ) ) ) : 0;
+			if ( null !== $value && max( strlen( (string) $encoded ), $stored_size ) > self::MAX_META_VALUE_BYTES ) {
 				return new WP_Error(
 					'meta_value_too_large',
 					sprintf(
@@ -562,7 +570,8 @@ class Mcpwp_Post_Fields {
 	private static function first_invalid_utf8_path( $value, $path = '' ) {
 		if ( is_string( $value ) ) {
 			$valid = function_exists( 'mb_check_encoding' ) ? mb_check_encoding( $value, 'UTF-8' ) : ( false !== @iconv( 'UTF-8', 'UTF-8//IGNORE', $value ) && @iconv( 'UTF-8', 'UTF-8//IGNORE', $value ) === $value );
-			return $valid ? null : $path;
+			// A raw NUL is valid UTF-8 and still not text anyone means to store.
+			return $valid && false === strpos( $value, "\0" ) ? null : $path;
 		}
 
 		if ( is_array( $value ) ) {
@@ -611,7 +620,7 @@ class Mcpwp_Post_Fields {
 	 * @param string $key Meta key.
 	 * @return string|null Reason, or null when writable.
 	 */
-	private static function refusal_reason( $key ) {
+	private static function refusal_reason( $key, $explicit_meta_route = false ) {
 		if ( in_array( $key, self::$blocked_keys, true ) ) {
 			return '_thumbnail_id' === $key ? 'use featured_image' : 'reserved by WordPress';
 		}
@@ -628,8 +637,13 @@ class Mcpwp_Post_Fields {
 			}
 		}
 
-		if ( function_exists( 'is_protected_meta' ) && is_protected_meta( $key, 'post' ) ) {
-			return 'protected meta (leading underscore)';
+		// The explicit meta route is the door for _yoast_wpseo_*, _price,
+		// _sku, _acf_*: a leading underscore is WordPress's "not in the
+		// Custom Fields box", not "not yours". A post write's meta field
+		// keeps the rule, since it rides beside title/content and a stray
+		// key there is far more likely an accident (#797 round 5).
+		if ( ! $explicit_meta_route && function_exists( 'is_protected_meta' ) && is_protected_meta( $key, 'post' ) ) {
+			return 'protected meta (leading underscore); use wp_set_post_meta';
 		}
 
 		if ( self::is_secret_shaped_key( $key ) ) {

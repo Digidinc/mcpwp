@@ -533,16 +533,20 @@ final class PostTermsMetaTest extends TestCase {
 	public function test_the_secret_detector_in_both_directions(): void {
 		$secret = array(
 			'stripe_secret_key', 'api_token', 'user_password', 'oauth_credential', 'basic_auth', 'apiKey', 'myPwd', 'sessionId', 'session_id',
-			'privkey', 'ssh_privkey', 'private_key', 'card_pin', 'pin', 'nonce', 'signature', 'recovery_codes', 'seed_phrase', 'totp',
+			'privkey', 'ssh_privkey', 'private_key', 'recovery_codes', 'seed_phrase', 'totp',
 			'aws_access_key_id', 'access_key', 'PASSWORD', 'client_secret', 'refresh_token', 'x-auth', 'authorization',
+			// Round 5: separators, numeric suffixes, the old substring set.
+			'x-api-key', 'X-API-Key', 'api.key', 'api:key', 'access-key', 'session-id', 'apikey2', 'api_key_2', 'stripe_sk', 'secretKey', 'PrivateKey', 'db_pass', 'passwd_hash', 'oauth2_token', 'client-secret',
+			'mysecret', 'apitoken', 'token2', 'secret2', 'githubtoken', 'vault_token1', 'stripe_secret2', 'clientsecret',
 		);
 		foreach ( $secret as $key ) {
 			$this->assertTrue( Mcpwp_Post_Fields::is_secret_shaped_key( $key ), $key . ' names a credential.' );
 		}
 
 		$ordinary = array(
-			'author', 'author_note', 'authors', 'authored_by', 'license', 'license_url', 'license_name', 'salt_grams', 'secretary_name', 'tokenizer',
-			'smc_role', 'smc_page_count', 'pinned', 'pinterest_url', 'session_count',
+			'author', 'author_note', 'authors', 'authored_by', 'authoring', 'authority', 'authorship', 'license', 'license_url', 'license_name', 'salt_grams',
+			'smc_role', 'smc_page_count', 'pinned', 'pinterest_url', 'session_count', 'nonce_field', 'nonce_key', 'event_pin', 'pin_code', 'signature_image',
+			'_yoast_wpseo_title', '_price', 'total_sales', 'rank_math_title',
 		);
 		foreach ( $ordinary as $key ) {
 			$this->assertFalse( Mcpwp_Post_Fields::is_secret_shaped_key( $key ), $key . ' is an ordinary field.' );
@@ -598,5 +602,61 @@ final class PostTermsMetaTest extends TestCase {
 			}
 		}
 		$this->assertSame( 4, $seen );
+	}
+
+	// ---------------------------------------------------------------
+	// Round 5: the meta route's door for underscore keys; read never looser.
+	// ---------------------------------------------------------------
+
+	public function test_the_meta_route_accepts_the_underscore_keys_plugins_actually_use(): void {
+		// P1-NEW: _yoast_wpseo_title, _price, _sku, _acf_* were refused as
+		// "protected meta" on the very tool that exists to set them.
+		$this->seed( 40, 'post' );
+		$GLOBALS['_mcpwp_test_posts'][40] = new WP_Post( (array) $GLOBALS['_mcpwp_test_posts'][40] );
+
+		foreach ( array( '_yoast_wpseo_title' => 'Best title', '_yoast_wpseo_metadesc' => 'desc', '_price' => '19.90', '_sku' => 'SKU-1', '_stock' => '4', '_acf_x' => 'y' ) as $key => $value ) {
+			$ok = $this->set_meta( 40, $key, $value );
+			$this->assertInstanceOf( WP_REST_Response::class, $ok, $key . ': ' . ( is_wp_error( $ok ) ? $ok->get_error_message() : '' ) );
+			$this->assertSame( $value, get_post_meta( 40, $key, true ), $key );
+		}
+
+		// The reserved ones are still refused on the meta route.
+		foreach ( array( '_wp_attached_file', '_edit_lock', '_elementor_data', 'mcpwp_api_key' ) as $key ) {
+			$this->assertInstanceOf( WP_Error::class, $this->set_meta( 40, $key, 'x' ), $key );
+		}
+
+		// And a post write's meta field keeps the underscore rule (a stray
+		// key beside title/content is more likely an accident).
+		$err = $this->posts()->update_post( 40, array( 'meta' => array( '_yoast_wpseo_title' => 'x' ) ) );
+		$this->assertInstanceOf( WP_Error::class, $err );
+		$this->assertStringContainsString( 'wp_set_post_meta', $err->get_error_message() );
+	}
+
+	public function test_the_read_blocklist_covers_the_old_substring_set(): void {
+		// P1-837 (round 5): the old regex was pure substring; secret/token
+		// at a word boundary only had let mysecret/apitoken through.
+		$content = new ReflectionMethod( Mcpwp_REST_Site_Content::class, 'is_blocked_meta_key' );
+		$content->setAccessible( true );
+		$ctl = new Mcpwp_REST_Site_Content();
+		foreach ( array( 'mysecret', 'apitoken', 'token2', 'secret2', 'githubtoken', 'vault_token1', 'stripe_secret2', 'clientsecret', 'x-api-key' ) as $k ) {
+			$this->assertTrue( $content->invoke( $ctl, $k ), $k . ' must stay blocked on read.' );
+		}
+		foreach ( array( 'author', 'author_email', 'co_authors', 'smc_role', '_yoast_wpseo_title' ) as $k ) {
+			$this->assertFalse( $content->invoke( $ctl, $k ), $k . ' is readable.' );
+		}
+	}
+
+	public function test_a_nul_byte_and_a_kses_amplified_value_are_refused(): void {
+		$this->seed( 40, 'post' );
+
+		$err = $this->posts()->update_post( 40, array( 'meta' => array( 'smc_note' => "a\0b" ) ) );
+		$this->assertSame( 'invalid_meta_value', $err->get_error_code() );
+
+		// Under the bound as sent (20,001 bytes); the size as it would be
+		// stored is measured too — the harness's wp_kses_post() entity-encodes
+		// '&' as core does, so this grows fivefold past the bound.
+		$err = $this->posts()->update_post( 40, array( 'meta' => array( 'smc_blob' => '<' . str_repeat( '&', 20000 ) ) ) );
+		$this->assertSame( 'meta_value_too_large', $err->get_error_code() );
+		$this->assertGreaterThan( 65536, strlen( wp_kses_post( '<' . str_repeat( '&', 20000 ) ) ), 'Premise: the double amplifies like core.' );
 	}
 }
