@@ -1078,6 +1078,36 @@ if (! isset($GLOBALS['wpdb'])) {
         }
         public function get_row($query = '', $output = OBJECT, $y = 0)
         {
+            // The direct option-row probe (Mcpwp_Encryption::read_option_row,
+            // #564). A select with no FROM always yields exactly one row when
+            // the query ran, so the real wpdb answers null here only when the
+            // read failed — never for "no such option". The double keeps that
+            // contract and lets a test fail the read two ways:
+            //   true     — null plus last_error, like a lost connection mid-query;
+            //   'silent' — null with an empty last_error, which is what the real
+            //              wpdb returns when a reconnect fails after
+            //              template_redirect (check_connection() returns false
+            //              without recording an error).
+            // A callable receives the option name and answers true/'silent'/false.
+            if (preg_match("/^SELECT 1 AS mcpwp_probe, \\(SELECT option_value FROM \\S*options WHERE option_name = '([^']+)' LIMIT 1\\) AS option_value$/", trim((string) $query), $m)) {
+                $this->last_error = '';
+                $fails            = $GLOBALS['mcpwp_test_wpdb_read_fails'] ?? false;
+                if (is_callable($fails)) {
+                    $fails = $fails($m[1]);
+                }
+                if ('silent' === $fails) {
+                    return null;
+                }
+                if (true === $fails) {
+                    $this->last_error = 'WordPress database error: Lost connection to MySQL server during query';
+                    return null;
+                }
+                $row = array(
+                    'mcpwp_probe'  => '1',
+                    'option_value' => $GLOBALS['mcpwp_test_wpdb_options'][ $m[1] ] ?? null,
+                );
+                return ARRAY_A === $output ? $row : (object) $row;
+            }
             return null;
         }
         public function get_var($query = '', $x = 0, $y = 0)
@@ -1169,6 +1199,14 @@ if (! isset($GLOBALS['wpdb'])) {
             // like this (it uses ON DUPLICATE KEY UPDATE); the earlier
             // add_option() double claiming otherwise is why a race shipped.
             if ($table === $this->options && isset($data['option_name'])) {
+                // One-shot hook that runs between a caller's read and its
+                // insert, so a test can land a concurrent writer's row first
+                // (the first-creation race in #564).
+                if (isset($GLOBALS['mcpwp_test_wpdb_before_insert']) && is_callable($GLOBALS['mcpwp_test_wpdb_before_insert'])) {
+                    $hook = $GLOBALS['mcpwp_test_wpdb_before_insert'];
+                    $GLOBALS['mcpwp_test_wpdb_before_insert'] = null;
+                    $hook((string) $data['option_name']);
+                }
                 if (! empty($GLOBALS['mcpwp_test_wpdb_insert_fails'])) {
                     $this->last_error = 'WordPress database error: connection lost';
                     return false;
@@ -1209,6 +1247,11 @@ if (! isset($GLOBALS['wpdb'])) {
             if ($table === $this->options && isset($where['option_name'])) {
                 $name = (string) $where['option_name'];
                 if (array_key_exists($name, $GLOBALS['mcpwp_test_wpdb_options'] ?? array())) {
+                    // Like the real DELETE ... WHERE option_value = %s: a
+                    // compare-and-delete that misses removes nothing.
+                    if (isset($where['option_value']) && (string) $where['option_value'] !== (string) $GLOBALS['mcpwp_test_wpdb_options'][ $name ]) {
+                        return 0;
+                    }
                     unset($GLOBALS['mcpwp_test_wpdb_options'][ $name ]);
                     return 1;
                 }

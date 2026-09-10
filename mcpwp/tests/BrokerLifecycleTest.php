@@ -97,52 +97,26 @@ class Mcpwp_Test_Wp_Die_Signal extends \RuntimeException {}
 class Mcpwp_Test_Termination_Signal extends \RuntimeException {}
 
 /**
- * $wpdb spy — captures every insert() call so a test can assert on exactly
- * what Mcpwp_Logging::log_activity() persisted (bootstrap.php's own
+ * $wpdb spy — captures every activity-log insert() so a test can assert on
+ * exactly what Mcpwp_Logging::log_activity() persisted (bootstrap.php's own
  * Mcpwp_Test_WPDB double doesn't retain what was inserted).
+ *
+ * It extends that double rather than standing alone: the encryption key is
+ * read and created straight through $wpdb (#564), and a spy that answered
+ * every options read with null modelled a database whose options table could
+ * not be read — so the credential store correctly refused to encrypt. Option
+ * rows go to the parent; everything else is captured.
  */
-class Mcpwp_Test_WPDB_Log_Spy {
-	public $prefix     = 'wp_';
-	public $insert_id  = 0;
-	public $last_error = '';
-
+class Mcpwp_Test_WPDB_Log_Spy extends Mcpwp_Test_WPDB {
 	/** @var array<int, array> */
 	public $captured = array();
 
 	public function insert( $table, $data, $format = null ) {
+		if ( $table === $this->options ) {
+			return parent::insert( $table, $data, $format );
+		}
 		$this->captured[] = $data;
 		return 1;
-	}
-
-	public function prepare( $query, ...$args ) {
-		return $query;
-	}
-	public function get_results( $query = '', $output = 'ARRAY_A' ) {
-		return array();
-	}
-	public function get_row( $query = '', $output = 'OBJECT', $y = 0 ) {
-		return null;
-	}
-	public function get_var( $query = '', $x = 0, $y = 0 ) {
-		return null;
-	}
-	public function get_col( $query = '', $x = 0 ) {
-		return array();
-	}
-	public function query( $query ) {
-		return 0;
-	}
-	public function update( $table, $data, $where, $f = null, $wf = null ) {
-		return 1;
-	}
-	public function delete( $table, $where, $where_format = null ) {
-		return 1;
-	}
-	public function replace( $table, $data, $format = null ) {
-		return 1;
-	}
-	public function esc_like( $text ) {
-		return (string) $text;
 	}
 }
 
