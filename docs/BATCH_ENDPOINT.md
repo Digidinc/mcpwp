@@ -234,9 +234,23 @@ Individual operation failures are included in the results:
 }
 ```
 
-### Refused by the spend budget
+### Refused whole by the spend budget
 
-An operation the request's spend budget cannot cover is refused **before it runs**, with status `413` and code `spend_budget_exhausted`. From that operation on, every later operation in the request is refused the same way, even a cheap one — the refused operations are always the tail of the batch, and `spend_budget.refused` lists them. Operations that already ran are not undone. Waiting does not help: send the refused operations in a new request.
+A batch whose operations, priced as sent, cost more than is left of the request's spend budget is refused **whole, before any operation runs**:
+
+```json
+{
+  "code": "spend_budget_exceeded",
+  "message": "Spend budget exceeded: this call costs 1250 units and 1000 of this request's 1000 remain. Nothing ran.",
+  "data": { "status": 413, "weight": 1250, "remaining": 1000, "limit": 1000, "hint": "…" }
+}
+```
+
+Nothing ran, so nothing needs undoing: split the operations into batches that each fit.
+
+### Refused one by one by the spend budget
+
+An operation's real price can show only at dispatch (from the route pattern WordPress matched, or its sanitised parameters). An operation that then does not fit is refused **before it runs**, with status `413` and code `spend_budget_exhausted`. From that operation on, every later operation in the request is refused the same way without being dispatched — even a cheap one, even one that would have failed for another reason — so `spend_budget.refused` is exactly the tail of the batch to resend. Operations that already ran are not undone. Waiting does not help: send the refused operations in a new request. Called as `wp_batch` with `params._meta.request_id`, a batch whose only failures are these refusals is pinned: a replay returns this result without running anything.
 
 ```json
 {
