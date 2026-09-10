@@ -532,59 +532,75 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			return $this->error_response( 'not_found', __( 'Post not found.', 'mcpwp' ), 404 );
 		}
 
-		$key   = sanitize_key( (string) $request->get_param( 'key' ) );
-		$value = $request->get_param( 'value' );
+		$raw_key = trim( (string) $request->get_param( 'key' ) );
+		$key     = Mcpwp_Post_Fields::sanitize_meta_key( $raw_key );
+		$value   = $request->get_param( 'value' );
 
 		if ( '' === $key ) {
 			return $this->error_response( 'missing_key', __( 'Meta key is required.', 'mcpwp' ), 400 );
 		}
 
-		if ( $this->is_blocked_meta_key( $key ) ) {
-			// Provide specific guidance for Elementor meta keys.
-			if ( '_elementor_data' === $key ) {
-				return $this->error_response(
-					'use_elementor_endpoint',
-					__( 'Use wp_set_elementor (POST /elementor/{id}) to set Elementor page data.', 'mcpwp' ),
-					400
-				);
-			}
-			if ( '_elementor_page_settings' === $key ) {
-				return $this->error_response(
-					'use_elementor_endpoint',
-					__( 'Use wp_set_elementor with the page_settings parameter to update Elementor page settings.', 'mcpwp' ),
-					400
-				);
-			}
-			if ( 0 === strpos( $key, '_elementor' ) ) {
-				return $this->error_response(
-					'use_elementor_endpoint',
-					__( 'Elementor meta keys cannot be set via wp_set_post_meta. Use the /elementor/{id} endpoints instead.', 'mcpwp' ),
-					400
-				);
-			}
-			return $this->error_response( 'forbidden_meta_key', __( 'This meta key is not accessible via API.', 'mcpwp' ), 403 );
+		// A key that does not survive the charset is refused, not rewritten
+		// onto a different key the caller never named.
+		if ( $key !== $raw_key ) {
+			return $this->error_response(
+				'invalid_meta_key',
+				sprintf(
+					/* translators: %s: key */
+					__( 'Meta key "%s" contains characters outside [A-Za-z0-9_-.:]. Nothing was written.', 'mcpwp' ),
+					$raw_key
+				),
+				400
+			);
 		}
 
-		// Sanitize value — decode JSON objects/arrays to PHP arrays so WordPress
-		// serializes them properly (instead of storing raw JSON strings).
+		// The featured image goes through the same check as the dedicated
+		// route: it has to be an attachment.
+		if ( '_thumbnail_id' === $key && ! empty( $value ) ) {
+			$attachment = get_post( absint( $value ) );
+			if ( ! $attachment || 'attachment' !== $attachment->post_type ) {
+				return $this->error_response( 'invalid_media', __( '_thumbnail_id must be the ID of a media attachment.', 'mcpwp' ), 400 );
+			}
+		}
+
+		// Elementor keys have their own tools; say which.
+		if ( '_elementor_data' === $key ) {
+			return $this->error_response( 'use_elementor_endpoint', __( 'Use wp_set_elementor (POST /elementor/{id}) to set Elementor page data.', 'mcpwp' ), 400 );
+		}
+		if ( '_elementor_page_settings' === $key ) {
+			return $this->error_response( 'use_elementor_endpoint', __( 'Use wp_set_elementor with the page_settings parameter to update Elementor page settings.', 'mcpwp' ), 400 );
+		}
+		if ( 0 === strpos( $key, '_elementor' ) ) {
+			return $this->error_response( 'use_elementor_endpoint', __( 'Elementor meta keys cannot be set via wp_set_post_meta. Use the /elementor/{id} endpoints instead.', 'mcpwp' ), 400 );
+		}
+
+		// A JSON object/array sent as a string is meant as a structure.
 		if ( is_string( $value ) ) {
 			$trimmed = ltrim( $value );
 			if ( ( '{' === substr( $trimmed, 0, 1 ) || '[' === substr( $trimmed, 0, 1 ) ) && null !== json_decode( $value ) ) {
-				// Decode JSON to a PHP array — WordPress will auto-serialize it.
 				$value = json_decode( $value, true );
-			} else {
-				$value = sanitize_text_field( $value );
 			}
 		}
 
-		$result = update_post_meta( $post_id, $key, $value );
+		// The same policy as meta on a post write (#797): one answer to "can
+		// this key be written, and how is the value treated". The two core
+		// keys this route has always accepted stay accepted here.
+		$clean = Mcpwp_Post_Fields::validate_meta( array( $key => $value ), true, (string) $post->post_type );
+		if ( is_wp_error( $clean ) ) {
+			return $clean;
+		}
+
+		$deleted = array();
+		$written = Mcpwp_Post_Fields::apply_meta( $post_id, $post->post_type, $clean, $deleted );
+		$stored  = get_post_meta( $post_id, $key, true );
 
 		return $this->success_response(
 			array(
 				'id'      => $post_id,
 				'key'     => $key,
-				'value'   => $value,
-				'updated' => false !== $result,
+				'value'   => $stored,
+				'updated' => in_array( $key, $written, true ),
+				'deleted' => in_array( $key, $deleted, true ),
 			)
 		);
 	}
@@ -604,14 +620,25 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			return true;
 		}
 
+		// Case-insensitive, like the write side: wp_postmeta.meta_key
+		// collates case-insensitively, so _WP_ATTACHED_FILE is _wp_attached_file.
+		$lower = strtolower( (string) $meta_key );
 		foreach ( $blocked_prefixes as $prefix ) {
-			if ( 0 === strpos( $meta_key, $prefix ) ) {
+			if ( 0 === strpos( $lower, strtolower( $prefix ) ) ) {
+				return true;
+			}
+		}
+		foreach ( array( '_menu_item_', '_transient', '_site_transient', '_customize_changeset', '_pingme', '_encloseme', '_downloadable_files' ) as $prefix ) {
+			if ( 0 === strpos( $lower, $prefix ) ) {
 				return true;
 			}
 		}
 
-		// Block secret-looking keys
-		if ( preg_match( '/(password|secret|token|auth|credential)/i', $meta_key ) ) {
+		// Secret-looking keys: the shared detector, OR the substring set the
+		// read side has always filtered — the read side is never looser
+		// than it was (#797 rounds 4–5). author* is the one deliberate
+		// widening: it was a false positive of the old regex.
+		if ( Mcpwp_Post_Fields::is_secret_shaped_key( $meta_key ) || preg_match( '/(password|secret|token|credential|auth(?!or))/i', $meta_key ) ) {
 			return true;
 		}
 

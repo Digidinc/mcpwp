@@ -241,7 +241,15 @@ function _n($single, $plural, $number)
 if (! function_exists('wp_kses_post')) {
     function wp_kses_post($text)
     {
-        return $text;
+        // Enough of core's behaviour for tests to tell "post-safe HTML" from
+        // "left as sent": script/style blocks and their bodies are removed.
+        if (! is_string($text)) {
+            return $text;
+        }
+        $text = preg_replace('#<(script|style)\b[^>]*>.*?</\1>#is', '', $text);
+        // Core normalises a bare ampersand to an entity, which is how a
+        // plain-text value run through kses comes back changed.
+        return preg_replace('/&(?!#?[a-z0-9]+;)/i', '&amp;', $text);
     }
 }
 
@@ -820,9 +828,34 @@ function wp_check_password($password, $hash)
     return hash_equals($hash, (string) $password);
 }
 
+function wp_check_invalid_utf8($text, $strip = false)
+{
+    $text = (string) $text;
+    if ('' === $text) {
+        return '';
+    }
+    return mb_check_encoding($text, 'UTF-8') ? $text : '';
+}
+
 function wp_json_encode($value, $flags = 0)
 {
-    return json_encode($value, $flags);
+    // Core: encode; on failure sanitise every string and retry once.
+    $encoded = json_encode($value, $flags);
+    if (false !== $encoded) {
+        return $encoded;
+    }
+    $sanitise = function ($v) use (&$sanitise) {
+        if (is_string($v)) {
+            return wp_check_invalid_utf8($v);
+        }
+        if (is_array($v)) {
+            foreach ($v as $k => $item) {
+                $v[ $k ] = $sanitise($item);
+            }
+        }
+        return $v;
+    };
+    return json_encode($sanitise($value), $flags);
 }
 
 function wp_parse_args($args, $defaults = array())
@@ -1196,11 +1229,15 @@ function get_posts($args = array())
 function post_type_exists($post_type)
 {
     $known = array( 'post', 'page', 'wp_block', 'elementor_library', 'elementor_snippet' );
-    return in_array((string) $post_type, $known, true);
+    // Tests may register public custom types: $GLOBALS['mcpwp_test_public_post_types'] = array( 'sm_team' ).
+    return in_array((string) $post_type, $known, true) || in_array((string) $post_type, (array) ($GLOBALS['mcpwp_test_public_post_types'] ?? array()), true);
 }
 
 function post_type_supports($post_type, $feature)
 {
+    if (isset($GLOBALS['mcpwp_test_post_type_supports'][ (string) $post_type ])) {
+        return in_array($feature, (array) $GLOBALS['mcpwp_test_post_type_supports'][ (string) $post_type ], true);
+    }
     return in_array((string) $post_type, array( 'post', 'page' ), true);
 }
 
@@ -1409,7 +1446,7 @@ function get_post_type_object($post_type)
     }
     return (object) array(
         'name'   => $post_type,
-        'public' => in_array((string) $post_type, array( 'post', 'page' ), true),
+        'public' => in_array((string) $post_type, array( 'post', 'page' ), true) || in_array((string) $post_type, (array) ($GLOBALS['mcpwp_test_public_post_types'] ?? array()), true),
     );
 }
 
@@ -1425,6 +1462,7 @@ function wp_insert_post($postarr, $wp_error = false)
         'post_name'         => isset($postarr['post_name']) ? $postarr['post_name'] : sanitize_title(isset($postarr['post_title']) ? $postarr['post_title'] : ''),
         'post_status'       => isset($postarr['post_status']) ? $postarr['post_status'] : 'draft',
         'post_date'         => '2026-06-06 00:00:00',
+        'post_date_gmt'     => '2026-06-06 00:00:00',
         'post_modified'     => '2026-06-06 00:00:00',
         'post_modified_gmt' => '2026-06-06 00:00:00',
         'post_parent'       => 0,
@@ -1780,7 +1818,15 @@ function get_post_meta($post_id, $key = '', $single = false)
 {
     $post_id = (int) $post_id;
     if ('' === $key) {
-        return isset($GLOBALS['_mcpwp_test_meta'][ $post_id ]) ? $GLOBALS['_mcpwp_test_meta'][ $post_id ] : array();
+        // Core returns every key as a LIST of values (get_post_custom shape),
+        // not key => value; a double that flattened it hid a count() on a
+        // string in the meta listing (#797 round 4).
+        $all = isset($GLOBALS['_mcpwp_test_meta'][ $post_id ]) ? $GLOBALS['_mcpwp_test_meta'][ $post_id ] : array();
+        $out = array();
+        foreach ($all as $k => $v) {
+            $out[ $k ] = array($v);
+        }
+        return $out;
     }
     if (isset($GLOBALS['_mcpwp_test_meta'][ $post_id ][ $key ])) {
         return $GLOBALS['_mcpwp_test_meta'][ $post_id ][ $key ];
@@ -1801,6 +1847,13 @@ function update_post_meta($post_id, $key, $value)
     // A host that HTML-escapes meta on write can be simulated for tests that
     // need it (see KitCssChildCombinatorTest). Off by default so no existing
     // test changes behaviour.
+    // Core's update_metadata() runs sanitize_meta(), which applies a
+    // registered key's sanitize_callback. Without this the harness could not
+    // tell whether a callback ran.
+    if (function_exists('sanitize_meta')) {
+        $post = get_post((int) $post_id);
+        $value = sanitize_meta($key, $value, 'post', ($post && isset($post->post_type)) ? $post->post_type : '');
+    }
     if (! empty($GLOBALS['mcpwp_test_meta_escapes_html'])) {
         $value = mcpwp_test_escape_meta_deep($value);
     }
@@ -2093,6 +2146,7 @@ require_once dirname(__DIR__) . '/includes/core/class-mcpwp-public-route.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-page-settings.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-slug-search.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-idempotency-claim.php';
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-post-fields.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-registry.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-element-keys.php';
 require_once dirname(__DIR__) . '/includes/core/traits/trait-mcpwp-elementor-reader.php';
@@ -2167,3 +2221,191 @@ if (!defined('MINUTE_IN_SECONDS')) {
 
 // Cache for paid SEO lookups — bounds agent-loop spend on DataForSEO credit.
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-seo-cache.php';
+
+// ---------------------------------------------------------------------------
+// Taxonomy, term, registered-meta and thumbnail doubles (#797).
+//
+// Registry: $GLOBALS['_mcpwp_test_taxonomies'][ $tax ] = array(
+//     'object_type' => array( 'post', 'sm_team' ),
+//     'terms'       => array( 1522 => array( 'slug' => 'k12', 'name' => 'K-12' ) ),
+// );
+// Assignments: $GLOBALS['_mcpwp_test_object_terms'][ $post_id ][ $tax ] = array( ids ).
+// Registered meta: $GLOBALS['_mcpwp_test_registered_meta'][ $key ] = array(
+//     'object_subtype' => 'sm_team', 'sanitize_callback' => callable|null );
+// ---------------------------------------------------------------------------
+if (! function_exists('get_post_type')) {
+    function get_post_type($post = null)
+    {
+        $post = is_object($post) ? $post : get_post((int) $post);
+        return $post ? $post->post_type : false;
+    }
+}
+if (! function_exists('taxonomy_exists')) {
+    function taxonomy_exists($taxonomy)
+    {
+        return isset($GLOBALS['_mcpwp_test_taxonomies'][ $taxonomy ]);
+    }
+}
+if (! function_exists('is_object_in_taxonomy')) {
+    function is_object_in_taxonomy($object_type, $taxonomy)
+    {
+        $tax = $GLOBALS['_mcpwp_test_taxonomies'][ $taxonomy ] ?? null;
+        return $tax && in_array($object_type, (array) ($tax['object_type'] ?? array()), true);
+    }
+}
+if (! function_exists('get_object_taxonomies')) {
+    function get_object_taxonomies($object_type, $output = 'names')
+    {
+        $out = array();
+        foreach ($GLOBALS['_mcpwp_test_taxonomies'] ?? array() as $name => $tax) {
+            if (in_array($object_type, (array) ($tax['object_type'] ?? array()), true)) {
+                $out[] = $name;
+            }
+        }
+        return $out;
+    }
+}
+if (! function_exists('get_term')) {
+    function get_term($term_id, $taxonomy = '')
+    {
+        foreach ($GLOBALS['_mcpwp_test_taxonomies'] ?? array() as $name => $tax) {
+            if ('' !== $taxonomy && $name !== $taxonomy) {
+                continue;
+            }
+            if (isset($tax['terms'][ (int) $term_id ])) {
+                $t = $tax['terms'][ (int) $term_id ];
+                return (object) array( 'term_id' => (int) $term_id, 'slug' => $t['slug'], 'name' => $t['name'], 'taxonomy' => $name );
+            }
+        }
+        return null;
+    }
+}
+if (! function_exists('get_term_by')) {
+    function get_term_by($field, $value, $taxonomy = '')
+    {
+        $tax = $GLOBALS['_mcpwp_test_taxonomies'][ $taxonomy ] ?? null;
+        if (! $tax) {
+            return false;
+        }
+        foreach ($tax['terms'] ?? array() as $id => $t) {
+            if (('id' === $field && (int) $value === (int) $id) || ('slug' === $field && $t['slug'] === $value) || ('name' === $field && $t['name'] === $value)) {
+                return (object) array( 'term_id' => (int) $id, 'slug' => $t['slug'], 'name' => $t['name'], 'taxonomy' => $taxonomy );
+            }
+        }
+        return false;
+    }
+}
+if (! function_exists('wp_set_object_terms')) {
+    function wp_set_object_terms($object_id, $terms, $taxonomy, $append = false)
+    {
+        $ids = array_map('intval', (array) $terms);
+        if ($append) {
+            $ids = array_values(array_unique(array_merge($GLOBALS['_mcpwp_test_object_terms'][ $object_id ][ $taxonomy ] ?? array(), $ids)));
+        }
+        $GLOBALS['_mcpwp_test_object_terms'][ $object_id ][ $taxonomy ] = $ids;
+        return $ids;
+    }
+}
+if (! function_exists('wp_get_object_terms')) {
+    function wp_get_object_terms($object_ids, $taxonomies, $args = array())
+    {
+        $out = array();
+        foreach ((array) $object_ids as $oid) {
+            foreach ((array) $taxonomies as $tax) {
+                foreach ($GLOBALS['_mcpwp_test_object_terms'][ $oid ][ $tax ] ?? array() as $id) {
+                    $term = get_term($id, $tax);
+                    if ($term) {
+                        $out[] = $term;
+                    }
+                }
+            }
+        }
+        return $out;
+    }
+}
+if (! function_exists('wp_set_post_categories')) {
+    function wp_set_post_categories($post_id, $categories = array())
+    {
+        return wp_set_object_terms($post_id, $categories, 'category');
+    }
+}
+if (! function_exists('wp_set_post_tags')) {
+    function wp_set_post_tags($post_id, $tags = '', $append = false)
+    {
+        $GLOBALS['_mcpwp_test_object_terms'][ $post_id ]['post_tag'] = (array) $tags;
+        return (array) $tags;
+    }
+}
+if (! function_exists('wp_get_post_categories')) {
+    function wp_get_post_categories($post_id, $args = array())
+    {
+        return $GLOBALS['_mcpwp_test_object_terms'][ $post_id ]['category'] ?? array();
+    }
+}
+if (! function_exists('wp_get_post_tags')) {
+    function wp_get_post_tags($post_id, $args = array())
+    {
+        return array();
+    }
+}
+if (! function_exists('registered_meta_key_exists')) {
+    function registered_meta_key_exists($object_type, $meta_key, $object_subtype = '')
+    {
+        $reg = $GLOBALS['_mcpwp_test_registered_meta'][ $meta_key ] ?? null;
+        if (! $reg) {
+            return false;
+        }
+        return '' === ($reg['object_subtype'] ?? '') || $reg['object_subtype'] === $object_subtype;
+    }
+}
+if (! function_exists('get_registered_meta_keys')) {
+    function get_registered_meta_keys($object_type, $object_subtype = '')
+    {
+        $out = array();
+        foreach ($GLOBALS['_mcpwp_test_registered_meta'] ?? array() as $key => $reg) {
+            $sub = $reg['object_subtype'] ?? '';
+            if ('' === $sub || $sub === $object_subtype) {
+                $out[ $key ] = array( 'sanitize_callback' => $reg['sanitize_callback'] ?? null );
+            }
+        }
+        return $out;
+    }
+}
+if (! function_exists('is_protected_meta')) {
+    function is_protected_meta($meta_key, $meta_type = '')
+    {
+        return '_' === substr((string) $meta_key, 0, 1);
+    }
+}
+if (! function_exists('sanitize_meta')) {
+    function sanitize_meta($meta_key, $meta_value, $object_type, $object_subtype = '')
+    {
+        $reg = $GLOBALS['_mcpwp_test_registered_meta'][ $meta_key ] ?? null;
+        if ($reg && ! empty($reg['sanitize_callback']) && is_callable($reg['sanitize_callback'])) {
+            return call_user_func($reg['sanitize_callback'], $meta_value);
+        }
+        return $meta_value;
+    }
+}
+if (! function_exists('set_post_thumbnail')) {
+    function set_post_thumbnail($post, $thumbnail_id)
+    {
+        $id = is_object($post) ? $post->ID : (int) $post;
+        update_post_meta($id, '_thumbnail_id', (int) $thumbnail_id);
+        return true;
+    }
+}
+if (! function_exists('delete_post_thumbnail')) {
+    function delete_post_thumbnail($post)
+    {
+        $id = is_object($post) ? $post->ID : (int) $post;
+        delete_post_meta($id, '_thumbnail_id');
+        return true;
+    }
+}
+if (! function_exists('wp_get_attachment_image_src')) {
+    function wp_get_attachment_image_src($attachment_id, $size = 'thumbnail')
+    {
+        return array( 'https://example.test/media/' . (int) $attachment_id . '.jpg', 100, 100, false );
+    }
+}
