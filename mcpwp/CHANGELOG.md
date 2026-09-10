@@ -28,6 +28,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * say what changed and why when Elementor alters a tree it rendered ([#612](https://github.com/Mumega-com/mcpwp/issues/612)) ([#793](https://github.com/Mumega-com/mcpwp/issues/793)) ([f97523d](https://github.com/Mumega-com/mcpwp/commit/f97523d7f7459efdd908eb89ebe88a0080e22b5e))
 * stop two more silent Elementor failures ([#789](https://github.com/Mumega-com/mcpwp/issues/789), [#788](https://github.com/Mumega-com/mcpwp/issues/788)) ([#791](https://github.com/Mumega-com/mcpwp/issues/791)) ([7223768](https://github.com/Mumega-com/mcpwp/commit/72237688768bcb01bc7a515dcbff2e269abc03df))
 
+### Upgrade Notes
+
+* **Permanent deletes now wait for approval.** A delete with no undo returns `202` with `approval_required: true` and an `approval_id`, and nothing is removed until a different reviewer, or a WordPress administrator in the Control Room, approves and applies it. That covers `force=true`, deleting a post already in the trash, media, Elementor templates, widgets, users, course categories and custom post types, and purging all drafts with `force=true`. Moving a post, page, product or draft to the trash still runs immediately. An administrator can turn the default off in MCPWP Settings, or exempt a single key in wp-admin; neither can be done through the API.
+* **The option API follows one policy.** Salts, user roles, active plugins, cron, transients and MCPWP's own state are never reachable. Secret-shaped values read back as `***`, and overwriting a stored secret needs `allow_secrets: true`. `widget_*`, `sidebars_*` and `auto_update_*` options can no longer be written through it. A refusal is `403 forbidden_option` and names the rule that refused it.
+* **Post meta refuses secret-shaped keys on write and masks credentials on read**, by key name and by value shape. Keys with a leading underscore are written through `wp_set_post_meta` only.
+* **Batch-shaped calls are charged one rate-limit slot per operation.** At the default burst of 30, that is the largest batch one call can carry; raise `burst_limit` for larger ones.
+
 ## [3.10.8](https://github.com/Mumega-com/mcpwp/compare/v3.10.7...v3.10.8) (2026-09-07)
 
 
