@@ -864,8 +864,8 @@ class Mcpwp_Settings {
 	 *   always safe); a check is not, since no change can be proven.
 	 * - A write that names the key without the form (WordPress re-sanitizing
 	 *   its own output, the REST plugin-settings path writing the whole
-	 *   array): that value; the explicit record is kept only if the write
-	 *   carries it.
+	 *   array): that value; its record (explicit, or legacy for an opt-in
+	 *   stored before 3.11.1) is kept only if the write carries it.
 	 * - Anything else: the stored value and its record stay.
 	 *
 	 * @param array    $input     Input values.
@@ -875,7 +875,8 @@ class Mcpwp_Settings {
 	 */
 	private function resolve_analytics_choice( array $input, array $present, array $stored, array &$sanitized ) {
 		$key   = 'analytics_enabled';
-		$write = null; // array( value, explicit? ), or null to keep what is stored.
+		$write = null; // array( value, record or null ), or null to keep what is stored.
+		$known = array( 'explicit', 'legacy' );
 
 		if ( in_array( $key, $present, true ) ) {
 			$posted = ! empty( $input[ $key ] );
@@ -884,27 +885,28 @@ class Mcpwp_Settings {
 				: null;
 
 			if ( null === $shown ) {
-				$write = $posted ? null : array( false, true );
+				$write = $posted ? null : array( false, 'explicit' );
 			} elseif ( $posted !== $shown ) {
-				$write = array( $posted, true );
+				$write = array( $posted, 'explicit' );
 			}
 		} elseif ( array_key_exists( $key, $input ) ) {
-			$write = array( ! empty( $input[ $key ] ), isset( $input['analytics_choice'] ) && 'explicit' === $input['analytics_choice'] );
+			$record = isset( $input['analytics_choice'] ) && in_array( $input['analytics_choice'], $known, true ) ? $input['analytics_choice'] : null;
+			$write  = array( ! empty( $input[ $key ] ), $record );
 		}
 
 		if ( null === $write ) {
 			if ( array_key_exists( $key, $stored ) ) {
 				$sanitized[ $key ] = (bool) $stored[ $key ];
-				if ( isset( $stored['analytics_choice'] ) && 'explicit' === $stored['analytics_choice'] ) {
-					$sanitized['analytics_choice'] = 'explicit';
+				if ( isset( $stored['analytics_choice'] ) && in_array( $stored['analytics_choice'], $known, true ) ) {
+					$sanitized['analytics_choice'] = $stored['analytics_choice'];
 				}
 			}
 			return;
 		}
 
 		$sanitized[ $key ] = $write[0];
-		if ( $write[1] ) {
-			$sanitized['analytics_choice'] = 'explicit';
+		if ( null !== $write[1] ) {
+			$sanitized['analytics_choice'] = $write[1];
 		}
 	}
 

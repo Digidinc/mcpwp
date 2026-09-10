@@ -670,12 +670,12 @@ class Mcpwp_Migrate {
 	 * @return array|null
 	 */
 	/**
-	 * A 2.8 analytics opt-in was an administrator ticking an unchecked box, so
-	 * it must be recorded as an explicit choice (see
-	 * Mcpwp_Analytics::has_explicit_consent()). The copied settings are left
-	 * exactly as they were; clearing the stamp flag makes
-	 * Mcpwp_Activator::stamp_analytics_choice() — which runs after this
-	 * migration on plugin load — record it, even on a site that stamped before.
+	 * A 2.8 analytics opt-in cannot be attributed — any API key could write
+	 * spai_settings — so it must be labelled legacy, which is not consent on
+	 * Free (see Mcpwp_Activator::stamp_analytics_choice()). The copied settings
+	 * are left exactly as they were; clearing the stamp flag makes the stamp —
+	 * which runs after this migration on plugin load — label it, even on a
+	 * site that stamped before.
 	 *
 	 * @param array $settings Settings just written.
 	 */

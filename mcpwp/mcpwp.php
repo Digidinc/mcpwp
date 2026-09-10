@@ -469,9 +469,9 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 		Mcpwp_Activator::reset_destructive_switch();
 	}
 
-	// One-time: record analytics opt-ins stored before 3.11.1 as explicit
-	// choices, so Mcpwp_Analytics::is_enabled() can require one on Free. Runs
-	// after the bridge migration above. Own flag, same reasoning.
+	// One-time: label analytics opt-ins stored before 3.11.1 as legacy — any
+	// API key could write them — so they are not consent on Free. Runs after
+	// the bridge migration above. Own flag, same reasoning.
 	if ( ! get_option( 'mcpwp_analytics_choice_stamped' ) ) {
 		require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-activator.php';
 		Mcpwp_Activator::stamp_analytics_choice();
@@ -483,6 +483,11 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 
 	// Refuse a second installed copy and surface a double load (#802).
 	Mcpwp_Duplicate_Copy::register();
+
+	// A Free site whose analytics opt-in predates recorded consent: ask an
+	// administrator to confirm it; the notice can be dismissed (review r2 N1).
+	add_action( 'admin_notices', array( 'Mcpwp_Analytics', 'render_legacy_consent_notice' ) );
+	add_action( 'admin_post_mcpwp_dismiss_analytics_notice', array( 'Mcpwp_Analytics', 'handle_dismiss_legacy_notice' ) );
 
 	// Wire analytics: Mcpwp_Analytics listens on every MCP tool call.
 	add_action( 'mcpwp_tool_called', array( 'Mcpwp_Analytics', 'on_tool_called' ), 10, 4 );
