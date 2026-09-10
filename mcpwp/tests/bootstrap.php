@@ -2249,6 +2249,7 @@ require_once dirname(__DIR__) . '/includes/core/class-mcpwp-option-access.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-destructive-gate.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-registry.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-element-keys.php';
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-element-ids.php';
 require_once dirname(__DIR__) . '/includes/core/traits/trait-mcpwp-elementor-reader.php';
 require_once dirname(__DIR__) . '/includes/core/traits/trait-mcpwp-elementor-writer.php';
 require_once dirname(__DIR__) . '/includes/core/traits/trait-mcpwp-elementor-validator.php';

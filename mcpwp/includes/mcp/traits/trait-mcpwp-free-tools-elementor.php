@@ -115,7 +115,7 @@ trait Mcpwp_Free_Tools_Elementor_Trait {
 				),
 				'widget_id'       => array(
 					'type'        => 'string',
-					'description' => 'Elementor widget element ID (8-char alphanumeric, from summary or previous get)',
+					'description' => 'Elementor widget element ID, from wp_get_elementor_summary or a previous get',
 					'required'    => true,
 				),
 				'settings'        => array(
@@ -167,7 +167,7 @@ trait Mcpwp_Free_Tools_Elementor_Trait {
 				),
 				'element_id' => array(
 					'type'        => 'string',
-					'description' => 'The 8-char Elementor element ID to remove',
+					'description' => 'The Elementor element ID to remove',
 					'required'    => true,
 				),
 			)
@@ -184,7 +184,7 @@ trait Mcpwp_Free_Tools_Elementor_Trait {
 				),
 				'element_id' => array(
 					'type'        => 'string',
-					'description' => 'The 8-char Elementor element ID to replace',
+					'description' => 'The Elementor element ID to replace',
 					'required'    => true,
 				),
 				'element'    => array(
@@ -202,7 +202,7 @@ trait Mcpwp_Free_Tools_Elementor_Trait {
 
 		$tools[] = $this->define_tool(
 			'wp_patch_elementor',
-			'Apply multiple operations to an Elementor page in a single read-write cycle (max 20 ops). More efficient than calling add/remove/replace individually. Operations: add, remove, replace, settings. Get element IDs from wp_get_elementor_summary first.',
+			'Apply multiple operations to an Elementor page in a single read-write cycle (max 20 ops). More efficient than calling add/remove/replace individually. Operations: add, remove, replace, settings. Get element IDs from wp_get_elementor_summary first. Pass repair_ids=true (operations optional) to rewrite element ids that are not exactly 7 alphanumeric characters — Elementor Pro\'s Search live results and Taxonomy Filter/Loop Grid AJAX reject them — and repoint selected_element references; the response\'s id_repair lists every old -> new id.',
 			array(
 				'page_id'    => array(
 					'type'        => 'integer',
@@ -211,8 +211,7 @@ trait Mcpwp_Free_Tools_Elementor_Trait {
 				),
 				'operations' => array(
 					'type'        => 'array',
-					'description' => 'Array of operations (maximum ' . Mcpwp_Elementor_Basic::MAX_PATCH_OPERATIONS . '). Each: {op: "add"|"remove"|"replace"|"settings", element_id: "...", element: {...}, position: "...", settings: {...}, delete_settings: [...]}',
-					'required'    => true,
+					'description' => 'Array of operations (maximum ' . Mcpwp_Elementor_Basic::MAX_PATCH_OPERATIONS . '). Each: {op: "add"|"remove"|"replace"|"settings", element_id: "...", element: {...}, position: "...", settings: {...}, delete_settings: [...]}. Required unless repair_ids is true.',
 					// Machine-readable, so a client can refuse an over-long
 					// batch before spending a round trip on it (#785).
 					'maxItems'    => Mcpwp_Elementor_Basic::MAX_PATCH_OPERATIONS,
@@ -236,6 +235,11 @@ trait Mcpwp_Free_Tools_Elementor_Trait {
 						),
 						'required'   => array( 'op' ),
 					),
+				),
+				'repair_ids' => array(
+					'type'        => 'boolean',
+					'description' => 'Rewrite every element id on the page that is not exactly 7 alphanumeric characters to a fresh 7-character id, after the operations run, and repoint selected_element settings that referenced an old id. Existing ids are otherwise never rewritten, because CSS (.elementor-element-<id>) and other widgets refer to them; the response\'s id_repair lists old -> new ids and possible_references to update by hand.',
+					'default'     => false,
 				),
 				'convert'    => array(
 					'type'        => 'boolean',
@@ -265,6 +269,11 @@ trait Mcpwp_Free_Tools_Elementor_Trait {
 				'dry_run'        => array(
 					'type'        => 'boolean',
 					'description' => 'If true, validate only — no changes are saved. Returns warnings and fixes without writing to database.',
+					'default'     => false,
+				),
+				'repair_ids'     => array(
+					'type'        => 'boolean',
+					'description' => 'Rewrite element ids in the data you send that are not exactly 7 alphanumeric characters (Elementor Pro\'s Search and Taxonomy Filter/Loop Grid AJAX reject them) to fresh 7-character ids, repointing selected_element references. The response\'s id_repair lists old -> new ids and settings that may still name an old id. Combine with dry_run=true to preview.',
 					'default'     => false,
 				),
 				'convert'    => array(

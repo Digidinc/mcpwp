@@ -170,12 +170,12 @@ class Mcpwp_Page_Builder {
 	}
 
 	/**
-	 * Generate a unique 8-char element ID.
+	 * Generate an element ID Elementor Pro's AJAX endpoints accept (#842).
 	 *
-	 * @return string
+	 * @return string Seven lowercase alphanumerics.
 	 */
 	private function id() {
-		return substr( bin2hex( random_bytes( 4 ) ), 0, 8 );
+		return Mcpwp_Elementor_Element_Ids::generate();
 	}
 
 	// ---------------------------------------------------------------

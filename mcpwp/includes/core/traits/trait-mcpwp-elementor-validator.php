@@ -147,13 +147,20 @@ trait Mcpwp_Elementor_Validator_Trait {
 	 * 3. Rename known wrong control keys
 	 * 4. Validate element structure and nesting
 	 * 5. Flag suspicious/unknown control keys
+	 * and, after the walk, flags element ids Elementor Pro's AJAX endpoints
+	 * reject — rewriting them only when `repair_ids` is set (#842).
 	 *
 	 * Modifies $elementor_json in-place (reference).
 	 *
 	 * @param string &$elementor_json JSON string (modified in-place).
-	 * @return array Associative array with 'warnings', 'fixes', and 'errors' arrays.
+	 * @param array  $options {
+	 *     @type bool $repair_ids Rewrite ids that are not exactly 7 alphanumeric
+	 *                            characters and repoint references to them.
+	 * }
+	 * @return array Associative array with 'warnings', 'fixes', and 'errors'
+	 *               arrays, plus 'id_repair' when repair_ids was requested.
 	 */
-	private function validate_and_fix_elements( &$elementor_json ) {
+	private function validate_and_fix_elements( &$elementor_json, array $options = array() ) {
 		$elements = json_decode( $elementor_json, true );
 		if ( ! is_array( $elements ) ) {
 			return array(
@@ -417,16 +424,55 @@ trait Mcpwp_Elementor_Validator_Trait {
 		}
 		unset( $el );
 
+		// --- 8. Element ids Elementor Pro's AJAX endpoints will accept (#842) ---
+		//
+		// After the walk, so ids it generated or de-duplicated are already in
+		// place. Rewriting is opt-in: ids are CSS selectors and other widgets
+		// point at them, so the default is to say which ones are wrong and
+		// leave them. The rule and the reasoning live in
+		// Mcpwp_Elementor_Element_Ids.
+		$id_repair = null;
+
+		if ( ! empty( $options['repair_ids'] ) ) {
+			$repaired  = Mcpwp_Elementor_Element_Ids::repair( $elements );
+			$id_repair = $repaired['report'];
+
+			if ( ! empty( $id_repair['rewritten'] ) ) {
+				$elements = $repaired['elements'];
+				$changed  = true;
+			}
+
+			foreach ( $id_repair['rewritten'] as $row ) {
+				$fixes[] = "{$row['path']}: rewrote id '{$row['from']}' -> '{$row['to']}' (Elementor Pro's AJAX endpoints accept only " . Mcpwp_Elementor_Element_Ids::LENGTH . '-character alphanumeric ids)';
+			}
+			foreach ( $id_repair['references_repointed'] as $row ) {
+				$fixes[] = "{$row['path']}: repointed {$row['key']} '{$row['from']}' -> '{$row['to']}'";
+			}
+		}
+
+		$warnings = array_merge(
+			$warnings,
+			Mcpwp_Elementor_Element_Ids::warnings( Mcpwp_Elementor_Element_Ids::audit( $elements ) )
+		);
+
 		// Re-encode if any fixes were applied.
 		if ( $changed ) {
 			$elementor_json = wp_json_encode( $elements );
 		}
 
-		return array(
+		$result = array(
 			'warnings' => $warnings,
 			'fixes'    => $fixes,
 			'errors'   => $errors,
 		);
+
+		// Present only when asked for, and then always — "asked, nothing to
+		// rewrite" carries a report saying so, never an absent key.
+		if ( null !== $id_repair ) {
+			$result['id_repair'] = $id_repair;
+		}
+
+		return $result;
 	}
 
 	/**

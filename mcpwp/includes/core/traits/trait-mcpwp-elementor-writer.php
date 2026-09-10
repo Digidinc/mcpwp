@@ -666,6 +666,16 @@ trait Mcpwp_Elementor_Writer_Trait {
 	}
 
 	/**
+	 * Carry an explicit id-repair opt-in (#842) from a request payload to the validator.
+	 *
+	 * @param mixed $data Request payload.
+	 * @return array Options for validate_and_fix_elements() / save_elements_to_page().
+	 */
+	private function id_repair_options( $data ) {
+		return array( 'repair_ids' => is_array( $data ) && ! empty( $data['repair_ids'] ) );
+	}
+
+	/**
 	 * Stop a write that would convert a page built with something else.
 	 *
 	 * The surgical operations accept any post ID that get_post() resolves.
@@ -909,7 +919,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 				: 'This site uses classic layout mode. Use "section" > "column" > widget structure.';
 		}
 
-		$structure_hint = 'Elementor data must be a JSON array of element objects. Each element needs: id (8-char alphanumeric), elType ("section"/"column"/"widget" or "container"), settings (object), elements (array). ' . $layout_hint . ' Use wp_get_elementor on an existing page to see the expected format.';
+		$structure_hint = 'Elementor data must be a JSON array of element objects. Each element needs: id (exactly 7 alphanumeric characters), elType ("section"/"column"/"widget" or "container"), settings (object), elements (array). ' . $layout_hint . ' Use wp_get_elementor on an existing page to see the expected format.';
 
 		// Validate and encode data
 		$elementor_json = null;
@@ -1100,7 +1110,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 		// --- Dry-run mode: validate only, no DB writes ---
 		if ( $dry_run ) {
 			$dry_json   = $elementor_json; // work on a copy
-			$validation = $this->validate_and_fix_elements( $dry_json );
+			$validation = $this->validate_and_fix_elements( $dry_json, $this->id_repair_options( $data ) );
 
 			if ( ! empty( $validation['errors'] ) ) {
 				return new WP_Error(
@@ -1139,6 +1149,10 @@ trait Mcpwp_Elementor_Writer_Trait {
 				'validation_fixes'    => $validation['fixes'],
 				'validation_warnings' => $validation['warnings'],
 			);
+
+			if ( isset( $validation['id_repair'] ) ) {
+				$result['id_repair'] = $validation['id_repair'];
+			}
 
 			return $result;
 		}
@@ -1222,7 +1236,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 		$input_count = count( json_decode( $elementor_json, true ) ?: array() );
 		$save_debug['sections_submitted'] = $input_count;
 
-		$validation = $this->validate_and_fix_elements( $elementor_json );
+		$validation = $this->validate_and_fix_elements( $elementor_json, $this->id_repair_options( $data ) );
 		if ( ! empty( $validation['errors'] ) ) {
 			return new WP_Error(
 				'invalid_elementor_structure',
@@ -1236,6 +1250,9 @@ trait Mcpwp_Elementor_Writer_Trait {
 		if ( ! empty( $validation['fixes'] ) || ! empty( $validation['warnings'] ) ) {
 			$save_debug['validation_fixes']    = $validation['fixes'];
 			$save_debug['validation_warnings'] = $validation['warnings'];
+		}
+		if ( isset( $validation['id_repair'] ) ) {
+			$save_debug['id_repair'] = $validation['id_repair'];
 		}
 
 		// Safety check: ensure validation did not corrupt or truncate the data.
@@ -1591,6 +1608,10 @@ trait Mcpwp_Elementor_Writer_Trait {
 			'next_step'          => sprintf( 'Call wp_get_elementor_summary(id=%d) to verify the page structure.', $page_id ),
 		);
 
+		if ( isset( $save_debug['id_repair'] ) ) {
+			$result['id_repair'] = $save_debug['id_repair'];
+		}
+
 		if ( ! empty( $all_warnings ) ) {
 			$result['warnings'] = $all_warnings;
 		}
@@ -1698,17 +1719,12 @@ trait Mcpwp_Elementor_Writer_Trait {
 	}
 
 	/**
-	 * Generate a random 8-character element ID matching Elementor's format.
+	 * Generate an element ID Elementor Pro's AJAX endpoints accept (#842).
 	 *
-	 * @return string Random ID.
+	 * @return string Seven lowercase alphanumerics.
 	 */
 	private function generate_element_id() {
-		$chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
-		$id    = '';
-		for ( $i = 0; $i < 8; $i++ ) {
-			$id .= $chars[ wp_rand( 0, 35 ) ];
-		}
-		return $id;
+		return Mcpwp_Elementor_Element_Ids::generate();
 	}
 
 	/**
@@ -1886,11 +1902,11 @@ trait Mcpwp_Elementor_Writer_Trait {
 	 * Edit a single widget's settings by widget ID.
 	 *
 	 * Lightweight alternative to edit_section that targets widgets specifically.
-	 * Loads current elementor_data, finds the widget by its 8-char ID, merges
+	 * Loads current elementor_data, finds the widget by its element ID, merges
 	 * new settings, and saves the updated data.
 	 *
 	 * @param int    $page_id   Page/post ID.
-	 * @param string $widget_id The 8-char Elementor element ID of the widget.
+	 * @param string $widget_id The Elementor element ID of the widget.
 	 * @param array  $settings  Settings to merge into the widget.
 	 * @param array  $delete_settings Optional setting keys to remove.
 	 * @return array|WP_Error Result with the modified widget, or error.
@@ -2060,7 +2076,9 @@ trait Mcpwp_Elementor_Writer_Trait {
 	 *
 	 * @param int   $page_id  Page/post ID.
 	 * @param array $elements Full top-level element array.
-	 * @param array $options  Reserved for future options.
+	 * @param array $options  `convert` opts in to converting non-Elementor
+	 *                        content (#788); `repair_ids` rewrites element ids
+	 *                        Elementor Pro's AJAX endpoints reject (#842).
 	 * @return array|WP_Error Debug info array or WP_Error on failure.
 	 */
 	protected function save_elements_to_page( $page_id, $elements, $options = array() ) {
@@ -2080,12 +2098,15 @@ trait Mcpwp_Elementor_Writer_Trait {
 		$debug['sections_submitted'] = $input_count;
 
 		// Validate and fix (before write).
-		$validation = $this->validate_and_fix_elements( $elementor_json );
+		$validation = $this->validate_and_fix_elements( $elementor_json, $this->id_repair_options( $options ) );
 		if ( ! empty( $validation['errors'] ) ) {
 			return new WP_Error( 'invalid_elementor_structure', implode( ' | ', $validation['errors'] ), array( 'status' => 400, 'validation_errors' => $validation['errors'] ) );
 		}
 		$debug['validation_fixes']    = $validation['fixes'];
 		$debug['validation_warnings'] = $validation['warnings'];
+		if ( isset( $validation['id_repair'] ) ) {
+			$debug['id_repair'] = $validation['id_repair'];
+		}
 
 		// Safety check: validation didn't corrupt data.
 		$post_val = json_decode( $elementor_json, true );
@@ -2651,9 +2672,12 @@ trait Mcpwp_Elementor_Writer_Trait {
 			return new WP_Error( 'invalid_page', 'Page not found.', array( 'status' => 404 ) );
 		}
 
+		// A repair-only patch (#842) carries no operations: it rewrites the
+		// page's non-conforming element ids and changes nothing else.
+		$repair_ids = is_array( $data ) && ! empty( $data['repair_ids'] );
 		$operations = isset( $data['operations'] ) ? $data['operations'] : array();
-		if ( empty( $operations ) || ! is_array( $operations ) ) {
-			return new WP_Error( 'no_operations', 'operations array is required.', array( 'status' => 400 ) );
+		if ( ! is_array( $operations ) || ( empty( $operations ) && ! $repair_ids ) ) {
+			return new WP_Error( 'no_operations', 'operations array is required (or pass repair_ids=true to rewrite non-conforming element ids without other changes).', array( 'status' => 400 ) );
 		}
 
 		if ( count( $operations ) > self::MAX_PATCH_OPERATIONS ) {
@@ -2665,7 +2689,31 @@ trait Mcpwp_Elementor_Writer_Trait {
 		}
 
 		$raw      = get_post_meta( $page_id, '_elementor_data', true );
-		$elements = json_decode( $raw, true );
+		$elements = is_string( $raw ) ? json_decode( $raw, true ) : null;
+
+		if ( empty( $operations ) ) {
+			// Repair only. "No Elementor data", "data that cannot be read"
+			// and "nothing to rewrite" are three different answers, and none
+			// of them is a write.
+			if ( ! is_string( $raw ) || '' === $raw ) {
+				return new WP_Error( 'no_elementor_data', 'This page has no Elementor data, so there are no element ids to repair. Nothing was written.', array( 'status' => 404 ) );
+			}
+			if ( ! is_array( $elements ) ) {
+				return new WP_Error( 'invalid_elementor_data', 'This page\'s Elementor data could not be decoded, so its element ids could not be checked. Nothing was written.', array( 'status' => 422 ) );
+			}
+
+			$preview = Mcpwp_Elementor_Element_Ids::repair( $elements );
+			if ( empty( $preview['report']['rewritten'] ) ) {
+				return array(
+					'success'    => true,
+					'page_id'    => (int) $page_id,
+					'operations' => array(),
+					'written'    => false,
+					'id_repair'  => $preview['report'],
+				);
+			}
+		}
+
 		if ( ! is_array( $elements ) ) {
 			$elements = array();
 		}
@@ -2804,7 +2852,11 @@ trait Mcpwp_Elementor_Writer_Trait {
 		}
 
 		// Save once.
-		$debug = $this->save_elements_to_page( $page_id, $elements, $this->conversion_options( $data ?? array() ) );
+		$debug = $this->save_elements_to_page(
+			$page_id,
+			$elements,
+			array_merge( $this->conversion_options( $data ?? array() ), $this->id_repair_options( $data ) )
+		);
 		if ( is_wp_error( $debug ) ) {
 			return $debug;
 		}
@@ -2823,6 +2875,9 @@ trait Mcpwp_Elementor_Writer_Trait {
 		);
 		if ( ! empty( $all_warnings ) ) {
 			$result['warnings'] = $all_warnings;
+		}
+		if ( isset( $debug['id_repair'] ) ) {
+			$result['id_repair'] = $debug['id_repair'];
 		}
 
 		$result = $this->decorate_render_status( $result, $debug );

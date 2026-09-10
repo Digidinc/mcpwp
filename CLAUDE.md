@@ -57,7 +57,7 @@ PAGE=$(curl -s -X POST http://localhost:8086/wp-json/mcpwp/v1/pages \
 
 curl -s -X POST "http://localhost:8086/wp-json/mcpwp/v1/elementor/$PAGE" \
   -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
-  -d '{"elementor_data":"[{\"id\":\"abc\",\"elType\":\"section\",\"settings\":{},\"elements\":[{\"id\":\"def\",\"elType\":\"column\",\"settings\":{\"_column_size\":100},\"elements\":[{\"id\":\"ghi\",\"elType\":\"widget\",\"widgetType\":\"heading\",\"settings\":{\"title\":\"Hello\"}}]}]}]"}' | jq
+  -d '{"elementor_data":"[{\"id\":\"abc0001\",\"elType\":\"section\",\"settings\":{},\"elements\":[{\"id\":\"def0001\",\"elType\":\"column\",\"settings\":{\"_column_size\":100},\"elements\":[{\"id\":\"ghi0001\",\"elType\":\"widget\",\"widgetType\":\"heading\",\"settings\":{\"title\":\"Hello\"}}]}]}]"}' | jq
 ```
 
 ### WP-CLI Shortcuts
@@ -573,7 +573,7 @@ container → container(s) → widget(s)  # Flexbox layout (check elementor_layo
 ```
 
 ### Critical Rules
-1. **Every element MUST have an `id`** (8 char alphanumeric) — plugin auto-generates if missing
+1. **Every element MUST have an `id`** of exactly 7 alphanumeric characters — Elementor Pro's Search and Taxonomy Filter/Loop Grid AJAX reject any other length (400 `widget_id`, silent on the front end). The plugin auto-generates missing ids, warns about non-conforming ones, and rewrites them only with `repair_ids=true` on `wp_patch_elementor` / `wp_set_elementor`
 2. **Use correct widget control keys** — wrong keys silently break rendering (plugin warns now)
 3. **Sections need `_column_size`** on columns (must sum to 100)
 4. **Multi-column sections** need `"structure": "20"` (2-col), `"30"` (3-col), `"40"` (4-col)
@@ -581,13 +581,13 @@ container → container(s) → widget(s)  # Flexbox layout (check elementor_layo
 ### Minimal Page Example
 ```json
 [{
-  "id": "sec1", "elType": "section",
+  "id": "sec0001", "elType": "section",
   "settings": {"background_background": "classic", "background_color": "#FFFFFF"},
   "elements": [{
-    "id": "col1", "elType": "column",
+    "id": "col0001", "elType": "column",
     "settings": {"_column_size": 100},
     "elements": [{
-      "id": "w1", "elType": "widget", "widgetType": "heading",
+      "id": "wid0001", "elType": "widget", "widgetType": "heading",
       "settings": {"title": "Hello World", "header_size": "h1", "align": "center"}
     }]
   }]
