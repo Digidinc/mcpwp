@@ -1193,7 +1193,12 @@ trait Mcpwp_Free_Tools_Site_Trait {
 				),
 				'scope'     => array(
 					'type'        => 'string',
-					'description' => 'Pass "site" to run across every Elementor post. Site-wide is opt-in; an empty ids list is refused, never widened.',
+					'enum'        => array( 'site' ),
+					'description' => 'Pass "site" to run across every Elementor post (admin-scoped key required, as for post_type). Site-wide is opt-in; an empty ids list is refused, never widened.',
+				),
+				'allow_compounding' => array(
+					'type'        => 'boolean',
+					'description' => 'Confirm a replacement that contains its own search text ("Acme" → "Acme Group"), which would compound on a retry. Refused otherwise.',
 				),
 				'offset'    => array(
 					'type'        => 'integer',

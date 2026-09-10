@@ -263,6 +263,75 @@ final class BulkShapesTest extends TestCase {
 		$this->assertStringContainsString( 'old-brand', get_post_meta( 1, '_elementor_data', true ) );
 	}
 
+	public function test_a_named_id_that_was_not_touched_is_reported_with_why(): void {
+		$this->seed( 1, 'page', 'Home', $this->elementor_with( 'old-brand' ) );
+		$this->seed( 2, 'page', 'Plain' );                      // no Elementor data
+		$this->seed( 3, 'page', 'Clean', $this->elementor_with( 'nothing' ) );
+		$this->seed( 4, 'attachment', 'Img', $this->elementor_with( 'old-brand' ) );
+
+		$data = $this->find_replace( array( 'search' => 'old-brand', 'replace' => 'x', 'ids' => array( 1, 2, 3, 4, 999 ), 'dry_run' => true ) )->get_data();
+
+		$this->assertSame( array( 1 ), array_column( $data['matched'], 'id' ) );
+		$this->assertSame(
+			array( 2 => 'no_elementor_data', 3 => 'no_match', 4 => 'type_not_supported', 999 => 'not_found' ),
+			array_column( $data['not_touched'], 'reason', 'id' ),
+			'A miss is never an empty success: each id asked for and not touched says why.'
+		);
+		$this->assertSame( array( 1, 2, 3, 4, 999 ), $data['ids'], 'The scope is echoed so a resume can repeat it.' );
+	}
+
+	public function test_a_replacement_that_contains_its_search_is_refused_unless_confirmed(): void {
+		$this->seed( 1, 'page', 'Home', $this->elementor_with( 'Acme' ) );
+
+		$refused = $this->find_replace( array( 'search' => 'Acme', 'replace' => 'Acme Group', 'ids' => array( 1 ) ) );
+		$this->assertInstanceOf( WP_Error::class, $refused );
+		$this->assertSame( 'compounding_replacement', $refused->get_error_code(), 'Run twice this yields "Acme Group Group"; a retry after a lost response is the common case.' );
+
+		$ok = $this->find_replace( array( 'search' => 'Acme', 'replace' => 'Acme Group', 'ids' => array( 1 ), 'allow_compounding' => true ) );
+		$this->assertInstanceOf( WP_REST_Response::class, $ok );
+	}
+
+	public function test_only_elementor_content_types_are_ever_touched(): void {
+		// Exactly what validate_post() lets every other Elementor route read.
+		$method = new ReflectionMethod( Mcpwp_REST_Elementor::class, 'find_replace_allowed_types' );
+		$method->setAccessible( true );
+
+		$this->assertSame( array( 'page', 'post', 'elementor_library', 'elementor_snippet' ), $method->invoke( new Mcpwp_REST_Elementor() ) );
+	}
+
+	public function test_a_site_or_type_wide_run_needs_an_admin_key_but_named_ids_do_not(): void {
+		$this->seed( 1, 'page', 'Home', $this->elementor_with( 'old-brand' ) );
+		$GLOBALS['mcpwp_test_filters'] = array();
+		$writer = ( new Mcpwp_REST_Elementor() )->create_scoped_api_key( 'writer', array( 'read', 'write' ), 'editor' );
+
+		foreach ( array( array( 'scope' => 'site' ), array( 'post_type' => 'page' ) ) as $wide ) {
+			$controller = new Mcpwp_REST_Elementor();
+			$request    = new WP_REST_Request( 'POST', '/mcpwp/v1/elementor/find-replace', array_merge( array( 'search' => 'old-brand', 'replace' => 'x', 'dry_run' => true ), $wide ), array( 'X-API-Key' => $writer['key'] ) );
+			$this->assertTrue( $controller->verify_api_key( $request ) );
+			$result = $controller->find_replace_many( $request );
+			$this->assertInstanceOf( WP_Error::class, $result, wp_json_encode( $wide ) );
+			$this->assertSame( 'admin_scope_required', $result->get_error_code() );
+		}
+
+		$controller = new Mcpwp_REST_Elementor();
+		$request    = new WP_REST_Request( 'POST', '/mcpwp/v1/elementor/find-replace', array( 'search' => 'old-brand', 'replace' => 'x', 'dry_run' => true, 'ids' => array( 1 ) ), array( 'X-API-Key' => $writer['key'] ) );
+		$this->assertTrue( $controller->verify_api_key( $request ) );
+		$this->assertInstanceOf( WP_REST_Response::class, $controller->find_replace_many( $request ), 'Named ids stay at write scope.' );
+	}
+
+	public function test_an_unrecognised_scope_value_is_named_not_treated_as_absent(): void {
+		$result = $this->find_replace( array( 'search' => 'a', 'replace' => 'b', 'scope' => 'all' ) );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'invalid_scope', $result->get_error_code() );
+	}
+
+	public function test_too_many_ids_is_refused_with_the_cap(): void {
+		$result = $this->find_replace( array( 'search' => 'a', 'replace' => 'b', 'ids' => range( 1, Mcpwp_REST_Elementor::FIND_REPLACE_MAX_POSTS + 1 ) ) );
+
+		$this->assertSame( 'too_many_ids', $result->get_error_code() );
+	}
+
 	public function test_a_post_type_outside_elementor_content_is_refused(): void {
 		$this->seed( 9, 'revision', 'Rev', $this->elementor_with( 'old-brand' ) );
 

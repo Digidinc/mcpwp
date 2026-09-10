@@ -422,6 +422,11 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 							'type'        => 'integer',
 							'default'     => 0,
 						),
+						'allow_compounding' => array(
+							'description' => __( 'Confirm a replacement that contains its own search text.', 'mcpwp' ),
+							'type'        => 'boolean',
+							'default'     => false,
+						),
 						'dry_run'   => array(
 							'description' => __( 'Report without writing.', 'mcpwp' ),
 							'type'        => 'boolean',
@@ -1088,23 +1093,29 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 	}
 
 	/**
-	 * Find/replace across many posts (#803).
-	 *
-	 * Scope is `id`, then `ids`, then `post_type`, then every post that has
-	 * Elementor data. `dry_run` reports per-post counts without writing.
-	 * Three things are kept apart in the response because a caller acts on
-	 * them differently: nothing scanned, nothing matched, and data that could
-	 * not be read.
-	 *
-	 * @param WP_REST_Request $request Request.
-	 * @return WP_REST_Response|WP_Error
-	 */
-	/**
 	 * How many posts one find/replace run touches. A truncated run says so
 	 * and hands back next_offset; nothing silently stops mid-loop.
 	 */
 	const FIND_REPLACE_MAX_POSTS = 200;
 
+	/**
+	 * Wall-clock budget for one run, in seconds. A host timeout at post 120
+	 * of 200 would leave 120 rewritten with no resume point; stopping early
+	 * with next_offset is the honest version of the same limit.
+	 */
+	const FIND_REPLACE_TIME_BUDGET = 20;
+
+	/**
+	 * Find/replace across many posts (#803).
+	 *
+	 * Scope is explicit: id, ids, post_type, or scope=site. `dry_run` reports
+	 * per-post counts without writing. The response keeps apart: nothing
+	 * scanned, nothing matched, data that could not be read, and — for an
+	 * id scope — ids that were asked for and not touched, each with why.
+	 *
+	 * @param WP_REST_Request $request Request.
+	 * @return WP_REST_Response|WP_Error
+	 */
 	public function find_replace_many( $request ) {
 		$this->log_activity( 'elementor_find_replace_many', $request );
 
@@ -1117,6 +1128,17 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 			return $this->error_response( 'missing_search', __( 'search is required.', 'mcpwp' ), 400 );
 		}
 
+		// "Acme" → "Acme Group" applied twice yields "Acme Group Group". A
+		// retry after a lost response is the common case, so a replacement
+		// that contains its own search text is refused unless asked for.
+		if ( false !== strpos( $replace, $search ) && ! rest_sanitize_boolean( $request->get_param( 'allow_compounding' ) ) ) {
+			return $this->error_response(
+				'compounding_replacement',
+				__( 'replace contains search, so running this twice would compound ("Acme" → "Acme Group" → "Acme Group Group"). Pass allow_compounding=true if that is intended, and never retry it blind.', 'mcpwp' ),
+				400
+			);
+		}
+
 		// Scope is explicit: exactly one of id, ids, post_type, scope=site.
 		// A scope that resolves to nothing is a refusal, never a widening —
 		// `ids: []` from an agent whose candidate list came back empty must be
@@ -1124,6 +1146,21 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 		$scope = $this->resolve_find_replace_scope( $request );
 		if ( is_wp_error( $scope ) ) {
 			return $scope;
+		}
+
+		// A run across a whole type or the whole site rewrites content the
+		// caller has not named. That is the class of operation this plugin
+		// keeps behind admin scope (wp_deploy_site_blueprint, wp_push_to_live,
+		// wp_delete_all_drafts); a named-id run stays at write scope.
+		if ( in_array( $scope['label'], array( 'site' ), true ) || 0 === strpos( $scope['label'], 'post_type:' ) ) {
+			$record = $this->get_current_api_key_record();
+			if ( is_array( $record ) && ! $this->key_has_scope( $record, 'admin' ) ) {
+				return $this->error_response(
+					'admin_scope_required',
+					__( 'A site-wide or per-type find/replace needs an admin-scoped key. Name the posts with id or ids to run at write scope.', 'mcpwp' ),
+					403
+				);
+			}
 		}
 
 		$query_args = array(
@@ -1153,8 +1190,17 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 		$scanned    = 0;
 		$empty      = 0;
 		$total      = 0;
+		$started    = microtime( true );
+		$processed  = 0;
+		$out_of_time = false;
 
 		foreach ( $found as $candidate ) {
+			if ( ( microtime( true ) - $started ) > self::FIND_REPLACE_TIME_BUDGET ) {
+				$out_of_time = true;
+				break;
+			}
+			$processed++;
+
 			$post_id = is_object( $candidate ) ? (int) $candidate->ID : (int) $candidate;
 
 			// The same gate the single-post route applies: never a type this
@@ -1220,26 +1266,57 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 			$matched[] = $entry;
 		}
 
+		// For a named-id scope, every id asked for and not touched is reported
+		// with why. A miss must never read as an empty success.
+		$not_touched = array();
+		if ( ! empty( $scope['ids'] ) ) {
+			$touched = array_merge( array_column( $matched, 'id' ), array_column( $unreadable, 'id' ) );
+			foreach ( $scope['ids'] as $wanted ) {
+				if ( in_array( $wanted, $touched, true ) ) {
+					continue;
+				}
+				$post = get_post( $wanted );
+				if ( ! $post ) {
+					$reason = 'not_found';
+				} elseif ( ! in_array( $post->post_type, $scope['post_types'], true ) ) {
+					$reason = 'type_not_supported';
+				} elseif ( '' === (string) get_post_meta( $wanted, '_elementor_data', true ) ) {
+					$reason = 'no_elementor_data';
+				} else {
+					$reason = 'no_match';
+				}
+				$not_touched[] = array( 'id' => $wanted, 'reason' => $reason );
+			}
+		}
+
 		$response = array(
 			'dry_run'            => $dry_run,
 			'scope'              => $scope['label'],
+			'ids'                => $scope['ids'],
 			'search'             => $search,
 			'replace'            => $replace,
 			'scanned'            => $scanned,
 			'skipped_empty'      => $empty,
 			'matched'            => $matched,
 			'unreadable'         => $unreadable,
+			'not_touched'        => $not_touched,
 			'total_replacements' => $total,
-			'truncated'          => $truncated,
+			'truncated'          => $truncated || $out_of_time,
 		);
 
-		if ( $truncated ) {
-			$response['next_offset'] = $offset + self::FIND_REPLACE_MAX_POSTS;
-			$response['warning']     = sprintf(
-				/* translators: %d: post cap */
-				__( 'Only the first %d posts in scope were processed. Call again with offset = next_offset to continue.', 'mcpwp' ),
-				self::FIND_REPLACE_MAX_POSTS
-			);
+		if ( $truncated || $out_of_time ) {
+			$response['next_offset'] = $offset + ( $out_of_time ? $processed - 1 : self::FIND_REPLACE_MAX_POSTS );
+			$response['warning']     = $out_of_time
+				? sprintf(
+					/* translators: %d: seconds */
+					__( 'Stopped after %d seconds so the host timeout could not cut the run mid-way. Call again with the same scope and offset = next_offset to continue.', 'mcpwp' ),
+					self::FIND_REPLACE_TIME_BUDGET
+				)
+				: sprintf(
+					/* translators: %d: post cap */
+					__( 'Only the first %d posts in scope were processed. Call again with the same scope (same ids) and offset = next_offset to continue.', 'mcpwp' ),
+					self::FIND_REPLACE_MAX_POSTS
+				);
 		}
 
 		return $this->success_response( $response );
@@ -1252,18 +1329,10 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 	 * @return array
 	 */
 	private function find_replace_allowed_types() {
-		$types = array( 'page', 'post', 'elementor_library', 'elementor_snippet' );
-
-		if ( function_exists( 'get_post_types' ) ) {
-			$blocked = array( 'attachment', 'revision', 'nav_menu_item', 'custom_css', 'customize_changeset', 'oembed_cache', 'wp_global_styles', 'wp_navigation', 'wp_template', 'wp_template_part' );
-			foreach ( (array) get_post_types( array( 'public' => true ), 'names' ) as $type ) {
-				if ( ! in_array( $type, $blocked, true ) ) {
-					$types[] = $type;
-				}
-			}
-		}
-
-		return array_values( array_unique( $types ) );
+		// Exactly what validate_post() lets every other Elementor route read
+		// and write. A type this plugin cannot read back through its own
+		// tools must not be rewritable through this one.
+		return array( 'page', 'post', 'elementor_library', 'elementor_snippet' );
 	}
 
 	/**
@@ -1275,7 +1344,20 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 		$has_id   = null !== $request->get_param( 'id' ) && '' !== $request->get_param( 'id' );
 		$has_ids  = null !== $request->get_param( 'ids' );
 		$has_type = null !== $request->get_param( 'post_type' ) && '' !== $request->get_param( 'post_type' );
-		$has_site = 'site' === $request->get_param( 'scope' );
+		$scope_param = $request->get_param( 'scope' );
+		$has_site    = 'site' === $scope_param;
+
+		if ( null !== $scope_param && '' !== $scope_param && ! $has_site ) {
+			return $this->error_response(
+				'invalid_scope',
+				sprintf(
+					/* translators: %s: the value */
+					__( 'scope "%s" is not recognised. The only value is "site"; otherwise name id, ids or post_type.', 'mcpwp' ),
+					is_scalar( $scope_param ) ? (string) $scope_param : gettype( $scope_param )
+				),
+				400
+			);
+		}
 
 		$given = (int) $has_id + (int) $has_ids + (int) $has_type + (int) $has_site;
 
@@ -1320,8 +1402,21 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 				$ids[] = (int) $value;
 			}
 
+			$ids = array_values( array_unique( $ids ) );
+			if ( count( $ids ) > self::FIND_REPLACE_MAX_POSTS ) {
+				return $this->error_response(
+					'too_many_ids',
+					sprintf(
+						/* translators: %d: cap */
+						__( 'At most %d ids per run. Split the list.', 'mcpwp' ),
+						self::FIND_REPLACE_MAX_POSTS
+					),
+					400
+				);
+			}
+
 			return array(
-				'ids'        => array_values( array_unique( $ids ) ),
+				'ids'        => $ids,
 				'post_types' => $allowed,
 				'label'      => $has_id ? 'id' : 'ids',
 			);
