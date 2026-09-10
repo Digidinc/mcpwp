@@ -246,11 +246,11 @@ A batch whose operations, priced as sent, cost more than is left of the request'
 }
 ```
 
-Nothing ran, so nothing needs undoing: split the operations into batches that each fit.
+Nothing ran, so nothing needs undoing: split the operations into batches that each fit. The request's rate-limit weight (one slot per operation) was already charged when it was authenticated, so an over-budget batch still costs its slots.
 
 ### Refused one by one by the spend budget
 
-An operation's real price can show only at dispatch (from the route pattern WordPress matched, or its sanitised parameters). An operation that then does not fit is refused **before it runs**, with status `413` and code `spend_budget_exhausted`. From that operation on, every later operation in the request is refused the same way without being dispatched — even a cheap one, even one that would have failed for another reason — so `spend_budget.refused` is exactly the tail of the batch to resend. Operations that already ran are not undone. Waiting does not help: send the refused operations in a new request. Called as `wp_batch` with `params._meta.request_id`, a batch whose only failures are these refusals is pinned: a replay returns this result without running anything.
+An operation's real price can show only at dispatch (from the route pattern WordPress matched, or its sanitised parameters). An operation that then does not fit is refused **before it runs**, with status `413` and code `spend_budget_exhausted`. From that operation on, every later operation in the request is refused the same way without being dispatched — even a cheap one, even one that would have failed for another reason — so `spend_budget.refused` is exactly the tail of the batch to resend. Operations that already ran are not undone. Waiting does not help: send the refused operations in a new request. Called as `wp_batch` with `params._meta.request_id`, a batch whose only failures are these refusals (status `413` and code `spend_budget_exhausted` — a `200` that happens to carry that code is not one) is pinned: a replay returns this result, with its `idempotency_reason`, without running anything.
 
 ```json
 {
