@@ -101,12 +101,41 @@ abstract class Mcpwp_REST_API {
 			return true;
 		}
 
-		return $this->error_response(
+		$upgrade_url = $this->get_pro_upgrade_url();
+
+		// Put upgrade_url on the WP_Error data (agents follow this field).
+		// error_response() only forwards $context to hint interpolation, so a
+		// contact-form or marketing URL stuffed there never reached the client.
+		$error = new WP_Error(
 			'pro_required',
 			__( 'This feature requires MCPWP Pro. Upgrade at https://mcpwp.net/pricing/', 'mcpwp' ),
-			403,
-			array( 'upgrade_url' => 'https://mcpwp.net/pricing/' )
+			array(
+				'status'      => 403,
+				'upgrade_url' => $upgrade_url,
+			)
 		);
+
+		if ( class_exists( 'Mcpwp_Error_Hints' ) ) {
+			return Mcpwp_Error_Hints::enhance_error( $error, array( 'upgrade_url' => $upgrade_url ) );
+		}
+
+		return $error;
+	}
+
+	/**
+	 * Machine-readable Pro upgrade URL for REST / MCP upsells.
+	 *
+	 * Prefers install-linked Freemius checkout. Falls back to the marketing
+	 * pricing page. Never /contact/.
+	 *
+	 * @return string
+	 */
+	protected function get_pro_upgrade_url() {
+		if ( class_exists( 'Mcpwp_License' ) ) {
+			return Mcpwp_License::get_instance()->get_upgrade_url();
+		}
+
+		return 'https://mcpwp.net/pricing/';
 	}
 
 	/**

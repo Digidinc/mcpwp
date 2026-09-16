@@ -1956,7 +1956,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 							$tool_name
 						),
 						'plan_required' => 'pro',
-						'upgrade_url'   => 'https://mcpwp.net/pricing/',
+						'upgrade_url'   => $this->get_pro_upgrade_url(),
 					)
 				);
 			}

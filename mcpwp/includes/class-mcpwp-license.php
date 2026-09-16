@@ -68,6 +68,16 @@ class Mcpwp_License {
 	const FREEMIUS_PRODUCT_ID = '23824';
 
 	/**
+	 * Marketing-site fallback when Freemius checkout is unavailable.
+	 *
+	 * Public page CTAs are Hadi-gated (GH #579). This URL must never be
+	 * /contact/ — a contact form cannot activate a license.
+	 *
+	 * @var string
+	 */
+	const MARKETING_UPGRADE_URL = 'https://mcpwp.net/pricing/';
+
+	/**
 	 * Singleton instance.
 	 *
 	 * @var Mcpwp_License
@@ -419,28 +429,83 @@ class Mcpwp_License {
 	 * redirects back into wp-admin. The plain marketing-site URL has no
 	 * install context: a purchase made there never syncs back to the plugin
 	 * (reported bug: "pay with coupon, nothing happens, no way back to WP").
-	 * Only falls back to the marketing URL when Freemius isn't available.
+	 * Only falls back to the marketing URL when Freemius isn't available
+	 * or returns an unusable URL (empty, or a /contact/ path — GH #579).
 	 *
 	 * @return string
 	 */
 	public function get_upgrade_url() {
-		if ( function_exists( 'mcpwp_get_fs_instance' ) ) {
-			$fs = mcpwp_get_fs_instance();
-			if ( is_object( $fs ) ) {
-				if ( method_exists( $fs, 'is_anonymous' ) && $fs->is_anonymous()
-					&& method_exists( $fs, 'get_reconnect_url' ) ) {
-					return $fs->get_reconnect_url();
-				}
-				if ( method_exists( $fs, 'is_pending_activation' ) && $fs->is_pending_activation()
-					&& method_exists( $fs, 'get_reconnect_url' ) ) {
-					return $fs->get_reconnect_url();
-				}
-				if ( method_exists( $fs, 'get_upgrade_url' ) ) {
-					return $fs->get_upgrade_url();
-				}
-			}
+		$candidate = $this->freemius_upgrade_url_candidate();
+		if ( $this->is_usable_upgrade_url( $candidate ) ) {
+			return $candidate;
 		}
-		return 'https://mcpwp.net/pricing/';
+		return self::MARKETING_UPGRADE_URL;
+	}
+
+	/**
+	 * Install-linked Freemius checkout or reconnect URL, if the SDK offers one.
+	 *
+	 * @return string Empty when Freemius is absent or has no URL.
+	 */
+	private function freemius_upgrade_url_candidate() {
+		if ( ! function_exists( 'mcpwp_get_fs_instance' ) ) {
+			return '';
+		}
+
+		$fs = mcpwp_get_fs_instance();
+		if ( ! is_object( $fs ) ) {
+			return '';
+		}
+
+		if ( method_exists( $fs, 'is_anonymous' ) && $fs->is_anonymous()
+			&& method_exists( $fs, 'get_reconnect_url' ) ) {
+			return $this->stringify_url( $fs->get_reconnect_url() );
+		}
+		if ( method_exists( $fs, 'is_pending_activation' ) && $fs->is_pending_activation()
+			&& method_exists( $fs, 'get_reconnect_url' ) ) {
+			return $this->stringify_url( $fs->get_reconnect_url() );
+		}
+		if ( method_exists( $fs, 'get_upgrade_url' ) ) {
+			return $this->stringify_url( $fs->get_upgrade_url() );
+		}
+
+		return '';
+	}
+
+	/**
+	 * Whether a candidate can be handed to a buyer as the Pro upgrade path.
+	 *
+	 * Rejects empty values and contact-form URLs. /contact/ cannot take a
+	 * payment or attach a license to this install (GH #579).
+	 *
+	 * @param string $url Candidate URL.
+	 * @return bool
+	 */
+	private function is_usable_upgrade_url( $url ) {
+		if ( ! is_string( $url ) ) {
+			return false;
+		}
+
+		$url = trim( $url );
+		if ( '' === $url ) {
+			return false;
+		}
+
+		$path = function_exists( 'wp_parse_url' ) ? wp_parse_url( $url, PHP_URL_PATH ) : parse_url( $url, PHP_URL_PATH );
+		if ( ! is_string( $path ) || '' === $path ) {
+			return true;
+		}
+
+		$normalized = strtolower( untrailingslashit( $path ) );
+		return ! in_array( $normalized, array( '/contact', '/contact-us' ), true );
+	}
+
+	/**
+	 * @param mixed $value Raw SDK return.
+	 * @return string
+	 */
+	private function stringify_url( $value ) {
+		return is_string( $value ) ? $value : '';
 	}
 
 	/**
