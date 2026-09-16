@@ -2536,6 +2536,10 @@ class Mcpwp_Test_Fs_Stub
     private $is_trial;
     private $can_use_premium_code;
     private $plan;
+    private $upgrade_url = '';
+    private $reconnect_url = '';
+    private $is_anonymous = false;
+    private $is_pending_activation = false;
 
     public function __construct(
         bool $can_use_premium_code = false,
@@ -2567,6 +2571,46 @@ class Mcpwp_Test_Fs_Stub
     public function get_plan()
     {
         return $this->plan;
+    }
+
+    public function set_upgrade_url(string $url): void
+    {
+        $this->upgrade_url = $url;
+    }
+
+    public function set_reconnect_url(string $url): void
+    {
+        $this->reconnect_url = $url;
+    }
+
+    public function set_anonymous(bool $anonymous): void
+    {
+        $this->is_anonymous = $anonymous;
+    }
+
+    public function set_pending_activation(bool $pending): void
+    {
+        $this->is_pending_activation = $pending;
+    }
+
+    public function get_upgrade_url()
+    {
+        return $this->upgrade_url;
+    }
+
+    public function get_reconnect_url()
+    {
+        return $this->reconnect_url;
+    }
+
+    public function is_anonymous()
+    {
+        return $this->is_anonymous;
+    }
+
+    public function is_pending_activation()
+    {
+        return $this->is_pending_activation;
     }
 }
 

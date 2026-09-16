@@ -103,12 +103,16 @@ class Mcpwp_Figma {
 	 * @return WP_Error
 	 */
 	private static function pro_required_error() {
+		$upgrade_url = class_exists( 'Mcpwp_License' )
+			? Mcpwp_License::get_instance()->get_upgrade_url()
+			: 'https://mcpwp.net/pricing/';
+
 		return new WP_Error(
 			'pro_required',
 			__( 'Figma design intake requires MCPWP Pro. Upgrade at https://mcpwp.net/pricing/', 'mcpwp' ),
 			array(
 				'status'      => 403,
-				'upgrade_url' => 'https://mcpwp.net/pricing/',
+				'upgrade_url' => $upgrade_url,
 			)
 		);
 	}
