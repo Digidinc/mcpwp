@@ -7,6 +7,7 @@ opened. Homepage **not** touched.
 **Human gate:** Hadi Servat.  
 **Linear:** [MUM-115](https://linear.app/mumega/issue/MUM-115).  
 **Base:** PR [#867](https://github.com/Mumega-com/mcpwp/pull/867) / `docs/cast/`.  
+**This PR:** [#868](https://github.com/Mumega-com/mcpwp/pull/868) (draft, stacked on #867).  
 **UTC window:** 2026-09-17T00:01Z–00:03Z.
 
 ---
@@ -153,7 +154,7 @@ post, no approval, homepage hash unchanged.
 
 | Artifact | State |
 |----------|--------|
-| Repo field note | this file, draft PR |
+| Repo field note | this file, draft [PR #868](https://github.com/Mumega-com/mcpwp/pull/868) |
 | WordPress post | **not created** |
 | Approval | **not opened** |
 | Homepage / front-page setting | **unchanged** (checksum above) |
