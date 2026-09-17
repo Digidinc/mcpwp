@@ -4,7 +4,7 @@
 > read this before spelunking. **Truth lives once per topic; everything else links here, never copies.**
 > Drift between two docs on the same fact is a **bug** — fix it by deleting the copy and pointing at the source.
 >
-> **Last updated:** 2026-07-22 · maintained under [`Mumega-com/mcpwp#687`](https://github.com/Mumega-com/mcpwp/issues/687)
+> **Last updated:** 2026-09-16 · maintained under [`Mumega-com/mcpwp#687`](https://github.com/Mumega-com/mcpwp/issues/687)
 
 ---
 
@@ -32,6 +32,7 @@ Full map: **[`docs/PROJECT-TOPOLOGY.md`](docs/PROJECT-TOPOLOGY.md)**. The plugin
 | Plugin internals (endpoints, hooks, options, arch) | root [`CLAUDE.md`](CLAUDE.md) |
 | Ops / tasks / who-owns-next (governance spine) | **mupot** (`mupot.mumega.com/mcp`) — not a doc |
 | Editorial content brief (the media site) | live WP option `mcpwp_site_context` on mcpwp.net |
+| Editorial / performance cast (Cairn, Aster, Lumen, MUMCP) | [`docs/cast/ROSTER.md`](docs/cast/ROSTER.md) — pot is live status |
 | OAuth broker (mumcp.com sign-in) | [`docs/superpowers/specs/2026-07-20-mumcp-oauth-broker-design.md`](docs/superpowers/specs/2026-07-20-mumcp-oauth-broker-design.md) |
 
 If a topic is not listed, it does not yet have a canonical home — **give it one here before writing about it twice.**
