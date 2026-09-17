@@ -3,6 +3,11 @@
 > Paste this as the user / Linear wake for the next Cursor cloud run.
 > Do not run it as part of Episode 0. Do not merge Episode 0 to `main`
 > unless Hadi asks.
+>
+> **Ran 2026-09-17** (Cursor cloud `bc-9f113123-3ebe-54e3-8e18-8cfd5cfb33c4`).
+> Outcome: **blocked receipt** — work plane up, no scoped key in env.
+> Ledger: [`01-field-note.md`](01-field-note.md). Next:
+> [`02-director-prompt.md`](02-director-prompt.md).
 
 ---
 
