@@ -8,7 +8,7 @@ opened. Homepage **not** touched.
 **Linear:** [MUM-115](https://linear.app/mumega/issue/MUM-115).  
 **Base:** PR [#868](https://github.com/Mumega-com/mcpwp/pull/868) / Episode 1
 blocked receipt (stacked on [#867](https://github.com/Mumega-com/mcpwp/pull/867)).  
-**This PR:** pending (draft, stacked on #868).  
+**This PR:** [#870](https://github.com/Mumega-com/mcpwp/pull/870) (draft, stacked on #868).  
 **UTC window:** 2026-09-17T14:27Z–14:29Z.
 
 ---
@@ -192,7 +192,7 @@ other Cloud secrets present by name, no post, no approval.
 
 | Artifact | State |
 |----------|--------|
-| Repo field note | this file, draft PR pending |
+| Repo field note | this file, draft [PR #870](https://github.com/Mumega-com/mcpwp/pull/870) |
 | WordPress post | **not created** |
 | Approval | **not opened** |
 | Homepage / front-page setting | **not written** (checksum note above) |
