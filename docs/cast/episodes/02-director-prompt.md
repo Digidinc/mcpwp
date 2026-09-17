@@ -2,6 +2,13 @@
 
 > Paste this as the user / Linear wake for the next Cursor cloud run.
 > Do not merge Episode 1 (or Episode 0) to `main` unless Hadi asks.
+>
+> **Ran 2026-09-17** (Cursor cloud `bc-45a55b1d-0308-53fe-8ed3-041cc3090d41`).
+> Outcome: **blocked receipt** — work plane up; Cloud secrets inject
+> (`DATAFORSEO_*` names present) but `MCPWP_API_KEY` is not in
+> `CLOUD_AGENT_INJECTED_SECRET_NAMES`. Authenticated MCPWP routes still
+> 401. Ledger: [`02-field-note.md`](02-field-note.md). Next:
+> [`03-director-prompt.md`](03-director-prompt.md).
 
 ---
 

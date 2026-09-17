@@ -20,7 +20,9 @@ Ledger). Those roles build the plugin. This cast *uses* the plugin on
 5. [`episodes/00-the-operators-return.md`](episodes/00-the-operators-return.md) — first publishable draft
 6. [`episodes/01-director-prompt.md`](episodes/01-director-prompt.md) — Episode 1 prompt (ran 2026-09-17)
 7. [`episodes/01-field-note.md`](episodes/01-field-note.md) — Episode 1 blocked receipt (no WP draft)
-8. [`episodes/02-director-prompt.md`](episodes/02-director-prompt.md) — next Grok 4.6 prompt
+8. [`episodes/02-director-prompt.md`](episodes/02-director-prompt.md) — Episode 2 prompt (ran 2026-09-17)
+9. [`episodes/02-field-note.md`](episodes/02-field-note.md) — Episode 2 blocked receipt (key still not injected)
+10. [`episodes/03-director-prompt.md`](episodes/03-director-prompt.md) — next Grok 4.6 prompt
 
 ## Two planes (do not collapse)
 
