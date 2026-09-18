@@ -246,6 +246,17 @@ class WP_REST_Request
         return isset($this->params[ $key ]) ? $this->params[ $key ] : null;
     }
 
+    public function has_param($key)
+    {
+        // Real WP_REST_Request::has_param() uses array_key_exists() (not
+        // isset()), so a param explicitly sent as null still counts as
+        // "present" — the distinction production code relies on to tell
+        // "the caller sent this field, even empty" from "the caller never
+        // mentioned it" (e.g. Mcpwp_REST_Elementor_Pro::
+        // has_elementor_payload_in_request(), RC review finding #1).
+        return array_key_exists($key, $this->params);
+    }
+
     public function set_param($key, $value)
     {
         $this->params[ $key ] = $value;

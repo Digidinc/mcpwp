@@ -406,6 +406,56 @@ final class ResponseProjectionTest extends TestCase {
 	}
 
 	/**
+	 * RC review small finding: `fields`' arg schema declares type=array but
+	 * this route has no `sanitize_callback`, so WP never coerces a caller's
+	 * raw value — a comma-separated string (the ordinary way to write an
+	 * array-typed value in a query string) reached get_widget_schema() as a
+	 * literal string and, before this, failed the `is_array($fields)` check
+	 * silently, over-returning every field instead of projecting. This pins
+	 * the recovered behaviour: a CSV string narrows exactly like the
+	 * equivalent array does.
+	 *
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_get_widget_schema_fields_accepts_comma_separated_string(): void {
+		if ( ! defined( 'ELEMENTOR_VERSION' ) ) {
+			define( 'ELEMENTOR_VERSION', '4.2.4' );
+		}
+		require_once __DIR__ . '/fixtures/elementor-widget-schema-doubles.php';
+		\Elementor\Plugin::$instance = new \Elementor\Plugin();
+
+		$controller = new Mcpwp_REST_Elementor();
+		$from_csv   = $controller->get_widget_schema( new WP_REST_Request( 'GET', '/mcpwp/v1/elementor/widgets/heading', array( 'type' => 'heading', 'fields' => ' description, example ,common_mistakes' ) ) )->get_data();
+		$from_array = $controller->get_widget_schema( new WP_REST_Request( 'GET', '/mcpwp/v1/elementor/widgets/heading', array( 'type' => 'heading', 'fields' => array( 'description', 'example', 'common_mistakes' ) ) ) )->get_data();
+
+		$this->assertSame( array( 'description', 'example', 'common_mistakes' ), array_keys( $from_csv ) );
+		$this->assertSame( wp_json_encode( $from_array ), wp_json_encode( $from_csv ) );
+	}
+
+	/**
+	 * An empty string carries no field names — it must behave exactly like
+	 * omitting `fields` altogether (the legacy, unprojected result), not
+	 * like an error or an empty allowlist that returns nothing.
+	 *
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_get_widget_schema_fields_empty_string_is_same_as_absent(): void {
+		if ( ! defined( 'ELEMENTOR_VERSION' ) ) {
+			define( 'ELEMENTOR_VERSION', '4.2.4' );
+		}
+		require_once __DIR__ . '/fixtures/elementor-widget-schema-doubles.php';
+		\Elementor\Plugin::$instance = new \Elementor\Plugin();
+
+		$controller = new Mcpwp_REST_Elementor();
+		$a = $controller->get_widget_schema( new WP_REST_Request( 'GET', '/mcpwp/v1/elementor/widgets/heading', array( 'type' => 'heading' ) ) )->get_data();
+		$b = $controller->get_widget_schema( new WP_REST_Request( 'GET', '/mcpwp/v1/elementor/widgets/heading', array( 'type' => 'heading', 'fields' => '' ) ) )->get_data();
+
+		$this->assertSame( wp_json_encode( $a ), wp_json_encode( $b ) );
+	}
+
+	/**
 	 * @runInSeparateProcess
 	 * @preserveGlobalState disabled
 	 */

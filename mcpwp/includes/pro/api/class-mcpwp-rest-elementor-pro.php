@@ -761,6 +761,23 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		}
 
 		if ( null !== $raw_code ) {
+			// Before anything else touches it: a runtime cap standing in for
+			// the `maxLength` this route's schema cannot actually enforce
+			// (see CUSTOM_CODE_MAX_LENGTH). Checked on the raw string, ahead
+			// of normalize_custom_code_content() and the wp_kses_post()
+			// diff-check both, so an oversized payload never reaches either.
+			if ( is_string( $raw_code ) && strlen( $raw_code ) > self::CUSTOM_CODE_MAX_LENGTH ) {
+				return $this->error_response(
+					'code_too_large',
+					sprintf(
+						/* translators: %d: maximum size in bytes */
+						__( 'Custom Code is limited to %d bytes.', 'mcpwp' ),
+						self::CUSTOM_CODE_MAX_LENGTH
+					),
+					400
+				);
+			}
+
 			$code       = $this->normalize_custom_code_content( $raw_code );
 			$payload['code'] = $code['content'];
 			$payload['wrapper_tags_removed'] = (bool) $code['changed'];
@@ -996,6 +1013,46 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	private static $custom_code_unfiltered_user = 0;
 
 	/**
+	 * Whether cleanup_custom_code_unfiltered_html_grant_on_shutdown() has
+	 * already been registered with register_shutdown_function() in this
+	 * process.
+	 *
+	 * register_shutdown_function() has no unregister — the callback lives
+	 * for the rest of the process either way — so this guard is what stops
+	 * a long-lived worker (WP-CLI, a rest_do_request() loop; see the
+	 * $mcpwp_verdicts precedent in trait-mcpwp-api-auth.php) from
+	 * accumulating one registered shutdown callback per Custom Code write.
+	 * It is registered at most once per process and is itself idempotent
+	 * (a no-op once the grant is already clean), so calling it more than
+	 * once would have been harmless — this exists purely to keep PHP's own
+	 * shutdown-function list from growing unbounded.
+	 *
+	 * @var bool
+	 */
+	private static $custom_code_shutdown_guard_registered = false;
+
+	/**
+	 * Upper bound on `code` this controller will run through
+	 * code_needs_unfiltered_html()'s wp_kses_post() diff-check.
+	 *
+	 * The REST arg schema for `code` (get_custom_code_write_args()) has no
+	 * `maxLength`, and would not enforce one even if declared: these routes
+	 * register their args as plain arrays with no `validate_callback`, so
+	 * WP_REST_Request::sanitize_params() never runs rest_validate_request_arg()
+	 * against them — a JSON Schema constraint here is documentation only
+	 * (RC review LOW finding). Without an actual runtime cap, an arbitrarily
+	 * large `code` string reaches wp_kses_post() unbounded on every write.
+	 *
+	 * `/elementor/custom-code` is admin-scope-gated already, so this is a
+	 * footgun (an accidentally huge payload spending needless CPU on the
+	 * diff-check) rather than an unauthenticated escalation path — hence a
+	 * generous cap rather than a strict one. 2MB is far past any real
+	 * Custom Code snippet (these are hand-authored HTML/CSS/JS, not
+	 * generated content) while still bounding the diff-check's cost.
+	 */
+	const CUSTOM_CODE_MAX_LENGTH = 2097152; // 2 MiB.
+
+	/**
 	 * Whether this code would be altered by Elementor's own kses pass.
 	 *
 	 * Elementor registers `_elementor_code` with a sanitize_callback that runs
@@ -1107,6 +1164,26 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	 * get_required_scope_for_request()'s $admin_routes, so a designer-, author-
 	 * or editor-scoped key never reaches this method.
 	 *
+	 * PHP's `finally` does not run on `exit()`/`die()` (RC review WARN
+	 * finding). If anything hooked into `update_post_meta()`/
+	 * `updated_postmeta` synchronously terminates the request — a security
+	 * or WAF plugin calling `wp_die()` on content it considers suspicious is
+	 * the realistic case, and script-bearing content is exactly what would
+	 * trigger one — the `finally` below never runs and the grant (plus the
+	 * depth counter) stays installed. On ordinary PHP-FPM that dies with the
+	 * process and is harmless; this codebase specifically does not assume
+	 * that, because it also supports a long-lived worker reusing this same
+	 * process across requests (see the `$mcpwp_verdicts` memoization note in
+	 * trait-mcpwp-api-auth.php: "a long-lived worker (WP-CLI, a
+	 * rest_do_request() loop) reuses this instance across requests"), and
+	 * every authenticated caller maps onto the same `mcpwp_api_agent`
+	 * account — so a leaked grant there would hand that account
+	 * `unfiltered_html` for the rest of such a process's life.
+	 * ensure_custom_code_shutdown_guard() registers a
+	 * `register_shutdown_function()` safety net for exactly that case:
+	 * `register_shutdown_function()`, unlike `finally`, does run on
+	 * `exit()`/`die()`.
+	 *
 	 * @param int    $post_id Snippet post ID.
 	 * @param string $code    Raw snippet code.
 	 */
@@ -1118,6 +1195,8 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 
 			return;
 		}
+
+		self::ensure_custom_code_shutdown_guard();
 
 		if ( 0 === self::$custom_code_unfiltered_depth ) {
 			self::$custom_code_unfiltered_user = get_current_user_id();
@@ -1135,6 +1214,55 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 				self::$custom_code_unfiltered_user = 0;
 			}
 		}
+	}
+
+	/**
+	 * Register the shutdown-time safety net for the Custom Code
+	 * `unfiltered_html` grant, at most once per process.
+	 *
+	 * See write_custom_code_meta()'s docblock for why `finally` alone is not
+	 * enough. Guarded by a static flag rather than called unconditionally,
+	 * because register_shutdown_function() has no unregister: without the
+	 * guard, a long-lived worker processing many Custom Code writes would
+	 * register one more shutdown callback per write for the life of the
+	 * process. The guard makes registration itself idempotent; the callback
+	 * it registers is idempotent too (see
+	 * cleanup_custom_code_unfiltered_html_grant_on_shutdown()), so nothing
+	 * about calling this more than once — which never happens, but is not
+	 * relied upon not to — would be unsafe either.
+	 */
+	private static function ensure_custom_code_shutdown_guard() {
+		if ( self::$custom_code_shutdown_guard_registered || ! function_exists( 'register_shutdown_function' ) ) {
+			return;
+		}
+
+		self::$custom_code_shutdown_guard_registered = true;
+
+		register_shutdown_function( array( __CLASS__, 'cleanup_custom_code_unfiltered_html_grant_on_shutdown' ) );
+	}
+
+	/**
+	 * Shutdown-time fallback for write_custom_code_meta()'s `finally`.
+	 *
+	 * A no-op — checked, not assumed — whenever the grant was already
+	 * cleaned up normally (the overwhelmingly common case: `finally` runs on
+	 * every ordinary return, error, or caught exception, so by the time
+	 * PHP's shutdown sequence reaches this, depth is back to 0). It only
+	 * does anything when a write was interrupted by `exit()`/`die()` inside
+	 * the grant window and left the filter and depth counter installed.
+	 *
+	 * Idempotent with the `finally` block by construction: both paths only
+	 * ever remove the filter and zero the counters, and remove_filter() on a
+	 * filter that is not registered is itself a safe no-op.
+	 */
+	public static function cleanup_custom_code_unfiltered_html_grant_on_shutdown() {
+		if ( self::$custom_code_unfiltered_depth <= 0 ) {
+			return;
+		}
+
+		remove_filter( 'user_has_cap', array( __CLASS__, 'grant_custom_code_unfiltered_html_cap' ), PHP_INT_MAX );
+		self::$custom_code_unfiltered_depth = 0;
+		self::$custom_code_unfiltered_user  = 0;
 	}
 
 	/**
@@ -1669,6 +1797,12 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	 * @return WP_REST_Response|WP_Error Response.
 	 */
 	public function create_archetype( $request ) {
+		$payload_check = $this->require_elementor_payload( $request );
+		if ( is_wp_error( $payload_check ) ) {
+			$this->log_activity( 'create_archetype', $request, null, 400 );
+			return $this->error_response( $payload_check->get_error_code(), $payload_check->get_error_message(), 400 );
+		}
+
 		$data = array(
 			'title'           => $request->get_param( 'title' ),
 			'type'            => $request->get_param( 'type' ),
@@ -1829,6 +1963,12 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	 * @return WP_REST_Response|WP_Error Response.
 	 */
 	public function create_part( $request ) {
+		$payload_check = $this->require_elementor_payload( $request );
+		if ( is_wp_error( $payload_check ) ) {
+			$this->log_activity( 'create_part', $request, null, 400 );
+			return $this->error_response( $payload_check->get_error_code(), $payload_check->get_error_message(), 400 );
+		}
+
 		$data = array(
 			'title'          => $request->get_param( 'title' ),
 			'type'           => $request->get_param( 'type' ),
@@ -1952,6 +2092,48 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	 */
 	private function has_elementor_payload_in_request( $request ) {
 		return $request->has_param( 'elementor_data_base64' ) || $request->has_param( 'elementor_data' );
+	}
+
+	/**
+	 * Refuse to create a library entry (part or archetype) from an empty
+	 * Elementor payload.
+	 *
+	 * `elementor_data` lost its `required: true` when `elementor_data_base64`
+	 * was added alongside it (#831) so a caller could satisfy the schema
+	 * with neither. Re-adding `required` to one of the two would wrongly
+	 * reject a legitimate base64-only or array-only call — JSON Schema
+	 * cannot express "exactly one of these" here — so this is enforced in
+	 * the handler instead.
+	 *
+	 * Without this, `Mcpwp_Elementor_Pro::create_template()` treats an
+	 * empty payload as "no data submitted" and simply skips the save step
+	 * ( `! empty( $data['elementor_data'] )` ), so create_part()/
+	 * create_archetype() previously returned 201 with a blank library
+	 * entry instead of a clear error (RC review finding #1).
+	 *
+	 * create_template() itself is NOT gated by this: its own tool
+	 * description documents an omitted payload as intentional ("If
+	 * omitted, Elementor creates a blank template"), a real workflow for
+	 * a Theme Builder template a human then finishes in the Elementor
+	 * editor. A part or an archetype has no such "finish it in the
+	 * editor" story — it exists purely to be reused/applied verbatim — so
+	 * a blank one is never useful and is refused instead.
+	 *
+	 * @param WP_REST_Request $request Request object.
+	 * @return true|WP_Error True when a usable payload is present.
+	 */
+	private function require_elementor_payload( $request ) {
+		$payload = $this->get_elementor_payload_from_request( $request );
+
+		if ( empty( $payload ) ) {
+			return new WP_Error(
+				'missing_elementor_data',
+				__( 'One of elementor_data or elementor_data_base64 is required.', 'mcpwp' ),
+				array( 'status' => 400 )
+			);
+		}
+
+		return true;
 	}
 
 	/**

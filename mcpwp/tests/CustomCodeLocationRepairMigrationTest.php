@@ -32,9 +32,15 @@ require_once dirname( __DIR__ ) . '/includes/class-mcpwp-activator.php';
 final class CustomCodeLocationRepairMigrationTest extends TestCase {
 
 	protected function setUp(): void {
-		$GLOBALS['mcpwp_test_options'] = array();
-		$GLOBALS['_mcpwp_test_posts']  = array();
-		$GLOBALS['_mcpwp_test_meta']   = array();
+		$GLOBALS['mcpwp_test_options']            = array();
+		$GLOBALS['_mcpwp_test_posts']             = array();
+		$GLOBALS['_mcpwp_test_meta']              = array();
+		$GLOBALS['mcpwp_test_wpdb_options']       = array();
+		$GLOBALS['mcpwp_test_wpdb_before_insert'] = null;
+	}
+
+	protected function tearDown(): void {
+		$GLOBALS['mcpwp_test_wpdb_before_insert'] = null;
 	}
 
 	/**
@@ -263,5 +269,172 @@ final class CustomCodeLocationRepairMigrationTest extends TestCase {
 
 		$this->assertSame( 1, get_option( 'mcpwp_custom_code_locations_repaired' ) );
 		$this->assertFalse( get_option( Mcpwp_Activator::CUSTOM_CODE_REPAIR_CURSOR_OPTION, false ) );
+	}
+
+	// ── RC review finding #2: the read-cursor -> batch -> write-cursor cycle ─
+	// must be locked so two overlapping plugins_loaded calls cannot both read
+	// the same stale cursor and have whichever writes last move it backward.
+
+	/**
+	 * A run that finds the lock already held (another process's in-flight
+	 * call) must simply return and make zero progress — not wait, not run
+	 * unprotected, and not touch the cursor or the completion flag.
+	 */
+	public function test_second_run_is_refused_while_lock_is_held(): void {
+		$this->seed_snippets( 5 );
+
+		// Simulate another process's run already in flight, well inside its TTL.
+		$GLOBALS['mcpwp_test_wpdb_options'][ Mcpwp_Activator::CUSTOM_CODE_REPAIR_LOCK_OPTION ] = (string) ( time() + Mcpwp_Activator::CUSTOM_CODE_REPAIR_LOCK_TTL );
+
+		Mcpwp_Activator::repair_custom_code_locations();
+
+		$this->assertFalse( get_option( 'mcpwp_custom_code_locations_repaired', false ) );
+		$this->assertFalse( get_option( Mcpwp_Activator::CUSTOM_CODE_REPAIR_CURSOR_OPTION, false ) );
+		for ( $i = 1; $i <= 5; $i++ ) {
+			$this->assertSame( 'head', get_post_meta( $i, '_elementor_location', true ), "post $i must be untouched while the lock is held" );
+		}
+	}
+
+	/**
+	 * Once the other process's lock is gone (released, or its TTL lapsed),
+	 * a later call must proceed and converge normally — the lock never
+	 * blocks the migration forever.
+	 */
+	public function test_run_proceeds_normally_once_the_other_lock_is_gone(): void {
+		$this->seed_snippets( 5 );
+
+		$GLOBALS['mcpwp_test_wpdb_options'][ Mcpwp_Activator::CUSTOM_CODE_REPAIR_LOCK_OPTION ] = (string) ( time() + Mcpwp_Activator::CUSTOM_CODE_REPAIR_LOCK_TTL );
+		Mcpwp_Activator::repair_custom_code_locations();
+		$this->assertFalse( get_option( 'mcpwp_custom_code_locations_repaired', false ), 'still blocked while the other lock stands' );
+
+		// The other process finished and released its lock.
+		unset( $GLOBALS['mcpwp_test_wpdb_options'][ Mcpwp_Activator::CUSTOM_CODE_REPAIR_LOCK_OPTION ] );
+
+		Mcpwp_Activator::repair_custom_code_locations();
+
+		$this->assertSame( 1, get_option( 'mcpwp_custom_code_locations_repaired' ) );
+		$this->assertArrayNotHasKey( Mcpwp_Activator::CUSTOM_CODE_REPAIR_LOCK_OPTION, $GLOBALS['mcpwp_test_wpdb_options'], 'this run must release its own lock' );
+	}
+
+	/**
+	 * A lock left behind by a holder that died mid-run (crash, worker
+	 * recycle) must not block the migration forever: once its TTL has
+	 * passed, the next call steals it via compare-and-swap and proceeds.
+	 */
+	public function test_expired_lock_from_a_dead_holder_is_taken_over(): void {
+		$this->seed_snippets( 5 );
+
+		// A lock whose expiry is already in the past — a holder that never
+		// came back to release it.
+		$GLOBALS['mcpwp_test_wpdb_options'][ Mcpwp_Activator::CUSTOM_CODE_REPAIR_LOCK_OPTION ] = (string) ( time() - 5 );
+
+		Mcpwp_Activator::repair_custom_code_locations();
+
+		$this->assertSame( 1, get_option( 'mcpwp_custom_code_locations_repaired' ), 'a stale lock must not block the migration forever' );
+		$this->assertArrayNotHasKey( Mcpwp_Activator::CUSTOM_CODE_REPAIR_LOCK_OPTION, $GLOBALS['mcpwp_test_wpdb_options'] );
+	}
+
+	/**
+	 * The actual race: two calls that both start at (as close as a
+	 * single-threaded test can get to) the same instant must serialize
+	 * through the lock, so the cursor only ever advances — it is never
+	 * possible for the second call to read the first's stale starting
+	 * cursor and overwrite forward progress with its own smaller value.
+	 *
+	 * Simulated via the same one-shot before-insert hook the codebase
+	 * already uses to land a concurrent writer between a caller's read and
+	 * its insert (#564) — here landing an entire second, fully-overlapping
+	 * repair_custom_code_locations() call at the exact point the first is
+	 * claiming the lock row.
+	 */
+	public function test_interleaved_calls_advance_the_cursor_serially_never_backward(): void {
+		$this->seed_snippets( 450 ); // 3 batches of the production 200-row size.
+
+		$GLOBALS['mcpwp_test_wpdb_before_insert'] = function ( $name ) {
+			if ( Mcpwp_Activator::CUSTOM_CODE_REPAIR_LOCK_OPTION !== $name ) {
+				return;
+			}
+			// A second, fully overlapping plugins_loaded call — e.g. two
+			// admin tabs, or an admin page load racing a REST request.
+			Mcpwp_Activator::repair_custom_code_locations( 0.0 );
+		};
+
+		Mcpwp_Activator::repair_custom_code_locations( 0.0 );
+
+		// Without the lock, both calls would have read cursor=0 and each
+		// checkpointed their own single batch's end position — whichever
+		// wrote last would win, and 200 (one batch) is exactly what "the
+		// cursor moved backward" looks like here. Serialized through the
+		// lock, the second call's read happens only after the first's
+		// full run (including release) completes, so it continues from
+		// 200, not from 0: two batches, 400.
+		$this->assertSame( 400, get_option( Mcpwp_Activator::CUSTOM_CODE_REPAIR_CURSOR_OPTION ) );
+		$this->assertArrayNotHasKey( Mcpwp_Activator::CUSTOM_CODE_REPAIR_LOCK_OPTION, $GLOBALS['mcpwp_test_wpdb_options'], 'the lock must be released after both calls finish' );
+
+		for ( $i = 1; $i <= 400; $i++ ) {
+			$this->assertTrue( $this->is_fully_repaired( $i ), "post $i should be repaired by one of the two interleaved calls" );
+		}
+		for ( $i = 401; $i <= 450; $i++ ) {
+			$this->assertSame( 'head', get_post_meta( $i, '_elementor_location', true ), "post $i must not be touched yet" );
+		}
+	}
+
+	// ── RC review finding #3: a cursor corrupted UPWARD must not read as ─────
+	// genuine completion — "no rows above cursor" and "actually finished" are
+	// proven apart by checking content, not the cursor's own value.
+
+	public function test_cursor_corrupted_upward_does_not_falsely_complete(): void {
+		$this->seed_snippets( 5 ); // real max ID is 5.
+
+		// Something outside this migration set the cursor far above any real
+		// post ID — e.g. a bad manual edit, or a bug in an unrelated migration
+		// sharing option-naming conventions.
+		update_option( Mcpwp_Activator::CUSTOM_CODE_REPAIR_CURSOR_OPTION, 999999, false );
+
+		Mcpwp_Activator::repair_custom_code_locations();
+
+		$this->assertFalse(
+			get_option( 'mcpwp_custom_code_locations_repaired', false ),
+			'an inflated cursor must not be trusted as proof the migration already ran'
+		);
+		for ( $i = 1; $i <= 5; $i++ ) {
+			$this->assertSame( 'head', get_post_meta( $i, '_elementor_location', true ), "post $i was never actually repaired despite the corrupted cursor" );
+		}
+
+		// Self-healed: the cursor is reset to something trustworthy rather
+		// than left at the value that lied, so the migration can actually
+		// make progress on a later call.
+		$this->assertNotEquals( 999999, get_option( Mcpwp_Activator::CUSTOM_CODE_REPAIR_CURSOR_OPTION ) );
+
+		// A follow-up call now converges normally.
+		Mcpwp_Activator::repair_custom_code_locations();
+
+		$this->assertSame( 1, get_option( 'mcpwp_custom_code_locations_repaired' ) );
+		for ( $i = 1; $i <= 5; $i++ ) {
+			$this->assertTrue( $this->is_fully_repaired( $i ), "post $i should be repaired once the cursor is trustworthy again" );
+		}
+	}
+
+	/**
+	 * A cursor sitting exactly at the true max ID, with every row genuinely
+	 * repaired already, must still be recognised as complete — the fix for
+	 * finding #3 must not turn a real completion into a false negative.
+	 */
+	public function test_genuinely_complete_migration_is_still_recognised_as_complete(): void {
+		$this->seed_snippets( 5 );
+		Mcpwp_Activator::repair_custom_code_locations();
+		$this->assertSame( 1, get_option( 'mcpwp_custom_code_locations_repaired' ) );
+
+		// Simulate the cursor having drifted to exactly the true max ID
+		// (the ordinary, non-corrupted end state) with the flag somehow
+		// unset, to isolate has_unrepaired_custom_code_snippets() from the
+		// top-level short-circuit and prove it answers "complete" on truly
+		// clean content.
+		delete_option( 'mcpwp_custom_code_locations_repaired' );
+		update_option( Mcpwp_Activator::CUSTOM_CODE_REPAIR_CURSOR_OPTION, 5, false );
+
+		Mcpwp_Activator::repair_custom_code_locations();
+
+		$this->assertSame( 1, get_option( 'mcpwp_custom_code_locations_repaired' ) );
 	}
 }

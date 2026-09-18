@@ -155,6 +155,27 @@ trait Mcpwp_Elementor_Writer_Trait {
 	 * @param string   $label  Key prefix for the debug entry.
 	 * @return array{ok:bool,value:mixed} ok=false when the call threw, returned
 	 *         WP_Error, or returned the literal bool `false`.
+	 *
+	 * NOT `exit()`/`die()`-safe (RC review WARN finding, flagged alongside
+	 * the structurally identical gap in
+	 * Mcpwp_REST_Elementor_Pro::write_custom_code_meta(), which now carries
+	 * a register_shutdown_function() safety net — see that method). Left
+	 * unpatched here deliberately: this `finally` restores THREE pieces of
+	 * state (the kses normalizer filter, the `map_meta_cap`/`user_has_cap`
+	 * grant, and — only here — Elementor's own content-sanitizer callback,
+	 * re-added via `$suspended_content_sanitizer`), not one, and the third
+	 * is a callable captured at suspend time. A shutdown-time fallback
+	 * would have to reconstruct or cache that same callable to re-hook it
+	 * correctly, which is materially more state to get right under the
+	 * unusual conditions PHP shutdown functions run under (some hooks
+	 * behave differently there) than the Custom Code copy's single
+	 * add_filter()/remove_filter() pair. Given a scoped `unfiltered_html`
+	 * grant escaping to the next request already requires a synchronous
+	 * `wp_die()` mid-`update_post_meta()` on a long-lived worker — a real
+	 * but narrow window — the safer move was fixing the simpler, newer
+	 * copy correctly rather than risking a subtly wrong fix here under time
+	 * pressure. This is a known gap, not an overlooked one; the next change
+	 * that touches this method should close it the same way.
 	 */
 	private function attempt_elementor_call( callable $call, array &$debug, $label ) {
 		// Depth-counted so a nested call cannot tear the filter out from under

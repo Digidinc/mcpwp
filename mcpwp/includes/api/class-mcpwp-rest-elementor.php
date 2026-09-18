@@ -1035,7 +1035,29 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 			$widget_type = $request->get_param( 'widget' );
 		}
 
-		$fields      = $request->get_param( 'fields' );
+		$fields = $request->get_param( 'fields' );
+
+		// This arg's schema declares type=array but no sanitize_callback, so
+		// WP_REST_Request::sanitize_params() never coerces it — a caller
+		// sending the common REST convention of a comma-separated string
+		// (?fields=tab,description) reaches here as a literal string and,
+		// before this, was silently treated as "no filter", over-returning
+		// the full ~119KB schema instead of projecting it down (#830's whole
+		// point). Recover that intent rather than 400 it: this is a
+		// read-only projection, not a security-relevant param, and CSV is
+		// exactly how an array-typed query param is normally written. Absent
+		// (null) and an already-decoded array both fall through unchanged.
+		if ( is_string( $fields ) && '' !== $fields ) {
+			$fields = array_values(
+				array_filter(
+					array_map( 'trim', explode( ',', $fields ) ),
+					static function ( $field ) {
+						return '' !== $field;
+					}
+				)
+			);
+		}
+
 		$args        = array(
 			'search'   => (string) $request->get_param( 'search' ),
 			'category' => (string) $request->get_param( 'category' ),

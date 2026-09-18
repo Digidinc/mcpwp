@@ -26,17 +26,27 @@ final class CustomCodeUnfilteredHtmlGrantTest extends TestCase {
 		$GLOBALS['mcpwp_test_current_user']    = 1;
 		$GLOBALS['mcpwp_test_is_multisite']    = false;
 		$GLOBALS['mcpwp_test_is_super_admin']  = false;
+		$GLOBALS['mcpwp_test_filters']         = array();
 
 		$this->set_static( 'custom_code_unfiltered_depth', 0 );
 		$this->set_static( 'custom_code_unfiltered_user', 0 );
+		$this->set_static( 'custom_code_shutdown_guard_registered', false );
 	}
 
 	protected function tearDown(): void {
 		$GLOBALS['mcpwp_test_is_multisite']   = false;
 		$GLOBALS['mcpwp_test_is_super_admin'] = false;
 
+		// remove_filter() on a tag that was never added is a safe no-op, so
+		// this is defensive rather than load-bearing: it stops a test that
+		// deliberately leaves the grant filter installed (simulating an
+		// interrupted write) from leaking it into a later test in the same
+		// process.
+		remove_filter( 'user_has_cap', array( Mcpwp_REST_Elementor_Pro::class, 'grant_custom_code_unfiltered_html_cap' ), PHP_INT_MAX );
+
 		$this->set_static( 'custom_code_unfiltered_depth', 0 );
 		$this->set_static( 'custom_code_unfiltered_user', 0 );
+		$this->set_static( 'custom_code_shutdown_guard_registered', false );
 	}
 
 	private function controller(): Mcpwp_REST_Elementor_Pro {
@@ -147,6 +157,122 @@ final class CustomCodeUnfilteredHtmlGrantTest extends TestCase {
 
 		$this->assertSame( 0, $this->get_static( 'custom_code_unfiltered_depth' ) );
 		$this->assertSame( 0, $this->get_static( 'custom_code_unfiltered_user' ) );
+	}
+
+	// --- WARN (RC review): finally is not exit()/die()-safe ------------------
+	//
+	// finally never runs on exit()/die() — a security/WAF plugin calling
+	// wp_die() synchronously from `updated_postmeta` on script-bearing
+	// content is the realistic trigger. On a long-lived worker
+	// (WP-CLI, a rest_do_request() loop — every authenticated caller maps
+	// onto the same mcpwp_api_agent account) that would leak `unfiltered_html`
+	// to the rest of the process. register_shutdown_function(), unlike
+	// finally, DOES run on exit()/die(), so
+	// ensure_custom_code_shutdown_guard() registers a cleanup callback as a
+	// safety net. exit()/die() itself can't be exercised inside a PHPUnit
+	// process (it would kill the test runner), so these tests exercise the
+	// guard's registration and the cleanup callback directly instead of
+	// trying to reproduce the termination itself.
+
+	public function test_write_custom_code_meta_registers_the_shutdown_guard(): void {
+		$this->assertFalse( $this->get_static( 'custom_code_shutdown_guard_registered' ) );
+
+		$this->call( 'write_custom_code_meta', array( 104, '<script>a()</script>' ) );
+
+		$this->assertTrue( $this->get_static( 'custom_code_shutdown_guard_registered' ) );
+	}
+
+	public function test_shutdown_guard_registration_is_idempotent(): void {
+		// register_shutdown_function() has no unregister — calling this
+		// unconditionally per write would accumulate one registered callback
+		// per Custom Code write for the life of a long-lived worker. Calling
+		// it repeatedly must be safe and must not un-flip the guard.
+		$ref = new ReflectionMethod( Mcpwp_REST_Elementor_Pro::class, 'ensure_custom_code_shutdown_guard' );
+		$ref->setAccessible( true );
+
+		$ref->invoke( null );
+		$ref->invoke( null );
+		$ref->invoke( null );
+
+		$this->assertTrue( $this->get_static( 'custom_code_shutdown_guard_registered' ) );
+	}
+
+	public function test_shutdown_cleanup_is_a_noop_after_a_normal_completed_write(): void {
+		$this->call( 'write_custom_code_meta', array( 105, '<script>a()</script>' ) );
+		$this->assertSame( 0, $this->get_static( 'custom_code_unfiltered_depth' ), 'sanity: finally already cleaned up' );
+
+		// By the time PHP's real shutdown sequence reaches this callback on
+		// any ordinary request, depth is already back to 0 — this is that
+		// case, and it must change nothing.
+		Mcpwp_REST_Elementor_Pro::cleanup_custom_code_unfiltered_html_grant_on_shutdown();
+
+		$this->assertSame( 0, $this->get_static( 'custom_code_unfiltered_depth' ) );
+		$this->assertSame( 0, $this->get_static( 'custom_code_unfiltered_user' ) );
+	}
+
+	public function test_shutdown_cleanup_closes_a_grant_left_by_an_interrupted_write(): void {
+		// Simulates exit()/die() firing partway through write_custom_code_meta(),
+		// after the grant was installed but before its `finally` ran: depth
+		// incremented, user captured, filter installed — exactly the state
+		// that method leaves behind up to the point of interruption.
+		$this->set_static( 'custom_code_unfiltered_depth', 1 );
+		$this->set_static( 'custom_code_unfiltered_user', 1 );
+		add_filter( 'user_has_cap', array( Mcpwp_REST_Elementor_Pro::class, 'grant_custom_code_unfiltered_html_cap' ), PHP_INT_MAX, 4 );
+
+		// Prove the grant is live before cleanup — otherwise "cleanup made no
+		// difference" would be indistinguishable from "there was nothing to
+		// clean up".
+		$granted_before = Mcpwp_REST_Elementor_Pro::grant_custom_code_unfiltered_html_cap( array(), array(), array(), new WP_User( 1 ) );
+		$this->assertTrue( ! empty( $granted_before['unfiltered_html'] ) );
+
+		Mcpwp_REST_Elementor_Pro::cleanup_custom_code_unfiltered_html_grant_on_shutdown();
+
+		$this->assertSame( 0, $this->get_static( 'custom_code_unfiltered_depth' ) );
+		$this->assertSame( 0, $this->get_static( 'custom_code_unfiltered_user' ) );
+		$this->assertFalse( has_filter( 'user_has_cap', array( Mcpwp_REST_Elementor_Pro::class, 'grant_custom_code_unfiltered_html_cap' ) ) );
+
+		// The consequence that actually matters: the same user_id that held
+		// the leaked grant no longer gets it.
+		$granted_after = Mcpwp_REST_Elementor_Pro::grant_custom_code_unfiltered_html_cap( array(), array(), array(), new WP_User( 1 ) );
+		$this->assertArrayNotHasKey( 'unfiltered_html', $granted_after );
+	}
+
+	// --- LOW (RC review): size guard ahead of the kses diff-check -----------
+
+	public function test_custom_code_write_over_the_length_cap_is_refused(): void {
+		$controller = $this->controller();
+		$oversized  = str_repeat( 'a', Mcpwp_REST_Elementor_Pro::CUSTOM_CODE_MAX_LENGTH + 1 );
+
+		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/elementor/custom-code', array(
+			'title' => 'Too big',
+			'code'  => $oversized,
+		) );
+
+		$result = $controller->create_custom_code( $request );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'code_too_large', $result->get_error_code() );
+		// Refused before wp_insert_post(), same reasoning as the multisite
+		// refusal test above: no orphan snippet post left behind.
+		$this->assertSame( array(), $GLOBALS['_mcpwp_test_posts'] );
+	}
+
+	public function test_custom_code_write_at_the_length_cap_is_allowed(): void {
+		$controller  = $this->controller();
+		$at_the_cap  = str_repeat( 'a', Mcpwp_REST_Elementor_Pro::CUSTOM_CODE_MAX_LENGTH );
+
+		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/elementor/custom-code', array(
+			'title' => 'Right at the limit',
+			'code'  => $at_the_cap,
+		) );
+
+		$result = $controller->create_custom_code( $request );
+
+		if ( is_wp_error( $result ) ) {
+			$this->assertNotSame( 'code_too_large', $result->get_error_code(), 'exactly the cap must not be refused for size' );
+		} else {
+			$this->assertNotEmpty( $GLOBALS['_mcpwp_test_posts'], 'a snippet post should have been created at exactly the cap' );
+		}
 	}
 
 	// --- multisite refusal ---------------------------------------------------

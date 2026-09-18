@@ -371,6 +371,69 @@ class Mcpwp_Activator {
 	const CUSTOM_CODE_REPAIR_CURSOR_OPTION = 'mcpwp_custom_code_locations_repair_cursor';
 
 	/**
+	 * Mutex for repair_custom_code_locations(): guards the read-cursor ->
+	 * process-batch -> write-cursor cycle so two overlapping `plugins_loaded`
+	 * calls (two admin tabs, or an admin page load racing a REST or cron
+	 * request) cannot both read the same stale cursor and have whichever
+	 * writes last move it backward (RC review finding #2). Every per-row
+	 * operation in this method is already idempotent, so a lost race never
+	 * corrupts data — the lock exists purely to stop the redundant
+	 * reprocessing (and, under sustained concurrent load, delayed
+	 * convergence) that a backward-moving cursor causes.
+	 *
+	 * Implemented as a row in `wp_options` rather than a WordPress transient
+	 * or `wp_cache_add()`: a transient's own read-then-write is exactly the
+	 * unlocked race this is meant to close, and `wp_cache_add()` is only
+	 * atomic when an external, atomic object cache (Memcached/Redis) is
+	 * configured — on the default DB-backed object cache it is not.
+	 * `option_name` carries a UNIQUE KEY at the schema level, so a plain
+	 * `$wpdb->insert()` against it is genuinely atomic at the MySQL layer on
+	 * every WordPress install, object cache or not: of two concurrent
+	 * inserts, only one can land the row, the other fails on the unique-key
+	 * violation. This is the same primitive `Mcpwp_Idempotency_Claim` (#802)
+	 * already established for request-level claims — reused here at the row
+	 * level via direct `$wpdb` calls (`insert()`/`update()`/`delete()`,
+	 * never `add_option()`, which uses `ON DUPLICATE KEY UPDATE` and would
+	 * let two concurrent "claims" both "succeed") rather than pulled in as a
+	 * dependency, since that class's day-long sweep window and stored
+	 * `<time>|<hash>` shape are built for deduplicating tool calls, not for
+	 * a short-lived batch-loop mutex.
+	 *
+	 * The stored value is the lock's own expiry (a Unix timestamp), not a
+	 * boolean, so a holder that dies mid-run (fatal error, worker recycle,
+	 * `kill -9`) cannot block the migration forever: the next call whose
+	 * insert loses the race reads the existing row, and if its expiry has
+	 * passed, steals it with a compare-and-swap update
+	 * (`WHERE option_value = <the stale value just read>`) rather than an
+	 * unconditional one, so two callers racing to steal the same stale lock
+	 * cannot both believe they hold it. Release is the same CAS shape:
+	 * delete only the row that still holds the value THIS call wrote, so a
+	 * run that overran its own TTL and had its lock legitimately stolen
+	 * never deletes the new holder's lock out from under it. A run that
+	 * cannot acquire the lock simply returns — it does not wait or retry
+	 * inline — and picks up the migration on a later request instead.
+	 */
+	const CUSTOM_CODE_REPAIR_LOCK_OPTION = 'mcpwp_custom_code_locations_repair_lock';
+
+	/**
+	 * Seconds a lock holder is trusted before another call may steal it.
+	 * Comfortably above migration_time_budget()'s 15s ceiling so a live run
+	 * is never pre-empted by a false "stale" read; short enough that a dead
+	 * holder's lock self-heals within a couple of requests.
+	 */
+	const CUSTOM_CODE_REPAIR_LOCK_TTL = 30;
+
+	/**
+	 * Upper bound on rows has_unrepaired_custom_code_snippets() will look at
+	 * when proving completion. Absurdly far past any realistic
+	 * `elementor_snippet` count (these are hand-authored Custom Code
+	 * snippets, not user content) — it exists only so the one-time
+	 * verification query is bounded the same way every batch query already
+	 * is, not because a real site is expected to approach it.
+	 */
+	const CUSTOM_CODE_REPAIR_VERIFY_LIMIT = 1000000;
+
+	/**
 	 * Repair Elementor Custom Code snippets written under GH #871, once.
 	 *
 	 * Before this fix, `wp_create_elementor_custom_code` / `_update_elementor_
@@ -447,6 +510,193 @@ class Mcpwp_Activator {
 			return;
 		}
 
+		$lock_token = self::acquire_custom_code_repair_lock();
+		if ( false === $lock_token ) {
+			// Another call already owns this run. Nothing to do this
+			// request — the holder (or, if it died, the next call once the
+			// lock's TTL lapses) makes progress instead.
+			return;
+		}
+
+		try {
+			self::run_custom_code_repair_batches( $time_budget );
+		} finally {
+			self::release_custom_code_repair_lock( $lock_token );
+		}
+	}
+
+	/**
+	 * Attempt to acquire the repair mutex. See CUSTOM_CODE_REPAIR_LOCK_OPTION
+	 * above for the atomicity argument.
+	 *
+	 * @return string|false The expiry token to pass to release_...(), or
+	 *                       false when another call already holds the lock.
+	 */
+	private static function acquire_custom_code_repair_lock() {
+		global $wpdb;
+
+		if ( ! is_object( $wpdb ) || ! method_exists( $wpdb, 'insert' ) ) {
+			// No $wpdb to arbitrate with — refuse rather than run unlocked.
+			return false;
+		}
+
+		$now        = time();
+		$expires_at = (string) ( $now + self::CUSTOM_CODE_REPAIR_LOCK_TTL );
+
+		// A plain INSERT against the UNIQUE KEY on option_name is the atomic
+		// claim primitive (see the constant's docblock above) — the same one
+		// Mcpwp_Idempotency_Claim::acquire() uses for #802, applied directly
+		// here via $wpdb rather than through that class.
+		$suppressed = method_exists( $wpdb, 'suppress_errors' ) ? $wpdb->suppress_errors( true ) : null;
+
+		$inserted = $wpdb->insert(
+			$wpdb->options,
+			array(
+				'option_name'  => self::CUSTOM_CODE_REPAIR_LOCK_OPTION,
+				'option_value' => $expires_at,
+				'autoload'     => 'no',
+			),
+			array( '%s', '%s', '%s' )
+		);
+
+		if ( null !== $suppressed ) {
+			$wpdb->suppress_errors( $suppressed );
+		}
+
+		if ( 1 === (int) $inserted ) {
+			return $expires_at;
+		}
+
+		// Someone else holds the row. Only take it over if its expiry has
+		// already passed, and only via a compare-and-swap update so two
+		// callers racing to steal the same stale lock cannot both succeed.
+		if ( ! method_exists( $wpdb, 'get_var' ) || ! method_exists( $wpdb, 'update' ) ) {
+			return false;
+		}
+
+		$current = $wpdb->get_var(
+			$wpdb->prepare(
+				"SELECT option_value FROM {$wpdb->options} WHERE option_name = %s",
+				self::CUSTOM_CODE_REPAIR_LOCK_OPTION
+			)
+		);
+
+		if ( null === $current || '' === $current || (int) $current >= $now ) {
+			return false;
+		}
+
+		$stolen = $wpdb->update(
+			$wpdb->options,
+			array( 'option_value' => $expires_at ),
+			array(
+				'option_name'  => self::CUSTOM_CODE_REPAIR_LOCK_OPTION,
+				'option_value' => $current,
+			),
+			array( '%s' ),
+			array( '%s', '%s' )
+		);
+
+		return 1 === (int) $stolen ? $expires_at : false;
+	}
+
+	/**
+	 * Release the repair mutex acquired by acquire_custom_code_repair_lock().
+	 *
+	 * @param string $token The expiry value that call returned.
+	 */
+	private static function release_custom_code_repair_lock( $token ) {
+		global $wpdb;
+
+		if ( ! is_object( $wpdb ) || ! method_exists( $wpdb, 'delete' ) ) {
+			return;
+		}
+
+		// CAS delete: only remove the row if it still holds the value THIS
+		// call wrote. If our own run overran CUSTOM_CODE_REPAIR_LOCK_TTL and
+		// another call already stole the lock, that row belongs to them now
+		// and must not be deleted out from under them.
+		$wpdb->delete(
+			$wpdb->options,
+			array(
+				'option_name'  => self::CUSTOM_CODE_REPAIR_LOCK_OPTION,
+				'option_value' => $token,
+			),
+			array( '%s', '%s' )
+		);
+	}
+
+	/**
+	 * Whether any elementor_snippet post still shows the unrepaired
+	 * signature repair_custom_code_locations() fixes, checked directly
+	 * against post/postmeta content rather than through the (potentially
+	 * corrupted) cursor.
+	 *
+	 * A cursor corrupted UPWARD — set above the true max elementor_snippet
+	 * ID by something outside this migration — makes `WHERE ID > $cursor`
+	 * return zero rows on the very first call, before a single row has ever
+	 * been repaired, which looks identical to genuine completion (RC review
+	 * finding #3). Comparing the cursor to MAX(ID) cannot catch this either:
+	 * an inflated cursor is, by construction, >= any real ID, so that
+	 * comparison agrees with the corruption. Proving completion means
+	 * looking at content, not position.
+	 *
+	 * This runs at most once per site, ever: only the call about to flip
+	 * the completion flag reaches it, and every call after that returns at
+	 * the top of repair_custom_code_locations() before getting here. It is
+	 * also not a full `wp_posts` table scan: it reuses the exact same
+	 * keyset query the batch loop above already runs — `post_type` is
+	 * indexed, so it is bounded to this site's (typically small)
+	 * `elementor_snippet` count, not the whole table — just started at 0
+	 * with CUSTOM_CODE_REPAIR_VERIFY_LIMIT instead of the cursor and the
+	 * per-request batch size, since proving completion means looking at
+	 * every real row regardless of what the cursor claims.
+	 *
+	 * @return bool
+	 */
+	private static function has_unrepaired_custom_code_snippets(): bool {
+		global $wpdb;
+
+		if ( ! is_object( $wpdb ) || ! method_exists( $wpdb, 'get_col' ) ) {
+			// No way to verify — never claim completion on an answer that
+			// could not actually be checked.
+			return true;
+		}
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared -- same shape/reasoning as the batch query above.
+		$snippet_ids = $wpdb->get_col(
+			$wpdb->prepare(
+				"SELECT ID FROM {$wpdb->posts} WHERE post_type = %s AND ID > %d ORDER BY ID ASC LIMIT %d",
+				'elementor_snippet',
+				0,
+				self::CUSTOM_CODE_REPAIR_VERIFY_LIMIT
+			)
+		);
+
+		foreach ( $snippet_ids as $post_id ) {
+			$post_id  = (int) $post_id;
+			$location = get_post_meta( $post_id, '_elementor_location', true );
+
+			if ( in_array( $location, array( 'head', 'body_start', 'body_end' ), true ) ) {
+				return true;
+			}
+			if ( '' === (string) get_post_meta( $post_id, '_elementor_code', true ) ) {
+				return true;
+			}
+			if ( '' === (string) get_post_meta( $post_id, '_elementor_priority', true ) ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * The actual batched scan/repair loop, run only while
+	 * repair_custom_code_locations() holds CUSTOM_CODE_REPAIR_LOCK_OPTION.
+	 *
+	 * @param float|null $time_budget Same meaning as on the public method.
+	 */
+	private static function run_custom_code_repair_batches( ?float $time_budget ) {
 		global $wpdb;
 
 		$location_map = array(
@@ -472,7 +722,19 @@ class Mcpwp_Activator {
 
 			if ( empty( $snippet_ids ) ) {
 				// Scan reached the end of the table (or there was never
-				// anything to repair). Done for good.
+				// anything to repair) — or the cursor is corrupted upward
+				// and only LOOKS like it did (RC review finding #3). Prove
+				// it against content before trusting it; see
+				// has_unrepaired_custom_code_snippets() for why.
+				if ( self::has_unrepaired_custom_code_snippets() ) {
+					// The cursor lied. Reset it to a value we can trust and
+					// let the next call rescan for real; every fix above is
+					// idempotent, so rescanning already-correct rows costs
+					// a no-op update, not a double-apply.
+					update_option( self::CUSTOM_CODE_REPAIR_CURSOR_OPTION, 0, false );
+					return;
+				}
+
 				delete_option( self::CUSTOM_CODE_REPAIR_CURSOR_OPTION );
 				update_option( 'mcpwp_custom_code_locations_repaired', 1, false );
 				return;

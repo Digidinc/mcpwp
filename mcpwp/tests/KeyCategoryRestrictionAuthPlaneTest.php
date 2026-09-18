@@ -176,6 +176,43 @@ final class KeyCategoryRestrictionAuthPlaneTest extends TestCase {
 		$this->assertTrue( $auth->verify_api_key( $this->request_with_key( $created['key'], 'GET', '/mcpwp/v1/site-info' ) ) );
 	}
 
+	// ── Custom Code stays admin-scoped through the real auth path ───────────
+	//
+	// RC review LOW finding: CustomCodeUnfilteredHtmlGrantTest's
+	// test_custom_code_route_is_admin_scoped() only reflects into
+	// get_required_scope_for_request() directly, never running the actual
+	// verify_api_key() chain (key lookup, category gate, then the scope
+	// check that would produce this error). That gap matters because the
+	// scoped `unfiltered_html` grant in write_custom_code_meta() is only
+	// defensible as long as a write-scope designer/editor key can never
+	// reach /elementor/custom-code at all — a future edit to either this
+	// route's admin-routes entry or to key_has_scope() could quietly
+	// reopen that path with the schema-level test above still green.
+
+	public function test_designer_key_is_refused_admin_scope_on_custom_code_route(): void {
+		$auth    = $this->harness();
+		$created = $auth->create_scoped_api_key( 'designer', array( 'read', 'write' ), 'designer' );
+
+		$result = $auth->verify_api_key( $this->request_with_key( $created['key'], 'POST', '/mcpwp/v1/elementor/custom-code' ) );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'insufficient_scope', $result->get_error_code() );
+		$this->assertSame( 403, $result->get_error_data()['status'] );
+		$this->assertSame( 'admin', $result->get_error_data()['required_scope'] );
+	}
+
+	public function test_editor_key_is_refused_admin_scope_on_custom_code_route(): void {
+		$auth    = $this->harness();
+		$created = $auth->create_scoped_api_key( 'editor', array( 'read', 'write' ), 'editor' );
+
+		$result = $auth->verify_api_key( $this->request_with_key( $created['key'], 'POST', '/mcpwp/v1/elementor/custom-code' ) );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'insufficient_scope', $result->get_error_code() );
+		$this->assertSame( 403, $result->get_error_data()['status'] );
+		$this->assertSame( 'admin', $result->get_error_data()['required_scope'] );
+	}
+
 	// ── The error is a 403 with actionable data, not a bare boolean false ───
 
 	public function test_forbidden_category_error_names_the_role_and_allowed_categories(): void {
