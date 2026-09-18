@@ -30,14 +30,30 @@ trait Mcpwp_Free_Tools_Site_Trait {
 
 		$tools[] = $this->define_tool(
 			'wp_introspect',
-			'Get a machine-readable description of this plugin (auth, endpoints, tools, capabilities) so AI clients can self-configure instead of guessing',
-			array()
+			'Get a machine-readable description of this plugin (auth, endpoints, tools, capabilities) so AI clients can self-configure instead of guessing. Compact tool list by default (name + one-line description, no schema). Pass tool="wp_x" to get that one tool\'s full inputSchema, or full=true to dump every tool\'s schema (200KB+).',
+			array(
+				'tool' => array(
+					'type'        => 'string',
+					'description' => 'Return only this tool\'s full entry (description, inputSchema, annotations, route) instead of the compact list. Takes precedence over full.',
+				),
+				'full' => array(
+					'type'        => 'boolean',
+					'description' => 'Return every tool with its full input schema (200KB+) instead of the compact name+description list.',
+					'default'     => false,
+				),
+			)
 		);
 
 		$tools[] = $this->define_tool(
 			'wp_onboard',
 			'Get a complete first-connection briefing for this WordPress site. Returns site identity, content inventory, active integrations, available tools grouped by category, site context, recommended first actions, and a quick reference card. Call this first when connecting to a new site.',
-			array()
+			array(
+				'sections' => array(
+					'type'        => 'array',
+					'description' => 'Allowlist of top-level sections to return: site_identity, content_inventory, active_integrations, available_tools, site_context, recommended_actions, quick_reference, suggested_first_tools, quick_start, pro_active. Omit for the full briefing — available_tools alone is ~95% of that payload; ask for the sections you actually need.',
+					'items'       => array( 'type' => 'string' ),
+				),
+			)
 		);
 
 		$tools[] = $this->define_tool(

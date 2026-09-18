@@ -87,6 +87,15 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 							'type'        => 'boolean',
 							'default'     => false,
 						),
+						'include_raw'    => array(
+							'description' => __( 'Also include elementor_json (raw JSON string duplicate of elementor_data). Off by default — doubles the payload.', 'mcpwp' ),
+							'type'        => 'boolean',
+							'default'     => false,
+						),
+						'element_id'     => array(
+							'description' => __( 'Return only the subtree of this one element (by id, from wp_get_elementor_summary) instead of the full page. 404 if not found.', 'mcpwp' ),
+							'type'        => 'string',
+						),
 					),
 				),
 				array(
@@ -455,6 +464,21 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 					'methods'             => WP_REST_Server::READABLE,
 					'callback'            => array( $this, 'get_widget_schema' ),
 					'permission_callback' => array( $this, 'check_permission' ),
+					'args'                => array(
+						'search'   => array(
+							'description' => __( 'Case-insensitive substring match against widget name, title, and description.', 'mcpwp' ),
+							'type'        => 'string',
+						),
+						'category' => array(
+							'description' => __( 'Filter to widgets whose reference category matches exactly.', 'mcpwp' ),
+							'type'        => 'string',
+						),
+						'fields'   => array(
+							'description' => __( 'Allowlist of per-widget keys to return (e.g. ["name","category"]). Omit for every field.', 'mcpwp' ),
+							'type'        => 'array',
+							'items'       => array( 'type' => 'string' ),
+						),
+					),
 				),
 			)
 		);
@@ -468,6 +492,17 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 					'methods'             => WP_REST_Server::READABLE,
 					'callback'            => array( $this, 'get_widget_schema' ),
 					'permission_callback' => array( $this, 'check_permission' ),
+					'args'                => array(
+						'tab'    => array(
+							'description' => __( 'Return controls from only this tab (content, style, or advanced).', 'mcpwp' ),
+							'type'        => 'string',
+						),
+						'fields' => array(
+							'description' => __( 'Allowlist of top-level result keys to return (e.g. ["tabs"] or ["description","example","common_mistakes"]). Omit for every field.', 'mcpwp' ),
+							'type'        => 'array',
+							'items'       => array( 'type' => 'string' ),
+						),
+					),
 				),
 			)
 		);
@@ -664,6 +699,7 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 		$options = array(
 			'strip_defaults' => (bool) $request->get_param( 'strip_defaults' ),
 			'include_raw'    => (bool) $request->get_param( 'include_raw' ),
+			'element_id'     => (string) $request->get_param( 'element_id' ),
 		);
 		$result  = $this->elementor->get_elementor_data( $page_id, $options );
 
@@ -979,7 +1015,14 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 		$this->log_activity( 'get_widget_schema', $request );
 
 		$widget_type = $request->get_param( 'type' );
-		$result      = $this->elementor->get_widget_schema( $widget_type ? (string) $widget_type : '' );
+		$fields      = $request->get_param( 'fields' );
+		$args        = array(
+			'search'   => (string) $request->get_param( 'search' ),
+			'category' => (string) $request->get_param( 'category' ),
+			'tab'      => (string) $request->get_param( 'tab' ),
+			'fields'   => is_array( $fields ) ? $fields : array(),
+		);
+		$result      = $this->elementor->get_widget_schema( $widget_type ? (string) $widget_type : '', $args );
 
 		if ( is_wp_error( $result ) ) {
 			return $result;

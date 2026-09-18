@@ -50,6 +50,18 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 					'methods'             => WP_REST_Server::READABLE,
 					'callback'            => array( $this, 'get_introspect' ),
 					'permission_callback' => array( $this, 'check_permission' ),
+					'args'                => array(
+						'full' => array(
+							'description'       => __( 'Return every tool with its full input schema (200KB+). Compact name+description list is the default.', 'mcpwp' ),
+							'type'              => 'boolean',
+							'default'           => false,
+							'sanitize_callback' => 'rest_sanitize_boolean',
+						),
+						'tool' => array(
+							'description' => __( 'Return only this tool\'s full entry (name, description, inputSchema, annotations, route) instead of the tool list. Takes precedence over full.', 'mcpwp' ),
+							'type'        => 'string',
+						),
+					),
 				),
 			)
 		);
@@ -61,6 +73,13 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 					'methods'             => WP_REST_Server::READABLE,
 					'callback'            => array( $this, 'get_onboard' ),
 					'permission_callback' => array( $this, 'check_permission' ),
+					'args'                => array(
+						'sections' => array(
+							'description' => __( 'Allowlist of top-level sections to include (e.g. ["site_identity","content_inventory"]). Omit for the full briefing — available_tools alone is the majority of that payload.', 'mcpwp' ),
+							'type'        => 'array',
+							'items'       => array( 'type' => 'string' ),
+						),
+					),
 				),
 			)
 		);
@@ -275,11 +294,38 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 
 		$data = $mcp->get_introspection_data();
 
+		// A single-tool lookup answers the exact gap #830 reported: the compact
+		// list below has no schema, and ?full=true dumps every tool's schema to
+		// get one. Return just the requested tool's full entry — same shape a
+		// tool would have inside the legacy full payload — and skip building
+		// the compact list entirely. Wins over `full`, which asked for
+		// "everything"; naming one tool is a narrower, more specific request.
+		$tool_filter = (string) $request->get_param( 'tool' );
+		if ( '' !== $tool_filter && isset( $data['tools'] ) && is_array( $data['tools'] ) ) {
+			foreach ( $data['tools'] as $tool_entry ) {
+				if ( isset( $tool_entry['name'] ) && $tool_entry['name'] === $tool_filter ) {
+					return $this->success_response(
+						array(
+							'plugin' => $data['plugin'] ?? array(),
+							'tool'   => $tool_entry,
+						)
+					);
+				}
+			}
+			return $this->error_response(
+				'unknown_tool',
+				sprintf( __( 'Unknown tool "%s".', 'mcpwp' ), $tool_filter ),
+				404,
+				array( 'hint' => 'Call wp_introspect with no arguments for the compact tool list, or wp_introspect(full=true) for every tool.' )
+			);
+		}
+
 		// Compact by default: the full output (every tool with its input
 		// schema and route map) exceeds 200KB / 5,000+ lines, which overflows
 		// AI-client contexts. Summarize tools to name + one-line description;
-		// schemas stay available via MCP tools/list (with Tool Search) or
-		// ?full=true for the legacy payload.
+		// schemas stay available via MCP tools/list (with Tool Search), a
+		// single-tool lookup (?tool=<name>, above), or ?full=true for the
+		// legacy payload.
 		$full = rest_sanitize_boolean( $request->get_param( 'full' ) );
 		if ( ! $full && isset( $data['tools'] ) && is_array( $data['tools'] ) ) {
 			$summary = array();
@@ -619,6 +665,15 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 			'quick_start'           => $quick_start,
 			'pro_active'            => $is_pro,
 		);
+
+		// Opt-in narrowing (#830): available_tools alone is ~95% of this
+		// payload (every tool name+description, grouped by category). No
+		// `sections` param — the behaviour every existing caller already
+		// gets — returns the full briefing unchanged, byte-for-byte.
+		$sections = $request->get_param( 'sections' );
+		if ( is_array( $sections ) && ! empty( $sections ) ) {
+			$data = array_intersect_key( $data, array_flip( $sections ) );
+		}
 
 		return $this->success_response( $data );
 	}
