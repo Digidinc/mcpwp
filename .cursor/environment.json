@@ -8,5 +8,5 @@
       "command": "bash .cursor/wp-rig-up.sh && sudo docker compose -f .cursor/wp-rig.compose.yml logs -f"
     }
   ],
-  "ports": [8086]
+  "ports": [8086, 5175, 8000, 3100]
 }

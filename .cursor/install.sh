@@ -32,6 +32,15 @@ fi
 echo '{"storage-driver":"vfs","features":{"containerd-snapshotter":false}}' \
   | sudo tee /etc/docker/daemon.json >/dev/null
 
+echo "==> Ensuring video toolchain (FFmpeg + Python venv) for OpenMontage / OpenShorts"
+# FFmpeg powers OpenMontage's composition/encoding and OpenShorts' clip export.
+# python3-venv/-dev are needed by OpenMontage's `make setup` (creates .venv).
+if ! command -v ffmpeg >/dev/null 2>&1; then
+  sudo apt-get install -y -qq ffmpeg
+fi
+sudo apt-get install -y -qq python3-venv python3-dev >/dev/null 2>&1 || true
+ffmpeg -version | head -1
+
 echo "==> Installing PHP dev dependencies (phpunit, phpcs)"
 composer install --no-interaction --prefer-dist --working-dir "$REPO_ROOT/mcpwp"
 
