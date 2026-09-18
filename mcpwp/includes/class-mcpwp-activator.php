@@ -221,6 +221,79 @@ class Mcpwp_Activator {
 	}
 
 	/**
+	 * Repair Elementor Custom Code snippets written under GH #871, once.
+	 *
+	 * Before this fix, `wp_create_elementor_custom_code` / `_update_elementor_
+	 * custom_code` stored our public location value ('head' / 'body_start' /
+	 * 'body_end') literally in `_elementor_location`, instead of Elementor
+	 * Pro's real internal value ('elementor_head' / 'elementor_body_start' /
+	 * 'elementor_body_end'). They also never wrote `_elementor_code` —
+	 * Elementor Pro's own renderer (ElementorPro\Modules\CustomCode\Document::
+	 * print_content()) reads that meta key, not `post_content` — and never
+	 * wrote `_elementor_priority`, which Elementor's location query needs
+	 * present (not just correct) to include the post at all. Any snippet
+	 * created before this release is silently dead on arrival regardless of
+	 * how correct everything else about it looks.
+	 *
+	 * This repairs every `elementor_snippet` post in place:
+	 *  - `_elementor_location` in {head, body_start, body_end} is rewritten to
+	 *    the matching Elementor internal value. A location already holding an
+	 *    internal value, or something unrecognized, is left untouched — we
+	 *    only fix the one specific mistake this bug made.
+	 *  - `_elementor_code` is backfilled from `post_content` when absent, so a
+	 *    pre-fix snippet's actual code (which round-trips fine through our own
+	 *    API today) becomes visible to Elementor's renderer too.
+	 *  - `_elementor_priority` is backfilled to 1 (this class's own default)
+	 *    when absent.
+	 *
+	 * Idempotent, own flag — same reasoning as the migrations above. Safe to
+	 * run on a site with no Elementor Pro / no snippets: the query simply
+	 * returns nothing.
+	 */
+	public static function repair_custom_code_locations() {
+		if ( get_option( 'mcpwp_custom_code_locations_repaired' ) ) {
+			return;
+		}
+
+		$location_map = array(
+			'head'       => 'elementor_head',
+			'body_start' => 'elementor_body_start',
+			'body_end'   => 'elementor_body_end',
+		);
+
+		$snippet_ids = get_posts(
+			array(
+				'post_type'      => 'elementor_snippet',
+				'post_status'    => 'any',
+				'posts_per_page' => -1,
+				'fields'         => 'ids',
+			)
+		);
+
+		foreach ( $snippet_ids as $post_id ) {
+			$location = get_post_meta( $post_id, '_elementor_location', true );
+			if ( isset( $location_map[ $location ] ) ) {
+				update_post_meta( $post_id, '_elementor_location', $location_map[ $location ] );
+			}
+
+			$code = get_post_meta( $post_id, '_elementor_code', true );
+			if ( '' === (string) $code ) {
+				$post = get_post( $post_id );
+				if ( $post && '' !== (string) $post->post_content ) {
+					update_post_meta( $post_id, '_elementor_code', $post->post_content );
+				}
+			}
+
+			$priority = get_post_meta( $post_id, '_elementor_priority', true );
+			if ( '' === (string) $priority ) {
+				update_post_meta( $post_id, '_elementor_priority', 1 );
+			}
+		}
+
+		update_option( 'mcpwp_custom_code_locations_repaired', 1, false );
+	}
+
+	/**
 	 * Create API role and user.
 	 */
 	private static function create_api_role_and_user() {

@@ -711,8 +711,13 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 				),
 				'location'   => array(
 					'type'        => 'string',
-					'description' => 'Injection location: head, body_start, or body_end',
+					'description' => 'Injection location: head, body_start, or body_end. Any other value is rejected, not silently coerced.',
 					'default'     => 'head',
+				),
+				'priority'   => array(
+					'type'        => 'integer',
+					'description' => 'Print order among snippets sharing a location, 1-10 (lower prints first).',
+					'default'     => 1,
 				),
 				'status'     => array(
 					'type'        => 'string',
@@ -759,7 +764,11 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 				),
 				'location'   => array(
 					'type'        => 'string',
-					'description' => 'Injection location: head, body_start, or body_end',
+					'description' => 'Injection location: head, body_start, or body_end. Any other value is rejected, not silently coerced.',
+				),
+				'priority'   => array(
+					'type'        => 'integer',
+					'description' => 'Print order among snippets sharing a location, 1-10 (lower prints first).',
 				),
 				'status'     => array(
 					'type'        => 'string',
@@ -939,6 +948,11 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 					'type'        => 'array',
 					'description' => 'Array of post IDs for specific_posts scope',
 					'items'       => array( 'type' => 'integer' ),
+				),
+				'dry_run' => array(
+					'type'        => 'boolean',
+					'description' => 'Validate without creating or publishing the template (#828: previously ignored here, so a dry run still created and published the template).',
+					'default'     => false,
 				),
 			)
 		);

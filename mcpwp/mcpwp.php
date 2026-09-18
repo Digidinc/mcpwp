@@ -496,6 +496,22 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 		Mcpwp_Activator::grant_agent_published_page_caps();
 	}
 
+	// One-time: repair Elementor Custom Code snippets written under GH #871 —
+	// wrong `_elementor_location` value, missing `_elementor_code` /
+	// `_elementor_priority` postmeta (see Mcpwp_Activator::
+	// repair_custom_code_locations() for the full defect). Own flag, same
+	// reasoning as the migrations above.
+	//
+	// #861b and #871 landed on separate branches and added their hooks at the
+	// same line, so this is the one place the 3.12 integration conflicted. The
+	// two are independent — different flags, different data, neither reads the
+	// other's state — so both run. Dropping either during conflict resolution
+	// would silently strand one migration on every existing install.
+	if ( ! get_option( 'mcpwp_custom_code_locations_repaired' ) ) {
+		require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-activator.php';
+		Mcpwp_Activator::repair_custom_code_locations();
+	}
+
 	// Initialize the plugin
 	$loader = new Mcpwp_Loader();
 	$loader->run();
