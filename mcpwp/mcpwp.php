@@ -483,6 +483,16 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 		Mcpwp_Activator::stamp_analytics_choice();
 	}
 
+	// One-time: repair Elementor Custom Code snippets written under GH #871 —
+	// wrong `_elementor_location` value, missing `_elementor_code` /
+	// `_elementor_priority` postmeta (see Mcpwp_Activator::
+	// repair_custom_code_locations() for the full defect). Own flag, same
+	// reasoning as the migrations above.
+	if ( ! get_option( 'mcpwp_custom_code_locations_repaired' ) ) {
+		require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-activator.php';
+		Mcpwp_Activator::repair_custom_code_locations();
+	}
+
 	// Initialize the plugin
 	$loader = new Mcpwp_Loader();
 	$loader->run();

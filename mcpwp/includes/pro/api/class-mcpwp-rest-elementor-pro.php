@@ -697,9 +697,14 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 				'type'        => 'string',
 			),
 			'location'   => array(
-				'description' => __( 'Injection location: head, body_start, or body_end.', 'mcpwp' ),
+				'description' => __( 'Injection location: head, body_start, or body_end. Any other value is rejected — it will not be silently coerced.', 'mcpwp' ),
 				'type'        => 'string',
 				'default'     => 'head',
+			),
+			'priority'   => array(
+				'description' => __( 'Print order among snippets sharing a location, 1-10 (lower prints first). Matches Elementor Pro\'s own Custom Code priority field.', 'mcpwp' ),
+				'type'        => 'integer',
+				'default'     => 1,
 			),
 			'status'     => array(
 				'description' => __( 'Post status: draft or publish.', 'mcpwp' ),
@@ -766,9 +771,23 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		}
 
 		if ( null !== $request->get_param( 'location' ) ) {
-			$payload['location'] = $this->normalize_custom_code_location( $request->get_param( 'location' ) );
+			$location = $this->normalize_custom_code_location( $request->get_param( 'location' ) );
+			if ( is_wp_error( $location ) ) {
+				return $this->error_response(
+					$location->get_error_code(),
+					$location->get_error_message(),
+					(int) ( $location->get_error_data()['status'] ?? 400 )
+				);
+			}
+			$payload['location'] = $location;
 		} elseif ( $creating ) {
 			$payload['location'] = 'head';
+		}
+
+		if ( null !== $request->get_param( 'priority' ) ) {
+			$payload['priority'] = max( 1, min( 10, absint( $request->get_param( 'priority' ) ) ) );
+		} elseif ( $creating ) {
+			$payload['priority'] = 1;
 		}
 
 		if ( null !== $request->get_param( 'status' ) ) {
@@ -809,15 +828,93 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	}
 
 	/**
-	 * Normalize Elementor custom-code injection location.
+	 * Public Custom Code location value => Elementor Pro's real internal
+	 * `_elementor_location` postmeta value.
+	 *
+	 * Verified against Elementor Pro's own source (4.2.x, elementor-snippet CPT):
+	 * - modules/custom-code/custom-code-metabox.php: Custom_Code_Metabox::
+	 *   OPTION_LOCATION_HEAD = 'elementor_head', OPTION_LOCATION_BODY_START =
+	 *   'elementor_body_start', OPTION_LOCATION_BODY_END = 'elementor_body_end'.
+	 * - modules/custom-code/module.php frontend_actions(): wp_head/wp_body_open/
+	 *   wp_footer each call print_snippets() with one of those three literal
+	 *   strings, and get_snippets_by_location() matches `_elementor_location`
+	 *   postmeta against it with a plain meta_query equality check — no other
+	 *   string, including our own short-form public values, is recognized.
+	 *
+	 * @return array<string,string> Public value => Elementor internal value.
+	 */
+	private function get_custom_code_location_map() {
+		return array(
+			'head'       => 'elementor_head',
+			'body_start' => 'elementor_body_start',
+			'body_end'   => 'elementor_body_end',
+		);
+	}
+
+	/**
+	 * Normalize + validate a Custom Code injection location.
+	 *
+	 * Accepts either our public short-form values (head/body_start/body_end)
+	 * or Elementor's own internal values directly, and always returns the
+	 * public short-form value (the write path maps it to Elementor's internal
+	 * value at the point of persistence; see save_custom_code_meta()).
+	 *
+	 * An unrecognized value used to be silently coerced to 'head', which let a
+	 * typo through as a snippet that looked saved (status: publish, correct
+	 * code, no warnings) but never rendered anywhere — the exact defect
+	 * reported in GH #871. It is now rejected outright.
 	 *
 	 * @param string $location Raw location.
-	 * @return string Location.
+	 * @return string|WP_Error Public location value, or error for unknown input.
 	 */
 	private function normalize_custom_code_location( $location ) {
-		$location = sanitize_key( $location );
-		$allowed  = array( 'head', 'body_start', 'body_end' );
-		return in_array( $location, $allowed, true ) ? $location : 'head';
+		$location = sanitize_key( (string) $location );
+		$map      = $this->get_custom_code_location_map();
+
+		if ( isset( $map[ $location ] ) ) {
+			return $location;
+		}
+
+		$public = array_search( $location, $map, true );
+		if ( false !== $public ) {
+			return $public;
+		}
+
+		return new WP_Error(
+			'invalid_location',
+			sprintf(
+				/* translators: 1: the invalid value received, 2: comma-separated list of valid location values. */
+				__( 'Invalid Custom Code location "%1$s". Use one of: %2$s.', 'mcpwp' ),
+				$location,
+				implode( ', ', array_keys( $map ) )
+			),
+			array( 'status' => 400 )
+		);
+	}
+
+	/**
+	 * Map a stored `_elementor_location` value back to our public contract.
+	 *
+	 * Handles three cases: the correct internal Elementor value (maps back to
+	 * the short-form public value); a pre-fix broken snippet whose meta holds
+	 * the public value literally (GH #871 — passed through unchanged, since
+	 * that IS its stored value, though the snippet itself will not be
+	 * rendering; see the repair path in Mcpwp_Activator::
+	 * repair_custom_code_locations()); and anything else (passed through
+	 * as-is rather than guessed at).
+	 *
+	 * @param string $stored Raw `_elementor_location` meta value.
+	 * @return string Public location value.
+	 */
+	private function public_custom_code_location( $stored ) {
+		$map    = $this->get_custom_code_location_map();
+		$public = array_search( $stored, $map, true );
+
+		if ( false !== $public ) {
+			return $public;
+		}
+
+		return $stored;
 	}
 
 	/**
@@ -867,12 +964,48 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	/**
 	 * Persist Elementor custom-code meta.
 	 *
+	 * Two metas here are load-bearing for Elementor Pro's own renderer, not
+	 * just our API's readback, and both were missing before GH #871:
+	 *
+	 * - `_elementor_location` must hold Elementor's real internal value
+	 *   (elementor_head/elementor_body_start/elementor_body_end) — see
+	 *   get_custom_code_location_map(). Our public short-form value never
+	 *   matched anything Elementor's wp_head/wp_body_open/wp_footer hooks
+	 *   query for, so every snippet was created "successfully" and never
+	 *   rendered.
+	 * - `_elementor_code` is what ElementorPro\Modules\CustomCode\Document::
+	 *   print_content() actually echoes (custom-code/document.php: `get_post_meta(
+	 *   $this->post->ID, '_elementor_' . Custom_Code_Metabox::FIELD_CODE, true )`).
+	 *   This class only ever wrote the code to `post_content`, which that
+	 *   renderer never reads — so even a correctly-located snippet rendered
+	 *   as an empty comment block. Verified end to end on the local rig
+	 *   (wp-rig-wp-dev): the marker only appeared on the live page once both
+	 *   `_elementor_location` and `_elementor_code` were corrected.
+	 * - `_elementor_priority` matters for a subtler reason: Elementor Pro's
+	 *   get_snippets_by_location() runs `WP_Query` with a top-level `meta_key`
+	 *   (for `orderby => meta_value_num`) *alongside* an explicit `meta_query`
+	 *   for location. WordPress ANDs the implicit clause from that top-level
+	 *   `meta_key` with the explicit meta_query, which requires the priority
+	 *   row to exist at all — a snippet without it is excluded from the query
+	 *   outright, never merely mis-ordered. Always writing a priority avoids
+	 *   depending on that WP_Query interaction to happen to still work.
+	 *
 	 * @param int   $post_id  Snippet post ID.
 	 * @param array $payload  Prepared payload.
 	 */
 	private function save_custom_code_meta( $post_id, $payload ) {
 		if ( isset( $payload['location'] ) ) {
-			update_post_meta( $post_id, '_elementor_location', $payload['location'] );
+			$map               = $this->get_custom_code_location_map();
+			$internal_location = isset( $map[ $payload['location'] ] ) ? $map[ $payload['location'] ] : $payload['location'];
+			update_post_meta( $post_id, '_elementor_location', $internal_location );
+		}
+
+		if ( array_key_exists( 'code', $payload ) ) {
+			update_post_meta( $post_id, '_elementor_code', $payload['code'] );
+		}
+
+		if ( isset( $payload['priority'] ) ) {
+			update_post_meta( $post_id, '_elementor_priority', (int) $payload['priority'] );
 		}
 
 		update_post_meta( $post_id, '_elementor_edit_mode', 'builder' );
@@ -1096,7 +1229,8 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			'title'             => (string) $post->post_title,
 			'status'            => (string) $post->post_status,
 			'modified_gmt'       => (string) $post->post_modified_gmt,
-			'location'           => (string) ( get_post_meta( $post->ID, '_elementor_location', true ) ?: 'head' ),
+			'location'           => $this->public_custom_code_location( (string) ( get_post_meta( $post->ID, '_elementor_location', true ) ?: 'elementor_head' ) ),
+			'priority'           => (int) ( get_post_meta( $post->ID, '_elementor_priority', true ) ?: 1 ),
 			'conditions'         => $this->get_custom_code_conditions( $post->ID ),
 			'conditions_engine'  => (string) ( get_post_meta( $post->ID, '_mcpwp_custom_code_conditions_engine', true ) ?: 'unknown' ),
 			'code_length'        => strlen( (string) $post->post_content ),
