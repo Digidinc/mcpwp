@@ -136,11 +136,11 @@ trait Mcpwp_Free_Tools_Elementor_Trait {
 
 		$tools[] = $this->define_tool(
 			'wp_add_section',
-			'Add a new section/container to an Elementor page at a specific position. No need to send the full page — just the new section. WORKFLOW: 1) wp_get_elementor_summary → get IDs for positioning 2) Build JSON manually or via wp_get_blueprint 3) wp_add_section(page_id, element, position) 4) Verify response has meta_verified=true.',
+			'Add a new section/container to an Elementor page at a specific position. No need to send the full page — just the new section. WORKFLOW: 1) wp_get_elementor_summary → get IDs for positioning 2) Build JSON manually or via wp_get_blueprint 3) wp_add_section(id, element, position) 4) Verify response has meta_verified=true.',
 			array(
-				'page_id'  => array(
-					'type'        => 'integer',
-					'description' => 'Page ID',
+				'id'  => array(
+					'type'        => 'number',
+					'description' => 'Page or post ID',
 					'required'    => true,
 				),
 				'element'  => array(
@@ -164,9 +164,9 @@ trait Mcpwp_Free_Tools_Elementor_Trait {
 			'wp_remove_section',
 			'Remove a section/container from an Elementor page by its element ID. Searches both top-level and nested elements.',
 			array(
-				'page_id'    => array(
-					'type'        => 'integer',
-					'description' => 'Page ID',
+				'id'    => array(
+					'type'        => 'number',
+					'description' => 'Page or post ID',
 					'required'    => true,
 				),
 				'element_id' => array(
@@ -181,9 +181,9 @@ trait Mcpwp_Free_Tools_Elementor_Trait {
 			'wp_replace_section',
 			'Replace an entire section/container in an Elementor page by its element ID. The new element takes the position of the old one. Get the target element ID from wp_get_elementor_summary first.',
 			array(
-				'page_id'    => array(
-					'type'        => 'integer',
-					'description' => 'Page ID',
+				'id'         => array(
+					'type'        => 'number',
+					'description' => 'Page or post ID',
 					'required'    => true,
 				),
 				'element_id' => array(
@@ -208,9 +208,9 @@ trait Mcpwp_Free_Tools_Elementor_Trait {
 			'wp_patch_elementor',
 			'Apply multiple operations to an Elementor page in a single read-write cycle (max 20 ops). More efficient than calling add/remove/replace individually. Operations: add, remove, replace, settings. Get element IDs from wp_get_elementor_summary first. Pass repair_ids=true (operations optional) to rewrite element ids that are not exactly 7 alphanumeric characters — Elementor Pro\'s Search live results and Taxonomy Filter/Loop Grid AJAX reject them — and repoint the references Elementor resolves (Taxonomy Filter selected_element, Off-canvas links); the response\'s id_repair lists every old -> new id. Like any validated write, it also applies the validator\'s standard fixes, reported in warnings.',
 			array(
-				'page_id'    => array(
-					'type'        => 'integer',
-					'description' => 'Page ID',
+				'id'         => array(
+					'type'        => 'number',
+					'description' => 'Page or post ID',
 					'required'    => true,
 				),
 				'operations' => array(
@@ -312,9 +312,9 @@ trait Mcpwp_Free_Tools_Elementor_Trait {
 
 		$tools[] = $this->define_tool(
 			'wp_get_elementor_widgets',
-			'Get list of available Elementor widgets. Pass a widget name to get its full controls schema with valid control keys, types, defaults, and options.',
+			'Get list of available Elementor widgets. Pass a widget type name to get its full controls schema with valid control keys, types, defaults, and options.',
 			array(
-				'widget' => array(
+				'widget_type' => array(
 					'type'        => 'string',
 					'description' => 'Widget type name (e.g. "heading", "image", "nav-menu") to get full controls schema. Omit to list all widgets.',
 				),

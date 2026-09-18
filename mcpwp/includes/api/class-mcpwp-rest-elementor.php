@@ -1014,7 +1014,27 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 	public function get_widget_schema( $request ) {
 		$this->log_activity( 'get_widget_schema', $request );
 
+		// 'type' is this route's own param name. 'widget' also accepted
+		// (#831) — the Pro build registers a same-path route whose handler
+		// reads 'widget', so a caller must not have to know which controller
+		// answered /elementor/widgets on this install.
 		$widget_type = $request->get_param( 'type' );
+		// Both halves are load-bearing and #830 and #831 each wrote only one of
+		// them, so this is the one hunk where taking either side wholesale
+		// silently drops a shipped fix:
+		//
+		// #831 — accept the deprecated `widget` name as well as `type`. On main
+		// the schema advertised `widget` while this handler read only `type`, so
+		// the filter was silently dropped and every call listed all widgets.
+		// #830 — pass the projection args through, turning a 119KB schema
+		// response into ~3KB when a caller asks for one tab or a field subset.
+		//
+		// Keeping only #831 loses the projection; keeping only #830 re-breaks
+		// the dropped-parameter bug for callers still on `widget`.
+		if ( ! $widget_type ) {
+			$widget_type = $request->get_param( 'widget' );
+		}
+
 		$fields      = $request->get_param( 'fields' );
 		$args        = array(
 			'search'   => (string) $request->get_param( 'search' ),
