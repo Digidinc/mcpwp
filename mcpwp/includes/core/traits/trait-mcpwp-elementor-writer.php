@@ -128,17 +128,27 @@ trait Mcpwp_Elementor_Writer_Trait {
 	 * A THIRD failure mode: Document::save() is documented to `@return bool`,
 	 * and returns exactly `false` — no exception, no WP_Error — when
 	 * is_editable_by_current_user() fails. On a PUBLISHED post that check
-	 * requires edit_published_{posts,pages} in addition to edit_{posts,pages};
-	 * the mcpwp_api_agent role has the latter but deliberately not the former
-	 * (least privilege). Before this fix that bare `false` fell through both
-	 * branches below, `ok` came back `true`, and every caller reported
-	 * document_save/html_cache_rebuild as having succeeded — a receipt that
-	 * claimed a save pipeline ran (revisions, `after_save` hooks, Pro features)
-	 * when Elementor had declined outright and only MCPWP's own raw-meta
-	 * fallback ever touched the row (#861, filed by the 3.12 undo lane; verified
-	 * on a real WP 7.0.2 + Elementor 4.2.4 rig — save() returns bool(false), no
-	 * post revision is created). A `false` return is recorded under
-	 * "<label>_declined" and MUST also leave the caller on the degraded path.
+	 * requires edit_published_{posts,pages} in addition to edit_{posts,pages}.
+	 * Until #861b the mcpwp_api_agent role had the latter but deliberately not
+	 * the former (least privilege); before the #861 fix that bare `false` fell
+	 * through both branches below, `ok` came back `true`, and every caller
+	 * reported document_save/html_cache_rebuild as having succeeded — a
+	 * receipt that claimed a save pipeline ran (revisions, `after_save` hooks,
+	 * Pro features) when Elementor had declined outright and only MCPWP's own
+	 * raw-meta fallback ever touched the row (#861, filed by the 3.12 undo
+	 * lane; verified on a real WP 7.0.2 + Elementor 4.2.4 rig — save() returns
+	 * bool(false), no post revision is created).
+	 *
+	 * #861b (owner decision, 2026-09-18): agent writes to published pages are
+	 * intended behaviour, so the role now grants edit_published_posts/
+	 * edit_published_pages openly (see Mcpwp_Activator::create_api_role_and_user()
+	 * and the one-time grant_agent_published_page_caps() migration) instead of
+	 * the code quietly routing around the denial. This decline path is kept as
+	 * defense-in-depth — a custom/legacy role, a site mid-migration before the
+	 * one-time grant has run, or a future capability regression can still hit
+	 * it — but it is no longer the expected path for the shipped role. A
+	 * `false` return is recorded under "<label>_declined" and MUST also leave
+	 * the caller on the degraded path.
 	 *
 	 * @param callable $call   The Elementor call to attempt.
 	 * @param array    $debug  Debug bag, written by reference on failure.

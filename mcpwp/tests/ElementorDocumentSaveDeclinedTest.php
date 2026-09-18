@@ -6,8 +6,16 @@
  * Document::save() returned bool `false`.
  *
  * Root cause, verified on a real WP 7.0.2 + Elementor 4.2.4 rig with the
- * mcpwp_api_agent role (edit_pages + edit_others_pages, deliberately NOT
- * edit_published_pages):
+ * mcpwp_api_agent role as it existed before #861b (edit_pages +
+ * edit_others_pages, deliberately NOT edit_published_pages):
+ *
+ * #861b granted edit_published_posts/edit_published_pages to the shipped
+ * role (owner decision: agent writes to published pages are intended), so
+ * this exact scenario no longer occurs for that role. The decline path
+ * covered below stays as defense-in-depth — a custom/legacy role, or a site
+ * mid-migration before Mcpwp_Activator::grant_agent_published_page_caps()
+ * has run, can still hit it — exercised here via a double that forces
+ * Document::save() to decline regardless of the real capability set.
  *
  *   current_user_can( 'edit_post', $published_page_id ) === false
  *   \Elementor\Core\Base\Document::is_editable_by_current_user() === false

@@ -55,6 +55,12 @@ $GLOBALS['mcpwp_test_user_caps'] = array();
 $GLOBALS['mcpwp_test_users'] = array(
     (object) array( 'ID' => 2, 'roles' => array( 'mcpwp_api_agent' ) ),
 );
+// Role registry double for add_role()/get_role() — keyed by role slug, value
+// a WP_Role instance. Lets #861b's capability-grant migration be exercised
+// against something that behaves like WordPress's real role storage (a
+// pre-existing role is left alone by add_role(), only add_cap()/remove_cap()
+// mutate it) without pulling in all of wp-admin/includes/capabilities.php.
+$GLOBALS['mcpwp_test_roles'] = array();
 
 /**
  * Minimal stand-in for WP_User. Production code identifies the user a
@@ -69,6 +75,66 @@ class WP_User
     {
         $this->ID = (int) $id;
     }
+}
+
+/**
+ * Minimal stand-in for WP_Role — just enough for #861b's capability-grant
+ * migration (has_cap/add_cap/remove_cap against a plain associative array),
+ * mirroring core's own WP_Role shape closely enough that production code
+ * written against the real class needs no changes to run against this double.
+ */
+class WP_Role
+{
+    public $name;
+    public $capabilities;
+
+    public function __construct($role, $capabilities = array())
+    {
+        $this->name         = $role;
+        $this->capabilities = $capabilities;
+    }
+
+    public function has_cap($cap)
+    {
+        return ! empty($this->capabilities[ $cap ]);
+    }
+
+    public function add_cap($cap, $grant = true)
+    {
+        $this->capabilities[ $cap ] = (bool) $grant;
+        $GLOBALS['mcpwp_test_roles'][ $this->name ] = $this;
+    }
+
+    public function remove_cap($cap)
+    {
+        unset($this->capabilities[ $cap ]);
+        $GLOBALS['mcpwp_test_roles'][ $this->name ] = $this;
+    }
+}
+
+/**
+ * add_role() no-ops when the role already exists — real WordPress behaviour,
+ * and the exact reason #861b needs a separate one-time migration for
+ * already-installed sites rather than relying on this to backfill new caps.
+ */
+function add_role($role, $display_name, $capabilities = array())
+{
+    if (isset($GLOBALS['mcpwp_test_roles'][ $role ])) {
+        return null;
+    }
+
+    $GLOBALS['mcpwp_test_roles'][ $role ] = new WP_Role($role, $capabilities);
+    return $GLOBALS['mcpwp_test_roles'][ $role ];
+}
+
+function get_role($role)
+{
+    return $GLOBALS['mcpwp_test_roles'][ $role ] ?? null;
+}
+
+function remove_role($role)
+{
+    unset($GLOBALS['mcpwp_test_roles'][ $role ]);
 }
 
 class WP_Error
