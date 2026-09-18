@@ -486,6 +486,14 @@ trait Mcpwp_Api_Auth {
 			return $category_check;
 		}
 
+		// Per-key role/category restriction (#874) — see
+		// check_key_category_restriction_for_route() docblock for why this is a
+		// separate check from the one immediately above.
+		$key_category_check = $this->check_key_category_restriction_for_route( $request );
+		if ( is_wp_error( $key_category_check ) ) {
+			return $key_category_check;
+		}
+
 		return true;
 	}
 
@@ -746,6 +754,115 @@ trait Mcpwp_Api_Auth {
 	}
 
 	/**
+	 * Check whether the AUTHENTICATED KEY's own role/category restriction allows
+	 * the route for the current request (#874).
+	 *
+	 * This is a DIFFERENT gate from check_disabled_category_for_route() above:
+	 * that one is a site-administrator-wide toggle (same for every key); this one
+	 * is the per-key restriction that is the entire substance of the "role" a
+	 * scoped key is created with (admin/designer/author/editor/custom — see
+	 * get_role_definitions()). Before this fix that restriction was enforced
+	 * ONLY inside Mcpwp_REST_MCP::handle_tools_call(), i.e. only for callers going
+	 * through the /mcp JSON-RPC surface. Every other entry point to this same
+	 * REST API — a direct call to any /mcpwp/v1/* route, or one nested inside a
+	 * /batch envelope — skipped it entirely, so an "author" key (categories:
+	 * content, media, taxonomy — no elementor* category) could write Elementor
+	 * data by calling POST /mcpwp/v1/elementor/{id} directly, something the same
+	 * key's role explicitly does not permit through /mcp. The scope tier
+	 * (read/write/admin, see get_required_scope_for_request()) was satisfied in
+	 * both cases — scope and category are orthogonal checks, and only one of the
+	 * two was ever applied outside of /mcp.
+	 *
+	 * Fails OPEN (allows) on an unclassified route ('' from get_category_for_route()),
+	 * matching check_disabled_category_for_route()'s own treatment of the same
+	 * cases and the documented fact that many discovery routes are deliberately
+	 * left uncategorised. Fails OPEN when the key's role carries no category
+	 * restriction (admin role, or any role/record resolve_key_tool_categories()
+	 * returns an empty array for) — see that method for the admin/custom-with-
+	 * zero-categories quirk this mirrors on purpose rather than changing.
+	 *
+	 * Called from every authentication path that also calls
+	 * check_disabled_category_for_route() (plain X-API-Key, the batch/MCP
+	 * sub-request fast path, OAuth bearer, and the mumcp.com broker bearer),
+	 * always AFTER $this->current_api_key_record is populated.
+	 *
+	 * @param WP_REST_Request $request Current request.
+	 * @return true|WP_Error True when allowed; WP_Error (403) when the key's role
+	 *                       does not include the route's tool category.
+	 */
+	protected function check_key_category_restriction_for_route( $request ) {
+		$key_record = $this->get_current_api_key_record();
+		if ( ! is_array( $key_record ) ) {
+			// No key record — trusted admin-AJAX context or a code path that
+			// never set one. Nothing to restrict.
+			return true;
+		}
+
+		$allowed = $this->resolve_key_tool_categories( $key_record );
+		if ( empty( $allowed ) ) {
+			// Unrestricted (admin role, unknown role, or legacy/migrated key).
+			return true;
+		}
+
+		$route = $this->normalize_route_for_authorization( method_exists( $request, 'get_route' ) ? (string) $request->get_route() : '' );
+
+		// /batch is a fan-out envelope, not a category surface in its own right —
+		// get_category_for_route() classifies it 'content' only so the SITE-WIDE
+		// disabled-category toggle can block it outright (check_disabled_category_for_route()).
+		// A per-key role restriction must not reuse that classification here: each
+		// operation inside the envelope re-dispatches through
+		// Mcpwp_REST_Batch::execute_operation() -> rest_do_request() ->
+		// verify_api_key_auth_only() (Mcpwp_REST_Batch::$is_batch_sub_request is
+		// true), which calls THIS method again with the operation's REAL route and
+		// correctly restricts it there. Applying the 'content' label to the outer
+		// /batch call itself would block a designer-role key from ever calling
+		// /batch at all — even to batch nothing but Elementor writes its role
+		// fully permits — which is exactly the over-broad, wrapper-level mistake
+		// #874 asked this file to stop making, just pointed the other direction.
+		// /mcp needs no such carve-out: it is not in get_route_category_map() at
+		// all (category '' below), because the real per-tool category check
+		// already lives in Mcpwp_REST_MCP::handle_tools_call() via
+		// resolve_key_tool_categories()/tool_category_for(), keyed by tool name,
+		// which is more precise than any route-prefix classification of '/mcp'
+		// itself could be.
+		if ( $this->route_matches( $route, '/mcpwp/v1/batch' ) ) {
+			return true;
+		}
+
+		$category = $this->get_category_for_route( $route );
+
+		// Route is not category-classified — always allow (same convention as
+		// check_disabled_category_for_route() and get_category_for_route()'s
+		// own docblock: many safe discovery routes are deliberately ungated).
+		if ( '' === $category || in_array( $category, $allowed, true ) ) {
+			return true;
+		}
+
+		$role = isset( $key_record['role'] ) ? (string) $key_record['role'] : 'unknown';
+
+		return new WP_Error(
+			'forbidden_category',
+			sprintf(
+				/* translators: 1: role name, 2: tool category, 3: comma-separated allowed categories */
+				__( 'This API key (role: %1$s) does not have access to %2$s routes. Allowed categories: %3$s.', 'mcpwp' ),
+				$role,
+				$category,
+				implode( ', ', $allowed )
+			),
+			array(
+				'status'   => 403,
+				'category' => $category,
+				'hint'     => sprintf(
+					'This route is in the "%1$s" tool category, but this key (role: %2$s) only has access to: %3$s. Request an admin key or a key with the "%1$s" category enabled.',
+					$category,
+					$role,
+					implode( ', ', $allowed )
+				),
+			)
+		);
+	}
+
+	/**
 	 * Verify API key without rate limiting (for batch sub-requests).
 	 *
 	 * @param WP_REST_Request $request Request object.
@@ -821,6 +938,16 @@ trait Mcpwp_Api_Auth {
 		$category_check = $this->check_disabled_category_for_route( $request );
 		if ( is_wp_error( $category_check ) ) {
 			return $category_check;
+		}
+
+		// Per-key role/category restriction (#874) — this is the batch / MCP
+		// sub-request fast path, so without this a /batch envelope (or a
+		// route-mapped MCP tool re-dispatched via rest_do_request()) would launder
+		// a route the calling key's own role does not permit, the same way a
+		// disabled category was laundered here before the fix above.
+		$key_category_check = $this->check_key_category_restriction_for_route( $request );
+		if ( is_wp_error( $key_category_check ) ) {
+			return $key_category_check;
 		}
 
 		return true;
@@ -1039,6 +1166,15 @@ trait Mcpwp_Api_Auth {
 			return $category_check;
 		}
 
+		// Per-key role/category restriction (#874). OAuth key records never
+		// carry a 'role', so resolve_key_tool_categories() treats them as
+		// unrestricted here exactly as it already does at the MCP layer — no
+		// behaviour change for OAuth callers, only parity with handle_tools_call().
+		$key_category_check = $this->check_key_category_restriction_for_route( $request );
+		if ( is_wp_error( $key_category_check ) ) {
+			return $key_category_check;
+		}
+
 		return true;
 	}
 
@@ -1148,6 +1284,14 @@ trait Mcpwp_Api_Auth {
 		$category_check = $this->check_disabled_category_for_route( $request );
 		if ( is_wp_error( $category_check ) ) {
 			return $category_check;
+		}
+
+		// Per-key role/category restriction (#874). Broker key records never
+		// carry a 'role' either (scope_to_capability() only ever yields
+		// read/write) — unrestricted here, same parity note as the OAuth path.
+		$key_category_check = $this->check_key_category_restriction_for_route( $request );
+		if ( is_wp_error( $key_category_check ) ) {
+			return $key_category_check;
 		}
 
 		return true;
@@ -1396,6 +1540,59 @@ trait Mcpwp_Api_Auth {
 	/**
 	 * Get required authorization scope for a request.
 	 *
+	 * ============================================================================
+	 * #874 — READ THIS BEFORE ADDING A ROUTE. THIS IS THE ONLY GATE.
+	 * ============================================================================
+	 * Every API key — whatever role it was created with (admin/designer/author/
+	 * editor/custom) — authenticates as the SAME WordPress user carrying the SAME
+	 * `mcpwp_api_agent` role (see set_api_user_context()). There is no WordPress
+	 * capability behind the read/write/admin distinction this method computes:
+	 * this table, and this table alone, is what stops a write-scoped key from
+	 * reaching an admin-only surface. A route this function does not classify
+	 * falls through to the bottom-line default (write for any mutating HTTP
+	 * method) — that default is a real decision for every admin-sensitive route,
+	 * not a safe fallback, so a new admin surface that is only added to a REST
+	 * controller and never added to $admin_routes / $admin_write_routes here is
+	 * reachable by a plain write-scoped key with nothing else in the way.
+	 *
+	 * This function governs the OUTER request only. Three things depend on it
+	 * agreeing with itself and with its two companions, or the "single layer"
+	 * silently grows a second, unaudited shape:
+	 *   1. get_required_scope_for_tool_name() — the /mcp JSON-RPC mirror of this
+	 *      table, keyed by tool name instead of route. For a route-mapped tool
+	 *      (the tool map's 'route' key — every first-party wp_ or wc_ tool today)
+	 *      this method's verdict is re-derived and re-checked from the REAL route
+	 *      when the tool dispatches via rest_do_request() (see
+	 *      Mcpwp_REST_MCP::handle_tools_call()), so a tool-name-table entry that
+	 *      under-classifies is latent, not live — UNTIL that tool is ever
+	 *      converted to a 'callback' tool (in-process dispatch, no
+	 *      rest_do_request() re-check — see the 'callback' branch of
+	 *      handle_tools_call()), at which point the tool-name table becomes the
+	 *      SOLE gate and a stale entry becomes a live bypass. Today the only
+	 *      'callback' tools are third-party additions registered through
+	 *      Mcpwp_Custom_Tool_Registry (the `mcpwp_register_tools` filter contract)
+	 *      — no first-party tool uses 'callback'. ToolNameRouteScopeParityTest
+	 *      asserts the two tables agree for every route-mapped tool so this
+	 *      cannot silently drift again.
+	 *   2. check_key_category_restriction_for_route() — a SEPARATE, ORTHOGONAL
+	 *      gate. This method answers "how privileged must the key be" (read vs.
+	 *      write vs. admin); that one answers "is this key's role even allowed to
+	 *      touch this tool category at all" (e.g. an 'author' key is read+write
+	 *      scoped but its role grants only the content/media/taxonomy categories
+	 *      — it must never reach an Elementor route regardless of scope). Before
+	 *      the #874 fix that category check ran ONLY inside
+	 *      Mcpwp_REST_MCP::handle_tools_call(), so calling a REST route directly
+	 *      (or nesting it in /batch) bypassed a key's role entirely and left only
+	 *      this method's coarse scope tier standing — a real, live bypass, not a
+	 *      latent one. It is now called from every authentication path in this
+	 *      trait (see its own docblock) precisely so this method is not the ONLY
+	 *      thing gating a route, even though it remains the only thing gating
+	 *      SCOPE.
+	 *   3. normalize_route_for_authorization() — every route compared against the
+	 *      tables below MUST be folded through it first (case-folding; see that
+	 *      method's docblock for the exact bug this closed). Comparing a raw,
+	 *      un-normalized route here reopens a case-sensitivity bypass.
+	 *
 	 * @param WP_REST_Request $request Request object.
 	 * @return string Scope name: read|write|admin.
 	 */
@@ -1619,6 +1816,13 @@ trait Mcpwp_Api_Auth {
 	/**
 	 * Determine required scope for a tool call name.
 	 *
+	 * #874: this is the tool-name mirror of get_required_scope_for_request()'s
+	 * route table — READ THAT METHOD'S DOCBLOCK FIRST. It must never classify a
+	 * route-mapped tool BELOW what that tool's real route requires; keep the two
+	 * tables in sync when adding either a route or a tool, and see
+	 * ToolNameRouteScopeParityTest, which now enforces that automatically for
+	 * every route-mapped tool in the free and pro registries.
+	 *
 	 * @param string $tool_name MCP tool name.
 	 * @return string Scope.
 	 */
@@ -1705,11 +1909,102 @@ trait Mcpwp_Api_Auth {
 			// the cached design-tokens option a companion theme reads — admin only,
 			// mirroring the REST /figma/design-tokens/sync gate above.
 			'wp_sync_figma_design_tokens',
+			// #874 systematic diff: every tool below dispatches (via its 'route'
+			// entry in the free/pro tool maps) to a REST route that
+			// get_required_scope_for_request() already gates at 'admin' — this
+			// table simply did not say so. Route-mapped tools are not exploitable
+			// from the gap alone (rest_do_request() re-derives scope from the real
+			// route and re-blocks a non-admin key there — see the class comment on
+			// get_required_scope_for_tool_name()), but a table that disagrees with
+			// the gate it mirrors is a bug in its own right and becomes a live
+			// bypass the moment a tool's dispatch mechanism ever changes (exactly
+			// what #874 asked this file to stop being able to do silently).
+			// Found and closed by ToolNameRouteScopeParityTest, which fails on any
+			// future desync between the two tables for every route-mapped tool.
+			'wp_check_update',
+			'wp_cloudflare_fix_mcp_access',
+			'wp_cloudflare_purge_cache',
+			'wp_cloudflare_update_speed_setting',
+			// /elementor/custom-code is a blanket-admin route (see $admin_routes
+			// above); mirror it for all seven of its tools, not just the two
+			// (create/update) that also happen to match the write-verb regex.
+			'wp_list_elementor_custom_code',
+			'wp_get_elementor_custom_code',
+			'wp_create_elementor_custom_code',
+			'wp_update_elementor_custom_code',
+			'wp_disable_elementor_custom_code',
+			'wp_enable_elementor_custom_code',
+			'wp_sanitize_elementor_custom_code',
+			// /menus is a blanket-admin route (see $admin_routes above); these
+			// four were missing from the otherwise-complete menu list above.
+			'wp_get_menu',
+			'wp_create_menu',
+			'wp_update_menu',
+			'wp_update_menu_item_auto',
+			'wp_delete_menu_item_auto',
+		);
+
+		// #874 systematic diff, second half: tools whose route requires 'write'
+		// (a mutating HTTP method with no admin classification) but whose name
+		// does not start with one of the regex's verbs below — most of these use
+		// a domain verb (apply/clone/edit/patch/regenerate/flush/assign/move/…)
+		// that was never added to the regex. Same rationale as the admin list
+		// above: not exploitable today (the second, route-derived check already
+		// requires 'write' and blocks a read-only key), but a table that
+		// disagrees with the gate it mirrors is a bug, and ToolNameRouteScopeParityTest
+		// now fails on any tool in this position that is left off both this list
+		// and the regex.
+		$write_tools = array(
+			'wp_remember',
+			'wp_forget',
+			'wp_apply_internal_link',
+			'wp_import_search_performance',
+			'wp_upsert_kit_css_block',
+			'wp_clone_page',
+			'wp_clone_elementor_page',
+			'wp_edit_section',
+			'wp_add_section',
+			'wp_remove_section',
+			'wp_replace_section',
+			'wp_patch_elementor',
+			'wp_patch_block_section',
+			'wp_edit_widget',
+			'wp_add_widget',
+			'wp_move_widget',
+			'wp_reorder_widgets',
+			'wp_regenerate_elementor_css',
+			'wp_screenshot_url',
+			'wp_parse_blocks',
+			'wp_serialize_blocks',
+			'wp_validate_blocks',
+			'wp_submit_feedback',
+			'wp_flush_permalinks',
+			'wp_flush_cache',
+			'wp_refresh_seo_visibility',
+			'wp_apply_elementor_template',
+			'wp_apply_elementor_archetype',
+			'wp_apply_elementor_part',
+			'wp_build_page',
+			'wp_get_blueprint', // POST /elementor/blueprints/build — builds & writes, not a plain read despite the name.
+			'wp_save_section_as_template',
+			'wp_assign_template',
+			'wp_submit_to_google_index',
+			'wp_network_switch',
+			// WooCommerce archetype/product/order tools — 'wc_' prefix, so the
+			// 'wp_' regex never had a chance to match these regardless of verb.
+			'wc_create_product_archetype',
+			'wc_apply_product_archetype',
+			'wc_create_product',
+			'wc_update_product',
+			'wc_delete_product',
+			'wc_create_product_category',
+			'wc_update_product_category',
+			'wc_update_order',
 		);
 
 		if ( in_array( $tool_name, $admin_tools, true ) ) {
 			$required_scope = 'admin';
-		} elseif ( preg_match( '/^wp_(create|update|delete|set|upload|bulk|generate|download)/', $tool_name ) ) {
+		} elseif ( in_array( $tool_name, $write_tools, true ) || preg_match( '/^wp_(create|update|delete|set|upload|bulk|generate|download)/', $tool_name ) ) {
 			$required_scope = 'write';
 		} else {
 			$required_scope = 'read';
