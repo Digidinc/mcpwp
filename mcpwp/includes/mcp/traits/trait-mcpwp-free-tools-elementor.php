@@ -39,6 +39,10 @@ trait Mcpwp_Free_Tools_Elementor_Trait {
 					'type'        => 'boolean',
 					'description' => 'Also include elementor_json (raw JSON string duplicate of elementor_data). Off by default — doubles the payload.',
 				),
+				'element_id' => array(
+					'type'        => 'string',
+					'description' => 'Return only the subtree of this one element (id from wp_get_elementor_summary) instead of the whole page. 404 if not found. Omit for the full page.',
+				),
 			)
 		);
 
@@ -314,6 +318,19 @@ trait Mcpwp_Free_Tools_Elementor_Trait {
 					'type'        => 'string',
 					'description' => 'Widget type name (e.g. "heading", "image", "nav-menu") to get full controls schema. Omit to list all widgets.',
 				),
+				'search' => array(
+					'type'        => 'string',
+					'description' => 'List mode only: case-insensitive substring match against widget name, title, and description.',
+				),
+				'category' => array(
+					'type'        => 'string',
+					'description' => 'List mode only: filter to widgets whose reference category matches exactly.',
+				),
+				'fields' => array(
+					'type'        => 'array',
+					'description' => 'List mode only: allowlist of per-widget keys to return (e.g. ["name","category"]). Omit for every field.',
+					'items'       => array( 'type' => 'string' ),
+				),
 			)
 		);
 
@@ -325,6 +342,15 @@ trait Mcpwp_Free_Tools_Elementor_Trait {
 					'type'        => 'string',
 					'description' => 'Widget type name (e.g. "heading", "image", "button")',
 					'required'    => true,
+				),
+				'tab' => array(
+					'type'        => 'string',
+					'description' => 'Return controls from only this tab (content, style, or advanced). Omit for every tab.',
+				),
+				'fields' => array(
+					'type'        => 'array',
+					'description' => 'Allowlist of top-level result keys to return (e.g. ["tabs"] or ["description","example","common_mistakes"]). Omit for every field.',
+					'items'       => array( 'type' => 'string' ),
 				),
 			)
 		);
