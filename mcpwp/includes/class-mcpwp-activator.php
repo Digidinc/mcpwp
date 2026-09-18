@@ -151,6 +151,48 @@ class Mcpwp_Activator {
 		update_option( 'mcpwp_analytics_choice_stamped', 1, false );
 	}
 
+	/**
+	 * One-time grant of edit_published_posts/edit_published_pages to the
+	 * mcpwp_api_agent role, for sites that already had the role created (#861b).
+	 *
+	 * add_role() is a no-op when the role already exists — it does NOT merge
+	 * in newly-added capabilities on an existing install — so bumping the
+	 * array literal in create_api_role_and_user() above only reaches sites
+	 * that activate the plugin fresh from here on. Every already-installed
+	 * site keeps the role exactly as it was created, which is the whole
+	 * problem: that role has edit_pages/edit_others_pages but not
+	 * edit_published_pages, so WordPress denies edit_post on a published page
+	 * and Elementor's Document::save() silently declines (bool false, no
+	 * exception, no WP_Error) while MCPWP's raw-meta fallback writes the
+	 * content anyway with no capability check, no revision, and no Elementor
+	 * pipeline (#861).
+	 *
+	 * Deliberately NOT gated on the mcpwp_db_version compare in mcpwp.php:
+	 * this ships without a version bump (constraint of #861b), so a site
+	 * already on the current version never re-enters that branch. Own flag,
+	 * same pattern as reset_destructive_switch()/stamp_analytics_choice()
+	 * above — runs once on plugins_loaded, idempotent, safe to call on a
+	 * fresh install too (get_role() returns the just-created role with the
+	 * caps already present, so add_cap() is a harmless no-op there).
+	 */
+	public static function grant_agent_published_page_caps() {
+		if ( get_option( 'mcpwp_agent_published_caps_migrated' ) ) {
+			return;
+		}
+
+		$role = get_role( 'mcpwp_api_agent' );
+		if ( $role ) {
+			if ( ! $role->has_cap( 'edit_published_posts' ) ) {
+				$role->add_cap( 'edit_published_posts' );
+			}
+			if ( ! $role->has_cap( 'edit_published_pages' ) ) {
+				$role->add_cap( 'edit_published_pages' );
+			}
+		}
+
+		update_option( 'mcpwp_agent_published_caps_migrated', 1, false );
+	}
+
 	public static function migrate_identity_less_approvals() {
 		if ( get_option( 'mcpwp_approvals_identity_migrated' ) ) {
 			return;
@@ -183,12 +225,33 @@ class Mcpwp_Activator {
 	 */
 	private static function create_api_role_and_user() {
 		// Add Role — principle of least privilege: no manage_options or edit_theme_options.
+		//
+		// edit_published_posts / edit_published_pages (#861b): agent writes to
+		// ALREADY-PUBLISHED posts/pages are intended behaviour (owner decision,
+		// 2026-09-18) — the plugin's whole value proposition is an agent that can
+		// edit a live site, not just drafts. Without these, WordPress's
+		// map_meta_cap() denies edit_post on a published item even though
+		// edit_pages/edit_others_pages are granted, so
+		// \Elementor\Core\Base\Document::save() returns bare bool(false)
+		// (is_editable_by_current_user() fails) with no exception and no
+		// WP_Error. MCPWP's raw-meta fallback then force-wrote _elementor_data
+		// via update_post_meta() — which performs no capability check at all —
+		// so the content landed anyway, just outside Elementor's real pipeline:
+		// no revision, no CSS regeneration, none of Document::save()'s
+		// after_save hooks (#861). That was a silent bypass of a denial the
+		// role itself no longer intends, not a safety boundary. Granting the
+		// capability openly means the write goes through the real pipeline
+		// instead of routing around a decline (see fix/861-document-save-truthfulness,
+		// PR #872, which made the receipt honest but deliberately left this
+		// permission decision to this change).
 		add_role( 'mcpwp_api_agent', 'MCPWP API Agent', array(
 			'read'               => true,
 			'edit_posts'         => true,
 			'edit_pages'         => true,
 			'edit_others_posts'  => true,
 			'edit_others_pages'  => true,
+			'edit_published_posts' => true,
+			'edit_published_pages' => true,
 			'publish_posts'      => true,
 			'publish_pages'      => true,
 			'delete_posts'       => true,

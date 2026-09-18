@@ -483,6 +483,19 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 		Mcpwp_Activator::stamp_analytics_choice();
 	}
 
+	// One-time: grant edit_published_posts/edit_published_pages to the
+	// mcpwp_api_agent role on sites where it was already created without
+	// them (#861b — owner decision: agent writes to published pages are
+	// intended, so the role should say so openly instead of the code
+	// routing around a denial via a raw-meta fallback). Own flag, not the
+	// mcpwp_db_version compare above — this ships without a version bump,
+	// so an already-current-version site would otherwise never re-enter
+	// that branch and would keep silently bypassing the denial forever.
+	if ( ! get_option( 'mcpwp_agent_published_caps_migrated' ) ) {
+		require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-activator.php';
+		Mcpwp_Activator::grant_agent_published_page_caps();
+	}
+
 	// Initialize the plugin
 	$loader = new Mcpwp_Loader();
 	$loader->run();
