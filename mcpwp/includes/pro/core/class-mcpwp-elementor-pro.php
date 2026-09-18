@@ -740,12 +740,50 @@ class Mcpwp_Elementor_Pro {
 		}
 
 		$title = ! empty( $data['title'] ) ? sanitize_text_field( $data['title'] ) : __( 'Untitled Template', 'mcpwp' );
-		$type  = ! empty( $data['type'] ) ? sanitize_text_field( $data['type'] ) : 'page';
 
-		// Valid template types.
-		$valid_types = array( 'page', 'section', 'header', 'footer', 'single', 'archive', 'popup', 'loop-item' );
-		if ( ! in_array( $type, $valid_types, true ) ) {
-			$type = 'page';
+		// An omitted type keeps its long-standing default; a type that is
+		// PRESENT but wrong is refused, not guessed at (#827).
+		$type_given = isset( $data['type'] ) && '' !== $data['type'];
+		$type       = $type_given ? sanitize_text_field( (string) $data['type'] ) : 'page';
+
+		$valid_types = $this->get_library_template_types();
+
+		// An empty registry means Elementor's document manager could not be
+		// asked (should not happen once is_elementor_active() passed, but a
+		// call site that got here with a genuinely blank list is one whose
+		// answer nobody can trust) — refuse rather than let ANY type through
+		// unchecked, including the default. Checked before the type-mismatch
+		// branch below so "the registry is unreadable" and "the registry
+		// answered and this type is not in it" are never reported as the
+		// same error.
+		if ( empty( $valid_types ) ) {
+			return new WP_Error(
+				'template_types_unavailable',
+				__( 'Elementor\'s template type registry could not be read, so the requested type could not be validated. Nothing was created.', 'mcpwp' ),
+				array( 'status' => 500 )
+			);
+		}
+
+		if ( $type_given && ! in_array( $type, $valid_types, true ) ) {
+			// This used to fall back to 'page' silently: type:"single-post"
+			// created a PAGE-type template that could never be bound to a
+			// post condition, and the tool reported success (#827). A page
+			// template and a single-post template are both real, different
+			// Elementor documents — there is no safe default between them,
+			// so a wrong type is refused, not repaired.
+			return new WP_Error(
+				'invalid_template_type',
+				sprintf(
+					/* translators: 1: the invalid type, 2: comma-separated list of valid types */
+					__( 'Invalid template type "%1$s". Must be one of: %2$s. Nothing was created.', 'mcpwp' ),
+					$type,
+					implode( ', ', $valid_types )
+				),
+				array(
+					'status'      => 400,
+					'valid_types' => $valid_types,
+				)
+			);
 		}
 
 		$post_data = array(
@@ -787,6 +825,67 @@ class Mcpwp_Elementor_Pro {
 		}
 
 		return $created;
+	}
+
+	/**
+	 * The template types Elementor's own "Add New Template" screen offers —
+	 * asked of Documents_Manager live, not a list frozen at the time this was
+	 * written (#827).
+	 *
+	 * A hardcoded eight-type list (page, section, header, footer, single,
+	 * archive, popup, loop-item) went stale the moment Elementor Pro shipped
+	 * single-post, single-page, search-results, error-404, product and
+	 * product-archive as their own document types — each a distinct,
+	 * independently bindable Elementor document, not a spelling of one of the
+	 * eight. `single-post` failing this list is what silently produced a
+	 * `page`-type template that could never be bound to a post (#827): the
+	 * list, not the caller, was wrong.
+	 *
+	 * Elementor's own new-template dialog builds its dropdown the same way
+	 * (`includes/admin-templates/new-template.php`): every registered document
+	 * type whose `show_in_library` property is true. Types that exist but are
+	 * not offered there (`post`, `wp-page`, `wp-post`, `kit`, `widget`, …) are
+	 * excluded the same way Elementor excludes them from its own UI.
+	 *
+	 * @return string[] Sorted type slugs, e.g. "archive", "page", "single-post". Empty when the registry cannot be read.
+	 */
+	private function get_library_template_types() {
+		if ( ! class_exists( '\Elementor\Plugin' ) ) {
+			return array();
+		}
+
+		$plugin = \Elementor\Plugin::instance();
+		if ( empty( $plugin ) || empty( $plugin->documents ) || ! method_exists( $plugin->documents, 'get_document_types' ) ) {
+			return array();
+		}
+
+		return self::filter_library_types( $plugin->documents->get_document_types() );
+	}
+
+	/**
+	 * Reduce a Documents_Manager type => class map to the slugs Elementor's
+	 * own template picker would show. Split out of get_library_template_types()
+	 * so the filtering rule is testable without a live Elementor instance.
+	 *
+	 * @param array $document_types Type slug => document class name.
+	 * @return string[] Sorted type slugs with show_in_library true.
+	 */
+	private static function filter_library_types( array $document_types ) {
+		$types = array();
+
+		foreach ( $document_types as $type => $document_class ) {
+			if ( ! is_string( $document_class ) || ! method_exists( $document_class, 'get_property' ) ) {
+				continue;
+			}
+
+			if ( $document_class::get_property( 'show_in_library' ) ) {
+				$types[] = (string) $type;
+			}
+		}
+
+		sort( $types );
+
+		return $types;
 	}
 
 	/**
