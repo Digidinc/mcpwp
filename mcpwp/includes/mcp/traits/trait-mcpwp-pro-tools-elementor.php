@@ -64,7 +64,7 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 				),
 				'type'           => array(
 					'type'        => 'string',
-					'description' => 'Template type (e.g. header, footer, single, archive, section, page)',
+					'description' => 'Template type — must be a document type Elementor itself registers for the template library (e.g. page, section, header, footer, single, single-post, single-page, archive, search-results, error-404, popup, loop-item; the exact set is this site\'s live Elementor/Elementor Pro registry, the same one its own "Add New Template" dialog offers). An unrecognised value is refused with the site\'s actual valid list — it is never silently rewritten to another type (#827).',
 					'required'    => true,
 				),
 				'elementor_data' => array(
