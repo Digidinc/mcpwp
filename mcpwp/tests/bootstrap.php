@@ -55,6 +55,12 @@ $GLOBALS['mcpwp_test_user_caps'] = array();
 $GLOBALS['mcpwp_test_users'] = array(
     (object) array( 'ID' => 2, 'roles' => array( 'mcpwp_api_agent' ) ),
 );
+// Role registry double for add_role()/get_role() — keyed by role slug, value
+// a WP_Role instance. Lets #861b's capability-grant migration be exercised
+// against something that behaves like WordPress's real role storage (a
+// pre-existing role is left alone by add_role(), only add_cap()/remove_cap()
+// mutate it) without pulling in all of wp-admin/includes/capabilities.php.
+$GLOBALS['mcpwp_test_roles'] = array();
 
 /**
  * Minimal stand-in for WP_User. Production code identifies the user a
@@ -69,6 +75,66 @@ class WP_User
     {
         $this->ID = (int) $id;
     }
+}
+
+/**
+ * Minimal stand-in for WP_Role — just enough for #861b's capability-grant
+ * migration (has_cap/add_cap/remove_cap against a plain associative array),
+ * mirroring core's own WP_Role shape closely enough that production code
+ * written against the real class needs no changes to run against this double.
+ */
+class WP_Role
+{
+    public $name;
+    public $capabilities;
+
+    public function __construct($role, $capabilities = array())
+    {
+        $this->name         = $role;
+        $this->capabilities = $capabilities;
+    }
+
+    public function has_cap($cap)
+    {
+        return ! empty($this->capabilities[ $cap ]);
+    }
+
+    public function add_cap($cap, $grant = true)
+    {
+        $this->capabilities[ $cap ] = (bool) $grant;
+        $GLOBALS['mcpwp_test_roles'][ $this->name ] = $this;
+    }
+
+    public function remove_cap($cap)
+    {
+        unset($this->capabilities[ $cap ]);
+        $GLOBALS['mcpwp_test_roles'][ $this->name ] = $this;
+    }
+}
+
+/**
+ * add_role() no-ops when the role already exists — real WordPress behaviour,
+ * and the exact reason #861b needs a separate one-time migration for
+ * already-installed sites rather than relying on this to backfill new caps.
+ */
+function add_role($role, $display_name, $capabilities = array())
+{
+    if (isset($GLOBALS['mcpwp_test_roles'][ $role ])) {
+        return null;
+    }
+
+    $GLOBALS['mcpwp_test_roles'][ $role ] = new WP_Role($role, $capabilities);
+    return $GLOBALS['mcpwp_test_roles'][ $role ];
+}
+
+function get_role($role)
+{
+    return $GLOBALS['mcpwp_test_roles'][ $role ] ?? null;
+}
+
+function remove_role($role)
+{
+    unset($GLOBALS['mcpwp_test_roles'][ $role ]);
 }
 
 class WP_Error
@@ -1257,6 +1323,32 @@ if (! isset($GLOBALS['wpdb'])) {
         }
         public function get_col($query = '', $x = 0)
         {
+            // Keyset-cursor scan used by
+            // Mcpwp_Activator::repair_custom_code_locations() (#875 W3) —
+            // get_posts()/WP_Query has no "ID > cursor" primitive, so that
+            // method queries $wpdb directly. Matches the exact shape its
+            // $wpdb->prepare() call produces; anything else still answers no
+            // rows, same as before this was added.
+            if (preg_match(
+                "/^SELECT ID FROM \\S*posts WHERE post_type = '([^']*)' AND ID > (\\d+) ORDER BY ID ASC LIMIT (\\d+)$/",
+                trim((string) $query),
+                $m
+            )) {
+                $type   = $m[1];
+                $cursor = (int) $m[2];
+                $limit  = (int) $m[3];
+
+                $ids = array();
+                foreach ($GLOBALS['_mcpwp_test_posts'] as $post) {
+                    if ($post->post_type === $type && (int) $post->ID > $cursor) {
+                        $ids[] = (int) $post->ID;
+                    }
+                }
+                sort($ids);
+
+                return array_slice($ids, 0, $limit);
+            }
+
             return array();
         }
         public $suppressed = false;

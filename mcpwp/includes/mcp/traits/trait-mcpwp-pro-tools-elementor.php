@@ -64,7 +64,20 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 				),
 				'type'           => array(
 					'type'        => 'string',
-					'description' => 'Template type (e.g. header, footer, single, archive, section, page)',
+					// header, footer, single, archive, section, and page are core
+					// Elementor Pro Theme Builder document types, present on any
+					// Elementor Pro activation. Other values Elementor Pro defines
+					// (e.g. popup, loop-item) belong to separate, individually
+					// licensable/toggleable features (Popup Builder, Loop Builder)
+					// that are NOT guaranteed present on a given install — this tool
+					// does not check for them, so passing one on a site where that
+					// feature is off does not fail here; it stores a template
+					// Elementor's own editor may not be able to open as intended.
+					// Deliberately not listing popup/loop-item as examples for that
+					// reason (#875 L2) — verify with the site owner or by checking
+					// this site's actual Elementor Pro feature set before using
+					// anything outside the six always-present types below.
+					'description' => 'Template type. Always available: header, footer, single, archive, section, page. Other Elementor Pro document types (e.g. popup, loop-item) depend on that specific Elementor Pro feature being enabled for this site and are not verified here.',
 					'required'    => true,
 				),
 				'elementor_data' => array(
