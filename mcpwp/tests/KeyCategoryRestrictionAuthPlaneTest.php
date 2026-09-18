@@ -88,6 +88,23 @@ final class KeyCategoryRestrictionAuthPlaneTest extends TestCase {
 		$this->assert_forbidden_category( $result, 'Wrapping the same call in a /batch envelope must not launder an author key past its role' );
 	}
 
+	// ── The /batch envelope itself must not be gated by its OWN nominal ──────
+	// category. get_category_for_route() classifies '/batch' as 'content' so the
+	// SITE-WIDE disabled-category toggle can block it outright, but a per-key
+	// role restriction must judge each operation INSIDE the envelope by its own
+	// real route (already proven above), not by the wrapper's label — otherwise
+	// a designer-role key could never call /batch at all, even to batch nothing
+	// but Elementor writes its role fully permits.
+
+	public function test_designer_key_can_call_batch_envelope_directly(): void {
+		$auth    = $this->harness();
+		$created = $auth->create_scoped_api_key( 'designer', array( 'read', 'write' ), 'designer' );
+
+		// The outer /batch request itself must not be rejected on '/batch' =>
+		// 'content', which is not one of designer's categories.
+		$this->assertTrue( $auth->verify_api_key( $this->request_with_key( $created['key'], 'POST', '/mcpwp/v1/batch' ) ) );
+	}
+
 	public function test_author_key_can_still_write_its_own_categories(): void {
 		$auth    = $this->harness();
 		$created = $auth->create_scoped_api_key( 'author', array( 'read', 'write' ), 'author' );

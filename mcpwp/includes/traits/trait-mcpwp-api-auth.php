@@ -804,7 +804,31 @@ trait Mcpwp_Api_Auth {
 			return true;
 		}
 
-		$route    = $this->normalize_route_for_authorization( method_exists( $request, 'get_route' ) ? (string) $request->get_route() : '' );
+		$route = $this->normalize_route_for_authorization( method_exists( $request, 'get_route' ) ? (string) $request->get_route() : '' );
+
+		// /batch is a fan-out envelope, not a category surface in its own right —
+		// get_category_for_route() classifies it 'content' only so the SITE-WIDE
+		// disabled-category toggle can block it outright (check_disabled_category_for_route()).
+		// A per-key role restriction must not reuse that classification here: each
+		// operation inside the envelope re-dispatches through
+		// Mcpwp_REST_Batch::execute_operation() -> rest_do_request() ->
+		// verify_api_key_auth_only() (Mcpwp_REST_Batch::$is_batch_sub_request is
+		// true), which calls THIS method again with the operation's REAL route and
+		// correctly restricts it there. Applying the 'content' label to the outer
+		// /batch call itself would block a designer-role key from ever calling
+		// /batch at all — even to batch nothing but Elementor writes its role
+		// fully permits — which is exactly the over-broad, wrapper-level mistake
+		// #874 asked this file to stop making, just pointed the other direction.
+		// /mcp needs no such carve-out: it is not in get_route_category_map() at
+		// all (category '' below), because the real per-tool category check
+		// already lives in Mcpwp_REST_MCP::handle_tools_call() via
+		// resolve_key_tool_categories()/tool_category_for(), keyed by tool name,
+		// which is more precise than any route-prefix classification of '/mcp'
+		// itself could be.
+		if ( $this->route_matches( $route, '/mcpwp/v1/batch' ) ) {
+			return true;
+		}
+
 		$category = $this->get_category_for_route( $route );
 
 		// Route is not category-classified — always allow (same convention as
