@@ -1014,6 +1014,16 @@ function is_multisite()
     return ! empty($GLOBALS['mcpwp_test_is_multisite']);
 }
 
+if (! function_exists('is_super_admin')) {
+    // Core grants unfiltered_html to super admins only on multisite, so the
+    // Custom Code refusal in #873 turns on this answer. Default false: the
+    // interesting case is the ordinary site admin who does NOT have it.
+    function is_super_admin($user_id = null)
+    {
+        return ! empty($GLOBALS['mcpwp_test_is_super_admin']);
+    }
+}
+
 if (! function_exists('get_site_option')) {
     function get_site_option($name, $default = false)
     {
@@ -2407,6 +2417,13 @@ function get_post_meta($post_id, $key = '', $single = false)
 
 function update_post_meta($post_id, $key, $value)
 {
+    // A seeded failure, so #873 can prove its `finally` releases the scoped
+    // unfiltered_html grant when the write throws rather than returns. Off
+    // unless a test asks for it.
+    if (! empty($GLOBALS['mcpwp_test_update_post_meta_throws'])) {
+        throw new \RuntimeException('seeded meta failure');
+    }
+
     // Mirror WP core, which unslashes on write (update_metadata() calls
     // wp_unslash on the value) so get_post_meta() returns clean data.
     //

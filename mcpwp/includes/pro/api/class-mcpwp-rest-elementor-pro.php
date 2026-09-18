@@ -770,6 +770,18 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			return $this->error_response( 'missing_code', __( 'Custom Code raw code is required.', 'mcpwp' ), 400 );
 		}
 
+		if ( array_key_exists( 'code', $payload ) ) {
+			$blocked = $this->custom_code_multisite_refusal( $payload['code'] );
+
+			if ( is_wp_error( $blocked ) ) {
+				return $this->error_response(
+					$blocked->get_error_code(),
+					$blocked->get_error_message(),
+					(int) ( $blocked->get_error_data()['status'] ?? 403 )
+				);
+			}
+		}
+
 		if ( null !== $request->get_param( 'location' ) ) {
 			$location = $this->normalize_custom_code_location( $request->get_param( 'location' ) );
 			if ( is_wp_error( $location ) ) {
@@ -962,6 +974,170 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	}
 
 	/**
+	 * How many Custom Code meta writes are in flight under the scoped grant.
+	 *
+	 * Depth-counted for the same reason as the Elementor writer's grant (#769):
+	 * a nested call must not tear the filter out from under the call that
+	 * installed it. Nothing nests today; an edit that starts to would otherwise
+	 * silently reopen this with no failing test.
+	 *
+	 * @var int
+	 */
+	private static $custom_code_unfiltered_depth = 0;
+
+	/**
+	 * The one user the scoped Custom Code grant applies to.
+	 *
+	 * Captured when the grant is installed, so a capability check performed for
+	 * some OTHER user inside the same call cannot pick it up.
+	 *
+	 * @var int
+	 */
+	private static $custom_code_unfiltered_user = 0;
+
+	/**
+	 * Whether this code would be altered by Elementor's own kses pass.
+	 *
+	 * Elementor registers `_elementor_code` with a sanitize_callback that runs
+	 * wp_kses_post() unless the writing user holds `unfiltered_html`
+	 * (elementor-pro/modules/custom-code/module.php). update_post_meta() honours
+	 * registered sanitize callbacks, so that filter is what strips <script> from
+	 * every snippet MCPWP writes — the whole reason GA4/GTM tags never worked.
+	 *
+	 * Asking whether the pass would CHANGE the content, rather than assuming it
+	 * always matters, keeps the scoped grant off the majority of writes: a plain
+	 * HTML or text snippet survives kses untouched and needs no capability at all.
+	 *
+	 * @param string $code Raw snippet code.
+	 * @return bool Whether kses would alter it.
+	 */
+	private function code_needs_unfiltered_html( $code ) {
+		if ( ! is_string( $code ) || '' === $code || ! function_exists( 'wp_kses_post' ) ) {
+			return false;
+		}
+
+		return wp_kses_post( $code ) !== $code;
+	}
+
+	/**
+	 * Refuse a Custom Code write that multisite will not let us honour.
+	 *
+	 * WordPress strips `unfiltered_html` from administrators and editors on
+	 * multisite, leaving it to super admins alone. Granting it to the
+	 * mcpwp_api_agent user there would hand the bot MORE power than the site's
+	 * own administrator holds — so the grant is refused on multisite for anyone
+	 * short of a super admin.
+	 *
+	 * The refusal is deliberately narrow: it fires only when the code would
+	 * actually be altered by kses. A snippet that survives the pass unchanged
+	 * needs no capability, so multisite is no obstacle to writing it and we do
+	 * not invent one.
+	 *
+	 * Refusing beats proceeding. Without the grant the snippet would be stored
+	 * with its <script> silently removed and would render as an empty comment
+	 * block — a write reported as successful that cannot do the one thing it was
+	 * asked to do. An honest 403 is the better failure.
+	 *
+	 * @param string $code Raw snippet code.
+	 * @return true|WP_Error True when the write may proceed.
+	 */
+	private function custom_code_multisite_refusal( $code ) {
+		if ( ! $this->code_needs_unfiltered_html( $code ) ) {
+			return true;
+		}
+
+		if ( ! function_exists( 'is_multisite' ) || ! is_multisite() ) {
+			return true;
+		}
+
+		if ( function_exists( 'is_super_admin' ) && is_super_admin( get_current_user_id() ) ) {
+			return true;
+		}
+
+		return new WP_Error(
+			'multisite_unfiltered_html_refused',
+			__( 'This snippet contains markup (such as <script>) that WordPress strips unless the writer holds unfiltered_html. On multisite that capability belongs to super admins only, and MCPWP will not grant the API user more than a site administrator holds. Add this snippet as a super admin, or use markup that survives wp_kses_post().', 'mcpwp' ),
+			array( 'status' => 403 )
+		);
+	}
+
+	/**
+	 * Grant `unfiltered_html` to the writing user for one Custom Code meta write.
+	 *
+	 * Narrow by construction: one capability, one user, one meta write, removed
+	 * in a `finally` so a Throwable cannot leave it installed.
+	 *
+	 * @param array     $allcaps All capabilities of the user being tested.
+	 * @param string[]  $caps    Required primitive capabilities.
+	 * @param array     $args    Arguments of the check.
+	 * @param \WP_User  $user    The user being tested.
+	 * @return array Capabilities, possibly with the scoped grant added.
+	 */
+	public static function grant_custom_code_unfiltered_html_cap( $allcaps, $caps = array(), $args = array(), $user = null ) {
+		if ( self::$custom_code_unfiltered_depth < 1 || ! is_array( $allcaps ) ) {
+			return $allcaps;
+		}
+
+		$user_id = ( $user instanceof \WP_User ) ? (int) $user->ID : 0;
+
+		if ( $user_id < 1 || $user_id !== self::$custom_code_unfiltered_user ) {
+			return $allcaps;
+		}
+
+		$allcaps['unfiltered_html'] = true;
+
+		return $allcaps;
+	}
+
+	/**
+	 * Write `_elementor_code`, granting `unfiltered_html` only when kses would
+	 * otherwise destroy the snippet.
+	 *
+	 * This is the single place the capability is granted, and it wraps exactly
+	 * one update_post_meta() call. `post_content` is written separately by
+	 * wp_insert_post()/wp_update_post() and stays under core's content_save_pre
+	 * KSES gate — deliberately. Elementor's renderer reads `_elementor_code`
+	 * (custom-code/document.php print_content()), never post_content, so the
+	 * grant covers the copy that renders and leaves the copy that does not
+	 * filtered. The two diverge for a script-bearing snippet, and that is the
+	 * intended outcome rather than an oversight.
+	 *
+	 * What governs whether a caller may write raw markup at all remains the API
+	 * key and its scope: `/elementor/custom-code` is gated at ADMIN scope in
+	 * get_required_scope_for_request()'s $admin_routes, so a designer-, author-
+	 * or editor-scoped key never reaches this method.
+	 *
+	 * @param int    $post_id Snippet post ID.
+	 * @param string $code    Raw snippet code.
+	 */
+	private function write_custom_code_meta( $post_id, $code ) {
+		$needs_grant = $this->code_needs_unfiltered_html( $code ) && get_current_user_id() > 0;
+
+		if ( ! $needs_grant ) {
+			update_post_meta( $post_id, '_elementor_code', $code );
+
+			return;
+		}
+
+		if ( 0 === self::$custom_code_unfiltered_depth ) {
+			self::$custom_code_unfiltered_user = get_current_user_id();
+			add_filter( 'user_has_cap', array( __CLASS__, 'grant_custom_code_unfiltered_html_cap' ), PHP_INT_MAX, 4 );
+		}
+		++self::$custom_code_unfiltered_depth;
+
+		try {
+			update_post_meta( $post_id, '_elementor_code', $code );
+		} finally {
+			--self::$custom_code_unfiltered_depth;
+
+			if ( 0 === self::$custom_code_unfiltered_depth ) {
+				remove_filter( 'user_has_cap', array( __CLASS__, 'grant_custom_code_unfiltered_html_cap' ), PHP_INT_MAX );
+				self::$custom_code_unfiltered_user = 0;
+			}
+		}
+	}
+
+	/**
 	 * Persist Elementor custom-code meta.
 	 *
 	 * Two metas here are load-bearing for Elementor Pro's own renderer, not
@@ -1001,7 +1177,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		}
 
 		if ( array_key_exists( 'code', $payload ) ) {
-			update_post_meta( $post_id, '_elementor_code', $payload['code'] );
+			$this->write_custom_code_meta( $post_id, $payload['code'] );
 		}
 
 		if ( isset( $payload['priority'] ) ) {
