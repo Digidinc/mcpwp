@@ -3,9 +3,23 @@
  * License management for MCPWP.
  *
  * Freemius is the single source of truth for entitlement in the production
- * build, with two developer/distribution overrides:
- *   - MCPWP_WPORG_BUILD defined => always free (WP.org build).
- *   - MCPWP_PRO constant true   => always pro (developer override).
+ * build, with narrow, non-wp-config overrides:
+ *   - MCPWP_WPORG_BUILD defined         => always free (WP.org build).
+ *   - Agency build marker file present  => always pro (agency distribution).
+ *   - MCPWP_TESTS true AND PHP_SAPI cli => always pro (test-only switch).
+ *
+ * SECURITY (issue #863): a bare `define( 'MCPWP_PRO', true )` in
+ * wp-config.php is DELIBERATELY not honoured. Before this fix, any Free or
+ * Freemius install could self-grant every Pro tool by adding that one line
+ * to wp-config.php — it was even documented publicly in
+ * `docs/skills/dev-pro.md`. The agency tier is now anchored to a real file,
+ * `includes/agency-license.php`, that only `scripts/build-agency.sh` writes
+ * (into the agency ZIP's build directory, never into this source tree) —
+ * see `agency_license_active()`. A wp-config.php constant cannot create
+ * that file. This is not DRM: a site owner with actual filesystem write
+ * access to the plugin directory can still forge it (or just edit this
+ * class) — same as always. The fix removes the one-line, no-file-access
+ * bypass; nothing more.
  *
  * BRIDGE FALLBACK (issue #505)
  * When a site migrated from site-pilot-ai 2.8.x and Freemius has not yet
@@ -68,6 +82,15 @@ class Mcpwp_License {
 	const FREEMIUS_PRODUCT_ID = '23824';
 
 	/**
+	 * Expected return value of the agency build marker file. Bumping this
+	 * (and the string a future build-agency.sh writes) invalidates any
+	 * marker file copied out of an old ZIP into a new one.
+	 *
+	 * @var string
+	 */
+	const AGENCY_MARKER_TOKEN = 'MCPWP_AGENCY_LICENSE_V1';
+
+	/**
 	 * Singleton instance.
 	 *
 	 * @var Mcpwp_License
@@ -92,11 +115,53 @@ class Mcpwp_License {
 	private function __construct() {}
 
 	/**
+	 * Whether the agency build marker is present and valid.
+	 *
+	 * The marker is a plain PHP file, `includes/agency-license.php`, that
+	 * `scripts/build-agency.sh` writes into the agency distribution's build
+	 * directory only — it is never part of this source tree and is never
+	 * shipped in the Free (wp.org / self-hosted) or Freemius ZIPs. Unlike a
+	 * constant, a site owner editing wp-config.php cannot create this file;
+	 * doing so requires actual filesystem write access to the plugin
+	 * directory (see the class docblock for that limit).
+	 *
+	 * The file is `include`d (not merely checked for existence) and must
+	 * `return` the exact expected token, so an empty or truncated file left
+	 * behind by a broken build/copy does not silently grant Pro.
+	 *
+	 * @return bool
+	 */
+	private static function agency_license_active(): bool {
+		$marker_file = __DIR__ . '/agency-license.php';
+		if ( ! is_file( $marker_file ) ) {
+			return false;
+		}
+		return self::AGENCY_MARKER_TOKEN === include $marker_file;
+	}
+
+	/**
+	 * Test-only Pro switch.
+	 *
+	 * Requires BOTH `MCPWP_TESTS` truthy AND PHP running under the CLI SAPI,
+	 * so it can never be reached by a normal web request even if a site
+	 * owner defines MCPWP_TESTS in wp-config.php — is_pro() is never called
+	 * from CLI in production request handling. This is what the PHPUnit
+	 * bootstrap / CI harness uses instead of the removed MCPWP_PRO override
+	 * (issue #863); it is not present in any shipped ZIP.
+	 *
+	 * @return bool
+	 */
+	private static function test_override_active(): bool {
+		return defined( 'MCPWP_TESTS' ) && MCPWP_TESTS && 'cli' === PHP_SAPI;
+	}
+
+	/**
 	 * Check if licensed features are active.
 	 *
 	 * Always false when MCPWP_WPORG_BUILD is defined (free build). Otherwise
-	 * pro is active when the MCPWP_PRO developer override is set, or when
-	 * Freemius reports premium access, a paying plan, or an active trial.
+	 * pro is active when the agency build marker or the CLI-only test switch
+	 * is present, or when Freemius reports premium access, a paying plan, or
+	 * an active trial.
 	 *
 	 * @return bool
 	 */
@@ -105,8 +170,7 @@ class Mcpwp_License {
 			return false;
 		}
 
-		// Developer override.
-		if ( defined( 'MCPWP_PRO' ) && MCPWP_PRO ) {
+		if ( self::agency_license_active() || self::test_override_active() ) {
 			return true;
 		}
 
@@ -230,7 +294,7 @@ class Mcpwp_License {
 			return false;
 		}
 
-		if ( defined( 'MCPWP_PRO' ) && MCPWP_PRO ) {
+		if ( self::agency_license_active() || self::test_override_active() ) {
 			return true;
 		}
 		if ( function_exists( 'mcpwp_get_fs_instance' ) ) {
@@ -266,7 +330,7 @@ class Mcpwp_License {
 			return $freemius_plan;
 		}
 
-		// MCPWP_PRO developer override with no Freemius instance.
+		// Agency marker or CLI test override active with no Freemius instance.
 		return 'pro';
 	}
 

@@ -113,7 +113,7 @@ bash mcpwp/scripts/build-all.sh
 | `mcpwp-agency-X.Y.Z.zip` | Always on | None needed | Agency/client installs |
 | `mcpwp-freemius-X.Y.Z.zip` | Via key | Freemius | Paid users |
 
-Agency build injects `MCPWP_PRO=true` at build time — no wp-config.php changes, no license prompt. Includes self-update channel (`updates.mcpwp.net`).
+Agency build writes a build-time marker file (`includes/agency-license.php`) at build time — no wp-config.php changes, no license prompt. A wp-config.php `define('MCPWP_PRO', true)` is NOT honoured by any build, Free or Freemius included (issue #863) — the marker file is the only thing that unlocks Pro without Freemius, and only `scripts/build-agency.sh` writes it. Includes self-update channel (`updates.mcpwp.net`).
 
 Agency builds are **not public** (#852): anyone holding one has every Pro feature. They are stored in the private R2 bucket `mcpwp-agency-builds` (never in `mumcp-updates`, which the legacy `mumega.com` Worker reads without auth) and served only by `updates.mcpwp.net/agency/mcpwp-agency-X.Y.Z.zip` to a request with `Authorization: Bearer <token>` — tokens are never accepted in a URL. Tokens are the `mcpwp-updates` Worker secret `AGENCY_DOWNLOAD_TOKENS` (one per agency, comma-separated, 32+ chars). Never upload an agency ZIP to a public bucket or paste a token into docs, a `package_url` or a script. The release fails if an agency build answers 200 without a token on either host. Note: an agency site's built-in updater follows the public manifest to `mcpwp-latest.zip`, which is the Free build.
 

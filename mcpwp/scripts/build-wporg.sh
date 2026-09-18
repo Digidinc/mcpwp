@@ -130,6 +130,21 @@ else
     echo "    [OK] No legacy updater"
 fi
 
+# Issue #863: the WP.org build must never be able to self-grant Pro.
+if grep -q "includes/agency-license.php" "$ZIP_MANIFEST"; then
+    echo "    [FAIL] Agency license marker found in WP.org zip!"
+    exit 1
+else
+    echo "    [OK] No agency license marker"
+fi
+
+if grep -Eq "defined\(\s*'MCPWP_PRO'\s*\)" "$DEST/includes/class-mcpwp-license.php"; then
+    echo "    [FAIL] class-mcpwp-license.php still honours a wp-config.php MCPWP_PRO constant"
+    exit 1
+else
+    echo "    [OK] No wp-config.php MCPWP_PRO override in license class"
+fi
+
 FILE_COUNT=$(unzip -l "$OUTPUT_ZIP" | tail -1 | awk '{print $2}')
 echo "    [INFO] $FILE_COUNT files in zip"
 echo ""
