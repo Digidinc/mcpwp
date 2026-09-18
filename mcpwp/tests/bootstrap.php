@@ -1333,6 +1333,32 @@ if (! isset($GLOBALS['wpdb'])) {
         }
         public function get_col($query = '', $x = 0)
         {
+            // Keyset-cursor scan used by
+            // Mcpwp_Activator::repair_custom_code_locations() (#875 W3) —
+            // get_posts()/WP_Query has no "ID > cursor" primitive, so that
+            // method queries $wpdb directly. Matches the exact shape its
+            // $wpdb->prepare() call produces; anything else still answers no
+            // rows, same as before this was added.
+            if (preg_match(
+                "/^SELECT ID FROM \\S*posts WHERE post_type = '([^']*)' AND ID > (\\d+) ORDER BY ID ASC LIMIT (\\d+)$/",
+                trim((string) $query),
+                $m
+            )) {
+                $type   = $m[1];
+                $cursor = (int) $m[2];
+                $limit  = (int) $m[3];
+
+                $ids = array();
+                foreach ($GLOBALS['_mcpwp_test_posts'] as $post) {
+                    if ($post->post_type === $type && (int) $post->ID > $cursor) {
+                        $ids[] = (int) $post->ID;
+                    }
+                }
+                sort($ids);
+
+                return array_slice($ids, 0, $limit);
+            }
+
             return array();
         }
         public $suppressed = false;

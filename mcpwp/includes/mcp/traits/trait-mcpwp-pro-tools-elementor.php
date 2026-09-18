@@ -64,7 +64,25 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 				),
 				'type'           => array(
 					'type'        => 'string',
-					'description' => 'Template type — must be a document type Elementor itself registers for the template library (e.g. page, section, header, footer, single, single-post, single-page, archive, search-results, error-404, popup, loop-item; the exact set is this site\'s live Elementor/Elementor Pro registry, the same one its own "Add New Template" dialog offers). An unrecognised value is refused with the site\'s actual valid list — it is never silently rewritten to another type (#827).',
+					// Two separate facts, from #827 and #875 L2, and the description
+					// needs both:
+					//
+					// #827 made this tool query Elementor's LIVE document registry
+					// instead of a hardcoded allowlist, so an unrecognised type is
+					// now refused with the site's real valid list rather than being
+					// silently rewritten to `page`.
+					//
+					// #875 L2 then found that naming popup/loop-item as examples is
+					// actively misleading: they belong to separately licensable
+					// Elementor Pro features (Popup Builder, Loop Builder) that are
+					// not present on every activation, so a caller following the
+					// tool's own description would hit invalid_template_type on a
+					// site where that feature is off. Only the six Theme Builder
+					// types below are present on any Elementor Pro install.
+					//
+					// So: promise the six, name the others as conditional, and say
+					// the refusal is honest and lists what this site actually has.
+					'description' => 'Template type. Always available on any Elementor Pro install: header, footer, single, archive, section, page. Other document types (e.g. popup, loop-item, single-post, search-results, error-404) depend on that specific Elementor Pro feature being enabled for this site. The set is read from this site\'s live Elementor registry — the same one its own "Add New Template" dialog offers — so an unrecognised value is refused with this site\'s actual valid list and is never silently rewritten to another type (#827).',
 					'required'    => true,
 				),
 				'elementor_data' => array(

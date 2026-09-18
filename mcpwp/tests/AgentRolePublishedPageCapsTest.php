@@ -2,8 +2,7 @@
 /**
  * Regression coverage for #861b: the mcpwp_api_agent role must be able to
  * edit ALREADY-PUBLISHED posts/pages, openly, rather than the plugin quietly
- * routing around a denial via a raw-meta fallback (see #861 /
- * ElementorDocumentSaveDeclinedTest for the truthfulness half of that story).
+ * routing around a denial via a raw-meta fallback.
  *
  * Owner decision (2026-09-18): agent writes to published pages are intended
  * behaviour. Two things must therefore both be true:
@@ -17,6 +16,12 @@
  *      than the mcpwp_db_version compare, because this ships without a
  *      version bump.
  *
+ * Also covers #875 review finding L1: the migration cannot tell "never
+ * granted" from "deliberately revoked" — it can only ever run its grant
+ * logic once (never re-entrant, verified below), and the one time it does
+ * run, it leaves an admin-visible, durable record of exactly what it
+ * changed instead of silently mutating the role.
+ *
  * @package MCPWP
  */
 
@@ -29,6 +34,12 @@ final class AgentRolePublishedPageCapsTest extends TestCase {
 	protected function setUp(): void {
 		$GLOBALS['mcpwp_test_options'] = array();
 		$GLOBALS['mcpwp_test_roles']   = array();
+		$GLOBALS['mcpwp_test_is_admin'] = false;
+		// No per-user cap map configured for user 1 → current_user_can()
+		// grants everything by default (see bootstrap.php), which is enough
+		// to exercise the manage_options gate in the notice tests below.
+		$GLOBALS['mcpwp_test_current_user'] = 1;
+		$GLOBALS['mcpwp_test_user_caps']    = array();
 	}
 
 	/**
@@ -129,10 +140,15 @@ final class AgentRolePublishedPageCapsTest extends TestCase {
 	}
 
 	/**
-	 * Own flag, not the mcpwp_db_version compare in mcpwp.php — this ships
-	 * without a version bump, so an already-current-version site must still
-	 * pick the grant up the first time plugins_loaded runs after upgrade,
-	 * and never again re-run once it has.
+	 * #875 L1: own flag, not the mcpwp_db_version compare in mcpwp.php — this
+	 * ships without a version bump, so an already-current-version site must
+	 * still pick the grant up the first time plugins_loaded runs after
+	 * upgrade, and never again re-run once it has, REGARDLESS of what the
+	 * role's capabilities look like on that later run. That "regardless" is
+	 * the whole L1 fix: the migration cannot distinguish an admin's
+	 * deliberate revocation from "never granted", so it must not try to —
+	 * once the flag is set, current capability state is never consulted
+	 * again.
 	 */
 	public function test_migration_runs_exactly_once(): void {
 		add_role(
@@ -144,9 +160,10 @@ final class AgentRolePublishedPageCapsTest extends TestCase {
 		Mcpwp_Activator::grant_agent_published_page_caps();
 		$this->assertSame( 1, get_option( 'mcpwp_agent_published_caps_migrated' ) );
 
-		// An administrator manually revoking the cap afterwards must not be
-		// silently re-granted by a later plugins_loaded — the migration is a
-		// one-time backfill, not a standing enforcement.
+		// An administrator manually revoking the cap afterwards — the exact
+		// L1 scenario, a deliberate stopgap — must not be silently re-granted
+		// by a later plugins_loaded. The migration is a one-time backfill,
+		// not a standing enforcement.
 		$role = get_role( 'mcpwp_api_agent' );
 		$role->remove_cap( 'edit_published_pages' );
 
@@ -168,5 +185,96 @@ final class AgentRolePublishedPageCapsTest extends TestCase {
 		Mcpwp_Activator::grant_agent_published_page_caps();
 
 		$this->assertSame( 1, get_option( 'mcpwp_agent_published_caps_migrated' ) );
+	}
+
+	/**
+	 * #875 L1: the one time the migration DOES change something, it must
+	 * leave a durable record of exactly which caps were added — this is
+	 * what makes a silent override of a deliberate admin choice discoverable
+	 * after the fact.
+	 */
+	public function test_migration_records_which_caps_were_added(): void {
+		add_role(
+			'mcpwp_api_agent',
+			'MCPWP API Agent',
+			array( 'edit_pages' => true, 'edit_others_pages' => true )
+		);
+
+		Mcpwp_Activator::grant_agent_published_page_caps();
+
+		$record = get_option( Mcpwp_Activator::AGENT_PUBLISHED_CAPS_GRANT_RECORD_OPTION );
+		$this->assertIsArray( $record );
+		$this->assertTrue( $record['role_existed'] );
+		sort( $record['caps_added'] );
+		$this->assertSame( array( 'edit_published_pages', 'edit_published_posts' ), $record['caps_added'] );
+		$this->assertNotEmpty( $record['granted_at'] );
+	}
+
+	/**
+	 * #875 L1: a fresh install (or any site where the role already had both
+	 * caps) recorded caps_added = [] — nothing was overridden, so there is
+	 * nothing to disclose, and the notice below must stay silent for it.
+	 */
+	public function test_migration_records_empty_caps_added_when_nothing_changed(): void {
+		add_role(
+			'mcpwp_api_agent',
+			'MCPWP API Agent',
+			array(
+				'edit_published_posts' => true,
+				'edit_published_pages' => true,
+			)
+		);
+
+		Mcpwp_Activator::grant_agent_published_page_caps();
+
+		$record = get_option( Mcpwp_Activator::AGENT_PUBLISHED_CAPS_GRANT_RECORD_OPTION );
+		$this->assertSame( array(), $record['caps_added'] );
+	}
+
+	/**
+	 * #875 L1: the admin_notices surface must only fire when a capability
+	 * was actually overridden — the case that needs disclosure — and must
+	 * stay silent otherwise, so it doesn't train admins to ignore it.
+	 */
+	public function test_notice_renders_only_when_a_cap_was_actually_added(): void {
+		$GLOBALS['mcpwp_test_is_admin'] = true;
+
+		// Nothing overridden: silent.
+		update_option(
+			Mcpwp_Activator::AGENT_PUBLISHED_CAPS_GRANT_RECORD_OPTION,
+			array( 'granted_at' => gmdate( 'c' ), 'role_existed' => true, 'caps_added' => array() )
+		);
+		ob_start();
+		Mcpwp_Activator::maybe_render_published_caps_grant_notice();
+		$this->assertSame( '', ob_get_clean() );
+
+		// Something overridden: notice must render and name the cap.
+		update_option(
+			Mcpwp_Activator::AGENT_PUBLISHED_CAPS_GRANT_RECORD_OPTION,
+			array( 'granted_at' => gmdate( 'c' ), 'role_existed' => true, 'caps_added' => array( 'edit_published_pages' ) )
+		);
+		ob_start();
+		Mcpwp_Activator::maybe_render_published_caps_grant_notice();
+		$output = ob_get_clean();
+		$this->assertStringContainsString( 'edit_published_pages', $output );
+		$this->assertStringContainsString( 'notice-warning', $output );
+	}
+
+	/**
+	 * Dismissing the notice must persist so it does not reappear on every
+	 * admin page load once an administrator has acknowledged it.
+	 */
+	public function test_dismissed_notice_does_not_render_again(): void {
+		$GLOBALS['mcpwp_test_is_admin'] = true;
+
+		update_option(
+			Mcpwp_Activator::AGENT_PUBLISHED_CAPS_GRANT_RECORD_OPTION,
+			array( 'granted_at' => gmdate( 'c' ), 'role_existed' => true, 'caps_added' => array( 'edit_published_pages' ) )
+		);
+		update_option( Mcpwp_Activator::AGENT_PUBLISHED_CAPS_NOTICE_DISMISSED_OPTION, 1 );
+
+		ob_start();
+		Mcpwp_Activator::maybe_render_published_caps_grant_notice();
+		$this->assertSame( '', ob_get_clean() );
 	}
 }

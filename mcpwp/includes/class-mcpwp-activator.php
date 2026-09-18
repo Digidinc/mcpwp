@@ -152,6 +152,18 @@ class Mcpwp_Activator {
 	}
 
 	/**
+	 * Option holding a durable, admin-visible record of what
+	 * grant_agent_published_page_caps() actually did the one time it ran.
+	 */
+	const AGENT_PUBLISHED_CAPS_GRANT_RECORD_OPTION = 'mcpwp_agent_published_caps_grant_record';
+
+	/** Whether an admin has dismissed the one-time grant notice below. */
+	const AGENT_PUBLISHED_CAPS_NOTICE_DISMISSED_OPTION = 'mcpwp_agent_published_caps_notice_dismissed';
+
+	/** admin-post action name for dismissing the notice below. */
+	const AGENT_PUBLISHED_CAPS_NOTICE_ACTION = 'mcpwp_dismiss_agent_published_caps_notice';
+
+	/**
 	 * One-time grant of edit_published_posts/edit_published_pages to the
 	 * mcpwp_api_agent role, for sites that already had the role created (#861b).
 	 *
@@ -174,23 +186,144 @@ class Mcpwp_Activator {
 	 * above — runs once on plugins_loaded, idempotent, safe to call on a
 	 * fresh install too (get_role() returns the just-created role with the
 	 * caps already present, so add_cap() is a harmless no-op there).
+	 *
+	 * NOT RE-ENTRANT BY DESIGN (#875 review finding L1). A forced capability
+	 * grant cannot tell "this role never had the cap" apart from "an admin
+	 * deliberately removed it" — has_cap()/add_cap() see only current state,
+	 * never intent. An admin who, on an older version, manually stripped
+	 * edit_published_pages as a stopgap for #861 (a reasonable reaction
+	 * before this fix existed) must not have that choice silently re-applied
+	 * on every future upgrade just because the site still lacks the cap.
+	 * That is why the guard above is a one-time flag and not a `has_cap()`
+	 * check on its own: once `mcpwp_agent_published_caps_migrated` is set,
+	 * this method returns immediately on every later call, forever,
+	 * regardless of what the role's capabilities look like by then — an
+	 * admin's later, deliberate removal is never overwritten again.
+	 *
+	 * The one time this DOES run, though, it can still silently override an
+	 * existing stopgap with no trace — has_cap()/add_cap() alone leave none.
+	 * record_published_caps_grant() below makes that single event durable
+	 * and admin-visible (an options-table record plus an admin_notices
+	 * surface, shown only when a capability was actually added — i.e. only
+	 * when something could have been overridden, never on a fresh install
+	 * where the role already had both caps).
 	 */
 	public static function grant_agent_published_page_caps() {
 		if ( get_option( 'mcpwp_agent_published_caps_migrated' ) ) {
 			return;
 		}
 
-		$role = get_role( 'mcpwp_api_agent' );
+		$role  = get_role( 'mcpwp_api_agent' );
+		$added = array();
+
 		if ( $role ) {
 			if ( ! $role->has_cap( 'edit_published_posts' ) ) {
 				$role->add_cap( 'edit_published_posts' );
+				$added[] = 'edit_published_posts';
 			}
 			if ( ! $role->has_cap( 'edit_published_pages' ) ) {
 				$role->add_cap( 'edit_published_pages' );
+				$added[] = 'edit_published_pages';
 			}
 		}
 
+		self::record_published_caps_grant( (bool) $role, $added );
+
 		update_option( 'mcpwp_agent_published_caps_migrated', 1, false );
+	}
+
+	/**
+	 * Persist what the one-time grant above actually did, so it is auditable
+	 * after the fact instead of leaving only its side effect on the role.
+	 *
+	 * @param bool     $role_existed Whether mcpwp_api_agent existed at all.
+	 * @param string[] $caps_added   Capabilities that were actually missing
+	 *                                and got added. Empty means the role
+	 *                                already had both — nothing was
+	 *                                overridden (fresh install, or a site
+	 *                                that never touched these caps).
+	 */
+	private static function record_published_caps_grant( $role_existed, array $caps_added ) {
+		update_option(
+			self::AGENT_PUBLISHED_CAPS_GRANT_RECORD_OPTION,
+			array(
+				'granted_at'   => gmdate( 'c' ),
+				'role_existed' => $role_existed,
+				'caps_added'   => $caps_added,
+			),
+			false
+		);
+	}
+
+	/**
+	 * admin_notices: surface the one-time grant above, but only when it
+	 * actually added a capability the role was missing — the case where an
+	 * admin's own prior choice (deliberate revocation, or a custom/legacy
+	 * role) could have just been overridden without them doing anything.
+	 * Silent (no notice) on a fresh install or a site where the role already
+	 * had both caps, since nothing there could have been overridden.
+	 */
+	public static function maybe_render_published_caps_grant_notice() {
+		if ( ! is_admin() || ! current_user_can( 'manage_options' ) ) {
+			return;
+		}
+		if ( get_option( self::AGENT_PUBLISHED_CAPS_NOTICE_DISMISSED_OPTION ) ) {
+			return;
+		}
+
+		$record = get_option( self::AGENT_PUBLISHED_CAPS_GRANT_RECORD_OPTION );
+		if ( ! is_array( $record ) || empty( $record['caps_added'] ) ) {
+			return;
+		}
+
+		$dismiss_url = add_query_arg(
+			array(
+				'action'   => self::AGENT_PUBLISHED_CAPS_NOTICE_ACTION,
+				'_wpnonce' => wp_create_nonce( self::AGENT_PUBLISHED_CAPS_NOTICE_ACTION ),
+			),
+			admin_url( 'admin-post.php' )
+		);
+
+		printf(
+			'<div class="notice notice-warning"><p>%1$s</p><p><a class="button" href="%2$s">%3$s</a></p></div>',
+			esc_html(
+				sprintf(
+					/* translators: %s: comma-separated list of WordPress capability names, e.g. "edit_published_posts, edit_published_pages" */
+					__( 'MCPWP granted the MCPWP API Agent role the following capabilities so it can save changes to already-published pages through Elementor\'s normal pipeline instead of a raw fallback: %s. If you had deliberately removed one of these, you will need to remove it again — this is a one-time upgrade step and will not repeat.', 'mcpwp' ),
+					implode( ', ', array_map( 'sanitize_key', $record['caps_added'] ) )
+				)
+			),
+			esc_url( $dismiss_url ),
+			esc_html__( 'Dismiss', 'mcpwp' )
+		);
+	}
+
+	/**
+	 * Dismiss the one-time grant notice for this site.
+	 *
+	 * @param string $nonce Nonce for AGENT_PUBLISHED_CAPS_NOTICE_ACTION.
+	 * @return bool Whether it was dismissed.
+	 */
+	public static function dismiss_published_caps_grant_notice( $nonce ) {
+		if ( ! current_user_can( 'manage_options' ) || ! wp_verify_nonce( (string) $nonce, self::AGENT_PUBLISHED_CAPS_NOTICE_ACTION ) ) {
+			return false;
+		}
+		update_option( self::AGENT_PUBLISHED_CAPS_NOTICE_DISMISSED_OPTION, 1, false );
+		return true;
+	}
+
+	/**
+	 * admin-post handler for the notice's Dismiss link.
+	 */
+	public static function handle_dismiss_published_caps_grant_notice() {
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- verified in dismiss_published_caps_grant_notice().
+		$nonce = isset( $_GET['_wpnonce'] ) ? sanitize_text_field( wp_unslash( $_GET['_wpnonce'] ) ) : '';
+		if ( ! self::dismiss_published_caps_grant_notice( $nonce ) ) {
+			wp_die( esc_html__( 'You are not allowed to do that.', 'mcpwp' ), '', array( 'response' => 403 ) );
+		}
+		$back = wp_get_referer();
+		wp_safe_redirect( $back ? $back : admin_url( 'admin.php?page=mcpwp-settings' ) );
+		exit;
 	}
 
 	public static function migrate_identity_less_approvals() {
@@ -221,6 +354,23 @@ class Mcpwp_Activator {
 	}
 
 	/**
+	 * Snippets repaired per plugins_loaded call, in addition to the time
+	 * budget below — whichever limit is hit first ends the current run. Kept
+	 * small enough that even a slow request (shared hosting, no object cache)
+	 * comfortably clears one batch inside the budget, which is what
+	 * guarantees forward progress on every call (see below).
+	 */
+	const CUSTOM_CODE_REPAIR_BATCH_SIZE = 200;
+
+	/**
+	 * Durable scan position for repair_custom_code_locations(): the highest
+	 * `elementor_snippet` post ID already repaired. Not autoloaded — like the
+	 * completion flag, it has no reason to load on a request that isn't
+	 * already mid-migration.
+	 */
+	const CUSTOM_CODE_REPAIR_CURSOR_OPTION = 'mcpwp_custom_code_locations_repair_cursor';
+
+	/**
 	 * Repair Elementor Custom Code snippets written under GH #871, once.
 	 *
 	 * Before this fix, `wp_create_elementor_custom_code` / `_update_elementor_
@@ -246,14 +396,58 @@ class Mcpwp_Activator {
 	 *  - `_elementor_priority` is backfilled to 1 (this class's own default)
 	 *    when absent.
 	 *
-	 * Idempotent, own flag — same reasoning as the migrations above. Safe to
-	 * run on a site with no Elementor Pro / no snippets: the query simply
-	 * returns nothing.
+	 * BATCHED AND CHECKPOINTED (#875 review finding W3). The original version
+	 * of this method did `get_posts( posts_per_page => -1 )` and looped every
+	 * `elementor_snippet` in one pass, on `plugins_loaded`, with up to 3 meta
+	 * reads/writes plus a `get_post()` per row, writing the completion flag
+	 * only after the whole loop finished. A site with enough snippets to
+	 * exceed `max_execution_time` timed out mid-loop, never set the flag, and
+	 * re-ran the entire scan from post 0 on EVERY subsequent request — a
+	 * permanent slow/failing-request loop for that install.
+	 *
+	 * Follows the time-budgeted pattern already established by
+	 * Mcpwp_Signals::compute() / request_time_budget() rather than inventing
+	 * a new one: a bounded time budget (5-15s, derived from
+	 * max_execution_time — see migration_time_budget()), at least one unit of
+	 * work always completed per call regardless of budget (there, one signal
+	 * type; here, one batch of posts), and a persisted marker so a call that
+	 * runs out of time resumes instead of restarting. The one addition beyond
+	 * that pattern is the cursor itself: Signals' units (signal types) are
+	 * independent and stateless between calls, but a snippet scan needs an
+	 * explicit position to resume from, since "everything already computed"
+	 * isn't a concept that applies to one big ID range.
+	 *
+	 * The cursor is the highest post ID repaired so far
+	 * (CUSTOM_CODE_REPAIR_CURSOR_OPTION), scanned in ascending ID order via a
+	 * direct `WHERE ID > $cursor` query — not `get_posts()` with an offset,
+	 * which would re-scan and skip already-visited rows on every batch as the
+	 * table grows, and would silently drop or repeat rows if a snippet is
+	 * created or trashed mid-migration. An ID-keyset cursor is immune to
+	 * that: new snippets always get higher IDs than the cursor (so they're
+	 * naturally picked up before completion, or by definition don't need
+	 * repair if created after this ships), and a deletion behind the cursor
+	 * changes nothing about what's ahead of it.
+	 *
+	 * Idempotent at every level: a post already holding an internal location
+	 * value, non-empty `_elementor_code`, or a set `_elementor_priority` is
+	 * left alone, so re-entering this method after a partial run (or even
+	 * after completion, in principle) never double-applies a fix. Safe to
+	 * run on a site with no Elementor Pro / no snippets: the first query
+	 * simply returns nothing and the migration completes immediately.
+	 *
+	 * @param float|null $time_budget Override for the per-call time budget,
+	 *                                in seconds. Tests use this to force an
+	 *                                interrupted run deterministically
+	 *                                instead of waiting on a real timeout.
+	 *                                Production callers omit it and get
+	 *                                migration_time_budget().
 	 */
-	public static function repair_custom_code_locations() {
+	public static function repair_custom_code_locations( ?float $time_budget = null ) {
 		if ( get_option( 'mcpwp_custom_code_locations_repaired' ) ) {
 			return;
 		}
+
+		global $wpdb;
 
 		$location_map = array(
 			'head'       => 'elementor_head',
@@ -261,36 +455,95 @@ class Mcpwp_Activator {
 			'body_end'   => 'elementor_body_end',
 		);
 
-		$snippet_ids = get_posts(
-			array(
-				'post_type'      => 'elementor_snippet',
-				'post_status'    => 'any',
-				'posts_per_page' => -1,
-				'fields'         => 'ids',
-			)
-		);
+		$start  = microtime( true );
+		$budget = null !== $time_budget ? $time_budget : self::migration_time_budget();
+		$cursor = (int) get_option( self::CUSTOM_CODE_REPAIR_CURSOR_OPTION, 0 );
 
-		foreach ( $snippet_ids as $post_id ) {
-			$location = get_post_meta( $post_id, '_elementor_location', true );
-			if ( isset( $location_map[ $location ] ) ) {
-				update_post_meta( $post_id, '_elementor_location', $location_map[ $location ] );
+		do {
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared -- uses only core $wpdb table names; values are all placeholder-bound. Keyset (ID > cursor) pagination has no get_posts()/WP_Query primitive; see docblock above for why offset pagination is the wrong tool here.
+			$snippet_ids = $wpdb->get_col(
+				$wpdb->prepare(
+					"SELECT ID FROM {$wpdb->posts} WHERE post_type = %s AND ID > %d ORDER BY ID ASC LIMIT %d",
+					'elementor_snippet',
+					$cursor,
+					self::CUSTOM_CODE_REPAIR_BATCH_SIZE
+				)
+			);
+
+			if ( empty( $snippet_ids ) ) {
+				// Scan reached the end of the table (or there was never
+				// anything to repair). Done for good.
+				delete_option( self::CUSTOM_CODE_REPAIR_CURSOR_OPTION );
+				update_option( 'mcpwp_custom_code_locations_repaired', 1, false );
+				return;
 			}
 
-			$code = get_post_meta( $post_id, '_elementor_code', true );
-			if ( '' === (string) $code ) {
-				$post = get_post( $post_id );
-				if ( $post && '' !== (string) $post->post_content ) {
-					update_post_meta( $post_id, '_elementor_code', $post->post_content );
+			foreach ( $snippet_ids as $post_id ) {
+				$post_id = (int) $post_id;
+
+				$location = get_post_meta( $post_id, '_elementor_location', true );
+				if ( isset( $location_map[ $location ] ) ) {
+					update_post_meta( $post_id, '_elementor_location', $location_map[ $location ] );
 				}
+
+				$code = get_post_meta( $post_id, '_elementor_code', true );
+				if ( '' === (string) $code ) {
+					$post = get_post( $post_id );
+					if ( $post && '' !== (string) $post->post_content ) {
+						update_post_meta( $post_id, '_elementor_code', $post->post_content );
+					}
+				}
+
+				$priority = get_post_meta( $post_id, '_elementor_priority', true );
+				if ( '' === (string) $priority ) {
+					update_post_meta( $post_id, '_elementor_priority', 1 );
+				}
+
+				$cursor = $post_id;
 			}
 
-			$priority = get_post_meta( $post_id, '_elementor_priority', true );
-			if ( '' === (string) $priority ) {
-				update_post_meta( $post_id, '_elementor_priority', 1 );
+			// Checkpoint after every batch, not only at the very end — this
+			// is the durable progress marker a re-entrant plugins_loaded call
+			// resumes from if the request ends (time limit, worker recycle,
+			// fatal elsewhere in the request) before the loop below decides
+			// to stop on its own.
+			update_option( self::CUSTOM_CODE_REPAIR_CURSOR_OPTION, $cursor, false );
+
+			if ( count( $snippet_ids ) < self::CUSTOM_CODE_REPAIR_BATCH_SIZE ) {
+				// That was the last (partial) page.
+				delete_option( self::CUSTOM_CODE_REPAIR_CURSOR_OPTION );
+				update_option( 'mcpwp_custom_code_locations_repaired', 1, false );
+				return;
 			}
+		} while ( ( microtime( true ) - $start ) <= $budget );
+
+		// Budget exhausted mid-scan. The completion flag is still unset and
+		// the cursor is already checkpointed above, so the next
+		// plugins_loaded call — ordinarily the very next request, since
+		// nothing here throws — resumes at $cursor instead of rescanning from
+		// the start. The budget is only checked BETWEEN batches (never mid-
+		// batch), so a call always completes at least one full batch no
+		// matter how small $time_budget is: a site can't get stuck making
+		// zero progress.
+	}
+
+	/**
+	 * Seconds of work a one-time plugins_loaded migration may safely spend
+	 * inside a web request before checkpointing and returning control.
+	 *
+	 * Same bounds and reasoning as Mcpwp_Signals::request_time_budget()
+	 * (5-15s, derived from max_execution_time with headroom for the rest of
+	 * the request) — duplicated here rather than called directly, because
+	 * this file is require_once'd straight from mcpwp.php's plugins_loaded
+	 * handler before the rest of the plugin, Mcpwp_Signals included, is
+	 * guaranteed to have been loaded yet.
+	 */
+	private static function migration_time_budget(): float {
+		$max = (int) ini_get( 'max_execution_time' );
+		if ( $max <= 0 ) {
+			return 15.0;
 		}
-
-		update_option( 'mcpwp_custom_code_locations_repaired', 1, false );
+		return max( 5.0, min( 15.0, (float) $max - 5.0 ) );
 	}
 
 	/**
@@ -314,9 +567,10 @@ class Mcpwp_Activator {
 		// after_save hooks (#861). That was a silent bypass of a denial the
 		// role itself no longer intends, not a safety boundary. Granting the
 		// capability openly means the write goes through the real pipeline
-		// instead of routing around a decline (see fix/861-document-save-truthfulness,
-		// PR #872, which made the receipt honest but deliberately left this
-		// permission decision to this change).
+		// instead of routing around a decline. An already-installed site gets
+		// the same two caps backfilled once by
+		// grant_agent_published_page_caps() below, since add_role() is a no-op
+		// on a role that already exists.
 		add_role( 'mcpwp_api_agent', 'MCPWP API Agent', array(
 			'read'               => true,
 			'edit_posts'         => true,
