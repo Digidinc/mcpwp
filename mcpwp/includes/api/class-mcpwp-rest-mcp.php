@@ -1983,6 +1983,17 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			);
 		}
 
+		$mapping = $tool_map[ $tool_name ];
+
+		// Resolve deprecated parameter-name aliases to their canonical name
+		// (#831) before any gate or the schema validator below ever sees
+		// $arguments. This must run before validate_tool_arguments() — that
+		// call checks required/unknown keys against the canonical schema, so
+		// an un-resolved deprecated key would fail as "unknown parameter"
+		// (or, for a required one, "missing parameter") even though the
+		// caller supplied an equivalent value under its old name.
+		$arguments = $this->resolve_param_aliases( $mapping, $arguments );
+
 		// Check if the tool's category has been disabled by the site administrator.
 		$disabled_categories = get_option( 'mcpwp_disabled_tool_categories', array() );
 		if ( ! empty( $disabled_categories ) && is_array( $disabled_categories ) ) {
@@ -2069,8 +2080,6 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			$this->fire_tool_called( $tool_name, $start, 'execution_error' );
 			return $this->jsonrpc_error( $id, -32602, $validation_error );
 		}
-
-		$mapping     = $tool_map[ $tool_name ];
 
 		// Once an earlier operation of this request was refused by the spend
 		// budget, every later one is refused too (#752 F9) — here, before it is
@@ -2354,6 +2363,60 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	}
 
 	/**
+	 * Resolve deprecated MCP parameter-name aliases to their canonical name
+	 * before validation and dispatch (#831).
+	 *
+	 * Historic and sibling-inconsistent parameter names — `page_id` where a
+	 * tool's sibling now calls the same target `id`, `alt_text` where this
+	 * plugin's own convention is `alt`, `base64` for `data`, `name` for
+	 * `key`, `type` for `post_type`, `widget` for `widget_type`, and so on —
+	 * are accepted silently, mapped onto the current canonical name, so
+	 * existing agent integrations and stored playbooks keep working across
+	 * the rename. A tool map entry opts in with:
+	 *
+	 *     'param_aliases' => array( 'old_name' => 'canonical_name', ... ),
+	 *
+	 * Deliberately NOT advertised in the tool's inputSchema — only the
+	 * canonical name is. This is the actual fix for #831's framing: with
+	 * Tool Search Tool, a client discovers ~272 tools by matching schemas
+	 * against a query, and every extra property on a schema is one more
+	 * thing that retrieval has to weigh per concept. Listing both names
+	 * would reintroduce exactly the noise this issue exists to remove, for
+	 * an alias that only a caller stuck on old documentation would ever
+	 * choose deliberately. The alias is pure compatibility plumbing: it
+	 * costs a real caller nothing to keep it undocumented, and it is proven
+	 * here and in the tool's changelog entry, not in the schema a client
+	 * reads to decide what to send.
+	 *
+	 * When both the alias and the canonical name are present in the same
+	 * call, the canonical value wins and the alias is dropped — simplest
+	 * predictable rule for a caller mid-migration between the two, and it
+	 * matches how validate_tool_arguments() already treats unknown keys
+	 * (refuse loudly) versus known ones (silently accepted): once resolved,
+	 * an alias is indistinguishable from having sent the canonical name.
+	 *
+	 * @param array $mapping   Tool map entry (may carry 'param_aliases').
+	 * @param array $arguments Raw arguments as received from the client.
+	 * @return array Arguments with any alias keys renamed to their canonical name.
+	 */
+	private function resolve_param_aliases( $mapping, $arguments ) {
+		$arguments = is_array( $arguments ) ? $arguments : array();
+		$aliases   = isset( $mapping['param_aliases'] ) && is_array( $mapping['param_aliases'] ) ? $mapping['param_aliases'] : array();
+
+		foreach ( $aliases as $alias => $canonical ) {
+			if ( ! is_string( $alias ) || ! is_string( $canonical ) || ! array_key_exists( $alias, $arguments ) ) {
+				continue;
+			}
+			if ( ! array_key_exists( $canonical, $arguments ) ) {
+				$arguments[ $canonical ] = $arguments[ $alias ];
+			}
+			unset( $arguments[ $alias ] );
+		}
+
+		return $arguments;
+	}
+
+	/**
 	 * A tool mapping applied to its arguments: param_remap, then path
 	 * placeholders substituted one segment each.
 	 *
@@ -2480,7 +2543,16 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			return 0;
 		}
 
-		return $this->tool_call_spend_price( $tool_map[ $tool_name ], $this->resolve_tool_dispatch( $tool_map[ $tool_name ], $arguments ), $tool_name );
+		// A batched call priced here never passed through handle_tools_call()'s
+		// own alias resolution, so an old parameter name must be resolved to
+		// its canonical form here too (#831) — otherwise a deprecated-name
+		// call inside a batch would be priced (and later dispatched, see
+		// handle_tools_call_idempotent()) as if param_remap alone applied to
+		// it, silently mispricing anything param_remap does not also cover.
+		$mapping   = $tool_map[ $tool_name ];
+		$arguments = $this->resolve_param_aliases( $mapping, $arguments );
+
+		return $this->tool_call_spend_price( $mapping, $this->resolve_tool_dispatch( $mapping, $arguments ), $tool_name );
 	}
 
 	/**

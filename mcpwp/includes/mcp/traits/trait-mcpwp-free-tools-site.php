@@ -1382,7 +1382,7 @@ trait Mcpwp_Free_Tools_Site_Trait {
 					'description' => 'Search query',
 					'required'    => true,
 				),
-				'type'  => array(
+				'post_type'  => array(
 					'type'        => 'string',
 					'description' => 'Content type filter (post, page, any)',
 					'default'     => 'any',
@@ -1417,7 +1417,7 @@ trait Mcpwp_Free_Tools_Site_Trait {
 					'type'        => 'string',
 					'description' => 'Canonical URL (use id or url)',
 				),
-				'type' => array(
+				'post_type' => array(
 					'type'        => 'string',
 					'description' => 'Expected type filter (post, page, any)',
 					'default'     => 'any',

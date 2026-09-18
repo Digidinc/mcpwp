@@ -1828,7 +1828,15 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	 * @return WP_REST_Response Response.
 	 */
 	public function get_widgets( $request ) {
+		// 'widget' is this route's own param name. 'type' also accepted
+		// (#831) — the Free build's controller registers the same path with
+		// a handler that reads 'type', and the MCP tool's canonical param is
+		// now 'widget_type' (remapped to 'type'); this keeps whichever
+		// controller answers /elementor/widgets on this install consistent.
 		$widget_name = $request->get_param( 'widget' );
+		if ( ! $widget_name ) {
+			$widget_name = $request->get_param( 'type' );
+		}
 		$result      = $this->elementor_pro->get_available_widgets( $widget_name );
 
 		if ( is_wp_error( $result ) ) {

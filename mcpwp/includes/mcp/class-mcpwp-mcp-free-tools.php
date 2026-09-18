@@ -613,16 +613,21 @@ class Mcpwp_MCP_Free_Tools extends Mcpwp_MCP_Tool_Registry {
 				'route'  => '/elementor/kit-css/blocks',
 			),
 			'wp_get_kit_css_block'   => array(
-				'method' => 'GET',
-				'route'  => '/elementor/kit-css/blocks/{name}',
+				'method'        => 'GET',
+				'route'         => '/elementor/kit-css/blocks/{name}',
+				// Already 'name' everywhere including wp_list_kit_css_blocks'
+				// output; 'block_id' accepted defensively (#831) since it is
+				// the name issue #831 reported reaching for.
+				'param_aliases' => array( 'block_id' => 'name' ),
 			),
 			'wp_upsert_kit_css_block' => array(
 				'method' => 'POST',
 				'route'  => '/elementor/kit-css/blocks',
 			),
 			'wp_delete_kit_css_block' => array(
-				'method' => 'DELETE',
-				'route'  => '/elementor/kit-css/blocks/{name}',
+				'method'        => 'DELETE',
+				'route'         => '/elementor/kit-css/blocks/{name}',
+				'param_aliases' => array( 'block_id' => 'name' ),
 			),
 			'wp_list_media'          => array(
 				'method' => 'GET',
@@ -637,12 +642,20 @@ class Mcpwp_MCP_Free_Tools extends Mcpwp_MCP_Tool_Registry {
 				'route'  => '/content/{post_type}/{id}',
 			),
 			'wp_search'         => array(
-				'method' => 'GET',
-				'route'  => '/search',
+				'method'        => 'GET',
+				'route'         => '/search',
+				// REST endpoint param is still 'type' (#831) — canonical MCP
+				// name is 'post_type', matching the majority of sibling
+				// content tools (wp_list_posts, wp_create_post, ...).
+				'param_remap'   => array( 'post_type' => 'type' ),
+				'param_aliases' => array( 'type' => 'post_type' ),
 			),
 			'wp_fetch'          => array(
-				'method' => 'GET',
-				'route'  => '/fetch',
+				'method'        => 'GET',
+				'route'         => '/fetch',
+				// Same rename as wp_search, for the same reason (#831 sweep).
+				'param_remap'   => array( 'post_type' => 'type' ),
+				'param_aliases' => array( 'type' => 'post_type' ),
 			),
 
 			// Posts
@@ -715,16 +728,25 @@ class Mcpwp_MCP_Free_Tools extends Mcpwp_MCP_Tool_Registry {
 				'route'  => '/media',
 			),
 			'wp_upload_media_from_url' => array(
-				'method' => 'POST',
-				'route'  => '/media/from-url',
+				'method'        => 'POST',
+				'route'         => '/media/from-url',
+				// This plugin's convention is `alt` (WordPress's own REST
+				// API calls the same field `alt_text`) — accept the WP-core
+				// name as a deprecated alias across all media write tools
+				// (#831 sweep).
+				'param_aliases' => array( 'alt_text' => 'alt' ),
 			),
 			'wp_bulk_upload_media'     => array(
 				'method' => 'POST',
 				'route'  => '/media/bulk',
 			),
 			'wp_upload_media_b64'      => array(
-				'method' => 'POST',
-				'route'  => '/media/from-base64',
+				'method'        => 'POST',
+				'route'         => '/media/from-base64',
+				'param_aliases' => array(
+					'base64'   => 'data',
+					'alt_text' => 'alt',
+				),
 			),
 			'wp_list_design_references' => array(
 				'method' => 'GET',
@@ -743,8 +765,9 @@ class Mcpwp_MCP_Free_Tools extends Mcpwp_MCP_Tool_Registry {
 				'route'  => '/design-references/{id}',
 			),
 			'wp_update_media'          => array(
-				'method' => 'POST',
-				'route'  => '/media/{id}',
+				'method'        => 'POST',
+				'route'         => '/media/{id}',
+				'param_aliases' => array( 'alt_text' => 'alt' ),
 			),
 			'wp_delete_media'          => array(
 				'method' => 'DELETE',
@@ -779,24 +802,38 @@ class Mcpwp_MCP_Free_Tools extends Mcpwp_MCP_Tool_Registry {
 				'route'  => '/elementor/{id}/edit-section',
 			),
 			'wp_add_section'           => array(
-				'method' => 'POST',
-				'route'  => '/elementor/{page_id}/add-section',
+				'method'        => 'POST',
+				// {page_id} was this tool's own placeholder token, not the
+				// underlying REST route's URL param (which has always been
+				// `id` — /elementor/(?P<id>\d+)/add-section). Renamed to
+				// `id` for consistency with every sibling Elementor tool
+				// that addresses one page (#831); `page_id` kept as a
+				// deprecated alias below.
+				'route'         => '/elementor/{id}/add-section',
+				'param_aliases' => array( 'page_id' => 'id' ),
 			),
 			'wp_remove_section'        => array(
-				'method' => 'POST',
-				'route'  => '/elementor/{page_id}/remove-section',
+				'method'        => 'POST',
+				'route'         => '/elementor/{id}/remove-section',
+				'param_aliases' => array( 'page_id' => 'id' ),
 			),
 			'wp_replace_section'       => array(
-				'method' => 'POST',
-				'route'  => '/elementor/{page_id}/replace-section',
+				'method'        => 'POST',
+				'route'         => '/elementor/{id}/replace-section',
+				'param_aliases' => array( 'page_id' => 'id' ),
 			),
 			'wp_patch_elementor'       => array(
-				'method' => 'POST',
-				'route'  => '/elementor/{page_id}/patch',
+				'method'        => 'POST',
+				'route'         => '/elementor/{id}/patch',
+				'param_aliases' => array( 'page_id' => 'id' ),
 			),
 			'wp_edit_widget'           => array(
-				'method' => 'POST',
-				'route'  => '/elementor/{id}/edit-widget',
+				'method'        => 'POST',
+				'route'         => '/elementor/{id}/edit-widget',
+				// The reported confusion (#831) was sending `page_id` where
+				// this tool has always wanted `id` — same alias as its
+				// siblings above, added for the same reason.
+				'param_aliases' => array( 'page_id' => 'id' ),
 			),
 			'wp_set_elementor'         => array(
 				'method' => 'POST',
@@ -811,8 +848,17 @@ class Mcpwp_MCP_Free_Tools extends Mcpwp_MCP_Tool_Registry {
 				'route'  => '/elementor/regenerate-css',
 			),
 			'wp_get_elementor_widgets'     => array(
-				'method' => 'GET',
-				'route'  => '/elementor/widgets',
+				'method'        => 'GET',
+				'route'         => '/elementor/widgets',
+				// Canonical name matches the two sibling tools that already
+				// use it (wp_get_widget_schema, wp_elementor_widget_help).
+				// This was previously 'widget', which the REST handler this
+				// bare route dispatches to never read (it reads 'type') —
+				// so passing it silently fell back to listing every widget
+				// instead of filtering (#831). param_remap fixes the
+				// dispatch bug and the rename together.
+				'param_remap'   => array( 'widget_type' => 'type' ),
+				'param_aliases' => array( 'widget' => 'widget_type' ),
 			),
 			'wp_get_widget_schema'         => array(
 				'method' => 'GET',
@@ -1031,18 +1077,24 @@ class Mcpwp_MCP_Free_Tools extends Mcpwp_MCP_Tool_Registry {
 
 			// Option Management
 			'wp_get_option'      => array(
-				'method' => 'GET',
-				'route'  => '/option',
+				'method'        => 'GET',
+				'route'         => '/option',
+				// 'name' accepted defensively (#831) — the obvious guess for
+				// "which WordPress option", and the actual name WP core's
+				// own get_option()/update_option() functions use.
+				'param_aliases' => array( 'name' => 'key' ),
 			),
 			'wp_update_option'   => array(
-				'method' => 'POST',
-				'route'  => '/option',
+				'method'        => 'POST',
+				'route'         => '/option',
+				'param_aliases' => array( 'name' => 'key' ),
 			),
 
 			// Feedback
 			'wp_submit_feedback'     => array(
-				'method' => 'POST',
-				'route'  => '/feedback',
+				'method'        => 'POST',
+				'route'         => '/feedback',
+				'param_aliases' => array( 'message' => 'description' ),
 			),
 			'wp_list_feedback'       => array(
 				'method' => 'GET',

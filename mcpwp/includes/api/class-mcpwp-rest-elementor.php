@@ -978,7 +978,14 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 	public function get_widget_schema( $request ) {
 		$this->log_activity( 'get_widget_schema', $request );
 
+		// 'type' is this route's own param name. 'widget' also accepted
+		// (#831) — the Pro build registers a same-path route whose handler
+		// reads 'widget', so a caller must not have to know which controller
+		// answered /elementor/widgets on this install.
 		$widget_type = $request->get_param( 'type' );
+		if ( ! $widget_type ) {
+			$widget_type = $request->get_param( 'widget' );
+		}
 		$result      = $this->elementor->get_widget_schema( $widget_type ? (string) $widget_type : '' );
 
 		if ( is_wp_error( $result ) ) {

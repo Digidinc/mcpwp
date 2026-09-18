@@ -72,6 +72,10 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 					'description' => 'Optional Elementor data JSON (array). If omitted, Elementor creates a blank template.',
 					'items'       => array( 'type' => 'object' ),
 				),
+				'elementor_data_base64' => array(
+					'type'        => 'string',
+					'description' => 'Base64-encoded Elementor JSON data. Use instead of elementor_data for large payloads with HTML or special characters, to avoid quoting/escaping issues.',
+				),
 				'page_settings' => array(
 					'type'        => 'object',
 					'description' => 'Elementor document settings to store with the template: template (canvas/header-footer), hide_title, background_*, padding, custom_css. A full-page template without these carries the layout and loses the frame (#638). Unrecognised keys are reported in page_settings_result.skipped rather than dropped silently.',
@@ -96,6 +100,10 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 					'type'        => 'array',
 					'description' => 'Optional Elementor data JSON (array)',
 					'items'       => array( 'type' => 'object' ),
+				),
+				'elementor_data_base64' => array(
+					'type'        => 'string',
+					'description' => 'Base64-encoded Elementor JSON data. Use instead of elementor_data for large payloads with HTML or special characters, to avoid quoting/escaping issues.',
 				),
 				'page_settings' => array(
 					'type'        => 'object',
@@ -125,7 +133,7 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 			'wp_apply_elementor_template',
 			'Apply an Elementor template to a page. WARNING: This COPIES the template data and REPLACES all existing page content. For non-destructive insertion, get the template data via wp_get_elementor_template then use wp_add_section to insert specific sections.',
 			array(
-				'template_id' => array(
+				'id'          => array(
 					'type'        => 'number',
 					'description' => 'Template ID',
 					'required'    => true,
@@ -215,6 +223,10 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 					'type'        => 'array',
 					'description' => 'Optional Elementor data JSON for the archetype',
 					'items'       => array( 'type' => 'object' ),
+				),
+				'elementor_data_base64' => array(
+					'type'        => 'string',
+					'description' => 'Base64-encoded Elementor JSON data. Use instead of elementor_data for large payloads with HTML or special characters, to avoid quoting/escaping issues.',
 				),
 				'type' => array(
 					'type'        => 'string',
@@ -338,9 +350,12 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 				),
 				'elementor_data' => array(
 					'type'        => 'array',
-					'description' => 'Elementor data JSON for the part',
-					'required'    => true,
+					'description' => 'Elementor data JSON for the part. One of elementor_data or elementor_data_base64 is required.',
 					'items'       => array( 'type' => 'object' ),
+				),
+				'elementor_data_base64' => array(
+					'type'        => 'string',
+					'description' => 'Base64-encoded Elementor JSON data. Use instead of elementor_data for large payloads with HTML or special characters, to avoid quoting/escaping issues. One of elementor_data or elementor_data_base64 is required.',
 				),
 				'type'           => array(
 					'type'        => 'string',
@@ -366,9 +381,9 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 			'wp_create_elementor_part_from_section',
 			'Extract a live Elementor section or container from a page and save it as a reusable part in the parts library. This is the professional way to promote a good live section into a canonical reusable asset.',
 			array(
-				'page_id'    => array(
-					'type'        => 'integer',
-					'description' => 'Page ID containing the source section',
+				'id'         => array(
+					'type'        => 'number',
+					'description' => 'Page or post ID containing the source section',
 					'required'    => true,
 				),
 				'element_id' => array(
@@ -490,13 +505,13 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 
 		$pro_tools[] = $this->define_tool(
 			'wp_list_blueprints',
-			'List all available section blueprint types with their parameter schemas. Use this to discover what section types can be generated with wp_get_blueprint. WORKFLOW: 1) wp_list_blueprints → see types + params 2) wp_get_blueprint(type, params) → get JSON 3) wp_add_section(page_id, element, position) → insert on page.',
+			'List all available section blueprint types with their parameter schemas. Use this to discover what section types can be generated with wp_get_blueprint. WORKFLOW: 1) wp_list_blueprints → see types + params 2) wp_get_blueprint(type, params) → get JSON 3) wp_add_section(id, element, position) → insert on page.',
 			array()
 		);
 
 		$pro_tools[] = $this->define_tool(
 			'wp_get_blueprint',
-			'Generate a single Elementor section from a blueprint type. Returns ready-to-use Elementor JSON that can be inserted into any page via wp_add_section. WORKFLOW: 1) wp_list_blueprints → discover types 2) wp_get_blueprint(type, params) → generate section JSON 3) wp_add_section(page_id, element=<json>.elements[0], position) → insert 4) wp_get_elementor_summary → verify.',
+			'Generate a single Elementor section from a blueprint type. Returns ready-to-use Elementor JSON that can be inserted into any page via wp_add_section. WORKFLOW: 1) wp_list_blueprints → discover types 2) wp_get_blueprint(type, params) → generate section JSON 3) wp_add_section(id, element=<json>.elements[0], position) → insert 4) wp_get_elementor_summary → verify.',
 			array(
 				'type' => array(
 					'type'        => 'string',
@@ -544,11 +559,11 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 
 		$pro_tools[] = $this->define_tool(
 			'wp_save_section_as_template',
-			'Extract a section/container from a live page and save it as a reusable Elementor template. WORKFLOW: 1) wp_get_elementor_summary → get section IDs 2) wp_save_section_as_template(page_id, element_id, title) → save as template 3) wp_list_elementor_templates → verify. The template can then be applied to other pages via wp_apply_elementor_template or its data retrieved via wp_get_elementor_template.',
+			'Extract a section/container from a live page and save it as a reusable Elementor template. WORKFLOW: 1) wp_get_elementor_summary → get section IDs 2) wp_save_section_as_template(id, element_id, title) → save as template 3) wp_list_elementor_templates → verify. The template can then be applied to other pages via wp_apply_elementor_template or its data retrieved via wp_get_elementor_template.',
 			array(
-				'page_id'    => array(
-					'type'        => 'integer',
-					'description' => 'Page ID containing the section',
+				'id'         => array(
+					'type'        => 'number',
+					'description' => 'Page or post ID containing the section',
 					'required'    => true,
 				),
 				'element_id' => array(
