@@ -2728,9 +2728,19 @@ if (! function_exists('check_ajax_referer')) {
     /**
      * Stub: returns truthy/falsy based on $GLOBALS['mcpwp_test_ajax_referer_valid'].
      * Never calls wp_die() in tests.
+     *
+     * Does not itself validate $action against anything (there is no real
+     * nonce here to bind an action string to) — but it records the action
+     * string it was called with in mcpwp_test_last_ajax_referer_action so a
+     * test can assert production code checked the RIGHT action string
+     * (e.g. #607: is_trusted_admin_ajax_request() once checked a nonce
+     * action ('mcpwp_admin_chat') that was never the one actually minted
+     * ('mcpwp_admin_nonce'), which this stub's boolean-only return would not
+     * have caught on its own).
      */
     function check_ajax_referer($action, $query_arg = false, $die = true)
     {
+        $GLOBALS['mcpwp_test_last_ajax_referer_action'] = $action;
         return (bool) $GLOBALS['mcpwp_test_ajax_referer_valid'];
     }
 }

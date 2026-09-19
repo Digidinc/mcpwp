@@ -1720,8 +1720,103 @@ trait Mcpwp_Api_Auth {
 			}
 		}
 
+		// #607: publishing a post or page (create, update, bulk create/update,
+		// or the page-clone target status) must never be reachable on generic
+		// write scope alone. A WordPress current_user_can('publish_posts') /
+		// ('publish_pages') check cannot enforce this boundary here: EVERY API
+		// key, whatever scope it declares, authenticates as the same shared
+		// mcpwp_api_agent WP user (see class-mcpwp-activator.php's add_role()
+		// call — read the docblock above it), and that role is granted
+		// publish_posts/publish_pages unconditionally, so
+		// current_user_can('publish_posts') is always true no matter which
+		// key made the request. The key's own scope tier is therefore the
+		// ONLY real authorization boundary this plugin has, so — the same way
+		// every other high-blast-radius write already is (wide find/replace,
+		// blueprint deploy, approval state transitions) — setting status to
+		// 'publish' is elevated to admin scope here, at the single chokepoint
+		// every dispatch path (direct REST, /batch, MCP tools/call) re-checks
+		// against (see this method's docblock).
+		$publish_gated_routes = array(
+			'/mcpwp/v1/posts', // covers /posts, /posts/{id}, /posts/bulk
+			'/mcpwp/v1/pages', // covers /pages, /pages/{id}, /pages/bulk, /pages/{id}/clone
+			// WooCommerce products carry the SAME status field and the SAME
+			// shared-agent-user problem, and create_product's own schema
+			// defaults 'status' to 'publish' (Mcpwp_REST_WooCommerce::
+			// get_product_create_args()) — a bare wc_create_product call with
+			// no status param at all would otherwise publish a live storefront
+			// listing on write scope alone. Covers /woocommerce/products and
+			// /woocommerce/products/{id}.
+			'/mcpwp/v1/woocommerce/products',
+		);
+		if ( $is_write ) {
+			foreach ( $publish_gated_routes as $publish_gated_route ) {
+				if ( $this->route_matches( $route, $publish_gated_route ) && $this->request_targets_publish_status( $request ) ) {
+					return 'admin';
+				}
+			}
+		}
+
 		// Default: GET/HEAD/OPTIONS → read, everything else → write.
 		return $is_write ? 'write' : 'read';
+	}
+
+	/**
+	 * Whether a create/update/bulk/clone request for a post or page asks for
+	 * the WordPress 'publish' status anywhere in its body — the top-level
+	 * 'status' param, or any item's 'status' inside a bulk 'posts' / 'pages' /
+	 * 'updates' array. See get_required_scope_for_request() (#607) for why
+	 * this gates scope instead of a WordPress capability check.
+	 *
+	 * Deliberately reads get_params() (like the sibling
+	 * find_replace_is_wide() check above) rather than get_json_params(): the
+	 * former is what WP_REST_Request actually exposes as the merged,
+	 * already-decoded body/query/URL params on every real dispatch path this
+	 * plugin uses (direct REST, /batch sub-dispatch, MCP tools/call via
+	 * rest_do_request()), and it degrades safely (empty array) rather than
+	 * null when a request carries no JSON body at all.
+	 *
+	 * @param WP_REST_Request $request Request object.
+	 * @return bool True when any targeted post/page would end up 'publish'.
+	 */
+	protected function request_targets_publish_status( $request ) {
+		if ( ! method_exists( $request, 'get_params' ) ) {
+			return false;
+		}
+
+		$params = (array) $request->get_params();
+
+		if ( $this->param_value_is_publish( $params, 'status' ) ) {
+			return true;
+		}
+
+		// Bulk create/update bodies carry an array of items under 'posts',
+		// 'pages', or the 'updates' alias (see Mcpwp_REST_Posts::
+		// register_routes() / Mcpwp_REST_Pages::register_routes()) — each
+		// item can independently request 'publish', so every one must be
+		// checked, not just the top level.
+		foreach ( array( 'posts', 'pages', 'updates' ) as $bulk_key ) {
+			if ( empty( $params[ $bulk_key ] ) || ! is_array( $params[ $bulk_key ] ) ) {
+				continue;
+			}
+			foreach ( $params[ $bulk_key ] as $item ) {
+				if ( is_array( $item ) && $this->param_value_is_publish( $item, 'status' ) ) {
+					return true;
+				}
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * Case-insensitive helper: is $params[$key] present and equal to 'publish'?
+	 *
+	 * @param array  $params Params array.
+	 * @param string $key    Key to inspect.
+	 * @return bool
+	 */
+	private function param_value_is_publish( $params, $key ) {
+		return isset( $params[ $key ] ) && is_scalar( $params[ $key ] ) && 'publish' === strtolower( (string) $params[ $key ] );
 	}
 
 	/**
@@ -2696,7 +2791,23 @@ trait Mcpwp_Api_Auth {
 	 *   2. activate_plugins capability — caller is a site admin.
 	 *   3. DOING_AJAX constant — request went through wp-admin/admin-ajax.php.
 	 *   4. $_POST['action'] is in the allowlist of known MCPWP admin AJAX actions.
-	 *   5. check_ajax_referer() verifies the mcpwp_admin_chat nonce for the action.
+	 *   5. check_ajax_referer() verifies the mcpwp_admin_nonce nonce for the action.
+	 *
+	 * #607: the allowlist here previously named 'mcpwp_admin_chat' and
+	 * 'mcpwp_chat_tool_call' — action strings that are never registered
+	 * anywhere (see includes/class-mcpwp-loader.php, which registers
+	 * wp_ajax_mcpwp_chat_execute_tool) and never sent by any client. The
+	 * nonce action checked was likewise 'mcpwp_admin_chat', while the only
+	 * nonce ever minted for this flow is 'mcpwp_admin_nonce' (see
+	 * Mcpwp_Admin::localize — wp_create_nonce('mcpwp_admin_nonce') — and
+	 * every check_ajax_referer('mcpwp_admin_nonce', ...) call in
+	 * trait-mcpwp-admin-chat.php). Both mismatches meant this method could
+	 * never return true against a real request: Chat's "execute tool"
+	 * button (Mcpwp_Admin_Chat_Trait::ajax_chat_execute_tool()) always hit
+	 * verify_api_key()'s missing-API-key rejection when it internally
+	 * rest_do_request()'d the /mcp route, an authenticated admin's own tool
+	 * execution failing with an auth error 100% of the time in production.
+	 * Fixed to the strings that are actually registered/minted.
 	 *
 	 * The GET ?api_key= query-param path is intentionally NOT touched here —
 	 * that path is required for MCP clients (Claude Desktop, ChatGPT connectors)
@@ -2717,10 +2828,14 @@ trait Mcpwp_Api_Auth {
 			return false;
 		}
 
-		// Only bypass for known MCPWP admin actions — never a wildcard.
+		// Only bypass for known MCPWP admin actions — never a wildcard. This
+		// must be the exact action string(s) registered via
+		// add_action('wp_ajax_<action>', ...) in class-mcpwp-loader.php for
+		// a handler that internally rest_do_request()s the /mcp route.
+		// Today that is only 'mcpwp_chat_execute_tool'
+		// (Mcpwp_Admin_Chat_Trait::ajax_chat_execute_tool()).
 		$allowed_actions = array(
-			'mcpwp_admin_chat',
-			'mcpwp_chat_tool_call',
+			'mcpwp_chat_execute_tool',
 		);
 
 		// phpcs:ignore WordPress.Security.NonceVerification.Missing
@@ -2729,9 +2844,11 @@ trait Mcpwp_Api_Auth {
 			return false;
 		}
 
-		// Verify the nonce — die()s on failure (WP behaviour).
-		// The nonce is generated server-side and sent to the admin JS bundle.
-		return (bool) check_ajax_referer( 'mcpwp_admin_chat', 'nonce', false );
+		// Verify the nonce — die()s on failure (WP behaviour). The nonce is
+		// generated server-side (wp_create_nonce('mcpwp_admin_nonce')) and
+		// sent to the admin JS bundle; every handler in
+		// trait-mcpwp-admin-chat.php verifies against the same action string.
+		return (bool) check_ajax_referer( 'mcpwp_admin_nonce', 'nonce', false );
 	}
 
 	/**

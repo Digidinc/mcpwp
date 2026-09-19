@@ -91,6 +91,7 @@ class Mcpwp_REST_WooCommerce extends Mcpwp_REST_API {
 					'methods'             => WP_REST_Server::EDITABLE,
 					'callback'            => array( $this, 'update_product' ),
 					'permission_callback' => array( $this, 'check_permission' ),
+					'args'                => $this->get_product_update_args(),
 				),
 				array(
 					'methods'             => WP_REST_Server::DELETABLE,
@@ -438,6 +439,27 @@ class Mcpwp_REST_WooCommerce extends Mcpwp_REST_API {
 				'description' => __( 'Downloadable product.', 'mcpwp' ),
 			),
 		);
+	}
+
+	/**
+	 * Get product UPDATE arguments.
+	 *
+	 * #607: the update route previously registered no 'args' schema at all —
+	 * every field, including 'status', went straight through with no type,
+	 * enum, or range check at the WP REST layer (WordPress only validates
+	 * against a route's declared arg schema; an omitted schema validates
+	 * nothing). Mirrors get_product_create_args() with 'required' and
+	 * 'default' stripped — same pattern as
+	 * Mcpwp_REST_API::get_post_update_args() for posts/pages.
+	 *
+	 * @return array
+	 */
+	private function get_product_update_args() {
+		$args = $this->get_product_create_args();
+		foreach ( $args as $name => $schema ) {
+			unset( $args[ $name ]['required'], $args[ $name ]['default'] );
+		}
+		return $args;
 	}
 
 	/**

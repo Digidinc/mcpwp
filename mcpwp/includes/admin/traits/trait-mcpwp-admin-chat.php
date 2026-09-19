@@ -247,10 +247,19 @@ trait Mcpwp_Admin_Chat_Trait {
 			),
 		) ) );
 
-		// Bypass API key auth for internal requests.
-		add_filter( 'mcpwp_bypass_api_key_check', '__return_true' );
+		// Authenticated via Mcpwp_Api_Auth::is_trusted_admin_ajax_request()
+		// inside verify_api_key()'s permission callback for this action —
+		// see that method for the admin+DOING_AJAX+action-allowlist+nonce
+		// conditions it requires. There used to be an
+		// add_filter( 'mcpwp_bypass_api_key_check', '__return_true' ) /
+		// remove_filter() pair here for a global apply_filters() bypass that
+		// has since been removed everywhere (#607): nothing calls
+		// apply_filters( 'mcpwp_bypass_api_key_check', ... ) any more, so
+		// that pair was dead weight — worse, it read as if flipping this
+		// filter still bypassed auth, which would silently reopen a global
+		// bypass for the next person who wired up a consumer for it. Removed
+		// rather than left as a no-op.
 		$response = rest_do_request( $request );
-		remove_filter( 'mcpwp_bypass_api_key_check', '__return_true' );
 
 		$data = rest_get_server()->response_to_data( $response, false );
 
