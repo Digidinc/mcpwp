@@ -5,6 +5,13 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.13.0](https://github.com/Mumega-com/mcpwp/compare/v3.12.0...v3.13.0) (2026-09-19)
+
+
+### Bug Fixes
+
+* 3.13.0 — publish requires admin scope, agent role least-privilege, version oracle, chat auth bridge ([#877](https://github.com/Mumega-com/mcpwp/issues/877)) ([8ca6d7b](https://github.com/Mumega-com/mcpwp/commit/8ca6d7b4dcba1eba64fcd87afe17d54ea1f1df55))
+
 ## [3.12.0](https://github.com/Mumega-com/mcpwp/compare/v3.11.1...v3.12.0) (2026-09-19)
 
 ### Security
