@@ -5,6 +5,75 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.12.0](https://github.com/Mumega-com/mcpwp/compare/v3.11.1...v3.12.0) (2026-09-19)
+
+### Security
+
+**Upgrade promptly if you issue role-scoped API keys.** Both issues below are
+privilege escalation *within* an already-issued credential — neither is remotely
+exploitable without a valid API key.
+
+* **Role-scoped API keys were not enforced outside `/mcp`** ([#875](https://github.com/Mumega-com/mcpwp/issues/875)).
+  A key's role — admin, designer, author, editor — was checked only inside MCP
+  tool dispatch. Direct REST calls and `/batch` operations skipped the check
+  entirely, so a key deliberately narrowed to one area could reach any tool
+  category by calling the route directly. The restriction is now enforced on all
+  four authentication paths (API key, batch sub-request, OAuth, broker bearer).
+  If you have issued narrow keys to contractors, agencies, or integrations,
+  assume those keys had full reach before this release.
+* **Free and Freemius builds granted Pro** when `wp-config.php` defined
+  `MCPWP_PRO` ([#863](https://github.com/Mumega-com/mcpwp/issues/863)). One line
+  in a config file unlocked every Pro surface. The constant no longer grants
+  anything; legitimate agency builds carry a marker file instead, and all four
+  build scripts now fail if the old constant survives into a shipped artifact.
+* **59 tools were classified below the scope their own route required**
+  ([#874](https://github.com/Mumega-com/mcpwp/issues/874)). Not exploitable on
+  its own — the route gate still held — but the two tables are now asserted
+  equal across all 295 route-mapped tools so they cannot drift apart again.
+
+### Upgrade notes
+
+* The `mcpwp_api_agent` role gains `edit_published_posts` and
+  `edit_published_pages` on upgrade ([#861](https://github.com/Mumega-com/mcpwp/issues/861)).
+  The plugin already wrote to published pages by bypassing WordPress's denial
+  with a raw metadata write; the role now says so openly, so those writes run
+  through Elementor's real save pipeline and create revisions. If you
+  deliberately removed either capability, your choice is preserved — the
+  migration runs once and never re-grants.
+* Existing Custom Code snippets are repaired automatically on the next page
+  load, in batches with a durable cursor.
+
+### Bug Fixes
+
+* **Elementor Custom Code was completely non-functional.** Snippets were stored
+  with a location value Elementor's own hooks never query for, and the metadata
+  Elementor actually renders from was never written at all
+  ([#871](https://github.com/Mumega-com/mcpwp/issues/871)). Separately,
+  `<script>` was stripped from every snippet, making GA4/GTM tags — the feature's
+  main use — silently inert ([#873](https://github.com/Mumega-com/mcpwp/issues/873)).
+* **Elementor writes on published pages reported success when the save had
+  failed** ([#861](https://github.com/Mumega-com/mcpwp/issues/861)). The receipt
+  now reflects what Elementor actually returned.
+* **Unknown Elementor template types were silently rewritten to `page`**
+  ([#827](https://github.com/Mumega-com/mcpwp/issues/827)). Unrecognised types are
+  now refused, listing the types this site actually has.
+* **Large read responses can now be narrowed** ([#830](https://github.com/Mumega-com/mcpwp/issues/830)).
+  Opt-in projection parameters take a widget schema from ~120KB to ~3KB and
+  `wp_onboard` from ~71KB to ~1KB. Responses are unchanged unless you ask.
+* **Parameter names made consistent across sibling tools**
+  ([#831](https://github.com/Mumega-com/mcpwp/issues/831)). Old names keep
+  working as deprecated aliases. Also fixes `wp_get_elementor_widgets`, whose
+  documented filter parameter was never read, so filtering returned everything.
+* **The Custom Code repair migration could never finish on a large site.** It
+  scanned every snippet on each request and only recorded completion at the very
+  end, so a site big enough to hit `max_execution_time` restarted the scan
+  forever. Now batched behind a lock with a checkpointed cursor.
+
+Full detail for all of the above, including the verification runs, is in commit
+[88cb2d4](https://github.com/Mumega-com/mcpwp/commit/88cb2d4303763788801e605e751efe3dc6fbd1db).
+* array-stored Elementor data through one reader, provider saves by compare-and-swap, Figma onboarding on Pro only ([#845](https://github.com/Mumega-com/mcpwp/issues/845)) ([#857](https://github.com/Mumega-com/mcpwp/issues/857)) ([c6cd59f](https://github.com/Mumega-com/mcpwp/commit/c6cd59f8d651f5225df386bfa3770205c18d0f5b))
+* **release:** publish agency builds under the token-gated agency/ prefix ([#852](https://github.com/Mumega-com/mcpwp/issues/852)) ([#855](https://github.com/Mumega-com/mcpwp/issues/855)) ([6c935d5](https://github.com/Mumega-com/mcpwp/commit/6c935d56a1cf33cace33b4c7028e4ba3b209bc6a))
+
 ## [3.11.1](https://github.com/Mumega-com/mcpwp/compare/v3.11.0...v3.11.1) (2026-09-10)
 
 
