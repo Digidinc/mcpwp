@@ -751,7 +751,44 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 		);
 	}
 
+	/**
+	 * Whether the current request may manage API keys / rate-limit config /
+	 * trigger the plugin self-update — the admin-tier operations gated by
+	 * mcpwp_manage_settings.
+	 *
+	 * GH #669: every API key — whatever scope it was created with —
+	 * authenticates as the SAME shared mcpwp_api_agent WordPress user (see
+	 * set_api_user_context() and the #874 docblock on
+	 * get_required_scope_for_request() in trait-mcpwp-api-auth.php). A
+	 * WordPress capability granted to that role is therefore held by every
+	 * key regardless of its own declared scope — current_user_can() cannot
+	 * distinguish one key from another. mcpwp_manage_settings is
+	 * administrator-only now (Mcpwp_Activator::create_api_role_and_user()),
+	 * so for an API-key-authenticated request the key's own scope is the
+	 * only signal that means anything, and it is checked directly here —
+	 * independent of get_required_scope_for_request()'s route table, so a
+	 * future route that is misclassified there cannot silently reach these
+	 * handlers with less than admin scope. This is the same pattern
+	 * trigger_update() above already applied for the self-update route.
+	 *
+	 * Without this, removing mcpwp_manage_settings from mcpwp_api_agent
+	 * would make current_user_can( 'mcpwp_manage_settings' ) false for every
+	 * API key — including a genuinely admin-scoped one — locking the
+	 * documented "call wp_create_api_key if you have admin access" flow out
+	 * of its own feature.
+	 *
+	 * @return bool
+	 */
 	private function can_manage_api_keys() {
+		$key_record = $this->get_current_api_key_record();
+		if ( is_array( $key_record ) ) {
+			return $this->key_has_scope( $key_record, 'admin' );
+		}
+
+		// No matched API key for this request (e.g. a future direct-PHP or
+		// genuinely cookie-authenticated call running as the real logged-in
+		// WordPress user). Falls back to the WordPress capability, which is
+		// administrator-only.
 		return function_exists( 'current_user_can' ) && current_user_can( 'mcpwp_manage_settings' );
 	}
 

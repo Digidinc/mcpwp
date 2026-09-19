@@ -532,6 +532,25 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 		Mcpwp_Activator::grant_agent_published_page_caps();
 	}
 
+	// One-time: strip mcpwp_manage_settings from the mcpwp_api_agent role on
+	// sites where it was already granted (GH #669 — backport of the wp.org
+	// audit's finding #4). Own flag, same reasoning as the migrations above —
+	// see Mcpwp_Activator::strip_agent_manage_settings_capability() for the
+	// full defect and why it is not re-entrant.
+	//
+	// Ordering vs. grant_agent_published_page_caps() above: both migrations
+	// mutate the SAME mcpwp_api_agent role, but each only ever touches its
+	// own capability key (edit_published_posts/edit_published_pages there,
+	// mcpwp_manage_settings here) via WP_Role::add_cap()/remove_cap(), which
+	// read-modify-write only the single capability named. Neither call reads
+	// or depends on the other's outcome, so running this before or after — or
+	// on a site that has already run one but not the other, in either order
+	// across separate requests — cannot undo or race the other's effect.
+	if ( ! get_option( 'mcpwp_agent_manage_settings_capability_migrated' ) ) {
+		require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-activator.php';
+		Mcpwp_Activator::strip_agent_manage_settings_capability();
+	}
+
 	// Initialize the plugin
 	$loader = new Mcpwp_Loader();
 	$loader->run();
