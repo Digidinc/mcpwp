@@ -965,9 +965,49 @@ class Mcpwp_REST_WooCommerce extends Mcpwp_REST_API {
 		}
 
 		$current = $items[ $index ];
-		$merged  = $this->normalize_product_archetype_payload( array_merge( $current, $request->get_params() ), true );
+
+		// #879: $current is shaped {..., product_data: {...}} — the stored
+		// product-field overrides (status, sku, stock_quantity, ...) live
+		// NESTED under 'product_data', not at the top level. Request params
+		// are flat ({"regular_price":"25.00"}). normalize_product_archetype_
+		// payload() rebuilds 'product_data' by calling
+		// extract_product_override_payload() on its input, which only ever
+		// reads TOP-LEVEL keys. Merging $current straight against the
+		// request (the old code) left 'product_data' sitting untouched as a
+		// single nested value the extractor never looks inside, so every
+		// stored product field the caller did not resend in this request was
+		// silently dropped. Flatten the stored product_data into the merge
+		// base first — record-level keys from $current (name, product_type,
+		// archetype_class, archetype_style, brief) are merged in AFTER, so
+		// they are never shadowed by a same-named product field, and the
+		// request's own params are merged in last so an explicit override
+		// still wins.
+		$stored_product_data = isset( $current['product_data'] ) && is_array( $current['product_data'] ) ? $current['product_data'] : array();
+		$merge_base           = array_merge( $stored_product_data, $current );
+		// Not load-bearing today: 'product_data' is not in
+		// extract_product_override_payload()'s allow-list, so nothing in the
+		// merge below ever re-adds it as a top-level key from $merge_base.
+		// Kept defensively so a future addition of 'product_data' to that
+		// allow-list can't leak this now-flattened nested value back in.
+		unset( $merge_base['product_data'] );
+
+		$merged = $this->normalize_product_archetype_payload( array_merge( $merge_base, $request->get_params() ), true );
 		if ( is_wp_error( $merged ) ) {
 			return $merged;
+		}
+
+		// #879 (name half): normalize_product_archetype_payload() derives BOTH
+		// the archetype label ('name') and product_data['name'] from a single
+		// 'name' param, so no merge ordering above can preserve a stored
+		// product name that differs from the label -- the normalizer itself
+		// cannot tell "caller resent the same name" from "caller never
+		// mentioned name at all". Fix it here, the one place that has both
+		// the request and the previously-stored product_data in hand: a PUT
+		// that never mentioned 'name' must not silently rewrite the
+		// product's name to the archetype's label just because the merge
+		// re-derived product_data['name'] from $merge_base['name'].
+		if ( ! array_key_exists( 'name', $request->get_params() ) && isset( $stored_product_data['name'] ) ) {
+			$merged['product_data']['name'] = $stored_product_data['name'];
 		}
 
 		$merged['id']          = $id;
@@ -992,10 +1032,14 @@ class Mcpwp_REST_WooCommerce extends Mcpwp_REST_API {
 			return $archetype;
 		}
 
-		$payload = $archetype['product_data'];
-		$payload = array_merge( $payload, $this->extract_product_override_payload( $request->get_params() ) );
+		$existing_product_id = ! empty( $request->get_param( 'product_id' ) );
+		$payload             = self::build_archetype_apply_payload(
+			isset( $archetype['product_data'] ) && is_array( $archetype['product_data'] ) ? $archetype['product_data'] : array(),
+			$request->get_params(),
+			$existing_product_id
+		);
 
-		if ( ! empty( $request->get_param( 'product_id' ) ) ) {
+		if ( $existing_product_id ) {
 			$product_id = absint( $request->get_param( 'product_id' ) );
 			$result     = $this->handler->update_product( $product_id, $payload );
 			if ( is_wp_error( $result ) ) {
@@ -1015,10 +1059,10 @@ class Mcpwp_REST_WooCommerce extends Mcpwp_REST_API {
 			return new WP_Error( 'missing_name', __( 'Applying a product archetype to a new product requires a name.', 'mcpwp' ), array( 'status' => 400 ) );
 		}
 
-		if ( empty( $payload['status'] ) ) {
-			$payload['status'] = 'draft';
-		}
-
+		// The empty-status default for create mode now lives inside
+		// build_archetype_apply_payload() itself (see that method's
+		// docblock) so the gate and this handler compute the identical
+		// effective payload -- do not re-add it here.
 		$result = $this->handler->create_product( $payload );
 		if ( is_wp_error( $result ) ) {
 			return $result;
@@ -1203,6 +1247,22 @@ class Mcpwp_REST_WooCommerce extends Mcpwp_REST_API {
 	/**
 	 * Normalize product archetype payload.
 	 *
+	 * NOTE on 'name': the archetype's own label (top-level $record['name'])
+	 * and $record['product_data']['name'] are DELIBERATELY the same value on
+	 * CREATE — create_product_archetype() feeds this method one 'name' param
+	 * that becomes both. This is not a bug and not an oversight to "fix" by
+	 * splitting them into two fields; that would be an API shape change.
+	 *
+	 * The two CAN diverge — either by writing the mcpwp_wc_product_archetypes
+	 * option directly, outside this method, or simply from any PUT that ever
+	 * changed one without the other. This method has no way to tell "caller
+	 * resent the unchanged name" from "caller never mentioned name", so it
+	 * cannot itself preserve a divergent stored name on an unrelated update.
+	 * update_product_archetype() handles that: after calling this method, it
+	 * restores the previously-stored product_data['name'] whenever the
+	 * request itself did not include 'name' — see that method for why the
+	 * restore has to happen there and not here.
+	 *
 	 * @param array $data    Raw input.
 	 * @param bool  $partial Whether partial update is allowed.
 	 * @return array|WP_Error
@@ -1224,7 +1284,7 @@ class Mcpwp_REST_WooCommerce extends Mcpwp_REST_API {
 			'archetype_style' => isset( $data['archetype_style'] ) ? sanitize_text_field( (string) $data['archetype_style'] ) : '',
 			'brief'           => isset( $data['brief'] ) ? sanitize_textarea_field( (string) $data['brief'] ) : '',
 			'product_type'    => $product_type,
-			'product_data'    => $this->extract_product_override_payload( $data ),
+			'product_data'    => self::extract_product_override_payload( $data ),
 		);
 
 		if ( empty( $record['product_data']['type'] ) ) {
@@ -1237,10 +1297,15 @@ class Mcpwp_REST_WooCommerce extends Mcpwp_REST_API {
 	/**
 	 * Extract known WooCommerce product fields from an input array.
 	 *
+	 * Static: used both by instance methods here and by
+	 * archetype_apply_targets_publish_status() (called statically, before
+	 * any controller is constructed — see that method's docblock) via
+	 * build_archetype_apply_payload().
+	 *
 	 * @param array $data Raw input.
 	 * @return array
 	 */
-	private function extract_product_override_payload( $data ) {
+	private static function extract_product_override_payload( $data ) {
 		$allowed_keys = array(
 			'name',
 			'type',
@@ -1270,6 +1335,63 @@ class Mcpwp_REST_WooCommerce extends Mcpwp_REST_API {
 			if ( array_key_exists( $key, $data ) ) {
 				$payload[ $key ] = $data[ $key ];
 			}
+		}
+
+		return $payload;
+	}
+
+	/**
+	 * Compute the effective product payload for applying an archetype — the
+	 * ONE canonical merge shared by apply_product_archetype() (the handler)
+	 * and archetype_apply_targets_publish_status() (the authorization gate),
+	 * so the two can never drift out of agreement.
+	 *
+	 * #878 was NOT a staleness incident: the gate was never an inline copy
+	 * of the handler's merge that fell out of sync with it. Both functions
+	 * independently computed the SAME wrong merge from the day the gate was
+	 * added (commit d5ce4a4, written against the handler's array_merge and
+	 * referencing it in a comment) — neither one distinguished the
+	 * existing-product path from create mode, so both blindly re-applied the
+	 * archetype's stored 'status' to a live product. Consolidating the merge
+	 * into this one helper does not fix a drift that already happened; it
+	 * removes the possibility of a future one-sided edit creating one.
+	 *
+	 * The archetype's stored product_data is a whole template, potentially
+	 * including a 'status' the archetype author chose when defining it (e.g.
+	 * 'draft', for "new products from this template start unpublished").
+	 * Blindly re-applying that stored status to an EXISTING product silently
+	 * pushes it to whatever the template says — including off a live
+	 * 'publish' — even though the caller sent no status-related param at
+	 * all. On the existing-product path only, the stored status is
+	 * therefore dropped unless the caller's own request explicitly overrides
+	 * it.
+	 *
+	 * Create mode is unaffected by the strip and defaults an unset status to
+	 * 'draft' right here — moved in from apply_product_archetype()'s create
+	 * branch (which used to apply this default AFTER calling this helper) so
+	 * the gate sees the exact same effective payload the handler computes,
+	 * making this genuinely the one shared computation rather than one both
+	 * sides happen to agree with today. The default can never change the
+	 * gate's verdict: 'draft' is not, and can never be, in the
+	 * publish/private/future set that flips the gate to admin-only.
+	 *
+	 * @param array $archetype_product_data Stored archetype 'product_data'.
+	 * @param array $request_params         Raw request params (flat).
+	 * @param bool  $existing_product       True when this apply targets an
+	 *                                       existing product (a 'product_id'
+	 *                                       was given), false for create mode.
+	 * @return array Effective payload to hand to update_product()/create_product().
+	 */
+	private static function build_archetype_apply_payload( array $archetype_product_data, array $request_params, $existing_product ) {
+		$override = self::extract_product_override_payload( $request_params );
+		$payload  = array_merge( $archetype_product_data, $override );
+
+		if ( $existing_product ) {
+			if ( ! array_key_exists( 'status', $override ) ) {
+				unset( $payload['status'] );
+			}
+		} elseif ( empty( $payload['status'] ) ) {
+			$payload['status'] = 'draft';
 		}
 
 		return $payload;
@@ -1329,32 +1451,41 @@ class Mcpwp_REST_WooCommerce extends Mcpwp_REST_API {
 	 * scheduled-publish flow for a WooCommerce product this plugin exposes
 	 * that including 'future' here could break.
 	 *
+	 * #878 fix: apply_product_archetype() now drops the archetype's stored
+	 * 'status' on the existing-product path when the caller's request does
+	 * not itself override 'status' (re-applying a template's stored status
+	 * to a live product was silently unpublishing it). This gate computes
+	 * its verdict through the exact same build_archetype_apply_payload()
+	 * helper the handler calls, INCLUDING that strip, so the two can never
+	 * disagree about the resulting status again — see that helper's
+	 * docblock. Before this fix, this method carried its own independent
+	 * copy of the merge with no strip, which is what let the two drift.
+	 *
 	 * @param int|string       $archetype_id Archetype ID from the route.
 	 * @param WP_REST_Request  $request      Request object.
 	 * @return bool True when the effective status is 'publish', 'private', or 'future'.
 	 */
 	public static function archetype_apply_targets_publish_status( $archetype_id, $request ) {
-		$status = '';
+		$product_data = array();
 
 		$items = get_option( self::PRODUCT_ARCHETYPES_OPTION_KEY, array() );
 		if ( is_array( $items ) ) {
 			foreach ( $items as $item ) {
 				if ( isset( $item['id'] ) && (int) $item['id'] === (int) $archetype_id ) {
-					if ( isset( $item['product_data']['status'] ) && is_scalar( $item['product_data']['status'] ) ) {
-						$status = (string) $item['product_data']['status'];
+					if ( isset( $item['product_data'] ) && is_array( $item['product_data'] ) ) {
+						$product_data = $item['product_data'];
 					}
 					break;
 				}
 			}
 		}
 
-		// The request's own 'status' override, when present, wins over the
-		// archetype's stored default — same precedence as the array_merge()
-		// in apply_product_archetype().
-		$params = method_exists( $request, 'get_params' ) ? (array) $request->get_params() : array();
-		if ( array_key_exists( 'status', $params ) && is_scalar( $params['status'] ) ) {
-			$status = (string) $params['status'];
-		}
+		$params           = method_exists( $request, 'get_params' ) ? (array) $request->get_params() : array();
+		$existing_product = ! empty( $params['product_id'] );
+
+		$payload = self::build_archetype_apply_payload( $product_data, $params, $existing_product );
+
+		$status = isset( $payload['status'] ) && is_scalar( $payload['status'] ) ? (string) $payload['status'] : '';
 
 		return in_array( sanitize_key( $status ), array( 'publish', 'private', 'future' ), true );
 	}
