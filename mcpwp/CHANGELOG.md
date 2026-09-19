@@ -5,6 +5,15 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.12.0](https://github.com/Mumega-com/mcpwp/compare/v3.11.1...v3.12.0) (2026-09-19)
+
+
+### Bug Fixes
+
+* 3.12.0 — scoped-key bypass, Pro tier gate, Elementor write path, response projection ([88cb2d4](https://github.com/Mumega-com/mcpwp/commit/88cb2d4303763788801e605e751efe3dc6fbd1db))
+* array-stored Elementor data through one reader, provider saves by compare-and-swap, Figma onboarding on Pro only ([#845](https://github.com/Mumega-com/mcpwp/issues/845)) ([#857](https://github.com/Mumega-com/mcpwp/issues/857)) ([c6cd59f](https://github.com/Mumega-com/mcpwp/commit/c6cd59f8d651f5225df386bfa3770205c18d0f5b))
+* **release:** publish agency builds under the token-gated agency/ prefix ([#852](https://github.com/Mumega-com/mcpwp/issues/852)) ([#855](https://github.com/Mumega-com/mcpwp/issues/855)) ([6c935d5](https://github.com/Mumega-com/mcpwp/commit/6c935d56a1cf33cace33b4c7028e4ba3b209bc6a))
+
 ## [3.11.1](https://github.com/Mumega-com/mcpwp/compare/v3.11.0...v3.11.1) (2026-09-10)
 
 
