@@ -289,6 +289,121 @@ final class WooCommerceArchetypeApplyRequiresAdminScopeTest extends TestCase {
 		$this->assertTrue( $controller->verify_api_key( $request ) );
 	}
 
+	// ── The existing-product authorization boundary itself: no test above
+	// this point ever calls verify_api_key() with 'product_id' set, so the
+	// #878 relaxation -- a write-scoped key now gets through here for a
+	// case create mode still refuses -- was never pinned at the layer that
+	// actually enforces it. Pin it deliberately in both directions. ───────
+
+	public function test_write_key_can_apply_a_publish_defaulting_archetype_to_an_existing_product_with_no_override(): void {
+		$controller = $this->controller();
+		$key        = $this->write_key( $controller );
+		$this->seed_archetype( 1, array( 'name' => 'Widget', 'status' => 'publish' ) );
+
+		$request = new WP_REST_Request(
+			'POST',
+			'/mcpwp/v1/woocommerce/archetypes/1/apply',
+			array(
+				'id'         => 1,
+				'product_id' => 42,
+			),
+			array( 'X-API-Key' => $key )
+		);
+
+		$this->assertTrue(
+			$controller->verify_api_key( $request ),
+			'#878: applying to an EXISTING product strips the stored status when the request carries no override at all — a write key must be let through even though the archetype defaults to publish.'
+		);
+	}
+
+	public function test_write_key_cannot_apply_a_publish_defaulting_archetype_to_an_existing_product_with_explicit_publish_override(): void {
+		$controller = $this->controller();
+		$key        = $this->write_key( $controller );
+		$this->seed_archetype( 1, array( 'name' => 'Widget', 'status' => 'publish' ) );
+
+		$request = new WP_REST_Request(
+			'POST',
+			'/mcpwp/v1/woocommerce/archetypes/1/apply',
+			array(
+				'id'         => 1,
+				'product_id' => 42,
+				'status'     => 'publish',
+			),
+			array( 'X-API-Key' => $key )
+		);
+
+		$result = $controller->verify_api_key( $request );
+		$this->assertInstanceOf(
+			WP_Error::class,
+			$result,
+			'The strip only drops the ARCHETYPE\'s stored status; an explicit override in the request is never stripped and must still require admin scope.'
+		);
+		$this->assertSame( 'insufficient_scope', $result->get_error_code() );
+	}
+
+	public function test_write_key_cannot_apply_a_publish_defaulting_archetype_in_create_mode_with_no_override(): void {
+		$controller = $this->controller();
+		$key        = $this->write_key( $controller );
+		$this->seed_archetype( 1, array( 'name' => 'Widget', 'status' => 'publish' ) );
+
+		$request = new WP_REST_Request(
+			'POST',
+			'/mcpwp/v1/woocommerce/archetypes/1/apply',
+			array( 'id' => 1 ),
+			array( 'X-API-Key' => $key )
+		);
+
+		$result = $controller->verify_api_key( $request );
+		$this->assertInstanceOf(
+			WP_Error::class,
+			$result,
+			'The strip is conditioned on product_id being present. With no product_id (create mode), the same stored publish status must still require admin scope — the direct contrast to the case above.'
+		);
+		$this->assertSame( 'insufficient_scope', $result->get_error_code() );
+	}
+
+	public function test_write_key_can_apply_a_private_defaulting_archetype_to_an_existing_product_with_no_override(): void {
+		$controller = $this->controller();
+		$key        = $this->write_key( $controller );
+		$this->seed_archetype( 1, array( 'name' => 'Widget', 'status' => 'private' ) );
+
+		$request = new WP_REST_Request(
+			'POST',
+			'/mcpwp/v1/woocommerce/archetypes/1/apply',
+			array(
+				'id'         => 1,
+				'product_id' => 42,
+			),
+			array( 'X-API-Key' => $key )
+		);
+
+		$this->assertTrue(
+			$controller->verify_api_key( $request ),
+			"The strip logic applies to a stored 'private' status the same as 'publish' on the existing-product path — confirmed, not assumed."
+		);
+	}
+
+	public function test_write_key_can_apply_a_future_defaulting_archetype_to_an_existing_product_with_no_override(): void {
+		$controller = $this->controller();
+		$key        = $this->write_key( $controller );
+		$this->seed_archetype( 1, array( 'name' => 'Widget', 'status' => 'future' ) );
+
+		$request = new WP_REST_Request(
+			'POST',
+			'/mcpwp/v1/woocommerce/archetypes/1/apply',
+			array(
+				'id'         => 1,
+				'product_id' => 42,
+			),
+			array( 'X-API-Key' => $key )
+		);
+
+		$this->assertTrue(
+			$controller->verify_api_key( $request ),
+			"The strip logic applies to a stored 'future' status the same as 'publish' on the existing-product path — confirmed, not assumed."
+		);
+	}
+
 	// ── Unrelated archetype-definition CRUD must not require admin scope ───
 
 	public function test_write_key_can_still_create_an_archetype_definition_whose_stored_status_is_publish(): void {

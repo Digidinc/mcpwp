@@ -239,15 +239,20 @@ final class WooCommerceArchetypeIntegrityTest extends TestCase {
 	}
 
 	/**
-	 * A same-shaped regression: an unrelated field update must never leak
-	 * into, or otherwise disturb, product_data['name'] — the field the
-	 * issue specifically flagged as suspicious (it is tied to the
-	 * archetype's own 'name' by design, see
-	 * normalize_product_archetype_payload()'s docblock, but that tie must
-	 * only ever move when the CALLER sends 'name', never as a side effect
-	 * of some other field's update).
+	 * A same-shaped check: with the archetype's label and its stored
+	 * product_data['name'] EQUAL (the ordinary case — they always start
+	 * that way via create_product_archetype()), an unrelated field update
+	 * must not touch either.
+	 *
+	 * This does NOT, on its own, guard against the #879 "clobbers name"
+	 * defect: when the two values are equal by construction, the old buggy
+	 * merge produced the same value anyway, so this test still passes even
+	 * with that fix fully reverted. For the test that actually fails
+	 * without the fix, see
+	 * test_put_unrelated_field_preserves_a_stored_product_name_that_diverges_from_the_archetype_label()
+	 * below, which seeds a genuinely divergent name and label.
 	 */
-	public function test_put_unrelated_field_update_does_not_change_product_data_name(): void {
+	public function test_put_unrelated_field_update_leaves_equal_name_and_label_unaffected(): void {
 		$controller = new Mcpwp_REST_WooCommerce( null );
 		$this->seed_archetype(
 			2,
@@ -274,6 +279,56 @@ final class WooCommerceArchetypeIntegrityTest extends TestCase {
 		$this->assertSame( 'Starter Kit Archetype', $data['product_data']['name'] );
 		$this->assertSame( 'Starter Kit Archetype', $data['name'] );
 		$this->assertSame( 'KIT-2', $data['product_data']['sku'] );
+	}
+
+	/**
+	 * The actual #879 "clobbers name" regression: the archetype's stored
+	 * product_data['name'] DIVERGES from its own label (only possible today
+	 * by writing the option directly, e.g. via seed_archetype() here — see
+	 * normalize_product_archetype_payload()'s docblock). A PUT that never
+	 * mentions 'name' at all must preserve the stored product name exactly,
+	 * and must not touch the label either.
+	 *
+	 * This is the test that fails without the guard in
+	 * update_product_archetype(): without it, the merge re-derives
+	 * product_data['name'] from the archetype's label ('Different Archetype
+	 * Label') and the stored 'Divergent Product Name' is lost.
+	 */
+	public function test_put_unrelated_field_preserves_a_stored_product_name_that_diverges_from_the_archetype_label(): void {
+		$controller = new Mcpwp_REST_WooCommerce( null );
+		$this->seed_archetype(
+			4,
+			array(
+				'name'   => 'Divergent Product Name',
+				'status' => 'draft',
+				'sku'    => 'DIV-1',
+			),
+			'Different Archetype Label'
+		);
+
+		$request = new WP_REST_Request(
+			'PUT',
+			'/mcpwp/v1/woocommerce/archetypes/4',
+			array(
+				'id'  => 4,
+				'sku' => 'DIV-2',
+			)
+		);
+
+		$response = $controller->update_product_archetype( $request );
+		$data     = $response->get_data();
+
+		$this->assertSame(
+			'Divergent Product Name',
+			$data['product_data']['name'],
+			"#879: a PUT that never mentioned 'name' must not rewrite a stored product name that diverges from the archetype's own label."
+		);
+		$this->assertSame(
+			'Different Archetype Label',
+			$data['name'],
+			'The archetype label itself must also be unaffected by an unrelated field update.'
+		);
+		$this->assertSame( 'DIV-2', $data['product_data']['sku'] );
 	}
 
 	/**
@@ -480,6 +535,14 @@ final class WooCommerceArchetypeIntegrityTest extends TestCase {
 				foreach ( $product_id_present as $has_product_id ) {
 					++$case_no;
 
+					$label = sprintf(
+						'case #%d: stored=%s override=%s product_id_present=%s',
+						$case_no,
+						null === $stored_status ? '(none)' : $stored_status,
+						null === $override_status ? '(none)' : $override_status,
+						$has_product_id ? 'yes' : 'no'
+					);
+
 					$product_data = array( 'name' => 'Widget' );
 					if ( null !== $stored_status ) {
 						$product_data['status'] = $stored_status;
@@ -513,18 +576,15 @@ final class WooCommerceArchetypeIntegrityTest extends TestCase {
 						$handler_targets_publish  = array_key_exists( 'status', $call['data'] )
 							&& in_array( sanitize_key( (string) $call['data']['status'] ), array( 'publish', 'private', 'future' ), true );
 					} else {
-						$created                 = end( $handler->create_calls );
-						$effective_status        = isset( $created['status'] ) ? $created['status'] : 'draft';
-						$handler_targets_publish = in_array( sanitize_key( (string) $effective_status ), array( 'publish', 'private', 'future' ), true );
+						$created = end( $handler->create_calls );
+						// The create path always sends an explicit 'status'
+						// (build_archetype_apply_payload() now defaults an
+						// empty one to 'draft' itself) -- assert that rather
+						// than silently falling back to a value that can
+						// never actually be reached here.
+						$this->assertArrayHasKey( 'status', $created, $label . ' — create mode must always send an explicit status.' );
+						$handler_targets_publish = in_array( sanitize_key( (string) $created['status'] ), array( 'publish', 'private', 'future' ), true );
 					}
-
-					$label = sprintf(
-						'case #%d: stored=%s override=%s product_id_present=%s',
-						$case_no,
-						null === $stored_status ? '(none)' : $stored_status,
-						null === $override_status ? '(none)' : $override_status,
-						$has_product_id ? 'yes' : 'no'
-					);
 
 					$this->assertSame(
 						$handler_targets_publish,
