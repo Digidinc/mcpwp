@@ -326,6 +326,85 @@ class Mcpwp_Activator {
 		exit;
 	}
 
+	/**
+	 * One-time removal of mcpwp_manage_settings from the mcpwp_api_agent role,
+	 * for sites where it was already granted (GH #669 — backport of the
+	 * wp.org audit's finding #4: "the low-privilege mcpwp_api_agent role is
+	 * granted mcpwp_manage_settings, collapsing admin-route capability gates
+	 * to scope-only").
+	 *
+	 * add_role() is a no-op when the role already exists — it does NOT strip
+	 * capabilities the array literal in create_api_role_and_user() above no
+	 * longer lists — so removing 'mcpwp_manage_settings' from that array only
+	 * reaches a fresh activation. Every already-installed site keeps the
+	 * capability exactly as it was granted, which is the whole problem: every
+	 * API key — whatever scope it was created with — authenticates as this
+	 * SAME shared mcpwp_api_agent WordPress user (see set_api_user_context()
+	 * and the #874 docblock on get_required_scope_for_request() in
+	 * trait-mcpwp-api-auth.php), so current_user_can('mcpwp_manage_settings')
+	 * was trivially true for every authenticated key regardless of its own
+	 * declared scope. That reduced Mcpwp_REST_Site_Updates::
+	 * can_manage_api_keys() — the second, supposedly-independent check
+	 * guarding /api-keys, /rate-limit, and the plugin self-update trigger —
+	 * to a no-op: only the key's own admin scope, checked earlier in
+	 * verify_api_key(), actually stood between an agent-bound key and those
+	 * routes.
+	 *
+	 * Deliberately NOT gated on the mcpwp_db_version compare in mcpwp.php:
+	 * this ships without a version bump, so a site already on the current
+	 * version would otherwise never re-enter that branch and would keep the
+	 * over-grant forever. Own flag, same pattern as
+	 * grant_agent_published_page_caps() above — runs once on plugins_loaded,
+	 * idempotent, safe to call on a fresh install too (the array literal
+	 * above never grants the capability there, so remove_cap() is a harmless
+	 * no-op).
+	 *
+	 * NOT RE-ENTRANT BY DESIGN, mirroring grant_agent_published_page_caps()'s
+	 * #875 L1 reasoning — inverted. That migration will not silently
+	 * re-apply a capability grant an admin deliberately removed afterward,
+	 * because has_cap()/add_cap() see only current state, never intent. The
+	 * same limitation applies here in reverse: has_cap()/remove_cap() cannot
+	 * tell "never removed yet" apart from "an admin deliberately granted it
+	 * back" (custom code, a compatibility shim, or an informed acceptance of
+	 * the risk). If this method re-checked current capability state on every
+	 * plugins_loaded instead of a one-time flag, it would silently overwrite
+	 * that deliberate choice forever, turning a one-time security backfill
+	 * into a standing enforcement nobody can opt out of on their own site.
+	 * The asymmetry with L1 (there, respecting a REMOVAL that lowers
+	 * privilege; here, respecting a RE-GRANT that raises it back) is
+	 * accepted: nothing in MCPWP's own API surface can call add_cap() on a
+	 * WordPress role — there is no REST/MCP tool that edits roles or
+	 * capabilities — so the only way this capability could reappear on
+	 * mcpwp_api_agent post-migration is direct PHP/database access on the
+	 * site, i.e. a principal who already has complete control over the site
+	 * regardless of this one capability.
+	 *
+	 * The companion administrator grant in create_api_role_and_user() above
+	 * is NOT gated the same way — see that comment for why it is safe to
+	 * (re)ensure on every activation instead.
+	 */
+	public static function strip_agent_manage_settings_capability() {
+		if ( get_option( 'mcpwp_agent_manage_settings_capability_migrated' ) ) {
+			return;
+		}
+
+		$role = get_role( 'mcpwp_api_agent' );
+		if ( $role && $role->has_cap( 'mcpwp_manage_settings' ) ) {
+			$role->remove_cap( 'mcpwp_manage_settings' );
+		}
+
+		// Belt-and-suspenders companion to the standing ensure-grant in
+		// create_api_role_and_user(): a site that upgrades without ever
+		// re-running activate() (no deactivate/reactivate cycle) would
+		// otherwise not pick up the administrator grant either.
+		$admin_role = get_role( 'administrator' );
+		if ( $admin_role && ! $admin_role->has_cap( 'mcpwp_manage_settings' ) ) {
+			$admin_role->add_cap( 'mcpwp_manage_settings' );
+		}
+
+		update_option( 'mcpwp_agent_manage_settings_capability_migrated', 1, false );
+	}
+
 	public static function migrate_identity_less_approvals() {
 		if ( get_option( 'mcpwp_approvals_identity_migrated' ) ) {
 			return;
@@ -833,6 +912,24 @@ class Mcpwp_Activator {
 		// the same two caps backfilled once by
 		// grant_agent_published_page_caps() below, since add_role() is a no-op
 		// on a role that already exists.
+		// mcpwp_manage_settings is deliberately NOT in this array (GH #669,
+		// backport of the wp.org audit's finding #4). Every API key — whatever
+		// scope it carries — authenticates as this SAME shared
+		// mcpwp_api_agent WordPress user (see set_api_user_context() and the
+		// #874 docblock on get_required_scope_for_request() in
+		// trait-mcpwp-api-auth.php); a WordPress capability granted to this
+		// role is therefore held by every key regardless of its own declared
+		// scope. Granting mcpwp_manage_settings here made
+		// current_user_can('mcpwp_manage_settings') trivially true for ANY
+		// authenticated key, collapsing Mcpwp_REST_Site_Updates::
+		// can_manage_api_keys() into a no-op — only the key's own admin scope
+		// actually stood between an agent-bound key and /api-keys,
+		// /rate-limit, and the plugin self-update trigger. The capability
+		// stays administrator-only (see the get_role('administrator') grant
+		// below); can_manage_api_keys() now checks the key's own scope
+		// directly for an API-key-authenticated request instead of relying on
+		// this capability, so an admin-scoped key still reaches those routes
+		// — see that method's docblock.
 		add_role( 'mcpwp_api_agent', 'MCPWP API Agent', array(
 			'read'               => true,
 			'edit_posts'         => true,
@@ -849,8 +946,8 @@ class Mcpwp_Activator {
 			'delete_others_pages' => true,
 			'upload_files'       => true,
 			'list_users'         => true,
-			// Custom MCPWP capabilities (NOT admin-level).
-			'mcpwp_manage_settings' => true,
+			// Custom MCPWP capability (NOT admin-level; mcpwp_manage_settings
+			// deliberately excluded — see comment above, GH #669).
 			'mcpwp_manage_webhooks' => true,
 		) );
 
@@ -861,8 +958,22 @@ class Mcpwp_Activator {
 			$role->remove_cap( 'edit_theme_options' );
 			$role->add_cap( 'delete_others_posts' );
 			$role->add_cap( 'delete_others_pages' );
-			$role->add_cap( 'mcpwp_manage_settings' );
+			// mcpwp_manage_settings intentionally NOT re-added here (GH #669) —
+			// see the comment above add_role() above.
 			$role->add_cap( 'mcpwp_manage_webhooks' );
+		}
+
+		// mcpwp_manage_settings is administrator-only (GH #669). WordPress's
+		// built-in 'administrator' role is never created by add_role() and
+		// never receives arbitrary plugin capabilities automatically, so it
+		// must be granted explicitly, the same way the agent role's own
+		// custom capabilities are. This is the site's own top role (not a
+		// capability handed to an untrusted third party), so — unlike the
+		// removal above — it is safe to (re)ensure on every activation rather
+		// than one-time-gated; add_cap() is a harmless no-op once granted.
+		$admin_role = get_role( 'administrator' );
+		if ( $admin_role && ! $admin_role->has_cap( 'mcpwp_manage_settings' ) ) {
+			$admin_role->add_cap( 'mcpwp_manage_settings' );
 		}
 
 		// Create User

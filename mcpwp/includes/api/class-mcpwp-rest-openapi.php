@@ -153,7 +153,18 @@ class Mcpwp_REST_OpenAPI extends Mcpwp_REST_API {
 			'openapi' => '3.0.0',
 			'info'    => array(
 				'title'       => get_bloginfo( 'name' ) . ' — MCPWP',
-				'version'     => MCPWP_VERSION,
+				// Deliberately NOT MCPWP_VERSION: this route is public
+				// (permission_callback => '__return_true', see
+				// register_routes() below) and reachable pre-auth by
+				// anyone, including an anonymous scanner. The exact
+				// installed plugin version is withheld from every other
+				// open route for the same reason — see the
+				// X-MCPWP-Version header gating in
+				// Mcpwp_REST_MCP::prepare_mcp_response() ("an exact
+				// version on an open route is a scanner's oracle"). This
+				// field describes the OpenAPI document's own (stable)
+				// schema version, not the plugin build.
+				'version'     => '1.0.0',
 				'description' => 'WordPress site management API powered by MCPWP. Authenticate with X-API-Key header.',
 			),
 			'servers' => array(

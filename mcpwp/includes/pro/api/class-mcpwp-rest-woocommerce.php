@@ -16,9 +16,22 @@ class Mcpwp_REST_WooCommerce extends Mcpwp_REST_API {
 	/**
 	 * Option key storing product archetype definitions.
 	 *
+	 * A class constant (not just the instance property below) so
+	 * Mcpwp_Api_Auth::get_required_scope_for_request() — which must resolve a
+	 * request's required scope BEFORE any controller is instantiated — can
+	 * read the same option via a static call. See
+	 * archetype_apply_targets_publish_status().
+	 *
 	 * @var string
 	 */
-	private $product_archetypes_option_key = 'mcpwp_wc_product_archetypes';
+	const PRODUCT_ARCHETYPES_OPTION_KEY = 'mcpwp_wc_product_archetypes';
+
+	/**
+	 * Option key storing product archetype definitions.
+	 *
+	 * @var string
+	 */
+	private $product_archetypes_option_key = self::PRODUCT_ARCHETYPES_OPTION_KEY;
 
 	/**
 	 * Option key storing next product archetype ID.
@@ -91,6 +104,7 @@ class Mcpwp_REST_WooCommerce extends Mcpwp_REST_API {
 					'methods'             => WP_REST_Server::EDITABLE,
 					'callback'            => array( $this, 'update_product' ),
 					'permission_callback' => array( $this, 'check_permission' ),
+					'args'                => $this->get_product_update_args(),
 				),
 				array(
 					'methods'             => WP_REST_Server::DELETABLE,
@@ -159,6 +173,7 @@ class Mcpwp_REST_WooCommerce extends Mcpwp_REST_API {
 					'methods'             => WP_REST_Server::CREATABLE,
 					'callback'            => array( $this, 'create_product_archetype' ),
 					'permission_callback' => array( $this, 'check_permission' ),
+					'args'                => $this->get_archetype_write_args(),
 				),
 			)
 		);
@@ -176,6 +191,7 @@ class Mcpwp_REST_WooCommerce extends Mcpwp_REST_API {
 					'methods'             => WP_REST_Server::EDITABLE,
 					'callback'            => array( $this, 'update_product_archetype' ),
 					'permission_callback' => array( $this, 'check_permission' ),
+					'args'                => $this->get_archetype_write_args(),
 				),
 			)
 		);
@@ -187,6 +203,7 @@ class Mcpwp_REST_WooCommerce extends Mcpwp_REST_API {
 				'methods'             => WP_REST_Server::CREATABLE,
 				'callback'            => array( $this, 'apply_product_archetype' ),
 				'permission_callback' => array( $this, 'check_permission' ),
+				'args'                => $this->get_archetype_apply_args(),
 			)
 		);
 
@@ -441,6 +458,27 @@ class Mcpwp_REST_WooCommerce extends Mcpwp_REST_API {
 	}
 
 	/**
+	 * Get product UPDATE arguments.
+	 *
+	 * #607: the update route previously registered no 'args' schema at all —
+	 * every field, including 'status', went straight through with no type,
+	 * enum, or range check at the WP REST layer (WordPress only validates
+	 * against a route's declared arg schema; an omitted schema validates
+	 * nothing). Mirrors get_product_create_args() with 'required' and
+	 * 'default' stripped — same pattern as
+	 * Mcpwp_REST_API::get_post_update_args() for posts/pages.
+	 *
+	 * @return array
+	 */
+	private function get_product_update_args() {
+		$args = $this->get_product_create_args();
+		foreach ( $args as $name => $schema ) {
+			unset( $args[ $name ]['required'], $args[ $name ]['default'] );
+		}
+		return $args;
+	}
+
+	/**
 	 * Get orders query arguments.
 	 *
 	 * @return array
@@ -573,6 +611,79 @@ class Mcpwp_REST_WooCommerce extends Mcpwp_REST_API {
 				'type'        => 'string',
 				'format'      => 'date-time',
 				'description' => __( 'End date (ISO 8601).', 'mcpwp' ),
+			),
+		);
+	}
+
+	/**
+	 * Get write arguments for POST /woocommerce/archetypes and
+	 * PUT /woocommerce/archetypes/{id}.
+	 *
+	 * fix/3121-future-status-coercion: these two routes registered NO 'args'
+	 * at all -- unlike every other WooCommerce write route in this file,
+	 * including their own sibling get_archetype_apply_args() below. A caller
+	 * could therefore store ANY string, including 'future', as the
+	 * archetype's product_data['status'], via normalize_product_archetype_payload()
+	 * -> extract_product_override_payload() -> create_product_archetype()/
+	 * update_product_archetype() (which do nothing but update_option() the
+	 * record, so no WordPress or WooCommerce write API ever saw the value at
+	 * definition time to reject it). apply_product_archetype() later merges
+	 * that stored value into a real product write with zero further
+	 * validation of its own (Mcpwp_WooCommerce::set_product_data(), which
+	 * used to hand the raw value straight to the product's status setter --
+	 * now allow-listed separately; see that method's docblock for why
+	 * 'future' is unconditionally equivalent to 'publish' here). Declaring
+	 * 'enum' stops
+	 * an invalid value being stored in the first place, the same way it
+	 * already stops one being applied directly via
+	 * get_archetype_apply_args() and the five routes fixed earlier in this
+	 * RC.
+	 *
+	 * @return array
+	 */
+	private function get_archetype_write_args() {
+		return array(
+			'status' => array(
+				'type'        => 'string',
+				'enum'        => array( 'draft', 'pending', 'private', 'publish' ),
+				'description' => __( 'Optional product status to store on the archetype template.', 'mcpwp' ),
+			),
+		);
+	}
+
+	/**
+	 * Get write arguments for POST /woocommerce/archetypes/{id}/apply.
+	 *
+	 * RC 3.12.1 adversarial review, BLOCK 2: this route registered NO 'args'
+	 * schema at all — unlike get_product_create_args() above, which already
+	 * declares 'enum' on 'status' for POST /woocommerce/products. A
+	 * caller-supplied 'status' override here reaches
+	 * extract_product_override_payload() -> Mcpwp_WooCommerce::
+	 * set_product_data() (sanitize_key( $data['status'] )) with nothing
+	 * validating it first, so a padded value like ' publish' could defeat
+	 * the publish-scope gate the same way it could on the four sibling
+	 * routes this fix closes. Declaring 'enum' here makes WordPress itself
+	 * reject an out-of-enum value before either the gate or the handler
+	 * ever sees it.
+	 *
+	 * Deliberately NO 'default' on 'status' here, unlike
+	 * get_product_create_args(): this route's override is optional by
+	 * design — when the caller omits it, the archetype's OWN stored
+	 * product_data status applies (see apply_product_archetype() and
+	 * archetype_apply_targets_publish_status() below, which is why THIS
+	 * route cannot rely on the plain request_targets_publish_status() check
+	 * alone). Injecting a default would silently clobber that stored value
+	 * on every apply call that omits an explicit override — a behavior
+	 * change this fix is not meant to make.
+	 *
+	 * @return array
+	 */
+	private function get_archetype_apply_args() {
+		return array(
+			'status' => array(
+				'type'        => 'string',
+				'enum'        => array( 'draft', 'pending', 'private', 'publish' ),
+				'description' => __( 'Optional product status override.', 'mcpwp' ),
 			),
 		);
 	}
@@ -1162,5 +1273,89 @@ class Mcpwp_REST_WooCommerce extends Mcpwp_REST_API {
 		}
 
 		return $payload;
+	}
+
+	/**
+	 * Whether applying archetype $archetype_id, together with this request's
+	 * overrides, would result in a 'publish', 'private', or 'future' product
+	 * status.
+	 *
+	 * RC 3.12.1 adversarial review, BLOCK 2 follow-up: a plain per-request
+	 * check (Mcpwp_Api_Auth::request_targets_publish_status(), which only ever
+	 * looks at $request's own params) is not enough for this route. The
+	 * archetype's STORED product_data can already carry 'status' => 'publish'
+	 * from whenever the archetype was defined — apply_product_archetype()
+	 * merges the request's overrides ON TOP of that stored data, so a caller
+	 * who sends zero status-related params at all can still end up publishing
+	 * a live product, as long as they know an archetype ID whose template
+	 * already defaults to publish. This mirrors that exact merge order
+	 * (archetype data first, request override wins) so the scope check and
+	 * the handler never disagree about the resulting status.
+	 *
+	 * Called statically from get_required_scope_for_request(), which must
+	 * resolve scope before any controller is constructed — see
+	 * PRODUCT_ARCHETYPES_OPTION_KEY's docblock.
+	 *
+	 * RC 3.12.1 adversarial review, follow-up hardening (this fix): this
+	 * method had its OWN independent `in_array( strtolower( $status ), [...],
+	 * true )` exact-match check — a second, separate instance of the exact
+	 * same defect this fix closes in
+	 * Mcpwp_Api_Auth::param_value_targets_admin_scope(). Because
+	 * get_required_scope_for_request() dispatches to THIS method instead of
+	 * request_targets_publish_status()/param_value_targets_admin_scope()
+	 * whenever Mcpwp_REST_WooCommerce is loaded (see the docblock on that
+	 * branch), fixing only the trait's comparison would have left this
+	 * route's real bypass wide open — caught by
+	 * PublishGatePaddedValueBypassTest, which failed here specifically
+	 * because that test suite loads Mcpwp_REST_WooCommerce elsewhere and so
+	 * exercises this exact branch, not the trait's fallback. Normalized with
+	 * sanitize_key() for the same reason as param_value_targets_admin_scope()
+	 * — it is the more aggressive of set_product_data()'s own
+	 * sanitize_key( $data['status'] ) call, so this check can never be
+	 * narrower than what the handler actually does with the value.
+	 *
+	 * fix/3121-future-status-coercion: 'future' added alongside 'publish' and
+	 * 'private'. This is the exact live bypass this fix closes: an archetype
+	 * defined (or updated) with product_data['status'] => 'future' at a time
+	 * when neither archetype route validated 'status' at all -- reachable on
+	 * write scope alone, since defining a template only ever update_option()s
+	 * a record -- then applied with ZERO status override, so this method's
+	 * merge sees only the stored 'future' value. WordPress's wp_insert_post()
+	 * coerces 'future' straight to 'publish' whenever the post's date is not
+	 * itself at least a minute in the future (wp-includes/post.php), and this
+	 * integration has no field anywhere that lets a caller set a product's
+	 * date -- every product it writes is dated now(), so 'future' here is
+	 * unconditionally equivalent to 'publish'. There is no legitimate
+	 * scheduled-publish flow for a WooCommerce product this plugin exposes
+	 * that including 'future' here could break.
+	 *
+	 * @param int|string       $archetype_id Archetype ID from the route.
+	 * @param WP_REST_Request  $request      Request object.
+	 * @return bool True when the effective status is 'publish', 'private', or 'future'.
+	 */
+	public static function archetype_apply_targets_publish_status( $archetype_id, $request ) {
+		$status = '';
+
+		$items = get_option( self::PRODUCT_ARCHETYPES_OPTION_KEY, array() );
+		if ( is_array( $items ) ) {
+			foreach ( $items as $item ) {
+				if ( isset( $item['id'] ) && (int) $item['id'] === (int) $archetype_id ) {
+					if ( isset( $item['product_data']['status'] ) && is_scalar( $item['product_data']['status'] ) ) {
+						$status = (string) $item['product_data']['status'];
+					}
+					break;
+				}
+			}
+		}
+
+		// The request's own 'status' override, when present, wins over the
+		// archetype's stored default — same precedence as the array_merge()
+		// in apply_product_archetype().
+		$params = method_exists( $request, 'get_params' ) ? (array) $request->get_params() : array();
+		if ( array_key_exists( 'status', $params ) && is_scalar( $params['status'] ) ) {
+			$status = (string) $params['status'];
+		}
+
+		return in_array( sanitize_key( $status ), array( 'publish', 'private', 'future' ), true );
 	}
 }

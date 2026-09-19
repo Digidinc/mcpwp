@@ -532,6 +532,44 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 		Mcpwp_Activator::grant_agent_published_page_caps();
 	}
 
+	// One-time: strip mcpwp_manage_settings from the mcpwp_api_agent role on
+	// sites where it was already granted (GH #669 — backport of the wp.org
+	// audit's finding #4). Own flag, same reasoning as the migrations above —
+	// see Mcpwp_Activator::strip_agent_manage_settings_capability() for the
+	// full defect and why it is not re-entrant.
+	//
+	// Ordering vs. grant_agent_published_page_caps() above: both migrations
+	// mutate the SAME mcpwp_api_agent role, each via WP_Role::add_cap()/
+	// remove_cap() for its own capability key (edit_published_posts/
+	// edit_published_pages there, mcpwp_manage_settings here). That is NOT
+	// per-capability atomic — WP_Role::add_cap()/remove_cap() each do a
+	// read-modify-write of the ENTIRE `wp_user_roles` option (every role,
+	// every capability), so "each only touches its own key" does not hold at
+	// the storage layer, and this is not a general race-free claim.
+	//
+	// It still cannot race *this specific pair*, for a narrower reason: both
+	// are idempotent ensure-X-is-present/-absent operations on capability
+	// keys the other migration never writes, so any interleaving of the two —
+	// before, after, or split across separate requests in either order —
+	// converges on the same end state (edit_published_posts/
+	// edit_published_pages present, mcpwp_manage_settings absent). Neither
+	// call reads or depends on the other's outcome.
+	//
+	// What that does NOT rule out: because each call round-trips the whole
+	// roles option, a genuinely unrelated concurrent role change landing in
+	// the same window — another plugin's activation hook, a role-editor
+	// plugin, `wp role` via WP-CLI — can be silently reverted by either
+	// migration's full-table overwrite (last write wins, table-wide, no
+	// merge). Both migrations set their completion flag unconditionally once
+	// they run, regardless of what the role actually persisted as afterward,
+	// so that collision leaves no trace. That hazard is real and unaddressed
+	// here; it is simply not the one "each touches only its own key" used to
+	// imply was ruled out.
+	if ( ! get_option( 'mcpwp_agent_manage_settings_capability_migrated' ) ) {
+		require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-activator.php';
+		Mcpwp_Activator::strip_agent_manage_settings_capability();
+	}
+
 	// Initialize the plugin
 	$loader = new Mcpwp_Loader();
 	$loader->run();
