@@ -697,9 +697,14 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 				'type'        => 'string',
 			),
 			'location'   => array(
-				'description' => __( 'Injection location: head, body_start, or body_end.', 'mcpwp' ),
+				'description' => __( 'Injection location: head, body_start, or body_end. Any other value is rejected — it will not be silently coerced.', 'mcpwp' ),
 				'type'        => 'string',
 				'default'     => 'head',
+			),
+			'priority'   => array(
+				'description' => __( 'Print order among snippets sharing a location, 1-10 (lower prints first). Matches Elementor Pro\'s own Custom Code priority field.', 'mcpwp' ),
+				'type'        => 'integer',
+				'default'     => 1,
 			),
 			'status'     => array(
 				'description' => __( 'Post status: draft or publish.', 'mcpwp' ),
@@ -756,6 +761,23 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		}
 
 		if ( null !== $raw_code ) {
+			// Before anything else touches it: a runtime cap standing in for
+			// the `maxLength` this route's schema cannot actually enforce
+			// (see CUSTOM_CODE_MAX_LENGTH). Checked on the raw string, ahead
+			// of normalize_custom_code_content() and the wp_kses_post()
+			// diff-check both, so an oversized payload never reaches either.
+			if ( is_string( $raw_code ) && strlen( $raw_code ) > self::CUSTOM_CODE_MAX_LENGTH ) {
+				return $this->error_response(
+					'code_too_large',
+					sprintf(
+						/* translators: %d: maximum size in bytes */
+						__( 'Custom Code is limited to %d bytes.', 'mcpwp' ),
+						self::CUSTOM_CODE_MAX_LENGTH
+					),
+					400
+				);
+			}
+
 			$code       = $this->normalize_custom_code_content( $raw_code );
 			$payload['code'] = $code['content'];
 			$payload['wrapper_tags_removed'] = (bool) $code['changed'];
@@ -765,10 +787,36 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			return $this->error_response( 'missing_code', __( 'Custom Code raw code is required.', 'mcpwp' ), 400 );
 		}
 
+		if ( array_key_exists( 'code', $payload ) ) {
+			$blocked = $this->custom_code_multisite_refusal( $payload['code'] );
+
+			if ( is_wp_error( $blocked ) ) {
+				return $this->error_response(
+					$blocked->get_error_code(),
+					$blocked->get_error_message(),
+					(int) ( $blocked->get_error_data()['status'] ?? 403 )
+				);
+			}
+		}
+
 		if ( null !== $request->get_param( 'location' ) ) {
-			$payload['location'] = $this->normalize_custom_code_location( $request->get_param( 'location' ) );
+			$location = $this->normalize_custom_code_location( $request->get_param( 'location' ) );
+			if ( is_wp_error( $location ) ) {
+				return $this->error_response(
+					$location->get_error_code(),
+					$location->get_error_message(),
+					(int) ( $location->get_error_data()['status'] ?? 400 )
+				);
+			}
+			$payload['location'] = $location;
 		} elseif ( $creating ) {
 			$payload['location'] = 'head';
+		}
+
+		if ( null !== $request->get_param( 'priority' ) ) {
+			$payload['priority'] = max( 1, min( 10, absint( $request->get_param( 'priority' ) ) ) );
+		} elseif ( $creating ) {
+			$payload['priority'] = 1;
 		}
 
 		if ( null !== $request->get_param( 'status' ) ) {
@@ -809,15 +857,93 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	}
 
 	/**
-	 * Normalize Elementor custom-code injection location.
+	 * Public Custom Code location value => Elementor Pro's real internal
+	 * `_elementor_location` postmeta value.
+	 *
+	 * Verified against Elementor Pro's own source (4.2.x, elementor-snippet CPT):
+	 * - modules/custom-code/custom-code-metabox.php: Custom_Code_Metabox::
+	 *   OPTION_LOCATION_HEAD = 'elementor_head', OPTION_LOCATION_BODY_START =
+	 *   'elementor_body_start', OPTION_LOCATION_BODY_END = 'elementor_body_end'.
+	 * - modules/custom-code/module.php frontend_actions(): wp_head/wp_body_open/
+	 *   wp_footer each call print_snippets() with one of those three literal
+	 *   strings, and get_snippets_by_location() matches `_elementor_location`
+	 *   postmeta against it with a plain meta_query equality check — no other
+	 *   string, including our own short-form public values, is recognized.
+	 *
+	 * @return array<string,string> Public value => Elementor internal value.
+	 */
+	private function get_custom_code_location_map() {
+		return array(
+			'head'       => 'elementor_head',
+			'body_start' => 'elementor_body_start',
+			'body_end'   => 'elementor_body_end',
+		);
+	}
+
+	/**
+	 * Normalize + validate a Custom Code injection location.
+	 *
+	 * Accepts either our public short-form values (head/body_start/body_end)
+	 * or Elementor's own internal values directly, and always returns the
+	 * public short-form value (the write path maps it to Elementor's internal
+	 * value at the point of persistence; see save_custom_code_meta()).
+	 *
+	 * An unrecognized value used to be silently coerced to 'head', which let a
+	 * typo through as a snippet that looked saved (status: publish, correct
+	 * code, no warnings) but never rendered anywhere — the exact defect
+	 * reported in GH #871. It is now rejected outright.
 	 *
 	 * @param string $location Raw location.
-	 * @return string Location.
+	 * @return string|WP_Error Public location value, or error for unknown input.
 	 */
 	private function normalize_custom_code_location( $location ) {
-		$location = sanitize_key( $location );
-		$allowed  = array( 'head', 'body_start', 'body_end' );
-		return in_array( $location, $allowed, true ) ? $location : 'head';
+		$location = sanitize_key( (string) $location );
+		$map      = $this->get_custom_code_location_map();
+
+		if ( isset( $map[ $location ] ) ) {
+			return $location;
+		}
+
+		$public = array_search( $location, $map, true );
+		if ( false !== $public ) {
+			return $public;
+		}
+
+		return new WP_Error(
+			'invalid_location',
+			sprintf(
+				/* translators: 1: the invalid value received, 2: comma-separated list of valid location values. */
+				__( 'Invalid Custom Code location "%1$s". Use one of: %2$s.', 'mcpwp' ),
+				$location,
+				implode( ', ', array_keys( $map ) )
+			),
+			array( 'status' => 400 )
+		);
+	}
+
+	/**
+	 * Map a stored `_elementor_location` value back to our public contract.
+	 *
+	 * Handles three cases: the correct internal Elementor value (maps back to
+	 * the short-form public value); a pre-fix broken snippet whose meta holds
+	 * the public value literally (GH #871 — passed through unchanged, since
+	 * that IS its stored value, though the snippet itself will not be
+	 * rendering; see the repair path in Mcpwp_Activator::
+	 * repair_custom_code_locations()); and anything else (passed through
+	 * as-is rather than guessed at).
+	 *
+	 * @param string $stored Raw `_elementor_location` meta value.
+	 * @return string Public location value.
+	 */
+	private function public_custom_code_location( $stored ) {
+		$map    = $this->get_custom_code_location_map();
+		$public = array_search( $stored, $map, true );
+
+		if ( false !== $public ) {
+			return $public;
+		}
+
+		return $stored;
 	}
 
 	/**
@@ -865,14 +991,325 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	}
 
 	/**
+	 * How many Custom Code meta writes are in flight under the scoped grant.
+	 *
+	 * Depth-counted for the same reason as the Elementor writer's grant (#769):
+	 * a nested call must not tear the filter out from under the call that
+	 * installed it. Nothing nests today; an edit that starts to would otherwise
+	 * silently reopen this with no failing test.
+	 *
+	 * @var int
+	 */
+	private static $custom_code_unfiltered_depth = 0;
+
+	/**
+	 * The one user the scoped Custom Code grant applies to.
+	 *
+	 * Captured when the grant is installed, so a capability check performed for
+	 * some OTHER user inside the same call cannot pick it up.
+	 *
+	 * @var int
+	 */
+	private static $custom_code_unfiltered_user = 0;
+
+	/**
+	 * Whether cleanup_custom_code_unfiltered_html_grant_on_shutdown() has
+	 * already been registered with register_shutdown_function() in this
+	 * process.
+	 *
+	 * register_shutdown_function() has no unregister — the callback lives
+	 * for the rest of the process either way — so this guard is what stops
+	 * a long-lived worker (WP-CLI, a rest_do_request() loop; see the
+	 * $mcpwp_verdicts precedent in trait-mcpwp-api-auth.php) from
+	 * accumulating one registered shutdown callback per Custom Code write.
+	 * It is registered at most once per process and is itself idempotent
+	 * (a no-op once the grant is already clean), so calling it more than
+	 * once would have been harmless — this exists purely to keep PHP's own
+	 * shutdown-function list from growing unbounded.
+	 *
+	 * @var bool
+	 */
+	private static $custom_code_shutdown_guard_registered = false;
+
+	/**
+	 * Upper bound on `code` this controller will run through
+	 * code_needs_unfiltered_html()'s wp_kses_post() diff-check.
+	 *
+	 * The REST arg schema for `code` (get_custom_code_write_args()) has no
+	 * `maxLength`, and would not enforce one even if declared: these routes
+	 * register their args as plain arrays with no `validate_callback`, so
+	 * WP_REST_Request::sanitize_params() never runs rest_validate_request_arg()
+	 * against them — a JSON Schema constraint here is documentation only
+	 * (RC review LOW finding). Without an actual runtime cap, an arbitrarily
+	 * large `code` string reaches wp_kses_post() unbounded on every write.
+	 *
+	 * `/elementor/custom-code` is admin-scope-gated already, so this is a
+	 * footgun (an accidentally huge payload spending needless CPU on the
+	 * diff-check) rather than an unauthenticated escalation path — hence a
+	 * generous cap rather than a strict one. 2MB is far past any real
+	 * Custom Code snippet (these are hand-authored HTML/CSS/JS, not
+	 * generated content) while still bounding the diff-check's cost.
+	 */
+	const CUSTOM_CODE_MAX_LENGTH = 2097152; // 2 MiB.
+
+	/**
+	 * Whether this code would be altered by Elementor's own kses pass.
+	 *
+	 * Elementor registers `_elementor_code` with a sanitize_callback that runs
+	 * wp_kses_post() unless the writing user holds `unfiltered_html`
+	 * (elementor-pro/modules/custom-code/module.php). update_post_meta() honours
+	 * registered sanitize callbacks, so that filter is what strips <script> from
+	 * every snippet MCPWP writes — the whole reason GA4/GTM tags never worked.
+	 *
+	 * Asking whether the pass would CHANGE the content, rather than assuming it
+	 * always matters, keeps the scoped grant off the majority of writes: a plain
+	 * HTML or text snippet survives kses untouched and needs no capability at all.
+	 *
+	 * @param string $code Raw snippet code.
+	 * @return bool Whether kses would alter it.
+	 */
+	private function code_needs_unfiltered_html( $code ) {
+		if ( ! is_string( $code ) || '' === $code || ! function_exists( 'wp_kses_post' ) ) {
+			return false;
+		}
+
+		return wp_kses_post( $code ) !== $code;
+	}
+
+	/**
+	 * Refuse a Custom Code write that multisite will not let us honour.
+	 *
+	 * WordPress strips `unfiltered_html` from administrators and editors on
+	 * multisite, leaving it to super admins alone. Granting it to the
+	 * mcpwp_api_agent user there would hand the bot MORE power than the site's
+	 * own administrator holds — so the grant is refused on multisite for anyone
+	 * short of a super admin.
+	 *
+	 * The refusal is deliberately narrow: it fires only when the code would
+	 * actually be altered by kses. A snippet that survives the pass unchanged
+	 * needs no capability, so multisite is no obstacle to writing it and we do
+	 * not invent one.
+	 *
+	 * Refusing beats proceeding. Without the grant the snippet would be stored
+	 * with its <script> silently removed and would render as an empty comment
+	 * block — a write reported as successful that cannot do the one thing it was
+	 * asked to do. An honest 403 is the better failure.
+	 *
+	 * @param string $code Raw snippet code.
+	 * @return true|WP_Error True when the write may proceed.
+	 */
+	private function custom_code_multisite_refusal( $code ) {
+		if ( ! $this->code_needs_unfiltered_html( $code ) ) {
+			return true;
+		}
+
+		if ( ! function_exists( 'is_multisite' ) || ! is_multisite() ) {
+			return true;
+		}
+
+		if ( function_exists( 'is_super_admin' ) && is_super_admin( get_current_user_id() ) ) {
+			return true;
+		}
+
+		return new WP_Error(
+			'multisite_unfiltered_html_refused',
+			__( 'This snippet contains markup (such as <script>) that WordPress strips unless the writer holds unfiltered_html. On multisite that capability belongs to super admins only, and MCPWP will not grant the API user more than a site administrator holds. Add this snippet as a super admin, or use markup that survives wp_kses_post().', 'mcpwp' ),
+			array( 'status' => 403 )
+		);
+	}
+
+	/**
+	 * Grant `unfiltered_html` to the writing user for one Custom Code meta write.
+	 *
+	 * Narrow by construction: one capability, one user, one meta write, removed
+	 * in a `finally` so a Throwable cannot leave it installed.
+	 *
+	 * @param array     $allcaps All capabilities of the user being tested.
+	 * @param string[]  $caps    Required primitive capabilities.
+	 * @param array     $args    Arguments of the check.
+	 * @param \WP_User  $user    The user being tested.
+	 * @return array Capabilities, possibly with the scoped grant added.
+	 */
+	public static function grant_custom_code_unfiltered_html_cap( $allcaps, $caps = array(), $args = array(), $user = null ) {
+		if ( self::$custom_code_unfiltered_depth < 1 || ! is_array( $allcaps ) ) {
+			return $allcaps;
+		}
+
+		$user_id = ( $user instanceof \WP_User ) ? (int) $user->ID : 0;
+
+		if ( $user_id < 1 || $user_id !== self::$custom_code_unfiltered_user ) {
+			return $allcaps;
+		}
+
+		$allcaps['unfiltered_html'] = true;
+
+		return $allcaps;
+	}
+
+	/**
+	 * Write `_elementor_code`, granting `unfiltered_html` only when kses would
+	 * otherwise destroy the snippet.
+	 *
+	 * This is the single place the capability is granted, and it wraps exactly
+	 * one update_post_meta() call. `post_content` is written separately by
+	 * wp_insert_post()/wp_update_post() and stays under core's content_save_pre
+	 * KSES gate — deliberately. Elementor's renderer reads `_elementor_code`
+	 * (custom-code/document.php print_content()), never post_content, so the
+	 * grant covers the copy that renders and leaves the copy that does not
+	 * filtered. The two diverge for a script-bearing snippet, and that is the
+	 * intended outcome rather than an oversight.
+	 *
+	 * What governs whether a caller may write raw markup at all remains the API
+	 * key and its scope: `/elementor/custom-code` is gated at ADMIN scope in
+	 * get_required_scope_for_request()'s $admin_routes, so a designer-, author-
+	 * or editor-scoped key never reaches this method.
+	 *
+	 * PHP's `finally` does not run on `exit()`/`die()` (RC review WARN
+	 * finding). If anything hooked into `update_post_meta()`/
+	 * `updated_postmeta` synchronously terminates the request — a security
+	 * or WAF plugin calling `wp_die()` on content it considers suspicious is
+	 * the realistic case, and script-bearing content is exactly what would
+	 * trigger one — the `finally` below never runs and the grant (plus the
+	 * depth counter) stays installed. On ordinary PHP-FPM that dies with the
+	 * process and is harmless; this codebase specifically does not assume
+	 * that, because it also supports a long-lived worker reusing this same
+	 * process across requests (see the `$mcpwp_verdicts` memoization note in
+	 * trait-mcpwp-api-auth.php: "a long-lived worker (WP-CLI, a
+	 * rest_do_request() loop) reuses this instance across requests"), and
+	 * every authenticated caller maps onto the same `mcpwp_api_agent`
+	 * account — so a leaked grant there would hand that account
+	 * `unfiltered_html` for the rest of such a process's life.
+	 * ensure_custom_code_shutdown_guard() registers a
+	 * `register_shutdown_function()` safety net for exactly that case:
+	 * `register_shutdown_function()`, unlike `finally`, does run on
+	 * `exit()`/`die()`.
+	 *
+	 * @param int    $post_id Snippet post ID.
+	 * @param string $code    Raw snippet code.
+	 */
+	private function write_custom_code_meta( $post_id, $code ) {
+		$needs_grant = $this->code_needs_unfiltered_html( $code ) && get_current_user_id() > 0;
+
+		if ( ! $needs_grant ) {
+			update_post_meta( $post_id, '_elementor_code', $code );
+
+			return;
+		}
+
+		self::ensure_custom_code_shutdown_guard();
+
+		if ( 0 === self::$custom_code_unfiltered_depth ) {
+			self::$custom_code_unfiltered_user = get_current_user_id();
+			add_filter( 'user_has_cap', array( __CLASS__, 'grant_custom_code_unfiltered_html_cap' ), PHP_INT_MAX, 4 );
+		}
+		++self::$custom_code_unfiltered_depth;
+
+		try {
+			update_post_meta( $post_id, '_elementor_code', $code );
+		} finally {
+			--self::$custom_code_unfiltered_depth;
+
+			if ( 0 === self::$custom_code_unfiltered_depth ) {
+				remove_filter( 'user_has_cap', array( __CLASS__, 'grant_custom_code_unfiltered_html_cap' ), PHP_INT_MAX );
+				self::$custom_code_unfiltered_user = 0;
+			}
+		}
+	}
+
+	/**
+	 * Register the shutdown-time safety net for the Custom Code
+	 * `unfiltered_html` grant, at most once per process.
+	 *
+	 * See write_custom_code_meta()'s docblock for why `finally` alone is not
+	 * enough. Guarded by a static flag rather than called unconditionally,
+	 * because register_shutdown_function() has no unregister: without the
+	 * guard, a long-lived worker processing many Custom Code writes would
+	 * register one more shutdown callback per write for the life of the
+	 * process. The guard makes registration itself idempotent; the callback
+	 * it registers is idempotent too (see
+	 * cleanup_custom_code_unfiltered_html_grant_on_shutdown()), so nothing
+	 * about calling this more than once — which never happens, but is not
+	 * relied upon not to — would be unsafe either.
+	 */
+	private static function ensure_custom_code_shutdown_guard() {
+		if ( self::$custom_code_shutdown_guard_registered || ! function_exists( 'register_shutdown_function' ) ) {
+			return;
+		}
+
+		self::$custom_code_shutdown_guard_registered = true;
+
+		register_shutdown_function( array( __CLASS__, 'cleanup_custom_code_unfiltered_html_grant_on_shutdown' ) );
+	}
+
+	/**
+	 * Shutdown-time fallback for write_custom_code_meta()'s `finally`.
+	 *
+	 * A no-op — checked, not assumed — whenever the grant was already
+	 * cleaned up normally (the overwhelmingly common case: `finally` runs on
+	 * every ordinary return, error, or caught exception, so by the time
+	 * PHP's shutdown sequence reaches this, depth is back to 0). It only
+	 * does anything when a write was interrupted by `exit()`/`die()` inside
+	 * the grant window and left the filter and depth counter installed.
+	 *
+	 * Idempotent with the `finally` block by construction: both paths only
+	 * ever remove the filter and zero the counters, and remove_filter() on a
+	 * filter that is not registered is itself a safe no-op.
+	 */
+	public static function cleanup_custom_code_unfiltered_html_grant_on_shutdown() {
+		if ( self::$custom_code_unfiltered_depth <= 0 ) {
+			return;
+		}
+
+		remove_filter( 'user_has_cap', array( __CLASS__, 'grant_custom_code_unfiltered_html_cap' ), PHP_INT_MAX );
+		self::$custom_code_unfiltered_depth = 0;
+		self::$custom_code_unfiltered_user  = 0;
+	}
+
+	/**
 	 * Persist Elementor custom-code meta.
+	 *
+	 * Two metas here are load-bearing for Elementor Pro's own renderer, not
+	 * just our API's readback, and both were missing before GH #871:
+	 *
+	 * - `_elementor_location` must hold Elementor's real internal value
+	 *   (elementor_head/elementor_body_start/elementor_body_end) — see
+	 *   get_custom_code_location_map(). Our public short-form value never
+	 *   matched anything Elementor's wp_head/wp_body_open/wp_footer hooks
+	 *   query for, so every snippet was created "successfully" and never
+	 *   rendered.
+	 * - `_elementor_code` is what ElementorPro\Modules\CustomCode\Document::
+	 *   print_content() actually echoes (custom-code/document.php: `get_post_meta(
+	 *   $this->post->ID, '_elementor_' . Custom_Code_Metabox::FIELD_CODE, true )`).
+	 *   This class only ever wrote the code to `post_content`, which that
+	 *   renderer never reads — so even a correctly-located snippet rendered
+	 *   as an empty comment block. Verified end to end on the local rig
+	 *   (wp-rig-wp-dev): the marker only appeared on the live page once both
+	 *   `_elementor_location` and `_elementor_code` were corrected.
+	 * - `_elementor_priority` matters for a subtler reason: Elementor Pro's
+	 *   get_snippets_by_location() runs `WP_Query` with a top-level `meta_key`
+	 *   (for `orderby => meta_value_num`) *alongside* an explicit `meta_query`
+	 *   for location. WordPress ANDs the implicit clause from that top-level
+	 *   `meta_key` with the explicit meta_query, which requires the priority
+	 *   row to exist at all — a snippet without it is excluded from the query
+	 *   outright, never merely mis-ordered. Always writing a priority avoids
+	 *   depending on that WP_Query interaction to happen to still work.
 	 *
 	 * @param int   $post_id  Snippet post ID.
 	 * @param array $payload  Prepared payload.
 	 */
 	private function save_custom_code_meta( $post_id, $payload ) {
 		if ( isset( $payload['location'] ) ) {
-			update_post_meta( $post_id, '_elementor_location', $payload['location'] );
+			$map               = $this->get_custom_code_location_map();
+			$internal_location = isset( $map[ $payload['location'] ] ) ? $map[ $payload['location'] ] : $payload['location'];
+			update_post_meta( $post_id, '_elementor_location', $internal_location );
+		}
+
+		if ( array_key_exists( 'code', $payload ) ) {
+			$this->write_custom_code_meta( $post_id, $payload['code'] );
+		}
+
+		if ( isset( $payload['priority'] ) ) {
+			update_post_meta( $post_id, '_elementor_priority', (int) $payload['priority'] );
 		}
 
 		update_post_meta( $post_id, '_elementor_edit_mode', 'builder' );
@@ -1096,7 +1533,8 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			'title'             => (string) $post->post_title,
 			'status'            => (string) $post->post_status,
 			'modified_gmt'       => (string) $post->post_modified_gmt,
-			'location'           => (string) ( get_post_meta( $post->ID, '_elementor_location', true ) ?: 'head' ),
+			'location'           => $this->public_custom_code_location( (string) ( get_post_meta( $post->ID, '_elementor_location', true ) ?: 'elementor_head' ) ),
+			'priority'           => (int) ( get_post_meta( $post->ID, '_elementor_priority', true ) ?: 1 ),
 			'conditions'         => $this->get_custom_code_conditions( $post->ID ),
 			'conditions_engine'  => (string) ( get_post_meta( $post->ID, '_mcpwp_custom_code_conditions_engine', true ) ?: 'unknown' ),
 			'code_length'        => strlen( (string) $post->post_content ),
@@ -1359,6 +1797,12 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	 * @return WP_REST_Response|WP_Error Response.
 	 */
 	public function create_archetype( $request ) {
+		$payload_check = $this->require_elementor_payload( $request );
+		if ( is_wp_error( $payload_check ) ) {
+			$this->log_activity( 'create_archetype', $request, null, 400 );
+			return $this->error_response( $payload_check->get_error_code(), $payload_check->get_error_message(), 400 );
+		}
+
 		$data = array(
 			'title'           => $request->get_param( 'title' ),
 			'type'            => $request->get_param( 'type' ),
@@ -1519,6 +1963,12 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	 * @return WP_REST_Response|WP_Error Response.
 	 */
 	public function create_part( $request ) {
+		$payload_check = $this->require_elementor_payload( $request );
+		if ( is_wp_error( $payload_check ) ) {
+			$this->log_activity( 'create_part', $request, null, 400 );
+			return $this->error_response( $payload_check->get_error_code(), $payload_check->get_error_message(), 400 );
+		}
+
 		$data = array(
 			'title'          => $request->get_param( 'title' ),
 			'type'           => $request->get_param( 'type' ),
@@ -1642,6 +2092,48 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	 */
 	private function has_elementor_payload_in_request( $request ) {
 		return $request->has_param( 'elementor_data_base64' ) || $request->has_param( 'elementor_data' );
+	}
+
+	/**
+	 * Refuse to create a library entry (part or archetype) from an empty
+	 * Elementor payload.
+	 *
+	 * `elementor_data` lost its `required: true` when `elementor_data_base64`
+	 * was added alongside it (#831) so a caller could satisfy the schema
+	 * with neither. Re-adding `required` to one of the two would wrongly
+	 * reject a legitimate base64-only or array-only call — JSON Schema
+	 * cannot express "exactly one of these" here — so this is enforced in
+	 * the handler instead.
+	 *
+	 * Without this, `Mcpwp_Elementor_Pro::create_template()` treats an
+	 * empty payload as "no data submitted" and simply skips the save step
+	 * ( `! empty( $data['elementor_data'] )` ), so create_part()/
+	 * create_archetype() previously returned 201 with a blank library
+	 * entry instead of a clear error (RC review finding #1).
+	 *
+	 * create_template() itself is NOT gated by this: its own tool
+	 * description documents an omitted payload as intentional ("If
+	 * omitted, Elementor creates a blank template"), a real workflow for
+	 * a Theme Builder template a human then finishes in the Elementor
+	 * editor. A part or an archetype has no such "finish it in the
+	 * editor" story — it exists purely to be reused/applied verbatim — so
+	 * a blank one is never useful and is refused instead.
+	 *
+	 * @param WP_REST_Request $request Request object.
+	 * @return true|WP_Error True when a usable payload is present.
+	 */
+	private function require_elementor_payload( $request ) {
+		$payload = $this->get_elementor_payload_from_request( $request );
+
+		if ( empty( $payload ) ) {
+			return new WP_Error(
+				'missing_elementor_data',
+				__( 'One of elementor_data or elementor_data_base64 is required.', 'mcpwp' ),
+				array( 'status' => 400 )
+			);
+		}
+
+		return true;
 	}
 
 	/**
@@ -1828,7 +2320,15 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	 * @return WP_REST_Response Response.
 	 */
 	public function get_widgets( $request ) {
+		// 'widget' is this route's own param name. 'type' also accepted
+		// (#831) — the Free build's controller registers the same path with
+		// a handler that reads 'type', and the MCP tool's canonical param is
+		// now 'widget_type' (remapped to 'type'); this keeps whichever
+		// controller answers /elementor/widgets on this install consistent.
 		$widget_name = $request->get_param( 'widget' );
+		if ( ! $widget_name ) {
+			$widget_name = $request->get_param( 'type' );
+		}
 		$result      = $this->elementor_pro->get_available_widgets( $widget_name );
 
 		if ( is_wp_error( $result ) ) {

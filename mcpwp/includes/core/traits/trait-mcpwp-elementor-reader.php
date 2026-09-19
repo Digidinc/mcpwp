@@ -42,7 +42,16 @@ trait Mcpwp_Elementor_Reader_Trait {
 	/**
 	 * Get Elementor data for a page.
 	 *
-	 * @param int $page_id Page ID.
+	 * @param int   $page_id Page ID.
+	 * @param array $data {
+	 *     Optional. Every key defaults to "off" — omitting $data returns
+	 *     exactly what this method always returned.
+	 *
+	 *     @type bool   $strip_defaults Strip default widget settings.
+	 *     @type bool   $include_raw    Also include the raw elementor_json string.
+	 *     @type string $element_id     Scope the response to this one element's
+	 *                                  subtree (#830) — 404 (WP_Error) if not found.
+	 * }
 	 * @return array|WP_Error Elementor data or error.
 	 */
 	public function get_elementor_data( $page_id, $data = array() ) {
@@ -79,6 +88,27 @@ trait Mcpwp_Elementor_Reader_Trait {
 			$this->strip_element_defaults( $decoded );
 		}
 
+		// Scope to one element's subtree (#830) — never on by default. Applied
+		// after strip_defaults so the settings on the returned subtree are
+		// stripped the same way a full-page read would strip them. Elements
+		// come back as a copy (find_element_by_id_readonly), never a reference
+		// into the stored tree — this is a read.
+		$element_id = isset( $data['element_id'] ) ? trim( (string) $data['element_id'] ) : '';
+		if ( '' !== $element_id ) {
+			$match = is_array( $decoded ) ? $this->find_element_by_id_readonly( $decoded, $element_id ) : null;
+			if ( null === $match ) {
+				return new WP_Error(
+					'element_not_found',
+					sprintf( __( "No element with id '%s' found on this page.", 'mcpwp' ), $element_id ),
+					array(
+						'status' => 404,
+						'hint'   => 'Call wp_get_elementor_summary(id) to list valid element ids, or omit element_id to fetch the whole page.',
+					)
+				);
+			}
+			$decoded = $match;
+		}
+
 		$response = array(
 			'page_id'        => (int) $page_id,
 			'title'          => $page->post_title,
@@ -89,6 +119,10 @@ trait Mcpwp_Elementor_Reader_Trait {
 			'page_settings'  => $page_settings ? ( is_array( $page_settings ) ? $page_settings : json_decode( $page_settings, true ) ) : null,
 			'edit_url'       => admin_url( "post.php?post={$page_id}&action=elementor" ),
 		);
+
+		if ( '' !== $element_id ) {
+			$response['element_id'] = $element_id;
+		}
 
 		if ( Mcpwp_Elementor_Stored_Tree::is_unusable( $stored ) ) {
 			$response['elementor_data_error'] = Mcpwp_Elementor_Stored_Tree::read_error( $stored );
@@ -580,9 +614,25 @@ trait Mcpwp_Elementor_Reader_Trait {
 	 * Get the controls schema for a specific widget type.
 	 *
 	 * @param string $widget_type Widget type name (e.g. 'heading', 'image').
+	 * @param array  $args {
+	 *     Optional projection (#830). Every key defaults to "off" — omitting
+	 *     $args returns exactly what this method always returned.
+	 *
+	 *     @type string $search   List mode only: case-insensitive substring match
+	 *                            against widget name, title, and description.
+	 *     @type string $category List mode only: exact match against reference category.
+	 *     @type string $tab      Detail mode only: keep controls from only this tab.
+	 *     @type array  $fields   Both modes: allowlist of top-level keys to return
+	 *                            (per-widget in list mode, on the result in detail mode).
+	 * }
 	 * @return array|WP_Error Schema data or error.
 	 */
-	public function get_widget_schema( $widget_type ) {
+	public function get_widget_schema( $widget_type, $args = array() ) {
+		$search   = isset( $args['search'] ) ? trim( (string) $args['search'] ) : '';
+		$category = isset( $args['category'] ) ? trim( (string) $args['category'] ) : '';
+		$tab_only = isset( $args['tab'] ) ? trim( (string) $args['tab'] ) : '';
+		$fields   = ( isset( $args['fields'] ) && is_array( $args['fields'] ) && ! empty( $args['fields'] ) ) ? $args['fields'] : null;
+
 		if ( ! $this->is_active() ) {
 			return new WP_Error(
 				'elementor_not_active',
@@ -619,6 +669,24 @@ trait Mcpwp_Elementor_Reader_Trait {
 				} else {
 					$entry['has_reference'] = false;
 				}
+
+				// Narrow the population (#830) — never on by default.
+				if ( '' !== $search ) {
+					$haystack = strtolower( $entry['name'] . ' ' . $entry['title'] . ' ' . ( $entry['description'] ?? '' ) );
+					if ( false === strpos( $haystack, strtolower( $search ) ) ) {
+						continue;
+					}
+				}
+				if ( '' !== $category && ( ! isset( $entry['category'] ) || $entry['category'] !== $category ) ) {
+					continue;
+				}
+
+				// Narrow the shape of each item — same allowlist convention as
+				// detail mode below and as wp_onboard's `sections`.
+				if ( null !== $fields ) {
+					$entry = array_intersect_key( $entry, array_flip( $fields ) );
+				}
+
 				$list[] = $entry;
 			}
 			return array(
@@ -691,6 +759,10 @@ trait Mcpwp_Elementor_Reader_Trait {
 				$result['common_mistakes'] = $ref['common_mistakes'];
 			}
 
+			if ( null !== $fields ) {
+				$result = array_intersect_key( $result, array_flip( $fields ) );
+			}
+
 			return $result;
 		}
 
@@ -704,6 +776,12 @@ trait Mcpwp_Elementor_Reader_Trait {
 			}
 
 			$tab = isset( $control['tab'] ) ? $control['tab'] : 'content';
+
+			// Narrow to one tab (#830) — never on by default.
+			if ( '' !== $tab_only && $tab !== $tab_only ) {
+				continue;
+			}
+
 			if ( ! isset( $grouped[ $tab ] ) ) {
 				$grouped[ $tab ] = array();
 			}
@@ -741,6 +819,10 @@ trait Mcpwp_Elementor_Reader_Trait {
 			$result['category']        = $ref['category'];
 			$result['example']         = $ref['example'];
 			$result['common_mistakes'] = $ref['common_mistakes'];
+		}
+
+		if ( null !== $fields ) {
+			$result = array_intersect_key( $result, array_flip( $fields ) );
 		}
 
 		return $result;

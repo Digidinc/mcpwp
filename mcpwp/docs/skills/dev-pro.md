@@ -40,7 +40,9 @@ Pro modules extend the free plugin with additional REST endpoints and feature ha
 
 ```
 1. defined('MCPWP_WPORG_BUILD')            → false (hard stop — always free on WP.org)
-2. defined('MCPWP_PRO') && MCPWP_PRO       → true  (developer / CI override)
+2. agency_license_active() (includes/agency-license.php marker file, written only
+   by scripts/build-agency.sh — NEVER a wp-config.php constant, see #863) → true
+2b. test_override_active() (MCPWP_TESTS true AND PHP_SAPI === 'cli', CI-only) → true
 3. mcpwp_get_fs_instance()->can_use_premium_code() → true  (Freemius SDK: paid + premium ZIP)
 4. mcpwp_get_fs_instance()->is_paying()    → true  (Freemius: active paid subscription)
 5. mcpwp_get_fs_instance()->is_trial()     → true  (Freemius: in-trial)
@@ -156,8 +158,15 @@ find mcpwp/includes/pro -name '*.php' | xargs php -l
 # Unit tests (if phpunit configured)
 composer test -- --filter Pro
 
-# Test gating — pro ON (dev override):
-define( 'MCPWP_PRO', true );  // in wp-config.php or test bootstrap
+# Test gating — pro ON (CI/test-only override, issue #863):
+# MCPWP_PRO in wp-config.php is NOT honoured by any build. Use this instead,
+# and only from a CLI context (PHPUnit bootstrap, wp-cli) — it is a no-op
+# under a web/MCP request:
+define( 'MCPWP_TESTS', true );  // in phpunit bootstrap only; requires PHP_SAPI === 'cli'
+
+# To simulate the agency build locally instead, drop a real marker file:
+#   echo "<?php return 'MCPWP_AGENCY_LICENSE_V1';" > includes/agency-license.php
+# (matches Mcpwp_License::AGENCY_MARKER_TOKEN — delete the file afterward)
 
 # Test gating — WP.org build (hard false):
 define( 'MCPWP_WPORG_BUILD', true );  // is_pro() returns false regardless

@@ -64,6 +64,23 @@ trait Mcpwp_Elementor_Writer_Trait {
 	private static $content_bearing_labels = array( 'document_save', 'html_cache_rebuild' );
 
 	/**
+	 * The debug keys attempt_elementor_call() writes when one of the
+	 * content-bearing labels above declines (#861) — i.e. `"{$label}_declined"`
+	 * for each entry in $content_bearing_labels. Kept as its own literal
+	 * array (not derived at runtime) so a static property default stays a
+	 * constant expression; the two lists must be extended together.
+	 *
+	 * Used to scope collect_render_errors()'s "*_declined" handling to real
+	 * save failures only. A non-content-bearing label — mark_built_with_elementor()'s
+	 * 'builder_flag', for one — can legitimately return bool false as normal
+	 * control flow with its own fallback and success check; that must not
+	 * read as a failed render.
+	 *
+	 * @var string[]
+	 */
+	private static $content_bearing_declined_keys = array( 'document_save_declined', 'html_cache_rebuild_declined' );
+
+	/**
 	 * Elementor's content-sanitizer callback while it is unhooked, or null.
 	 *
 	 * @var callable|null
@@ -108,10 +125,57 @@ trait Mcpwp_Elementor_Writer_Trait {
 	 * the degraded path. An Elementor API that failed and one that worked must
 	 * not produce the same response.
 	 *
+	 * A THIRD failure mode: Document::save() is documented to `@return bool`,
+	 * and returns exactly `false` — no exception, no WP_Error — when
+	 * is_editable_by_current_user() fails. On a PUBLISHED post that check
+	 * requires edit_published_{posts,pages} in addition to edit_{posts,pages}.
+	 * Until #861b the mcpwp_api_agent role had the latter but deliberately not
+	 * the former (least privilege); before the #861 fix that bare `false` fell
+	 * through both branches below, `ok` came back `true`, and every caller
+	 * reported document_save/html_cache_rebuild as having succeeded — a
+	 * receipt that claimed a save pipeline ran (revisions, `after_save` hooks,
+	 * Pro features) when Elementor had declined outright and only MCPWP's own
+	 * raw-meta fallback ever touched the row (#861, filed by the 3.12 undo
+	 * lane; verified on a real WP 7.0.2 + Elementor 4.2.4 rig — save() returns
+	 * bool(false), no post revision is created).
+	 *
+	 * #861b (owner decision, 2026-09-18): agent writes to published pages are
+	 * intended behaviour, so the role now grants edit_published_posts/
+	 * edit_published_pages openly (see Mcpwp_Activator::create_api_role_and_user()
+	 * and the one-time grant_agent_published_page_caps() migration) instead of
+	 * the code quietly routing around the denial. This decline path is kept as
+	 * defense-in-depth — a custom/legacy role, a site mid-migration before the
+	 * one-time grant has run, or a future capability regression can still hit
+	 * it — but it is no longer the expected path for the shipped role. A
+	 * `false` return is recorded under "<label>_declined" and MUST also leave
+	 * the caller on the degraded path.
+	 *
 	 * @param callable $call   The Elementor call to attempt.
 	 * @param array    $debug  Debug bag, written by reference on failure.
 	 * @param string   $label  Key prefix for the debug entry.
-	 * @return array{ok:bool,value:mixed} ok=false when the call threw or returned WP_Error.
+	 * @return array{ok:bool,value:mixed} ok=false when the call threw, returned
+	 *         WP_Error, or returned the literal bool `false`.
+	 *
+	 * NOT `exit()`/`die()`-safe (RC review WARN finding, flagged alongside
+	 * the structurally identical gap in
+	 * Mcpwp_REST_Elementor_Pro::write_custom_code_meta(), which now carries
+	 * a register_shutdown_function() safety net — see that method). Left
+	 * unpatched here deliberately: this `finally` restores THREE pieces of
+	 * state (the kses normalizer filter, the `map_meta_cap`/`user_has_cap`
+	 * grant, and — only here — Elementor's own content-sanitizer callback,
+	 * re-added via `$suspended_content_sanitizer`), not one, and the third
+	 * is a callable captured at suspend time. A shutdown-time fallback
+	 * would have to reconstruct or cache that same callable to re-hook it
+	 * correctly, which is materially more state to get right under the
+	 * unusual conditions PHP shutdown functions run under (some hooks
+	 * behave differently there) than the Custom Code copy's single
+	 * add_filter()/remove_filter() pair. Given a scoped `unfiltered_html`
+	 * grant escaping to the next request already requires a synchronous
+	 * `wp_die()` mid-`update_post_meta()` on a long-lived worker — a real
+	 * but narrow window — the safer move was fixing the simpler, newer
+	 * copy correctly rather than risking a subtly wrong fix here under time
+	 * pressure. This is a known gap, not an overlooked one; the next change
+	 * that touches this method should close it the same way.
 	 */
 	private function attempt_elementor_call( callable $call, array &$debug, $label ) {
 		// Depth-counted so a nested call cannot tear the filter out from under
@@ -166,6 +230,19 @@ trait Mcpwp_Elementor_Writer_Trait {
 				return array(
 					'ok'    => false,
 					'value' => $value,
+				);
+			}
+
+			// (#861) Elementor's own declined-save signal: bool `false`, not an
+			// exception, not a WP_Error. Strict comparison — a legitimate
+			// falsy-but-successful value (e.g. an empty array) must not be
+			// caught by this.
+			if ( false === $value ) {
+				$debug[ $label . '_declined' ] = true;
+
+				return array(
+					'ok'    => false,
+					'value' => false,
 				);
 			}
 
@@ -627,7 +704,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 		}
 
 		foreach ( $debug as $key => $value ) {
-			if ( $initial_save_was_recovered && in_array( $key, array( 'document_save_exception', 'document_save_error' ), true ) ) {
+			if ( $initial_save_was_recovered && in_array( $key, array( 'document_save_exception', 'document_save_error', 'document_save_declined' ), true ) ) {
 				continue;
 			}
 
@@ -651,6 +728,27 @@ trait Mcpwp_Elementor_Writer_Trait {
 					'%s: WP_Error: %s',
 					substr( (string) $key, 0, -6 ),
 					$value
+				);
+				continue;
+			}
+
+			// (#861) Elementor declined the save outright — no exception, no
+			// WP_Error, just Document::save() returning bool false. Most
+			// commonly: the API role can edit_pages/edit_others_pages but not
+			// edit_published_pages, and the target is already published.
+			//
+			// Scoped to the content-bearing labels only (document_save,
+			// html_cache_rebuild) — NOT a blanket "*_declined" suffix match.
+			// mark_built_with_elementor()'s own closure legitimately returns
+			// bool false whenever the document lacks
+			// set_is_built_with_elementor() and falls through to its own raw
+			// meta fallback; that is normal control flow with its own
+			// success check, not a failed save, and must not surface here as
+			// one.
+			if ( in_array( $key, self::$content_bearing_declined_keys, true ) && true === $value ) {
+				$errors[] = sprintf(
+					'%s: Elementor declined the save for the current user (Document::save() returned false) — likely missing edit_published_posts/edit_published_pages on an already-published item.',
+					substr( (string) $key, 0, -9 )
 				);
 			}
 		}
@@ -1358,6 +1456,14 @@ trait Mcpwp_Elementor_Writer_Trait {
 
 					$save_result = $attempt['value'];
 
+					// (#861) Default to the truth we can prove: Elementor's save
+					// pipeline did not run. The branches below are the only way
+					// to earn `true` — an exception, a WP_Error, or a declined
+					// (bool false) result all leave this exactly as it is here,
+					// so the response never claims a pipeline ran when it did
+					// not. Never leave this field unset on any path.
+					$save_debug['document_save'] = false;
+
 					if ( $attempt['ok'] && ! is_wp_error( $save_result ) ) {
 						// (#198) Always overwrite raw meta after Document::save() to
 						// prevent revision/cache divergence on subsequent reads.
@@ -1389,9 +1495,14 @@ trait Mcpwp_Elementor_Writer_Trait {
 						$save_debug['document_save_error'] = $save_result->get_error_message();
 					}
 					// When the call threw, $save_result is null and the throw is
-					// already recorded as document_save_exception. There is no else
-					// branch on purpose: get_error_message() on null would replace
-					// one fatal with another.
+					// already recorded as document_save_exception. When Elementor
+					// declined outright (#861), $save_result is bool false and
+					// attempt_elementor_call() already recorded
+					// document_save_declined. Both leave document_save=false
+					// (set above) and save_method at its 'meta_direct' default
+					// below — there is no else branch on purpose: calling
+					// get_error_message() on a non-WP_Error would replace one
+					// fatal with another.
 				}
 			}
 		}
@@ -2191,6 +2302,14 @@ trait Mcpwp_Elementor_Writer_Trait {
 						'document_save'
 					);
 					$save_result = $attempt['value'];
+
+					// (#861) Default to the truth we can prove: Elementor's save
+					// pipeline did not run. Only the verified-success branch
+					// below earns `true` — an exception, a WP_Error, or a
+					// declined (bool false) result all leave this as-is, so the
+					// response never claims a pipeline ran when it did not.
+					$debug['document_save'] = false;
+
 					if ( $attempt['ok'] && ! is_wp_error( $save_result ) ) {
 						// (#198) Always do a direct meta overwrite after Document::save()
 						// to guarantee the raw _elementor_data meta matches what we sent.
@@ -2226,7 +2345,11 @@ trait Mcpwp_Elementor_Writer_Trait {
 						$debug['document_save_error'] = $save_result->get_error_message();
 					}
 					// No else: a thrown call leaves $save_result null and is already
-					// recorded as document_save_exception.
+					// recorded as document_save_exception. A declined (bool false)
+					// call (#861) is recorded as document_save_declined by
+					// attempt_elementor_call(). Both leave document_save=false
+					// (set above) and save_method at its 'meta_direct' fallback
+					// below.
 				}
 			}
 		}

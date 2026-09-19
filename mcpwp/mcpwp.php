@@ -483,6 +483,55 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 		Mcpwp_Activator::stamp_analytics_choice();
 	}
 
+	// One-time: grant edit_published_posts/edit_published_pages to the
+	// mcpwp_api_agent role on sites where it was already created without
+	// them (#861b — owner decision: agent writes to published pages are
+	// intended, so the role should say so openly instead of the code
+	// routing around a denial via a raw-meta fallback). Own flag, not the
+	// mcpwp_db_version compare above — this ships without a version bump,
+	// so an already-current-version site would otherwise never re-enter
+	// that branch and would keep silently bypassing the denial forever.
+	if ( ! get_option( 'mcpwp_agent_published_caps_migrated' ) ) {
+		require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-activator.php';
+		Mcpwp_Activator::grant_agent_published_page_caps();
+	}
+
+	// One-time: repair Elementor Custom Code snippets written under GH #871 —
+	// wrong `_elementor_location` value, missing `_elementor_code` /
+	// `_elementor_priority` postmeta (see Mcpwp_Activator::
+	// repair_custom_code_locations() for the full defect). Own flag, same
+	// reasoning as the migrations above. Batched + checkpointed (#875 W3) —
+	// see repair_custom_code_locations() for why a plain single-pass loop on
+	// this hook was unsafe on a site with many thousands of snippets.
+	//
+	// #861b and #871 landed on separate branches and added their hooks at the
+	// same line, so this is the one place the 3.12 integration conflicted. The
+	// two are independent — different flags, different data, neither reads the
+	// other's state — so both run. Dropping either during conflict resolution
+	// would silently strand one migration on every existing install.
+	if ( ! get_option( 'mcpwp_custom_code_locations_repaired' ) ) {
+		require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-activator.php';
+		Mcpwp_Activator::repair_custom_code_locations();
+	}
+
+	// One-time: grant edit_published_posts/edit_published_pages to the
+	// mcpwp_api_agent role on sites where it was already created without
+	// them (#861b — owner decision: agent writes to published pages are
+	// intended, so the role should say so openly instead of the code
+	// routing around a denial via a raw-meta fallback). Own flag, not the
+	// mcpwp_db_version compare above — this ships without a version bump,
+	// so an already-current-version site would otherwise never re-enter
+	// that branch and would keep silently bypassing the denial forever.
+	// Runs at most once, ever (#875 L1) — see
+	// Mcpwp_Activator::grant_agent_published_page_caps() for why it does
+	// not re-check current capability state on later runs, and
+	// maybe_render_published_caps_grant_notice() below for how an admin
+	// finds out this ran.
+	if ( ! get_option( 'mcpwp_agent_published_caps_migrated' ) ) {
+		require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-activator.php';
+		Mcpwp_Activator::grant_agent_published_page_caps();
+	}
+
 	// Initialize the plugin
 	$loader = new Mcpwp_Loader();
 	$loader->run();
@@ -494,6 +543,11 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	// administrator to confirm it; the notice can be dismissed (review r2 N1).
 	add_action( 'admin_notices', array( 'Mcpwp_Analytics', 'render_legacy_consent_notice' ) );
 	add_action( 'admin_post_mcpwp_dismiss_analytics_notice', array( 'Mcpwp_Analytics', 'handle_dismiss_legacy_notice' ) );
+
+	// Surface the one-time published-page capability grant above, but only
+	// when it actually overrode something (#875 L1).
+	add_action( 'admin_notices', array( 'Mcpwp_Activator', 'maybe_render_published_caps_grant_notice' ) );
+	add_action( 'admin_post_mcpwp_dismiss_agent_published_caps_notice', array( 'Mcpwp_Activator', 'handle_dismiss_published_caps_grant_notice' ) );
 
 	// Wire analytics: Mcpwp_Analytics listens on every MCP tool call.
 	add_action( 'mcpwp_tool_called', array( 'Mcpwp_Analytics', 'on_tool_called' ), 10, 4 );

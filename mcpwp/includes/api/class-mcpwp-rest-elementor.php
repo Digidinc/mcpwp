@@ -87,6 +87,15 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 							'type'        => 'boolean',
 							'default'     => false,
 						),
+						'include_raw'    => array(
+							'description' => __( 'Also include elementor_json (raw JSON string duplicate of elementor_data). Off by default — doubles the payload.', 'mcpwp' ),
+							'type'        => 'boolean',
+							'default'     => false,
+						),
+						'element_id'     => array(
+							'description' => __( 'Return only the subtree of this one element (by id, from wp_get_elementor_summary) instead of the full page. 404 if not found.', 'mcpwp' ),
+							'type'        => 'string',
+						),
 					),
 				),
 				array(
@@ -455,6 +464,21 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 					'methods'             => WP_REST_Server::READABLE,
 					'callback'            => array( $this, 'get_widget_schema' ),
 					'permission_callback' => array( $this, 'check_permission' ),
+					'args'                => array(
+						'search'   => array(
+							'description' => __( 'Case-insensitive substring match against widget name, title, and description.', 'mcpwp' ),
+							'type'        => 'string',
+						),
+						'category' => array(
+							'description' => __( 'Filter to widgets whose reference category matches exactly.', 'mcpwp' ),
+							'type'        => 'string',
+						),
+						'fields'   => array(
+							'description' => __( 'Allowlist of per-widget keys to return (e.g. ["name","category"]). Omit for every field.', 'mcpwp' ),
+							'type'        => 'array',
+							'items'       => array( 'type' => 'string' ),
+						),
+					),
 				),
 			)
 		);
@@ -468,6 +492,17 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 					'methods'             => WP_REST_Server::READABLE,
 					'callback'            => array( $this, 'get_widget_schema' ),
 					'permission_callback' => array( $this, 'check_permission' ),
+					'args'                => array(
+						'tab'    => array(
+							'description' => __( 'Return controls from only this tab (content, style, or advanced).', 'mcpwp' ),
+							'type'        => 'string',
+						),
+						'fields' => array(
+							'description' => __( 'Allowlist of top-level result keys to return (e.g. ["tabs"] or ["description","example","common_mistakes"]). Omit for every field.', 'mcpwp' ),
+							'type'        => 'array',
+							'items'       => array( 'type' => 'string' ),
+						),
+					),
 				),
 			)
 		);
@@ -664,6 +699,7 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 		$options = array(
 			'strip_defaults' => (bool) $request->get_param( 'strip_defaults' ),
 			'include_raw'    => (bool) $request->get_param( 'include_raw' ),
+			'element_id'     => (string) $request->get_param( 'element_id' ),
 		);
 		$result  = $this->elementor->get_elementor_data( $page_id, $options );
 
@@ -978,8 +1014,57 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 	public function get_widget_schema( $request ) {
 		$this->log_activity( 'get_widget_schema', $request );
 
+		// 'type' is this route's own param name. 'widget' also accepted
+		// (#831) — the Pro build registers a same-path route whose handler
+		// reads 'widget', so a caller must not have to know which controller
+		// answered /elementor/widgets on this install.
 		$widget_type = $request->get_param( 'type' );
-		$result      = $this->elementor->get_widget_schema( $widget_type ? (string) $widget_type : '' );
+		// Both halves are load-bearing and #830 and #831 each wrote only one of
+		// them, so this is the one hunk where taking either side wholesale
+		// silently drops a shipped fix:
+		//
+		// #831 — accept the deprecated `widget` name as well as `type`. On main
+		// the schema advertised `widget` while this handler read only `type`, so
+		// the filter was silently dropped and every call listed all widgets.
+		// #830 — pass the projection args through, turning a 119KB schema
+		// response into ~3KB when a caller asks for one tab or a field subset.
+		//
+		// Keeping only #831 loses the projection; keeping only #830 re-breaks
+		// the dropped-parameter bug for callers still on `widget`.
+		if ( ! $widget_type ) {
+			$widget_type = $request->get_param( 'widget' );
+		}
+
+		$fields = $request->get_param( 'fields' );
+
+		// This arg's schema declares type=array but no sanitize_callback, so
+		// WP_REST_Request::sanitize_params() never coerces it — a caller
+		// sending the common REST convention of a comma-separated string
+		// (?fields=tab,description) reaches here as a literal string and,
+		// before this, was silently treated as "no filter", over-returning
+		// the full ~119KB schema instead of projecting it down (#830's whole
+		// point). Recover that intent rather than 400 it: this is a
+		// read-only projection, not a security-relevant param, and CSV is
+		// exactly how an array-typed query param is normally written. Absent
+		// (null) and an already-decoded array both fall through unchanged.
+		if ( is_string( $fields ) && '' !== $fields ) {
+			$fields = array_values(
+				array_filter(
+					array_map( 'trim', explode( ',', $fields ) ),
+					static function ( $field ) {
+						return '' !== $field;
+					}
+				)
+			);
+		}
+
+		$args        = array(
+			'search'   => (string) $request->get_param( 'search' ),
+			'category' => (string) $request->get_param( 'category' ),
+			'tab'      => (string) $request->get_param( 'tab' ),
+			'fields'   => is_array( $fields ) ? $fields : array(),
+		);
+		$result      = $this->elementor->get_widget_schema( $widget_type ? (string) $widget_type : '', $args );
 
 		if ( is_wp_error( $result ) ) {
 			return $result;

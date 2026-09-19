@@ -49,7 +49,7 @@ trait Mcpwp_Pro_Tools_Commerce_Trait {
 				),
 				'category'     => array(
 					'type'        => 'string',
-					'description' => 'Filter by category slug',
+					'description' => 'Filter by category slug, or numeric category (term) ID — resolved to its slug automatically.',
 				),
 				'tag'          => array(
 					'type'        => 'string',

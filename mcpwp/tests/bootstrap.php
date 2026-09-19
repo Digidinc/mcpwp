@@ -55,6 +55,12 @@ $GLOBALS['mcpwp_test_user_caps'] = array();
 $GLOBALS['mcpwp_test_users'] = array(
     (object) array( 'ID' => 2, 'roles' => array( 'mcpwp_api_agent' ) ),
 );
+// Role registry double for add_role()/get_role() — keyed by role slug, value
+// a WP_Role instance. Lets #861b's capability-grant migration be exercised
+// against something that behaves like WordPress's real role storage (a
+// pre-existing role is left alone by add_role(), only add_cap()/remove_cap()
+// mutate it) without pulling in all of wp-admin/includes/capabilities.php.
+$GLOBALS['mcpwp_test_roles'] = array();
 
 /**
  * Minimal stand-in for WP_User. Production code identifies the user a
@@ -69,6 +75,66 @@ class WP_User
     {
         $this->ID = (int) $id;
     }
+}
+
+/**
+ * Minimal stand-in for WP_Role — just enough for #861b's capability-grant
+ * migration (has_cap/add_cap/remove_cap against a plain associative array),
+ * mirroring core's own WP_Role shape closely enough that production code
+ * written against the real class needs no changes to run against this double.
+ */
+class WP_Role
+{
+    public $name;
+    public $capabilities;
+
+    public function __construct($role, $capabilities = array())
+    {
+        $this->name         = $role;
+        $this->capabilities = $capabilities;
+    }
+
+    public function has_cap($cap)
+    {
+        return ! empty($this->capabilities[ $cap ]);
+    }
+
+    public function add_cap($cap, $grant = true)
+    {
+        $this->capabilities[ $cap ] = (bool) $grant;
+        $GLOBALS['mcpwp_test_roles'][ $this->name ] = $this;
+    }
+
+    public function remove_cap($cap)
+    {
+        unset($this->capabilities[ $cap ]);
+        $GLOBALS['mcpwp_test_roles'][ $this->name ] = $this;
+    }
+}
+
+/**
+ * add_role() no-ops when the role already exists — real WordPress behaviour,
+ * and the exact reason #861b needs a separate one-time migration for
+ * already-installed sites rather than relying on this to backfill new caps.
+ */
+function add_role($role, $display_name, $capabilities = array())
+{
+    if (isset($GLOBALS['mcpwp_test_roles'][ $role ])) {
+        return null;
+    }
+
+    $GLOBALS['mcpwp_test_roles'][ $role ] = new WP_Role($role, $capabilities);
+    return $GLOBALS['mcpwp_test_roles'][ $role ];
+}
+
+function get_role($role)
+{
+    return $GLOBALS['mcpwp_test_roles'][ $role ] ?? null;
+}
+
+function remove_role($role)
+{
+    unset($GLOBALS['mcpwp_test_roles'][ $role ]);
 }
 
 class WP_Error
@@ -178,6 +244,17 @@ class WP_REST_Request
     public function get_param($key)
     {
         return isset($this->params[ $key ]) ? $this->params[ $key ] : null;
+    }
+
+    public function has_param($key)
+    {
+        // Real WP_REST_Request::has_param() uses array_key_exists() (not
+        // isset()), so a param explicitly sent as null still counts as
+        // "present" — the distinction production code relies on to tell
+        // "the caller sent this field, even empty" from "the caller never
+        // mentioned it" (e.g. Mcpwp_REST_Elementor_Pro::
+        // has_elementor_payload_in_request(), RC review finding #1).
+        return array_key_exists($key, $this->params);
     }
 
     public function set_param($key, $value)
@@ -948,6 +1025,16 @@ function is_multisite()
     return ! empty($GLOBALS['mcpwp_test_is_multisite']);
 }
 
+if (! function_exists('is_super_admin')) {
+    // Core grants unfiltered_html to super admins only on multisite, so the
+    // Custom Code refusal in #873 turns on this answer. Default false: the
+    // interesting case is the ordinary site admin who does NOT have it.
+    function is_super_admin($user_id = null)
+    {
+        return ! empty($GLOBALS['mcpwp_test_is_super_admin']);
+    }
+}
+
 if (! function_exists('get_site_option')) {
     function get_site_option($name, $default = false)
     {
@@ -1257,6 +1344,32 @@ if (! isset($GLOBALS['wpdb'])) {
         }
         public function get_col($query = '', $x = 0)
         {
+            // Keyset-cursor scan used by
+            // Mcpwp_Activator::repair_custom_code_locations() (#875 W3) —
+            // get_posts()/WP_Query has no "ID > cursor" primitive, so that
+            // method queries $wpdb directly. Matches the exact shape its
+            // $wpdb->prepare() call produces; anything else still answers no
+            // rows, same as before this was added.
+            if (preg_match(
+                "/^SELECT ID FROM \\S*posts WHERE post_type = '([^']*)' AND ID > (\\d+) ORDER BY ID ASC LIMIT (\\d+)$/",
+                trim((string) $query),
+                $m
+            )) {
+                $type   = $m[1];
+                $cursor = (int) $m[2];
+                $limit  = (int) $m[3];
+
+                $ids = array();
+                foreach ($GLOBALS['_mcpwp_test_posts'] as $post) {
+                    if ($post->post_type === $type && (int) $post->ID > $cursor) {
+                        $ids[] = (int) $post->ID;
+                    }
+                }
+                sort($ids);
+
+                return array_slice($ids, 0, $limit);
+            }
+
             return array();
         }
         public $suppressed = false;
@@ -2341,6 +2454,13 @@ function get_post_meta($post_id, $key = '', $single = false)
 
 function update_post_meta($post_id, $key, $value)
 {
+    // A seeded failure, so #873 can prove its `finally` releases the scoped
+    // unfiltered_html grant when the write throws rather than returns. Off
+    // unless a test asks for it.
+    if (! empty($GLOBALS['mcpwp_test_update_post_meta_throws'])) {
+        throw new \RuntimeException('seeded meta failure');
+    }
+
     // Mirror WP core, which unslashes on write (update_metadata() calls
     // wp_unslash on the value) so get_post_meta() returns clean data.
     //

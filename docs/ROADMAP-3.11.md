@@ -48,7 +48,9 @@ Every PR went through adversarial review until it passed (the relay and follow-u
 
 **Infrastructure, deployed 2026-09-10 (#852):** agency builds (`MCPWP_PRO=true`) moved to the private R2 bucket `mcpwp-agency-builds`; the `mcpwp-updates` Worker serves them only with an agency token in the `Authorization` header. The legacy `mumega.com/mcp-updates` host still serves the old public agency objects until an owner decision removes them.
 
-**Open owner decisions:** delete the 32 public agency objects from `mumcp-updates`; whether the Free and Freemius builds should keep honouring `define('MCPWP_PRO', true)` (#852).
+**Owner decision (2026-09-10, #852 → #863):** no — Free and Freemius builds must not honour `define('MCPWP_PRO', true)`. Fixed in #863: the license class no longer reads that constant at all; the agency tier is anchored to a build-only marker file (`includes/agency-license.php`) that only `scripts/build-agency.sh` writes.
+
+**Open owner decisions:** delete the 32 public agency objects from `mumcp-updates`.
 
 **3.12 in progress:** undo through WordPress revisions and validation against Elementor's live controls (#820, #824); patch contract fixes (#825, #826, #828, #829); then verification (#568, #804).
 

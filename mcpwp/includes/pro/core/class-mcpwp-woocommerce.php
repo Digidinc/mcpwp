@@ -72,6 +72,29 @@ class Mcpwp_WooCommerce {
 	// =========================================================================
 
 	/**
+	 * Resolve a `wc_list_products` `category` value to the slug
+	 * wc_get_products()'s `category` query arg actually matches on (#831).
+	 *
+	 * wc_get_products() only ever compares `category` against product_cat
+	 * slugs — passing a numeric term ID silently matched nothing. A caller
+	 * reaching for the ID a category listing just handed back (or the ID
+	 * form every other list/filter tool in this plugin accepts) is resolved
+	 * to its slug here; a non-numeric value passes through unchanged.
+	 *
+	 * @param mixed $category Raw `category` argument.
+	 * @return mixed The slug to filter on, or the original value unchanged
+	 *               when it is not a resolvable numeric term ID.
+	 */
+	private function resolve_category_slug( $category ) {
+		if ( ! is_numeric( $category ) ) {
+			return $category;
+		}
+
+		$term = get_term( (int) $category, 'product_cat' );
+		return ( $term && ! is_wp_error( $term ) ) ? $term->slug : $category;
+	}
+
+	/**
 	 * Get products.
 	 *
 	 * @param array $args Query arguments.
@@ -112,7 +135,7 @@ class Mcpwp_WooCommerce {
 		}
 
 		if ( ! empty( $args['category'] ) ) {
-			$query_args['category'] = array( $args['category'] );
+			$query_args['category'] = array( $this->resolve_category_slug( $args['category'] ) );
 		}
 
 		if ( ! empty( $args['tag'] ) ) {

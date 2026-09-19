@@ -107,10 +107,11 @@ AGENCY_ZIP="$PLUGIN_DIR/scripts/mcpwp-agency-$VERSION.zip"
 
 if [[ "$BUILD" -eq 1 ]]; then
 	bash "$BUILD_SCRIPT" --version "$VERSION"
-	# The agency build (MCPWP_PRO=true) is a separate, token-gated distribution
-	# stored under the agency/ prefix of the same bucket (#852). Build it here so
-	# it exists for every release instead of relying on a remembered manual
-	# wrangler upload.
+	# The agency build (Pro unlocked via a build-only marker file,
+	# includes/agency-license.php — not a wp-config.php constant, see #863) is
+	# a separate, token-gated distribution stored under the agency/ prefix of
+	# the same bucket (#852). Build it here so it exists for every release
+	# instead of relying on a remembered manual wrangler upload.
 	bash "$AGENCY_BUILD_SCRIPT" --version "$VERSION"
 fi
 
@@ -215,8 +216,9 @@ PY
 	# The manifest's download_url is mcpwp-latest.zip — this key MUST exist in R2 or downloads 404.
 	CLOUDFLARE_API_TOKEN="$CF_TOKEN" npx --prefix "$WORKER_DIR" wrangler r2 object put mumcp-updates/mcpwp-latest.zip \
 		--file="$ZIP_PATH" --content-type="application/zip" --remote
-	# Versioned agency package (MCPWP_PRO=true), never in the public bucket
-	# (#852): the legacy spai-updates Worker reads mumcp-updates without auth.
+	# Versioned agency package (Pro unlocked via a build-only marker file, not
+	# a wp-config.php constant — #863), never in the public bucket (#852): the
+	# legacy spai-updates Worker reads mumcp-updates without auth.
 	# It goes to the private mcpwp-agency-builds bucket, which only the
 	# mcpwp-updates Worker can read, and only for a request carrying a download
 	# token. If that bucket does not exist this upload fails, and so does the

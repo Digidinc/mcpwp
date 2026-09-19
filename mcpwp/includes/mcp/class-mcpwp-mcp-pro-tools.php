@@ -466,12 +466,25 @@ class Mcpwp_MCP_Pro_Tools extends Mcpwp_MCP_Tool_Registry {
 				'route'  => '/elementor/templates/{id}',
 			),
 			'wp_delete_elementor_template'   => array(
-				'method' => 'DELETE',
-				'route'  => '/elementor/templates/{id}',
+				'method'        => 'DELETE',
+				'route'         => '/elementor/templates/{id}',
+				// wp_list_elementor_templates' items are keyed 'id' too, but
+				// accept 'template_id' defensively (#831) — it is what a
+				// caller reaching for the obvious name would try first.
+				'param_aliases' => array( 'template_id' => 'id' ),
 			),
 			'wp_apply_elementor_template'    => array(
-				'method' => 'POST',
-				'route'  => '/elementor/templates/{template_id}/apply',
+				'method'        => 'POST',
+				// {template_id} was this tool's own placeholder token; the
+				// underlying REST route's URL param has always been `id`
+				// (/elementor/templates/(?P<id>\d+)/apply). Renamed to `id`
+				// to match its siblings wp_apply_elementor_archetype and
+				// wp_apply_elementor_part, which both already use `id` for
+				// "the thing being applied" (#831 sweep — not one of the
+				// issue's 24, found while fixing wp_apply_elementor_part's
+				// row). `template_id` kept as a deprecated alias.
+				'route'         => '/elementor/templates/{id}/apply',
+				'param_aliases' => array( 'template_id' => 'id' ),
 			),
 			'wp_list_elementor_archetypes'   => array(
 				'method'      => 'GET',
@@ -514,8 +527,20 @@ class Mcpwp_MCP_Pro_Tools extends Mcpwp_MCP_Tool_Registry {
 				'route'  => '/elementor/parts',
 			),
 			'wp_create_elementor_part_from_section' => array(
-				'method' => 'POST',
-				'route'  => '/elementor/parts/from-section',
+				'method'        => 'POST',
+				'route'         => '/elementor/parts/from-section',
+				// Canonical MCP name is `id`, matching every other Elementor
+				// tool that addresses one source page (#831 sweep); the REST
+				// body param is still `page_id` (no path placeholder on this
+				// route to hide the rename behind, so param_remap does it).
+				// `element_id` was already this tool's canonical name for
+				// the section — `section_id` is its deprecated alias, the
+				// actual case from issue #831's table.
+				'param_remap'   => array( 'id' => 'page_id' ),
+				'param_aliases' => array(
+					'page_id'    => 'id',
+					'section_id' => 'element_id',
+				),
 			),
 			'wp_apply_elementor_part'        => array(
 				'method' => 'POST',
@@ -542,16 +567,27 @@ class Mcpwp_MCP_Pro_Tools extends Mcpwp_MCP_Tool_Registry {
 				'route'  => '/elementor/blueprints/build',
 			),
 			'wp_save_section_as_template'    => array(
-				'method' => 'POST',
-				'route'  => '/elementor/save-section-as-template',
+				'method'        => 'POST',
+				'route'         => '/elementor/save-section-as-template',
+				// Same page_id -> id rename as wp_create_elementor_part_from_section,
+				// for the same reason (#831 sweep).
+				'param_remap'   => array( 'id' => 'page_id' ),
+				'param_aliases' => array( 'page_id' => 'id' ),
 			),
 			'wp_get_elementor_globals'       => array(
 				'method' => 'GET',
 				'route'  => '/elementor/globals',
 			),
 			'wp_set_elementor_globals'       => array(
-				'method' => 'POST',
-				'route'  => '/elementor/globals',
+				'method'        => 'POST',
+				'route'         => '/elementor/globals',
+				// `colors` (#831) is not a lossless rename — Elementor keeps
+				// separate system_colors/custom_colors palettes and the
+				// deprecated flat shape did not say which one it meant. A
+				// caller's `colors` is treated as `system_colors` (the
+				// default palette most color pickers show first); a caller
+				// that means custom_colors must say so explicitly.
+				'param_aliases' => array( 'colors' => 'system_colors' ),
 			),
 			'wp_list_elementor_custom_code'  => array(
 				'method' => 'GET',
@@ -644,8 +680,14 @@ class Mcpwp_MCP_Pro_Tools extends Mcpwp_MCP_Tool_Registry {
 				'route'  => '/widgets/{id}',
 			),
 			'wp_add_widget'         => array(
-				'method' => 'POST',
-				'route'  => '/sidebars/{id}/widgets',
+				'method'        => 'POST',
+				'route'         => '/sidebars/{id}/widgets',
+				// This tool already used `id`/`type` correctly (#831 issue
+				// report confused it with the unrelated Elementor widget
+				// tools — `page_id`/`column_id` have no equivalent here).
+				// `widget_type` accepted as a harmless alias for `type`
+				// since it is the name every sibling widget-info tool uses.
+				'param_aliases' => array( 'widget_type' => 'type' ),
 			),
 			'wp_update_widget'      => array(
 				'method' => 'PUT',
