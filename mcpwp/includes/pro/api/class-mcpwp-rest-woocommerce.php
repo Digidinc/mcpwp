@@ -1013,10 +1013,14 @@ class Mcpwp_REST_WooCommerce extends Mcpwp_REST_API {
 			return $archetype;
 		}
 
-		$payload = $archetype['product_data'];
-		$payload = array_merge( $payload, $this->extract_product_override_payload( $request->get_params() ) );
+		$existing_product_id = ! empty( $request->get_param( 'product_id' ) );
+		$payload             = self::build_archetype_apply_payload(
+			isset( $archetype['product_data'] ) && is_array( $archetype['product_data'] ) ? $archetype['product_data'] : array(),
+			$request->get_params(),
+			$existing_product_id
+		);
 
-		if ( ! empty( $request->get_param( 'product_id' ) ) ) {
+		if ( $existing_product_id ) {
 			$product_id = absint( $request->get_param( 'product_id' ) );
 			$result     = $this->handler->update_product( $product_id, $payload );
 			if ( is_wp_error( $result ) ) {
@@ -1253,7 +1257,7 @@ class Mcpwp_REST_WooCommerce extends Mcpwp_REST_API {
 			'archetype_style' => isset( $data['archetype_style'] ) ? sanitize_text_field( (string) $data['archetype_style'] ) : '',
 			'brief'           => isset( $data['brief'] ) ? sanitize_textarea_field( (string) $data['brief'] ) : '',
 			'product_type'    => $product_type,
-			'product_data'    => $this->extract_product_override_payload( $data ),
+			'product_data'    => self::extract_product_override_payload( $data ),
 		);
 
 		if ( empty( $record['product_data']['type'] ) ) {
@@ -1266,10 +1270,15 @@ class Mcpwp_REST_WooCommerce extends Mcpwp_REST_API {
 	/**
 	 * Extract known WooCommerce product fields from an input array.
 	 *
+	 * Static: used both by instance methods here and by
+	 * archetype_apply_targets_publish_status() (called statically, before
+	 * any controller is constructed — see that method's docblock) via
+	 * build_archetype_apply_payload().
+	 *
 	 * @param array $data Raw input.
 	 * @return array
 	 */
-	private function extract_product_override_payload( $data ) {
+	private static function extract_product_override_payload( $data ) {
 		$allowed_keys = array(
 			'name',
 			'type',
@@ -1299,6 +1308,43 @@ class Mcpwp_REST_WooCommerce extends Mcpwp_REST_API {
 			if ( array_key_exists( $key, $data ) ) {
 				$payload[ $key ] = $data[ $key ];
 			}
+		}
+
+		return $payload;
+	}
+
+	/**
+	 * Compute the effective product payload for applying an archetype — the
+	 * ONE canonical merge shared by apply_product_archetype() (the handler)
+	 * and archetype_apply_targets_publish_status() (the authorization gate),
+	 * so the two can never drift out of agreement again. That drift is
+	 * exactly what happened for #878: the gate had its own inline copy of
+	 * this merge and was never updated when the handler changed.
+	 *
+	 * #878: the archetype's stored product_data is a whole template,
+	 * potentially including a 'status' the archetype author chose when
+	 * defining it (e.g. 'draft', for "new products from this template start
+	 * unpublished"). Blindly re-applying that stored status to an EXISTING
+	 * product silently pushes it to whatever the template says — including
+	 * off a live 'publish' — even though the caller sent no status-related
+	 * param at all. On the existing-product path only, the stored status is
+	 * therefore dropped unless the caller's own request explicitly overrides
+	 * it; create mode is unaffected and keeps applying the stored status
+	 * (defaulted to 'draft' by the caller, same as before).
+	 *
+	 * @param array $archetype_product_data Stored archetype 'product_data'.
+	 * @param array $request_params         Raw request params (flat).
+	 * @param bool  $existing_product       True when this apply targets an
+	 *                                       existing product (a 'product_id'
+	 *                                       was given), false for create mode.
+	 * @return array Effective payload to hand to update_product()/create_product().
+	 */
+	private static function build_archetype_apply_payload( array $archetype_product_data, array $request_params, $existing_product ) {
+		$override = self::extract_product_override_payload( $request_params );
+		$payload  = array_merge( $archetype_product_data, $override );
+
+		if ( $existing_product && ! array_key_exists( 'status', $override ) ) {
+			unset( $payload['status'] );
 		}
 
 		return $payload;
@@ -1358,32 +1404,41 @@ class Mcpwp_REST_WooCommerce extends Mcpwp_REST_API {
 	 * scheduled-publish flow for a WooCommerce product this plugin exposes
 	 * that including 'future' here could break.
 	 *
+	 * #878 fix: apply_product_archetype() now drops the archetype's stored
+	 * 'status' on the existing-product path when the caller's request does
+	 * not itself override 'status' (re-applying a template's stored status
+	 * to a live product was silently unpublishing it). This gate computes
+	 * its verdict through the exact same build_archetype_apply_payload()
+	 * helper the handler calls, INCLUDING that strip, so the two can never
+	 * disagree about the resulting status again — see that helper's
+	 * docblock. Before this fix, this method carried its own independent
+	 * copy of the merge with no strip, which is what let the two drift.
+	 *
 	 * @param int|string       $archetype_id Archetype ID from the route.
 	 * @param WP_REST_Request  $request      Request object.
 	 * @return bool True when the effective status is 'publish', 'private', or 'future'.
 	 */
 	public static function archetype_apply_targets_publish_status( $archetype_id, $request ) {
-		$status = '';
+		$product_data = array();
 
 		$items = get_option( self::PRODUCT_ARCHETYPES_OPTION_KEY, array() );
 		if ( is_array( $items ) ) {
 			foreach ( $items as $item ) {
 				if ( isset( $item['id'] ) && (int) $item['id'] === (int) $archetype_id ) {
-					if ( isset( $item['product_data']['status'] ) && is_scalar( $item['product_data']['status'] ) ) {
-						$status = (string) $item['product_data']['status'];
+					if ( isset( $item['product_data'] ) && is_array( $item['product_data'] ) ) {
+						$product_data = $item['product_data'];
 					}
 					break;
 				}
 			}
 		}
 
-		// The request's own 'status' override, when present, wins over the
-		// archetype's stored default — same precedence as the array_merge()
-		// in apply_product_archetype().
-		$params = method_exists( $request, 'get_params' ) ? (array) $request->get_params() : array();
-		if ( array_key_exists( 'status', $params ) && is_scalar( $params['status'] ) ) {
-			$status = (string) $params['status'];
-		}
+		$params           = method_exists( $request, 'get_params' ) ? (array) $request->get_params() : array();
+		$existing_product = ! empty( $params['product_id'] );
+
+		$payload = self::build_archetype_apply_payload( $product_data, $params, $existing_product );
+
+		$status = isset( $payload['status'] ) && is_scalar( $payload['status'] ) ? (string) $payload['status'] : '';
 
 		return in_array( sanitize_key( $status ), array( 'publish', 'private', 'future' ), true );
 	}
