@@ -965,7 +965,28 @@ class Mcpwp_REST_WooCommerce extends Mcpwp_REST_API {
 		}
 
 		$current = $items[ $index ];
-		$merged  = $this->normalize_product_archetype_payload( array_merge( $current, $request->get_params() ), true );
+
+		// #879: $current is shaped {..., product_data: {...}} — the stored
+		// product-field overrides (status, sku, stock_quantity, ...) live
+		// NESTED under 'product_data', not at the top level. Request params
+		// are flat ({"regular_price":"25.00"}). normalize_product_archetype_
+		// payload() rebuilds 'product_data' by calling
+		// extract_product_override_payload() on its input, which only ever
+		// reads TOP-LEVEL keys. Merging $current straight against the
+		// request (the old code) left 'product_data' sitting untouched as a
+		// single nested value the extractor never looks inside, so every
+		// stored product field the caller did not resend in this request was
+		// silently dropped. Flatten the stored product_data into the merge
+		// base first — record-level keys from $current (name, product_type,
+		// archetype_class, archetype_style, brief) are merged in AFTER, so
+		// they are never shadowed by a same-named product field, and the
+		// request's own params are merged in last so an explicit override
+		// still wins.
+		$stored_product_data = isset( $current['product_data'] ) && is_array( $current['product_data'] ) ? $current['product_data'] : array();
+		$merge_base           = array_merge( $stored_product_data, $current );
+		unset( $merge_base['product_data'] );
+
+		$merged = $this->normalize_product_archetype_payload( array_merge( $merge_base, $request->get_params() ), true );
 		if ( is_wp_error( $merged ) ) {
 			return $merged;
 		}
@@ -1202,6 +1223,14 @@ class Mcpwp_REST_WooCommerce extends Mcpwp_REST_API {
 
 	/**
 	 * Normalize product archetype payload.
+	 *
+	 * NOTE on 'name': the archetype's own label (top-level $record['name'])
+	 * and $record['product_data']['name'] are DELIBERATELY the same value —
+	 * create_product_archetype() feeds this method one 'name' param that
+	 * becomes both. This is not a bug and not an oversight to "fix" by
+	 * splitting them into two fields; that would be an API shape change. The
+	 * two can only diverge today by writing the mcpwp_wc_product_archetypes
+	 * option directly, outside this method.
 	 *
 	 * @param array $data    Raw input.
 	 * @param bool  $partial Whether partial update is allowed.
