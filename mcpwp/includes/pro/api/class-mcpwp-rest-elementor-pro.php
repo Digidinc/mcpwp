@@ -203,6 +203,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 				'methods'             => WP_REST_Server::CREATABLE,
 				'callback'            => array( $this, 'clone_page' ),
 				'permission_callback' => array( $this, 'check_permission' ),
+				'args'                => $this->get_status_targeting_write_args(),
 			)
 		);
 
@@ -214,6 +215,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 				'methods'             => WP_REST_Server::CREATABLE,
 				'callback'            => array( $this, 'create_landing_page' ),
 				'permission_callback' => array( $this, 'check_permission' ),
+				'args'                => $this->get_status_targeting_write_args(),
 			)
 		);
 
@@ -343,6 +345,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 				'methods'             => WP_REST_Server::CREATABLE,
 				'callback'            => array( $this, 'build_page' ),
 				'permission_callback' => array( $this, 'check_permission' ),
+				'args'                => $this->get_build_page_write_args(),
 			)
 		);
 
@@ -377,6 +380,65 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 				'callback'            => array( $this, 'save_section_as_template' ),
 				'permission_callback' => array( $this, 'check_permission' ),
 			)
+		);
+	}
+
+	/**
+	 * Get write arguments for a route whose handler sets post_status from a
+	 * caller-supplied 'status' (clone_page(), create_landing_page()).
+	 *
+	 * RC 3.12.1 adversarial review, BLOCK: /elementor/clone and
+	 * /elementor/landing-page registered NO 'args' schema at all, so
+	 * WordPress's has_valid_params() never ran before the callback — the
+	 * ONLY thing standing between a write-scoped key and a published page
+	 * was get_required_scope_for_request()'s own string comparison in
+	 * trait-mcpwp-api-auth.php, which a padded value like ' publish' could
+	 * defeat (see param_value_targets_admin_scope()'s docblock there).
+	 * Both handlers (Mcpwp_Elementor_Pro::clone_page() /
+	 * create_landing_page()) normalize with sanitize_text_field() and
+	 * default to 'draft'. Declaring 'enum' here makes WordPress itself
+	 * reject an out-of-enum value with rest_invalid_param before the gate
+	 * or the handler ever sees it — the same protection /posts, /pages, and
+	 * WooCommerce products already had by construction. Mirrors the
+	 * draft/pending/private/publish set those routes already declare.
+	 *
+	 * @return array
+	 */
+	private function get_status_targeting_write_args() {
+		return array(
+			'status' => array(
+				'type'        => 'string',
+				'enum'        => array( 'draft', 'pending', 'private', 'publish' ),
+				'description' => __( 'Post status for the resulting page.', 'mcpwp' ),
+			),
+		);
+	}
+
+	/**
+	 * Get write arguments for /elementor/build-page.
+	 *
+	 * RC 3.12.1 adversarial review, Requirement 1: Mcpwp_Page_Builder::build()
+	 * is schema-less like clone_page()/create_landing_page() above, but its
+	 * own status handling — a strict in_array( $status, [...], true ) with
+	 * no trimming — happens to fall back to 'draft' for any value that is
+	 * not an exact byte-for-byte 'draft'/'publish'/'private', so a padded
+	 * value like ' publish' was never actually exploitable here (see the
+	 * report's WARN note on this route). That safety is accidental, not
+	 * structural: the absent schema is still the root cause this fix
+	 * addresses network-wide, so this route gets the same 'enum' treatment
+	 * as the four routes that WERE exploitable — matching the handler's own
+	 * accepted set exactly (no 'pending'; Mcpwp_Page_Builder::build() does
+	 * not recognize it).
+	 *
+	 * @return array
+	 */
+	private function get_build_page_write_args() {
+		return array(
+			'status' => array(
+				'type'        => 'string',
+				'enum'        => array( 'draft', 'private', 'publish' ),
+				'description' => __( 'Post status for the built page.', 'mcpwp' ),
+			),
 		);
 	}
 

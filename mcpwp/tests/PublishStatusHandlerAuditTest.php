@@ -17,16 +17,38 @@
  * halves:
  *
  *   1. test_every_caller_controlled_post_status_write_is_triaged() — greps
- *      every file under includes/ for a wp_insert_post()/wp_update_post()
- *      call sitting next to a 'post_status' array key, and fails if that set
- *      of files ever differs from self::AUDITED. This is independent of
- *      $publish_gated_routes' own contents: it does not ask "does the route
- *      table gate this route" (the question BLOCK 1/2 already answered
- *      "no" to, silently), it asks "does a NEW file exist that can even
- *      raise the question at all." A future sibling surface (a Podcasts CPT,
- *      say) making the exact same 'defaults to publish' mistake fails this
- *      test the moment it is written, before anyone has to think to check
- *      the route table for it.
+ *      every file under includes/ for any of several fingerprints of "this
+ *      code writes a status the caller controls" (see file_matches_fingerprint()
+ *      below), and fails if that set of files ever differs from self::AUDITED.
+ *      This is independent of $publish_gated_routes' own contents: it does
+ *      not ask "does the route table gate this route" (the question BLOCK
+ *      1/2 already answered "no" to, silently), it asks "does a NEW file
+ *      exist that can even raise the question at all." A future sibling
+ *      surface (a Podcasts CPT, say) making the exact same 'defaults to
+ *      publish' mistake fails this test the moment it is written, before
+ *      anyone has to think to check the route table for it.
+ *
+ *      RC 3.12.1 adversarial review, Requirement 2 hardening (this fix):
+ *      the ORIGINAL version of this fingerprint — wp_insert_post()/
+ *      wp_update_post() sitting next to the single-quoted literal
+ *      'post_status' — was itself blind to two things:
+ *        a. A double-quoted "post_status" literal escaped detection
+ *           entirely (strpos() looked for the single-quoted form only).
+ *        b. Any object-setter/ORM shape that changes a status WITHOUT ever
+ *           calling wp_insert_post()/wp_update_post() or writing the
+ *           literal 'post_status' key — e.g. WC_Product::set_status()/
+ *           WC_Order::set_status(). This is not a hypothetical: it is
+ *           EXACTLY how includes/pro/core/class-mcpwp-woocommerce.php (the
+ *           file backing BLOCK 2, the WooCommerce archetype-apply bypass)
+ *           was invisible to this audit's own grep even after BLOCK 2 was
+ *           fixed by hand — the fingerprint that was supposed to make this
+ *           class of miss impossible could not see the file that caused it.
+ *      file_matches_fingerprint() now also matches ->set_status(),
+ *      wp_publish_post(), wp_transition_post_status(), and a raw $wpdb
+ *      write (update/insert/replace/query) whose own statement touches
+ *      post_status directly — every shape that changes a WordPress/
+ *      WooCommerce object's status by a path other than the literal
+ *      wp_insert_post()/wp_update_post()+'post_status' pattern.
  *
  *   2. test_every_conditionally_gated_route_actually_requires_admin_for_publish_and_private()
  *      — for every route self::AUDITED says is gated by $publish_gated_routes
@@ -86,6 +108,17 @@ final class PublishStatusHandlerAuditTest extends TestCase {
 		// covered by the /mcpwp/v1/posts and /mcpwp/v1/pages prefixes above —
 		// no separate $publish_gated_routes entry needed.
 		'pro/core/class-mcpwp-multilang.php'           => 'gated: rides the /mcpwp/v1/posts and /mcpwp/v1/pages prefixes (routes are /posts/{id}/translations, /pages/{id}/translations)',
+		// RC 3.12.1 adversarial review, Requirement 2 fix: this file never
+		// calls wp_insert_post()/wp_update_post() and never writes the
+		// literal 'post_status' array key at all — it goes through
+		// WC_Product::set_status()/WC_Order::set_status() instead, an
+		// object-setter/ORM shape the OLD fingerprint could not see at all
+		// (not a false-negative TRIAGE miss — the file was structurally
+		// invisible to the grep). This is exactly BLOCK 2's shape: it is why
+		// the WooCommerce archetype-apply bypass was gated only by a human
+		// noticing, never by this test. The widened fingerprint below
+		// (->set_status() shape) now catches it.
+		'pro/core/class-mcpwp-woocommerce.php'         => 'gated: $product->set_status() at set_product_data() backs /mcpwp/v1/woocommerce/products AND /mcpwp/v1/woocommerce/archetypes/{id}/apply (the BLOCK 2 route — see archetype_apply_targets_publish_status() in api/class-mcpwp-rest-woocommerce.php). $order->set_status() in update_order() is a DIFFERENT, unrelated status vocabulary (WooCommerce order statuses like \'processing\'/\'completed\' — never \'publish\'/\'private\') and carries no publish-gating concern at all; it is listed here only because this file matches the ->set_status() shape the fingerprint now looks for.',
 
 		// ── Already blanket-admin for every request regardless of status —
 		// no conditional gate needed because the WHOLE route already
@@ -139,6 +172,25 @@ final class PublishStatusHandlerAuditTest extends TestCase {
 		'elementor landing-page'      => array( 'POST', '/mcpwp/v1/elementor/landing-page', array( 'title' => 'x' ) ),
 		'elementor clone'             => array( 'POST', '/mcpwp/v1/elementor/clone', array( 'source_id' => 1 ) ),
 		'elementor page'              => array( 'POST', '/mcpwp/v1/elementor/page', array( 'title' => 'x' ) ),
+		// BLOCK 2's route. Whether get_required_scope_for_request() takes its
+		// Mcpwp_REST_WooCommerce::archetype_apply_targets_publish_status()
+		// branch or its request_targets_publish_status() fallback here
+		// depends on whether that class happens to be loaded elsewhere in
+		// this PHP process by the time this test runs (PHPUnit requires
+		// every test file during suite construction, so in a full-suite run
+		// it is virtually always loaded) -- this file does not require it
+		// itself either way. With no archetype seeded in
+		// mcpwp_test_options, BOTH branches resolve 'status' from nothing
+		// but this request's own top-level param, so this assertion is
+		// valid regardless of which one actually ran; see
+		// PublishGatePaddedValueBypassTest, which requires that class
+		// explicitly so its outcome does not depend on load order, and
+		// which is what caught archetype_apply_targets_publish_status()'s
+		// own independent exact-match bug (now fixed alongside this one).
+		// The archetype's OWN stored status (the part only that method can
+		// see) is covered separately by
+		// WooCommerceArchetypeApplyRequiresAdminScopeTest.
+		'woocommerce archetype apply' => array( 'POST', '/mcpwp/v1/woocommerce/archetypes/1/apply', array( 'id' => 1 ) ),
 	);
 
 	protected function setUp(): void {
@@ -160,6 +212,62 @@ final class PublishStatusHandlerAuditTest extends TestCase {
 		return $out;
 	}
 
+	/**
+	 * Does $src contain any known shape of "this file writes a status the
+	 * caller (eventually) controls"? See this file's top docblock for why
+	 * each shape was added.
+	 *
+	 * Deliberately over-inclusive, not under-inclusive: a shape matching a
+	 * file that turns out NOT to be caller-controlled (e.g. a hardcoded
+	 * literal, or a ->set_status() on something unrelated to publish/
+	 * private post visibility) is a one-line triage entry in self::AUDITED.
+	 * A shape that fails to match a file that IS caller-controlled is a
+	 * live, silent security gap — exactly what BLOCK 1/2 were.
+	 *
+	 * @param string $src File contents.
+	 * @return bool
+	 */
+	private function file_matches_fingerprint( string $src ): bool {
+		// Shape 1 (original): wp_insert_post()/wp_update_post() sitting
+		// anywhere in the file alongside a 'post_status' or "post_status"
+		// array-key literal (either quote style — the original only matched
+		// the single-quoted form).
+		if (
+			preg_match( '/\bwp_(?:insert|update)_post\s*\(/', $src )
+			&& preg_match( '/[\'"]post_status[\'"]/', $src )
+		) {
+			return true;
+		}
+
+		// Shape 2: object-setter/ORM shapes that change a status without
+		// ever calling wp_insert_post()/wp_update_post() or writing the
+		// literal 'post_status' key at all — e.g. WC_Product::set_status()/
+		// WC_Order::set_status(). This is the shape that made
+		// class-mcpwp-woocommerce.php (BLOCK 2) invisible to shape 1.
+		if ( preg_match( '/->set_status\s*\(/', $src ) ) {
+			return true;
+		}
+
+		// Shape 3: core helpers that transition a post's status by a path
+		// other than wp_insert_post()/wp_update_post().
+		if ( preg_match( '/\bwp_publish_post\s*\(/', $src ) || preg_match( '/\bwp_transition_post_status\s*\(/', $src ) ) {
+			return true;
+		}
+
+		// Shape 4: a raw $wpdb write (update/insert/replace/query) whose OWN
+		// statement touches post_status directly, bypassing every WP post
+		// API this audit would otherwise see. Scoped to the same statement
+		// (up to the next ';') rather than "anywhere in the file" so this
+		// does not fire on unrelated $wpdb calls sharing a file with
+		// unrelated post_status text (e.g. a docblock or a SELECT nowhere
+		// near a write).
+		if ( preg_match( '/\$wpdb\s*->\s*(?:update|insert|replace|query)\s*\([^;]*post_status/is', $src ) ) {
+			return true;
+		}
+
+		return false;
+	}
+
 	public function test_every_caller_controlled_post_status_write_is_triaged(): void {
 		$root  = dirname( __DIR__ ) . '/includes';
 		$found = array();
@@ -169,10 +277,7 @@ final class PublishStatusHandlerAuditTest extends TestCase {
 			if ( false === $src ) {
 				continue;
 			}
-			if ( ! preg_match( '/\bwp_(insert|update)_post\s*\(/', $src ) ) {
-				continue;
-			}
-			if ( false === strpos( $src, "'post_status'" ) ) {
+			if ( ! $this->file_matches_fingerprint( $src ) ) {
 				continue;
 			}
 			$found[] = ltrim( str_replace( $root, '', $path ), '/' );
@@ -185,13 +290,13 @@ final class PublishStatusHandlerAuditTest extends TestCase {
 		$this->assertSame(
 			$expected,
 			$found,
-			"A file's wp_insert_post()/wp_update_post()+'post_status' fingerprint changed since the RC 3.12.1 adversarial-review " .
-			"fix audited this codebase. This is exactly how BLOCK 1/2 were missed the first time (enumerating routes by hand " .
-			"instead of grepping the handlers) — audit any newly-listed file: is its post_status caller-controlled? If so, is the " .
-			"whole route already blanket-admin regardless of status (an \$admin_routes / \$admin_write_routes entry, or a " .
-			"dynamic-segment regex like the approvals/site-blueprints ones)? If neither, add a \$publish_gated_routes entry (or " .
-			"regex) in get_required_scope_for_request(), a direct scope assertion to ROUTE_SCOPE_CASES below, and an entry here " .
-			'explaining the disposition.'
+			"A file's caller-controlled-status fingerprint (see file_matches_fingerprint()) changed since the RC 3.12.1 " .
+			'adversarial-review fix audited this codebase. This is exactly how BLOCK 1/2 were missed the first time ' .
+			'(enumerating routes by hand instead of grepping the handlers) — audit any newly-listed file: is its status ' .
+			'caller-controlled? If so, is the whole route already blanket-admin regardless of status (an $admin_routes / ' .
+			'$admin_write_routes entry, or a dynamic-segment regex like the approvals/site-blueprints ones)? If neither, add a ' .
+			'$publish_gated_routes entry (or regex) in get_required_scope_for_request(), a direct scope assertion to ' .
+			'ROUTE_SCOPE_CASES below, and an entry here explaining the disposition.'
 		);
 	}
 
@@ -230,6 +335,18 @@ final class PublishStatusHandlerAuditTest extends TestCase {
 	}
 
 	public function route_scope_case_provider(): array {
+		return self::ROUTE_SCOPE_CASES;
+	}
+
+	/**
+	 * Public static accessor so PublishGateSchemaInvariantTest (RC 3.12.1
+	 * adversarial review, WARN) can reuse this exact [method, route, ...]
+	 * list rather than maintaining a second, driftable copy of "every route
+	 * this fix cares about".
+	 *
+	 * @return array
+	 */
+	public static function gated_route_scope_cases(): array {
 		return self::ROUTE_SCOPE_CASES;
 	}
 

@@ -48,6 +48,7 @@ class Mcpwp_REST_Events extends Mcpwp_REST_API {
 					'methods'             => WP_REST_Server::CREATABLE,
 					'callback'            => array( $this, 'create_event' ),
 					'permission_callback' => array( $this, 'check_permission' ),
+					'args'                => $this->get_event_write_args(),
 				),
 			)
 		);
@@ -65,6 +66,7 @@ class Mcpwp_REST_Events extends Mcpwp_REST_API {
 					'methods'             => WP_REST_Server::EDITABLE,
 					'callback'            => array( $this, 'update_event' ),
 					'permission_callback' => array( $this, 'check_permission' ),
+					'args'                => $this->get_event_write_args(),
 				),
 			)
 		);
@@ -103,6 +105,35 @@ class Mcpwp_REST_Events extends Mcpwp_REST_API {
 			'search'   => array(
 				'type'        => 'string',
 				'description' => __( 'Search term.', 'mcpwp' ),
+			),
+		);
+	}
+
+	/**
+	 * Get create/update ("write") arguments for a single event.
+	 *
+	 * RC 3.12.1 adversarial review, BLOCK: create_event()/update_event() had
+	 * no 'args' schema at all — unlike get_events_args() above, which
+	 * already declares 'enum' on the LIST filter's 'status'. Without a
+	 * declared enum, WordPress's has_valid_params() never runs before the
+	 * callback, so a padded value (e.g. ' publish') that defeated the old
+	 * exact-match publish-scope gate (get_required_scope_for_request() /
+	 * param_value_targets_admin_scope() in trait-mcpwp-api-auth.php) could
+	 * still reach Mcpwp_Events::create_event()/update_event(), which
+	 * normalizes with sanitize_key() and would have accepted it as
+	 * 'publish'. Declaring 'enum' here closes that gap the same way the
+	 * schema-carrying routes (posts, pages, WooCommerce products) always
+	 * were — WordPress itself rejects an out-of-enum value with
+	 * rest_invalid_param before the gate or the handler ever sees it.
+	 *
+	 * @return array
+	 */
+	private function get_event_write_args() {
+		return array(
+			'status' => array(
+				'type'        => 'string',
+				'enum'        => array( 'draft', 'pending', 'private', 'publish' ),
+				'description' => __( 'Event status.', 'mcpwp' ),
 			),
 		);
 	}

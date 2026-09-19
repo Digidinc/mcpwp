@@ -201,6 +201,7 @@ class Mcpwp_REST_WooCommerce extends Mcpwp_REST_API {
 				'methods'             => WP_REST_Server::CREATABLE,
 				'callback'            => array( $this, 'apply_product_archetype' ),
 				'permission_callback' => array( $this, 'check_permission' ),
+				'args'                => $this->get_archetype_apply_args(),
 			)
 		);
 
@@ -608,6 +609,43 @@ class Mcpwp_REST_WooCommerce extends Mcpwp_REST_API {
 				'type'        => 'string',
 				'format'      => 'date-time',
 				'description' => __( 'End date (ISO 8601).', 'mcpwp' ),
+			),
+		);
+	}
+
+	/**
+	 * Get write arguments for POST /woocommerce/archetypes/{id}/apply.
+	 *
+	 * RC 3.12.1 adversarial review, BLOCK 2: this route registered NO 'args'
+	 * schema at all — unlike get_product_create_args() above, which already
+	 * declares 'enum' on 'status' for POST /woocommerce/products. A
+	 * caller-supplied 'status' override here reaches
+	 * extract_product_override_payload() -> Mcpwp_WooCommerce::
+	 * set_product_data() (sanitize_key( $data['status'] )) with nothing
+	 * validating it first, so a padded value like ' publish' could defeat
+	 * the publish-scope gate the same way it could on the four sibling
+	 * routes this fix closes. Declaring 'enum' here makes WordPress itself
+	 * reject an out-of-enum value before either the gate or the handler
+	 * ever sees it.
+	 *
+	 * Deliberately NO 'default' on 'status' here, unlike
+	 * get_product_create_args(): this route's override is optional by
+	 * design — when the caller omits it, the archetype's OWN stored
+	 * product_data status applies (see apply_product_archetype() and
+	 * archetype_apply_targets_publish_status() below, which is why THIS
+	 * route cannot rely on the plain request_targets_publish_status() check
+	 * alone). Injecting a default would silently clobber that stored value
+	 * on every apply call that omits an explicit override — a behavior
+	 * change this fix is not meant to make.
+	 *
+	 * @return array
+	 */
+	private function get_archetype_apply_args() {
+		return array(
+			'status' => array(
+				'type'        => 'string',
+				'enum'        => array( 'draft', 'pending', 'private', 'publish' ),
+				'description' => __( 'Optional product status override.', 'mcpwp' ),
 			),
 		);
 	}
@@ -1219,6 +1257,24 @@ class Mcpwp_REST_WooCommerce extends Mcpwp_REST_API {
 	 * resolve scope before any controller is constructed — see
 	 * PRODUCT_ARCHETYPES_OPTION_KEY's docblock.
 	 *
+	 * RC 3.12.1 adversarial review, follow-up hardening (this fix): this
+	 * method had its OWN independent `in_array( strtolower( $status ), [...],
+	 * true )` exact-match check — a second, separate instance of the exact
+	 * same defect this fix closes in
+	 * Mcpwp_Api_Auth::param_value_targets_admin_scope(). Because
+	 * get_required_scope_for_request() dispatches to THIS method instead of
+	 * request_targets_publish_status()/param_value_targets_admin_scope()
+	 * whenever Mcpwp_REST_WooCommerce is loaded (see the docblock on that
+	 * branch), fixing only the trait's comparison would have left this
+	 * route's real bypass wide open — caught by
+	 * PublishGatePaddedValueBypassTest, which failed here specifically
+	 * because that test suite loads Mcpwp_REST_WooCommerce elsewhere and so
+	 * exercises this exact branch, not the trait's fallback. Normalized with
+	 * sanitize_key() for the same reason as param_value_targets_admin_scope()
+	 * — it is the more aggressive of set_product_data()'s own
+	 * sanitize_key( $data['status'] ) call, so this check can never be
+	 * narrower than what the handler actually does with the value.
+	 *
 	 * @param int|string       $archetype_id Archetype ID from the route.
 	 * @param WP_REST_Request  $request      Request object.
 	 * @return bool True when the effective status is 'publish' or 'private'.
@@ -1246,6 +1302,6 @@ class Mcpwp_REST_WooCommerce extends Mcpwp_REST_API {
 			$status = (string) $params['status'];
 		}
 
-		return in_array( strtolower( $status ), array( 'publish', 'private' ), true );
+		return in_array( sanitize_key( $status ), array( 'publish', 'private' ), true );
 	}
 }

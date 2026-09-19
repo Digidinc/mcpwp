@@ -1923,6 +1923,42 @@ trait Mcpwp_Api_Auth {
 	 * 3.12.1 adversarial review). See request_targets_publish_status()'s
 	 * docblock for why 'private' is included and 'future' deliberately is not.
 	 *
+	 * RC 3.12.1 adversarial review, BLOCK: this used to compare
+	 * strtolower( (string) $value ) against ('publish', 'private') with an
+	 * EXACT match. Most gated routes never noticed because their own
+	 * register_routes() declares an 'enum' on 'status', so WordPress rejects
+	 * an out-of-enum value with rest_invalid_param before the callback (and
+	 * this gate's own admin-scope check earlier in dispatch) ever sees a
+	 * value that could reach a handler. Five routes registered NO args
+	 * schema at all on their write methods (see the five register_routes()
+	 * additions this fix makes — 'enum' now closes that gap directly), and
+	 * every one of their handlers normalizes the raw value before using it:
+	 * Mcpwp_Events::create_event()/update_event() and
+	 * Mcpwp_WooCommerce::set_product_data() call sanitize_key( $data['status'] ),
+	 * Mcpwp_Elementor_Pro::clone_page()/create_landing_page() call
+	 * sanitize_text_field(). A value like ' publish' (leading space),
+	 * "publish\n", or a unicode-whitespace-padded variant fails this
+	 * method's old exact match (scope stayed 'write') but normalized to the
+	 * literal 'publish' in every one of those handlers — a live bypass.
+	 *
+	 * The fix: run the SAME normalization here that the handlers run.
+	 * sanitize_key() is the strictly more aggressive of the two downstream
+	 * normalizers — it deletes every byte outside [a-z0-9_-] anywhere in the
+	 * string (not only at the edges), so it already swallows ASCII space and
+	 * tab, every unicode whitespace/format/control character (non-breaking
+	 * space, zero-width space, line/paragraph separators, NUL, etc. — none
+	 * of those are in [a-z0-9_-], so they are stripped unconditionally
+	 * without needing to be enumerated by name here), and it is a superset
+	 * of what sanitize_text_field()'s trim-and-collapse does for this
+	 * specific padding-based bypass shape (a clean 'publish'/'private'
+	 * token surrounded by whitespace/control padding — the only shape this
+	 * gate needs to reason about, since it is a status ENUM check, not a
+	 * free-text field). Using sanitize_key() here therefore can never be
+	 * NARROWER than the most permissive downstream normalizer: any input
+	 * that lands on 'publish'/'private' via sanitize_text_field() also
+	 * lands there via sanitize_key(), so the gate is always at least as
+	 * inclusive as the handler it protects.
+	 *
 	 * @param array  $params Params array.
 	 * @param string $key    Key to inspect.
 	 * @return bool
@@ -1932,7 +1968,9 @@ trait Mcpwp_Api_Auth {
 			return false;
 		}
 
-		return in_array( strtolower( (string) $params[ $key ] ), array( 'publish', 'private' ), true );
+		$normalized = sanitize_key( (string) $params[ $key ] );
+
+		return in_array( $normalized, array( 'publish', 'private' ), true );
 	}
 
 	/**
