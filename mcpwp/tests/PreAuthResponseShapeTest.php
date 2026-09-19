@@ -107,9 +107,30 @@ final class PreAuthResponseShapeTest extends TestCase {
 	 * @return array<int,array{route:string,method:string,callback:callable}>
 	 */
 	private function id_routes(): array {
+		// Every controller under includes/api/ that registers a route with an
+		// id-shaped parameter (grepped for `(?P<id>` at the time this list was
+		// last widened — #670 follow-up audit, 2026-09-19). A controller added
+		// later that never appears here would silently narrow this invariant
+		// back down to the two classes it started with, so
+		// test_the_harness_actually_found_routes_to_check() stays the backstop:
+		// it fails loudly if this list (or a future one) stops finding routes.
 		$controllers = array(
 			Mcpwp_REST_Pages::class,
 			Mcpwp_REST_Menus::class,
+			Mcpwp_REST_Posts::class,
+			Mcpwp_REST_Media::class,
+			Mcpwp_REST_Elementor::class,
+			Mcpwp_REST_Blocks::class,
+			Mcpwp_REST_Content::class,
+			Mcpwp_REST_Approvals::class,
+			Mcpwp_REST_Webhooks::class,
+			Mcpwp_REST_SEO_Audit::class,
+			Mcpwp_REST_Content_Quality::class,
+			Mcpwp_REST_Site_Library::class,
+			Mcpwp_REST_Site_Taxonomy::class,
+			Mcpwp_REST_Site_Blueprints::class,
+			Mcpwp_REST_Site_Content::class,
+			Mcpwp_REST_Site_Updates::class,
 		);
 
 		foreach ( $controllers as $class ) {
