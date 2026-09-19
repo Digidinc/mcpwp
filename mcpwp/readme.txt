@@ -153,6 +153,19 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 
 == Changelog ==
 
+= 3.12.0 =
+**Security — upgrade promptly if you issue role-scoped API keys.** Both issues below are privilege escalation within an already-issued credential; neither is remotely exploitable without a valid API key.
+* security: role-scoped API keys were enforced only for MCP tool calls. Direct REST requests and /batch operations skipped the key's role restriction, so a key narrowed to one area could reach any tool category by calling the route directly. Now enforced on all four authentication paths. If you issued narrow keys to contractors, agencies or integrations, assume they had full reach before this release ([#875](https://github.com/Mumega-com/mcpwp/issues/875))
+* security: Free and Freemius builds granted Pro when wp-config.php defined MCPWP_PRO. The constant no longer grants anything ([#863](https://github.com/Mumega-com/mcpwp/issues/863))
+* security: 59 tools were classified below the scope their own route required; the two tables are now asserted equal across all 295 route-mapped tools ([#874](https://github.com/Mumega-com/mcpwp/issues/874))
+* note: the mcpwp_api_agent role gains edit_published_posts and edit_published_pages on upgrade. The plugin already wrote to published pages by bypassing WordPress's denial; the role now says so openly, so those writes create revisions and run Elementor's real save pipeline. A capability you deliberately removed is not re-granted ([#861](https://github.com/Mumega-com/mcpwp/issues/861))
+* fix: Elementor Custom Code was completely non-functional — snippets were stored with a location Elementor never queries for, the metadata Elementor renders from was never written, and <script> was stripped, making GA4/GTM tags inert. Existing snippets are repaired automatically ([#871](https://github.com/Mumega-com/mcpwp/issues/871), [#873](https://github.com/Mumega-com/mcpwp/issues/873))
+* fix: Elementor writes on published pages reported success when the save had failed ([#861](https://github.com/Mumega-com/mcpwp/issues/861))
+* fix: unknown Elementor template types were silently rewritten to "page"; they are now refused, listing the types this site actually has ([#827](https://github.com/Mumega-com/mcpwp/issues/827))
+* fix: large read responses can be narrowed with opt-in projection parameters — a widget schema drops from ~120KB to ~3KB. Responses are unchanged unless you ask ([#830](https://github.com/Mumega-com/mcpwp/issues/830))
+* fix: parameter names made consistent across sibling tools, old names kept as deprecated aliases; also fixes wp_get_elementor_widgets, whose documented filter was never read ([#831](https://github.com/Mumega-com/mcpwp/issues/831))
+* fix: the Custom Code repair migration could never finish on a site with many snippets; it is now batched behind a lock with a checkpointed cursor
+
 = 3.11.1 =
 * feat: **mcp:** wp_batch, per-request spend budget, fixed bulk weights, plugin_version in _meta ([#802](https://github.com/Mumega-com/mcpwp/issues/802), [#752](https://github.com/Mumega-com/mcpwp/issues/752) F9) ([#848](https://github.com/Mumega-com/mcpwp/issues/848))
 * fix: 3.11.1 follow-ups — WooCommerce product facts, webhook log redaction, settings checkboxes, Freemius ZIP verify ([#846](https://github.com/Mumega-com/mcpwp/issues/846))
