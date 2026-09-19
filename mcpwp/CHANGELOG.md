@@ -8,9 +8,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [3.13.0](https://github.com/Mumega-com/mcpwp/compare/v3.12.0...v3.13.0) (2026-09-19)
 
 
-### Bug Fixes
+### ⚠️ Breaking: a write-scoped API key can no longer publish
 
-* 3.13.0 — publish requires admin scope, agent role least-privilege, version oracle, chat auth bridge ([#877](https://github.com/Mumega-com/mcpwp/issues/877)) ([8ca6d7b](https://github.com/Mumega-com/mcpwp/commit/8ca6d7b4dcba1eba64fcd87afe17d54ea1f1df55))
+Publishing now requires an **admin-scoped** key. An integration that sets
+`status=publish` (or `private`, or `future`) with a write-scoped key will receive
+`403 insufficient_scope` after this upgrade. **Mint an admin-scoped key for those
+automations.**
+
+This breaks working setups, deliberately. The previous behaviour was not a
+considered grant: no publish capability check existed anywhere, and adding one
+would have been meaningless, because every API key authenticates as the *same
+shared* `mcpwp_api_agent` WordPress user, which holds `publish_posts` and
+`publish_pages` unconditionally. The key's scope tier was the only real boundary,
+and `write` cleared it.
+
+Now admin-scoped on every surface that can publish: `/posts`, `/pages` and their
+clone and translation paths; `/woocommerce/products` and
+`/woocommerce/archetypes/{id}/apply`; all of `/learnpress` (courses, lessons,
+quizzes); `/events`; and the Elementor page-creation routes (`/elementor/page`,
+`/elementor/build-page`, `/elementor/landing-page`, `/elementor/clone`).
+
+Two of those published with **no caller input at all**: LearnPress
+`create_lesson()` and `create_quiz()` defaulted `post_status` to `publish`, so a
+zero-argument call from a write-scoped key produced a live, enrollable lesson. A
+WooCommerce archetype can carry its own stored `publish` default, so applying one
+with no status override put a live product on the storefront.
+
+### Security
+
+* **The agent role held `mcpwp_manage_settings`**
+  ([#669](https://github.com/Mumega-com/mcpwp/issues/669)). Because every key
+  authenticates as that one shared user, `current_user_can('mcpwp_manage_settings')`
+  was trivially true for *every* authenticated key — collapsing the capability half
+  of the gate on `/api-keys` (list, create, revoke), `/rate-limit` (settings and
+  reset) and the plugin self-update trigger. Only the key's own scope stood in the
+  way. The capability is now administrator-only, and the API-key routes check the
+  matched key's own scope instead. A one-time migration strips it from existing
+  installs.
+* **`/openapi.json` disclosed the exact plugin version to anonymous callers**
+  ([#607](https://github.com/Mumega-com/mcpwp/issues/607)) — pre-auth
+  fingerprinting for CVE targeting. It no longer does.
+* **The admin Chat tool-execution bridge was failing 100% of the time** (#607) —
+  its action allowlist and nonce name matched nothing actually registered. Fixed,
+  and a vestigial `mcpwp_bypass_api_key_check` filter removed. That filter has no
+  consumer anywhere, but code that reads as though a global authorization bypass
+  is still wired is an invitation to re-wire one.
+* All ten routes using `permission_callback => '__return_true'` were audited
+  individually rather than accepted as "deliberately public". All ten are sound.
+
+### Verified — no code change needed
+
+* **[#670](https://github.com/Mumega-com/mcpwp/issues/670)** (pre-auth enumeration
+  oracle) is present on neither `main` nor the wp.org branch, contrary to the
+  issue's own text. All 228 `permission_callback` registrations across 34
+  controllers were audited. The standing guard was hardened instead: it covered 2
+  controllers — a list predating most of the API — and now covers 20 controllers
+  and 92 (route, method) pairs, mutation-verified.
+* **[#547](https://github.com/Mumega-com/mcpwp/issues/547)** (dead white-label
+  hostname routing) was already removed in `b7148ee`. Verified by exhaustive
+  search: zero matches for any of the shapes it describes.
+
+### Upgrade notes
+
+* Existing WooCommerce archetypes that stored a `future` status are now refused
+  for write-scoped keys and resolve to `draft` even for an admin key.
+* No other behaviour changes. Draft creation, content editing, media, SEO and
+  read operations are unaffected at write scope.
 
 ## [3.12.0](https://github.com/Mumega-com/mcpwp/compare/v3.11.1...v3.12.0) (2026-09-19)
 
