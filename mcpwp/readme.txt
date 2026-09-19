@@ -6,7 +6,7 @@ Requires at least: 6.1
 Tested up to: 7.0
 Requires PHP: 7.4
 <!-- x-release-please-start-version -->
-Stable tag: 3.12.0
+Stable tag: 3.13.0
 <!-- x-release-please-end -->
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -152,6 +152,17 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 4. Integrations and Chat — connected services plus safety-first agent workflow
 
 == Changelog ==
+
+= 3.13.0 =
+**BREAKING — a write-scoped API key can no longer publish.** Publishing now requires an admin-scoped key. Any integration that sets status=publish (or private, or future) with a write-scoped key will get 403 insufficient_scope after this upgrade. Mint an admin-scoped key for those automations.
+This breaks working setups deliberately. No publish capability check existed anywhere, and adding one would have been meaningless: every API key authenticates as the same shared mcpwp_api_agent user, which holds publish_posts and publish_pages unconditionally. The key's scope tier was the only real boundary and "write" cleared it. Two surfaces published with no caller input at all — LearnPress create_lesson()/create_quiz() defaulted to publish, so a zero-argument call from a write-scoped key produced a live enrollable lesson; and a WooCommerce archetype carrying a stored publish default put a live product on the storefront when applied with no status override.
+Now admin-scoped: /posts, /pages and their clone and translation paths; /woocommerce/products and /woocommerce/archetypes/{id}/apply; all of /learnpress; /events; and the Elementor page-creation routes.
+* security: the mcpwp_api_agent role held mcpwp_manage_settings, so the capability half of the gate on /api-keys, /rate-limit and the plugin self-update trigger was trivially satisfied for every authenticated key. Now administrator-only, with the API-key routes checking the key's own scope; a one-time migration strips it from existing installs ([#669](https://github.com/Mumega-com/mcpwp/issues/669))
+* security: /openapi.json disclosed the exact plugin version to anonymous callers — pre-auth fingerprinting for CVE targeting ([#607](https://github.com/Mumega-com/mcpwp/issues/607))
+* security: the admin Chat tool-execution bridge was failing 100% of the time (its action allowlist and nonce name matched nothing registered); fixed, and a vestigial mcpwp_bypass_api_key_check filter removed ([#607](https://github.com/Mumega-com/mcpwp/issues/607))
+* verified, no change needed: the pre-auth enumeration oracle ([#670](https://github.com/Mumega-com/mcpwp/issues/670)) is present on neither tree despite the issue's own text — all 228 permission_callback registrations audited; the standing guard was widened from 2 to 20 controllers and mutation-verified instead
+* verified, no change needed: dead white-label hostname routing ([#547](https://github.com/Mumega-com/mcpwp/issues/547)) was already removed in b7148ee
+* note: existing WooCommerce archetypes storing a "future" status are now refused for write-scoped keys and resolve to draft even for an admin key. Draft creation, content editing, media, SEO and read operations are unaffected at write scope.
 
 = 3.12.0 =
 **Security — upgrade promptly if you issue role-scoped API keys.** Both issues below are privilege escalation within an already-issued credential; neither is remotely exploitable without a valid API key.
