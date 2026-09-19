@@ -27,6 +27,34 @@
 
 use PHPUnit\Framework\TestCase;
 
+// This file's own controller list (CONTROLLERS below) is the thing under
+// test — do not rely on some OTHER test file in the suite having already
+// require_once'd a given controller by coincidence of PHPUnit's file/run
+// order. tests/bootstrap.php itself only loads Mcpwp_REST_Pages,
+// Mcpwp_REST_Menus, Mcpwp_REST_Media and Mcpwp_REST_Site_Updates; every
+// other class in CONTROLLERS was, before this, reachable only because some
+// unrelated test happened to load it first when the full suite ran —
+// Mcpwp_REST_Webhooks had no such accidental loader at all and was
+// discovering zero routes even in the widened list, invisibly, until
+// test_the_harness_actually_found_routes_to_check() below started requiring
+// a positive count per controller and caught it.
+require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-posts.php';
+require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-elementor.php';
+require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-blocks.php';
+require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-content.php';
+require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-approvals.php';
+require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-webhooks.php';
+require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-seo-audit.php';
+require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-content-quality.php';
+require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-site-library.php';
+require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-site-taxonomy.php';
+require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-site-blueprints.php';
+require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-site-content.php';
+require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-action-log.php';
+require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-site-memory.php';
+require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-site-network.php';
+require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-integrations.php';
+
 final class PreAuthResponseShapeTest extends TestCase {
 
 	private const PUBLISHED_PAGE = 8300;
@@ -102,40 +130,98 @@ final class PreAuthResponseShapeTest extends TestCase {
 	}
 
 	/**
-	 * Registered routes that take an id, as {route, method, permission callback}.
+	 * Every controller under includes/api/ believed to register a route with
+	 * an id-shaped path parameter. Membership here is a claim, not proof —
+	 * discover_id_routes() below is what proves it, by requiring every entry
+	 * to actually contribute at least one discovered route
+	 * (test_the_harness_actually_found_routes_to_check()). A controller
+	 * added later that never appears in this array is invisible to the
+	 * whole file, the same way these four were before this list grew from
+	 * 16 to 20 (RC 3.12.1 review, 2026-09-19): Mcpwp_REST_Action_Log
+	 * (`log_id`), Mcpwp_REST_Site_Memory (`namespace`/`key`),
+	 * Mcpwp_REST_Site_Network (`name`/`topic`), Mcpwp_REST_Integrations
+	 * (`provider`).
+	 */
+	private const CONTROLLERS = array(
+		Mcpwp_REST_Pages::class,
+		Mcpwp_REST_Menus::class,
+		Mcpwp_REST_Posts::class,
+		Mcpwp_REST_Media::class,
+		Mcpwp_REST_Elementor::class,
+		Mcpwp_REST_Blocks::class,
+		Mcpwp_REST_Content::class,
+		Mcpwp_REST_Approvals::class,
+		Mcpwp_REST_Webhooks::class,
+		Mcpwp_REST_SEO_Audit::class,
+		Mcpwp_REST_Content_Quality::class,
+		Mcpwp_REST_Site_Library::class,
+		Mcpwp_REST_Site_Taxonomy::class,
+		Mcpwp_REST_Site_Blueprints::class,
+		Mcpwp_REST_Site_Content::class,
+		Mcpwp_REST_Site_Updates::class,
+		Mcpwp_REST_Action_Log::class,
+		Mcpwp_REST_Site_Memory::class,
+		Mcpwp_REST_Site_Network::class,
+		Mcpwp_REST_Integrations::class,
+	);
+
+	/**
+	 * Floor for the number of id-bearing (route, method) pairs discovery
+	 * must find. Set to what discover_id_routes() actually finds today
+	 * (raise it when a route is added; a drop below it means something that
+	 * used to be covered stopped being found, and test_the_harness_
+	 * actually_found_routes_to_check() must fail rather than pass quietly
+	 * over a thinner list).
+	 */
+	private const MIN_EXPECTED_ROUTES = 92;
+
+	/**
+	 * Registered routes that take one or more id-shaped path parameters, as
+	 * {route, method, params, callback}. One entry per (route, HTTP method)
+	 * pair — a route registered for POST,PUT,PATCH under
+	 * WP_REST_Server::EDITABLE yields three entries, not one silently
+	 * tested as GET.
 	 *
-	 * @return array<int,array{route:string,method:string,callback:callable}>
+	 * @return array<int,array{route:string,method:string,params:string[],callback:callable}>
 	 */
 	private function id_routes(): array {
-		// Every controller under includes/api/ that registers a route with an
-		// id-shaped parameter (grepped for `(?P<id>` at the time this list was
-		// last widened — #670 follow-up audit, 2026-09-19). A controller added
-		// later that never appears here would silently narrow this invariant
-		// back down to the two classes it started with, so
-		// test_the_harness_actually_found_routes_to_check() stays the backstop:
-		// it fails loudly if this list (or a future one) stops finding routes.
-		$controllers = array(
-			Mcpwp_REST_Pages::class,
-			Mcpwp_REST_Menus::class,
-			Mcpwp_REST_Posts::class,
-			Mcpwp_REST_Media::class,
-			Mcpwp_REST_Elementor::class,
-			Mcpwp_REST_Blocks::class,
-			Mcpwp_REST_Content::class,
-			Mcpwp_REST_Approvals::class,
-			Mcpwp_REST_Webhooks::class,
-			Mcpwp_REST_SEO_Audit::class,
-			Mcpwp_REST_Content_Quality::class,
-			Mcpwp_REST_Site_Library::class,
-			Mcpwp_REST_Site_Taxonomy::class,
-			Mcpwp_REST_Site_Blueprints::class,
-			Mcpwp_REST_Site_Content::class,
-			Mcpwp_REST_Site_Updates::class,
-		);
+		return $this->discover_id_routes()['routes'];
+	}
 
-		foreach ( $controllers as $class ) {
-			if ( class_exists( $class ) ) {
-				( new $class() )->register_routes();
+	/**
+	 * Route discovery plus a per-controller contribution count, so the
+	 * backstop test can assert not just "found something" but "every listed
+	 * controller found something".
+	 *
+	 * Discovery matches ANY single named capture group — `(?P<name>...)` for
+	 * any `name`, not the literal substring `(?P<id>` — because the id-shaped
+	 * parameter is not always spelled `id`. The literal-substring version of
+	 * this method listed Mcpwp_REST_Menus as covered while silently finding
+	 * zero of its routes: `/menus/(?P<menu_id>\d+)` and
+	 * `/menus/(?P<menu_id>\d+)/items/(?P<item_id>\d+)` never contain the
+	 * substring `(?P<id>`. The same gap hid four whole controllers that were
+	 * simply absent from the list (see CONTROLLERS above).
+	 *
+	 * @return array{routes: array<int,array{route:string,method:string,params:string[],callback:callable}>, controllers: array<class-string,int>}
+	 */
+	private function discover_id_routes(): array {
+		$controller_counts = array_fill_keys( self::CONTROLLERS, 0 );
+
+		foreach ( self::CONTROLLERS as $class ) {
+			if ( ! class_exists( $class ) ) {
+				continue;
+			}
+
+			$before = count( $GLOBALS['_mcpwp_test_registered_routes'] );
+			( new $class() )->register_routes();
+			$after = count( $GLOBALS['_mcpwp_test_registered_routes'] );
+
+			// Tag each route this controller just registered so contribution
+			// can be counted per controller below, without changing the
+			// shared register_rest_route() double that every other test file
+			// in this suite also relies on.
+			for ( $i = $before; $i < $after; $i++ ) {
+				$GLOBALS['_mcpwp_test_registered_routes'][ $i ]['_discovered_by'] = $class;
 			}
 		}
 
@@ -144,9 +230,12 @@ final class PreAuthResponseShapeTest extends TestCase {
 		foreach ( $GLOBALS['_mcpwp_test_registered_routes'] as $registered ) {
 			$route = (string) $registered['route'];
 
-			if ( false === strpos( $route, '(?P<id>' ) ) {
+			if ( ! preg_match_all( '/\(\?P<([A-Za-z_][A-Za-z0-9_]*)>[^)]*\)/', $route, $matches ) ) {
 				continue;
 			}
+
+			$param_names = $matches[1];
+			$controller  = $registered['_discovered_by'] ?? null;
 
 			// register_rest_route() accepts one endpoint or a list of them.
 			$endpoints = isset( $registered['args'][0] ) ? $registered['args'] : array( $registered['args'] );
@@ -159,15 +248,28 @@ final class PreAuthResponseShapeTest extends TestCase {
 					continue;
 				}
 
-				$found[] = array(
-					'route'    => $route,
-					'method'   => isset( $endpoint['methods'] ) ? (string) $endpoint['methods'] : 'GET',
-					'callback' => $endpoint['permission_callback'],
-				);
+				$methods_raw = isset( $endpoint['methods'] ) ? (string) $endpoint['methods'] : 'GET';
+				$methods     = array_filter( array_map( 'trim', explode( ',', $methods_raw ) ) );
+
+				foreach ( $methods as $method ) {
+					$found[] = array(
+						'route'    => $route,
+						'method'   => $method,
+						'params'   => $param_names,
+						'callback' => $endpoint['permission_callback'],
+					);
+
+					if ( null !== $controller && isset( $controller_counts[ $controller ] ) ) {
+						++$controller_counts[ $controller ];
+					}
+				}
 			}
 		}
 
-		return $found;
+		return array(
+			'routes'      => $found,
+			'controllers' => $controller_counts,
+		);
 	}
 
 	/**
@@ -198,11 +300,36 @@ final class PreAuthResponseShapeTest extends TestCase {
 	}
 
 	public function test_the_harness_actually_found_routes_to_check(): void {
-		// Without this, a refactor that renames the id parameter turns every
-		// assertion below into a vacuous pass over an empty list — the exact
-		// "test passes for the wrong reason" shape this suite has been bitten
-		// by before.
-		$this->assertNotEmpty( $this->id_routes(), 'No id-bearing route was discovered; the invariant below would assert nothing.' );
+		$discovery = $this->discover_id_routes();
+
+		// Without this, a refactor that renames an id parameter — or drops a
+		// controller from CONTROLLERS above — turns every assertion below
+		// into a vacuous pass over an empty or thinner list, the exact "test
+		// passes for the wrong reason" shape this suite has been bitten by
+		// before: Mcpwp_REST_Menus sat in the controller list contributing
+		// zero routes, and nothing failed.
+		$this->assertGreaterThanOrEqual(
+			self::MIN_EXPECTED_ROUTES,
+			count( $discovery['routes'] ),
+			'Fewer id-bearing (route, method) pairs were discovered than expected; the invariant below would assert less than it claims to.'
+		);
+
+		// A non-empty total is not the same guarantee as "nobody on the list
+		// is being silently skipped" — a controller listed in CONTROLLERS
+		// that discovers zero routes (a renamed param, a route pattern the
+		// regex above stops matching, a controller class that quietly stops
+		// registering routes) must fail loudly here instead of just shrinking
+		// the total that the assertion above still happens to clear.
+		foreach ( $discovery['controllers'] as $class => $count ) {
+			$this->assertGreaterThan(
+				0,
+				$count,
+				sprintf(
+					'%s is listed in CONTROLLERS but contributed zero id-bearing routes — it is being silently skipped by discovery, the same way Mcpwp_REST_Menus was before this test widened its matching.',
+					$class
+				)
+			);
+		}
 	}
 
 	public function test_an_anonymous_caller_cannot_tell_targets_apart(): void {
@@ -220,10 +347,20 @@ final class PreAuthResponseShapeTest extends TestCase {
 				// code under test.
 				$this->reset_request_state();
 
+				// Substitute the probe id into every named parameter the route
+				// declares (a route can carry more than one, e.g. Menus'
+				// menu_id + item_id), not just one hardcoded as `id`.
+				$path   = $entry['route'];
+				$params = array();
+				foreach ( $entry['params'] as $name ) {
+					$path            = preg_replace( '/\(\?P<' . preg_quote( $name, '/' ) . '>[^)]*\)/', (string) $id, $path, 1 );
+					$params[ $name ] = $id;
+				}
+
 				$request = new WP_REST_Request(
-					'GET',
-					'/mcpwp/v1' . str_replace( '(?P<id>\d+)', (string) $id, $entry['route'] ),
-					array( 'id' => $id )
+					$entry['method'],
+					'/mcpwp/v1' . $path,
+					$params
 				);
 
 				$responses[ $label ] = $this->describe( call_user_func( $entry['callback'], $request ) );

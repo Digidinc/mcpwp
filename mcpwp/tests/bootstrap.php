@@ -82,6 +82,21 @@ class WP_User
  * migration (has_cap/add_cap/remove_cap against a plain associative array),
  * mirroring core's own WP_Role shape closely enough that production code
  * written against the real class needs no changes to run against this double.
+ *
+ * Deliberately NOT a model of WordPress's real role storage: in core, every
+ * role lives inside ONE option (`wp_user_roles`), and add_cap()/remove_cap()
+ * each read-modify-write that whole option — every role, every capability —
+ * not just the single capability named. This double instead keeps each
+ * role as its own independent object in $GLOBALS['mcpwp_test_roles'], so
+ * add_cap()/remove_cap() here mutate only that one role's array in memory.
+ * That means tests built on this double (e.g.
+ * AgentRoleManageSettingsCapabilityTest) can verify the CAPABILITY-level
+ * behaviour of the activator migrations, but they cannot exercise or refute
+ * anything about the single-option round-trip mechanism — do not read a
+ * green result here as evidence about concurrent-write/race behaviour
+ * against the real wp_user_roles option (see the docblock in mcpwp.php
+ * above strip_agent_manage_settings_capability()'s registration for what is
+ * and is not actually established there).
  */
 class WP_Role
 {
