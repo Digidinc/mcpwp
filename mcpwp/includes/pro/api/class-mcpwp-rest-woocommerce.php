@@ -16,9 +16,22 @@ class Mcpwp_REST_WooCommerce extends Mcpwp_REST_API {
 	/**
 	 * Option key storing product archetype definitions.
 	 *
+	 * A class constant (not just the instance property below) so
+	 * Mcpwp_Api_Auth::get_required_scope_for_request() — which must resolve a
+	 * request's required scope BEFORE any controller is instantiated — can
+	 * read the same option via a static call. See
+	 * archetype_apply_targets_publish_status().
+	 *
 	 * @var string
 	 */
-	private $product_archetypes_option_key = 'mcpwp_wc_product_archetypes';
+	const PRODUCT_ARCHETYPES_OPTION_KEY = 'mcpwp_wc_product_archetypes';
+
+	/**
+	 * Option key storing product archetype definitions.
+	 *
+	 * @var string
+	 */
+	private $product_archetypes_option_key = self::PRODUCT_ARCHETYPES_OPTION_KEY;
 
 	/**
 	 * Option key storing next product archetype ID.
@@ -1184,5 +1197,55 @@ class Mcpwp_REST_WooCommerce extends Mcpwp_REST_API {
 		}
 
 		return $payload;
+	}
+
+	/**
+	 * Whether applying archetype $archetype_id, together with this request's
+	 * overrides, would result in a 'publish' or 'private' product status.
+	 *
+	 * RC 3.12.1 adversarial review, BLOCK 2 follow-up: a plain per-request
+	 * check (Mcpwp_Api_Auth::request_targets_publish_status(), which only ever
+	 * looks at $request's own params) is not enough for this route. The
+	 * archetype's STORED product_data can already carry 'status' => 'publish'
+	 * from whenever the archetype was defined — apply_product_archetype()
+	 * merges the request's overrides ON TOP of that stored data, so a caller
+	 * who sends zero status-related params at all can still end up publishing
+	 * a live product, as long as they know an archetype ID whose template
+	 * already defaults to publish. This mirrors that exact merge order
+	 * (archetype data first, request override wins) so the scope check and
+	 * the handler never disagree about the resulting status.
+	 *
+	 * Called statically from get_required_scope_for_request(), which must
+	 * resolve scope before any controller is constructed — see
+	 * PRODUCT_ARCHETYPES_OPTION_KEY's docblock.
+	 *
+	 * @param int|string       $archetype_id Archetype ID from the route.
+	 * @param WP_REST_Request  $request      Request object.
+	 * @return bool True when the effective status is 'publish' or 'private'.
+	 */
+	public static function archetype_apply_targets_publish_status( $archetype_id, $request ) {
+		$status = '';
+
+		$items = get_option( self::PRODUCT_ARCHETYPES_OPTION_KEY, array() );
+		if ( is_array( $items ) ) {
+			foreach ( $items as $item ) {
+				if ( isset( $item['id'] ) && (int) $item['id'] === (int) $archetype_id ) {
+					if ( isset( $item['product_data']['status'] ) && is_scalar( $item['product_data']['status'] ) ) {
+						$status = (string) $item['product_data']['status'];
+					}
+					break;
+				}
+			}
+		}
+
+		// The request's own 'status' override, when present, wins over the
+		// archetype's stored default — same precedence as the array_merge()
+		// in apply_product_archetype().
+		$params = method_exists( $request, 'get_params' ) ? (array) $request->get_params() : array();
+		if ( array_key_exists( 'status', $params ) && is_scalar( $params['status'] ) ) {
+			$status = (string) $params['status'];
+		}
+
+		return in_array( strtolower( $status ), array( 'publish', 'private' ), true );
 	}
 }

@@ -320,6 +320,86 @@ final class PublishRequiresAdminScopeTest extends TestCase {
 		$this->assertTrue( $controller->verify_api_key( $request ) );
 	}
 
+	// ── WARN 3 (RC 3.12.1 adversarial review): 'private' is publishing too ──
+
+	public function test_write_key_cannot_create_a_private_post(): void {
+		$controller = new Mcpwp_REST_Posts();
+		$key        = $this->write_key( $controller );
+
+		$request = new WP_REST_Request(
+			'POST',
+			'/mcpwp/v1/posts',
+			array(
+				'title'  => 'Hello',
+				'status' => 'private',
+			),
+			array( 'X-API-Key' => $key )
+		);
+
+		$result = $controller->verify_api_key( $request );
+		$this->assertInstanceOf(
+			WP_Error::class,
+			$result,
+			"'private' is a real, non-draft state visible to editors/admins — it must require admin scope exactly like 'publish'."
+		);
+		$this->assertSame( 'insufficient_scope', $result->get_error_code() );
+	}
+
+	public function test_write_key_cannot_update_a_page_to_private(): void {
+		$controller = new Mcpwp_REST_Pages();
+		$key        = $this->write_key( $controller );
+
+		$request = new WP_REST_Request(
+			'PUT',
+			'/mcpwp/v1/pages/5',
+			array(
+				'id'     => 5,
+				'status' => 'private',
+			),
+			array( 'X-API-Key' => $key )
+		);
+
+		$result = $controller->verify_api_key( $request );
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'insufficient_scope', $result->get_error_code() );
+	}
+
+	public function test_write_key_cannot_clone_a_page_to_private_status(): void {
+		$controller = new Mcpwp_REST_Pages();
+		$key        = $this->write_key( $controller );
+
+		$request = new WP_REST_Request(
+			'POST',
+			'/mcpwp/v1/pages/9/clone',
+			array(
+				'id'     => 9,
+				'status' => 'private',
+			),
+			array( 'X-API-Key' => $key )
+		);
+
+		$result = $controller->verify_api_key( $request );
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'insufficient_scope', $result->get_error_code() );
+	}
+
+	public function test_admin_key_can_create_a_private_post(): void {
+		$controller = new Mcpwp_REST_Posts();
+		$key        = $this->admin_key( $controller );
+
+		$request = new WP_REST_Request(
+			'POST',
+			'/mcpwp/v1/posts',
+			array(
+				'title'  => 'Hello',
+				'status' => 'private',
+			),
+			array( 'X-API-Key' => $key )
+		);
+
+		$this->assertTrue( $controller->verify_api_key( $request ) );
+	}
+
 	// ── Unrelated sub-routes must never be swept in by the prefix match ──────
 
 	public function test_write_key_can_still_set_featured_image_no_status_param_involved(): void {

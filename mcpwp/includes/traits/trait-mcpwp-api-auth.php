@@ -1747,10 +1747,105 @@ trait Mcpwp_Api_Auth {
 			// listing on write scope alone. Covers /woocommerce/products and
 			// /woocommerce/products/{id}.
 			'/mcpwp/v1/woocommerce/products',
+			// RC 3.12.1 adversarial review, BLOCK 1: LearnPress courses/lessons/
+			// quizzes are lp_course/lp_lesson/lp_quiz POSTS (Mcpwp_LearnPress::
+			// create_course()/create_lesson()/create_quiz() all call
+			// wp_insert_post(); the *_update variants call wp_update_post()) with
+			// the SAME shared-agent-user problem as posts/pages/products above —
+			// this table simply never listed them. create_lesson() and
+			// create_quiz() default 'status' to 'publish' with zero arguments
+			// (Mcpwp_REST_LearnPress::get_lesson_create_args() /
+			// get_quiz_create_args() now declare that default so it is visible
+			// here, mirroring the WooCommerce products fix). Covers
+			// /learnpress/courses(/{id}(/curriculum)), /learnpress/lessons(/{id}),
+			// /learnpress/quizzes(/{id}(/questions)) — the curriculum and
+			// questions sub-routes never carry a 'status' param, so they are
+			// unaffected by this gate; they ride along only because they share
+			// the /courses and /quizzes prefixes.
+			'/mcpwp/v1/learnpress/courses',
+			'/mcpwp/v1/learnpress/lessons',
+			'/mcpwp/v1/learnpress/quizzes',
+			// RC 3.12.1 adversarial review, Requirement 1 systematic sweep
+			// (grepping every wp_insert_post()/wp_update_post() call site for a
+			// caller-controlled 'post_status', not just the route table) turned
+			// up FIVE more surfaces with the identical defect, none named in the
+			// original two BLOCK findings:
+			//
+			// - Events (Mcpwp_Events::update_event(), a sibling CPT to
+			//   LearnPress with the exact same shape — create_event() defaults
+			//   safely to 'draft', update_event() takes the caller's status raw).
+			//   Covers /events and /events/{id}. NOTE: this route also has a
+			//   pre-existing, UNRELATED bug — Mcpwp_REST_Webhooks and
+			//   Mcpwp_REST_Events both register GET /mcpwp/v1/events — that is
+			//   not this fix's to resolve (see the report), but the scope gate
+			//   on the PUT sub-route is independent of it and closed here.
+			// - wp_build_page (Mcpwp_REST_Elementor_Pro::build_page() ->
+			//   Mcpwp_Page_Builder::build(), which accepts 'draft'/'publish'/
+			//   'private' and defaults to 'draft'). Covers /elementor/build-page.
+			// - wp_create_landing_page (Mcpwp_Elementor_Pro::create_landing_page(),
+			//   same 'draft'-default/caller-override shape). Covers
+			//   /elementor/landing-page.
+			// - wp_clone_elementor_page (Mcpwp_Elementor_Pro::clone_page() — the
+			//   Elementor-specific sibling of /pages/{id}/clone, which is already
+			//   gated above; this one was not). Covers /elementor/clone.
+			// - create_elementor_page (Mcpwp_Elementor_Writer_Trait::
+			//   create_elementor_page(), reachable directly over REST at
+			//   /elementor/page even though it maps to no MCP tool today — the
+			//   review's own threat model is direct REST, not only /mcp).
+			//
+			// (wp_apply_elementor_archetype/_template/_part were audited too —
+			// all three only ever mutate Elementor JSON on an EXISTING page_id
+			// and never touch post_status, so none needed gating.
+			// wp_create_translation's routes are already covered: they live at
+			// /posts/{id}/translations and /pages/{id}/translations, under the
+			// /posts and /pages prefixes above. Elementor Custom Code and
+			// site-blueprints deploy also set a caller status but are already
+			// blanket-admin-gated for every method, publish or not — see
+			// $admin_routes and the site-blueprints deploy regex above.)
+			'/mcpwp/v1/events',
+			'/mcpwp/v1/elementor/build-page',
+			'/mcpwp/v1/elementor/landing-page',
+			'/mcpwp/v1/elementor/clone',
+			'/mcpwp/v1/elementor/page',
 		);
 		if ( $is_write ) {
 			foreach ( $publish_gated_routes as $publish_gated_route ) {
 				if ( $this->route_matches( $route, $publish_gated_route ) && $this->request_targets_publish_status( $request ) ) {
+					return 'admin';
+				}
+			}
+
+			// RC 3.12.1 adversarial review, BLOCK 2: applying a WooCommerce
+			// product archetype dispatches through the SAME create_product()/
+			// update_product() path as /woocommerce/products above (see
+			// Mcpwp_REST_WooCommerce::apply_product_archetype() and
+			// extract_product_override_payload(), which whitelists 'status' as
+			// an overridable field) — but the id sits in the MIDDLE of the path
+			// (/woocommerce/archetypes/{id}/apply), so route_matches()'s
+			// exact-or-prefix comparison can never match it against a
+			// '/woocommerce/archetypes' prefix without ALSO sweeping in
+			// archetype DEFINITION CRUD (create/get/update the stored
+			// template) — routes that only ever update_option() a record and
+			// never call wp_insert_post()/wp_update_post() at all, so gating
+			// them here would require admin scope for something that cannot
+			// publish anything. A dynamic-segment regex, the same technique
+			// already used above for /approvals/{id}/(approve|reject|...) and
+			// /site-blueprints/{id}/deploy, keeps the gate on only the route
+			// that actually publishes.
+			//
+			// This route also cannot use the plain request_targets_publish_status()
+			// check below: the archetype's OWN stored product_data can already
+			// carry 'status' => 'publish' from whenever it was defined, so a
+			// caller need not repeat it in the request at all to reach the
+			// same outcome. archetype_apply_targets_publish_status() merges
+			// the request's override on top of the stored archetype the same
+			// way apply_product_archetype() itself does.
+			if ( preg_match( '#^/mcpwp/v1/woocommerce/archetypes/([^/]+)/apply$#', $route, $archetype_route_matches ) ) {
+				$targets_publish = class_exists( 'Mcpwp_REST_WooCommerce' )
+					? Mcpwp_REST_WooCommerce::archetype_apply_targets_publish_status( $archetype_route_matches[1], $request )
+					: $this->request_targets_publish_status( $request );
+
+				if ( $targets_publish ) {
 					return 'admin';
 				}
 			}
@@ -1761,11 +1856,25 @@ trait Mcpwp_Api_Auth {
 	}
 
 	/**
-	 * Whether a create/update/bulk/clone request for a post or page asks for
-	 * the WordPress 'publish' status anywhere in its body — the top-level
-	 * 'status' param, or any item's 'status' inside a bulk 'posts' / 'pages' /
+	 * Whether a create/update/bulk/clone request for a post, page, WooCommerce
+	 * product, or LearnPress course/lesson/quiz asks for a status this plugin
+	 * treats as publishing anywhere in its body — the top-level 'status'
+	 * param, or any item's 'status' inside a bulk 'posts' / 'pages' /
 	 * 'updates' array. See get_required_scope_for_request() (#607) for why
 	 * this gates scope instead of a WordPress capability check.
+	 *
+	 * RC 3.12.1 adversarial review, WARN 3: 'publish' is not the only status
+	 * this must catch. 'private' is a real, non-draft state — visible to
+	 * editors and admins, excluded from public listings but not from the
+	 * dashboard — and is an accepted enum value on every gated surface
+	 * (/posts, /pages, /pages/{id}/clone, WooCommerce products, and now
+	 * LearnPress). Treating only 'publish' as publishing let a write-scoped
+	 * key reach the same "content is live for anyone with dashboard access"
+	 * outcome via status=private. ('future' was also checked by the review and
+	 * confirmed NOT reachable here — Mcpwp_Posts::create()/update() allow-list
+	 * post_status to publish/draft/pending/private(/trash on update) BEFORE
+	 * calling wp_insert_post()/wp_update_post(), so no handling for it was
+	 * added.) See param_value_targets_admin_scope().
 	 *
 	 * Deliberately reads get_params() (like the sibling
 	 * find_replace_is_wide() check above) rather than get_json_params(): the
@@ -1776,7 +1885,7 @@ trait Mcpwp_Api_Auth {
 	 * null when a request carries no JSON body at all.
 	 *
 	 * @param WP_REST_Request $request Request object.
-	 * @return bool True when any targeted post/page would end up 'publish'.
+	 * @return bool True when any targeted item would end up 'publish' or 'private'.
 	 */
 	protected function request_targets_publish_status( $request ) {
 		if ( ! method_exists( $request, 'get_params' ) ) {
@@ -1785,21 +1894,21 @@ trait Mcpwp_Api_Auth {
 
 		$params = (array) $request->get_params();
 
-		if ( $this->param_value_is_publish( $params, 'status' ) ) {
+		if ( $this->param_value_targets_admin_scope( $params, 'status' ) ) {
 			return true;
 		}
 
 		// Bulk create/update bodies carry an array of items under 'posts',
 		// 'pages', or the 'updates' alias (see Mcpwp_REST_Posts::
 		// register_routes() / Mcpwp_REST_Pages::register_routes()) — each
-		// item can independently request 'publish', so every one must be
-		// checked, not just the top level.
+		// item can independently request 'publish'/'private', so every one
+		// must be checked, not just the top level.
 		foreach ( array( 'posts', 'pages', 'updates' ) as $bulk_key ) {
 			if ( empty( $params[ $bulk_key ] ) || ! is_array( $params[ $bulk_key ] ) ) {
 				continue;
 			}
 			foreach ( $params[ $bulk_key ] as $item ) {
-				if ( is_array( $item ) && $this->param_value_is_publish( $item, 'status' ) ) {
+				if ( is_array( $item ) && $this->param_value_targets_admin_scope( $item, 'status' ) ) {
 					return true;
 				}
 			}
@@ -1809,14 +1918,21 @@ trait Mcpwp_Api_Auth {
 	}
 
 	/**
-	 * Case-insensitive helper: is $params[$key] present and equal to 'publish'?
+	 * Case-insensitive helper: is $params[$key] present and a status this
+	 * plugin requires admin scope for — 'publish' or 'private' (WARN 3, RC
+	 * 3.12.1 adversarial review). See request_targets_publish_status()'s
+	 * docblock for why 'private' is included and 'future' deliberately is not.
 	 *
 	 * @param array  $params Params array.
 	 * @param string $key    Key to inspect.
 	 * @return bool
 	 */
-	private function param_value_is_publish( $params, $key ) {
-		return isset( $params[ $key ] ) && is_scalar( $params[ $key ] ) && 'publish' === strtolower( (string) $params[ $key ] );
+	private function param_value_targets_admin_scope( $params, $key ) {
+		if ( ! isset( $params[ $key ] ) || ! is_scalar( $params[ $key ] ) ) {
+			return false;
+		}
+
+		return in_array( strtolower( (string) $params[ $key ] ), array( 'publish', 'private' ), true );
 	}
 
 	/**
@@ -2844,10 +2960,14 @@ trait Mcpwp_Api_Auth {
 			return false;
 		}
 
-		// Verify the nonce — die()s on failure (WP behaviour). The nonce is
-		// generated server-side (wp_create_nonce('mcpwp_admin_nonce')) and
-		// sent to the admin JS bundle; every handler in
-		// trait-mcpwp-admin-chat.php verifies against the same action string.
+		// Verify the nonce. check_ajax_referer()'s third argument ($die) is
+		// passed false here, so an invalid/missing nonce returns false rather
+		// than die()ing — this method must be able to return false and let its
+		// caller fall through to the ordinary API-key check, not halt the
+		// request. The nonce is generated server-side
+		// (wp_create_nonce('mcpwp_admin_nonce')) and sent to the admin JS
+		// bundle; every handler in trait-mcpwp-admin-chat.php verifies against
+		// the same action string.
 		return (bool) check_ajax_referer( 'mcpwp_admin_nonce', 'nonce', false );
 	}
 

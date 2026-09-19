@@ -49,6 +49,7 @@ class Mcpwp_REST_LearnPress extends Mcpwp_REST_API {
 					'methods'             => WP_REST_Server::CREATABLE,
 					'callback'            => array( $this, 'create_course' ),
 					'permission_callback' => array( $this, 'check_permission' ),
+					'args'                => $this->get_course_create_args(),
 				),
 			)
 		);
@@ -66,6 +67,7 @@ class Mcpwp_REST_LearnPress extends Mcpwp_REST_API {
 					'methods'             => WP_REST_Server::EDITABLE,
 					'callback'            => array( $this, 'update_course' ),
 					'permission_callback' => array( $this, 'check_permission' ),
+					'args'                => $this->get_course_update_args(),
 				),
 			)
 		);
@@ -103,6 +105,7 @@ class Mcpwp_REST_LearnPress extends Mcpwp_REST_API {
 					'methods'             => WP_REST_Server::CREATABLE,
 					'callback'            => array( $this, 'create_lesson' ),
 					'permission_callback' => array( $this, 'check_permission' ),
+					'args'                => $this->get_lesson_create_args(),
 				),
 			)
 		);
@@ -114,6 +117,7 @@ class Mcpwp_REST_LearnPress extends Mcpwp_REST_API {
 				'methods'             => WP_REST_Server::EDITABLE,
 				'callback'            => array( $this, 'update_lesson' ),
 				'permission_callback' => array( $this, 'check_permission' ),
+				'args'                => $this->get_lesson_update_args(),
 			)
 		);
 
@@ -132,6 +136,7 @@ class Mcpwp_REST_LearnPress extends Mcpwp_REST_API {
 					'methods'             => WP_REST_Server::CREATABLE,
 					'callback'            => array( $this, 'create_quiz' ),
 					'permission_callback' => array( $this, 'check_permission' ),
+					'args'                => $this->get_quiz_create_args(),
 				),
 			)
 		);
@@ -143,6 +148,7 @@ class Mcpwp_REST_LearnPress extends Mcpwp_REST_API {
 				'methods'             => WP_REST_Server::EDITABLE,
 				'callback'            => array( $this, 'update_quiz' ),
 				'permission_callback' => array( $this, 'check_permission' ),
+				'args'                => $this->get_quiz_update_args(),
 			)
 		);
 
@@ -304,6 +310,111 @@ class Mcpwp_REST_LearnPress extends Mcpwp_REST_API {
 				'description' => __( 'Search term.', 'mcpwp' ),
 			),
 		);
+	}
+
+	/**
+	 * Get course create arguments.
+	 *
+	 * RC 3.12.1 adversarial review, BLOCK 1: mirrors the fix already applied to
+	 * WooCommerce products (Mcpwp_REST_WooCommerce::get_product_create_args()).
+	 * Mcpwp_LearnPress::create_course() defaults post_status to 'draft' when no
+	 * 'status' param is sent, so declaring that default here does not change
+	 * behavior — it only makes the default visible to
+	 * get_required_scope_for_request() (WordPress merges declared defaults
+	 * into the request BEFORE permission_callback runs), so a bare create call
+	 * is gated exactly like an explicit status=draft call.
+	 *
+	 * @return array
+	 */
+	private function get_course_create_args() {
+		return array(
+			'status' => array(
+				'type'        => 'string',
+				'default'     => 'draft',
+				'enum'        => array( 'publish', 'draft', 'pending', 'private' ),
+				'description' => __( 'Course status.', 'mcpwp' ),
+			),
+		);
+	}
+
+	/**
+	 * Get course update arguments — same enum as create, no forced default
+	 * (an update must not force a status onto a caller who did not mention one).
+	 *
+	 * @return array
+	 */
+	private function get_course_update_args() {
+		$args = $this->get_course_create_args();
+		unset( $args['status']['default'] );
+		return $args;
+	}
+
+	/**
+	 * Get lesson create arguments.
+	 *
+	 * RC 3.12.1 adversarial review, BLOCK 1: Mcpwp_LearnPress::create_lesson()
+	 * defaults post_status to 'publish' when no 'status' param is sent at all —
+	 * unlike create_course(), which defaults to 'draft'. Declaring that default
+	 * here (rather than changing it — the plugin's status defaults are a
+	 * product decision, not this fix's to make) is what lets
+	 * get_required_scope_for_request() see and gate it: WordPress merges a
+	 * route's declared 'default' into the request before permission_callback
+	 * runs, so a bare create-lesson call with zero arguments is now gated
+	 * exactly like an explicit status=publish call.
+	 *
+	 * @return array
+	 */
+	private function get_lesson_create_args() {
+		return array(
+			'status' => array(
+				'type'        => 'string',
+				'default'     => 'publish',
+				'enum'        => array( 'publish', 'draft', 'pending', 'private' ),
+				'description' => __( 'Lesson status.', 'mcpwp' ),
+			),
+		);
+	}
+
+	/**
+	 * Get lesson update arguments — same enum as create, no forced default.
+	 *
+	 * @return array
+	 */
+	private function get_lesson_update_args() {
+		$args = $this->get_lesson_create_args();
+		unset( $args['status']['default'] );
+		return $args;
+	}
+
+	/**
+	 * Get quiz create arguments.
+	 *
+	 * RC 3.12.1 adversarial review, BLOCK 1: same "defaults to publish with
+	 * zero arguments" shape as create_lesson() above — see that method's
+	 * docblock for why declaring (not changing) the default is the fix.
+	 *
+	 * @return array
+	 */
+	private function get_quiz_create_args() {
+		return array(
+			'status' => array(
+				'type'        => 'string',
+				'default'     => 'publish',
+				'enum'        => array( 'publish', 'draft', 'pending', 'private' ),
+				'description' => __( 'Quiz status.', 'mcpwp' ),
+			),
+		);
+	}
+
+	/**
+	 * Get quiz update arguments — same enum as create, no forced default.
+	 *
+	 * @return array
+	 */
+	private function get_quiz_update_args() {
+		$args = $this->get_quiz_create_args();
+		unset( $args['status']['default'] );
+		return $args;
 	}
 
 	// =========================================================================

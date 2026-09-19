@@ -207,6 +207,46 @@ final class WooCommercePublishRequiresAdminScopeTest extends TestCase {
 		$this->assertArrayNotHasKey( 'default', $editable['args']['status'] );
 	}
 
+	// ── WARN 3 (RC 3.12.1 adversarial review): 'private' is publishing too ──
+
+	public function test_write_key_cannot_create_a_private_product(): void {
+		$controller = $this->controller();
+		$key        = $this->write_key( $controller );
+
+		$request = new WP_REST_Request(
+			'POST',
+			'/mcpwp/v1/woocommerce/products',
+			array(
+				'name'   => 'Widget',
+				'status' => 'private',
+			),
+			array( 'X-API-Key' => $key )
+		);
+
+		$result = $controller->verify_api_key( $request );
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'insufficient_scope', $result->get_error_code() );
+	}
+
+	public function test_write_key_cannot_update_a_product_to_private(): void {
+		$controller = $this->controller();
+		$key        = $this->write_key( $controller );
+
+		$request = new WP_REST_Request(
+			'PUT',
+			'/mcpwp/v1/woocommerce/products/7',
+			array(
+				'id'     => 7,
+				'status' => 'private',
+			),
+			array( 'X-API-Key' => $key )
+		);
+
+		$result = $controller->verify_api_key( $request );
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'insufficient_scope', $result->get_error_code() );
+	}
+
 	// ── Unrelated sub-route must not be swept in by the prefix match ─────────
 
 	public function test_write_key_can_still_create_a_product_category_no_status_field_involved(): void {
