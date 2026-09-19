@@ -320,7 +320,54 @@ class Mcpwp_WooCommerce {
 		}
 
 		if ( isset( $data['status'] ) ) {
-			$product->set_status( sanitize_key( $data['status'] ) );
+			// fix/3121-future-status-coercion (RC 3.12.1 BLOCK): this used to
+			// hand sanitize_key( $data['status'] ) straight to set_status()
+			// with no allow-list at all -- unlike the equivalent write paths
+			// in Mcpwp_Posts::create_post()/update_post() and
+			// Mcpwp_Pages::create_page()/update_page(), which have always
+			// restricted post_status to publish/draft/pending/private(/trash
+			// on update) before calling wp_insert_post()/wp_update_post().
+			// That asymmetry is the root cause of the bypass: WordPress's
+			// wp_insert_post() (wp-includes/post.php) coerces a 'future'
+			// post_status straight to 'publish' whenever the post's date is
+			// not itself at least a minute out --
+			//   if ( 'future' === $post_status ) {
+			//       if ( strtotime( $post_date_gmt ) - strtotime( $now ) < MINUTE_IN_SECONDS ) {
+			//           $post_status = 'publish';
+			//       }
+			//   }
+			// -- and this integration exposes NO field anywhere (product
+			// create, update, or archetype apply) that lets a caller set a
+			// product's date. Every product this plugin ever writes is dated
+			// now(), so 'future' is unconditionally and unavoidably
+			// equivalent to 'publish' here; there is no legitimate scheduled-
+			// publish flow for a WooCommerce product this allow-list could
+			// break by excluding it.
+			//
+			// Allow-list to the same four values Mcpwp_Posts/Mcpwp_Pages
+			// accept and drop anything else to 'draft', rather than refusing
+			// the write outright: this is the last chokepoint before
+			// set_status(), reached not only from a fresh REST request (now
+			// also blocked earlier, at the route's own 'enum' schema and at
+			// the admin-scope gate -- see get_archetype_write_args() and
+			// Mcpwp_Api_Auth::param_value_targets_admin_scope()) but also
+			// from applying an archetype whose product_data was stored
+			// BEFORE this fix shipped and may still carry a bad value with
+			// no request-time schema to catch it. A hard error here would
+			// fail the caller's entire product write -- including unrelated
+			// field changes (price, stock, description) bundled in the same
+			// call -- over one stale, already-invalid field it may not even
+			// know is there. Dropping to 'draft' can only ever reduce
+			// privilege, never grant it, so it fails safe the same way the
+			// existing posts/pages convention already does, and the write
+			// still succeeds for the fields the caller actually meant to
+			// change.
+			$status           = sanitize_key( $data['status'] );
+			$allowed_statuses = array( 'publish', 'draft', 'pending', 'private' );
+			if ( ! in_array( $status, $allowed_statuses, true ) ) {
+				$status = 'draft';
+			}
+			$product->set_status( $status );
 		}
 
 		if ( isset( $data['description'] ) ) {

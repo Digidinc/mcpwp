@@ -1870,11 +1870,30 @@ trait Mcpwp_Api_Auth {
 	 * (/posts, /pages, /pages/{id}/clone, WooCommerce products, and now
 	 * LearnPress). Treating only 'publish' as publishing let a write-scoped
 	 * key reach the same "content is live for anyone with dashboard access"
-	 * outcome via status=private. ('future' was also checked by the review and
-	 * confirmed NOT reachable here — Mcpwp_Posts::create()/update() allow-list
+	 * outcome via status=private.
+	 *
+	 * fix/3121-future-status-coercion: the note that used to sit here —
+	 * "'future' was also checked by the review and confirmed NOT reachable
+	 * here" — was true only for Mcpwp_Posts/Mcpwp_Pages, which allow-list
 	 * post_status to publish/draft/pending/private(/trash on update) BEFORE
-	 * calling wp_insert_post()/wp_update_post(), so no handling for it was
-	 * added.) See param_value_targets_admin_scope().
+	 * calling wp_insert_post()/wp_update_post(). It was WRONG as a blanket
+	 * claim: Mcpwp_WooCommerce::set_product_data() had no such allow-list at
+	 * all (now added — see that method's docblock), and the WooCommerce
+	 * archetype-definition routes (POST /woocommerce/archetypes, PUT
+	 * /woocommerce/archetypes/{id}) had no 'args' schema whatsoever, so a
+	 * 'future' status could be stored via those routes and later reach a real
+	 * product write through /woocommerce/archetypes/{id}/apply with no
+	 * request-time validation ever seeing it (see
+	 * Mcpwp_REST_WooCommerce::archetype_apply_targets_publish_status(), which
+	 * has its own independent copy of this same check for exactly that
+	 * reason). WordPress's wp_insert_post() coerces 'future' straight to
+	 * 'publish' whenever the post's date is not itself at least a minute out
+	 * (wp-includes/post.php), and no surface in this plugin exposes a way to
+	 * set a post's or product's date, so 'future' is unconditionally
+	 * equivalent to 'publish' everywhere this gate applies — there is no
+	 * legitimate scheduled-publish flow this could break. 'future' is
+	 * therefore now included below, alongside 'publish' and 'private'. See
+	 * param_value_targets_admin_scope().
 	 *
 	 * Deliberately reads get_params() (like the sibling
 	 * find_replace_is_wide() check above) rather than get_json_params(): the
@@ -1885,7 +1904,7 @@ trait Mcpwp_Api_Auth {
 	 * null when a request carries no JSON body at all.
 	 *
 	 * @param WP_REST_Request $request Request object.
-	 * @return bool True when any targeted item would end up 'publish' or 'private'.
+	 * @return bool True when any targeted item would end up 'publish', 'private', or 'future'.
 	 */
 	protected function request_targets_publish_status( $request ) {
 		if ( ! method_exists( $request, 'get_params' ) ) {
@@ -1919,9 +1938,12 @@ trait Mcpwp_Api_Auth {
 
 	/**
 	 * Case-insensitive helper: is $params[$key] present and a status this
-	 * plugin requires admin scope for — 'publish' or 'private' (WARN 3, RC
-	 * 3.12.1 adversarial review). See request_targets_publish_status()'s
-	 * docblock for why 'private' is included and 'future' deliberately is not.
+	 * plugin requires admin scope for — 'publish', 'private' (WARN 3, RC
+	 * 3.12.1 adversarial review), or 'future' (fix/3121-future-status-coercion).
+	 * See request_targets_publish_status()'s docblock for why each is
+	 * included — in short: WordPress's wp_insert_post() can coerce 'future'
+	 * to 'publish' at write time, and 'private' is a real, non-draft visible
+	 * status, so both must be treated exactly like 'publish' here.
 	 *
 	 * RC 3.12.1 adversarial review, BLOCK: this used to compare
 	 * strtolower( (string) $value ) against ('publish', 'private') with an
@@ -1970,7 +1992,7 @@ trait Mcpwp_Api_Auth {
 
 		$normalized = sanitize_key( (string) $params[ $key ] );
 
-		return in_array( $normalized, array( 'publish', 'private' ), true );
+		return in_array( $normalized, array( 'publish', 'private', 'future' ), true );
 	}
 
 	/**

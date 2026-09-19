@@ -173,6 +173,7 @@ class Mcpwp_REST_WooCommerce extends Mcpwp_REST_API {
 					'methods'             => WP_REST_Server::CREATABLE,
 					'callback'            => array( $this, 'create_product_archetype' ),
 					'permission_callback' => array( $this, 'check_permission' ),
+					'args'                => $this->get_archetype_write_args(),
 				),
 			)
 		);
@@ -190,6 +191,7 @@ class Mcpwp_REST_WooCommerce extends Mcpwp_REST_API {
 					'methods'             => WP_REST_Server::EDITABLE,
 					'callback'            => array( $this, 'update_product_archetype' ),
 					'permission_callback' => array( $this, 'check_permission' ),
+					'args'                => $this->get_archetype_write_args(),
 				),
 			)
 		);
@@ -609,6 +611,42 @@ class Mcpwp_REST_WooCommerce extends Mcpwp_REST_API {
 				'type'        => 'string',
 				'format'      => 'date-time',
 				'description' => __( 'End date (ISO 8601).', 'mcpwp' ),
+			),
+		);
+	}
+
+	/**
+	 * Get write arguments for POST /woocommerce/archetypes and
+	 * PUT /woocommerce/archetypes/{id}.
+	 *
+	 * fix/3121-future-status-coercion: these two routes registered NO 'args'
+	 * at all -- unlike every other WooCommerce write route in this file,
+	 * including their own sibling get_archetype_apply_args() below. A caller
+	 * could therefore store ANY string, including 'future', as the
+	 * archetype's product_data['status'], via normalize_product_archetype_payload()
+	 * -> extract_product_override_payload() -> create_product_archetype()/
+	 * update_product_archetype() (which do nothing but update_option() the
+	 * record, so no WordPress or WooCommerce write API ever saw the value at
+	 * definition time to reject it). apply_product_archetype() later merges
+	 * that stored value into a real product write with zero further
+	 * validation of its own (Mcpwp_WooCommerce::set_product_data(), which
+	 * used to hand the raw value straight to the product's status setter --
+	 * now allow-listed separately; see that method's docblock for why
+	 * 'future' is unconditionally equivalent to 'publish' here). Declaring
+	 * 'enum' stops
+	 * an invalid value being stored in the first place, the same way it
+	 * already stops one being applied directly via
+	 * get_archetype_apply_args() and the five routes fixed earlier in this
+	 * RC.
+	 *
+	 * @return array
+	 */
+	private function get_archetype_write_args() {
+		return array(
+			'status' => array(
+				'type'        => 'string',
+				'enum'        => array( 'draft', 'pending', 'private', 'publish' ),
+				'description' => __( 'Optional product status to store on the archetype template.', 'mcpwp' ),
 			),
 		);
 	}
@@ -1239,7 +1277,8 @@ class Mcpwp_REST_WooCommerce extends Mcpwp_REST_API {
 
 	/**
 	 * Whether applying archetype $archetype_id, together with this request's
-	 * overrides, would result in a 'publish' or 'private' product status.
+	 * overrides, would result in a 'publish', 'private', or 'future' product
+	 * status.
 	 *
 	 * RC 3.12.1 adversarial review, BLOCK 2 follow-up: a plain per-request
 	 * check (Mcpwp_Api_Auth::request_targets_publish_status(), which only ever
@@ -1275,9 +1314,24 @@ class Mcpwp_REST_WooCommerce extends Mcpwp_REST_API {
 	 * sanitize_key( $data['status'] ) call, so this check can never be
 	 * narrower than what the handler actually does with the value.
 	 *
+	 * fix/3121-future-status-coercion: 'future' added alongside 'publish' and
+	 * 'private'. This is the exact live bypass this fix closes: an archetype
+	 * defined (or updated) with product_data['status'] => 'future' at a time
+	 * when neither archetype route validated 'status' at all -- reachable on
+	 * write scope alone, since defining a template only ever update_option()s
+	 * a record -- then applied with ZERO status override, so this method's
+	 * merge sees only the stored 'future' value. WordPress's wp_insert_post()
+	 * coerces 'future' straight to 'publish' whenever the post's date is not
+	 * itself at least a minute in the future (wp-includes/post.php), and this
+	 * integration has no field anywhere that lets a caller set a product's
+	 * date -- every product it writes is dated now(), so 'future' here is
+	 * unconditionally equivalent to 'publish'. There is no legitimate
+	 * scheduled-publish flow for a WooCommerce product this plugin exposes
+	 * that including 'future' here could break.
+	 *
 	 * @param int|string       $archetype_id Archetype ID from the route.
 	 * @param WP_REST_Request  $request      Request object.
-	 * @return bool True when the effective status is 'publish' or 'private'.
+	 * @return bool True when the effective status is 'publish', 'private', or 'future'.
 	 */
 	public static function archetype_apply_targets_publish_status( $archetype_id, $request ) {
 		$status = '';
@@ -1302,6 +1356,6 @@ class Mcpwp_REST_WooCommerce extends Mcpwp_REST_API {
 			$status = (string) $params['status'];
 		}
 
-		return in_array( sanitize_key( $status ), array( 'publish', 'private' ), true );
+		return in_array( sanitize_key( $status ), array( 'publish', 'private', 'future' ), true );
 	}
 }

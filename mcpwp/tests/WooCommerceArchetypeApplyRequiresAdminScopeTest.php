@@ -221,6 +221,74 @@ final class WooCommerceArchetypeApplyRequiresAdminScopeTest extends TestCase {
 		$this->assertSame( 'insufficient_scope', $result->get_error_code() );
 	}
 
+	// ── fix/3121-future-status-coercion: 'future' must be treated the same
+	// as 'publish'/'private' — WordPress coerces it there at write time
+	// whenever the post's date is not itself in the future, and this
+	// integration exposes no way to set a product's date. ───────────────
+
+	public function test_write_key_cannot_apply_an_archetype_with_an_explicit_future_override(): void {
+		$controller = $this->controller();
+		$key        = $this->write_key( $controller );
+		$this->seed_archetype( 1, array( 'name' => 'Widget', 'status' => 'draft' ) );
+
+		$request = new WP_REST_Request(
+			'POST',
+			'/mcpwp/v1/woocommerce/archetypes/1/apply',
+			array(
+				'id'     => 1,
+				'status' => 'future',
+			),
+			array( 'X-API-Key' => $key )
+		);
+
+		$result = $controller->verify_api_key( $request );
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'insufficient_scope', $result->get_error_code() );
+	}
+
+	/**
+	 * The finding that matters most, for 'future': the archetype's OWN
+	 * stored data already says 'future' — the caller sends NO status-related
+	 * param at all. This is exactly the shape a pre-fix archetype record (or
+	 * any future bug in the defining route's own schema) has.
+	 */
+	public function test_write_key_cannot_apply_a_future_defaulting_archetype_with_zero_status_params(): void {
+		$controller = $this->controller();
+		$key        = $this->write_key( $controller );
+		$this->seed_archetype( 1, array( 'name' => 'Widget', 'status' => 'future' ) );
+
+		$request = new WP_REST_Request(
+			'POST',
+			'/mcpwp/v1/woocommerce/archetypes/1/apply',
+			array( 'id' => 1 ),
+			array( 'X-API-Key' => $key )
+		);
+
+		$result = $controller->verify_api_key( $request );
+		$this->assertInstanceOf(
+			WP_Error::class,
+			$result,
+			"The archetype template itself defaults to 'future' — applying it with no override at all must still " .
+			'require admin scope, the same as an explicit \'publish\'.'
+		);
+		$this->assertSame( 'insufficient_scope', $result->get_error_code() );
+	}
+
+	public function test_admin_key_can_apply_a_future_defaulting_archetype(): void {
+		$controller = $this->controller();
+		$key        = $this->admin_key( $controller );
+		$this->seed_archetype( 1, array( 'name' => 'Widget', 'status' => 'future' ) );
+
+		$request = new WP_REST_Request(
+			'POST',
+			'/mcpwp/v1/woocommerce/archetypes/1/apply',
+			array( 'id' => 1 ),
+			array( 'X-API-Key' => $key )
+		);
+
+		$this->assertTrue( $controller->verify_api_key( $request ) );
+	}
+
 	// ── Unrelated archetype-definition CRUD must not require admin scope ───
 
 	public function test_write_key_can_still_create_an_archetype_definition_whose_stored_status_is_publish(): void {

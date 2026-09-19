@@ -54,8 +54,13 @@
  *      — for every route self::AUDITED says is gated by $publish_gated_routes
  *      (as opposed to already blanket-admin, or never caller-controlled),
  *      actually dispatches get_required_scope_for_request() with
- *      status=publish / status=private / status=draft / no status at all,
- *      and asserts admin / admin / write / write. This is the part
+ *      status=publish / status=private / status=future / status=draft / no
+ *      status at all, and asserts admin / admin / admin / write / write
+ *      (the 'future' case is fix/3121-future-status-coercion: WordPress
+ *      coerces 'future' to 'publish' at write time whenever the post's date
+ *      is not itself in the future, and no surface in this plugin exposes a
+ *      way to set one, so it is unconditionally equivalent to 'publish'
+ *      everywhere this gate applies). This is the part
  *      PublishRequiresAdminScopeTest-style per-route tests already cover
  *      individually — collecting it here as one parametrized sweep means a
  *      route ever REMOVED from $publish_gated_routes (not just one never
@@ -319,6 +324,14 @@ final class PublishStatusHandlerAuditTest extends TestCase {
 			'admin',
 			$auth->scope_for( $method, $route, $base_params + array( 'status' => 'private' ) ),
 			"$method $route with status=private must require admin scope (WARN 3)."
+		);
+		$this->assertSame(
+			'admin',
+			$auth->scope_for( $method, $route, $base_params + array( 'status' => 'future' ) ),
+			"$method $route with status=future must require admin scope (fix/3121-future-status-coercion: WordPress " .
+			"coerces 'future' to 'publish' at write time whenever the post's date is not itself in the future, and no " .
+			'surface in this plugin exposes a way to set a post/page/product\'s date, so \'future\' is unconditionally ' .
+			"equivalent to 'publish' here)."
 		);
 		$this->assertSame(
 			'write',
