@@ -23,6 +23,8 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 MANIFEST_URL=""
 EXPECT_VERSION=""
 RETRIES=1
@@ -161,11 +163,9 @@ PY
 	# The check that #716's neighbourhood was missing: the manifest and the
 	# bytes it points at must agree. When they don't, sites "update" and land
 	# back on the version they started from, and are re-offered it forever.
-	local zip_version
-	zip_version="$(unzip -p "$zip_file" "$zip_root/mcpwp.php" 2>/dev/null | grep -m1 'Version:' | sed 's/.*Version:[[:space:]]*//' | tr -d '[:space:]')"
-	[[ -n "$zip_version" ]] || fail "served package has no readable Version header in $zip_root/mcpwp.php" || return 1
-	echo "  served ZIP:   $zip_version"
-	[[ "$zip_version" == "$manifest_version" ]] || fail "manifest advertises $manifest_version but the served ZIP contains $zip_version — sites would update into a no-op loop" || return 1
+	python3 "$SCRIPT_DIR/verify_release_compatibility.py" \
+		--manifest "$manifest_file" --zip "$zip_file" || return 1
+	echo "  served ZIP:   $manifest_version (header verified)"
 
 	echo "  OK: channel can deliver $manifest_version"
 	return 0

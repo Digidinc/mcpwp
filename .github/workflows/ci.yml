@@ -7,6 +7,14 @@ on:
     branches: [main]
 
 jobs:
+  release-compatibility:
+    name: Release Compatibility Metadata
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify requirements and release-channel regression tests
+        run: python3 -m unittest discover -s scripts/tests -p test_release_compatibility.py
+
   php-lint:
     name: PHP Syntax
     runs-on: ubuntu-latest
