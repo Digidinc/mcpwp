@@ -780,30 +780,28 @@ class Mcpwp_Theme_Builder {
 				}
 			}
 
-			// Build options for assign_to_location.
-			$assign_options = array();
-			if ( ! empty( $data['post_type'] ) ) {
-				$assign_options['post_type'] = sanitize_text_field( $data['post_type'] );
-			}
-			if ( ! empty( $data['post_ids'] ) ) {
-				$assign_options['post_ids'] = array_map( 'absint', (array) $data['post_ids'] );
-			}
-
-			// Assign to location. The type maps to the Elementor location name.
-			// A conditions failure does not roll back the template — the
-			// Elementor data (the thing #828/#759 could leave broken) is already
-			// safely written by this point, so what remains is "created but not
-			// bound to a location", which is what the pre-existing
-			// conditions_error contract below already reports.
-			$assign_result = $this->assign_to_location( $template_id, $type, $scope, $assign_options );
-			if ( is_wp_error( $assign_result ) ) {
-				$conditions_error = $assign_result->get_error_message();
-			}
-
-			// Publish only now — after the Elementor data has been written (or
-			// there was none to write) and conditions have been applied. This is
-			// the one status transition in this method; every path above either
-			// reaches here or throws into the catch block below.
+			// Publish now — after the Elementor data has been written (or there
+			// was none to write) but BEFORE display conditions are assigned.
+			// This is the one status transition in this method; every path
+			// above either reaches here or throws into the catch block below.
+			//
+			// Conditions MUST be assigned AFTER this, not before (RC review
+			// BLOCK, 2026-09-25): assign_to_location() -> set_template_conditions()
+			// calls ElementorPro\Modules\ThemeBuilder\...\Conditions_Manager::
+			// save_conditions() then ->get_cache()->regenerate(). regenerate()
+			// runs a WP_Query with no post_status, which under a REST request
+			// (not is_admin()) only matches PUBLIC statuses — a draft is
+			// invisible to it. Elementor Pro also does not regenerate that
+			// cache on transition_post_status/save_post (only on
+			// wp_trash_post/untrashed_post/section save_settings), so
+			// publishing AFTER assigning conditions never corrects a cache
+			// entry that regenerate() built without this template in it. The
+			// result was a template that reported `assigned:true` and was
+			// genuinely published, bound and present in
+			// elementor_pro_theme_builder_conditions, yet never rendered
+			// anywhere — regenerate()'s own WP_Query silently dropped it, and
+			// nothing after ever re-ran it. Publishing first means the query
+			// that populates the cache can see this post at all.
 			$published = wp_update_post(
 				array(
 					'ID'          => $template_id,
@@ -814,11 +812,39 @@ class Mcpwp_Theme_Builder {
 			if ( is_wp_error( $published ) ) {
 				throw new RuntimeException( 'publish_failed: ' . $published->get_error_message() );
 			}
+
+			// Build options for assign_to_location.
+			$assign_options = array();
+			if ( ! empty( $data['post_type'] ) ) {
+				$assign_options['post_type'] = sanitize_text_field( $data['post_type'] );
+			}
+			if ( ! empty( $data['post_ids'] ) ) {
+				$assign_options['post_ids'] = array_map( 'absint', (array) $data['post_ids'] );
+			}
+
+			// Assign to location. The type maps to the Elementor location name.
+			// A conditions failure does NOT roll back the publish above: the
+			// Elementor data (the thing #828/#759 could leave broken) is
+			// already safely written, and a header/footer template that is
+			// published but bound to no location renders nowhere on the site —
+			// harmless, and reported via conditions_error below rather than
+			// reverted to draft. Reverting it here would also re-open the very
+			// ordering bug this block exists to fix, by pulling a status change
+			// back after conditions have already been (successfully) written.
+			$assign_result = $this->assign_to_location( $template_id, $type, $scope, $assign_options );
+			if ( is_wp_error( $assign_result ) ) {
+				$conditions_error = $assign_result->get_error_message();
+			}
 		} catch ( \Throwable $e ) {
-			// Any failure past this point — a returned WP_Error surfaced as a
-			// throw above, or a genuine Throwable straight out of Elementor
-			// (#759) — must not leave a published, broken template live. Force
-			// delete: it is still a draft with no meaningful revision history.
+			// Reaches here for: a WP_Error from clearing post_content or from
+			// the publish transition itself (both surfaced as a throw above,
+			// before conditions are ever touched), or a genuine Throwable
+			// straight out of Elementor (#759). An ordinary WP_Error from
+			// assign_to_location() — invalid scope/conditions — is handled
+			// separately above via $conditions_error and never reaches here;
+			// only an outright crash in Elementor Pro's own conditions code
+			// would. Either way this must not leave a broken template live:
+			// force delete, published or still a draft.
 			wp_delete_post( $template_id, true );
 
 			return new WP_Error(

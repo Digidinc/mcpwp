@@ -248,4 +248,40 @@ final class ThemeBuilderCreateAtomicityTest extends TestCase {
 			'A throw from Document::save() must not leave Elementor\'s own content-sanitizer unhooked beyond this one call.'
 		);
 	}
+
+	/**
+	 * RC review BLOCK (2026-09-25): assign_to_location()'s own
+	 * save_conditions()/get_cache()->regenerate() call, in real Elementor Pro,
+	 * runs a WP_Query with no post_status — which only matches PUBLIC statuses
+	 * under a REST request. A draft is invisible to it, and Elementor Pro never
+	 * re-regenerates that cache on publish, so a template bound to a location
+	 * WHILE STILL A DRAFT is published afterward but never actually rendered —
+	 * "assigned:true", present in elementor_pro_theme_builder_conditions,
+	 * genuinely published, and permanently absent from the frontend.
+	 *
+	 * Unit doubles cannot see that cache defect (it lives entirely inside
+	 * Elementor Pro's real regenerate() implementation — verified against a
+	 * real Elementor Pro install, see the PR). What a double CAN and must
+	 * enforce is the ordering that avoids it: by the time
+	 * assign_to_location() runs, the post is already 'publish'.
+	 *
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_conditions_are_assigned_only_after_the_template_is_published(): void {
+		$this->install_elementor( false );
+
+		require_once __DIR__ . '/fixtures/theme-builder-order-spy.php';
+
+		$builder = new Mcpwp_Test_Theme_Builder_Order_Spy();
+		$result  = $builder->create_theme_template( $this->create_args() );
+
+		$this->assertIsArray( $result, 'The happy path must still succeed with the spy in place.' );
+		$this->assertTrue( $builder->assign_to_location_was_called, 'assign_to_location() must actually run for this test to mean anything.' );
+		$this->assertSame(
+			'publish',
+			$builder->post_status_when_assign_to_location_ran,
+			'assign_to_location() must not run until the template post is already published — otherwise Elementor Pro\'s own conditions-cache regenerate() (which queries only public statuses) silently drops it, and no later publish call ever corrects that cache.'
+		);
+	}
 }
