@@ -277,7 +277,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 					self::$unfiltered_html_user = 0;
 
 					if ( null !== self::$suspended_content_sanitizer ) {
-						add_filter( 'elementor/document/save/data', self::$suspended_content_sanitizer, 10, 2 );
+						Mcpwp_Elementor_Sanitizer_Guard::restore( self::$suspended_content_sanitizer );
 						self::$suspended_content_sanitizer = null;
 					}
 				}
@@ -427,30 +427,18 @@ trait Mcpwp_Elementor_Writer_Trait {
 	 * null when the module is not present or not hooked, in which case nothing
 	 * was changed and nothing needs restoring.
 	 *
+	 * The actual suspend/restore logic lives in Mcpwp_Elementor_Sanitizer_Guard
+	 * (#828 part 2 / #759 residual gap) so Mcpwp_Theme_Builder::
+	 * create_theme_template() — which hands Elementor its own element tree
+	 * outside this trait — can neutralise the same upstream defect without a
+	 * second copy of this method. This wrapper exists only so every other
+	 * call site in this file keeps calling `self::suspend_elementor_content_sanitizer()`
+	 * unchanged.
+	 *
 	 * @return callable|null The removed callback, or null if nothing was removed.
 	 */
 	private static function suspend_elementor_content_sanitizer() {
-		if ( ! class_exists( '\Elementor\Plugin' ) || empty( \Elementor\Plugin::$instance->modules_manager ) ) {
-			return null;
-		}
-
-		try {
-			$module = \Elementor\Plugin::$instance->modules_manager->get_modules( 'content-sanitizer' );
-		} catch ( \Throwable $e ) {
-			return null;
-		}
-
-		if ( ! is_object( $module ) || ! method_exists( $module, 'sanitize_content' ) ) {
-			return null;
-		}
-
-		$callback = array( $module, 'sanitize_content' );
-
-		if ( ! remove_filter( 'elementor/document/save/data', $callback, 10 ) ) {
-			return null;
-		}
-
-		return $callback;
+		return Mcpwp_Elementor_Sanitizer_Guard::suspend();
 	}
 
 	/**
