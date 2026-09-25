@@ -39,17 +39,29 @@ trait Mcpwp_Sanitization {
 
 	/**
 	 * Safety cap on the number of strip passes {@see sanitize_content_body()}
-	 * runs over one string. Each pass that changes anything strictly
-	 * shortens the string (an element removal deletes characters; nothing
-	 * ever adds any), so the loop is naturally finite and normally stops in
-	 * one or two passes — even a 12-layer reassembly decoy resolves in 12.
-	 * This cap only guards against a pathological input designed to keep
-	 * shrinking by one byte per pass forever; 100 passes is far more than
-	 * any real reassembly depth needs, so it never fires in practice.
+	 * runs over one string. Each pass re-scans the WHOLE current string, so
+	 * the cap bounds total work at (cap × length) even though any one pass
+	 * is linear — a cap of 100 against a large adversarial input (e.g. 99
+	 * nested reassembly layers padded with hundreds of thousands of `<b>`
+	 * tags) forced all 100 of those full-length passes: 250KB took 9.6s, 1MB
+	 * took 37s. 5 passes resolves every real reassembly depth this fix has
+	 * ever needed to prove (see the round-2/round-3 tests) while keeping
+	 * worst-case cost at 5× one pass — around 0.2s even on a 1MB input per
+	 * the round-3 perf numbers.
+	 *
+	 * If content is STILL changing after 5 passes, stripping simply stops:
+	 * the loop does not retry, reject the write, or error — it falls out of
+	 * {@see sanitize_content_body()} and lets wp_kses_post() run on whatever
+	 * the 5th pass produced, exactly like every other tag kses does not
+	 * understand. That is not a regression: kses's own tag-by-tag pass still
+	 * strips any `<script>`/`<style>` tag it recognizes in what remains, so
+	 * content nested deeper than this fix can fully unwind ends up exactly
+	 * as non-executable as it was on origin/main before this fix existed —
+	 * never worse, just no longer specially cleaned past this depth.
 	 *
 	 * @var int
 	 */
-	private static $raw_text_strip_max_passes = 100;
+	private static $raw_text_strip_max_passes = 5;
 
 	/**
 	 * Sanitize a post/page/attachment content body for a write.
@@ -89,6 +101,13 @@ trait Mcpwp_Sanitization {
 	 * tokenizer see what a browser would see is what actually closes this,
 	 * not a special case bolted onto the tokenizer.
 	 *
+	 * Called with `array( 'slash_zero' => 'keep' )` — the same option kses
+	 * itself passes at its own call site (wp-includes/kses.php). The default
+	 * ('remove') deletes a literal backslash-zero *sequence of characters*
+	 * — `C:\0dir` becomes `C:dir` — which has nothing to do with an actual
+	 * NUL byte and is exactly the kind of surprise content mutation this fix
+	 * exists to prevent, not cause.
+	 *
 	 * @param mixed $content Raw content as submitted by the caller.
 	 * @return array{content:string,removed:array<int,array{tag:string,count:int}>}
 	 *               Sanitized content and a report of whole elements removed.
@@ -106,7 +125,7 @@ trait Mcpwp_Sanitization {
 		}
 
 		if ( function_exists( 'wp_kses_no_null' ) ) {
-			$content = wp_kses_no_null( $content );
+			$content = wp_kses_no_null( $content, array( 'slash_zero' => 'keep' ) );
 		}
 
 		$counts   = array();

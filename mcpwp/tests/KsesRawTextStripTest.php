@@ -71,17 +71,34 @@
  *
  * WARN 2 — 12 nested reassembly layers outlived the old 10-pass cap and
  * left a visible payload. The loop already ran until the string stopped
- * changing; only the cap needed raising (to 100, since each changing pass
- * strictly shortens the string, the loop is naturally finite, and no real
- * reassembly needs anywhere near that many layers) — see
- * `test_twelve_nested_reassembly_layers_leave_no_visible_payload`.
+ * changing; only the cap needed raising — see
+ * `test_twelve_nested_reassembly_layers_leave_no_visible_payload`. Raising
+ * it to 100 then turned out to be its own BLOCK (below): each pass re-scans
+ * the WHOLE current string, so a large-enough pathological input forced all
+ * 100 of those full-length passes. The cap is now 5; anything a pathological
+ * input hasn't resolved by then is handed to wp_kses_post() as-is rather
+ * than re-scanned further, never rejected — deeper reassembly ends up
+ * exactly as non-executable as it was on origin/main, just not specially
+ * cleaned past this depth. See `sanitize_content_body()`'s docblock.
  *
  * WARN 3 — a NUL byte inside a tag name (`<scr\0ipt>`) split the name so
  * the tokenizer never recognized it as `script` at all; the tag passed
  * through untouched and its body rendered as visible text. Fixed:
  * `wp_kses_no_null()` (WordPress core) runs on the input before any
  * stripping, the same normalization a browser and kses itself both apply —
- * see `test_a_null_byte_inside_a_tag_name_does_not_hide_the_tag`.
+ * see `test_a_null_byte_inside_a_tag_name_does_not_hide_the_tag`. That call
+ * passes `array( 'slash_zero' => 'keep' )`, matching kses's own call site
+ * (wp-includes/kses.php): the default ('remove') deletes a literal
+ * backslash-zero *character sequence* — `C:\0dir` became `C:dir` — which
+ * has nothing to do with an actual NUL byte; see
+ * `test_a_literal_backslash_zero_is_not_mistaken_for_a_null_byte`.
+ *
+ * BLOCK (round 3, part 2) — the 100-pass cap above, applied to a large
+ * enough pathological input (99 nested reassembly layers padded to ~1MB
+ * with `<b>` tags), forced 100 full-length re-scans: 250KB took 9.6s, 1MB
+ * took 37s. Lowered to 5 — see `sanitize_content_body()`'s docblock for why
+ * 5 is enough for every real case this fix has needed, and
+ * `test_ninety_nine_nested_layers_with_large_padding_stay_fast_and_safe`.
  *
  * @package MCPWP
  */
@@ -154,15 +171,24 @@ if ( ! function_exists( 'wp_get_attachment_url' ) ) {
 
 if ( ! function_exists( 'wp_kses_no_null' ) ) {
 	/**
-	 * Minimal stand-in for WordPress core's wp_kses_no_null() — strips
-	 * literal NUL bytes and backslash-zero sequences the same way core does
-	 * (default 'slash_zero' => 'remove'). Good enough for round-3 WARN 3:
-	 * proving sanitize_content_body() runs this BEFORE stripping so a NUL
-	 * hidden inside a tag name can't hide the tag from the tokenizer.
+	 * Minimal stand-in for WordPress core's wp_kses_no_null(). Always strips
+	 * literal NUL bytes (round-3 WARN 3: proving sanitize_content_body()
+	 * runs this BEFORE stripping so a NUL hidden inside a tag name can't
+	 * hide the tag from the tokenizer). Only strips a literal backslash-zero
+	 * *character sequence* — e.g. `C:\0dir` — when 'slash_zero' is 'remove'
+	 * (core's own default when the option is omitted); with 'keep', the
+	 * option this fix actually passes (matching kses's own call site), that
+	 * sequence survives untouched (round-3 WARN: a prior version always
+	 * removed it regardless of the option, mutating literal content like a
+	 * Windows path or a regex pattern that merely contains "\0").
 	 */
 	function wp_kses_no_null( $string, $options = null ) { // phpcs:ignore
-		$string = preg_replace( '/\0+/', '', $string );
-		return preg_replace( '/\\\\+0+/', '', $string );
+		$string     = preg_replace( '/\0+/', '', $string );
+		$slash_zero = is_array( $options ) && isset( $options['slash_zero'] ) ? $options['slash_zero'] : 'remove';
+		if ( 'remove' === $slash_zero ) {
+			$string = preg_replace( '/\\\\+0+/', '', $string );
+		}
+		return $string;
 	}
 }
 
@@ -647,10 +673,14 @@ final class KsesRawTextStripTest extends TestCase {
 		// Each layer wraps the previous decoy in one more split of the same
 		// shape as the original two-decoy reassembly
 		// (`<scr<script>x</script>ipt>...</scr<script></script>ipt>`), so a
-		// single strip pass only partially unwinds the nesting and several
-		// more passes are needed to fully resolve it — proving the cap (100)
-		// is well above any real depth and the loop genuinely runs until
-		// stable rather than stopping at a fixed pass count.
+		// single strip pass only partially unwinds the nesting and more
+		// passes are needed to fully resolve it. Round 3 lowered the pass
+		// cap from 100 to 5 (a large adversarial input forced all 100 full-
+		// length passes — see the perf test below); this specific shape
+		// still fully resolves in 3, well under the new cap, but the
+		// assertion is written the way the round-3 fix requires content
+		// past the cap to be judged: no live `<script` tag survives (kses
+		// would strip any it still recognizes), not "the string is empty".
 		$payload = 'alert(1)';
 		for ( $layer = 0; $layer < 12; $layer++ ) {
 			$payload = '<scr<script>x</script>ipt>' . $payload . '</scr<script></script>ipt>';
@@ -660,7 +690,40 @@ final class KsesRawTextStripTest extends TestCase {
 		$result  = $harness->sanitize( $payload );
 
 		$this->assertStringNotContainsString( 'alert(1)', $result['content'] );
-		$this->assertStringNotContainsString( 'script>alert', $result['content'] );
+		$this->assertStringNotContainsStringIgnoringCase( '<script', $result['content'], 'No live open <script> tag may survive, capped or not.' );
+	}
+
+	/**
+	 * BLOCK round 3: the old 100-pass cap re-scanned the WHOLE current
+	 * string on every pass, so a large, deeply-nested adversarial input
+	 * forced (in the reported case) all 100 of those full-length passes:
+	 * 250KB took 9.6s, 1MB took 37s. The cap is now 5; whatever a pathological
+	 * input hasn't resolved by then is handed to wp_kses_post() as-is rather
+	 * than re-scanned further — bounding worst case at 5 passes regardless of
+	 * how deep the nesting goes. This ~1MB, 99-layer padded input must both
+	 * finish well under the cap's cost bound and leave no live `<script` tag
+	 * for a browser to execute.
+	 */
+	public function test_ninety_nine_nested_layers_with_large_padding_stay_fast_and_safe(): void {
+		$payload = 'alert(1)';
+		for ( $layer = 0; $layer < 99; $layer++ ) {
+			$payload = '<scr<script>x</script>ipt>' . $payload . '</scr<script></script>ipt>';
+		}
+		$payload .= str_repeat( '<b>', 333000 ); // ~1MB total.
+
+		$harness = new Mcpwp_Test_Sanitization_Harness();
+
+		$started = microtime( true );
+		$result  = $harness->sanitize( $payload );
+		$elapsed = microtime( true ) - $started;
+
+		$this->assertLessThan(
+			3.0,
+			$elapsed,
+			sprintf( 'sanitize_content_body() on a %d-byte, 99-layer input took %.3fs — the pass cap is not bounding cost.', strlen( $payload ), $elapsed )
+		);
+		$this->assertStringNotContainsString( 'alert(1)', $result['content'] );
+		$this->assertStringNotContainsStringIgnoringCase( '<script', $result['content'] );
 	}
 
 	public function test_a_null_byte_inside_a_tag_name_does_not_hide_the_tag(): void {
@@ -671,6 +734,29 @@ final class KsesRawTextStripTest extends TestCase {
 		$this->assertStringNotContainsString( 'alert(1)', $result['content'] );
 		$this->assertSame( '', $result['content'] );
 		$this->assertSame( array( array( 'tag' => 'script', 'count' => 1 ) ), $result['removed'] );
+	}
+
+	/**
+	 * Round 3 WARN: wp_kses_no_null() with its default options ('slash_zero'
+	 * => 'remove') deletes a literal backslash-zero *character sequence* —
+	 * `C:\0dir \000` became `C:dir ` — which has nothing to do with an
+	 * actual NUL byte. kses's own call site (wp-includes/kses.php) passes
+	 * 'slash_zero' => 'keep' for exactly this reason; sanitize_content_body()
+	 * now does the same. Both a Windows-path-shaped string and a bare
+	 * regex-pattern-shaped string containing "\0" must survive unchanged.
+	 */
+	public function test_a_literal_backslash_zero_is_not_mistaken_for_a_null_byte(): void {
+		$harness = new Mcpwp_Test_Sanitization_Harness();
+
+		// Single-quoted: '\0' here is two literal characters, backslash and
+		// '0' — not the octal-escaped NUL byte a double-quoted "\0" would be.
+		$windows_path = '<p>C:\0dir \000</p>';
+		$result       = $harness->sanitize( $windows_path );
+		$this->assertSame( $windows_path, $result['content'] );
+
+		$regex_doc = '<p>Matches a NUL byte with the regex \0 or \x00.</p>';
+		$result    = $harness->sanitize( $regex_doc );
+		$this->assertSame( $regex_doc, $result['content'] );
 	}
 
 	/**
