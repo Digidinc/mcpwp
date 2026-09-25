@@ -461,6 +461,14 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 				'pro'         => ! empty( $capabilities['elementor_pro'] ),
 				'layout_mode' => $capabilities['elementor_layout_mode'] ?? 'section',
 			);
+
+			// Atomic mode implies the Container experiment is also active, but
+			// Elementor's own render pipeline is currently dropping atomic
+			// elements (e-div-block, e-heading, ...) after save. Steer agents
+			// toward what renders today rather than what the mode name suggests.
+			if ( 'atomic' === ( $capabilities['elementor_layout_mode'] ?? '' ) ) {
+				$integrations['elementor']['note'] = 'Build with container + classic widgets — they render correctly. Atomic elements are accepted on write but not yet confirmed to render; check render_verified in the wp_set_elementor response.';
+			}
 		}
 
 		if ( ! empty( $capabilities['gutenberg'] ) ) {

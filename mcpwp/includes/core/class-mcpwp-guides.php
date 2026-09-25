@@ -177,6 +177,9 @@ class Mcpwp_Guides {
 						. "**Section mode (classic):** section -> column(s) -> widget(s)\n"
 						. "**Container mode (flexbox):** container -> container(s) -> widget(s)\n"
 						. "**Atomic mode (Editor V4):** e-div-block/e-flexbox/e-grid -> more of the same -> leaf elements (e-heading, e-button, ...). See the 'Atomic Elements' section below — the data shape is different from the other two modes.\n\n"
+						. ( 'atomic' === $layout_mode
+							? "**On this site:** recommend building with **container + classic widgets** — \"atomic\" mode means the Container experiment is also active, and container/widget data renders correctly. Genuine atomic elements (e-div-block, e-heading, ...) are accepted and saved, but Elementor's own render pipeline currently drops them after save (`render_verified: false` in the wp_set_elementor response) — see 'Atomic Elements' below before using them.\n\n"
+							: '' )
 						. "Always check the layout mode via wp_site_info or wp_introspect before building pages. Sending the wrong element types for this site's mode (e.g. container elements on a section-mode site, or atomic elements on a site without Atomic Elements active) is rejected up front with a clear error — it will not silently corrupt the page, but it also will not work, so check first.",
 				),
 				array(
@@ -208,6 +211,7 @@ class Mcpwp_Guides {
 				array(
 					'heading' => 'Atomic Elements (Editor V4)',
 					'content' => "Only applies when elementor_layout_mode is \"atomic\" (Elementor's Atomic Elements / Editor V4 experiment active). Do not send these element types otherwise — they will be rejected up front.\n\n"
+							. "**Recommendation:** on an atomic-mode site, build with **container + classic widgets** (`elType: \"container\"` / `elType: \"widget\"`) — that structure renders correctly today. Genuine atomic elements below are fully supported for reading and are accepted on write, but Elementor's own render pipeline currently drops them after save; check `render_verified` in the wp_set_elementor response before trusting an atomic write.\n\n"
 						. "**Key difference from section/container mode:** atomic elements are typed purely by `elType` — there is no separate `widgetType`. A heading is `{\"elType\": \"e-heading\", ...}`, not `{\"elType\": \"widget\", \"widgetType\": \"e-heading\"}`.\n\n"
 						. "**Container-style elements** (can nest anything, including each other): `e-div-block`, `e-flexbox`, `e-grid`.\n"
 						. "**Leaf content elements:** `e-heading`, `e-paragraph`, `e-button`, `e-image`, `e-svg`, `e-divider`, `e-youtube`, `e-self-hosted-video`.\n\n"
@@ -225,14 +229,14 @@ class Mcpwp_Guides {
 						. "    \"id\": \"hed456cd\", \"elType\": \"e-heading\",\n"
 						. "    \"settings\": {\n"
 						. "      \"tag\": {\"\$\$type\": \"string\", \"value\": \"h2\"},\n"
-						. "      \"title\": {\"\$\$type\": \"string\", \"value\": \"Hello Atomic World\"}\n"
+						. "      \"title\": {\"\$\$type\": \"escaped-html\", \"value\": \"Hello Atomic World\"}\n"
 						. "    },\n"
 						. "    \"styles\": {}\n"
 						. "  }]\n"
 						. "}]\n"
 						. "```\n\n"
 						. "**Always call `wp_get_widget_schema(widget_type)`** before setting props on an atomic element (e.g. `wp_get_widget_schema(\"e-heading\")`) — it returns the real prop list and the exact \"kind\" each one expects (string, union with an enum, etc.), taken directly from Elementor's own schema, not guessed.\n\n"
-						. "**Not yet supported:** full atomic write support is still gated on stability — Elementor's own Atomic Editor has open upstream bugs around saving. wp_set_elementor/wp_add_section/wp_edit_widget do work with atomic elements today (validated with a full recursive integrity check that catches and restores anything Elementor's own save silently drops), but treat atomic pages as more likely to need a retry/verify pass than section/container pages.",
+						. "**Not yet rendering when written via API:** writes succeed and validate (including a full recursive integrity check), but Elementor's own render pipeline has been observed dropping atomic elements after save on Elementor 4.3.2, reporting `render_verified: false` and a `render_errors` entry rather than silently losing them. Until that upstream issue is resolved, prefer container + classic widgets for anything that must be visible immediately, and always check `render_verified` after an atomic write.",
 				),
 				array(
 					'heading' => 'Multi-Column Sections',

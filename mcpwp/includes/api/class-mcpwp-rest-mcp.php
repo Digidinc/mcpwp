@@ -2830,7 +2830,10 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			$lines[] = 'This site uses Elementor (**' . $layout_mode . ' mode**) for visual page building.';
 			$lines[] = '';
 
-			if ( 'container' === $layout_mode ) {
+			if ( 'atomic' === $layout_mode ) {
+				$lines[] = '- **Recommendation:** build with `container > container(s) > widget(s)` (classic widgets) — "atomic" mode means the Container experiment is also active, and that structure renders correctly today.';
+				$lines[] = '- Genuine atomic elements (`e-div-block`, `e-heading`, ...) are accepted and saved, but Elementor\'s render pipeline currently drops them after save. Check `render_verified` in the `wp_set_elementor` response before trusting an atomic write. Details: `wp_get_guide(topic="elementor")`.';
+			} elseif ( 'container' === $layout_mode ) {
 				$lines[] = '- **Hierarchy:** `container > container(s) > widget(s)`. Containers can be nested.';
 				$lines[] = '- Top-level elements use `"elType": "container"` with `"settings": {"content_width": "full"}` or boxed.';
 			} else {

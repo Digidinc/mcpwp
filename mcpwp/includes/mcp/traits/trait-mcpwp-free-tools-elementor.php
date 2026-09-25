@@ -255,7 +255,7 @@ trait Mcpwp_Free_Tools_Elementor_Trait {
 
 		$tools[] = $this->define_tool(
 			'wp_set_elementor',
-			'FULL PAGE REPLACEMENT — overwrites all Elementor data on the page. For surgical edits, prefer wp_add_section, wp_replace_section, wp_edit_section, or wp_edit_widget instead. Use dry_run=true to validate data without saving. For large payloads with HTML content, use elementor_data_base64 (base64-encoded JSON) instead of elementor_data to avoid quoting/escaping issues. Check elementor_layout_mode from wp_site_info first: sending "container" elements to a "section"-mode site, or Atomic Elements (e-div-block, e-heading, ...) to a site without the Atomic Elements experiment active, is rejected up front with a clear error rather than silently losing data.',
+			'FULL PAGE REPLACEMENT — overwrites all Elementor data on the page. For surgical edits, prefer wp_add_section, wp_replace_section, wp_edit_section, or wp_edit_widget instead. Use dry_run=true to validate data without saving. For large payloads with HTML content, use elementor_data_base64 (base64-encoded JSON) instead of elementor_data to avoid quoting/escaping issues. Check elementor_layout_mode from wp_site_info first: sending "container" elements to a "section"-mode site, or Atomic Elements (e-div-block, e-heading, ...) to a site without the Atomic Elements experiment active, is rejected up front with a clear error rather than silently losing data. On an "atomic"-mode site, prefer container + classic widgets — they render correctly; Atomic Elements are accepted and saved but not yet confirmed to render, so check render_verified in the response before trusting an atomic write.',
 			array(
 				'id'             => array(
 					'type'        => 'number',
