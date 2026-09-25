@@ -16,6 +16,8 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 class Mcpwp_Multilang {
 
+	use Mcpwp_Sanitization;
+
 	/**
 	 * ISO 639-1 codes for right-to-left languages.
 	 *
@@ -408,7 +410,7 @@ class Mcpwp_Multilang {
 		// Create the translated post.
 		$new_post = array(
 			'post_title'   => isset( $data['title'] ) ? sanitize_text_field( $data['title'] ) : $original->post_title,
-			'post_content' => isset( $data['content'] ) ? wp_kses_post( $data['content'] ) : $original->post_content,
+			'post_content' => isset( $data['content'] ) ? $this->sanitize_content_body( $data['content'] )['content'] : $original->post_content,
 			'post_excerpt' => isset( $data['excerpt'] ) ? sanitize_textarea_field( $data['excerpt'] ) : $original->post_excerpt,
 			'post_status'  => isset( $data['status'] ) ? sanitize_key( $data['status'] ) : 'draft',
 			'post_type'    => $original->post_type,
@@ -563,7 +565,7 @@ class Mcpwp_Multilang {
 		// Create the translated post.
 		$new_post = array(
 			'post_title'   => isset( $data['title'] ) ? sanitize_text_field( $data['title'] ) : $original->post_title,
-			'post_content' => isset( $data['content'] ) ? wp_kses_post( $data['content'] ) : $original->post_content,
+			'post_content' => isset( $data['content'] ) ? $this->sanitize_content_body( $data['content'] )['content'] : $original->post_content,
 			'post_excerpt' => isset( $data['excerpt'] ) ? sanitize_textarea_field( $data['excerpt'] ) : $original->post_excerpt,
 			'post_status'  => isset( $data['status'] ) ? sanitize_key( $data['status'] ) : 'draft',
 			'post_type'    => $original->post_type,

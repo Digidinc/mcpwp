@@ -16,6 +16,8 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 class Mcpwp_Events {
 
+	use Mcpwp_Sanitization;
+
 	/**
 	 * Check if TP Events is active.
 	 *
@@ -113,8 +115,10 @@ class Mcpwp_Events {
 			'post_title'  => isset( $data['title'] ) ? sanitize_text_field( $data['title'] ) : '',
 		);
 
+		$sanitized_content = array( 'removed' => array() );
 		if ( isset( $data['content'] ) ) {
-			$post_data['post_content'] = wp_kses_post( $data['content'] );
+			$sanitized_content          = $this->sanitize_content_body( $data['content'] );
+			$post_data['post_content'] = $sanitized_content['content'];
 		}
 
 		if ( isset( $data['excerpt'] ) ) {
@@ -129,7 +133,12 @@ class Mcpwp_Events {
 
 		$this->set_event_meta( $post_id, $data );
 
-		return $this->get_event( $post_id );
+		$created = $this->get_event( $post_id );
+		if ( is_array( $created ) && ! empty( $sanitized_content['removed'] ) ) {
+			$created['sanitized'] = $sanitized_content['removed'];
+		}
+
+		return $created;
 	}
 
 	/**
@@ -149,14 +158,16 @@ class Mcpwp_Events {
 			return new WP_Error( 'not_found', __( 'Event not found.', 'mcpwp' ), array( 'status' => 404 ) );
 		}
 
-		$post_data = array( 'ID' => $id );
+		$post_data         = array( 'ID' => $id );
+		$sanitized_content = array( 'removed' => array() );
 
 		if ( isset( $data['title'] ) ) {
 			$post_data['post_title'] = sanitize_text_field( $data['title'] );
 		}
 
 		if ( isset( $data['content'] ) ) {
-			$post_data['post_content'] = wp_kses_post( $data['content'] );
+			$sanitized_content         = $this->sanitize_content_body( $data['content'] );
+			$post_data['post_content'] = $sanitized_content['content'];
 		}
 
 		if ( isset( $data['excerpt'] ) ) {
@@ -175,7 +186,12 @@ class Mcpwp_Events {
 
 		$this->set_event_meta( $id, $data );
 
-		return $this->get_event( $id );
+		$updated = $this->get_event( $id );
+		if ( is_array( $updated ) && ! empty( $sanitized_content['removed'] ) ) {
+			$updated['sanitized'] = $sanitized_content['removed'];
+		}
+
+		return $updated;
 	}
 
 	// =========================================================================

@@ -323,10 +323,15 @@ class Mcpwp_Posts {
 			return $clean_meta;
 		}
 
+		$sanitized_content = array( 'removed' => array() );
+		if ( isset( $data['content'] ) ) {
+			$sanitized_content = $this->sanitize_content_body( $data['content'] );
+		}
+
 		$post_data = array(
 			'post_type'    => $post_type,
 			'post_title'   => isset( $data['title'] ) ? sanitize_text_field( $data['title'] ) : '',
-			'post_content' => isset( $data['content'] ) ? wp_kses_post( $data['content'] ) : '',
+			'post_content' => isset( $data['content'] ) ? $sanitized_content['content'] : '',
 			'post_status'  => isset( $data['status'] ) ? sanitize_key( $data['status'] ) : 'draft',
 			'post_excerpt' => isset( $data['excerpt'] ) ? sanitize_textarea_field( $data['excerpt'] ) : '',
 		);
@@ -391,6 +396,9 @@ class Mcpwp_Posts {
 			if ( ! empty( $meta_deleted ) ) {
 				$created['meta_deleted'] = $meta_deleted;
 			}
+			if ( ! empty( $sanitized_content['removed'] ) ) {
+				$created['sanitized'] = $sanitized_content['removed'];
+			}
 		}
 
 		return $created;
@@ -454,14 +462,16 @@ class Mcpwp_Posts {
 			$before['tags'] = wp_list_pluck( wp_get_post_tags( $post_id ), 'slug' );
 		}
 
-		$post_data = array( 'ID' => $post_id );
+		$post_data         = array( 'ID' => $post_id );
+		$sanitized_content = array( 'removed' => array() );
 
 		if ( isset( $data['title'] ) ) {
 			$post_data['post_title'] = sanitize_text_field( $data['title'] );
 		}
 
 		if ( isset( $data['content'] ) ) {
-			$post_data['post_content'] = wp_kses_post( $data['content'] );
+			$sanitized_content         = $this->sanitize_content_body( $data['content'] );
+			$post_data['post_content'] = $sanitized_content['content'];
 		}
 
 		if ( isset( $data['status'] ) ) {
@@ -530,6 +540,9 @@ class Mcpwp_Posts {
 			}
 			if ( ! empty( $meta_deleted ) ) {
 				$post_result['meta_deleted'] = $meta_deleted;
+			}
+			if ( ! empty( $sanitized_content['removed'] ) ) {
+				$post_result['sanitized'] = $sanitized_content['removed'];
 			}
 		}
 
