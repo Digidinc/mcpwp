@@ -16,6 +16,8 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 class Mcpwp_WooCommerce {
 
+	use Mcpwp_Sanitization;
+
 	/**
 	 * Check if WooCommerce is active.
 	 *
@@ -371,11 +373,11 @@ class Mcpwp_WooCommerce {
 		}
 
 		if ( isset( $data['description'] ) ) {
-			$product->set_description( wp_kses_post( $data['description'] ) );
+			$product->set_description( $this->sanitize_content_body( $data['description'] )['content'] );
 		}
 
 		if ( isset( $data['short_description'] ) ) {
-			$product->set_short_description( wp_kses_post( $data['short_description'] ) );
+			$product->set_short_description( $this->sanitize_content_body( $data['short_description'] )['content'] );
 		}
 
 		if ( isset( $data['sku'] ) ) {

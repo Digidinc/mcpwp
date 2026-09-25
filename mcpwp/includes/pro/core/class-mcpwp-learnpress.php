@@ -16,6 +16,8 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 class Mcpwp_LearnPress {
 
+	use Mcpwp_Sanitization;
+
 	/**
 	 * Check if LearnPress is active.
 	 *
@@ -129,7 +131,7 @@ class Mcpwp_LearnPress {
 		);
 
 		if ( isset( $data['content'] ) ) {
-			$post_data['post_content'] = wp_kses_post( $data['content'] );
+			$post_data['post_content'] = $this->sanitize_content_body( $data['content'] )['content'];
 		}
 
 		if ( isset( $data['excerpt'] ) ) {
@@ -176,7 +178,7 @@ class Mcpwp_LearnPress {
 		}
 
 		if ( isset( $data['content'] ) ) {
-			$post_data['post_content'] = wp_kses_post( $data['content'] );
+			$post_data['post_content'] = $this->sanitize_content_body( $data['content'] )['content'];
 		}
 
 		if ( isset( $data['excerpt'] ) ) {
@@ -430,7 +432,7 @@ class Mcpwp_LearnPress {
 		);
 
 		if ( isset( $data['content'] ) ) {
-			$post_data['post_content'] = wp_kses_post( $data['content'] );
+			$post_data['post_content'] = $this->sanitize_content_body( $data['content'] )['content'];
 		}
 
 		$post_id = wp_insert_post( $post_data, true );
@@ -475,7 +477,7 @@ class Mcpwp_LearnPress {
 		}
 
 		if ( isset( $data['content'] ) ) {
-			$post_data['post_content'] = wp_kses_post( $data['content'] );
+			$post_data['post_content'] = $this->sanitize_content_body( $data['content'] )['content'];
 		}
 
 		if ( isset( $data['status'] ) ) {
@@ -581,7 +583,7 @@ class Mcpwp_LearnPress {
 		);
 
 		if ( isset( $data['content'] ) ) {
-			$post_data['post_content'] = wp_kses_post( $data['content'] );
+			$post_data['post_content'] = $this->sanitize_content_body( $data['content'] )['content'];
 		}
 
 		$post_id = wp_insert_post( $post_data, true );
@@ -619,7 +621,7 @@ class Mcpwp_LearnPress {
 		}
 
 		if ( isset( $data['content'] ) ) {
-			$post_data['post_content'] = wp_kses_post( $data['content'] );
+			$post_data['post_content'] = $this->sanitize_content_body( $data['content'] )['content'];
 		}
 
 		if ( isset( $data['status'] ) ) {
@@ -965,7 +967,7 @@ class Mcpwp_LearnPress {
 			$faqs = array();
 			foreach ( $data['faqs'] as $faq ) {
 				if ( is_array( $faq ) && count( $faq ) >= 2 ) {
-					$faqs[] = array( sanitize_text_field( $faq[0] ), wp_kses_post( $faq[1] ) );
+					$faqs[] = array( sanitize_text_field( $faq[0] ), $this->sanitize_content_body( $faq[1] )['content'] );
 				}
 			}
 			update_post_meta( $post_id, '_lp_faqs', $faqs );

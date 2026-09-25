@@ -559,7 +559,8 @@ class Mcpwp_Media {
 			return new WP_Error( 'not_found', 'Attachment not found.', array( 'status' => 404 ) );
 		}
 
-		$post_data = array( 'ID' => $attachment_id );
+		$post_data         = array( 'ID' => $attachment_id );
+		$sanitized_content = array( 'removed' => array() );
 
 		if ( isset( $args['title'] ) ) {
 			$post_data['post_title'] = sanitize_text_field( $args['title'] );
@@ -568,7 +569,8 @@ class Mcpwp_Media {
 			$post_data['post_excerpt'] = sanitize_textarea_field( $args['caption'] );
 		}
 		if ( isset( $args['description'] ) ) {
-			$post_data['post_content'] = wp_kses_post( $args['description'] );
+			$sanitized_content          = $this->sanitize_content_body( $args['description'] );
+			$post_data['post_content'] = $sanitized_content['content'];
 		}
 
 		if ( count( $post_data ) > 1 ) {
@@ -582,7 +584,12 @@ class Mcpwp_Media {
 			update_post_meta( $attachment_id, '_wp_attachment_image_alt', sanitize_text_field( $args['alt'] ) );
 		}
 
-		return $this->format_attachment( $attachment_id );
+		$updated = $this->format_attachment( $attachment_id );
+		if ( is_array( $updated ) && ! empty( $sanitized_content['removed'] ) ) {
+			$updated['sanitized'] = $sanitized_content['removed'];
+		}
+
+		return $updated;
 	}
 
 	protected function mime_to_extension( $mime ) {
