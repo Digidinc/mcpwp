@@ -38,6 +38,20 @@ trait Mcpwp_Sanitization {
 	private static $raw_text_elements = array( 'script', 'style' );
 
 	/**
+	 * Maximum number of strip passes {@see strip_raw_text_elements()} runs
+	 * over one string. A reassembly trick — e.g.
+	 * `<scr<script>x</script>ipt>alert(1)</scr<script></script>ipt>` — can
+	 * leave a genuine `<script>...</script>` pair assembled from the debris
+	 * of two decoys that a single pass correctly removed; re-scanning the
+	 * *output* of each pass catches that. Bounded so a pathological input
+	 * cannot loop unboundedly; in practice real content stabilizes in one or
+	 * two passes.
+	 *
+	 * @var int
+	 */
+	private static $raw_text_strip_max_passes = 10;
+
+	/**
 	 * Sanitize a post/page/attachment content body for a write.
 	 *
 	 * Replaces a bare `wp_kses_post( $content )` call. Before kses ever sees
@@ -54,45 +68,104 @@ trait Mcpwp_Sanitization {
 	 * could not before kses ran unconditionally on this path. That is a wider
 	 * stored-XSS surface, not a fix for #808.
 	 *
+	 * Non-string input is handled the way a bare `wp_kses_post( $content )`
+	 * call always was: a scalar (int/float/bool) is cast to a string first —
+	 * the implicit coercion PHP's string functions already performed inside
+	 * wp_kses_post() — and then goes through the same strip-then-kses pass as
+	 * any other string. An array or object never went through any
+	 * string-shaped logic before this fix either; it is still handed straight
+	 * to wp_kses_post() so a caller that (mistakenly, or via a bulk payload)
+	 * sends a non-scalar `content` gets exactly what main did with it, not a
+	 * blanked page (a prior version of this fix turned any non-string into
+	 * `''`, which is what let `wp_bulk_update_pages` blank a page whose
+	 * content happened to arrive as something other than a string).
+	 *
 	 * @param mixed $content Raw content as submitted by the caller.
 	 * @return array{content:string,removed:array<int,array{tag:string,count:int}>}
 	 *               Sanitized content and a report of whole elements removed.
 	 */
 	protected function sanitize_content_body( $content ) {
 		if ( ! is_string( $content ) ) {
-			$content = '';
+			if ( is_scalar( $content ) ) {
+				$content = (string) $content;
+			} else {
+				return array(
+					'content' => wp_kses_post( $content ),
+					'removed' => array(),
+				);
+			}
 		}
 
-		$stripped = $this->strip_raw_text_elements( $content );
+		$counts   = array();
+		$previous = null;
+
+		for ( $pass = 0; $pass < self::$raw_text_strip_max_passes && $content !== $previous; $pass++ ) {
+			$previous = $content;
+			$stripped = $this->strip_raw_text_elements( $content );
+			$content  = $stripped['content'];
+
+			foreach ( $stripped['removed'] as $entry ) {
+				$counts[ $entry['tag'] ] = ( isset( $counts[ $entry['tag'] ] ) ? $counts[ $entry['tag'] ] : 0 ) + $entry['count'];
+			}
+		}
+
+		$removed = array();
+		foreach ( $counts as $tag => $count ) {
+			$removed[] = array(
+				'tag'   => $tag,
+				'count' => $count,
+			);
+		}
 
 		return array(
-			'content' => wp_kses_post( $stripped['content'] ),
-			'removed' => $stripped['removed'],
+			'content' => wp_kses_post( $content ),
+			'removed' => $removed,
 		);
 	}
 
 	/**
-	 * Remove every `<script>`/`<style>` element — opening tag, body, and
-	 * closing tag — from $content, tolerating case, extra whitespace/attrs
-	 * in the closing tag (e.g. `</SCRIPT >`), and a missing closing tag.
+	 * Remove `<script>`/`<style>` elements — opening tag, body, and closing
+	 * tag together — from one pass over $content.
 	 *
-	 * Mirrors an HTML parser's tokenizer instead of a single greedy/lazy
-	 * regex: once an opening `<script>`/`<style>` tag is found, everything up
-	 * to that *same* element's matching closing tag is raw text and is
-	 * discarded as one unit — including anything inside it that merely looks
-	 * like another tag (e.g. a literal "<style>" inside a `<script>` body).
-	 * If no matching closing tag exists anywhere after it, a browser treats
-	 * the rest of the document as still inside the element, so this does the
-	 * same and removes through the end of the string — that's what actually
-	 * defeats an unclosed `<script>` bypass; a regex that requires a closing
-	 * tag to match at all would leave the tag-less body right where it was.
+	 * This is a small hand-rolled tokenizer, not a single regex, because a
+	 * regex that matches "`<script`...`</script>`" greedily-but-lazily is
+	 * exactly what makes this bug class exploitable: it cannot tell a real
+	 * tag boundary from text that merely contains the same characters. Every
+	 * rule below exists to fix one proven false-positive that made an
+	 * earlier, regex-only version of this method eat real page content:
 	 *
-	 * A single left-to-right scan (via preg_match with an offset, not
-	 * `preg_replace`) also keeps this linear in input length and avoids the
-	 * catastrophic-backtracking risk a `.*` between open/close tags invites
-	 * on adversarial input.
+	 * - A tag name must start *immediately* after `<` (no `<\s*name`) and end
+	 *   at whitespace, `/`, or `>` — never at `-` or another word character.
+	 *   Without this, `<style-guide>` and `< style tags sparingly` were both
+	 *   misread as the start of a `<style>` element.
+	 * - HTML comments (`<!-- ... -->`) and CDATA sections (`<![CDATA[ ... ]]>`)
+	 *   are skipped as opaque spans. Without this, `<!-- <style> -->` and
+	 *   `<![CDATA[<script>]]>` were misread as containing a real tag.
+	 * - Quoted attribute values are skipped as opaque spans while looking for
+	 *   the `>` that ends a tag. Without this, `<p title="<style>">` had its
+	 *   attribute value misread as a real `<style>` tag.
+	 * - When a real `<script>`/`<style>` open tag has NO matching close tag
+	 *   anywhere in the rest of the string, only the open tag itself is
+	 *   removed — never the remainder of the document. An earlier version of
+	 *   this method removed to the end of the string on the theory that a
+	 *   browser's raw-text parser would do the same; in practice a false
+	 *   "open tag" produced by any of the misreads above (or simply a stray
+	 *   `<script` with no real body) turned into wholesale data loss on
+	 *   unrelated, later content. kses then treats the remaining bare tag
+	 *   exactly as it did before this fix (its own existing behavior, not
+	 *   something introduced here).
 	 *
-	 * @param string $content Content to scan.
+	 * Once a genuine `<script>`/`<style>` open tag is found, the matching
+	 * close tag is found the way a browser's tokenizer finds it for a
+	 * raw-text element: by literal, case-insensitive text search for
+	 * `</name` followed by whitespace, `/`, or `>` — comments, CDATA and
+	 * quotes are NOT recognized inside a raw-text element's body, because
+	 * they are not recognized there either.
+	 *
+	 * Callers loop this method ({@see sanitize_content_body()}) to catch a
+	 * reassembly split across two decoy elements.
+	 *
+	 * @param string $content Content to scan (already a string).
 	 * @return array{content:string,removed:array<int,array{tag:string,count:int}>}
 	 */
 	private function strip_raw_text_elements( $content ) {
@@ -103,44 +176,104 @@ trait Mcpwp_Sanitization {
 			);
 		}
 
-		$tag_alternation = implode(
-			'|',
-			array_map(
-				static function ( $tag ) {
-					return preg_quote( $tag, '/' );
-				},
-				self::$raw_text_elements
-			)
-		);
-		$open_pattern = '/<\s*(' . $tag_alternation . ')\b[^>]*>/i';
-
 		$counts = array();
 		$result = '';
 		$cursor = 0;
 		$length = strlen( $content );
 
-		while ( $cursor < $length && preg_match( $open_pattern, $content, $open_match, PREG_OFFSET_CAPTURE, $cursor ) ) {
-			$open_start = $open_match[0][1];
-			$open_end   = $open_start + strlen( $open_match[0][0] );
-			$tag        = strtolower( $open_match[1][0] );
+		while ( $cursor < $length ) {
+			$lt = strpos( $content, '<', $cursor );
 
-			// Untouched text before the opening tag.
-			$result .= substr( $content, $cursor, $open_start - $cursor );
-
-			$close_pattern = '/<\s*\/\s*' . preg_quote( $tag, '/' ) . '\b[^>]*>/i';
-
-			if ( preg_match( $close_pattern, $content, $close_match, PREG_OFFSET_CAPTURE, $open_end ) ) {
-				$cursor = $close_match[0][1] + strlen( $close_match[0][0] );
-			} else {
-				// No closing tag anywhere after this — the rest of the
-				// document is still "inside" the element; drop it all.
-				$cursor = $length;
+			if ( false === $lt ) {
+				$result .= substr( $content, $cursor );
+				break;
 			}
 
-			$counts[ $tag ] = isset( $counts[ $tag ] ) ? $counts[ $tag ] + 1 : 1;
-		}
+			// Plain text before this '<'.
+			$result .= substr( $content, $cursor, $lt - $cursor );
 
-		$result .= substr( $content, $cursor );
+			// HTML comment — copied through verbatim, never scanned for tags.
+			if ( '<!--' === substr( $content, $lt, 4 ) ) {
+				$end = strpos( $content, '-->', $lt + 4 );
+				if ( false === $end ) {
+					$result .= substr( $content, $lt );
+					break;
+				}
+				$end     = $end + 3;
+				$result .= substr( $content, $lt, $end - $lt );
+				$cursor  = $end;
+				continue;
+			}
+
+			// CDATA section — same treatment.
+			if ( '<![CDATA[' === substr( $content, $lt, 9 ) ) {
+				$end = strpos( $content, ']]>', $lt + 9 );
+				if ( false === $end ) {
+					$result .= substr( $content, $lt );
+					break;
+				}
+				$end     = $end + 3;
+				$result .= substr( $content, $lt, $end - $lt );
+				$cursor  = $end;
+				continue;
+			}
+
+			// A real tag name starts immediately after '<' (optionally '/'
+			// for a close tag) — not after whitespace, which is just text.
+			if ( ! preg_match( '/\G<(\/?)([a-zA-Z][a-zA-Z0-9]*)/', $content, $tag_match, 0, $lt ) ) {
+				// '<' not followed by a valid tag name start — plain text.
+				$result .= '<';
+				$cursor  = $lt + 1;
+				continue;
+			}
+
+			$is_close  = '/' === $tag_match[1];
+			$tag_name  = strtolower( $tag_match[2] );
+			$name_end  = $lt + strlen( $tag_match[0] );
+			$boundary  = $name_end < $length ? $content[ $name_end ] : '>';
+
+			// The character right after the name must end it (whitespace,
+			// '/', or '>'); anything else (e.g. '-') means this is a longer,
+			// unrelated name such as a custom element and not a real match.
+			if ( ! preg_match( '/[\s\/>]/', $boundary ) ) {
+				$result .= '<';
+				$cursor  = $lt + 1;
+				continue;
+			}
+
+			$tag_end = $this->find_unquoted_gt( $content, $name_end );
+
+			if ( false === $tag_end ) {
+				// Unterminated tag ('<' with no closing '>' anywhere) — copy
+				// the rest through verbatim; there is nothing left to parse.
+				$result .= substr( $content, $lt );
+				break;
+			}
+
+			if ( ! $is_close && in_array( $tag_name, self::$raw_text_elements, true ) ) {
+				$close = $this->find_raw_text_close( $content, $tag_end + 1, $tag_name );
+
+				$counts[ $tag_name ] = ( isset( $counts[ $tag_name ] ) ? $counts[ $tag_name ] : 0 ) + 1;
+
+				if ( false !== $close ) {
+					// A real matching close tag: drop tag + body + close tag.
+					$cursor = $close;
+				} else {
+					// No matching close tag anywhere: drop ONLY the open tag.
+					// Whatever follows is left for kses, same as before this
+					// fix — never removed as a guess.
+					$cursor = $tag_end + 1;
+				}
+				continue;
+			}
+
+			// Any other tag (including a close tag with no matching open, or
+			// script/style's own close tag reached without ever finding an
+			// unmatched open — both handled above) passes through untouched;
+			// kses decides its fate exactly as it did before this fix.
+			$result .= substr( $content, $lt, $tag_end - $lt + 1 );
+			$cursor  = $tag_end + 1;
+		}
 
 		$removed = array();
 		foreach ( $counts as $tag => $count ) {
@@ -154,6 +287,89 @@ trait Mcpwp_Sanitization {
 			'content' => $result,
 			'removed' => $removed,
 		);
+	}
+
+	/**
+	 * Find the '>' that ends a tag starting at $from, skipping over any
+	 * single- or double-quoted attribute value along the way so a literal
+	 * '>' (or, via the caller, a literal "<style>") inside a quoted value is
+	 * never mistaken for the tag boundary.
+	 *
+	 * @param string $content Content to scan.
+	 * @param int    $from    Offset to start scanning from.
+	 * @return int|false Offset of the terminating '>', or false if none.
+	 */
+	private function find_unquoted_gt( $content, $from ) {
+		$length    = strlen( $content );
+		$in_quote  = null;
+
+		for ( $i = $from; $i < $length; $i++ ) {
+			$char = $content[ $i ];
+
+			if ( null !== $in_quote ) {
+				if ( $char === $in_quote ) {
+					$in_quote = null;
+				}
+				continue;
+			}
+
+			if ( '"' === $char || "'" === $char ) {
+				$in_quote = $char;
+				continue;
+			}
+
+			if ( '>' === $char ) {
+				return $i;
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * Find the end of the matching close tag for a raw-text element
+	 * (`</script`/`</style`), the way a browser's tokenizer does: a literal,
+	 * case-insensitive search for "</name" followed by whitespace, '/', or
+	 * '>' — nothing inside a raw-text element's body (comments, CDATA,
+	 * quotes, other tags) is recognized as anything but more raw text.
+	 *
+	 * @param string $content Content to scan.
+	 * @param int    $from    Offset to start scanning from (just after the
+	 *                        element's open tag).
+	 * @param string $tag_name Lowercase element name, e.g. 'script'.
+	 * @return int|false Offset one past the close tag's '>', or false if no
+	 *                    real close tag exists anywhere after $from.
+	 */
+	private function find_raw_text_close( $content, $from, $tag_name ) {
+		$length = strlen( $content );
+		$needle = '</' . $tag_name;
+		$pos    = $from;
+
+		while ( $pos < $length ) {
+			$found = stripos( $content, $needle, $pos );
+
+			if ( false === $found ) {
+				return false;
+			}
+
+			$after_idx  = $found + strlen( $needle );
+			$after_char = $after_idx < $length ? $content[ $after_idx ] : '>';
+
+			if ( preg_match( '/[\s\/>]/', $after_char ) ) {
+				$close_gt = strpos( $content, '>', $after_idx );
+
+				if ( false === $close_gt ) {
+					return false;
+				}
+
+				return $close_gt + 1;
+			}
+
+			// A false match, e.g. "</scripting" — keep looking.
+			$pos = $after_idx;
+		}
+
+		return false;
 	}
 
 	/**
