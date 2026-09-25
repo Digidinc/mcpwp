@@ -125,6 +125,11 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 							'type'        => 'boolean',
 							'default'     => false,
 						),
+						'convert' => array(
+							'description' => __( 'Set true to convert a page that has existing non-Elementor content. Without it the write is refused rather than destroying that content (#788).', 'mcpwp' ),
+							'type'        => 'boolean',
+							'default'     => false,
+						),
 					),
 				),
 			)
@@ -195,6 +200,11 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 							'type'        => 'array',
 							'items'       => array( 'type' => 'string' ),
 						),
+						'convert' => array(
+							'description' => __( 'Set true to convert a page that has existing non-Elementor content. Without it the write is refused rather than destroying that content (#788).', 'mcpwp' ),
+							'type'        => 'boolean',
+							'default'     => false,
+						),
 					),
 				),
 			)
@@ -224,6 +234,11 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 							'required'    => false,
 							'type'        => 'string',
 							'default'     => 'end',
+						),
+						'convert' => array(
+							'description' => __( 'Set true to convert a page that has existing non-Elementor content. Without it the write is refused rather than destroying that content (#788).', 'mcpwp' ),
+							'type'        => 'boolean',
+							'default'     => false,
 						),
 					),
 				),
@@ -278,6 +293,11 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 							'required'    => true,
 							'type'        => 'object',
 						),
+						'convert' => array(
+							'description' => __( 'Set true to convert a page that has existing non-Elementor content. Without it the write is refused rather than destroying that content (#788).', 'mcpwp' ),
+							'type'        => 'boolean',
+							'default'     => false,
+						),
 					),
 				),
 			)
@@ -303,6 +323,11 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 						),
 						'repair_ids' => array(
 							'description' => __( 'Rewrite element ids that are not exactly 7 alphanumeric characters and repoint the references Elementor resolves to them (#842).', 'mcpwp' ),
+							'type'        => 'boolean',
+							'default'     => false,
+						),
+						'convert' => array(
+							'description' => __( 'Set true to convert a page that has existing non-Elementor content. Without it the write is refused rather than destroying that content (#788).', 'mcpwp' ),
 							'type'        => 'boolean',
 							'default'     => false,
 						),
@@ -852,6 +877,10 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 			'elementor_json'        => $request->get_param( 'elementor_json' ),
 			'elementor_data_base64' => $request->get_param( 'elementor_data_base64' ),
 			'repair_ids'            => rest_sanitize_boolean( $request->get_param( 'repair_ids' ) ),
+			// Dropped here previously: the conversion-guard opt-in never
+			// reached the writer, so `convert=true` could not un-stick a
+			// would_convert_existing_content 409 (#883).
+			'convert'               => rest_sanitize_boolean( $request->get_param( 'convert' ) ),
 		);
 
 		$result = $this->elementor->set_elementor_data( $page_id, $data, $dry_run );

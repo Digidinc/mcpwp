@@ -2818,6 +2818,10 @@ require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-registry.p
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-element-keys.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-element-ids.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-stored-tree.php';
+// The one reader of an Elementor experiment's active/inactive state (#883) —
+// loaded before the writer trait and class-mcpwp-core.php, both of which
+// call it.
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-experiments.php';
 require_once dirname(__DIR__) . '/includes/core/traits/trait-mcpwp-elementor-reader.php';
 require_once dirname(__DIR__) . '/includes/core/traits/trait-mcpwp-elementor-writer.php';
 require_once dirname(__DIR__) . '/includes/core/traits/trait-mcpwp-elementor-validator.php';

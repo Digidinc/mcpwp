@@ -337,8 +337,7 @@ class Mcpwp_Error_Hints {
 			return '';
 		}
 
-		$experiment = get_option( 'elementor_experiment-container', '' );
-		if ( 'active' === $experiment || 'default' === $experiment ) {
+		if ( class_exists( 'Mcpwp_Elementor_Experiments' ) && Mcpwp_Elementor_Experiments::is_container_active() ) {
 			return 'flexbox';
 		}
 

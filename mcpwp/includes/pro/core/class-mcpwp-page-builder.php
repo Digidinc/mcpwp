@@ -166,8 +166,7 @@ class Mcpwp_Page_Builder {
 		if ( ! defined( 'ELEMENTOR_VERSION' ) ) {
 			return false;
 		}
-		$experiments = get_option( 'elementor_experiment-container', '' );
-		return in_array( $experiments, array( 'active', 'default' ), true );
+		return Mcpwp_Elementor_Experiments::is_container_active();
 	}
 
 	/**

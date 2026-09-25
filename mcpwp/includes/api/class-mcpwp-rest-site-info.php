@@ -931,8 +931,7 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 		);
 
 		if ( defined( 'ELEMENTOR_VERSION' ) ) {
-			$experiment = get_option( 'elementor_experiment-container' );
-			if ( 'active' === $experiment || 'default' === $experiment ) {
+			if ( Mcpwp_Elementor_Experiments::is_container_active() ) {
 				$info['elementor']['layout_mode'] = 'container';
 			}
 		}
