@@ -335,6 +335,30 @@ class Mcpwp_License {
 	}
 
 	/**
+	 * Human-readable label for the current plan, for admin UI display only.
+	 *
+	 * get_plan() is a stable API/internal value ('unlicensed', 'pro', 'agency',
+	 * 'trial', …) read by the site-info capabilities payload and covered by
+	 * tests that assert the literal string — it must not change. But shown
+	 * verbatim in the admin Setup/Settings pages, title-cased 'unlicensed'
+	 * reads as "Plan: Unlicensed", which looks like an error rather than the
+	 * normal state of a Free install. Map that one value to "Free"; every
+	 * other plan (Pro, Agency, Trial, or any Freemius plan slug) keeps its
+	 * ordinary title-cased label.
+	 *
+	 * @return string
+	 */
+	public function get_plan_label() {
+		$plan = $this->get_plan();
+
+		if ( 'unlicensed' === $plan || 'free' === $plan ) {
+			return __( 'Free', 'mcpwp' );
+		}
+
+		return ucwords( str_replace( '_', ' ', $plan ) );
+	}
+
+	/**
 	 * Get the normalized Freemius plan slug when available.
 	 *
 	 * @return string Plan slug, or empty string when unknown.

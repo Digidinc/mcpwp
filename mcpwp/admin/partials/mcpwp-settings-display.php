@@ -16,8 +16,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 $license       = class_exists( 'Mcpwp_License' ) ? Mcpwp_License::get_instance() : null;
-$license_plan  = $license ? $license->get_plan() : 'unlicensed';
-$license_label = ucwords( str_replace( '_', ' ', $license_plan ) );
+$license_label = $license ? $license->get_plan_label() : __( 'Free', 'mcpwp' );
 ?>
 
 <div class="wrap mcpwp-admin">

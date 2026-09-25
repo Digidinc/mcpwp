@@ -12,6 +12,17 @@
  * access (cPanel's Error Log / File Manager can read wp-content/debug.log
  * or the host's PHP error log on shared hosting like HostGator).
  *
+ * #612's original cause (a layout-mode mismatch) was fixed in 3.4.8, and the
+ * follow-up destructive-rebuild case is now detected, restored, and reported
+ * to the caller at write time via `render_verified: false` (#793, 3.11.0) —
+ * so this class no longer backs an open investigation. It still has forensic
+ * value on hosts with unusual caching/object-cache layers that could
+ * reproduce a similar symptom, so it stays as an explicit opt-in rather than
+ * being deleted outright: unconditional `error_log()` on every single
+ * Elementor write was flooding debug.log on every first-run install (found
+ * ahead of the Product Hunt launch), which is out of proportion to a closed
+ * bug. Define `MCPWP_DEBUG_WRITES` (in wp-config.php) to re-enable it.
+ *
  * @package MCPWP
  */
 
@@ -25,6 +36,10 @@ class Mcpwp_Elementor_Data_Audit {
 	const LOG_PREFIX = '[MCPWP-612]';
 
 	public static function init() {
+		if ( ! defined( 'MCPWP_DEBUG_WRITES' ) || ! MCPWP_DEBUG_WRITES ) {
+			return;
+		}
+
 		add_action( 'added_post_meta', array( __CLASS__, 'on_write' ), 10, 4 );
 		add_action( 'updated_post_meta', array( __CLASS__, 'on_write' ), 10, 4 );
 		add_action( 'deleted_post_meta', array( __CLASS__, 'on_delete' ), 10, 3 );

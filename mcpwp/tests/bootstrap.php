@@ -339,8 +339,20 @@ class WP_REST_Server
     public const DELETABLE = 'DELETE';
 }
 
-function __($text)
+function __($text, $domain = 'default')
 {
+    // Mirror WP 6.7+'s "_load_textdomain_just_in_time" doing-it-wrong: real
+    // WordPress lazy-loads a non-default text domain's translations on first
+    // use, and logs a notice if that first use happens before the `init`
+    // action has fired. Record every call that would have tripped it, keyed
+    // by domain, so a test can assert "no early translation call for domain
+    // X" without needing a real WP_Textdomain_Registry.
+    if ('default' !== $domain && 0 === did_action('init')) {
+        $GLOBALS['mcpwp_test_early_textdomain_calls'][] = array(
+            'text'   => $text,
+            'domain' => $domain,
+        );
+    }
     return $text;
 }
 

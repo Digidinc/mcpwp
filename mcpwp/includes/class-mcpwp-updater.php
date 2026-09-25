@@ -20,9 +20,16 @@ class Mcpwp_Updater {
 	/**
 	 * Default URL to the version JSON file.
 	 *
+	 * This is only ever used as the `get_option( 'mcpwp_version_url', ... )`
+	 * fallback — i.e. for a site that has never explicitly saved the option —
+	 * so raising it to the canonical channel changes nothing for a site that
+	 * already saved a value (including the legacy mumega.com manifest, which
+	 * keeps working: both read the same R2 bucket, see CLAUDE.md "Deploy &
+	 * Update System").
+	 *
 	 * @var string
 	 */
-	private $version_url = 'https://mumega.com/mcp-updates/version.json';
+	private $version_url = 'https://updates.mcpwp.net/version.json';
 
 	/**
 	 * Plugin basename (e.g. mcpwp/mcpwp.php).
