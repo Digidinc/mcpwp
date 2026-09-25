@@ -46,13 +46,13 @@ trait Mcpwp_Sanitization {
 	 * text (#808). kses still runs afterwards for every other disallowed tag,
 	 * unchanged from today's behavior.
 	 *
-	 * Skipped entirely for a user holding `unfiltered_html`: every MCPWP
-	 * content write currently runs unconditionally through wp_kses_post()
-	 * regardless of the writing user's capabilities, so — unlike the
-	 * Elementor writer's scoped `unfiltered_html` grant — there was nothing
-	 * for this fix to preserve for that population on this path; this simply
-	 * makes the capability check exist here at all, matching how WordPress's
-	 * own post editor and the plugin's Elementor writer already treat it.
+	 * Deliberately unconditional — no `unfiltered_html` bypass. Every API key
+	 * runs as the shared `mcpwp_api_agent` user, the chat auth bridge runs as
+	 * a real admin, and the Elementor writer grants that user a scoped
+	 * `unfiltered_html` during its own saves, so exempting the capability
+	 * here would let an MCP-driven write store a raw `<script>` where it
+	 * could not before kses ran unconditionally on this path. That is a wider
+	 * stored-XSS surface, not a fix for #808.
 	 *
 	 * @param mixed $content Raw content as submitted by the caller.
 	 * @return array{content:string,removed:array<int,array{tag:string,count:int}>}
@@ -61,13 +61,6 @@ trait Mcpwp_Sanitization {
 	protected function sanitize_content_body( $content ) {
 		if ( ! is_string( $content ) ) {
 			$content = '';
-		}
-
-		if ( function_exists( 'current_user_can' ) && current_user_can( 'unfiltered_html' ) ) {
-			return array(
-				'content' => $content,
-				'removed' => array(),
-			);
 		}
 
 		$stripped = $this->strip_raw_text_elements( $content );

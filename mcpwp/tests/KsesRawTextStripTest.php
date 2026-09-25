@@ -17,6 +17,13 @@
  * `sanitized: [{tag, count}]` on the write response — same shape family as
  * the existing `terms`/`meta_applied`/`slug_warning` echo-back fields.
  *
+ * The strip-then-kses pass is unconditional — no `unfiltered_html` bypass.
+ * kses ran on these four sites for every caller before this fix regardless
+ * of capability, so a bypass would newly let an MCP-driven write (every API
+ * key runs as the shared mcpwp_api_agent user, which the Elementor writer
+ * scopes `unfiltered_html` to during its own saves) store a raw `<script>`
+ * where it could not before — a wider stored-XSS surface, not a fix.
+ *
  * @package MCPWP
  */
 
@@ -214,15 +221,23 @@ final class KsesRawTextStripTest extends TestCase {
 	/**
 	 * @dataProvider surfaces
 	 */
-	public function test_a_user_with_unfiltered_html_is_not_regressed( string $surface ): void {
+	public function test_a_user_with_unfiltered_html_still_gets_script_bodies_stripped( string $surface ): void {
+		// Every API key runs as the shared mcpwp_api_agent user, the chat
+		// auth bridge runs as a real admin, and the Elementor writer grants
+		// that user a scoped unfiltered_html during its own saves — so this
+		// capability is reachable on these write paths in practice, not a
+		// hypothetical. kses ran unconditionally here before #808's fix and
+		// must keep doing so for everyone, or this pinned-content-body path
+		// becomes a wider stored-XSS surface than it was.
 		$GLOBALS['mcpwp_test_user_caps'][ self::AGENT_ID ] = array( 'unfiltered_html' => true );
 
 		$content = '<p>Keep</p><script>alert(1)</script>';
 		$result  = $this->write_content( $surface, $content, 97 );
 
 		$this->assertIsArray( $result, is_wp_error( $result ) ? $result->get_error_message() : '' );
-		$this->assertSame( $content, $result['content'], 'A user with unfiltered_html is not put through the new strip step.' );
-		$this->assertArrayNotHasKey( 'sanitized', $result );
+		$this->assertSame( '<p>Keep</p>', $result['content'], 'unfiltered_html does not exempt this path from stripping.' );
+		$this->assertStringNotContainsString( 'alert(1)', $result['content'] );
+		$this->assertSame( array( 'script' => 1 ), $this->removed_map( $result ) );
 	}
 
 	public function test_rest_layer_surfaces_the_sanitized_field_on_create_and_update(): void {
