@@ -13,6 +13,156 @@ if ( ! defined( 'ABSPATH' ) ) {
  * Input sanitization and validation functionality.
  */
 trait Mcpwp_Sanitization {
+
+	/**
+	 * Element tag names whose content model is raw text (CDATA-like), not
+	 * markup — everything between the open and close tag is program source,
+	 * never text meant to render on the page.
+	 *
+	 * wp_kses_post() is a markup-aware sanitizer: a disallowed tag it doesn't
+	 * recognize is removed, but ordinary text between that tag's start and
+	 * end stays, because for every *markup* element that is correct — the
+	 * text is content. For `<script>`/`<style>` that "text" is JS/CSS source,
+	 * so a stripped `<script>alert(1)</script>` turns into a paragraph
+	 * reading "alert(1)" on the live page instead of disappearing (#808).
+	 *
+	 * `noscript` is deliberately excluded. Its body is ordinary markup — a
+	 * fallback shown to JS-disabled browsers — not source code. Once the
+	 * disallowed `noscript` wrapper itself is removed, the normal kses
+	 * allow-list pass over the markup inside it is correct; there is no
+	 * code-as-text leak to guard against, so treating it like script/style
+	 * would only discard content a user could otherwise legitimately keep.
+	 *
+	 * @var string[]
+	 */
+	private static $raw_text_elements = array( 'script', 'style' );
+
+	/**
+	 * Sanitize a post/page/attachment content body for a write.
+	 *
+	 * Replaces a bare `wp_kses_post( $content )` call. Before kses ever sees
+	 * the string, `<script>`/`<style>` elements are removed whole — tag and
+	 * body together — so their source code can never survive as visible page
+	 * text (#808). kses still runs afterwards for every other disallowed tag,
+	 * unchanged from today's behavior.
+	 *
+	 * Skipped entirely for a user holding `unfiltered_html`: every MCPWP
+	 * content write currently runs unconditionally through wp_kses_post()
+	 * regardless of the writing user's capabilities, so — unlike the
+	 * Elementor writer's scoped `unfiltered_html` grant — there was nothing
+	 * for this fix to preserve for that population on this path; this simply
+	 * makes the capability check exist here at all, matching how WordPress's
+	 * own post editor and the plugin's Elementor writer already treat it.
+	 *
+	 * @param mixed $content Raw content as submitted by the caller.
+	 * @return array{content:string,removed:array<int,array{tag:string,count:int}>}
+	 *               Sanitized content and a report of whole elements removed.
+	 */
+	protected function sanitize_content_body( $content ) {
+		if ( ! is_string( $content ) ) {
+			$content = '';
+		}
+
+		if ( function_exists( 'current_user_can' ) && current_user_can( 'unfiltered_html' ) ) {
+			return array(
+				'content' => $content,
+				'removed' => array(),
+			);
+		}
+
+		$stripped = $this->strip_raw_text_elements( $content );
+
+		return array(
+			'content' => wp_kses_post( $stripped['content'] ),
+			'removed' => $stripped['removed'],
+		);
+	}
+
+	/**
+	 * Remove every `<script>`/`<style>` element — opening tag, body, and
+	 * closing tag — from $content, tolerating case, extra whitespace/attrs
+	 * in the closing tag (e.g. `</SCRIPT >`), and a missing closing tag.
+	 *
+	 * Mirrors an HTML parser's tokenizer instead of a single greedy/lazy
+	 * regex: once an opening `<script>`/`<style>` tag is found, everything up
+	 * to that *same* element's matching closing tag is raw text and is
+	 * discarded as one unit — including anything inside it that merely looks
+	 * like another tag (e.g. a literal "<style>" inside a `<script>` body).
+	 * If no matching closing tag exists anywhere after it, a browser treats
+	 * the rest of the document as still inside the element, so this does the
+	 * same and removes through the end of the string — that's what actually
+	 * defeats an unclosed `<script>` bypass; a regex that requires a closing
+	 * tag to match at all would leave the tag-less body right where it was.
+	 *
+	 * A single left-to-right scan (via preg_match with an offset, not
+	 * `preg_replace`) also keeps this linear in input length and avoids the
+	 * catastrophic-backtracking risk a `.*` between open/close tags invites
+	 * on adversarial input.
+	 *
+	 * @param string $content Content to scan.
+	 * @return array{content:string,removed:array<int,array{tag:string,count:int}>}
+	 */
+	private function strip_raw_text_elements( $content ) {
+		if ( '' === $content ) {
+			return array(
+				'content' => $content,
+				'removed' => array(),
+			);
+		}
+
+		$tag_alternation = implode(
+			'|',
+			array_map(
+				static function ( $tag ) {
+					return preg_quote( $tag, '/' );
+				},
+				self::$raw_text_elements
+			)
+		);
+		$open_pattern = '/<\s*(' . $tag_alternation . ')\b[^>]*>/i';
+
+		$counts = array();
+		$result = '';
+		$cursor = 0;
+		$length = strlen( $content );
+
+		while ( $cursor < $length && preg_match( $open_pattern, $content, $open_match, PREG_OFFSET_CAPTURE, $cursor ) ) {
+			$open_start = $open_match[0][1];
+			$open_end   = $open_start + strlen( $open_match[0][0] );
+			$tag        = strtolower( $open_match[1][0] );
+
+			// Untouched text before the opening tag.
+			$result .= substr( $content, $cursor, $open_start - $cursor );
+
+			$close_pattern = '/<\s*\/\s*' . preg_quote( $tag, '/' ) . '\b[^>]*>/i';
+
+			if ( preg_match( $close_pattern, $content, $close_match, PREG_OFFSET_CAPTURE, $open_end ) ) {
+				$cursor = $close_match[0][1] + strlen( $close_match[0][0] );
+			} else {
+				// No closing tag anywhere after this — the rest of the
+				// document is still "inside" the element; drop it all.
+				$cursor = $length;
+			}
+
+			$counts[ $tag ] = isset( $counts[ $tag ] ) ? $counts[ $tag ] + 1 : 1;
+		}
+
+		$result .= substr( $content, $cursor );
+
+		$removed = array();
+		foreach ( $counts as $tag => $count ) {
+			$removed[] = array(
+				'tag'   => $tag,
+				'count' => $count,
+			);
+		}
+
+		return array(
+			'content' => $result,
+			'removed' => $removed,
+		);
+	}
+
 	/**
 	 * Check whether content contains wrapper HTML tags that should never be injected.
 	 *

@@ -117,10 +117,15 @@ class Mcpwp_Pages {
 			return $clean_meta;
 		}
 
+		$sanitized_content = array( 'removed' => array() );
+		if ( isset( $data['content'] ) ) {
+			$sanitized_content = $this->sanitize_content_body( $data['content'] );
+		}
+
 		$page_data = array(
 			'post_type'    => 'page',
 			'post_title'   => isset( $data['title'] ) ? sanitize_text_field( $data['title'] ) : '',
-			'post_content' => isset( $data['content'] ) ? wp_kses_post( $data['content'] ) : '',
+			'post_content' => isset( $data['content'] ) ? $sanitized_content['content'] : '',
 			'post_excerpt' => isset( $data['excerpt'] ) ? sanitize_textarea_field( $data['excerpt'] ) : '',
 			'post_status'  => isset( $data['status'] ) ? sanitize_key( $data['status'] ) : 'draft',
 		);
@@ -182,6 +187,9 @@ class Mcpwp_Pages {
 			if ( ! empty( $meta_deleted ) ) {
 				$created['meta_deleted'] = $meta_deleted;
 			}
+			if ( ! empty( $sanitized_content['removed'] ) ) {
+				$created['sanitized'] = $sanitized_content['removed'];
+			}
 		}
 
 		return $created;
@@ -234,14 +242,16 @@ class Mcpwp_Pages {
 			$before['content_chars'] = mb_strlen( $page->post_content );
 		}
 
-		$page_data = array( 'ID' => $page_id );
+		$page_data         = array( 'ID' => $page_id );
+		$sanitized_content = array( 'removed' => array() );
 
 		if ( isset( $data['title'] ) ) {
 			$page_data['post_title'] = sanitize_text_field( $data['title'] );
 		}
 
 		if ( isset( $data['content'] ) ) {
-			$page_data['post_content'] = wp_kses_post( $data['content'] );
+			$sanitized_content         = $this->sanitize_content_body( $data['content'] );
+			$page_data['post_content'] = $sanitized_content['content'];
 		}
 
 		if ( isset( $data['excerpt'] ) ) {
@@ -315,6 +325,9 @@ class Mcpwp_Pages {
 			}
 			if ( ! empty( $meta_deleted ) ) {
 				$page_result['meta_deleted'] = $meta_deleted;
+			}
+			if ( ! empty( $sanitized_content['removed'] ) ) {
+				$page_result['sanitized'] = $sanitized_content['removed'];
 			}
 		}
 
