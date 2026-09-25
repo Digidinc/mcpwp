@@ -673,106 +673,171 @@ class Mcpwp_Theme_Builder {
 			return $result;
 		}
 
-		// Create the template post.
+		// Create the template post as a DRAFT, not 'publish'. A header/footer
+		// Theme Builder template goes live site-wide the instant it is both
+		// published AND assigned to a location — so publishing here, before its
+		// Elementor data is even attempted, meant a save that failed (a returned
+		// WP_Error) or fatalled (a Throwable — #759's unguarded `widgetType`
+		// read in Elementor's content-sanitizer, which runs for any non-admin
+		// writer) left an empty header or footer live on every page of the site
+		// (#828 part 2). Nothing below is allowed to publish until the
+		// Elementor data has actually been written; any failure along the way
+		// deletes this draft instead of leaving it live.
 		$post_data = array(
 			'post_title'  => $title,
-			'post_status' => 'publish',
+			'post_status' => 'draft',
 			'post_type'   => 'elementor_library',
 		);
 
-		$template_id = wp_insert_post( $post_data );
+		$template_id = wp_insert_post( $post_data, true );
 		if ( is_wp_error( $template_id ) ) {
 			return $template_id;
 		}
 
-		// Set all required Elementor meta for Theme Builder templates to render.
-		update_post_meta( $template_id, '_elementor_template_type', $type );
-		update_post_meta( $template_id, '_elementor_edit_mode', 'builder' );
-		update_post_meta( $template_id, '_elementor_version', defined( 'ELEMENTOR_VERSION' ) ? ELEMENTOR_VERSION : '' );
-		update_post_meta( $template_id, '_wp_page_template', 'elementor_header_footer' );
+		$conditions_error = null;
 
-		// Set Elementor data if provided — use document_save_with_meta_overwrite pattern.
-		if ( ! empty( $data['elementor_data'] ) ) {
-			$elements = $data['elementor_data'];
-			if ( is_string( $elements ) ) {
-				$elements = json_decode( $elements, true );
-			}
-			if ( ! is_array( $elements ) ) {
-				$elements = array();
-			}
+		try {
+			// Set all required Elementor meta for Theme Builder templates to render.
+			update_post_meta( $template_id, '_elementor_template_type', $type );
+			update_post_meta( $template_id, '_elementor_edit_mode', 'builder' );
+			update_post_meta( $template_id, '_elementor_version', defined( 'ELEMENTOR_VERSION' ) ? ELEMENTOR_VERSION : '' );
+			update_post_meta( $template_id, '_wp_page_template', 'elementor_header_footer' );
 
-			// Normalised before both the Document::save() below and the raw meta
-			// write, so Elementor renders the same tree we store. This path
-			// never reaches validate_and_fix_elements(), so a theme template
-			// carrying `css_id` kept an id Elementor never renders (#737).
-			if ( class_exists( 'Mcpwp_Elementor_Element_Keys' ) ) {
-				$elements = Mcpwp_Elementor_Element_Keys::normalize_tree( $elements );
-			}
+			// Set Elementor data if provided — use document_save_with_meta_overwrite pattern.
+			if ( ! empty( $data['elementor_data'] ) ) {
+				$elements = $data['elementor_data'];
+				if ( is_string( $elements ) ) {
+					$elements = json_decode( $elements, true );
+				}
+				if ( ! is_array( $elements ) ) {
+					$elements = array();
+				}
 
-			$json         = wp_json_encode( $elements );
-			$elementor_ok = class_exists( '\Elementor\Plugin' ) && ! empty( \Elementor\Plugin::$instance->documents );
+				// Normalised before both the Document::save() below and the raw meta
+				// write, so Elementor renders the same tree we store. This path
+				// never reaches validate_and_fix_elements(), so a theme template
+				// carrying `css_id` kept an id Elementor never renders (#737).
+				if ( class_exists( 'Mcpwp_Elementor_Element_Keys' ) ) {
+					$elements = Mcpwp_Elementor_Element_Keys::normalize_tree( $elements );
+				}
 
-			// Try Document::save() first for proper Elementor initialization.
-			if ( $elementor_ok ) {
+				$json         = wp_json_encode( $elements );
+				$elementor_ok = class_exists( '\Elementor\Plugin' ) && ! empty( \Elementor\Plugin::$instance->documents );
+
+				// Try Document::save() first for proper Elementor initialization.
+				// Wrapped in the same content-sanitizer suspend used by the main
+				// Elementor writer (Mcpwp_Elementor_Sanitizer_Guard, shared with
+				// trait-mcpwp-elementor-writer.php — #759): this call carries our
+				// own element tree to a non-admin writer's Document::save(), the
+				// exact shape that trips Elementor's unguarded `widgetType` read.
+				// A restore() in `finally` guarantees the sanitizer is re-hooked
+				// whether the save throws or not.
+				if ( $elementor_ok ) {
+					wp_cache_delete( $template_id, 'post_meta' );
+					clean_post_cache( $template_id );
+					$document = \Elementor\Plugin::$instance->documents->get( $template_id, false );
+					if ( $document && method_exists( $document, 'save' ) ) {
+						$suspended_sanitizer = Mcpwp_Elementor_Sanitizer_Guard::suspend();
+						try {
+							$document->save( array( 'elements' => $elements ) );
+						} finally {
+							Mcpwp_Elementor_Sanitizer_Guard::restore( $suspended_sanitizer );
+						}
+					}
+				}
+
+				// Always overwrite raw meta — Document::save() may silently fail or
+				// write to revision cache instead of post meta (#198).
+				update_post_meta( $template_id, '_elementor_data', wp_slash( $json ) );
+
+				// Clear post_content so Elementor owns the rendering.
+				$content_cleared = wp_update_post(
+					array(
+						'ID'           => $template_id,
+						'post_content' => '',
+					),
+					true
+				);
+				if ( is_wp_error( $content_cleared ) ) {
+					throw new RuntimeException( 'clear_post_content_failed: ' . $content_cleared->get_error_message() );
+				}
+
+				// Flush caches so Elementor reads the new data.
 				wp_cache_delete( $template_id, 'post_meta' );
 				clean_post_cache( $template_id );
-				$document = \Elementor\Plugin::$instance->documents->get( $template_id, false );
-				if ( $document && method_exists( $document, 'save' ) ) {
-					$document->save( array( 'elements' => $elements ) );
+				if ( $elementor_ok ) {
+					\Elementor\Plugin::$instance->documents->get( $template_id, false );
+					if ( function_exists( 'wp_cache_flush_group' ) ) {
+						wp_cache_flush_group( 'post_meta' );
+					}
+				}
+
+				// Regenerate CSS.
+				delete_post_meta( $template_id, '_elementor_css' );
+				if ( class_exists( '\Elementor\Core\Files\CSS\Post' ) ) {
+					$css_file = \Elementor\Core\Files\CSS\Post::create( $template_id );
+					$css_file->update();
 				}
 			}
 
-			// Always overwrite raw meta — Document::save() may silently fail or
-			// write to revision cache instead of post meta (#198).
-			update_post_meta( $template_id, '_elementor_data', wp_slash( $json ) );
-
-			// Clear post_content so Elementor owns the rendering.
-			wp_update_post( array(
-				'ID'           => $template_id,
-				'post_content' => '',
-			) );
-
-			// Flush caches so Elementor reads the new data.
-			wp_cache_delete( $template_id, 'post_meta' );
-			clean_post_cache( $template_id );
-			if ( $elementor_ok ) {
-				\Elementor\Plugin::$instance->documents->get( $template_id, false );
-				if ( function_exists( 'wp_cache_flush_group' ) ) {
-					wp_cache_flush_group( 'post_meta' );
-				}
+			// Build options for assign_to_location.
+			$assign_options = array();
+			if ( ! empty( $data['post_type'] ) ) {
+				$assign_options['post_type'] = sanitize_text_field( $data['post_type'] );
+			}
+			if ( ! empty( $data['post_ids'] ) ) {
+				$assign_options['post_ids'] = array_map( 'absint', (array) $data['post_ids'] );
 			}
 
-			// Regenerate CSS.
-			delete_post_meta( $template_id, '_elementor_css' );
-			if ( class_exists( '\Elementor\Core\Files\CSS\Post' ) ) {
-				$css_file = \Elementor\Core\Files\CSS\Post::create( $template_id );
-				$css_file->update();
+			// Assign to location. The type maps to the Elementor location name.
+			// A conditions failure does not roll back the template — the
+			// Elementor data (the thing #828/#759 could leave broken) is already
+			// safely written by this point, so what remains is "created but not
+			// bound to a location", which is what the pre-existing
+			// conditions_error contract below already reports.
+			$assign_result = $this->assign_to_location( $template_id, $type, $scope, $assign_options );
+			if ( is_wp_error( $assign_result ) ) {
+				$conditions_error = $assign_result->get_error_message();
 			}
-		}
 
-		// Build options for assign_to_location.
-		$assign_options = array();
-		if ( ! empty( $data['post_type'] ) ) {
-			$assign_options['post_type'] = sanitize_text_field( $data['post_type'] );
-		}
-		if ( ! empty( $data['post_ids'] ) ) {
-			$assign_options['post_ids'] = array_map( 'absint', (array) $data['post_ids'] );
-		}
-
-		// Assign to location. The type maps to the Elementor location name.
-		$result = $this->assign_to_location( $template_id, $type, $scope, $assign_options );
-		if ( is_wp_error( $result ) ) {
-			// Template was created but conditions failed — still return the template.
-			$template = $this->get_template( $template_id );
-			if ( is_wp_error( $template ) ) {
-				return $template;
+			// Publish only now — after the Elementor data has been written (or
+			// there was none to write) and conditions have been applied. This is
+			// the one status transition in this method; every path above either
+			// reaches here or throws into the catch block below.
+			$published = wp_update_post(
+				array(
+					'ID'          => $template_id,
+					'post_status' => 'publish',
+				),
+				true
+			);
+			if ( is_wp_error( $published ) ) {
+				throw new RuntimeException( 'publish_failed: ' . $published->get_error_message() );
 			}
-			$template['conditions_error'] = $result->get_error_message();
-			return $template;
+		} catch ( \Throwable $e ) {
+			// Any failure past this point — a returned WP_Error surfaced as a
+			// throw above, or a genuine Throwable straight out of Elementor
+			// (#759) — must not leave a published, broken template live. Force
+			// delete: it is still a draft with no meaningful revision history.
+			wp_delete_post( $template_id, true );
+
+			return new WP_Error(
+				'theme_template_save_failed',
+				sprintf(
+					/* translators: %s: underlying error message */
+					__( 'Theme template could not be created: %s. Nothing was published.', 'mcpwp' ),
+					$e->getMessage()
+				)
+			);
 		}
 
 		$template = $this->get_template( $template_id );
 		if ( is_wp_error( $template ) ) {
+			return $template;
+		}
+
+		if ( null !== $conditions_error ) {
+			$template['conditions_error'] = $conditions_error;
 			return $template;
 		}
 

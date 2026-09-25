@@ -282,6 +282,9 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-elementor-element-ids.php';
 	// The one reader of a stored `_elementor_data` tree, whatever its form (#845).
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-elementor-stored-tree.php';
+	// Shared suspend/restore for Elementor's content-sanitizer (#828 part 2 /
+	// #759 residual gap) — loaded before anything that calls it, trait or not.
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-elementor-sanitizer-guard.php';
 	// Elementor engine verb traits (mixed into Mcpwp_Elementor_Basic — G4 split).
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/traits/trait-mcpwp-elementor-reader.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/traits/trait-mcpwp-elementor-writer.php';
