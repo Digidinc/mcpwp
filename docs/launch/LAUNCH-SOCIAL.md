@@ -1,5 +1,5 @@
 STATUS: DRAFT — routes through Hadi's Telegram gate before any publish.
-Target launch day: Tue Jun 30 or Thu Jul 2, 2026 (TBC). Nothing here posts automatically.
+Target launch day: [OWNER: pick date]. Nothing here posts automatically.
 
 ---
 
@@ -22,10 +22,11 @@ We just launched MCPWP on Product Hunt.
 
 Install the plugin on any WordPress site. Generate an API key. Paste one config block.
 
-Your AI (Claude, Cursor, GPT, Gemini) can now operate your entire site — pages,
-Elementor, WooCommerce, SEO, menus, media — through 239 structured tools.
+Your AI (Claude, Cursor, or any MCP client) can now operate your entire site — pages,
+Elementor, WooCommerce, SEO, menus, media — through 180+ structured tools free (300+
+with Pro).
 
-With an approval gate.
+With an opt-in approval gate.
 
 [Product Hunt link — add on launch day]
 
@@ -40,41 +41,40 @@ changed or how to undo it.
 
 MCPWP's architecture works the other way:
 
-Every write is staged first.
+Any write can be staged first.
 You approve (or reject).
 Full audit log. One-click rollback.
 
-Nothing touches the live site until you say so.
+Route it through the gate and nothing touches the live site until you say so. As of
+3.13, publishing itself needs an admin-scoped key — a write-scoped agent can draft, not
+ship.
 
 ---
 
 **Post 3 — The specificity post (post ~40 min after launch)**
 
-What does 239 tools actually mean?
+What does 180+ free tools (300+ with Pro) actually mean?
 
 Content: create pages, posts, bulk ops, search, clone, template.
 Elementor: build full pages, edit sections, patch widgets, find-replace.
-WooCommerce: products, orders, categories.
+WooCommerce: products, orders, categories (Pro).
 SEO: audit, issues, autofix, search performance, structured data.
 Media: upload file/URL/base64, AI alt text.
 Menus, Gutenberg blocks, site memory, blueprints, approvals, webhooks.
 
 All discoverable on connect. All role-scoped.
 
-Compare: the official WordPress MCP adapter has ~15.
+Compare: the official WordPress MCP adapter exposes three meta-tools by default and
+leaves abilities private until you register them. MCPWP works out of the box.
 
 ---
 
-**Post 4 — The agency angle (post ~1 hr after launch)**
+**Post 4 — [held]**
 
-If you run a WordPress agency, the interesting part is the multi-site proxy.
-
-One MCP token. N client sites.
-
-Claude (or any agent) calls `wp_list_sites()`, addresses a client by domain, and operates
-that site — pages, Elementor, SEO — without needing separate credentials per client.
-
-Full audit trail. Approval queue across the fleet.
+The original post here pitched a multi-site agency proxy ("one MCP token, N client
+sites"). That is not a purchasable product today — the public agency builds were pulled
+(#852). Do not post this until an agency offering actually ships with a real price and
+signup path.
 
 ---
 
@@ -101,12 +101,12 @@ Brand voice, design decisions, client preferences — persistent.
 
 **Post 6 — Free + CTA (post ~3 hr after launch, or end-of-day push)**
 
-MCPWP free tier is on WordPress.org. [TK: confirm WP.org listing is live.]
+MCPWP free tier is a direct download: mcpwp.net.
 
-Free includes: the full tool surface, approval gate, audit log, rollback, site memory,
+Free includes: 180+ tools, approval gate, audit log, rollback, site memory,
 Elementor read/write.
 
-Pro ($59/yr): advanced Elementor builders, WooCommerce, SEO Pro, LMS, agency proxy, Figma.
+Pro ($59/yr): advanced Elementor builders, WooCommerce, SEO Pro, LMS, Figma.
 
 Install in 5 minutes: mcpwp.net
 
@@ -130,17 +130,20 @@ Attach the 1200x630 landscape video or the carousel (6 slides).
 
 Today we launched MCPWP on Product Hunt.
 
-It turns any WordPress site into an MCP server — so AI agents (Claude, ChatGPT, Cursor,
-Gemini) can operate the site in natural language through 239 structured tools.
+It turns any WordPress site into an MCP server — so AI agents (Claude, Cursor, or any MCP
+client) can operate the site in natural language through 180+ structured tools free
+(300+ with Pro).
 
 I want to explain the part we think is most important, because it's different from every
 other AI-for-WordPress tool:
 
 The governance layer.
 
-Every change an AI makes goes into an approval queue. Nothing touches the live site until
-a human approves it. If you approve and then change your mind, one click rolls it back.
-Full audit log with before/after state on every write.
+Any change an AI makes can be routed into an approval queue — you choose what gets
+staged. A staged change only touches the live site once a human approves it. If you
+approve and then change your mind, one click rolls it back. Full audit log with
+before/after state on every write, staged or direct. And as of our latest release,
+publishing itself needs an admin-scoped key — a write-scoped agent can draft, not ship.
 
 The reason this matters: AI makes mistakes. The question is whether your architecture
 assumes that or ignores it. MCPWP assumes it. That's the design choice.
@@ -151,7 +154,7 @@ the work. The risk was that nobody knew what had changed or how to undo it.
 
 This is the tool we built for ourselves. Now it's free to install.
 
-Free tier on WordPress.org. [TK: confirm listing is live.]
+Free is a direct download at mcpwp.net.
 Pro from $59/yr.
 
 If you work with WordPress sites and AI agents, I'd love your feedback — especially on
@@ -165,7 +168,7 @@ the install experience. We're targeting under 5 minutes from download to first t
 ## 3. Show HN — Hacker News
 
 **Post title:**
-"Show HN: MCPWP — MCP server for WordPress with 239 tools, approval gate, and audit log"
+"Show HN: MCPWP — MCP server for WordPress with 180+ tools, an approval gate, and an audit log"
 
 **Opening comment (the first comment, posted immediately by OP):**
 
@@ -176,26 +179,31 @@ directly on the live site. Nothing was auditable. Nothing was reversible.
 
 MCPWP is what we built to fix that.
 
-The core idea: expose WordPress as an MCP server (239 tools across content, Elementor,
-WooCommerce, SEO, media, menus, and more) with a human-in-the-loop approval gate baked
-into the architecture. Every write goes into an approval queue. You approve, the change
-applies. You reject, nothing happens. Either way, it's in the log with before/after state
-and you can roll it back.
+The core idea: expose WordPress as an MCP server (180+ tools free, 300+ with Pro, across
+content, Elementor, WooCommerce, SEO, media, menus, and more) with an opt-in
+human-in-the-loop approval gate. Route a write through it and it goes into an approval
+queue — you approve, the change applies; you reject, nothing happens. Either way it's in
+the log with before/after state and you can roll it back. Writes you don't route through
+the gate apply immediately, same as any other plugin, and are still logged. Publishing
+itself also needs an admin-scoped key as of our latest release — a write-scoped agent can
+draft, not ship.
 
 Technical details:
 - Plugin installs on self-hosted WordPress, exposes a Streamable HTTP MCP endpoint at
   `wp-json/mcpwp/v1/mcp`.
-- Works with any MCP client (Claude Desktop, Claude Code, Cursor, Hermes, ChatGPT Custom
-  GPT, Gemini via proxy).
+- Verified with Claude Desktop, Claude Code, and Cursor; Windsurf passes the MCP protocol
+  check. Built on the open MCP standard, so any compliant client can connect.
+- OAuth ships in the plugin too — Claude's "Add custom connector" + your WordPress login,
+  via a broker at mumcp.com — alongside API-key auth.
 - Role-scoped API keys: content agent gets different access than design agent.
 - Persistent site memory across sessions (`wp_remember`/`wp_recall`).
 - Proactive signals: the site surfaces broken Elementor data, stale content, pending
   updates — without being asked.
-- The compare: official WordPress MCP adapter has ~15 tools. MCPWP has 239. The
-  difference is Elementor depth, governance, memory, and the agency proxy.
+- The compare: the official WordPress MCP adapter exposes three meta-tools by default and
+  leaves abilities private until you register them. MCPWP works out of the box, with
+  Elementor depth, an approval gate, and persistent memory on top.
 
-Free tier on WordPress.org. [TK: confirm WP.org listing live.]
-Source: github.com/Mumega-com/mcpwp
+Free tier is a direct download at mcpwp.net.
 Site: mcpwp.net
 
 Happy to answer technical questions — especially on the MCP transport layer, the Elementor
@@ -211,7 +219,7 @@ data format, or how the approval gate is implemented.
   the comment. Don't be defensive — be specific.
 - If someone asks about the governance model: explain the `wp_create_approval_request` →
   `wp_apply_approval` / `wp_rollback_approval` flow.
-- If someone pushes back on "239 tools is too many for LLMs to handle": acknowledge the
+- If someone pushes back on "180+ tools is too many for LLMs to handle": acknowledge the
   context-window tension and explain tool discovery + role-scoped key scoping reduces the
   effective surface per agent.
 - Do not engage with off-topic trolling. Do engage with every sincere technical question.

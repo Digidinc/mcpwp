@@ -166,9 +166,10 @@ Content, Elementor, Elementor Build, Media, SEO, Menus, WooCommerce, Site Memory
 Blueprints, Approvals, Webhooks, Gutenberg, Taxonomy, LMS, Analytics, Admin.
 
 Entry animation: cards fade + translateY(+20px) → (0px) with 6-frame stagger between
-cards. All 16 cards visible by frame 1590.
+cards. All cards visible by frame 1590 (this scene shows a representative subset of the
+21 total categories, not all of them).
 
-Lower-third: "239 tools covering every surface of WordPress."
+Lower-third: "180+ tools free, 300+ with Pro, covering every surface of WordPress."
 
 ### Scene 7 — Brand Lockup (BrandLockup)
 
@@ -176,7 +177,7 @@ Full-bleed PrimaryGradient background. Centered:
 - MCPWP compass mark SVG (from `mcpwp/assets/icon.svg`) — 96px, white fill, subtle
   blue glow pulse (`opacity` spring, 0.7 → 1.0 → 0.7 over 30 frames).
 - "MCPWP" wordmark, Space Grotesk 700, 64px, White.
-- "Free on WordPress.org" — Instrument Sans 500, 24px, Blue100.
+- "Free direct download" — Instrument Sans 500, 24px, Blue100.
 - "mcpwp.net" — IBM Plex Mono 400, 18px, Slate200.
 
 Hold 5 seconds. Fade to black in last 15 frames.
@@ -195,7 +196,7 @@ Each slide is a static Remotion frame (renderStill). Composition: `CarouselSlide
 - Main headline (Space Grotesk 700, 52px, White, centered):
   "Your WordPress site, operated by AI."
 - Sub-line (Instrument Sans 400, 20px, Blue100):
-  "239 tools. Approval-gated. Self-hosted."
+  "180+ tools free. Approval-gated. Self-hosted."
 - Bottom-right corner: "mcpwp.net" (IBM Plex Mono 14px, Slate200).
 
 ### Slide 2 — The AI prompt loop
@@ -218,7 +219,7 @@ Each slide is a static Remotion frame (renderStill). Composition: `CarouselSlide
   "Every write logged" | "Staged before it's live" | "Undo any change"
 - Main headline above the row (Space Grotesk 700, 40px, White):
   "AI power. Human control."
-- Sub: "Nothing applies to your site unless you approve it."
+- Sub: "Any change can be staged for approval before it touches your site."
 
 ### Slide 4 — Tool surface
 
@@ -227,7 +228,7 @@ Each slide is a static Remotion frame (renderStill). Composition: `CarouselSlide
 - 4x4 grid of category chips (Blue100 background, Blue600 text, 8px radius, Instrument
   Sans 500 13px): Content, Elementor, WooCommerce, SEO, Media, Menus, LMS, Memory,
   Blueprints, Approvals, Webhooks, Gutenberg, Taxonomy, Analytics, Figma, Admin.
-- Headline above grid (Space Grotesk 700, 40px, White): "239 tools."
+- Headline above grid (Space Grotesk 700, 40px, White): "180+ tools free. 300+ with Pro."
 - Sub below (Slate200 16px): "Every surface of WordPress. One MCP server."
 
 ### Slide 5 — Site memory
@@ -259,10 +260,10 @@ Each slide is a static Remotion frame (renderStill). Composition: `CarouselSlide
 **Background:** PrimaryGradient
 **Content:**
 - MCPWP compass mark, 96px, centered top half.
-- Headline (Space Grotesk 700, 56px, White): "Free on WordPress.org"
+- Headline (Space Grotesk 700, 56px, White): "Free direct download"
 - Sub (Instrument Sans 500, 20px, Blue100): "Pro from $59/yr. Install in 5 minutes."
 - URL (IBM Plex Mono 400, 18px, White): "mcpwp.net"
-- Small print bottom-center (Slate200, 12px): "Works with Claude, Cursor, GPT, Gemini."
+- Small print bottom-center (Slate200, 12px): "Verified with Claude Desktop, Claude Code, and Cursor."
 
 ---
 

@@ -5,7 +5,7 @@
 <h1 align="center">MCPWP</h1>
 
 <p align="center">
-  <strong>WordPress MCP server. 260+ tools (180+ on Free). Works with Claude, ChatGPT, OpenClaw, Hermes, Cursor, and any MCP client.</strong>
+  <strong>WordPress MCP server. 180+ tools free, 300+ with Pro. Works with Claude, ChatGPT, OpenClaw, Hermes, Cursor, and any MCP client.</strong>
 </p>
 
 <p align="center">
@@ -20,7 +20,7 @@
 <p align="center">
   <a href="https://github.com/Mumega-com/mcpwp/stargazers"><img src="https://img.shields.io/github/stars/Mumega-com/mcpwp?style=flat-square" alt="Stars"></a>
   <a href="https://github.com/Mumega-com/mcpwp/releases"><img src="https://img.shields.io/github/v/release/Mumega-com/mcpwp?style=flat-square" alt="Release"></a>
-  <img src="https://img.shields.io/badge/tools-260%2B-blue?style=flat-square" alt="260+ tools">
+  <img src="https://img.shields.io/badge/tools-180%2B%20free%20%C2%B7%20300%2B%20pro-blue?style=flat-square" alt="180+ free tools, 300+ with Pro">
   <img src="https://img.shields.io/badge/MCP-compatible-brightgreen?style=flat-square" alt="MCP">
   <img src="https://img.shields.io/badge/OpenClaw-skill%20available-orange?style=flat-square" alt="OpenClaw">
   <img src="https://img.shields.io/badge/WordPress-5.0%2B-21759b?style=flat-square" alt="WordPress">
@@ -30,7 +30,7 @@
 
 ---
 
-MCPWP turns any WordPress site into an MCP server. AI assistants manage site operations through natural language — pages, Elementor layouts, media, SEO, menus, approvals, analytics, and more. 120+ tools across 15+ categories, live-discovered on connect.
+MCPWP turns any WordPress site into an MCP server. AI assistants manage site operations through natural language — pages, Elementor layouts, media, SEO, menus, approvals, analytics, and more. 180+ tools free (300+ with Pro) across 21 categories, live-discovered on connect.
 
 ```
 You: "Build a landing page with a hero, 3 feature cards, and a CTA"
@@ -69,10 +69,10 @@ graph LR
 
 | | MCPWP | AI Engine (Meow) | WordPress MCP Adapter | InstaWP mcp-wp |
 |---|---|---|---|---|
-| **Tools** | **120+** | ~30 | ~15 | ~10 |
+| **Tools** | **180+ free / 300+ Pro** | ~30 | ~15 | ~10 |
 | **Elementor** | Full (build + edit + templates + theme) | No | No | No |
 | **Agency proxy** | Multi-site (N clients, 1 token) | No | No | No |
-| **Audit log + rollback** | Yes (EU AI Act ready) | No | No | No |
+| **Audit log + rollback** | Yes | No | No | No |
 | **Site blueprints** | Yes (5 starters + custom) | No | No | No |
 | **White-label** | Yes (agency branding) | No | No | No |
 | **Site memory** | Persistent across sessions | No | No | No |
@@ -203,7 +203,7 @@ wp_set_elementor(_site: "client.com", id: 5, elementor_data: [...])
 
 ### Audit Log + Rollback
 
-Every MCP write logged to DB with timestamp, tool, args, before/after state snapshots. One-click rollback from Control Room. CSV export for compliance. Configurable log retention (default 90 days). EU AI Act enforcement deadline: August 2, 2026.
+Every MCP write logged to DB with timestamp, tool, args, before/after state snapshots. One-click rollback from Control Room. CSV export for compliance. Configurable log retention (default 90 days).
 
 ### White-Label
 
