@@ -102,6 +102,12 @@ if [[ "$PLUGIN_VERSION" != "$DEFINE_VERSION" || "$PLUGIN_VERSION" != "$README_VE
 fi
 
 VERSION="$PLUGIN_VERSION"
+
+# WordPress uses the manifest's requirements before downloading the ZIP. A
+# correct version number cannot compensate for an incompatible minimum.
+python3 "$ROOT_DIR/scripts/verify_release_compatibility.py" \
+	--manifest "$MANIFEST_FILE" --plugin "$PLUGIN_MAIN" --readme "$README_FILE"
+
 ZIP_PATH="$PLUGIN_DIR/scripts/mcpwp-selfhosted-$VERSION.zip"
 AGENCY_ZIP="$PLUGIN_DIR/scripts/mcpwp-agency-$VERSION.zip"
 
@@ -130,11 +136,13 @@ if [[ "$VERIFY_ONLY" -eq 0 && ! -f "$AGENCY_ZIP" ]]; then
 	exit 1
 fi
 
-ZIP_ROOT="$(unzip -Z1 "$ZIP_PATH" | sed -n '1p' | cut -d/ -f1)"
-ZIP_VERSION="$(unzip -p "$ZIP_PATH" "$ZIP_ROOT/mcpwp.php" | grep -m1 'Version:' | sed 's/.*Version:[[:space:]]*//' | tr -d '[:space:]')"
-if [[ "$ZIP_VERSION" != "$VERSION" ]]; then
-	echo "ZIP version mismatch: expected $VERSION, got $ZIP_VERSION" >&2
-	exit 1
+# The filenames are not version evidence: inspect both artifacts before upload.
+python3 "$ROOT_DIR/scripts/verify_release_compatibility.py" \
+	--manifest "$MANIFEST_FILE" --zip "$ZIP_PATH"
+
+if [[ "$VERIFY_ONLY" -eq 0 ]]; then
+	python3 "$ROOT_DIR/scripts/verify_release_compatibility.py" \
+		--manifest "$MANIFEST_FILE" --zip "$AGENCY_ZIP"
 fi
 
 # grep -q closes the pipe early, causing SIGPIPE (141) under pipefail — use grep -c instead.

@@ -66,11 +66,13 @@ mcpwp-pro-*.zip
 #   scripts/verify_no_committed_secrets.sh  — a tracked script carrying a
 #                                             credential-shaped literal fails it
 scripts/*.py
+!scripts/verify_release_compatibility.py
 scripts/*.php
 scripts/update-github-assets.sh
 scripts/validate-workflows.sh
 
 # Test caches
+__pycache__/
 mcpwp/tests/.phpunit.result.cache
 .claude/
 # but track the mumcp squad's agent definitions — they belong to the MCPWP tenant's repo

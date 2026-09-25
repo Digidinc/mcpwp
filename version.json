@@ -1,7 +1,7 @@
 {
   "version": "3.13.0",
   "download_url": "https://updates.mcpwp.net/mcpwp-latest.zip",
-  "requires": "5.0",
+  "requires": "6.1",
   "requires_php": "7.4",
   "tested": "7.0",
   "name": "MCPWP",
