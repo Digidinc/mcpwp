@@ -4,11 +4,15 @@
 
 Issue: #418 | Branch: docs/418-connect-matrix | Date: 2026-06-11
 
----
+> **Tool count below (171) is stale — captured against plugin 3.0.1.** Current release is
+> 3.13.0: 172 core Free tools + 9 AI/stock tools = 181 usable Free, 118 Pro tools + 4 Figma
+> = 303 total with Pro (counted from the registries on `origin/main`). Public phrasing:
+> "180+ tools free, 300+ with Pro." Re-run this handshake against a current build before
+> quoting a number from this doc anywhere external.
 
 ## Handshake Evidence (rig: wp-dev, http://127.0.0.1:8086)
 
-Plugin: mcpwp 3.0.1, active (captured at 3.0.1; current release is 3.3.3 — tool count is higher). Key source: `/mnt/HC_Volume_104325311/projects/sitepilotai/wp-rig/.mcpwp-dev-key`
+Plugin: mcpwp 3.0.1, active (captured at 3.0.1; current release is 3.13.0 — tool count is higher, see note above). Key source: `/mnt/HC_Volume_104325311/projects/sitepilotai/wp-rig/.mcpwp-dev-key`
 
 ### Step 1 — initialize
 
@@ -251,7 +255,7 @@ EXTERNAL VERIFICATION: BLOCKED — requires public HTTPS via cloudflared tunnel.
 ### Tested (GREEN)
 - Full JSON-RPC 2.0 handshake: `initialize` -> `tools/list` -> `tools/call`
 - Server returns correct `protocolVersion: "2024-11-05"`, `serverInfo`, `capabilities`
-- 171 tools returned by `tools/list`
+- 171 tools returned by `tools/list` (as of plugin 3.0.1 — stale, see note at top of doc)
 - `wp_site_info` tool call returns correct structured result, `isError: false`
 - Auth negative: bad key -> HTTP 401 `invalid_api_key`
 - Auth negative: no key -> HTTP 401 `missing_api_key`
@@ -268,6 +272,6 @@ EXTERNAL VERIFICATION: BLOCKED — requires public HTTPS via cloudflared tunnel.
 ### Reconciliation with existing docs
 - `docs/API.md` line 3481: Claude Desktop Custom Connector documents `?api_key=` query param — CONSISTENT (server accepts `?api_key=` param per API.md §Authentication).
 - `docs/API.md` line 3492: Claude Desktop npm package config — CONSISTENT with what is documented here.
-- `docs/API.md` mentions "90+ tools" in the tools/list description — the rig currently returns **171 tools**. API.md §Tools description is stale; this matrix supersedes it for tool count.
+- `docs/API.md` mentions "90+ tools" in the tools/list description — the rig returned **171 tools** at the time of this capture (plugin 3.0.1). Both figures are stale; current is 180+ free / 300+ Pro (see note at top of doc). Neither API.md's number nor this matrix's should be quoted externally without a fresh count.
 - `docs/blog-launch-post.md` shows `"url"` + `"headers"` shape for Claude Desktop mcpServers — CONSISTENT.
 - No existing `mumcp:connect` skill found in `~/.claude/skills/` — nothing to reconcile.

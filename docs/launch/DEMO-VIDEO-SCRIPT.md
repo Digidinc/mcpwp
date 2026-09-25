@@ -100,7 +100,7 @@ The send action is visible.
    review." A green "Approve" button and a red "Rollback" button are clearly visible.
 
 **On-screen text (lower third, at 0:33):**
-"Staged. Not live. Waiting for you."
+"Staged for approval. Waiting for you."
 
 **Voiceover / caption:**
 "The AI builds the full Elementor page. It's not live yet — it's in the approval queue."
@@ -133,11 +133,12 @@ entry is shown, clicked, and the page reverts. Clean, fast.
 **Type:** Motion graphic — category grid
 
 **On-screen text:**
-"239 tools. Content. Elementor. WooCommerce. SEO. Media. Menus."
+"180+ tools free. 300+ with Pro. Content. Elementor. WooCommerce. SEO. Media. Menus."
 (categories appear one by one in a 3-column grid, blue accent on category name)
 
 **Voiceover / caption:**
-"239 tools covering every surface of WordPress. Works with Claude, Cursor, GPT, Gemini."
+"180+ tools free, 300+ with Pro, covering every surface of WordPress. Works with Claude
+and Cursor — and any MCP client."
 
 ---
 
@@ -147,7 +148,7 @@ entry is shown, clicked, and the page reverts. Clean, fast.
 **Type:** Motion graphic — brand lockup + CTA
 
 **On-screen text (large, centered):**
-"Free on WordPress.org"
+"Free direct download"
 [sub-line, smaller:]
 "mcpwp.net"
 
@@ -155,7 +156,7 @@ entry is shown, clicked, and the page reverts. Clean, fast.
 Primary gradient field. Clean, confident, no animation noise.
 
 **Voiceover / caption:**
-"Free on WordPress.org. Install in five minutes."
+"Free direct download. Install in five minutes."
 
 ---
 

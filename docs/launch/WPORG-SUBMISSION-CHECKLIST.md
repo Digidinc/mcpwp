@@ -1,14 +1,20 @@
 # WordPress.org Submission Checklist (#495)
 
 > STATUS: DRAFT / audit — NOT submitted. WP.org review is a one-shot first impression; clear every box before submitting the free build.
+>
+> Note: a separate, reduced edition is already live on WordPress.org under the slug
+> `mumega-mcp` ("Mumega MCP", v3.4.14). This checklist is for submitting the full MCPWP
+> free build under its own slug — it is a distinct submission, not an update to the
+> existing listing. Do not describe the existing `mumega-mcp` listing as "MCPWP on
+> WordPress.org" in public copy.
 
 ## readme.txt header — COMPLIANT (audited mcpwp/readme.txt)
 - [x] Contributors: mumega
 - [x] Tags: ai, claude, mcp, elementor, api  *(WP.org allows max 5 — currently exactly 5 ✓)*
-- [x] Requires at least: 5.0
-- [x] Tested up to: 6.9
+- [x] Requires at least: 6.1
+- [x] Tested up to: 7.0
 - [x] Requires PHP: 7.4
-- [x] Stable tag: 3.0.1  *(must match the deployed version at submit time)*
+- [x] Stable tag: 3.13.0 (current) — the tag in this checklist must be re-verified against `mcpwp/readme.txt` at actual submit time; release-please owns this value and it moves on every release
 - [x] License: GPLv2 or later + License URI
 - [x] Short description present (<150 chars)
 - [x] Sections: Description, (verify Installation, FAQ, Changelog, Screenshots below)
