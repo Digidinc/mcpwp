@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="base.css">
+<style>
+  .grids { display: flex; gap: 30px; flex: 1; min-height: 0; }
+  .panel {
+    flex: 1;
+    background: var(--ink-900);
+    border: 1px solid rgba(217,226,242,0.14);
+    border-radius: 14px;
+    padding: 22px 26px;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  .panel h2 {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 19px;
+    font-weight: 600;
+    color: var(--white);
+    margin: 0 0 3px;
+  }
+  .panel .sub {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11.5px;
+    color: var(--blue-100);
+    margin-bottom: 13px;
+  }
+  .cat-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; flex-wrap: wrap; }
+  .cat-list.two-col { display: grid; grid-template-columns: 1fr 1fr; grid-auto-flow: row; column-gap: 20px; row-gap: 7px; }
+  .cat-list li {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 13.5px;
+    color: var(--slate-200);
+    border-bottom: 1px solid rgba(217,226,242,0.08);
+    padding-bottom: 7px;
+  }
+  .cat-list li b { color: var(--white); font-weight: 500; text-transform: capitalize; }
+  .cat-list li .count {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    color: var(--blue-100);
+    background: rgba(27,77,255,0.18);
+    border-radius: 6px;
+    padding: 2px 9px;
+  }
+  .panel.pro .count { background: rgba(27,77,255,0.32); color: #FFFFFF; }
+  .panel.pro h2, .panel.pro .sub { color: var(--white); }
+  .panel.pro { background: linear-gradient(160deg, rgba(27,77,255,0.20), rgba(18,26,43,1) 55%); border-color: rgba(27,77,255,0.35); }
+</style>
+</head>
+<body>
+<div class="slide">
+  <div class="brand-row"><img src="icon.svg"><span>MCPWP</span></div>
+  <h1 class="headline">180+ tools free.<br>300+ with Pro.</h1>
+  <div class="grids">
+    <div class="panel free">
+      <h2>Free</h2>
+      <div class="sub">184 tools observed &middot; 12 categories</div>
+      <ul class="cat-list two-col">
+        <li><b>Site &amp; admin</b><span class="count">54</span></li>
+        <li><b>Content</b><span class="count">29</span></li>
+        <li><b>Admin</b><span class="count">27</span></li>
+        <li><b>Elementor</b><span class="count">18</span></li>
+        <li><b>SEO</b><span class="count">12</span></li>
+        <li><b>Webhooks</b><span class="count">9</span></li>
+        <li><b>Media</b><span class="count">8</span></li>
+        <li><b>AI / stock photo</b><span class="count">8</span></li>
+        <li><b>Taxonomy</b><span class="count">5</span></li>
+        <li><b>Elementor info</b><span class="count">5</span></li>
+        <li><b>Gutenberg</b><span class="count">5</span></li>
+        <li><b>Staging</b><span class="count">4</span></li>
+      </ul>
+    </div>
+    <div class="panel pro">
+      <h2>Pro adds</h2>
+      <div class="sub">291 tools observed &middot; 18 categories</div>
+      <ul class="cat-list">
+        <li><b>WooCommerce</b><span class="count">21</span></li>
+        <li><b>LearnPress LMS</b><span class="count">18</span></li>
+        <li><b>Elementor templates</b><span class="count">15</span></li>
+        <li><b>Theme builder</b><span class="count">13</span></li>
+        <li><b>Elementor build</b><span class="count">8</span></li>
+        <li><b>Forms</b><span class="count">4</span></li>
+        <li><b>+ deeper Site, Content &amp; SEO</b><span class="count">+24</span></li>
+      </ul>
+    </div>
+  </div>
+  <div class="caption-row">Content, Elementor, WooCommerce, SEO, media, menus, LMS, and more. <b>Real counts from a live tools/list call on a fresh install.</b></div>
+</div>
+</body>
+</html>

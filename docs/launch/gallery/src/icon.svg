@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-labelledby="title desc">
+  <title id="title">MCPWP icon</title>
+  <desc id="desc">A lightning route mark representing safe AI control for WordPress.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#07101f"/>
+      <stop offset="1" stop-color="#10264f"/>
+    </linearGradient>
+    <linearGradient id="bolt" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#dbeafe"/>
+    </linearGradient>
+  </defs>
+  <rect x="16" y="16" width="224" height="224" rx="52" fill="url(#bg)"/>
+  <path d="M146 34 62 134h54l-16 88 94-120h-58l10-68Z" fill="url(#bolt)"/>
+  <path d="M48 164c30 42 88 54 132 28" fill="none" stroke="#2f7cff" stroke-width="16" stroke-linecap="round"/>
+  <path d="M192 92c-30-38-84-50-126-28" fill="none" stroke="#2f7cff" stroke-width="16" stroke-linecap="round"/>
+  <circle cx="48" cy="164" r="20" fill="#20b86f"/>
+  <circle cx="48" cy="164" r="9" fill="#07101f"/>
+  <circle cx="192" cy="92" r="20" fill="#2f7cff"/>
+  <circle cx="192" cy="92" r="9" fill="#07101f"/>
+  <path d="M184 184h18M193 175v18" stroke="#20b86f" stroke-width="10" stroke-linecap="round"/>
+</svg>

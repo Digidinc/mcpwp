@@ -21,7 +21,7 @@ Every claim below has been checked against `origin/main` (3.13.0) and live surfa
 | Make the `Mumega-com/mcpwp` repo public? Currently private — PH "Open Source" topic and repo link are held out of public copy until this is decided | OPEN |
 | MCPWP vs mumcp naming (see #688) | OPEN |
 | Secure a hunter with PH standing in AI-tools / developer-tools | OPEN |
-| Produce gallery + demo-video assets (real screen recordings from the dev rig — see DEMO-VIDEO-SCRIPT.md §7 and REMOTION-SPEC.md §7) | OPEN |
+| Produce gallery + demo-video assets (real screen recordings from the dev rig — see DEMO-VIDEO-SCRIPT.md §7 and REMOTION-SPEC.md §7) | Gallery: DONE (docs/launch/gallery/); demo video: OPEN |
 
 ### Engineering status
 

@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"wp_remember","arguments":{"namespace":"preferences","key":"brand_tone","value":"direct, no jargon"}}}

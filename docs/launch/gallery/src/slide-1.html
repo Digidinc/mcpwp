@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="base.css">
+<style>
+  .row { display: flex; gap: 30px; flex: 1; min-height: 0; }
+  .col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 14px; min-height: 0; }
+  .shot-frame img { max-height: 330px; object-fit: cover; object-position: top; }
+  .code-panel { overflow: hidden; position: relative; }
+  .code-panel pre { font-size: 12px; line-height: 1.55; }
+  .code-panel.req { flex: 1.4; min-height: 0; }
+  .code-panel.resp { flex: 1; min-height: 0; }
+  .code-panel::after {
+    content: "";
+    position: absolute; left: 0; right: 0; bottom: 0; height: 34px;
+    background: linear-gradient(to bottom, rgba(18,26,43,0), rgba(18,26,43,1));
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<div class="slide">
+  <div class="brand-row"><img src="icon.svg"><span>MCPWP</span></div>
+  <h1 class="headline">AI builds the page.<br>You approve it.</h1>
+  <div class="row">
+    <div class="col">
+      <div class="code-panel req">
+        <span class="tag">MCP request &middot; tools/call</span>
+        <pre>{
+  &quot;method&quot;: &quot;tools/call&quot;,
+  &quot;params&quot;: {
+    &quot;name&quot;: &quot;wp_set_elementor&quot;,
+    &quot;arguments&quot;: {
+      &quot;id&quot;: 25,
+      &quot;elementor_data&quot;: [
+        { &quot;elType&quot;: &quot;section&quot;, &quot;elements&quot;: [
+          { &quot;widgetType&quot;: &quot;heading&quot;,
+            &quot;settings&quot;: { &quot;title&quot;: &quot;Gentle, modern dental care...&quot; } },
+          { &quot;widgetType&quot;: &quot;button&quot;,
+            &quot;settings&quot;: { &quot;text&quot;: &quot;Book an appointment&quot; } }
+        ]},
+        &quot;...3 services, 1 contact section&quot;
+      ]
+    }
+  }
+}</pre>
+      </div>
+      <div class="code-panel resp">
+        <span class="tag">MCP response</span>
+        <pre>{
+  &quot;result&quot;: {
+    &quot;success&quot;: true,
+    &quot;page_id&quot;: 25,
+    &quot;sections_saved&quot;: 3,
+    &quot;widgets_after&quot;: 8,
+    &quot;render_verified&quot;: true
+  }
+}</pre>
+      </div>
+    </div>
+    <div class="col">
+      <div class="shot-frame">
+        <div class="chrome"><i></i><i></i><i></i></div>
+        <img src="page-front2.png">
+      </div>
+    </div>
+  </div>
+  <div class="caption-row">Any change can be staged for approval. <b>Approved changes apply with one click; applied changes roll back with one click.</b></div>
+</div>
+</body>
+</html>

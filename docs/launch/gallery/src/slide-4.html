@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="base.css">
+<style>
+  .row { display: flex; gap: 0; flex: 1; min-height: 0; align-items: stretch; position: relative; }
+  .col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+  .col.left { padding-right: 40px; }
+  .col.right { padding-left: 40px; }
+  .divider {
+    position: absolute; left: 50%; top: 6px; bottom: 6px; width: 1px;
+    background: rgba(217,226,242,0.18);
+  }
+  .badge {
+    display: inline-flex; align-self: flex-start;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--white);
+    background: rgba(27,77,255,0.28);
+    border: 1px solid rgba(27,77,255,0.5);
+    border-radius: 20px;
+    padding: 5px 14px;
+    margin-bottom: 4px;
+  }
+  .midlabel {
+    position: absolute; left: 50%; top: 46%; transform: translate(-50%,-50%);
+    background: var(--ink-950);
+    border: 1px solid rgba(217,226,242,0.3);
+    border-radius: 20px;
+    padding: 8px 16px;
+    font-family: 'Instrument Sans', sans-serif;
+    font-size: 12.5px;
+    font-style: italic;
+    color: var(--slate-200);
+    white-space: nowrap;
+  }
+  .code-panel pre { font-size: 12.5px; }
+</style>
+</head>
+<body>
+<div class="slide">
+  <div class="brand-row"><img src="icon.svg"><span>MCPWP</span></div>
+  <h1 class="headline">The AI remembers your site.</h1>
+  <div class="row">
+    <div class="col left">
+      <span class="badge">Session 1</span>
+      <div class="code-panel">
+        <span class="tag">wp_remember</span>
+        <pre>{
+  &quot;method&quot;: &quot;tools/call&quot;,
+  &quot;params&quot;: {
+    &quot;name&quot;: &quot;wp_remember&quot;,
+    &quot;arguments&quot;: {
+      &quot;namespace&quot;: &quot;preferences&quot;,
+      &quot;key&quot;: &quot;brand_tone&quot;,
+      &quot;value&quot;: &quot;direct, no jargon&quot;
+    }
+  }
+}</pre>
+      </div>
+      <div class="code-panel">
+        <span class="tag">result</span>
+        <pre>{
+  &quot;result&quot;: {
+    &quot;success&quot;: true,
+    &quot;namespace&quot;: &quot;preferences&quot;,
+    &quot;key&quot;: &quot;brand_tone&quot;
+  }
+}</pre>
+      </div>
+    </div>
+    <div class="divider"></div>
+    <div class="midlabel">Different session. Same memory.</div>
+    <div class="col right">
+      <span class="badge">Session 2 &middot; new context window</span>
+      <div class="code-panel">
+        <span class="tag">wp_recall</span>
+        <pre>{
+  &quot;method&quot;: &quot;tools/call&quot;,
+  &quot;params&quot;: {
+    &quot;name&quot;: &quot;wp_recall&quot;,
+    &quot;arguments&quot;: { &quot;namespace&quot;: &quot;preferences&quot; }
+  }
+}</pre>
+      </div>
+      <div class="code-panel">
+        <span class="tag">result</span>
+        <pre>{
+  &quot;result&quot;: {
+    &quot;memories&quot;: [
+      { &quot;key&quot;: &quot;brand_tone&quot;,
+        &quot;value&quot;: &quot;direct, no jargon&quot; },
+      { &quot;key&quot;: &quot;brand_palette&quot;,
+        &quot;value&quot;: &quot;navy, electric blue, white&quot; }
+    ],
+    &quot;count&quot;: 2
+  }
+}</pre>
+      </div>
+    </div>
+  </div>
+  <div class="caption-row">Brand rules, design decisions, and client preferences persist across every session. <b>Real wp_remember / wp_recall calls against the same site.</b></div>
+</div>
+</body>
+</html>
