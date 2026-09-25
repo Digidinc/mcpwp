@@ -173,9 +173,23 @@ class Mcpwp_Loader {
 	 */
 	public function register_cron_schedules( $schedules ) {
 		if ( ! isset( $schedules['mcpwp_every_five_minutes'] ) ) {
+			// The `cron_schedules` filter can run before `init` — e.g. the very
+			// first `wp_schedule_event()` call for one of this plugin's own cron
+			// hooks happens eagerly on `plugins_loaded` (Mcpwp_Signals::schedule(),
+			// Mcpwp_Figma::schedule(), the action-log prune scheduling in
+			// mcpwp.php). Calling `__()` at that point loads the 'mcpwp' text
+			// domain before WordPress considers it safe to, and WP 6.7+ logs a
+			// "_load_textdomain_just_in_time" doing-it-wrong notice on every such
+			// first-run. This 'display' label is only ever read by WP-Cron admin
+			// UI (which loads well after init), so it is safe — and required —
+			// to skip translation on the early call and fall back to the
+			// untranslated string; any later call (admin screens) still gets the
+			// real translation.
+			$display = did_action( 'init' ) ? __( 'Every 5 Minutes (MCPWP)', 'mcpwp' ) : 'Every 5 Minutes (MCPWP)';
+
 			$schedules['mcpwp_every_five_minutes'] = array(
 				'interval' => 5 * MINUTE_IN_SECONDS,
-				'display'  => __( 'Every 5 Minutes (MCPWP)', 'mcpwp' ),
+				'display'  => $display,
 			);
 		}
 

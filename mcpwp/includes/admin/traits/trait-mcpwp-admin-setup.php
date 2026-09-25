@@ -186,11 +186,15 @@ trait Mcpwp_Admin_Setup_Trait {
 			);
 		}
 
-		$manifest_url    = get_option( 'mcpwp_version_url', 'https://mumega.com/mcp-updates/version.json' );
-		$manifest_url    = $manifest_url ? $manifest_url : 'https://mumega.com/mcp-updates/version.json';
+		// Canonical channel for a site that never explicitly saved
+		// mcpwp_version_url. A site that did save one — including the legacy
+		// mumega.com manifest — is untouched: both read the same R2 bucket
+		// (see CLAUDE.md "Deploy & Update System").
+		$manifest_url    = get_option( 'mcpwp_version_url', 'https://updates.mcpwp.net/version.json' );
+		$manifest_url    = $manifest_url ? $manifest_url : 'https://updates.mcpwp.net/version.json';
 		$current_version = defined( 'MCPWP_VERSION' ) ? MCPWP_VERSION : '0.0.0';
 		$remote_version  = null;
-		$download_url    = 'https://mumega.com/mcp-updates/mcpwp-latest.zip';
+		$download_url    = 'https://updates.mcpwp.net/mcpwp-latest.zip';
 		$source          = 'remote';
 		$option_version  = null;
 		$warning         = '';

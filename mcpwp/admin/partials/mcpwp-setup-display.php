@@ -24,8 +24,7 @@ $site_slug       = sanitize_title( $site_name );
 // In the WP.org build no update-channel data is needed — the method early-returns a neutral stub.
 $update_channel  = $admin->get_update_channel_status();
 $license         = class_exists( 'Mcpwp_License' ) ? Mcpwp_License::get_instance() : null;
-$license_plan    = $license ? $license->get_plan() : 'unlicensed';
-$license_label   = ucwords( str_replace( '_', ' ', $license_plan ) );
+$license_label   = $license ? $license->get_plan_label() : __( 'Free', 'mcpwp' );
 
 // Prefer the Freemius SDK's own install-linked URL — it carries the site's
 // install_id so checkout activates THIS site and redirects back into
@@ -687,7 +686,7 @@ $last_activity_time = ! empty( $recent_activity[0]['created_at'] ) ? $recent_act
 				<p class="description" style="margin-top:8px;">
 					<?php esc_html_e( 'Update channel:', 'mcpwp' ); ?>
 					<code><?php echo esc_html( $update_channel['manifest_url'] ); ?></code>
-					<br /><span class="description"><?php esc_html_e( 'This is the URL MCPWP checks for new versions. It should point to the mumega.com manifest.', 'mcpwp' ); ?></span>
+					<br /><span class="description"><?php esc_html_e( 'This is the URL MCPWP checks for new versions. It should point to the updates.mcpwp.net manifest (the legacy mumega.com manifest also still works).', 'mcpwp' ); ?></span>
 				</p>
 			</div>
 			<?php endif; // ! MCPWP_WPORG_BUILD ?>
