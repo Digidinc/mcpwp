@@ -1062,8 +1062,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 		// Determine layout mode for hints.
 		$layout_hint = '';
 		if ( class_exists( 'Mcpwp_Error_Hints' ) ) {
-			$experiment   = get_option( 'elementor_experiment-container', '' );
-			$is_flexbox   = in_array( $experiment, array( 'active', 'default' ), true );
+			$is_flexbox   = Mcpwp_Elementor_Experiments::is_container_active();
 			$layout_hint  = $is_flexbox
 				? 'This site uses flexbox layout mode. Use "container" as the top-level elType.'
 				: 'This site uses classic layout mode. Use "section" > "column" > widget structure.';
@@ -1210,8 +1209,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 		// valid in that mode — producing a false "success" followed by an empty
 		// page on readback, with no error surfaced anywhere. Catch it up front.
 		if ( class_exists( '\Elementor\Plugin' ) ) {
-			$container_experiment = get_option( 'elementor_experiment-container', '' );
-			$containers_active    = in_array( $container_experiment, array( 'active', 'default' ), true );
+			$containers_active = Mcpwp_Elementor_Experiments::is_container_active();
 			if ( ! $containers_active ) {
 				$decoded_for_check = json_decode( $elementor_json, true );
 				if ( is_array( $decoded_for_check ) && $this->elementor_tree_contains_type( $decoded_for_check, 'container' ) ) {
@@ -1233,8 +1231,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 			// site's 'e_atomic_elements' experiment is active. Unlike container mode,
 			// atomic is additive — it can be on alongside section or container mode —
 			// so this check is independent of the containers_active check above.
-			$atomic_experiment = get_option( 'elementor_experiment-e_atomic_elements', '' );
-			$atomic_active     = in_array( $atomic_experiment, array( 'active', 'default' ), true );
+			$atomic_active = Mcpwp_Elementor_Experiments::is_atomic_active();
 			if ( ! $atomic_active ) {
 				$decoded_for_atomic_check = json_decode( $elementor_json, true );
 				$known_atomic_types       = array( 'e-div-block', 'e-flexbox', 'e-grid', 'e-heading', 'e-paragraph', 'e-button', 'e-image', 'e-svg', 'e-divider', 'e-youtube', 'e-self-hosted-video' );

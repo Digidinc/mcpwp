@@ -98,14 +98,15 @@ class Mcpwp_Core {
 		$elementor_layout        = 'section';
 		$elementor_atomic_active = false;
 		if ( defined( 'ELEMENTOR_VERSION' ) ) {
-			// Elementor 3.15+ uses containers by default; check experiment setting.
-			$experiments = get_option( 'elementor_experiment-container', '' );
-			if ( 'active' === $experiments || 'default' === $experiments ) {
+			// Elementor 3.15+ uses containers by default — ask Elementor's own
+			// Experiments_Manager rather than the raw option, which is absent
+			// entirely on a fresh install where Container is default-active
+			// (#883).
+			if ( Mcpwp_Elementor_Experiments::is_container_active() ) {
 				$elementor_layout = 'container';
 			}
 
-			$atomic_experiment = get_option( 'elementor_experiment-e_atomic_elements', '' );
-			if ( 'active' === $atomic_experiment || 'default' === $atomic_experiment ) {
+			if ( Mcpwp_Elementor_Experiments::is_atomic_active() ) {
 				$elementor_atomic_active = true;
 				$elementor_layout        = 'atomic';
 			}

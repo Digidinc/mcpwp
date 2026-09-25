@@ -257,6 +257,11 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-ai-presence.php';
 
 	// Load core functionality
+	// The one reader of an Elementor experiment's active/inactive state
+	// (default-active features on a fresh install, e.g. Container 3.15+).
+	// Loaded before class-mcpwp-core.php and every _elementor_data write
+	// path that asks whether container/atomic mode is active.
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-elementor-experiments.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-core.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-idempotency-claim.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-post-fields.php';
