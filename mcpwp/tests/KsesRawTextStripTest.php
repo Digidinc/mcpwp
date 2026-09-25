@@ -47,6 +47,42 @@
  * `wp_bulk_update_pages` erase a page's content — see
  * `test_non_scalar_content_is_passed_through_like_before_the_fix`).
  *
+ * Round 3 (adversarial review of round 2): a BLOCK and three WARNs.
+ *
+ * BLOCK — quadratic time, a DoS reachable by any content-write key.
+ * find_raw_text_close() re-scanned from scratch, with `stripos()` (which
+ * re-normalizes case on every call), for every open tag lacking a real
+ * close; input like `str_repeat('<script></scriptx', $n)` or
+ * `str_repeat('<script>', $n)` made every one of $n open tags re-scan
+ * almost the whole remaining string. Fixed by lowercasing $content once per
+ * pass and using `strpos()` against that copy, plus memoizing "no close tag
+ * exists at/after position P" per tag name for the rest of the pass — see
+ * `test_adversarial_inputs_stay_roughly_linear`. Output is now built as an
+ * array of chunks joined with `implode()` rather than repeated `.=`.
+ *
+ * WARN 1 — a stray apostrophe in an *unquoted* attribute value
+ * (`data-x=it's`) was read as opening a quote that then had nothing valid
+ * to close it before the real end of the tag, so a real `<script>` a few
+ * characters later was copied straight through as "still inside an
+ * attribute", unstripped. Fixed: a quote only starts a quoted value when it
+ * is the first non-space character after `=`; anything else is an unquoted
+ * value that ends at whitespace or `>` — see
+ * `test_a_stray_apostrophe_in_an_unquoted_value_does_not_swallow_the_rest`.
+ *
+ * WARN 2 — 12 nested reassembly layers outlived the old 10-pass cap and
+ * left a visible payload. The loop already ran until the string stopped
+ * changing; only the cap needed raising (to 100, since each changing pass
+ * strictly shortens the string, the loop is naturally finite, and no real
+ * reassembly needs anywhere near that many layers) — see
+ * `test_twelve_nested_reassembly_layers_leave_no_visible_payload`.
+ *
+ * WARN 3 — a NUL byte inside a tag name (`<scr\0ipt>`) split the name so
+ * the tokenizer never recognized it as `script` at all; the tag passed
+ * through untouched and its body rendered as visible text. Fixed:
+ * `wp_kses_no_null()` (WordPress core) runs on the input before any
+ * stripping, the same normalization a browser and kses itself both apply —
+ * see `test_a_null_byte_inside_a_tag_name_does_not_hide_the_tag`.
+ *
  * @package MCPWP
  */
 
@@ -113,6 +149,20 @@ if ( ! function_exists( 'wp_get_attachment_metadata' ) ) {
 if ( ! function_exists( 'wp_get_attachment_url' ) ) {
 	function wp_get_attachment_url( $attachment_id ) { // phpcs:ignore
 		return 'https://example.com/wp-content/uploads/mock-' . (int) $attachment_id . '.jpg';
+	}
+}
+
+if ( ! function_exists( 'wp_kses_no_null' ) ) {
+	/**
+	 * Minimal stand-in for WordPress core's wp_kses_no_null() — strips
+	 * literal NUL bytes and backslash-zero sequences the same way core does
+	 * (default 'slash_zero' => 'remove'). Good enough for round-3 WARN 3:
+	 * proving sanitize_content_body() runs this BEFORE stripping so a NUL
+	 * hidden inside a tag name can't hide the tag from the tokenizer.
+	 */
+	function wp_kses_no_null( $string, $options = null ) { // phpcs:ignore
+		$string = preg_replace( '/\0+/', '', $string );
+		return preg_replace( '/\\\\+0+/', '', $string );
 	}
 }
 
@@ -577,5 +627,89 @@ final class KsesRawTextStripTest extends TestCase {
 		) );
 		$this->assertIsInt( $polylang_id, is_wp_error( $polylang_id ) ? $polylang_id->get_error_message() : '' );
 		$this->assertStringNotContainsString( 'color:red', $GLOBALS['_mcpwp_test_posts'][ $polylang_id ]->post_content );
+	}
+
+	// ---------------------------------------------------------------
+	// Round 3 — adversarial review: BLOCK (quadratic time) and three WARNs.
+	// ---------------------------------------------------------------
+
+	public function test_a_stray_apostrophe_in_an_unquoted_value_does_not_swallow_the_rest(): void {
+		$harness = new Mcpwp_Test_Sanitization_Harness();
+
+		$result = $harness->sanitize( "<b data-x=it's>B</b><script>alert(1)</script><p>REST</p>" );
+
+		$this->assertSame( "<b data-x=it's>B</b><p>REST</p>", $result['content'] );
+		$this->assertStringNotContainsString( 'alert(1)', $result['content'] );
+		$this->assertSame( array( array( 'tag' => 'script', 'count' => 1 ) ), $result['removed'] );
+	}
+
+	public function test_twelve_nested_reassembly_layers_leave_no_visible_payload(): void {
+		// Each layer wraps the previous decoy in one more split of the same
+		// shape as the original two-decoy reassembly
+		// (`<scr<script>x</script>ipt>...</scr<script></script>ipt>`), so a
+		// single strip pass only partially unwinds the nesting and several
+		// more passes are needed to fully resolve it — proving the cap (100)
+		// is well above any real depth and the loop genuinely runs until
+		// stable rather than stopping at a fixed pass count.
+		$payload = 'alert(1)';
+		for ( $layer = 0; $layer < 12; $layer++ ) {
+			$payload = '<scr<script>x</script>ipt>' . $payload . '</scr<script></script>ipt>';
+		}
+
+		$harness = new Mcpwp_Test_Sanitization_Harness();
+		$result  = $harness->sanitize( $payload );
+
+		$this->assertStringNotContainsString( 'alert(1)', $result['content'] );
+		$this->assertStringNotContainsString( 'script>alert', $result['content'] );
+	}
+
+	public function test_a_null_byte_inside_a_tag_name_does_not_hide_the_tag(): void {
+		$harness = new Mcpwp_Test_Sanitization_Harness();
+
+		$result = $harness->sanitize( "<scr\0ipt>alert(1)</script>" );
+
+		$this->assertStringNotContainsString( 'alert(1)', $result['content'] );
+		$this->assertSame( '', $result['content'] );
+		$this->assertSame( array( array( 'tag' => 'script', 'count' => 1 ) ), $result['removed'] );
+	}
+
+	/**
+	 * BLOCK: adversarial inputs that made find_raw_text_close() re-scan
+	 * almost the whole remaining string for every open tag, i.e. quadratic
+	 * in input size. Each pattern here is sized to ~1MB — the reported
+	 * timings on the unfixed code were already 2.5s+ at well under that —
+	 * and must sanitize in well under a second on the fixed, linear-ish
+	 * tokenizer. The bound is deliberately generous (CI is slower and
+	 * noisier than a dev machine) while still being tight enough that a
+	 * regression back to quadratic time would blow through it immediately.
+	 */
+	public function adversarial_performance_inputs(): array {
+		return array(
+			'every open tag has a near-miss close (</scriptx)' => array( str_repeat( '<script></scriptx', 60000 ) ),
+			'every open tag has no close attempt at all'       => array( str_repeat( '<script>', 130000 ) ),
+			'an endless run of unterminated comments'          => array( str_repeat( '<!--', 260000 ) ),
+			'an endless run of unterminated quoted attributes' => array( str_repeat( '<a title="', 105000 ) ),
+		);
+	}
+
+	/**
+	 * @dataProvider adversarial_performance_inputs
+	 */
+	public function test_adversarial_inputs_stay_roughly_linear( string $content ): void {
+		$harness = new Mcpwp_Test_Sanitization_Harness();
+
+		$started = microtime( true );
+		$harness->sanitize( $content );
+		$elapsed = microtime( true ) - $started;
+
+		$this->assertLessThan(
+			2.0,
+			$elapsed,
+			sprintf(
+				'sanitize_content_body() on a %d-byte adversarial input took %.3fs — quadratic time is back.',
+				strlen( $content ),
+				$elapsed
+			)
+		);
 	}
 }

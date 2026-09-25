@@ -38,18 +38,18 @@ trait Mcpwp_Sanitization {
 	private static $raw_text_elements = array( 'script', 'style' );
 
 	/**
-	 * Maximum number of strip passes {@see strip_raw_text_elements()} runs
-	 * over one string. A reassembly trick — e.g.
-	 * `<scr<script>x</script>ipt>alert(1)</scr<script></script>ipt>` — can
-	 * leave a genuine `<script>...</script>` pair assembled from the debris
-	 * of two decoys that a single pass correctly removed; re-scanning the
-	 * *output* of each pass catches that. Bounded so a pathological input
-	 * cannot loop unboundedly; in practice real content stabilizes in one or
-	 * two passes.
+	 * Safety cap on the number of strip passes {@see sanitize_content_body()}
+	 * runs over one string. Each pass that changes anything strictly
+	 * shortens the string (an element removal deletes characters; nothing
+	 * ever adds any), so the loop is naturally finite and normally stops in
+	 * one or two passes — even a 12-layer reassembly decoy resolves in 12.
+	 * This cap only guards against a pathological input designed to keep
+	 * shrinking by one byte per pass forever; 100 passes is far more than
+	 * any real reassembly depth needs, so it never fires in practice.
 	 *
 	 * @var int
 	 */
-	private static $raw_text_strip_max_passes = 10;
+	private static $raw_text_strip_max_passes = 100;
 
 	/**
 	 * Sanitize a post/page/attachment content body for a write.
@@ -80,6 +80,15 @@ trait Mcpwp_Sanitization {
 	 * `''`, which is what let `wp_bulk_update_pages` blank a page whose
 	 * content happened to arrive as something other than a string).
 	 *
+	 * `wp_kses_no_null()` (WordPress core) runs on the string first, before
+	 * any stripping. A NUL byte inside a tag name — `<scr\0ipt>` — splits the
+	 * name so the tokenizer below never recognizes it as `script` at all,
+	 * the tag passes through untouched, and its body renders as visible
+	 * text. Browsers and kses itself both discard NUL bytes before parsing,
+	 * so removing them first (reassembling `<script>`) and letting the
+	 * tokenizer see what a browser would see is what actually closes this,
+	 * not a special case bolted onto the tokenizer.
+	 *
 	 * @param mixed $content Raw content as submitted by the caller.
 	 * @return array{content:string,removed:array<int,array{tag:string,count:int}>}
 	 *               Sanitized content and a report of whole elements removed.
@@ -96,6 +105,10 @@ trait Mcpwp_Sanitization {
 			}
 		}
 
+		if ( function_exists( 'wp_kses_no_null' ) ) {
+			$content = wp_kses_no_null( $content );
+		}
+
 		$counts   = array();
 		$previous = null;
 
@@ -104,8 +117,8 @@ trait Mcpwp_Sanitization {
 			$stripped = $this->strip_raw_text_elements( $content );
 			$content  = $stripped['content'];
 
-			foreach ( $stripped['removed'] as $entry ) {
-				$counts[ $entry['tag'] ] = ( isset( $counts[ $entry['tag'] ] ) ? $counts[ $entry['tag'] ] : 0 ) + $entry['count'];
+			foreach ( $stripped['removed'] as $tag => $count ) {
+				$counts[ $tag ] = ( isset( $counts[ $tag ] ) ? $counts[ $tag ] : 0 ) + $count;
 			}
 		}
 
@@ -132,7 +145,8 @@ trait Mcpwp_Sanitization {
 	 * exactly what makes this bug class exploitable: it cannot tell a real
 	 * tag boundary from text that merely contains the same characters. Every
 	 * rule below exists to fix one proven false-positive that made an
-	 * earlier, regex-only version of this method eat real page content:
+	 * earlier version of this method eat real page content, or run
+	 * quadratically:
 	 *
 	 * - A tag name must start *immediately* after `<` (no `<\s*name`) and end
 	 *   at whitespace, `/`, or `>` — never at `-` or another word character.
@@ -142,8 +156,14 @@ trait Mcpwp_Sanitization {
 	 *   are skipped as opaque spans. Without this, `<!-- <style> -->` and
 	 *   `<![CDATA[<script>]]>` were misread as containing a real tag.
 	 * - Quoted attribute values are skipped as opaque spans while looking for
-	 *   the `>` that ends a tag. Without this, `<p title="<style>">` had its
-	 *   attribute value misread as a real `<style>` tag.
+	 *   the `>` that ends a tag, and a quote only *starts* being one when it
+	 *   is the first non-space character after `=` — never mid-value.
+	 *   Without the first half, `<p title="<style>">` had its attribute
+	 *   value misread as a real `<style>` tag. Without the second half, a
+	 *   stray apostrophe in an unquoted value (`data-x=it's`) opened a quote
+	 *   that never closed, and everything after it — including a real
+	 *   `<script>` a few characters later — was copied straight through as
+	 *   "still inside an attribute", unstripped.
 	 * - When a real `<script>`/`<style>` open tag has NO matching close tag
 	 *   anywhere in the rest of the string, only the open tag itself is
 	 *   removed — never the remainder of the document. An earlier version of
@@ -154,19 +174,37 @@ trait Mcpwp_Sanitization {
 	 *   unrelated, later content. kses then treats the remaining bare tag
 	 *   exactly as it did before this fix (its own existing behavior, not
 	 *   something introduced here).
+	 * - Finding "no close tag anywhere" is memoized per tag name for the rest
+	 *   of this pass (see `$no_close_from`): once a full scan from position P
+	 *   confirms no `</script` exists at or after P, no scan starting at or
+	 *   after P can find one either — the search space is a subset of one
+	 *   already known to be empty. Without this, adversarial input like
+	 *   `str_repeat('<script>', $n)` (every open tag genuinely has no close)
+	 *   or `str_repeat('<script></scriptx', $n)` (every close is a
+	 *   near-miss) made every one of $n open tags re-scan almost the entire
+	 *   remaining string for its own close tag, which is quadratic in `$n`.
 	 *
 	 * Once a genuine `<script>`/`<style>` open tag is found, the matching
 	 * close tag is found the way a browser's tokenizer finds it for a
 	 * raw-text element: by literal, case-insensitive text search for
 	 * `</name` followed by whitespace, `/`, or `>` — comments, CDATA and
 	 * quotes are NOT recognized inside a raw-text element's body, because
-	 * they are not recognized there either.
+	 * they are not recognized there either. That search lowercases $content
+	 * once (not per `stripos()` call — `stripos()` re-normalizes case on
+	 * every call, which is itself a meaningful cost at this scale) and uses
+	 * `strpos()` against the lowercased copy and a pre-lowercased needle.
+	 *
+	 * Output is built as an array of chunks joined with `implode()` at the
+	 * end rather than repeated `$result .= ...`, so a pass with many
+	 * pass-through tags does not pay for incremental string growth.
 	 *
 	 * Callers loop this method ({@see sanitize_content_body()}) to catch a
 	 * reassembly split across two decoy elements.
 	 *
 	 * @param string $content Content to scan (already a string).
-	 * @return array{content:string,removed:array<int,array{tag:string,count:int}>}
+	 * @return array{content:string,removed:array<string,int>} Sanitized
+	 *               content and a tag => count map of whole elements removed
+	 *               in this one pass.
 	 */
 	private function strip_raw_text_elements( $content ) {
 		if ( '' === $content ) {
@@ -176,32 +214,40 @@ trait Mcpwp_Sanitization {
 			);
 		}
 
+		$lower  = strtolower( $content );
 		$counts = array();
-		$result = '';
+		$chunks = array();
 		$cursor = 0;
 		$length = strlen( $content );
+
+		// Per tag name, the smallest position P for which a full scan of
+		// this pass's $content already proved no valid close tag exists at
+		// or after P. See the method docblock's memoization note.
+		$no_close_from = array();
 
 		while ( $cursor < $length ) {
 			$lt = strpos( $content, '<', $cursor );
 
 			if ( false === $lt ) {
-				$result .= substr( $content, $cursor );
+				$chunks[] = substr( $content, $cursor );
 				break;
 			}
 
 			// Plain text before this '<'.
-			$result .= substr( $content, $cursor, $lt - $cursor );
+			if ( $lt > $cursor ) {
+				$chunks[] = substr( $content, $cursor, $lt - $cursor );
+			}
 
 			// HTML comment — copied through verbatim, never scanned for tags.
 			if ( '<!--' === substr( $content, $lt, 4 ) ) {
 				$end = strpos( $content, '-->', $lt + 4 );
 				if ( false === $end ) {
-					$result .= substr( $content, $lt );
+					$chunks[] = substr( $content, $lt );
 					break;
 				}
-				$end     = $end + 3;
-				$result .= substr( $content, $lt, $end - $lt );
-				$cursor  = $end;
+				$end      = $end + 3;
+				$chunks[] = substr( $content, $lt, $end - $lt );
+				$cursor   = $end;
 				continue;
 			}
 
@@ -209,12 +255,12 @@ trait Mcpwp_Sanitization {
 			if ( '<![CDATA[' === substr( $content, $lt, 9 ) ) {
 				$end = strpos( $content, ']]>', $lt + 9 );
 				if ( false === $end ) {
-					$result .= substr( $content, $lt );
+					$chunks[] = substr( $content, $lt );
 					break;
 				}
-				$end     = $end + 3;
-				$result .= substr( $content, $lt, $end - $lt );
-				$cursor  = $end;
+				$end      = $end + 3;
+				$chunks[] = substr( $content, $lt, $end - $lt );
+				$cursor   = $end;
 				continue;
 			}
 
@@ -222,8 +268,8 @@ trait Mcpwp_Sanitization {
 			// for a close tag) — not after whitespace, which is just text.
 			if ( ! preg_match( '/\G<(\/?)([a-zA-Z][a-zA-Z0-9]*)/', $content, $tag_match, 0, $lt ) ) {
 				// '<' not followed by a valid tag name start — plain text.
-				$result .= '<';
-				$cursor  = $lt + 1;
+				$chunks[] = '<';
+				$cursor   = $lt + 1;
 				continue;
 			}
 
@@ -236,8 +282,8 @@ trait Mcpwp_Sanitization {
 			// '/', or '>'); anything else (e.g. '-') means this is a longer,
 			// unrelated name such as a custom element and not a real match.
 			if ( ! preg_match( '/[\s\/>]/', $boundary ) ) {
-				$result .= '<';
-				$cursor  = $lt + 1;
+				$chunks[] = '<';
+				$cursor   = $lt + 1;
 				continue;
 			}
 
@@ -246,12 +292,12 @@ trait Mcpwp_Sanitization {
 			if ( false === $tag_end ) {
 				// Unterminated tag ('<' with no closing '>' anywhere) — copy
 				// the rest through verbatim; there is nothing left to parse.
-				$result .= substr( $content, $lt );
+				$chunks[] = substr( $content, $lt );
 				break;
 			}
 
 			if ( ! $is_close && in_array( $tag_name, self::$raw_text_elements, true ) ) {
-				$close = $this->find_raw_text_close( $content, $tag_end + 1, $tag_name );
+				$close = $this->find_raw_text_close( $lower, $tag_end + 1, $tag_name, $no_close_from );
 
 				$counts[ $tag_name ] = ( isset( $counts[ $tag_name ] ) ? $counts[ $tag_name ] : 0 ) + 1;
 
@@ -271,37 +317,44 @@ trait Mcpwp_Sanitization {
 			// script/style's own close tag reached without ever finding an
 			// unmatched open — both handled above) passes through untouched;
 			// kses decides its fate exactly as it did before this fix.
-			$result .= substr( $content, $lt, $tag_end - $lt + 1 );
-			$cursor  = $tag_end + 1;
-		}
-
-		$removed = array();
-		foreach ( $counts as $tag => $count ) {
-			$removed[] = array(
-				'tag'   => $tag,
-				'count' => $count,
-			);
+			$chunks[] = substr( $content, $lt, $tag_end - $lt + 1 );
+			$cursor   = $tag_end + 1;
 		}
 
 		return array(
-			'content' => $result,
-			'removed' => $removed,
+			'content' => implode( '', $chunks ),
+			'removed' => $counts,
 		);
 	}
 
 	/**
 	 * Find the '>' that ends a tag starting at $from, skipping over any
-	 * single- or double-quoted attribute value along the way so a literal
-	 * '>' (or, via the caller, a literal "<style>") inside a quoted value is
-	 * never mistaken for the tag boundary.
+	 * quoted attribute value along the way so a literal '>' (or, via the
+	 * caller, a literal "<style>") inside one is never mistaken for the tag
+	 * boundary.
+	 *
+	 * A quote character is only treated as starting a quoted value when it
+	 * is the first non-whitespace character after an `=` — the actual HTML
+	 * rule. Anywhere else (mid-value, mid-attribute-name, stray) it is just
+	 * an ordinary character. This matters for an *unquoted* attribute value:
+	 * once one starts (a non-quote, non-whitespace character right after
+	 * `=`), every character up to the next whitespace or `>` — including a
+	 * `'`, `"`, or even another `=` — is part of that value, not a new quote
+	 * or a new attribute. Treating a mid-value apostrophe as a quote
+	 * delimiter (`data-x=it's`) opened a quote that had nothing to close it
+	 * before the real end of the tag, which made everything after — up to
+	 * whatever *later*, unrelated quote character happened to exist, or the
+	 * end of the string — look like it was still "inside an attribute".
 	 *
 	 * @param string $content Content to scan.
 	 * @param int    $from    Offset to start scanning from.
 	 * @return int|false Offset of the terminating '>', or false if none.
 	 */
 	private function find_unquoted_gt( $content, $from ) {
-		$length    = strlen( $content );
-		$in_quote  = null;
+		$length             = strlen( $content );
+		$in_quote           = null;
+		$after_equals       = false;
+		$in_unquoted_value  = false;
 
 		for ( $i = $from; $i < $length; $i++ ) {
 			$char = $content[ $i ];
@@ -313,8 +366,35 @@ trait Mcpwp_Sanitization {
 				continue;
 			}
 
-			if ( '"' === $char || "'" === $char ) {
-				$in_quote = $char;
+			if ( $in_unquoted_value ) {
+				if ( ' ' === $char || "\t" === $char || "\n" === $char || "\r" === $char ) {
+					$in_unquoted_value = false;
+				} elseif ( '>' === $char ) {
+					return $i;
+				}
+				// Any other character (including '=', quotes, '-', etc.) is
+				// just more of the unquoted value.
+				continue;
+			}
+
+			if ( $after_equals ) {
+				if ( ' ' === $char || "\t" === $char || "\n" === $char || "\r" === $char ) {
+					continue; // Still skipping whitespace after '='.
+				}
+				$after_equals = false;
+				if ( '"' === $char || "'" === $char ) {
+					$in_quote = $char;
+					continue;
+				}
+				if ( '>' === $char ) {
+					return $i;
+				}
+				$in_unquoted_value = true;
+				continue;
+			}
+
+			if ( '=' === $char ) {
+				$after_equals = true;
 				continue;
 			}
 
@@ -333,32 +413,51 @@ trait Mcpwp_Sanitization {
 	 * '>' — nothing inside a raw-text element's body (comments, CDATA,
 	 * quotes, other tags) is recognized as anything but more raw text.
 	 *
-	 * @param string $content Content to scan.
-	 * @param int    $from    Offset to start scanning from (just after the
-	 *                        element's open tag).
-	 * @param string $tag_name Lowercase element name, e.g. 'script'.
+	 * $lower must already be `strtolower( $content )` for the whole pass —
+	 * computed once by the caller, not per call — and $no_close_from is that
+	 * same call's per-tag-name memo, updated here and reused by every later
+	 * call in the same pass. See the class docblock on
+	 * {@see strip_raw_text_elements()} for why this is required for
+	 * near-miss-heavy adversarial input to stay linear rather than
+	 * quadratic.
+	 *
+	 * @param string $lower         Lowercased content for the whole pass.
+	 * @param int    $from          Offset to start scanning from (just after
+	 *                              the element's open tag).
+	 * @param string $tag_name      Lowercase element name, e.g. 'script'.
+	 * @param array  $no_close_from By-reference tag_name => position memo.
 	 * @return int|false Offset one past the close tag's '>', or false if no
 	 *                    real close tag exists anywhere after $from.
 	 */
-	private function find_raw_text_close( $content, $from, $tag_name ) {
-		$length = strlen( $content );
+	private function find_raw_text_close( $lower, $from, $tag_name, array &$no_close_from ) {
+		if ( isset( $no_close_from[ $tag_name ] ) && $from >= $no_close_from[ $tag_name ] ) {
+			return false;
+		}
+
+		$length = strlen( $lower );
 		$needle = '</' . $tag_name;
 		$pos    = $from;
 
 		while ( $pos < $length ) {
-			$found = stripos( $content, $needle, $pos );
+			$found = strpos( $lower, $needle, $pos );
 
 			if ( false === $found ) {
+				$no_close_from[ $tag_name ] = isset( $no_close_from[ $tag_name ] )
+					? min( $no_close_from[ $tag_name ], $from )
+					: $from;
 				return false;
 			}
 
 			$after_idx  = $found + strlen( $needle );
-			$after_char = $after_idx < $length ? $content[ $after_idx ] : '>';
+			$after_char = $after_idx < $length ? $lower[ $after_idx ] : '>';
 
 			if ( preg_match( '/[\s\/>]/', $after_char ) ) {
-				$close_gt = strpos( $content, '>', $after_idx );
+				$close_gt = strpos( $lower, '>', $after_idx );
 
 				if ( false === $close_gt ) {
+					$no_close_from[ $tag_name ] = isset( $no_close_from[ $tag_name ] )
+						? min( $no_close_from[ $tag_name ], $from )
+						: $from;
 					return false;
 				}
 
@@ -369,6 +468,9 @@ trait Mcpwp_Sanitization {
 			$pos = $after_idx;
 		}
 
+		$no_close_from[ $tag_name ] = isset( $no_close_from[ $tag_name ] )
+			? min( $no_close_from[ $tag_name ], $from )
+			: $from;
 		return false;
 	}
 
