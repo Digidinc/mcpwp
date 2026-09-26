@@ -320,6 +320,19 @@ trait Mcpwp_Api_Auth {
 			return $this->verify_api_key_auth_only( $request );
 		}
 
+		// The real HTTP method, not rate_limit_method() — every pre-auth bucket
+		// below (missing:, unconfigured:/invalid:) is keyed on the client IP
+		// alone, reachable by anyone who can send a request at all, with or
+		// without a real credential. rate_limit_method() for /mcp parses the
+		// JSON-RPC body to ask "does every operation name a known GET-mapped
+		// tool", which an unauthenticated caller controls completely — an
+		// attacker-chosen body would buy the 2x read ceiling on these
+		// anonymous-abuse buckets, and building the tool map to answer that
+		// question runs get_all_tool_map() (with its
+		// apply_filters('mcpwp_integrations')) before any credential has been
+		// checked at all (#892 adversarial review). rate_limit_method() is
+		// reserved for the authenticated meter_request() calls below, once a
+		// real key/token is already known to be valid.
 		$http_method = method_exists( $request, 'get_method' ) ? $request->get_method() : 'POST';
 		$api_key     = $this->get_api_key_from_request( $request );
 
@@ -430,7 +443,10 @@ trait Mcpwp_Api_Auth {
 			? 'key:' . sanitize_key( $matched_key['id'] )
 			: 'key:' . hash( 'sha256', $api_key );
 
-		$rate_limit_check = $this->meter_request( $request, $rate_identifier, $http_method, $matched_key );
+		// rate_limit_method(), not $http_method, ONLY here: $matched_key is a
+		// real, validated key by this point, so this bucket is not reachable
+		// by an anonymous caller shaping a body (#892).
+		$rate_limit_check = $this->meter_request( $request, $rate_identifier, $this->rate_limit_method( $request ), $matched_key );
 		if ( is_wp_error( $rate_limit_check ) ) {
 			return $rate_limit_check;
 		}
@@ -977,6 +993,34 @@ trait Mcpwp_Api_Auth {
 	}
 
 	/**
+	 * The HTTP method a request is rate-limited as (#891).
+	 *
+	 * Default: the request's real HTTP method. check_limit() gives GET/HEAD/
+	 * OPTIONS 2x the burst and per-minute ceiling, on the theory that a read
+	 * is non-destructive and cheaper to allow more of. That theory breaks for
+	 * any controller whose transport method is fixed regardless of what the
+	 * request actually does — every /mcp call is an HTTP POST carrying a
+	 * JSON-RPC envelope, so a call to the read tool wp_get_elementor was
+	 * priced exactly like a write: same 1x ceiling, same shared per-identifier
+	 * counter. A single-post wp_bulk_find_replace burning the whole write
+	 * burst then left wp_get_elementor refused right behind it — a read
+	 * blocked by an unrelated write, both reported under "bucket":"write"
+	 * (#891).
+	 *
+	 * Mcpwp_REST_MCP overrides this to answer with the underlying tool's own
+	 * mapped method when every operation in the request resolves to a
+	 * known, GET-mapped tool — the same "every operation must qualify" rule
+	 * is_diagnostic_request() applies, so one write anywhere in a batch keeps
+	 * the whole request priced as a write.
+	 *
+	 * @param WP_REST_Request $request Request.
+	 * @return string HTTP method to price the request as.
+	 */
+	protected function rate_limit_method( $request ) {
+		return method_exists( $request, 'get_method' ) ? $request->get_method() : 'POST';
+	}
+
+	/**
 	 * How many rate-limit slots this request costs (#802).
 	 *
 	 * One, unless a controller carries several operations in one HTTP
@@ -1097,7 +1141,7 @@ trait Mcpwp_Api_Auth {
 			);
 		}
 
-		$rate_limit_check = $this->meter_request( $request, 'oauth:' . substr( hash( 'sha256', (string) $token ), 0, 16 ), method_exists( $request, 'get_method' ) ? $request->get_method() : 'POST' );
+		$rate_limit_check = $this->meter_request( $request, 'oauth:' . substr( hash( 'sha256', (string) $token ), 0, 16 ), $this->rate_limit_method( $request ) );
 		if ( is_wp_error( $rate_limit_check ) ) {
 			return $rate_limit_check;
 		}
@@ -1210,6 +1254,13 @@ trait Mcpwp_Api_Auth {
 		// — worker exhaustion locally and amplification against the broker. This
 		// bucket is keyed on IP (not the token) so rotating tokens can't evade it,
 		// and it runs ahead of validate_token()'s own per-token 'broker:' bucket.
+		//
+		// The real HTTP method, not rate_limit_method(): the token has not
+		// been validated yet, so this ceiling exists precisely to cap what an
+		// unauthenticated caller can make this server do — letting that same
+		// caller's request body raise its own ceiling defeats the guard, and
+		// this is the amplification-capping bucket the adversarial review on
+		// #892 called out by name (#892).
 		$http_method      = method_exists( $request, 'get_method' ) ? $request->get_method() : 'POST';
 		$attempt_limit    = $this->check_rate_limit( 'broker-attempt:' . $this->get_client_ip(), $http_method );
 		if ( is_wp_error( $attempt_limit ) ) {
@@ -1224,7 +1275,7 @@ trait Mcpwp_Api_Auth {
 			return $result;
 		}
 
-		$rate_limit_check = $this->meter_request( $request, 'broker:' . substr( hash( 'sha256', (string) $token ), 0, 16 ), method_exists( $request, 'get_method' ) ? $request->get_method() : 'POST' );
+		$rate_limit_check = $this->meter_request( $request, 'broker:' . substr( hash( 'sha256', (string) $token ), 0, 16 ), $this->rate_limit_method( $request ) );
 		if ( is_wp_error( $rate_limit_check ) ) {
 			return $rate_limit_check;
 		}

@@ -11,6 +11,14 @@
  * `mcpwp_tool_operation_weight` — and an explicit id list longer than that is
  * charged per id.
  *
+ * #891 narrowed that fixed weight to wp_bulk_find_replace calls that did NOT
+ * name their posts. A single-id (or short `ids`) call is `scoped` — it costs
+ * what it actually touches, never the fixed weight a whole post type or the
+ * whole site costs — because a single-post find/replace was burning the
+ * caller's entire write burst on one post and refusing the very next call.
+ * wp_delete_all_drafts has no such narrowing (it always touches every draft
+ * of a type) and keeps the flat weight unconditionally.
+ *
  * @package MCPWP
  */
 
@@ -55,16 +63,26 @@ final class ToolOperationWeightTest extends TestCase {
 		return $count->invoke( new Mcpwp_REST_MCP(), $arguments, $tool );
 	}
 
-	public function test_find_replace_and_delete_all_drafts_cost_a_fixed_ten(): void {
+	public function test_a_wide_find_replace_and_delete_all_drafts_cost_a_fixed_ten(): void {
 		$this->assertSame( 10, $this->weight( 'wp_bulk_find_replace', array( 'search' => 'a', 'replace' => 'b', 'scope' => 'site' ) ) );
-		$this->assertSame( 10, $this->weight( 'wp_bulk_find_replace', array( 'search' => 'a', 'replace' => 'b', 'id' => 5 ) ), 'Fixed: one named post still costs the fixed weight.' );
+		$this->assertSame( 10, $this->weight( 'wp_bulk_find_replace', array( 'search' => 'a', 'replace' => 'b', 'post_type' => 'page' ) ) );
 		$this->assertSame( 10, $this->weight( 'wp_delete_all_drafts', array() ) );
 		$this->assertSame( 10, $this->weight( 'wp_delete_all_drafts', array( 'type' => 'page', 'force' => true ) ) );
 	}
 
-	public function test_an_explicit_id_list_is_charged_the_larger_of_ten_and_its_length(): void {
+	public function test_a_find_replace_named_to_one_post_costs_one(): void {
+		// #891: a single-id wp_bulk_find_replace was priced identically to a
+		// site-wide run — the fixed weight of 10 — which could exhaust the
+		// caller's entire write burst on one post and refuse the very next
+		// call. Naming exactly one post now costs exactly one slot.
+		$this->assertSame( 1, $this->weight( 'wp_bulk_find_replace', array( 'search' => 'a', 'replace' => 'b', 'id' => 5 ) ) );
+	}
+
+	public function test_an_explicit_id_list_is_charged_its_length_not_the_fixed_weight(): void {
 		$this->assertSame( 50, $this->weight( 'wp_bulk_find_replace', array( 'search' => 'a', 'replace' => 'b', 'ids' => range( 1, 50 ) ) ) );
-		$this->assertSame( 10, $this->weight( 'wp_bulk_find_replace', array( 'search' => 'a', 'replace' => 'b', 'ids' => range( 1, 3 ) ) ) );
+		// #891: named to 3 posts costs 3 — the fixed weight is what NOT
+		// naming posts costs, never a floor under a narrow, named run.
+		$this->assertSame( 3, $this->weight( 'wp_bulk_find_replace', array( 'search' => 'a', 'replace' => 'b', 'ids' => range( 1, 3 ) ) ) );
 	}
 
 	public function test_a_comma_separated_id_list_is_counted_like_an_array(): void {
@@ -72,7 +90,7 @@ final class ToolOperationWeightTest extends TestCase {
 		// so the handler processes every id; the price must count them too.
 		$this->assertSame( 50, $this->weight( 'wp_bulk_find_replace', array( 'search' => 'a', 'replace' => 'b', 'ids' => implode( ',', range( 1, 50 ) ) ) ) );
 		$this->assertSame( 12, $this->weight( 'wp_bulk_find_replace', array( 'search' => 'a', 'replace' => 'b', 'ids' => ' 1, 2 ,3,4,5,6,7,8,9,10,11,12,, ' ) ) );
-		$this->assertSame( 10, $this->weight( 'wp_bulk_find_replace', array( 'search' => 'a', 'replace' => 'b', 'ids' => '1,2' ) ) );
+		$this->assertSame( 2, $this->weight( 'wp_bulk_find_replace', array( 'search' => 'a', 'replace' => 'b', 'ids' => '1,2' ) ), '#891: 2 named posts costs 2, not the fixed weight.' );
 	}
 
 	public function test_the_weight_is_filterable_and_a_value_that_is_not_a_weight_keeps_the_default(): void {

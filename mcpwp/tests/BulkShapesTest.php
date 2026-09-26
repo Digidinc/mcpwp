@@ -189,6 +189,35 @@ final class BulkShapesTest extends TestCase {
 		$this->assertSame( array( 1 ), array_column( $data['matched'], 'id' ) );
 	}
 
+	/**
+	 * #891: find_replace_many() writes `_elementor_data` directly for every
+	 * matched post and never calls Document::save() — the only place
+	 * Elementor's own element-render cache (`_elementor_element_cache`) gets
+	 * cleared on a normal save. Left uncleared, a site with element caching
+	 * enabled kept serving each matched post's pre-replace render until a
+	 * site-wide cache clear, regardless of how many posts the bulk run
+	 * actually rewrote.
+	 */
+	public function test_a_real_run_clears_the_element_render_cache_for_every_post_it_writes(): void {
+		$this->seed( 1, 'page', 'Home', $this->elementor_with( 'old-brand' ) );
+		$this->seed( 2, 'post', 'News', $this->elementor_with( 'old-brand' ) );
+		$this->seed( 3, 'page', 'Clean', $this->elementor_with( 'nothing here' ) );
+
+		foreach ( array( 1, 2, 3 ) as $id ) {
+			$GLOBALS['_mcpwp_test_meta'][ $id ]['_elementor_element_cache'] = array(
+				'timeout' => time() + 3600,
+				'value'   => array( 'content' => 'stale render ' . $id ),
+			);
+		}
+
+		$data = $this->find_replace( array( 'search' => 'old-brand', 'replace' => 'new-brand', 'scope' => 'site' ) )->get_data();
+
+		$this->assertSame( array( 1, 2 ), array_column( $data['matched'], 'id' ) );
+		$this->assertSame( '', get_post_meta( 1, '_elementor_element_cache', true ), 'Matched post 1 must lose its stale render cache.' );
+		$this->assertSame( '', get_post_meta( 2, '_elementor_element_cache', true ), 'Matched post 2 must lose its stale render cache.' );
+		$this->assertNotSame( '', get_post_meta( 3, '_elementor_element_cache', true ), 'Post 3 never matched and was never written; its cache is untouched.' );
+	}
+
 	public function test_post_type_and_ids_scope_the_run(): void {
 		$this->seed( 1, 'page', 'Home', $this->elementor_with( 'old-brand' ) );
 		$this->seed( 2, 'post', 'News', $this->elementor_with( 'old-brand' ) );

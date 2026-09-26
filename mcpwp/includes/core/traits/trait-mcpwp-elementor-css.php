@@ -66,6 +66,52 @@ trait Mcpwp_Elementor_Css_Trait {
 	}
 
 	/**
+	 * Clear the per-document caches Elementor's own Document::save() clears
+	 * on every normal write, for a write path that updates `_elementor_data`
+	 * directly and never calls Document::save() (#891).
+	 *
+	 * Elementor's save() (core/base/document.php) always does two things after
+	 * writing elements: deletes the post's CSS file (`Post_CSS::create( $id )
+	 * ->delete()`) and deletes the post's render cache
+	 * (`delete_cache()`, i.e. the `_elementor_element_cache` meta —
+	 * `\Elementor\Core\Base\Document::CACHE_META_KEY`). A write that bypasses
+	 * Document::save() and only calls update_post_meta() on `_elementor_data`
+	 * — find/replace, before this fix — leaves both stale.
+	 *
+	 * The element cache is the one that actually served stale content: when
+	 * Elementor's element-caching module is enabled
+	 * (`elementor_element_cache_ttl` not `disable`), `Document::print_elements()`
+	 * serves this cached copy verbatim until its TTL lapses, regardless of
+	 * what `_elementor_data` now says. That is why the bug reproduced as a
+	 * "written: true" response with the live page still serving the pre-write
+	 * text, fixable only by the site-wide `wp_regenerate_elementor_css`, whose
+	 * no-id path calls `Files_Manager::clear_cache()` — which deletes this
+	 * same meta key across every post (core/files/manager.php).
+	 *
+	 * The meta key is a literal string, not the class constant: this trait's
+	 * callers must not require `\Elementor\Core\Base\Document` to be
+	 * autoloadable by name, only `\Elementor\Plugin` (already the class_exists
+	 * guard every other Elementor call in this codebase uses), and the key is
+	 * Elementor's own stable public contract — `Files_Manager::clear_cache()`
+	 * deletes it site-wide by this exact literal.
+	 *
+	 * @param int $page_id Post ID.
+	 */
+	public function invalidate_document_cache( $page_id ) {
+		if ( class_exists( '\Elementor\Plugin' ) ) {
+			$post_css = \Elementor\Core\Files\CSS\Post::create( $page_id );
+			if ( $post_css ) {
+				$post_css->delete();
+			}
+		}
+
+		// \Elementor\Core\Base\Document::CACHE_META_KEY.
+		delete_post_meta( $page_id, '_elementor_element_cache' );
+
+		clean_post_cache( $page_id );
+	}
+
+	/**
 	 * Regenerate Elementor CSS for a specific page or the entire site.
 	 *
 	 * @param int|null $page_id Page ID, or null for full site regeneration.
@@ -106,6 +152,15 @@ trait Mcpwp_Elementor_Css_Trait {
 			}
 
 			$method = 'cache_clear';
+
+			// Clear this page's element-render cache regardless of which branch
+			// below runs (#891). Before this, only the no-id site-wide path —
+			// via files_manager->clear_cache() — ever cleared
+			// `_elementor_element_cache`, so an id + force=true call here
+			// reported "Cache cleared" or "CSS regenerated" while a page with
+			// element caching enabled kept serving the pre-clear render until
+			// its TTL lapsed.
+			delete_post_meta( $page_id, '_elementor_element_cache' );
 
 			// Force: delete existing CSS files before regenerating.
 			if ( $force ) {

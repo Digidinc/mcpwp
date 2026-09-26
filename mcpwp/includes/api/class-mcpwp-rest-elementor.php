@@ -1197,13 +1197,12 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 
 		update_post_meta( $page_id, '_elementor_data', wp_slash( $updated ) );
 
-		// Clear Elementor CSS cache for this post.
-		if ( class_exists( '\Elementor\Plugin' ) ) {
-			$post_css = \Elementor\Core\Files\CSS\Post::create( $page_id );
-			if ( $post_css ) {
-				$post_css->delete();
-			}
-		}
+		// Clear the same per-document caches Document::save() clears on a
+		// normal write — CSS file and element-render cache (#891). This path
+		// writes _elementor_data directly and never calls Document::save(),
+		// so without this the live page kept serving the pre-replace render
+		// from `_elementor_element_cache` until a site-wide cache clear.
+		$this->elementor->invalidate_document_cache( $page_id );
 
 		return $this->success_response(
 			array(
@@ -1437,12 +1436,10 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 					$encoded = Mcpwp_Elementor_Element_Keys::normalize_json( $encoded );
 				}
 				update_post_meta( $post_id, '_elementor_data', wp_slash( $encoded ) );
-				if ( class_exists( '\Elementor\Plugin' ) ) {
-					$post_css = \Elementor\Core\Files\CSS\Post::create( $post_id );
-					if ( $post_css ) {
-						$post_css->delete();
-					}
-				}
+				// Same per-document cache clear find_replace() does (#891) —
+				// this loop is the same bypass-of-Document::save() write path,
+				// once per matched post.
+				$this->elementor->invalidate_document_cache( $post_id );
 				$entry['written'] = true;
 			}
 
