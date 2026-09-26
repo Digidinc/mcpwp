@@ -279,6 +279,49 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 			)
 		);
 
+		// Act-worthy SEO signals distilled from imported search performance.
+		register_rest_route(
+			$this->namespace,
+			'/seo/flags',
+			array(
+				array(
+					'methods'             => WP_REST_Server::READABLE,
+					'callback'            => array( $this, 'get_seo_flags' ),
+					'permission_callback' => array( $this, 'check_permission' ),
+					'args'                => array(
+						'days' => array(
+							'description'       => __( 'Lookback window in days.', 'mcpwp' ),
+							'type'              => 'integer',
+							'default'           => 28,
+							'minimum'           => 1,
+							'maximum'           => 365,
+							'sanitize_callback' => 'absint',
+						),
+						'min_impressions' => array(
+							'description'       => __( 'Impression floor for the no_clicks flag.', 'mcpwp' ),
+							'type'              => 'integer',
+							'default'           => 500,
+							'minimum'           => 0,
+							'sanitize_callback' => 'absint',
+						),
+						'brand_terms' => array(
+							'description' => __( 'Brand terms to exclude from the almost_there flag. Defaults to the site name, domain, and any wp_recall brand_terms entry.', 'mcpwp' ),
+							'type'        => 'array',
+							'items'       => array( 'type' => 'string' ),
+						),
+						'limit' => array(
+							'description'       => __( 'Maximum items per flag.', 'mcpwp' ),
+							'type'              => 'integer',
+							'default'           => 20,
+							'minimum'           => 1,
+							'maximum'           => 100,
+							'sanitize_callback' => 'absint',
+						),
+					),
+				),
+			)
+		);
+
 		// WooCommerce SEO intelligence.
 		register_rest_route(
 			$this->namespace,
@@ -1353,6 +1396,37 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 		);
 
 		return $this->success_response( $report );
+	}
+
+	/**
+	 * Get act-worthy SEO signals distilled from imported search performance.
+	 *
+	 * @param WP_REST_Request $request Request object.
+	 * @return WP_REST_Response Response.
+	 */
+	public function get_seo_flags( $request ) {
+		$this->log_activity( 'get_seo_flags', $request );
+
+		$brand_terms = $request->get_param( 'brand_terms' );
+
+		$result = class_exists( 'Mcpwp_Seo_Flags' ) ? Mcpwp_Seo_Flags::build(
+			array(
+				'days'            => $request->get_param( 'days' ),
+				'min_impressions' => $request->get_param( 'min_impressions' ),
+				'brand_terms'     => is_array( $brand_terms ) ? $brand_terms : array(),
+				'limit'           => $request->get_param( 'limit' ),
+			)
+		) : array(
+			'schema_version' => '2026-09-26',
+			'flags'          => array(),
+			'summary'        => array(),
+			'data_window'    => array(),
+			'last_import_at' => '',
+			'filters'        => array(),
+			'next_step'      => 'The SEO flags engine is unavailable on this install.',
+		);
+
+		return $this->success_response( $result );
 	}
 
 	/**

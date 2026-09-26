@@ -88,6 +88,67 @@ class Mcpwp_Search_Performance {
 	}
 
 	/**
+	 * Whether any search performance rows have ever been imported.
+	 *
+	 * @return bool
+	 */
+	public static function has_any_rows() {
+		return ! empty( self::get_rows() );
+	}
+
+	/**
+	 * Timestamp of the most recent import, or '' if none.
+	 *
+	 * @return string
+	 */
+	public static function get_last_import_at() {
+		$imports = self::get_imports();
+		return isset( $imports[0]['imported_at'] ) ? (string) $imports[0]['imported_at'] : '';
+	}
+
+	/**
+	 * All stored imports, newest first (public accessor for callers that need
+	 * import-boundary grouping, e.g. decay detection when rows carry a single
+	 * shared date per import rather than per-day granularity).
+	 *
+	 * @return array
+	 */
+	public static function get_all_imports() {
+		return self::get_imports();
+	}
+
+	/**
+	 * All stored rows, unfiltered. Public accessor for callers (e.g.
+	 * Mcpwp_Seo_Flags) that need the raw row set rather than the aggregate
+	 * report shape returned by get_report().
+	 *
+	 * @return array
+	 */
+	public static function get_all_rows() {
+		return self::get_rows();
+	}
+
+	/**
+	 * Stored rows with date >= (today - $days), oldest storage cap still applies.
+	 *
+	 * @param int $days Lookback window in days.
+	 * @return array
+	 */
+	public static function get_rows_since( $days ) {
+		$days   = max( 1, min( 365, absint( $days ) ) );
+		$cutoff = gmdate( 'Y-m-d', time() - ( $days * DAY_IN_SECONDS ) );
+
+		return array_values(
+			array_filter(
+				self::get_rows(),
+				static function ( $row ) use ( $cutoff ) {
+					return (string) ( $row['date'] ?? '' ) >= $cutoff;
+				}
+			)
+		);
+	}
+
+	/**
 	 * Get aggregate report.
 	 *
 	 * @param array $args Filters.
