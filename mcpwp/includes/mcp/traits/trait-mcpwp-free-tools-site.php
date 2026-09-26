@@ -804,6 +804,30 @@ trait Mcpwp_Free_Tools_Site_Trait {
 		);
 
 		$tools[] = $this->define_tool(
+			'wp_seo_flags',
+			'Read-only. Returns ONLY the six act-worthy search signals distilled from imported search performance — everything else is ignored by design: almost_there (page 1-2, non-brand, not converting), no_clicks (real impressions, near-zero CTR), decaying (clicks down 30%+ vs the prior window), untargeted (impressions with no page/post title, slug, or focus keyword covering the query), wrong_intent (query intent vs landing page type mismatch, rule-based, confidence "heuristic"), and ai_mode (7+ word conversational queries). Each item includes evidence, a suggested_action, and the tool names that implement it. When no search performance has been imported yet, returns success with empty flags and a next_step telling you to ask for a Search Console export and call wp_import_search_performance.',
+			array(
+				'days' => array(
+					'type'        => 'number',
+					'description' => 'Lookback window in days, 1-365. Defaults to 28.',
+				),
+				'min_impressions' => array(
+					'type'        => 'number',
+					'description' => 'Impression floor for the no_clicks flag. Defaults to 500.',
+				),
+				'brand_terms' => array(
+					'type'        => 'array',
+					'description' => 'Brand terms to exclude from the almost_there flag. Defaults to the site name, domain tokens, and any wp_recall brand_terms entry.',
+					'items'       => array( 'type' => 'string' ),
+				),
+				'limit' => array(
+					'type'        => 'number',
+					'description' => 'Maximum items per flag, 1-100. Defaults to 20.',
+				),
+			)
+		);
+
+		$tools[] = $this->define_tool(
 			'wp_get_woocommerce_seo_report',
 			'Get a read-only WooCommerce SEO intelligence report for products. Inspects product content depth, short descriptions, category evidence, images, price/schema signals, stock review opportunities, and imported search performance evidence.',
 			array(

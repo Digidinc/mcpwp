@@ -2777,6 +2777,7 @@ require_once dirname(__DIR__) . '/includes/core/class-mcpwp-content-coherence.ph
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-seo-audit-store.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-seo-autofix.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-search-performance.php';
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-seo-flags.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-woocommerce-seo.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-pages.php';
 require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-api.php';

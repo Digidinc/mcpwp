@@ -310,6 +310,7 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-seo-audit-store.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-seo-autofix.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-search-performance.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-seo-flags.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-woocommerce-seo.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-keyword-research.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-figma.php';

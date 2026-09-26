@@ -89,6 +89,7 @@ class Mcpwp_MCP_Free_Tools extends Mcpwp_MCP_Tool_Registry {
 			'wp_run_seo_autofix_plan'    => 'seo',
 			'wp_import_search_performance' => 'seo',
 			'wp_get_seo_trends'          => 'seo',
+			'wp_seo_flags'               => 'seo',
 			'wp_get_woocommerce_seo_report' => 'seo',
 			'wp_get_custom_css'          => 'site',
 			'wp_set_custom_css'          => 'site',
@@ -503,6 +504,10 @@ class Mcpwp_MCP_Free_Tools extends Mcpwp_MCP_Tool_Registry {
 			'wp_get_seo_trends' => array(
 				'method' => 'GET',
 				'route'  => '/seo/search-performance',
+			),
+			'wp_seo_flags' => array(
+				'method' => 'GET',
+				'route'  => '/seo/flags',
 			),
 			'wp_get_woocommerce_seo_report' => array(
 				'method' => 'GET',

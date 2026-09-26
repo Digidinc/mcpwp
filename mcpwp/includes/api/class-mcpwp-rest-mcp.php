@@ -1855,6 +1855,11 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 					),
 				),
 			),
+			array(
+				'name'        => 'seo-loop',
+				'description' => 'Run the SEO evidence loop: read wp_seo_flags, judge the six flags, fix before write through approvals/drafts, kill bad keywords, link best pages to stuck ones, measure, and record decisions with wp_remember.',
+				'arguments'   => array(),
+			),
 		);
 
 		return array(
@@ -1949,6 +1954,17 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 					. "4. Rebuild the Elementor data to match the reference's section structure, typography, and color palette.\n"
 					. "5. Call wp_set_elementor to save. Include structural_changes in your report.\n"
 					. "6. Do not publish — return the page ID for review.";
+				break;
+
+			case 'seo-loop':
+				$text = "You are running the SEO evidence loop on \"{$site_title}\" ({$site_url}). Work the flags in order, one at a time, and do not skip the approval gate.\n\n"
+					. "1. READ: Call wp_seo_flags to get the six act-worthy signals (almost_there, no_clicks, decaying, untargeted, wrong_intent, ai_mode). If it returns an empty result with a next_step, stop and ask the owner for a Search Console export, then call wp_import_search_performance and retry.\n"
+					. "2. JUDGE: For each flag item, read its evidence and suggested_action. Decide which items are worth acting on now — prioritize decaying and almost_there first, they have the shortest path to more clicks.\n"
+					. "3. FIX BEFORE WRITE: Never edit a live page directly. Use wp_create_page/wp_update_page or wp_create_post/wp_update_post to prepare the change, then route it through wp_list_approvals / wp_apply_approval so nothing publishes unreviewed.\n"
+					. "4. KILL BAD KEYWORDS: For wrong_intent and ai_mode items that do not deserve a dedicated page, do not force-fit them — note them and move on rather than contorting an existing page's intent.\n"
+					. "5. LINK BEST TO STUCK: For untargeted and almost_there items, call wp_suggest_internal_links and wp_apply_internal_link to link from your strongest existing pages to the page that should own the query.\n"
+					. "6. MEASURE: After changes are approved and live, call wp_import_search_performance with the next export and call wp_seo_flags again to confirm clicks moved and the flag cleared.\n"
+					. "7. RECORD: Call wp_remember to store what you changed and why (query, url, action, date) so the next loop doesn't repeat the same judgment call from scratch.";
 				break;
 
 			default:
