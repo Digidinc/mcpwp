@@ -324,7 +324,7 @@ See [SECURITY.md](SECURITY.md) for our vulnerability disclosure policy.
 - **Website:** [mcpwp.net](https://mcpwp.net)
 - **OpenClaw skill:** [integrations/clawhub/](integrations/clawhub/)
 - **ChatGPT schema:** [integrations/chatgpt/](integrations/chatgpt/) *(coming in v2.9)*
-- **WordPress.org:** submission pending
+- **WordPress.org:** not a distribution channel for MCPWP (owner decision, #931) — the wp.org listing "Mumega MCP" is a separate, reduced edition
 - **Download:** [mcpwp.net](https://mcpwp.net)
 
 ## License

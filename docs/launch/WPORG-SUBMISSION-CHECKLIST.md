@@ -1,5 +1,10 @@
 # WordPress.org Submission Checklist (#495)
 
+> **SUPERSEDED (2026-09-26, #931):** owner decision is that MCPWP is distributed directly
+> (updates.mcpwp.net, Freemius, directories) and is not going on WordPress.org; the wp.org listing
+> stays the separate, reduced "Mumega MCP" edition. This checklist's plan — submitting the full
+> MCPWP build under its own slug — is not planned. Kept for reference only.
+>
 > STATUS: DRAFT / audit — NOT submitted. WP.org review is a one-shot first impression; clear every box before submitting the free build.
 >
 > Note: a separate, reduced edition is already live on WordPress.org under the slug
