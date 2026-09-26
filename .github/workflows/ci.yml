@@ -8,12 +8,16 @@ on:
 
 jobs:
   release-compatibility:
-    name: Release Compatibility Metadata
+    name: Python Scripts Unit Tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Verify requirements and release-channel regression tests
-        run: python3 -m unittest discover -s scripts/tests -p test_release_compatibility.py
+      - name: Run all scripts/tests/test_*.py suites
+        # A specific filename here silently drops every future test_*.py that
+        # isn't test_release_compatibility.py — test_intake_triage.py (#940)
+        # would otherwise exist in the repo and never run in CI. Broadened to
+        # the glob unittest discover already understands.
+        run: python3 -m unittest discover -s scripts/tests -p "test_*.py"
 
   php-lint:
     name: PHP Syntax
