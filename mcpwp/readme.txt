@@ -153,6 +153,16 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 
 == Changelog ==
 
+= 3.13.1 =
+* fix: **admin:** clean first-run debug log, canonical update channel, Free plan label ([#888](https://github.com/Mumega-com/mcpwp/issues/888))
+* fix: **content:** strip script/style bodies with their tags and report removals ([#808](https://github.com/Mumega-com/mcpwp/issues/808)) ([#885](https://github.com/Mumega-com/mcpwp/issues/885))
+* fix: **elementor:** detect default-on Container experiment and honour convert on set_elementor ([#887](https://github.com/Mumega-com/mcpwp/issues/887))
+* fix: **elementor:** invalidate Elementor caches after find/replace and price it by scope ([#891](https://github.com/Mumega-com/mcpwp/issues/891)) ([#892](https://github.com/Mumega-com/mcpwp/issues/892))
+* fix: **elementor:** recommend container widgets on atomic-mode sites until atomic writes render ([#889](https://github.com/Mumega-com/mcpwp/issues/889))
+* fix: **release:** reject mismatched package versions and runtime requirements ([#882](https://github.com/Mumega-com/mcpwp/issues/882))
+* fix: **theme-builder:** publish templates only after their Elementor save succeeds ([#828](https://github.com/Mumega-com/mcpwp/issues/828)) ([#886](https://github.com/Mumega-com/mcpwp/issues/886))
+* fix: **woocommerce:** archetype PUT drops stored fields ([#879](https://github.com/Mumega-com/mcpwp/issues/879)), apply unpublishes live products ([#878](https://github.com/Mumega-com/mcpwp/issues/878))
+
 = 3.13.0 =
 **BREAKING — a write-scoped API key can no longer publish.** Publishing now requires an admin-scoped key. Any integration that sets status=publish (or private, or future) with a write-scoped key will get 403 insufficient_scope after this upgrade. Mint an admin-scoped key for those automations.
 This breaks working setups deliberately. No publish capability check existed anywhere, and adding one would have been meaningless: every API key authenticates as the same shared mcpwp_api_agent user, which holds publish_posts and publish_pages unconditionally. The key's scope tier was the only real boundary and "write" cleared it. Two surfaces published with no caller input at all — LearnPress create_lesson()/create_quiz() defaulted to publish, so a zero-argument call from a write-scoped key produced a live enrollable lesson; and a WooCommerce archetype carrying a stored publish default put a live product on the storefront when applied with no status override.
