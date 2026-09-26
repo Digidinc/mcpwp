@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="base.css">
+<style>
+  .stack { flex: 1; display: flex; flex-direction: column; gap: 16px; min-height: 0; }
+  .cards-frame { border-radius: 12px; overflow: hidden; max-height: 92px; box-shadow: 0 20px 50px -20px rgba(0,0,0,0.55), 0 0 0 1px rgba(217,226,242,0.10); }
+  .cards-frame img { display: block; width: 100%; object-fit: cover; object-position: top; }
+  .two-up { display: flex; gap: 28px; align-items: flex-start; }
+  .two-up .shot-frame img { display: block; width: auto; max-width: 100%; max-height: 296px; margin: 0 auto; }
+  .two-up .lbl {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--blue-100);
+    margin-bottom: 10px;
+    display: block;
+  }
+  .two-up .col { display: flex; flex-direction: column; flex: 1; align-items: flex-start; }
+</style>
+</head>
+<body>
+<div class="slide">
+  <div class="brand-row"><img src="icon.svg"><span>MCPWP</span></div>
+  <h1 class="headline">Full audit log.<br>One-click rollback.</h1>
+  <div class="stack">
+    <div class="cards-frame"><img src="cr-cards.png"></div>
+    <div class="two-up">
+      <div class="col">
+        <span class="lbl">Pending &middot; needs a decision</span>
+        <div class="shot-frame"><img src="cr-pending.png"></div>
+      </div>
+      <div class="col">
+        <span class="lbl">Applied &middot; still reversible</span>
+        <div class="shot-frame"><img src="cr-rollback.png"></div>
+      </div>
+    </div>
+  </div>
+  <div class="caption-row">Every write is logged with before/after state. <b>Approved changes apply with one click; applied changes roll back with one click.</b></div>
+</div>
+</body>
+</html>

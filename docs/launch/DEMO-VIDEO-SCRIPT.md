@@ -133,11 +133,11 @@ entry is shown, clicked, and the page reverts. Clean, fast.
 **Type:** Motion graphic — category grid
 
 **On-screen text:**
-"180+ tools free. 300+ with Pro. Content. Elementor. WooCommerce. SEO. Media. Menus."
+"180+ tools free. 290+ with Pro. Content. Elementor. WooCommerce. SEO. Media. Menus."
 (categories appear one by one in a 3-column grid, blue accent on category name)
 
 **Voiceover / caption:**
-"180+ tools free, 300+ with Pro, covering every surface of WordPress. Works with Claude
+"180+ tools free, 290+ with Pro, covering every surface of WordPress. Works with Claude
 and Cursor — and any MCP client."
 
 ---

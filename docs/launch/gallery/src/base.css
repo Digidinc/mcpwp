@@ -1,0 +1,154 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Instrument+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+:root {
+  --ink-950: #0B1220;
+  --ink-900: #121A2B;
+  --blue-600: #1B4DFF;
+  --blue-100: #DCE5FF;
+  --blue-50: #EFF4FF;
+  --slate-600: #5F6C86;
+  --slate-200: #D9E2F2;
+  --white: #FFFFFF;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 1270px;
+  height: 760px;
+  background: var(--ink-950);
+  font-family: 'Instrument Sans', 'Helvetica Neue', Arial, sans-serif;
+  overflow: hidden;
+}
+
+.slide {
+  width: 1270px;
+  height: 760px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  padding: 56px 72px 40px;
+  background:
+    radial-gradient(1100px 500px at 85% -10%, rgba(27,77,255,0.16), transparent 60%),
+    var(--ink-950);
+}
+
+/* Every slide's main visual block (.row / .stack / .grids / .steps) shares this
+   sizing contract: it is the ONLY flexible element between the (variable-height)
+   headline and the (fixed-height) caption, so flexbox pins the caption's top
+   edge — the footer rule — to the same Y on every slide regardless of headline
+   line count. The 24px bottom padding is the mandatory clear-space margin: any
+   content that fills 100% of this box still lands 24px above the rule. Children
+   (code-panel / shot-frame / cards) must additionally be sized or clipped to
+   fit inside this box — the padding alone does not shrink an oversized child. */
+.row, .stack, .grids, .steps {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding-bottom: 24px;
+  box-sizing: border-box;
+}
+
+.brand-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 26px;
+}
+.brand-row img { width: 26px; height: 26px; display: block; }
+.brand-row span {
+  font-family: 'Space Grotesk', sans-serif;
+  font-weight: 600;
+  font-size: 16px;
+  letter-spacing: 0.08em;
+  color: var(--slate-200);
+  text-transform: uppercase;
+}
+
+.headline {
+  font-family: 'Space Grotesk', sans-serif;
+  font-weight: 700;
+  font-size: 46px;
+  line-height: 1.12;
+  color: var(--white);
+  letter-spacing: -0.01em;
+  margin: 0 0 8px;
+  max-width: 980px;
+}
+
+.subhead {
+  font-family: 'Instrument Sans', sans-serif;
+  font-weight: 400;
+  font-size: 17px;
+  line-height: 1.5;
+  color: var(--slate-200);
+  max-width: 900px;
+  margin: 0 0 30px;
+}
+
+.caption-row {
+  flex: none;
+  height: 48px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 15px;
+  color: var(--slate-200);
+  border-top: 1px solid rgba(217,226,242,0.16);
+  padding-top: 14px;
+}
+.caption-row b { color: var(--white); font-weight: 600; }
+
+.mono {
+  font-family: 'IBM Plex Mono', 'SFMono-Regular', Consolas, monospace;
+}
+
+.shot-frame {
+  background: var(--white);
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 30px 70px -20px rgba(0,0,0,0.55), 0 0 0 1px rgba(217,226,242,0.10);
+}
+.shot-frame .chrome {
+  height: 30px;
+  background: #E9EDF5;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+}
+.shot-frame .chrome i {
+  width: 9px; height: 9px; border-radius: 50%;
+  background: #C7CEDA;
+  display: inline-block;
+}
+.shot-frame img { display: block; width: 100%; }
+
+.code-panel {
+  background: var(--ink-900);
+  border: 1px solid rgba(217,226,242,0.14);
+  border-radius: 12px;
+  padding: 20px 22px;
+  box-shadow: 0 20px 50px -20px rgba(0,0,0,0.6);
+}
+.code-panel .tag {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--blue-100);
+  margin-bottom: 10px;
+  display: block;
+}
+.code-panel pre {
+  margin: 0;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: #E7ECFA;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.code-panel .k { color: #8FB3FF; }
+.code-panel .s { color: #B8F3D0; }

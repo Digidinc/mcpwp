@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="base.css">
+<style>
+  .steps { display: flex; gap: 26px; align-items: flex-start; }
+  .step { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .step .num {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 24px; height: 24px; border-radius: 50%;
+    background: var(--blue-600); color: #fff;
+    font-family: 'Space Grotesk', sans-serif; font-size: 13px; font-weight: 700;
+    margin-bottom: 10px;
+  }
+  .step .stitle {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 16px; font-weight: 600; color: var(--white);
+    margin-bottom: 12px;
+  }
+  .step .shot-frame img { width: 100%; display: block; }
+  .done-card {
+    background: var(--ink-900);
+    border: 1px solid rgba(217,226,242,0.14);
+    border-radius: 12px;
+    padding: 22px 22px;
+    min-height: 280px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 16px;
+    box-sizing: border-box;
+  }
+  .done-card .item { display: flex; align-items: center; gap: 10px; font-size: 14.5px; color: var(--slate-200); }
+  .done-card .item b { color: var(--white); font-weight: 500; }
+  .done-card .check {
+    width: 18px; height: 18px; border-radius: 50%; flex: none;
+    background: rgba(27,77,255,0.28); color: #fff;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; border: 1px solid rgba(27,77,255,0.6);
+  }
+</style>
+</head>
+<body>
+<div class="slide">
+  <div class="brand-row"><img src="icon.svg"><span>MCPWP</span></div>
+  <h1 class="headline">Install. Generate key.<br>Paste config. Done.</h1>
+  <div class="steps">
+    <div class="step">
+      <span class="num">1</span>
+      <span class="stitle">Generate an API key</span>
+      <div class="shot-frame"><img src="setup-keybox.png"></div>
+    </div>
+    <div class="step">
+      <span class="num">2</span>
+      <span class="stitle">Paste the config into your AI client</span>
+      <div class="shot-frame"><img src="setup-connect.png"></div>
+    </div>
+    <div class="step">
+      <span class="num">3</span>
+      <span class="stitle">Connect and go</span>
+      <div class="done-card">
+        <div class="item"><span class="check">&#10003;</span><b>Claude Desktop</b></div>
+        <div class="item"><span class="check">&#10003;</span><b>Claude Code</b></div>
+        <div class="item"><span class="check">&#10003;</span><b>Cursor</b></div>
+        <div class="item"><span class="check">&#10003;</span><b>Windsurf</b> &middot; MCP protocol check</div>
+      </div>
+    </div>
+  </div>
+  <div class="caption-row">Verified with Claude Desktop, Claude Code, and Cursor. <b>Built on the open MCP standard — works with any compliant client.</b></div>
+</div>
+</body>
+</html>

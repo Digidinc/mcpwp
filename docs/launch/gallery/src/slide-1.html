@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="base.css">
+<style>
+  .row { display: flex; gap: 30px; }
+  .col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 14px; min-height: 0; }
+  .col.right { display: flex; align-items: flex-start; }
+  .shot-frame img { width: 100%; display: block; max-height: 360px; object-fit: cover; object-position: top; }
+  .code-panel { overflow: hidden; position: relative; }
+  .code-panel pre { font-size: 11.5px; line-height: 1.45; }
+  .code-panel.req { flex: 1; min-height: 0; }
+  .code-panel.resp { flex: 1; min-height: 0; }
+</style>
+</head>
+<body>
+<div class="slide">
+  <div class="brand-row"><img src="icon.svg"><span>MCPWP</span></div>
+  <h1 class="headline">AI builds the page.<br>You stay in control.</h1>
+  <div class="row">
+    <div class="col">
+      <div class="code-panel req">
+        <span class="tag">MCP request &middot; tools/call</span>
+        <pre>{
+  &quot;method&quot;: &quot;tools/call&quot;,
+  &quot;params&quot;: {
+    &quot;name&quot;: &quot;wp_set_elementor&quot;,
+    &quot;arguments&quot;: { &quot;id&quot;: 25,
+      &quot;elementor_data&quot;:
+        &quot;hero + 3 services + contact&quot; }
+  }
+}</pre>
+      </div>
+      <div class="code-panel resp">
+        <span class="tag">MCP response</span>
+        <pre>{
+  &quot;result&quot;: {
+    &quot;success&quot;: true,
+    &quot;page_id&quot;: 25,
+    &quot;sections_saved&quot;: 3,
+    &quot;widgets_after&quot;: 8,
+    &quot;render_verified&quot;: true
+  }
+}</pre>
+      </div>
+    </div>
+    <div class="col right">
+      <div class="shot-frame">
+        <div class="chrome"><i></i><i></i><i></i></div>
+        <img src="page-front2.png">
+      </div>
+    </div>
+  </div>
+  <div class="caption-row">Any change can be staged for approval. <b>Approved changes apply with one click; applied changes roll back with one click.</b></div>
+</div>
+</body>
+</html>
