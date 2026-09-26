@@ -1311,6 +1311,17 @@ class Mcpwp_Elementor_Pro {
 			return new WP_Error( 'delete_failed', __( 'Failed to delete template.', 'mcpwp' ) );
 		}
 
+		// #952: wp_delete_post() alone leaves this template's ID in
+		// elementor_pro_theme_builder_conditions — the site-wide option
+		// Elementor Pro's frontend reads to decide which templates to load.
+		// Elementor never removes it itself, on trash OR force delete: a
+		// trashed elementor_library post is skipped at render, but the
+		// stale binding stays live in the option regardless, ready to
+		// resurface if the ID is ever reused or the trash is restored.
+		if ( class_exists( 'Mcpwp_Theme_Builder' ) ) {
+			( new Mcpwp_Theme_Builder() )->cleanup_after_template_delete( $template_id );
+		}
+
 		return true;
 	}
 

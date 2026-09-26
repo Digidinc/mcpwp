@@ -209,6 +209,14 @@ class Mcpwp_REST_Content extends Mcpwp_REST_API {
 			);
 		}
 
+		// #952: this generic endpoint can delete an elementor_library post
+		// too (a Theme Builder template has no dedicated CPT of its own), and
+		// that path has the same stale-index bug as delete_elementor_template
+		// — wp_delete_post() never touches elementor_pro_theme_builder_conditions.
+		if ( 'elementor_library' === $post_type && class_exists( 'Mcpwp_Theme_Builder' ) ) {
+			( new Mcpwp_Theme_Builder() )->cleanup_after_template_delete( $post_id );
+		}
+
 		return $this->success_response(
 			array(
 				'success'   => true,

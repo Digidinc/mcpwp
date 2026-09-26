@@ -146,6 +146,77 @@ namespace ElementorPro\Modules\ThemeBuilder {
 		public function get_document_conditions( $document ) {
 			return array();
 		}
+
+		/**
+		 * #952 coverage: writes into the REAL shape Elementor Pro's own
+		 * Conditions_Cache uses — `{ location => { template_id =>
+		 * [condition_strings] } }`, verified against
+		 * ElementorPro\Modules\ThemeBuilder\Classes\Conditions_Cache on a
+		 * real install — hardcoded to the 'header' location, the only one
+		 * these tests need. Lets a #952 rollback test prove a template was
+		 * genuinely registered in the cache before a later step crashes,
+		 * without needing a real Theme_Document::get_location().
+		 */
+		public function save_conditions( $template_id, $conditions ) {
+			$all = get_option( 'elementor_pro_theme_builder_conditions', array() );
+			$all['header'][ (int) $template_id ] = array_map(
+				function ( $condition ) {
+					return is_array( $condition ) ? rtrim( implode( '/', $condition ), '/' ) : (string) $condition;
+				},
+				$conditions
+			);
+			update_option( 'elementor_pro_theme_builder_conditions', $all );
+		}
+
+		/**
+		 * #952 coverage: mirrors Elementor Pro's real
+		 * Conditions_Manager::purge_post_from_cache() — a targeted removal
+		 * of one template, not a full rebuild — so a test can assert the
+		 * option's actual content changed, not only that a spy was called.
+		 */
+		public function purge_post_from_cache( $post_id ) {
+			if ( ! empty( $GLOBALS['mcpwp_theme_test_purge_throws'] ) ) {
+				// #952 coverage: a broken purge must not block the delete
+				// itself — the caller only needs to see this NOT propagate.
+				throw new \RuntimeException( 'conditions cache purge failed (test double)' );
+			}
+
+			$GLOBALS['mcpwp_theme_test_cache_purge_calls'] = ( $GLOBALS['mcpwp_theme_test_cache_purge_calls'] ?? 0 ) + 1;
+
+			$all     = get_option( 'elementor_pro_theme_builder_conditions', array() );
+			$post_id = absint( $post_id );
+
+			foreach ( $all as $location => $templates ) {
+				if ( is_array( $templates ) && array_key_exists( $post_id, $templates ) ) {
+					unset( $all[ $location ][ $post_id ] );
+				}
+			}
+
+			update_option( 'elementor_pro_theme_builder_conditions', $all );
+		}
+
+		public function get_cache() {
+			return new Mcpwp_Fake_Conditions_Cache();
+		}
+	}
+
+	/**
+	 * #952 coverage: spies on how many times a full cache rebuild ran — the
+	 * fallback path for an Elementor Pro build old enough not to have
+	 * purge_post_from_cache().
+	 */
+	class Mcpwp_Fake_Conditions_Cache {
+
+		public function regenerate() {
+			if ( ! empty( $GLOBALS['mcpwp_theme_test_regenerate_throws'] ) ) {
+				// #952 rollback coverage: set_template_conditions() calls
+				// this explicitly right after save_conditions() already
+				// registered the template in the (real-shaped) cache above.
+				throw new \RuntimeException( 'conditions cache regenerate failed (test double)' );
+			}
+
+			$GLOBALS['mcpwp_theme_test_cache_regenerate_calls'] = ( $GLOBALS['mcpwp_theme_test_cache_regenerate_calls'] ?? 0 ) + 1;
+		}
 	}
 
 	/**

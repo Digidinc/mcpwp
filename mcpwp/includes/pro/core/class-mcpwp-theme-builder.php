@@ -847,6 +847,13 @@ class Mcpwp_Theme_Builder {
 			// force delete, published or still a draft.
 			wp_delete_post( $template_id, true );
 
+			// #952: a crash straight out of Elementor Pro's conditions code
+			// can land here AFTER assign_to_location() already wrote this
+			// template into elementor_pro_theme_builder_conditions — the
+			// throw happens later, e.g. in get_cache()->regenerate(). The
+			// force delete above must not leave that binding behind.
+			$this->cleanup_after_template_delete( $template_id );
+
 			return new WP_Error(
 				'theme_template_save_failed',
 				sprintf(
@@ -929,6 +936,132 @@ class Mcpwp_Theme_Builder {
 		}
 
 		update_option( 'elementor_pro_theme_builder_conditions', $all_conditions );
+	}
+
+	/**
+	 * Whether a template currently appears anywhere in Elementor Pro's real
+	 * conditions cache/option.
+	 *
+	 * `elementor_pro_theme_builder_conditions` is Elementor Pro's own option
+	 * (`ElementorPro\Modules\ThemeBuilder\Classes\Conditions_Cache::OPTION_NAME`),
+	 * shaped `{ location => { template_id => [condition_strings] } }` —
+	 * LOCATION first, then template ID, the opposite axis from
+	 * update_global_conditions_index() above. That method's own writes to
+	 * this same option are harmless in production only because they are
+	 * always immediately followed by a real `regenerate()` call (inside
+	 * Elementor's own save_conditions(), and again explicitly below) that
+	 * rebuilds it correctly; verified reading Elementor Pro's actual source
+	 * (`conditions-cache.php`) on a real install rather than re-deriving the
+	 * shape from this file's own (pre-existing, unrelated) assumption.
+	 *
+	 * @param int $template_id Template ID.
+	 * @return bool
+	 */
+	private function template_is_in_conditions_cache( $template_id ) {
+		$all_conditions = get_option( 'elementor_pro_theme_builder_conditions', array() );
+		if ( ! is_array( $all_conditions ) ) {
+			return false;
+		}
+
+		$template_id = absint( $template_id );
+
+		foreach ( $all_conditions as $templates_by_id ) {
+			if ( is_array( $templates_by_id ) && array_key_exists( $template_id, $templates_by_id ) ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * Drop a location key left with no templates under it after a removal.
+	 *
+	 * Elementor Pro's own Conditions_Cache::remove() (called via
+	 * purge_post_from_cache() below) unsets only the one template ID and
+	 * leaves the location key behind as `[]` — real, shipped behaviour,
+	 * left alone by every Elementor Pro write path, and only ever cleaned
+	 * up incidentally by a later full regenerate() rebuild (which never
+	 * adds a key for a location with nothing in it, so it just does not
+	 * reappear). #952 asked for that tidiness on every delete, not just the
+	 * next unrelated regenerate(), so this does it explicitly, only writing
+	 * when a key actually goes away.
+	 *
+	 * @return void
+	 */
+	private function drop_empty_condition_locations() {
+		$all_conditions = get_option( 'elementor_pro_theme_builder_conditions', array() );
+		if ( ! is_array( $all_conditions ) ) {
+			return;
+		}
+
+		$changed = false;
+
+		foreach ( $all_conditions as $location => $templates_by_id ) {
+			if ( is_array( $templates_by_id ) && empty( $templates_by_id ) ) {
+				unset( $all_conditions[ $location ] );
+				$changed = true;
+			}
+		}
+
+		if ( $changed ) {
+			update_option( 'elementor_pro_theme_builder_conditions', $all_conditions );
+		}
+	}
+
+	/**
+	 * Remove a deleted template's ID from Elementor Pro's real conditions
+	 * cache/option (#952) — trash or force delete alike, since Elementor
+	 * never does this itself: `wp_delete_post()` does not touch
+	 * `elementor_pro_theme_builder_conditions`, and nothing else runs
+	 * afterward that would.
+	 *
+	 * Delegates the actual removal to Elementor Pro's own purpose-built
+	 * Conditions_Manager::purge_post_from_cache() rather than re-deriving
+	 * the option's shape here a second time: a hand-rolled removal that
+	 * disagreed with Elementor's real internal shape (or a future Elementor
+	 * Pro release that changes it) would silently do nothing, which is a
+	 * worse failure than doing nothing loudly. Falls back to a full
+	 * get_cache()->regenerate() rebuild — slower, but always correct,
+	 * because it re-queries every condition-bearing template fresh and the
+	 * one just deleted is gone — for an Elementor Pro build old enough not
+	 * to have the targeted method.
+	 *
+	 * Callers: Mcpwp_Elementor_Pro::delete_template() (trash and force),
+	 * Mcpwp_REST_Content::delete_content() when post_type is
+	 * elementor_library, and this class's own create_theme_template()
+	 * rollback (assign_to_location() can register a template in the cache
+	 * before a later step in that same method throws).
+	 *
+	 * @param int $template_id Template ID.
+	 * @return bool True if the template was actually removed (and the
+	 *              option written); false if it was never in the cache, or
+	 *              Elementor Pro's Theme Builder is not available.
+	 */
+	public function cleanup_after_template_delete( $template_id ) {
+		if ( ! $this->is_available() || ! $this->template_is_in_conditions_cache( $template_id ) ) {
+			return false;
+		}
+
+		try {
+			$conditions_manager = \ElementorPro\Modules\ThemeBuilder\Module::instance()->get_conditions_manager();
+
+			if ( method_exists( $conditions_manager, 'purge_post_from_cache' ) ) {
+				$conditions_manager->purge_post_from_cache( $template_id );
+			} else {
+				$conditions_manager->get_cache()->regenerate();
+			}
+
+			$this->drop_empty_condition_locations();
+		} catch ( \Throwable $e ) {
+			// Best-effort: a cache that fails to update here self-heals on
+			// the next conditions write (set_template_conditions() always
+			// calls regenerate()), and a delete must never fail on account
+			// of it.
+			return false;
+		}
+
+		return true;
 	}
 
 	/**
