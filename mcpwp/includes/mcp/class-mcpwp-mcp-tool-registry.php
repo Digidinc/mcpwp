@@ -183,9 +183,27 @@ abstract class Mcpwp_MCP_Tool_Registry {
 	/**
 	 * Determine whether a tool performs destructive actions.
 	 *
-	 * Consults the override table first (see is_read_only_tool()), then each
-	 * registry's own get_destructive_tools() list, then falls back to the
-	 * DELETE-method heuristic.
+	 * Per the MCP spec: readOnlyHint true means no modification of the
+	 * environment at all; destructiveHint true means "may perform destructive
+	 * updates," false means "only additive updates." Any tool that overwrites
+	 * or deletes an existing value is destructive — so the order here is:
+	 *
+	 * 1. Explicit override wins (see is_read_only_tool()).
+	 * 2. A registry's own get_destructive_tools() list, or a DELETE method —
+	 *    an explicit declaration (first-party list, or a custom registration's
+	 *    `destructive => true`) always wins, even over a GET/read-only
+	 *    method; a registrant declaring both is a contradiction this method
+	 *    resolves in favor of the explicit, human-authored signal.
+	 * 3. A read-only tool changes nothing, so absent an explicit declaration
+	 *    it can't be destructive.
+	 * 4. Otherwise: default_destructive_for_write_tools() decides. First-party
+	 *    registries (free/pro/Figma/AI) default this true — a write tool is
+	 *    presumed destructive unless its name is a known purely-additive verb
+	 *    (create/add/upload/clone/import/submit/duplicate/bulk_create/
+	 *    bulk_upload — see Mcpwp_MCP_Tool_Annotations::is_purely_additive_by_name()).
+	 *    Mcpwp_Custom_Tool_Registry overrides this back to false: its public
+	 *    `mcpwp_register_tools` contract documents destructive as opt-in
+	 *    (default false), and third-party registrants set it explicitly.
 	 *
 	 * @param string $name Tool name.
 	 * @return bool True when tool can delete/revoke/reset/overwrite data.
@@ -197,17 +215,42 @@ abstract class Mcpwp_MCP_Tool_Registry {
 		}
 
 		$destructive_tools = $this->get_destructive_tools();
-
 		if ( in_array( $name, $destructive_tools, true ) ) {
 			return true;
 		}
 
 		$tool_map = $this->get_tool_map();
-		if ( empty( $tool_map[ $name ]['method'] ) ) {
+		$method   = isset( $tool_map[ $name ]['method'] ) ? strtoupper( (string) $tool_map[ $name ]['method'] ) : '';
+		if ( 'DELETE' === $method ) {
+			return true;
+		}
+
+		// A tool that modifies nothing cannot be destructive — but only
+		// reached once an explicit declaration above has had its say.
+		if ( $this->is_read_only_tool( $name ) ) {
 			return false;
 		}
 
-		return 'DELETE' === strtoupper( (string) $tool_map[ $name ]['method'] );
+		if ( ! $this->default_destructive_for_write_tools() ) {
+			return false;
+		}
+
+		return ! Mcpwp_MCP_Tool_Annotations::is_purely_additive_by_name( $name );
+	}
+
+	/**
+	 * Whether an un-overridden, non-read-only tool with no explicit
+	 * destructive declaration defaults to destructiveHint=true.
+	 *
+	 * True for first-party registries (the strict, connector-directory-ready
+	 * reading). Mcpwp_Custom_Tool_Registry overrides this to false to honor
+	 * its documented `destructive` (default false) contract for third-party
+	 * `mcpwp_register_tools` registrants.
+	 *
+	 * @return bool
+	 */
+	protected function default_destructive_for_write_tools() {
+		return true;
 	}
 
 	/**

@@ -421,4 +421,18 @@ class Mcpwp_Custom_Tool_Registry extends Mcpwp_MCP_Tool_Registry {
 		}
 		return $open_world;
 	}
+
+	/**
+	 * Preserve this class's documented contract: `destructive` (bool) —
+	 * "sets annotations.destructiveHint (default false)". A third-party
+	 * registrant already has an explicit, first-class way to declare a tool
+	 * destructive (the `destructive` key, collected above); silently
+	 * flipping the default for anyone who didn't set it would be a breaking,
+	 * undocumented change to a public extension API this task does not own.
+	 *
+	 * @return bool
+	 */
+	protected function default_destructive_for_write_tools() {
+		return false;
+	}
 }

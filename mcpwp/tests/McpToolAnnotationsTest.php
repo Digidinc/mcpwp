@@ -148,6 +148,18 @@ final class McpToolAnnotationsTest extends TestCase {
 			array( 'wp_submit_to_google_index' ),
 			array( 'wp_refresh_seo_visibility' ),
 			array( 'wp_seo_opportunities' ),
+			array( 'wp_validate_seo_readiness' ),
+			array( 'wp_validate_structured_data' ),
+			array( 'wp_get_site_health' ),
+			array( 'wp_cloudflare_status' ),
+			array( 'wp_cloudflare_get_speed_settings' ),
+			array( 'wp_cloudflare_purge_cache' ),
+			array( 'wp_cloudflare_update_speed_setting' ),
+			array( 'wp_cloudflare_fix_mcp_access' ),
+			array( 'wp_trigger_update' ),
+			array( 'wp_screenshot_url' ),
+			array( 'wp_test_webhook' ),
+			array( 'wp_test_integration' ),
 		);
 	}
 
@@ -160,6 +172,15 @@ final class McpToolAnnotationsTest extends TestCase {
 		$this->assertTrue( $free->get_tool_annotations( 'wp_check_update' )['openWorldHint'] );
 		$this->assertTrue( $free->get_tool_annotations( 'wp_get_rendered_html' )['openWorldHint'] );
 		$this->assertTrue( $free->get_tool_annotations( 'wp_get_rendered_copy' )['openWorldHint'] );
+		$this->assertTrue( $free->get_tool_annotations( 'wp_validate_seo_readiness' )['openWorldHint'] );
+		$this->assertTrue( $free->get_tool_annotations( 'wp_validate_structured_data' )['openWorldHint'] );
+		$this->assertTrue( $free->get_tool_annotations( 'wp_get_site_health' )['openWorldHint'] );
+		$this->assertTrue( $free->get_tool_annotations( 'wp_cloudflare_status' )['openWorldHint'] );
+		$this->assertTrue( $free->get_tool_annotations( 'wp_cloudflare_get_speed_settings' )['openWorldHint'] );
+		$this->assertTrue( $free->get_tool_annotations( 'wp_cloudflare_purge_cache' )['openWorldHint'] );
+		$this->assertTrue( $free->get_tool_annotations( 'wp_cloudflare_update_speed_setting' )['openWorldHint'] );
+		$this->assertTrue( $free->get_tool_annotations( 'wp_cloudflare_fix_mcp_access' )['openWorldHint'] );
+		$this->assertTrue( $free->get_tool_annotations( 'wp_trigger_update' )['openWorldHint'] );
 		$this->assertTrue( $pro->get_tool_annotations( 'wp_google_index_status' )['openWorldHint'] );
 		$this->assertTrue( $pro->get_tool_annotations( 'wp_submit_to_google_index' )['openWorldHint'] );
 		$this->assertTrue( $pro->get_tool_annotations( 'wp_refresh_seo_visibility' )['openWorldHint'] );
@@ -192,6 +213,74 @@ final class McpToolAnnotationsTest extends TestCase {
 			$free->get_tool_annotations( 'wp_seo_audit_site' )['readOnlyHint'],
 			'wp_seo_audit_site can persist a stored snapshot when store=true and must not claim to be pure-read'
 		);
+	}
+
+	/**
+	 * @dataProvider get_only_tool_with_a_write_side_effect_provider
+	 */
+	public function test_get_mapped_tools_with_a_write_side_effect_are_not_read_only( string $tool, string $tier ): void {
+		$registry = 'pro' === $tier ? new Mcpwp_MCP_Pro_Tools() : new Mcpwp_MCP_Free_Tools();
+		$map      = $registry->get_tool_map();
+
+		$this->assertSame( 'GET', $map[ $tool ]['method'], "{$tool}: premise — this tool is GET-mapped" );
+		$this->assertFalse( $registry->get_tool_annotations( $tool )['readOnlyHint'], "{$tool}: has a write side effect and must not be read-only" );
+	}
+
+	public function get_only_tool_with_a_write_side_effect_provider(): array {
+		return array(
+			// Mcpwp_Site_Blueprints::save() via save=true.
+			array( 'wp_extract_site_blueprint', 'free' ),
+			// Mcpwp_Signals::compute() -> update_option(), on first call or refresh=true.
+			array( 'wp_get_signals', 'free' ),
+			// keyword_research(): enrich=true consumes the lookup budget.
+			array( 'wp_keyword_research', 'free' ),
+			// Mcpwp_Updater::check_for_update() rebuilds the update_plugins transient.
+			array( 'wp_check_update', 'free' ),
+			// Both route to list_memories(), which runs a one-time migration write.
+			array( 'wp_recall', 'free' ),
+			array( 'wp_list_memories', 'free' ),
+			// Mcpwp_REST_SEO_Market::get_opportunities(): a seed with no stored
+			// visibility rows falls through to a live paid lookup.
+			array( 'wp_seo_opportunities', 'pro' ),
+		);
+	}
+
+	/**
+	 * Guard: any tool whose schema exposes a parameter named save/store/
+	 * refresh/enrich/persist (as a whole underscore-split word — so
+	 * `auto_save` counts too) must be readOnlyHint=false, because a
+	 * parameter with that name exists to trigger a write. This is the
+	 * mechanical check the P0 findings above were found by hand with; it
+	 * exists so the next one is caught automatically.
+	 */
+	public function test_tools_with_a_save_store_refresh_enrich_or_persist_param_are_not_read_only(): void {
+		$trigger_words = array( 'save', 'store', 'refresh', 'enrich', 'persist' );
+
+		foreach ( $this->all_registries() as $registry ) {
+			foreach ( $registry->get_tools() as $tool ) {
+				$properties = $tool['inputSchema']['properties'] ?? array();
+				if ( $properties instanceof \stdClass ) {
+					$properties = (array) $properties;
+				}
+
+				$flagged_param = null;
+				foreach ( array_keys( $properties ) as $param_name ) {
+					if ( array_intersect( explode( '_', (string) $param_name ), $trigger_words ) ) {
+						$flagged_param = $param_name;
+						break;
+					}
+				}
+
+				if ( null === $flagged_param ) {
+					continue;
+				}
+
+				$this->assertFalse(
+					$tool['annotations']['readOnlyHint'],
+					"{$tool['name']}: has a '{$flagged_param}' parameter, which signals a write path — readOnlyHint must be false (or this guard needs a documented exception)."
+				);
+			}
+		}
 	}
 
 	// ── destructiveHint corrections ──────────────────────────────────────
@@ -232,6 +321,149 @@ final class McpToolAnnotationsTest extends TestCase {
 			$this->assertFalse( $override['destructiveHint'] );
 			$this->assertArrayHasKey( 'reason', $override );
 		}
+	}
+
+	/**
+	 * Mcpwp_MCP_Tool_Registry::default_destructive_for_write_tools() makes
+	 * every non-read-only, non-purely-additive first-party tool destructive
+	 * by default — this is what actually resolves the P0 sweep (update_*,
+	 * set_*, edit_*, patch_*, batch*, assign_*, configure_*, sync_*, remember,
+	 * apply_approval, wc_update_*, wp_push_to_staging, …) without a hand-kept
+	 * per-tool override for each one. Spot-check a representative slice so a
+	 * regression in that default is caught immediately rather than by someone
+	 * noticing 80 missing overrides.
+	 *
+	 * @dataProvider destructive_by_default_provider
+	 */
+	public function test_write_tools_default_to_destructive_when_not_purely_additive( string $tool, string $tier ): void {
+		$registry = 'pro' === $tier ? new Mcpwp_MCP_Pro_Tools() : new Mcpwp_MCP_Free_Tools();
+		$ann      = $registry->get_tool_annotations( $tool );
+		$override = Mcpwp_MCP_Tool_Annotations::get_override( $tool );
+
+		$this->assertFalse( $ann['readOnlyHint'], "{$tool}: premise — must be a write tool for this default to apply" );
+		$this->assertFalse(
+			null !== $override && array_key_exists( 'destructiveHint', $override ),
+			"{$tool}: this test is for the DEFAULT rule — it has an explicit destructiveHint override, so move it out of this provider"
+		);
+		$this->assertFalse( Mcpwp_MCP_Tool_Annotations::is_purely_additive_by_name( $tool ), "{$tool}: premise — must not match the purely-additive name pattern" );
+		$this->assertTrue( $ann['destructiveHint'], "{$tool}: expected destructiveHint=true from the default-destructive-for-write-tools rule" );
+	}
+
+	public function destructive_by_default_provider(): array {
+		return array(
+			array( 'wp_batch', 'free' ),
+			array( 'wp_batch_update', 'free' ),
+			array( 'wp_update_post', 'free' ),
+			array( 'wp_update_page', 'free' ),
+			array( 'wp_patch_elementor', 'free' ),
+			array( 'wp_edit_section', 'free' ),
+			array( 'wp_edit_widget', 'free' ),
+			array( 'wp_update_option', 'free' ),
+			array( 'wp_update_options', 'free' ),
+			array( 'wp_update_plugin_settings', 'free' ),
+			array( 'wp_upsert_kit_css_block', 'free' ),
+			array( 'wp_remember', 'free' ),
+			array( 'wp_configure_integration', 'free' ),
+			array( 'wp_apply_approval', 'free' ),
+			array( 'wp_assign_menu_location', 'free' ),
+			array( 'wp_reorder_menu_items', 'free' ),
+			array( 'wp_move_widget', 'pro' ),
+			array( 'wp_update_widget', 'pro' ),
+			array( 'wp_set_seo', 'pro' ),
+			array( 'wp_set_site_context', 'free' ),
+			array( 'wp_sync_figma_design_tokens', 'pro' ),
+			array( 'wp_update_elementor_template', 'pro' ),
+			array( 'wp_push_to_staging', 'pro' ),
+			array( 'wc_update_product', 'pro' ),
+			array( 'wc_update_order', 'pro' ),
+			array( 'wc_apply_product_archetype', 'pro' ),
+			array( 'wp_disable_elementor_custom_code', 'pro' ),
+			array( 'wp_sanitize_elementor_custom_code', 'pro' ),
+		);
+	}
+
+	/**
+	 * Tools whose verb is NOT create/add/upload/clone/import/submit/duplicate
+	 * but whose actual implementation only ever adds, never overwrites or
+	 * removes something that already existed — so they need an explicit
+	 * destructiveHint=false to escape the new default (without one, every
+	 * one of these would otherwise default to true).
+	 */
+	public function test_additive_by_implementation_but_not_by_name_are_documented_false(): void {
+		$free = new Mcpwp_MCP_Free_Tools();
+		$pro  = new Mcpwp_MCP_Pro_Tools();
+
+		$free_false = array(
+			'wp_apply_internal_link', 'wp_screenshot_url', 'wp_test_webhook',
+			'wp_deploy_site_blueprint', 'wp_flush_cache', 'wp_flush_permalinks',
+			'wp_regenerate_elementor_css',
+		);
+		foreach ( $free_false as $tool ) {
+			$ann = $free->get_tool_annotations( $tool );
+			$this->assertFalse( $ann['destructiveHint'], "{$tool}: expected destructiveHint=false" );
+
+			$override = Mcpwp_MCP_Tool_Annotations::get_override( $tool );
+			$this->assertNotNull( $override, "{$tool}: not purely-additive by name, so this MUST be an explicit override, not a default" );
+			$this->assertFalse( $override['destructiveHint'] ?? null, "{$tool}: override must set destructiveHint=false explicitly" );
+		}
+
+		$pro_false = array( 'wp_download_stock_photo', 'wp_generate_image', 'wp_describe_image', 'wp_get_blueprint', 'wp_build_page', 'wp_save_section_as_template', 'wp_test_integration' );
+		foreach ( $pro_false as $tool ) {
+			// wp_download_stock_photo/wp_generate_image/wp_describe_image live on
+			// the AI integration; the rest are pro-tier tools.
+			$registry = in_array( $tool, array( 'wp_download_stock_photo', 'wp_generate_image', 'wp_describe_image' ), true )
+				? new Mcpwp_MCP_AI_Integration()
+				: $pro;
+			$ann = $registry->get_tool_annotations( $tool );
+			$this->assertFalse( $ann['destructiveHint'], "{$tool}: expected destructiveHint=false" );
+		}
+	}
+
+	/**
+	 * The reverse trap: a tool whose happy path looks purely additive but
+	 * has a conditional parameter that overwrites existing state.
+	 */
+	public function test_conditional_overwrite_tools_are_destructive_despite_looking_additive(): void {
+		$ai   = new Mcpwp_MCP_AI_Integration();
+		$free = new Mcpwp_MCP_Free_Tools();
+
+		$this->assertTrue( $ai->get_tool_annotations( 'wp_generate_featured_image' )['destructiveHint'], 'set_post_thumbnail() overwrites an existing featured-image assignment' );
+		$this->assertTrue( $ai->get_tool_annotations( 'wp_generate_alt_text' )['destructiveHint'], 'auto_save=true overwrites existing alt text' );
+		$this->assertTrue( $ai->get_tool_annotations( 'wp_generate_excerpt' )['destructiveHint'], 'auto_save=true overwrites the existing excerpt' );
+		$this->assertTrue( $free->get_tool_annotations( 'wp_setup_menu' )['destructiveHint'], 'overwrite=true deletes existing menu items before repopulating' );
+
+		// wp_generate_image never assigns/overwrites anything — contrast case.
+		$this->assertFalse( $ai->get_tool_annotations( 'wp_generate_image' )['destructiveHint'] );
+	}
+
+	/**
+	 * Mcpwp_Custom_Tool_Registry's own docblock documents `destructive`
+	 * (bool) as an opt-in flag, default false — third-party registrants who
+	 * don't set it must keep getting false, not the strict first-party
+	 * default. This is the regression test for that carve-out.
+	 */
+	public function test_custom_registry_write_tool_without_explicit_flag_stays_non_destructive(): void {
+		add_filter(
+			'mcpwp_register_tools',
+			function ( $tools ) {
+				$tools[] = array(
+					'name'        => 'acme_update_widget',
+					'description' => 'Update an Acme widget.',
+					'rest_path'   => '/acme/v1/widgets/1',
+					'method'      => 'POST',
+					// Deliberately omits 'destructive' — the documented
+					// default (false) must hold even though this tool's
+					// name would default to true under the first-party rule.
+				);
+				return $tools;
+			}
+		);
+
+		$custom = new Mcpwp_Custom_Tool_Registry();
+		$ann    = $custom->get_tool_annotations( 'acme_update_widget' );
+
+		$this->assertFalse( $ann['readOnlyHint'] );
+		$this->assertFalse( $ann['destructiveHint'], 'a third-party tool with no explicit destructive flag must keep the documented default of false' );
 	}
 
 	// ── idempotentHint ───────────────────────────────────────────────────

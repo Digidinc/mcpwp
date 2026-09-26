@@ -2,23 +2,36 @@
 /**
  * MCP Tool Annotation Overrides — single source of truth
  *
+ * Per the MCP spec: readOnlyHint true means the tool does not modify its
+ * environment AT ALL — not options, not cached state, not a paid third-party
+ * call. destructiveHint true means "may perform destructive updates";
+ * false means "only additive updates" — so any tool that overwrites or
+ * deletes something that already existed is destructive, full stop.
+ *
  * The base registry (Mcpwp_MCP_Tool_Registry) infers readOnlyHint from HTTP
- * method and destructiveHint from a DELETE method or an explicit per-registry
- * list. That heuristic is right most of the time but wrong for a known set of
- * tools — a GET tool that spends third-party credit or calls an external API
- * (openWorldHint), a POST tool that only validates/transforms input without
- * touching WordPress state (readOnlyHint), or a "set_*"/"replace_*" tool that
- * fully overwrites existing content (destructiveHint). Connector directory
- * review (2026-09-25 submission) checks these for correctness, so every
- * inaccuracy has to be fixed at one place, not scattered across registries.
+ * method, and — absent an override — treats every non-read-only tool as
+ * destructive UNLESS its name is a known purely-additive verb
+ * (is_purely_additive_by_name() below). That combination is right most of
+ * the time but wrong for a known set of tools: a GET tool that writes state
+ * or spends third-party credit on some call paths (readOnlyHint), a POST
+ * tool that only validates/transforms input (readOnlyHint), a tool that
+ * overwrites/deletes existing state despite a non-obvious verb (destructiveHint
+ * true), or one whose verb reads destructively but is actually additive-only
+ * once you read the implementation (destructiveHint false). Connector
+ * directory review (2026-09-25 submission, plus a follow-up adversarial
+ * pass) checks these for correctness, so every inaccuracy has to be fixed at
+ * one place, not scattered across registries.
  *
  * This class is that one place. `ANNOTATION_OVERRIDES` is consulted by
- * Mcpwp_MCP_Tool_Registry BEFORE the HTTP-method heuristic and before each
- * registry's own get_destructive_tools()/get_open_world_tools() lists — an
- * override here always wins. Every entry carries a `reason` so a future
- * change to the underlying tool can be checked against why the override
- * exists (docs/mcp-tool-annotations.md is the human-readable audit trail this
- * table backs).
+ * Mcpwp_MCP_Tool_Registry BEFORE the HTTP-method heuristic, before the
+ * default-destructive-for-write-tools rule, and before each registry's own
+ * get_destructive_tools()/get_open_world_tools() lists — an override here
+ * always wins. Every entry carries a `reason` so a future change to the
+ * underlying tool can be checked against why the override exists
+ * (docs/mcp-tool-annotations.md is the human-readable audit trail this
+ * table backs). A tool with a `save`/`store`/`refresh`/`enrich`/`persist`
+ * parameter (as a whole underscore-split word, e.g. `auto_save`) is
+ * guard-tested to require readOnlyHint=false unless documented here.
  *
  * `TITLE_OVERRIDES` is the curated exception list for tool names the
  * humanizer (`humanize_tool_name()`) reads badly for; everything else gets an
@@ -62,12 +75,16 @@ class Mcpwp_MCP_Tool_Annotations {
 			'reason'        => 'Fetches an arbitrary caller-supplied external URL (/fetch).',
 		),
 		'wp_keyword_research'       => array(
-			'openWorldHint' => true,
-			'reason'        => 'Free/keyless by default, but enrich=true routes through a configured DataForSEO provider and spends the site\'s lookup budget (Mcpwp_REST_SEO_Audit::keyword_research()).',
+			'readOnlyHint'    => false,
+			'destructiveHint' => false,
+			'openWorldHint'   => true,
+			'reason'          => 'Free/keyless by default, but enrich=true routes through a configured DataForSEO provider and spends the site\'s lookup budget (Mcpwp_REST_SEO_Audit::keyword_research()) — spending a budget is a write, not a pure read. Not destructive: nothing existing is overwritten, only a shared lookup-cache/budget counter is consumed.',
 		),
 		'wp_check_update'           => array(
-			'openWorldHint' => true,
-			'reason'        => 'Calls the plugin update manifest URL over HTTP (Mcpwp_Updater::check_for_update() -> wp_remote_get()).',
+			'readOnlyHint'    => false,
+			'destructiveHint' => false,
+			'openWorldHint'   => true,
+			'reason'          => 'Calls the plugin update manifest URL over HTTP and, on success, deletes + rebuilds WordPress core\'s own `update_plugins` site transient (Mcpwp_REST_Site_Updates::check_update()) — a real write, not a pure read. Not destructive: the transient is core\'s own disposable, regenerable cache, not user content or plugin configuration.',
 		),
 		'wp_get_rendered_html'      => array(
 			'openWorldHint' => true,
@@ -86,16 +103,86 @@ class Mcpwp_MCP_Tool_Annotations {
 			'reason'        => 'Submits URLs to the Google Indexing API (Mcpwp_REST_Google_Indexing::submit_urls()).',
 		),
 		'wp_refresh_seo_visibility' => array(
-			'openWorldHint' => true,
-			'reason'        => 'Fetches a fresh ranked-keyword snapshot from the configured DataForSEO provider and stores it (Mcpwp_REST_SEO_Market::refresh_visibility()) — distinct from wp_seo_visibility, which only reads the stored snapshot.',
+			'destructiveHint' => false,
+			'openWorldHint'   => true,
+			'reason'          => 'Fetches a fresh ranked-keyword snapshot from the configured DataForSEO provider and REPLACES the stored one (Mcpwp_REST_SEO_Market::refresh_visibility() -> Mcpwp_SEO_Visibility::store_snapshot()) — distinct from wp_seo_visibility, which only reads the stored snapshot. Not destructive: the snapshot is a disposable, re-fetchable market-data cache, not user-authored content.',
 		),
 		'wp_seo_opportunities'      => array(
-			'openWorldHint' => true,
-			'reason'        => 'Falls through to a live DataForSEO keyword lookup (spending the lookup budget) when a seed is given and no visibility rows are stored yet (Mcpwp_REST_SEO_Market::get_opportunities()).',
+			'readOnlyHint'    => false,
+			'destructiveHint' => false,
+			'openWorldHint'   => true,
+			'reason'          => 'Falls through to a live DataForSEO keyword lookup (spending the lookup budget) when a seed is given and no visibility rows are stored yet (Mcpwp_REST_SEO_Market::get_opportunities()) — a real write, not a pure read. Not destructive: nothing existing is overwritten, only the shared lookup cache/budget.',
 		),
 		'wp_seo_audit_site'         => array(
-			'readOnlyHint' => false,
-			'reason'       => 'GET, but store=true persists the run to Mcpwp_SEO_Audit_Store (Mcpwp_REST_SEO_Audit::audit_seo_site()) — not a pure read on every call.',
+			'readOnlyHint'    => false,
+			'destructiveHint' => false,
+			'reason'          => 'GET, but store=true persists the run to Mcpwp_SEO_Audit_Store (Mcpwp_REST_SEO_Audit::audit_seo_site()) — not a pure read on every call. Not destructive: the stored audit is a disposable, re-runnable snapshot, not user content.',
+		),
+		'wp_extract_site_blueprint' => array(
+			'readOnlyHint'    => false,
+			'destructiveHint' => false,
+			'reason'          => 'GET, but save=true persists the extracted result via Mcpwp_Site_Blueprints::save() (Mcpwp_REST_Site_Blueprints::extract_blueprint()) — not a pure read. Not destructive: extract() never sets an `id`, so save() always mints a brand-new blueprint id — this call path can only create, never overwrite an existing stored blueprint.',
+		),
+		'wp_get_signals'            => array(
+			'readOnlyHint'    => false,
+			'destructiveHint' => false,
+			'reason'          => 'GET, but the first call ever (or refresh=true) recomputes and persists the signal feed via update_option() and can fire mcpwp_event_emitted for high-severity signals (Mcpwp_REST_Signals::get_signals() -> Mcpwp_Signals::compute()) — not a pure read. Not destructive: it replaces a computed health-signal cache for the types just recomputed, not user-authored content.',
+		),
+		'wp_recall'                 => array(
+			'readOnlyHint'    => false,
+			'destructiveHint' => false,
+			'reason'          => 'Routes to the same /memory GET handler as wp_list_memories, which runs a one-time migration write on first call (Mcpwp_Site_Memory::maybe_migrate_site_context() -> update_option()) — not a pure read. Not destructive: it sets an internal one-time migration flag, never overwriting a memory value the caller can see.',
+		),
+		'wp_list_memories'          => array(
+			'readOnlyHint'    => false,
+			'destructiveHint' => false,
+			'reason'          => 'Same one-time migration write as wp_recall — Mcpwp_Rest_Site_Memory::list_memories() calls Mcpwp_Site_Memory::maybe_migrate_site_context() before reading. Not destructive for the same reason.',
+		),
+
+		// --- openWorldHint fixes: tools that reach an external service but
+		// were not in any registry's get_open_world_tools() list. Several
+		// (the Cloudflare tools, wp_trigger_update) are also destructiveHint
+		// fixes — see the reason for each.
+
+		'wp_validate_seo_readiness'   => array(
+			'openWorldHint' => true,
+			'reason'        => 'For a published post, fetches the live rendered page over HTTP for its validation basis (Mcpwp_REST_SEO_Audit::validate_seo_readiness() -> fetch_rendered_html_body()/fetch_rendered_head_seo()) — same loopback-fetch reasoning as wp_get_rendered_html.',
+		),
+		'wp_validate_structured_data' => array(
+			'openWorldHint' => true,
+			'reason'        => 'Same rendered-page fetch as wp_validate_seo_readiness (Mcpwp_REST_SEO_Audit::validate_structured_data() -> fetch_rendered_html_body()).',
+		),
+		'wp_get_site_health'          => array(
+			'openWorldHint' => true,
+			'reason'        => 'Includes update_channel status; Mcpwp_Update_Channel_Health::get_status() fetches the update manifest over HTTP whenever its cached transient has expired (Mcpwp_REST_Site_Info::get_site_health()).',
+		),
+		'wp_cloudflare_status'              => array(
+			'openWorldHint' => true,
+			'reason'        => 'Calls the Cloudflare API to read zone/DNS status (Mcpwp_REST_Cloudflare).',
+		),
+		'wp_cloudflare_get_speed_settings'   => array(
+			'openWorldHint' => true,
+			'reason'        => 'Calls the Cloudflare API to read speed/performance settings (Mcpwp_REST_Cloudflare::get_speed_settings()).',
+		),
+		'wp_cloudflare_purge_cache'          => array(
+			'destructiveHint' => false,
+			'openWorldHint'   => true,
+			'reason'          => 'Calls the Cloudflare API to purge the edge cache (Mcpwp_REST_Cloudflare::purge_cache()). Not destructive: a CDN cache is disposable and regenerates from origin on the next request — no user content or configuration is lost.',
+		),
+		'wp_cloudflare_update_speed_setting' => array(
+			'destructiveHint' => true,
+			'openWorldHint'   => true,
+			'reason'          => 'Calls the Cloudflare API to overwrite a persistent zone setting (Mcpwp_REST_Cloudflare::update_speed_settings()) — unlike a cache purge, this replaces real configuration.',
+		),
+		'wp_cloudflare_fix_mcp_access'       => array(
+			'destructiveHint' => true,
+			'openWorldHint'   => true,
+			'reason'          => 'Calls the Cloudflare API to modify WAF/firewall rules so MCP requests are not blocked (Mcpwp_REST_Cloudflare::fix_mcp_access()) — overwrites existing firewall configuration.',
+		),
+		'wp_trigger_update'                  => array(
+			'destructiveHint' => true,
+			'openWorldHint'   => true,
+			'reason'          => 'Downloads and installs a plugin package via Plugin_Upgrader, overwriting the currently-installed plugin files (Mcpwp_REST_Site_Updates); also reaches the update manifest/package host over HTTP.',
 		),
 
 		// --- POST tools that validate/transform input without touching
@@ -218,6 +305,107 @@ class Mcpwp_MCP_Tool_Annotations {
 			'reason'          => 'Creates new posts; additive only.',
 		),
 
+		// --- destructiveHint=false exceptions that are NOT caught by
+		// Mcpwp_MCP_Tool_Annotations::is_purely_additive_by_name() (their verb
+		// isn't create/add/upload/clone/import/submit/duplicate/bulk_*), so
+		// Mcpwp_MCP_Tool_Registry's new default-destructive-for-write-tools
+		// rule would otherwise mark them destructive. Each was read against
+		// its actual implementation to confirm it never overwrites or removes
+		// something that already existed.
+
+		'wp_apply_internal_link'  => array(
+			'destructiveHint' => false,
+			'reason'          => 'Appends one new paragraph linking to the target to the END of existing post_content (Mcpwp_REST_Content_Graph::apply_internal_link()) and rejects a duplicate link (409); never removes or rewrites existing content. Approval-gated by default.',
+		),
+		'wp_download_stock_photo' => array(
+			'destructiveHint' => false,
+			'reason'          => 'Downloads a Pexels photo into a NEW media attachment (Mcpwp_Provider_Pexels::download_to_media()); additive only.',
+		),
+		'wp_generate_image'       => array(
+			'destructiveHint' => false,
+			'reason'          => 'Generates an AI image into a NEW media attachment (provider generate_image_to_media()); additive only — unlike wp_generate_featured_image, it does not also assign anything.',
+		),
+		'wp_describe_image'       => array(
+			'destructiveHint' => false,
+			'reason'          => 'Returns an AI-generated description; writes nothing anywhere (Mcpwp_REST_Integrations::describe_image()).',
+		),
+		'wp_get_blueprint'        => array(
+			'destructiveHint' => false,
+			'reason'          => 'Pure generator: builds and returns one Elementor section\'s JSON from a blueprint type + params (Mcpwp_Page_Builder::build_single_section()); writes nothing to WordPress.',
+		),
+		'wp_build_page'           => array(
+			'destructiveHint' => false,
+			'reason'          => 'Creates a NEW page from title/sections (Mcpwp_Page_Builder::build()); additive only.',
+		),
+		'wp_save_section_as_template' => array(
+			'destructiveHint' => false,
+			'reason'          => 'Creates a NEW reusable Elementor template from a live section (Mcpwp_Elementor_Pro::save_section_as_template()); the source page/section is only read, never modified.',
+		),
+		'wp_screenshot_url'       => array(
+			'destructiveHint' => false,
+			'openWorldHint'   => true,
+			'reason'          => 'Renders via an external screenshot worker; save_to_media=true adds a NEW media attachment (Mcpwp_REST_Screenshot). Additive only.',
+		),
+		'wp_test_webhook'         => array(
+			'destructiveHint' => false,
+			'openWorldHint'   => true,
+			'reason'          => 'Sends one external test delivery to the webhook\'s configured URL and appends a delivery-log row (Mcpwp_Webhooks::test()); does not modify the webhook\'s own stored configuration.',
+		),
+		'wp_test_integration'     => array(
+			'destructiveHint' => false,
+			'openWorldHint'   => true,
+			'reason'          => 'Performs a live connectivity check against the provider (Mcpwp_Integration_Manager::test_provider()); does not modify the stored provider configuration.',
+		),
+		'wp_deploy_site_blueprint' => array(
+			'destructiveHint' => false,
+			'reason'          => 'Creates NEW pages via wp_insert_post() for every blueprint page, and only reuses (never deletes) an existing same-named nav menu to append items to (Mcpwp_Site_Blueprints::deploy()); no existing page or menu item is overwritten or removed.',
+		),
+		'wp_flush_cache'          => array(
+			'destructiveHint' => false,
+			'idempotentHint'  => true,
+			'reason'          => 'Clears page-cache plugin caches (W3TC/WP Super Cache/LiteSpeed/WP Rocket/Cache Enabler); disposable, regenerates from origin on next request — no user content or configuration is lost. Idempotent: flushing an already-empty cache is a no-op with the same end state.',
+		),
+		'wp_flush_permalinks'     => array(
+			'destructiveHint' => false,
+			'idempotentHint'  => true,
+			'reason'          => 'Regenerates WordPress\'s rewrite-rules cache from currently-registered post types/taxonomies; disposable and deterministically reproducible, not authored content. Idempotent: running it again from the same state produces the same rules.',
+		),
+		'wp_regenerate_elementor_css' => array(
+			'destructiveHint' => false,
+			'idempotentHint'  => true,
+			'reason'          => 'Regenerates the derived Elementor CSS cache file from current page/kit data; disposable and deterministically reproducible, not the authoritative source (the Elementor data itself). Idempotent: same input deterministically produces the same output file.',
+		),
+
+		// --- destructiveHint=true for a conditional overwrite path that is
+		// easy to miss because the tool's happy path looks purely additive.
+		// (Everything else that should default to true — wp_update_*,
+		// wp_set_*, wp_edit_*, wp_patch_*, wp_batch*, wp_assign_*, wp_reorder_*,
+		// wp_move_widget, wp_remember, wp_configure_integration,
+		// wp_sync_figma_design_tokens, wp_upsert_kit_css_block, wp_apply_approval,
+		// wc_update_*, wc_apply_product_archetype, wp_push_to_staging, etc. —
+		// already gets destructiveHint=true from
+		// Mcpwp_MCP_Tool_Registry::default_destructive_for_write_tools(),
+		// since none of those verbs match is_purely_additive_by_name(). No
+		// override entry is needed for them, and none is added here, so this
+		// table doesn't rot into a second, driftable copy of that list.)
+
+		'wp_generate_featured_image' => array(
+			'destructiveHint' => true,
+			'reason'          => 'Generates a new media attachment AND calls set_post_thumbnail() (Mcpwp_REST_Integrations::generate_featured_image()), overwriting the post\'s existing featured-image assignment if it had one.',
+		),
+		'wp_generate_alt_text'       => array(
+			'destructiveHint' => true,
+			'reason'          => 'With auto_save=true, overwrites the attachment\'s existing alt text via update_post_meta() (Mcpwp_REST_Integrations::generate_alt_text()). The happy-path default (auto_save omitted) only returns suggested text, but the hint must cover the write path.',
+		),
+		'wp_generate_excerpt'        => array(
+			'destructiveHint' => true,
+			'reason'          => 'With auto_save=true, overwrites the post\'s existing excerpt via wp_update_post() (Mcpwp_REST_Integrations::generate_excerpt()). Same reasoning as wp_generate_alt_text.',
+		),
+		'wp_setup_menu'              => array(
+			'destructiveHint' => true,
+			'reason'          => 'With overwrite=true and an existing same-named menu, deletes every existing menu item on that menu before repopulating it (Mcpwp_REST_Menus::setup_menu()) — a real deletion path, not purely additive.',
+		),
+
 		// --- idempotentHint for meaningfully-idempotent write tools. Default
 		// (no override) is: read-only tools are idempotent, other write
 		// tools are not asserted either way (false). These are the write
@@ -255,15 +443,23 @@ class Mcpwp_MCP_Tool_Annotations {
 		'wp_reorder_menu_items'      => array( 'idempotentHint' => true, 'reason' => 'Sets an explicit final order; the same order twice leaves the same state.' ),
 		'wp_reorder_widgets'         => array( 'idempotentHint' => true, 'reason' => 'Same reasoning as wp_reorder_menu_items.' ),
 		'wp_move_widget'             => array( 'idempotentHint' => true, 'reason' => 'Moves a widget to an explicit target position; the same target twice leaves the same state.' ),
-		'wp_flush_permalinks'        => array( 'idempotentHint' => true, 'reason' => 'Regenerates rewrite rules from current state; running it again produces the same rules.' ),
-		'wp_flush_cache'             => array( 'idempotentHint' => true, 'reason' => 'Flushing an already-empty cache is a no-op with the same end state.' ),
-		'wp_regenerate_elementor_css' => array( 'idempotentHint' => true, 'reason' => 'Deterministically regenerates CSS from current page data; same input produces the same output file.' ),
 		'wp_update_rate_limit'       => array( 'idempotentHint' => true, 'reason' => 'Replaces the rate-limit config with the given values; same values twice leave the same state.' ),
 		'wp_update_plugin_settings'  => array( 'idempotentHint' => true, 'reason' => 'Replaces settings with the given values; same values twice leave the same state.' ),
 		'wp_update_options'          => array( 'idempotentHint' => true, 'reason' => 'Sets the given options to given values; same values twice leave the same state.' ),
 		'wp_update_option'           => array( 'idempotentHint' => true, 'reason' => 'Same reasoning as wp_update_options.' ),
 		'wp_push_to_live'            => array( 'idempotentHint' => true, 'reason' => 'Pushes the same source snapshot to live; the same push twice leaves live in the same state.' ),
 		'wp_push_to_staging'         => array( 'idempotentHint' => true, 'reason' => 'Same reasoning as wp_push_to_live.' ),
+		// Reviewed against a P1 finding that these regenerate element ids on
+		// every apply. Traced instead: Mcpwp_Elementor_Pro::apply_archetype_to_page()
+		// and ::apply_part_to_page() both delegate to the same
+		// apply_template_to_page() that backs wp_apply_elementor_template —
+		// it copies the source's stored _elementor_data verbatim through
+		// save_elementor_data() -> set_elementor_data(), which only fills in
+		// a MISSING id (validator: "auto-generated missing ID"), never
+		// rewrites an existing valid one. The generate_element_id() calls
+		// found nearby live in the unrelated summarize_template_data()
+		// preview path. Kept idempotentHint=true on that evidence; flagging
+		// for the reviewer rather than silently overriding the finding.
 		'wp_apply_elementor_template' => array( 'idempotentHint' => true, 'reason' => 'Applies the same template content each call; applying it twice leaves the page in the same state.' ),
 		'wp_apply_elementor_archetype' => array( 'idempotentHint' => true, 'reason' => 'Same reasoning as wp_apply_elementor_template.' ),
 		'wp_apply_elementor_part'    => array( 'idempotentHint' => true, 'reason' => 'Same reasoning as wp_apply_elementor_template.' ),
@@ -415,5 +611,27 @@ class Mcpwp_MCP_Tool_Annotations {
 	 */
 	public static function get_override( $name ) {
 		return isset( self::ANNOTATION_OVERRIDES[ $name ] ) ? self::ANNOTATION_OVERRIDES[ $name ] : null;
+	}
+
+	/**
+	 * Whether a tool's name identifies it as purely additive — creates or
+	 * appends a new thing without ever touching something that already
+	 * existed. Used by Mcpwp_MCP_Tool_Registry::is_destructive_tool() as the
+	 * one exemption from "every other write tool defaults to destructive."
+	 *
+	 * Deliberately narrow: only verbs that are additive in EVERY tool that
+	 * uses them belong here. A verb like "apply"/"generate"/"save"/"setup" is
+	 * additive in some tools and an overwrite in others (see the
+	 * per-tool overrides above for those), so none of them are in this list
+	 * — guessing from the verb alone would silently misclassify one of them.
+	 *
+	 * @param string $name Tool name.
+	 * @return bool
+	 */
+	public static function is_purely_additive_by_name( $name ) {
+		return (bool) preg_match(
+			'/^(?:wp|wc)_(?:create|add|upload|clone|duplicate|import|submit|bulk_create|bulk_upload)_/',
+			(string) $name
+		);
 	}
 }
