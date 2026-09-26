@@ -4,6 +4,7 @@
   "packages": {
     ".": {
       "release-type": "simple",
+      "versioning": "always-bump-patch",
       "package-name": "mcpwp",
       "component": "",
       "include-component-in-tag": false,
