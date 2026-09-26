@@ -381,6 +381,58 @@ abstract class Mcpwp_REST_API {
 	}
 
 	/**
+	 * Resolve the HTTP status a WP_Error carries in its own data, if any.
+	 *
+	 * 64 call sites used to re-wrap a lower-level WP_Error (e.g. from a
+	 * WordPress core insert/update helper or a storage class) and hardcode
+	 * status 400 on the re-wrap, which reported real server failures
+	 * (500), not-found (404), permission errors (403), etc. as a generic
+	 * client error. This reads the status the original error already
+	 * carries and only falls back to $default_status when it is missing
+	 * or not a plausible HTTP status. See #953.
+	 *
+	 * @param WP_Error $error          The error to inspect.
+	 * @param int      $default_status Status to use when the error carries none.
+	 * @return int Resolved HTTP status.
+	 */
+	protected function get_wp_error_status( WP_Error $error, $default_status = 400 ) {
+		$data = $error->get_error_data( $error->get_error_code() );
+
+		if ( is_array( $data ) && isset( $data['status'] ) ) {
+			$status = $data['status'];
+
+			if ( is_int( $status ) && $status >= 400 && $status <= 599 ) {
+				return $status;
+			}
+		}
+
+		return $default_status;
+	}
+
+	/**
+	 * Prepare an error response from an existing WP_Error, honouring the
+	 * HTTP status the error already carries instead of forcing one.
+	 *
+	 * Replaces the historic pattern of re-wrapping a WP_Error's own code
+	 * and message while hardcoding the status to 400. Routes through
+	 * error_response() so hint enrichment still applies. See #953.
+	 *
+	 * @param WP_Error $error          The error to re-wrap.
+	 * @param int      $default_status Status to use when the error carries none
+	 *                                 (matches the old hardcoded behaviour).
+	 * @param array    $context        Optional context for dynamic hint generation.
+	 * @return WP_Error Error object with hints, carrying the resolved status.
+	 */
+	protected function error_response_from_wp_error( WP_Error $error, $default_status = 400, $context = array() ) {
+		return $this->error_response(
+			$error->get_error_code(),
+			$error->get_error_message(),
+			$this->get_wp_error_status( $error, $default_status ),
+			$context
+		);
+	}
+
+	/**
 	 * Get pagination args schema.
 	 *
 	 * @return array Schema.

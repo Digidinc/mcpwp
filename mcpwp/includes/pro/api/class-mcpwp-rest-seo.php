@@ -242,8 +242,9 @@ class Mcpwp_REST_SEO extends Mcpwp_REST_API {
 		$result = $this->seo->get_post_seo( $post_id, $plugin );
 
 		if ( is_wp_error( $result ) ) {
-			$this->log_activity( 'get_seo', $request, null, 400 );
-			return $this->error_response( $result->get_error_code(), $result->get_error_message(), 400 );
+			$status = $this->get_wp_error_status( $result );
+			$this->log_activity( 'get_seo', $request, null, $status );
+			return $this->error_response_from_wp_error( $result );
 		}
 
 		$this->log_activity( 'get_seo', $request, $result );
@@ -286,8 +287,9 @@ class Mcpwp_REST_SEO extends Mcpwp_REST_API {
 		$result = $this->seo->update_post_seo( $post_id, $data, $plugin );
 
 		if ( is_wp_error( $result ) ) {
-			$this->log_activity( 'update_seo', $request, null, 400 );
-			return $this->error_response( $result->get_error_code(), $result->get_error_message(), 400 );
+			$status = $this->get_wp_error_status( $result );
+			$this->log_activity( 'update_seo', $request, null, $status );
+			return $this->error_response_from_wp_error( $result );
 		}
 
 		$this->log_activity( 'update_seo', $request, $result );
@@ -398,7 +400,7 @@ class Mcpwp_REST_SEO extends Mcpwp_REST_API {
 		$result  = $this->seo->get_post_seo( $post_id, 'yoast' );
 
 		if ( is_wp_error( $result ) ) {
-			return $this->error_response( $result->get_error_code(), $result->get_error_message(), 400 );
+			return $this->error_response_from_wp_error( $result );
 		}
 
 		return $this->success_response( $result );
@@ -433,7 +435,7 @@ class Mcpwp_REST_SEO extends Mcpwp_REST_API {
 		$result  = $this->seo->get_post_seo( $post_id, 'rankmath' );
 
 		if ( is_wp_error( $result ) ) {
-			return $this->error_response( $result->get_error_code(), $result->get_error_message(), 400 );
+			return $this->error_response_from_wp_error( $result );
 		}
 
 		return $this->success_response( $result );
@@ -468,7 +470,7 @@ class Mcpwp_REST_SEO extends Mcpwp_REST_API {
 		$result  = $this->seo->get_post_seo( $post_id, 'aioseo' );
 
 		if ( is_wp_error( $result ) ) {
-			return $this->error_response( $result->get_error_code(), $result->get_error_message(), 400 );
+			return $this->error_response_from_wp_error( $result );
 		}
 
 		return $this->success_response( $result );
@@ -503,7 +505,7 @@ class Mcpwp_REST_SEO extends Mcpwp_REST_API {
 		$result  = $this->seo->get_post_seo( $post_id, 'seopress' );
 
 		if ( is_wp_error( $result ) ) {
-			return $this->error_response( $result->get_error_code(), $result->get_error_message(), 400 );
+			return $this->error_response_from_wp_error( $result );
 		}
 
 		return $this->success_response( $result );
@@ -558,7 +560,7 @@ class Mcpwp_REST_SEO extends Mcpwp_REST_API {
 		$result = $this->seo->update_post_seo( $post_id, $data, $plugin );
 
 		if ( is_wp_error( $result ) ) {
-			return $this->error_response( $result->get_error_code(), $result->get_error_message(), 400 );
+			return $this->error_response_from_wp_error( $result );
 		}
 
 		return $this->success_response( $result );
@@ -586,7 +588,7 @@ class Mcpwp_REST_SEO extends Mcpwp_REST_API {
 		$result = $this->seo->update_post_seo( $post_id, $data );
 
 		if ( is_wp_error( $result ) ) {
-			return $this->error_response( $result->get_error_code(), $result->get_error_message(), 400 );
+			return $this->error_response_from_wp_error( $result );
 		}
 
 		$this->log_activity( 'set_noindex', $request, array(

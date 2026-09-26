@@ -176,7 +176,7 @@ class Mcpwp_REST_Users extends Mcpwp_REST_API {
 		$user = $this->users->create_user( $data );
 
 		if ( is_wp_error( $user ) ) {
-			return $this->error_response( $user->get_error_code(), $user->get_error_message(), 400 );
+			return $this->error_response_from_wp_error( $user );
 		}
 
 		$this->log_activity( 'create_user', $request, array( 'user_id' => $user['id'] ), 201 );
@@ -214,7 +214,7 @@ class Mcpwp_REST_Users extends Mcpwp_REST_API {
 		$user = $this->users->update_user( $user_id, $data );
 
 		if ( is_wp_error( $user ) ) {
-			return $this->error_response( $user->get_error_code(), $user->get_error_message(), 400 );
+			return $this->error_response_from_wp_error( $user );
 		}
 
 		$this->log_activity( 'update_user', $request, array( 'user_id' => $user_id ) );
@@ -252,7 +252,7 @@ class Mcpwp_REST_Users extends Mcpwp_REST_API {
 		$result = $this->users->delete_user( $user_id, $reassign ? absint( $reassign ) : null );
 
 		if ( is_wp_error( $result ) ) {
-			return $this->error_response( $result->get_error_code(), $result->get_error_message(), 400 );
+			return $this->error_response_from_wp_error( $result );
 		}
 
 		$this->log_activity( 'delete_user', $request, array( 'user_id' => $user_id ) );

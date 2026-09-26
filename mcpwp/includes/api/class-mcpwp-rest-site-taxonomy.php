@@ -253,7 +253,7 @@ class Mcpwp_REST_Site_Taxonomy extends Mcpwp_REST_API {
 		$result = wp_insert_term( $name, $taxonomy, $args );
 
 		if ( is_wp_error( $result ) ) {
-			return $this->error_response( $result->get_error_code(), $result->get_error_message(), 400 );
+			return $this->error_response_from_wp_error( $result );
 		}
 
 		$term = get_term( $result['term_id'], $taxonomy );
@@ -305,7 +305,7 @@ class Mcpwp_REST_Site_Taxonomy extends Mcpwp_REST_API {
 		$result = wp_update_term( $term_id, $taxonomy, $args );
 
 		if ( is_wp_error( $result ) ) {
-			return $this->error_response( $result->get_error_code(), $result->get_error_message(), 400 );
+			return $this->error_response_from_wp_error( $result );
 		}
 
 		$term = get_term( $result['term_id'], $taxonomy );
@@ -341,7 +341,7 @@ class Mcpwp_REST_Site_Taxonomy extends Mcpwp_REST_API {
 		$result = wp_delete_term( $term_id, $taxonomy );
 
 		if ( is_wp_error( $result ) ) {
-			return $this->error_response( $result->get_error_code(), $result->get_error_message(), 400 );
+			return $this->error_response_from_wp_error( $result );
 		}
 
 		if ( false === $result ) {

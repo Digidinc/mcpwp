@@ -148,8 +148,9 @@ class Mcpwp_REST_Forms extends Mcpwp_REST_API {
 		$forms = $this->forms->get_forms( $plugin, $args );
 
 		if ( is_wp_error( $forms ) ) {
-			$this->log_activity( 'get_forms', $request, null, 400 );
-			return $this->error_response( $forms->get_error_code(), $forms->get_error_message(), 400 );
+			$status = $this->get_wp_error_status( $forms );
+			$this->log_activity( 'get_forms', $request, null, $status );
+			return $this->error_response_from_wp_error( $forms );
 		}
 
 		$this->log_activity( 'get_forms', $request, array(
@@ -206,8 +207,9 @@ class Mcpwp_REST_Forms extends Mcpwp_REST_API {
 		$entries = $this->forms->get_entries( $plugin, $form_id, $args );
 
 		if ( is_wp_error( $entries ) ) {
-			$this->log_activity( 'get_entries', $request, null, 400 );
-			return $this->error_response( $entries->get_error_code(), $entries->get_error_message(), 400 );
+			$status = $this->get_wp_error_status( $entries );
+			$this->log_activity( 'get_entries', $request, null, $status );
+			return $this->error_response_from_wp_error( $entries );
 		}
 
 		$this->log_activity( 'get_entries', $request, array(
