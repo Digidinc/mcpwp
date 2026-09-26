@@ -5,6 +5,17 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.14.0](https://github.com/Mumega-com/mcpwp/compare/v3.13.1...v3.14.0) (2026-09-26)
+
+
+### Features
+
+* **approvals:** optional Jev triage ranks the approval queue ([#935](https://github.com/Mumega-com/mcpwp/issues/935)) ([2a88c0f](https://github.com/Mumega-com/mcpwp/commit/2a88c0faf97d0f7be53d2cc830319541792b1b2d))
+* **mcp:** accurate tool annotations and titles for connector directories ([#934](https://github.com/Mumega-com/mcpwp/issues/934)) ([d836cc7](https://github.com/Mumega-com/mcpwp/commit/d836cc72b24934981e176000e1b898f028940afd))
+* **mcp:** return tool execution failures as isError results the model can read ([#936](https://github.com/Mumega-com/mcpwp/issues/936)) ([2f19282](https://github.com/Mumega-com/mcpwp/commit/2f19282ec83a4b425fedf2b1ba61a4e164f82c4f)), closes [#896](https://github.com/Mumega-com/mcpwp/issues/896)
+* **seo:** AI crawler policy, IndexNow, and llms.txt/robots fixes that coexist with SEO plugins ([#937](https://github.com/Mumega-com/mcpwp/issues/937)) ([5c5c247](https://github.com/Mumega-com/mcpwp/commit/5c5c24715157e485de157fb1766553718f256827))
+* **seo:** wp_seo_flags returns the six act-worthy search signals, plus an seo-loop prompt ([#933](https://github.com/Mumega-com/mcpwp/issues/933)) ([9fa4d9e](https://github.com/Mumega-com/mcpwp/commit/9fa4d9e01d694b55846e4cd78a0300f838a27ce6)), closes [#898](https://github.com/Mumega-com/mcpwp/issues/898)
+
 ## [3.13.1](https://github.com/Mumega-com/mcpwp/compare/v3.13.0...v3.13.1) (2026-09-26)
 
 
