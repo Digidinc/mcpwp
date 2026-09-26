@@ -729,6 +729,79 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	}
 
 	/**
+	 * Price a JSON-RPC request as its underlying tools, not as the HTTP
+	 * envelope that carries them (#891).
+	 *
+	 * Every call to this endpoint is an HTTP POST, so the base
+	 * rate_limit_method() answer is always "POST" — a plain read like
+	 * wp_get_elementor was priced exactly like a write (1x burst/minute
+	 * ceiling on the caller's shared counter, not the 2x a GET gets),
+	 * and reported as refused with `"bucket":"write"` even though nothing
+	 * it did was destructive.
+	 *
+	 * Answers "GET" only when every operation in the request is a
+	 * `tools/call` naming a tool this server's own map marks `method: GET`
+	 * — the same map handle_tools_call_idempotent() already reads to decide
+	 * a tool has nothing to protect. One write anywhere in a batch — an
+	 * unknown tool, a non-GET tool, anything that is not `tools/call` at
+	 * all — keeps the whole request priced at the real HTTP method, the
+	 * same "every operation must qualify" rule is_diagnostic_request()
+	 * applies just above. Never prices anything BELOW the real method:
+	 * this can only raise a request to the read ceiling, never lower one
+	 * to it.
+	 *
+	 * @param WP_REST_Request $request Request.
+	 * @return string
+	 */
+	protected function rate_limit_method( $request ) {
+		$default = parent::rate_limit_method( $request );
+
+		$body = method_exists( $request, 'get_json_params' ) ? $request->get_json_params() : null;
+
+		if ( ! is_array( $body ) || empty( $body ) ) {
+			return $default;
+		}
+
+		$operations = isset( $body[0] ) ? $body : array( $body );
+		$tool_map   = null;
+
+		foreach ( $operations as $operation ) {
+			if ( ! is_array( $operation ) ) {
+				return $default;
+			}
+
+			$method = isset( $operation['method'] ) && is_string( $operation['method'] ) ? $operation['method'] : '';
+
+			if ( 'tools/call' !== $method ) {
+				return $default;
+			}
+
+			$params    = isset( $operation['params'] ) && is_array( $operation['params'] ) ? $operation['params'] : array();
+			$tool_name = isset( $params['name'] ) && is_string( $params['name'] ) ? $params['name'] : '';
+
+			if ( '' === $tool_name ) {
+				return $default;
+			}
+
+			if ( null === $tool_map ) {
+				$tool_map = $this->get_all_tool_map();
+			}
+
+			if ( ! isset( $tool_map[ $tool_name ] ) ) {
+				return $default;
+			}
+
+			$tool_method = isset( $tool_map[ $tool_name ]['method'] ) ? strtoupper( (string) $tool_map[ $tool_name ]['method'] ) : 'POST';
+
+			if ( 'GET' !== $tool_method ) {
+				return $default;
+			}
+		}
+
+		return 'GET';
+	}
+
+	/**
 	 * Put the server's own facts on every result (#802).
 	 *
 	 * - `plugin_version`: the plugin that produced THIS answer, so a plugin

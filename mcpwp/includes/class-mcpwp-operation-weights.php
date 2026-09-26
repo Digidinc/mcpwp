@@ -41,6 +41,11 @@ final class Mcpwp_Operation_Weights {
 			'weight' => 10,
 			'ids'    => 'ids',
 			'route'  => '/elementor/find-replace',
+			// #891: the fixed weight prices a run the caller did NOT scope to
+			// named posts — a whole post type or the whole site. A call that
+			// names its posts (id or ids) is priced by scope instead, in
+			// tool_weight() below.
+			'scoped' => true,
 		),
 		'wp_delete_all_drafts' => array(
 			'weight' => 10,
@@ -223,7 +228,18 @@ final class Mcpwp_Operation_Weights {
 
 		$spec    = array_key_exists( $tool_name, self::TOOL_WEIGHTS ) ? self::TOOL_WEIGHTS[ $tool_name ] : null;
 		$default = null !== $spec ? (int) $spec['weight'] : 1;
-		$own     = $default;
+
+		// #891: a `scoped` tool named its posts (id or ids) rather than
+		// asking for a whole post type or the whole site — one post, or an
+		// explicit id list, costs what it touches, not the fixed weight a
+		// genuinely wide run costs. A single-id wp_bulk_find_replace was
+		// billed the full fixed weight regardless of scope, which could
+		// exhaust a caller's entire write burst on one post.
+		if ( null !== $spec && ! empty( $spec['scoped'] ) && self::find_replace_names_posts( $arguments ) ) {
+			$default = max( 1, self::id_list_count( $arguments, $spec['ids'] ) );
+		}
+
+		$own = $default;
 
 		if ( function_exists( 'apply_filters' ) ) {
 			/**
@@ -371,6 +387,37 @@ final class Mcpwp_Operation_Weights {
 		}
 
 		return count( array_filter( array_map( 'trim', explode( ',', (string) $params[ $key ] ) ), 'strlen' ) );
+	}
+
+	/**
+	 * Whether a find/replace call names posts (`id` or `ids`) rather than
+	 * asking for a whole post type or the whole site (#891).
+	 *
+	 * The exact negation of Mcpwp_REST_Elementor::find_replace_is_wide() —
+	 * the REST auth route table's own answer to the same question, reused
+	 * here so pricing cannot silently disagree with what the handler decided
+	 * "named" means. Falls back to an inline copy of that predicate only
+	 * when the class is not loaded (e.g. this class exercised in isolation);
+	 * the two are kept in sync deliberately, as find_replace_is_wide()'s own
+	 * docblock already asks of every caller of that predicate.
+	 *
+	 * @param array $arguments Tool arguments.
+	 * @return bool
+	 */
+	private static function find_replace_names_posts( array $arguments ) {
+		if ( class_exists( 'Mcpwp_REST_Elementor' ) && method_exists( 'Mcpwp_REST_Elementor', 'find_replace_is_wide' ) ) {
+			return ! Mcpwp_REST_Elementor::find_replace_is_wide( $arguments );
+		}
+
+		$present = function ( $key ) use ( $arguments ) {
+			if ( ! isset( $arguments[ $key ] ) ) {
+				return false;
+			}
+			$v = $arguments[ $key ];
+			return is_array( $v ) ? ! empty( $v ) : ( is_scalar( $v ) && '' !== trim( (string) $v ) );
+		};
+
+		return $present( 'ids' ) || ( $present( 'id' ) && ( ! is_scalar( $arguments['id'] ) || 0 !== (int) $arguments['id'] ) );
 	}
 
 	/**

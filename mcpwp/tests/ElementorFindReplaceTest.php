@@ -148,4 +148,47 @@ final class ElementorFindReplaceTest extends TestCase {
 		$data     = $response->get_data();
 		$this->assertSame( 0, $data['replacements'] );
 	}
+
+	/**
+	 * #891: find_replace() wrote `_elementor_data` directly and never called
+	 * Document::save() — the only place Elementor's own element-render cache
+	 * (`_elementor_element_cache`) got cleared. With element caching enabled
+	 * (`elementor_element_cache_ttl` not "disable"), the live page kept
+	 * serving this stale cached render until a site-wide cache clear, even
+	 * though a dry-run readback confirmed the write landed. A write that
+	 * matched something must clear this meta so the next render is built
+	 * fresh from the just-written data.
+	 */
+	public function test_find_replace_clears_the_element_render_cache_on_a_write(): void {
+		$GLOBALS['_mcpwp_test_meta'][50]['_elementor_element_cache'] = array(
+			'timeout' => time() + 3600,
+			'value'   => array( 'content' => 'stale pre-replace render' ),
+		);
+
+		$response = $this->run_find_replace( 'Old Brand', 'New Brand' );
+
+		$this->assertSame( 1, $response->get_data()['replacements'] );
+		$this->assertSame(
+			'',
+			get_post_meta( 50, '_elementor_element_cache', true ),
+			'A write that matched something must clear the stale element-render cache.'
+		);
+	}
+
+	/** A write that matches nothing must not disturb an unrelated, still-valid cache. */
+	public function test_find_replace_leaves_the_element_render_cache_alone_on_a_no_op(): void {
+		$GLOBALS['_mcpwp_test_meta'][50]['_elementor_element_cache'] = array(
+			'timeout' => time() + 3600,
+			'value'   => array( 'content' => 'still-valid render' ),
+		);
+
+		$response = $this->run_find_replace( 'nonexistent-string-xyz', 'whatever' );
+
+		$this->assertSame( 0, $response->get_data()['replacements'] );
+		$this->assertNotSame(
+			'',
+			get_post_meta( 50, '_elementor_element_cache', true ),
+			'A no-op write must not clear a cache that still describes the unchanged page.'
+		);
+	}
 }
