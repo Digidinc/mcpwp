@@ -254,6 +254,9 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	if ( file_exists( MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-update-channel-health.php' ) ) {
 		require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-update-channel-health.php';
 	}
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-seo-plugin-detect.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-ai-crawler-policy.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-indexnow.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-ai-presence.php';
 
 	// Load core functionality
@@ -347,6 +350,7 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/mcp/traits/trait-mcpwp-free-tools-elementor.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/mcp/traits/trait-mcpwp-free-tools-blocks.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/mcp/traits/trait-mcpwp-free-tools-ops.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/mcp/traits/trait-mcpwp-free-tools-ai-presence.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/mcp/class-mcpwp-mcp-free-tools.php';
 	// Pro-tool category trait groups (mixed into Mcpwp_MCP_Pro_Tools — G2 split).
 	require_once MCPWP_PLUGIN_DIR . 'includes/mcp/traits/trait-mcpwp-pro-tools-seo.php';
@@ -390,6 +394,7 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-content-graph.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-seo-audit.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-seo-market.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-ai-presence.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-content-quality.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-menus.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-content.php';
@@ -426,6 +431,7 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/admin/class-mcpwp-admin.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/admin/class-mcpwp-activity-log.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/admin/class-mcpwp-settings.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/admin/class-mcpwp-ai-presence-settings.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/admin/class-mcpwp-mupot-profile.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/admin/class-mcpwp-integrations-admin.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/admin/class-mcpwp-broker-admin.php';

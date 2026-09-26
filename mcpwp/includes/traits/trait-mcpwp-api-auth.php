@@ -1763,6 +1763,10 @@ trait Mcpwp_Api_Auth {
 			// change external infra config outside this site; status/speed-settings
 			// GETs stay read.
 			'/mcpwp/v1/cloudflare',
+			// Writing the AI crawler allow/deny policy edits robots.txt output
+			// site-wide (denying a search bot can remove the site from an AI
+			// product's live answers); reading it stays at the read default.
+			'/mcpwp/v1/ai-crawlers',
 		);
 
 		foreach ( $admin_write_routes as $admin_write_route ) {
@@ -2264,6 +2268,11 @@ trait Mcpwp_Api_Auth {
 			'wp_update_menu',
 			'wp_update_menu_item_auto',
 			'wp_delete_menu_item_auto',
+			// Mirrors the '/mcpwp/v1/ai-crawlers' admin-on-write route: writing
+			// the AI crawler policy edits robots.txt output site-wide (denying a
+			// search bot can remove the site from an AI product's live
+			// answers). wp_get_ai_crawler_policy is read-only and not listed here.
+			'wp_set_ai_crawler_policy',
 		);
 
 		// #874 systematic diff, second half: tools whose route requires 'write'
@@ -2322,6 +2331,8 @@ trait Mcpwp_Api_Auth {
 			'wc_create_product_category',
 			'wc_update_product_category',
 			'wc_update_order',
+			// POST /indexnow/submit — 'submit' is not one of the regex verbs.
+			'wp_indexnow_submit',
 		);
 
 		if ( in_array( $tool_name, $admin_tools, true ) ) {

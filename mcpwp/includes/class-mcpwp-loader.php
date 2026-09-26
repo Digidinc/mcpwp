@@ -66,6 +66,7 @@ class Mcpwp_Loader {
 		$integrations_admin = new Mcpwp_Integrations_Admin();
 		$tools_admin = new Mcpwp_Tools_Admin();
 		$broker_admin = new Mcpwp_Broker_Admin();
+		$ai_presence_settings = new Mcpwp_AI_Presence_Settings();
 
 		// Admin menu
 		$this->add_action( 'admin_menu', $admin, 'add_admin_menu' );
@@ -86,6 +87,8 @@ class Mcpwp_Loader {
 
 		// Settings
 		$this->add_action( 'admin_init', $settings, 'register_settings' );
+		$this->add_action( 'admin_init', $ai_presence_settings, 'register_settings' );
+		$this->add_action( 'admin_notices', $ai_presence_settings, 'maybe_render_notices' );
 
 		// mupot Profile screen connect fields
 		$mupot_profile = new Mcpwp_Mupot_Profile();
@@ -143,10 +146,12 @@ class Mcpwp_Loader {
 	 */
 	private function define_api_hooks() {
 		$ai_presence = new Mcpwp_AI_Presence();
+		$indexnow    = new Mcpwp_IndexNow();
 
 		// Initialize REST API
 		$this->add_action( 'rest_api_init', $this, 'register_rest_routes' );
 		$this->add_action( 'init', $ai_presence, 'register' );
+		$this->add_action( 'init', $indexnow, 'register' );
 		// Attach rate-limit headers to both success and error responses.
 		$this->add_filter( 'rest_post_dispatch', $this, 'add_mcpwp_rate_limit_headers', 10, 3 );
 		// Ensure log cleanup cron is scheduled and executed.
@@ -293,6 +298,10 @@ class Mcpwp_Loader {
 		// SEO market data — visibility and opportunities
 		$seo_market = new Mcpwp_REST_SEO_Market();
 		$seo_market->register_routes();
+
+		// AI crawler policy + IndexNow
+		$ai_presence_controller = new Mcpwp_REST_AI_Presence();
+		$ai_presence_controller->register_routes();
 
 		// Content quality
 		$content_quality_controller = new Mcpwp_REST_Content_Quality();

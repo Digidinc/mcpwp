@@ -995,6 +995,17 @@ if (! function_exists('home_url')) {
     }
 }
 
+if (! function_exists('wp_sitemaps_get_server')) {
+    // Real WP (5.5+) always defines this once core sitemaps are loaded; the
+    // stub just needs to exist so feature-detection code takes the same
+    // branch it would on a real site, with `wp_sitemaps_enabled` (a plain
+    // filter, already supported) doing the actual on/off switching in tests.
+    function wp_sitemaps_get_server()
+    {
+        return true;
+    }
+}
+
 if (! function_exists('get_nav_menu_locations')) {
     function get_nav_menu_locations()
     {
@@ -1635,6 +1646,14 @@ function get_post($id)
     return isset($GLOBALS['_mcpwp_test_posts'][ $id ]) ? $GLOBALS['_mcpwp_test_posts'][ $id ] : null;
 }
 
+if (! function_exists('get_post_status')) {
+    function get_post_status($post = null)
+    {
+        $post = is_object($post) ? $post : get_post($post);
+        return $post && isset($post->post_status) ? $post->post_status : false;
+    }
+}
+
 if (! function_exists('clean_post_cache')) {
     function clean_post_cache($post)
     {
@@ -1735,6 +1754,13 @@ if (! function_exists('wp_next_scheduled')) {
 }
 if (! function_exists('wp_schedule_event')) {
     function wp_schedule_event($timestamp, $recurrence, $hook, $args = array(), $wp_error = false)
+    {
+        $GLOBALS['mcpwp_test_cron'][ $hook ] = (int) $timestamp;
+        return true;
+    }
+}
+if (! function_exists('wp_schedule_single_event')) {
+    function wp_schedule_single_event($timestamp, $hook, $args = array(), $wp_error = false)
     {
         $GLOBALS['mcpwp_test_cron'][ $hook ] = (int) $timestamp;
         return true;
@@ -2822,6 +2848,7 @@ require_once dirname(__DIR__) . '/includes/mcp/traits/trait-mcpwp-free-tools-med
 require_once dirname(__DIR__) . '/includes/mcp/traits/trait-mcpwp-free-tools-elementor.php';
 require_once dirname(__DIR__) . '/includes/mcp/traits/trait-mcpwp-free-tools-blocks.php';
 require_once dirname(__DIR__) . '/includes/mcp/traits/trait-mcpwp-free-tools-ops.php';
+require_once dirname(__DIR__) . '/includes/mcp/traits/trait-mcpwp-free-tools-ai-presence.php';
 require_once dirname(__DIR__) . '/includes/mcp/class-mcpwp-mcp-free-tools.php';
 require_once dirname(__DIR__) . '/includes/mcp/traits/trait-mcpwp-pro-tools-seo.php';
 require_once dirname(__DIR__) . '/includes/mcp/traits/trait-mcpwp-pro-tools-forms.php';
@@ -2929,6 +2956,12 @@ if (!defined('MINUTE_IN_SECONDS')) {
 
 // Cache for paid SEO lookups — bounds agent-loop spend on DataForSEO credit.
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-seo-cache.php';
+
+// AI presence: llms.txt/robots.txt coexistence, AI crawler policy, IndexNow.
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-seo-plugin-detect.php';
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-ai-crawler-policy.php';
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-indexnow.php';
+require_once dirname(__DIR__) . '/includes/class-mcpwp-ai-presence.php';
 
 // ---------------------------------------------------------------------------
 // Taxonomy, term, registered-meta and thumbnail doubles (#797).
