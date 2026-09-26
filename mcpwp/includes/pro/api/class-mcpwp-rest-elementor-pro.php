@@ -517,8 +517,9 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		);
 
 		if ( is_wp_error( $post_id ) ) {
-			$this->log_activity( 'create_elementor_custom_code', $request, null, 400 );
-			return $this->error_response( $post_id->get_error_code(), $post_id->get_error_message(), 400 );
+			$status = $this->get_wp_error_status( $post_id );
+			$this->log_activity( 'create_elementor_custom_code', $request, null, $status );
+			return $this->error_response_from_wp_error( $post_id );
 		}
 
 		$this->save_custom_code_meta( $post_id, $prepared );
@@ -600,8 +601,9 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		if ( count( $post_update ) > 1 ) {
 			$updated = wp_update_post( $post_update, true );
 			if ( is_wp_error( $updated ) ) {
-				$this->log_activity( 'update_elementor_custom_code', $request, null, 400 );
-				return $this->error_response( $updated->get_error_code(), $updated->get_error_message(), 400 );
+				$status = $this->get_wp_error_status( $updated );
+				$this->log_activity( 'update_elementor_custom_code', $request, null, $status );
+				return $this->error_response_from_wp_error( $updated );
 			}
 		}
 
@@ -721,8 +723,9 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		);
 
 		if ( is_wp_error( $update ) ) {
-			$this->log_activity( 'set_elementor_custom_code_status', $request, null, 400 );
-			return $this->error_response( $update->get_error_code(), $update->get_error_message(), 400 );
+			$status = $this->get_wp_error_status( $update );
+			$this->log_activity( 'set_elementor_custom_code_status', $request, null, $status );
+			return $this->error_response_from_wp_error( $update );
 		}
 
 		$data = array(
@@ -1696,8 +1699,9 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		$template = $this->elementor_pro->create_template( $data );
 
 		if ( is_wp_error( $template ) ) {
-			$this->log_activity( 'create_template', $request, null, 400 );
-			return $this->error_response( $template->get_error_code(), $template->get_error_message(), 400 );
+			$status = $this->get_wp_error_status( $template );
+			$this->log_activity( 'create_template', $request, null, $status );
+			return $this->error_response_from_wp_error( $template );
 		}
 
 		$this->log_activity( 'create_template', $request, $template, 201 );
@@ -1726,8 +1730,9 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		$template = $this->elementor_pro->update_template( $template_id, $data );
 
 		if ( is_wp_error( $template ) ) {
-			$this->log_activity( 'update_template', $request, null, 400 );
-			return $this->error_response( $template->get_error_code(), $template->get_error_message(), 400 );
+			$status = $this->get_wp_error_status( $template );
+			$this->log_activity( 'update_template', $request, null, $status );
+			return $this->error_response_from_wp_error( $template );
 		}
 
 		$this->log_activity( 'update_template', $request, $template );
@@ -1758,8 +1763,9 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		$result = $this->elementor_pro->delete_template( $template_id, $force );
 
 		if ( is_wp_error( $result ) ) {
-			$this->log_activity( 'delete_template', $request, null, 400 );
-			return $this->error_response( $result->get_error_code(), $result->get_error_message(), 400 );
+			$status = $this->get_wp_error_status( $result );
+			$this->log_activity( 'delete_template', $request, null, $status );
+			return $this->error_response_from_wp_error( $result );
 		}
 
 		$this->log_activity( 'delete_template', $request );
@@ -1791,8 +1797,9 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		);
 
 		if ( is_wp_error( $result ) ) {
-			$this->log_activity( 'apply_template', $request, null, 400 );
-			return $this->error_response( $result->get_error_code(), $result->get_error_message(), 400 );
+			$status = $this->get_wp_error_status( $result );
+			$this->log_activity( 'apply_template', $request, null, $status );
+			return $this->error_response_from_wp_error( $result );
 		}
 
 		$this->log_activity( 'apply_template', $request );
@@ -1861,8 +1868,9 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	public function create_archetype( $request ) {
 		$payload_check = $this->require_elementor_payload( $request );
 		if ( is_wp_error( $payload_check ) ) {
-			$this->log_activity( 'create_archetype', $request, null, 400 );
-			return $this->error_response( $payload_check->get_error_code(), $payload_check->get_error_message(), 400 );
+			$status = $this->get_wp_error_status( $payload_check );
+			$this->log_activity( 'create_archetype', $request, null, $status );
+			return $this->error_response_from_wp_error( $payload_check );
 		}
 
 		$data = array(
@@ -1877,8 +1885,9 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		$archetype = $this->elementor_pro->create_archetype( $data );
 
 		if ( is_wp_error( $archetype ) ) {
-			$this->log_activity( 'create_archetype', $request, null, 400 );
-			return $this->error_response( $archetype->get_error_code(), $archetype->get_error_message(), 400 );
+			$status = $this->get_wp_error_status( $archetype );
+			$this->log_activity( 'create_archetype', $request, null, $status );
+			return $this->error_response_from_wp_error( $archetype );
 		}
 
 		$this->log_activity( 'create_archetype', $request, $archetype, 201 );
@@ -1915,8 +1924,9 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		$archetype = $this->elementor_pro->update_template( $archetype_id, $data );
 
 		if ( is_wp_error( $archetype ) ) {
-			$this->log_activity( 'update_archetype', $request, null, 400 );
-			return $this->error_response( $archetype->get_error_code(), $archetype->get_error_message(), 400 );
+			$status = $this->get_wp_error_status( $archetype );
+			$this->log_activity( 'update_archetype', $request, null, $status );
+			return $this->error_response_from_wp_error( $archetype );
 		}
 
 		$this->log_activity( 'update_archetype', $request, $archetype );
@@ -1945,8 +1955,9 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		);
 
 		if ( is_wp_error( $result ) ) {
-			$this->log_activity( 'apply_archetype', $request, null, 400 );
-			return $this->error_response( $result->get_error_code(), $result->get_error_message(), 400 );
+			$status = $this->get_wp_error_status( $result );
+			$this->log_activity( 'apply_archetype', $request, null, $status );
+			return $this->error_response_from_wp_error( $result );
 		}
 
 		$this->log_activity( 'apply_archetype', $request );
@@ -2027,8 +2038,9 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	public function create_part( $request ) {
 		$payload_check = $this->require_elementor_payload( $request );
 		if ( is_wp_error( $payload_check ) ) {
-			$this->log_activity( 'create_part', $request, null, 400 );
-			return $this->error_response( $payload_check->get_error_code(), $payload_check->get_error_message(), 400 );
+			$status = $this->get_wp_error_status( $payload_check );
+			$this->log_activity( 'create_part', $request, null, $status );
+			return $this->error_response_from_wp_error( $payload_check );
 		}
 
 		$data = array(
@@ -2043,8 +2055,9 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		$part = $this->elementor_pro->create_part( $data );
 
 		if ( is_wp_error( $part ) ) {
-			$this->log_activity( 'create_part', $request, null, 400 );
-			return $this->error_response( $part->get_error_code(), $part->get_error_message(), 400 );
+			$status = $this->get_wp_error_status( $part );
+			$this->log_activity( 'create_part', $request, null, $status );
+			return $this->error_response_from_wp_error( $part );
 		}
 
 		$this->log_activity( 'create_part', $request, $part, 201 );
@@ -2081,8 +2094,9 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		$part = $this->elementor_pro->update_template( $part_id, $data );
 
 		if ( is_wp_error( $part ) ) {
-			$this->log_activity( 'update_part', $request, null, 400 );
-			return $this->error_response( $part->get_error_code(), $part->get_error_message(), 400 );
+			$status = $this->get_wp_error_status( $part );
+			$this->log_activity( 'update_part', $request, null, $status );
+			return $this->error_response_from_wp_error( $part );
 		}
 
 		$this->log_activity( 'update_part', $request, $part );
@@ -2114,8 +2128,9 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		$part = $this->elementor_pro->create_part_from_section( $page_id, $element_id, $data );
 
 		if ( is_wp_error( $part ) ) {
-			$this->log_activity( 'create_part_from_section', $request, null, 400 );
-			return $this->error_response( $part->get_error_code(), $part->get_error_message(), 400 );
+			$status = $this->get_wp_error_status( $part );
+			$this->log_activity( 'create_part_from_section', $request, null, $status );
+			return $this->error_response_from_wp_error( $part );
 		}
 
 		$this->log_activity( 'create_part_from_section', $request, $part, 201 );
@@ -2223,8 +2238,9 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		}
 
 		if ( is_wp_error( $result ) ) {
-			$this->log_activity( 'apply_part', $request, null, 400 );
-			return $this->error_response( $result->get_error_code(), $result->get_error_message(), 400 );
+			$status = $this->get_wp_error_status( $result );
+			$this->log_activity( 'apply_part', $request, null, $status );
+			return $this->error_response_from_wp_error( $result );
 		}
 
 		$this->log_activity( 'apply_part', $request );
@@ -2339,8 +2355,9 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		$result = $this->elementor_pro->clone_page( $source_id, $args );
 
 		if ( is_wp_error( $result ) ) {
-			$this->log_activity( 'clone_page', $request, null, 400 );
-			return $this->error_response( $result->get_error_code(), $result->get_error_message(), 400 );
+			$status = $this->get_wp_error_status( $result );
+			$this->log_activity( 'clone_page', $request, null, $status );
+			return $this->error_response_from_wp_error( $result );
 		}
 
 		$this->log_activity( 'clone_page', $request, $result, 201 );
@@ -2366,8 +2383,9 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		$result = $this->elementor_pro->create_landing_page( $data );
 
 		if ( is_wp_error( $result ) ) {
-			$this->log_activity( 'create_landing_page', $request, null, 400 );
-			return $this->error_response( $result->get_error_code(), $result->get_error_message(), 400 );
+			$status = $this->get_wp_error_status( $result );
+			$this->log_activity( 'create_landing_page', $request, null, $status );
+			return $this->error_response_from_wp_error( $result );
 		}
 
 		$this->log_activity( 'create_landing_page', $request, $result, 201 );
@@ -2421,8 +2439,9 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		$globals = $this->elementor_pro->get_globals();
 
 		if ( is_wp_error( $globals ) ) {
-			$this->log_activity( 'get_globals', $request, null, 400 );
-			return $this->error_response( $globals->get_error_code(), $globals->get_error_message(), 400 );
+			$status = $this->get_wp_error_status( $globals );
+			$this->log_activity( 'get_globals', $request, null, $status );
+			return $this->error_response_from_wp_error( $globals );
 		}
 
 		$this->log_activity( 'get_globals', $request, $globals );

@@ -179,6 +179,37 @@ class WP_Error
     {
         return $this->data;
     }
+
+    /**
+     * Real WP_Error::remove() drops every message and the data recorded
+     * under $code. This double only ever holds one code, so "remove the
+     * current code" is "go back to empty" — good enough for the only
+     * caller in this codebase (Mcpwp_Error_Hints::enhance_error(), which
+     * always removes the code it is about to re-add).
+     */
+    public function remove($code)
+    {
+        if ($this->code === $code) {
+            $this->code    = '';
+            $this->message = '';
+            $this->data    = null;
+        }
+    }
+
+    /**
+     * Real WP_Error::add() appends a message under $code and, when $data
+     * is not an empty string, replaces the data recorded for it. Matches
+     * real behaviour closely enough for enhance_error()'s remove-then-add
+     * round trip (it never accumulates multiple messages on one code).
+     */
+    public function add($code, $message, $data = '')
+    {
+        $this->code    = $code;
+        $this->message = $message;
+        if ('' !== $data) {
+            $this->data = $data;
+        }
+    }
 }
 
 class WP_REST_Response

@@ -216,7 +216,7 @@ class Mcpwp_REST_Themes extends Mcpwp_REST_API {
 		$result = $this->themes->update_settings( $settings );
 
 		if ( is_wp_error( $result ) ) {
-			return $this->error_response( $result->get_error_code(), $result->get_error_message(), 400 );
+			return $this->error_response_from_wp_error( $result );
 		}
 
 		$this->log_activity( 'update_theme_settings', $request, array( 'keys' => array_keys( $settings ) ) );
@@ -282,7 +282,7 @@ class Mcpwp_REST_Themes extends Mcpwp_REST_API {
 	public function get_astra_colors( $request ) {
 		$check = $this->check_astra();
 		if ( is_wp_error( $check ) ) {
-			return $this->error_response( $check->get_error_code(), $check->get_error_message(), 400 );
+			return $this->error_response_from_wp_error( $check );
 		}
 
 		$settings = $this->themes->get_settings();
@@ -301,7 +301,7 @@ class Mcpwp_REST_Themes extends Mcpwp_REST_API {
 	public function update_astra_colors( $request ) {
 		$check = $this->check_astra();
 		if ( is_wp_error( $check ) ) {
-			return $this->error_response( $check->get_error_code(), $check->get_error_message(), 400 );
+			return $this->error_response_from_wp_error( $check );
 		}
 
 		$colors = $request->get_params();
@@ -332,7 +332,7 @@ class Mcpwp_REST_Themes extends Mcpwp_REST_API {
 		$result = $this->themes->update_settings( $astra_settings );
 
 		if ( is_wp_error( $result ) ) {
-			return $this->error_response( $result->get_error_code(), $result->get_error_message(), 400 );
+			return $this->error_response_from_wp_error( $result );
 		}
 
 		$this->log_activity( 'update_astra_colors', $request, array( 'keys' => array_keys( $colors ) ) );
@@ -349,7 +349,7 @@ class Mcpwp_REST_Themes extends Mcpwp_REST_API {
 	public function get_astra_typography( $request ) {
 		$check = $this->check_astra();
 		if ( is_wp_error( $check ) ) {
-			return $this->error_response( $check->get_error_code(), $check->get_error_message(), 400 );
+			return $this->error_response_from_wp_error( $check );
 		}
 
 		$settings = $this->themes->get_settings();
@@ -368,7 +368,7 @@ class Mcpwp_REST_Themes extends Mcpwp_REST_API {
 	public function update_astra_typography( $request ) {
 		$check = $this->check_astra();
 		if ( is_wp_error( $check ) ) {
-			return $this->error_response( $check->get_error_code(), $check->get_error_message(), 400 );
+			return $this->error_response_from_wp_error( $check );
 		}
 
 		$typography = $request->get_params();
@@ -398,7 +398,7 @@ class Mcpwp_REST_Themes extends Mcpwp_REST_API {
 		$result = $this->themes->update_settings( $astra_settings );
 
 		if ( is_wp_error( $result ) ) {
-			return $this->error_response( $result->get_error_code(), $result->get_error_message(), 400 );
+			return $this->error_response_from_wp_error( $result );
 		}
 
 		$this->log_activity( 'update_astra_typography', $request, array( 'keys' => array_keys( $typography ) ) );
@@ -415,7 +415,7 @@ class Mcpwp_REST_Themes extends Mcpwp_REST_API {
 	public function get_astra_header( $request ) {
 		$check = $this->check_astra();
 		if ( is_wp_error( $check ) ) {
-			return $this->error_response( $check->get_error_code(), $check->get_error_message(), 400 );
+			return $this->error_response_from_wp_error( $check );
 		}
 
 		$settings = $this->themes->get_settings();
@@ -434,7 +434,7 @@ class Mcpwp_REST_Themes extends Mcpwp_REST_API {
 	public function get_astra_footer( $request ) {
 		$check = $this->check_astra();
 		if ( is_wp_error( $check ) ) {
-			return $this->error_response( $check->get_error_code(), $check->get_error_message(), 400 );
+			return $this->error_response_from_wp_error( $check );
 		}
 
 		$settings = $this->themes->get_settings();
@@ -453,7 +453,7 @@ class Mcpwp_REST_Themes extends Mcpwp_REST_API {
 	public function get_astra_layout( $request ) {
 		$check = $this->check_astra();
 		if ( is_wp_error( $check ) ) {
-			return $this->error_response( $check->get_error_code(), $check->get_error_message(), 400 );
+			return $this->error_response_from_wp_error( $check );
 		}
 
 		$settings = $this->themes->get_settings();

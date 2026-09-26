@@ -294,7 +294,7 @@ class Mcpwp_REST_Site_Manager extends Mcpwp_REST_API {
 		$menu = $this->manager->create_menu( $data );
 
 		if ( is_wp_error( $menu ) ) {
-			return $this->error_response( $menu->get_error_code(), $menu->get_error_message(), 400 );
+			return $this->error_response_from_wp_error( $menu );
 		}
 
 		$this->log_activity( 'create_menu', $request, array( 'menu_id' => $menu['id'] ), 201 );
@@ -318,7 +318,7 @@ class Mcpwp_REST_Site_Manager extends Mcpwp_REST_API {
 		$menu = $this->manager->update_menu( $menu_id, $data );
 
 		if ( is_wp_error( $menu ) ) {
-			return $this->error_response( $menu->get_error_code(), $menu->get_error_message(), 400 );
+			return $this->error_response_from_wp_error( $menu );
 		}
 
 		$this->log_activity( 'update_menu', $request, array( 'menu_id' => $menu_id ) );
@@ -337,7 +337,7 @@ class Mcpwp_REST_Site_Manager extends Mcpwp_REST_API {
 		$result = $this->manager->delete_menu( $menu_id );
 
 		if ( is_wp_error( $result ) ) {
-			return $this->error_response( $result->get_error_code(), $result->get_error_message(), 400 );
+			return $this->error_response_from_wp_error( $result );
 		}
 
 		$this->log_activity( 'delete_menu', $request, array( 'menu_id' => $menu_id ) );
@@ -371,7 +371,7 @@ class Mcpwp_REST_Site_Manager extends Mcpwp_REST_API {
 		$item_id = $this->manager->add_menu_item( $menu_id, $data );
 
 		if ( is_wp_error( $item_id ) ) {
-			return $this->error_response( $item_id->get_error_code(), $item_id->get_error_message(), 400 );
+			return $this->error_response_from_wp_error( $item_id );
 		}
 
 		$this->log_activity( 'add_menu_item', $request, array( 'menu_id' => $menu_id, 'item_id' => $item_id ), 201 );
@@ -403,7 +403,7 @@ class Mcpwp_REST_Site_Manager extends Mcpwp_REST_API {
 		$result = $this->manager->update_menu_item( $menu_id, $item_id, $data );
 
 		if ( is_wp_error( $result ) ) {
-			return $this->error_response( $result->get_error_code(), $result->get_error_message(), 400 );
+			return $this->error_response_from_wp_error( $result );
 		}
 
 		$this->log_activity( 'update_menu_item', $request, array( 'menu_id' => $menu_id, 'item_id' => $item_id ) );
@@ -426,7 +426,7 @@ class Mcpwp_REST_Site_Manager extends Mcpwp_REST_API {
 		$result = $this->manager->delete_menu_item( $item_id );
 
 		if ( is_wp_error( $result ) ) {
-			return $this->error_response( $result->get_error_code(), $result->get_error_message(), 400 );
+			return $this->error_response_from_wp_error( $result );
 		}
 
 		$this->log_activity( 'delete_menu_item', $request, array( 'item_id' => $item_id ) );
@@ -535,7 +535,7 @@ class Mcpwp_REST_Site_Manager extends Mcpwp_REST_API {
 		$styles = $this->manager->get_global_styles();
 
 		if ( is_wp_error( $styles ) ) {
-			return $this->error_response( $styles->get_error_code(), $styles->get_error_message(), 400 );
+			return $this->error_response_from_wp_error( $styles );
 		}
 
 		$this->log_activity( 'get_global_styles', $request );
@@ -632,7 +632,7 @@ class Mcpwp_REST_Site_Manager extends Mcpwp_REST_API {
 		$result = $this->manager->set_page_template( $page_id, $template );
 
 		if ( is_wp_error( $result ) ) {
-			return $this->error_response( $result->get_error_code(), $result->get_error_message(), 400 );
+			return $this->error_response_from_wp_error( $result );
 		}
 
 		$this->log_activity( 'set_page_template', $request, array( 'page_id' => $page_id, 'template' => $template ) );

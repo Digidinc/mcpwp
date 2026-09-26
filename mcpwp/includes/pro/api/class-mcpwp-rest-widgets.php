@@ -253,7 +253,7 @@ class Mcpwp_REST_Widgets extends Mcpwp_REST_API {
 		$widget = $this->widgets->add_widget( $sidebar_id, $widget_type, $settings, $position );
 
 		if ( is_wp_error( $widget ) ) {
-			return $this->error_response( $widget->get_error_code(), $widget->get_error_message(), 400 );
+			return $this->error_response_from_wp_error( $widget );
 		}
 
 		$this->log_activity( 'add_widget', $request, array(
@@ -286,7 +286,7 @@ class Mcpwp_REST_Widgets extends Mcpwp_REST_API {
 		$widget = $this->widgets->update_widget( $widget_id, $settings );
 
 		if ( is_wp_error( $widget ) ) {
-			return $this->error_response( $widget->get_error_code(), $widget->get_error_message(), 400 );
+			return $this->error_response_from_wp_error( $widget );
 		}
 
 		$this->log_activity( 'update_widget', $request, array( 'widget_id' => $widget_id ) );
@@ -317,7 +317,7 @@ class Mcpwp_REST_Widgets extends Mcpwp_REST_API {
 		$result = $this->widgets->delete_widget( $widget_id );
 
 		if ( is_wp_error( $result ) ) {
-			return $this->error_response( $result->get_error_code(), $result->get_error_message(), 400 );
+			return $this->error_response_from_wp_error( $result );
 		}
 
 		$this->log_activity( 'delete_widget', $request, array( 'widget_id' => $widget_id ) );
@@ -350,7 +350,7 @@ class Mcpwp_REST_Widgets extends Mcpwp_REST_API {
 		$widget = $this->widgets->move_widget( $widget_id, $sidebar_id, $position );
 
 		if ( is_wp_error( $widget ) ) {
-			return $this->error_response( $widget->get_error_code(), $widget->get_error_message(), 400 );
+			return $this->error_response_from_wp_error( $widget );
 		}
 
 		$this->log_activity( 'move_widget', $request, array(
@@ -385,7 +385,7 @@ class Mcpwp_REST_Widgets extends Mcpwp_REST_API {
 		$sidebar = $this->widgets->reorder_widgets( $sidebar_id, $widget_ids );
 
 		if ( is_wp_error( $sidebar ) ) {
-			return $this->error_response( $sidebar->get_error_code(), $sidebar->get_error_message(), 400 );
+			return $this->error_response_from_wp_error( $sidebar );
 		}
 
 		$this->log_activity( 'reorder_widgets', $request, array(

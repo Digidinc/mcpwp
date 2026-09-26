@@ -363,7 +363,7 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 		$result = $this->pages->delete_page( $page_id, $force );
 
 		if ( is_wp_error( $result ) ) {
-			return $this->error_response( $result->get_error_code(), $result->get_error_message(), 400 );
+			return $this->error_response_from_wp_error( $result );
 		}
 
 		return $this->success_response(

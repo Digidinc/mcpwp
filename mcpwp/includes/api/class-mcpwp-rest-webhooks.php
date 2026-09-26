@@ -320,11 +320,7 @@ class Mcpwp_REST_Webhooks extends Mcpwp_REST_API {
 		$result = $this->webhooks->register( $data );
 
 		if ( is_wp_error( $result ) ) {
-			return $this->error_response(
-				$result->get_error_code(),
-				$result->get_error_message(),
-				400
-			);
+			return $this->error_response_from_wp_error( $result );
 		}
 
 		$webhook = $this->webhooks->get( $result );
