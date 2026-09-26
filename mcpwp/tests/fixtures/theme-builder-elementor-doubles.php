@@ -75,6 +75,13 @@ namespace Elementor {
 				throw new \TypeError( 'Undefined array key "widgetType"' );
 			}
 
+			if ( ! empty( $GLOBALS['mcpwp_theme_test_decline'] ) ) {
+				// The #951 shape: Core\Base\Document::save() is documented
+				// `@return bool` and returns exactly `false` — no exception,
+				// no WP_Error — when is_editable_by_current_user() fails.
+				return false;
+			}
+
 			return true;
 		}
 

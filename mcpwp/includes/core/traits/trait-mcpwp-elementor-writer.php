@@ -661,6 +661,19 @@ trait Mcpwp_Elementor_Writer_Trait {
 		$errors                    = array();
 		$initial_save_was_recovered = true === ( $debug['html_cache_rebuilt'] ?? false );
 
+		// (#901) verify_css_file_was_written() downgraded css_regenerated to
+		// false because the post's CSS file does not exist on disk (or is
+		// empty) despite regeneration reporting no exception. Named separately
+		// from css_regeneration_exception/_error below — this is Elementor's
+		// own CSS_File::update() swallowing a filesystem write failure with no
+		// exception, not a caught Throwable or WP_Error — and it gets an
+		// actionable hint rather than a bare label, since "the uploads
+		// directory is not writable" is something an operator can actually go
+		// fix.
+		if ( ! empty( $debug['css_file_not_written'] ) ) {
+			$errors[] = 'css_regeneration: CSS file could not be written to uploads/elementor/css — check that the uploads directory is writable.';
+		}
+
 		if ( ! empty( $debug['html_rebuild_corrupted_data'] ) ) {
 			$before = isset( $debug['html_rebuild_elements_before'] ) ? (int) $debug['html_rebuild_elements_before'] : 0;
 			$after  = isset( $debug['html_rebuild_elements_after'] ) ? (int) $debug['html_rebuild_elements_after'] : 0;
@@ -742,6 +755,54 @@ trait Mcpwp_Elementor_Writer_Trait {
 		}
 
 		return $errors;
+	}
+
+	/**
+	 * Confirm a reported CSS regeneration actually produced a usable result,
+	 * rather than trusting attempt_elementor_call()'s ok=true — which only
+	 * means "no exception, no WP_Error, not literal false" (#901).
+	 *
+	 * The closures wrapping \Elementor\Core\Files\CSS\Post::create()->update()
+	 * hardcode `return true;` after calling it, so a filesystem write that
+	 * Elementor's own CSS_File::update() swallowed — an unwritable
+	 * uploads/elementor/css, a full disk, wrong permissions — with no
+	 * exception and no WP_Error left css_regenerated:true and, downstream via
+	 * decorate_render_status(), render_verified:true for a page whose CSS
+	 * file was never actually written and therefore rendered unstyled.
+	 *
+	 * Verified truth is one of two things: Elementor is configured to print
+	 * CSS inline (`elementor_css_print_method` = 'internal' — no file is ever
+	 * written by design, so none is expected), or the post's CSS file exists
+	 * on disk and is non-empty. Anything else downgrades css_regenerated to
+	 * false and names the reason so collect_render_errors() can turn it into
+	 * an actionable hint instead of a silent lie.
+	 *
+	 * Only ever downgrades a currently-true css_regenerated: a regeneration
+	 * that already threw or returned a WP_Error is left exactly as
+	 * attempt_elementor_call() reported it (that failure is already surfaced
+	 * under css_regeneration_exception/_error), and a css_regenerated key
+	 * that is entirely absent — Elementor inactive, or
+	 * \Elementor\Core\Files\CSS\Post unavailable — means regeneration was
+	 * never attempted, so there is nothing here to verify.
+	 *
+	 * @param array $debug    Debug bag, written by reference.
+	 * @param int   $css_size Size in bytes of the post's CSS file on disk (0 when missing).
+	 */
+	private function verify_css_file_was_written( array &$debug, $css_size ) {
+		if ( empty( $debug['css_regenerated'] ) ) {
+			return;
+		}
+
+		if ( $css_size > 0 ) {
+			return;
+		}
+
+		if ( 'internal' === get_option( 'elementor_css_print_method', 'external' ) ) {
+			return;
+		}
+
+		$debug['css_regenerated']      = false;
+		$debug['css_file_not_written'] = true;
 	}
 
 	/**
@@ -1664,6 +1725,10 @@ trait Mcpwp_Elementor_Writer_Trait {
 			$css_size   = file_exists( $css_path ) ? filesize( $css_path ) : 0;
 			$save_debug['css_file_size'] = $css_size;
 
+			// (#901) A reported success here can still be a lie — see
+			// verify_css_file_was_written() for why.
+			$this->verify_css_file_was_written( $save_debug, $css_size );
+
 			// If CSS is still empty/tiny, prime it via loopback request.
 			if ( $css_size < 10 ) {
 				delete_post_meta( $page_id, '_elementor_css' );
@@ -2487,6 +2552,11 @@ trait Mcpwp_Elementor_Writer_Trait {
 			$css_path   = $upload_dir['basedir'] . '/elementor/css/post-' . $page_id . '.css';
 			$css_size   = file_exists( $css_path ) ? filesize( $css_path ) : 0;
 			$debug['css_file_size'] = $css_size;
+
+			// (#901) A reported success here can still be a lie — see
+			// verify_css_file_was_written() for why.
+			$this->verify_css_file_was_written( $debug, $css_size );
+
 			if ( $css_size < 10 ) {
 				delete_post_meta( $page_id, '_elementor_css' );
 				$permalink = get_permalink( $page_id );

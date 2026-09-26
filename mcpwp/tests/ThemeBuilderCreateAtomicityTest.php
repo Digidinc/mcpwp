@@ -42,9 +42,12 @@ final class ThemeBuilderCreateAtomicityTest extends TestCase {
 	 * fake content-sanitizer hooked exactly as the real module would be at
 	 * plugin load time.
 	 *
-	 * @param bool $throw Whether Mcpwp_Fake_Document::save() should throw.
+	 * @param bool $throw   Whether Mcpwp_Fake_Document::save() should throw.
+	 * @param bool $decline Whether Mcpwp_Fake_Document::save() should return
+	 *                      the literal bool `false` (#951) instead of
+	 *                      throwing or succeeding. Ignored when $throw is true.
 	 */
-	private function install_elementor( bool $throw ): void {
+	private function install_elementor( bool $throw, bool $decline = false ): void {
 		if ( ! defined( 'ELEMENTOR_VERSION' ) ) {
 			define( 'ELEMENTOR_VERSION', '4.2.4' );
 		}
@@ -53,6 +56,7 @@ final class ThemeBuilderCreateAtomicityTest extends TestCase {
 		}
 
 		$GLOBALS['mcpwp_theme_test_throw']         = $throw;
+		$GLOBALS['mcpwp_theme_test_decline']       = $decline;
 		$GLOBALS['mcpwp_theme_test_save_calls']    = 0;
 		$GLOBALS['mcpwp_theme_test_sanitizer_ran'] = 0;
 
@@ -154,6 +158,41 @@ final class ThemeBuilderCreateAtomicityTest extends TestCase {
 	}
 
 	/**
+	 * The #951 shape: Document::save() declines (returns bool `false`, no
+	 * Throwable, no WP_Error) rather than throwing. Before the fix this
+	 * return value was ignored outright, the unconditional raw-meta overwrite
+	 * a few lines below still ran, and the template ended up published with
+	 * data that was never verified as having gone through Elementor's own
+	 * save pipeline — the #861 truthfulness gap, but for a site-wide
+	 * header/footer template with no render-verification layer to catch it
+	 * afterwards. A decline must fail exactly like a throw: force-delete, no
+	 * orphaned post of any status, theme_template_save_failed.
+	 *
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_a_declined_document_save_deletes_the_draft_and_leaves_no_post(): void {
+		$this->install_elementor( false, true );
+
+		$builder = new Mcpwp_Theme_Builder();
+		$result  = $builder->create_theme_template( $this->create_args() );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'theme_template_save_failed', $result->get_error_code() );
+
+		$this->assertSame( 1, $GLOBALS['mcpwp_theme_test_save_calls'], 'Document::save() must actually have run for this test to mean anything.' );
+
+		// The #951 defect: a declined save must not leave data behind via
+		// the raw-meta overwrite that follows a successful save — that write
+		// must never be reached once save() has declined.
+		$this->assertEmpty(
+			$GLOBALS['_mcpwp_test_posts'],
+			'A declined Elementor save must not leave an orphaned template post behind, in any status.'
+		);
+		$this->assertEmpty( $GLOBALS['_mcpwp_test_meta'], 'No meta should survive either — the whole post was force-deleted.' );
+	}
+
+	/**
 	 * The happy path: a save that succeeds ends published, carrying the
 	 * submitted data — and publish happens even though the (unrelated,
 	 * deliberately invalid) location assignment failed, matching the
@@ -246,6 +285,28 @@ final class ThemeBuilderCreateAtomicityTest extends TestCase {
 			1,
 			mcpwp_test_filter_count( 'elementor/document/save/data' ),
 			'A throw from Document::save() must not leave Elementor\'s own content-sanitizer unhooked beyond this one call.'
+		);
+	}
+
+	/**
+	 * The #951 decline path escalates to a thrown RuntimeException AFTER the
+	 * save()/finally pair has already restored the sanitizer — confirm that
+	 * escalation itself doesn't leave a second copy hooked (e.g. by tripping
+	 * suspend() again on the way out).
+	 *
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_a_decline_does_not_leave_the_content_sanitizer_unhooked(): void {
+		$this->install_elementor( false, true );
+
+		$builder = new Mcpwp_Theme_Builder();
+		$builder->create_theme_template( $this->create_args() );
+
+		$this->assertSame(
+			1,
+			mcpwp_test_filter_count( 'elementor/document/save/data' ),
+			'A declined Document::save() must not leave Elementor\'s own content-sanitizer unhooked beyond this one call.'
 		);
 	}
 
