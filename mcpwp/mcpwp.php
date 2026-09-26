@@ -306,6 +306,11 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-agent-playbooks.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-content-coherence.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-approvals.php';
+	// Optional, opt-in, BYOK: Jev (TypeSafe) ranks the approval queue only —
+	// it routes, it never gates. Loaded after Mcpwp_Approvals and
+	// Mcpwp_Integration_Manager, which both classes depend on at call time.
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-jev.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-jev-triage.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-action-log.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-seo-audit-store.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-seo-autofix.php';

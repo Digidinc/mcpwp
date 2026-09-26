@@ -147,9 +147,33 @@ $event_escalated_count = (int) ( $event_summary['escalated'] ?? 0 );
 						$diff_after   = isset( $item_diff['after_excerpt'] ) ? (string) $item_diff['after_excerpt'] : '';
 						$short_desc   = ! empty( $item['description'] ) ? $item['description'] : ( ! empty( $item['detail'] ) ? $item['detail'] : '' );
 						$short_desc   = $short_desc ? wp_html_excerpt( $short_desc, 120, '…' ) : '';
+						// Independent re-validation before render: never trust a stored
+						// `triage` value at face value, even though set_triage() already
+						// validated it on write. Jev's answer summarized untrusted site
+						// content, so an enum that doesn't match is dropped here too
+						// rather than displayed — this is a display label, nothing more,
+						// and it never changes what Approve/Reject/Apply do.
+						$triage_raw      = isset( $item['triage'] ) && is_array( $item['triage'] ) ? $item['triage'] : array();
+						$triage_priority = isset( $triage_raw['priority'] ) && in_array( $triage_raw['priority'], Mcpwp_Approvals::TRIAGE_PRIORITIES, true )
+							? (string) $triage_raw['priority']
+							: '';
+						$triage_kind     = isset( $triage_raw['change_kind'] ) && in_array( $triage_raw['change_kind'], Mcpwp_Approvals::TRIAGE_CHANGE_KINDS, true )
+							? (string) $triage_raw['change_kind']
+							: '';
 						?>
 						<li class="mcpwp-control-list__item is-warning">
 							<span class="mcpwp-control-list__icon dashicons dashicons-clock"></span>
+							<?php if ( '' !== $triage_priority ) : ?>
+								<span
+									class="mcpwp-triage-chip mcpwp-triage-chip--<?php echo esc_attr( $triage_priority ); ?>"
+									title="<?php echo esc_attr( sprintf(
+										/* translators: 1: priority label, 2: change-kind label */
+										__( 'Jev triage (display only): %1$s priority, %2$s', 'mcpwp' ),
+										$triage_priority,
+										'' !== $triage_kind ? $triage_kind : 'other'
+									) ); ?>"
+								><?php echo esc_html( ucfirst( $triage_priority ) ); ?></span>
+							<?php endif; ?>
 							<strong><?php echo esc_html( $item['title'] ?? $item['id'] ?? '' ); ?></strong>
 							<span><?php echo esc_html( $item['tool'] ?? $item['action'] ?? '' ); ?></span>
 							<?php if ( $res_label || $short_desc ) : ?>

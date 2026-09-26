@@ -1757,6 +1757,25 @@ if (! function_exists('wp_clear_scheduled_hook')) {
         return $had;
     }
 }
+// wp_schedule_single_event() has no real WP counterpart here — it also records
+// into $GLOBALS['mcpwp_test_single_cron'] (a plain list, since a single hook
+// can legitimately be scheduled more than once with different $args) so a
+// test can assert not just "was this hook scheduled" but "with which args".
+// Cron itself never actually runs in this harness; a test simulates a cron
+// tick by calling do_action($hook, ...$args) directly against whatever
+// add_action() already registered.
+if (! function_exists('wp_schedule_single_event')) {
+    function wp_schedule_single_event($timestamp, $hook, $args = array(), $wp_error = false)
+    {
+        $GLOBALS['mcpwp_test_cron'][ $hook ] = (int) $timestamp;
+        $GLOBALS['mcpwp_test_single_cron'][] = array(
+            'timestamp' => (int) $timestamp,
+            'hook'      => $hook,
+            'args'      => $args,
+        );
+        return true;
+    }
+}
 
 if (! function_exists('wp_cache_delete')) {
     function wp_cache_delete($key, $group = '')
@@ -2312,6 +2331,19 @@ if (! function_exists('wp_safe_remote_get')) {
         // Mirror core: same transport, with reject_unsafe_urls on. Tests mock
         // the response via the pre_http_request filter regardless.
         $args['method']             = 'GET';
+        $args['reject_unsafe_urls'] = true;
+        return wp_remote_request($url, $args);
+    }
+}
+
+if (! function_exists('wp_safe_remote_post')) {
+    function wp_safe_remote_post($url, $args = array())
+    {
+        // Same shape as wp_safe_remote_get() above, for POST callers (e.g.
+        // Mcpwp_Jev) that must reject internal/private hosts even though
+        // nothing in this double actually enforces it — tests mock the
+        // response via pre_http_request regardless.
+        $args['method']             = 'POST';
         $args['reject_unsafe_urls'] = true;
         return wp_remote_request($url, $args);
     }

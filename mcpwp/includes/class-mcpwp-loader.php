@@ -158,6 +158,11 @@ class Mcpwp_Loader {
 		$this->add_action( 'init', $this, 'maybe_schedule_alert_checks' );
 		$this->add_action( 'mcpwp_check_alerts', $this, 'check_alerts' );
 
+		// Jev approval-queue triage (optional, opt-in, BYOK): a single
+		// wp-cron event per newly created approval, scheduled from
+		// Mcpwp_Approvals — never run inline with the create call.
+		$this->add_action( Mcpwp_Jev_Triage::HOOK, 'Mcpwp_Jev_Triage', 'run', 10, 1 );
+
 		// Invalidate the capabilities cache when any plugin is activated or
 		// deactivated, so newly-enabled integrations (WooCommerce, LearnPress, …)
 		// are detected immediately instead of after the 1-hour transient TTL.

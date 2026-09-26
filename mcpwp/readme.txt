@@ -144,6 +144,8 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 
 **How to opt out:** Uncheck "Share anonymous tool-usage data" under WP Admin > MCPWP > Settings.
 
+**Jev approval-queue triage (optional, off by default):** if you configure the Jev integration under WP Admin > Integrations with your own TypeSafe API key, a short summary of each new approval request (its title, tool/operation, resource type, and a truncated excerpt of the changed content) is sent to TypeSafe (api.typesafe.ai) to compute a display-only review priority and change classification. That excerpt can include text from draft or private posts/pages, since approvals routinely cover unpublished content. Credential-shaped strings are removed before sending on a best-effort basis; do not enable this integration if your approvals may contain secrets you cannot risk sending. This never changes what a request is allowed to do; it only affects how the approval queue is sorted and labeled. Usage is billed to your own TypeSafe account. Remove the Jev API key under Integrations to stop sending anything.
+
 == Screenshots ==
 
 1. Control Room — supervised approvals, SEO findings, rollback-ready changes, and recommended next actions

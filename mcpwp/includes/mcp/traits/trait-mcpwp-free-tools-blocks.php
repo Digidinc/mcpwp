@@ -177,6 +177,10 @@ trait Mcpwp_Free_Tools_Blocks_Trait {
 					'type'        => 'number',
 					'description' => 'Maximum requests to return. Defaults to 50.',
 				),
+				'order' => array(
+					'type'        => 'string',
+					'description' => 'Sort order: "date" (default) or "priority" (Jev triage priority, when the optional Jev integration is configured; untriaged requests fall back to date). Priority only ever affects display order — never which requests are shown or how they may be decided.',
+				),
 			)
 		);
 

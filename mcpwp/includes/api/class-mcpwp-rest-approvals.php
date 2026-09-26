@@ -39,6 +39,11 @@ class Mcpwp_REST_Approvals extends Mcpwp_REST_API {
 							'maximum'           => 100,
 							'sanitize_callback' => 'absint',
 						),
+						'order'  => array(
+							'description' => __( 'Sort order: "date" (default) or "priority" (Jev triage priority, when configured; untriaged requests fall back to date).', 'mcpwp' ),
+							'type'        => 'string',
+							'default'     => 'date',
+						),
 					),
 				),
 			)
@@ -92,7 +97,8 @@ class Mcpwp_REST_Approvals extends Mcpwp_REST_API {
 		$approvals = Mcpwp_Approvals::list_requests(
 			(string) $request->get_param( 'status' ),
 			(int) $request->get_param( 'limit' ),
-			$this->requester_can_see_non_public()
+			$this->requester_can_see_non_public(),
+			(string) $request->get_param( 'order' )
 		);
 
 		return $this->success_response(
