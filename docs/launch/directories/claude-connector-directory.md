@@ -7,11 +7,20 @@ Sources checked 2026-09-26: [Submit a connector to the directory](https://claude
 [Anthropic Connectors Directory FAQ](https://support.claude.com/en/articles/11596036-anthropic-connectors-directory-faq)
 (now redirects into the docs above). The portal opened for submissions 2026-09-25.
 
-## Status: BLOCKED — owner must provision a demo/test WordPress site before submitting
+## Status: READY — owner mints reviewer key and submits
 
-Everything else below is ready to paste. The blocker is the **Test & launch** step, which needs
-live, reviewer-usable credentials — we cannot generate those without a running site. See
-"Owner actions" at the bottom.
+`https://demo.mcpwp.net` is live: confirmed 2026-09-26 via `/wp-json/` — the `mcpwp/v1`
+namespace is present alongside the standard `wp/v2`, `wp-site-health/v1`, `wp-block-editor/v1`,
+and `wp-abilities/v1` namespaces. The site identifies itself as "MCPWP Live Demo — Watch AI run
+a real WordPress site — live, read-only demo." No plugin version string was visible in the
+unauthenticated index; confirm 3.14.0 is what's actually running before pointing reviewers at
+it. The "read-only demo" tagline is worth a direct check too — if it enforces read-only at the
+WordPress level regardless of key scope, some write-tool calls a reviewer tries may correctly
+return nothing changed. That's fine to explain to reviewers, but confirm it's a scope
+restriction (a key the owner mints) and not a global lockout, since the Tools step below
+expects both read and write tools to be callable.
+
+Everything else below is ready to paste.
 
 ## Form field → answer
 
@@ -38,7 +47,7 @@ Syncs automatically from a connected server. Already satisfied: every tool in 3.
 | Categories (1–5) | Portal's exact taxonomy wasn't enumerated in the docs pulled for this package — pick the closest live options at submit time. Best-fit guesses: Website/CMS or Developer Tools, plus Productivity. |
 | Documentation URL | `https://docs.mcpwp.net/` |
 | Privacy policy URL | `https://mcpwp.net/privacy/` (confirmed live 2026-09-26, "MCPWP Privacy Policy and Terms") |
-| Support contact | **OWNER TO PROVIDE** — no published support email or contact form was found in the repo or on mcpwp.net during this pass. Needs a real inbox before submitting. |
+| Support contact | `support@mumega.com` (published at `https://mcpwp.net/contact/`) |
 | Icon | `docs/launch/gallery/src/icon.svg` exists (256×256 vector, "lightning route" mark). No PNG export exists yet — export at whatever raster size the portal's upload widget asks for. |
 | URL slug | `mcpwp` (permanent once published — confirm it's free) |
 
@@ -78,7 +87,8 @@ Syncs automatically from a connected server. Already satisfied: every tool in 3.
 ### Company step
 - **Company name**: Mumega
 - **Website**: `https://mcpwp.net`
-- **Primary contact**: OWNER TO PROVIDE
+- **Primary contact**: `support@mumega.com` (owner may prefer to substitute a named person for
+  review-update correspondence — the published address is the only contact on file)
 
 ### Authentication step
 Two real options exist on the product today — present both, since the portal's own guidance
@@ -102,10 +112,21 @@ review team says fits best, use that; don't guess and submit both.
   control (the mumcp.com broker only handles the OAuth handshake and token introspection).
 - **Personal health data / sponsored content**: no.
 
-### Test & launch step — BLOCKED
-Needs: a live WordPress install with MCPWP active, a generated API key (or OAuth enrolled),
-and step-by-step connect instructions a reviewer can follow with no prior context. Nothing here
-until the owner provisions a demo site (see below).
+### Test & launch step
+Reviewer test account: **`https://demo.mcpwp.net`**. Instructions only — the owner mints the
+actual key, nothing is minted as part of this docs pass.
+
+1. Owner logs into `demo.mcpwp.net` WP Admin → MCPWP → Setup and generates a fresh, scoped API
+   key labeled for Claude review (write scope, so reviewers can exercise both read and write
+   tools — not admin, so a reviewer can't touch publish-only surfaces or site settings).
+2. Owner pastes that key into the portal's Test & launch step, along with:
+   - Connector URL: `https://demo.mcpwp.net/wp-json/mcpwp/v1/mcp`
+   - Header: `X-API-Key: <the minted key>`
+   - One line of context: "This is a public demo site — content changes are expected and
+     safe to make; it resets/no personal data is present."
+3. Confirm before submitting whether the demo's "read-only" framing blocks any write tool a
+   reviewer might call — if it does, say so explicitly in this step's notes rather than letting
+   a reviewer discover a silent no-op.
 
 ### Compliance step
 Seven acknowledgments (directory guidelines, first-party API usage, financial transactions, AI
@@ -121,14 +142,13 @@ provider key, not MCPWP's), and documentation is public at docs.mcpwp.net.
 | Gallery/carousel screenshots (only if listed as an MCP App — MCPWP is a plain connector, not an App, so these likely aren't required) | `docs/launch/gallery/01-05*.png` (1270×760 each) | Exist, in case the reviewer asks for visuals |
 
 ## Owner actions
-1. Stand up a demo WordPress site (or reuse an existing rig), install MCPWP 3.14.0, generate a
-   test API key (and optionally enroll OAuth via mumcp.com), and write the reviewer-facing
-   connect steps — this is the actual blocker.
-2. Provide a support contact (email or form) and a company primary contact.
+1. Confirm `demo.mcpwp.net` is running 3.14.0 and check whether "read-only" blocks write-tool
+   calls regardless of key scope.
+2. Mint a scoped (write, not admin) API key on `demo.mcpwp.net` for Claude reviewers.
 3. Export `icon.svg` to the raster format/size the portal's upload widget requires.
 4. Confirm the `mcpwp` slug is available.
 5. Submit at claude.ai/directory/manage, using the answers above, and raise the
    URL-pattern-vs-custom-connection question with the review team rather than guessing.
 
-**Est. owner time: 45–90 min**, most of it standing up the demo site and writing its connect
-instructions.
+**Est. owner time: 20–30 min** — the demo site already exists, so this is mostly minting a key
+and running the portal steps.

@@ -21,15 +21,14 @@ decision.
 | Repository, Website or Documentation | `https://mcpwp.net` (or `https://docs.mcpwp.net/` if the form wants docs specifically) |
 | Official MCP Registry Name (optional) | Leave blank until the official-registry duplicate-listing decision (see `docs/launch/directories/mcp-registry.md`) is resolved — filling this in now would point at whichever name turns out to be wrong. Revisit after that decision. |
 | This server supports remote connections | Yes — check this box |
-| Contact Email | OWNER TO PROVIDE — same gap noted in the Claude directory and Muse packages |
+| Contact Email | `support@mumega.com` |
 
 ## Required assets
 None documented — no icon or screenshot upload appears on this form.
 
 ## Owner actions
-1. Provide a contact email (one gap shared across three packages in this set).
-2. Submit at `mcpservers.org/submit` with the fields above.
-3. Come back and fill in "Official MCP Registry Name" once the official-registry duplicate
+1. Submit at `mcpservers.org/submit` with the fields above.
+2. Come back and fill in "Official MCP Registry Name" once the official-registry duplicate
    decision lands.
 
 **Est. owner time: 10 min.** This is the fastest of the seven — no demo site, no repo decision,

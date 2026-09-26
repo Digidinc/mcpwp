@@ -25,7 +25,7 @@ only so the owner knows it exists as a later option.
 |---|---|
 | Repo to submit | `https://github.com/Mumega-com/mcpwp` |
 | What Glama will index | README (readme.txt content should be mirrored or linked in a root README for best indexing — verify one exists at repo root), the 3.14.0 tool registries (title + all four annotation hints already present, from #934), and the live server via its inspector if a demo URL is also supplied |
-| In-browser inspector target | `https://<demo-site>/wp-json/mcpwp/v1/mcp` with the demo API key — same demo site as the other packages, so Glama's visitors can exercise tools "no clone, no build, no local environment" |
+| In-browser inspector target | `https://demo.mcpwp.net/wp-json/mcpwp/v1/mcp` with a reviewer key minted on that demo site — same one used for the Claude/Muse/Smithery packages, so Glama's visitors can exercise tools "no clone, no build, no local environment" |
 
 ## Owner actions
 1. Decide on repo visibility (this is the actual blocker — same open item as
