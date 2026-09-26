@@ -2,7 +2,7 @@
 
 Generated audit of every statically-registered MCP tool (free + pro + AI integration + Figma integration) ahead of the Claude connector directory's public submission (opened 2026-09-25), which requires every tool to carry a human `title` and correctness-checked `readOnlyHint`/`destructiveHint` annotations.
 
-Per the MCP spec: `readOnlyHint` true means the tool does not modify its environment at all — not options, not cached state, not a paid third-party call. `destructiveHint` true means "may perform destructive updates"; false means "only additive updates" — any tool that overwrites or deletes something that already existed is destructive. `Mcpwp_MCP_Tool_Registry::is_destructive_tool()` therefore treats every non-read-only, first-party tool as destructive **by default**, unless its name is a known purely-additive verb (`Mcpwp_MCP_Tool_Annotations::is_purely_additive_by_name()`) or an override says otherwise — the reverse of the old "destructive only if declared" model.
+Per the MCP spec: `readOnlyHint` true means the tool does not modify its environment at all — not options, not cached state, not a paid third-party call. `destructiveHint` true means "may perform destructive updates"; false means "only additive updates" — any tool that overwrites or deletes something that already existed is destructive. `Mcpwp_MCP_Tool_Registry::is_destructive_tool()` therefore treats every non-read-only, first-party tool as destructive **by default**, unless its name is a known purely-additive verb (`Mcpwp_MCP_Tool_Annotations::is_purely_additive_by_name()`) or an override says otherwise. A tool can also be purely-additive *by name* while still having a parameter that switches it into an overwrite/delete mode (e.g. `wp_add_section`'s `convert`, `wp_submit_to_google_index`'s `action` accepting `URL_DELETED`) — those are caught by hand and recorded as overrides, with a mechanical guard test scanning for the same pattern (a `convert`/`replace`/`overwrite`/`mode`/`action` param whose enum or description mentions delete/replace/overwrite/destroy).
 
 Single source of truth for every override below: `mcpwp/includes/mcp/class-mcpwp-mcp-tool-annotations.php` (`Mcpwp_MCP_Tool_Annotations::ANNOTATION_OVERRIDES` / `TITLE_OVERRIDES`). It is consulted first, ahead of the HTTP-method heuristic, each registry's own `get_destructive_tools()`/`get_open_world_tools()` lists, and the default-destructive-for-write-tools rule. A tool not listed as an override below either got its hint from an explicit first-party list/DELETE method, or was checked by hand against the new default and found correct.
 
@@ -13,11 +13,11 @@ Custom tools registered via the `mcpwp_register_tools` filter (`Mcpwp_Custom_Too
 - pro: 118
 - ai integration: 8
 - figma integration (Pro-gated): 5
-- destructive: 98
+- destructive: 102
 - read-only: 144
-- open-world: 35
-- idempotent: 197
-- tools with an explicit annotation override: 97
+- open-world: 36
+- idempotent: 196
+- tools with an explicit annotation override: 101
 
 | Tool | Tier | Method | Title | RO | Destr | Idem | OW | Reason |
 |---|---|---|---|---|---|---|---|---|
@@ -35,7 +35,7 @@ Custom tools registered via the `mcpwp_register_tools` filter (`Mcpwp_Custom_Too
 | `wp_get_figma_node` | figma | GET | Get Figma node | Y | - | Y | Y | Read-only (GET/HEAD/OPTIONS): no environment modification, so not destructive. |
 | `wp_sync_figma_design_tokens` | figma | POST | Sync Figma design tokens | - | Y | - | Y | Write tool (POST). Not purely additive by name (create/add/upload/clone/import/submit/duplicate/bulk_create/bulk_upload) -> defaults destructive under Mcpwp_MCP_Tool_Registry::default_destructive_for_write_tools(). |
 | `wp_add_menu_item` | free | POST | Add menu item | - | - | - | - | Write tool (POST). Purely additive by name -> defaults non-destructive (Mcpwp_MCP_Tool_Annotations::is_purely_additive_by_name()). |
-| `wp_add_section` | free | POST | Add section | - | - | - | - | Write tool (POST). Purely additive by name -> defaults non-destructive (Mcpwp_MCP_Tool_Annotations::is_purely_additive_by_name()). |
+| `wp_add_section` | free | POST | Add section | - | Y | - | - | With convert=true on a page that has existing non-Elementor content and no Elementor data, converting it means "its current content will not survive" (trait-mcpwp-elementor-writer.php ensure_elementor_page_or_error()) — the same content-loss path #788 already guards against. Default (convert omitted) refuses the write rather than losing content, but the hint must cover the opt-in path. |
 | `wp_analytics` | free | GET | Analytics | Y | - | Y | - | Read-only (GET/HEAD/OPTIONS): no environment modification, so not destructive. |
 | `wp_apply_approval` | free | POST | Apply approval | - | Y | - | - | Write tool (POST). Not purely additive by name (create/add/upload/clone/import/submit/duplicate/bulk_create/bulk_upload) -> defaults destructive under Mcpwp_MCP_Tool_Registry::default_destructive_for_write_tools(). |
 | `wp_apply_internal_link` | free | POST | Apply internal link | - | - | - | - | Write tool (POST). |
@@ -121,7 +121,7 @@ Custom tools registered via the `mcpwp_register_tools` filter (`Mcpwp_Custom_Too
 | `wp_get_widget_schema` | free | GET | Get widget schema | Y | - | Y | - | Read-only (GET/HEAD/OPTIONS): no environment modification, so not destructive. |
 | `wp_get_woocommerce_seo_report` | free | GET | Get WooCommerce SEO report | Y | - | Y | - | Read-only (GET/HEAD/OPTIONS): no environment modification, so not destructive. |
 | `wp_get_workflow` | free | GET | Get workflow | Y | - | Y | - | Read-only (GET/HEAD/OPTIONS): no environment modification, so not destructive. |
-| `wp_import_search_performance` | free | POST | Import search performance | - | - | - | - | Write tool (POST). Purely additive by name -> defaults non-destructive (Mcpwp_MCP_Tool_Annotations::is_purely_additive_by_name()). |
+| `wp_import_search_performance` | free | POST | Import search performance | - | Y | - | - | Evicts the oldest imports/rows once storage exceeds Mcpwp_Search_Performance::MAX_IMPORTS/MAX_ROWS (array_slice() after array_unshift()/array_merge()) — a real deletion path once the cap is reached, not purely additive despite the "import_" verb. |
 | `wp_integrations_status` | free | GET | Integrations status | Y | - | Y | - | Read-only (GET/HEAD/OPTIONS): no environment modification, so not destructive. |
 | `wp_introspect` | free | GET | Get API introspection | Y | - | Y | - | Read-only (GET/HEAD/OPTIONS): no environment modification, so not destructive. |
 | `wp_keyword_research` | free | GET | Keyword research | - | - | - | Y | Free/keyless by default, but enrich=true routes through a configured DataForSEO provider and spends the site's lookup budget (Mcpwp_REST_SEO_Audit::keyword_research()) — spending a budget is a write, not a pure read. Not destructive: nothing existing is overwritten, only a shared lookup-cache/budget counter is consumed. |
@@ -225,13 +225,13 @@ Custom tools registered via the `mcpwp_register_tools` filter (`Mcpwp_Custom_Too
 | `wc_list_product_tags` | pro | GET | List product tags | Y | - | Y | - | Read-only (GET/HEAD/OPTIONS): no environment modification, so not destructive. |
 | `wc_list_products` | pro | GET | List products | Y | - | Y | - | Read-only (GET/HEAD/OPTIONS): no environment modification, so not destructive. |
 | `wc_status` | pro | GET | WooCommerce status | Y | - | Y | - | Read-only (GET/HEAD/OPTIONS): no environment modification, so not destructive. |
-| `wc_update_order` | pro | PUT | Update order | - | Y | - | - | Write tool (PUT). Not purely additive by name (create/add/upload/clone/import/submit/duplicate/bulk_create/bulk_upload) -> defaults destructive under Mcpwp_MCP_Tool_Registry::default_destructive_for_write_tools(). |
+| `wc_update_order` | pro | PUT | Update order | - | Y | - | Y | A status change on a WooCommerce order (Mcpwp_REST_Woocommerce::update_order()) fires WooCommerce's own order-status-changed hooks, which can send customer-facing emails depending on WooCommerce email settings. |
 | `wc_update_product` | pro | PUT | Update product | - | Y | - | - | Write tool (PUT). Not purely additive by name (create/add/upload/clone/import/submit/duplicate/bulk_create/bulk_upload) -> defaults destructive under Mcpwp_MCP_Tool_Registry::default_destructive_for_write_tools(). |
 | `wc_update_product_category` | pro | PUT | Update product category | - | Y | - | - | Write tool (PUT). Not purely additive by name (create/add/upload/clone/import/submit/duplicate/bulk_create/bulk_upload) -> defaults destructive under Mcpwp_MCP_Tool_Registry::default_destructive_for_write_tools(). |
 | `wp_add_widget` | pro | POST | Add widget | - | - | - | - | Write tool (POST). Purely additive by name -> defaults non-destructive (Mcpwp_MCP_Tool_Annotations::is_purely_additive_by_name()). |
 | `wp_analyze_seo` | pro | GET | Analyze SEO | Y | - | Y | - | Read-only (GET/HEAD/OPTIONS): no environment modification, so not destructive. |
 | `wp_apply_elementor_archetype` | pro | POST | Apply Elementor archetype | - | Y | Y | - | Same reasoning as wp_apply_elementor_template. |
-| `wp_apply_elementor_part` | pro | POST | Apply Elementor part | - | Y | Y | - | Same reasoning as wp_apply_elementor_template. |
+| `wp_apply_elementor_part` | pro | POST | Apply Elementor part | - | Y | - | - | Default mode=insert (Mcpwp_REST_Elementor_Pro::apply_part() -> insert_part_into_page()) appends another copy of the part's sections on every call; only mode=replace would behave like wp_apply_elementor_template, and that is not the default. |
 | `wp_apply_elementor_template` | pro | POST | Apply Elementor template | - | Y | Y | - | Applies the same template content each call; applying it twice leaves the page in the same state. |
 | `wp_assign_template` | pro | POST | Assign template | - | Y | Y | - | Assigns a theme-builder template; the same assignment twice leaves the same state. |
 | `wp_build_page` | pro | POST | Build page | - | - | - | - | Creates a NEW page from title/sections (Mcpwp_Page_Builder::build()); additive only. |
@@ -247,7 +247,7 @@ Custom tools registered via the `mcpwp_register_tools` filter (`Mcpwp_Custom_Too
 | `wp_create_event` | pro | POST | Create event | - | - | - | - | Write tool (POST). Purely additive by name -> defaults non-destructive (Mcpwp_MCP_Tool_Annotations::is_purely_additive_by_name()). |
 | `wp_create_landing_page` | pro | POST | Create landing page | - | - | - | - | Write tool (POST). Purely additive by name -> defaults non-destructive (Mcpwp_MCP_Tool_Annotations::is_purely_additive_by_name()). |
 | `wp_create_lesson` | pro | POST | Create lesson | - | - | - | - | Write tool (POST). Purely additive by name -> defaults non-destructive (Mcpwp_MCP_Tool_Annotations::is_purely_additive_by_name()). |
-| `wp_create_menu` | pro | POST | Create menu | - | - | - | - | Write tool (POST). Purely additive by name -> defaults non-destructive (Mcpwp_MCP_Tool_Annotations::is_purely_additive_by_name()). |
+| `wp_create_menu` | pro | POST | Create menu | - | Y | - | - | A `location` arg reassigns that theme location's nav_menu_locations entry to the new menu (Mcpwp_Site_Manager::create_menu()), overwriting whatever menu was previously assigned there — not purely additive despite the "create_" verb. |
 | `wp_create_quiz` | pro | POST | Create quiz | - | - | - | - | Write tool (POST). Purely additive by name -> defaults non-destructive (Mcpwp_MCP_Tool_Annotations::is_purely_additive_by_name()). |
 | `wp_create_theme_template` | pro | POST | Create theme template | - | - | - | - | Write tool (POST). Purely additive by name -> defaults non-destructive (Mcpwp_MCP_Tool_Annotations::is_purely_additive_by_name()). |
 | `wp_create_translation` | pro | POST | Create translation | - | - | - | - | Write tool (POST). Purely additive by name -> defaults non-destructive (Mcpwp_MCP_Tool_Annotations::is_purely_additive_by_name()). |
@@ -314,7 +314,7 @@ Custom tools registered via the `mcpwp_register_tools` filter (`Mcpwp_Custom_Too
 | `wp_set_noindex` | pro | POST | Set noindex | - | Y | Y | - | Sets a boolean flag; same value twice leaves the same state. |
 | `wp_set_seo` | pro | POST | Set SEO | - | Y | Y | - | Replaces a post's SEO fields with the given values; same values twice leave the same state. |
 | `wp_set_template_conditions` | pro | POST | Set template conditions | - | Y | Y | - | Fully replaces a theme-builder template's display conditions; a misconfigured call can unassign the template everywhere. |
-| `wp_submit_to_google_index` | pro | POST | Submit to Google index | - | - | - | Y | Submits URLs to the Google Indexing API (Mcpwp_REST_Google_Indexing::submit_urls()). |
+| `wp_submit_to_google_index` | pro | POST | Submit to Google index | - | Y | - | Y | Submits URLs to the Google Indexing API (Mcpwp_REST_Google_Indexing::submit_urls()); action accepts URL_DELETED, which asks Google to drop the URL from its index — not purely additive despite the "submit_" verb. |
 | `wp_theme_builder_status` | pro | GET | Theme builder status | Y | - | Y | - | Read-only (GET/HEAD/OPTIONS): no environment modification, so not destructive. |
 | `wp_update_course` | pro | PUT | Update course | - | Y | - | - | Write tool (PUT). Not purely additive by name (create/add/upload/clone/import/submit/duplicate/bulk_create/bulk_upload) -> defaults destructive under Mcpwp_MCP_Tool_Registry::default_destructive_for_write_tools(). |
 | `wp_update_course_category` | pro | PUT | Update course category | - | Y | - | - | Write tool (PUT). Not purely additive by name (create/add/upload/clone/import/submit/duplicate/bulk_create/bulk_upload) -> defaults destructive under Mcpwp_MCP_Tool_Registry::default_destructive_for_write_tools(). |

@@ -99,8 +99,9 @@ class Mcpwp_MCP_Tool_Annotations {
 			'reason'        => 'Calls the Google Indexing API to check a URL\'s status (Mcpwp_REST_Google_Indexing::get_status()); pro-tier open-world list is empty by default.',
 		),
 		'wp_submit_to_google_index' => array(
-			'openWorldHint' => true,
-			'reason'        => 'Submits URLs to the Google Indexing API (Mcpwp_REST_Google_Indexing::submit_urls()).',
+			'destructiveHint' => true,
+			'openWorldHint'   => true,
+			'reason'          => 'Submits URLs to the Google Indexing API (Mcpwp_REST_Google_Indexing::submit_urls()); action accepts URL_DELETED, which asks Google to drop the URL from its index — not purely additive despite the "submit_" verb.',
 		),
 		'wp_refresh_seo_visibility' => array(
 			'destructiveHint' => false,
@@ -183,6 +184,10 @@ class Mcpwp_MCP_Tool_Annotations {
 			'destructiveHint' => true,
 			'openWorldHint'   => true,
 			'reason'          => 'Downloads and installs a plugin package via Plugin_Upgrader, overwriting the currently-installed plugin files (Mcpwp_REST_Site_Updates); also reaches the update manifest/package host over HTTP.',
+		),
+		'wc_update_order'                    => array(
+			'openWorldHint' => true,
+			'reason'        => 'A status change on a WooCommerce order (Mcpwp_REST_Woocommerce::update_order()) fires WooCommerce\'s own order-status-changed hooks, which can send customer-facing emails depending on WooCommerce email settings.',
 		),
 
 		// --- POST tools that validate/transform input without touching
@@ -405,6 +410,18 @@ class Mcpwp_MCP_Tool_Annotations {
 			'destructiveHint' => true,
 			'reason'          => 'With overwrite=true and an existing same-named menu, deletes every existing menu item on that menu before repopulating it (Mcpwp_REST_Menus::setup_menu()) — a real deletion path, not purely additive.',
 		),
+		'wp_add_section'             => array(
+			'destructiveHint' => true,
+			'reason'          => 'With convert=true on a page that has existing non-Elementor content and no Elementor data, converting it means "its current content will not survive" (trait-mcpwp-elementor-writer.php ensure_elementor_page_or_error()) — the same content-loss path #788 already guards against. Default (convert omitted) refuses the write rather than losing content, but the hint must cover the opt-in path.',
+		),
+		'wp_import_search_performance' => array(
+			'destructiveHint' => true,
+			'reason'          => 'Evicts the oldest imports/rows once storage exceeds Mcpwp_Search_Performance::MAX_IMPORTS/MAX_ROWS (array_slice() after array_unshift()/array_merge()) — a real deletion path once the cap is reached, not purely additive despite the "import_" verb.',
+		),
+		'wp_create_menu'             => array(
+			'destructiveHint' => true,
+			'reason'          => 'A `location` arg reassigns that theme location\'s nav_menu_locations entry to the new menu (Mcpwp_Site_Manager::create_menu()), overwriting whatever menu was previously assigned there — not purely additive despite the "create_" verb.',
+		),
 
 		// --- idempotentHint for meaningfully-idempotent write tools. Default
 		// (no override) is: read-only tools are idempotent, other write
@@ -451,18 +468,24 @@ class Mcpwp_MCP_Tool_Annotations {
 		'wp_push_to_staging'         => array( 'idempotentHint' => true, 'reason' => 'Same reasoning as wp_push_to_live.' ),
 		// Reviewed against a P1 finding that these regenerate element ids on
 		// every apply. Traced instead: Mcpwp_Elementor_Pro::apply_archetype_to_page()
-		// and ::apply_part_to_page() both delegate to the same
-		// apply_template_to_page() that backs wp_apply_elementor_template —
-		// it copies the source's stored _elementor_data verbatim through
-		// save_elementor_data() -> set_elementor_data(), which only fills in
-		// a MISSING id (validator: "auto-generated missing ID"), never
-		// rewrites an existing valid one. The generate_element_id() calls
-		// found nearby live in the unrelated summarize_template_data()
-		// preview path. Kept idempotentHint=true on that evidence; flagging
-		// for the reviewer rather than silently overriding the finding.
+		// delegates to the same apply_template_to_page() that backs
+		// wp_apply_elementor_template — it copies the source's stored
+		// _elementor_data verbatim through save_elementor_data() ->
+		// set_elementor_data(), which only fills in a MISSING id (validator:
+		// "auto-generated missing ID"), never rewrites an existing valid one.
+		// The generate_element_id() calls found nearby live in the unrelated
+		// summarize_template_data() preview path. Confirmed idempotentHint=true
+		// for these two on that evidence.
 		'wp_apply_elementor_template' => array( 'idempotentHint' => true, 'reason' => 'Applies the same template content each call; applying it twice leaves the page in the same state.' ),
 		'wp_apply_elementor_archetype' => array( 'idempotentHint' => true, 'reason' => 'Same reasoning as wp_apply_elementor_template.' ),
-		'wp_apply_elementor_part'    => array( 'idempotentHint' => true, 'reason' => 'Same reasoning as wp_apply_elementor_template.' ),
+		// wp_apply_elementor_part is different: Mcpwp_REST_Elementor_Pro::apply_part()
+		// defaults `mode` to 'insert', which calls insert_part_into_page() —
+		// a loop of additive add_section() calls, not the full-replace
+		// apply_template_to_page() path (that only runs for mode=replace).
+		// Calling with the same args twice inserts a second copy of the
+		// part's sections each time, so — unlike template/archetype — this
+		// one is not idempotent.
+		'wp_apply_elementor_part'    => array( 'idempotentHint' => false, 'reason' => 'Default mode=insert (Mcpwp_REST_Elementor_Pro::apply_part() -> insert_part_into_page()) appends another copy of the part\'s sections on every call; only mode=replace would behave like wp_apply_elementor_template, and that is not the default.' ),
 	);
 
 	/**

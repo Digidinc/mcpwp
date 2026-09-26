@@ -283,6 +283,97 @@ final class McpToolAnnotationsTest extends TestCase {
 		}
 	}
 
+	/**
+	 * Guard, round 2: a tool can look purely additive by name (so
+	 * is_purely_additive_by_name() clears it) while still having a
+	 * parameter that switches it into an overwrite/delete mode — e.g.
+	 * wp_add_section's `convert`, wp_submit_to_google_index's `action`
+	 * accepting URL_DELETED. Any tool with a param literally named
+	 * convert/replace/overwrite/mode/action whose enum or description
+	 * mentions delete/replace/overwrite must be destructiveHint=true, unless
+	 * Mcpwp_MCP_Tool_Annotations has a reviewed override that says otherwise.
+	 */
+	public function test_tools_with_a_mode_switching_param_are_destructive_or_documented(): void {
+		$param_names   = array( 'convert', 'replace', 'overwrite', 'mode', 'action' );
+		// 'destroy' catches wp_add_section's own wording ("...content will
+		// not survive"/"destroying that content") in addition to the
+		// reviewer's literal delete/replace/overwrite list.
+		$trigger_words = array( 'delete', 'replace', 'overwrite', 'destroy' );
+		$examined      = array();
+
+		foreach ( $this->all_registries() as $registry ) {
+			foreach ( $registry->get_tools() as $tool ) {
+				$properties = $tool['inputSchema']['properties'] ?? array();
+				if ( $properties instanceof \stdClass ) {
+					$properties = (array) $properties;
+				}
+
+				$flagged_param = null;
+				foreach ( $properties as $param_name => $schema ) {
+					if ( ! in_array( strtolower( (string) $param_name ), $param_names, true ) ) {
+						continue;
+					}
+
+					$haystack = strtolower( (string) ( $schema['description'] ?? '' ) );
+					if ( ! empty( $schema['enum'] ) && is_array( $schema['enum'] ) ) {
+						$haystack .= ' ' . strtolower( implode( ' ', $schema['enum'] ) );
+					}
+
+					foreach ( $trigger_words as $word ) {
+						if ( false !== strpos( $haystack, $word ) ) {
+							$flagged_param = $param_name;
+							break 2;
+						}
+					}
+				}
+
+				if ( null === $flagged_param ) {
+					continue;
+				}
+
+				$examined[] = $tool['name'];
+
+				if ( true === $tool['annotations']['destructiveHint'] ) {
+					$this->assertTrue( true ); // Correctly flagged — record the assertion, not just a silent continue.
+					continue;
+				}
+
+				$override = Mcpwp_MCP_Tool_Annotations::get_override( $tool['name'] );
+				$this->assertNotNull(
+					$override,
+					"{$tool['name']}: has a '{$flagged_param}' parameter whose enum/description mentions delete/replace/overwrite, and destructiveHint is false with no override documenting why."
+				);
+				$this->assertArrayHasKey(
+					'destructiveHint',
+					$override,
+					"{$tool['name']}: has an override entry but it does not address destructiveHint."
+				);
+			}
+		}
+
+		// The guard is only doing its job if it actually finds the cases this
+		// round of review named — an empty scan would pass by finding nothing,
+		// which is indistinguishable from a broken property scan.
+		$this->assertContains( 'wp_submit_to_google_index', $examined );
+		$this->assertContains( 'wp_add_section', $examined );
+	}
+
+	/**
+	 * Spot-check the three tools this round's review named by hand, so a
+	 * regression in the generalized guard above is caught even if the guard
+	 * itself has a bug.
+	 */
+	public function test_mode_switching_destructive_tools_named_by_review(): void {
+		$free = new Mcpwp_MCP_Free_Tools();
+		$pro  = new Mcpwp_MCP_Pro_Tools();
+
+		$this->assertTrue( $pro->get_tool_annotations( 'wp_submit_to_google_index' )['destructiveHint'], 'action=URL_DELETED asks Google to drop the URL from its index' );
+		$this->assertTrue( $free->get_tool_annotations( 'wp_add_section' )['destructiveHint'], 'convert=true can destroy existing non-Elementor content' );
+		$this->assertTrue( $free->get_tool_annotations( 'wp_import_search_performance' )['destructiveHint'], 'evicts the oldest rows/imports once storage caps are hit' );
+		$this->assertTrue( $free->get_tool_annotations( 'wp_create_menu' )['destructiveHint'], 'a location arg reassigns that location away from whatever menu already held it' );
+		$this->assertTrue( $pro->get_tool_annotations( 'wc_update_order' )['openWorldHint'], 'a status change can trigger a WooCommerce customer email' );
+	}
+
 	// ── destructiveHint corrections ──────────────────────────────────────
 
 	public function test_full_replacement_tools_are_destructive_like_apply_elementor_template(): void {
@@ -493,6 +584,16 @@ final class McpToolAnnotationsTest extends TestCase {
 		}
 		$this->assertTrue( $pro->get_tool_annotations( 'wp_push_to_live' )['idempotentHint'] );
 		$this->assertTrue( $pro->get_tool_annotations( 'wp_apply_elementor_template' )['idempotentHint'] );
+		$this->assertTrue( $pro->get_tool_annotations( 'wp_apply_elementor_archetype' )['idempotentHint'] );
+	}
+
+	public function test_apply_elementor_part_is_not_idempotent_because_default_mode_inserts(): void {
+		$pro = new Mcpwp_MCP_Pro_Tools();
+
+		$this->assertFalse(
+			$pro->get_tool_annotations( 'wp_apply_elementor_part' )['idempotentHint'],
+			'default mode=insert appends another copy of the part on every call, unlike template/archetype which always fully replace'
+		);
 	}
 
 	// ── Figma + AI integration tools inherit the same machinery ──────────
