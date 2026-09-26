@@ -739,9 +739,28 @@ class Mcpwp_Theme_Builder {
 					if ( $document && method_exists( $document, 'save' ) ) {
 						$suspended_sanitizer = Mcpwp_Elementor_Sanitizer_Guard::suspend();
 						try {
-							$document->save( array( 'elements' => $elements ) );
+							$save_result = $document->save( array( 'elements' => $elements ) );
 						} finally {
 							Mcpwp_Elementor_Sanitizer_Guard::restore( $suspended_sanitizer );
+						}
+
+						// (#951) Core\Base\Document::save() is documented `@return
+						// bool` and returns exactly `false` -- no exception, no
+						// WP_Error -- when is_editable_by_current_user() fails (the
+						// same signal trait-mcpwp-elementor-writer.php's
+						// attempt_elementor_call() already treats as a decline,
+						// #861). This call site never routed through that helper
+						// and ignored the return value outright: the raw-meta
+						// overwrite a few lines below runs unconditionally regardless,
+						// so a declined save still landed data on disk with no
+						// failure ever surfaced -- the exact #861 truthfulness gap,
+						// but for a site-wide header/footer template with no
+						// render-verification layer to catch it afterwards.
+						// Escalate into the existing force-delete-and-fail path below
+						// rather than silently falling through to an unverified meta
+						// write.
+						if ( false === $save_result ) {
+							throw new RuntimeException( 'document_save_declined: Elementor declined to save this template -- the current user cannot edit it.' );
 						}
 					}
 				}

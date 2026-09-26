@@ -661,6 +661,23 @@ trait Mcpwp_Elementor_Writer_Trait {
 		$errors                    = array();
 		$initial_save_was_recovered = true === ( $debug['html_cache_rebuilt'] ?? false );
 
+		// (#901) verify_css_file_was_written() downgraded css_regenerated to
+		// false because the post's CSS file does not exist on disk (or is
+		// empty), or exists but predates this write (a stale survivor from
+		// before the directory broke — RC review WARN) — despite regeneration
+		// reporting no exception. Named separately from
+		// css_regeneration_exception/_error below — this is Elementor's own
+		// CSS_File::update() swallowing a filesystem write failure with no
+		// exception, not a caught Throwable or WP_Error — and it gets an
+		// actionable hint rather than a bare label, since "the uploads
+		// directory is not writable" is something an operator can actually go
+		// fix.
+		if ( ! empty( $debug['css_file_not_written'] ) ) {
+			$errors[] = ! empty( $debug['css_file_stale'] )
+				? 'css_regeneration: CSS file on disk was not updated by this save (it predates it) — check that the uploads directory is writable.'
+				: 'css_regeneration: CSS file could not be written to uploads/elementor/css — check that the uploads directory is writable.';
+		}
+
 		if ( ! empty( $debug['html_rebuild_corrupted_data'] ) ) {
 			$before = isset( $debug['html_rebuild_elements_before'] ) ? (int) $debug['html_rebuild_elements_before'] : 0;
 			$after  = isset( $debug['html_rebuild_elements_after'] ) ? (int) $debug['html_rebuild_elements_after'] : 0;
@@ -742,6 +759,153 @@ trait Mcpwp_Elementor_Writer_Trait {
 		}
 
 		return $errors;
+	}
+
+	/**
+	 * Confirm a reported CSS regeneration actually produced a usable result,
+	 * rather than trusting attempt_elementor_call()'s ok=true — which only
+	 * means "no exception, no WP_Error, not literal false" (#901).
+	 *
+	 * The closures wrapping \Elementor\Core\Files\CSS\Post::create()->update()
+	 * hardcode `return true;` after calling it, so a filesystem write that
+	 * Elementor's own CSS_File::update() swallowed — an unwritable
+	 * uploads/elementor/css, a full disk, wrong permissions — with no
+	 * exception and no WP_Error left css_regenerated:true and, downstream via
+	 * decorate_render_status(), render_verified:true for a page whose CSS
+	 * file was never actually written and therefore rendered unstyled.
+	 *
+	 * (RC review BLOCK, 2026-09-26): "no file, or an empty one" is NOT
+	 * always a failure. Elementor's own Base::update() -> update_file()
+	 * deliberately DELETES a post's CSS file and records
+	 * `_elementor_css.status = 'empty'` whenever there is nothing to print —
+	 * a cleared page (no elements), a widget with no styled/global-default
+	 * controls, or an Elementor 4 atomic-only page (the legacy Post CSS file
+	 * only ever carries legacy-control rules; atomic styles are written by a
+	 * separate, lazily-populated `local-*` file the atomic styles manager
+	 * owns, not this one). Treating that deliberate, healthy "nothing to
+	 * write" as the same failure as a write that silently dropped content
+	 * produced false BLOCKs on every one of those pages. The fix is to ask
+	 * Elementor what it decided, not to infer intent from a byte count:
+	 * `_elementor_css.status` is 'file' (a file was meant to exist), 'inline'
+	 * (this site prints CSS inline — no file, by design, same as the
+	 * `elementor_css_print_method` option this already recognised) or
+	 * 'empty' (Elementor decided there was nothing to print and removed any
+	 * existing file on purpose). Only 'file' with nothing usable on disk is
+	 * a real defect. The status is read by the caller BEFORE the CSS-priming
+	 * block a few lines later deletes/refreshes that same meta key on a
+	 * small file — read it any later and this method would see nothing.
+	 *
+	 * (RC review WARN, 2026-09-26): a non-empty file existing is not proof
+	 * IT was written by THIS call. On an uploads directory that went
+	 * unwritable after a page already had CSS, Elementor's write silently
+	 * no-ops and the OLD file — non-empty, sitting right where this method
+	 * looks — stays exactly as it was, so a byte-count-only check passes a
+	 * stale file left over from before the directory broke. $regen_started_at
+	 * (captured by the caller immediately before invoking Elementor's
+	 * update(), via time()) lets this method require the file's mtime to be
+	 * no older than that instant, with a 2-second slack for filesystem/clock
+	 * granularity — a truly rewritten file is never older than the call that
+	 * (claims to have) rewritten it. The caller clears PHP's stat cache for
+	 * this exact path immediately before reading $css_size, so a second
+	 * write to the SAME page in one PHP process (round 2 of this review:
+	 * /batch, wp_batch, back-to-back surgical operations) sees THIS call's
+	 * file, not a cached stat() result left over from an earlier one in the
+	 * same request — file_put_contents() does not invalidate that cache on
+	 * its own.
+	 *
+	 * (RC review NOTE, round 2, 2026-09-26): the mtime check above trusts
+	 * PHP's clock and the storage clock to agree. On the one real setup
+	 * where they routinely do not — uploads mounted over NFS/EFS, where the
+	 * file server stamps mtime on its own clock — a genuinely fresh write
+	 * can carry an mtime this host considers "too old", which would read as
+	 * a false WARN. Comparing against a second clock (e.g. a probe file
+	 * touch()ed just before regeneration) only relocates the same
+	 * cross-clock problem rather than solving it — the probe's mtime is
+	 * stamped by the SAME storage clock as the real file's, so it is a
+	 * fresher-looking version of the identical assumption, not an
+	 * independent one. The simplest robust signal that does not depend on
+	 * any clock at all: compare CONTENT. $css_size_before_regen is the
+	 * file's size immediately before this call's write; if the size on disk
+	 * changed, the file was demonstrably rewritten this call regardless of
+	 * what its mtime says, and the mtime check is overruled. Only a file
+	 * that is BOTH mtime-stale AND byte-identical to what was already there
+	 * — indistinguishable from a survivor nothing touched — is reported as
+	 * a failure. (A same-size rewrite of different content is the one gap
+	 * this leaves; accepted as the pragmatic trade-off over tracking a
+	 * second, no more trustworthy clock.)
+	 *
+	 * Only ever downgrades a currently-true css_regenerated: a regeneration
+	 * that already threw or returned a WP_Error is left exactly as
+	 * attempt_elementor_call() reported it (that failure is already surfaced
+	 * under css_regeneration_exception/_error), and a css_regenerated key
+	 * that is entirely absent — Elementor inactive, or
+	 * \Elementor\Core\Files\CSS\Post unavailable — means regeneration was
+	 * never attempted, so there is nothing here to verify.
+	 *
+	 * @param array       $debug                 Debug bag, written by reference.
+	 * @param int         $css_size               Size in bytes of the post's CSS file on disk (0 when missing),
+	 *                                             read by the caller AFTER clearing the stat cache for this path.
+	 * @param string      $css_path               Absolute path to the post's CSS file.
+	 * @param string|null $meta_status            `_elementor_css['status']` read right after the
+	 *                                             regeneration call, before anything later can
+	 *                                             delete/refresh it. Null when the meta was never
+	 *                                             written (older Elementor, or the write itself
+	 *                                             never landed) — falls back to the site-wide
+	 *                                             print-method option.
+	 * @param int|null    $regen_started_at       time() captured immediately before the
+	 *                                             regeneration call ran; null skips the
+	 *                                             staleness check entirely (nothing to compare
+	 *                                             against — a non-empty file is accepted as-is).
+	 * @param int|null    $css_size_before_regen  Size in bytes of the post's CSS file immediately
+	 *                                             BEFORE the regeneration call ran (0 when it did
+	 *                                             not exist yet). Null when the caller could not
+	 *                                             capture one; a changed size overrules an
+	 *                                             otherwise-stale mtime (see the NOTE above).
+	 */
+	private function verify_css_file_was_written( array &$debug, $css_size, $css_path, $meta_status = null, $regen_started_at = null, $css_size_before_regen = null ) {
+		if ( empty( $debug['css_regenerated'] ) ) {
+			return;
+		}
+
+		// Elementor's own verdict: nothing was SUPPOSED to be on disk.
+		if ( in_array( $meta_status, array( 'empty', 'inline' ), true ) ) {
+			return;
+		}
+
+		// No per-page verdict to read — fall back to the site-wide setting,
+		// which is the same 'inline' exemption by another name.
+		if ( null === $meta_status && 'internal' === get_option( 'elementor_css_print_method', 'external' ) ) {
+			return;
+		}
+
+		// A 'file' verdict (or no verdict, external print method): a file
+		// SHOULD exist, be non-empty, AND have actually been touched by this
+		// call — not a stale survivor from before the directory broke.
+		if ( $css_size > 0 ) {
+			if ( null === $regen_started_at ) {
+				// No timestamp to compare against (caller did not supply
+				// one) — fall back to the pre-staleness-check contract:
+				// non-empty is enough.
+				return;
+			}
+
+			$mtime = @filemtime( $css_path );
+			if ( false !== $mtime && $mtime >= ( $regen_started_at - 2 ) ) {
+				return;
+			}
+
+			// mtime says stale. Before trusting a clock that may not agree
+			// with the storage layer's own (NFS/EFS — see the NOTE above),
+			// ask whether the content actually changed.
+			if ( null !== $css_size_before_regen && $css_size !== $css_size_before_regen ) {
+				return;
+			}
+
+			$debug['css_file_stale'] = true;
+		}
+
+		$debug['css_regenerated']      = false;
+		$debug['css_file_not_written'] = true;
 	}
 
 	/**
@@ -1571,6 +1735,15 @@ trait Mcpwp_Elementor_Writer_Trait {
 		// --- 4. Rebuild CSS + HTML rendering cache ---
 		// Always regenerate — meta overwrite may leave post_content (HTML cache) stale.
 
+		// Populated around the css_regeneration call below, read by
+		// verify_css_file_was_written() further down — declared here (rather
+		// than inside either of the two separate `if ( $elementor_ok )`
+		// blocks that follow) because both need them and neither encloses
+		// the other.
+		$css_regen_started_at  = null;
+		$css_meta_status        = null;
+		$css_size_before_regen  = null;
+
 		if ( $elementor_ok ) {
 			if ( ! empty( \Elementor\Plugin::$instance->files_manager ) ) {
 				$cleared = $this->attempt_elementor_call(
@@ -1642,6 +1815,28 @@ trait Mcpwp_Elementor_Writer_Trait {
 			}
 
 			if ( class_exists( '\Elementor\Core\Files\CSS\Post' ) ) {
+				// Captured immediately before the call Elementor might write
+				// a file from, so verify_css_file_was_written() can tell a
+				// file this call actually rewrote from a stale one that
+				// merely survived from before (RC review WARN).
+				$css_regen_started_at = time();
+
+				// (RC review WARN round 2) The file's size BEFORE this call's
+				// write, so a content change can stand in for a trustworthy
+				// timestamp when the storage clock disagrees with PHP's —
+				// see verify_css_file_was_written() for why this exists
+				// alongside $css_regen_started_at rather than instead of it.
+				// clearstatcache() here for the same reason as the one a few
+				// lines below: nothing may have touched this exact path yet
+				// in this process, but a PRIOR page's write earlier in this
+				// same request/batch could have populated PHP's stat cache
+				// for a different post's identically-shaped path — cheap
+				// insurance either way.
+				$css_upload_dir_before = wp_upload_dir();
+				$css_path_before       = $css_upload_dir_before['basedir'] . '/elementor/css/post-' . $page_id . '.css';
+				clearstatcache( true, $css_path_before );
+				$css_size_before_regen = file_exists( $css_path_before ) ? filesize( $css_path_before ) : 0;
+
 				// Same Elementor API surface as the saves above: an unguarded throw
 				// here would still 500 a request whose data is already persisted.
 				$css_regen = $this->attempt_elementor_call(
@@ -1654,6 +1849,15 @@ trait Mcpwp_Elementor_Writer_Trait {
 					'css_regeneration'
 				);
 				$save_debug['css_regenerated'] = $css_regen['ok'];
+
+				// (RC review BLOCK) Read Elementor's own verdict now, before
+				// the priming block a few lines below can delete/refresh
+				// this same meta key on a small file — read any later and
+				// there is nothing left to read.
+				$css_meta = get_post_meta( $page_id, '_elementor_css', true );
+				if ( is_array( $css_meta ) && isset( $css_meta['status'] ) ) {
+					$css_meta_status = $css_meta['status'];
+				}
 			}
 		}
 
@@ -1661,8 +1865,32 @@ trait Mcpwp_Elementor_Writer_Trait {
 		if ( $elementor_ok ) {
 			$upload_dir = wp_upload_dir();
 			$css_path   = $upload_dir['basedir'] . '/elementor/css/post-' . $page_id . '.css';
+
+			// (RC review WARN) PHP caches stat() results per path; without
+			// clearing it here, a second write to the SAME page within one
+			// PHP process (a /batch or wp_batch request, or two back-to-back
+			// surgical operations) would read the FIRST write's cached
+			// size/mtime here instead of what THIS write actually produced —
+			// file_put_contents() does not invalidate the cache itself.
+			clearstatcache( true, $css_path );
 			$css_size   = file_exists( $css_path ) ? filesize( $css_path ) : 0;
 			$save_debug['css_file_size'] = $css_size;
+
+			// (#901) A reported success here can still be a lie — see
+			// verify_css_file_was_written() for why.
+			//
+			// (RC review NOTE) Deliberately verified BEFORE the loopback
+			// below, not after: that request runs 'blocking' => false, so
+			// this method never waits for it and moving the check past the
+			// wp_remote_get() call would not observe anything the loopback
+			// changed — the response is already on its way out before any
+			// remote render happens. What the loopback exists to fix is a
+			// thin-but-real 'file' CSS (< 10 bytes, needing a live page load
+			// to populate the full ruleset) — already a PASS above, since a
+			// non-empty, freshly-written file satisfies
+			// verify_css_file_was_written() regardless of this threshold.
+			// Nothing here downgrades a page the loopback is about to help.
+			$this->verify_css_file_was_written( $save_debug, $css_size, $css_path, $css_meta_status, $css_regen_started_at, $css_size_before_regen );
 
 			// If CSS is still empty/tiny, prime it via loopback request.
 			if ( $css_size < 10 ) {
@@ -2376,6 +2604,13 @@ trait Mcpwp_Elementor_Writer_Trait {
 		// Rebuild Elementor's CSS + HTML rendering cache.
 		// Always regenerate — Document::save() may have used stale data before
 		// our meta overwrite, leaving post_content (HTML cache) stale.
+
+		// See the matching declaration in set_elementor_data() for why these
+		// live outside either `if ( $elementor_ok )` block below.
+		$css_regen_started_at = null;
+		$css_meta_status       = null;
+		$css_size_before_regen = null;
+
 		if ( $elementor_ok ) {
 			if ( ! empty( \Elementor\Plugin::$instance->files_manager ) ) {
 				$cleared = $this->attempt_elementor_call(
@@ -2433,6 +2668,16 @@ trait Mcpwp_Elementor_Writer_Trait {
 			}
 
 			if ( class_exists( '\Elementor\Core\Files\CSS\Post' ) ) {
+				// Captured immediately before the call Elementor might write
+				// a file from — see set_elementor_data() for why.
+				$css_regen_started_at = time();
+
+				// (RC review WARN round 2) See set_elementor_data() for why.
+				$css_upload_dir_before = wp_upload_dir();
+				$css_path_before       = $css_upload_dir_before['basedir'] . '/elementor/css/post-' . $page_id . '.css';
+				clearstatcache( true, $css_path_before );
+				$css_size_before_regen = file_exists( $css_path_before ) ? filesize( $css_path_before ) : 0;
+
 				// Same Elementor API surface as the saves above: an unguarded throw
 				// here would still 500 a request whose data is already persisted.
 				$css_regen = $this->attempt_elementor_call(
@@ -2445,6 +2690,14 @@ trait Mcpwp_Elementor_Writer_Trait {
 					'css_regeneration'
 				);
 				$debug['css_regenerated'] = $css_regen['ok'];
+
+				// (RC review BLOCK) Read Elementor's own verdict now, before
+				// the priming block below can delete/refresh this same meta
+				// key on a small file.
+				$css_meta = get_post_meta( $page_id, '_elementor_css', true );
+				if ( is_array( $css_meta ) && isset( $css_meta['status'] ) ) {
+					$css_meta_status = $css_meta['status'];
+				}
 			}
 		}
 
@@ -2485,8 +2738,18 @@ trait Mcpwp_Elementor_Writer_Trait {
 		if ( $elementor_ok ) {
 			$upload_dir = wp_upload_dir();
 			$css_path   = $upload_dir['basedir'] . '/elementor/css/post-' . $page_id . '.css';
+
+			// (RC review WARN round 2) See set_elementor_data() for why.
+			clearstatcache( true, $css_path );
 			$css_size   = file_exists( $css_path ) ? filesize( $css_path ) : 0;
 			$debug['css_file_size'] = $css_size;
+
+			// (#901) A reported success here can still be a lie — see
+			// verify_css_file_was_written() for why. (RC review NOTE) See
+			// set_elementor_data() for why this runs before, not after, the
+			// non-blocking loopback below.
+			$this->verify_css_file_was_written( $debug, $css_size, $css_path, $css_meta_status, $css_regen_started_at, $css_size_before_regen );
+
 			if ( $css_size < 10 ) {
 				delete_post_meta( $page_id, '_elementor_css' );
 				$permalink = get_permalink( $page_id );
