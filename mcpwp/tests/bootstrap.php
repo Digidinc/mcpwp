@@ -2017,8 +2017,16 @@ if (! function_exists('wp_http_validate_url')) {
 if (! function_exists('url_to_postid')) {
     // Mirror WP: resolve the plain-permalink query vars (?p=ID / ?page_id=ID)
     // regardless of post status; pretty draft slugs fall through to path lookup.
+    // A test can also register an exact pretty-permalink URL -> post ID via
+    // $GLOBALS['mcpwp_test_url_to_postid'][$url] = $id, since get_permalink()
+    // here always returns the plain-permalink shape and this stub has no
+    // rewrite-rule engine to derive a pretty path from a post ID itself.
     function url_to_postid($url)
     {
+        if (isset($GLOBALS['mcpwp_test_url_to_postid'][ (string) $url ])) {
+            return (int) $GLOBALS['mcpwp_test_url_to_postid'][ (string) $url ];
+        }
+
         $query = (string) parse_url((string) $url, PHP_URL_QUERY);
         if ('' !== $query) {
             parse_str($query, $args);

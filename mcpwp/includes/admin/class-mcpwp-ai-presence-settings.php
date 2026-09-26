@@ -129,24 +129,35 @@ class Mcpwp_AI_Presence_Settings {
 		$indexnow = new Mcpwp_IndexNow();
 		$settings = $indexnow->get_settings();
 		?>
+		<p class="description">
+			<?php esc_html_e( 'When on, publishing or updating a public post or page sends its URL — never its content — to the shared IndexNow endpoint at api.indexnow.org, which relays it to participating search engines (Bing, Yandex, Naver, Seznam, Yep, Amazon — not Google).', 'mcpwp' ); ?>
+		</p>
 		<label>
 			<input type="checkbox" name="<?php echo esc_attr( Mcpwp_IndexNow::SETTINGS_OPTION ); ?>[enabled]" value="1" <?php checked( $settings['enabled'] ); ?> />
-			<?php esc_html_e( 'Automatically ping IndexNow when a public post or page is published or updated.', 'mcpwp' ); ?>
+			<?php esc_html_e( 'Automatically ping IndexNow when a public post or page is published or updated. Off by default.', 'mcpwp' ); ?>
 		</label><br />
 		<label>
 			<input type="checkbox" name="<?php echo esc_attr( Mcpwp_IndexNow::SETTINGS_OPTION ); ?>[force_non_production]" value="1" <?php checked( $settings['force_non_production'] ); ?> />
 			<?php esc_html_e( 'Also submit outside a production environment (normally off, so staging/local sites never ping the real endpoint).', 'mcpwp' ); ?>
 		</label>
 		<p class="description">
+			<?php if ( ! $indexnow->blog_public_allows_indexing() ) : ?>
+				<strong><?php esc_html_e( 'This site\'s Settings > Reading > "Discourage search engines from indexing this site" is on — IndexNow will not run regardless of the setting above, until that is turned off.', 'mcpwp' ); ?></strong><br />
+			<?php endif; ?>
 			<?php
-			printf(
-				/* translators: %s: key file URL */
-				esc_html__( 'Key file: %s', 'mcpwp' ),
-				'<code>' . esc_html( $indexnow->key_url() ) . '</code>'
-			);
+			$key_url = $indexnow->key_url();
+			if ( '' !== $key_url ) {
+				printf(
+					/* translators: %s: key file URL */
+					esc_html__( 'Key file: %s', 'mcpwp' ),
+					'<code>' . esc_html( $key_url ) . '</code>'
+				);
+			} else {
+				esc_html_e( 'No key has been generated yet — one is created automatically the first time this is turned on.', 'mcpwp' );
+			}
 			?>
 			<?php if ( $indexnow->defer_to_rankmath() ) : ?>
-				<br /><?php esc_html_e( 'Rank Math\'s own IndexNow module is active — MCPWP is deferring to it and will not submit.', 'mcpwp' ); ?>
+				<br /><?php esc_html_e( 'Rank Math\'s own Instant Indexing module is configured to auto-submit on this site — MCPWP is deferring to it and will not submit automatically.', 'mcpwp' ); ?>
 			<?php endif; ?>
 		</p>
 		<?php
@@ -213,9 +224,19 @@ class Mcpwp_AI_Presence_Settings {
 	 * @return array
 	 */
 	public function sanitize_indexnow_settings( $input ) {
-		$input = is_array( $input ) ? $input : array();
+		$input   = is_array( $input ) ? $input : array();
+		$enabled = ! empty( $input['enabled'] );
+
+		if ( $enabled && class_exists( 'Mcpwp_IndexNow' ) ) {
+			// Generate on enable (#937 WARN-1) — this Settings API sanitize
+			// callback IS the save path the admin form goes through, so the
+			// key must be created here rather than assuming some other
+			// caller already handled it.
+			( new Mcpwp_IndexNow() )->ensure_key_generated();
+		}
+
 		return array(
-			'enabled'              => ! empty( $input['enabled'] ),
+			'enabled'              => $enabled,
 			'force_non_production' => ! empty( $input['force_non_production'] ),
 		);
 	}

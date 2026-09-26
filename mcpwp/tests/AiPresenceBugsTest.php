@@ -42,20 +42,57 @@ final class AiPresenceBugsTest extends TestCase {
 		$this->assertTrue( $presence->should_serve_own_llms_txt() );
 	}
 
-	public function test_defers_to_yoast_llms_txt_by_default(): void {
+	/**
+	 * #937 adversarial review WARN-4: Yoast/Rank Math ship llms.txt OFF by
+	 * default (verified against Yoast 28.5 / Rank Math 1.0.279 source),
+	 * so being merely ACTIVE must never be treated as evidence on its own.
+	 */
+	public function test_does_not_defer_to_yoast_when_active_but_its_llms_txt_feature_is_off(): void {
 		$this->force_seo_plugin( 'yoast' );
+		update_option( 'wpseo', array( 'enable_llms_txt' => false ) );
+
+		$presence = new Mcpwp_AI_Presence();
+		$this->assertTrue( $presence->should_serve_own_llms_txt(), 'Yoast active with its own feature off must not shadow MCPWP\'s llms.txt' );
+	}
+
+	public function test_defers_to_yoast_when_its_llms_txt_feature_is_on(): void {
+		$this->force_seo_plugin( 'yoast' );
+		update_option( 'wpseo', array( 'enable_llms_txt' => true ) );
+
 		$presence = new Mcpwp_AI_Presence();
 		$this->assertFalse( $presence->should_serve_own_llms_txt() );
 	}
 
-	public function test_defers_to_rankmath_llms_txt_by_default(): void {
+	public function test_does_not_defer_to_rankmath_when_active_but_its_llms_txt_module_is_inactive(): void {
 		$this->force_seo_plugin( 'rankmath' );
+		update_option( 'rank_math_modules', array( 'sitemap', 'seo-analysis' ) );
+
+		$presence = new Mcpwp_AI_Presence();
+		$this->assertTrue( $presence->should_serve_own_llms_txt(), 'Rank Math active without the llms-txt module must not shadow MCPWP\'s llms.txt' );
+	}
+
+	public function test_defers_to_rankmath_when_its_llms_txt_module_is_active(): void {
+		$this->force_seo_plugin( 'rankmath' );
+		update_option( 'rank_math_modules', array( 'sitemap', 'llms-txt' ) );
+
 		$presence = new Mcpwp_AI_Presence();
 		$this->assertFalse( $presence->should_serve_own_llms_txt() );
+	}
+
+	public function test_defers_when_a_physical_llms_txt_file_exists_regardless_of_any_flag(): void {
+		$path = rtrim( ABSPATH, '/' ) . '/llms.txt';
+		file_put_contents( $path, "# someone else's llms.txt\n" );
+		try {
+			$presence = new Mcpwp_AI_Presence();
+			$this->assertFalse( $presence->should_serve_own_llms_txt() );
+		} finally {
+			unlink( $path );
+		}
 	}
 
 	public function test_force_llms_txt_setting_overrides_deference(): void {
 		$this->force_seo_plugin( 'yoast' );
+		update_option( 'wpseo', array( 'enable_llms_txt' => true ) );
 		update_option( Mcpwp_AI_Presence::SETTINGS_OPTION, array( 'force_llms_txt' => true ) );
 
 		$presence = new Mcpwp_AI_Presence();

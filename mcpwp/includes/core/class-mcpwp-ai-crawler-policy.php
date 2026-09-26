@@ -37,7 +37,8 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 class Mcpwp_AI_Crawler_Policy {
 
-	const OPTION_NAME = 'mcpwp_ai_crawler_policy';
+	const OPTION_NAME    = 'mcpwp_ai_crawler_policy';
+	const CONFLICTS_OPTION = 'mcpwp_ai_crawler_policy_conflicts';
 
 	const TYPE_SEARCH   = 'search';
 	const TYPE_TRAINING = 'training';
@@ -193,11 +194,27 @@ class Mcpwp_AI_Crawler_Policy {
 	}
 
 	/**
-	 * Build the denylist block for robots.txt. Idempotent: skips a bot
-	 * already mentioned anywhere in the existing output (case-insensitive)
-	 * so this never duplicates a directive an SEO plugin's own robots.txt
-	 * filter already emitted for the same agent, and calling this twice on
-	 * the same $output never doubles the block.
+	 * Build the denylist block for robots.txt. Idempotent against ITSELF
+	 * (calling this twice on output that already carries our own
+	 * delimited block never doubles it), and always emits every denied
+	 * bot inside that block regardless of what else the output already
+	 * contains.
+	 *
+	 * Earlier revision silently skipped a bot when the existing output
+	 * already mentioned that exact User-agent, assuming another plugin's
+	 * directive was equivalent cooperation. Adversarial review (#937
+	 * NOTE-1) correctly flagged that as an unsafe assumption: the existing
+	 * directive could be an Allow, or something narrower than a full
+	 * Disallow: /, in which case the owner's explicit "deny" choice would
+	 * be silently unenforced. This now always appends our own deny group
+	 * for every bot the policy denies — per robots.txt precedence rules a
+	 * second `User-agent: X` group for the same agent is additional
+	 * directives for that agent (Google documents merging same-agent
+	 * groups; the practical effect of *our* group is an unconditional
+	 * `Disallow: /`, which cannot be loosened by an earlier Allow). Any
+	 * pre-existing directive for a denied bot is instead surfaced via
+	 * detect_conflicts() so a site owner/agent is told about the overlap
+	 * rather than either side silently winning.
 	 *
 	 * @param string $output Robots.txt content assembled so far.
 	 * @return string Lines to append, or '' when there is nothing to add.
@@ -219,24 +236,38 @@ class Mcpwp_AI_Crawler_Policy {
 		$lines   = array();
 		$lines[] = self::BLOCK_START;
 		foreach ( $denied as $bot ) {
-			if ( false !== stripos( (string) $output, 'user-agent: ' . $bot ) ) {
-				// Some other filter (an SEO plugin's own robots.txt output)
-				// already carries a directive for this exact agent —
-				// cooperate rather than emit a second, possibly
-				// contradictory block for it.
-				continue;
-			}
 			$lines[] = 'User-agent: ' . $bot;
 			$lines[] = 'Disallow: /';
 		}
 		$lines[] = self::BLOCK_END;
 
-		// Every denied bot was already covered by someone else's output.
-		if ( 2 === count( $lines ) ) {
-			return '';
+		return implode( "\n", $lines );
+	}
+
+	/**
+	 * Bots this policy denies that ALSO already have some directive for
+	 * that exact User-agent elsewhere in the robots.txt output — worth
+	 * surfacing (#937 NOTE-1) even though build_block() no longer skips
+	 * them, since two same-agent groups (ours and theirs) is still worth
+	 * a site owner's attention.
+	 *
+	 * @param string $output Robots.txt content assembled so far (BEFORE our own block is appended).
+	 * @return string[] Bot names with a pre-existing directive.
+	 */
+	public static function detect_conflicts( $output ) {
+		$policy = self::get_policy();
+		$denied = array_keys( array_filter( $policy, static function ( $v ) {
+			return 'deny' === $v;
+		} ) );
+
+		$conflicts = array();
+		foreach ( $denied as $bot ) {
+			if ( false !== stripos( (string) $output, 'user-agent: ' . $bot ) ) {
+				$conflicts[] = $bot;
+			}
 		}
 
-		return implode( "\n", $lines );
+		return $conflicts;
 	}
 
 	/**
@@ -246,6 +277,17 @@ class Mcpwp_AI_Crawler_Policy {
 	 * @return string
 	 */
 	public static function append_to_robots( $output ) {
+		// Recorded here (the one place that sees robots.txt as WordPress and
+		// every other plugin actually assembled it) rather than recomputed
+		// on demand by the read tool, which has no such view without
+		// fragile filter-introspection (#937 NOTE-1).
+		$conflicts = self::detect_conflicts( $output );
+		if ( ! empty( $conflicts ) ) {
+			update_option( self::CONFLICTS_OPTION, $conflicts, false );
+		} else {
+			delete_option( self::CONFLICTS_OPTION );
+		}
+
 		$block = self::build_block( $output );
 		if ( '' === $block ) {
 			return $output;
@@ -253,5 +295,17 @@ class Mcpwp_AI_Crawler_Policy {
 
 		$output = rtrim( (string) $output, "\n" );
 		return ( '' !== $output ? $output . "\n" : '' ) . $block . "\n";
+	}
+
+	/**
+	 * Bots with a conflict last time robots.txt was actually generated
+	 * (see append_to_robots()). May be briefly stale between robots.txt
+	 * requests; refreshed on every real one.
+	 *
+	 * @return string[]
+	 */
+	public static function last_known_conflicts() {
+		$stored = get_option( self::CONFLICTS_OPTION, array() );
+		return is_array( $stored ) ? $stored : array();
 	}
 }

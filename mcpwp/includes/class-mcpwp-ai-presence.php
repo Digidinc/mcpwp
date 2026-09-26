@@ -35,7 +35,15 @@ class Mcpwp_AI_Presence {
 	 */
 	public function register() {
 		add_action( 'parse_request', array( $this, 'maybe_serve_llms_txt' ) );
-		add_filter( 'robots_txt', array( $this, 'filter_robots_txt' ), 10, 2 );
+		// Very late priority (#937 adversarial review NOTE-1): an SEO
+		// plugin's own robots_txt filter commonly runs late too (Yoast:
+		// 99999) to have the last word over core's defaults. Running after
+		// it means our dedupe check (existing "sitemap:"/"user-agent: X"
+		// text) sees what that plugin ACTUALLY produced, not just whatever
+		// ran before us — and our own appended content lands last, after
+		// every other plugin's block, which is also the clearer read for a
+		// human or agent looking at the final file.
+		add_filter( 'robots_txt', array( $this, 'filter_robots_txt' ), PHP_INT_MAX - 10, 2 );
 		add_action( 'wp_head', array( $this, 'output_llms_link_tag' ), 1 );
 	}
 
@@ -58,14 +66,36 @@ class Mcpwp_AI_Presence {
 	/**
 	 * Whether MCPWP should serve its own /llms.txt right now.
 	 *
-	 * Yoast ships llms.txt free to every install, and Rank Math has its own
-	 * generator; both would otherwise be shadowed by MCPWP unconditionally
-	 * answering the same request first (#bug 1). Detection here is
-	 * deliberately coarse — "is a coexistence-partner SEO plugin active at
-	 * all" — because there is no reliable, version-stable per-plugin
-	 * feature flag to probe, and the instruction that matters is: when
-	 * unsure, defer. `force_llms_txt` is the explicit escape hatch for a
-	 * site that wants MCPWP's version regardless.
+	 * #937 adversarial review WARN-4: deferring merely because Yoast/Rank
+	 * Math is ACTIVE was wrong — both ship llms.txt as an opt-in feature
+	 * that defaults OFF, so a site running Yoast for meta/schema only
+	 * would get neither plugin's llms.txt if MCPWP deferred on presence
+	 * alone. Deference now requires POSITIVE evidence the other plugin's
+	 * llms.txt is actually configured to serve, checked in order:
+	 *
+	 *   1. A physical llms.txt file at the site root. Yoast (verified
+	 *      against Yoast 28.5 source, 2026-09-26) writes a REAL file via
+	 *      WP_Filesystem to get_home_path() . 'llms.txt' — the same
+	 *      "static file wins before WordPress even routes the request"
+	 *      situation as a physical robots.txt (see
+	 *      Mcpwp_AI_Crawler_Policy::physical_robots_file_exists()). If
+	 *      that file exists, it will answer the request regardless of
+	 *      what MCPWP does, so there is nothing to gain by also serving
+	 *      ours and a real risk of the two disagreeing.
+	 *   2. Yoast's own feature flag: option `wpseo`, key `enable_llms_txt`
+	 *      (Yoast\WP\SEO\...\Enable_Llms_Txt_Option_Watcher reads this
+	 *      exact option/key; default false).
+	 *   3. Rank Math's own module flag: option `rank_math_modules`
+	 *      contains `llms-txt` (Rank Math's module id for its dynamically-
+	 *      served, template_redirect-based llms.txt — verified against
+	 *      Rank Math 1.0.279 source; NOT in the default-active module
+	 *      list, so inactive on a fresh install).
+	 *
+	 * AIOSEO/SEOPress are not known to ship an llms.txt feature at all as
+	 * of this writing, so no flag is probed for them; being active alone
+	 * is no longer treated as evidence for any of the four. `force_llms_txt`
+	 * remains the explicit escape hatch for a site that wants MCPWP's
+	 * version regardless of what else is configured.
 	 *
 	 * @return bool
 	 */
@@ -74,7 +104,54 @@ class Mcpwp_AI_Presence {
 			return true;
 		}
 
-		return ! Mcpwp_SEO_Plugin_Detect::any_active();
+		if ( $this->llms_txt_physical_file_exists() ) {
+			return false;
+		}
+
+		if ( $this->yoast_llms_txt_enabled() ) {
+			return false;
+		}
+
+		if ( $this->rankmath_llms_txt_enabled() ) {
+			return false;
+		}
+
+		return true;
+	}
+
+	/**
+	 * A physical llms.txt file at the site root — see should_serve_own_llms_txt().
+	 *
+	 * @return bool
+	 */
+	private function llms_txt_physical_file_exists() {
+		return file_exists( trailingslashit( ABSPATH ) . 'llms.txt' );
+	}
+
+	/**
+	 * Yoast's llms.txt feature flag — see should_serve_own_llms_txt().
+	 *
+	 * @return bool
+	 */
+	private function yoast_llms_txt_enabled() {
+		if ( ! Mcpwp_SEO_Plugin_Detect::is_yoast_active() ) {
+			return false;
+		}
+		$wpseo = get_option( 'wpseo', array() );
+		return is_array( $wpseo ) && ! empty( $wpseo['enable_llms_txt'] );
+	}
+
+	/**
+	 * Rank Math's llms.txt module flag — see should_serve_own_llms_txt().
+	 *
+	 * @return bool
+	 */
+	private function rankmath_llms_txt_enabled() {
+		if ( ! Mcpwp_SEO_Plugin_Detect::is_rankmath_active() ) {
+			return false;
+		}
+		$modules = (array) get_option( 'rank_math_modules', array() );
+		return in_array( 'llms-txt', $modules, true );
 	}
 
 	/**

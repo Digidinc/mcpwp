@@ -133,6 +133,7 @@ class Mcpwp_REST_AI_Presence extends Mcpwp_REST_API {
 		}
 
 		$physical_file = Mcpwp_AI_Crawler_Policy::physical_robots_file_exists();
+		$conflicts     = Mcpwp_AI_Crawler_Policy::last_known_conflicts();
 
 		return array(
 			'bots'                   => $described,
@@ -141,6 +142,10 @@ class Mcpwp_REST_AI_Presence extends Mcpwp_REST_API {
 			'policy_applies'         => ! $physical_file,
 			'warning'                => $physical_file
 				? 'A physical robots.txt file exists at the site root. WordPress only serves its virtual robots.txt (which is where this policy is written) when no physical file is present, so this policy cannot take effect until that file is removed or updated by hand.'
+				: '',
+			'conflicts'              => $conflicts,
+			'conflicts_note'         => ! empty( $conflicts )
+				? 'These denied bots also have some other directive for the exact same User-agent elsewhere in robots.txt (last observed the previous time robots.txt was generated) — MCPWP still appends its own Disallow: / for them, but a second group for the same agent is worth reviewing by hand.'
 				: '',
 		);
 	}
@@ -159,7 +164,16 @@ class Mcpwp_REST_AI_Presence extends Mcpwp_REST_API {
 	}
 
 	/**
-	 * POST /indexnow/submit
+	 * POST /indexnow/submit — admin scope only (see the '/mcpwp/v1/indexnow'
+	 * entry in trait-mcpwp-api-auth.php's $admin_write_routes table).
+	 *
+	 * #937 WARN-3 hardening over the automatic publish-hook path: every
+	 * gate that governs automatic submission (off switch, blog_public,
+	 * environment, Rank Math deferral) applies here too — there is no
+	 * "explicit calls bypass the environment gate" carve-out — plus a
+	 * per-call cap, a 1/minute throttle, and URL validation that requires
+	 * each URL to resolve via url_to_postid() to a currently-indexable
+	 * post and rejects any URL carrying a query string.
 	 *
 	 * @param WP_REST_Request $request Request.
 	 * @return WP_REST_Response|WP_Error
@@ -183,30 +197,48 @@ class Mcpwp_REST_AI_Presence extends Mcpwp_REST_API {
 
 		$indexnow = new Mcpwp_IndexNow();
 
-		// An explicit submit call is allowed to run in a non-production
-		// environment (that gate only governs the automatic publish-hook
-		// path); the off-switch and the Rank Math deferral still apply.
+		$reason_messages = array(
+			'disabled_by_setting'              => array( 'indexnow_disabled', __( 'IndexNow is disabled in MCPWP settings.', 'mcpwp' ) ),
+			'site_discourages_search_engines'  => array( 'indexnow_blog_public_off', __( 'This site\'s "Discourage search engines from indexing this site" setting is on. IndexNow will not run while that is set, regardless of the IndexNow setting.', 'mcpwp' ) ),
+			'non_production_environment'       => array( 'indexnow_non_production', __( 'This environment is not production and IndexNow is not forced on for non-production environments in MCPWP settings.', 'mcpwp' ) ),
+			'rankmath_indexnow_active'         => array( 'indexnow_deferred_to_rankmath', __( 'Rank Math\'s own Instant Indexing module is configured to auto-submit on this site. MCPWP defers to it to avoid double-submitting the same URLs.', 'mcpwp' ) ),
+		);
+
 		$reason = $indexnow->blocked_reason();
-		if ( 'rankmath_indexnow_active' === $reason ) {
-			return $this->error_response(
-				'indexnow_deferred_to_rankmath',
-				__( 'Rank Math\'s own IndexNow module is active on this site. MCPWP defers to it to avoid double-submitting the same URLs.', 'mcpwp' ),
-				409
-			);
+		if ( isset( $reason_messages[ $reason ] ) ) {
+			list( $code, $message ) = $reason_messages[ $reason ];
+			return $this->error_response( $code, $message, 409 );
 		}
-		if ( 'disabled_by_setting' === $reason ) {
+
+		if ( ! $indexnow->check_and_consume_submit_throttle() ) {
 			return $this->error_response(
-				'indexnow_disabled',
-				__( 'IndexNow is disabled in MCPWP settings.', 'mcpwp' ),
-				409
+				'indexnow_throttled',
+				__( 'Explicit IndexNow submissions are limited to once per minute. Try again shortly.', 'mcpwp' ),
+				429
 			);
 		}
 
-		$result = $indexnow->submit( $urls );
+		$validated = $indexnow->validate_explicit_urls( $urls );
+		if ( is_wp_error( $validated ) ) {
+			return $validated;
+		}
+
+		if ( empty( $validated['valid'] ) ) {
+			return $this->error_response(
+				'indexnow_no_valid_urls',
+				__( 'None of the submitted URLs are eligible: each must belong to this site, carry no query string, and resolve to a currently-published, indexable post.', 'mcpwp' ),
+				400,
+				array( 'rejected' => $validated['rejected'] )
+			);
+		}
+
+		$result = $indexnow->submit( $validated['valid'] );
 
 		if ( is_wp_error( $result ) ) {
 			return $result;
 		}
+
+		$result['rejected'] = $validated['rejected'];
 
 		return $this->success_response( $result );
 	}

@@ -23,9 +23,28 @@ if ( ! defined( 'ABSPATH' ) ) {
 class Mcpwp_SEO_Plugin_Detect {
 
 	/**
+	 * The `mcpwp_seo_plugin_active_override` filter value, once, or null
+	 * when unset. Shared by every is_X_active() check below AND by
+	 * active_plugin_slug() so a test (or a site correcting a detection
+	 * edge case) has exactly one lever, consistently honored everywhere —
+	 * not just by the coarse any_active()/active_plugin_slug() pair. See
+	 * active_plugin_slug()'s docblock for why this exists instead of
+	 * defining/undefining a real plugin constant.
+	 *
+	 * @return string|null
+	 */
+	private static function override() {
+		return apply_filters( 'mcpwp_seo_plugin_active_override', null );
+	}
+
+	/**
 	 * @return bool
 	 */
 	public static function is_yoast_active() {
+		$override = self::override();
+		if ( null !== $override ) {
+			return 'yoast' === $override;
+		}
 		return defined( 'WPSEO_VERSION' );
 	}
 
@@ -33,6 +52,10 @@ class Mcpwp_SEO_Plugin_Detect {
 	 * @return bool
 	 */
 	public static function is_rankmath_active() {
+		$override = self::override();
+		if ( null !== $override ) {
+			return 'rankmath' === $override;
+		}
 		return class_exists( 'RankMath' ) || defined( 'RANK_MATH_VERSION' );
 	}
 
@@ -40,6 +63,10 @@ class Mcpwp_SEO_Plugin_Detect {
 	 * @return bool
 	 */
 	public static function is_aioseo_active() {
+		$override = self::override();
+		if ( null !== $override ) {
+			return 'aioseo' === $override;
+		}
 		return defined( 'AIOSEO_VERSION' );
 	}
 
@@ -47,6 +74,10 @@ class Mcpwp_SEO_Plugin_Detect {
 	 * @return bool
 	 */
 	public static function is_seopress_active() {
+		$override = self::override();
+		if ( null !== $override ) {
+			return 'seopress' === $override;
+		}
 		return defined( 'SEOPRESS_VERSION' );
 	}
 
@@ -75,7 +106,7 @@ class Mcpwp_SEO_Plugin_Detect {
 	 * @return string
 	 */
 	public static function active_plugin_slug() {
-		$override = apply_filters( 'mcpwp_seo_plugin_active_override', null );
+		$override = self::override();
 		if ( null !== $override ) {
 			return (string) $override;
 		}

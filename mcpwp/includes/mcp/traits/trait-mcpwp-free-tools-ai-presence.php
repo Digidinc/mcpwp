@@ -55,12 +55,12 @@ trait Mcpwp_Free_Tools_AI_Presence_Trait {
 
 		$tools[] = $this->define_tool(
 			'wp_indexnow_submit',
-			'Explicitly submit one or more of this site\'s own URLs to the shared IndexNow endpoint (relays to Bing, Yandex, Naver, Seznam, Yep, Amazon — not Google). Refused if Rank Math\'s own IndexNow module is active on this site (avoids double-submitting) or if IndexNow is disabled in MCPWP settings. Unlike the automatic publish-hook path, this explicit call is not blocked by the production-only environment gate.',
+			'Explicitly submit up to 100 of this site\'s own URLs to the shared IndexNow endpoint (relays to Bing, Yandex, Naver, Seznam, Yep, Amazon — not Google). Requires an admin-scoped key and is limited to one call per minute. Every URL must resolve to a currently-published, indexable post on this site with no query string — a URL that fails validation is reported back in "rejected", not silently dropped. Refused (whole call, nothing sent) if IndexNow is disabled, this site\'s "Discourage search engines" setting is on, the environment is non-production and not forced on, or Rank Math\'s own Instant Indexing module is configured to auto-submit — call wp_indexnow_status first to see which, if any, applies.',
 			array(
 				'urls' => array(
 					'type'        => 'array',
 					'items'       => array( 'type' => 'string' ),
-					'description' => 'URLs to submit. Must belong to this site; others are silently dropped.',
+					'description' => 'Up to 100 URLs to submit. Each must belong to this site, carry no query string, and resolve to a currently-indexable post.',
 					'required'    => true,
 				),
 			)

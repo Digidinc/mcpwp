@@ -105,15 +105,45 @@ final class AiCrawlerPolicyTest extends TestCase {
 		$this->assertSame( 1, substr_count( $twice, Mcpwp_AI_Crawler_Policy::BLOCK_START ) );
 	}
 
-	public function test_does_not_duplicate_a_directive_an_seo_plugin_already_emitted_for_the_same_agent(): void {
+	/**
+	 * #937 adversarial review NOTE-1: an owner's explicit "deny" must
+	 * never be silently unenforced just because some other plugin already
+	 * mentions the same agent — our own Disallow: / group is always
+	 * appended. The overlap is still worth surfacing, via a separate
+	 * conflicts list rather than by dropping our directive.
+	 */
+	public function test_still_appends_deny_even_when_another_plugin_already_mentions_the_same_agent(): void {
 		Mcpwp_AI_Crawler_Policy::set_policy( array( 'GPTBot' => 'deny', 'CCBot' => 'deny' ) );
 
 		// Some other robots_txt filter already added its own GPTBot rule.
 		$existing = "User-agent: *\nDisallow:\nUser-agent: GPTBot\nDisallow: /private\n";
 		$block    = Mcpwp_AI_Crawler_Policy::build_block( $existing );
 
-		$this->assertStringNotContainsString( 'User-agent: GPTBot', $block );
+		$this->assertStringContainsString( 'User-agent: GPTBot', $block );
 		$this->assertStringContainsString( 'User-agent: CCBot', $block );
+	}
+
+	public function test_detects_and_surfaces_the_conflict_without_dropping_the_deny(): void {
+		Mcpwp_AI_Crawler_Policy::set_policy( array( 'GPTBot' => 'deny', 'CCBot' => 'deny' ) );
+
+		$existing  = "User-agent: *\nDisallow:\nUser-agent: GPTBot\nDisallow: /private\n";
+		$conflicts = Mcpwp_AI_Crawler_Policy::detect_conflicts( $existing );
+
+		$this->assertSame( array( 'GPTBot' ), $conflicts );
+
+		// append_to_robots() records the same conflicts for the read tool to surface.
+		Mcpwp_AI_Crawler_Policy::append_to_robots( $existing );
+		$this->assertSame( array( 'GPTBot' ), Mcpwp_AI_Crawler_Policy::last_known_conflicts() );
+	}
+
+	public function test_conflicts_clear_once_the_other_plugin_no_longer_mentions_the_bot(): void {
+		Mcpwp_AI_Crawler_Policy::set_policy( array( 'GPTBot' => 'deny' ) );
+
+		Mcpwp_AI_Crawler_Policy::append_to_robots( "User-agent: *\nUser-agent: GPTBot\nAllow: /\n" );
+		$this->assertSame( array( 'GPTBot' ), Mcpwp_AI_Crawler_Policy::last_known_conflicts() );
+
+		Mcpwp_AI_Crawler_Policy::append_to_robots( "User-agent: *\nDisallow:\n" );
+		$this->assertSame( array(), Mcpwp_AI_Crawler_Policy::last_known_conflicts() );
 	}
 
 	public function test_physical_robots_file_detection(): void {
