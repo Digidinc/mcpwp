@@ -67,6 +67,7 @@ mcpwp-pro-*.zip
 #                                             credential-shaped literal fails it
 scripts/*.py
 !scripts/verify_release_compatibility.py
+!scripts/intake_triage.py
 scripts/*.php
 scripts/update-github-assets.sh
 scripts/validate-workflows.sh
