@@ -13,6 +13,12 @@ MCPWP ships to **two independent update fleets**. Publishing one reaches none of
 
 Releases are cut by **release-please**. Do not bump versions by hand.
 
+`release-please-config.json` sets `versioning: always-bump-patch`, so **every release is
+`3.14.N`** — `feat:`, `fix:`, and breaking changes all bump the patch digit, until the owner
+decides to move off the 3.14 line. Checkpoints on that line are tracked as GitHub milestones, not
+version numbers: "3.14.1 — Solid ground", "3.14.5 — Agent-native", "3.14.9 — Self-improving +
+go-to-market".
+
 1. Merge reviewed, green PRs to `main` with conventional-commit titles (`feat:`, `fix:`).
 2. release-please keeps a release PR open that bumps `mcpwp/mcpwp.php`, `MCPWP_VERSION`, `readme.txt`, `version.json` and `mcpwp/CHANGELOG.md` together.
 3. If the release changes behaviour a site owner would notice, add an `### Upgrade Notes` section with plain-language bullets under that version in `mcpwp/CHANGELOG.md`. `scripts/sync-wporg-changelog.mjs` carries it to readme.txt's `== Upgrade Notice ==` and to the `version.json` update modal.
@@ -21,9 +27,40 @@ Releases are cut by **release-please**. Do not bump versions by hand.
 
 A release is not shipped until both publish jobs are green. Each one fails the run if its channel cannot serve the new version.
 
+### When GitHub Actions can't run the release
+
+Actions billing has blocked this workflow twice (used for 3.13.1 and 3.14.0) — release-please and
+the publish jobs are `release-please@16` and shell scripts, so they run the same way from a local
+checkout:
+
+```bash
+T=$(env -u GITHUB_TOKEN gh auth token)
+
+npx -y release-please@16 release-pr \
+  --token="$T" --repo-url=Mumega-com/mcpwp --target-branch=main \
+  --config-file=release-please-config.json --manifest-file=.release-please-manifest.json
+
+# merge the Release PR by hand, then:
+npx -y release-please@16 github-release \
+  --token="$T" --repo-url=Mumega-com/mcpwp --target-branch=main \
+  --config-file=release-please-config.json --manifest-file=.release-please-manifest.json
+gh release edit vX --title "MCPWP vX"
+
+node scripts/sync-wporg-changelog.mjs --version X && git add -A && git commit -m "chore: sync WP.org changelog for vX" && git push
+python3 scripts/verify_release_compatibility.py --manifest version.json --plugin mcpwp/mcpwp.php --readme mcpwp/readme.txt
+bash mcpwp/scripts/build-all.sh
+# Attach only the free + freemius ZIPs to the GitHub release — never the agency ZIP (#852)
+bash scripts/publish_update_release.sh --build
+curl -sI https://updates.mcpwp.net/mcpwp-latest.zip | grep -i version
+```
+
+Then the owner runs the Freemius publish: `FREEMIUS_BEARER_TOKEN=… bash scripts/release_freemius.sh --version X --skip-bump`.
+
 ## Pinning the version
 
-release-please derives the next version from the commits since the last tag: any `feat:` means a minor bump. To ship a different version (for example a planned patch release that contains a small feature), land a commit on `main` whose message has a footer line, on its own line at the start:
+With `versioning: always-bump-patch`, release-please bumps the patch digit regardless of commit
+type — there is no automatic minor/major bump to override on this line. `Release-As` is still how
+you move off the 3.14 line intentionally: land a commit on `main` whose message has a footer line, on its own line at the start:
 
 ```
 Release-As: X.Y.Z

@@ -1,5 +1,9 @@
 # WordPress.org Plugin Name/Slug Exception Request (#495 / #521)
 
+> **SUPERSEDED (2026-09-26, #931):** MCPWP is not going on WordPress.org — it is distributed
+> directly (updates.mcpwp.net, Freemius, directories). The wp.org listing stays the separate
+> "Mumega MCP" edition. Nothing here needs sending. Kept for reference only.
+>
 > STATUS: DRAFT for Hadi to send. Decision (2026-06-11): **pursue the exception** — keep the `MCPWP` name + `mcpwp` slug rather than rename.
 
 ## Context & realistic odds (read before sending)

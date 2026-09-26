@@ -33,6 +33,39 @@ docker inspect wp-rig-wp-dev --format '{{range .Mounts}}{{.Source}} -> {{.Destin
 
 There is no PHP on the host — every PHP or WP-CLI command must run inside the container.
 
+**Parallel work hazard:** `wp-rig-wp-dev`'s bind mount points at this shared checkout, so two
+agents testing at once are editing the same files under the same web server. Isolated work stands
+up its own throwaway container against its own clone rather than testing against the shared mount.
+
+### Testing without the shared rig
+
+PHPUnit needs a `vendor/` (composer-installed; `mcpwp/vendor/` is gitignored and not shipped), but
+it does not need `wp-rig-wp-dev`. Point a throwaway container at any composer-installed vendor
+directory — from a `composer install` in this worktree, another worktree, or a scratch clone — and
+mount it read-only next to the plugin:
+
+```bash
+docker run --rm \
+  -v <worktree>/mcpwp:/app \
+  -v <any-composer-installed>/mcpwp/vendor:/app/vendor:ro \
+  -w /app php:8.3-cli php vendor/bin/phpunit -c tests/phpunit.xml
+```
+
+This never touches the shared rig or its bind mount, so it is safe to run from an isolated worktree
+while other work is live on `wp-rig-wp-dev`.
+
+**Testing a Pro surface** needs the agency-license marker, `mcpwp/includes/agency-license.php`
+returning `'MCPWP_AGENCY_LICENSE_V1'` (see `Mcpwp_License::agency_license_active()`). It is not
+gitignored and is not in any shipped ZIP — create it only inside your own worktree, delete it when
+done, and never commit it:
+
+```bash
+printf '<?php\nreturn '"'"'MCPWP_AGENCY_LICENSE_V1'"'"';\n' > mcpwp/includes/agency-license.php
+```
+
+(`MCPWP_TESTS` + CLI SAPI is the other Pro switch — that one is what the PHPUnit bootstrap uses,
+and by design it cannot be reached by a web request.)
+
 ### Generate API Key
 ```bash
 docker exec wp-rig-wp-dev bash -c 'php -r "
@@ -109,9 +142,15 @@ bash mcpwp/scripts/build-all.sh
 
 | Zip | Pro? | License | Use for |
 |-----|------|---------|---------|
-| `mcpwp-X.Y.Z.zip` | No | — | WordPress.org submission |
+| `mcpwp-X.Y.Z.zip` | No | — | Free direct-download / self-hosted install |
 | `mcpwp-agency-X.Y.Z.zip` | Always on | None needed | Agency/client installs |
 | `mcpwp-freemius-X.Y.Z.zip` | Via key | Freemius | Paid users |
+
+**Editions, not to be confused:** MCPWP (this repo) is the professional plugin, distributed directly
+— `updates.mcpwp.net`, Freemius, and the directories in `docs/launch/directories/`. It is not on
+WordPress.org. The wp.org listing (slug `mumega-mcp`, display name "Mumega MCP") is a separate,
+reduced edition built from a different tree and is not an MCPWP distribution channel (owner
+decision, 2026-09-26, #931 closed not planned).
 
 Agency build writes a build-time marker file (`includes/agency-license.php`) at build time — no wp-config.php changes, no license prompt. A wp-config.php `define('MCPWP_PRO', true)` is NOT honoured by any build, Free or Freemius included (issue #863) — the marker file is the only thing that unlocks Pro without Freemius, and only `scripts/build-agency.sh` writes it. Includes self-update channel (`updates.mcpwp.net`).
 
@@ -119,9 +158,44 @@ Agency builds are **not public** (#852): anyone holding one has every Pro featur
 
 ### Release a New Version
 
-**release-please owns versioning — never hand-bump.** Land Conventional Commits on `main`
-(`fix:` → patch, `feat:` → minor); release-please opens/updates a release PR that bumps all six
-version artefacts, writes the changelog, tags, and creates the GitHub Release when a human merges it.
+**release-please owns versioning — never hand-bump.** Since `versioning: always-bump-patch`
+(`release-please-config.json`), **every release is `3.14.N`** — `fix:`, `feat:`, and breaking
+changes all bump the patch digit, not the minor or major — until the owner decides to move off the
+3.14 line. Land Conventional Commits on `main`; release-please opens/updates a release PR that bumps
+all six version artefacts, writes the changelog, tags, and creates the GitHub Release when a human
+merges it. Checkpoints on the 3.14 line are tracked as GitHub milestones, not version numbers:
+"3.14.1 — Solid ground", "3.14.5 — Agent-native", "3.14.9 — Self-improving + go-to-market".
+
+**Fallback when GitHub Actions can't run a release** (billing blocked it twice — used for 3.13.1
+and 3.14.0): run release-please locally instead of waiting on CI.
+
+```bash
+T=$(env -u GITHUB_TOKEN gh auth token)
+
+# 1. Open/update the release PR
+npx -y release-please@16 release-pr \
+  --token="$T" --repo-url=Mumega-com/mcpwp --target-branch=main \
+  --config-file=release-please-config.json --manifest-file=.release-please-manifest.json
+
+# 2. Merge the Release PR, then tag + create the GitHub Release
+npx -y release-please@16 github-release \
+  --token="$T" --repo-url=Mumega-com/mcpwp --target-branch=main \
+  --config-file=release-please-config.json --manifest-file=.release-please-manifest.json
+gh release edit vX --title "MCPWP vX"
+
+# 3. Carry the changelog to the wp.org-format readme.txt, verify version consistency, build, publish
+node scripts/sync-wporg-changelog.mjs --version X && git add -A && git commit -m "chore: sync WP.org changelog for vX" && git push
+python3 scripts/verify_release_compatibility.py --manifest version.json --plugin mcpwp/mcpwp.php --readme mcpwp/readme.txt
+bash mcpwp/scripts/build-all.sh
+# Attach only the free + freemius ZIPs to the GitHub release — never the agency ZIP (#852)
+bash scripts/publish_update_release.sh --build
+
+# 4. Verify the live ZIP actually shipped
+curl -sI https://updates.mcpwp.net/mcpwp-latest.zip | grep -i version
+curl -s https://updates.mcpwp.net/mcpwp-latest.zip -o /tmp/mcpwp-latest.zip && unzip -p /tmp/mcpwp-latest.zip mcpwp/mcpwp.php | grep -i "Version:\|MCPWP_VERSION"
+```
+
+The owner runs the Freemius publish separately: `FREEMIUS_BEARER_TOKEN=… bash scripts/release_freemius.sh --version X --skip-bump`.
 
 Merge the release PR (`chore(main): release X.Y.Z`) → tags `vX.Y.Z`. release-please then publishes
 automatically (`publish-canonical-channel` job): it uploads `version.json` + the self-hosted ZIP +
@@ -159,7 +233,10 @@ Release PRs get **no CI** — GitHub does not trigger workflows for `GITHUB_TOKE
 
 ### How the Updater Works
 1. Checks `mcpwp_update_info` WP option first
-2. Falls back to `mcpwp_version_url` option or hardcoded mumega.com manifest URL
+2. Falls back to `mcpwp_version_url` option, or `https://updates.mcpwp.net/version.json` if that
+   option was never saved (raised from the legacy mumega.com manifest in #888/3.13.1 — a site that
+   already saved a value, including the legacy manifest, keeps working: both read the same R2
+   bucket, see "Deploy & Update System" above)
 3. Compares remote version to installed version
 4. Downloads zip from `download_url` and installs via `Plugin_Upgrader`
 5. `wp_trigger_update` also accepts `package_url` param for forced installs
@@ -229,9 +306,13 @@ explicit `package_url` bypasses the manifest and the transient entirely.
 
 ### Update Notes
 
-- Canonical release sources are the `mumega.com` static manifest and ZIP
+- Canonical release source is `updates.mcpwp.net` (the `mcpwp-updates` Worker, R2 bucket
+  `mumcp-updates`); `mumega.com/mcp-updates` is a legacy mirror serving the same R2 objects for
+  un-migrated sites, not a separate source
 - A stale `mcpwp_update_info` can block newer releases — leave it empty unless intentionally overriding
-- `mcpwp_version_url` on all sites should point to `https://mumega.com/mcp-updates/version.json`
+- New sites default `mcpwp_version_url` to `https://updates.mcpwp.net/version.json` (since #888,
+  3.13.1); sites that already saved the legacy `mumega.com` manifest URL keep working and do not
+  need to be repointed
 - See `docs/RELEASE_CHECKLIST.md` for full release procedure
 
 ## Plugin Architecture
@@ -336,11 +417,11 @@ wp-ai-operator/mcpwp/
 │   ├── css/mcpwp-admin.css                    # MCPWP design system (CSS tokens, dark headers)
 │   └── partials/                              # Admin page templates
 ├── readme.txt                                 # WordPress.org changelog + Privacy section
-├── version.json                               # Self-update manifest (mumega.com serves this)
+├── version.json                               # Self-update manifest (updates.mcpwp.net serves this; mumega.com mirrors it)
 └── scripts/
-    ├── build-wporg.sh                         # Build WordPress.org free package
+    ├── build-wporg.sh                         # Build the free, no-Pro zip (self-hosted distribution, not a WordPress.org submission)
     ├── build-freemius.sh                      # Build Freemius paid package
-    ├── publish_update_release.sh              # Build + publish to mumega.com static + R2
+    ├── publish_update_release.sh              # Build + publish to updates.mcpwp.net R2 (mumega.com mirrors the same bucket)
     └── release_freemius.sh                   # Deploy to Freemius
 ```
 
@@ -463,6 +544,25 @@ All endpoints require `X-API-Key` header. Namespace: `mcpwp/v1`.
 | `/seo/visibility` | GET | Stored search visibility snapshot (DataForSEO) |
 | `/seo/visibility/refresh` | POST | Fetch a fresh visibility snapshot — debounced 5 min, spends DataForSEO credit |
 | `/seo/opportunities` | GET | Ranked SEO opportunity list, maturity-aware |
+| `/seo/flags` | GET | The six act-worthy search signals (`almost_there`, `no_clicks`, `decaying`, `untargeted`, `wrong_intent`, `ai_mode`) computed from imported search performance (#933) |
+
+MCP prompt `seo-loop` walks an agent through `wp_seo_flags` end to end: read the six flags, judge
+them, fix before write through approvals/drafts, kill bad keywords, link best pages to stuck ones,
+measure with `wp_import_search_performance`, and record decisions with `wp_remember`.
+
+### AI Presence & Crawlers
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/ai-crawlers/policy` | GET/PUT | AI crawler allow/block policy (admin scope to write) |
+| `/indexnow/status` | GET | IndexNow key, enabled state, last submission result |
+| `/indexnow/submit` | POST | Manually submit URLs to IndexNow |
+
+IndexNow is opt-in (off by default) and always respects `blog_public` (WordPress's "discourage
+search engines" setting) and defers to Rank Math's own IndexNow module when that is active. Serving
+`/llms.txt` defers whenever Yoast's `enable_llms_txt` option, Rank Math's `llms-txt` module, or a
+physical `llms.txt` file at the site root is present — MCPWP only serves its own when none of those
+apply (or when forced via settings). See `mcpwp/includes/core/class-mcpwp-indexnow.php` and
+`mcpwp/includes/class-mcpwp-ai-presence.php`.
 
 ### Approvals & Safety
 | Endpoint | Method | Purpose |
@@ -542,6 +642,16 @@ Push to live always gates through the approval system — same key cannot approv
 |----------|--------|---------|
 | `/mcp` | POST | MCP tool dispatch (all tools via JSON-RPC) — methods: `initialize`, `tools/list`, `tools/call`, `resources/list`, `resources/read`, `prompts/list`, `prompts/get`, `ping` |
 
+A tool execution failure now returns as an `isError: true` `tools/call` result (#936) instead of a
+bare JSON-RPC error, so a model reading `content` can see and react to what went wrong. A
+programmatic client should read the structured reason from `result.structuredContent.error`, not
+parse the human-readable `content` text.
+
+Every tool also carries a top-level `title` and `readOnlyHint`/`destructiveHint`/`openWorldHint`/
+`idempotentHint` annotations (#934), with per-tool overrides in
+`mcpwp/includes/mcp/class-mcpwp-mcp-tool-annotations.php` and the generated audit table at
+`mcpwp/docs/mcp-tool-annotations.md`.
+
 ## SEO Market Data (DataForSEO)
 
 Two data classes, deliberately in separate stores:
@@ -619,7 +729,8 @@ container → container(s) → widget(s)  # Flexbox layout (check elementor_layo
 desynchronises the set — that is how the repo ended up with a manifest on 3.6.0 while every other file
 said 3.7.0.
 
-Just write Conventional Commits (`fix:` → patch, `feat:` → minor) and merge the release PR.
+Just write Conventional Commits and merge the release PR — with `versioning: always-bump-patch`,
+every commit type bumps the patch digit (`3.14.N`), not just `fix:`.
 See [Release a New Version](#release-a-new-version) for the publish steps and the traps.
 
 ## Analytics (v2.8.45+)
@@ -660,6 +771,7 @@ Server-side MCP tool usage tracked via PostHog when enabled.
 | Google Indexing API | Pro | `service_account_json` | submit URLs to Google index |
 | Figma | Pro | `personal_access_token`, `oauth_client_id`, `oauth_client_secret`, `default_file_key` | design files, colors, typography |
 | PostHog | Free/Pro | `token`, `host` | server-side MCP tool analytics |
+| Jev (TypeSafe) | Free | `api_key`, `endpoint` (advanced override) | optional approval-queue triage ranking (bring-your-own key, billed to the site owner directly); routes only — never approves, rejects, applies, or blocks anything |
 
 Config stored per-provider in `mcpwp_integrations` wp_option (encrypted). Manage via WP Admin > Integrations or `/integrations/configure` endpoint.
 
@@ -680,7 +792,7 @@ Config stored per-provider in `mcpwp_integrations` wp_option (encrypted). Manage
 | `mcpwp_disabled_tool_categories` | Tool category toggles |
 | `mcpwp_figma_design_tokens` | Cached Figma colors/typography tokens (synced hourly via cron + on-demand via `/figma/design-tokens/sync`); read directly by companion theme projects |
 | `mcpwp_update_info` | Update manifest override (leave empty unless overriding) |
-| `mcpwp_version_url` | Update check URL (→ mumega.com manifest) |
+| `mcpwp_version_url` | Update check URL (default `updates.mcpwp.net`; legacy sites may still hold the mumega.com manifest URL — both serve the same R2 bucket) |
 | `mcpwp_site_uuid` | Anonymous site UUID for analytics (`mcpwp-<uuid4>`) |
 | `mcpwp_first_activation` | Initial activation timestamp |
 | `mcpwp_approvals_identity_migrated` | One-time flag: on upgrade, purge identity-less pending/approved approvals so a reconnected OAuth principal can't self-approve a pre-fix request |
@@ -709,3 +821,13 @@ Config stored per-provider in `mcpwp_integrations` wp_option (encrypted). Manage
 |--------|---------------|
 | MCPWP | `mcpwp/v1` |
 | DigID Marketing Manager | `digid/v1` |
+
+## Operations & growth docs
+
+- [`docs/INTAKE.md`](docs/INTAKE.md) — intake process (#940)
+- [`docs/growth/NORTH-STAR.md`](docs/growth/NORTH-STAR.md) — growth north star (#958)
+- [`docs/launch/directories/`](docs/launch/directories/) — per-directory submission notes (#968)
+
+**Task truth is GitHub issues + the org project board**
+(https://github.com/orgs/Mumega-com/projects/2), fields `Version`, `Priority`, `Track`, `Size`.
+Linear is not used for MCPWP.

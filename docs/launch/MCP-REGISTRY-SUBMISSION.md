@@ -9,7 +9,7 @@ Unlike a centrally-hosted MCP server, MCPWP turns *each WordPress site* into its
 - [ ] Repo is public + the `mcpwp.net` website live (both true / near).
 - [ ] `name` namespace: `io.github.mumega-com/mcpwp` requires proving ownership of the GitHub org — `mcp-publisher` authenticates via GitHub OAuth against `Mumega-com`. Hadi (org owner) runs the auth.
 - [ ] Validate `registry-server.json` against the current schema (the `$schema` URL pins the version; re-check it's current at submit time — the MCP registry schema evolves).
-- [ ] Decide: do we want the listing to point people at WP.org (free install) as the "how to run"? Consider adding a `packages` entry referencing the WP.org plugin slug once #495 is live, so the listing has an install path, not just a remote URL.
+- [x] Decided (#931, 2026-09-26): MCPWP is not going on WordPress.org — #495 is not planned, so there is no MCPWP wp.org slug to reference. The listing's install path is the direct download (`https://updates.mcpwp.net/mcpwp-latest.zip`), not a `packages` entry pointing at wp.org.
 
 ## Publish steps (when gated)
 ```bash
@@ -33,4 +33,4 @@ mcp-publisher publish
 
 ## Needs Hadi
 - GitHub org-owner OAuth for `mcp-publisher login github`.
-- Go decision (publishing is public; coordinate with the PH / WP.org timing so discovery channels light up together).
+- Go decision (publishing is public; coordinate with PH launch timing so discovery channels light up together — WP.org is not part of this coordination, see #931).
