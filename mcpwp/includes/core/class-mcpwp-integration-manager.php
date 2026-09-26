@@ -257,6 +257,25 @@ class Mcpwp_Integration_Manager {
 				),
 			),
 		),
+		'jev' => array(
+			'name'        => 'Jev (TypeSafe)',
+			'url'         => 'https://typesafe.ai/',
+			'key_prefix'  => '',
+			'tier'        => 'free',
+			'description' => 'Optional: TypeSafe\'s Jev evaluation model ranks the approval queue by priority so the most urgent pending changes surface first. Bring your own TypeSafe API key; usage is billed to you directly (input tokens only, $0.042/1M). Off until a key is saved here. Jev only routes — it never approves, rejects, applies, or blocks anything, and it has no say over scope checks or safety reports.',
+			'fields'      => array(
+				'api_key'  => array(
+					'label'       => 'API Key',
+					'type'        => 'password',
+					'placeholder' => 'TypeSafe API key',
+				),
+				'endpoint' => array(
+					'label'       => 'Endpoint override (advanced)',
+					'type'        => 'url',
+					'placeholder' => 'https://api.typesafe.ai/v1/systemone',
+				),
+			),
+		),
 	);
 
 	/**

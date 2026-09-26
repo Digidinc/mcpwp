@@ -220,7 +220,9 @@ trait Mcpwp_Admin_Control_Room_Trait {
 
 		$data = array(
 			'approval_counts'  => $approval_counts,
-			'pending_approvals' => class_exists( 'Mcpwp_Approvals' ) ? Mcpwp_Approvals::list_requests( 'pending', 5, true ) : array(),
+			// Priority order when any pending request carries a validated Jev
+			// triage; falls back to date order on its own when none do.
+			'pending_approvals' => class_exists( 'Mcpwp_Approvals' ) ? Mcpwp_Approvals::list_requests( 'pending', 5, true, 'priority' ) : array(),
 			'approved_approvals' => class_exists( 'Mcpwp_Approvals' ) ? Mcpwp_Approvals::list_requests( 'approved', 5, true ) : array(),
 			'rollback_ready'   => array_slice(
 				array_values(

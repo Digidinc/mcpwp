@@ -29,6 +29,24 @@ class Mcpwp_Approvals {
 	const MAX_ITEMS = 200;
 
 	/**
+	 * Allowed values for triage.priority — the single enum every writer and
+	 * every reader of a `triage` record must agree on. Anything else (an
+	 * injected string, a typo, a future Jev model naming levels differently)
+	 * is rejected, never stored, never rendered.
+	 *
+	 * @var string[]
+	 */
+	const TRIAGE_PRIORITIES = array( 'low', 'medium', 'high', 'urgent' );
+
+	/**
+	 * Allowed values for triage.change_kind. Same fail-closed contract as
+	 * TRIAGE_PRIORITIES.
+	 *
+	 * @var string[]
+	 */
+	const TRIAGE_CHANGE_KINDS = array( 'content_edit', 'layout_change', 'seo_meta', 'deletion', 'bulk', 'settings', 'other' );
+
+	/**
 	 * Create a post-content approval request.
 	 *
 	 * @param int    $post_id      Post ID.
@@ -92,6 +110,7 @@ class Mcpwp_Approvals {
 			'medium',
 			__( 'Review approval request.', 'mcpwp' )
 		);
+		self::maybe_schedule_triage( $public );
 
 		return $public;
 	}
@@ -220,11 +239,26 @@ class Mcpwp_Approvals {
 			'high',
 			__( 'Review a destructive operation before it runs.', 'mcpwp' )
 		);
+		self::maybe_schedule_triage( $public );
 
 		return $public;
 	}
 
-	public static function list_requests( $status = '', $limit = 50, $reveal_non_public = false ) {
+	/**
+	 * @param string $status            Status filter.
+	 * @param int    $limit             Maximum records.
+	 * @param bool   $reveal_non_public When true, return full records; when false
+	 *                                  (default, SAFE) redact non-public sources.
+	 * @param string $order             'date' (default) or 'priority'. 'priority'
+	 *                                  sorts records that carry a validated Jev
+	 *                                  `triage` by priority (urgent first), placing
+	 *                                  untriaged records after them; within each
+	 *                                  group the existing date order is kept. Jev
+	 *                                  never decides WHETHER a request is shown,
+	 *                                  approved, or applied — only where it sorts.
+	 * @return array Requests.
+	 */
+	public static function list_requests( $status = '', $limit = 50, $reveal_non_public = false, $order = 'date' ) {
 		$items  = array_values( self::get_all() );
 		$status = sanitize_key( (string) $status );
 		$limit  = min( 100, max( 1, (int) $limit ) );
@@ -247,6 +281,10 @@ class Mcpwp_Approvals {
 			);
 		}
 
+		if ( 'priority' === sanitize_key( (string) $order ) ) {
+			$items = self::sort_by_priority( $items );
+		}
+
 		$records = array_map( array( __CLASS__, 'public_record' ), array_slice( $items, 0, $limit ) );
 
 		if ( ! $reveal_non_public ) {
@@ -254,6 +292,143 @@ class Mcpwp_Approvals {
 		}
 
 		return $records;
+	}
+
+	/**
+	 * Stable-sort already date-ordered items so a validated `triage.priority`
+	 * moves urgent-first; items with no (or invalid) triage keep their
+	 * existing date order, after every triaged item. This is display
+	 * ordering only — it does not filter, approve, reject, or otherwise
+	 * change any record.
+	 *
+	 * @param array $items Date-ordered requests (private or public shape; both carry 'triage').
+	 * @return array Same items, re-ordered.
+	 */
+	private static function sort_by_priority( array $items ) {
+		$rank = function ( $item ) {
+			$triage = self::sanitize_triage( isset( $item['triage'] ) ? $item['triage'] : null );
+			return null === $triage ? -1 : self::triage_priority_rank( $triage['priority'] );
+		};
+
+		usort(
+			$items,
+			function ( $a, $b ) use ( $rank ) {
+				return $rank( $b ) <=> $rank( $a );
+			}
+		);
+
+		return $items;
+	}
+
+	/**
+	 * Numeric rank for a validated priority level, highest first.
+	 *
+	 * @param string $priority One of TRIAGE_PRIORITIES.
+	 * @return int
+	 */
+	public static function triage_priority_rank( $priority ) {
+		$index = array_search( $priority, self::TRIAGE_PRIORITIES, true );
+		return false === $index ? -1 : $index;
+	}
+
+	/**
+	 * The single validation chokepoint for a `triage` record — every writer
+	 * (the Jev cron callback) and every reader that must not trust stored
+	 * data at face value (sort_by_priority(), the Control Room template)
+	 * calls this. Anything that fails comes back null: never partially
+	 * accepted, never rendered, never sorted as if it meant something.
+	 *
+	 * Jev's answer is untrusted data (site content it summarized may itself
+	 * carry injected instructions) — this is the fail-closed boundary that
+	 * keeps a spoofed "urgent"-looking string, or an out-of-range confidence,
+	 * from reaching storage or the screen unchanged.
+	 *
+	 * @param mixed $triage Candidate triage array.
+	 * @return array{priority:string,change_kind:string,confidence:float,source:string,at:string}|null
+	 */
+	public static function sanitize_triage( $triage ) {
+		if ( ! is_array( $triage ) ) {
+			return null;
+		}
+
+		$priority = isset( $triage['priority'] ) ? sanitize_key( (string) $triage['priority'] ) : '';
+		if ( ! in_array( $priority, self::TRIAGE_PRIORITIES, true ) ) {
+			return null;
+		}
+
+		$change_kind = isset( $triage['change_kind'] ) ? sanitize_key( (string) $triage['change_kind'] ) : '';
+		if ( ! in_array( $change_kind, self::TRIAGE_CHANGE_KINDS, true ) ) {
+			return null;
+		}
+
+		$confidence = isset( $triage['confidence'] ) && is_numeric( $triage['confidence'] ) ? (float) $triage['confidence'] : 0.0;
+		$confidence = max( 0.0, min( 1.0, $confidence ) );
+
+		$at = isset( $triage['at'] ) ? sanitize_text_field( (string) $triage['at'] ) : gmdate( 'c' );
+
+		return array(
+			'priority'    => $priority,
+			'change_kind' => $change_kind,
+			'confidence'  => $confidence,
+			'source'      => 'jev',
+			'at'          => $at,
+		);
+	}
+
+	/**
+	 * Store a validated Jev triage result on an approval record. Never
+	 * called from, and never read by, approve_request()/reject_request()/
+	 * apply_request()/apply_payload() — triage is display/sort metadata
+	 * only, not a gate (see class docblock on Mcpwp_Jev).
+	 *
+	 * A record that fails sanitize_triage() is dropped: nothing is stored,
+	 * and the existing (or absent) triage on the record is left untouched.
+	 *
+	 * @param string $id     Approval request ID.
+	 * @param mixed  $triage Candidate triage array.
+	 * @return bool True when stored.
+	 */
+	public static function set_triage( $id, $triage ) {
+		$sanitized = self::sanitize_triage( $triage );
+		if ( null === $sanitized ) {
+			return false;
+		}
+
+		$id = sanitize_key( (string) $id );
+		$items = self::get_all();
+		if ( empty( $items[ $id ] ) ) {
+			return false;
+		}
+
+		$items[ $id ]['triage'] = $sanitized;
+		self::upsert( $items[ $id ] );
+
+		return true;
+	}
+
+	/**
+	 * Schedule async Jev triage for a just-created approval — never blocks
+	 * the call that created it. A no-op whenever Jev is not configured, or
+	 * the cron API is unavailable (mirrors Mcpwp_Screenshot's guard).
+	 *
+	 * @param array $public Public approval record (needs only 'id').
+	 * @return void
+	 */
+	private static function maybe_schedule_triage( $public ) {
+		if ( ! is_array( $public ) || empty( $public['id'] ) ) {
+			return;
+		}
+		if ( ! class_exists( 'Mcpwp_Jev' ) || ! Mcpwp_Jev::is_configured() ) {
+			return;
+		}
+		if ( ! function_exists( 'wp_schedule_single_event' ) ) {
+			return;
+		}
+		if ( ! class_exists( 'Mcpwp_Jev_Triage' ) ) {
+			return;
+		}
+
+		wp_schedule_single_event( time(), Mcpwp_Jev_Triage::HOOK, array( (string) $public['id'] ) );
 	}
 
 	/**

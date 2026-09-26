@@ -461,6 +461,9 @@ class Mcpwp_REST_Integrations extends Mcpwp_REST_API {
 			if ( isset( $sanitized['url'] ) ) {
 				$sanitized['url'] = esc_url_raw( $sanitized['url'] );
 			}
+			if ( isset( $sanitized['endpoint'] ) ) {
+				$sanitized['endpoint'] = esc_url_raw( $sanitized['endpoint'] );
+			}
 			$result = $manager->set_provider_config( $provider, $sanitized );
 		} else {
 			$key = $request->get_param( 'key' );
