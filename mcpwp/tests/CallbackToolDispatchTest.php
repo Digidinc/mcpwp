@@ -110,11 +110,17 @@ final class CallbackToolDispatchTest extends TestCase {
 
 		$data = $this->call_tool();
 
-		$this->assertSame( -32000, $data['error']['code'] );
-		$this->assertStringContainsString( 'Could not update the theme.', $data['error']['message'] );
-		$this->assertSame( 'update_failed', $data['error']['data']['code'] );
-		$this->assertSame( 422, $data['error']['data']['status'] );
-		$this->assertSame( 'Check the update package.', $data['error']['data']['hint'] );
+		// A callback failure is a tool EXECUTION failure — an isError result
+		// the model can read, not a JSON-RPC protocol error.
+		$this->assertArrayNotHasKey( 'error', $data );
+		$error = $data['result']['structuredContent']['error'];
+		$this->assertTrue( $data['result']['isError'] );
+		$this->assertStringContainsString( 'Could not update the theme.', $error['message'] );
+		$this->assertStringContainsString( 'Could not update the theme.', $data['result']['content'][0]['text'] );
+		$this->assertSame( 'update_failed', $error['code'] );
+		$this->assertSame( 422, $error['status'] );
+		$this->assertSame( 'Check the update package.', $error['hint'] );
+		$this->assertStringContainsString( 'Fix: Check the update package.', $data['result']['content'][0]['text'] );
 	}
 
 	/**
@@ -179,7 +185,9 @@ final class CallbackToolDispatchTest extends TestCase {
 
 		$data = $this->call_tool();
 
-		$this->assertSame( -32003, $data['error']['code'] );
+		$this->assertArrayNotHasKey( 'error', $data );
+		$this->assertTrue( $data['result']['isError'] );
+		$this->assertSame( 'category_disabled', $data['result']['structuredContent']['error']['code'] );
 		$this->assertFalse( $called );
 	}
 
@@ -223,7 +231,10 @@ final class CallbackToolDispatchTest extends TestCase {
 
 		$data = $this->call_tool_as( array( 'id' => 'k_read', 'scopes' => array( 'read' ) ) );
 
-		$this->assertSame( -32003, $data['error']['code'] );
+		$this->assertArrayNotHasKey( 'error', $data );
+		$this->assertTrue( $data['result']['isError'] );
+		$this->assertSame( 'scope_denied', $data['result']['structuredContent']['error']['code'] );
+		$this->assertSame( 'write', $data['result']['structuredContent']['error']['required_scope'] );
 		$this->assertFalse( $called, 'Callback must not run for a read-only key' );
 	}
 

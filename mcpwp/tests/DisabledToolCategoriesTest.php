@@ -43,10 +43,16 @@ final class DisabledToolCategoriesTest extends TestCase {
 
 		$data = $this->call_tool( 'wp_site_info' );
 
-		$this->assertArrayHasKey( 'error', $data, 'A disabled-category tool must return a JSON-RPC error.' );
-		$this->assertArrayNotHasKey( 'result', $data, 'A disabled-category tool must not execute.' );
-		$this->assertSame( -32003, $data['error']['code'] );
-		$this->assertStringContainsString( 'disabled by the site administrator', $data['error']['message'] );
+		// A disabled-category tool is a tool EXECUTION refusal — an isError
+		// result the model can read, not a JSON-RPC protocol error. The tool
+		// itself never ran (WordPress functions are not stubbed to return a
+		// site-info shape), only the gate answered.
+		$this->assertArrayNotHasKey( 'error', $data, 'A disabled-category tool must not return a JSON-RPC protocol error.' );
+		$this->assertArrayHasKey( 'result', $data );
+		$this->assertTrue( $data['result']['isError'], 'A disabled-category tool must be refused.' );
+		$this->assertSame( 'category_disabled', $data['result']['structuredContent']['error']['code'] );
+		$this->assertStringContainsString( 'disabled by the site administrator', $data['result']['structuredContent']['error']['message'] );
+		$this->assertStringContainsString( 'disabled by the site administrator', $data['result']['content'][0]['text'] );
 	}
 
 	public function test_tool_in_non_disabled_category_passes_the_gate(): void {
@@ -56,10 +62,9 @@ final class DisabledToolCategoriesTest extends TestCase {
 		$data = $this->call_tool( 'wp_site_info' );
 
 		// The disabled-categories gate must not have fired for a non-disabled category.
-		if ( isset( $data['error'] ) ) {
-			$this->assertStringNotContainsString( 'disabled by the site administrator', $data['error']['message'] );
-		} else {
-			$this->assertArrayHasKey( 'result', $data, 'A non-disabled tool should execute successfully.' );
+		$this->assertArrayHasKey( 'result', $data, 'A non-disabled tool should execute successfully.' );
+		if ( isset( $data['result']['isError'] ) && $data['result']['isError'] ) {
+			$this->assertStringNotContainsString( 'disabled by the site administrator', $data['result']['structuredContent']['error']['message'] );
 		}
 	}
 
@@ -67,7 +72,8 @@ final class DisabledToolCategoriesTest extends TestCase {
 		// Disable, confirm blocked, then clear and confirm it is no longer blocked.
 		update_option( 'mcpwp_disabled_tool_categories', array( 'site' ) );
 		$blocked = $this->call_tool( 'wp_site_info' );
-		$this->assertSame( -32003, $blocked['error']['code'] );
+		$this->assertTrue( $blocked['result']['isError'] );
+		$this->assertSame( 'category_disabled', $blocked['result']['structuredContent']['error']['code'] );
 
 		delete_option( 'mcpwp_disabled_tool_categories' );
 		$data = $this->call_tool( 'wp_site_info' );

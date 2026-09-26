@@ -45,13 +45,19 @@ final class StableHardeningTest extends TestCase {
 
 	public function test_pro_tool_on_free_install_returns_upgrade_error(): void {
 		// No license configured in setUp() → is_pro_active() is false.
+		// wp_build_page is a real, documented tool — a Pro-required refusal is
+		// an isError tools/call result the model can read, not a protocol
+		// error like unknown-tool.
 		$data = $this->call_tool( 'wp_build_page' );
 
-		$this->assertArrayHasKey( 'error', $data, 'Pro tool on Free must error.' );
-		$this->assertSame( -32004, $data['error']['code'], 'Pro-required uses a dedicated JSON-RPC code, not unknown-tool -32602.' );
-		$this->assertStringContainsString( 'MCPWP Pro', $data['error']['message'] );
-		$this->assertSame( 'pro', $data['error']['data']['plan_required'] );
-		$this->assertStringContainsString( 'mcpwp.net/pricing', $data['error']['data']['upgrade_url'] );
+		$this->assertArrayNotHasKey( 'error', $data, 'Pro tool on Free must not be a JSON-RPC protocol error.' );
+		$error = $data['result']['structuredContent']['error'];
+		$this->assertTrue( $data['result']['isError'], 'Pro tool on Free must error.' );
+		$this->assertSame( 'pro_required', $error['code'] );
+		$this->assertStringContainsString( 'MCPWP Pro', $error['message'] );
+		$this->assertStringContainsString( 'MCPWP Pro', $data['result']['content'][0]['text'] );
+		$this->assertSame( 'pro', $error['plan_required'] );
+		$this->assertStringContainsString( 'mcpwp.net/pricing', $error['upgrade_url'] );
 	}
 
 	public function test_unknown_tool_still_returns_unknown_not_upsell(): void {

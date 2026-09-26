@@ -998,18 +998,18 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			// the write again on the strength of a broken record is the one
 			// thing this feature must never do.
 			if ( ! isset( $existing['args_hash'], $existing['response'] ) || ! is_array( $existing['response'] ) ) {
-				return $this->jsonrpc_error(
+				return $this->tool_error_result(
 					$id,
-					-32010,
+					'idempotency_corrupt',
 					sprintf( 'The stored result for request_id "%s" is unreadable.', $request_id ),
 					array( 'hint' => 'The first attempt completed but its record is corrupt, so it cannot be replayed and will not be re-run. Verify the site state and use a new request_id if the work is still needed.' )
 				);
 			}
 
 			if ( $existing['args_hash'] !== $args_hash ) {
-				return $this->jsonrpc_error(
+				return $this->tool_error_result(
 					$id,
-					-32602,
+					'idempotency_conflict',
 					sprintf( 'request_id "%s" was already used with different arguments.', $request_id ),
 					array( 'hint' => 'A request_id identifies one intended write. Use a new id for a different call.' )
 				);
@@ -1094,9 +1094,9 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				// is abandoned, not held forever (#802 round 4).
 				if ( $age >= 0 && $age < $lease_seconds ) {
 					if ( '' !== $lease['args_hash'] && $lease['args_hash'] !== $args_hash ) {
-						return $this->jsonrpc_error(
+						return $this->tool_error_result(
 							$id,
-							-32602,
+							'idempotency_conflict',
 							sprintf( 'request_id "%s" was already used with different arguments.', $request_id ),
 							array( 'hint' => 'A request_id identifies one intended write. Use a new id for a different call.' )
 						);
@@ -1170,9 +1170,9 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 * @return array
 	 */
 	private function in_progress_error( $id, $request_id, $retry_after ) {
-		return $this->jsonrpc_error(
+		return $this->tool_error_result(
 			$id,
-			-32009,
+			'idempotency_in_progress',
 			sprintf( 'A call with request_id "%s" is still in progress.', $request_id ),
 			array(
 				'hint'        => sprintf( 'The first attempt has not finished. Wait and re-send with the same request_id; if it completes you get its result, not a second write. A claim older than %d seconds is treated as abandoned and the retry runs.', self::lease_seconds() ),
@@ -2019,9 +2019,9 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			// not "unknown tool" — the tool exists, the plan doesn't (#496).
 			if ( ! $this->is_pro_active() && isset( $this->pro_registry->get_tool_map()[ $tool_name ] ) ) {
 				$this->fire_tool_called( $tool_name, $start, 'pro_required' );
-				return $this->jsonrpc_error(
+				return $this->tool_error_result(
 					$id,
-					-32004,
+					'pro_required',
 					sprintf( 'Tool "%s" is part of MCPWP Pro, which is not active on this site.', $tool_name ),
 					array(
 						'hint'          => sprintf(
@@ -2073,9 +2073,9 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			$tool_category = $this->tool_category_for( $tool_name );
 			if ( '' !== $tool_category && in_array( $tool_category, $disabled_categories, true ) ) {
 				$this->fire_tool_called( $tool_name, $start, 'category_disabled' );
-				return $this->jsonrpc_error(
+				return $this->tool_error_result(
 					$id,
-					-32003,
+					'category_disabled',
 					sprintf(
 						'Tool "%s" is in the "%s" category, which has been disabled by the site administrator.',
 						$tool_name,
@@ -2099,9 +2099,9 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				if ( '' === $tool_category || ! in_array( $tool_category, $allowed_categories, true ) ) {
 					$role = isset( $key_record['role'] ) ? $key_record['role'] : 'unknown';
 					$this->fire_tool_called( $tool_name, $start, 'scope_denied' );
-					return $this->jsonrpc_error(
+					return $this->tool_error_result(
 						$id,
-						-32003,
+						'scope_denied',
 						sprintf(
 							'This API key (role: %s) does not have access to %s tools. Allowed categories: %s.',
 							$role,
@@ -2134,9 +2134,9 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			$req          = $reqs[ $tool_name ];
 			$human        = isset( $plugin_names[ $req ] ) ? $plugin_names[ $req ] : $req;
 			$this->fire_tool_called( $tool_name, $start, 'scope_denied' );
-			return $this->jsonrpc_error(
+			return $this->tool_error_result(
 				$id,
-				-32003,
+				'scope_denied',
 				sprintf( 'Tool "%s" requires %s to be installed and active on this WordPress site.', $tool_name, $human ),
 				array(
 					'hint' => sprintf(
@@ -2151,7 +2151,12 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		$validation_error = $this->validate_tool_arguments( $tool_name, $arguments );
 		if ( $validation_error ) {
 			$this->fire_tool_called( $tool_name, $start, 'execution_error' );
-			return $this->jsonrpc_error( $id, -32602, $validation_error );
+			return $this->tool_error_result(
+				$id,
+				'invalid_arguments',
+				$validation_error,
+				array( 'hint' => "Call tools/list to see \"$tool_name\"'s required and optional parameters, then retry with the missing or corrected parameter." )
+			);
 		}
 
 		// Once an earlier operation of this request was refused by the spend
@@ -2160,7 +2165,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		$spend_state = Mcpwp_Spend_Budget::refuse_if_exhausted();
 		if ( is_wp_error( $spend_state ) ) {
 			$this->fire_tool_called( $tool_name, $start, Mcpwp_Spend_Budget::ERROR_CODE );
-			return $this->spend_refusal( $id, $spend_state->get_error_message(), $spend_state->get_error_data() );
+			return $this->spend_refusal_result( $id, $spend_state->get_error_message(), $spend_state->get_error_data() );
 		}
 
 		$dispatch = $this->resolve_tool_dispatch( $mapping, $arguments );
@@ -2171,12 +2176,11 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		$batch_cap = class_exists( 'Mcpwp_REST_Batch' ) ? Mcpwp_REST_Batch::MAX_OPERATIONS : 100;
 		if ( $dispatch['is_batch'] && isset( $dispatch['arguments']['operations'] ) && is_array( $dispatch['arguments']['operations'] ) && count( $dispatch['arguments']['operations'] ) > $batch_cap ) {
 			$this->fire_tool_called( $tool_name, $start, 'execution_error' );
-			return $this->jsonrpc_error(
+			return $this->tool_error_result(
 				$id,
-				-32602,
+				'batch_too_large',
 				sprintf( 'Batch contains too many operations. Maximum %d allowed.', $batch_cap ),
 				array(
-					'code' => 'batch_too_large',
 					'hint' => sprintf( 'Split the operations into calls of at most %d. Nothing ran and no rate-limit slots were charged for the operations.', $batch_cap ),
 				)
 			);
@@ -2188,7 +2192,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		$spend_whole = Mcpwp_Spend_Budget::refuse_whole( $this->tool_call_spend_price( $mapping, $dispatch, $tool_name ) );
 		if ( is_wp_error( $spend_whole ) ) {
 			$this->fire_tool_called( $tool_name, $start, Mcpwp_Spend_Budget::EXCEEDED_CODE );
-			return $this->spend_refusal( $id, $spend_whole->get_error_message(), $spend_whole->get_error_data(), $spend_whole->get_error_code() );
+			return $this->spend_refusal_result( $id, $spend_whole->get_error_message(), $spend_whole->get_error_data(), $spend_whole->get_error_code() );
 		}
 
 		// A tool that carries a list of operations is a batch by another name
@@ -2202,9 +2206,9 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			if ( is_wp_error( $charge ) ) {
 				$this->fire_tool_called( $tool_name, $start, 'rate_limited' );
 				$data = $charge->get_error_data();
-				return $this->jsonrpc_error(
+				return $this->tool_error_result(
 					$id,
-					-32029,
+					'rate_limited',
 					$charge->get_error_message(),
 					array(
 						'hint'        => sprintf( 'This call carries %d operations and each costs one rate-limit slot. Nothing ran. If it exceeds the ceiling (batch_exceeds_limit) waiting will not help: split it. Otherwise wait for the window or raise the key\'s limits.', $nested ),
@@ -2228,9 +2232,9 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 
 		if ( null !== $dispatch['bad_placeholder'] ) {
 			$this->fire_tool_called( $tool_name, $start, 'invalid_path_parameter' );
-			return $this->jsonrpc_error(
+			return $this->tool_error_result(
 				$id,
-				-32602,
+				'invalid_path_parameter',
 				sprintf( 'Path parameter "%s" may not contain "/".', $dispatch['bad_placeholder'] ),
 				array(
 					'hint' => 'A path placeholder fills one route segment. Pass the bare value (for example an ID or slug) without any path separators.',
@@ -2258,11 +2262,14 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			// consistent with the other gates in this method.
 			if ( $key_record && ! $this->key_has_scope( $key_record, 'write' ) ) {
 				$this->fire_tool_called( $tool_name, $start, 'scope_denied' );
-				return $this->jsonrpc_error(
+				return $this->tool_error_result(
 					$id,
-					-32003,
+					'scope_denied',
 					sprintf( 'Tool "%s" requires at least write scope.', $tool_name ),
-					array( 'hint' => 'Custom callback tools mutate state and require a write- or admin-scoped API key.' )
+					array(
+						'hint'           => 'Custom callback tools mutate state and require a write- or admin-scoped API key.',
+						'required_scope' => 'write',
+					)
 				);
 			}
 
@@ -2274,7 +2281,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 					Mcpwp_Action_Log::complete( $audit_log_id, (int) round( ( microtime( true ) - $start ) * 1000 ), false, Mcpwp_Spend_Budget::ERROR_CODE );
 				}
 				$this->fire_tool_called( $tool_name, $start, Mcpwp_Spend_Budget::ERROR_CODE );
-				return $this->spend_refusal( $id, $spend->get_error_message(), $spend->get_error_data() );
+				return $this->spend_refusal_result( $id, $spend->get_error_message(), $spend->get_error_data() );
 			}
 
 			$full_route = 'callback:' . $tool_name;
@@ -2363,7 +2370,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 					Mcpwp_Action_Log::complete( $audit_log_id, (int) round( ( microtime( true ) - $start ) * 1000 ), false, $error_code );
 				}
 				$this->fire_tool_called( $tool_name, $start, $error_code );
-				return $this->spend_refusal( $id, $error_message, isset( $data['data'] ) ? $data['data'] : array(), $error_code );
+				return $this->spend_refusal_result( $id, $error_message, isset( $data['data'] ) ? $data['data'] : array(), $error_code );
 			}
 
 			// Build error data, preserving hint/guide from REST response.
@@ -2396,9 +2403,9 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				Mcpwp_Action_Log::complete( $audit_log_id, (int) round( ( microtime( true ) - $start ) * 1000 ), false, 'execution_error' );
 			}
 			$this->fire_tool_called( $tool_name, $start, 'execution_error' );
-			return $this->jsonrpc_error(
+			return $this->tool_error_result(
 				$id,
-				-32000,
+				$error_code,
 				$error_message . ' (route: ' . $method . ' ' . $full_route . ')',
 				$error_data
 			);
@@ -2688,6 +2695,36 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		}
 
 		return $this->jsonrpc_error( $id, Mcpwp_Spend_Budget::JSONRPC_CODE, (string) $message, $error );
+	}
+
+	/**
+	 * A tool call the spend budget refused, as an isError tools/call RESULT.
+	 *
+	 * Same fields as spend_refusal() (weight/remaining/limit/hint/status/code)
+	 * but for a refusal that happens while dispatching ONE already-resolved
+	 * tool inside handle_tools_call() — the batch-level, pre-dispatch whole
+	 * refusal in handle_mcp_messages() still uses spend_refusal() unchanged,
+	 * because it can apply to non-tools/call methods too, for which isError
+	 * has no meaning.
+	 *
+	 * @param mixed  $id      Request ID.
+	 * @param string $message Refusal message.
+	 * @param mixed  $data    Refusal data (weight, remaining, limit, hint).
+	 * @param string $code    spend_budget_exhausted or spend_budget_exceeded.
+	 * @return array JSON-RPC result response with isError:true.
+	 */
+	private function spend_refusal_result( $id, $message, $data, $code = Mcpwp_Spend_Budget::ERROR_CODE ) {
+		$data     = is_array( $data ) ? $data : array();
+		$resolved = Mcpwp_Spend_Budget::is_refusal_code( $code ) ? $code : Mcpwp_Spend_Budget::ERROR_CODE;
+		$error    = array( 'status' => Mcpwp_Spend_Budget::HTTP_STATUS );
+
+		foreach ( array( 'weight', 'remaining', 'limit', 'hint' ) as $field ) {
+			if ( isset( $data[ $field ] ) ) {
+				$error[ $field ] = $data[ $field ];
+			}
+		}
+
+		return $this->tool_error_result( $id, $resolved, (string) $message, $error );
 	}
 
 	/**
@@ -3099,6 +3136,62 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		}
 
 		return class_exists( 'Mcpwp_License' ) && Mcpwp_License::get_instance()->is_pro();
+	}
+
+	/**
+	 * Build a tools/call RESULT reporting an execution failure as data the
+	 * model can read, instead of a JSON-RPC protocol error.
+	 *
+	 * Per the MCP spec ("Error Handling"), a protocol-level `error` is for
+	 * parse failures, malformed requests, unknown methods/tools, and genuine
+	 * server faults — not for a tool that resolved and then failed to run.
+	 * Many clients drop `error.data` entirely, which is exactly where this
+	 * plugin's `hint`/`guide` used to live, so a model could never see why a
+	 * call failed or how to fix it. This returns a normal JSON-RPC `result`
+	 * with `isError: true`: the teaching text goes in `content` (which every
+	 * client shows the model), and every machine field a programmatic caller
+	 * previously read from `error.data` is preserved verbatim under
+	 * `result.structuredContent.error`.
+	 *
+	 * @param mixed  $id      JSON-RPC id.
+	 * @param string $code    Machine error code (e.g. 'pro_required', 'scope_denied',
+	 *                        'category_disabled', 'rate_limited', 'execution_error', or a
+	 *                        granular REST error code carried through from the route).
+	 * @param string $message One-line description of what failed.
+	 * @param array  $data    Extra machine fields — hint, guide, status, retry_after,
+	 *                        upgrade_url, required_scope, plan_required, weight,
+	 *                        remaining, limit, etc. Merged as-is into structuredContent.error.
+	 * @return array JSON-RPC result response with isError:true.
+	 */
+	private function tool_error_result( $id, $code, $message, array $data = array() ) {
+		$error = array_merge( array( 'code' => $code, 'message' => $message ), $data );
+
+		// Teaching text: one line of what failed, then "Fix:" from hint, then
+		// "Next:" from guide. Short and plain — no JSON dump — because this is
+		// what a model actually reads; the full machine detail is still in
+		// structuredContent.error for anything that parses it.
+		$lines = array( $message );
+		if ( ! empty( $error['hint'] ) && is_string( $error['hint'] ) ) {
+			$lines[] = 'Fix: ' . $error['hint'];
+		}
+		if ( ! empty( $error['guide'] ) && is_string( $error['guide'] ) ) {
+			$lines[] = 'Next: ' . $error['guide'];
+		}
+
+		return array(
+			'jsonrpc' => '2.0',
+			'id'      => $id,
+			'result'  => array(
+				'content'           => array(
+					array(
+						'type' => 'text',
+						'text' => implode( "\n", $lines ),
+					),
+				),
+				'isError'           => true,
+				'structuredContent' => array( 'error' => $error ),
+			),
+		);
 	}
 
 	/**

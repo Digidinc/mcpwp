@@ -246,9 +246,9 @@ final class WpBatchToolTest extends TestCase {
 		// charge 100 extra rate-limit slots first for work that cannot run.
 		$data = $this->call( 'wp_batch', array( 'operations' => $this->reads( 101 ) ) );
 
-		$this->assertArrayHasKey( 'error', $data );
-		$this->assertSame( -32602, $data['error']['code'] );
-		$this->assertSame( 'batch_too_large', $data['error']['data']['code'] );
+		$this->assertArrayNotHasKey( 'error', $data );
+		$this->assertTrue( $data['result']['isError'] );
+		$this->assertSame( 'batch_too_large', $data['result']['structuredContent']['error']['code'] );
 		$this->assertSame( 999, Mcpwp_Rate_Limiter::get_instance()->get_budget()['remaining'], 'Only the HTTP request itself was charged.' );
 		$this->assertSame( array(), $GLOBALS['mcpwp_test_dispatched_routes'] );
 	}
