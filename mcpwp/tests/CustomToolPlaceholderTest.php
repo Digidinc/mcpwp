@@ -176,9 +176,11 @@ final class CustomToolPlaceholderTest extends TestCase {
 		// smuggled path fails to match anything (verified against WP 7.0.2).
 		// Depending on that would make our safety a property of someone else's
 		// matcher — the exact dependency #752 F7 and F11 existed to remove.
-		$this->assertArrayHasKey( 'error', $data, 'A slash-bearing path parameter must be refused.' );
-		$this->assertSame( -32602, $data['error']['code'] );
-		$this->assertStringContainsString( 'may not contain', $data['error']['message'] );
+		$this->assertArrayNotHasKey( 'error', $data, 'A slash-bearing path parameter is a tool-execution refusal, not a protocol error.' );
+		$this->assertTrue( $data['result']['isError'], 'A slash-bearing path parameter must be refused.' );
+		$this->assertSame( 'invalid_path_parameter', $data['result']['structuredContent']['error']['code'] );
+		$this->assertStringContainsString( 'may not contain', $data['result']['structuredContent']['error']['message'] );
+		$this->assertStringContainsString( 'may not contain', $data['result']['content'][0]['text'] );
 
 		$this->assertSame(
 			array(),

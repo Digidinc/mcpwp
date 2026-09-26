@@ -124,8 +124,9 @@ final class ParamAliasesDispatchTest extends TestCase {
 		// Sanity check the alias did not loosen the tool's real contract —
 		// only page_id changed meaning, widget_id is still required.
 		$data = $this->call( 'wp_edit_widget', array( 'id' => 9 ) );
-		$this->assertArrayHasKey( 'error', $data );
-		$this->assertStringContainsString( 'widget_id', $data['error']['message'] );
+		$this->assertArrayNotHasKey( 'error', $data, 'A resolved tool with a bad call is an isError result, not a protocol error.' );
+		$this->assertTrue( $data['result']['isError'] );
+		$this->assertStringContainsString( 'widget_id', $data['result']['structuredContent']['error']['message'] );
 	}
 
 	// -------------------------------------------------------------------
@@ -159,8 +160,9 @@ final class ParamAliasesDispatchTest extends TestCase {
 
 	public function test_wp_update_option_still_requires_value(): void {
 		$data = $this->call( 'wp_update_option', array( 'name' => 'blogname' ) );
-		$this->assertArrayHasKey( 'error', $data );
-		$this->assertStringContainsString( 'value', $data['error']['message'] );
+		$this->assertArrayNotHasKey( 'error', $data, 'A resolved tool with a bad call is an isError result, not a protocol error.' );
+		$this->assertTrue( $data['result']['isError'] );
+		$this->assertStringContainsString( 'value', $data['result']['structuredContent']['error']['message'] );
 	}
 
 	// -------------------------------------------------------------------
@@ -235,8 +237,9 @@ final class ParamAliasesDispatchTest extends TestCase {
 
 	public function test_wp_upload_media_b64_still_requires_filename(): void {
 		$data = $this->call( 'wp_upload_media_b64', array( 'base64' => 'ZmFrZQ==' ) );
-		$this->assertArrayHasKey( 'error', $data );
-		$this->assertStringContainsString( 'filename', $data['error']['message'] );
+		$this->assertArrayNotHasKey( 'error', $data, 'A resolved tool with a bad call is an isError result, not a protocol error.' );
+		$this->assertTrue( $data['result']['isError'] );
+		$this->assertStringContainsString( 'filename', $data['result']['structuredContent']['error']['message'] );
 	}
 
 	// -------------------------------------------------------------------

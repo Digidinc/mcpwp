@@ -195,7 +195,8 @@ final class IdempotentToolCallTest extends TestCase {
 	public function test_a_failed_call_is_not_pinned_so_the_retry_can_do_the_work(): void {
 		update_option( 'mcpwp_disabled_tool_categories', array( 'content' ) );
 		$failed = $this->call( 'wp_create_page', array( 'title' => 'A' ), 'r1' );
-		$this->assertArrayHasKey( 'error', $failed );
+		$this->assertArrayNotHasKey( 'error', $failed );
+		$this->assertTrue( $failed['result']['isError'] );
 
 		delete_option( 'mcpwp_disabled_tool_categories' );
 		Mcpwp_REST_MCP::reset_verdict_memo();
@@ -267,9 +268,12 @@ final class IdempotentToolCallTest extends TestCase {
 		$this->call( 'wp_create_page', array( 'title' => 'A' ), 'r1' );
 		$second = $this->call( 'wp_create_page', array( 'title' => 'B' ), 'r1' );
 
-		$this->assertArrayHasKey( 'error', $second );
-		$this->assertSame( -32602, $second['error']['code'] );
-		$this->assertStringContainsString( 'request_id', $second['error']['message'] );
+		// wp_create_page resolved to a real tool; the conflict is a refusal to
+		// run it, not a malformed request — isError result, not protocol error.
+		$this->assertArrayNotHasKey( 'error', $second );
+		$this->assertTrue( $second['result']['isError'] );
+		$this->assertSame( 'idempotency_conflict', $second['result']['structuredContent']['error']['code'] );
+		$this->assertStringContainsString( 'request_id', $second['result']['structuredContent']['error']['message'] );
 		$this->assertSame( 1, $this->dispatches() );
 	}
 
@@ -394,9 +398,10 @@ final class IdempotentToolCallTest extends TestCase {
 
 		$data = $this->call( 'wp_create_page', array( 'title' => 'A' ), 'r1' );
 
-		$this->assertArrayHasKey( 'error', $data );
-		$this->assertSame( -32009, $data['error']['code'] );
-		$this->assertGreaterThan( 0, $data['error']['data']['retry_after'] );
+		$this->assertArrayNotHasKey( 'error', $data );
+		$this->assertTrue( $data['result']['isError'] );
+		$this->assertSame( 'idempotency_in_progress', $data['result']['structuredContent']['error']['code'] );
+		$this->assertGreaterThan( 0, $data['result']['structuredContent']['error']['retry_after'] );
 		$this->assertSame( 0, $this->dispatches() );
 	}
 
@@ -424,8 +429,9 @@ final class IdempotentToolCallTest extends TestCase {
 
 		$data = $this->call( 'wp_create_page', array( 'title' => 'A' ), 'r1' );
 
-		$this->assertArrayHasKey( 'error', $data );
-		$this->assertSame( -32010, $data['error']['code'] );
+		$this->assertArrayNotHasKey( 'error', $data );
+		$this->assertTrue( $data['result']['isError'] );
+		$this->assertSame( 'idempotency_corrupt', $data['result']['structuredContent']['error']['code'] );
 		$this->assertSame( 0, $this->dispatches() );
 	}
 
@@ -513,8 +519,9 @@ final class IdempotentToolCallTest extends TestCase {
 		Mcpwp_REST_MCP::reset_verdict_memo();
 		$data = $this->call( 'wp_create_page', array( 'title' => 'A' ), 'r1' );
 
-		$this->assertArrayHasKey( 'error', $data );
-		$this->assertSame( -32003, $data['error']['code'] );
+		$this->assertArrayNotHasKey( 'error', $data );
+		$this->assertTrue( $data['result']['isError'] );
+		$this->assertSame( 'category_disabled', $data['result']['structuredContent']['error']['code'] );
 	}
 
 	public function test_a_replay_is_visible_in_the_activity_log(): void {
@@ -552,7 +559,8 @@ final class IdempotentToolCallTest extends TestCase {
 		$second = $this->call( 'wp_update_menu_item_auto', array( 'item_id' => 5, 'title' => 'X' ), 'r1' );
 
 		$this->assertSame( 1, $this->dispatches(), 'The write did not run again.' );
-		$this->assertSame( -32003, $second['error']['code'], 'Both _auto tools are in the category map now, so the kill switch binds them.' );
+		$this->assertTrue( $second['result']['isError'] );
+		$this->assertSame( 'category_disabled', $second['result']['structuredContent']['error']['code'], 'Both _auto tools are in the category map now, so the kill switch binds them.' );
 
 		// And the two gates read one resolver: a name in neither map has no
 		// category on either side, so the replay gate cannot invent one.
@@ -664,7 +672,8 @@ final class IdempotentToolCallTest extends TestCase {
 		// Held 5 s ago: in progress under the default 120 s.
 		$GLOBALS['mcpwp_test_wpdb_options'][ $lease ] = ( time() - 5 ) . '|' . $hash;
 		$data = $this->call( 'wp_create_page', array( 'title' => 'A' ), 'r1' );
-		$this->assertSame( -32009, $data['error']['code'] );
+		$this->assertTrue( $data['result']['isError'] );
+		$this->assertSame( 'idempotency_in_progress', $data['result']['structuredContent']['error']['code'] );
 		$this->assertSame( 0, $this->dispatches() );
 
 		// Lower the lease to 3 s: the same 5 s old lease is abandoned and taken over.
@@ -681,7 +690,7 @@ final class IdempotentToolCallTest extends TestCase {
 		$GLOBALS['mcpwp_test_wpdb_options'][ $lease ] = ( time() + 3600 ) . '|' . $hash;
 		Mcpwp_REST_MCP::reset_verdict_memo();
 		$data = $this->call( 'wp_create_page', array( 'title' => 'A' ), 'r1' );
-		$this->assertArrayHasKey( 'result', $data, 'Not -32009 for the next hour.' );
+		$this->assertArrayHasKey( 'result', $data, 'Not still-in-progress for the next hour.' );
 		$this->assertSame( 2, $this->dispatches() );
 		$this->assertSame( 1, Mcpwp_REST_MCP::lease_seconds() >= 1 ? 1 : 0 );
 	}
@@ -763,8 +772,10 @@ final class IdempotentToolCallTest extends TestCase {
 		$first  = $this->call( 'zz_write_thing', array( 'title' => 'x' ), 'r1', 7, $restricted['key'] );
 		Mcpwp_REST_MCP::reset_verdict_memo();
 		$second = $this->call( 'zz_write_thing', array( 'title' => 'x' ), 'r1', 7, $restricted['key'] );
-		$this->assertSame( -32003, $first['error']['code'] );
-		$this->assertSame( -32003, $second['error']['code'] );
+		$this->assertTrue( $first['result']['isError'] );
+		$this->assertSame( 'scope_denied', $first['result']['structuredContent']['error']['code'] );
+		$this->assertTrue( $second['result']['isError'] );
+		$this->assertSame( 'scope_denied', $second['result']['structuredContent']['error']['code'] );
 		$this->assertSame( 0, $this->dispatches(), 'Denied on every path; never re-run.' );
 
 		// An unrestricted key: pinned and replayed like any built-in tool.
@@ -799,9 +810,11 @@ final class IdempotentToolCallTest extends TestCase {
 		$GLOBALS['mcpwp_test_filters'] = array();
 		add_filter( 'mcpwp_idempotency_lease_seconds', function () { return 10; } );
 		$data = $this->call( 'wp_create_page', array( 'title' => 'A' ), 'r1' );
-		$this->assertSame( -32009, $data['error']['code'] );
-		$this->assertStringContainsString( '10 seconds', $data['error']['data']['hint'] );
-		$this->assertLessThanOrEqual( 8, $data['error']['data']['retry_after'] );
+		$this->assertTrue( $data['result']['isError'] );
+		$this->assertSame( 'idempotency_in_progress', $data['result']['structuredContent']['error']['code'] );
+		$this->assertStringContainsString( '10 seconds', $data['result']['structuredContent']['error']['hint'] );
+		$this->assertStringContainsString( '10 seconds', $data['result']['content'][0]['text'] );
+		$this->assertLessThanOrEqual( 8, $data['result']['structuredContent']['error']['retry_after'] );
 
 		$GLOBALS['mcpwp_test_filters'] = array();
 		add_filter( 'mcpwp_idempotency_lease_seconds', function () { return PHP_INT_MAX; } );

@@ -252,8 +252,12 @@ final class BatchBudgetTest extends TestCase {
 		$this->assertTrue( $controller->verify_api_key( $request ) ); // 6 left; needs 7 more
 		$data = $controller->handle_mcp( $request )->get_data();
 
-		$this->assertArrayHasKey( 'error', $data );
-		$this->assertSame( -32029, $data['error']['code'] );
+		// A refusal AFTER the tool name resolved (wp_batch_update is real) is
+		// an isError tools/call result, not a JSON-RPC protocol error — the
+		// model reads content/structuredContent, not error.data.
+		$this->assertArrayNotHasKey( 'error', $data );
+		$this->assertTrue( $data['result']['isError'] );
+		$this->assertSame( 'rate_limited', $data['result']['structuredContent']['error']['code'] );
 		$this->assertSame( 0, count( $GLOBALS['mcpwp_test_dispatched_routes'] ), 'Nothing ran.' );
 	}
 

@@ -581,10 +581,13 @@ final class SpendBudgetTest extends TestCase {
 
 		$this->assertCount( 3, $responses );
 		$this->assertSame( array( 200, 200, 413 ), $this->statuses( $this->tool_body( $responses[0] ) ) );
-		$this->assertSame( -32030, $responses[1]['error']['code'] );
-		$this->assertSame( 'spend_budget_exhausted', $responses[1]['error']['data']['code'] );
-		$this->assertSame( 10, $responses[1]['error']['data']['remaining'] );
-		$this->assertSame( 60, $responses[1]['error']['data']['limit'] );
+		// wp_list_posts resolved to a real tool; the budget ran out AT DISPATCH
+		// (not at admission), so this is an isError result, not a protocol error.
+		$this->assertArrayNotHasKey( 'error', $responses[1] );
+		$this->assertTrue( $responses[1]['result']['isError'] );
+		$this->assertSame( 'spend_budget_exhausted', $responses[1]['result']['structuredContent']['error']['code'] );
+		$this->assertSame( 10, $responses[1]['result']['structuredContent']['error']['remaining'] );
+		$this->assertSame( 60, $responses[1]['result']['structuredContent']['error']['limit'] );
 		$this->assertArrayHasKey( 'result', $responses[2], 'A method that dispatches nothing still answers.' );
 		$this->assertCount( 2, $this->operation_dispatches() );
 	}
@@ -608,9 +611,10 @@ final class SpendBudgetTest extends TestCase {
 		foreach ( array( 'first', 'resend' ) as $attempt ) {
 			Mcpwp_REST_MCP::reset_verdict_memo();
 			$response = $this->mcp( $call );
-			$this->assertSame( -32030, $response['error']['code'], $attempt );
-			$this->assertSame( 'spend_budget_exceeded', $response['error']['data']['code'], $attempt );
-			$this->assertSame( 50, $response['error']['data']['weight'], $attempt );
+			$this->assertArrayNotHasKey( 'error', $response, $attempt );
+			$this->assertTrue( $response['result']['isError'], $attempt );
+			$this->assertSame( 'spend_budget_exceeded', $response['result']['structuredContent']['error']['code'], $attempt );
+			$this->assertSame( 50, $response['result']['structuredContent']['error']['weight'], $attempt );
 			$this->assertSame( array(), $GLOBALS['mcpwp_test_dispatched_routes'], $attempt . ': no generation ran.' );
 		}
 	}
@@ -761,7 +765,7 @@ final class SpendBudgetTest extends TestCase {
 		);
 
 		$this->assertSame( array( 200, 200, 413 ), $this->statuses( $this->tool_body( $responses[0] ) ) );
-		$this->assertSame( 'spend_budget_exhausted', $responses[1]['error']['data']['code'] );
+		$this->assertSame( 'spend_budget_exhausted', $responses[1]['result']['structuredContent']['error']['code'] );
 		$this->assertSame( 96, Mcpwp_Rate_Limiter::get_instance()->get_budget()['remaining'], '2 for the HTTP request, 2 more for the 3-operation batch — and none for the 5 posts that were never going to run.' );
 	}
 
@@ -809,8 +813,9 @@ final class SpendBudgetTest extends TestCase {
 			)
 		);
 
-		$this->assertSame( -32602, $responses[0]['error']['code'] );
-		$this->assertSame( 'batch_too_large', $responses[0]['error']['data']['code'] );
+		$this->assertArrayNotHasKey( 'error', $responses[0] );
+		$this->assertTrue( $responses[0]['result']['isError'] );
+		$this->assertSame( 'batch_too_large', $responses[0]['result']['structuredContent']['error']['code'] );
 		$this->assertArrayHasKey( 'result', $responses[1], 'The call that fits runs.' );
 		$this->assertSame( array( '/mcpwp/v1/posts' ), $GLOBALS['mcpwp_test_dispatched_routes'] );
 	}
@@ -851,14 +856,18 @@ final class SpendBudgetTest extends TestCase {
 		Mcpwp_Rate_Limiter::get_instance()->update_settings( array( 'enabled' => true, 'requests_per_minute' => 1000, 'requests_per_hour' => 5000, 'burst_limit' => 1000 ) );
 
 		$batch = $this->mcp( $this->tool( 'wp_batch', array( 'operations' => $this->times( 50, $this->image() ) ) ) );
-		$this->assertSame( 'spend_budget_exceeded', $batch['error']['data']['code'] );
+		$this->assertArrayNotHasKey( 'error', $batch );
+		$this->assertTrue( $batch['result']['isError'] );
+		$this->assertSame( 'spend_budget_exceeded', $batch['result']['structuredContent']['error']['code'] );
 		$this->assertSame( 999, Mcpwp_Rate_Limiter::get_instance()->get_budget()['remaining'], 'The HTTP request\'s own slot, and none of the 49 extra.' );
 
 		Mcpwp_REST_MCP::reset_verdict_memo();
 		$urls   = array_map( function ( $i ) { return 'https://example.com/' . $i . '.jpg'; }, range( 1, 41 ) );
 		$upload = $this->mcp( $this->tool( 'wp_bulk_upload_media', array( 'urls' => $urls ), 2 ) );
-		$this->assertSame( 'spend_budget_exceeded', $upload['error']['data']['code'], 'Refused whole as sent, not at dispatch.' );
-		$this->assertSame( 1025, $upload['error']['data']['weight'] );
+		$this->assertArrayNotHasKey( 'error', $upload );
+		$this->assertTrue( $upload['result']['isError'] );
+		$this->assertSame( 'spend_budget_exceeded', $upload['result']['structuredContent']['error']['code'], 'Refused whole as sent, not at dispatch.' );
+		$this->assertSame( 1025, $upload['result']['structuredContent']['error']['weight'] );
 		$this->assertSame( 998, Mcpwp_Rate_Limiter::get_instance()->get_budget()['remaining'], 'Again only the HTTP slot, not 40 more for the URLs.' );
 		$this->assertSame( array(), $GLOBALS['mcpwp_test_dispatched_routes'] );
 	}
