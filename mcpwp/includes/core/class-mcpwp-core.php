@@ -29,8 +29,13 @@ class Mcpwp_Core {
 		$theme = wp_get_theme();
 
 		$info = array(
-			'name'         => get_bloginfo( 'name' ),
-			'description'  => get_bloginfo( 'description' ),
+			// Decoded for agents (#903): get_bloginfo() returns the option
+			// verbatim, and WordPress stores blogname/blogdescription with
+			// entities already encoded ("Crumb &amp; Co") for direct
+			// echoing into a theme's markup. Nothing here changes the
+			// stored option or theme-rendered output — only this API's copy.
+			'name'         => Mcpwp_Agent_Text::decode( get_bloginfo( 'name' ) ),
+			'description'  => Mcpwp_Agent_Text::decode( get_bloginfo( 'description' ) ),
 			'url'          => home_url(),
 			'admin_url'    => admin_url(),
 			'wp_version'   => $wp_version,

@@ -230,7 +230,7 @@ class Mcpwp_Pages {
 		}
 
 		$before = array(
-			'title'      => $page->post_title,
+			'title'      => Mcpwp_Agent_Text::decode( $page->post_title ),
 			'excerpt'    => $page->post_excerpt ?? '',
 			'status'     => $page->post_status,
 			'slug'       => $page->post_name,
@@ -430,7 +430,9 @@ class Mcpwp_Pages {
 
 		$data = array(
 			'id'           => $page->ID,
-			'title'        => $page->post_title,
+			// Decoded for agents (#903) — see Mcpwp_Agent_Text. The stored
+			// value and any theme rendering are untouched.
+			'title'        => Mcpwp_Agent_Text::decode( $page->post_title ),
 			'excerpt'      => $page->post_excerpt ?? '',
 			'slug'         => $page->post_name,
 			'status'       => $page->post_status,

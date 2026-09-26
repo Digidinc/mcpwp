@@ -227,6 +227,7 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/traits/trait-mcpwp-api-auth.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/traits/trait-mcpwp-sanitization.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/traits/trait-mcpwp-logging.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-agent-text.php';
 
 	// Load core classes
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-loader.php';

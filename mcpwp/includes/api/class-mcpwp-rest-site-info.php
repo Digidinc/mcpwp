@@ -369,8 +369,11 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 
 		// 1. Site identity.
 		$identity = array(
-			'name'        => $site_info['name'] ?? get_bloginfo( 'name' ),
-			'description' => $site_info['description'] ?? get_bloginfo( 'description' ),
+			// Decoded for agents (#903) — see Mcpwp_Agent_Text. get_site_info()
+			// already decodes 'name'/'description'; the ?? fallback is
+			// wrapped too, defensively, in case that key is ever absent.
+			'name'        => $site_info['name'] ?? Mcpwp_Agent_Text::decode( get_bloginfo( 'name' ) ),
+			'description' => $site_info['description'] ?? Mcpwp_Agent_Text::decode( get_bloginfo( 'description' ) ),
 			'url'         => $site_info['url'] ?? home_url(),
 			'admin_url'   => $site_info['admin_url'] ?? admin_url(),
 			'language'    => $site_info['language'] ?? get_locale(),
@@ -433,7 +436,7 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 		foreach ( $recent_posts as $p ) {
 			$recent_updates[] = array(
 				'id'       => $p->ID,
-				'title'    => $p->post_title,
+				'title'    => Mcpwp_Agent_Text::decode( $p->post_title ),
 				'type'     => $p->post_type,
 				'status'   => $p->post_status,
 				'modified' => $p->post_modified,
@@ -991,7 +994,7 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 		foreach ( array_slice( $orphan_pages, 0, 20 ) as $pid ) {
 			$orphan_list[] = array(
 				'id'    => $pid,
-				'title' => get_the_title( $pid ),
+				'title' => Mcpwp_Agent_Text::decode( get_the_title( $pid ) ),
 				'slug'  => get_post_field( 'post_name', $pid ),
 			);
 		}
@@ -1015,7 +1018,7 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 		foreach ( array_slice( $pages_query, 0, 20 ) as $pid ) {
 			$no_thumb[] = array(
 				'id'    => $pid,
-				'title' => get_the_title( $pid ),
+				'title' => Mcpwp_Agent_Text::decode( get_the_title( $pid ) ),
 			);
 		}
 

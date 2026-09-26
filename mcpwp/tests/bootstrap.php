@@ -1084,7 +1084,12 @@ function get_bloginfo($show = '')
         return '6.9.4';
     }
     if ('name' === $show) {
-        return 'Example Site';
+        // Overridable so tests can exercise #903 (entity-encoded blogname,
+        // e.g. "Crumb &amp; Co") without a real WordPress option store.
+        return $GLOBALS['mcpwp_test_bloginfo_name'] ?? 'Example Site';
+    }
+    if ('description' === $show) {
+        return $GLOBALS['mcpwp_test_bloginfo_description'] ?? '';
     }
     return '';
 }
@@ -2873,6 +2878,7 @@ if (! function_exists('sodium_memzero') && ! extension_loaded('sodium')) {
 require_once dirname(__DIR__) . '/includes/traits/trait-mcpwp-api-auth.php';
 require_once dirname(__DIR__) . '/includes/traits/trait-mcpwp-sanitization.php';
 require_once dirname(__DIR__) . '/includes/traits/trait-mcpwp-logging.php';
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-agent-text.php';
 require_once dirname(__DIR__) . '/includes/class-mcpwp-rate-limiter.php';
 require_once dirname(__DIR__) . '/includes/class-mcpwp-operation-weights.php';
 require_once dirname(__DIR__) . '/includes/class-mcpwp-spend-budget.php';
@@ -2886,6 +2892,8 @@ require_once dirname(__DIR__) . '/includes/core/class-mcpwp-search-performance.p
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-seo-flags.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-woocommerce-seo.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-pages.php';
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-posts.php';
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-drafts.php';
 require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-api.php';
 require_once dirname(__DIR__) . '/includes/mcp/class-mcpwp-mcp-tool-annotations.php';
 require_once dirname(__DIR__) . '/includes/mcp/class-mcpwp-mcp-tool-registry.php';

@@ -389,7 +389,8 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 */
 	public function __construct() {
 		$this->server_version = defined( 'MCPWP_VERSION' ) ? MCPWP_VERSION : '1.0.0';
-		$site_name            = function_exists( 'get_bloginfo' ) ? get_bloginfo( 'name' ) : '';
+		// Decoded for agents (#903) — see Mcpwp_Agent_Text.
+		$site_name            = function_exists( 'get_bloginfo' ) ? Mcpwp_Agent_Text::decode( get_bloginfo( 'name' ) ) : '';
 		$this->server_name    = 'mcpwp' . ( '' !== $site_name ? ':' . $site_name : '' );
 		$this->initial_ob_level = ob_get_level();
 		$this->free_registry    = new Mcpwp_MCP_Free_Tools();
@@ -1469,7 +1470,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				return $this->handle_resources_list( $id );
 
 			case 'resources/read':
-				return $this->handle_resources_read( $id, $params );
+				return $this->handle_resources_read( $id, $params, $request );
 
 			case 'prompts/list':
 				return $this->handle_prompts_list( $id );
@@ -1659,6 +1660,94 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	}
 
 	/**
+	 * Canonical resource definitions.
+	 *
+	 * The single source of truth for both resources/list (what gets
+	 * advertised) and resources/read (what is resolvable) so the two can
+	 * never drift — resources/read only ever proxies a route that
+	 * resources/list actually advertised (#902).
+	 *
+	 * @return array<int, array{key:string, route:string, query:array, name:string, description:string, mimeType:string, text_field?:string}>
+	 */
+	private function mcp_resource_definitions() {
+		return array(
+			array(
+				'key'         => 'site-info',
+				'route'       => '/mcpwp/v1/site-info',
+				'query'       => array(),
+				'name'        => 'Site Info',
+				'description' => 'WordPress site title, URL, active plugins, Elementor mode, and MCP capabilities. Read this before any content work.',
+				'mimeType'    => 'application/json',
+			),
+			array(
+				'key'         => 'site-context',
+				'route'       => '/mcpwp/v1/site-context',
+				'query'       => array(),
+				'name'        => 'Site Context',
+				'description' => 'Brand context and style guide set by the site owner. Read before writing or designing content.',
+				'mimeType'    => 'text/plain',
+				// get_site_context() returns a structured object, not a plain
+				// string; extract the field the advertised text/plain
+				// mimeType actually promises instead of dumping raw JSON.
+				'text_field'  => 'effective_context',
+			),
+			array(
+				'key'         => 'pages',
+				'route'       => '/mcpwp/v1/pages',
+				'query'       => array( 'per_page' => 50 ),
+				'name'        => 'Pages',
+				'description' => 'All published pages with IDs, slugs, and titles. Use to find page IDs before editing.',
+				'mimeType'    => 'application/json',
+			),
+			array(
+				'key'         => 'posts',
+				'route'       => '/mcpwp/v1/posts',
+				'query'       => array( 'per_page' => 50 ),
+				'name'        => 'Recent Posts',
+				'description' => 'Most recent 50 posts with IDs, slugs, titles, and categories.',
+				'mimeType'    => 'application/json',
+			),
+			array(
+				'key'         => 'design-references',
+				'route'       => '/mcpwp/v1/design-references',
+				'query'       => array(),
+				'name'        => 'Design References',
+				'description' => 'Stored design references (screenshots, approved designs) that should guide visual page creation.',
+				'mimeType'    => 'application/json',
+			),
+			array(
+				'key'         => 'elementor-status',
+				'route'       => '/mcpwp/v1/elementor/status',
+				'query'       => array(),
+				'name'        => 'Elementor Status',
+				'description' => 'Elementor version and layout mode (section or container/flexbox). Always read before writing Elementor data.',
+				'mimeType'    => 'application/json',
+			),
+		);
+	}
+
+	/**
+	 * Build the URI resources/list advertises for a resource definition.
+	 *
+	 * Uses rest_url() rather than hand-built "site_url() . '/wp-json/...'"
+	 * string concatenation so the advertised URI is the same one WordPress
+	 * itself would generate under either permalink structure (pretty
+	 * "/wp-json/…" or plain "?rest_route=…").
+	 *
+	 * @param array $definition Resource definition.
+	 * @return string
+	 */
+	private function mcp_resource_uri( $definition ) {
+		$uri = rest_url( ltrim( $definition['route'], '/' ) );
+
+		if ( ! empty( $definition['query'] ) ) {
+			$uri = add_query_arg( $definition['query'], $uri );
+		}
+
+		return $uri;
+	}
+
+	/**
 	 * Handle resources/list method.
 	 *
 	 * Exposes key site data as MCP resources so clients can read context without
@@ -1668,46 +1757,16 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 * @return array JSON-RPC response.
 	 */
 	private function handle_resources_list( $id ) {
-		$site_url = get_site_url();
+		$resources = array();
 
-		$resources = array(
-			array(
-				'uri'         => $site_url . '/wp-json/mcpwp/v1/site-info',
-				'name'        => 'Site Info',
-				'description' => 'WordPress site title, URL, active plugins, Elementor mode, and MCP capabilities. Read this before any content work.',
-				'mimeType'    => 'application/json',
-			),
-			array(
-				'uri'         => $site_url . '/wp-json/mcpwp/v1/site-context',
-				'name'        => 'Site Context',
-				'description' => 'Brand context and style guide set by the site owner. Read before writing or designing content.',
-				'mimeType'    => 'text/plain',
-			),
-			array(
-				'uri'         => $site_url . '/wp-json/mcpwp/v1/pages?per_page=50',
-				'name'        => 'Pages',
-				'description' => 'All published pages with IDs, slugs, and titles. Use to find page IDs before editing.',
-				'mimeType'    => 'application/json',
-			),
-			array(
-				'uri'         => $site_url . '/wp-json/mcpwp/v1/posts?per_page=50',
-				'name'        => 'Recent Posts',
-				'description' => 'Most recent 50 posts with IDs, slugs, titles, and categories.',
-				'mimeType'    => 'application/json',
-			),
-			array(
-				'uri'         => $site_url . '/wp-json/mcpwp/v1/design-references',
-				'name'        => 'Design References',
-				'description' => 'Stored design references (screenshots, approved designs) that should guide visual page creation.',
-				'mimeType'    => 'application/json',
-			),
-			array(
-				'uri'         => $site_url . '/wp-json/mcpwp/v1/elementor/status',
-				'name'        => 'Elementor Status',
-				'description' => 'Elementor version and layout mode (section or container/flexbox). Always read before writing Elementor data.',
-				'mimeType'    => 'application/json',
-			),
-		);
+		foreach ( $this->mcp_resource_definitions() as $definition ) {
+			$resources[] = array(
+				'uri'         => $this->mcp_resource_uri( $definition ),
+				'name'        => $definition['name'],
+				'description' => $definition['description'],
+				'mimeType'    => $definition['mimeType'],
+			);
+		}
 
 		return array(
 			'jsonrpc' => '2.0',
@@ -1719,66 +1778,174 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	}
 
 	/**
+	 * Resolve a client-supplied resource URI to one of the definitions in
+	 * mcp_resource_definitions().
+	 *
+	 * Accepts two forms:
+	 *  - the plugin's own `mcpwp://<key>` shorthand — independent of host,
+	 *    scheme, and permalink structure;
+	 *  - the https REST URI resources/list actually advertised, matched by
+	 *    REST *route* (the part after "/wp-json/" or in "?rest_route=")
+	 *    rather than by exact string equality against get_site_url(), so a
+	 *    reverse proxy or a port-mapped dev host — where the scheme/host the
+	 *    agent used to reach the site differs from what get_site_url()
+	 *    returns inside the PHP process — does not 404 a URI the client
+	 *    copied verbatim from resources/list.
+	 *
+	 * @param string $uri Client-supplied resource URI.
+	 * @return array|null Matching resource definition, or null when nothing matches.
+	 */
+	private function resolve_mcp_resource( $uri ) {
+		$definitions = $this->mcp_resource_definitions();
+
+		if ( 0 === strncasecmp( $uri, 'mcpwp://', 8 ) ) {
+			$key = strtok( substr( $uri, 8 ), '?' );
+			$key = rtrim( (string) $key, '/' );
+
+			foreach ( $definitions as $definition ) {
+				if ( $definition['key'] === $key ) {
+					return $definition;
+				}
+			}
+
+			return null;
+		}
+
+		$parts = wp_parse_url( $uri );
+		if ( empty( $parts['path'] ) ) {
+			return null;
+		}
+
+		$route       = null;
+		$wp_json_pos = strpos( $parts['path'], '/wp-json/' );
+		if ( false !== $wp_json_pos ) {
+			// Keep the leading slash: "/wp-json/mcpwp/v1/x" -> "/mcpwp/v1/x".
+			$route = substr( $parts['path'], $wp_json_pos + strlen( '/wp-json' ) );
+		} elseif ( ! empty( $parts['query'] ) ) {
+			parse_str( $parts['query'], $query_args );
+			if ( ! empty( $query_args['rest_route'] ) ) {
+				$route = $query_args['rest_route'];
+			}
+		}
+
+		if ( null === $route ) {
+			return null;
+		}
+
+		$route = '/' . trim( $route, '/' );
+
+		foreach ( $definitions as $definition ) {
+			if ( $definition['route'] === $route ) {
+				return $definition;
+			}
+		}
+
+		return null;
+	}
+
+	/**
 	 * Handle resources/read method.
 	 *
-	 * Proxies to the internal REST API and returns the response as a text blob.
+	 * Resolves the resource internally via rest_do_request() under the
+	 * calling request's own authenticated context — no second HTTP round
+	 * trip. Two bugs made every advertised resource unreadable (#902):
 	 *
-	 * @param mixed $id     Request ID.
-	 * @param array $params Request parameters.
+	 *  1. The internal sub-request's route was built as
+	 *     "/wp-json/mcpwp/v1/…" — the "/wp-json" prefix is stripped by the
+	 *     front-controller rewrite before a route ever reaches
+	 *     WP_REST_Server::dispatch(); a request constructed in-process and
+	 *     handed straight to rest_do_request() must use the bare route
+	 *     ("/mcpwp/v1/…"), so the old code 404'd as rest_no_route on every
+	 *     server, Apache included.
+	 *  2. The API key was re-read from apache_request_headers() /
+	 *     getallheaders(), which return nothing under php-fpm + nginx —
+	 *     authentication silently vanished on non-Apache stacks even once
+	 *     the route matched. get_api_key_from_request() reads
+	 *     $request->get_header(), which WordPress populates from $_SERVER on
+	 *     every server, and is the same helper tools/call already uses to
+	 *     carry auth into its own internal sub-requests.
+	 *
+	 * @param mixed           $id      Request ID.
+	 * @param array           $params  Request parameters.
+	 * @param WP_REST_Request $request Original REST request (the outer /mcp call).
 	 * @return array JSON-RPC response.
 	 */
-	private function handle_resources_read( $id, $params ) {
+	private function handle_resources_read( $id, $params, $request ) {
 		$uri = isset( $params['uri'] ) ? (string) $params['uri'] : '';
 
 		if ( '' === $uri ) {
 			return $this->jsonrpc_error( $id, -32602, 'Missing resource URI' );
 		}
 
-		$site_url = get_site_url();
-		$rest_base = $site_url . '/wp-json/mcpwp/v1/';
+		$definition = $this->resolve_mcp_resource( $uri );
 
-		// Only proxy internal mcpwp/v1 REST endpoints.
-		if ( 0 !== strpos( $uri, $rest_base ) ) {
+		if ( null === $definition ) {
 			return $this->jsonrpc_error(
 				$id,
 				-32002,
 				'Resource not found',
 				array(
 					'uri'  => $uri,
-					'hint' => 'Only mcpwp/v1 resources are readable. Call resources/list to see available URIs.',
+					'hint' => 'Only resources advertised by resources/list are readable — call resources/list to see available URIs, or use the mcpwp://<name> form.',
 				)
 			);
 		}
 
-		$internal_path = '/' . ltrim( str_replace( $site_url, '', $uri ), '/' );
+		$sub_request = new WP_REST_Request( 'GET', $definition['route'] );
 
-		$sub_request = new WP_REST_Request( 'GET', $internal_path );
-
-		// Carry the API key auth from the outer request.
-		$current_request_headers = function_exists( 'apache_request_headers' ) ? apache_request_headers() : array();
-		$api_key = '';
-		foreach ( $current_request_headers as $header => $value ) {
-			if ( 'x-api-key' === strtolower( $header ) ) {
-				$api_key = $value;
-				break;
-			}
-		}
-		if ( $api_key ) {
-			$sub_request->add_header( 'X-API-Key', $api_key );
+		foreach ( $definition['query'] as $key => $value ) {
+			$sub_request->set_param( $key, $value );
 		}
 
-		// Parse query string from URI.
-		$query_string = parse_url( $uri, PHP_URL_QUERY );
-		if ( $query_string ) {
-			parse_str( $query_string, $query_params );
-			foreach ( $query_params as $key => $value ) {
+		// An explicit query string on the client-supplied URI overrides the
+		// definition's own defaults (e.g. a different per_page on /pages).
+		$parts = wp_parse_url( $uri );
+		if ( ! empty( $parts['query'] ) ) {
+			parse_str( $parts['query'], $query_args );
+			unset( $query_args['rest_route'] );
+			foreach ( $query_args as $key => $value ) {
 				$sub_request->set_param( sanitize_key( $key ), sanitize_text_field( $value ) );
 			}
-			$sub_request->set_route( strtok( $internal_path, '?' ) );
+		}
+
+		// Carry the caller's own authenticated context into the sub-request —
+		// same pattern handle_tools_call_idempotent() already uses.
+		$api_key = $this->get_api_key_from_request( $request );
+		if ( $api_key ) {
+			$sub_request->set_header( 'X-API-Key', $api_key );
 		}
 
 		$response = rest_do_request( $sub_request );
-		$data     = rest_get_server()->response_to_data( $response, false );
+		$status   = $response->get_status();
+		$data     = $response->get_data();
+
+		if ( $status >= 400 ) {
+			$error_message = ( is_array( $data ) && isset( $data['message'] ) ) ? $data['message'] : 'Resource read failed';
+			$error_code    = ( is_array( $data ) && isset( $data['code'] ) ) ? $data['code'] : 'resource_error';
+
+			return $this->jsonrpc_error(
+				$id,
+				-32003,
+				$error_message,
+				array(
+					'uri'    => $uri,
+					'code'   => $error_code,
+					'status' => $status,
+				)
+			);
+		}
+
+		$mime_type = $definition['mimeType'];
+		$text      = wp_json_encode( $data );
+
+		if ( 'text/plain' === $mime_type && is_array( $data ) && isset( $definition['text_field'] ) ) {
+			$field = $definition['text_field'];
+			if ( isset( $data[ $field ] ) && is_string( $data[ $field ] ) ) {
+				$text = $data[ $field ];
+			}
+		} elseif ( 'text/plain' === $mime_type && is_string( $data ) ) {
+			$text = $data;
+		}
 
 		return array(
 			'jsonrpc' => '2.0',
@@ -1787,8 +1954,8 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				'contents' => array(
 					array(
 						'uri'      => $uri,
-						'mimeType' => 'application/json',
-						'text'     => wp_json_encode( $data ),
+						'mimeType' => $mime_type,
+						'text'     => $text,
 					),
 				),
 			),
@@ -1888,7 +2055,8 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			return $this->jsonrpc_error( $id, -32602, 'Missing prompt name' );
 		}
 
-		$site_title = get_bloginfo( 'name' );
+		// Decoded for agents (#903) — see Mcpwp_Agent_Text.
+		$site_title = Mcpwp_Agent_Text::decode( get_bloginfo( 'name' ) );
 		$site_url   = get_site_url();
 
 		switch ( $name ) {
@@ -2916,7 +3084,8 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	private function build_server_instructions() {
 		$core         = class_exists( 'Mcpwp_Core' ) ? new Mcpwp_Core() : null;
 		$capabilities = $core ? $core->get_capabilities() : array();
-		$site_name    = function_exists( 'get_bloginfo' ) ? get_bloginfo( 'name' ) : 'this site';
+		// Decoded for agents (#903) — see Mcpwp_Agent_Text.
+		$site_name    = function_exists( 'get_bloginfo' ) ? Mcpwp_Agent_Text::decode( get_bloginfo( 'name' ) ) : 'this site';
 		$site_url     = function_exists( 'home_url' ) ? home_url() : '';
 
 		$lines = array();
