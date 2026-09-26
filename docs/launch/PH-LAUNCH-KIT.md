@@ -80,7 +80,7 @@ Desktop, Claude Code, Cursor, or any MCP-compatible client — can now operate y
 natural language: build Elementor pages, publish posts, run SEO audits, manage menus,
 upload media, and more.
 
-**180+ tools free, 300+ with Pro, across 21 categories.** Free covers content, Elementor
+**180+ tools free, 290+ with Pro, across 21 categories.** Free covers content, Elementor
 read/write, media, SEO, menus, Gutenberg blocks, taxonomy, webhooks, and admin — plus a
 set of AI/stock-photo tools that work with your own OpenAI, Gemini, ElevenLabs, or Pexels
 key. Pro adds advanced Elementor builders and templates, theme builder, WooCommerce, SEO
@@ -133,7 +133,7 @@ nobody could say what happened or undo it.
 That's what MCPWP is built to solve.
 
 The idea is simple: WordPress is already an API. MCP is already a protocol. The plugin
-connects them properly — 180+ structured tools free (300+ with Pro), an opt-in approval
+connects them properly — 180+ structured tools free (290+ with Pro), an opt-in approval
 gate with rollback, a full audit log, and persistent memory across sessions. Your AI agent
 can build an Elementor landing page, run an SEO audit on 50 pages, reorganize a menu, and
 queue a change for your approval — all in one session, all reversible.
@@ -187,7 +187,7 @@ Control Room approval panel visible below it.
 click; applied changes roll back with one click."
 
 ### Slide 2 — The tool surface
-**Headline:** "180+ tools free. 300+ with Pro."
+**Headline:** "180+ tools free. 290+ with Pro."
 **Visual:** Dark background (Ink 950). A clean category grid showing the 21 categories
 (10 free, 11 Pro) with tool counts — styled like a terminal output or structured card
 grid. Blue 600 accents on category names.

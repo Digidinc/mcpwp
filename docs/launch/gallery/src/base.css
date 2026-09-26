@@ -29,10 +29,25 @@ html, body {
   position: relative;
   display: flex;
   flex-direction: column;
-  padding: 56px 72px 48px;
+  padding: 56px 72px 40px;
   background:
     radial-gradient(1100px 500px at 85% -10%, rgba(27,77,255,0.16), transparent 60%),
     var(--ink-950);
+}
+
+/* Every slide's main visual block (.row / .stack / .grids / .steps) shares this
+   sizing contract: it is the ONLY flexible element between the (variable-height)
+   headline and the (fixed-height) caption, so flexbox pins the caption's top
+   edge — the footer rule — to the same Y on every slide regardless of headline
+   line count. The 24px bottom padding is the mandatory clear-space margin: any
+   content that fills 100% of this box still lands 24px above the rule. Children
+   (code-panel / shot-frame / cards) must additionally be sized or clipped to
+   fit inside this box — the padding alone does not shrink an oversized child. */
+.row, .stack, .grids, .steps {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding-bottom: 24px;
+  box-sizing: border-box;
 }
 
 .brand-row {
@@ -73,14 +88,15 @@ html, body {
 }
 
 .caption-row {
-  position: absolute;
-  left: 72px;
-  right: 72px;
-  bottom: 34px;
+  flex: none;
+  height: 48px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   font-size: 15px;
   color: var(--slate-200);
   border-top: 1px solid rgba(217,226,242,0.16);
-  padding-top: 16px;
+  padding-top: 14px;
 }
 .caption-row b { color: var(--white); font-weight: 600; }
 

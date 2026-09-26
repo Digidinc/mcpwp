@@ -23,7 +23,7 @@ We just launched MCPWP on Product Hunt.
 Install the plugin on any WordPress site. Generate an API key. Paste one config block.
 
 Your AI (Claude, Cursor, or any MCP client) can now operate your entire site — pages,
-Elementor, WooCommerce, SEO, menus, media — through 180+ structured tools free (300+
+Elementor, WooCommerce, SEO, menus, media — through 180+ structured tools free (290+
 with Pro).
 
 With an opt-in approval gate.
@@ -53,7 +53,7 @@ ship.
 
 **Post 3 — The specificity post (post ~40 min after launch)**
 
-What does 180+ free tools (300+ with Pro) actually mean?
+What does 180+ free tools (290+ with Pro) actually mean?
 
 Content: create pages, posts, bulk ops, search, clone, template.
 Elementor: build full pages, edit sections, patch widgets, find-replace.
@@ -132,7 +132,7 @@ Today we launched MCPWP on Product Hunt.
 
 It turns any WordPress site into an MCP server — so AI agents (Claude, Cursor, or any MCP
 client) can operate the site in natural language through 180+ structured tools free
-(300+ with Pro).
+(290+ with Pro).
 
 I want to explain the part we think is most important, because it's different from every
 other AI-for-WordPress tool:
@@ -179,7 +179,7 @@ directly on the live site. Nothing was auditable. Nothing was reversible.
 
 MCPWP is what we built to fix that.
 
-The core idea: expose WordPress as an MCP server (180+ tools free, 300+ with Pro, across
+The core idea: expose WordPress as an MCP server (180+ tools free, 290+ with Pro, across
 content, Elementor, WooCommerce, SEO, media, menus, and more) with an opt-in
 human-in-the-loop approval gate. Route a write through it and it goes into an approval
 queue — you approve, the change applies; you reject, nothing happens. Either way it's in

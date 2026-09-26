@@ -4,16 +4,16 @@
 <meta charset="utf-8">
 <link rel="stylesheet" href="base.css">
 <style>
-  .row { display: flex; gap: 0; flex: 1; min-height: 0; align-items: stretch; position: relative; }
-  .col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+  .row { display: flex; gap: 0; align-items: stretch; position: relative; }
+  .col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 12px; min-height: 0; }
   .col.left { padding-right: 40px; }
   .col.right { padding-left: 40px; }
   .divider {
-    position: absolute; left: 50%; top: 6px; bottom: 6px; width: 1px;
+    position: absolute; left: 50%; top: 6px; bottom: 30px; width: 1px;
     background: rgba(217,226,242,0.18);
   }
   .badge {
-    display: inline-flex; align-self: flex-start;
+    display: inline-flex; align-self: flex-start; flex: none;
     font-family: 'IBM Plex Mono', monospace;
     font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase;
     color: var(--white);
@@ -21,10 +21,9 @@
     border: 1px solid rgba(27,77,255,0.5);
     border-radius: 20px;
     padding: 5px 14px;
-    margin-bottom: 4px;
   }
   .midlabel {
-    position: absolute; left: 50%; top: 46%; transform: translate(-50%,-50%);
+    position: absolute; left: 50%; top: 42%; transform: translate(-50%,-50%);
     background: var(--ink-950);
     border: 1px solid rgba(217,226,242,0.3);
     border-radius: 20px;
@@ -35,7 +34,8 @@
     color: var(--slate-200);
     white-space: nowrap;
   }
-  .code-panel pre { font-size: 12.5px; }
+  .code-panel { padding: 15px 20px; }
+  .code-panel pre { font-size: 12px; line-height: 1.5; }
 </style>
 </head>
 <body>
@@ -49,14 +49,11 @@
         <span class="tag">wp_remember</span>
         <pre>{
   &quot;method&quot;: &quot;tools/call&quot;,
-  &quot;params&quot;: {
-    &quot;name&quot;: &quot;wp_remember&quot;,
+  &quot;params&quot;: { &quot;name&quot;: &quot;wp_remember&quot;,
     &quot;arguments&quot;: {
       &quot;namespace&quot;: &quot;preferences&quot;,
       &quot;key&quot;: &quot;brand_tone&quot;,
-      &quot;value&quot;: &quot;direct, no jargon&quot;
-    }
-  }
+      &quot;value&quot;: &quot;direct, no jargon&quot; } }
 }</pre>
       </div>
       <div class="code-panel">
@@ -65,8 +62,7 @@
   &quot;result&quot;: {
     &quot;success&quot;: true,
     &quot;namespace&quot;: &quot;preferences&quot;,
-    &quot;key&quot;: &quot;brand_tone&quot;
-  }
+    &quot;key&quot;: &quot;brand_tone&quot; }
 }</pre>
       </div>
     </div>
@@ -78,24 +74,19 @@
         <span class="tag">wp_recall</span>
         <pre>{
   &quot;method&quot;: &quot;tools/call&quot;,
-  &quot;params&quot;: {
-    &quot;name&quot;: &quot;wp_recall&quot;,
-    &quot;arguments&quot;: { &quot;namespace&quot;: &quot;preferences&quot; }
-  }
+  &quot;params&quot;: { &quot;name&quot;: &quot;wp_recall&quot;,
+    &quot;arguments&quot;: { &quot;namespace&quot;: &quot;preferences&quot; } }
 }</pre>
       </div>
       <div class="code-panel">
         <span class="tag">result</span>
         <pre>{
-  &quot;result&quot;: {
-    &quot;memories&quot;: [
-      { &quot;key&quot;: &quot;brand_tone&quot;,
-        &quot;value&quot;: &quot;direct, no jargon&quot; },
-      { &quot;key&quot;: &quot;brand_palette&quot;,
-        &quot;value&quot;: &quot;navy, electric blue, white&quot; }
-    ],
-    &quot;count&quot;: 2
-  }
+  &quot;result&quot;: { &quot;memories&quot;: [
+    { &quot;key&quot;: &quot;brand_tone&quot;,
+      &quot;value&quot;: &quot;direct, no jargon&quot; },
+    { &quot;key&quot;: &quot;brand_palette&quot;,
+      &quot;value&quot;: &quot;navy, blue, white&quot; }
+  ], &quot;count&quot;: 2 }
 }</pre>
       </div>
     </div>

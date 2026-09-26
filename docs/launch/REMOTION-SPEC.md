@@ -169,7 +169,7 @@ Entry animation: cards fade + translateY(+20px) → (0px) with 6-frame stagger b
 cards. All cards visible by frame 1590 (this scene shows a representative subset of the
 21 total categories, not all of them).
 
-Lower-third: "180+ tools free, 300+ with Pro, covering every surface of WordPress."
+Lower-third: "180+ tools free, 290+ with Pro, covering every surface of WordPress."
 
 ### Scene 7 — Brand Lockup (BrandLockup)
 
@@ -228,7 +228,7 @@ Each slide is a static Remotion frame (renderStill). Composition: `CarouselSlide
 - 4x4 grid of category chips (Blue100 background, Blue600 text, 8px radius, Instrument
   Sans 500 13px): Content, Elementor, WooCommerce, SEO, Media, Menus, LMS, Memory,
   Blueprints, Approvals, Webhooks, Gutenberg, Taxonomy, Analytics, Figma, Admin.
-- Headline above grid (Space Grotesk 700, 40px, White): "180+ tools free. 300+ with Pro."
+- Headline above grid (Space Grotesk 700, 40px, White): "180+ tools free. 290+ with Pro."
 - Sub below (Slate200 16px): "Every surface of WordPress. One MCP server."
 
 ### Slide 5 — Site memory

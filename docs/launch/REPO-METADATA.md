@@ -17,9 +17,9 @@ a hard count that overstates.
 ```
 Turn any WordPress site into an MCP server — let Claude, Cursor, and any MCP client build
 pages, edit Elementor, run WooCommerce, and manage media/SEO through natural language.
-180+ tools free, 300+ with Pro. Governed, approval-gated, auditable.
+180+ tools free, 290+ with Pro. Governed, approval-gated, auditable.
 ```
-(If you want a count, use "180+ tools free, 300+ with Pro" — counted from the registries
+(If you want a count, use "180+ tools free, 290+ with Pro" — counted from the registries
 on `origin/main` — not 239 or 171. Recount via `tools/list` before any marketing copy
 hard-codes a number; it drifts with every release.)
 

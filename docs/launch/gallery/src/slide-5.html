@@ -4,9 +4,8 @@
 <meta charset="utf-8">
 <link rel="stylesheet" href="base.css">
 <style>
-  .steps { display: flex; gap: 26px; flex: 1; min-height: 0; align-items: stretch; }
+  .steps { display: flex; gap: 26px; align-items: flex-start; }
   .step { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-  .step .shot-frame { margin-top: auto; margin-bottom: auto; }
   .step .num {
     display: inline-flex; align-items: center; justify-content: center;
     width: 24px; height: 24px; border-radius: 50%;
@@ -20,17 +19,17 @@
     margin-bottom: 12px;
   }
   .step .shot-frame img { width: 100%; display: block; }
-  .step.wide { flex: 1.4; }
   .done-card {
     background: var(--ink-900);
     border: 1px solid rgba(217,226,242,0.14);
     border-radius: 12px;
-    padding: 20px 22px;
-    flex: 1;
+    padding: 22px 22px;
+    min-height: 280px;
     display: flex;
     flex-direction: column;
-    gap: 11px;
     justify-content: center;
+    gap: 16px;
+    box-sizing: border-box;
   }
   .done-card .item { display: flex; align-items: center; gap: 10px; font-size: 14.5px; color: var(--slate-200); }
   .done-card .item b { color: var(--white); font-weight: 500; }
@@ -52,7 +51,7 @@
       <span class="stitle">Generate an API key</span>
       <div class="shot-frame"><img src="setup-keybox.png"></div>
     </div>
-    <div class="step wide">
+    <div class="step">
       <span class="num">2</span>
       <span class="stitle">Paste the config into your AI client</span>
       <div class="shot-frame"><img src="setup-connect.png"></div>
