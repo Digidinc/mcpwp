@@ -5,6 +5,20 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.13.1](https://github.com/Mumega-com/mcpwp/compare/v3.13.0...v3.13.1) (2026-09-26)
+
+
+### Bug Fixes
+
+* **admin:** clean first-run debug log, canonical update channel, Free plan label ([#888](https://github.com/Mumega-com/mcpwp/issues/888)) ([14aef59](https://github.com/Mumega-com/mcpwp/commit/14aef59f9f58a8dffa9b0a4c6e6253561145e0b1))
+* **content:** strip script/style bodies with their tags and report removals ([#808](https://github.com/Mumega-com/mcpwp/issues/808)) ([#885](https://github.com/Mumega-com/mcpwp/issues/885)) ([22bccaf](https://github.com/Mumega-com/mcpwp/commit/22bccaf508b7d61789501f6e4a54795dac094824))
+* **elementor:** detect default-on Container experiment and honour convert on set_elementor ([#887](https://github.com/Mumega-com/mcpwp/issues/887)) ([8f2eb1a](https://github.com/Mumega-com/mcpwp/commit/8f2eb1a1bceaa70d0174ab20a3e206a45a54bffe))
+* **elementor:** invalidate Elementor caches after find/replace and price it by scope ([#891](https://github.com/Mumega-com/mcpwp/issues/891)) ([#892](https://github.com/Mumega-com/mcpwp/issues/892)) ([f847141](https://github.com/Mumega-com/mcpwp/commit/f8471412493e6582ffe989142c809e7393b0465e))
+* **elementor:** recommend container widgets on atomic-mode sites until atomic writes render ([#889](https://github.com/Mumega-com/mcpwp/issues/889)) ([ac5548e](https://github.com/Mumega-com/mcpwp/commit/ac5548ec12eec4a2371bdbdae11767ee7d109ce2))
+* **release:** reject mismatched package versions and runtime requirements ([#882](https://github.com/Mumega-com/mcpwp/issues/882)) ([cadc7d9](https://github.com/Mumega-com/mcpwp/commit/cadc7d9dc6ac8cbda2ccf41832211979fc8c93d6))
+* **theme-builder:** publish templates only after their Elementor save succeeds ([#828](https://github.com/Mumega-com/mcpwp/issues/828)) ([#886](https://github.com/Mumega-com/mcpwp/issues/886)) ([e96264b](https://github.com/Mumega-com/mcpwp/commit/e96264bc3bac36e3c76d329f9e331a7f1fcc8f85))
+* **woocommerce:** archetype PUT drops stored fields ([#879](https://github.com/Mumega-com/mcpwp/issues/879)), apply unpublishes live products ([#878](https://github.com/Mumega-com/mcpwp/issues/878)) ([bae4e71](https://github.com/Mumega-com/mcpwp/commit/bae4e71db5612bfdf1adbe98f8e34a88d03c691d))
+
 ## [3.13.0](https://github.com/Mumega-com/mcpwp/compare/v3.12.0...v3.13.0) (2026-09-19)
 
 
