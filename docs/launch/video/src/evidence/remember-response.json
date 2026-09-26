@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"{\n    \"success\": true,\n    \"namespace\": \"preferences\",\n    \"key\": \"brand_tone\"\n}"}],"isError":false,"_meta":{"plugin_version":"3.13.0","rate_limit":{"limit":30,"remaining":29,"reset_in":10,"window":"burst","bucket":"write"},"spend_budget":{"limit":1000,"spent":1,"remaining":999,"exhausted":false}}}}

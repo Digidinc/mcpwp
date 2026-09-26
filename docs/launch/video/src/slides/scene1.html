@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<link rel="stylesheet" href="tokens.css">
+<style>
+.frame { align-items: center; justify-content: center; }
+.stack { display:flex; flex-direction:column; gap:36px; text-align:center; max-width:1500px; }
+.line { font-family:'Space Grotesk',sans-serif; font-weight:700; font-size:64px; color:var(--white); opacity:0; line-height:1.25; }
+.l1 { animation: l1 7s ease forwards; }
+.l2 { animation: l2 7s ease forwards; color: var(--slate-200); font-weight:600; font-size:52px; }
+.l3 { animation: l3 7s ease forwards; color: var(--blue-100); font-weight:600; font-size:52px; }
+@keyframes l1 { 0%{opacity:0; transform:translateY(14px);} 8%{opacity:1; transform:translateY(0);} 100%{opacity:1;} }
+@keyframes l2 { 0%{opacity:0; transform:translateY(14px);} 33%{opacity:0;} 41%{opacity:1; transform:translateY(0);} 100%{opacity:1;} }
+@keyframes l3 { 0%{opacity:0; transform:translateY(14px);} 66%{opacity:0;} 75%{opacity:1; transform:translateY(0);} 100%{opacity:1;} }
+</style></head>
+<body>
+<div class="frame">
+  <div class="stack">
+    <div class="line l1">WordPress runs a huge share of the web.</div>
+    <div class="line l2">AI agents can now do real work.</div>
+    <div class="line l3">The missing piece is the connection between them.</div>
+  </div>
+</div>
+</body></html>

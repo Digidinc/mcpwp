@@ -1,0 +1,3 @@
+# Build output (webm captures, normalized/assembled intermediates) — regenerate with
+# capture.sh + assemble.sh. Only the final deliverables in docs/launch/video/ are committed.
+out/
