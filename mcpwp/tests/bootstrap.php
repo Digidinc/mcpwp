@@ -2172,6 +2172,44 @@ function get_post_type_object($post_type)
     );
 }
 
+// The page templates the active theme/plugins register, mirroring
+// wp_get_theme()->get_page_templates(). Tests can override via
+// $GLOBALS['mcpwp_test_page_templates']; unset means the same three
+// Elementor-registered templates a real rig has.
+function mcpwp_test_page_templates()
+{
+    return isset($GLOBALS['mcpwp_test_page_templates']) ? $GLOBALS['mcpwp_test_page_templates'] : array(
+        'elementor_canvas'        => 'Elementor Canvas',
+        'elementor_header_footer' => 'Elementor Full Width',
+        'elementor_theme'         => 'Theme',
+    );
+}
+
+// Mirrors WP core's wp_insert_post(): if a non-empty 'page_template' key is
+// present in $postarr, it is validated against the active theme's registered
+// templates. 'default' always short-circuits as valid. An invalid slug
+// returns a WP_Error (when $wp_error) WITHOUT undoing whatever else this
+// call already wrote — matching core, where the row is already persisted by
+// the time this check runs. See #965.
+function mcpwp_test_apply_page_template($post_id, $postarr, $wp_error)
+{
+    if (empty($postarr['page_template'])) {
+        return null;
+    }
+
+    $templates = mcpwp_test_page_templates();
+    if ('default' !== $postarr['page_template'] && ! isset($templates[ $postarr['page_template'] ])) {
+        if ($wp_error) {
+            return new WP_Error('invalid_page_template', 'Invalid page template.');
+        }
+        update_post_meta($post_id, '_wp_page_template', 'default');
+        return null;
+    }
+
+    update_post_meta($post_id, '_wp_page_template', $postarr['page_template']);
+    return null;
+}
+
 function wp_insert_post($postarr, $wp_error = false)
 {
     $next_id = empty($GLOBALS['_mcpwp_test_posts']) ? 1 : max(array_map('intval', array_keys($GLOBALS['_mcpwp_test_posts']))) + 1;
@@ -2194,6 +2232,11 @@ function wp_insert_post($postarr, $wp_error = false)
         'post_excerpt'      => isset($postarr['post_excerpt']) ? $postarr['post_excerpt'] : '',
     );
 
+    $template_error = mcpwp_test_apply_page_template($post_id, $postarr, $wp_error);
+    if ($template_error instanceof WP_Error) {
+        return $template_error;
+    }
+
     return $post_id;
 }
 
@@ -2203,18 +2246,43 @@ function wp_update_post($postarr, $wp_error = false)
         return $wp_error ? new WP_Error('not_found', 'Post not found.', array( 'status' => 404 )) : 0;
     }
 
-    $post = $GLOBALS['_mcpwp_test_posts'][ (int) $postarr['ID'] ];
+    $post_id = (int) $postarr['ID'];
+
+    // Mirror WP core's wp_update_post(): it fetches the FULL existing row
+    // (get_post($ID, ARRAY_A)) and merges it under the caller's array before
+    // ever reaching wp_insert_post()'s validation. WP_Post::to_array() folds
+    // in a virtual 'page_template' key sourced from the _wp_page_template
+    // postmeta, so a caller who never mentions page_template still carries
+    // forward whatever stale slug is stored in meta. Reproduces #965: a
+    // title-only update on a post with a stale/invalid _wp_page_template can
+    // be rejected below even though nothing here asked for a template.
+    if (! array_key_exists('page_template', $postarr)) {
+        $existing_template = get_post_meta($post_id, '_wp_page_template', true);
+        if ('' !== $existing_template) {
+            $postarr['page_template'] = $existing_template;
+        }
+    }
+
+    $post = $GLOBALS['_mcpwp_test_posts'][ $post_id ];
     foreach ($postarr as $key => $value) {
-        if ('ID' === $key) {
+        if ('ID' === $key || 'page_template' === $key) {
             continue;
         }
         $post->{$key} = $value;
     }
     $post->post_modified = '2026-06-06 01:00:00';
     $post->post_modified_gmt = '2026-06-06 01:00:00';
-    $GLOBALS['_mcpwp_test_posts'][ (int) $postarr['ID'] ] = $post;
+    $GLOBALS['_mcpwp_test_posts'][ $post_id ] = $post;
 
-    return (int) $postarr['ID'];
+    // Mirror WP core: the page-template check runs AFTER the row is written,
+    // so an invalid template surfaces as an error return without undoing the
+    // field changes already applied above.
+    $template_error = mcpwp_test_apply_page_template($post_id, $postarr, $wp_error);
+    if ($template_error instanceof WP_Error) {
+        return $template_error;
+    }
+
+    return $post_id;
 }
 
 class WP_Query

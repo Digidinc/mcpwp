@@ -508,10 +508,16 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 
 		$post_id = wp_insert_post(
 			array(
-				'post_type'    => $this->custom_code_cpt,
-				'post_title'   => $prepared['title'],
-				'post_content' => $prepared['code'],
-				'post_status'  => $prepared['status'],
+				'post_type'     => $this->custom_code_cpt,
+				'post_title'    => $prepared['title'],
+				'post_content'  => $prepared['code'],
+				'post_status'   => $prepared['status'],
+				// Custom Code snippets never use a page template. Passing
+				// 'default' explicitly (rather than leaving the key unset)
+				// keeps wp_insert_post()'s own page-template validation a
+				// guaranteed no-op — see the identical guard in
+				// update_custom_code() and #965.
+				'page_template' => 'default',
 			),
 			true
 		);
@@ -576,18 +582,54 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		}
 
 		if ( ! empty( $prepared['dry_run'] ) ) {
+			// Report what the real save would actually apply, not the raw
+			// input. status/location/priority are omitted from $prepared
+			// entirely when the caller didn't send them (see
+			// get_custom_code_write_args()), so without this the dry-run
+			// payload could look like a change occurred (or, before #965,
+			// misreport a fabricated "draft" default) when the real save
+			// leaves that field untouched.
+			$effective = $prepared;
+			if ( ! isset( $effective['status'] ) ) {
+				$effective['status'] = $post->post_status;
+			}
+			if ( ! isset( $effective['location'] ) ) {
+				$effective['location'] = $this->public_custom_code_location( (string) ( get_post_meta( $post->ID, '_elementor_location', true ) ?: 'elementor_head' ) );
+			}
+			if ( ! isset( $effective['priority'] ) ) {
+				$effective['priority'] = (int) ( get_post_meta( $post->ID, '_elementor_priority', true ) ?: 1 );
+			}
+
 			return $this->success_response(
 				array(
 					'dry_run' => true,
 					'valid'   => true,
 					'id'      => (int) $post->ID,
-					'payload' => $this->redact_custom_code_payload( $prepared ),
+					'payload' => $this->redact_custom_code_payload( $effective ),
 					'message' => __( 'Custom Code update payload is valid. Nothing was saved because dry_run=true.', 'mcpwp' ),
 				)
 			);
 		}
 
-		$post_update = array( 'ID' => (int) $post->ID );
+		$post_update = array(
+			'ID'            => (int) $post->ID,
+			// wp_update_post() fetches the full existing post row and merges
+			// it under the caller's array before delegating to
+			// wp_insert_post() — and WP_Post exposes a virtual 'page_template'
+			// property read straight from the _wp_page_template postmeta. A
+			// title-only (or any partial) update therefore silently carries
+			// forward whatever template slug is stored there, even though
+			// this route never asks for one. If that slug isn't registered
+			// by the active theme (stale from a prior theme, or simply never
+			// meaningful for a snippet post), wp_insert_post()'s own
+			// page-template validation rejects the ENTIRE update with
+			// "Invalid page template." Custom Code snippets never use a page
+			// template, so we always pin it to 'default' — the one value the
+			// validation short-circuits as always-valid — which both
+			// prevents the failure and self-heals a previously-stale value.
+			// See #965.
+			'page_template' => 'default',
+		);
 		if ( isset( $prepared['title'] ) ) {
 			$post_update['post_title'] = $prepared['title'];
 		}
@@ -598,13 +640,11 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			$post_update['post_status'] = $prepared['status'];
 		}
 
-		if ( count( $post_update ) > 1 ) {
-			$updated = wp_update_post( $post_update, true );
-			if ( is_wp_error( $updated ) ) {
-				$status = $this->get_wp_error_status( $updated );
-				$this->log_activity( 'update_elementor_custom_code', $request, null, $status );
-				return $this->error_response_from_wp_error( $updated );
-			}
+		$updated = wp_update_post( $post_update, true );
+		if ( is_wp_error( $updated ) ) {
+			$status = $this->get_wp_error_status( $updated );
+			$this->log_activity( 'update_elementor_custom_code', $request, null, $status );
+			return $this->error_response_from_wp_error( $updated );
 		}
 
 		$this->save_custom_code_meta( (int) $post->ID, $prepared );
@@ -746,7 +786,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	 * @return array Args schema.
 	 */
 	private function get_custom_code_write_args( $creating ) {
-		return array(
+		$args = array(
 			'title'      => array(
 				'description' => __( 'Snippet title.', 'mcpwp' ),
 				'type'        => 'string',
@@ -764,17 +804,14 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			'location'   => array(
 				'description' => __( 'Injection location: head, body_start, or body_end. Any other value is rejected — it will not be silently coerced.', 'mcpwp' ),
 				'type'        => 'string',
-				'default'     => 'head',
 			),
 			'priority'   => array(
 				'description' => __( 'Print order among snippets sharing a location, 1-10 (lower prints first). Matches Elementor Pro\'s own Custom Code priority field.', 'mcpwp' ),
 				'type'        => 'integer',
-				'default'     => 1,
 			),
 			'status'     => array(
 				'description' => __( 'Post status: draft or publish.', 'mcpwp' ),
 				'type'        => 'string',
-				'default'     => 'draft',
 			),
 			'conditions' => array(
 				'description' => __( 'Elementor display conditions. Default is include/general (entire site). Example: [{"type":"include","name":"general"}].', 'mcpwp' ),
@@ -786,6 +823,20 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 				'default'     => false,
 			),
 		);
+
+		// Defaults belong to CREATE only. The REST dispatcher back-fills a
+		// registered 'default' into the request whenever the caller omits
+		// the param — on the update route that indistinguishably looks like
+		// an explicit value, so status/location/priority were being reset
+		// (e.g. status -> draft) on every update that didn't repeat them.
+		// See #965.
+		if ( $creating ) {
+			$args['location']['default'] = 'head';
+			$args['priority']['default']  = 1;
+			$args['status']['default']    = 'draft';
+		}
+
+		return $args;
 	}
 
 	/**

@@ -237,4 +237,288 @@ final class ElementorCustomCodeTest extends TestCase {
 		$this->assertSame( 'body_start', $data['snippet']['location'] );
 		$this->assertSame( 'elementor_body_start', get_post_meta( 99, '_elementor_location', true ) );
 	}
+
+	/**
+	 * Helper: seed an existing published elementor_snippet post, optionally
+	 * with a stale/invalid _wp_page_template meta value — the exact shape
+	 * production hit on mcpwp.net (#965): a snippet post that already has a
+	 * template slug in postmeta that the active theme no longer registers.
+	 */
+	private function seed_published_snippet( int $id, string $stale_page_template = '' ): void {
+		$GLOBALS['_mcpwp_test_posts'][ $id ] = (object) array(
+			'ID'                => $id,
+			'post_type'         => 'elementor_snippet',
+			'post_title'        => 'PostHog snippet',
+			'post_name'         => 'posthog-snippet',
+			'post_status'       => 'publish',
+			'post_date'         => '2026-06-06 00:00:00',
+			'post_modified'     => '2026-06-06 00:00:00',
+			'post_modified_gmt' => '2026-06-06 00:00:00',
+			'post_parent'       => 0,
+			'menu_order'        => 0,
+			'post_author'       => 1,
+			'post_content'      => '<script>console.log("original");</script>',
+			'post_excerpt'      => '',
+		);
+		update_post_meta( $id, '_elementor_location', 'elementor_head' );
+		update_post_meta( $id, '_elementor_priority', 1 );
+
+		if ( '' !== $stale_page_template ) {
+			update_post_meta( $id, '_wp_page_template', $stale_page_template );
+		}
+	}
+
+	/**
+	 * #965 core repro: a snippet carrying a stale _wp_page_template meta
+	 * (from a theme that no longer registers it) must not block a
+	 * title-only update. Before the fix, wp_update_post() merged that stale
+	 * value into $postarr and core's own page-template validation rejected
+	 * the whole update with "Invalid page template."
+	 */
+	public function test_update_custom_code_survives_stale_page_template_meta(): void {
+		$this->seed_published_snippet( 682, 'old-theme-template.php' );
+
+		$controller = new Mcpwp_REST_Elementor_Pro( new stdClass() );
+		$request    = new WP_REST_Request(
+			'PUT',
+			'/mcpwp/v1/elementor/custom-code/682',
+			array(
+				'id'     => 682,
+				'title'  => 'PostHog snippet (renamed)',
+				'status' => 'publish',
+			)
+		);
+
+		$response = $controller->update_custom_code( $request );
+
+		$this->assertFalse( is_wp_error( $response ), 'update must not fail with invalid_page_template' );
+		$data = $response->get_data();
+		$this->assertSame( 'PostHog snippet (renamed)', $data['snippet']['title'] );
+		$this->assertSame( 'publish', $data['snippet']['status'] );
+
+		// The stale slug is self-healed rather than left to fail the next update too.
+		$this->assertSame( 'default', get_post_meta( 682, '_wp_page_template', true ) );
+	}
+
+	/**
+	 * A code-only update (no title, no status) on a published snippet must
+	 * leave the status untouched.
+	 */
+	public function test_update_custom_code_code_only_preserves_status(): void {
+		$this->seed_published_snippet( 683 );
+
+		$controller = new Mcpwp_REST_Elementor_Pro( new stdClass() );
+		$request    = new WP_REST_Request(
+			'PUT',
+			'/mcpwp/v1/elementor/custom-code/683',
+			array(
+				'id'   => 683,
+				'code' => '<script>console.log("updated");</script>',
+			)
+		);
+
+		$response = $controller->update_custom_code( $request );
+		$data     = $response->get_data();
+
+		$this->assertSame( 'publish', $data['snippet']['status'] );
+		$this->assertStringContainsString( 'updated', $data['snippet']['code'] );
+		$this->assertSame( 'publish', get_post_status( 683 ) );
+	}
+
+	/**
+	 * A title-only update on a published snippet, with status explicitly
+	 * repeated as publish, must succeed and keep publish.
+	 */
+	public function test_update_custom_code_title_only_with_explicit_status_keeps_publish(): void {
+		$this->seed_published_snippet( 684 );
+
+		$controller = new Mcpwp_REST_Elementor_Pro( new stdClass() );
+		$request    = new WP_REST_Request(
+			'PUT',
+			'/mcpwp/v1/elementor/custom-code/684',
+			array(
+				'id'     => 684,
+				'title'  => 'Renamed snippet',
+				'status' => 'publish',
+			)
+		);
+
+		$response = $controller->update_custom_code( $request );
+		$data     = $response->get_data();
+
+		$this->assertSame( 'Renamed snippet', $data['snippet']['title'] );
+		$this->assertSame( 'publish', $data['snippet']['status'] );
+	}
+
+	/**
+	 * Status omitted entirely on update must never default to draft — the
+	 * write-args schema only carries a 'draft' default for the CREATE route;
+	 * see get_custom_code_write_args(). Before the fix this schema default
+	 * was shared with the update route (applied by the real REST dispatcher
+	 * whenever the caller omits the param), silently unpublishing on update.
+	 */
+	public function test_update_custom_code_status_omitted_keeps_publish(): void {
+		$this->seed_published_snippet( 685 );
+
+		$controller = new Mcpwp_REST_Elementor_Pro( new stdClass() );
+		$request    = new WP_REST_Request(
+			'PUT',
+			'/mcpwp/v1/elementor/custom-code/685',
+			array(
+				'id'    => 685,
+				'title' => 'No status param here',
+			)
+		);
+
+		$response = $controller->update_custom_code( $request );
+		$data     = $response->get_data();
+
+		$this->assertSame( 'publish', $data['snippet']['status'] );
+		$this->assertSame( 'publish', get_post_status( 685 ) );
+	}
+
+	/**
+	 * dry_run must report the same outcome the real save would produce. Before
+	 * the fix, dry_run on an update with status omitted reported a fabricated
+	 * "draft" (the create-only schema default leaking into prepare's payload)
+	 * even though the real save left a published snippet untouched.
+	 */
+	public function test_update_custom_code_dry_run_reports_current_status_when_omitted(): void {
+		$this->seed_published_snippet( 686 );
+
+		$controller = new Mcpwp_REST_Elementor_Pro( new stdClass() );
+		$request    = new WP_REST_Request(
+			'PUT',
+			'/mcpwp/v1/elementor/custom-code/686',
+			array(
+				'id'      => 686,
+				'title'   => 'Dry run title',
+				'dry_run' => true,
+			)
+		);
+
+		$response = $controller->update_custom_code( $request );
+		$data     = $response->get_data();
+
+		$this->assertTrue( $data['dry_run'] );
+		$this->assertTrue( $data['valid'] );
+		$this->assertSame( 'publish', $data['payload']['status'] );
+
+		// Nothing was actually written.
+		$this->assertSame( 'publish', get_post_status( 686 ) );
+		$this->assertSame( 'PostHog snippet', get_post( 686 )->post_title );
+	}
+
+	/**
+	 * dry_run parity must also hold when the snippet carries the same stale
+	 * _wp_page_template meta as the core repro: dry_run must not report
+	 * success while the real save would fail (and, per the fix, the real
+	 * save no longer fails either).
+	 */
+	public function test_update_custom_code_dry_run_parity_with_stale_page_template(): void {
+		$this->seed_published_snippet( 687, 'old-theme-template.php' );
+
+		$controller = new Mcpwp_REST_Elementor_Pro( new stdClass() );
+		$dry_request = new WP_REST_Request(
+			'PUT',
+			'/mcpwp/v1/elementor/custom-code/687',
+			array(
+				'id'      => 687,
+				'title'   => 'Renamed under dry run',
+				'status'  => 'publish',
+				'dry_run' => true,
+			)
+		);
+		$dry_response = $controller->update_custom_code( $dry_request );
+		$this->assertTrue( $dry_response->get_data()['valid'] );
+
+		$real_request = new WP_REST_Request(
+			'PUT',
+			'/mcpwp/v1/elementor/custom-code/687',
+			array(
+				'id'     => 687,
+				'title'  => 'Renamed under dry run',
+				'status' => 'publish',
+			)
+		);
+		$real_response = $controller->update_custom_code( $real_request );
+
+		$this->assertFalse( is_wp_error( $real_response ), 'dry_run reported valid but the real save failed — parity broken' );
+		$this->assertSame( 'Renamed under dry run', $real_response->get_data()['snippet']['title'] );
+	}
+
+	/**
+	 * location and priority, like status, must only default on create.
+	 * Omitting them on update must not reset a previously-set value.
+	 */
+	public function test_update_custom_code_location_and_priority_omitted_are_preserved(): void {
+		$this->seed_published_snippet( 688 );
+		update_post_meta( 688, '_elementor_location', 'elementor_body_end' );
+		update_post_meta( 688, '_elementor_priority', 7 );
+
+		$controller = new Mcpwp_REST_Elementor_Pro( new stdClass() );
+		$request    = new WP_REST_Request(
+			'PUT',
+			'/mcpwp/v1/elementor/custom-code/688',
+			array(
+				'id'    => 688,
+				'title' => 'Location/priority preserved',
+			)
+		);
+
+		$response = $controller->update_custom_code( $request );
+		$data     = $response->get_data();
+
+		$this->assertSame( 'body_end', $data['snippet']['location'] );
+		$this->assertSame( 7, $data['snippet']['priority'] );
+	}
+
+	/**
+	 * Direct check on the root cause: the write-args schema must only carry
+	 * a 'default' for status/location/priority on the CREATE route. Sharing
+	 * those defaults with the update route is exactly what made the real WP
+	 * REST dispatcher (which back-fills a registered 'default' into the
+	 * request whenever the caller omits the param) look like an explicit
+	 * "reset to draft" on every update.
+	 */
+	public function test_write_args_schema_only_defaults_status_location_priority_on_create(): void {
+		$controller = new Mcpwp_REST_Elementor_Pro( new stdClass() );
+		$method     = new ReflectionMethod( Mcpwp_REST_Elementor_Pro::class, 'get_custom_code_write_args' );
+		$method->setAccessible( true );
+
+		$create_args = $method->invoke( $controller, true );
+		$update_args = $method->invoke( $controller, false );
+
+		$this->assertArrayHasKey( 'default', $create_args['status'] );
+		$this->assertArrayHasKey( 'default', $create_args['location'] );
+		$this->assertArrayHasKey( 'default', $create_args['priority'] );
+
+		$this->assertArrayNotHasKey( 'default', $update_args['status'] );
+		$this->assertArrayNotHasKey( 'default', $update_args['location'] );
+		$this->assertArrayNotHasKey( 'default', $update_args['priority'] );
+	}
+
+	/**
+	 * Create path, checked for the same class of bug: a fresh snippet must
+	 * always persist with page_template pinned to 'default' so a later
+	 * theme switch can never retroactively invalidate it.
+	 */
+	public function test_create_custom_code_pins_page_template_to_default(): void {
+		$controller = new Mcpwp_REST_Elementor_Pro( new stdClass() );
+		$request    = new WP_REST_Request(
+			'POST',
+			'/mcpwp/v1/elementor/custom-code',
+			array(
+				'title'  => 'New snippet',
+				'code'   => '<script>console.log("new");</script>',
+				'status' => 'publish',
+			)
+		);
+
+		$response = $controller->create_custom_code( $request );
+		$data     = $response->get_data();
+
+		$this->assertSame( 201, $response->get_status() );
+		$this->assertSame( 'default', get_post_meta( $data['id'], '_wp_page_template', true ) );
+	}
 }
