@@ -1,6 +1,6 @@
 {
   "name": "@mcpwp.net/mcpwp",
-  "version": "3.0.2",
+  "version": "3.0.3",
   "mcpName": "io.github.mumega848/mcpwp",
   "publishConfig": {
     "access": "public"
