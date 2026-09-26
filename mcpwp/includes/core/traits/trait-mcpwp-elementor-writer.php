@@ -663,15 +663,19 @@ trait Mcpwp_Elementor_Writer_Trait {
 
 		// (#901) verify_css_file_was_written() downgraded css_regenerated to
 		// false because the post's CSS file does not exist on disk (or is
-		// empty) despite regeneration reporting no exception. Named separately
-		// from css_regeneration_exception/_error below — this is Elementor's
-		// own CSS_File::update() swallowing a filesystem write failure with no
+		// empty), or exists but predates this write (a stale survivor from
+		// before the directory broke — RC review WARN) — despite regeneration
+		// reporting no exception. Named separately from
+		// css_regeneration_exception/_error below — this is Elementor's own
+		// CSS_File::update() swallowing a filesystem write failure with no
 		// exception, not a caught Throwable or WP_Error — and it gets an
 		// actionable hint rather than a bare label, since "the uploads
 		// directory is not writable" is something an operator can actually go
 		// fix.
 		if ( ! empty( $debug['css_file_not_written'] ) ) {
-			$errors[] = 'css_regeneration: CSS file could not be written to uploads/elementor/css — check that the uploads directory is writable.';
+			$errors[] = ! empty( $debug['css_file_stale'] )
+				? 'css_regeneration: CSS file on disk was not updated by this save (it predates it) — check that the uploads directory is writable.'
+				: 'css_regeneration: CSS file could not be written to uploads/elementor/css — check that the uploads directory is writable.';
 		}
 
 		if ( ! empty( $debug['html_rebuild_corrupted_data'] ) ) {
@@ -770,12 +774,38 @@ trait Mcpwp_Elementor_Writer_Trait {
 	 * decorate_render_status(), render_verified:true for a page whose CSS
 	 * file was never actually written and therefore rendered unstyled.
 	 *
-	 * Verified truth is one of two things: Elementor is configured to print
-	 * CSS inline (`elementor_css_print_method` = 'internal' — no file is ever
-	 * written by design, so none is expected), or the post's CSS file exists
-	 * on disk and is non-empty. Anything else downgrades css_regenerated to
-	 * false and names the reason so collect_render_errors() can turn it into
-	 * an actionable hint instead of a silent lie.
+	 * (RC review BLOCK, 2026-09-26): "no file, or an empty one" is NOT
+	 * always a failure. Elementor's own Base::update() -> update_file()
+	 * deliberately DELETES a post's CSS file and records
+	 * `_elementor_css.status = 'empty'` whenever there is nothing to print —
+	 * a cleared page (no elements), a widget with no styled/global-default
+	 * controls, or an Elementor 4 atomic-only page (the legacy Post CSS file
+	 * only ever carries legacy-control rules; atomic styles are written by a
+	 * separate, lazily-populated `local-*` file the atomic styles manager
+	 * owns, not this one). Treating that deliberate, healthy "nothing to
+	 * write" as the same failure as a write that silently dropped content
+	 * produced false BLOCKs on every one of those pages. The fix is to ask
+	 * Elementor what it decided, not to infer intent from a byte count:
+	 * `_elementor_css.status` is 'file' (a file was meant to exist), 'inline'
+	 * (this site prints CSS inline — no file, by design, same as the
+	 * `elementor_css_print_method` option this already recognised) or
+	 * 'empty' (Elementor decided there was nothing to print and removed any
+	 * existing file on purpose). Only 'file' with nothing usable on disk is
+	 * a real defect. The status is read by the caller BEFORE the CSS-priming
+	 * block a few lines later deletes/refreshes that same meta key on a
+	 * small file — read it any later and this method would see nothing.
+	 *
+	 * (RC review WARN, 2026-09-26): a non-empty file existing is not proof
+	 * IT was written by THIS call. On an uploads directory that went
+	 * unwritable after a page already had CSS, Elementor's write silently
+	 * no-ops and the OLD file — non-empty, sitting right where this method
+	 * looks — stays exactly as it was, so a byte-count-only check passes a
+	 * stale file left over from before the directory broke. $regen_started_at
+	 * (captured by the caller immediately before invoking Elementor's
+	 * update(), via time()) lets this method require the file's mtime to be
+	 * no older than that instant, with a 2-second slack for filesystem/clock
+	 * granularity — a truly rewritten file is never older than the call that
+	 * (claims to have) rewritten it.
 	 *
 	 * Only ever downgrades a currently-true css_regenerated: a regeneration
 	 * that already threw or returned a WP_Error is left exactly as
@@ -785,19 +815,48 @@ trait Mcpwp_Elementor_Writer_Trait {
 	 * \Elementor\Core\Files\CSS\Post unavailable — means regeneration was
 	 * never attempted, so there is nothing here to verify.
 	 *
-	 * @param array $debug    Debug bag, written by reference.
-	 * @param int   $css_size Size in bytes of the post's CSS file on disk (0 when missing).
+	 * @param array      $debug             Debug bag, written by reference.
+	 * @param int        $css_size          Size in bytes of the post's CSS file on disk (0 when missing).
+	 * @param string     $css_path          Absolute path to the post's CSS file.
+	 * @param string|null $meta_status      `_elementor_css['status']` read right after the
+	 *                                       regeneration call, before anything later can
+	 *                                       delete/refresh it. Null when the meta was never
+	 *                                       written (older Elementor, or the write itself
+	 *                                       never landed) — falls back to the site-wide
+	 *                                       print-method option.
+	 * @param int|null    $regen_started_at time() captured immediately before the
+	 *                                       regeneration call ran; null skips the
+	 *                                       staleness check (nothing to compare against).
 	 */
-	private function verify_css_file_was_written( array &$debug, $css_size ) {
+	private function verify_css_file_was_written( array &$debug, $css_size, $css_path, $meta_status = null, $regen_started_at = null ) {
 		if ( empty( $debug['css_regenerated'] ) ) {
 			return;
 		}
 
-		if ( $css_size > 0 ) {
+		// Elementor's own verdict: nothing was SUPPOSED to be on disk.
+		if ( in_array( $meta_status, array( 'empty', 'inline' ), true ) ) {
 			return;
 		}
 
-		if ( 'internal' === get_option( 'elementor_css_print_method', 'external' ) ) {
+		// No per-page verdict to read — fall back to the site-wide setting,
+		// which is the same 'inline' exemption by another name.
+		if ( null === $meta_status && 'internal' === get_option( 'elementor_css_print_method', 'external' ) ) {
+			return;
+		}
+
+		// A 'file' verdict (or no verdict, external print method): a file
+		// SHOULD exist, be non-empty, AND have actually been touched by this
+		// call — not a stale survivor from before the directory broke.
+		if ( $css_size > 0 && null !== $regen_started_at ) {
+			$mtime = @filemtime( $css_path );
+			if ( false !== $mtime && $mtime >= ( $regen_started_at - 2 ) ) {
+				return;
+			}
+			$debug['css_file_stale'] = true;
+		} elseif ( $css_size > 0 ) {
+			// No timestamp to compare against (caller did not supply one) —
+			// fall back to the pre-staleness-check contract: non-empty is
+			// enough.
 			return;
 		}
 
@@ -1632,6 +1691,14 @@ trait Mcpwp_Elementor_Writer_Trait {
 		// --- 4. Rebuild CSS + HTML rendering cache ---
 		// Always regenerate — meta overwrite may leave post_content (HTML cache) stale.
 
+		// Populated around the css_regeneration call below, read by
+		// verify_css_file_was_written() further down — declared here (rather
+		// than inside either of the two separate `if ( $elementor_ok )`
+		// blocks that follow) because both need them and neither encloses
+		// the other.
+		$css_regen_started_at = null;
+		$css_meta_status       = null;
+
 		if ( $elementor_ok ) {
 			if ( ! empty( \Elementor\Plugin::$instance->files_manager ) ) {
 				$cleared = $this->attempt_elementor_call(
@@ -1703,6 +1770,12 @@ trait Mcpwp_Elementor_Writer_Trait {
 			}
 
 			if ( class_exists( '\Elementor\Core\Files\CSS\Post' ) ) {
+				// Captured immediately before the call Elementor might write
+				// a file from, so verify_css_file_was_written() can tell a
+				// file this call actually rewrote from a stale one that
+				// merely survived from before (RC review WARN).
+				$css_regen_started_at = time();
+
 				// Same Elementor API surface as the saves above: an unguarded throw
 				// here would still 500 a request whose data is already persisted.
 				$css_regen = $this->attempt_elementor_call(
@@ -1715,6 +1788,15 @@ trait Mcpwp_Elementor_Writer_Trait {
 					'css_regeneration'
 				);
 				$save_debug['css_regenerated'] = $css_regen['ok'];
+
+				// (RC review BLOCK) Read Elementor's own verdict now, before
+				// the priming block a few lines below can delete/refresh
+				// this same meta key on a small file — read any later and
+				// there is nothing left to read.
+				$css_meta = get_post_meta( $page_id, '_elementor_css', true );
+				if ( is_array( $css_meta ) && isset( $css_meta['status'] ) ) {
+					$css_meta_status = $css_meta['status'];
+				}
 			}
 		}
 
@@ -1727,7 +1809,19 @@ trait Mcpwp_Elementor_Writer_Trait {
 
 			// (#901) A reported success here can still be a lie — see
 			// verify_css_file_was_written() for why.
-			$this->verify_css_file_was_written( $save_debug, $css_size );
+			//
+			// (RC review NOTE) Deliberately verified BEFORE the loopback
+			// below, not after: that request runs 'blocking' => false, so
+			// this method never waits for it and moving the check past the
+			// wp_remote_get() call would not observe anything the loopback
+			// changed — the response is already on its way out before any
+			// remote render happens. What the loopback exists to fix is a
+			// thin-but-real 'file' CSS (< 10 bytes, needing a live page load
+			// to populate the full ruleset) — already a PASS above, since a
+			// non-empty, freshly-written file satisfies
+			// verify_css_file_was_written() regardless of this threshold.
+			// Nothing here downgrades a page the loopback is about to help.
+			$this->verify_css_file_was_written( $save_debug, $css_size, $css_path, $css_meta_status, $css_regen_started_at );
 
 			// If CSS is still empty/tiny, prime it via loopback request.
 			if ( $css_size < 10 ) {
@@ -2441,6 +2535,12 @@ trait Mcpwp_Elementor_Writer_Trait {
 		// Rebuild Elementor's CSS + HTML rendering cache.
 		// Always regenerate — Document::save() may have used stale data before
 		// our meta overwrite, leaving post_content (HTML cache) stale.
+
+		// See the matching declaration in set_elementor_data() for why these
+		// live outside either `if ( $elementor_ok )` block below.
+		$css_regen_started_at = null;
+		$css_meta_status       = null;
+
 		if ( $elementor_ok ) {
 			if ( ! empty( \Elementor\Plugin::$instance->files_manager ) ) {
 				$cleared = $this->attempt_elementor_call(
@@ -2498,6 +2598,10 @@ trait Mcpwp_Elementor_Writer_Trait {
 			}
 
 			if ( class_exists( '\Elementor\Core\Files\CSS\Post' ) ) {
+				// Captured immediately before the call Elementor might write
+				// a file from — see set_elementor_data() for why.
+				$css_regen_started_at = time();
+
 				// Same Elementor API surface as the saves above: an unguarded throw
 				// here would still 500 a request whose data is already persisted.
 				$css_regen = $this->attempt_elementor_call(
@@ -2510,6 +2614,14 @@ trait Mcpwp_Elementor_Writer_Trait {
 					'css_regeneration'
 				);
 				$debug['css_regenerated'] = $css_regen['ok'];
+
+				// (RC review BLOCK) Read Elementor's own verdict now, before
+				// the priming block below can delete/refresh this same meta
+				// key on a small file.
+				$css_meta = get_post_meta( $page_id, '_elementor_css', true );
+				if ( is_array( $css_meta ) && isset( $css_meta['status'] ) ) {
+					$css_meta_status = $css_meta['status'];
+				}
 			}
 		}
 
@@ -2554,8 +2666,10 @@ trait Mcpwp_Elementor_Writer_Trait {
 			$debug['css_file_size'] = $css_size;
 
 			// (#901) A reported success here can still be a lie — see
-			// verify_css_file_was_written() for why.
-			$this->verify_css_file_was_written( $debug, $css_size );
+			// verify_css_file_was_written() for why. (RC review NOTE) See
+			// set_elementor_data() for why this runs before, not after, the
+			// non-blocking loopback below.
+			$this->verify_css_file_was_written( $debug, $css_size, $css_path, $css_meta_status, $css_regen_started_at );
 
 			if ( $css_size < 10 ) {
 				delete_post_meta( $page_id, '_elementor_css' );
