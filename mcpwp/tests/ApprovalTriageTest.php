@@ -722,6 +722,206 @@ final class ApprovalTriageTest extends TestCase
         $this->assertArrayHasKey('note', $decoded);
     }
 
+    // -- Round 2 WARN: labels joined to their prefix by `_` were missed ----------
+
+    public function test_redacts_db_password_written_as_a_php_define(): void
+    {
+        $this->configureJev();
+        $secret   = 'Tr0ub4dor&3';
+        $approval = Mcpwp_Approvals::create_post_content_request(
+            $this->makePost(),
+            'updated content',
+            array('title' => 'Update page', 'note' => "define('DB_PASSWORD', '" . $secret . "');")
+        );
+
+        $state = $this->stateSentFor($approval['id']);
+
+        $this->assertStringNotContainsString($secret, $state);
+        $this->assertStringContainsString('redacted', $state);
+        $this->assertNotNull(json_decode($state, true));
+    }
+
+    public function test_redacts_db_password_written_as_an_env_line(): void
+    {
+        $this->configureJev();
+        $secret   = 'Tr0ub4dor&3';
+        $approval = Mcpwp_Approvals::create_post_content_request(
+            $this->makePost(),
+            'updated content',
+            // \b never matches between '_' and a letter, so a label glued
+            // to a prefix by '_' (DB_PASSWORD, not just PASSWORD) is exactly
+            // the shape the old regex missed.
+            array('title' => 'Update page', 'note' => 'DB_PASSWORD: ' . $secret)
+        );
+
+        $state = $this->stateSentFor($approval['id']);
+
+        $this->assertStringNotContainsString($secret, $state);
+        $this->assertStringContainsString('redacted', $state);
+    }
+
+    public function test_redacts_auth_token_assignment(): void
+    {
+        $this->configureJev();
+        $secret   = 'ab12cd34ef56';
+        $approval = Mcpwp_Approvals::create_post_content_request(
+            $this->makePost(),
+            'updated content',
+            array('title' => 'Update page', 'note' => 'auth_token=' . $secret)
+        );
+
+        $state = $this->stateSentFor($approval['id']);
+
+        $this->assertStringNotContainsString($secret, $state);
+        $this->assertStringContainsString('redacted', $state);
+    }
+
+    /** @return array<string,string> scheme => full connection string with a distinct password each. */
+    private function connectionStrings(): array
+    {
+        return array(
+            'mysql'        => 'mysql://appuser:MyP4ssw0rd@db-host:3306/appdb',
+            'postgres'     => 'postgresql://appuser:s3cr3tPW@db.example.com:5432/appdb',
+            'mongodb+srv'  => 'mongodb+srv://appuser:m0ngoSecret9@cluster0.mongodb.net/appdb',
+            'https'        => 'https://appuser:tok3nABCDEFGH@api.example.com/path',
+        );
+    }
+
+    public function test_redacts_the_password_in_connection_string_credentials(): void
+    {
+        $this->configureJev();
+
+        foreach ($this->connectionStrings() as $scheme => $conn) {
+            $password = explode('@', explode(':', $conn, 3)[2], 2)[0];
+            $this->assertNotSame('', $password, "fixture password extraction failed for $scheme");
+
+            $approval = Mcpwp_Approvals::create_post_content_request(
+                $this->makePost(),
+                'updated content',
+                array('title' => 'Update page', 'note' => 'Connection string: ' . $conn)
+            );
+
+            $state = $this->stateSentFor($approval['id']);
+
+            $this->assertStringNotContainsString($password, $state, "$scheme: password leaked");
+            $this->assertStringContainsString('redacted', $state, "$scheme: nothing was redacted");
+            $this->assertNotNull(json_decode($state, true), "$scheme: state is not valid JSON");
+        }
+    }
+
+    public function test_connection_string_host_and_scheme_survive_redaction(): void
+    {
+        $this->configureJev();
+        $approval = Mcpwp_Approvals::create_post_content_request(
+            $this->makePost(),
+            'updated content',
+            array('title' => 'Update page', 'note' => 'DB: mysql://appuser:MyP4ssw0rd@db-host:3306/appdb')
+        );
+
+        $state = $this->stateSentFor($approval['id']);
+
+        $this->assertStringContainsString('mysql://appuser:', $state);
+        $this->assertStringContainsString('@db-host:3306/appdb', $state);
+    }
+
+    public function test_redacts_password_with_a_space_separator(): void
+    {
+        $this->configureJev();
+        $secret   = 'Tr0ub4dor&3';
+        $approval = Mcpwp_Approvals::create_post_content_request(
+            $this->makePost(),
+            'updated content',
+            array('title' => 'Update page', 'note' => 'password ' . $secret)
+        );
+
+        $state = $this->stateSentFor($approval['id']);
+
+        $this->assertStringNotContainsString($secret, $state);
+        $this->assertStringContainsString('redacted', $state);
+    }
+
+    public function test_redacts_bare_pass_colon_form(): void
+    {
+        $this->configureJev();
+        $secret   = 'hunter2ABC';
+        $approval = Mcpwp_Approvals::create_post_content_request(
+            $this->makePost(),
+            'updated content',
+            array('title' => 'Update page', 'note' => 'pass: ' . $secret)
+        );
+
+        $state = $this->stateSentFor($approval['id']);
+
+        $this->assertStringNotContainsString($secret, $state);
+        $this->assertStringContainsString('redacted', $state);
+    }
+
+    public function test_ordinary_sentence_mentioning_password_is_not_redacted(): void
+    {
+        $this->configureJev();
+        $approval = Mcpwp_Approvals::create_post_content_request(
+            $this->makePost(),
+            'updated content',
+            array('title' => 'Update page', 'note' => 'your password expired, please reset it')
+        );
+
+        $state = $this->stateSentFor($approval['id']);
+
+        $this->assertStringContainsString('password expired', $state);
+        $this->assertStringNotContainsString('redacted', $state);
+    }
+
+    // -- Round 2 usefulness: slugs and dated URL paths must survive redaction ----
+
+    public function test_kebab_case_slug_with_a_year_survives_redaction(): void
+    {
+        $this->configureJev();
+        $slug     = 'my-summer-sale-2024-landing';
+        $approval = Mcpwp_Approvals::create_post_content_request(
+            $this->makePost(),
+            'updated content',
+            array('title' => 'Update page', 'note' => 'Rename the page slug to ' . $slug)
+        );
+
+        $state = $this->stateSentFor($approval['id']);
+
+        $this->assertStringContainsString($slug, $state);
+        $this->assertStringNotContainsString('redacted', $state);
+    }
+
+    public function test_dated_url_path_survives_redaction(): void
+    {
+        $this->configureJev();
+        $url      = '/blog/my-summer-sale-2024-landing/index';
+        $approval = Mcpwp_Approvals::create_post_content_request(
+            $this->makePost(),
+            'updated content',
+            array('title' => 'Update page', 'note' => 'Broken link to ' . $url)
+        );
+
+        $state = $this->stateSentFor($approval['id']);
+
+        $this->assertStringContainsString($url, $state);
+        $this->assertStringNotContainsString('redacted', $state);
+    }
+
+    public function test_a_secret_that_happens_to_contain_a_hyphen_is_still_redacted(): void
+    {
+        $this->configureJev();
+        // Not slug-shaped: the first segment mixes case and digits with no
+        // clean word/number split, unlike "sale-2024".
+        $secret   = 'aB3xQ9zK7mP2-vL8nR4wT6yU1';
+        $approval = Mcpwp_Approvals::create_post_content_request(
+            $this->makePost(),
+            'updated content',
+            array('title' => 'Update page', 'note' => 'leftover key: ' . $secret)
+        );
+
+        $state = $this->stateSentFor($approval['id']);
+
+        $this->assertStringNotContainsString($secret, $state);
+    }
+
     // -- NOTE: triage.change_kind follows the same redaction rule as the rest ----
 
     public function test_redact_source_for_unprivileged_strips_change_kind_but_keeps_priority(): void

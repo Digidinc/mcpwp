@@ -269,38 +269,121 @@ class Mcpwp_Jev_Triage {
 			$text
 		);
 
-		// Labelled values, quoted or bare, "label: value" or "label=value".
-		// 'key' (bare, not just 'api_key'/'access_key') and 'auth'/'bearer'
-		// are included as labels here — broader than the specific header
-		// rule above, since "auth" or "bearer" can also appear as a
-		// lowercase field label rather than a real HTTP header. The value
-		// pattern stops at the next quote so a literal `key="..."` keeps its
-		// closing quote instead of it being consumed by the match.
+		// Connection-string credentials: scheme://user:PASSWORD@host — only
+		// the password segment is replaced, keeping the scheme/user/host
+		// visible (useful for diagnosing which connection a note is about).
+		$text = preg_replace_callback(
+			'#\b(?:mysql|postgres(?:ql)?|mongodb(?:\+srv)?|redis|amqp|smtps?|ftps?|https?)://[^:/\s@]*:([^@/\s]+)@#i',
+			static function ( $matches ) {
+				return str_replace( $matches[1], '[redacted]', $matches[0] );
+			},
+			$text
+		);
+
+		// Labelled values, quoted or bare, "label: value", "label=value",
+		// "label => 'value'" (PHP array literal), or "'LABEL', 'value'"
+		// (PHP define()). The leading boundary is a lookbehind rather than
+		// `\b` — `\b` never fires between two word characters, so it missed
+		// every label written as part of a larger identifier with `_`
+		// (DB_PASSWORD, auth_token, client_secret, WP_API_KEY): `_` is a
+		// word character, so `\bPASSWORD` does not match inside `DB_PASSWORD`
+		// at all. The `[A-Za-z0-9_-]*` prefix absorbs that leading
+		// "DB_"/"auth_"/"client_" part instead of requiring the label to
+		// start the identifier. No boundary is needed after the label word:
+		// the separator group itself only matches punctuation/quote/comma,
+		// so a label that is actually just a substring of an unrelated
+		// longer word (e.g. "key" inside "monkey_business") fails to find a
+		// valid separator right after it and the whole match backs out.
 		$text = preg_replace(
-			'/([\'"]?\b(?:api[_-]?key|apikey|key|secret|token|password|passwd|access[_-]?key|auth|bearer)\b[\'"]?\s*[:=]\s*)[\'"]?[^\s,}"\']{4,}/i',
+			'/((?<![A-Za-z0-9])[A-Za-z0-9_-]*(?:api[_-]?key|apikey|secret|token|password|passwd|pass|access[_-]?key|auth|bearer|key)[\'"]?\s*(?:=>|[:=]|,)\s*)[\'"]?[^\s,}"\']{4,}/i',
 			'$1[redacted]',
 			$text
 		);
 
-		// Any remaining opaque run of 20+ characters that mixes letters and
-		// digits is far more likely to be a key/hash/token than ordinary
-		// prose — catches whatever the labelled/prefixed rules above did not
-		// name, including a token that would otherwise be split by
-		// json_encode()'s slash-escaping if this ran after encoding instead
-		// of before it.
+		// "password <space> value" / "pass <space> value" — no operator at
+		// all, the other common paste shape. Only replaced when the value
+		// itself looks secret-shaped (see looks_like_secret_value()), so
+		// ordinary prose ("your password expired") is left alone while
+		// "password Tr0ub4dor&3" is not.
+		$text = preg_replace_callback(
+			'/(?<![A-Za-z0-9])(password|passwd|pass)(\s+)([^\s,}"\']{4,})/i',
+			static function ( $matches ) {
+				return self::looks_like_secret_value( $matches[3] )
+					? $matches[1] . $matches[2] . '[redacted]'
+					: $matches[0];
+			},
+			$text
+		);
+
+		// Any remaining opaque run of 20+ characters is redacted only when
+		// it looks secret-shaped rather than merely long — see
+		// looks_like_secret_value() for what that means (a URL path or a
+		// dated/kebab-case slug is deliberately left alone).
 		$text = preg_replace_callback(
 			'/[A-Za-z0-9_\-\.\/+=]{20,}/',
 			static function ( $matches ) {
-				$token = $matches[0];
-				if ( preg_match( '/[0-9]/', $token ) && preg_match( '/[A-Za-z]/', $token ) ) {
-					return '[redacted-token]';
-				}
-				return $token;
+				return self::looks_like_secret_value( $matches[0] ) ? '[redacted-token]' : $matches[0];
 			},
 			$text
 		);
 
 		return null === $text ? '' : $text;
+	}
+
+	/**
+	 * Decide whether an opaque token is shaped like a secret (redact) or
+	 * like a URL path / slug (leave alone). Deliberately errs toward
+	 * redacting: a token is only exempted when EVERY '/'- or '-'-separated
+	 * segment reads as a plain word, a plain number, or a simple
+	 * word-then-number/number-then-word shape (e.g. "sale-2024",
+	 * "2024-landing") — the shape an ordinary slug or URL path has. A secret
+	 * that happens to contain a stray '/' or '-' (an AWS-style key, a
+	 * base64 chunk) almost always has at least one segment that mixes
+	 * letters and digits in a way no slug segment does, so it still gets
+	 * caught.
+	 *
+	 * @param string $token Candidate opaque run.
+	 * @return bool
+	 */
+	private static function looks_like_secret_value( $token ) {
+		$token = (string) $token;
+
+		// A long hex run (a hash/id) is a secret-shaped value even without
+		// a letter-case mix — a lowercase md5/sha hex digest has none.
+		if ( preg_match( '/^[0-9a-fA-F]{32,}$/', $token ) ) {
+			return true;
+		}
+
+		if ( false !== strpos( $token, '/' ) || false !== strpos( $token, '-' ) || false !== strpos( $token, '.' ) ) {
+			// '.' is included too: a bare hostname/path caught alongside a
+			// connection-string password (api.example.com, cluster0.mongodb.net)
+			// is exactly the kind of non-secret this rule exists to leave alone.
+			$segments = array_filter( preg_split( '/[\/\-.]/', $token ), 'strlen' );
+			if ( empty( $segments ) ) {
+				return false;
+			}
+			foreach ( $segments as $segment ) {
+				// A word/number fused pair is only "simple" when the number
+				// part is short (<=4 digits: a year, a version, an ordinal —
+				// "sale-2024", "cluster0"). A longer fused digit run reads as
+				// a random suffix rather than a date, so it does NOT exempt
+				// the segment — this is what keeps a secret that happens to
+				// tokenize as "word+digits" (e.g. a base64 chunk ending in
+				// several digits) from slipping through as if it were a slug.
+				$slug_shaped = preg_match( '/^[A-Za-z]+$/', $segment )
+					|| preg_match( '/^[0-9]+$/', $segment )
+					|| preg_match( '/^[A-Za-z]+[0-9]{1,4}$/', $segment )
+					|| preg_match( '/^[0-9]{1,4}[A-Za-z]+$/', $segment );
+				if ( ! $slug_shaped ) {
+					return true; // one segment shaped like random data is enough.
+				}
+			}
+			return false; // every segment reads as a URL path / slug.
+		}
+
+		// No separators at all: mixing letters and digits is the shape of
+		// an opaque base64/API-key blob rather than ordinary prose.
+		return (bool) preg_match( '/[0-9]/', $token ) && (bool) preg_match( '/[A-Za-z]/', $token );
 	}
 
 	/**
