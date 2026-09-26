@@ -1865,6 +1865,26 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 *     every server, and is the same helper tools/call already uses to
 	 *     carry auth into its own internal sub-requests.
 	 *
+	 * Adversarial review round 2 found two more:
+	 *
+	 *  3. The credential was always re-sent as X-API-Key, even when the
+	 *     caller authenticated with `Authorization: Bearer` (an OAuth access
+	 *     token or a mumcp.com broker token) — the broker fallback only ever
+	 *     runs for a genuine Bearer header with no X-API-Key present, so a
+	 *     broker caller got "invalid_api_key" 401 on a request whose outer
+	 *     /mcp call had already authenticated. Fixed by copying whichever
+	 *     header the caller actually sent, never converting one into the
+	 *     other.
+	 *  4. The inner dispatch re-ran the full metered auth path, so one
+	 *     resources/read call cost two rate-limit slots (outer /mcp + this
+	 *     inner dispatch). Fixed by wrapping the dispatch in
+	 *     Mcpwp_REST_Batch::$is_batch_sub_request, the same flag
+	 *     handle_tools_call_idempotent() sets around its own internal
+	 *     dispatch — it routes the inner permission_callback to
+	 *     verify_api_key_auth_only(), which still runs full scope/category
+	 *     checks (and, as of this round, the OAuth/broker branches too) and
+	 *     only skips the rate-limit charge.
+	 *
 	 * @param mixed           $id      Request ID.
 	 * @param array           $params  Request parameters.
 	 * @param WP_REST_Request $request Original REST request (the outer /mcp call).
@@ -1908,16 +1928,59 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			}
 		}
 
-		// Carry the caller's own authenticated context into the sub-request —
-		// same pattern handle_tools_call_idempotent() already uses.
-		$api_key = $this->get_api_key_from_request( $request );
-		if ( $api_key ) {
-			$sub_request->set_header( 'X-API-Key', $api_key );
+		// Carry the caller's own authenticated credential into the sub-request
+		// exactly as presented — never convert one credential type into
+		// another. A plain API key arrives as X-API-Key (or the ?api_key=
+		// query fallback, which get_api_key_from_request() folds into the
+		// same string); an OAuth access token or a mumcp.com broker token
+		// arrives as `Authorization: Bearer <token>`, and the broker fallback
+		// in particular only ever runs for a genuine Bearer header with no
+		// X-API-Key present (trait-mcpwp-api-auth.php) — copying a Bearer
+		// token onto X-API-Key authenticates as neither, so a broker caller
+		// got "invalid_api_key" 401 from this method even though its outer
+		// /mcp request had already authenticated (#902 review round 2).
+		$outer_api_key_header = method_exists( $request, 'get_header' ) ? $request->get_header( 'X-API-Key' ) : null;
+		$outer_auth_header     = method_exists( $request, 'get_header' ) ? $request->get_header( 'Authorization' ) : null;
+
+		if ( ! empty( $outer_api_key_header ) ) {
+			$sub_request->set_header( 'X-API-Key', $outer_api_key_header );
+		} elseif ( ! empty( $outer_auth_header ) ) {
+			$sub_request->set_header( 'Authorization', $outer_auth_header );
+		} else {
+			// Neither header was present — e.g. the ?api_key= query-string
+			// fallback some MCP clients use. get_api_key_from_request() folds
+			// that into the same plain-key form X-API-Key would carry.
+			$api_key = $this->get_api_key_from_request( $request );
+			if ( $api_key ) {
+				$sub_request->set_header( 'X-API-Key', $api_key );
+			}
 		}
 
-		$response = rest_do_request( $sub_request );
-		$status   = $response->get_status();
-		$data     = $response->get_data();
+		// Mark as an internal sub-request so the inner dispatch's own
+		// permission_callback runs the unmetered auth-only fast path
+		// (verify_api_key_auth_only()) instead of full compute_api_key_verdict()
+		// — full scope/category/broker/OAuth checks still run, only the
+		// rate-limit charge is skipped, since the outer /mcp request already
+		// metered this same caller once. Without this, one resources/read
+		// call cost two rate-limit slots (outer /mcp + this inner dispatch).
+		// Same save/restore pattern handle_tools_call_idempotent() uses, for
+		// the same reason: this dispatch may itself be running inside another
+		// internal dispatch, so a hard reset to false could clear an outer
+		// caller's still-live flag.
+		$batch_class_exists    = class_exists( 'Mcpwp_REST_Batch' );
+		$previous_sub_request  = $batch_class_exists ? Mcpwp_REST_Batch::$is_batch_sub_request : null;
+		if ( $batch_class_exists ) {
+			Mcpwp_REST_Batch::$is_batch_sub_request = true;
+		}
+		try {
+			$response = rest_do_request( $sub_request );
+		} finally {
+			if ( $batch_class_exists ) {
+				Mcpwp_REST_Batch::$is_batch_sub_request = $previous_sub_request;
+			}
+		}
+		$status = $response->get_status();
+		$data   = $response->get_data();
 
 		if ( $status >= 400 ) {
 			$error_message = ( is_array( $data ) && isset( $data['message'] ) ) ? $data['message'] : 'Resource read failed';

@@ -2,17 +2,22 @@
 
 use PHPUnit\Framework\TestCase;
 
+require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-batch.php';
+
 final class McpEndpointTest extends TestCase {
 	protected function setUp(): void {
 		$GLOBALS['mcpwp_test_options']             = array();
 		$GLOBALS['mcpwp_test_transients']          = array();
 		$GLOBALS['mcpwp_test_dispatched_routes']   = array();
 		$GLOBALS['mcpwp_test_dispatched_requests'] = array();
+		$GLOBALS['mcpwp_test_filters']              = array();
 	}
 
 	protected function tearDown(): void {
 		$GLOBALS['mcpwp_test_dispatched_routes']   = array();
 		$GLOBALS['mcpwp_test_dispatched_requests'] = array();
+		$GLOBALS['mcpwp_test_filters']              = array();
+		Mcpwp_REST_Batch::$is_batch_sub_request     = false;
 	}
 
 	/**
@@ -165,6 +170,82 @@ final class McpEndpointTest extends TestCase {
 		$this->assertNotEmpty( $GLOBALS['mcpwp_test_dispatched_requests'] );
 		$sub_request = end( $GLOBALS['mcpwp_test_dispatched_requests'] );
 		$this->assertSame( 'mcpwp_secret_test_key', $sub_request->get_header( 'X-API-Key' ) );
+	}
+
+	/**
+	 * #902 review round 2 (WARN): the sub-request's credential was always
+	 * re-sent as X-API-Key, even when the outer caller authenticated with
+	 * `Authorization: Bearer` (an OAuth access token or a mumcp.com broker
+	 * token). The broker fallback in trait-mcpwp-api-auth.php only ever runs
+	 * for a genuine Bearer header with no X-API-Key present, so converting
+	 * Bearer -> X-API-Key made a broker/OAuth caller's own resources/read call
+	 * unauthenticatable. The credential must be carried on the SAME header
+	 * type the caller actually used — never converted.
+	 */
+	public function test_resources_read_carries_bearer_header_when_caller_used_bearer(): void {
+		$controller = new Mcpwp_REST_MCP();
+
+		$request = new WP_REST_Request(
+			'POST',
+			'/mcpwp/v1/mcp',
+			array(),
+			array( 'Authorization' => 'Bearer opaque-caller-token' ),
+			array(
+				'jsonrpc' => '2.0',
+				'id'      => 9,
+				'method'  => 'resources/read',
+				'params'  => array( 'uri' => 'https://example.com/wp-json/mcpwp/v1/site-info' ),
+			)
+		);
+
+		$controller->handle_mcp( $request );
+
+		$this->assertNotEmpty( $GLOBALS['mcpwp_test_dispatched_requests'] );
+		$sub_request = end( $GLOBALS['mcpwp_test_dispatched_requests'] );
+		$this->assertSame( 'Bearer opaque-caller-token', $sub_request->get_header( 'Authorization' ) );
+		$this->assertEmpty( $sub_request->get_header( 'X-API-Key' ), 'A Bearer credential must never be converted onto X-API-Key.' );
+	}
+
+	/**
+	 * #902 review round 2 (NOTE): resources/read used to cost two rate-limit
+	 * slots for the same caller (outer /mcp + this inner dispatch). It now
+	 * wraps its internal dispatch in Mcpwp_REST_Batch::$is_batch_sub_request —
+	 * the same flag handle_tools_call_idempotent() sets around its own
+	 * internal dispatch — so the inner permission_callback takes the
+	 * unmetered auth-only fast path. This observes the flag is actually true
+	 * for the DURATION of the dispatch (not merely set-then-immediately-
+	 * cleared) and restored afterward.
+	 */
+	public function test_resources_read_dispatches_with_sub_request_flag_set_and_restores_it(): void {
+		$observed = array();
+		add_filter(
+			'rest_dispatch_request',
+			function ( $result, $request, $route, $handler ) use ( &$observed ) {
+				$observed[] = Mcpwp_REST_Batch::$is_batch_sub_request;
+				return $result; // null: let the stub's canned response proceed.
+			},
+			10,
+			4
+		);
+
+		$controller = new Mcpwp_REST_MCP();
+		$controller->handle_mcp( $this->resources_read_request( 'mcpwp://site-info', 'mcpwp_secret_test_key' ) );
+
+		$this->assertSame( array( true ), $observed, 'The flag must be true while the internal dispatch is in flight.' );
+		$this->assertFalse( Mcpwp_REST_Batch::$is_batch_sub_request, 'The flag must be restored to its previous value once the dispatch returns.' );
+	}
+
+	/**
+	 * The save/restore must not clobber an outer caller's already-true flag —
+	 * same regression McpSubRequestFlagTest pins for tools/call.
+	 */
+	public function test_resources_read_does_not_clear_an_outer_sub_request_flag(): void {
+		Mcpwp_REST_Batch::$is_batch_sub_request = true;
+
+		$controller = new Mcpwp_REST_MCP();
+		$controller->handle_mcp( $this->resources_read_request( 'mcpwp://site-info', 'mcpwp_secret_test_key' ) );
+
+		$this->assertTrue( Mcpwp_REST_Batch::$is_batch_sub_request );
 	}
 
 	/**
