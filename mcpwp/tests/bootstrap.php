@@ -1759,13 +1759,6 @@ if (! function_exists('wp_schedule_event')) {
         return true;
     }
 }
-if (! function_exists('wp_schedule_single_event')) {
-    function wp_schedule_single_event($timestamp, $hook, $args = array(), $wp_error = false)
-    {
-        $GLOBALS['mcpwp_test_cron'][ $hook ] = (int) $timestamp;
-        return true;
-    }
-}
 if (! function_exists('wp_unschedule_event')) {
     function wp_unschedule_event($timestamp, $hook, $args = array(), $wp_error = false)
     {
