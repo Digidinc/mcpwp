@@ -29,8 +29,33 @@
  * alone (not rewritten, not deleted) while the meta status still reports
  * 'file'.
  *
+ * WARN round 2 — PHP caches stat() results (file_exists/filesize/filemtime)
+ * per path for the life of the process; file_put_contents() does not clear
+ * that cache for the path it just wrote. Two writes to the SAME page within
+ * one PHP process (a /batch request, wp_batch, back-to-back surgical
+ * operations) could see the FIRST write's cached size/mtime on the SECOND
+ * write's check. 'healthy_growing' writes a DIFFERENT-sized file on each
+ * successive call (tracked via $GLOBALS['mcpwp_test_css_update_calls']),
+ * specifically so a test can prove the production code clears the cache: an
+ * uncleared cache would report the first call's size on the second check.
+ *
+ * NOTE round 2 (storage-clock skew, e.g. NFS/EFS) — a genuinely fresh write
+ * can carry an mtime PHP's clock considers "too old" when the file server
+ * stamps mtime on its own clock. 'clock_skew_rewrite' writes NEW,
+ * different-sized content but then backdates the file's mtime well past the
+ * staleness slack, modelling exactly that: the write is real (size changed),
+ * but the timestamp alone would say otherwise.
+ *
  * $GLOBALS['mcpwp_test_css_scenario'] selects the behaviour:
  *   'healthy'                  — writes a real, non-empty file; status 'file'.
+ *   'healthy_growing'          — like 'healthy', but each call's content is a
+ *                                 different length than the last, so a stale
+ *                                 stat-cache read is distinguishable from a
+ *                                 fresh one.
+ *   'clock_skew_rewrite'       — writes new, different-sized content, then
+ *                                 sets the file's mtime far in the past
+ *                                 (simulating a storage clock PHP's disagrees
+ *                                 with); status 'file'.
  *   'unwritable_first'         — no file (dir unwritable, nothing existed
  *                                 before); status 'file' regardless (mirrors
  *                                 Elementor recording its intent even though
@@ -125,6 +150,30 @@ namespace Elementor\Core\Files\CSS {
 						mkdir( $dir, 0777, true );
 					}
 					file_put_contents( $path, '.mcpwp-test{color:red}' );
+					\update_post_meta( $this->post_id, '_elementor_css', array( 'status' => 'file' ) );
+					break;
+
+				case 'healthy_growing':
+					if ( ! is_dir( $dir ) ) {
+						mkdir( $dir, 0777, true );
+					}
+					// A distinct length per call: comments padded to the call
+					// count, so call 1 and call 2 can never coincide in size.
+					$call_count = $GLOBALS['mcpwp_test_css_update_calls'];
+					file_put_contents( $path, '.mcpwp-test{color:red}' . str_repeat( '/* pad */', $call_count ) );
+					\update_post_meta( $this->post_id, '_elementor_css', array( 'status' => 'file' ) );
+					break;
+
+				case 'clock_skew_rewrite':
+					if ( ! is_dir( $dir ) ) {
+						mkdir( $dir, 0777, true );
+					}
+					$call_count = $GLOBALS['mcpwp_test_css_update_calls'];
+					file_put_contents( $path, '.mcpwp-test{color:blue}' . str_repeat( '/* pad */', $call_count ) );
+					// Backdate well past the 2-second slack, even though the
+					// content really was just rewritten.
+					touch( $path, time() - 3600 );
+					clearstatcache( true, $path );
 					\update_post_meta( $this->post_id, '_elementor_css', array( 'status' => 'file' ) );
 					break;
 

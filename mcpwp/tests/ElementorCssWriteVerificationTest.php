@@ -37,6 +37,25 @@
  * site-wide print method not 'internal') AND the file is missing, empty, or
  * older than the regeneration call that supposedly (re)wrote it.
  *
+ * Round 2 of the same review, against that fix:
+ *
+ * WARN — PHP's per-process stat() cache (file_exists/filesize/filemtime)
+ * for a path is not invalidated by file_put_contents() writing to that same
+ * path. Two writes to one page within one PHP process (a /batch request,
+ * wp_batch, back-to-back surgical operations) could see the FIRST write's
+ * cached size/mtime on the SECOND write's check. Fixed with
+ * `clearstatcache( true, $css_path )` immediately before each of the three
+ * checks, at both checkpoints.
+ *
+ * NOTE — the mtime check assumes PHP's clock and the storage clock agree,
+ * which is not always true on network filesystems (NFS/EFS) where the file
+ * server stamps mtime on its own clock. Rather than track a second,
+ * equally-untrustworthy clock (e.g. a probe file's own mtime — stamped by
+ * the same storage clock as the real file, so not actually independent),
+ * a size change vs. the size captured immediately before the regeneration
+ * call overrules an otherwise-stale mtime: content that demonstrably
+ * changed was demonstrably rewritten, regardless of what its timestamp says.
+ *
  * Each test runs in a separate process because the fixture declares
  * \Elementor\Plugin and \Elementor\Core\Files\CSS\Post — see
  * ElementorSaveThrowableTest for why (#757).
@@ -377,6 +396,116 @@ final class ElementorCssWriteVerificationTest extends TestCase {
 		$this->assertTrue( $result['css_regenerated'] );
 		$this->assertArrayNotHasKey( 'css_file_not_written', $result['debug'] );
 		$this->assertGreaterThan( 0, $result['debug']['css_file_size'] ?? 0 );
+		$this->assertTrue( $result['render_verified'] );
+	}
+
+	/**
+	 * RC review WARN, round 2: PHP caches file_exists()/filesize()/filemtime()
+	 * results per path for the life of the process, and file_put_contents()
+	 * does not invalidate that cache for the path it just wrote. Two writes
+	 * to the SAME page within one PHP process — a /batch request, wp_batch,
+	 * or two back-to-back surgical operations — must each see what THEY
+	 * actually wrote, not a stat() result cached from the other one.
+	 *
+	 * The fixture's 'healthy_growing' scenario writes a longer file on each
+	 * successive call specifically so a stale cache is distinguishable from
+	 * a fresh one: if clearstatcache() were missing from the production
+	 * code, the second save would report the FIRST save's (smaller,
+	 * now-more-than-2-seconds-old) size and mtime — which is stale by this
+	 * method's own 2-second slack — and get flagged css_file_stale:true.
+	 * The real sleep(3) (the reviewer's own suggested reproduction) is what
+	 * pushes the first write's real mtime‑past‑slack; without a cache clear,
+	 * this test fails.
+	 *
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_two_saves_of_the_same_page_in_one_process_both_pass(): void {
+		$this->install_elementor( 'healthy_growing' );
+		$this->install_reflecting_wpdb();
+		$this->seed_page();
+
+		$basic = new Mcpwp_Elementor_Basic();
+
+		$result1 = $basic->set_elementor_data( self::PAGE_ID, array( 'elementor_data' => wp_json_encode( $this->minimal_section() ) ) );
+		$this->assertNotInstanceOf( WP_Error::class, $result1 );
+		$this->assertTrue( $result1['css_regenerated'], 'The first save must pass on its own.' );
+		$this->assertArrayNotHasKey( 'css_file_stale', $result1['debug'] );
+		$size_after_first = $result1['debug']['css_file_size'] ?? 0;
+		$this->assertGreaterThan( 0, $size_after_first );
+
+		sleep( 3 );
+
+		$result2 = $basic->set_elementor_data( self::PAGE_ID, array( 'elementor_data' => wp_json_encode( $this->minimal_section() ) ) );
+		$this->assertNotInstanceOf( WP_Error::class, $result2 );
+
+		$this->assertTrue(
+			$result2['css_regenerated'],
+			'A second save of the same page, more than 2 seconds after the first, must not be flagged stale because of a cached stat() result from the first save.'
+		);
+		$this->assertArrayNotHasKey(
+			'css_file_stale',
+			$result2['debug'],
+			'A stale-stat-cache false positive would show up here first.'
+		);
+		$this->assertTrue( $result2['render_verified'] );
+
+		// The size actually differs between the two calls (the fixture's
+		// whole point) — if this equals $size_after_first, the cache was
+		// never cleared and this test is not exercising anything.
+		$size_after_second = $result2['debug']['css_file_size'] ?? 0;
+		$this->assertNotSame(
+			$size_after_first,
+			$size_after_second,
+			'The fixture must write a different-sized file on the second call for this test to actually detect a stale cache.'
+		);
+	}
+
+	/**
+	 * RC review NOTE, round 2 (storage-clock skew — NFS/EFS mtime, not
+	 * PHP's own clock): a genuinely fresh rewrite whose CONTENT changed must
+	 * not be reported stale just because its mtime — stamped by a storage
+	 * clock that disagrees with PHP's — looks older than the 2-second slack
+	 * allows. The fixture backdates the file's mtime by an hour after
+	 * writing new, differently-sized content; verify_css_file_was_written()
+	 * must see the size change and overrule the stale-looking timestamp.
+	 *
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_a_backdated_mtime_is_overruled_by_a_changed_size(): void {
+		$this->install_elementor( 'clock_skew_rewrite' );
+		$this->install_reflecting_wpdb();
+		$this->seed_page();
+		// A fixed-size pre-existing file, backdated — the "before" state
+		// verify_css_file_was_written() compares the post-write size
+		// against. Its content/length differs from whatever
+		// 'clock_skew_rewrite' writes, which is exactly the point.
+		$this->seed_existing_css_file( 3600 );
+
+		$path         = sys_get_temp_dir() . '/mcpwp-test-uploads/elementor/css/post-' . self::PAGE_ID . '.css';
+		$size_before  = filesize( $path );
+
+		$basic  = new Mcpwp_Elementor_Basic();
+		$result = $basic->set_elementor_data( self::PAGE_ID, array( 'elementor_data' => wp_json_encode( $this->minimal_section() ) ) );
+
+		$this->assertNotInstanceOf( WP_Error::class, $result );
+
+		$size_after = $result['debug']['css_file_size'] ?? 0;
+		$this->assertNotSame( $size_before, $size_after, 'The fixture must actually rewrite the file with a different size for this test to mean anything.' );
+
+		// The mtime the fixture set is an hour in the past — well past the
+		// 2-second slack — so a naive mtime-only check would flag this as
+		// stale. The size change must overrule that.
+		$mtime_now = time();
+		$this->assertLessThan( $mtime_now - 60, filemtime( $path ), 'The backdated mtime must actually be old for this test to mean anything.' );
+
+		$this->assertTrue(
+			$result['css_regenerated'],
+			'A rewrite whose content (and therefore size) demonstrably changed must not be reported as a regeneration failure just because its mtime looks old.'
+		);
+		$this->assertArrayNotHasKey( 'css_file_stale', $result['debug'] );
+		$this->assertArrayNotHasKey( 'css_file_not_written', $result['debug'] );
 		$this->assertTrue( $result['render_verified'] );
 	}
 
