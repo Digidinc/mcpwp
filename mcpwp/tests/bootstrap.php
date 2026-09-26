@@ -995,6 +995,17 @@ if (! function_exists('home_url')) {
     }
 }
 
+if (! function_exists('wp_sitemaps_get_server')) {
+    // Real WP (5.5+) always defines this once core sitemaps are loaded; the
+    // stub just needs to exist so feature-detection code takes the same
+    // branch it would on a real site, with `wp_sitemaps_enabled` (a plain
+    // filter, already supported) doing the actual on/off switching in tests.
+    function wp_sitemaps_get_server()
+    {
+        return true;
+    }
+}
+
 if (! function_exists('get_nav_menu_locations')) {
     function get_nav_menu_locations()
     {
@@ -1635,6 +1646,14 @@ function get_post($id)
     return isset($GLOBALS['_mcpwp_test_posts'][ $id ]) ? $GLOBALS['_mcpwp_test_posts'][ $id ] : null;
 }
 
+if (! function_exists('get_post_status')) {
+    function get_post_status($post = null)
+    {
+        $post = is_object($post) ? $post : get_post($post);
+        return $post && isset($post->post_status) ? $post->post_status : false;
+    }
+}
+
 if (! function_exists('clean_post_cache')) {
     function clean_post_cache($post)
     {
@@ -1991,8 +2010,16 @@ if (! function_exists('wp_http_validate_url')) {
 if (! function_exists('url_to_postid')) {
     // Mirror WP: resolve the plain-permalink query vars (?p=ID / ?page_id=ID)
     // regardless of post status; pretty draft slugs fall through to path lookup.
+    // A test can also register an exact pretty-permalink URL -> post ID via
+    // $GLOBALS['mcpwp_test_url_to_postid'][$url] = $id, since get_permalink()
+    // here always returns the plain-permalink shape and this stub has no
+    // rewrite-rule engine to derive a pretty path from a post ID itself.
     function url_to_postid($url)
     {
+        if (isset($GLOBALS['mcpwp_test_url_to_postid'][ (string) $url ])) {
+            return (int) $GLOBALS['mcpwp_test_url_to_postid'][ (string) $url ];
+        }
+
         $query = (string) parse_url((string) $url, PHP_URL_QUERY);
         if ('' !== $query) {
             parse_str($query, $args);
@@ -2634,6 +2661,22 @@ function trailingslashit($string)
     return rtrim((string) $string, '/\\') . '/';
 }
 
+if (! function_exists('get_home_path')) {
+    // Real WP: derives the filesystem path to the site's home URL, which can
+    // differ from ABSPATH when WordPress is installed in a subdirectory.
+    // Defaults to ABSPATH (this double has no such split by default) but a
+    // test can set $GLOBALS['mcpwp_test_home_path'] to a DIFFERENT directory
+    // to prove a code path genuinely calls get_home_path() rather than
+    // reading ABSPATH directly (#937 NOTE-3). Defining this here also means
+    // llms_txt_physical_file_exists()'s `function_exists('get_home_path')`
+    // guard never tries to require a real wp-admin/includes/file.php that
+    // doesn't exist in this harness.
+    function get_home_path()
+    {
+        return $GLOBALS['mcpwp_test_home_path'] ?? ABSPATH;
+    }
+}
+
 function untrailingslashit($string)
 {
     return rtrim((string) $string, '/\\');
@@ -2822,6 +2865,7 @@ require_once dirname(__DIR__) . '/includes/mcp/traits/trait-mcpwp-free-tools-med
 require_once dirname(__DIR__) . '/includes/mcp/traits/trait-mcpwp-free-tools-elementor.php';
 require_once dirname(__DIR__) . '/includes/mcp/traits/trait-mcpwp-free-tools-blocks.php';
 require_once dirname(__DIR__) . '/includes/mcp/traits/trait-mcpwp-free-tools-ops.php';
+require_once dirname(__DIR__) . '/includes/mcp/traits/trait-mcpwp-free-tools-ai-presence.php';
 require_once dirname(__DIR__) . '/includes/mcp/class-mcpwp-mcp-free-tools.php';
 require_once dirname(__DIR__) . '/includes/mcp/traits/trait-mcpwp-pro-tools-seo.php';
 require_once dirname(__DIR__) . '/includes/mcp/traits/trait-mcpwp-pro-tools-forms.php';
@@ -2929,6 +2973,12 @@ if (!defined('MINUTE_IN_SECONDS')) {
 
 // Cache for paid SEO lookups — bounds agent-loop spend on DataForSEO credit.
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-seo-cache.php';
+
+// AI presence: llms.txt/robots.txt coexistence, AI crawler policy, IndexNow.
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-seo-plugin-detect.php';
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-ai-crawler-policy.php';
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-indexnow.php';
+require_once dirname(__DIR__) . '/includes/class-mcpwp-ai-presence.php';
 
 // ---------------------------------------------------------------------------
 // Taxonomy, term, registered-meta and thumbnail doubles (#797).

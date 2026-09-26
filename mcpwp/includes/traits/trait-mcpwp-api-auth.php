@@ -1763,6 +1763,14 @@ trait Mcpwp_Api_Auth {
 			// change external infra config outside this site; status/speed-settings
 			// GETs stay read.
 			'/mcpwp/v1/cloudflare',
+			// Writing the AI crawler allow/deny policy edits robots.txt output
+			// site-wide (denying a search bot can remove the site from an AI
+			// product's live answers); reading it stays at the read default.
+			'/mcpwp/v1/ai-crawlers',
+			// Explicit IndexNow submission (adversarial review #937 WARN-3):
+			// pings an external endpoint with arbitrary caller-supplied URLs.
+			// Admin scope only; /indexnow/status stays read.
+			'/mcpwp/v1/indexnow',
 		);
 
 		foreach ( $admin_write_routes as $admin_write_route ) {
@@ -2264,6 +2272,15 @@ trait Mcpwp_Api_Auth {
 			'wp_update_menu',
 			'wp_update_menu_item_auto',
 			'wp_delete_menu_item_auto',
+			// Mirrors the '/mcpwp/v1/ai-crawlers' admin-on-write route: writing
+			// the AI crawler policy edits robots.txt output site-wide (denying a
+			// search bot can remove the site from an AI product's live
+			// answers). wp_get_ai_crawler_policy is read-only and not listed here.
+			'wp_set_ai_crawler_policy',
+			// Mirrors the '/mcpwp/v1/indexnow' admin-on-write route (#937 WARN-3):
+			// pings an external endpoint with caller-supplied URLs.
+			// wp_indexnow_status is read-only and not listed here.
+			'wp_indexnow_submit',
 		);
 
 		// #874 systematic diff, second half: tools whose route requires 'write'

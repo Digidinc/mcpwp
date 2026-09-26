@@ -24,6 +24,7 @@ class Mcpwp_MCP_Free_Tools extends Mcpwp_MCP_Tool_Registry {
 	use Mcpwp_Free_Tools_Elementor_Trait;
 	use Mcpwp_Free_Tools_Blocks_Trait;
 	use Mcpwp_Free_Tools_Ops_Trait;
+	use Mcpwp_Free_Tools_AI_Presence_Trait;
 
 	/**
 	 * Get destructive tool names for free tier.
@@ -284,6 +285,8 @@ class Mcpwp_MCP_Free_Tools extends Mcpwp_MCP_Tool_Registry {
 			'wp_extract_site_blueprint'  => 'site',
 		);
 
+		$categories = array_merge( $categories, $this->get_ai_presence_tool_categories() );
+
 		// Remove custom CSS tool categories in WP.org build.
 		if ( defined( 'MCPWP_WPORG_BUILD' ) ) {
 			unset( $categories['wp_get_custom_css'], $categories['wp_set_custom_css'], $categories['wp_delete_custom_css'], $categories['wp_get_css_length'] );
@@ -365,6 +368,7 @@ class Mcpwp_MCP_Free_Tools extends Mcpwp_MCP_Tool_Registry {
 			$this->get_flush_permalinks_tools(),
 			$this->get_site_health_tools(),
 			$this->get_guides_workflows_tools(),
+			$this->get_ai_presence_tools(),
 		);
 	}
 
@@ -1172,6 +1176,8 @@ class Mcpwp_MCP_Free_Tools extends Mcpwp_MCP_Tool_Registry {
 				'route'  => '/content-coherence',
 			),
 		);
+
+		$map = array_merge( $map, $this->get_ai_presence_tool_map() );
 
 		// Remove custom CSS tools in WP.org build.
 		if ( defined( 'MCPWP_WPORG_BUILD' ) ) {
