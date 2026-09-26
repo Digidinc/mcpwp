@@ -45,7 +45,8 @@ class Mcpwp_Drafts {
 			$drafts[] = array(
 				'id'       => $post->ID,
 				'type'     => $post->post_type,
-				'title'    => $post->post_title ?: __( '(no title)', 'mcpwp' ),
+				// Decoded for agents (#903) — see Mcpwp_Agent_Text.
+				'title'    => $post->post_title ? Mcpwp_Agent_Text::decode( $post->post_title ) : __( '(no title)', 'mcpwp' ),
 				'created'  => $post->post_date,
 				'modified' => $post->post_modified,
 				'author'   => array(

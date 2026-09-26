@@ -895,6 +895,18 @@ trait Mcpwp_Api_Auth {
 			);
 		}
 
+		// Same credential-type dispatch as compute_api_key_verdict(), unmetered
+		// (see authenticate_oauth_access_token()'s $metered param): an OAuth
+		// bearer caller whose outer /mcp or /batch request already authenticated
+		// must not be turned into "invalid_api_key" just because this fast path
+		// only ever tried the scoped-key store (#902 review round 2 — the WARN
+		// that follows applies here too: get_api_key_from_request() returns the
+		// same string get_header() gave the outer request, so the token's own
+		// shape ("mcpwp_at_"/"spai_at_" prefix) is preserved end to end).
+		if ( $this->looks_like_oauth_access_token( $api_key ) ) {
+			return $this->authenticate_oauth_access_token( $api_key, $request, false );
+		}
+
 		$matched_key = $this->find_scoped_api_key( $api_key );
 		$legacy_key  = get_option( 'mcpwp_api_key' );
 
@@ -908,6 +920,22 @@ trait Mcpwp_Api_Auth {
 		}
 
 		if ( ! $matched_key ) {
+			// mumcp.com broker bearer token — same fallback and same ordering
+			// compute_api_key_verdict() uses: only after every local key store
+			// missed, only for a genuine Authorization: Bearer with no
+			// X-API-Key, and only when the site is actively enrolled. Unmetered
+			// for the same reason the OAuth branch above is.
+			$auth_header        = method_exists( $request, 'get_header' ) ? $request->get_header( 'Authorization' ) : null;
+			$has_bearer_header  = ! empty( $auth_header ) && 0 === strpos( (string) $auth_header, 'Bearer ' );
+			$has_api_key_header = method_exists( $request, 'get_header' ) && ! empty( $request->get_header( 'X-API-Key' ) );
+
+			if ( $has_bearer_header && ! $has_api_key_header && class_exists( 'Mcpwp_Broker_Auth' ) ) {
+				$broker_auth = new Mcpwp_Broker_Auth();
+				if ( $broker_auth->is_enrolled() ) {
+					return $this->authenticate_broker_bearer_token( $api_key, $request, $broker_auth, false );
+				}
+			}
+
 			return new WP_Error(
 				'invalid_api_key',
 				__( 'Invalid API key.', 'mcpwp' ),
@@ -1107,9 +1135,16 @@ trait Mcpwp_Api_Auth {
 	 *
 	 * @param string          $token   Access token.
 	 * @param WP_REST_Request $request Request object.
+	 * @param bool            $metered False for an internal sub-request whose
+	 *                                 outer request already metered this same
+	 *                                 caller once (mirrors verify_api_key_auth_only()'s
+	 *                                 contract for scoped keys — auth and scope
+	 *                                 checks always run; only the rate-limit
+	 *                                 charge is skipped, so a resources/read or
+	 *                                 tools/call fan-out is one slot, not two).
 	 * @return bool|WP_Error True when valid, error otherwise.
 	 */
-	protected function authenticate_oauth_access_token( $token, $request ) {
+	protected function authenticate_oauth_access_token( $token, $request, $metered = true ) {
 		$oauth_settings = $this->get_oauth_settings();
 		if ( empty( $oauth_settings['oauth_enabled'] ) ) {
 			return new WP_Error(
@@ -1141,9 +1176,11 @@ trait Mcpwp_Api_Auth {
 			);
 		}
 
-		$rate_limit_check = $this->meter_request( $request, 'oauth:' . substr( hash( 'sha256', (string) $token ), 0, 16 ), $this->rate_limit_method( $request ) );
-		if ( is_wp_error( $rate_limit_check ) ) {
-			return $rate_limit_check;
+		if ( $metered ) {
+			$rate_limit_check = $this->meter_request( $request, 'oauth:' . substr( hash( 'sha256', (string) $token ), 0, 16 ), $this->rate_limit_method( $request ) );
+			if ( is_wp_error( $rate_limit_check ) ) {
+				return $rate_limit_check;
+			}
 		}
 
 		// Give the OAuth principal a stable, non-empty identity so downstream
@@ -1244,9 +1281,17 @@ trait Mcpwp_Api_Auth {
 	 * @param string            $token       Opaque bearer token (Bearer prefix already stripped).
 	 * @param WP_REST_Request   $request     Request object.
 	 * @param Mcpwp_Broker_Auth $broker_auth Validator instance (caller already confirmed is_enrolled()).
+	 * @param bool              $metered     False for an internal sub-request whose
+	 *                                       outer request already metered this same
+	 *                                       caller once. The per-IP DoS throttle on
+	 *                                       the outbound introspection call stays on
+	 *                                       regardless — it caps what an
+	 *                                       unauthenticated caller can make this
+	 *                                       server do, not the authenticated
+	 *                                       caller's own budget.
 	 * @return bool|WP_Error True when valid, error otherwise.
 	 */
-	protected function authenticate_broker_bearer_token( $token, $request, $broker_auth ) {
+	protected function authenticate_broker_bearer_token( $token, $request, $broker_auth, $metered = true ) {
 		// DoS guard: throttle anonymous introspection attempts per client IP
 		// BEFORE the outbound network call, mirroring the invalid-key limiter
 		// ('invalid:'.$ip). Without this a Bearer token that is not a local key
@@ -1275,9 +1320,11 @@ trait Mcpwp_Api_Auth {
 			return $result;
 		}
 
-		$rate_limit_check = $this->meter_request( $request, 'broker:' . substr( hash( 'sha256', (string) $token ), 0, 16 ), $this->rate_limit_method( $request ) );
-		if ( is_wp_error( $rate_limit_check ) ) {
-			return $rate_limit_check;
+		if ( $metered ) {
+			$rate_limit_check = $this->meter_request( $request, 'broker:' . substr( hash( 'sha256', (string) $token ), 0, 16 ), $this->rate_limit_method( $request ) );
+			if ( is_wp_error( $rate_limit_check ) ) {
+				return $rate_limit_check;
+			}
 		}
 
 		// Cap capability at read/write. scope_to_capability() never returns

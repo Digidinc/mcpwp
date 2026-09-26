@@ -445,7 +445,7 @@ class Mcpwp_Posts {
 		}
 
 		$before = array(
-			'title'  => $post->post_title,
+			'title'  => Mcpwp_Agent_Text::decode( $post->post_title ),
 			'status' => $post->post_status,
 			'slug'   => $post->post_name,
 		);
@@ -651,7 +651,10 @@ class Mcpwp_Posts {
 	protected function format_post( $post, $include_full = false ) {
 		$data = array(
 			'id'             => $post->ID,
-			'title'          => $post->post_title,
+			// Decoded for agents (#903) — see Mcpwp_Agent_Text. post_title is
+			// stored with entities already encoded ("Crumb &amp; Co"); the
+			// stored value and any theme rendering are untouched.
+			'title'          => Mcpwp_Agent_Text::decode( $post->post_title ),
 			'slug'           => $post->post_name,
 			'status'         => $post->post_status,
 			'date'           => $post->post_date,
