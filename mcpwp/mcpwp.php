@@ -337,6 +337,7 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-site-blueprints.php';
 
 	// Load MCP tool registries
+	require_once MCPWP_PLUGIN_DIR . 'includes/mcp/class-mcpwp-mcp-tool-annotations.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/mcp/class-mcpwp-mcp-tool-registry.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/mcp/class-mcpwp-integration.php';
 	// Free-tool category trait groups (mixed into Mcpwp_MCP_Free_Tools — G2 split).

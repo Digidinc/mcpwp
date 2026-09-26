@@ -107,6 +107,7 @@ abstract class Mcpwp_MCP_Tool_Registry {
 
 		return array(
 			'name'        => $name,
+			'title'       => Mcpwp_MCP_Tool_Annotations::get_title( $name ),
 			'description' => $description,
 			'inputSchema' => $schema,
 			'annotations' => $this->get_tool_annotations( $name ),
@@ -116,14 +117,20 @@ abstract class Mcpwp_MCP_Tool_Registry {
 	/**
 	 * Get tool annotations for MCP compatibility.
 	 *
+	 * `title` is duplicated into annotations for clients predating the MCP
+	 * 2025-06-18 tool-level `title` field, which read display names from
+	 * `annotations.title` instead.
+	 *
 	 * @param string $name Tool name.
-	 * @return array<string,bool> Tool annotation hints.
+	 * @return array<string,bool|string> Tool annotation hints.
 	 */
 	public function get_tool_annotations( $name ) {
 		return array(
+			'title'           => Mcpwp_MCP_Tool_Annotations::get_title( $name ),
 			'readOnlyHint'    => $this->is_read_only_tool( $name ),
 			'openWorldHint'   => $this->is_open_world_tool( $name ),
 			'destructiveHint' => $this->is_destructive_tool( $name ),
+			'idempotentHint'  => $this->is_idempotent_tool( $name ),
 			'category'        => $this->get_tool_category( $name ),
 		);
 	}
@@ -131,10 +138,20 @@ abstract class Mcpwp_MCP_Tool_Registry {
 	/**
 	 * Determine whether a tool is read-only.
 	 *
+	 * Consults Mcpwp_MCP_Tool_Annotations::ANNOTATION_OVERRIDES first — see
+	 * that class for why the HTTP-method heuristic below is wrong for a
+	 * known set of tools (e.g. a POST-mapped validator that never writes, or
+	 * a GET-mapped tool that conditionally persists a result).
+	 *
 	 * @param string $name Tool name.
 	 * @return bool True when tool does not modify data.
 	 */
 	protected function is_read_only_tool( $name ) {
+		$override = Mcpwp_MCP_Tool_Annotations::get_override( $name );
+		if ( null !== $override && isset( $override['readOnlyHint'] ) ) {
+			return (bool) $override['readOnlyHint'];
+		}
+
 		$tool_map = $this->get_tool_map();
 		if ( empty( $tool_map[ $name ]['method'] ) ) {
 			return false;
@@ -147,10 +164,18 @@ abstract class Mcpwp_MCP_Tool_Registry {
 	/**
 	 * Determine whether a tool can access external systems.
 	 *
+	 * Consults the override table first (see is_read_only_tool()), then each
+	 * registry's own get_open_world_tools() list.
+	 *
 	 * @param string $name Tool name.
 	 * @return bool True when tool may interact with external services.
 	 */
 	protected function is_open_world_tool( $name ) {
+		$override = Mcpwp_MCP_Tool_Annotations::get_override( $name );
+		if ( null !== $override && isset( $override['openWorldHint'] ) ) {
+			return (bool) $override['openWorldHint'];
+		}
+
 		$open_world_tools = $this->get_open_world_tools();
 		return in_array( $name, $open_world_tools, true );
 	}
@@ -158,10 +183,19 @@ abstract class Mcpwp_MCP_Tool_Registry {
 	/**
 	 * Determine whether a tool performs destructive actions.
 	 *
+	 * Consults the override table first (see is_read_only_tool()), then each
+	 * registry's own get_destructive_tools() list, then falls back to the
+	 * DELETE-method heuristic.
+	 *
 	 * @param string $name Tool name.
-	 * @return bool True when tool can delete/revoke/reset data.
+	 * @return bool True when tool can delete/revoke/reset/overwrite data.
 	 */
 	protected function is_destructive_tool( $name ) {
+		$override = Mcpwp_MCP_Tool_Annotations::get_override( $name );
+		if ( null !== $override && isset( $override['destructiveHint'] ) ) {
+			return (bool) $override['destructiveHint'];
+		}
+
 		$destructive_tools = $this->get_destructive_tools();
 
 		if ( in_array( $name, $destructive_tools, true ) ) {
@@ -174,6 +208,27 @@ abstract class Mcpwp_MCP_Tool_Registry {
 		}
 
 		return 'DELETE' === strtoupper( (string) $tool_map[ $name ]['method'] );
+	}
+
+	/**
+	 * Determine whether calling a tool twice with the same arguments leaves
+	 * the site in the same state as calling it once.
+	 *
+	 * Consults the override table first. Absent an override, a read-only
+	 * tool is idempotent by construction (it changes nothing); any other
+	 * tool is not asserted either way and defaults to false — MCP clients
+	 * should not assume a retry is safe unless this is explicitly true.
+	 *
+	 * @param string $name Tool name.
+	 * @return bool True when repeat calls with the same arguments are safe.
+	 */
+	protected function is_idempotent_tool( $name ) {
+		$override = Mcpwp_MCP_Tool_Annotations::get_override( $name );
+		if ( null !== $override && isset( $override['idempotentHint'] ) ) {
+			return (bool) $override['idempotentHint'];
+		}
+
+		return $this->is_read_only_tool( $name );
 	}
 
 	/**
