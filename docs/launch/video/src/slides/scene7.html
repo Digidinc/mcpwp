@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<link rel="stylesheet" href="tokens.css">
+<style>
+.frame {
+  align-items:center; justify-content:center;
+  background: linear-gradient(135deg, #0B1220 0%, #1B4DFF 50%, #0B1220 100%);
+}
+.stack { display:flex; flex-direction:column; align-items:center; gap:22px; opacity:0; animation: in 0.8s ease forwards; animation-delay:0.15s; }
+@keyframes in { from{opacity:0; transform:translateY(16px);} to{opacity:1; transform:translateY(0);} }
+.mark { width:110px; height:110px; animation: pulse 3s ease-in-out infinite; filter: drop-shadow(0 0 30px rgba(27,77,255,0.65)); }
+@keyframes pulse { 0%,100%{opacity:0.85;} 50%{opacity:1;} }
+.word { font-family:'Space Grotesk',sans-serif; font-weight:700; font-size:88px; color:var(--white); letter-spacing:-0.01em; }
+.tagline { font-family:'Instrument Sans',sans-serif; font-weight:500; font-size:34px; color:var(--blue-100); }
+.url { font-family:'IBM Plex Mono',monospace; font-size:26px; color:var(--slate-200); margin-top:6px; }
+.small { font-family:'Instrument Sans',sans-serif; font-size:20px; color:var(--slate-200); opacity:0.85; margin-top:26px; }
+</style></head>
+<body>
+<div class="frame">
+  <div class="stack">
+    <img class="mark" src="../assets/icon.svg">
+    <div class="word">MCPWP</div>
+    <div class="tagline">180+ tools free. 290+ with Pro.</div>
+    <div class="url">mcpwp.net</div>
+    <div class="small">Verified with Claude Desktop, Claude Code, and Cursor.</div>
+  </div>
+</div>
+</body></html>
