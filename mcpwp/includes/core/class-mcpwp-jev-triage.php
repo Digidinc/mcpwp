@@ -39,6 +39,25 @@ class Mcpwp_Jev_Triage {
 	const STATE_MAX_CHARS = 4000;
 
 	/**
+	 * WP option storing the day-bucketed egress counter (see maybe_count_call()).
+	 *
+	 * @var string
+	 */
+	const DAILY_COUNT_OPTION = 'mcpwp_jev_triage_daily';
+
+	/**
+	 * Hard ceiling on Jev calls this feature will make in one UTC day, across
+	 * every approval. Not a cost-control knob for the admin — a floor under
+	 * a misbehaving loop (a bug that reschedules the same job repeatedly, or
+	 * an unexpectedly high approval-creation rate) so a runaway can't turn
+	 * into an unbounded bill or an unbounded stream of site content leaving
+	 * the site.
+	 *
+	 * @var int
+	 */
+	const MAX_CALLS_PER_DAY = 200;
+
+	/**
 	 * Cron callback: fetch the approval, ask Jev, store a validated result.
 	 * Every exit point is silent-safe — nothing here may throw into cron, and
 	 * a failure at any step simply leaves the approval without a `triage`
@@ -53,19 +72,32 @@ class Mcpwp_Jev_Triage {
 			return;
 		}
 
+		// Integration removed since this was scheduled: nothing to do, and
+		// nothing to fail loudly about.
 		$jev = Mcpwp_Jev::for_site();
 		if ( ! $jev ) {
-			// Jev was configured when this was scheduled but is not anymore —
-			// nothing to do, and nothing to fail loudly about.
 			return;
 		}
 
 		$record = Mcpwp_Approvals::get_request( $approval_id );
-		if ( is_wp_error( $record ) ) {
+		if ( is_wp_error( $record ) || ! is_array( $record ) ) {
 			return;
 		}
 
-		$state  = self::build_state( is_array( $record ) ? $record : array() );
+		// Dedupe per approval: a record that already carries a validated
+		// triage (e.g. a re-scheduled or re-run cron event for the same id)
+		// is not re-sent. Jev triage is a one-shot enrichment, not a
+		// recurring poll.
+		if ( null !== Mcpwp_Approvals::sanitize_triage( isset( $record['triage'] ) ? $record['triage'] : null ) ) {
+			return;
+		}
+
+		if ( ! self::allow_call_today() ) {
+			self::log_failure( $approval_id, new WP_Error( 'jev_daily_cap_reached', sprintf( 'Daily Jev triage cap (%d) reached; skipped.', self::MAX_CALLS_PER_DAY ) ) );
+			return;
+		}
+
+		$state  = self::build_state( $record );
 		$result = $jev->evaluate( $state, self::questions() );
 
 		if ( is_wp_error( $result ) ) {
@@ -77,6 +109,38 @@ class Mcpwp_Jev_Triage {
 		if ( ! Mcpwp_Approvals::set_triage( $approval_id, $triage ) ) {
 			self::log_failure( $approval_id, new WP_Error( 'jev_invalid_answer', 'Jev answer failed enum validation; nothing stored.' ) );
 		}
+	}
+
+	/**
+	 * Day-bucketed egress counter: true and increments when today's count is
+	 * still under MAX_CALLS_PER_DAY, false (does not increment) once the cap
+	 * is reached. The bucket resets automatically at UTC midnight because the
+	 * stored date simply stops matching "today".
+	 *
+	 * @return bool
+	 */
+	private static function allow_call_today() {
+		$today   = gmdate( 'Y-m-d' );
+		$counter = get_option( self::DAILY_COUNT_OPTION, array() );
+		$counter = is_array( $counter ) ? $counter : array();
+
+		$date  = isset( $counter['date'] ) ? (string) $counter['date'] : '';
+		$count = ( $date === $today && isset( $counter['count'] ) ) ? (int) $counter['count'] : 0;
+
+		if ( $count >= self::MAX_CALLS_PER_DAY ) {
+			return false;
+		}
+
+		update_option(
+			self::DAILY_COUNT_OPTION,
+			array(
+				'date'  => $today,
+				'count' => $count + 1,
+			),
+			false
+		);
+
+		return true;
 	}
 
 	/**
@@ -111,9 +175,22 @@ class Mcpwp_Jev_Triage {
 	 * Build the untrusted-but-bounded state string sent to Jev. Only ever
 	 * reads the PUBLIC approval record (already stripped of raw
 	 * before/after content, target fingerprints, etc. by
-	 * Mcpwp_Approvals::public_record()) and then applies its own
-	 * credential-shaped-string scrub on top, because a title or note is
-	 * free text an operator could have pasted anything into.
+	 * Mcpwp_Approvals::public_record()) — NOTE this still includes
+	 * before/after excerpts of the resource, which may itself be a draft or
+	 * private post/page; see the readme Privacy section — and then applies
+	 * its own credential-shaped-string scrub on top, because a title or note
+	 * is free text an operator could have pasted anything into.
+	 *
+	 * Redaction runs on each field BEFORE JSON-encoding, not on the encoded
+	 * text: json_encode() escapes '/' as '\/' by default, which splits a
+	 * token containing a slash (an AWS secret access key, for one) across an
+	 * inserted backslash, so a regex over the encoded text can miss exactly
+	 * what it exists to catch — and a label-matching regex run over encoded
+	 * text can eat the closing `"` of a JSON string and corrupt the
+	 * structure. Redacting the plain field values first and only then
+	 * encoding (with JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE, so the
+	 * escaping does not reappear afterwards) avoids both problems and keeps
+	 * the result always well-formed JSON.
 	 *
 	 * @param array $approval Public approval record.
 	 * @return string
@@ -132,7 +209,12 @@ class Mcpwp_Jev_Triage {
 			'diff_summary'  => self::diff_summary( $diff ),
 		);
 
-		$state = self::redact_credential_shaped_strings( (string) wp_json_encode( $parts ) );
+		foreach ( $parts as $key => $value ) {
+			$parts[ $key ] = self::redact_credential_shaped_strings( $value );
+		}
+
+		$state = wp_json_encode( $parts, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE );
+		$state = is_string( $state ) ? $state : '{}';
 
 		if ( strlen( $state ) > self::STATE_MAX_CHARS ) {
 			$state = substr( $state, 0, self::STATE_MAX_CHARS ) . '…(truncated)';
@@ -161,9 +243,11 @@ class Mcpwp_Jev_Triage {
 	 * option value before it leaves the site. Not a substitute for keeping
 	 * secrets out of approval titles/notes in the first place — a
 	 * defense-in-depth net, deliberately conservative in the direction of
-	 * over-redacting rather than leaking.
+	 * over-redacting rather than leaking. Operates on ONE plain-text field
+	 * value at a time, before any JSON-encoding (see build_state()) — never
+	 * on already-encoded text.
 	 *
-	 * @param string $text Candidate state text.
+	 * @param string $text Candidate field value.
 	 * @return string
 	 */
 	private static function redact_credential_shaped_strings( $text ) {
@@ -171,18 +255,50 @@ class Mcpwp_Jev_Triage {
 
 		// Authorization headers / bearer tokens.
 		$text = preg_replace( '/\bBearer\s+[A-Za-z0-9._\-]{8,}/i', 'Bearer [redacted]', $text );
-		$text = preg_replace( '/\\\\?"?Authorization\\\\?"?\s*:\s*\\\\?"?[^",}]+/i', 'Authorization: [redacted]', $text );
+		$text = preg_replace( '/\bAuthorization\s*:\s*\S+/i', 'Authorization: [redacted]', $text );
 
-		// key/token/secret/password-labelled values, quoted or bare.
+		// Provider-specific shapes a generic length/label rule can miss:
+		// AWS access key ids (20 chars, not otherwise "long" enough to look
+		// suspicious on their own), JWTs (three dot-separated base64url
+		// segments), and a set of well-known secret/token prefixes.
+		$text = preg_replace( '/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/', '[redacted-token]', $text );
+		$text = preg_replace( '/\beyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]*/', '[redacted-token]', $text );
 		$text = preg_replace(
-			'/([\'"]?\b(?:api[_-]?key|apikey|secret|token|password|passwd|access[_-]?key)\b[\'"]?\s*[:=]\s*)[\'"]?[^\s,}"\']{6,}[\'"]?/i',
+			'/\b(?:sk-|sk_live_|pk_live_|ghp_|gho_|xox[bap]-|AIza|mcpwp_)[A-Za-z0-9_\-]{6,}/i',
+			'[redacted-token]',
+			$text
+		);
+
+		// Labelled values, quoted or bare, "label: value" or "label=value".
+		// 'key' (bare, not just 'api_key'/'access_key') and 'auth'/'bearer'
+		// are included as labels here — broader than the specific header
+		// rule above, since "auth" or "bearer" can also appear as a
+		// lowercase field label rather than a real HTTP header. The value
+		// pattern stops at the next quote so a literal `key="..."` keeps its
+		// closing quote instead of it being consumed by the match.
+		$text = preg_replace(
+			'/([\'"]?\b(?:api[_-]?key|apikey|key|secret|token|password|passwd|access[_-]?key|auth|bearer)\b[\'"]?\s*[:=]\s*)[\'"]?[^\s,}"\']{4,}/i',
 			'$1[redacted]',
 			$text
 		);
 
-		// Long opaque runs (>=32 chars, no whitespace) are far more likely to
-		// be a key/hash/token than legitimate free text.
-		$text = preg_replace( '/[A-Za-z0-9_\-\.\/+]{32,}/', '[redacted-token]', $text );
+		// Any remaining opaque run of 20+ characters that mixes letters and
+		// digits is far more likely to be a key/hash/token than ordinary
+		// prose — catches whatever the labelled/prefixed rules above did not
+		// name, including a token that would otherwise be split by
+		// json_encode()'s slash-escaping if this ran after encoding instead
+		// of before it.
+		$text = preg_replace_callback(
+			'/[A-Za-z0-9_\-\.\/+=]{20,}/',
+			static function ( $matches ) {
+				$token = $matches[0];
+				if ( preg_match( '/[0-9]/', $token ) && preg_match( '/[A-Za-z]/', $token ) ) {
+					return '[redacted-token]';
+				}
+				return $token;
+			},
+			$text
+		);
 
 		return null === $text ? '' : $text;
 	}

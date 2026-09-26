@@ -113,22 +113,24 @@ class Mcpwp_Jev {
 			return new WP_Error( 'jev_no_questions', __( 'At least one question is required.', 'mcpwp' ) );
 		}
 
-		// HTTPS only, no exceptions on scheme — the sslverify relaxation below
-		// (loopback + WP_DEBUG, mirroring every other loopback fetch in this
-		// plugin) is how a local test stub is reached without weakening the
-		// scheme requirement itself.
+		// HTTPS only, no exceptions on scheme.
 		$scheme = wp_parse_url( $this->endpoint, PHP_URL_SCHEME );
 		if ( 'https' !== $scheme ) {
 			return new WP_Error( 'jev_invalid_endpoint', __( 'The configured Jev endpoint must use HTTPS.', 'mcpwp' ) );
 		}
 
-		$host          = (string) wp_parse_url( $this->endpoint, PHP_URL_HOST );
-		$is_loopback   = in_array( $host, array( 'localhost', '127.0.0.1', '::1' ), true );
-		$response      = wp_remote_post(
+		// wp_safe_remote_post(), not wp_remote_post(): this call is driven by
+		// an admin-supplied endpoint override, so it must refuse internal/
+		// private hosts the same way any other outbound integration in this
+		// plugin does — an SSRF guard, not a convenience. sslverify is never
+		// disabled or relaxed, including for a loopback target: a local test
+		// double is reached by mocking pre_http_request, never by weakening
+		// TLS verification on a real request.
+		$response = wp_safe_remote_post(
 			$this->endpoint,
 			array(
 				'timeout'   => self::TIMEOUT,
-				'sslverify' => $is_loopback ? ! ( defined( 'WP_DEBUG' ) && WP_DEBUG ) : true,
+				'sslverify' => true,
 				'headers'   => array(
 					'Authorization' => 'Bearer ' . $this->api_key,
 					'Content-Type'  => 'application/json',

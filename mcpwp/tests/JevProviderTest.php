@@ -140,6 +140,11 @@ final class JevProviderTest extends TestCase
         $request = $captured[0];
         $this->assertSame('https://jev-stub.test/v1/systemone', $request['url']);
         $this->assertSame('POST', $request['args']['method']);
+        // wp_safe_remote_post(), not wp_remote_post(): an admin-supplied
+        // endpoint override must be treated like any other outbound
+        // integration's SSRF guard.
+        $this->assertTrue($request['args']['reject_unsafe_urls']);
+        $this->assertTrue($request['args']['sslverify']);
         $this->assertSame('Bearer test-typesafe-key', $request['args']['headers']['Authorization']);
         $this->assertSame('application/json', $request['args']['headers']['Content-Type']);
         $this->assertLessThanOrEqual(8, $request['args']['timeout']);
@@ -175,6 +180,21 @@ final class JevProviderTest extends TestCase
         Mcpwp_Jev::for_site()->evaluate('s', array('q' => array('type' => 'choice', 'instructions' => 'x', 'criteria' => array('a' => 'a'))));
 
         $this->assertCount(1, $captured);
+    }
+
+    public function test_evaluate_never_relaxes_sslverify_even_for_a_loopback_shaped_endpoint(): void
+    {
+        // HTTPS-only is enforced by scheme alone — a loopback-shaped host
+        // must never buy a weaker TLS check. There is no WP_DEBUG or
+        // loopback carve-out left in the client at all.
+        $this->configure('https://127.0.0.1:9443/v1/systemone');
+        $captured = $this->mockHttp(array('answers' => array('q' => array('type' => 'choice', 'choice' => 'a'))));
+
+        Mcpwp_Jev::for_site()->evaluate('s', array('q' => array('type' => 'choice', 'instructions' => 'x', 'criteria' => array('a' => 'a'))));
+
+        $this->assertCount(1, $captured);
+        $this->assertTrue($captured[0]['args']['sslverify']);
+        $this->assertTrue($captured[0]['args']['reject_unsafe_urls']);
     }
 
     // -- Failure modes: never fatal, always WP_Error -----------------------------

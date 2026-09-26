@@ -376,6 +376,15 @@ class Mcpwp_Approvals {
 	}
 
 	/**
+	 * How many times set_triage() re-reads and retries its compare-and-swap
+	 * after losing a race to another writer. Mirrors
+	 * Mcpwp_Integration_Manager::WRITE_ATTEMPTS (#845 pattern).
+	 *
+	 * @var int
+	 */
+	const TRIAGE_WRITE_ATTEMPTS = 5;
+
+	/**
 	 * Store a validated Jev triage result on an approval record. Never
 	 * called from, and never read by, approve_request()/reject_request()/
 	 * apply_request()/apply_payload() — triage is display/sort metadata
@@ -383,6 +392,18 @@ class Mcpwp_Approvals {
 	 *
 	 * A record that fails sanitize_triage() is dropped: nothing is stored,
 	 * and the existing (or absent) triage on the record is left untouched.
+	 *
+	 * Deliberately NOT built on get_all()/upsert(): that pair reads the
+	 * whole store once here, then upsert() reads it AGAIN and blindly
+	 * replaces this id's slot with the (possibly by-then-stale) record this
+	 * method built from its own earlier read — so an approve/apply/reject
+	 * that lands on this id between those two reads is silently reverted
+	 * (approved -> pending; applied -> approved with applied_at wiped back
+	 * to null, making it re-applicable). Instead this reads the row directly
+	 * and merges ONLY the `triage` key onto whatever is there right now,
+	 * with a real compare-and-swap retry loop identical in spirit to
+	 * Mcpwp_Integration_Manager::write_records() (#845) — a lost race is
+	 * detected and retried onto fresh data rather than silently overwritten.
 	 *
 	 * @param string $id     Approval request ID.
 	 * @param mixed  $triage Candidate triage array.
@@ -395,15 +416,50 @@ class Mcpwp_Approvals {
 		}
 
 		$id = sanitize_key( (string) $id );
-		$items = self::get_all();
-		if ( empty( $items[ $id ] ) ) {
+		if ( '' === $id || ! class_exists( 'Mcpwp_Encryption' ) ) {
 			return false;
 		}
 
-		$items[ $id ]['triage'] = $sanitized;
-		self::upsert( $items[ $id ] );
+		for ( $attempt = 0; $attempt < self::TRIAGE_WRITE_ATTEMPTS; $attempt++ ) {
+			$row = Mcpwp_Encryption::read_option_row( self::OPTION_NAME );
 
-		return true;
+			if ( Mcpwp_Encryption::ROW_ERROR === $row['state'] ) {
+				return false;
+			}
+
+			$present = Mcpwp_Encryption::ROW_PRESENT === $row['state'];
+			$items   = $present ? maybe_unserialize( $row['value'] ) : array();
+			$items   = is_array( $items ) ? $items : array();
+
+			if ( empty( $items[ $id ] ) || ! is_array( $items[ $id ] ) ) {
+				return false;
+			}
+
+			// Merge onto the record exactly as read THIS iteration — never a
+			// copy captured before this loop started.
+			$items[ $id ]['triage'] = $sanitized;
+
+			$value = maybe_serialize( $items );
+
+			if ( $present && $value === $row['value'] ) {
+				return true; // Already exactly this.
+			}
+
+			$written = $present
+				? Mcpwp_Encryption::compare_and_swap_option_row( self::OPTION_NAME, $row['value'], $value )
+				: Mcpwp_Encryption::insert_option_row_if_absent( self::OPTION_NAME, $value, 'no' );
+
+			if ( $written ) {
+				Mcpwp_Encryption::clean_option_cache( self::OPTION_NAME );
+				return true;
+			}
+
+			// Another writer's change landed between our read and our write
+			// this iteration — read again and reapply the merge onto ITS
+			// result, rather than keeping our now-stale copy.
+		}
+
+		return false;
 	}
 
 	/**
@@ -867,6 +923,15 @@ class Mcpwp_Approvals {
 		if ( isset( $record['diff'] ) && is_array( $record['diff'] ) ) {
 			unset( $record['diff']['before_excerpt'], $record['diff']['after_excerpt'] );
 			$record['diff']['redacted'] = true;
+		}
+
+		// triage.change_kind is derived from (and hints at) the hidden
+		// content — e.g. "deletion" or "seo_meta" on an otherwise-restricted
+		// record still tells an unprivileged reader something about what the
+		// content is. priority/confidence stay: they only rank the queue and
+		// name nothing about the resource itself.
+		if ( isset( $record['triage'] ) && is_array( $record['triage'] ) ) {
+			unset( $record['triage']['change_kind'] );
 		}
 
 		$record['redacted'] = true;

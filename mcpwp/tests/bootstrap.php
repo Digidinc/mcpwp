@@ -2336,6 +2336,19 @@ if (! function_exists('wp_safe_remote_get')) {
     }
 }
 
+if (! function_exists('wp_safe_remote_post')) {
+    function wp_safe_remote_post($url, $args = array())
+    {
+        // Same shape as wp_safe_remote_get() above, for POST callers (e.g.
+        // Mcpwp_Jev) that must reject internal/private hosts even though
+        // nothing in this double actually enforces it — tests mock the
+        // response via pre_http_request regardless.
+        $args['method']             = 'POST';
+        $args['reject_unsafe_urls'] = true;
+        return wp_remote_request($url, $args);
+    }
+}
+
 function wp_remote_post($url, $args = array())
 {
     $args['method'] = 'POST';

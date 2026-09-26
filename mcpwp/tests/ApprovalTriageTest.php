@@ -23,14 +23,22 @@ final class ApprovalTriageTest extends TestCase
 {
     protected function setUp(): void
     {
-        $GLOBALS['mcpwp_test_options']      = array();
-        $GLOBALS['mcpwp_test_filters']      = array();
-        $GLOBALS['mcpwp_test_actions']      = array();
-        $GLOBALS['mcpwp_test_cron']         = array();
-        $GLOBALS['mcpwp_test_single_cron']  = array();
-        $GLOBALS['_mcpwp_test_posts']       = array();
-        $GLOBALS['_mcpwp_test_meta']        = array();
-        $GLOBALS['mcpwp_test_current_user'] = 2;
+        $GLOBALS['mcpwp_test_options']            = array();
+        $GLOBALS['mcpwp_test_filters']            = array();
+        $GLOBALS['mcpwp_test_actions']            = array();
+        $GLOBALS['mcpwp_test_cron']               = array();
+        $GLOBALS['mcpwp_test_single_cron']        = array();
+        $GLOBALS['_mcpwp_test_posts']             = array();
+        $GLOBALS['_mcpwp_test_meta']              = array();
+        $GLOBALS['mcpwp_test_current_user']       = 2;
+        // Raw-row double used by Mcpwp_Approvals::set_triage()'s
+        // compare-and-swap (same mechanism as Mcpwp_Integration_Manager's
+        // #845 write_records(), exercised here for the approvals option).
+        $GLOBALS['mcpwp_test_wpdb_options']       = array();
+        $GLOBALS['mcpwp_test_wpdb_before_update'] = null;
+        $GLOBALS['mcpwp_test_wpdb_after_update']  = null;
+        $GLOBALS['mcpwp_test_wpdb_update_fails']  = false;
+        $GLOBALS['mcpwp_test_wpdb_read_fails']    = false;
 
         $ref      = new ReflectionClass(Mcpwp_Encryption::class);
         $instance = $ref->getProperty('instance');
@@ -40,7 +48,9 @@ final class ApprovalTriageTest extends TestCase
 
     protected function tearDown(): void
     {
-        $GLOBALS['mcpwp_test_filters'] = array();
+        $GLOBALS['mcpwp_test_filters']            = array();
+        $GLOBALS['mcpwp_test_wpdb_before_update'] = null;
+        $GLOBALS['mcpwp_test_wpdb_after_update']  = null;
     }
 
     private function configureJev(string $endpoint = 'https://jev-stub.test/v1/systemone'): void
@@ -445,5 +455,315 @@ final class ApprovalTriageTest extends TestCase
         // regardless of the triage record's contents.
         $this->assertSame('after', get_post($plain['resource']['id'])->post_content);
         $this->assertSame('after', get_post($poisoned['resource']['id'])->post_content);
+    }
+
+    // -- WARN2: set_triage() must not revert a concurrent approve/apply ----------
+
+    public function test_set_triage_does_not_revert_an_approve_and_apply_landing_between_its_read_and_write(): void
+    {
+        $post_id  = $this->makePost();
+        $approval = Mcpwp_Approvals::create_post_content_request($post_id, 'after', array('title' => 'Race'));
+        $id       = $approval['id'];
+
+        // Fires exactly once, from inside Mcpwp_Test_WPDB::update() — i.e.
+        // strictly between set_triage()'s read of the row and its
+        // compare-and-swap write of it (same mechanism
+        // IntegrationManagerConcurrentSaveTest uses for the #845 family).
+        $GLOBALS['mcpwp_test_wpdb_before_update'] = function (string $name) use ($id): void {
+            if (Mcpwp_Approvals::OPTION_NAME !== $name) {
+                return;
+            }
+            Mcpwp_Approvals::approve_request($id, '', array('actor' => 'reviewer-1'));
+            Mcpwp_Approvals::apply_request($id, array('actor' => 'reviewer-1'));
+        };
+
+        $stored = Mcpwp_Approvals::set_triage($id, array('priority' => 'urgent', 'change_kind' => 'content_edit'));
+        $this->assertTrue($stored, 'set_triage() must retry onto fresh data and still report success');
+
+        $record = Mcpwp_Approvals::get_request($id);
+        // The old bug: status reverted to 'pending' (or 'approved' with
+        // applied_at wiped back to null, making it re-applicable). Neither
+        // may happen — the concurrent approve+apply must survive untouched.
+        $this->assertSame('applied', $record['status']);
+        $this->assertNotNull($record['applied_at']);
+        $this->assertSame('urgent', $record['triage']['priority']);
+        $this->assertSame('content_edit', $record['triage']['change_kind']);
+        $this->assertSame('after', get_post($post_id)->post_content);
+    }
+
+    public function test_set_triage_retries_when_the_row_changes_between_read_and_write(): void
+    {
+        $post_id  = $this->makePost();
+        $approval = Mcpwp_Approvals::create_post_content_request($post_id, 'after', array('title' => 'Race'));
+        $id       = $approval['id'];
+
+        $attempts = 0;
+        $GLOBALS['mcpwp_test_wpdb_update_fails'] = function (string $name) use (&$attempts): bool {
+            if (Mcpwp_Approvals::OPTION_NAME !== $name) {
+                return false;
+            }
+            $attempts++;
+            // Force exactly one lost race, then let the retry succeed.
+            return 1 === $attempts;
+        };
+
+        $stored = Mcpwp_Approvals::set_triage($id, array('priority' => 'low', 'change_kind' => 'other'));
+
+        $this->assertTrue($stored);
+        $this->assertGreaterThanOrEqual(2, $attempts, 'a forced failure must cause a retry, not a silent drop');
+        $this->assertSame('low', Mcpwp_Approvals::get_request($id)['triage']['priority']);
+    }
+
+    public function test_set_triage_gives_up_after_write_attempts_exhausted(): void
+    {
+        $post_id  = $this->makePost();
+        $approval = Mcpwp_Approvals::create_post_content_request($post_id, 'after', array('title' => 'Race'));
+
+        $GLOBALS['mcpwp_test_wpdb_update_fails'] = function (string $name): bool {
+            return Mcpwp_Approvals::OPTION_NAME === $name; // never let the CAS land
+        };
+
+        $stored = Mcpwp_Approvals::set_triage($approval['id'], array('priority' => 'low', 'change_kind' => 'other'));
+
+        $this->assertFalse($stored, 'a permanently contended row must fail, not silently overwrite');
+        $this->assertArrayNotHasKey('triage', Mcpwp_Approvals::get_request($approval['id']));
+    }
+
+    // -- NOTE: dedupe per approval + a daily egress cap ---------------------------
+
+    public function test_run_does_not_re_ask_jev_for_an_approval_that_already_has_a_valid_triage(): void
+    {
+        $this->configureJev();
+        $post_id  = $this->makePost();
+        $approval = Mcpwp_Approvals::create_post_content_request($post_id, 'updated content', array('title' => 'Edit'));
+
+        $captured = $this->mockJevAnswer(array(
+            'review_priority' => array('type' => 'score', 'score' => 1, 'legend' => 'low'),
+            'change_kind'     => array('type' => 'choice', 'choice' => 'content_edit'),
+        ));
+
+        Mcpwp_Jev_Triage::run($approval['id']);
+        Mcpwp_Jev_Triage::run($approval['id']);
+        Mcpwp_Jev_Triage::run($approval['id']);
+
+        $this->assertCount(1, $captured, 'a re-scheduled or re-run cron event for the same id must not re-send it');
+        $this->assertSame('low', Mcpwp_Approvals::get_request($approval['id'])['triage']['priority']);
+    }
+
+    public function test_run_skips_once_the_daily_call_cap_is_reached(): void
+    {
+        $this->configureJev();
+        update_option(Mcpwp_Jev_Triage::DAILY_COUNT_OPTION, array(
+            'date'  => gmdate('Y-m-d'),
+            'count' => Mcpwp_Jev_Triage::MAX_CALLS_PER_DAY,
+        ));
+
+        $post_id  = $this->makePost();
+        $approval = Mcpwp_Approvals::create_post_content_request($post_id, 'updated content', array('title' => 'Edit'));
+
+        $captured = $this->mockJevAnswer(array(
+            'review_priority' => array('type' => 'score', 'score' => 1, 'legend' => 'low'),
+            'change_kind'     => array('type' => 'choice', 'choice' => 'content_edit'),
+        ));
+
+        Mcpwp_Jev_Triage::run($approval['id']);
+
+        $this->assertCount(0, $captured, 'at the daily cap, no call is made at all');
+        $this->assertArrayNotHasKey('triage', Mcpwp_Approvals::get_request($approval['id']));
+    }
+
+    public function test_run_allows_a_call_on_a_new_day_even_if_yesterday_was_at_cap(): void
+    {
+        $this->configureJev();
+        update_option(Mcpwp_Jev_Triage::DAILY_COUNT_OPTION, array(
+            'date'  => '2000-01-01', // long past — a different "today"
+            'count' => Mcpwp_Jev_Triage::MAX_CALLS_PER_DAY,
+        ));
+
+        $post_id  = $this->makePost();
+        $approval = Mcpwp_Approvals::create_post_content_request($post_id, 'updated content', array('title' => 'Edit'));
+
+        $captured = $this->mockJevAnswer(array(
+            'review_priority' => array('type' => 'score', 'score' => 1, 'legend' => 'low'),
+            'change_kind'     => array('type' => 'choice', 'choice' => 'content_edit'),
+        ));
+
+        Mcpwp_Jev_Triage::run($approval['id']);
+
+        $this->assertCount(1, $captured);
+    }
+
+    // -- WARN1: redaction runs on plain text before encoding, not after ----------
+
+    /** @return string The 'state' string decoded from the single captured request body. */
+    private function stateSentFor(string $approvalId): string
+    {
+        $captured = $this->mockJevAnswer(array(
+            'review_priority' => array('type' => 'score', 'score' => 1, 'legend' => 'low'),
+            'change_kind'     => array('type' => 'choice', 'choice' => 'content_edit'),
+        ));
+
+        Mcpwp_Jev_Triage::run($approvalId);
+
+        $this->assertCount(1, $captured);
+        $body = json_decode($captured[0]['args']['body'], true);
+        $this->assertIsArray($body);
+        $this->assertIsString($body['state']);
+
+        return $body['state'];
+    }
+
+    public function test_redacts_an_aws_style_secret_access_key_containing_a_slash(): void
+    {
+        $this->configureJev();
+        // A slash in the token used to survive: build_state() previously
+        // ran the redaction regex over already-json_encode()'d text, and
+        // json_encode() escapes '/' as '\/' by default, splitting this
+        // exact shape of secret across an inserted backslash.
+        $secret   = 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY';
+        $approval = Mcpwp_Approvals::create_post_content_request(
+            $this->makePost(),
+            'updated content',
+            array('title' => 'Update page', 'note' => 'AWS secret access key: ' . $secret)
+        );
+
+        $state = $this->stateSentFor($approval['id']);
+
+        $this->assertStringNotContainsString($secret, $state);
+        $this->assertStringContainsString('redacted', $state);
+        $this->assertNotNull(json_decode($state, true), 'the state itself must still be well-formed JSON');
+    }
+
+    public function test_redacts_an_aws_access_key_id(): void
+    {
+        $this->configureJev();
+        $key_id   = 'AKIAIOSFODNN7EXAMPLE'; // 20 chars, AWS's own documented example id
+        $approval = Mcpwp_Approvals::create_post_content_request(
+            $this->makePost(),
+            'updated content',
+            array('title' => 'Update page', 'note' => 'Access key id ' . $key_id)
+        );
+
+        $state = $this->stateSentFor($approval['id']);
+
+        $this->assertStringNotContainsString($key_id, $state);
+        $this->assertStringContainsString('redacted', $state);
+    }
+
+    public function test_redacts_a_quoted_key_value_labelled_just_key(): void
+    {
+        $this->configureJev();
+        $value    = 'ThirtyCharacterSecretValueHere123';
+        $approval = Mcpwp_Approvals::create_post_content_request(
+            $this->makePost(),
+            'updated content',
+            array('title' => 'Update page', 'note' => 'config: key="' . $value . '" rotate soon')
+        );
+
+        $state = $this->stateSentFor($approval['id']);
+
+        $this->assertStringNotContainsString($value, $state);
+        $this->assertStringContainsString('redacted', $state);
+        $this->assertNotNull(json_decode($state, true), 'a labelled value must not eat its own closing quote and corrupt the JSON');
+    }
+
+    public function test_redacts_a_jwt(): void
+    {
+        $this->configureJev();
+        $jwt      = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PYAo';
+        $approval = Mcpwp_Approvals::create_post_content_request(
+            $this->makePost(),
+            'updated content',
+            array('title' => 'Update page', 'note' => 'Bearer session leftover: ' . $jwt)
+        );
+
+        $state = $this->stateSentFor($approval['id']);
+
+        $this->assertStringNotContainsString($jwt, $state);
+        $this->assertStringContainsString('redacted', $state);
+    }
+
+    public function test_redacts_split_keys_that_span_a_json_escaped_slash(): void
+    {
+        $this->configureJev();
+        // Two secrets separated only by a slash, back to back — the exact
+        // "split keys" shape the review flagged: a post-encode regex would
+        // see "keyA\/keyB" (slash escaped) and match neither cleanly.
+        $secret_a = 'firstsecretvaluewithdigits123456';
+        $secret_b = 'secondsecretvaluewithdigits98765';
+        $approval = Mcpwp_Approvals::create_post_content_request(
+            $this->makePost(),
+            'updated content',
+            array('title' => 'Update page', 'note' => $secret_a . '/' . $secret_b)
+        );
+
+        $state = $this->stateSentFor($approval['id']);
+
+        $this->assertStringNotContainsString($secret_a, $state);
+        $this->assertStringNotContainsString($secret_b, $state);
+    }
+
+    public function test_redacted_state_is_always_well_formed_json(): void
+    {
+        $this->configureJev();
+        $approval = Mcpwp_Approvals::create_post_content_request(
+            $this->makePost(),
+            'updated content',
+            array(
+                'title' => 'Update page',
+                'note'  => 'api_key="abc" token=def secret: ghijk password=lmno "quotes" and, commas, {braces}',
+            )
+        );
+
+        $state = $this->stateSentFor($approval['id']);
+
+        $decoded = json_decode($state, true);
+        $this->assertNotNull($decoded, 'redaction must never corrupt the JSON structure: ' . $state);
+        $this->assertArrayHasKey('note', $decoded);
+    }
+
+    // -- NOTE: triage.change_kind follows the same redaction rule as the rest ----
+
+    public function test_redact_source_for_unprivileged_strips_change_kind_but_keeps_priority(): void
+    {
+        $draft_id = wp_insert_post(array(
+            'post_type'    => 'page',
+            'post_title'   => 'Secret draft',
+            'post_content' => 'shh',
+            'post_status'  => 'draft',
+        ));
+        $approval = Mcpwp_Approvals::create_post_content_request($draft_id, 'updated', array('title' => 'Edit draft'));
+        Mcpwp_Approvals::set_triage($approval['id'], array('priority' => 'high', 'change_kind' => 'deletion', 'confidence' => 0.9));
+
+        $record   = Mcpwp_Approvals::get_request($approval['id']);
+        $redacted = Mcpwp_Approvals::redact_source_for_unprivileged($record);
+
+        $this->assertTrue($redacted['redacted']);
+        $this->assertArrayNotHasKey('change_kind', $redacted['triage']);
+        $this->assertSame('high', $redacted['triage']['priority']);
+        $this->assertSame(0.9, $redacted['triage']['confidence']);
+    }
+
+    public function test_list_requests_applies_change_kind_redaction_for_unprivileged_callers(): void
+    {
+        $draft_id = wp_insert_post(array(
+            'post_type'    => 'page',
+            'post_title'   => 'Secret draft',
+            'post_content' => 'shh',
+            'post_status'  => 'draft',
+        ));
+        $approval = Mcpwp_Approvals::create_post_content_request($draft_id, 'updated', array('title' => 'Edit draft'));
+        Mcpwp_Approvals::set_triage($approval['id'], array('priority' => 'high', 'change_kind' => 'deletion'));
+
+        $unprivileged = Mcpwp_Approvals::list_requests('', 10, false);
+        $found        = null;
+        foreach ($unprivileged as $item) {
+            if ($item['id'] === $approval['id']) {
+                $found = $item;
+            }
+        }
+
+        $this->assertNotNull($found);
+        $this->assertArrayNotHasKey('change_kind', $found['triage']);
     }
 }
