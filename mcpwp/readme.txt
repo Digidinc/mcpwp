@@ -157,6 +157,13 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 
 == Changelog ==
 
+= 3.14.0 =
+* feat: **approvals:** optional Jev triage ranks the approval queue ([#935](https://github.com/Mumega-com/mcpwp/issues/935))
+* feat: **mcp:** accurate tool annotations and titles for connector directories ([#934](https://github.com/Mumega-com/mcpwp/issues/934))
+* feat: **mcp:** return tool execution failures as isError results the model can read ([#936](https://github.com/Mumega-com/mcpwp/issues/936)) ([2f19282](https://github.com/Mumega-com/mcpwp/commit/2f19282ec83a4b425fedf2b1ba61a4e164f82c4f)), closes [#896](https://github.com/Mumega-com/mcpwp/issues/896)
+* feat: **seo:** AI crawler policy, IndexNow, and llms.txt/robots fixes that coexist with SEO plugins ([#937](https://github.com/Mumega-com/mcpwp/issues/937))
+* feat: **seo:** wp_seo_flags returns the six act-worthy search signals, plus an seo-loop prompt ([#933](https://github.com/Mumega-com/mcpwp/issues/933)) ([9fa4d9e](https://github.com/Mumega-com/mcpwp/commit/9fa4d9e01d694b55846e4cd78a0300f838a27ce6)), closes [#898](https://github.com/Mumega-com/mcpwp/issues/898)
+
 = 3.13.1 =
 * fix: **admin:** clean first-run debug log, canonical update channel, Free plan label ([#888](https://github.com/Mumega-com/mcpwp/issues/888))
 * fix: **content:** strip script/style bodies with their tags and report removals ([#808](https://github.com/Mumega-com/mcpwp/issues/808)) ([#885](https://github.com/Mumega-com/mcpwp/issues/885))
