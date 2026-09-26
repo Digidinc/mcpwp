@@ -2661,6 +2661,22 @@ function trailingslashit($string)
     return rtrim((string) $string, '/\\') . '/';
 }
 
+if (! function_exists('get_home_path')) {
+    // Real WP: derives the filesystem path to the site's home URL, which can
+    // differ from ABSPATH when WordPress is installed in a subdirectory.
+    // Defaults to ABSPATH (this double has no such split by default) but a
+    // test can set $GLOBALS['mcpwp_test_home_path'] to a DIFFERENT directory
+    // to prove a code path genuinely calls get_home_path() rather than
+    // reading ABSPATH directly (#937 NOTE-3). Defining this here also means
+    // llms_txt_physical_file_exists()'s `function_exists('get_home_path')`
+    // guard never tries to require a real wp-admin/includes/file.php that
+    // doesn't exist in this harness.
+    function get_home_path()
+    {
+        return $GLOBALS['mcpwp_test_home_path'] ?? ABSPATH;
+    }
+}
+
 function untrailingslashit($string)
 {
     return rtrim((string) $string, '/\\');

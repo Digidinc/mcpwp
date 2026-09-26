@@ -48,6 +48,12 @@ class Mcpwp_IndexNow {
 	const MAX_EXPLICIT_PER_CALL = 100;
 	const SUBMIT_THROTTLE_SECONDS = 60;
 	const MAX_BACKOFF_SECONDS   = 3600;
+	// A batch that fails with one of these is not going to succeed on retry
+	// with the same content — 400 (malformed request/key), 403 (key
+	// rejected/host mismatch), 422 (IndexNow's own "Unprocessable Entity" for
+	// a malformed URL list, per its API docs). Retrying it would just spend
+	// the backoff window for nothing (#937 NOTE-4).
+	const PERMANENT_FAILURE_CODES = array( 400, 403, 422 );
 	const MAX_QUEUE_CAS_ATTEMPTS = 5;
 
 	/**
@@ -247,6 +253,24 @@ class Mcpwp_IndexNow {
 	 * anything, so both conditions are checked. Exposed as a filter so a
 	 * site (or a test) can correct this without an MCPWP release if Rank
 	 * Math changes the shape.
+	 *
+	 * KNOWN LIMITATION, documented rather than fixed (#937 NOTE-1,
+	 * "optional... else document"): this is a SITE-WIDE bool, not per
+	 * post type. `bing_post_types` can legitimately restrict Rank Math's
+	 * own auto-submit to a subset of types (e.g. `post` only) — on such a
+	 * site, this method still returns true for EVERY post type, so MCPWP
+	 * defers entirely rather than covering the types Rank Math left out
+	 * (e.g. `page`). Making this type-aware would need to thread a post
+	 * type through every caller (maybe_queue() has one; flush()'s
+	 * blanket discard-the-whole-batch gate and blocked_reason()'s
+	 * single-reason-for-the-whole-call contract do not, and would need
+	 * restructuring to filter per-URL instead of refusing/discarding
+	 * wholesale) — a real, multi-file change, not a small one. Until
+	 * that lands, a site relying on Rank Math for only some post types
+	 * gets full IndexNow coverage for none of them via MCPWP; it can
+	 * still submit the types Rank Math skips through the explicit
+	 * wp_indexnow_submit tool (which is gated by this same method today —
+	 * also blanket, also part of this limitation).
 	 *
 	 * @return bool
 	 */
@@ -624,8 +648,10 @@ class Mcpwp_IndexNow {
 			$survivors = array_slice( $survivors, 0, self::MAX_URLS_PER_REQUEST );
 		}
 
-		$result = $this->submit( $survivors );
-		$succeeded = is_array( $result ) && ! empty( $result['success'] );
+		$result      = $this->submit( $survivors );
+		$succeeded   = is_array( $result ) && ! empty( $result['success'] );
+		$status_code = is_array( $result ) && isset( $result['response_code'] ) ? (int) $result['response_code'] : 0;
+		$permanent   = ! $succeeded && in_array( $status_code, self::PERMANENT_FAILURE_CODES, true );
 
 		if ( ! empty( $over_cap ) ) {
 			// Deferred to the next flush rather than lost — reported so an
@@ -635,6 +661,27 @@ class Mcpwp_IndexNow {
 
 		if ( $succeeded ) {
 			delete_option( self::RETRY_STATE_OPTION );
+		} elseif ( $permanent ) {
+			// A 400/403/422 means THIS batch's content or credentials are
+			// rejected outright — resubmitting the same URLs with the same
+			// key will fail identically every time, so retrying only burns
+			// the backoff window for nothing (#937 NOTE-4). The survivors
+			// are NOT requeued; the failure is recorded so it stays visible
+			// in wp_indexnow_status rather than disappearing silently.
+			update_option(
+				self::RETRY_STATE_OPTION,
+				array(
+					'attempt'          => 0,
+					'permanent_failure' => true,
+					'response_code'    => $status_code,
+					'last_error'       => is_array( $result ) ? ( $result['error'] ?? '' ) : '',
+				),
+				false
+			);
+
+			if ( is_array( $result ) ) {
+				$result['permanent_failure'] = true;
+			}
 		} else {
 			// Keep the survivors queued and retry with exponential backoff
 			// instead of losing them on a transient failure (#937 NOTE-2).

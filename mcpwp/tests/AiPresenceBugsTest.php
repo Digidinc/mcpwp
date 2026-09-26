@@ -26,7 +26,8 @@ final class AiPresenceBugsTest extends TestCase {
 	}
 
 	protected function tearDown(): void {
-		$GLOBALS['mcpwp_test_filters'] = array();
+		$GLOBALS['mcpwp_test_filters']    = array();
+		unset( $GLOBALS['mcpwp_test_home_path'] );
 	}
 
 	private function force_seo_plugin( $slug ) {
@@ -87,6 +88,42 @@ final class AiPresenceBugsTest extends TestCase {
 			$this->assertFalse( $presence->should_serve_own_llms_txt() );
 		} finally {
 			unlink( $path );
+		}
+	}
+
+	/**
+	 * #937 NOTE-3: the physical-file check must use get_home_path() — the
+	 * exact path Yoast's WordPress_File_System_Adapter writes to — not
+	 * ABSPATH. They differ whenever WordPress lives in a subdirectory below
+	 * the site's home path. Proven here by pointing get_home_path() at a
+	 * DIFFERENT directory than ABSPATH: a file dropped in the home path is
+	 * detected, and a file dropped in ABSPATH (where get_home_path() is NOT
+	 * pointed) is not.
+	 */
+	public function test_physical_llms_txt_check_uses_get_home_path_not_abspath(): void {
+		$home_dir = rtrim( sys_get_temp_dir(), '/' ) . '/mcpwp-test-home-' . uniqid();
+		mkdir( $home_dir );
+		$GLOBALS['mcpwp_test_home_path'] = $home_dir;
+
+		try {
+			$presence = new Mcpwp_AI_Presence();
+			$this->assertTrue( $presence->should_serve_own_llms_txt(), 'premise: nothing at the home path yet' );
+
+			// A file at ABSPATH (NOT the configured home path) must be ignored.
+			$abspath_file = rtrim( ABSPATH, '/' ) . '/llms.txt';
+			file_put_contents( $abspath_file, "# not at the home path\n" );
+			try {
+				$this->assertTrue( $presence->should_serve_own_llms_txt(), 'a file at ABSPATH must not count when get_home_path() points elsewhere' );
+			} finally {
+				unlink( $abspath_file );
+			}
+
+			// A file at the actual home path must be detected.
+			file_put_contents( $home_dir . '/llms.txt', "# at the home path\n" );
+			$this->assertFalse( $presence->should_serve_own_llms_txt(), 'a file at get_home_path() must be detected' );
+		} finally {
+			@unlink( $home_dir . '/llms.txt' );
+			@rmdir( $home_dir );
 		}
 	}
 

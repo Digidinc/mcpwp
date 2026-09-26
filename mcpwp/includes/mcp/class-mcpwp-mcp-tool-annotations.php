@@ -486,6 +486,34 @@ class Mcpwp_MCP_Tool_Annotations {
 		// part's sections each time, so — unlike template/archetype — this
 		// one is not idempotent.
 		'wp_apply_elementor_part'    => array( 'idempotentHint' => false, 'reason' => 'Default mode=insert (Mcpwp_REST_Elementor_Pro::apply_part() -> insert_part_into_page()) appends another copy of the part\'s sections on every call; only mode=replace would behave like wp_apply_elementor_template, and that is not the default.' ),
+
+		// --- AI crawler policy / IndexNow (#937). GET tools included even
+		// though their fields match the heuristic's own default, per review:
+		// this documents the review happened, not a correction. The other
+		// two need real corrections (noted per field below).
+
+		'wp_get_ai_crawler_policy' => array(
+			'readOnlyHint'   => true,
+			'openWorldHint'  => false,
+			'idempotentHint' => true,
+			'reason'         => 'Reviewed, matches default: pure read of the stored mcpwp_ai_crawler_policy option plus local robots.txt introspection (Mcpwp_REST_AI_Presence::get_crawler_policy()) — no external call, no write.',
+		),
+		'wp_set_ai_crawler_policy' => array(
+			'idempotentHint' => true,
+			'reason'         => 'readOnlyHint/destructiveHint/openWorldHint already match the base heuristic (write tool, not purely-additive by name -> destructiveHint=true by default; not in any open-world list -> openWorldHint=false by default), so only idempotentHint needs a correction: Mcpwp_AI_Crawler_Policy::set_policy() replaces the stored per-bot allow/deny map with the given values (Mcpwp_REST_AI_Presence::update_crawler_policy()) — submitting the same {bot: allow|deny} map twice leaves the same state.',
+		),
+		'wp_indexnow_status' => array(
+			'readOnlyHint'   => true,
+			'openWorldHint'  => false,
+			'idempotentHint' => true,
+			'reason'         => 'Reviewed, matches default: pure read of stored IndexNow settings/key/queue/last-result state (Mcpwp_REST_AI_Presence::get_indexnow_status() -> Mcpwp_IndexNow::get_status()) — no external call, no write.',
+		),
+		'wp_indexnow_submit' => array(
+			'destructiveHint' => false,
+			'openWorldHint'   => true,
+			'idempotentHint'  => true,
+			'reason'          => 'POST, but not purely-additive by name (verb is "indexnow_submit", not one of is_purely_additive_by_name()\'s create/add/upload/clone/duplicate/import/submit/bulk_create/bulk_upload stems — "submit" only matches as the SECOND name segment, and this tool\'s second segment is "indexnow"), so the default-destructive-for-write-tools rule would otherwise mark it destructiveHint=true. Corrected false: Mcpwp_IndexNow::submit()/validate_explicit_urls() only ever notifies the shared IndexNow endpoint about URLs that already exist and are already publicly indexable — it does not create, overwrite, or delete anything in WordPress. openWorldHint=true: pings https://api.indexnow.org/indexnow (Mcpwp_IndexNow::ENDPOINT). idempotentHint=true: IndexNow\'s own protocol treats repeat notifications of the same URL as a no-op on the receiving end, and this tool\'s own effect on WordPress state (validation only) is identical on repeat calls with the same URLs.',
+		),
 	);
 
 	/**
@@ -508,6 +536,13 @@ class Mcpwp_MCP_Tool_Annotations {
 		'wp_remember'                          => 'Remember memory',
 		'wp_forget'                            => 'Forget memory',
 		'wp_text_to_speech'                    => 'Convert text to speech',
+		'wp_get_ai_crawler_policy'             => 'Get AI crawler policy',
+		'wp_set_ai_crawler_policy'             => 'Set AI crawler policy',
+		'wp_indexnow_status'                   => 'IndexNow status',
+		// "Submit to IndexNow" reads more naturally than the humanizer's literal
+		// word order ("IndexNow submit") — same convention as
+		// wp_submit_to_google_index -> "Submit to Google index".
+		'wp_indexnow_submit'                   => 'Submit to IndexNow',
 
 		// wc_* tools: the humanizer would prefix every one with "WooCommerce"
 		// (from the wc_ stem), which is redundant once the tool is grouped
@@ -566,6 +601,7 @@ class Mcpwp_MCP_Tool_Annotations {
 		'google'      => 'Google',
 		'gutenberg'   => 'Gutenberg',
 		'pexels'      => 'Pexels',
+		'indexnow'    => 'IndexNow',
 	);
 
 	/**

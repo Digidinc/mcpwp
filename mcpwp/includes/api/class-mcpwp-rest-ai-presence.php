@@ -145,7 +145,7 @@ class Mcpwp_REST_AI_Presence extends Mcpwp_REST_API {
 				: '',
 			'conflicts'              => $conflicts,
 			'conflicts_note'         => ! empty( $conflicts )
-				? 'These denied bots also have some other directive for the exact same User-agent elsewhere in robots.txt (last observed the previous time robots.txt was generated) — MCPWP still appends its own Disallow: / for them, but a second group for the same agent is worth reviewing by hand.'
+				? 'These denied bots also have some other directive for the exact same User-agent elsewhere in robots.txt (last observed the previous time robots.txt was generated). MCPWP still appends its own "Disallow: /" group for them, but the conflict is surfaced here, not resolved: under RFC 9309, a crawler merges same-agent groups and an equal-length "Allow: /" beats "Disallow: /" — so the other directive may be the one that actually wins for a given crawler. Review and reconcile the two by hand.'
 				: '',
 		);
 	}
@@ -210,14 +210,11 @@ class Mcpwp_REST_AI_Presence extends Mcpwp_REST_API {
 			return $this->error_response( $code, $message, 409 );
 		}
 
-		if ( ! $indexnow->check_and_consume_submit_throttle() ) {
-			return $this->error_response(
-				'indexnow_throttled',
-				__( 'Explicit IndexNow submissions are limited to once per minute. Try again shortly.', 'mcpwp' ),
-				429
-			);
-		}
-
+		// Validate BEFORE consuming the throttle (#937 NOTE-6): a caller
+		// whose whole batch fails validation (a typo'd URL, a query
+		// string) has made no successful submission at all, and must not
+		// be forced to wait out the 1/minute window just to retry with the
+		// corrected URLs.
 		$validated = $indexnow->validate_explicit_urls( $urls );
 		if ( is_wp_error( $validated ) ) {
 			return $validated;
@@ -229,6 +226,14 @@ class Mcpwp_REST_AI_Presence extends Mcpwp_REST_API {
 				__( 'None of the submitted URLs are eligible: each must belong to this site, carry no query string, and resolve to a currently-published, indexable post.', 'mcpwp' ),
 				400,
 				array( 'rejected' => $validated['rejected'] )
+			);
+		}
+
+		if ( ! $indexnow->check_and_consume_submit_throttle() ) {
+			return $this->error_response(
+				'indexnow_throttled',
+				__( 'Explicit IndexNow submissions are limited to once per minute. Try again shortly.', 'mcpwp' ),
+				429
 			);
 		}
 

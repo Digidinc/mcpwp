@@ -207,14 +207,22 @@ class Mcpwp_AI_Crawler_Policy {
 	 * directive could be an Allow, or something narrower than a full
 	 * Disallow: /, in which case the owner's explicit "deny" choice would
 	 * be silently unenforced. This now always appends our own deny group
-	 * for every bot the policy denies — per robots.txt precedence rules a
-	 * second `User-agent: X` group for the same agent is additional
-	 * directives for that agent (Google documents merging same-agent
-	 * groups; the practical effect of *our* group is an unconditional
-	 * `Disallow: /`, which cannot be loosened by an earlier Allow). Any
-	 * pre-existing directive for a denied bot is instead surfaced via
-	 * detect_conflicts() so a site owner/agent is told about the overlap
-	 * rather than either side silently winning.
+	 * for every bot the policy denies, rather than skipping it.
+	 *
+	 * This does NOT guarantee our Disallow wins. Per RFC 9309 §2.2.2, a
+	 * crawler that finds multiple groups matching its own User-agent
+	 * merges them into one, and for two rules of EQUAL matched-path
+	 * length, Allow wins over Disallow. An existing `User-agent: X` /
+	 * `Allow: /` group is exactly equal-length to our `Disallow: /`, so a
+	 * compliant crawler (Google explicitly documents merging same-agent
+	 * groups this way) would resolve the conflict in the Allow's favor —
+	 * our group does not override it. What this method actually
+	 * guarantees is that the owner's "deny" choice is always PRESENT in
+	 * the output, never silently dropped; whether it is the directive
+	 * that wins is between the two conflicting groups (and the specific
+	 * crawler's own conformance), which is exactly why any pre-existing
+	 * directive for a denied bot is separately surfaced via
+	 * detect_conflicts() rather than presented as resolved.
 	 *
 	 * @param string $output Robots.txt content assembled so far.
 	 * @return string Lines to append, or '' when there is nothing to add.

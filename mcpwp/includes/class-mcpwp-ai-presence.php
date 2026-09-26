@@ -122,10 +122,24 @@ class Mcpwp_AI_Presence {
 	/**
 	 * A physical llms.txt file at the site root — see should_serve_own_llms_txt().
 	 *
+	 * Uses get_home_path(), the exact path Yoast's own
+	 * WordPress_File_System_Adapter::get_llms_file_path() writes to (#937
+	 * NOTE-3) — not ABSPATH. The two differ whenever WordPress is installed
+	 * in a subdirectory below the site's home path (or vice versa); ABSPATH
+	 * would miss a file Yoast actually wrote, or check a directory Yoast
+	 * never touches. get_home_path() is defined in wp-admin/includes/file.php,
+	 * which is not autoloaded on the front end (where this runs, via
+	 * parse_request/robots_txt) — loaded on demand, matching how core itself
+	 * guards this exact function in front-end-reachable code.
+	 *
 	 * @return bool
 	 */
 	private function llms_txt_physical_file_exists() {
-		return file_exists( trailingslashit( ABSPATH ) . 'llms.txt' );
+		if ( ! function_exists( 'get_home_path' ) ) {
+			require_once ABSPATH . 'wp-admin/includes/file.php';
+		}
+
+		return file_exists( trailingslashit( get_home_path() ) . 'llms.txt' );
 	}
 
 	/**

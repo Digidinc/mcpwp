@@ -457,6 +457,69 @@ final class IndexNowTest extends TestCase {
 		$this->assertGreaterThanOrEqual( time() + $result['retry_in_seconds'] - 1, $scheduled );
 	}
 
+	/**
+	 * #937 NOTE-4: a permanent 4xx (400/403/422) means the SAME batch will
+	 * fail identically on retry — it must not be requeued or rescheduled,
+	 * and the failure must stay visible in status rather than vanish.
+	 */
+	public function test_flush_does_not_retry_a_permanent_4xx_failure(): void {
+		add_filter( 'pre_http_request', function () {
+			return array( 'response' => array( 'code' => 422 ), 'body' => 'malformed url list' );
+		} );
+
+		$GLOBALS['_mcpwp_test_posts'][1] = (object) array( 'ID' => 1, 'post_type' => 'page', 'post_status' => 'publish', 'post_password' => '' );
+		$GLOBALS['mcpwp_test_url_to_postid']['https://example.com/a'] = 1;
+
+		$indexnow = $this->enable();
+		$indexnow->queue_url( 'https://example.com/a' );
+		$scheduled_before_flush = $GLOBALS['mcpwp_test_cron'][ Mcpwp_IndexNow::FLUSH_HOOK ] ?? null;
+
+		$result = $indexnow->flush();
+
+		$this->assertFalse( $result['success'] );
+		$this->assertTrue( $result['permanent_failure'] );
+
+		// Not requeued — the batch is done, not deferred.
+		$this->assertSame( array(), get_option( Mcpwp_IndexNow::PENDING_OPTION, array() ) );
+
+		// Not rescheduled for a backoff retry — the debounce event
+		// queue_url() already set (if any) is left exactly as-is; flush()
+		// does not push it out further for a batch it has given up on.
+		$this->assertSame( $scheduled_before_flush, $GLOBALS['mcpwp_test_cron'][ Mcpwp_IndexNow::FLUSH_HOOK ] ?? null );
+
+		// But recorded, and visible in status.
+		$retry_state = get_option( Mcpwp_IndexNow::RETRY_STATE_OPTION, null );
+		$this->assertNotNull( $retry_state );
+		$this->assertTrue( $retry_state['permanent_failure'] );
+		$this->assertSame( 422, $retry_state['response_code'] );
+
+		$status = $indexnow->get_status();
+		$this->assertTrue( $status['retry_state']['permanent_failure'] );
+	}
+
+	/**
+	 * A transient failure (5xx) must still requeue and back off — the
+	 * permanent-failure gate must not swallow the general retry path.
+	 */
+	public function test_flush_still_retries_a_5xx_failure(): void {
+		add_filter( 'pre_http_request', function () {
+			return array( 'response' => array( 'code' => 503 ), 'body' => 'unavailable' );
+		} );
+
+		$GLOBALS['_mcpwp_test_posts'][1] = (object) array( 'ID' => 1, 'post_type' => 'page', 'post_status' => 'publish', 'post_password' => '' );
+		$GLOBALS['mcpwp_test_url_to_postid']['https://example.com/a'] = 1;
+
+		$indexnow = $this->enable();
+		$indexnow->queue_url( 'https://example.com/a' );
+
+		$result = $indexnow->flush();
+
+		$this->assertFalse( $result['success'] );
+		$this->assertArrayNotHasKey( 'permanent_failure', $result );
+		$this->assertSame( array( 'https://example.com/a' ), get_option( Mcpwp_IndexNow::PENDING_OPTION, array() ) );
+		$this->assertNotNull( $GLOBALS['mcpwp_test_cron'][ Mcpwp_IndexNow::FLUSH_HOOK ] ?? null );
+	}
+
 	public function test_flush_clears_retry_state_after_a_subsequent_success(): void {
 		$attempt = 0;
 		add_filter( 'pre_http_request', function () use ( &$attempt ) {
