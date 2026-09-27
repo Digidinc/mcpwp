@@ -583,12 +583,16 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 
 		if ( ! empty( $prepared['dry_run'] ) ) {
 			// Report what the real save would actually apply, not the raw
-			// input. status/location/priority are omitted from $prepared
-			// entirely when the caller didn't send them (see
+			// input. status/location/priority/conditions are omitted from
+			// $prepared entirely when the caller didn't send them (see
 			// get_custom_code_write_args()), so without this the dry-run
 			// payload could look like a change occurred (or, before #965,
 			// misreport a fabricated "draft" default) when the real save
-			// leaves that field untouched.
+			// leaves that field untouched. conditions was the one field this
+			// missed (#974): an update that omitted it reported no
+			// `conditions` key at all instead of the snippet's real,
+			// unchanged conditions, which is the same "looks like nothing
+			// would happen here" gap the other three fields were fixed for.
 			$effective = $prepared;
 			if ( ! isset( $effective['status'] ) ) {
 				$effective['status'] = $post->post_status;
@@ -598,6 +602,9 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			}
 			if ( ! isset( $effective['priority'] ) ) {
 				$effective['priority'] = (int) ( get_post_meta( $post->ID, '_elementor_priority', true ) ?: 1 );
+			}
+			if ( ! isset( $effective['conditions'] ) ) {
+				$effective['conditions'] = $this->get_custom_code_conditions( $post->ID );
 			}
 
 			return $this->success_response(
@@ -753,7 +760,22 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			return $this->error_response( 'not_found', __( 'Custom Code snippet not found.', 'mcpwp' ), 404 );
 		}
 
-		$status = $this->validate_post_status( $status, array( 'publish', 'draft' ) );
+		$status = $this->normalize_custom_code_status( $status );
+		if ( is_wp_error( $status ) ) {
+			// Unreachable from either registered route today — both
+			// enable_custom_code()/disable_custom_code() pass a hardcoded
+			// literal — but this method takes $status as a parameter, and a
+			// future caller passing something else through it must get the
+			// same refusal prepare_custom_code_payload() gives, not a silent
+			// coercion to draft (#974 N2).
+			$this->log_activity( 'set_elementor_custom_code_status', $request, null, 400 );
+			return $this->error_response(
+				$status->get_error_code(),
+				$status->get_error_message(),
+				(int) ( $status->get_error_data()['status'] ?? 400 )
+			);
+		}
+
 		$update = wp_update_post(
 			array(
 				'ID'          => $id,
@@ -930,13 +952,27 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		}
 
 		if ( null !== $request->get_param( 'priority' ) ) {
-			$payload['priority'] = max( 1, min( 10, absint( $request->get_param( 'priority' ) ) ) );
+			// intval(), not absint() (#974 N3): absint() takes the absolute
+			// value FIRST, so a negative priority like -5 became 5 — a
+			// value inside the valid range, silently the opposite of what
+			// clamping means. Casting with intval() keeps the sign so a
+			// negative value clamps DOWN to the floor (1), matching what
+			// "clamp to 1-10" actually promises.
+			$payload['priority'] = max( 1, min( 10, (int) $request->get_param( 'priority' ) ) );
 		} elseif ( $creating ) {
 			$payload['priority'] = 1;
 		}
 
 		if ( null !== $request->get_param( 'status' ) ) {
-			$payload['status'] = $this->validate_post_status( $request->get_param( 'status' ), array( 'publish', 'draft' ) );
+			$status = $this->normalize_custom_code_status( $request->get_param( 'status' ) );
+			if ( is_wp_error( $status ) ) {
+				return $this->error_response(
+					$status->get_error_code(),
+					$status->get_error_message(),
+					(int) ( $status->get_error_data()['status'] ?? 400 )
+				);
+			}
+			$payload['status'] = $status;
 		} elseif ( $creating ) {
 			$payload['status'] = 'draft';
 		}
@@ -993,6 +1029,40 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			'head'       => 'elementor_head',
 			'body_start' => 'elementor_body_start',
 			'body_end'   => 'elementor_body_end',
+		);
+	}
+
+	/**
+	 * Normalize + validate a Custom Code post status.
+	 *
+	 * The shared Mcpwp_Trait_Sanitization::validate_post_status() this used
+	 * to call silently coerces anything not in the allowed list to 'draft' —
+	 * fine for a caller that means "give me some safe default", wrong here:
+	 * a typo like 'enabled' or 'Published' unpublished a live snippet with no
+	 * error at all (#974 N2), the same class of defect #871 already fixed
+	 * for location (see normalize_custom_code_location() above). Rejecting
+	 * outright, the same way that method does, is the fix.
+	 *
+	 * @param string $status Raw status.
+	 * @return string|WP_Error 'publish' or 'draft', or error for anything else.
+	 */
+	private function normalize_custom_code_status( $status ) {
+		$allowed    = array( 'publish', 'draft' );
+		$normalized = sanitize_key( (string) $status );
+
+		if ( in_array( $normalized, $allowed, true ) ) {
+			return $normalized;
+		}
+
+		return new WP_Error(
+			'invalid_status',
+			sprintf(
+				/* translators: 1: the invalid value received, 2: comma-separated list of valid status values. */
+				__( 'Invalid Custom Code status "%1$s". Use one of: %2$s.', 'mcpwp' ),
+				(string) $status,
+				implode( ', ', $allowed )
+			),
+			array( 'status' => 400 )
 		);
 	}
 
@@ -1447,13 +1517,32 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	/**
 	 * Save Elementor display conditions through Elementor Pro when available.
 	 *
+	 * Used to also call update_custom_code_conditions_index() here, writing
+	 * `elementor_pro_theme_builder_conditions` itself under the same wrong
+	 * axis #976 removed from Mcpwp_Theme_Builder — `{ condition_key =>
+	 * [post_ids] }` instead of Elementor Pro's real `{ location =>
+	 * { post_id => [condition_strings] } }`. Elementor Pro's own Custom Code
+	 * renderer (modules/custom-code/module.php print_snippets()) never reads
+	 * that option directly either way: it always goes through
+	 * `Plugin::instance()->modules_manager->get_modules('theme-builder')
+	 * ->get_conditions_manager()->get_documents_for_location()`, which reads
+	 * Elementor's own Conditions_Cache in its real shape — confirmed against
+	 * the installed Elementor Pro source. So the wrong-axis write was pure
+	 * dead weight in the common case (immediately below, where
+	 * Conditions_Manager::save_conditions() + regenerate() write the real
+	 * shape and would just overwrite it), and in the case where those
+	 * ThemeBuilder classes are not loaded at all, that same renderer cannot
+	 * run either — Custom Code's frontend print path hard-depends on the
+	 * ThemeBuilder module, so there is no live scenario where writing that
+	 * option ourselves would ever be read back by anything. Removed
+	 * entirely, same fix as #976.
+	 *
 	 * @param int   $post_id    Snippet post ID.
 	 * @param array $conditions Normalized conditions.
 	 * @return string|WP_Error Save engine name or error.
 	 */
 	private function save_custom_code_conditions( $post_id, $conditions ) {
 		update_post_meta( $post_id, '_elementor_conditions', $conditions );
-		$this->update_custom_code_conditions_index( $post_id, $conditions );
 
 		if (
 			class_exists( '\\ElementorPro\\Modules\\ThemeBuilder\\Module' )
@@ -1525,64 +1614,6 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		return is_array( $conditions ) ? $this->normalize_custom_code_conditions( $conditions ) : array();
 	}
 
-	/**
-	 * Keep Elementor's global condition index in sync for fallback/debug visibility.
-	 *
-	 * @param int   $post_id    Snippet post ID.
-	 * @param array $conditions Normalized conditions.
-	 */
-	private function update_custom_code_conditions_index( $post_id, $conditions ) {
-		$all_conditions = get_option( 'elementor_pro_theme_builder_conditions', array() );
-		if ( ! is_array( $all_conditions ) ) {
-			$all_conditions = array();
-		}
-
-		foreach ( $all_conditions as $key => $post_ids ) {
-			if ( is_array( $post_ids ) ) {
-				$all_conditions[ $key ] = array_values(
-					array_filter(
-						$post_ids,
-						function ( $id ) use ( $post_id ) {
-							return absint( $id ) !== absint( $post_id );
-						}
-					)
-				);
-
-				if ( empty( $all_conditions[ $key ] ) ) {
-					unset( $all_conditions[ $key ] );
-				}
-			}
-		}
-
-		foreach ( $conditions as $condition ) {
-			$key = $this->build_custom_code_condition_key( $condition );
-			if ( ! isset( $all_conditions[ $key ] ) ) {
-				$all_conditions[ $key ] = array();
-			}
-			if ( ! in_array( absint( $post_id ), array_map( 'absint', $all_conditions[ $key ] ), true ) ) {
-				$all_conditions[ $key ][] = absint( $post_id );
-			}
-		}
-
-		update_option( 'elementor_pro_theme_builder_conditions', $all_conditions );
-	}
-
-	/**
-	 * Build Elementor condition index key.
-	 *
-	 * @param array $condition Condition.
-	 * @return string Index key.
-	 */
-	private function build_custom_code_condition_key( $condition ) {
-		$key = ( $condition['type'] ?? 'include' ) . '/' . ( $condition['name'] ?? 'general' );
-		if ( ! empty( $condition['sub_name'] ) ) {
-			$key .= '/' . $condition['sub_name'];
-			if ( ! empty( $condition['sub_id'] ) ) {
-				$key .= '/' . $condition['sub_id'];
-			}
-		}
-		return $key;
-	}
 
 	/**
 	 * Redact raw code from activity logs and dry-run summaries.
@@ -1644,6 +1675,8 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			}
 		}
 
+		$code = $this->read_custom_code_source( $post );
+
 		$data = array(
 			'id'                => (int) $post->ID,
 			'title'             => (string) $post->post_title,
@@ -1653,7 +1686,9 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			'priority'           => (int) ( get_post_meta( $post->ID, '_elementor_priority', true ) ?: 1 ),
 			'conditions'         => $this->get_custom_code_conditions( $post->ID ),
 			'conditions_engine'  => (string) ( get_post_meta( $post->ID, '_mcpwp_custom_code_conditions_engine', true ) ?: 'unknown' ),
-			'code_length'        => strlen( (string) $post->post_content ),
+			'code_length'        => strlen( $code['content'] ),
+			'code_source'        => $code['source'],
+			'code_may_be_altered' => $code['may_be_altered'],
 			'wrapper_tags_removed' => '1' === (string) get_post_meta( $post->ID, '_mcpwp_wrapper_tags_removed', true ),
 			'has_wrapper_tags'   => ! empty( $matching_meta_keys ),
 			'matching_meta_keys' => array_values( array_unique( $matching_meta_keys ) ),
@@ -1661,10 +1696,65 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		);
 
 		if ( $include_code ) {
-			$data['code'] = (string) $post->post_content;
+			$data['code'] = $code['content'];
 		}
 
 		return $data;
+	}
+
+	/**
+	 * The single source of truth for "what code does this snippet hold",
+	 * shared by every readback path (create/update responses, GET, list).
+	 *
+	 * #974 N1 (adversarial review of #973/#965): for a writer without
+	 * `unfiltered_html` (multisite site admins, or anyone under
+	 * DISALLOW_UNFILTERED_HTML), wp_update_post()/wp_insert_post() re-filter
+	 * `post_content` through core's own content_save_pre KSES gate and strip
+	 * `<script>` from it. The code Elementor actually renders lives in
+	 * `_elementor_code` (see write_custom_code_meta()'s docblock) and is
+	 * untouched by that gate — but every readback path here used to return
+	 * `post_content` regardless, so an agent that read, edited and wrote a
+	 * snippet back saved the ALREADY-STRIPPED copy into `_elementor_code`,
+	 * permanently destroying the one place the real code lived. Elementor
+	 * Pro's own renderer never reads `post_content` at all (see the same
+	 * docblock), so returning it was never "what was stored" in the first
+	 * place — it is a copy of the input that a completely different KSES
+	 * gate may have altered on the way in.
+	 *
+	 * `_elementor_code` is therefore always preferred. `post_content` is
+	 * used only as a fallback for a snippet old enough to predate #871 (when
+	 * this class only ever wrote `_elementor_code`... prior to that fix it
+	 * only wrote `post_content`), and that fallback is never silently
+	 * presented as the untouched source: `may_be_altered` is true whenever
+	 * the value returned is not read from `_elementor_code`, satisfying the
+	 * issue's "or says clearly that it was altered" alternative.
+	 *
+	 * @param WP_Post $post Snippet post.
+	 * @return array{content:string,source:string,may_be_altered:bool}
+	 */
+	private function read_custom_code_source( $post ) {
+		$elementor_code = get_post_meta( $post->ID, '_elementor_code', true );
+
+		if ( is_string( $elementor_code ) && '' !== $elementor_code ) {
+			return array(
+				'content'        => $elementor_code,
+				'source'         => '_elementor_code',
+				'may_be_altered' => false,
+			);
+		}
+
+		// Legacy fallback only: a snippet with no _elementor_code at all
+		// (pre-#871) or one whose meta value is genuinely an empty string.
+		// post_content is not necessarily what render uses and may have
+		// been through WordPress's own KSES gate on save — say so plainly
+		// rather than passing it off as verbatim stored content.
+		$post_content = (string) $post->post_content;
+
+		return array(
+			'content'        => $post_content,
+			'source'         => 'post_content_fallback',
+			'may_be_altered' => '' !== $post_content,
+		);
 	}
 
 	/**

@@ -57,7 +57,18 @@ final class ElementorCustomCodeTest extends TestCase {
 		$this->assertTrue( $snippet['wrapper_tags_removed'] );
 		$this->assertSame( array( array( 'type' => 'include', 'name' => 'general' ) ), $snippet['conditions'] );
 		$this->assertSame( 'fallback_meta', $snippet['conditions_engine'] );
-		$this->assertSame( array( 1 ), get_option( 'elementor_pro_theme_builder_conditions' )['include/general'] );
+		// #976: this main-process test never loads the ElementorPro\...\
+		// ThemeBuilder classes, so save_custom_code_conditions() takes the
+		// 'fallback_meta' branch. It used to also write
+		// `elementor_pro_theme_builder_conditions` itself here, under the
+		// wrong axis (`{"include/general": [1]}` instead of Elementor Pro's
+		// real `{location => {post_id => [condition_strings]}}`) — dead
+		// weight even then, since Elementor Pro's own Custom Code renderer
+		// (modules/custom-code/module.php print_snippets()) never reads
+		// that option directly; it always goes through
+		// ThemeBuilder's Conditions_Manager, which this fallback branch by
+		// definition has none of loaded. The option must be left untouched.
+		$this->assertSame( array(), get_option( 'elementor_pro_theme_builder_conditions', array() ) );
 	}
 
 	public function test_update_custom_code_dry_run_does_not_mutate_existing_snippet(): void {
