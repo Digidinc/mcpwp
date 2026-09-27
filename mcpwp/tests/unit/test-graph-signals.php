@@ -7,6 +7,7 @@
 
 use PHPUnit\Framework\TestCase;
 
+require_once dirname(__DIR__, 2) . '/includes/core/class-mcpwp-graph-builder.php';
 require_once dirname(__DIR__, 2) . '/includes/core/class-mcpwp-graph-signals.php';
 
 final class GraphSignalsTest extends TestCase
@@ -15,10 +16,13 @@ final class GraphSignalsTest extends TestCase
 
     protected function setUp(): void
     {
-        foreach (array( 'mcpwp_test_graph_signals', 'mcpwp_test_filters' ) as $global) {
+        foreach (array( 'mcpwp_test_graph_signals', 'mcpwp_test_filters', 'mcpwp_test_options' ) as $global) {
             $this->saved[ $global ] = $GLOBALS[ $global ] ?? array();
             $GLOBALS[ $global ]     = array();
         }
+        // Mcpwp_Graph_Signals::upsert()/prune() check the readiness guard
+        // added post PR #993 review (W1/W6) before touching the table.
+        update_option(Mcpwp_Graph_Builder::READY_OPTION, true, true);
     }
 
     protected function tearDown(): void
@@ -110,6 +114,18 @@ final class GraphSignalsTest extends TestCase
 
         Mcpwp_Graph_Signals::prune();
 
+        $this->assertCount(0, $GLOBALS['mcpwp_test_graph_signals']);
+    }
+
+    public function test_upsert_and_prune_are_no_ops_when_not_ready(): void
+    {
+        update_option(Mcpwp_Graph_Builder::READY_OPTION, false, true);
+
+        $written = Mcpwp_Graph_Signals::upsert(array(
+            array( 'node_key' => 'post:1', 'metric' => 'clicks', 'value' => 1 ),
+        ), 'gsc');
+
+        $this->assertSame(0, $written);
         $this->assertCount(0, $GLOBALS['mcpwp_test_graph_signals']);
     }
 }

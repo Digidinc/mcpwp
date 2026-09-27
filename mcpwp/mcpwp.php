@@ -650,21 +650,37 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 		add_action( Mcpwp_Signals::CRON_HOOK, array( 'Mcpwp_Signals', 'compute' ) );
 	}
 
-	// Site graph — incremental hooks, shutdown rebuild, backfill batches,
-	// and the dirty-overflow drain (#943 S1).
+	// Site graph — incremental hooks (mark-only), the async worker, and
+	// backfill batches (#943 S1, revised post PR #993 review). Every handler
+	// checks Mcpwp_Graph_Builder::ready() itself and no-ops when the tables
+	// are not confirmed present, so registering these unconditionally is safe
+	// on a site where table creation failed.
 	if ( class_exists( 'Mcpwp_Graph_Builder' ) ) {
 		add_action( 'save_post', array( 'Mcpwp_Graph_Builder', 'on_save_post' ), 10, 2 );
 		add_action( 'deleted_post', array( 'Mcpwp_Graph_Builder', 'on_deleted_post' ), 10, 1 );
+		add_action( 'untrashed_post', array( 'Mcpwp_Graph_Builder', 'on_untrashed_post' ), 10, 1 );
 		add_action( 'set_object_terms', array( 'Mcpwp_Graph_Builder', 'on_set_object_terms' ), 10, 1 );
 		add_action( 'edited_term', array( 'Mcpwp_Graph_Builder', 'on_edited_term' ), 10, 3 );
 		add_action( 'delete_term', array( 'Mcpwp_Graph_Builder', 'on_delete_term' ), 10, 3 );
+		// W3: a writer that updates these keys directly (wp_set_elementor,
+		// find-replace, rollback, "set featured image", page template
+		// assignment) never fires save_post at all.
+		add_action( 'updated_post_meta', array( 'Mcpwp_Graph_Builder', 'on_post_meta_changed' ), 10, 3 );
+		add_action( 'added_post_meta', array( 'Mcpwp_Graph_Builder', 'on_post_meta_changed' ), 10, 3 );
+		add_action( 'deleted_post_meta', array( 'Mcpwp_Graph_Builder', 'on_post_meta_changed' ), 10, 3 );
 		add_action( 'shutdown', array( 'Mcpwp_Graph_Builder', 'on_shutdown' ) );
+		add_action( Mcpwp_Graph_Builder::WORKER_CRON_HOOK, array( 'Mcpwp_Graph_Builder', 'run_worker_batch' ) );
 		add_action( Mcpwp_Graph_Builder::BACKFILL_CRON_HOOK, array( 'Mcpwp_Graph_Builder', 'run_backfill_batch' ) );
+	}
 
-		if ( ! wp_next_scheduled( Mcpwp_Graph_Builder::DIRTY_DRAIN_CRON_HOOK ) ) {
-			wp_schedule_event( time() + HOUR_IN_SECONDS, 'hourly', Mcpwp_Graph_Builder::DIRTY_DRAIN_CRON_HOOK );
+	// Daily retry for graph table creation while not yet confirmed present
+	// (W1/W6) — e.g. a restricted DB user that could not CREATE TABLE at
+	// install time gets another chance every day rather than being stuck.
+	if ( class_exists( 'Mcpwp_Activator' ) ) {
+		if ( ! wp_next_scheduled( Mcpwp_Graph_Builder::READY_RETRY_CRON_HOOK ) ) {
+			wp_schedule_event( time() + HOUR_IN_SECONDS, 'daily', Mcpwp_Graph_Builder::READY_RETRY_CRON_HOOK );
 		}
-		add_action( Mcpwp_Graph_Builder::DIRTY_DRAIN_CRON_HOOK, array( 'Mcpwp_Graph_Builder', 'drain_dirty_batch' ) );
+		add_action( Mcpwp_Graph_Builder::READY_RETRY_CRON_HOOK, array( 'Mcpwp_Activator', 'retry_graph_tables_cron' ) );
 	}
 
 	// Site graph signals — daily retention prune (#943 S1).

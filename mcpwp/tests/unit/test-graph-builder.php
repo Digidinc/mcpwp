@@ -1,7 +1,8 @@
 <?php
 /**
- * Site graph builder — extraction, incremental dirty handling, hash-skip,
- * and backfill cursor progress (#943 S1).
+ * Site graph builder — extraction, queue/worker incremental handling,
+ * trash/delete semantics, batched link resolution, and backfill cursor
+ * progress (#943 S1, revised after PR #993 review).
  *
  * @package MCPWP
  */
@@ -25,12 +26,18 @@ final class GraphBuilderTest extends TestCase
             'mcpwp_test_options',
             'mcpwp_test_graph_nodes',
             'mcpwp_test_graph_edges',
+            'mcpwp_test_graph_queue',
             'mcpwp_test_public_post_types',
+            'mcpwp_test_actions',
         ) as $global) {
             $this->saved[ $global ] = $GLOBALS[ $global ] ?? array();
             $GLOBALS[ $global ]     = array();
         }
-        Mcpwp_Graph_Builder::reset_pending_dirty_nodes();
+        unset($GLOBALS['mcpwp_test_throw_for_post_id']);
+        Mcpwp_Graph_Builder::reset_request_state();
+        // Every hook handler no-ops unless the tables are confirmed present.
+        // Matches a healthy site; readiness-guard-off is its own test below.
+        update_option(Mcpwp_Graph_Builder::READY_OPTION, true, true);
     }
 
     protected function tearDown(): void
@@ -38,19 +45,21 @@ final class GraphBuilderTest extends TestCase
         foreach ($this->saved as $global => $value) {
             $GLOBALS[ $global ] = $value;
         }
-        Mcpwp_Graph_Builder::reset_pending_dirty_nodes();
+        unset($GLOBALS['mcpwp_test_throw_for_post_id']);
+        Mcpwp_Graph_Builder::reset_request_state();
     }
 
     private function post(int $id, array $overrides = array()): WP_Post
     {
         $post = new WP_Post(array_merge(array(
-            'ID'           => $id,
-            'post_type'    => 'post',
-            'post_status'  => 'publish',
-            'post_title'   => 'Post ' . $id,
-            'post_name'    => 'post-' . $id,
-            'post_content' => '',
-            'post_parent'  => 0,
+            'ID'                => $id,
+            'post_type'         => 'post',
+            'post_status'       => 'publish',
+            'post_title'        => 'Post ' . $id,
+            'post_name'         => 'post-' . $id,
+            'post_content'      => '',
+            'post_parent'       => 0,
+            'post_modified_gmt' => '2026-01-01 00:00:00',
         ), $overrides));
         $GLOBALS['_mcpwp_test_posts'][ $id ] = $post;
         return $post;
@@ -62,14 +71,12 @@ final class GraphBuilderTest extends TestCase
 
     public function test_extract_post_link_targets_from_content_link(): void
     {
-        $target = $this->post(20);
+        $this->post(20);
         $source = $this->post(10, array(
             'post_content' => '<p>See <a href="https://example.com/?p=20">this</a>.</p>',
         ));
 
-        $targets = Mcpwp_Graph_Builder::extract_post_link_targets($source);
-
-        $this->assertSame(array(20), $targets);
+        $this->assertSame(array(20), Mcpwp_Graph_Builder::extract_post_link_targets($source));
     }
 
     public function test_extract_post_link_targets_ignores_external_and_self_links(): void
@@ -81,9 +88,17 @@ final class GraphBuilderTest extends TestCase
                 . '<a href="https://example.com/?p=20">target</a>',
         ));
 
-        $targets = Mcpwp_Graph_Builder::extract_post_link_targets($source);
+        $this->assertSame(array(20), Mcpwp_Graph_Builder::extract_post_link_targets($source));
+    }
 
-        $this->assertSame(array(20), $targets);
+    public function test_extract_post_link_targets_resolves_via_slug_path(): void
+    {
+        $this->post(25, array('post_name' => 'about-us'));
+        $source = $this->post(10, array(
+            'post_content' => '<a href="https://example.com/about-us/">About</a>',
+        ));
+
+        $this->assertSame(array(25), Mcpwp_Graph_Builder::extract_post_link_targets($source));
     }
 
     // ---------------------------------------------------------------------
@@ -111,9 +126,40 @@ final class GraphBuilderTest extends TestCase
             ),
         ));
 
-        $targets = Mcpwp_Graph_Builder::extract_post_link_targets($source);
+        $this->assertSame(array(30), Mcpwp_Graph_Builder::extract_post_link_targets($source));
+    }
 
-        $this->assertSame(array(30), $targets);
+    // ---------------------------------------------------------------------
+    // N4: edge props (anchors <=5, location).
+    // ---------------------------------------------------------------------
+
+    public function test_build_link_edges_data_collects_anchors_and_location(): void
+    {
+        $this->post(20);
+        $source = $this->post(10, array(
+            'post_content' => '<a href="https://example.com/?p=20">First</a> '
+                . '<a href="https://example.com/?p=20">Second</a>',
+        ));
+
+        $data = Mcpwp_Graph_Builder::build_link_edges_data($source);
+
+        $this->assertArrayHasKey(20, $data);
+        $this->assertSame(array('First', 'Second'), $data[20]['anchors']);
+        $this->assertSame(array('content' => true), $data[20]['locations']);
+    }
+
+    public function test_build_link_edges_data_caps_anchors_at_five(): void
+    {
+        $this->post(20);
+        $links = '';
+        for ($i = 1; $i <= 7; $i++) {
+            $links .= '<a href="https://example.com/?p=20">Anchor ' . $i . '</a> ';
+        }
+        $source = $this->post(10, array('post_content' => $links));
+
+        $data = Mcpwp_Graph_Builder::build_link_edges_data($source);
+
+        $this->assertCount(5, $data[20]['anchors']);
     }
 
     // ---------------------------------------------------------------------
@@ -163,7 +209,50 @@ final class GraphBuilderTest extends TestCase
     }
 
     // ---------------------------------------------------------------------
-    // rebuild_post_node: full write + hash skip + delete.
+    // BLOCK-1: change hash covers everything the rebuild writes.
+    // ---------------------------------------------------------------------
+
+    public function test_content_hash_changes_with_elementor_thumbnail_template_or_menu_order(): void
+    {
+        $post = $this->post(50, array('menu_order' => 0));
+        $base = Mcpwp_Graph_Builder::content_hash($post);
+
+        $GLOBALS['_mcpwp_test_meta'][50]['_elementor_data'] = 'x';
+        $this->assertNotSame($base, Mcpwp_Graph_Builder::content_hash($this->post(50, array('menu_order' => 0))), 'Elementor data change must change the hash.');
+        unset($GLOBALS['_mcpwp_test_meta'][50]['_elementor_data']);
+
+        $GLOBALS['_mcpwp_test_meta'][50]['_thumbnail_id'] = '99';
+        $this->assertNotSame($base, Mcpwp_Graph_Builder::content_hash($this->post(50, array('menu_order' => 0))), 'Featured image change must change the hash.');
+        unset($GLOBALS['_mcpwp_test_meta'][50]['_thumbnail_id']);
+
+        $GLOBALS['_mcpwp_test_meta'][50]['_wp_page_template'] = 'full-width.php';
+        $this->assertNotSame($base, Mcpwp_Graph_Builder::content_hash($this->post(50, array('menu_order' => 0))), 'Page template change must change the hash.');
+        unset($GLOBALS['_mcpwp_test_meta'][50]['_wp_page_template']);
+
+        $this->assertNotSame($base, Mcpwp_Graph_Builder::content_hash($this->post(50, array('menu_order' => 3))), 'menu_order change must change the hash.');
+    }
+
+    public function test_content_hash_changes_with_terms(): void
+    {
+        $GLOBALS['_mcpwp_test_taxonomies']['category'] = array(
+            'object_type' => array( 'post' ),
+            'terms'       => array(
+                5 => array( 'slug' => 'news', 'name' => 'News' ),
+                6 => array( 'slug' => 'life', 'name' => 'Life' ),
+            ),
+        );
+        $post = $this->post(51);
+        $GLOBALS['_mcpwp_test_object_terms'][51]['category'] = array( 5 );
+        $with_one_term = Mcpwp_Graph_Builder::content_hash($post);
+
+        $GLOBALS['_mcpwp_test_object_terms'][51]['category'] = array( 5, 6 );
+        $with_two_terms = Mcpwp_Graph_Builder::content_hash($post);
+
+        $this->assertNotSame($with_one_term, $with_two_terms);
+    }
+
+    // ---------------------------------------------------------------------
+    // rebuild_post_node: full write + hash skip + delete + trash.
     // ---------------------------------------------------------------------
 
     public function test_rebuild_post_node_writes_node_and_edges(): void
@@ -189,11 +278,10 @@ final class GraphBuilderTest extends TestCase
         $this->assertArrayHasKey('term:category:5', $GLOBALS['mcpwp_test_graph_nodes']);
     }
 
-    public function test_rebuild_post_node_skips_when_content_and_terms_unchanged(): void
+    public function test_rebuild_post_node_skips_when_hash_unchanged(): void
     {
-        $post = $this->post(15, array( 'post_title' => 'Stable', 'post_content' => 'Body text' ));
+        $this->post(15, array( 'post_title' => 'Stable', 'post_content' => 'Body text' ));
 
-        // First rebuild establishes the stored hash.
         Mcpwp_Graph_Builder::rebuild_post_node(15);
         $stored_hash = $GLOBALS['mcpwp_test_graph_nodes']['post:15']['content_hash'];
         $this->assertNotSame('', $stored_hash);
@@ -209,7 +297,6 @@ final class GraphBuilderTest extends TestCase
             'updated_at' => '2020-01-01 00:00:00',
         );
 
-        // Nothing about the post changed — rebuilding again must be a no-op.
         Mcpwp_Graph_Builder::rebuild_post_node(15);
 
         $this->assertCount(1, $GLOBALS['mcpwp_test_graph_edges'], 'A skipped rebuild must not touch existing edges.');
@@ -229,7 +316,7 @@ final class GraphBuilderTest extends TestCase
         $this->assertNotSame($first_hash, $second_hash);
     }
 
-    public function test_rebuild_post_node_deletes_node_and_edges_when_post_missing(): void
+    public function test_rebuild_post_node_deletes_node_and_edges_when_post_permanently_gone(): void
     {
         $GLOBALS['mcpwp_test_graph_nodes']['post:17'] = array(
             'node_key' => 'post:17', 'kind' => 'post', 'ref_id' => 17, 'label' => 'Gone',
@@ -241,71 +328,301 @@ final class GraphBuilderTest extends TestCase
             'weight' => 1.0, 'source' => 'builder', 'props' => '{}', 'updated_at' => '2020-01-01 00:00:00',
         );
 
-        Mcpwp_Graph_Builder::rebuild_post_node(17); // No post 17 seeded — "deleted".
+        Mcpwp_Graph_Builder::rebuild_post_node(17); // No post 17 seeded.
 
         $this->assertArrayNotHasKey('post:17', $GLOBALS['mcpwp_test_graph_nodes']);
         $this->assertCount(0, $GLOBALS['mcpwp_test_graph_edges']);
     }
 
-    // ---------------------------------------------------------------------
-    // Incremental: dirty set + shutdown rebuild + overflow.
-    // ---------------------------------------------------------------------
-
-    public function test_shutdown_rebuilds_up_to_limit_and_overflows_the_rest(): void
+    public function test_rebuild_post_node_excludes_attachments(): void
     {
-        for ($i = 1; $i <= 30; $i++) {
-            $this->post($i);
-            Mcpwp_Graph_Builder::mark_dirty(Mcpwp_Graph_Builder::node_key_for_post($i));
-        }
-
-        Mcpwp_Graph_Builder::on_shutdown();
-
-        $this->assertCount(Mcpwp_Graph_Builder::SHUTDOWN_LIMIT, $GLOBALS['mcpwp_test_graph_nodes']);
-
-        $overflow = get_option(Mcpwp_Graph_Builder::DIRTY_OPTION, array());
-        $this->assertCount(30 - Mcpwp_Graph_Builder::SHUTDOWN_LIMIT, $overflow);
-        $this->assertSame(array(), Mcpwp_Graph_Builder::get_pending_dirty_nodes());
+        $this->post(18, array('post_type' => 'attachment'));
+        Mcpwp_Graph_Builder::rebuild_post_node(18);
+        $this->assertArrayNotHasKey('post:18', $GLOBALS['mcpwp_test_graph_nodes']);
     }
 
-    public function test_shutdown_with_nothing_dirty_is_a_no_op(): void
+    // ---------------------------------------------------------------------
+    // BLOCK-2: trash is not delete.
+    // ---------------------------------------------------------------------
+
+    public function test_trash_keeps_edges_and_only_updates_status(): void
     {
-        Mcpwp_Graph_Builder::on_shutdown();
-        $this->assertSame(array(), $GLOBALS['mcpwp_test_graph_nodes']);
-        $this->assertFalse(get_option(Mcpwp_Graph_Builder::DIRTY_OPTION, false));
+        $this->post(60);
+        $linker = $this->post(61, array('post_content' => '<a href="https://example.com/?p=60">L</a>'));
+        Mcpwp_Graph_Builder::rebuild_post_node(60);
+        Mcpwp_Graph_Builder::rebuild_post_node(61);
+        $this->assertNotEmpty(array_filter($GLOBALS['mcpwp_test_graph_edges'], fn($e) => 'post:61' === $e['from_key'] && 'post:60' === $e['to_key']));
+
+        // Trash post 60 — same node_key, status transitions to trash.
+        $this->post(60, array('post_status' => 'trash'));
+        Mcpwp_Graph_Builder::rebuild_post_node(60);
+
+        $this->assertSame('trash', $GLOBALS['mcpwp_test_graph_nodes']['post:60']['status']);
+        $this->assertNotEmpty(
+            array_filter($GLOBALS['mcpwp_test_graph_edges'], fn($e) => 'post:61' === $e['from_key'] && 'post:60' === $e['to_key']),
+            'B->A must survive A being trashed.'
+        );
+
+        // Restore — status returns to normal, edge is untouched either way.
+        $this->post(60, array('post_status' => 'publish'));
+        Mcpwp_Graph_Builder::rebuild_post_node(60);
+        $this->assertSame('publish', $GLOBALS['mcpwp_test_graph_nodes']['post:60']['status']);
+        $this->assertNotEmpty(array_filter($GLOBALS['mcpwp_test_graph_edges'], fn($e) => 'post:61' === $e['from_key'] && 'post:60' === $e['to_key']));
     }
 
-    public function test_drain_dirty_batch_processes_overflow_option(): void
+    public function test_trash_of_never_graphed_post_falls_through_to_full_rebuild(): void
     {
-        for ($i = 1; $i <= 5; $i++) {
-            $this->post($i);
-        }
-        update_option(Mcpwp_Graph_Builder::DIRTY_OPTION, array(
-            'post:1', 'post:2', 'post:3', 'post:4', 'post:5',
-        ), false);
+        $this->post(62, array('post_status' => 'trash'));
+        Mcpwp_Graph_Builder::rebuild_post_node(62);
+        $this->assertArrayHasKey('post:62', $GLOBALS['mcpwp_test_graph_nodes']);
+        $this->assertSame('trash', $GLOBALS['mcpwp_test_graph_nodes']['post:62']['status']);
+    }
 
-        Mcpwp_Graph_Builder::drain_dirty_batch();
+    public function test_permanent_delete_requeues_dependents(): void
+    {
+        $this->post(70);
+        $this->post(71, array('post_content' => '<a href="https://example.com/?p=70">L</a>'));
+        $this->post(72, array('post_parent' => 70));
+        Mcpwp_Graph_Builder::rebuild_post_node(70);
+        Mcpwp_Graph_Builder::rebuild_post_node(71);
+        Mcpwp_Graph_Builder::rebuild_post_node(72);
 
-        $this->assertCount(5, $GLOBALS['mcpwp_test_graph_nodes']);
-        $this->assertSame(array(), get_option(Mcpwp_Graph_Builder::DIRTY_OPTION, array()));
+        unset($GLOBALS['_mcpwp_test_posts'][70]); // permanently gone
+
+        Mcpwp_Graph_Builder::on_deleted_post(70);
+        Mcpwp_Graph_Builder::on_shutdown(); // mark() buffers until shutdown flushes it to the queue table.
+
+        $this->assertArrayNotHasKey('post:70', $GLOBALS['mcpwp_test_graph_nodes']);
+        $queued = array_keys($GLOBALS['mcpwp_test_graph_queue']);
+        $this->assertContains('post:71', $queued, 'The linking source must be requeued.');
+        $this->assertContains('post:72', $queued, 'The child must be requeued.');
+    }
+
+    // ---------------------------------------------------------------------
+    // N3: term node upsert must not clobber an already-correct URL.
+    // ---------------------------------------------------------------------
+
+    public function test_ensure_term_node_does_not_clobber_url(): void
+    {
+        $GLOBALS['_mcpwp_test_taxonomies']['category'] = array(
+            'object_type' => array( 'post' ),
+            'terms'       => array( 5 => array( 'slug' => 'news', 'name' => 'News' ) ),
+        );
+        $GLOBALS['_mcpwp_test_object_terms'][80]['category'] = array( 5 );
+        $this->post(80);
+
+        Mcpwp_Graph_Builder::rebuild_post_node(80);
+
+        $this->assertNotSame('', $GLOBALS['mcpwp_test_graph_nodes']['term:category:5']['url']);
+
+        $this->post(81);
+        $GLOBALS['_mcpwp_test_object_terms'][81]['category'] = array( 5 );
+        Mcpwp_Graph_Builder::rebuild_post_node(81);
+
+        $this->assertNotSame('', $GLOBALS['mcpwp_test_graph_nodes']['term:category:5']['url'], 'A second post referencing the term must not blank its URL.');
+    }
+
+    // ---------------------------------------------------------------------
+    // W4/N1: scope — attachments excluded, set_object_terms only for covered types.
+    // ---------------------------------------------------------------------
+
+    public function test_on_set_object_terms_ignores_non_covered_post_type(): void
+    {
+        $this->post(90, array('post_type' => 'attachment'));
+        Mcpwp_Graph_Builder::on_set_object_terms(90);
+        $this->assertArrayNotHasKey('post:90', $GLOBALS['mcpwp_test_graph_queue'] ?? array());
+    }
+
+    public function test_on_set_object_terms_marks_covered_post_type(): void
+    {
+        $this->post(91);
+        Mcpwp_Graph_Builder::on_set_object_terms(91);
+        Mcpwp_Graph_Builder::on_shutdown(); // mark() buffers until shutdown flushes it to the queue table.
+        $this->assertArrayHasKey('post:91', $GLOBALS['mcpwp_test_graph_queue']);
+    }
+
+    // ---------------------------------------------------------------------
+    // W3: meta-change hooks (find-replace / rollback / featured image never
+    // fire save_post).
+    // ---------------------------------------------------------------------
+
+    public function test_meta_change_marks_covered_post_for_watched_keys(): void
+    {
+        $this->post(95);
+
+        Mcpwp_Graph_Builder::on_post_meta_changed(1, 95, '_elementor_data');
+        Mcpwp_Graph_Builder::on_shutdown();
+        $this->assertArrayHasKey('post:95', $GLOBALS['mcpwp_test_graph_queue']);
+
+        $GLOBALS['mcpwp_test_graph_queue'] = array();
+        Mcpwp_Graph_Builder::on_post_meta_changed(1, 95, '_thumbnail_id');
+        Mcpwp_Graph_Builder::on_shutdown();
+        $this->assertArrayHasKey('post:95', $GLOBALS['mcpwp_test_graph_queue']);
+
+        $GLOBALS['mcpwp_test_graph_queue'] = array();
+        Mcpwp_Graph_Builder::on_post_meta_changed(1, 95, '_wp_page_template');
+        Mcpwp_Graph_Builder::on_shutdown();
+        $this->assertArrayHasKey('post:95', $GLOBALS['mcpwp_test_graph_queue']);
+    }
+
+    public function test_meta_change_ignores_unwatched_key(): void
+    {
+        $this->post(96);
+        Mcpwp_Graph_Builder::on_post_meta_changed(1, 96, '_some_unrelated_key');
+        Mcpwp_Graph_Builder::on_shutdown();
+        $this->assertArrayNotHasKey('post:96', $GLOBALS['mcpwp_test_graph_queue'] ?? array());
+    }
+
+    public function test_real_meta_write_fires_the_hook_and_marks(): void
+    {
+        // mcpwp.php wires these in production; a unit test that only
+        // requires the class file must wire them itself to exercise the
+        // real update_post_meta()/delete_post_meta() -> do_action() path.
+        add_action('updated_post_meta', array('Mcpwp_Graph_Builder', 'on_post_meta_changed'), 10, 3);
+        add_action('added_post_meta', array('Mcpwp_Graph_Builder', 'on_post_meta_changed'), 10, 3);
+        add_action('deleted_post_meta', array('Mcpwp_Graph_Builder', 'on_post_meta_changed'), 10, 3);
+
+        $this->post(97);
+        update_post_meta(97, '_thumbnail_id', '5'); // added_post_meta (new key)
+        Mcpwp_Graph_Builder::on_shutdown();
+        $this->assertArrayHasKey('post:97', $GLOBALS['mcpwp_test_graph_queue']);
+
+        $GLOBALS['mcpwp_test_graph_queue'] = array();
+        update_post_meta(97, '_thumbnail_id', '6'); // updated_post_meta (existing key)
+        Mcpwp_Graph_Builder::on_shutdown();
+        $this->assertArrayHasKey('post:97', $GLOBALS['mcpwp_test_graph_queue']);
+
+        $GLOBALS['mcpwp_test_graph_queue'] = array();
+        delete_post_meta(97, '_thumbnail_id');
+        Mcpwp_Graph_Builder::on_shutdown();
+        $this->assertArrayHasKey('post:97', $GLOBALS['mcpwp_test_graph_queue']);
+    }
+
+    // ---------------------------------------------------------------------
+    // BLOCK-4: mark = one (request-buffered, shutdown-flushed) INSERT
+    // IGNORE; save-path never rebuilds inline.
+    // ---------------------------------------------------------------------
+
+    public function test_on_save_post_only_queues_never_rebuilds(): void
+    {
+        $this->post(100);
+        Mcpwp_Graph_Builder::on_save_post(100);
+        Mcpwp_Graph_Builder::on_shutdown();
+
+        $this->assertArrayHasKey('post:100', $GLOBALS['mcpwp_test_graph_queue']);
+        $this->assertArrayNotHasKey('post:100', $GLOBALS['mcpwp_test_graph_nodes'], 'save_post must not rebuild inline.');
     }
 
     public function test_on_save_post_ignores_revisions_and_autosaves(): void
     {
         $this->post(40, array( 'post_type' => 'revision', 'post_parent' => 39 ));
         Mcpwp_Graph_Builder::on_save_post(40);
-        $this->assertSame(array(), Mcpwp_Graph_Builder::get_pending_dirty_nodes());
 
         $this->post(41, array( 'post_name' => '41-autosave-v1' ));
         Mcpwp_Graph_Builder::on_save_post(41);
-        $this->assertSame(array(), Mcpwp_Graph_Builder::get_pending_dirty_nodes());
 
         $this->post(42);
         Mcpwp_Graph_Builder::on_save_post(42);
-        $this->assertSame(array( 'post:42' ), Mcpwp_Graph_Builder::get_pending_dirty_nodes());
+
+        Mcpwp_Graph_Builder::on_shutdown();
+
+        $this->assertArrayNotHasKey('post:40', $GLOBALS['mcpwp_test_graph_queue'] ?? array());
+        $this->assertArrayNotHasKey('post:41', $GLOBALS['mcpwp_test_graph_queue'] ?? array());
+        $this->assertArrayHasKey('post:42', $GLOBALS['mcpwp_test_graph_queue']);
+    }
+
+    public function test_mark_batches_a_requests_marks_into_one_flush_at_shutdown(): void
+    {
+        Mcpwp_Graph_Builder::mark('post:1', 'first');
+        Mcpwp_Graph_Builder::mark('post:1', 'second'); // Same node re-marked — first reason wins, no duplicate.
+        Mcpwp_Graph_Builder::mark('post:2', 'third');
+
+        // Nothing written yet — mark() only buffers in memory (BLOCK-4 perf:
+        // this is what makes a bulk edit's SAVE step cheap regardless of how
+        // many posts are marked in one request).
+        $this->assertSame(array(), $GLOBALS['mcpwp_test_graph_queue'] ?? array());
+
+        Mcpwp_Graph_Builder::on_shutdown();
+
+        $this->assertSame('first', $GLOBALS['mcpwp_test_graph_queue']['post:1']['reason']);
+    }
+
+    public function test_readiness_guard_makes_every_hook_a_no_op(): void
+    {
+        update_option(Mcpwp_Graph_Builder::READY_OPTION, false, true);
+        $this->post(101);
+
+        Mcpwp_Graph_Builder::on_save_post(101);
+        Mcpwp_Graph_Builder::mark('post:999');
+
+        $this->assertSame(array(), $GLOBALS['mcpwp_test_graph_queue'] ?? array());
     }
 
     // ---------------------------------------------------------------------
-    // Backfill cursor progress.
+    // BLOCK-4: MCPWP-authenticated request rebuilds up to 5 within budget;
+    // everything else only ever queues.
+    // ---------------------------------------------------------------------
+
+    public function test_shutdown_without_authenticated_flag_does_not_rebuild(): void
+    {
+        for ($i = 1; $i <= 3; $i++) {
+            $this->post($i);
+            Mcpwp_Graph_Builder::mark(Mcpwp_Graph_Builder::node_key_for_post($i));
+        }
+
+        Mcpwp_Graph_Builder::on_shutdown();
+
+        $this->assertSame(array(), $GLOBALS['mcpwp_test_graph_nodes']);
+    }
+
+    public function test_shutdown_with_authenticated_flag_rebuilds_up_to_limit(): void
+    {
+        for ($i = 1; $i <= 8; $i++) {
+            $this->post($i);
+            Mcpwp_Graph_Builder::mark(Mcpwp_Graph_Builder::node_key_for_post($i));
+        }
+        Mcpwp_Graph_Builder::mark_request_authenticated();
+
+        Mcpwp_Graph_Builder::on_shutdown();
+
+        $this->assertCount(Mcpwp_Graph_Builder::REQUEST_REBUILD_LIMIT, $GLOBALS['mcpwp_test_graph_nodes']);
+    }
+
+    // ---------------------------------------------------------------------
+    // Worker: drains the queue, time-budgeted, self-reschedules.
+    // ---------------------------------------------------------------------
+
+    public function test_worker_batch_drains_queue_and_rebuilds(): void
+    {
+        for ($i = 1; $i <= 5; $i++) {
+            $this->post($i);
+        }
+        $GLOBALS['mcpwp_test_graph_queue'] = array(
+            'post:1' => array('reason' => 'x', 'queued_at' => '2026-01-01 00:00:01'),
+            'post:2' => array('reason' => 'x', 'queued_at' => '2026-01-01 00:00:02'),
+            'post:3' => array('reason' => 'x', 'queued_at' => '2026-01-01 00:00:03'),
+            'post:4' => array('reason' => 'x', 'queued_at' => '2026-01-01 00:00:04'),
+            'post:5' => array('reason' => 'x', 'queued_at' => '2026-01-01 00:00:05'),
+        );
+
+        Mcpwp_Graph_Builder::run_worker_batch();
+
+        $this->assertCount(5, $GLOBALS['mcpwp_test_graph_nodes']);
+        $this->assertSame(array(), $GLOBALS['mcpwp_test_graph_queue']);
+    }
+
+    public function test_worker_batch_is_a_no_op_when_not_ready(): void
+    {
+        update_option(Mcpwp_Graph_Builder::READY_OPTION, false, true);
+        $GLOBALS['mcpwp_test_graph_queue'] = array('post:1' => array('reason' => 'x', 'queued_at' => 'x'));
+
+        Mcpwp_Graph_Builder::run_worker_batch();
+
+        $this->assertSame(array(), $GLOBALS['mcpwp_test_graph_nodes']);
+    }
+
+    // ---------------------------------------------------------------------
+    // Backfill: per-post cursor save, throwing filter does not stall it.
     // ---------------------------------------------------------------------
 
     public function test_backfill_batches_advance_cursor_and_finish(): void
@@ -330,6 +647,7 @@ final class GraphBuilderTest extends TestCase
         $this->assertSame(120, get_option(Mcpwp_Graph_Builder::BACKFILL_CURSOR_OPTION, 0));
         $this->assertSame('done', get_option(Mcpwp_Graph_Builder::BACKFILL_STATUS_OPTION, ''));
         $this->assertCount(120, $GLOBALS['mcpwp_test_graph_nodes']);
+        $this->assertNotSame('', get_option(Mcpwp_Graph_Builder::BUILT_AT_OPTION, ''));
 
         $status = Mcpwp_Graph_Builder::backfill_status();
         $this->assertSame('done', $status['status']);
@@ -344,5 +662,92 @@ final class GraphBuilderTest extends TestCase
         Mcpwp_Graph_Builder::run_backfill_batch();
 
         $this->assertSame(array(), $GLOBALS['mcpwp_test_graph_nodes']);
+    }
+
+    public function test_backfill_is_a_no_op_when_not_ready(): void
+    {
+        update_option(Mcpwp_Graph_Builder::READY_OPTION, false, true);
+        $this->post(1);
+
+        Mcpwp_Graph_Builder::run_backfill_batch();
+
+        $this->assertSame(array(), $GLOBALS['mcpwp_test_graph_nodes']);
+        $this->assertSame('', get_option(Mcpwp_Graph_Builder::BACKFILL_STATUS_OPTION, ''));
+    }
+
+    public function test_backfill_throwing_filter_skips_one_post_and_advances_cursor(): void
+    {
+        for ($i = 1; $i <= 5; $i++) {
+            $this->post($i);
+        }
+        $GLOBALS['mcpwp_test_throw_for_post_id'] = 3;
+
+        Mcpwp_Graph_Builder::run_backfill_batch();
+
+        // Post 3's own get_post() throws inside rebuild_node_safely(), which
+        // must catch it; the cursor still advances past it, and every OTHER
+        // post in the batch still gets built.
+        $this->assertSame(5, get_option(Mcpwp_Graph_Builder::BACKFILL_CURSOR_OPTION, 0));
+        $this->assertArrayNotHasKey('post:3', $GLOBALS['mcpwp_test_graph_nodes']);
+        foreach (array(1, 2, 4, 5) as $id) {
+            $this->assertArrayHasKey('post:' . $id, $GLOBALS['mcpwp_test_graph_nodes']);
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // W8: reconcile after reactivation.
+    // ---------------------------------------------------------------------
+
+    public function test_upgrade_when_backfill_already_done_enqueues_reconcile(): void
+    {
+        update_option(Mcpwp_Graph_Builder::BACKFILL_STATUS_OPTION, 'done', false);
+        update_option(Mcpwp_Graph_Builder::BUILT_AT_OPTION, '2026-01-01 00:00:00', false);
+
+        $this->post(200, array('post_modified_gmt' => '2026-06-01 00:00:00')); // modified after built_at
+        $this->post(201, array('post_modified_gmt' => '2025-01-01 00:00:00')); // modified before
+
+        Mcpwp_Graph_Builder::on_upgrade_schedule_backfill();
+        Mcpwp_Graph_Builder::on_shutdown(); // mark() buffers until shutdown flushes it to the queue table.
+
+        $this->assertArrayHasKey('post:200', $GLOBALS['mcpwp_test_graph_queue']);
+        $this->assertArrayNotHasKey('post:201', $GLOBALS['mcpwp_test_graph_queue'] ?? array());
+        $this->assertSame('pending', get_option(Mcpwp_Graph_Builder::RECONCILE_STATUS_OPTION, ''));
+    }
+
+    public function test_reconcile_batch_marks_only_hash_mismatches(): void
+    {
+        $this->post(210, array('post_content' => 'same'));
+        $this->post(211, array('post_content' => 'old'));
+
+        Mcpwp_Graph_Builder::rebuild_post_node(210);
+        Mcpwp_Graph_Builder::rebuild_post_node(211);
+        $unchanged_hash_before = $GLOBALS['mcpwp_test_graph_nodes']['post:210']['content_hash'];
+
+        // Drift 211's content WITHOUT going through mark() — simulates a
+        // change made while the plugin was deactivated (nothing marked it).
+        $this->post(211, array('post_content' => 'new'));
+        $expected_new_hash = Mcpwp_Graph_Builder::content_hash($GLOBALS['_mcpwp_test_posts'][211]);
+
+        update_option(Mcpwp_Graph_Builder::RECONCILE_STATUS_OPTION, 'pending', false);
+        update_option(Mcpwp_Graph_Builder::RECONCILE_CURSOR_OPTION, 0, false);
+        $GLOBALS['mcpwp_test_graph_queue'] = array();
+
+        // Pass 1: the queue is empty, so the worker advances the reconcile
+        // scan — 210's hash still matches (untouched), 211's does not, so
+        // only 211 gets mark()'d. Nothing is rebuilt yet in THIS pass.
+        // on_shutdown() simulates the end of this cron/AS run, which is what
+        // actually flushes the buffered mark() to the queue table (proven on
+        // the real rig: WordPress's `shutdown` action fires for a WP-Cron
+        // request the same way it does for a web request).
+        Mcpwp_Graph_Builder::run_worker_batch();
+        Mcpwp_Graph_Builder::on_shutdown();
+        $this->assertSame($unchanged_hash_before, $GLOBALS['mcpwp_test_graph_nodes']['post:210']['content_hash'], 'An unchanged post must not be rewritten.');
+        $this->assertArrayHasKey('post:211', $GLOBALS['mcpwp_test_graph_queue'], 'The drifted post must be queued by the reconcile scan.');
+        $this->assertNotSame($expected_new_hash, $GLOBALS['mcpwp_test_graph_nodes']['post:211']['content_hash'], 'Not rebuilt yet — only queued.');
+
+        // Pass 2: the next worker run drains what the reconcile scan queued.
+        Mcpwp_Graph_Builder::run_worker_batch();
+        Mcpwp_Graph_Builder::on_shutdown();
+        $this->assertSame($expected_new_hash, $GLOBALS['mcpwp_test_graph_nodes']['post:211']['content_hash']);
     }
 }

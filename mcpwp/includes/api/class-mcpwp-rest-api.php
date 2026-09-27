@@ -69,7 +69,21 @@ abstract class Mcpwp_REST_API {
 	 * @return bool|WP_Error True if valid.
 	 */
 	public function check_permission( $request ) {
-		return $this->verify_api_key( $request );
+		$verdict = $this->verify_api_key( $request );
+
+		// Site graph (#943 S1 review, N2): the chokepoint every route's
+		// permission_callback runs through (direct HTTP, /batch
+		// sub-requests, /mcp tool dispatch — all reach a controller's
+		// check_permission() the same way), so this is where "an
+		// MCPWP-authenticated request is making this edit" gets flagged for
+		// Mcpwp_Graph_Builder's same-response rebuild. #957's guardrails
+		// would give an equivalent flag if merged first; this is accepted as
+		// the standalone equivalent rather than depending on that branch.
+		if ( true === $verdict && class_exists( 'Mcpwp_Graph_Builder' ) ) {
+			Mcpwp_Graph_Builder::mark_request_authenticated();
+		}
+
+		return $verdict;
 	}
 
 	/**
@@ -818,11 +832,7 @@ abstract class Mcpwp_REST_API {
 	 * @return bool
 	 */
 	protected function is_elementor_built( $post_id ) {
-		if ( 'builder' === get_post_meta( $post_id, '_elementor_edit_mode', true ) ) {
-			return true;
-		}
-		// empty(), not a (string) cast: array-stored data is data (#845).
-		return ! empty( get_post_meta( $post_id, '_elementor_data', true ) );
+		return Mcpwp_Graph_Builder::is_elementor_built( $post_id );
 	}
 
 	/**

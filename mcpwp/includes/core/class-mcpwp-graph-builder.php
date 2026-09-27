@@ -1,21 +1,38 @@
 <?php
 /**
  * Site graph builder — the single extraction + persistence chokepoint for the
- * `mcpwp_graph_nodes` / `mcpwp_graph_edges` tables (#943 S1).
+ * `mcpwp_graph_nodes` / `mcpwp_graph_edges` tables (#943 S1, revised after
+ * PR #993 review: queue table replaces the dirty option, save-path marks
+ * only, batched link resolution, a change hash covering everything the
+ * rebuild writes, trash-keeps-edges, and a readiness guard).
  *
  * Extraction here is the SAME parsing logic `class-mcpwp-rest-content-graph.php`
  * and `class-mcpwp-rest-api.php` already used for the live, request-scoped
  * content graph (link parsing, Elementor `_elementor_data` link/text
  * extraction, taxonomy, menu depth, freshness/hub/orphan scoring) — moved here
- * so there is exactly one parser, not two. Those REST classes now delegate to
- * the static methods below; their request/response shapes are unchanged
- * (verified by the existing content-graph/SEO-audit/content-quality test
- * coverage staying green).
+ * so there is exactly one parser, not two. Those REST classes delegate to the
+ * static methods below; their request/response shapes are unchanged.
  *
- * New in this class (nothing to move — the REST-time graph never persisted or
- * tracked these): the incremental dirty-set + shutdown rebuild, the WP-Cron/
- * Action Scheduler backfill, and media/term/parent edge extraction for the
- * persisted graph.
+ * ## Write-path shape (post #993 review)
+ *
+ * A WordPress hook (save_post, meta changes, term changes, trash/delete)
+ * calls `mark()`, which does at most one `INSERT IGNORE` into
+ * `mcpwp_graph_queue` and schedules the worker. It never rebuilds inline —
+ * a bulk edit of 400 posts in one request stays fast because the request
+ * only ever writes queue rows, not graph rows. The one exception: inside an
+ * MCPWP-authenticated request (`mark_request_authenticated()`, called from
+ * `Mcpwp_REST_API::check_permission()` the moment a request passes API-key
+ * auth — the same chokepoint every route's permission_callback runs
+ * through), `on_shutdown()` rebuilds up to REQUEST_REBUILD_LIMIT of that
+ * request's own marked nodes within REQUEST_REBUILD_BUDGET seconds, so the
+ * agent that made the edit sees its own edges in the same response. Every
+ * other caller (wp-admin, another agent's concurrent edit, a cron-driven
+ * import) only ever queues; `run_worker_batch()` drains it, time-budgeted,
+ * on a WP-Cron single event (60s out) or an Action Scheduler async action
+ * when present.
+ *
+ * Acceptance: edges reflect an edit by the next worker run (<=2 min), or the
+ * same request for MCPWP-made edits.
  *
  * @package MCPWP
  */
@@ -29,11 +46,14 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 class Mcpwp_Graph_Builder {
 
-	/** Option holding node keys that overflowed the per-request shutdown budget. */
-	const DIRTY_OPTION = 'mcpwp_graph_dirty';
+	/** Option: true only once SHOW TABLES has verified all 4 graph tables exist. */
+	const READY_OPTION = 'mcpwp_graph_ready';
 
-	/** Cron hook that drains DIRTY_OPTION on a schedule, independent of backfill state. */
-	const DIRTY_DRAIN_CRON_HOOK = 'mcpwp_graph_dirty_drain';
+	/** Daily cron that retries table creation while READY_OPTION is not true. */
+	const READY_RETRY_CRON_HOOK = 'mcpwp_graph_tables_retry';
+
+	/** WP-Cron/Action-Scheduler hook that drains the queue table. */
+	const WORKER_CRON_HOOK = 'mcpwp_graph_worker';
 
 	/** Cron/Action-Scheduler hook for one backfill batch. */
 	const BACKFILL_CRON_HOOK = 'mcpwp_graph_backfill';
@@ -44,25 +64,176 @@ class Mcpwp_Graph_Builder {
 	/** pending|running|done. */
 	const BACKFILL_STATUS_OPTION = 'mcpwp_graph_backfill_status';
 
+	/** When the backfill last completed — the reconcile "since" watermark. */
+	const BUILT_AT_OPTION = 'mcpwp_graph_built_at';
+
+	/** pending|running|done — a cheap hash-comparison sweep after reactivation. */
+	const RECONCILE_STATUS_OPTION = 'mcpwp_graph_reconcile_status';
+
+	/** Highest post ID already reconcile-checked. */
+	const RECONCILE_CURSOR_OPTION = 'mcpwp_graph_reconcile_cursor';
+
 	/** Posts processed per backfill batch. */
 	const BACKFILL_BATCH_SIZE = 50;
 
 	/** Max seconds a single backfill batch may run. */
 	const BACKFILL_TIME_BUDGET = 10.0;
 
-	/** Max dirty nodes rebuilt inline at `shutdown`. */
-	const SHUTDOWN_LIMIT = 25;
+	/** Posts hash-compared per reconcile batch (cheap: no rewrite unless changed). */
+	const RECONCILE_BATCH_SIZE = 200;
 
-	/** Max dirty-option entries drained per DIRTY_DRAIN_CRON_HOOK run. */
-	const DIRTY_DRAIN_BATCH = 25;
+	/** Max seconds a single worker run may spend draining the queue. */
+	const WORKER_TIME_BUDGET = 5.0;
 
-	/** Request-local dirty set — node_key => true, insertion order preserved. */
-	private static $dirty_nodes = array();
+	/** Max node keys popped from the queue per worker pass. */
+	const WORKER_POP_BATCH = 25;
+
+	/** Max of THIS request's own marked nodes rebuilt at shutdown. */
+	const REQUEST_REBUILD_LIMIT = 5;
+
+	/** Max seconds the shutdown request-rebuild may spend. */
+	const REQUEST_REBUILD_BUDGET = 1.0;
+
+	/** Same-host href resolution falls back to url_to_postid() at most this many times per post. */
+	const URL_TO_POSTID_FALLBACK_CAP = 10;
+
+	/** Max distinct anchor texts stored per links_to edge. */
+	const MAX_EDGE_ANCHORS = 5;
+
+	/** Post types never graphed as post nodes, regardless of public/queryable. */
+	const EXCLUDED_POST_TYPES = array( 'attachment', 'revision' );
+
+	/**
+	 * Node keys marked during THIS request (node_key => reason), in mark()
+	 * order. Read by on_shutdown() for the MCPWP-authenticated-request
+	 * same-response rebuild; always populated (cheap, in-memory) regardless
+	 * of whether this request turns out to be MCPWP-authenticated, since
+	 * mark() cannot know that in advance for a hook that fires before
+	 * check_permission() on a nested/looped dispatch.
+	 *
+	 * @var array<string,string>
+	 */
+	private static $request_marked = array();
+
+	/**
+	 * Set by mark_request_authenticated() the moment a request passes
+	 * Mcpwp_REST_API::check_permission(). A PHP static, not anything derived
+	 * from request headers — nothing a caller sends can set this directly.
+	 *
+	 * @var bool
+	 */
+	private static $in_mcpwp_request = false;
+
+	/**
+	 * Per-run href -> post ID cache for the batched link resolver. Reset by
+	 * whichever loop starts a "run" (one rebuild, one worker pass, one
+	 * backfill/reconcile batch) so cross-post cache hits are free within
+	 * that run without ever serving a stale answer across runs.
+	 *
+	 * @var array<string,int>
+	 */
+	private static $url_id_cache = array();
+
+	/** Whether a DB error has already been logged this request (log once). */
+	private static $logged_db_error_this_request = false;
 
 	// -------------------------------------------------------------------------
-	// Hook handlers — mark dirty only. The actual rebuild happens at shutdown
-	// (or in a later cron batch), so a request that touches many posts pays
-	// for parsing once per node, not once per hook fire.
+	// Readiness (W1, W6)
+	// -------------------------------------------------------------------------
+
+	/**
+	 * Whether all 4 graph tables are known-present. Every hook handler checks
+	 * this FIRST and returns with zero queries when false — a site mid
+	 * upgrade, or one where table creation failed (a restricted DB user,
+	 * `CREATE TABLE` denied), never throws from a hook or half-writes.
+	 *
+	 * READY_OPTION is autoloaded (update_option()'s third arg defaults to
+	 * true for a new option, and Mcpwp_Activator::mark_graph_ready() passes
+	 * true explicitly), so this is a read from the already-loaded alloptions
+	 * cache, not a per-hook query.
+	 *
+	 * @return bool
+	 */
+	public static function ready() {
+		return true === (bool) get_option( self::READY_OPTION, false );
+	}
+
+	/**
+	 * Daily retry: if tables still are not confirmed present, ask the
+	 * activator to try creating them again and re-verify.
+	 */
+	public static function retry_table_creation() {
+		if ( self::ready() ) {
+			return;
+		}
+		if ( class_exists( 'Mcpwp_Activator' ) && method_exists( 'Mcpwp_Activator', 'ensure_graph_tables' ) ) {
+			Mcpwp_Activator::ensure_graph_tables();
+		}
+	}
+
+	// -------------------------------------------------------------------------
+	// Request-authenticated flag (for same-request rebuild)
+	// -------------------------------------------------------------------------
+
+	/**
+	 * Called from Mcpwp_REST_API::check_permission() the instant a request
+	 * passes API-key auth. Every route's permission_callback is (or wraps)
+	 * check_permission(), so this fires for direct HTTP calls, /batch
+	 * sub-requests and /mcp tool dispatch alike — one chokepoint, matching
+	 * how #957's guardrails scope "is this an MCPWP-made edit" (N2: accepted
+	 * as the equivalent flag rather than depending on that unmerged branch).
+	 */
+	public static function mark_request_authenticated() {
+		self::$in_mcpwp_request = true;
+	}
+
+	/**
+	 * Test/introspection helper.
+	 *
+	 * @return bool
+	 */
+	public static function is_request_authenticated() {
+		return self::$in_mcpwp_request;
+	}
+
+	/**
+	 * Test helper: reset all request-local state between tests.
+	 */
+	public static function reset_request_state() {
+		self::$request_marked          = array();
+		self::$in_mcpwp_request        = false;
+		self::$url_id_cache            = array();
+		self::$logged_db_error_this_request = false;
+	}
+
+	// -------------------------------------------------------------------------
+	// Scope (W4, N1): which post types this graph covers at all.
+	// -------------------------------------------------------------------------
+
+	/**
+	 * @param string $post_type Post type.
+	 * @return bool
+	 */
+	public static function is_covered_post_type( $post_type ) {
+		$post_type = (string) $post_type;
+		if ( in_array( $post_type, self::EXCLUDED_POST_TYPES, true ) ) {
+			return false;
+		}
+		$obj = get_post_type_object( $post_type );
+		return (bool) ( $obj && ( ! empty( $obj->public ) || ! empty( $obj->publicly_queryable ) ) );
+	}
+
+	/**
+	 * @return array<string> Covered, public/queryable, non-excluded post types.
+	 */
+	public static function covered_post_types() {
+		$all = function_exists( 'get_post_types' ) ? array_values( get_post_types( array( 'public' => true ) ) ) : array( 'post', 'page' );
+		return array_values( array_filter( $all, array( __CLASS__, 'is_covered_post_type' ) ) );
+	}
+
+	// -------------------------------------------------------------------------
+	// Hook handlers — mark only (BLOCK-4). Filter scope BEFORE marking, not at
+	// rebuild time, so an excluded post type never even reaches the queue.
 	// -------------------------------------------------------------------------
 
 	/**
@@ -72,6 +243,9 @@ class Mcpwp_Graph_Builder {
 	 * @param WP_Post|null $post    Post object.
 	 */
 	public static function on_save_post( $post_id, $post = null ) {
+		if ( ! self::ready() ) {
+			return;
+		}
 		$post_id = (int) $post_id;
 		if ( $post_id <= 0 ) {
 			return;
@@ -82,27 +256,68 @@ class Mcpwp_Graph_Builder {
 		if ( function_exists( 'wp_is_post_autosave' ) && wp_is_post_autosave( $post_id ) ) {
 			return;
 		}
-		self::mark_dirty( self::node_key_for_post( $post_id ) );
+		$post = $post ?: get_post( $post_id );
+		if ( ! $post || ! self::is_covered_post_type( $post->post_type ) ) {
+			return;
+		}
+		self::mark( self::node_key_for_post( $post_id ), 'save_post' );
 	}
 
 	/**
-	 * `deleted_post` handler. Fires after the row is gone, so the shutdown
-	 * rebuild's "post not found" branch removes the node — no separate
-	 * delete path needed.
+	 * `deleted_post` handler — a PERMANENT delete (force-delete or empty
+	 * trash), never a plain move-to-trash (that is a `save_post` with
+	 * status=trash, see `on_save_post()` + `mark_node_trashed()`).
+	 *
+	 * BLOCK-2: before removing the node, requeue every post that links to it
+	 * and every child (`parent_of`), so their own edges/hash get reconsidered
+	 * once the target is actually gone.
 	 *
 	 * @param int $post_id Post ID.
 	 */
 	public static function on_deleted_post( $post_id ) {
-		self::mark_dirty( self::node_key_for_post( (int) $post_id ) );
+		if ( ! self::ready() ) {
+			return;
+		}
+		$node_key = self::node_key_for_post( (int) $post_id );
+		self::requeue_dependents_before_delete( $node_key );
+		self::delete_node_and_edges( $node_key );
 	}
 
 	/**
-	 * `set_object_terms` handler — a post's in_term edges depend on its terms.
+	 * `untrashed_post` handler — mark for a normal full rebuild (status is no
+	 * longer 'trash', and content may have changed while trashed).
 	 *
-	 * @param int $object_id Object (post) ID.
+	 * @param int $post_id Post ID.
+	 */
+	public static function on_untrashed_post( $post_id ) {
+		if ( ! self::ready() ) {
+			return;
+		}
+		$post_id = (int) $post_id;
+		$post    = get_post( $post_id );
+		if ( ! $post || ! self::is_covered_post_type( $post->post_type ) ) {
+			return;
+		}
+		self::mark( self::node_key_for_post( $post_id ), 'untrash' );
+	}
+
+	/**
+	 * `set_object_terms` handler — a post's in_term edges depend on its
+	 * terms. Only fires for a covered post type (W4): a term change on a
+	 * non-covered object type (e.g. a taxonomy attached to a CPT this graph
+	 * excludes) never reaches the queue.
+	 *
+	 * @param int $object_id Object ID.
 	 */
 	public static function on_set_object_terms( $object_id ) {
-		self::mark_dirty( self::node_key_for_post( (int) $object_id ) );
+		if ( ! self::ready() ) {
+			return;
+		}
+		$post = get_post( (int) $object_id );
+		if ( ! $post || ! self::is_covered_post_type( $post->post_type ) ) {
+			return;
+		}
+		self::mark( self::node_key_for_post( (int) $object_id ), 'set_object_terms' );
 	}
 
 	/**
@@ -113,7 +328,10 @@ class Mcpwp_Graph_Builder {
 	 * @param string $taxonomy Taxonomy.
 	 */
 	public static function on_edited_term( $term_id, $tt_id, $taxonomy ) {
-		self::mark_dirty( self::node_key_for_term( (string) $taxonomy, (int) $term_id ) );
+		if ( ! self::ready() ) {
+			return;
+		}
+		self::mark( self::node_key_for_term( (string) $taxonomy, (int) $term_id ), 'edited_term' );
 	}
 
 	/**
@@ -124,95 +342,299 @@ class Mcpwp_Graph_Builder {
 	 * @param string $taxonomy Taxonomy.
 	 */
 	public static function on_delete_term( $term_id, $tt_id, $taxonomy ) {
-		self::mark_dirty( self::node_key_for_term( (string) $taxonomy, (int) $term_id ) );
+		if ( ! self::ready() ) {
+			return;
+		}
+		self::mark( self::node_key_for_term( (string) $taxonomy, (int) $term_id ), 'delete_term' );
 	}
 
 	/**
-	 * Add a node key to the request-local dirty set.
+	 * `updated_post_meta`/`added_post_meta`/`deleted_post_meta` handler
+	 * (W3): these do NOT fire `save_post`, so a writer that updates meta
+	 * directly — `wp_set_elementor`, find-replace, rollback, "set featured
+	 * image" — was invisible to the old save_post-only wiring.
+	 *
+	 * @param int    $meta_id   Meta row ID (unused).
+	 * @param int    $object_id Post ID.
+	 * @param string $meta_key  Meta key.
+	 */
+	public static function on_post_meta_changed( $meta_id, $object_id, $meta_key ) {
+		if ( ! self::ready() ) {
+			return;
+		}
+		if ( ! in_array( (string) $meta_key, array( '_elementor_data', '_thumbnail_id', '_wp_page_template' ), true ) ) {
+			return;
+		}
+		$post_id = (int) $object_id;
+		$post    = get_post( $post_id );
+		if ( ! $post || ! self::is_covered_post_type( $post->post_type ) ) {
+			return;
+		}
+		self::mark( self::node_key_for_post( $post_id ), 'meta:' . $meta_key );
+	}
+
+	/**
+	 * Requeue every source of an inbound links_to edge and every child
+	 * (parent_of) of a node about to be permanently deleted.
+	 *
+	 * @param string $node_key Node key about to be deleted.
+	 */
+	private static function requeue_dependents_before_delete( $node_key ) {
+		global $wpdb;
+		$table = self::edges_table();
+
+		$sources = self::run_suppressed(
+			function () use ( $wpdb, $table, $node_key ) {
+				return $wpdb->get_col( $wpdb->prepare( "SELECT DISTINCT from_key FROM {$table} WHERE to_key = %s AND type = 'links_to'", $node_key ) );
+			}
+		);
+		$children = self::run_suppressed(
+			function () use ( $wpdb, $table, $node_key ) {
+				return $wpdb->get_col( $wpdb->prepare( "SELECT DISTINCT to_key FROM {$table} WHERE from_key = %s AND type = 'parent_of'", $node_key ) );
+			}
+		);
+
+		foreach ( array_unique( array_merge( (array) $sources, (array) $children ) ) as $key ) {
+			self::mark( (string) $key, 'dependent_of_delete' );
+		}
+	}
+
+	// -------------------------------------------------------------------------
+	// Queue table (BLOCK-4 / W2 / W5): mark = one atomic INSERT IGNORE.
+	// -------------------------------------------------------------------------
+
+	/**
+	 * Mark a node dirty. Buffers in memory for the rest of this request and
+	 * lets `on_shutdown()` flush the whole request's marks as ONE (or one
+	 * per <=500-row chunk) `INSERT IGNORE` — never one query per mark().
+	 *
+	 * Measured on this rig: 400 individual per-call `INSERT IGNORE`s cost
+	 * ~10ms each (~4.05s total) — dominated by this container's MySQL commit
+	 * latency, not PHP — which alone blew a bulk edit's request budget. The
+	 * fix is the same one already applied to edges (BLOCK-4): batch the
+	 * writes a single request produces into one statement, deferred to
+	 * `shutdown`, exactly where the rebuild carve-out already defers to.
+	 * `INSERT IGNORE` is still what lands in the table — this only changes
+	 * WHEN the write happens, not what it is, so it stays atomic and
+	 * duplicate-proof per the design.
+	 *
+	 * Trade-off: a mark is no longer durable the instant this call returns —
+	 * it survives until `shutdown`, which WordPress runs via a PHP shutdown
+	 * function (fires even after a fatal error) but not after a hard
+	 * process kill. Accepted: the same window already existed for the
+	 * authenticated-request rebuild carve-out, and a request that dies that
+	 * hard has bigger problems than one missed graph mark — the NEXT save of
+	 * that post (or the reconcile pass) still catches it.
+	 *
+	 * Uses $wpdb->prefix at flush time, so a save inside a switch_to_blog()
+	 * context marks THAT blog's own queue table (W5) — no separate
+	 * multisite branch needed.
 	 *
 	 * @param string $node_key Node key.
+	 * @param string $reason   Short reason tag (bookkeeping only).
 	 */
-	public static function mark_dirty( $node_key ) {
+	public static function mark( $node_key, $reason = 'edit' ) {
 		$node_key = (string) $node_key;
-		if ( '' === $node_key ) {
+		if ( '' === $node_key || ! self::ready() ) {
 			return;
 		}
-		self::$dirty_nodes[ $node_key ] = true;
+
+		if ( ! isset( self::$request_marked[ $node_key ] ) ) {
+			self::$request_marked[ $node_key ] = (string) $reason;
+		}
 	}
 
 	/**
-	 * Read the current request-local dirty set (test/introspection helper).
+	 * Flush a set of {node_key => reason} marks to the queue table in as few
+	 * queries as possible, then schedule the worker once.
 	 *
-	 * @return array Node keys.
+	 * @param array<string,string> $marks node_key => reason.
 	 */
-	public static function get_pending_dirty_nodes() {
-		return array_keys( self::$dirty_nodes );
+	private static function flush_marks_to_queue( array $marks ) {
+		if ( empty( $marks ) ) {
+			return;
+		}
+
+		global $wpdb;
+		$table = self::queue_table();
+		$now   = current_time( 'mysql' );
+
+		foreach ( array_chunk( array_keys( $marks ), 500 ) as $chunk ) {
+			$placeholders = array();
+			$args         = array();
+			foreach ( $chunk as $node_key ) {
+				$placeholders[] = '(%s, %s, %s)';
+				$args[]         = $node_key;
+				$args[]         = $marks[ $node_key ];
+				$args[]         = $now;
+			}
+
+			// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- $sql built with placeholders only, prepared below.
+			$sql = "INSERT IGNORE INTO {$table} (node_key, reason, queued_at) VALUES " . implode( ',', $placeholders );
+
+			self::run_suppressed(
+				function () use ( $wpdb, $sql, $args ) {
+					return $wpdb->query( $wpdb->prepare( $sql, $args ) );
+				}
+			);
+		}
+
+		self::schedule_worker();
 	}
 
 	/**
-	 * Clear the request-local dirty set without rebuilding (test helper).
+	 * @return string
 	 */
-	public static function reset_pending_dirty_nodes() {
-		self::$dirty_nodes = array();
+	private static function queue_table() {
+		global $wpdb;
+		return $wpdb->prefix . 'mcpwp_graph_queue';
 	}
 
-	// -------------------------------------------------------------------------
-	// Shutdown rebuild
-	// -------------------------------------------------------------------------
-
 	/**
-	 * `shutdown` handler: rebuild up to SHUTDOWN_LIMIT dirty nodes inline;
-	 * anything left over goes to DIRTY_OPTION for the drain cron to pick up.
+	 * Pop up to $limit node keys off the queue (oldest first), deleting them
+	 * as claimed. A worker-run "pop": fine for the single-consumer WP-Cron/AS
+	 * scheduling this class uses; not a distributed lock.
+	 *
+	 * @param int $limit Max rows.
+	 * @return array<string>
 	 */
-	public static function on_shutdown() {
-		$keys = array_keys( self::$dirty_nodes );
-		self::$dirty_nodes = array();
+	private static function pop_queue_batch( $limit ) {
+		global $wpdb;
+		$table = self::queue_table();
 
+		$keys = self::run_suppressed(
+			function () use ( $wpdb, $table, $limit ) {
+				return $wpdb->get_col( $wpdb->prepare( "SELECT node_key FROM {$table} ORDER BY queued_at ASC LIMIT %d", (int) $limit ) );
+			}
+		);
+		$keys = is_array( $keys ) ? $keys : array();
 		if ( empty( $keys ) ) {
-			return;
+			return array();
 		}
 
-		$batch    = array_slice( $keys, 0, self::SHUTDOWN_LIMIT );
-		$overflow = array_slice( $keys, self::SHUTDOWN_LIMIT );
+		$placeholders = implode( ',', array_fill( 0, count( $keys ), '%s' ) );
+		self::run_suppressed(
+			function () use ( $wpdb, $table, $placeholders, $keys ) {
+				// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- built via $wpdb->prepare().
+				return $wpdb->query( $wpdb->prepare( "DELETE FROM {$table} WHERE node_key IN ({$placeholders})", $keys ) );
+			}
+		);
 
-		foreach ( $batch as $node_key ) {
-			self::rebuild_node_safely( $node_key );
-		}
-
-		if ( ! empty( $overflow ) ) {
-			self::add_to_dirty_option( $overflow );
-		}
+		return $keys;
 	}
 
 	/**
-	 * Drain up to DIRTY_DRAIN_BATCH entries from the overflow option. Runs on
-	 * its own cron independent of backfill state, and is also called
-	 * opportunistically at the top of every backfill batch.
+	 * Whether the queue table currently has any rows.
+	 *
+	 * @return bool
 	 */
-	public static function drain_dirty_batch() {
-		$existing = get_option( self::DIRTY_OPTION, array() );
-		if ( ! is_array( $existing ) || empty( $existing ) ) {
+	private static function queue_has_rows() {
+		global $wpdb;
+		$table = self::queue_table();
+		$count = self::run_suppressed(
+			function () use ( $wpdb, $table ) {
+				return $wpdb->get_var( "SELECT COUNT(*) FROM {$table} LIMIT 1" );
+			}
+		);
+		return (int) $count > 0;
+	}
+
+	// -------------------------------------------------------------------------
+	// Worker (BLOCK-4): drains the queue, time-budgeted, self-rescheduling.
+	// -------------------------------------------------------------------------
+
+	/**
+	 * Schedule one worker pass: an Action Scheduler async action when
+	 * present, else a WP-Cron single event 60s out. Guards duplicates by
+	 * checking for a PENDING scheduled action specifically (BLOCK-5's fix
+	 * applied here too, for the same reason) — `as_has_scheduled_action()`
+	 * alone can keep matching a long-finished action depending on AS's
+	 * internal status handling, which would permanently stop new work being
+	 * scheduled after the very first run.
+	 */
+	private static function schedule_worker() {
+		if ( self::has_pending_scheduled_action( self::WORKER_CRON_HOOK ) ) {
 			return;
 		}
-
-		$batch     = array_slice( $existing, 0, self::DIRTY_DRAIN_BATCH );
-		$remaining = array_slice( $existing, self::DIRTY_DRAIN_BATCH );
-
-		// Persist the remainder BEFORE rebuilding, so a fatal mid-batch does
-		// not silently drop the tail back into an unbounded option forever.
-		update_option( self::DIRTY_OPTION, $remaining, false );
-
-		foreach ( $batch as $node_key ) {
-			self::rebuild_node_safely( $node_key );
+		if ( function_exists( 'as_enqueue_async_action' ) ) {
+			as_enqueue_async_action( self::WORKER_CRON_HOOK, array(), 'mcpwp' );
+			return;
+		}
+		if ( function_exists( 'wp_next_scheduled' ) && wp_next_scheduled( self::WORKER_CRON_HOOK ) ) {
+			return;
+		}
+		if ( function_exists( 'wp_schedule_single_event' ) ) {
+			wp_schedule_single_event( time() + 60, self::WORKER_CRON_HOOK );
 		}
 	}
 
 	/**
-	 * Rebuild one node, never letting a parse/DB error fatal the request.
+	 * True when $hook has a PENDING Action Scheduler action (never checks
+	 * WP-Cron here — that branch is handled by its own wp_next_scheduled()
+	 * call at each call site).
+	 *
+	 * @param string $hook Hook name.
+	 * @return bool
+	 */
+	private static function has_pending_scheduled_action( $hook ) {
+		if ( function_exists( 'as_get_scheduled_actions' ) ) {
+			$pending = as_get_scheduled_actions(
+				array(
+					'hook'     => $hook,
+					'status'   => 'pending',
+					'per_page' => 1,
+				),
+				'ids'
+			);
+			return ! empty( $pending );
+		}
+		return false;
+	}
+
+	/**
+	 * Drain the queue, time-budgeted; reschedule itself while work remains.
+	 * Once the queue is empty, advance a reconcile pass (if one is pending)
+	 * within whatever budget is left.
+	 */
+	public static function run_worker_batch() {
+		if ( ! self::ready() ) {
+			return;
+		}
+
+		$start = microtime( true );
+		self::$url_id_cache = array();
+
+		while ( ( microtime( true ) - $start ) < self::WORKER_TIME_BUDGET ) {
+			$batch = self::pop_queue_batch( self::WORKER_POP_BATCH );
+			if ( empty( $batch ) ) {
+				break;
+			}
+			foreach ( $batch as $node_key ) {
+				self::rebuild_node_safely( $node_key );
+				if ( ( microtime( true ) - $start ) >= self::WORKER_TIME_BUDGET ) {
+					break;
+				}
+			}
+		}
+
+		if ( self::queue_has_rows() ) {
+			self::schedule_worker();
+			return;
+		}
+
+		self::maybe_run_reconcile_batch( $start );
+	}
+
+	/**
+	 * Rebuild one node, logging and skipping on any throw — a filter/hook a
+	 * theme or another plugin attaches to get_post_meta(), wp_get_object_terms()
+	 * etc. must never stall a worker/backfill run for every OTHER post
+	 * (BLOCK-3's "a throwing filter doesn't stall the backfill", applied
+	 * uniformly everywhere a node gets rebuilt).
 	 *
 	 * @param string $node_key Node key.
 	 */
-	private static function rebuild_node_safely( $node_key ) {
+	public static function rebuild_node_safely( $node_key ) {
 		try {
 			self::rebuild_node( $node_key );
 		} catch ( \Throwable $e ) {
@@ -221,20 +643,6 @@ class Mcpwp_Graph_Builder {
 				error_log( 'MCPWP graph rebuild error for ' . $node_key . ': ' . $e->getMessage() );
 			}
 		}
-	}
-
-	/**
-	 * Merge overflowed node keys into DIRTY_OPTION (deduplicated).
-	 *
-	 * @param array $node_keys Node keys.
-	 */
-	private static function add_to_dirty_option( array $node_keys ) {
-		$existing = get_option( self::DIRTY_OPTION, array() );
-		if ( ! is_array( $existing ) ) {
-			$existing = array();
-		}
-		$merged = array_values( array_unique( array_merge( $existing, $node_keys ) ) );
-		update_option( self::DIRTY_OPTION, $merged, false );
 	}
 
 	/**
@@ -253,6 +661,43 @@ class Mcpwp_Graph_Builder {
 				self::rebuild_term_node( $parts[1], (int) $parts[2] );
 			}
 		}
+	}
+
+	/**
+	 * `shutdown` handler — the ONE place a request's mark() calls turn into
+	 * writes. For an MCPWP-authenticated request, up to REQUEST_REBUILD_LIMIT
+	 * of THIS request's own marked nodes are rebuilt within
+	 * REQUEST_REBUILD_BUDGET seconds first, so the agent that made the edit
+	 * sees its own edges in the same response (BLOCK-4's carve-out) — those
+	 * are rebuilt directly and never queued at all (already fully handled).
+	 * Whatever is left (every other request's marks entirely, or the tail
+	 * past the limit/budget for an authenticated one) is flushed to the
+	 * queue table in one batched `INSERT IGNORE` and the worker is scheduled;
+	 * the worker handles it async.
+	 */
+	public static function on_shutdown() {
+		if ( empty( self::$request_marked ) ) {
+			return;
+		}
+
+		$marks = self::$request_marked;
+		self::$request_marked = array();
+
+		if ( self::$in_mcpwp_request ) {
+			$start = microtime( true );
+			self::$url_id_cache = array();
+
+			$batch = array_slice( array_keys( $marks ), 0, self::REQUEST_REBUILD_LIMIT );
+			foreach ( $batch as $node_key ) {
+				if ( ( microtime( true ) - $start ) > self::REQUEST_REBUILD_BUDGET ) {
+					break;
+				}
+				self::rebuild_node_safely( $node_key );
+				unset( $marks[ $node_key ] ); // Already fully handled — no need to also queue it.
+			}
+		}
+
+		self::flush_marks_to_queue( $marks );
 	}
 
 	// -------------------------------------------------------------------------
@@ -289,7 +734,8 @@ class Mcpwp_Graph_Builder {
 	// -------------------------------------------------------------------------
 
 	/**
-	 * Rebuild (or delete) the node + builder-sourced edges for one post.
+	 * Rebuild (or delete, or trash-mark) the node + builder-sourced edges for
+	 * one post.
 	 *
 	 * @param int $post_id Post ID.
 	 */
@@ -298,33 +744,94 @@ class Mcpwp_Graph_Builder {
 		$node_key = self::node_key_for_post( $post_id );
 		$post     = get_post( $post_id );
 
-		if ( ! $post || in_array( $post->post_status, array( 'trash', 'auto-draft' ), true ) ) {
+		if ( ! $post || 'auto-draft' === $post->post_status ) {
 			self::delete_node_and_edges( $node_key );
 			return;
 		}
 
-		$post_type_obj = get_post_type_object( $post->post_type );
-		if ( ! $post_type_obj || ( empty( $post_type_obj->public ) && empty( $post_type_obj->publicly_queryable ) ) ) {
+		if ( ! self::is_covered_post_type( $post->post_type ) ) {
 			self::delete_node_and_edges( $node_key );
 			return;
 		}
 
-		$term_refs  = self::extract_term_refs( $post );
-		$terms_hash = self::terms_hash( $term_refs );
-		$new_hash   = self::content_hash( $post );
+		// BLOCK-2: trash is not delete. The node's OWN fields (including its
+		// content_hash, so a later untrash's hash-compare stays correct — see
+		// rebuild_trashed_node()) are kept current, but every edge is left
+		// alone; readers filter by status.
+		if ( 'trash' === $post->post_status ) {
+			self::rebuild_trashed_node( $post, $node_key );
+			return;
+		}
 
-		$existing = self::read_node_hashes( $node_key );
-		if ( $existing && $existing['content_hash'] === $new_hash && $existing['terms_hash'] === $terms_hash ) {
-			return; // Nothing changed — skip the rebuild entirely.
+		self::full_rebuild_post_node( $post, $node_key );
+	}
+
+	/**
+	 * Upsert a trashed post's node fields (status='trash', and every other
+	 * field a full rebuild would also write, including content_hash) WITHOUT
+	 * touching any edge.
+	 *
+	 * content_hash must still be kept current here: skipping it would leave
+	 * the stored hash reflecting the pre-trash (non-trash) state, and a
+	 * later untrash — restoring the post to that same non-trash state with
+	 * nothing else changed — would then wrongly hash-match and skip the
+	 * rebuild that is supposed to flip status back and (if anything else
+	 * changed while trashed) resync edges.
+	 *
+	 * @param WP_Post $post     Post.
+	 * @param string  $node_key Node key.
+	 */
+	private static function rebuild_trashed_node( $post, $node_key ) {
+		$post_id  = (int) $post->ID;
+		$term_refs = self::extract_term_refs( $post );
+
+		$props = array(
+			'template'     => (string) ( function_exists( 'get_page_template_slug' ) ? get_page_template_slug( $post_id ) : '' ),
+			'builder'      => self::detect_builder( $post_id, $post ),
+			'lang'         => '',
+			'parent'       => (int) $post->post_parent,
+			'modified_gmt' => get_post_modified_time( 'c', true, $post ),
+		);
+
+		self::upsert_node(
+			array(
+				'node_key'     => $node_key,
+				'kind'         => $post->post_type,
+				'ref_id'       => $post_id,
+				'label'        => get_the_title( $post ),
+				'url'          => (string) get_permalink( $post ),
+				'status'       => 'trash',
+				'content_hash' => self::content_hash( $post, $term_refs ),
+				'word_count'   => str_word_count( wp_strip_all_tags( (string) $post->post_content ) ),
+				'props'        => wp_json_encode( $props ),
+			)
+		);
+	}
+
+	/**
+	 * The full rebuild: change-hash skip, node upsert, and builder-owned edge
+	 * replacement (links_to/in_term/uses_media/parent_of).
+	 *
+	 * @param WP_Post $post     Post.
+	 * @param string  $node_key Node key.
+	 */
+	private static function full_rebuild_post_node( $post, $node_key ) {
+		$post_id = (int) $post->ID;
+
+		$term_refs = self::extract_term_refs( $post );
+		$new_hash  = self::content_hash( $post, $term_refs );
+
+		$existing_hash = self::read_node_hash( $node_key );
+		if ( null !== $existing_hash && $existing_hash === $new_hash ) {
+			return; // Nothing that would change any written field.
 		}
 
 		$props = array(
 			'template'     => (string) ( function_exists( 'get_page_template_slug' ) ? get_page_template_slug( $post_id ) : '' ),
-			'builder'      => self::detect_builder( $post_id ),
+			'builder'      => self::detect_builder( $post_id, $post ),
 			'lang'         => '',
 			'parent'       => (int) $post->post_parent,
 			'modified_gmt' => get_post_modified_time( 'c', true, $post ),
-			'terms_hash'   => $terms_hash,
 		);
 
 		self::upsert_node(
@@ -341,31 +848,63 @@ class Mcpwp_Graph_Builder {
 			)
 		);
 
-		// Replace this node's builder-owned edges: its own outgoing
-		// links_to/in_term/uses_media, and the one incoming parent_of edge
-		// it is authoritative for (parent_of is stored parent -> child, but
-		// only the CHILD's post_parent determines whether it exists).
 		self::delete_builder_edges_for_node( $node_key );
 
-		foreach ( self::extract_post_link_targets( $post ) as $target_id ) {
-			self::insert_edge( $node_key, self::node_key_for_post( $target_id ), 'links_to', 1.0, 'builder', array() );
+		$edge_rows = array();
+		$now       = current_time( 'mysql' );
+
+		// BLOCK-4 perf: one batched resolver call for every link on the post,
+		// not one query per link. N4: anchors (<=5) + location kept as props.
+		foreach ( self::build_link_edges_data( $post ) as $target_id => $data ) {
+			$edge_rows[] = array(
+				'from_key' => $node_key,
+				'to_key'   => self::node_key_for_post( $target_id ),
+				'type'     => 'links_to',
+				'weight'   => 1.0,
+				'source'   => 'builder',
+				'props'    => array(
+					'anchors'   => $data['anchors'],
+					'locations' => array_keys( $data['locations'] ),
+				),
+			);
 		}
 
 		foreach ( $term_refs as $term_ref ) {
-			$term_key = self::node_key_for_term( $term_ref['taxonomy'], $term_ref['term_id'] );
 			self::ensure_term_node( $term_ref['taxonomy'], $term_ref['term_id'], $term_ref['name'] );
-			self::insert_edge( $node_key, $term_key, 'in_term', 1.0, 'builder', array() );
+			$edge_rows[] = array(
+				'from_key' => $node_key,
+				'to_key'   => self::node_key_for_term( $term_ref['taxonomy'], $term_ref['term_id'] ),
+				'type'     => 'in_term',
+				'weight'   => 1.0,
+				'source'   => 'builder',
+				'props'    => array(),
+			);
 		}
 
 		foreach ( self::extract_media_refs( $post ) as $media_id ) {
-			$media_key = self::node_key_for_media( $media_id );
 			self::ensure_media_node( $media_id );
-			self::insert_edge( $node_key, $media_key, 'uses_media', 1.0, 'builder', array() );
+			$edge_rows[] = array(
+				'from_key' => $node_key,
+				'to_key'   => self::node_key_for_media( $media_id ),
+				'type'     => 'uses_media',
+				'weight'   => 1.0,
+				'source'   => 'builder',
+				'props'    => array(),
+			);
 		}
 
 		if ( $post->post_parent && (int) $post->post_parent !== $post_id ) {
-			self::insert_edge( self::node_key_for_post( (int) $post->post_parent ), $node_key, 'parent_of', 1.0, 'builder', array() );
+			$edge_rows[] = array(
+				'from_key' => self::node_key_for_post( (int) $post->post_parent ),
+				'to_key'   => $node_key,
+				'type'     => 'parent_of',
+				'weight'   => 1.0,
+				'source'   => 'builder',
+				'props'    => array(),
+			);
 		}
+
+		self::insert_edges_batch( $edge_rows, $now );
 	}
 
 	/**
@@ -401,20 +940,26 @@ class Mcpwp_Graph_Builder {
 	}
 
 	/**
-	 * Ensure a lightweight term node exists (label/url kept current).
+	 * Ensure a term node exists with its real, current label/url. N3: this
+	 * used to write url='' unconditionally, which meant every post that
+	 * referenced the term CLOBBERED whatever real permalink
+	 * rebuild_term_node() (or an earlier ensure) had written. Now computes
+	 * the same get_term_link() every time, so it is idempotent instead of
+	 * destructive.
 	 *
 	 * @param string $taxonomy Taxonomy.
 	 * @param int    $term_id  Term ID.
 	 * @param string $name     Term name.
 	 */
 	private static function ensure_term_node( $taxonomy, $term_id, $name ) {
+		$link = get_term_link( (int) $term_id, $taxonomy );
 		self::upsert_node(
 			array(
 				'node_key'     => self::node_key_for_term( $taxonomy, $term_id ),
 				'kind'         => 'term',
 				'ref_id'       => $term_id,
 				'label'        => (string) $name,
-				'url'          => '',
+				'url'          => is_wp_error( $link ) ? '' : (string) $link,
 				'status'       => '',
 				'content_hash' => '',
 				'word_count'   => 0,
@@ -451,14 +996,15 @@ class Mcpwp_Graph_Builder {
 	/**
 	 * Which builder produced a post's content, for `props.builder`.
 	 *
-	 * @param int $post_id Post ID.
+	 * @param int          $post_id Post ID.
+	 * @param WP_Post|null $post    Post, when already loaded.
 	 * @return string elementor|gutenberg|classic
 	 */
-	private static function detect_builder( $post_id ) {
+	private static function detect_builder( $post_id, $post = null ) {
 		if ( self::is_elementor_built( $post_id ) ) {
 			return 'elementor';
 		}
-		$post = get_post( $post_id );
+		$post = $post ?: get_post( $post_id );
 		if ( $post && function_exists( 'has_blocks' ) && has_blocks( $post ) ) {
 			return 'gutenberg';
 		}
@@ -466,62 +1012,74 @@ class Mcpwp_Graph_Builder {
 	}
 
 	// -------------------------------------------------------------------------
-	// Hashing
+	// Hashing (BLOCK-1): everything the rebuild writes, in one hash.
 	// -------------------------------------------------------------------------
 
 	/**
-	 * sha1 of normalized text (title + stripped body). Terms are hashed
-	 * separately (terms_hash, stored in props) so a taxonomy-only change is
-	 * still detected without folding term names into the content signal.
+	 * sha1 over every input the rebuild's OWN writes depend on: post_content
+	 * raw, `_elementor_data` raw, title, status, slug, parent, `_thumbnail_id`,
+	 * `_wp_page_template`, menu_order, and the sorted term ids. A change to
+	 * any of these — and only these — is what a rebuild would ever act on, so
+	 * this single hash is the correct and complete "did anything change?"
+	 * signal; there is no separate terms_hash any more.
 	 *
-	 * @param WP_Post $post Post.
+	 * @param WP_Post    $post      Post.
+	 * @param array|null $term_refs Pre-computed extract_term_refs() result, to
+	 *                              avoid a second lookup when the caller
+	 *                              already has it.
 	 * @return string
 	 */
-	public static function content_hash( $post ) {
-		$normalized = trim( (string) $post->post_title ) . "\n" . trim( wp_strip_all_tags( (string) $post->post_content ) );
-		return sha1( strtolower( $normalized ) );
-	}
+	public static function content_hash( $post, $term_refs = null ) {
+		$post_id       = (int) $post->ID;
+		$elementor_raw = (string) get_post_meta( $post_id, '_elementor_data', true );
+		$thumbnail_id  = (string) get_post_meta( $post_id, '_thumbnail_id', true );
+		$page_template = (string) get_post_meta( $post_id, '_wp_page_template', true );
 
-	/**
-	 * sha1 of a post's sorted term refs.
-	 *
-	 * @param array $term_refs {taxonomy, term_id, name}[].
-	 * @return string
-	 */
-	public static function terms_hash( array $term_refs ) {
-		$keys = array();
-		foreach ( $term_refs as $ref ) {
-			$keys[] = $ref['taxonomy'] . ':' . $ref['term_id'];
+		if ( null === $term_refs ) {
+			$term_refs = self::extract_term_refs( $post );
 		}
-		sort( $keys );
-		return sha1( implode( ',', $keys ) );
+		$term_ids = array();
+		foreach ( $term_refs as $ref ) {
+			$term_ids[] = (int) $ref['term_id'];
+		}
+		sort( $term_ids );
+
+		$parts = array(
+			(string) $post->post_content,
+			$elementor_raw,
+			(string) $post->post_title,
+			(string) $post->post_status,
+			(string) $post->post_name,
+			(string) $post->post_parent,
+			$thumbnail_id,
+			$page_template,
+			(string) $post->menu_order,
+			implode( ',', $term_ids ),
+		);
+
+		// \x1f (unit separator) delimits fields so no concatenation of two
+		// different field splits can collide onto the same hash.
+		return sha1( implode( "\x1f", $parts ) );
 	}
 
 	/**
-	 * Read a node's stored content_hash + terms_hash (from props), or null
-	 * when the node does not exist yet.
+	 * Read a node's stored content_hash, or null when the node does not
+	 * exist yet.
 	 *
 	 * @param string $node_key Node key.
-	 * @return array{content_hash: string, terms_hash: string}|null
+	 * @return string|null
 	 */
-	private static function read_node_hashes( $node_key ) {
+	private static function read_node_hash( $node_key ) {
 		global $wpdb;
 		$table = self::nodes_table();
 
-		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- built via $wpdb->prepare().
-		$row = $wpdb->get_row( $wpdb->prepare( "SELECT content_hash, props FROM {$table} WHERE node_key = %s", $node_key ), ARRAY_A );
-
-		if ( ! $row ) {
-			return null;
-		}
-
-		$props      = json_decode( (string) ( $row['props'] ?? '' ), true );
-		$terms_hash = is_array( $props ) ? (string) ( $props['terms_hash'] ?? '' ) : '';
-
-		return array(
-			'content_hash' => (string) ( $row['content_hash'] ?? '' ),
-			'terms_hash'   => $terms_hash,
+		$hash = self::run_suppressed(
+			function () use ( $wpdb, $table, $node_key ) {
+				return $wpdb->get_var( $wpdb->prepare( "SELECT content_hash FROM {$table} WHERE node_key = %s", $node_key ) );
+			}
 		);
+
+		return null === $hash ? null : (string) $hash;
 	}
 
 	// -------------------------------------------------------------------------
@@ -996,49 +1554,334 @@ class Mcpwp_Graph_Builder {
 		return $count;
 	}
 
+	/**
+	 * Extract links from Elementor widget data in {href, anchor, source}
+	 * format (moved from class-mcpwp-rest-content-graph.php, used by
+	 * validate_internal_links — distinct from
+	 * extract_elementor_links_from_postmeta()/collect_elementor_link_hrefs()
+	 * above, which resolve against a url_to_id map instead of tagging source).
+	 *
+	 * @param int $post_id Post ID.
+	 * @return array[] Array of {href, anchor, source} records.
+	 */
+	public static function extract_raw_links_from_elementor( $post_id ) {
+		$data = Mcpwp_Elementor_Stored_Tree::of_post( $post_id )['elements'];
+		if ( empty( $data ) ) {
+			return array();
+		}
+
+		$links = array();
+		self::collect_elementor_raw_links( $data, $links );
+
+		$seen  = array();
+		$dedup = array();
+		foreach ( $links as $link ) {
+			$key = strtolower( trim( $link['href'] ) );
+			if ( '' !== $key && ! isset( $seen[ $key ] ) ) {
+				$seen[ $key ] = true;
+				$dedup[]      = $link;
+			}
+		}
+		return $dedup;
+	}
+
+	/**
+	 * Recursively collect {href, anchor, source} records from Elementor elements.
+	 *
+	 * @param array $elements Elementor elements array.
+	 * @param array $links    Accumulator passed by reference.
+	 */
+	public static function collect_elementor_raw_links( $elements, &$links ) {
+		if ( ! is_array( $elements ) ) {
+			return;
+		}
+
+		foreach ( $elements as $element ) {
+			if ( ! is_array( $element ) ) {
+				continue;
+			}
+
+			$settings = isset( $element['settings'] ) && is_array( $element['settings'] ) ? $element['settings'] : array();
+
+			foreach ( array( 'link', 'url' ) as $url_key ) {
+				if ( ! empty( $settings[ $url_key ]['url'] ) && is_string( $settings[ $url_key ]['url'] ) ) {
+					$anchor  = trim( wp_strip_all_tags( (string) ( $settings['text'] ?? $settings['button_text'] ?? $settings['title'] ?? '' ) ) );
+					$links[] = array(
+						'href'   => $settings[ $url_key ]['url'],
+						'anchor' => $anchor,
+						'source' => 'elementor',
+					);
+				}
+			}
+
+			foreach ( array( 'editor', 'html', 'content', 'inner_text' ) as $field ) {
+				if ( ! empty( $settings[ $field ] ) && is_string( $settings[ $field ] ) ) {
+					if ( preg_match_all( '/<a\s[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)<\/a>/is', $settings[ $field ], $matches, PREG_SET_ORDER ) ) {
+						foreach ( $matches as $m ) {
+							$links[] = array(
+								'href'   => trim( html_entity_decode( $m[1], ENT_QUOTES, 'UTF-8' ) ),
+								'anchor' => trim( wp_strip_all_tags( $m[2] ) ),
+								'source' => 'elementor',
+							);
+						}
+					}
+				}
+			}
+
+			if ( ! empty( $element['elements'] ) && is_array( $element['elements'] ) ) {
+				self::collect_elementor_raw_links( $element['elements'], $links );
+			}
+		}
+	}
+
+	/**
+	 * Whether a post is built with Elementor.
+	 *
+	 * @param int $post_id Post ID.
+	 * @return bool
+	 */
+	public static function is_elementor_built( $post_id ) {
+		if ( 'builder' === get_post_meta( $post_id, '_elementor_edit_mode', true ) ) {
+			return true;
+		}
+		return ! empty( get_post_meta( $post_id, '_elementor_data', true ) );
+	}
+
 	// -------------------------------------------------------------------------
 	// New extraction for the persisted graph (no REST-time equivalent existed).
 	// -------------------------------------------------------------------------
 
 	/**
+	 * Gather every raw {href, anchor, source} link on a post (content +
+	 * Elementor), unresolved.
+	 *
+	 * @param WP_Post $post Post.
+	 * @return array[]
+	 */
+	private static function collect_post_raw_links( $post ) {
+		$links = array();
+
+		if ( preg_match_all( '/<a\s[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)<\/a>/is', (string) $post->post_content, $matches, PREG_SET_ORDER ) ) {
+			foreach ( $matches as $m ) {
+				$links[] = array(
+					'href'   => trim( html_entity_decode( $m[1], ENT_QUOTES, 'UTF-8' ) ),
+					'anchor' => trim( wp_strip_all_tags( $m[2] ) ),
+					'source' => 'content',
+				);
+			}
+		}
+
+		return array_merge( $links, self::extract_raw_links_from_elementor( (int) $post->ID ) );
+	}
+
+	/**
+	 * BLOCK-4 perf: resolve every href on a post to a target post ID with ONE
+	 * batched query (plus, at most, URL_TO_POSTID_FALLBACK_CAP one-off
+	 * fallbacks for anything the batch could not place) — not one query per
+	 * link. Populates the per-run cache (self::$url_id_cache).
+	 *
+	 * Resolution order per href:
+	 *   1. Not same-host -> 0 (skip).
+	 *   2. Already cached (this run) -> cached value.
+	 *   3. `?p=<id>` / `?page_id=<id>` -> a direct candidate ID.
+	 *   4. Otherwise, the last path segment as a `post_name` candidate.
+	 *   Steps 3+4 are then resolved together in ONE query against
+	 *   {$wpdb->posts} (`ID IN (...) OR post_name IN (...)`).
+	 *   5. Anything still unresolved after that falls back to core's
+	 *      url_to_postid(), capped at URL_TO_POSTID_FALLBACK_CAP per call —
+	 *      a known, documented limit: a post whose real target requires full
+	 *      rewrite-rule resolution beyond a plain slug/ID match, past the
+	 *      cap, is simply not resolved (no edge), rather than costing one
+	 *      query per remaining link.
+	 *
+	 * @param array<string> $hrefs Raw hrefs.
+	 * @return array<string,int> href => target post ID, or 0 when unresolved
+	 *                            / external / not a covered post type.
+	 */
+	private static function resolve_hrefs_for_post( array $hrefs ) {
+		global $wpdb;
+
+		$results       = array();
+		$direct_ids    = array(); // normalized => int candidate ID
+		$slug_lookup   = array(); // slug => [normalized, ...]
+		$candidate_href = array(); // normalized => one representative raw href
+
+		foreach ( $hrefs as $href ) {
+			$href = trim( (string) $href );
+			if ( '' === $href ) {
+				$results[ $href ] = 0;
+				continue;
+			}
+			if ( ! self::is_same_host_href( $href ) ) {
+				$results[ $href ] = 0;
+				continue;
+			}
+
+			$absolute   = wp_http_validate_url( $href ) ? $href : home_url( $href );
+			$normalized = self::normalize_internal_graph_url( $absolute );
+
+			if ( isset( self::$url_id_cache[ $normalized ] ) ) {
+				$results[ $href ] = self::$url_id_cache[ $normalized ];
+				continue;
+			}
+
+			$candidate_href[ $normalized ] = $href;
+
+			$parts = wp_parse_url( $absolute );
+			$query = array();
+			if ( ! empty( $parts['query'] ) ) {
+				parse_str( (string) $parts['query'], $query );
+			}
+
+			if ( ! empty( $query['p'] ) && is_numeric( $query['p'] ) ) {
+				$direct_ids[ $normalized ] = (int) $query['p'];
+				continue;
+			}
+			if ( ! empty( $query['page_id'] ) && is_numeric( $query['page_id'] ) ) {
+				$direct_ids[ $normalized ] = (int) $query['page_id'];
+				continue;
+			}
+
+			$path = isset( $parts['path'] ) ? trim( (string) $parts['path'], '/' ) : '';
+			if ( '' === $path ) {
+				$results[ $href ] = 0;
+				unset( $candidate_href[ $normalized ] );
+				continue;
+			}
+			$segments = explode( '/', $path );
+			$slug     = sanitize_title( (string) end( $segments ) );
+			if ( '' === $slug ) {
+				$results[ $href ] = 0;
+				unset( $candidate_href[ $normalized ] );
+				continue;
+			}
+			$slug_lookup[ $slug ][] = $normalized;
+		}
+
+		// One batched query for every direct ID + every slug candidate.
+		$id_list = array_values( array_unique( array_map( 'intval', $direct_ids ) ) );
+		$slugs   = array_keys( $slug_lookup );
+
+		if ( ! empty( $id_list ) || ! empty( $slugs ) ) {
+			$where = array();
+			$args  = array();
+
+			if ( ! empty( $id_list ) ) {
+				$placeholders = implode( ',', array_fill( 0, count( $id_list ), '%d' ) );
+				$where[]      = "ID IN ($placeholders)";
+				$args          = array_merge( $args, $id_list );
+			}
+			if ( ! empty( $slugs ) ) {
+				$placeholders = implode( ',', array_fill( 0, count( $slugs ), '%s' ) );
+				$where[]      = "post_name IN ($placeholders)";
+				$args          = array_merge( $args, $slugs );
+			}
+
+			// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- $sql built with placeholders only, prepared below.
+			$sql = "SELECT ID, post_name, post_type FROM {$wpdb->posts} WHERE (" . implode( ' OR ', $where ) . ") AND post_status != 'auto-draft'";
+
+			$rows = self::run_suppressed(
+				function () use ( $wpdb, $sql, $args ) {
+					return $wpdb->get_results( $wpdb->prepare( $sql, $args ), ARRAY_A );
+				}
+			);
+
+			$by_id   = array();
+			$by_slug = array();
+			foreach ( (array) $rows as $row ) {
+				$by_id[ (int) $row['ID'] ]           = $row;
+				$by_slug[ $row['post_name'] ][]       = $row;
+			}
+
+			foreach ( $direct_ids as $normalized => $id ) {
+				$row      = $by_id[ $id ] ?? null;
+				$resolved = ( $row && self::is_covered_post_type( $row['post_type'] ) ) ? $id : 0;
+				self::$url_id_cache[ $normalized ] = $resolved;
+				$results[ $candidate_href[ $normalized ] ] = $resolved;
+			}
+
+			foreach ( $slug_lookup as $slug => $normalized_keys ) {
+				$matches  = $by_slug[ $slug ] ?? array();
+				$resolved = 0;
+				foreach ( $matches as $row ) {
+					if ( self::is_covered_post_type( $row['post_type'] ) ) {
+						$resolved = (int) $row['ID'];
+						break;
+					}
+				}
+				foreach ( $normalized_keys as $normalized ) {
+					self::$url_id_cache[ $normalized ] = $resolved;
+					$results[ $candidate_href[ $normalized ] ] = $resolved;
+				}
+			}
+		}
+
+		// Fallback: url_to_postid() for anything still unresolved, capped.
+		$fallback_used = 0;
+		foreach ( $results as $href => $id ) {
+			if ( 0 !== $id ) {
+				continue;
+			}
+			if ( $fallback_used >= self::URL_TO_POSTID_FALLBACK_CAP ) {
+				break;
+			}
+			$fallback_used++;
+
+			$absolute    = wp_http_validate_url( $href ) ? $href : home_url( $href );
+			$fallback_id = (int) url_to_postid( $absolute );
+			if ( $fallback_id ) {
+				$results[ $href ] = $fallback_id;
+				self::$url_id_cache[ self::normalize_internal_graph_url( $absolute ) ] = $fallback_id;
+			}
+		}
+
+		return $results;
+	}
+
+	/**
+	 * Build {target_id => {anchors: [...<=5], locations: {content|elementor => true}}}
+	 * for a post's outgoing same-host links, via the batched resolver.
+	 *
+	 * @param WP_Post $post Post.
+	 * @return array
+	 */
+	public static function build_link_edges_data( $post ) {
+		$raw   = self::collect_post_raw_links( $post );
+		$hrefs = array_column( $raw, 'href' );
+		$resolved = self::resolve_hrefs_for_post( $hrefs );
+
+		$by_target = array();
+		foreach ( $raw as $link ) {
+			$target_id = (int) ( $resolved[ $link['href'] ] ?? 0 );
+			if ( ! $target_id || $target_id === (int) $post->ID ) {
+				continue;
+			}
+			if ( ! isset( $by_target[ $target_id ] ) ) {
+				$by_target[ $target_id ] = array( 'anchors' => array(), 'locations' => array() );
+			}
+			if ( '' !== $link['anchor']
+				&& count( $by_target[ $target_id ]['anchors'] ) < self::MAX_EDGE_ANCHORS
+				&& ! in_array( $link['anchor'], $by_target[ $target_id ]['anchors'], true )
+			) {
+				$by_target[ $target_id ]['anchors'][] = $link['anchor'];
+			}
+			$loc = 'elementor' === $link['source'] ? 'elementor' : 'content';
+			$by_target[ $target_id ]['locations'][ $loc ] = true;
+		}
+
+		return $by_target;
+	}
+
+	/**
 	 * Resolve a post's outgoing same-host links (content + Elementor) to
-	 * target post IDs, using core's url_to_postid() rather than a prebuilt
-	 * url_to_id map — right for a single-node incremental rebuild, where
-	 * building that map up front costs more than it saves.
+	 * target post IDs — plain ID list, for callers/tests that don't need
+	 * anchor/location props.
 	 *
 	 * @param WP_Post $post Post.
 	 * @return array Unique target post IDs.
 	 */
 	public static function extract_post_link_targets( $post ) {
-		$hrefs = array();
-
-		if ( preg_match_all( '/<a\s[^>]*href=["\']([^"\']+)["\'][^>]*>/i', (string) $post->post_content, $matches ) ) {
-			foreach ( $matches[1] as $href ) {
-				$hrefs[] = $href;
-			}
-		}
-
-		$data = Mcpwp_Elementor_Stored_Tree::of_post( (int) $post->ID )['elements'];
-		if ( ! empty( $data ) ) {
-			self::collect_elementor_link_hrefs( $data, $hrefs );
-		}
-
-		$targets = array();
-		foreach ( array_unique( $hrefs ) as $href ) {
-			$href = trim( html_entity_decode( $href, ENT_QUOTES, 'UTF-8' ) );
-			if ( '' === $href || ! self::is_same_host_href( $href ) ) {
-				continue;
-			}
-
-			$absolute  = wp_http_validate_url( $href ) ? $href : home_url( $href );
-			$target_id = (int) url_to_postid( $absolute );
-
-			if ( $target_id && $target_id !== (int) $post->ID ) {
-				$targets[ $target_id ] = true;
-			}
-		}
-
-		return array_keys( $targets );
+		return array_keys( self::build_link_edges_data( $post ) );
 	}
 
 	/**
@@ -1145,97 +1988,45 @@ class Mcpwp_Graph_Builder {
 		}
 	}
 
+	// -------------------------------------------------------------------------
+	// DB error suppression + once-per-request logging (W6)
+	// -------------------------------------------------------------------------
+
 	/**
-	 * Extract links from Elementor widget data in {href, anchor, source}
-	 * format (moved from class-mcpwp-rest-content-graph.php, used by
-	 * validate_internal_links — distinct from
-	 * extract_elementor_links_from_postmeta()/collect_elementor_link_hrefs()
-	 * above, which resolve against a url_to_id map instead of tagging source).
+	 * Run a $wpdb call with errors suppressed, restoring the previous
+	 * suppression state, and log at most once per request if it left an
+	 * error behind — so a dropped/broken graph table degrades a REST save to
+	 * "no graph update", never to a polluted or failed response.
 	 *
-	 * @param int $post_id Post ID.
-	 * @return array[] Array of {href, anchor, source} records.
+	 * @param callable $fn Closure making exactly one $wpdb call.
+	 * @return mixed The closure's return value.
 	 */
-	public static function extract_raw_links_from_elementor( $post_id ) {
-		$data = Mcpwp_Elementor_Stored_Tree::of_post( $post_id )['elements'];
-		if ( empty( $data ) ) {
-			return array();
+	private static function run_suppressed( callable $fn ) {
+		global $wpdb;
+		$prev = $wpdb->suppress_errors( true );
+		try {
+			$result = $fn();
+		} finally {
+			$wpdb->suppress_errors( $prev );
 		}
-
-		$links = array();
-		self::collect_elementor_raw_links( $data, $links );
-
-		$seen  = array();
-		$dedup = array();
-		foreach ( $links as $link ) {
-			$key = strtolower( trim( $link['href'] ) );
-			if ( '' !== $key && ! isset( $seen[ $key ] ) ) {
-				$seen[ $key ] = true;
-				$dedup[]      = $link;
-			}
+		if ( ! empty( $wpdb->last_error ) ) {
+			self::log_db_error_once( (string) $wpdb->last_error );
 		}
-		return $dedup;
+		return $result;
 	}
 
 	/**
-	 * Recursively collect {href, anchor, source} records from Elementor elements.
-	 *
-	 * @param array $elements Elementor elements array.
-	 * @param array $links    Accumulator passed by reference.
+	 * @param string $message Error message.
 	 */
-	public static function collect_elementor_raw_links( $elements, &$links ) {
-		if ( ! is_array( $elements ) ) {
+	private static function log_db_error_once( $message ) {
+		if ( self::$logged_db_error_this_request ) {
 			return;
 		}
-
-		foreach ( $elements as $element ) {
-			if ( ! is_array( $element ) ) {
-				continue;
-			}
-
-			$settings = isset( $element['settings'] ) && is_array( $element['settings'] ) ? $element['settings'] : array();
-
-			foreach ( array( 'link', 'url' ) as $url_key ) {
-				if ( ! empty( $settings[ $url_key ]['url'] ) && is_string( $settings[ $url_key ]['url'] ) ) {
-					$anchor  = trim( wp_strip_all_tags( (string) ( $settings['text'] ?? $settings['button_text'] ?? $settings['title'] ?? '' ) ) );
-					$links[] = array(
-						'href'   => $settings[ $url_key ]['url'],
-						'anchor' => $anchor,
-						'source' => 'elementor',
-					);
-				}
-			}
-
-			foreach ( array( 'editor', 'html', 'content', 'inner_text' ) as $field ) {
-				if ( ! empty( $settings[ $field ] ) && is_string( $settings[ $field ] ) ) {
-					if ( preg_match_all( '/<a\s[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)<\/a>/is', $settings[ $field ], $matches, PREG_SET_ORDER ) ) {
-						foreach ( $matches as $m ) {
-							$links[] = array(
-								'href'   => trim( html_entity_decode( $m[1], ENT_QUOTES, 'UTF-8' ) ),
-								'anchor' => trim( wp_strip_all_tags( $m[2] ) ),
-								'source' => 'elementor',
-							);
-						}
-					}
-				}
-			}
-
-			if ( ! empty( $element['elements'] ) && is_array( $element['elements'] ) ) {
-				self::collect_elementor_raw_links( $element['elements'], $links );
-			}
+		self::$logged_db_error_this_request = true;
+		if ( defined( 'WP_DEBUG_LOG' ) && WP_DEBUG_LOG ) {
+			// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+			error_log( 'MCPWP graph DB error: ' . $message );
 		}
-	}
-
-	/**
-	 * Whether a post is built with Elementor (moved from class-mcpwp-rest-api.php).
-	 *
-	 * @param int $post_id Post ID.
-	 * @return bool
-	 */
-	public static function is_elementor_built( $post_id ) {
-		if ( 'builder' === get_post_meta( $post_id, '_elementor_edit_mode', true ) ) {
-			return true;
-		}
-		return ! empty( get_post_meta( $post_id, '_elementor_data', true ) );
 	}
 
 	// -------------------------------------------------------------------------
@@ -1259,7 +2050,9 @@ class Mcpwp_Graph_Builder {
 	}
 
 	/**
-	 * Upsert one node row.
+	 * Upsert one node row. Timestamps are set here in PHP, never by a DB
+	 * column default (W6 — dbDelta can then ALTER the column later without
+	 * touching a DEFAULT clause it would otherwise have to reconcile).
 	 *
 	 * @param array $row {node_key, kind, ref_id, label, url, status, content_hash, word_count, props}.
 	 */
@@ -1268,58 +2061,73 @@ class Mcpwp_Graph_Builder {
 		$table = self::nodes_table();
 		$now   = current_time( 'mysql' );
 
-		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- built via $wpdb->prepare().
-		$wpdb->query(
-			$wpdb->prepare(
-				"INSERT INTO {$table} (node_key, kind, ref_id, label, url, status, content_hash, word_count, props, updated_at)
-				VALUES (%s, %s, %d, %s, %s, %s, %s, %d, %s, %s)
-				ON DUPLICATE KEY UPDATE kind = VALUES(kind), ref_id = VALUES(ref_id), label = VALUES(label),
-					url = VALUES(url), status = VALUES(status), content_hash = VALUES(content_hash),
-					word_count = VALUES(word_count), props = VALUES(props), updated_at = VALUES(updated_at)",
-				(string) $row['node_key'],
-				(string) $row['kind'],
-				isset( $row['ref_id'] ) ? (int) $row['ref_id'] : 0,
-				(string) ( $row['label'] ?? '' ),
-				(string) ( $row['url'] ?? '' ),
-				(string) ( $row['status'] ?? '' ),
-				(string) ( $row['content_hash'] ?? '' ),
-				(int) ( $row['word_count'] ?? 0 ),
-				(string) ( $row['props'] ?? '' ),
-				$now
-			)
+		self::run_suppressed(
+			function () use ( $wpdb, $table, $row, $now ) {
+				// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- built via $wpdb->prepare().
+				return $wpdb->query(
+					$wpdb->prepare(
+						"INSERT INTO {$table} (node_key, kind, ref_id, label, url, status, content_hash, word_count, props, updated_at)
+						VALUES (%s, %s, %d, %s, %s, %s, %s, %d, %s, %s)
+						ON DUPLICATE KEY UPDATE kind = VALUES(kind), ref_id = VALUES(ref_id), label = VALUES(label),
+							url = VALUES(url), status = VALUES(status), content_hash = VALUES(content_hash),
+							word_count = VALUES(word_count), props = VALUES(props), updated_at = VALUES(updated_at)",
+						(string) $row['node_key'],
+						(string) $row['kind'],
+						isset( $row['ref_id'] ) ? (int) $row['ref_id'] : 0,
+						(string) ( $row['label'] ?? '' ),
+						(string) ( $row['url'] ?? '' ),
+						(string) ( $row['status'] ?? '' ),
+						(string) ( $row['content_hash'] ?? '' ),
+						(int) ( $row['word_count'] ?? 0 ),
+						(string) ( $row['props'] ?? '' ),
+						$now
+					)
+				);
+			}
 		);
 	}
 
 	/**
-	 * Insert/refresh one builder-sourced edge.
+	 * Batch-insert/refresh builder-sourced edges in as few queries as
+	 * possible (BLOCK-4 perf) — one multi-row INSERT ... ON DUPLICATE KEY
+	 * UPDATE per <=500-row chunk, instead of one query per edge.
 	 *
-	 * @param string $from   From node key.
-	 * @param string $to     To node key.
-	 * @param string $type   Edge type.
-	 * @param float  $weight Weight.
-	 * @param string $source Source tag (builder|gsc|bing|agent|manual).
-	 * @param array  $props  Extra JSON-able props.
+	 * @param array  $rows Each: {from_key, to_key, type, weight, source, props (array)}.
+	 * @param string $now  Timestamp to stamp every row with.
 	 */
-	private static function insert_edge( $from, $to, $type, $weight, $source, array $props = array() ) {
+	private static function insert_edges_batch( array $rows, $now ) {
+		if ( empty( $rows ) ) {
+			return;
+		}
+
 		global $wpdb;
 		$table = self::edges_table();
-		$now   = current_time( 'mysql' );
 
-		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- built via $wpdb->prepare().
-		$wpdb->query(
-			$wpdb->prepare(
-				"INSERT INTO {$table} (from_key, to_key, type, weight, source, props, updated_at)
-				VALUES (%s, %s, %s, %f, %s, %s, %s)
-				ON DUPLICATE KEY UPDATE weight = VALUES(weight), source = VALUES(source), props = VALUES(props), updated_at = VALUES(updated_at)",
-				(string) $from,
-				(string) $to,
-				(string) $type,
-				(float) $weight,
-				(string) $source,
-				wp_json_encode( $props ),
-				$now
-			)
-		);
+		foreach ( array_chunk( $rows, 500 ) as $chunk ) {
+			$placeholders = array();
+			$args         = array();
+			foreach ( $chunk as $row ) {
+				$placeholders[] = '(%s, %s, %s, %f, %s, %s, %s)';
+				$args[]         = (string) $row['from_key'];
+				$args[]         = (string) $row['to_key'];
+				$args[]         = (string) $row['type'];
+				$args[]         = (float) ( $row['weight'] ?? 1.0 );
+				$args[]         = (string) ( $row['source'] ?? 'builder' );
+				$args[]         = wp_json_encode( $row['props'] ?? array() );
+				$args[]         = $now;
+			}
+
+			// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- $sql built with placeholders only, prepared below.
+			$sql = "INSERT INTO {$table} (from_key, to_key, type, weight, source, props, updated_at) VALUES "
+				. implode( ',', $placeholders )
+				. ' ON DUPLICATE KEY UPDATE weight = VALUES(weight), source = VALUES(source), props = VALUES(props), updated_at = VALUES(updated_at)';
+
+			self::run_suppressed(
+				function () use ( $wpdb, $sql, $args ) {
+					return $wpdb->query( $wpdb->prepare( $sql, $args ) );
+				}
+			);
+		}
 	}
 
 	/**
@@ -1333,19 +2141,25 @@ class Mcpwp_Graph_Builder {
 		global $wpdb;
 		$table = self::edges_table();
 
-		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- built via $wpdb->prepare().
-		$wpdb->query(
-			$wpdb->prepare(
-				"DELETE FROM {$table} WHERE from_key = %s AND source = 'builder' AND type IN ('links_to','in_term','uses_media')",
-				$node_key
-			)
+		self::run_suppressed(
+			function () use ( $wpdb, $table, $node_key ) {
+				return $wpdb->query(
+					$wpdb->prepare(
+						"DELETE FROM {$table} WHERE from_key = %s AND source = 'builder' AND type IN ('links_to','in_term','uses_media')",
+						$node_key
+					)
+				);
+			}
 		);
-		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- built via $wpdb->prepare().
-		$wpdb->query(
-			$wpdb->prepare(
-				"DELETE FROM {$table} WHERE to_key = %s AND source = 'builder' AND type = 'parent_of'",
-				$node_key
-			)
+		self::run_suppressed(
+			function () use ( $wpdb, $table, $node_key ) {
+				return $wpdb->query(
+					$wpdb->prepare(
+						"DELETE FROM {$table} WHERE to_key = %s AND source = 'builder' AND type = 'parent_of'",
+						$node_key
+					)
+				);
+			}
 		);
 	}
 
@@ -1359,101 +2173,113 @@ class Mcpwp_Graph_Builder {
 		$nodes_table = self::nodes_table();
 		$edges_table = self::edges_table();
 
-		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- built via $wpdb->prepare().
-		$wpdb->query( $wpdb->prepare( "DELETE FROM {$nodes_table} WHERE node_key = %s", $node_key ) );
-		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- built via $wpdb->prepare().
-		$wpdb->query( $wpdb->prepare( "DELETE FROM {$edges_table} WHERE from_key = %s OR to_key = %s", $node_key, $node_key ) );
+		self::run_suppressed(
+			function () use ( $wpdb, $nodes_table, $node_key ) {
+				return $wpdb->query( $wpdb->prepare( "DELETE FROM {$nodes_table} WHERE node_key = %s", $node_key ) );
+			}
+		);
+		self::run_suppressed(
+			function () use ( $wpdb, $edges_table, $node_key ) {
+				return $wpdb->query( $wpdb->prepare( "DELETE FROM {$edges_table} WHERE from_key = %s OR to_key = %s", $node_key, $node_key ) );
+			}
+		);
 	}
 
 	// -------------------------------------------------------------------------
-	// Backfill
+	// Backfill (BLOCK-3, BLOCK-5)
 	// -------------------------------------------------------------------------
 
 	/**
-	 * Called from the mcpwp_db_version upgrade path. Kicks off (or resumes)
-	 * the backfill unless it has already completed.
+	 * Called from the mcpwp_db_version upgrade path / on activation. Kicks
+	 * off (or resumes) the backfill unless it has already completed, in
+	 * which case it enqueues a reconcile instead (W8: stale-after-reactivation).
 	 */
 	public static function on_upgrade_schedule_backfill() {
+		if ( ! self::ready() ) {
+			// Tables aren't confirmed yet; the readiness retry cron (or the
+			// activator that called this) will get us here again once they are.
+			return;
+		}
+
 		$status = get_option( self::BACKFILL_STATUS_OPTION, '' );
 		if ( 'done' === $status ) {
+			self::enqueue_reconcile();
 			return;
 		}
 		if ( '' === $status ) {
 			update_option( self::BACKFILL_STATUS_OPTION, 'pending', false );
 		}
-		self::schedule_next_backfill_batch( 0 );
+		self::schedule_next_backfill_batch();
 	}
 
 	/**
-	 * Schedule one backfill batch, preferring Action Scheduler when present
-	 * (WooCommerce ships it) over WP-Cron, which is traffic-dependent.
-	 *
-	 * @param int $delay_seconds Delay before the batch may run (WP-Cron path only).
+	 * Schedule one backfill batch. Guards duplicates by checking for a
+	 * PENDING Action Scheduler action specifically (BLOCK-5) —
+	 * `as_has_scheduled_action()` alone kept matching a long-completed
+	 * action's still-present record, so the very first batch's own
+	 * "is one already scheduled" check would block every batch after it,
+	 * forever, once Action Scheduler's store had ANY record for this hook.
 	 */
-	private static function schedule_next_backfill_batch( $delay_seconds = 5 ) {
+	private static function schedule_next_backfill_batch() {
+		if ( self::has_pending_scheduled_action( self::BACKFILL_CRON_HOOK ) ) {
+			return;
+		}
 		if ( function_exists( 'as_enqueue_async_action' ) ) {
-			if ( function_exists( 'as_has_scheduled_action' ) && as_has_scheduled_action( self::BACKFILL_CRON_HOOK ) ) {
-				return;
-			}
 			as_enqueue_async_action( self::BACKFILL_CRON_HOOK, array(), 'mcpwp' );
 			return;
 		}
-
 		if ( function_exists( 'wp_next_scheduled' ) && wp_next_scheduled( self::BACKFILL_CRON_HOOK ) ) {
 			return;
 		}
-
 		if ( function_exists( 'wp_schedule_single_event' ) ) {
-			wp_schedule_single_event( time() + max( 0, (int) $delay_seconds ), self::BACKFILL_CRON_HOOK );
+			wp_schedule_single_event( time() + 5, self::BACKFILL_CRON_HOOK );
 		}
 	}
 
 	/**
-	 * Run one backfill batch: drain a slice of the incremental overflow
-	 * first, then process up to BACKFILL_BATCH_SIZE posts ordered by ID,
-	 * bounded by BACKFILL_TIME_BUDGET. Self-reschedules until done.
+	 * Run one backfill batch: process up to BACKFILL_BATCH_SIZE posts
+	 * ordered by ID, bounded by BACKFILL_TIME_BUDGET. Every post goes
+	 * through rebuild_node_safely() (BLOCK-3: a throwing filter must not
+	 * stall the whole batch) and the cursor is saved after EVERY post, not
+	 * once at the end, so a killed process loses at most one post's worth of
+	 * progress. The next batch is scheduled unconditionally whenever this
+	 * one did not just determine "no more rows" (BLOCK-3/5).
 	 */
 	public static function run_backfill_batch() {
-		self::drain_dirty_batch();
-
+		if ( ! self::ready() ) {
+			return;
+		}
 		if ( 'done' === get_option( self::BACKFILL_STATUS_OPTION, '' ) ) {
 			return;
 		}
 
 		update_option( self::BACKFILL_STATUS_OPTION, 'running', false );
 
-		$start      = microtime( true );
-		$cursor     = (int) get_option( self::BACKFILL_CURSOR_OPTION, 0 );
-		$post_types = function_exists( 'get_post_types' ) ? array_values( get_post_types( array( 'public' => true ) ) ) : array();
-		if ( empty( $post_types ) ) {
-			$post_types = array( 'post', 'page' );
-		}
+		$start  = microtime( true );
+		self::$url_id_cache = array();
+		$cursor = (int) get_option( self::BACKFILL_CURSOR_OPTION, 0 );
 
-		$ids = self::fetch_backfill_batch_ids( $post_types, $cursor, self::BACKFILL_BATCH_SIZE );
+		$ids = self::fetch_backfill_batch_ids( self::covered_post_types(), $cursor, self::BACKFILL_BATCH_SIZE );
 
 		$processed = 0;
-		$last_id   = $cursor;
-
 		foreach ( $ids as $id ) {
 			if ( ( microtime( true ) - $start ) > self::BACKFILL_TIME_BUDGET ) {
 				break;
 			}
-			self::rebuild_post_node( (int) $id );
-			$last_id = (int) $id;
+			self::rebuild_node_safely( self::node_key_for_post( (int) $id ) );
+			update_option( self::BACKFILL_CURSOR_OPTION, (int) $id, false );
 			$processed++;
 		}
 
-		update_option( self::BACKFILL_CURSOR_OPTION, $last_id, false );
+		$done = $processed === count( $ids ) && count( $ids ) < self::BACKFILL_BATCH_SIZE;
 
-		$time_capped     = $processed < count( $ids );
-		$more_rows_likely = count( $ids ) === self::BACKFILL_BATCH_SIZE;
-
-		if ( $time_capped || $more_rows_likely ) {
-			self::schedule_next_backfill_batch( 5 );
+		if ( $done ) {
+			update_option( self::BACKFILL_STATUS_OPTION, 'done', false );
+			update_option( self::BUILT_AT_OPTION, current_time( 'mysql' ), false );
 			return;
 		}
 
-		update_option( self::BACKFILL_STATUS_OPTION, 'done', false );
+		self::schedule_next_backfill_batch();
 	}
 
 	/**
@@ -1461,7 +2287,7 @@ class Mcpwp_Graph_Builder {
 	 * across $post_types. Raw $wpdb (not WP_Query) — cursor pagination at
 	 * 20k-post scale must avoid OFFSET.
 	 *
-	 * @param array $post_types Post types (trusted — from get_post_types(), never user input).
+	 * @param array $post_types Post types (trusted — from covered_post_types(), never user input).
 	 * @param int   $cursor     Highest ID already processed.
 	 * @param int   $limit      Max rows.
 	 * @return array<int> Post IDs.
@@ -1469,17 +2295,26 @@ class Mcpwp_Graph_Builder {
 	private static function fetch_backfill_batch_ids( array $post_types, $cursor, $limit ) {
 		global $wpdb;
 
+		if ( empty( $post_types ) ) {
+			return array();
+		}
+
 		$post_types = array_map( 'sanitize_key', $post_types );
 		$in_clause  = "'" . implode( "','", array_map( 'esc_sql', $post_types ) ) . "'";
 
-		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- $in_clause is built only from get_post_types() values (never user input); cursor/limit are prepared.
+		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- $in_clause is built only from covered_post_types() values (never user input); cursor/limit are prepared.
 		$sql = $wpdb->prepare(
 			"SELECT ID FROM {$wpdb->posts} WHERE post_type IN ({$in_clause}) AND post_status != 'auto-draft' AND ID > %d ORDER BY ID ASC LIMIT %d",
 			(int) $cursor,
 			(int) $limit
 		);
 
-		$ids = $wpdb->get_col( $sql );
+		$ids = self::run_suppressed(
+			function () use ( $wpdb, $sql ) {
+				return $wpdb->get_col( $sql );
+			}
+		);
+
 		return array_map( 'intval', is_array( $ids ) ? $ids : array() );
 	}
 
@@ -1493,5 +2328,102 @@ class Mcpwp_Graph_Builder {
 			'status' => (string) get_option( self::BACKFILL_STATUS_OPTION, '' ),
 			'cursor' => (int) get_option( self::BACKFILL_CURSOR_OPTION, 0 ),
 		);
+	}
+
+	// -------------------------------------------------------------------------
+	// Reconcile (W8): stale-after-deactivation.
+	// -------------------------------------------------------------------------
+
+	/**
+	 * Queue every covered post modified after `built_at`, and start a cheap
+	 * hash-comparison sweep (run in batches by the worker) over everything
+	 * else. Called when activation/upgrade finds the backfill already done —
+	 * a plugin can be deactivated for weeks while content keeps changing (a
+	 * theme's own save routine, WP-CLI, another plugin), and none of that
+	 * ever reached the queue while this plugin's hooks were not registered.
+	 */
+	private static function enqueue_reconcile() {
+		global $wpdb;
+
+		$built_at   = (string) get_option( self::BUILT_AT_OPTION, '' );
+		$since      = '' !== $built_at ? $built_at : '1970-01-01 00:00:00';
+		$post_types = self::covered_post_types();
+
+		if ( ! empty( $post_types ) ) {
+			$in_clause = "'" . implode( "','", array_map( 'esc_sql', array_map( 'sanitize_key', $post_types ) ) ) . "'";
+
+			// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- $in_clause from covered_post_types(); $since is prepared.
+			$ids = self::run_suppressed(
+				function () use ( $wpdb, $in_clause, $since ) {
+					return $wpdb->get_col(
+						$wpdb->prepare(
+							"SELECT ID FROM {$wpdb->posts} WHERE post_type IN ({$in_clause}) AND post_status != 'auto-draft' AND post_modified_gmt > %s",
+							$since
+						)
+					);
+				}
+			);
+
+			foreach ( (array) $ids as $id ) {
+				self::mark( self::node_key_for_post( (int) $id ), 'reconcile_modified' );
+			}
+		}
+
+		update_option( self::RECONCILE_STATUS_OPTION, 'pending', false );
+		update_option( self::RECONCILE_CURSOR_OPTION, 0, false );
+		self::schedule_worker();
+	}
+
+	/**
+	 * One reconcile batch: hash-compare RECONCILE_BATCH_SIZE posts (cheap —
+	 * only a rewrite when the hash actually differs), called from the worker
+	 * once the queue is empty, within whatever time budget remains.
+	 *
+	 * @param float $start Worker run's own microtime(true) start, so the
+	 *                      combined queue-drain + reconcile time stays within
+	 *                      one WORKER_TIME_BUDGET window.
+	 */
+	private static function maybe_run_reconcile_batch( $start ) {
+		$status = get_option( self::RECONCILE_STATUS_OPTION, '' );
+		if ( 'pending' !== $status && 'running' !== $status ) {
+			return;
+		}
+		if ( ( microtime( true ) - $start ) >= self::WORKER_TIME_BUDGET ) {
+			self::schedule_worker();
+			return;
+		}
+
+		update_option( self::RECONCILE_STATUS_OPTION, 'running', false );
+
+		$cursor     = (int) get_option( self::RECONCILE_CURSOR_OPTION, 0 );
+		$post_types = self::covered_post_types();
+		$ids        = self::fetch_backfill_batch_ids( $post_types, $cursor, self::RECONCILE_BATCH_SIZE );
+
+		foreach ( $ids as $id ) {
+			if ( ( microtime( true ) - $start ) >= self::WORKER_TIME_BUDGET ) {
+				update_option( self::RECONCILE_CURSOR_OPTION, (int) $cursor, false );
+				self::schedule_worker();
+				return;
+			}
+
+			$post = get_post( (int) $id );
+			if ( $post && self::is_covered_post_type( $post->post_type ) ) {
+				$new_hash      = self::content_hash( $post );
+				$existing_hash = self::read_node_hash( self::node_key_for_post( (int) $id ) );
+				if ( null === $existing_hash || $existing_hash !== $new_hash ) {
+					self::mark( self::node_key_for_post( (int) $id ), 'reconcile_hash_diff' );
+				}
+			}
+
+			$cursor = (int) $id;
+			update_option( self::RECONCILE_CURSOR_OPTION, $cursor, false );
+		}
+
+		if ( count( $ids ) < self::RECONCILE_BATCH_SIZE ) {
+			update_option( self::RECONCILE_STATUS_OPTION, 'done', false );
+			return;
+		}
+
+		self::schedule_worker();
 	}
 }

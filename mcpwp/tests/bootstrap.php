@@ -1341,6 +1341,69 @@ if (! function_exists('mcpwp_test_split_sql_tuple')) {
     }
 }
 
+// Site graph (#943 S1 review, BLOCK-4): split a multi-row `VALUES
+// (t1),(t2),(t3)` blob into each tuple's inner content (still comma-joined —
+// pass each result through mcpwp_test_split_sql_tuple() for the field
+// values), respecting quoted strings so a comma or paren inside a JSON props
+// value never miscounts a tuple boundary.
+if (! function_exists('mcpwp_test_split_value_tuples')) {
+    function mcpwp_test_split_value_tuples($blob)
+    {
+        $tuples   = array();
+        $depth    = 0;
+        $current  = '';
+        $in_quote = false;
+        $len      = strlen($blob);
+
+        for ($i = 0; $i < $len; $i++) {
+            $ch = $blob[ $i ];
+
+            if ($in_quote) {
+                $current .= $ch;
+                if ('\\' === $ch && $i + 1 < $len) {
+                    $current .= $blob[ ++$i ];
+                    continue;
+                }
+                if ("'" === $ch) {
+                    $in_quote = false;
+                }
+                continue;
+            }
+
+            if ("'" === $ch) {
+                $in_quote = true;
+                $current .= $ch;
+                continue;
+            }
+            if ('(' === $ch) {
+                $depth++;
+                if (1 === $depth) {
+                    $current = '';
+                    continue;
+                }
+                $current .= $ch;
+                continue;
+            }
+            if (')' === $ch) {
+                $depth--;
+                if (0 === $depth) {
+                    $tuples[] = $current;
+                    $current  = '';
+                    continue;
+                }
+                $current .= $ch;
+                continue;
+            }
+            if (0 === $depth) {
+                continue; // comma (or whitespace) between tuples
+            }
+            $current .= $ch;
+        }
+
+        return $tuples;
+    }
+}
+
 if (! isset($GLOBALS['wpdb'])) {
     class Mcpwp_Test_WPDB
     {
@@ -1391,6 +1454,44 @@ if (! isset($GLOBALS['wpdb'])) {
         }
         public function get_results($query = '', $output = ARRAY_A)
         {
+            // Site graph batched link resolver (#943 S1 review, BLOCK-4
+            // perf): resolve_hrefs_for_post()'s ONE query for every ?p=/
+            // ?page_id= id and every same-host path slug on a post, instead
+            // of one query per link.
+            if (preg_match(
+                "/^SELECT ID, post_name, post_type FROM \\S*posts WHERE \\((.*)\\) AND post_status != 'auto-draft'$/s",
+                trim((string) $query),
+                $m
+            )) {
+                $cond = $m[1];
+                $ids  = array();
+                $slugs = array();
+                if (preg_match('/ID IN \(([^)]*)\)/', $cond, $mi)) {
+                    $ids = array_map('intval', array_filter(array_map('trim', explode(',', $mi[1]))));
+                }
+                if (preg_match("/post_name IN \\(((?:'(?:[^'\\\\]|\\\\.)*'(?:,)?)*)\\)/", $cond, $ms)) {
+                    $slugs = array_map(function ($s) {
+                        return str_replace("\\'", "'", trim($s, "'"));
+                    }, array_filter(mcpwp_test_split_sql_tuple($ms[1])));
+                }
+
+                $rows = array();
+                foreach ($GLOBALS['_mcpwp_test_posts'] as $post) {
+                    if ('auto-draft' === $post->post_status) {
+                        continue;
+                    }
+                    if (in_array((int) $post->ID, $ids, true) || in_array($post->post_name, $slugs, true)) {
+                        $row = array(
+                            'ID'        => (string) $post->ID,
+                            'post_name' => $post->post_name,
+                            'post_type' => $post->post_type,
+                        );
+                        $rows[] = ARRAY_A === $output ? $row : (object) $row;
+                    }
+                }
+                return $rows;
+            }
+
             return array();
         }
         public function get_row($query = '', $output = OBJECT, $y = 0)
@@ -1453,6 +1554,19 @@ if (! isset($GLOBALS['wpdb'])) {
         }
         public function get_var($query = '', $x = 0, $y = 0)
         {
+            // Site graph (#943 S1 review): read_node_hash() — the single
+            // change-hash comparison BLOCK-1 collapsed the old two-field
+            // check into.
+            if (preg_match("/^SELECT content_hash FROM \\S*mcpwp_graph_nodes WHERE node_key = '((?:[^'\\\\]|\\\\.)*)'$/", trim((string) $query), $m)) {
+                $key = str_replace("\\'", "'", $m[1]);
+                return isset($GLOBALS['mcpwp_test_graph_nodes'][ $key ]) ? $GLOBALS['mcpwp_test_graph_nodes'][ $key ]['content_hash'] : null;
+            }
+
+            // queue_has_rows() — plain, unprepared (no placeholders to substitute).
+            if (preg_match('/^SELECT COUNT\(\*\) FROM \S*mcpwp_graph_queue LIMIT 1$/', trim((string) $query))) {
+                return (string) count($GLOBALS['mcpwp_test_graph_queue'] ?? array());
+            }
+
             if (preg_match("/SELECT option_value FROM \\S*options WHERE option_name = '([^']+)'/", (string) $query, $m)) {
                 return $GLOBALS['mcpwp_test_wpdb_options'][ $m[1] ] ?? null;
             }
@@ -1483,6 +1597,60 @@ if (! isset($GLOBALS['wpdb'])) {
         }
         public function get_col($query = '', $x = 0)
         {
+            // Site graph queue drain (#943 S1 review): pop_queue_batch()'s
+            // SELECT, oldest-queued first.
+            if (preg_match('/^SELECT node_key FROM \S*mcpwp_graph_queue ORDER BY queued_at ASC LIMIT (\d+)$/', trim((string) $query), $m)) {
+                $rows = $GLOBALS['mcpwp_test_graph_queue'] ?? array();
+                uasort($rows, function ($a, $b) {
+                    return strcmp((string) $a['queued_at'], (string) $b['queued_at']);
+                });
+                return array_slice(array_keys($rows), 0, (int) $m[1]);
+            }
+
+            // requeue_dependents_before_delete() (BLOCK-2): every source of
+            // an inbound links_to edge, and every parent_of child.
+            if (preg_match("/^SELECT DISTINCT from_key FROM \\S*mcpwp_graph_edges WHERE to_key = '((?:[^'\\\\]|\\\\.)*)' AND type = 'links_to'$/", trim((string) $query), $m)) {
+                $key = str_replace("\\'", "'", $m[1]);
+                $out = array();
+                foreach ($GLOBALS['mcpwp_test_graph_edges'] ?? array() as $e) {
+                    if ($e['to_key'] === $key && 'links_to' === $e['type']) {
+                        $out[ $e['from_key'] ] = true;
+                    }
+                }
+                return array_keys($out);
+            }
+            if (preg_match("/^SELECT DISTINCT to_key FROM \\S*mcpwp_graph_edges WHERE from_key = '((?:[^'\\\\]|\\\\.)*)' AND type = 'parent_of'$/", trim((string) $query), $m)) {
+                $key = str_replace("\\'", "'", $m[1]);
+                $out = array();
+                foreach ($GLOBALS['mcpwp_test_graph_edges'] ?? array() as $e) {
+                    if ($e['from_key'] === $key && 'parent_of' === $e['type']) {
+                        $out[ $e['to_key'] ] = true;
+                    }
+                }
+                return array_keys($out);
+            }
+
+            // Reconcile (W8): every covered post modified after built_at.
+            if (preg_match(
+                "/^SELECT ID FROM \\S*posts WHERE post_type IN \\(((?:'[^']*'(?:,'[^']*')*)?)\\) AND post_status != 'auto-draft' AND post_modified_gmt > '([^']*)'$/",
+                trim((string) $query),
+                $m
+            )) {
+                $types = array_map(function ($t) {
+                    return trim($t, "'");
+                }, array_filter(explode(',', $m[1])));
+                $since = $m[2];
+
+                $ids = array();
+                foreach ($GLOBALS['_mcpwp_test_posts'] as $post) {
+                    if (in_array($post->post_type, $types, true) && 'auto-draft' !== $post->post_status && (string) ($post->post_modified_gmt ?? '') > $since) {
+                        $ids[] = (int) $post->ID;
+                    }
+                }
+                sort($ids);
+                return $ids;
+            }
+
             // Site graph backfill batch (#943 S1): Mcpwp_Graph_Builder::
             // fetch_backfill_batch_ids() — same keyset-cursor idea as the
             // single-post-type scan below, extended to an IN() list of types.
@@ -1577,31 +1745,86 @@ if (! isset($GLOBALS['wpdb'])) {
                 return 1;
             }
 
-            if (preg_match('/^INSERT INTO (\S*mcpwp_graph_edges) \(from_key, to_key, type, weight, source, props, updated_at\)\s*VALUES\s*\((.*)\)\s*ON DUPLICATE KEY UPDATE/s', $trimmed, $m)) {
-                $vals = mcpwp_test_split_sql_tuple($m[2]);
-                $row  = array(
-                    'from_key'   => $vals[0],
-                    'to_key'     => $vals[1],
-                    'type'       => $vals[2],
-                    'weight'     => (float) $vals[3],
-                    'source'     => $vals[4],
-                    'props'      => $vals[5],
-                    'updated_at' => $vals[6],
-                );
+            // Multi-row: Mcpwp_Graph_Builder::insert_edges_batch() (#943 S1
+            // review, BLOCK-4 perf) issues ONE statement with N value
+            // tuples, not one query per edge. Each tuple is split the same
+            // quote-aware way as a single-row VALUES(...).
+            if (preg_match('/^INSERT INTO (\S*mcpwp_graph_edges) \(from_key, to_key, type, weight, source, props, updated_at\)\s*VALUES\s*(\(.*\))\s*ON DUPLICATE KEY UPDATE/s', $trimmed, $m)) {
                 if (! isset($GLOBALS['mcpwp_test_graph_edges'])) {
                     $GLOBALS['mcpwp_test_graph_edges'] = array();
                 }
-                $matched = false;
-                foreach ($GLOBALS['mcpwp_test_graph_edges'] as $i => $existing) {
-                    if ($existing['from_key'] === $row['from_key'] && $existing['to_key'] === $row['to_key'] && $existing['type'] === $row['type']) {
-                        $GLOBALS['mcpwp_test_graph_edges'][ $i ] = $row;
-                        $matched                                 = true;
-                        break;
+                foreach (mcpwp_test_split_value_tuples($m[2]) as $tuple) {
+                    $vals = mcpwp_test_split_sql_tuple($tuple);
+                    $row  = array(
+                        'from_key'   => $vals[0],
+                        'to_key'     => $vals[1],
+                        'type'       => $vals[2],
+                        'weight'     => (float) $vals[3],
+                        'source'     => $vals[4],
+                        'props'      => $vals[5],
+                        'updated_at' => $vals[6],
+                    );
+                    $matched = false;
+                    foreach ($GLOBALS['mcpwp_test_graph_edges'] as $i => $existing) {
+                        if ($existing['from_key'] === $row['from_key'] && $existing['to_key'] === $row['to_key'] && $existing['type'] === $row['type']) {
+                            $GLOBALS['mcpwp_test_graph_edges'][ $i ] = $row;
+                            $matched                                 = true;
+                            break;
+                        }
+                    }
+                    if (! $matched) {
+                        $GLOBALS['mcpwp_test_graph_edges'][] = $row;
                     }
                 }
-                if (! $matched) {
-                    $GLOBALS['mcpwp_test_graph_edges'][] = $row;
+                return 1;
+            }
+
+            // Site graph queue table (#943 S1 review, BLOCK-4/W2/W5):
+            // mark() -> flush_marks_to_queue() -> ONE multi-row INSERT
+            // IGNORE for every mark() buffered during the request (#943 S1
+            // review, BLOCK-4 perf: 400 individual single-row INSERTs
+            // measured ~10ms each on the rig — batching this the same way
+            // insert_edges_batch() already does was the actual fix). Real
+            // MySQL semantics: each row is skipped silently when its primary
+            // key (node_key) already exists — other rows in the same
+            // statement are unaffected.
+            if (preg_match("/^INSERT IGNORE INTO (\\S*mcpwp_graph_queue) \\(node_key, reason, queued_at\\) VALUES (\\(.*\\))$/s", $trimmed, $m)) {
+                if (! isset($GLOBALS['mcpwp_test_graph_queue'])) {
+                    $GLOBALS['mcpwp_test_graph_queue'] = array();
                 }
+                $inserted = 0;
+                foreach (mcpwp_test_split_value_tuples($m[2]) as $tuple) {
+                    $vals = mcpwp_test_split_sql_tuple($tuple);
+                    $key  = $vals[0];
+                    if (! isset($GLOBALS['mcpwp_test_graph_queue'][ $key ])) {
+                        $GLOBALS['mcpwp_test_graph_queue'][ $key ] = array(
+                            'reason'    => $vals[1],
+                            'queued_at' => $vals[2],
+                        );
+                        $inserted++;
+                    }
+                }
+                return $inserted;
+            }
+
+            if (preg_match("/^DELETE FROM (\\S*mcpwp_graph_queue) WHERE node_key IN \\((.*)\\)$/s", $trimmed, $m)) {
+                $keys = mcpwp_test_split_sql_tuple($m[2]);
+                foreach ($keys as $key) {
+                    unset($GLOBALS['mcpwp_test_graph_queue'][ $key ]);
+                }
+                return count($keys);
+            }
+
+            // Trash status-only update (BLOCK-2): mark_node_trashed() — never
+            // touches content_hash/edges, only the status column.
+            if (preg_match("/^UPDATE (\\S*mcpwp_graph_nodes) SET status = 'trash', updated_at = '((?:[^'\\\\]|\\\\.)*)' WHERE node_key = '((?:[^'\\\\]|\\\\.)*)'$/", $trimmed, $m)) {
+                $updated_at = str_replace("\\'", "'", $m[2]);
+                $key        = str_replace("\\'", "'", $m[3]);
+                if (! isset($GLOBALS['mcpwp_test_graph_nodes'][ $key ])) {
+                    return 0;
+                }
+                $GLOBALS['mcpwp_test_graph_nodes'][ $key ]['status']     = 'trash';
+                $GLOBALS['mcpwp_test_graph_nodes'][ $key ]['updated_at'] = $updated_at;
                 return 1;
             }
 
@@ -1893,6 +2116,12 @@ $GLOBALS['_mcpwp_test_menu_page_ids'] = array();
 function get_post($id)
 {
     $id = (int) $id;
+    // Site graph (#943 S1 review, BLOCK-3): lets a test simulate "a filter
+    // this plugin does not control throws while rebuilding one specific
+    // post" — off unless a test explicitly sets it.
+    if (isset($GLOBALS['mcpwp_test_throw_for_post_id']) && (int) $GLOBALS['mcpwp_test_throw_for_post_id'] === $id) {
+        throw new \RuntimeException('seeded test throw for post ' . $id);
+    }
     return isset($GLOBALS['_mcpwp_test_posts'][ $id ]) ? $GLOBALS['_mcpwp_test_posts'][ $id ] : null;
 }
 
@@ -2983,7 +3212,18 @@ function update_post_meta($post_id, $key, $value)
         return false;
     }
 
+    $existed = array_key_exists((int) $post_id, $GLOBALS['_mcpwp_test_meta'] ?? array())
+        && array_key_exists($key, $GLOBALS['_mcpwp_test_meta'][ (int) $post_id ]);
+
     $GLOBALS['_mcpwp_test_meta'][ (int) $post_id ][ $key ] = wp_unslash($value);
+
+    // Mirrors core: update_metadata() fires 'added_post_meta' for a brand new
+    // key, 'updated_post_meta' for an existing one — both needed so
+    // Mcpwp_Graph_Builder::on_post_meta_changed() (#943 S1 review, W3) can be
+    // exercised for either path (e.g. "set featured image" on a post with no
+    // prior _thumbnail_id is an ADD, not an update).
+    do_action($existed ? 'updated_post_meta' : 'added_post_meta', 0, (int) $post_id, $key, $value);
+
     return true;
 }
 
@@ -3033,6 +3273,7 @@ function delete_post_meta($post_id, $key, $value = '')
         return false;
     }
     unset($GLOBALS['_mcpwp_test_meta'][ (int) $post_id ][ $key ]);
+    do_action('deleted_post_meta', array(0), (int) $post_id, $key, $value);
     return true;
 }
 

@@ -37,6 +37,14 @@ class Mcpwp_Graph_Signals {
 		if ( empty( $rows ) || '' === trim( $source ) ) {
 			return 0;
 		}
+		if ( class_exists( 'Mcpwp_Graph_Builder' ) && ! Mcpwp_Graph_Builder::ready() ) {
+			// W1/W6: the signals table is one of the 4 graph tables the
+			// readiness guard covers. A fetcher (#945/#947/#956) calling
+			// this before tables are confirmed present degrades to "nothing
+			// written" rather than a DB error surfacing in that fetcher's
+			// own response.
+			return 0;
+		}
 
 		global $wpdb;
 		$table   = $wpdb->prefix . 'mcpwp_graph_signals';
@@ -53,6 +61,7 @@ class Mcpwp_Graph_Signals {
 			$period_end   = self::normalize_date( $row['period_end'] ?? $row['period_start'] ?? null );
 			$fetched_at   = ! empty( $row['fetched_at'] ) ? (string) $row['fetched_at'] : current_time( 'mysql' );
 
+			$prev = $wpdb->suppress_errors( true );
 			// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- built via $wpdb->prepare().
 			$wpdb->query(
 				$wpdb->prepare(
@@ -68,6 +77,7 @@ class Mcpwp_Graph_Signals {
 					$fetched_at
 				)
 			);
+			$wpdb->suppress_errors( $prev );
 
 			$written++;
 		}
@@ -121,6 +131,10 @@ class Mcpwp_Graph_Signals {
 	 * @return int Rows deleted (or affected, per $wpdb->query()'s return).
 	 */
 	public static function prune(): int {
+		if ( class_exists( 'Mcpwp_Graph_Builder' ) && ! Mcpwp_Graph_Builder::ready() ) {
+			return 0;
+		}
+
 		global $wpdb;
 		$table = $wpdb->prefix . 'mcpwp_graph_signals';
 
@@ -133,8 +147,10 @@ class Mcpwp_Graph_Signals {
 		$days   = max( 1, $days );
 		$cutoff = gmdate( 'Y-m-d', time() - ( $days * DAY_IN_SECONDS ) );
 
+		$prev = $wpdb->suppress_errors( true );
 		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- built via $wpdb->prepare().
 		$result = $wpdb->query( $wpdb->prepare( "DELETE FROM {$table} WHERE period_end < %s", $cutoff ) );
+		$wpdb->suppress_errors( $prev );
 
 		return false === $result ? 0 : (int) $result;
 	}
