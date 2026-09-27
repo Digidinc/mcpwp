@@ -185,6 +185,7 @@ final class ResponseProjectionTest extends TestCase {
 						'suggested_first_tools',
 						'quick_start',
 						'pro_active',
+						'guardrails_status',
 					),
 				)
 			)
