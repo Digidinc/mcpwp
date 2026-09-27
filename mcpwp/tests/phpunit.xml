@@ -27,6 +27,8 @@
       <file>./unit/test-seo-market-debounce.php</file>
       <file>./unit/test-seo-market-opportunities.php</file>
       <file>./unit/test-rest-seo-audit-keyword-enrichment.php</file>
+      <file>./unit/test-graph-builder.php</file>
+      <file>./unit/test-graph-signals.php</file>
     </testsuite>
   </testsuites>
 </phpunit>

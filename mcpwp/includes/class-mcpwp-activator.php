@@ -1171,5 +1171,60 @@ class Mcpwp_Activator {
 			KEY success (success)
 		) $charset_collate;";
 		dbDelta( $sql_action_log );
+
+		// Site graph — nodes, edges, signals (#943 S1). Every release re-runs
+		// this via the mcpwp_db_version compare in mcpwp.php, and dbDelta()
+		// is idempotent, so a re-run on an already-current schema is a no-op.
+		$graph_nodes_table = $wpdb->prefix . 'mcpwp_graph_nodes';
+		$sql_graph_nodes   = "CREATE TABLE IF NOT EXISTS $graph_nodes_table (
+			id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+			node_key varchar(191) NOT NULL,
+			kind varchar(32) NOT NULL,
+			ref_id bigint(20) unsigned DEFAULT NULL,
+			label varchar(255) DEFAULT '',
+			url varchar(2048) DEFAULT '',
+			status varchar(20) DEFAULT '',
+			content_hash char(40) DEFAULT '',
+			word_count int(10) unsigned DEFAULT 0,
+			props longtext DEFAULT NULL,
+			updated_at datetime DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (id),
+			UNIQUE KEY node_key (node_key),
+			KEY kind_status (kind, status),
+			KEY ref (kind, ref_id)
+		) $charset_collate;";
+		dbDelta( $sql_graph_nodes );
+
+		$graph_edges_table = $wpdb->prefix . 'mcpwp_graph_edges';
+		$sql_graph_edges   = "CREATE TABLE IF NOT EXISTS $graph_edges_table (
+			id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+			from_key varchar(191) NOT NULL,
+			to_key varchar(191) NOT NULL,
+			type varchar(32) NOT NULL,
+			weight double DEFAULT 0,
+			source varchar(32) DEFAULT 'builder',
+			props text DEFAULT NULL,
+			updated_at datetime DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (id),
+			UNIQUE KEY edge (from_key(120), to_key(120), type),
+			KEY to_type (to_key(120), type)
+		) $charset_collate;";
+		dbDelta( $sql_graph_edges );
+
+		$graph_signals_table = $wpdb->prefix . 'mcpwp_graph_signals';
+		$sql_graph_signals   = "CREATE TABLE IF NOT EXISTS $graph_signals_table (
+			id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+			node_key varchar(191) NOT NULL,
+			metric varchar(64) NOT NULL,
+			value double DEFAULT 0,
+			period_start date DEFAULT NULL,
+			period_end date DEFAULT NULL,
+			source varchar(32) NOT NULL,
+			fetched_at datetime DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (id),
+			UNIQUE KEY sig (node_key(120), metric, source, period_start, period_end),
+			KEY metric_period (metric, period_start)
+		) $charset_collate;";
+		dbDelta( $sql_graph_signals );
 	}
 }

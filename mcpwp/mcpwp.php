@@ -338,6 +338,10 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-white-label.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-site-memory.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-signals.php';
+	// Site graph: persisted nodes/edges/signals (#943 S1). Builder must load
+	// before the db-version upgrade check below, which schedules its backfill.
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-graph-builder.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-graph-signals.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-site-blueprints.php';
 
 	// Load MCP tool registries
@@ -474,6 +478,14 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 		require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-activator.php';
 		Mcpwp_Activator::activate();
 		update_option( 'mcpwp_db_version', MCPWP_VERSION );
+
+		// Site graph tables were just created/verified by activate() above —
+		// kick off (or resume) the backfill (#943 S1). Own status option, not
+		// gated further: on_upgrade_schedule_backfill() itself no-ops once
+		// backfill: done, so a same-version reactivation is cheap.
+		if ( class_exists( 'Mcpwp_Graph_Builder' ) ) {
+			Mcpwp_Graph_Builder::on_upgrade_schedule_backfill();
+		}
 	}
 
 	// One-time purge of identity-less pending approvals — gated on its OWN flag,
@@ -636,6 +648,29 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	if ( class_exists( 'Mcpwp_Signals' ) ) {
 		Mcpwp_Signals::schedule();
 		add_action( Mcpwp_Signals::CRON_HOOK, array( 'Mcpwp_Signals', 'compute' ) );
+	}
+
+	// Site graph — incremental hooks, shutdown rebuild, backfill batches,
+	// and the dirty-overflow drain (#943 S1).
+	if ( class_exists( 'Mcpwp_Graph_Builder' ) ) {
+		add_action( 'save_post', array( 'Mcpwp_Graph_Builder', 'on_save_post' ), 10, 2 );
+		add_action( 'deleted_post', array( 'Mcpwp_Graph_Builder', 'on_deleted_post' ), 10, 1 );
+		add_action( 'set_object_terms', array( 'Mcpwp_Graph_Builder', 'on_set_object_terms' ), 10, 1 );
+		add_action( 'edited_term', array( 'Mcpwp_Graph_Builder', 'on_edited_term' ), 10, 3 );
+		add_action( 'delete_term', array( 'Mcpwp_Graph_Builder', 'on_delete_term' ), 10, 3 );
+		add_action( 'shutdown', array( 'Mcpwp_Graph_Builder', 'on_shutdown' ) );
+		add_action( Mcpwp_Graph_Builder::BACKFILL_CRON_HOOK, array( 'Mcpwp_Graph_Builder', 'run_backfill_batch' ) );
+
+		if ( ! wp_next_scheduled( Mcpwp_Graph_Builder::DIRTY_DRAIN_CRON_HOOK ) ) {
+			wp_schedule_event( time() + HOUR_IN_SECONDS, 'hourly', Mcpwp_Graph_Builder::DIRTY_DRAIN_CRON_HOOK );
+		}
+		add_action( Mcpwp_Graph_Builder::DIRTY_DRAIN_CRON_HOOK, array( 'Mcpwp_Graph_Builder', 'drain_dirty_batch' ) );
+	}
+
+	// Site graph signals — daily retention prune (#943 S1).
+	if ( class_exists( 'Mcpwp_Graph_Signals' ) ) {
+		Mcpwp_Graph_Signals::schedule_prune();
+		add_action( Mcpwp_Graph_Signals::PRUNE_CRON_HOOK, array( 'Mcpwp_Graph_Signals', 'prune' ) );
 	}
 
 	// Figma design-token sync cron — pulls colors/typography from the configured

@@ -343,4 +343,21 @@ function mcpwp_fs_uninstall_cleanup_site() {
 	$wpdb->query( "DROP TABLE IF EXISTS {$wpdb->prefix}mcpwp_webhook_logs" );
 	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- $wpdb->prefix is safe.
 	$wpdb->query( "DROP TABLE IF EXISTS {$wpdb->prefix}mcpwp_feedback" );
+
+	// Site graph tables (#943 S1). Deactivation keeps this data; only
+	// uninstall drops it, same as every other table above.
+	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- $wpdb->prefix is safe.
+	$wpdb->query( "DROP TABLE IF EXISTS {$wpdb->prefix}mcpwp_graph_nodes" );
+	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- $wpdb->prefix is safe.
+	$wpdb->query( "DROP TABLE IF EXISTS {$wpdb->prefix}mcpwp_graph_edges" );
+	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- $wpdb->prefix is safe.
+	$wpdb->query( "DROP TABLE IF EXISTS {$wpdb->prefix}mcpwp_graph_signals" );
+
+	// Site graph options/cron (#943 S1).
+	delete_option( 'mcpwp_graph_dirty' );
+	delete_option( 'mcpwp_graph_backfill_cursor' );
+	delete_option( 'mcpwp_graph_backfill_status' );
+	wp_clear_scheduled_hook( 'mcpwp_graph_backfill' );
+	wp_clear_scheduled_hook( 'mcpwp_graph_dirty_drain' );
+	wp_clear_scheduled_hook( 'mcpwp_graph_signals_prune' );
 }

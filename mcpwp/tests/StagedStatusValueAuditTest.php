@@ -130,6 +130,11 @@ final class StagedStatusValueAuditTest extends TestCase {
 			'and every state-changing route is already admin-scope-gated unconditionally (get_required_scope_for_request()\'s ' .
 			'/approvals/{id}/(approve|reject|apply|rollback) regex) — there is no lower-scoped path that ever sets this ' .
 			'field to anything.',
+		'core/class-mcpwp-graph-builder.php' => 'staged value is the site graph node\'s mirrored copy of the SOURCE ' .
+			'post\'s own post_status (rebuild_post_node() reads $post->post_status and stores it verbatim on the node row ' .
+			'purely for graph filtering/display) — the update_option() calls in this file are unrelated backfill-cursor/' .
+			'dirty-set bookkeeping, and the graph write path never calls wp_insert_post()/->set_status() or anything else ' .
+			'that would let a stored graph value change a post\'s or product\'s actual visibility. #943 S1.',
 		'core/class-mcpwp-seo-audit-store.php' => 'staged value is a stored SEO issue\'s open/resolved/dismissed status — ' .
 			'never fed into a WordPress or WooCommerce post/product status write.',
 		'core/class-mcpwp-design-references.php' => 'staged value is a design-reference library entry\'s own metadata ' .
