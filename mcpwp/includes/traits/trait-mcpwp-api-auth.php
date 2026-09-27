@@ -2271,6 +2271,63 @@ trait Mcpwp_Api_Auth {
 	}
 
 	/**
+	 * The tool a tools/call message will ACTUALLY dispatch — unwrapping the
+	 * mcpwp_call meta tool (#907) so every place that infers required
+	 * scope, rate-limit weight, or diagnostic status from a raw tools/call
+	 * payload agrees with what will really run, and can never be
+	 * under-classified merely because the payload named the wrapper
+	 * instead of the tool it wraps.
+	 *
+	 * Adversarial review of #907 round 1 (BLOCK-1): get_required_scope_for_mcp_request()
+	 * used to read `params.name` directly, so a message naming "mcpwp_call"
+	 * was classified from a table that has never heard of "mcpwp_call" —
+	 * defaulting to 'read' — regardless of how privileged the tool named
+	 * in `params.arguments.name` actually was. A read-scoped key wrapping
+	 * an admin-only tool (`wp_list_mcp_events`) or a write-scoped key
+	 * wrapping one (`wp_delete_all_drafts`, `wp_batch`) sailed past this
+	 * gate and reached it — live, over real HTTP, 200 with real data. This
+	 * is the ONE place that unwraps for every caller of this kind
+	 * (get_required_scope_for_mcp_request() here, plus
+	 * Mcpwp_REST_MCP::is_diagnostic_operation() and ::rate_limit_method(),
+	 * which call it the same way) — every one of those MUST route through
+	 * this method rather than read `params.name`/`params.arguments`
+	 * themselves, or the next one of them reopens exactly this bypass.
+	 *
+	 * A message that does not name mcpwp_call passes through unchanged. One
+	 * that does but carries no resolvable inner tool (missing `name`, or an
+	 * attempt to wrap mcpwp_call/mcpwp_find_tools — Mcpwp_REST_MCP::resolve_mcpwp_call()
+	 * refuses both before dispatch, so neither ever actually runs) is
+	 * reported as the wrapper itself, `"mcpwp_call"` — which the tool-name
+	 * scope table below lists under `$admin_tools` for exactly this case,
+	 * so an unresolvable wrapper is never classified BELOW what any real
+	 * dispatch could need.
+	 *
+	 * @param string $tool_name Outer tools/call `name`.
+	 * @param mixed  $arguments Outer tools/call `arguments`.
+	 * @return array{name:string, arguments:array} Effective name/arguments.
+	 */
+	protected function effective_mcp_tool_call( $tool_name, $arguments ) {
+		if ( 'mcpwp_call' !== $tool_name ) {
+			return array(
+				'name'      => is_string( $tool_name ) ? $tool_name : '',
+				'arguments' => is_array( $arguments ) ? $arguments : array(),
+			);
+		}
+
+		$wrapped    = is_array( $arguments ) ? $arguments : array();
+		$inner_name = isset( $wrapped['name'] ) && is_string( $wrapped['name'] ) ? $wrapped['name'] : '';
+
+		if ( '' === $inner_name || in_array( $inner_name, array( 'mcpwp_call', 'mcpwp_find_tools' ), true ) ) {
+			return array( 'name' => 'mcpwp_call', 'arguments' => array() );
+		}
+
+		return array(
+			'name'      => $inner_name,
+			'arguments' => isset( $wrapped['arguments'] ) && is_array( $wrapped['arguments'] ) ? $wrapped['arguments'] : array(),
+		);
+	}
+
+	/**
 	 * Infer required scope from MCP JSON-RPC payload.
 	 *
 	 * @param WP_REST_Request $request Request object.
@@ -2295,14 +2352,22 @@ trait Mcpwp_Api_Auth {
 			$scope  = 'read';
 
 			if ( 'tools/call' === $method ) {
-				$tool_name = isset( $message['params']['name'] ) ? (string) $message['params']['name'] : '';
+				// #907 BLOCK-1: classify the EFFECTIVE tool — mcpwp_call
+				// unwrapped to the tool it names — never the raw outer
+				// name, or a wrapped admin/write tool is misclassified as
+				// whatever "mcpwp_call" itself would require (nothing).
+				$outer_name = isset( $message['params']['name'] ) ? (string) $message['params']['name'] : '';
+				$outer_args = isset( $message['params']['arguments'] ) && is_array( $message['params']['arguments'] ) ? $message['params']['arguments'] : array();
+				$effective  = $this->effective_mcp_tool_call( $outer_name, $outer_args );
+				$tool_name  = $effective['name'];
 				$scope = $this->get_required_scope_for_tool_name( $tool_name );
 
 				// The same rule the REST route table applies: a wide
-				// find/replace is admin whichever door it comes through.
+				// find/replace is admin whichever door it comes through —
+				// including wrapped in mcpwp_call, so this reads the
+				// EFFECTIVE arguments, not the outer wrapper's.
 				if ( 'wp_bulk_find_replace' === $tool_name && class_exists( 'Mcpwp_REST_Elementor' ) ) {
-					$args = isset( $message['params']['arguments'] ) && is_array( $message['params']['arguments'] ) ? $message['params']['arguments'] : array();
-					if ( Mcpwp_REST_Elementor::find_replace_is_wide( $args ) ) {
+					if ( Mcpwp_REST_Elementor::find_replace_is_wide( $effective['arguments'] ) ) {
 						$scope = 'admin';
 					}
 				}
@@ -2456,6 +2521,16 @@ trait Mcpwp_Api_Auth {
 			// pings an external endpoint with caller-supplied URLs.
 			// wp_indexnow_status is read-only and not listed here.
 			'wp_indexnow_submit',
+			// #907 BLOCK-1: the literal string "mcpwp_call" only ever reaches
+			// this table via effective_mcp_tool_call()'s conservative fallback
+			// — an mcpwp_call message whose own wrapper is unresolvable
+			// (missing `name`, or an attempt to wrap mcpwp_call/mcpwp_find_tools,
+			// both refused before dispatch by Mcpwp_REST_MCP::resolve_mcpwp_call()).
+			// A VALID wrapper is unwrapped to the tool it actually names before
+			// this table is ever consulted, so listing it here does not require
+			// admin scope to use mcpwp_call itself — only to send it a wrapper
+			// this server cannot resolve to anything.
+			'mcpwp_call',
 		);
 
 		// #874 systematic diff, second half: tools whose route requires 'write'

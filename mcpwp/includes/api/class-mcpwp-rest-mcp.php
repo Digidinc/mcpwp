@@ -191,6 +191,19 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	const META_TOOL_NAMES = array( 'mcpwp_find_tools', 'mcpwp_call' );
 
 	/**
+	 * mcpwp_find_tools query caps (#907 adversarial round 1, WARN-2): an
+	 * unbounded query — a 400KB string — cost ~5.5s scoring against the full
+	 * tool catalog on every request, an unauthenticated-cost-wise-free DoS
+	 * lever for any key that can reach the tool at all. Truncated, not
+	 * refused: a caller who pastes something huge still gets a useful
+	 * search from the first 256 characters / 16 words, with `_meta.query`
+	 * (added by handle_find_tools()) saying so rather than silently
+	 * matching on less than they sent.
+	 */
+	const FIND_TOOLS_QUERY_MAX_CHARS = 256;
+	const FIND_TOOLS_QUERY_MAX_TERMS = 16;
+
+	/**
 	 * The `core` MCP tool profile's fixed tool set (#907) — chosen from the
 	 * onboarding/agent-playbook "read the site, edit a page, verify it"
 	 * recipe rather than by category, so a client capped to a small
@@ -972,9 +985,16 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			return false;
 		}
 
-		$name = isset( $operation['params']['name'] ) ? $operation['params']['name'] : '';
+		// #907 BLOCK-1/NIT-1: classify the EFFECTIVE tool (mcpwp_call
+		// unwrapped) so a diagnostic tool wrapped in mcpwp_call keeps its
+		// exemption, and — the security-relevant direction — a non-diagnostic
+		// tool wrapped in mcpwp_call is never mistaken for a diagnostic one
+		// merely because "mcpwp_call" itself matches nothing in the list.
+		$outer_name = isset( $operation['params']['name'] ) ? $operation['params']['name'] : '';
+		$outer_args = isset( $operation['params']['arguments'] ) && is_array( $operation['params']['arguments'] ) ? $operation['params']['arguments'] : array();
+		$effective  = $this->effective_mcp_tool_call( is_string( $outer_name ) ? $outer_name : '', $outer_args );
 
-		return is_string( $name ) && in_array( $name, self::$diagnostic_tools, true );
+		return in_array( $effective['name'], self::$diagnostic_tools, true );
 	}
 
 	/**
@@ -1025,8 +1045,13 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				return $default;
 			}
 
-			$params    = isset( $operation['params'] ) && is_array( $operation['params'] ) ? $operation['params'] : array();
-			$tool_name = isset( $params['name'] ) && is_string( $params['name'] ) ? $params['name'] : '';
+			$params     = isset( $operation['params'] ) && is_array( $operation['params'] ) ? $operation['params'] : array();
+			$outer_name = isset( $params['name'] ) && is_string( $params['name'] ) ? $params['name'] : '';
+			$outer_args = isset( $params['arguments'] ) && is_array( $params['arguments'] ) ? $params['arguments'] : array();
+			// #907 NIT-1: price the EFFECTIVE tool (mcpwp_call unwrapped),
+			// so a wrapped GET tool still prices at the lighter GET ceiling
+			// instead of the default write bucket.
+			$tool_name  = $this->effective_mcp_tool_call( $outer_name, $outer_args )['name'];
 
 			if ( '' === $tool_name ) {
 				return $default;
@@ -1741,7 +1766,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				// a direct call to it would, never against "mcpwp_call".
 				$resolved = $this->resolve_mcpwp_call( is_array( $params ) ? $params : array() );
 				if ( null !== $resolved['error'] ) {
-					$this->fire_tool_called( 'mcpwp_call', microtime( true ), $resolved['error']['code'] );
+					$this->fire_tool_called( 'mcpwp_call', microtime( true ), $this->analytics_code_for_client_code( $resolved['error']['code'] ) );
 					return $this->tool_error_result( $id, $resolved['error']['code'], $resolved['error']['message'], $resolved['error']['data'] );
 				}
 				$params = $resolved['params'];
@@ -2958,6 +2983,57 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	}
 
 	/**
+	 * Whether the current caller may use a meta tool (mcpwp_call or
+	 * mcpwp_find_tools) at ALL — the site's "meta" category toggle and the
+	 * key's own role-category restriction.
+	 *
+	 * #907 WARN-1 (adversarial round 1): this gate is ORTHOGONAL to, and
+	 * checked IN ADDITION to, the named/wrapped tool's own gates — it is
+	 * never a substitute for them. Before this fix, mcpwp_find_tools ran it
+	 * (inline in handle_tools_call()) but resolve_mcpwp_call() did not, so
+	 * disabling "meta" (or a custom role that never granted it) correctly
+	 * hid mcpwp_call from tools/list and refused mcpwp_find_tools, yet
+	 * mcpwp_call itself still rewrote and dispatched — the site's own
+	 * "turn off tool search/dispatch" switch did not actually turn it off.
+	 *
+	 * @param string $meta_tool_name 'mcpwp_call' or 'mcpwp_find_tools' — used only for the message.
+	 * @return array{code:string,message:string,data:array}|null Null when allowed.
+	 */
+	private function meta_tool_gate_error( $meta_tool_name ) {
+		$disabled_categories = get_option( 'mcpwp_disabled_tool_categories', array() );
+		if ( ! empty( $disabled_categories ) && is_array( $disabled_categories ) && in_array( Mcpwp_MCP_Meta_Tools::CATEGORY, $disabled_categories, true ) ) {
+			return array(
+				'code'    => 'category_disabled',
+				'message' => sprintf( 'Tool "%s" is in the "%s" category, which has been disabled by the site administrator.', $meta_tool_name, Mcpwp_MCP_Meta_Tools::CATEGORY ),
+				'data'    => array( 'hint' => 'This category has been disabled in WP Admin > mcpwp > Tools. Contact the site administrator to re-enable it.' ),
+			);
+		}
+
+		$key_record = $this->get_current_api_key_record();
+		if ( $key_record ) {
+			$allowed_categories = $this->resolve_key_tool_categories( $key_record );
+			if ( ! empty( $allowed_categories ) && ! in_array( Mcpwp_MCP_Meta_Tools::CATEGORY, $allowed_categories, true ) ) {
+				$role = isset( $key_record['role'] ) ? $key_record['role'] : 'unknown';
+				return array(
+					'code'    => 'scope_denied',
+					'message' => sprintf( 'This API key (role: %s) does not have access to %s tools. Allowed categories: %s.', $role, Mcpwp_MCP_Meta_Tools::CATEGORY, implode( ', ', $allowed_categories ) ),
+					'data'    => array(
+						'hint' => sprintf(
+							'Tool "%s" is in the "%s" category, but this key only has access to: %s. Request an admin key or a key with the "%s" category enabled.',
+							$meta_tool_name,
+							Mcpwp_MCP_Meta_Tools::CATEGORY,
+							implode( ', ', $allowed_categories ),
+							Mcpwp_MCP_Meta_Tools::CATEGORY
+						),
+					),
+				);
+			}
+		}
+
+		return null;
+	}
+
+	/**
 	 * If `$params` names the mcpwp_call meta tool (#907), resolve it to the
 	 * params of the REAL tool it wraps — the single rewrite point so every
 	 * gate downstream of it (category toggle, role category, Pro gating,
@@ -2965,11 +3041,24 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 * tool exactly as a direct tools/call would, never against "mcpwp_call"
 	 * itself. Anything not naming mcpwp_call passes through unchanged.
 	 *
+	 * The SCOPE-TIER gate (read/write/admin) for a wrapped call is enforced
+	 * earlier still, at authentication, by
+	 * Mcpwp_Api_Auth::get_required_scope_for_mcp_request() — which performs
+	 * its OWN unwrap (via effective_mcp_tool_call(), the shared helper) on
+	 * the raw request before this method ever runs, precisely so a
+	 * request that should never have reached dispatch at all is refused
+	 * before it gets here (#907 BLOCK-1). This method's job is everything
+	 * that gate does not cover: the "meta" category/role gate on mcpwp_call
+	 * itself, and rewriting so every gate INSIDE handle_tools_call() judges
+	 * the real tool.
+	 *
 	 * @param array $params tools/call params as received.
 	 * @return array{params: array, error: array{code:string,message:string,data:array}|null}
 	 *               `error` is set (params echoed back unchanged) only when
 	 *               mcpwp_call's OWN arguments are unusable — a missing
-	 *               `name`, or an attempt to wrap mcpwp_call/mcpwp_find_tools.
+	 *               `name`, an attempt to wrap mcpwp_call/mcpwp_find_tools,
+	 *               a stray top-level argument key, or the caller lacking
+	 *               the "meta" category for mcpwp_call itself.
 	 */
 	private function resolve_mcpwp_call( array $params ) {
 		$name = isset( $params['name'] ) && is_string( $params['name'] ) ? $params['name'] : '';
@@ -3002,8 +3091,40 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			);
 		}
 
-		$rewritten             = $params;
-		$rewritten['name']     = $inner_name;
+		// #907 NIT-2: a caller that flattens the inner tool's own arguments
+		// onto mcpwp_call's top-level arguments object instead of nesting
+		// them under "arguments" (e.g. {"name":"wp_list_pages","per_page":1})
+		// would otherwise have "per_page" silently dropped — the inner tool
+		// runs, just not the way the caller intended, with no signal that
+		// anything was wrong. Refused instead, naming the stray key(s).
+		$stray = array_values( array_diff( array_keys( $wrapped ), array( 'name', 'arguments' ) ) );
+		if ( ! empty( $stray ) ) {
+			return array(
+				'params' => $params,
+				'error'  => array(
+					'code'    => 'invalid_params',
+					'message' => sprintf( 'mcpwp_call received unexpected argument key(s): %s.', implode( ', ', $stray ) ),
+					'data'    => array(
+						'hint' => sprintf(
+							'mcpwp_call takes exactly "name" and "arguments" — put the inner tool\'s parameters under "arguments", e.g. {"name": "%s", "arguments": {"%s": ...}}.',
+							$inner_name,
+							$stray[0]
+						),
+					),
+				),
+			);
+		}
+
+		// #907 WARN-1: mcpwp_call itself needs the "meta" category — checked
+		// here, in addition to (never instead of) every gate the rewritten
+		// inner tool call below will still run into.
+		$gate_error = $this->meta_tool_gate_error( 'mcpwp_call' );
+		if ( null !== $gate_error ) {
+			return array( 'params' => $params, 'error' => $gate_error );
+		}
+
+		$rewritten              = $params;
+		$rewritten['name']      = $inner_name;
 		$rewritten['arguments'] = isset( $wrapped['arguments'] ) && is_array( $wrapped['arguments'] ) ? $wrapped['arguments'] : array();
 
 		return array( 'params' => $rewritten, 'error' => null );
@@ -3026,9 +3147,9 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 * @return array JSON-RPC tools/call result.
 	 */
 	private function handle_find_tools( $id, $arguments, $start ) {
-		$query = isset( $arguments['query'] ) ? trim( (string) $arguments['query'] ) : '';
-		if ( '' === $query ) {
-			$this->fire_tool_called( 'mcpwp_find_tools', $start, 'invalid_arguments' );
+		$raw_query = isset( $arguments['query'] ) ? trim( (string) $arguments['query'] ) : '';
+		if ( '' === $raw_query ) {
+			$this->fire_tool_called( 'mcpwp_find_tools', $start, $this->analytics_code_for_client_code( 'invalid_arguments' ) );
 			return $this->tool_error_result(
 				$id,
 				'invalid_arguments',
@@ -3036,6 +3157,12 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				array( 'hint' => 'Pass keywords to match against tool names, titles, descriptions and categories, e.g. {"query": "elementor widget"}.' )
 			);
 		}
+
+		// #907 WARN-2: cap query cost. mb_substr() would still leave a
+		// multi-KB string of single non-space "words" un-capped by the char
+		// limit alone; the term cap below closes that gap independently.
+		$query           = mb_substr( $raw_query, 0, self::FIND_TOOLS_QUERY_MAX_CHARS );
+		$query_truncated = strlen( $query ) < strlen( $raw_query );
 
 		$limit = isset( $arguments['limit'] ) ? (int) $arguments['limit'] : 10;
 		$limit = max( 1, min( 20, $limit ) );
@@ -3050,7 +3177,9 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		// broader (#907's "hidden tools must not leak via search").
 		$candidates = $this->filter_tools_by_key_role( $this->tools_cache );
 
-		$words = array_values( array_filter( preg_split( '/\s+/', strtolower( $query ) ), 'strlen' ) );
+		$words           = array_values( array_filter( preg_split( '/\s+/', strtolower( $query ) ), 'strlen' ) );
+		$terms_truncated = count( $words ) > self::FIND_TOOLS_QUERY_MAX_TERMS;
+		$words           = array_slice( $words, 0, self::FIND_TOOLS_QUERY_MAX_TERMS );
 
 		$scored = array();
 		foreach ( $candidates as $tool ) {
@@ -3127,12 +3256,22 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 
 		$this->fire_tool_called( 'mcpwp_find_tools', $start, '' );
 
+		$result_data = array(
+			'query'   => $query,
+			'count'   => count( $matches ),
+			'matches' => $matches,
+		);
+		// #907 WARN-2: say so, rather than silently matching on less than
+		// the caller sent.
+		if ( $query_truncated || $terms_truncated ) {
+			$result_data['query_truncated'] = array(
+				'chars_kept' => self::FIND_TOOLS_QUERY_MAX_CHARS,
+				'terms_kept' => self::FIND_TOOLS_QUERY_MAX_TERMS,
+			);
+		}
+
 		$encoded = wp_json_encode(
-			array(
-				'query'   => $query,
-				'count'   => count( $matches ),
-				'matches' => $matches,
-			),
+			$result_data,
 			JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES
 		);
 
@@ -3185,44 +3324,15 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		);
 
 		// mcpwp_find_tools (#907) has no REST route — it never reaches the
-		// tool_map lookup below — but still rides the same admin
-		// category-disable and role-category gates every other tool in the
-		// "meta" category gets, checked here explicitly since those two
-		// gates are normally reached only after a successful tool_map
-		// lookup.
+		// tool_map lookup below — but still rides the same "meta"
+		// category-disable and role-category gate every other tool in that
+		// category gets (meta_tool_gate_error(), shared with mcpwp_call's
+		// own gate in resolve_mcpwp_call() — #907 WARN-1).
 		if ( 'mcpwp_find_tools' === $tool_name ) {
-			$disabled_categories = get_option( 'mcpwp_disabled_tool_categories', array() );
-			if ( ! empty( $disabled_categories ) && is_array( $disabled_categories ) && in_array( Mcpwp_MCP_Meta_Tools::CATEGORY, $disabled_categories, true ) ) {
-				$this->fire_tool_called( $tool_name, $start, 'category_disabled' );
-				return $this->tool_error_result(
-					$id,
-					'category_disabled',
-					sprintf( 'Tool "%s" is in the "%s" category, which has been disabled by the site administrator.', $tool_name, Mcpwp_MCP_Meta_Tools::CATEGORY ),
-					array( 'hint' => 'This category has been disabled in WP Admin > mcpwp > Tools. Contact the site administrator to re-enable it.' )
-				);
-			}
-
-			$key_record = $this->get_current_api_key_record();
-			if ( $key_record ) {
-				$allowed_categories = $this->resolve_key_tool_categories( $key_record );
-				if ( ! empty( $allowed_categories ) && ! in_array( Mcpwp_MCP_Meta_Tools::CATEGORY, $allowed_categories, true ) ) {
-					$role = isset( $key_record['role'] ) ? $key_record['role'] : 'unknown';
-					$this->fire_tool_called( $tool_name, $start, 'scope_denied' );
-					return $this->tool_error_result(
-						$id,
-						'scope_denied',
-						sprintf( 'This API key (role: %s) does not have access to %s tools. Allowed categories: %s.', $role, Mcpwp_MCP_Meta_Tools::CATEGORY, implode( ', ', $allowed_categories ) ),
-						array(
-							'hint' => sprintf(
-								'Tool "%s" is in the "%s" category, but this key only has access to: %s. Request an admin key or a key with the "%s" category enabled.',
-								$tool_name,
-								Mcpwp_MCP_Meta_Tools::CATEGORY,
-								implode( ', ', $allowed_categories ),
-								Mcpwp_MCP_Meta_Tools::CATEGORY
-							),
-						)
-					);
-				}
+			$gate_error = $this->meta_tool_gate_error( $tool_name );
+			if ( null !== $gate_error ) {
+				$this->fire_tool_called( $tool_name, $start, $gate_error['code'] );
+				return $this->tool_error_result( $id, $gate_error['code'], $gate_error['message'], $gate_error['data'] );
 			}
 
 			return $this->handle_find_tools( $id, is_array( $arguments ) ? $arguments : array(), $start );
@@ -4045,6 +4155,25 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		$category    = ( $tool_name && isset( $all_cats[ $tool_name ] ) ) ? $all_cats[ $tool_name ] : 'site';
 		$duration_ms = (int) round( ( microtime( true ) - $start ) * 1000 );
 		do_action( 'mcpwp_tool_called', $tool_name, $category, $duration_ms, $error_code );
+	}
+
+	/**
+	 * Map a client-facing tool_error_result 'code' to the mcpwp_tool_called
+	 * analytics enum (CLAUDE.md's "Analytics" section — the two are
+	 * deliberately not always the same string: validate_tool_arguments()'s
+	 * own schema failures already report the CLIENT code 'invalid_arguments'
+	 * but fire analytics as 'invalid_params'). #907's mcpwp_call/mcpwp_find_tools
+	 * "missing required argument" refusals are the same kind of failure —
+	 * this call could not even be attempted — so they follow the same
+	 * mapping rather than adding a second, near-duplicate analytics code.
+	 * `recursion_denied` and `invalid_params` (mcpwp_call's own stray-key
+	 * refusal) pass through unchanged; both are documented analytics codes.
+	 *
+	 * @param string $client_code tool_error_result's own 'code'.
+	 * @return string mcpwp_tool_called error_code.
+	 */
+	private function analytics_code_for_client_code( $client_code ) {
+		return 'invalid_arguments' === $client_code ? 'invalid_params' : $client_code;
 	}
 
 	/**

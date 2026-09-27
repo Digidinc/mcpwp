@@ -357,6 +357,85 @@ final class McpToolProfileTest extends TestCase {
 		$this->assertSame( 'recursion_denied', $data['result']['structuredContent']['error']['code'] );
 	}
 
+	// ── Adversarial review round 1: WARN-1 — "meta" gate on mcpwp_call ─────
+
+	public function test_mcpwp_call_refused_when_meta_category_disabled(): void {
+		update_option( 'mcpwp_disabled_tool_categories', array( 'meta' ) );
+
+		$data = $this->call_tool_unauthenticated(
+			'mcpwp_call',
+			array(
+				'name'      => 'wp_site_info',
+				'arguments' => array(),
+			)
+		);
+
+		$this->assertTrue( $data['result']['isError'], 'Disabling "meta" must turn off mcpwp_call itself, not just mcpwp_find_tools/tools-list.' );
+		$this->assertSame( 'category_disabled', $data['result']['structuredContent']['error']['code'] );
+	}
+
+	public function test_mcpwp_call_refused_when_key_role_lacks_meta_category(): void {
+		$controller = new Mcpwp_REST_MCP();
+		// Has 'content' — the INNER tool's own category — but not 'meta'.
+		$key = $controller->create_scoped_api_key( 'no-meta', array( 'read', 'write' ), 'custom', array( 'content' ) );
+
+		$request = $this->request(
+			'tools/call',
+			array(
+				'name'      => 'mcpwp_call',
+				'arguments' => array(
+					'name'      => 'wp_list_pages',
+					'arguments' => array(),
+				),
+			),
+			array( 'X-API-Key' => $key['key'] )
+		);
+		Mcpwp_REST_MCP::reset_verdict_memo();
+		$this->assertTrue( $controller->verify_api_key( $request ) );
+		$data = $controller->handle_mcp( $request )->get_data();
+
+		$this->assertTrue( $data['result']['isError'], 'A key without "meta" must not be able to use mcpwp_call, even to reach a tool its OTHER categories already permit.' );
+		$this->assertSame( 'scope_denied', $data['result']['structuredContent']['error']['code'] );
+		$this->assertStringContainsString( 'meta', $data['result']['structuredContent']['error']['message'] );
+	}
+
+	// ── Adversarial review round 1: WARN-2 — unbounded find_tools query ────
+
+	public function test_find_tools_query_is_capped_fast_and_notes_truncation(): void {
+		$huge  = str_repeat( 'a', 400000 ) . ' ' . implode( ' ', array_fill( 0, 50, 'wordterm' ) );
+		$start = microtime( true );
+		$data  = $this->call_tool_unauthenticated( 'mcpwp_find_tools', array( 'query' => $huge, 'limit' => 5 ) );
+		$this->assertLessThan( 2.0, microtime( true ) - $start, 'A 400KB query must not blow up scoring time — it must be capped, not scored in full.' );
+
+		$this->assertFalse( $data['result']['isError'] );
+		$payload = json_decode( $data['result']['content'][0]['text'], true );
+		$this->assertArrayHasKey( 'query_truncated', $payload, 'A query over the char/term cap must say so.' );
+		$this->assertSame( Mcpwp_REST_MCP::FIND_TOOLS_QUERY_MAX_CHARS, $payload['query_truncated']['chars_kept'] );
+		$this->assertSame( Mcpwp_REST_MCP::FIND_TOOLS_QUERY_MAX_TERMS, $payload['query_truncated']['terms_kept'] );
+	}
+
+	public function test_find_tools_short_query_is_not_marked_truncated(): void {
+		$data    = $this->call_tool_unauthenticated( 'mcpwp_find_tools', array( 'query' => 'elementor widget', 'limit' => 5 ) );
+		$payload = json_decode( $data['result']['content'][0]['text'], true );
+		$this->assertArrayNotHasKey( 'query_truncated', $payload );
+	}
+
+	// ── Adversarial review round 1: NIT-2 — stray outer argument keys ───────
+
+	public function test_mcpwp_call_refuses_stray_top_level_argument_keys(): void {
+		$data = $this->call_tool_unauthenticated(
+			'mcpwp_call',
+			array(
+				'name'      => 'wp_list_pages',
+				'per_page'  => 1,
+			)
+		);
+
+		$this->assertTrue( $data['result']['isError'], 'A key flattened onto mcpwp_call\'s own arguments (instead of nested under "arguments") must be refused, not silently dropped.' );
+		$this->assertSame( 'invalid_params', $data['result']['structuredContent']['error']['code'] );
+		$this->assertStringContainsString( 'per_page', $data['result']['structuredContent']['error']['message'] );
+	}
+
 	/** tools/call with no API key context (unrestricted admin fallback). */
 	private function call_tool_unauthenticated( string $name, array $arguments ): array {
 		$controller = new Mcpwp_REST_MCP();
