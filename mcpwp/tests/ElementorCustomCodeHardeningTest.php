@@ -771,4 +771,22 @@ final class ElementorCustomCodeHardeningTest extends TestCase {
 
 		$this->assertSame( array( 'include/general', 'exclude/singular/page' ), $result );
 	}
+
+	/**
+	 * Round 3 of the #974/#976 adversarial review: /elementor/clone copied a
+	 * snippet's meta raw, skipping the unfiltered_html grant and the
+	 * conditions-cache sync, and was reachable by non-admin keys. A snippet
+	 * source is now refused before anything is written.
+	 */
+	public function test_clone_refuses_a_custom_code_snippet_and_writes_nothing(): void {
+		$this->seed_snippet_with_diverged_content( 77 );
+		$before = array_keys( $GLOBALS['_mcpwp_test_posts'] );
+
+		$result = ( new Mcpwp_Elementor_Pro() )->clone_page( 77, array( 'status' => 'pending' ) );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'use_custom_code_tool', $result->get_error_code() );
+		$this->assertSame( 400, $result->get_error_data()['status'] );
+		$this->assertSame( $before, array_keys( $GLOBALS['_mcpwp_test_posts'] ), 'No post may be created for a refused snippet clone.' );
+	}
 }
