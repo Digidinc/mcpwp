@@ -677,6 +677,16 @@ Every tool also carries a top-level `title` and `readOnlyHint`/`destructiveHint`
 `mcpwp/includes/mcp/class-mcpwp-mcp-tool-annotations.php` and the generated audit table at
 `mcpwp/docs/mcp-tool-annotations.md`.
 
+`tools/list` answers under one of two profiles (#907): `full` (default, every tool, unchanged) or
+`core` (~25 most-used tools, from `Mcpwp_REST_MCP::CORE_TOOL_PROFILE_TOOLS`, plus the meta tools
+`mcpwp_find_tools` — keyword search the full catalog, filtered to what the caller can currently
+call — and `mcpwp_call` — dispatch any tool by name through the exact same gates as calling it
+directly). For a client with a small tool-count budget (Cursor's 40-tool cap; a fixed token
+budget). Precedence: `?profile=core|full` query arg on the `/mcp` URL > site setting
+(`mcpwp_settings.mcp_tool_profile`, WP Admin > mcpwp > Settings) > `full`; an unrecognised value at
+either level falls through rather than failing the handshake. See
+`mcpwp/docs/MCP_NATIVE_ENDPOINT.md` for the client-facing writeup.
+
 Protocol version is negotiated per the spec (#906): `initialize` echoes a supported
 `protocolVersion` (`2024-11-05`, `2025-03-26`, `2025-06-18`, `2025-11-25`) and answers the latest for
 anything else — the handshake never fails on version. Every later request follows its
@@ -792,7 +802,7 @@ Server-side MCP tool usage tracked via PostHog when enabled.
 - **Free tier:** off by default (opt-in). **Paid tier:** on by default (opt-out)
 - **UUID:** `mcpwp_site_uuid` in wp_options — random, never reveals site domain
 - **Event:** `mcp_tool_called` with `tool`, `category`, `success`, `duration_ms`, `error_code`, plugin/WP/PHP version
-- **Error codes (enum):** `''` success, `tool_not_found`, `category_disabled`, `scope_denied`, `execution_error`, `pro_required` (v3.2.2+: Pro tool called on Free install — upsell telemetry), `rate_limited` (3.11: refused over budget, nothing ran), `replayed` (3.11: an idempotent re-send served from the stored result — counted as `success: true`, it is the feature's happy path), `spend_budget_exceeded` (3.11.1: the call was priced over this request's spend budget and refused whole; nothing ran), `spend_budget_exhausted` (3.11.1: an operation priced at dispatch no longer fit; it and every later operation in the request did not run), `invalid_params` (#911: a missing required param, or an unknown top-level argument key with no confident/safe near-miss mapping, refused before dispatch — nothing ran). A tool whose route answers with a REST error reports that error's `code`; `tool_error` when it carries none.
+- **Error codes (enum):** `''` success, `tool_not_found`, `category_disabled`, `scope_denied`, `execution_error`, `pro_required` (v3.2.2+: Pro tool called on Free install — upsell telemetry), `rate_limited` (3.11: refused over budget, nothing ran), `replayed` (3.11: an idempotent re-send served from the stored result — counted as `success: true`, it is the feature's happy path), `spend_budget_exceeded` (3.11.1: the call was priced over this request's spend budget and refused whole; nothing ran), `spend_budget_exhausted` (3.11.1: an operation priced at dispatch no longer fit; it and every later operation in the request did not run), `invalid_params` (#911: a missing required param, or an unknown top-level argument key with no confident/safe near-miss mapping, refused before dispatch — nothing ran; #907 reuses this for mcpwp_call's own "missing name"/stray-argument-key refusals and mcpwp_find_tools' missing-query refusal, rather than adding a near-duplicate code), `recursion_denied` (#907: mcpwp_call refused to wrap itself or mcpwp_find_tools). A tool whose route answers with a REST error reports that error's `code`; `tool_error` when it carries none.
 
 ## Admin Pages
 
