@@ -386,7 +386,7 @@ trait Mcpwp_Free_Tools_Elementor_Trait {
 
 		$tools[] = $this->define_tool(
 			'wp_screenshot_url',
-			'Take a screenshot of a URL. Uses Cloudflare Browser Rendering (headless Chromium) if configured, otherwise falls back to WordPress mshots. By default the screenshot is saved to the media library and returned as a URL (base64 payloads overflow AI-client contexts); pass inline=true for raw base64. Set webhook_url for async mode — the webhook fires when the screenshot is ready.',
+			'Take a screenshot of a URL. Uses Cloudflare Browser Rendering (headless Chromium) if configured, otherwise falls back to WordPress mshots — which commonly blocks datacenter-hosted servers outright; when it refuses or errors this now returns an honest error (mshots_rejected / mshots_unavailable) instead of a false "success" pointing at an image that will never render (#804). By default the screenshot is saved to the media library and returned as a URL (base64 payloads overflow AI-client contexts); pass inline=true for raw base64. Set webhook_url for async mode — the webhook fires when the screenshot is ready. Pass widths (max 6, clamped to 320-1920) for a multi-breakpoint sweep in one call — the response reports succeeded/failed counts, and fails outright only if every width failed — or full_page for a full-scroll capture (Cloudflare worker only — mshots has no full-page mode and says so rather than ignoring it). inline cannot be combined with both widths and full_page (memory).',
 			array(
 				'url' => array(
 					'type'        => 'string',
@@ -395,13 +395,23 @@ trait Mcpwp_Free_Tools_Elementor_Trait {
 				),
 				'width' => array(
 					'type'        => 'number',
-					'description' => 'Screenshot width (320-1920)',
+					'description' => 'Screenshot width (320-1920). Ignored when widths is set.',
 					'default'     => 1280,
 				),
 				'height' => array(
 					'type'        => 'number',
-					'description' => 'Screenshot height (240-1440)',
+					'description' => 'Screenshot height (240-1440). Applied to every entry when widths is set.',
 					'default'     => 960,
+				),
+				'widths' => array(
+					'type'        => 'array',
+					'items'       => array( 'type' => 'number' ),
+					'description' => 'Capture at several viewport widths in one call, e.g. [390,767,1024,1440] for a responsive sweep. Max 6. Returns "screenshots" (one result per width) instead of a single result. Not supported together with webhook_url.',
+				),
+				'full_page' => array(
+					'type'        => 'boolean',
+					'description' => 'Capture the full scrollable page height instead of just the viewport. Honored only when the Cloudflare Browser Rendering worker is configured; the mshots fallback has no full-page mode and the response says so instead of silently ignoring the request.',
+					'default'     => false,
 				),
 				'save_to_media' => array(
 					'type'        => 'boolean',
@@ -415,7 +425,7 @@ trait Mcpwp_Free_Tools_Elementor_Trait {
 				),
 				'webhook_url' => array(
 					'type'        => 'string',
-					'description' => 'URL to POST when screenshot is ready. Enables async mode for mshots. Payload: {url, screenshot_url, status, timestamp}. Header: X-SPAI-Event: screenshot.ready',
+					'description' => 'URL to POST when screenshot is ready. Enables async mode for mshots. Payload: {url, screenshot_url, status, timestamp}. Header: X-SPAI-Event: screenshot.ready. Not supported together with widths.',
 				),
 			)
 		);

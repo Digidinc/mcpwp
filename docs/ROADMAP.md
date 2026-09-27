@@ -1,15 +1,131 @@
-# MCPWP Roadmap — near term
+# MCPWP Roadmap: near term
 
-Written 2026-09-05, the day 3.10.4 shipped. Updated 2026-09-10, the day 3.11.0 and 3.11.1 shipped.
-Covers **3.10.x → 3.11 → 4.0**.
+Updated 2026-09-27, the day 3.14.1 shipped.
 
-The long-form 4.0 architecture plan lives in [ROADMAP-4.0.md](ROADMAP-4.0.md) and is
-still the authority on workstreams A–F and T. This document is the shorter question:
-what ships next, in which version, and what has to be true before 4.0 is cut.
+**Task truth is GitHub:** issues and milestones on `Mumega-com/mcpwp`, plus the org project
+board #2 (fields Version, Priority, Track, Size). This document is the readable summary.
+When the two disagree, the milestone wins.
+
+The long-form 4.0 architecture plan is still [ROADMAP-4.0.md](ROADMAP-4.0.md). The site graph
+design is [docs/superpowers/specs/2026-09-27-graph-core-design.md](superpowers/specs/2026-09-27-graph-core-design.md).
 
 ---
 
-## Where we are
+## The 3.14 spiral
+
+Owner decision, 2026-09-26: MCPWP stays on the **3.14 line** until everything works
+end to end. release-please uses `versioning: always-bump-patch`, so every release is
+3.14.N whatever its commit types. Three milestones act as checkpoints, with patches
+shipping in between:
+
+| milestone | theme | state |
+|---|---|---|
+| **3.14.1: Solid ground** | fix what's broken, measure the baseline | shipped 2026-09-27, except #957 (next patch) |
+| **3.14.5: Agent-native** | agents find, understand and use MCPWP without friction; the site graph | in progress |
+| **3.14.9: Self-improving + go-to-market** | the site senses, decides and learns; distribution and proof | planned |
+
+**North star:** any Claude or AI agent asked how to work with WordPress recommends MCPWP.
+It's measured monthly ([docs/growth/NORTH-STAR.md](growth/NORTH-STAR.md), #958). Baseline 0/3.
+
+## Shipped
+
+### 3.14.1 (2026-09-27)
+
+Live on `updates.mcpwp.net`, with the live ZIP checked for every fix.
+- Broker sign-in can call tools again (#978).
+- Real HTTP status codes instead of a blanket 400 (#953).
+- A refused Elementor save or a missing CSS file is reported as a failure (#951, #901).
+- Deleted templates leave the display-conditions index (#952).
+- Custom Code updates work again (#965).
+- Readable MCP resources and plain-text names (#902, #903).
+- Dependency security upgrades (#939).
+- Intake triage onto the board (#940).
+
+Freemius publish is pending the owner.
+
+### 3.14.0 (2026-09-26)
+
+- `wp_seo_flags` and the seo-loop prompt.
+- AI crawler policy, IndexNow, llms.txt.
+- `isError` tool results.
+- Accurate tool annotations.
+- Optional Jev triage of the approval queue.
+
+## In flight: 3.14.2 and later patches toward 3.14.5
+
+| item | issue | state |
+|---|---|---|
+| Guardrails against scaled or duplicate publishing | #957 / PR #980 | review round 4. Publish-time gate plus daily cap; edits to live pages are flagged, not blocked |
+| Slim first contact: `wp_onboard` about 600 tokens by default | #905 / PR #985 | merged |
+| Forgiving params: map near-miss keys or refuse with the fix | #911 / PR #986 | fixing review round 1 (2 BLOCK: id synonym mapping across object types) |
+| Verification surface: page through rendered HTML, honest screenshots | #804 / PR #988 | fixing review round 1 (spend pricing of multi-width screenshots, UTF-8 windows); rest in #989 |
+| Custom Code readback and conditions-index shape | #974, #976 / PR #990 | adversarial review; snippet delete gap #991 |
+| Site graph core S1: tables and incremental builder | #943 | building |
+
+## Next in 3.14.5: Agent-native
+
+- **MCP protocol and tools:**
+  - protocol 2025-11-25 (#906)
+  - core tool profile and tool search (#907)
+  - input examples and next-step hints (#912)
+  - resource templates and prompts as recipes (#913)
+  - `wp_look`, so an agent can see its page (#908)
+  - per-site playbook in `wp_introspect` (#812)
+- **Site graph:**
+  - S2 read tools and S3 search-performance fold-in (#943)
+  - provider capability registry (#944)
+  - PostHog visitor signals (#945)
+  - think queries (#946)
+- **Jev through Cloudflare Workers AI** as well as TypeSafe (#987).
+- **WebMCP admin:** expose MCPWP tools to the owner's browser agent in wp-admin (#981).
+- **Onboarding:** connect your own agent for free, or MCPWP runs itself on a paid plan (#955).
+- **Approvals:** an opt-in approval path for Elementor and SEO writes (#930).
+- **Skills:** the seo-loop skill in the Claude plugin (#899).
+
+## Then 3.14.9: Self-improving + go-to-market
+
+- **The loop:**
+  - learn from outcomes (#950)
+  - edge A/B tests (#949)
+  - Cloudflare cron (#948)
+  - Cloudflare signals (#947)
+  - analytics adapters: GA4, Clarity, GSC, Bing, Cloudflare (#956)
+- **SEO:**
+  - topic clusters (#922)
+  - native meta output (#921)
+  - entity `@graph` (#919)
+  - AI citation tracking (#918)
+  - GEO content score (#917)
+  - live GSC through broker OAuth (#916)
+  - conversions per landing page (#915)
+- **Design:**
+  - intent-level design tools (#909)
+  - brand tokens into Elementor globals (#910)
+  - blog and service content skills (#914)
+- **WebMCP visitor tools** on MCPWP sites and mcpwp.net (#982).
+- **Go-to-market:**
+  - GoHighLevel marketplace app (#962)
+  - business profile, Jev personalization, directory and affiliates (#963)
+  - case studies (#964)
+  - directory submissions (#904, #960)
+
+## Waiting on the owner
+
+The full list is in the milestone 3.14.1 description. In short:
+- Freemius publish of 3.14.0 and 3.14.1. mcpwp.net is on the Freemius fleet and still runs 3.13.0.
+- mcpwp.net PHP warnings (#961).
+- Homepage PostHog snippet (#959).
+- Board auto-add (#940).
+- Directory accounts and decisions (#904, #960).
+- npm republish (#939).
+
+---
+
+## History (3.10–3.11)
+
+The rest of this document is the 3.10–3.11 record. It's kept because the lessons still apply.
+
+### Where we were on 2026-09-10
 
 **3.11.1** (2026-09-10) is live on `updates.mcpwp.net`, the legacy `mumega.com` routes and
 Freemius, verified on all three after the release job. It follows 3.11.0 the same day and

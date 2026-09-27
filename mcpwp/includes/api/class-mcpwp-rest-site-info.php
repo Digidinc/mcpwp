@@ -74,8 +74,14 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 					'callback'            => array( $this, 'get_onboard' ),
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(
+						'detail' => array(
+							'description' => __( 'Response detail level. Default "slim" (~3k tokens or less) returns only first-contact essentials: identity, builder mode, what is connected, the top next actions, and pointers to more (tools/list, wp_get_guide, this param). Pass "full" for the complete legacy briefing, including the full tool catalog grouped by category, quick reference, suggested first tools, content inventory, and site context text.', 'mcpwp' ),
+							'type'        => 'string',
+							'enum'        => array( 'slim', 'full' ),
+							'default'     => 'slim',
+						),
 						'sections' => array(
-							'description' => __( 'Allowlist of top-level sections to include (e.g. ["site_identity","content_inventory"]). Omit for the full briefing — available_tools alone is the majority of that payload.', 'mcpwp' ),
+							'description' => __( 'Allowlist of top-level sections to include from the full briefing (e.g. ["site_identity","content_inventory"]). Implies detail=full. available_tools alone is the majority of that payload.', 'mcpwp' ),
 							'type'        => 'array',
 							'items'       => array( 'type' => 'string' ),
 						),
@@ -364,6 +370,15 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 	public function get_onboard( $request ) {
 		$this->log_activity( 'onboard', $request );
 
+		// #905: slim is the default now — an explicit `sections` allowlist
+		// (#830) still narrows the full legacy briefing built below, so it
+		// implies detail=full rather than being filtered out of the slim
+		// shape (which has no `available_tools`/`quick_reference`/etc. keys
+		// to select from in the first place).
+		$sections    = $request->get_param( 'sections' );
+		$has_sections = is_array( $sections ) && ! empty( $sections );
+		$full        = $has_sections || ( 'full' === sanitize_key( (string) $request->get_param( 'detail' ) ) );
+
 		$site_info    = $this->core->get_site_info();
 		$capabilities = $site_info['capabilities'] ?? array();
 
@@ -416,43 +431,48 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 			);
 		}
 
-		// Recent updates (last 5 modified posts/pages). Security clamp: a read-only
-		// key must not see draft/private titles/statuses in the onboarding brief —
-		// only widen beyond published for write scope (or trusted admin-AJAX).
-		$recent_statuses = $this->requester_can_see_non_public()
-			? array( 'publish', 'draft', 'private' )
-			: array( 'publish' );
-		$recent_posts = get_posts(
-			array(
-				'post_type'      => array( 'post', 'page' ),
-				'post_status'    => $recent_statuses,
-				'orderby'        => 'modified',
-				'order'          => 'DESC',
-				'posts_per_page' => 5,
-			)
-		);
+		// Recent updates and the design reference inventory are only needed for
+		// the full legacy briefing (#905) — skip both the query and the bytes
+		// on the slim default path.
+		if ( $full ) {
+			// Security clamp: a read-only key must not see draft/private
+			// titles/statuses in the onboarding brief — only widen beyond
+			// published for write scope (or trusted admin-AJAX).
+			$recent_statuses = $this->requester_can_see_non_public()
+				? array( 'publish', 'draft', 'private' )
+				: array( 'publish' );
+			$recent_posts = get_posts(
+				array(
+					'post_type'      => array( 'post', 'page' ),
+					'post_status'    => $recent_statuses,
+					'orderby'        => 'modified',
+					'order'          => 'DESC',
+					'posts_per_page' => 5,
+				)
+			);
 
-		$recent_updates = array();
-		foreach ( $recent_posts as $p ) {
-			$recent_updates[] = array(
-				'id'       => $p->ID,
-				'title'    => Mcpwp_Agent_Text::decode( $p->post_title ),
-				'type'     => $p->post_type,
-				'status'   => $p->post_status,
-				'modified' => $p->post_modified,
+			$recent_updates = array();
+			foreach ( $recent_posts as $p ) {
+				$recent_updates[] = array(
+					'id'       => $p->ID,
+					'title'    => Mcpwp_Agent_Text::decode( $p->post_title ),
+					'type'     => $p->post_type,
+					'status'   => $p->post_status,
+					'modified' => $p->post_modified,
+				);
+			}
+			$inventory['recent_updates'] = $recent_updates;
+			$design_reference_inventory  = $this->design_references->list_references(
+				array(
+					'per_page' => 3,
+					'page'     => 1,
+				)
+			);
+			$inventory['design_references'] = array(
+				'total'  => (int) ( $design_reference_inventory['total'] ?? 0 ),
+				'recent' => $design_reference_inventory['references'] ?? array(),
 			);
 		}
-		$inventory['recent_updates'] = $recent_updates;
-		$design_reference_inventory  = $this->design_references->list_references(
-			array(
-				'per_page' => 3,
-				'page'     => 1,
-			)
-		);
-		$inventory['design_references'] = array(
-			'total'  => (int) ( $design_reference_inventory['total'] ?? 0 ),
-			'recent' => $design_reference_inventory['references'] ?? array(),
-		);
 
 		// 3. Active integrations.
 		$integrations = array();
@@ -522,9 +542,12 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 
 		$is_pro = class_exists( 'Mcpwp_License' ) && Mcpwp_License::get_instance()->is_pro();
 
-		// 4. Available tools grouped by category.
+		// 4. Available tools grouped by category. This is the single largest
+		// contributor to this endpoint's payload — every tool with its
+		// description, duplicating tools/list (#830 measured it at ~95% of
+		// the full briefing). #905: only build it for the full briefing.
 		$tools_by_category = array();
-		if ( class_exists( 'Mcpwp_REST_MCP' ) ) {
+		if ( $full && class_exists( 'Mcpwp_REST_MCP' ) ) {
 			$mcp       = new Mcpwp_REST_MCP();
 			$all_tools = method_exists( $mcp, 'get_introspection_data' )
 				? ( $mcp->get_introspection_data()['tools'] ?? array() )
@@ -547,15 +570,20 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 			}
 		}
 
-		// 5. Site context.
+		// 5. Site context. Full markdown text (up to 50KB, see set_site_context)
+		// is deferred to the full briefing (#905) — the slim default only
+		// needs to know whether one is configured; wp_get_site_context reads
+		// the text directly.
 		$site_context    = get_option( 'mcpwp_site_context', '' );
 		$context_section = array(
 			'configured' => '' !== $site_context,
 		);
-		if ( '' !== $site_context ) {
-			$context_section['context'] = $site_context;
-		} else {
-			$context_section['hint'] = 'No site context configured. Use wp_set_site_context to define design rules, color palette, typography, and layout guidelines.';
+		if ( $full ) {
+			if ( '' !== $site_context ) {
+				$context_section['context'] = $site_context;
+			} else {
+				$context_section['hint'] = 'No site context configured. Use wp_set_site_context to define design rules, color palette, typography, and layout guidelines.';
+			}
 		}
 
 		// 6. Recommended first actions.
@@ -599,6 +627,59 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 				'tool'        => 'wp_list_posts',
 				'description' => 'Browse existing blog posts to understand current content.',
 			);
+		}
+
+		if ( ! $full ) {
+			// #905: slim by default — everything an agent needs in its first
+			// 30 seconds (identity, builder mode, what's connected, the top 3
+			// next actions) and nothing else. No tool catalog dump — that
+			// duplicated tools/list and was ~95% of this endpoint's payload
+			// (#830 measured it; this makes the fix the default instead of
+			// opt-in). Every field below `available_tools`, `quick_reference`,
+			// `suggested_first_tools`, full `recommended_actions`, recent
+			// content, design references, and the full site context text
+			// stays reachable via detail=full or a `sections` allowlist —
+			// nothing here is deleted, only deferred.
+			$builder_mode = null;
+			if ( ! empty( $integrations['elementor'] ) ) {
+				$builder_mode = 'elementor:' . $integrations['elementor']['layout_mode'];
+			} elseif ( ! empty( $integrations['gutenberg'] ) ) {
+				$builder_mode = 'gutenberg';
+			}
+
+			$data = array(
+				'site_identity' => array(
+					'name'       => $identity['name'],
+					'url'        => $identity['url'],
+					'wp_version' => $identity['wp_version'],
+					'plugin'     => $identity['plugin'],
+				),
+				'builder_mode'            => $builder_mode,
+				'connected'               => $integrations,
+				'content_summary'         => array(
+					'pages' => array(
+						'published' => $inventory['pages']['published'],
+						'total'     => $inventory['pages']['total'],
+					),
+					'posts' => array(
+						'published' => $inventory['posts']['published'],
+						'total'     => $inventory['posts']['total'],
+					),
+					'media' => $inventory['media'],
+				),
+				'site_context_configured' => $context_section['configured'],
+				'next_actions'            => array_slice( $actions, 0, 3 ),
+				'more'                    => array(
+					'tools'         => 'Call MCP tools/list (or GET /introspect) for the full tool catalog with input schemas.',
+					'guide'         => 'Call wp_get_guide(topic="...") for a topic guide — e.g. onboarding, elementor, seo, workflows.',
+					'site_context'  => 'Call wp_get_site_context for the full site brief and design rules.',
+					'full_briefing' => 'Call wp_onboard(detail="full") — or GET /onboard?detail=full — for the complete legacy briefing: full tool catalog, quick reference, suggested first tools, recent content, design references, and site context text.',
+				),
+				'pro_active'              => $is_pro,
+				'detail'                  => 'slim',
+			);
+
+			return $this->success_response( $data );
 		}
 
 		// 7. Quick reference card — top 10 most-used tools.
@@ -675,14 +756,15 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 			'suggested_first_tools' => $suggested_first_tools,
 			'quick_start'           => $quick_start,
 			'pro_active'            => $is_pro,
+			// Read-only content-guardrails status (#957): current UTC-day
+			// published count vs the cap, so an agent sees headroom before
+			// it starts publishing.
+			'guardrails_status'     => class_exists( 'Mcpwp_Content_Guardrails' ) ? Mcpwp_Content_Guardrails::get_status_summary() : array(),
 		);
 
-		// Opt-in narrowing (#830): available_tools alone is ~95% of this
-		// payload (every tool name+description, grouped by category). No
-		// `sections` param — the behaviour every existing caller already
-		// gets — returns the full briefing unchanged, byte-for-byte.
-		$sections = $request->get_param( 'sections' );
-		if ( is_array( $sections ) && ! empty( $sections ) ) {
+		// #830: an explicit `sections` allowlist still narrows the full
+		// legacy briefing built above — unchanged behavior.
+		if ( $has_sections ) {
 			$data = array_intersect_key( $data, array_flip( $sections ) );
 		}
 

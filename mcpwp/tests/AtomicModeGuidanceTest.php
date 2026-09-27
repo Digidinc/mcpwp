@@ -227,13 +227,16 @@ final class AtomicModeGuidanceTest extends TestCase {
 		$this->stubThemeLookup();
 
 		$controller = new Mcpwp_REST_Site_Info();
-		$data       = $controller->get_onboard( new WP_REST_Request( 'GET', '/mcpwp/v1/onboard' ) )->get_data();
+		// #905: the default response is now the slim shape, where active
+		// integrations (with their guidance notes intact) live under
+		// `connected` rather than `active_integrations` (full-briefing-only).
+		$data = $controller->get_onboard( new WP_REST_Request( 'GET', '/mcpwp/v1/onboard' ) )->get_data();
 
-		$this->assertArrayHasKey( 'elementor', $data['active_integrations'] );
-		$this->assertSame( 'atomic', $data['active_integrations']['elementor']['layout_mode'] );
-		$this->assertArrayHasKey( 'note', $data['active_integrations']['elementor'] );
-		$this->assertStringContainsString( 'container', $data['active_integrations']['elementor']['note'] );
-		$this->assertStringContainsString( 'render_verified', $data['active_integrations']['elementor']['note'] );
+		$this->assertArrayHasKey( 'elementor', $data['connected'] );
+		$this->assertSame( 'atomic', $data['connected']['elementor']['layout_mode'] );
+		$this->assertArrayHasKey( 'note', $data['connected']['elementor'] );
+		$this->assertStringContainsString( 'container', $data['connected']['elementor']['note'] );
+		$this->assertStringContainsString( 'render_verified', $data['connected']['elementor']['note'] );
 	}
 
 	/**
@@ -247,8 +250,8 @@ final class AtomicModeGuidanceTest extends TestCase {
 		$controller = new Mcpwp_REST_Site_Info();
 		$data       = $controller->get_onboard( new WP_REST_Request( 'GET', '/mcpwp/v1/onboard' ) )->get_data();
 
-		$this->assertSame( 'container', $data['active_integrations']['elementor']['layout_mode'] );
-		$this->assertArrayNotHasKey( 'note', $data['active_integrations']['elementor'] );
+		$this->assertSame( 'container', $data['connected']['elementor']['layout_mode'] );
+		$this->assertArrayNotHasKey( 'note', $data['connected']['elementor'] );
 	}
 
 	// ---------------------------------------------------------------

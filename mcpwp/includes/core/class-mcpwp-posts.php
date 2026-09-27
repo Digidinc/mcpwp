@@ -313,6 +313,29 @@ class Mcpwp_Posts {
 			$post_type = $validated;
 		}
 
+		// elementor_snippet is whitelisted in $safe_nonpublic_types (a
+		// generic caller can list/read them fine), but a generic create
+		// here writes only post_content — never _elementor_code,
+		// _elementor_location, or _elementor_priority. That produces a
+		// snippet that reads back via the "may be altered" legacy fallback
+		// in Mcpwp_REST_Elementor_Pro::read_custom_code_source() forever
+		// (never rendered by Elementor, since its own renderer reads
+		// _elementor_code, not post_content — see #871) and, being a
+		// snippet with no _elementor_location at all, never enters
+		// Elementor's location-keyed conditions cache either (#974/#976
+		// adversarial review, NIT-c). Refusing here, once, is smaller than
+		// teaching this generic writer the Custom Code shape.
+		if ( 'elementor_snippet' === $post_type ) {
+			return new WP_Error(
+				'use_custom_code_tool',
+				__( 'Elementor Custom Code snippets cannot be created through the generic post endpoint.', 'mcpwp' ),
+				array(
+					'status' => 400,
+					'hint'   => 'Use wp_create_elementor_custom_code (POST /elementor/custom-code) instead — it writes the _elementor_code/_elementor_location/_elementor_priority meta Elementor\'s own renderer and conditions cache require, which this generic endpoint does not.',
+				)
+			);
+		}
+
 		// Validate terms and meta before anything is written (#797).
 		$resolved_terms = Mcpwp_Post_Fields::resolve_terms( isset( $data['terms'] ) ? $data['terms'] : null, $post_type, $data );
 		if ( is_wp_error( $resolved_terms ) ) {
@@ -346,22 +369,14 @@ class Mcpwp_Posts {
 			$post_data['post_name'] = sanitize_title( $data['slug'] );
 		}
 
+		// Content guardrails (#957): enforced centrally by
+		// Mcpwp_Content_Guardrails::on_insert_post_data(), a wp_insert_post_data
+		// filter that runs inside the wp_insert_post() call below — not here.
+		// See that method's docblock for why.
 		$post_id = wp_insert_post( $post_data, true );
 
 		if ( is_wp_error( $post_id ) ) {
 			return $post_id;
-		}
-
-		// Set Elementor snippet location meta (head, body_start, body_end).
-		if ( 'elementor_snippet' === $post_type ) {
-			$allowed_locations = array( 'head', 'body_start', 'body_end' );
-			$location          = isset( $data['elementor_location'] ) ? sanitize_key( $data['elementor_location'] ) : 'head';
-			if ( ! in_array( $location, $allowed_locations, true ) ) {
-				$location = 'head';
-			}
-			update_post_meta( $post_id, '_elementor_location', $location );
-			// Elementor Custom Code requires these meta keys to function.
-			update_post_meta( $post_id, '_elementor_edit_mode', 'builder' );
 		}
 
 		// Set categories
@@ -429,6 +444,36 @@ class Mcpwp_Posts {
 						'Post ID %d not found. Use wp_list_posts to see available posts. If this is a page, use wp_update_page instead.',
 						absint( $post_id )
 					),
+				)
+			);
+		}
+
+		// #974/#976 review round 2, W1: this route used to accept
+		// `elementor_location` on an elementor_snippet update and write it
+		// as the SHORT public value (e.g. "body_end") straight into
+		// `_elementor_location` — which Elementor's own renderer reads as
+		// its literal internal value (elementor_head/elementor_body_start/
+		// elementor_body_end; see get_custom_code_location_map() in
+		// Mcpwp_REST_Elementor_Pro), so the snippet kept printing in its
+		// OLD place. It also never called
+		// Mcpwp_REST_Elementor_Pro::sync_custom_code_conditions_cache(),
+		// so Elementor Pro's real conditions cache kept the snippet filed
+		// under its stale former location and it eventually stopped
+		// rendering there too, matching what create_post() already refuses
+		// (#974/#976 review round 1, NIT-c) for the identical reason.
+		// `content` (post_content) is refused the same way: it is not what
+		// Elementor's renderer reads either (`_elementor_code` is — see
+		// Mcpwp_REST_Elementor_Pro::read_custom_code_source()), so writing
+		// it here produces exactly the divergence that fix already guards
+		// against on create. A title-only (or status/excerpt/slug/meta/
+		// terms) update carries neither field and is unaffected.
+		if ( 'elementor_snippet' === $post->post_type && ( isset( $data['elementor_location'] ) || isset( $data['content'] ) ) ) {
+			return new WP_Error(
+				'use_custom_code_tool',
+				__( 'Elementor Custom Code snippets cannot have their code or injection location updated through the generic post endpoint.', 'mcpwp' ),
+				array(
+					'status' => 400,
+					'hint'   => 'Use wp_update_elementor_custom_code (PUT /elementor/custom-code/{id}) instead — it writes the internal _elementor_location value Elementor\'s renderer actually reads and keeps Elementor Pro\'s conditions cache in sync, neither of which this generic endpoint does.',
 				)
 			);
 		}
@@ -506,15 +551,6 @@ class Mcpwp_Posts {
 		if ( isset( $data['tags'] ) ) {
 			$tags = array_map( 'sanitize_text_field', (array) $data['tags'] );
 			wp_set_post_tags( $post_id, $tags );
-		}
-
-		// A snippet's location may change after creation too; refusing on
-		// update what create accepts breaks a client round-tripping payloads.
-		if ( isset( $data['elementor_location'] ) && 'elementor_snippet' === $post->post_type ) {
-			$location = sanitize_key( (string) $data['elementor_location'] );
-			if ( in_array( $location, array( 'head', 'body_start', 'body_end' ), true ) ) {
-				update_post_meta( $post_id, '_elementor_location', $location );
-			}
 		}
 
 		// Update featured image

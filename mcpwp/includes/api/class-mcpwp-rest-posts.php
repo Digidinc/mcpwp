@@ -367,8 +367,18 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 		$normalized = $this->normalize_bulk_items( $posts_data, 'post' );
 		$posts_data = $normalized['items'];
 
-		$created = array();
-		$errors  = $normalized['errors'];
+		// Content guardrails (#957 rule 2): a single bulk call publishing
+		// more than the configured threshold goes through the approval flow
+		// instead — every item below is force-created as a draft, and one
+		// approval request covers publishing the whole batch. A batch that
+		// only creates drafts is never gated.
+		$bulk_plan = class_exists( 'Mcpwp_Content_Guardrails' )
+			? Mcpwp_Content_Guardrails::plan_bulk_publish( $posts_data )
+			: array( 'requires_approval' => false, 'threshold' => 0 );
+
+		$created          = array();
+		$errors           = $normalized['errors'];
+		$forced_draft_ids = array();
 
 		foreach ( $posts_data as $index => $post_item ) {
 			if ( empty( $post_item['title'] ) ) {
@@ -377,6 +387,11 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 					'message' => __( 'Title is required.', 'mcpwp' ),
 				);
 				continue;
+			}
+
+			$originally_publish = isset( $post_item['status'] ) && 'publish' === sanitize_key( (string) $post_item['status'] );
+			if ( $bulk_plan['requires_approval'] && $originally_publish ) {
+				$post_item['status'] = 'draft';
 			}
 
 			$result = $this->posts->create_post( $post_item );
@@ -389,17 +404,23 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 				);
 			} else {
 				$created[] = $result;
+				if ( $bulk_plan['requires_approval'] && $originally_publish && ! empty( $result['id'] ) ) {
+					$forced_draft_ids[] = (int) $result['id'];
+				}
 			}
 		}
 
-		return $this->success_response(
-			array(
-				'created' => $created,
-				'errors'  => $errors,
-				'total'   => count( $created ),
-			),
-			201
+		$response = array(
+			'created' => $created,
+			'errors'  => $errors,
+			'total'   => count( $created ),
 		);
+
+		if ( $bulk_plan['requires_approval'] && ! empty( $forced_draft_ids ) ) {
+			$response['guardrails'] = $this->queue_bulk_publish_approval( $forced_draft_ids, 'post', $bulk_plan['threshold'], 'wp_bulk_create_posts' );
+		}
+
+		return $this->success_response( $response, 201 );
 	}
 
 	/**

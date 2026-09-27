@@ -227,6 +227,33 @@ class Mcpwp_Multilang {
 	}
 
 	/**
+	 * Exclude a translation's whole group (its source post and every
+	 * existing sibling translation) from the NEXT duplicate_check() the
+	 * content guardrails filter runs (#957 adversarial review: "translations
+	 * are exempt from duplicate checks against posts in their own
+	 * translation group"). A translation is deliberately near-identical to
+	 * its source at least until it is actually translated — that similarity
+	 * is the whole point, not scaled/duplicate content.
+	 *
+	 * @param int $post_id Source post ID.
+	 * @return void
+	 */
+	private function exclude_translation_group_from_duplicate_check( $post_id ) {
+		if ( ! class_exists( 'Mcpwp_Content_Guardrails' ) ) {
+			return;
+		}
+
+		$exclude = array( (int) $post_id );
+		foreach ( $this->get_post_translations( $post_id ) as $translation ) {
+			if ( isset( $translation['post_id'] ) ) {
+				$exclude[] = (int) $translation['post_id'];
+			}
+		}
+
+		Mcpwp_Content_Guardrails::set_duplicate_exclude_ids( array_values( array_unique( $exclude ) ) );
+	}
+
+	/**
 	 * Create a translation for a post.
 	 *
 	 * @param int    $post_id  Original post ID.
@@ -407,12 +434,26 @@ class Mcpwp_Multilang {
 			return new WP_Error( 'not_found', __( 'Original post not found.', 'mcpwp' ), array( 'status' => 404 ) );
 		}
 
+		$new_title   = isset( $data['title'] ) ? sanitize_text_field( $data['title'] ) : $original->post_title;
+		$new_content = isset( $data['content'] ) ? $this->sanitize_content_body( $data['content'] )['content'] : $original->post_content;
+		$new_status  = isset( $data['status'] ) ? sanitize_key( $data['status'] ) : 'draft';
+
+		// Content guardrails (#957): enforced centrally by
+		// Mcpwp_Content_Guardrails::on_insert_post_data() — a translation is
+		// a new published post too, and still counts against the ramp cap
+		// (a machine-translated batch of hundreds of posts is exactly the
+		// scaled-publishing pattern this guards against). But a translation
+		// is DELIBERATELY near-identical to its own source/siblings, so
+		// exclude the whole translation group from the duplicate check —
+		// see set_duplicate_exclude_ids()'s docblock.
+		$this->exclude_translation_group_from_duplicate_check( $post_id );
+
 		// Create the translated post.
 		$new_post = array(
-			'post_title'   => isset( $data['title'] ) ? sanitize_text_field( $data['title'] ) : $original->post_title,
-			'post_content' => isset( $data['content'] ) ? $this->sanitize_content_body( $data['content'] )['content'] : $original->post_content,
+			'post_title'   => $new_title,
+			'post_content' => $new_content,
 			'post_excerpt' => isset( $data['excerpt'] ) ? sanitize_textarea_field( $data['excerpt'] ) : $original->post_excerpt,
-			'post_status'  => isset( $data['status'] ) ? sanitize_key( $data['status'] ) : 'draft',
+			'post_status'  => $new_status,
 			'post_type'    => $original->post_type,
 			'post_author'  => $original->post_author,
 		);
@@ -562,12 +603,19 @@ class Mcpwp_Multilang {
 			return new WP_Error( 'not_found', __( 'Original post not found.', 'mcpwp' ), array( 'status' => 404 ) );
 		}
 
+		$new_title   = isset( $data['title'] ) ? sanitize_text_field( $data['title'] ) : $original->post_title;
+		$new_content = isset( $data['content'] ) ? $this->sanitize_content_body( $data['content'] )['content'] : $original->post_content;
+		$new_status  = isset( $data['status'] ) ? sanitize_key( $data['status'] ) : 'draft';
+
+		// Content guardrails (#957): see create_wpml_translation() above.
+		$this->exclude_translation_group_from_duplicate_check( $post_id );
+
 		// Create the translated post.
 		$new_post = array(
-			'post_title'   => isset( $data['title'] ) ? sanitize_text_field( $data['title'] ) : $original->post_title,
-			'post_content' => isset( $data['content'] ) ? $this->sanitize_content_body( $data['content'] )['content'] : $original->post_content,
+			'post_title'   => $new_title,
+			'post_content' => $new_content,
 			'post_excerpt' => isset( $data['excerpt'] ) ? sanitize_textarea_field( $data['excerpt'] ) : $original->post_excerpt,
-			'post_status'  => isset( $data['status'] ) ? sanitize_key( $data['status'] ) : 'draft',
+			'post_status'  => $new_status,
 			'post_type'    => $original->post_type,
 			'post_author'  => $original->post_author,
 		);

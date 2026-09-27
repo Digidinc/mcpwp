@@ -15,7 +15,7 @@
  * Plugin URI:        https://mcpwp.net/
  * Description:       Connect WordPress to AI assistants via the Model Context Protocol (MCP). Manage posts, pages, media, and Elementor through natural language.
  * x-release-please-start-version
- * Version:           3.14.1
+ * Version:           3.14.2
  * x-release-please-end
  * Requires at least: 6.1
  * Requires PHP:      7.4
@@ -71,7 +71,7 @@ if ( defined( 'MCPWP_VERSION' ) ) {
 /**
  * Plugin version.
  */
-define( 'MCPWP_VERSION', '3.14.1' ); // x-release-please-version
+define( 'MCPWP_VERSION', '3.14.2' ); // x-release-please-version
 
 /**
  * Whether custom MCP tool scope filtering is supported.
@@ -272,6 +272,9 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-post-fields.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-option-access.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-destructive-gate.php';
+	// Consulted by every post/page create-or-publish path (#957); loaded
+	// before Mcpwp_Posts/Mcpwp_Pages, which call it inline.
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-content-guardrails.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-posts.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-pages.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-media.php';

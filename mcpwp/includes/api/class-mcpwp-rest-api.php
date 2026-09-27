@@ -347,6 +347,15 @@ abstract class Mcpwp_REST_API {
 	 * @return WP_REST_Response Response object.
 	 */
 	protected function success_response( $data, $status = 200 ) {
+		// Merge any content-guardrails notice recorded for a post ID
+		// somewhere in this response, generically — every create/update
+		// route reports guardrails results without needing its own call to
+		// ask for them (#957 adversarial review design fix: "so every tool
+		// reports it, no per-site plumbing").
+		if ( is_array( $data ) && class_exists( 'Mcpwp_Content_Guardrails' ) ) {
+			Mcpwp_Content_Guardrails::attach_notices_to_response( $data );
+		}
+
 		$response = new WP_REST_Response( $data, $status );
 
 		// Add rate limit headers.

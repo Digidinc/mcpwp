@@ -280,7 +280,7 @@ final class CustomCodeUnfilteredHtmlGrantTest extends TestCase {
 	public function test_multisite_refuses_a_write_that_would_need_the_grant(): void {
 		$GLOBALS['mcpwp_test_is_multisite'] = true;
 
-		$result = $this->call( 'custom_code_multisite_refusal', array( '<script>a()</script>' ) );
+		$result = $this->call( 'custom_code_unfiltered_html_refusal', array( '<script>a()</script>' ) );
 
 		$this->assertInstanceOf( WP_Error::class, $result );
 		$this->assertSame( 'multisite_unfiltered_html_refused', $result->get_error_code() );
@@ -292,20 +292,20 @@ final class CustomCodeUnfilteredHtmlGrantTest extends TestCase {
 		// no capability, so multisite is no obstacle and we do not invent one.
 		$GLOBALS['mcpwp_test_is_multisite'] = true;
 
-		$this->assertTrue( $this->call( 'custom_code_multisite_refusal', array( '<p>plain</p>' ) ) );
+		$this->assertTrue( $this->call( 'custom_code_unfiltered_html_refusal', array( '<p>plain</p>' ) ) );
 	}
 
 	public function test_multisite_super_admin_is_allowed(): void {
 		$GLOBALS['mcpwp_test_is_multisite']   = true;
 		$GLOBALS['mcpwp_test_is_super_admin'] = true;
 
-		$this->assertTrue( $this->call( 'custom_code_multisite_refusal', array( '<script>a()</script>' ) ) );
+		$this->assertTrue( $this->call( 'custom_code_unfiltered_html_refusal', array( '<script>a()</script>' ) ) );
 	}
 
 	public function test_single_site_is_allowed(): void {
 		$GLOBALS['mcpwp_test_is_multisite'] = false;
 
-		$this->assertTrue( $this->call( 'custom_code_multisite_refusal', array( '<script>a()</script>' ) ) );
+		$this->assertTrue( $this->call( 'custom_code_unfiltered_html_refusal', array( '<script>a()</script>' ) ) );
 	}
 
 	public function test_create_request_is_refused_on_multisite_before_any_post_is_created(): void {

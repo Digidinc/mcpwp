@@ -148,6 +148,10 @@ class Mcpwp_Event_Store {
 				'hook'        => 'mcpwp_seo_audit_completed',
 				'description' => __( 'A stored SEO audit completed.', 'mcpwp' ),
 			),
+			'content.publish_spike' => array(
+				'hook'        => 'mcpwp_content_publish_spike',
+				'description' => __( 'Published posts+pages in the last 24h crossed both an absolute floor and 2x the trailing 30-day daily average — a possible scaled/automated publishing spike (#957).', 'mcpwp' ),
+			),
 		);
 	}
 

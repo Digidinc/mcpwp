@@ -236,7 +236,15 @@ class Mcpwp_REST_Site_Custom_Css extends Mcpwp_REST_API {
 				array(
 					'method'      => 'elementor_custom_code',
 					'available'   => $elementor_snippet_available,
-					'description' => 'Create an elementor_snippet post — injects a <style> block via Elementor output, bypasses theme CSS load order. Use: wp_create_post(post_type="elementor_snippet", title="Global CSS", content="<style>...<\/style>", location="head")',
+					// #974/#976 review round 2, W2: this used to point at
+					// wp_create_post(post_type="elementor_snippet", ...) —
+					// the generic post endpoint now refuses that post_type
+					// outright (round 1, NIT-c), since it cannot write the
+					// _elementor_code/_elementor_location meta Elementor's
+					// own renderer requires. wp_create_elementor_custom_code
+					// is the real writer, and its param is `code`, not
+					// `content`.
+					'description' => 'Create an Elementor Custom Code snippet — injects a <style> block via Elementor output, bypasses theme CSS load order. Use: wp_create_elementor_custom_code(title="Global CSS", code="<style>...<\/style>", location="head", status="publish")',
 				),
 				array(
 					'method'      => 'elementor_header_widget',

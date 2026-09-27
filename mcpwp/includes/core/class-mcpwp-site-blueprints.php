@@ -118,7 +118,24 @@ class Mcpwp_Site_Blueprints {
 		$created_pages = array();
 		$slug_to_id    = array();
 
-		// Create pages.
+		// Content guardrails (#957 rule 2): deploying a blueprint publishes
+		// every one of its pages in a single call — treat it the same as a
+		// bulk_create_pages call for the bulk-approval threshold. Over the
+		// threshold, every page is force-created as a draft and one
+		// approval request covers publishing the whole set.
+		$page_count = is_array( $blueprint['pages'] ) ? count( $blueprint['pages'] ) : 0;
+		$bulk_plan  = ( class_exists( 'Mcpwp_Content_Guardrails' ) && 'publish' === $post_status )
+			? Mcpwp_Content_Guardrails::plan_bulk_publish( array_fill( 0, $page_count, array( 'status' => 'publish' ) ) )
+			: array( 'requires_approval' => false, 'threshold' => 0 );
+
+		$forced_draft_ids = array();
+
+		// Create pages. Per-page content guardrails (ramp cap, duplicate
+		// detection) are enforced centrally by
+		// Mcpwp_Content_Guardrails::on_insert_post_data() inside the
+		// wp_insert_post() call below — not here; only the bulk-approval
+		// threshold decision above (which needs the whole batch's size
+		// before any single insert happens) stays call-site logic.
 		foreach ( $blueprint['pages'] as $page_def ) {
 			$title = $name_prefix
 				? $name_prefix . ': ' . ( $page_def['title'] ?? 'Page' )
@@ -128,10 +145,12 @@ class Mcpwp_Site_Blueprints {
 
 			$content = self::build_page_placeholder_content( $page_def );
 
+			$page_status = $bulk_plan['requires_approval'] ? 'draft' : $post_status;
+
 			$page_id = wp_insert_post( array(
 				'post_title'   => $title,
 				'post_name'    => $slug,
-				'post_status'  => $post_status,
+				'post_status'  => $page_status,
 				'post_type'    => 'page',
 				'post_content' => $content,
 				'meta_input'   => array(
@@ -149,12 +168,17 @@ class Mcpwp_Site_Blueprints {
 				update_post_meta( $page_id, '_wp_page_template', sanitize_text_field( $page_def['template'] ) );
 			}
 
+			if ( $bulk_plan['requires_approval'] ) {
+				$forced_draft_ids[] = $page_id;
+			}
+
 			$slug_to_id[ $page_def['slug'] ?? $slug ] = $page_id;
 			$created_pages[] = array(
-				'page_id' => $page_id,
-				'title'   => $title,
-				'slug'    => $slug,
-				'url'     => get_permalink( $page_id ),
+				'id'       => $page_id,
+				'page_id'  => $page_id,
+				'title'    => $title,
+				'slug'     => $slug,
+				'url'      => get_permalink( $page_id ),
 				'sections' => $page_def['sections'] ?? array(),
 				'next_step' => 'Use wp_get_blueprint to generate Elementor sections for each section type listed, then wp_add_section to insert them.',
 			);
@@ -194,7 +218,7 @@ class Mcpwp_Site_Blueprints {
 			update_option( 'mcpwp_site_context', wp_kses_post( $blueprint['site_context'] ), false );
 		}
 
-		return array(
+		$result = array(
 			'success'      => true,
 			'blueprint_id' => $id,
 			'blueprint'    => $blueprint['name'],
@@ -203,6 +227,20 @@ class Mcpwp_Site_Blueprints {
 			'pages_count'  => count( $created_pages ),
 			'note'         => 'All pages created as ' . $post_status . '. Use wp_set_elementor or wp_get_blueprint + wp_add_section to build page layouts.',
 		);
+
+		// The bulk-publish approval request itself is queued by the REST
+		// controller (deploy_blueprint()), not here — creating it needs
+		// guard_stable_identity_for_approvals()/current_requester_key_id(),
+		// which only exist on a REST controller instance, and this is a
+		// static method with no such context (#957 adversarial review
+		// WARN-7). Hand back what it needs to do that.
+		if ( $bulk_plan['requires_approval'] && ! empty( $forced_draft_ids ) ) {
+			$result['note']                 = 'This blueprint publishes ' . count( $forced_draft_ids ) . ' pages at once (bulk threshold: ' . $bulk_plan['threshold'] . '), so every page was created as a draft instead.';
+			$result['_bulk_approval_ids']   = $forced_draft_ids;
+			$result['_bulk_approval_threshold'] = $bulk_plan['threshold'];
+		}
+
+		return $result;
 	}
 
 	// -------------------------------------------------------------------------

@@ -155,10 +155,6 @@ final class StagedStatusValueAuditTest extends TestCase {
 		'api/class-mcpwp-rest-site-info.php' => 'staged value is unrelated site-info/onboarding bookkeeping, never a post/' .
 			'product status.',
 		'api/class-mcpwp-rest-site-settings.php' => 'staged value is plugin settings bookkeeping, never a post/product status.',
-		'pro/api/class-mcpwp-rest-elementor-pro.php' => 'staged value here is Elementor Custom Code\'s enabled/disabled ' .
-			'status — the whole surface is already blanket-admin-gated for every method via the /mcpwp/v1/elementor/' .
-			'custom-code entry in $admin_routes (see PublishStatusHandlerAuditTest::AUDITED), so no lower-scoped path can ' .
-			'ever stage or consume it.',
 		'pro/api/class-mcpwp-rest-staging.php' => 'staged value is a staging push operation\'s progress status — the ' .
 			'entire /mcpwp/v1/staging surface is already blanket-admin-gated for every method (an $admin_routes entry), ' .
 			'so no lower-scoped path can ever stage or consume it.',
@@ -169,6 +165,29 @@ final class StagedStatusValueAuditTest extends TestCase {
 		// ── False positive from the grep's word boundary ────────────────
 		'traits/trait-mcpwp-api-auth.php' => 'false positive: this file — docblocks/comments discussing \'status\' and ' .
 			'calling update_option() for unrelated bookkeeping (e.g. rate-limit state), not a status-staging handler.',
+		// #957: the file's update_option() calls (mcpwp_content_guardrails
+		// settings, mcpwp_content_guardrails_publish_log) never store a
+		// 'status' key at all — the 'status' => ... literal the regex
+		// matches is evaluate()'s own RETURN array field (the effective
+		// post_status decision it hands back to its caller to use in that
+		// caller's own wp_insert_post()/wp_update_post() call), which is
+		// covered by PublishStatusHandlerAuditTest::AUDITED's disposition
+		// for this same file, not by anything staged here.
+		'core/class-mcpwp-content-guardrails.php' => 'false positive: this file — update_option() calls store settings/' .
+			'publish-log bookkeeping with no \'status\' key; the matched \'status\' literal is evaluate()\'s own return ' .
+			'value, handed back for the CALLER to write, not staged here for later consumption.',
+		// #957: the matched 'status' => 'publish' literal is a synthetic
+		// per-item array built ONLY to count how many of a blueprint's pages
+		// would publish (passed to Mcpwp_Content_Guardrails::plan_bulk_publish()),
+		// never itself written via this file's (pre-existing, unrelated)
+		// update_option( 'mcpwp_site_context', ... ) call. The real page
+		// statuses are written via wp_insert_post(), already covered by
+		// PublishStatusHandlerAuditTest::AUDITED's blanket-admin disposition
+		// for this same file.
+		'core/class-mcpwp-site-blueprints.php' => 'false positive: the matched \'status\' literal is a synthetic ' .
+			'bulk-count array passed to plan_bulk_publish(), unrelated to the file\'s own (pre-existing) ' .
+			'update_option( \'mcpwp_site_context\', ... ) call; real page statuses go through wp_insert_post(), already ' .
+			'blanket-admin-gated per PublishStatusHandlerAuditTest::AUDITED.',
 	);
 
 	protected function setUp(): void {

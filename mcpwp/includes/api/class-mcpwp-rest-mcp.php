@@ -50,6 +50,22 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	private $tools_cache = null;
 
 	/**
+	 * Forgiving-params notes from the most recently validated tools/call
+	 * (#911) — set by validate_tool_arguments() via handle_tools_call(),
+	 * consumed and cleared by attach_result_meta() into
+	 * `result._meta.param_fixes`. A side channel, not a return value,
+	 * because attach_result_meta() decorates every JSON-RPC response
+	 * uniformly (see its own docblock) and has no path to a per-call value
+	 * threaded back from deep inside handle_tools_call()'s many early
+	 * returns — the same reason current_rate_limit_budget() and
+	 * Mcpwp_Spend_Budget::report() are read the same way for that method's
+	 * other _meta keys.
+	 *
+	 * @var array[]
+	 */
+	private $last_param_fixes = array();
+
+	/**
 	 * Free tools registry.
 	 *
 	 * @var Mcpwp_MCP_Free_Tools
@@ -823,6 +839,13 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 * @return array
 	 */
 	private function attach_result_meta( $response ) {
+		// Consumed exactly once per JSON-RPC message, success or error alike,
+		// then cleared — a later message in the same batch (same controller
+		// instance, see handle_mcp_messages()) must not inherit this one's
+		// notes (#911).
+		$param_fixes            = $this->last_param_fixes;
+		$this->last_param_fixes = array();
+
 		// An empty result is an object on the wire (stdClass); decorate it as a map.
 		if ( is_array( $response ) && isset( $response['result'] ) && $response['result'] instanceof \stdClass ) {
 			$response['result'] = get_object_vars( $response['result'] );
@@ -837,6 +860,13 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		}
 
 		$response['result']['_meta']['plugin_version'] = $this->server_version;
+
+		// Forgiving-params notes (#911): near-miss argument keys this call
+		// silently remapped onto the tool's real schema, so the caller learns
+		// the canonical name instead of quietly relying on a guess forever.
+		if ( ! empty( $param_fixes ) ) {
+			$response['result']['_meta']['param_fixes'] = $param_fixes;
+		}
 
 		$budget = $this->current_rate_limit_budget();
 
@@ -991,7 +1021,14 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		}
 
 		$store_key = self::idempotency_key( $scope, $request_id );
-		$args_hash = hash( 'sha256', $tool_name . '|' . wp_json_encode( self::canonicalize( $arguments ) ) );
+		// Hash the CANONICAL arguments (#831 alias-resolved, #911 near-miss
+		// remapped) so postId:5 and post_id:5 under the same request_id hash
+		// identically and are recognized as the same call (#911 review round
+		// 1, WARN-2's NIT). Only this local hash changes — $params (still
+		// carrying the caller's original spelling) is what actually reaches
+		// handle_tools_call() below, which re-derives and re-validates its
+		// own arguments independently, so this does not skip validation.
+		$args_hash = hash( 'sha256', $tool_name . '|' . wp_json_encode( self::canonicalize( $this->canonical_tool_arguments( $tool_name, $tool_map[ $tool_name ], $arguments ) ) ) );
 		$existing  = get_transient( $store_key );
 
 		if ( is_array( $existing ) && isset( $existing['state'] ) && 'done' === $existing['state'] ) {
@@ -2141,7 +2178,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 
 			case 'onboard':
 				$text = "You are connecting to the WordPress site \"{$site_title}\" ({$site_url}) for the first time.\n\n"
-					. "1. Call wp_onboard to get a complete site briefing (content inventory, integrations, suggested tools).\n"
+					. "1. Call wp_onboard for a short site briefing (identity, builder mode, connected services, next actions); pass detail=full for the complete inventory.\n"
 					. "2. Call wp_get_signals to check the current site health score.\n"
 					. "3. Summarize: what's on the site, what integrations are active, and the top 3 actions you'd recommend.\n"
 					. "4. Ask the site owner what they'd like to work on.";
@@ -2372,14 +2409,22 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			);
 		}
 
-		// Validate arguments against tool schema.
-		$validation_error = $this->validate_tool_arguments( $tool_name, $arguments );
-		if ( $validation_error ) {
-			$this->fire_tool_called( $tool_name, $start, 'execution_error' );
+		// Validate arguments against tool schema — forgiving of near-miss keys
+		// (#911): an unambiguous case/separator variant or small-table synonym
+		// of exactly one known param is silently remapped (noted in
+		// _meta.param_fixes via $this->last_param_fixes, see
+		// attach_result_meta()); anything left unresolved (no candidate, a
+		// tie, or a privileged/destructive target) is refused here, before
+		// dispatch.
+		$validation             = $this->validate_tool_arguments( $tool_name, $arguments );
+		$arguments              = $validation['arguments'];
+		$this->last_param_fixes = $validation['fixes'];
+		if ( $validation['error'] ) {
+			$this->fire_tool_called( $tool_name, $start, 'invalid_params' );
 			return $this->tool_error_result(
 				$id,
 				'invalid_arguments',
-				$validation_error,
+				$validation['error'],
 				array( 'hint' => "Call tools/list to see \"$tool_name\"'s required and optional parameters, then retry with the missing or corrected parameter." )
 			);
 		}
@@ -2848,13 +2893,17 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		}
 
 		// A batched call priced here never passed through handle_tools_call()'s
-		// own alias resolution, so an old parameter name must be resolved to
-		// its canonical form here too (#831) — otherwise a deprecated-name
-		// call inside a batch would be priced (and later dispatched, see
-		// handle_tools_call_idempotent()) as if param_remap alone applied to
-		// it, silently mispricing anything param_remap does not also cover.
+		// own alias resolution and forgiving-params remap, so both must run
+		// here too (#831, #911 review round 1 WARN-2) — otherwise a
+		// deprecated or near-miss parameter name inside a batch is priced (and
+		// later dispatched, see handle_tools_call_idempotent()) as if neither
+		// applied to it: a batch tool's operations count under the wrong key
+		// name prices as if it carried none, and a path-placeholder route
+		// left unsubstituted prices under the wrong route entirely — either
+		// way undermining "the whole batch is refused before any of it runs"
+		// (#752 F9 review r1).
 		$mapping   = $tool_map[ $tool_name ];
-		$arguments = $this->resolve_param_aliases( $mapping, $arguments );
+		$arguments = $this->canonical_tool_arguments( $tool_name, $mapping, $arguments );
 
 		return $this->tool_call_spend_price( $mapping, $this->resolve_tool_dispatch( $mapping, $arguments ), $tool_name );
 	}
@@ -2882,6 +2931,11 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		}
 
 		$arguments = isset( $params['arguments'] ) && is_array( $params['arguments'] ) ? $params['arguments'] : array();
+		// Canonicalized the same way handle_tools_call_idempotent() hashes
+		// arguments to STORE a result, so a batched replay check agrees with
+		// the stored hash regardless of which near-miss spelling either call
+		// used (#911 review round 1, WARN-2's NIT).
+		$arguments = $this->canonical_tool_arguments( $tool_name, $tool_map[ $tool_name ], $arguments );
 		$existing  = get_transient( self::idempotency_key( $scope, $request_id ) );
 
 		return is_array( $existing )
@@ -3009,72 +3063,467 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	}
 
 	/**
-	 * Validate tool arguments against the tool's inputSchema.
+	 * Small, explicit synonym groups for #911's "known synonyms" case —
+	 * concepts different tools spell differently. A near-miss key is mapped
+	 * onto the schema's own member of its group only when the tool's schema
+	 * carries EXACTLY one member of that group (see remap_near_miss_params());
+	 * with more than one present, which one the caller meant is a guess this
+	 * issue asks not to make, so it is refused instead (a tie, not a map).
 	 *
-	 * Checks for missing required parameters and unknown parameters.
-	 * Does NOT type-check values (MCP clients often send strings for all types).
+	 * Empty today (adversarial review of PR #986, round 1, BLOCK-1). The
+	 * `id`/`page_id`/`post_id` group this started with was removed entirely:
+	 * across the 295-tool schema dump, `id` is the sole group member on ~105
+	 * tools, and it means a completely different resource on each — a term,
+	 * a menu, a webhook, a WooCommerce order, a course, a sidebar widget —
+	 * never uniformly "a post or page". `wp_delete_term({post_id: 12})` would
+	 * have silently mapped `post_id` onto `id` and deleted TERM 12, which is
+	 * not what a caller typing "post_id" out of habit meant. #831's per-tool
+	 * `param_aliases` (curated, one tool at a time) is the correct place for
+	 * a genuine `page_id` -> `id` rename; this generic table is not, for any
+	 * pairing where the target's meaning varies by tool.
 	 *
-	 * @param string $tool_name The tool name.
-	 * @param array  $arguments The arguments to validate.
-	 * @return string|null Error message, or null if valid.
+	 * `content`/`content_html` was considered and also dropped: the schema
+	 * shows `content` meaning a post/page body on some tools but a course,
+	 * lesson, quiz or event DESCRIPTION, a translation, or raw Gutenberg
+	 * block markup on others — not uniformly "post content" either, so it
+	 * does not clear the bar a synonym entry here needs to clear. Kept as an
+	 * empty table, not deleted outright, for a future pairing that a schema
+	 * check actually clears — e.g. a synonym that means the exact same thing
+	 * on every tool that has one of its members.
+	 *
+	 * @var string[][]
 	 */
-	private function validate_tool_arguments( $tool_name, $arguments ) {
-		// Ensure tools cache is populated.
-		if ( $this->tools_cache === null ) {
-			$this->tools_cache = $this->get_all_tools();
-		}
+	const PARAM_SYNONYM_GROUPS = array();
 
-		// Find the tool schema.
-		$schema = null;
-		foreach ( $this->tools_cache as $tool ) {
-			if ( $tool['name'] === $tool_name ) {
-				$schema = isset( $tool['inputSchema'] ) ? $tool['inputSchema'] : null;
-				break;
+	/**
+	 * Substrings (case-insensitive) that mark a parameter name as
+	 * privileged/destructive — never the target of an auto-mapped near-miss
+	 * (#911), even when it is the caller's only candidate. These gate
+	 * privilege, destructive intent, state-flipping toggles, or auth/
+	 * permission state — a wrong guess here is a security regression, not a
+	 * convenience. A call naming one of these unexpectedly is refused with
+	 * the standard unknown-key message; the caller must spell it out on
+	 * purpose, never have it inferred.
+	 *
+	 * Deliberately substrings, not exact names only (adversarial review of
+	 * PR #986, round 1, WARN-1) — `force`/`status`/`role` as exact-only
+	 * missed real near-misses of real schema params: `forceTypeChange`
+	 * (wp_update_option), `postStatus`/`stockStatus` (wp_deploy_site_blueprint
+	 * / wc_create_product), `allowCompounding`/`allowRestrictedBlocks`
+	 * (wp_bulk_find_replace / wp_set_blocks), `purgeEverything`
+	 * (wp_cloudflare_purge_cache), `overwrite` case variants (wp_setup_menu),
+	 * `Enabled` (wp_update_rate_limit), `noIndex` (wp_set_noindex/wp_set_seo).
+	 * Across all 295 tools this list protects 27 distinct real param names —
+	 * see the PR #986 review-round comment for the full enumeration.
+	 *
+	 * @var string[]
+	 */
+	const PRIVILEGED_PARAM_MARKERS = array(
+		'delete',
+		'auth',
+		'permission',
+		'scope',
+		'secret',
+		'password',
+		'token',
+		'privilege',
+		'admin',
+		'role',
+		'status',
+		'force',
+		'allow',
+		'purge',
+		'overwrite',
+		'publish',
+		'enabled',
+		'noindex',
+	);
+
+	/**
+	 * Whether a (candidate) parameter name is privileged/destructive and must
+	 * never be the target of an auto-mapped near-miss (#911).
+	 *
+	 * @param string $name Candidate canonical parameter name.
+	 * @return bool
+	 */
+	private function is_privileged_param_name( $name ) {
+		$name = strtolower( (string) $name );
+		if ( '' === $name ) {
+			return false;
+		}
+		foreach ( self::PRIVILEGED_PARAM_MARKERS as $marker ) {
+			if ( false !== strpos( $name, $marker ) ) {
+				return true;
 			}
 		}
+		return false;
+	}
 
+	/**
+	 * Normalize a parameter key for case/separator-insensitive matching
+	 * (#911's generic normalizer) — `postId`, `post-id`, `POST_ID` and
+	 * `post_id` all reduce to `postid`. Word-level synonyms (`content_html`
+	 * vs `content`) are NOT caught here on purpose — they normalize to
+	 * different strings and are handled only by the explicit
+	 * PARAM_SYNONYM_GROUPS table above, never guessed generically.
+	 *
+	 * @param string $key Raw parameter key.
+	 * @return string Normalized form, lowercase alphanumeric only.
+	 */
+	private function normalize_param_key( $key ) {
+		$key = (string) $key;
+		// camelCase / PascalCase -> snake_case before the separator strip, so
+		// `postId` and `post_id` normalize to the same string.
+		$key = preg_replace( '/([a-z0-9])([A-Z])/', '$1_$2', $key );
+		$key = strtolower( (string) $key );
+		return (string) preg_replace( '/[^a-z0-9]/', '', (string) $key );
+	}
+
+	/**
+	 * Coerce a raw argument value into the same comparable form a JSON-RPC
+	 * caller's `"5"` and `5` (or `5.0`) already are to WordPress's own REST
+	 * value handling — WP_REST_Request/rest_sanitize_* treat those as the
+	 * same value, so a duplicate near-miss sent as a numeric string must not
+	 * read as a conflict against the real key's numeric value (#911 review
+	 * round 1, BLOCK-2).
+	 *
+	 * @param mixed $value Raw value.
+	 * @return mixed Comparable form.
+	 */
+	private function coerce_param_value_for_compare( $value ) {
+		if ( is_numeric( $value ) ) {
+			// "5", 5, 5.0 and "5.0" all become the same string ("5"), and a
+			// non-integer stays exact ("5.5").
+			return (string) ( $value + 0 );
+		}
+		return $value;
+	}
+
+	/**
+	 * Whether two argument values are the same, once coerced the way the
+	 * REST layer already treats a JSON string vs a JSON number (#911 review
+	 * round 1, BLOCK-2). Strict (`===`) after coercion — never loose `==`,
+	 * which PHP still applies its own (safer, but still surprising) rules to
+	 * for non-numeric strings.
+	 *
+	 * @param mixed $a First value.
+	 * @param mixed $b Second value.
+	 * @return bool
+	 */
+	private function param_values_equal( $a, $b ) {
+		return $this->coerce_param_value_for_compare( $a ) === $this->coerce_param_value_for_compare( $b );
+	}
+
+	/**
+	 * Remap unknown top-level argument keys onto the tool's real schema
+	 * where the caller's key is an unambiguous near-miss (#911).
+	 *
+	 * For each key in $arguments that is not already a known param:
+	 *  - a case/separator variant of exactly one known param, or a member of
+	 *    a PARAM_SYNONYM_GROUPS group of which the schema carries exactly one
+	 *    other member, is the key's sole candidate;
+	 *  - a key with zero candidates is left alone (genuinely unknown — the
+	 *    caller gets a fuzzy did-you-mean instead, from validate_tool_arguments());
+	 *  - a key with more than one candidate is a tie and is never mapped —
+	 *    which one the caller meant is exactly the guess this issue refuses
+	 *    to make;
+	 *  - a key whose sole candidate the caller ALSO supplied under its real
+	 *    name is dropped silently ONLY when the two values are the same
+	 *    (param_values_equal()) — matching resolve_param_aliases()'s existing
+	 *    "canonical wins" rule for #831's deprecated-alias table. When they
+	 *    differ, this is a genuine conflict (adversarial review of PR #986,
+	 *    round 1, BLOCK-2): silently picking either value would be a guess
+	 *    with the caller's own data as the stakes, so it is refused instead,
+	 *    same as an unresolved near-miss. This also settles which of two
+	 *    near-misses that target the SAME candidate wins: whichever this
+	 *    loop resolves first is compared against every later one the same
+	 *    way, so two near-misses with equal values collapse to one fix and
+	 *    two with different values are refused as a conflict — neither is
+	 *    ever silently preferred over the other;
+	 *  - a key whose sole candidate is a privileged/destructive param
+	 *    (is_privileged_param_name()) is never mapped — refused instead, same
+	 *    as a true unknown key, so a caller cannot get `force` or `role` set
+	 *    by a coincidental near-miss of an unrelated typo.
+	 *
+	 * @param string[] $known_params Property names from the tool's inputSchema.
+	 * @param array    $arguments    Raw arguments (already alias-resolved by
+	 *                                resolve_param_aliases()).
+	 * @return array{arguments:array,fixes:array[],refused:array<string,array{candidate:string,reason:string}>}
+	 */
+	private function remap_near_miss_params( array $known_params, array $arguments ) {
+		$fixes      = array();
+		$refused    = array();
+		$known_flip = array_flip( $known_params );
+
+		// Snapshot the original keys — mutations below (mapping a key onto a
+		// new one) must not make this loop revisit a key it just created.
+		foreach ( array_keys( $arguments ) as $key ) {
+			if ( ! is_string( $key ) || isset( $known_flip[ $key ] ) ) {
+				continue;
+			}
+
+			$candidates = array();
+
+			foreach ( self::PARAM_SYNONYM_GROUPS as $group ) {
+				if ( ! in_array( $key, $group, true ) ) {
+					continue;
+				}
+				foreach ( $group as $member ) {
+					if ( $member !== $key && isset( $known_flip[ $member ] ) ) {
+						$candidates[ $member ] = true;
+					}
+				}
+			}
+
+			$normalized_key = $this->normalize_param_key( $key );
+			if ( '' !== $normalized_key ) {
+				foreach ( $known_params as $known ) {
+					if ( $this->normalize_param_key( $known ) === $normalized_key ) {
+						$candidates[ $known ] = true;
+					}
+				}
+			}
+
+			$candidates = array_keys( $candidates );
+
+			if ( 1 !== count( $candidates ) ) {
+				if ( count( $candidates ) > 1 ) {
+					$refused[ $key ] = array(
+						'candidate' => implode( ', ', $candidates ),
+						'reason'    => 'ambiguous',
+					);
+				}
+				continue; // 0 candidates: genuinely unknown.
+			}
+
+			$candidate = $candidates[0];
+
+			if ( array_key_exists( $candidate, $arguments ) ) {
+				if ( $this->param_values_equal( $arguments[ $key ], $arguments[ $candidate ] ) ) {
+					// Same value under both names — redundant, drop the
+					// near-miss rather than overwrite the real key with an
+					// identical value.
+					unset( $arguments[ $key ] );
+					$fixes[] = array(
+						'from'   => $key,
+						'to'     => $candidate,
+						'reason' => 'duplicate_dropped',
+					);
+					continue;
+				}
+
+				// Different values under the near-miss and the real key —
+				// never silently pick one (#911 review round 1, BLOCK-2).
+				$refused[ $key ] = array(
+					'candidate' => $candidate,
+					'reason'    => 'conflict',
+				);
+				continue;
+			}
+
+			if ( $this->is_privileged_param_name( $candidate ) ) {
+				$refused[ $key ] = array(
+					'candidate' => $candidate,
+					'reason'    => 'privileged',
+				);
+				continue;
+			}
+
+			$arguments[ $candidate ] = $arguments[ $key ];
+			unset( $arguments[ $key ] );
+			$fixes[] = array(
+				'from'   => $key,
+				'to'     => $candidate,
+				'reason' => 'near_miss',
+			);
+		}
+
+		return array(
+			'arguments' => $arguments,
+			'fixes'     => $fixes,
+			'refused'   => $refused,
+		);
+	}
+
+	/**
+	 * Validate tool arguments against the tool's inputSchema, forgiving of
+	 * near-miss keys (#911).
+	 *
+	 * Checks for missing required parameters and unknown parameters. Before
+	 * either check, an unknown top-level key that is an unambiguous near-miss
+	 * of exactly one real param is silently remapped by
+	 * remap_near_miss_params() — everything that method leaves unresolved (no
+	 * candidate, a tie, or a privileged/destructive target) is refused here,
+	 * naming the unknown key, its closest valid key(s) when any exist, and
+	 * the tool's required parameters, so a model can self-correct in one
+	 * round trip instead of guessing again. Does NOT type-check values (MCP
+	 * clients often send strings for all types).
+	 *
+	 * A schema that declares `additionalProperties: true` opts the whole
+	 * tool out of both the remap and the unknown-key refusal — it intends to
+	 * accept arbitrary extra top-level keys. No first-party or
+	 * mcpwp_register_tools schema does this today; the guard exists for
+	 * whichever tool is the first to.
+	 *
+	 * @param string $tool_name The tool name.
+	 * @param array  $arguments The arguments to validate (already alias-resolved).
+	 * @return array{arguments:array,fixes:array[],error:?string} Possibly-remapped
+	 *         arguments, the fixes applied (for _meta.param_fixes), and an
+	 *         error message, or null error if valid.
+	 */
+	private function validate_tool_arguments( $tool_name, $arguments ) {
+		$arguments = is_array( $arguments ) ? $arguments : array();
+		$result    = array(
+			'arguments' => $arguments,
+			'fixes'     => array(),
+			'error'     => null,
+		);
+
+		$schema = $this->get_tool_input_schema( $tool_name );
 		if ( ! $schema ) {
-			return null; // No schema to validate against.
+			return $result; // No schema to validate against.
 		}
 
 		// Get properties as an array (may be stdClass if empty).
 		$properties = isset( $schema['properties'] ) ? (array) $schema['properties'] : array();
 		$required   = isset( $schema['required'] ) ? $schema['required'] : array();
+		$free_form  = isset( $schema['additionalProperties'] ) && true === $schema['additionalProperties'];
+		$refused    = array();
+		$known_params = array_keys( $properties );
 
-		// Check required parameters.
+		if ( ! $free_form && ! empty( $known_params ) ) {
+			$remap = $this->remap_near_miss_params( $known_params, $arguments );
+			$arguments           = $remap['arguments'];
+			$result['arguments'] = $arguments;
+			$result['fixes']     = $remap['fixes'];
+			$refused             = $remap['refused'];
+		}
+
+		// Missing required params — collect every one, not just the first.
+		$missing = array();
 		foreach ( $required as $param ) {
 			if ( ! array_key_exists( $param, $arguments ) ) {
-				return 'Missing required parameter: ' . $param;
+				$missing[] = $param;
 			}
 		}
 
-		// Check for unknown parameters.
-		if ( ! empty( $properties ) ) {
-			$known_params = array_keys( $properties );
+		// Unknown params that survived the remap above (no confident
+		// candidate, a tie, a value conflict, or a candidate refused as
+		// privileged/destructive) — the ORIGINAL key, string or not (a stray
+		// integer/list-shaped key is exactly as unknown as a misspelled
+		// string one and must refuse the same way it did before this fix).
+		// Reports only the first for message brevity, matching this method's
+		// existing single-message style.
+		$unknown_param  = null;
+		$unknown_detail = '';
+		if ( ! $free_form && ! empty( $known_params ) ) {
 			foreach ( array_keys( $arguments ) as $param ) {
-				if ( ! in_array( $param, $known_params, true ) ) {
+				if ( in_array( $param, $known_params, true ) ) {
+					continue;
+				}
+
+				$unknown_param = $param;
+
+				if ( isset( $refused[ $param ] ) && 'privileged' === $refused[ $param ]['reason'] ) {
+					$unknown_detail = sprintf(
+						". '%s' looks like '%s', but that parameter is privileged/destructive and is never guessed — pass '%s' explicitly if that is what you meant.",
+						$param,
+						$refused[ $param ]['candidate'],
+						$refused[ $param ]['candidate']
+					);
+				} elseif ( isset( $refused[ $param ] ) && 'ambiguous' === $refused[ $param ]['reason'] ) {
+					$unknown_detail = sprintf( ". '%s' matches more than one parameter (%s) — ambiguous, pass the exact name.", $param, $refused[ $param ]['candidate'] );
+				} elseif ( isset( $refused[ $param ] ) && 'conflict' === $refused[ $param ]['reason'] ) {
+					$unknown_detail = sprintf( ". '%s' looks like '%s', which was already supplied with a different value — ambiguous, pass one explicit value.", $param, $refused[ $param ]['candidate'] );
+				} else {
 					// Fuzzy-match for "did you mean?" suggestion.
 					$best_match = null;
 					$best_score = 0;
 					foreach ( $known_params as $known ) {
 						$score = 0;
-						similar_text( $param, $known, $score );
+						similar_text( (string) $param, $known, $score );
 						if ( $score > $best_score ) {
 							$best_score = $score;
 							$best_match = $known;
 						}
 					}
-
-					$msg = 'Unknown parameter: ' . $param;
 					if ( $best_match && $best_score >= 50 ) {
-						$msg .= '. Did you mean: ' . $best_match . '?';
+						$unknown_detail = '. Did you mean: ' . $best_match . '?';
 					}
-					return $msg;
 				}
+
+				break;
+			}
+		}
+
+		if ( ! empty( $missing ) || null !== $unknown_param ) {
+			$parts = array();
+			if ( ! empty( $missing ) ) {
+				$parts[] = 'Missing required parameter' . ( count( $missing ) > 1 ? 's' : '' ) . ': ' . implode( ', ', $missing ) . '.';
+			}
+			if ( null !== $unknown_param ) {
+				$parts[] = 'Unknown parameter: ' . $unknown_param . $unknown_detail;
+			}
+			$parts[] = 'Required: ' . ( empty( $required ) ? 'none' : implode( ', ', $required ) ) . '.';
+			if ( null !== $unknown_param ) {
+				$parts[] = 'Known parameters: ' . implode( ', ', $known_params ) . '.';
+			}
+			$result['error'] = implode( ' ', $parts );
+		}
+
+		return $result;
+	}
+
+	/**
+	 * Look up one tool's inputSchema by name, populating (and reusing) the
+	 * tools cache. Shared by validate_tool_arguments() and
+	 * canonical_tool_arguments() so pricing/hashing and actual validation can
+	 * never see a different schema for the same tool name.
+	 *
+	 * @param string $tool_name Tool name.
+	 * @return array|null The tool's inputSchema, or null if the tool (or a
+	 *                     schema for it) does not exist.
+	 */
+	private function get_tool_input_schema( $tool_name ) {
+		if ( $this->tools_cache === null ) {
+			$this->tools_cache = $this->get_all_tools();
+		}
+
+		foreach ( $this->tools_cache as $tool ) {
+			if ( $tool['name'] === $tool_name ) {
+				return isset( $tool['inputSchema'] ) ? $tool['inputSchema'] : null;
 			}
 		}
 
 		return null;
+	}
+
+	/**
+	 * The arguments a tools/call for $tool_name will actually dispatch with,
+	 * once #831's deprecated-alias table and #911's forgiving-params remap
+	 * both run — the identical transform handle_tools_call() applies before
+	 * dispatch. Pricing (message_spend_price()) and idempotency hashing
+	 * (handle_tools_call_idempotent(), has_stored_result()) call this so a
+	 * caller who spells a parameter differently is priced, and identified for
+	 * idempotency, exactly as if they had spelled it canonically — the same
+	 * call must not be a different price or a different idempotency identity
+	 * just because of which near-miss spelling reached the server (adversarial
+	 * review of PR #986, round 1, WARN-2 and its NIT).
+	 *
+	 * Deliberately reuses validate_tool_arguments() itself, not a re-fetch of
+	 * the schema plus a second call to remap_near_miss_params() — one
+	 * function computes "what this call will actually run as", so pricing,
+	 * hashing and dispatch cannot drift apart from each other over time.
+	 *
+	 * @param string $tool_name Tool name.
+	 * @param array  $mapping   Tool map entry (for param_aliases).
+	 * @param array  $arguments Raw arguments.
+	 * @return array Canonical (alias-resolved, near-miss-remapped) arguments.
+	 */
+	private function canonical_tool_arguments( $tool_name, $mapping, $arguments ) {
+		$arguments = is_array( $arguments ) ? $arguments : array();
+		$arguments = $this->resolve_param_aliases( $mapping, $arguments );
+		return $this->validate_tool_arguments( $tool_name, $arguments )['arguments'];
 	}
 
 	/**
@@ -3139,7 +3588,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		// --- Best practices ---
 		$lines[] = '## Getting Started';
 		$lines[] = '';
-		$lines[] = '1. **Always call `wp_onboard` first** — it returns a complete site briefing with content inventory, active integrations, available tools, and recommended first actions.';
+		$lines[] = '1. **Always call `wp_onboard` first** — it returns a short briefing: site identity, builder mode, connected services, content summary and the top next actions. Pass `detail=full` for the complete inventory; use tools/list for the tool catalog.';
 		$lines[] = '2. Call `wp_get_site_context` to read the site style guide and design rules (if configured).';
 		$lines[] = '3. Use `wp_detect_plugins` to confirm which integrations are available before using plugin-specific tools.';
 		$lines[] = '';

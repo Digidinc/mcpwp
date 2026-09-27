@@ -156,6 +156,10 @@ class Mcpwp_Pages {
 			$page_data['page_template'] = sanitize_text_field( $data['template'] );
 		}
 
+		// Content guardrails (#957): enforced centrally by
+		// Mcpwp_Content_Guardrails::on_insert_post_data(), a wp_insert_post_data
+		// filter that runs inside the wp_insert_post() call below — not here.
+		// See that method's docblock for why.
 		$page_id = wp_insert_post( $page_data, true );
 
 		if ( is_wp_error( $page_id ) ) {

@@ -19,6 +19,15 @@
  *   2. omitting it returns the exact legacy payload, byte-for-byte — this
  *      is opt-in narrowing, never a silent default change.
  *
+ * wp_onboard is the one exception, and it is deliberate (#905): the tool
+ * catalog dump this file's own comment above calls out (`available_tools`
+ * alone is ~95% of the payload) made first contact cost ~18k tokens before
+ * an agent wrote anything. #830's opt-in `sections` allowlist fixed that for
+ * callers who knew to ask; #905 flips the wp_onboard *default* to the slim
+ * shape instead, so every caller gets it without asking. `sections` (and the
+ * new `detail=full` escape hatch) still reach the exact legacy payload,
+ * byte-for-byte — nothing is unreachable, just no longer the default.
+ *
  * @package MCPWP
  */
 
@@ -105,6 +114,8 @@ final class ResponseProjectionTest extends TestCase {
 		$this->stubThemeLookup();
 		$controller = new Mcpwp_REST_Site_Info();
 
+		// A non-empty `sections` allowlist implies the full legacy briefing
+		// (#905) — it still selects from that shape, not the slim default.
 		$scoped = $controller->get_onboard( new WP_REST_Request( 'GET', '/mcpwp/v1/onboard', array( 'sections' => array( 'site_identity', 'quick_start' ) ) ) );
 		$data   = $scoped->get_data();
 
@@ -115,12 +126,70 @@ final class ResponseProjectionTest extends TestCase {
 	 * @runInSeparateProcess
 	 * @preserveGlobalState disabled
 	 */
-	public function test_onboard_with_no_sections_param_is_byte_for_byte_the_legacy_payload(): void {
+	public function test_onboard_with_no_params_is_the_slim_default(): void {
+		// #905: wp_onboard is the one tool in this file where omitting the
+		// projection parameter is *not* the legacy payload — the slim shape
+		// is the default, so every caller gets ≤3k tokens without asking.
 		$this->stubThemeLookup();
 		$controller = new Mcpwp_REST_Site_Info();
 
 		$a = $controller->get_onboard( new WP_REST_Request( 'GET', '/mcpwp/v1/onboard' ) )->get_data();
 		$b = $controller->get_onboard( new WP_REST_Request( 'GET', '/mcpwp/v1/onboard', array( 'sections' => array() ) ) )->get_data();
+
+		$expected_keys = array(
+			'site_identity',
+			'builder_mode',
+			'connected',
+			'content_summary',
+			'site_context_configured',
+			'next_actions',
+			'more',
+			'pro_active',
+			'detail',
+		);
+
+		$this->assertSame( $expected_keys, array_keys( $a ), 'Default (no params) must be the slim shape, in this order.' );
+		$this->assertSame( 'slim', $a['detail'] );
+		$this->assertArrayNotHasKey( 'available_tools', $a, 'The tool catalog dump must not appear in the slim default.' );
+		$this->assertSame(
+			wp_json_encode( $a ),
+			wp_json_encode( $b ),
+			'An empty sections array is not a narrowing request — it must answer exactly like no params at all (slim).'
+		);
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_onboard_detail_full_is_byte_for_byte_the_legacy_payload(): void {
+		$this->stubThemeLookup();
+		$controller = new Mcpwp_REST_Site_Info();
+
+		$a = $controller->get_onboard( new WP_REST_Request( 'GET', '/mcpwp/v1/onboard', array( 'detail' => 'full' ) ) )->get_data();
+		// A non-empty `sections` allowlist covering every legacy key also
+		// implies the full briefing and must match it exactly.
+		$b = $controller->get_onboard(
+			new WP_REST_Request(
+				'GET',
+				'/mcpwp/v1/onboard',
+				array(
+					'sections' => array(
+						'site_identity',
+						'content_inventory',
+						'active_integrations',
+						'available_tools',
+						'site_context',
+						'recommended_actions',
+						'quick_reference',
+						'suggested_first_tools',
+						'quick_start',
+						'pro_active',
+						'guardrails_status',
+					),
+				)
+			)
+		)->get_data();
 
 		$expected_keys = array(
 			'site_identity',
@@ -133,13 +202,14 @@ final class ResponseProjectionTest extends TestCase {
 			'suggested_first_tools',
 			'quick_start',
 			'pro_active',
+			'guardrails_status',
 		);
 
-		$this->assertSame( $expected_keys, array_keys( $a ), 'Omitting sections must return every section, in the existing order.' );
+		$this->assertSame( $expected_keys, array_keys( $a ), 'detail=full must return every legacy section, in the existing order.' );
 		$this->assertSame(
 			wp_json_encode( $a ),
 			wp_json_encode( $b ),
-			'An empty sections array is not a narrowing request — it must answer exactly like no sections param at all.'
+			'detail=full and an explicit all-sections allowlist must answer identically.'
 		);
 	}
 

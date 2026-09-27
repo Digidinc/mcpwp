@@ -17,6 +17,34 @@ if ( ! defined( 'ABSPATH' ) ) {
 class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 
 	/**
+	 * Token-reasonable default window for a rendered-HTML response. Large
+	 * enough to see meaningful content, small enough that an agent calling
+	 * this in a loop doesn't blow its context — but the response always
+	 * reports the document's true total_bytes and how to page for the rest,
+	 * so a small default is never a silent cut (#804).
+	 */
+	const RENDERED_HTML_DEFAULT_MAX_BYTES = 51200;
+
+	/**
+	 * Hard per-call ceiling. Raised from the old 200 KB cap (#804) so a
+	 * caller who explicitly asks for the whole document gets it in one call
+	 * for anything up to 512 KB of rendered HTML — comfortably covers a real
+	 * page's head+body+footer. Beyond that, offset-based paging is the
+	 * documented path; there is no size a caller can be locked out of, only
+	 * one that takes more than one call.
+	 *
+	 * Set at 512 KB rather than the 1 MB this first shipped with (#804
+	 * adversarial review, W5): every window this size is held in PHP memory
+	 * at once (the fetched body, the extracted/selector-matched copy, and
+	 * the windowed slice can all be live simultaneously), and a caller may
+	 * ask for the ceiling on every operation of a large batch. The spend
+	 * budget also prices a call by how much of this ceiling it asks for
+	 * (SPEND_SIZE_ROUTES in Mcpwp_Operation_Weights), so a batch of
+	 * near-ceiling reads is charged for the memory it holds open, not free.
+	 */
+	const RENDERED_HTML_MAX_BYTES_CEILING = 524288;
+
+	/**
 	 * Register routes.
 	 */
 	public function register_routes() {
@@ -156,13 +184,18 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 							'type'        => 'string',
 						),
 						'selector'  => array(
-							'description' => __( 'CSS selector to extract (tag, .class, or #id).', 'mcpwp' ),
+							'description' => __( 'CSS selector to extract (tag, .class, or #id) — applied to the full document before any windowing, so e.g. selector=footer is unaffected by max_bytes/offset.', 'mcpwp' ),
 							'type'        => 'string',
 						),
 						'max_bytes' => array(
-							'description' => __( 'Maximum response size in bytes (default 51200, max 204800).', 'mcpwp' ),
+							'description' => __( 'Maximum response size in bytes (default 51200, max 524288/512KB). A negative value is refused with 400.', 'mcpwp' ),
 							'type'        => 'integer',
-							'default'     => 51200,
+							'default'     => self::RENDERED_HTML_DEFAULT_MAX_BYTES,
+						),
+						'offset'    => array(
+							'description' => __( 'Byte offset into the full document to start reading from (default 0). Snapped to the nearest whole-character boundary for multi-byte UTF-8 content, so the response may report a slightly earlier actual offset than requested. The response reports total_bytes and next_offset so a caller can page through a document larger than one window, including reaching the tail/footer. A negative value is refused with 400.', 'mcpwp' ),
+							'type'        => 'integer',
+							'default'     => 0,
 						),
 					),
 				),
@@ -675,10 +708,25 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 	public function get_rendered_html( $request ) {
 		$this->log_activity( 'get_rendered_html', $request );
 
+		// #804 NIT-1: absint() on a negative value silently flips its sign —
+		// a caller who sent offset=-5000 meaning "from the end" would get
+		// offset=5000 instead, a different window with no error to explain
+		// why. Refuse a negative value outright rather than reinterpreting it.
+		foreach ( array( 'max_bytes', 'offset' ) as $param ) {
+			$rejection = $this->reject_if_negative( $request, $param );
+			if ( null !== $rejection ) {
+				return $rejection;
+			}
+		}
+
 		$post_id   = $request->get_param( 'id' );
 		$url       = $request->get_param( 'url' );
 		$selector  = $request->get_param( 'selector' );
-		$max_bytes = min( absint( $request->get_param( 'max_bytes' ) ?: 51200 ), 204800 );
+		$max_bytes = min(
+			absint( $request->get_param( 'max_bytes' ) ?: self::RENDERED_HTML_DEFAULT_MAX_BYTES ),
+			self::RENDERED_HTML_MAX_BYTES_CEILING
+		);
+		$offset    = absint( $request->get_param( 'offset' ) ?: 0 );
 
 		// Resolve URL from post ID.
 		if ( $post_id ) {
@@ -706,7 +754,7 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 				// it before WordPress even runs. Render in-process instead — no
 				// network hop, so neither problem applies. Note: this returns the
 				// Elementor content only, not the surrounding theme header/footer.
-				return $this->get_rendered_html_via_elementor( $post_id, $selector, $max_bytes );
+				return $this->get_rendered_html_via_elementor( $post_id, $selector, $max_bytes, $offset );
 			} else {
 				// Draft/pending — use Elementor preview URL or plain preview.
 				$url = add_query_arg( 'elementor-preview', $post_id, get_permalink( $post_id ) );
@@ -770,23 +818,256 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			}
 		}
 
-		// Truncate if needed.
-		$truncated = false;
-		if ( strlen( $html ) > $max_bytes ) {
-			$html      = substr( $html, 0, $max_bytes );
-			$truncated = true;
-		}
+		// Window the (possibly selector-extracted) HTML honestly: never a
+		// silent cut — the response always carries the document's real
+		// total_bytes and, when this window isn't the whole thing, exactly
+		// how to page for the rest (#804).
+		$window = $this->window_html_response( $html, $offset, $max_bytes );
 
 		return $this->success_response(
 			array(
 				'url'            => $url,
 				'status_code'    => $status_code,
-				'html'           => $html,
-				'length'         => strlen( $html ),
-				'truncated'      => $truncated,
+				'html'           => $window['html'],
+				'length'         => $window['length'],
+				'total_bytes'    => $window['total_bytes'],
+				'offset'         => $window['offset'],
+				'truncated'      => $window['truncated'],
+				'next_offset'    => $window['next_offset'],
+				'note'           => $window['note'],
 				'selector_used'  => $selector_used,
 				'selector_found' => $selector_found,
 			)
+		);
+	}
+
+	/**
+	 * A 400 refusal when a numeric request param was sent negative, or null
+	 * when the param is absent or non-negative (#804 NIT-1).
+	 *
+	 * absint() silently flips a negative value's sign, which would turn a
+	 * caller's mistake (or an attempt to use a Python-style "offset from the
+	 * end") into a different, unremarked window rather than an error they can
+	 * see and fix.
+	 *
+	 * @param WP_REST_Request $request Request.
+	 * @param string          $param   Param name to check.
+	 * @return WP_Error|null
+	 */
+	private function reject_if_negative( $request, $param ) {
+		$value = $request->get_param( $param );
+
+		if ( null === $value || '' === $value ) {
+			return null;
+		}
+
+		if ( is_numeric( $value ) && (float) $value < 0 ) {
+			return $this->error_response(
+				'invalid_param',
+				sprintf(
+					/* translators: %s: request parameter name */
+					__( '%s must not be negative.', 'mcpwp' ),
+					$param
+				),
+				400
+			);
+		}
+
+		return null;
+	}
+
+	/**
+	 * A UTF-8 character is at most 4 bytes: a lead byte plus up to this many
+	 * continuation bytes. Bounds how far either snap below may walk.
+	 */
+	const UTF8_MAX_CONTINUATION_BYTES = 3;
+
+	/**
+	 * The nearest whole-UTF-8-character byte position at or before $pos —
+	 * bounded to at most UTF8_MAX_CONTINUATION_BYTES steps back.
+	 *
+	 * A UTF-8 continuation byte always has its top two bits set to 10
+	 * (0x80-0xBF); backing off while sat on one lands on the lead byte (or a
+	 * plain single-byte/ASCII byte) that starts the character — never
+	 * mid-character (#804 W4). 0 and strlen($html) are always boundaries and
+	 * returned unchanged.
+	 *
+	 * #804 W-R2-1: the walk is capped at 3 steps. Invalid UTF-8 (or binary
+	 * content) can run continuation bytes far longer than any real
+	 * character — an uncapped walk over, say, 2 MB of stray 0x80 bytes
+	 * would back off (or, via the forward fallback below, walk forward)
+	 * across the ENTIRE run, returning a window many times larger than
+	 * max_bytes and the documented ceiling. Past the cap, this gives up on
+	 * finding a boundary nearby and returns the raw position unchanged —
+	 * still capped in width by the ceiling, at the cost of a possible
+	 * (rare, and only on invalid input) split character at that one edge.
+	 *
+	 * @param string $html Byte string.
+	 * @param int    $pos  Candidate byte position.
+	 * @return int
+	 */
+	private function snap_utf8_boundary_backward( $html, $pos ) {
+		$len = strlen( $html );
+		$pos = max( 0, min( $pos, $len ) );
+
+		if ( 0 === $pos || $len === $pos ) {
+			return $pos;
+		}
+
+		$original = $pos;
+		$steps    = 0;
+
+		while ( $pos > 0 && $steps < self::UTF8_MAX_CONTINUATION_BYTES && 0x80 === ( ord( $html[ $pos ] ) & 0xC0 ) ) {
+			--$pos;
+			++$steps;
+		}
+
+		if ( 0x80 === ( ord( $html[ $pos ] ) & 0xC0 ) ) {
+			// Still on a continuation byte after the cap: not valid UTF-8
+			// (or a boundary genuinely isn't nearby). Give up rather than
+			// keep walking, and use the position as asked.
+			return $original;
+		}
+
+		return $pos;
+	}
+
+	/**
+	 * The nearest whole-UTF-8-character byte position at or after $pos —
+	 * the mirror of snap_utf8_boundary_backward(), used only as a fallback
+	 * to guarantee paging progress (see window_html_response()). Bounded
+	 * the same way and for the same reason (#804 W-R2-1).
+	 *
+	 * @param string $html Byte string.
+	 * @param int    $pos  Candidate byte position.
+	 * @return int
+	 */
+	private function snap_utf8_boundary_forward( $html, $pos ) {
+		$len = strlen( $html );
+		$pos = max( 0, min( $pos, $len ) );
+
+		if ( 0 === $pos || $len === $pos ) {
+			return $pos;
+		}
+
+		$original = $pos;
+		$steps    = 0;
+
+		while ( $pos < $len && $steps < self::UTF8_MAX_CONTINUATION_BYTES && 0x80 === ( ord( $html[ $pos ] ) & 0xC0 ) ) {
+			++$pos;
+			++$steps;
+		}
+
+		if ( $pos < $len && 0x80 === ( ord( $html[ $pos ] ) & 0xC0 ) ) {
+			return $original;
+		}
+
+		return $pos;
+	}
+
+	/**
+	 * Slice a string of (possibly already selector-extracted) HTML into an
+	 * honest, pageable window.
+	 *
+	 * The old behavior silently cut the document at max_bytes with no way to
+	 * learn how big it really was or how to see the rest — on any page over
+	 * ~51 KB that reliably lost the tail (the theme footer, Custom Code
+	 * snippets, closing markup) while never saying so (#804). This always
+	 * reports total_bytes and, whenever the window doesn't cover the whole
+	 * document, a next_offset/note that gets the caller to the missing part,
+	 * including the tail, by paging forward.
+	 *
+	 * Both edges are snapped to a whole UTF-8 character boundary (#804 W4):
+	 * a raw byte offset/max_bytes can land mid-character in multi-byte
+	 * content (Farsi, emoji, …), which would hand back invalid UTF-8 on one
+	 * page and the orphaned remainder on the next. Snapping backward at both
+	 * edges means a start this method itself produced (offset=0, or a prior
+	 * next_offset) is already a boundary — a no-op — and only a caller-
+	 * supplied arbitrary offset can move, with the actual (possibly earlier)
+	 * offset reported rather than silently used. Sequential pages therefore
+	 * still concatenate back to the original exactly, byte for byte.
+	 *
+	 * @param string $html      Full (or selector-extracted) HTML.
+	 * @param int    $offset    Byte offset to start the window at.
+	 * @param int    $max_bytes Window size in bytes.
+	 * @return array{html:string,total_bytes:int,offset:int,length:int,truncated:bool,next_offset:int|null,note:string|null}
+	 */
+	private function window_html_response( $html, $offset, $max_bytes ) {
+		$total_bytes = strlen( $html );
+		// The offset as the caller actually asked for it — bounds-clamped,
+		// but before any UTF-8 boundary snapping. next_offset is judged
+		// against THIS value (#804 N-R3-1), not the snapped serving offset
+		// below: a client pages by feeding next_offset back in as its next
+		// offset, so it is next_offset advancing past what was JUST
+		// requested that guarantees progress, not next_offset merely
+		// exceeding wherever this call happened to start serving from.
+		$requested_offset = max( 0, min( absint( $offset ), $total_bytes ) );
+		$offset           = $this->snap_utf8_boundary_backward( $html, $requested_offset );
+
+		$raw_end = min( $total_bytes, $offset + $max_bytes );
+		$end     = $this->snap_utf8_boundary_backward( $html, $raw_end );
+
+		// Backing off both edges can only collapse the window to nothing when
+		// max_bytes is narrower than the one character sitting at this
+		// boundary (a pathologically small max_bytes, not a realistic one).
+		// Snap forward instead so a page never returns empty with the same
+		// offset it was asked at — that would neither move the caller nor
+		// finish the document.
+		if ( $end <= $offset && $offset < $total_bytes ) {
+			$end = $this->snap_utf8_boundary_forward( $html, $raw_end );
+		}
+
+		$window    = substr( $html, $offset, $end - $offset );
+		$length    = strlen( $window );
+		$end       = $offset + $length;
+		$truncated = $end < $total_bytes || $offset > 0;
+
+		$next_offset = $end < $total_bytes ? $end : null;
+
+		// #804 N-R3-1: on invalid UTF-8 with a tiny max_bytes, backward
+		// snapping the START can move it BEHIND the requested offset (e.g.
+		// requested_offset=1 snaps to offset=0 above), while the forward
+		// fallback above is capped at the same 3-byte walk — so $end can
+		// land at or before $requested_offset too. A client that keeps
+		// resending next_offset as its offset would then get back to this
+		// exact call forever. Force next_offset strictly past what was
+		// requested, even if that means serving less than a full character
+		// past it on this one pathological page — progress beats a
+		// byte-perfect split on unparseable input.
+		if ( null !== $next_offset && $next_offset <= $requested_offset ) {
+			$next_offset = min( $total_bytes, max( $end, $requested_offset + 1 ) );
+		}
+
+		$note = null;
+		if ( $truncated ) {
+			if ( null !== $next_offset ) {
+				$note = sprintf(
+					/* translators: 1: start byte, 2: end byte, 3: total bytes, 4: max bytes ceiling */
+					__( 'Showing bytes %1$d-%2$d of %3$d total. Pass offset=%2$d to continue reading — paging to the end reaches the tail, including the theme footer — or raise max_bytes (ceiling %4$d) to fetch more per call.', 'mcpwp' ),
+					$offset,
+					$end,
+					$total_bytes,
+					self::RENDERED_HTML_MAX_BYTES_CEILING
+				);
+			} else {
+				$note = sprintf(
+					/* translators: 1: start byte, 2: end byte, 3: total bytes */
+					__( 'Showing bytes %1$d-%2$d of %3$d total — this is the end of the document. Pass offset=0 to see the beginning.', 'mcpwp' ),
+					$offset,
+					$end,
+					$total_bytes
+				);
+			}
+		}
+
+		return array(
+			'html'        => $window,
+			'total_bytes' => $total_bytes,
+			'offset'      => $offset,
+			'length'      => $length,
+			'truncated'   => $truncated,
+			'next_offset' => $next_offset,
+			'note'        => $note,
 		);
 	}
 
@@ -798,10 +1079,11 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 	 *
 	 * @param int         $post_id   Post ID.
 	 * @param string|null $selector  Optional CSS selector to extract.
-	 * @param int         $max_bytes Truncation limit.
+	 * @param int         $max_bytes Window size in bytes.
+	 * @param int         $offset    Byte offset to start the window at.
 	 * @return WP_REST_Response
 	 */
-	private function get_rendered_html_via_elementor( $post_id, $selector, $max_bytes ) {
+	private function get_rendered_html_via_elementor( $post_id, $selector, $max_bytes, $offset = 0 ) {
 		$html = \Elementor\Plugin::$instance->frontend->get_builder_content_for_display( $post_id, true );
 
 		$selector_used  = null;
@@ -818,18 +1100,18 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			}
 		}
 
-		$truncated = false;
-		if ( strlen( $html ) > $max_bytes ) {
-			$html      = substr( $html, 0, $max_bytes );
-			$truncated = true;
-		}
+		$window = $this->window_html_response( $html, $offset, $max_bytes );
 
 		$result = array(
 			'url'            => add_query_arg( 'elementor-preview', $post_id, get_permalink( $post_id ) ),
 			'status_code'    => 200,
-			'html'           => $html,
-			'length'         => strlen( $html ),
-			'truncated'      => $truncated,
+			'html'           => $window['html'],
+			'length'         => $window['length'],
+			'total_bytes'    => $window['total_bytes'],
+			'offset'         => $window['offset'],
+			'truncated'      => $window['truncated'],
+			'next_offset'    => $window['next_offset'],
+			'note'           => $window['note'],
 			'selector_used'  => $selector_used,
 			'selector_found' => $selector_found,
 			'render_method'  => 'internal_elementor',
