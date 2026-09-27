@@ -2595,7 +2595,13 @@ trait Mcpwp_Api_Auth {
 				// unwrapped to the tool it names — never the raw outer
 				// name, or a wrapped admin/write tool is misclassified as
 				// whatever "mcpwp_call" itself would require (nothing).
-				$outer_name = isset( $message['params']['name'] ) ? (string) $message['params']['name'] : '';
+				// #1016: pass the raw value through, unconverted — a
+				// premature (string) cast turns an array/object `name`
+				// into the literal string "Array" (a PHP "Array to string
+				// conversion" warning, not caught here) instead of the ''
+				// effective_mcp_tool_call() itself already normalizes a
+				// non-string name to.
+				$outer_name = isset( $message['params']['name'] ) ? $message['params']['name'] : '';
 				$outer_args = isset( $message['params']['arguments'] ) && is_array( $message['params']['arguments'] ) ? $message['params']['arguments'] : array();
 				$effective  = $this->effective_mcp_tool_call( $outer_name, $outer_args );
 				$tool_name  = $effective['name'];
