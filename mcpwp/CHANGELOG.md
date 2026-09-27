@@ -5,6 +5,23 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.14.1](https://github.com/Mumega-com/mcpwp/compare/v3.14.0...v3.14.1) (2026-09-27)
+
+
+### Features
+
+* **ops:** intake triage puts every issue source on the board ([#940](https://github.com/Mumega-com/mcpwp/issues/940)) ([#967](https://github.com/Mumega-com/mcpwp/issues/967)) ([df02468](https://github.com/Mumega-com/mcpwp/commit/df0246801c42b29fdfe7ca6ec15f9f81b342603a))
+
+
+### Bug Fixes
+
+* **deps:** upgrade hono, fast-uri, undici and other vulnerable packages ([#939](https://github.com/Mumega-com/mcpwp/issues/939)) ([#971](https://github.com/Mumega-com/mcpwp/issues/971)) ([2ee6ce0](https://github.com/Mumega-com/mcpwp/commit/2ee6ce05e2143f2740746895b415b11b0955f605))
+* **elementor-pro:** custom code updates no longer fail on page-template validation ([#965](https://github.com/Mumega-com/mcpwp/issues/965)) ([#973](https://github.com/Mumega-com/mcpwp/issues/973)) ([6b69abe](https://github.com/Mumega-com/mcpwp/commit/6b69abe6ad520528a3d39dc40902e7efc792694f))
+* **elementor-pro:** remove a deleted template from the display-conditions index ([#952](https://github.com/Mumega-com/mcpwp/issues/952)) ([#975](https://github.com/Mumega-com/mcpwp/issues/975)) ([15567c4](https://github.com/Mumega-com/mcpwp/commit/15567c46cfffb4ebd221eb9d8b93bd181857240c))
+* **elementor:** treat a refused save and a missing CSS file as failures ([#951](https://github.com/Mumega-com/mcpwp/issues/951), [#901](https://github.com/Mumega-com/mcpwp/issues/901)) ([#969](https://github.com/Mumega-com/mcpwp/issues/969)) ([afcb782](https://github.com/Mumega-com/mcpwp/commit/afcb78286ed794016a52202ad7a7d5bb4cbaa23f))
+* **mcp:** readable resources on every server and plain-text names for agents ([#972](https://github.com/Mumega-com/mcpwp/issues/972)) ([8b33142](https://github.com/Mumega-com/mcpwp/commit/8b331422e4b0216dff66c78dcfc40a2ef9173c5f))
+* **mcp:** tools/call forwards the caller's credential as received ([#979](https://github.com/Mumega-com/mcpwp/issues/979)) ([89e58b6](https://github.com/Mumega-com/mcpwp/commit/89e58b60a3d778c3ae2eb4aefa3b96249b4dcc03))
+
 ## [3.14.0](https://github.com/Mumega-com/mcpwp/compare/v3.13.1...v3.14.0) (2026-09-26)
 
 
