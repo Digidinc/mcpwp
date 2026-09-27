@@ -372,4 +372,22 @@ final class ScreenshotHonestyTest extends TestCase {
 			$this->assertTrue( $result['success'], "width $width" );
 		}
 	}
+
+	// #804 round 3, N-R3-3: capture() must always validate — there is no
+	// "_url_validated" (or any other) flag a caller can pass in $args to
+	// skip it. The flag existed only as a private contract between
+	// capture_many() and capture(); it must not be a public bypass anyone
+	// who can shape $args could set.
+	public function test_capture_ignores_a_caller_supplied_url_validated_flag(): void {
+		// 169.254.169.254 is blocked by Mcpwp_Security::is_public_ip() —
+		// no network mock needed, since a validated capture() call never
+		// reaches the network for this URL either way.
+		$result = ( new Mcpwp_Screenshot() )->capture(
+			'http://169.254.169.254/',
+			array( '_url_validated' => true )
+		);
+
+		$this->assertInstanceOf( WP_Error::class, $result, 'capture() must still validate even when the caller sets _url_validated.' );
+		$this->assertSame( 'ssrf_blocked', $result->get_error_code() );
+	}
 }

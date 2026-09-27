@@ -994,8 +994,15 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 	 */
 	private function window_html_response( $html, $offset, $max_bytes ) {
 		$total_bytes = strlen( $html );
-		$offset      = max( 0, min( absint( $offset ), $total_bytes ) );
-		$offset      = $this->snap_utf8_boundary_backward( $html, $offset );
+		// The offset as the caller actually asked for it — bounds-clamped,
+		// but before any UTF-8 boundary snapping. next_offset is judged
+		// against THIS value (#804 N-R3-1), not the snapped serving offset
+		// below: a client pages by feeding next_offset back in as its next
+		// offset, so it is next_offset advancing past what was JUST
+		// requested that guarantees progress, not next_offset merely
+		// exceeding wherever this call happened to start serving from.
+		$requested_offset = max( 0, min( absint( $offset ), $total_bytes ) );
+		$offset           = $this->snap_utf8_boundary_backward( $html, $requested_offset );
 
 		$raw_end = min( $total_bytes, $offset + $max_bytes );
 		$end     = $this->snap_utf8_boundary_backward( $html, $raw_end );
@@ -1016,6 +1023,20 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 		$truncated = $end < $total_bytes || $offset > 0;
 
 		$next_offset = $end < $total_bytes ? $end : null;
+
+		// #804 N-R3-1: on invalid UTF-8 with a tiny max_bytes, backward
+		// snapping the START can move it BEHIND the requested offset (e.g.
+		// requested_offset=1 snaps to offset=0 above), while the forward
+		// fallback above is capped at the same 3-byte walk — so $end can
+		// land at or before $requested_offset too. A client that keeps
+		// resending next_offset as its offset would then get back to this
+		// exact call forever. Force next_offset strictly past what was
+		// requested, even if that means serving less than a full character
+		// past it on this one pathological page — progress beats a
+		// byte-perfect split on unparseable input.
+		if ( null !== $next_offset && $next_offset <= $requested_offset ) {
+			$next_offset = min( $total_bytes, max( $end, $requested_offset + 1 ) );
+		}
 
 		$note = null;
 		if ( $truncated ) {

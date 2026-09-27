@@ -265,6 +265,17 @@ final class SpendBudgetTest extends TestCase {
 		);
 	}
 
+	// #804 round 3, N-R3-2: list_count() must price the EFFECTIVE width
+	// count (after clamp/dedupe/cap), the same way SPEND_URL_ITEM_ROUTES
+	// already does for the spend budget — 40 copies of the same width only
+	// ever render one image, so it must cost one rate-limit slot, not 40.
+	public function test_forty_copies_of_the_same_width_costs_one_rate_slot(): void {
+		$this->assertSame(
+			1,
+			Mcpwp_Operation_Weights::list_count( array( 'url' => 'https://example.com', 'widths' => array_fill( 0, 40, 390 ) ) )
+		);
+	}
+
 	public function test_a_wp_batch_of_forty_screenshots_at_six_widths_each_is_refused_whole(): void {
 		// 40 operations x 6 widths x 25 units/width = 6000 — far over the
 		// 1000-unit budget, and it must be refused whole, before anything

@@ -139,30 +139,43 @@ class Mcpwp_Screenshot {
 	 * @return array|WP_Error Screenshot data or error.
 	 */
 	public function capture( $url, $args = array() ) {
-		// #804 W-R2-3: capture_many() validates the URL once for the whole
-		// sweep and passes _url_validated so each width doesn't repeat a
-		// DNS lookup (Mcpwp_Security::validate_external_url() resolves the
-		// host) that already happened and already gave the same answer for
-		// this same URL.
-		if ( empty( $args['_url_validated'] ) ) {
-			$url = esc_url_raw( $url );
-			if ( empty( $url ) ) {
-				return new WP_Error(
-					'invalid_url',
-					__( 'A valid URL is required.', 'mcpwp' ),
-					array( 'status' => 400 )
-				);
-			}
+		$url = esc_url_raw( $url );
+		if ( empty( $url ) ) {
+			return new WP_Error(
+				'invalid_url',
+				__( 'A valid URL is required.', 'mcpwp' ),
+				array( 'status' => 400 )
+			);
+		}
 
-			// SSRF protection.
-			if ( class_exists( 'Mcpwp_Security' ) ) {
-				$ssrf_check = Mcpwp_Security::validate_external_url( $url );
-				if ( is_wp_error( $ssrf_check ) ) {
-					return $ssrf_check;
-				}
+		// SSRF protection.
+		if ( class_exists( 'Mcpwp_Security' ) ) {
+			$ssrf_check = Mcpwp_Security::validate_external_url( $url );
+			if ( is_wp_error( $ssrf_check ) ) {
+				return $ssrf_check;
 			}
 		}
 
+		return $this->capture_validated( $url, $args );
+	}
+
+	/**
+	 * capture()'s actual work, run against an ALREADY-validated URL.
+	 *
+	 * #804 N-R3-3: split out of capture() so capture_many() — which
+	 * validates the URL exactly once for the whole sweep (W-R2-3) — calls
+	 * this directly instead of calling capture() with a caller-settable
+	 * "_url_validated" escape hatch in $args. That flag was reachable by
+	 * anything that could shape $args, including a caller of the public
+	 * capture() method itself; a private method with no such flag is the
+	 * only way to make "capture() cannot be told to skip validation" true
+	 * regardless of what $args a caller passes.
+	 *
+	 * @param string $url    Already validated (esc_url_raw + SSRF-checked) URL.
+	 * @param array  $args   Same options capture() takes.
+	 * @return array|WP_Error Screenshot data or error.
+	 */
+	private function capture_validated( $url, $args = array() ) {
 		$width  = isset( $args['width'] ) ? absint( $args['width'] ) : 1280;
 		$height = isset( $args['height'] ) ? absint( $args['height'] ) : 960;
 
@@ -613,11 +626,16 @@ class Mcpwp_Screenshot {
 		$results = array();
 
 		foreach ( $widths as $width ) {
-			$one_args = array_merge( $args, array( 'width' => $width, '_url_validated' => true ) );
+			$one_args = array_merge( $args, array( 'width' => $width ) );
 			if ( null !== $probe_status ) {
 				$one_args['_mshots_probe_status'] = $probe_status;
 			}
-			$results[ $width ] = $this->capture( $validated_url, $one_args );
+			// #804 N-R3-3: call capture_validated() directly — $url is
+			// already validated above, once, for the whole sweep, so this
+			// does not re-validate (no per-width DNS lookup) and there is
+			// no "_url_validated" flag in $args for a caller to set or rely
+			// on; capture() itself always validates, unconditionally.
+			$results[ $width ] = $this->capture_validated( $validated_url, $one_args );
 		}
 
 		return $results;

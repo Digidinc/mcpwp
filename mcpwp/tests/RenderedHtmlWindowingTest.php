@@ -314,4 +314,53 @@ final class RenderedHtmlWindowingTest extends TestCase {
 		$this->assertNotNull( $data['next_offset'], 'Must make progress — a stuck offset would page forever.' );
 		$this->assertGreaterThan( $data['offset'], $data['next_offset'], 'next_offset must move forward from the (possibly snapped) offset actually served.' );
 	}
+
+	// #804 round 3, N-R3-1: a tiny max_bytes (1-3 bytes) on invalid UTF-8
+	// can make the served/snapped offset land BEHIND the requested offset
+	// (backward snapping has nowhere valid to land), while the window still
+	// ends at or before that same requested offset too — so comparing
+	// next_offset only against the served offset (as the previous test
+	// does) missed this: a client that keeps resending next_offset as its
+	// next request's offset would get the exact same response forever.
+	public function test_repeated_paging_on_invalid_utf8_with_tiny_max_bytes_still_advances(): void {
+		// Exact repro: 0x61 ('a') followed by four 0x80 continuation bytes.
+		$html = "\x61\x80\x80\x80\x80";
+		$this->mock_remote_html( $html );
+
+		[ $controller, $request ] = $this->authed_request(
+			array( 'url' => 'https://example.com/tiny-invalid-utf8', 'offset' => 1, 'max_bytes' => 1 )
+		);
+		$data = $controller->get_rendered_html( $request )->get_data();
+
+		$this->assertNotNull( $data['next_offset'] );
+		$this->assertGreaterThan(
+			1,
+			$data['next_offset'],
+			'next_offset must exceed the REQUESTED offset (1), not just the served/snapped offset — else offset=1 forever returns next_offset=1 and a client loops.'
+		);
+
+		// Following next_offset all the way through must terminate, and
+		// never repeat the same (requested) offset twice.
+		$seen       = array();
+		$offset     = 1;
+		$iterations = 0;
+		while ( null !== $offset && $iterations < 10 ) {
+			$this->assertArrayNotHasKey( $offset, $seen, "offset $offset was requested twice — paging is stuck in a loop." );
+			$seen[ $offset ] = true;
+
+			[ $controller, $request ] = $this->authed_request(
+				array( 'url' => 'https://example.com/tiny-invalid-utf8', 'offset' => $offset, 'max_bytes' => 1 )
+			);
+			$page = $controller->get_rendered_html( $request )->get_data();
+
+			if ( null !== $page['next_offset'] ) {
+				$this->assertGreaterThan( $offset, $page['next_offset'], "next_offset did not advance past requested offset $offset." );
+			}
+
+			$offset = $page['next_offset'];
+			++$iterations;
+		}
+
+		$this->assertLessThan( 10, $iterations, 'Paging must terminate within strlen($html) + 1 steps for this 5-byte document.' );
+	}
 }

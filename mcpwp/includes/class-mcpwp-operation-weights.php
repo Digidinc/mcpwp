@@ -270,18 +270,23 @@ final class Mcpwp_Operation_Weights {
 					continue;
 				}
 
-				if ( is_array( $arguments[ $key ] ) ) {
-					$largest = max( $largest, count( $arguments[ $key ] ) );
+				// #804 N-R2-2/N-R3-2: widths is rate-limited (and priced,
+				// via SPEND_URL_ITEM_ROUTES below) by the EFFECTIVE count —
+				// after the same clamp(320-1920)/dedupe/cap(6) pipeline
+				// capture_multi_width() actually runs — not the raw list
+				// length or a plain count(). Without this, 40 copies of the
+				// same width (or 40 out-of-range widths that all clamp to
+				// one value) would cost 40 rate-limit slots for a call that
+				// only ever renders one image; a comma-separated string
+				// (some MCP clients encode it that way) would count as
+				// zero. effective_screenshot_widths() handles both shapes.
+				if ( 'widths' === $key ) {
+					$largest = max( $largest, count( self::effective_screenshot_widths( $arguments[ $key ] ) ) );
 					continue;
 				}
 
-				// #804 N-R2-2: some MCP clients send a widths sweep as a
-				// comma-separated string rather than an array — the exact
-				// shape id_list_count() already handles for id lists. Count
-				// it the same way, not as zero, so the weighted rate
-				// limiter sees the real fan-out here too.
-				if ( 'widths' === $key ) {
-					$largest = max( $largest, self::id_list_count( $arguments, $key ) );
+				if ( is_array( $arguments[ $key ] ) ) {
+					$largest = max( $largest, count( $arguments[ $key ] ) );
 				}
 			}
 			$count += $largest;
