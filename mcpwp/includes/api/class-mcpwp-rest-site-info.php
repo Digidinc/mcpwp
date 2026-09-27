@@ -358,7 +358,16 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 			$data['tools_note']  = 'Compact tool list (name + summary). Full input schemas: MCP tools/list, or GET /introspect?full=true.';
 		}
 
-		// Include site context if set.
+		// Include site context if set. #1007 review round 2 owner decision:
+		// site context is public brand copy — it is already published,
+		// unauthenticated, at /llms.txt (Mcpwp_AI_Presence::generate_llms_txt()
+		// reads the same mcpwp_site_context option). READING it is therefore
+		// on the discovery allowlist for every key regardless of role or the
+		// site-wide toggle (see get_discovery_allowlist()'s 'wp_get_site_context'
+		// entry, 'read_only' => true — GET /site-context and mcpwp://site-context
+		// carry the identical exemption). WRITING it (wp_set_site_context,
+		// POST/PUT /site-context) stays gated to the 'site' category — that is
+		// the site owner's own edit, not published data.
 		$site_context = get_option( 'mcpwp_site_context', '' );
 		if ( '' !== $site_context ) {
 			$data['site_context'] = $site_context;
@@ -580,6 +589,10 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 		);
 		if ( $full ) {
 			if ( '' !== $site_context ) {
+				// #1007 review round 2 owner decision: site context is public
+				// brand copy, already published unauthenticated at /llms.txt —
+				// reading it is on the discovery allowlist for every key (see
+				// get_discovery_allowlist()'s 'wp_get_site_context' entry).
 				$context_section['context'] = $site_context;
 			} else {
 				$context_section['hint'] = 'No site context configured. Use wp_set_site_context to define design rules, color palette, typography, and layout guidelines.';
@@ -629,6 +642,12 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 			);
 		}
 
+		// #1007 WARN-2: /onboard is on the discovery allowlist, so it stays
+		// reachable by every key, but its own SUGGESTIONS must not point a
+		// category-restricted key (or any key while a category is disabled
+		// site-wide) at a tool that same key's next tools/call would refuse.
+		$actions = $this->filter_actions_by_caller_categories( $actions );
+
 		if ( ! $full ) {
 			// #905: slim by default — everything an agent needs in its first
 			// 30 seconds (identity, builder mode, what's connected, the top 3
@@ -669,11 +688,27 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 				),
 				'site_context_configured' => $context_section['configured'],
 				'next_actions'            => array_slice( $actions, 0, 3 ),
-				'more'                    => array(
-					'tools'         => 'Call MCP tools/list (or GET /introspect) for the full tool catalog with input schemas.',
-					'guide'         => 'Call wp_get_guide(topic="...") for a topic guide — e.g. onboarding, elementor, seo, workflows.',
-					'site_context'  => 'Call wp_get_site_context for the full site brief and design rules.',
-					'full_briefing' => 'Call wp_onboard(detail="full") — or GET /onboard?detail=full — for the complete legacy briefing: full tool catalog, quick reference, suggested first tools, recent content, design references, and site context text.',
+				// #1007 review round 2, NIT-2: 'guide' points at wp_get_guide
+				// ('site' category, still genuinely gated) — must not be
+				// offered to a key that cannot call it. 'site_context' points
+				// at wp_get_site_context, which is on the discovery allowlist
+				// (round 2 owner decision: public brand copy) and therefore
+				// always survives the filter; 'tools'/'full_briefing' name no
+				// single gated tool at all. filter_actions_by_caller_categories()
+				// is the same filter next_actions/quick_reference/
+				// suggested_first_tools already use, so this can never
+				// disagree with them.
+				'more'                    => array_column(
+					$this->filter_actions_by_caller_categories(
+						array(
+							array( 'key' => 'tools', 'tool' => '', 'text' => 'Call MCP tools/list (or GET /introspect) for the full tool catalog with input schemas.' ),
+							array( 'key' => 'guide', 'tool' => 'wp_get_guide', 'text' => 'Call wp_get_guide(topic="...") for a topic guide — e.g. onboarding, elementor, seo, workflows.' ),
+							array( 'key' => 'site_context', 'tool' => 'wp_get_site_context', 'text' => 'Call wp_get_site_context for the full site brief and design rules.' ),
+							array( 'key' => 'full_briefing', 'tool' => '', 'text' => 'Call wp_onboard(detail="full") — or GET /onboard?detail=full — for the complete legacy briefing: full tool catalog, quick reference, suggested first tools, recent content, design references, and site context text.' ),
+						)
+					),
+					'text',
+					'key'
 				),
 				'pro_active'              => $is_pro,
 				'detail'                  => 'slim',
@@ -742,6 +777,10 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 			'tool'   => 'wp_list_posts',
 			'reason' => 'Review recent content before editing',
 		);
+
+		// #1007 WARN-2: same caller-category filter as $actions above.
+		$quick_reference       = $this->filter_actions_by_caller_categories( $quick_reference );
+		$suggested_first_tools = $this->filter_actions_by_caller_categories( $suggested_first_tools );
 
 		$quick_start = 'Start with wp_site_info, then wp_get_signals, then review existing content before making any changes.';
 
@@ -819,6 +858,70 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 		);
 	}
 
+	/**
+	 * Filter a list of {'tool': 'wp_x', ...} recommendation entries (onboard's
+	 * $actions / $quick_reference / $suggested_first_tools) down to tools the
+	 * CURRENT caller could actually invoke through tools/call right now
+	 * (#1007 WARN-2).
+	 *
+	 * /onboard itself is on the discovery allowlist (get_discovery_allowlist_routes()),
+	 * so it stays reachable by every key regardless of role or the site-wide
+	 * toggle — deliberately, for first contact. But before this fix its OWN
+	 * suggestions were not filtered at all: an author-role key (categories:
+	 * content, media, taxonomy) got pointed at wp_get_guide and
+	 * wp_get_site_context ('site' category) — tools the identical key's next
+	 * tools/call for either one would refuse with scope_denied. Mirrors the
+	 * same two gates handle_tools_call() enforces (site-wide disabled
+	 * category, per-key role category) plus the shared discovery-tool
+	 * exemption, so a suggestion here and a tools/call for it never disagree.
+	 *
+	 * @param array $entries Each with a 'tool' key naming an MCP tool.
+	 * @return array Filtered list, same shape and order.
+	 */
+	private function filter_actions_by_caller_categories( array $entries ) {
+		$key_record           = $this->get_current_api_key_record();
+		$allowed_categories   = is_array( $key_record ) ? $this->resolve_key_tool_categories( $key_record ) : array();
+		$disabled_categories  = get_option( 'mcpwp_disabled_tool_categories', array() );
+		$disabled_categories  = is_array( $disabled_categories ) ? $disabled_categories : array();
+
+		// Nothing restricts anything — skip building the tool-category map.
+		if ( empty( $allowed_categories ) && empty( $disabled_categories ) ) {
+			return $entries;
+		}
+
+		$tool_categories = array();
+		if ( class_exists( 'Mcpwp_MCP_Free_Tools' ) ) {
+			$tool_categories = ( new Mcpwp_MCP_Free_Tools() )->get_tool_categories();
+		}
+		if ( class_exists( 'Mcpwp_MCP_Pro_Tools' ) ) {
+			$tool_categories = array_merge( $tool_categories, ( new Mcpwp_MCP_Pro_Tools() )->get_tool_categories() );
+		}
+
+		$discovery_exempt = self::get_discovery_allowlist_tool_names();
+
+		return array_values(
+			array_filter(
+				$entries,
+				function ( $entry ) use ( $allowed_categories, $disabled_categories, $tool_categories, $discovery_exempt ) {
+					$name = isset( $entry['tool'] ) ? (string) $entry['tool'] : '';
+					if ( '' === $name || in_array( $name, $discovery_exempt, true ) ) {
+						return true;
+					}
+					$category = isset( $tool_categories[ $name ] ) ? (string) $tool_categories[ $name ] : '';
+					if ( '' !== $category && in_array( $category, $disabled_categories, true ) ) {
+						return false;
+					}
+					if ( ! empty( $allowed_categories ) ) {
+						// Same fail-closed convention as filter_tools_by_key_role():
+						// an uncategorised tool is denied to a category-restricted key.
+						return '' !== $category && in_array( $category, $allowed_categories, true );
+					}
+					return true;
+				}
+			)
+		);
+	}
+
 	private function build_effective_site_context( $base_context, $scope, $archetype_class, $style ) {
 		$inheritance = array(
 			'scope'           => $scope,
@@ -867,12 +970,88 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 		);
 	}
 
+	/**
+	 * #1007 review round 3, BLOCK-1. build_effective_site_context() is the
+	 * one function every door to site context goes through — REST
+	 * GET /site-context, tools/call wp_get_site_context, resources/read
+	 * mcpwp://site-context, and mcpwp://brand's site-context half (all four
+	 * dispatch to get_site_context() above, directly or via an internal
+	 * sub-request) — so this is the single chokepoint to gate, not each door
+	 * separately.
+	 *
+	 * The round-2 owner decision made the BASE mcpwp_site_context text
+	 * public (it is published, unauthenticated, at /llms.txt). It said
+	 * nothing about a scope='product'/archetype_class page-type OVERRIDE:
+	 * that pulls a WooCommerce product archetype brief
+	 * (find_product_context_override(), backed by the 'mcpwp_wc_product_archetypes'
+	 * option — same data wc_get_product_archetype/wc_list_product_archetypes
+	 * gate behind the 'woocommerce' category) or an Elementor page archetype
+	 * brief (find_page_context_override(), backed by
+	 * Mcpwp_Elementor_Pro::get_archetypes() — same data
+	 * wp_get_elementor_archetype/wp_list_elementor_archetypes gate behind
+	 * 'elementor-templates'). Neither brief is in /llms.txt. Live evidence
+	 * from the review: an author read-key with 'site' AND 'woocommerce' AND
+	 * 'elementor-templates' all disabled still got the full product/page
+	 * brief plus its archetype title and id back from every one of the four
+	 * doors, while a direct call to the archetype's OWN route
+	 * (GET /woocommerce/archetypes) correctly 403'd.
+	 *
+	 * Fix: apply the override only when the CURRENT caller may read the
+	 * archetype's own category (site-wide toggle + per-key role, same two
+	 * gates every other category check in this plugin applies — admin, and
+	 * any context with no key record at all, are unaffected). When the
+	 * caller may not, return array() — exactly the "no archetype matched"
+	 * shape build_effective_site_context() already falls back to: the base
+	 * context only, inheritance.matched stays false, and no 'source' key —
+	 * so a denied caller sees nothing that reveals an archetype exists,
+	 * let alone its title, id, or brief.
+	 *
+	 * @param string $scope           'product' or a page-archetype scope.
+	 * @param string $archetype_class Archetype class to match.
+	 * @param string $style           Optional archetype style to match.
+	 * @return array Override {type,id,title,brief}, or array() (no match / not permitted).
+	 */
 	private function find_context_override( $scope, $archetype_class, $style ) {
 		if ( 'product' === $scope ) {
+			if ( ! $this->caller_may_read_category( 'woocommerce' ) ) {
+				return array();
+			}
 			return $this->find_product_context_override( $archetype_class, $style );
 		}
 
+		if ( ! $this->caller_may_read_category( 'elementor-templates' ) ) {
+			return array();
+		}
 		return $this->find_page_context_override( $scope, $archetype_class, $style );
+	}
+
+	/**
+	 * Whether the current caller may read data in $category — the site-wide
+	 * disabled-category toggle (blocks every key, including admin) and the
+	 * per-key role restriction (empty for admin/legacy/no-key-record
+	 * contexts, meaning unrestricted). Same two checks
+	 * check_disabled_category_for_route()/check_key_category_restriction_for_route()
+	 * apply to a ROUTE; this applies the identical pair to an arbitrary
+	 * category a response is about to embed data from, for a chokepoint
+	 * (build_effective_site_context()'s archetype override) that a route
+	 * classification can't reach because it lives one level inside an
+	 * already-public route.
+	 *
+	 * @param string $category Tool category slug.
+	 * @return bool
+	 */
+	private function caller_may_read_category( $category ) {
+		$disabled_categories = get_option( 'mcpwp_disabled_tool_categories', array() );
+		if ( is_array( $disabled_categories ) && in_array( $category, $disabled_categories, true ) ) {
+			return false;
+		}
+
+		$key_record = $this->get_current_api_key_record();
+		if ( ! is_array( $key_record ) ) {
+			return true;
+		}
+
+		return $this->key_allows_category( $key_record, $category );
 	}
 
 	private function find_page_context_override( $scope, $archetype_class, $style ) {

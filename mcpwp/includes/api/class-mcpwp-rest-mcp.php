@@ -353,17 +353,25 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			);
 		}
 
-		// Filter out tools in admin-disabled categories.
+		// Filter out tools in admin-disabled categories. #1007 WARN-2: the
+		// discovery allowlist tools (wp_site_info/wp_onboard/wp_introspect)
+		// are exempt here too, same as handle_tools_call()'s matching check —
+		// tools/list must not omit a tool that a tools/call for the same name
+		// would still answer.
 		$disabled_categories = get_option( 'mcpwp_disabled_tool_categories', array() );
 		if ( ! empty( $disabled_categories ) && is_array( $disabled_categories ) ) {
-			$all_categories = $this->get_all_tool_categories();
-			$tools          = array_values(
+			$all_categories    = $this->get_all_tool_categories();
+			$discovery_exempt  = self::get_discovery_allowlist_tool_names();
+			$tools             = array_values(
 				array_filter(
 					$tools,
-					function ( $tool ) use ( $disabled_categories, $all_categories ) {
+					function ( $tool ) use ( $disabled_categories, $all_categories, $discovery_exempt ) {
+						$name = isset( $tool['name'] ) ? $tool['name'] : '';
+						if ( in_array( $name, $discovery_exempt, true ) ) {
+							return true;
+						}
 						// Same rule as the handler: an uncategorised tool is not
 						// hidden by a disabled category it does not belong to.
-						$name     = isset( $tool['name'] ) ? $tool['name'] : '';
 						$category = isset( $all_categories[ $name ] ) ? (string) $all_categories[ $name ] : '';
 						return '' === $category || ! in_array( $category, $disabled_categories, true );
 					}
@@ -1531,6 +1539,20 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 * @return bool
 	 */
 	private function tool_currently_permitted( $tool_name, $key_record ) {
+		// #1007 review round 2, NIT-1: the discovery allowlist
+		// (get_discovery_allowlist_tool_names(), shared with the REST-side
+		// get_discovery_allowlist_routes()) exempts wp_site_info/wp_onboard/
+		// wp_introspect from both category checks below, same as
+		// handle_tools_call() itself. Without this, this function disagreed
+		// with the handler it exists to mirror — its two OTHER callers,
+		// handle_tools_call_idempotent()'s replay gate (~1324) and #1012's
+		// next-step-hint filter (~2174), would have called a discovery tool
+		// "not currently permitted" for a role-restricted key even though a
+		// tools/call for it succeeds.
+		if ( in_array( $tool_name, self::get_discovery_allowlist_tool_names(), true ) ) {
+			return true;
+		}
+
 		// The same resolver the handler uses. Inventing a category here that
 		// the handler does not enforce sent a refused replay back INTO the
 		// handler, which ran the write again (#802 round 4).
@@ -2492,16 +2514,24 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			return $tools;
 		}
 
-		$all_categories = $this->get_all_tool_categories();
+		$all_categories   = $this->get_all_tool_categories();
+		$discovery_exempt = self::get_discovery_allowlist_tool_names();
 
 		return array_values(
 			array_filter(
 				$tools,
-				function ( $tool ) use ( $allowed_categories, $all_categories ) {
+				function ( $tool ) use ( $allowed_categories, $all_categories, $discovery_exempt ) {
+					$name = isset( $tool['name'] ) ? $tool['name'] : '';
+					// #1007 WARN-2: wp_site_info/wp_onboard/wp_introspect stay
+					// listed to every role, same as they stay callable
+					// (handle_tools_call()'s matching exemption) and reachable
+					// over REST (get_discovery_allowlist_routes()).
+					if ( in_array( $name, $discovery_exempt, true ) ) {
+						return true;
+					}
 					// Same rule as the handler's per-key gate: an uncategorised
 					// tool is denied to a category-restricted key, so it is not
 					// listed to it either (#802 round 6).
-					$name     = isset( $tool['name'] ) ? $tool['name'] : '';
 					$category = isset( $all_categories[ $name ] ) ? (string) $all_categories[ $name ] : '';
 					return '' !== $category && in_array( $category, $allowed_categories, true );
 				}
@@ -2610,6 +2640,55 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	}
 
 	/**
+	 * Whether the CURRENT caller could actually resources/read this
+	 * definition right now — the identical two gates
+	 * verify_api_key_auth_only() applies to the real sub-request
+	 * handle_resources_read() dispatches (check_disabled_category_for_route(),
+	 * check_key_category_restriction_for_route()), evaluated against the
+	 * definition's own route instead of the outer /mcp request's route
+	 * (#1007 NIT).
+	 *
+	 * @param array $definition One entry from mcp_resource_definitions().
+	 * @return bool
+	 */
+	private function resource_definition_is_readable_by_caller( $definition ) {
+		$route = isset( $definition['route'] ) ? (string) $definition['route'] : '';
+
+		// #1007 review round 2: a resource read is always semantically a GET,
+		// so a read-only discovery route (e.g. /site-context — the write
+		// tool, wp_set_site_context, is a different tool on the same route)
+		// is always readable here, matching is_discovery_read_bypass()'s REST
+		// treatment of the same route on a real GET. Definitions carry the
+		// full '/mcpwp/v1/...' route; the allowlist stores the bare path, so
+		// strip the base the same way get_category_for_route() does below.
+		$base = '/mcpwp/v1';
+		$path = ( 0 === strpos( $route, $base ) ) ? substr( $route, strlen( $base ) ) : $route;
+		foreach ( self::get_discovery_allowlist_read_only_routes() as $allowlisted ) {
+			if ( $path === $allowlisted || 0 === strpos( $path, $allowlisted . '/' ) ) {
+				return true;
+			}
+		}
+
+		$category = $this->get_category_for_route( $route );
+
+		if ( '' === $category ) {
+			return true; // Ungated route — same convention as both real gates.
+		}
+
+		$disabled_categories = get_option( 'mcpwp_disabled_tool_categories', array() );
+		if ( is_array( $disabled_categories ) && in_array( $category, $disabled_categories, true ) ) {
+			return false;
+		}
+
+		$key_record = $this->get_current_api_key_record();
+		if ( ! is_array( $key_record ) ) {
+			return true;
+		}
+
+		return $this->key_allows_category( $key_record, $category );
+	}
+
+	/**
 	 * Handle resources/list method.
 	 *
 	 * Exposes key site data as MCP resources so clients can read context without
@@ -2622,6 +2701,18 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		$resources = array();
 
 		foreach ( $this->mcp_resource_definitions() as $definition ) {
+			// #1007 NIT: resources/list used to advertise every resource
+			// unconditionally, including ones the SAME caller's resources/read
+			// (dispatched through the real REST route — see
+			// handle_resources_read()) would refuse with -32003. A category-
+			// restricted key (or any key while that category is disabled
+			// site-wide) saw e.g. Design References or Site Context listed,
+			// then hit an error reading the one thing it was just told exists.
+			// Filter list by the identical gate read already enforces, so the
+			// two can never disagree.
+			if ( ! $this->resource_definition_is_readable_by_caller( $definition ) ) {
+				continue;
+			}
 			$resources[] = array(
 				'uri'         => $this->mcp_resource_uri( $definition ),
 				'name'        => $definition['name'],
@@ -4174,9 +4265,20 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		// caller supplied an equivalent value under its old name.
 		$arguments = $this->resolve_param_aliases( $mapping, $arguments );
 
+		// #1007 WARN-2: the discovery allowlist (get_discovery_allowlist_tool_names(),
+		// shared with the REST-side get_discovery_allowlist_routes()) exempts
+		// wp_site_info/wp_onboard/wp_introspect from BOTH the category checks
+		// below — the site-wide toggle and the per-key role gate — so a
+		// tools/call for one of these three agrees with the identical call
+		// already reachable directly over REST. The tool's own SCOPE
+		// requirement is untouched: it was already checked, before this
+		// method ever ran, by the outer /mcp request's
+		// get_required_scope_for_mcp_request().
+		$is_discovery_tool = in_array( $tool_name, self::get_discovery_allowlist_tool_names(), true );
+
 		// Check if the tool's category has been disabled by the site administrator.
 		$disabled_categories = get_option( 'mcpwp_disabled_tool_categories', array() );
-		if ( ! empty( $disabled_categories ) && is_array( $disabled_categories ) ) {
+		if ( ! $is_discovery_tool && ! empty( $disabled_categories ) && is_array( $disabled_categories ) ) {
 			$tool_category = $this->tool_category_for( $tool_name );
 			if ( '' !== $tool_category && in_array( $tool_category, $disabled_categories, true ) ) {
 				$this->fire_tool_called( $tool_name, $start, 'category_disabled' );
@@ -4195,7 +4297,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 
 		// Check if the API key's role allows this tool's category.
 		$key_record = $this->get_current_api_key_record();
-		if ( $key_record ) {
+		if ( ! $is_discovery_tool && $key_record ) {
 			$allowed_categories = $this->resolve_key_tool_categories( $key_record );
 			if ( ! empty( $allowed_categories ) ) {
 				// The same resolver as every other gate. A tool with no
