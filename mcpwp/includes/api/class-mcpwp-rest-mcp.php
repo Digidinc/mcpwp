@@ -1897,18 +1897,29 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	/**
 	 * Append next-step hints to a successful tools/call result (#912).
 	 *
-	 * Advisory only: a short "Next: ..." line is appended to the text
-	 * content block, and the same suggestions are given machine-readable
-	 * under result._meta['mcpwp/next'] as [{tool, why, arguments}, ...].
-	 * NEVER written into structuredContent — that is validated against the
+	 * Advisory only, and additive-only to `content`: `content[0]` is read
+	 * to learn this call's own result data, but is NEVER rewritten — many
+	 * clients, proxies, and integrations `JSON.parse()` `content[0].text`
+	 * directly (older protocol versions carry no `structuredContent` at
+	 * all), and appending human-readable text onto that string would break
+	 * every one of them. A hint therefore lands as a SEPARATE, ADDITIONAL
+	 * `content` entry — `{type: "text", text: "Next: ...\nNext: ..."}` —
+	 * after whatever entries were already there, so `content[0]` stays
+	 * byte-for-byte what it would have been with no hint at all. The same
+	 * suggestions are also given machine-readable under
+	 * result._meta['mcpwp/next'] as [{tool, why, arguments}, ...]. NEVER
+	 * written into structuredContent — that is validated against the
 	 * tool's own declared outputSchema (#906) and must not carry a
 	 * suggestion no schema describes.
 	 *
 	 * Runs identically for a fresh dispatch and an idempotent replay (#802):
 	 * both reach this from the same conform_tool_call_result() chokepoint,
-	 * and a replay's stored text/arguments are read fresh here every time —
-	 * nothing about a hint is itself stored, so re-running this on the same
-	 * stored result never compounds.
+	 * and a replay's stored content/arguments are read fresh here every
+	 * time — the stored record is captured BEFORE this method ever runs
+	 * (handle_tools_call_idempotent() persists handle_tools_call()'s own
+	 * return value, which conform_tool_call_result() only wraps afterward),
+	 * so the stored `content` array never carries a hint entry, and
+	 * replaying it twice can never produce two hint blocks.
 	 *
 	 * A hint naming a tool the caller cannot currently reach (category
 	 * disabled by the site admin, or outside the API key's allowed
@@ -1931,6 +1942,8 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			return $response;
 		}
 
+		// Read-only: this call's own result data, learned from content[0]
+		// but never written back into it.
 		$text        = isset( $response['result']['content'][0]['text'] ) && is_string( $response['result']['content'][0]['text'] )
 			? $response['result']['content'][0]['text']
 			: null;
@@ -1961,18 +1974,24 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			return empty( $args ) ? new \stdClass() : $args;
 		};
 
-		if ( null !== $text ) {
-			$lines = array();
-			foreach ( $available as $hint ) {
-				$lines[] = sprintf(
-					'Next: %s(%s) to %s.',
-					$hint['tool'],
-					(string) wp_json_encode( $as_json_object( $hint['arguments'] ) ),
-					$hint['why']
-				);
-			}
-			$response['result']['content'][0]['text'] = $text . "\n\n" . implode( "\n", $lines );
+		$lines = array();
+		foreach ( $available as $hint ) {
+			$lines[] = sprintf(
+				'Next: %s(%s) to %s.',
+				$hint['tool'],
+				(string) wp_json_encode( $as_json_object( $hint['arguments'] ) ),
+				$hint['why']
+			);
 		}
+		if ( ! isset( $response['result']['content'] ) || ! is_array( $response['result']['content'] ) ) {
+			$response['result']['content'] = array();
+		}
+		// content[0] (and any other existing entry) is untouched — this
+		// pushes a brand-new entry onto the end.
+		$response['result']['content'][] = array(
+			'type' => 'text',
+			'text' => implode( "\n", $lines ),
+		);
 
 		if ( ! isset( $response['result']['_meta'] ) || ! is_array( $response['result']['_meta'] ) ) {
 			$response['result']['_meta'] = array();

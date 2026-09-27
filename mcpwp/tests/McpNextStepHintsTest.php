@@ -7,10 +7,15 @@
  *     builder, no WordPress or REST involved.
  *  2. Mcpwp_REST_MCP::apply_next_step_hints() (private, reached via
  *     Reflection like McpProtocolVersionTest's conform_tool_call_result
- *     coverage) — the chokepoint wiring: text line + _meta['mcpwp/next'],
- *     never structuredContent, dropped for an error result, and filtered by
- *     the same tool_currently_permitted() gate the idempotent-replay path
- *     already uses for category/role visibility.
+ *     coverage) — the chokepoint wiring: a hint is a NEW, SEPARATE content
+ *     entry appended after whatever was already there (content[0] is
+ *     read for its result data but never rewritten — a client or proxy
+ *     that JSON.parse()s content[0].text directly, which is the ONLY
+ *     content entry pre-2025-06-18, must never see it corrupted by an
+ *     appended human-readable line), plus the same suggestions under
+ *     _meta['mcpwp/next'], never structuredContent, dropped for an error
+ *     result, and filtered by the same tool_currently_permitted() gate the
+ *     idempotent-replay path already uses for category/role visibility.
  *  3. One true end-to-end call through Mcpwp_REST_MCP::handle_mcp() proving
  *     the wiring from process_single_request() through to the HTTP response
  *     body actually fires for a real tools/call.
@@ -166,15 +171,20 @@ final class McpNextStepHintsTest extends TestCase {
 		);
 	}
 
-	public function test_hint_appends_a_next_line_and_meta_on_success(): void {
-		$out = $this->invoke_apply_next_step_hints(
-			$this->success_response( array( 'id' => 55 ) ),
-			'wp_create_page',
-			array( 'title' => 'About' )
-		);
+	public function test_hint_appends_a_new_content_entry_and_meta_on_success(): void {
+		$original = $this->success_response( array( 'id' => 55 ) );
 
-		$this->assertStringContainsString( 'Next: wp_set_elementor({"id":55})', $out['result']['content'][0]['text'] );
-		$this->assertStringContainsString( 'Next: wp_set_seo({"id":55})', $out['result']['content'][0]['text'] );
+		$out = $this->invoke_apply_next_step_hints( $original, 'wp_create_page', array( 'title' => 'About' ) );
+
+		// content[0] — the tool's own result — is byte-for-byte untouched.
+		$this->assertSame( $original['result']['content'][0], $out['result']['content'][0] );
+
+		// The hint lands in a NEW, second content entry, never in content[0].
+		$this->assertCount( 2, $out['result']['content'] );
+		$this->assertSame( 'text', $out['result']['content'][1]['type'] );
+		$this->assertStringContainsString( 'Next: wp_set_elementor({"id":55})', $out['result']['content'][1]['text'] );
+		$this->assertStringContainsString( 'Next: wp_set_seo({"id":55})', $out['result']['content'][1]['text'] );
+		$this->assertStringNotContainsString( 'Next:', $out['result']['content'][0]['text'] );
 
 		$this->assertArrayHasKey( '_meta', $out['result'] );
 		$next = $out['result']['_meta']['mcpwp/next'];
@@ -184,13 +194,37 @@ final class McpNextStepHintsTest extends TestCase {
 		$this->assertArrayHasKey( 'why', $next[0] );
 	}
 
+	/**
+	 * The load-bearing regression for the required fix: content[0] must
+	 * json_decode to the EXACT same value whether or not a hint fired —
+	 * a client (or a proxy/integration) that JSON.parse()s content[0].text
+	 * directly must never see it change shape because a hint was added.
+	 */
+	public function test_content_zero_json_decodes_identically_with_and_without_a_hint(): void {
+		$data = array( 'id' => 55, 'title' => 'About', 'status' => 'draft' );
+
+		$without_hint = $this->invoke_apply_next_step_hints( $this->success_response( $data ), 'wp_list_pages', array() );
+		$with_hint    = $this->invoke_apply_next_step_hints( $this->success_response( $data ), 'wp_create_page', array( 'title' => 'About' ) );
+
+		// Same raw string, not just the same decoded value — a hint must
+		// not touch content[0]['text'] at all, not even re-encode it.
+		$this->assertSame( $without_hint['result']['content'][0]['text'], $with_hint['result']['content'][0]['text'] );
+		$this->assertSame(
+			json_decode( $without_hint['result']['content'][0]['text'], true ),
+			json_decode( $with_hint['result']['content'][0]['text'], true )
+		);
+		// The hinted response did grow — just not at content[0].
+		$this->assertCount( 1, $without_hint['result']['content'] );
+		$this->assertCount( 2, $with_hint['result']['content'] );
+	}
+
 	public function test_no_args_hint_serializes_as_a_json_object_not_an_array(): void {
 		$out = $this->invoke_apply_next_step_hints(
 			$this->success_response( array( 'detail' => 'slim' ) ),
 			'wp_onboard'
 		);
 
-		$this->assertStringContainsString( 'Next: wp_get_site_context({})', $out['result']['content'][0]['text'] );
+		$this->assertStringContainsString( 'Next: wp_get_site_context({})', $out['result']['content'][1]['text'] );
 		$encoded = wp_json_encode( $out['result']['_meta']['mcpwp/next'][0]['arguments'] );
 		$this->assertSame( '{}', $encoded, 'An empty hint-arguments object must encode as {}, not [].' );
 	}
@@ -254,7 +288,7 @@ final class McpNextStepHintsTest extends TestCase {
 			'wp_onboard'
 		);
 
-		$this->assertStringNotContainsString( 'Next:', $out['result']['content'][0]['text'] );
+		$this->assertCount( 1, $out['result']['content'], 'No hint entry should have been appended at all.' );
 		$this->assertArrayNotHasKey( '_meta', $out['result'] );
 	}
 
@@ -283,8 +317,8 @@ final class McpNextStepHintsTest extends TestCase {
 		$next = $out['result']['_meta']['mcpwp/next'];
 		$this->assertCount( 1, $next );
 		$this->assertSame( 'wp_set_elementor', $next[0]['tool'] );
-		$this->assertStringContainsString( 'wp_set_elementor', $out['result']['content'][0]['text'] );
-		$this->assertStringNotContainsString( 'wp_set_seo', $out['result']['content'][0]['text'] );
+		$this->assertStringContainsString( 'wp_set_elementor', $out['result']['content'][1]['text'] );
+		$this->assertStringNotContainsString( 'wp_set_seo', $out['result']['content'][1]['text'] );
 	}
 
 	// ---------------------------------------------------------------
@@ -316,7 +350,11 @@ final class McpNextStepHintsTest extends TestCase {
 		$data = $controller->handle_mcp( $request )->get_data();
 
 		$this->assertFalse( $data['result']['isError'] );
-		$this->assertStringContainsString( 'Next: wp_get_site_context({})', $data['result']['content'][0]['text'] );
+		// content[0] carries the tool's own result, unmutated; the hint is
+		// a distinct second content entry.
+		$this->assertCount( 2, $data['result']['content'] );
+		$this->assertIsArray( json_decode( $data['result']['content'][0]['text'], true ), 'content[0] must still be valid, parseable JSON of the result data.' );
+		$this->assertStringContainsString( 'Next: wp_get_site_context({})', $data['result']['content'][1]['text'] );
 		$this->assertSame(
 			array(
 				array(
@@ -327,5 +365,93 @@ final class McpNextStepHintsTest extends TestCase {
 			),
 			json_decode( wp_json_encode( $data['result']['_meta']['mcpwp/next'] ), true )
 		);
+	}
+
+	/**
+	 * The idempotency store persists handle_tools_call()'s own return value
+	 * — captured BEFORE conform_tool_call_result()/apply_next_step_hints()
+	 * ever runs (#802) — so the stored record must never itself contain a
+	 * hint content entry. Confirmed two ways: the stored transient payload
+	 * has exactly the tool's own content entries, and calling the SAME
+	 * idempotent request twice never grows content past one hint entry
+	 * (a bug here would double it on the second call).
+	 */
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_idempotent_replay_never_stores_or_duplicates_the_hint_block(): void {
+		// wp_onboard is a GET/read tool and is never pinned for idempotency
+		// (handle_tools_call_idempotent()'s own "read tool" -> not_applicable
+		// short-circuit) — a WRITE tool, AND an authenticated principal
+		// (idempotency is scoped per-key; no key context, no pinning), are
+		// needed to actually exercise the stored-replay path this test is
+		// about — same setup IdempotentToolCallTest (#802) uses.
+		//
+		// wp_set_elementor (not wp_create_page): the test bootstrap's
+		// generic REST dispatch stub answers an unmapped route with a bare
+		// {"ok":true} (no `id`), so a hint that only reads the RESULT's id
+		// would have nothing to build from here. wp_set_elementor's hint
+		// build ('id_from_result_or_args') falls back to the call's OWN
+		// `id` argument — supplied directly below — so the hint still
+		// resolves regardless of what the stubbed dispatch returns.
+		$GLOBALS['mcpwp_test_dispatched_routes'] = array();
+		Mcpwp_REST_MCP::reset_verdict_memo();
+		// wp_set_elementor's required-capability gate (get_required_capabilities()
+		// -> 'elementor') needs this defined, same as every other Elementor test
+		// (a process-wide constant — defined only if a prior test hasn't already).
+		if ( ! defined( 'ELEMENTOR_VERSION' ) ) {
+			define( 'ELEMENTOR_VERSION', '4.2.4' );
+		}
+
+		$controller = new Mcpwp_REST_MCP();
+		$key        = $controller->create_scoped_api_key( 'hint replay test', array( 'admin' ) );
+
+		$make_request = function () use ( $key ) {
+			return new WP_REST_Request(
+				'POST',
+				'/mcpwp/v1/mcp',
+				array(),
+				array( 'X-API-Key' => $key['key'] ),
+				array(
+					'jsonrpc' => '2.0',
+					'id'      => 1,
+					'method'  => 'tools/call',
+					'params'  => array(
+						'name'      => 'wp_set_elementor',
+						'arguments' => array( 'id' => 42, 'elementor_data' => '[]' ),
+						'_meta'     => array( 'request_id' => 'mcp-912-replay-test' ),
+					),
+				)
+			);
+		};
+
+		$first_request = $make_request();
+		$this->assertTrue( $controller->verify_api_key( $first_request ), 'Test premise: the key authenticates.' );
+		$first = $controller->handle_mcp( $first_request )->get_data();
+
+		$second_request = $make_request();
+		$this->assertTrue( $controller->verify_api_key( $second_request ) );
+		$second = $controller->handle_mcp( $second_request )->get_data();
+
+		$this->assertArrayNotHasKey( 'replayed', $first['result']['_meta'] ?? array() );
+		$this->assertTrue( $second['result']['_meta']['replayed'] ?? false, 'The second identical request must be served from the idempotency store.' );
+
+		// Both the fresh call and the replay carry exactly one hint entry —
+		// never two, never zero.
+		$this->assertCount( 2, $first['result']['content'] );
+		$this->assertCount( 2, $second['result']['content'] );
+		$this->assertSame( $first['result']['content'][0]['text'], $second['result']['content'][0]['text'] );
+		$this->assertSame( $first['result']['content'][1]['text'], $second['result']['content'][1]['text'] );
+
+		// The stored record itself (read directly from the transient) has
+		// no hint entry at all — it is handle_tools_call()'s raw return
+		// value, from before apply_next_step_hints() ever ran.
+		$store_key = Mcpwp_REST_MCP::idempotency_key( $key['id'], 'mcp-912-replay-test' );
+		$stored    = get_transient( $store_key );
+
+		$this->assertIsArray( $stored );
+		$this->assertSame( 'done', $stored['state'] );
+		$this->assertCount( 1, $stored['response']['result']['content'], 'The stored record must carry only the tool\'s own content entry, never a hint entry.' );
 	}
 }
