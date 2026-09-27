@@ -87,6 +87,16 @@ fi
 
 # Freemius handles Pro updates; do not ship the legacy self-hosted updater.
 rm -f "$DEST/includes/class-mcpwp-updater.php"
+
+# #943 S1 review round 2, BLOCK-1c: core prefers a static uninstall.php over
+# a plugin's own register_uninstall_hook() callback — shipping this file
+# would silently disable Freemius's after_uninstall cleanup (SDK teardown,
+# licence deactivation, uninstall reporting) for every paying customer who
+# uninstalls. Not in .distignore on purpose: the Free/Agency builds NEED
+# this file (they have no Freemius uninstall hook at all), so it must stay
+# removed only here, not for every build.
+rm -f "$DEST/uninstall.php"
+
 rm -rf "$DEST/scripts"
 
 OUTPUT_DIR="$PLUGIN_DIR/scripts"
@@ -140,6 +150,16 @@ if grep -Eq "defined\(\s*'MCPWP_PRO'\s*\)" "$DEST/includes/class-mcpwp-license.p
 	exit 1
 else
 	echo "    [OK] No wp-config.php MCPWP_PRO override in license class"
+fi
+
+# BLOCK-1c: a static uninstall.php in this ZIP would disable Freemius's own
+# after_uninstall cleanup for every customer on this build (core uses
+# uninstall.php first, never both mechanisms).
+if grep -q "^mcpwp/uninstall.php$" "$ZIP_MANIFEST"; then
+	echo "    [FAIL] uninstall.php present — this disables Freemius's after_uninstall cleanup"
+	exit 1
+else
+	echo "    [OK] uninstall.php excluded (Freemius owns uninstall on this build)"
 fi
 
 FILE_COUNT=$(unzip -l "$OUTPUT_ZIP" | tail -1 | awk '{print $2}')

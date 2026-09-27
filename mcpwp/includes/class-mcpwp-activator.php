@@ -1171,5 +1171,160 @@ class Mcpwp_Activator {
 			KEY success (success)
 		) $charset_collate;";
 		dbDelta( $sql_action_log );
+
+		self::ensure_graph_tables();
+	}
+
+	/**
+	 * Site graph — nodes, edges, signals, queue (#943 S1, revised post PR
+	 * #993 review). Called from create_tables() on every activate()/upgrade,
+	 * and again by the daily READY_RETRY_CRON_HOOK while readiness has not
+	 * yet been confirmed (W1/W6) — a restricted DB user that could not
+	 * CREATE TABLE at install time gets a second chance every day instead of
+	 * being stuck forever.
+	 *
+	 * No `IF NOT EXISTS` on these 4 CREATE TABLE statements (W6): dbDelta()
+	 * diffs and ALTERs an existing table by parsing the CREATE TABLE text
+	 * itself, and `IF NOT EXISTS` made a real MySQL server silently skip
+	 * that path on a table dbDelta needed to alter, on a later release that
+	 * adds a column here. Plain `CREATE TABLE` still errors safely (caught
+	 * below) when the table already exists in a shape dbDelta considers
+	 * final.
+	 *
+	 * No `DEFAULT CURRENT_TIMESTAMP` on any timestamp column (W6): every
+	 * writer sets its own timestamp in PHP (current_time('mysql')) via
+	 * Mcpwp_Graph_Builder's suppressed-query helpers, so the column default
+	 * never has to be reconciled by a later dbDelta ALTER either.
+	 */
+	public static function ensure_graph_tables() {
+		global $wpdb;
+
+		$charset_collate = $wpdb->get_charset_collate();
+
+		if ( ! function_exists( 'dbDelta' ) ) {
+			require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+		}
+
+		$graph_nodes_table = $wpdb->prefix . 'mcpwp_graph_nodes';
+		$sql_graph_nodes   = "CREATE TABLE $graph_nodes_table (
+			id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+			node_key varchar(191) NOT NULL,
+			kind varchar(32) NOT NULL,
+			ref_id bigint(20) unsigned DEFAULT NULL,
+			label varchar(255) DEFAULT '',
+			url varchar(2048) DEFAULT '',
+			status varchar(20) DEFAULT '',
+			content_hash char(40) DEFAULT '',
+			word_count int(10) unsigned DEFAULT 0,
+			props longtext DEFAULT NULL,
+			updated_at datetime DEFAULT NULL,
+			PRIMARY KEY (id),
+			UNIQUE KEY node_key (node_key),
+			KEY kind_status (kind, status),
+			KEY ref (kind, ref_id)
+		) $charset_collate;";
+		dbDelta( $sql_graph_nodes );
+
+		$graph_edges_table = $wpdb->prefix . 'mcpwp_graph_edges';
+		$sql_graph_edges   = "CREATE TABLE $graph_edges_table (
+			id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+			from_key varchar(191) NOT NULL,
+			to_key varchar(191) NOT NULL,
+			type varchar(32) NOT NULL,
+			weight double DEFAULT 0,
+			source varchar(32) DEFAULT 'builder',
+			props text DEFAULT NULL,
+			updated_at datetime DEFAULT NULL,
+			PRIMARY KEY (id),
+			UNIQUE KEY edge (from_key(120), to_key(120), type),
+			KEY to_type (to_key(120), type)
+		) $charset_collate;";
+		dbDelta( $sql_graph_edges );
+
+		$graph_signals_table = $wpdb->prefix . 'mcpwp_graph_signals';
+		$sql_graph_signals   = "CREATE TABLE $graph_signals_table (
+			id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+			node_key varchar(191) NOT NULL,
+			metric varchar(64) NOT NULL,
+			value double DEFAULT 0,
+			period_start date DEFAULT NULL,
+			period_end date DEFAULT NULL,
+			source varchar(32) NOT NULL,
+			fetched_at datetime DEFAULT NULL,
+			PRIMARY KEY (id),
+			UNIQUE KEY sig (node_key(120), metric, source, period_start, period_end),
+			KEY metric_period (metric, period_start)
+		) $charset_collate;";
+		dbDelta( $sql_graph_signals );
+
+		// Queue table (replaces the mcpwp_graph_dirty option — BLOCK-4/W2/W5):
+		// mark() does one INSERT IGNORE, which is atomic (no read-modify-write
+		// race between two concurrent saves) and, being keyed on $wpdb->prefix
+		// at call time, naturally per-blog under switch_to_blog() with no
+		// separate multisite branch.
+		$graph_queue_table = $wpdb->prefix . 'mcpwp_graph_queue';
+		$sql_graph_queue   = "CREATE TABLE $graph_queue_table (
+			node_key varchar(191) NOT NULL,
+			reason varchar(32) DEFAULT '',
+			queued_at datetime DEFAULT NULL,
+			PRIMARY KEY (node_key)
+		) $charset_collate;";
+		dbDelta( $sql_graph_queue );
+
+		self::verify_graph_tables_ready();
+	}
+
+	/**
+	 * SHOW TABLES LIKE for each of the 4 graph tables; sets READY_OPTION
+	 * (autoloaded, so ready() is a free read) only when every one exists.
+	 * Never throws — a restricted DB user that could not CREATE TABLE above
+	 * simply leaves readiness false, and every graph hook stays a no-op
+	 * until the daily retry cron (or a manual re-activation) succeeds.
+	 */
+	private static function verify_graph_tables_ready() {
+		global $wpdb;
+
+		$tables = array(
+			$wpdb->prefix . 'mcpwp_graph_nodes',
+			$wpdb->prefix . 'mcpwp_graph_edges',
+			$wpdb->prefix . 'mcpwp_graph_signals',
+			$wpdb->prefix . 'mcpwp_graph_queue',
+		);
+
+		$prev = $wpdb->suppress_errors( true );
+		$present = 0;
+		foreach ( $tables as $table ) {
+			// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- esc_like() escapes the LIKE metacharacters; the value itself is prepared.
+			$found = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $wpdb->esc_like( $table ) ) );
+			if ( $found ) {
+				$present++;
+			}
+		}
+		$wpdb->suppress_errors( $prev );
+
+		if ( count( $tables ) === $present ) {
+			update_option( 'mcpwp_graph_ready', true, true );
+		} else {
+			update_option( 'mcpwp_graph_ready', false, true );
+		}
+	}
+
+	/**
+	 * Daily retry cron (#943 S1 review round 2, N3): re-verifies the 4 graph
+	 * tables EVERY run, even when already marked ready — not only while not
+	 * yet ready. A table can disappear after being confirmed present (a
+	 * restored-from-backup DB missing one, manual surgery, a botched
+	 * migration on the host), and the previous version of this method would
+	 * never notice: it early-returned the moment `ready()` was true once,
+	 * for good. `ensure_graph_tables()` is a cheap `SHOW TABLES LIKE` per
+	 * table plus a `CREATE TABLE` for dbDelta to no-op or fill in whatever
+	 * is missing — running it daily regardless of the current flag is what
+	 * makes readiness self-healing instead of a one-shot check.
+	 */
+	public static function retry_graph_tables_cron() {
+		self::ensure_graph_tables();
+		if ( class_exists( 'Mcpwp_Graph_Builder' ) && Mcpwp_Graph_Builder::ready() ) {
+			Mcpwp_Graph_Builder::on_upgrade_schedule_backfill();
+		}
 	}
 }

@@ -596,261 +596,15 @@ class Mcpwp_REST_Content_Graph extends Mcpwp_REST_API {
 	}
 
 	// --- Private helpers ---
-
-	/**
-	 * Parse requested graph post types and keep only public/queryable types.
-	 *
-	 * @param string $post_types Raw comma-separated post types.
-	 * @return array Post types.
-	 */
-	protected function parse_graph_post_types( $post_types ) {
-		$requested = array_filter( array_map( 'sanitize_key', array_map( 'trim', explode( ',', $post_types ) ) ) );
-		if ( empty( $requested ) ) {
-			$requested = array( 'page', 'post' );
-		}
-
-		$allowed = array();
-		foreach ( $requested as $post_type ) {
-			$obj = get_post_type_object( $post_type );
-			if ( $obj && ( ! empty( $obj->public ) || ! empty( $obj->publicly_queryable ) ) ) {
-				$allowed[] = $post_type;
-			}
-		}
-
-		return empty( $allowed ) ? array( 'page', 'post' ) : array_values( array_unique( $allowed ) );
-	}
-
-	/**
-	 * Get graph-safe term names for a post.
-	 *
-	 * @param WP_Post $post Post.
-	 * @return array Term names.
-	 */
-	protected function get_graph_term_names( $post ) {
-		$names      = array();
-		$taxonomies = get_object_taxonomies( $post->post_type );
-
-		foreach ( $taxonomies as $taxonomy ) {
-			$term_names = wp_get_object_terms( $post->ID, $taxonomy, array( 'fields' => 'names' ) );
-			if ( is_wp_error( $term_names ) || empty( $term_names ) ) {
-				continue;
-			}
-
-			$names = array_merge( $names, $term_names );
-		}
-
-		return array_values( array_unique( array_filter( array_map( 'trim', $names ) ) ) );
-	}
-
-	/**
-	 * Get post IDs included in navigation menus.
-	 *
-	 * @return array Menu post IDs.
-	 */
-	protected function get_menu_post_ids() {
-		return array_keys( $this->get_menu_post_depths() );
-	}
-
-	/**
-	 * Get post IDs included in navigation menus with shallowest menu depth.
-	 *
-	 * @return array Post ID to depth map.
-	 */
-	protected function get_menu_post_depths() {
-		$depths    = array();
-		$locations = get_nav_menu_locations();
-
-		foreach ( $locations as $menu_id ) {
-			$items = wp_get_nav_menu_items( $menu_id );
-			if ( empty( $items ) || is_wp_error( $items ) ) {
-				continue;
-			}
-
-			foreach ( $items as $item ) {
-				if ( 'post_type' === $item->type && ! empty( $item->object_id ) ) {
-					$depth   = $this->get_menu_item_depth( $item, $items );
-					$post_id = (int) $item->object_id;
-
-					if ( ! isset( $depths[ $post_id ] ) || $depth < $depths[ $post_id ] ) {
-						$depths[ $post_id ] = $depth;
-					}
-				}
-			}
-		}
-
-		return $depths;
-	}
-
-	/**
-	 * Get depth for a nav menu item.
-	 *
-	 * @param WP_Post $item  Menu item.
-	 * @param array   $items Menu items.
-	 * @return int Depth.
-	 */
-	protected function get_menu_item_depth( $item, $items ) {
-		$parent_id = (int) $item->menu_item_parent;
-		$depth     = 0;
-		$seen      = array();
-
-		while ( $parent_id > 0 && ! isset( $seen[ $parent_id ] ) ) {
-			$seen[ $parent_id ] = true;
-			$depth++;
-			$next_parent = 0;
-
-			foreach ( $items as $candidate ) {
-				if ( (int) $candidate->ID === $parent_id ) {
-					$next_parent = (int) $candidate->menu_item_parent;
-					break;
-				}
-			}
-
-			$parent_id = $next_parent;
-		}
-
-		return $depth;
-	}
-
-	/**
-	 * Calculate freshness score from age in days.
-	 *
-	 * @param int|null $freshness_days Days since modified.
-	 * @return float Score from 0-1.
-	 */
-	protected function calculate_freshness_score( $freshness_days ) {
-		if ( null === $freshness_days ) {
-			return 0.0;
-		}
-
-		if ( $freshness_days <= 30 ) {
-			return 1.0;
-		}
-
-		if ( $freshness_days >= 730 ) {
-			return 0.0;
-		}
-
-		return round( max( 0, 1 - ( ( $freshness_days - 30 ) / 700 ) ), 3 );
-	}
-
-	/**
-	 * Calculate a simple hub score for graph nodes.
-	 *
-	 * @param array $node Graph node.
-	 * @return float Score.
-	 */
-	protected function calculate_hub_score( $node ) {
-		$score = ( (int) $node['inbound_count'] * 2 ) + (int) $node['outbound_count'];
-
-		if ( ! empty( $node['in_menu'] ) ) {
-			$score += null === $node['menu_depth'] ? 2 : max( 1, 3 - (int) $node['menu_depth'] );
-		}
-
-		if ( ! empty( $node['parent_id'] ) ) {
-			$score += 1;
-		}
-
-		$score += min( 3, count( $node['terms'] ) );
-
-		return round( $score, 3 );
-	}
-
-	/**
-	 * Calculate orphan severity for nodes.
-	 *
-	 * @param array $node Graph node.
-	 * @return string Severity.
-	 */
-	protected function calculate_orphan_severity( $node ) {
-		if ( ! empty( $node['in_menu'] ) || (int) $node['inbound_count'] > 0 ) {
-			return 'none';
-		}
-
-		if ( 'page' === $node['type'] && (int) $node['word_count'] >= 300 ) {
-			return 'high';
-		}
-
-		if ( (int) $node['word_count'] >= 150 ) {
-			return 'medium';
-		}
-
-		return 'low';
-	}
-
-	/**
-	 * Calculate a compact PageRank-style score for content-link edges.
-	 *
-	 * @param array $node_ids Node IDs.
-	 * @param array $edges    Graph edges.
-	 * @return array Scores.
-	 */
-	protected function calculate_graph_page_rank( $node_ids, $edges ) {
-		$count = count( $node_ids );
-		if ( 0 === $count ) {
-			return array();
-		}
-
-		$ranks    = array_fill_keys( $node_ids, 1 / $count );
-		$outgoing = array_fill_keys( $node_ids, array() );
-
-		foreach ( $edges as $edge ) {
-			if ( 'content_link' !== $edge['type'] || ! array_key_exists( $edge['from'], $outgoing ) ) {
-				continue;
-			}
-
-			if ( isset( $outgoing[ $edge['from'] ], $ranks[ $edge['to'] ] ) ) {
-				$outgoing[ $edge['from'] ][] = (int) $edge['to'];
-			}
-		}
-
-		for ( $i = 0; $i < 8; $i++ ) {
-			$next = array_fill_keys( $node_ids, ( 1 - 0.85 ) / $count );
-
-			foreach ( $node_ids as $node_id ) {
-				$targets = array_values( array_unique( $outgoing[ $node_id ] ) );
-				if ( empty( $targets ) ) {
-					continue;
-				}
-
-				$share = ( $ranks[ $node_id ] * 0.85 ) / count( $targets );
-				foreach ( $targets as $target_id ) {
-					$next[ $target_id ] += $share;
-				}
-			}
-
-			$ranks = $next;
-		}
-
-		foreach ( $ranks as $id => $score ) {
-			$ranks[ $id ] = round( $score, 6 );
-		}
-
-		return $ranks;
-	}
-
-	/**
-	 * Extract heading texts from block/raw content.
-	 *
-	 * @param string $content Post content.
-	 * @return array Heading texts.
-	 */
-	protected function extract_heading_texts( $content ) {
-		$headings = array();
-
-		if ( preg_match_all( '/<h([1-6])[^>]*>(.*?)<\/h\1>/is', $content, $matches, PREG_SET_ORDER ) ) {
-			foreach ( $matches as $match ) {
-				$text = trim( wp_strip_all_tags( $match[2] ) );
-				if ( '' !== $text ) {
-					$headings[] = array(
-						'level' => (int) $match[1],
-						'text'  => $text,
-					);
-				}
-			}
-		}
-
-		return $headings;
-	}
+	//
+	// parse_graph_post_types(), get_graph_term_names(), get_menu_post_ids(),
+	// get_menu_post_depths(), get_menu_item_depth(), calculate_freshness_score(),
+	// calculate_hub_score(), calculate_orphan_severity(), calculate_graph_page_rank()
+	// and extract_heading_texts() used to be redefined here byte-for-byte
+	// identical to class-mcpwp-rest-api.php's copies (dead duplication — this
+	// subclass's override shadowed the parent's without differing from it).
+	// Removed (#943 S1): calls now fall through to the parent, which itself
+	// delegates to Mcpwp_Graph_Builder — one parser, not two.
 
 	/**
 	 * Extract internal links from post content.
@@ -860,18 +614,7 @@ class Mcpwp_REST_Content_Graph extends Mcpwp_REST_API {
 	 * @return array Links.
 	 */
 	protected function extract_internal_links_from_content( $content, $url_to_id ) {
-		$links = array();
-
-		if ( preg_match_all( '/<a\s[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)<\/a>/is', $content, $matches, PREG_SET_ORDER ) ) {
-			foreach ( $matches as $match ) {
-				$link = $this->resolve_internal_graph_link( $match[1], wp_strip_all_tags( $match[2] ), $url_to_id );
-				if ( $link ) {
-					$links[] = $link;
-				}
-			}
-		}
-
-		return $links;
+		return Mcpwp_Graph_Builder::extract_internal_links_from_content( $content, $url_to_id );
 	}
 
 	/**
@@ -1113,31 +856,7 @@ class Mcpwp_REST_Content_Graph extends Mcpwp_REST_API {
 	 * @return array|null Link record.
 	 */
 	protected function resolve_internal_graph_link( $href, $anchor, $url_to_id ) {
-		$href = trim( $href );
-		if ( '' === $href || 0 === strpos( $href, '#' ) || preg_match( '/^(mailto|tel|sms|javascript):/i', $href ) ) {
-			return null;
-		}
-
-		$absolute = wp_http_validate_url( $href ) ? $href : home_url( $href );
-		$home     = wp_parse_url( home_url() );
-		$target   = wp_parse_url( $absolute );
-
-		if ( empty( $target['host'] ) || empty( $home['host'] ) || strtolower( $target['host'] ) !== strtolower( $home['host'] ) ) {
-			return null;
-		}
-
-		$normalized = $this->normalize_internal_graph_url( $absolute );
-		$target_id  = isset( $url_to_id[ $normalized ] ) ? (int) $url_to_id[ $normalized ] : url_to_postid( $absolute );
-
-		if ( ! $target_id ) {
-			return null;
-		}
-
-		return array(
-			'target_id' => $target_id,
-			'url'       => $absolute,
-			'anchor'    => trim( $anchor ),
-		);
+		return Mcpwp_Graph_Builder::resolve_internal_graph_link( $href, $anchor, $url_to_id );
 	}
 
 	/**
@@ -1147,11 +866,7 @@ class Mcpwp_REST_Content_Graph extends Mcpwp_REST_API {
 	 * @return string Normalized URL.
 	 */
 	protected function normalize_internal_graph_url( $url ) {
-		$parts = wp_parse_url( $url );
-		$path  = isset( $parts['path'] ) ? untrailingslashit( $parts['path'] ) : '';
-		$query = isset( $parts['query'] ) ? '?' . $parts['query'] : '';
-
-		return strtolower( $path . $query );
+		return Mcpwp_Graph_Builder::normalize_internal_graph_url( $url );
 	}
 
 	/**
@@ -1166,26 +881,7 @@ class Mcpwp_REST_Content_Graph extends Mcpwp_REST_API {
 	 * @return array[] Array of {href, anchor, source} records.
 	 */
 	protected function extract_raw_links_from_elementor( $post_id ) {
-		// In whatever form it is stored (#845): an array-stored tree has links too.
-		$data = Mcpwp_Elementor_Stored_Tree::of_post( $post_id )['elements'];
-		if ( empty( $data ) ) {
-			return array();
-		}
-
-		$links = array();
-		$this->collect_elementor_raw_links( $data, $links );
-
-		// Deduplicate by href.
-		$seen  = array();
-		$dedup = array();
-		foreach ( $links as $link ) {
-			$key = strtolower( trim( $link['href'] ) );
-			if ( '' !== $key && ! isset( $seen[ $key ] ) ) {
-				$seen[ $key ] = true;
-				$dedup[]       = $link;
-			}
-		}
-		return $dedup;
+		return Mcpwp_Graph_Builder::extract_raw_links_from_elementor( $post_id );
 	}
 
 	/**
@@ -1195,49 +891,7 @@ class Mcpwp_REST_Content_Graph extends Mcpwp_REST_API {
 	 * @param array $links    Accumulator passed by reference.
 	 */
 	protected function collect_elementor_raw_links( $elements, &$links ) {
-		if ( ! is_array( $elements ) ) {
-			return;
-		}
-
-		foreach ( $elements as $element ) {
-			if ( ! is_array( $element ) ) {
-				continue;
-			}
-
-			$settings = isset( $element['settings'] ) && is_array( $element['settings'] ) ? $element['settings'] : array();
-
-			// URL-typed settings: link.url, url.url. Anchor = button text or title where available.
-			foreach ( array( 'link', 'url' ) as $url_key ) {
-				if ( ! empty( $settings[ $url_key ]['url'] ) && is_string( $settings[ $url_key ]['url'] ) ) {
-					$anchor  = trim( wp_strip_all_tags( (string) ( $settings['text'] ?? $settings['button_text'] ?? $settings['title'] ?? '' ) ) );
-					$links[] = array(
-						'href'   => $settings[ $url_key ]['url'],
-						'anchor' => $anchor,
-						'source' => 'elementor',
-					);
-				}
-			}
-
-			// HTML-content settings: parse <a> tags to get real hrefs + anchors.
-			foreach ( array( 'editor', 'html', 'content', 'inner_text' ) as $field ) {
-				if ( ! empty( $settings[ $field ] ) && is_string( $settings[ $field ] ) ) {
-					if ( preg_match_all( '/<a\s[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)<\/a>/is', $settings[ $field ], $matches, PREG_SET_ORDER ) ) {
-						foreach ( $matches as $m ) {
-							$links[] = array(
-								'href'   => trim( html_entity_decode( $m[1], ENT_QUOTES, 'UTF-8' ) ),
-								'anchor' => trim( wp_strip_all_tags( $m[2] ) ),
-								'source' => 'elementor',
-							);
-						}
-					}
-				}
-			}
-
-			// Recurse into child elements.
-			if ( ! empty( $element['elements'] ) && is_array( $element['elements'] ) ) {
-				$this->collect_elementor_raw_links( $element['elements'], $links );
-			}
-		}
+		Mcpwp_Graph_Builder::collect_elementor_raw_links( $elements, $links );
 	}
 
 }

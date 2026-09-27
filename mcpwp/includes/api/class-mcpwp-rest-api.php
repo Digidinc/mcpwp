@@ -69,6 +69,15 @@ abstract class Mcpwp_REST_API {
 	 * @return bool|WP_Error True if valid.
 	 */
 	public function check_permission( $request ) {
+		// Site graph (#943 S1 review round 3, N1): this used to also flag
+		// Mcpwp_Graph_Builder's own "authenticated request" static here, as
+		// the standalone equivalent of #957's guardrails context before that
+		// branch had merged. #957 is on main now — verify_api_key() (below)
+		// already calls Mcpwp_Content_Guardrails::enter_context() at this
+		// same chokepoint, and Mcpwp_Graph_Builder::mark() reads
+		// Mcpwp_Content_Guardrails::in_context() directly, so a second,
+		// graph-owned copy of the same flag would just be two sources of
+		// truth for one fact.
 		return $this->verify_api_key( $request );
 	}
 
@@ -719,20 +728,7 @@ abstract class Mcpwp_REST_API {
 	 * @return array Post types.
 	 */
 	protected function parse_graph_post_types( $post_types ) {
-		$requested = array_filter( array_map( 'sanitize_key', array_map( 'trim', explode( ',', $post_types ) ) ) );
-		if ( empty( $requested ) ) {
-			$requested = array( 'page', 'post' );
-		}
-
-		$allowed = array();
-		foreach ( $requested as $post_type ) {
-			$obj = get_post_type_object( $post_type );
-			if ( $obj && ( ! empty( $obj->public ) || ! empty( $obj->publicly_queryable ) ) ) {
-				$allowed[] = $post_type;
-			}
-		}
-
-		return empty( $allowed ) ? array( 'page', 'post' ) : array_values( array_unique( $allowed ) );
+		return Mcpwp_Graph_Builder::parse_graph_post_types( $post_types );
 	}
 
 	/**
@@ -742,19 +738,7 @@ abstract class Mcpwp_REST_API {
 	 * @return array Term names.
 	 */
 	protected function get_graph_term_names( $post ) {
-		$names      = array();
-		$taxonomies = get_object_taxonomies( $post->post_type );
-
-		foreach ( $taxonomies as $taxonomy ) {
-			$term_names = wp_get_object_terms( $post->ID, $taxonomy, array( 'fields' => 'names' ) );
-			if ( is_wp_error( $term_names ) || empty( $term_names ) ) {
-				continue;
-			}
-
-			$names = array_merge( $names, $term_names );
-		}
-
-		return array_values( array_unique( array_filter( array_map( 'trim', $names ) ) ) );
+		return Mcpwp_Graph_Builder::get_graph_term_names( $post );
 	}
 
 	/**
@@ -763,7 +747,7 @@ abstract class Mcpwp_REST_API {
 	 * @return array Menu post IDs.
 	 */
 	protected function get_menu_post_ids() {
-		return array_keys( $this->get_menu_post_depths() );
+		return Mcpwp_Graph_Builder::get_menu_post_ids();
 	}
 
 	/**
@@ -772,28 +756,7 @@ abstract class Mcpwp_REST_API {
 	 * @return array Post ID to depth map.
 	 */
 	protected function get_menu_post_depths() {
-		$depths    = array();
-		$locations = get_nav_menu_locations();
-
-		foreach ( $locations as $menu_id ) {
-			$items = wp_get_nav_menu_items( $menu_id );
-			if ( empty( $items ) || is_wp_error( $items ) ) {
-				continue;
-			}
-
-			foreach ( $items as $item ) {
-				if ( 'post_type' === $item->type && ! empty( $item->object_id ) ) {
-					$depth   = $this->get_menu_item_depth( $item, $items );
-					$post_id = (int) $item->object_id;
-
-					if ( ! isset( $depths[ $post_id ] ) || $depth < $depths[ $post_id ] ) {
-						$depths[ $post_id ] = $depth;
-					}
-				}
-			}
-		}
-
-		return $depths;
+		return Mcpwp_Graph_Builder::get_menu_post_depths();
 	}
 
 	/**
@@ -804,26 +767,7 @@ abstract class Mcpwp_REST_API {
 	 * @return int Depth.
 	 */
 	protected function get_menu_item_depth( $item, $items ) {
-		$parent_id = (int) $item->menu_item_parent;
-		$depth     = 0;
-		$seen      = array();
-
-		while ( $parent_id > 0 && ! isset( $seen[ $parent_id ] ) ) {
-			$seen[ $parent_id ] = true;
-			$depth++;
-			$next_parent = 0;
-
-			foreach ( $items as $candidate ) {
-				if ( (int) $candidate->ID === $parent_id ) {
-					$next_parent = (int) $candidate->menu_item_parent;
-					break;
-				}
-			}
-
-			$parent_id = $next_parent;
-		}
-
-		return $depth;
+		return Mcpwp_Graph_Builder::get_menu_item_depth( $item, $items );
 	}
 
 	/**
@@ -833,19 +777,7 @@ abstract class Mcpwp_REST_API {
 	 * @return float Score from 0-1.
 	 */
 	protected function calculate_freshness_score( $freshness_days ) {
-		if ( null === $freshness_days ) {
-			return 0.0;
-		}
-
-		if ( $freshness_days <= 30 ) {
-			return 1.0;
-		}
-
-		if ( $freshness_days >= 730 ) {
-			return 0.0;
-		}
-
-		return round( max( 0, 1 - ( ( $freshness_days - 30 ) / 700 ) ), 3 );
+		return Mcpwp_Graph_Builder::calculate_freshness_score( $freshness_days );
 	}
 
 	/**
@@ -855,19 +787,7 @@ abstract class Mcpwp_REST_API {
 	 * @return float Score.
 	 */
 	protected function calculate_hub_score( $node ) {
-		$score = ( (int) $node['inbound_count'] * 2 ) + (int) $node['outbound_count'];
-
-		if ( ! empty( $node['in_menu'] ) ) {
-			$score += null === $node['menu_depth'] ? 2 : max( 1, 3 - (int) $node['menu_depth'] );
-		}
-
-		if ( ! empty( $node['parent_id'] ) ) {
-			$score += 1;
-		}
-
-		$score += min( 3, count( $node['terms'] ) );
-
-		return round( $score, 3 );
+		return Mcpwp_Graph_Builder::calculate_hub_score( $node );
 	}
 
 	/**
@@ -877,19 +797,7 @@ abstract class Mcpwp_REST_API {
 	 * @return string Severity.
 	 */
 	protected function calculate_orphan_severity( $node ) {
-		if ( ! empty( $node['in_menu'] ) || (int) $node['inbound_count'] > 0 ) {
-			return 'none';
-		}
-
-		if ( 'page' === $node['type'] && (int) $node['word_count'] >= 300 ) {
-			return 'high';
-		}
-
-		if ( (int) $node['word_count'] >= 150 ) {
-			return 'medium';
-		}
-
-		return 'low';
+		return Mcpwp_Graph_Builder::calculate_orphan_severity( $node );
 	}
 
 	/**
@@ -900,47 +808,7 @@ abstract class Mcpwp_REST_API {
 	 * @return array Scores.
 	 */
 	protected function calculate_graph_page_rank( $node_ids, $edges ) {
-		$count = count( $node_ids );
-		if ( 0 === $count ) {
-			return array();
-		}
-
-		$ranks    = array_fill_keys( $node_ids, 1 / $count );
-		$outgoing = array_fill_keys( $node_ids, array() );
-
-		foreach ( $edges as $edge ) {
-			if ( 'content_link' !== $edge['type'] || ! array_key_exists( $edge['from'], $outgoing ) ) {
-				continue;
-			}
-
-			if ( isset( $outgoing[ $edge['from'] ], $ranks[ $edge['to'] ] ) ) {
-				$outgoing[ $edge['from'] ][] = (int) $edge['to'];
-			}
-		}
-
-		for ( $i = 0; $i < 8; $i++ ) {
-			$next = array_fill_keys( $node_ids, ( 1 - 0.85 ) / $count );
-
-			foreach ( $node_ids as $node_id ) {
-				$targets = array_values( array_unique( $outgoing[ $node_id ] ) );
-				if ( empty( $targets ) ) {
-					continue;
-				}
-
-				$share = ( $ranks[ $node_id ] * 0.85 ) / count( $targets );
-				foreach ( $targets as $target_id ) {
-					$next[ $target_id ] += $share;
-				}
-			}
-
-			$ranks = $next;
-		}
-
-		foreach ( $ranks as $id => $score ) {
-			$ranks[ $id ] = round( $score, 6 );
-		}
-
-		return $ranks;
+		return Mcpwp_Graph_Builder::calculate_graph_page_rank( $node_ids, $edges );
 	}
 
 	/**
@@ -950,21 +818,7 @@ abstract class Mcpwp_REST_API {
 	 * @return array Heading texts.
 	 */
 	protected function extract_heading_texts( $content ) {
-		$headings = array();
-
-		if ( preg_match_all( '/<h([1-6])[^>]*>(.*?)<\/h\1>/is', $content, $matches, PREG_SET_ORDER ) ) {
-			foreach ( $matches as $match ) {
-				$text = trim( wp_strip_all_tags( $match[2] ) );
-				if ( '' !== $text ) {
-					$headings[] = array(
-						'level' => (int) $match[1],
-						'text'  => $text,
-					);
-				}
-			}
-		}
-
-		return $headings;
+		return Mcpwp_Graph_Builder::extract_heading_texts( $content );
 	}
 
 	/**
@@ -982,11 +836,7 @@ abstract class Mcpwp_REST_API {
 	 * @return bool
 	 */
 	protected function is_elementor_built( $post_id ) {
-		if ( 'builder' === get_post_meta( $post_id, '_elementor_edit_mode', true ) ) {
-			return true;
-		}
-		// empty(), not a (string) cast: array-stored data is data (#845).
-		return ! empty( get_post_meta( $post_id, '_elementor_data', true ) );
+		return Mcpwp_Graph_Builder::is_elementor_built( $post_id );
 	}
 
 	/**
@@ -1056,11 +906,7 @@ abstract class Mcpwp_REST_API {
 	 * @return string Normalized URL.
 	 */
 	protected function normalize_internal_graph_url( $url ) {
-		$parts = wp_parse_url( $url );
-		$path  = isset( $parts['path'] ) ? untrailingslashit( $parts['path'] ) : '';
-		$query = isset( $parts['query'] ) ? '?' . $parts['query'] : '';
-
-		return strtolower( $path . $query );
+		return Mcpwp_Graph_Builder::normalize_internal_graph_url( $url );
 	}
 
 	/**
@@ -1079,56 +925,7 @@ abstract class Mcpwp_REST_API {
 	 * @return bool
 	 */
 	protected function is_same_host_href( $href ) {
-		$href = trim( (string) $href );
-
-		// A fragment jumps within the page; a non-navigational scheme is not a
-		// link to another document. Neither is an internal outbound link.
-		// data: is included — it embeds content rather than pointing anywhere.
-		if ( '' === $href || 0 === strpos( $href, '#' )
-			|| preg_match( '/^(mailto|tel|sms|javascript|data):/i', $href ) ) {
-			return false;
-		}
-
-		$home = wp_parse_url( home_url() );
-		if ( empty( $home['host'] ) ) {
-			return false;
-		}
-
-		// Classify by the URL's own shape. An earlier version asked
-		// wp_http_validate_url() whether the href was absolute and fell back to
-		// home_url( $href ) when it said no — which is wrong in a way that
-		// inverts this function's answer.
-		//
-		// wp_http_validate_url() returns false for reasons that have nothing to
-		// do with being absolute: it runs gethostbyname() on the host and
-		// `return false`s when the lookup fails (wp-includes/http.php), and it
-		// rejects userinfo and private/loopback targets. home_url() then appends
-		// the whole absolute URL as a path — home_url('https://other.test/x')
-		// is 'https://example.com/https://other.test/x', whose parsed host is
-		// OUR host. Every unresolvable external link counted as internal, and on
-		// a host with no outbound DNS that meant all of them, silencing
-		// no_internal_outbound_links exactly as #717 complained.
-		//
-		// It also blocked per-href DNS lookups inside the bulk audit loop.
-		// Determining whether a URL points at our own host needs no network.
-		if ( 0 === strpos( $href, '//' ) ) {
-			// Protocol-relative: inherits our scheme, carries its own host.
-			$target = wp_parse_url( 'https:' . $href );
-		} elseif ( preg_match( '#^[a-z][a-z0-9+.\-]*:#i', $href ) ) {
-			// Any other scheme — absolute. Parse as-is; a scheme we do not
-			// navigate with was already rejected above.
-			$target = wp_parse_url( $href );
-		} else {
-			// No scheme and no leading '//' — a site-relative path or a bare
-			// filename. Internal by construction.
-			return true;
-		}
-
-		if ( empty( $target['host'] ) ) {
-			return false;
-		}
-
-		return strtolower( $target['host'] ) === strtolower( $home['host'] );
+		return Mcpwp_Graph_Builder::is_same_host_href( $href );
 	}
 
 	/**
@@ -1141,29 +938,7 @@ abstract class Mcpwp_REST_API {
 	 * @return int Number of distinct same-host hrefs.
 	 */
 	protected function count_same_host_outbound_links( $post ) {
-		$hrefs = array();
-
-		if ( preg_match_all( '/<a\s[^>]*href=["\']([^"\']+)["\'][^>]*>/i', (string) $post->post_content, $matches ) ) {
-			foreach ( $matches[1] as $href ) {
-				$hrefs[] = $href;
-			}
-		}
-
-		// In whatever form it is stored (#845): an array-stored tree has links too.
-		$data = Mcpwp_Elementor_Stored_Tree::of_post( (int) $post->ID )['elements'];
-		if ( ! empty( $data ) ) {
-			$this->collect_elementor_link_hrefs( $data, $hrefs );
-		}
-
-		$count = 0;
-		foreach ( array_unique( $hrefs ) as $href ) {
-			$href = trim( html_entity_decode( $href, ENT_QUOTES, 'UTF-8' ) );
-			if ( $this->is_same_host_href( $href ) ) {
-				$count++;
-			}
-		}
-
-		return $count;
+		return Mcpwp_Graph_Builder::count_same_host_outbound_links( $post );
 	}
 
 	/**
@@ -1175,31 +950,7 @@ abstract class Mcpwp_REST_API {
 	 * @return array|null
 	 */
 	protected function resolve_internal_graph_link( $href, $anchor, $url_to_id ) {
-		$href = trim( $href );
-		if ( '' === $href || 0 === strpos( $href, '#' ) || preg_match( '/^(mailto|tel|sms|javascript):/i', $href ) ) {
-			return null;
-		}
-
-		$absolute = wp_http_validate_url( $href ) ? $href : home_url( $href );
-		$home     = wp_parse_url( home_url() );
-		$target   = wp_parse_url( $absolute );
-
-		if ( empty( $target['host'] ) || empty( $home['host'] ) || strtolower( $target['host'] ) !== strtolower( $home['host'] ) ) {
-			return null;
-		}
-
-		$normalized = $this->normalize_internal_graph_url( $absolute );
-		$target_id  = isset( $url_to_id[ $normalized ] ) ? (int) $url_to_id[ $normalized ] : url_to_postid( $absolute );
-
-		if ( ! $target_id ) {
-			return null;
-		}
-
-		return array(
-			'target_id' => $target_id,
-			'url'       => $absolute,
-			'anchor'    => trim( $anchor ),
-		);
+		return Mcpwp_Graph_Builder::resolve_internal_graph_link( $href, $anchor, $url_to_id );
 	}
 
 	/**
@@ -1217,28 +968,7 @@ abstract class Mcpwp_REST_API {
 	 * @return array Links.
 	 */
 	protected function extract_elementor_links_from_postmeta( $post_id, $url_to_id ) {
-		// In whatever form it is stored (#845): an array-stored tree has links too.
-		$data = Mcpwp_Elementor_Stored_Tree::of_post( $post_id )['elements'];
-		if ( empty( $data ) ) {
-			return array();
-		}
-
-		$hrefs = array();
-		$this->collect_elementor_link_hrefs( $data, $hrefs );
-
-		$links = array();
-		foreach ( array_unique( $hrefs ) as $href ) {
-			$href = trim( html_entity_decode( $href, ENT_QUOTES, 'UTF-8' ) );
-			if ( '' === $href ) {
-				continue;
-			}
-			$link = $this->resolve_internal_graph_link( $href, '', $url_to_id );
-			if ( $link ) {
-				$links[] = $link;
-			}
-		}
-
-		return $links;
+		return Mcpwp_Graph_Builder::extract_elementor_links_from_postmeta( $post_id, $url_to_id );
 	}
 
 	/**
@@ -1255,43 +985,7 @@ abstract class Mcpwp_REST_API {
 	 * @param array $hrefs    Accumulator passed by reference.
 	 */
 	protected function collect_elementor_link_hrefs( $elements, &$hrefs ) {
-		if ( ! is_array( $elements ) ) {
-			return;
-		}
-
-		foreach ( $elements as $element ) {
-			if ( ! is_array( $element ) ) {
-				continue;
-			}
-
-			$settings = isset( $element['settings'] ) && is_array( $element['settings'] ) ? $element['settings'] : array();
-
-			// button, icon-box, image, image-box, call-to-action, flip-box — link object.
-			if ( ! empty( $settings['link']['url'] ) && is_string( $settings['link']['url'] ) ) {
-				$hrefs[] = $settings['link']['url'];
-			}
-
-			// icon widget — url object.
-			if ( ! empty( $settings['url']['url'] ) && is_string( $settings['url']['url'] ) ) {
-				$hrefs[] = $settings['url']['url'];
-			}
-
-			// text-editor, html, rich-text content — parse HTML for <a href>.
-			foreach ( array( 'editor', 'html', 'content', 'inner_text' ) as $field ) {
-				if ( ! empty( $settings[ $field ] ) && is_string( $settings[ $field ] ) ) {
-					if ( preg_match_all( '/<a\s[^>]*href=["\']([^"\']+)["\'][^>]*>/i', $settings[ $field ], $matches ) ) {
-						foreach ( $matches[1] as $href ) {
-							$hrefs[] = $href;
-						}
-					}
-				}
-			}
-
-			// Recurse into child elements.
-			if ( ! empty( $element['elements'] ) && is_array( $element['elements'] ) ) {
-				$this->collect_elementor_link_hrefs( $element['elements'], $hrefs );
-			}
-		}
+		Mcpwp_Graph_Builder::collect_elementor_link_hrefs( $elements, $hrefs );
 	}
 
 	/**
@@ -1302,17 +996,6 @@ abstract class Mcpwp_REST_API {
 	 * @return array Links.
 	 */
 	protected function extract_internal_links_from_content( $content, $url_to_id ) {
-		$links = array();
-
-		if ( preg_match_all( '/<a\s[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)<\/a>/is', $content, $matches, PREG_SET_ORDER ) ) {
-			foreach ( $matches as $match ) {
-				$link = $this->resolve_internal_graph_link( $match[1], wp_strip_all_tags( $match[2] ), $url_to_id );
-				if ( $link ) {
-					$links[] = $link;
-				}
-			}
-		}
-
-		return $links;
+		return Mcpwp_Graph_Builder::extract_internal_links_from_content( $content, $url_to_id );
 	}
 }

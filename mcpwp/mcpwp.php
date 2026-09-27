@@ -234,6 +234,7 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-i18n.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-activator.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-deactivator.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-uninstaller.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-rate-limiter.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-operation-weights.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-spend-budget.php';
@@ -341,6 +342,10 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-white-label.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-site-memory.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-signals.php';
+	// Site graph: persisted nodes/edges/signals (#943 S1). Builder must load
+	// before the db-version upgrade check below, which schedules its backfill.
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-graph-builder.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-graph-signals.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-site-blueprints.php';
 
 	// Load MCP tool registries
@@ -477,6 +482,14 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 		require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-activator.php';
 		Mcpwp_Activator::activate();
 		update_option( 'mcpwp_db_version', MCPWP_VERSION );
+
+		// Site graph tables were just created/verified by activate() above —
+		// kick off (or resume) the backfill (#943 S1). Own status option, not
+		// gated further: on_upgrade_schedule_backfill() itself no-ops once
+		// backfill: done, so a same-version reactivation is cheap.
+		if ( class_exists( 'Mcpwp_Graph_Builder' ) ) {
+			Mcpwp_Graph_Builder::on_upgrade_schedule_backfill();
+		}
 	}
 
 	// One-time purge of identity-less pending approvals — gated on its OWN flag,
@@ -641,6 +654,56 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 		add_action( Mcpwp_Signals::CRON_HOOK, array( 'Mcpwp_Signals', 'compute' ) );
 	}
 
+	// Site graph — incremental hooks (mark-only), the async worker, and
+	// backfill batches (#943 S1, revised post PR #993 review). Every handler
+	// checks Mcpwp_Graph_Builder::ready() itself and no-ops when the tables
+	// are not confirmed present, so registering these unconditionally is safe
+	// on a site where table creation failed.
+	if ( class_exists( 'Mcpwp_Graph_Builder' ) ) {
+		// N1 (#943 S1 review round 3): reset the authenticated-request flag
+		// at the START of every request too (on_shutdown() already resets it
+		// at the end) — a persistent process serving several requests
+		// without restarting PHP (a long WP-CLI script, certain worker
+		// setups) must never carry "authenticated" from the request that set
+		// it into a later, unrelated one. Priority 1: before any hook's
+		// mark() call (which is what OR's the flag in, reading
+		// Mcpwp_Content_Guardrails::in_context() — #980 landed, so this is
+		// now the single definition of "an MCPWP-made edit", not two) can
+		// possibly run.
+		add_action( 'init', array( 'Mcpwp_Graph_Builder', 'reset_for_new_request' ), 1 );
+		add_action( 'save_post', array( 'Mcpwp_Graph_Builder', 'on_save_post' ), 10, 2 );
+		add_action( 'deleted_post', array( 'Mcpwp_Graph_Builder', 'on_deleted_post' ), 10, 1 );
+		add_action( 'untrashed_post', array( 'Mcpwp_Graph_Builder', 'on_untrashed_post' ), 10, 1 );
+		add_action( 'set_object_terms', array( 'Mcpwp_Graph_Builder', 'on_set_object_terms' ), 10, 1 );
+		add_action( 'edited_term', array( 'Mcpwp_Graph_Builder', 'on_edited_term' ), 10, 3 );
+		add_action( 'delete_term', array( 'Mcpwp_Graph_Builder', 'on_delete_term' ), 10, 3 );
+		// W3: a writer that updates these keys directly (wp_set_elementor,
+		// find-replace, rollback, "set featured image", page template
+		// assignment) never fires save_post at all.
+		add_action( 'updated_post_meta', array( 'Mcpwp_Graph_Builder', 'on_post_meta_changed' ), 10, 3 );
+		add_action( 'added_post_meta', array( 'Mcpwp_Graph_Builder', 'on_post_meta_changed' ), 10, 3 );
+		add_action( 'deleted_post_meta', array( 'Mcpwp_Graph_Builder', 'on_post_meta_changed' ), 10, 3 );
+		add_action( 'shutdown', array( 'Mcpwp_Graph_Builder', 'on_shutdown' ) );
+		add_action( Mcpwp_Graph_Builder::WORKER_CRON_HOOK, array( 'Mcpwp_Graph_Builder', 'run_worker_batch' ) );
+		add_action( Mcpwp_Graph_Builder::BACKFILL_CRON_HOOK, array( 'Mcpwp_Graph_Builder', 'run_backfill_batch' ) );
+	}
+
+	// Daily retry for graph table creation while not yet confirmed present
+	// (W1/W6) — e.g. a restricted DB user that could not CREATE TABLE at
+	// install time gets another chance every day rather than being stuck.
+	if ( class_exists( 'Mcpwp_Activator' ) ) {
+		if ( ! wp_next_scheduled( Mcpwp_Graph_Builder::READY_RETRY_CRON_HOOK ) ) {
+			wp_schedule_event( time() + HOUR_IN_SECONDS, 'daily', Mcpwp_Graph_Builder::READY_RETRY_CRON_HOOK );
+		}
+		add_action( Mcpwp_Graph_Builder::READY_RETRY_CRON_HOOK, array( 'Mcpwp_Activator', 'retry_graph_tables_cron' ) );
+	}
+
+	// Site graph signals — daily retention prune (#943 S1).
+	if ( class_exists( 'Mcpwp_Graph_Signals' ) ) {
+		Mcpwp_Graph_Signals::schedule_prune();
+		add_action( Mcpwp_Graph_Signals::PRUNE_CRON_HOOK, array( 'Mcpwp_Graph_Signals', 'prune' ) );
+	}
+
 	// Figma design-token sync cron — pulls colors/typography from the configured
 	// Figma file's shared styles so a companion theme can read them as CSS custom
 	// properties. cron_sync_design_tokens() no-ops when Figma isn't configured or
@@ -685,12 +748,22 @@ if ( ! function_exists( 'mcpwp_activate' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-activator.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-encryption.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-migrate.php';
+	// #943 S1 review round 2, W1: the mcpwp_db_version compare in
+	// plugins_loaded only calls on_upgrade_schedule_backfill() when the
+	// version actually changed — a plain deactivate/reactivate on an
+	// unchanged version never enters that branch, so the graph's own
+	// reconcile-after-reactivation (W8) would never get a chance to run.
+	// Called directly from the real activation hook here instead, so it
+	// fires on every activation, version bump or not.
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-graph-builder.php';
 
 	if ( $network_wide && function_exists( 'is_multisite' ) && is_multisite() ) {
-		$sites = get_sites( array( 'fields' => 'ids' ) );
+		// W3: number => 0 — every site in the network, not a default-limited page.
+		$sites = get_sites( array( 'fields' => 'ids', 'number' => 0 ) );
 		foreach ( $sites as $blog_id ) {
 			switch_to_blog( $blog_id );
 			Mcpwp_Activator::activate();
+			Mcpwp_Graph_Builder::on_upgrade_schedule_backfill();
 			try {
 				Mcpwp_Migrate::run();
 			} catch ( \Throwable $e ) {
@@ -708,6 +781,7 @@ if ( ! function_exists( 'mcpwp_activate' ) ) {
 		}
 	} else {
 		Mcpwp_Activator::activate();
+		Mcpwp_Graph_Builder::on_upgrade_schedule_backfill();
 		try {
 			Mcpwp_Migrate::run();
 		} catch ( \Throwable $e ) {
@@ -722,6 +796,24 @@ if ( ! function_exists( 'mcpwp_activate' ) ) {
 			}
 		}
 	}
+
+		// N3(b) (#943 S1 review round 3): enqueue_reconcile() (inside
+		// on_upgrade_schedule_backfill(), above) calls mark() directly for
+		// every covered post modified since the graph was last known
+		// current -- on a site reconciling after weeks of edits made while
+		// deactivated, that can be hundreds of marks. mark() only buffers in
+		// memory; it is on_shutdown(), hooked to WordPress's global
+		// `shutdown` action, that actually flushes them. That normally
+		// fires at the end of every request including this activation one,
+		// but activation is reached through several different entry points
+		// (wp-admin's plugin activation redirect, WP-CLI's `wp plugin
+		// activate`, a network-wide loop above that already switches blogs
+		// itself) and this method has no business trusting all of them to
+		// reach a clean `shutdown` before something else (a redirect, an
+		// early exit) intervenes. Flushing explicitly here removes that
+		// dependency; a later real `shutdown` call finds the buffer already
+		// empty and no-ops (on_shutdown()'s first line).
+		Mcpwp_Graph_Builder::on_shutdown();
 	}
 }
 
@@ -742,10 +834,16 @@ if ( ! function_exists( 'mcpwp_on_new_site' ) ) {
 	}
 
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-activator.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-graph-builder.php';
 
 	switch_to_blog( $new_site->blog_id );
 	Mcpwp_Activator::activate();
+	Mcpwp_Graph_Builder::on_upgrade_schedule_backfill();
 	restore_current_blog();
+
+	// N3(b): same reasoning as mcpwp_activate() above — flush explicitly
+	// rather than trust a later `shutdown` to catch marks made here.
+	Mcpwp_Graph_Builder::on_shutdown();
 	}
 }
 add_action( 'wp_insert_site', 'mcpwp_on_new_site' );
