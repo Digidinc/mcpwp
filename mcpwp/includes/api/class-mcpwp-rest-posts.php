@@ -230,6 +230,20 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 	public function list_posts( $request ) {
 		$this->log_activity( 'list_posts', $request );
 
+		// #1020: /posts is a 'content'-classified ROUTE, but ?post_type=
+		// lets the caller name any writable type — product, elementor_library
+		// — that belongs to a different tool category. Checked against the
+		// raw param (before sanitize_query_args() folds it into $args) so an
+		// unset param (defaults to 'post' downstream) is never checked
+		// against the empty string.
+		$requested_type = $request->get_param( 'post_type' );
+		if ( null !== $requested_type && '' !== $requested_type ) {
+			$category_denied = $this->guard_post_type_category_for_type( sanitize_key( (string) $requested_type ) );
+			if ( $category_denied ) {
+				return $category_denied;
+			}
+		}
+
 		$args   = $this->sanitize_query_args( $request->get_params() );
 		$result = $this->posts->list_posts( $args );
 
@@ -256,6 +270,17 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 		);
 		if ( $denied ) {
 			return $denied;
+		}
+
+		// #1020: same not-found-shaped category guard as every other
+		// id-resolving door — a product or Elementor template id must not be
+		// readable through /posts/{id} just because the route is 'content'.
+		$category_denied = $this->guard_post_type_category(
+			get_post( absint( $post_id ) ),
+			__( 'Post not found.', 'mcpwp' )
+		);
+		if ( $category_denied ) {
+			return $category_denied;
 		}
 
 		$result = $this->posts->get_post( $post_id );
@@ -509,6 +534,15 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 				404,
 				array( 'id' => $post_id )
 			);
+		}
+
+		// #1020: is_writable_post_type() above allows any public custom type
+		// (product included) plus the Elementor safe_nonpublic_types — so
+		// this route could set a WooCommerce product's or an Elementor
+		// template's featured image on a 'content'-only key without it.
+		$category_denied = $this->guard_post_type_category( $post, __( 'Post not found.', 'mcpwp' ) );
+		if ( $category_denied ) {
+			return $category_denied;
 		}
 
 		// Any type that declares thumbnail support, not only post and page

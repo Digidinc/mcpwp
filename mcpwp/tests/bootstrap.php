@@ -2308,7 +2308,12 @@ function post_type_exists($post_type)
 {
     $known = array( 'post', 'page', 'wp_block', 'elementor_library', 'elementor_snippet' );
     // Tests may register public custom types: $GLOBALS['mcpwp_test_public_post_types'] = array( 'sm_team' ).
-    return in_array((string) $post_type, $known, true) || in_array((string) $post_type, (array) ($GLOBALS['mcpwp_test_public_post_types'] ?? array()), true);
+    // #1020: a test may also register a REGISTERED-BUT-PRIVATE type — exists,
+    // but neither public nor show_in_rest (e.g. a plugin's internal working
+    // storage) — via $GLOBALS['mcpwp_test_private_post_types'].
+    return in_array((string) $post_type, $known, true)
+        || in_array((string) $post_type, (array) ($GLOBALS['mcpwp_test_public_post_types'] ?? array()), true)
+        || in_array((string) $post_type, (array) ($GLOBALS['mcpwp_test_private_post_types'] ?? array()), true);
 }
 
 function post_type_supports($post_type, $feature)
@@ -2794,8 +2799,12 @@ function get_post_type_object($post_type)
         return null;
     }
     return (object) array(
-        'name'   => $post_type,
-        'public' => in_array((string) $post_type, array( 'post', 'page' ), true) || in_array((string) $post_type, (array) ($GLOBALS['mcpwp_test_public_post_types'] ?? array()), true),
+        'name'         => $post_type,
+        'public'       => in_array((string) $post_type, array( 'post', 'page' ), true) || in_array((string) $post_type, (array) ($GLOBALS['mcpwp_test_public_post_types'] ?? array()), true),
+        // #1020: honoured by category_for_post_type()'s public-OR-show_in_rest
+        // fallback. A test-registered private type (mcpwp_test_private_post_types)
+        // defaults to false here, same as a real non-REST-exposed CPT.
+        'show_in_rest' => in_array((string) $post_type, (array) ($GLOBALS['mcpwp_test_show_in_rest_post_types'] ?? array()), true),
     );
 }
 

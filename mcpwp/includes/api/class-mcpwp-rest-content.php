@@ -92,6 +92,16 @@ class Mcpwp_REST_Content extends Mcpwp_REST_API {
 			);
 		}
 
+		// #1020: this generic listing is a 'content'-classified ROUTE, but the
+		// caller names an arbitrary post type — a WooCommerce product, an
+		// Elementor archetype — that belongs to a different tool category.
+		// The caller named the type up front, so a 403 (not a 404) is the
+		// right shape here; see guard_post_type_category_for_type().
+		$category_denied = $this->guard_post_type_category_for_type( $post_type );
+		if ( $category_denied ) {
+			return $category_denied;
+		}
+
 		$per_page = min( 100, max( 1, absint( $request->get_param( 'per_page' ) ?: 10 ) ) );
 		$page     = max( 1, absint( $request->get_param( 'page' ) ?: 1 ) );
 
@@ -191,6 +201,15 @@ class Mcpwp_REST_Content extends Mcpwp_REST_API {
 				__( 'Content item not found.', 'mcpwp' ),
 				404
 			);
+		}
+
+		// #1020: unlike list_content() above, a specific id IS being resolved
+		// here, so a denial takes the not-found shape rather than 403 — a
+		// scoped key must not be able to tell "wrong category" apart from
+		// "no such product/template exists".
+		$category_denied = $this->guard_post_type_category( $post, __( 'Content item not found.', 'mcpwp' ) );
+		if ( $category_denied ) {
+			return $category_denied;
 		}
 
 		// A permanent delete has no undo: approval by default (#536). A custom

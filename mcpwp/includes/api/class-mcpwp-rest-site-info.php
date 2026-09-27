@@ -1025,34 +1025,12 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 		return $this->find_page_context_override( $scope, $archetype_class, $style );
 	}
 
-	/**
-	 * Whether the current caller may read data in $category — the site-wide
-	 * disabled-category toggle (blocks every key, including admin) and the
-	 * per-key role restriction (empty for admin/legacy/no-key-record
-	 * contexts, meaning unrestricted). Same two checks
-	 * check_disabled_category_for_route()/check_key_category_restriction_for_route()
-	 * apply to a ROUTE; this applies the identical pair to an arbitrary
-	 * category a response is about to embed data from, for a chokepoint
-	 * (build_effective_site_context()'s archetype override) that a route
-	 * classification can't reach because it lives one level inside an
-	 * already-public route.
-	 *
-	 * @param string $category Tool category slug.
-	 * @return bool
-	 */
-	private function caller_may_read_category( $category ) {
-		$disabled_categories = get_option( 'mcpwp_disabled_tool_categories', array() );
-		if ( is_array( $disabled_categories ) && in_array( $category, $disabled_categories, true ) ) {
-			return false;
-		}
-
-		$key_record = $this->get_current_api_key_record();
-		if ( ! is_array( $key_record ) ) {
-			return true;
-		}
-
-		return $this->key_allows_category( $key_record, $category );
-	}
+	// caller_may_read_category() was promoted to the shared Mcpwp_Api_Auth
+	// trait (trait-mcpwp-api-auth.php) so #1020's post-type category guard
+	// could reuse the exact same "site-wide toggle + per-key role" pair
+	// this chokepoint pioneered, instead of a second copy of it. This
+	// controller inherits it via Mcpwp_REST_API; see the trait for the
+	// canonical implementation.
 
 	private function find_page_context_override( $scope, $archetype_class, $style ) {
 		if ( ! class_exists( 'Mcpwp_Elementor_Pro' ) ) {
