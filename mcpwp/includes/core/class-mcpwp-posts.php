@@ -346,6 +346,21 @@ class Mcpwp_Posts {
 			$post_data['post_name'] = sanitize_title( $data['slug'] );
 		}
 
+		// Content guardrails (#957): ramp cap, thin-content floor, and
+		// near-duplicate detection — only ever enforced for a write that is
+		// actually publishing; may downgrade post_status to 'draft'.
+		$guardrails = class_exists( 'Mcpwp_Content_Guardrails' )
+			? Mcpwp_Content_Guardrails::evaluate(
+				array(
+					'post_type' => $post_type,
+					'status'    => $post_data['post_status'],
+					'title'     => $post_data['post_title'],
+					'content'   => $post_data['post_content'],
+				)
+			)
+			: array( 'status' => $post_data['post_status'], 'warnings' => array(), 'guardrails' => array() );
+		$post_data['post_status'] = $guardrails['status'];
+
 		$post_id = wp_insert_post( $post_data, true );
 
 		if ( is_wp_error( $post_id ) ) {
@@ -398,6 +413,12 @@ class Mcpwp_Posts {
 			}
 			if ( ! empty( $sanitized_content['removed'] ) ) {
 				$created['sanitized'] = $sanitized_content['removed'];
+			}
+			if ( ! empty( $guardrails['guardrails'] ) ) {
+				$created['guardrails'] = $guardrails['guardrails'];
+			}
+			if ( ! empty( $guardrails['warnings'] ) ) {
+				$created['warnings'] = array_merge( isset( $created['warnings'] ) ? (array) $created['warnings'] : array(), $guardrails['warnings'] );
 			}
 		}
 

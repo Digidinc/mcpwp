@@ -88,6 +88,8 @@ class Mcpwp_Loader {
 		// Settings
 		$this->add_action( 'admin_init', $settings, 'register_settings' );
 		$this->add_action( 'admin_init', $ai_presence_settings, 'register_settings' );
+		// Content guardrails settings (#957) — static class, same admin_init pattern.
+		$this->add_action( 'admin_init', 'Mcpwp_Content_Guardrails', 'register_settings_ui' );
 		$this->add_action( 'admin_notices', $ai_presence_settings, 'maybe_render_notices' );
 
 		// mupot Profile screen connect fields

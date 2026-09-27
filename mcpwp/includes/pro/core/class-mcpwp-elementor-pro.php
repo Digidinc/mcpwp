@@ -1337,6 +1337,31 @@ class Mcpwp_Elementor_Pro {
 		$title  = ! empty( $args['title'] ) ? sanitize_text_field( $args['title'] ) : $source->post_title . ' (Copy)';
 		$status = ! empty( $args['status'] ) ? sanitize_text_field( $args['status'] ) : 'draft';
 
+		// Content guardrails (#957): a clone that publishes immediately is
+		// exactly the duplicate-content pattern rule 3 exists for (a page
+		// cloned and republished with only its title changed, e.g. the
+		// classic per-city landing page). Use the source's Elementor text
+		// when it has one — its content usually lives there, not in
+		// post_content, and that is what the actual clone will carry too.
+		$clone_content_text = class_exists( 'Mcpwp_Content_Guardrails' )
+			? Mcpwp_Content_Guardrails::extract_text_from_elementor( get_post_meta( $source_id, '_elementor_data', true ) )
+			: '';
+		if ( '' === trim( (string) $clone_content_text ) ) {
+			$clone_content_text = $source->post_content;
+		}
+
+		$guardrails = class_exists( 'Mcpwp_Content_Guardrails' )
+			? Mcpwp_Content_Guardrails::evaluate(
+				array(
+					'post_type' => $source->post_type,
+					'status'    => $status,
+					'title'     => $title,
+					'content'   => $clone_content_text,
+				)
+			)
+			: array( 'status' => $status, 'warnings' => array(), 'guardrails' => array() );
+		$status = $guardrails['status'];
+
 		// Create new post.
 		$new_post = array(
 			'post_title'   => $title,
@@ -1385,6 +1410,13 @@ class Mcpwp_Elementor_Pro {
 			'elementor_data' => get_post_meta( $new_id, '_elementor_data', true ),
 		);
 
+		if ( ! empty( $guardrails['guardrails'] ) ) {
+			$result['guardrails'] = $guardrails['guardrails'];
+		}
+		if ( ! empty( $guardrails['warnings'] ) ) {
+			$result['warnings'] = $guardrails['warnings'];
+		}
+
 		return $result;
 	}
 
@@ -1399,12 +1431,39 @@ class Mcpwp_Elementor_Pro {
 			return new WP_Error( 'elementor_inactive', __( 'Elementor is not active.', 'mcpwp' ) );
 		}
 
-		$title = ! empty( $data['title'] ) ? sanitize_text_field( $data['title'] ) : __( 'Landing Page', 'mcpwp' );
+		$title  = ! empty( $data['title'] ) ? sanitize_text_field( $data['title'] ) : __( 'Landing Page', 'mcpwp' );
+		$status = ! empty( $data['status'] ) ? sanitize_text_field( $data['status'] ) : 'draft';
+
+		// Build the Elementor structure before insert (not after) so its
+		// text is available to the content guardrails below.
+		$landing_elementor_data = null;
+		if ( ! empty( $data['sections'] ) ) {
+			$landing_elementor_data = $this->build_landing_page_structure( $data['sections'] );
+		} elseif ( ! empty( $data['elementor_data'] ) ) {
+			$landing_elementor_data = $data['elementor_data'];
+		}
+
+		// Content guardrails (#957): ramp cap, thin-content floor, and
+		// near-duplicate detection against the page's actual Elementor copy.
+		$landing_content_text = ( class_exists( 'Mcpwp_Content_Guardrails' ) && null !== $landing_elementor_data )
+			? Mcpwp_Content_Guardrails::extract_text_from_elementor( $landing_elementor_data )
+			: '';
+		$guardrails           = class_exists( 'Mcpwp_Content_Guardrails' )
+			? Mcpwp_Content_Guardrails::evaluate(
+				array(
+					'post_type' => 'page',
+					'status'    => $status,
+					'title'     => $title,
+					'content'   => $landing_content_text,
+				)
+			)
+			: array( 'status' => $status, 'warnings' => array(), 'guardrails' => array() );
+		$status = $guardrails['status'];
 
 		// Create the page.
 		$page_data = array(
 			'post_title'  => $title,
-			'post_status' => ! empty( $data['status'] ) ? sanitize_text_field( $data['status'] ) : 'draft',
+			'post_status' => $status,
 			'post_type'   => 'page',
 			'post_author' => get_current_user_id(),
 		);
@@ -1419,15 +1478,8 @@ class Mcpwp_Elementor_Pro {
 		update_post_meta( $page_id, '_wp_page_template', 'elementor_header_footer' );
 		update_post_meta( $page_id, '_elementor_edit_mode', 'builder' );
 
-		// Build Elementor structure if sections provided.
-		if ( ! empty( $data['sections'] ) ) {
-			$elementor_data = $this->build_landing_page_structure( $data['sections'] );
-			$save_result = $this->save_elementor_data( $page_id, $elementor_data );
-			if ( is_wp_error( $save_result ) ) {
-				return $save_result;
-			}
-		} elseif ( ! empty( $data['elementor_data'] ) ) {
-			$save_result = $this->save_elementor_data( $page_id, $data['elementor_data'] );
+		if ( null !== $landing_elementor_data ) {
+			$save_result = $this->save_elementor_data( $page_id, $landing_elementor_data );
 			if ( is_wp_error( $save_result ) ) {
 				return $save_result;
 			}
@@ -1438,7 +1490,7 @@ class Mcpwp_Elementor_Pro {
 			$this->apply_template_to_page( $page_id, absint( $data['template_id'] ) );
 		}
 
-		return array(
+		$result = array(
 			'id'             => $page_id,
 			'title'          => $title,
 			'status'         => get_post_status( $page_id ),
@@ -1446,6 +1498,15 @@ class Mcpwp_Elementor_Pro {
 			'edit_url'       => admin_url( 'post.php?post=' . $page_id . '&action=elementor' ),
 			'elementor_data' => get_post_meta( $page_id, '_elementor_data', true ),
 		);
+
+		if ( ! empty( $guardrails['guardrails'] ) ) {
+			$result['guardrails'] = $guardrails['guardrails'];
+		}
+		if ( ! empty( $guardrails['warnings'] ) ) {
+			$result['warnings'] = $guardrails['warnings'];
+		}
+
+		return $result;
 	}
 
 	/**

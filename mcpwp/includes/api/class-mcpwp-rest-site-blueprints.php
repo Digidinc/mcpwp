@@ -140,8 +140,9 @@ class Mcpwp_REST_Site_Blueprints extends Mcpwp_REST_API {
 	public function deploy_blueprint( WP_REST_Request $request ): WP_REST_Response {
 		$id       = $request->get_param( 'id' );
 		$overrides = array(
-			'post_status' => $request->get_param( 'post_status' ) ?: 'draft',
-			'name_prefix' => $request->get_param( 'name_prefix' ) ?: '',
+			'post_status'         => $request->get_param( 'post_status' ) ?: 'draft',
+			'name_prefix'         => $request->get_param( 'name_prefix' ) ?: '',
+			'requested_by_key_id' => $this->current_requester_key_id(),
 		);
 
 		$result = Mcpwp_Site_Blueprints::deploy( $id, $overrides );

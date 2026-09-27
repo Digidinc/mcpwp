@@ -133,6 +133,7 @@ final class ResponseProjectionTest extends TestCase {
 			'suggested_first_tools',
 			'quick_start',
 			'pro_active',
+			'guardrails_status',
 		);
 
 		$this->assertSame( $expected_keys, array_keys( $a ), 'Omitting sections must return every section, in the existing order.' );

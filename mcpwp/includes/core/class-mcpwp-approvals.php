@@ -245,6 +245,89 @@ class Mcpwp_Approvals {
 	}
 
 	/**
+	 * Create an approval request to publish a batch of already-drafted
+	 * posts/pages at once (#957 rule 2: a bulk-create call over the
+	 * configured threshold is created as drafts plus one approval request,
+	 * instead of publishing directly). Unlike create_destructive_request(),
+	 * this is reversible: rollback simply reverts the batch to draft — see
+	 * Mcpwp_Content_Guardrails::apply_bulk_publish(), which apply_payload()
+	 * delegates to below.
+	 *
+	 * @param int[]  $post_ids  IDs already created as drafts.
+	 * @param string $post_type 'post' or 'page'.
+	 * @param array  $args      title/note/tool/requested_by_key_id.
+	 * @return array|WP_Error Public approval request.
+	 */
+	public static function create_bulk_publish_request( array $post_ids, $post_type, $args = array() ) {
+		$post_ids  = array_values( array_unique( array_map( 'absint', $post_ids ) ) );
+		$post_type = sanitize_key( (string) $post_type );
+
+		if ( empty( $post_ids ) ) {
+			return new WP_Error( 'no_items', __( 'No items to queue for publish approval.', 'mcpwp' ), array( 'status' => 400 ) );
+		}
+
+		$id    = self::generate_id();
+		$now   = gmdate( 'c' );
+		$count = count( $post_ids );
+
+		$request = array(
+			'id'                  => $id,
+			'status'              => 'pending',
+			'action'              => 'bulk_content_publish',
+			'title'               => isset( $args['title'] ) ? sanitize_text_field( (string) $args['title'] ) : sprintf(
+				/* translators: 1: item count, 2: post type. */
+				__( 'Publish %1$d %2$s at once', 'mcpwp' ),
+				$count,
+				$post_type
+			),
+			'note'                => isset( $args['note'] ) ? sanitize_textarea_field( (string) $args['note'] ) : '',
+			'tool'                => isset( $args['tool'] ) ? sanitize_key( (string) $args['tool'] ) : '',
+			'resource'            => array(
+				'type'  => 'bulk_' . $post_type,
+				'id'    => null,
+				'title' => sprintf( '%1$d %2$s', $count, $post_type ),
+			),
+			'diff'                => array(
+				'summary' => sprintf(
+					/* translators: %d: item count. */
+					__( 'Created as drafts; queued for approval to publish all %d at once (bulk creation threshold exceeded).', 'mcpwp' ),
+					$count
+				),
+			),
+			'payload'             => array(
+				'post_ids'  => $post_ids,
+				'post_type' => $post_type,
+			),
+			'rollback'            => array(
+				'post_ids'  => $post_ids,
+				'post_type' => $post_type,
+			),
+			'metadata'            => array(),
+			'requested_by_key_id' => isset( $args['requested_by_key_id'] ) ? sanitize_text_field( (string) $args['requested_by_key_id'] ) : '',
+			'created_at'          => $now,
+			'updated_at'          => $now,
+			'approved_at'         => null,
+			'applied_at'          => null,
+			'rejected_at'         => null,
+			'rolled_back_at'      => null,
+		);
+
+		self::upsert( $request );
+
+		$public = self::public_record( $request );
+		self::emit_event(
+			'approval.created',
+			$public,
+			'pending',
+			'medium',
+			__( 'Review before publishing this batch.', 'mcpwp' )
+		);
+		self::maybe_schedule_triage( $public );
+
+		return $public;
+	}
+
+	/**
 	 * @param string $status            Status filter.
 	 * @param int    $limit             Maximum records.
 	 * @param bool   $reveal_non_public When true, return full records; when false
@@ -769,6 +852,16 @@ class Mcpwp_Approvals {
 		// Staging push apply path.
 		if ( 'staging_push' === $request['action'] ) {
 			return self::apply_staging_push( $request, $field );
+		}
+
+		// Bulk-publish apply/rollback path (#957) — delegates to the
+		// guardrails module, which owns the ramp/anomaly bookkeeping that a
+		// batch publish still has to go through.
+		if ( 'bulk_content_publish' === $request['action'] ) {
+			if ( ! class_exists( 'Mcpwp_Content_Guardrails' ) ) {
+				return new WP_Error( 'guardrails_unavailable', __( 'The content guardrails module is not loaded.', 'mcpwp' ), array( 'status' => 500 ) );
+			}
+			return Mcpwp_Content_Guardrails::apply_bulk_publish( $request, $field );
 		}
 
 		// A destructive operation replays the reviewed call once; there is

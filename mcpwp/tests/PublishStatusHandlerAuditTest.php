@@ -131,6 +131,18 @@ final class PublishStatusHandlerAuditTest extends TestCase {
 		'pro/api/class-mcpwp-rest-elementor-pro.php'   => 'blanket-admin: Custom Code create/update/status routes live under /mcpwp/v1/elementor/custom-code, a full $admin_routes entry',
 		'core/class-mcpwp-site-blueprints.php'         => 'blanket-admin: only reachable via /mcpwp/v1/site-blueprints/{id}/deploy, admin for every request via the deploy regex',
 		'core/class-mcpwp-action-log.php'              => 'blanket-admin: rollback is only reachable via /mcpwp/v1/action-log, an $admin_write_routes entry',
+		// #957: Mcpwp_Content_Guardrails::apply_bulk_publish() is the only
+		// wp_update_post()+'post_status' write in this file — it flips a
+		// bulk-publish approval's already-created drafts to 'publish' (or
+		// back to 'draft' on rollback). It is reachable only from
+		// Mcpwp_Approvals::apply_payload()/rollback_request(), which in turn
+		// is reachable only via POST /approvals/{id}/(apply|rollback) — the
+		// approvals regex above already requires admin scope for that route
+		// unconditionally. $target_status itself is never a caller
+		// parameter: it is hardcoded to 'publish' for $field==='payload' and
+		// 'draft' for $field==='rollback' by the calling method, not read
+		// from request input.
+		'core/class-mcpwp-content-guardrails.php'      => 'blanket-admin: apply_bulk_publish() only runs via POST /approvals/{id}/(apply|rollback), already admin-gated by the approvals regex; target_status is hardcoded publish/draft, never a caller parameter',
 
 		// ── Not caller-controlled at all — post_status is a hardcoded
 		// literal or restricted to a context with no API key involved.
