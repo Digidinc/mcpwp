@@ -61,6 +61,23 @@ final class ApprovalTriageTest extends TestCase
         ));
     }
 
+    /**
+     * Configures ONLY the Cloudflare integration (no TypeSafe key at all) —
+     * transport() must resolve to 'cloudflare' from these alone, and every
+     * triage behaviour below must be identical to the TypeSafe path.
+     */
+    private function configureJevViaCloudflareOnly(): void
+    {
+        Mcpwp_Integration_Manager::get_instance()->set_provider_config('cloudflare', array(
+            'api_token'  => 'test-cf-token',
+            'zone_id'    => 'zone-123',
+            'account_id' => 'account-abc',
+        ));
+        add_filter('mcpwp_jev_cloudflare_endpoint', function () {
+            return 'https://cf-stub.test/client/v4/accounts/account-abc/ai/run';
+        }, 10, 2);
+    }
+
     /** @return ArrayObject<int, array{url:string, args:array}> */
     private function mockJevAnswer(array $answers): ArrayObject
     {
@@ -70,6 +87,31 @@ final class ApprovalTriageTest extends TestCase
             return array(
                 'response' => array('code' => 200),
                 'body'     => wp_json_encode(array('answers' => $answers)),
+            );
+        }, 10, 3);
+
+        return $captured;
+    }
+
+    /**
+     * Same shape as mockJevAnswer(), but wrapped in the Cloudflare API's
+     * standard {success,errors,messages,result} envelope — for the
+     * 'cloudflare' transport double.
+     *
+     * @return ArrayObject<int, array{url:string, args:array}>
+     */
+    private function mockJevAnswerViaCloudflare(array $answers): ArrayObject
+    {
+        $captured = new ArrayObject();
+        add_filter('pre_http_request', function ($preempt, $args, $url) use ($captured, $answers) {
+            $captured[] = array('url' => $url, 'args' => $args);
+            return array(
+                'response' => array('code' => 200),
+                'body'     => wp_json_encode(array(
+                    'success' => true,
+                    'errors'  => array(),
+                    'result'  => array('answers' => $answers),
+                )),
             );
         }, 10, 3);
 
@@ -180,6 +222,74 @@ final class ApprovalTriageTest extends TestCase
         $this->assertArrayHasKey('at', $stored['triage']);
         // Exactly these five keys — no room for an injected extra field to ride along.
         $this->assertSame(array('priority', 'change_kind', 'confidence', 'source', 'at'), array_keys($stored['triage']));
+    }
+
+    public function test_run_stores_validated_triage_from_a_documented_jev_answer_via_cloudflare_transport(): void
+    {
+        // The load-bearing guarantee for #987: with ONLY the Cloudflare
+        // integration configured (no TypeSafe key at all), the exact same
+        // triage cron path — scheduling, redaction, enum validation,
+        // storage — produces the exact same stored result. Nothing in
+        // Mcpwp_Approvals or Mcpwp_Jev_Triage changed to make this work.
+        $this->configureJevViaCloudflareOnly();
+        $post_id  = $this->makePost();
+        $approval = Mcpwp_Approvals::create_post_content_request($post_id, 'updated content', array('title' => 'Edit hero copy'));
+
+        $scheduled = array_column($GLOBALS['mcpwp_test_single_cron'], 'hook');
+        $this->assertContains(Mcpwp_Jev_Triage::HOOK, $scheduled, 'triage must still be scheduled when only Cloudflare is configured');
+
+        $captured = $this->mockJevAnswerViaCloudflare(array(
+            'review_priority' => array(
+                'type'          => 'score',
+                'score'         => 2.6,
+                'confidence'    => 0.82,
+                'legend'        => 'high',
+                'probabilities' => array('low' => 0.02, 'medium' => 0.1, 'high' => 0.7, 'urgent' => 0.18),
+            ),
+            'change_kind' => array(
+                'type'          => 'choice',
+                'choice'        => 'content_edit',
+                'probabilities' => array('content_edit' => 0.9, 'other' => 0.1),
+            ),
+        ));
+
+        Mcpwp_Jev_Triage::run($approval['id']);
+
+        $this->assertCount(1, $captured);
+        $this->assertSame('https://cf-stub.test/client/v4/accounts/account-abc/ai/run', $captured[0]['url']);
+        $body = json_decode($captured[0]['args']['body'], true);
+        $this->assertSame('typesafe/jev', $body['model']);
+        $this->assertArrayHasKey('input', $body);
+
+        $stored = Mcpwp_Approvals::get_request($approval['id']);
+        $this->assertArrayHasKey('triage', $stored);
+        $this->assertSame('high', $stored['triage']['priority']);
+        $this->assertSame('content_edit', $stored['triage']['change_kind']);
+        $this->assertSame(0.82, $stored['triage']['confidence']);
+        $this->assertSame('jev', $stored['triage']['source']);
+        $this->assertSame(array('priority', 'change_kind', 'confidence', 'source', 'at'), array_keys($stored['triage']));
+    }
+
+    public function test_run_is_a_silent_noop_via_cloudflare_transport_when_the_call_fails(): void
+    {
+        // Same "never block" guarantee as the TypeSafe path, proven for
+        // Cloudflare: a failure (e.g. the token lacks Workers AI permission)
+        // leaves the approval untriaged rather than throwing or blocking.
+        $this->configureJevViaCloudflareOnly();
+        $post_id  = $this->makePost();
+        $approval = Mcpwp_Approvals::create_post_content_request($post_id, 'updated content', array('title' => 'Edit'));
+
+        add_filter('pre_http_request', function ($preempt, $args, $url) {
+            return array(
+                'response' => array('code' => 403),
+                'body'     => wp_json_encode(array('success' => false, 'errors' => array(array('code' => 10000, 'message' => 'Authentication error')))),
+            );
+        }, 10, 3);
+
+        Mcpwp_Jev_Triage::run($approval['id']);
+
+        $stored = Mcpwp_Approvals::get_request($approval['id']);
+        $this->assertArrayNotHasKey('triage', $stored);
     }
 
     public function test_run_drops_the_whole_triage_when_change_kind_is_an_invalid_or_injected_value(): void

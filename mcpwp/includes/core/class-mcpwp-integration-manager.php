@@ -243,36 +243,46 @@ class Mcpwp_Integration_Manager {
 			'url'         => 'https://developers.cloudflare.com/fundamentals/api/get-started/create-token/',
 			'key_prefix'  => '',
 			'tier'        => 'free',
-			'description' => 'Connect this site\'s Cloudflare zone to fix Bot Fight Mode/Security Level blocking MCP requests, purge cache after content edits, and manage Speed settings (Early Hints, HTTP/3, Rocket Loader, Polish) that affect Core Web Vitals. Use a scoped API Token (Zone Settings: Edit, Zone WAF: Edit, Cache Purge: Purge) — not the Global API Key.',
+			'description' => 'Connect this site\'s Cloudflare zone to fix Bot Fight Mode/Security Level blocking MCP requests, purge cache after content edits, and manage Speed settings (Early Hints, HTTP/3, Rocket Loader, Polish) that affect Core Web Vitals. Use a scoped API Token (Zone Settings: Edit, Zone WAF: Edit, Cache Purge: Purge) — not the Global API Key. Add Account ID + a token with Workers AI permission if you also want Jev (see below) to run through Cloudflare instead of TypeSafe.',
 			'fields'      => array(
-				'api_token' => array(
+				'api_token'  => array(
 					'label'       => 'API Token',
 					'type'        => 'password',
 					'placeholder' => 'Scoped Cloudflare API Token for this zone',
 				),
-				'zone_id'   => array(
+				'zone_id'    => array(
 					'label'       => 'Zone ID',
 					'type'        => 'text',
 					'placeholder' => 'Zone ID (Cloudflare dashboard > this domain > Overview > API)',
 				),
+				'account_id' => array(
+					'label'       => 'Account ID (optional — Workers AI)',
+					'type'        => 'text',
+					'placeholder' => 'Cloudflare Account ID (only needed to run Jev via Workers AI)',
+				),
 			),
 		),
 		'jev' => array(
-			'name'        => 'Jev (TypeSafe)',
+			'name'        => 'Jev (TypeSafe / Cloudflare Workers AI)',
 			'url'         => 'https://typesafe.ai/',
 			'key_prefix'  => '',
 			'tier'        => 'free',
-			'description' => 'Optional: TypeSafe\'s Jev evaluation model ranks the approval queue by priority so the most urgent pending changes surface first. Bring your own TypeSafe API key; usage is billed to you directly (input tokens only, $0.042/1M). Off until a key is saved here. Jev only routes — it never approves, rejects, applies, or blocks anything, and it has no say over scope checks or safety reports.',
+			'description' => 'Optional: TypeSafe\'s Jev evaluation model ranks the approval queue by priority so the most urgent pending changes surface first. Bring your own TypeSafe API key (billed to you directly, input tokens only, $0.042/1M) — or, with no separate signup, run the same model through Cloudflare Workers AI using the Account ID + API token saved on the Cloudflare integration above (same pricing, https://developers.cloudflare.com/ai/models/typesafe/jev/). A TypeSafe key is preferred when both are configured; set the transport override below to force one or the other. Off until either is configured. Jev only routes — it never approves, rejects, applies, or blocks anything, and it has no say over scope checks or safety reports.',
 			'fields'      => array(
-				'api_key'  => array(
-					'label'       => 'API Key',
+				'api_key'   => array(
+					'label'       => 'API Key (TypeSafe)',
 					'type'        => 'password',
 					'placeholder' => 'TypeSafe API key',
 				),
-				'endpoint' => array(
-					'label'       => 'Endpoint override (advanced)',
+				'endpoint'  => array(
+					'label'       => 'TypeSafe endpoint override (advanced)',
 					'type'        => 'url',
 					'placeholder' => 'https://api.typesafe.ai/v1/systemone',
+				),
+				'transport' => array(
+					'label'       => 'Transport override (advanced)',
+					'type'        => 'text',
+					'placeholder' => 'auto (default), typesafe, or cloudflare',
 				),
 			),
 		),
@@ -744,6 +754,10 @@ class Mcpwp_Integration_Manager {
 			return $this->test_cloudflare_provider();
 		}
 
+		if ( 'jev' === $provider ) {
+			return $this->test_jev_provider();
+		}
+
 		$key = $this->get_provider_key( $provider );
 		if ( false === $key ) {
 			return array(
@@ -901,6 +915,32 @@ class Mcpwp_Integration_Manager {
 	}
 
 	/**
+	 * Test the Jev connection — whichever transport (TypeSafe or Cloudflare
+	 * Workers AI) resolves for this site — and say which one answered.
+	 *
+	 * @return array{success: bool, message: string}
+	 */
+	private function test_jev_provider() {
+		if ( ! class_exists( 'Mcpwp_Jev' ) ) {
+			return array(
+				'success' => false,
+				'message' => __( 'Jev support is not available in this build.', 'mcpwp' ),
+			);
+		}
+
+		$result = Mcpwp_Jev::test_connection();
+
+		return $this->with_recorded_test_status(
+			'jev',
+			array(
+				'success'   => (bool) $result['success'],
+				'message'   => (string) $result['message'],
+				'transport' => (string) $result['transport'],
+			)
+		);
+	}
+
+	/**
 	 * Get list of available providers with status.
 	 *
 	 * @return array
@@ -935,6 +975,16 @@ class Mcpwp_Integration_Manager {
 				$provider_data['oauth_ready']     = ! empty( $config['oauth_client_id'] ) && ! empty( $config['oauth_client_secret'] );
 				$provider_data['oauth_connected'] = ! empty( $config['access_token'] ) || ! empty( $config['refresh_token'] );
 				$provider_data['auth_mode']       = ! empty( $config['personal_access_token'] ) ? 'personal_token' : ( $provider_data['oauth_connected'] ? 'oauth' : 'unconfigured' );
+			}
+
+			// Jev can run with no 'jev' record at all (Cloudflare Workers AI
+			// credentials alone), so 'configured' above cannot say whether it
+			// is on. Say which transport is active and why (#987).
+			if ( 'jev' === $slug && class_exists( 'Mcpwp_Jev' ) ) {
+				$jev_status                        = Mcpwp_Jev::status();
+				$provider_data['available']        = '' !== $jev_status['transport'];
+				$provider_data['transport']        = $jev_status['transport'];
+				$provider_data['transport_reason'] = $jev_status['reason'];
 			}
 
 			$providers[ $slug ] = $provider_data;
