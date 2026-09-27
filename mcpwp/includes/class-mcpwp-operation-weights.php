@@ -163,36 +163,53 @@ final class Mcpwp_Operation_Weights {
 
 	/**
 	 * Routes priced by how much data one call asks for rather than by a list
-	 * of items (#804 adversarial review, W5/W-R2-2): 1 spend unit per
-	 * `unit_bytes` of the requested value CLAMPED to `ceiling` first,
-	 * minimum 1.
+	 * of items (#804 adversarial review, W5/W-R2-2): a call at or under
+	 * `baseline` costs 1 (unchanged from before this pricing existed —
+	 * every default-sized caller stays at 1), and anything above `baseline`
+	 * costs `1 + ceil((clamped - baseline) / unit_bytes)`, clamped to
+	 * `ceiling` FIRST.
 	 *
 	 * /rendered-html holds its whole requested window in memory for one
 	 * response; before this it carried no list argument and so priced as an
 	 * ordinary 1-unit call regardless of max_bytes, letting a batch of
 	 * near-ceiling reads cost the same as a batch of tiny ones.
 	 *
-	 * Round 2 (W-R2-2): the first pass priced 1 unit per 64KB, which put the
-	 * 512KB ceiling at only 8 units — a batch of 100 ceiling-sized reads
-	 * (800 units) still fit inside the 1000-unit budget, so the batch-level
-	 * ceiling this exists to bind never actually bound. 16KB/unit puts the
-	 * ceiling at 32 units, so that same batch (3200 units) is refused whole.
+	 * Round 2 (W-R2-2): the first pass priced 1 unit per 64KB flat from
+	 * zero, which put the 512KB ceiling at only 8 units — a batch of 100
+	 * ceiling-sized reads (800) still fit inside the 1000-unit budget, so
+	 * the batch-level ceiling this exists to bind never actually bound.
+	 * Pricing flat from zero at 16KB/unit fixed that (ceiling = 32) but
+	 * also repriced the ordinary default (51200) at 4 units — a quiet 4x
+	 * increase for every existing default caller that never asked for
+	 * anything unusual.
+	 *
+	 * Round 3 fixes that: the baseline (the handler's own default,
+	 * RENDERED_HTML_DEFAULT_MAX_BYTES) stays flat at 1, and only bytes
+	 * requested ABOVE it are metered — so nothing changes for a default
+	 * caller, while a call that actually asks for more still scales:
+	 * 512KB is 1 + ceil((524288-51200)/16384) = 1 + 29 = 30 units, and a
+	 * batch of 100 such reads (3000) is still refused whole against the
+	 * 1000 budget.
+	 *
 	 * `ceiling` here must be kept equal to
-	 * Mcpwp_REST_Site_Content::RENDERED_HTML_MAX_BYTES_CEILING — an
-	 * operation-weights unit test asserts they match, since this class must
-	 * not (and, being lower-level, cannot cleanly) depend on that REST class
-	 * directly.
+	 * Mcpwp_REST_Site_Content::RENDERED_HTML_MAX_BYTES_CEILING, and
+	 * `baseline` equal to Mcpwp_REST_Site_Content::RENDERED_HTML_DEFAULT_
+	 * MAX_BYTES — an operation-weights unit test asserts both match, since
+	 * this class must not (and, being lower-level, cannot cleanly) depend
+	 * on that REST class directly.
 	 *
-	 * Pricing clamps the requested value to `ceiling` BEFORE dividing (N-R2-1
-	 * — the other half of W-R2-2): the handler itself clamps max_bytes to the
-	 * ceiling before ever reading that many bytes, so pricing an unclamped
-	 * number would price memory the call never actually holds.
+	 * Pricing clamps the requested value to `ceiling` BEFORE dividing
+	 * (N-R2-1 — the other half of W-R2-2): the handler itself clamps
+	 * max_bytes to the ceiling before ever reading that many bytes, so
+	 * pricing an unclamped number would price memory the call never
+	 * actually holds.
 	 *
-	 * @var array<string,array{param:string,unit_bytes:int,ceiling:int}>
+	 * @var array<string,array{param:string,baseline:int,unit_bytes:int,ceiling:int}>
 	 */
 	const SPEND_SIZE_ROUTES = array(
 		'/rendered-html' => array(
 			'param'      => 'max_bytes',
+			'baseline'   => 51200,
 			'unit_bytes' => 16384,
 			'ceiling'    => 524288,
 		),
@@ -458,16 +475,27 @@ final class Mcpwp_Operation_Weights {
 		}
 
 		// Routes priced by requested size rather than by a list (#804 W5 /
-		// W-R2-2). Clamped to the route's own ceiling BEFORE dividing
-		// (N-R2-1): the handler never actually holds more than the ceiling
-		// in memory, so pricing an unclamped number a caller merely asked
-		// for would price memory the call never allocates.
+		// W-R2-2 / round 3). Clamped to the route's own ceiling BEFORE
+		// dividing (N-R2-1): the handler never actually holds more than the
+		// ceiling in memory, so pricing an unclamped number a caller merely
+		// asked for would price memory the call never allocates.
+		//
+		// A clamped value at or under `baseline` (the handler's own
+		// default) costs 1 — unchanged for every ordinary caller. Only
+		// bytes requested ABOVE the baseline are metered, at 1 + one unit
+		// per `unit_bytes` over it, so the 512KB ceiling costs 30 (still
+		// enough to refuse a batch of 100 whole) without quietly raising
+		// the price of a call that never asked for anything unusual.
 		if ( array_key_exists( $path, self::SPEND_SIZE_ROUTES ) ) {
 			$spec      = self::SPEND_SIZE_ROUTES[ $path ];
 			$requested = isset( $params[ $spec['param'] ] ) ? absint( $params[ $spec['param'] ] ) : 0;
 			$clamped   = min( $requested, $spec['ceiling'] );
-			$units     = $clamped > 0 ? (int) ceil( $clamped / $spec['unit_bytes'] ) : 1;
-			return max( 1, $units );
+
+			if ( $clamped <= $spec['baseline'] ) {
+				return 1;
+			}
+
+			return 1 + (int) ceil( ( $clamped - $spec['baseline'] ) / $spec['unit_bytes'] );
 		}
 
 		// A paid route given a list costs at least the list, like any other

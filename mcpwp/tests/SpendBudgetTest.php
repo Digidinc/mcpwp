@@ -329,16 +329,18 @@ final class SpendBudgetTest extends TestCase {
 		// caller who never names a size.
 		$this->assertSame( 1, $this->spent( array( $this->rendered_html() ) ) );
 
-		// Reporting the exact default cost, as asked: an explicit
-		// max_bytes=51200 (the handler's own default) costs
-		// ceil(51200/16384) = 4 units under 16KB/unit pricing. This is
-		// "4 units or fewer" — satisfied exactly at that boundary — and is
-		// a real, disclosed change from round 1's 1 unit at this size.
-		$this->assertSame( 4, $this->spent( array( $this->rendered_html( 51200 ) ) ) );
+		// #804 round 3 correction: an explicit max_bytes=51200 (the
+		// handler's own default) must ALSO cost 1 — round 2's flat
+		// 16KB/unit pricing quietly quadrupled this to 4 for every
+		// existing default caller, which nothing asked it to do. A clamped
+		// value at or under the baseline (51200) is free of the per-KB
+		// meter entirely; only bytes requested ABOVE it are metered.
+		$this->assertSame( 1, $this->spent( array( $this->rendered_html( 51200 ) ) ) );
 
-		// The ceiling (512KB) costs 32 units at 16KB/unit — exactly what
-		// makes a batch of 100 ceiling reads (3200) fail to fit 1000.
-		$this->assertSame( 32, $this->spent( array( $this->rendered_html( 524288 ) ) ) );
+		// The ceiling (512KB) costs 1 + ceil((524288-51200)/16384)
+		// = 1 + 29 = 30 units — still enough that a batch of 100 ceiling
+		// reads (3000) is refused whole against the 1000 budget.
+		$this->assertSame( 30, $this->spent( array( $this->rendered_html( 524288 ) ) ) );
 	}
 
 	public function test_rendered_html_price_clamps_before_dividing(): void {
@@ -348,39 +350,56 @@ final class SpendBudgetTest extends TestCase {
 		// handler never holds more than the ceiling in memory, so pricing
 		// an unclamped number would price memory the call never allocates.
 		$this->assertSame(
-			32,
+			30,
 			$this->spent( array( $this->rendered_html( 999999999 ) ) ),
-			'Priced as the 512KB ceiling (32 units), not as ~999MB/16KB (tens of thousands of units).'
+			'Priced as the 512KB ceiling (30 units), not as ~999MB worth of 16KB units.'
 		);
 	}
 
 	public function test_a_batch_of_a_hundred_ceiling_rendered_html_reads_is_refused_whole(): void {
-		// 100 x 32 = 3200 — far over the 1000-unit budget. Round 1's 64KB/
-		// unit pricing put this same batch at 800 (8 x 100), which fit —
-		// the batch-level ceiling this pricing exists to bind never bound.
+		// 100 x 30 = 3000 — far over the 1000-unit budget. Round 2's flat
+		// 16KB/unit-from-zero pricing put the ceiling at 32 (same order of
+		// magnitude); round 1's 64KB/unit put this same batch at only 800,
+		// which fit — the batch-level ceiling this pricing exists to bind
+		// never bound. This still binds it, without repricing the default.
 		$refusal = $this->batch_refusal( $this->times( 100, $this->rendered_html( 524288 ) ) );
 		$data    = $refusal->get_error_data();
 
 		$this->assertSame( 413, $data['status'] );
-		$this->assertSame( 3200, $data['weight'] );
+		$this->assertSame( 3000, $data['weight'] );
 		$this->assertSame( 1000, $data['remaining'] );
 		$this->assertSame( 1000, $data['limit'] );
 		$this->assertSame( array(), $GLOBALS['mcpwp_test_dispatched_routes'], 'Nothing ran.' );
 
-		// A batch of the same shape that fits: 31 x 32 = 992 <= 1000.
-		$fits = $this->batch( $this->times( 31, $this->rendered_html( 524288 ) ) );
-		$this->assertSame( 31, $fits['succeeded'] );
-		$this->assertSame( 992, $fits['spend_budget']['spent'] );
+		// A batch of the same shape that fits: 33 x 30 = 990 <= 1000.
+		$fits = $this->batch( $this->times( 33, $this->rendered_html( 524288 ) ) );
+		$this->assertSame( 33, $fits['succeeded'] );
+		$this->assertSame( 990, $fits['spend_budget']['spent'] );
 		$this->assertSame( array(), $fits['spend_budget']['refused'] );
 	}
 
-	// A future edit to either ceiling in isolation is a silent price/memory
-	// mismatch — this guard makes that a failing test instead.
-	public function test_rendered_html_pricing_ceiling_matches_the_handlers_ceiling(): void {
+	// A batch of default-sized reads must still cost exactly its item
+	// count — the regression round 3 exists to prevent, made explicit at
+	// batch scale rather than only for one call.
+	public function test_a_batch_of_a_hundred_default_rendered_html_reads_still_costs_a_hundred(): void {
+		$fits = $this->batch( $this->times( 100, $this->rendered_html( 51200 ) ) );
+		$this->assertSame( 100, $fits['succeeded'] );
+		$this->assertSame( 100, $fits['spend_budget']['spent'] );
+		$this->assertSame( array(), $fits['spend_budget']['refused'] );
+	}
+
+	// A future edit to either ceiling/baseline in isolation is a silent
+	// price/memory mismatch — this guard makes that a failing test instead.
+	public function test_rendered_html_pricing_ceiling_and_baseline_match_the_handlers(): void {
 		$this->assertSame(
 			Mcpwp_REST_Site_Content::RENDERED_HTML_MAX_BYTES_CEILING,
 			Mcpwp_Operation_Weights::SPEND_SIZE_ROUTES['/rendered-html']['ceiling'],
 			'Mcpwp_Operation_Weights::SPEND_SIZE_ROUTES[\'/rendered-html\'][\'ceiling\'] must be kept equal to Mcpwp_REST_Site_Content::RENDERED_HTML_MAX_BYTES_CEILING by hand.'
+		);
+		$this->assertSame(
+			Mcpwp_REST_Site_Content::RENDERED_HTML_DEFAULT_MAX_BYTES,
+			Mcpwp_Operation_Weights::SPEND_SIZE_ROUTES['/rendered-html']['baseline'],
+			'Mcpwp_Operation_Weights::SPEND_SIZE_ROUTES[\'/rendered-html\'][\'baseline\'] must be kept equal to Mcpwp_REST_Site_Content::RENDERED_HTML_DEFAULT_MAX_BYTES by hand.'
 		);
 	}
 
