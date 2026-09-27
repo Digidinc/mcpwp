@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * **elementor:** treat a refused save and a missing CSS file as failures ([#951](https://github.com/Mumega-com/mcpwp/issues/951), [#901](https://github.com/Mumega-com/mcpwp/issues/901)) ([#969](https://github.com/Mumega-com/mcpwp/issues/969)) ([afcb782](https://github.com/Mumega-com/mcpwp/commit/afcb78286ed794016a52202ad7a7d5bb4cbaa23f))
 * **mcp:** readable resources on every server and plain-text names for agents ([#972](https://github.com/Mumega-com/mcpwp/issues/972)) ([8b33142](https://github.com/Mumega-com/mcpwp/commit/8b331422e4b0216dff66c78dcfc40a2ef9173c5f))
 * **mcp:** tools/call forwards the caller's credential as received ([#979](https://github.com/Mumega-com/mcpwp/issues/979)) ([89e58b6](https://github.com/Mumega-com/mcpwp/commit/89e58b60a3d778c3ae2eb4aefa3b96249b4dcc03))
+* **rest:** server failures keep their real HTTP status instead of a blanket 400 ([#953](https://github.com/Mumega-com/mcpwp/issues/953)) ([#970](https://github.com/Mumega-com/mcpwp/issues/970)) ([1d5f991](https://github.com/Mumega-com/mcpwp/commit/1d5f991e))
 
 ## [3.14.0](https://github.com/Mumega-com/mcpwp/compare/v3.13.1...v3.14.0) (2026-09-26)
 
