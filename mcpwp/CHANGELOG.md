@@ -21,6 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * **graph:** price /batch and wp_batch graph sub-requests at their graph weight ([#1011](https://github.com/Mumega-com/mcpwp/issues/1011)) ([5cad84b](https://github.com/Mumega-com/mcpwp/commit/5cad84b80a407b453042967964ab0f4bd47c85b6))
 * **mcp:** harden tools/call name validation and next-step hint visibility ([#1019](https://github.com/Mumega-com/mcpwp/issues/1019)) ([8e03ec1](https://github.com/Mumega-com/mcpwp/commit/8e03ec1c718ef6172aacf51aa8bed33bf63c33d9))
 
+### Changed for existing API keys
+
+* **Site routes now follow the key's role.** Author and Editor keys can no longer reach site routes (menus, options, memory, site settings, favicon, theme CSS/mods, signals, guides, design references and similar), over REST, `/batch` or MCP. Admin and Designer keys are unchanged. To restore access for a key, switch it to Custom and add the `site` category. `/users` and `/action-log` now need the Admin role category. Every key can still reach `/site-info`, `/onboard`, `/introspect` and read the site context, which is public brand copy (it is already published in `/llms.txt`) ([#1007](https://github.com/Mumega-com/mcpwp/issues/1007)).
+
 ## [3.14.3](https://github.com/Mumega-com/mcpwp/compare/v3.14.2...v3.14.3) (2026-09-27)
 
 
