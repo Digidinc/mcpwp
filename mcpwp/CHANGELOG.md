@@ -5,6 +5,22 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.14.4](https://github.com/Mumega-com/mcpwp/compare/v3.14.3...v3.14.4) (2026-09-27)
+
+
+### Features
+
+* **mcp:** core tool profile + mcpwp_find_tools/mcpwp_call ([#1014](https://github.com/Mumega-com/mcpwp/issues/1014)) ([2c36d61](https://github.com/Mumega-com/mcpwp/commit/2c36d61c81feb3e5ddb196c66589edf7bc1e8beb))
+* **mcp:** resource templates (page/brand/memory/guide) + real prompt recipes ([#1015](https://github.com/Mumega-com/mcpwp/issues/1015)) ([db0ad0e](https://github.com/Mumega-com/mcpwp/commit/db0ad0e5150039ec6c5ac2439573540eb85d258e))
+* **mcp:** tool input examples + next-step hints in tools/call results ([#1012](https://github.com/Mumega-com/mcpwp/issues/1012)) ([ced40cb](https://github.com/Mumega-com/mcpwp/commit/ced40cb6a133aba1fc729b0aecd43bef02c56460))
+
+
+### Bug Fixes
+
+* **auth:** gate site-category REST routes to the site tool category ([#1013](https://github.com/Mumega-com/mcpwp/issues/1013)) ([5e3352c](https://github.com/Mumega-com/mcpwp/commit/5e3352c4491a1f615794053bf214ac582d2ed6e5))
+* **graph:** price /batch and wp_batch graph sub-requests at their graph weight ([#1011](https://github.com/Mumega-com/mcpwp/issues/1011)) ([5cad84b](https://github.com/Mumega-com/mcpwp/commit/5cad84b80a407b453042967964ab0f4bd47c85b6))
+* **mcp:** harden tools/call name validation and next-step hint visibility ([#1019](https://github.com/Mumega-com/mcpwp/issues/1019)) ([8e03ec1](https://github.com/Mumega-com/mcpwp/commit/8e03ec1c718ef6172aacf51aa8bed33bf63c33d9))
+
 ## [3.14.3](https://github.com/Mumega-com/mcpwp/compare/v3.14.2...v3.14.3) (2026-09-27)
 
 
