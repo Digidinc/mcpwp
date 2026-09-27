@@ -2141,7 +2141,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 
 			case 'onboard':
 				$text = "You are connecting to the WordPress site \"{$site_title}\" ({$site_url}) for the first time.\n\n"
-					. "1. Call wp_onboard to get a complete site briefing (content inventory, integrations, suggested tools).\n"
+					. "1. Call wp_onboard for a short site briefing (identity, builder mode, connected services, next actions); pass detail=full for the complete inventory.\n"
 					. "2. Call wp_get_signals to check the current site health score.\n"
 					. "3. Summarize: what's on the site, what integrations are active, and the top 3 actions you'd recommend.\n"
 					. "4. Ask the site owner what they'd like to work on.";
@@ -3139,7 +3139,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		// --- Best practices ---
 		$lines[] = '## Getting Started';
 		$lines[] = '';
-		$lines[] = '1. **Always call `wp_onboard` first** — it returns a complete site briefing with content inventory, active integrations, available tools, and recommended first actions.';
+		$lines[] = '1. **Always call `wp_onboard` first** — it returns a short briefing: site identity, builder mode, connected services, content summary and the top next actions. Pass `detail=full` for the complete inventory; use tools/list for the tool catalog.';
 		$lines[] = '2. Call `wp_get_site_context` to read the site style guide and design rules (if configured).';
 		$lines[] = '3. Use `wp_detect_plugins` to confirm which integrations are available before using plugin-specific tools.';
 		$lines[] = '';
