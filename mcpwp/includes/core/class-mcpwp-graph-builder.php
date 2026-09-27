@@ -108,7 +108,25 @@ class Mcpwp_Graph_Builder {
 	const MAX_EDGE_ANCHORS = 5;
 
 	/** Post types never graphed as post nodes, regardless of public/queryable. */
-	const EXCLUDED_POST_TYPES = array( 'attachment', 'revision' );
+	const EXCLUDED_POST_TYPES = array(
+		'attachment',
+		'revision',
+		// Page-builder and theme internals that some builders register as
+		// publicly queryable. They are not pages a visitor reaches, so they
+		// would only show up as false orphans (Elementor's "Default Kit" did,
+		// in the 3.14.3 release smoke test).
+		'elementor_library',
+		'elementor_snippet',
+		'elementor_font',
+		'elementor_icons',
+		'wp_block',
+		'wp_template',
+		'wp_template_part',
+		'wp_navigation',
+		'wp_global_styles',
+		'wp_font_family',
+		'wp_font_face',
+	);
 
 	/**
 	 * Node keys marked during THIS request, keyed by blog ID first
@@ -235,7 +253,13 @@ class Mcpwp_Graph_Builder {
 	 */
 	public static function is_covered_post_type( $post_type ) {
 		$post_type = (string) $post_type;
-		if ( in_array( $post_type, self::EXCLUDED_POST_TYPES, true ) ) {
+		/**
+		 * Filter the post types the site graph never covers.
+		 *
+		 * @param string[] $excluded Post type slugs.
+		 */
+		$excluded = function_exists( 'apply_filters' ) ? (array) apply_filters( 'mcpwp_graph_excluded_post_types', self::EXCLUDED_POST_TYPES ) : self::EXCLUDED_POST_TYPES;
+		if ( in_array( $post_type, $excluded, true ) ) {
 			return false;
 		}
 		$obj = get_post_type_object( $post_type );

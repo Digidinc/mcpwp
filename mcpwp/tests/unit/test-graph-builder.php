@@ -1136,4 +1136,30 @@ final class GraphBuilderTest extends TestCase
 
         $this->assertSame(array(630), Mcpwp_Graph_Builder::extract_post_link_targets($source));
     }
+
+    /**
+     * Builder/theme internals that some plugins register as publicly
+     * queryable (Elementor's template library held the "Default Kit",
+     * a false orphan in the 3.14.3 smoke test) are never graph nodes.
+     */
+    public function test_builder_internal_post_types_are_not_covered(): void
+    {
+        foreach (array('elementor_library', 'elementor_snippet', 'wp_block', 'wp_template', 'wp_navigation') as $type) {
+            $this->assertFalse(Mcpwp_Graph_Builder::is_covered_post_type($type), $type . ' must not be covered');
+        }
+    }
+
+    public function test_excluded_post_types_are_filterable(): void
+    {
+        $cb = static function ($excluded) {
+            $excluded[] = 'page';
+            return $excluded;
+        };
+        add_filter('mcpwp_graph_excluded_post_types', $cb);
+        try {
+            $this->assertFalse(Mcpwp_Graph_Builder::is_covered_post_type('page'));
+        } finally {
+            remove_filter('mcpwp_graph_excluded_post_types', $cb);
+        }
+    }
 }
