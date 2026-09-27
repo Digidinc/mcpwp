@@ -86,8 +86,10 @@ final class Mcpwp_Operation_Weights {
 	 * pattern core matched ("/webhooks/(?p<id>\d+)/test"). Not listed, because
 	 * they spend no credential and cannot be pointed elsewhere: /fetch (resolves
 	 * a URL to a local post), and the same-host loopbacks to this site's own
-	 * permalinks (/rendered-html, /rendered-copy, /seo/readiness,
-	 * /seo/structured-data, /elementor/{id}/preview, /custom-css).
+	 * permalinks (/rendered-copy, /seo/readiness, /seo/structured-data,
+	 * /elementor/{id}/preview, /custom-css). /rendered-html is priced instead
+	 * by requested size — SPEND_SIZE_ROUTES below — since it holds its whole
+	 * window in memory even though it spends no credential (#804 W5).
 	 *
 	 * @var array<string,string>
 	 */
@@ -135,6 +137,15 @@ final class Mcpwp_Operation_Weights {
 		'/media/bulk'             => array( 'urls', 'items' ),
 		// One Indexing API request per URL (up to 200).
 		'/google-indexing/submit' => array( 'urls' ),
+		// #804 adversarial review (BLOCK-1): a widths sweep is one render — and
+		// one media attachment when save_to_media is on — per width, not one.
+		// Before this, /screenshot's flat 25-unit egress price (SPEND_EGRESS_
+		// PATTERNS below) let a single call with 6 widths do 6x the outbound
+		// renders and attachments of an ordinary screenshot for the same
+		// charge. Listing it here (checked before SPEND_EGRESS_PATTERNS)
+		// prices it per width instead; a call with no widths still resolves to
+		// max(1, 0) = 1 item, unchanged from before.
+		'/screenshot'             => array( 'widths' ),
 	);
 
 	/**
@@ -146,6 +157,25 @@ final class Mcpwp_Operation_Weights {
 	 */
 	const SPEND_ID_LIST_ROUTES = array(
 		'/elementor/bulk' => 'ids',
+	);
+
+	/**
+	 * Routes priced by how much data one call asks for rather than by a list
+	 * of items (#804 adversarial review, W5): 1 spend unit per `unit_bytes`
+	 * of the named param's requested value, minimum 1.
+	 *
+	 * /rendered-html holds its whole requested window in memory for one
+	 * response; before this it carried no list argument and so priced as an
+	 * ordinary 1-unit call regardless of max_bytes, letting a batch of
+	 * near-ceiling reads cost the same as a batch of tiny ones.
+	 *
+	 * @var array<string,array{param:string,unit_bytes:int}>
+	 */
+	const SPEND_SIZE_ROUTES = array(
+		'/rendered-html' => array(
+			'param'      => 'max_bytes',
+			'unit_bytes' => 65536,
+		),
 	);
 
 	/**
@@ -178,6 +208,10 @@ final class Mcpwp_Operation_Weights {
 		array( 'rows' ),
 		array( 'widgets' ),
 		array( 'sections' ),
+		// #804: a screenshot widths sweep fans out into one render per width —
+		// the weighted rate limiter must see that too, not just the spend
+		// budget (SPEND_URL_ITEM_ROUTES above).
+		array( 'widths' ),
 	);
 
 	/**
@@ -337,6 +371,14 @@ final class Mcpwp_Operation_Weights {
 				}
 			}
 			return max( 1, $items ) * self::SPEND_EGRESS_WEIGHT;
+		}
+
+		// Routes priced by requested size rather than by a list (#804 W5).
+		if ( array_key_exists( $path, self::SPEND_SIZE_ROUTES ) ) {
+			$spec      = self::SPEND_SIZE_ROUTES[ $path ];
+			$requested = isset( $params[ $spec['param'] ] ) ? absint( $params[ $spec['param'] ] ) : 0;
+			$units     = $requested > 0 ? (int) ceil( $requested / $spec['unit_bytes'] ) : 1;
+			return max( 1, $units );
 		}
 
 		// A paid route given a list costs at least the list, like any other

@@ -924,7 +924,7 @@ trait Mcpwp_Free_Tools_Site_Trait {
 
 		$tools[] = $this->define_tool(
 			'wp_get_rendered_html',
-			'Fetch the rendered HTML of a page as the browser sees it — the ground truth for verifying CSS, fonts, meta tags, and actual content rendering, including wp_head/wp_footer output (theme footer, Custom Code snippets). The default response window (51200 bytes) is small on purpose to stay token-reasonable, but it never silently cuts: the response always reports total_bytes and, when the window is not the whole document, a next_offset/note explaining how to page for the rest — including paging to the tail to see the footer. Pass max_bytes up to 1048576 to fetch more per call, or offset to page through a document larger than one window. Supports CSS selector extraction (tag, .class, #id) applied to the full document before windowing — e.g. selector="footer" or selector="head" is unaffected by max_bytes/offset. Only same-host URLs allowed (SSRF-safe).',
+			'Fetch the rendered HTML of a page as the browser sees it — the ground truth for verifying CSS, fonts, meta tags, and actual content rendering, including wp_head/wp_footer output (theme footer, Custom Code snippets). The default response window (51200 bytes) is small on purpose to stay token-reasonable, but it never silently cuts: the response always reports total_bytes and, when the window is not the whole document, a next_offset/note explaining how to page for the rest — including paging to the tail to see the footer. Pass max_bytes up to 524288 (512KB) to fetch more per call, or offset to page through a document larger than one window; both edges snap to whole UTF-8 characters, so multi-byte content (e.g. Farsi, emoji) is never split across a page. Supports CSS selector extraction (tag, .class, #id) applied to the full document before windowing — e.g. selector="footer" or selector="head" is unaffected by max_bytes/offset. Only same-host URLs allowed (SSRF-safe). Negative offset/max_bytes are refused.',
 			array(
 				'id'        => array(
 					'type'        => 'number',
@@ -940,12 +940,12 @@ trait Mcpwp_Free_Tools_Site_Trait {
 				),
 				'max_bytes' => array(
 					'type'        => 'number',
-					'description' => 'Maximum response size in bytes (default 51200, max 1048576/1MB)',
+					'description' => 'Maximum response size in bytes (default 51200, max 524288/512KB). Negative is refused with an error.',
 					'default'     => 51200,
 				),
 				'offset'    => array(
 					'type'        => 'number',
-					'description' => 'Byte offset into the full document to start reading from (default 0). The response reports total_bytes and next_offset so you can page through a document larger than one window — page forward to reach the tail (e.g. the theme footer).',
+					'description' => 'Byte offset into the full document to start reading from (default 0). Snapped to the nearest whole-character boundary for multi-byte UTF-8 content — the response reports the actual offset used. The response also reports total_bytes and next_offset so you can page through a document larger than one window — page forward to reach the tail (e.g. the theme footer). Negative is refused with an error.',
 					'default'     => 0,
 				),
 			)

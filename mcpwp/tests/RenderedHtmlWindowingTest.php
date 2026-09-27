@@ -136,7 +136,7 @@ final class RenderedHtmlWindowingTest extends TestCase {
 	// ── A document that fits in the (raised) ceiling comes back whole ────
 
 	public function test_document_under_ceiling_is_not_truncated_when_max_bytes_covers_it(): void {
-		$html = $this->big_document( 100000 ); // ~100 KB, well under the 1MB ceiling.
+		$html = $this->big_document( 100000 ); // ~100 KB, well under the 512KB ceiling.
 		$this->mock_remote_html( $html );
 
 		[ $controller, $request ] = $this->authed_request(
@@ -153,7 +153,7 @@ final class RenderedHtmlWindowingTest extends TestCase {
 	// ── max_bytes is still capped at the documented ceiling ───────────────
 
 	public function test_max_bytes_is_capped_at_ceiling(): void {
-		$html = $this->big_document( 2000000 ); // ~2 MB, over the 1MB ceiling.
+		$html = $this->big_document( 2000000 ); // ~2 MB, well over the 512KB ceiling.
 		$this->mock_remote_html( $html );
 
 		[ $controller, $request ] = $this->authed_request(
@@ -195,5 +195,94 @@ final class RenderedHtmlWindowingTest extends TestCase {
 		$this->assertTrue( $data['selector_found'] );
 		$this->assertStringContainsString( 'Copyright 2026', $data['html'] );
 		$this->assertFalse( $data['truncated'], 'The extracted footer tag is small; it should fit the default window whole.' );
+	}
+
+	// ── #804 NIT-1: a negative offset/max_bytes is refused, not absint'd ──
+
+	public function test_negative_offset_is_refused_with_400(): void {
+		$html = $this->big_document( 1000 );
+		$this->mock_remote_html( $html );
+
+		[ $controller, $request ] = $this->authed_request(
+			array( 'url' => 'https://example.com/big', 'offset' => -5000 )
+		);
+		$resp = $controller->get_rendered_html( $request );
+
+		$this->assertInstanceOf( WP_Error::class, $resp, 'A negative offset must be refused, not silently absint\'d into a positive one.' );
+		$this->assertSame( 400, $resp->get_error_data()['status'] );
+	}
+
+	public function test_negative_max_bytes_is_refused_with_400(): void {
+		$html = $this->big_document( 1000 );
+		$this->mock_remote_html( $html );
+
+		[ $controller, $request ] = $this->authed_request(
+			array( 'url' => 'https://example.com/big', 'max_bytes' => -1 )
+		);
+		$resp = $controller->get_rendered_html( $request );
+
+		$this->assertInstanceOf( WP_Error::class, $resp );
+		$this->assertSame( 400, $resp->get_error_data()['status'] );
+	}
+
+	public function test_zero_offset_and_max_bytes_are_not_refused(): void {
+		// Zero is a legitimate, non-negative value — only strictly negative
+		// values are refused.
+		$html = $this->big_document( 1000 );
+		$this->mock_remote_html( $html );
+
+		[ $controller, $request ] = $this->authed_request(
+			array( 'url' => 'https://example.com/big', 'offset' => 0 )
+		);
+		$resp = $controller->get_rendered_html( $request );
+
+		$this->assertInstanceOf( WP_REST_Response::class, $resp );
+	}
+
+	// ── #804 W4: byte windows must not split a UTF-8 character ────────────
+
+	public function test_utf8_multibyte_content_never_split_across_pages(): void {
+		// Farsi text plus emoji, repeated densely enough that a fixed-size
+		// byte window is virtually guaranteed to land mid-character
+		// somewhere across the whole paging run — exactly the case this
+		// exists for. mb_strlen/strlen differ hugely here (2-4 bytes per
+		// character), unlike the ASCII filler the other tests use.
+		$farsi_emoji_block = 'سلام دنیا 😀🌍✨ این یک متن آزمایشی است 🎉 ';
+		$body              = str_repeat( $farsi_emoji_block, 4000 );
+		$html              = '<html><head><title>UTF8</title></head><body>' . $body . self::FOOTER_MARKER;
+
+		$this->assertGreaterThan(
+			Mcpwp_REST_Site_Content::RENDERED_HTML_DEFAULT_MAX_BYTES * 2,
+			strlen( $html ),
+			'Sanity check: the document must span several default-sized pages for this test to mean anything.'
+		);
+
+		$this->mock_remote_html( $html );
+
+		$reconstructed = '';
+		$offset        = 0;
+		$pages         = 0;
+		$max_pages     = 50; // Guards the test itself against a stuck-offset bug hanging it.
+
+		do {
+			[ $controller, $request ] = $this->authed_request(
+				array( 'url' => 'https://example.com/multibyte', 'offset' => $offset )
+			);
+			$data = $controller->get_rendered_html( $request )->get_data();
+
+			$this->assertTrue(
+				mb_check_encoding( $data['html'], 'UTF-8' ),
+				"Page at offset {$offset} is not valid UTF-8 — a character was split across the window edge."
+			);
+
+			$reconstructed .= $data['html'];
+			$offset         = $data['next_offset'];
+			++$pages;
+		} while ( null !== $offset && $pages < $max_pages );
+
+		$this->assertLessThan( $max_pages, $pages, 'Paging did not terminate within the guard — likely a stuck offset.' );
+		$this->assertGreaterThan( 1, $pages, 'Sanity check: this should have taken more than one page.' );
+		$this->assertSame( strlen( $html ), strlen( $reconstructed ) );
+		$this->assertSame( $html, $reconstructed, 'Concatenated pages must equal the original document exactly, byte for byte — nothing dropped, nothing duplicated.' );
 	}
 }

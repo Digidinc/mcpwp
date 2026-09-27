@@ -78,12 +78,12 @@ class Mcpwp_REST_Screenshot extends Mcpwp_REST_API {
 							'required'    => false,
 						),
 						'full_page'     => array(
-							'description' => __( 'Capture the full scrollable page height instead of just the viewport. Honored by the Cloudflare Browser Rendering worker when configured; the mshots fallback has no full-page mode and the response says so instead of silently ignoring it.', 'mcpwp' ),
+							'description' => __( 'Capture the full scrollable page height instead of just the viewport. Honored by the Cloudflare Browser Rendering worker when configured; the mshots fallback has no full-page mode and the response says so instead of silently ignoring it. Cannot be combined with inline+widths together (memory).', 'mcpwp' ),
 							'type'        => 'boolean',
 							'default'     => false,
 						),
 						'widths'        => array(
-							'description' => __( 'Capture at several viewport widths in one call, e.g. [390,767,1024,1440] for a responsive sweep. height applies to every width. Max 6 widths. When set, the response carries "screenshots" (one result per width) instead of a single result, and webhook_url is not supported together with widths.', 'mcpwp' ),
+							'description' => __( 'Capture at several viewport widths (320-1920, clamped) in one call, e.g. [390,767,1024,1440] for a responsive sweep. height applies to every width. Max 6 widths. Returns "screenshots" (one result per width) plus succeeded/failed counts instead of a single result; if every width fails the call itself fails. webhook_url and inline+full_page are not supported together with widths.', 'mcpwp' ),
 							'type'        => 'array',
 							'items'       => array( 'type' => 'integer' ),
 						),
@@ -135,9 +135,26 @@ class Mcpwp_REST_Screenshot extends Mcpwp_REST_API {
 				);
 			}
 
-			return $this->success_response(
-				$this->capture_multi_width( $url, $widths, $request->get_param( 'height' ), $save_to_media, $request->get_param( 'title' ), $full_page, $inline )
-			);
+			// #804 W5: inline + widths + full_page is the worst-case memory
+			// shape — several full-scroll captures, each returned as raw
+			// base64 in the same response, none of them offloaded to the
+			// media library. Refused rather than silently accepted and
+			// discovered as a memory problem later.
+			if ( $inline && $full_page ) {
+				return $this->error_response(
+					'incompatible_params',
+					__( 'inline cannot be combined with both widths and full_page — several full-page captures returned as raw base64 in one response can exhaust memory. Drop inline (screenshots then save to the media library and return URLs), request a single width, or turn off full_page.', 'mcpwp' ),
+					400
+				);
+			}
+
+			$result = $this->capture_multi_width( $url, $widths, $request->get_param( 'height' ), $save_to_media, $request->get_param( 'title' ), $full_page, $inline );
+
+			if ( is_wp_error( $result ) ) {
+				return $result;
+			}
+
+			return $this->success_response( $result );
 		}
 
 		$args = array(
@@ -214,10 +231,12 @@ class Mcpwp_REST_Screenshot extends Mcpwp_REST_API {
 	/**
 	 * Capture the same URL at several viewport widths in one call (#804).
 	 *
-	 * Each width is captured independently through Mcpwp_Screenshot::capture()
-	 * — the same code path a single-width call uses, including the mshots
-	 * honesty check — so a bad width never blocks the others; its failure is
-	 * reported per-entry instead of failing the whole sweep.
+	 * Delegates to Mcpwp_Screenshot::capture_many(), which probes mshots
+	 * reachability at most once for the whole sweep rather than once per
+	 * width (W2). A bad width never blocks the others — its failure is
+	 * reported per-entry — but a sweep where EVERY width failed is refused
+	 * as a whole WP_Error (W3), so an MCP caller gets isError instead of a
+	 * 200 whose "success" envelope hides an all-failed screenshots array.
 	 *
 	 * @param string      $url           URL to screenshot.
 	 * @param array       $widths        Requested widths.
@@ -226,29 +245,47 @@ class Mcpwp_REST_Screenshot extends Mcpwp_REST_API {
 	 * @param string|null $title         Title for saved media.
 	 * @param bool        $full_page     Whether to request full-page capture.
 	 * @param bool        $inline        Whether to keep raw base64 in each result.
-	 * @return array{url:string,widths:array<int>,screenshots:array}
+	 * @return array{url:string,widths:array<int>,screenshots:array,succeeded:int,failed:int}|WP_Error
 	 */
 	private function capture_multi_width( $url, array $widths, $height, $save_to_media, $title, $full_page, $inline ) {
+		// #804 NIT-3: clamp each width into the same 320-1920 range a
+		// single-width call enforces BEFORE de-duplicating. Deduping first
+		// would silently collapse two different requested widths (e.g. 200
+		// and 300, both clamped to 320) into one entry with no sign to the
+		// caller that anything was dropped.
+		$widths = array_map(
+			static function ( $w ) {
+				return max( 320, min( 1920, absint( $w ) ) );
+			},
+			$widths
+		);
 		// Cap the sweep — a responsive check needs a handful of breakpoints,
 		// not an open-ended list that turns one call into dozens of outbound
 		// renders.
-		$widths = array_slice( array_values( array_unique( array_map( 'absint', $widths ) ) ), 0, 6 );
+		$widths = array_slice( array_values( array_unique( $widths ) ), 0, 6 );
+
+		$captures = $this->screenshot->capture_many(
+			$url,
+			$widths,
+			array(
+				'height'        => $height,
+				'save_to_media' => $save_to_media,
+				'title'         => $title,
+				'full_page'     => $full_page,
+			)
+		);
 
 		$screenshots = array();
+		$succeeded   = 0;
+		$failed      = 0;
 
 		foreach ( $widths as $width ) {
-			$one = $this->screenshot->capture(
-				$url,
-				array(
-					'width'         => $width,
-					'height'        => $height,
-					'save_to_media' => $save_to_media,
-					'title'         => $title,
-					'full_page'     => $full_page,
-				)
-			);
+			$one = isset( $captures[ $width ] )
+				? $captures[ $width ]
+				: new WP_Error( 'capture_missing', __( 'No result was produced for this width.', 'mcpwp' ) );
 
 			if ( is_wp_error( $one ) ) {
+				++$failed;
 				$screenshots[] = array(
 					'width'   => $width,
 					'success' => false,
@@ -258,19 +295,43 @@ class Mcpwp_REST_Screenshot extends Mcpwp_REST_API {
 				continue;
 			}
 
+			++$succeeded;
+
 			if ( ! $inline && ! empty( $one['screenshot'] ) && ! empty( $one['media'] ) ) {
 				unset( $one['screenshot'] );
 				$one['note'] = __( 'Screenshot saved to the media library; base64 omitted. Pass inline=true for raw image data.', 'mcpwp' );
 			}
 
-			$one['width']  = $width;
-			$screenshots[] = $one;
+			$one['width']   = $width;
+			$one['success'] = true;
+			$screenshots[]  = $one;
+		}
+
+		// #804 W3: a sweep where nothing succeeded did not do what it was
+		// asked, and an MCP client needs isError to react to that — not a
+		// 200 that a caller has to inspect screenshots[] to discover failed.
+		if ( 0 === $succeeded && $failed > 0 ) {
+			return new WP_Error(
+				'screenshot_sweep_failed',
+				sprintf(
+					/* translators: %d: number of widths requested */
+					__( 'All %d widths in this sweep failed. See screenshots[].error for each.', 'mcpwp' ),
+					$failed
+				),
+				array(
+					'status'      => 502,
+					'widths'      => $widths,
+					'screenshots' => $screenshots,
+				)
+			);
 		}
 
 		return array(
 			'url'         => $url,
 			'widths'      => $widths,
 			'screenshots' => $screenshots,
+			'succeeded'   => $succeeded,
+			'failed'      => $failed,
 		);
 	}
 }

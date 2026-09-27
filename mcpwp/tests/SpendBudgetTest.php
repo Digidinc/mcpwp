@@ -227,6 +227,64 @@ final class SpendBudgetTest extends TestCase {
 		$this->assertSame( array(), $fits['spend_budget']['refused'] );
 	}
 
+	// ---------------------------------------------------------------
+	// #804 adversarial review, BLOCK-1: a screenshot widths sweep does one
+	// render (and, with save_to_media, one attachment) per width — it must
+	// be priced per width, not at the flat 25-unit price of one screenshot.
+	// ---------------------------------------------------------------
+
+	private function screenshot( array $widths = array() ): array {
+		$body = array( 'url' => 'https://example.com/page' );
+		if ( ! empty( $widths ) ) {
+			$body['widths'] = $widths;
+		}
+		return $this->op( 'POST', '/screenshot', $body );
+	}
+
+	public function test_six_widths_costs_six_times_one_screenshot(): void {
+		$one = $this->spent( array( $this->screenshot() ) );
+		$six = $this->spent( array( $this->screenshot( array( 390, 500, 600, 700, 800, 900 ) ) ) );
+
+		$this->assertSame( 25, $one, 'One screenshot, no widths, is still priced as one ordinary egress call.' );
+		$this->assertSame(
+			150,
+			$six,
+			'6 widths must cost 6x one screenshot (25 each) — not the flat 25 a single-width call costs, which would let a widths sweep do 6x the outbound renders/attachments for the same charge.'
+		);
+	}
+
+	public function test_widths_also_scales_the_weighted_rate_limit_slot_count(): void {
+		// Same fan-out, the other ceiling (#802): the weighted rate limiter
+		// must see the same per-width scaling the spend budget does, via
+		// LIST_GROUPS — not just SPEND_URL_ITEM_ROUTES.
+		$this->assertSame( 0, Mcpwp_Operation_Weights::list_count( array( 'url' => 'https://example.com' ) ), 'No list-shaped argument at all — list_count itself does not clamp to 1.' );
+		$this->assertSame(
+			6,
+			Mcpwp_Operation_Weights::list_count( array( 'url' => 'https://example.com', 'widths' => array( 390, 500, 600, 700, 800, 900 ) ) )
+		);
+	}
+
+	public function test_a_wp_batch_of_forty_screenshots_at_six_widths_each_is_refused_whole(): void {
+		// 40 operations x 6 widths x 25 units/width = 6000 — far over the
+		// 1000-unit budget, and it must be refused whole, before anything
+		// dispatches, exactly like the plain-screenshot case above.
+		$refusal = $this->batch_refusal( $this->times( 40, $this->screenshot( array( 390, 500, 600, 700, 800, 900 ) ) ) );
+		$data    = $refusal->get_error_data();
+
+		$this->assertSame( 413, $data['status'] );
+		$this->assertSame( 6000, $data['weight'], 'The price of the whole call: 40 x 6 widths x 25.' );
+		$this->assertSame( 1000, $data['remaining'] );
+		$this->assertSame( 1000, $data['limit'] );
+		$this->assertSame( array(), $GLOBALS['mcpwp_test_dispatched_routes'], 'Nothing ran, so nothing was paid for and nothing needs a retry.' );
+
+		// A batch of the same shape that fits the budget runs whole: 6 ops x
+		// 6 widths x 25 = 900.
+		$fits = $this->batch( $this->times( 6, $this->screenshot( array( 390, 500, 600, 700, 800, 900 ) ) ) );
+		$this->assertSame( 6, $fits['succeeded'] );
+		$this->assertSame( 900, $fits['spend_budget']['spent'] );
+		$this->assertSame( array(), $fits['spend_budget']['refused'] );
+	}
+
 	public function test_a_refusal_says_what_the_operation_needed_and_what_was_left(): void {
 		$this->budget( 30 );
 		$this->route_alias_to_paid_handler();
