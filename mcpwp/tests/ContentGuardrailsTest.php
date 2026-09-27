@@ -221,12 +221,14 @@ final class ContentGuardrailsTest extends TestCase {
 		$this->assertSame( 0, Mcpwp_Content_Guardrails::get_daily_count() );
 	}
 
-	public function test_parallel_publishes_at_cap_atomic_counter_never_loses_an_increment(): void {
-		// True concurrent-request atomicity is a database-engine guarantee
-		// (see the class docblock + PR description for the rig proof with
-		// real parallel HTTP requests against real MySQL); this pins the
-		// counting PRIMITIVE itself is correct under many sequential calls,
-		// which the CAS-retry loop must be regardless.
+	public function test_sequential_publishes_under_cap_reserve_exactly_once_each(): void {
+		// True concurrent-request atomicity (many requests hitting the
+		// reservation CAS loop at the exact same instant) is a database-
+		// engine guarantee — see the class docblock + PR description for
+		// the rig proof with real parallel HTTP requests against real
+		// MySQL. This pins the reservation PRIMITIVE's arithmetic itself:
+		// 30 sequential reservations, each one individually below the cap,
+		// must land at exactly 30 — not more, not fewer.
 		Mcpwp_Content_Guardrails::enter_context();
 		Mcpwp_Content_Guardrails::update_settings( array( 'daily_publish_cap' => 1000, 'min_word_count' => 0 ) );
 
@@ -235,6 +237,63 @@ final class ContentGuardrailsTest extends TestCase {
 		}
 
 		$this->assertSame( 30, Mcpwp_Content_Guardrails::get_daily_count() );
+	}
+
+	public function test_reservation_gate_lets_through_exactly_the_remaining_slots(): void {
+		// #957 adversarial review round 2 WARN-3: at cap-1, exactly ONE
+		// more publish may land — this is the sequential form of the rig's
+		// genuinely-parallel proof (50 real concurrent HTTP requests at
+		// cap-1 landing exactly 1 publish; see the PR description), pinning
+		// that the RESERVATION decision itself (not just the arithmetic) is
+		// a hard cutoff, not a probabilistic one.
+		Mcpwp_Content_Guardrails::enter_context();
+		Mcpwp_Content_Guardrails::update_settings( array( 'daily_publish_cap' => 5, 'min_word_count' => 0, 'duplicate_threshold' => 1.1 ) );
+
+		for ( $i = 0; $i < 4; $i++ ) {
+			wp_insert_post( array( 'post_type' => 'post', 'post_title' => "Filler $i", 'post_status' => 'publish', 'post_content' => $this->words( 10, "f{$i}w" ) ) );
+		}
+		$this->assertSame( 4, Mcpwp_Content_Guardrails::get_daily_count(), 'at cap-1 before the contested batch' );
+
+		$published = 0;
+		for ( $i = 0; $i < 10; $i++ ) {
+			$id = wp_insert_post( array( 'post_type' => 'post', 'post_title' => "Contested $i", 'post_status' => 'publish', 'post_content' => $this->words( 10, "c{$i}w" ) ) );
+			if ( 'publish' === $GLOBALS['_mcpwp_test_posts'][ $id ]->post_status ) {
+				$published++;
+			}
+		}
+
+		$this->assertSame( 1, $published, 'exactly the one remaining slot, whichever of the 10 callers got it' );
+		$this->assertSame( 5, Mcpwp_Content_Guardrails::get_daily_count() );
+	}
+
+	public function test_release_stale_reservation_gives_back_a_slot_from_a_failed_insert(): void {
+		// #957 adversarial review round 2 WARN-3: "release the reservation
+		// if the insert then fails." wp_insert_post() failing AFTER the
+		// data filter reserved a slot (e.g. a page-template validation
+		// error) must not permanently burn that slot.
+		Mcpwp_Content_Guardrails::enter_context();
+		Mcpwp_Content_Guardrails::update_settings( array( 'daily_publish_cap' => 1, 'min_word_count' => 0 ) );
+
+		$GLOBALS['mcpwp_test_page_templates'] = array(); // 'invalid-template' below is not in the (now empty) allow-list.
+		$failed = wp_insert_post(
+			array(
+				'post_type'     => 'page',
+				'post_title'    => 'Will fail template validation',
+				'post_status'   => 'publish',
+				'post_content'  => $this->words( 10 ),
+				'page_template' => 'invalid-template',
+			),
+			true
+		);
+		$this->assertInstanceOf( 'WP_Error', $failed );
+
+		// The reservation the filter made for the failed call above must
+		// have been released — a fresh publish attempt still gets the slot.
+		$id = wp_insert_post( array( 'post_type' => 'page', 'post_title' => 'Should still get the slot', 'post_status' => 'publish', 'post_content' => $this->words( 10, 'ok' ) ) );
+		$this->assertSame( 'publish', $GLOBALS['_mcpwp_test_posts'][ $id ]->post_status );
+		$this->assertSame( 1, Mcpwp_Content_Guardrails::get_daily_count() );
+
+		unset( $GLOBALS['mcpwp_test_page_templates'] );
 	}
 
 	public function test_daily_count_resets_on_a_new_utc_day(): void {
@@ -592,6 +651,295 @@ final class ContentGuardrailsTest extends TestCase {
 
 		$this->assertIsInt( $result );
 		$this->assertSame( 'publish', $GLOBALS['_mcpwp_test_posts'][ $result ]->post_status );
+	}
+
+	// -------------------------------------------------------------------------
+	// WARN-1: content edits to an ALREADY-published post
+
+	public function test_editing_a_published_post_into_a_city_swap_copy_is_refused_not_downgraded(): void {
+		Mcpwp_Content_Guardrails::enter_context();
+		Mcpwp_Content_Guardrails::update_settings( array( 'min_word_count' => 0, 'duplicate_threshold' => 0.99, 'daily_publish_cap' => 1000 ) );
+
+		$toronto = 'Looking for a reliable plumber in Toronto? Our Toronto team handles emergencies across Toronto every day of the week.';
+		$this->seed_published( 1501, 'page', 'Toronto Plumbing Services', $toronto );
+
+		// A page published with genuinely unique text...
+		$this->seed_published( 1502, 'page', 'Unique Original Page', $this->words( 40, 'orig_' ) );
+
+		// ...then edited into a city-swap copy of 1501.
+		$ottawa = 'Looking for a reliable plumber in Ottawa? Our Ottawa team handles emergencies across Ottawa every day of the week.';
+		$result = wp_update_post( array( 'ID' => 1502, 'post_title' => 'Ottawa Plumbing Services', 'post_content' => $ottawa ), true );
+
+		$this->assertSame( 1502, $result, 'the update call itself still succeeds — only the content reverts' );
+		$this->assertSame( 'publish', $GLOBALS['_mcpwp_test_posts'][1502]->post_status, 'a live page is never silently unpublished by this guard' );
+		$this->assertSame( $this->words( 40, 'orig_' ), $GLOBALS['_mcpwp_test_posts'][1502]->post_content, 'the content change was refused — the live body is unchanged' );
+		$this->assertSame( 'Unique Original Page', $GLOBALS['_mcpwp_test_posts'][1502]->post_title, 'the title change was refused too' );
+
+		$response = array( 'id' => 1502 );
+		Mcpwp_Content_Guardrails::attach_notices_to_response( $response );
+		$this->assertTrue( $response['guardrails']['content_edit_refused'] );
+		$this->assertTrue( $response['guardrails']['duplicate']['city_swap'] );
+		$this->assertNotEmpty( $response['warnings'] );
+	}
+
+	public function test_editing_a_published_post_to_genuinely_different_content_is_allowed(): void {
+		Mcpwp_Content_Guardrails::enter_context();
+		Mcpwp_Content_Guardrails::update_settings( array( 'min_word_count' => 0, 'duplicate_threshold' => 0.6, 'daily_publish_cap' => 1000 ) );
+
+		$this->seed_published( 1511, 'page', 'Original Topic', $this->words( 40, 'topicA_' ) );
+
+		$result = wp_update_post( array( 'ID' => 1511, 'post_content' => $this->words( 40, 'topicB_' ) ), true );
+
+		$this->assertSame( 1511, $result );
+		$this->assertSame( $this->words( 40, 'topicB_' ), $GLOBALS['_mcpwp_test_posts'][1511]->post_content, 'a genuine content edit is never refused' );
+	}
+
+	public function test_editing_a_published_post_without_touching_content_never_runs_the_duplicate_check(): void {
+		// "A change that doesn't touch the content stays cheap" — verified
+		// indirectly: a status/meta-only update to a post whose content
+		// WOULD duplicate-match something else must still go through
+		// untouched, because the guard bails before ever comparing.
+		Mcpwp_Content_Guardrails::enter_context();
+		Mcpwp_Content_Guardrails::update_settings( array( 'min_word_count' => 0, 'duplicate_threshold' => 0.01, 'daily_publish_cap' => 1000 ) );
+
+		$shared = $this->words( 40, 'dup_' );
+		$this->seed_published( 1521, 'page', 'Page A', $shared );
+		$this->seed_published( 1522, 'page', 'Page B', $shared ); // Already an exact duplicate of 1521 — pre-existing, not this edit's concern.
+
+		// An update that never mentions post_content at all (e.g. only
+		// changing the menu order) must not be refused just because the
+		// EXISTING content happens to duplicate something else.
+		$result = wp_update_post( array( 'ID' => 1522, 'menu_order' => 5 ), true );
+
+		$this->assertSame( 1522, $result );
+		$this->assertSame( 5, $GLOBALS['_mcpwp_test_posts'][1522]->menu_order );
+	}
+
+	public function test_bulk_update_posts_editing_into_a_duplicate_is_refused_across_the_site(): void {
+		// "wp_bulk_update_posts does the same across the site" — bulk
+		// update loops over Mcpwp_Posts::update_post(), the exact same
+		// wp_update_post() call this guard already covers; no separate
+		// wiring needed, proven here through the actual bulk REST route.
+		Mcpwp_Content_Guardrails::enter_context();
+		Mcpwp_Content_Guardrails::update_settings( array( 'min_word_count' => 0, 'duplicate_threshold' => 0.6, 'daily_publish_cap' => 1000 ) );
+
+		$this->seed_published( 1531, 'post', 'Source Post', $this->words( 40, 'src_' ) );
+		$this->seed_published( 1532, 'post', 'Target Post', $this->words( 40, 'tgt_' ) );
+
+		$controller = new Mcpwp_REST_Posts();
+		$request    = new WP_REST_Request( 'PUT', '/mcpwp/v1/posts/bulk' );
+		$request->set_param(
+			'updates',
+			array(
+				array( 'id' => 1532, 'content' => $this->words( 40, 'src_' ) ), // Duplicates 1531.
+			)
+		);
+
+		$controller->bulk_update_posts( $request );
+
+		$this->assertSame( $this->words( 40, 'tgt_' ), $GLOBALS['_mcpwp_test_posts'][1532]->post_content, 'the bulk edit into a duplicate was refused, live content unchanged' );
+	}
+
+	// -------------------------------------------------------------------------
+	// WARN-2: the exclude-id list is cleared on EVERY pass, not just publishes
+
+	public function test_exclude_ids_set_for_a_draft_translation_do_not_leak_into_a_later_unrelated_publish(): void {
+		// wp_batch: create_translation (draft) of post A, then create_post
+		// (publish) of an UNRELATED copy of post A's body. The exclude list
+		// set for the draft translation must be cleared even though the
+		// draft write never reaches the publish/duplicate-check branch at
+		// all — otherwise the second, unrelated call would wrongly skip
+		// comparing against post A (#957 adversarial review round 2 WARN-2).
+		Mcpwp_Content_Guardrails::enter_context();
+		Mcpwp_Content_Guardrails::update_settings( array( 'min_word_count' => 0, 'duplicate_threshold' => 0.6, 'daily_publish_cap' => 1000 ) );
+
+		$body = $this->words( 40, 'shared_' );
+		$this->seed_published( 1601, 'post', 'Post A', $body );
+
+		if ( ! function_exists( 'pll_get_post_translations' ) ) {
+			function pll_get_post_translations( $post_id ) { return array(); }
+		}
+		if ( ! function_exists( 'pll_set_post_language' ) ) {
+			function pll_set_post_language( $post_id, $lang ) {}
+		}
+		if ( ! function_exists( 'pll_save_post_translations' ) ) {
+			function pll_save_post_translations( $translations ) {}
+		}
+		if ( ! function_exists( 'pll_languages_list' ) ) {
+			function pll_languages_list() { return array( 'en', 'fr' ); }
+		}
+		if ( ! function_exists( 'PLL' ) ) {
+			function PLL() {
+				return new class {
+					public $model;
+					public function __construct() {
+						$this->model = new class {
+							public function get_languages_list() {
+								return array(
+									(object) array( 'slug' => 'en', 'name' => 'English', 'flag_url' => '', 'is_default' => true, 'locale' => 'en_US' ),
+									(object) array( 'slug' => 'fr', 'name' => 'French', 'flag_url' => '', 'is_default' => false, 'locale' => 'fr_FR' ),
+								);
+							}
+						};
+					}
+				};
+			}
+		}
+
+		$multilang = new Mcpwp_Multilang();
+		$ref       = new ReflectionProperty( $multilang, 'detected_plugin' );
+		$ref->setAccessible( true );
+		$ref->setValue( $multilang, 'polylang' );
+
+		// Step 1: create a DRAFT translation of post A. This sets the
+		// exclude-ids list to [1301-ish source id], then the write is a
+		// draft, so the OLD code never reached the point that would have
+		// consumed it.
+		$translation_id = $multilang->create_post_translation( 1601, 'fr', array( 'title' => 'Translated (draft)', 'content' => $body, 'status' => 'draft' ) );
+		$this->assertIsInt( $translation_id );
+
+		// Step 2: an UNRELATED post, published, with the SAME body as post
+		// A. If the exclude list leaked, post A would be wrongly excluded
+		// from the comparison and this would NOT be flagged.
+		$copy_id = wp_insert_post( array( 'post_type' => 'post', 'post_title' => 'An Unrelated Copy', 'post_status' => 'publish', 'post_content' => $body ) );
+
+		$this->assertSame( 'draft', $GLOBALS['_mcpwp_test_posts'][ $copy_id ]->post_status, 'the leaked exclude list must not have shielded this unrelated duplicate' );
+	}
+
+	// -------------------------------------------------------------------------
+	// NIT-3: per-request state cannot leak across requests in a worker process
+
+	public function test_shutdown_resets_context_so_a_worker_process_cannot_leak_it(): void {
+		Mcpwp_Content_Guardrails::enter_context();
+		$this->assertTrue( Mcpwp_Content_Guardrails::in_context() );
+
+		// Simulates the end of this HTTP request in a long-lived worker
+		// process (FrankenPHP/Swoole) that reuses the same PHP process —
+		// and the next request beginning with in_context() still true
+		// would be exactly the leak (#957 adversarial review round 2 NIT-3).
+		do_action( 'shutdown' );
+
+		$this->assertFalse( Mcpwp_Content_Guardrails::in_context(), 'context must not survive past the end of the request that set it' );
+	}
+
+	public function test_shutdown_releases_any_reservation_still_pending_at_request_end(): void {
+		Mcpwp_Content_Guardrails::enter_context();
+		Mcpwp_Content_Guardrails::update_settings( array( 'daily_publish_cap' => 1, 'min_word_count' => 0 ) );
+
+		$GLOBALS['mcpwp_test_page_templates'] = array();
+		wp_insert_post(
+			array(
+				'post_type'     => 'page',
+				'post_title'    => 'Fails at the very end of the request',
+				'post_status'   => 'publish',
+				'post_content'  => $this->words( 10 ),
+				'page_template' => 'invalid-template',
+			),
+			true
+		);
+		$this->assertSame( 1, Mcpwp_Content_Guardrails::get_daily_count(), 'reserved, not yet confirmed or released' );
+
+		do_action( 'shutdown' );
+
+		$this->assertSame( 0, Mcpwp_Content_Guardrails::get_daily_count(), 'shutdown released the never-confirmed reservation' );
+		unset( $GLOBALS['mcpwp_test_page_templates'] );
+	}
+
+	// -------------------------------------------------------------------------
+	// NIT-4: applying an approval from wp-admin re-runs the same guard
+
+	public function test_admin_control_room_apply_re_checks_the_cap_even_without_api_context(): void {
+		// Control Room's approve/apply runs entirely inside wp-admin — no
+		// verify_api_key() call, so in_context() is false going in. Per
+		// the class docblock's claim that apply always re-checks the cap
+		// regardless of caller, apply_bulk_publish() must enter context
+		// for its own duration (#957 adversarial review round 2 NIT-4:
+		// "preferred: run the guard").
+		Mcpwp_Content_Guardrails::update_settings( array( 'daily_publish_cap' => 1, 'min_word_count' => 0, 'duplicate_threshold' => 1.1 ) );
+		$this->assertFalse( Mcpwp_Content_Guardrails::in_context(), 'a wp-admin request never called verify_api_key()' );
+
+		$this->seed_draft( 1701, 'page', 'Page A', $this->words( 30, 'a_' ) );
+		$this->seed_draft( 1702, 'page', 'Page B', $this->words( 30, 'b_' ) );
+
+		$approval = Mcpwp_Content_Guardrails::request_bulk_publish_approval( array( 1701, 1702 ), 'page', array() );
+		$this->assertIsArray( $approval );
+
+		Mcpwp_Approvals::approve_request( $approval['id'], '', array( 'actor' => 'admin' ) );
+		// Still no enter_context() call anywhere in this test — apply_bulk_publish() must do it itself.
+		Mcpwp_Approvals::apply_request( $approval['id'], array( 'admin_user' => 1, 'actor' => 'wp-user:1' ) );
+
+		$this->assertSame( 'publish', $GLOBALS['_mcpwp_test_posts'][1701]->post_status, 'first item fits under the cap of 1' );
+		$this->assertSame( 'draft', $GLOBALS['_mcpwp_test_posts'][1702]->post_status, 'second item is downgraded — the cap WAS re-checked from wp-admin' );
+
+		// And the guard did not leave context on for whatever runs next in
+		// this same wp-admin page load.
+		$this->assertFalse( Mcpwp_Content_Guardrails::in_context() );
+	}
+
+	// -------------------------------------------------------------------------
+	// NIT-5: content_hash covers title/slug/SEO meta, not just body content
+
+	public function test_content_hash_changes_when_only_the_title_changes(): void {
+		$this->seed_published( 1801, 'page', 'Original Title', $this->words( 20 ) );
+		$post = get_post( 1801 );
+		$hash_before = Mcpwp_Content_Guardrails::content_hash( $post );
+
+		$GLOBALS['_mcpwp_test_posts'][1801]->post_title = 'Renamed Title';
+		$hash_after = Mcpwp_Content_Guardrails::content_hash( get_post( 1801 ) );
+
+		$this->assertNotSame( $hash_before, $hash_after, 'a title-only edit (exactly what a city-swap rename touches) must change the hash' );
+	}
+
+	public function test_content_hash_changes_when_seo_meta_changes(): void {
+		$this->seed_published( 1802, 'page', 'A Page', $this->words( 20 ) );
+		$post = get_post( 1802 );
+		$hash_before = Mcpwp_Content_Guardrails::content_hash( $post );
+
+		update_post_meta( 1802, '_yoast_wpseo_title', 'A totally different SEO title' );
+		$hash_after = Mcpwp_Content_Guardrails::content_hash( get_post( 1802 ) );
+
+		$this->assertNotSame( $hash_before, $hash_after );
+	}
+
+	public function test_bulk_apply_skips_a_post_whose_title_changed_since_approval(): void {
+		// The hash-based skip in apply_bulk_publish() (WARN-1) must fire
+		// on a title-only change too, now that content_hash() covers it.
+		Mcpwp_Content_Guardrails::enter_context();
+		Mcpwp_Content_Guardrails::update_settings( array( 'daily_publish_cap' => 1000, 'min_word_count' => 0, 'duplicate_threshold' => 1.1 ) );
+
+		$this->seed_draft( 1811, 'page', 'Original Title', $this->words( 30 ) );
+		$approval = Mcpwp_Content_Guardrails::request_bulk_publish_approval( array( 1811 ), 'page', array() );
+
+		$GLOBALS['_mcpwp_test_posts'][1811]->post_title = 'Retitled After Approval';
+
+		Mcpwp_Approvals::approve_request( $approval['id'], '', array( 'actor' => 'key-2' ) );
+		Mcpwp_Approvals::apply_request( $approval['id'], array( 'actor' => 'key-2' ) );
+
+		$this->assertSame( 'draft', $GLOBALS['_mcpwp_test_posts'][1811]->post_status, 'title-only change since approval must still be caught' );
+	}
+
+	// -------------------------------------------------------------------------
+	// NIT-1 (strengthened): CJK bigram tokenization actually shingles
+
+	public function test_cjk_near_duplicate_with_word_level_edits_is_detected(): void {
+		// A whole-run-as-one-token tokenizer could only ever match byte-
+		// identical CJK text; this proves bigram tokenization catches a
+		// NEAR match with real edits scattered through it — the case
+		// round 1's tokenizer could not have caught even by coincidence.
+		Mcpwp_Content_Guardrails::enter_context();
+		Mcpwp_Content_Guardrails::update_settings( array( 'min_word_count' => 0, 'duplicate_threshold' => 0.6, 'daily_publish_cap' => 1000 ) );
+
+		$original = '欢迎来到我们的多伦多水管维修服务公司我们提供全天候紧急服务和专业的维修团队为您解决所有水管问题';
+		$this->seed_published( 1901, 'post', 'CJK Original', $original );
+
+		// Same passage with the city name and a few characters swapped
+		// throughout — NOT byte-identical, but still a near-duplicate.
+		$near_dup = str_replace( '多伦多', '渥太华', $original );
+		$this->assertNotSame( $original, $near_dup, 'sanity: the edited copy really is different bytes' );
+
+		$id = wp_insert_post( array( 'post_type' => 'post', 'post_title' => 'CJK Copy', 'post_status' => 'publish', 'post_content' => $near_dup ) );
+
+		$this->assertSame( 'draft', $GLOBALS['_mcpwp_test_posts'][ $id ]->post_status, 'a near-duplicate with word-level CJK edits must still be caught' );
 	}
 
 	// -------------------------------------------------------------------------

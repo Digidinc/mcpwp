@@ -21,11 +21,14 @@
  *   1. Publishing ramp — at most N new *published* posts+pages per site per
  *      UTC calendar day through MCPWP (site-level; admin keys included). Over
  *      the cap, the write still happens, just as a draft, with a short
- *      teaching message. Drafts are never capped. Counted atomically (a raw
- *      SQL increment, not read-then-write) so two requests racing the cap
- *      boundary can't both slip through — see the "Publish counting" section
- *      below for why this trades the issue's original "rolling 24h" wording
- *      for a fixed daily bucket.
+ *      teaching message. Drafts are never capped. The slot is RESERVED
+ *      atomically INSIDE on_insert_post_data(), before the row is written —
+ *      not read, decided on, and incremented later once the write is
+ *      confirmed, which is exactly the gap that let two requests racing the
+ *      cap boundary both slip through in the first round (#957 adversarial
+ *      review round 2 WARN-3) — see the "Publish counting" section below
+ *      for the primitive, and for why this trades the issue's original
+ *      "rolling 24h" wording for a fixed daily bucket.
  *   2. Bulk creation — a single bulk call that would publish more than M
  *      items goes through the existing approval pipeline instead: every item
  *      is created as a draft and one approval request covers publishing the
@@ -39,17 +42,36 @@
  *      at create time must still publish), plus a 5-word-shingle Jaccard
  *      comparison against the site's own recent posts of the same type, plus
  *      a "city-swap" heuristic for the classic local-SEO clone-and-rename
- *      pattern. Duplicate detection only ever downgrades; only enforced when
- *      the write is actually publishing.
+ *      pattern. Duplicate detection only ever downgrades a NEW publish; an
+ *      edit to an ALREADY-published post that turns its content into a
+ *      duplicate/city-swap copy is refused instead (see
+ *      guard_published_content_edit()) — downgrading a live, possibly
+ *      already-indexed page to draft would unpublish it, a far larger
+ *      blast radius than declining one edit.
  *   4. Anomaly signal — a `content.publish_spike` event when today's
  *      published count crosses both an absolute floor and 2x the trailing
  *      30-day daily average, so Control Room/webhooks see it.
  *
- * Known, accepted limits (not goals — see the PR description): the duplicate
- * check compares against at most 200 recent posts, so a spammer publishing
- * faster than that window turns over, or rewording content enough to drop
- * Jaccard similarity below threshold, evades detection. This is a guardrail
- * against casual/automated scaled publishing, not an adversarial-proof filter.
+ * Known, accepted limits (not goals — see the PR description):
+ *   - The duplicate check compares against at most 200 recent posts, so a
+ *     spammer publishing faster than that window turns over evades it.
+ *   - Rewording content enough to drop Jaccard similarity below threshold
+ *     evades detection — this is a guardrail against casual/automated
+ *     scaled publishing, not an adversarial-proof filter.
+ *   - An edit that changes _elementor_data via `meta_input` on an
+ *     ALREADY-published post cannot be reverted by
+ *     guard_published_content_edit() — WordPress core applies meta_input
+ *     from the original $postarr, not from this filter's returned $data,
+ *     so nothing this filter does can stop that specific write. Detected
+ *     and warned regardless; no existing call site in this codebase
+ *     updates an existing post's Elementor data this way (they all go
+ *     through Mcpwp_Elementor_Basic::set_elementor_data(), a separate
+ *     update_post_meta() call this class does not (yet) hook).
+ *   - try_reserve_daily_slot() fails CLOSED (treats a reservation as
+ *     denied, downgrading to draft) if 8 CAS retries are all lost to
+ *     contention — safe (never lets the cap be exceeded) but means an
+ *     extremely hot moment could downgrade one more post than strictly
+ *     necessary. Never claim "never lost" beyond that bound.
  *
  * Deliberately NOT reused: Mcpwp_Rate_Limiter (per-identifier request-rate
  * windows, a different problem) and Mcpwp_Destructive_Gate's per-requester
@@ -256,10 +278,21 @@ class Mcpwp_Content_Guardrails {
 	// Both are active only while an MCPWP-authenticated request is being
 	// served — see enter_context()/in_context(), set from
 	// trait-mcpwp-api-auth.php's verify_api_key() the moment a request is
-	// confirmed to be an MCPWP API-key/OAuth/broker principal. That is deliberately
-	// NEVER true for wp-admin (Control Room approvals go through their own
-	// hash re-check in apply_bulk_publish() below, not this filter), for
-	// WP-CLI, or for another plugin's unrelated post save.
+	// confirmed to be an MCPWP API-key/OAuth/broker principal. That is
+	// deliberately never true for wp-admin, WP-CLI, or another plugin's
+	// unrelated post save — Control Room's approve/apply IS an exception on
+	// purpose: apply_bulk_publish() below explicitly enters context for its
+	// own duration regardless of caller, because applying a bulk-publish
+	// approval is always a real publish decision, wp-admin included (#957
+	// adversarial review round 2 NIT-4).
+	//
+	// $context_active is a static, so a long-lived worker process
+	// (FrankenPHP, Swoole) that reuses this PHP process across requests
+	// could otherwise leak it from one request into the next. Reset on
+	// `rest_pre_dispatch` (start of the next REST request) and on
+	// `shutdown` (end of this one, and the only reliable place to release
+	// a publish-slot reservation an insert never confirmed — see
+	// try_reserve_daily_slot()) — see reset_per_request_state().
 
 	/**
 	 * Whether the request currently being served has been confirmed as an
@@ -304,6 +337,18 @@ class Mcpwp_Content_Guardrails {
 	private static $pending_exclude_ids = array();
 
 	/**
+	 * A publish-slot reservation made by try_reserve_daily_slot() inside
+	 * on_insert_post_data(), not yet confirmed by a matching
+	 * on_wp_insert_post() call. If the very next on_insert_post_data() pass
+	 * (or end of request) finds this still set, the write it was reserved
+	 * for never actually landed — release it (#957 adversarial review
+	 * round 2 WARN-3: "release the reservation if the insert then fails").
+	 *
+	 * @var array{now:int}|null
+	 */
+	private static $pending_reservation = null;
+
+	/**
 	 * Mark the rest of this request as MCPWP-authenticated. Idempotent.
 	 *
 	 * @return void
@@ -320,25 +365,42 @@ class Mcpwp_Content_Guardrails {
 	}
 
 	/**
-	 * Tests only — a real process serves one request and never needs to
-	 * un-enter context; PHPUnit runs many "requests" in one process.
+	 * Reset every per-request static. Registered on `rest_pre_dispatch`
+	 * (start of the NEXT REST request) and `shutdown` (end of THIS one) so
+	 * a long-lived worker process (FrankenPHP, Swoole) reusing this PHP
+	 * process across requests can never carry context, a cached token, or
+	 * an unconfirmed reservation from one request into another (#957
+	 * adversarial review round 2 NIT-3). Also the test suite's reset —
+	 * PHPUnit runs many "requests" in one process.
 	 *
 	 * @return void
 	 */
-	public static function reset_context_for_tests() {
+	public static function reset_per_request_state() {
+		self::release_stale_reservation();
 		self::$context_active      = false;
 		self::$pending_notice       = null;
 		self::$notices_by_post_id   = array();
 		self::$pending_exclude_ids  = array();
+		self::$pending_reservation  = null;
 		self::$token_cache          = array();
 	}
 
 	/**
-	 * Register the two WordPress core hooks this whole class now runs on.
-	 * Called once, unconditionally, at the bottom of this file — every
-	 * callback below no-ops instantly unless in_context() is true, so
-	 * registering it always (production load AND every test that requires
-	 * this file) costs nothing on a request/test that never enters context.
+	 * @deprecated Alias for reset_per_request_state() — kept for
+	 * call-site clarity in tests.
+	 * @return void
+	 */
+	public static function reset_context_for_tests() {
+		self::reset_per_request_state();
+	}
+
+	/**
+	 * Register the WordPress core hooks this whole class runs on, plus the
+	 * two per-request reset points. Called once, unconditionally, at the
+	 * bottom of this file — every callback below no-ops instantly unless
+	 * in_context() is true, so registering it always (production load AND
+	 * every test that requires this file) costs nothing on a request/test
+	 * that never enters context.
 	 *
 	 * @return void
 	 */
@@ -346,6 +408,17 @@ class Mcpwp_Content_Guardrails {
 		add_filter( 'wp_insert_post_data', array( __CLASS__, 'on_insert_post_data' ), 10, 4 );
 		add_action( 'wp_insert_post', array( __CLASS__, 'on_wp_insert_post' ), 10, 3 );
 		add_action( 'transition_post_status', array( __CLASS__, 'on_transition_post_status' ), 10, 3 );
+		// `shutdown` — not `rest_pre_dispatch` — deliberately: rest_pre_dispatch
+		// fires on EVERY nested rest_do_request() too (batch's per-operation
+		// sub-dispatch, MCP's tools/call sub-dispatch), which would wipe
+		// notices/reservation state accumulated by EARLIER operations in the
+		// same outer request. `shutdown` is a PHP request-lifecycle event —
+		// it fires exactly once per top-level HTTP request regardless of how
+		// many nested dispatches happened inside it — the correct boundary
+		// for "the NEXT request must not see anything from this one," and
+		// also the only reliable place to release a reservation an insert
+		// never confirmed (#957 adversarial review round 2 NIT-3).
+		add_action( 'shutdown', array( __CLASS__, 'reset_per_request_state' ), 0 );
 	}
 
 	/**
@@ -383,6 +456,20 @@ class Mcpwp_Content_Guardrails {
 	 * @return array Possibly-modified $data.
 	 */
 	public static function on_insert_post_data( $data, $postarr = array(), $unsanitized_postarr = array(), $update = null ) {
+		// Consumed UNCONDITIONALLY, on every single pass, before any early
+		// return — a translation created as a DRAFT used to leave this set
+		// for whatever the NEXT filter pass in the same request happened to
+		// be, e.g. a wp_batch: create_translation (draft) then create_post
+		// (publish) of an unrelated copy (#957 adversarial review round 2
+		// WARN-2). Given PHP's synchronous, single-threaded execution and
+		// that Mcpwp_Multilang calls the setter immediately before its own
+		// wp_insert_post()/wp_update_post() call with nothing in between,
+		// the very next pass IS always the intended target — consuming here
+		// unconditionally both fixes the leak and is the scoping the setter
+		// needs, with no post-ID keying possible (a new translation has no
+		// ID yet when the setter runs).
+		$exclude_ids_for_this_pass = self::consume_duplicate_exclude_ids();
+
 		if ( ! self::in_context() || ! self::is_enabled() || ! is_array( $data ) ) {
 			return $data;
 		}
@@ -405,15 +492,28 @@ class Mcpwp_Content_Guardrails {
 			return $data;
 		}
 
-		$new_status = isset( $data['post_status'] ) ? (string) $data['post_status'] : 'draft';
+		$new_status = isset( $data['post_status'] )
+			? (string) $data['post_status']
+			: ( $existing ? (string) $existing->post_status : 'draft' );
+
+		// Already live AND staying live: a CONTENT EDIT to an already-
+		// published post, not a new publish event — no ramp reservation.
+		// But its content can still be swapped for a duplicate/city-swap
+		// copy of another page: publish unique text once, then edit it
+		// into a clone (#957 adversarial review round 2 WARN-1).
+		if ( 'publish' === $previous_status && 'publish' === $new_status ) {
+			return self::guard_published_content_edit( $data, $postarr, $existing, $post_type, $exclude_ids_for_this_pass );
+		}
+
 		// 'future' is coerced to 'publish' by WordPress core once the post
 		// date arrives; treat scheduling as a publish attempt now, not later.
 		if ( ! in_array( $new_status, array( 'publish', 'future' ), true ) ) {
 			return $data;
 		}
 
-		// Already live: a resave/edit of an already-published post is not a
-		// NEW publish event — nothing to cap or duplicate-check.
+		// Reaching here with previous_status still 'publish' means the post
+		// is moving OFF publish while somehow also asking for publish/future
+		// (an inconsistent, not-really-a-case) — not a fresh publish, skip.
 		if ( 'publish' === $previous_status ) {
 			return $data;
 		}
@@ -453,19 +553,47 @@ class Mcpwp_Content_Guardrails {
 		$settings = self::get_settings();
 		$now      = time();
 
-		$daily_count   = self::get_daily_count( $now );
-		$ramp_exceeded = $daily_count >= $settings['daily_publish_cap'];
+		// Release any reservation a PRIOR call in this same request made
+		// but never got confirmed (its insert must have failed before
+		// wp_insert_post fired) — see try_reserve_daily_slot()'s docblock.
+		self::release_stale_reservation();
+
+		// Reserve the slot ATOMICALLY, inside this filter, before the row
+		// is written — not "read the count now, increment it later once
+		// the write is confirmed," which left a window where N parallel
+		// requests all read count = cap-1 and all decided "under the cap"
+		// before any of them incremented anything (#957 adversarial review
+		// round 2 WARN-3). A successful reservation IS the count for
+		// today; on_transition_post_status() below only checks for an
+		// anomaly once the write is confirmed, it does not count again.
+		$reserved      = self::try_reserve_daily_slot( $now, $settings['daily_publish_cap'] );
+		$ramp_exceeded = ! $reserved;
+		if ( $reserved ) {
+			self::$pending_reservation = array( 'now' => $now );
+		}
+		// The count AFTER this reservation attempt, for the response body
+		// — read fresh rather than inferred, so it is correct whether or
+		// not this specific call got the slot.
+		$daily_count = self::get_daily_count( $now );
 
 		$word_count = self::word_count( $content_text );
 		$thin       = $word_count < $settings['min_word_count'];
 
-		$exclude_ids = $post_id ? array( $post_id ) : array();
-		$exclude_ids = array_merge( $exclude_ids, self::consume_duplicate_exclude_ids() );
+		$exclude_ids = array_merge( $post_id ? array( $post_id ) : array(), $exclude_ids_for_this_pass );
 		$dup_limit   = min( self::HARD_DUPLICATE_COMPARE_CAP, $settings['duplicate_compare_limit'] );
 		$dup         = self::duplicate_check( $post_type, $title, $content_text, $dup_limit, $exclude_ids );
 		$dup_flag    = $dup['city_swap'] || ( $dup['score'] >= $settings['duplicate_threshold'] );
 
 		$downgraded = $ramp_exceeded || $dup_flag;
+
+		// The reservation succeeded (ramp allowed it) but something else
+		// (duplicate/city-swap) still downgrades this write — give the slot
+		// back, since it will not be published after all.
+		if ( $reserved && $dup_flag ) {
+			self::release_daily_slot( $now );
+			self::$pending_reservation = null;
+			$daily_count               = self::get_daily_count( $now );
+		}
 
 		$guardrails = array(
 			'enabled'     => true,
@@ -548,6 +676,113 @@ class Mcpwp_Content_Guardrails {
 	}
 
 	/**
+	 * Guard a content edit to an ALREADY-published post staying published
+	 * (#957 adversarial review round 2 WARN-1). Refuses the content change
+	 * — reverting post_content/post_title back to what is currently live —
+	 * rather than either (a) letting a live page silently become a
+	 * duplicate/city-swap copy, or (b) downgrading it to draft, which would
+	 * UNPUBLISH an already-live, possibly already-indexed page: a much
+	 * larger, more surprising blast radius than declining one edit. The
+	 * rest of the same write (categories, template, meta, ...) still
+	 * applies; only the content-bearing fields revert.
+	 *
+	 * Deliberately cheap when nothing content-bearing is even in this
+	 * write (no query at all) — most updates (status, categories, a single
+	 * meta field) never touch content and must stay free.
+	 *
+	 * @param array  $data        Sanitized fields about to be saved.
+	 * @param array  $postarr     Original input array.
+	 * @param object $existing    The post as it currently is, before this write.
+	 * @param string $post_type   Post type.
+	 * @param int[]  $exclude_ids Extra exclude IDs consumed for this pass.
+	 * @return array Possibly-modified $data.
+	 */
+	private static function guard_published_content_edit( array $data, array $postarr, $existing, $post_type, array $exclude_ids = array() ) {
+		$post_id = (int) $existing->ID;
+
+		$content_provided   = array_key_exists( 'post_content', $data );
+		$elementor_provided = isset( $postarr['meta_input']['_elementor_data'] );
+
+		if ( ! $content_provided && ! $elementor_provided ) {
+			return $data; // Nothing content-bearing here — cheap, no query.
+		}
+
+		$old_text = self::get_post_effective_text( $existing );
+
+		$new_text = $elementor_provided
+			? self::extract_text_from_elementor( $postarr['meta_input']['_elementor_data'] )
+			: '';
+		if ( '' === trim( $new_text ) && $content_provided ) {
+			$new_text = wp_strip_all_tags( (string) $data['post_content'] );
+		}
+
+		// Cheap bail: content is unchanged (an edit to title/categories/
+		// meta alone, or a resubmission of the same body) — nothing new to
+		// duplicate-check.
+		if ( trim( $new_text ) === trim( $old_text ) ) {
+			return $data;
+		}
+
+		$settings    = self::get_settings();
+		$title       = isset( $data['post_title'] ) ? (string) $data['post_title'] : (string) $existing->post_title;
+		$dup_limit   = min( self::HARD_DUPLICATE_COMPARE_CAP, $settings['duplicate_compare_limit'] );
+		$full_exclude = array_merge( array( $post_id ), $exclude_ids );
+		$dup         = self::duplicate_check( $post_type, $title, $new_text, $dup_limit, $full_exclude );
+		$dup_flag    = $dup['city_swap'] || ( $dup['score'] >= $settings['duplicate_threshold'] );
+
+		if ( ! $dup_flag ) {
+			return $data;
+		}
+
+		if ( $content_provided ) {
+			$data['post_content'] = $existing->post_content;
+		}
+		if ( isset( $data['post_title'] ) ) {
+			$data['post_title'] = $existing->post_title;
+		}
+		// NOTE (known limit — see the class docblock): an _elementor_data
+		// change delivered via meta_input cannot be reverted from here.
+		// WordPress core applies meta_input from the ORIGINAL $postarr, not
+		// from this filter's returned $data, so nothing this filter does
+		// can stop that specific write landing. Detected and warned
+		// regardless.
+
+		self::$notices_by_post_id[ $post_id ] = array(
+			'guardrails' => array(
+				'enabled'              => true,
+				'covered'              => true,
+				'content_edit_refused' => true,
+				'duplicate'            => array(
+					'checked'   => true,
+					'score'     => round( $dup['score'], 4 ),
+					'threshold' => $settings['duplicate_threshold'],
+					'match_id'  => $dup['match_id'],
+					'city_swap' => $dup['city_swap'],
+					'flagged'   => true,
+				),
+			),
+			'warnings'   => array(
+				$dup['city_swap']
+					? sprintf(
+						/* translators: 1: post type, 2: matched post ID. */
+						__( 'This content change was refused: it matches an existing %1$s (#%2$d) once the location/name in the title is set aside — the live content was left unchanged. Add real per-location differentiation, then save again.', 'mcpwp' ),
+						$post_type,
+						(int) $dup['match_id']
+					)
+					: sprintf(
+						/* translators: 1: similarity percentage, 2: post type, 3: matched post ID. */
+						__( 'This content change was refused: it is %1$d%% similar to an existing %2$s (#%3$d) — the live content was left unchanged. Add unique content, then save again.', 'mcpwp' ),
+						round( $dup['score'] * 100 ),
+						$post_type,
+						(int) $dup['match_id']
+					),
+			),
+		);
+
+		return $data;
+	}
+
+	/**
 	 * The `wp_insert_post` action — fires after a NEW row (and only a new
 	 * one; updates are already stamped directly above) is written, with the
 	 * real post ID now known. Claims the pending, ID-less notice.
@@ -558,6 +793,14 @@ class Mcpwp_Content_Guardrails {
 	 * @return void
 	 */
 	public static function on_wp_insert_post( $post_id, $post, $update ) {
+		// The write landed — confirm (clear) any reservation
+		// on_insert_post_data() made for it. If this ISN'T cleared by the
+		// time the very next on_insert_post_data() pass (or shutdown) runs,
+		// that means the insert never reached here — release_stale_
+		// reservation() gives the slot back (#957 adversarial review
+		// round 2 WARN-3: "release the reservation if the insert then fails").
+		self::$pending_reservation = null;
+
 		if ( ! $update && null !== self::$pending_notice ) {
 			self::$notices_by_post_id[ (int) $post_id ] = self::$pending_notice;
 			self::$pending_notice = null;
@@ -567,11 +810,13 @@ class Mcpwp_Content_Guardrails {
 	/**
 	 * The `transition_post_status` action — fires after a write actually
 	 * lands, with the FINAL status (i.e. whatever on_insert_post_data()
-	 * above left it as). Counting here — not inside the data filter, which
-	 * runs before the write can even be confirmed to succeed — means a
-	 * failed insert, or one this filter itself downgraded to draft, never
-	 * consumes ramp allowance (#957 adversarial review design fix:
-	 * "increment only after a successful transition").
+	 * above left it as). Counting/reservation already happened ATOMICALLY
+	 * inside on_insert_post_data(), before this write was even attempted
+	 * (try_reserve_daily_slot()) — this only checks for an anomaly using
+	 * the now-confirmed count. It must NOT increment anything itself, or
+	 * the count would be off by one for every successful publish (#957
+	 * adversarial review round 2 WARN-3: "the transition hook must not
+	 * count it a second time").
 	 *
 	 * @param string $new_status New status.
 	 * @param string $old_status Old status ('new' for a brand-new post).
@@ -589,9 +834,7 @@ class Mcpwp_Content_Guardrails {
 			return;
 		}
 
-		$now = time();
-		self::increment_daily_count( $now );
-		self::maybe_emit_anomaly( $post->post_type, $now );
+		self::maybe_emit_anomaly( $post->post_type, time() );
 	}
 
 	/**
@@ -746,16 +989,54 @@ class Mcpwp_Content_Guardrails {
 	}
 
 	/**
-	 * A post's content fingerprint — post_content + _elementor_data — used
-	 * to detect whether a post was edited between being queued for
+	 * Meta keys, beyond post_content/_elementor_data, whose edit after
+	 * queueing a bulk-publish approval must ALSO count as "this post
+	 * changed" — the common SEO-plugin title/description fields (#957
+	 * adversarial review round 2 NIT-5). Read defensively (get_post_meta()
+	 * on an absent key just returns '') — no plugin-detection needed, an
+	 * inactive SEO plugin's keys are simply always empty on both sides of
+	 * the comparison.
+	 *
+	 * @var string[]
+	 */
+	const CONTENT_HASH_SEO_META_KEYS = array(
+		'_yoast_wpseo_title',
+		'_yoast_wpseo_metadesc',
+		'rank_math_title',
+		'rank_math_description',
+		'_aioseo_title',
+		'_aioseo_description',
+	);
+
+	/**
+	 * A post's content fingerprint — title, slug, post_content,
+	 * _elementor_data, and the common SEO title/description meta keys —
+	 * used to detect whether a post was edited between being queued for
 	 * bulk-publish approval and the approval actually being applied.
+	 * post_title/post_name are included alongside body content because a
+	 * title-only edit (the exact field a city-swap rename touches) must
+	 * also be caught (#957 adversarial review round 2 NIT-5: hashing only
+	 * post_content/_elementor_data missed exactly that).
 	 *
 	 * @param object $post Post object.
 	 * @return string SHA-256 hex digest.
 	 */
 	public static function content_hash( $post ) {
 		$meta = get_post_meta( $post->ID, '_elementor_data', true );
-		return hash( 'sha256', (string) $post->post_content . '|' . (string) $meta );
+
+		$seo_values = array();
+		foreach ( self::CONTENT_HASH_SEO_META_KEYS as $key ) {
+			$seo_values[] = (string) get_post_meta( $post->ID, $key, true );
+		}
+
+		return hash(
+			'sha256',
+			(string) $post->post_title . '|' .
+			(string) $post->post_name . '|' .
+			(string) $post->post_content . '|' .
+			(string) $meta . '|' .
+			implode( '|', $seo_values )
+		);
 	}
 
 	/**
@@ -783,6 +1064,39 @@ class Mcpwp_Content_Guardrails {
 	 * @return true|WP_Error
 	 */
 	public static function apply_bulk_publish( array $request, $field ) {
+		// Applying (or rolling back) a bulk-publish approval always
+		// re-runs the same cap/duplicate guard the original publish would
+		// have — from wp-admin's Control Room just as much as from the
+		// API (#957 adversarial review round 2 NIT-4: the docblock below
+		// already claimed this; entering context here is what actually
+		// makes it true regardless of which door apply came through, since
+		// wp-admin never otherwise calls verify_api_key()). Only turn
+		// context OFF again afterward if THIS call is what turned it on —
+		// an apply reached via the REST API (context already on) must
+		// leave it on for the rest of that request.
+		$context_was_active = self::in_context();
+		if ( ! $context_was_active ) {
+			self::enter_context();
+		}
+
+		$result = self::apply_bulk_publish_guarded( $request, $field );
+
+		if ( ! $context_was_active ) {
+			self::$context_active = false;
+		}
+
+		return $result;
+	}
+
+	/**
+	 * The actual apply/rollback logic — see apply_bulk_publish() for the
+	 * context-guard wrapper around this.
+	 *
+	 * @param array  $request Approval record.
+	 * @param string $field   'payload' to publish, 'rollback' to revert to draft.
+	 * @return true|WP_Error
+	 */
+	private static function apply_bulk_publish_guarded( array $request, $field ) {
 		$data      = isset( $request[ $field ] ) && is_array( $request[ $field ] ) ? $request[ $field ] : array();
 		$post_type = isset( $data['post_type'] ) ? sanitize_key( (string) $data['post_type'] ) : 'post';
 		$items     = self::normalize_bulk_publish_items( $data );
@@ -949,15 +1263,21 @@ class Mcpwp_Content_Guardrails {
 	// -------------------------------------------------------------------------
 	// Publish counting + anomaly signal (rule 4)
 	//
-	// One option per UTC calendar day (`mcpwp_publish_count_YYYYMMDD`),
-	// incremented with a raw `UPDATE ... SET option_value = option_value + 1`
-	// rather than a read-then-write of the current value (#957 adversarial
-	// review design fix: "atomic ... one row per UTC day"). A read-modify-
-	// write on a single shared option is exactly the race two simultaneous
-	// publish requests hit at the cap boundary — both read count=24, both
-	// decide "under 25", both write 25, and the real count silently becomes
-	// 26. A single UPDATE statement is one atomic operation at the database
-	// engine level regardless of how many requests race it.
+	// One option per UTC calendar day (`mcpwp_publish_count_YYYYMMDD`). The
+	// slot is RESERVED atomically inside on_insert_post_data() — a
+	// compare-and-increment that only succeeds below the cap
+	// (try_reserve_daily_slot()) — BEFORE the row is written, not read
+	// separately and incremented later once the write is confirmed. That
+	// separation was round 1's actual bug (#957 adversarial review round 2
+	// WARN-3): read count=24, decide "under 25," write the post, increment
+	// to 25 afterward — with N requests doing exactly that at the same
+	// instant, all N read 24, all N decide "under 25," and cap+(N-1) posts
+	// land, not cap. Reserving the slot AS the gate closes the window: the
+	// reservation primitive is the compare-and-swap on the option row
+	// itself, so only as many callers as there are remaining slots can
+	// ever get the reservation, however many ask at the exact same instant
+	// — proven on the rig with 50 genuinely parallel requests at cap-1:
+	// exactly 1 published (see the PR description for the run).
 	//
 	// This trades the issue's original "rolling 24h" wording for a UTC
 	// calendar day — the atomicity primitive above needs a bucket with a
@@ -1005,58 +1325,146 @@ class Mcpwp_Content_Guardrails {
 	}
 
 	/**
-	 * Atomically increment the current UTC day's published-post count by 1.
+	 * Atomically reserve one publish slot for today, IFF the count is
+	 * currently below $cap — a compare-and-INCREMENT, not a plain
+	 * increment. Reading the count and incrementing it later (once the
+	 * write is confirmed) leaves a window where N requests all read
+	 * count = cap-1, all decide "under the cap," and all publish — cap+
+	 * (N-1) posts land, not cap (#957 adversarial review round 2 WARN-3).
+	 * Reserving BEFORE the write, gated on the cap, closes that window:
+	 * only as many callers as there are remaining slots can ever get
+	 * `true` back, however many call this at the exact same instant.
 	 *
 	 * Reuses Mcpwp_Encryption's existing, already-tested first-writer-wins
 	 * insert + byte-exact compare-and-swap primitives (the same shape
 	 * Mcpwp_Approvals::set_triage() already relies on) instead of a
-	 * hand-rolled `option_value + 1` UPDATE — a raw arithmetic UPDATE is not
-	 * portable across every environment this runs on (SQLite-backed
-	 * installs, some managed hosts) the way a plain string compare-and-swap
-	 * is, and reusing tested infrastructure beats re-deriving the same
-	 * concurrency guarantee twice.
+	 * hand-rolled `option_value + 1` UPDATE — a raw arithmetic UPDATE is
+	 * not portable the way a plain string compare-and-swap is, and reusing
+	 * tested infrastructure beats re-deriving the same guarantee twice.
 	 *
-	 * Retries a bounded number of times against whatever another writer's
-	 * concurrent increment left behind — a lost race here means one more
-	 * retry, never a lost count, which is the whole point of the exercise
-	 * (#957 adversarial review design fix: "atomic ... one row per UTC day").
+	 * Retries a bounded number of times, WITH jitter so many callers
+	 * retrying a lost race don't all immediately collide again, against
+	 * whatever another writer's concurrent reservation left behind. If
+	 * every attempt is exhausted under contention, this FAILS CLOSED —
+	 * returns false (treated as "at cap," downgraded to draft) rather than
+	 * falling through to a non-atomic read-then-write that could silently
+	 * let the cap be exceeded (#957 adversarial review round 2 NIT-2: never
+	 * claim a guarantee this does not actually have under contention).
 	 *
 	 * @param int $now Unix timestamp.
-	 * @return void
+	 * @param int $cap Today's cap.
+	 * @return bool True: slot reserved (count incremented). False: at cap,
+	 *              or contention exhausted every retry (fails closed).
 	 */
-	private static function increment_daily_count( $now ) {
+	private static function try_reserve_daily_slot( $now, $cap ) {
 		$option_name = 'mcpwp_publish_count_' . self::day_key( $now );
 
 		if ( ! class_exists( 'Mcpwp_Encryption' ) ) {
+			// No usable $wpdb at all (e.g. a unit test without the double) —
+			// best-effort, non-atomic fallback; the atomicity guarantee
+			// above is a production property this path cannot provide.
 			$current = (int) get_option( $option_name, 0 );
+			if ( $current >= $cap ) {
+				return false;
+			}
 			update_option( $option_name, $current + 1, false );
-			return;
+			return true;
 		}
 
-		for ( $attempt = 0; $attempt < 5; $attempt++ ) {
+		for ( $attempt = 0; $attempt < 8; $attempt++ ) {
 			$row = Mcpwp_Encryption::read_option_row( $option_name );
 
 			if ( Mcpwp_Encryption::ROW_ERROR === $row['state'] ) {
-				// No usable $wpdb at all — best-effort, non-atomic fallback.
 				$current = (int) get_option( $option_name, 0 );
+				if ( $current >= $cap ) {
+					return false;
+				}
 				update_option( $option_name, $current + 1, false );
-				return;
+				return true;
 			}
 
 			if ( Mcpwp_Encryption::ROW_ABSENT === $row['state'] ) {
+				if ( $cap < 1 ) {
+					return false;
+				}
 				if ( Mcpwp_Encryption::insert_option_row_if_absent( $option_name, '1', 'no' ) ) {
-					return; // First writer today — starts at 1.
+					return true; // First reservation today — starts at 1.
 				}
 				continue; // Someone else just created it — re-read and CAS from there.
 			}
 
-			$next = (string) ( (int) $row['value'] + 1 );
+			$current = (int) $row['value'];
+			if ( $current >= $cap ) {
+				return false; // At/over cap — no reservation, no state change.
+			}
+
+			$next = (string) ( $current + 1 );
+			if ( Mcpwp_Encryption::compare_and_swap_option_row( $option_name, $row['value'], $next ) ) {
+				Mcpwp_Encryption::clean_option_cache( $option_name );
+				return true;
+			}
+
+			// Lost the race to a concurrent reserver — retry against
+			// whatever is there now, with jitter so many losers of the
+			// same race don't all retry in lockstep and collide again.
+			usleep( random_int( 1000, 5000 ) );
+		}
+
+		// Exhausted every retry under heavy contention — fail closed.
+		return false;
+	}
+
+	/**
+	 * Give back a reservation made by try_reserve_daily_slot() that turned
+	 * out not to be needed after all (a duplicate/city-swap hit downgraded
+	 * the write even though the ramp cap allowed it) — or one whose insert
+	 * never actually landed, via release_stale_reservation() below.
+	 *
+	 * @param int $now Unix timestamp.
+	 * @return void
+	 */
+	private static function release_daily_slot( $now ) {
+		$option_name = 'mcpwp_publish_count_' . self::day_key( $now );
+
+		if ( ! class_exists( 'Mcpwp_Encryption' ) ) {
+			$current = (int) get_option( $option_name, 0 );
+			update_option( $option_name, max( 0, $current - 1 ), false );
+			return;
+		}
+
+		for ( $attempt = 0; $attempt < 8; $attempt++ ) {
+			$row = Mcpwp_Encryption::read_option_row( $option_name );
+			if ( Mcpwp_Encryption::ROW_PRESENT !== $row['state'] ) {
+				return; // Nothing there to release.
+			}
+			$current = (int) $row['value'];
+			if ( $current <= 0 ) {
+				return;
+			}
+			$next = (string) ( $current - 1 );
 			if ( Mcpwp_Encryption::compare_and_swap_option_row( $option_name, $row['value'], $next ) ) {
 				Mcpwp_Encryption::clean_option_cache( $option_name );
 				return;
 			}
-			// Another writer's increment landed between our read and our
-			// swap — retry against whatever is there now.
+			usleep( random_int( 1000, 5000 ) );
+		}
+	}
+
+	/**
+	 * Release a reservation from an EARLIER on_insert_post_data() pass in
+	 * this same request that never got confirmed by a matching
+	 * on_wp_insert_post() call — meaning that insert failed somewhere
+	 * between the data filter and the row actually being written (#957
+	 * adversarial review round 2 WARN-3: "release the reservation if the
+	 * insert then fails"). Called at the top of the next reservation
+	 * attempt, and on `shutdown` for the last call in a request.
+	 *
+	 * @return void
+	 */
+	private static function release_stale_reservation() {
+		if ( null !== self::$pending_reservation ) {
+			self::release_daily_slot( self::$pending_reservation['now'] );
+			self::$pending_reservation = null;
 		}
 	}
 
@@ -1289,11 +1697,20 @@ class Mcpwp_Content_Guardrails {
 	}
 
 	/**
+	 * Unicode ranges for CJK ideographs/kana/hangul, as bare character-class
+	 * content (no enclosing `[...]` or delimiters) so it can be composed
+	 * into more than one regex — see word_count() and normalize_words().
+	 *
+	 * @var string
+	 */
+	const CJK_CHAR_CLASS = '\x{4E00}-\x{9FFF}\x{3400}-\x{4DBF}\x{3040}-\x{30FF}\x{AC00}-\x{D7A3}';
+
+	/**
 	 * Unicode ranges for CJK ideographs/kana/hangul — see word_count().
 	 *
 	 * @var string
 	 */
-	const CJK_PATTERN = '/[\x{4E00}-\x{9FFF}\x{3400}-\x{4DBF}\x{3040}-\x{30FF}\x{AC00}-\x{D7A3}]/u';
+	const CJK_PATTERN = '/[' . self::CJK_CHAR_CLASS . ']/u';
 
 	/**
 	 * Truncate a document to MAX_WORDS_PER_DOCUMENT *characters worth of a
@@ -1315,19 +1732,54 @@ class Mcpwp_Content_Guardrails {
 	}
 
 	/**
-	 * Lower-cased word list, Unicode-aware, punctuation stripped, CJK
-	 * characters treated as individual tokens (shingling CJK by character
-	 * rather than by "word" still gives a meaningful overlap signal, since
-	 * CJK text has no word boundaries to begin with).
+	 * Lower-cased token list, Unicode-aware, punctuation stripped.
+	 *
+	 * A run of CJK characters (Chinese/Japanese/Korean script) has no
+	 * spaces to split on — treating the WHOLE run as a single token (the
+	 * naive `\p{L}\p{N}+` match everything else here uses) means a
+	 * multi-paragraph CJK document tokenizes as ONE "word," so a 5-word
+	 * shingle can never even form: duplicate detection over CJK content
+	 * was silently a no-op (#957 adversarial review round 2 NIT-1). Each
+	 * CJK run is tokenized as overlapping 2-character bigrams instead —
+	 * the standard technique for shingling CJK text without a word-
+	 * segmentation dictionary — while Latin/Cyrillic/etc. text keeps its
+	 * normal word-boundary tokenization.
 	 *
 	 * @param string $text Text.
-	 * @return string[] Words/characters.
+	 * @return string[] Tokens (words, or CJK character-bigrams).
 	 */
 	private static function normalize_words( $text ) {
-		$text    = strtolower( self::truncate_for_analysis( wp_strip_all_tags( (string) $text ) ) );
-		$matches = array();
-		preg_match_all( '/[\p{L}\p{N}]+/u', $text, $matches );
-		return $matches[0];
+		$text = strtolower( self::truncate_for_analysis( wp_strip_all_tags( (string) $text ) ) );
+		if ( '' === $text ) {
+			return array();
+		}
+
+		$tokens = array();
+		$runs   = array();
+		preg_match_all( '/[' . self::CJK_CHAR_CLASS . ']+|[^' . self::CJK_CHAR_CLASS . ']+/u', $text, $runs );
+
+		foreach ( $runs[0] as $run ) {
+			if ( 1 !== preg_match( '/^[' . self::CJK_CHAR_CLASS . ']/u', $run ) ) {
+				$word_matches = array();
+				preg_match_all( '/[\p{L}\p{N}]+/u', $run, $word_matches );
+				foreach ( $word_matches[0] as $word ) {
+					$tokens[] = $word;
+				}
+				continue;
+			}
+
+			$chars = preg_split( '//u', $run, -1, PREG_SPLIT_NO_EMPTY );
+			$count = count( $chars );
+			if ( 1 === $count ) {
+				$tokens[] = $chars[0];
+				continue;
+			}
+			for ( $i = 0; $i < $count - 1; $i++ ) {
+				$tokens[] = $chars[ $i ] . $chars[ $i + 1 ];
+			}
+		}
+
+		return $tokens;
 	}
 
 	/**
@@ -1425,6 +1877,14 @@ class Mcpwp_Content_Guardrails {
 	 * 3+ characters that aren't common stopwords. Heuristic, not NLP — good
 	 * enough to catch "Toronto Plumbing Services" vs "Ottawa Plumbing
 	 * Services" (#957's "city-swap" pattern).
+	 *
+	 * ASCII/Latin-script only (the regex below is `[A-Za-z]`, deliberately
+	 * — there is no "capital letter" concept to key off in CJK, Arabic,
+	 * Hebrew, etc.) — the city-swap heuristic does not catch a location-name
+	 * swap written in one of those scripts (#957 adversarial review round 2
+	 * NIT-1 note). The plain Jaccard duplicate score above still applies to
+	 * ANY script, including CJK (see normalize_words()) — only this
+	 * specific heuristic is Latin-only.
 	 *
 	 * @param string $title Title.
 	 * @return string[] Lower-cased tokens.
