@@ -1587,6 +1587,43 @@ final class ContentGuardrailsTest extends TestCase {
 		$this->assertSame( 'resolved', $duplicate_edit_issue[0]['status'], 'a later clean check resolves the open issue' );
 	}
 
+	public function test_a_flagged_elementor_duplicate_plus_a_trivial_post_content_edit_stays_open(): void {
+		// #957 adversarial review round 6 NIT-1: "resolve a duplicate_edit
+		// issue only when the SAME representation that raised it is
+		// re-checked." An Elementor-raised issue must not be resolved by
+		// an unrelated, genuinely-clean post_content edit to the same
+		// post — the Elementor content that caused the flag was never
+		// re-examined at all.
+		Mcpwp_Content_Guardrails::update_settings( array( 'min_word_count' => 0, 'duplicate_threshold' => 0.6, 'daily_publish_cap' => 1000 ) );
+
+		$this->seed_published( 7101, 'page', 'Sibling Page', $this->words( 40, 'dup_' ) );
+		$this->seed_published( 7102, 'page', 'Target Page', '' );
+		$GLOBALS['_mcpwp_test_meta'][7102]['_elementor_data'] = wp_json_encode( array( array(
+			'elType' => 'widget', 'settings' => array( 'title' => 'v0' ),
+		) ) );
+
+		Mcpwp_Content_Guardrails::enter_context();
+
+		// Flag it via Elementor.
+		update_post_meta( 7102, '_elementor_data', wp_json_encode( array( array(
+			'elType' => 'widget', 'settings' => array( 'title' => $this->words( 40, 'dup_' ) ),
+		) ) ) );
+
+		$issues = Mcpwp_SEO_Audit_Store::list_issues( array( 'post_id' => 7102, 'reveal_non_public' => true ) );
+		$duplicate_edit_issue = array_values( array_filter( $issues['issues'], function ( $i ) { return 'duplicate_edit' === $i['code']; } ) );
+		$this->assertSame( 'open', $duplicate_edit_issue[0]['status'] );
+		$this->assertSame( 'elementor', $duplicate_edit_issue[0]['representation'] );
+
+		// Now a TRIVIAL, genuinely-unrelated post_content edit — a real
+		// check runs (different text) and scores clean for post_content,
+		// but must NOT resolve the Elementor-raised issue.
+		wp_update_post( array( 'ID' => 7102, 'post_content' => $this->words( 20, 'trivialedit_' ) ) );
+
+		$issues_after = Mcpwp_SEO_Audit_Store::list_issues( array( 'post_id' => 7102, 'reveal_non_public' => true ) );
+		$duplicate_edit_issue_after = array_values( array_filter( $issues_after['issues'], function ( $i ) { return 'duplicate_edit' === $i['code']; } ) );
+		$this->assertSame( 'open', $duplicate_edit_issue_after[0]['status'], 'a clean post_content check must not resolve an Elementor-raised issue' );
+	}
+
 	public function test_guardrail_issues_expire_after_30_days(): void {
 		Mcpwp_SEO_Audit_Store::upsert_issue( array(
 			'post_id'  => 7011,
@@ -1703,6 +1740,118 @@ final class ContentGuardrailsTest extends TestCase {
 		$this->assertStringContainsString( 'This product changed how our whole team works day to day.', $text );
 		$this->assertStringContainsString( 'Jordan Rivera', $text );
 		$this->assertStringNotContainsString( 'https://example.test/jordan.jpg', $text );
+	}
+
+	public function test_extract_text_from_elementor_covers_every_common_widget_copy_key(): void {
+		// #957 adversarial review round 6 WARN-1: "a pure allowlist will
+		// keep missing keys" — one 17-word unique sentence per common
+		// Elementor widget's real copy key(s); at least 15 of the 17 words
+		// must come through for every one of them, via either the
+		// explicit allowlist or the hybrid's copy-pattern match.
+		$sentence = function ( $seed ) {
+			$words = array();
+			for ( $i = 0; $i < 17; $i++ ) {
+				$words[] = $seed . $i;
+			}
+			return implode( ' ', $words );
+		};
+
+		$fixtures = array(
+			'heading'           => array( array( 'elType' => 'widget', 'widgetType' => 'heading', 'settings' => array(
+				'title' => $sentence( 'heading' ),
+			) ) ),
+			'text-editor'       => array( array( 'elType' => 'widget', 'widgetType' => 'text-editor', 'settings' => array(
+				'editor' => $sentence( 'texteditor' ),
+			) ) ),
+			'button'            => array( array( 'elType' => 'widget', 'widgetType' => 'button', 'settings' => array(
+				'text' => $sentence( 'buttonwidget' ),
+			) ) ),
+			'icon-box'          => array( array( 'elType' => 'widget', 'widgetType' => 'icon-box', 'settings' => array(
+				'title_text' => $sentence( 'iconbox' ),
+			) ) ),
+			'image-box'         => array( array( 'elType' => 'widget', 'widgetType' => 'image-box', 'settings' => array(
+				'description_text' => $sentence( 'imagebox' ),
+			) ) ),
+			'icon-list'         => array( array( 'elType' => 'widget', 'widgetType' => 'icon-list', 'settings' => array(
+				'icon_list' => array( array( 'text' => $sentence( 'iconlist' ) ) ),
+			) ) ),
+			'testimonial'       => array( array( 'elType' => 'widget', 'widgetType' => 'testimonial', 'settings' => array(
+				'testimonial_content' => $sentence( 'testimonialwidget' ),
+			) ) ),
+			'tabs'              => array( array( 'elType' => 'widget', 'widgetType' => 'tabs', 'settings' => array(
+				'tabs' => array( array( 'tab_content' => $sentence( 'tabswidget' ) ) ),
+			) ) ),
+			'accordion'         => array( array( 'elType' => 'widget', 'widgetType' => 'accordion', 'settings' => array(
+				'tabs' => array( array( 'tab_content' => $sentence( 'accordionwidget' ) ) ),
+			) ) ),
+			'toggle'            => array( array( 'elType' => 'widget', 'widgetType' => 'toggle', 'settings' => array(
+				'tabs' => array( array( 'tab_content' => $sentence( 'togglewidget' ) ) ),
+			) ) ),
+			'price-table'       => array( array( 'elType' => 'widget', 'widgetType' => 'price-table', 'settings' => array(
+				'sub_heading' => $sentence( 'pricetable' ),
+			) ) ),
+			'call-to-action'    => array( array( 'elType' => 'widget', 'widgetType' => 'call-to-action', 'settings' => array(
+				'button' => $sentence( 'ctawidget' ),
+			) ) ),
+			'flip-box'          => array( array( 'elType' => 'widget', 'widgetType' => 'flip-box', 'settings' => array(
+				'title_text_a' => $sentence( 'flipbox' ),
+			) ) ),
+			'animated-headline' => array( array( 'elType' => 'widget', 'widgetType' => 'animated-headline', 'settings' => array(
+				'rotating_text' => $sentence( 'animatedheadline' ),
+			) ) ),
+			'form'              => array( array( 'elType' => 'widget', 'widgetType' => 'form', 'settings' => array(
+				'form_fields' => array( array( 'field_label' => $sentence( 'formwidget' ) ) ),
+			) ) ),
+			'progress'          => array( array( 'elType' => 'widget', 'widgetType' => 'progress', 'settings' => array(
+				'inner_text' => $sentence( 'progresswidget' ),
+			) ) ),
+			'alert'             => array( array( 'elType' => 'widget', 'widgetType' => 'alert', 'settings' => array(
+				'alert_title' => $sentence( 'alertwidget' ),
+			) ) ),
+			'blockquote'        => array( array( 'elType' => 'widget', 'widgetType' => 'blockquote', 'settings' => array(
+				'blockquote_content' => $sentence( 'blockquotewidget' ),
+			) ) ),
+		);
+
+		foreach ( $fixtures as $widget => $data ) {
+			$text                  = Mcpwp_Content_Guardrails::extract_text_from_elementor( $data );
+			$extracted_word_count  = count( array_filter( explode( ' ', trim( $text ) ) ) );
+			$this->assertGreaterThanOrEqual( 15, $extracted_word_count, "widget '$widget' extracted only $extracted_word_count/17 words: '$text'" );
+		}
+	}
+
+	public function test_round6_flip_box_price_table_clone_with_filler_post_content_is_refused_at_publish(): void {
+		// Re-run of the round-4 BLOCK-1 bypass shape, this time with
+		// widgets the PURE allowlist (round 5) missed entirely — a
+		// flip-box + price-table clone would have extracted as empty text
+		// under round 5, so this exact sequence would have published
+		// unflagged. Confirms round 6's hybrid allowlist closes it.
+		Mcpwp_Content_Guardrails::enter_context();
+		Mcpwp_Content_Guardrails::update_settings( array( 'min_word_count' => 0, 'duplicate_threshold' => 0.5, 'daily_publish_cap' => 1000 ) );
+
+		$flip_text  = 'Save twenty percent on every single order placed before midnight tonight only for new customers everywhere';
+		$price_text = 'Our most popular plan includes unlimited storage and priority support for every growing team worldwide';
+
+		$this->seed_published( 8001, 'page', 'Existing Offer Page', '' );
+		$GLOBALS['_mcpwp_test_meta'][8001]['_elementor_data'] = wp_json_encode( array(
+			array( 'elType' => 'widget', 'widgetType' => 'flip-box', 'settings' => array( 'title_text_a' => $flip_text ) ),
+			array( 'elType' => 'widget', 'widgetType' => 'price-table', 'settings' => array( 'sub_heading' => $price_text ) ),
+		) );
+
+		// 1. Create a draft.
+		$this->seed_draft( 8002, 'page', 'New Offer Page', '' );
+
+		// 2. wp_set_elementor a clone of the existing page onto it (still a draft).
+		$GLOBALS['_mcpwp_test_meta'][8002]['_elementor_data'] = wp_json_encode( array(
+			array( 'elType' => 'widget', 'widgetType' => 'flip-box', 'settings' => array( 'title_text_a' => $flip_text ) ),
+			array( 'elType' => 'widget', 'widgetType' => 'price-table', 'settings' => array( 'sub_heading' => $price_text ) ),
+		) );
+
+		// 3. update_page: unique filler words + status=publish.
+		$filler = $this->words( 30, 'zzfiller6_' );
+		wp_update_post( array( 'ID' => 8002, 'post_content' => $filler, 'post_status' => 'publish' ) );
+
+		$this->assertSame( 'draft', $GLOBALS['_mcpwp_test_posts'][8002]->post_status, 'the flip-box/price-table clone is caught even though post_content alone was unique filler' );
 	}
 
 	public function test_extract_text_from_elementor_never_expands_a_referenced_template(): void {

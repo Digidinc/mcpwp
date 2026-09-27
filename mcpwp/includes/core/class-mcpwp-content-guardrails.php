@@ -1073,7 +1073,7 @@ class Mcpwp_Content_Guardrails {
 		$title    = isset( $data['post_title'] ) ? (string) $data['post_title'] : (string) $existing->post_title;
 		$post_id  = (int) $existing->ID;
 
-		$result = self::evaluate_content_edit_advisory( $post_id, $post_type, $title, $old_text, $new_text, $exclude_ids );
+		$result = self::evaluate_content_edit_advisory( $post_id, $post_type, $title, $old_text, $new_text, 'post_content', $exclude_ids );
 		if ( null !== $result ) {
 			// Deferred to the `post_updated` action, fired only once
 			// WordPress core has actually written this row (#957
@@ -1081,9 +1081,13 @@ class Mcpwp_Content_Guardrails {
 			// after the write succeeds ... so a failed write leaves no
 			// phantom issue") — this filter runs BEFORE the write; a
 			// validation failure after it returns must never have already
-			// recorded a notice/issue for a change that never landed. The
-			// Elementor path (maybe_advise_on_elementor_meta_change()
-			// below) already runs from a POST-write action, so it records
+			// recorded a notice/issue for a change that never landed. This
+			// now defers a CLEAR decision too, not just a flag one (#957
+			// adversarial review round 6 NIT-1) — resolving an issue is
+			// also a write to Control Room's store that must not happen
+			// for an edit that never actually landed. The Elementor path
+			// (maybe_advise_on_elementor_meta_change() below) already runs
+			// from a POST-write action, so it applies its decision
 			// immediately — no deferral needed there.
 			self::$pending_content_edit_advisory[ $post_id ] = array(
 				'post_type' => $post_type,
@@ -1096,9 +1100,10 @@ class Mcpwp_Content_Guardrails {
 
 	/**
 	 * The `post_updated` action — fires ONLY after WordPress core has
-	 * actually written an UPDATE to an existing post's row. Confirms (or
-	 * discards) whatever advise_on_published_content_edit() staged for
-	 * this exact post ID.
+	 * actually written an UPDATE to an existing post's row. Applies
+	 * whatever advise_on_published_content_edit() staged for this exact
+	 * post ID — flagging OR clearing, both deferred the same way (#957
+	 * adversarial review round 6 NIT-1).
 	 *
 	 * @param int    $post_id    Post ID.
 	 * @param object $post_after Post object after the update (unused).
@@ -1112,7 +1117,31 @@ class Mcpwp_Content_Guardrails {
 		}
 		$pending = self::$pending_content_edit_advisory[ $post_id ];
 		unset( self::$pending_content_edit_advisory[ $post_id ] );
-		self::record_content_edit_advisory( $post_id, $pending['post_type'], $pending['result'] );
+		self::apply_content_edit_advisory_result( $post_id, $pending['post_type'], $pending['result'] );
+	}
+
+	/**
+	 * Apply a decision evaluate_content_edit_advisory() already made —
+	 * either FLAG (record a notice + Control Room issue) or CLEAR (resolve
+	 * an existing open one, but only if the SAME representation raised it
+	 * — see resolve_issue_if_open()'s own docblock and #957 adversarial
+	 * review round 6 NIT-1). Called immediately by the Elementor path
+	 * (already post-write) and from on_post_updated() for the deferred
+	 * post_content path.
+	 *
+	 * @param int    $post_id   Post ID.
+	 * @param string $post_type Post type.
+	 * @param array  $result    evaluate_content_edit_advisory()'s return value.
+	 * @return void
+	 */
+	private static function apply_content_edit_advisory_result( $post_id, $post_type, array $result ) {
+		if ( 'flag' === $result['action'] ) {
+			self::record_content_edit_advisory( $post_id, $post_type, $result );
+			return;
+		}
+		if ( 'clear' === $result['action'] && class_exists( 'Mcpwp_SEO_Audit_Store' ) ) {
+			Mcpwp_SEO_Audit_Store::resolve_issue_if_open( $post_id, 'content_guardrails', 'duplicate_edit', $result['representation'] );
+		}
 	}
 
 	/**
@@ -1134,16 +1163,23 @@ class Mcpwp_Content_Guardrails {
 	 * skipped outright, counted, and surfaced as a single note by
 	 * attach_notices_to_response() instead of a per-post one.
 	 *
-	 * @param int    $post_id     Post ID (always known — this only ever
-	 *                            applies to an ALREADY-published post).
-	 * @param string $post_type   Post type.
-	 * @param string $title       Post title (as it will be after this write).
-	 * @param string $old_text    Previously-stored rendered text.
-	 * @param string $new_text    Newly-submitted rendered text.
-	 * @param int[]  $exclude_ids Extra exclude IDs (e.g. a translation group).
-	 * @return array|null {dup, warning}, or null if nothing to advise.
+	 * @param int    $post_id        Post ID (always known — this only ever
+	 *                               applies to an ALREADY-published post).
+	 * @param string $post_type      Post type.
+	 * @param string $title          Post title (as it will be after this write).
+	 * @param string $old_text       Previously-stored rendered text.
+	 * @param string $new_text       Newly-submitted rendered text.
+	 * @param string $representation Which field this check is against —
+	 *                               'post_content' or 'elementor' — stored
+	 *                               on a FLAG so a later CLEAR from the
+	 *                               OTHER representation cannot resolve it
+	 *                               (#957 adversarial review round 6 NIT-1).
+	 * @param int[]  $exclude_ids    Extra exclude IDs (e.g. a translation group).
+	 * @return array|null {action: 'flag'|'clear', representation, dup?, warning?},
+	 *                     or null if nothing ran (cheap bail, dedupe, or the
+	 *                     per-request cap).
 	 */
-	private static function evaluate_content_edit_advisory( $post_id, $post_type, $title, $old_text, $new_text, array $exclude_ids = array() ) {
+	private static function evaluate_content_edit_advisory( $post_id, $post_type, $title, $old_text, $new_text, $representation, array $exclude_ids = array() ) {
 		if ( trim( $new_text ) === trim( $old_text ) ) {
 			return null; // Nothing rendered actually changed — no duplicate work.
 		}
@@ -1191,16 +1227,14 @@ class Mcpwp_Content_Guardrails {
 
 		if ( ! $dup_flag ) {
 			// A REAL check just ran (not a cheap bail above) and came back
-			// clean — if this post has an OPEN duplicate_edit advisory from
-			// an earlier edit, resolve it: Control Room's list should
-			// reflect the post's CURRENT state, not every finding it has
-			// ever had (#957 adversarial review round 5 NIT-4: "a later
-			// advisory check on the same post that scores below the
-			// threshold marks its open duplicate_edit issue resolved").
-			if ( class_exists( 'Mcpwp_SEO_Audit_Store' ) ) {
-				Mcpwp_SEO_Audit_Store::resolve_issue_if_open( $post_id, 'content_guardrails', 'duplicate_edit' );
-			}
-			return null;
+			// clean — the CALLER resolves any OPEN duplicate_edit advisory
+			// this SAME representation raised (#957 adversarial review
+			// round 5 NIT-4, round 6 NIT-1: resolving is now deferred like
+			// recording — see apply_content_edit_advisory_result() — and
+			// scoped to the representation that raised the issue in the
+			// first place, so a clean post_content edit cannot resolve an
+			// issue an Elementor duplicate raised, or vice versa).
+			return array( 'action' => 'clear', 'representation' => $representation );
 		}
 
 		$warning = $dup['city_swap']
@@ -1218,7 +1252,7 @@ class Mcpwp_Content_Guardrails {
 				(int) $dup['match_id']
 			);
 
-		return array( 'dup' => $dup, 'warning' => $warning );
+		return array( 'action' => 'flag', 'representation' => $representation, 'dup' => $dup, 'warning' => $warning );
 	}
 
 	/**
@@ -1229,7 +1263,8 @@ class Mcpwp_Content_Guardrails {
 	 *
 	 * @param int    $post_id   Post ID.
 	 * @param string $post_type Post type.
-	 * @param array  $result    {dup, warning} from evaluate_content_edit_advisory().
+	 * @param array  $result    {action, representation, dup, warning} from
+	 *                          evaluate_content_edit_advisory().
 	 * @return void
 	 */
 	private static function record_content_edit_advisory( $post_id, $post_type, array $result ) {
@@ -1258,7 +1293,7 @@ class Mcpwp_Content_Guardrails {
 		$notice['warnings'][] = $result['warning'];
 		self::$notices_by_post_id[ $post_id ] = $notice;
 
-		self::record_duplicate_edit_issue( $post_id, $post_type, $dup );
+		self::record_duplicate_edit_issue( $post_id, $post_type, $dup, $result['representation'] );
 	}
 
 	/**
@@ -1273,13 +1308,17 @@ class Mcpwp_Content_Guardrails {
 	 * Deduping is "per post, not per call" for free — issue_key() derives
 	 * from (post_id, category, code), so a repeat finding on the same post
 	 * updates the same record instead of creating a new one each time.
+	 * Stores WHICH representation raised it (#957 adversarial review round
+	 * 6 NIT-1), so only a later check of that SAME representation can
+	 * resolve it — see resolve_issue_if_open().
 	 *
-	 * @param int    $post_id   Post ID.
-	 * @param string $post_type Post type.
-	 * @param array  $dup       duplicate_check() result.
+	 * @param int    $post_id        Post ID.
+	 * @param string $post_type      Post type.
+	 * @param array  $dup            duplicate_check() result.
+	 * @param string $representation 'post_content' or 'elementor'.
 	 * @return void
 	 */
-	private static function record_duplicate_edit_issue( $post_id, $post_type, array $dup ) {
+	private static function record_duplicate_edit_issue( $post_id, $post_type, array $dup, $representation ) {
 		if ( ! class_exists( 'Mcpwp_SEO_Audit_Store' ) ) {
 			return;
 		}
@@ -1294,6 +1333,7 @@ class Mcpwp_Content_Guardrails {
 				'type'           => $post_type,
 				'category'       => 'content_guardrails',
 				'code'           => 'duplicate_edit',
+				'representation' => $representation,
 				'severity'       => 'warning',
 				'message'        => $dup['city_swap']
 					? sprintf(
@@ -1408,12 +1448,15 @@ class Mcpwp_Content_Guardrails {
 		$new_text = self::extract_text_from_elementor( $meta_value );
 		// This hook only ever fires AFTER WordPress core has already
 		// written the row (`updated_post_meta`/`added_post_meta` are both
-		// POST-write actions) — recording immediately is correct here; no
-		// deferral needed the way the post_content path needs one (#957
-		// adversarial review round 4 NIT-2).
-		$result = self::evaluate_content_edit_advisory( $object_id, $post->post_type, $post->post_title, $old_text, $new_text );
+		// POST-write actions) — applying the decision immediately is
+		// correct here; no deferral needed the way the post_content path
+		// needs one (#957 adversarial review round 4 NIT-2, round 6
+		// NIT-1). Tagged 'elementor' so a clean check here can only
+		// resolve an issue an EARLIER Elementor check raised, never one a
+		// post_content edit raised.
+		$result = self::evaluate_content_edit_advisory( $object_id, $post->post_type, $post->post_title, $old_text, $new_text, 'elementor' );
 		if ( null !== $result ) {
-			self::record_content_edit_advisory( $object_id, $post->post_type, $result );
+			self::apply_content_edit_advisory_result( $object_id, $post->post_type, $result );
 		}
 	}
 
@@ -2906,27 +2949,71 @@ class Mcpwp_Content_Guardrails {
 	}
 
 	/**
-	 * Settings keys that carry visible widget copy — an ALLOWLIST, not a
-	 * denylist (#957 adversarial review round 5 NIT-1): a key this list
-	 * has never heard of is excluded by default, which is the safe
-	 * direction for anything Elementor-internal this class does not know
-	 * about (`__dynamic__`/`__globals__` bindings, a link/image control's
-	 * own sub-keys, an enum-like select value) — the previous denylist had
-	 * to name every NON-copy pattern instead, the wrong side to be
-	 * incomplete on. Extend this list as real widgets turn up more copy
-	 * keys; it is deliberately not exhaustive of every third-party widget
-	 * in existence.
+	 * Settings keys that carry visible widget copy — an explicit ALLOWLIST
+	 * of exact key names, checked alongside ELEMENTOR_TEXT_COPY_PATTERN_TERMS
+	 * (#957 adversarial review round 5 NIT-1, round 6 WARN-1: "a pure
+	 * allowlist will keep missing keys" — flip-box's title_text_a/_b,
+	 * animated-headline's rotating_text, price-table's sub_heading, and
+	 * every other widget-specific copy key would each need its own entry
+	 * forever). This list is now for keys the PATTERN below does not catch
+	 * — price/period/name/question/answer/quote/excerpt/job_title/company
+	 * and similar, which name real copy without containing any of the
+	 * generic pattern terms. Extend as real widgets turn up more; it is
+	 * deliberately not exhaustive of every third-party widget in
+	 * existence, which is exactly why the pattern match exists too.
 	 *
 	 * @var string[]
 	 */
 	const ELEMENTOR_TEXT_ALLOWLIST_KEYS = array(
-		'title', 'title_text', 'description_text', 'editor', 'text', 'description',
-		'content', 'caption', 'html', 'heading', 'sub_title', 'subtitle',
+		'title', 'title_text', 'title_text_a', 'title_text_b', 'description_text',
+		'description_text_a', 'description_text_b', 'editor', 'text', 'description',
+		'content', 'caption', 'html', 'heading', 'sub_heading', 'sub_title', 'subtitle',
 		'testimonial_content', 'testimonial_name', 'testimonial_job',
 		'blockquote_content', 'alert_title', 'alert_description',
-		'tab_title', 'tab_content', 'item_title', 'item_description',
-		'price', 'period', 'button_text', 'label', 'placeholder',
+		'tab_title', 'tab_content', 'item_title', 'item_description', 'item_text',
+		'price', 'period', 'button_text', 'label', 'field_label', 'placeholder',
 		'quote', 'excerpt', 'question', 'answer', 'name', 'job_title', 'company',
+		'before_text', 'highlighted_text', 'rotating_text', 'after_text',
+		'footer_additional_info', 'ribbon_title', 'button', 'inner_text',
+	);
+
+	/**
+	 * Key-name SUBSTRINGS that mark a settings value as likely copy, even
+	 * when the exact key isn't in ELEMENTOR_TEXT_ALLOWLIST_KEYS (#957
+	 * adversarial review round 6 WARN-1: "the allowlist ... misses stock
+	 * widget copy keys ... a pure allowlist will keep missing keys. Make
+	 * it a hybrid"). Case-insensitive substring match, deliberately, not a
+	 * segment/exact match — real widgets compound these into many
+	 * different names (title_text_a, sub_heading, item_text,
+	 * footer_additional_info, …) that a fixed list can never fully
+	 * enumerate. ELEMENTOR_TEXT_EXCLUSION_TERMS is checked FIRST and wins
+	 * over this — see is_elementor_copy_key().
+	 *
+	 * @var string[]
+	 */
+	const ELEMENTOR_TEXT_COPY_PATTERN_TERMS = array(
+		'text', 'title', 'heading', 'label', 'content', 'description', 'caption',
+		'info', 'headline', 'button', 'item_',
+	);
+
+	/**
+	 * Key-name substrings that mark a settings value as NON-copy metadata
+	 * — checked before, and taking priority over, both
+	 * ELEMENTOR_TEXT_ALLOWLIST_KEYS and ELEMENTOR_TEXT_COPY_PATTERN_TERMS
+	 * (#957 adversarial review round 6 WARN-1). Deliberately a substring
+	 * match, same known trade-off as round 4's denylist: a key that
+	 * happens to CONTAIN one of these as running text (e.g. "guide" inside
+	 * a hypothetical "guide_text") would be wrongly excluded — accepted,
+	 * this is the reviewer's own specified shape, and no real Elementor
+	 * widget key observed so far collides with it.
+	 *
+	 * @var string[]
+	 */
+	const ELEMENTOR_TEXT_EXCLUSION_TERMS = array(
+		'url', 'link', 'href', 'src', 'image', 'icon', 'color', 'typography',
+		'size', 'width', 'height', 'margin', 'padding', 'border', 'background',
+		'animation', 'css', 'class', '_id', 'id', 'align', 'position', 'style',
+		'type', 'view', 'tag', '__dynamic__', '__globals__',
 	);
 
 	/**
@@ -2942,8 +3029,15 @@ class Mcpwp_Content_Guardrails {
 	const ELEMENTOR_TEXT_SKIP_CONTAINER_KEYS = array( '__dynamic__', '__globals__' );
 
 	/**
-	 * Whether a settings key is one of the allowlisted copy-bearing names
-	 * — see ELEMENTOR_TEXT_ALLOWLIST_KEYS.
+	 * Whether a settings key is likely to hold visible copy — a HYBRID of
+	 * an explicit allowlist and a copy-pattern match, both subject to the
+	 * exclusion terms winning first (#957 adversarial review round 6
+	 * WARN-1):
+	 *   1. If the key contains an EXCLUSION term, it is never copy — full
+	 *      stop, regardless of anything else.
+	 *   2. Otherwise, it IS copy if the exact key is in
+	 *      ELEMENTOR_TEXT_ALLOWLIST_KEYS, OR it contains one of
+	 *      ELEMENTOR_TEXT_COPY_PATTERN_TERMS.
 	 *
 	 * @param string|int $key Settings key.
 	 * @return bool
@@ -2957,7 +3051,25 @@ class Mcpwp_Content_Guardrails {
 			// opposite call, correct for THAT design, not this one).
 			return false;
 		}
-		return in_array( strtolower( $key ), self::ELEMENTOR_TEXT_ALLOWLIST_KEYS, true );
+		$lower = strtolower( $key );
+
+		foreach ( self::ELEMENTOR_TEXT_EXCLUSION_TERMS as $term ) {
+			if ( false !== strpos( $lower, $term ) ) {
+				return false;
+			}
+		}
+
+		if ( in_array( $lower, self::ELEMENTOR_TEXT_ALLOWLIST_KEYS, true ) ) {
+			return true;
+		}
+
+		foreach ( self::ELEMENTOR_TEXT_COPY_PATTERN_TERMS as $term ) {
+			if ( false !== strpos( $lower, $term ) ) {
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 	/**

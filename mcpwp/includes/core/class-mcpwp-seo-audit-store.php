@@ -121,6 +121,7 @@ class Mcpwp_SEO_Audit_Store {
 				'url'               => esc_url_raw( (string) ( $issue['url'] ?? '' ) ),
 				'category'          => sanitize_key( (string) ( $issue['category'] ?? '' ) ),
 				'code'              => sanitize_key( (string) ( $issue['code'] ?? '' ) ),
+				'representation'    => sanitize_key( (string) ( $issue['representation'] ?? '' ) ),
 				'severity'          => sanitize_key( (string) ( $issue['severity'] ?? '' ) ),
 				'message'           => sanitize_text_field( (string) ( $issue['message'] ?? '' ) ),
 				'recommendation'    => sanitize_text_field( (string) ( $issue['recommendation'] ?? '' ) ),
@@ -146,12 +147,27 @@ class Mcpwp_SEO_Audit_Store {
 	 * key derivation upsert_issue() writes with, so this resolves exactly
 	 * the record a matching upsert_issue() call would update.
 	 *
-	 * @param int    $post_id  Post ID.
-	 * @param string $category Issue category.
-	 * @param string $code     Issue code.
-	 * @return bool True if an open issue was found and resolved.
+	 * When $representation is given, resolves ONLY if it matches the
+	 * representation STORED on the open issue (#957 adversarial review
+	 * round 6 NIT-1: "resolve a duplicate_edit issue only when the SAME
+	 * representation that raised it is re-checked") — a published post
+	 * can be flagged by its Elementor data and separately have an
+	 * unrelated, genuinely clean post_content edit; that clean
+	 * post_content check must not resolve an issue the Elementor side
+	 * raised, since the Elementor content that caused it was never
+	 * re-examined at all.
+	 *
+	 * @param int    $post_id        Post ID.
+	 * @param string $category       Issue category.
+	 * @param string $code           Issue code.
+	 * @param string $representation 'post_content' or 'elementor' — the
+	 *                               representation THIS check just ran
+	 *                               against. Empty string matches any
+	 *                               (back-compat for a caller that does not
+	 *                               track representations at all).
+	 * @return bool True if an open, representation-matching issue was found and resolved.
 	 */
-	public static function resolve_issue_if_open( $post_id, $category, $code ) {
+	public static function resolve_issue_if_open( $post_id, $category, $code, $representation = '' ) {
 		$issues = self::get_guardrail_issues();
 		$key    = self::issue_key(
 			array( 'id' => $post_id ),
@@ -160,6 +176,10 @@ class Mcpwp_SEO_Audit_Store {
 
 		if ( ! isset( $issues[ $key ] ) || 'open' !== ( $issues[ $key ]['status'] ?? '' ) ) {
 			return false;
+		}
+
+		if ( '' !== $representation && ( $issues[ $key ]['representation'] ?? '' ) !== $representation ) {
+			return false; // A DIFFERENT representation raised this — not this check's to resolve.
 		}
 
 		$issues[ $key ]['status']           = 'resolved';
