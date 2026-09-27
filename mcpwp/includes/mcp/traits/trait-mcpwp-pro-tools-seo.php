@@ -222,6 +222,19 @@ trait Mcpwp_Pro_Tools_Seo_Trait {
 					'type'        => 'string',
 					'description' => 'Twitter card image URL',
 				),
+			),
+			null,
+			array(
+				array(
+					'id' => 42,
+					'title' => 'Best Coffee Beans Online | Acme Roasters',
+					'description' => 'Shop small-batch, ethically sourced coffee beans roasted fresh weekly.',
+					'focus_keyword' => 'coffee beans online',
+					'canonical' => 'https://example.com/coffee-beans',
+					'noindex' => false,
+					'og_title' => 'Best Coffee Beans Online',
+					'og_image' => 'https://example.com/wp-content/uploads/coffee-hero.jpg',
+				),
 			)
 		);
 
@@ -280,6 +293,24 @@ trait Mcpwp_Pro_Tools_Seo_Trait {
 						'required'   => array( 'id' ),
 					),
 					'description' => 'Alias for updates. Accepted for compatibility with the SEO guide examples.',
+				),
+			),
+			null,
+			array(
+				array(
+					'updates' => array(
+						array(
+							'id' => 12,
+							'title' => 'Summer Sale | Acme',
+							'description' => 'Save up to 40% storewide through August.',
+							'focus_keyword' => 'summer sale',
+						),
+						array(
+							'id' => 15,
+							'title' => 'Returns & Exchanges | Acme',
+							'description' => 'Free returns within 30 days.',
+						),
+					),
 				),
 			)
 		);
