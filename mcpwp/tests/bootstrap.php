@@ -1715,6 +1715,11 @@ function did_action($hook)
 
 function get_posts($args = array())
 {
+    // Call-count spy — lets a test assert the duplicate-check QUERY itself
+    // never ran (e.g. a title-only edit doing zero duplicate work), not
+    // just that the outcome happened to be unflagged.
+    $GLOBALS['mcpwp_test_get_posts_call_count'] = ($GLOBALS['mcpwp_test_get_posts_call_count'] ?? 0) + 1;
+
     $posts = array_values($GLOBALS['_mcpwp_test_posts']);
     $types = isset($args['post_type']) ? (array) $args['post_type'] : array();
     $statuses = isset($args['post_status']) ? (array) $args['post_status'] : array();
@@ -2729,7 +2734,23 @@ function update_post_meta($post_id, $key, $value)
         return false;
     }
 
-    $GLOBALS['_mcpwp_test_meta'][ (int) $post_id ][ $key ] = wp_unslash($value);
+    // Mirror WP core's update_metadata(): a key that has no existing row
+    // yet is delegated to add_metadata() internally, which fires
+    // add_post_meta/added_post_meta instead of update_post_meta/
+    // updated_post_meta. Content guardrails (#957 round 3) hooks all three
+    // of these real WordPress core meta actions to advisory-check an
+    // already-published post's _elementor_data edit — a double this class
+    // never fired at all made that path untestable.
+    $post_id_int = (int) $post_id;
+    $existed     = isset($GLOBALS['_mcpwp_test_meta'][ $post_id_int ][ $key ]);
+    $meta_id     = 1;
+
+    do_action($existed ? 'update_post_meta' : 'add_post_meta', $meta_id, $post_id_int, $key, $value);
+
+    $GLOBALS['_mcpwp_test_meta'][ $post_id_int ][ $key ] = wp_unslash($value);
+
+    do_action($existed ? 'updated_post_meta' : 'added_post_meta', $meta_id, $post_id_int, $key, $value);
+
     return true;
 }
 

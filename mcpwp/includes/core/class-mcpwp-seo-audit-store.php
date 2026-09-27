@@ -43,6 +43,68 @@ class Mcpwp_SEO_Audit_Store {
 	const MAX_ISSUES = 1000;
 
 	/**
+	 * Directly upsert ONE issue record, bypassing store_issues_for_run()'s
+	 * run-scoped bookkeeping (#957 round 3: content guardrails' published-
+	 * edit advisory). store_issues_for_run() resolves every OTHER open issue
+	 * for a post that its own url-rows didn't re-report — correct for a full
+	 * SEO audit pass (it is the whole site's current truth), wrong for a
+	 * single ad-hoc finding: recording one duplicate-content advisory must
+	 * not silently resolve unrelated, still-real SEO issues on the same post
+	 * just because this call never mentioned them.
+	 *
+	 * Reuses issue_key()'s existing (post_id, category, code) derivation, so
+	 * calling this again for the SAME post+category+code updates the same
+	 * record (seen_count, last_seen_at) instead of creating a second one —
+	 * "dedupe per post, not per call" falls out of the existing key shape
+	 * for free.
+	 *
+	 * @param array $issue { post_id, title, url, type, category, code, severity, message, recommendation, approval_required }.
+	 * @return string The issue's stable key.
+	 */
+	public static function upsert_issue( array $issue ) {
+		$issues = self::get_issues();
+		$key    = self::issue_key(
+			array( 'id' => $issue['post_id'] ?? 0 ),
+			array( 'category' => $issue['category'] ?? '', 'code' => $issue['code'] ?? '' )
+		);
+		$now = gmdate( 'c' );
+
+		$record = isset( $issues[ $key ] ) && is_array( $issues[ $key ] ) ? $issues[ $key ] : array(
+			'id'                => $key,
+			'first_seen_at'     => $now,
+			'first_seen_run_id' => '',
+			'seen_count'        => 0,
+		);
+
+		$record = array_merge(
+			$record,
+			array(
+				'status'            => 'open',
+				'last_seen_at'      => $now,
+				'last_seen_run_id'  => '',
+				'seen_count'        => (int) ( $record['seen_count'] ?? 0 ) + 1,
+				'post_id'           => (int) ( $issue['post_id'] ?? 0 ),
+				'title'             => sanitize_text_field( (string) ( $issue['title'] ?? '' ) ),
+				'type'              => sanitize_key( (string) ( $issue['type'] ?? '' ) ),
+				'url'               => esc_url_raw( (string) ( $issue['url'] ?? '' ) ),
+				'category'          => sanitize_key( (string) ( $issue['category'] ?? '' ) ),
+				'code'              => sanitize_key( (string) ( $issue['code'] ?? '' ) ),
+				'severity'          => sanitize_key( (string) ( $issue['severity'] ?? '' ) ),
+				'message'           => sanitize_text_field( (string) ( $issue['message'] ?? '' ) ),
+				'recommendation'    => sanitize_text_field( (string) ( $issue['recommendation'] ?? '' ) ),
+				'approval_required' => ! empty( $issue['approval_required'] ),
+				'priority_score'    => self::priority_score( $issue ),
+			)
+		);
+		unset( $record['resolved_at'], $record['resolved_run_id'] );
+
+		$issues[ $key ] = $record;
+		self::save_issues( $issues );
+
+		return $key;
+	}
+
+	/**
 	 * Store an audit run and normalize issue records.
 	 *
 	 * @param array $audit Audit payload.
