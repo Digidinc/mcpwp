@@ -1110,6 +1110,18 @@ trait Mcpwp_Api_Auth {
 	 * @return int
 	 */
 	protected function request_rate_weight( $request ) {
+		// Site graph reads (#943 S2 review round 2, W6): a direct REST call is
+		// priced the same as the tool that dispatches to it, through the one
+		// graph_weight() table. An internal /mcp or /batch sub-request never
+		// reaches this (it takes the unmetered verify_api_key_auth_only() path),
+		// so a tools/call that already charged the weight is not charged twice.
+		if ( class_exists( 'Mcpwp_Operation_Weights' ) && method_exists( $request, 'get_route' ) ) {
+			$params = method_exists( $request, 'get_params' ) ? (array) $request->get_params() : array();
+			$graph  = Mcpwp_Operation_Weights::graph_weight( Mcpwp_Operation_Weights::normalize_route( (string) $request->get_route() ), $params );
+			if ( null !== $graph ) {
+				return $graph;
+			}
+		}
 		return 1;
 	}
 

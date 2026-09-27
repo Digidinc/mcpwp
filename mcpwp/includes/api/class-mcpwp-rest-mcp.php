@@ -2350,6 +2350,32 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		// see forward_caller_credential()).
 		$this->forward_caller_credential( $request, $sub_request );
 
+		// A resource that is a heavy read (mcpwp://graph, weight 5) costs what
+		// the same route costs over REST (#943 S2 review round 2, W6). The
+		// outer /mcp request paid one slot; charge the rest before dispatch,
+		// exactly as tools/call does for a multi-operation tool. The inner
+		// dispatch below is unmetered, so nothing is charged twice.
+		$resource_weight = class_exists( 'Mcpwp_Operation_Weights' )
+			? Mcpwp_Operation_Weights::graph_weight( Mcpwp_Operation_Weights::normalize_route( $definition['route'] ), (array) $sub_request->get_params() )
+			: null;
+		if ( null !== $resource_weight && $resource_weight > 1 ) {
+			$charge = $this->charge_additional_slots( $resource_weight - 1 );
+			if ( is_wp_error( $charge ) ) {
+				$data = $charge->get_error_data();
+				return $this->jsonrpc_error(
+					$id,
+					-32000,
+					$charge->get_error_message(),
+					array(
+						'code'        => 'rate_limited',
+						'requested'   => $resource_weight,
+						'retry_after' => isset( $data['retry_after'] ) ? (int) $data['retry_after'] : null,
+						'hint'        => sprintf( 'Reading %s costs %d rate-limit slots. Nothing was read. Wait for the window or raise the key\'s limits.', $uri, $resource_weight ),
+					)
+				);
+			}
+		}
+
 		// Mark as an internal sub-request so the inner dispatch's own
 		// permission_callback runs the unmetered auth-only fast path
 		// (verify_api_key_auth_only()) instead of full compute_api_key_verdict()

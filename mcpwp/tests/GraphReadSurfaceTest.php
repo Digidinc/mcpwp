@@ -183,7 +183,7 @@ final class GraphReadSurfaceTest extends TestCase
             $out = array();
             foreach ($this->edges as $e) {
                 if (false !== strpos($query, "'" . $e['to_key'] . "'")) {
-                    $out[] = array('to_key' => $e['to_key'], 'from_key' => $e['from_key']);
+                    $out[] = array('to_key' => $e['to_key'], 'from_key' => $e['from_key'], 'type' => $e['type']);
                 }
             }
             return $out;
@@ -552,7 +552,7 @@ final class GraphReadSurfaceTest extends TestCase
     {
         Mcpwp_Graph_Reader::query(array('orphan' => true), true);
         $q = $this->graph_sql()[0];
-        $this->assertStringContainsString("LEFT(n.node_key, 5) = 'post:' AND p.post_status = 'publish' AND NOT EXISTS (SELECT 1 FROM wp_mcpwp_graph_edges eo WHERE eo.to_key = n.node_key AND eo.type = 'links_to' AND (CASE WHEN LEFT(eo.from_key, 5) = 'post:' THEN EXISTS (SELECT 1 FROM wp_posts eofp WHERE eofp.ID = CAST(SUBSTRING(eo.from_key, 6) AS UNSIGNED) AND eofp.post_type <> 'attachment' AND eofp.post_status IN ('publish'))", $q);
+        $this->assertStringContainsString("LEFT(n.node_key, 5) = 'post:' AND p.post_status IN ('publish') AND NOT EXISTS (SELECT 1 FROM wp_mcpwp_graph_edges eo WHERE eo.to_key = n.node_key AND eo.type = 'links_to' AND (CASE WHEN LEFT(eo.from_key, 5) = 'post:' THEN EXISTS (SELECT 1 FROM wp_posts eofp WHERE eofp.ID = CAST(SUBSTRING(eo.from_key, 6) AS UNSIGNED) AND eofp.post_type <> 'attachment' AND eofp.post_status IN ('publish'))", $q);
         // Even for a privileged caller: a draft's or trashed post's link does not rescue an orphan.
         $this->assertStringContainsString("eopw.post_password <> ''", $q);
     }
@@ -1011,6 +1011,35 @@ final class GraphReadSurfaceTest extends TestCase
         $this->assertNull(Mcpwp_Graph_Reader::get_node('fact:roadmap', false));
         $this->assertNull(Mcpwp_Graph_Reader::get_node('url:2', false));
         $this->assertSame('https://partner.example/a', Mcpwp_Graph_Reader::get_node('url:1', false)['label']);
+    }
+
+    /** Review round 2, NIT-2: a protected post's content edge does not anchor another kind. */
+    public function test_protected_posts_content_edges_do_not_anchor_other_kinds(): void
+    {
+        $this->node('url:3', 'url', 0, 'https://members-only.example/', '');
+        $this->node('query:abc', 'query', 0, 'members pricing', '');
+        $this->edges = array(
+            $this->edge(1, 'post:30', 'url:3'),                    // links_to from a protected post
+            $this->edge(2, 'post:30', 'query:abc', 'targets_query'), // not content-derived
+        );
+        $this->assertSame(array('query:abc' => true), Mcpwp_Graph_Reader::visible_keys(array('url:3', 'query:abc'), false));
+        $this->assertNull(Mcpwp_Graph_Reader::get_node('url:3', false));
+
+        Mcpwp_Graph_Reader::get_node('url:3', false);
+        $node_sql = array_values(array_filter($this->graph_sql(), static function ($q) {
+            return false !== strpos($q, 'WHERE n.node_key = ');
+        }));
+        $this->assertStringContainsString("ELSE EXISTS (SELECT 1 FROM wp_mcpwp_graph_edges nvx WHERE nvx.to_key = n.node_key", end($node_sql));
+        $this->assertStringContainsString("AND NOT (nvx.type IN ('links_to', 'uses_media') AND LEFT(nvx.from_key, 5) = 'post:' AND EXISTS (SELECT 1 FROM wp_posts nvxw WHERE nvxw.ID = CAST(SUBSTRING(nvx.from_key, 6) AS UNSIGNED) AND nvxw.post_password <> ''))", end($node_sql));
+    }
+
+    /** Review round 2, NIT-3: orphan uses every public status, not a literal 'publish'. */
+    public function test_orphan_uses_public_statuses(): void
+    {
+        Mcpwp_Graph_Reader::query(array('orphan' => true), false);
+        $q = $this->graph_sql()[0];
+        $this->assertStringContainsString("LEFT(n.node_key, 5) = 'post:' AND p.post_status IN ('publish') AND NOT EXISTS", $q);
+        $this->assertStringNotContainsString("p.post_status = 'publish' AND NOT EXISTS", $q);
     }
 
     /** Review NIT: dirty_count for a read key counts visible queued nodes only. */

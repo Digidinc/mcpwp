@@ -28,6 +28,74 @@ class Mcpwp_Route_Category_Parity_Harness {
 
 final class RouteCategoryToolParityTest extends TestCase {
 
+	/** Ungated 'site' tool routes, "tool route" sorted. Owner decision pending. */
+	const SITE_EXEMPT = array(
+		'wp_add_menu_item /mcpwp/v1/menus/1/items',
+		'wp_add_widget /mcpwp/v1/sidebars/1/widgets',
+		'wp_analytics /mcpwp/v1/analytics',
+		'wp_assign_menu_location /mcpwp/v1/menus/assign-location',
+		'wp_create_menu /mcpwp/v1/menus',
+		'wp_create_site_blueprint /mcpwp/v1/site-blueprints',
+		'wp_delete_custom_css /mcpwp/v1/custom-css',
+		'wp_delete_menu /mcpwp/v1/menus/1',
+		'wp_delete_menu_item /mcpwp/v1/menus/1/items/1',
+		'wp_delete_menu_item_auto /mcpwp/v1/menus/items/1',
+		'wp_delete_widget /mcpwp/v1/widgets/1',
+		'wp_deploy_site_blueprint /mcpwp/v1/site-blueprints/1/deploy',
+		'wp_detect_plugins /mcpwp/v1/plugins',
+		'wp_extract_site_blueprint /mcpwp/v1/site-blueprints/extract',
+		'wp_flush_cache /mcpwp/v1/cache-flush',
+		'wp_flush_permalinks /mcpwp/v1/flush-permalinks',
+		'wp_forget /mcpwp/v1/memory/1/1',
+		'wp_get_agent_playbook /mcpwp/v1/agent-playbooks',
+		'wp_get_css_length /mcpwp/v1/custom-css/length',
+		'wp_get_custom_css /mcpwp/v1/custom-css',
+		'wp_get_design_reference /mcpwp/v1/design-references/1',
+		'wp_get_guide /mcpwp/v1/guides',
+		'wp_get_menu /mcpwp/v1/menus/1',
+		'wp_get_option /mcpwp/v1/option',
+		'wp_get_options /mcpwp/v1/options',
+		'wp_get_rendered_copy /mcpwp/v1/rendered-copy',
+		'wp_get_rendered_html /mcpwp/v1/rendered-html',
+		'wp_get_sidebar /mcpwp/v1/sidebars/1',
+		'wp_get_sidebar_widgets /mcpwp/v1/sidebars/1/widgets',
+		'wp_get_signals /mcpwp/v1/signals',
+		'wp_get_site_blueprint /mcpwp/v1/site-blueprints/1',
+		'wp_get_site_context /mcpwp/v1/site-context',
+		'wp_get_site_health /mcpwp/v1/site-health',
+		'wp_get_site_state /mcpwp/v1/site-state',
+		'wp_get_theme_info /mcpwp/v1/theme-info',
+		'wp_get_widget /mcpwp/v1/widgets/1',
+		'wp_get_widget_types /mcpwp/v1/widgets/types',
+		'wp_get_workflow /mcpwp/v1/workflows/1',
+		'wp_introspect /mcpwp/v1/introspect',
+		'wp_list_design_references /mcpwp/v1/design-references',
+		'wp_list_memories /mcpwp/v1/memory',
+		'wp_list_menu_items /mcpwp/v1/menus/1/items',
+		'wp_list_menu_locations /mcpwp/v1/menus/locations',
+		'wp_list_menus /mcpwp/v1/menus',
+		'wp_list_sidebars /mcpwp/v1/sidebars',
+		'wp_list_site_blueprints /mcpwp/v1/site-blueprints',
+		'wp_move_widget /mcpwp/v1/widgets/1/move',
+		'wp_onboard /mcpwp/v1/onboard',
+		'wp_recall /mcpwp/v1/memory',
+		'wp_remember /mcpwp/v1/memory',
+		'wp_reorder_menu_items /mcpwp/v1/menus/1/items/reorder',
+		'wp_reorder_widgets /mcpwp/v1/sidebars/1/reorder',
+		'wp_set_custom_css /mcpwp/v1/custom-css',
+		'wp_set_site_context /mcpwp/v1/site-context',
+		'wp_setup_menu /mcpwp/v1/menus/setup',
+		'wp_site_info /mcpwp/v1/site-info',
+		'wp_update_design_reference /mcpwp/v1/design-references/1',
+		'wp_update_menu /mcpwp/v1/menus/1',
+		'wp_update_menu_item /mcpwp/v1/menus/1/items/1',
+		'wp_update_menu_item_auto /mcpwp/v1/menus/items/1',
+		'wp_update_option /mcpwp/v1/option',
+		'wp_update_options /mcpwp/v1/options',
+		'wp_update_widget /mcpwp/v1/widgets/1',
+		'wp_upload_design_reference /mcpwp/v1/design-references',
+	);
+
 	/**
 	 * @return array<string,array{0:string,1:string}> tool => [route, tool category]
 	 */
@@ -70,7 +138,7 @@ final class RouteCategoryToolParityTest extends TestCase {
 			// is an owner decision (#943 S2 review follow-up). Anything else
 			// resolving to '' fails here.
 			if ( 'site' === $tool_category && '' === $route_category ) {
-				$site_exempt[] = $route;
+				$site_exempt[] = $name . ' ' . $route;
 				continue;
 			}
 			if ( '' === $route_category || $route_category !== $tool_category ) {
@@ -79,8 +147,10 @@ final class RouteCategoryToolParityTest extends TestCase {
 		}
 
 		$this->assertSame( array(), $failures, "Tool routes whose REST category gate disagrees with the tool:\n" . implode( "\n", $failures ) );
-		// The exemption must not grow silently: 64 site-tool routes today.
-		$this->assertLessThanOrEqual( 64, count( $site_exempt ), "New ungated 'site' tool routes:\n" . implode( "\n", $site_exempt ) );
+		// The exemption is pinned exactly (review round 2, NIT-1): any new,
+		// removed or substituted ungated 'site' tool route fails here.
+		sort( $site_exempt );
+		$this->assertSame( self::SITE_EXEMPT, $site_exempt );
 	}
 
 	public function test_graph_routes_are_content(): void {

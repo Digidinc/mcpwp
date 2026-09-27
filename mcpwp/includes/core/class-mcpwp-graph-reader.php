@@ -387,17 +387,23 @@ class Mcpwp_Graph_Reader {
 		}
 		$edges = Mcpwp_Graph_Builder::edges_table();
 		$rows  = self::get_results(
-			"SELECT e.to_key AS to_key, e.from_key AS from_key FROM {$edges} e WHERE e.to_key IN (" . self::placeholders( count( $keys ) ) . ") AND LEFT(e.from_key, 5) = 'post:' LIMIT %d",
+			"SELECT e.to_key AS to_key, e.from_key AS from_key, e.type AS type FROM {$edges} e WHERE e.to_key IN (" . self::placeholders( count( $keys ) ) . ") AND LEFT(e.from_key, 5) = 'post:' LIMIT %d",
 			array_merge( $keys, array( 5000 ) )
 		);
 		$ids = array();
 		foreach ( $rows as $r ) {
 			$ids[] = self::post_id_from_key( $r['from_key'] );
 		}
-		$public = self::visible_post_ids( $ids, false );
-		$out    = array();
+		$public    = self::visible_post_ids( $ids, false );
+		$protected = self::protected_post_ids( $ids );
+		$out       = array();
 		foreach ( $rows as $r ) {
-			if ( isset( $public[ self::post_id_from_key( $r['from_key'] ) ] ) ) {
+			$from = self::post_id_from_key( $r['from_key'] );
+			// Review round 2, NIT-2: a protected post's content edge is not an anchor.
+			if ( isset( $protected[ $from ] ) && in_array( (string) ( $r['type'] ?? '' ), self::CONTENT_EDGE_TYPES, true ) ) {
+				continue;
+			}
+			if ( isset( $public[ $from ] ) ) {
 				$out[ (string) $r['to_key'] ] = true;
 			}
 		}
@@ -451,7 +457,10 @@ class Mcpwp_Graph_Reader {
 			. " WHEN LEFT({$col}, 6) = 'media:' THEN EXISTS (SELECT 1 FROM {$posts} {$a}m WHERE {$a}m.ID = CAST(SUBSTRING({$col}, 7) AS UNSIGNED) AND {$a}m.post_type = 'attachment'"
 			. " AND ({$a}m.post_parent = 0 OR EXISTS (SELECT 1 FROM {$posts} {$a}mp WHERE {$a}mp.ID = {$a}m.post_parent AND {$a}mp.post_status IN ({$in}))))"
 			. " ELSE EXISTS (SELECT 1 FROM {$edges} {$a}x WHERE {$a}x.to_key = {$col} AND LEFT({$a}x.from_key, 5) = 'post:'"
-			. " AND EXISTS (SELECT 1 FROM {$posts} {$a}xp WHERE {$a}xp.ID = CAST(SUBSTRING({$a}x.from_key, 6) AS UNSIGNED) AND {$a}xp.post_status IN ({$in})))"
+			. " AND EXISTS (SELECT 1 FROM {$posts} {$a}xp WHERE {$a}xp.ID = CAST(SUBSTRING({$a}x.from_key, 6) AS UNSIGNED) AND {$a}xp.post_status IN ({$in}))"
+			// Review round 2, NIT-2: a password-protected post's content edge
+			// does not anchor a node, the same rule live_inbound_sql() applies.
+			. ' AND NOT ' . self::protected_content_edge_sql( "{$a}x", "{$a}xw" ) . ')'
 			. ' END) = 1';
 		return array( $sql, array_merge( $pub, $tax, $pub, $pub ) );
 	}
@@ -1543,9 +1552,12 @@ class Mcpwp_Graph_Reader {
 
 		if ( $q['orphan'] ) {
 			list( $live_sql, $live_params ) = self::live_inbound_sql( 'eo' );
-			$where[] = "LEFT(n.node_key, 5) = 'post:' AND p.post_status = 'publish'"
+			// Review round 2, NIT-3: "published" is every public status, the
+			// same public_statuses() set visibility uses, not a literal.
+			$statuses = self::public_statuses();
+			$where[]  = "LEFT(n.node_key, 5) = 'post:' AND p.post_status IN (" . self::placeholders( count( $statuses ) ) . ')'
 				. " AND NOT EXISTS (SELECT 1 FROM {$edges} eo WHERE eo.to_key = n.node_key AND eo.type = 'links_to' AND {$live_sql})";
-			$params  = array_merge( $params, $live_params );
+			$params   = array_merge( $params, $statuses, $live_params );
 		}
 
 		if ( null !== $q['min_inbound'] || null !== $q['max_inbound'] ) {
