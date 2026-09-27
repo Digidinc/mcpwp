@@ -313,6 +313,29 @@ class Mcpwp_Posts {
 			$post_type = $validated;
 		}
 
+		// elementor_snippet is whitelisted in $safe_nonpublic_types (a
+		// generic caller can list/read them fine), but a generic create
+		// here writes only post_content — never _elementor_code,
+		// _elementor_location, or _elementor_priority. That produces a
+		// snippet that reads back via the "may be altered" legacy fallback
+		// in Mcpwp_REST_Elementor_Pro::read_custom_code_source() forever
+		// (never rendered by Elementor, since its own renderer reads
+		// _elementor_code, not post_content — see #871) and, being a
+		// snippet with no _elementor_location at all, never enters
+		// Elementor's location-keyed conditions cache either (#974/#976
+		// adversarial review, NIT-c). Refusing here, once, is smaller than
+		// teaching this generic writer the Custom Code shape.
+		if ( 'elementor_snippet' === $post_type ) {
+			return new WP_Error(
+				'use_custom_code_tool',
+				__( 'Elementor Custom Code snippets cannot be created through the generic post endpoint.', 'mcpwp' ),
+				array(
+					'status' => 400,
+					'hint'   => 'Use wp_create_elementor_custom_code (POST /elementor/custom-code) instead — it writes the _elementor_code/_elementor_location/_elementor_priority meta Elementor\'s own renderer and conditions cache require, which this generic endpoint does not.',
+				)
+			);
+		}
+
 		// Validate terms and meta before anything is written (#797).
 		$resolved_terms = Mcpwp_Post_Fields::resolve_terms( isset( $data['terms'] ) ? $data['terms'] : null, $post_type, $data );
 		if ( is_wp_error( $resolved_terms ) ) {

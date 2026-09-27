@@ -532,7 +532,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 
 		$data = array(
 			'id'      => (int) $post_id,
-			'snippet' => $this->format_custom_code_snippet( get_post( $post_id ), true ),
+			'snippet' => $this->format_custom_code_snippet( get_post( $post_id ), true, $prepared['code'] ),
 		);
 
 		$this->log_activity( 'create_elementor_custom_code', $request, $this->redact_custom_code_payload( $data ) );
@@ -658,7 +658,11 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 
 		$data = array(
 			'id'      => (int) $post->ID,
-			'snippet' => $this->format_custom_code_snippet( get_post( $post->ID ), true ),
+			'snippet' => $this->format_custom_code_snippet(
+				get_post( $post->ID ),
+				true,
+				array_key_exists( 'code', $prepared ) ? $prepared['code'] : null
+			),
 		);
 
 		$this->log_activity( 'update_elementor_custom_code', $request, $this->redact_custom_code_payload( $data ) );
@@ -789,6 +793,15 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			$this->log_activity( 'set_elementor_custom_code_status', $request, null, $status );
 			return $this->error_response_from_wp_error( $update );
 		}
+
+		// #974/#976 review W1: enable_custom_code()/disable_custom_code()
+		// are a status-only change that never runs through
+		// save_custom_code_meta() at all — without this, a snippet created
+		// as draft (whose cache entry save_custom_code_conditions()'s
+		// status-filtered regenerate() never wrote in the first place) and
+		// later enabled here would stay permanently absent from Elementor
+		// Pro's real conditions cache and never render.
+		$this->sync_custom_code_conditions_cache( $id );
 
 		$data = array(
 			'id'      => $id,
@@ -926,7 +939,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		}
 
 		if ( array_key_exists( 'code', $payload ) ) {
-			$blocked = $this->custom_code_multisite_refusal( $payload['code'] );
+			$blocked = $this->custom_code_unfiltered_html_refusal( $payload['code'] );
 
 			if ( is_wp_error( $blocked ) ) {
 				return $this->error_response(
@@ -1043,12 +1056,22 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	 * for location (see normalize_custom_code_location() above). Rejecting
 	 * outright, the same way that method does, is the fix.
 	 *
+	 * Deliberately NOT `sanitize_key()` (#974/#976 review NIT-a): that
+	 * function is built for slugs, so it strips ANY character outside
+	 * a-z0-9_- with a regex — including internal punctuation and whitespace
+	 * — before the allow-list comparison ever runs. `" publish!"` survives
+	 * that as `"publish"` and would have been silently ACCEPTED, exactly
+	 * the "looks clean after all" trap this method exists to close for the
+	 * more obvious typos. Only `trim()` + `strtolower()` run before the
+	 * exact match, so anything that is not byte-for-byte (case-insensitive)
+	 * `publish` or `draft` once outer whitespace is gone is refused.
+	 *
 	 * @param string $status Raw status.
 	 * @return string|WP_Error 'publish' or 'draft', or error for anything else.
 	 */
 	private function normalize_custom_code_status( $status ) {
 		$allowed    = array( 'publish', 'draft' );
-		$normalized = sanitize_key( (string) $status );
+		$normalized = is_scalar( $status ) ? strtolower( trim( (string) $status ) ) : '';
 
 		if ( in_array( $normalized, $allowed, true ) ) {
 			return $normalized;
@@ -1263,38 +1286,81 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	}
 
 	/**
-	 * Refuse a Custom Code write that multisite will not let us honour.
+	 * Whether this environment could ever grant `unfiltered_html` for a
+	 * Custom Code write, regardless of who is asking.
 	 *
-	 * WordPress strips `unfiltered_html` from administrators and editors on
-	 * multisite, leaving it to super admins alone. Granting it to the
-	 * mcpwp_api_agent user there would hand the bot MORE power than the site's
-	 * own administrator holds — so the grant is refused on multisite for anyone
-	 * short of a super admin.
+	 * Two independent conditions make the scoped grant in
+	 * write_custom_code_meta() structurally inert rather than merely
+	 * user-specific: WordPress core's own `map_meta_cap()` substitutes the
+	 * primitive capability actually checked with the sentinel
+	 * `'do_not_allow'` in both cases, and no `user_has_cap` filter —
+	 * including the one this class installs — can ever satisfy that:
+	 *
+	 *  - `DISALLOW_UNFILTERED_HTML`: core's comment on this branch says
+	 *    "even admins and super admins." #974 BLOCK-1 (adversarial review
+	 *    of #990) found this had no check at all: the grant applied,
+	 *    Elementor's own sanitize_callback stripped `<script>` from
+	 *    `_elementor_code` anyway, and the readback reported
+	 *    `code_source:_elementor_code, code_may_be_altered:false` while
+	 *    the front end printed bare JS text — a confident wrong answer.
+	 *  - Multisite without super admin: the pre-existing check this method
+	 *    already made (formerly custom_code_multisite_refusal()).
+	 *
+	 * @return bool True when a grant here could actually take effect.
+	 */
+	private function custom_code_environment_can_hold_unfiltered_html() {
+		if ( defined( 'DISALLOW_UNFILTERED_HTML' ) && DISALLOW_UNFILTERED_HTML ) {
+			return false;
+		}
+
+		if ( function_exists( 'is_multisite' ) && is_multisite() ) {
+			return function_exists( 'is_super_admin' ) && is_super_admin( get_current_user_id() );
+		}
+
+		return true;
+	}
+
+	/**
+	 * Refuse a Custom Code write this environment cannot actually honour.
+	 *
+	 * Formerly custom_code_multisite_refusal(), covering only multisite.
+	 * #974 BLOCK-1 added the `DISALLOW_UNFILTERED_HTML` case: see
+	 * custom_code_environment_can_hold_unfiltered_html()'s docblock for why
+	 * that one needed its OWN refusal rather than falling through to the
+	 * multisite message alone — it is structurally the same failure (a
+	 * grant that can never take effect), reached a different way, and a
+	 * caller told "multisite" on a single-site install with this constant
+	 * set would have no idea what actually happened.
 	 *
 	 * The refusal is deliberately narrow: it fires only when the code would
 	 * actually be altered by kses. A snippet that survives the pass unchanged
-	 * needs no capability, so multisite is no obstacle to writing it and we do
-	 * not invent one.
+	 * needs no capability, so neither condition is an obstacle to writing it
+	 * and we do not invent one.
 	 *
-	 * Refusing beats proceeding. Without the grant the snippet would be stored
-	 * with its <script> silently removed and would render as an empty comment
-	 * block — a write reported as successful that cannot do the one thing it was
-	 * asked to do. An honest 403 is the better failure.
+	 * Refusing beats proceeding. Without a grant that can actually apply,
+	 * the snippet would be stored with its <script> silently removed and
+	 * would render as an empty comment block — a write reported as
+	 * successful that cannot do the one thing it was asked to do. An honest
+	 * 403 is the better failure.
 	 *
 	 * @param string $code Raw snippet code.
 	 * @return true|WP_Error True when the write may proceed.
 	 */
-	private function custom_code_multisite_refusal( $code ) {
+	private function custom_code_unfiltered_html_refusal( $code ) {
 		if ( ! $this->code_needs_unfiltered_html( $code ) ) {
 			return true;
 		}
 
-		if ( ! function_exists( 'is_multisite' ) || ! is_multisite() ) {
+		if ( $this->custom_code_environment_can_hold_unfiltered_html() ) {
 			return true;
 		}
 
-		if ( function_exists( 'is_super_admin' ) && is_super_admin( get_current_user_id() ) ) {
-			return true;
+		if ( defined( 'DISALLOW_UNFILTERED_HTML' ) && DISALLOW_UNFILTERED_HTML ) {
+			return new WP_Error(
+				'unfiltered_html_disallowed',
+				__( 'This snippet contains markup (such as <script>) that WordPress strips unless the writer holds unfiltered_html. This site defines DISALLOW_UNFILTERED_HTML, which WordPress enforces for every user without exception — no capability grant can override it, so MCPWP cannot promise this code will render as submitted. Remove DISALLOW_UNFILTERED_HTML, or use markup that survives wp_kses_post().', 'mcpwp' ),
+				array( 'status' => 403 )
+			);
 		}
 
 		return new WP_Error(
@@ -1512,6 +1578,13 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 				is_wp_error( $result ) ? 'fallback_meta' : (string) $result
 			);
 		}
+
+		// #974/#976 review W1 + W2: unconditional, regardless of which
+		// fields this call actually touched — location alone is enough to
+		// leave the cache stale (W2), and this is also the ONLY place a
+		// freshly created snippet's cache entry gets written at all. See
+		// sync_custom_code_conditions_cache()'s docblock.
+		$this->sync_custom_code_conditions_cache( $post_id );
 	}
 
 	/**
@@ -1567,6 +1640,120 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		}
 
 		return 'fallback_meta';
+	}
+
+	/**
+	 * Keep THIS snippet's entry in Elementor Pro's real conditions cache
+	 * in sync with its current location + conditions, regardless of its
+	 * post_status.
+	 *
+	 * #974/#976 review, W1 + W2 (against #990): #976 made
+	 * set_template_conditions()/save_custom_code_conditions() delegate the
+	 * shared `elementor_pro_theme_builder_conditions` option entirely to
+	 * Elementor Pro's own Conditions_Manager/Conditions_Cache — correct
+	 * shape, but `Conditions_Cache::regenerate()`'s rebuild query carries
+	 * no explicit `post_status` (confirmed reading the installed
+	 * conditions-cache.php directly), so outside `is_admin()` — every REST
+	 * request this plugin serves — it matches PUBLISHED posts only. Two
+	 * live consequences, both seen on a real rig:
+	 *
+	 *  - W1: create a snippet as draft with conditions, then enable it
+	 *    (the `/enable` route, or `update status:publish`) — regenerate()
+	 *    ran while it was still draft and never saw it; nothing after
+	 *    `/enable` (a bare wp_update_post() for post_status alone) ever
+	 *    re-runs it. The snippet is genuinely published and correctly
+	 *    conditioned, and never renders.
+	 *  - W2: change ONLY `location` (head -> body_end) on an already-cached
+	 *    snippet. save_custom_code_conditions() — the one place that used
+	 *    to touch the cache at all — only runs when `conditions` is part
+	 *    of the payload; a location-only update never calls it, so the
+	 *    cache keeps filing the snippet under its stale former location.
+	 *
+	 * The fix delegates to Elementor Pro's own API for ONE post directly —
+	 * `Conditions_Cache::update()`/`add()`/`remove()` — instead of the
+	 * status-filtered, whole-site `regenerate()` query. Those methods
+	 * derive the document's CURRENT location (Theme_Document::get_location(),
+	 * which for a Custom Code document resolves `_elementor_location` meta
+	 * — confirmed reading theme-document.php + custom-code/document.php)
+	 * and store whatever conditions are handed to them, with no status
+	 * filter at all. That is safe to do unconditionally, including for a
+	 * draft: Elementor Pro's OWN render gate
+	 * (`Conditions_Manager::get_location_templates()`) re-checks
+	 * `get_post_status() === 'publish'` at render time, on every request —
+	 * a draft's entry sitting in the cache is simply skipped there, never
+	 * rendered. Keeping the cache in permanent sync is therefore both
+	 * simpler and correct, rather than trying to add/remove entries in
+	 * lockstep with publish/draft transitions.
+	 *
+	 * Called unconditionally from the end of save_custom_code_meta()
+	 * (covers create and every update, whichever fields changed) and from
+	 * set_custom_code_status() (covers enable/disable) — the two places a
+	 * Custom Code snippet's status, location, or conditions can change. One
+	 * method, every call site; see #991 below for the delete-side sibling.
+	 *
+	 * @param int $post_id Snippet post ID.
+	 * @return void
+	 */
+	private function sync_custom_code_conditions_cache( $post_id ) {
+		if (
+			! class_exists( '\\ElementorPro\\Modules\\ThemeBuilder\\Module' )
+			|| ! class_exists( '\\Elementor\\Plugin' )
+			|| ! method_exists( '\\ElementorPro\\Modules\\ThemeBuilder\\Module', 'instance' )
+		) {
+			return;
+		}
+
+		try {
+			$document = \Elementor\Plugin::instance()->documents->get( $post_id );
+			if ( ! $document ) {
+				return;
+			}
+
+			$conditions_manager = \ElementorPro\Modules\ThemeBuilder\Module::instance()->get_conditions_manager();
+			if ( ! method_exists( $conditions_manager, 'get_cache' ) ) {
+				return;
+			}
+
+			$cache = $conditions_manager->get_cache();
+			if ( ! $cache ) {
+				return;
+			}
+
+			// #975 WARN-2 pattern: this Cache instance is a per-request
+			// singleton loaded from the option once, at construction. Never
+			// mutate-then-save from a possibly-stale in-memory copy —
+			// refresh from the real option immediately before touching it.
+			if ( method_exists( $cache, 'refresh' ) ) {
+				$cache->refresh();
+			}
+
+			// The exact value Elementor Pro's OWN regenerate() would store
+			// for this post (raw `_elementor_conditions` meta, string-array
+			// form — save_custom_code_conditions() already ran this through
+			// Conditions_Manager::save_conditions(), which overwrites this
+			// meta with that form; never the object-array shape this class
+			// uses for its own API contract).
+			$conditions = get_post_meta( $post_id, '_elementor_conditions', true );
+			$conditions = is_array( $conditions ) ? $conditions : array();
+
+			if ( method_exists( $cache, 'update' ) ) {
+				$cache->update( $document, $conditions );
+			} elseif ( method_exists( $cache, 'remove' ) && method_exists( $cache, 'add' ) ) {
+				$cache->remove( $post_id )->add( $document, $conditions );
+			} else {
+				return;
+			}
+
+			if ( method_exists( $cache, 'save' ) ) {
+				$cache->save();
+			}
+		} catch ( \Throwable $e ) {
+			// Best-effort, same posture as Mcpwp_Theme_Builder::
+			// cleanup_after_template_delete(): a cache that fails to sync
+			// here self-heals on the next conditions write, and this must
+			// never fail the create/update/enable/disable that triggered
+			// it.
+		}
 	}
 
 	/**
@@ -1638,11 +1825,22 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	/**
 	 * Format a Custom Code snippet post for API response.
 	 *
-	 * @param WP_Post $post Post object.
-	 * @param bool    $include_code Include raw code.
+	 * @param WP_Post     $post           Post object.
+	 * @param bool        $include_code   Include raw code.
+	 * @param string|null $submitted_code The raw code THIS request just
+	 *                                    submitted for storage (create/
+	 *                                    update only, after normalization —
+	 *                                    see prepare_custom_code_payload()),
+	 *                                    or null for a pure read (GET/list/
+	 *                                    enable/disable) with no submission
+	 *                                    to compare against. Passed straight
+	 *                                    through to read_custom_code_source()
+	 *                                    — see its docblock for how this
+	 *                                    changes what `code_may_be_altered`
+	 *                                    means (#974 BLOCK-1).
 	 * @return array Formatted snippet.
 	 */
-	private function format_custom_code_snippet( $post, $include_code = false ) {
+	private function format_custom_code_snippet( $post, $include_code = false, $submitted_code = null ) {
 		$meta = get_post_meta( $post->ID );
 
 		$matching_meta_keys = array();
@@ -1675,7 +1873,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			}
 		}
 
-		$code = $this->read_custom_code_source( $post );
+		$code = $this->read_custom_code_source( $post, $submitted_code );
 
 		$data = array(
 			'id'                => (int) $post->ID,
@@ -1725,29 +1923,73 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	 * used only as a fallback for a snippet old enough to predate #871 (when
 	 * this class only ever wrote `_elementor_code`... prior to that fix it
 	 * only wrote `post_content`), and that fallback is never silently
-	 * presented as the untouched source: `may_be_altered` is true whenever
-	 * the value returned is not read from `_elementor_code`, satisfying the
-	 * issue's "or says clearly that it was altered" alternative.
+	 * presented as the untouched source, satisfying the issue's "or says
+	 * clearly that it was altered" alternative.
 	 *
-	 * @param WP_Post $post Snippet post.
+	 * `may_be_altered` for an `_elementor_code` source is evidence-based
+	 * (#974 BLOCK-1, adversarial review of #990), not a bare `false` for
+	 * that source alone. Round 1 of this fix assumed the scoped
+	 * `unfiltered_html` grant in write_custom_code_meta() always either
+	 * takes effect or the write is refused (custom_code_unfiltered_html_refusal())
+	 * — true for multisite, but DISALLOW_UNFILTERED_HTML defeats the grant
+	 * a THIRD way core's map_meta_cap() handles identically to multisite
+	 * (substitutes the checked capability for the sentinel 'do_not_allow',
+	 * which no `user_has_cap` filter can ever satisfy) — round 1 refused
+	 * multisite but not this, so a write could still land with
+	 * `_elementor_code` silently kses-stripped, and the readback said
+	 * `code_source:_elementor_code, code_may_be_altered:false` while the
+	 * front end printed bare JS text. custom_code_unfiltered_html_refusal()
+	 * now refuses that write too (see its docblock), but existing data
+	 * written before this shipped, or under a DISALLOW_UNFILTERED_HTML
+	 * flip after the fact, needs an honest flag on READ as well as on
+	 * WRITE:
+	 *
+	 *  - On a create/update response ($submitted_code given): direct
+	 *    evidence — did what is actually in storage match what THIS
+	 *    request just submitted?
+	 *  - On a pure read (GET/list/enable/disable; $submitted_code is null,
+	 *    there is nothing this request submitted to compare against):
+	 *    the closest available evidence is whether a write of this exact
+	 *    value, right now, in this environment, would survive — if the
+	 *    environment cannot hold unfiltered code AND the stored value
+	 *    still contains markup wp_kses_post() would strip, that is reason
+	 *    to distrust it, whichever direction it happened.
+	 *
+	 * @param WP_Post     $post           Snippet post.
+	 * @param string|null $submitted_code The code this same request just
+	 *                                    asked to store (create/update),
+	 *                                    or null for a pure read.
 	 * @return array{content:string,source:string,may_be_altered:bool}
 	 */
-	private function read_custom_code_source( $post ) {
+	private function read_custom_code_source( $post, $submitted_code = null ) {
 		$elementor_code = get_post_meta( $post->ID, '_elementor_code', true );
 
 		if ( is_string( $elementor_code ) && '' !== $elementor_code ) {
+			if ( null !== $submitted_code ) {
+				$may_be_altered = ( $elementor_code !== $submitted_code );
+			} else {
+				$may_be_altered = ! $this->custom_code_environment_can_hold_unfiltered_html()
+					&& $this->code_needs_unfiltered_html( $elementor_code );
+			}
+
 			return array(
 				'content'        => $elementor_code,
 				'source'         => '_elementor_code',
-				'may_be_altered' => false,
+				'may_be_altered' => $may_be_altered,
 			);
 		}
 
-		// Legacy fallback only: a snippet with no _elementor_code at all
-		// (pre-#871) or one whose meta value is genuinely an empty string.
-		// post_content is not necessarily what render uses and may have
-		// been through WordPress's own KSES gate on save — say so plainly
-		// rather than passing it off as verbatim stored content.
+		// Legacy fallback only: a snippet with no _elementor_code at all —
+		// pre-#871 (when this class only ever wrote post_content), OR
+		// created through the generic /posts endpoint, which lists
+		// elementor_snippet as a safe non-public type for read/list but —
+		// until Mcpwp_Posts::create_post() started refusing it outright —
+		// could create one with post_content set and none of
+		// _elementor_code/_elementor_location/_elementor_priority at all
+		// (#974/#976 review, NIT-c). Either way, post_content is not
+		// necessarily what render uses and may have been through
+		// WordPress's own KSES gate on save — say so plainly rather than
+		// passing it off as verbatim stored content.
 		$post_content = (string) $post->post_content;
 
 		return array(

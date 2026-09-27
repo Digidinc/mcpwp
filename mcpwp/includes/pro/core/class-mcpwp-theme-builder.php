@@ -996,6 +996,16 @@ class Mcpwp_Theme_Builder {
 	 * of a cleanup call scattered across each route that happens to know
 	 * about `elementor_library` today.
 	 *
+	 * `elementor_snippet` (Elementor Pro Custom Code) added for #991,
+	 * found while building #990 (#974/#976): this hook covered Theme
+	 * Builder templates only, so a force-deleted Custom Code snippet kept
+	 * its `_elementor_head`/`body_start`/`body_end` entry in
+	 * `elementor_pro_theme_builder_conditions` forever — the same shared
+	 * option, the same missing purge, one post type short.
+	 * cleanup_after_template_delete() below is already post-type-agnostic
+	 * (it scans the option's real `{location => {post_id => [...]}}` shape
+	 * by ID, never by type), so widening the gate here is the entire fix.
+	 *
 	 * @param int          $post_id Post ID being deleted.
 	 * @param WP_Post|null $post    The post object, when WordPress supplies
 	 *                              one (added to this action in WP 5.5).
@@ -1004,7 +1014,7 @@ class Mcpwp_Theme_Builder {
 	public function handle_before_delete_post( $post_id, $post = null ) {
 		$post = $post ? $post : get_post( $post_id );
 
-		if ( ! $post || 'elementor_library' !== $post->post_type ) {
+		if ( ! $post || ! in_array( $post->post_type, array( 'elementor_library', 'elementor_snippet' ), true ) ) {
 			return;
 		}
 

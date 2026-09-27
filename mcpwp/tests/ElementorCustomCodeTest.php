@@ -23,6 +23,24 @@ final class ElementorCustomCodeTest extends TestCase {
 		$this->assertSame( '/elementor/custom-code', $map['wp_create_elementor_custom_code']['route'] );
 		$this->assertSame( '/elementor/custom-code/{id}', $map['wp_get_elementor_custom_code']['route'] );
 		$this->assertSame( '/elementor/custom-code/{id}', $map['wp_update_elementor_custom_code']['route'] );
+
+		// #974/#976 review NIT-a: the tool schemas must advertise the same
+		// exact-match contract normalize_custom_code_status() enforces —
+		// an MCP client reading the schema should see 'enum' say the same
+		// thing the 400 refusal proves at call time.
+		$by_name = array();
+		foreach ( $tools as $tool ) {
+			$by_name[ $tool['name'] ] = $tool;
+		}
+
+		$this->assertSame(
+			array( 'publish', 'draft' ),
+			$by_name['wp_create_elementor_custom_code']['inputSchema']['properties']['status']['enum']
+		);
+		$this->assertSame(
+			array( 'publish', 'draft' ),
+			$by_name['wp_update_elementor_custom_code']['inputSchema']['properties']['status']['enum']
+		);
 	}
 
 	public function test_create_custom_code_preserves_raw_script_and_reads_back_conditions(): void {

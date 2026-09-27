@@ -754,7 +754,8 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 				),
 				'status'     => array(
 					'type'        => 'string',
-					'description' => 'Initial status: draft or publish',
+					'description' => 'Initial status: draft or publish. Any other value is rejected, not silently coerced.',
+					'enum'        => array( 'publish', 'draft' ),
 					'default'     => 'draft',
 				),
 				'conditions' => array(
@@ -805,7 +806,8 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 				),
 				'status'     => array(
 					'type'        => 'string',
-					'description' => 'Status: draft or publish',
+					'description' => 'Status: draft or publish. Any other value is rejected, not silently coerced.',
+					'enum'        => array( 'publish', 'draft' ),
 				),
 				'conditions' => array(
 					'type'        => 'array',

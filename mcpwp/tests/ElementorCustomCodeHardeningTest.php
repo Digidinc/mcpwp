@@ -407,4 +407,261 @@ final class ElementorCustomCodeHardeningTest extends TestCase {
 			get_post_meta( 730, '_elementor_conditions', true )
 		);
 	}
+
+	// ---------------------------------------------------------------
+	// #974/#976 review BLOCK-1: DISALLOW_UNFILTERED_HTML. Core's
+	// map_meta_cap() substitutes the checked capability for the sentinel
+	// 'do_not_allow' when this constant is true — "even admins and super
+	// admins" — so write_custom_code_meta()'s scoped user_has_cap grant is
+	// structurally inert, exactly like multisite-without-super-admin
+	// already was. Each test here DEFINEs the constant, so each runs in
+	// its own process (constants cannot be undefined once set — a normal
+	// test defining this would poison every later test in the same
+	// process, see #757's family of hazards).
+	// ---------------------------------------------------------------
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_create_is_refused_under_disallow_unfiltered_html(): void {
+		define( 'DISALLOW_UNFILTERED_HTML', true );
+
+		$controller = new Mcpwp_REST_Elementor_Pro( new stdClass() );
+		$response   = $controller->create_custom_code(
+			new WP_REST_Request(
+				'POST',
+				'/mcpwp/v1/elementor/custom-code',
+				array(
+					'title'  => 'Blocked by DISALLOW_UNFILTERED_HTML',
+					'code'   => '<script>should_not_be_promised()</script>',
+					'status' => 'publish',
+				)
+			)
+		);
+
+		$this->assertTrue( is_wp_error( $response ), 'A write this environment cannot honour must be refused, not silently stored kses-stripped.' );
+		$this->assertSame( 'unfiltered_html_disallowed', $response->get_error_code() );
+		$this->assertSame( 403, (int) ( $response->get_error_data()['status'] ?? 0 ) );
+	}
+
+	/**
+	 * A snippet whose code survives wp_kses_post() unchanged (no <script>,
+	 * no other stripped markup) needs no capability at all, so
+	 * DISALLOW_UNFILTERED_HTML must not block it — the refusal stays as
+	 * narrow as the pre-existing multisite one.
+	 *
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_plain_code_is_not_blocked_by_disallow_unfiltered_html(): void {
+		define( 'DISALLOW_UNFILTERED_HTML', true );
+
+		$controller = new Mcpwp_REST_Elementor_Pro( new stdClass() );
+		$response   = $controller->create_custom_code(
+			new WP_REST_Request(
+				'POST',
+				'/mcpwp/v1/elementor/custom-code',
+				array(
+					'title'  => 'Plain markup',
+					'code'   => '<div>Nothing kses would touch</div>',
+					'status' => 'publish',
+				)
+			)
+		);
+
+		$this->assertFalse( is_wp_error( $response ) );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_update_is_refused_under_disallow_unfiltered_html_and_leaves_the_snippet_untouched(): void {
+		define( 'DISALLOW_UNFILTERED_HTML', true );
+
+		$this->seed_published_snippet( 740 );
+
+		$controller = new Mcpwp_REST_Elementor_Pro( new stdClass() );
+		$response   = $controller->update_custom_code(
+			new WP_REST_Request(
+				'PUT',
+				'/mcpwp/v1/elementor/custom-code/740',
+				array(
+					'id'   => 740,
+					'code' => '<script>still_blocked()</script>',
+				)
+			)
+		);
+
+		$this->assertTrue( is_wp_error( $response ) );
+		$this->assertSame( 'unfiltered_html_disallowed', $response->get_error_code() );
+
+		// No half-applied write: the real, original code is untouched.
+		$this->assertSame(
+			'<script>console.log("original");</script>',
+			get_post_meta( 740, '_elementor_code', true )
+		);
+	}
+
+	/**
+	 * The exact BLOCK-1 scenario: data whose `_elementor_code` still
+	 * contains markup kses would strip, read back in an environment that
+	 * cannot currently hold unfiltered code. Round 1 of this fix reported
+	 * `code_source:_elementor_code, code_may_be_altered:false` here — a
+	 * confident wrong answer while the front end printed bare JS text.
+	 *
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_get_flags_stored_code_as_possibly_altered_under_disallow_unfiltered_html(): void {
+		define( 'DISALLOW_UNFILTERED_HTML', true );
+
+		// seed_published_snippet() already stores a <script>-bearing value
+		// in _elementor_code — exactly the shape this evidence check must
+		// distrust once the environment can no longer honour it.
+		$this->seed_published_snippet( 741 );
+
+		$controller = new Mcpwp_REST_Elementor_Pro( new stdClass() );
+		$response   = $controller->get_custom_code( new WP_REST_Request( 'GET', '/mcpwp/v1/elementor/custom-code/741', array( 'id' => 741 ) ) );
+		$snippet    = $response->get_data()['snippet'];
+
+		$this->assertSame( '_elementor_code', $snippet['code_source'] );
+		$this->assertTrue(
+			$snippet['code_may_be_altered'],
+			'This environment cannot hold unfiltered code (DISALLOW_UNFILTERED_HTML) and the stored value still contains markup kses would strip — that combination must be flagged, not reported as a clean read.'
+		);
+	}
+
+	/**
+	 * A snippet whose stored code does NOT need unfiltered_html at all
+	 * (plain markup) must never be flagged, even under
+	 * DISALLOW_UNFILTERED_HTML — there is nothing for kses to have altered.
+	 *
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_get_does_not_flag_plain_code_under_disallow_unfiltered_html(): void {
+		define( 'DISALLOW_UNFILTERED_HTML', true );
+
+		$GLOBALS['_mcpwp_test_posts'][ 742 ] = (object) array(
+			'ID'                => 742,
+			'post_type'         => 'elementor_snippet',
+			'post_title'        => 'Plain',
+			'post_name'         => 'plain',
+			'post_status'       => 'publish',
+			'post_date'         => '2026-06-06 00:00:00',
+			'post_modified'     => '2026-06-06 00:00:00',
+			'post_modified_gmt' => '2026-06-06 00:00:00',
+			'post_parent'       => 0,
+			'menu_order'        => 0,
+			'post_author'       => 1,
+			'post_content'      => '<div>plain</div>',
+			'post_excerpt'      => '',
+		);
+		update_post_meta( 742, '_elementor_code', '<div>plain</div>' );
+
+		$controller = new Mcpwp_REST_Elementor_Pro( new stdClass() );
+		$response   = $controller->get_custom_code( new WP_REST_Request( 'GET', '/mcpwp/v1/elementor/custom-code/742', array( 'id' => 742 ) ) );
+		$snippet    = $response->get_data()['snippet'];
+
+		$this->assertFalse( $snippet['code_may_be_altered'] );
+	}
+
+	/**
+	 * The read-time evidence check is environment-based, not just
+	 * DISALLOW_UNFILTERED_HTML-based: multisite without super admin is the
+	 * other structurally-inert case (custom_code_environment_can_hold_unfiltered_html()),
+	 * and it needs no constant, so it runs without @runInSeparateProcess.
+	 */
+	public function test_get_flags_stored_code_on_multisite_without_super_admin_too(): void {
+		$GLOBALS['mcpwp_test_is_multisite']   = true;
+		$GLOBALS['mcpwp_test_is_super_admin'] = false;
+
+		try {
+			$this->seed_published_snippet( 743 );
+
+			$controller = new Mcpwp_REST_Elementor_Pro( new stdClass() );
+			$response   = $controller->get_custom_code( new WP_REST_Request( 'GET', '/mcpwp/v1/elementor/custom-code/743', array( 'id' => 743 ) ) );
+			$snippet    = $response->get_data()['snippet'];
+
+			$this->assertTrue( $snippet['code_may_be_altered'] );
+		} finally {
+			$GLOBALS['mcpwp_test_is_multisite']   = false;
+			$GLOBALS['mcpwp_test_is_super_admin']  = false;
+		}
+	}
+
+	// ---------------------------------------------------------------
+	// #974/#976 review NIT-a: status must be an EXACT match after
+	// trim()+strtolower(), never sanitize_key()'s slug-style stripping —
+	// that regex silently deletes internal punctuation and whitespace
+	// before the allow-list comparison, so " publish!" would have survived
+	// as "publish" and been wrongly ACCEPTED.
+	// ---------------------------------------------------------------
+
+	public function test_update_rejects_a_status_that_sanitize_key_would_have_laundered_clean(): void {
+		$this->seed_published_snippet( 750 );
+
+		$controller = new Mcpwp_REST_Elementor_Pro( new stdClass() );
+		$response   = $controller->update_custom_code(
+			new WP_REST_Request(
+				'PUT',
+				'/mcpwp/v1/elementor/custom-code/750',
+				array(
+					'id'     => 750,
+					'status' => ' publish!',
+				)
+			)
+		);
+
+		$this->assertTrue(
+			is_wp_error( $response ),
+			'sanitize_key(" publish!") === "publish" — this must still be refused, not silently accepted as a clean value.'
+		);
+		$this->assertSame( 'invalid_status', $response->get_error_code() );
+	}
+
+	public function test_update_accepts_status_with_only_outer_whitespace_and_case_difference(): void {
+		$this->seed_published_snippet( 751 );
+
+		$controller = new Mcpwp_REST_Elementor_Pro( new stdClass() );
+		$response   = $controller->update_custom_code(
+			new WP_REST_Request(
+				'PUT',
+				'/mcpwp/v1/elementor/custom-code/751',
+				array(
+					'id'     => 751,
+					'status' => " Draft \n",
+				)
+			)
+		);
+
+		$this->assertFalse( is_wp_error( $response ) );
+		$this->assertSame( 'draft', $response->get_data()['snippet']['status'] );
+	}
+
+	// ---------------------------------------------------------------
+	// #974/#976 review NIT-c: the generic /posts create endpoint accepted
+	// post_type=elementor_snippet (it is in $safe_nonpublic_types for read/
+	// list) but wrote only post_content — never _elementor_code/
+	// _elementor_location/_elementor_priority — producing a snippet that
+	// never renders and never enters the conditions cache. Refused outright
+	// now, pointing at the real writer.
+	// ---------------------------------------------------------------
+
+	public function test_generic_posts_create_refuses_elementor_snippet(): void {
+		$posts  = new Mcpwp_Posts();
+		$result = $posts->create_post(
+			array(
+				'post_type' => 'elementor_snippet',
+				'title'     => 'Should be refused',
+				'content'   => '<script>never_rendered()</script>',
+			)
+		);
+
+		$this->assertTrue( is_wp_error( $result ) );
+		$this->assertSame( 'use_custom_code_tool', $result->get_error_code() );
+		$this->assertStringContainsString( 'wp_create_elementor_custom_code', $result->get_error_data()['hint'] );
+	}
 }
