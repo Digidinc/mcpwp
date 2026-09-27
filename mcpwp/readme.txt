@@ -157,6 +157,14 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 
 == Changelog ==
 
+= 3.14.3 =
+* feat: **graph:** read tools and mcpwp://graph resource ([#943](https://github.com/Mumega-com/mcpwp/issues/943) S2) ([#1006](https://github.com/Mumega-com/mcpwp/issues/1006))
+* feat: **graph:** site graph storage and incremental builder ([#943](https://github.com/Mumega-com/mcpwp/issues/943) S1) ([#993](https://github.com/Mumega-com/mcpwp/issues/993))
+* feat: **jev:** run Jev through Cloudflare Workers AI as well as the TypeSafe API ([#987](https://github.com/Mumega-com/mcpwp/issues/987)) ([#1002](https://github.com/Mumega-com/mcpwp/issues/1002))
+* feat: **mcp:** negotiate protocol 2025-11-25 with titles, outputSchema and structuredContent ([#906](https://github.com/Mumega-com/mcpwp/issues/906)) ([#1003](https://github.com/Mumega-com/mcpwp/issues/1003))
+* fix: **graph:** keep page-builder and theme internals out of the site graph ([#1009](https://github.com/Mumega-com/mcpwp/issues/1009))
+* fix: **guardrails:** report real word_count for wp_build_page ([#998](https://github.com/Mumega-com/mcpwp/issues/998)) ([#1001](https://github.com/Mumega-com/mcpwp/issues/1001))
+
 = 3.14.2 =
 * feat: **content:** guardrails against scaled and duplicate publishing ([#957](https://github.com/Mumega-com/mcpwp/issues/957)) ([#980](https://github.com/Mumega-com/mcpwp/issues/980))
 * feat: **mcp:** forgiving params — map near-miss argument keys or refuse with the fix ([#986](https://github.com/Mumega-com/mcpwp/issues/986))
