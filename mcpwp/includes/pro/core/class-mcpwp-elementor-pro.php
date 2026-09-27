@@ -1334,6 +1334,19 @@ class Mcpwp_Elementor_Pro {
 			return new WP_Error( 'not_found', __( 'Source page not found.', 'mcpwp' ) );
 		}
 
+		// A Custom Code snippet must not be cloned by copying its meta raw: the
+		// copy skips the unfiltered_html grant (Elementor's sanitize_callback
+		// then kses-strips _elementor_code) and the conditions-cache sync, and
+		// this route is reachable by non-admin keys while every Custom Code
+		// route is admin-only (#974/#976 adversarial review, round 3).
+		if ( 'elementor_snippet' === $source->post_type ) {
+			return new WP_Error(
+				'use_custom_code_tool',
+				__( 'Elementor Custom Code snippets cannot be cloned. Read the snippet and create a new one with wp_create_elementor_custom_code.', 'mcpwp' ),
+				array( 'status' => 400 )
+			);
+		}
+
 		$title  = ! empty( $args['title'] ) ? sanitize_text_field( $args['title'] ) : $source->post_title . ' (Copy)';
 		$status = ! empty( $args['status'] ) ? sanitize_text_field( $args['status'] ) : 'draft';
 
