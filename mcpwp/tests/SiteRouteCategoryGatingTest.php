@@ -299,4 +299,79 @@ final class SiteRouteCategoryGatingTest extends TestCase {
 		$this->assertTrue( $data['result']['isError'] ?? false );
 		$this->assertSame( 'scope_denied', $data['result']['structuredContent']['error']['code'] );
 	}
+
+	// ── BLOCK-1 (adversarial review round 1): untooled routes ───────────────
+	//
+	// /settings, /favicon, /theme/*, /themes/*, /action-log and /users
+	// dispatch no MCP tool at all, so RouteCategoryToolParityTest never saw
+	// them — AllRegisteredRoutesCategoryTest closes that blind spot
+	// generically; these are the specific, named regression pins for the
+	// six routes the live review evidence named. GET only, to keep each
+	// assertion isolated to the CATEGORY gate: /settings, /users (blanket-
+	// admin SCOPE for every method) and /theme, /themes, /action-log
+	// (admin scope on WRITE only) all stay at the READ scope default on GET.
+
+	public function test_author_key_is_blocked_from_untooled_site_routes_directly(): void {
+		$auth    = $this->harness();
+		$created = $auth->create_scoped_api_key( 'author', array( 'read', 'write' ), 'author' );
+
+		foreach ( array( '/mcpwp/v1/favicon', '/mcpwp/v1/theme/custom-css', '/mcpwp/v1/themes/detect', '/mcpwp/v1/action-log' ) as $route ) {
+			$result = $auth->verify_api_key( $this->request_with_key( $created['key'], 'GET', $route ) );
+			$this->assert_forbidden_category( $result, "author key on {$route}" );
+		}
+	}
+
+	public function test_designer_key_is_allowed_on_untooled_site_routes(): void {
+		$auth    = $this->harness();
+		$created = $auth->create_scoped_api_key( 'designer', array( 'read', 'write' ), 'designer' );
+
+		foreach ( array( '/mcpwp/v1/favicon', '/mcpwp/v1/theme/custom-css', '/mcpwp/v1/themes/detect' ) as $route ) {
+			$this->assertTrue( $auth->verify_api_key( $this->request_with_key( $created['key'], 'GET', $route ) ), $route );
+		}
+	}
+
+	public function test_admin_key_is_allowed_on_untooled_admin_scope_routes(): void {
+		$auth    = $this->harness();
+		$created = $auth->create_scoped_api_key( 'admin', array( 'read', 'write', 'admin' ), 'admin' );
+
+		foreach ( array( '/mcpwp/v1/settings', '/mcpwp/v1/users', '/mcpwp/v1/action-log' ) as $route ) {
+			$this->assertTrue( $auth->verify_api_key( $this->request_with_key( $created['key'], 'GET', $route ) ), $route );
+		}
+	}
+
+	public function test_disabling_site_category_blocks_admin_from_untooled_routes(): void {
+		update_option( 'mcpwp_disabled_tool_categories', array( 'site' ) );
+
+		$auth    = $this->harness();
+		$created = $auth->create_scoped_api_key( 'admin', array( 'read', 'write', 'admin' ), 'admin' );
+
+		foreach ( array( '/mcpwp/v1/settings', '/mcpwp/v1/favicon', '/mcpwp/v1/theme/custom-css', '/mcpwp/v1/themes/detect' ) as $route ) {
+			$result = $auth->verify_api_key( $this->request_with_key( $created['key'], 'GET', $route ) );
+			$this->assertInstanceOf( WP_Error::class, $result, $route );
+			$this->assertSame( 'forbidden_category', $result->get_error_code(), $route );
+		}
+	}
+
+	public function test_disabling_admin_category_blocks_admin_from_users_and_action_log(): void {
+		update_option( 'mcpwp_disabled_tool_categories', array( 'admin' ) );
+
+		$auth    = $this->harness();
+		$created = $auth->create_scoped_api_key( 'admin', array( 'read', 'write', 'admin' ), 'admin' );
+
+		foreach ( array( '/mcpwp/v1/users', '/mcpwp/v1/action-log' ) as $route ) {
+			$result = $auth->verify_api_key( $this->request_with_key( $created['key'], 'GET', $route ) );
+			$this->assertInstanceOf( WP_Error::class, $result, $route );
+			$this->assertSame( 'forbidden_category', $result->get_error_code(), $route );
+		}
+	}
+
+	public function test_theme_builder_routes_are_not_shadowed_by_the_new_theme_prefix(): void {
+		// '/theme' is a literal string prefix of '/theme-builder' — first-match
+		// ordering in get_route_category_map() must keep /theme-builder's own
+		// 'elementor-theme' category (theme-builder's entry comes first).
+		$auth = $this->harness();
+		$this->assertSame( 'elementor-theme', $auth->get_category_for_route( '/mcpwp/v1/theme-builder/status' ) );
+		$this->assertSame( 'site', $auth->get_category_for_route( '/mcpwp/v1/theme/mods' ) );
+		$this->assertSame( 'site', $auth->get_category_for_route( '/mcpwp/v1/themes/astra/colors' ) );
+	}
 }

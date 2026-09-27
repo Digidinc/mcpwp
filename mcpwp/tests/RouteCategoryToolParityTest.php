@@ -33,9 +33,10 @@ final class RouteCategoryToolParityTest extends TestCase {
 	 *
 	 * #1007 owner decision (2026-09-27): shrunk from all 64 'site'-category
 	 * tool routes down to exactly the discovery allowlist
-	 * (Mcpwp_Api_Auth::DISCOVERY_ALLOWLIST_ROUTES) — the other 61 (menus,
-	 * memory, options, site-blueprints, custom-css, ...) are now mapped to
-	 * 'site' in get_route_category_map() and enforced like any other category.
+	 * (Mcpwp_Api_Auth::get_discovery_allowlist_routes()) — the other 61
+	 * (menus, memory, options, site-blueprints, custom-css, ...) are now
+	 * mapped to 'site' in get_route_category_map() and enforced like any
+	 * other category.
 	 */
 	const SITE_EXEMPT = array(
 		'wp_introspect /mcpwp/v1/introspect',
@@ -79,12 +80,13 @@ final class RouteCategoryToolParityTest extends TestCase {
 				continue;
 			}
 			// #1007 owner decision: the discovery allowlist
-			// (DISCOVERY_ALLOWLIST_ROUTES) stays ungated at REST so every key,
-			// any role — including migrated 2.8 spai_ keys — keeps /site-info,
-			// /onboard and /introspect. Pinned by KeyCategoryRestrictionAuthPlaneTest
-			// and BridgeAuthTest. Every other 'site' tool route is now mapped in
-			// get_route_category_map(); anything else still resolving to '' fails
-			// here.
+			// (Mcpwp_Api_Auth::get_discovery_allowlist_routes()) stays ungated
+			// at REST so every key, any role — including migrated 2.8 spai_
+			// keys — keeps /site-info, /onboard and /introspect. Pinned by
+			// KeyCategoryRestrictionAuthPlaneTest and BridgeAuthTest. Every
+			// other 'site' tool route is now mapped in
+			// get_route_category_map(); anything else still resolving to ''
+			// fails here.
 			if ( 'site' === $tool_category && '' === $route_category ) {
 				$site_exempt[] = $name . ' ' . $route;
 				continue;

@@ -38,10 +38,14 @@ final class DisabledToolCategoriesTest extends TestCase {
 	}
 
 	public function test_tool_in_disabled_category_is_rejected_on_call(): void {
-		// `wp_site_info` is in the "site" category (read-only, no plugin requirement).
+		// `wp_list_menus` is in the "site" category. NOT `wp_site_info`
+		// (#1007 WARN-2): that tool is on the discovery allowlist and is now
+		// deliberately exempt from this exact gate — see
+		// test_discovery_allowlist_tool_stays_callable_even_when_its_category_is_disabled()
+		// below.
 		update_option( 'mcpwp_disabled_tool_categories', array( 'site' ) );
 
-		$data = $this->call_tool( 'wp_site_info' );
+		$data = $this->call_tool( 'wp_list_menus' );
 
 		// A disabled-category tool is a tool EXECUTION refusal — an isError
 		// result the model can read, not a JSON-RPC protocol error. The tool
@@ -71,12 +75,12 @@ final class DisabledToolCategoriesTest extends TestCase {
 	public function test_disabled_category_tool_is_callable_again_after_clearing_option(): void {
 		// Disable, confirm blocked, then clear and confirm it is no longer blocked.
 		update_option( 'mcpwp_disabled_tool_categories', array( 'site' ) );
-		$blocked = $this->call_tool( 'wp_site_info' );
+		$blocked = $this->call_tool( 'wp_list_menus' );
 		$this->assertTrue( $blocked['result']['isError'] );
 		$this->assertSame( 'category_disabled', $blocked['result']['structuredContent']['error']['code'] );
 
 		delete_option( 'mcpwp_disabled_tool_categories' );
-		$data = $this->call_tool( 'wp_site_info' );
+		$data = $this->call_tool( 'wp_list_menus' );
 
 		$this->assertArrayHasKey( 'result', $data, 'Tool should be callable again after the option is cleared.' );
 		$this->assertArrayNotHasKey( 'error', $data );
@@ -89,5 +93,23 @@ final class DisabledToolCategoriesTest extends TestCase {
 
 		$this->assertArrayHasKey( 'result', $data );
 		$this->assertArrayNotHasKey( 'error', $data );
+	}
+
+	/**
+	 * #1007 WARN-2: wp_site_info/wp_onboard/wp_introspect are on the
+	 * discovery allowlist (Mcpwp_Api_Auth::get_discovery_allowlist_tool_names()),
+	 * shared with the REST-side discovery allowlist that already keeps
+	 * /site-info reachable while 'site' is disabled site-wide. Before this
+	 * fix, tools/call for these three obeyed the disabled-category gate like
+	 * any other 'site' tool — the identical call over direct REST did not.
+	 */
+	public function test_discovery_allowlist_tool_stays_callable_even_when_its_category_is_disabled(): void {
+		update_option( 'mcpwp_disabled_tool_categories', array( 'site' ) );
+
+		$data = $this->call_tool( 'wp_site_info' );
+
+		$this->assertArrayHasKey( 'result', $data );
+		$this->assertArrayNotHasKey( 'error', $data );
+		$this->assertFalse( $data['result']['isError'] ?? false, 'wp_site_info must stay callable while "site" is disabled.' );
 	}
 }

@@ -541,43 +541,72 @@ trait Mcpwp_Api_Auth {
 	}
 
 	/**
-	 * Discovery routes that stay permanently ungated in get_category_for_route(),
-	 * regardless of a key's role or the site-wide category toggle (#1007 owner
-	 * decision, 2026-09-27).
+	 * Single source of truth for the discovery allowlist: tool name => REST
+	 * route (#1007 owner decision, 2026-09-27, hardened by adversarial review
+	 * round 1 WARN-2). Every key, of any role, and even while the site
+	 * administrator has disabled the 'site' category outright, must still be
+	 * able to make first contact with a site:
 	 *
-	 * Before #1007, EVERY route dispatched by a 'site'-category tool (64 of
-	 * them — menus, options, memory, site-blueprints, custom-css, ...) resolved
-	 * to '' here, so none of them were reachable by role or by the site-wide
-	 * toggle. #1007 maps those 64 to 'site' in get_route_category_map(); this
-	 * allowlist is the deliberately narrow exception that survives that change
-	 * — every key, of any role, and even while the site administrator has
-	 * disabled the 'site' category outright, must still be able to make first
-	 * contact with a site:
+	 *  - wp_site_info  / '/site-info'  — capabilities probe every client calls
+	 *    before anything else (KeyCategoryRestrictionAuthPlaneTest,
+	 *    BridgeAuthTest pin this for author/editor keys, including migrated
+	 *    2.8 spai_ keys).
+	 *  - wp_onboard    / '/onboard'    — the first-connection briefing; an
+	 *    agent cannot follow it to a specific tool's category without having
+	 *    read it first.
+	 *  - wp_introspect / '/introspect' — the machine-readable API description;
+	 *    same chicken-and-egg problem as onboard.
 	 *
-	 *  - '/site-info' — capabilities probe every client calls before anything
-	 *    else (KeyCategoryRestrictionAuthPlaneTest, BridgeAuthTest pin this for
-	 *    author/editor keys, including migrated 2.8 spai_ keys).
-	 *  - '/onboard'   — the first-connection briefing; an agent cannot follow
-	 *    it to a specific tool's category without having read it first.
-	 *  - '/introspect' — the machine-readable API description; same
-	 *    chicken-and-egg problem as /onboard.
+	 * Consumed two ways, both derived from this one map so they cannot drift
+	 * apart: get_discovery_allowlist_routes() (REST — checked first in
+	 * get_category_for_route(), before either route map, so nothing added
+	 * there can ever shadow it back into being gated) and
+	 * get_discovery_allowlist_tool_names() (MCP — Mcpwp_REST_MCP's
+	 * get_all_tools(), filter_tools_by_key_role() and handle_tools_call() all
+	 * exempt these three tool NAMES from the per-key role gate and the
+	 * site-wide toggle exactly the way this method's routes are exempt over
+	 * REST; the tool's own SCOPE requirement, e.g. wp_onboard's 'read', still
+	 * applies — only the CATEGORY gate is bypassed).
+	 *
+	 * Before WARN-2, the REST allowlist above had no MCP-side counterpart:
+	 * an author key's tools/list omitted wp_onboard/wp_site_info/wp_introspect
+	 * and a tools/call for any of them answered scope_denied (or
+	 * category_disabled once the admin disabled 'site' site-wide) — the same
+	 * three tools /mcp refused that direct REST already, correctly, let
+	 * through. First contact should not depend on which transport a client
+	 * happens to use.
 	 *
 	 * The MCP JSON-RPC handshake (initialize, tools/list, ping, and
 	 * notifications/*) needs no entry here: none of those methods dispatch
-	 * through a REST route at all (Mcpwp_REST_MCP::process_single_request()
-	 * answers them directly), so this classifier never sees them in the first
-	 * place. tools/call is deliberately NOT exempt — it is gated per tool via
-	 * tool_category_for()/resolve_key_tool_categories() in
-	 * Mcpwp_REST_MCP::handle_tools_call(), independent of this route map.
+	 * through a REST route or a named tool at all — process_single_request()
+	 * answers them directly.
 	 *
 	 * A method, not a trait class constant: this plugin still supports PHP
 	 * 7.4 (readme.txt "Requires PHP"), and constants inside a trait are a
 	 * PHP 8.1 addition — declaring one here would fail to parse on 7.4/8.0.
 	 *
-	 * @return string[]
+	 * @return array<string,string> Tool name => REST route.
+	 */
+	protected static function get_discovery_allowlist() {
+		return array(
+			'wp_site_info'  => '/site-info',
+			'wp_onboard'    => '/onboard',
+			'wp_introspect' => '/introspect',
+		);
+	}
+
+	/**
+	 * @return string[] The discovery allowlist's REST routes.
 	 */
 	protected static function get_discovery_allowlist_routes() {
-		return array( '/site-info', '/onboard', '/introspect' );
+		return array_values( self::get_discovery_allowlist() );
+	}
+
+	/**
+	 * @return string[] The discovery allowlist's MCP tool names.
+	 */
+	protected static function get_discovery_allowlist_tool_names() {
+		return array_keys( self::get_discovery_allowlist() );
 	}
 
 	/**
@@ -617,8 +646,14 @@ trait Mcpwp_Api_Auth {
 		// Discovery allowlist (#1007) — checked before every other map so
 		// nothing added to get_route_category_map() or get_route_pattern_map()
 		// can ever accidentally shadow it back into being gated.
+		// Exact match or a '/' boundary right after — NOT a bare strpos()
+		// prefix (review NIT): a naive prefix match would also swallow an
+		// unrelated route that merely starts with the same characters, e.g.
+		// a hypothetical '/site-information'. None of the three routes here
+		// has a real sub-path today, so this is strictly more correct with
+		// no behavior change for any route that actually exists.
 		foreach ( self::get_discovery_allowlist_routes() as $allowlisted ) {
-			if ( 0 === strpos( $path, $allowlisted ) ) {
+			if ( $path === $allowlisted || 0 === strpos( $path, $allowlisted . '/' ) ) {
 				return '';
 			}
 		}
@@ -749,6 +784,17 @@ trait Mcpwp_Api_Auth {
 			'/rate-limit'                           => 'admin',
 			'/integrations'                         => 'admin',
 			'/feedback'                             => 'admin',
+			// Cross-key audit trail: /action-log shows which API key ran which
+			// tool/route, including ones a viewer's own role would not
+			// otherwise be able to call — an owner-facing surface, same
+			// bucket as /api-keys and /approvals, not a per-content-area tool.
+			'/action-log'                           => 'admin',
+			// Privilege-escalation surface: can create/modify WP user accounts
+			// and exposes account PII (emails, roles, capabilities). Already
+			// blanket-admin SCOPE in get_required_scope_for_request(); this
+			// closes the matching CATEGORY gap so the site-wide toggle also
+			// reaches it (adversarial review round 1 on #1007, BLOCK-1).
+			'/users'                                => 'admin',
 
 			// Granular plugin/admin families that the admin UI can toggle (all present
 			// in get_category_meta()) but whose REST routes previously classified as ''
@@ -761,9 +807,31 @@ trait Mcpwp_Api_Auth {
 			'/learnpress'                           => 'learnpress',
 			'/network'                              => 'multisite',
 			'/staging'                              => 'staging',
+			// /theme-builder MUST precede /theme below — '/theme' is a literal
+			// string prefix of '/theme-builder' (strpos() matching, not word
+			// boundary), so first-match-wins would misclassify every
+			// theme-builder route as 'site' if the order were reversed.
 			'/theme-builder'                        => 'elementor-theme',
 			'/forms'                                => 'forms',
 			'/keyword-research'                     => 'seo',
+
+			// Adversarial review round 1 on #1007, BLOCK-1: /settings, /favicon,
+			// /theme/* (customizer mods/global-styles/custom-css — distinct from
+			// /theme-builder above) and /themes/* (Pro theme reconfiguration:
+			// Astra colors/typography/header/footer/layout, detect/supported)
+			// are all check_permission()-gated but dispatch no MCP tool at all,
+			// so RouteCategoryToolParityTest — which only iterates TOOL routes —
+			// could never see them ungated. Live evidence from the review: an
+			// author key with 'site' disabled could still POST /favicon and
+			// change the site icon; an admin key with 'site' disabled could
+			// still PUT /settings and change blogname, and GET/PUT
+			// /theme/custom-css freely. AllRegisteredRoutesCategoryTest now
+			// enumerates every REAL registered route (not just tooled ones) so
+			// this class of gap fails a test instead of needing a live probe.
+			'/settings'                             => 'site',
+			'/favicon'                              => 'site',
+			'/theme'                                => 'site',
+			'/themes'                               => 'site',
 
 			// wp_search is a 'content' tool; wp_list_block_types / wp_list_block_patterns
 			// are 'gutenberg'. /block-types and /block-patterns do NOT begin with the
@@ -795,16 +863,19 @@ trait Mcpwp_Api_Auth {
 			'/update'                               => 'admin',
 			'/cloudflare'                           => 'admin',
 
-			// #1007: the remaining 'site'-category tool routes. Before this fix
-			// these 61 routes resolved to '' (ungated) — same BLOCK-1 gap as the
-			// /graph block above — so an author/editor key, or a site with 'site'
-			// disabled, could still reach /menus, /memory, /options, etc. directly,
-			// through /batch, or through resources/read, even though the identical
-			// tool call through /mcp tools/call was refused. That was deliberate
-			// for /site-info, /onboard and /introspect (see
+			// #1007: the remaining 'site'-category TOOL routes — 61 of the 64
+			// routes a Free or Pro MCP tool maps to the 'site' category (the
+			// other 3 are the discovery allowlist, immediately below). Before
+			// this fix these 61 resolved to '' (ungated) — the same shape of
+			// gap the #943 S2 review's BLOCK-1 fixed for /graph above — so an
+			// author/editor key, or a site with 'site' disabled, could still
+			// reach /menus, /memory, /options, etc. directly, through /batch,
+			// or through resources/read, even though the identical tool call
+			// through /mcp tools/call was refused. That was deliberate for
+			// /site-info, /onboard and /introspect (see
 			// get_discovery_allowlist_routes(), checked earlier in this method
-			// and therefore never reaching this map) but never for the other 61 — the
-			// owner decision that closed #1007 is to gate all of them, accepting
+			// and therefore never reaching this map) but never for the other
+			// 61 — the owner decision that closed #1007 is to gate all of them, accepting
 			// that Author and Editor keys (whose role categories do not include
 			// 'site') lose access to this group. RouteCategoryToolParityTest's
 			// SITE_EXEMPT is shrunk to exactly the discovery allowlist above.
@@ -3157,6 +3228,46 @@ trait Mcpwp_Api_Auth {
 		}
 
 		return in_array( $category, $allowed, true );
+	}
+
+	/**
+	 * Whether the current caller may read the 'site' category's data — not
+	 * just its ROUTES.
+	 *
+	 * #1007 WARN-1: /introspect and /onboard?detail=full (Mcpwp_REST_Site_Info)
+	 * are on the discovery allowlist (get_discovery_allowlist_routes()), so
+	 * they stay reachable by every key regardless of role or the site-wide
+	 * toggle — deliberately, so a key can always make first contact. But
+	 * before this fix they both embedded the FULL mcpwp_site_context text
+	 * inline in their response body, and /site-context (the dedicated route)
+	 * and the mcpwp://site-context MCP resource both refuse that same text
+	 * to a key whose role excludes 'site', or when 'site' is disabled
+	 * site-wide. Because the allowlist check runs first in
+	 * get_category_for_route() and returns before either map is ever
+	 * consulted, nothing in the route-category system can close that leak
+	 * for /introspect or /onboard themselves — it has to be closed in the
+	 * response body, at the one place the leaked field is built.
+	 *
+	 * Two authorization questions, deliberately combined: the site-wide
+	 * toggle applies to every key including admin (matches
+	 * check_disabled_category_for_route()); the per-key role check fails
+	 * OPEN when there is no key record at all, matching every other
+	 * fail-open convention in this file for a trusted/legacy context.
+	 *
+	 * @return bool True if the caller may see 'site'-category data inline.
+	 */
+	protected function caller_may_read_site_context() {
+		$disabled_categories = get_option( 'mcpwp_disabled_tool_categories', array() );
+		if ( is_array( $disabled_categories ) && in_array( 'site', $disabled_categories, true ) ) {
+			return false;
+		}
+
+		$key_record = $this->get_current_api_key_record();
+		if ( ! is_array( $key_record ) ) {
+			return true;
+		}
+
+		return $this->key_allows_category( $key_record, 'site' );
 	}
 
 	/**

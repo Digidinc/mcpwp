@@ -126,9 +126,12 @@ final class ToolExecutionIsErrorTest extends TestCase {
 	}
 
 	public function test_a_category_disabled_refusal_is_an_iserror_result(): void {
+		// `wp_list_menus`, not `wp_site_info` (#1007 WARN-2): wp_site_info is
+		// on the discovery allowlist and deliberately exempt from this gate —
+		// see DisabledToolCategoriesTest::test_discovery_allowlist_tool_stays_callable_even_when_its_category_is_disabled().
 		update_option( 'mcpwp_disabled_tool_categories', array( 'site' ) );
 
-		$data = $this->call( 'wp_site_info' );
+		$data = $this->call( 'wp_list_menus' );
 
 		$this->assertArrayNotHasKey( 'error', $data );
 		$this->assertTrue( $data['result']['isError'] );
