@@ -76,7 +76,7 @@ Freemius publish is pending the owner.
   - provider capability registry (#944)
   - PostHog visitor signals (#945)
   - think queries (#946)
-- **Jev through Cloudflare Workers AI** as well as TypeSafe (#987).
+- **Jev through Cloudflare Workers AI** as well as TypeSafe (#987): set the Cloudflare account ID and a Workers AI token (create a Workers AI token with Workers AI:Read permission for your account) in the Jev integration itself; the Cloudflare integration's zone token is never used.
 - **WebMCP admin:** expose MCPWP tools to the owner's browser agent in wp-admin (#981).
 - **Onboarding:** connect your own agent for free, or MCPWP runs itself on a paid plan (#955).
 - **Approvals:** an opt-in approval path for Elementor and SEO writes (#930).
