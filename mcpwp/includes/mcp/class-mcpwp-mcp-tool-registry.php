@@ -62,25 +62,44 @@ abstract class Mcpwp_MCP_Tool_Registry {
 	/**
 	 * Define a tool for MCP.
 	 *
-	 * @param string     $name          Tool name.
-	 * @param string     $description   Tool description.
-	 * @param array      $input_props   Input schema properties.
-	 * @param array|null $output_schema Optional JSON Schema for this tool's
-	 *                                  result data (MCP spec 2025-06-18+
-	 *                                  `outputSchema` — #906). Pass only when
-	 *                                  the tool's REST result has a stable,
-	 *                                  verified shape: a caller-selectable
-	 *                                  `fields`/`_mcpwp_fields` filter, for
-	 *                                  example, means no per-item property
-	 *                                  can be `required`. Stored on the tool
-	 *                                  definition unconditionally; whether it
-	 *                                  is actually emitted to a given client
-	 *                                  is decided per-request in
-	 *                                  Mcpwp_REST_MCP against the negotiated
-	 *                                  protocol version, not here.
+	 * @param string      $name          Tool name.
+	 * @param string      $description   Tool description.
+	 * @param array       $input_props   Input schema properties.
+	 * @param array|null  $output_schema Optional JSON Schema for this tool's
+	 *                                   result data (MCP spec 2025-06-18+
+	 *                                   `outputSchema` — #906). Pass only when
+	 *                                   the tool's REST result has a stable,
+	 *                                   verified shape: a caller-selectable
+	 *                                   `fields`/`_mcpwp_fields` filter, for
+	 *                                   example, means no per-item property
+	 *                                   can be `required`. Stored on the tool
+	 *                                   definition unconditionally; whether it
+	 *                                   is actually emitted to a given client
+	 *                                   is decided per-request in
+	 *                                   Mcpwp_REST_MCP against the negotiated
+	 *                                   protocol version, not here.
+	 * @param array[]|null $examples     Optional realistic full-argument
+	 *                                   examples (#912) — each entry a full
+	 *                                   `arguments` object for this tool,
+	 *                                   attached verbatim as the standard
+	 *                                   JSON Schema `examples` annotation
+	 *                                   keyword at the top level of
+	 *                                   `inputSchema` (a sibling of
+	 *                                   `properties`/`required`, not a
+	 *                                   per-property annotation). Reserved
+	 *                                   for the handful of tools whose
+	 *                                   params are hard enough (nested
+	 *                                   Elementor trees, batch operation
+	 *                                   arrays, filter objects) that a
+	 *                                   worked example earns its weight in
+	 *                                   every tools/list payload; most tools
+	 *                                   should leave this null.
+	 *                                   `McpToolExamplesTest` asserts every
+	 *                                   example here validates against this
+	 *                                   same tool's own inputSchema.
 	 * @return array Tool definition.
 	 */
-	protected function define_tool( $name, $description, $input_props, $output_schema = null ) {
+	protected function define_tool( $name, $description, $input_props, $output_schema = null, $examples = null ) {
 		$properties = array();
 		$required   = array();
 
@@ -116,6 +135,10 @@ abstract class Mcpwp_MCP_Tool_Registry {
 
 		if ( ! empty( $required ) ) {
 			$schema['required'] = $required;
+		}
+
+		if ( ! empty( $examples ) ) {
+			$schema['examples'] = $examples;
 		}
 
 		$tool = array(

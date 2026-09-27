@@ -156,6 +156,22 @@ trait Mcpwp_Free_Tools_Content_Trait {
 					'type'        => 'object',
 					'description' => 'Post meta to write, as {key: value}. Registered meta runs through its registered sanitize callback; unregistered strings are reduced to post-safe HTML (URLs keep their %20). Protected/reserved keys (leading underscore, _elementor_*, mcpwp_*) are refused.',
 				),
+			),
+			null,
+			array(
+				array(
+					'title' => '5 Tips for Better Sleep',
+					'content' => '<p>Getting good sleep starts with a consistent routine...</p>',
+					'status' => 'draft',
+					'categories' => array(
+						3,
+					),
+					'tags' => array(
+						'sleep',
+						'health',
+					),
+					'excerpt' => 'Practical tips for better sleep tonight.',
+				),
 			)
 		);
 
@@ -408,6 +424,15 @@ trait Mcpwp_Free_Tools_Content_Trait {
 					'type'        => 'object',
 					'description' => 'Post meta to write, as {key: value}. Registered meta runs through its registered sanitize callback; unregistered strings are reduced to post-safe HTML (URLs keep their %20). Protected/reserved keys (leading underscore, _elementor_*, mcpwp_*) are refused.',
 				),
+			),
+			null,
+			array(
+				array(
+					'id' => 42,
+					'title' => 'About Our Team',
+					'status' => 'publish',
+					'template' => 'elementor_canvas',
+				),
 			)
 		);
 
@@ -595,6 +620,24 @@ trait Mcpwp_Free_Tools_Content_Trait {
 							'body'   => array( 'type' => 'object', 'description' => 'Request body for POST/PUT, or query params for GET/DELETE.' ),
 						),
 						'required'   => array( 'method', 'path' ),
+					),
+				),
+			),
+			null,
+			array(
+				array(
+					'operations' => array(
+						array(
+							'method' => 'PUT',
+							'path' => '/posts/42',
+							'body' => array(
+								'title' => 'New title',
+							),
+						),
+						array(
+							'method' => 'GET',
+							'path' => '/pages',
+						),
 					),
 				),
 			)

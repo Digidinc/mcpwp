@@ -1059,6 +1059,18 @@ trait Mcpwp_Free_Tools_Site_Trait {
 					'description' => 'If true, creates a new menu even if name exists',
 					'default'     => false,
 				),
+			),
+			null,
+			array(
+				array(
+					'name' => 'Primary Menu',
+					'location' => 'primary',
+					'page_ids' => array(
+						12,
+						15,
+						18,
+					),
+				),
 			)
 		);
 
@@ -1314,6 +1326,15 @@ trait Mcpwp_Free_Tools_Site_Trait {
 					'type'        => 'string',
 					'description' => 'Replacement text',
 					'required'    => true,
+				),
+			),
+			null,
+			array(
+				array(
+					'search' => 'Acme Inc',
+					'replace' => 'Acme Group',
+					'post_type' => 'page',
+					'dry_run' => true,
 				),
 			)
 		);

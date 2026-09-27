@@ -1629,7 +1629,8 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			case 'tools/call':
 				return $this->conform_tool_call_result(
 					$this->handle_tools_call_idempotent( $id, $params, $request ),
-					is_array( $params ) && isset( $params['name'] ) && is_string( $params['name'] ) ? $params['name'] : ''
+					is_array( $params ) && isset( $params['name'] ) && is_string( $params['name'] ) ? $params['name'] : '',
+					is_array( $params ) && isset( $params['arguments'] ) && is_array( $params['arguments'] ) ? $params['arguments'] : array()
 				);
 
 			case 'resources/list':
@@ -1816,7 +1817,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 * @param string     $tool_name Tool name as the client called it.
 	 * @return array|null
 	 */
-	private function conform_tool_call_result( $response, $tool_name ) {
+	private function apply_output_schema( $response, $tool_name ) {
 		if ( ! is_array( $response ) || ! isset( $response['result'] ) || ! is_array( $response['result'] ) ) {
 			return $response;
 		}
@@ -1869,6 +1870,124 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			$this->schema_mismatches_logged[ $tool_name ] = true;
 			error_log( sprintf( 'MCPWP: %s result does not match its outputSchema; structured copy withheld (%s)', $tool_name, implode( '; ', array_slice( $errors, 0, 3 ) ) ) ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
 		}
+		return $response;
+	}
+
+	/**
+	 * The one place every tools/call answer passes through, whichever of
+	 * handle_tools_call()'s many exits or the idempotent replay path
+	 * produced it: makes the result agree with the negotiated protocol
+	 * version and the tool's outputSchema (#906, apply_output_schema()),
+	 * then appends next-step hints for a successful result (#912,
+	 * apply_next_step_hints()). Order matters: hints read the SAME text
+	 * block apply_output_schema() validated structuredContent from, and are
+	 * never written into structuredContent themselves.
+	 *
+	 * @param array|null $response  JSON-RPC response from the tools/call handler.
+	 * @param string     $tool_name Tool name as the client called it.
+	 * @param array      $arguments Arguments as the client sent them, for
+	 *                              building a next-step hint's own call.
+	 * @return array|null
+	 */
+	private function conform_tool_call_result( $response, $tool_name, $arguments = array() ) {
+		$response = $this->apply_output_schema( $response, $tool_name );
+		return $this->apply_next_step_hints( $response, $tool_name, is_array( $arguments ) ? $arguments : array() );
+	}
+
+	/**
+	 * Append next-step hints to a successful tools/call result (#912).
+	 *
+	 * Advisory only: a short "Next: ..." line is appended to the text
+	 * content block, and the same suggestions are given machine-readable
+	 * under result._meta['mcpwp/next'] as [{tool, why, arguments}, ...].
+	 * NEVER written into structuredContent — that is validated against the
+	 * tool's own declared outputSchema (#906) and must not carry a
+	 * suggestion no schema describes.
+	 *
+	 * Runs identically for a fresh dispatch and an idempotent replay (#802):
+	 * both reach this from the same conform_tool_call_result() chokepoint,
+	 * and a replay's stored text/arguments are read fresh here every time —
+	 * nothing about a hint is itself stored, so re-running this on the same
+	 * stored result never compounds.
+	 *
+	 * A hint naming a tool the caller cannot currently reach (category
+	 * disabled by the site admin, or outside the API key's allowed
+	 * categories) is dropped before it is shown — same gate the idempotent
+	 * replay path already uses for its own permission recheck.
+	 *
+	 * @param array|null $response  JSON-RPC response, already schema-conformed.
+	 * @param string     $tool_name Tool name as the client called it.
+	 * @param array      $arguments Arguments as the client sent them.
+	 * @return array|null
+	 */
+	private function apply_next_step_hints( $response, $tool_name, array $arguments ) {
+		if ( ! is_array( $response ) || ! isset( $response['result'] ) || ! is_array( $response['result'] ) ) {
+			return $response;
+		}
+		if ( '' === $tool_name || ! empty( $response['result']['isError'] ) ) {
+			return $response;
+		}
+		if ( ! class_exists( 'Mcpwp_MCP_Next_Step_Hints' ) ) {
+			return $response;
+		}
+
+		$text        = isset( $response['result']['content'][0]['text'] ) && is_string( $response['result']['content'][0]['text'] )
+			? $response['result']['content'][0]['text']
+			: null;
+		$decoded     = null !== $text ? json_decode( $text, true ) : null;
+		$result_data = is_array( $decoded ) ? $decoded : array();
+
+		$hints = Mcpwp_MCP_Next_Step_Hints::for_tool( $tool_name, $arguments, $result_data );
+		if ( empty( $hints ) ) {
+			return $response;
+		}
+
+		$key_record = $this->get_current_api_key_record();
+		$available  = array();
+		foreach ( $hints as $hint ) {
+			if ( isset( $hint['tool'] ) && $this->tool_currently_permitted( $hint['tool'], $key_record ) ) {
+				$available[] = $hint;
+			}
+		}
+		if ( empty( $available ) ) {
+			return $response;
+		}
+
+		// An empty PHP array is a JSON array ([]) unless cast to an object —
+		// a hint's `arguments` is always a JSON-RPC arguments OBJECT, even
+		// when it has no keys (e.g. wp_get_site_context takes none), so a
+		// no-arg hint must read as {} on the wire, not [].
+		$as_json_object = function ( array $args ) {
+			return empty( $args ) ? new \stdClass() : $args;
+		};
+
+		if ( null !== $text ) {
+			$lines = array();
+			foreach ( $available as $hint ) {
+				$lines[] = sprintf(
+					'Next: %s(%s) to %s.',
+					$hint['tool'],
+					(string) wp_json_encode( $as_json_object( $hint['arguments'] ) ),
+					$hint['why']
+				);
+			}
+			$response['result']['content'][0]['text'] = $text . "\n\n" . implode( "\n", $lines );
+		}
+
+		if ( ! isset( $response['result']['_meta'] ) || ! is_array( $response['result']['_meta'] ) ) {
+			$response['result']['_meta'] = array();
+		}
+		$response['result']['_meta']['mcpwp/next'] = array_map(
+			function ( $hint ) use ( $as_json_object ) {
+				return array(
+					'tool'      => $hint['tool'],
+					'why'       => $hint['why'],
+					'arguments' => $as_json_object( $hint['arguments'] ),
+				);
+			},
+			$available
+		);
+
 		return $response;
 	}
 

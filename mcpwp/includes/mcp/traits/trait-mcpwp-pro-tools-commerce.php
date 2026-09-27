@@ -323,6 +323,29 @@ trait Mcpwp_Pro_Tools_Commerce_Trait {
 					'type'        => 'boolean',
 					'description' => 'Downloadable product',
 				),
+			),
+			null,
+			array(
+				array(
+					'name' => 'Classic Cotton T-Shirt',
+					'type' => 'simple',
+					'status' => 'draft',
+					'description' => '<p>100% organic cotton, unisex fit.</p>',
+					'short_description' => 'Soft, breathable everyday tee.',
+					'sku' => 'TSHIRT-CTN-001',
+					'regular_price' => '24.99',
+					'sale_price' => '19.99',
+					'manage_stock' => true,
+					'stock_quantity' => 150,
+					'stock_status' => 'instock',
+					'categories' => array(
+						'Apparel',
+					),
+					'tags' => array(
+						'cotton',
+						'bestseller',
+					),
+				),
 			)
 		);
 
