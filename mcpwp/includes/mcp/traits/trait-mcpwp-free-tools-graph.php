@@ -172,6 +172,29 @@ trait Mcpwp_Free_Tools_Graph_Trait {
 					'type'        => 'string',
 					'description' => 'next_cursor from the previous page, with the same filters.',
 				),
+			),
+			null,
+			array(
+				array(
+					'orphan' => true,
+					'kind' => array(
+						'post',
+					),
+					'limit' => 20,
+				),
+				array(
+					'min_inbound' => 0,
+					'max_inbound' => 1,
+					'order_by' => 'modified',
+					'order_dir' => 'desc',
+					'metric' => array(
+						'name' => 'clicks',
+						'op' => 'lt',
+						'value' => 5,
+						'window_days' => 28,
+					),
+					'limit' => 10,
+				),
 			)
 		);
 

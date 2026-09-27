@@ -131,6 +131,17 @@ trait Mcpwp_Free_Tools_Elementor_Trait {
 					'description' => 'Setting keys to remove from the widget',
 					'items'       => array( 'type' => 'string' ),
 				),
+			),
+			null,
+			array(
+				array(
+					'id' => 42,
+					'widget_id' => 'wid0001',
+					'settings' => array(
+						'title' => 'New Heading',
+						'align' => 'center',
+					),
+				),
 			)
 		);
 
@@ -156,6 +167,39 @@ trait Mcpwp_Free_Tools_Elementor_Trait {
 					'type'        => 'boolean',
 					'description' => 'Set true to convert a page that has existing non-Elementor content. Without it the write is refused rather than destroying that content (#788).',
 					'default'     => false,
+				),
+			),
+			null,
+			array(
+				array(
+					'id' => 42,
+					'element' => array(
+						'id' => 'sec0001',
+						'elType' => 'section',
+						'settings' => array(
+						),
+						'elements' => array(
+							array(
+								'id' => 'col0001',
+								'elType' => 'column',
+								'settings' => array(
+									'_column_size' => 100,
+								),
+								'elements' => array(
+									array(
+										'id' => 'wid0001',
+										'elType' => 'widget',
+										'widgetType' => 'heading',
+										'settings' => array(
+											'title' => 'New Section',
+											'header_size' => 'h2',
+										),
+									),
+								),
+							),
+						),
+					),
+					'position' => 'end',
 				),
 			)
 		);
@@ -200,6 +244,41 @@ trait Mcpwp_Free_Tools_Elementor_Trait {
 					'type'        => 'boolean',
 					'description' => 'Set true to convert a page that has existing non-Elementor content. Without it the write is refused rather than destroying that content (#788).',
 					'default'     => false,
+				),
+			),
+			null,
+			array(
+				array(
+					'id' => 42,
+					'element_id' => 'sec0001',
+					'element' => array(
+						'id' => 'sec0002',
+						'elType' => 'section',
+						'settings' => array(
+							'background_background' => 'classic',
+							'background_color' => '#FFFFFF',
+						),
+						'elements' => array(
+							array(
+								'id' => 'col0002',
+								'elType' => 'column',
+								'settings' => array(
+									'_column_size' => 100,
+								),
+								'elements' => array(
+									array(
+										'id' => 'wid0002',
+										'elType' => 'widget',
+										'widgetType' => 'heading',
+										'settings' => array(
+											'title' => 'Updated Section',
+											'header_size' => 'h2',
+										),
+									),
+								),
+							),
+						),
+					),
 				),
 			)
 		);
@@ -250,6 +329,50 @@ trait Mcpwp_Free_Tools_Elementor_Trait {
 					'description' => 'Set true to convert a page that has existing non-Elementor content. Without it the write is refused rather than destroying that content (#788).',
 					'default'     => false,
 				),
+			),
+			null,
+			array(
+				array(
+					'id' => 42,
+					'operations' => array(
+						array(
+							'op' => 'settings',
+							'element_id' => 'wid0001',
+							'settings' => array(
+								'title' => 'Updated Heading',
+							),
+						),
+						array(
+							'op' => 'add',
+							'element' => array(
+								'id' => 'sec0003',
+								'elType' => 'section',
+								'settings' => array(
+								),
+								'elements' => array(
+									array(
+										'id' => 'col0003',
+										'elType' => 'column',
+										'settings' => array(
+											'_column_size' => 100,
+										),
+										'elements' => array(
+											array(
+												'id' => 'wid0003',
+												'elType' => 'widget',
+												'widgetType' => 'text-editor',
+												'settings' => array(
+													'editor' => '<p>New paragraph</p>',
+												),
+											),
+										),
+									),
+								),
+							),
+							'position' => 'end',
+						),
+					),
+				),
 			)
 		);
 
@@ -284,6 +407,14 @@ trait Mcpwp_Free_Tools_Elementor_Trait {
 					'type'        => 'boolean',
 					'description' => 'Set true to convert a page that has existing non-Elementor content. Without it the write is refused rather than destroying that content (#788).',
 					'default'     => false,
+				),
+			),
+			null,
+			array(
+				array(
+					'id' => 42,
+					'elementor_data' => '[{"id":"sec0001","elType":"section","settings":{"background_background":"classic","background_color":"#FFFFFF"},"elements":[{"id":"col0001","elType":"column","settings":{"_column_size":100},"elements":[{"id":"wid0001","elType":"widget","widgetType":"heading","settings":{"title":"Welcome","header_size":"h1","align":"center"}}]}]}]',
+					'dry_run' => true,
 				),
 			)
 		);

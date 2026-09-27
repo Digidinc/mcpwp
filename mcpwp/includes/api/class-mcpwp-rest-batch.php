@@ -141,7 +141,11 @@ class Mcpwp_REST_Batch extends Mcpwp_REST_API {
 	 */
 	/**
 	 * A batch costs one rate-limit slot per operation (#802); the sub-requests
-	 * themselves are exempt, so nothing is charged twice.
+	 * themselves are exempt, so nothing is charged twice. A /graph* operation
+	 * costs its graph weight instead of one (#1008) — Mcpwp_Operation_Weights::
+	 * batch_operations_weight() is the same function the wp_batch / wp_batch_
+	 * update tools/call path uses, so a caller cannot dodge the graph weight by
+	 * reaching this same handler through the other door.
 	 *
 	 * @param WP_REST_Request $request Request.
 	 * @return int
@@ -149,7 +153,15 @@ class Mcpwp_REST_Batch extends Mcpwp_REST_API {
 	protected function request_rate_weight( $request ) {
 		$operations = method_exists( $request, 'get_param' ) ? $request->get_param( 'operations' ) : null;
 
-		return is_array( $operations ) ? max( 1, count( $operations ) ) : 1;
+		if ( ! is_array( $operations ) ) {
+			return 1;
+		}
+
+		if ( ! class_exists( 'Mcpwp_Operation_Weights' ) ) {
+			return max( 1, count( $operations ) );
+		}
+
+		return max( 1, Mcpwp_Operation_Weights::batch_operations_weight( $operations ) );
 	}
 
 	public function handle_batch( $request ) {
