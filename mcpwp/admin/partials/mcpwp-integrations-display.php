@@ -182,10 +182,18 @@ $figma_oauth_message = isset( $_GET['message'] ) ? sanitize_text_field( wp_unsla
 										<?php foreach ( $provider['fields'] as $field_key => $field_info ) : ?>
 											<div class="mcpwp-field-row">
 												<label class="mcpwp-field-label"><?php echo esc_html( $field_info['label'] ); ?></label>
+												<?php if ( 'select' === $field_info['type'] && ! empty( $field_info['options'] ) ) : ?>
+													<select class="mcpwp-config-field" data-field="<?php echo esc_attr( $field_key ); ?>">
+														<?php foreach ( $field_info['options'] as $option_value => $option_label ) : ?>
+															<option value="<?php echo esc_attr( $option_value ); ?>"><?php echo esc_html( $option_label ); ?></option>
+														<?php endforeach; ?>
+													</select>
+												<?php else : ?>
 												<input type="<?php echo 'password' === $field_info['type'] ? 'password' : 'text'; ?>"
 													class="regular-text mcpwp-config-field"
 													data-field="<?php echo esc_attr( $field_key ); ?>"
 													placeholder="<?php echo esc_attr( isset( $field_info['placeholder'] ) ? $field_info['placeholder'] : '' ); ?>" />
+												<?php endif; ?>
 											</div>
 										<?php endforeach; ?>
 									</div>
@@ -215,10 +223,18 @@ $figma_oauth_message = isset( $_GET['message'] ) ? sanitize_text_field( wp_unsla
 									<?php foreach ( $provider['fields'] as $field_key => $field_info ) : ?>
 										<div class="mcpwp-field-row">
 											<label class="mcpwp-field-label"><?php echo esc_html( $field_info['label'] ); ?></label>
+											<?php if ( 'select' === $field_info['type'] && ! empty( $field_info['options'] ) ) : ?>
+												<select class="mcpwp-config-field" data-field="<?php echo esc_attr( $field_key ); ?>">
+													<?php foreach ( $field_info['options'] as $option_value => $option_label ) : ?>
+														<option value="<?php echo esc_attr( $option_value ); ?>"><?php echo esc_html( $option_label ); ?></option>
+													<?php endforeach; ?>
+												</select>
+											<?php else : ?>
 											<input type="<?php echo 'password' === $field_info['type'] ? 'password' : 'text'; ?>"
 												class="regular-text mcpwp-config-field"
 												data-field="<?php echo esc_attr( $field_key ); ?>"
 												placeholder="<?php echo esc_attr( isset( $field_info['placeholder'] ) ? $field_info['placeholder'] : '' ); ?>" />
+											<?php endif; ?>
 										</div>
 									<?php endforeach; ?>
 								</div>

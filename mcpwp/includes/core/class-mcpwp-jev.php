@@ -14,11 +14,13 @@
  *   brings their own TypeSafe API key; usage is billed to them directly.
  *   Cost is input tokens only, $0.042/1M.
  * - 'cloudflare': POST https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run
- *   with {"model":"typesafe/jev","input":{state,questions}}, run against the
- *   site's own Cloudflare account (the same credentials the wp_cloudflare_*
- *   tools use, plus an account_id — Workers AI is account-scoped, unlike the
- *   zone-scoped token those tools were built for). Same pricing per
- *   https://developers.cloudflare.com/ai/models/typesafe/jev/. No waitlist.
+ *   with {"model":"typesafe/jev","input":{state,questions}}, using the Jev
+ *   integration's OWN cf_account_id + cf_api_token (a Workers-AI-only token
+ *   with Workers AI:Read permission). Jev never borrows the Cloudflare
+ *   integration's zone token: that token was granted for cache/WAF/Speed,
+ *   not for sending approval content to a model, and removing the Jev
+ *   integration must remove every credential Jev can send with. Same pricing
+ *   per https://developers.cloudflare.com/ai/models/typesafe/jev/.
  *
  * Cloudflare's published schema-input.json / schema-output.json for this
  * model are, question-for-question and answer-for-answer, the SAME dialect
@@ -34,9 +36,9 @@
  * Cloudflare's own schema files, not assumed.
  *
  * Transport resolution (Mcpwp_Jev::transport()) is a pure, no-network read of
- * stored config: a TypeSafe key configured picks 'typesafe'; otherwise a
- * Cloudflare api_token + account_id configured on the 'cloudflare' provider
- * picks 'cloudflare'; otherwise ''. Whether a Cloudflare token can actually
+ * the Jev integration's stored config: transport 'off' picks ''; otherwise a
+ * TypeSafe key picks 'typesafe'; otherwise Jev's own cf_api_token +
+ * cf_account_id pick 'cloudflare'; otherwise ''. Whether a Cloudflare token can actually
  * run Workers AI is never guessed at resolution time — it is proven by the
  * first real call (evaluate() or test_connection()), and a permission
  * failure surfaces as an ordinary WP_Error, same as any other Jev failure:
@@ -56,6 +58,23 @@ class Mcpwp_Jev {
 
 	const TRANSPORT_TYPESAFE   = 'typesafe';
 	const TRANSPORT_CLOUDFLARE = 'cloudflare';
+
+	/**
+	 * Values the Jev integration's 'transport' setting accepts. Anything else
+	 * is refused at configure time (Mcpwp_Integration_Manager).
+	 */
+	const TRANSPORT_SETTINGS = array( 'auto', 'typesafe', 'cloudflare', 'off' );
+
+	/**
+	 * A Cloudflare account ID: 32 hex characters.
+	 */
+	const CF_ACCOUNT_ID_PATTERN = '/^[0-9a-f]{32}$/i';
+
+	/**
+	 * Upstream error text is untrusted and unbounded; cap what is echoed into
+	 * responses and error_log.
+	 */
+	const MAX_UPSTREAM_ERROR_LENGTH = 300;
 
 	/**
 	 * Default TypeSafe endpoint. Only ever overridden for testing — the
@@ -155,40 +174,35 @@ class Mcpwp_Jev {
 
 	/**
 	 * Resolve which transport this site would use, without making any
-	 * network call:
+	 * network call. Reads only the Jev integration's own record:
+	 * - 'off' resolves to '' — nothing is ever sent.
 	 * - an explicit override on the 'jev' provider ('typesafe' or
 	 *   'cloudflare') is honoured if — and only if — that transport is
 	 *   actually configured; an override naming an unconfigured transport
 	 *   resolves to '' rather than silently falling back to the other one,
 	 *   because an explicit choice that can't be honoured should say so, not
 	 *   quietly substitute.
-	 * - otherwise ("auto", empty, or an unrecognised value): a TypeSafe key
-	 *   wins if present, else Cloudflare Workers AI credentials
-	 *   (api_token + account_id on the 'cloudflare' provider) if present,
-	 *   else ''.
+	 * - otherwise ('auto' or empty): a TypeSafe key wins if present, else
+	 *   Jev's own Workers AI credentials (cf_api_token + cf_account_id) if
+	 *   present, else ''.
 	 *
 	 * @return string '' | self::TRANSPORT_TYPESAFE | self::TRANSPORT_CLOUDFLARE
 	 */
 	public static function transport() {
-		if ( ! class_exists( 'Mcpwp_Integration_Manager' ) ) {
+		$config = self::jev_config();
+
+		$setting = self::transport_setting( $config );
+		if ( 'off' === $setting ) {
 			return '';
 		}
 
-		$jev_config = Mcpwp_Integration_Manager::get_instance()->get_provider_config( 'jev' );
-		$jev_config = is_array( $jev_config ) ? $jev_config : array();
+		$typesafe_ready   = ! empty( $config['api_key'] );
+		$cloudflare_ready = self::cloudflare_credentials_ready( $config );
 
-		$override = isset( $jev_config['transport'] ) ? strtolower( trim( (string) $jev_config['transport'] ) ) : '';
-		if ( ! in_array( $override, array( self::TRANSPORT_TYPESAFE, self::TRANSPORT_CLOUDFLARE ), true ) ) {
-			$override = 'auto';
-		}
-
-		$typesafe_ready   = ! empty( $jev_config['api_key'] );
-		$cloudflare_ready = self::cloudflare_credentials_ready();
-
-		if ( self::TRANSPORT_TYPESAFE === $override ) {
+		if ( self::TRANSPORT_TYPESAFE === $setting ) {
 			return $typesafe_ready ? self::TRANSPORT_TYPESAFE : '';
 		}
-		if ( self::TRANSPORT_CLOUDFLARE === $override ) {
+		if ( self::TRANSPORT_CLOUDFLARE === $setting ) {
 			return $cloudflare_ready ? self::TRANSPORT_CLOUDFLARE : '';
 		}
 
@@ -199,6 +213,79 @@ class Mcpwp_Jev {
 			return self::TRANSPORT_CLOUDFLARE;
 		}
 		return '';
+	}
+
+	/**
+	 * The Jev integration's stored config, or an empty array.
+	 *
+	 * @return array
+	 */
+	private static function jev_config() {
+		if ( ! class_exists( 'Mcpwp_Integration_Manager' ) ) {
+			return array();
+		}
+		$config = Mcpwp_Integration_Manager::get_instance()->get_provider_config( 'jev' );
+		return is_array( $config ) ? $config : array();
+	}
+
+	/**
+	 * The stored transport setting, normalised. Empty means 'auto'. A value
+	 * outside TRANSPORT_SETTINGS cannot be saved through the configure paths;
+	 * one found in storage anyway (hand-edited option) is treated as 'off'
+	 * — an unreadable choice must not send anything.
+	 *
+	 * @param array $config Jev config.
+	 * @return string One of TRANSPORT_SETTINGS.
+	 */
+	private static function transport_setting( array $config ) {
+		$setting = isset( $config['transport'] ) ? strtolower( trim( (string) $config['transport'] ) ) : '';
+		if ( '' === $setting ) {
+			return 'auto';
+		}
+		return in_array( $setting, self::TRANSPORT_SETTINGS, true ) ? $setting : 'off';
+	}
+
+	/**
+	 * Validate and normalise a Jev config before it is stored. Called by
+	 * Mcpwp_Integration_Manager::set_provider_config() for every save path
+	 * (REST, MCP, wp-admin).
+	 *
+	 * @param array $config Submitted config.
+	 * @return array|WP_Error Normalised config, or a 400 WP_Error naming the problem.
+	 */
+	public static function validate_config( array $config ) {
+		$transport = isset( $config['transport'] ) ? strtolower( trim( (string) $config['transport'] ) ) : '';
+		if ( '' === $transport ) {
+			$transport = 'auto';
+		}
+		if ( ! in_array( $transport, self::TRANSPORT_SETTINGS, true ) ) {
+			return new WP_Error(
+				'invalid_jev_transport',
+				sprintf(
+					/* translators: %s: comma-separated allowed values */
+					__( 'Jev transport must be one of: %s.', 'mcpwp' ),
+					implode( ', ', self::TRANSPORT_SETTINGS )
+				),
+				array( 'status' => 400 )
+			);
+		}
+		$config['transport'] = $transport;
+
+		$account_id = isset( $config['cf_account_id'] ) ? trim( (string) $config['cf_account_id'] ) : '';
+		if ( '' !== $account_id && ! preg_match( self::CF_ACCOUNT_ID_PATTERN, $account_id ) ) {
+			return new WP_Error(
+				'invalid_cf_account_id',
+				__( 'The Cloudflare account ID must be 32 hexadecimal characters.', 'mcpwp' ),
+				array( 'status' => 400 )
+			);
+		}
+		$config['cf_account_id'] = strtolower( $account_id );
+
+		if ( isset( $config['cf_api_token'] ) ) {
+			$config['cf_api_token'] = trim( (string) $config['cf_api_token'] );
+		}
+
+		return $config;
 	}
 
 	/**
@@ -216,39 +303,32 @@ class Mcpwp_Jev {
 			return array( 'transport' => $transport, 'reason' => 'cloudflare_workers_ai_credentials_configured' );
 		}
 
-		$jev_config = class_exists( 'Mcpwp_Integration_Manager' ) ? Mcpwp_Integration_Manager::get_instance()->get_provider_config( 'jev' ) : false;
-		$jev_config = is_array( $jev_config ) ? $jev_config : array();
-		$override   = isset( $jev_config['transport'] ) ? strtolower( trim( (string) $jev_config['transport'] ) ) : '';
-
-		if ( self::TRANSPORT_TYPESAFE === $override ) {
+		$setting = self::transport_setting( self::jev_config() );
+		if ( 'off' === $setting ) {
+			return array( 'transport' => '', 'reason' => 'disabled_by_admin' );
+		}
+		if ( self::TRANSPORT_TYPESAFE === $setting ) {
 			return array( 'transport' => '', 'reason' => 'override_typesafe_not_configured' );
 		}
-		if ( self::TRANSPORT_CLOUDFLARE === $override ) {
+		if ( self::TRANSPORT_CLOUDFLARE === $setting ) {
 			return array( 'transport' => '', 'reason' => 'override_cloudflare_not_configured' );
 		}
 		return array( 'transport' => '', 'reason' => 'not_configured' );
 	}
 
 	/**
-	 * Whether the 'cloudflare' integration carries what Workers AI needs:
-	 * an api_token AND an account_id. Deliberately requires account_id even
-	 * though existing wp_cloudflare_* tools only need api_token + zone_id —
-	 * Workers AI is an account-level resource, not a zone-level one, and a
-	 * zone-scoped token saved for cache/WAF/Speed use has no reason to also
-	 * carry Workers AI permission. Requiring the admin to additionally save
-	 * account_id is the signal that this token was deliberately meant for
-	 * Workers AI too, rather than assuming it based on presence of the
-	 * zone-scoped fields alone. Whether the token's permissions actually
-	 * cover Workers AI is proven by the first real call, not guessed here.
+	 * Whether the Jev integration carries its OWN Workers AI credentials: a
+	 * cf_api_token and a well-formed cf_account_id. The Cloudflare
+	 * integration's zone token is never consulted. Whether the token really
+	 * has Workers AI permission is proven by the first real call.
 	 *
+	 * @param array $config Jev config.
 	 * @return bool
 	 */
-	private static function cloudflare_credentials_ready() {
-		if ( ! class_exists( 'Mcpwp_Integration_Manager' ) ) {
-			return false;
-		}
-		$config = Mcpwp_Integration_Manager::get_instance()->get_provider_config( 'cloudflare' );
-		return is_array( $config ) && ! empty( $config['api_token'] ) && ! empty( $config['account_id'] );
+	private static function cloudflare_credentials_ready( array $config ) {
+		$token      = isset( $config['cf_api_token'] ) ? trim( (string) $config['cf_api_token'] ) : '';
+		$account_id = isset( $config['cf_account_id'] ) ? trim( (string) $config['cf_account_id'] ) : '';
+		return '' !== $token && 1 === preg_match( self::CF_ACCOUNT_ID_PATTERN, $account_id );
 	}
 
 	/**
@@ -258,34 +338,24 @@ class Mcpwp_Jev {
 	 * @return self|false False when neither transport is configured.
 	 */
 	public static function for_site() {
-		if ( ! class_exists( 'Mcpwp_Integration_Manager' ) ) {
-			return false;
-		}
-
 		$transport = self::transport();
 		if ( '' === $transport ) {
 			return false;
 		}
 
+		$config = self::jev_config();
+
 		if ( self::TRANSPORT_TYPESAFE === $transport ) {
-			$jev_config = Mcpwp_Integration_Manager::get_instance()->get_provider_config( 'jev' );
-			$jev_config = is_array( $jev_config ) ? $jev_config : array();
 			return new self(
-				isset( $jev_config['api_key'] ) ? $jev_config['api_key'] : '',
-				isset( $jev_config['endpoint'] ) ? $jev_config['endpoint'] : '',
+				isset( $config['api_key'] ) ? $config['api_key'] : '',
+				isset( $config['endpoint'] ) ? $config['endpoint'] : '',
 				self::TRANSPORT_TYPESAFE
 			);
 		}
 
-		// Cloudflare.
-		$cf_config  = Mcpwp_Integration_Manager::get_instance()->get_provider_config( 'cloudflare' );
-		$cf_config  = is_array( $cf_config ) ? $cf_config : array();
-		$account_id = isset( $cf_config['account_id'] ) ? trim( (string) $cf_config['account_id'] ) : '';
-		$api_token  = isset( $cf_config['api_token'] ) ? trim( (string) $cf_config['api_token'] ) : '';
-
-		if ( '' === $account_id || '' === $api_token ) {
-			return false; // Defensive — transport() above already checked this.
-		}
+		// Cloudflare — Jev's own credentials only (transport() checked them).
+		$account_id = trim( (string) $config['cf_account_id'] );
+		$api_token  = trim( (string) $config['cf_api_token'] );
 
 		$default_endpoint = sprintf( self::CLOUDFLARE_ENDPOINT_TEMPLATE, rawurlencode( $account_id ) );
 
@@ -385,9 +455,11 @@ class Mcpwp_Jev {
 			case 'override_typesafe_not_configured':
 				return __( 'Jev is set to use TypeSafe, but no TypeSafe API key is saved.', 'mcpwp' );
 			case 'override_cloudflare_not_configured':
-				return __( 'Jev is set to use Cloudflare Workers AI, but the Cloudflare integration is missing an API token or account ID.', 'mcpwp' );
+				return __( 'Jev is set to use Cloudflare Workers AI, but the Jev integration is missing its Workers AI API token or a valid 32-character account ID.', 'mcpwp' );
+			case 'disabled_by_admin':
+				return __( 'Jev is turned off (transport set to "off"). Nothing is sent.', 'mcpwp' );
 			default:
-				return __( 'Jev is not configured: save a TypeSafe API key, or a Cloudflare API token + account ID, to turn it on.', 'mcpwp' );
+				return __( 'Jev is not configured: save a TypeSafe API key, or a Cloudflare account ID + Workers AI API token, in the Jev integration to turn it on.', 'mcpwp' );
 		}
 	}
 
@@ -447,13 +519,16 @@ class Mcpwp_Jev {
 		$response = wp_safe_remote_post(
 			$this->endpoint,
 			array(
-				'timeout'   => self::TIMEOUT,
-				'sslverify' => true,
-				'headers'   => array(
+				'timeout'     => self::TIMEOUT,
+				'sslverify'   => true,
+				// Never follow a redirect: it would carry the bearer token and
+				// the approval content to wherever the Location header says.
+				'redirection' => 0,
+				'headers'     => array(
 					'Authorization' => 'Bearer ' . $this->api_key,
 					'Content-Type'  => 'application/json',
 				),
-				'body'      => wp_json_encode( $body ),
+				'body'        => wp_json_encode( $body ),
 			)
 		);
 
@@ -464,6 +539,12 @@ class Mcpwp_Jev {
 		$code     = (int) wp_remote_retrieve_response_code( $response );
 		$body_raw = wp_remote_retrieve_body( $response );
 		$decoded  = json_decode( $body_raw, true );
+
+		// A redirect is a failure on both transports, never followed (see
+		// 'redirection' => 0 above) and never read as an answer.
+		if ( $code >= 300 && $code < 400 ) {
+			return new WP_Error( 'jev_http_error', sprintf( 'Jev returned HTTP %d (redirects are not followed).', $code ) );
+		}
 
 		if ( self::TRANSPORT_CLOUDFLARE === $this->transport ) {
 			// Cloudflare's standard API envelope: {success, errors, messages,
@@ -488,7 +569,7 @@ class Mcpwp_Jev {
 					'result'  => $decoded,
 				);
 			}
-			if ( empty( $decoded['success'] ) ) {
+			if ( ! isset( $decoded['success'] ) || true !== $decoded['success'] ) {
 				$messages = array();
 				if ( ! empty( $decoded['errors'] ) && is_array( $decoded['errors'] ) ) {
 					foreach ( $decoded['errors'] as $err ) {
@@ -501,7 +582,7 @@ class Mcpwp_Jev {
 				}
 				return new WP_Error(
 					'jev_http_error',
-					$messages ? implode( '; ', $messages ) : sprintf( 'Cloudflare Workers AI returned HTTP %d.', $code )
+					$messages ? self::truncate_upstream( implode( '; ', $messages ) ) : sprintf( 'Cloudflare Workers AI returned HTTP %d.', $code )
 				);
 			}
 			// The model's own {model, answers, usage} payload — the same
@@ -534,6 +615,21 @@ class Mcpwp_Jev {
 			'model'     => isset( $decoded['model'] ) ? $decoded['model'] : '',
 			'transport' => $this->transport,
 		);
+	}
+
+	/**
+	 * Cap untrusted upstream error text before it reaches a response or
+	 * error_log.
+	 *
+	 * @param string $text Upstream text.
+	 * @return string
+	 */
+	private static function truncate_upstream( $text ) {
+		$text = (string) $text;
+		if ( function_exists( 'mb_substr' ) ) {
+			return mb_strlen( $text ) > self::MAX_UPSTREAM_ERROR_LENGTH ? mb_substr( $text, 0, self::MAX_UPSTREAM_ERROR_LENGTH ) . '…' : $text;
+		}
+		return strlen( $text ) > self::MAX_UPSTREAM_ERROR_LENGTH ? substr( $text, 0, self::MAX_UPSTREAM_ERROR_LENGTH ) . '...' : $text;
 	}
 
 	/**

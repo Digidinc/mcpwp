@@ -46,12 +46,19 @@ class Mcpwp_Integration_Manager {
 
 	/**
 	 * Why the last set_provider_key() / set_provider_config() returned false:
-	 * 'unknown_provider', 'encryption_failed' or 'integration_write_failed'
-	 * ('' after a save that succeeded).
+	 * 'unknown_provider', 'encryption_failed', 'integration_write_failed' or
+	 * 'invalid_config' ('' after a save that succeeded).
 	 *
 	 * @var string
 	 */
 	private $last_save_error = '';
+
+	/**
+	 * Human-readable reason when last_save_error is 'invalid_config'.
+	 *
+	 * @var string
+	 */
+	private $last_save_error_message = '';
 
 	/**
 	 * Supported providers.
@@ -243,22 +250,17 @@ class Mcpwp_Integration_Manager {
 			'url'         => 'https://developers.cloudflare.com/fundamentals/api/get-started/create-token/',
 			'key_prefix'  => '',
 			'tier'        => 'free',
-			'description' => 'Connect this site\'s Cloudflare zone to fix Bot Fight Mode/Security Level blocking MCP requests, purge cache after content edits, and manage Speed settings (Early Hints, HTTP/3, Rocket Loader, Polish) that affect Core Web Vitals. Use a scoped API Token (Zone Settings: Edit, Zone WAF: Edit, Cache Purge: Purge) — not the Global API Key. Add Account ID + a token with Workers AI permission if you also want Jev (see below) to run through Cloudflare instead of TypeSafe.',
+			'description' => 'Connect this site\'s Cloudflare zone to fix Bot Fight Mode/Security Level blocking MCP requests, purge cache after content edits, and manage Speed settings (Early Hints, HTTP/3, Rocket Loader, Polish) that affect Core Web Vitals. Use a scoped API Token (Zone Settings: Edit, Zone WAF: Edit, Cache Purge: Purge) — not the Global API Key.',
 			'fields'      => array(
-				'api_token'  => array(
+				'api_token' => array(
 					'label'       => 'API Token',
 					'type'        => 'password',
 					'placeholder' => 'Scoped Cloudflare API Token for this zone',
 				),
-				'zone_id'    => array(
+				'zone_id'   => array(
 					'label'       => 'Zone ID',
 					'type'        => 'text',
 					'placeholder' => 'Zone ID (Cloudflare dashboard > this domain > Overview > API)',
-				),
-				'account_id' => array(
-					'label'       => 'Account ID (optional — Workers AI)',
-					'type'        => 'text',
-					'placeholder' => 'Cloudflare Account ID (only needed to run Jev via Workers AI)',
 				),
 			),
 		),
@@ -267,22 +269,37 @@ class Mcpwp_Integration_Manager {
 			'url'         => 'https://typesafe.ai/',
 			'key_prefix'  => '',
 			'tier'        => 'free',
-			'description' => 'Optional: TypeSafe\'s Jev evaluation model ranks the approval queue by priority so the most urgent pending changes surface first. Bring your own TypeSafe API key (billed to you directly, input tokens only, $0.042/1M) — or, with no separate signup, run the same model through Cloudflare Workers AI using the Account ID + API token saved on the Cloudflare integration above (same pricing, https://developers.cloudflare.com/ai/models/typesafe/jev/). A TypeSafe key is preferred when both are configured; set the transport override below to force one or the other. Off until either is configured. Jev only routes — it never approves, rejects, applies, or blocks anything, and it has no say over scope checks or safety reports.',
+			'description' => 'Optional: TypeSafe\'s Jev evaluation model ranks the approval queue by priority so the most urgent pending changes surface first. Either bring your own TypeSafe API key (billed to you directly, input tokens only, $0.042/1M), or run the same model through Cloudflare Workers AI: enter your Cloudflare account ID and create a Workers AI token with Workers AI:Read permission for your account (same pricing, https://developers.cloudflare.com/ai/models/typesafe/jev/). Jev never uses the Cloudflare integration\'s zone token. A TypeSafe key is preferred when both are set; the transport setting forces one, or "off" stops all sending. Removing this integration deletes every Jev credential. Jev only routes — it never approves, rejects, applies, or blocks anything, and it has no say over scope checks or safety reports.',
 			'fields'      => array(
-				'api_key'   => array(
+				'api_key'       => array(
 					'label'       => 'API Key (TypeSafe)',
 					'type'        => 'password',
 					'placeholder' => 'TypeSafe API key',
 				),
-				'endpoint'  => array(
+				'endpoint'      => array(
 					'label'       => 'TypeSafe endpoint override (advanced)',
 					'type'        => 'url',
 					'placeholder' => 'https://api.typesafe.ai/v1/systemone',
 				),
-				'transport' => array(
-					'label'       => 'Transport override (advanced)',
+				'cf_account_id' => array(
+					'label'       => 'Cloudflare Account ID (Workers AI)',
 					'type'        => 'text',
-					'placeholder' => 'auto (default), typesafe, or cloudflare',
+					'placeholder' => '32-character Cloudflare account ID',
+				),
+				'cf_api_token'  => array(
+					'label'       => 'Cloudflare Workers AI API Token',
+					'type'        => 'password',
+					'placeholder' => 'Token with Workers AI:Read permission for your account',
+				),
+				'transport'     => array(
+					'label'   => 'Transport',
+					'type'    => 'select',
+					'options' => array(
+						'auto'       => 'Auto (TypeSafe key if set, else Cloudflare Workers AI)',
+						'typesafe'   => 'TypeSafe only',
+						'cloudflare' => 'Cloudflare Workers AI only',
+						'off'        => 'Off (send nothing)',
+					),
 				),
 			),
 		),
@@ -376,6 +393,14 @@ class Mcpwp_Integration_Manager {
 			return false;
 		}
 
+		$this->last_save_error_message = '';
+		$config = $this->validate_provider_config( $provider, is_array( $config ) ? $config : array() );
+		if ( is_wp_error( $config ) ) {
+			$this->last_save_error         = 'invalid_config';
+			$this->last_save_error_message = $config->get_error_message();
+			return false;
+		}
+
 		$encryption = Mcpwp_Encryption::get_instance();
 		$encrypted  = $encryption->encrypt( wp_json_encode( $config ) );
 		if ( false === $encrypted ) {
@@ -393,6 +418,30 @@ class Mcpwp_Integration_Manager {
 				'multi_field'   => true,
 			)
 		);
+	}
+
+	/**
+	 * Validate a multi-field config before it is stored — one chokepoint for
+	 * the REST, MCP and wp-admin save paths.
+	 *
+	 * @param string $provider Provider slug.
+	 * @param array  $config   Submitted config.
+	 * @return array|WP_Error Config to store, or why it was refused.
+	 */
+	private function validate_provider_config( $provider, array $config ) {
+		if ( 'jev' === $provider && class_exists( 'Mcpwp_Jev' ) ) {
+			return Mcpwp_Jev::validate_config( $config );
+		}
+		return $config;
+	}
+
+	/**
+	 * Human-readable reason for the last 'invalid_config' save failure.
+	 *
+	 * @return string
+	 */
+	public function get_last_save_error_message() {
+		return $this->last_save_error_message;
 	}
 
 	/**

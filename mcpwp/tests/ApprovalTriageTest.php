@@ -68,14 +68,24 @@ final class ApprovalTriageTest extends TestCase
      */
     private function configureJevViaCloudflareOnly(): void
     {
-        Mcpwp_Integration_Manager::get_instance()->set_provider_config('cloudflare', array(
-            'api_token'  => 'test-cf-token',
-            'zone_id'    => 'zone-123',
-            'account_id' => 'account-abc',
+        Mcpwp_Integration_Manager::get_instance()->set_provider_config('jev', array(
+            'cf_account_id' => '0123456789abcdef0123456789abcdef',
+            'cf_api_token'  => 'test-cf-token',
         ));
         add_filter('mcpwp_jev_cloudflare_endpoint', function () {
-            return 'https://cf-stub.test/client/v4/accounts/account-abc/ai/run';
+            return 'https://cf-stub.test/client/v4/accounts/0123456789abcdef0123456789abcdef/ai/run';
         }, 10, 2);
+    }
+
+    /** Registers a pre_http_request spy that answers nothing useful and counts calls. */
+    private function spyOutbound(): ArrayObject
+    {
+        $captured = new ArrayObject();
+        add_filter('pre_http_request', function ($preempt, $args, $url) use ($captured) {
+            $captured[] = $url;
+            return array('response' => array('code' => 500), 'body' => '');
+        }, 10, 3);
+        return $captured;
     }
 
     /** @return ArrayObject<int, array{url:string, args:array}> */
@@ -256,7 +266,7 @@ final class ApprovalTriageTest extends TestCase
         Mcpwp_Jev_Triage::run($approval['id']);
 
         $this->assertCount(1, $captured);
-        $this->assertSame('https://cf-stub.test/client/v4/accounts/account-abc/ai/run', $captured[0]['url']);
+        $this->assertSame('https://cf-stub.test/client/v4/accounts/0123456789abcdef0123456789abcdef/ai/run', $captured[0]['url']);
         $body = json_decode($captured[0]['args']['body'], true);
         $this->assertSame('typesafe/jev', $body['model']);
         $this->assertArrayHasKey('input', $body);
@@ -1075,5 +1085,75 @@ final class ApprovalTriageTest extends TestCase
 
         $this->assertNotNull($found);
         $this->assertArrayNotHasKey('change_kind', $found['triage']);
+    }
+
+    // -- Consent / off-switches (#987 review BLOCK-1) ---------------------------
+
+    public function test_removing_the_jev_integration_stops_all_sending_even_with_both_transports_configured(): void
+    {
+        $manager = Mcpwp_Integration_Manager::get_instance();
+        $manager->set_provider_config('jev', array(
+            'api_key'       => 'test-typesafe-key',
+            'cf_account_id' => '0123456789abcdef0123456789abcdef',
+            'cf_api_token'  => 'test-cf-token',
+        ));
+        // A Cloudflare zone integration stays configured: it must not keep Jev alive.
+        $manager->set_provider_config('cloudflare', array(
+            'api_token'  => 'zone-token',
+            'zone_id'    => 'zone-123',
+            'account_id' => '0123456789abcdef0123456789abcdef',
+        ));
+        $this->assertTrue(Mcpwp_Jev::is_available());
+
+        $this->assertTrue($manager->remove_provider_key('jev'));
+
+        $spy      = $this->spyOutbound();
+        $post_id  = $this->makePost();
+        $approval = Mcpwp_Approvals::create_post_content_request($post_id, 'updated content', array('title' => 'Edit'));
+
+        $scheduled = array_column($GLOBALS['mcpwp_test_single_cron'], 'hook');
+        $this->assertNotContains(Mcpwp_Jev_Triage::HOOK, $scheduled);
+
+        // Even a stale, already-scheduled event sends nothing.
+        Mcpwp_Jev_Triage::run($approval['id']);
+        $this->assertCount(0, $spy);
+        $this->assertArrayNotHasKey('triage', Mcpwp_Approvals::get_request($approval['id']));
+    }
+
+    public function test_transport_off_stops_all_sending(): void
+    {
+        Mcpwp_Integration_Manager::get_instance()->set_provider_config('jev', array(
+            'api_key'       => 'test-typesafe-key',
+            'cf_account_id' => '0123456789abcdef0123456789abcdef',
+            'cf_api_token'  => 'test-cf-token',
+            'transport'     => 'off',
+        ));
+
+        $spy      = $this->spyOutbound();
+        $post_id  = $this->makePost();
+        $approval = Mcpwp_Approvals::create_post_content_request($post_id, 'updated content', array('title' => 'Edit'));
+
+        $scheduled = array_column($GLOBALS['mcpwp_test_single_cron'], 'hook');
+        $this->assertNotContains(Mcpwp_Jev_Triage::HOOK, $scheduled);
+        Mcpwp_Jev_Triage::run($approval['id']);
+        $this->assertCount(0, $spy);
+    }
+
+    public function test_the_cloudflare_zone_integration_alone_never_enables_jev(): void
+    {
+        Mcpwp_Integration_Manager::get_instance()->set_provider_config('cloudflare', array(
+            'api_token'  => 'zone-token',
+            'zone_id'    => 'zone-123',
+            'account_id' => '0123456789abcdef0123456789abcdef',
+        ));
+
+        $spy      = $this->spyOutbound();
+        $post_id  = $this->makePost();
+        $approval = Mcpwp_Approvals::create_post_content_request($post_id, 'updated content', array('title' => 'Edit'));
+
+        $this->assertSame('', Mcpwp_Jev::transport());
+        $this->assertNotContains(Mcpwp_Jev_Triage::HOOK, array_column($GLOBALS['mcpwp_test_single_cron'], 'hook'));
+        Mcpwp_Jev_Triage::run($approval['id']);
+        $this->assertCount(0, $spy);
     }
 }
