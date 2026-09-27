@@ -5,6 +5,22 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.14.3](https://github.com/Mumega-com/mcpwp/compare/v3.14.2...v3.14.3) (2026-09-27)
+
+
+### Features
+
+* **graph:** read tools and mcpwp://graph resource ([#943](https://github.com/Mumega-com/mcpwp/issues/943) S2) ([#1006](https://github.com/Mumega-com/mcpwp/issues/1006)) ([4624f94](https://github.com/Mumega-com/mcpwp/commit/4624f94f10ce1374976a9e31a11a50e1304fcde6))
+* **graph:** site graph storage and incremental builder ([#943](https://github.com/Mumega-com/mcpwp/issues/943) S1) ([#993](https://github.com/Mumega-com/mcpwp/issues/993)) ([03b727a](https://github.com/Mumega-com/mcpwp/commit/03b727a067f6d329c57522cef2153243027cca5a))
+* **jev:** run Jev through Cloudflare Workers AI as well as the TypeSafe API ([#987](https://github.com/Mumega-com/mcpwp/issues/987)) ([#1002](https://github.com/Mumega-com/mcpwp/issues/1002)) ([8d1bbf5](https://github.com/Mumega-com/mcpwp/commit/8d1bbf5664aa85d40c9c2ff1623f9da8c6420406))
+* **mcp:** negotiate protocol 2025-11-25 with titles, outputSchema and structuredContent ([#906](https://github.com/Mumega-com/mcpwp/issues/906)) ([#1003](https://github.com/Mumega-com/mcpwp/issues/1003)) ([1588db9](https://github.com/Mumega-com/mcpwp/commit/1588db9a5dd22a329bbc7aff2f0dc65cddfc406c))
+
+
+### Bug Fixes
+
+* **graph:** keep page-builder and theme internals out of the site graph ([#1009](https://github.com/Mumega-com/mcpwp/issues/1009)) ([0250715](https://github.com/Mumega-com/mcpwp/commit/0250715df9016831123476add4de90f8e144a194))
+* **guardrails:** report real word_count for wp_build_page ([#998](https://github.com/Mumega-com/mcpwp/issues/998)) ([#1001](https://github.com/Mumega-com/mcpwp/issues/1001)) ([f627429](https://github.com/Mumega-com/mcpwp/commit/f62742918a5641a6791a44be402fb8e36bea8baf))
+
 ## [3.14.2](https://github.com/Mumega-com/mcpwp/compare/v3.14.1...v3.14.2) (2026-09-27)
 
 
