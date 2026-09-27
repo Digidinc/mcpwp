@@ -179,9 +179,6 @@ class Mcpwp_REST_Batch extends Mcpwp_REST_API {
 			);
 		}
 
-		// Get API key from current request for forwarding
-		$api_key = $this->get_api_key_from_request( $request );
-
 		$results = array();
 
 		// One spend budget for the whole fan-out tree of this HTTP request
@@ -204,7 +201,7 @@ class Mcpwp_REST_Batch extends Mcpwp_REST_API {
 
 			// Execute each operation sequentially
 			foreach ( $operations as $index => $operation ) {
-				$result    = $this->execute_operation( $operation, $index, $api_key );
+				$result    = $this->execute_operation( $operation, $index, $request );
 				$results[] = $result;
 			}
 
@@ -406,12 +403,14 @@ class Mcpwp_REST_Batch extends Mcpwp_REST_API {
 	/**
 	 * Execute a single operation.
 	 *
-	 * @param array  $operation Operation details.
-	 * @param int    $index     Operation index.
-	 * @param string $api_key   API key for authentication.
+	 * @param array           $operation Operation details.
+	 * @param int             $index     Operation index.
+	 * @param WP_REST_Request $request   The outer, already-authenticated /batch request —
+	 *                                    its credential is forwarded onto the internal
+	 *                                    sub-request exactly as presented (#978).
 	 * @return array Operation result.
 	 */
-	private function execute_operation( $operation, $index, $api_key ) {
+	private function execute_operation( $operation, $index, $request ) {
 		// Once the spend budget refused an operation of this request, every
 		// later one is refused without dispatching — including one core or the
 		// checks below would have rejected for another reason — so the batch's
@@ -462,10 +461,10 @@ class Mcpwp_REST_Batch extends Mcpwp_REST_API {
 			$internal_request->set_query_params( $body );
 		}
 
-		// Copy authentication.
-		if ( $api_key ) {
-			$internal_request->set_header( 'X-API-Key', $api_key );
-		}
+		// Copy authentication — exactly as the caller presented it, never
+		// converted into a different credential type (#978; shared helper
+		// also used by resources/read and tools/call — see #902).
+		$this->forward_caller_credential( $request, $internal_request );
 
 		// Mark as batch sub-request via a PHP static property so that the
 		// auth/rate-limit layer can skip rate counting for sub-requests.

@@ -42,7 +42,11 @@ final class BatchOperationPathTest extends TestCase {
 	private function run_operation( array $operation, int $index = 0 ): array {
 		$reflection = new ReflectionMethod( Mcpwp_REST_Batch::class, 'execute_operation' );
 		$reflection->setAccessible( true );
-		return $reflection->invokeArgs( $this->controller, array( $operation, $index, 'test-key' ) );
+		// execute_operation()'s third argument is the outer, already-authenticated
+		// /batch request (#978) — forwarded onto the internal sub-request via
+		// forward_caller_credential(), not a bare API key string.
+		$outer_request = new WP_REST_Request( 'POST', '/mcpwp/v1/batch', array(), array( 'X-API-Key' => 'test-key' ) );
+		return $reflection->invokeArgs( $this->controller, array( $operation, $index, $outer_request ) );
 	}
 
 	public function denied_path_provider(): array {

@@ -1930,31 +1930,9 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 
 		// Carry the caller's own authenticated credential into the sub-request
 		// exactly as presented — never convert one credential type into
-		// another. A plain API key arrives as X-API-Key (or the ?api_key=
-		// query fallback, which get_api_key_from_request() folds into the
-		// same string); an OAuth access token or a mumcp.com broker token
-		// arrives as `Authorization: Bearer <token>`, and the broker fallback
-		// in particular only ever runs for a genuine Bearer header with no
-		// X-API-Key present (trait-mcpwp-api-auth.php) — copying a Bearer
-		// token onto X-API-Key authenticates as neither, so a broker caller
-		// got "invalid_api_key" 401 from this method even though its outer
-		// /mcp request had already authenticated (#902 review round 2).
-		$outer_api_key_header = method_exists( $request, 'get_header' ) ? $request->get_header( 'X-API-Key' ) : null;
-		$outer_auth_header     = method_exists( $request, 'get_header' ) ? $request->get_header( 'Authorization' ) : null;
-
-		if ( ! empty( $outer_api_key_header ) ) {
-			$sub_request->set_header( 'X-API-Key', $outer_api_key_header );
-		} elseif ( ! empty( $outer_auth_header ) ) {
-			$sub_request->set_header( 'Authorization', $outer_auth_header );
-		} else {
-			// Neither header was present — e.g. the ?api_key= query-string
-			// fallback some MCP clients use. get_api_key_from_request() folds
-			// that into the same plain-key form X-API-Key would carry.
-			$api_key = $this->get_api_key_from_request( $request );
-			if ( $api_key ) {
-				$sub_request->set_header( 'X-API-Key', $api_key );
-			}
-		}
+		// another (#902 review round 2; shared with tools/call and /batch —
+		// see forward_caller_credential()).
+		$this->forward_caller_credential( $request, $sub_request );
 
 		// Mark as an internal sub-request so the inner dispatch's own
 		// permission_callback runs the unmetered auth-only fast path
@@ -2558,11 +2536,10 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				$internal_request->set_body_params( $arguments );
 			}
 
-			// Copy authentication from current request.
-			$api_key = $this->get_api_key_from_request( $request );
-			if ( $api_key ) {
-				$internal_request->set_header( 'X-API-Key', $api_key );
-			}
+			// Copy authentication from current request — exactly as the caller
+			// presented it, never converted into a different credential type
+			// (#978, same fix and shared helper as resources/read's #902).
+			$this->forward_caller_credential( $request, $internal_request );
 
 			// Mark as internal sub-request via a PHP static property so rate limiting
 			// is not double-counted. Using a static flag (not an HTTP header) prevents

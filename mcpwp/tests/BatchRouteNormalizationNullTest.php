@@ -84,7 +84,11 @@ final class BatchRouteNormalizationNullTest extends TestCase {
 
 		// A normal, allowed path must dispatch (status 200) under today's
 		// pattern — establishing the baseline this guard must not disturb.
-		$baseline = $reflection->invokeArgs( $controller, array( array( 'method' => 'GET', 'path' => '/site-info' ), 0, 'test-key' ) );
+		// execute_operation()'s third argument is the outer, already-authenticated
+		// /batch request (#978), forwarded onto the internal sub-request via
+		// forward_caller_credential() — not a bare API key string.
+		$outer_request = new WP_REST_Request( 'POST', '/mcpwp/v1/batch', array(), array( 'X-API-Key' => 'test-key' ) );
+		$baseline       = $reflection->invokeArgs( $controller, array( array( 'method' => 'GET', 'path' => '/site-info' ), 0, $outer_request ) );
 		$this->assertSame( 200, $baseline['status'] );
 
 		// Directly confirm the deny-on-null contract the fix wires into

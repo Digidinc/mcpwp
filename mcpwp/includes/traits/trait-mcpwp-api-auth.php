@@ -1105,6 +1105,48 @@ trait Mcpwp_Api_Auth {
 	}
 
 	/**
+	 * Carry the caller's own authenticated credential onto an internal
+	 * sub-request, exactly as the caller presented it — never converted into
+	 * a different credential type.
+	 *
+	 * A plain API key arrives as X-API-Key (or the ?api_key= query fallback,
+	 * which get_api_key_from_request() folds into the same string). An OAuth
+	 * access token or a mumcp.com broker token arrives as
+	 * `Authorization: Bearer <token>`. The broker fallback in this trait's
+	 * compute_api_key_verdict()/verify_api_key_auth_only() only ever runs for
+	 * a genuine Bearer header with no X-API-Key present, so re-sending a
+	 * Bearer credential as X-API-Key authenticates as neither — a broker (or,
+	 * before #902's OAuth branch was added to the sub-request fast path,
+	 * OAuth) caller's own sub-request would fail even though its outer
+	 * request had already authenticated (#902, #978).
+	 *
+	 * Shared by every internal dispatch that forwards auth to a sub-request:
+	 * resources/read, tools/call, and /batch's per-operation dispatch.
+	 *
+	 * @param WP_REST_Request $outer_request    The original, already-authenticated request.
+	 * @param WP_REST_Request $internal_request The sub-request about to be dispatched.
+	 * @return void
+	 */
+	protected function forward_caller_credential( $outer_request, $internal_request ) {
+		$outer_api_key_header = method_exists( $outer_request, 'get_header' ) ? $outer_request->get_header( 'X-API-Key' ) : null;
+		$outer_auth_header    = method_exists( $outer_request, 'get_header' ) ? $outer_request->get_header( 'Authorization' ) : null;
+
+		if ( ! empty( $outer_api_key_header ) ) {
+			$internal_request->set_header( 'X-API-Key', $outer_api_key_header );
+		} elseif ( ! empty( $outer_auth_header ) ) {
+			$internal_request->set_header( 'Authorization', $outer_auth_header );
+		} else {
+			// Neither header was present — e.g. the ?api_key= query-string
+			// fallback some MCP clients use. get_api_key_from_request() folds
+			// that into the same plain-key form X-API-Key would carry.
+			$api_key = $this->get_api_key_from_request( $outer_request );
+			if ( $api_key ) {
+				$internal_request->set_header( 'X-API-Key', $api_key );
+			}
+		}
+	}
+
+	/**
 	 * Check whether a token looks like a generated OAuth access token.
 	 *
 	 * Accepts both the v3 prefix (mcpwp_at_) and the legacy 2.8.x prefix
@@ -1283,12 +1325,20 @@ trait Mcpwp_Api_Auth {
 	 * @param Mcpwp_Broker_Auth $broker_auth Validator instance (caller already confirmed is_enrolled()).
 	 * @param bool              $metered     False for an internal sub-request whose
 	 *                                       outer request already metered this same
-	 *                                       caller once. The per-IP DoS throttle on
-	 *                                       the outbound introspection call stays on
-	 *                                       regardless — it caps what an
-	 *                                       unauthenticated caller can make this
-	 *                                       server do, not the authenticated
-	 *                                       caller's own budget.
+	 *                                       caller once. Also gates the per-IP
+	 *                                       broker-attempt DoS throttle below —
+	 *                                       an internal sub-request's outer
+	 *                                       request already passed that same
+	 *                                       throttle, in the same request
+	 *                                       lifecycle, for the same token, a
+	 *                                       moment earlier, so charging it a
+	 *                                       second time only halves the
+	 *                                       legitimate ceiling without capping
+	 *                                       any additional unauthenticated
+	 *                                       attempt (#978 review NOTE). The
+	 *                                       OUTER call's throttle is never
+	 *                                       weakened: it still always runs
+	 *                                       with $metered defaulting true.
 	 * @return bool|WP_Error True when valid, error otherwise.
 	 */
 	protected function authenticate_broker_bearer_token( $token, $request, $broker_auth, $metered = true ) {
@@ -1306,10 +1356,20 @@ trait Mcpwp_Api_Auth {
 		// caller's request body raise its own ceiling defeats the guard, and
 		// this is the amplification-capping bucket the adversarial review on
 		// #892 called out by name (#892).
-		$http_method      = method_exists( $request, 'get_method' ) ? $request->get_method() : 'POST';
-		$attempt_limit    = $this->check_rate_limit( 'broker-attempt:' . $this->get_client_ip(), $http_method );
-		if ( is_wp_error( $attempt_limit ) ) {
-			return $attempt_limit;
+		//
+		// Skipped only when $metered is false — i.e. only for the internal
+		// sub-request fast path (resources/read, tools/call, /batch), whose
+		// outer request already ran this exact check, for this exact token,
+		// earlier in the same request. That outer check is unconditional
+		// (this branch never runs there), so the throttle itself is never
+		// weakened — only the redundant second charge for one client call is
+		// removed.
+		if ( $metered ) {
+			$http_method   = method_exists( $request, 'get_method' ) ? $request->get_method() : 'POST';
+			$attempt_limit = $this->check_rate_limit( 'broker-attempt:' . $this->get_client_ip(), $http_method );
+			if ( is_wp_error( $attempt_limit ) ) {
+				return $attempt_limit;
+			}
 		}
 
 		$result = $broker_auth->validate_token( $token );
