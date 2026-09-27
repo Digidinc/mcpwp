@@ -10,6 +10,9 @@
 use PHPUnit\Framework\TestCase;
 
 require_once dirname(__DIR__, 2) . '/includes/core/class-mcpwp-graph-builder.php';
+// N1 (#943 S1 review round 3): mark() reads Mcpwp_Content_Guardrails::in_context()
+// directly now, so its tests need the real class, not a double.
+require_once dirname(__DIR__, 2) . '/includes/core/class-mcpwp-content-guardrails.php';
 
 final class GraphBuilderTest extends TestCase
 {
@@ -35,6 +38,7 @@ final class GraphBuilderTest extends TestCase
             'mcpwp_test_blog_stack',
             'mcpwp_test_current_blog_id',
             'mcpwp_test_url_to_postid',
+            'mcpwp_test_permalinks',
         ) as $global) {
             $this->saved[ $global ] = $GLOBALS[ $global ] ?? array();
             $GLOBALS[ $global ]     = array();
@@ -43,6 +47,7 @@ final class GraphBuilderTest extends TestCase
         $GLOBALS['mcpwp_test_current_blog_id'] = 1;
         $GLOBALS['wpdb']->prefix = 'wp_';
         Mcpwp_Graph_Builder::reset_request_state();
+        Mcpwp_Content_Guardrails::reset_context_for_tests();
         // Every hook handler no-ops unless the tables are confirmed present.
         // Matches a healthy site; readiness-guard-off is its own test below.
         update_option(Mcpwp_Graph_Builder::READY_OPTION, true, true);
@@ -56,6 +61,7 @@ final class GraphBuilderTest extends TestCase
         unset($GLOBALS['mcpwp_test_throw_for_post_id']);
         $GLOBALS['wpdb']->prefix = 'wp_';
         Mcpwp_Graph_Builder::reset_request_state();
+        Mcpwp_Content_Guardrails::reset_context_for_tests();
     }
 
     private function post(int $id, array $overrides = array()): WP_Post
@@ -586,11 +592,15 @@ final class GraphBuilderTest extends TestCase
 
     public function test_shutdown_with_authenticated_flag_rebuilds_up_to_limit(): void
     {
+        // N1 (round 3): mark() itself reads Mcpwp_Content_Guardrails::in_context()
+        // and OR's it into the request flag, so the context must already be
+        // active BEFORE the mark() calls, not set afterwards the way the old
+        // graph-owned mark_request_authenticated() setter allowed.
+        Mcpwp_Content_Guardrails::enter_context();
         for ($i = 1; $i <= 8; $i++) {
             $this->post($i);
             Mcpwp_Graph_Builder::mark(Mcpwp_Graph_Builder::node_key_for_post($i));
         }
-        Mcpwp_Graph_Builder::mark_request_authenticated();
 
         Mcpwp_Graph_Builder::on_shutdown();
 
@@ -846,7 +856,9 @@ final class GraphBuilderTest extends TestCase
 
     public function test_authenticated_flag_resets_for_a_new_request(): void
     {
-        Mcpwp_Graph_Builder::mark_request_authenticated();
+        $this->post(400);
+        Mcpwp_Content_Guardrails::enter_context();
+        Mcpwp_Graph_Builder::mark('post:400', 'edit');
         $this->assertTrue(Mcpwp_Graph_Builder::is_request_authenticated());
 
         Mcpwp_Graph_Builder::reset_for_new_request();
@@ -857,12 +869,36 @@ final class GraphBuilderTest extends TestCase
     public function test_authenticated_flag_resets_at_shutdown(): void
     {
         $this->post(401);
-        Mcpwp_Graph_Builder::mark_request_authenticated();
+        Mcpwp_Content_Guardrails::enter_context();
         Mcpwp_Graph_Builder::mark('post:401', 'edit');
 
         Mcpwp_Graph_Builder::on_shutdown();
 
         $this->assertFalse(Mcpwp_Graph_Builder::is_request_authenticated());
+    }
+
+    // ---------------------------------------------------------------------
+    // N3(a) (round 3): a retry mark() call made DURING on_shutdown()'s own
+    // rebuild loop must still reach the queue table, not be silently
+    // dropped by the same on_shutdown() call that caused it.
+    // ---------------------------------------------------------------------
+
+    public function test_shutdown_rebuild_retry_mark_is_flushed_after_the_rebuild_loop(): void
+    {
+        $this->post(720);
+        Mcpwp_Content_Guardrails::enter_context();
+        Mcpwp_Graph_Builder::mark(Mcpwp_Graph_Builder::node_key_for_post(720));
+        $GLOBALS['mcpwp_test_throw_for_post_id'] = 720;
+
+        Mcpwp_Graph_Builder::on_shutdown();
+
+        // The rebuild threw, rebuild_node_safely() re-marked it with
+        // reason='retry' — that mark() call happened INSIDE the same
+        // on_shutdown() invocation that is supposed to flush it. Without
+        // the round-3 fix, self::$request_marked held this mark but nothing
+        // after the rebuild loop ever looked at it again.
+        $this->assertArrayHasKey('post:720', $GLOBALS['mcpwp_test_graph_queue']);
+        $this->assertSame('retry', $GLOBALS['mcpwp_test_graph_queue']['post:720']['reason']);
     }
 
     // ---------------------------------------------------------------------
@@ -901,6 +937,54 @@ final class GraphBuilderTest extends TestCase
         // NOT be requeued again — proves pop_queue_batch()'s reason travels
         // all the way to rebuild_node_safely() via run_worker_batch().
         $this->assertSame(array(), $GLOBALS['mcpwp_test_graph_queue']);
+    }
+
+    // ---------------------------------------------------------------------
+    // BLOCK-1 (round 3): a nested path whose last segment matches a
+    // NON-hierarchical post's slug is only accepted when the candidate's
+    // OWN real permalink actually equals the href — never on the slug
+    // coincidence alone. /product-category/shoes/ is not the shoes
+    // product's URL just because nothing else is named "shoes".
+    // ---------------------------------------------------------------------
+
+    public function test_taxonomy_archive_shaped_paths_do_not_resolve_to_a_same_slug_product(): void
+    {
+        $GLOBALS['mcpwp_test_public_post_types'][] = 'product';
+        $this->post(700, array('post_type' => 'product', 'post_name' => 'shoes', 'post_parent' => 0));
+        $GLOBALS['mcpwp_test_permalinks'][700] = 'https://example.com/product/shoes/';
+
+        $source = $this->post(701, array(
+            'post_content' => '<a href="https://example.com/product-category/shoes/">cat</a> '
+                . '<a href="https://example.com/product-tag/shoes/">tag</a> '
+                . '<a href="https://example.com/shop/shoes/">shop</a>',
+        ));
+
+        $this->assertSame(array(), Mcpwp_Graph_Builder::extract_post_link_targets($source));
+    }
+
+    public function test_blog_path_does_not_resolve_to_a_same_slug_post_elsewhere(): void
+    {
+        $this->post(710, array('post_type' => 'post', 'post_name' => 'news', 'post_parent' => 0));
+        $GLOBALS['mcpwp_test_permalinks'][710] = 'https://example.com/?p=710';
+
+        $source = $this->post(711, array(
+            'post_content' => '<a href="https://example.com/blog/news/">blog news</a>',
+        ));
+
+        $this->assertSame(array(), Mcpwp_Graph_Builder::extract_post_link_targets($source));
+    }
+
+    public function test_real_product_permalink_still_resolves_despite_the_above(): void
+    {
+        $GLOBALS['mcpwp_test_public_post_types'][] = 'product';
+        $this->post(700, array('post_type' => 'product', 'post_name' => 'shoes', 'post_parent' => 0));
+        $GLOBALS['mcpwp_test_permalinks'][700] = 'https://example.com/product/shoes/';
+
+        $source = $this->post(702, array(
+            'post_content' => '<a href="https://example.com/product/shoes/">shoes</a>',
+        ));
+
+        $this->assertSame(array(700), Mcpwp_Graph_Builder::extract_post_link_targets($source));
     }
 
     // ---------------------------------------------------------------------
@@ -958,6 +1042,23 @@ final class GraphBuilderTest extends TestCase
         ));
 
         $this->assertSame(array(), Mcpwp_Graph_Builder::extract_post_link_targets($source));
+    }
+
+    public function test_trailing_pagination_suffix_is_stripped_and_the_rest_still_resolves(): void
+    {
+        // N2 (round 3): /blog/news/page/2/ is real pagination ON a real
+        // nested page — stripping the /page/N/ suffix and resolving what's
+        // left gives a real edge to that page, instead of discarding the
+        // whole link the way bare pagination-with-nothing-in-front-of-it
+        // correctly still does (test above).
+        $this->post(615, array('post_type' => 'page', 'post_name' => 'blog', 'post_parent' => 0));
+        $this->post(616, array('post_type' => 'page', 'post_name' => 'news', 'post_parent' => 615));
+
+        $source = $this->post(617, array(
+            'post_content' => '<a href="https://example.com/blog/news/page/2/">older news</a>',
+        ));
+
+        $this->assertSame(array(616), Mcpwp_Graph_Builder::extract_post_link_targets($source));
     }
 
     public function test_ambiguous_slug_across_types_falls_back_to_url_to_postid(): void

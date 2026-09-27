@@ -660,16 +660,16 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	// are not confirmed present, so registering these unconditionally is safe
 	// on a site where table creation failed.
 	if ( class_exists( 'Mcpwp_Graph_Builder' ) ) {
-		// N1: reset the authenticated-request flag at the START of every
-		// request too (on_shutdown() already resets it at the end) — a
-		// persistent process serving several requests without restarting PHP
-		// (a long WP-CLI script, certain worker setups) must never carry
-		// "authenticated" from the request that set it into a later,
-		// unrelated one. Priority 1: before any route's permission_callback
-		// (which is what sets the flag) can possibly run.
-		// TODO(#980): replace with Mcpwp_Content_Guardrails::in_context()
-		// once that lands, so there is one definition of "an MCPWP-made
-		// edit" instead of two.
+		// N1 (#943 S1 review round 3): reset the authenticated-request flag
+		// at the START of every request too (on_shutdown() already resets it
+		// at the end) — a persistent process serving several requests
+		// without restarting PHP (a long WP-CLI script, certain worker
+		// setups) must never carry "authenticated" from the request that set
+		// it into a later, unrelated one. Priority 1: before any hook's
+		// mark() call (which is what OR's the flag in, reading
+		// Mcpwp_Content_Guardrails::in_context() — #980 landed, so this is
+		// now the single definition of "an MCPWP-made edit", not two) can
+		// possibly run.
 		add_action( 'init', array( 'Mcpwp_Graph_Builder', 'reset_for_new_request' ), 1 );
 		add_action( 'save_post', array( 'Mcpwp_Graph_Builder', 'on_save_post' ), 10, 2 );
 		add_action( 'deleted_post', array( 'Mcpwp_Graph_Builder', 'on_deleted_post' ), 10, 1 );
@@ -796,6 +796,24 @@ if ( ! function_exists( 'mcpwp_activate' ) ) {
 			}
 		}
 	}
+
+		// N3(b) (#943 S1 review round 3): enqueue_reconcile() (inside
+		// on_upgrade_schedule_backfill(), above) calls mark() directly for
+		// every covered post modified since the graph was last known
+		// current -- on a site reconciling after weeks of edits made while
+		// deactivated, that can be hundreds of marks. mark() only buffers in
+		// memory; it is on_shutdown(), hooked to WordPress's global
+		// `shutdown` action, that actually flushes them. That normally
+		// fires at the end of every request including this activation one,
+		// but activation is reached through several different entry points
+		// (wp-admin's plugin activation redirect, WP-CLI's `wp plugin
+		// activate`, a network-wide loop above that already switches blogs
+		// itself) and this method has no business trusting all of them to
+		// reach a clean `shutdown` before something else (a redirect, an
+		// early exit) intervenes. Flushing explicitly here removes that
+		// dependency; a later real `shutdown` call finds the buffer already
+		// empty and no-ops (on_shutdown()'s first line).
+		Mcpwp_Graph_Builder::on_shutdown();
 	}
 }
 
@@ -822,6 +840,10 @@ if ( ! function_exists( 'mcpwp_on_new_site' ) ) {
 	Mcpwp_Activator::activate();
 	Mcpwp_Graph_Builder::on_upgrade_schedule_backfill();
 	restore_current_blog();
+
+	// N3(b): same reasoning as mcpwp_activate() above — flush explicitly
+	// rather than trust a later `shutdown` to catch marks made here.
+	Mcpwp_Graph_Builder::on_shutdown();
 	}
 }
 add_action( 'wp_insert_site', 'mcpwp_on_new_site' );

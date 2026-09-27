@@ -3060,6 +3060,19 @@ function get_the_title($post)
 function get_permalink($post)
 {
     $post_id = is_object($post) ? (int) $post->ID : (int) $post;
+
+    // BLOCK-1 (round 3): the resolver's non-hierarchical nested-path branch
+    // compares a candidate's REAL permalink against the href it is being
+    // matched to — a plain `?p=ID` stub can never differ from a nested path
+    // like /product-category/shoes/, which would make that comparison
+    // vacuously always-fail (or, if the comparison were reversed by
+    // mistake, always-pass) and hide either direction of the bug. A test
+    // that needs a post type with its own rewrite structure (a CPT with an
+    // archive base, a taxonomy-prefixed permalink) declares it explicitly.
+    if (isset($GLOBALS['mcpwp_test_permalinks'][$post_id])) {
+        return $GLOBALS['mcpwp_test_permalinks'][$post_id];
+    }
+
     return 'https://example.com/?p=' . $post_id;
 }
 

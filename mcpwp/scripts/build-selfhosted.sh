@@ -109,5 +109,16 @@ else
     echo "    [OK] No wp-config.php MCPWP_PRO override in license class"
 fi
 
+# #943 S1 review round 3, N4: this build has no Freemius SDK at all (removed
+# above), so uninstall.php is the ONLY mechanism that will ever drop the
+# graph tables on uninstall here. Missing it silently leaves those four
+# tables behind forever on every self-hosted uninstall.
+if grep -q "^$PLUGIN_SLUG/uninstall.php$" "$ZIP_MANIFEST"; then
+    echo "    [OK] uninstall.php present (this build has no Freemius to own uninstall instead)"
+else
+    echo "    [FAIL] uninstall.php missing — nothing will drop the graph tables on uninstall"
+    exit 1
+fi
+
 FILE_COUNT=$(unzip -l "$OUTPUT_ZIP" | tail -1 | awk '{print $2}')
 echo "    [INFO] $FILE_COUNT files in zip"

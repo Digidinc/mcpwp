@@ -69,21 +69,16 @@ abstract class Mcpwp_REST_API {
 	 * @return bool|WP_Error True if valid.
 	 */
 	public function check_permission( $request ) {
-		$verdict = $this->verify_api_key( $request );
-
-		// Site graph (#943 S1 review, N2): the chokepoint every route's
-		// permission_callback runs through (direct HTTP, /batch
-		// sub-requests, /mcp tool dispatch — all reach a controller's
-		// check_permission() the same way), so this is where "an
-		// MCPWP-authenticated request is making this edit" gets flagged for
-		// Mcpwp_Graph_Builder's same-response rebuild. #957's guardrails
-		// would give an equivalent flag if merged first; this is accepted as
-		// the standalone equivalent rather than depending on that branch.
-		if ( true === $verdict && class_exists( 'Mcpwp_Graph_Builder' ) ) {
-			Mcpwp_Graph_Builder::mark_request_authenticated();
-		}
-
-		return $verdict;
+		// Site graph (#943 S1 review round 3, N1): this used to also flag
+		// Mcpwp_Graph_Builder's own "authenticated request" static here, as
+		// the standalone equivalent of #957's guardrails context before that
+		// branch had merged. #957 is on main now — verify_api_key() (below)
+		// already calls Mcpwp_Content_Guardrails::enter_context() at this
+		// same chokepoint, and Mcpwp_Graph_Builder::mark() reads
+		// Mcpwp_Content_Guardrails::in_context() directly, so a second,
+		// graph-owned copy of the same flag would just be two sources of
+		// truth for one fact.
+		return $this->verify_api_key( $request );
 	}
 
 	/**

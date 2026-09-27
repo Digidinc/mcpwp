@@ -20,16 +20,16 @@
  * `mcpwp_graph_queue` and schedules the worker. It never rebuilds inline —
  * a bulk edit of 400 posts in one request stays fast because the request
  * only ever writes queue rows, not graph rows. The one exception: inside an
- * MCPWP-authenticated request (`mark_request_authenticated()`, called from
- * `Mcpwp_REST_API::check_permission()` the moment a request passes API-key
- * auth — the same chokepoint every route's permission_callback runs
- * through), `on_shutdown()` rebuilds up to REQUEST_REBUILD_LIMIT of that
- * request's own marked nodes within REQUEST_REBUILD_BUDGET seconds, so the
- * agent that made the edit sees its own edges in the same response. Every
- * other caller (wp-admin, another agent's concurrent edit, a cron-driven
- * import) only ever queues; `run_worker_batch()` drains it, time-budgeted,
- * on a WP-Cron single event (60s out) or an Action Scheduler async action
- * when present.
+ * MCPWP-authenticated request — `mark()` itself reads
+ * `Mcpwp_Content_Guardrails::in_context()` (#943 S1 review round 3, N1; set
+ * by `verify_api_key()` the moment a request passes API-key auth, the same
+ * chokepoint every route's permission_callback runs through) — `on_shutdown()`
+ * rebuilds up to REQUEST_REBUILD_LIMIT of that request's own marked nodes
+ * within REQUEST_REBUILD_BUDGET seconds, so the agent that made the edit sees
+ * its own edges in the same response. Every other caller (wp-admin, another
+ * agent's concurrent edit, a cron-driven import) only ever queues;
+ * `run_worker_batch()` drains it, time-budgeted, on a WP-Cron single event
+ * (60s out) or an Action Scheduler async action when present.
  *
  * Acceptance: edges reflect an edit by the next worker run (<=2 min), or the
  * same request for MCPWP-made edits.
@@ -133,9 +133,10 @@ class Mcpwp_Graph_Builder {
 	private static $request_marked = array();
 
 	/**
-	 * Set by mark_request_authenticated() the moment a request passes
-	 * Mcpwp_REST_API::check_permission(). A PHP static, not anything derived
-	 * from request headers — nothing a caller sends can set this directly.
+	 * OR-accumulated inside `mark()` from `Mcpwp_Content_Guardrails::in_context()`
+	 * (#943 S1 review round 3, N1) — never set directly from a request header
+	 * or any other caller-controlled input. See `mark()`'s docblock for why
+	 * this is captured there instead of read fresh at `on_shutdown()` time.
 	 *
 	 * @var bool
 	 */
@@ -185,26 +186,15 @@ class Mcpwp_Graph_Builder {
 	// -------------------------------------------------------------------------
 
 	/**
-	 * Called from Mcpwp_REST_API::check_permission() the instant a request
-	 * passes API-key auth. Every route's permission_callback is (or wraps)
-	 * check_permission(), so this fires for direct HTTP calls, /batch
-	 * sub-requests and /mcp tool dispatch alike — one chokepoint, matching
-	 * how #957's guardrails scope "is this an MCPWP-made edit".
+	 * #943 S1 review round 3, N1: there is no graph-owned setter for this
+	 * flag any more. `mark()` OR-in's `Mcpwp_Content_Guardrails::in_context()`
+	 * every time it is called, which is #957's single definition of "an
+	 * MCPWP-made edit" — the same chokepoint (`Mcpwp_REST_API::check_permission()`
+	 * via `trait-mcpwp-api-auth.php`'s `verify_api_key()`) that used to set this
+	 * class's own flag directly now sets Guardrails' flag instead, and this
+	 * class just reads it. See `mark()`'s docblock for why that read happens
+	 * there and not at `on_shutdown()` time.
 	 *
-	 * TODO(#980): once Mcpwp_Content_Guardrails::in_context() lands, replace
-	 * this standalone flag with that one so there is a single definition of
-	 * "an MCPWP-made edit" instead of two. Until then this flag is reset the
-	 * same way that one is documented to be: at the start of every request
-	 * (reset_for_new_request(), wired on `init`) and again at `shutdown`
-	 * (on_shutdown(), after it has been read) — never carried into a next
-	 * request on a persistent process (long-lived WP-CLI script, a worker
-	 * that runs several requests without restarting PHP).
-	 */
-	public static function mark_request_authenticated() {
-		self::$in_mcpwp_request = true;
-	}
-
-	/**
 	 * Test/introspection helper.
 	 *
 	 * @return bool
@@ -216,7 +206,9 @@ class Mcpwp_Graph_Builder {
 	/**
 	 * Reset the authenticated-request flag at the start of a new request
 	 * (wired on `init`, priority 1 — before any route's permission_callback
-	 * can run). N1: a persistent process must never carry "authenticated"
+	 * can run, and before any hook's `mark()` call could OR in a stale
+	 * Guardrails read left over from a previous request on a persistent
+	 * process). N1: a persistent process must never carry "authenticated"
 	 * over from the request that set it into a later, different request.
 	 */
 	public static function reset_for_new_request() {
@@ -468,6 +460,24 @@ class Mcpwp_Graph_Builder {
 		$node_key = (string) $node_key;
 		if ( '' === $node_key || ! self::ready() ) {
 			return;
+		}
+
+		// N1 (#943 S1 review round 3): read #957's shared context flag HERE,
+		// at mark() time, not at on_shutdown() time. Mcpwp_Content_Guardrails
+		// resets its own context on `shutdown` at priority 0; this class's
+		// on_shutdown() runs at priority 10 — by the time it would run, the
+		// flag has already gone back to false, so reading it there would
+		// always see false and silently kill the same-response rebuild for
+		// every real MCPWP request. mark() itself runs earlier, from inside
+		// the same request that is (or isn't) authenticated, so OR-ing the
+		// current value in here — never overwriting it back to false —
+		// accumulates "was this request ever MCPWP-authenticated at the time
+		// any of its marks were made" correctly for on_shutdown() to read
+		// later. This also lets the graph builder's own flag be deleted:
+		// there is now exactly one definition of "an MCPWP-made edit",
+		// Mcpwp_Content_Guardrails::in_context(), not two.
+		if ( class_exists( 'Mcpwp_Content_Guardrails' ) ) {
+			self::$in_mcpwp_request = self::$in_mcpwp_request || Mcpwp_Content_Guardrails::in_context();
 		}
 
 		$blog_id = function_exists( 'get_current_blog_id' ) ? (int) get_current_blog_id() : 1;
@@ -781,6 +791,26 @@ class Mcpwp_Graph_Builder {
 					unset( $marks[ $node_key ] ); // Already fully handled — no need to also queue it.
 					$rebuilt_so_far++;
 				}
+			}
+
+			// N3(a) (#943 S1 review round 3): rebuild_node_safely() calls
+			// mark() again, with reason='retry', when the rebuild it just
+			// ran above throws. That mark() call writes into
+			// self::$request_marked — which this method already reset to
+			// empty at its own top, and is NOT the same variable as the
+			// local $marks this loop is about to flush. Left alone, a retry
+			// mark made during the rebuild loop just above is buffered,
+			// then simply dropped: nothing after this point ever looks at
+			// self::$request_marked again, so it survives until the NEXT
+			// shutdown at the earliest — and if this was itself the last
+			// mark() call of the whole request, there IS no next shutdown.
+			// get_current_blog_id() at retry-mark time is still this same
+			// $blog_id (we are switched into it for the whole rebuild
+			// loop), so folding it straight into $marks before the flush
+			// below is correct, not a guess.
+			if ( ! empty( self::$request_marked[ $blog_id ] ) ) {
+				$marks = array_merge( $marks, self::$request_marked[ $blog_id ] );
+				unset( self::$request_marked[ $blog_id ] );
 			}
 
 			self::flush_marks_to_queue( $marks );
@@ -1865,6 +1895,18 @@ class Mcpwp_Graph_Builder {
 			}
 
 			$path = isset( $parts['path'] ) ? trim( (string) $parts['path'], '/' ) : '';
+
+			// N2 (#943 S1 review round 3): a trailing /page/N/ is WordPress's
+			// pagination suffix riding on an otherwise real path — a page
+			// with children (/blog/news/page/2/) or a paginated singular.
+			// The path IN FRONT of it still names a real object; discarding
+			// the whole href instead of resolving what is left loses a
+			// genuine edge for no reason. Strip it and resolve the
+			// remainder normally. /page/N/ with nothing in front of it has
+			// nothing left after stripping and correctly falls through to
+			// the empty-path branch just below (still not a post).
+			$path = (string) preg_replace( '#(^|/)page/\d+$#', '', $path );
+
 			if ( '' === $path || self::is_excluded_rewrite_path( $path ) ) {
 				self::$url_id_cache[ $normalized ] = 0;
 				$results[ $href ] = 0;
@@ -1988,7 +2030,25 @@ class Mcpwp_Graph_Builder {
 					$resolved = (int) $page->ID;
 				}
 			} elseif ( empty( $hierarchical_matches ) && 1 === count( $other_matches ) ) {
-				$resolved = (int) $other_matches[0]['ID'];
+				// A non-hierarchical type has no parent chain to verify against
+				// get_page_by_path() — its post_name matching the path's LAST
+				// segment is not evidence the path actually names it.
+				// /product-category/shoes/ and /shop/shoes/ share a last
+				// segment with a real product's slug "shoes" without being
+				// that product's URL at all (round 3 review, BLOCK-1). The
+				// only trustworthy check left is: does this candidate's own
+				// real permalink equal the href's actual normalized path? If
+				// so the nested segments in front of it are exactly its own
+				// rewrite structure (a CPT with an extra base, category+name
+				// permalinks, etc.) and the match is genuine. If not, this is
+				// a same-slug coincidence — treat it as unresolved here and
+				// let url_to_postid() have the real say, same as any other
+				// ambiguous case.
+				$candidate_id   = (int) $other_matches[0]['ID'];
+				$candidate_perm = get_permalink( $candidate_id );
+				if ( $candidate_perm && self::normalize_internal_graph_url( $candidate_perm ) === $normalized ) {
+					$resolved = $candidate_id;
+				}
 			}
 
 			$results[ $candidate_href[ $normalized ] ] = $resolved;
@@ -2066,9 +2126,9 @@ class Mcpwp_Graph_Builder {
 	 * @return bool
 	 */
 	private static function is_excluded_rewrite_path( $path ) {
-		if ( preg_match( '#(^|/)page/\d+$#', $path ) ) {
-			return true; // Pagination.
-		}
+		// A trailing /page/N/ is stripped by the ONLY caller before this
+		// runs (N2, round 3) so it can resolve the remaining path instead
+		// of discarding the whole href — nothing left to check for here.
 		if ( preg_match( '#^\d{4}(/\d{1,2}(/\d{1,2})?)?$#', $path ) ) {
 			return true; // Date archive: the WHOLE path is just numeric segments.
 		}
