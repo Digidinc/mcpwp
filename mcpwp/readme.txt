@@ -157,6 +157,16 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 
 == Changelog ==
 
+= 3.14.1 =
+* feat: **ops:** intake triage puts every issue source on the board ([#940](https://github.com/Mumega-com/mcpwp/issues/940)) ([#967](https://github.com/Mumega-com/mcpwp/issues/967))
+* fix: **deps:** upgrade hono, fast-uri, undici and other vulnerable packages ([#939](https://github.com/Mumega-com/mcpwp/issues/939)) ([#971](https://github.com/Mumega-com/mcpwp/issues/971))
+* fix: **elementor-pro:** custom code updates no longer fail on page-template validation ([#965](https://github.com/Mumega-com/mcpwp/issues/965)) ([#973](https://github.com/Mumega-com/mcpwp/issues/973))
+* fix: **elementor-pro:** remove a deleted template from the display-conditions index ([#952](https://github.com/Mumega-com/mcpwp/issues/952)) ([#975](https://github.com/Mumega-com/mcpwp/issues/975))
+* fix: **elementor:** treat a refused save and a missing CSS file as failures ([#951](https://github.com/Mumega-com/mcpwp/issues/951), [#901](https://github.com/Mumega-com/mcpwp/issues/901)) ([#969](https://github.com/Mumega-com/mcpwp/issues/969))
+* fix: **mcp:** readable resources on every server and plain-text names for agents ([#972](https://github.com/Mumega-com/mcpwp/issues/972))
+* fix: **mcp:** tools/call forwards the caller's credential as received ([#979](https://github.com/Mumega-com/mcpwp/issues/979))
+* fix: **rest:** server failures keep their real HTTP status instead of a blanket 400 ([#953](https://github.com/Mumega-com/mcpwp/issues/953)) ([#970](https://github.com/Mumega-com/mcpwp/issues/970))
+
 = 3.14.0 =
 * feat: **approvals:** optional Jev triage ranks the approval queue ([#935](https://github.com/Mumega-com/mcpwp/issues/935))
 * feat: **mcp:** accurate tool annotations and titles for connector directories ([#934](https://github.com/Mumega-com/mcpwp/issues/934))
