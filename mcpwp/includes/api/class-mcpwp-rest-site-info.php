@@ -970,12 +970,88 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 		);
 	}
 
+	/**
+	 * #1007 review round 3, BLOCK-1. build_effective_site_context() is the
+	 * one function every door to site context goes through — REST
+	 * GET /site-context, tools/call wp_get_site_context, resources/read
+	 * mcpwp://site-context, and mcpwp://brand's site-context half (all four
+	 * dispatch to get_site_context() above, directly or via an internal
+	 * sub-request) — so this is the single chokepoint to gate, not each door
+	 * separately.
+	 *
+	 * The round-2 owner decision made the BASE mcpwp_site_context text
+	 * public (it is published, unauthenticated, at /llms.txt). It said
+	 * nothing about a scope='product'/archetype_class page-type OVERRIDE:
+	 * that pulls a WooCommerce product archetype brief
+	 * (find_product_context_override(), backed by the 'mcpwp_wc_product_archetypes'
+	 * option — same data wc_get_product_archetype/wc_list_product_archetypes
+	 * gate behind the 'woocommerce' category) or an Elementor page archetype
+	 * brief (find_page_context_override(), backed by
+	 * Mcpwp_Elementor_Pro::get_archetypes() — same data
+	 * wp_get_elementor_archetype/wp_list_elementor_archetypes gate behind
+	 * 'elementor-templates'). Neither brief is in /llms.txt. Live evidence
+	 * from the review: an author read-key with 'site' AND 'woocommerce' AND
+	 * 'elementor-templates' all disabled still got the full product/page
+	 * brief plus its archetype title and id back from every one of the four
+	 * doors, while a direct call to the archetype's OWN route
+	 * (GET /woocommerce/archetypes) correctly 403'd.
+	 *
+	 * Fix: apply the override only when the CURRENT caller may read the
+	 * archetype's own category (site-wide toggle + per-key role, same two
+	 * gates every other category check in this plugin applies — admin, and
+	 * any context with no key record at all, are unaffected). When the
+	 * caller may not, return array() — exactly the "no archetype matched"
+	 * shape build_effective_site_context() already falls back to: the base
+	 * context only, inheritance.matched stays false, and no 'source' key —
+	 * so a denied caller sees nothing that reveals an archetype exists,
+	 * let alone its title, id, or brief.
+	 *
+	 * @param string $scope           'product' or a page-archetype scope.
+	 * @param string $archetype_class Archetype class to match.
+	 * @param string $style           Optional archetype style to match.
+	 * @return array Override {type,id,title,brief}, or array() (no match / not permitted).
+	 */
 	private function find_context_override( $scope, $archetype_class, $style ) {
 		if ( 'product' === $scope ) {
+			if ( ! $this->caller_may_read_category( 'woocommerce' ) ) {
+				return array();
+			}
 			return $this->find_product_context_override( $archetype_class, $style );
 		}
 
+		if ( ! $this->caller_may_read_category( 'elementor-templates' ) ) {
+			return array();
+		}
 		return $this->find_page_context_override( $scope, $archetype_class, $style );
+	}
+
+	/**
+	 * Whether the current caller may read data in $category — the site-wide
+	 * disabled-category toggle (blocks every key, including admin) and the
+	 * per-key role restriction (empty for admin/legacy/no-key-record
+	 * contexts, meaning unrestricted). Same two checks
+	 * check_disabled_category_for_route()/check_key_category_restriction_for_route()
+	 * apply to a ROUTE; this applies the identical pair to an arbitrary
+	 * category a response is about to embed data from, for a chokepoint
+	 * (build_effective_site_context()'s archetype override) that a route
+	 * classification can't reach because it lives one level inside an
+	 * already-public route.
+	 *
+	 * @param string $category Tool category slug.
+	 * @return bool
+	 */
+	private function caller_may_read_category( $category ) {
+		$disabled_categories = get_option( 'mcpwp_disabled_tool_categories', array() );
+		if ( is_array( $disabled_categories ) && in_array( $category, $disabled_categories, true ) ) {
+			return false;
+		}
+
+		$key_record = $this->get_current_api_key_record();
+		if ( ! is_array( $key_record ) ) {
+			return true;
+		}
+
+		return $this->key_allows_category( $key_record, $category );
 	}
 
 	private function find_page_context_override( $scope, $archetype_class, $style ) {
