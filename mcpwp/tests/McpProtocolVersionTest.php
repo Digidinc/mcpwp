@@ -649,6 +649,24 @@ final class McpProtocolVersionTest extends TestCase {
 		$this->assertSame( array(), call_user_func( $v, 'x', $annotated ), 'Annotations are ignored.' );
 	}
 
+	public function test_an_unsupported_keyword_is_fatal_everywhere_never_a_branch_result(): void {
+		$v    = array( 'Mcpwp_MCP_Output_Schema', 'validate' );
+		$data = json_decode( '{"a":1}' );
+
+		$this->assertNotSame( array(), call_user_func( $v, $data, array( 'not' => array( 'required' => array( 'a' ), 'minProperties' => 1 ) ) ), 'Inside not: fatal, not a passing not.' );
+		$this->assertNotSame( array(), call_user_func( $v, $data, array( 'oneOf' => array( array( 'required' => array( 'a' ) ), array( 'format' => 'email' ) ) ) ), 'Inside oneOf: fatal, not one failing branch.' );
+		$this->assertNotSame( array(), call_user_func( $v, $data, array( 'anyOf' => array( array( 'required' => array( 'a' ) ), array( 'format' => 'email' ) ) ) ), 'Inside anyOf, even after a passing branch.' );
+		$this->assertNotSame( array(), call_user_func( $v, $data, array( 'properties' => array( 'absent' => array( 'format' => 'email' ) ) ) ), 'In a property the data never reaches.' );
+		$this->assertNotSame( array(), call_user_func( $v, array(), array( 'items' => array( 'format' => 'email' ) ) ), 'In the items of an empty array.' );
+		$this->assertNotSame( array(), call_user_func( $v, array(), array( 'items' => array( array( 'type' => 'string' ) ) ) ), 'Tuple items on an empty array.' );
+		$this->assertStringContainsString( 'unsupported schema keyword', implode( ' ', call_user_func( $v, $data, array( 'not' => array( 'minProperties' => 1 ) ) ) ) );
+	}
+
+	public function test_pattern_dollar_does_not_match_before_a_trailing_newline(): void {
+		$this->assertNotSame( array(), Mcpwp_MCP_Output_Schema::validate( "abc\n", array( 'pattern' => '^abc$' ) ) );
+		$this->assertSame( array(), Mcpwp_MCP_Output_Schema::validate( 'abc', array( 'pattern' => '^abc$' ) ) );
+	}
+
 	public function test_server_validator_supports_the_common_assertion_keywords(): void {
 		$v = array( 'Mcpwp_MCP_Output_Schema', 'validate' );
 		$cases = array(

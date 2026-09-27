@@ -27,6 +27,11 @@ if ( ! defined( 'ABSPATH' ) ) {
  * built for coercing request input — it accepts the string "7" as an
  * integer and an empty or list array as an object, and has no `not`.
  *
+ * `pattern` must be ECMAScript-compatible: clients validate with Ajv in
+ * unicode mode (JavaScript regex semantics), while this class runs the
+ * pattern as PCRE with the `u` and `D` flags. Keep to the common subset —
+ * no lookbehind-heavy or PCRE-only syntax — or the two may disagree.
+ *
  * Input is json_decode()d WITHOUT assoc, so a JSON object is a stdClass and
  * a JSON array a PHP list — the exact distinction the client sees. An
  * integral float (3.0) is an integer, and equal to 3, as in JSON Schema.
@@ -69,6 +74,66 @@ class Mcpwp_MCP_Output_Schema {
 	 * @return string[] Failures, each "path: reason". Empty when valid.
 	 */
 	public static function validate( $value, $schema, $path = '$' ) {
+		// An unsupported or malformed keyword ANYWHERE is fatal to the whole
+		// validation — never a mere branch result. Inside `not` it would
+		// otherwise make the `not` pass, and inside anyOf/oneOf it would
+		// count as one failing branch among others.
+		try {
+			// Scan the whole schema first, so a keyword in a branch the data
+			// never reaches (an absent property, an empty array's items) is
+			// just as fatal as one it does.
+			self::scan( is_array( $schema ) ? json_decode( (string) wp_json_encode( $schema ) ) : $schema, $path );
+			return self::check( $value, $schema, $path );
+		} catch ( Mcpwp_MCP_Output_Schema_Unsupported $e ) {
+			return array( $e->getMessage() );
+		}
+	}
+
+	/**
+	 * Walk every subschema and throw on any keyword outside the supported
+	 * and annotation sets.
+	 *
+	 * @param mixed  $schema Decoded schema.
+	 * @param string $path   Schema path, for messages.
+	 * @throws Mcpwp_MCP_Output_Schema_Unsupported On an unsupported keyword.
+	 */
+	private static function scan( $schema, $path ) {
+		if ( is_bool( $schema ) ) {
+			return;
+		}
+		if ( ! $schema instanceof stdClass ) {
+			throw new Mcpwp_MCP_Output_Schema_Unsupported( $path . ': schema is not an object' );
+		}
+		foreach ( get_object_vars( $schema ) as $keyword => $sub ) {
+			if ( ! in_array( $keyword, self::ASSERTION_KEYWORDS, true ) && ! in_array( $keyword, self::ANNOTATION_KEYWORDS, true ) ) {
+				throw new Mcpwp_MCP_Output_Schema_Unsupported( sprintf( "%s: unsupported schema keyword '%s'", $path, $keyword ) );
+			}
+			if ( 'properties' === $keyword && $sub instanceof stdClass ) {
+				foreach ( get_object_vars( $sub ) as $name => $child ) {
+					self::scan( $child, $path . '.' . $name );
+				}
+			} elseif ( 'items' === $keyword && is_array( $sub ) ) {
+				throw new Mcpwp_MCP_Output_Schema_Unsupported( $path . ': unsupported items form' );
+			} elseif ( in_array( $keyword, array( 'items', 'additionalProperties', 'not' ), true ) ) {
+				self::scan( $sub, $path );
+			} elseif ( in_array( $keyword, array( 'anyOf', 'oneOf', 'allOf' ), true ) && is_array( $sub ) ) {
+				foreach ( $sub as $branch ) {
+					self::scan( $branch, $path );
+				}
+			}
+		}
+	}
+
+	/**
+	 * Recursive validation. Throws on a schema it cannot fully evaluate.
+	 *
+	 * @param mixed        $value  JSON-decoded (non-assoc) value.
+	 * @param array|object $schema Schema.
+	 * @param string       $path   JSON path.
+	 * @return string[]
+	 * @throws Mcpwp_MCP_Output_Schema_Unsupported On an unsupported or malformed keyword.
+	 */
+	private static function check( $value, $schema, $path ) {
 		if ( is_array( $schema ) ) {
 			$schema = json_decode( (string) wp_json_encode( $schema ) );
 		}
@@ -76,13 +141,13 @@ class Mcpwp_MCP_Output_Schema {
 			return array();
 		}
 		if ( ! $schema instanceof stdClass ) {
-			return array( $path . ': schema is not an object' );
+			throw new Mcpwp_MCP_Output_Schema_Unsupported( $path . ': schema is not an object' );
 		}
 
 		$keywords = get_object_vars( $schema );
 		foreach ( array_keys( $keywords ) as $keyword ) {
 			if ( ! in_array( $keyword, self::ASSERTION_KEYWORDS, true ) && ! in_array( $keyword, self::ANNOTATION_KEYWORDS, true ) ) {
-				return array( sprintf( "%s: unsupported schema keyword '%s'", $path, $keyword ) );
+				throw new Mcpwp_MCP_Output_Schema_Unsupported( sprintf( "%s: unsupported schema keyword '%s'", $path, $keyword ) );
 			}
 		}
 
@@ -91,7 +156,7 @@ class Mcpwp_MCP_Output_Schema {
 			$match = false;
 			foreach ( $types as $type ) {
 				if ( ! is_string( $type ) ) {
-					return array( $path . ': malformed type' );
+					throw new Mcpwp_MCP_Output_Schema_Unsupported( $path . ': malformed type' );
 				}
 				if ( self::is_type( $value, $type ) ) {
 					$match = true;
@@ -107,7 +172,7 @@ class Mcpwp_MCP_Output_Schema {
 
 		if ( array_key_exists( 'enum', $keywords ) ) {
 			if ( ! is_array( $schema->enum ) ) {
-				return array( $path . ': malformed enum' );
+				throw new Mcpwp_MCP_Output_Schema_Unsupported( $path . ': malformed enum' );
 			}
 			$found = false;
 			foreach ( $schema->enum as $allowed ) {
@@ -131,7 +196,7 @@ class Mcpwp_MCP_Output_Schema {
 					continue;
 				}
 				if ( ! is_int( $schema->$bound ) && ! is_float( $schema->$bound ) ) {
-					return array( $path . ': malformed ' . $bound );
+					throw new Mcpwp_MCP_Output_Schema_Unsupported( $path . ': malformed ' . $bound );
 				}
 				if ( 'minimum' === $bound ? $value < $schema->$bound : $value > $schema->$bound ) {
 					$errors[] = sprintf( '%s: %s %s', $path, 'minimum' === $bound ? 'below' : 'above', $bound );
@@ -146,7 +211,7 @@ class Mcpwp_MCP_Output_Schema {
 					continue;
 				}
 				if ( ! is_int( $schema->$bound ) ) {
-					return array( $path . ': malformed ' . $bound );
+					throw new Mcpwp_MCP_Output_Schema_Unsupported( $path . ': malformed ' . $bound );
 				}
 				if ( 'minLength' === $bound ? $length < $schema->$bound : $length > $schema->$bound ) {
 					$errors[] = sprintf( '%s: string length outside %s', $path, $bound );
@@ -154,14 +219,16 @@ class Mcpwp_MCP_Output_Schema {
 			}
 			if ( array_key_exists( 'pattern', $keywords ) ) {
 				if ( ! is_string( $schema->pattern ) ) {
-					return array( $path . ': malformed pattern' );
+					throw new Mcpwp_MCP_Output_Schema_Unsupported( $path . ': malformed pattern' );
 				}
 				// ECMA-262 regex run as PCRE, unanchored like JSON Schema's,
-				// with a delimiter that cannot collide. A pattern PCRE cannot
-				// compile is a failure, never a pass.
-				$matched = @preg_match( "\x01" . $schema->pattern . "\x01u", $value ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+				// with a delimiter that cannot collide. `D` so `$` matches only
+				// at the very end, as in JavaScript (without it PCRE lets `$`
+				// match before a trailing newline). A pattern PCRE cannot
+				// compile is fatal, never a pass.
+				$matched = @preg_match( "\x01" . $schema->pattern . "\x01uD", $value ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
 				if ( false === $matched ) {
-					return array( $path . ': pattern could not be evaluated' );
+					throw new Mcpwp_MCP_Output_Schema_Unsupported( $path . ': pattern could not be evaluated' );
 				}
 				if ( 0 === $matched ) {
 					$errors[] = $path . ': does not match pattern';
@@ -172,11 +239,11 @@ class Mcpwp_MCP_Output_Schema {
 		if ( $value instanceof stdClass ) {
 			if ( array_key_exists( 'required', $keywords ) ) {
 				if ( ! is_array( $schema->required ) ) {
-					return array( $path . ': malformed required' );
+					throw new Mcpwp_MCP_Output_Schema_Unsupported( $path . ': malformed required' );
 				}
 				foreach ( $schema->required as $key ) {
 					if ( ! is_string( $key ) ) {
-						return array( $path . ': malformed required' );
+						throw new Mcpwp_MCP_Output_Schema_Unsupported( $path . ': malformed required' );
 					}
 					if ( ! property_exists( $value, $key ) ) {
 						$errors[] = sprintf( "%s: missing required '%s'", $path, $key );
@@ -186,7 +253,7 @@ class Mcpwp_MCP_Output_Schema {
 			$properties = array();
 			if ( array_key_exists( 'properties', $keywords ) ) {
 				if ( ! $schema->properties instanceof stdClass ) {
-					return array( $path . ': malformed properties' );
+					throw new Mcpwp_MCP_Output_Schema_Unsupported( $path . ': malformed properties' );
 				}
 				$properties = get_object_vars( $schema->properties );
 			}
@@ -194,11 +261,11 @@ class Mcpwp_MCP_Output_Schema {
 			foreach ( get_object_vars( $value ) as $key => $child ) {
 				$child_path = $path . '.' . $key;
 				if ( array_key_exists( $key, $properties ) ) {
-					$errors = array_merge( $errors, self::validate( $child, $properties[ $key ], $child_path ) );
+					$errors = array_merge( $errors, self::check( $child, $properties[ $key ], $child_path ) );
 				} elseif ( false === $additional ) {
 					$errors[] = $child_path . ': property not allowed';
 				} elseif ( true !== $additional ) {
-					$errors = array_merge( $errors, self::validate( $child, $additional, $child_path ) );
+					$errors = array_merge( $errors, self::check( $child, $additional, $child_path ) );
 				}
 			}
 		}
@@ -206,10 +273,10 @@ class Mcpwp_MCP_Output_Schema {
 		if ( is_array( $value ) && array_key_exists( 'items', $keywords ) ) {
 			if ( ! $schema->items instanceof stdClass && true !== $schema->items ) {
 				// Tuple form (an array of schemas) is unsupported: fail closed.
-				return array( $path . ': unsupported items form' );
+				throw new Mcpwp_MCP_Output_Schema_Unsupported( $path . ': unsupported items form' );
 			}
 			foreach ( $value as $index => $item ) {
-				$errors = array_merge( $errors, self::validate( $item, $schema->items, $path . '[' . $index . ']' ) );
+				$errors = array_merge( $errors, self::check( $item, $schema->items, $path . '[' . $index . ']' ) );
 			}
 		}
 
@@ -218,12 +285,12 @@ class Mcpwp_MCP_Output_Schema {
 				continue;
 			}
 			if ( ! is_array( $schema->$combinator ) || array() === $schema->$combinator ) {
-				return array( $path . ': malformed ' . $combinator );
+				throw new Mcpwp_MCP_Output_Schema_Unsupported( $path . ': malformed ' . $combinator );
 			}
 			$passing = 0;
 			$failure = array();
 			foreach ( $schema->$combinator as $branch ) {
-				$branch_errors = self::validate( $value, $branch, $path );
+				$branch_errors = self::check( $value, $branch, $path );
 				if ( array() === $branch_errors ) {
 					++$passing;
 				} elseif ( array() === $failure ) {
@@ -239,7 +306,7 @@ class Mcpwp_MCP_Output_Schema {
 			}
 		}
 
-		if ( array_key_exists( 'not', $keywords ) && array() === self::validate( $value, $schema->not, $path ) ) {
+		if ( array_key_exists( 'not', $keywords ) && array() === self::check( $value, $schema->not, $path ) ) {
 			$errors[] = $path . ': matches a "not" schema';
 		}
 
@@ -354,4 +421,12 @@ class Mcpwp_MCP_Output_Schema {
 		}
 		return 'string';
 	}
+}
+
+/**
+ * Thrown inside Mcpwp_MCP_Output_Schema when a schema uses a keyword it
+ * cannot evaluate; caught once at the top of validate() so the whole
+ * validation fails closed.
+ */
+class Mcpwp_MCP_Output_Schema_Unsupported extends RuntimeException {
 }

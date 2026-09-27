@@ -124,6 +124,14 @@ add_filter('mcpwp_integrations', function($integrations) {
 
 See [CONTRIBUTING.md](../CONTRIBUTING.md) for details on the integration API.
 
+A tool definition may carry an `outputSchema` (MCP 2025-06-18+). MCPWP wraps it so its error
+envelope still validates, and checks each result against it before sending `structuredContent`.
+That check fails closed: keywords outside type, properties, required, items (single schema),
+additionalProperties, anyOf/oneOf/allOf/not, enum/const, minimum/maximum, minLength/maxLength and
+pattern, apart from annotation keywords, make every result fall back to the `output_schema_mismatch`
+envelope. Write any `pattern` as an ECMAScript-compatible regex: clients validate with Ajv in unicode
+mode (JavaScript semantics), while MCPWP evaluates it as PCRE with the `u` and `D` flags.
+
 ## Request a Plugin
 
 Want MCPWP to support your favorite plugin? [File a feature request](https://github.com/Mumega-com/mcp-for-wp/issues/new?template=feature_request.md) with the plugin name and what tools you'd need.
