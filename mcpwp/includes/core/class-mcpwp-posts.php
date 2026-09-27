@@ -259,10 +259,10 @@ class Mcpwp_Posts {
 
 		return array(
 			'posts'       => $posts,
-			'total'       => $query->found_posts,
-			'pages'       => $query->max_num_pages,
-			'page'        => $args['paged'],
-			'per_page'    => $args['posts_per_page'],
+			'total'       => (int) $query->found_posts,
+			'pages'       => (int) $query->max_num_pages,
+			'page'        => (int) $args['paged'],
+			'per_page'    => (int) $args['posts_per_page'],
 		);
 	}
 
@@ -685,23 +685,25 @@ class Mcpwp_Posts {
 	 * @return array Formatted post.
 	 */
 	protected function format_post( $post, $include_full = false ) {
+		// Leaves cast to the types wp_list_posts declares in its
+		// outputSchema (#906).
 		$data = array(
-			'id'             => $post->ID,
+			'id'             => (int) $post->ID,
 			// Decoded for agents (#903) — see Mcpwp_Agent_Text. post_title is
 			// stored with entities already encoded ("Crumb &amp; Co"); the
 			// stored value and any theme rendering are untouched.
-			'title'          => Mcpwp_Agent_Text::decode( $post->post_title ),
-			'slug'           => $post->post_name,
-			'status'         => $post->post_status,
-			'date'           => $post->post_date,
-			'date_gmt'       => $post->post_date_gmt,
-			'modified'       => $post->post_modified,
-			'modified_gmt'   => $post->post_modified_gmt,
-			'url'            => get_permalink( $post ),
+			'title'          => (string) Mcpwp_Agent_Text::decode( $post->post_title ),
+			'slug'           => (string) $post->post_name,
+			'status'         => (string) $post->post_status,
+			'date'           => (string) $post->post_date,
+			'date_gmt'       => (string) $post->post_date_gmt,
+			'modified'       => (string) $post->post_modified,
+			'modified_gmt'   => (string) $post->post_modified_gmt,
+			'url'            => (string) get_permalink( $post ),
 			'edit_url'       => get_edit_post_link( $post->ID, 'raw' ),
 			'author'         => array(
 				'id'   => (int) $post->post_author,
-				'name' => get_the_author_meta( 'display_name', $post->post_author ),
+				'name' => (string) get_the_author_meta( 'display_name', $post->post_author ),
 			),
 			'featured_image' => $this->get_featured_image( $post->ID ),
 			'categories'     => $this->get_post_terms( $post->ID, 'category' ),
@@ -709,11 +711,11 @@ class Mcpwp_Posts {
 		);
 
 		if ( $include_full ) {
-			$data['content']    = $post->post_content;
-			$data['excerpt']    = $post->post_excerpt;
-			$data['word_count'] = str_word_count( wp_strip_all_tags( $post->post_content ) );
+			$data['content']    = (string) $post->post_content;
+			$data['excerpt']    = (string) $post->post_excerpt;
+			$data['word_count'] = (int) str_word_count( wp_strip_all_tags( $post->post_content ) );
 		} else {
-			$data['excerpt'] = wp_trim_words( $post->post_excerpt ?: $post->post_content, 30 );
+			$data['excerpt'] = (string) wp_trim_words( $post->post_excerpt ?: $post->post_content, 30 );
 		}
 
 		return $data;
@@ -756,15 +758,18 @@ class Mcpwp_Posts {
 			return array();
 		}
 
-		return array_map(
-			function ( $term ) {
-				return array(
-					'id'   => $term->term_id,
-					'name' => $term->name,
-					'slug' => $term->slug,
-				);
-			},
-			$terms
+		// array_values(): always a JSON array, whatever keys WP handed back.
+		return array_values(
+			array_map(
+				function ( $term ) {
+					return array(
+						'id'   => (int) $term->term_id,
+						'name' => (string) $term->name,
+						'slug' => (string) $term->slug,
+					);
+				},
+				(array) $terms
+			)
 		);
 	}
 

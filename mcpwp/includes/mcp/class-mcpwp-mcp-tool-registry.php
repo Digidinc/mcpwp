@@ -62,12 +62,25 @@ abstract class Mcpwp_MCP_Tool_Registry {
 	/**
 	 * Define a tool for MCP.
 	 *
-	 * @param string $name        Tool name.
-	 * @param string $description Tool description.
-	 * @param array  $input_props Input schema properties.
+	 * @param string     $name          Tool name.
+	 * @param string     $description   Tool description.
+	 * @param array      $input_props   Input schema properties.
+	 * @param array|null $output_schema Optional JSON Schema for this tool's
+	 *                                  result data (MCP spec 2025-06-18+
+	 *                                  `outputSchema` — #906). Pass only when
+	 *                                  the tool's REST result has a stable,
+	 *                                  verified shape: a caller-selectable
+	 *                                  `fields`/`_mcpwp_fields` filter, for
+	 *                                  example, means no per-item property
+	 *                                  can be `required`. Stored on the tool
+	 *                                  definition unconditionally; whether it
+	 *                                  is actually emitted to a given client
+	 *                                  is decided per-request in
+	 *                                  Mcpwp_REST_MCP against the negotiated
+	 *                                  protocol version, not here.
 	 * @return array Tool definition.
 	 */
-	protected function define_tool( $name, $description, $input_props ) {
+	protected function define_tool( $name, $description, $input_props, $output_schema = null ) {
 		$properties = array();
 		$required   = array();
 
@@ -105,13 +118,106 @@ abstract class Mcpwp_MCP_Tool_Registry {
 			$schema['required'] = $required;
 		}
 
-		return array(
+		$tool = array(
 			'name'        => $name,
 			'title'       => Mcpwp_MCP_Tool_Annotations::get_title( $name ),
 			'description' => $description,
 			'inputSchema' => $schema,
 			'annotations' => $this->get_tool_annotations( $name ),
 		);
+
+		if ( null !== $output_schema ) {
+			$tool['outputSchema'] = self::with_error_envelope( $output_schema );
+		}
+
+		return $tool;
+	}
+
+	/**
+	 * Admit the plugin-wide isError envelope into a tool's declared
+	 * outputSchema (#906).
+	 *
+	 * Every failed tools/call carries `structuredContent: {error: {code,
+	 * message, ...}}` (#936), whichever tool failed. The reference MCP SDK
+	 * client validates structuredContent against the tool's outputSchema
+	 * even when isError is true, so a schema that described only the
+	 * success shape would turn every failure of that tool into a client-side
+	 * "does not match the tool's output schema" exception — the model would
+	 * never see the teaching text. Composed here, once, so no tool can
+	 * declare a schema that forgets it.
+	 *
+	 * The result is an object schema whose `anyOf` accepts either the
+	 * success shape (its own `required` keys) or the error envelope. The
+	 * success properties keep their types; `error` is added to them.
+	 *
+	 * @param array $schema Success-shape object schema as the tool authored it.
+	 * @return array
+	 */
+	public static function with_error_envelope( array $schema ) {
+		// Idempotent: a schema already carrying the envelope (a tool list
+		// normalized twice, or a third party that composed it itself) is
+		// returned as-is rather than nested.
+		if ( self::has_error_envelope( $schema ) ) {
+			return $schema;
+		}
+
+		$success_required = isset( $schema['required'] ) && is_array( $schema['required'] ) ? array_values( $schema['required'] ) : array();
+		unset( $schema['required'] );
+
+		$properties = array();
+		if ( isset( $schema['properties'] ) && is_array( $schema['properties'] ) ) {
+			$properties = $schema['properties'];
+		} elseif ( isset( $schema['properties'] ) && is_object( $schema['properties'] ) ) {
+			// A third party may pass `new stdClass()` / a decoded object.
+			$properties = get_object_vars( $schema['properties'] );
+		}
+		$properties['error'] = array(
+			'type'                 => 'object',
+			'description'          => 'Present only on an isError result: the machine-readable failure (#936).',
+			'properties'           => array(
+				'code'    => array( 'type' => array( 'string', 'integer' ) ),
+				'message' => array( 'type' => 'string' ),
+			),
+			'required'             => array( 'code', 'message' ),
+			'additionalProperties' => true,
+		);
+
+		// Success branch: its own required keys, and never an `error` key —
+		// so a success-shaped result that also carries `error` is rejected
+		// instead of passing as either branch.
+		$success_branch = array( 'not' => array( 'required' => array( 'error' ) ) );
+		if ( ! empty( $success_required ) ) {
+			$success_branch = array_merge( array( 'required' => $success_required ), $success_branch );
+		}
+
+		$schema['type']       = 'object';
+		$schema['properties'] = $properties;
+		$schema['anyOf']      = array(
+			$success_branch,
+			array( 'required' => array( 'error' ) ),
+		);
+
+		return $schema;
+	}
+
+	/**
+	 * Whether a schema already admits the error envelope: an `error`
+	 * property and an anyOf branch requiring it. Detected structurally,
+	 * not by a vendor keyword — a strict-mode Ajv rejects unknown keywords.
+	 *
+	 * @param array $schema Output schema.
+	 * @return bool
+	 */
+	private static function has_error_envelope( array $schema ) {
+		if ( ! isset( $schema['properties']['error'], $schema['anyOf'] ) || ! is_array( $schema['anyOf'] ) ) {
+			return false;
+		}
+		foreach ( $schema['anyOf'] as $branch ) {
+			if ( is_array( $branch ) && isset( $branch['required'] ) && array( 'error' ) === $branch['required'] ) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**

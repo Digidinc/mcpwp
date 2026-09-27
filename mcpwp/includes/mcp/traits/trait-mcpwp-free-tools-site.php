@@ -25,7 +25,54 @@ trait Mcpwp_Free_Tools_Site_Trait {
 		$tools[] = $this->define_tool(
 			'wp_site_info',
 			'Get WordPress site information including name, URL, version, theme, active plugins, content counts, and RTL/text direction detection',
-			array()
+			array(),
+			// #906: shape is Mcpwp_Core::get_site_info() verbatim — every
+			// key here is always present, never behind a fields filter.
+			array(
+				'type'       => 'object',
+				'properties' => array(
+					'name'           => array( 'type' => 'string' ),
+					'description'    => array( 'type' => 'string' ),
+					'url'            => array( 'type' => 'string' ),
+					'admin_url'      => array( 'type' => 'string' ),
+					'wp_version'     => array( 'type' => 'string' ),
+					'php_version'    => array( 'type' => 'string' ),
+					'theme'          => array(
+						'type'       => 'object',
+						'properties' => array(
+							'name'    => array( 'type' => 'string' ),
+							'version' => array( 'type' => 'string' ),
+						),
+					),
+					'timezone'       => array( 'type' => 'string' ),
+					'language'       => array( 'type' => 'string' ),
+					'is_rtl'         => array( 'type' => 'boolean' ),
+					'text_direction' => array( 'type' => 'string' ),
+					// Grows as plugins/integrations are detected — never a
+					// fixed key set, so no per-key `required`.
+					'capabilities'   => array(
+						'type'                 => 'object',
+						'additionalProperties' => true,
+					),
+					'plugin'         => array(
+						'type'       => 'object',
+						'properties' => array(
+							'name'    => array( 'type' => 'string' ),
+							'version' => array( 'type' => array( 'string', 'null' ) ),
+						),
+					),
+					'license'        => array(
+						'type'       => 'object',
+						'properties' => array(
+							'plan'   => array( 'type' => 'string' ),
+							'is_pro' => array( 'type' => 'boolean' ),
+							'reason' => array( 'type' => 'string' ),
+						),
+					),
+				),
+				'required'             => array( 'name', 'url', 'wp_version', 'php_version', 'theme', 'timezone', 'language', 'capabilities', 'plugin', 'license' ),
+				'additionalProperties' => true,
+			)
 		);
 
 		$tools[] = $this->define_tool(

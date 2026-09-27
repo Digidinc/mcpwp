@@ -677,6 +677,29 @@ Every tool also carries a top-level `title` and `readOnlyHint`/`destructiveHint`
 `mcpwp/includes/mcp/class-mcpwp-mcp-tool-annotations.php` and the generated audit table at
 `mcpwp/docs/mcp-tool-annotations.md`.
 
+Protocol version is negotiated per the spec (#906): `initialize` echoes a supported
+`protocolVersion` (`2024-11-05`, `2025-03-26`, `2025-06-18`, `2025-11-25`) and answers the latest for
+anything else — the handshake never fails on version. Every later request follows its
+`MCP-Protocol-Version` header: none (or empty) means `2025-03-26`, per the spec; an unsupported or
+malformed value is an HTTP 400 JSON-RPC error listing the supported versions (the value is not echoed).
+An `initialize` in the same JSON-RPC batch wins over the header. The npm proxy (`mcp-server/`) runs its
+own `initialize` against WordPress with the version its host negotiated and forwards the answer as the
+header on every request after that.
+
+Under `2025-06-18`+ tools carry top-level `title`, and tools with a stable result shape
+(`wp_site_info`, `wp_list_pages`, `wp_list_posts`, `wp_get_page_by_slug`) declare an `outputSchema`
+and return `structuredContent` beside a compact-JSON text block. Older versions get neither
+(`annotations.title` stays). Declare a schema via `define_tool()`'s 4th argument; it is wrapped by
+`Mcpwp_MCP_Tool_Registry::with_error_envelope()` (success branch forbids an `error` key; the #936
+`structuredContent.error` branch still validates) — a third-party integration's raw `outputSchema`
+gets the same wrapping at `tools/list`. Before emitting, `conform_tool_call_result()` validates the
+structured copy server-side (`Mcpwp_MCP_Output_Schema`, strict like the client's Ajv — not core's
+coercing validator). A result that fails keeps its text and `isError`, is logged once per request,
+and carries `structuredContent: {error: {code: "output_schema_mismatch", path}}` instead: the
+reference SDK client throws on a missing structuredContent as well as a mismatching one. A top-level
+list result is sent as `{"items": [...]}`. `McpProtocolVersionTest` fails until a new schema is
+validated against a real result.
+
 ## SEO Market Data (DataForSEO)
 
 Two data classes, deliberately in separate stores:
