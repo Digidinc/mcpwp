@@ -140,6 +140,27 @@
  *     by design (round 4 NIT-1). Accepted: closing this would mean
  *     auditing every third-party plugin's write path, which this class
  *     has no visibility into and no business gating.
+ *   - A referenced Elementor template's text is NEVER expanded into a
+ *     page's comparable text, on either side of duplicate detection
+ *     (round 5 WARN-1 — round 4 briefly did expand it, which made every
+ *     sibling page built from the same shared template score 0.6-0.8
+ *     against every other sibling, a false positive downgrading
+ *     legitimate, unique publishes). The one-level template lookup that
+ *     remains (measure_embedded_templates()) is measurement-only, feeding
+ *     just the thin-content WARNING's wording — never the duplicate
+ *     score. The accepted cost: a page whose ENTIRE visible copy is one
+ *     shared template and nothing else is invisible to duplicate
+ *     detection by design, the same way any other near-empty page is —
+ *     it gets the thin-content warning, not a duplicate flag.
+ *   - Publishing an EMPTY (or near-empty) page and filling it with
+ *     duplicate/scaled content in a LATER edit is not something the hard
+ *     publish-time gate can catch — there is no content to compare yet at
+ *     create time. This is covered by the OTHER two mechanisms, not a
+ *     gap in either: the ramp cap still counts the publish itself, and
+ *     the published-edit ADVISORY (see rule 3 above) catches the
+ *     content-bearing edit that follows, flagging it for human review
+ *     rather than silently letting it through unnoticed (#957
+ *     adversarial review round 5 NIT-2).
  *
  * Deliberately NOT reused: Mcpwp_Rate_Limiter (per-identifier request-rate
  * windows, a different problem) and Mcpwp_Destructive_Gate's per-requester
@@ -542,6 +563,17 @@ class Mcpwp_Content_Guardrails {
 	private static $advisory_checks_skipped_count = 0;
 
 	/**
+	 * Post IDs whose advisory check was skipped this request, capped at
+	 * MAX_ADVISORY_SKIPPED_POST_IDS_RECORDED — included in the Control
+	 * Room issue record_advisory_checks_skipped_issue() writes (#957
+	 * adversarial review round 5 NIT-3: "record ONE guardrail issue for
+	 * the request ... with the post IDs (capped list)").
+	 *
+	 * @var int[]
+	 */
+	private static $advisory_checks_skipped_post_ids = array();
+
+	/**
 	 * Hard ceiling on how many advisory duplicate-checks
 	 * evaluate_content_edit_advisory() will actually run in one request
 	 * (#957 adversarial review round 4 NIT-3: "bound the advisory work per
@@ -553,6 +585,16 @@ class Mcpwp_Content_Guardrails {
 	 * @var int
 	 */
 	const MAX_ADVISORY_CHECKS_PER_REQUEST = 20;
+
+	/**
+	 * Cap on how many skipped post IDs are actually recorded in the
+	 * Control Room issue (round 5 NIT-3) — the aggregate COUNT is never
+	 * truncated, only the list of IDs shown, so the issue record itself
+	 * stays small regardless of how large a bulk operation gets.
+	 *
+	 * @var int
+	 */
+	const MAX_ADVISORY_SKIPPED_POST_IDS_RECORDED = 50;
 
 	/**
 	 * Mark the rest of this request as MCPWP-authenticated. Idempotent.
@@ -630,6 +672,7 @@ class Mcpwp_Content_Guardrails {
 		self::$pending_content_edit_advisory          = array();
 		self::$advisory_checks_this_request           = 0;
 		self::$advisory_checks_skipped_count          = 0;
+		self::$advisory_checks_skipped_post_ids       = array();
 		self::$token_cache                            = array();
 		self::$token_cache_bytes                       = 0;
 	}
@@ -810,12 +853,12 @@ class Mcpwp_Content_Guardrails {
 		// specifically so a clone of an Elementor page is duplicate-
 		// checked against its actual content even though it has no ID yet.
 		if ( $post_id ) {
-			$elementor_text = self::extract_text_from_elementor( get_post_meta( $post_id, '_elementor_data', true ) );
+			$elementor_raw  = get_post_meta( $post_id, '_elementor_data', true );
+			$elementor_text = self::extract_text_from_elementor( $elementor_raw );
 			$edit_mode      = (string) get_post_meta( $post_id, '_elementor_edit_mode', true );
 		} else {
-			$elementor_text = isset( $postarr['meta_input']['_elementor_data'] )
-				? self::extract_text_from_elementor( $postarr['meta_input']['_elementor_data'] )
-				: '';
+			$elementor_raw  = isset( $postarr['meta_input']['_elementor_data'] ) ? $postarr['meta_input']['_elementor_data'] : null;
+			$elementor_text = null !== $elementor_raw ? self::extract_text_from_elementor( $elementor_raw ) : '';
 			$edit_mode      = isset( $postarr['meta_input']['_elementor_edit_mode'] )
 				? (string) $postarr['meta_input']['_elementor_edit_mode']
 				: '';
@@ -917,14 +960,33 @@ class Mcpwp_Content_Guardrails {
 		// Thin content is WARNING ONLY — never a reason to downgrade
 		// (#957 adversarial review false-positive fix: contact/thank-you
 		// pages and Elementor-first pages that publish with 0 words at
-		// create time must still publish).
+		// create time must still publish). When it's also a builder page
+		// embedding at least one template, the warning names that —
+		// "5 unique words + a template" is exactly the case round 5
+		// WARN-1's fix stopped scoring as a duplicate; it is still worth
+		// flagging that most of the page's apparent copy is borrowed, not
+		// original, for a human to judge (#957 adversarial review round 5
+		// WARN-1: "attach the thin-content warning ... with 'most of this
+		// page's copy comes from shared templates'").
 		if ( $thin ) {
-			$warnings[] = sprintf(
-				/* translators: 1: word count, 2: minimum word count. */
-				__( 'Content is %1$d words, below the usual %2$d-word floor for published content. If this is a short intentional page (contact, thank-you), no action needed.', 'mcpwp' ),
-				$word_count,
-				$settings['min_word_count']
-			);
+			$template_info = ! empty( $elementor_raw ) ? self::measure_embedded_templates( $elementor_raw ) : array( 'has_templates' => false, 'template_word_count' => 0 );
+
+			if ( $template_info['has_templates'] ) {
+				$warnings[] = sprintf(
+					/* translators: 1: word count, 2: minimum word count, 3: template word count. */
+					__( 'Content is %1$d words, below the usual %2$d-word floor for published content, and most of this page\'s copy comes from shared templates (%3$d words borrowed). If this is a short intentional page (contact, thank-you), no action needed.', 'mcpwp' ),
+					$word_count,
+					$settings['min_word_count'],
+					$template_info['template_word_count']
+				);
+			} else {
+				$warnings[] = sprintf(
+					/* translators: 1: word count, 2: minimum word count. */
+					__( 'Content is %1$d words, below the usual %2$d-word floor for published content. If this is a short intentional page (contact, thank-you), no action needed.', 'mcpwp' ),
+					$word_count,
+					$settings['min_word_count']
+				);
+			}
 		}
 
 		if ( $downgraded ) {
@@ -1113,6 +1175,9 @@ class Mcpwp_Content_Guardrails {
 
 		if ( self::$advisory_checks_this_request >= self::MAX_ADVISORY_CHECKS_PER_REQUEST ) {
 			self::$advisory_checks_skipped_count++;
+			if ( count( self::$advisory_checks_skipped_post_ids ) < self::MAX_ADVISORY_SKIPPED_POST_IDS_RECORDED ) {
+				self::$advisory_checks_skipped_post_ids[] = $post_id;
+			}
 			return null;
 		}
 		self::$advisory_checks_this_request++;
@@ -1125,6 +1190,16 @@ class Mcpwp_Content_Guardrails {
 		$dup_flag     = $dup['city_swap'] || ( $dup['score'] >= $settings['duplicate_threshold'] );
 
 		if ( ! $dup_flag ) {
+			// A REAL check just ran (not a cheap bail above) and came back
+			// clean — if this post has an OPEN duplicate_edit advisory from
+			// an earlier edit, resolve it: Control Room's list should
+			// reflect the post's CURRENT state, not every finding it has
+			// ever had (#957 adversarial review round 5 NIT-4: "a later
+			// advisory check on the same post that scores below the
+			// threshold marks its open duplicate_edit issue resolved").
+			if ( class_exists( 'Mcpwp_SEO_Audit_Store' ) ) {
+				Mcpwp_SEO_Audit_Store::resolve_issue_if_open( $post_id, 'content_guardrails', 'duplicate_edit' );
+			}
 			return null;
 		}
 
@@ -1437,15 +1512,58 @@ class Mcpwp_Content_Guardrails {
 		// ONE aggregate note, not a per-post one (#957 adversarial review
 		// round 4 NIT-3) — a 100-page bulk operation that hit
 		// MAX_ADVISORY_CHECKS_PER_REQUEST reports it once, here, rather
-		// than stapling the same sentence onto 80 different items.
+		// than stapling the same sentence onto 80 different items. Also
+		// left as a trace in Control Room (round 5 NIT-3), not just the
+		// response body, since a bulk operation's caller may never look at
+		// the raw JSON.
 		if ( self::$advisory_checks_skipped_count > 0 ) {
 			$data['guardrails_advisory_note'] = sprintf(
 				/* translators: %d: number of pages/posts whose advisory check was skipped. */
 				__( 'Advisory checks skipped for %d further pages in this bulk operation.', 'mcpwp' ),
 				self::$advisory_checks_skipped_count
 			);
-			self::$advisory_checks_skipped_count = 0;
+			self::record_advisory_checks_skipped_issue( self::$advisory_checks_skipped_count, self::$advisory_checks_skipped_post_ids );
+			self::$advisory_checks_skipped_count    = 0;
+			self::$advisory_checks_skipped_post_ids = array();
 		}
+	}
+
+	/**
+	 * Record ONE Control Room issue for a request that hit
+	 * MAX_ADVISORY_CHECKS_PER_REQUEST — a site-level (post_id = 0) advisory
+	 * naming how many edits went unchecked and which posts, capped, so a
+	 * bulk operation whose caller never inspects the response body still
+	 * leaves a trace a human reviewing Control Room will see (#957
+	 * adversarial review round 5 NIT-3).
+	 *
+	 * @param int   $skipped_count Total advisory checks skipped this request.
+	 * @param int[] $post_ids      Skipped post IDs (already capped to
+	 *                             MAX_ADVISORY_SKIPPED_POST_IDS_RECORDED).
+	 * @return void
+	 */
+	private static function record_advisory_checks_skipped_issue( $skipped_count, array $post_ids ) {
+		if ( ! class_exists( 'Mcpwp_SEO_Audit_Store' ) ) {
+			return;
+		}
+
+		Mcpwp_SEO_Audit_Store::upsert_issue(
+			array(
+				'post_id'        => 0,
+				'title'          => '',
+				'url'            => '',
+				'type'           => 'site',
+				'category'       => 'content_guardrails',
+				'code'           => 'advisory_checks_skipped',
+				'severity'       => 'info',
+				'message'        => sprintf(
+					/* translators: 1: number of skipped checks, 2: comma-separated post IDs. */
+					__( '%1$d edits were not checked for duplicate/scaled content in one bulk operation (post IDs: %2$s) — the per-request advisory budget was reached.', 'mcpwp' ),
+					$skipped_count,
+					implode( ', ', array_map( 'absint', $post_ids ) )
+				),
+				'recommendation' => __( 'Spot-check the listed pages, or re-run in smaller batches for full coverage.', 'mcpwp' ),
+			)
+		);
 	}
 
 	/**
@@ -2753,11 +2871,22 @@ class Mcpwp_Content_Guardrails {
 	/**
 	 * Best-effort plain-text extraction from an Elementor element tree, for
 	 * word-count and duplicate-shingle purposes. Not a renderer — recurses
-	 * through every settings value (#957 adversarial review round 4
-	 * WARN-1 — the fixed-list-of-keys version used to miss most widget
-	 * copy: icon-box's title_text/description_text, icon_list/tabs/
-	 * accordion repeater items, testimonial_content, and anything inside a
-	 * referenced template were all invisible to duplicate detection).
+	 * through allowlisted settings keys at any depth (#957 adversarial
+	 * review round 4 WARN-1 — the original fixed-list-of-keys version
+	 * missed most widget copy; round 5 NIT-1 switched the "which keys
+	 * carry copy" decision from a denylist to an ALLOWLIST, so a stray
+	 * Elementor internal key this class has never seen — `__dynamic__`,
+	 * `__globals__`, a link/image control's own keys, an enum-like select
+	 * value — is excluded by DEFAULT rather than needing to be named).
+	 *
+	 * Deliberately does NOT expand a referenced template's own text into
+	 * this page's comparable text (#957 adversarial review round 5
+	 * WARN-1 — see the class docblock's "shared templates" note): doing so
+	 * made every sibling page built from the same template score 0.6-0.8
+	 * against each other, downgrading legitimate, unique publishes. Use
+	 * measure_embedded_templates() to gauge how much of a page's OWN
+	 * apparent thinness is template-borrowed, for the thin-content warning
+	 * only — never to inflate a page's comparable text.
 	 *
 	 * @param mixed $data Elementor data: JSON string, or already-decoded array.
 	 * @return string Extracted text.
@@ -2771,58 +2900,73 @@ class Mcpwp_Content_Guardrails {
 			return '';
 		}
 
-		$texts             = array();
-		$visited_templates = array();
-		self::walk_elementor_text( $data, $texts, true, $visited_templates );
+		$texts = array();
+		self::walk_elementor_text( $data, $texts );
 		return trim( implode( ' ', $texts ) );
 	}
 
 	/**
-	 * Settings-key substrings that mark a value as non-copy metadata
-	 * (dimensions, colors, typography, identifiers, markup/asset
-	 * references, …) rather than visible text — matched against each
-	 * underscore/non-alpha-delimited SEGMENT of a key, not a raw substring
-	 * search, so a real copy key that happens to CONTAIN one of these as
-	 * running text ("guide_text" contains "id") is never wrongly excluded
-	 * (#957 adversarial review round 4 WARN-1).
+	 * Settings keys that carry visible widget copy — an ALLOWLIST, not a
+	 * denylist (#957 adversarial review round 5 NIT-1): a key this list
+	 * has never heard of is excluded by default, which is the safe
+	 * direction for anything Elementor-internal this class does not know
+	 * about (`__dynamic__`/`__globals__` bindings, a link/image control's
+	 * own sub-keys, an enum-like select value) — the previous denylist had
+	 * to name every NON-copy pattern instead, the wrong side to be
+	 * incomplete on. Extend this list as real widgets turn up more copy
+	 * keys; it is deliberately not exhaustive of every third-party widget
+	 * in existence.
 	 *
 	 * @var string[]
 	 */
-	const ELEMENTOR_TEXT_DENYLIST_KEY_TERMS = array(
-		'url', 'link', 'href', 'src', 'id', 'css', 'class', 'color',
-		'typography', 'size', 'width', 'height', 'margin', 'padding',
-		'border', 'background', 'animation',
+	const ELEMENTOR_TEXT_ALLOWLIST_KEYS = array(
+		'title', 'title_text', 'description_text', 'editor', 'text', 'description',
+		'content', 'caption', 'html', 'heading', 'sub_title', 'subtitle',
+		'testimonial_content', 'testimonial_name', 'testimonial_job',
+		'blockquote_content', 'alert_title', 'alert_description',
+		'tab_title', 'tab_content', 'item_title', 'item_description',
+		'price', 'period', 'button_text', 'label', 'placeholder',
+		'quote', 'excerpt', 'question', 'answer', 'name', 'job_title', 'company',
 	);
 
 	/**
-	 * Whether a settings key is likely to hold visible copy (true) or
-	 * layout/style/identifier metadata (false) — see
-	 * ELEMENTOR_TEXT_DENYLIST_KEY_TERMS.
+	 * Settings keys never worth descending into at all, even though their
+	 * OWN value is an array whose sub-keys might otherwise look allowlisted
+	 * (#957 adversarial review round 5 NIT-1: "never include `__dynamic__`
+	 * or `__globals__`") — a dynamic-tag/global-style binding's own control
+	 * name (e.g. `__dynamic__.title`) is a CODE (a shortcode-like tag id),
+	 * not copy, and would otherwise pass the allowlist on its inner key.
+	 *
+	 * @var string[]
+	 */
+	const ELEMENTOR_TEXT_SKIP_CONTAINER_KEYS = array( '__dynamic__', '__globals__' );
+
+	/**
+	 * Whether a settings key is one of the allowlisted copy-bearing names
+	 * — see ELEMENTOR_TEXT_ALLOWLIST_KEYS.
 	 *
 	 * @param string|int $key Settings key.
 	 * @return bool
 	 */
 	private static function is_elementor_copy_key( $key ) {
 		if ( ! is_string( $key ) ) {
-			return true; // A numeric list index carries no key semantics of its own.
-		}
-		$key = strtolower( ltrim( $key, '_' ) );
-		if ( '' === $key ) {
+			// A bare numeric list index (a plain scalar sitting directly in
+			// a list, e.g. an enum-like multi-select value) has no key name
+			// to allowlist — excluded, not included, under an allowlist
+			// (round 4's denylist-era default of "include" was the
+			// opposite call, correct for THAT design, not this one).
 			return false;
 		}
-		foreach ( preg_split( '/[^a-z]+/', $key ) as $segment ) {
-			if ( '' !== $segment && in_array( $segment, self::ELEMENTOR_TEXT_DENYLIST_KEY_TERMS, true ) ) {
-				return false;
-			}
-		}
-		return true;
+		return in_array( strtolower( $key ), self::ELEMENTOR_TEXT_ALLOWLIST_KEYS, true );
 	}
 
 	/**
 	 * Whether a string value's own SHAPE (not its key) marks it as non-copy
 	 * — a URL, a hex/rgb() color, a bare number, or an inline JSON blob
 	 * (#957 adversarial review round 4 WARN-1: "plus values that look like
-	 * URLs, colors, numbers or JSON").
+	 * URLs, colors, numbers or JSON"). Still checked even under the round 5
+	 * allowlist — an allowlisted key ("content", "text") can still legally
+	 * hold a URL-shaped or numeric value in some third-party widget.
 	 *
 	 * @param string $value Value.
 	 * @return bool
@@ -2856,21 +3000,15 @@ class Mcpwp_Content_Guardrails {
 
 	/**
 	 * Recursively collect text-bearing widget settings — one element (or a
-	 * list of elements/repeater items), then its children.
+	 * list of elements/repeater items), then its children. Never expands a
+	 * `template_id` reference — see extract_text_from_elementor()'s
+	 * docblock (#957 adversarial review round 5 WARN-1).
 	 *
-	 * @param mixed    $nodes                 One element (assoc array) or a list of elements.
-	 * @param string[] $texts                 Accumulator, by reference.
-	 * @param bool     $allow_template_lookup Whether a `template_id` setting
-	 *                                        found here may pull in that
-	 *                                        template's OWN text — true at
-	 *                                        the top level, false once
-	 *                                        already inside a looked-up
-	 *                                        template (ONE level deep only).
-	 * @param array    $visited_templates     Template post IDs already
-	 *                                        expanded this call — cycle guard.
+	 * @param mixed    $nodes One element (assoc array) or a list of elements.
+	 * @param string[] $texts Accumulator, by reference.
 	 * @return void
 	 */
-	private static function walk_elementor_text( $nodes, array &$texts, $allow_template_lookup = true, array &$visited_templates = array() ) {
+	private static function walk_elementor_text( $nodes, array &$texts ) {
 		if ( ! is_array( $nodes ) ) {
 			return;
 		}
@@ -2884,12 +3022,9 @@ class Mcpwp_Content_Guardrails {
 			}
 			if ( isset( $node['settings'] ) && is_array( $node['settings'] ) ) {
 				self::walk_elementor_settings( $node['settings'], $texts );
-				if ( $allow_template_lookup ) {
-					self::maybe_walk_elementor_template_reference( $node['settings'], $texts, $visited_templates );
-				}
 			}
 			if ( ! empty( $node['elements'] ) && is_array( $node['elements'] ) ) {
-				self::walk_elementor_text( $node['elements'], $texts, $allow_template_lookup, $visited_templates );
+				self::walk_elementor_text( $node['elements'], $texts );
 			}
 		}
 	}
@@ -2898,9 +3033,11 @@ class Mcpwp_Content_Guardrails {
 	 * Recurse through EVERY value of a settings array (or a nested
 	 * repeater item / control found within it — icon_list, tabs, accordion
 	 * items, and so on are all just arrays at this level, walked the same
-	 * way regardless of depth), collecting copy-bearing strings and
-	 * skipping denylisted keys / non-copy-shaped values (#957 adversarial
-	 * review round 4 WARN-1).
+	 * way regardless of depth), collecting copy under ALLOWLISTED keys
+	 * only and skipping non-copy-shaped values (#957 adversarial review
+	 * round 4 WARN-1, round 5 NIT-1). Never descends into
+	 * ELEMENTOR_TEXT_SKIP_CONTAINER_KEYS at all, regardless of what its own
+	 * sub-keys look like.
 	 *
 	 * @param array    $settings Settings (or a nested item) to walk.
 	 * @param string[] $texts    Accumulator, by reference.
@@ -2908,6 +3045,9 @@ class Mcpwp_Content_Guardrails {
 	 */
 	private static function walk_elementor_settings( array $settings, array &$texts ) {
 		foreach ( $settings as $key => $value ) {
+			if ( is_string( $key ) && in_array( strtolower( $key ), self::ELEMENTOR_TEXT_SKIP_CONTAINER_KEYS, true ) ) {
+				continue; // A dynamic-tag/global-style binding's control name is a CODE, not copy.
+			}
 			if ( is_array( $value ) ) {
 				self::walk_elementor_settings( $value, $texts );
 				continue;
@@ -2923,38 +3063,82 @@ class Mcpwp_Content_Guardrails {
 	}
 
 	/**
-	 * If this element's settings reference a template (a "Template"/
-	 * "Global Widget" style `template_id` setting), pull that template's
-	 * OWN Elementor text in — ONE level deep only, and never the same
-	 * template twice in one extraction (#957 adversarial review round 4
-	 * WARN-1: "include that template's Elementor text one level deep (no
-	 * recursion into further templates; guard cycles)").
+	 * Gauge how much of a page's Elementor tree is template-borrowed —
+	 * used ONLY to phrase the thin-content warning ("most of this page's
+	 * copy comes from shared templates"), NEVER to inflate this page's own
+	 * comparable text for duplicate detection (#957 adversarial review
+	 * round 5 WARN-1 — round 4's template expansion made every sibling
+	 * page built from the same template score 0.6-0.8 against each other,
+	 * a false positive on legitimate, unique publishes; the fix removes
+	 * expansion entirely from BOTH sides of duplicate detection and keeps
+	 * only this one-level, measurement-only lookup). Every `template_id`
+	 * referenced directly in $data (never a template's OWN nested
+	 * template_id — one level deep only) contributes its own inline word
+	 * count.
 	 *
-	 * @param array    $settings          Element settings.
-	 * @param string[] $texts             Accumulator, by reference.
-	 * @param array    $visited_templates Template post IDs already expanded, by reference.
+	 * @param mixed $data Elementor data: JSON string, or already-decoded array.
+	 * @return array { has_templates: bool, template_word_count: int }.
+	 */
+	private static function measure_embedded_templates( $data ) {
+		if ( is_string( $data ) ) {
+			$decoded = json_decode( $data, true );
+			$data    = is_array( $decoded ) ? $decoded : array();
+		}
+		if ( ! is_array( $data ) ) {
+			return array( 'has_templates' => false, 'template_word_count' => 0 );
+		}
+
+		$template_ids = array();
+		self::collect_elementor_template_ids( $data, $template_ids );
+
+		$template_word_count = 0;
+		foreach ( array_keys( $template_ids ) as $template_id ) {
+			$template_data = get_post_meta( $template_id, '_elementor_data', true );
+			if ( empty( $template_data ) ) {
+				continue;
+			}
+			// extract_text_from_elementor() never follows a FURTHER
+			// template_id, so this is naturally one level deep with no
+			// separate depth tracking needed.
+			$template_word_count += self::word_count( self::extract_text_from_elementor( $template_data ) );
+		}
+
+		return array(
+			'has_templates'       => ! empty( $template_ids ),
+			'template_word_count' => $template_word_count,
+		);
+	}
+
+	/**
+	 * Collect every `template_id` referenced directly in an Elementor tree
+	 * (one level — does not look inside a referenced template's own data
+	 * for further references).
+	 *
+	 * @param mixed $nodes One element or a list of elements.
+	 * @param array $ids   Post ID => true, by reference.
 	 * @return void
 	 */
-	private static function maybe_walk_elementor_template_reference( array $settings, array &$texts, array &$visited_templates ) {
-		if ( empty( $settings['template_id'] ) ) {
+	private static function collect_elementor_template_ids( $nodes, array &$ids ) {
+		if ( ! is_array( $nodes ) ) {
 			return;
 		}
-		$template_id = absint( $settings['template_id'] );
-		if ( $template_id <= 0 || isset( $visited_templates[ $template_id ] ) ) {
-			return;
+		if ( isset( $nodes['elType'] ) || isset( $nodes['settings'] ) ) {
+			$nodes = array( $nodes );
 		}
-		$visited_templates[ $template_id ] = true;
-
-		$template_data = get_post_meta( $template_id, '_elementor_data', true );
-		if ( empty( $template_data ) ) {
-			return;
+		foreach ( $nodes as $node ) {
+			if ( ! is_array( $node ) ) {
+				continue;
+			}
+			if ( ! empty( $node['settings']['template_id'] ) ) {
+				$template_id = absint( $node['settings']['template_id'] );
+				if ( $template_id > 0 ) {
+					$ids[ $template_id ] = true;
+				}
+			}
+			if ( ! empty( $node['elements'] ) && is_array( $node['elements'] ) ) {
+				self::collect_elementor_template_ids( $node['elements'], $ids );
+			}
 		}
-		$decoded = is_string( $template_data ) ? json_decode( $template_data, true ) : $template_data;
-		if ( ! is_array( $decoded ) ) {
-			return;
-		}
-
-		self::walk_elementor_text( $decoded, $texts, false, $visited_templates );
 	}
 
 	// -------------------------------------------------------------------------

@@ -137,6 +137,40 @@ class Mcpwp_SEO_Audit_Store {
 	}
 
 	/**
+	 * Mark ONE guardrail advisory resolved, IF it is currently open (#957
+	 * adversarial review round 5 NIT-4: "guardrail issues resolve" — a
+	 * later advisory check on the same post that scores below the
+	 * threshold marks its open duplicate_edit issue resolved, so Control
+	 * Room's list reflects the CURRENT state of the post, not every
+	 * finding it has ever had). Uses the same (post_id, category, code)
+	 * key derivation upsert_issue() writes with, so this resolves exactly
+	 * the record a matching upsert_issue() call would update.
+	 *
+	 * @param int    $post_id  Post ID.
+	 * @param string $category Issue category.
+	 * @param string $code     Issue code.
+	 * @return bool True if an open issue was found and resolved.
+	 */
+	public static function resolve_issue_if_open( $post_id, $category, $code ) {
+		$issues = self::get_guardrail_issues();
+		$key    = self::issue_key(
+			array( 'id' => $post_id ),
+			array( 'category' => $category, 'code' => $code )
+		);
+
+		if ( ! isset( $issues[ $key ] ) || 'open' !== ( $issues[ $key ]['status'] ?? '' ) ) {
+			return false;
+		}
+
+		$issues[ $key ]['status']           = 'resolved';
+		$issues[ $key ]['resolved_at']       = gmdate( 'c' );
+		$issues[ $key ]['resolved_run_id']   = '';
+		self::save_guardrail_issues( $issues );
+
+		return true;
+	}
+
+	/**
 	 * Store an audit run and normalize issue records.
 	 *
 	 * @param array $audit Audit payload.
@@ -513,13 +547,62 @@ class Mcpwp_SEO_Audit_Store {
 
 	/**
 	 * Get stored guardrail advisories — see GUARDRAIL_ISSUES_OPTION's own
-	 * docblock for why this is a separate store from get_issues().
+	 * docblock for why this is a separate store from get_issues(). Sweeps
+	 * expired OPEN advisories to 'resolved' on every read (#957 adversarial
+	 * review round 5 NIT-4: "expire guardrail issues after 30 days") — a
+	 * lazy, self-healing sweep rather than a cron: nothing here runs on a
+	 * timer, matching this plugin's existing "every lookup is an explicit
+	 * action" convention (see CLAUDE.md's SEO Market Data section).
 	 *
 	 * @return array Guardrail advisory records.
 	 */
 	private static function get_guardrail_issues() {
 		$issues = get_option( self::GUARDRAIL_ISSUES_OPTION, array() );
-		return is_array( $issues ) ? $issues : array();
+		$issues = is_array( $issues ) ? $issues : array();
+		return self::expire_stale_guardrail_issues( $issues );
+	}
+
+	/**
+	 * How long an OPEN guardrail advisory stays open with no re-flag
+	 * before it is swept to 'resolved' on its own (#957 adversarial review
+	 * round 5 NIT-4). A post nobody has re-checked in this long is either
+	 * genuinely fixed or simply not being worked on — either way, it
+	 * should not sit in Control Room's open list forever.
+	 *
+	 * @var int
+	 */
+	const GUARDRAIL_ISSUE_EXPIRY_DAYS = 30;
+
+	/**
+	 * Resolve any OPEN guardrail advisory whose last_seen_at is older than
+	 * GUARDRAIL_ISSUE_EXPIRY_DAYS, persisting the change if anything
+	 * actually expired.
+	 *
+	 * @param array $issues Guardrail advisory records.
+	 * @return array The same records, with any expired ones now 'resolved'.
+	 */
+	private static function expire_stale_guardrail_issues( array $issues ) {
+		$cutoff  = time() - ( self::GUARDRAIL_ISSUE_EXPIRY_DAYS * DAY_IN_SECONDS );
+		$changed = false;
+
+		foreach ( $issues as $key => $issue ) {
+			if ( 'open' !== ( $issue['status'] ?? '' ) ) {
+				continue;
+			}
+			$last_seen = isset( $issue['last_seen_at'] ) ? strtotime( (string) $issue['last_seen_at'] ) : false;
+			if ( false !== $last_seen && $last_seen < $cutoff ) {
+				$issues[ $key ]['status']         = 'resolved';
+				$issues[ $key ]['resolved_at']     = gmdate( 'c' );
+				$issues[ $key ]['resolved_run_id'] = '';
+				$changed                           = true;
+			}
+		}
+
+		if ( $changed ) {
+			self::save_guardrail_issues( $issues );
+		}
+
+		return $issues;
 	}
 
 	/**

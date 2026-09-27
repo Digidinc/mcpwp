@@ -1549,6 +1549,66 @@ final class ContentGuardrailsTest extends TestCase {
 		$this->assertSame( 20, $flagged, 'exactly MAX_ADVISORY_CHECKS_PER_REQUEST advisories actually ran' );
 		$this->assertArrayHasKey( 'guardrails_advisory_note', $response );
 		$this->assertStringContainsString( '5', $response['guardrails_advisory_note'], '25 - 20 = 5 skipped' );
+
+		// #957 adversarial review round 5 NIT-3: "record ONE guardrail
+		// issue for the request ... with the post IDs (capped list), so
+		// it leaves a trace in the Control Room."
+		$issues = Mcpwp_SEO_Audit_Store::list_issues( array( 'reveal_non_public' => true, 'limit' => 200 ) );
+		$skip_issues = array_values( array_filter( $issues['issues'], function ( $i ) { return 'advisory_checks_skipped' === $i['code']; } ) );
+		$this->assertCount( 1, $skip_issues, 'exactly ONE issue for the whole request, not one per skipped post' );
+		$this->assertStringContainsString( '5', $skip_issues[0]['message'] );
+		// One of the 5 actually-skipped post IDs (3021-3025, the 21st-25th
+		// iterations) must be named.
+		$this->assertMatchesRegularExpression( '/302[1-5]/', $skip_issues[0]['message'] );
+	}
+
+	// -------------------------------------------------------------------------
+	// NIT-4: guardrail issues resolve and expire
+
+	public function test_a_later_clean_advisory_check_resolves_the_open_duplicate_edit_issue(): void {
+		Mcpwp_Content_Guardrails::enter_context();
+		Mcpwp_Content_Guardrails::update_settings( array( 'min_word_count' => 0, 'duplicate_threshold' => 0.6, 'daily_publish_cap' => 1000 ) );
+
+		$this->seed_published( 7001, 'page', 'Existing Page', $this->words( 40, 'dup_' ) );
+		$this->seed_published( 7002, 'page', 'Target Page', $this->words( 40, 'orig_' ) );
+
+		// First edit: into a duplicate — opens the issue.
+		wp_update_post( array( 'ID' => 7002, 'post_content' => $this->words( 40, 'dup_' ) ) );
+
+		$issues = Mcpwp_SEO_Audit_Store::list_issues( array( 'post_id' => 7002, 'reveal_non_public' => true ) );
+		$this->assertSame( 'open', $issues['issues'][0]['status'] );
+
+		// Second edit: back to genuinely unique content — a REAL check
+		// runs (different text) and scores clean, resolving the issue.
+		wp_update_post( array( 'ID' => 7002, 'post_content' => $this->words( 40, 'genuinelyunique_' ) ) );
+
+		$issues_after = Mcpwp_SEO_Audit_Store::list_issues( array( 'post_id' => 7002, 'reveal_non_public' => true ) );
+		$duplicate_edit_issue = array_values( array_filter( $issues_after['issues'], function ( $i ) { return 'duplicate_edit' === $i['code']; } ) );
+		$this->assertSame( 'resolved', $duplicate_edit_issue[0]['status'], 'a later clean check resolves the open issue' );
+	}
+
+	public function test_guardrail_issues_expire_after_30_days(): void {
+		Mcpwp_SEO_Audit_Store::upsert_issue( array(
+			'post_id'  => 7011,
+			'title'    => 'A Page',
+			'url'      => 'http://example.test/a-page/',
+			'type'     => 'page',
+			'category' => 'content_guardrails',
+			'code'     => 'duplicate_edit',
+			'severity' => 'warning',
+			'message'  => 'Looks like a duplicate.',
+		) );
+
+		// Age the stored record past the 30-day expiry window directly —
+		// no clock-mocking needed, this store keys off last_seen_at.
+		$option_name = Mcpwp_SEO_Audit_Store::GUARDRAIL_ISSUES_OPTION;
+		$stored = get_option( $option_name, array() );
+		$key = array_key_first( $stored );
+		$stored[ $key ]['last_seen_at'] = gmdate( 'c', time() - ( 31 * DAY_IN_SECONDS ) );
+		update_option( $option_name, $stored, false );
+
+		$issues = Mcpwp_SEO_Audit_Store::list_issues( array( 'post_id' => 7011, 'reveal_non_public' => true ) );
+		$this->assertSame( 'resolved', $issues['issues'][0]['status'], 'an OPEN issue not re-flagged in 30+ days expires on its own' );
 	}
 
 	// -------------------------------------------------------------------------
@@ -1572,7 +1632,27 @@ final class ContentGuardrailsTest extends TestCase {
 	}
 
 	// -------------------------------------------------------------------------
-	// WARN-1: deep recursion through settings, denylist, templates
+	// WARN-1/NIT-1: deep recursion through settings, allowlist, templates
+
+	public function test_extract_text_from_elementor_excludes_dynamic_globals_link_and_image_and_enum_values(): void {
+		// #957 adversarial review round 5 NIT-1: an ALLOWLIST of copy
+		// keys, never including __dynamic__/__globals__ bindings, a
+		// link/image control's own sub-keys, or enum-like tokens sitting
+		// bare in a list.
+		$data = array( array(
+			'elType'   => 'widget',
+			'settings' => array(
+				'title'       => 'Real Copy Title',
+				'__dynamic__' => array( 'title' => '[elementor-tag id="abc123" name="post-title"]' ),
+				'__globals__' => array( 'title_color' => 'globals/colors?id=xyz' ),
+				'link'        => array( 'url' => 'https://example.test/', 'is_external' => '', 'nofollow' => '' ),
+				'image'       => array( 'id' => 42, 'url' => 'https://example.test/pic.jpg', 'alt' => 'a photo' ),
+				'alignment'   => array( 'left', 'center' ), // enum-like tokens in a bare list.
+			),
+		) );
+		$text = Mcpwp_Content_Guardrails::extract_text_from_elementor( $data );
+		$this->assertSame( 'Real Copy Title', $text );
+	}
 
 	public function test_extract_text_from_elementor_pulls_icon_box_title_and_description(): void {
 		$data = array( array(
@@ -1625,7 +1705,11 @@ final class ContentGuardrailsTest extends TestCase {
 		$this->assertStringNotContainsString( 'https://example.test/jordan.jpg', $text );
 	}
 
-	public function test_extract_text_from_elementor_pulls_referenced_template_text_one_level_deep(): void {
+	public function test_extract_text_from_elementor_never_expands_a_referenced_template(): void {
+		// #957 adversarial review round 5 WARN-1: a template's OWN text is
+		// NEVER pulled into a page's comparable text — round 4 briefly did
+		// this, which made every sibling page built from the same shared
+		// template score 0.6-0.8 against each other, a false positive.
 		$this->seed_published( 5001, 'elementor_library', 'A Template', '' );
 		$GLOBALS['_mcpwp_test_meta'][5001]['_elementor_data'] = wp_json_encode( array( array(
 			'elType' => 'widget', 'settings' => array( 'title' => 'Template Headline Text' ),
@@ -1637,32 +1721,125 @@ final class ContentGuardrailsTest extends TestCase {
 			'settings'   => array( 'template_id' => 5001 ),
 		) );
 		$text = Mcpwp_Content_Guardrails::extract_text_from_elementor( $data );
-		$this->assertStringContainsString( 'Template Headline Text', $text );
+		$this->assertStringNotContainsString( 'Template Headline Text', $text );
+		$this->assertSame( '', $text, 'a page with ONLY a template reference and no own copy extracts as empty' );
 	}
 
-	public function test_extract_text_from_elementor_guards_against_template_cycles(): void {
-		// Template A references template B, which references template A
-		// back — must not infinite-loop.
-		$this->seed_published( 5011, 'elementor_library', 'Template A', '' );
-		$this->seed_published( 5012, 'elementor_library', 'Template B', '' );
-		$GLOBALS['_mcpwp_test_meta'][5011]['_elementor_data'] = wp_json_encode( array( array(
-			'elType' => 'widget', 'settings' => array( 'title' => 'From A', 'template_id' => 5012 ),
-		) ) );
-		$GLOBALS['_mcpwp_test_meta'][5012]['_elementor_data'] = wp_json_encode( array( array(
-			'elType' => 'widget', 'settings' => array( 'title' => 'From B', 'template_id' => 5011 ),
+	public function test_measure_embedded_templates_reports_template_word_count_without_including_it_in_text(): void {
+		// The one-level lookup that remains is measurement-only — it feeds
+		// the thin-content warning's wording, never duplicate detection.
+		$this->seed_published( 5002, 'elementor_library', 'A Template', '' );
+		$template_body = $this->words( 400, 'tpl' );
+		$GLOBALS['_mcpwp_test_meta'][5002]['_elementor_data'] = wp_json_encode( array( array(
+			'elType' => 'widget', 'settings' => array( 'content' => $template_body ),
 		) ) );
 
 		$data = array( array(
-			'elType' => 'widget', 'settings' => array( 'title' => 'Root', 'template_id' => 5011 ),
+			'elType' => 'widget', 'settings' => array( 'content' => 'Five short own words here today', 'template_id' => 5002 ),
 		) );
+
+		$rc = new ReflectionMethod( 'Mcpwp_Content_Guardrails', 'measure_embedded_templates' );
+		$rc->setAccessible( true );
+		$info = $rc->invoke( null, $data );
+
+		$this->assertTrue( $info['has_templates'] );
+		$this->assertSame( 400, $info['template_word_count'] );
+
+		// And this same $data's OWN extracted text never includes the
+		// template's 400 words.
 		$text = Mcpwp_Content_Guardrails::extract_text_from_elementor( $data );
-		$this->assertStringContainsString( 'Root', $text );
-		$this->assertStringContainsString( 'From A', $text, 'one level deep from root' );
-		// "no recursion into further templates" — template B's OWN
-		// template_id reference (back to A) must not be followed, so
-		// "From B" is never reached and the cycle guard is not even the
-		// only thing preventing infinite recursion here.
-		$this->assertStringNotContainsString( 'From B', $text );
+		$this->assertStringNotContainsString( 'tpl0', $text );
+	}
+
+	public function test_shared_template_no_longer_makes_siblings_score_as_duplicates(): void {
+		// #957 adversarial review round 5 WARN-1 — the false positive
+		// round 4's template expansion created: 150 unique words + a
+		// 400-word SHARED template vs. a sibling with DIFFERENT unique
+		// words + the SAME template must not be flagged. Under round 4
+		// this scored 0.6-0.77 (the shared template dominating the
+		// comparison); under round 5 it must score near zero, since only
+		// each page's own text is ever compared.
+		Mcpwp_Content_Guardrails::enter_context();
+		Mcpwp_Content_Guardrails::update_settings( array( 'min_word_count' => 0, 'duplicate_threshold' => 0.5, 'daily_publish_cap' => 1000 ) );
+
+		$this->seed_published( 6001, 'elementor_library', 'Shared Template', '' );
+		$GLOBALS['_mcpwp_test_meta'][6001]['_elementor_data'] = wp_json_encode( array( array(
+			'elType' => 'widget', 'settings' => array( 'content' => $this->words( 400, 'tpl' ) ),
+		) ) );
+
+		// Sibling, already published: 150 unique words + the shared template.
+		$this->seed_published( 6002, 'page', 'Sibling Page', '' );
+		$GLOBALS['_mcpwp_test_meta'][6002]['_elementor_data'] = wp_json_encode( array(
+			array( 'elType' => 'widget', 'settings' => array( 'content' => $this->words( 150, 'siblingwords' ) ) ),
+			array( 'elType' => 'widget', 'settings' => array( 'template_id' => 6001 ) ),
+		) );
+
+		// New page: 150 DIFFERENT unique words + the SAME shared template.
+		$this->seed_draft( 6003, 'page', 'New Page', '' );
+		$GLOBALS['_mcpwp_test_meta'][6003]['_elementor_data'] = wp_json_encode( array(
+			array( 'elType' => 'widget', 'settings' => array( 'content' => $this->words( 150, 'newwords' ) ) ),
+			array( 'elType' => 'widget', 'settings' => array( 'template_id' => 6001 ) ),
+		) );
+
+		wp_update_post( array( 'ID' => 6003, 'post_status' => 'publish' ) );
+
+		$this->assertSame( 'publish', $GLOBALS['_mcpwp_test_posts'][6003]->post_status, 'a shared template must not, by itself, make two otherwise-unique pages duplicates of each other' );
+	}
+
+	public function test_icon_box_city_page_duplicate_is_still_refused_after_the_template_fix(): void {
+		// The round 4 WARN-1 fix (deep recursion through icon-box/repeater
+		// widgets) must still work after round 5 removed template
+		// expansion — the two fixes are independent.
+		Mcpwp_Content_Guardrails::enter_context();
+		Mcpwp_Content_Guardrails::update_settings( array( 'min_word_count' => 0, 'duplicate_threshold' => 0.5, 'daily_publish_cap' => 1000 ) );
+
+		$sibling_body = 'Fast local delivery within 24 hours guaranteed every single time for every customer near you today. Friendly expert support available around the clock every single day of the week for everyone.';
+		$this->seed_published( 6011, 'page', 'Denver Service Overview', $sibling_body );
+
+		$this->seed_draft( 6012, 'page', 'Aurora Service Overview', '' );
+		$GLOBALS['_mcpwp_test_meta'][6012]['_elementor_data'] = wp_json_encode( array(
+			array( 'elType' => 'widget', 'widgetType' => 'icon-box', 'settings' => array(
+				'title_text' => 'Fast local delivery within 24 hours guaranteed every single time for every customer near you today.',
+				'title_color' => '#FF0000',
+			) ),
+			array( 'elType' => 'widget', 'widgetType' => 'icon-box', 'settings' => array(
+				'title_text' => 'Friendly expert support available around the clock every single day of the week for everyone.',
+				'title_color' => '#0000FF',
+			) ),
+		) );
+
+		wp_update_post( array( 'ID' => 6012, 'post_status' => 'publish' ) );
+
+		$this->assertSame( 'draft', $GLOBALS['_mcpwp_test_posts'][6012]->post_status, 'the icon-box-built duplicate is still caught' );
+	}
+
+	public function test_five_words_plus_a_template_publishes_with_thin_and_template_warning(): void {
+		// #957 adversarial review round 5 WARN-1: "5 unique words + a
+		// template → publishes with the thin/template warning."
+		Mcpwp_Content_Guardrails::enter_context();
+		Mcpwp_Content_Guardrails::update_settings( array( 'min_word_count' => 150, 'duplicate_threshold' => 0.9, 'daily_publish_cap' => 1000 ) );
+
+		$this->seed_published( 6021, 'elementor_library', 'Shared Template', '' );
+		$GLOBALS['_mcpwp_test_meta'][6021]['_elementor_data'] = wp_json_encode( array( array(
+			'elType' => 'widget', 'settings' => array( 'content' => $this->words( 400, 'tpl' ) ),
+		) ) );
+
+		$this->seed_draft( 6022, 'page', 'Thin Page', '' );
+		$GLOBALS['_mcpwp_test_meta'][6022]['_elementor_data'] = wp_json_encode( array(
+			array( 'elType' => 'widget', 'settings' => array( 'content' => 'Five unique own words here' ) ),
+			array( 'elType' => 'widget', 'settings' => array( 'template_id' => 6021 ) ),
+		) );
+
+		$result = wp_update_post( array( 'ID' => 6022, 'post_status' => 'publish' ) );
+
+		$this->assertSame( 6022, $result );
+		$this->assertSame( 'publish', $GLOBALS['_mcpwp_test_posts'][6022]->post_status, 'thin content is warning-only, never a reason to downgrade' );
+
+		$response = array( 'id' => 6022 );
+		Mcpwp_Content_Guardrails::attach_notices_to_response( $response );
+		$this->assertTrue( $response['guardrails']['thin_content']['is_thin'] );
+		$warning_text = implode( ' ', $response['warnings'] );
+		$this->assertStringContainsString( 'shared templates', $warning_text );
 	}
 
 	// -------------------------------------------------------------------------
