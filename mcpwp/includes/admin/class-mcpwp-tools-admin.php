@@ -133,6 +133,11 @@ class Mcpwp_Tools_Admin {
 				'description' => __( 'Staging environments, push to staging/live', 'mcpwp' ),
 				'icon'        => 'dashicons-migrate',
 			),
+			'meta'                => array(
+				'name'        => __( 'Tool Search & Dispatch', 'mcpwp' ),
+				'description' => __( 'mcpwp_find_tools + mcpwp_call — reach a tool the core MCP profile does not advertise directly (#907)', 'mcpwp' ),
+				'icon'        => 'dashicons-search',
+			),
 		);
 	}
 

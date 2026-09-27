@@ -514,6 +514,29 @@ class Mcpwp_MCP_Tool_Annotations {
 			'idempotentHint'  => true,
 			'reason'          => 'POST, but not purely-additive by name (verb is "indexnow_submit", not one of is_purely_additive_by_name()\'s create/add/upload/clone/duplicate/import/submit/bulk_create/bulk_upload stems — "submit" only matches as the SECOND name segment, and this tool\'s second segment is "indexnow"), so the default-destructive-for-write-tools rule would otherwise mark it destructiveHint=true. Corrected false: Mcpwp_IndexNow::submit()/validate_explicit_urls() only ever notifies the shared IndexNow endpoint about URLs that already exist and are already publicly indexable — it does not create, overwrite, or delete anything in WordPress. openWorldHint=true: pings https://api.indexnow.org/indexnow (Mcpwp_IndexNow::ENDPOINT). idempotentHint=true: IndexNow\'s own protocol treats repeat notifications of the same URL as a no-op on the receiving end, and this tool\'s own effect on WordPress state (validation only) is identical on repeat calls with the same URLs.',
 		),
+
+		// --- Meta tools (#907): Mcpwp_MCP_Meta_Tools has no tool_map entry
+		// for either, so the base heuristic (readOnlyHint from tool_map's
+		// HTTP method) has nothing to read and would default both to
+		// readOnlyHint=false / destructiveHint=true. Right for mcpwp_call
+		// (it may dispatch anything, including a destructive write, so the
+		// worst case is the honest default) but wrong for mcpwp_find_tools,
+		// which only ever runs a keyword match over the tool catalog.
+
+		'mcpwp_find_tools' => array(
+			'readOnlyHint'    => true,
+			'destructiveHint' => false,
+			'openWorldHint'   => false,
+			'idempotentHint'  => true,
+			'reason'          => 'Mcpwp_REST_MCP answers it with an in-process keyword score over the already-filtered tool list (get_all_tools() + the caller\'s own category/role/Pro visibility) — no dispatch, no external call, no state change.',
+		),
+		'mcpwp_call' => array(
+			'readOnlyHint'    => false,
+			'destructiveHint' => true,
+			'openWorldHint'   => true,
+			'idempotentHint'  => false,
+			'reason'          => 'Dispatches an arbitrary named tool through the same tools/call path (resolve_mcpwp_call()) — its actual read/write/destructive/open-world/idempotent behaviour is whatever the wrapped tool declares, which is not known statically. Every hint here is deliberately the worst case (may write, may destroy, may reach an external system, a retry is not assumed safe) rather than the base heuristic\'s "no tool_map entry" default, which would otherwise call it readOnlyHint=false but destructiveHint=true only by accident of default_destructive_for_write_tools().',
+		),
 	);
 
 	/**
@@ -575,6 +598,12 @@ class Mcpwp_MCP_Tool_Annotations {
 		'wc_list_order_statuses'     => 'List order statuses',
 		'wc_list_customers'          => 'List customers',
 		'wc_get_customer'            => 'Get customer',
+
+		// Meta tools (#907): the humanizer does not strip the "mcpwp_"
+		// prefix (only "wp_"/"wc_"), so left uncurated these would read as
+		// "Mcpwp find tools" / "Mcpwp call".
+		'mcpwp_find_tools'           => 'Find tools',
+		'mcpwp_call'                 => 'Call a tool',
 	);
 
 	/**

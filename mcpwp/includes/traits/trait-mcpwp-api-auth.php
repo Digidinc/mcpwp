@@ -2979,17 +2979,20 @@ trait Mcpwp_Api_Auth {
 			'author'   => array(
 				'label'       => __( 'Author', 'mcpwp' ),
 				'description' => __( 'Content writing — pages, posts, media, taxonomy.', 'mcpwp' ),
-				'categories'  => array( 'content', 'media', 'taxonomy' ),
+				// 'meta' (#907): mcpwp_find_tools/mcpwp_call re-check the
+				// tool they actually dispatch against this same category
+				// list, so granting it widens discovery, never scope.
+				'categories'  => array( 'content', 'media', 'taxonomy', 'meta' ),
 			),
 			'designer' => array(
 				'label'       => __( 'Designer', 'mcpwp' ),
 				'description' => __( 'Visual building — Elementor, Gutenberg, media, site settings.', 'mcpwp' ),
-				'categories'  => array( 'elementor', 'elementor-build', 'elementor-templates', 'elementor-theme', 'elementor-info', 'gutenberg', 'media', 'site' ),
+				'categories'  => array( 'elementor', 'elementor-build', 'elementor-templates', 'elementor-theme', 'elementor-info', 'gutenberg', 'media', 'site', 'meta' ),
 			),
 			'editor'   => array(
 				'label'       => __( 'Editor', 'mcpwp' ),
 				'description' => __( 'Content + SEO management.', 'mcpwp' ),
-				'categories'  => array( 'content', 'media', 'taxonomy', 'seo', 'elementor', 'elementor-build', 'elementor-templates', 'elementor-theme', 'elementor-info' ),
+				'categories'  => array( 'content', 'media', 'taxonomy', 'seo', 'elementor', 'elementor-build', 'elementor-templates', 'elementor-theme', 'elementor-info', 'meta' ),
 			),
 			'custom'   => array(
 				'label'       => __( 'Custom', 'mcpwp' ),
@@ -3026,6 +3029,11 @@ trait Mcpwp_Api_Auth {
 			'events'              => __( 'Events', 'mcpwp' ),
 			'multisite'           => __( 'Multisite', 'mcpwp' ),
 			'staging'             => __( 'Staging', 'mcpwp' ),
+			// mcpwp_find_tools + mcpwp_call (#907) — kept distinct from
+			// every content/capability category so a custom role can be
+			// granted (or an admin can disable) tool discovery/dispatch
+			// independently of any of them.
+			'meta'                => __( 'Tool Search & Dispatch', 'mcpwp' ),
 		);
 	}
 

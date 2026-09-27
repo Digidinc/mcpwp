@@ -677,6 +677,16 @@ Every tool also carries a top-level `title` and `readOnlyHint`/`destructiveHint`
 `mcpwp/includes/mcp/class-mcpwp-mcp-tool-annotations.php` and the generated audit table at
 `mcpwp/docs/mcp-tool-annotations.md`.
 
+`tools/list` answers under one of two profiles (#907): `full` (default, every tool, unchanged) or
+`core` (~25 most-used tools, from `Mcpwp_REST_MCP::CORE_TOOL_PROFILE_TOOLS`, plus the meta tools
+`mcpwp_find_tools` — keyword search the full catalog, filtered to what the caller can currently
+call — and `mcpwp_call` — dispatch any tool by name through the exact same gates as calling it
+directly). For a client with a small tool-count budget (Cursor's 40-tool cap; a fixed token
+budget). Precedence: `?profile=core|full` query arg on the `/mcp` URL > site setting
+(`mcpwp_settings.mcp_tool_profile`, WP Admin > mcpwp > Settings) > `full`; an unrecognised value at
+either level falls through rather than failing the handshake. See
+`mcpwp/docs/MCP_NATIVE_ENDPOINT.md` for the client-facing writeup.
+
 Protocol version is negotiated per the spec (#906): `initialize` echoes a supported
 `protocolVersion` (`2024-11-05`, `2025-03-26`, `2025-06-18`, `2025-11-25`) and answers the latest for
 anything else — the handshake never fails on version. Every later request follows its

@@ -351,6 +351,7 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	// Load MCP tool registries
 	require_once MCPWP_PLUGIN_DIR . 'includes/mcp/class-mcpwp-mcp-tool-annotations.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/mcp/class-mcpwp-mcp-tool-registry.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/mcp/class-mcpwp-mcp-meta-tools.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/mcp/class-mcpwp-mcp-output-schema.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/mcp/class-mcpwp-integration.php';
 	// Free-tool category trait groups (mixed into Mcpwp_MCP_Free_Tools — G2 split).

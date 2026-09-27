@@ -327,6 +327,23 @@ class Mcpwp_Settings {
 			)
 		);
 
+		add_settings_field(
+			'mcp_tool_profile',
+			__( 'MCP Tool Profile', 'mcpwp' ),
+			array( $this, 'render_select_field' ),
+			'mcpwp_settings',
+			'mcpwp_general_section',
+			array(
+				'id'          => 'mcp_tool_profile',
+				'label_for'   => 'mcp_tool_profile',
+				'options'     => array(
+					'full' => __( 'Full — every tool (default)', 'mcpwp' ),
+					'core' => __( 'Core — ~25 tools + search/dispatch (smaller tools/list)', 'mcpwp' ),
+				),
+				'description' => __( 'Tools/list surface for MCP clients. "Core" trims the list to the most-used tools for a client with a small tool-count limit (e.g. Cursor\'s 40-tool cap); every other tool stays reachable via mcpwp_find_tools + mcpwp_call. A client can override this per-connection with a ?profile=core or ?profile=full query arg on its MCP endpoint URL.', 'mcpwp' ),
+			)
+		);
+
 		// GitHub Integration.
 		add_settings_field(
 			'github_token',
@@ -606,6 +623,13 @@ class Mcpwp_Settings {
 			// staging pushes. Raising this to 'admin' is an explicit administrator
 			// choice made in WP Admin > MCPWP > Settings.
 			'oauth_client_credentials_max_scope' => 'write',
+			// MCP tool profile (#907): 'full' keeps every tool this server
+			// has always advertised. 'core' trims tools/list to ~25 tools
+			// plus mcpwp_find_tools/mcpwp_call, for a client with a small
+			// tool-count budget (Cursor's 40-tool cap, a fixed token
+			// budget). A per-connection `?profile=` query arg on the /mcp
+			// URL overrides this site-wide default.
+			'mcp_tool_profile'        => 'full',
 			'alerts_enabled'          => false,
 			'alerts_window_minutes'   => 5,
 			'alerts_cooldown_minutes' => 15,
@@ -748,6 +772,13 @@ class Mcpwp_Settings {
 		$sanitized['oauth_client_credentials_max_scope'] = in_array( $cc_max_scope, array( 'read', 'write', 'admin' ), true )
 			? $cc_max_scope
 			: 'write';
+
+		// MCP tool profile (#907). Absent/unrecognised falls back to 'full',
+		// same as Mcpwp_REST_MCP::resolve_mcp_tool_profile()'s own fallback.
+		$tool_profile = isset( $input['mcp_tool_profile'] ) ? sanitize_key( (string) $input['mcp_tool_profile'] ) : '';
+		$sanitized['mcp_tool_profile'] = in_array( $tool_profile, array( 'full', 'core' ), true )
+			? $tool_profile
+			: 'full';
 
 		$new_secret = isset( $input['oauth_client_secret'] ) ? trim( (string) $input['oauth_client_secret'] ) : '';
 		if ( '' !== $new_secret ) {

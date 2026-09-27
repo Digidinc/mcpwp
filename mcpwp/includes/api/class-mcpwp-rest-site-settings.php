@@ -284,6 +284,13 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 			'github_token'            => 'secret',
 			'github_repo'             => 'text',
 			'option_allowlist'        => 'allowlist',
+			// MCP tool profile (#907): 'full' (default, every tool) or
+			// 'core' (~25 tools + mcpwp_find_tools/mcpwp_call). Resolved
+			// per-request in Mcpwp_REST_MCP::resolve_mcp_tool_profile(),
+			// which falls back to 'full' for anything not in the enum below
+			// rather than erroring — this validation exists so a deliberate
+			// write is caught at the door, not to be the only guard.
+			'mcp_tool_profile'        => 'enum:full,core',
 		);
 
 		foreach ( $allowed as $key => $rule ) {
@@ -346,6 +353,22 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 				$min   = (int) $parts[1];
 				$max   = (int) $parts[2];
 				$current[ $key ] = max( $min, min( $max, absint( $value ) ) );
+			} elseif ( 0 === strpos( $rule, 'enum:' ) ) {
+				$choices = explode( ',', substr( $rule, 5 ) );
+				$val     = sanitize_key( (string) $value );
+				if ( ! in_array( $val, $choices, true ) ) {
+					return $this->error_response(
+						'invalid_' . $key,
+						sprintf(
+							/* translators: 1: setting key, 2: comma-separated allowed values */
+							__( '%1$s must be one of: %2$s.', 'mcpwp' ),
+							$key,
+							implode( ', ', $choices )
+						),
+						400
+					);
+				}
+				$current[ $key ] = $val;
 			}
 
 			$updated[] = $key;
