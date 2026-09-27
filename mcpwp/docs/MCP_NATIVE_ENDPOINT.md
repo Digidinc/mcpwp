@@ -77,6 +77,44 @@ Response:
 
 Response includes all available tools (17 free + PRO tools if active).
 
+#### Tool profiles: `full` vs `core` (#907)
+
+A full `tools/list` can run to hundreds of tools — more than some clients can
+hold. Cursor caps a server at 40 tools, and every extra tool in the list is
+tokens spent before the model reads a single word of the conversation. MCPWP
+answers this with two profiles:
+
+- **`full`** (default) — every tool this site has, unchanged. This is what
+  every site got before this feature and what you still get if you do nothing.
+- **`core`** — a fixed set of ~25 of the most-used tools (onboarding, pages,
+  posts, search, Elementor, media, SEO, rendering/verification, menus,
+  approvals) plus two meta tools:
+  - **`mcpwp_find_tools`** — keyword-search the full catalog (`{"query": "...",
+    "limit": 20, "category": "seo"}`) and get back only tools you are
+    currently allowed to call.
+  - **`mcpwp_call`** — dispatch any tool by name (`{"name": "wp_get_seo",
+    "arguments": {...}}`), including one `core`'s tools/list does not
+    advertise directly. It runs through the exact same gates as calling that
+    tool directly — category, role, Pro, rate limit, idempotency — so nothing
+    is bypassed by wrapping a call in it.
+
+  In practice: search first, then call. `core` cuts a typical tools/list
+  payload by roughly 80% with no loss of capability — every tool `full` has is
+  still one `mcpwp_find_tools` + `mcpwp_call` away.
+
+Select the profile with a query arg on the endpoint URL itself, so a client
+can choose per-connection without changing anything site-wide:
+
+```
+POST https://yoursite.com/wp-json/mcpwp/v1/mcp?profile=core
+```
+
+Or set a site-wide default in WP Admin > mcpwp > Settings ("MCP Tool
+Profile"), or via `PUT /wp-json/mcpwp/v1/plugin-settings` with
+`{"mcp_tool_profile": "core"}`. Precedence: the `?profile=` query arg wins,
+then the site setting, then `full`. An unrecognised value at either level
+falls back rather than failing the connection.
+
 ### 3. Call Tool
 
 ```json
