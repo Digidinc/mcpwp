@@ -101,17 +101,25 @@ class Mcpwp_Page_Builder {
 
 		$effective_status = in_array( $status, array( 'draft', 'publish', 'private' ), true ) ? $status : 'draft';
 
-		// Content guardrails (#957): enforced centrally by
+		// Content guardrails (#957/#998): enforced centrally by
 		// Mcpwp_Content_Guardrails::on_insert_post_data() — not here. The
-		// page is created empty (Elementor data is written to postmeta
-		// separately, below) so the ramp cap still applies at create time
-		// but thin/duplicate correctly see no content yet — exactly the
-		// "Elementor-first page publishes with 0 words at create" case the
-		// false-positive fix exists for.
+		// built $elements are front-loaded into meta_input on THIS SAME
+		// wp_insert_post() call — a real wp_insert_post() feature that
+		// writes postmeta atomically alongside the post — the same
+		// technique create_landing_page() and clone_elementor_page() already
+		// use, so the guardrails gate judges thin/duplicate content against
+		// what this page ACTUALLY contains. Without it, the page used to be
+		// inserted with no Elementor data at all (written to postmeta only
+		// afterward, below), so the gate always saw 0 words: correctly
+		// harmless for the ramp/duplicate decision (thin content never
+		// downgrades — see resolve_comparable_texts()'s docblock) but a
+		// false "word_count: 0" reported back for a page with real,
+		// multi-section visible text (#998).
 		$page_id = wp_insert_post( array(
 			'post_title'  => sanitize_text_field( $title ),
 			'post_status' => $effective_status,
 			'post_type'   => 'page',
+			'meta_input'  => array( '_elementor_data' => $elements ),
 		) );
 
 		if ( is_wp_error( $page_id ) ) {
@@ -150,19 +158,35 @@ class Mcpwp_Page_Builder {
 
 		$page = get_post( $page_id );
 
-		return array(
-			'id'             => $page_id,
-			'title'          => $page->post_title,
-			'status'         => $page->post_status,
-			'link'           => get_permalink( $page_id ),
-			'edit_url'       => admin_url( "post.php?post={$page_id}&action=elementor" ),
-			'section_count'  => count( $elements ),
-			'save_method'    => isset( $save_result['save_method'] ) ? $save_result['save_method'] : null,
-			'meta_verified'  => $meta_verified,
-			'sections_saved' => $final_count,
-			'warnings'       => $warnings,
-			'debug'          => isset( $save_result['debug'] ) ? $save_result['debug'] : array(),
+		// set_elementor_data() decorates its own result with render_verified
+		// (and render_errors/renders_via_elementor when the render pipeline
+		// didn't complete) via the SAME decorate_render_status() every
+		// wp_set_elementor call goes through — pass it through here too so
+		// a caller doesn't have to know build_page's response used to be
+		// missing exactly the field its guide tells them to check (#998).
+		$response = array(
+			'id'              => $page_id,
+			'title'           => $page->post_title,
+			'status'          => $page->post_status,
+			'link'            => get_permalink( $page_id ),
+			'edit_url'        => admin_url( "post.php?post={$page_id}&action=elementor" ),
+			'section_count'   => count( $elements ),
+			'save_method'     => isset( $save_result['save_method'] ) ? $save_result['save_method'] : null,
+			'meta_verified'   => $meta_verified,
+			'sections_saved'  => $final_count,
+			'render_verified' => isset( $save_result['render_verified'] ) ? (bool) $save_result['render_verified'] : true,
+			'warnings'        => array_merge( $warnings, isset( $save_result['warnings'] ) ? (array) $save_result['warnings'] : array() ),
+			'debug'           => isset( $save_result['debug'] ) ? $save_result['debug'] : array(),
 		);
+
+		if ( isset( $save_result['render_errors'] ) ) {
+			$response['render_errors'] = $save_result['render_errors'];
+		}
+		if ( isset( $save_result['renders_via_elementor'] ) ) {
+			$response['renders_via_elementor'] = $save_result['renders_via_elementor'];
+		}
+
+		return $response;
 	}
 
 	/**
