@@ -55,6 +55,51 @@ final class Mcpwp_Operation_Weights {
 	);
 
 	/**
+	 * Site graph read routes (#943 S2 review W6), by normalised route. A
+	 * whole-graph scan (the /graph summary, any /graph/query) costs 5; one
+	 * node, or a depth-1 neighbor page, costs 1; a depth-2 walk costs 5.
+	 *
+	 * @var array<string,int>
+	 */
+	const GRAPH_ROUTE_WEIGHTS = array(
+		'/graph'           => 5,
+		'/graph/query'     => 5,
+		'/graph/node'      => 1,
+		'/graph/neighbors' => 1,
+	);
+
+	/** Weight of a depth-2 /graph/neighbors walk. */
+	const GRAPH_DEPTH2_WEIGHT = 5;
+
+	/**
+	 * Graph tools and the route each dispatches to.
+	 *
+	 * @var array<string,string>
+	 */
+	const GRAPH_TOOL_ROUTES = array(
+		'wp_graph_query'     => '/graph/query',
+		'wp_graph_node'      => '/graph/node',
+		'wp_graph_neighbors' => '/graph/neighbors',
+	);
+
+	/**
+	 * Weight of one site graph read, or null when the route is not one.
+	 *
+	 * @param string $path   Normalised route.
+	 * @param array  $params Request parameters.
+	 * @return int|null
+	 */
+	public static function graph_weight( $path, array $params ) {
+		if ( ! array_key_exists( $path, self::GRAPH_ROUTE_WEIGHTS ) ) {
+			return null;
+		}
+		if ( '/graph/neighbors' === $path && isset( $params['depth'] ) && is_numeric( $params['depth'] ) && 2 === (int) $params['depth'] ) {
+			return self::GRAPH_DEPTH2_WEIGHT;
+		}
+		return self::GRAPH_ROUTE_WEIGHTS[ $path ];
+	}
+
+	/**
 	 * Spend units of one credential-spending or egress call (#752 F9).
 	 */
 	const SPEND_EGRESS_WEIGHT = 25;
@@ -352,6 +397,9 @@ final class Mcpwp_Operation_Weights {
 
 		$spec    = array_key_exists( $tool_name, self::TOOL_WEIGHTS ) ? self::TOOL_WEIGHTS[ $tool_name ] : null;
 		$default = null !== $spec ? (int) $spec['weight'] : 1;
+		if ( array_key_exists( $tool_name, self::GRAPH_TOOL_ROUTES ) ) {
+			$default = (int) self::graph_weight( self::GRAPH_TOOL_ROUTES[ $tool_name ], $arguments );
+		}
 
 		// #891: a `scoped` tool named its posts (id or ids) rather than
 		// asking for a whole post type or the whole site — one post, or an
@@ -524,6 +572,11 @@ final class Mcpwp_Operation_Weights {
 			if ( $spec['route'] === $path ) {
 				return self::tool_weight( $tool_name, $params );
 			}
+		}
+
+		$graph = self::graph_weight( $path, $params );
+		if ( null !== $graph ) {
+			return max( $graph, self::list_count( $params ) );
 		}
 
 		return max( 1, self::list_count( $params ) );

@@ -8,18 +8,18 @@ Single source of truth for every override below: `mcpwp/includes/mcp/class-mcpwp
 
 Custom tools registered via the `mcpwp_register_tools` filter (`Mcpwp_Custom_Tool_Registry`) are not in this table — their name, method, destructive/open-world flags and title are declared by the registrant at registration time (see that class's docblock for the contract). That registry explicitly keeps the *old*, pre-2026-09-26 default (`destructiveHint` false unless the registrant sets `destructive => true`) via `default_destructive_for_write_tools()`, so third-party tools are unaffected by the stricter first-party default below.
 
-**Total tools audited: 308**
-- free: 177
+**Total tools audited: 311**
+- free: 180
 - pro: 118
 - ai integration: 8
 - figma integration (Pro-gated): 5
 - destructive: 103
-- read-only: 146
+- read-only: 149
 - open-world: 37
-- idempotent: 200
+- idempotent: 203
 - tools with an explicit annotation override: 105
 
-(+4 since the 304-tool baseline: wp_get_ai_crawler_policy, wp_set_ai_crawler_policy, wp_indexnow_status, wp_indexnow_submit — #937's AI crawler policy + IndexNow feature.)
+(+4 since the 304-tool baseline: wp_get_ai_crawler_policy, wp_set_ai_crawler_policy, wp_indexnow_status, wp_indexnow_submit — #937's AI crawler policy + IndexNow feature. +3 more: wp_graph_node, wp_graph_neighbors, wp_graph_query — #943 S2's site graph read tools, all read-only GET with curated titles.)
 
 | Tool | Tier | Method | Title | RO | Destr | Idem | OW | Reason |
 |---|---|---|---|---|---|---|---|---|
@@ -124,6 +124,9 @@ Custom tools registered via the `mcpwp_register_tools` filter (`Mcpwp_Custom_Too
 | `wp_get_widget_schema` | free | GET | Get widget schema | Y | - | Y | - | Read-only (GET/HEAD/OPTIONS): no environment modification, so not destructive. |
 | `wp_get_woocommerce_seo_report` | free | GET | Get WooCommerce SEO report | Y | - | Y | - | Read-only (GET/HEAD/OPTIONS): no environment modification, so not destructive. |
 | `wp_get_workflow` | free | GET | Get workflow | Y | - | Y | - | Read-only (GET/HEAD/OPTIONS): no environment modification, so not destructive. |
+| `wp_graph_neighbors` | free | GET | Get site graph neighbors | Y | - | Y | - | Read-only (GET/HEAD/OPTIONS): no environment modification, so not destructive. |
+| `wp_graph_node` | free | GET | Get site graph node | Y | - | Y | - | Read-only (GET/HEAD/OPTIONS): no environment modification, so not destructive. |
+| `wp_graph_query` | free | GET | Query site graph | Y | - | Y | - | Read-only (GET/HEAD/OPTIONS): no environment modification, so not destructive. |
 | `wp_indexnow_status` | free | GET | IndexNow status | Y | - | Y | - | Reviewed, matches default: pure read of stored IndexNow settings/key/queue/last-result state (Mcpwp_REST_AI_Presence::get_indexnow_status() -> Mcpwp_IndexNow::get_status()) — no external call, no write. |
 | `wp_indexnow_submit` | free | POST | Submit to IndexNow | - | - | Y | Y | POST, but not purely-additive by name ("submit" only matches as the SECOND name segment; this tool's second segment is "indexnow"), so the default rule would otherwise mark it destructive. Corrected false: only notifies the shared IndexNow endpoint about URLs that already exist and are already publicly indexable — creates/overwrites/deletes nothing in WordPress. Pings https://api.indexnow.org/indexnow (open-world). Idempotent: repeat notification of the same URLs is a no-op on the receiving end and this tool's own effect on WordPress state (validation only) is unchanged on repeat calls. |
 | `wp_import_search_performance` | free | POST | Import search performance | - | Y | - | - | Evicts the oldest imports/rows once storage exceeds Mcpwp_Search_Performance::MAX_IMPORTS/MAX_ROWS (array_slice() after array_unshift()/array_merge()) — a real deletion path once the cap is reached, not purely additive despite the "import_" verb. |

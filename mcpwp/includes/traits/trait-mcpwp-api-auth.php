@@ -726,6 +726,30 @@ trait Mcpwp_Api_Auth {
 			// Figma tools and wp_list_page_templates are 'site' tools.
 			'/figma'                                => 'site',
 			'/templates/page'                       => 'site',
+
+			// #943 S2 adversarial review, BLOCK-1: every route below is the REST
+			// target of a Free or Pro MCP tool but used to classify as '' (ungated),
+			// so a key whose role lacks the tool's category — or a site that had
+			// disabled that category — could still reach it directly, through
+			// /batch, or through resources/read, while /mcp refused the same tool.
+			// The site graph was the data-egress case: a designer-role read+write
+			// key read every draft through /graph/query. Each entry matches the
+			// dispatching tool's category; RouteCategoryToolParityTest now fails
+			// if any tool route resolves to '' or to a different category.
+			// 'site'-category tool routes (/site-info, /onboard, /menus, ...) are
+			// deliberately NOT added: KeyCategoryRestrictionAuthPlaneTest and
+			// BridgeAuthTest pin them as reachable by author/editor keys (including
+			// migrated 2.8 spai_ keys), and gating them is an owner decision. The
+			// parity test lists them as a known, reported exemption.
+			'/graph'                                => 'content',
+			'/fetch'                                => 'content',
+			'/languages'                            => 'content',
+			'/ai-crawlers'                          => 'seo',
+			'/indexnow'                             => 'seo',
+			'/google-indexing'                      => 'seo',
+			'/plugin-settings'                      => 'admin',
+			'/update'                               => 'admin',
+			'/cloudflare'                           => 'admin',
 		);
 	}
 
@@ -1086,6 +1110,18 @@ trait Mcpwp_Api_Auth {
 	 * @return int
 	 */
 	protected function request_rate_weight( $request ) {
+		// Site graph reads (#943 S2 review round 2, W6): a direct REST call is
+		// priced the same as the tool that dispatches to it, through the one
+		// graph_weight() table. An internal /mcp or /batch sub-request never
+		// reaches this (it takes the unmetered verify_api_key_auth_only() path),
+		// so a tools/call that already charged the weight is not charged twice.
+		if ( class_exists( 'Mcpwp_Operation_Weights' ) && method_exists( $request, 'get_route' ) ) {
+			$params = method_exists( $request, 'get_params' ) ? (array) $request->get_params() : array();
+			$graph  = Mcpwp_Operation_Weights::graph_weight( Mcpwp_Operation_Weights::normalize_route( (string) $request->get_route() ), $params );
+			if ( null !== $graph ) {
+				return $graph;
+			}
+		}
 		return 1;
 	}
 
@@ -1905,6 +1941,11 @@ trait Mcpwp_Api_Auth {
 			// pings an external endpoint with arbitrary caller-supplied URLs.
 			// Admin scope only; /indexnow/status stays read.
 			'/mcpwp/v1/indexnow',
+			// Site graph (#943 S2): /graph/rebuild reschedules a full
+			// backfill pass over every covered post — a real, if bounded,
+			// cost the owner should control. Every other /graph/* route is
+			// GET-only and stays at the read default.
+			'/mcpwp/v1/graph/rebuild',
 		);
 
 		foreach ( $admin_write_routes as $admin_write_route ) {

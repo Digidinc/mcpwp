@@ -34,7 +34,7 @@ Available on all installs. Gated only by API key scope.
 
 **Webhooks:** wp_list_webhooks, wp_create_webhook, wp_update_webhook, wp_delete_webhook, wp_test_webhook, wp_list_webhook_events, wp_list_webhook_logs
 
-**SEO (free subset):** wp_get_seo_issues, wp_run_seo_autofix_plan, wp_validate_seo_readiness, wp_audit_media_seo, wp_audit_content_quality, wp_get_content_coherence_report, wp_validate_internal_links, wp_validate_structured_data, wp_suggest_internal_links, wp_apply_internal_link, wp_get_seo_trends, wp_get_content_graph, wp_import_search_performance
+**SEO (free subset):** wp_get_seo_issues, wp_run_seo_autofix_plan, wp_validate_seo_readiness, wp_audit_media_seo, wp_audit_content_quality, wp_get_content_coherence_report, wp_validate_internal_links, wp_validate_structured_data, wp_suggest_internal_links, wp_apply_internal_link, wp_get_seo_trends, wp_get_content_graph, wp_import_search_performance, wp_graph_query, wp_graph_node, wp_graph_neighbors (site graph read tools, #943 — Free by owner decision; they sit in the `content` tool category)
 
 **Analytics:** wp_analytics, wp_fetch
 

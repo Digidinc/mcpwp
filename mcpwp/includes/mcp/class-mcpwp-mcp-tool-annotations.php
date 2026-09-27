@@ -543,6 +543,11 @@ class Mcpwp_MCP_Tool_Annotations {
 		// word order ("IndexNow submit") — same convention as
 		// wp_submit_to_google_index -> "Submit to Google index".
 		'wp_indexnow_submit'                   => 'Submit to IndexNow',
+		// Site graph read tools (#943 S2): the humanizer would read these as
+		// "Graph node" / "Graph query", which name a thing rather than an action.
+		'wp_graph_node'                        => 'Get site graph node',
+		'wp_graph_neighbors'                   => 'Get site graph neighbors',
+		'wp_graph_query'                       => 'Query site graph',
 
 		// wc_* tools: the humanizer would prefix every one with "WooCommerce"
 		// (from the wc_ stem), which is redundant once the tool is grouped
