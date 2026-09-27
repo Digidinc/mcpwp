@@ -291,6 +291,14 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 					'default'     => 'preserve',
 					'description' => 'How the template\'s document settings meet the target page\'s. preserve (default): the page keeps every setting it already has, and only gains ones it lacks — applying a template never silently restyles a page\'s canvas, title visibility or page CSS. replace: the page takes the template\'s document wholesale. merge: the template wins per key, the page keeps what the template does not mention. The response reports applied / preserved / skipped by name.',
 				),
+			),
+			null,
+			array(
+				array(
+					'id' => 501,
+					'page_id' => 42,
+					'page_settings_mode' => 'merge',
+				),
 			)
 		);
 
@@ -517,6 +525,29 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 					'type'        => 'string',
 					'description' => 'Page status: draft (default), publish, private',
 					'default'     => 'draft',
+				),
+			),
+			null,
+			array(
+				array(
+					'title' => 'Contact Us',
+					'sections' => array(
+						array(
+							'type' => 'hero',
+							'heading' => 'Get In Touch',
+							'subheading' => 'We would love to hear from you',
+							'cta_text' => 'Contact Us',
+							'cta_url' => '#contact-form',
+							'background' => '#1A1A2E',
+						),
+						array(
+							'type' => 'contact_form',
+							'heading' => 'Send a Message',
+							'form_id' => '1',
+							'plugin' => 'cf7',
+						),
+					),
+					'status' => 'draft',
 				),
 			)
 		);
@@ -776,6 +807,16 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 					'description' => 'Validate and normalize without saving',
 					'default'     => false,
 				),
+			),
+			null,
+			array(
+				array(
+					'title' => 'Google Analytics',
+					'code' => '<script>console.log("ga loaded");</script>',
+					'location' => 'head',
+					'priority' => 1,
+					'status' => 'draft',
+				),
 			)
 		);
 
@@ -922,6 +963,26 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 						'items' => array( 'type' => 'string' ),
 					),
 				),
+			),
+			null,
+			array(
+				array(
+					'id' => 88,
+					'conditions' => array(
+						array(
+							'include',
+							'general',
+							'singular',
+							'post',
+						),
+						array(
+							'exclude',
+							'general',
+							'singular',
+							'page',
+						),
+					),
+				),
 			)
 		);
 
@@ -988,6 +1049,15 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 					'type'        => 'boolean',
 					'description' => 'Validate without creating or publishing the template (#828: previously ignored here, so a dry run still created and published the template).',
 					'default'     => false,
+				),
+			),
+			null,
+			array(
+				array(
+					'title' => 'Site Footer',
+					'type' => 'footer',
+					'scope' => 'entire_site',
+					'dry_run' => true,
 				),
 			)
 		);

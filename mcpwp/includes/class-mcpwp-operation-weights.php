@@ -83,6 +83,15 @@ final class Mcpwp_Operation_Weights {
 	);
 
 	/**
+	 * MCP tool names that dispatch to the /batch route — the tool a bulk job
+	 * calls by name (wp_batch) and its older alias (wp_batch_update), both
+	 * carrying their operations in an `operations` argument (#1008).
+	 *
+	 * @var string[]
+	 */
+	const BATCH_TOOL_NAMES = array( 'wp_batch', 'wp_batch_update' );
+
+	/**
 	 * Weight of one site graph read, or null when the route is not one.
 	 *
 	 * @param string $path   Normalised route.
@@ -97,6 +106,60 @@ final class Mcpwp_Operation_Weights {
 			return self::GRAPH_DEPTH2_WEIGHT;
 		}
 		return self::GRAPH_ROUTE_WEIGHTS[ $path ];
+	}
+
+	/**
+	 * Rate-limit slots one batch operation costs (#1008).
+	 *
+	 * A /graph* sub-request costs its graph_weight(), same as reaching that
+	 * route directly or through tools/call — a caller cannot dodge the graph
+	 * weight by wrapping the read in a batch operation instead. Anything
+	 * else costs the items its own body carries (list_count()), at least
+	 * one — the same "graph weight, else list count" shape spend_weight()
+	 * already prices a single dispatched route with.
+	 *
+	 * Reads `path`/`body` directly off the raw operation as sent — before
+	 * validation — so a malformed operation that would be refused at
+	 * dispatch still costs its slot up front, matching how every other
+	 * operation in the batch is counted before any of them run.
+	 *
+	 * @param mixed $operation One batch operation ({method, path, body}).
+	 * @return int At least 1.
+	 */
+	public static function batch_operation_weight( $operation ) {
+		if ( ! is_array( $operation ) ) {
+			return 1;
+		}
+
+		$path = isset( $operation['path'] ) && is_string( $operation['path'] ) ? $operation['path'] : '';
+		$body = isset( $operation['body'] ) && is_array( $operation['body'] ) ? $operation['body'] : array();
+
+		$graph = self::graph_weight( self::normalize_route( $path ), $body );
+
+		return null !== $graph ? max( $graph, self::list_count( $body ) ) : max( 1, self::list_count( $body ) );
+	}
+
+	/**
+	 * Rate-limit slots a whole list of batch operations costs — the sum of
+	 * batch_operation_weight() over each one (#1008). Shared by the /batch
+	 * controller's request_rate_weight() and the /mcp tools/call path's
+	 * tool_weight() for wp_batch / wp_batch_update, so a caller cannot reach
+	 * the same handler through the other door for a lower price.
+	 *
+	 * @param mixed $operations Batch operations.
+	 * @return int Zero when there is nothing to charge.
+	 */
+	public static function batch_operations_weight( $operations ) {
+		if ( ! is_array( $operations ) || empty( $operations ) ) {
+			return 0;
+		}
+
+		$weight = 0;
+		foreach ( $operations as $operation ) {
+			$weight += self::batch_operation_weight( $operation );
+		}
+
+		return $weight;
 	}
 
 	/**
@@ -399,6 +462,16 @@ final class Mcpwp_Operation_Weights {
 		$default = null !== $spec ? (int) $spec['weight'] : 1;
 		if ( array_key_exists( $tool_name, self::GRAPH_TOOL_ROUTES ) ) {
 			$default = (int) self::graph_weight( self::GRAPH_TOOL_ROUTES[ $tool_name ], $arguments );
+		}
+
+		// #1008: wp_batch / wp_batch_update carry their own operations list,
+		// which $weight above already counted one slot per item — but a
+		// /graph* operation inside that list costs its graph weight, not
+		// one, same as reaching it directly or through tools/call. Priced
+		// from the same batch_operations_weight() the /batch controller
+		// uses, so the two entry points to the same handler cannot disagree.
+		if ( in_array( $tool_name, self::BATCH_TOOL_NAMES, true ) ) {
+			$default = self::batch_operations_weight( isset( $arguments['operations'] ) ? $arguments['operations'] : null );
 		}
 
 		// #891: a `scoped` tool named its posts (id or ids) rather than
