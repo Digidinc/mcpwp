@@ -36,10 +36,13 @@ require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-guides.php';
 
 final class McpResourceTemplatesTest extends TestCase {
 
-	private const PUB_PAGE_ID    = 8501;
-	private const DRAFT_PAGE_ID  = 8502;
-	private const PUB_POST_ID    = 8601;
-	private const ATTACHMENT_ID  = 8701;
+	private const PUB_PAGE_ID     = 8501;
+	private const DRAFT_PAGE_ID   = 8502;
+	private const PUB_POST_ID     = 8601;
+	private const ATTACHMENT_ID   = 8701;
+	private const PRIVATE_POST_ID = 8602;
+	private const TRASHED_PAGE_ID = 8503;
+	private const FUTURE_POST_ID  = 8603;
 
 	protected function setUp(): void {
 		$GLOBALS['mcpwp_test_options']             = array();
@@ -102,6 +105,36 @@ final class McpResourceTemplatesTest extends TestCase {
 					'post_type'   => 'attachment',
 					'post_title'  => 'some-image.jpg',
 					'post_status' => 'inherit',
+				)
+			),
+			self::PRIVATE_POST_ID => new WP_Post(
+				array(
+					'ID'           => self::PRIVATE_POST_ID,
+					'post_type'    => 'post',
+					'post_title'   => 'Private Post',
+					'post_name'    => 'private-post',
+					'post_status'  => 'private',
+					'post_content' => 'Private post body.',
+				)
+			),
+			self::TRASHED_PAGE_ID => new WP_Post(
+				array(
+					'ID'           => self::TRASHED_PAGE_ID,
+					'post_type'    => 'page',
+					'post_title'   => 'Trashed Page',
+					'post_name'    => 'trashed-page',
+					'post_status'  => 'trash',
+					'post_content' => 'Trashed page body.',
+				)
+			),
+			self::FUTURE_POST_ID => new WP_Post(
+				array(
+					'ID'           => self::FUTURE_POST_ID,
+					'post_type'    => 'post',
+					'post_title'   => 'Scheduled Post',
+					'post_name'    => 'scheduled-post',
+					'post_status'  => 'future',
+					'post_content' => 'Scheduled post body.',
 				)
 			),
 		);
@@ -262,8 +295,11 @@ final class McpResourceTemplatesTest extends TestCase {
 
 		$data = $this->dispatch( $controller, 'resources/read', array( 'uri' => 'mcpwp://page/' . self::DRAFT_PAGE_ID ), $key );
 
+		// Folded into the single shared not-found shape (#1015 review round
+		// 1, B1) — no route-specific 'code' survives; see
+		// test_page_template_hidden_missing_and_wrong_type_all_answer_identically().
 		$this->assertArrayHasKey( 'error', $data );
-		$this->assertSame( 'not_found', $data['error']['data']['code'] );
+		$this->assertSame( -32002, $data['error']['code'] );
 	}
 
 	public function test_page_template_draft_visible_to_write_key(): void {
@@ -308,6 +344,94 @@ final class McpResourceTemplatesTest extends TestCase {
 		$this->assertNull( $summary['template'] );
 	}
 
+	/**
+	 * #1015 adversarial review round 1, B1: a hidden draft/private/future/
+	 * trashed post, an attachment id, and a genuinely nonexistent id must
+	 * answer with the exact same error — same code, same message, same
+	 * data shape (only the echoed `uri` differs, and that is already known
+	 * to the caller). Before this fix, missing/wrong-type used -32002 with a
+	 * fixed message while a hidden post fell through to -32003 carrying the
+	 * inner route's own "Page not found."/"Post not found." — an oracle that
+	 * let a read-only caller learn a hidden post exists, and its type,
+	 * purely from which error shape came back.
+	 */
+	public function test_page_template_hidden_missing_and_wrong_type_all_answer_identically(): void {
+		$controller = new Mcpwp_REST_MCP();
+		$key        = $controller->create_scoped_api_key( 'reader', array( 'read' ), 'admin' )['key'];
+
+		$cases = array(
+			'nonexistent id'  => 999999,
+			'attachment id'   => self::ATTACHMENT_ID,
+			'draft page'      => self::DRAFT_PAGE_ID,
+			'private post'    => self::PRIVATE_POST_ID,
+			'trashed page'    => self::TRASHED_PAGE_ID,
+			'future post'     => self::FUTURE_POST_ID,
+		);
+
+		$errors = array();
+		foreach ( $cases as $label => $post_id ) {
+			$data = $this->dispatch( $controller, 'resources/read', array( 'uri' => 'mcpwp://page/' . $post_id ), $key );
+			$this->assertArrayHasKey( 'error', $data, "Expected an error for {$label}." );
+			// Strip the echoed uri (the only field allowed to differ — it is
+			// exactly what the caller supplied, so it discloses nothing new)
+			// before comparing the rest byte-for-byte.
+			$error = $data['error'];
+			unset( $error['data']['uri'] );
+			$errors[ $label ] = $error;
+		}
+
+		$canonical = $errors['nonexistent id'];
+		foreach ( $errors as $label => $error ) {
+			$this->assertSame( $canonical, $error, "{$label} must answer identically to a nonexistent id." );
+		}
+	}
+
+	public function test_page_template_draft_visible_to_write_key_is_still_distinguishable_from_not_found(): void {
+		// Regression guard alongside the identical-error test above: a
+		// VISIBLE draft (write-scope key) must still return real data, not
+		// the shared not-found — the fix must not have over-corrected into
+		// hiding everything.
+		$controller = new Mcpwp_REST_MCP();
+		$key        = $controller->create_scoped_api_key( 'writer', array( 'read', 'write' ), 'admin' )['key'];
+
+		$data = $this->dispatch( $controller, 'resources/read', array( 'uri' => 'mcpwp://page/' . self::DRAFT_PAGE_ID ), $key );
+		$this->assertArrayHasKey( 'result', $data );
+	}
+
+	/**
+	 * #1015 adversarial review round 1, W1: a query string on a template URI
+	 * must be refused outright, never layered onto the inner request's
+	 * params — mcpwp://page/{id} never reads its own query string at all
+	 * (unlike the six FIXED resources, e.g. /pages?per_page=…, where an
+	 * explicit override is intentional and unrelated to this fix), so any
+	 * query string here is refused up front rather than silently ignored.
+	 */
+	public function test_page_template_rejects_a_query_string(): void {
+		$controller = new Mcpwp_REST_MCP();
+		$key        = $controller->create_scoped_api_key( 'admin', array( 'read', 'write' ), 'admin' )['key'];
+
+		$data = $this->dispatch( $controller, 'resources/read', array( 'uri' => 'mcpwp://page/' . self::PUB_PAGE_ID . '?foo=bar' ), $key );
+
+		$this->assertArrayHasKey( 'error', $data );
+		$this->assertSame( -32602, $data['error']['code'] );
+		$this->assertEmpty( $GLOBALS['mcpwp_test_dispatched_routes'], 'A rejected query string must never reach the inner dispatch.' );
+	}
+
+	/**
+	 * #1015 adversarial review round 1, N1: `$` in a non-multiline PCRE
+	 * pattern also matches just before a trailing "\n" — a URI carrying one
+	 * must not be treated as a valid id.
+	 */
+	public function test_page_template_rejects_a_trailing_newline(): void {
+		$controller = new Mcpwp_REST_MCP();
+		$key        = $controller->create_scoped_api_key( 'admin', array( 'read', 'write' ), 'admin' )['key'];
+
+		$data = $this->dispatch( $controller, 'resources/read', array( 'uri' => 'mcpwp://page/' . self::PUB_PAGE_ID . "\n" ), $key );
+
+		$this->assertArrayHasKey( 'error', $data );
+		$this->assertSame( -32002, $data['error']['code'] );
+	}
+
 	// ── mcpwp://memory/{namespace} ────────────────────────────────────────
 
 	public function test_memory_template_denies_a_role_that_lacks_site_category(): void {
@@ -336,6 +460,54 @@ final class McpResourceTemplatesTest extends TestCase {
 		$this->assertSame( 'identity', $result['memories'][0]['namespace'] );
 		$this->assertSame( 'brand_voice', $result['memories'][0]['key'] );
 		$this->assertSame( 'Friendly and direct', $result['memories'][0]['value'] );
+	}
+
+	/**
+	 * #1015 adversarial review round 1, W1: resolve_mcp_resource() strips the
+	 * query string when extracting the KEY ("memory/identity"), so the
+	 * namespace it puts on the sub-request's query params is always
+	 * "identity" — but handle_resources_read()'s own query-override block
+	 * (kept, on purpose, for the six FIXED resources) then re-parsed the
+	 * ORIGINAL uri's query string and overwrote that param, so
+	 * mcpwp://memory/identity?namespace=constraints actually served
+	 * "constraints" under the "identity" URI, and "?namespace=" (empty)
+	 * silently cleared the filter to "everything". Both must now be refused
+	 * outright instead.
+	 */
+	public function test_memory_template_rejects_a_query_string_override(): void {
+		Mcpwp_Site_Memory::remember( 'identity', 'id_key', 'identity value' );
+		Mcpwp_Site_Memory::remember( 'constraints', 'con_key', 'constraints value' );
+
+		$controller = new Mcpwp_REST_MCP();
+		$key        = $controller->create_scoped_api_key( 'admin', array( 'read', 'write' ), 'admin' )['key'];
+
+		$data = $this->dispatch( $controller, 'resources/read', array( 'uri' => 'mcpwp://memory/identity?namespace=constraints' ), $key );
+
+		$this->assertArrayHasKey( 'error', $data );
+		$this->assertSame( -32602, $data['error']['code'] );
+		$this->assertEmpty( $GLOBALS['mcpwp_test_dispatched_routes'], 'A rejected query override must never reach the inner /memory dispatch.' );
+
+		// The "clear the filter" variant must be refused too.
+		$data2 = $this->dispatch( $controller, 'resources/read', array( 'uri' => 'mcpwp://memory/identity?namespace=' ), $key );
+		$this->assertArrayHasKey( 'error', $data2 );
+		$this->assertSame( -32602, $data2['error']['code'] );
+	}
+
+	/**
+	 * #1015 adversarial review round 1, N2: the memory/guide key match used
+	 * to be case-INsensitive while page/brand were already case-sensitive.
+	 * Now consistently case-sensitive across all four.
+	 */
+	public function test_memory_template_namespace_match_is_case_sensitive(): void {
+		Mcpwp_Site_Memory::remember( 'identity', 'k', 'v' );
+
+		$controller = new Mcpwp_REST_MCP();
+		$key        = $controller->create_scoped_api_key( 'admin', array( 'read', 'write' ), 'admin' )['key'];
+
+		$data = $this->dispatch( $controller, 'resources/read', array( 'uri' => 'mcpwp://Memory/identity' ), $key );
+
+		$this->assertArrayHasKey( 'error', $data );
+		$this->assertSame( -32002, $data['error']['code'] );
 	}
 
 	// ── mcpwp://guide/{topic} ─────────────────────────────────────────────
@@ -370,6 +542,27 @@ final class McpResourceTemplatesTest extends TestCase {
 		$this->assertSame( 'invalid_topic', $data['error']['data']['code'] );
 	}
 
+	public function test_guide_template_rejects_a_query_string(): void {
+		$controller = new Mcpwp_REST_MCP();
+		$key        = $controller->create_scoped_api_key( 'admin', array( 'read', 'write' ), 'admin' )['key'];
+
+		$data = $this->dispatch( $controller, 'resources/read', array( 'uri' => 'mcpwp://guide/elementor?topic=seo' ), $key );
+
+		$this->assertArrayHasKey( 'error', $data );
+		$this->assertSame( -32602, $data['error']['code'] );
+		$this->assertEmpty( $GLOBALS['mcpwp_test_dispatched_routes'], 'A rejected query string must never reach the inner /guides dispatch.' );
+	}
+
+	public function test_guide_template_topic_match_is_case_sensitive(): void {
+		$controller = new Mcpwp_REST_MCP();
+		$key        = $controller->create_scoped_api_key( 'admin', array( 'read', 'write' ), 'admin' )['key'];
+
+		$data = $this->dispatch( $controller, 'resources/read', array( 'uri' => 'mcpwp://guide/ELEMENTOR' ), $key );
+
+		$this->assertArrayHasKey( 'error', $data );
+		$this->assertSame( -32002, $data['error']['code'] );
+	}
+
 	// ── mcpwp://brand ─────────────────────────────────────────────────────
 
 	public function test_brand_template_denies_a_role_that_lacks_site_category(): void {
@@ -393,6 +586,17 @@ final class McpResourceTemplatesTest extends TestCase {
 
 		$this->assertArrayHasKey( 'site_context', $brand );
 		$this->assertArrayHasKey( 'elementor_globals', $brand );
+	}
+
+	public function test_brand_template_rejects_a_query_string(): void {
+		$controller = new Mcpwp_REST_MCP();
+		$key        = $controller->create_scoped_api_key( 'admin', array( 'read', 'write' ), 'admin' )['key'];
+
+		$data = $this->dispatch( $controller, 'resources/read', array( 'uri' => 'mcpwp://brand?foo=bar' ), $key );
+
+		$this->assertArrayHasKey( 'error', $data );
+		$this->assertSame( -32602, $data['error']['code'] );
+		$this->assertEmpty( $GLOBALS['mcpwp_test_dispatched_routes'], 'A rejected query string must never reach the inner /site-context dispatch.' );
 	}
 
 	public function test_brand_template_omits_globals_when_the_key_lacks_that_category_but_still_returns_context(): void {
