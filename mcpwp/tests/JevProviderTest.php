@@ -7,12 +7,19 @@ require_once dirname(__DIR__) . '/includes/core/class-mcpwp-integration-manager.
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-jev.php';
 
 /**
- * Jev (TypeSafe) provider registration + wire client.
+ * Jev (TypeSafe / Cloudflare Workers AI) provider registration + wire client.
  *
- * Jev is opt-in, bring-your-own-key, and off until an api_key is saved.
- * These tests cover the provider config surface and the request/response
- * shape of Mcpwp_Jev::evaluate() against a mocked pre_http_request — never
- * a real TypeSafe key, never a real network call.
+ * Jev is opt-in, bring-your-own-key, and off until either a TypeSafe key or
+ * Cloudflare Workers AI credentials are saved. These tests cover the provider
+ * config surface, transport resolution/override, and the request/response
+ * shape of Mcpwp_Jev::evaluate() for BOTH transports against a mocked
+ * pre_http_request — never a real TypeSafe key, never a real Cloudflare
+ * token, never a real network call.
+ *
+ * The Cloudflare fixtures below (request/response shape) are taken directly
+ * from Cloudflare's published schema-input.json / schema-output.json for
+ * typesafe/jev (https://developers.cloudflare.com/ai/models/typesafe/jev/),
+ * not guessed — see the class docblock on Mcpwp_Jev for what was verified.
  */
 final class JevProviderTest extends TestCase
 {
@@ -21,6 +28,7 @@ final class JevProviderTest extends TestCase
         $GLOBALS['mcpwp_test_options'] = array();
         $GLOBALS['mcpwp_test_filters'] = array();
         $GLOBALS['mcpwp_test_actions'] = array();
+        $this->jevConfig = array();
 
         $ref      = new ReflectionClass(Mcpwp_Encryption::class);
         $instance = $ref->getProperty('instance');
@@ -36,13 +44,78 @@ final class JevProviderTest extends TestCase
         $GLOBALS['mcpwp_test_filters'] = array();
     }
 
-    private function configure(string $endpoint = ''): void
+    /** @var array Accumulated Jev config — every helper merges into one record. */
+    private $jevConfig = array();
+
+    private function saveJev(array $merge): void
+    {
+        $this->jevConfig = array_merge($this->jevConfig, $merge);
+        $this->assertTrue(Mcpwp_Integration_Manager::get_instance()->set_provider_config('jev', $this->jevConfig));
+    }
+
+    private function configure(string $endpoint = '', string $transport = ''): void
     {
         $config = array('api_key' => 'test-typesafe-key');
         if ('' !== $endpoint) {
             $config['endpoint'] = $endpoint;
         }
-        Mcpwp_Integration_Manager::get_instance()->set_provider_config('jev', $config);
+        if ('' !== $transport) {
+            $config['transport'] = $transport;
+        }
+        $this->saveJev($config);
+    }
+
+    private function configureTransportOverrideOnly(string $transport): void
+    {
+        $this->saveJev(array('transport' => $transport));
+    }
+
+    /** Jev's OWN Workers AI credentials — never the Cloudflare integration's. */
+    private function configureCloudflare(bool $withAccountId = true): void
+    {
+        $config = array('cf_api_token' => 'test-cf-token');
+        if ($withAccountId) {
+            $config['cf_account_id'] = '0123456789abcdef0123456789abcdef';
+        }
+        $this->saveJev($config);
+    }
+
+    /**
+     * Points Mcpwp_Jev's Cloudflare endpoint at a local stub URL via the
+     * mcpwp_jev_cloudflare_endpoint filter, and returns that URL.
+     */
+    private function stubCloudflareEndpoint(string $url = 'https://cf-stub.test/client/v4/accounts/0123456789abcdef0123456789abcdef/ai/run'): string
+    {
+        add_filter('mcpwp_jev_cloudflare_endpoint', function () use ($url) {
+            return $url;
+        }, 10, 2);
+        return $url;
+    }
+
+    /**
+     * Wraps a Cloudflare Workers AI "run" result in the standard
+     * {success,errors,messages,result} envelope and registers it as the
+     * mocked HTTP response.
+     *
+     * @return ArrayObject<int, array{url:string, args:array}>
+     */
+    private function mockCloudflareHttp(array $jevResult, int $httpCode = 200, bool $success = true, array $errors = array()): ArrayObject
+    {
+        $captured = new ArrayObject();
+        add_filter('pre_http_request', function ($preempt, $args, $url) use ($captured, $jevResult, $httpCode, $success, $errors) {
+            $captured[] = array('url' => $url, 'args' => $args);
+            return array(
+                'response' => array('code' => $httpCode),
+                'body'     => wp_json_encode(array(
+                    'success' => $success,
+                    'errors'  => $errors,
+                    'messages' => array(),
+                    'result'  => $jevResult,
+                )),
+            );
+        }, 10, 3);
+
+        return $captured;
     }
 
     /**
@@ -256,5 +329,616 @@ final class JevProviderTest extends TestCase
 
         $this->assertInstanceOf(WP_Error::class, $result);
         $this->assertSame('jev_unreachable', $result->get_error_code());
+    }
+
+    // -- Cloudflare provider field registration -----------------------------
+
+    public function test_cloudflare_zone_integration_has_no_workers_ai_fields(): void
+    {
+        $fields = Mcpwp_Integration_Manager::PROVIDERS['cloudflare']['fields'];
+        $this->assertSame(array('api_token', 'zone_id'), array_keys($fields));
+    }
+
+    public function test_jev_has_its_own_workers_ai_credential_fields(): void
+    {
+        $fields = Mcpwp_Integration_Manager::PROVIDERS['jev']['fields'];
+        $this->assertSame('text', $fields['cf_account_id']['type']);
+        $this->assertSame('password', $fields['cf_api_token']['type']);
+        $this->assertStringContainsString('Workers AI:Read', Mcpwp_Integration_Manager::PROVIDERS['jev']['description']);
+    }
+
+    public function test_transport_field_is_an_enum_select(): void
+    {
+        $field = Mcpwp_Integration_Manager::PROVIDERS['jev']['fields']['transport'];
+        $this->assertSame('select', $field['type']);
+        $this->assertSame(array('auto', 'typesafe', 'cloudflare', 'off'), array_keys($field['options']));
+    }
+
+    public function test_jev_gains_a_transport_override_field(): void
+    {
+        $fields = Mcpwp_Integration_Manager::PROVIDERS['jev']['fields'];
+        $this->assertArrayHasKey('transport', $fields);
+    }
+
+    // -- Transport resolution: structural, no network ------------------------
+
+    public function test_transport_is_empty_when_nothing_is_configured(): void
+    {
+        $this->assertSame('', Mcpwp_Jev::transport());
+        $this->assertFalse(Mcpwp_Jev::is_available());
+        $this->assertFalse(Mcpwp_Jev::is_configured());
+    }
+
+    public function test_transport_resolves_to_typesafe_when_only_typesafe_is_configured(): void
+    {
+        $this->configure();
+        $this->assertSame('typesafe', Mcpwp_Jev::transport());
+    }
+
+    public function test_transport_resolves_to_cloudflare_when_only_cloudflare_is_configured(): void
+    {
+        $this->configureCloudflare();
+        $this->assertSame('cloudflare', Mcpwp_Jev::transport());
+        $this->assertTrue(Mcpwp_Jev::is_available());
+        $this->assertTrue(Mcpwp_Jev::is_configured());
+    }
+
+    public function test_transport_prefers_typesafe_when_both_are_configured_and_no_override(): void
+    {
+        $this->configure();
+        $this->configureCloudflare();
+
+        $this->assertSame('typesafe', Mcpwp_Jev::transport());
+    }
+
+    public function test_workers_ai_token_without_account_id_is_not_enough(): void
+    {
+        $this->configureCloudflare(false);
+
+        $this->assertSame('', Mcpwp_Jev::transport());
+    }
+
+    public function test_the_cloudflare_zone_integration_is_never_borrowed(): void
+    {
+        Mcpwp_Integration_Manager::get_instance()->set_provider_config('cloudflare', array(
+            'api_token'  => 'zone-token',
+            'zone_id'    => 'zone-123',
+            'account_id' => '0123456789abcdef0123456789abcdef',
+        ));
+
+        $this->assertSame('', Mcpwp_Jev::transport());
+        $this->assertFalse(Mcpwp_Jev::for_site());
+    }
+
+    public function test_cloudflare_request_uses_jevs_own_token_not_the_zone_token(): void
+    {
+        Mcpwp_Integration_Manager::get_instance()->set_provider_config('cloudflare', array(
+            'api_token' => 'zone-token',
+            'zone_id'   => 'zone-123',
+        ));
+        $this->configureCloudflare();
+        $this->stubCloudflareEndpoint();
+        $captured = $this->mockCloudflareHttp(array('answers' => array('q' => array('type' => 'choice', 'choice' => 'a'))));
+
+        Mcpwp_Jev::for_site()->evaluate('s', array('q' => array('type' => 'choice', 'instructions' => 'x', 'criteria' => array('a' => 'a'))));
+
+        $this->assertSame('Bearer test-cf-token', $captured[0]['args']['headers']['Authorization']);
+    }
+
+    public function test_override_forces_cloudflare_even_though_typesafe_is_also_configured(): void
+    {
+        $this->configure('', 'cloudflare');
+        $this->configureCloudflare();
+
+        $this->assertSame('cloudflare', Mcpwp_Jev::transport());
+    }
+
+    public function test_override_forces_typesafe_even_though_cloudflare_is_also_configured(): void
+    {
+        $this->configure('', 'typesafe');
+        $this->configureCloudflare();
+
+        $this->assertSame('typesafe', Mcpwp_Jev::transport());
+    }
+
+    public function test_override_naming_an_unconfigured_transport_does_not_fall_back_to_the_other(): void
+    {
+        // Override says "typesafe" but only Cloudflare is configured — this
+        // must resolve to unavailable, not silently substitute Cloudflare.
+        $this->configureTransportOverrideOnly('typesafe');
+        $this->configureCloudflare();
+
+        $this->assertSame('', Mcpwp_Jev::transport());
+
+        $status = Mcpwp_Jev::status();
+        $this->assertSame('override_typesafe_not_configured', $status['reason']);
+    }
+
+    public function test_override_naming_cloudflare_when_unconfigured_does_not_fall_back_to_typesafe(): void
+    {
+        $this->configure(); // TypeSafe configured
+        Mcpwp_Integration_Manager::get_instance()->set_provider_config('jev', array(
+            'api_key'   => 'test-typesafe-key',
+            'transport' => 'cloudflare',
+        ));
+
+        $this->assertSame('', Mcpwp_Jev::transport());
+        $this->assertSame('override_cloudflare_not_configured', Mcpwp_Jev::status()['reason']);
+    }
+
+    public function test_unknown_transport_value_is_refused_at_configure_time(): void
+    {
+        $manager = Mcpwp_Integration_Manager::get_instance();
+
+        $this->assertFalse($manager->set_provider_config('jev', array('api_key' => 'k', 'transport' => 'some-typo')));
+        $this->assertSame('invalid_config', $manager->get_last_save_error());
+        foreach (array('auto', 'typesafe', 'cloudflare', 'off') as $allowed) {
+            $this->assertStringContainsString($allowed, $manager->get_last_save_error_message());
+        }
+        $this->assertFalse($manager->get_provider_config('jev'), 'nothing is stored');
+    }
+
+    public function test_empty_transport_is_stored_as_auto(): void
+    {
+        $this->configure();
+        $this->assertSame('auto', Mcpwp_Integration_Manager::get_instance()->get_provider_config('jev')['transport']);
+    }
+
+    public function test_a_hand_stored_unknown_transport_sends_nothing(): void
+    {
+        // Bypasses validation (a hand-edited option): an unreadable choice is 'off'.
+        $enc = Mcpwp_Encryption::get_instance()->encrypt(wp_json_encode(array('api_key' => 'k', 'transport' => 'weird')));
+        update_option(Mcpwp_Integration_Manager::OPTION_NAME, array('jev' => array('key_encrypted' => $enc, 'multi_field' => true)));
+
+        $this->assertSame('', Mcpwp_Jev::transport());
+    }
+
+    public function test_transport_off_resolves_to_nothing_with_reason_disabled_by_admin(): void
+    {
+        $this->configure('', 'off');
+        $this->configureCloudflare();
+
+        $this->assertSame('', Mcpwp_Jev::transport());
+        $this->assertFalse(Mcpwp_Jev::for_site());
+        $this->assertSame(array('transport' => '', 'reason' => 'disabled_by_admin'), Mcpwp_Jev::status());
+        $this->assertFalse(Mcpwp_Jev::test_connection()['success']);
+    }
+
+    /** @dataProvider badAccountIds */
+    public function test_malformed_account_id_is_refused_at_configure_time(string $bad): void
+    {
+        $manager = Mcpwp_Integration_Manager::get_instance();
+        $this->assertFalse($manager->set_provider_config('jev', array('cf_api_token' => 't', 'cf_account_id' => $bad)));
+        $this->assertSame('invalid_config', $manager->get_last_save_error());
+    }
+
+    public function badAccountIds(): array
+    {
+        return array(
+            'short'        => array('abc123'),
+            'non-hex'      => array('zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz'),
+            'path'         => array('0123456789abcdef0123456789abcdef/../x'),
+            'thirty-three' => array('0123456789abcdef0123456789abcdef0'),
+        );
+    }
+
+    public function test_uppercase_hex_account_id_is_accepted(): void
+    {
+        $this->saveJev(array('cf_api_token' => 't', 'cf_account_id' => strtoupper('0123456789abcdef0123456789abcdef')));
+        $this->assertSame('cloudflare', Mcpwp_Jev::transport());
+    }
+
+    public function test_status_reason_when_nothing_is_configured(): void
+    {
+        $this->assertSame(array('transport' => '', 'reason' => 'not_configured'), Mcpwp_Jev::status());
+    }
+
+    // -- Cloudflare wire shape: fixtures from Cloudflare's published schema -------
+
+    public function test_for_site_builds_a_cloudflare_client_when_resolved(): void
+    {
+        $this->configureCloudflare();
+        $this->stubCloudflareEndpoint();
+
+        $jev = Mcpwp_Jev::for_site();
+
+        $this->assertInstanceOf(Mcpwp_Jev::class, $jev);
+        $this->assertSame('cloudflare', $jev->which_transport());
+    }
+
+    public function test_cloudflare_endpoint_defaults_to_the_documented_account_scoped_url(): void
+    {
+        $this->configureCloudflare();
+        // No mcpwp_jev_cloudflare_endpoint filter hooked — must compute the
+        // real https://api.cloudflare.com/... URL from account_id, per
+        // https://developers.cloudflare.com/ai/models/typesafe/jev/.
+        $captured = new ArrayObject();
+        add_filter('pre_http_request', function ($preempt, $args, $url) use ($captured) {
+            $captured[] = $url;
+            return array(
+                'response' => array('code' => 200),
+                'body'     => wp_json_encode(array(
+                    'success' => true,
+                    'result'  => array('answers' => array('q' => array('type' => 'choice', 'choice' => 'a'))),
+                )),
+            );
+        }, 10, 3);
+
+        Mcpwp_Jev::for_site()->evaluate('s', array('q' => array('type' => 'choice', 'instructions' => 'x', 'criteria' => array('a' => 'a'))));
+
+        $this->assertCount(1, $captured);
+        $this->assertSame('https://api.cloudflare.com/client/v4/accounts/0123456789abcdef0123456789abcdef/ai/run', $captured[0]);
+    }
+
+    public function test_evaluate_cloudflare_sends_the_documented_request_shape(): void
+    {
+        $this->configureCloudflare();
+        $endpoint = $this->stubCloudflareEndpoint();
+
+        // This exact {model, input:{state, questions}} shape, and the
+        // noul/choice/score criteria/answer shapes below, are copied from
+        // Cloudflare's published schema-input.json / schema-output.json and
+        // its worked curl example — not guessed.
+        $captured = $this->mockCloudflareHttp(array(
+            'model'   => 'jev-1.13.0',
+            'answers' => array(
+                'is_urgent' => array('type' => 'noul', 'noul' => 0.75),
+            ),
+            'usage'   => array('input_tokens' => 42, 'output_tokens' => 0),
+        ));
+
+        $jev    = Mcpwp_Jev::for_site();
+        $result = $jev->evaluate(
+            array('title' => 'test state'),
+            array(
+                'is_urgent' => array(
+                    'type'         => 'boolean',
+                    'instructions' => 'Does this convey urgency?',
+                    'criteria'     => array('true' => 'Explicitly time-sensitive', 'false' => 'No urgency expressed'),
+                ),
+            )
+        );
+
+        $this->assertCount(1, $captured);
+        $request = $captured[0];
+        $this->assertSame($endpoint, $request['url']);
+        $this->assertSame('POST', $request['args']['method']);
+        $this->assertTrue($request['args']['reject_unsafe_urls']);
+        $this->assertTrue($request['args']['sslverify']);
+        $this->assertSame('Bearer test-cf-token', $request['args']['headers']['Authorization']);
+        $this->assertSame('application/json', $request['args']['headers']['Content-Type']);
+        $this->assertLessThanOrEqual(8, $request['args']['timeout']);
+
+        $body = json_decode($request['args']['body'], true);
+        $this->assertSame('typesafe/jev', $body['model']);
+        $this->assertSame(array('title' => 'test state'), $body['input']['state']);
+        // Our 'boolean' spelling must be translated to the shared 'noul' wire
+        // spelling for Cloudflare too — same dialect as TypeSafe.
+        $this->assertSame('noul', $body['input']['questions']['is_urgent']['type']);
+
+        $this->assertIsArray($result);
+        $this->assertSame('cloudflare', $result['transport']);
+        $this->assertSame('boolean', $result['answers']['is_urgent']['type']);
+        $this->assertSame(0.75, $result['answers']['is_urgent']['probability']);
+    }
+
+    public function test_evaluate_cloudflare_translates_choice_and_score_answers_unchanged(): void
+    {
+        $this->configureCloudflare();
+        $this->stubCloudflareEndpoint();
+
+        $this->mockCloudflareHttp(array(
+            'model'   => 'jev-1.13.0',
+            'answers' => array(
+                'department' => array(
+                    'type'          => 'choice',
+                    'choice'        => 'billing',
+                    'probabilities' => array('billing' => 0.8, 'technical' => 0.15, 'sales' => 0.05),
+                    'confidence'    => 0.8,
+                ),
+                'frustration' => array(
+                    'type'          => 'score',
+                    'score'         => 1.4,
+                    'legend'        => array('0' => 'Calm', '1' => 'Frustrated', '2' => 'Very angry'),
+                    'probabilities' => array('0' => 0.1, '1' => 0.6, '2' => 0.3),
+                    'confidence'    => 0.6,
+                ),
+            ),
+            'usage'   => array('input_tokens' => 50, 'output_tokens' => 0),
+        ));
+
+        $result = Mcpwp_Jev::for_site()->evaluate(
+            'Help! My payouts have been failing for 3 days.',
+            array(
+                'department'  => array(
+                    'type'         => 'choice',
+                    'instructions' => 'Which team should handle this?',
+                    'criteria'     => array('billing' => 'Payments, invoicing, refunds', 'technical' => 'Bugs, outages, integrations', 'sales' => 'Pricing, upgrades, new accounts'),
+                ),
+                'frustration' => array(
+                    'type'         => 'score',
+                    'instructions' => 'How frustrated is the customer?',
+                    'criteria'     => array('Calm', 'Frustrated', 'Very angry'),
+                ),
+            )
+        );
+
+        $this->assertIsArray($result);
+        // choice/score answers pass through untranslated on both transports.
+        $this->assertSame('billing', $result['answers']['department']['choice']);
+        $this->assertSame(1.4, $result['answers']['frustration']['score']);
+        $this->assertSame('Frustrated', $result['answers']['frustration']['legend']['1']);
+    }
+
+    public function test_evaluate_cloudflare_returns_wp_error_when_envelope_reports_failure(): void
+    {
+        $this->configureCloudflare();
+        $this->stubCloudflareEndpoint();
+        $this->mockCloudflareHttp(
+            array(),
+            200,
+            false,
+            array(array('code' => 7003, 'message' => 'No route for that URI'))
+        );
+
+        $result = Mcpwp_Jev::for_site()->evaluate('s', array('q' => array('type' => 'choice', 'instructions' => 'x', 'criteria' => array('a' => 'a'))));
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertSame('jev_http_error', $result->get_error_code());
+        $this->assertStringContainsString('No route for that URI', $result->get_error_message());
+    }
+
+    public function test_evaluate_cloudflare_returns_wp_error_on_http_error_status(): void
+    {
+        $this->configureCloudflare();
+        $this->stubCloudflareEndpoint();
+        $this->mockCloudflareHttp(array(), 403, false);
+
+        $result = Mcpwp_Jev::for_site()->evaluate('s', array('q' => array('type' => 'choice', 'instructions' => 'x', 'criteria' => array('a' => 'a'))));
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertSame('jev_http_error', $result->get_error_code());
+    }
+
+    public function test_evaluate_cloudflare_returns_wp_error_on_transport_failure(): void
+    {
+        $this->configureCloudflare();
+        $this->stubCloudflareEndpoint();
+        add_filter('pre_http_request', function () {
+            return new WP_Error('http_request_failed', 'timed out');
+        }, 10, 3);
+
+        $result = Mcpwp_Jev::for_site()->evaluate('s', array('q' => array('type' => 'choice', 'instructions' => 'x', 'criteria' => array('a' => 'a'))));
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertSame('jev_unreachable', $result->get_error_code());
+    }
+
+    public function test_evaluate_cloudflare_never_relaxes_sslverify(): void
+    {
+        $this->configureCloudflare();
+        $this->stubCloudflareEndpoint('https://127.0.0.1:9443/client/v4/accounts/0123456789abcdef0123456789abcdef/ai/run');
+        $captured = $this->mockCloudflareHttp(array('answers' => array('q' => array('type' => 'choice', 'choice' => 'a'))));
+
+        Mcpwp_Jev::for_site()->evaluate('s', array('q' => array('type' => 'choice', 'instructions' => 'x', 'criteria' => array('a' => 'a'))));
+
+        $this->assertCount(1, $captured);
+        $this->assertTrue($captured[0]['args']['sslverify']);
+        $this->assertTrue($captured[0]['args']['reject_unsafe_urls']);
+    }
+
+    // -- test_connection(): says which transport answered, and why when none does --
+
+    public function test_connection_reports_not_configured_message_when_nothing_is_saved(): void
+    {
+        $result = Mcpwp_Jev::test_connection();
+
+        $this->assertFalse($result['success']);
+        $this->assertSame('', $result['transport']);
+        $this->assertStringContainsString('not configured', $result['message']);
+    }
+
+    public function test_connection_succeeds_via_typesafe_and_names_the_transport(): void
+    {
+        $this->configure('https://jev-stub.test/v1/systemone');
+        $this->mockHttp(array('answers' => array('ok' => array('type' => 'noul', 'noul' => 0.99))));
+
+        $result = Mcpwp_Jev::test_connection();
+
+        $this->assertTrue($result['success']);
+        $this->assertSame('typesafe', $result['transport']);
+        $this->assertStringContainsString('typesafe', $result['message']);
+    }
+
+    public function test_connection_succeeds_via_cloudflare_and_names_the_transport(): void
+    {
+        $this->configureCloudflare();
+        $this->stubCloudflareEndpoint();
+        $this->mockCloudflareHttp(array('answers' => array('ok' => array('type' => 'noul', 'noul' => 0.99))));
+
+        $result = Mcpwp_Jev::test_connection();
+
+        $this->assertTrue($result['success']);
+        $this->assertSame('cloudflare', $result['transport']);
+        $this->assertStringContainsString('cloudflare', $result['message']);
+    }
+
+    public function test_connection_surfaces_a_cloudflare_permission_failure_as_a_named_message(): void
+    {
+        // The "does the token actually have Workers AI permission" question
+        // is answered by a real call, not guessed at resolution time — this
+        // is what that failure looks like.
+        $this->configureCloudflare();
+        $this->stubCloudflareEndpoint();
+        $this->mockCloudflareHttp(array(), 403, false, array(array('code' => 10000, 'message' => 'Authentication error')));
+
+        $result = Mcpwp_Jev::test_connection();
+
+        $this->assertFalse($result['success']);
+        $this->assertSame('cloudflare', $result['transport']);
+        $this->assertStringContainsString('Authentication error', $result['message']);
+    }
+
+    // -- Unwrapped Cloudflare body (the model page's documented response) -----
+
+    public function test_evaluate_cloudflare_accepts_the_unwrapped_model_payload_on_2xx(): void
+    {
+        $this->configureCloudflare();
+        $this->stubCloudflareEndpoint();
+        $this->mockHttp(array(
+            'model'   => 'jev-1.13.0',
+            'answers' => array('is_urgent' => array('type' => 'noul', 'noul' => 0.95)),
+            'usage'   => array('input_tokens' => 426, 'output_tokens' => 73),
+        ));
+
+        $result = Mcpwp_Jev::for_site()->evaluate('s', array('is_urgent' => array('type' => 'boolean', 'instructions' => 'x', 'criteria' => array('true' => 'y', 'false' => 'n'))));
+
+        $this->assertIsArray($result);
+        $this->assertSame('cloudflare', $result['transport']);
+        $this->assertSame(0.95, $result['answers']['is_urgent']['probability']);
+        $this->assertSame('jev-1.13.0', $result['model']);
+    }
+
+    public function test_evaluate_cloudflare_does_not_accept_an_unwrapped_body_on_an_error_status(): void
+    {
+        $this->configureCloudflare();
+        $this->stubCloudflareEndpoint();
+        $this->mockHttp(array('answers' => array('q' => array('type' => 'choice', 'choice' => 'a'))), 500);
+
+        $result = Mcpwp_Jev::for_site()->evaluate('s', array('q' => array('type' => 'choice', 'instructions' => 'x', 'criteria' => array('a' => 'a'))));
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertSame('jev_http_error', $result->get_error_code());
+    }
+
+    public function test_evaluate_cloudflare_error_never_echoes_the_token(): void
+    {
+        $this->configureCloudflare();
+        $this->stubCloudflareEndpoint();
+        $this->mockCloudflareHttp(array(), 401, false);
+
+        $result = Mcpwp_Jev::for_site()->evaluate('s', array('q' => array('type' => 'choice', 'instructions' => 'x', 'criteria' => array('a' => 'a'))));
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertStringNotContainsString('test-cf-token', $result->get_error_message());
+        $this->assertStringNotContainsString('test-cf-token', wp_json_encode($result->get_error_data()));
+    }
+
+    // -- Integration status + test surface say which transport and why ---------
+
+    public function test_integrations_status_reports_the_active_jev_transport_and_reason(): void
+    {
+        $manager = Mcpwp_Integration_Manager::get_instance();
+
+        $none = $manager->get_available_providers()['jev'];
+        $this->assertFalse($none['available']);
+        $this->assertSame('', $none['transport']);
+        $this->assertSame('not_configured', $none['transport_reason']);
+
+        // Cloudflare credentials alone turn Jev on, with no 'jev' record saved.
+        $this->configureCloudflare();
+        $cf = $manager->get_available_providers()['jev'];
+        $this->assertTrue($cf['available']);
+        $this->assertSame('cloudflare', $cf['transport']);
+        $this->assertSame('cloudflare_workers_ai_credentials_configured', $cf['transport_reason']);
+
+        $this->configure();
+        $ts = $manager->get_available_providers()['jev'];
+        $this->assertSame('typesafe', $ts['transport']);
+        $this->assertSame('typesafe_key_configured', $ts['transport_reason']);
+    }
+
+    public function test_integration_manager_test_provider_for_jev_names_the_transport(): void
+    {
+        $this->configureCloudflare();
+        $this->stubCloudflareEndpoint();
+        $this->mockCloudflareHttp(array('answers' => array('ok' => array('type' => 'noul', 'noul' => 0.99))));
+
+        $result = Mcpwp_Integration_Manager::get_instance()->test_provider('jev');
+
+        $this->assertTrue($result['success']);
+        $this->assertSame('cloudflare', $result['transport']);
+    }
+
+    // -- Redirects, strict success, bounded upstream text (#987 review) -------
+
+    /** @dataProvider bothTransports */
+    public function test_redirects_are_never_followed_and_a_3xx_is_a_failure(string $transport): void
+    {
+        if ('cloudflare' === $transport) {
+            $this->configureCloudflare();
+            $this->stubCloudflareEndpoint();
+            $body = array('success' => true, 'result' => array('answers' => array('q' => array('type' => 'choice', 'choice' => 'a'))));
+        } else {
+            $this->configure('https://jev-stub.test/v1/systemone');
+            $body = array('answers' => array('q' => array('type' => 'choice', 'choice' => 'a')));
+        }
+        $captured = new ArrayObject();
+        add_filter('pre_http_request', function ($preempt, $args, $url) use ($captured, $body) {
+            $captured[] = $args;
+            return array(
+                'response' => array('code' => 302),
+                'headers'  => array('location' => 'https://evil.example/steal'),
+                'body'     => wp_json_encode($body),
+            );
+        }, 10, 3);
+
+        $result = Mcpwp_Jev::for_site()->evaluate('s', array('q' => array('type' => 'choice', 'instructions' => 'x', 'criteria' => array('a' => 'a'))));
+
+        $this->assertCount(1, $captured, 'exactly one request; the Location is not followed');
+        $this->assertSame(0, $captured[0]['redirection']);
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertSame('jev_http_error', $result->get_error_code());
+    }
+
+    public function bothTransports(): array
+    {
+        return array('typesafe' => array('typesafe'), 'cloudflare' => array('cloudflare'));
+    }
+
+    /** @dataProvider truthyNonTrueSuccess */
+    public function test_cloudflare_envelope_success_must_be_literally_true($success): void
+    {
+        $this->configureCloudflare();
+        $this->stubCloudflareEndpoint();
+        $this->mockHttp(array('success' => $success, 'result' => array('answers' => array('q' => array('type' => 'choice', 'choice' => 'a')))));
+
+        $result = Mcpwp_Jev::for_site()->evaluate('s', array('q' => array('type' => 'choice', 'instructions' => 'x', 'criteria' => array('a' => 'a'))));
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+    }
+
+    public function truthyNonTrueSuccess(): array
+    {
+        return array('string' => array('true'), 'int' => array(1), 'array' => array(array(1)), 'null' => array(null));
+    }
+
+    public function test_upstream_error_text_is_truncated_to_300_characters(): void
+    {
+        $this->configureCloudflare();
+        $this->stubCloudflareEndpoint();
+        $this->mockCloudflareHttp(array(), 400, false, array(array('code' => 1, 'message' => str_repeat('A', 5000))));
+
+        $result = Mcpwp_Jev::for_site()->evaluate('s', array('q' => array('type' => 'choice', 'instructions' => 'x', 'criteria' => array('a' => 'a'))));
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertLessThanOrEqual(301, mb_strlen($result->get_error_message()));
+        $this->assertLessThanOrEqual(301, mb_strlen(Mcpwp_Jev::test_connection()['message']));
+    }
+
+    public function test_rest_configure_refuses_an_unknown_transport_with_a_400_naming_the_allowed_values(): void
+    {
+        require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-integrations.php';
+        $request = new WP_REST_Request('POST', '/mcpwp/v1/integrations/configure');
+        $request->set_param('provider', 'jev');
+        $request->set_param('config', array('api_key' => 'k', 'transport' => 'cloudfare'));
+
+        $result = (new Mcpwp_REST_Integrations())->configure_integration($request);
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertSame('invalid_config', $result->get_error_code());
+        $this->assertSame(400, $result->get_error_data()['status']);
+        $this->assertStringContainsString('auto, typesafe, cloudflare, off', $result->get_error_message());
+        $this->assertFalse(Mcpwp_Integration_Manager::get_instance()->get_provider_config('jev'));
     }
 }

@@ -104,6 +104,13 @@ class Mcpwp_Integrations_Admin {
 
 		if ( $result ) {
 			wp_send_json_success( array( 'message' => __( 'Configuration saved.', 'mcpwp' ) ) );
+		} elseif ( 'invalid_config' === $manager->get_last_save_error() ) {
+			wp_send_json_error(
+				array(
+					'message' => $manager->get_last_save_error_message(),
+					'code'    => 'invalid_config',
+				)
+			);
 		} elseif ( 'integration_write_failed' === $manager->get_last_save_error() ) {
 			// The store was the problem, not the input (#845 review).
 			wp_send_json_error(
