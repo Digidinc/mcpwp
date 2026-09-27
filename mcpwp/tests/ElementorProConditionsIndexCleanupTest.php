@@ -10,15 +10,18 @@
  * `ElementorPro\Modules\ThemeBuilder\Classes\Conditions_Cache` on a live
  * Elementor Pro install rather than assuming it — is
  * `{ location => { template_id => [condition_strings] } }`: LOCATION first,
- * then template ID. `Mcpwp_Theme_Builder::update_global_conditions_index()`
- * (pre-existing, unrelated to this issue) writes the *opposite* axis
- * (`{ condition_key => [template_ids] }`) into this same option; that is
+ * then template ID. At the time this test was written,
+ * `Mcpwp_Theme_Builder::update_global_conditions_index()` (pre-existing,
+ * unrelated to this issue) wrote the *opposite* axis
+ * (`{ condition_key => [template_ids] }`) into this same option; that was
  * harmless there only because Elementor's own `save_conditions()` and the
  * explicit `get_cache()->regenerate()` right after it both immediately
- * rebuild the option correctly, overwriting it. A delete has no such
- * follow-up write, so a fix for this issue cannot reuse that method's shape
- * — it would silently do nothing. The real fix instead calls Elementor
- * Pro's own purpose-built `Conditions_Manager::purge_post_from_cache()`.
+ * rebuilt the option correctly, overwriting it. A delete has no such
+ * follow-up write, so a fix for this issue could not reuse that method's
+ * shape — it would silently do nothing. The real fix instead calls
+ * Elementor Pro's own purpose-built `Conditions_Manager::purge_post_from_cache()`.
+ * `update_global_conditions_index()` itself is now gone (#976) — see
+ * ElementorProConditionsIndexShapeTest.php.
  *
  * Adversarial review of the first cut found two more defects, both covered
  * here:
@@ -558,16 +561,16 @@ final class ElementorProConditionsIndexCleanupTest extends TestCase {
 	// before_delete_post hook as everything else, covering the case where
 	// assign_to_location() already registered the template in the cache
 	// before a later step in that same method throws. Not asserted with a
-	// dedicated end-to-end test here: reaching that exact crash through the
-	// real set_template_conditions() call also runs the pre-existing,
-	// unrelated update_global_conditions_index() in between — which writes
-	// the *wrong* axis into this same option and is normally harmless only
-	// because the regenerate() call right after it overwrites the mistake.
-	// Forcing regenerate() itself to throw (the only way to reach this
-	// rollback branch at all) means that repair never happens, so the cache
-	// is left holding the template's ID under an axis
-	// cleanup_after_template_delete() cannot recognise — a real
-	// interaction with that pre-existing, out-of-scope bug, not a gap in
-	// this fix or in handle_before_delete_post()'s wiring.
+	// dedicated end-to-end test here: reaching that exact crash requires
+	// forcing the real set_template_conditions() call's regenerate() to
+	// throw, which is exercised directly (against the real-shaped option)
+	// by ElementorProConditionsIndexShapeTest.php instead. Before #976,
+	// set_template_conditions() also ran the wrong-axis
+	// update_global_conditions_index() write in between save_conditions()
+	// and this regenerate() call, so a throw here used to be able to leave
+	// the option holding the template's ID under an axis
+	// cleanup_after_template_delete() could not recognise. #976 removed
+	// that write entirely, so this rollback path no longer has a
+	// wrong-axis remnant to interact with.
 	// ---------------------------------------------------------------
 }

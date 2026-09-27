@@ -288,13 +288,31 @@ class Mcpwp_Theme_Builder {
 		}
 
 		// Save conditions via Elementor's conditions manager.
+		//
+		// save_conditions() (real ElementorPro\...\Conditions_Manager, verified
+		// against the installed source, not re-derived) writes `_elementor_conditions`
+		// post meta AND already calls $this->cache->regenerate() itself before
+		// returning — the explicit regenerate() below is deliberately kept as a
+		// defensive second call (harmless: regenerate() rebuilds from scratch
+		// and is idempotent) for an older Elementor Pro build whose
+		// save_conditions() might not do this internally. Nothing here writes
+		// `elementor_pro_theme_builder_conditions` directly any more (#976):
+		// this class previously also wrote it itself, in
+		// update_global_conditions_index(), shaped `{ condition_key =>
+		// [template_ids] }` — the wrong axis. Elementor Pro's own
+		// Conditions_Cache stores `{ location => { template_id =>
+		// [condition_strings] } }`, LOCATION first (confirmed reading
+		// ElementorPro\Modules\ThemeBuilder\Classes\Conditions_Cache::add()/
+		// regenerate() directly). That wrong-shaped write was harmless only
+		// because both regenerate() calls immediately overwrote it in the
+		// normal case; any path where regenerate() is skipped or throws
+		// between the two writes left `elementor_pro_theme_builder_conditions`
+		// genuinely malformed, which #975's own delete-cleanup fix could not
+		// even recognise. The fix is to never write that shape ourselves and
+		// let Elementor Pro own the option entirely, as #975 already does for
+		// deletes via Conditions_Manager::purge_post_from_cache().
 		$conditions_manager = \ElementorPro\Modules\ThemeBuilder\Module::instance()->get_conditions_manager();
 		$conditions_manager->save_conditions( $template_id, $formatted_conditions );
-
-		// Ensure the global conditions index is updated.
-		// Elementor Pro reads elementor_pro_theme_builder_conditions at runtime
-		// to decide which templates to load. The per-post meta alone is not enough.
-		$this->update_global_conditions_index( $template_id, $formatted_conditions );
 
 		// Clear cache.
 		$conditions_manager->get_cache()->regenerate();
@@ -897,80 +915,18 @@ class Mcpwp_Theme_Builder {
 	}
 
 	/**
-	 * Update the global theme builder conditions index.
-	 *
-	 * Elementor Pro maintains a site-wide option `elementor_pro_theme_builder_conditions`
-	 * that maps condition strings to template IDs. The frontend reads this option at
-	 * runtime to decide which templates to load for each location. Without this,
-	 * templates have per-post meta but are invisible to the rendering engine.
-	 *
-	 * @param int   $template_id Template ID.
-	 * @param array $conditions  Formatted conditions array.
-	 */
-	private function update_global_conditions_index( $template_id, $conditions ) {
-		$all_conditions = get_option( 'elementor_pro_theme_builder_conditions', array() );
-		if ( ! is_array( $all_conditions ) ) {
-			$all_conditions = array();
-		}
-
-		// Remove this template from all existing condition keys.
-		foreach ( $all_conditions as $key => $template_ids ) {
-			if ( is_array( $template_ids ) ) {
-				$all_conditions[ $key ] = array_values( array_filter(
-					$template_ids,
-					function ( $id ) use ( $template_id ) {
-						return absint( $id ) !== absint( $template_id );
-					}
-				) );
-				if ( empty( $all_conditions[ $key ] ) ) {
-					unset( $all_conditions[ $key ] );
-				}
-			}
-		}
-
-		// Add this template under each new condition key.
-		foreach ( $conditions as $condition ) {
-			$type     = isset( $condition['type'] ) ? $condition['type'] : 'include';
-			$name     = isset( $condition['name'] ) ? $condition['name'] : 'general';
-			$sub_name = isset( $condition['sub_name'] ) ? $condition['sub_name'] : '';
-			$sub_id   = isset( $condition['sub_id'] ) ? $condition['sub_id'] : '';
-
-			// Build the condition key in Elementor's format: "type/name[/sub_name[/sub_id]]"
-			$key = $type . '/' . $name;
-			if ( ! empty( $sub_name ) ) {
-				$key .= '/' . $sub_name;
-				if ( ! empty( $sub_id ) ) {
-					$key .= '/' . $sub_id;
-				}
-			}
-
-			if ( ! isset( $all_conditions[ $key ] ) ) {
-				$all_conditions[ $key ] = array();
-			}
-
-			if ( ! in_array( absint( $template_id ), array_map( 'absint', $all_conditions[ $key ] ), true ) ) {
-				$all_conditions[ $key ][] = absint( $template_id );
-			}
-		}
-
-		update_option( 'elementor_pro_theme_builder_conditions', $all_conditions );
-	}
-
-	/**
 	 * Whether a template currently appears anywhere in Elementor Pro's real
 	 * conditions cache/option.
 	 *
 	 * `elementor_pro_theme_builder_conditions` is Elementor Pro's own option
 	 * (`ElementorPro\Modules\ThemeBuilder\Classes\Conditions_Cache::OPTION_NAME`),
 	 * shaped `{ location => { template_id => [condition_strings] } }` —
-	 * LOCATION first, then template ID, the opposite axis from
-	 * update_global_conditions_index() above. That method's own writes to
-	 * this same option are harmless in production only because they are
-	 * always immediately followed by a real `regenerate()` call (inside
-	 * Elementor's own save_conditions(), and again explicitly below) that
-	 * rebuilds it correctly; verified reading Elementor Pro's actual source
-	 * (`conditions-cache.php`) on a real install rather than re-deriving the
-	 * shape from this file's own (pre-existing, unrelated) assumption.
+	 * LOCATION first, then template ID; verified reading Elementor Pro's
+	 * actual source (`conditions-cache.php`) on a real install rather than
+	 * re-deriving the shape from assumption. set_template_conditions() above
+	 * used to also write this option itself, under the opposite (wrong) axis
+	 * — see #976, fixed by deleting that write entirely and delegating to
+	 * Elementor Pro's own save_conditions() + regenerate().
 	 *
 	 * @param int $template_id Template ID.
 	 * @return bool
@@ -1040,6 +996,16 @@ class Mcpwp_Theme_Builder {
 	 * of a cleanup call scattered across each route that happens to know
 	 * about `elementor_library` today.
 	 *
+	 * `elementor_snippet` (Elementor Pro Custom Code) added for #991,
+	 * found while building #990 (#974/#976): this hook covered Theme
+	 * Builder templates only, so a force-deleted Custom Code snippet kept
+	 * its `_elementor_head`/`body_start`/`body_end` entry in
+	 * `elementor_pro_theme_builder_conditions` forever — the same shared
+	 * option, the same missing purge, one post type short.
+	 * cleanup_after_template_delete() below is already post-type-agnostic
+	 * (it scans the option's real `{location => {post_id => [...]}}` shape
+	 * by ID, never by type), so widening the gate here is the entire fix.
+	 *
 	 * @param int          $post_id Post ID being deleted.
 	 * @param WP_Post|null $post    The post object, when WordPress supplies
 	 *                              one (added to this action in WP 5.5).
@@ -1048,7 +1014,7 @@ class Mcpwp_Theme_Builder {
 	public function handle_before_delete_post( $post_id, $post = null ) {
 		$post = $post ? $post : get_post( $post_id );
 
-		if ( ! $post || 'elementor_library' !== $post->post_type ) {
+		if ( ! $post || ! in_array( $post->post_type, array( 'elementor_library', 'elementor_snippet' ), true ) ) {
 			return;
 		}
 

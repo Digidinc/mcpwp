@@ -61,6 +61,13 @@ namespace Elementor {
 	 */
 	class Mcpwp_Fake_Document {
 
+		/** @var int */
+		private $id;
+
+		public function __construct( $id = 0 ) {
+			$this->id = (int) $id;
+		}
+
 		public function save( $data ) {
 			$GLOBALS['mcpwp_theme_test_save_calls'] = ( $GLOBALS['mcpwp_theme_test_save_calls'] ?? 0 ) + 1;
 
@@ -92,12 +99,52 @@ namespace Elementor {
 		public function get_edit_url() {
 			return 'https://example.test/wp-admin/post.php?action=elementor';
 		}
+
+		/**
+		 * Mirrors Theme_Document::get_main_id() as far as these tests need:
+		 * every document here is a plain post, never a "section"
+		 * sub-document, so the main id is just the post id.
+		 */
+		public function get_main_id() {
+			return $this->id;
+		}
+
+		/**
+		 * Mirrors Theme_Document::get_location() (#974/#976 review, W1/W2):
+		 * a document-TYPE-level fixed property when the real document
+		 * class sets one (a real Header/Footer/etc document does, in
+		 * get_properties()), else the per-instance `_elementor_location`
+		 * meta — which is what Custom Code's real Document class always
+		 * falls through to, since it never sets that type property
+		 * (confirmed reading custom-code/document.php). No Theme Builder
+		 * test here ever seeds `_elementor_location` meta, so the 'header'
+		 * default preserves that suite's pre-existing behaviour exactly;
+		 * the Custom Code cache-sync tests set the meta explicitly and get
+		 * it back.
+		 */
+		public function get_location() {
+			$meta = get_post_meta( $this->id, '_elementor_location', true );
+
+			return $meta ? $meta : 'header';
+		}
 	}
 
 	class Mcpwp_Fake_Documents {
 
+		/**
+		 * Real Elementor returns null for a post ID that isn't a
+		 * recognised document at all. #974/#976 review round 2, NIT-3:
+		 * modelled via a global id-list so a test can simulate "not a
+		 * theme document" and prove save_conditions() returns false for
+		 * it, matching the real Conditions_Manager::save_conditions()'s
+		 * own `if ( ! $document ) { return false; }` guard.
+		 */
 		public function get( $id, $from_cache = true ) {
-			return new Mcpwp_Fake_Document();
+			if ( in_array( (int) $id, $GLOBALS['mcpwp_theme_test_no_document_ids'] ?? array(), true ) ) {
+				return null;
+			}
+
+			return new Mcpwp_Fake_Document( $id );
 		}
 	}
 
@@ -164,24 +211,60 @@ namespace ElementorPro\Modules\ThemeBuilder {
 		 * Conditions_Cache uses — `{ location => { template_id =>
 		 * [condition_strings] } }`, verified against
 		 * ElementorPro\Modules\ThemeBuilder\Classes\Conditions_Cache on a
-		 * real install — hardcoded to the 'header' location, the only one
-		 * these tests need. Mirrors the real method: writes through THIS
-		 * request's shared cache instance (get_cache()), not straight to
-		 * the option, so a later regenerate()/purge on that same instance
-		 * sees it — the exact staleness this fix's WARN-2 hardening exists
-		 * for.
+		 * real install. Mirrors the real method: fetches the document the
+		 * same way (`\Elementor\Plugin::instance()->documents->get()`) and
+		 * calls `add($document, $conditions)` on THIS request's shared
+		 * cache instance (get_cache()), not straight to the option, so a
+		 * later regenerate()/purge on that same instance sees it — the
+		 * exact staleness this fix's WARN-2 hardening exists for.
+		 *
+		 * #974/#976 review W1/W2 coverage: also overwrites
+		 * `_elementor_conditions` post meta with the SAME stringified form,
+		 * mirroring the real Conditions_Manager::save_conditions()'s
+		 * `$document->update_meta('_elementor_conditions', $conditions_to_save)`
+		 * exactly (confirmed reading the installed conditions-manager.php
+		 * directly). Without this, Mcpwp_REST_Elementor_Pro::
+		 * sync_custom_code_conditions_cache() — which deliberately reads
+		 * that same meta key as its source of truth, the same way
+		 * regenerate() does — would read back MCPWP's own pre-conversion
+		 * object-array shape instead and push the wrong shape into the
+		 * cache right after this method just wrote the correct one.
+		 *
+		 * #974/#976 review round 2, NIT-3: this used to call
+		 * `add($document, ...)->save()` directly, a targeted write with NO
+		 * status filter — the real method never calls `add()` itself at
+		 * all; it delegates the entire cache write to `regenerate()`,
+		 * which DOES filter by status (see that method below). Calling
+		 * `add()` directly here made this fixture more forgiving than
+		 * production, masking the exact gap
+		 * sync_custom_code_conditions_cache() exists to close. Also
+		 * returns `false` without writing anything when the id isn't a
+		 * recognised document at all, matching the real method's own
+		 * `if ( ! $document ) { return false; }` guard.
 		 */
 		public function save_conditions( $template_id, $conditions ) {
-			$this->get_cache()->add(
-				'header',
-				$template_id,
-				array_map(
-					function ( $condition ) {
-						return is_array( $condition ) ? rtrim( implode( '/', $condition ), '/' ) : (string) $condition;
-					},
-					$conditions
-				)
-			)->save();
+			$document = \Elementor\Plugin::instance()->documents->get( $template_id );
+
+			if ( ! $document ) {
+				return false;
+			}
+
+			$conditions_to_save = array_map(
+				function ( $condition ) {
+					return is_array( $condition ) ? rtrim( implode( '/', $condition ), '/' ) : (string) $condition;
+				},
+				$conditions
+			);
+
+			if ( empty( $conditions_to_save ) ) {
+				delete_post_meta( $template_id, '_elementor_conditions' );
+			} else {
+				update_post_meta( $template_id, '_elementor_conditions', $conditions_to_save );
+			}
+
+			$this->get_cache()->regenerate();
+
+			return true;
 		}
 
 		/**
@@ -242,10 +325,26 @@ namespace ElementorPro\Modules\ThemeBuilder {
 			$this->refresh();
 		}
 
-		public function add( $location, $template_id, array $conditions ) {
-			$this->conditions[ $location ][ (int) $template_id ] = $conditions;
+		/**
+		 * Mirrors the real `Conditions_Cache::add(Theme_Document $document,
+		 * array $conditions)` exactly (#974/#976 review, W1/W2) — location
+		 * and main id both come from the document, never a bare string
+		 * passed in by the caller. See Mcpwp_Fake_Document::get_location()/
+		 * get_main_id() above.
+		 */
+		public function add( $document, array $conditions ) {
+			$this->conditions[ $document->get_location() ][ (int) $document->get_main_id() ] = $conditions;
 
 			return $this;
+		}
+
+		/**
+		 * Mirrors the real Conditions_Cache::update(): remove then add,
+		 * both keyed off the SAME document — see Mcpwp_Rest_Elementor_Pro::
+		 * sync_custom_code_conditions_cache()'s primary path.
+		 */
+		public function update( $document, $conditions ) {
+			return $this->remove( $document->get_main_id() )->add( $document, $conditions );
 		}
 
 		public function remove( $post_id ) {
@@ -284,17 +383,49 @@ namespace ElementorPro\Modules\ThemeBuilder {
 
 		/**
 		 * Mirrors the real regenerate(): clear the in-memory state first,
-		 * THEN rebuild it from a (here, simulated) query, then save(). A
-		 * crash anywhere in that rebuild — modelled here as happening
-		 * immediately after clear(), the worst case — leaves $conditions
-		 * empty in memory while the option on disk is untouched (save()
-		 * is never reached), exactly the staleness WARN-2 found.
+		 * THEN rebuild it from a query, then save(). A crash anywhere in
+		 * that rebuild — modelled here as happening immediately after
+		 * clear(), the worst case — leaves $conditions empty in memory
+		 * while the option on disk is untouched (save() is never
+		 * reached), exactly the staleness WARN-2 found.
+		 *
+		 * #974/#976 review round 2, NIT-3: the rebuild itself used to be
+		 * a no-op (clear(), then straight to save() — always ending
+		 * empty). The real WP_Query in Conditions_Cache::regenerate()
+		 * carries no explicit `post_status` (confirmed reading the
+		 * installed conditions-cache.php directly), so outside
+		 * `is_admin()` it matches PUBLISHED posts only — the actual root
+		 * cause of #974/#976 review W1. Rebuilding from every published
+		 * test post carrying `_elementor_conditions` meta (skipping
+		 * drafts, matching that same real behaviour) is what makes
+		 * ElementorCustomCodeConditionsCacheSyncTest.php's proof that
+		 * sync_custom_code_conditions_cache() compensates for it
+		 * meaningful, instead of vacuously true against a double that
+		 * never populated anything either way.
 		 */
 		public function regenerate() {
 			$this->clear();
 
 			if ( ! empty( $GLOBALS['mcpwp_theme_test_regenerate_throws'] ) ) {
 				throw new \RuntimeException( 'conditions cache regenerate failed (test double)' );
+			}
+
+			foreach ( $GLOBALS['_mcpwp_test_posts'] ?? array() as $post_id => $post ) {
+				if ( ! isset( $post->post_status ) || 'publish' !== $post->post_status ) {
+					continue;
+				}
+
+				$conditions = get_post_meta( $post_id, '_elementor_conditions', true );
+				if ( empty( $conditions ) || ! is_array( $conditions ) ) {
+					continue;
+				}
+
+				$document = \Elementor\Plugin::instance()->documents->get( $post_id );
+				if ( ! $document ) {
+					continue;
+				}
+
+				$this->add( $document, $conditions );
 			}
 
 			$GLOBALS['mcpwp_theme_test_cache_regenerate_calls'] = ( $GLOBALS['mcpwp_theme_test_cache_regenerate_calls'] ?? 0 ) + 1;

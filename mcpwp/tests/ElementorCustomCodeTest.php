@@ -23,6 +23,24 @@ final class ElementorCustomCodeTest extends TestCase {
 		$this->assertSame( '/elementor/custom-code', $map['wp_create_elementor_custom_code']['route'] );
 		$this->assertSame( '/elementor/custom-code/{id}', $map['wp_get_elementor_custom_code']['route'] );
 		$this->assertSame( '/elementor/custom-code/{id}', $map['wp_update_elementor_custom_code']['route'] );
+
+		// #974/#976 review NIT-a: the tool schemas must advertise the same
+		// exact-match contract normalize_custom_code_status() enforces —
+		// an MCP client reading the schema should see 'enum' say the same
+		// thing the 400 refusal proves at call time.
+		$by_name = array();
+		foreach ( $tools as $tool ) {
+			$by_name[ $tool['name'] ] = $tool;
+		}
+
+		$this->assertSame(
+			array( 'publish', 'draft' ),
+			$by_name['wp_create_elementor_custom_code']['inputSchema']['properties']['status']['enum']
+		);
+		$this->assertSame(
+			array( 'publish', 'draft' ),
+			$by_name['wp_update_elementor_custom_code']['inputSchema']['properties']['status']['enum']
+		);
 	}
 
 	public function test_create_custom_code_preserves_raw_script_and_reads_back_conditions(): void {
@@ -57,7 +75,18 @@ final class ElementorCustomCodeTest extends TestCase {
 		$this->assertTrue( $snippet['wrapper_tags_removed'] );
 		$this->assertSame( array( array( 'type' => 'include', 'name' => 'general' ) ), $snippet['conditions'] );
 		$this->assertSame( 'fallback_meta', $snippet['conditions_engine'] );
-		$this->assertSame( array( 1 ), get_option( 'elementor_pro_theme_builder_conditions' )['include/general'] );
+		// #976: this main-process test never loads the ElementorPro\...\
+		// ThemeBuilder classes, so save_custom_code_conditions() takes the
+		// 'fallback_meta' branch. It used to also write
+		// `elementor_pro_theme_builder_conditions` itself here, under the
+		// wrong axis (`{"include/general": [1]}` instead of Elementor Pro's
+		// real `{location => {post_id => [condition_strings]}}`) — dead
+		// weight even then, since Elementor Pro's own Custom Code renderer
+		// (modules/custom-code/module.php print_snippets()) never reads
+		// that option directly; it always goes through
+		// ThemeBuilder's Conditions_Manager, which this fallback branch by
+		// definition has none of loaded. The option must be left untouched.
+		$this->assertSame( array(), get_option( 'elementor_pro_theme_builder_conditions', array() ) );
 	}
 
 	public function test_update_custom_code_dry_run_does_not_mutate_existing_snippet(): void {

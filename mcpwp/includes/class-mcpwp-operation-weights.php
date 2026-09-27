@@ -86,8 +86,10 @@ final class Mcpwp_Operation_Weights {
 	 * pattern core matched ("/webhooks/(?p<id>\d+)/test"). Not listed, because
 	 * they spend no credential and cannot be pointed elsewhere: /fetch (resolves
 	 * a URL to a local post), and the same-host loopbacks to this site's own
-	 * permalinks (/rendered-html, /rendered-copy, /seo/readiness,
-	 * /seo/structured-data, /elementor/{id}/preview, /custom-css).
+	 * permalinks (/rendered-copy, /seo/readiness, /seo/structured-data,
+	 * /elementor/{id}/preview, /custom-css). /rendered-html is priced instead
+	 * by requested size — SPEND_SIZE_ROUTES below — since it holds its whole
+	 * window in memory even though it spends no credential (#804 W5).
 	 *
 	 * @var array<string,string>
 	 */
@@ -135,6 +137,17 @@ final class Mcpwp_Operation_Weights {
 		'/media/bulk'             => array( 'urls', 'items' ),
 		// One Indexing API request per URL (up to 200).
 		'/google-indexing/submit' => array( 'urls' ),
+		// #804 adversarial review (BLOCK-1): a widths sweep is one render — and
+		// one media attachment when save_to_media is on — per width, not one.
+		// Before this, /screenshot's flat 25-unit egress price (SPEND_EGRESS_
+		// PATTERNS below) let a single call with 6 widths do 6x the outbound
+		// renders and attachments of an ordinary screenshot for the same
+		// charge. Listing it here (checked before SPEND_EGRESS_PATTERNS)
+		// prices it per width instead; a call with no widths still resolves to
+		// max(1, 0) = 1 item, unchanged from before. '/screenshot' is priced
+		// from effective_screenshot_widths() (round 2, N-R2-2), not a raw
+		// count of whatever the caller sent — see default_spend_weight().
+		'/screenshot'             => array( 'widths' ),
 	);
 
 	/**
@@ -146,6 +159,60 @@ final class Mcpwp_Operation_Weights {
 	 */
 	const SPEND_ID_LIST_ROUTES = array(
 		'/elementor/bulk' => 'ids',
+	);
+
+	/**
+	 * Routes priced by how much data one call asks for rather than by a list
+	 * of items (#804 adversarial review, W5/W-R2-2): a call at or under
+	 * `baseline` costs 1 (unchanged from before this pricing existed —
+	 * every default-sized caller stays at 1), and anything above `baseline`
+	 * costs `1 + ceil((clamped - baseline) / unit_bytes)`, clamped to
+	 * `ceiling` FIRST.
+	 *
+	 * /rendered-html holds its whole requested window in memory for one
+	 * response; before this it carried no list argument and so priced as an
+	 * ordinary 1-unit call regardless of max_bytes, letting a batch of
+	 * near-ceiling reads cost the same as a batch of tiny ones.
+	 *
+	 * Round 2 (W-R2-2): the first pass priced 1 unit per 64KB flat from
+	 * zero, which put the 512KB ceiling at only 8 units — a batch of 100
+	 * ceiling-sized reads (800) still fit inside the 1000-unit budget, so
+	 * the batch-level ceiling this exists to bind never actually bound.
+	 * Pricing flat from zero at 16KB/unit fixed that (ceiling = 32) but
+	 * also repriced the ordinary default (51200) at 4 units — a quiet 4x
+	 * increase for every existing default caller that never asked for
+	 * anything unusual.
+	 *
+	 * Round 3 fixes that: the baseline (the handler's own default,
+	 * RENDERED_HTML_DEFAULT_MAX_BYTES) stays flat at 1, and only bytes
+	 * requested ABOVE it are metered — so nothing changes for a default
+	 * caller, while a call that actually asks for more still scales:
+	 * 512KB is 1 + ceil((524288-51200)/16384) = 1 + 29 = 30 units, and a
+	 * batch of 100 such reads (3000) is still refused whole against the
+	 * 1000 budget.
+	 *
+	 * `ceiling` here must be kept equal to
+	 * Mcpwp_REST_Site_Content::RENDERED_HTML_MAX_BYTES_CEILING, and
+	 * `baseline` equal to Mcpwp_REST_Site_Content::RENDERED_HTML_DEFAULT_
+	 * MAX_BYTES — an operation-weights unit test asserts both match, since
+	 * this class must not (and, being lower-level, cannot cleanly) depend
+	 * on that REST class directly.
+	 *
+	 * Pricing clamps the requested value to `ceiling` BEFORE dividing
+	 * (N-R2-1 — the other half of W-R2-2): the handler itself clamps
+	 * max_bytes to the ceiling before ever reading that many bytes, so
+	 * pricing an unclamped number would price memory the call never
+	 * actually holds.
+	 *
+	 * @var array<string,array{param:string,baseline:int,unit_bytes:int,ceiling:int}>
+	 */
+	const SPEND_SIZE_ROUTES = array(
+		'/rendered-html' => array(
+			'param'      => 'max_bytes',
+			'baseline'   => 51200,
+			'unit_bytes' => 16384,
+			'ceiling'    => 524288,
+		),
 	);
 
 	/**
@@ -178,6 +245,10 @@ final class Mcpwp_Operation_Weights {
 		array( 'rows' ),
 		array( 'widgets' ),
 		array( 'sections' ),
+		// #804: a screenshot widths sweep fans out into one render per width —
+		// the weighted rate limiter must see that too, not just the spend
+		// budget (SPEND_URL_ITEM_ROUTES above).
+		array( 'widths' ),
 	);
 
 	/**
@@ -195,7 +266,26 @@ final class Mcpwp_Operation_Weights {
 		foreach ( self::LIST_GROUPS as $group ) {
 			$largest = 0;
 			foreach ( $group as $key ) {
-				if ( isset( $arguments[ $key ] ) && is_array( $arguments[ $key ] ) ) {
+				if ( ! isset( $arguments[ $key ] ) ) {
+					continue;
+				}
+
+				// #804 N-R2-2/N-R3-2: widths is rate-limited (and priced,
+				// via SPEND_URL_ITEM_ROUTES below) by the EFFECTIVE count —
+				// after the same clamp(320-1920)/dedupe/cap(6) pipeline
+				// capture_multi_width() actually runs — not the raw list
+				// length or a plain count(). Without this, 40 copies of the
+				// same width (or 40 out-of-range widths that all clamp to
+				// one value) would cost 40 rate-limit slots for a call that
+				// only ever renders one image; a comma-separated string
+				// (some MCP clients encode it that way) would count as
+				// zero. effective_screenshot_widths() handles both shapes.
+				if ( 'widths' === $key ) {
+					$largest = max( $largest, count( self::effective_screenshot_widths( $arguments[ $key ] ) ) );
+					continue;
+				}
+
+				if ( is_array( $arguments[ $key ] ) ) {
 					$largest = max( $largest, count( $arguments[ $key ] ) );
 				}
 			}
@@ -203,6 +293,40 @@ final class Mcpwp_Operation_Weights {
 		}
 
 		return $count;
+	}
+
+	/**
+	 * The viewport widths a /screenshot call will actually render, after the
+	 * same pipeline Mcpwp_REST_Screenshot::capture_multi_width() applies:
+	 * clamp each to 320-1920, de-duplicate, cap at 6 (#804 N-R2-2).
+	 *
+	 * Pricing and the weighted rate limiter both call this — not their own
+	 * copy of the clamp/dedupe/cap logic — so neither can price a different
+	 * width count than what the request actually runs. Accepts a comma-
+	 * separated string the same way an id-list argument is accepted
+	 * elsewhere in this class.
+	 *
+	 * @param mixed $widths Raw widths value: an array, or a comma-separated
+	 *                       string/scalar.
+	 * @return array<int,int> Effective widths, in the order they will run.
+	 */
+	public static function effective_screenshot_widths( $widths ) {
+		if ( is_string( $widths ) || is_int( $widths ) ) {
+			$widths = array_filter( array_map( 'trim', explode( ',', (string) $widths ) ), 'strlen' );
+		}
+
+		if ( ! is_array( $widths ) ) {
+			return array();
+		}
+
+		$clamped = array_map(
+			static function ( $w ) {
+				return max( 320, min( 1920, absint( $w ) ) );
+			},
+			$widths
+		);
+
+		return array_slice( array_values( array_unique( $clamped ) ), 0, 6 );
 	}
 
 	/**
@@ -332,11 +456,51 @@ final class Mcpwp_Operation_Weights {
 		if ( array_key_exists( $path, self::SPEND_URL_ITEM_ROUTES ) ) {
 			$items = 0;
 			foreach ( self::SPEND_URL_ITEM_ROUTES[ $path ] as $key ) {
-				if ( isset( $params[ $key ] ) && is_array( $params[ $key ] ) ) {
+				if ( ! isset( $params[ $key ] ) ) {
+					continue;
+				}
+
+				// #804 N-R2-2: /screenshot's widths sweep clamps, dedupes,
+				// and caps at 6 before it runs — price that effective count,
+				// not the raw length of whatever the caller sent (which
+				// could overstate it — 20 duplicate/out-of-range widths
+				// collapse to far fewer real renders — or understate a
+				// comma-string the plain is_array() check below ignores
+				// entirely).
+				if ( '/screenshot' === $path && 'widths' === $key ) {
+					$items = max( $items, count( self::effective_screenshot_widths( $params[ $key ] ) ) );
+					continue;
+				}
+
+				if ( is_array( $params[ $key ] ) ) {
 					$items = max( $items, count( $params[ $key ] ) );
 				}
 			}
 			return max( 1, $items ) * self::SPEND_EGRESS_WEIGHT;
+		}
+
+		// Routes priced by requested size rather than by a list (#804 W5 /
+		// W-R2-2 / round 3). Clamped to the route's own ceiling BEFORE
+		// dividing (N-R2-1): the handler never actually holds more than the
+		// ceiling in memory, so pricing an unclamped number a caller merely
+		// asked for would price memory the call never allocates.
+		//
+		// A clamped value at or under `baseline` (the handler's own
+		// default) costs 1 — unchanged for every ordinary caller. Only
+		// bytes requested ABOVE the baseline are metered, at 1 + one unit
+		// per `unit_bytes` over it, so the 512KB ceiling costs 30 (still
+		// enough to refuse a batch of 100 whole) without quietly raising
+		// the price of a call that never asked for anything unusual.
+		if ( array_key_exists( $path, self::SPEND_SIZE_ROUTES ) ) {
+			$spec      = self::SPEND_SIZE_ROUTES[ $path ];
+			$requested = isset( $params[ $spec['param'] ] ) ? absint( $params[ $spec['param'] ] ) : 0;
+			$clamped   = min( $requested, $spec['ceiling'] );
+
+			if ( $clamped <= $spec['baseline'] ) {
+				return 1;
+			}
+
+			return 1 + (int) ceil( ( $clamped - $spec['baseline'] ) / $spec['unit_bytes'] );
 		}
 
 		// A paid route given a list costs at least the list, like any other
