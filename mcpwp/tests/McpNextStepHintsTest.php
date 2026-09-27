@@ -14,8 +14,9 @@
  *     content entry pre-2025-06-18, must never see it corrupted by an
  *     appended human-readable line), plus the same suggestions under
  *     _meta['mcpwp/next'], never structuredContent, dropped for an error
- *     result, and filtered by the same tool_currently_permitted() gate the
- *     idempotent-replay path already uses for category/role visibility.
+ *     result, and filtered by the same role/availability/profile
+ *     visibility tools/list itself computes (#1017 — tools_visible_by_role_and_availability()
+ *     / tools_visible_to_current_caller()), never a second, independent check.
  *  3. One true end-to-end call through Mcpwp_REST_MCP::handle_mcp() proving
  *     the wiring from process_single_request() through to the HTTP response
  *     body actually fires for a real tools/call.
@@ -31,9 +32,10 @@ final class McpNextStepHintsTest extends TestCase {
 		$GLOBALS['mcpwp_test_options']      = array();
 		$GLOBALS['mcpwp_test_transients']   = array();
 		$GLOBALS['mcpwp_test_current_user'] = 2;
+		$GLOBALS['mcpwp_test_filters']      = array();
 		// Pro active so Pro-tier hint targets (wp_set_seo, category "seo")
 		// are present in the merged category map at all — otherwise
-		// tool_currently_permitted() finds no category for them and the
+		// the visibility gate finds no category for them and the
 		// disabled-category gate never has anything to bite on.
 		$GLOBALS['mcpwp_test_fs'] = new Mcpwp_Test_Fs_Stub( true, true, false, 'pro' );
 		$ref                      = new ReflectionProperty( Mcpwp_License::class, 'instance' );
@@ -42,10 +44,33 @@ final class McpNextStepHintsTest extends TestCase {
 	}
 
 	protected function tearDown(): void {
-		$GLOBALS['mcpwp_test_fs'] = null;
-		$ref                      = new ReflectionProperty( Mcpwp_License::class, 'instance' );
+		$GLOBALS['mcpwp_test_fs']      = null;
+		$GLOBALS['mcpwp_test_filters'] = array();
+		$ref                            = new ReflectionProperty( Mcpwp_License::class, 'instance' );
 		$ref->setAccessible( true );
 		$ref->setValue( null, null );
+	}
+
+	/**
+	 * Force the 'seo' capability Mcpwp_REST_MCP::is_capability_active()
+	 * derives (Mcpwp_Core::get_capabilities()['yoast'] etc.) active WITHOUT
+	 * defining a real WPSEO_VERSION/RANK_MATH_VERSION/... constant — those
+	 * are process-global and can never be un-defined, which would leak "an
+	 * SEO plugin is active" into every OTHER test in the same PHPUnit run
+	 * (this is exactly why SeoPluginDetectTest uses its own
+	 * `mcpwp_seo_plugin_active_override` filter instead of a constant —
+	 * that filter is NOT read by Mcpwp_Core::get_capabilities() itself, so
+	 * this test file uses the filter get_capabilities() DOES read).
+	 * Reset for free every test via the `mcpwp_test_filters` reset above.
+	 */
+	private function force_seo_capability_active(): void {
+		add_filter(
+			'mcpwp_site_capabilities',
+			static function ( $caps ) {
+				$caps['yoast'] = true;
+				return $caps;
+			}
+		);
 	}
 
 	// ---------------------------------------------------------------
@@ -172,6 +197,15 @@ final class McpNextStepHintsTest extends TestCase {
 	}
 
 	public function test_hint_appends_a_new_content_entry_and_meta_on_success(): void {
+		// #1017: the hint visibility gate now also requires the hinted tool's
+		// own plugin to be active (Mcpwp_REST_MCP::get_all_tools()'s
+		// capability filter) — wp_set_elementor needs 'elementor', wp_set_seo
+		// needs an active SEO plugin.
+		if ( ! defined( 'ELEMENTOR_VERSION' ) ) {
+			define( 'ELEMENTOR_VERSION', '4.2.4' );
+		}
+		$this->force_seo_capability_active();
+
 		$original = $this->success_response( array( 'id' => 55 ) );
 
 		$out = $this->invoke_apply_next_step_hints( $original, 'wp_create_page', array( 'title' => 'About' ) );
@@ -276,8 +310,8 @@ final class McpNextStepHintsTest extends TestCase {
 
 	/**
 	 * A hint naming a tool whose category has been disabled site-wide must
-	 * not be shown — same tool_currently_permitted() gate the idempotent
-	 * replay path already relies on for its own permission recheck (#802).
+	 * not be shown — the same role/availability visibility tools/list
+	 * itself computes (#1017).
 	 */
 	public function test_hint_is_dropped_when_the_target_tools_category_is_disabled(): void {
 		// wp_get_site_context (the hint wp_onboard points at) is category "site".
@@ -305,7 +339,12 @@ final class McpNextStepHintsTest extends TestCase {
 	public function test_a_hint_with_only_some_targets_disabled_keeps_the_reachable_ones(): void {
 		// wp_create_page's two hints are wp_set_elementor (category
 		// "elementor") and wp_set_seo (category "seo"). Disabling only
-		// "seo" must drop the second hint but keep the first.
+		// "seo" must drop the second hint but keep the first — and
+		// wp_set_elementor needs 'elementor' active to be visible at all
+		// now that the gate also checks plugin availability (#1017).
+		if ( ! defined( 'ELEMENTOR_VERSION' ) ) {
+			define( 'ELEMENTOR_VERSION', '4.2.4' );
+		}
 		update_option( 'mcpwp_disabled_tool_categories', array( 'seo' ) );
 
 		$out = $this->invoke_apply_next_step_hints(
@@ -319,6 +358,112 @@ final class McpNextStepHintsTest extends TestCase {
 		$this->assertSame( 'wp_set_elementor', $next[0]['tool'] );
 		$this->assertStringContainsString( 'wp_set_elementor', $out['result']['content'][1]['text'] );
 		$this->assertStringNotContainsString( 'wp_set_seo', $out['result']['content'][1]['text'] );
+	}
+
+	/**
+	 * #1017: a hint naming a tool whose required plugin is not active on
+	 * this site — the live bug (admin key offered wp_set_elementor and
+	 * wp_set_seo on a site with neither Elementor nor an SEO plugin) — must
+	 * be dropped, exactly like tools/list itself would never advertise that
+	 * tool. Run in its own process so no OTHER test file's
+	 * `define('ELEMENTOR_VERSION', ...)` leaks in and hides the bug: this
+	 * test forces only the 'seo' capability (via the filter, never a real
+	 * constant), leaving 'elementor' unavailable.
+	 *
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_hint_dropped_when_the_targets_plugin_is_not_active(): void {
+		$this->force_seo_capability_active();
+		$this->assertFalse( defined( 'ELEMENTOR_VERSION' ), 'Precondition: this process must not have Elementor "active".' );
+
+		$out = $this->invoke_apply_next_step_hints(
+			$this->success_response( array( 'id' => 55 ) ),
+			'wp_create_page',
+			array( 'title' => 'About' )
+		);
+
+		$next = $out['result']['_meta']['mcpwp/next'];
+		$this->assertCount( 1, $next, 'Only wp_set_seo (SEO active) should survive; wp_set_elementor (Elementor NOT active) must be dropped.' );
+		$this->assertSame( 'wp_set_seo', $next[0]['tool'] );
+		$this->assertStringNotContainsString( 'wp_set_elementor', $out['result']['content'][1]['text'] );
+	}
+
+	/**
+	 * #1017: under the `core` MCP tool profile (#907), a hint naming a tool
+	 * that IS reachable (role + availability say yes) but sits outside the
+	 * fixed core subset is not simply dropped — it is re-expressed as a
+	 * call to `mcpwp_call` (always in `core`) naming the real tool, the
+	 * same door a `core` client must already use to reach it directly. A
+	 * hint whose target IS in the core subset is shown unchanged.
+	 */
+	public function test_core_profile_wraps_a_non_core_hint_target_in_mcpwp_call(): void {
+		if ( ! defined( 'ELEMENTOR_VERSION' ) ) {
+			define( 'ELEMENTOR_VERSION', '4.2.4' );
+		}
+
+		// wp_set_elementor's two hints: wp_regenerate_elementor_css (NOT in
+		// Mcpwp_REST_MCP::CORE_TOOL_PROFILE_TOOLS) and wp_get_rendered_html
+		// (IS in it).
+		$controller = new Mcpwp_REST_MCP();
+		$profile    = new ReflectionProperty( Mcpwp_REST_MCP::class, 'resolved_tool_profile' );
+		$profile->setAccessible( true );
+		$profile->setValue( $controller, 'core' );
+
+		$method = new ReflectionMethod( $controller, 'apply_next_step_hints' );
+		$method->setAccessible( true );
+
+		$out = $method->invoke(
+			$controller,
+			$this->success_response( array( 'id' => 55 ) ),
+			'wp_set_elementor',
+			array( 'id' => 55, 'elementor_data' => '[]' )
+		);
+
+		$next = $out['result']['_meta']['mcpwp/next'];
+		$this->assertCount( 2, $next );
+
+		$by_tool = array();
+		foreach ( $next as $hint ) {
+			$by_tool[ $hint['tool'] ][] = $hint;
+		}
+
+		// Core-listed target: shown directly, unwrapped.
+		$this->assertArrayHasKey( 'wp_get_rendered_html', $by_tool, 'A core-listed hint target must still be shown directly.' );
+
+		// Non-core but reachable target: wrapped in mcpwp_call.
+		$this->assertArrayHasKey( 'mcpwp_call', $by_tool, 'A non-core but reachable hint target must be re-expressed as mcpwp_call under the core profile.' );
+		$wrapped = $by_tool['mcpwp_call'][0];
+		$this->assertSame( 'wp_regenerate_elementor_css', $wrapped['arguments']['name'] );
+		$this->assertSame( array( 'id' => 55 ), $wrapped['arguments']['arguments'] );
+		$this->assertStringContainsString( 'mcpwp_call({"name":"wp_regenerate_elementor_css"', $out['result']['content'][1]['text'] );
+
+		// The wrapper itself is never named as a hint TARGET verbatim from
+		// a hint source that already named it directly (sanity: exactly one
+		// wrap, not one per non-core hint accidentally duplicated).
+		$this->assertCount( 1, $by_tool['mcpwp_call'] );
+	}
+
+	/**
+	 * The `full` profile (the default) never wraps — a hint for a
+	 * reachable-but-non-"core"-listed tool means nothing under `full`,
+	 * since `full` has no subset to begin with, and is shown directly.
+	 */
+	public function test_full_profile_never_wraps_a_hint_in_mcpwp_call(): void {
+		if ( ! defined( 'ELEMENTOR_VERSION' ) ) {
+			define( 'ELEMENTOR_VERSION', '4.2.4' );
+		}
+
+		$out = $this->invoke_apply_next_step_hints(
+			$this->success_response( array( 'id' => 55 ) ),
+			'wp_set_elementor',
+			array( 'id' => 55, 'elementor_data' => '[]' )
+		);
+
+		$next = $out['result']['_meta']['mcpwp/next'];
+		$tools = array_column( $next, 'tool' );
+		$this->assertContains( 'wp_regenerate_elementor_css', $tools );
+		$this->assertNotContains( 'mcpwp_call', $tools );
 	}
 
 	// ---------------------------------------------------------------

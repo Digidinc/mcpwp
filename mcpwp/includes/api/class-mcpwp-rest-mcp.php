@@ -2102,10 +2102,17 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 * so the stored `content` array never carries a hint entry, and
 	 * replaying it twice can never produce two hint blocks.
 	 *
-	 * A hint naming a tool the caller cannot currently reach (category
-	 * disabled by the site admin, or outside the API key's allowed
-	 * categories) is dropped before it is shown — same gate the idempotent
-	 * replay path already uses for its own permission recheck.
+	 * A hint naming a tool the caller cannot currently see in tools/list —
+	 * category disabled by the site admin, outside the API key's allowed
+	 * categories, or (#1017) the tool's required plugin (Elementor, an SEO
+	 * plugin, …) is not active on this site — is dropped before it is
+	 * shown, through the exact same visibility chokepoint tools/list itself
+	 * uses (tools_visible_by_role_and_availability()). Under the `core`
+	 * tool profile (#907) specifically, a hint for a tool that IS reachable
+	 * but sits outside the fixed core subset is not simply dropped: since
+	 * `mcpwp_call` is always in `core`, the hint is re-expressed as a call
+	 * to that wrapper naming the real tool — the same door a `core` client
+	 * would have to use to reach it anyway.
 	 *
 	 * @param array|null $response  JSON-RPC response, already schema-conformed.
 	 * @param string     $tool_name Tool name as the client called it.
@@ -2136,11 +2143,42 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			return $response;
 		}
 
-		$key_record = $this->get_current_api_key_record();
-		$available  = array();
+		// #1017: the SAME two visibility stages tools/list itself computes —
+		// role/category + Pro/plugin availability, then (on top) the `core`
+		// profile subset — never a second, independently-maintained check.
+		$role_and_availability_visible = $this->tool_name_lookup( $this->tools_visible_by_role_and_availability() );
+		$profile_visible                = $this->tool_name_lookup( $this->tools_visible_to_current_caller() );
+
+		$available = array();
 		foreach ( $hints as $hint ) {
-			if ( isset( $hint['tool'] ) && $this->tool_currently_permitted( $hint['tool'], $key_record ) ) {
+			if ( ! isset( $hint['tool'] ) ) {
+				continue;
+			}
+
+			// Fully visible to this caller right now — shown as-is.
+			if ( isset( $profile_visible[ $hint['tool'] ] ) ) {
 				$available[] = $hint;
+				continue;
+			}
+
+			// Reachable in principle (role + availability say yes) but
+			// trimmed out only by the `core` profile's fixed subset: offer
+			// it through mcpwp_call, the same door a `core` client must
+			// already use to reach any non-core tool. `mcpwp_call` itself
+			// is always in the core set (META_TOOL_NAMES), so this branch
+			// can only fire when that wrapper is actually available too.
+			if ( 'core' === $this->resolved_tool_profile
+				&& isset( $role_and_availability_visible[ $hint['tool'] ] )
+				&& isset( $profile_visible['mcpwp_call'] )
+			) {
+				$available[] = array(
+					'tool'      => 'mcpwp_call',
+					'why'       => $hint['why'],
+					'arguments' => array(
+						'name'      => $hint['tool'],
+						'arguments' => isset( $hint['arguments'] ) && is_array( $hint['arguments'] ) ? $hint['arguments'] : array(),
+					),
+				);
 			}
 		}
 		if ( empty( $available ) ) {
@@ -2280,33 +2318,45 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	}
 
 	/**
-	 * Handle tools/list method.
+	 * Tools the current caller can see once Pro/plugin availability and
+	 * admin-disabled categories (get_all_tools(), cached) and the API key's
+	 * role/category restrictions (filter_tools_by_key_role()) are applied —
+	 * everything tools/list filters on BEFORE the `core` profile subset and
+	 * the optional params.category query narrowing.
 	 *
-	 * Supports optional category filter via params.category.
-	 * Filters tools based on the API key's role and allowed categories.
+	 * The one other caller is next-step hints (#912/#1017): it needs this
+	 * PRE-profile stage on its own, to tell "hidden because the caller
+	 * cannot reach it at all" apart from "hidden only because `core` trims
+	 * the list", which get different treatment there.
 	 *
-	 * @param mixed $id     Request ID.
-	 * @param array $params Optional request parameters.
-	 * @return array JSON-RPC response.
+	 * @return array Tool definitions.
 	 */
-	private function handle_tools_list( $id, $params = array() ) {
-		$this->log_mcp_activity( 'mcp_tools_list', array( 'params' => $params ) );
-
-		// Build tools from all registries (with caching).
+	private function tools_visible_by_role_and_availability() {
 		if ( $this->tools_cache === null ) {
 			$this->tools_cache = $this->get_all_tools();
 		}
 
-		$tools = $this->tools_cache;
+		return $this->filter_tools_by_key_role( $this->tools_cache );
+	}
 
-		// Filter by API key role (tool category restrictions).
-		$tools = $this->filter_tools_by_key_role( $tools );
+	/**
+	 * The exact tool set tools/list returns for the current caller, before
+	 * params.category query narrowing and protocol-version field
+	 * stripping: role/availability (tools_visible_by_role_and_availability())
+	 * plus the `core` MCP tool profile (#907) — a fixed ~25-tool subset plus
+	 * the two meta tools, applied last so `core` never re-adds a tool the
+	 * key/capability/category gates already removed. `full` (the default,
+	 * and every profile before #907) does not filter here at all.
+	 *
+	 * The single visibility chokepoint tools/list and next-step hints
+	 * (#912/#1017) both call, so a hint can never name a tool the caller's
+	 * own tools/list would not show it.
+	 *
+	 * @return array Tool definitions.
+	 */
+	private function tools_visible_to_current_caller() {
+		$tools = $this->tools_visible_by_role_and_availability();
 
-		// The `core` MCP tool profile (#907): a fixed ~25-tool subset plus
-		// the two meta tools, applied after every other visibility filter
-		// above so `core` never re-adds a tool the key/capability/category
-		// gates already removed. `full` (the default, and every profile
-		// before #907) does not filter here at all.
 		if ( 'core' === $this->resolved_tool_profile ) {
 			$tools = array_values(
 				array_filter(
@@ -2319,6 +2369,41 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				)
 			);
 		}
+
+		return $tools;
+	}
+
+	/**
+	 * Extract just the `name` field of a tool-definition list, as a lookup
+	 * map (`name => true`) for isset() checks.
+	 *
+	 * @param array $tools Tool definitions, e.g. from tools_visible_to_current_caller().
+	 * @return array<string,true>
+	 */
+	private function tool_name_lookup( array $tools ) {
+		$names = array();
+		foreach ( $tools as $tool ) {
+			if ( isset( $tool['name'] ) && is_string( $tool['name'] ) ) {
+				$names[ $tool['name'] ] = true;
+			}
+		}
+		return $names;
+	}
+
+	/**
+	 * Handle tools/list method.
+	 *
+	 * Supports optional category filter via params.category.
+	 * Filters tools based on the API key's role and allowed categories.
+	 *
+	 * @param mixed $id     Request ID.
+	 * @param array $params Optional request parameters.
+	 * @return array JSON-RPC response.
+	 */
+	private function handle_tools_list( $id, $params = array() ) {
+		$this->log_mcp_activity( 'mcp_tools_list', array( 'params' => $params ) );
+
+		$tools = $this->tools_visible_to_current_caller();
 
 		// Filter by category if requested.
 		$category_filter = isset( $params['category'] ) ? sanitize_key( $params['category'] ) : '';
@@ -3301,19 +3386,29 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 * @return array JSON-RPC response.
 	 */
 	private function handle_tools_call( $id, $params, $request ) {
-		$start     = microtime( true );
-		$tool_name = isset( $params['name'] ) ? $params['name'] : '';
-		$arguments = isset( $params['arguments'] ) ? $params['arguments'] : array();
+		$start         = microtime( true );
+		$raw_tool_name = isset( $params['name'] ) ? $params['name'] : null;
 
-		if ( empty( $tool_name ) ) {
-			$this->fire_tool_called( $tool_name, $start, 'tool_not_found' );
+		// #1016: a non-string `name` (array, int, bool, null/missing) must
+		// never reach an array-key lookup below (get_all_tool_map(),
+		// get_all_tool_categories(), etc.) — PHP throws a TypeError
+		// ("Cannot access offset of type array") on those instead of
+		// failing cleanly, which surfaced as a bare HTTP 500 rather than a
+		// JSON-RPC error. Validate the shape FIRST, before anything else
+		// (including fire_tool_called()/log_mcp_activity(), which do their
+		// own array-key lookups on the name) ever sees the raw value.
+		if ( ! is_string( $raw_tool_name ) || '' === $raw_tool_name ) {
+			$this->fire_tool_called( '', $start, 'invalid_params' );
 			return $this->jsonrpc_error(
 				$id,
 				-32602,
-				'Missing tool name',
-				array( 'hint' => 'The "name" field is required in tools/call params. Call tools/list to see available tool names.' )
+				'Invalid params: "name" must be a non-empty string',
+				array( 'hint' => 'The "name" field in tools/call params must be a non-empty string naming an existing tool. Call tools/list to see available tool names.' )
 			);
 		}
+
+		$tool_name = $raw_tool_name;
+		$arguments = isset( $params['arguments'] ) ? $params['arguments'] : array();
 
 		$this->log_mcp_activity(
 			'mcp_tool_call',
