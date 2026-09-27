@@ -157,6 +157,13 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 
 == Changelog ==
 
+= 3.14.2 =
+* feat: **content:** guardrails against scaled and duplicate publishing ([#957](https://github.com/Mumega-com/mcpwp/issues/957)) ([#980](https://github.com/Mumega-com/mcpwp/issues/980))
+* feat: **mcp:** forgiving params — map near-miss argument keys or refuse with the fix ([#986](https://github.com/Mumega-com/mcpwp/issues/986))
+* feat: **mcp:** slim wp_onboard default to ~3k tokens, drop the tool dump ([#985](https://github.com/Mumega-com/mcpwp/issues/985))
+* fix: **elementor-pro:** Custom Code readback/status/priority, and the wrong-axis conditions index ([#990](https://github.com/Mumega-com/mcpwp/issues/990))
+* fix: **verification:** honest paging for rendered HTML, mshots rejection, full_page + widths ([#988](https://github.com/Mumega-com/mcpwp/issues/988))
+
 = 3.14.1 =
 * feat: **ops:** intake triage puts every issue source on the board ([#940](https://github.com/Mumega-com/mcpwp/issues/940)) ([#967](https://github.com/Mumega-com/mcpwp/issues/967))
 * fix: **deps:** upgrade hono, fast-uri, undici and other vulnerable packages ([#939](https://github.com/Mumega-com/mcpwp/issues/939)) ([#971](https://github.com/Mumega-com/mcpwp/issues/971))
