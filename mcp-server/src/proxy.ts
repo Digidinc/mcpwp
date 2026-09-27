@@ -19,6 +19,16 @@ export interface JsonRpcResponse {
   error?: { code: number; message: string; data?: any };
 }
 
+/** A 400 from the plugin's MCP-Protocol-Version check (#906). */
+export function isUnsupportedVersionRefusal(error: any): boolean {
+  const body = error?.body;
+  return (
+    error?.status === 400 &&
+    body?.error?.code === -32600 &&
+    Array.isArray(body?.error?.data?.supported)
+  );
+}
+
 export class McpProxy {
   private endpoint: string;
   private apiKey: string;
@@ -104,6 +114,9 @@ export class McpProxy {
           `HTTP ${response.status} from WordPress MCP endpoint: ${text.slice(0, 200)}`
         );
         (error as any).status = response.status;
+        try {
+          (error as any).body = JSON.parse(text);
+        } catch {}
         throw error;
       }
       return (await response.json()) as any;
@@ -124,8 +137,10 @@ export class McpProxy {
       return (await this.post(request, version)) as unknown as JsonRpcResponse;
     } catch (error: any) {
       // The plugin was swapped mid-session for one that no longer speaks
-      // the negotiated version: renegotiate once and retry.
-      if (version && error?.status === 400) {
+      // the negotiated version: renegotiate once and retry — only for that
+      // refusal (400, JSON-RPC -32600 carrying the supported-version list),
+      // never for any other 400.
+      if (version && isUnsupportedVersionRefusal(error)) {
         this.setRequestedProtocolVersion(this.requestedProtocolVersion);
         await this.negotiate();
         return (await this.post(request, this.protocolVersion)) as unknown as JsonRpcResponse;

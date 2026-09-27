@@ -164,7 +164,13 @@ abstract class Mcpwp_MCP_Tool_Registry {
 		$success_required = isset( $schema['required'] ) && is_array( $schema['required'] ) ? array_values( $schema['required'] ) : array();
 		unset( $schema['required'] );
 
-		$properties          = isset( $schema['properties'] ) && is_array( $schema['properties'] ) ? $schema['properties'] : array();
+		$properties = array();
+		if ( isset( $schema['properties'] ) && is_array( $schema['properties'] ) ) {
+			$properties = $schema['properties'];
+		} elseif ( isset( $schema['properties'] ) && is_object( $schema['properties'] ) ) {
+			// A third party may pass `new stdClass()` / a decoded object.
+			$properties = get_object_vars( $schema['properties'] );
+		}
 		$properties['error'] = array(
 			'type'                 => 'object',
 			'description'          => 'Present only on an isError result: the machine-readable failure (#936).',

@@ -16,7 +16,8 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
   CallToolRequestSchema,
-  InitializeRequestSchema,
+  LATEST_PROTOCOL_VERSION,
+  SUPPORTED_PROTOCOL_VERSIONS,
   ListToolsRequestSchema,
   ListResourcesRequestSchema,
   ReadResourceRequestSchema,
@@ -282,17 +283,22 @@ const server = new Server(
   { capabilities: { tools: {}, resources: {} } }
 );
 
-// initialize → the SDK's own handshake, then remember the version the host
-// negotiated so WordPress is spoken to in the same one (#906).
+// Host protocol version (#906). The SDK answers the host's `initialize` itself;
+// this derives the version it answered with the same rule, from the SDK's
+// public constants — the requested version if the SDK supports it, else its
+// latest — so WordPress is spoken to in the same version.
 let hostProtocolVersion: string | null = null;
-server.setRequestHandler(InitializeRequestSchema, async (request) => {
-  // _oninitialize is the SDK's built-in handler (capabilities bookkeeping and
-  // version choice); wrapping it keeps that behaviour exactly.
-  const result = await (server as any)._oninitialize(request);
-  hostProtocolVersion = typeof result?.protocolVersion === "string" ? result.protocolVersion : null;
+
+function noteHostInitialize(message: unknown): void {
+  const msg = message as { method?: unknown; params?: { protocolVersion?: unknown } } | null;
+  if (!msg || msg.method !== "initialize") return;
+  const requested = msg.params?.protocolVersion;
+  hostProtocolVersion =
+    typeof requested === "string" && SUPPORTED_PROTOCOL_VERSIONS.includes(requested)
+      ? requested
+      : LATEST_PROTOCOL_VERSION;
   activeProxy.setRequestedProtocolVersion(hostProtocolVersion);
-  return result;
-});
+}
 
 // tools/list → proxy + inject Module M tools
 server.setRequestHandler(ListToolsRequestSchema, async () => {
@@ -367,6 +373,13 @@ async function main() {
   try {
     const transport = new StdioServerTransport();
     await server.connect(transport);
+    // Observe (never alter) inbound messages through the public Transport
+    // interface, to learn the host's requested protocol version.
+    const deliver = transport.onmessage;
+    transport.onmessage = (message) => {
+      noteHostInitialize(message);
+      deliver?.(message);
+    };
     log("info", `MCPWP Server v${VERSION} running as "${serverName}" (proxy mode)`);
     log("info", `Proxying to: ${site.url} | session: ${sessionId}`);
   } catch (error: any) {

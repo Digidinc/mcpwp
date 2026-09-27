@@ -500,7 +500,10 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 
 		// A browser's CORS preflight is answered by WordPress core, not by
 		// handle_options(), so the MCP request headers must also be on
-		// core's allow-list for this route (#906).
+		// core's allow-list for this route (#906). Core passes the request
+		// to this filter only from WordPress 6.3; on older cores the second
+		// argument is absent and allow_mcp_cors_headers() leaves the list
+		// alone rather than widen it for every route.
 		add_filter( 'rest_allowed_cors_headers', array( $this, 'allow_mcp_cors_headers' ), 10, 2 );
 	}
 
@@ -1708,7 +1711,15 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			return self::HEADERLESS_PROTOCOL_VERSION;
 		}
 
-		return in_array( $header, self::SUPPORTED_PROTOCOL_VERSIONS, true ) ? $header : null;
+		// A header sent twice reaches WordPress comma-joined. The same
+		// value repeated ("2025-06-18, 2025-06-18") is that value; two
+		// different values are ambiguous and refused like any bad one.
+		$values = array_values( array_unique( array_map( 'trim', explode( ',', $header ) ) ) );
+		if ( 1 !== count( $values ) ) {
+			return null;
+		}
+
+		return in_array( $values[0], self::SUPPORTED_PROTOCOL_VERSIONS, true ) ? $values[0] : null;
 	}
 
 	/**

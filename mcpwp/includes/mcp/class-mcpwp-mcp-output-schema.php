@@ -10,23 +10,55 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 /**
- * Validates JSON-decoded wire data against the JSON Schema subset tool
- * outputSchemas use: `type` (a name or a list of names), `properties`,
- * `required`, `items`, `additionalProperties` (bool or schema), `anyOf`,
- * `not`, `enum`.
+ * Validates JSON-decoded wire data against a JSON Schema, FAILING CLOSED.
+ *
+ * Supported: `type` (a name or a list of names), `properties`, `required`,
+ * `items` (a single schema), `additionalProperties` (bool or schema),
+ * `anyOf`, `oneOf`, `allOf`, `not`, `enum`, `const`, `minimum`, `maximum`,
+ * `minLength`, `maxLength`, `pattern`. Annotation keywords (`description`,
+ * `title`, `default`, `examples`, `$schema`, `$comment`) are ignored. ANY
+ * other keyword — `$ref`, tuple `items`, `format`, `exclusiveMinimum`, … —
+ * is a validation failure, never silently skipped: the client's validator
+ * (Ajv in the reference SDK) does enforce them, so a result this class
+ * waved through could still make that client throw. Failing closed means
+ * the caller sends the error envelope instead, which every schema admits.
  *
  * Why not rest_validate_value_from_schema(): WordPress core's validator is
- * built for coercing request input, so it is deliberately lenient where a
- * client's validator (Ajv in the reference SDK) is strict — it accepts the
- * string "7" as an integer and an empty or list array as an object, and it
- * has no `not`. A result it waved through could still make the client throw.
+ * built for coercing request input — it accepts the string "7" as an
+ * integer and an empty or list array as an object, and has no `not`.
  *
  * Input is json_decode()d WITHOUT assoc, so a JSON object is a stdClass and
  * a JSON array a PHP list — the exact distinction the client sees. An
- * integral float (3.0) counts as an integer, as it does in JSON Schema.
- * Keywords outside the subset are ignored, never guessed at.
+ * integral float (3.0) is an integer, and equal to 3, as in JSON Schema.
  */
 class Mcpwp_MCP_Output_Schema {
+
+	/**
+	 * Keywords that carry no assertion.
+	 */
+	const ANNOTATION_KEYWORDS = array( 'description', 'title', 'default', 'examples', '$schema', '$comment' );
+
+	/**
+	 * Keywords this class asserts.
+	 */
+	const ASSERTION_KEYWORDS = array(
+		'type',
+		'properties',
+		'required',
+		'items',
+		'additionalProperties',
+		'anyOf',
+		'oneOf',
+		'allOf',
+		'not',
+		'enum',
+		'const',
+		'minimum',
+		'maximum',
+		'minLength',
+		'maxLength',
+		'pattern',
+	);
 
 	/**
 	 * Validate a value.
@@ -38,17 +70,30 @@ class Mcpwp_MCP_Output_Schema {
 	 */
 	public static function validate( $value, $schema, $path = '$' ) {
 		if ( is_array( $schema ) ) {
-			$schema = json_decode( wp_json_encode( $schema ) );
+			$schema = json_decode( (string) wp_json_encode( $schema ) );
 		}
-		if ( ! is_object( $schema ) ) {
+		if ( true === $schema || ( $schema instanceof stdClass && array() === get_object_vars( $schema ) ) ) {
 			return array();
 		}
+		if ( ! $schema instanceof stdClass ) {
+			return array( $path . ': schema is not an object' );
+		}
 
-		if ( isset( $schema->type ) ) {
+		$keywords = get_object_vars( $schema );
+		foreach ( array_keys( $keywords ) as $keyword ) {
+			if ( ! in_array( $keyword, self::ASSERTION_KEYWORDS, true ) && ! in_array( $keyword, self::ANNOTATION_KEYWORDS, true ) ) {
+				return array( sprintf( "%s: unsupported schema keyword '%s'", $path, $keyword ) );
+			}
+		}
+
+		if ( isset( $keywords['type'] ) ) {
 			$types = is_array( $schema->type ) ? $schema->type : array( $schema->type );
 			$match = false;
 			foreach ( $types as $type ) {
-				if ( is_string( $type ) && self::is_type( $value, $type ) ) {
+				if ( ! is_string( $type ) ) {
+					return array( $path . ': malformed type' );
+				}
+				if ( self::is_type( $value, $type ) ) {
 					$match = true;
 					break;
 				}
@@ -60,56 +105,203 @@ class Mcpwp_MCP_Output_Schema {
 
 		$errors = array();
 
-		if ( isset( $schema->enum ) && is_array( $schema->enum ) && ! in_array( $value, $schema->enum, false ) ) {
-			$errors[] = $path . ': not one of the allowed values';
+		if ( array_key_exists( 'enum', $keywords ) ) {
+			if ( ! is_array( $schema->enum ) ) {
+				return array( $path . ': malformed enum' );
+			}
+			$found = false;
+			foreach ( $schema->enum as $allowed ) {
+				if ( self::json_equal( $value, $allowed ) ) {
+					$found = true;
+					break;
+				}
+			}
+			if ( ! $found ) {
+				$errors[] = $path . ': not one of the allowed values';
+			}
+		}
+
+		if ( array_key_exists( 'const', $keywords ) && ! self::json_equal( $value, $schema->const ) ) {
+			$errors[] = $path . ': not the constant value';
+		}
+
+		if ( is_int( $value ) || is_float( $value ) ) {
+			foreach ( array( 'minimum', 'maximum' ) as $bound ) {
+				if ( ! array_key_exists( $bound, $keywords ) ) {
+					continue;
+				}
+				if ( ! is_int( $schema->$bound ) && ! is_float( $schema->$bound ) ) {
+					return array( $path . ': malformed ' . $bound );
+				}
+				if ( 'minimum' === $bound ? $value < $schema->$bound : $value > $schema->$bound ) {
+					$errors[] = sprintf( '%s: %s %s', $path, 'minimum' === $bound ? 'below' : 'above', $bound );
+				}
+			}
+		}
+
+		if ( is_string( $value ) ) {
+			$length = self::length( $value );
+			foreach ( array( 'minLength', 'maxLength' ) as $bound ) {
+				if ( ! array_key_exists( $bound, $keywords ) ) {
+					continue;
+				}
+				if ( ! is_int( $schema->$bound ) ) {
+					return array( $path . ': malformed ' . $bound );
+				}
+				if ( 'minLength' === $bound ? $length < $schema->$bound : $length > $schema->$bound ) {
+					$errors[] = sprintf( '%s: string length outside %s', $path, $bound );
+				}
+			}
+			if ( array_key_exists( 'pattern', $keywords ) ) {
+				if ( ! is_string( $schema->pattern ) ) {
+					return array( $path . ': malformed pattern' );
+				}
+				// ECMA-262 regex run as PCRE, unanchored like JSON Schema's,
+				// with a delimiter that cannot collide. A pattern PCRE cannot
+				// compile is a failure, never a pass.
+				$matched = @preg_match( "\x01" . $schema->pattern . "\x01u", $value ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+				if ( false === $matched ) {
+					return array( $path . ': pattern could not be evaluated' );
+				}
+				if ( 0 === $matched ) {
+					$errors[] = $path . ': does not match pattern';
+				}
+			}
 		}
 
 		if ( $value instanceof stdClass ) {
-			if ( isset( $schema->required ) && is_array( $schema->required ) ) {
+			if ( array_key_exists( 'required', $keywords ) ) {
+				if ( ! is_array( $schema->required ) ) {
+					return array( $path . ': malformed required' );
+				}
 				foreach ( $schema->required as $key ) {
-					if ( is_string( $key ) && ! property_exists( $value, $key ) ) {
+					if ( ! is_string( $key ) ) {
+						return array( $path . ': malformed required' );
+					}
+					if ( ! property_exists( $value, $key ) ) {
 						$errors[] = sprintf( "%s: missing required '%s'", $path, $key );
 					}
 				}
 			}
-			$properties = isset( $schema->properties ) && is_object( $schema->properties ) ? get_object_vars( $schema->properties ) : array();
-			$additional = isset( $schema->additionalProperties ) ? $schema->additionalProperties : true;
+			$properties = array();
+			if ( array_key_exists( 'properties', $keywords ) ) {
+				if ( ! $schema->properties instanceof stdClass ) {
+					return array( $path . ': malformed properties' );
+				}
+				$properties = get_object_vars( $schema->properties );
+			}
+			$additional = array_key_exists( 'additionalProperties', $keywords ) ? $schema->additionalProperties : true;
 			foreach ( get_object_vars( $value ) as $key => $child ) {
 				$child_path = $path . '.' . $key;
 				if ( array_key_exists( $key, $properties ) ) {
 					$errors = array_merge( $errors, self::validate( $child, $properties[ $key ], $child_path ) );
 				} elseif ( false === $additional ) {
 					$errors[] = $child_path . ': property not allowed';
-				} elseif ( is_object( $additional ) ) {
+				} elseif ( true !== $additional ) {
 					$errors = array_merge( $errors, self::validate( $child, $additional, $child_path ) );
 				}
 			}
 		}
 
-		if ( is_array( $value ) && isset( $schema->items ) && is_object( $schema->items ) ) {
+		if ( is_array( $value ) && array_key_exists( 'items', $keywords ) ) {
+			if ( ! $schema->items instanceof stdClass && true !== $schema->items ) {
+				// Tuple form (an array of schemas) is unsupported: fail closed.
+				return array( $path . ': unsupported items form' );
+			}
 			foreach ( $value as $index => $item ) {
 				$errors = array_merge( $errors, self::validate( $item, $schema->items, $path . '[' . $index . ']' ) );
 			}
 		}
 
-		if ( isset( $schema->anyOf ) && is_array( $schema->anyOf ) ) {
-			$any = false;
-			foreach ( $schema->anyOf as $branch ) {
-				if ( array() === self::validate( $value, $branch, $path ) ) {
-					$any = true;
-					break;
+		foreach ( array( 'anyOf', 'oneOf', 'allOf' ) as $combinator ) {
+			if ( ! array_key_exists( $combinator, $keywords ) ) {
+				continue;
+			}
+			if ( ! is_array( $schema->$combinator ) || array() === $schema->$combinator ) {
+				return array( $path . ': malformed ' . $combinator );
+			}
+			$passing = 0;
+			$failure = array();
+			foreach ( $schema->$combinator as $branch ) {
+				$branch_errors = self::validate( $value, $branch, $path );
+				if ( array() === $branch_errors ) {
+					++$passing;
+				} elseif ( array() === $failure ) {
+					$failure = $branch_errors;
 				}
 			}
-			if ( ! $any ) {
+			if ( 'anyOf' === $combinator && 0 === $passing ) {
 				$errors[] = $path . ': matches no anyOf branch';
+			} elseif ( 'oneOf' === $combinator && 1 !== $passing ) {
+				$errors[] = sprintf( '%s: matches %d oneOf branches, not exactly one', $path, $passing );
+			} elseif ( 'allOf' === $combinator && array() !== $failure ) {
+				$errors = array_merge( $errors, $failure );
 			}
 		}
 
-		if ( isset( $schema->not ) && is_object( $schema->not ) && array() === self::validate( $value, $schema->not, $path ) ) {
+		if ( array_key_exists( 'not', $keywords ) && array() === self::validate( $value, $schema->not, $path ) ) {
 			$errors[] = $path . ': matches a "not" schema';
 		}
 
 		return $errors;
+	}
+
+	/**
+	 * JSON equality: same JSON type and value; numbers compare by value
+	 * (1 equals 1.0), objects by keys regardless of order, arrays in order.
+	 * Never PHP's loose `==` ("1" is not 1, true is not "x").
+	 *
+	 * @param mixed $a Decoded value.
+	 * @param mixed $b Decoded value.
+	 * @return bool
+	 */
+	public static function json_equal( $a, $b ) {
+		$a_number = is_int( $a ) || is_float( $a );
+		$b_number = is_int( $b ) || is_float( $b );
+		if ( $a_number || $b_number ) {
+			return $a_number && $b_number && (float) $a === (float) $b;
+		}
+		if ( $a instanceof stdClass || $b instanceof stdClass ) {
+			if ( ! $a instanceof stdClass || ! $b instanceof stdClass ) {
+				return false;
+			}
+			$a_vars = get_object_vars( $a );
+			$b_vars = get_object_vars( $b );
+			if ( count( $a_vars ) !== count( $b_vars ) ) {
+				return false;
+			}
+			foreach ( $a_vars as $key => $child ) {
+				if ( ! array_key_exists( $key, $b_vars ) || ! self::json_equal( $child, $b_vars[ $key ] ) ) {
+					return false;
+				}
+			}
+			return true;
+		}
+		if ( is_array( $a ) || is_array( $b ) ) {
+			if ( ! is_array( $a ) || ! is_array( $b ) || count( $a ) !== count( $b ) ) {
+				return false;
+			}
+			foreach ( array_values( $a ) as $index => $child ) {
+				if ( ! self::json_equal( $child, array_values( $b )[ $index ] ) ) {
+					return false;
+				}
+			}
+			return true;
+		}
+		return $a === $b;
+	}
+
+	/**
+	 * String length in code points, as JSON Schema counts it.
+	 *
+	 * @param string $value String.
+	 * @return int
+	 */
+	private static function length( $value ) {
+		if ( function_exists( 'mb_strlen' ) ) {
+			return (int) mb_strlen( $value, 'UTF-8' );
+		}
+		return (int) preg_match_all( '/./us', $value );
 	}
 
 	/**

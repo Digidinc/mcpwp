@@ -302,7 +302,7 @@ final class McpProtocolVersionTest extends TestCase {
 	}
 
 	public function test_an_unsupported_or_malformed_header_is_a_400_naming_the_supported_versions(): void {
-		foreach ( array( '2099-01-01', '2025-6-18', 'latest', '2025-11-25,2025-11-25', "<script>" ) as $header ) {
+		foreach ( array( '2099-01-01', '2025-6-18', 'latest', '2025-03-26,2025-11-25', "<script>" ) as $header ) {
 			$response = $this->post_raw( array( 'jsonrpc' => '2.0', 'id' => 7, 'method' => 'tools/list' ), $header );
 			$data     = $response->get_data();
 
@@ -323,6 +323,16 @@ final class McpProtocolVersionTest extends TestCase {
 		);
 		$this->assertSame( 400, $response->get_status() );
 		$this->assertSame( array(), $GLOBALS['mcpwp_test_dispatched_routes'] );
+	}
+
+	public function test_a_comma_joined_duplicate_of_one_supported_version_is_that_version(): void {
+		foreach ( array( '2025-06-18, 2025-06-18', '2025-06-18,2025-06-18' ) as $header ) {
+			$response = $this->post_raw( array( 'jsonrpc' => '2.0', 'id' => 1, 'method' => 'tools/list' ), $header );
+			$this->assertSame( 200, $response->get_status(), "'$header' is accepted." );
+			$tools = json_decode( wp_json_encode( $response->get_data() ), true )['result']['tools'];
+			$this->assertArrayHasKey( 'title', $tools[0], 'Answered as 2025-06-18.' );
+		}
+		$this->assertSame( 400, $this->post_raw( array( 'jsonrpc' => '2.0', 'id' => 1, 'method' => 'tools/list' ), '2025-06-18, 2025-03-26' )->get_status(), 'Two different values are refused.' );
 	}
 
 	public function test_initialize_is_never_refused_for_its_header(): void {
@@ -611,6 +621,105 @@ final class McpProtocolVersionTest extends TestCase {
 			$this->assertSame( array(), call_user_func( $validator, json_decode( $error ), $schema ), "$label: error envelope passes." );
 			$this->assertNotSame( array(), call_user_func( $validator, json_decode( $mixed ), $schema ), "$label: success shape plus an error key fails." );
 		}
+	}
+
+	public function test_server_validator_fails_closed_on_unsupported_keywords_and_ignores_only_annotations(): void {
+		$v = array( 'Mcpwp_MCP_Output_Schema', 'validate' );
+		foreach ( array(
+			'$ref'             => array( '$ref' => '#/definitions/x' ),
+			'format'           => array( 'type' => 'string', 'format' => 'email' ),
+			'exclusiveMinimum' => array( 'exclusiveMinimum' => 0 ),
+			'tuple items'      => array( 'type' => 'array', 'items' => array( array( 'type' => 'string' ) ) ),
+			'nested unknown'   => array( 'type' => 'object', 'properties' => array( 'a' => array( 'if' => array( 'type' => 'string' ) ) ) ),
+			'bad pattern'      => array( 'type' => 'string', 'pattern' => '(' ),
+		) as $label => $schema ) {
+			$value = 'tuple items' === $label ? array( 'x' ) : ( 'nested unknown' === $label ? json_decode( '{"a":"x"}' ) : 'x' );
+			$this->assertNotSame( array(), call_user_func( $v, $value, $schema ), "$label fails closed." );
+		}
+
+		$annotated = array(
+			'type'        => 'string',
+			'description' => 'd',
+			'title'       => 't',
+			'default'     => 'x',
+			'examples'    => array( 'x' ),
+			'$schema'     => 'https://json-schema.org/draft/2020-12/schema',
+			'$comment'    => 'c',
+		);
+		$this->assertSame( array(), call_user_func( $v, 'x', $annotated ), 'Annotations are ignored.' );
+	}
+
+	public function test_server_validator_supports_the_common_assertion_keywords(): void {
+		$v = array( 'Mcpwp_MCP_Output_Schema', 'validate' );
+		$cases = array(
+			array( 'x', array( 'const' => 'Nope' ), false ),
+			array( 'Nope', array( 'const' => 'Nope' ), true ),
+			array( 5, array( 'minimum' => 1, 'maximum' => 5 ), true ),
+			array( 6, array( 'minimum' => 1, 'maximum' => 5 ), false ),
+			array( 0, array( 'minimum' => 1 ), false ),
+			array( 'héllo', array( 'minLength' => 5, 'maxLength' => 5 ), true ),
+			array( 'hi', array( 'minLength' => 3 ), false ),
+			array( 'toolong', array( 'maxLength' => 3 ), false ),
+			array( 'ab12', array( 'pattern' => '^[a-z]+[0-9]+$' ), true ),
+			array( 'a/b', array( 'pattern' => 'a/b' ), true ),
+			array( '12ab', array( 'pattern' => '^[a-z]+$' ), false ),
+			array( 3, array( 'oneOf' => array( array( 'type' => 'integer' ), array( 'type' => 'number' ) ) ), false ),
+			array( 3.5, array( 'oneOf' => array( array( 'type' => 'integer' ), array( 'type' => 'number' ) ) ), true ),
+			array( 3, array( 'allOf' => array( array( 'type' => 'integer' ), array( 'minimum' => 4 ) ) ), false ),
+			array( 4, array( 'allOf' => array( array( 'type' => 'integer' ), array( 'minimum' => 4 ) ) ), true ),
+		);
+		foreach ( $cases as $i => $case ) {
+			list( $value, $schema, $valid ) = $case;
+			$this->assertSame( $valid, array() === call_user_func( $v, $value, $schema ), "case $i" );
+		}
+	}
+
+	public function test_enum_and_const_compare_as_json_not_loosely(): void {
+		$v = array( 'Mcpwp_MCP_Output_Schema', 'validate' );
+		$this->assertNotSame( array(), call_user_func( $v, true, array( 'enum' => array( 'x' ) ) ), 'true does not match "x".' );
+		$this->assertNotSame( array(), call_user_func( $v, '1', array( 'enum' => array( 1 ) ) ), '"1" does not match 1.' );
+		$this->assertNotSame( array(), call_user_func( $v, 0, array( 'enum' => array( false, null, '' ) ) ), '0 matches none of false/null/"".' );
+		$this->assertSame( array(), call_user_func( $v, 1, array( 'enum' => array( 1.0 ) ) ), '1 matches 1.0.' );
+		$this->assertSame( array(), call_user_func( $v, 1.0, array( 'const' => 1 ) ), '1.0 matches 1.' );
+		$this->assertSame( array(), call_user_func( $v, json_decode( '{"b":1,"a":[1,2]}' ), array( 'const' => json_decode( '{"a":[1,2],"b":1}' ) ) ), 'Objects compare by key.' );
+		$this->assertNotSame( array(), call_user_func( $v, array( 2, 1 ), array( 'const' => array( 1, 2 ) ) ), 'Arrays compare in order.' );
+	}
+
+	public function test_a_third_party_schema_the_data_violates_gets_the_envelope_not_a_client_exception(): void {
+		$integration = new class() extends Mcpwp_Integration {
+			public function get_info() {
+				return array( 'id' => 'zz', 'name' => 'ZZ', 'version' => '1.0' );
+			}
+			public function get_tool_map() {
+				return array( 'zz_const' => array( 'route' => '/mcpwp/v1/zz-const', 'method' => 'GET' ) );
+			}
+			public function get_tools() {
+				return array(
+					array(
+						'name'         => 'zz_const',
+						'description'  => 'const schema',
+						'inputSchema'  => array( 'type' => 'object', 'properties' => new stdClass() ),
+						'outputSchema' => array(
+							'type'       => 'object',
+							'properties' => array( 'v' => array( 'const' => 'Nope' ) ),
+							'required'   => array( 'v' ),
+						),
+					),
+				);
+			}
+		};
+		add_filter( 'mcpwp_integrations', function () use ( $integration ) { return array( $integration ); } );
+		Mcpwp_Integration::clear_cache();
+
+		$GLOBALS['mcpwp_test_rest_response_override'] = array( 'v' => 'x' );
+		$result = $this->tools_call( 'zz_const', array(), '2025-11-25' )['result'];
+		$this->assertFalse( $result['isError'] );
+		$this->assertSame( 'output_schema_mismatch', $result['structuredContent']['error']['code'] );
+		$this->assertSame( '$.v', $result['structuredContent']['error']['path'] );
+
+		$GLOBALS['mcpwp_test_rest_response_override'] = array( 'v' => 'Nope' );
+		$result = $this->tools_call( 'zz_const', array(), '2025-11-25' )['result'];
+		$this->assertSame( array( 'v' => 'Nope' ), $result['structuredContent'] );
 	}
 
 	public function test_server_validator_is_strict_where_core_would_coerce(): void {
