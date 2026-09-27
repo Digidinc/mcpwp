@@ -889,12 +889,15 @@ class Mcpwp_Approvals {
 
 		// Bulk-publish apply/rollback path (#957) — delegates to the
 		// guardrails module, which owns the ramp/anomaly bookkeeping that a
-		// batch publish still has to go through.
+		// batch publish still has to go through. $context is forwarded so
+		// apply_bulk_publish() can decide whether THIS apply is a genuine
+		// wp-admin human (the only caller its ramp-cap exemption ever
+		// applies to — #957 adversarial review round 4 WARN-2).
 		if ( 'bulk_content_publish' === $request['action'] ) {
 			if ( ! class_exists( 'Mcpwp_Content_Guardrails' ) ) {
 				return new WP_Error( 'guardrails_unavailable', __( 'The content guardrails module is not loaded.', 'mcpwp' ), array( 'status' => 500 ) );
 			}
-			return Mcpwp_Content_Guardrails::apply_bulk_publish( $request, $field );
+			return Mcpwp_Content_Guardrails::apply_bulk_publish( $request, $field, is_array( $context ) ? $context : array() );
 		}
 
 		// A destructive operation replays the reviewed call once; there is

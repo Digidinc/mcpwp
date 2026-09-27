@@ -128,6 +128,18 @@
  *     shingles as the same one, nudging a Jaccard score slightly off. At a
  *     few thousand shingles per document this is a acceptable, negligible
  *     risk for a heuristic guardrail, not a security boundary.
+ *   - The ramp cap only ever counts a write that reaches
+ *     on_insert_post_data() while in_context() is true — every MCPWP call
+ *     site does, since they all go through wp_insert_post()/
+ *     wp_update_post(). A THIRD-PARTY plugin's own nested publish,
+ *     triggered as a side effect of one of ours (e.g. a hook on
+ *     `wp_insert_post`/`save_post` that creates a companion post), is
+ *     UNDERCOUNTED whenever it either (a) writes via a raw $wpdb query
+ *     instead of WordPress's own post API, invisible to any hook at all,
+ *     or (b) targets a post type outside COVERED_POST_TYPES, out of scope
+ *     by design (round 4 NIT-1). Accepted: closing this would mean
+ *     auditing every third-party plugin's write path, which this class
+ *     has no visibility into and no business gating.
  *
  * Deliberately NOT reused: Mcpwp_Rate_Limiter (per-identifier request-rate
  * windows, a different problem) and Mcpwp_Destructive_Gate's per-requester
@@ -484,15 +496,63 @@ class Mcpwp_Content_Guardrails {
 	private static $bulk_apply_exempt_from_cap = false;
 
 	/**
-	 * The last NEW rendered text advise_on_content_edit() actually ran the
-	 * duplicate check against, per post ID, this request — lets a second
-	 * write carrying the identical final text (Elementor's own internal
-	 * double-write — see advise_on_content_edit()'s docblock) collapse into
-	 * the first instead of stacking a second, identical warning/issue-touch.
+	 * A HASH of the last NEW rendered text evaluate_content_edit_advisory()
+	 * actually ran the duplicate check against, per post ID, this request
+	 * (#957 adversarial review round 4 NIT-2: a hash, not the raw text
+	 * itself — nothing needs the text back, only whether it repeats) —
+	 * lets a second write carrying the identical final text (Elementor's
+	 * own internal double-write — see evaluate_content_edit_advisory()'s
+	 * docblock) collapse into the first instead of stacking a second,
+	 * identical warning/issue-touch.
 	 *
 	 * @var array<int,string>
 	 */
 	private static $last_advised_text_by_post = array();
+
+	/**
+	 * A post_content edit's advisory decision, staged by
+	 * advise_on_published_content_edit() (which runs BEFORE the row is
+	 * written) until on_post_updated() confirms the write actually landed
+	 * (#957 adversarial review round 4 NIT-2: "record the advisory only
+	 * after the write succeeds ... so a failed write leaves no phantom
+	 * issue"). Keyed by post ID; there is at most one pending entry per
+	 * post at a time (the same post cannot be mid-update twice
+	 * concurrently within one PHP request).
+	 *
+	 * @var array<int,array{post_type:string,result:array}>
+	 */
+	private static $pending_content_edit_advisory = array();
+
+	/**
+	 * How many advisory checks (the EXPENSIVE part — a duplicate_check()
+	 * call) have actually run this request — see
+	 * MAX_ADVISORY_CHECKS_PER_REQUEST.
+	 *
+	 * @var int
+	 */
+	private static $advisory_checks_this_request = 0;
+
+	/**
+	 * How many advisory checks were SKIPPED this request for having
+	 * already hit MAX_ADVISORY_CHECKS_PER_REQUEST — surfaced as a single
+	 * aggregate note by attach_notices_to_response(), not a per-post one.
+	 *
+	 * @var int
+	 */
+	private static $advisory_checks_skipped_count = 0;
+
+	/**
+	 * Hard ceiling on how many advisory duplicate-checks
+	 * evaluate_content_edit_advisory() will actually run in one request
+	 * (#957 adversarial review round 4 NIT-3: "bound the advisory work per
+	 * request ... so a 100-page find-replace stays fast"). The cheap
+	 * unchanged-text and already-processed-this-request bails above this
+	 * limit in the calling code do NOT count against it — only a write
+	 * that would otherwise trigger a real duplicate_check() call does.
+	 *
+	 * @var int
+	 */
+	const MAX_ADVISORY_CHECKS_PER_REQUEST = 20;
 
 	/**
 	 * Mark the rest of this request as MCPWP-authenticated. Idempotent.
@@ -567,6 +627,9 @@ class Mcpwp_Content_Guardrails {
 		self::$suppress_next_elementor_meta_advisory   = false;
 		self::$bulk_apply_exempt_from_cap              = false;
 		self::$last_advised_text_by_post              = array();
+		self::$pending_content_edit_advisory          = array();
+		self::$advisory_checks_this_request           = 0;
+		self::$advisory_checks_skipped_count          = 0;
 		self::$token_cache                            = array();
 		self::$token_cache_bytes                       = 0;
 	}
@@ -607,6 +670,11 @@ class Mcpwp_Content_Guardrails {
 		add_action( 'update_post_meta', array( __CLASS__, 'on_pre_update_elementor_meta' ), 10, 4 );
 		add_action( 'updated_post_meta', array( __CLASS__, 'on_updated_elementor_meta' ), 10, 4 );
 		add_action( 'added_post_meta', array( __CLASS__, 'on_added_elementor_meta' ), 10, 4 );
+		// Fires only after WordPress core has actually written an UPDATE to
+		// an existing post's row — confirms a post_content advisory staged
+		// by advise_on_published_content_edit() (#957 adversarial review
+		// round 4 NIT-2: a failed write must leave no phantom issue).
+		add_action( 'post_updated', array( __CLASS__, 'on_post_updated' ), 10, 3 );
 		// `shutdown` — not `rest_pre_dispatch` — deliberately: rest_pre_dispatch
 		// fires on EVERY nested rest_do_request() too (batch's per-operation
 		// sub-dispatch, MCP's tools/call sub-dispatch), which would wipe
@@ -721,33 +789,44 @@ class Mcpwp_Content_Guardrails {
 			? (string) $data['post_title']
 			: ( $existing ? (string) $existing->post_title : '' );
 
-		$content_text = isset( $data['post_content'] )
+		$post_content_text = isset( $data['post_content'] )
 			? wp_strip_all_tags( (string) $data['post_content'] )
 			: ( $existing ? wp_strip_all_tags( (string) $existing->post_content ) : '' );
 
-		// An existing post being updated may carry its real content in
-		// _elementor_data rather than post_content — check it whenever
-		// post_content itself is empty/too short to judge from (#957
-		// adversarial review false-positive fix). A brand-new insert has no
-		// ID yet to look postmeta up by, UNLESS the caller front-loaded
-		// _elementor_data into $postarr['meta_input'] itself — a real
-		// wp_insert_post() feature (writes postmeta atomically alongside the
-		// post) that clone_page() uses specifically so a clone of an
-		// Elementor page is duplicate-checked against its actual content
-		// even though it has no ID yet. Anything that does NOT do this
-		// (build_page(), create_landing_page()) legitimately publishes with
-		// 0 words at create time — the same false-positive fix.
-		if ( self::word_count( $content_text ) < self::MIN_COMPARABLE_WORDS ) {
-			$meta_text = '';
-			if ( $post_id ) {
-				$meta_text = self::extract_text_from_elementor( get_post_meta( $post_id, '_elementor_data', true ) );
-			} elseif ( isset( $postarr['meta_input']['_elementor_data'] ) ) {
-				$meta_text = self::extract_text_from_elementor( $postarr['meta_input']['_elementor_data'] );
-			}
-			if ( '' !== trim( $meta_text ) ) {
-				$content_text = $meta_text;
-			}
+		// Builder-page detection lives in resolve_comparable_texts() — the
+		// ONE function BOTH this gate and duplicate_check()'s candidate
+		// side use, so they can never disagree about which field is a
+		// post's real, rendered copy (#957 adversarial review round 4
+		// BLOCK-1: the gate used to prefer post_content, falling back to
+		// Elementor only when post_content was thin, while candidates
+		// preferred Elementor — a draft with a cloned Elementor page AND
+		// 30 unique filler words in post_content published unflagged,
+		// because the gate scored the filler and never looked at the
+		// clone). An existing post looks its OWN postmeta up directly; a
+		// brand-new insert has no ID yet, UNLESS the caller front-loaded
+		// _elementor_data/_elementor_edit_mode into $postarr['meta_input']
+		// itself — a real wp_insert_post() feature (writes postmeta
+		// atomically alongside the post) that clone_page() uses
+		// specifically so a clone of an Elementor page is duplicate-
+		// checked against its actual content even though it has no ID yet.
+		if ( $post_id ) {
+			$elementor_text = self::extract_text_from_elementor( get_post_meta( $post_id, '_elementor_data', true ) );
+			$edit_mode      = (string) get_post_meta( $post_id, '_elementor_edit_mode', true );
+		} else {
+			$elementor_text = isset( $postarr['meta_input']['_elementor_data'] )
+				? self::extract_text_from_elementor( $postarr['meta_input']['_elementor_data'] )
+				: '';
+			$edit_mode      = isset( $postarr['meta_input']['_elementor_edit_mode'] )
+				? (string) $postarr['meta_input']['_elementor_edit_mode']
+				: '';
 		}
+		$content_texts = self::resolve_comparable_texts( $elementor_text, $edit_mode, $post_content_text );
+		// The PRIMARY variant (Elementor text for a builder page, else
+		// post_content) is what word-count/thin-content reporting below
+		// describes — an Elementor-first page's word count should reflect
+		// its actual Elementor content, not an empty/placeholder
+		// post_content (#957 adversarial review false-positive fix).
+		$content_text = $content_texts[0];
 
 		$settings = self::get_settings();
 		$now      = time();
@@ -791,7 +870,7 @@ class Mcpwp_Content_Guardrails {
 
 		$exclude_ids = array_merge( $post_id ? array( $post_id ) : array(), $exclude_ids_for_this_pass );
 		$dup_limit   = min( self::HARD_DUPLICATE_COMPARE_CAP, $settings['duplicate_compare_limit'] );
-		$dup         = self::duplicate_check( $post_type, $title, $content_text, $dup_limit, $exclude_ids );
+		$dup         = self::duplicate_check( $post_type, $title, $content_texts, $dup_limit, $exclude_ids );
 		$dup_flag    = $dup['city_swap'] || ( $dup['score'] >= $settings['duplicate_threshold'] );
 
 		$downgraded = $ramp_exceeded || $dup_flag;
@@ -930,19 +1009,68 @@ class Mcpwp_Content_Guardrails {
 		$old_text = wp_strip_all_tags( (string) $existing->post_content );
 		$new_text = wp_strip_all_tags( (string) $data['post_content'] );
 		$title    = isset( $data['post_title'] ) ? (string) $data['post_title'] : (string) $existing->post_title;
+		$post_id  = (int) $existing->ID;
 
-		self::advise_on_content_edit( (int) $existing->ID, $post_type, $title, $old_text, $new_text, $exclude_ids );
+		$result = self::evaluate_content_edit_advisory( $post_id, $post_type, $title, $old_text, $new_text, $exclude_ids );
+		if ( null !== $result ) {
+			// Deferred to the `post_updated` action, fired only once
+			// WordPress core has actually written this row (#957
+			// adversarial review round 4 NIT-2: "record the advisory only
+			// after the write succeeds ... so a failed write leaves no
+			// phantom issue") — this filter runs BEFORE the write; a
+			// validation failure after it returns must never have already
+			// recorded a notice/issue for a change that never landed. The
+			// Elementor path (maybe_advise_on_elementor_meta_change()
+			// below) already runs from a POST-write action, so it records
+			// immediately — no deferral needed there.
+			self::$pending_content_edit_advisory[ $post_id ] = array(
+				'post_type' => $post_type,
+				'result'    => $result,
+			);
+		}
 
 		return $data;
 	}
 
 	/**
-	 * Shared advisory logic for BOTH published-edit paths (post_content via
-	 * on_insert_post_data(), and _elementor_data via the meta hooks below).
-	 * Cheap-bails the moment the rendered text hasn't actually changed —
-	 * "compare like with like" (#957 adversarial review round 3): the
-	 * caller passes exactly the old and new RENDERED text for the one field
-	 * that changed, never a mix of the two paths.
+	 * The `post_updated` action — fires ONLY after WordPress core has
+	 * actually written an UPDATE to an existing post's row. Confirms (or
+	 * discards) whatever advise_on_published_content_edit() staged for
+	 * this exact post ID.
+	 *
+	 * @param int    $post_id    Post ID.
+	 * @param object $post_after Post object after the update (unused).
+	 * @param object $post_before Post object before the update (unused).
+	 * @return void
+	 */
+	public static function on_post_updated( $post_id, $post_after, $post_before ) {
+		$post_id = (int) $post_id;
+		if ( ! isset( self::$pending_content_edit_advisory[ $post_id ] ) ) {
+			return;
+		}
+		$pending = self::$pending_content_edit_advisory[ $post_id ];
+		unset( self::$pending_content_edit_advisory[ $post_id ] );
+		self::record_content_edit_advisory( $post_id, $pending['post_type'], $pending['result'] );
+	}
+
+	/**
+	 * Shared advisory DECISION for BOTH published-edit paths (post_content
+	 * via on_insert_post_data(), and _elementor_data via the meta hooks
+	 * below). Cheap-bails the moment the rendered text hasn't actually
+	 * changed — "compare like with like" (#957 adversarial review round
+	 * 3): the caller passes exactly the old and new RENDERED text for the
+	 * one field that changed, never a mix of the two paths. Returns the
+	 * decision only — recording it (a notice + a Control Room issue) is a
+	 * separate step (record_content_edit_advisory()), so a caller that
+	 * must defer recording until a write is confirmed can (#957
+	 * adversarial review round 4 NIT-2).
+	 *
+	 * Also enforces MAX_ADVISORY_CHECKS_PER_REQUEST (#957 adversarial
+	 * review round 4 NIT-3: "bound the advisory work per request") — a
+	 * bulk find-replace touching 100 pages must not run 100 full
+	 * duplicate_check() calls; the 21st-and-later check in one request is
+	 * skipped outright, counted, and surfaced as a single note by
+	 * attach_notices_to_response() instead of a per-post one.
 	 *
 	 * @param int    $post_id     Post ID (always known — this only ever
 	 *                            applies to an ALREADY-published post).
@@ -951,11 +1079,11 @@ class Mcpwp_Content_Guardrails {
 	 * @param string $old_text    Previously-stored rendered text.
 	 * @param string $new_text    Newly-submitted rendered text.
 	 * @param int[]  $exclude_ids Extra exclude IDs (e.g. a translation group).
-	 * @return void
+	 * @return array|null {dup, warning}, or null if nothing to advise.
 	 */
-	private static function advise_on_content_edit( $post_id, $post_type, $title, $old_text, $new_text, array $exclude_ids = array() ) {
+	private static function evaluate_content_edit_advisory( $post_id, $post_type, $title, $old_text, $new_text, array $exclude_ids = array() ) {
 		if ( trim( $new_text ) === trim( $old_text ) ) {
-			return; // Nothing rendered actually changed — no duplicate work.
+			return null; // Nothing rendered actually changed — no duplicate work.
 		}
 
 		// A single logical Elementor save fires the underlying
@@ -968,18 +1096,27 @@ class Mcpwp_Content_Guardrails {
 		// does not catch this (its "old" value is whatever the FIRST write
 		// left in postmeta, which — while extracting the same visible text —
 		// is not byte-identical at the JSON level to the plain $new_text
-		// this second call also arrives at). Comparing against the last
+		// this second call also arrives at). Comparing a HASH of the last
 		// NEW text this post was actually processed with THIS REQUEST does:
 		// identical text means the same logical edit landing twice, not two
 		// separate edits — skip re-running the check, but a genuinely
 		// DIFFERENT second edit to the same post later in the same request
 		// still runs (see the dedupe-per-post test, which relies on exactly
 		// that — dedup lives at Mcpwp_SEO_Audit_Store::upsert_issue()'s
-		// storage layer, not here).
-		if ( isset( self::$last_advised_text_by_post[ $post_id ] ) && trim( self::$last_advised_text_by_post[ $post_id ] ) === trim( $new_text ) ) {
-			return;
+		// storage layer, not here). A hash, not the raw text itself, is
+		// kept — #957 adversarial review round 4 NIT-2 — nothing needs the
+		// text back, only whether it repeats.
+		$new_hash = md5( trim( $new_text ) );
+		if ( isset( self::$last_advised_text_by_post[ $post_id ] ) && self::$last_advised_text_by_post[ $post_id ] === $new_hash ) {
+			return null;
 		}
-		self::$last_advised_text_by_post[ $post_id ] = $new_text;
+
+		if ( self::$advisory_checks_this_request >= self::MAX_ADVISORY_CHECKS_PER_REQUEST ) {
+			self::$advisory_checks_skipped_count++;
+			return null;
+		}
+		self::$advisory_checks_this_request++;
+		self::$last_advised_text_by_post[ $post_id ] = $new_hash;
 
 		$settings     = self::get_settings();
 		$dup_limit    = min( self::HARD_DUPLICATE_COMPARE_CAP, $settings['duplicate_compare_limit'] );
@@ -988,7 +1125,7 @@ class Mcpwp_Content_Guardrails {
 		$dup_flag     = $dup['city_swap'] || ( $dup['score'] >= $settings['duplicate_threshold'] );
 
 		if ( ! $dup_flag ) {
-			return;
+			return null;
 		}
 
 		$warning = $dup['city_swap']
@@ -1006,11 +1143,24 @@ class Mcpwp_Content_Guardrails {
 				(int) $dup['match_id']
 			);
 
-		// Attached the SAME way every other guardrails notice is (#957
-		// adversarial review round 3: "attach a warning to the current
-		// response the same way the other guardrail warnings are attached")
-		// — merged onto whatever notice this post already has this request,
-		// rather than overwriting it.
+		return array( 'dup' => $dup, 'warning' => $warning );
+	}
+
+	/**
+	 * Record a decision evaluate_content_edit_advisory() already made — a
+	 * notice attached the SAME way every other guardrails notice is (#957
+	 * adversarial review round 3), merged onto whatever notice this post
+	 * already has this request, plus a Control Room issue.
+	 *
+	 * @param int    $post_id   Post ID.
+	 * @param string $post_type Post type.
+	 * @param array  $result    {dup, warning} from evaluate_content_edit_advisory().
+	 * @return void
+	 */
+	private static function record_content_edit_advisory( $post_id, $post_type, array $result ) {
+		$dup      = $result['dup'];
+		$settings = self::get_settings();
+
 		$notice               = isset( self::$notices_by_post_id[ $post_id ] )
 			? self::$notices_by_post_id[ $post_id ]
 			: array( 'guardrails' => array(), 'warnings' => array() );
@@ -1030,7 +1180,7 @@ class Mcpwp_Content_Guardrails {
 				),
 			)
 		);
-		$notice['warnings'][] = $warning;
+		$notice['warnings'][] = $result['warning'];
 		self::$notices_by_post_id[ $post_id ] = $notice;
 
 		self::record_duplicate_edit_issue( $post_id, $post_type, $dup );
@@ -1181,7 +1331,15 @@ class Mcpwp_Content_Guardrails {
 		}
 
 		$new_text = self::extract_text_from_elementor( $meta_value );
-		self::advise_on_content_edit( $object_id, $post->post_type, $post->post_title, $old_text, $new_text );
+		// This hook only ever fires AFTER WordPress core has already
+		// written the row (`updated_post_meta`/`added_post_meta` are both
+		// POST-write actions) — recording immediately is correct here; no
+		// deferral needed the way the post_content path needs one (#957
+		// adversarial review round 4 NIT-2).
+		$result = self::evaluate_content_edit_advisory( $object_id, $post->post_type, $post->post_title, $old_text, $new_text );
+		if ( null !== $result ) {
+			self::record_content_edit_advisory( $object_id, $post->post_type, $result );
+		}
 	}
 
 	/**
@@ -1268,13 +1426,25 @@ class Mcpwp_Content_Guardrails {
 	 * @return void
 	 */
 	public static function attach_notices_to_response( array &$data ) {
-		if ( empty( self::$notices_by_post_id ) ) {
-			return;
-		}
-		self::attach_notices_recursive( $data, 0 );
 		if ( ! empty( self::$notices_by_post_id ) ) {
-			$data['guardrails_notices'] = array_values( self::$notices_by_post_id );
-			self::$notices_by_post_id   = array();
+			self::attach_notices_recursive( $data, 0 );
+			if ( ! empty( self::$notices_by_post_id ) ) {
+				$data['guardrails_notices'] = array_values( self::$notices_by_post_id );
+				self::$notices_by_post_id   = array();
+			}
+		}
+
+		// ONE aggregate note, not a per-post one (#957 adversarial review
+		// round 4 NIT-3) — a 100-page bulk operation that hit
+		// MAX_ADVISORY_CHECKS_PER_REQUEST reports it once, here, rather
+		// than stapling the same sentence onto 80 different items.
+		if ( self::$advisory_checks_skipped_count > 0 ) {
+			$data['guardrails_advisory_note'] = sprintf(
+				/* translators: %d: number of pages/posts whose advisory check was skipped. */
+				__( 'Advisory checks skipped for %d further pages in this bulk operation.', 'mcpwp' ),
+				self::$advisory_checks_skipped_count
+			);
+			self::$advisory_checks_skipped_count = 0;
 		}
 	}
 
@@ -1383,16 +1553,16 @@ class Mcpwp_Content_Guardrails {
 			return null;
 		}
 
-		$text      = self::get_post_effective_text( $post );
+		$texts     = self::get_post_comparable_texts( $post );
 		$settings  = self::get_settings();
 		$dup_limit = min( self::HARD_DUPLICATE_COMPARE_CAP, $settings['duplicate_compare_limit'] );
-		$dup       = self::duplicate_check( $post_type, $post->post_title, $text, $dup_limit, array( $post_id ) );
+		$dup       = self::duplicate_check( $post_type, $post->post_title, $texts, $dup_limit, array( $post_id ) );
 
 		return array(
 			'id'       => $post_id,
 			'hash'     => self::content_hash( $post ),
 			'findings' => array(
-				'word_count'      => self::word_count( $text ),
+				'word_count'      => self::word_count( $texts[0] ),
 				'duplicate_score' => round( $dup['score'], 4 ),
 				'city_swap'       => $dup['city_swap'],
 			),
@@ -1470,18 +1640,26 @@ class Mcpwp_Content_Guardrails {
 	 * adversarial review WARN-2) — never a post this apply skipped, and
 	 * never one a human has since touched again.
 	 *
-	 * A human already approved this batch, so the RAMP CAP does not apply
-	 * to it — but the daily count still increments for every item that
-	 * actually publishes, so today's remaining-cap number stays correct for
-	 * every OTHER, non-approved publish (#957 adversarial review round 3
-	 * NIT-d: "exempt from the cap ... but still COUNTED"). Duplicate/city-
-	 * swap detection is NOT exempt — it still runs, same as any publish.
+	 * A GENUINE wp-admin human's apply is exempt from the RAMP CAP (they
+	 * are the gate) — but the daily count still increments for every item
+	 * that actually publishes, so today's remaining-cap number stays
+	 * correct for every OTHER, non-approved publish (#957 adversarial
+	 * review round 3 NIT-d, round 4 WARN-2 — see
+	 * is_genuine_admin_human_apply() for exactly what "genuine" means: a
+	 * logged-in user in a real wp-admin page request, never admin-ajax
+	 * (Chat included), never an API key, never OAuth, and never a request
+	 * already authenticated as an MCPWP API/OAuth principal, whatever
+	 * admin_user it also happens to carry — a self-approve-then-apply
+	 * via two API keys, or Chat approving its own batch, both stay
+	 * capped). Duplicate/city-swap detection is NEVER exempt — it still
+	 * runs, same as any publish.
 	 *
 	 * @param array  $request Approval record.
 	 * @param string $field   'payload' to publish, 'rollback' to revert to draft.
+	 * @param array  $context {admin_user?: int} — see is_genuine_admin_human_apply().
 	 * @return true|WP_Error
 	 */
-	public static function apply_bulk_publish( array $request, $field ) {
+	public static function apply_bulk_publish( array $request, $field, array $context = array() ) {
 		// Applying (or rolling back) a bulk-publish approval always
 		// re-runs the same cap/duplicate guard the original publish would
 		// have — from wp-admin's Control Room just as much as from the
@@ -1496,12 +1674,22 @@ class Mcpwp_Content_Guardrails {
 		// an apply reached via the REST API (context already on) must
 		// leave it on for the rest of that request.
 		$context_was_active = self::in_context();
+
+		// The cap exemption is decided BEFORE force_context_active_
+		// without_reset() runs, using whether context was ALREADY active
+		// going in — an apply that arrives already API/OAuth-authenticated
+		// (context_was_active === true) is NEVER exempt, full stop,
+		// regardless of any admin_user the context also carries (#957
+		// adversarial review round 4 WARN-2: "an agent that holds two
+		// principals ... must stay capped").
+		$is_exempt = ! $context_was_active && self::is_genuine_admin_human_apply( $context );
+
 		if ( ! $context_was_active ) {
 			self::force_context_active_without_reset();
 		}
 
 		$exempt_was_active                = self::$bulk_apply_exempt_from_cap;
-		self::$bulk_apply_exempt_from_cap = true;
+		self::$bulk_apply_exempt_from_cap = $is_exempt;
 
 		$result = self::apply_bulk_publish_guarded( $request, $field );
 
@@ -1511,6 +1699,45 @@ class Mcpwp_Content_Guardrails {
 		}
 
 		return $result;
+	}
+
+	/**
+	 * Whether an apply/rollback call is a GENUINE wp-admin human — the only
+	 * caller the ramp cap ever exempts (#957 adversarial review round 4
+	 * WARN-2). ALL of:
+	 *   - `$context['admin_user']` names a real, positive user ID;
+	 *   - that ID matches the CURRENT session's actual logged-in user (a
+	 *     caller cannot merely claim an admin_user it does not hold);
+	 *   - `is_admin()` is true (a wp-admin-area request) AND `wp_doing_ajax()`
+	 *     is false — admin-ajax.php (the Chat UI's transport) reports
+	 *     `is_admin() === true` too, so DOING_AJAX is what actually tells
+	 *     a real admin PAGE apart from an admin-ajax REQUEST;
+	 *   - this is not a REST API request (`REST_REQUEST`) — every REST/MCP
+	 *     caller, including Chat's own internal `rest_do_request()` to the
+	 *     `/mcp` route, is excluded by this alone, on top of the context-
+	 *     already-active exclusion the caller applies separately.
+	 *
+	 * @param array $context {admin_user?: int}.
+	 * @return bool
+	 */
+	private static function is_genuine_admin_human_apply( array $context ) {
+		$admin_user = isset( $context['admin_user'] ) ? (int) $context['admin_user'] : 0;
+		if ( $admin_user < 1 ) {
+			return false;
+		}
+		if ( function_exists( 'get_current_user_id' ) && get_current_user_id() !== $admin_user ) {
+			return false;
+		}
+		if ( ! function_exists( 'is_admin' ) || ! is_admin() ) {
+			return false;
+		}
+		if ( function_exists( 'wp_doing_ajax' ) && wp_doing_ajax() ) {
+			return false;
+		}
+		if ( defined( 'REST_REQUEST' ) && REST_REQUEST ) {
+			return false;
+		}
+		return true;
 	}
 
 	/**
@@ -2001,28 +2228,120 @@ class Mcpwp_Content_Guardrails {
 	const MIN_COMPARABLE_WORDS = 10;
 
 	/**
-	 * Compare new content against the site's recent published posts of the
-	 * same type.
+	 * The single chokepoint deciding WHICH text is a post's real, rendered
+	 * copy — used by BOTH the publish-time gate (on_insert_post_data) and
+	 * the candidate side of duplicate_check() (#957 adversarial review
+	 * round 4 BLOCK-1). Before this, the gate preferred post_content
+	 * (falling back to Elementor only when post_content was thin) while
+	 * candidates preferred Elementor (falling back to post_content) — two
+	 * DIFFERENT priority orders let a draft be duplicate-checked on one
+	 * field while visitors see the other: create a draft, wp_set_elementor
+	 * a clone of an existing page onto it, then publish with 30 unique
+	 * throwaway filler words in post_content — the gate scored the filler
+	 * (>= MIN_COMPARABLE_WORDS, so it never fell back to Elementor) and let
+	 * the clone through untouched.
 	 *
-	 * @param string $post_type    Post type.
-	 * @param string $title        New title.
-	 * @param string $content_text New content (plain text).
-	 * @param int    $limit        Recent posts to compare against.
-	 * @param int[]  $exclude_ids  Post IDs never compared against — e.g. the
-	 *                             post being updated itself (re-checks at
-	 *                             apply time), or a translation's own
-	 *                             source/sibling posts in its translation
-	 *                             group (#957 adversarial review).
+	 * A "builder page" is one with non-empty extractable _elementor_data OR
+	 * `_elementor_edit_mode` meta set to 'builder' — its real, rendered
+	 * copy is the Elementor text, full stop. When it ALSO has MEANINGFUL
+	 * post_content (>= MIN_COMPARABLE_WORDS — e.g. an SEO description field
+	 * some themes duplicate into post_content, or exactly the bypass
+	 * above), both are returned: the caller scores each independently and
+	 * takes the MAX similarity, so neither field can hide behind the
+	 * other.
+	 *
+	 * @param string $elementor_text    Extracted Elementor text ('' if none).
+	 * @param string $edit_mode         `_elementor_edit_mode` meta value ('' if unset).
+	 * @param string $post_content_text Plain post_content text ('' if none).
+	 * @return string[] One or two text variants to score independently.
+	 */
+	private static function resolve_comparable_texts( $elementor_text, $edit_mode, $post_content_text ) {
+		$is_builder = ( '' !== trim( (string) $elementor_text ) ) || ( 'builder' === $edit_mode );
+
+		if ( ! $is_builder ) {
+			return array( (string) $post_content_text );
+		}
+
+		$texts = array( (string) $elementor_text );
+		if ( self::word_count( $post_content_text ) >= self::MIN_COMPARABLE_WORDS ) {
+			$texts[] = (string) $post_content_text;
+		}
+		return $texts;
+	}
+
+	/**
+	 * resolve_comparable_texts() for an EXISTING post (a duplicate_check()
+	 * candidate, or an approval snapshot) — reads the three raw pieces from
+	 * postmeta/post_content itself so every caller shares the exact same
+	 * builder-page decision.
+	 *
+	 * @param object $post Post object.
+	 * @return string[] One or two text variants — see resolve_comparable_texts().
+	 */
+	private static function get_post_comparable_texts( $post ) {
+		return self::resolve_comparable_texts(
+			self::extract_text_from_elementor( get_post_meta( $post->ID, '_elementor_data', true ) ),
+			(string) get_post_meta( $post->ID, '_elementor_edit_mode', true ),
+			wp_strip_all_tags( (string) $post->post_content )
+		);
+	}
+
+	/**
+	 * A single representative text for a post — the PRIMARY variant only
+	 * (Elementor text for a builder page, post_content otherwise). For
+	 * anything that needs to independently score every applicable variant
+	 * (duplicate_check()'s own candidate loop), use get_post_comparable_texts()
+	 * instead — this exists for callers that only ever wanted one number
+	 * (e.g. a word-count to report), not a duplicate/city-swap verdict.
+	 *
+	 * @param object $post Post object.
+	 * @return string Plain text.
+	 */
+	private static function get_post_effective_text( $post ) {
+		$texts = self::get_post_comparable_texts( $post );
+		return $texts[0];
+	}
+
+	/**
+	 * Compare new content against the site's recent published posts of the
+	 * same type. Both sides may carry more than one comparable text
+	 * variant (a builder page with also-meaningful post_content — see
+	 * resolve_comparable_texts()); every NEW variant is scored against
+	 * every surviving CANDIDATE variant, and the single worst (most
+	 * suspicious) pairing wins.
+	 *
+	 * @param string   $post_type     Post type.
+	 * @param string   $title         New title.
+	 * @param string[] $content_texts New content variant(s) (plain text) —
+	 *                                see resolve_comparable_texts().
+	 * @param int      $limit         Recent posts to compare against.
+	 * @param int[]    $exclude_ids   Post IDs never compared against — e.g. the
+	 *                                post being updated itself (re-checks at
+	 *                                apply time), or a translation's own
+	 *                                source/sibling posts in its translation
+	 *                                group (#957 adversarial review).
 	 * @return array { score: float, match_id: int|null, city_swap: bool }
 	 */
-	private static function duplicate_check( $post_type, $title, $content_text, $limit, array $exclude_ids = array() ) {
+	private static function duplicate_check( $post_type, $title, $content_texts, $limit, array $exclude_ids = array() ) {
 		$limit = min( self::HARD_DUPLICATE_COMPARE_CAP, max( 1, (int) $limit ) );
 
-		// Nothing meaningful to compare on the NEW side — an Elementor-first
-		// page has no post_content yet at create time, a contact/thank-you
-		// page may be legitimately near-empty. Reporting "0% similar" would
-		// be misleading; reporting no match at all is the honest answer.
-		if ( self::word_count( $content_text ) < self::MIN_COMPARABLE_WORDS ) {
+		// Nothing meaningful to compare on the NEW side at all — an
+		// Elementor-first page has no post_content yet at create time, a
+		// contact/thank-you page may be legitimately near-empty. Reporting
+		// "0% similar" would be misleading; reporting no match at all is
+		// the honest answer.
+		$new_variants = array();
+		foreach ( (array) $content_texts as $text ) {
+			$tokens = self::normalize_words( (string) $text );
+			if ( count( $tokens ) < self::MIN_COMPARABLE_WORDS ) {
+				continue;
+			}
+			$new_variants[] = array(
+				'tokens'   => $tokens,
+				'shingles' => self::shingles_from_tokens( $tokens ),
+			);
+		}
+		if ( empty( $new_variants ) ) {
 			return array( 'score' => 0.0, 'match_id' => null, 'city_swap' => false );
 		}
 
@@ -2039,8 +2358,6 @@ class Mcpwp_Content_Guardrails {
 		}
 		$recent = get_posts( $query_args );
 
-		$new_tokens_words = self::normalize_words( $content_text );
-		$new_shingles     = self::shingles_from_tokens( $new_tokens_words );
 		$new_title_tokens = self::proper_noun_tokens( $title );
 
 		$best = array(
@@ -2050,79 +2367,62 @@ class Mcpwp_Content_Guardrails {
 		);
 
 		foreach ( $recent as $post ) {
-			$cand_text = self::get_post_effective_text( $post );
-
-			// Tokens AND shingles cached together, per candidate, per
-			// request (#957 adversarial review round 3 PERF) — the city-swap
-			// check below needs the raw word list, Jaccard needs the
-			// shingle set, and a bulk call re-running this comparison many
-			// times against the same recent-posts window would otherwise
-			// redo both for every one of them. Computed BEFORE the
-			// thinness check (not after, as a separate word_count() call)
-			// so a candidate's text is only ever truncated+tokenized ONCE —
-			// word_count() would otherwise redo its own truncate+regex pass
-			// over the same text a moment before normalize_words() did the
-			// same work again (#957 adversarial review round 3 PERF: this
-			// was the dominant cost in the 200-candidate benchmark). The
-			// token COUNT is a fine proxy for "no comparable text at all" —
-			// this is a coarse floor (10), not a precise measurement.
-			$cand_analysis = self::cached_candidate_analysis( (int) $post->ID, $cand_text );
-			$cand_words    = $cand_analysis['tokens'];
-
-			if ( count( $cand_words ) < self::MIN_COMPARABLE_WORDS ) {
-				continue;
+			// Tokens AND shingles cached together, per candidate TEXT
+			// VARIANT, per request (#957 adversarial review round 3 PERF) —
+			// the city-swap check below needs the raw word list, Jaccard
+			// needs the shingle set, and a bulk call re-running this
+			// comparison many times against the same recent-posts window
+			// would otherwise redo both for every one of them.
+			$cand_analyses = array();
+			foreach ( self::get_post_comparable_texts( $post ) as $cand_text ) {
+				$analysis = self::cached_candidate_analysis( (int) $post->ID, $cand_text );
+				if ( count( $analysis['tokens'] ) < self::MIN_COMPARABLE_WORDS ) {
+					continue; // No comparable text in THIS variant.
+				}
+				$cand_analyses[] = $analysis;
 			}
-
-			$cand_shingles = $cand_analysis['shingles'];
-			$score         = self::jaccard( $new_shingles, $cand_shingles );
+			if ( empty( $cand_analyses ) ) {
+				continue; // No comparable text in ANY variant.
+			}
 
 			$cand_tokens = self::proper_noun_tokens( $post->post_title );
 			$tokens      = array_values( array_unique( array_merge( $new_title_tokens, $cand_tokens ) ) );
-			// array_diff() (C-implemented value comparison) in place of
-			// array_filter() with a per-element PHP closure — semantically
-			// identical (removes every occurrence of a value present in
-			// $tokens, preserving order), materially cheaper run 200 times
-			// per duplicate_check() call (#957 adversarial review round 3
-			// PERF).
-			$stripped_new  = implode( ' ', array_diff( $new_tokens_words, $tokens ) );
-			$stripped_cand = implode( ' ', array_diff( $cand_words, $tokens ) );
-			$city_swap     = ( '' !== $stripped_new && $stripped_new === $stripped_cand );
 
-			if ( $city_swap && ! $best['city_swap'] ) {
-				$best = array(
-					'score'     => max( $score, $best['score'] ),
-					'match_id'  => (int) $post->ID,
-					'city_swap' => true,
-				);
-			} elseif ( ! $best['city_swap'] && $score > $best['score'] ) {
-				$best = array(
-					'score'     => $score,
-					'match_id'  => (int) $post->ID,
-					'city_swap' => false,
-				);
+			// Every NEW variant against every CANDIDATE variant — a builder
+			// page with also-meaningful post_content on either side must
+			// not be able to hide a match behind whichever variant this
+			// particular comparison happens to prefer (#957 adversarial
+			// review round 4 BLOCK-1).
+			foreach ( $new_variants as $nv ) {
+				// array_diff() (C-implemented value comparison) in place of
+				// array_filter() with a per-element PHP closure — cheaper
+				// run many times per duplicate_check() call (#957
+				// adversarial review round 3 PERF).
+				$stripped_new = implode( ' ', array_diff( $nv['tokens'], $tokens ) );
+
+				foreach ( $cand_analyses as $ca ) {
+					$score         = self::jaccard( $nv['shingles'], $ca['shingles'] );
+					$stripped_cand = implode( ' ', array_diff( $ca['tokens'], $tokens ) );
+					$city_swap     = ( '' !== $stripped_new && $stripped_new === $stripped_cand );
+
+					if ( $city_swap && ! $best['city_swap'] ) {
+						$best = array(
+							'score'     => max( $score, $best['score'] ),
+							'match_id'  => (int) $post->ID,
+							'city_swap' => true,
+						);
+					} elseif ( ! $best['city_swap'] && $score > $best['score'] ) {
+						$best = array(
+							'score'     => $score,
+							'match_id'  => (int) $post->ID,
+							'city_swap' => false,
+						);
+					}
+				}
 			}
 		}
 
 		return $best;
-	}
-
-	/**
-	 * A post's comparable text: the Elementor-rendered text when the post
-	 * has one (most MCPWP-built pages carry the real content in
-	 * `_elementor_data`, not post_content), falling back to post_content.
-	 *
-	 * @param object $post Post object.
-	 * @return string Plain text.
-	 */
-	private static function get_post_effective_text( $post ) {
-		$elementor_json = get_post_meta( $post->ID, '_elementor_data', true );
-		if ( ! empty( $elementor_json ) ) {
-			$text = self::extract_text_from_elementor( $elementor_json );
-			if ( '' !== trim( $text ) ) {
-				return $text;
-			}
-		}
-		return wp_strip_all_tags( (string) $post->post_content );
 	}
 
 	/**
@@ -2452,8 +2752,12 @@ class Mcpwp_Content_Guardrails {
 
 	/**
 	 * Best-effort plain-text extraction from an Elementor element tree, for
-	 * word-count and duplicate-shingle purposes. Not a renderer — just pulls
-	 * the handful of settings keys that carry visible copy.
+	 * word-count and duplicate-shingle purposes. Not a renderer — recurses
+	 * through every settings value (#957 adversarial review round 4
+	 * WARN-1 — the fixed-list-of-keys version used to miss most widget
+	 * copy: icon-box's title_text/description_text, icon_list/tabs/
+	 * accordion repeater items, testimonial_content, and anything inside a
+	 * referenced template were all invisible to duplicate detection).
 	 *
 	 * @param mixed $data Elementor data: JSON string, or already-decoded array.
 	 * @return string Extracted text.
@@ -2467,19 +2771,106 @@ class Mcpwp_Content_Guardrails {
 			return '';
 		}
 
-		$texts = array();
-		self::walk_elementor_text( $data, $texts );
+		$texts             = array();
+		$visited_templates = array();
+		self::walk_elementor_text( $data, $texts, true, $visited_templates );
 		return trim( implode( ' ', $texts ) );
 	}
 
 	/**
-	 * Recursively collect text-bearing widget settings.
+	 * Settings-key substrings that mark a value as non-copy metadata
+	 * (dimensions, colors, typography, identifiers, markup/asset
+	 * references, …) rather than visible text — matched against each
+	 * underscore/non-alpha-delimited SEGMENT of a key, not a raw substring
+	 * search, so a real copy key that happens to CONTAIN one of these as
+	 * running text ("guide_text" contains "id") is never wrongly excluded
+	 * (#957 adversarial review round 4 WARN-1).
 	 *
-	 * @param mixed    $nodes One element (assoc array) or a list of elements.
-	 * @param string[] $texts Accumulator, by reference.
+	 * @var string[]
+	 */
+	const ELEMENTOR_TEXT_DENYLIST_KEY_TERMS = array(
+		'url', 'link', 'href', 'src', 'id', 'css', 'class', 'color',
+		'typography', 'size', 'width', 'height', 'margin', 'padding',
+		'border', 'background', 'animation',
+	);
+
+	/**
+	 * Whether a settings key is likely to hold visible copy (true) or
+	 * layout/style/identifier metadata (false) — see
+	 * ELEMENTOR_TEXT_DENYLIST_KEY_TERMS.
+	 *
+	 * @param string|int $key Settings key.
+	 * @return bool
+	 */
+	private static function is_elementor_copy_key( $key ) {
+		if ( ! is_string( $key ) ) {
+			return true; // A numeric list index carries no key semantics of its own.
+		}
+		$key = strtolower( ltrim( $key, '_' ) );
+		if ( '' === $key ) {
+			return false;
+		}
+		foreach ( preg_split( '/[^a-z]+/', $key ) as $segment ) {
+			if ( '' !== $segment && in_array( $segment, self::ELEMENTOR_TEXT_DENYLIST_KEY_TERMS, true ) ) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * Whether a string value's own SHAPE (not its key) marks it as non-copy
+	 * — a URL, a hex/rgb() color, a bare number, or an inline JSON blob
+	 * (#957 adversarial review round 4 WARN-1: "plus values that look like
+	 * URLs, colors, numbers or JSON").
+	 *
+	 * @param string $value Value.
+	 * @return bool
+	 */
+	private static function looks_like_non_copy_value( $value ) {
+		$value = trim( (string) $value );
+		if ( '' === $value ) {
+			return true;
+		}
+		if ( is_numeric( $value ) ) {
+			return true;
+		}
+		if ( preg_match( '#^(https?:)?//#i', $value ) || preg_match( '#^\.{0,2}/[^\s]*$#', $value ) ) {
+			return true; // Absolute/protocol-relative URL, or a bare path.
+		}
+		if ( preg_match( '/^#[0-9a-f]{3,8}$/i', $value ) || preg_match( '/^rgba?\(/i', $value ) || preg_match( '/^hsla?\(/i', $value ) ) {
+			return true; // Hex/rgb()/rgba()/hsl() color.
+		}
+		$first = $value[0];
+		$last  = substr( $value, -1 );
+		if ( ( '{' === $first && '}' === $last ) || ( '[' === $first && ']' === $last ) ) {
+			// An inline (undecoded) JSON blob rather than prose — prose
+			// essentially never starts AND ends with a bracket pair.
+			json_decode( $value, true );
+			if ( JSON_ERROR_NONE === json_last_error() ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Recursively collect text-bearing widget settings — one element (or a
+	 * list of elements/repeater items), then its children.
+	 *
+	 * @param mixed    $nodes                 One element (assoc array) or a list of elements.
+	 * @param string[] $texts                 Accumulator, by reference.
+	 * @param bool     $allow_template_lookup Whether a `template_id` setting
+	 *                                        found here may pull in that
+	 *                                        template's OWN text — true at
+	 *                                        the top level, false once
+	 *                                        already inside a looked-up
+	 *                                        template (ONE level deep only).
+	 * @param array    $visited_templates     Template post IDs already
+	 *                                        expanded this call — cycle guard.
 	 * @return void
 	 */
-	private static function walk_elementor_text( $nodes, array &$texts ) {
+	private static function walk_elementor_text( $nodes, array &$texts, $allow_template_lookup = true, array &$visited_templates = array() ) {
 		if ( ! is_array( $nodes ) ) {
 			return;
 		}
@@ -2492,16 +2883,78 @@ class Mcpwp_Content_Guardrails {
 				continue;
 			}
 			if ( isset( $node['settings'] ) && is_array( $node['settings'] ) ) {
-				foreach ( array( 'title', 'editor', 'text', 'description', 'sub_title', 'content', 'caption', 'html' ) as $key ) {
-					if ( ! empty( $node['settings'][ $key ] ) && is_string( $node['settings'][ $key ] ) ) {
-						$texts[] = wp_strip_all_tags( $node['settings'][ $key ] );
-					}
+				self::walk_elementor_settings( $node['settings'], $texts );
+				if ( $allow_template_lookup ) {
+					self::maybe_walk_elementor_template_reference( $node['settings'], $texts, $visited_templates );
 				}
 			}
 			if ( ! empty( $node['elements'] ) && is_array( $node['elements'] ) ) {
-				self::walk_elementor_text( $node['elements'], $texts );
+				self::walk_elementor_text( $node['elements'], $texts, $allow_template_lookup, $visited_templates );
 			}
 		}
+	}
+
+	/**
+	 * Recurse through EVERY value of a settings array (or a nested
+	 * repeater item / control found within it — icon_list, tabs, accordion
+	 * items, and so on are all just arrays at this level, walked the same
+	 * way regardless of depth), collecting copy-bearing strings and
+	 * skipping denylisted keys / non-copy-shaped values (#957 adversarial
+	 * review round 4 WARN-1).
+	 *
+	 * @param array    $settings Settings (or a nested item) to walk.
+	 * @param string[] $texts    Accumulator, by reference.
+	 * @return void
+	 */
+	private static function walk_elementor_settings( array $settings, array &$texts ) {
+		foreach ( $settings as $key => $value ) {
+			if ( is_array( $value ) ) {
+				self::walk_elementor_settings( $value, $texts );
+				continue;
+			}
+			if ( ! is_string( $value ) || ! self::is_elementor_copy_key( $key ) || self::looks_like_non_copy_value( $value ) ) {
+				continue;
+			}
+			$stripped = trim( wp_strip_all_tags( $value ) );
+			if ( '' !== $stripped ) {
+				$texts[] = $stripped;
+			}
+		}
+	}
+
+	/**
+	 * If this element's settings reference a template (a "Template"/
+	 * "Global Widget" style `template_id` setting), pull that template's
+	 * OWN Elementor text in — ONE level deep only, and never the same
+	 * template twice in one extraction (#957 adversarial review round 4
+	 * WARN-1: "include that template's Elementor text one level deep (no
+	 * recursion into further templates; guard cycles)").
+	 *
+	 * @param array    $settings          Element settings.
+	 * @param string[] $texts             Accumulator, by reference.
+	 * @param array    $visited_templates Template post IDs already expanded, by reference.
+	 * @return void
+	 */
+	private static function maybe_walk_elementor_template_reference( array $settings, array &$texts, array &$visited_templates ) {
+		if ( empty( $settings['template_id'] ) ) {
+			return;
+		}
+		$template_id = absint( $settings['template_id'] );
+		if ( $template_id <= 0 || isset( $visited_templates[ $template_id ] ) ) {
+			return;
+		}
+		$visited_templates[ $template_id ] = true;
+
+		$template_data = get_post_meta( $template_id, '_elementor_data', true );
+		if ( empty( $template_data ) ) {
+			return;
+		}
+		$decoded = is_string( $template_data ) ? json_decode( $template_data, true ) : $template_data;
+		if ( ! is_array( $decoded ) ) {
+			return;
+		}
+
+		self::walk_elementor_text( $decoded, $texts, false, $visited_templates );
 	}
 
 	// -------------------------------------------------------------------------

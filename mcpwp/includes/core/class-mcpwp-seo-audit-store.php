@@ -43,32 +43,64 @@ class Mcpwp_SEO_Audit_Store {
 	const MAX_ISSUES = 1000;
 
 	/**
-	 * Directly upsert ONE issue record, bypassing store_issues_for_run()'s
-	 * run-scoped bookkeeping (#957 round 3: content guardrails' published-
-	 * edit advisory). store_issues_for_run() resolves every OTHER open issue
-	 * for a post that its own url-rows didn't re-report — correct for a full
-	 * SEO audit pass (it is the whole site's current truth), wrong for a
-	 * single ad-hoc finding: recording one duplicate-content advisory must
-	 * not silently resolve unrelated, still-real SEO issues on the same post
-	 * just because this call never mentioned them.
+	 * Guardrail advisories option — DELIBERATELY separate from
+	 * ISSUES_OPTION (#957 adversarial review round 4 WARN-3: "guardrail
+	 * advisories must not live and die with SEO audit runs"). Kept in its
+	 * own array/option so store_issues_for_run() — which resolves every
+	 * OTHER open issue a run's own url-rows didn't re-report, correct for
+	 * a full SEO audit pass but wrong for an unrelated ad-hoc finding —
+	 * structurally cannot see or resolve these records at all, and so a
+	 * flood of advisories (e.g. a bulk find-replace touching hundreds of
+	 * pages) can never evict a real SEO issue from ISSUES_OPTION's own
+	 * MAX_ISSUES cap.
+	 *
+	 * @var string
+	 */
+	const GUARDRAIL_ISSUES_OPTION = 'mcpwp_content_guardrail_issues';
+
+	/**
+	 * Maximum stored guardrail advisories — capped SEPARATELY from
+	 * MAX_ISSUES (#957 adversarial review round 4 WARN-3), so a flood of
+	 * advisories only ever evicts OTHER advisories, never a real SEO issue.
+	 *
+	 * @var int
+	 */
+	const MAX_GUARDRAIL_ISSUES = 200;
+
+	/**
+	 * Directly upsert ONE guardrail advisory, into GUARDRAIL_ISSUES_OPTION
+	 * — a store completely separate from the one store_issues_for_run()
+	 * operates on (see GUARDRAIL_ISSUES_OPTION's own docblock for why).
+	 * Content guardrails (#957) uses this for a published-edit duplicate-
+	 * content advisory; nothing here is a general-purpose "add an SEO
+	 * issue" API for other callers.
 	 *
 	 * Reuses issue_key()'s existing (post_id, category, code) derivation, so
 	 * calling this again for the SAME post+category+code updates the same
 	 * record (seen_count, last_seen_at) instead of creating a second one —
 	 * "dedupe per post, not per call" falls out of the existing key shape
-	 * for free.
+	 * for free. list_issues() merges this store with the SEO-audit one so
+	 * Control Room's open-issues view still shows both together.
 	 *
 	 * @param array $issue { post_id, title, url, type, category, code, severity, message, recommendation, approval_required }.
 	 * @return string The issue's stable key.
 	 */
 	public static function upsert_issue( array $issue ) {
-		$issues = self::get_issues();
+		$issues = self::get_guardrail_issues();
 		$key    = self::issue_key(
 			array( 'id' => $issue['post_id'] ?? 0 ),
 			array( 'category' => $issue['category'] ?? '', 'code' => $issue['code'] ?? '' )
 		);
 		$now = gmdate( 'c' );
 
+		// Concurrent upserts to the SAME key (two requests advising the
+		// same post at once) can race — read, merge, write is not atomic.
+		// The loser's write still lands (seen_count/last_seen_at just
+		// reflect whichever call wrote last), so no advisory is silently
+		// dropped; the only cost is an undercounted seen_count on a rare
+		// double-flag, an accepted, minor imprecision for a "how many
+		// times has this been flagged" counter rather than a correctness
+		// boundary (#957 adversarial review round 4 NIT-4).
 		$record = isset( $issues[ $key ] ) && is_array( $issues[ $key ] ) ? $issues[ $key ] : array(
 			'id'                => $key,
 			'first_seen_at'     => $now,
@@ -99,7 +131,7 @@ class Mcpwp_SEO_Audit_Store {
 		unset( $record['resolved_at'], $record['resolved_run_id'] );
 
 		$issues[ $key ] = $record;
-		self::save_issues( $issues );
+		self::save_guardrail_issues( $issues );
 
 		return $key;
 	}
@@ -167,7 +199,12 @@ class Mcpwp_SEO_Audit_Store {
 	 * @return array Result.
 	 */
 	public static function list_issues( $args = array() ) {
-		$issues   = array_values( self::get_issues() );
+		// Merges the SEO-audit-owned store with the separately-capped
+		// guardrail-advisory store (#957 adversarial review round 4
+		// WARN-3) — Control Room's open-issues view shows both together,
+		// even though store_issues_for_run() can only ever resolve the
+		// former.
+		$issues = array_values( array_merge( self::get_issues(), self::get_guardrail_issues() ) );
 		$status   = isset( $args['status'] ) ? sanitize_key( (string) $args['status'] ) : '';
 		$severity = isset( $args['severity'] ) ? sanitize_key( (string) $args['severity'] ) : '';
 		$category = isset( $args['category'] ) ? sanitize_key( (string) $args['category'] ) : '';
@@ -435,6 +472,25 @@ class Mcpwp_SEO_Audit_Store {
 	}
 
 	/**
+	 * Save guardrail advisory records — MAX_GUARDRAIL_ISSUES, a separate
+	 * cap from save_issues()'s MAX_ISSUES (#957 adversarial review round 4
+	 * WARN-3), so a flood of advisories can only ever evict OTHER
+	 * advisories, never a real SEO issue.
+	 *
+	 * @param array $issues Guardrail advisory records.
+	 * @return void
+	 */
+	private static function save_guardrail_issues( $issues ) {
+		uasort(
+			$issues,
+			function ( $a, $b ) {
+				return strcmp( $b['last_seen_at'] ?? '', $a['last_seen_at'] ?? '' );
+			}
+		);
+		update_option( self::GUARDRAIL_ISSUES_OPTION, array_slice( $issues, 0, self::MAX_GUARDRAIL_ISSUES, true ), false );
+	}
+
+	/**
 	 * Get stored runs.
 	 *
 	 * @return array Runs.
@@ -445,12 +501,24 @@ class Mcpwp_SEO_Audit_Store {
 	}
 
 	/**
-	 * Get stored issues.
+	 * Get stored issues (the SEO-audit-owned store only — see
+	 * get_guardrail_issues() for the separate advisory store).
 	 *
 	 * @return array Issues.
 	 */
 	private static function get_issues() {
 		$issues = get_option( self::ISSUES_OPTION, array() );
+		return is_array( $issues ) ? $issues : array();
+	}
+
+	/**
+	 * Get stored guardrail advisories — see GUARDRAIL_ISSUES_OPTION's own
+	 * docblock for why this is a separate store from get_issues().
+	 *
+	 * @return array Guardrail advisory records.
+	 */
+	private static function get_guardrail_issues() {
+		$issues = get_option( self::GUARDRAIL_ISSUES_OPTION, array() );
 		return is_array( $issues ) ? $issues : array();
 	}
 

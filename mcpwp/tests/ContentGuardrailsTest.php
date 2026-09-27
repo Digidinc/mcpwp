@@ -18,6 +18,7 @@ use PHPUnit\Framework\TestCase;
 
 require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-encryption.php';
 require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-content-guardrails.php';
+require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-seo-audit-store.php';
 require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-integration-manager.php';
 require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-approvals.php';
 require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-posts.php';
@@ -38,6 +39,8 @@ final class ContentGuardrailsTest extends TestCase {
 		$GLOBALS['mcpwp_test_current_user']       = 2;
 		$GLOBALS['mcpwp_test_actions']            = array();
 		$GLOBALS['mcpwp_test_filters']            = array();
+		$GLOBALS['mcpwp_test_is_admin']           = false;
+		$GLOBALS['mcpwp_test_doing_ajax']         = false;
 		Mcpwp_Content_Guardrails::reset_context_for_tests();
 		Mcpwp_Content_Guardrails::register_hooks();
 	}
@@ -45,6 +48,8 @@ final class ContentGuardrailsTest extends TestCase {
 	protected function tearDown(): void {
 		$GLOBALS['_mcpwp_test_posts'] = array();
 		$GLOBALS['_mcpwp_test_meta']  = array();
+		$GLOBALS['mcpwp_test_is_admin'] = false;
+		$GLOBALS['mcpwp_test_doing_ajax'] = false;
 		Mcpwp_Content_Guardrails::reset_context_for_tests();
 	}
 
@@ -607,6 +612,77 @@ final class ContentGuardrailsTest extends TestCase {
 		$this->assertSame( 'draft', $GLOBALS['_mcpwp_test_posts'][1102]->post_status );
 	}
 
+	public function test_block1_elementor_clone_with_filler_post_content_is_refused_at_publish(): void {
+		// #957 adversarial review round 4 BLOCK-1: the gate used to prefer
+		// post_content (falling back to Elementor only when post_content
+		// was thin) while candidates preferred Elementor — a draft could be
+		// given a cloned Elementor page, then published with unique filler
+		// post_content (>= MIN_COMPARABLE_WORDS, so the gate never fell
+		// back to Elementor at all) and slip through untouched, even though
+		// visitors would see the clone (Elementor pages render from
+		// _elementor_data, never post_content). Exact bypass sequence:
+		// draft -> wp_set_elementor a clone of X -> update_page with 30
+		// unique filler words + status=publish.
+		Mcpwp_Content_Guardrails::enter_context();
+		Mcpwp_Content_Guardrails::update_settings( array( 'min_word_count' => 0, 'duplicate_threshold' => 0.6, 'daily_publish_cap' => 1000 ) );
+
+		$original_body = $this->words( 40, 'roofing_' );
+		$this->seed_published( 1111, 'page', 'Existing Roofing Page', $original_body );
+
+		// 1. Create a draft.
+		$this->seed_draft( 1112, 'page', 'New Page', '' );
+
+		// 2. wp_set_elementor a clone of the existing page onto it (still a
+		// draft — the elementor-meta advisory chokepoint only watches
+		// ALREADY-published posts, so this alone must do nothing yet).
+		update_post_meta( 1112, '_elementor_data', wp_json_encode( array( array( 'elType' => 'widget', 'settings' => array( 'editor' => $original_body ) ) ) ) );
+		$response = array( 'id' => 1112 );
+		Mcpwp_Content_Guardrails::attach_notices_to_response( $response );
+		$this->assertArrayNotHasKey( 'guardrails', $response, 'a DRAFT is not the advisory chokepoint\'s concern' );
+
+		// 3. update_page: 30 UNIQUE filler words, status=publish — the
+		// exact bypass shape. Filler shares no vocabulary with anything.
+		$filler = $this->words( 30, 'zzfiller_' );
+		wp_update_post( array( 'ID' => 1112, 'post_content' => $filler, 'post_status' => 'publish' ) );
+
+		$this->assertSame( 'draft', $GLOBALS['_mcpwp_test_posts'][1112]->post_status, 'the Elementor clone is caught even though post_content alone was unique filler' );
+	}
+
+	public function test_block1_builder_page_with_meaningful_post_content_scores_the_max_of_both(): void {
+		// The other half of the fix: a builder page that ALSO carries
+		// meaningful post_content must not be able to hide a match behind
+		// WHICHEVER field happens to be checked — both are scored, the
+		// worse (more suspicious) one wins.
+		Mcpwp_Content_Guardrails::enter_context();
+		Mcpwp_Content_Guardrails::update_settings( array( 'min_word_count' => 0, 'duplicate_threshold' => 0.6, 'daily_publish_cap' => 1000 ) );
+
+		$dup_body = $this->words( 40, 'dup_' );
+		$this->seed_published( 1121, 'page', 'Existing Page', $dup_body );
+
+		$this->seed_draft( 1122, 'page', 'New Page', $dup_body ); // post_content ALSO matches.
+		update_post_meta( 1122, '_elementor_data', wp_json_encode( array( array( 'elType' => 'widget', 'settings' => array( 'editor' => $dup_body ) ) ) ) );
+
+		wp_update_post( array( 'ID' => 1122, 'post_status' => 'publish' ) );
+
+		$this->assertSame( 'draft', $GLOBALS['_mcpwp_test_posts'][1122]->post_status );
+	}
+
+	public function test_block1_builder_page_with_unique_post_content_and_unique_elementor_text_still_publishes(): void {
+		// Sanity: a genuinely unique builder page (both fields unique) is
+		// never wrongly caught by the dual-scoring.
+		Mcpwp_Content_Guardrails::enter_context();
+		Mcpwp_Content_Guardrails::update_settings( array( 'min_word_count' => 0, 'duplicate_threshold' => 0.6, 'daily_publish_cap' => 1000 ) );
+
+		$this->seed_published( 1131, 'page', 'Unrelated Existing Page', $this->words( 40, 'unrelated_' ) );
+
+		$this->seed_draft( 1132, 'page', 'New Unique Page', $this->words( 30, 'contentA_' ) );
+		update_post_meta( 1132, '_elementor_data', wp_json_encode( array( array( 'elType' => 'widget', 'settings' => array( 'editor' => $this->words( 40, 'contentB_' ) ) ) ) ) );
+
+		wp_update_post( array( 'ID' => 1132, 'post_status' => 'publish' ) );
+
+		$this->assertSame( 'publish', $GLOBALS['_mcpwp_test_posts'][1132]->post_status );
+	}
+
 	// -------------------------------------------------------------------------
 	// CJK word counting
 
@@ -1055,6 +1131,12 @@ final class ContentGuardrailsTest extends TestCase {
 	// NIT-d: an approved apply is exempt from the ramp cap, but still counted
 
 	public function test_approved_apply_larger_than_the_remaining_cap_publishes_fully_and_counts_fully(): void {
+		// The cap exemption (#957 adversarial review round 4 WARN-2) only
+		// applies to a GENUINE wp-admin human: is_admin() true, not
+		// admin-ajax, not a REST/API-authenticated request, and the
+		// claimed admin_user must be the actual current session's user.
+		$GLOBALS['mcpwp_test_is_admin']     = true;
+		$GLOBALS['mcpwp_test_current_user'] = 1;
 		Mcpwp_Content_Guardrails::update_settings( array( 'daily_publish_cap' => 1, 'min_word_count' => 0, 'duplicate_threshold' => 1.1 ) );
 
 		$this->seed_draft( 1711, 'page', 'Page A', $this->words( 30, 'a_' ) );
@@ -1074,6 +1156,52 @@ final class ContentGuardrailsTest extends TestCase {
 		// But the count reflects all 3 — a SUBSEQUENT, non-approved publish
 		// today must see an already-exceeded cap, not a stale "1 used."
 		$this->assertSame( 3, Mcpwp_Content_Guardrails::get_daily_count(), 'the count increases by the full size of the approved batch' );
+	}
+
+	public function test_two_key_self_approve_apply_stays_capped_even_with_admin_fields_present(): void {
+		// #957 adversarial review round 4 WARN-2: "an agent that holds two
+		// principals ... must stay capped." Simulates an apply reached via
+		// an ALREADY API/OAuth-authenticated request (context active
+		// before apply_bulk_publish() ever runs, exactly what
+		// verify_api_key() does for a second key applying what a first
+		// key requested) — the cap exemption must never apply here, even
+		// though the context ALSO happens to carry admin-looking fields.
+		$GLOBALS['mcpwp_test_is_admin']     = true;
+		$GLOBALS['mcpwp_test_current_user'] = 1;
+		Mcpwp_Content_Guardrails::update_settings( array( 'daily_publish_cap' => 1, 'min_word_count' => 0, 'duplicate_threshold' => 1.1 ) );
+
+		$this->seed_draft( 1721, 'page', 'Page A', $this->words( 30, 'a_' ) );
+		$this->seed_draft( 1722, 'page', 'Page B', $this->words( 30, 'b_' ) );
+
+		$approval = Mcpwp_Content_Guardrails::request_bulk_publish_approval( array( 1721, 1722 ), 'page', array() );
+		Mcpwp_Approvals::approve_request( $approval['id'], '', array( 'actor' => 'key-1' ) );
+
+		Mcpwp_Content_Guardrails::enter_context(); // Simulates the SECOND key's request already being API-authenticated.
+		Mcpwp_Approvals::apply_request( $approval['id'], array( 'admin_user' => 1, 'actor' => 'key-2' ) );
+
+		$this->assertSame( 'publish', $GLOBALS['_mcpwp_test_posts'][1721]->post_status, 'first item fits under the cap of 1' );
+		$this->assertSame( 'draft', $GLOBALS['_mcpwp_test_posts'][1722]->post_status, 'second item is capped — an already API-authenticated apply is never exempt' );
+	}
+
+	public function test_chat_admin_ajax_apply_stays_capped(): void {
+		// Chat authenticates via admin-ajax.php, which reports is_admin()
+		// TRUE too — wp_doing_ajax() is what actually tells a real admin
+		// PAGE apart from an admin-ajax REQUEST (#957 adversarial review
+		// round 4 WARN-2).
+		$GLOBALS['mcpwp_test_doing_ajax']   = true;
+		$GLOBALS['mcpwp_test_is_admin']     = true;
+		$GLOBALS['mcpwp_test_current_user'] = 1;
+		Mcpwp_Content_Guardrails::update_settings( array( 'daily_publish_cap' => 1, 'min_word_count' => 0, 'duplicate_threshold' => 1.1 ) );
+
+		$this->seed_draft( 1731, 'page', 'Page A', $this->words( 30, 'a_' ) );
+		$this->seed_draft( 1732, 'page', 'Page B', $this->words( 30, 'b_' ) );
+
+		$approval = Mcpwp_Content_Guardrails::request_bulk_publish_approval( array( 1731, 1732 ), 'page', array() );
+		Mcpwp_Approvals::approve_request( $approval['id'], '', array( 'actor' => 'admin' ) );
+		Mcpwp_Approvals::apply_request( $approval['id'], array( 'admin_user' => 1, 'actor' => 'wp-user:1' ) );
+
+		$this->assertSame( 'publish', $GLOBALS['_mcpwp_test_posts'][1731]->post_status );
+		$this->assertSame( 'draft', $GLOBALS['_mcpwp_test_posts'][1732]->post_status, 'admin-ajax (Chat) is never exempt, even with admin_user present' );
 	}
 
 	// -------------------------------------------------------------------------
@@ -1316,6 +1444,114 @@ final class ContentGuardrailsTest extends TestCase {
 	}
 
 	// -------------------------------------------------------------------------
+	// NIT-2: record only after the write succeeds; dedupe one save -> one advisory
+
+	public function test_failed_write_leaves_no_phantom_advisory(): void {
+		// #957 adversarial review round 4 NIT-2: the post_content advisory
+		// DECISION runs inside wp_insert_post_data, BEFORE the row is
+		// written; recording it is deferred to `post_updated`, which only
+		// fires once the write actually lands. A write that fails after
+		// the filter returns (a page-template validation error here) must
+		// leave no phantom notice or Control Room issue.
+		Mcpwp_Content_Guardrails::enter_context();
+		Mcpwp_Content_Guardrails::update_settings( array( 'min_word_count' => 0, 'duplicate_threshold' => 0.6, 'daily_publish_cap' => 1000 ) );
+
+		$this->seed_published( 2051, 'page', 'Existing Page', $this->words( 40, 'dup_' ) );
+		$this->seed_published( 2052, 'page', 'Target Page', $this->words( 40, 'orig_' ) );
+
+		$GLOBALS['mcpwp_test_page_templates'] = array(); // Any template is now invalid.
+		$result = wp_update_post( array( 'ID' => 2052, 'post_content' => $this->words( 40, 'dup_' ), 'page_template' => 'invalid-template' ), true );
+		$this->assertInstanceOf( 'WP_Error', $result, 'sanity: the write itself really did fail' );
+
+		$response = array( 'id' => 2052 );
+		Mcpwp_Content_Guardrails::attach_notices_to_response( $response );
+		$this->assertArrayNotHasKey( 'guardrails', $response, 'a failed write leaves no phantom advisory notice' );
+
+		$issues = Mcpwp_SEO_Audit_Store::list_issues( array( 'post_id' => 2052, 'reveal_non_public' => true ) );
+		$this->assertEmpty( $issues['issues'], 'and no phantom Control Room issue either' );
+
+		unset( $GLOBALS['mcpwp_test_page_templates'] );
+	}
+
+	public function test_one_elementor_save_produces_one_advisory_not_two(): void {
+		// #957 adversarial review round 4 NIT-2: "dedupe so one Elementor
+		// save produces one advisory, not two" — simulates the real
+		// double-write (Document::save() + the writer trait's explicit
+		// re-write of the SAME final value).
+		Mcpwp_Content_Guardrails::update_settings( array( 'min_word_count' => 0, 'duplicate_threshold' => 0.6, 'daily_publish_cap' => 1000 ) );
+
+		$this->seed_published( 2041, 'page', 'Elementor Page', '' );
+		$GLOBALS['_mcpwp_test_meta'][2041]['_elementor_data'] = wp_json_encode( array( array( 'elType' => 'widget', 'settings' => array( 'title' => 'v0' ) ) ) );
+		$this->seed_published( 2042, 'page', 'Sibling Page', $this->words( 40, 'dup_' ) );
+
+		Mcpwp_Content_Guardrails::enter_context();
+
+		$new_elementor = wp_json_encode( array( array( 'elType' => 'widget', 'settings' => array( 'title' => $this->words( 40, 'dup_' ) ) ) ) );
+		update_post_meta( 2041, '_elementor_data', $new_elementor ); // Document::save()'s own write.
+		update_post_meta( 2041, '_elementor_data', $new_elementor ); // The writer trait's explicit re-write, same value.
+
+		$response = array( 'id' => 2041 );
+		Mcpwp_Content_Guardrails::attach_notices_to_response( $response );
+		$this->assertCount( 1, $response['warnings'], 'one logical save produces one advisory, not two' );
+	}
+
+	public function test_last_advised_hash_is_not_the_raw_text(): void {
+		// #957 adversarial review round 4 NIT-2: "store a hash, not the
+		// raw text" in the per-post dedupe map.
+		Mcpwp_Content_Guardrails::update_settings( array( 'min_word_count' => 0, 'duplicate_threshold' => 0.6, 'daily_publish_cap' => 1000 ) );
+		$this->seed_published( 2061, 'page', 'Elementor Page', '' );
+		$this->seed_published( 2062, 'page', 'Sibling Page', $this->words( 40, 'dup_' ) );
+
+		Mcpwp_Content_Guardrails::enter_context();
+		$long_text = $this->words( 40, 'dup_' );
+		update_post_meta( 2061, '_elementor_data', wp_json_encode( array( array( 'elType' => 'widget', 'settings' => array( 'title' => $long_text ) ) ) ) );
+
+		$rc   = new ReflectionProperty( 'Mcpwp_Content_Guardrails', 'last_advised_text_by_post' );
+		$rc->setAccessible( true );
+		$map  = $rc->getValue();
+		$this->assertArrayHasKey( 2061, $map );
+		$this->assertSame( 32, strlen( $map[2061] ), 'an md5 hash is 32 hex chars — not the ~240-char raw text' );
+		$this->assertNotSame( $long_text, $map[2061] );
+	}
+
+	// -------------------------------------------------------------------------
+	// NIT-3: advisory work is bounded per request
+
+	public function test_advisory_checks_are_bounded_per_request(): void {
+		// #957 adversarial review round 4 NIT-3: "bound the advisory work
+		// per request ... so a 100-page find-replace stays fast." 25
+		// different already-published pages edited into duplicates in ONE
+		// request — only the first MAX_ADVISORY_CHECKS_PER_REQUEST (20)
+		// actually run the duplicate check; the rest are skipped and
+		// reported ONCE, in aggregate.
+		Mcpwp_Content_Guardrails::enter_context();
+		Mcpwp_Content_Guardrails::update_settings( array( 'min_word_count' => 0, 'duplicate_threshold' => 0.6, 'daily_publish_cap' => 1000 ) );
+
+		$this->seed_published( 3000, 'page', 'Source Page', $this->words( 40, 'dup_' ) );
+
+		$items = array();
+		for ( $i = 1; $i <= 25; $i++ ) {
+			$post_id = 3000 + $i;
+			$this->seed_published( $post_id, 'page', "Page $i", $this->words( 40, "orig{$i}_" ) );
+			wp_update_post( array( 'ID' => $post_id, 'post_content' => $this->words( 40, 'dup_' ) ) );
+			$items[] = array( 'id' => $post_id );
+		}
+
+		$response = array( 'items' => $items );
+		Mcpwp_Content_Guardrails::attach_notices_to_response( $response );
+
+		$flagged = 0;
+		foreach ( $response['items'] as $item ) {
+			if ( isset( $item['guardrails']['content_edit_advisory'] ) ) {
+				$flagged++;
+			}
+		}
+		$this->assertSame( 20, $flagged, 'exactly MAX_ADVISORY_CHECKS_PER_REQUEST advisories actually ran' );
+		$this->assertArrayHasKey( 'guardrails_advisory_note', $response );
+		$this->assertStringContainsString( '5', $response['guardrails_advisory_note'], '25 - 20 = 5 skipped' );
+	}
+
+	// -------------------------------------------------------------------------
 	// Elementor text extraction
 
 	public function test_extract_text_from_elementor_pulls_widget_copy(): void {
@@ -1333,5 +1569,176 @@ final class ContentGuardrailsTest extends TestCase {
 		$text = Mcpwp_Content_Guardrails::extract_text_from_elementor( $data );
 		$this->assertStringContainsString( 'Hello World', $text );
 		$this->assertStringContainsString( 'Some body copy here.', $text );
+	}
+
+	// -------------------------------------------------------------------------
+	// WARN-1: deep recursion through settings, denylist, templates
+
+	public function test_extract_text_from_elementor_pulls_icon_box_title_and_description(): void {
+		$data = array( array(
+			'elType'   => 'widget',
+			'widgetType' => 'icon-box',
+			'settings' => array(
+				'title_text'       => 'Fast Shipping',
+				'description_text' => 'Orders ship within 24 hours of purchase confirmation.',
+				'title_color'      => '#FF0000',
+				'icon_color'       => 'rgba(0,0,0,0.5)',
+				'selected_icon'    => array( 'value' => 'fas fa-truck', 'library' => 'fa-solid' ),
+			),
+		) );
+		$text = Mcpwp_Content_Guardrails::extract_text_from_elementor( $data );
+		$this->assertStringContainsString( 'Fast Shipping', $text );
+		$this->assertStringContainsString( 'Orders ship within 24 hours of purchase confirmation.', $text );
+		$this->assertStringNotContainsString( '#FF0000', $text );
+		$this->assertStringNotContainsString( 'rgba(0,0,0,0.5)', $text );
+	}
+
+	public function test_extract_text_from_elementor_pulls_icon_list_repeater_items(): void {
+		$data = array( array(
+			'elType'     => 'widget',
+			'widgetType' => 'icon-list',
+			'settings'   => array(
+				'icon_list' => array(
+					array( 'text' => 'Free returns within 30 days', 'selected_icon' => array( 'value' => 'fas fa-check', 'library' => 'fa-solid' ) ),
+					array( 'text' => 'Lifetime warranty on all parts', 'selected_icon' => array( 'value' => 'fas fa-check', 'library' => 'fa-solid' ) ),
+				),
+			),
+		) );
+		$text = Mcpwp_Content_Guardrails::extract_text_from_elementor( $data );
+		$this->assertStringContainsString( 'Free returns within 30 days', $text );
+		$this->assertStringContainsString( 'Lifetime warranty on all parts', $text );
+	}
+
+	public function test_extract_text_from_elementor_pulls_testimonial_content(): void {
+		$data = array( array(
+			'elType'     => 'widget',
+			'widgetType' => 'testimonial',
+			'settings'   => array(
+				'testimonial_content' => 'This product changed how our whole team works day to day.',
+				'testimonial_name'    => 'Jordan Rivera',
+				'testimonial_image'   => array( 'id' => 42, 'url' => 'https://example.test/jordan.jpg' ),
+			),
+		) );
+		$text = Mcpwp_Content_Guardrails::extract_text_from_elementor( $data );
+		$this->assertStringContainsString( 'This product changed how our whole team works day to day.', $text );
+		$this->assertStringContainsString( 'Jordan Rivera', $text );
+		$this->assertStringNotContainsString( 'https://example.test/jordan.jpg', $text );
+	}
+
+	public function test_extract_text_from_elementor_pulls_referenced_template_text_one_level_deep(): void {
+		$this->seed_published( 5001, 'elementor_library', 'A Template', '' );
+		$GLOBALS['_mcpwp_test_meta'][5001]['_elementor_data'] = wp_json_encode( array( array(
+			'elType' => 'widget', 'settings' => array( 'title' => 'Template Headline Text' ),
+		) ) );
+
+		$data = array( array(
+			'elType'     => 'widget',
+			'widgetType' => 'template',
+			'settings'   => array( 'template_id' => 5001 ),
+		) );
+		$text = Mcpwp_Content_Guardrails::extract_text_from_elementor( $data );
+		$this->assertStringContainsString( 'Template Headline Text', $text );
+	}
+
+	public function test_extract_text_from_elementor_guards_against_template_cycles(): void {
+		// Template A references template B, which references template A
+		// back — must not infinite-loop.
+		$this->seed_published( 5011, 'elementor_library', 'Template A', '' );
+		$this->seed_published( 5012, 'elementor_library', 'Template B', '' );
+		$GLOBALS['_mcpwp_test_meta'][5011]['_elementor_data'] = wp_json_encode( array( array(
+			'elType' => 'widget', 'settings' => array( 'title' => 'From A', 'template_id' => 5012 ),
+		) ) );
+		$GLOBALS['_mcpwp_test_meta'][5012]['_elementor_data'] = wp_json_encode( array( array(
+			'elType' => 'widget', 'settings' => array( 'title' => 'From B', 'template_id' => 5011 ),
+		) ) );
+
+		$data = array( array(
+			'elType' => 'widget', 'settings' => array( 'title' => 'Root', 'template_id' => 5011 ),
+		) );
+		$text = Mcpwp_Content_Guardrails::extract_text_from_elementor( $data );
+		$this->assertStringContainsString( 'Root', $text );
+		$this->assertStringContainsString( 'From A', $text, 'one level deep from root' );
+		// "no recursion into further templates" — template B's OWN
+		// template_id reference (back to A) must not be followed, so
+		// "From B" is never reached and the cycle guard is not even the
+		// only thing preventing infinite recursion here.
+		$this->assertStringNotContainsString( 'From B', $text );
+	}
+
+	// -------------------------------------------------------------------------
+	// WARN-3: guardrail advisories don't live/die with SEO audit runs
+
+	public function test_guardrail_advisory_survives_an_seo_audit_run_that_covers_the_same_post(): void {
+		// #957 adversarial review round 4 WARN-3: an SEO audit run that
+		// DOES cover this exact post (but reports DIFFERENT findings, not
+		// this advisory) must not resolve the advisory — it lives in a
+		// store store_issues_for_run() structurally cannot see.
+		Mcpwp_SEO_Audit_Store::upsert_issue( array(
+			'post_id'  => 9001,
+			'title'    => 'A Page',
+			'url'      => 'http://example.test/a-page/',
+			'type'     => 'page',
+			'category' => 'content_guardrails',
+			'code'     => 'duplicate_edit',
+			'severity' => 'warning',
+			'message'  => 'Looks like a duplicate.',
+			'recommendation' => 'Review it.',
+		) );
+
+		Mcpwp_SEO_Audit_Store::store_run( array(
+			'urls' => array(
+				array(
+					'id'         => 9001,
+					'title'      => 'A Page',
+					'url'        => 'http://example.test/a-page/',
+					'type'       => 'page',
+					'top_issues' => array(
+						array( 'category' => 'meta', 'code' => 'missing_meta_description', 'severity' => 'warning', 'message' => 'No meta description.' ),
+					),
+				),
+			),
+		) );
+
+		$result   = Mcpwp_SEO_Audit_Store::list_issues( array( 'post_id' => 9001, 'reveal_non_public' => true, 'limit' => 200 ) );
+		$advisory = array_values( array_filter( $result['issues'], function ( $i ) { return 'content_guardrails' === $i['category']; } ) );
+		$this->assertCount( 1, $advisory );
+		$this->assertSame( 'open', $advisory[0]['status'], 'the guardrail advisory is still OPEN after an audit run covering the same post' );
+
+		$seo_issue = array_values( array_filter( $result['issues'], function ( $i ) { return 'meta' === $i['category']; } ) );
+		$this->assertCount( 1, $seo_issue );
+		$this->assertSame( 'open', $seo_issue[0]['status'] );
+	}
+
+	public function test_300_guardrail_advisories_never_evict_a_real_seo_issue(): void {
+		Mcpwp_SEO_Audit_Store::store_run( array(
+			'urls' => array(
+				array(
+					'id'         => 9101,
+					'title'      => 'Important Page',
+					'url'        => 'http://example.test/important/',
+					'type'       => 'page',
+					'top_issues' => array(
+						array( 'category' => 'meta', 'code' => 'missing_meta_description', 'severity' => 'warning', 'message' => 'No meta description.' ),
+					),
+				),
+			),
+		) );
+
+		for ( $i = 1; $i <= 300; $i++ ) {
+			Mcpwp_SEO_Audit_Store::upsert_issue( array(
+				'post_id'  => 9200 + $i,
+				'title'    => "Page $i",
+				'url'      => "http://example.test/page-$i/",
+				'type'     => 'page',
+				'category' => 'content_guardrails',
+				'code'     => 'duplicate_edit',
+				'severity' => 'warning',
+				'message'  => 'Looks like a duplicate.',
+				'recommendation' => 'Review it.',
+			) );
+		}
+
+		$result = Mcpwp_SEO_Audit_Store::list_issues( array( 'post_id' => 9101, 'reveal_non_public' => true ) );
+		$this->assertNotEmpty( $result['issues'], '300 advisories must never evict a real SEO issue — separately capped stores' );
 	}
 }

@@ -2234,6 +2234,7 @@ function wp_insert_post($postarr, $wp_error = false)
 {
     $is_update = ! empty($postarr['ID']) && ! empty($GLOBALS['_mcpwp_test_posts'][ (int) $postarr['ID'] ]);
     $old_status = $is_update ? ($GLOBALS['_mcpwp_test_posts'][ (int) $postarr['ID'] ]->post_status ?? '') : 'new';
+    $post_before = $is_update ? clone $GLOBALS['_mcpwp_test_posts'][ (int) $postarr['ID'] ] : null;
 
     // wp_insert_post_data fires here in real WP core, before the row is
     // written, for BOTH a create and an update (wp_update_post() below
@@ -2282,6 +2283,9 @@ function wp_insert_post($postarr, $wp_error = false)
 
     $post = $GLOBALS['_mcpwp_test_posts'][ $post_id ];
     do_action('transition_post_status', $post->post_status ?? '', $old_status, $post);
+    if ($is_update) {
+        do_action('post_updated', $post_id, $post, $post_before);
+    }
     do_action('wp_insert_post', $post_id, $post, $is_update);
 
     return $post_id;
@@ -2295,6 +2299,9 @@ function wp_update_post($postarr, $wp_error = false)
 
     $post_id = (int) $postarr['ID'];
     $old_status = $GLOBALS['_mcpwp_test_posts'][ $post_id ]->post_status ?? '';
+    // Snapshot BEFORE any field mutation below, for the post_updated action
+    // (WordPress core passes the pre-update post object as its 3rd arg).
+    $post_before = clone $GLOBALS['_mcpwp_test_posts'][ $post_id ];
 
     // Mirror WP core's wp_update_post(): it fetches the FULL existing row
     // (get_post($ID, ARRAY_A)) and merges it under the caller's array before
@@ -2338,6 +2345,11 @@ function wp_update_post($postarr, $wp_error = false)
     }
 
     do_action('transition_post_status', $post->post_status ?? '', $old_status, $post);
+    // WordPress core fires this ONLY for a genuine update (never a
+    // create), after the row is actually written — content guardrails'
+    // post_content advisory (#957 round 4 NIT-2) defers its recording to
+    // exactly this hook.
+    do_action('post_updated', $post_id, $post, $post_before);
     do_action('wp_insert_post', $post_id, $post, true);
 
     return $post_id;
@@ -2976,6 +2988,25 @@ if (! function_exists('is_admin')) {
     function is_admin()
     {
         return (bool) $GLOBALS['mcpwp_test_is_admin'];
+    }
+}
+
+if (! function_exists('wp_doing_ajax')) {
+    // Deliberately NOT "defined('DOING_AJAX') && DOING_AJAX" — DOING_AJAX
+    // is a raw, permanent PHP constant once any test defines it (PHP
+    // cannot undefine a constant), and this suite runs many hundreds of
+    // "requests" in one shared process. A test file that legitimately
+    // needs DOING_AJAX true (see AdminChatToolExecutionAuthTest.php,
+    // which reads the constant directly, not through this function) would
+    // otherwise leak that into every OTHER test in every OTHER file that
+    // runs afterward in the same process, including ones asserting the
+    // opposite. This function is used ONLY by content guardrails'
+    // is_genuine_admin_human_apply() (#957 round 4 WARN-2) — nothing else
+    // in this codebase calls wp_doing_ajax() — so it is free to use a
+    // per-test-resettable global instead, isolated from that constant.
+    function wp_doing_ajax()
+    {
+        return (bool) ($GLOBALS['mcpwp_test_doing_ajax'] ?? false);
     }
 }
 
