@@ -142,6 +142,7 @@ trait Mcpwp_Api_Auth {
 				// charging silently switch off (#802 round 4).
 				$this->current_api_key_record = self::$mcpwp_verdicts[ $memo_id ][2];
 				$this->mcpwp_metered          = self::$mcpwp_verdicts[ $memo_id ][3];
+				$this->maybe_enter_guardrails_context( self::$mcpwp_verdicts[ $memo_id ][1] );
 				return self::$mcpwp_verdicts[ $memo_id ][1];
 			}
 
@@ -156,10 +157,36 @@ trait Mcpwp_Api_Auth {
 			}
 			self::$mcpwp_verdicts[ $memo_id ] = array( $request, $verdict, $this->current_api_key_record, $this->mcpwp_metered );
 
+			$this->maybe_enter_guardrails_context( $verdict );
 			return $verdict;
 		}
 
-		return $this->compute_api_key_verdict( $request );
+		$verdict = $this->compute_api_key_verdict( $request );
+		$this->maybe_enter_guardrails_context( $verdict );
+		return $verdict;
+	}
+
+	/**
+	 * Mark the rest of this request as MCPWP-authenticated for the content
+	 * guardrails module (#957 adversarial review design fix) the moment a
+	 * verdict resolves to true — whichever of compute_api_key_verdict()'s
+	 * several `return true;` points produced it (the trusted-admin-ajax
+	 * Chat-tab bypass, the destructive-gate admin-replay bypass, or the
+	 * ordinary end-of-checks success) and regardless of whether this call
+	 * hit the per-request verdict cache above or computed fresh. Every one
+	 * of those IS a genuine MCPWP tool call executing, even when triggered
+	 * from wp-admin (the Chat tab literally dispatches tools/call) — the
+	 * cases that must NOT set this (a plain wp-admin post edit, WP-CLI,
+	 * another plugin's save) never call verify_api_key() at all, so they
+	 * are excluded by construction, not by an extra check here.
+	 *
+	 * @param bool|WP_Error $verdict This call's result.
+	 * @return void
+	 */
+	private function maybe_enter_guardrails_context( $verdict ) {
+		if ( true === $verdict && class_exists( 'Mcpwp_Content_Guardrails' ) ) {
+			Mcpwp_Content_Guardrails::enter_context();
+		}
 	}
 
 	/**

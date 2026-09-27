@@ -185,6 +185,7 @@ final class ResponseProjectionTest extends TestCase {
 						'suggested_first_tools',
 						'quick_start',
 						'pro_active',
+						'guardrails_status',
 					),
 				)
 			)
@@ -201,6 +202,7 @@ final class ResponseProjectionTest extends TestCase {
 			'suggested_first_tools',
 			'quick_start',
 			'pro_active',
+			'guardrails_status',
 		);
 
 		$this->assertSame( $expected_keys, array_keys( $a ), 'detail=full must return every legacy section, in the existing order.' );

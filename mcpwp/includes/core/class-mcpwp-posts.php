@@ -369,6 +369,10 @@ class Mcpwp_Posts {
 			$post_data['post_name'] = sanitize_title( $data['slug'] );
 		}
 
+		// Content guardrails (#957): enforced centrally by
+		// Mcpwp_Content_Guardrails::on_insert_post_data(), a wp_insert_post_data
+		// filter that runs inside the wp_insert_post() call below — not here.
+		// See that method's docblock for why.
 		$post_id = wp_insert_post( $post_data, true );
 
 		if ( is_wp_error( $post_id ) ) {

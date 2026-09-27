@@ -275,8 +275,14 @@ class Mcpwp_REST_Multilang extends Mcpwp_REST_API {
 
 		$new_post = get_post( $result );
 
-		return rest_ensure_response( array(
+		// $this->success_response(), not rest_ensure_response(): the former
+		// merges any content-guardrails notice recorded for this post ID
+		// generically (#957 adversarial review: "multilang callers must
+		// surface the guardrails result, not just ['status']"). 'id' is the
+		// key that mechanism looks for.
+		return $this->success_response( array(
 			'success'           => true,
+			'id'                => $result,
 			'original_post_id'  => $post_id,
 			'translation_id'    => $result,
 			'language'          => $language,

@@ -99,10 +99,18 @@ class Mcpwp_Page_Builder {
 			return new WP_Error( 'no_valid_sections', __( 'No valid sections to build.', 'mcpwp' ) );
 		}
 
-		// Create the page.
+		$effective_status = in_array( $status, array( 'draft', 'publish', 'private' ), true ) ? $status : 'draft';
+
+		// Content guardrails (#957): enforced centrally by
+		// Mcpwp_Content_Guardrails::on_insert_post_data() — not here. The
+		// page is created empty (Elementor data is written to postmeta
+		// separately, below) so the ramp cap still applies at create time
+		// but thin/duplicate correctly see no content yet — exactly the
+		// "Elementor-first page publishes with 0 words at create" case the
+		// false-positive fix exists for.
 		$page_id = wp_insert_post( array(
 			'post_title'  => sanitize_text_field( $title ),
-			'post_status' => in_array( $status, array( 'draft', 'publish', 'private' ), true ) ? $status : 'draft',
+			'post_status' => $effective_status,
 			'post_type'   => 'page',
 		) );
 

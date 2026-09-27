@@ -815,4 +815,74 @@ trait Mcpwp_Sanitization {
 		// Use WordPress sanitization
 		return sanitize_file_name( $filename );
 	}
+
+	/**
+	 * Queue (or report the failure to queue) a bulk-publish approval request
+	 * for items that were force-created as drafts because a bulk create
+	 * call exceeded the content-guardrails bulk threshold (#957 rule 2).
+	 * Shared by bulk_create_pages()/bulk_create_posts() and any other bulk
+	 * create route that adopts the same pattern.
+	 *
+	 * @param int[]  $post_ids  IDs created as drafts.
+	 * @param string $post_type 'post' or 'page'.
+	 * @param int    $threshold Configured threshold, for the message.
+	 * @param string $tool      Tool/route name, for the approval record.
+	 * @return array Guardrails response block.
+	 */
+	protected function queue_bulk_publish_approval( array $post_ids, $post_type, $threshold, $tool ) {
+		if ( ! class_exists( 'Mcpwp_Content_Guardrails' ) ) {
+			return array(
+				'bulk_approval_required' => true,
+				'message'                => __( 'This batch exceeded the bulk publishing threshold but the approval pipeline is unavailable, so every item was created as a draft. Publish them manually.', 'mcpwp' ),
+			);
+		}
+
+		if ( method_exists( $this, 'guard_stable_identity_for_approvals' ) ) {
+			$identity_guard = $this->guard_stable_identity_for_approvals();
+			if ( is_wp_error( $identity_guard ) ) {
+				return array(
+					'bulk_approval_required' => true,
+					'message'                => sprintf(
+						/* translators: 1: item count, 2: reason. */
+						__( '%1$d items were created as drafts because this batch exceeded the bulk publishing threshold, but no approval request could be queued (%2$s). Publish them manually, or reconnect and retry.', 'mcpwp' ),
+						count( $post_ids ),
+						$identity_guard->get_error_message()
+					),
+				);
+			}
+		}
+
+		$approval = Mcpwp_Content_Guardrails::request_bulk_publish_approval(
+			$post_ids,
+			$post_type,
+			array(
+				'tool'                => sanitize_key( (string) $tool ),
+				'requested_by_key_id' => method_exists( $this, 'current_requester_key_id' ) ? $this->current_requester_key_id() : '',
+			)
+		);
+
+		if ( is_wp_error( $approval ) ) {
+			return array(
+				'bulk_approval_required' => true,
+				'message'                => sprintf(
+					/* translators: 1: item count, 2: reason. */
+					__( '%1$d items were created as drafts because this batch exceeded the bulk publishing threshold, but no approval request could be queued (%2$s). Publish them manually.', 'mcpwp' ),
+					count( $post_ids ),
+					$approval->get_error_message()
+				),
+			);
+		}
+
+		return array(
+			'bulk_approval_required' => true,
+			'approval_id'            => $approval['id'],
+			'message'                => sprintf(
+				/* translators: 1: item count, 2: threshold, 3: approval id. */
+				__( '%1$d items were created as drafts and queued for approval before publishing (bulk threshold: %2$d). Approve and apply request %3$s to publish them.', 'mcpwp' ),
+				count( $post_ids ),
+				$threshold,
+				$approval['id']
+			),
+		);
+	}
 }

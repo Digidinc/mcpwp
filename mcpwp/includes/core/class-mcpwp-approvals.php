@@ -245,6 +245,106 @@ class Mcpwp_Approvals {
 	}
 
 	/**
+	 * Create an approval request to publish a batch of already-drafted
+	 * posts/pages at once (#957 rule 2: a bulk-create call over the
+	 * configured threshold is created as drafts plus one approval request,
+	 * instead of publishing directly). Unlike create_destructive_request(),
+	 * this is reversible: rollback simply reverts the batch to draft — see
+	 * Mcpwp_Content_Guardrails::apply_bulk_publish(), which apply_payload()
+	 * delegates to below.
+	 *
+	 * @param array  $items     {id, hash, findings} entries, IDs already
+	 *                          created as drafts.
+	 * @param string $post_type 'post' or 'page'.
+	 * @param array  $args      title/note/tool/requested_by_key_id.
+	 * @return array|WP_Error Public approval request.
+	 */
+	public static function create_bulk_publish_request( array $items, $post_type, $args = array() ) {
+		$post_type = sanitize_key( (string) $post_type );
+
+		// Each item: {id, hash, findings} — see
+		// Mcpwp_Content_Guardrails::snapshot_for_approval(). 'hash' lets
+		// apply_bulk_publish() refuse to publish anything edited since this
+		// snapshot; 'findings' is shown to the approver (#957 adversarial
+		// review WARN-1).
+		$normalized = array();
+		foreach ( $items as $item ) {
+			if ( ! is_array( $item ) || empty( $item['id'] ) ) {
+				continue;
+			}
+			$normalized[] = array(
+				'id'       => absint( $item['id'] ),
+				'hash'     => isset( $item['hash'] ) ? sanitize_text_field( (string) $item['hash'] ) : null,
+				'findings' => isset( $item['findings'] ) && is_array( $item['findings'] ) ? $item['findings'] : array(),
+			);
+		}
+
+		if ( empty( $normalized ) ) {
+			return new WP_Error( 'no_items', __( 'No items to queue for publish approval.', 'mcpwp' ), array( 'status' => 400 ) );
+		}
+
+		$id    = self::generate_id();
+		$now   = gmdate( 'c' );
+		$count = count( $normalized );
+
+		$request = array(
+			'id'                  => $id,
+			'status'              => 'pending',
+			'action'              => 'bulk_content_publish',
+			'title'               => isset( $args['title'] ) ? sanitize_text_field( (string) $args['title'] ) : sprintf(
+				/* translators: 1: item count, 2: post type. */
+				__( 'Publish %1$d %2$s at once', 'mcpwp' ),
+				$count,
+				$post_type
+			),
+			'note'                => isset( $args['note'] ) ? sanitize_textarea_field( (string) $args['note'] ) : '',
+			'tool'                => isset( $args['tool'] ) ? sanitize_key( (string) $args['tool'] ) : '',
+			'resource'            => array(
+				'type'  => 'bulk_' . $post_type,
+				'id'    => null,
+				'title' => sprintf( '%1$d %2$s', $count, $post_type ),
+			),
+			'diff'                => array(
+				'summary' => sprintf(
+					/* translators: %d: item count. */
+					__( 'Created as drafts; queued for approval to publish all %d at once (bulk creation threshold exceeded).', 'mcpwp' ),
+					$count
+				),
+			),
+			'payload'             => array(
+				'items'     => $normalized,
+				'post_type' => $post_type,
+			),
+			'rollback'            => array(
+				'items'     => $normalized,
+				'post_type' => $post_type,
+			),
+			'metadata'            => array(),
+			'requested_by_key_id' => isset( $args['requested_by_key_id'] ) ? sanitize_text_field( (string) $args['requested_by_key_id'] ) : '',
+			'created_at'          => $now,
+			'updated_at'          => $now,
+			'approved_at'         => null,
+			'applied_at'          => null,
+			'rejected_at'         => null,
+			'rolled_back_at'      => null,
+		);
+
+		self::upsert( $request );
+
+		$public = self::public_record( $request );
+		self::emit_event(
+			'approval.created',
+			$public,
+			'pending',
+			'medium',
+			__( 'Review before publishing this batch.', 'mcpwp' )
+		);
+		self::maybe_schedule_triage( $public );
+
+		return $public;
+	}
+
+	/**
 	 * @param string $status            Status filter.
 	 * @param int    $limit             Maximum records.
 	 * @param bool   $reveal_non_public When true, return full records; when false
@@ -614,6 +714,16 @@ class Mcpwp_Approvals {
 			return $result;
 		}
 
+		// Re-fetch: apply_payload() (e.g. Mcpwp_Content_Guardrails::
+		// apply_bulk_publish()'s record_apply_result()) may have just
+		// written metadata onto this SAME record via its own update_option()
+		// call — upserting the copy read at the top of this method, before
+		// that write happened, would silently erase it.
+		$request = self::get_private_request( $id );
+		if ( is_wp_error( $request ) ) {
+			return $request;
+		}
+
 		$request['status']     = 'applied';
 		$request['applied_at'] = gmdate( 'c' );
 		$request['updated_at'] = $request['applied_at'];
@@ -650,6 +760,12 @@ class Mcpwp_Approvals {
 		$result = self::apply_payload( $request, 'rollback' );
 		if ( is_wp_error( $result ) ) {
 			return $result;
+		}
+
+		// Re-fetch for the same reason as apply_request() above.
+		$request = self::get_private_request( $id );
+		if ( is_wp_error( $request ) ) {
+			return $request;
 		}
 
 		$request['status']         = 'rolled_back';
@@ -769,6 +885,19 @@ class Mcpwp_Approvals {
 		// Staging push apply path.
 		if ( 'staging_push' === $request['action'] ) {
 			return self::apply_staging_push( $request, $field );
+		}
+
+		// Bulk-publish apply/rollback path (#957) — delegates to the
+		// guardrails module, which owns the ramp/anomaly bookkeeping that a
+		// batch publish still has to go through. $context is forwarded so
+		// apply_bulk_publish() can decide whether THIS apply is a genuine
+		// wp-admin human (the only caller its ramp-cap exemption ever
+		// applies to — #957 adversarial review round 4 WARN-2).
+		if ( 'bulk_content_publish' === $request['action'] ) {
+			if ( ! class_exists( 'Mcpwp_Content_Guardrails' ) ) {
+				return new WP_Error( 'guardrails_unavailable', __( 'The content guardrails module is not loaded.', 'mcpwp' ), array( 'status' => 500 ) );
+			}
+			return Mcpwp_Content_Guardrails::apply_bulk_publish( $request, $field, is_array( $context ) ? $context : array() );
 		}
 
 		// A destructive operation replays the reviewed call once; there is

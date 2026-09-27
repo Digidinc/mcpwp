@@ -1350,7 +1350,17 @@ class Mcpwp_Elementor_Pro {
 		$title  = ! empty( $args['title'] ) ? sanitize_text_field( $args['title'] ) : $source->post_title . ' (Copy)';
 		$status = ! empty( $args['status'] ) ? sanitize_text_field( $args['status'] ) : 'draft';
 
-		// Create new post.
+		// Create new post. _elementor_data is front-loaded into meta_input
+		// (rather than copied in the loop below, after insert) specifically
+		// so a clone that publishes immediately — exactly the duplicate-
+		// content pattern rule 3 exists for, e.g. the classic per-city
+		// landing page cloned and republished with only its title changed —
+		// is duplicate-checked against its REAL content by
+		// Mcpwp_Content_Guardrails::on_insert_post_data() (#957), which has
+		// no post ID to look postmeta up by otherwise. See that method's
+		// docblock.
+		$elementor_data = get_post_meta( $source_id, '_elementor_data', true );
+
 		$new_post = array(
 			'post_title'   => $title,
 			'post_content' => $source->post_content,
@@ -1359,6 +1369,9 @@ class Mcpwp_Elementor_Pro {
 			'post_type'    => $source->post_type,
 			'post_author'  => get_current_user_id(),
 		);
+		if ( ! empty( $elementor_data ) ) {
+			$new_post['meta_input'] = array( '_elementor_data' => $elementor_data );
+		}
 
 		if ( ! empty( $args['parent'] ) ) {
 			$new_post['post_parent'] = absint( $args['parent'] );
@@ -1370,13 +1383,21 @@ class Mcpwp_Elementor_Pro {
 			return $new_id;
 		}
 
-		// Copy all post meta.
+		// Copy every OTHER post meta — _elementor_data was already written
+		// above, atomically with the insert.
 		$meta = get_post_meta( $source_id );
 		foreach ( $meta as $key => $values ) {
+			if ( '_elementor_data' === $key ) {
+				continue;
+			}
 			foreach ( $values as $value ) {
 				add_post_meta( $new_id, $key, maybe_unserialize( $value ) );
 			}
 		}
+
+		// The guardrails filter above may have downgraded post_status —
+		// read back what actually landed, not what was requested.
+		$status = get_post_status( $new_id );
 
 		// Copy taxonomies.
 		$taxonomies = get_object_taxonomies( $source->post_type );
@@ -1412,15 +1433,32 @@ class Mcpwp_Elementor_Pro {
 			return new WP_Error( 'elementor_inactive', __( 'Elementor is not active.', 'mcpwp' ) );
 		}
 
-		$title = ! empty( $data['title'] ) ? sanitize_text_field( $data['title'] ) : __( 'Landing Page', 'mcpwp' );
+		$title  = ! empty( $data['title'] ) ? sanitize_text_field( $data['title'] ) : __( 'Landing Page', 'mcpwp' );
+		$status = ! empty( $data['status'] ) ? sanitize_text_field( $data['status'] ) : 'draft';
+
+		// Build the Elementor structure before insert (not after) and pass
+		// it via meta_input — a real wp_insert_post() feature that writes
+		// postmeta atomically alongside the post — so it is visible to
+		// Mcpwp_Content_Guardrails::on_insert_post_data() (#957) even though
+		// the page has no ID yet at that point. Content guardrails are
+		// enforced entirely there now, not here.
+		$landing_elementor_data = null;
+		if ( ! empty( $data['sections'] ) ) {
+			$landing_elementor_data = $this->build_landing_page_structure( $data['sections'] );
+		} elseif ( ! empty( $data['elementor_data'] ) ) {
+			$landing_elementor_data = $data['elementor_data'];
+		}
 
 		// Create the page.
 		$page_data = array(
 			'post_title'  => $title,
-			'post_status' => ! empty( $data['status'] ) ? sanitize_text_field( $data['status'] ) : 'draft',
+			'post_status' => $status,
 			'post_type'   => 'page',
 			'post_author' => get_current_user_id(),
 		);
+		if ( null !== $landing_elementor_data ) {
+			$page_data['meta_input'] = array( '_elementor_data' => $landing_elementor_data );
+		}
 
 		$page_id = wp_insert_post( $page_data );
 
@@ -1432,15 +1470,8 @@ class Mcpwp_Elementor_Pro {
 		update_post_meta( $page_id, '_wp_page_template', 'elementor_header_footer' );
 		update_post_meta( $page_id, '_elementor_edit_mode', 'builder' );
 
-		// Build Elementor structure if sections provided.
-		if ( ! empty( $data['sections'] ) ) {
-			$elementor_data = $this->build_landing_page_structure( $data['sections'] );
-			$save_result = $this->save_elementor_data( $page_id, $elementor_data );
-			if ( is_wp_error( $save_result ) ) {
-				return $save_result;
-			}
-		} elseif ( ! empty( $data['elementor_data'] ) ) {
-			$save_result = $this->save_elementor_data( $page_id, $data['elementor_data'] );
+		if ( null !== $landing_elementor_data ) {
+			$save_result = $this->save_elementor_data( $page_id, $landing_elementor_data );
 			if ( is_wp_error( $save_result ) ) {
 				return $save_result;
 			}
@@ -1451,7 +1482,7 @@ class Mcpwp_Elementor_Pro {
 			$this->apply_template_to_page( $page_id, absint( $data['template_id'] ) );
 		}
 
-		return array(
+		$result = array(
 			'id'             => $page_id,
 			'title'          => $title,
 			'status'         => get_post_status( $page_id ),
@@ -1459,6 +1490,8 @@ class Mcpwp_Elementor_Pro {
 			'edit_url'       => admin_url( 'post.php?post=' . $page_id . '&action=elementor' ),
 			'elementor_data' => get_post_meta( $page_id, '_elementor_data', true ),
 		);
+
+		return $result;
 	}
 
 	/**

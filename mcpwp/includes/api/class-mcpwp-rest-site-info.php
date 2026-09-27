@@ -756,6 +756,10 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 			'suggested_first_tools' => $suggested_first_tools,
 			'quick_start'           => $quick_start,
 			'pro_active'            => $is_pro,
+			// Read-only content-guardrails status (#957): current UTC-day
+			// published count vs the cap, so an agent sees headroom before
+			// it starts publishing.
+			'guardrails_status'     => class_exists( 'Mcpwp_Content_Guardrails' ) ? Mcpwp_Content_Guardrails::get_status_summary() : array(),
 		);
 
 		// #830: an explicit `sections` allowlist still narrows the full
