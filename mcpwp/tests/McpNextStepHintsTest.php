@@ -278,9 +278,19 @@ final class McpNextStepHintsTest extends TestCase {
 	 * A hint naming a tool whose category has been disabled site-wide must
 	 * not be shown — same tool_currently_permitted() gate the idempotent
 	 * replay path already relies on for its own permission recheck (#802).
+	 *
+	 * wp_onboard's own hint (wp_get_site_context) is no longer a usable
+	 * example of this: #1007 review round 2 (owner decision) put
+	 * wp_get_site_context on the discovery allowlist — site context is
+	 * public brand copy, already published unauthenticated at /llms.txt — so
+	 * it is exempt from the disabled-category gate entirely. See
+	 * test_wp_onboards_site_context_hint_survives_site_being_disabled()
+	 * below for that new, deliberate behavior. The generic "disabled
+	 * category drops the hint" mechanism stays covered by
+	 * test_a_hint_with_only_some_targets_disabled_keeps_the_reachable_ones()
+	 * (wp_set_seo, a genuinely gated tool).
 	 */
-	public function test_hint_is_dropped_when_the_target_tools_category_is_disabled(): void {
-		// wp_get_site_context (the hint wp_onboard points at) is category "site".
+	public function test_wp_onboards_site_context_hint_survives_site_being_disabled(): void {
 		update_option( 'mcpwp_disabled_tool_categories', array( 'site' ) );
 
 		$out = $this->invoke_apply_next_step_hints(
@@ -288,18 +298,19 @@ final class McpNextStepHintsTest extends TestCase {
 			'wp_onboard'
 		);
 
-		$this->assertCount( 1, $out['result']['content'], 'No hint entry should have been appended at all.' );
-		$this->assertArrayNotHasKey( '_meta', $out['result'] );
+		$this->assertArrayHasKey( 'mcpwp/next', $out['result']['_meta'], 'wp_get_site_context is on the discovery allowlist — the hint must survive.' );
+		$this->assertSame( 'wp_get_site_context', $out['result']['_meta']['mcpwp/next'][0]['tool'] );
 	}
 
-	public function test_hint_reappears_once_the_category_is_re_enabled(): void {
+	public function test_wp_onboards_site_context_hint_is_unaffected_by_re_enabling_site(): void {
 		update_option( 'mcpwp_disabled_tool_categories', array( 'site' ) );
-		$blocked = $this->invoke_apply_next_step_hints( $this->success_response( array( 'detail' => 'slim' ) ), 'wp_onboard' );
-		$this->assertArrayNotHasKey( '_meta', $blocked['result'] );
+		$disabled = $this->invoke_apply_next_step_hints( $this->success_response( array( 'detail' => 'slim' ) ), 'wp_onboard' );
 
 		delete_option( 'mcpwp_disabled_tool_categories' );
-		$restored = $this->invoke_apply_next_step_hints( $this->success_response( array( 'detail' => 'slim' ) ), 'wp_onboard' );
-		$this->assertArrayHasKey( 'mcpwp/next', $restored['result']['_meta'] );
+		$enabled = $this->invoke_apply_next_step_hints( $this->success_response( array( 'detail' => 'slim' ) ), 'wp_onboard' );
+
+		$this->assertArrayHasKey( 'mcpwp/next', $disabled['result']['_meta'] );
+		$this->assertArrayHasKey( 'mcpwp/next', $enabled['result']['_meta'] );
 	}
 
 	public function test_a_hint_with_only_some_targets_disabled_keeps_the_reachable_ones(): void {

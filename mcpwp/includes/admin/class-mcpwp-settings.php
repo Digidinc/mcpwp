@@ -1211,6 +1211,10 @@ class Mcpwp_Settings {
 		esc_html_e( 'Write in Markdown. This text is included in the wp_introspect response, available via wp_get_site_context, and published in a public llms.txt summary. AI assistants will use this as their design reference when building or editing pages.', 'mcpwp' );
 		echo '</p>';
 
+		echo '<p class="description"><strong>';
+		esc_html_e( 'This text is public: it is published in /llms.txt and readable by every API key.', 'mcpwp' );
+		echo '</strong></p>';
+
 		if ( '' !== $updated ) {
 			printf(
 				'<p class="description">%s %s</p>',

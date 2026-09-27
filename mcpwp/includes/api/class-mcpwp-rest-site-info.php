@@ -358,20 +358,19 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 			$data['tools_note']  = 'Compact tool list (name + summary). Full input schemas: MCP tools/list, or GET /introspect?full=true.';
 		}
 
-		// Include site context if set — but only for a caller allowed to read
-		// 'site'-category data (#1007 WARN-1). /introspect stays on the
-		// discovery allowlist so every key can always reach it, but the
-		// context TEXT itself is the same data /site-context and
-		// mcpwp://site-context already refuse to a key without 'site' (or
-		// while 'site' is disabled site-wide) — embedding it here would
-		// silently reopen exactly that leak.
+		// Include site context if set. #1007 review round 2 owner decision:
+		// site context is public brand copy — it is already published,
+		// unauthenticated, at /llms.txt (Mcpwp_AI_Presence::generate_llms_txt()
+		// reads the same mcpwp_site_context option). READING it is therefore
+		// on the discovery allowlist for every key regardless of role or the
+		// site-wide toggle (see get_discovery_allowlist()'s 'wp_get_site_context'
+		// entry, 'read_only' => true — GET /site-context and mcpwp://site-context
+		// carry the identical exemption). WRITING it (wp_set_site_context,
+		// POST/PUT /site-context) stays gated to the 'site' category — that is
+		// the site owner's own edit, not published data.
 		$site_context = get_option( 'mcpwp_site_context', '' );
 		if ( '' !== $site_context ) {
-			if ( $this->caller_may_read_site_context() ) {
-				$data['site_context'] = $site_context;
-			} else {
-				$data['site_context_note'] = 'A site context is configured but this key\'s role does not include the "site" category (or it is disabled site-wide). Use a key with "site" and call wp_get_site_context / GET /site-context to read it.';
-			}
+			$data['site_context'] = $site_context;
 		}
 
 		return $this->success_response( $data );
@@ -590,15 +589,11 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 		);
 		if ( $full ) {
 			if ( '' !== $site_context ) {
-				// #1007 WARN-1: same leak as /introspect, same fix — /onboard
-				// stays on the discovery allowlist (reachable by every key),
-				// but the context TEXT is 'site'-category data. Omit it for a
-				// caller not allowed to read that category.
-				if ( $this->caller_may_read_site_context() ) {
-					$context_section['context'] = $site_context;
-				} else {
-					$context_section['note'] = 'A site context is configured but this key\'s role does not include the "site" category (or it is disabled site-wide). Use a key with "site" and call wp_get_site_context / GET /site-context to read it.';
-				}
+				// #1007 review round 2 owner decision: site context is public
+				// brand copy, already published unauthenticated at /llms.txt —
+				// reading it is on the discovery allowlist for every key (see
+				// get_discovery_allowlist()'s 'wp_get_site_context' entry).
+				$context_section['context'] = $site_context;
 			} else {
 				$context_section['hint'] = 'No site context configured. Use wp_set_site_context to define design rules, color palette, typography, and layout guidelines.';
 			}
@@ -693,11 +688,27 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 				),
 				'site_context_configured' => $context_section['configured'],
 				'next_actions'            => array_slice( $actions, 0, 3 ),
-				'more'                    => array(
-					'tools'         => 'Call MCP tools/list (or GET /introspect) for the full tool catalog with input schemas.',
-					'guide'         => 'Call wp_get_guide(topic="...") for a topic guide — e.g. onboarding, elementor, seo, workflows.',
-					'site_context'  => 'Call wp_get_site_context for the full site brief and design rules.',
-					'full_briefing' => 'Call wp_onboard(detail="full") — or GET /onboard?detail=full — for the complete legacy briefing: full tool catalog, quick reference, suggested first tools, recent content, design references, and site context text.',
+				// #1007 review round 2, NIT-2: 'guide' points at wp_get_guide
+				// ('site' category, still genuinely gated) — must not be
+				// offered to a key that cannot call it. 'site_context' points
+				// at wp_get_site_context, which is on the discovery allowlist
+				// (round 2 owner decision: public brand copy) and therefore
+				// always survives the filter; 'tools'/'full_briefing' name no
+				// single gated tool at all. filter_actions_by_caller_categories()
+				// is the same filter next_actions/quick_reference/
+				// suggested_first_tools already use, so this can never
+				// disagree with them.
+				'more'                    => array_column(
+					$this->filter_actions_by_caller_categories(
+						array(
+							array( 'key' => 'tools', 'tool' => '', 'text' => 'Call MCP tools/list (or GET /introspect) for the full tool catalog with input schemas.' ),
+							array( 'key' => 'guide', 'tool' => 'wp_get_guide', 'text' => 'Call wp_get_guide(topic="...") for a topic guide — e.g. onboarding, elementor, seo, workflows.' ),
+							array( 'key' => 'site_context', 'tool' => 'wp_get_site_context', 'text' => 'Call wp_get_site_context for the full site brief and design rules.' ),
+							array( 'key' => 'full_briefing', 'tool' => '', 'text' => 'Call wp_onboard(detail="full") — or GET /onboard?detail=full — for the complete legacy briefing: full tool catalog, quick reference, suggested first tools, recent content, design references, and site context text.' ),
+						)
+					),
+					'text',
+					'key'
 				),
 				'pro_active'              => $is_pro,
 				'detail'                  => 'slim',

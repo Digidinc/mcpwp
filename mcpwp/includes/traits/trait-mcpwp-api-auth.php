@@ -541,9 +541,9 @@ trait Mcpwp_Api_Auth {
 	}
 
 	/**
-	 * Single source of truth for the discovery allowlist: tool name => REST
-	 * route (#1007 owner decision, 2026-09-27, hardened by adversarial review
-	 * round 1 WARN-2). Every key, of any role, and even while the site
+	 * Single source of truth for the discovery allowlist: tool name => {route,
+	 * read_only} (#1007 owner decision, 2026-09-27, hardened by adversarial
+	 * review rounds 1-2). Every key, of any role, and even while the site
 	 * administrator has disabled the 'site' category outright, must still be
 	 * able to make first contact with a site:
 	 *
@@ -556,17 +556,36 @@ trait Mcpwp_Api_Auth {
 	 *    read it first.
 	 *  - wp_introspect / '/introspect' — the machine-readable API description;
 	 *    same chicken-and-egg problem as onboard.
+	 *  - wp_get_site_context / '/site-context' — round 2 owner decision:
+	 *    site context is public brand copy, already published unauthenticated
+	 *    at /llms.txt (Mcpwp_AI_Presence::generate_llms_txt() reads the same
+	 *    mcpwp_site_context option), so READING it needs no gate at all.
+	 *    'read_only' => true: unlike the other three entries, this route is
+	 *    NOT method-agnostic — wp_set_site_context (POST/PUT /site-context,
+	 *    a DIFFERENT tool name sharing the same route) is a genuine site-owner
+	 *    edit and stays gated to 'site'. get_discovery_allowlist_routes()
+	 *    (unconditional, any method — used by get_category_for_route()'s
+	 *    method-agnostic classifier) therefore excludes read_only entries;
+	 *    get_discovery_allowlist_read_only_routes() carries them, consulted
+	 *    only where a request's HTTP method is known to be safe (GET/HEAD) —
+	 *    see is_discovery_read_bypass().
 	 *
-	 * Consumed two ways, both derived from this one map so they cannot drift
-	 * apart: get_discovery_allowlist_routes() (REST — checked first in
-	 * get_category_for_route(), before either route map, so nothing added
-	 * there can ever shadow it back into being gated) and
+	 * Consumed three ways, all derived from this one map so they cannot drift
+	 * apart: get_discovery_allowlist_routes() (REST, any method — checked
+	 * first in get_category_for_route(), before either route map, so nothing
+	 * added there can ever shadow it back into being gated),
+	 * get_discovery_allowlist_read_only_routes() (REST, GET/HEAD only — see
+	 * is_discovery_read_bypass(), consulted by check_disabled_category_for_route()
+	 * and check_key_category_restriction_for_route()), and
 	 * get_discovery_allowlist_tool_names() (MCP — Mcpwp_REST_MCP's
-	 * get_all_tools(), filter_tools_by_key_role() and handle_tools_call() all
-	 * exempt these three tool NAMES from the per-key role gate and the
-	 * site-wide toggle exactly the way this method's routes are exempt over
-	 * REST; the tool's own SCOPE requirement, e.g. wp_onboard's 'read', still
-	 * applies — only the CATEGORY gate is bypassed).
+	 * get_all_tools(), filter_tools_by_key_role(), handle_tools_call() and
+	 * tool_currently_permitted() all exempt these tool NAMES from the per-key
+	 * role gate and the site-wide toggle exactly the way this method's routes
+	 * are exempt over REST — a tool name is not method-ambiguous the way a
+	 * shared route is, since wp_get_site_context and wp_set_site_context are
+	 * already two different names; the tool's own SCOPE requirement, e.g.
+	 * wp_onboard's 'read', still applies — only the CATEGORY gate is
+	 * bypassed).
 	 *
 	 * Before WARN-2, the REST allowlist above had no MCP-side counterpart:
 	 * an author key's tools/list omitted wp_onboard/wp_site_info/wp_introspect
@@ -585,28 +604,82 @@ trait Mcpwp_Api_Auth {
 	 * 7.4 (readme.txt "Requires PHP"), and constants inside a trait are a
 	 * PHP 8.1 addition — declaring one here would fail to parse on 7.4/8.0.
 	 *
-	 * @return array<string,string> Tool name => REST route.
+	 * @return array<string,array{route:string,read_only?:bool}> Tool name => entry.
 	 */
 	protected static function get_discovery_allowlist() {
 		return array(
-			'wp_site_info'  => '/site-info',
-			'wp_onboard'    => '/onboard',
-			'wp_introspect' => '/introspect',
+			'wp_site_info'        => array( 'route' => '/site-info' ),
+			'wp_onboard'          => array( 'route' => '/onboard' ),
+			'wp_introspect'       => array( 'route' => '/introspect' ),
+			'wp_get_site_context' => array( 'route' => '/site-context', 'read_only' => true ),
 		);
 	}
 
 	/**
-	 * @return string[] The discovery allowlist's REST routes.
+	 * @return string[] Routes exempt from the category gate for EVERY method
+	 *                   (the three entries with no write counterpart on the
+	 *                   same route).
 	 */
 	protected static function get_discovery_allowlist_routes() {
-		return array_values( self::get_discovery_allowlist() );
+		$routes = array();
+		foreach ( self::get_discovery_allowlist() as $entry ) {
+			if ( empty( $entry['read_only'] ) ) {
+				$routes[] = $entry['route'];
+			}
+		}
+		return $routes;
 	}
 
 	/**
-	 * @return string[] The discovery allowlist's MCP tool names.
+	 * @return string[] Routes exempt from the category gate ONLY for a
+	 *                   safe/read HTTP method (GET/HEAD) — the route's own
+	 *                   write method stays gated. See is_discovery_read_bypass().
+	 */
+	protected static function get_discovery_allowlist_read_only_routes() {
+		$routes = array();
+		foreach ( self::get_discovery_allowlist() as $entry ) {
+			if ( ! empty( $entry['read_only'] ) ) {
+				$routes[] = $entry['route'];
+			}
+		}
+		return $routes;
+	}
+
+	/**
+	 * @return string[] The discovery allowlist's MCP tool names (read-only
+	 *                   entries included — a tool name is never method-shared).
 	 */
 	protected static function get_discovery_allowlist_tool_names() {
 		return array_keys( self::get_discovery_allowlist() );
+	}
+
+	/**
+	 * Whether $request's route+method matches a READ-ONLY discovery-allowlist
+	 * entry on a safe method (GET/HEAD) — e.g. GET /site-context, but not
+	 * POST/PUT /site-context. Consulted by both real category gates
+	 * (check_disabled_category_for_route(), check_key_category_restriction_for_route())
+	 * in addition to the unconditional get_discovery_allowlist_routes() check
+	 * already inside get_category_for_route().
+	 *
+	 * @param WP_REST_Request $request Current request.
+	 * @return bool
+	 */
+	protected function is_discovery_read_bypass( $request ) {
+		$method = method_exists( $request, 'get_method' ) ? strtoupper( (string) $request->get_method() ) : 'GET';
+		if ( ! in_array( $method, array( 'GET', 'HEAD' ), true ) ) {
+			return false;
+		}
+
+		$route = $this->normalize_route_for_authorization( method_exists( $request, 'get_route' ) ? (string) $request->get_route() : '' );
+		$base  = '/mcpwp/v1';
+		$path  = ( 0 === strpos( $route, $base ) ) ? substr( $route, strlen( $base ) ) : $route;
+
+		foreach ( self::get_discovery_allowlist_read_only_routes() as $allowlisted ) {
+			if ( $path === $allowlisted || 0 === strpos( $path, $allowlisted . '/' ) ) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -945,6 +1018,13 @@ trait Mcpwp_Api_Auth {
 			return true;
 		}
 
+		// #1007 review round 2: GET/HEAD on a read-only discovery route (e.g.
+		// GET /site-context) bypasses the site-wide toggle too — site context
+		// is public brand copy, already served unauthenticated at /llms.txt.
+		if ( $this->is_discovery_read_bypass( $request ) ) {
+			return true;
+		}
+
 		$route    = $this->normalize_route_for_authorization( method_exists( $request, 'get_route' ) ? (string) $request->get_route() : '' );
 		$category = $this->get_category_for_route( $route );
 
@@ -1020,6 +1100,13 @@ trait Mcpwp_Api_Auth {
 		$allowed = $this->resolve_key_tool_categories( $key_record );
 		if ( empty( $allowed ) ) {
 			// Unrestricted (admin role, unknown role, or legacy/migrated key).
+			return true;
+		}
+
+		// #1007 review round 2: GET/HEAD on a read-only discovery route (e.g.
+		// GET /site-context) bypasses the per-key role gate too — same
+		// reasoning as check_disabled_category_for_route()'s matching check.
+		if ( $this->is_discovery_read_bypass( $request ) ) {
 			return true;
 		}
 
@@ -3311,46 +3398,6 @@ trait Mcpwp_Api_Auth {
 		}
 
 		return in_array( $category, $allowed, true );
-	}
-
-	/**
-	 * Whether the current caller may read the 'site' category's data — not
-	 * just its ROUTES.
-	 *
-	 * #1007 WARN-1: /introspect and /onboard?detail=full (Mcpwp_REST_Site_Info)
-	 * are on the discovery allowlist (get_discovery_allowlist_routes()), so
-	 * they stay reachable by every key regardless of role or the site-wide
-	 * toggle — deliberately, so a key can always make first contact. But
-	 * before this fix they both embedded the FULL mcpwp_site_context text
-	 * inline in their response body, and /site-context (the dedicated route)
-	 * and the mcpwp://site-context MCP resource both refuse that same text
-	 * to a key whose role excludes 'site', or when 'site' is disabled
-	 * site-wide. Because the allowlist check runs first in
-	 * get_category_for_route() and returns before either map is ever
-	 * consulted, nothing in the route-category system can close that leak
-	 * for /introspect or /onboard themselves — it has to be closed in the
-	 * response body, at the one place the leaked field is built.
-	 *
-	 * Two authorization questions, deliberately combined: the site-wide
-	 * toggle applies to every key including admin (matches
-	 * check_disabled_category_for_route()); the per-key role check fails
-	 * OPEN when there is no key record at all, matching every other
-	 * fail-open convention in this file for a trusted/legacy context.
-	 *
-	 * @return bool True if the caller may see 'site'-category data inline.
-	 */
-	protected function caller_may_read_site_context() {
-		$disabled_categories = get_option( 'mcpwp_disabled_tool_categories', array() );
-		if ( is_array( $disabled_categories ) && in_array( 'site', $disabled_categories, true ) ) {
-			return false;
-		}
-
-		$key_record = $this->get_current_api_key_record();
-		if ( ! is_array( $key_record ) ) {
-			return true;
-		}
-
-		return $this->key_allows_category( $key_record, 'site' );
 	}
 
 	/**

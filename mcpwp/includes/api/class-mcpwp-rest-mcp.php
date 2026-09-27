@@ -1539,6 +1539,20 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 * @return bool
 	 */
 	private function tool_currently_permitted( $tool_name, $key_record ) {
+		// #1007 review round 2, NIT-1: the discovery allowlist
+		// (get_discovery_allowlist_tool_names(), shared with the REST-side
+		// get_discovery_allowlist_routes()) exempts wp_site_info/wp_onboard/
+		// wp_introspect from both category checks below, same as
+		// handle_tools_call() itself. Without this, this function disagreed
+		// with the handler it exists to mirror — its two OTHER callers,
+		// handle_tools_call_idempotent()'s replay gate (~1324) and #1012's
+		// next-step-hint filter (~2174), would have called a discovery tool
+		// "not currently permitted" for a role-restricted key even though a
+		// tools/call for it succeeds.
+		if ( in_array( $tool_name, self::get_discovery_allowlist_tool_names(), true ) ) {
+			return true;
+		}
+
 		// The same resolver the handler uses. Inventing a category here that
 		// the handler does not enforce sent a refused replay back INTO the
 		// handler, which ran the write again (#802 round 4).
@@ -2553,7 +2567,23 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 * @return bool
 	 */
 	private function resource_definition_is_readable_by_caller( $definition ) {
-		$route    = isset( $definition['route'] ) ? (string) $definition['route'] : '';
+		$route = isset( $definition['route'] ) ? (string) $definition['route'] : '';
+
+		// #1007 review round 2: a resource read is always semantically a GET,
+		// so a read-only discovery route (e.g. /site-context — the write
+		// tool, wp_set_site_context, is a different tool on the same route)
+		// is always readable here, matching is_discovery_read_bypass()'s REST
+		// treatment of the same route on a real GET. Definitions carry the
+		// full '/mcpwp/v1/...' route; the allowlist stores the bare path, so
+		// strip the base the same way get_category_for_route() does below.
+		$base = '/mcpwp/v1';
+		$path = ( 0 === strpos( $route, $base ) ) ? substr( $route, strlen( $base ) ) : $route;
+		foreach ( self::get_discovery_allowlist_read_only_routes() as $allowlisted ) {
+			if ( $path === $allowlisted || 0 === strpos( $path, $allowlisted . '/' ) ) {
+				return true;
+			}
+		}
+
 		$category = $this->get_category_for_route( $route );
 
 		if ( '' === $category ) {

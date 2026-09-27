@@ -565,14 +565,29 @@ final class McpResourceTemplatesTest extends TestCase {
 
 	// ── mcpwp://brand ─────────────────────────────────────────────────────
 
-	public function test_brand_template_denies_a_role_that_lacks_site_category(): void {
+	/**
+	 * #1007 review round 2 (owner decision): site context is public brand
+	 * copy, already published unauthenticated at /llms.txt, so
+	 * wp_get_site_context (and therefore mcpwp://brand's site_context half)
+	 * is on the discovery allowlist — reachable by EVERY role, including
+	 * author, which carries no 'site' category. The globals half is
+	 * unaffected: it still names wp_get_elementor_globals ('elementor-build'
+	 * category, Pro), which author does not carry either, so it stays
+	 * best-effort "unavailable".
+	 */
+	public function test_brand_template_returns_site_context_for_a_role_that_lacks_site_category(): void {
+		update_option( 'mcpwp_site_context', 'Warm, direct, no corporate jargon.' );
+
 		$controller = new Mcpwp_REST_MCP();
 		$key        = $controller->create_scoped_api_key( 'author', array( 'read', 'write' ), 'author' )['key'];
 
-		$data = $this->dispatch( $controller, 'resources/read', array( 'uri' => 'mcpwp://brand' ), $key );
+		$data  = $this->dispatch( $controller, 'resources/read', array( 'uri' => 'mcpwp://brand' ), $key );
+		$brand = json_decode( $data['result']['contents'][0]['text'], true );
 
-		$this->assertArrayHasKey( 'error', $data );
-		$this->assertSame( 'scope_denied', $data['error']['data']['code'] );
+		$this->assertArrayHasKey( 'site_context', $brand );
+		$this->assertStringContainsString( 'Warm, direct, no corporate jargon.', $brand['site_context'] );
+		$this->assertTrue( $brand['elementor_globals']['unavailable'] );
+		$this->assertSame( 'scope_denied', $brand['elementor_globals']['reason'] );
 	}
 
 	public function test_brand_template_returns_site_context_for_an_allowed_key(): void {

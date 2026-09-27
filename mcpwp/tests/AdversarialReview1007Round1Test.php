@@ -1,28 +1,36 @@
 <?php
 /**
- * Adversarial review round 1 on #1007 — WARN-1, WARN-2, and the resources/list
- * NIT. (BLOCK-1's untooled-route gap is covered separately by
+ * Adversarial review on #1007 — WARN-1, WARN-2, and the resources/list NIT.
+ * (BLOCK-1's untooled-route gap is covered separately by
  * AllRegisteredRoutesCategoryTest; the discovery-allowlist route change to
  * DisabledToolCategoriesTest / ToolExecutionIsErrorTest covers the tools/call
  * exemption's "must still refuse a genuine site tool" half.)
  *
- * WARN-1: /introspect and /onboard?detail=full are on the discovery
- * allowlist (reachable by every key, any role, even with 'site' disabled),
- * but before this fix they both embedded the FULL mcpwp_site_context text
- * inline — the exact data /site-context and mcpwp://site-context already
- * refuse to a key without 'site'. Fixed by
- * Mcpwp_Api_Auth::caller_may_read_site_context(), consulted at both
- * embedding sites.
+ * WARN-1, round 1 fix (redaction) then SUPERSEDED by an explicit round-2
+ * owner decision: site context is public brand copy, already published
+ * unauthenticated at /llms.txt (Mcpwp_AI_Presence::generate_llms_txt() reads
+ * the same mcpwp_site_context option) — so /introspect and
+ * /onboard?detail=full now include it for EVERY key, any role, even with
+ * 'site' disabled site-wide. Mcpwp_Api_Auth::caller_may_read_site_context()
+ * (the round-1 redaction gate) was removed entirely. Reading site context
+ * through any surface — GET /site-context, wp_get_site_context,
+ * mcpwp://site-context, mcpwp://brand — is on the discovery allowlist as a
+ * READ-ONLY entry (get_discovery_allowlist_read_only_routes() /
+ * is_discovery_read_bypass()): GET bypasses the category gate, but
+ * wp_set_site_context / POST|PUT /site-context (the site owner's own edit,
+ * a DIFFERENT tool sharing the same route) stays gated to 'site'.
  *
  * WARN-2: handle_tools_call()/get_all_tools()/filter_tools_by_key_role()
- * gated wp_site_info/wp_onboard/wp_introspect exactly like any other 'site'
- * tool — an author key's tools/list omitted them and a tools/call answered
- * scope_denied (or category_disabled with 'site' disabled), even though the
- * identical call was already reachable directly over REST. Fixed by
- * exempting the shared discovery-allowlist tool names
- * (get_discovery_allowlist_tool_names()) from both category gates in both
- * methods, plus filter_actions_by_caller_categories() so onboard's own
- * suggestions never point a restricted key at a tool it cannot call.
+ * gated wp_site_info/wp_onboard/wp_introspect (and now wp_get_site_context)
+ * exactly like any other 'site' tool — an author key's tools/list omitted
+ * them and a tools/call answered scope_denied (or category_disabled with
+ * 'site' disabled), even though the identical call was already reachable
+ * directly over REST. Fixed by exempting the shared discovery-allowlist
+ * tool names (get_discovery_allowlist_tool_names()) from both category
+ * gates in both methods, plus filter_actions_by_caller_categories() so
+ * onboard's own suggestions never point a restricted key at a tool it
+ * cannot call (NIT-2, round 2: this now means wp_get_guide is filtered but
+ * wp_get_site_context is NOT — it is universally callable).
  *
  * NIT: resources/list advertised every resource regardless of the caller's
  * categories; resources/read (the real gate) refused some of them anyway.
@@ -115,21 +123,20 @@ final class AdversarialReview1007Round1Test extends TestCase {
 		return $request;
 	}
 
-	// ── WARN-1: /introspect ─────────────────────────────────────────────────
+	// ── WARN-1 (round 2 reversal): site context is public, always included ──
 
 	/**
 	 * @runInSeparateProcess
 	 */
-	public function test_introspect_omits_site_context_for_a_key_without_site_category(): void {
+	public function test_introspect_includes_site_context_for_an_author_key(): void {
 		$this->stubThemeLookup();
 		$controller = $this->site_info_controller();
 		$request    = $this->authenticate( $controller, '/mcpwp/v1/introspect', 'author' );
 
 		$data = $controller->get_introspect( $request )->get_data();
 
-		$this->assertArrayNotHasKey( 'site_context', $data );
-		$this->assertArrayHasKey( 'site_context_note', $data );
-		$this->assertStringContainsString( 'site', $data['site_context_note'] );
+		$this->assertSame( 'Brand voice: warm and direct. Primary color: #1a2b3c.', $data['site_context'] ?? null );
+		$this->assertArrayNotHasKey( 'site_context_note', $data );
 	}
 
 	/**
@@ -143,13 +150,12 @@ final class AdversarialReview1007Round1Test extends TestCase {
 		$data = $controller->get_introspect( $request )->get_data();
 
 		$this->assertSame( 'Brand voice: warm and direct. Primary color: #1a2b3c.', $data['site_context'] ?? null );
-		$this->assertArrayNotHasKey( 'site_context_note', $data );
 	}
 
 	/**
 	 * @runInSeparateProcess
 	 */
-	public function test_introspect_omits_site_context_when_site_category_is_disabled_even_for_admin(): void {
+	public function test_introspect_includes_site_context_even_when_site_category_is_disabled(): void {
 		$this->stubThemeLookup();
 		update_option( 'mcpwp_disabled_tool_categories', array( 'site' ) );
 
@@ -158,16 +164,15 @@ final class AdversarialReview1007Round1Test extends TestCase {
 
 		$data = $controller->get_introspect( $request )->get_data();
 
-		$this->assertArrayNotHasKey( 'site_context', $data );
-		$this->assertArrayHasKey( 'site_context_note', $data );
+		$this->assertSame( 'Brand voice: warm and direct. Primary color: #1a2b3c.', $data['site_context'] ?? null );
 	}
 
-	// ── WARN-1: /onboard?detail=full ────────────────────────────────────────
+	// ── WARN-1 (round 2 reversal): /onboard?detail=full ─────────────────────
 
 	/**
 	 * @runInSeparateProcess
 	 */
-	public function test_onboard_full_omits_site_context_for_a_key_without_site_category(): void {
+	public function test_onboard_full_includes_site_context_for_an_author_key(): void {
 		$this->stubThemeLookup();
 		$controller = $this->site_info_controller();
 		$request    = $this->authenticate( $controller, '/mcpwp/v1/onboard', 'author' );
@@ -175,9 +180,8 @@ final class AdversarialReview1007Round1Test extends TestCase {
 
 		$data = $controller->get_onboard( $request )->get_data();
 
-		$this->assertTrue( $data['site_context']['configured'] );
-		$this->assertArrayNotHasKey( 'context', $data['site_context'] );
-		$this->assertArrayHasKey( 'note', $data['site_context'] );
+		$this->assertSame( 'Brand voice: warm and direct. Primary color: #1a2b3c.', $data['site_context']['context'] ?? null );
+		$this->assertArrayNotHasKey( 'note', $data['site_context'] );
 	}
 
 	/**
@@ -194,12 +198,17 @@ final class AdversarialReview1007Round1Test extends TestCase {
 		$this->assertSame( 'Brand voice: warm and direct. Primary color: #1a2b3c.', $data['site_context']['context'] ?? null );
 	}
 
-	// ── WARN-2: onboard's own suggestions must not point at an uncallable tool ──
+	// ── WARN-2 / NIT-2: onboard's own suggestions ────────────────────────────
 
 	/**
+	 * wp_get_site_context is universally callable (round 2), so onboard
+	 * keeps pointing every key at it; wp_get_guide is NOT on the discovery
+	 * allowlist and is still genuinely gated to 'site', so it must not be
+	 * suggested to a key that cannot call it.
+	 *
 	 * @runInSeparateProcess
 	 */
-	public function test_onboard_full_suggestions_exclude_site_category_tools_for_an_author_key(): void {
+	public function test_onboard_full_suggestions_filter_wp_get_guide_but_keep_site_context_for_an_author_key(): void {
 		$this->stubThemeLookup();
 		$controller = $this->site_info_controller();
 		$request    = $this->authenticate( $controller, '/mcpwp/v1/onboard', 'author' );
@@ -209,13 +218,15 @@ final class AdversarialReview1007Round1Test extends TestCase {
 
 		foreach ( array( 'quick_reference', 'suggested_first_tools', 'recommended_actions' ) as $section ) {
 			$names = array_column( $data[ $section ], 'tool' );
-			$this->assertNotContains( 'wp_get_site_context', $names, "{$section} must not suggest a 'site' tool to an author key." );
-			$this->assertNotContains( 'wp_set_site_context', $names, "{$section} must not suggest a 'site' tool to an author key." );
+			$this->assertNotContains( 'wp_get_guide', $names, "{$section} must not suggest wp_get_guide to an author key." );
+			$this->assertNotContains( 'wp_set_site_context', $names, "{$section} must not suggest the WRITE tool to an author key." );
 		}
 
-		// Discovery tools stay suggested regardless of role — quick_reference
-		// names wp_site_info explicitly.
-		$this->assertContains( 'wp_site_info', array_column( $data['quick_reference'], 'tool' ) );
+		// Discovery tools (including wp_get_site_context, round 2) stay
+		// suggested regardless of role — quick_reference names both explicitly.
+		$quick_ref_names = array_column( $data['quick_reference'], 'tool' );
+		$this->assertContains( 'wp_site_info', $quick_ref_names );
+		$this->assertContains( 'wp_get_site_context', $quick_ref_names );
 	}
 
 	/**
@@ -231,6 +242,38 @@ final class AdversarialReview1007Round1Test extends TestCase {
 		$names = array_column( $data['quick_reference'], 'tool' );
 
 		$this->assertContains( 'wp_get_site_context', $names );
+	}
+
+	// ── NIT-2: slim onboard's 'more' pointers ────────────────────────────────
+
+	/**
+	 * @runInSeparateProcess
+	 */
+	public function test_onboard_slim_more_filters_guide_but_keeps_site_context_pointer_for_an_author_key(): void {
+		$this->stubThemeLookup();
+		$controller = $this->site_info_controller();
+		$request    = $this->authenticate( $controller, '/mcpwp/v1/onboard', 'author' );
+
+		$data = $controller->get_onboard( $request )->get_data();
+
+		$this->assertSame( 'slim', $data['detail'] );
+		$this->assertArrayNotHasKey( 'guide', $data['more'], 'wp_get_guide is still gated to "site" — must not be pointed at.' );
+		$this->assertArrayHasKey( 'site_context', $data['more'], 'wp_get_site_context is universally callable (round 2) — the pointer stays.' );
+		$this->assertArrayHasKey( 'tools', $data['more'] );
+		$this->assertArrayHasKey( 'full_briefing', $data['more'] );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 */
+	public function test_onboard_slim_more_keeps_guide_pointer_for_a_designer_key(): void {
+		$this->stubThemeLookup();
+		$controller = $this->site_info_controller();
+		$request    = $this->authenticate( $controller, '/mcpwp/v1/onboard', 'designer' );
+
+		$data = $controller->get_onboard( $request )->get_data();
+
+		$this->assertArrayHasKey( 'guide', $data['more'] );
 	}
 
 	// ── WARN-2: tools/list and tools/call for the discovery tools themselves ──
@@ -294,7 +337,7 @@ final class AdversarialReview1007Round1Test extends TestCase {
 		return false;
 	}
 
-	public function test_resources_list_omits_resources_an_author_key_cannot_read(): void {
+	public function test_resources_list_omits_design_references_but_keeps_site_context_for_an_author_key(): void {
 		require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-mcp.php';
 
 		$controller = new Mcpwp_REST_MCP();
@@ -311,13 +354,13 @@ final class AdversarialReview1007Round1Test extends TestCase {
 		$data = $controller->handle_mcp( $request )->get_data();
 		$uris = array_column( $data['result']['resources'], 'uri' );
 
-		// 'site' category — author key does not carry it, resources/read
-		// would refuse both with -32003.
-		$this->assertFalse( $this->uris_contain_route( $uris, '/mcpwp/v1/site-context' ) );
+		// 'site' category, still genuinely gated — author key does not carry
+		// it, resources/read would refuse with -32003.
 		$this->assertFalse( $this->uris_contain_route( $uris, '/mcpwp/v1/design-references' ) );
-		// Discovery / content — still advertised.
+		// Discovery / content / round-2 public site-context — still advertised.
 		$this->assertTrue( $this->uris_contain_route( $uris, '/mcpwp/v1/site-info' ) );
 		$this->assertTrue( $this->uris_contain_route( $uris, '/mcpwp/v1/pages' ) );
+		$this->assertTrue( $this->uris_contain_route( $uris, '/mcpwp/v1/site-context' ), 'site-context is public (round 2) — must stay advertised even to an author key.' );
 	}
 
 	public function test_resources_list_shows_every_resource_to_an_admin_key(): void {

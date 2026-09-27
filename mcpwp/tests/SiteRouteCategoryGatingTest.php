@@ -374,4 +374,118 @@ final class SiteRouteCategoryGatingTest extends TestCase {
 		$this->assertSame( 'site', $auth->get_category_for_route( '/mcpwp/v1/theme/mods' ) );
 		$this->assertSame( 'site', $auth->get_category_for_route( '/mcpwp/v1/themes/astra/colors' ) );
 	}
+
+	// ── Review round 2 owner decision: /site-context reading is public ─────
+	//
+	// GET /site-context (read) is a discovery-allowlist READ-ONLY entry:
+	// every key, any role, even with 'site' disabled site-wide. PUT/POST
+	// /site-context (write, wp_set_site_context — a different tool sharing
+	// the same route) stays gated to 'site' exactly as before. The pure
+	// route classifier (get_category_for_route(), method-unaware) still
+	// resolves 'site' for either method — the read/write split lives in
+	// is_discovery_read_bypass(), consulted by both real gates.
+
+	public function test_get_site_context_is_public_regardless_of_role(): void {
+		$auth = $this->harness();
+
+		foreach ( array( 'author', 'designer' ) as $role ) {
+			$created = $auth->create_scoped_api_key( $role . ' key', array( 'read', 'write' ), $role );
+			$this->assertTrue(
+				$auth->verify_api_key( $this->request_with_key( $created['key'], 'GET', '/mcpwp/v1/site-context' ) ),
+				$role
+			);
+		}
+	}
+
+	public function test_get_site_context_is_public_even_when_site_category_is_disabled(): void {
+		update_option( 'mcpwp_disabled_tool_categories', array( 'site' ) );
+
+		$auth    = $this->harness();
+		$created = $auth->create_scoped_api_key( 'admin', array( 'read', 'write', 'admin' ), 'admin' );
+
+		$this->assertTrue( $auth->verify_api_key( $this->request_with_key( $created['key'], 'GET', '/mcpwp/v1/site-context' ) ) );
+	}
+
+	public function test_put_site_context_stays_gated_to_site_category_for_an_author_key(): void {
+		$auth    = $this->harness();
+		$created = $auth->create_scoped_api_key( 'author', array( 'read', 'write' ), 'author' );
+
+		$result = $auth->verify_api_key( $this->request_with_key( $created['key'], 'PUT', '/mcpwp/v1/site-context' ) );
+		$this->assert_forbidden_category( $result, 'PUT /site-context (the write tool) must stay gated even though GET is public.' );
+	}
+
+	public function test_put_site_context_is_refused_when_site_category_is_disabled_even_for_admin(): void {
+		update_option( 'mcpwp_disabled_tool_categories', array( 'site' ) );
+
+		$auth    = $this->harness();
+		$created = $auth->create_scoped_api_key( 'admin', array( 'read', 'write', 'admin' ), 'admin' );
+
+		$result = $auth->verify_api_key( $this->request_with_key( $created['key'], 'PUT', '/mcpwp/v1/site-context' ) );
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'forbidden_category', $result->get_error_code() );
+	}
+
+	public function test_get_site_context_via_batch_stays_public_for_an_author_key(): void {
+		$auth    = $this->harness();
+		$created = $auth->create_scoped_api_key( 'author', array( 'read', 'write' ), 'author' );
+
+		Mcpwp_REST_Batch::$is_batch_sub_request = true;
+		$result                                 = $auth->verify_api_key( $this->request_with_key( $created['key'], 'GET', '/mcpwp/v1/site-context' ) );
+		Mcpwp_REST_Batch::$is_batch_sub_request = false;
+
+		$this->assertTrue( $result, 'Wrapping the public GET in a /batch envelope must not accidentally gate it.' );
+	}
+
+	// ── NIT-1: tool_currently_permitted() must agree with the handler ───────
+	//
+	// tool_currently_permitted() backs two callers besides handle_tools_call()
+	// itself: the idempotent-replay gate (~1324, only ever reached for a
+	// PINNED tool — i.e. a write; none of the discovery tools are pinned,
+	// since they are all reads) and #1012's next-step-hint filter (~2174,
+	// which can name ANY tool, including a discovery one, as a suggested
+	// next call). Before this fix, this function disagreed with the
+	// handler it exists to mirror for exactly the three (now four) tool
+	// names the handler itself exempts — a hint naming wp_site_info for an
+	// author key would have been silently dropped as "not currently
+	// permitted" even though calling it directly succeeds. Tested directly
+	// via reflection (the method is private) rather than by trying to force
+	// a specific hint to appear, which depends on unrelated site state.
+
+	public function test_tool_currently_permitted_exempts_discovery_tools_for_a_restricted_key(): void {
+		require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-mcp.php';
+
+		$controller = new Mcpwp_REST_MCP();
+		$created    = $controller->create_scoped_api_key( 'author', array( 'read', 'write' ), 'author' );
+		$this->assertTrue( $controller->verify_api_key( $this->request_with_key( $created['key'], 'GET', '/mcpwp/v1/site-info' ) ) );
+		$key_record = $controller->get_current_api_key_record();
+		$this->assertIsArray( $key_record, 'Test premise: the key resolves to a record.' );
+
+		$method = new ReflectionMethod( Mcpwp_REST_MCP::class, 'tool_currently_permitted' );
+		$method->setAccessible( true );
+
+		foreach ( array( 'wp_site_info', 'wp_onboard', 'wp_introspect', 'wp_get_site_context' ) as $tool_name ) {
+			$this->assertTrue( $method->invoke( $controller, $tool_name, $key_record ), $tool_name );
+		}
+		// Proof this is a narrow exemption, not a blanket unrestriction: a
+		// genuine 'site' tool the author role does not carry still fails.
+		$this->assertFalse( $method->invoke( $controller, 'wp_list_menus', $key_record ) );
+	}
+
+	public function test_tool_currently_permitted_exempts_discovery_tools_when_site_category_is_disabled(): void {
+		require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-mcp.php';
+		update_option( 'mcpwp_disabled_tool_categories', array( 'site' ) );
+
+		$controller = new Mcpwp_REST_MCP();
+		$created    = $controller->create_scoped_api_key( 'admin', array( 'read', 'write', 'admin' ), 'admin' );
+		$this->assertTrue( $controller->verify_api_key( $this->request_with_key( $created['key'], 'GET', '/mcpwp/v1/site-info' ) ) );
+		$key_record = $controller->get_current_api_key_record();
+
+		$method = new ReflectionMethod( Mcpwp_REST_MCP::class, 'tool_currently_permitted' );
+		$method->setAccessible( true );
+
+		foreach ( array( 'wp_site_info', 'wp_get_site_context' ) as $tool_name ) {
+			$this->assertTrue( $method->invoke( $controller, $tool_name, $key_record ), $tool_name );
+		}
+		$this->assertFalse( $method->invoke( $controller, 'wp_list_menus', $key_record ), 'A disabled category must still block a genuine site tool.' );
+	}
 }
