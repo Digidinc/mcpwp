@@ -2554,6 +2554,15 @@ if (! function_exists('wp_cache_decr')) {
     }
 }
 
+if (! function_exists('is_taxonomy_viewable')) {
+    /** Double: viewable unless a test registers the taxonomy with 'viewable' => false. */
+    function is_taxonomy_viewable($taxonomy)
+    {
+        $tax = $GLOBALS['_mcpwp_test_taxonomies'][ (string) $taxonomy ] ?? array();
+        return ! array_key_exists('viewable', $tax) || (bool) $tax['viewable'];
+    }
+}
+
 if (! function_exists('get_post_type')) {
     function get_post_type($post = null)
     {

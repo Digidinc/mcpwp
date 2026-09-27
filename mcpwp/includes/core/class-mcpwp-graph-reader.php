@@ -13,28 +13,35 @@
  *
  * VISIBILITY (the chokepoint)
  * ---------------------------
- * A node is "post-backed" when its node_key starts with `post:`. That is how
- * the builder keys every post of every covered type (node_key_for_post()), and
- * unlike `kind` it cannot drift if a post type is later unregistered.
+ * One rule, key_visible_sql() in SQL and visible_keys() in PHP, decides
+ * whether a node_key is visible. It FAILS CLOSED by kind (#943 S2 review W5):
  *
- * A post-backed node's visibility is decided from the LIVE wp_posts row, never
- * from the node's stored `status` column. The stored status is only as fresh
- * as the last worker run, so a post unpublished a minute ago would otherwise
- * stay visible, title and URL included, until the queue drained. Every query
- * joins `{posts} p ON p.ID = n.ref_id` and filters on `p.post_status`:
+ *   - `post:<id>`  the LIVE wp_posts row, never the node's stored status.
+ *                  Read scope: the post exists and its status is public.
+ *                  Privileged: the post exists.
+ *   - `term:<tax>:<id>`  read scope: the taxonomy is viewable
+ *                  (is_taxonomy_viewable()). Privileged: always.
+ *   - `media:<id>` the id is a real attachment. Read scope: its parent post
+ *                  is public, or it has no parent.
+ *   - anything else (query, url, fact, any future kind)
+ *                  read scope: visible only while it has at least one inbound
+ *                  edge from a public post. Privileged: always.
  *
- *   - unprivileged: the post must exist and its status must be public
- *     (get_post_stati(['public' => true]), `publish` on a stock site);
- *   - privileged:   the post must exist (a node whose post was deleted is
- *     never shown, even while the worker has not yet removed it).
+ * `$can_see_non_public` is computed by the REST controller through
+ * Mcpwp_REST_API::requester_can_see_non_public(), the gate every content
+ * endpoint uses (write scope or higher, or a trusted admin-AJAX request).
  *
- * Every other node kind (term, media, query, url, fact) is site-level data and
- * visible at read scope, per the design doc's "Security and limits".
- *
- * The SQL clause is backed by a second, independent PHP check
- * (visible_post_ids()) that re-reads each post through get_post() before any
- * row leaves this class. A future filter added without the SQL clause, or a
+ * The SQL rule is backed by the same rule in PHP (get_post() through the
+ * object cache, plus one batched edge lookup for "other" kinds) before any row
+ * leaves this class. A future filter added without the SQL clause, or a
  * broken join, still cannot hand a read-only key a draft title.
+ *
+ * LIVE VALUES (#943 S2 review W7)
+ * -------------------------------
+ * For a post-backed row, `label`, `url` and `status` come from the live post
+ * (get_the_title(), get_permalink(), post_status), and label ordering sorts by
+ * the live post_title. A draft renamed and published before the worker runs
+ * therefore never shows its old draft title, even in a cursor.
  *
  * EDGES
  * -----
@@ -57,8 +64,8 @@
  * INBOUND COUNTS AND ORPHANS
  * --------------------------
  * `orphan`, `min_inbound`, `max_inbound` and `order_by=inbound` count only
- * edges from LIVE sources: a source that is site-level, or a post that is
- * publicly visible, with a password-protected source's content edges not
+ * edges from LIVE sources: a source a read key could see (a public post, a
+ * viewable term, ...), with a password-protected source's content edges not
  * counted. This is the same for every caller. It is the right orphan
  * semantics (a draft's or a trashed post's link does not make a page
  * reachable), and it means a count can never reveal hidden content, even to
@@ -89,11 +96,13 @@
  *
  * CURSORS
  * -------
- * Opaque: base64url of JSON {id, v, q} plus an HMAC. `id` is the last row's
- * id, `v` the last row's order value exactly as MySQL returned it, and `q` a
- * fingerprint of the normalized query and the caller's privilege. A cursor
- * that fails the HMAC, has the wrong shape, or was minted for a different
- * query or privilege level is rejected with a 400.
+ * Opaque and encrypted: base64url of a libsodium secretbox (authenticated
+ * encryption; WordPress ships sodium_compat) over JSON {k, i, v, q}. `i`/`v`
+ * are the last VISIBLE row's id and order value exactly as MySQL returned it
+ * (review W2: a row the PHP backstop dropped never becomes the cursor), and
+ * `q` fingerprints the normalized query and the caller's privilege. A cursor
+ * that fails to decrypt, has the wrong shape, or was minted for a different
+ * query, surface or privilege level is rejected with a 400.
  *
  * @package MCPWP
  */
@@ -157,7 +166,7 @@ class Mcpwp_Graph_Reader {
 	const POST_PREFIX = 'post:';
 
 	/** Cursor wire-format version. */
-	const CURSOR_VERSION = 1;
+	const CURSOR_VERSION = 2;
 
 	// -------------------------------------------------------------------------
 	// Visibility primitives
@@ -185,6 +194,23 @@ class Mcpwp_Graph_Reader {
 	}
 
 	/**
+	 * Viewable taxonomies (is_taxonomy_viewable()), for term: visibility.
+	 * Never empty: an impossible sentinel keeps the SQL IN () valid.
+	 *
+	 * @return array<int,string>
+	 */
+	public static function viewable_taxonomies() {
+		$names = function_exists( 'get_taxonomies' ) ? array_values( (array) get_taxonomies() ) : array( 'category', 'post_tag' );
+		$out   = array();
+		foreach ( $names as $name ) {
+			if ( Mcpwp_Graph_Builder::is_viewable_taxonomy( (string) $name ) ) {
+				$out[] = sanitize_key( (string) $name );
+			}
+		}
+		return empty( $out ) ? array( ':none:' ) : array_values( array_unique( $out ) );
+	}
+
+	/**
 	 * Same semantics as Mcpwp_REST_API::is_public_status(): a registered
 	 * status whose object carries the `public` flag.
 	 *
@@ -207,23 +233,33 @@ class Mcpwp_Graph_Reader {
 	}
 
 	/**
+	 * Numeric id after a `<prefix>` in a key, or 0.
+	 *
+	 * @param string $node_key Node key.
+	 * @param string $prefix   Prefix, e.g. `post:`.
+	 * @return int
+	 */
+	private static function id_after( $node_key, $prefix ) {
+		if ( 0 !== strpos( (string) $node_key, $prefix ) ) {
+			return 0;
+		}
+		$rest = substr( (string) $node_key, strlen( $prefix ) );
+		return ctype_digit( $rest ) ? (int) $rest : 0;
+	}
+
+	/**
 	 * Post ID encoded in a `post:<id>` key, or 0.
 	 *
 	 * @param string $node_key Node key.
 	 * @return int
 	 */
 	public static function post_id_from_key( $node_key ) {
-		if ( ! self::is_post_key( $node_key ) ) {
-			return 0;
-		}
-		$rest = substr( (string) $node_key, strlen( self::POST_PREFIX ) );
-		return ctype_digit( $rest ) ? (int) $rest : 0;
+		return self::id_after( $node_key, self::POST_PREFIX );
 	}
 
 	/**
-	 * The independent PHP half of the visibility check: which of these post
-	 * IDs may this caller see, judged from get_post() (the live row, through
-	 * the object cache), not from anything stored in the graph tables.
+	 * Which of these post IDs may this caller see, judged from get_post()
+	 * (the live row, through the object cache), not the graph tables.
 	 *
 	 * @param array<int> $post_ids           Post IDs.
 	 * @param bool       $can_see_non_public Caller privilege.
@@ -240,7 +276,7 @@ class Mcpwp_Graph_Reader {
 		$visible = array();
 		foreach ( $post_ids as $id ) {
 			$post = get_post( $id );
-			if ( ! $post || empty( $post->ID ) ) {
+			if ( ! $post || empty( $post->ID ) || 'attachment' === $post->post_type ) {
 				continue;
 			}
 			if ( $can_see_non_public || self::is_public_status( (string) $post->post_status ) ) {
@@ -268,32 +304,101 @@ class Mcpwp_Graph_Reader {
 	}
 
 	/**
-	 * Filter a list of node_keys down to the ones visible to this caller.
-	 * Non-post keys are always visible. Post keys go through
-	 * visible_post_ids().
+	 * PHP half of the visibility rule (see the class docblock). Mirrors
+	 * key_visible_sql() exactly, and fails closed for any unknown kind.
 	 *
 	 * @param array<string> $keys               Node keys.
 	 * @param bool          $can_see_non_public Caller privilege.
 	 * @return array<string,bool> Set of visible keys.
 	 */
 	public static function visible_keys( array $keys, $can_see_non_public ) {
+		$keys     = array_values( array_unique( array_map( 'strval', $keys ) ) );
 		$post_ids = array();
+		$other    = array();
 		foreach ( $keys as $key ) {
 			if ( self::is_post_key( $key ) ) {
 				$post_ids[] = self::post_id_from_key( $key );
+			} elseif ( ! $can_see_non_public && 0 !== strpos( $key, 'term:' ) && 0 !== strpos( $key, 'media:' ) ) {
+				$other[] = $key;
 			}
 		}
 		$visible_ids = self::visible_post_ids( $post_ids, $can_see_non_public );
-		$out         = array();
+		$viewable    = array_flip( self::viewable_taxonomies() );
+		$anchored    = self::keys_with_public_inbound( $other );
+
+		$out = array();
 		foreach ( $keys as $key ) {
-			$key = (string) $key;
-			if ( ! self::is_post_key( $key ) ) {
-				$out[ $key ] = true;
+			if ( self::is_post_key( $key ) ) {
+				$id = self::post_id_from_key( $key );
+				if ( $id > 0 && isset( $visible_ids[ $id ] ) ) {
+					$out[ $key ] = true;
+				}
 				continue;
 			}
-			$id = self::post_id_from_key( $key );
-			if ( $id > 0 && isset( $visible_ids[ $id ] ) ) {
+			if ( 0 === strpos( $key, 'term:' ) ) {
+				$parts = explode( ':', $key );
+				if ( $can_see_non_public || ( 3 === count( $parts ) && isset( $viewable[ $parts[1] ] ) ) ) {
+					$out[ $key ] = true;
+				}
+				continue;
+			}
+			if ( 0 === strpos( $key, 'media:' ) ) {
+				if ( self::media_visible( self::id_after( $key, 'media:' ), $can_see_non_public ) ) {
+					$out[ $key ] = true;
+				}
+				continue;
+			}
+			if ( $can_see_non_public || isset( $anchored[ $key ] ) ) {
 				$out[ $key ] = true;
+			}
+		}
+		return $out;
+	}
+
+	/**
+	 * A media: node is visible only for a real attachment whose parent post
+	 * is visible to the caller, or which has no parent (review W3).
+	 *
+	 * @param int  $id                 Attachment ID.
+	 * @param bool $can_see_non_public Caller privilege.
+	 * @return bool
+	 */
+	private static function media_visible( $id, $can_see_non_public ) {
+		$att = $id > 0 ? get_post( $id ) : null;
+		if ( ! $att || 'attachment' !== $att->post_type ) {
+			return false;
+		}
+		if ( $can_see_non_public || empty( $att->post_parent ) ) {
+			return true;
+		}
+		return ! empty( self::visible_post_ids( array( (int) $att->post_parent ), false ) );
+	}
+
+	/**
+	 * Of these non-post, non-term, non-media keys, which have an inbound edge
+	 * from a public post (review W5: other kinds fail closed without one).
+	 *
+	 * @param array<string> $keys Node keys.
+	 * @return array<string,bool>
+	 */
+	private static function keys_with_public_inbound( array $keys ) {
+		if ( empty( $keys ) ) {
+			return array();
+		}
+		$edges = Mcpwp_Graph_Builder::edges_table();
+		$rows  = self::get_results(
+			"SELECT e.to_key AS to_key, e.from_key AS from_key FROM {$edges} e WHERE e.to_key IN (" . self::placeholders( count( $keys ) ) . ") AND LEFT(e.from_key, 5) = 'post:' LIMIT %d",
+			array_merge( $keys, array( 5000 ) )
+		);
+		$ids = array();
+		foreach ( $rows as $r ) {
+			$ids[] = self::post_id_from_key( $r['from_key'] );
+		}
+		$public = self::visible_post_ids( $ids, false );
+		$out    = array();
+		foreach ( $rows as $r ) {
+			if ( isset( $public[ self::post_id_from_key( $r['from_key'] ) ] ) ) {
+				$out[ (string) $r['to_key'] ] = true;
 			}
 		}
 		return $out;
@@ -302,6 +407,7 @@ class Mcpwp_Graph_Reader {
 	// -------------------------------------------------------------------------
 	// SQL fragments. Each returns array( string $sql, array $params ): the
 	// fragment is server-written, and every value in it is a placeholder.
+	// Column and alias arguments are always fixed strings from this class.
 	// -------------------------------------------------------------------------
 
 	/**
@@ -315,20 +421,49 @@ class Mcpwp_Graph_Reader {
 	}
 
 	/**
-	 * Node visibility for alias n (with posts_join_sql() joined as p).
+	 * The visibility rule for one node_key column (see the class docblock).
+	 * One CASE, so only the branch for the key's kind is evaluated.
+	 *
+	 * @param string $col                Fixed column expression.
+	 * @param string $a                  Fixed alias prefix, unique per use.
+	 * @param bool   $can_see_non_public Caller privilege.
+	 * @return array{0:string,1:array}
+	 */
+	private static function key_visible_sql( $col, $a, $can_see_non_public ) {
+		global $wpdb;
+		$posts = $wpdb->posts;
+		$edges = Mcpwp_Graph_Builder::edges_table();
+
+		if ( $can_see_non_public ) {
+			return array(
+				"(CASE WHEN LEFT({$col}, 5) = 'post:' THEN EXISTS (SELECT 1 FROM {$posts} {$a}p WHERE {$a}p.ID = CAST(SUBSTRING({$col}, 6) AS UNSIGNED) AND {$a}p.post_type <> 'attachment')"
+				. " WHEN LEFT({$col}, 6) = 'media:' THEN EXISTS (SELECT 1 FROM {$posts} {$a}m WHERE {$a}m.ID = CAST(SUBSTRING({$col}, 7) AS UNSIGNED) AND {$a}m.post_type = 'attachment')"
+				. ' ELSE 1 END) = 1',
+				array(),
+			);
+		}
+
+		$pub  = self::public_statuses();
+		$in   = self::placeholders( count( $pub ) );
+		$tax  = self::viewable_taxonomies();
+		$sql  = "(CASE WHEN LEFT({$col}, 5) = 'post:' THEN EXISTS (SELECT 1 FROM {$posts} {$a}p WHERE {$a}p.ID = CAST(SUBSTRING({$col}, 6) AS UNSIGNED) AND {$a}p.post_type <> 'attachment' AND {$a}p.post_status IN ({$in}))"
+			. " WHEN LEFT({$col}, 5) = 'term:' THEN SUBSTRING_INDEX(SUBSTRING({$col}, 6), ':', 1) IN (" . self::placeholders( count( $tax ) ) . ')'
+			. " WHEN LEFT({$col}, 6) = 'media:' THEN EXISTS (SELECT 1 FROM {$posts} {$a}m WHERE {$a}m.ID = CAST(SUBSTRING({$col}, 7) AS UNSIGNED) AND {$a}m.post_type = 'attachment'"
+			. " AND ({$a}m.post_parent = 0 OR EXISTS (SELECT 1 FROM {$posts} {$a}mp WHERE {$a}mp.ID = {$a}m.post_parent AND {$a}mp.post_status IN ({$in}))))"
+			. " ELSE EXISTS (SELECT 1 FROM {$edges} {$a}x WHERE {$a}x.to_key = {$col} AND LEFT({$a}x.from_key, 5) = 'post:'"
+			. " AND EXISTS (SELECT 1 FROM {$posts} {$a}xp WHERE {$a}xp.ID = CAST(SUBSTRING({$a}x.from_key, 6) AS UNSIGNED) AND {$a}xp.post_status IN ({$in})))"
+			. ' END) = 1';
+		return array( $sql, array_merge( $pub, $tax, $pub, $pub ) );
+	}
+
+	/**
+	 * Node visibility for alias n.
 	 *
 	 * @param bool $can_see_non_public Caller privilege.
 	 * @return array{0:string,1:array}
 	 */
 	private static function node_visible_sql( $can_see_non_public ) {
-		if ( $can_see_non_public ) {
-			return array( "(LEFT(n.node_key, 5) <> 'post:' OR p.ID IS NOT NULL)", array() );
-		}
-		$statuses = self::public_statuses();
-		return array(
-			"(LEFT(n.node_key, 5) <> 'post:' OR p.post_status IN (" . self::placeholders( count( $statuses ) ) . '))',
-			$statuses,
-		);
+		return self::key_visible_sql( 'n.node_key', 'nv', $can_see_non_public );
 	}
 
 	/**
@@ -341,30 +476,9 @@ class Mcpwp_Graph_Reader {
 	}
 
 	/**
-	 * Visibility of one edge endpoint column (e.g. `e.from_key`).
-	 *
-	 * @param string $column             Fixed column expression (never caller input).
-	 * @param string $alias              Fixed alias for the posts subquery.
-	 * @param bool   $can_see_non_public Caller privilege.
-	 * @return array{0:string,1:array}
-	 */
-	private static function endpoint_visible_sql( $column, $alias, $can_see_non_public ) {
-		global $wpdb;
-		$lookup = "SELECT 1 FROM {$wpdb->posts} {$alias} WHERE {$alias}.ID = CAST(SUBSTRING({$column}, 6) AS UNSIGNED)";
-		if ( $can_see_non_public ) {
-			return array( "(LEFT({$column}, 5) <> 'post:' OR EXISTS ({$lookup}))", array() );
-		}
-		$statuses = self::public_statuses();
-		return array(
-			"(LEFT({$column}, 5) <> 'post:' OR EXISTS ({$lookup} AND {$alias}.post_status IN (" . self::placeholders( count( $statuses ) ) . ')))',
-			$statuses,
-		);
-	}
-
-	/**
 	 * "This edge is a content-derived edge from a password-protected post."
 	 *
-	 * @param string $alias Edge table alias (fixed).
+	 * @param string $alias  Edge table alias (fixed).
 	 * @param string $palias Posts subquery alias (fixed).
 	 * @return string
 	 */
@@ -383,8 +497,8 @@ class Mcpwp_Graph_Reader {
 	 * @return array{0:string,1:array}
 	 */
 	private static function edge_visible_sql( $alias, $can_see_non_public ) {
-		list( $from_sql, $from_params ) = self::endpoint_visible_sql( "{$alias}.from_key", "{$alias}pf", $can_see_non_public );
-		list( $to_sql, $to_params )     = self::endpoint_visible_sql( "{$alias}.to_key", "{$alias}pt", $can_see_non_public );
+		list( $from_sql, $from_params ) = self::key_visible_sql( "{$alias}.from_key", "{$alias}f", $can_see_non_public );
+		list( $to_sql, $to_params )     = self::key_visible_sql( "{$alias}.to_key", "{$alias}t", $can_see_non_public );
 		$sql = "{$from_sql} AND {$to_sql}";
 		if ( ! $can_see_non_public ) {
 			$sql .= ' AND NOT ' . self::protected_content_edge_sql( $alias, "{$alias}pw" );
@@ -394,14 +508,14 @@ class Mcpwp_Graph_Reader {
 
 	/**
 	 * Live-source rule for inbound counting (orphan, min/max_inbound,
-	 * order_by=inbound): the source is site-level or publicly visible, and
-	 * is not a password-protected post's content edge. Caller-independent.
+	 * order_by=inbound): the source is visible to a READ key, and is not a
+	 * password-protected post's content edge. Caller-independent.
 	 *
 	 * @param string $alias Edge alias (fixed).
 	 * @return array{0:string,1:array}
 	 */
 	private static function live_inbound_sql( $alias ) {
-		list( $from_sql, $from_params ) = self::endpoint_visible_sql( "{$alias}.from_key", "{$alias}pf", false );
+		list( $from_sql, $from_params ) = self::key_visible_sql( "{$alias}.from_key", "{$alias}f", false );
 		return array(
 			"{$from_sql} AND NOT " . self::protected_content_edge_sql( $alias, "{$alias}pw" ),
 			$from_params,
@@ -409,15 +523,17 @@ class Mcpwp_Graph_Reader {
 	}
 
 	/**
-	 * `(SELECT COUNT(*) ...)` live inbound edges of any type into node n.
+	 * Review W6: live inbound counts computed ONCE per query as an aggregated
+	 * derived table (materialized, never re-evaluated per row), joined as
+	 * `ic` and reused for the min/max filters, the sort and the cursor.
 	 *
 	 * @return array{0:string,1:array}
 	 */
-	private static function inbound_count_sql() {
+	private static function inbound_join_sql() {
 		$edges = Mcpwp_Graph_Builder::edges_table();
 		list( $live_sql, $live_params ) = self::live_inbound_sql( 'ei' );
 		return array(
-			"(SELECT COUNT(*) FROM {$edges} ei WHERE ei.to_key = n.node_key AND {$live_sql})",
+			" LEFT JOIN (SELECT ei.to_key AS k, COUNT(*) AS c FROM {$edges} ei WHERE {$live_sql} GROUP BY ei.to_key) ic ON ic.k = n.node_key",
 			$live_params,
 		);
 	}
@@ -429,7 +545,6 @@ class Mcpwp_Graph_Reader {
 	private static function placeholders( $count ) {
 		return implode( ',', array_fill( 0, max( 1, (int) $count ), '%s' ) );
 	}
-
 	// -------------------------------------------------------------------------
 	// graph_status: the freshness envelope on every response
 	// -------------------------------------------------------------------------
@@ -482,11 +597,10 @@ class Mcpwp_Graph_Reader {
 					return $wpdb->get_var( $wpdb->prepare( $sql_graphed, $params ) ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- server-written template, values bound.
 				}
 			);
-			$dirty = (int) Mcpwp_Graph_Builder::run_suppressed_query(
-				function () use ( $wpdb, $queue ) {
-					return $wpdb->get_var( "SELECT COUNT(*) FROM {$queue}" ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- fixed table name, no input.
-				}
-			);
+			// Review NIT: a read key only learns how many VISIBLE nodes are
+			// waiting, never how many hidden posts were just edited.
+			list( $q_vis_sql, $q_vis_params ) = self::key_visible_sql( 'q.node_key', 'qv', $can_see_non_public );
+			$dirty = (int) self::get_var( "SELECT COUNT(*) FROM {$queue} q WHERE {$q_vis_sql}", $q_vis_params );
 		}
 
 		$backfill = (string) get_option( Mcpwp_Graph_Builder::BACKFILL_STATUS_OPTION, '' );
@@ -552,7 +666,7 @@ class Mcpwp_Graph_Reader {
 		$sql_types = "SELECT e.type AS type, COUNT(*) AS cnt FROM {$edges} e WHERE {$edge_sql} GROUP BY e.type ORDER BY cnt DESC LIMIT %d";
 		$types     = self::get_results( $sql_types, array_merge( $edge_params, array( 25 ) ) );
 
-		list( $sig_vis_sql, $sig_vis_params ) = self::endpoint_visible_sql( 's.node_key', 'sp', $can_see_non_public );
+		list( $sig_vis_sql, $sig_vis_params ) = self::key_visible_sql( 's.node_key', 'sv', $can_see_non_public );
 		$sql_sources = "SELECT s.source AS source, MAX(s.period_end) AS latest_period_end, COUNT(*) AS cnt FROM {$signals} s WHERE {$sig_vis_sql} GROUP BY s.source ORDER BY cnt DESC LIMIT %d";
 		$sources     = self::get_results( $sql_sources, array_merge( $sig_vis_params, array( 10 ) ) );
 
@@ -819,6 +933,7 @@ class Mcpwp_Graph_Reader {
 	private static function present_node_row( array $row, $can_see_non_public ) {
 		$props = json_decode( (string) ( $row['props'] ?? '' ), true );
 		$props = is_array( $props ) ? $props : array();
+		$live  = self::live_fields( $row );
 
 		$protected = self::is_post_key( $row['node_key'] ) && ! empty( $row['is_protected'] );
 		$redact    = $protected && ! $can_see_non_public;
@@ -830,15 +945,40 @@ class Mcpwp_Graph_Reader {
 			'node_key'   => (string) $row['node_key'],
 			'kind'       => (string) $row['kind'],
 			'ref_id'     => isset( $row['ref_id'] ) && null !== $row['ref_id'] ? (int) $row['ref_id'] : null,
-			'label'      => (string) $row['label'],
-			'url'        => (string) $row['url'],
-			'status'     => (string) $row['status'],
+			'label'      => $live['label'],
+			'url'        => $live['url'],
+			'status'     => $live['status'],
 			'word_count' => $redact ? null : (int) $row['word_count'],
 			'props'      => empty( $props ) ? new stdClass() : $props,
 			'updated_at' => ! empty( $row['updated_at'] ) ? (string) $row['updated_at'] : null,
 		);
 		if ( $protected ) {
 			$out['password_protected'] = true;
+		}
+		return $out;
+	}
+
+	/**
+	 * Review W7: label, url and status of a post-backed row come from the
+	 * live post, never the stored node (which lags until the worker runs).
+	 * Other kinds keep their stored values.
+	 *
+	 * @param array $row Node row with node_key, label, url, status.
+	 * @return array{label:string,url:string,status:string}
+	 */
+	private static function live_fields( array $row ) {
+		$out = array(
+			'label'  => (string) ( $row['label'] ?? '' ),
+			'url'    => (string) ( $row['url'] ?? '' ),
+			'status' => (string) ( $row['status'] ?? '' ),
+		);
+		if ( self::is_post_key( $row['node_key'] ?? '' ) ) {
+			$post = get_post( self::post_id_from_key( $row['node_key'] ) );
+			if ( $post ) {
+				$out['label']  = (string) get_the_title( $post );
+				$out['url']    = (string) get_permalink( $post );
+				$out['status'] = (string) $post->post_status;
+			}
 		}
 		return $out;
 	}
@@ -1144,12 +1284,13 @@ class Mcpwp_Graph_Reader {
 	 * @return array
 	 */
 	private static function present_minimal_node( array $row ) {
+		$live = self::live_fields( $row );
 		return array(
 			'node_key' => (string) $row['node_key'],
 			'kind'     => (string) $row['kind'],
-			'label'    => (string) $row['label'],
-			'url'      => (string) $row['url'],
-			'status'   => (string) $row['status'],
+			'label'    => $live['label'],
+			'url'      => $live['url'],
+			'status'   => $live['status'],
 		);
 	}
 
@@ -1393,15 +1534,16 @@ class Mcpwp_Graph_Reader {
 		}
 
 		// Status applies to post-backed nodes only; term/media/query/url/fact
-		// nodes carry no post status and are not excluded by it.
+		// nodes carry no post status and are not excluded by it. It is the
+		// LIVE post status (review NIT), like visibility.
 		if ( 'any' !== $q['status'] ) {
-			$where[]  = "(LEFT(n.node_key, 5) <> 'post:' OR n.status = %s)";
+			$where[]  = "(LEFT(n.node_key, 5) <> 'post:' OR p.post_status = %s)";
 			$params[] = $q['status'];
 		}
 
 		if ( $q['orphan'] ) {
 			list( $live_sql, $live_params ) = self::live_inbound_sql( 'eo' );
-			$where[] = "LEFT(n.node_key, 5) = 'post:' AND n.status = 'publish'"
+			$where[] = "LEFT(n.node_key, 5) = 'post:' AND p.post_status = 'publish'"
 				. " AND NOT EXISTS (SELECT 1 FROM {$edges} eo WHERE eo.to_key = n.node_key AND eo.type = 'links_to' AND {$live_sql})";
 			$params  = array_merge( $params, $live_params );
 		}
@@ -1411,9 +1553,8 @@ class Mcpwp_Graph_Reader {
 				if ( null === $q[ $field ] ) {
 					continue;
 				}
-				list( $count_sql, $count_params ) = self::inbound_count_sql();
-				$where[]  = "{$count_sql} {$op} %d";
-				$params   = array_merge( $params, $count_params );
+				// ic is the inbound derived table query() joins (review W6).
+				$where[]  = "IFNULL(ic.c, 0) {$op} %d";
 				$params[] = (int) $q[ $field ];
 			}
 		}
@@ -1474,13 +1615,14 @@ class Mcpwp_Graph_Reader {
 	 */
 	private static function order_expr( $order_by ) {
 		if ( 'label' === $order_by ) {
-			return array( "IFNULL(n.label, '')", array() );
+			// Review W7: a post sorts by its LIVE title (the one displayed).
+			return array( "(CASE WHEN LEFT(n.node_key, 5) = 'post:' THEN IFNULL(p.post_title, '') ELSE IFNULL(n.label, '') END)", array() );
 		}
 		if ( 'modified' === $order_by ) {
 			return array( "IFNULL(p.post_modified_gmt, '1000-01-01 00:00:00')", array() );
 		}
 		if ( 'inbound' === $order_by ) {
-			return self::inbound_count_sql();
+			return array( 'IFNULL(ic.c, 0)', array() );
 		}
 		$signals = Mcpwp_Graph_Builder::signals_table();
 		$metric  = substr( $order_by, strlen( 'metric:' ) );
@@ -1511,11 +1653,17 @@ class Mcpwp_Graph_Reader {
 		list( $order_sql, $order_params ) = self::order_expr( $q['order_by'] );
 		$desc = 'desc' === $q['order_dir'];
 
+		$join_sql    = '';
+		$join_params = array();
+		if ( 'inbound' === $q['order_by'] || null !== $q['min_inbound'] || null !== $q['max_inbound'] ) {
+			list( $join_sql, $join_params ) = self::inbound_join_sql();
+		}
+
 		$sql    = "SELECT n.id AS id, n.node_key AS node_key, n.kind AS kind, n.ref_id AS ref_id, n.label AS label, n.url AS url, n.status AS status, n.word_count AS word_count, n.props AS props, n.updated_at AS updated_at, "
 			. self::node_protected_sql() . " AS is_protected, {$order_sql} AS order_value"
-			. " FROM {$nodes} n" . self::posts_join_sql()
+			. " FROM {$nodes} n" . self::posts_join_sql() . $join_sql
 			. " WHERE {$where_sql}";
-		$params = array_merge( $order_params, $where_params );
+		$params = array_merge( $order_params, $join_params, $where_params );
 
 		if ( null !== $q['cursor'] ) {
 			$cmp     = $desc ? '<' : '>';
@@ -1535,10 +1683,11 @@ class Mcpwp_Graph_Reader {
 		// PHP backstop: re-check every post-backed row against the live post.
 		$visible = self::visible_keys( array_column( $rows, 'node_key' ), $can_see_non_public );
 
-		$results   = array();
-		$bytes     = 0;
-		$last      = null;
-		$truncated = false;
+		$results      = array();
+		$bytes        = 0;
+		$last         = null; // Last row processed, visible or not.
+		$last_visible = null; // Last row returned to the caller.
+		$truncated    = false;
 		$numeric   = 'inbound' === $q['order_by'] || 0 === strpos( $q['order_by'], 'metric:' );
 		foreach ( $rows as $row ) {
 			if ( ! isset( $visible[ (string) $row['node_key'] ] ) ) {
@@ -1555,14 +1704,24 @@ class Mcpwp_Graph_Reader {
 				$truncated = true;
 				break;
 			}
-			$bytes    += $size;
-			$results[] = $item;
-			$last      = $row;
+			$bytes       += $size;
+			$results[]    = $item;
+			$last         = $row;
+			$last_visible = $row;
 		}
 
-		$next = null;
-		if ( $has_more && null !== $last ) {
-			$next = self::encode_cursor( (int) $last['id'], (string) ( $last['order_value'] ?? '' ), $q['fingerprint'] );
+		// Review W2: the cursor is built from the last row the caller was
+		// actually shown, so a row the backstop dropped never becomes its
+		// order value. Rows dropped after it are simply re-read (and dropped
+		// again) by the next page. Only a page with NO visible row at all
+		// (the SQL and PHP halves disagreeing for a whole page, which the
+		// shared rule makes a race-only case) resumes after the last row
+		// processed; the cursor is encrypted, so even then its order value
+		// is not readable, and pagination cannot loop on that page.
+		$next   = null;
+		$anchor = null !== $last_visible ? $last_visible : $last;
+		if ( $has_more && null !== $anchor ) {
+			$next = self::encode_cursor( (int) $anchor['id'], (string) ( $anchor['order_value'] ?? '' ), $q['fingerprint'] );
 		}
 
 		return array(
@@ -1763,7 +1922,7 @@ class Mcpwp_Graph_Reader {
 	}
 
 	/**
-	 * @return string HMAC key.
+	 * @return string Key material for cursor_secret().
 	 */
 	private static function cursor_key() {
 		if ( function_exists( 'wp_salt' ) ) {
@@ -1773,10 +1932,20 @@ class Mcpwp_Graph_Reader {
 	}
 
 	/**
-	 * Encode an opaque, signed cursor.
+	 * 32-byte secretbox key derived from the site's nonce salt.
 	 *
-	 * @param int    $last_id     Last row id.
-	 * @param string $order_value Last row's order value (as MySQL returned it).
+	 * @return string
+	 */
+	private static function cursor_secret() {
+		return sodium_crypto_generichash( self::cursor_key(), '', SODIUM_CRYPTO_SECRETBOX_KEYBYTES );
+	}
+
+	/**
+	 * Encode an opaque cursor: base64url( nonce || secretbox(json) ).
+	 * Authenticated encryption, so it is both unreadable and tamper-evident.
+	 *
+	 * @param int    $last_id     Last visible row id.
+	 * @param string $order_value Last visible row's order value (as MySQL returned it).
 	 * @param string $fingerprint Query fingerprint.
 	 * @return string
 	 */
@@ -1789,12 +1958,12 @@ class Mcpwp_Graph_Reader {
 				'q' => (string) $fingerprint,
 			)
 		);
-		$mac = substr( hash_hmac( 'sha256', $payload, self::cursor_key() ), 0, 32 );
-		return self::b64url_encode( $payload ) . '.' . $mac;
+		$nonce = random_bytes( SODIUM_CRYPTO_SECRETBOX_NONCEBYTES );
+		return self::b64url_encode( $nonce . sodium_crypto_secretbox( $payload, $nonce, self::cursor_secret() ) );
 	}
 
 	/**
-	 * Decode and verify a cursor. Null for anything that is not exactly a
+	 * Decrypt and validate a cursor. Null for anything that is not exactly a
 	 * cursor this class minted for this query fingerprint.
 	 *
 	 * @param mixed  $cursor      Raw cursor.
@@ -1802,18 +1971,19 @@ class Mcpwp_Graph_Reader {
 	 * @return array{id:int,v:string}|null
 	 */
 	public static function decode_cursor( $cursor, $fingerprint ) {
-		if ( ! is_string( $cursor ) || '' === $cursor || strlen( $cursor ) > 2048 ) {
+		if ( ! is_string( $cursor ) || '' === $cursor || strlen( $cursor ) > 2048 || 1 !== preg_match( '/^[A-Za-z0-9_-]+$/D', $cursor ) ) {
 			return null;
 		}
-		if ( 1 !== preg_match( '/^([A-Za-z0-9_-]+)\.([a-f0-9]{32})$/D', $cursor, $m ) ) {
+		$raw = self::b64url_decode( $cursor );
+		if ( null === $raw || strlen( $raw ) <= SODIUM_CRYPTO_SECRETBOX_NONCEBYTES + SODIUM_CRYPTO_SECRETBOX_MACBYTES ) {
 			return null;
 		}
-		$payload = self::b64url_decode( $m[1] );
-		if ( null === $payload ) {
+		try {
+			$payload = sodium_crypto_secretbox_open( substr( $raw, SODIUM_CRYPTO_SECRETBOX_NONCEBYTES ), substr( $raw, 0, SODIUM_CRYPTO_SECRETBOX_NONCEBYTES ), self::cursor_secret() );
+		} catch ( Exception $e ) {
 			return null;
 		}
-		$expected = substr( hash_hmac( 'sha256', $payload, self::cursor_key() ), 0, 32 );
-		if ( ! hash_equals( $expected, $m[2] ) ) {
+		if ( false === $payload ) {
 			return null;
 		}
 		$data = json_decode( $payload, true );

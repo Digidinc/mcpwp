@@ -222,6 +222,20 @@ class Mcpwp_REST_Graph extends Mcpwp_REST_API {
 		if ( ! Mcpwp_Graph_Builder::ready() ) {
 			return $this->error_response( 'graph_not_ready', 'The site graph tables are not ready yet.', 503 );
 		}
+		// Review NIT: a backfill already walking the posts is not restarted
+		// from the first post (that would throw away its cursor and re-walk
+		// everything on every repeat call).
+		if ( 'running' === get_option( Mcpwp_Graph_Builder::BACKFILL_STATUS_OPTION, '' ) ) {
+			return new WP_REST_Response(
+				array(
+					'success'         => true,
+					'already_running' => true,
+					'message'         => 'A backfill is already running; it was not restarted. graph_status.backfill shows progress.',
+					'graph_status'    => Mcpwp_Graph_Reader::graph_status( true ),
+				),
+				202
+			);
+		}
 		Mcpwp_Graph_Builder::force_rebuild();
 		return new WP_REST_Response(
 			array(

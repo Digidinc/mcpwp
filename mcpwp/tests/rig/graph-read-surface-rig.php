@@ -14,9 +14,12 @@
  * check and a final JSON summary, and exits non-zero on any failure.
  *
  * The same visibility rules the reader documents are re-derived here:
- *  - a post node is visible to a read key iff its live post is public;
- *  - an inbound link counts iff its source is site-level, or a live public
- *    post (and, for content edges, not password-protected).
+ *  - post: visible to a read key iff its live post is public;
+ *  - term: iff its taxonomy is viewable; media: iff a real attachment whose
+ *    parent is public (or none); any other kind iff a public post links in;
+ *  - an inbound link counts iff its source is visible to a read key (and,
+ *    for content edges, not password-protected);
+ *  - status filters and labels use the LIVE post.
  *
  * @package MCPWP
  */
@@ -70,12 +73,29 @@ $is_public = static function ( $status ) {
 	$obj = get_post_status_object( $status );
 	return $obj && ! empty( $obj->public );
 };
-$visible = static function ( $key, $priv ) use ( $post_of, $is_public ) {
-	if ( 0 !== strpos( $key, 'post:' ) ) {
-		return true;
+$public_in = array();
+foreach ( $all_edges as $e ) {
+	$src = $post_of( $e['from_key'] );
+	if ( $src && $is_public( $src->post_status ) ) {
+		$public_in[ $e['to_key'] ] = true;
 	}
-	$post = $post_of( $key );
-	return $post && ( $priv || $is_public( $post->post_status ) );
+}
+$visible = static function ( $key, $priv ) use ( $post_of, $is_public, $public_in ) {
+	if ( 0 === strpos( $key, 'post:' ) ) {
+		$post = $post_of( $key );
+		return $post && 'attachment' !== $post->post_type && ( $priv || $is_public( $post->post_status ) );
+	}
+	if ( 0 === strpos( $key, 'term:' ) ) {
+		return $priv || is_taxonomy_viewable( explode( ':', $key )[1] );
+	}
+	if ( 0 === strpos( $key, 'media:' ) ) {
+		$att = get_post( (int) substr( $key, 6 ) );
+		if ( ! $att || 'attachment' !== $att->post_type ) {
+			return false;
+		}
+		return $priv || 0 === (int) $att->post_parent || ( get_post( $att->post_parent ) && $is_public( get_post( $att->post_parent )->post_status ) );
+	}
+	return $priv || isset( $public_in[ $key ] );
 };
 $protected = static function ( $key ) use ( $post_of ) {
 	$post = $post_of( $key );
@@ -109,7 +129,8 @@ $brute = static function ( callable $pred, $priv, $status = 'publish' ) use ( $a
 		}
 		$is_post = 0 === strpos( $n['node_key'], 'post:' );
 		$eff     = $priv ? $status : 'publish';
-		if ( 'any' !== $eff && $is_post && $n['status'] !== $eff ) {
+		$live    = $is_post ? get_post( (int) substr( $n['node_key'], 5 ) ) : null;
+		if ( 'any' !== $eff && $is_post && ( ! $live || $live->post_status !== $eff ) ) {
 			continue;
 		}
 		if ( $pred( $n ) ) {
@@ -183,8 +204,9 @@ $has_metric = static function ( $key, $metric ) use ( $all_signals ) {
 // 1. Orphans: reader == brute force over tables == brute force from content
 // ---------------------------------------------------------------------------
 
-$orphan_pred = static function ( $n ) use ( $has_links_to_in ) {
-	return 0 === strpos( $n['node_key'], 'post:' ) && 'publish' === $n['status'] && empty( $has_links_to_in[ $n['node_key'] ] );
+$orphan_pred = static function ( $n ) use ( $has_links_to_in, $post_of ) {
+	$p = $post_of( $n['node_key'] );
+	return $p && 'publish' === $p->post_status && empty( $has_links_to_in[ $n['node_key'] ] );
 };
 $compare( 'orphan (read key, paginated)', array( 'orphan' => true ), $orphan_pred, false );
 $compare( 'orphan (write key, paginated)', array( 'orphan' => true ), $orphan_pred, true );
@@ -393,6 +415,29 @@ list( $stale_rows ) = $collect( array(), false, 200 );
 $check( "stale node {$stale_key} (stored publish, live draft) hidden from read key", null === $stale_node && ! in_array( $stale_key, array_column( $stale_rows, 'node_key' ), true ) );
 $wpdb->update( $wpdb->posts, array( 'post_status' => 'publish' ), array( 'ID' => $stale_id ) );
 clean_post_cache( $stale_id );
+
+// Review W7: a draft renamed and published before the worker runs.
+$draft_key = null;
+foreach ( $all_nodes as $n ) {
+	$p = $post_of( $n['node_key'] );
+	if ( $p && 'draft' === $p->post_status && 'post' === $p->post_type ) {
+		$draft_key = $n['node_key'];
+		break;
+	}
+}
+$draft_id  = (int) substr( $draft_key, 5 );
+$old_title = get_post( $draft_id )->post_title;
+$wpdb->update( $wpdb->posts, array( 'post_status' => 'publish', 'post_title' => 'Renamed Launch Title' ), array( 'ID' => $draft_id ) ); // No hooks: node keeps the draft.
+clean_post_cache( $draft_id );
+$w7_node = Mcpwp_Graph_Reader::get_node( $draft_key, false );
+list( $w7_rows ) = $collect( array( 'order_by' => 'label' ), false, 50 );
+$w7_json = wp_json_encode( array( $w7_node, $w7_rows, Mcpwp_Graph_Reader::resource_summary( false ) ) );
+$w7_row  = array_values( array_filter( $w7_rows, static function ( $r ) use ( $draft_key ) {
+	return $r['node_key'] === $draft_key;
+} ) );
+$check( "W7: {$draft_key} renamed+published before the worker: read key sees only the live title", is_array( $w7_node ) && 'Renamed Launch Title' === $w7_node['label'] && 'publish' === $w7_node['status'] && 1 === count( $w7_row ) && 'Renamed Launch Title' === $w7_row[0]['label'] && false === strpos( $w7_json, wp_json_encode( $old_title ) ) );
+$wpdb->update( $wpdb->posts, array( 'post_status' => 'draft', 'post_title' => $old_title ), array( 'ID' => $draft_id ) );
+clean_post_cache( $draft_id );
 
 // ---------------------------------------------------------------------------
 // 5. Injection attempts against real MySQL.

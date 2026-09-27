@@ -726,6 +726,30 @@ trait Mcpwp_Api_Auth {
 			// Figma tools and wp_list_page_templates are 'site' tools.
 			'/figma'                                => 'site',
 			'/templates/page'                       => 'site',
+
+			// #943 S2 adversarial review, BLOCK-1: every route below is the REST
+			// target of a Free or Pro MCP tool but used to classify as '' (ungated),
+			// so a key whose role lacks the tool's category — or a site that had
+			// disabled that category — could still reach it directly, through
+			// /batch, or through resources/read, while /mcp refused the same tool.
+			// The site graph was the data-egress case: a designer-role read+write
+			// key read every draft through /graph/query. Each entry matches the
+			// dispatching tool's category; RouteCategoryToolParityTest now fails
+			// if any tool route resolves to '' or to a different category.
+			// 'site'-category tool routes (/site-info, /onboard, /menus, ...) are
+			// deliberately NOT added: KeyCategoryRestrictionAuthPlaneTest and
+			// BridgeAuthTest pin them as reachable by author/editor keys (including
+			// migrated 2.8 spai_ keys), and gating them is an owner decision. The
+			// parity test lists them as a known, reported exemption.
+			'/graph'                                => 'content',
+			'/fetch'                                => 'content',
+			'/languages'                            => 'content',
+			'/ai-crawlers'                          => 'seo',
+			'/indexnow'                             => 'seo',
+			'/google-indexing'                      => 'seo',
+			'/plugin-settings'                      => 'admin',
+			'/update'                               => 'admin',
+			'/cloudflare'                           => 'admin',
 		);
 	}
 

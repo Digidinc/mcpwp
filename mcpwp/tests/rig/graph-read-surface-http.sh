@@ -4,7 +4,10 @@
 # Run against a THROWAWAY rig with a backfilled graph and rate limiting off:
 #
 #   BASE=http://localhost:9143 READ_KEY=mcpwp_... WRITE_KEY=mcpwp_... \
-#     [EXPECTED_ORPHANS=81] bash graph-read-surface-http.sh
+#     [DESIGNER_KEY=mcpwp_...] [EXPECTED_ORPHANS=81] bash graph-read-surface-http.sh
+#
+# DESIGNER_KEY (a read+write key with role=designer, which has no `content`
+# category) checks review BLOCK-1: it must be refused on every graph surface.
 #
 # 1. The write key (positive control) lists every non-public post node with
 #    wp_graph_query status=any, and every published node with an edge to one.
@@ -117,6 +120,20 @@ jq -e 'tostring | test("invalid_filter")' <<<"$inj" >/dev/null || { echo "FAIL o
 inj2=$(tool "$READ_KEY" wp_graph_query '{"metric":{"name":"clicks","op":"> 0 OR 1=1 OR 0 >","value":1}}')
 jq -e 'tostring | test("invalid_filter")' <<<"$inj2" >/dev/null || { echo "FAIL metric.op injection not refused: $inj2"; fail=1; }
 echo "injection over HTTP: order_by and metric.op payloads refused (invalid_filter)"
+
+# ---- 4. BLOCK-1: a designer-role key (no content category) is refused. ----
+if [[ -n ${DESIGNER_KEY:-} ]]; then
+	for r in "graph" "graph/query" "graph/node&post_id=1" "graph/neighbors&post_id=1"; do
+		code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/?rest_route=/mcpwp/v1/$r" -H "X-API-Key: $DESIGNER_KEY")
+		[[ $code == 403 ]] || { echo "FAIL designer REST /$r answered $code"; fail=1; }
+	done
+	d1=$(tool "$DESIGNER_KEY" wp_graph_query '{"status":"any"}')
+	jq -e 'tostring | test("scope_denied|forbidden_category")' <<<"$d1" >/dev/null || { echo "FAIL designer wp_graph_query not refused: $(head -c 200 <<<"$d1")"; fail=1; }
+	d2=$(rpc "$DESIGNER_KEY" resources/read '{"uri":"mcpwp://graph"}')
+	jq -e 'tostring | test("forbidden_category")' <<<"$d2" >/dev/null || { echo "FAIL designer resources/read mcpwp://graph not refused: $(head -c 200 <<<"$d2")"; fail=1; }
+	leak_check "designer surfaces" "$d1 $d2"
+	echo "designer key: REST /graph* 403, wp_graph_query refused, resources/read mcpwp://graph refused"
+fi
 
 rm -f "$needles"
 echo "fail=$fail"

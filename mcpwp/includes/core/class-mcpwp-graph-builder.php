@@ -1098,6 +1098,9 @@ class Mcpwp_Graph_Builder {
 	 */
 	private static function ensure_media_node( $media_id ) {
 		$media_id = (int) $media_id;
+		if ( ! self::is_attachment_id( $media_id ) ) {
+			return; // W3: never label a media: node with a non-attachment's title.
+		}
 		$title    = function_exists( 'get_the_title' ) ? get_the_title( $media_id ) : '';
 		$url      = function_exists( 'wp_get_attachment_url' ) ? (string) wp_get_attachment_url( $media_id ) : '';
 
@@ -2234,6 +2237,12 @@ class Mcpwp_Graph_Builder {
 		$taxonomies = get_object_taxonomies( $post->post_type );
 
 		foreach ( $taxonomies as $taxonomy ) {
+			// #943 S2 review W4: a non-viewable taxonomy (private, not publicly
+			// queryable) has no public archive, so its term names are not site-
+			// level data and never become graph nodes a read key could list.
+			if ( ! self::is_viewable_taxonomy( $taxonomy ) ) {
+				continue;
+			}
 			$terms = wp_get_object_terms( $post->ID, $taxonomy, array( 'fields' => 'all' ) );
 			if ( is_wp_error( $terms ) || empty( $terms ) ) {
 				continue;
@@ -2283,7 +2292,42 @@ class Mcpwp_Graph_Builder {
 
 		unset( $ids[0] );
 
-		return array_keys( $ids );
+		// #943 S2 review W3: `wp-image-<id>` classes and Elementor widget ids
+		// are author-controlled text; only a real attachment becomes a media:
+		// node. Without this, `wp-image-<draft id>` made a node labelled with
+		// that draft's title.
+		return array_values(
+			array_filter(
+				array_keys( $ids ),
+				static function ( $id ) {
+					return self::is_attachment_id( $id );
+				}
+			)
+		);
+	}
+
+	/**
+	 * Whether an id names a real attachment.
+	 *
+	 * @param int $id Post ID.
+	 * @return bool
+	 */
+	public static function is_attachment_id( $id ) {
+		return (int) $id > 0 && 'attachment' === get_post_type( (int) $id );
+	}
+
+	/**
+	 * Whether a taxonomy is publicly viewable (is_taxonomy_viewable(), WP 5.1+).
+	 *
+	 * @param string $taxonomy Taxonomy name.
+	 * @return bool
+	 */
+	public static function is_viewable_taxonomy( $taxonomy ) {
+		if ( function_exists( 'is_taxonomy_viewable' ) ) {
+			return (bool) is_taxonomy_viewable( (string) $taxonomy );
+		}
+		$obj = function_exists( 'get_taxonomy' ) ? get_taxonomy( (string) $taxonomy ) : null;
+		return (bool) ( $obj && ( ! empty( $obj->publicly_queryable ) || ! empty( $obj->public ) ) );
 	}
 
 	/**

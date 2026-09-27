@@ -217,10 +217,48 @@ final class GraphBuilderTest extends TestCase
             ),
         ));
 
+        foreach (array(55, 77, 88) as $att) {
+            $this->post($att, array('post_type' => 'attachment', 'post_status' => 'inherit'));
+        }
+
         $ids = Mcpwp_Graph_Builder::extract_media_refs($post);
         sort($ids);
 
         $this->assertSame(array( 55, 77, 88 ), $ids);
+    }
+
+    public function test_extract_media_refs_ignores_ids_that_are_not_attachments(): void
+    {
+        // #943 S2 review W3: wp-image-<id> is author-controlled text. A draft's
+        // id there must not become a media: node carrying the draft's title.
+        $this->post(56, array('post_type' => 'attachment', 'post_status' => 'inherit'));
+        $this->post(57, array('post_status' => 'draft', 'post_title' => 'SECRET DRAFT'));
+        $post = $this->post(14, array(
+            'post_content' => '<img class="wp-image-56" /><img class="wp-image-57" /><img class="wp-image-999" />',
+        ));
+
+        $this->assertSame(array( 56 ), Mcpwp_Graph_Builder::extract_media_refs($post));
+    }
+
+    public function test_extract_term_refs_skips_non_viewable_taxonomies(): void
+    {
+        // #943 S2 review W4.
+        $GLOBALS['_mcpwp_test_taxonomies']['category'] = array(
+            'object_type' => array( 'post' ),
+            'terms'       => array( 5 => array( 'slug' => 'news', 'name' => 'News' ) ),
+        );
+        $GLOBALS['_mcpwp_test_taxonomies']['internal_flag'] = array(
+            'object_type' => array( 'post' ),
+            'viewable'    => false,
+            'terms'       => array( 9 => array( 'slug' => 'secret', 'name' => 'Secret Launch' ) ),
+        );
+        $post = $this->post(15);
+        $GLOBALS['_mcpwp_test_object_terms'][15]['category']      = array( 5 );
+        $GLOBALS['_mcpwp_test_object_terms'][15]['internal_flag'] = array( 9 );
+
+        $this->assertSame(array(
+            array( 'taxonomy' => 'category', 'term_id' => 5, 'name' => 'News' ),
+        ), Mcpwp_Graph_Builder::extract_term_refs($post));
     }
 
     // ---------------------------------------------------------------------

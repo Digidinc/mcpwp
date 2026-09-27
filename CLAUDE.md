@@ -561,11 +561,16 @@ measure with `wp_import_search_performance`, and record decisions with `wp_remem
 | `/graph/query` | GET | `wp_graph_query`: allowlisted filters (`orphan`, `min_inbound`/`max_inbound`, `has_metric`, `metric{name,source,op,value,window_days}`, `no_edge_type`, `modified_before`, `word_count_lt`), `order_by` label/modified/inbound/metric, `limit` ≤200, `cursor` |
 | `/graph/rebuild` | POST | Restart the backfill from the first post (admin scope) |
 
-All three tools are Free and read scope. `Mcpwp_Graph_Reader` is the single visibility chokepoint.
-A read-scope key sees published content only. Visibility follows the **live** `wp_posts` row, not
-the node's stored status, and edges touching a hidden node are omitted rather than redacted.
-Password-protected posts expose no word count or content links. An invalid filter value is a 400
-`invalid_filter`, never a silently dropped filter. Cursors are HMAC-signed and bound to their query.
+All three tools are Free, read scope, and in the `content` category (REST `/graph*` too, so a
+designer key or a disabled `content` category is refused everywhere). `Mcpwp_Graph_Reader` is the
+single visibility chokepoint, and it fails closed by kind. A read-scope key sees published posts
+only, judged from the **live** `wp_posts` row (label, url and status are live too). It sees terms
+of viewable taxonomies only, and media only for attachments whose parent is public. Any other kind
+is visible only with an inbound edge from a public post. Edges touching a hidden node are omitted
+rather than redacted. Password-protected posts expose no word count or content links. An invalid
+filter value is a 400 `invalid_filter`, never a silently dropped filter. Cursors are encrypted
+(sodium secretbox) and bound to their query. Graph reads weigh 5 (query, summary, depth-2
+neighbors) or 1 (node, depth-1 neighbors).
 Every response carries `graph_status` (ready, coverage, built_at, backfill, dirty_count).
 Real-MySQL checks live in `mcpwp/tests/rig/` (see `graph-read-surface-rig.php` and
 `graph-read-surface-http.sh`).

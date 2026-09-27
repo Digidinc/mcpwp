@@ -38,6 +38,11 @@ class Mcpwp_Graph_Scope_Harness {
     {
         return $this->get_required_scope_for_tool_name($tool);
     }
+
+    public function route_category(string $route): string
+    {
+        return $this->get_category_for_route($route);
+    }
 }
 
 final class GraphReadSurfaceTest extends TestCase
@@ -173,6 +178,17 @@ final class GraphReadSurfaceTest extends TestCase
             return array();
         }
 
+        // Fail-closed "other kind" backstop: inbound edges into these keys.
+        if (0 === strpos($query, 'SELECT e.to_key AS to_key, e.from_key AS from_key')) {
+            $out = array();
+            foreach ($this->edges as $e) {
+                if (false !== strpos($query, "'" . $e['to_key'] . "'")) {
+                    $out[] = array('to_key' => $e['to_key'], 'from_key' => $e['from_key']);
+                }
+            }
+            return $out;
+        }
+
         // Minimal neighbor rows.
         if (preg_match('/WHERE n\.node_key IN \((.*?)\) AND/s', $query, $m)) {
             $keys = array_map(static function ($v) {
@@ -247,6 +263,15 @@ final class GraphReadSurfaceTest extends TestCase
 
     private function assertNoSecrets(string $json, string $surface): void
     {
+        // Review W2: a cursor is part of the response, so decode every one and
+        // check its contents too.
+        if (preg_match_all('/"next_cursor":"([A-Za-z0-9_.-]+)"/', $json, $m)) {
+            foreach ($m[1] as $cursor) {
+                foreach (explode('.', $cursor) as $part) {
+                    $json .= ' ' . base64_decode(strtr($part, '-_', '+/'));
+                }
+            }
+        }
         foreach (array(self::SECRET, 'SECRET PRIVATE TITLE', 'SECRET STALE TITLE', 'post:20', 'post:21', 'post:22') as $needle) {
             $this->assertStringNotContainsString($needle, $json, "{$surface} leaked {$needle}");
         }
@@ -333,12 +358,16 @@ final class GraphReadSurfaceTest extends TestCase
                 $node_queries++;
                 // Live join to wp_posts + public-status filter, never the stored n.status alone.
                 $this->assertStringContainsString("LEFT JOIN wp_posts p ON (p.ID = n.ref_id AND LEFT(n.node_key, 5) = 'post:')", $q);
-                $this->assertStringContainsString("(LEFT(n.node_key, 5) <> 'post:' OR p.post_status IN ('publish'))", $q);
+                $this->assertStringContainsString("(CASE WHEN LEFT(n.node_key, 5) = 'post:' THEN EXISTS (SELECT 1 FROM wp_posts nvp WHERE nvp.ID = CAST(SUBSTRING(n.node_key, 6) AS UNSIGNED) AND nvp.post_type <> 'attachment' AND nvp.post_status IN ('publish'))", $q);
+                // W4/W5: viewable taxonomies only; unknown kinds fail closed.
+                $this->assertStringContainsString("WHEN LEFT(n.node_key, 5) = 'term:' THEN SUBSTRING_INDEX(SUBSTRING(n.node_key, 6), ':', 1) IN ('category','post_tag')", $q);
+                $this->assertStringContainsString("nvm.post_type = 'attachment' AND (nvm.post_parent = 0 OR EXISTS", $q);
+                $this->assertStringContainsString("ELSE EXISTS (SELECT 1 FROM wp_mcpwp_graph_edges nvx WHERE nvx.to_key = n.node_key", $q);
             }
             if (preg_match('/FROM wp_mcpwp_graph_edges e WHERE/', $q)) {
                 // Both endpoints checked against live public posts; content edges of protected posts excluded.
-                $this->assertStringContainsString("(LEFT(e.from_key, 5) <> 'post:' OR EXISTS (SELECT 1 FROM wp_posts epf WHERE epf.ID = CAST(SUBSTRING(e.from_key, 6) AS UNSIGNED) AND epf.post_status IN ('publish')))", $q);
-                $this->assertStringContainsString("(LEFT(e.to_key, 5) <> 'post:' OR EXISTS (SELECT 1 FROM wp_posts ept WHERE ept.ID = CAST(SUBSTRING(e.to_key, 6) AS UNSIGNED) AND ept.post_status IN ('publish')))", $q);
+                $this->assertStringContainsString("(CASE WHEN LEFT(e.from_key, 5) = 'post:' THEN EXISTS (SELECT 1 FROM wp_posts efp WHERE efp.ID = CAST(SUBSTRING(e.from_key, 6) AS UNSIGNED) AND efp.post_type <> 'attachment' AND efp.post_status IN ('publish'))", $q);
+                $this->assertStringContainsString("(CASE WHEN LEFT(e.to_key, 5) = 'post:' THEN EXISTS (SELECT 1 FROM wp_posts etp WHERE etp.ID = CAST(SUBSTRING(e.to_key, 6) AS UNSIGNED) AND etp.post_type <> 'attachment' AND etp.post_status IN ('publish'))", $q);
                 $this->assertStringContainsString("epw.post_password <> ''", $q);
             }
         }
@@ -359,14 +388,14 @@ final class GraphReadSurfaceTest extends TestCase
             return 0 === strpos($q, 'SELECT n.id AS id');
         }));
         $this->assertStringNotContainsString('n.status =', end($main));
-        $this->assertStringContainsString("(LEFT(n.node_key, 5) <> 'post:' OR p.ID IS NOT NULL)", end($main));
+        $this->assertStringContainsString("(CASE WHEN LEFT(n.node_key, 5) = 'post:' THEN EXISTS (SELECT 1 FROM wp_posts nvp WHERE nvp.ID = CAST(SUBSTRING(n.node_key, 6) AS UNSIGNED) AND nvp.post_type <> 'attachment') WHEN LEFT(n.node_key, 6) = 'media:' THEN EXISTS (SELECT 1 FROM wp_posts nvm WHERE nvm.ID = CAST(SUBSTRING(n.node_key, 7) AS UNSIGNED) AND nvm.post_type = 'attachment') ELSE 1 END) = 1", end($main));
     }
 
     public function test_read_key_status_request_is_clamped_to_publish_in_sql(): void
     {
         Mcpwp_Graph_Reader::query(array('status' => 'draft'), false);
         $q = $this->graph_sql()[0];
-        $this->assertStringContainsString("(LEFT(n.node_key, 5) <> 'post:' OR n.status = 'publish')", $q);
+        $this->assertStringContainsString("(LEFT(n.node_key, 5) <> 'post:' OR p.post_status = 'publish')", $q);
         $this->assertStringNotContainsString("'draft'", $q);
     }
 
@@ -400,6 +429,7 @@ final class GraphReadSurfaceTest extends TestCase
 
     public function test_password_protected_posts_content_edges_are_dropped_for_read_key(): void
     {
+        $GLOBALS['_mcpwp_test_posts'][9] = new WP_Post(array('ID' => 9, 'post_type' => 'attachment', 'post_status' => 'inherit', 'post_title' => 'Photo'));
         $this->edges = array(
             $this->edge(1, 'post:30', 'post:10'),
             $this->edge(2, 'post:30', 'media:9', 'uses_media'),
@@ -522,7 +552,7 @@ final class GraphReadSurfaceTest extends TestCase
     {
         Mcpwp_Graph_Reader::query(array('orphan' => true), true);
         $q = $this->graph_sql()[0];
-        $this->assertStringContainsString("LEFT(n.node_key, 5) = 'post:' AND n.status = 'publish' AND NOT EXISTS (SELECT 1 FROM wp_mcpwp_graph_edges eo WHERE eo.to_key = n.node_key AND eo.type = 'links_to' AND (LEFT(eo.from_key, 5) <> 'post:' OR EXISTS (SELECT 1 FROM wp_posts eopf WHERE eopf.ID = CAST(SUBSTRING(eo.from_key, 6) AS UNSIGNED) AND eopf.post_status IN ('publish')))", $q);
+        $this->assertStringContainsString("LEFT(n.node_key, 5) = 'post:' AND p.post_status = 'publish' AND NOT EXISTS (SELECT 1 FROM wp_mcpwp_graph_edges eo WHERE eo.to_key = n.node_key AND eo.type = 'links_to' AND (CASE WHEN LEFT(eo.from_key, 5) = 'post:' THEN EXISTS (SELECT 1 FROM wp_posts eofp WHERE eofp.ID = CAST(SUBSTRING(eo.from_key, 6) AS UNSIGNED) AND eofp.post_type <> 'attachment' AND eofp.post_status IN ('publish'))", $q);
         // Even for a privileged caller: a draft's or trashed post's link does not rescue an orphan.
         $this->assertStringContainsString("eopw.post_password <> ''", $q);
     }
@@ -531,9 +561,12 @@ final class GraphReadSurfaceTest extends TestCase
     {
         Mcpwp_Graph_Reader::query(array('min_inbound' => 2, 'max_inbound' => '5'), false);
         $q = $this->graph_sql()[0];
-        $this->assertMatchesRegularExpression('/\(SELECT COUNT\(\*\) FROM wp_mcpwp_graph_edges ei WHERE ei\.to_key = n\.node_key AND .*\) >= 2\)/', $q);
-        $this->assertMatchesRegularExpression('/\) <= 5\)/', $q);
-        $this->assertStringContainsString('eipf.post_status IN', $q);
+        // W6: one aggregated derived table, reused by both filters.
+        $this->assertSame(1, substr_count($q, 'LEFT JOIN (SELECT ei.to_key AS k, COUNT(*) AS c FROM wp_mcpwp_graph_edges ei WHERE'));
+        $this->assertStringContainsString('GROUP BY ei.to_key) ic ON ic.k = n.node_key', $q);
+        $this->assertStringContainsString('(IFNULL(ic.c, 0) >= 2)', $q);
+        $this->assertStringContainsString('(IFNULL(ic.c, 0) <= 5)', $q);
+        $this->assertStringContainsString('eifp.post_status IN', $q);
     }
 
     public function test_modified_before_uses_live_post_modified_gmt(): void
@@ -562,9 +595,9 @@ final class GraphReadSurfaceTest extends TestCase
     public function test_each_order_by_mode_and_direction(): void
     {
         $cases = array(
-            'label'    => "IFNULL(n.label, '') AS order_value",
+            'label'    => "(CASE WHEN LEFT(n.node_key, 5) = 'post:' THEN IFNULL(p.post_title, '') ELSE IFNULL(n.label, '') END) AS order_value",
             'modified' => "IFNULL(p.post_modified_gmt, '1000-01-01 00:00:00') AS order_value",
-            'inbound'  => 'ei.to_key = n.node_key AND',
+            'inbound'  => 'IFNULL(ic.c, 0) AS order_value',
             'clicks'   => "so.metric = 'clicks'",
         );
         foreach ($cases as $order_by => $needle) {
@@ -618,7 +651,7 @@ final class GraphReadSurfaceTest extends TestCase
 
         $this->sql = array();
         $this->assertIsArray(Mcpwp_Graph_Reader::query(array('limit' => 2, 'kind' => 'term', 'cursor' => $cursor), false));
-        $this->assertStringContainsString("AND ((IFNULL(n.label, '')) > 'Label 002' OR ((IFNULL(n.label, '')) = 'Label 002' AND n.id > 2)) ORDER BY", $this->graph_sql()[0]);
+        $this->assertStringContainsString("AND (((CASE WHEN LEFT(n.node_key, 5) = 'post:' THEN IFNULL(p.post_title, '') ELSE IFNULL(n.label, '') END)) > 'Label 002' OR (((CASE WHEN LEFT(n.node_key, 5) = 'post:' THEN IFNULL(p.post_title, '') ELSE IFNULL(n.label, '') END)) = 'Label 002' AND n.id > 2)) ORDER BY", $this->graph_sql()[0]);
 
         // DESC uses <, and a label containing quotes/percent stays a bound literal.
         $row                = $this->rows(2);
@@ -628,30 +661,34 @@ final class GraphReadSurfaceTest extends TestCase
         $cursor             = Mcpwp_Graph_Reader::query(array('limit' => 1, 'order_dir' => 'desc'), false)['next_cursor'];
         $this->sql          = array();
         Mcpwp_Graph_Reader::query(array('limit' => 1, 'order_dir' => 'desc', 'cursor' => $cursor), false);
-        $this->assertStringContainsString("< 'O\\'Brien 100% %s' OR ((IFNULL(n.label, '')) = 'O\\'Brien 100% %s' AND n.id < 9))", $this->graph_sql()[0]);
+        $this->assertStringContainsString("< 'O\\'Brien 100% %s' OR (((CASE WHEN LEFT(n.node_key, 5) = 'post:' THEN IFNULL(p.post_title, '') ELSE IFNULL(n.label, '') END)) = 'O\\'Brien 100% %s' AND n.id < 9))", $this->graph_sql()[0]);
     }
 
     public function test_tampered_or_foreign_cursors_are_rejected(): void
     {
         $this->query_rows = $this->rows(3);
         $cursor           = Mcpwp_Graph_Reader::query(array('limit' => 2), false)['next_cursor'];
-        list($payload, $mac) = explode('.', $cursor);
-        $decoded          = json_decode(base64_decode(strtr($payload, '-_', '+/')), true);
+        $raw              = base64_decode(strtr($cursor, '-_', '+/'));
 
-        $forge = static function (array $data) use ($mac) {
-            return rtrim(strtr(base64_encode(wp_json_encode($data)), '+/', '-_'), '=') . '.' . $mac;
+        // Encrypted: the plaintext order value and id are not in the cursor.
+        $this->assertStringNotContainsString('Label 002', $raw);
+
+        $flip = static function ($bytes, $at) {
+            $bytes[ $at ] = chr(ord($bytes[ $at ]) ^ 1);
+            return rtrim(strtr(base64_encode($bytes), '+/', '-_'), '=');
         };
 
         $bad = array(
-            'garbage'            => 'not-a-cursor',
-            'empty mac'          => $payload . '.',
-            'flipped mac'        => $payload . '.' . strrev($mac),
-            'flipped payload'    => substr($payload, 0, -2) . 'AA.' . $mac,
-            'forged id'          => $forge(array_merge($decoded, array('i' => 0))),
-            'forged value'       => $forge(array_merge($decoded, array('v' => "' OR 1=1 -- "))),
-            'overlong'           => str_repeat('A', 3000) . '.' . $mac,
-            'array'              => array('i' => 1),
-            'sql'                => "1' OR '1'='1",
+            'garbage'         => 'not-a-cursor!',
+            'flipped nonce'   => $flip($raw, 0),
+            'flipped box'     => $flip($raw, 30),
+            'flipped mac'     => $flip($raw, strlen($raw) - 1),
+            'truncated'       => substr($cursor, 0, 30),
+            'plain json'      => rtrim(strtr(base64_encode('{"k":2,"i":0,"v":"","q":"x"}'), '+/', '-_'), '='),
+            'v1 hmac format'  => 'eyJpIjowfQ.' . str_repeat('a', 32),
+            'overlong'        => str_repeat('A', 3000),
+            'array'           => array('i' => 1),
+            'sql'             => "1' OR '1'='1",
         );
         foreach ($bad as $label => $c) {
             $this->sql = array();
@@ -661,7 +698,7 @@ final class GraphReadSurfaceTest extends TestCase
             $this->assertSame(array(), $this->graph_sql(), $label);
         }
 
-        // Valid signature, but minted for a different query / privilege / surface.
+        // Valid, but minted for a different query / privilege / surface.
         $this->assertSame('invalid_cursor', Mcpwp_Graph_Reader::query(array('limit' => 2, 'orphan' => true, 'cursor' => $cursor), false)->get_error_code());
         $this->assertSame('invalid_cursor', Mcpwp_Graph_Reader::query(array('limit' => 2, 'cursor' => $cursor), true)->get_error_code());
         $this->assertSame('invalid_cursor', Mcpwp_Graph_Reader::get_neighbors(array('node_key' => 'post:10', 'cursor' => $cursor), false)->get_error_code());
@@ -704,11 +741,11 @@ final class GraphReadSurfaceTest extends TestCase
     {
         $this->edges = array();
         for ($i = 1; $i <= 100; $i++) {
-            $this->edges[] = $this->edge($i, 'post:10', 'term:t:' . $i, 'in_term');
+            $this->edges[] = $this->edge($i, 'post:10', 'term:category:' . $i, 'in_term');
         }
         $this->hop2_edges = array();
         for ($i = 1; $i <= 1000; $i++) {
-            $this->hop2_edges[] = $this->edge(1000 + $i, 'term:t:' . (($i % 100) + 1), 'url:' . $i, 'derived_from');
+            $this->hop2_edges[] = $this->edge(1000 + $i, 'term:category:' . (($i % 100) + 1), 'term:post_tag:' . $i, 'derived_from');
         }
         $result = Mcpwp_Graph_Reader::get_neighbors(array('node_key' => 'post:10', 'depth' => 2, 'direction' => 'both', 'limit' => 100), false);
         $keys   = array('post:10' => true);
@@ -770,7 +807,7 @@ final class GraphReadSurfaceTest extends TestCase
             if (0 === strpos($query, 'SELECT n.id AS id')) {
                 $rows = array();
                 for ($i = 1; $i <= 11; $i++) {
-                    $rows[] = array('id' => (string) $i, 'node_key' => 'term:' . str_repeat('x', 150) . $i, 'kind' => 'term', 'ref_id' => '1', 'label' => $long, 'url' => str_repeat('u', 2048), 'status' => '', 'word_count' => '0', 'props' => '{}', 'updated_at' => null, 'is_protected' => '0', 'order_value' => '2026-01-01 00:00:00');
+                    $rows[] = array('id' => (string) $i, 'node_key' => 'term:category:' . str_repeat('9', 150) . $i, 'kind' => 'term', 'ref_id' => '1', 'label' => $long, 'url' => str_repeat('u', 2048), 'status' => '', 'word_count' => '0', 'props' => '{}', 'updated_at' => null, 'is_protected' => '0', 'order_value' => '2026-01-01 00:00:00');
                 }
                 return $rows;
             }
@@ -868,5 +905,159 @@ final class GraphReadSurfaceTest extends TestCase
             $keys[ $def['key'] ] = $def['route'];
         }
         $this->assertSame('/mcpwp/v1/graph', $keys['graph']);
+    }
+
+    // ------------------------------------------------------------------
+    // Adversarial review of PR #1006 — regression tests
+    // ------------------------------------------------------------------
+
+    /** Review W2 (reviewer's fixture): a backstop-hidden row never becomes the cursor. */
+    public function test_ADV_backstop_skipped_row_label_never_reaches_the_cursor(): void
+    {
+        $read = $this->controller(array('read'));
+        $this->query_rows = array($this->nodes['post:10'], $this->nodes['post:20'], $this->nodes['post:11']);
+        $resp = $read->query(new WP_REST_Request('GET', '/mcpwp/v1/graph/query', array('limit' => 2)));
+        $data = $resp->get_data();
+        $this->assertNoSecrets($this->json($resp), 'query json incl. decoded cursor');
+        $this->assertSame(array('post:10'), array_column($data['results'], 'node_key'));
+
+        // Decrypt server-side: the cursor anchors on the last VISIBLE row.
+        $fp      = Mcpwp_Graph_Reader::parse_query_args(array('limit' => 2), false)['fingerprint'];
+        $decoded = Mcpwp_Graph_Reader::decode_cursor($data['next_cursor'], $fp);
+        $this->assertSame(array('id' => 1, 'v' => 'Home'), $decoded);
+        $this->assertStringNotContainsString(self::SECRET, (string) wp_json_encode($decoded));
+    }
+
+    /** Review BLOCK-1 (reviewer's probe): the /graph routes are content-category routes. */
+    public function test_ADV_graph_routes_have_the_content_category(): void
+    {
+        $h = new Mcpwp_Graph_Scope_Harness();
+        foreach (array('/mcpwp/v1/graph', '/mcpwp/v1/graph/query', '/mcpwp/v1/graph/node', '/mcpwp/v1/graph/neighbors', '/mcpwp/v1/content-graph', '/mcpwp/v1/pages') as $r) {
+            $this->assertSame('content', $h->route_category($r), $r);
+        }
+    }
+
+    /** Review W7: a draft renamed and published before the worker runs shows only its new title. */
+    public function test_renamed_and_published_draft_shows_only_the_live_title(): void
+    {
+        // Stored node: still the draft, with the draft's title. Live post: published, renamed.
+        $this->post(23, 'publish', 'Launch Announcement');
+        $this->node('post:23', 'post', 23, 'OLD SECRET CODENAME', 'draft');
+        $read = $this->controller(array('read'));
+
+        $node = $read->get_node(new WP_REST_Request('GET', '/', array('post_id' => 23)))->get_data();
+        $this->assertSame('Launch Announcement', $node['label']);
+        $this->assertSame('publish', $node['status']);
+        $this->assertSame('https://example.com/?p=23', $node['url']);
+
+        $this->query_rows = array($this->nodes['post:23']);
+        $q = $read->query(new WP_REST_Request('GET', '/', array('limit' => 1)));
+        $this->assertSame('Launch Announcement', $q->get_data()['results'][0]['label']);
+
+        $this->edges = array($this->edge(1, 'post:10', 'post:23'));
+        $nb = $read->get_neighbors(new WP_REST_Request('GET', '/', array('node_key' => 'post:10')));
+        $this->assertSame('Launch Announcement', $nb->get_data()['nodes'][0]['label']);
+
+        foreach (array($node, $q->get_data(), $nb->get_data()) as $payload) {
+            $this->assertStringNotContainsString('OLD SECRET CODENAME', (string) wp_json_encode($payload));
+        }
+        // Label ordering sorts by the live title, not the stored one.
+        $this->assertStringContainsString("THEN IFNULL(p.post_title, '')", $this->graph_sql()[count($this->graph_sql()) - 1] . implode(' ', $this->graph_sql()));
+    }
+
+    /** Review W3: media: nodes are real attachments, hidden with a hidden parent. */
+    public function test_media_node_visibility_follows_the_attachment_and_its_parent(): void
+    {
+        $GLOBALS['_mcpwp_test_posts'][60] = new WP_Post(array('ID' => 60, 'post_type' => 'attachment', 'post_status' => 'inherit', 'post_parent' => 10, 'post_title' => 'Public photo'));
+        $GLOBALS['_mcpwp_test_posts'][61] = new WP_Post(array('ID' => 61, 'post_type' => 'attachment', 'post_status' => 'inherit', 'post_parent' => 20, 'post_title' => 'Draft photo'));
+        $GLOBALS['_mcpwp_test_posts'][62] = new WP_Post(array('ID' => 62, 'post_type' => 'attachment', 'post_status' => 'inherit', 'post_parent' => 0, 'post_title' => 'Library photo'));
+        $this->node('media:60', 'media', 60, 'Public photo', '');
+        $this->node('media:61', 'media', 61, 'Draft photo', '');
+        $this->node('media:62', 'media', 62, 'Library photo', '');
+        $this->node('media:20', 'media', 20, self::SECRET, ''); // Built from wp-image-20 before W3: not an attachment.
+
+        $read = Mcpwp_Graph_Reader::visible_keys(array('media:60', 'media:61', 'media:62', 'media:20'), false);
+        $this->assertSame(array('media:60' => true, 'media:62' => true), $read);
+        $priv = Mcpwp_Graph_Reader::visible_keys(array('media:60', 'media:61', 'media:62', 'media:20'), true);
+        $this->assertSame(array('media:60' => true, 'media:61' => true, 'media:62' => true), $priv);
+
+        $this->assertNull(Mcpwp_Graph_Reader::get_node('media:20', true));
+        $this->assertNull(Mcpwp_Graph_Reader::get_node('media:61', false));
+    }
+
+    /** Review W4: terms of non-viewable taxonomies are hidden from read keys. */
+    public function test_terms_of_non_viewable_taxonomies_are_hidden_from_read_keys(): void
+    {
+        $this->node('term:internal_flag:9', 'term', 9, 'Secret Launch', '');
+        $this->assertNull(Mcpwp_Graph_Reader::get_node('term:internal_flag:9', false));
+        $this->assertIsArray(Mcpwp_Graph_Reader::get_node('term:internal_flag:9', true));
+        $this->assertIsArray(Mcpwp_Graph_Reader::get_node('term:category:5', false));
+    }
+
+    /** Review W5: kinds other than post/term/media fail closed for read keys. */
+    public function test_other_kinds_are_visible_only_with_an_inbound_edge_from_a_public_post(): void
+    {
+        $this->node('url:1', 'url', 0, 'https://partner.example/a', '');
+        $this->node('url:2', 'url', 0, 'https://secret.example/unreleased', '');
+        $this->node('fact:roadmap', 'fact', 0, 'Unannounced product', '');
+        $this->edges = array(
+            $this->edge(1, 'post:10', 'url:1'),
+            $this->edge(2, 'post:20', 'url:2'), // only a draft points here
+        );
+        $read = Mcpwp_Graph_Reader::visible_keys(array('url:1', 'url:2', 'fact:roadmap', 'newkind:x'), false);
+        $this->assertSame(array('url:1' => true), $read);
+        $this->assertCount(4, Mcpwp_Graph_Reader::visible_keys(array('url:1', 'url:2', 'fact:roadmap', 'newkind:x'), true));
+
+        $this->assertNull(Mcpwp_Graph_Reader::get_node('fact:roadmap', false));
+        $this->assertNull(Mcpwp_Graph_Reader::get_node('url:2', false));
+        $this->assertSame('https://partner.example/a', Mcpwp_Graph_Reader::get_node('url:1', false)['label']);
+    }
+
+    /** Review NIT: dirty_count for a read key counts visible queued nodes only. */
+    public function test_dirty_count_is_visibility_filtered_for_read_keys(): void
+    {
+        $GLOBALS['mcpwp_test_public_post_types'] = array('post', 'page');
+        $captured = array();
+        $GLOBALS['mcpwp_test_wpdb_intercept'] = static function ($method, $query) use (&$captured) {
+            $captured[] = $query;
+            return '0';
+        };
+        Mcpwp_Graph_Reader::graph_status(false);
+        $queue = array_values(array_filter($captured, static function ($q) {
+            return false !== strpos($q, 'mcpwp_graph_queue');
+        }));
+        $this->assertCount(1, $queue);
+        $this->assertStringContainsString("FROM wp_mcpwp_graph_queue q WHERE (CASE WHEN LEFT(q.node_key, 5) = 'post:'", $queue[0]);
+        $this->assertStringContainsString("qvp.post_status IN ('publish')", $queue[0]);
+    }
+
+    /** Review NIT: /graph/rebuild does not restart a running backfill. */
+    public function test_rebuild_does_not_reset_a_running_backfill(): void
+    {
+        update_option(Mcpwp_Graph_Builder::BACKFILL_STATUS_OPTION, 'running', false);
+        update_option(Mcpwp_Graph_Builder::BACKFILL_CURSOR_OPTION, 1234, false);
+        $resp = $this->controller(array('admin'))->rebuild(new WP_REST_Request('POST', '/mcpwp/v1/graph/rebuild'));
+        $this->assertSame(202, $resp->get_status());
+        $this->assertTrue($resp->get_data()['already_running']);
+        $this->assertSame(1234, (int) get_option(Mcpwp_Graph_Builder::BACKFILL_CURSOR_OPTION));
+
+        update_option(Mcpwp_Graph_Builder::BACKFILL_STATUS_OPTION, 'done', false);
+        $resp = $this->controller(array('admin'))->rebuild(new WP_REST_Request('POST', '/mcpwp/v1/graph/rebuild'));
+        $this->assertSame(200, $resp->get_status());
+        $this->assertSame(0, (int) get_option(Mcpwp_Graph_Builder::BACKFILL_CURSOR_OPTION));
+    }
+
+    /** Review W6: graph reads carry a cost weight. */
+    public function test_graph_reads_are_weighted(): void
+    {
+        $this->assertSame(5, Mcpwp_Operation_Weights::tool_weight('wp_graph_query', array()));
+        $this->assertSame(5, Mcpwp_Operation_Weights::tool_weight('wp_graph_neighbors', array('depth' => 2)));
+        $this->assertSame(1, Mcpwp_Operation_Weights::tool_weight('wp_graph_neighbors', array('depth' => 1)));
+        $this->assertSame(1, Mcpwp_Operation_Weights::tool_weight('wp_graph_node', array('post_id' => 5)));
+        $this->assertSame(5, Mcpwp_Operation_Weights::spend_weight('GET', '/mcpwp/v1/graph', array()));
+        $this->assertSame(5, Mcpwp_Operation_Weights::spend_weight('GET', '/mcpwp/v1/graph/query', array()));
+        $this->assertSame(5, Mcpwp_Operation_Weights::spend_weight('GET', '/mcpwp/v1/graph/neighbors', array('depth' => '2')));
+        $this->assertSame(1, Mcpwp_Operation_Weights::spend_weight('GET', '/mcpwp/v1/graph/neighbors', array()));
+        $this->assertSame(1, Mcpwp_Operation_Weights::spend_weight('GET', '/mcpwp/v1/graph/node', array()));
     }
 }
