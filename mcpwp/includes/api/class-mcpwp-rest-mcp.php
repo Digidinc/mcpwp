@@ -1779,6 +1779,9 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			case 'resources/list':
 				return $this->handle_resources_list( $id );
 
+			case 'resources/templates/list':
+				return $this->handle_resources_templates_list( $id );
+
 			case 'resources/read':
 				return $this->handle_resources_read( $id, $params, $request );
 
@@ -1796,7 +1799,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 					$id,
 					-32601,
 					'Method not found: ' . $method,
-					array( 'hint' => 'Supported MCP methods: initialize, tools/list, tools/call, resources/list, resources/read, prompts/list, prompts/get, ping. Check the method name for typos.' )
+					array( 'hint' => 'Supported MCP methods: initialize, tools/list, tools/call, resources/list, resources/templates/list, resources/read, prompts/list, prompts/get, ping. Check the method name for typos.' )
 				);
 		}
 	}
@@ -2008,6 +2011,27 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		if ( ! $this->protocol_version_has_structured_output() ) {
 			if ( ! $is_error ) {
 				unset( $response['result']['structuredContent'] );
+			}
+			// resource_link is a 2025-06-18+ content type (#913): a result
+			// captured under a newer protocol version — including one
+			// stored for idempotent replay — must not carry it forward to a
+			// client that negotiated an older one (#1015 adversarial review
+			// round 1, W2). This is the one place every tools/call answer
+			// passes through regardless of protocol version or replay
+			// (conform_tool_call_result()'s own docblock), so it is the one
+			// place that can strip it for both a fresh dispatch and a
+			// replay alike — the insertion site (build_tool_resource_link())
+			// does not gate on protocol version at all, on purpose, so
+			// there is exactly one authority for whether it survives.
+			if ( isset( $response['result']['content'] ) && is_array( $response['result']['content'] ) ) {
+				$response['result']['content'] = array_values(
+					array_filter(
+						$response['result']['content'],
+						static function ( $item ) {
+							return ! ( is_array( $item ) && isset( $item['type'] ) && 'resource_link' === $item['type'] );
+						}
+					)
+				);
 			}
 			return $response;
 		}
@@ -2531,6 +2555,107 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	}
 
 	/**
+	 * Canonical resource TEMPLATE definitions (#913).
+	 *
+	 * Unlike mcp_resource_definitions() above — one fixed URI, one REST route
+	 * each — every one of these needs a URI variable resolved into a route or
+	 * query arg (memory/{namespace}, guide/{topic}), or a response composed
+	 * from more than one REST route (page/{id}, brand). handle_resources_read()
+	 * resolves each one to the exact REST route(s) the equivalent tool itself
+	 * dispatches to, through the same forward_caller_credential() +
+	 * rest_do_request() chokepoint resources/read already uses for the fixed
+	 * resources — so a role-restricted key gets the same refusal here it would
+	 * get calling the tool directly. See read_mcp_resource_page(),
+	 * read_mcp_resource_brand(), and resolve_mcp_resource()'s template branch.
+	 *
+	 * @return array<int, array{key:string, uriTemplate:string, name:string, description:string, mimeType:string}>
+	 */
+	private function mcp_resource_template_definitions() {
+		return array(
+			array(
+				'key'         => 'page',
+				'uriTemplate' => 'mcpwp://page/{id}',
+				'name'        => 'Page or Post',
+				'description' => 'Content summary for one page or post: title, status, url, template, and an Elementor structure summary when it has Elementor data. Same visibility rule as the pages/posts tools — a read-only key never sees a draft, pending, or private body, and the same 404 covers a missing id, a forbidden one, and any post type other than page/post.',
+				'mimeType'    => 'application/json',
+			),
+			array(
+				'key'         => 'brand',
+				'uriTemplate' => 'mcpwp://brand',
+				'name'        => 'Brand Context',
+				'description' => 'Brand/style guide (site context) plus Elementor global colors and typography when Elementor Pro is active and the key\'s role allows it. Read before writing or designing content.',
+				'mimeType'    => 'application/json',
+			),
+			array(
+				'key'         => 'memory',
+				'uriTemplate' => 'mcpwp://memory/{namespace}',
+				'name'        => 'Site Memory',
+				'description' => 'Stored memory entries in one namespace (identity, constraints, history, preferences, contacts) — the same data wp_recall(namespace) returns.',
+				'mimeType'    => 'application/json',
+			),
+			array(
+				'key'         => 'guide',
+				'uriTemplate' => 'mcpwp://guide/{topic}',
+				'name'        => 'Guide',
+				'description' => 'A topic guide — the same content wp_get_guide(topic) returns. Call wp_get_guide with no topic, or resources/list\'s Site Info, to see available topics.',
+				'mimeType'    => 'application/json',
+			),
+		);
+	}
+
+	/**
+	 * Handle resources/templates/list method (#913).
+	 *
+	 * @param mixed $id Request ID.
+	 * @return array JSON-RPC response.
+	 */
+	private function handle_resources_templates_list( $id ) {
+		$templates = array();
+
+		foreach ( $this->mcp_resource_template_definitions() as $definition ) {
+			$templates[] = array(
+				'uriTemplate' => $definition['uriTemplate'],
+				'name'        => $definition['name'],
+				'description' => $definition['description'],
+				'mimeType'    => $definition['mimeType'],
+			);
+		}
+
+		return array(
+			'jsonrpc' => '2.0',
+			'id'      => $id,
+			'result'  => array(
+				'resourceTemplates' => $templates,
+			),
+		);
+	}
+
+	/**
+	 * Whether a URI names one of the four #913 resource templates — by
+	 * prefix only, deliberately not validating the id/namespace/topic
+	 * itself (that happens where each template is actually resolved). Used
+	 * to reject a query string/fragment on all four alike before any of
+	 * them is matched (#1015 adversarial review round 1, W1). Case-sensitive,
+	 * matching the case-sensitive key comparisons every template match uses
+	 * (N2) — only the "mcpwp://" scheme token itself is case-insensitive.
+	 *
+	 * @param string $uri Client-supplied resource URI.
+	 * @return bool
+	 */
+	private function is_mcp_template_uri( $uri ) {
+		if ( 0 !== strncasecmp( $uri, 'mcpwp://', 8 ) ) {
+			return false;
+		}
+		$key = substr( $uri, 8 );
+		foreach ( array( 'page/', 'brand', 'memory/', 'guide/' ) as $prefix ) {
+			if ( 0 === strpos( $key, $prefix ) ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
 	 * Resolve a client-supplied resource URI to one of the definitions in
 	 * mcp_resource_definitions().
 	 *
@@ -2559,6 +2684,50 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				if ( $definition['key'] === $key ) {
 					return $definition;
 				}
+			}
+
+			// Templated single-route proxies (#913): memory/{namespace} and
+			// guide/{topic} are, like every definition above, exactly one REST
+			// route with the URI variable folded into a query arg or the route
+			// itself — so they can reuse the rest of handle_resources_read()
+			// unchanged. page/{id} and brand need more than one route (post
+			// data + an optional Elementor/globals section) and are matched
+			// directly in handle_resources_read() before this method runs.
+			//
+			// Case-sensitive and anchored with \z, not $ — $ also matches
+			// just before a trailing "\n", and the mcpwp://page/{id} /
+			// mcpwp://brand matching in handle_resources_read() is already
+			// both, so this keeps every template consistent with itself
+			// (#1015 adversarial review round 1, N1/N2). The "mcpwp://"
+			// scheme token itself stays case-INsensitive (resolved by the
+			// strncasecmp() a few lines up) — schemes are case-insensitive
+			// per RFC 3986 §3.1; only the path-like key after it is compared
+			// exactly, same as the exact `===` match against the six fixed
+			// resource keys just above.
+			if ( preg_match( '#^memory/([a-z0-9_-]{1,190})\z#', $key, $m ) ) {
+				$namespace = sanitize_key( $m[1] );
+				return array(
+					'key'         => 'memory:' . $namespace,
+					'route'       => '/mcpwp/v1/memory',
+					'query'       => array( 'namespace' => $namespace ),
+					'mimeType'    => 'application/json',
+					'tool_parity' => 'wp_recall',
+				);
+			}
+
+			if ( preg_match( '#^guide/([a-z_]{1,190})\z#', $key, $m ) ) {
+				$topic = sanitize_key( $m[1] );
+				return array(
+					'key'      => 'guide:' . $topic,
+					// The registered route pattern is "/guides/(?P<topic>[a-z_]+)"
+					// — a topic sanitize_key() leaves containing a digit or a
+					// dash simply matches no registered route and 404s exactly
+					// as it would if a caller hit that REST path directly.
+					'route'       => '/mcpwp/v1/guides/' . $topic,
+					'query'       => array(),
+					'mimeType'    => 'application/json',
+					'tool_parity' => 'wp_get_guide',
+				);
 			}
 
 			return null;
@@ -2650,6 +2819,45 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			return $this->jsonrpc_error( $id, -32602, 'Missing resource URI' );
 		}
 
+		// The four #913 templates never accept a query string or fragment —
+		// the id/namespace/topic is the entire path segment. Checked by raw
+		// character, not wp_parse_url()'s notion of "query", and BEFORE
+		// anything below ever runs: resolve_mcp_resource()'s key extraction
+		// strips at "?" for matching purposes, but handle_resources_read()'s
+		// own query-override block (a few lines down, for the six FIXED
+		// resources like /pages?per_page=…) re-parses the ORIGINAL uri and
+		// layers its query params onto the sub-request — so
+		// mcpwp://memory/identity?namespace=constraints served "constraints"
+		// under the "identity" URI, and "?namespace=" silently cleared the
+		// filter (#1015 adversarial review round 1, W1). Rejecting the
+		// string up front, for all four templates alike, means that override
+		// block is never reached for one of them.
+		if ( $this->is_mcp_template_uri( $uri ) && ( false !== strpos( $uri, '?' ) || false !== strpos( $uri, '#' ) ) ) {
+			return $this->jsonrpc_error(
+				$id,
+				-32602,
+				'Invalid resource URI',
+				array(
+					'uri'  => $uri,
+					'hint' => 'mcpwp://page/{id}, mcpwp://brand, mcpwp://memory/{namespace} and mcpwp://guide/{topic} do not accept a query string or fragment.',
+				)
+			);
+		}
+
+		// Composed resource templates (#913): page/{id} and brand each read
+		// more than one internal route and are resolved directly, before the
+		// single-route definitions below ever see the URI. Case-sensitive
+		// and anchored with \z (not $, which also matches just before a
+		// trailing "\n") — consistent with resolve_mcp_resource()'s
+		// memory/guide matching just below (#1015 review round 1, N1/N2).
+		if ( preg_match( '#^mcpwp://page/(\d+)\z#', $uri, $m ) ) {
+			return $this->read_mcp_resource_page( $id, $uri, (int) $m[1], $request );
+		}
+
+		if ( 'mcpwp://brand' === $uri ) {
+			return $this->read_mcp_resource_brand( $id, $uri, $request );
+		}
+
 		$definition = $this->resolve_mcp_resource( $uri );
 
 		if ( null === $definition ) {
@@ -2662,6 +2870,23 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 					'hint' => 'Only resources advertised by resources/list are readable — call resources/list to see available URIs, or use the mcpwp://<name> form.',
 				)
 			);
+		}
+
+		// Single-route templates whose REST route is deliberately NOT
+		// category-gated (memory/{namespace}, guide/{topic} — both "site"-
+		// category tools; get_route_category_map()'s docblock documents /memory
+		// and /guides as left unclassified on purpose, same as /site-context
+		// and /onboard, so a direct REST or /batch caller of any role can
+		// still reach them). The equivalent TOOL (wp_recall, wp_get_guide) DOES
+		// enforce that category at the tools/call layer, so a resource read of
+		// the same data must refuse exactly the same key it would refuse there
+		// — reusing tool_currently_permitted(), the one function tools/call and
+		// its replay gate already share, rather than inventing a second table.
+		if ( isset( $definition['tool_parity'] ) ) {
+			$parity_error = $this->resource_template_category_error( $id, $uri, $definition['tool_parity'] );
+			if ( null !== $parity_error ) {
+				return $parity_error;
+			}
 		}
 
 		$sub_request = new WP_REST_Request( 'GET', $definition['route'] );
@@ -2783,6 +3008,337 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	}
 
 	/**
+	 * Category gate for a resource TEMPLATE read (#913), mirroring exactly
+	 * what tools/call enforces for the equivalent tool.
+	 * tool_currently_permitted() is the single function the tool-dispatch
+	 * gate and its idempotent-replay gate already share (#802 round 4/5), so
+	 * a resources/read caller and a tools/call caller of the same key cannot
+	 * be told two different things about the same category.
+	 *
+	 * @param mixed  $id        JSON-RPC id.
+	 * @param string $uri       Client-supplied URI (echoed back).
+	 * @param string $tool_name The tool this template read is equivalent to.
+	 * @return array|null JSON-RPC error, or null when the read may proceed.
+	 */
+	private function resource_template_category_error( $id, $uri, $tool_name ) {
+		$key_record = $this->get_current_api_key_record();
+
+		if ( $this->tool_currently_permitted( $tool_name, $key_record ) ) {
+			return null;
+		}
+
+		$tool_category        = $this->tool_category_for( $tool_name );
+		$disabled_categories   = get_option( 'mcpwp_disabled_tool_categories', array() );
+
+		if ( '' !== $tool_category && is_array( $disabled_categories ) && in_array( $tool_category, $disabled_categories, true ) ) {
+			return $this->jsonrpc_error(
+				$id,
+				-32003,
+				sprintf( 'This resource is in the "%s" category, which has been disabled by the site administrator.', $tool_category ),
+				array(
+					'uri'  => $uri,
+					'code' => 'category_disabled',
+					'hint' => 'This category has been disabled in WP Admin > mcpwp > Tools. Contact the site administrator to re-enable it.',
+				)
+			);
+		}
+
+		$allowed = $key_record ? $this->resolve_key_tool_categories( $key_record ) : array();
+		$role    = $key_record && isset( $key_record['role'] ) ? $key_record['role'] : 'unknown';
+
+		return $this->jsonrpc_error(
+			$id,
+			-32003,
+			sprintf(
+				'This API key (role: %s) does not have access to %s resources. Allowed categories: %s.',
+				$role,
+				'' === $tool_category ? 'uncategorised' : $tool_category,
+				implode( ', ', $allowed )
+			),
+			array(
+				'uri'  => $uri,
+				'code' => 'scope_denied',
+				'hint' => sprintf(
+					'This resource mirrors tool "%s" (category "%s"), but this key only has access to: %s.',
+					$tool_name,
+					'' === $tool_category ? 'uncategorised' : $tool_category,
+					implode( ', ', $allowed )
+				),
+			)
+		);
+	}
+
+	/**
+	 * Dispatch one internal GET sub-request under the calling request's own
+	 * authenticated context (#913), for a composed resource template that
+	 * needs more than one internal read. Same forward_caller_credential() +
+	 * Mcpwp_REST_Batch::$is_batch_sub_request pattern handle_resources_read()
+	 * already uses for its single-route definitions — factored out here so
+	 * read_mcp_resource_page() and read_mcp_resource_brand() can each make two
+	 * internal calls without re-metering the outer /mcp request's rate-limit
+	 * slot per call. Neither caller charges extra weight for the second call:
+	 * like every other fixed resource except mcpwp://graph, these are cheap
+	 * metadata reads with no entry in Mcpwp_Operation_Weights.
+	 *
+	 * @param string          $route   Bare REST route ("/mcpwp/v1/...").
+	 * @param array           $query   Query args to set on the sub-request.
+	 * @param WP_REST_Request $request Original REST request (the outer /mcp call).
+	 * @return WP_REST_Response
+	 */
+	private function dispatch_internal_mcp_get( $route, array $query, $request ) {
+		$sub_request = new WP_REST_Request( 'GET', $route );
+
+		foreach ( $query as $key => $value ) {
+			$sub_request->set_param( $key, $value );
+		}
+
+		$this->forward_caller_credential( $request, $sub_request );
+
+		$batch_class_exists   = class_exists( 'Mcpwp_REST_Batch' );
+		$previous_sub_request = $batch_class_exists ? Mcpwp_REST_Batch::$is_batch_sub_request : null;
+		if ( $batch_class_exists ) {
+			Mcpwp_REST_Batch::$is_batch_sub_request = true;
+		}
+		try {
+			return rest_do_request( $sub_request );
+		} finally {
+			if ( $batch_class_exists ) {
+				Mcpwp_REST_Batch::$is_batch_sub_request = $previous_sub_request;
+			}
+		}
+	}
+
+	/**
+	 * ONE identical "not found" for every way mcpwp://page/{id} can fail to
+	 * resolve — non-positive id, no such post, an attachment/CPT id, a
+	 * hidden draft/pending/private/future/trashed post the caller's scope
+	 * cannot see, or (defensively) a race against the inner dispatch below.
+	 *
+	 * Before this, a missing id or wrong post type answered -32002 with a
+	 * fixed message, while a guard_non_public_post()-hidden post fell through
+	 * to the generic -32003 branch carrying THAT ROUTE's own message
+	 * ("Page not found." vs "Post not found.") — two different codes and two
+	 * different, type-revealing messages for what a direct REST call already
+	 * treats as one indistinguishable 404. That let a caller learn a hidden
+	 * post exists, and its type, purely from which shape of error came back
+	 * (#1015 adversarial review round 1, B1). Every caller of this method
+	 * (including the pre-dispatch checks, so the common case never pays for
+	 * a dispatch it cannot use) must return this exact array — same code,
+	 * same message, same data shape, only `uri` varying (already known to
+	 * the caller, who supplied it).
+	 *
+	 * @param mixed  $id  JSON-RPC request id.
+	 * @param string $uri Client-supplied URI, echoed back.
+	 * @return array JSON-RPC error.
+	 */
+	private function page_resource_not_found( $id, $uri ) {
+		return $this->jsonrpc_error(
+			$id,
+			-32002,
+			'Resource not found',
+			array(
+				'uri'  => $uri,
+				'hint' => 'mcpwp://page/{id} resolves only a page or post id you can currently read.',
+			)
+		);
+	}
+
+	/**
+	 * Resolve mcpwp://page/{id} (#913).
+	 *
+	 * Reuses the existing /pages/{id} and /posts/{id} REST routes' "content"
+	 * category and guard_non_public_post() visibility rule — but checks
+	 * visibility directly, via guard_non_public_post() itself, BEFORE ever
+	 * dispatching to either route, and folds every negative outcome into
+	 * page_resource_not_found()'s one fixed shape (#1015 review round 1,
+	 * B1) — a hidden post is never even sent to the inner REST call, so
+	 * there is nothing left for its route-specific message to leak.
+	 *
+	 * The category check runs first of all, before get_post(), and is
+	 * independent of whether $post_id resolves to anything: wp_update_page
+	 * and wp_update_post are both "content" category, so a category-denied
+	 * caller is told the same thing regardless of whether the id exists.
+	 *
+	 * The Elementor summary section is best-effort: if the caller's key lacks
+	 * the category wp_get_elementor_summary's route enforces, or the page has
+	 * no Elementor data, the section is omitted rather than failing the whole
+	 * read — the page/post fields are gated independently and must not be
+	 * withheld just because a supplementary section isn't available. (That
+	 * gate never distinguishes existence either — it only ever runs once the
+	 * page/post fields above already resolved, so it carries no new oracle.)
+	 *
+	 * @param mixed           $id      JSON-RPC request id.
+	 * @param string          $uri     Original client-supplied URI (echoed back).
+	 * @param int             $post_id Numeric id parsed from the URI.
+	 * @param WP_REST_Request $request Original REST request.
+	 * @return array JSON-RPC response.
+	 */
+	private function read_mcp_resource_page( $id, $uri, $post_id, $request ) {
+		if ( $post_id <= 0 ) {
+			return $this->page_resource_not_found( $id, $uri );
+		}
+
+		// wp_update_page and wp_update_post are both "content" category — the
+		// check is the same either way, so it does not need to know yet
+		// whether $post_id turns out to be a page or a post.
+		$parity_error = $this->resource_template_category_error( $id, $uri, 'wp_update_page' );
+		if ( null !== $parity_error ) {
+			return $parity_error;
+		}
+
+		$post = get_post( $post_id );
+
+		if ( ! ( $post instanceof WP_Post ) || ! in_array( $post->post_type, array( 'page', 'post' ), true ) ) {
+			// Missing entirely, or any post type other than page/post (e.g.
+			// an attachment or a custom post type neither tool would
+			// resolve) — folded into the one shared not-found.
+			return $this->page_resource_not_found( $id, $uri );
+		}
+
+		// Same visibility rule /pages/{id} and /posts/{id} enforce via
+		// guard_non_public_post(), checked directly and BEFORE any internal
+		// dispatch — a hidden draft/pending/private/future/trashed post
+		// answers byte-for-byte the same as a missing id or a non-existent
+		// one, never the route's own "Page not found."/"Post not found."
+		if ( null !== $this->guard_non_public_post( $post, 'unused — message is never read, see page_resource_not_found()' ) ) {
+			return $this->page_resource_not_found( $id, $uri );
+		}
+
+		$route = 'page' === $post->post_type ? ( '/mcpwp/v1/pages/' . $post_id ) : ( '/mcpwp/v1/posts/' . $post_id );
+
+		$response = $this->dispatch_internal_mcp_get( $route, array(), $request );
+		$status   = $response->get_status();
+		$data     = $response->get_data();
+
+		if ( $status >= 400 ) {
+			// Not reachable in normal operation — the checks above already
+			// establish the post exists, is a page/post, and is visible to
+			// this caller. Kept as a defensive fallback (e.g. a race between
+			// the check above and this dispatch) that still answers with the
+			// one shared shape rather than whatever this route says.
+			return $this->page_resource_not_found( $id, $uri );
+		}
+
+		$summary = array(
+			'id'       => (int) $post_id,
+			'type'     => $post->post_type,
+			'title'    => ( is_array( $data ) && isset( $data['title'] ) ) ? $data['title'] : '',
+			'status'   => ( is_array( $data ) && isset( $data['status'] ) ) ? $data['status'] : '',
+			'url'      => ( is_array( $data ) && isset( $data['url'] ) ) ? $data['url'] : '',
+			'template' => ( is_array( $data ) && isset( $data['template'] ) ) ? $data['template'] : null,
+			'elementor' => null,
+		);
+
+		if ( is_array( $data ) && ! empty( $data['has_elementor'] ) ) {
+			$el_response = $this->dispatch_internal_mcp_get( '/mcpwp/v1/elementor/' . $post_id . '/summary', array(), $request );
+			$el_status   = $el_response->get_status();
+			$el_data     = $el_response->get_data();
+
+			if ( $el_status < 400 ) {
+				$summary['elementor'] = $el_data;
+			} else {
+				$summary['elementor'] = array(
+					'unavailable' => true,
+					'reason'      => ( is_array( $el_data ) && isset( $el_data['code'] ) ) ? $el_data['code'] : 'resource_error',
+				);
+			}
+		}
+
+		return array(
+			'jsonrpc' => '2.0',
+			'id'      => $id,
+			'result'  => array(
+				'contents' => array(
+					array(
+						'uri'      => $uri,
+						'mimeType' => 'application/json',
+						'text'     => wp_json_encode( $summary ),
+					),
+				),
+			),
+		);
+	}
+
+	/**
+	 * Resolve mcpwp://brand (#913).
+	 *
+	 * Composes two independently-gated reads: site context (category "site",
+	 * same as wp_get_site_context — deliberately uncategorized at the REST
+	 * route layer, see get_route_category_map()'s docblock, so the tool-layer
+	 * check is applied explicitly here) and Elementor global colors/
+	 * typography (same category wp_get_elementor_globals currently resolves
+	 * to — Pro-only). The globals section is best-effort: on Free, when the
+	 * key's role lacks that category, or when the site category is disabled,
+	 * the section is simply omitted. Site context is not — it is gated
+	 * independently and a denial for it fails the whole read.
+	 *
+	 * @param mixed           $id      JSON-RPC request id.
+	 * @param string          $uri     Original client-supplied URI.
+	 * @param WP_REST_Request $request Original REST request.
+	 * @return array JSON-RPC response.
+	 */
+	private function read_mcp_resource_brand( $id, $uri, $request ) {
+		$parity_error = $this->resource_template_category_error( $id, $uri, 'wp_get_site_context' );
+		if ( null !== $parity_error ) {
+			return $parity_error;
+		}
+
+		$context_response = $this->dispatch_internal_mcp_get( '/mcpwp/v1/site-context', array(), $request );
+		$status            = $context_response->get_status();
+		$data              = $context_response->get_data();
+
+		if ( $status >= 400 ) {
+			$error_message = ( is_array( $data ) && isset( $data['message'] ) ) ? $data['message'] : 'Resource read failed';
+			$error_code    = ( is_array( $data ) && isset( $data['code'] ) ) ? $data['code'] : 'resource_error';
+			return $this->jsonrpc_error(
+				$id,
+				-32003,
+				$error_message,
+				array( 'uri' => $uri, 'code' => $error_code, 'status' => $status )
+			);
+		}
+
+		$brand = array(
+			'site_context'      => ( is_array( $data ) && isset( $data['effective_context'] ) ) ? $data['effective_context'] : $data,
+			'elementor_globals' => null,
+		);
+
+		if ( null === $this->resource_template_category_error( $id, $uri, 'wp_get_elementor_globals' ) ) {
+			$globals_response = $this->dispatch_internal_mcp_get( '/mcpwp/v1/elementor/globals', array(), $request );
+			$globals_status    = $globals_response->get_status();
+			$globals_data       = $globals_response->get_data();
+
+			if ( $globals_status < 400 ) {
+				$brand['elementor_globals'] = $globals_data;
+			} else {
+				$brand['elementor_globals'] = array(
+					'unavailable' => true,
+					'reason'      => ( is_array( $globals_data ) && isset( $globals_data['code'] ) ) ? $globals_data['code'] : 'resource_error',
+				);
+			}
+		} else {
+			$brand['elementor_globals'] = array(
+				'unavailable' => true,
+				'reason'      => 'scope_denied',
+			);
+		}
+
+		return array(
+			'jsonrpc' => '2.0',
+			'id'      => $id,
+			'result'  => array(
+				'contents' => array(
+					array(
+						'uri'      => $uri,
+						'mimeType' => 'application/json',
+						'text'     => wp_json_encode( $brand ),
+					),
+				),
+			),
+		);
+	}
+
+	/**
 	 * Handle prompts/list method.
 	 *
 	 * @param mixed $id Request ID.
@@ -2846,6 +3402,67 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				'name'        => 'seo-loop',
 				'description' => 'Run the SEO evidence loop: read wp_seo_flags, judge the six flags, fix before write through approvals/drafts, kill bad keywords, link best pages to stuck ones, measure, and record decisions with wp_remember.',
 				'arguments'   => array(),
+			),
+		);
+
+		// build-landing-page's steps depend on wp_build_page, which is a Pro
+		// tool (elementor-build category) — tools/list still advertises it on
+		// Free (upsell by design), but a PROMPT is advisory text meant to be
+		// literally followed, and following it on Free ends in every step
+		// after the first refusing with pro_required. Hidden here rather
+		// than reworded to a Free path (#1015 adversarial review round 1,
+		// N4) — prompts/get refuses it the same way an unknown prompt name
+		// would if asked for directly on Free.
+		if ( $this->is_pro_active() ) {
+			$prompts[] = array(
+				'name'        => 'build-landing-page',
+				'description' => 'Build a new on-brand landing page from semantic section blueprints (hero, features, cta, pricing, faq, testimonials, and more), reading the brand context first and verifying the rendered result before handing off for review.',
+				'arguments'   => array(
+					array(
+						'name'        => 'title',
+						'description' => 'Page title',
+						'required'    => true,
+					),
+					array(
+						'name'        => 'goal',
+						'description' => 'What the page needs to accomplish (e.g., "capture leads for the spring sale")',
+						'required'    => true,
+					),
+					array(
+						'name'        => 'sections',
+						'description' => 'Optional comma-separated section types to use, from wp_build_page\'s supported list (hero, features, cta, pricing, faq, testimonials, text, gallery, contact_form, map, countdown, stats, logo_grid, video). Left blank, choose sections that fit the goal.',
+						'required'    => false,
+					),
+				),
+			);
+		}
+
+		$prompts[] = array(
+			'name'        => 'fix-page-from-screenshot',
+			'description' => 'Diagnose and fix a page that looks wrong — screenshot the live page, compare it against the brand context and the Elementor structure, make the minimal fix, then verify again before handing off.',
+			'arguments'   => array(
+				array(
+					'name'        => 'page_id',
+					'description' => 'WordPress page or post ID to fix',
+					'required'    => true,
+				),
+				array(
+					'name'        => 'issue',
+					'description' => 'What looks wrong (e.g., "hero text is unreadable on mobile", "wrong brand colors"). Leave blank to have the agent judge against the brand context alone.',
+					'required'    => false,
+				),
+			),
+		);
+
+		$prompts[] = array(
+			'name'        => 'publish-post-safely',
+			'description' => 'Move a draft or pending post/page to publish through the approval gate — validate SEO readiness and brand fit, verify the rendered result, then route the publish itself through an approval request rather than flipping status directly.',
+			'arguments'   => array(
+				array(
+					'name'        => 'post_id',
+					'description' => 'WordPress post or page ID to publish',
+					'required'    => true,
+				),
 			),
 		);
 
@@ -2953,6 +3570,74 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 					. "5. LINK BEST TO STUCK: For untargeted and almost_there items, call wp_suggest_internal_links and wp_apply_internal_link to link from your strongest existing pages to the page that should own the query.\n"
 					. "6. MEASURE: After changes are approved and live, call wp_import_search_performance with the next export and call wp_seo_flags again to confirm clicks moved and the flag cleared.\n"
 					. "7. RECORD: Call wp_remember to store what you changed and why (query, url, action, date) so the next loop doesn't repeat the same judgment call from scratch.";
+				break;
+
+			case 'build-landing-page':
+				// wp_build_page is Pro (elementor-build category); hidden
+				// from prompts/list on Free (handle_prompts_list()) for the
+				// same reason it is refused the same way an unknown prompt
+				// name would be if asked for directly (#1015 adversarial
+				// review round 1, N4).
+				if ( ! $this->is_pro_active() ) {
+					return $this->jsonrpc_error(
+						$id,
+						-32002,
+						"Prompt \"{$name}\" not found",
+						array( 'hint' => 'Call prompts/list to see available prompt names.' )
+					);
+				}
+
+				$title    = isset( $arguments['title'] ) ? sanitize_text_field( $arguments['title'] ) : '';
+				$goal     = isset( $arguments['goal'] ) ? sanitize_textarea_field( $arguments['goal'] ) : '';
+				$sections = isset( $arguments['sections'] ) ? sanitize_text_field( $arguments['sections'] ) : '';
+
+				if ( '' === $title || '' === $goal ) {
+					return $this->jsonrpc_error( $id, -32602, 'build-landing-page requires title and goal arguments' );
+				}
+
+				$text = "You are building a new on-brand landing page on \"{$site_title}\" ({$site_url}).\n\n"
+					. "Title: \"{$title}\". Goal: {$goal}."
+					. ( $sections ? " Preferred sections: {$sections}." : '' ) . "\n\n"
+					. "1. BRAND: Read the mcpwp://brand resource (resources/read) for the style guide and Elementor global colors/typography. Do not invent colors or fonts it doesn't give you.\n"
+					. "2. Call wp_list_design_references for any relevant reference to match.\n"
+					. "3. Call wp_build_page with section blueprints that fit the goal (hero, features, cta, pricing, faq, testimonials, text, gallery, contact_form, map, countdown, stats, logo_grid, video) — this creates the page as a draft.\n"
+					. "4. VERIFY: Call wp_get_rendered_html on the new page (by its id), or read its url from the wp_build_page result / mcpwp://page/{id} and call wp_screenshot_url(url=...) — wp_screenshot_url takes a url, not an id. Compare the result against the brand context and the stated goal.\n"
+					. "5. If anything is off-brand or doesn't serve the goal, fix it with wp_edit_section/wp_edit_widget, then verify again.\n"
+					. "6. Report the page ID, edit URL, and what you built. Do not publish — leave it as a draft for review.";
+				break;
+
+			case 'fix-page-from-screenshot':
+				$page_id = isset( $arguments['page_id'] ) ? absint( $arguments['page_id'] ) : 0;
+				$issue   = isset( $arguments['issue'] ) ? sanitize_textarea_field( $arguments['issue'] ) : '';
+
+				if ( ! $page_id ) {
+					return $this->jsonrpc_error( $id, -32602, 'fix-page-from-screenshot requires a page_id argument' );
+				}
+
+				$text = "You are diagnosing and fixing page {$page_id} on \"{$site_title}\" ({$site_url})."
+					. ( $issue ? " Reported issue: {$issue}." : ' No specific issue was reported — judge it against the brand context.' ) . "\n\n"
+					. "1. VERIFY (before): Call wp_get_rendered_html({$page_id}) to see the page as it renders now — id works there. For a visual screenshot instead, first read its url (mcpwp://page/{$page_id}, or wp_get_page_by_slug) and call wp_screenshot_url(url=...); wp_screenshot_url takes a url, not an id.\n"
+					. "2. BRAND: Read the mcpwp://brand resource (resources/read) for the style guide and Elementor global colors/typography.\n"
+					. "3. Call wp_get_elementor({$page_id}) to read the current structure.\n"
+					. "4. Diagnose the specific mismatch — against the reported issue if one was given, otherwise against the brand context.\n"
+					. "5. Make the minimal fix with wp_edit_widget or wp_edit_section rather than rewriting the whole page.\n"
+					. "6. VERIFY (after): Call wp_get_rendered_html({$page_id}) again (or wp_screenshot_url(url=...) as above) and confirm the fix actually resolved the issue.\n"
+					. "7. If the page is already live (not a draft), call wp_list_approvals first — if an approval request already covers this change, use wp_apply_approval rather than editing directly; otherwise report the fix as pending review rather than a finished change.";
+				break;
+
+			case 'publish-post-safely':
+				$post_id = isset( $arguments['post_id'] ) ? absint( $arguments['post_id'] ) : 0;
+
+				if ( ! $post_id ) {
+					return $this->jsonrpc_error( $id, -32602, 'publish-post-safely requires a post_id argument' );
+				}
+
+				$text = "You are publishing post/page {$post_id} on \"{$site_title}\" ({$site_url}) — through the approval gate, not by flipping status directly.\n\n"
+					. "1. BRAND: Read the mcpwp://brand resource (resources/read) and confirm the content fits the brand voice.\n"
+					. "2. Call wp_validate_seo_readiness({$post_id}) and wp_audit_content_quality({$post_id}) — do not proceed on an unresolved P0/P1 finding.\n"
+					. "3. VERIFY: Call wp_get_rendered_html({$post_id}) — or read its url and call wp_screenshot_url(url=...), which takes a url, not an id — and confirm the final rendered result actually matches what you intend to publish.\n"
+					. "4. Do not call wp_update_post/wp_update_page with status=publish yourself. Leave it in draft/pending and call wp_list_approvals to check for an existing pending request covering this post. There is no tool to create a publish approval on demand for a single post — publish_status_change requests are raised automatically by the site's content guardrails (e.g. the bulk-publish threshold), not by this prompt — so if none exists, report the post as ready and let a human publish it.\n"
+					. "5. If wp_list_approvals does show a pending request for this post and a human has approved it, call wp_apply_approval to publish it, then verify again with wp_get_rendered_html({$post_id}) and call wp_remember to record what was published and when.";
 				break;
 
 			default:
@@ -3799,10 +4484,75 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			'isError' => false,
 		);
 
+		// A create/update result may point at a readable MCP resource — a
+		// freshly created or edited page/post is also readable as
+		// mcpwp://page/{id} without a second tool call (#913). Deliberately
+		// NOT gated on protocol version here: this result may be replayed
+		// later under a different (older) negotiated version, so
+		// apply_output_schema() — the one chokepoint every tools/call answer
+		// passes through on both a fresh dispatch and a replay
+		// (conform_tool_call_result()'s docblock) — is the sole authority
+		// for whether a `resource_link` item survives to the client
+		// (#1015 adversarial review round 1, W2). Building it unconditionally
+		// here and filtering centrally there means there is exactly one
+		// place to agree with, not two.
+		$resource_link = $this->build_tool_resource_link( $tool_name, $data );
+		if ( null !== $resource_link ) {
+			$result['content'][] = $resource_link;
+		}
+
 		return array(
 			'jsonrpc' => '2.0',
 			'id'      => $id,
 			'result'  => $result,
+		);
+	}
+
+	/**
+	 * A tool's result may point at a readable MCP resource template (#913) —
+	 * e.g. wp_create_page's result is also readable as mcpwp://page/{id}
+	 * without a second tool call. Only tools where an id round-trips this
+	 * cleanly are listed; every other tool is unaffected.
+	 *
+	 * @param string $tool_name Dispatched tool name.
+	 * @param mixed  $data      Decoded tool result data.
+	 * @return array|null Content item, or null when not applicable.
+	 */
+	private function build_tool_resource_link( $tool_name, $data ) {
+		static $page_link_tools = array(
+			'wp_create_page' => true,
+			'wp_update_page' => true,
+			'wp_clone_page'  => true,
+			'wp_create_post' => true,
+			'wp_update_post' => true,
+		);
+
+		if ( empty( $page_link_tools[ $tool_name ] ) || ! is_array( $data ) || empty( $data['id'] ) ) {
+			return null;
+		}
+
+		$post_id = absint( $data['id'] );
+		if ( $post_id <= 0 ) {
+			return null;
+		}
+
+		// wp_create_post/wp_update_post take a caller-controlled post_type —
+		// wp_block, elementor_library, or any other writable type — and the
+		// formatted response carries no post_type field to check inline.
+		// mcpwp://page/{id} resolves only page/post; linking anything else
+		// would be a dangling resource_link that 404s the moment a client
+		// reads it (#1015 adversarial review round 1, W3). Verify the real
+		// resulting type before linking.
+		$post = get_post( $post_id );
+		if ( ! ( $post instanceof WP_Post ) || ! in_array( $post->post_type, array( 'page', 'post' ), true ) ) {
+			return null;
+		}
+
+		return array(
+			'type'     => 'resource_link',
+			'uri'      => 'mcpwp://page/' . $post_id,
+			'name'     => ( isset( $data['title'] ) && is_string( $data['title'] ) && '' !== $data['title'] ) ? $data['title'] : ( 'Resource ' . $post_id ),
+			'mimeType' => 'application/json',
 		);
 	}
 
@@ -3957,10 +4707,38 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	}
 
 	/**
+	 * Upper bound on how many internal REST dispatches one resources/read
+	 * for this URI can make, for JSON-RPC batch pre-pricing (#752 F9) —
+	 * computed from the URI alone, with no dispatch and no database access,
+	 * since pricing runs before anything in the batch is allowed to.
+	 *
+	 * mcpwp://page/{id} and mcpwp://brand each compose up to two internal
+	 * reads (post/page data + an optional Elementor/globals section, #913);
+	 * message_spend_price() priced every resources/read at a flat 1 unit,
+	 * under-pricing both by half their real cost inside a batch (#1015
+	 * adversarial review round 1, N5). Every other resource — the six FIXED
+	 * ones and the single-route mcpwp://memory/{namespace} and
+	 * mcpwp://guide/{topic} proxies — makes exactly one internal dispatch.
+	 * A malformed or unresolvable URI still prices at the safe floor of 1;
+	 * it dispatches nothing and costs nothing for real, so 1 can only ever
+	 * over-price it, never under-price it.
+	 *
+	 * @param string $uri Client-supplied resource URI.
+	 * @return int
+	 */
+	private function resource_read_max_inner_dispatches( $uri ) {
+		if ( preg_match( '#^mcpwp://page/\d+\z#', $uri ) || 'mcpwp://brand' === $uri ) {
+			return 2;
+		}
+		return 1;
+	}
+
+	/**
 	 * Spend units one JSON-RPC message of a batch costs as sent. A tool call
 	 * that will be answered from its stored result dispatches nothing and
-	 * costs nothing; a resource read dispatches one route; everything else
-	 * dispatches nothing.
+	 * costs nothing; a resource read dispatches one or two routes (#913, see
+	 * resource_read_max_inner_dispatches()); everything else dispatches
+	 * nothing.
 	 *
 	 * @param mixed $message  JSON-RPC message.
 	 * @param array $tool_map Merged tool map, built once for the whole batch.
@@ -3972,7 +4750,9 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		}
 
 		if ( 'resources/read' === $message['method'] ) {
-			return 1;
+			$read_params = isset( $message['params'] ) && is_array( $message['params'] ) ? $message['params'] : array();
+			$uri         = isset( $read_params['uri'] ) && is_string( $read_params['uri'] ) ? $read_params['uri'] : '';
+			return $this->resource_read_max_inner_dispatches( $uri );
 		}
 
 		if ( 'tools/call' !== $message['method'] ) {
