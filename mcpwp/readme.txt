@@ -157,6 +157,14 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 
 == Changelog ==
 
+= 3.14.4 =
+* feat: **mcp:** core tool profile + mcpwp_find_tools/mcpwp_call ([#1014](https://github.com/Mumega-com/mcpwp/issues/1014))
+* feat: **mcp:** resource templates (page/brand/memory/guide) + real prompt recipes ([#1015](https://github.com/Mumega-com/mcpwp/issues/1015))
+* feat: **mcp:** tool input examples + next-step hints in tools/call results ([#1012](https://github.com/Mumega-com/mcpwp/issues/1012))
+* fix: **auth:** gate site-category REST routes to the site tool category ([#1013](https://github.com/Mumega-com/mcpwp/issues/1013))
+* fix: **graph:** price /batch and wp_batch graph sub-requests at their graph weight ([#1011](https://github.com/Mumega-com/mcpwp/issues/1011))
+* fix: **mcp:** harden tools/call name validation and next-step hint visibility ([#1019](https://github.com/Mumega-com/mcpwp/issues/1019))
+
 = 3.14.3 =
 * feat: **graph:** read tools and mcpwp://graph resource ([#943](https://github.com/Mumega-com/mcpwp/issues/943) S2) ([#1006](https://github.com/Mumega-com/mcpwp/issues/1006))
 * feat: **graph:** site graph storage and incremental builder ([#943](https://github.com/Mumega-com/mcpwp/issues/943) S1) ([#993](https://github.com/Mumega-com/mcpwp/issues/993))
