@@ -652,6 +652,17 @@ Every tool also carries a top-level `title` and `readOnlyHint`/`destructiveHint`
 `mcpwp/includes/mcp/class-mcpwp-mcp-tool-annotations.php` and the generated audit table at
 `mcpwp/docs/mcp-tool-annotations.md`.
 
+Protocol version is negotiated per the spec (#906): `initialize` echoes a supported
+`protocolVersion` (`2024-11-05`, `2025-03-26`, `2025-06-18`, `2025-11-25`) and answers the latest for
+anything else; later requests follow their `MCP-Protocol-Version` header (none = latest — the npm
+proxy never relays its handshake). Under `2025-06-18`+ tools carry top-level `title`, and tools with a
+stable result shape (`wp_site_info`, `wp_list_pages`, `wp_list_posts`, `wp_get_page_by_slug`) declare an
+`outputSchema` and return `structuredContent` beside a compact-JSON text block. Older versions get
+neither (`annotations.title` stays). Declare a schema via `define_tool()`'s 4th argument; it is
+wrapped by `Mcpwp_MCP_Tool_Registry::with_error_envelope()` so the #936 `structuredContent.error`
+still validates, and `McpProtocolVersionTest` fails until the new schema is validated against a real
+result.
+
 ## SEO Market Data (DataForSEO)
 
 Two data classes, deliberately in separate stores:

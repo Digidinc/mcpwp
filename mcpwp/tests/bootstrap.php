@@ -4021,3 +4021,33 @@ if (! function_exists('wp_get_attachment_image_src')) {
         return array( 'https://example.test/media/' . (int) $attachment_id . '.jpg', 100, 100, false );
     }
 }
+
+// Site-info surface (#906): lets Mcpwp_Core::get_site_info() — the real
+// wp_site_info result — run in-process so its declared outputSchema is
+// validated against what the code actually produces.
+if (! function_exists('wp_get_theme')) {
+    function wp_get_theme()
+    {
+        return new class {
+            public function get($header)
+            {
+                $headers = array( 'Name' => 'Twenty Twenty-Five', 'Version' => '1.2' );
+                return isset($headers[ $header ]) ? $headers[ $header ] : '';
+            }
+        };
+    }
+}
+
+if (! function_exists('wp_timezone_string')) {
+    function wp_timezone_string()
+    {
+        return 'UTC';
+    }
+}
+
+if (! function_exists('get_locale')) {
+    function get_locale()
+    {
+        return 'en_US';
+    }
+}
