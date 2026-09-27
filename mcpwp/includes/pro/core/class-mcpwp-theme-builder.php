@@ -844,15 +844,14 @@ class Mcpwp_Theme_Builder {
 			// separately above via $conditions_error and never reaches here;
 			// only an outright crash in Elementor Pro's own conditions code
 			// would. Either way this must not leave a broken template live:
-			// force delete, published or still a draft.
+			// force delete, published or still a draft. #952:
+			// elementor_pro_theme_builder_conditions cleanup happens via
+			// handle_before_delete_post(), hooked on before_delete_post —
+			// it fires for this wp_delete_post() call too, covering the
+			// case where assign_to_location() already wrote this template
+			// into the conditions cache before the throw above (which can
+			// land after that write, e.g. in get_cache()->regenerate()).
 			wp_delete_post( $template_id, true );
-
-			// #952: a crash straight out of Elementor Pro's conditions code
-			// can land here AFTER assign_to_location() already wrote this
-			// template into elementor_pro_theme_builder_conditions — the
-			// throw happens later, e.g. in get_cache()->regenerate(). The
-			// force delete above must not leave that binding behind.
-			$this->cleanup_after_template_delete( $template_id );
 
 			return new WP_Error(
 				'theme_template_save_failed',
@@ -1010,28 +1009,79 @@ class Mcpwp_Theme_Builder {
 	}
 
 	/**
+	 * Fires just before ANY post is permanently deleted — WordPress's own
+	 * `before_delete_post` action, not a route this plugin owns. #952
+	 * (adversarial review WARN-1): MCPWP's generic `/posts/{id}` route
+	 * (`Mcpwp_Posts::delete_post()`) and `/content/{post_type}/{id}`
+	 * (`Mcpwp_REST_Content::delete_content()`) both accept `elementor_library`
+	 * as a valid post type and call `wp_delete_post()` directly, with no
+	 * cleanup of their own — and neither does wp-admin's own post-delete
+	 * screen, WP-CLI, or any other plugin. One hook here, fired by
+	 * `wp_delete_post()` itself, covers every one of those at once instead
+	 * of a cleanup call scattered across each route that happens to know
+	 * about `elementor_library` today.
+	 *
+	 * @param int          $post_id Post ID being deleted.
+	 * @param WP_Post|null $post    The post object, when WordPress supplies
+	 *                              one (added to this action in WP 5.5).
+	 * @return void
+	 */
+	public function handle_before_delete_post( $post_id, $post = null ) {
+		$post = $post ? $post : get_post( $post_id );
+
+		if ( ! $post || 'elementor_library' !== $post->post_type ) {
+			return;
+		}
+
+		$this->cleanup_after_template_delete( $post_id );
+	}
+
+	/**
 	 * Remove a deleted template's ID from Elementor Pro's real conditions
 	 * cache/option (#952) — trash or force delete alike, since Elementor
 	 * never does this itself: `wp_delete_post()` does not touch
 	 * `elementor_pro_theme_builder_conditions`, and nothing else runs
-	 * afterward that would.
+	 * afterward that would. (Elementor Pro's own Conditions_Manager DOES
+	 * self-clean on `wp_trash_post` — see `handle_before_delete_post()`'s
+	 * docblock for why that never actually fires for us here.)
 	 *
 	 * Delegates the actual removal to Elementor Pro's own purpose-built
 	 * Conditions_Manager::purge_post_from_cache() rather than re-deriving
 	 * the option's shape here a second time: a hand-rolled removal that
 	 * disagreed with Elementor's real internal shape (or a future Elementor
 	 * Pro release that changes it) would silently do nothing, which is a
-	 * worse failure than doing nothing loudly. Falls back to a full
-	 * get_cache()->regenerate() rebuild — slower, but always correct,
-	 * because it re-queries every condition-bearing template fresh and the
-	 * one just deleted is gone — for an Elementor Pro build old enough not
-	 * to have the targeted method.
+	 * worse failure than doing nothing loudly.
 	 *
-	 * Callers: Mcpwp_Elementor_Pro::delete_template() (trash and force),
-	 * Mcpwp_REST_Content::delete_content() when post_type is
-	 * elementor_library, and this class's own create_theme_template()
-	 * rollback (assign_to_location() can register a template in the cache
-	 * before a later step in that same method throws).
+	 * Two hazards found in adversarial review (WARN-2) that a naive call to
+	 * purge_post_from_cache() would hit:
+	 *
+	 * 1. Conditions_Manager (and its Conditions_Cache) is a per-request
+	 *    singleton, loaded from the option once at construction. If
+	 *    anything earlier in THIS SAME request already called
+	 *    regenerate() — Elementor's own save_conditions() does, and
+	 *    set_template_conditions() calls it again explicitly — and that
+	 *    call threw partway through its rebuild, the singleton's in-memory
+	 *    state now holds only whatever it had rebuilt before the crash,
+	 *    while the option on disk is untouched (regenerate() never reached
+	 *    its own save()). purge_post_from_cache() would persist that
+	 *    truncated in-memory state, wiping every OTHER template's real
+	 *    binding, not just the one being deleted. Refreshing the cache
+	 *    from the option immediately before purging discards any such
+	 *    staleness — the fix is to trust the option, not this request's
+	 *    possibly-corrupted copy of it.
+	 * 2. The natural-looking fallback for an Elementor Pro build old
+	 *    enough not to have purge_post_from_cache() is
+	 *    get_cache()->regenerate() — but its rebuild query matches only
+	 *    public statuses, so it would silently drop every draft or
+	 *    scheduled template's binding too, not just remove the one
+	 *    template actually being deleted. The fallback instead removes
+	 *    this one template directly from the stored option — same real
+	 *    shape, no Elementor object involved, so there is nothing to leave
+	 *    stale.
+	 *
+	 * Callers: handle_before_delete_post() above, wired to WordPress's
+	 * before_delete_post — see that method's docblock for every path that
+	 * reaches this through it.
 	 *
 	 * @param int $template_id Template ID.
 	 * @return bool True if the template was actually removed (and the
@@ -1047,9 +1097,23 @@ class Mcpwp_Theme_Builder {
 			$conditions_manager = \ElementorPro\Modules\ThemeBuilder\Module::instance()->get_conditions_manager();
 
 			if ( method_exists( $conditions_manager, 'purge_post_from_cache' ) ) {
+				// WARN-2 hazard 1: never purge without first proving this
+				// singleton's in-memory cache actually matches the option —
+				// a regenerate() elsewhere in this request may have thrown
+				// partway through and left it holding less than what is
+				// really on disk.
+				if ( method_exists( $conditions_manager, 'get_cache' ) ) {
+					$cache = $conditions_manager->get_cache();
+					if ( is_object( $cache ) && method_exists( $cache, 'refresh' ) ) {
+						$cache->refresh();
+					}
+				}
+
 				$conditions_manager->purge_post_from_cache( $template_id );
 			} else {
-				$conditions_manager->get_cache()->regenerate();
+				// WARN-2 hazard 2: regenerate() is not a safe substitute —
+				// see docblock above.
+				$this->remove_template_from_stored_conditions_option( $template_id );
 			}
 
 			$this->drop_empty_condition_locations();
@@ -1062,6 +1126,36 @@ class Mcpwp_Theme_Builder {
 		}
 
 		return true;
+	}
+
+	/**
+	 * Targeted removal of one template directly against the stored option,
+	 * bypassing Elementor Pro's Conditions_Cache object entirely (#952
+	 * WARN-2's fallback path) — used only when purge_post_from_cache() is
+	 * not available on the installed Elementor Pro build.
+	 *
+	 * @param int $template_id Template ID.
+	 * @return void
+	 */
+	private function remove_template_from_stored_conditions_option( $template_id ) {
+		$all_conditions = get_option( 'elementor_pro_theme_builder_conditions', array() );
+		if ( ! is_array( $all_conditions ) ) {
+			return;
+		}
+
+		$template_id = absint( $template_id );
+		$changed     = false;
+
+		foreach ( $all_conditions as $location => $templates_by_id ) {
+			if ( is_array( $templates_by_id ) && array_key_exists( $template_id, $templates_by_id ) ) {
+				unset( $all_conditions[ $location ][ $template_id ] );
+				$changed = true;
+			}
+		}
+
+		if ( $changed ) {
+			update_option( 'elementor_pro_theme_builder_conditions', $all_conditions );
+		}
 	}
 
 	/**

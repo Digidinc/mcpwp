@@ -143,6 +143,11 @@ namespace ElementorPro\Modules\ThemeBuilder {
 	 */
 	class Mcpwp_Fake_Conditions_Manager {
 
+		/**
+		 * @var Mcpwp_Fake_Conditions_Cache
+		 */
+		private $cache;
+
 		public function get_document_conditions( $document ) {
 			return array();
 		}
@@ -153,26 +158,35 @@ namespace ElementorPro\Modules\ThemeBuilder {
 		 * [condition_strings] } }`, verified against
 		 * ElementorPro\Modules\ThemeBuilder\Classes\Conditions_Cache on a
 		 * real install — hardcoded to the 'header' location, the only one
-		 * these tests need. Lets a #952 rollback test prove a template was
-		 * genuinely registered in the cache before a later step crashes,
-		 * without needing a real Theme_Document::get_location().
+		 * these tests need. Mirrors the real method: writes through THIS
+		 * request's shared cache instance (get_cache()), not straight to
+		 * the option, so a later regenerate()/purge on that same instance
+		 * sees it — the exact staleness this fix's WARN-2 hardening exists
+		 * for.
 		 */
 		public function save_conditions( $template_id, $conditions ) {
-			$all = get_option( 'elementor_pro_theme_builder_conditions', array() );
-			$all['header'][ (int) $template_id ] = array_map(
-				function ( $condition ) {
-					return is_array( $condition ) ? rtrim( implode( '/', $condition ), '/' ) : (string) $condition;
-				},
-				$conditions
-			);
-			update_option( 'elementor_pro_theme_builder_conditions', $all );
+			$this->get_cache()->add(
+				'header',
+				$template_id,
+				array_map(
+					function ( $condition ) {
+						return is_array( $condition ) ? rtrim( implode( '/', $condition ), '/' ) : (string) $condition;
+					},
+					$conditions
+				)
+			)->save();
 		}
 
 		/**
 		 * #952 coverage: mirrors Elementor Pro's real
-		 * Conditions_Manager::purge_post_from_cache() — a targeted removal
-		 * of one template, not a full rebuild — so a test can assert the
-		 * option's actual content changed, not only that a spy was called.
+		 * Conditions_Manager::purge_post_from_cache() exactly —
+		 * `$this->cache->remove($post_id)->save()` on THIS request's one
+		 * shared Cache instance. Deliberately does NOT refresh from the
+		 * option itself (real Elementor Pro doesn't either): that is
+		 * exactly the hazard WARN-2 found, and this double exists so a
+		 * test can prove Mcpwp_Theme_Builder::cleanup_after_template_delete()
+		 * refreshes the cache itself before calling this, not rely on this
+		 * method to be safe on its own.
 		 */
 		public function purge_post_from_cache( $post_id ) {
 			if ( ! empty( $GLOBALS['mcpwp_theme_test_purge_throws'] ) ) {
@@ -183,39 +197,103 @@ namespace ElementorPro\Modules\ThemeBuilder {
 
 			$GLOBALS['mcpwp_theme_test_cache_purge_calls'] = ( $GLOBALS['mcpwp_theme_test_cache_purge_calls'] ?? 0 ) + 1;
 
-			$all     = get_option( 'elementor_pro_theme_builder_conditions', array() );
-			$post_id = absint( $post_id );
-
-			foreach ( $all as $location => $templates ) {
-				if ( is_array( $templates ) && array_key_exists( $post_id, $templates ) ) {
-					unset( $all[ $location ][ $post_id ] );
-				}
-			}
-
-			update_option( 'elementor_pro_theme_builder_conditions', $all );
+			$this->get_cache()->remove( $post_id )->save();
 		}
 
+		/**
+		 * Real Elementor Pro constructs exactly one Conditions_Cache in its
+		 * own constructor and returns that same instance from every
+		 * get_cache() call for the life of the request — never a fresh one.
+		 * Modelling that (lazily, since these tests build the Manager
+		 * before touching the option) is what makes the WARN-2 staleness
+		 * scenario reproducible at all: without a shared instance, nothing
+		 * here could ever go stale.
+		 */
 		public function get_cache() {
-			return new Mcpwp_Fake_Conditions_Cache();
+			if ( null === $this->cache ) {
+				$this->cache = new Mcpwp_Fake_Conditions_Cache();
+			}
+
+			return $this->cache;
 		}
 	}
 
 	/**
-	 * #952 coverage: spies on how many times a full cache rebuild ran — the
-	 * fallback path for an Elementor Pro build old enough not to have
-	 * purge_post_from_cache().
+	 * #952 coverage: mirrors Elementor Pro's real Conditions_Cache — an
+	 * in-memory `$conditions` array loaded from the option once at
+	 * construction (real shape), only ever written back to the option by
+	 * an explicit save(), and only ever re-synced with the option by an
+	 * explicit refresh() or regenerate(). This statefulness is the point:
+	 * WARN-2's hazard is a stale IN-MEMORY copy getting saved over a
+	 * fresher on-disk one, which a stateless fake could never reproduce.
 	 */
 	class Mcpwp_Fake_Conditions_Cache {
 
+		private $conditions;
+
+		public function __construct() {
+			$this->refresh();
+		}
+
+		public function add( $location, $template_id, array $conditions ) {
+			$this->conditions[ $location ][ (int) $template_id ] = $conditions;
+
+			return $this;
+		}
+
+		public function remove( $post_id ) {
+			$post_id = absint( $post_id );
+
+			foreach ( $this->conditions as $location => $templates ) {
+				if ( is_array( $templates ) && array_key_exists( $post_id, $templates ) ) {
+					unset( $this->conditions[ $location ][ $post_id ] );
+				}
+			}
+
+			return $this;
+		}
+
+		public function save() {
+			return update_option( 'elementor_pro_theme_builder_conditions', $this->conditions );
+		}
+
+		/**
+		 * Re-reads the option into this instance's in-memory state,
+		 * discarding whatever it held before. This is the operation #952's
+		 * WARN-2 fix calls before every purge_post_from_cache(), and the
+		 * one thing this whole fixture exists to prove is actually called.
+		 */
+		public function refresh() {
+			$this->conditions = get_option( 'elementor_pro_theme_builder_conditions', array() );
+
+			return $this;
+		}
+
+		public function clear() {
+			$this->conditions = array();
+
+			return $this;
+		}
+
+		/**
+		 * Mirrors the real regenerate(): clear the in-memory state first,
+		 * THEN rebuild it from a (here, simulated) query, then save(). A
+		 * crash anywhere in that rebuild — modelled here as happening
+		 * immediately after clear(), the worst case — leaves $conditions
+		 * empty in memory while the option on disk is untouched (save()
+		 * is never reached), exactly the staleness WARN-2 found.
+		 */
 		public function regenerate() {
+			$this->clear();
+
 			if ( ! empty( $GLOBALS['mcpwp_theme_test_regenerate_throws'] ) ) {
-				// #952 rollback coverage: set_template_conditions() calls
-				// this explicitly right after save_conditions() already
-				// registered the template in the (real-shaped) cache above.
 				throw new \RuntimeException( 'conditions cache regenerate failed (test double)' );
 			}
 
 			$GLOBALS['mcpwp_theme_test_cache_regenerate_calls'] = ( $GLOBALS['mcpwp_theme_test_cache_regenerate_calls'] ?? 0 ) + 1;
+			$this->save();
+
+			return $this;
 		}
 	}
 
