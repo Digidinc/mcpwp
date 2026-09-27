@@ -360,6 +360,7 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/mcp/traits/trait-mcpwp-free-tools-blocks.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/mcp/traits/trait-mcpwp-free-tools-ops.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/mcp/traits/trait-mcpwp-free-tools-ai-presence.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/mcp/traits/trait-mcpwp-free-tools-graph.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/mcp/class-mcpwp-mcp-free-tools.php';
 	// Pro-tool category trait groups (mixed into Mcpwp_MCP_Pro_Tools — G2 split).
 	require_once MCPWP_PLUGIN_DIR . 'includes/mcp/traits/trait-mcpwp-pro-tools-seo.php';
@@ -401,6 +402,8 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-site-network.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-site-cache.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-content-graph.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-graph-reader.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-graph.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-seo-audit.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-seo-market.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-ai-presence.php';

@@ -347,6 +347,7 @@ wp-ai-operator/mcpwp/
 │   │   ├── class-mcpwp-figma.php               # Figma API wrapper
 │   │   ├── class-mcpwp-screenshot.php          # Page screenshot
 │   │   ├── class-mcpwp-search-performance.php  # Search Console import storage
+│   │   ├── class-mcpwp-graph-reader.php        # Site graph read surface: visibility chokepoint, filters, cursors
 │   │   ├── class-mcpwp-woocommerce-seo.php     # WooCommerce SEO report
 │   │   ├── class-mcpwp-keyword-research.php    # Keyword research
 │   │   ├── class-mcpwp-white-label.php         # White-label config
@@ -370,6 +371,7 @@ wp-ai-operator/mcpwp/
 │   │   ├── class-mcpwp-rest-seo-audit.php      # /seo/* — audit, issues, autofix
 │   │   ├── class-mcpwp-rest-signals.php        # /signals — site health signals
 │   │   ├── class-mcpwp-rest-content-graph.php  # /content-graph, /suggest-links
+│   │   ├── class-mcpwp-rest-graph.php          # /graph, /graph/node|neighbors|query, /graph/rebuild (#943)
 │   │   ├── class-mcpwp-rest-content-quality.php# /seo/content-quality
 │   │   ├── class-mcpwp-rest-approvals.php      # /approvals — full approval lifecycle
 │   │   ├── class-mcpwp-rest-webhooks.php       # /webhooks, /events
@@ -549,6 +551,24 @@ All endpoints require `X-API-Key` header. Namespace: `mcpwp/v1`.
 MCP prompt `seo-loop` walks an agent through `wp_seo_flags` end to end: read the six flags, judge
 them, fix before write through approvals/drafts, kill bad keywords, link best pages to stuck ones,
 measure with `wp_import_search_performance`, and record decisions with `wp_remember`.
+
+### Site Graph (#943)
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/graph` | GET | Summary, also the `mcpwp://graph` MCP resource: node counts by kind, edge counts by type, signal sources, orphan total plus the top 10, and `graph_status`. Hard-capped under 2k tokens |
+| `/graph/node` | GET | `wp_graph_node`: one node (`node_key` or `post_id`), edge counts by type, latest signals, and a 28-day trend |
+| `/graph/neighbors` | GET | `wp_graph_neighbors`: edges and neighbor nodes, `direction` out/in/both, `depth` 1-2 (capped at 200 nodes), `limit` ≤100, `cursor` |
+| `/graph/query` | GET | `wp_graph_query`: allowlisted filters (`orphan`, `min_inbound`/`max_inbound`, `has_metric`, `metric{name,source,op,value,window_days}`, `no_edge_type`, `modified_before`, `word_count_lt`), `order_by` label/modified/inbound/metric, `limit` ≤200, `cursor` |
+| `/graph/rebuild` | POST | Restart the backfill from the first post (admin scope) |
+
+All three tools are Free and read scope. `Mcpwp_Graph_Reader` is the single visibility chokepoint.
+A read-scope key sees published content only. Visibility follows the **live** `wp_posts` row, not
+the node's stored status, and edges touching a hidden node are omitted rather than redacted.
+Password-protected posts expose no word count or content links. An invalid filter value is a 400
+`invalid_filter`, never a silently dropped filter. Cursors are HMAC-signed and bound to their query.
+Every response carries `graph_status` (ready, coverage, built_at, backfill, dirty_count).
+Real-MySQL checks live in `mcpwp/tests/rig/` (see `graph-read-surface-rig.php` and
+`graph-read-surface-http.sh`).
 
 ### AI Presence & Crawlers
 | Endpoint | Method | Purpose |

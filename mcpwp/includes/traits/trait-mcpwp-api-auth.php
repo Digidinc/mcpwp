@@ -1905,6 +1905,11 @@ trait Mcpwp_Api_Auth {
 			// pings an external endpoint with arbitrary caller-supplied URLs.
 			// Admin scope only; /indexnow/status stays read.
 			'/mcpwp/v1/indexnow',
+			// Site graph (#943 S2): /graph/rebuild reschedules a full
+			// backfill pass over every covered post — a real, if bounded,
+			// cost the owner should control. Every other /graph/* route is
+			// GET-only and stays at the read default.
+			'/mcpwp/v1/graph/rebuild',
 		);
 
 		foreach ( $admin_write_routes as $admin_write_route ) {

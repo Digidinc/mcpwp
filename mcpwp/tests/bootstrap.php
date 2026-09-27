@@ -1462,6 +1462,10 @@ if (! function_exists('mcpwp_test_split_value_tuples')) {
     }
 }
 
+if (! defined('MCPWP_TEST_WPDB_PASS')) {
+    define('MCPWP_TEST_WPDB_PASS', '__mcpwp_test_wpdb_pass__');
+}
+
 if (! isset($GLOBALS['wpdb'])) {
     class Mcpwp_Test_WPDB
     {
@@ -1512,6 +1516,16 @@ if (! isset($GLOBALS['wpdb'])) {
         }
         public function get_results($query = '', $output = ARRAY_A)
         {
+            // Test-scoped interceptor (#943 S2 graph read surface): a test may
+            // install a callable that sees every query and either answers it
+            // (any value other than MCPWP_TEST_WPDB_PASS) or lets it fall
+            // through to this double's own handling.
+            if (isset($GLOBALS['mcpwp_test_wpdb_intercept']) && is_callable($GLOBALS['mcpwp_test_wpdb_intercept'])) {
+                $answer = call_user_func($GLOBALS['mcpwp_test_wpdb_intercept'], 'get_results', (string) $query, $output);
+                if (MCPWP_TEST_WPDB_PASS !== $answer) {
+                    return $answer;
+                }
+            }
             // Site graph batched link resolver (#943 S1 review, BLOCK-4
             // perf / BLOCK-2 correctness): resolve_hrefs_for_post()'s ONE
             // query for every ?p=/?page_id= id and every same-host path's
@@ -1575,6 +1589,16 @@ if (! isset($GLOBALS['wpdb'])) {
         }
         public function get_row($query = '', $output = OBJECT, $y = 0)
         {
+            // Test-scoped interceptor (#943 S2 graph read surface): a test may
+            // install a callable that sees every query and either answers it
+            // (any value other than MCPWP_TEST_WPDB_PASS) or lets it fall
+            // through to this double's own handling.
+            if (isset($GLOBALS['mcpwp_test_wpdb_intercept']) && is_callable($GLOBALS['mcpwp_test_wpdb_intercept'])) {
+                $answer = call_user_func($GLOBALS['mcpwp_test_wpdb_intercept'], 'get_row', (string) $query, $output);
+                if (MCPWP_TEST_WPDB_PASS !== $answer) {
+                    return $answer;
+                }
+            }
             // Site graph (#943 S1): the hash-skip check that decides whether
             // rebuild_post_node() has anything to do.
             if (preg_match("/^SELECT content_hash, props FROM \\S*mcpwp_graph_nodes WHERE node_key = '((?:[^'\\\\]|\\\\.)*)'$/", trim((string) $query), $m)) {
@@ -1633,6 +1657,16 @@ if (! isset($GLOBALS['wpdb'])) {
         }
         public function get_var($query = '', $x = 0, $y = 0)
         {
+            // Test-scoped interceptor (#943 S2 graph read surface): a test may
+            // install a callable that sees every query and either answers it
+            // (any value other than MCPWP_TEST_WPDB_PASS) or lets it fall
+            // through to this double's own handling.
+            if (isset($GLOBALS['mcpwp_test_wpdb_intercept']) && is_callable($GLOBALS['mcpwp_test_wpdb_intercept'])) {
+                $answer = call_user_func($GLOBALS['mcpwp_test_wpdb_intercept'], 'get_var', (string) $query, null);
+                if (MCPWP_TEST_WPDB_PASS !== $answer) {
+                    return $answer;
+                }
+            }
             // Site graph (#943 S1 review): read_node_hash() — the single
             // change-hash comparison BLOCK-1 collapsed the old two-field
             // check into.
@@ -1676,6 +1710,16 @@ if (! isset($GLOBALS['wpdb'])) {
         }
         public function get_col($query = '', $x = 0)
         {
+            // Test-scoped interceptor (#943 S2 graph read surface): a test may
+            // install a callable that sees every query and either answers it
+            // (any value other than MCPWP_TEST_WPDB_PASS) or lets it fall
+            // through to this double's own handling.
+            if (isset($GLOBALS['mcpwp_test_wpdb_intercept']) && is_callable($GLOBALS['mcpwp_test_wpdb_intercept'])) {
+                $answer = call_user_func($GLOBALS['mcpwp_test_wpdb_intercept'], 'get_col', (string) $query, null);
+                if (MCPWP_TEST_WPDB_PASS !== $answer) {
+                    return $answer;
+                }
+            }
 
             // requeue_dependents_before_delete() (BLOCK-2): every source of
             // an inbound links_to edge, and every parent_of child.
@@ -2169,6 +2213,7 @@ if (! class_exists('WP_Post')) {
         public $post_parent       = 0;
         public $menu_order        = 0;
         public $post_author       = 0;
+        public $post_password     = '';
 
         public function __construct(array $data = array())
         {
@@ -3727,6 +3772,7 @@ require_once dirname(__DIR__) . '/includes/mcp/traits/trait-mcpwp-free-tools-ele
 require_once dirname(__DIR__) . '/includes/mcp/traits/trait-mcpwp-free-tools-blocks.php';
 require_once dirname(__DIR__) . '/includes/mcp/traits/trait-mcpwp-free-tools-ops.php';
 require_once dirname(__DIR__) . '/includes/mcp/traits/trait-mcpwp-free-tools-ai-presence.php';
+require_once dirname(__DIR__) . '/includes/mcp/traits/trait-mcpwp-free-tools-graph.php';
 require_once dirname(__DIR__) . '/includes/mcp/class-mcpwp-mcp-free-tools.php';
 require_once dirname(__DIR__) . '/includes/mcp/traits/trait-mcpwp-pro-tools-seo.php';
 require_once dirname(__DIR__) . '/includes/mcp/traits/trait-mcpwp-pro-tools-forms.php';
@@ -3762,6 +3808,7 @@ require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-stored-tre
 // exercising them (build_content_graph_data() and friends) has a real target.
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-graph-builder.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-graph-signals.php';
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-graph-reader.php';
 // The one reader of an Elementor experiment's active/inactive state (#883) —
 // loaded before the writer trait and class-mcpwp-core.php, both of which
 // call it.

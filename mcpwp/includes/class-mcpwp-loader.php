@@ -293,6 +293,12 @@ class Mcpwp_Loader {
 		$content_graph_controller = new Mcpwp_REST_Content_Graph();
 		$content_graph_controller->register_routes();
 
+		// Site graph read surface (#943 S2)
+		if ( class_exists( 'Mcpwp_REST_Graph' ) ) {
+			$graph_controller = new Mcpwp_REST_Graph();
+			$graph_controller->register_routes();
+		}
+
 		// SEO audit
 		$seo_audit_controller = new Mcpwp_REST_SEO_Audit();
 		$seo_audit_controller->register_routes();

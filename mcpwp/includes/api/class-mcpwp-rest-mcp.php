@@ -1760,6 +1760,18 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				'description' => 'Elementor version and layout mode (section or container/flexbox). Always read before writing Elementor data.',
 				'mimeType'    => 'application/json',
 			),
+			array(
+				'key'         => 'graph',
+				'route'       => '/mcpwp/v1/graph',
+				'query'       => array(),
+				'name'        => 'Site Graph Summary',
+				// #943 S2: read as mcpwp://graph. Counts, signal sources, top
+				// orphans and freshness for first contact, hard-capped under a
+				// 2k-token budget (Mcpwp_Graph_Reader::RESOURCE_MAX_BYTES) and
+				// filtered by the caller's visibility like the graph tools.
+				'description' => 'Site graph summary: node counts by kind, edge counts by type, signal sources with their latest period_end, the published orphan count plus the 10 most recently modified orphans (no inbound link from a published post), and graph_status freshness (coverage, built_at, backfill, dirty_count). Drill in with wp_graph_query, wp_graph_node and wp_graph_neighbors.',
+				'mimeType'    => 'application/json',
+			),
 		);
 	}
 

@@ -532,7 +532,7 @@ class Mcpwp_Graph_Builder {
 	/**
 	 * @return string
 	 */
-	private static function queue_table() {
+	public static function queue_table() {
 		global $wpdb;
 		return $wpdb->prefix . 'mcpwp_graph_queue';
 	}
@@ -2374,7 +2374,7 @@ class Mcpwp_Graph_Builder {
 	/**
 	 * @return string
 	 */
-	private static function nodes_table() {
+	public static function nodes_table() {
 		global $wpdb;
 		return $wpdb->prefix . 'mcpwp_graph_nodes';
 	}
@@ -2382,9 +2382,47 @@ class Mcpwp_Graph_Builder {
 	/**
 	 * @return string
 	 */
-	private static function edges_table() {
+	public static function edges_table() {
 		global $wpdb;
 		return $wpdb->prefix . 'mcpwp_graph_edges';
+	}
+
+	/**
+	 * @return string
+	 */
+	public static function signals_table() {
+		global $wpdb;
+		return $wpdb->prefix . 'mcpwp_graph_signals';
+	}
+
+	/**
+	 * Public entry point to run_suppressed() for the read surface (#943 S2):
+	 * every read query goes through the SAME "never surface a raw DB error"
+	 * guarantee the write path already has (W6), rather than the read
+	 * surface growing its own, second copy of that suppression/log-once
+	 * logic.
+	 *
+	 * @param callable $fn Closure making exactly one $wpdb call.
+	 * @return mixed The closure's return value.
+	 */
+	public static function run_suppressed_query( callable $fn ) {
+		return self::run_suppressed( $fn );
+	}
+
+	/**
+	 * POST /graph/rebuild (admin scope): reschedule the backfill from
+	 * scratch. Does NOT drop existing nodes/edges — a full re-walk simply
+	 * re-upserts every covered post through the same content_hash-skips-
+	 * unchanged path a normal backfill already uses, so this is safe to
+	 * call on a live, populated graph (e.g. after a bulk import a site
+	 * owner suspects the incremental hooks missed).
+	 *
+	 * @return void
+	 */
+	public static function force_rebuild() {
+		update_option( self::BACKFILL_STATUS_OPTION, 'pending', false );
+		update_option( self::BACKFILL_CURSOR_OPTION, 0, false );
+		self::on_upgrade_schedule_backfill();
 	}
 
 	/**

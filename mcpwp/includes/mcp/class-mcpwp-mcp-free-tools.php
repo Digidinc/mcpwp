@@ -25,6 +25,7 @@ class Mcpwp_MCP_Free_Tools extends Mcpwp_MCP_Tool_Registry {
 	use Mcpwp_Free_Tools_Blocks_Trait;
 	use Mcpwp_Free_Tools_Ops_Trait;
 	use Mcpwp_Free_Tools_AI_Presence_Trait;
+	use Mcpwp_Free_Tools_Graph_Trait;
 
 	/**
 	 * Get destructive tool names for free tier.
@@ -81,6 +82,11 @@ class Mcpwp_MCP_Free_Tools extends Mcpwp_MCP_Tool_Registry {
 			'wp_suggest_internal_links'  => 'content',
 			'wp_apply_internal_link'     => 'content',
 			'wp_validate_internal_links' => 'content',
+			// Site graph read surface (#943 S2) — same 'content' category as
+			// the other content-graph tools it sits alongside.
+			'wp_graph_node'              => 'content',
+			'wp_graph_neighbors'         => 'content',
+			'wp_graph_query'             => 'content',
 			'wp_validate_seo_readiness'  => 'seo',
 			'wp_validate_structured_data' => 'seo',
 			'wp_audit_media_seo'         => 'seo',
@@ -369,6 +375,7 @@ class Mcpwp_MCP_Free_Tools extends Mcpwp_MCP_Tool_Registry {
 			$this->get_site_health_tools(),
 			$this->get_guides_workflows_tools(),
 			$this->get_ai_presence_tools(),
+			$this->get_graph_tools(),
 		);
 	}
 
@@ -476,6 +483,18 @@ class Mcpwp_MCP_Free_Tools extends Mcpwp_MCP_Tool_Registry {
 			'wp_validate_internal_links' => array(
 				'method' => 'GET',
 				'route'  => '/content-graph/validate-links',
+			),
+			'wp_graph_node' => array(
+				'method' => 'GET',
+				'route'  => '/graph/node',
+			),
+			'wp_graph_neighbors' => array(
+				'method' => 'GET',
+				'route'  => '/graph/neighbors',
+			),
+			'wp_graph_query' => array(
+				'method' => 'GET',
+				'route'  => '/graph/query',
 			),
 			'wp_validate_seo_readiness' => array(
 				'method' => 'GET',
