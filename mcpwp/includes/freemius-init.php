@@ -299,7 +299,8 @@ if ( $mcpwp_fs_instance && method_exists( $mcpwp_fs_instance, 'add_action' ) ) {
  */
 function mcpwp_fs_uninstall_cleanup() {
 	if ( is_multisite() ) {
-		$sites = get_sites( array( 'fields' => 'ids' ) );
+		// W3: number => 0 — every site in the network, not the default-limited page.
+		$sites = get_sites( array( 'fields' => 'ids', 'number' => 0 ) );
 		foreach ( $sites as $blog_id ) {
 			switch_to_blog( $blog_id );
 			mcpwp_fs_uninstall_cleanup_site();
@@ -344,20 +345,15 @@ function mcpwp_fs_uninstall_cleanup_site() {
 	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- $wpdb->prefix is safe.
 	$wpdb->query( "DROP TABLE IF EXISTS {$wpdb->prefix}mcpwp_feedback" );
 
-	// Site graph tables (#943 S1). Deactivation keeps this data; only
-	// uninstall drops it, same as every other table above.
-	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- $wpdb->prefix is safe.
-	$wpdb->query( "DROP TABLE IF EXISTS {$wpdb->prefix}mcpwp_graph_nodes" );
-	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- $wpdb->prefix is safe.
-	$wpdb->query( "DROP TABLE IF EXISTS {$wpdb->prefix}mcpwp_graph_edges" );
-	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- $wpdb->prefix is safe.
-	$wpdb->query( "DROP TABLE IF EXISTS {$wpdb->prefix}mcpwp_graph_signals" );
-
-	// Site graph options/cron (#943 S1).
-	delete_option( 'mcpwp_graph_dirty' );
-	delete_option( 'mcpwp_graph_backfill_cursor' );
-	delete_option( 'mcpwp_graph_backfill_status' );
-	wp_clear_scheduled_hook( 'mcpwp_graph_backfill' );
-	wp_clear_scheduled_hook( 'mcpwp_graph_dirty_drain' );
-	wp_clear_scheduled_hook( 'mcpwp_graph_signals_prune' );
+	// Site graph tables/options/schedules (#943 S1 review round 2, BLOCK-1b):
+	// this is the SAME helper uninstall.php calls — the two lists cannot
+	// drift out of sync again the way they just did (this function's inline
+	// copy still had mcpwp_graph_dirty/mcpwp_graph_dirty_drain and no queue
+	// table, both stale by the time this review round landed). Called here
+	// per-site, WITHOUT its own multisite loop — mcpwp_fs_uninstall_cleanup()
+	// above already switch_to_blog()s before calling this function.
+	if ( ! class_exists( 'Mcpwp_Uninstaller' ) ) {
+		require_once __DIR__ . '/class-mcpwp-uninstaller.php';
+	}
+	Mcpwp_Uninstaller::drop_graph_data_for_current_site();
 }

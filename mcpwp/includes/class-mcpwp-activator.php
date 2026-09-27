@@ -1310,14 +1310,18 @@ class Mcpwp_Activator {
 	}
 
 	/**
-	 * Daily retry cron: try creating the graph tables again while they are
-	 * not yet confirmed present, then resume the backfill/reconcile path
-	 * once they are.
+	 * Daily retry cron (#943 S1 review round 2, N3): re-verifies the 4 graph
+	 * tables EVERY run, even when already marked ready — not only while not
+	 * yet ready. A table can disappear after being confirmed present (a
+	 * restored-from-backup DB missing one, manual surgery, a botched
+	 * migration on the host), and the previous version of this method would
+	 * never notice: it early-returned the moment `ready()` was true once,
+	 * for good. `ensure_graph_tables()` is a cheap `SHOW TABLES LIKE` per
+	 * table plus a `CREATE TABLE` for dbDelta to no-op or fill in whatever
+	 * is missing — running it daily regardless of the current flag is what
+	 * makes readiness self-healing instead of a one-shot check.
 	 */
 	public static function retry_graph_tables_cron() {
-		if ( true === (bool) get_option( 'mcpwp_graph_ready', false ) ) {
-			return;
-		}
 		self::ensure_graph_tables();
 		if ( class_exists( 'Mcpwp_Graph_Builder' ) && Mcpwp_Graph_Builder::ready() ) {
 			Mcpwp_Graph_Builder::on_upgrade_schedule_backfill();

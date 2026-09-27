@@ -1105,6 +1105,64 @@ function is_multisite()
     return ! empty($GLOBALS['mcpwp_test_is_multisite']);
 }
 
+// Site graph (#943 S1 review round 2, W2/W3): minimal multisite double —
+// switch_to_blog()/restore_current_blog() actually move $wpdb->prefix (main
+// site 'wp_', blog N 'wp_N_', matching real WordPress), so a test can assert
+// on the generated SQL which table a write actually targeted.
+if (! function_exists('get_current_blog_id')) {
+    function get_current_blog_id()
+    {
+        return (int) ($GLOBALS['mcpwp_test_current_blog_id'] ?? 1);
+    }
+}
+
+if (! function_exists('mcpwp_test_prefix_for_blog')) {
+    function mcpwp_test_prefix_for_blog($blog_id)
+    {
+        $blog_id = (int) $blog_id;
+        return 1 === $blog_id ? 'wp_' : 'wp_' . $blog_id . '_';
+    }
+}
+
+if (! function_exists('switch_to_blog')) {
+    function switch_to_blog($blog_id)
+    {
+        if (! isset($GLOBALS['mcpwp_test_blog_stack'])) {
+            $GLOBALS['mcpwp_test_blog_stack'] = array();
+        }
+        $GLOBALS['mcpwp_test_blog_stack'][] = get_current_blog_id();
+        $GLOBALS['mcpwp_test_current_blog_id'] = (int) $blog_id;
+        $GLOBALS['wpdb']->prefix = mcpwp_test_prefix_for_blog($blog_id);
+        return true;
+    }
+}
+
+if (! function_exists('restore_current_blog')) {
+    function restore_current_blog()
+    {
+        if (! isset($GLOBALS['mcpwp_test_blog_stack'])) {
+            $GLOBALS['mcpwp_test_blog_stack'] = array();
+        }
+        $prev = array_pop($GLOBALS['mcpwp_test_blog_stack']);
+        $GLOBALS['mcpwp_test_current_blog_id'] = null === $prev ? 1 : (int) $prev;
+        $GLOBALS['wpdb']->prefix = mcpwp_test_prefix_for_blog($GLOBALS['mcpwp_test_current_blog_id']);
+        return true;
+    }
+}
+
+if (! function_exists('get_sites')) {
+    function get_sites($args = array())
+    {
+        $ids = $GLOBALS['mcpwp_test_sites'] ?? array(1);
+        if (isset($args['fields']) && 'ids' === $args['fields']) {
+            return array_values(array_map('intval', $ids));
+        }
+        return array_map(function ($id) {
+            return (object) array('blog_id' => $id);
+        }, $ids);
+    }
+}
+
 if (! function_exists('is_super_admin')) {
     // Core grants unfiltered_html to super admins only on multisite, so the
     // Custom Code refusal in #873 turns on this answer. Default false: the
@@ -1455,11 +1513,14 @@ if (! isset($GLOBALS['wpdb'])) {
         public function get_results($query = '', $output = ARRAY_A)
         {
             // Site graph batched link resolver (#943 S1 review, BLOCK-4
-            // perf): resolve_hrefs_for_post()'s ONE query for every ?p=/
-            // ?page_id= id and every same-host path slug on a post, instead
-            // of one query per link.
+            // perf / BLOCK-2 correctness): resolve_hrefs_for_post()'s ONE
+            // query for every ?p=/?page_id= id and every same-host path's
+            // last-segment slug on a post, instead of one query per link.
+            // post_parent is fetched too (BLOCK-2 round 2) even though this
+            // double does not itself use it — get_page_by_path() (a separate
+            // stub) does the actual parent-chain verification.
             if (preg_match(
-                "/^SELECT ID, post_name, post_type FROM \\S*posts WHERE \\((.*)\\) AND post_status != 'auto-draft'$/s",
+                "/^SELECT ID, post_name, post_type, post_parent FROM \\S*posts WHERE \\((.*)\\) AND post_status != 'auto-draft'$/s",
                 trim((string) $query),
                 $m
             )) {
@@ -1482,14 +1543,32 @@ if (! isset($GLOBALS['wpdb'])) {
                     }
                     if (in_array((int) $post->ID, $ids, true) || in_array($post->post_name, $slugs, true)) {
                         $row = array(
-                            'ID'        => (string) $post->ID,
-                            'post_name' => $post->post_name,
-                            'post_type' => $post->post_type,
+                            'ID'          => (string) $post->ID,
+                            'post_name'   => $post->post_name,
+                            'post_type'   => $post->post_type,
+                            'post_parent' => (string) $post->post_parent,
                         );
                         $rows[] = ARRAY_A === $output ? $row : (object) $row;
                     }
                 }
                 return $rows;
+            }
+
+            // Site graph queue drain (#943 S1 review round 2, N4a):
+            // pop_queue_batch()'s SELECT now also reads `reason`, so a
+            // second failure can be told from a fresh one.
+            if (preg_match('/^SELECT node_key, reason FROM \S*mcpwp_graph_queue ORDER BY queued_at ASC LIMIT (\d+)$/', trim((string) $query), $m)) {
+                $rows = $GLOBALS['mcpwp_test_graph_queue'] ?? array();
+                uasort($rows, function ($a, $b) {
+                    return strcmp((string) $a['queued_at'], (string) $b['queued_at']);
+                });
+                $rows = array_slice($rows, 0, (int) $m[1], true);
+                $out  = array();
+                foreach ($rows as $node_key => $row) {
+                    $one = array('node_key' => $node_key, 'reason' => $row['reason']);
+                    $out[] = ARRAY_A === $output ? $one : (object) $one;
+                }
+                return $out;
             }
 
             return array();
@@ -1597,15 +1676,6 @@ if (! isset($GLOBALS['wpdb'])) {
         }
         public function get_col($query = '', $x = 0)
         {
-            // Site graph queue drain (#943 S1 review): pop_queue_batch()'s
-            // SELECT, oldest-queued first.
-            if (preg_match('/^SELECT node_key FROM \S*mcpwp_graph_queue ORDER BY queued_at ASC LIMIT (\d+)$/', trim((string) $query), $m)) {
-                $rows = $GLOBALS['mcpwp_test_graph_queue'] ?? array();
-                uasort($rows, function ($a, $b) {
-                    return strcmp((string) $a['queued_at'], (string) $b['queued_at']);
-                });
-                return array_slice(array_keys($rows), 0, (int) $m[1]);
-            }
 
             // requeue_dependents_before_delete() (BLOCK-2): every source of
             // an inbound links_to edge, and every parent_of child.
@@ -2513,18 +2583,48 @@ if (! function_exists('url_to_postid')) {
 }
 
 if (! function_exists('get_page_by_path')) {
+    // Site graph resolver fix (#943 S1 review round 2, BLOCK-2) depends on
+    // this WALKING THE PARENT CHAIN like the real core function does, not
+    // just matching the last segment — a stub that only checked basename()
+    // would make BLOCK-2's own regression test pass without the underlying
+    // bug actually being fixed.
     function get_page_by_path($path, $output = OBJECT, $post_type = 'page')
     {
-        $types = (array) $post_type;
-        $name  = basename(trim((string) $path, '/'));
-        foreach ($GLOBALS['_mcpwp_test_posts'] as $post) {
-            if ('publish' === $post->post_status
-                && $post->post_name === $name
-                && in_array($post->post_type, $types, true)) {
-                return $post;
-            }
+        $types    = (array) $post_type;
+        $segments = array_values(array_filter(explode('/', trim((string) $path, '/')), 'strlen'));
+        if (empty($segments)) {
+            return null;
         }
-        return null;
+
+        $parent_id = 0;
+        $found     = null;
+        foreach ($segments as $i => $slug) {
+            $slug     = sanitize_title($slug);
+            $is_last  = ($i === count($segments) - 1);
+            $found    = null;
+            foreach ($GLOBALS['_mcpwp_test_posts'] as $post) {
+                if ('publish' !== $post->post_status) {
+                    continue;
+                }
+                if ($post->post_name !== $slug) {
+                    continue;
+                }
+                if ((int) $post->post_parent !== $parent_id) {
+                    continue;
+                }
+                if ($is_last && ! in_array($post->post_type, $types, true)) {
+                    continue;
+                }
+                $found = $post;
+                break;
+            }
+            if (! $found) {
+                return null;
+            }
+            $parent_id = (int) $found->ID;
+        }
+
+        return $found;
     }
 }
 
@@ -2647,14 +2747,25 @@ if (! function_exists('get_post_types')) {
             (array) ($GLOBALS['mcpwp_test_public_post_types'] ?? array())
         )));
 
-        if (empty($args['public'])) {
-            return $all;
+        if (! empty($args['public'])) {
+            $all = array_values(array_filter($all, function ($post_type) {
+                $obj = get_post_type_object($post_type);
+                return $obj && ! empty($obj->public);
+            }));
         }
 
-        return array_values(array_filter($all, function ($post_type) {
-            $obj = get_post_type_object($post_type);
-            return $obj && ! empty($obj->public);
-        }));
+        // BLOCK-2: hierarchical_covered_post_types() needs this filter.
+        // 'page' is hierarchical by default; a test can register more via
+        // $GLOBALS['mcpwp_test_hierarchical_post_types'].
+        if (array_key_exists('hierarchical', $args)) {
+            $hierarchical = array_unique(array_merge(array('page'), (array) ($GLOBALS['mcpwp_test_hierarchical_post_types'] ?? array())));
+            $all = array_values(array_filter($all, function ($post_type) use ($args, $hierarchical) {
+                $is_hierarchical = in_array($post_type, $hierarchical, true);
+                return $args['hierarchical'] ? $is_hierarchical : ! $is_hierarchical;
+            }));
+        }
+
+        return $all;
     }
 }
 

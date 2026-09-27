@@ -6,16 +6,28 @@
  * plugin is deleted from wp-admin > Plugins, so it must be fully standalone —
  * no assumption that any MCPWP class has been loaded.
  *
- * Scope (#943 S1 review, W7): the site graph tables only — nodes, edges,
- * signals, queue — plus their options and cron schedules, for single site
- * and, on multisite, every blog in the network. The plugin's OLDER tables
- * (activity log, webhooks, webhook logs, feedback, action log) are
- * deliberately left untouched here: on a self-hosted/agency install those
- * were previously cleaned up only via the Freemius `after_uninstall` action
- * in `includes/freemius-init.php`, which is gated on `MCPWP_FREEMIUS_BUILD`
- * and therefore never runs on a Free or Agency build at all — a pre-existing
- * gap this file does not attempt to fix (tracked separately; see the issue
- * this PR files rather than silently expanding scope here).
+ * IMPORTANT (#943 S1 review round 2, BLOCK-1): core prefers a static
+ * `uninstall.php` over a plugin's `register_uninstall_hook()` callback — a
+ * plugin gets ONE OR THE OTHER, never both. Freemius registers its OWN
+ * uninstall hook internally (which is what fires `after_uninstall` ->
+ * `mcpwp_fs_uninstall_cleanup()` in `includes/freemius-init.php` — SDK
+ * cleanup, licence deactivation, uninstall reporting, and this file's own
+ * table cleanup). Shipping this file in the FREEMIUS build would silently
+ * disable ALL of that for every paying customer who uninstalls. This file
+ * therefore ships ONLY in the Free and Agency builds — `scripts/
+ * build-freemius.sh` deletes it, and `scripts/verify_freemius_no_uninstall.sh`
+ * fails the build if it is ever present in that ZIP. Free/Agency builds have
+ * no Freemius SDK loaded at all, so this static file is the only uninstall
+ * mechanism available to them.
+ *
+ * Scope: the site graph tables — nodes, edges, signals, queue — plus their
+ * options and cron/Action-Scheduler schedules, for single site and, on
+ * multisite, every blog in the network. The plugin's OLDER tables (activity
+ * log, webhooks, webhook logs, feedback, action log) are deliberately left
+ * untouched here: on a self-hosted/agency install those were previously
+ * cleaned up only via the Freemius `after_uninstall` action, which — see
+ * above — never runs on a Free or Agency build at all. That is a
+ * pre-existing gap tracked separately (#995) rather than expanded here.
  *
  * @package MCPWP
  */
@@ -24,47 +36,6 @@ if ( ! defined( 'WP_UNINSTALL_PLUGIN' ) ) {
 	exit;
 }
 
-/**
- * Drop the 4 site graph tables + their options + cron schedules for the
- * CURRENT blog (the caller has already switch_to_blog()'d when needed).
- */
-function mcpwp_uninstall_drop_graph_tables_current_blog() {
-	global $wpdb;
+require_once __DIR__ . '/includes/class-mcpwp-uninstaller.php';
 
-	foreach ( array( 'mcpwp_graph_nodes', 'mcpwp_graph_edges', 'mcpwp_graph_signals', 'mcpwp_graph_queue' ) as $suffix ) {
-		$table = $wpdb->prefix . $suffix;
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- $wpdb->prefix is safe.
-		$wpdb->query( "DROP TABLE IF EXISTS {$table}" );
-	}
-
-	foreach ( array(
-		'mcpwp_graph_ready',
-		'mcpwp_graph_backfill_status',
-		'mcpwp_graph_backfill_cursor',
-		'mcpwp_graph_built_at',
-		'mcpwp_graph_reconcile_status',
-		'mcpwp_graph_reconcile_cursor',
-	) as $option ) {
-		delete_option( $option );
-	}
-
-	foreach ( array(
-		'mcpwp_graph_worker',
-		'mcpwp_graph_backfill',
-		'mcpwp_graph_tables_retry',
-		'mcpwp_graph_signals_prune',
-	) as $hook ) {
-		wp_clear_scheduled_hook( $hook );
-	}
-}
-
-if ( is_multisite() ) {
-	$site_ids = get_sites( array( 'fields' => 'ids' ) );
-	foreach ( $site_ids as $site_id ) {
-		switch_to_blog( $site_id );
-		mcpwp_uninstall_drop_graph_tables_current_blog();
-		restore_current_blog();
-	}
-} else {
-	mcpwp_uninstall_drop_graph_tables_current_blog();
-}
+Mcpwp_Uninstaller::drop_graph_data();

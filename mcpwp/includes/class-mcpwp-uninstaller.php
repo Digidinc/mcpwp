@@ -1,0 +1,115 @@
+<?php
+/**
+ * Shared site-graph uninstall logic (#943 S1 review round 2, BLOCK-1).
+ *
+ * `uninstall.php` (WordPress core's own preferred uninstall mechanism —
+ * "core uses uninstall.php first") and `mcpwp_fs_uninstall_cleanup_site()`
+ * (Freemius's `after_uninstall` action, fired by the Freemius SDK's OWN
+ * uninstall reporting/cleanup) both need to drop the 4 graph tables and
+ * their options/schedules. Duplicating that logic in both places is how it
+ * drifts out of sync (exactly what happened here: `uninstall.php` had the
+ * queue table and the current option/hook names; `freemius-init.php` still
+ * had the old `mcpwp_graph_dirty`/`mcpwp_graph_dirty_drain` names and no
+ * queue table at all). One class, called from both.
+ *
+ * @package MCPWP
+ */
+
+if ( ! defined( 'ABSPATH' ) ) {
+	exit;
+}
+
+/**
+ * Drops the site graph's tables, options and schedules.
+ */
+class Mcpwp_Uninstaller {
+
+	/** @var array<string> Table name suffixes (without the site prefix). */
+	const GRAPH_TABLES = array(
+		'mcpwp_graph_nodes',
+		'mcpwp_graph_edges',
+		'mcpwp_graph_signals',
+		'mcpwp_graph_queue',
+	);
+
+	/** @var array<string> Options this feature owns. */
+	const GRAPH_OPTIONS = array(
+		'mcpwp_graph_ready',
+		'mcpwp_graph_backfill_status',
+		'mcpwp_graph_backfill_cursor',
+		'mcpwp_graph_built_at',
+		'mcpwp_graph_reconcile_status',
+		'mcpwp_graph_reconcile_cursor',
+	);
+
+	/** @var array<string> Cron/Action-Scheduler hooks this feature owns. */
+	const GRAPH_CRON_HOOKS = array(
+		'mcpwp_graph_worker',
+		'mcpwp_graph_backfill',
+		'mcpwp_graph_tables_retry',
+		'mcpwp_graph_signals_prune',
+	);
+
+	/**
+	 * Drop the graph tables/options/schedules for every site — the current
+	 * site on single-site, every site in the network on multisite (W3: with
+	 * `number => 0`, not the default-limited page, so a network past 100
+	 * sites is not silently left with orphaned tables past the first page).
+	 *
+	 * Call this from a context where switch_to_blog() is safe to call
+	 * (uninstall.php, an admin-triggered Freemius uninstall action) — never
+	 * from inside a request that is itself mid switch_to_blog() for an
+	 * unrelated reason, since this always ends by restoring the blog that
+	 * was current when it was called.
+	 */
+	public static function drop_graph_data() {
+		if ( is_multisite() ) {
+			$site_ids = get_sites(
+				array(
+					'fields' => 'ids',
+					'number' => 0,
+				)
+			);
+			foreach ( $site_ids as $site_id ) {
+				switch_to_blog( $site_id );
+				self::drop_graph_data_for_current_site();
+				restore_current_blog();
+			}
+			return;
+		}
+
+		self::drop_graph_data_for_current_site();
+	}
+
+	/**
+	 * Drop the graph tables/options/schedules for ONLY the current site —
+	 * no multisite looping. Use this when the caller is already inside its
+	 * own per-site loop (Freemius's `mcpwp_fs_uninstall_cleanup()`, which
+	 * switch_to_blog()s per site before calling this).
+	 */
+	public static function drop_graph_data_for_current_site() {
+		global $wpdb;
+
+		foreach ( self::GRAPH_TABLES as $suffix ) {
+			$table = $wpdb->prefix . $suffix;
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- $wpdb->prefix is safe; $suffix is a fixed class constant, never input.
+			$wpdb->query( "DROP TABLE IF EXISTS {$table}" );
+		}
+
+		foreach ( self::GRAPH_OPTIONS as $option ) {
+			delete_option( $option );
+		}
+
+		foreach ( self::GRAPH_CRON_HOOKS as $hook ) {
+			wp_clear_scheduled_hook( $hook );
+			// N4b / BLOCK-1(a): also unschedule any Action Scheduler action
+			// for this hook — wp_clear_scheduled_hook() only ever touches
+			// WP-Cron's own store, and this class's worker/backfill prefer
+			// Action Scheduler when it is present, leaving orphaned
+			// actionscheduler_actions rows behind otherwise.
+			if ( function_exists( 'as_unschedule_all_actions' ) ) {
+				as_unschedule_all_actions( $hook );
+			}
+		}
+	}
+}

@@ -94,8 +94,15 @@ class Mcpwp_Graph_Builder {
 	/** Max seconds the shutdown request-rebuild may spend. */
 	const REQUEST_REBUILD_BUDGET = 1.0;
 
-	/** Same-host href resolution falls back to url_to_postid() at most this many times per post. */
-	const URL_TO_POSTID_FALLBACK_CAP = 10;
+	/**
+	 * Same-host, non-excluded href resolution falls back to url_to_postid()
+	 * at most this many times per post (#943 S1 review round 2, BLOCK-2:
+	 * raised from 10 — the cap is now spent only on genuinely ambiguous
+	 * candidates, never on an already-excluded rewrite-base/search/external
+	 * href, so 25 covers realistically link-heavy pages without the old
+	 * risk of an excluded href silently eating the budget).
+	 */
+	const URL_TO_POSTID_FALLBACK_CAP = 25;
 
 	/** Max distinct anchor texts stored per links_to edge. */
 	const MAX_EDGE_ANCHORS = 5;
@@ -104,14 +111,24 @@ class Mcpwp_Graph_Builder {
 	const EXCLUDED_POST_TYPES = array( 'attachment', 'revision' );
 
 	/**
-	 * Node keys marked during THIS request (node_key => reason), in mark()
-	 * order. Read by on_shutdown() for the MCPWP-authenticated-request
+	 * Node keys marked during THIS request, keyed by blog ID first
+	 * (`[blog_id][node_key] => reason`), in mark() order (#943 S1 review
+	 * round 2, W2). A single flat array flushed with $wpdb->prefix read at
+	 * SHUTDOWN time — not at mark() time — mis-attributed every mark made
+	 * inside a switch_to_blog() block to whichever blog happened to be
+	 * current when shutdown ran, not the blog that was current when
+	 * mark() was called. Grouping by the blog ID captured at mark() time
+	 * lets on_shutdown() switch_to_blog() into each group before flushing
+	 * it, so a save made while switched to blog 2 lands in blog 2's own
+	 * `wp_2_mcpwp_graph_queue`, not blog 1's.
+	 *
+	 * Read by on_shutdown() for the MCPWP-authenticated-request
 	 * same-response rebuild; always populated (cheap, in-memory) regardless
 	 * of whether this request turns out to be MCPWP-authenticated, since
 	 * mark() cannot know that in advance for a hook that fires before
 	 * check_permission() on a nested/looped dispatch.
 	 *
-	 * @var array<string,string>
+	 * @var array<int,array<string,string>>
 	 */
 	private static $request_marked = array();
 
@@ -158,18 +175,10 @@ class Mcpwp_Graph_Builder {
 		return true === (bool) get_option( self::READY_OPTION, false );
 	}
 
-	/**
-	 * Daily retry: if tables still are not confirmed present, ask the
-	 * activator to try creating them again and re-verify.
-	 */
-	public static function retry_table_creation() {
-		if ( self::ready() ) {
-			return;
-		}
-		if ( class_exists( 'Mcpwp_Activator' ) && method_exists( 'Mcpwp_Activator', 'ensure_graph_tables' ) ) {
-			Mcpwp_Activator::ensure_graph_tables();
-		}
-	}
+	// The daily re-verify (N3) lives at Mcpwp_Activator::retry_graph_tables_cron(),
+	// which is what mcpwp.php actually wires to READY_RETRY_CRON_HOOK — it
+	// re-checks every run, not only while not yet ready (see that method's
+	// docblock).
 
 	// -------------------------------------------------------------------------
 	// Request-authenticated flag (for same-request rebuild)
@@ -180,8 +189,16 @@ class Mcpwp_Graph_Builder {
 	 * passes API-key auth. Every route's permission_callback is (or wraps)
 	 * check_permission(), so this fires for direct HTTP calls, /batch
 	 * sub-requests and /mcp tool dispatch alike — one chokepoint, matching
-	 * how #957's guardrails scope "is this an MCPWP-made edit" (N2: accepted
-	 * as the equivalent flag rather than depending on that unmerged branch).
+	 * how #957's guardrails scope "is this an MCPWP-made edit".
+	 *
+	 * TODO(#980): once Mcpwp_Content_Guardrails::in_context() lands, replace
+	 * this standalone flag with that one so there is a single definition of
+	 * "an MCPWP-made edit" instead of two. Until then this flag is reset the
+	 * same way that one is documented to be: at the start of every request
+	 * (reset_for_new_request(), wired on `init`) and again at `shutdown`
+	 * (on_shutdown(), after it has been read) — never carried into a next
+	 * request on a persistent process (long-lived WP-CLI script, a worker
+	 * that runs several requests without restarting PHP).
 	 */
 	public static function mark_request_authenticated() {
 		self::$in_mcpwp_request = true;
@@ -194,6 +211,16 @@ class Mcpwp_Graph_Builder {
 	 */
 	public static function is_request_authenticated() {
 		return self::$in_mcpwp_request;
+	}
+
+	/**
+	 * Reset the authenticated-request flag at the start of a new request
+	 * (wired on `init`, priority 1 — before any route's permission_callback
+	 * can run). N1: a persistent process must never carry "authenticated"
+	 * over from the request that set it into a later, different request.
+	 */
+	public static function reset_for_new_request() {
+		self::$in_mcpwp_request = false;
 	}
 
 	/**
@@ -426,9 +453,13 @@ class Mcpwp_Graph_Builder {
 	 * hard has bigger problems than one missed graph mark — the NEXT save of
 	 * that post (or the reconcile pass) still catches it.
 	 *
-	 * Uses $wpdb->prefix at flush time, so a save inside a switch_to_blog()
-	 * context marks THAT blog's own queue table (W5) — no separate
-	 * multisite branch needed.
+	 * Groups by get_current_blog_id() AT MARK TIME (#943 S1 review round 2,
+	 * W2) — not by $wpdb->prefix read later, at flush time, which is what a
+	 * previous version of this method did directly. That was wrong on
+	 * multisite: a save made inside a switch_to_blog(2) block, flushed from
+	 * a shutdown handler that (by then) may have restored to blog 1, wrote
+	 * blog 2's mark into blog 1's queue table. Grouping here and having
+	 * on_shutdown() switch_to_blog() per group before flushing fixes that.
 	 *
 	 * @param string $node_key Node key.
 	 * @param string $reason   Short reason tag (bookkeeping only).
@@ -439,14 +470,20 @@ class Mcpwp_Graph_Builder {
 			return;
 		}
 
-		if ( ! isset( self::$request_marked[ $node_key ] ) ) {
-			self::$request_marked[ $node_key ] = (string) $reason;
+		$blog_id = function_exists( 'get_current_blog_id' ) ? (int) get_current_blog_id() : 1;
+		if ( ! isset( self::$request_marked[ $blog_id ] ) ) {
+			self::$request_marked[ $blog_id ] = array();
+		}
+		if ( ! isset( self::$request_marked[ $blog_id ][ $node_key ] ) ) {
+			self::$request_marked[ $blog_id ][ $node_key ] = (string) $reason;
 		}
 	}
 
 	/**
-	 * Flush a set of {node_key => reason} marks to the queue table in as few
-	 * queries as possible, then schedule the worker once.
+	 * Flush a set of {node_key => reason} marks to the CURRENT blog's queue
+	 * table in as few queries as possible, then schedule that blog's worker.
+	 * Caller is responsible for already being switched to the right blog
+	 * (see on_shutdown()) — this function itself does not switch.
 	 *
 	 * @param array<string,string> $marks node_key => reason.
 	 */
@@ -491,27 +528,35 @@ class Mcpwp_Graph_Builder {
 	}
 
 	/**
-	 * Pop up to $limit node keys off the queue (oldest first), deleting them
-	 * as claimed. A worker-run "pop": fine for the single-consumer WP-Cron/AS
-	 * scheduling this class uses; not a distributed lock.
+	 * Pop up to $limit node keys (with their reason — N4a needs it to tell a
+	 * fresh failure from an already-retried one) off the queue (oldest
+	 * first), deleting them as claimed. A worker-run "pop": fine for the
+	 * single-consumer WP-Cron/AS scheduling this class uses; not a
+	 * distributed lock.
 	 *
 	 * @param int $limit Max rows.
-	 * @return array<string>
+	 * @return array<string,string> node_key => reason.
 	 */
 	private static function pop_queue_batch( $limit ) {
 		global $wpdb;
 		$table = self::queue_table();
 
-		$keys = self::run_suppressed(
+		$rows = self::run_suppressed(
 			function () use ( $wpdb, $table, $limit ) {
-				return $wpdb->get_col( $wpdb->prepare( "SELECT node_key FROM {$table} ORDER BY queued_at ASC LIMIT %d", (int) $limit ) );
+				return $wpdb->get_results( $wpdb->prepare( "SELECT node_key, reason FROM {$table} ORDER BY queued_at ASC LIMIT %d", (int) $limit ), ARRAY_A );
 			}
 		);
-		$keys = is_array( $keys ) ? $keys : array();
-		if ( empty( $keys ) ) {
+		$rows = is_array( $rows ) ? $rows : array();
+		if ( empty( $rows ) ) {
 			return array();
 		}
 
+		$batch = array();
+		foreach ( $rows as $row ) {
+			$batch[ (string) $row['node_key'] ] = (string) $row['reason'];
+		}
+
+		$keys         = array_keys( $batch );
 		$placeholders = implode( ',', array_fill( 0, count( $keys ), '%s' ) );
 		self::run_suppressed(
 			function () use ( $wpdb, $table, $placeholders, $keys ) {
@@ -520,7 +565,7 @@ class Mcpwp_Graph_Builder {
 			}
 		);
 
-		return $keys;
+		return $batch;
 	}
 
 	/**
@@ -609,8 +654,8 @@ class Mcpwp_Graph_Builder {
 			if ( empty( $batch ) ) {
 				break;
 			}
-			foreach ( $batch as $node_key ) {
-				self::rebuild_node_safely( $node_key );
+			foreach ( $batch as $node_key => $reason ) {
+				self::rebuild_node_safely( $node_key, $reason );
 				if ( ( microtime( true ) - $start ) >= self::WORKER_TIME_BUDGET ) {
 					break;
 				}
@@ -632,9 +677,22 @@ class Mcpwp_Graph_Builder {
 	 * (BLOCK-3's "a throwing filter doesn't stall the backfill", applied
 	 * uniformly everywhere a node gets rebuilt).
 	 *
+	 * N4a: a failure gets exactly ONE retry, not an infinite loop. A fresh
+	 * failure (any $reason other than 'retry') re-marks the node with
+	 * reason='retry' so the next worker pass (or the same one, if the
+	 * re-mark's flush is reached before this pass ends) tries again once.
+	 * A failure on a node ALREADY carrying reason='retry' is logged and
+	 * dropped for good — whatever is wrong with it is not transient.
+	 *
 	 * @param string $node_key Node key.
+	 * @param string $reason   The mark's reason, so a retry can be told from
+	 *                         a fresh failure. '' (the default) for callers
+	 *                         that never went through the queue at all —
+	 *                         backfill and the authenticated-request
+	 *                         carve-out — which still get exactly one retry
+	 *                         via mark(), same as everything else.
 	 */
-	public static function rebuild_node_safely( $node_key ) {
+	public static function rebuild_node_safely( $node_key, $reason = '' ) {
 		try {
 			self::rebuild_node( $node_key );
 		} catch ( \Throwable $e ) {
@@ -642,6 +700,14 @@ class Mcpwp_Graph_Builder {
 				// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
 				error_log( 'MCPWP graph rebuild error for ' . $node_key . ': ' . $e->getMessage() );
 			}
+			if ( 'retry' === $reason ) {
+				if ( defined( 'WP_DEBUG_LOG' ) && WP_DEBUG_LOG ) {
+					// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+					error_log( 'MCPWP graph rebuild for ' . $node_key . ' failed again on retry — giving up.' );
+				}
+				return;
+			}
+			self::mark( $node_key, 'retry' );
 		}
 	}
 
@@ -674,30 +740,57 @@ class Mcpwp_Graph_Builder {
 	 * past the limit/budget for an authenticated one) is flushed to the
 	 * queue table in one batched `INSERT IGNORE` and the worker is scheduled;
 	 * the worker handles it async.
+	 *
+	 * W2: marks are grouped by the blog ID that was current when mark() was
+	 * called, and each group is flushed AFTER switch_to_blog() into that
+	 * blog — so a save made inside a switch_to_blog(2) block lands in blog
+	 * 2's own queue table, never blog 1's (which is whatever blog happens to
+	 * be current when shutdown itself runs). The REQUEST_REBUILD_LIMIT/
+	 * BUDGET carve-out is shared across every blog group in this one
+	 * request, not per-group.
 	 */
 	public static function on_shutdown() {
 		if ( empty( self::$request_marked ) ) {
+			self::$in_mcpwp_request = false; // N1: never carried into a later request on a persistent process.
 			return;
 		}
 
-		$marks = self::$request_marked;
+		$groups = self::$request_marked;
 		self::$request_marked = array();
 
-		if ( self::$in_mcpwp_request ) {
-			$start = microtime( true );
-			self::$url_id_cache = array();
+		$start           = microtime( true );
+		$rebuilt_so_far  = 0;
+		$current_blog_id = function_exists( 'get_current_blog_id' ) ? (int) get_current_blog_id() : 1;
+		$is_multisite    = function_exists( 'is_multisite' ) && is_multisite();
 
-			$batch = array_slice( array_keys( $marks ), 0, self::REQUEST_REBUILD_LIMIT );
-			foreach ( $batch as $node_key ) {
-				if ( ( microtime( true ) - $start ) > self::REQUEST_REBUILD_BUDGET ) {
-					break;
+		foreach ( $groups as $blog_id => $marks ) {
+			$blog_id = (int) $blog_id;
+			$switched = $is_multisite && $blog_id !== $current_blog_id && function_exists( 'switch_to_blog' );
+			if ( $switched ) {
+				switch_to_blog( $blog_id );
+			}
+
+			if ( self::$in_mcpwp_request && $rebuilt_so_far < self::REQUEST_REBUILD_LIMIT ) {
+				self::$url_id_cache = array();
+				$batch = array_slice( array_keys( $marks ), 0, self::REQUEST_REBUILD_LIMIT - $rebuilt_so_far );
+				foreach ( $batch as $node_key ) {
+					if ( ( microtime( true ) - $start ) > self::REQUEST_REBUILD_BUDGET ) {
+						break;
+					}
+					self::rebuild_node_safely( $node_key, $marks[ $node_key ] );
+					unset( $marks[ $node_key ] ); // Already fully handled — no need to also queue it.
+					$rebuilt_so_far++;
 				}
-				self::rebuild_node_safely( $node_key );
-				unset( $marks[ $node_key ] ); // Already fully handled — no need to also queue it.
+			}
+
+			self::flush_marks_to_queue( $marks );
+
+			if ( $switched ) {
+				restore_current_blog();
 			}
 		}
 
-		self::flush_marks_to_queue( $marks );
+		self::$in_mcpwp_request = false; // N1: reset at shutdown, same as reset_for_new_request() does at `init`.
 	}
 
 	// -------------------------------------------------------------------------
@@ -1676,43 +1769,64 @@ class Mcpwp_Graph_Builder {
 
 	/**
 	 * BLOCK-4 perf: resolve every href on a post to a target post ID with ONE
-	 * batched query (plus, at most, URL_TO_POSTID_FALLBACK_CAP one-off
-	 * fallbacks for anything the batch could not place) — not one query per
-	 * link. Populates the per-run cache (self::$url_id_cache).
+	 * batched query for the common cases (plus, at most,
+	 * URL_TO_POSTID_FALLBACK_CAP one-off fallbacks for genuinely ambiguous
+	 * links) — not one query per link. Populates the per-run cache
+	 * (self::$url_id_cache).
+	 *
+	 * BLOCK-2 (S1 review round 2): the previous version matched a URL's LAST
+	 * path segment against ANY post_name across every post type, which gave
+	 * wrong edges whenever that slug was not unique — `/services/seo/`
+	 * resolving to an unrelated blog post named "seo" instead of the nested
+	 * page actually at that path, or `/category/news/` resolving to a post
+	 * named "news" instead of not being a post at all. Fixed by:
+	 *   - matching the FULL path for hierarchical types via get_page_by_path()
+	 *     (which walks the parent chain), not just the last segment;
+	 *   - treating known rewrite bases (category/tag base, author, feed,
+	 *     `page/<n>` pagination, a bare date archive, `?s=` search) as not a
+	 *     post at all, before ever querying;
+	 *   - sending anything still ambiguous (more than one covered-type
+	 *     candidate for a slug/path) to the url_to_postid() fallback instead
+	 *     of guessing;
+	 *   - spending that fallback only on same-host, non-excluded links.
 	 *
 	 * Resolution order per href:
-	 *   1. Not same-host -> 0 (skip).
+	 *   1. Not same-host, or a recognised rewrite-base/search path -> 0
+	 *      (definitively not a post; never spends fallback budget).
 	 *   2. Already cached (this run) -> cached value.
 	 *   3. `?p=<id>` / `?page_id=<id>` -> a direct candidate ID.
-	 *   4. Otherwise, the last path segment as a `post_name` candidate.
-	 *   Steps 3+4 are then resolved together in ONE query against
-	 *   {$wpdb->posts} (`ID IN (...) OR post_name IN (...)`).
-	 *   5. Anything still unresolved after that falls back to core's
-	 *      url_to_postid(), capped at URL_TO_POSTID_FALLBACK_CAP per call —
-	 *      a known, documented limit: a post whose real target requires full
-	 *      rewrite-rule resolution beyond a plain slug/ID match, past the
-	 *      cap, is simply not resolved (no edge), rather than costing one
-	 *      query per remaining link.
+	 *   4. A single-segment path -> a `post_name` candidate; resolved only
+	 *      when exactly one covered-type row matches.
+	 *   5. A multi-segment path -> the last segment is a candidate;
+	 *      resolved via get_page_by_path() against the FULL path when
+	 *      exactly one hierarchical-type row matches it (and that lookup
+	 *      agrees), or directly when exactly one NON-hierarchical row
+	 *      matches and no hierarchical one does (e.g. a `%category%/
+	 *      %postname%/` permalink structure).
+	 *   6. Anything still unresolved (ambiguous, or no candidate at all)
+	 *      falls back to core's url_to_postid(), capped at
+	 *      URL_TO_POSTID_FALLBACK_CAP per call, same-host/non-excluded links
+	 *      only — a documented limit past which a link is simply not
+	 *      resolved (no edge) rather than costing one query per remaining
+	 *      link.
 	 *
 	 * @param array<string> $hrefs Raw hrefs.
 	 * @return array<string,int> href => target post ID, or 0 when unresolved
-	 *                            / external / not a covered post type.
+	 *                            / external / excluded / not a covered type.
 	 */
 	private static function resolve_hrefs_for_post( array $hrefs ) {
 		global $wpdb;
 
-		$results       = array();
-		$direct_ids    = array(); // normalized => int candidate ID
-		$slug_lookup   = array(); // slug => [normalized, ...]
-		$candidate_href = array(); // normalized => one representative raw href
+		$results          = array();
+		$direct_ids       = array(); // normalized => int candidate ID
+		$simple_slugs     = array(); // slug => [normalized, ...]                 (single path segment)
+		$nested_paths     = array(); // normalized => {path, last_slug}          (2+ path segments)
+		$candidate_href   = array(); // normalized => one representative raw href
+		$fallback_eligible = array(); // normalized => true — only genuine ambiguity/no-match, never an exclusion
 
 		foreach ( $hrefs as $href ) {
 			$href = trim( (string) $href );
-			if ( '' === $href ) {
-				$results[ $href ] = 0;
-				continue;
-			}
-			if ( ! self::is_same_host_href( $href ) ) {
+			if ( '' === $href || ! self::is_same_host_href( $href ) ) {
 				$results[ $href ] = 0;
 				continue;
 			}
@@ -1733,6 +1847,14 @@ class Mcpwp_Graph_Builder {
 				parse_str( (string) $parts['query'], $query );
 			}
 
+			// A search query is never a post, whatever the path.
+			if ( isset( $query['s'] ) ) {
+				self::$url_id_cache[ $normalized ] = 0;
+				$results[ $href ] = 0;
+				unset( $candidate_href[ $normalized ] );
+				continue;
+			}
+
 			if ( ! empty( $query['p'] ) && is_numeric( $query['p'] ) ) {
 				$direct_ids[ $normalized ] = (int) $query['p'];
 				continue;
@@ -1743,24 +1865,48 @@ class Mcpwp_Graph_Builder {
 			}
 
 			$path = isset( $parts['path'] ) ? trim( (string) $parts['path'], '/' ) : '';
-			if ( '' === $path ) {
+			if ( '' === $path || self::is_excluded_rewrite_path( $path ) ) {
+				self::$url_id_cache[ $normalized ] = 0;
 				$results[ $href ] = 0;
 				unset( $candidate_href[ $normalized ] );
 				continue;
 			}
-			$segments = explode( '/', $path );
-			$slug     = sanitize_title( (string) end( $segments ) );
-			if ( '' === $slug ) {
+
+			$segments = array_values( array_filter( explode( '/', $path ), 'strlen' ) );
+			if ( empty( $segments ) ) {
+				self::$url_id_cache[ $normalized ] = 0;
 				$results[ $href ] = 0;
 				unset( $candidate_href[ $normalized ] );
 				continue;
 			}
-			$slug_lookup[ $slug ][] = $normalized;
+
+			$last_slug = sanitize_title( (string) end( $segments ) );
+			if ( '' === $last_slug ) {
+				self::$url_id_cache[ $normalized ] = 0;
+				$results[ $href ] = 0;
+				unset( $candidate_href[ $normalized ] );
+				continue;
+			}
+
+			if ( 1 === count( $segments ) ) {
+				$simple_slugs[ $last_slug ][] = $normalized;
+			} else {
+				$nested_paths[ $normalized ] = array(
+					'path'      => $path,
+					'last_slug' => $last_slug,
+				);
+			}
 		}
 
-		// One batched query for every direct ID + every slug candidate.
+		// One batched query for every direct ID + every last-segment slug
+		// needed (single-segment candidates AND the coarse candidate filter
+		// for nested paths — the parent-chain check for those happens after,
+		// only for slugs this query actually found a hierarchical match for).
 		$id_list = array_values( array_unique( array_map( 'intval', $direct_ids ) ) );
-		$slugs   = array_keys( $slug_lookup );
+		$slugs   = array_values( array_unique( array_merge( array_keys( $simple_slugs ), wp_list_pluck( $nested_paths, 'last_slug' ) ) ) );
+
+		$by_id   = array();
+		$by_slug = array();
 
 		if ( ! empty( $id_list ) || ! empty( $slugs ) ) {
 			$where = array();
@@ -1778,7 +1924,7 @@ class Mcpwp_Graph_Builder {
 			}
 
 			// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- $sql built with placeholders only, prepared below.
-			$sql = "SELECT ID, post_name, post_type FROM {$wpdb->posts} WHERE (" . implode( ' OR ', $where ) . ") AND post_status != 'auto-draft'";
+			$sql = "SELECT ID, post_name, post_type, post_parent FROM {$wpdb->posts} WHERE (" . implode( ' OR ', $where ) . ") AND post_status != 'auto-draft'";
 
 			$rows = self::run_suppressed(
 				function () use ( $wpdb, $sql, $args ) {
@@ -1786,56 +1932,188 @@ class Mcpwp_Graph_Builder {
 				}
 			);
 
-			$by_id   = array();
-			$by_slug = array();
 			foreach ( (array) $rows as $row ) {
-				$by_id[ (int) $row['ID'] ]           = $row;
-				$by_slug[ $row['post_name'] ][]       = $row;
+				$by_id[ (int) $row['ID'] ]     = $row;
+				$by_slug[ $row['post_name'] ][] = $row;
 			}
+		}
 
-			foreach ( $direct_ids as $normalized => $id ) {
-				$row      = $by_id[ $id ] ?? null;
-				$resolved = ( $row && self::is_covered_post_type( $row['post_type'] ) ) ? $id : 0;
-				self::$url_id_cache[ $normalized ] = $resolved;
+		foreach ( $direct_ids as $normalized => $id ) {
+			$row      = $by_id[ $id ] ?? null;
+			$resolved = ( $row && self::is_covered_post_type( $row['post_type'] ) ) ? $id : 0;
+			self::$url_id_cache[ $normalized ] = $resolved;
+			$results[ $candidate_href[ $normalized ] ] = $resolved;
+		}
+
+		// Single-segment paths: resolve ONLY when exactly one covered-type
+		// row shares that slug. More than one -> genuinely ambiguous ->
+		// fallback; that is precisely BLOCK-2's bug when left unresolved.
+		foreach ( $simple_slugs as $slug => $normalized_keys ) {
+			$matches = array_values( array_filter( $by_slug[ $slug ] ?? array(), array( __CLASS__, 'is_covered_post_type_row' ) ) );
+			$resolved = 1 === count( $matches ) ? (int) $matches[0]['ID'] : 0;
+
+			foreach ( $normalized_keys as $normalized ) {
 				$results[ $candidate_href[ $normalized ] ] = $resolved;
-			}
-
-			foreach ( $slug_lookup as $slug => $normalized_keys ) {
-				$matches  = $by_slug[ $slug ] ?? array();
-				$resolved = 0;
-				foreach ( $matches as $row ) {
-					if ( self::is_covered_post_type( $row['post_type'] ) ) {
-						$resolved = (int) $row['ID'];
-						break;
-					}
-				}
-				foreach ( $normalized_keys as $normalized ) {
+				if ( 0 === $resolved ) {
+					$fallback_eligible[ $normalized ] = true;
+				} else {
 					self::$url_id_cache[ $normalized ] = $resolved;
-					$results[ $candidate_href[ $normalized ] ] = $resolved;
 				}
 			}
 		}
 
-		// Fallback: url_to_postid() for anything still unresolved, capped.
-		$fallback_used = 0;
-		foreach ( $results as $href => $id ) {
-			if ( 0 !== $id ) {
-				continue;
+		// Multi-segment paths: prefer a hierarchical-type match verified
+		// against the FULL path (parent chain), falling back to a single
+		// unambiguous non-hierarchical match (e.g. %category%/%postname%/).
+		$hierarchical_types = self::hierarchical_covered_post_types();
+		foreach ( $nested_paths as $normalized => $info ) {
+			$matches              = $by_slug[ $info['last_slug'] ] ?? array();
+			$hierarchical_matches = array();
+			$other_matches        = array();
+			foreach ( $matches as $row ) {
+				if ( ! self::is_covered_post_type_row( $row ) ) {
+					continue;
+				}
+				if ( ! empty( $hierarchical_types ) && in_array( $row['post_type'], $hierarchical_types, true ) ) {
+					$hierarchical_matches[] = $row;
+				} else {
+					$other_matches[] = $row;
+				}
 			}
+
+			$resolved = 0;
+			if ( 1 === count( $hierarchical_matches ) ) {
+				$page = get_page_by_path( $info['path'], OBJECT, $hierarchical_types );
+				if ( $page && (int) $page->ID === (int) $hierarchical_matches[0]['ID'] ) {
+					$resolved = (int) $page->ID;
+				}
+			} elseif ( empty( $hierarchical_matches ) && 1 === count( $other_matches ) ) {
+				$resolved = (int) $other_matches[0]['ID'];
+			}
+
+			$results[ $candidate_href[ $normalized ] ] = $resolved;
+			if ( 0 === $resolved ) {
+				$fallback_eligible[ $normalized ] = true;
+			} else {
+				self::$url_id_cache[ $normalized ] = $resolved;
+			}
+		}
+
+		// Fallback: url_to_postid(), spent ONLY on links that reached a
+		// genuine slug/path candidate and still could not be resolved
+		// unambiguously — never on an external link or one already
+		// classified as a rewrite base/search (those were resolved to 0,
+		// cached, and never marked fallback_eligible above).
+		$fallback_used = 0;
+		foreach ( $fallback_eligible as $normalized => $true ) {
 			if ( $fallback_used >= self::URL_TO_POSTID_FALLBACK_CAP ) {
 				break;
 			}
 			$fallback_used++;
 
+			$href        = $candidate_href[ $normalized ];
 			$absolute    = wp_http_validate_url( $href ) ? $href : home_url( $href );
 			$fallback_id = (int) url_to_postid( $absolute );
 			if ( $fallback_id ) {
 				$results[ $href ] = $fallback_id;
-				self::$url_id_cache[ self::normalize_internal_graph_url( $absolute ) ] = $fallback_id;
+				self::$url_id_cache[ $normalized ] = $fallback_id;
 			}
 		}
 
 		return $results;
+	}
+
+	/**
+	 * @param array $row {..., post_type} as returned by the batched resolver query.
+	 * @return bool
+	 */
+	private static function is_covered_post_type_row( $row ) {
+		return self::is_covered_post_type( $row['post_type'] );
+	}
+
+	/**
+	 * Hierarchical, covered post types (normally just 'page') — the set
+	 * get_page_by_path() is restricted to when verifying a multi-segment
+	 * candidate's full path.
+	 *
+	 * @return array<string>
+	 */
+	private static function hierarchical_covered_post_types() {
+		$all = function_exists( 'get_post_types' )
+			? array_values( get_post_types( array( 'hierarchical' => true, 'public' => true ) ) )
+			: array( 'page' );
+
+		return array_values( array_filter( $all, array( __CLASS__, 'is_covered_post_type' ) ) );
+	}
+
+	/**
+	 * Whether $path (already trimmed of leading/trailing slashes) is a known
+	 * rewrite base rather than a post permalink — category/tag archive base,
+	 * author archive, feed, `page/<n>` pagination, or a bare date archive
+	 * (BLOCK-2). Attachments are not path-detectable this way (their default
+	 * permalink is indistinguishable in shape from a nested page's), so they
+	 * are excluded instead by post_type filtering on the query result, same
+	 * as every other non-covered type.
+	 *
+	 * A known, documented limitation: a site with fully custom rewrite rules
+	 * (a "search" base other than the literal string checked here, etc.)
+	 * may not have every one of its non-post paths caught by this function —
+	 * those fall through to the url_to_postid() fallback instead, which is
+	 * exactly the safety net this function exists to reduce reliance on, not
+	 * eliminate.
+	 *
+	 * @param string $path Trimmed path (no leading/trailing slash).
+	 * @return bool
+	 */
+	private static function is_excluded_rewrite_path( $path ) {
+		if ( preg_match( '#(^|/)page/\d+$#', $path ) ) {
+			return true; // Pagination.
+		}
+		if ( preg_match( '#^\d{4}(/\d{1,2}(/\d{1,2})?)?$#', $path ) ) {
+			return true; // Date archive: the WHOLE path is just numeric segments.
+		}
+
+		$segments = explode( '/', $path );
+		$first    = $segments[0];
+		$last     = end( $segments );
+
+		$category_base = trim( (string) get_option( 'category_base' ), '/' );
+		if ( '' === $category_base ) {
+			$category_base = 'category';
+		}
+		if ( $first === $category_base ) {
+			return true;
+		}
+
+		$tag_base = trim( (string) get_option( 'tag_base' ), '/' );
+		if ( '' === $tag_base ) {
+			$tag_base = 'tag';
+		}
+		if ( $first === $tag_base ) {
+			return true;
+		}
+
+		global $wp_rewrite;
+
+		$author_base = ( isset( $wp_rewrite ) && is_object( $wp_rewrite ) && ! empty( $wp_rewrite->author_base ) )
+			? trim( (string) $wp_rewrite->author_base, '/' )
+			: 'author';
+		if ( $first === $author_base ) {
+			return true;
+		}
+
+		$feed_base = ( isset( $wp_rewrite ) && is_object( $wp_rewrite ) && ! empty( $wp_rewrite->feed_base ) )
+			? trim( (string) $wp_rewrite->feed_base, '/' )
+			: 'feed';
+		if ( $first === $feed_base || $last === $feed_base ) {
+			return true;
+		}
+
+		if ( 'search' === $first ) {
+			return true; // A common custom search-results rewrite base.
+		}
+
+		return false;
 	}
 
 	/**
@@ -2421,6 +2699,11 @@ class Mcpwp_Graph_Builder {
 
 		if ( count( $ids ) < self::RECONCILE_BATCH_SIZE ) {
 			update_option( self::RECONCILE_STATUS_OPTION, 'done', false );
+			// W1: refresh the watermark a FUTURE reconcile's "modified since"
+			// query reads. Without this, every later reactivation re-scans
+			// everything modified since the ORIGINAL backfill forever, doing
+			// increasingly redundant work as a site ages.
+			update_option( self::BUILT_AT_OPTION, current_time( 'mysql' ), false );
 			return;
 		}
 

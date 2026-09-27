@@ -28,12 +28,20 @@ final class GraphBuilderTest extends TestCase
             'mcpwp_test_graph_edges',
             'mcpwp_test_graph_queue',
             'mcpwp_test_public_post_types',
+            'mcpwp_test_hierarchical_post_types',
             'mcpwp_test_actions',
+            'mcpwp_test_is_multisite',
+            'mcpwp_test_sites',
+            'mcpwp_test_blog_stack',
+            'mcpwp_test_current_blog_id',
+            'mcpwp_test_url_to_postid',
         ) as $global) {
             $this->saved[ $global ] = $GLOBALS[ $global ] ?? array();
             $GLOBALS[ $global ]     = array();
         }
         unset($GLOBALS['mcpwp_test_throw_for_post_id']);
+        $GLOBALS['mcpwp_test_current_blog_id'] = 1;
+        $GLOBALS['wpdb']->prefix = 'wp_';
         Mcpwp_Graph_Builder::reset_request_state();
         // Every hook handler no-ops unless the tables are confirmed present.
         // Matches a healthy site; readiness-guard-off is its own test below.
@@ -46,6 +54,7 @@ final class GraphBuilderTest extends TestCase
             $GLOBALS[ $global ] = $value;
         }
         unset($GLOBALS['mcpwp_test_throw_for_post_id']);
+        $GLOBALS['wpdb']->prefix = 'wp_';
         Mcpwp_Graph_Builder::reset_request_state();
     }
 
@@ -749,5 +758,243 @@ final class GraphBuilderTest extends TestCase
         Mcpwp_Graph_Builder::run_worker_batch();
         Mcpwp_Graph_Builder::on_shutdown();
         $this->assertSame($expected_new_hash, $GLOBALS['mcpwp_test_graph_nodes']['post:211']['content_hash']);
+    }
+
+    // ---------------------------------------------------------------------
+    // W1: reconcile/backfill completion refreshes BUILT_AT_OPTION.
+    // ---------------------------------------------------------------------
+
+    public function test_reconcile_completion_refreshes_built_at(): void
+    {
+        update_option(Mcpwp_Graph_Builder::BUILT_AT_OPTION, '2020-01-01 00:00:00', false);
+        $this->post(300);
+
+        update_option(Mcpwp_Graph_Builder::RECONCILE_STATUS_OPTION, 'pending', false);
+        update_option(Mcpwp_Graph_Builder::RECONCILE_CURSOR_OPTION, 0, false);
+
+        Mcpwp_Graph_Builder::run_worker_batch();
+
+        $this->assertSame('done', get_option(Mcpwp_Graph_Builder::RECONCILE_STATUS_OPTION, ''));
+        $this->assertNotSame('2020-01-01 00:00:00', get_option(Mcpwp_Graph_Builder::BUILT_AT_OPTION, ''), 'A completed reconcile must refresh the watermark, not leave the original backfill timestamp forever.');
+    }
+
+    // ---------------------------------------------------------------------
+    // W1: activation (not just a version-bump upgrade) triggers reconcile.
+    // ---------------------------------------------------------------------
+
+    public function test_on_upgrade_schedule_backfill_reconciles_when_backfill_already_done(): void
+    {
+        // on_upgrade_schedule_backfill() is exactly what mcpwp_activate()
+        // now calls directly (#943 S1 review round 2, W1) — a plain
+        // deactivate/reactivate on an unchanged version used to never reach
+        // this at all, since the OLD wiring only ran it from the
+        // mcpwp_db_version version-compare branch.
+        update_option(Mcpwp_Graph_Builder::BACKFILL_STATUS_OPTION, 'done', false);
+        update_option(Mcpwp_Graph_Builder::BUILT_AT_OPTION, '2020-01-01 00:00:00', false);
+        $this->post(301, array('post_modified_gmt' => '2026-06-01 00:00:00'));
+
+        Mcpwp_Graph_Builder::on_upgrade_schedule_backfill();
+        Mcpwp_Graph_Builder::on_shutdown();
+
+        $this->assertArrayHasKey('post:301', $GLOBALS['mcpwp_test_graph_queue']);
+    }
+
+    // ---------------------------------------------------------------------
+    // W2: the mark buffer is grouped by blog ID, and on_shutdown() flushes
+    // each group into THAT blog's own queue table.
+    // ---------------------------------------------------------------------
+
+    public function test_mark_on_a_switched_blog_flushes_into_that_blogs_queue_table(): void
+    {
+        $GLOBALS['mcpwp_test_is_multisite'] = true;
+
+        Mcpwp_Graph_Builder::mark('post:1', 'edit'); // marked while "on" blog 1
+
+        switch_to_blog(2);
+        Mcpwp_Graph_Builder::mark('post:1', 'edit'); // same node_key, but blog 2's OWN post:1
+        restore_current_blog();
+
+        $this->assertSame(1, get_current_blog_id(), 'Sanity: back on the original blog before shutdown.');
+
+        Mcpwp_Graph_Builder::on_shutdown();
+
+        $queries = implode("\n", $GLOBALS['wpdb']->queries);
+        $this->assertStringContainsString('wp_mcpwp_graph_queue', $queries, 'Blog 1s mark must flush through the UNPREFIXED table.');
+        $this->assertStringContainsString('wp_2_mcpwp_graph_queue', $queries, "Blog 2's mark must flush through ITS OWN table, not blog 1's.");
+
+        // on_shutdown() must have restored blog 1 as current when it finished.
+        $this->assertSame(1, get_current_blog_id());
+        $this->assertSame('wp_', $GLOBALS['wpdb']->prefix);
+    }
+
+    public function test_mark_without_multisite_never_switches_blogs(): void
+    {
+        $GLOBALS['mcpwp_test_is_multisite'] = false;
+        $this->post(400);
+        Mcpwp_Graph_Builder::mark('post:400', 'edit');
+
+        Mcpwp_Graph_Builder::on_shutdown();
+
+        $this->assertArrayHasKey('post:400', $GLOBALS['mcpwp_test_graph_queue']);
+        $this->assertSame(1, get_current_blog_id());
+    }
+
+    // ---------------------------------------------------------------------
+    // N1: the authenticated-request flag resets at the start of a request
+    // (reset_for_new_request(), wired on `init`) and at `shutdown`.
+    // ---------------------------------------------------------------------
+
+    public function test_authenticated_flag_resets_for_a_new_request(): void
+    {
+        Mcpwp_Graph_Builder::mark_request_authenticated();
+        $this->assertTrue(Mcpwp_Graph_Builder::is_request_authenticated());
+
+        Mcpwp_Graph_Builder::reset_for_new_request();
+
+        $this->assertFalse(Mcpwp_Graph_Builder::is_request_authenticated());
+    }
+
+    public function test_authenticated_flag_resets_at_shutdown(): void
+    {
+        $this->post(401);
+        Mcpwp_Graph_Builder::mark_request_authenticated();
+        Mcpwp_Graph_Builder::mark('post:401', 'edit');
+
+        Mcpwp_Graph_Builder::on_shutdown();
+
+        $this->assertFalse(Mcpwp_Graph_Builder::is_request_authenticated());
+    }
+
+    // ---------------------------------------------------------------------
+    // N4a: a throwing rebuild gets exactly one retry, then gives up.
+    // ---------------------------------------------------------------------
+
+    public function test_a_fresh_failure_is_requeued_once_with_reason_retry(): void
+    {
+        $GLOBALS['mcpwp_test_throw_for_post_id'] = 500;
+
+        Mcpwp_Graph_Builder::rebuild_node_safely('post:500', '');
+        Mcpwp_Graph_Builder::on_shutdown(); // flush the re-mark mark() made.
+
+        $this->assertArrayHasKey('post:500', $GLOBALS['mcpwp_test_graph_queue']);
+        $this->assertSame('retry', $GLOBALS['mcpwp_test_graph_queue']['post:500']['reason']);
+    }
+
+    public function test_a_second_failure_on_a_retry_gives_up_without_requeuing(): void
+    {
+        $GLOBALS['mcpwp_test_throw_for_post_id'] = 501;
+
+        Mcpwp_Graph_Builder::rebuild_node_safely('post:501', 'retry');
+        Mcpwp_Graph_Builder::on_shutdown();
+
+        $this->assertSame(array(), $GLOBALS['mcpwp_test_graph_queue'], 'A retry that fails again must not be requeued a third time.');
+    }
+
+    public function test_worker_threads_reason_through_to_rebuild_node_safely(): void
+    {
+        $GLOBALS['mcpwp_test_throw_for_post_id'] = 502;
+        $GLOBALS['mcpwp_test_graph_queue']['post:502'] = array('reason' => 'retry', 'queued_at' => '2026-01-01 00:00:01');
+
+        Mcpwp_Graph_Builder::run_worker_batch();
+
+        // The worker popped it WITH reason='retry', so a throw there must
+        // NOT be requeued again — proves pop_queue_batch()'s reason travels
+        // all the way to rebuild_node_safely() via run_worker_batch().
+        $this->assertSame(array(), $GLOBALS['mcpwp_test_graph_queue']);
+    }
+
+    // ---------------------------------------------------------------------
+    // BLOCK-2: the batched resolver matches the FULL path for hierarchical
+    // types, treats rewrite bases as not-a-post, and sends ambiguity to the
+    // url_to_postid() fallback.
+    // ---------------------------------------------------------------------
+
+    public function test_nested_page_resolves_correctly_even_when_a_post_shares_its_slug(): void
+    {
+        // The exact BLOCK-2 repro: /services/seo/ must resolve to the nested
+        // PAGE at that path, never to the unrelated blog POST named "seo".
+        $this->post(600, array('post_type' => 'page', 'post_name' => 'services', 'post_parent' => 0));
+        $this->post(601, array('post_type' => 'page', 'post_name' => 'seo', 'post_parent' => 600));
+        $this->post(602, array('post_type' => 'post', 'post_name' => 'seo', 'post_parent' => 0));
+
+        $source = $this->post(603, array(
+            'post_content' => '<a href="https://example.com/services/seo/">SEO services</a>',
+        ));
+
+        $this->assertSame(array(601), Mcpwp_Graph_Builder::extract_post_link_targets($source));
+    }
+
+    public function test_category_archive_link_is_not_a_post(): void
+    {
+        $this->post(610, array('post_type' => 'post', 'post_name' => 'news')); // shares the archive's slug
+        $source = $this->post(611, array(
+            'post_content' => '<a href="https://example.com/category/news/">News category</a>',
+        ));
+
+        // Must NOT resolve to post 610 just because "news" matches its slug.
+        $this->assertSame(array(), Mcpwp_Graph_Builder::extract_post_link_targets($source));
+    }
+
+    public function test_custom_category_base_is_also_excluded(): void
+    {
+        $GLOBALS['mcpwp_test_options']['category_base'] = 'topics';
+        $this->post(612, array('post_type' => 'post', 'post_name' => 'launch'));
+        $source = $this->post(613, array(
+            'post_content' => '<a href="https://example.com/topics/launch/">Launch topic</a>',
+        ));
+
+        $this->assertSame(array(), Mcpwp_Graph_Builder::extract_post_link_targets($source));
+    }
+
+    public function test_tag_author_feed_and_pagination_paths_are_not_posts(): void
+    {
+        $source = $this->post(614, array(
+            'post_content' => '<a href="https://example.com/tag/news/">tag</a> '
+                . '<a href="https://example.com/author/admin/">author</a> '
+                . '<a href="https://example.com/feed/">feed</a> '
+                . '<a href="https://example.com/page/2/">pagination</a> '
+                . '<a href="https://example.com/2026/">date archive</a> '
+                . '<a href="https://example.com/?s=hello">search</a>',
+        ));
+
+        $this->assertSame(array(), Mcpwp_Graph_Builder::extract_post_link_targets($source));
+    }
+
+    public function test_ambiguous_slug_across_types_falls_back_to_url_to_postid(): void
+    {
+        // Two DIFFERENT covered-type posts share the same single-segment
+        // slug — genuinely ambiguous from post_name alone. url_to_postid()
+        // (which this test's stub resolves via its own registered rewrite
+        // rule simulation) is the fallback, not a guess.
+        $this->post(620, array('post_type' => 'post', 'post_name' => 'launch'));
+        $GLOBALS['mcpwp_test_public_post_types'][] = 'sm_team';
+        $this->post(621, array('post_type' => 'sm_team', 'post_name' => 'launch'));
+
+        $GLOBALS['mcpwp_test_url_to_postid'] = array(
+            'https://example.com/launch/' => 621,
+        );
+
+        $source = $this->post(622, array(
+            'post_content' => '<a href="https://example.com/launch/">Launch</a>',
+        ));
+
+        $this->assertSame(array(621), Mcpwp_Graph_Builder::extract_post_link_targets($source));
+    }
+
+    public function test_post_id_permalink_resolves_through_the_fallback(): void
+    {
+        // A /%post_id%/ custom permalink structure: the path IS the numeric
+        // ID, which is not a slug this resolver's batched query can match
+        // by post_name at all — url_to_postid() is the only way to resolve it.
+        $this->post(630);
+        $GLOBALS['mcpwp_test_url_to_postid'] = array(
+            'https://example.com/630/' => 630,
+        );
+
+        $source = $this->post(631, array(
+            'post_content' => '<a href="https://example.com/630/">Direct ID link</a>',
+        ));
+
+        $this->assertSame(array(630), Mcpwp_Graph_Builder::extract_post_link_targets($source));
     }
 }

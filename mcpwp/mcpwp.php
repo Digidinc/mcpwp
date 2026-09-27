@@ -234,6 +234,7 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-i18n.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-activator.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-deactivator.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-uninstaller.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-rate-limiter.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-operation-weights.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-spend-budget.php';
@@ -656,6 +657,17 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	// are not confirmed present, so registering these unconditionally is safe
 	// on a site where table creation failed.
 	if ( class_exists( 'Mcpwp_Graph_Builder' ) ) {
+		// N1: reset the authenticated-request flag at the START of every
+		// request too (on_shutdown() already resets it at the end) — a
+		// persistent process serving several requests without restarting PHP
+		// (a long WP-CLI script, certain worker setups) must never carry
+		// "authenticated" from the request that set it into a later,
+		// unrelated one. Priority 1: before any route's permission_callback
+		// (which is what sets the flag) can possibly run.
+		// TODO(#980): replace with Mcpwp_Content_Guardrails::in_context()
+		// once that lands, so there is one definition of "an MCPWP-made
+		// edit" instead of two.
+		add_action( 'init', array( 'Mcpwp_Graph_Builder', 'reset_for_new_request' ), 1 );
 		add_action( 'save_post', array( 'Mcpwp_Graph_Builder', 'on_save_post' ), 10, 2 );
 		add_action( 'deleted_post', array( 'Mcpwp_Graph_Builder', 'on_deleted_post' ), 10, 1 );
 		add_action( 'untrashed_post', array( 'Mcpwp_Graph_Builder', 'on_untrashed_post' ), 10, 1 );
@@ -733,12 +745,22 @@ if ( ! function_exists( 'mcpwp_activate' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-activator.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-encryption.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-migrate.php';
+	// #943 S1 review round 2, W1: the mcpwp_db_version compare in
+	// plugins_loaded only calls on_upgrade_schedule_backfill() when the
+	// version actually changed — a plain deactivate/reactivate on an
+	// unchanged version never enters that branch, so the graph's own
+	// reconcile-after-reactivation (W8) would never get a chance to run.
+	// Called directly from the real activation hook here instead, so it
+	// fires on every activation, version bump or not.
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-graph-builder.php';
 
 	if ( $network_wide && function_exists( 'is_multisite' ) && is_multisite() ) {
-		$sites = get_sites( array( 'fields' => 'ids' ) );
+		// W3: number => 0 — every site in the network, not a default-limited page.
+		$sites = get_sites( array( 'fields' => 'ids', 'number' => 0 ) );
 		foreach ( $sites as $blog_id ) {
 			switch_to_blog( $blog_id );
 			Mcpwp_Activator::activate();
+			Mcpwp_Graph_Builder::on_upgrade_schedule_backfill();
 			try {
 				Mcpwp_Migrate::run();
 			} catch ( \Throwable $e ) {
@@ -756,6 +778,7 @@ if ( ! function_exists( 'mcpwp_activate' ) ) {
 		}
 	} else {
 		Mcpwp_Activator::activate();
+		Mcpwp_Graph_Builder::on_upgrade_schedule_backfill();
 		try {
 			Mcpwp_Migrate::run();
 		} catch ( \Throwable $e ) {
@@ -790,9 +813,11 @@ if ( ! function_exists( 'mcpwp_on_new_site' ) ) {
 	}
 
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-activator.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-graph-builder.php';
 
 	switch_to_blog( $new_site->blog_id );
 	Mcpwp_Activator::activate();
+	Mcpwp_Graph_Builder::on_upgrade_schedule_backfill();
 	restore_current_blog();
 	}
 }
