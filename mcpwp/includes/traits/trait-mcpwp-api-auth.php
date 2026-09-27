@@ -541,6 +541,46 @@ trait Mcpwp_Api_Auth {
 	}
 
 	/**
+	 * Discovery routes that stay permanently ungated in get_category_for_route(),
+	 * regardless of a key's role or the site-wide category toggle (#1007 owner
+	 * decision, 2026-09-27).
+	 *
+	 * Before #1007, EVERY route dispatched by a 'site'-category tool (64 of
+	 * them — menus, options, memory, site-blueprints, custom-css, ...) resolved
+	 * to '' here, so none of them were reachable by role or by the site-wide
+	 * toggle. #1007 maps those 64 to 'site' in get_route_category_map(); this
+	 * allowlist is the deliberately narrow exception that survives that change
+	 * — every key, of any role, and even while the site administrator has
+	 * disabled the 'site' category outright, must still be able to make first
+	 * contact with a site:
+	 *
+	 *  - '/site-info' — capabilities probe every client calls before anything
+	 *    else (KeyCategoryRestrictionAuthPlaneTest, BridgeAuthTest pin this for
+	 *    author/editor keys, including migrated 2.8 spai_ keys).
+	 *  - '/onboard'   — the first-connection briefing; an agent cannot follow
+	 *    it to a specific tool's category without having read it first.
+	 *  - '/introspect' — the machine-readable API description; same
+	 *    chicken-and-egg problem as /onboard.
+	 *
+	 * The MCP JSON-RPC handshake (initialize, tools/list, ping, and
+	 * notifications/*) needs no entry here: none of those methods dispatch
+	 * through a REST route at all (Mcpwp_REST_MCP::process_single_request()
+	 * answers them directly), so this classifier never sees them in the first
+	 * place. tools/call is deliberately NOT exempt — it is gated per tool via
+	 * tool_category_for()/resolve_key_tool_categories() in
+	 * Mcpwp_REST_MCP::handle_tools_call(), independent of this route map.
+	 *
+	 * A method, not a trait class constant: this plugin still supports PHP
+	 * 7.4 (readme.txt "Requires PHP"), and constants inside a trait are a
+	 * PHP 8.1 addition — declaring one here would fail to parse on 7.4/8.0.
+	 *
+	 * @return string[]
+	 */
+	protected static function get_discovery_allowlist_routes() {
+		return array( '/site-info', '/onboard', '/introspect' );
+	}
+
+	/**
 	 * Map a REST route to the tool-category it belongs to.
 	 *
 	 * INVARIANT (enforced by CategoryTaxonomyInvariantTest): every category this
@@ -573,6 +613,15 @@ trait Mcpwp_Api_Auth {
 	protected function get_category_for_route( $route ) {
 		$base = '/mcpwp/v1';
 		$path = ( 0 === strpos( $route, $base ) ) ? substr( $route, strlen( $base ) ) : $route;
+
+		// Discovery allowlist (#1007) — checked before every other map so
+		// nothing added to get_route_category_map() or get_route_pattern_map()
+		// can ever accidentally shadow it back into being gated.
+		foreach ( self::get_discovery_allowlist_routes() as $allowlisted ) {
+			if ( 0 === strpos( $path, $allowlisted ) ) {
+				return '';
+			}
+		}
 
 		// Path-parameter routes whose category cannot be expressed as a leading prefix.
 		foreach ( $this->get_route_pattern_map() as $pattern => $pattern_category ) {
@@ -736,11 +785,6 @@ trait Mcpwp_Api_Auth {
 			// key read every draft through /graph/query. Each entry matches the
 			// dispatching tool's category; RouteCategoryToolParityTest now fails
 			// if any tool route resolves to '' or to a different category.
-			// 'site'-category tool routes (/site-info, /onboard, /menus, ...) are
-			// deliberately NOT added: KeyCategoryRestrictionAuthPlaneTest and
-			// BridgeAuthTest pin them as reachable by author/editor keys (including
-			// migrated 2.8 spai_ keys), and gating them is an owner decision. The
-			// parity test lists them as a known, reported exemption.
 			'/graph'                                => 'content',
 			'/fetch'                                => 'content',
 			'/languages'                            => 'content',
@@ -750,6 +794,43 @@ trait Mcpwp_Api_Auth {
 			'/plugin-settings'                      => 'admin',
 			'/update'                               => 'admin',
 			'/cloudflare'                           => 'admin',
+
+			// #1007: the remaining 'site'-category tool routes. Before this fix
+			// these 61 routes resolved to '' (ungated) — same BLOCK-1 gap as the
+			// /graph block above — so an author/editor key, or a site with 'site'
+			// disabled, could still reach /menus, /memory, /options, etc. directly,
+			// through /batch, or through resources/read, even though the identical
+			// tool call through /mcp tools/call was refused. That was deliberate
+			// for /site-info, /onboard and /introspect (see
+			// get_discovery_allowlist_routes(), checked earlier in this method
+			// and therefore never reaching this map) but never for the other 61 — the
+			// owner decision that closed #1007 is to gate all of them, accepting
+			// that Author and Editor keys (whose role categories do not include
+			// 'site') lose access to this group. RouteCategoryToolParityTest's
+			// SITE_EXEMPT is shrunk to exactly the discovery allowlist above.
+			'/menus'                                => 'site',
+			'/sidebars'                             => 'site',
+			'/widgets'                              => 'site',
+			'/analytics'                            => 'site',
+			'/site-blueprints'                      => 'site',
+			'/custom-css'                           => 'site',
+			'/plugins'                              => 'site',
+			'/cache-flush'                          => 'site',
+			'/flush-permalinks'                     => 'site',
+			'/memory'                               => 'site',
+			'/agent-playbooks'                      => 'site',
+			'/design-references'                    => 'site',
+			'/guides'                                => 'site',
+			'/options'                              => 'site',
+			'/option'                               => 'site',
+			'/rendered-copy'                        => 'site',
+			'/rendered-html'                        => 'site',
+			'/signals'                              => 'site',
+			'/site-context'                         => 'site',
+			'/site-health'                          => 'site',
+			'/site-state'                           => 'site',
+			'/theme-info'                           => 'site',
+			'/workflows'                            => 'site',
 		);
 	}
 
