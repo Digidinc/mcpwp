@@ -46,11 +46,16 @@ trait Mcpwp_Free_Tools_Site_Trait {
 
 		$tools[] = $this->define_tool(
 			'wp_onboard',
-			'Get a complete first-connection briefing for this WordPress site. Returns site identity, content inventory, active integrations, available tools grouped by category, site context, recommended first actions, and a quick reference card. Call this first when connecting to a new site.',
+			'Get a slim first-connection briefing for this WordPress site (~3k tokens or less): site identity, builder mode, what is connected, and the top next actions. No tool catalog dump. Call this first when connecting to a new site, then use tools/list, wp_get_guide, or detail="full" for more. Pass detail="full" for the complete legacy briefing: full tool catalog grouped by category, site context text, quick reference card, suggested first tools, and content inventory (recent updates, design references).',
 			array(
+				'detail' => array(
+					'type'        => 'string',
+					'description' => 'Response detail level. Default "slim" (recommended) returns only first-contact essentials. Pass "full" for the complete legacy briefing.',
+					'enum'        => array( 'slim', 'full' ),
+				),
 				'sections' => array(
 					'type'        => 'array',
-					'description' => 'Allowlist of top-level sections to return: site_identity, content_inventory, active_integrations, available_tools, site_context, recommended_actions, quick_reference, suggested_first_tools, quick_start, pro_active. Omit for the full briefing — available_tools alone is ~95% of that payload; ask for the sections you actually need.',
+					'description' => 'Allowlist of top-level sections to return from the full briefing (implies detail=full): site_identity, content_inventory, active_integrations, available_tools, site_context, recommended_actions, quick_reference, suggested_first_tools, quick_start, pro_active. available_tools alone is ~95% of that payload; ask for the sections you actually need.',
 					'items'       => array( 'type' => 'string' ),
 				),
 			)
