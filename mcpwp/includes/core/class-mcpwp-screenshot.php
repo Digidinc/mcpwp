@@ -178,6 +178,10 @@ class Mcpwp_Screenshot {
 				'service'    => 'cloudflare-browser',
 			);
 
+			if ( ! empty( $args['full_page'] ) ) {
+				$result['full_page_honored'] = true;
+			}
+
 			// Save to media library if requested.
 			if ( ! empty( $args['save_to_media'] ) ) {
 				$cf_format = isset( $cf_result['format'] ) ? $cf_result['format'] : 'png';
@@ -195,6 +199,33 @@ class Mcpwp_Screenshot {
 		// Fallback: mshots.
 		$screenshot_url = $this->mshots_base . rawurlencode( $url ) . '?w=' . $width . '&h=' . $height;
 
+		// mshots can refuse a host outright (403/404/451 — WordPress.com's own
+		// service blocking a staging/private/unreachable host) rather than
+		// merely being slow to generate. Claiming "success" for a URL that
+		// will never render anything but a broken-image icon is exactly the
+		// dead end #804 reported — one quick probe here catches an outright
+		// rejection before this method ever says success, instead of leaving
+		// the caller to discover it only when they try to view the image.
+		// A "still generating" placeholder is a normal 200/202 and is not
+		// mistaken for a rejection; that case is unchanged below.
+		$probe_status = $this->probe_mshots_status( $screenshot_url );
+
+		if ( in_array( $probe_status, array( 401, 403, 404, 410, 451 ), true ) ) {
+			return new WP_Error(
+				'mshots_rejected',
+				sprintf(
+					/* translators: %d: HTTP status code returned by WordPress.com mshots */
+					__( 'WordPress.com mshots refused this host (HTTP %d). This is the external fallback renderer rejecting the request, not a plugin bug — it cannot reach staging/private/auth-gated hosts. Configure a Cloudflare Browser Rendering worker under Integrations > Screenshot Worker for a renderer that works on any host.', 'mcpwp' ),
+					$probe_status
+				),
+				array(
+					'status'             => 502,
+					'mshots_status'      => $probe_status,
+					'cf_fallback_reason' => is_wp_error( $cf_result ) ? $cf_result->get_error_message() : null,
+				)
+			);
+		}
+
 		$result = array(
 			'success'        => true,
 			'url'            => $url,
@@ -204,6 +235,15 @@ class Mcpwp_Screenshot {
 			'service'        => 'wordpress-mshots',
 			'note'           => 'First request triggers generation. Screenshot may take 10-30 seconds to appear. Retry the URL if you get a placeholder.',
 		);
+
+		// mshots is a fixed-viewport service — it has no full-page equivalent,
+		// so a caller who asked for full_page needs to know it silently did
+		// not happen here rather than assume the returned image is the whole
+		// page (#804).
+		if ( ! empty( $args['full_page'] ) ) {
+			$result['full_page_honored'] = false;
+			$result['note']             .= ' full_page was requested but the mshots fallback only supports a fixed viewport, not full-page capture; configure the Cloudflare Browser Rendering worker for that.';
+		}
 
 		// If CF failed, include the reason.
 		if ( is_wp_error( $cf_result ) ) {
@@ -394,6 +434,35 @@ class Mcpwp_Screenshot {
 
 		// Real screenshots are typically > 5KB, placeholders are much smaller.
 		return $content_length > 5000;
+	}
+
+	/**
+	 * Quick reachability probe for an mshots URL — distinguishes an outright
+	 * rejection (403/404/451, WordPress.com's own service refusing to reach
+	 * this host at all) from the normal "still generating" placeholder state
+	 * (#804). Only the former should stop capture() from claiming success;
+	 * the latter is expected on a first request and is unaffected.
+	 *
+	 * @param string $screenshot_url mshots URL to probe.
+	 * @return int|false HTTP status code, or false if the probe itself could
+	 *                    not complete (treated as inconclusive, never as a
+	 *                    rejection — a network hiccup here must not turn into
+	 *                    a false failure for the caller).
+	 */
+	private function probe_mshots_status( $screenshot_url ) {
+		$response = wp_remote_get(
+			$screenshot_url,
+			array(
+				'timeout'   => 8,
+				'sslverify' => true,
+			)
+		);
+
+		if ( is_wp_error( $response ) ) {
+			return false;
+		}
+
+		return (int) wp_remote_retrieve_response_code( $response );
 	}
 
 	/**

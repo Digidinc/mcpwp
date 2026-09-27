@@ -17,6 +17,25 @@ if ( ! defined( 'ABSPATH' ) ) {
 class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 
 	/**
+	 * Token-reasonable default window for a rendered-HTML response. Large
+	 * enough to see meaningful content, small enough that an agent calling
+	 * this in a loop doesn't blow its context — but the response always
+	 * reports the document's true total_bytes and how to page for the rest,
+	 * so a small default is never a silent cut (#804).
+	 */
+	const RENDERED_HTML_DEFAULT_MAX_BYTES = 51200;
+
+	/**
+	 * Hard per-call ceiling. Raised from the old 200 KB cap (#804) so a
+	 * caller who explicitly asks for the whole document gets it in one
+	 * call for anything up to 1 MB of rendered HTML — comfortably covers a
+	 * real page's head+body+footer. Beyond that, offset-based paging is the
+	 * documented path; there is no size a caller can be locked out of, only
+	 * one that takes more than one call.
+	 */
+	const RENDERED_HTML_MAX_BYTES_CEILING = 1048576;
+
+	/**
 	 * Register routes.
 	 */
 	public function register_routes() {
@@ -156,13 +175,18 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 							'type'        => 'string',
 						),
 						'selector'  => array(
-							'description' => __( 'CSS selector to extract (tag, .class, or #id).', 'mcpwp' ),
+							'description' => __( 'CSS selector to extract (tag, .class, or #id) — applied to the full document before any windowing, so e.g. selector=footer is unaffected by max_bytes/offset.', 'mcpwp' ),
 							'type'        => 'string',
 						),
 						'max_bytes' => array(
-							'description' => __( 'Maximum response size in bytes (default 51200, max 204800).', 'mcpwp' ),
+							'description' => __( 'Maximum response size in bytes (default 51200, max 1048576/1MB).', 'mcpwp' ),
 							'type'        => 'integer',
-							'default'     => 51200,
+							'default'     => self::RENDERED_HTML_DEFAULT_MAX_BYTES,
+						),
+						'offset'    => array(
+							'description' => __( 'Byte offset into the full document to start reading from (default 0). The response reports total_bytes and next_offset so a caller can page through a document larger than one window, including reaching the tail/footer.', 'mcpwp' ),
+							'type'        => 'integer',
+							'default'     => 0,
 						),
 					),
 				),
@@ -678,7 +702,11 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 		$post_id   = $request->get_param( 'id' );
 		$url       = $request->get_param( 'url' );
 		$selector  = $request->get_param( 'selector' );
-		$max_bytes = min( absint( $request->get_param( 'max_bytes' ) ?: 51200 ), 204800 );
+		$max_bytes = min(
+			absint( $request->get_param( 'max_bytes' ) ?: self::RENDERED_HTML_DEFAULT_MAX_BYTES ),
+			self::RENDERED_HTML_MAX_BYTES_CEILING
+		);
+		$offset    = absint( $request->get_param( 'offset' ) ?: 0 );
 
 		// Resolve URL from post ID.
 		if ( $post_id ) {
@@ -706,7 +734,7 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 				// it before WordPress even runs. Render in-process instead — no
 				// network hop, so neither problem applies. Note: this returns the
 				// Elementor content only, not the surrounding theme header/footer.
-				return $this->get_rendered_html_via_elementor( $post_id, $selector, $max_bytes );
+				return $this->get_rendered_html_via_elementor( $post_id, $selector, $max_bytes, $offset );
 			} else {
 				// Draft/pending — use Elementor preview URL or plain preview.
 				$url = add_query_arg( 'elementor-preview', $post_id, get_permalink( $post_id ) );
@@ -770,23 +798,86 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			}
 		}
 
-		// Truncate if needed.
-		$truncated = false;
-		if ( strlen( $html ) > $max_bytes ) {
-			$html      = substr( $html, 0, $max_bytes );
-			$truncated = true;
-		}
+		// Window the (possibly selector-extracted) HTML honestly: never a
+		// silent cut — the response always carries the document's real
+		// total_bytes and, when this window isn't the whole thing, exactly
+		// how to page for the rest (#804).
+		$window = $this->window_html_response( $html, $offset, $max_bytes );
 
 		return $this->success_response(
 			array(
 				'url'            => $url,
 				'status_code'    => $status_code,
-				'html'           => $html,
-				'length'         => strlen( $html ),
-				'truncated'      => $truncated,
+				'html'           => $window['html'],
+				'length'         => $window['length'],
+				'total_bytes'    => $window['total_bytes'],
+				'offset'         => $window['offset'],
+				'truncated'      => $window['truncated'],
+				'next_offset'    => $window['next_offset'],
+				'note'           => $window['note'],
 				'selector_used'  => $selector_used,
 				'selector_found' => $selector_found,
 			)
+		);
+	}
+
+	/**
+	 * Slice a string of (possibly already selector-extracted) HTML into an
+	 * honest, pageable window.
+	 *
+	 * The old behavior silently cut the document at max_bytes with no way to
+	 * learn how big it really was or how to see the rest — on any page over
+	 * ~51 KB that reliably lost the tail (the theme footer, Custom Code
+	 * snippets, closing markup) while never saying so (#804). This always
+	 * reports total_bytes and, whenever the window doesn't cover the whole
+	 * document, a next_offset/note that gets the caller to the missing part,
+	 * including the tail, by paging forward.
+	 *
+	 * @param string $html      Full (or selector-extracted) HTML.
+	 * @param int    $offset    Byte offset to start the window at.
+	 * @param int    $max_bytes Window size in bytes.
+	 * @return array{html:string,total_bytes:int,offset:int,length:int,truncated:bool,next_offset:int|null,note:string|null}
+	 */
+	private function window_html_response( $html, $offset, $max_bytes ) {
+		$total_bytes = strlen( $html );
+		$offset      = max( 0, min( absint( $offset ), $total_bytes ) );
+		$window      = substr( $html, $offset, $max_bytes );
+		$length      = strlen( $window );
+		$end         = $offset + $length;
+		$truncated   = $end < $total_bytes || $offset > 0;
+
+		$next_offset = $end < $total_bytes ? $end : null;
+
+		$note = null;
+		if ( $truncated ) {
+			if ( null !== $next_offset ) {
+				$note = sprintf(
+					/* translators: 1: start byte, 2: end byte, 3: total bytes, 4: max bytes ceiling */
+					__( 'Showing bytes %1$d-%2$d of %3$d total. Pass offset=%2$d to continue reading — paging to the end reaches the tail, including the theme footer — or raise max_bytes (ceiling %4$d) to fetch more per call.', 'mcpwp' ),
+					$offset,
+					$end,
+					$total_bytes,
+					self::RENDERED_HTML_MAX_BYTES_CEILING
+				);
+			} else {
+				$note = sprintf(
+					/* translators: 1: start byte, 2: end byte, 3: total bytes */
+					__( 'Showing bytes %1$d-%2$d of %3$d total — this is the end of the document. Pass offset=0 to see the beginning.', 'mcpwp' ),
+					$offset,
+					$end,
+					$total_bytes
+				);
+			}
+		}
+
+		return array(
+			'html'        => $window,
+			'total_bytes' => $total_bytes,
+			'offset'      => $offset,
+			'length'      => $length,
+			'truncated'   => $truncated,
+			'next_offset' => $next_offset,
+			'note'        => $note,
 		);
 	}
 
@@ -798,10 +889,11 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 	 *
 	 * @param int         $post_id   Post ID.
 	 * @param string|null $selector  Optional CSS selector to extract.
-	 * @param int         $max_bytes Truncation limit.
+	 * @param int         $max_bytes Window size in bytes.
+	 * @param int         $offset    Byte offset to start the window at.
 	 * @return WP_REST_Response
 	 */
-	private function get_rendered_html_via_elementor( $post_id, $selector, $max_bytes ) {
+	private function get_rendered_html_via_elementor( $post_id, $selector, $max_bytes, $offset = 0 ) {
 		$html = \Elementor\Plugin::$instance->frontend->get_builder_content_for_display( $post_id, true );
 
 		$selector_used  = null;
@@ -818,18 +910,18 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			}
 		}
 
-		$truncated = false;
-		if ( strlen( $html ) > $max_bytes ) {
-			$html      = substr( $html, 0, $max_bytes );
-			$truncated = true;
-		}
+		$window = $this->window_html_response( $html, $offset, $max_bytes );
 
 		$result = array(
 			'url'            => add_query_arg( 'elementor-preview', $post_id, get_permalink( $post_id ) ),
 			'status_code'    => 200,
-			'html'           => $html,
-			'length'         => strlen( $html ),
-			'truncated'      => $truncated,
+			'html'           => $window['html'],
+			'length'         => $window['length'],
+			'total_bytes'    => $window['total_bytes'],
+			'offset'         => $window['offset'],
+			'truncated'      => $window['truncated'],
+			'next_offset'    => $window['next_offset'],
+			'note'           => $window['note'],
 			'selector_used'  => $selector_used,
 			'selector_found' => $selector_found,
 			'render_method'  => 'internal_elementor',
