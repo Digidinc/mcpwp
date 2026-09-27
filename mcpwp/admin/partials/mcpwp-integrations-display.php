@@ -17,6 +17,28 @@ $integrations_admin = new Mcpwp_Integrations_Admin();
 $figma_oauth_notice = isset( $_GET['mcpwp_figma_oauth'] ) ? sanitize_key( wp_unslash( $_GET['mcpwp_figma_oauth'] ) ) : '';
 $figma_oauth_message = isset( $_GET['message'] ) ? sanitize_text_field( wp_unslash( $_GET['message'] ) ) : '';
 ?>
+<?php
+if ( ! function_exists( 'mcpwp_integration_stored_select_value' ) ) {
+	/**
+	 * Stored value of a non-secret select field, so the form shows what is
+	 * actually saved instead of always the first option (#987 review NIT-1).
+	 * Select fields hold only enum settings (never secrets), so echoing the
+	 * stored choice back is safe.
+	 *
+	 * @param string $slug      Provider slug.
+	 * @param string $field_key Field key.
+	 * @return string Stored value, or '' when nothing is saved.
+	 */
+	function mcpwp_integration_stored_select_value( $slug, $field_key ) {
+		static $configs = array();
+		if ( ! array_key_exists( $slug, $configs ) ) {
+			$config            = class_exists( 'Mcpwp_Integration_Manager' ) ? Mcpwp_Integration_Manager::get_instance()->get_provider_config( $slug ) : false;
+			$configs[ $slug ] = is_array( $config ) ? $config : array();
+		}
+		return isset( $configs[ $slug ][ $field_key ] ) && is_scalar( $configs[ $slug ][ $field_key ] ) ? (string) $configs[ $slug ][ $field_key ] : '';
+	}
+}
+?>
 <div class="wrap mcpwp-admin mcpwp-integrations-page">
 	<h1 class="mcpwp-header">
 		<span class="mcpwp-logo">
@@ -185,7 +207,7 @@ $figma_oauth_message = isset( $_GET['message'] ) ? sanitize_text_field( wp_unsla
 												<?php if ( 'select' === $field_info['type'] && ! empty( $field_info['options'] ) ) : ?>
 													<select class="mcpwp-config-field" data-field="<?php echo esc_attr( $field_key ); ?>">
 														<?php foreach ( $field_info['options'] as $option_value => $option_label ) : ?>
-															<option value="<?php echo esc_attr( $option_value ); ?>"><?php echo esc_html( $option_label ); ?></option>
+															<option value="<?php echo esc_attr( $option_value ); ?>" <?php selected( mcpwp_integration_stored_select_value( $slug, $field_key ), (string) $option_value ); ?>><?php echo esc_html( $option_label ); ?></option>
 														<?php endforeach; ?>
 													</select>
 												<?php else : ?>
@@ -226,7 +248,7 @@ $figma_oauth_message = isset( $_GET['message'] ) ? sanitize_text_field( wp_unsla
 											<?php if ( 'select' === $field_info['type'] && ! empty( $field_info['options'] ) ) : ?>
 												<select class="mcpwp-config-field" data-field="<?php echo esc_attr( $field_key ); ?>">
 													<?php foreach ( $field_info['options'] as $option_value => $option_label ) : ?>
-														<option value="<?php echo esc_attr( $option_value ); ?>"><?php echo esc_html( $option_label ); ?></option>
+														<option value="<?php echo esc_attr( $option_value ); ?>" <?php selected( mcpwp_integration_stored_select_value( $slug, $field_key ), (string) $option_value ); ?>><?php echo esc_html( $option_label ); ?></option>
 													<?php endforeach; ?>
 												</select>
 											<?php else : ?>
