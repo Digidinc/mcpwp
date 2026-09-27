@@ -70,7 +70,7 @@ class Mcpwp_Core {
 			'reason' => $license_info['is_pro'] ? '' : ( $license_info['reason'] ?? '' ),
 		);
 
-		// Read-only content-guardrails status (#957): current 24h published
+		// Read-only content-guardrails status (#957): current UTC-day published
 		// count vs the cap.
 		$info['guardrails_status'] = class_exists( 'Mcpwp_Content_Guardrails' )
 			? Mcpwp_Content_Guardrails::get_status_summary()

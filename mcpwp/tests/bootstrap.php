@@ -1718,12 +1718,16 @@ function get_posts($args = array())
     $posts = array_values($GLOBALS['_mcpwp_test_posts']);
     $types = isset($args['post_type']) ? (array) $args['post_type'] : array();
     $statuses = isset($args['post_status']) ? (array) $args['post_status'] : array();
+    $not_in = isset($args['post__not_in']) ? array_map('intval', (array) $args['post__not_in']) : array();
 
-    $posts = array_values(array_filter($posts, function ($post) use ($types, $statuses) {
+    $posts = array_values(array_filter($posts, function ($post) use ($types, $statuses, $not_in) {
         if (! empty($types) && ! in_array($post->post_type, $types, true)) {
             return false;
         }
         if (! empty($statuses) && ! in_array($post->post_status, $statuses, true)) {
+            return false;
+        }
+        if (! empty($not_in) && in_array((int) $post->ID, $not_in, true)) {
             return false;
         }
         return true;
@@ -2223,6 +2227,19 @@ function mcpwp_test_apply_page_template($post_id, $postarr, $wp_error)
 
 function wp_insert_post($postarr, $wp_error = false)
 {
+    $is_update = ! empty($postarr['ID']) && ! empty($GLOBALS['_mcpwp_test_posts'][ (int) $postarr['ID'] ]);
+    $old_status = $is_update ? ($GLOBALS['_mcpwp_test_posts'][ (int) $postarr['ID'] ]->post_status ?? '') : 'new';
+
+    // wp_insert_post_data fires here in real WP core, before the row is
+    // written, for BOTH a create and an update (wp_update_post() below
+    // calls this same function) — it's the one filter #957's content
+    // guardrails hook to gate a caller-controlled post_status regardless
+    // of which of the many write paths reached it.
+    $filtered = apply_filters('wp_insert_post_data', $postarr, $postarr, $postarr, $is_update);
+    if (is_array($filtered)) {
+        $postarr = $filtered;
+    }
+
     $next_id = empty($GLOBALS['_mcpwp_test_posts']) ? 1 : max(array_map('intval', array_keys($GLOBALS['_mcpwp_test_posts']))) + 1;
     $post_id = isset($postarr['ID']) ? (int) $postarr['ID'] : $next_id;
 
@@ -2243,10 +2260,24 @@ function wp_insert_post($postarr, $wp_error = false)
         'post_excerpt'      => isset($postarr['post_excerpt']) ? $postarr['post_excerpt'] : '',
     );
 
+    // meta_input: a real wp_insert_post() feature — writes postmeta
+    // atomically alongside the post. clone_page() relies on this (#957) to
+    // make _elementor_data visible to the wp_insert_post_data filter above
+    // even for a brand-new post that has no ID until this point.
+    if (! empty($postarr['meta_input']) && is_array($postarr['meta_input'])) {
+        foreach ($postarr['meta_input'] as $meta_key => $meta_value) {
+            update_post_meta($post_id, $meta_key, $meta_value);
+        }
+    }
+
     $template_error = mcpwp_test_apply_page_template($post_id, $postarr, $wp_error);
     if ($template_error instanceof WP_Error) {
         return $template_error;
     }
+
+    $post = $GLOBALS['_mcpwp_test_posts'][ $post_id ];
+    do_action('transition_post_status', $post->post_status ?? '', $old_status, $post);
+    do_action('wp_insert_post', $post_id, $post, $is_update);
 
     return $post_id;
 }
@@ -2258,6 +2289,7 @@ function wp_update_post($postarr, $wp_error = false)
     }
 
     $post_id = (int) $postarr['ID'];
+    $old_status = $GLOBALS['_mcpwp_test_posts'][ $post_id ]->post_status ?? '';
 
     // Mirror WP core's wp_update_post(): it fetches the FULL existing row
     // (get_post($ID, ARRAY_A)) and merges it under the caller's array before
@@ -2272,6 +2304,13 @@ function wp_update_post($postarr, $wp_error = false)
         if ('' !== $existing_template) {
             $postarr['page_template'] = $existing_template;
         }
+    }
+
+    // wp_insert_post_data fires here too — WP core's wp_update_post() calls
+    // wp_insert_post() internally, hitting the exact same filter (#957).
+    $filtered = apply_filters('wp_insert_post_data', $postarr, $postarr, $postarr, true);
+    if (is_array($filtered)) {
+        $postarr = $filtered;
     }
 
     $post = $GLOBALS['_mcpwp_test_posts'][ $post_id ];
@@ -2292,6 +2331,9 @@ function wp_update_post($postarr, $wp_error = false)
     if ($template_error instanceof WP_Error) {
         return $template_error;
     }
+
+    do_action('transition_post_status', $post->post_status ?? '', $old_status, $post);
+    do_action('wp_insert_post', $post_id, $post, true);
 
     return $post_id;
 }

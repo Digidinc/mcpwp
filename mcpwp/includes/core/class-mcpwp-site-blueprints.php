@@ -130,7 +130,12 @@ class Mcpwp_Site_Blueprints {
 
 		$forced_draft_ids = array();
 
-		// Create pages.
+		// Create pages. Per-page content guardrails (ramp cap, duplicate
+		// detection) are enforced centrally by
+		// Mcpwp_Content_Guardrails::on_insert_post_data() inside the
+		// wp_insert_post() call below — not here; only the bulk-approval
+		// threshold decision above (which needs the whole batch's size
+		// before any single insert happens) stays call-site logic.
 		foreach ( $blueprint['pages'] as $page_def ) {
 			$title = $name_prefix
 				? $name_prefix . ': ' . ( $page_def['title'] ?? 'Page' )
@@ -140,22 +145,7 @@ class Mcpwp_Site_Blueprints {
 
 			$content = self::build_page_placeholder_content( $page_def );
 
-			$page_status  = $post_status;
-			$page_warnings = array();
-			if ( $bulk_plan['requires_approval'] ) {
-				$page_status = 'draft';
-			} elseif ( class_exists( 'Mcpwp_Content_Guardrails' ) ) {
-				$guarded       = Mcpwp_Content_Guardrails::evaluate(
-					array(
-						'post_type' => 'page',
-						'status'    => $post_status,
-						'title'     => $title,
-						'content'   => $content,
-					)
-				);
-				$page_status   = $guarded['status'];
-				$page_warnings = $guarded['warnings'];
-			}
+			$page_status = $bulk_plan['requires_approval'] ? 'draft' : $post_status;
 
 			$page_id = wp_insert_post( array(
 				'post_title'   => $title,
@@ -183,18 +173,15 @@ class Mcpwp_Site_Blueprints {
 			}
 
 			$slug_to_id[ $page_def['slug'] ?? $slug ] = $page_id;
-			$page_entry = array(
-				'page_id' => $page_id,
-				'title'   => $title,
-				'slug'    => $slug,
-				'url'     => get_permalink( $page_id ),
+			$created_pages[] = array(
+				'id'       => $page_id,
+				'page_id'  => $page_id,
+				'title'    => $title,
+				'slug'     => $slug,
+				'url'      => get_permalink( $page_id ),
 				'sections' => $page_def['sections'] ?? array(),
 				'next_step' => 'Use wp_get_blueprint to generate Elementor sections for each section type listed, then wp_add_section to insert them.',
 			);
-			if ( ! empty( $page_warnings ) ) {
-				$page_entry['warnings'] = $page_warnings;
-			}
-			$created_pages[] = $page_entry;
 		}
 
 		// Create menus.
@@ -241,30 +228,16 @@ class Mcpwp_Site_Blueprints {
 			'note'         => 'All pages created as ' . $post_status . '. Use wp_set_elementor or wp_get_blueprint + wp_add_section to build page layouts.',
 		);
 
-		if ( $bulk_plan['requires_approval'] && ! empty( $forced_draft_ids ) && class_exists( 'Mcpwp_Content_Guardrails' ) ) {
-			$approval = Mcpwp_Content_Guardrails::request_bulk_publish_approval(
-				$forced_draft_ids,
-				'page',
-				array(
-					'tool'                => 'wp_deploy_site_blueprint',
-					'requested_by_key_id' => isset( $overrides['requested_by_key_id'] ) ? (string) $overrides['requested_by_key_id'] : '',
-				)
-			);
-
-			$result['note'] = 'This blueprint publishes ' . count( $forced_draft_ids ) . ' pages at once (bulk threshold: ' . $bulk_plan['threshold'] . '), so every page was created as a draft instead.';
-
-			if ( is_wp_error( $approval ) ) {
-				$result['guardrails'] = array(
-					'bulk_approval_required' => true,
-					'message'                => 'Pages were created as drafts, but no approval request could be queued (' . $approval->get_error_message() . '). Publish them manually.',
-				);
-			} else {
-				$result['guardrails'] = array(
-					'bulk_approval_required' => true,
-					'approval_id'            => $approval['id'],
-					'message'                => 'Pages were created as drafts and queued for approval before publishing. Approve and apply request ' . $approval['id'] . ' to publish them.',
-				);
-			}
+		// The bulk-publish approval request itself is queued by the REST
+		// controller (deploy_blueprint()), not here — creating it needs
+		// guard_stable_identity_for_approvals()/current_requester_key_id(),
+		// which only exist on a REST controller instance, and this is a
+		// static method with no such context (#957 adversarial review
+		// WARN-7). Hand back what it needs to do that.
+		if ( $bulk_plan['requires_approval'] && ! empty( $forced_draft_ids ) ) {
+			$result['note']                 = 'This blueprint publishes ' . count( $forced_draft_ids ) . ' pages at once (bulk threshold: ' . $bulk_plan['threshold'] . '), so every page was created as a draft instead.';
+			$result['_bulk_approval_ids']   = $forced_draft_ids;
+			$result['_bulk_approval_threshold'] = $bulk_plan['threshold'];
 		}
 
 		return $result;

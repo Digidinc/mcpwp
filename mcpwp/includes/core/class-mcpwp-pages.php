@@ -156,21 +156,10 @@ class Mcpwp_Pages {
 			$page_data['page_template'] = sanitize_text_field( $data['template'] );
 		}
 
-		// Content guardrails (#957): ramp cap, thin-content floor, and
-		// near-duplicate detection — only ever enforced for a write that is
-		// actually publishing; may downgrade post_status to 'draft'.
-		$guardrails = class_exists( 'Mcpwp_Content_Guardrails' )
-			? Mcpwp_Content_Guardrails::evaluate(
-				array(
-					'post_type' => 'page',
-					'status'    => $page_data['post_status'],
-					'title'     => $page_data['post_title'],
-					'content'   => $page_data['post_content'],
-				)
-			)
-			: array( 'status' => $page_data['post_status'], 'warnings' => array(), 'guardrails' => array() );
-		$page_data['post_status'] = $guardrails['status'];
-
+		// Content guardrails (#957): enforced centrally by
+		// Mcpwp_Content_Guardrails::on_insert_post_data(), a wp_insert_post_data
+		// filter that runs inside the wp_insert_post() call below — not here.
+		// See that method's docblock for why.
 		$page_id = wp_insert_post( $page_data, true );
 
 		if ( is_wp_error( $page_id ) ) {
@@ -204,12 +193,6 @@ class Mcpwp_Pages {
 			}
 			if ( ! empty( $sanitized_content['removed'] ) ) {
 				$created['sanitized'] = $sanitized_content['removed'];
-			}
-			if ( ! empty( $guardrails['guardrails'] ) ) {
-				$created['guardrails'] = $guardrails['guardrails'];
-			}
-			if ( ! empty( $guardrails['warnings'] ) ) {
-				$created['warnings'] = array_merge( isset( $created['warnings'] ) ? (array) $created['warnings'] : array(), $guardrails['warnings'] );
 			}
 		}
 

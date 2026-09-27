@@ -148,7 +148,37 @@ class Mcpwp_REST_Site_Blueprints extends Mcpwp_REST_API {
 		$result = Mcpwp_Site_Blueprints::deploy( $id, $overrides );
 		$status = ( $result['success'] ?? false ) ? 200 : 404;
 
-		return new WP_REST_Response( $result, $status );
+		// deploy() hands back which pages it force-created as drafts over
+		// the bulk-approval threshold (rule 2), rather than queuing the
+		// approval itself — that needs guard_stable_identity_for_approvals()
+		// (#957 adversarial review WARN-7), which only exists here, on a
+		// REST controller instance.
+		$bulk_ids      = $result['_bulk_approval_ids'] ?? array();
+		$bulk_threshold = $result['_bulk_approval_threshold'] ?? 0;
+		unset( $result['_bulk_approval_ids'], $result['_bulk_approval_threshold'] );
+
+		if ( ! empty( $bulk_ids ) ) {
+			$identity_guard = $this->guard_stable_identity_for_approvals();
+			if ( is_wp_error( $identity_guard ) ) {
+				$result['guardrails'] = array(
+					'bulk_approval_required' => true,
+					'message'                => sprintf(
+						/* translators: %s: reason no approval could be queued. */
+						__( 'Pages were created as drafts, but no approval request could be queued (%s). Publish them manually, or reconnect and retry.', 'mcpwp' ),
+						$identity_guard->get_error_message()
+					),
+				);
+			} else {
+				$result['guardrails'] = $this->queue_bulk_publish_approval(
+					$bulk_ids,
+					'page',
+					$bulk_threshold,
+					'wp_deploy_site_blueprint'
+				);
+			}
+		}
+
+		return $this->success_response( $result, $status );
 	}
 
 	public function extract_blueprint( WP_REST_Request $request ): WP_REST_Response {

@@ -253,22 +253,39 @@ class Mcpwp_Approvals {
 	 * Mcpwp_Content_Guardrails::apply_bulk_publish(), which apply_payload()
 	 * delegates to below.
 	 *
-	 * @param int[]  $post_ids  IDs already created as drafts.
+	 * @param array  $items     {id, hash, findings} entries, IDs already
+	 *                          created as drafts.
 	 * @param string $post_type 'post' or 'page'.
 	 * @param array  $args      title/note/tool/requested_by_key_id.
 	 * @return array|WP_Error Public approval request.
 	 */
-	public static function create_bulk_publish_request( array $post_ids, $post_type, $args = array() ) {
-		$post_ids  = array_values( array_unique( array_map( 'absint', $post_ids ) ) );
+	public static function create_bulk_publish_request( array $items, $post_type, $args = array() ) {
 		$post_type = sanitize_key( (string) $post_type );
 
-		if ( empty( $post_ids ) ) {
+		// Each item: {id, hash, findings} — see
+		// Mcpwp_Content_Guardrails::snapshot_for_approval(). 'hash' lets
+		// apply_bulk_publish() refuse to publish anything edited since this
+		// snapshot; 'findings' is shown to the approver (#957 adversarial
+		// review WARN-1).
+		$normalized = array();
+		foreach ( $items as $item ) {
+			if ( ! is_array( $item ) || empty( $item['id'] ) ) {
+				continue;
+			}
+			$normalized[] = array(
+				'id'       => absint( $item['id'] ),
+				'hash'     => isset( $item['hash'] ) ? sanitize_text_field( (string) $item['hash'] ) : null,
+				'findings' => isset( $item['findings'] ) && is_array( $item['findings'] ) ? $item['findings'] : array(),
+			);
+		}
+
+		if ( empty( $normalized ) ) {
 			return new WP_Error( 'no_items', __( 'No items to queue for publish approval.', 'mcpwp' ), array( 'status' => 400 ) );
 		}
 
 		$id    = self::generate_id();
 		$now   = gmdate( 'c' );
-		$count = count( $post_ids );
+		$count = count( $normalized );
 
 		$request = array(
 			'id'                  => $id,
@@ -295,11 +312,11 @@ class Mcpwp_Approvals {
 				),
 			),
 			'payload'             => array(
-				'post_ids'  => $post_ids,
+				'items'     => $normalized,
 				'post_type' => $post_type,
 			),
 			'rollback'            => array(
-				'post_ids'  => $post_ids,
+				'items'     => $normalized,
 				'post_type' => $post_type,
 			),
 			'metadata'            => array(),
@@ -697,6 +714,16 @@ class Mcpwp_Approvals {
 			return $result;
 		}
 
+		// Re-fetch: apply_payload() (e.g. Mcpwp_Content_Guardrails::
+		// apply_bulk_publish()'s record_apply_result()) may have just
+		// written metadata onto this SAME record via its own update_option()
+		// call — upserting the copy read at the top of this method, before
+		// that write happened, would silently erase it.
+		$request = self::get_private_request( $id );
+		if ( is_wp_error( $request ) ) {
+			return $request;
+		}
+
 		$request['status']     = 'applied';
 		$request['applied_at'] = gmdate( 'c' );
 		$request['updated_at'] = $request['applied_at'];
@@ -733,6 +760,12 @@ class Mcpwp_Approvals {
 		$result = self::apply_payload( $request, 'rollback' );
 		if ( is_wp_error( $result ) ) {
 			return $result;
+		}
+
+		// Re-fetch for the same reason as apply_request() above.
+		$request = self::get_private_request( $id );
+		if ( is_wp_error( $request ) ) {
+			return $request;
 		}
 
 		$request['status']         = 'rolled_back';

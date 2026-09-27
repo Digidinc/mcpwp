@@ -101,25 +101,13 @@ class Mcpwp_Page_Builder {
 
 		$effective_status = in_array( $status, array( 'draft', 'publish', 'private' ), true ) ? $status : 'draft';
 
-		// Content guardrails (#957): ramp cap, thin-content floor, and
-		// near-duplicate detection against the built Elementor structure.
-		$guardrails = class_exists( 'Mcpwp_Content_Guardrails' )
-			? Mcpwp_Content_Guardrails::evaluate(
-				array(
-					'post_type' => 'page',
-					'status'    => $effective_status,
-					'title'     => $title,
-					'content'   => Mcpwp_Content_Guardrails::extract_text_from_elementor( $elements ),
-				)
-			)
-			: array( 'status' => $effective_status, 'warnings' => array(), 'guardrails' => array() );
-		$effective_status = $guardrails['status'];
-
-		if ( ! empty( $guardrails['warnings'] ) ) {
-			$warnings = array_merge( $warnings, $guardrails['warnings'] );
-		}
-
-		// Create the page.
+		// Content guardrails (#957): enforced centrally by
+		// Mcpwp_Content_Guardrails::on_insert_post_data() — not here. The
+		// page is created empty (Elementor data is written to postmeta
+		// separately, below) so the ramp cap still applies at create time
+		// but thin/duplicate correctly see no content yet — exactly the
+		// "Elementor-first page publishes with 0 words at create" case the
+		// false-positive fix exists for.
 		$page_id = wp_insert_post( array(
 			'post_title'  => sanitize_text_field( $title ),
 			'post_status' => $effective_status,
@@ -173,7 +161,6 @@ class Mcpwp_Page_Builder {
 			'meta_verified'  => $meta_verified,
 			'sections_saved' => $final_count,
 			'warnings'       => $warnings,
-			'guardrails'     => isset( $guardrails['guardrails'] ) ? $guardrails['guardrails'] : array(),
 			'debug'          => isset( $save_result['debug'] ) ? $save_result['debug'] : array(),
 		);
 	}

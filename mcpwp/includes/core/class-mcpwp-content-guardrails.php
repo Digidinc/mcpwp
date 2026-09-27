@@ -5,34 +5,55 @@
  * Owner concern: the self-improving loop is allowed to run on its own, but it
  * must not be usable as a mass thin-page, link-spam, or "parasite SEO" tool —
  * the patterns Google's spam policies describe as scaled content abuse and
- * site reputation abuse. This class is the single place every create/publish
- * tool path consults before a post, page, or Elementor-built page goes live
- * through MCPWP:
+ * site reputation abuse.
+ *
+ * Architecture (rewritten after adversarial review of the first version —
+ * see git history on #957 for what BLOCK-1/BLOCK-2 were): this is NOT a
+ * function every create/publish call site remembers to call. It is a
+ * WordPress core hook — `wp_insert_post_data`, which fires before EVERY
+ * wp_insert_post() AND wp_update_post() — so "create as a draft, then
+ * update to publish" is not a second path to gate, it is the exact same
+ * call every write already makes. See on_insert_post_data() for the full
+ * design note and enter_context()/in_context() for how it stays scoped to
+ * an MCPWP-authenticated request only (never wp-admin, WP-CLI, or another
+ * plugin's save):
  *
  *   1. Publishing ramp — at most N new *published* posts+pages per site per
- *      rolling 24h through MCPWP (site-level; admin keys included). Over the
- *      cap, the write still happens, just as a draft, with a short teaching
- *      message. Drafts are never capped.
+ *      UTC calendar day through MCPWP (site-level; admin keys included). Over
+ *      the cap, the write still happens, just as a draft, with a short
+ *      teaching message. Drafts are never capped. Counted atomically (a raw
+ *      SQL increment, not read-then-write) so two requests racing the cap
+ *      boundary can't both slip through — see the "Publish counting" section
+ *      below for why this trades the issue's original "rolling 24h" wording
+ *      for a fixed daily bucket.
  *   2. Bulk creation — a single bulk call that would publish more than M
  *      items goes through the existing approval pipeline instead: every item
  *      is created as a draft and one approval request covers publishing the
- *      whole batch. A bulk call that only creates drafts is never gated.
+ *      whole batch, with each item's content hash + findings snapshotted at
+ *      queue time so apply can refuse anything edited since — see
+ *      apply_bulk_publish(). A bulk call that only creates drafts is never
+ *      gated.
  *   3. Thin/near-duplicate detection — a word-count floor for published
- *      content, plus a 5-word-shingle Jaccard comparison against the site's
- *      own recent posts of the same type, plus a "city-swap" heuristic for
- *      the classic local-SEO clone-and-rename pattern. Only enforced when the
- *      write is actually publishing; drafts are informational-only (skipped
- *      entirely — see evaluate()).
- *   4. Anomaly signal — a `content.publish_spike` event when the 24h
+ *      content (WARNING ONLY, never a reason to downgrade — a contact page
+ *      or an Elementor-first page that legitimately publishes with 0 words
+ *      at create time must still publish), plus a 5-word-shingle Jaccard
+ *      comparison against the site's own recent posts of the same type, plus
+ *      a "city-swap" heuristic for the classic local-SEO clone-and-rename
+ *      pattern. Duplicate detection only ever downgrades; only enforced when
+ *      the write is actually publishing.
+ *   4. Anomaly signal — a `content.publish_spike` event when today's
  *      published count crosses both an absolute floor and 2x the trailing
  *      30-day daily average, so Control Room/webhooks see it.
  *
+ * Known, accepted limits (not goals — see the PR description): the duplicate
+ * check compares against at most 200 recent posts, so a spammer publishing
+ * faster than that window turns over, or rewording content enough to drop
+ * Jaccard similarity below threshold, evades detection. This is a guardrail
+ * against casual/automated scaled publishing, not an adversarial-proof filter.
+ *
  * Deliberately NOT reused: Mcpwp_Rate_Limiter (per-identifier request-rate
  * windows, a different problem) and Mcpwp_Destructive_Gate's per-requester
- * pending caps (built for irreversible deletes, not creation). This class
- * follows the same *shape* as Mcpwp_Destructive_Gate — a small policy gate
- * that calls into Mcpwp_Approvals's public API rather than duplicating its
- * storage — without sharing its constants.
+ * pending caps (built for irreversible deletes, not creation).
  *
  * Scope: posts and pages only (Mcpwp_Approvals-style content types), per the
  * issue's own wording for the ramp and thin-content rules. WooCommerce
@@ -57,15 +78,6 @@ class Mcpwp_Content_Guardrails {
 	 * @var string
 	 */
 	const OPTION_NAME = 'mcpwp_content_guardrails';
-
-	/**
-	 * Rolling publish-event log option name. Array of {t: unix timestamp,
-	 * type: post type}, pruned to the last 31 days on every write (30 days
-	 * of anomaly baseline, plus the current rolling 24h).
-	 *
-	 * @var string
-	 */
-	const PUBLISH_LOG_OPTION = 'mcpwp_content_guardrails_publish_log';
 
 	/**
 	 * Hard architectural ceiling on how many recent posts a duplicate check
@@ -94,14 +106,41 @@ class Mcpwp_Content_Guardrails {
 	const SHINGLE_SIZE = 5;
 
 	/**
-	 * Per-request shingle cache, keyed by "{post_id}:{content hash}" so a
-	 * bulk call or blueprint deploy that checks many new items against the
-	 * same recent-posts window does not re-tokenize each candidate post once
-	 * per new item (#957: "precompute shingles cheaply").
+	 * Hard cap on how many WORDS of any single document (new content or a
+	 * candidate post) are ever tokenized/shingled. Adversarial-review WARN-4:
+	 * without this, a 10,000-word post costs the same as reading the whole
+	 * thing on every comparison; with it, cost per document is bounded
+	 * regardless of how long the stored content actually is.
+	 *
+	 * @var int
+	 */
+	const MAX_WORDS_PER_DOCUMENT = 3000;
+
+	/**
+	 * Max entries kept in the per-request candidate-token LRU cache
+	 * (WARN-4: "cap shingle cache, e.g. 50 entries, LRU"). Deliberately
+	 * smaller than HARD_DUPLICATE_COMPARE_CAP — a single duplicate_check()
+	 * call re-reads more candidates than this, but a BULK call re-running
+	 * duplicate_check() for many new items in one request tends to re-see
+	 * the same most-recent candidates repeatedly, which is exactly what an
+	 * LRU keeps warm.
+	 *
+	 * @var int
+	 */
+	const MAX_TOKEN_CACHE_ENTRIES = 50;
+
+	/**
+	 * Per-request LRU cache of a candidate post's normalized word tokens,
+	 * keyed by "{post_id}:{content hash}". PHP array insertion order is
+	 * used as the recency order: re-touching a key moves it to the end via
+	 * unset()+re-insert; the OLDEST (front) entry is evicted once the cache
+	 * is full (#957 WARN-4: "cache normalized tokens per candidate").
+	 * Shingles are derived from these cached tokens on demand — cheap once
+	 * tokenizing itself is cached.
 	 *
 	 * @var array<string,string[]>
 	 */
-	private static $shingle_cache = array();
+	private static $token_cache = array();
 
 	// -------------------------------------------------------------------------
 	// Settings
@@ -125,22 +164,18 @@ class Mcpwp_Content_Guardrails {
 	}
 
 	/**
-	 * Get current settings, merged with defaults and bounds-clamped.
+	 * Get current settings, sanitized and bounds-clamped.
 	 *
 	 * @return array Settings.
 	 */
 	public static function get_settings() {
-		$stored = get_option( self::OPTION_NAME, array() );
-		if ( ! is_array( $stored ) ) {
-			$stored = array();
-		}
-		return self::sanitize_settings( array_merge( self::default_settings(), $stored ) );
+		return self::sanitize_settings( get_option( self::OPTION_NAME, array() ) );
 	}
 
 	/**
 	 * Persist new settings (bounds-clamped).
 	 *
-	 * @param array $input Raw input, e.g. from a settings form or REST body.
+	 * @param array $input Raw input, e.g. a programmatic partial update.
 	 * @return array Stored (sanitized) settings.
 	 */
 	public static function update_settings( $input ) {
@@ -150,51 +185,46 @@ class Mcpwp_Content_Guardrails {
 	}
 
 	/**
-	 * Clamp every field to a sane bound. Always starts from defaults, so a
-	 * partial or malformed input never leaves a field unset.
+	 * Clamp every field to a sane bound.
+	 *
+	 * Falls back to the CURRENTLY STORED value for any field $input doesn't
+	 * mention — never straight to the hardcoded default. This is the fix
+	 * for #957's adversarial-review WARN-6: WordPress's Settings API invokes
+	 * this sanitize_callback DIRECTLY from options.php on every settings-page
+	 * save, never through update_settings() above, and an HTML checkbox
+	 * submits NOTHING when unchecked. Falling back to the default here would
+	 * mean unchecking "Enabled" and saving silently re-enables it (the
+	 * default is true) instead of storing false — and, more generally,
+	 * means any single-field save (or a partial programmatic call) resets
+	 * every OTHER field back to default too. render_field_enabled()'s hidden
+	 * `value="0"` input makes the checkbox itself unambiguous when a real
+	 * form submits it; this fallback is what protects every other field, and
+	 * every caller that isn't that form.
 	 *
 	 * @param array $input Raw input.
 	 * @return array Sanitized settings.
 	 */
 	public static function sanitize_settings( $input ) {
-		$defaults  = self::default_settings();
-		$input     = is_array( $input ) ? $input : array();
-		$sanitized = $defaults;
+		$defaults = self::default_settings();
+		$stored   = get_option( self::OPTION_NAME, array() );
+		$stored   = is_array( $stored ) ? array_merge( $defaults, $stored ) : $defaults;
+		$input    = is_array( $input ) ? $input : array();
 
-		$sanitized['enabled'] = array_key_exists( 'enabled', $input )
-			? ! empty( $input['enabled'] )
-			: $defaults['enabled'];
+		$pick = function ( $key ) use ( $input, $stored ) {
+			return array_key_exists( $key, $input ) ? $input[ $key ] : $stored[ $key ];
+		};
 
-		$sanitized['daily_publish_cap'] = isset( $input['daily_publish_cap'] )
-			? max( 1, min( 100000, absint( $input['daily_publish_cap'] ) ) )
-			: $defaults['daily_publish_cap'];
-
-		$sanitized['bulk_approval_threshold'] = isset( $input['bulk_approval_threshold'] )
-			? max( 1, min( 1000, absint( $input['bulk_approval_threshold'] ) ) )
-			: $defaults['bulk_approval_threshold'];
-
-		$sanitized['min_word_count'] = isset( $input['min_word_count'] )
-			? max( 0, min( 5000, absint( $input['min_word_count'] ) ) )
-			: $defaults['min_word_count'];
-
-		$sanitized['duplicate_threshold'] = isset( $input['duplicate_threshold'] )
-			? max( 0.1, min( 1.0, (float) $input['duplicate_threshold'] ) )
-			: $defaults['duplicate_threshold'];
-
-		// Never above the hard architectural cap, whatever is stored.
-		$sanitized['duplicate_compare_limit'] = isset( $input['duplicate_compare_limit'] )
-			? max( 1, min( self::HARD_DUPLICATE_COMPARE_CAP, absint( $input['duplicate_compare_limit'] ) ) )
-			: $defaults['duplicate_compare_limit'];
-
-		$sanitized['anomaly_multiplier'] = isset( $input['anomaly_multiplier'] )
-			? max( 1.0, min( 10.0, (float) $input['anomaly_multiplier'] ) )
-			: $defaults['anomaly_multiplier'];
-
-		$sanitized['anomaly_min_count'] = isset( $input['anomaly_min_count'] )
-			? max( 1, min( 1000, absint( $input['anomaly_min_count'] ) ) )
-			: $defaults['anomaly_min_count'];
-
-		return $sanitized;
+		return array(
+			'enabled'                 => ! empty( $pick( 'enabled' ) ),
+			'daily_publish_cap'       => max( 1, min( 100000, absint( $pick( 'daily_publish_cap' ) ) ) ),
+			'bulk_approval_threshold' => max( 1, min( 1000, absint( $pick( 'bulk_approval_threshold' ) ) ) ),
+			'min_word_count'          => max( 0, min( 5000, absint( $pick( 'min_word_count' ) ) ) ),
+			'duplicate_threshold'     => max( 0.1, min( 1.0, (float) $pick( 'duplicate_threshold' ) ) ),
+			// Never above the hard architectural cap, whatever is stored.
+			'duplicate_compare_limit' => max( 1, min( self::HARD_DUPLICATE_COMPARE_CAP, absint( $pick( 'duplicate_compare_limit' ) ) ) ),
+			'anomaly_multiplier'      => max( 1.0, min( 10.0, (float) $pick( 'anomaly_multiplier' ) ) ),
+			'anomaly_min_count'       => max( 1, min( 1000, absint( $pick( 'anomaly_min_count' ) ) ) ),
+		);
 	}
 
 	/**
@@ -208,120 +238,287 @@ class Mcpwp_Content_Guardrails {
 	}
 
 	// -------------------------------------------------------------------------
-	// Single-item chokepoint
+	// The chokepoint (#957 adversarial review, BLOCK-1/BLOCK-2 fix)
+	//
+	// Every earlier version of this class was consulted per call site
+	// (Mcpwp_Posts::create_post(), Mcpwp_Pages::create_page(), clone_page(),
+	// etc.) — which meant any write path nobody remembered to wire in
+	// (a free wp_clone_page route, POST /elementor/page, any *update* to an
+	// already-created draft) published straight through, uncapped and
+	// unchecked. update_post()/update_page()/bulk updates/wp_batch's
+	// update operations are ordinary wp_update_post() calls; "create as
+	// draft, then update to publish" is not a separate code path to find
+	// and gate, it is the SAME call WordPress core itself always makes.
+	//
+	// The fix: one filter (`wp_insert_post_data`) that WordPress core itself
+	// runs before EVERY insert and update, and one action
+	// (`transition_post_status`) that fires after a write actually lands.
+	// Both are active only while an MCPWP-authenticated request is being
+	// served — see enter_context()/in_context(), set from
+	// trait-mcpwp-api-auth.php's verify_api_key() the moment a request is
+	// confirmed to be an MCPWP API-key/OAuth/broker principal. That is deliberately
+	// NEVER true for wp-admin (Control Room approvals go through their own
+	// hash re-check in apply_bulk_publish() below, not this filter), for
+	// WP-CLI, or for another plugin's unrelated post save.
 
 	/**
-	 * Evaluate a single post/page create-or-publish call. Called from every
-	 * single-item write path (Mcpwp_Posts::create_post(),
-	 * Mcpwp_Pages::create_page(), clone_page(), create_landing_page(),
-	 * Mcpwp_Page_Builder::build(), the WPML/Polylang translation creators)
-	 * BEFORE wp_insert_post()/wp_update_post() runs, so the caller can use
-	 * the (possibly downgraded) effective status.
+	 * Whether the request currently being served has been confirmed as an
+	 * MCPWP-authenticated request (REST route or MCP tools/call/batch/
+	 * resources sub-request under mcpwp/v1). Set once per request and never
+	 * cleared mid-request — once true, the rest of that request IS an MCPWP
+	 * call, by definition.
 	 *
-	 * Bulk creation reuses this too — bulk tools loop over create_post()/
-	 * create_page() per item, so the ramp cap and thin/duplicate checks
-	 * apply per item automatically. The bulk-approval threshold (rule 2) is a
-	 * separate, call-level decision — see plan_bulk_publish().
-	 *
-	 * @param array $args {
-	 *     @type string $post_type Post type. Only 'post'/'page' are covered.
-	 *     @type string $status    Requested status, already allow-listed by
-	 *                             the caller to publish/draft/pending/private.
-	 *     @type string $title     Title, for the city-swap heuristic.
-	 *     @type string $content   Body text (HTML or plain; stripped here).
-	 *     @type int    $now       Optional Unix timestamp, for tests.
-	 * }
-	 * @return array {
-	 *     @type string $status     Effective status to actually write.
-	 *     @type bool   $downgraded Whether publish was downgraded to draft.
-	 *     @type string[] $warnings Teaching messages for the API response.
-	 *     @type array  $guardrails Structured detail for the response body.
-	 * }
+	 * @var bool
 	 */
-	public static function evaluate( array $args ) {
-		$post_type    = isset( $args['post_type'] ) ? sanitize_key( (string) $args['post_type'] ) : 'post';
-		$status       = isset( $args['status'] ) ? sanitize_key( (string) $args['status'] ) : 'draft';
-		$title        = isset( $args['title'] ) ? (string) $args['title'] : '';
-		$content_text = isset( $args['content'] ) ? wp_strip_all_tags( (string) $args['content'] ) : '';
-		$now          = isset( $args['now'] ) ? (int) $args['now'] : time();
+	private static $context_active = false;
 
-		$enabled = self::is_enabled();
-		$covered = in_array( $post_type, self::COVERED_POST_TYPES, true );
+	/**
+	 * A notice recorded by on_insert_post_data() for a not-yet-assigned post
+	 * ID (a brand new insert — the filter runs BEFORE the row exists).
+	 * Claimed by on_wp_insert_post() the moment the real ID is known.
+	 *
+	 * @var array|null
+	 */
+	private static $pending_notice = null;
 
-		$result = array(
-			'status'     => $status,
-			'downgraded' => false,
-			'warnings'   => array(),
-			'guardrails' => array(
-				'enabled' => $enabled,
-				'covered' => $covered,
-			),
-		);
+	/**
+	 * Per-request notices, post_id => {guardrails, warnings}, surfaced into
+	 * REST/MCP responses generically — see Mcpwp_REST_API::success_response().
+	 *
+	 * @var array<int,array>
+	 */
+	private static $notices_by_post_id = array();
 
-		if ( ! $enabled || ! $covered ) {
-			return $result;
+	/**
+	 * Post IDs a caller wants excluded from the NEXT duplicate_check() this
+	 * request performs — e.g. a translation's own source post and sibling
+	 * translations, which are SUPPOSED to closely resemble each other
+	 * (#957 adversarial review: "translations are exempt from duplicate
+	 * checks against posts in their own translation group"). Set by
+	 * Mcpwp_Multilang immediately before its wp_insert_post()/
+	 * wp_update_post() call, consumed (and cleared) by the very next
+	 * on_insert_post_data() invocation.
+	 *
+	 * @var int[]
+	 */
+	private static $pending_exclude_ids = array();
+
+	/**
+	 * Mark the rest of this request as MCPWP-authenticated. Idempotent.
+	 *
+	 * @return void
+	 */
+	public static function enter_context() {
+		self::$context_active = true;
+	}
+
+	/**
+	 * @return bool Whether the current request is MCPWP-authenticated.
+	 */
+	public static function in_context() {
+		return self::$context_active;
+	}
+
+	/**
+	 * Tests only — a real process serves one request and never needs to
+	 * un-enter context; PHPUnit runs many "requests" in one process.
+	 *
+	 * @return void
+	 */
+	public static function reset_context_for_tests() {
+		self::$context_active      = false;
+		self::$pending_notice       = null;
+		self::$notices_by_post_id   = array();
+		self::$pending_exclude_ids  = array();
+		self::$token_cache          = array();
+	}
+
+	/**
+	 * Register the two WordPress core hooks this whole class now runs on.
+	 * Called once, unconditionally, at the bottom of this file — every
+	 * callback below no-ops instantly unless in_context() is true, so
+	 * registering it always (production load AND every test that requires
+	 * this file) costs nothing on a request/test that never enters context.
+	 *
+	 * @return void
+	 */
+	public static function register_hooks() {
+		add_filter( 'wp_insert_post_data', array( __CLASS__, 'on_insert_post_data' ), 10, 4 );
+		add_action( 'wp_insert_post', array( __CLASS__, 'on_wp_insert_post' ), 10, 3 );
+		add_action( 'transition_post_status', array( __CLASS__, 'on_transition_post_status' ), 10, 3 );
+	}
+
+	/**
+	 * Exclude a set of post IDs from the very next duplicate_check() this
+	 * request performs.
+	 *
+	 * @param int[] $ids Post IDs.
+	 * @return void
+	 */
+	public static function set_duplicate_exclude_ids( array $ids ) {
+		self::$pending_exclude_ids = array_map( 'absint', $ids );
+	}
+
+	/**
+	 * Read and clear the exclude-list set by set_duplicate_exclude_ids().
+	 *
+	 * @return int[] Post IDs.
+	 */
+	private static function consume_duplicate_exclude_ids() {
+		$ids                       = self::$pending_exclude_ids;
+		self::$pending_exclude_ids = array();
+		return $ids;
+	}
+
+	/**
+	 * The `wp_insert_post_data` filter — fires for EVERY wp_insert_post()
+	 * AND wp_update_post() call while in_context() is true, before the row
+	 * is written. This is the single place a caller-controlled status is
+	 * ever gated, regardless of which of the many call sites reached it.
+	 *
+	 * @param array $data                Sanitized fields about to be saved.
+	 * @param array $postarr             Original input array (carries 'ID' on an update).
+	 * @param array $unsanitized_postarr Unused here; part of core's signature.
+	 * @param bool  $update              True for an update, false for a new post.
+	 * @return array Possibly-modified $data.
+	 */
+	public static function on_insert_post_data( $data, $postarr = array(), $unsanitized_postarr = array(), $update = null ) {
+		if ( ! self::in_context() || ! self::is_enabled() || ! is_array( $data ) ) {
+			return $data;
 		}
 
-		// Rule 1/3: never enforced for drafts/pending/private — only a write
-		// that is actually publishing is capped, floor-checked, or
-		// duplicate-checked.
-		if ( 'publish' !== $status ) {
-			return $result;
+		// On an update, WordPress core's real wp_insert_post_data filter
+		// receives $data already merged with the existing row's fields —
+		// every column is present even if the caller's own $postarr only
+		// mentioned 'status'. Look the existing row up explicitly rather
+		// than assume that of $data, so a minimal update call (only ID +
+		// status) is judged correctly by post_type/title/content that
+		// already exists, not silently defaulted to 'post'/''/''.
+		$post_id         = ! empty( $postarr['ID'] ) ? absint( $postarr['ID'] ) : 0;
+		$existing        = $post_id ? get_post( $post_id ) : null;
+		$previous_status = $existing ? (string) $existing->post_status : '';
+
+		$post_type = isset( $data['post_type'] )
+			? sanitize_key( (string) $data['post_type'] )
+			: ( $existing ? $existing->post_type : 'post' );
+		if ( ! in_array( $post_type, self::COVERED_POST_TYPES, true ) ) {
+			return $data;
+		}
+
+		$new_status = isset( $data['post_status'] ) ? (string) $data['post_status'] : 'draft';
+		// 'future' is coerced to 'publish' by WordPress core once the post
+		// date arrives; treat scheduling as a publish attempt now, not later.
+		if ( ! in_array( $new_status, array( 'publish', 'future' ), true ) ) {
+			return $data;
+		}
+
+		// Already live: a resave/edit of an already-published post is not a
+		// NEW publish event — nothing to cap or duplicate-check.
+		if ( 'publish' === $previous_status ) {
+			return $data;
+		}
+
+		$title = isset( $data['post_title'] )
+			? (string) $data['post_title']
+			: ( $existing ? (string) $existing->post_title : '' );
+
+		$content_text = isset( $data['post_content'] )
+			? wp_strip_all_tags( (string) $data['post_content'] )
+			: ( $existing ? wp_strip_all_tags( (string) $existing->post_content ) : '' );
+
+		// An existing post being updated may carry its real content in
+		// _elementor_data rather than post_content — check it whenever
+		// post_content itself is empty/too short to judge from (#957
+		// adversarial review false-positive fix). A brand-new insert has no
+		// ID yet to look postmeta up by, UNLESS the caller front-loaded
+		// _elementor_data into $postarr['meta_input'] itself — a real
+		// wp_insert_post() feature (writes postmeta atomically alongside the
+		// post) that clone_page() uses specifically so a clone of an
+		// Elementor page is duplicate-checked against its actual content
+		// even though it has no ID yet. Anything that does NOT do this
+		// (build_page(), create_landing_page()) legitimately publishes with
+		// 0 words at create time — the same false-positive fix.
+		if ( self::word_count( $content_text ) < self::MIN_COMPARABLE_WORDS ) {
+			$meta_text = '';
+			if ( $post_id ) {
+				$meta_text = self::extract_text_from_elementor( get_post_meta( $post_id, '_elementor_data', true ) );
+			} elseif ( isset( $postarr['meta_input']['_elementor_data'] ) ) {
+				$meta_text = self::extract_text_from_elementor( $postarr['meta_input']['_elementor_data'] );
+			}
+			if ( '' !== trim( $meta_text ) ) {
+				$content_text = $meta_text;
+			}
 		}
 
 		$settings = self::get_settings();
+		$now      = time();
 
-		$published_24h = self::count_published_last_24h( $now );
-		$ramp_exceeded = $published_24h >= $settings['daily_publish_cap'];
+		$daily_count   = self::get_daily_count( $now );
+		$ramp_exceeded = $daily_count >= $settings['daily_publish_cap'];
 
 		$word_count = self::word_count( $content_text );
 		$thin       = $word_count < $settings['min_word_count'];
 
-		$dup_limit      = min( self::HARD_DUPLICATE_COMPARE_CAP, $settings['duplicate_compare_limit'] );
-		$dup            = self::duplicate_check( $post_type, $title, $content_text, $dup_limit );
-		$duplicate_flag = $dup['city_swap'] || ( $dup['score'] >= $settings['duplicate_threshold'] );
+		$exclude_ids = $post_id ? array( $post_id ) : array();
+		$exclude_ids = array_merge( $exclude_ids, self::consume_duplicate_exclude_ids() );
+		$dup_limit   = min( self::HARD_DUPLICATE_COMPARE_CAP, $settings['duplicate_compare_limit'] );
+		$dup         = self::duplicate_check( $post_type, $title, $content_text, $dup_limit, $exclude_ids );
+		$dup_flag    = $dup['city_swap'] || ( $dup['score'] >= $settings['duplicate_threshold'] );
 
-		$result['guardrails']['ramp'] = array(
-			'published_last_24h' => $published_24h,
-			'cap'                => $settings['daily_publish_cap'],
-			'remaining'          => max( 0, $settings['daily_publish_cap'] - $published_24h ),
-		);
-		$result['guardrails']['thin_content'] = array(
-			'word_count'     => $word_count,
-			'min_word_count' => $settings['min_word_count'],
-			'is_thin'        => $thin,
-		);
-		$result['guardrails']['duplicate'] = array(
-			'checked'   => true,
-			'score'     => round( $dup['score'], 4 ),
-			'threshold' => $settings['duplicate_threshold'],
-			'match_id'  => $dup['match_id'],
-			'city_swap' => $dup['city_swap'],
-			'flagged'   => $duplicate_flag,
+		$downgraded = $ramp_exceeded || $dup_flag;
+
+		$guardrails = array(
+			'enabled'     => true,
+			'covered'     => true,
+			'downgraded'  => $downgraded,
+			'ramp'        => array(
+				'published_today' => $daily_count,
+				'cap'              => $settings['daily_publish_cap'],
+				'remaining'        => max( 0, $settings['daily_publish_cap'] - $daily_count ),
+			),
+			'thin_content' => array(
+				'word_count'     => $word_count,
+				'min_word_count' => $settings['min_word_count'],
+				'is_thin'        => $thin,
+			),
+			'duplicate'    => array(
+				'checked'   => true,
+				'score'     => round( $dup['score'], 4 ),
+				'threshold' => $settings['duplicate_threshold'],
+				'match_id'  => $dup['match_id'],
+				'city_swap' => $dup['city_swap'],
+				'flagged'   => $dup_flag,
+			),
 		);
 
-		if ( $ramp_exceeded || $thin || $duplicate_flag ) {
-			$result['status']     = 'draft';
-			$result['downgraded'] = true;
+		$warnings = array();
+
+		// Thin content is WARNING ONLY — never a reason to downgrade
+		// (#957 adversarial review false-positive fix: contact/thank-you
+		// pages and Elementor-first pages that publish with 0 words at
+		// create time must still publish).
+		if ( $thin ) {
+			$warnings[] = sprintf(
+				/* translators: 1: word count, 2: minimum word count. */
+				__( 'Content is %1$d words, below the usual %2$d-word floor for published content. If this is a short intentional page (contact, thank-you), no action needed.', 'mcpwp' ),
+				$word_count,
+				$settings['min_word_count']
+			);
+		}
+
+		if ( $downgraded ) {
+			$data['post_status'] = 'draft';
 
 			if ( $ramp_exceeded ) {
-				$result['warnings'][] = sprintf(
-					/* translators: 1: published count in the last 24h, 2: daily cap. */
-					__( 'Publishing cap reached (%1$d/%2$d published in the last 24h) — created as a draft instead. Publish it manually, or wait for the daily window to roll over.', 'mcpwp' ),
-					$published_24h,
+				$warnings[] = sprintf(
+					/* translators: 1: published count today, 2: daily cap. */
+					__( 'Publishing cap reached (%1$d/%2$d published today) — created as a draft instead. Publish it manually from wp-admin, or wait for the next UTC day.', 'mcpwp' ),
+					$daily_count,
 					$settings['daily_publish_cap']
 				);
 			}
-			if ( $thin ) {
-				$result['warnings'][] = sprintf(
-					/* translators: 1: word count, 2: minimum word count. */
-					__( 'Content is %1$d words, below the %2$d-word floor for published content — created as a draft instead. Add more original content, then publish.', 'mcpwp' ),
-					$word_count,
-					$settings['min_word_count']
-				);
-			}
-			if ( $duplicate_flag ) {
-				$result['warnings'][] = $dup['city_swap']
+			if ( $dup_flag ) {
+				$warnings[] = $dup['city_swap']
 					? sprintf(
 						/* translators: 1: post type, 2: matched post ID. */
 						__( 'Content matches an existing %1$s (#%2$d) once the location/name in the title is set aside — created as a draft instead. Add real per-location differentiation before publishing.', 'mcpwp' ),
@@ -336,11 +533,123 @@ class Mcpwp_Content_Guardrails {
 						(int) $dup['match_id']
 					);
 			}
-		} else {
-			self::record_publish( $post_type, 1, $now );
 		}
 
-		return $result;
+		$notice = array( 'guardrails' => $guardrails, 'warnings' => $warnings );
+		if ( $post_id ) {
+			// Updates: the ID already exists, stamp the notice directly.
+			self::$notices_by_post_id[ $post_id ] = $notice;
+		} else {
+			// Creates: no ID yet — claimed by on_wp_insert_post() below.
+			self::$pending_notice = $notice;
+		}
+
+		return $data;
+	}
+
+	/**
+	 * The `wp_insert_post` action — fires after a NEW row (and only a new
+	 * one; updates are already stamped directly above) is written, with the
+	 * real post ID now known. Claims the pending, ID-less notice.
+	 *
+	 * @param int    $post_id Post ID.
+	 * @param object $post    Post object.
+	 * @param bool   $update  True for an update.
+	 * @return void
+	 */
+	public static function on_wp_insert_post( $post_id, $post, $update ) {
+		if ( ! $update && null !== self::$pending_notice ) {
+			self::$notices_by_post_id[ (int) $post_id ] = self::$pending_notice;
+			self::$pending_notice = null;
+		}
+	}
+
+	/**
+	 * The `transition_post_status` action — fires after a write actually
+	 * lands, with the FINAL status (i.e. whatever on_insert_post_data()
+	 * above left it as). Counting here — not inside the data filter, which
+	 * runs before the write can even be confirmed to succeed — means a
+	 * failed insert, or one this filter itself downgraded to draft, never
+	 * consumes ramp allowance (#957 adversarial review design fix:
+	 * "increment only after a successful transition").
+	 *
+	 * @param string $new_status New status.
+	 * @param string $old_status Old status ('new' for a brand-new post).
+	 * @param object $post       Post object.
+	 * @return void
+	 */
+	public static function on_transition_post_status( $new_status, $old_status, $post ) {
+		if ( ! self::in_context() ) {
+			return;
+		}
+		if ( 'publish' !== $new_status || 'publish' === $old_status ) {
+			return;
+		}
+		if ( ! is_object( $post ) || ! in_array( $post->post_type, self::COVERED_POST_TYPES, true ) ) {
+			return;
+		}
+
+		$now = time();
+		self::increment_daily_count( $now );
+		self::maybe_emit_anomaly( $post->post_type, $now );
+	}
+
+	/**
+	 * Merge any notice recorded for a post ID somewhere in this request into
+	 * a REST/MCP response, generically — called once from
+	 * Mcpwp_REST_API::success_response() so every tool reports guardrails
+	 * results without each individual controller method needing to ask for
+	 * them (#957 adversarial review design fix: "so every tool reports it,
+	 * no per-site plumbing").
+	 *
+	 * Walks the response tree looking for a numeric 'id' key at any of the
+	 * first few levels (covers a single-item response like create_page()'s
+	 * own return, and a bulk response's `created[]` list) and merges that
+	 * post's notice directly onto that node. Any notice left unclaimed after
+	 * the walk (a response shape with no matching 'id' anywhere — e.g. one
+	 * that only ever returns a bare int) is still surfaced, under a
+	 * top-level `guardrails_notices` fallback, so nothing is silently lost.
+	 *
+	 * @param array $data Response data, modified in place.
+	 * @return void
+	 */
+	public static function attach_notices_to_response( array &$data ) {
+		if ( empty( self::$notices_by_post_id ) ) {
+			return;
+		}
+		self::attach_notices_recursive( $data, 0 );
+		if ( ! empty( self::$notices_by_post_id ) ) {
+			$data['guardrails_notices'] = array_values( self::$notices_by_post_id );
+			self::$notices_by_post_id   = array();
+		}
+	}
+
+	/**
+	 * @param array $node  Response subtree, modified in place.
+	 * @param int   $depth Recursion guard.
+	 * @return void
+	 */
+	private static function attach_notices_recursive( array &$node, $depth ) {
+		if ( $depth > 3 || empty( self::$notices_by_post_id ) ) {
+			return;
+		}
+
+		if ( isset( $node['id'] ) && is_numeric( $node['id'] ) && isset( self::$notices_by_post_id[ (int) $node['id'] ] ) ) {
+			$notice = self::$notices_by_post_id[ (int) $node['id'] ];
+			if ( ! empty( $notice['guardrails'] ) ) {
+				$node['guardrails'] = $notice['guardrails'];
+			}
+			if ( ! empty( $notice['warnings'] ) ) {
+				$node['warnings'] = array_merge( isset( $node['warnings'] ) ? (array) $node['warnings'] : array(), $notice['warnings'] );
+			}
+			unset( self::$notices_by_post_id[ (int) $node['id'] ] );
+		}
+
+		foreach ( $node as &$value ) {
+			if ( is_array( $value ) ) {
+				self::attach_notices_recursive( $value, $depth + 1 );
+			}
+		}
 	}
 
 	// -------------------------------------------------------------------------
@@ -378,10 +687,12 @@ class Mcpwp_Content_Guardrails {
 	 * Queue an approval request to publish an already-drafted batch at once.
 	 *
 	 * The batch was already written as drafts by the caller — this only
-	 * queues the decision to flip them all to 'publish'. Delegates the
-	 * actual request storage to Mcpwp_Approvals, which owns the lifecycle;
-	 * see apply_bulk_publish() for the other half, called back from
-	 * Mcpwp_Approvals::apply_request()/rollback_request().
+	 * queues the decision to flip them all to 'publish'. Snapshots each
+	 * post's content hash + findings NOW (#957 adversarial review WARN-1),
+	 * so the approver sees why (if anything) each item was flagged, and
+	 * apply_bulk_publish() below can refuse to publish anything a human
+	 * edited after this snapshot was taken. Delegates the actual request
+	 * storage to Mcpwp_Approvals, which owns the lifecycle.
 	 *
 	 * @param int[]  $post_ids  IDs already created as drafts.
 	 * @param string $post_type 'post' or 'page'.
@@ -393,7 +704,58 @@ class Mcpwp_Content_Guardrails {
 			return new WP_Error( 'approvals_unavailable', __( 'The approval pipeline is not available.', 'mcpwp' ), array( 'status' => 500 ) );
 		}
 
-		return Mcpwp_Approvals::create_bulk_publish_request( $post_ids, $post_type, $args );
+		$items = array();
+		foreach ( $post_ids as $post_id ) {
+			$snapshot = self::snapshot_for_approval( absint( $post_id ), $post_type );
+			if ( null !== $snapshot ) {
+				$items[] = $snapshot;
+			}
+		}
+
+		return Mcpwp_Approvals::create_bulk_publish_request( $items, $post_type, $args );
+	}
+
+	/**
+	 * Content hash + findings for one post, at the moment it is queued for
+	 * bulk-publish approval.
+	 *
+	 * @param int    $post_id   Post ID.
+	 * @param string $post_type 'post' or 'page'.
+	 * @return array|null { id, hash, findings } or null if the post is gone.
+	 */
+	public static function snapshot_for_approval( $post_id, $post_type ) {
+		$post = get_post( $post_id );
+		if ( ! $post ) {
+			return null;
+		}
+
+		$text      = self::get_post_effective_text( $post );
+		$settings  = self::get_settings();
+		$dup_limit = min( self::HARD_DUPLICATE_COMPARE_CAP, $settings['duplicate_compare_limit'] );
+		$dup       = self::duplicate_check( $post_type, $post->post_title, $text, $dup_limit, array( $post_id ) );
+
+		return array(
+			'id'       => $post_id,
+			'hash'     => self::content_hash( $post ),
+			'findings' => array(
+				'word_count'      => self::word_count( $text ),
+				'duplicate_score' => round( $dup['score'], 4 ),
+				'city_swap'       => $dup['city_swap'],
+			),
+		);
+	}
+
+	/**
+	 * A post's content fingerprint — post_content + _elementor_data — used
+	 * to detect whether a post was edited between being queued for
+	 * bulk-publish approval and the approval actually being applied.
+	 *
+	 * @param object $post Post object.
+	 * @return string SHA-256 hex digest.
+	 */
+	public static function content_hash( $post ) {
+		$meta = get_post_meta( $post->ID, '_elementor_data', true );
+		return hash( 'sha256', (string) $post->post_content . '|' . (string) $meta );
 	}
 
 	/**
@@ -402,96 +764,300 @@ class Mcpwp_Content_Guardrails {
 	 * controller, so the approval lifecycle (status transitions, actor
 	 * checks) stays entirely inside Mcpwp_Approvals.
 	 *
-	 * @param array  $request Approval record (payload/rollback both carry
-	 *                        the same {post_ids, post_type} shape here).
+	 * Apply re-checks EVERY item at the moment it runs (#957 adversarial
+	 * review WARN-1): a post whose content hash no longer matches its
+	 * approval-time snapshot is skipped, not published — someone edited it
+	 * since a human reviewed the batch, so what would publish is not what
+	 * was approved. The ramp cap and duplicate check are ALSO re-run for
+	 * free: wp_update_post() below runs through on_insert_post_data() like
+	 * any other write in this class, so a batch approved yesterday but
+	 * applied today still respects today's cap.
+	 *
+	 * Rollback only reverts posts THIS SPECIFIC apply actually published,
+	 * and only while they are still exactly where apply left them (#957
+	 * adversarial review WARN-2) — never a post this apply skipped, and
+	 * never one a human has since touched again.
+	 *
+	 * @param array  $request Approval record.
 	 * @param string $field   'payload' to publish, 'rollback' to revert to draft.
 	 * @return true|WP_Error
 	 */
 	public static function apply_bulk_publish( array $request, $field ) {
 		$data      = isset( $request[ $field ] ) && is_array( $request[ $field ] ) ? $request[ $field ] : array();
-		$post_ids  = isset( $data['post_ids'] ) ? array_map( 'absint', (array) $data['post_ids'] ) : array();
 		$post_type = isset( $data['post_type'] ) ? sanitize_key( (string) $data['post_type'] ) : 'post';
+		$items     = self::normalize_bulk_publish_items( $data );
 
-		if ( empty( $post_ids ) ) {
+		if ( empty( $items ) ) {
 			return new WP_Error( 'no_items', __( 'No items recorded on this approval request.', 'mcpwp' ), array( 'status' => 400 ) );
 		}
 
-		$target_status = ( 'rollback' === $field ) ? 'draft' : 'publish';
-		$applied       = 0;
+		if ( 'rollback' === $field ) {
+			return self::rollback_bulk_publish( $request, $items );
+		}
 
-		foreach ( $post_ids as $post_id ) {
-			$post = get_post( $post_id );
-			if ( ! $post || $post->post_status === $target_status ) {
+		$published = array();
+		$skipped   = array();
+
+		foreach ( $items as $item ) {
+			$post_id = (int) $item['id'];
+			$post    = get_post( $post_id );
+
+			if ( ! $post ) {
+				$skipped[] = array( 'id' => $post_id, 'reason' => 'not_found' );
 				continue;
 			}
-			$result = wp_update_post( array( 'ID' => $post_id, 'post_status' => $target_status ), true );
-			if ( ! is_wp_error( $result ) ) {
-				$applied++;
+			if ( null !== $item['hash'] && self::content_hash( $post ) !== $item['hash'] ) {
+				$skipped[] = array( 'id' => $post_id, 'reason' => 'content_changed_since_approval' );
+				continue;
 			}
+
+			$result = wp_update_post( array( 'ID' => $post_id, 'post_status' => 'publish' ), true );
+			if ( is_wp_error( $result ) ) {
+				$skipped[] = array( 'id' => $post_id, 'reason' => $result->get_error_message() );
+				continue;
+			}
+
+			// on_insert_post_data() may have independently downgraded this
+			// to draft (ramp cap / duplicate, re-checked live) — the write
+			// above can succeed while still not landing as 'publish'.
+			$after = get_post( $post_id );
+			if ( ! $after || 'publish' !== $after->post_status ) {
+				$skipped[] = array( 'id' => $post_id, 'reason' => 'guardrails_downgraded_at_apply' );
+				continue;
+			}
+
+			$published[] = $post_id;
 		}
 
-		if ( 'publish' === $target_status && $applied > 0 ) {
-			self::record_publish( $post_type, $applied );
-		}
+		self::record_apply_result( isset( $request['id'] ) ? (string) $request['id'] : '', $published, $skipped );
 
 		return true;
 	}
 
-	// -------------------------------------------------------------------------
-	// Rolling publish log + anomaly signal (rule 4)
+	/**
+	 * Roll back a bulk-publish apply — see apply_bulk_publish()'s docblock
+	 * for the WARN-2 scope rules.
+	 *
+	 * @param array $request Approval record (needs 'id' and 'metadata').
+	 * @param array $items   Normalized {id, hash} items.
+	 * @return true
+	 */
+	private static function rollback_bulk_publish( array $request, array $items ) {
+		$applied_ids = isset( $request['metadata']['applied_ids'] )
+			? array_map( 'absint', (array) $request['metadata']['applied_ids'] )
+			: array();
+
+		$reverted = array();
+		foreach ( $items as $item ) {
+			$post_id = (int) $item['id'];
+
+			// Never touched by THIS apply — nothing here for rollback to undo.
+			if ( ! in_array( $post_id, $applied_ids, true ) ) {
+				continue;
+			}
+			$post = get_post( $post_id );
+			// Not still exactly where apply left it (a human already
+			// changed it again) — don't stomp on that.
+			if ( ! $post || 'publish' !== $post->post_status ) {
+				continue;
+			}
+
+			$result = wp_update_post( array( 'ID' => $post_id, 'post_status' => 'draft' ), true );
+			if ( ! is_wp_error( $result ) ) {
+				$reverted[] = $post_id;
+			}
+		}
+
+		self::record_apply_result( isset( $request['id'] ) ? (string) $request['id'] : '', array(), array(), $reverted );
+
+		return true;
+	}
 
 	/**
-	 * Count posts+pages published through MCPWP in the last rolling 24h.
+	 * Accept either the current {items: [{id,hash,findings}]} payload shape
+	 * or an older {post_ids: [...]} record created before this rework
+	 * shipped, so an approval queued on the previous version of this class
+	 * still applies (as unconditional publishes — no hash to compare, no
+	 * findings to show) instead of fataling.
+	 *
+	 * @param array $data Payload or rollback array.
+	 * @return array[] Normalized {id: int, hash: string|null} items.
+	 */
+	private static function normalize_bulk_publish_items( array $data ) {
+		if ( ! empty( $data['items'] ) && is_array( $data['items'] ) ) {
+			$items = array();
+			foreach ( $data['items'] as $item ) {
+				if ( is_array( $item ) && isset( $item['id'] ) ) {
+					$items[] = array(
+						'id'   => absint( $item['id'] ),
+						'hash' => isset( $item['hash'] ) ? (string) $item['hash'] : null,
+					);
+				}
+			}
+			return $items;
+		}
+		if ( ! empty( $data['post_ids'] ) ) {
+			return array_map(
+				function ( $id ) {
+					return array( 'id' => absint( $id ), 'hash' => null );
+				},
+				(array) $data['post_ids']
+			);
+		}
+		return array();
+	}
+
+	/**
+	 * Persist what an apply/rollback actually did onto the approval record
+	 * itself, so a subsequent rollback knows which IDs are its to touch
+	 * (WARN-2) and a human reviewing the record later can see what
+	 * happened. Reaches directly into Mcpwp_Approvals's option store —
+	 * the same pattern includes/pro/api/class-mcpwp-rest-staging.php
+	 * already uses via the public Mcpwp_Approvals::OPTION_NAME constant.
+	 *
+	 * @param string $request_id Approval ID.
+	 * @param int[]  $published  IDs actually flipped to publish.
+	 * @param array  $skipped    {id, reason} entries not published/reverted.
+	 * @param int[]  $reverted   IDs actually flipped back to draft (rollback).
+	 * @return void
+	 */
+	private static function record_apply_result( $request_id, array $published = array(), array $skipped = array(), array $reverted = array() ) {
+		if ( '' === $request_id || ! class_exists( 'Mcpwp_Approvals' ) ) {
+			return;
+		}
+		$items = get_option( Mcpwp_Approvals::OPTION_NAME, array() );
+		if ( ! isset( $items[ $request_id ] ) || ! is_array( $items[ $request_id ] ) ) {
+			return;
+		}
+
+		if ( ! empty( $published ) ) {
+			$items[ $request_id ]['metadata']['applied_ids'] = $published;
+		}
+		if ( ! empty( $published ) || ! empty( $skipped ) ) {
+			$items[ $request_id ]['metadata']['apply_summary'] = array(
+				'published' => $published,
+				'skipped'   => $skipped,
+			);
+		}
+		if ( ! empty( $reverted ) ) {
+			$items[ $request_id ]['metadata']['reverted_ids'] = $reverted;
+		}
+
+		update_option( Mcpwp_Approvals::OPTION_NAME, $items, false );
+	}
+
+	// -------------------------------------------------------------------------
+	// Publish counting + anomaly signal (rule 4)
+	//
+	// One option per UTC calendar day (`mcpwp_publish_count_YYYYMMDD`),
+	// incremented with a raw `UPDATE ... SET option_value = option_value + 1`
+	// rather than a read-then-write of the current value (#957 adversarial
+	// review design fix: "atomic ... one row per UTC day"). A read-modify-
+	// write on a single shared option is exactly the race two simultaneous
+	// publish requests hit at the cap boundary — both read count=24, both
+	// decide "under 25", both write 25, and the real count silently becomes
+	// 26. A single UPDATE statement is one atomic operation at the database
+	// engine level regardless of how many requests race it.
+	//
+	// This trades the issue's original "rolling 24h" wording for a UTC
+	// calendar day — the atomicity primitive above needs a bucket with a
+	// fixed key, and a rolling window has none. The tradeoff (a burst right
+	// at UTC midnight can publish close to 2x the cap within an hour) is a
+	// known, accepted limit, not the intended behavior — see the PR
+	// description.
+
+	/**
+	 * @param int $now Unix timestamp.
+	 * @return string 'YYYYMMDD', UTC.
+	 */
+	private static function day_key( $now ) {
+		return gmdate( 'Ymd', $now );
+	}
+
+	/**
+	 * Current UTC day's published-post count.
+	 *
+	 * Reads via the same raw options-row path increment_daily_count() writes
+	 * through (Mcpwp_Encryption::read_option_row(), which explicitly bypasses
+	 * the object cache) rather than the cached Options API — a value just
+	 * written by a raw SQL UPDATE is not necessarily reflected by a cached
+	 * get_option() read in the same request otherwise.
 	 *
 	 * @param int|null $now Unix timestamp; defaults to time().
 	 * @return int Count.
 	 */
-	public static function count_published_last_24h( $now = null ) {
-		$now    = null === $now ? time() : (int) $now;
-		$log    = self::prune_log( self::get_publish_log(), $now );
-		$cutoff = $now - DAY_IN_SECONDS;
-		$count  = 0;
+	public static function get_daily_count( $now = null ) {
+		$now         = null === $now ? time() : (int) $now;
+		$option_name = 'mcpwp_publish_count_' . self::day_key( $now );
 
-		foreach ( $log as $entry ) {
-			if ( isset( $entry['t'] ) && (int) $entry['t'] >= $cutoff ) {
-				$count++;
+		if ( class_exists( 'Mcpwp_Encryption' ) ) {
+			$row = Mcpwp_Encryption::read_option_row( $option_name );
+			if ( Mcpwp_Encryption::ROW_PRESENT === $row['state'] ) {
+				return (int) $row['value'];
 			}
+			if ( Mcpwp_Encryption::ROW_ABSENT === $row['state'] ) {
+				return 0;
+			}
+			// ROW_ERROR (no usable $wpdb) — fall through to the Options API.
 		}
 
-		return $count;
+		return (int) get_option( $option_name, 0 );
 	}
 
 	/**
-	 * Record N successful publishes and check for an anomaly.
+	 * Atomically increment the current UTC day's published-post count by 1.
 	 *
-	 * @param string   $post_type Post type published.
-	 * @param int      $count     Number of items published in this call.
-	 * @param int|null $now       Unix timestamp; defaults to time().
+	 * Reuses Mcpwp_Encryption's existing, already-tested first-writer-wins
+	 * insert + byte-exact compare-and-swap primitives (the same shape
+	 * Mcpwp_Approvals::set_triage() already relies on) instead of a
+	 * hand-rolled `option_value + 1` UPDATE — a raw arithmetic UPDATE is not
+	 * portable across every environment this runs on (SQLite-backed
+	 * installs, some managed hosts) the way a plain string compare-and-swap
+	 * is, and reusing tested infrastructure beats re-deriving the same
+	 * concurrency guarantee twice.
+	 *
+	 * Retries a bounded number of times against whatever another writer's
+	 * concurrent increment left behind — a lost race here means one more
+	 * retry, never a lost count, which is the whole point of the exercise
+	 * (#957 adversarial review design fix: "atomic ... one row per UTC day").
+	 *
+	 * @param int $now Unix timestamp.
 	 * @return void
 	 */
-	public static function record_publish( $post_type, $count = 1, $now = null ) {
-		$now   = null === $now ? time() : (int) $now;
-		$count = max( 1, (int) $count );
-		$log   = self::prune_log( self::get_publish_log(), $now );
+	private static function increment_daily_count( $now ) {
+		$option_name = 'mcpwp_publish_count_' . self::day_key( $now );
 
-		$day_ago    = $now - DAY_IN_SECONDS;
-		$before_24h = 0;
-		foreach ( $log as $entry ) {
-			if ( isset( $entry['t'] ) && (int) $entry['t'] >= $day_ago ) {
-				$before_24h++;
+		if ( ! class_exists( 'Mcpwp_Encryption' ) ) {
+			$current = (int) get_option( $option_name, 0 );
+			update_option( $option_name, $current + 1, false );
+			return;
+		}
+
+		for ( $attempt = 0; $attempt < 5; $attempt++ ) {
+			$row = Mcpwp_Encryption::read_option_row( $option_name );
+
+			if ( Mcpwp_Encryption::ROW_ERROR === $row['state'] ) {
+				// No usable $wpdb at all — best-effort, non-atomic fallback.
+				$current = (int) get_option( $option_name, 0 );
+				update_option( $option_name, $current + 1, false );
+				return;
 			}
+
+			if ( Mcpwp_Encryption::ROW_ABSENT === $row['state'] ) {
+				if ( Mcpwp_Encryption::insert_option_row_if_absent( $option_name, '1', 'no' ) ) {
+					return; // First writer today — starts at 1.
+				}
+				continue; // Someone else just created it — re-read and CAS from there.
+			}
+
+			$next = (string) ( (int) $row['value'] + 1 );
+			if ( Mcpwp_Encryption::compare_and_swap_option_row( $option_name, $row['value'], $next ) ) {
+				Mcpwp_Encryption::clean_option_cache( $option_name );
+				return;
+			}
+			// Another writer's increment landed between our read and our
+			// swap — retry against whatever is there now.
 		}
-
-		for ( $i = 0; $i < $count; $i++ ) {
-			$log[] = array(
-				't'    => $now,
-				'type' => sanitize_key( (string) $post_type ),
-			);
-		}
-
-		update_option( self::PUBLISH_LOG_OPTION, $log, false );
-
-		self::maybe_emit_anomaly( $post_type, $log, $now, $before_24h, $before_24h + $count );
 	}
 
 	/**
@@ -502,11 +1068,11 @@ class Mcpwp_Content_Guardrails {
 	 */
 	public static function get_status_summary( $now = null ) {
 		$settings = self::get_settings();
-		$count    = self::count_published_last_24h( $now );
+		$count    = self::get_daily_count( $now );
 
 		return array(
 			'enabled'                 => $settings['enabled'],
-			'published_last_24h'      => $count,
+			'published_today_utc'     => $count,
 			'daily_publish_cap'       => $settings['daily_publish_cap'],
 			'remaining_today'         => max( 0, $settings['daily_publish_cap'] - $count ),
 			'bulk_approval_threshold' => $settings['bulk_approval_threshold'],
@@ -515,78 +1081,41 @@ class Mcpwp_Content_Guardrails {
 	}
 
 	/**
-	 * Get the raw publish log.
+	 * Emit 'content.publish_spike' the moment today's count crosses both an
+	 * absolute floor and 2x (by default) the trailing 30-day daily average
+	 * — fires once per crossing (the increment that pushes the count from
+	 * at-or-below the threshold to above it), not on every publish once
+	 * already over the line.
 	 *
-	 * @return array Log entries.
-	 */
-	private static function get_publish_log() {
-		$log = get_option( self::PUBLISH_LOG_OPTION, array() );
-		return is_array( $log ) ? $log : array();
-	}
-
-	/**
-	 * Drop entries older than the anomaly baseline window (31 days: 30 days
-	 * of baseline plus the current rolling 24h) so the option never grows
-	 * unbounded.
-	 *
-	 * @param array $log Log entries.
-	 * @param int   $now Unix timestamp.
-	 * @return array Pruned log.
-	 */
-	private static function prune_log( array $log, $now ) {
-		$cutoff = $now - ( 31 * DAY_IN_SECONDS );
-		return array_values(
-			array_filter(
-				$log,
-				function ( $entry ) use ( $cutoff ) {
-					return isset( $entry['t'] ) && (int) $entry['t'] >= $cutoff;
-				}
-			)
-		);
-	}
-
-	/**
-	 * Emit 'content.publish_spike' the moment the rolling 24h count crosses
-	 * both an absolute floor and 2x (by default) the trailing 30-day daily
-	 * average — fires once per crossing, not on every publish once already
-	 * over the line, because it compares the count immediately before this
-	 * call against the count immediately after.
-	 *
-	 * @param string $post_type  Post type just published.
-	 * @param array  $log        Full (pruned) log, including this publish.
-	 * @param int    $now        Unix timestamp.
-	 * @param int    $before_24h 24h count before this publish.
-	 * @param int    $after_24h  24h count after this publish.
+	 * @param string $post_type Post type just published.
+	 * @param int    $now       Unix timestamp, AFTER today's count was
+	 *                          already incremented by the caller.
 	 * @return void
 	 */
-	private static function maybe_emit_anomaly( $post_type, array $log, $now, $before_24h, $after_24h ) {
+	private static function maybe_emit_anomaly( $post_type, $now ) {
 		if ( ! class_exists( 'Mcpwp_Event_Store' ) ) {
 			return;
 		}
 
-		$settings       = self::get_settings();
-		$day_ago        = $now - DAY_IN_SECONDS;
-		$baseline_start = $now - ( 31 * DAY_IN_SECONDS );
+		$settings    = self::get_settings();
+		$today_count = self::get_daily_count( $now );
+		$before      = $today_count - 1;
 
-		$baseline_count = 0;
-		foreach ( $log as $entry ) {
-			$t = isset( $entry['t'] ) ? (int) $entry['t'] : 0;
-			if ( $t >= $baseline_start && $t < $day_ago ) {
-				$baseline_count++;
-			}
+		$baseline_total = 0;
+		for ( $i = 1; $i <= 30; $i++ ) {
+			$baseline_total += self::get_daily_count( $now - ( $i * DAY_IN_SECONDS ) );
 		}
-
-		$daily_avg = $baseline_count / 30;
+		$daily_avg = $baseline_total / 30;
 		$threshold = max( (float) $settings['anomaly_min_count'], $settings['anomaly_multiplier'] * $daily_avg );
 
-		if ( $after_24h >= $settings['anomaly_min_count'] && $after_24h > $threshold && $before_24h <= $threshold ) {
+		if ( $today_count >= $settings['anomaly_min_count'] && $today_count > $threshold && $before <= $threshold ) {
 			Mcpwp_Event_Store::emit(
 				'content.publish_spike',
 				array(
-					'published_last_24h' => $after_24h,
-					'daily_average_30d'  => round( $daily_avg, 2 ),
-					'threshold'          => round( $threshold, 2 ),
-					'post_type'          => sanitize_key( (string) $post_type ),
+					'published_today_utc' => $today_count,
+					'daily_average_30d'   => round( $daily_avg, 2 ),
+					'threshold'           => round( $threshold, 2 ),
+					'post_type'           => sanitize_key( (string) $post_type ),
 				),
 				array(
 					'risk_level'         => 'medium',
@@ -600,6 +1129,18 @@ class Mcpwp_Content_Guardrails {
 	// Thin-content / duplicate detection
 
 	/**
+	 * Minimum word count a document (new content, or a candidate post) must
+	 * have before it is even worth comparing — below this, "no comparable
+	 * text" (an Elementor-first page whose builder hasn't run yet, a
+	 * contact-form shortcode-only page, etc.) is the honest answer, not
+	 * "0% similar" or a spurious match (#957 adversarial review: "skip
+	 * posts with no comparable text").
+	 *
+	 * @var int
+	 */
+	const MIN_COMPARABLE_WORDS = 10;
+
+	/**
 	 * Compare new content against the site's recent published posts of the
 	 * same type.
 	 *
@@ -607,24 +1148,40 @@ class Mcpwp_Content_Guardrails {
 	 * @param string $title        New title.
 	 * @param string $content_text New content (plain text).
 	 * @param int    $limit        Recent posts to compare against.
+	 * @param int[]  $exclude_ids  Post IDs never compared against — e.g. the
+	 *                             post being updated itself (re-checks at
+	 *                             apply time), or a translation's own
+	 *                             source/sibling posts in its translation
+	 *                             group (#957 adversarial review).
 	 * @return array { score: float, match_id: int|null, city_swap: bool }
 	 */
-	private static function duplicate_check( $post_type, $title, $content_text, $limit ) {
+	private static function duplicate_check( $post_type, $title, $content_text, $limit, array $exclude_ids = array() ) {
 		$limit = min( self::HARD_DUPLICATE_COMPARE_CAP, max( 1, (int) $limit ) );
 
-		$recent = get_posts(
-			array(
-				'post_type'      => $post_type,
-				'post_status'    => 'publish',
-				'posts_per_page' => $limit,
-				'orderby'        => 'date',
-				'order'          => 'DESC',
-				'no_found_rows'  => true,
-			)
-		);
+		// Nothing meaningful to compare on the NEW side — an Elementor-first
+		// page has no post_content yet at create time, a contact/thank-you
+		// page may be legitimately near-empty. Reporting "0% similar" would
+		// be misleading; reporting no match at all is the honest answer.
+		if ( self::word_count( $content_text ) < self::MIN_COMPARABLE_WORDS ) {
+			return array( 'score' => 0.0, 'match_id' => null, 'city_swap' => false );
+		}
 
-		$new_shingles = self::shingles( $content_text );
-		$new_tokens   = self::proper_noun_tokens( $title );
+		$query_args = array(
+			'post_type'      => $post_type,
+			'post_status'    => 'publish',
+			'posts_per_page' => $limit,
+			'orderby'        => 'date',
+			'order'          => 'DESC',
+			'no_found_rows'  => true,
+		);
+		if ( ! empty( $exclude_ids ) ) {
+			$query_args['post__not_in'] = array_map( 'absint', $exclude_ids );
+		}
+		$recent = get_posts( $query_args );
+
+		$new_tokens_words = self::normalize_words( $content_text );
+		$new_shingles     = self::shingles_from_tokens( $new_tokens_words );
+		$new_title_tokens = self::proper_noun_tokens( $title );
 
 		$best = array(
 			'score'     => 0.0,
@@ -633,14 +1190,27 @@ class Mcpwp_Content_Guardrails {
 		);
 
 		foreach ( $recent as $post ) {
-			$cand_text     = self::get_post_effective_text( $post );
-			$cand_shingles = self::cached_shingles( (int) $post->ID, $cand_text );
+			$cand_text = self::get_post_effective_text( $post );
+
+			// Skip posts with no comparable text at all (no post_content,
+			// no _elementor_data with any extractable copy).
+			if ( self::word_count( $cand_text ) < self::MIN_COMPARABLE_WORDS ) {
+				continue;
+			}
+
+			$cand_words    = self::cached_tokens( (int) $post->ID, $cand_text );
+			$cand_shingles = self::shingles_from_tokens( $cand_words );
 			$score         = self::jaccard( $new_shingles, $cand_shingles );
 
 			$cand_tokens   = self::proper_noun_tokens( $post->post_title );
-			$tokens        = array_values( array_unique( array_merge( $new_tokens, $cand_tokens ) ) );
-			$stripped_new  = self::strip_tokens( $content_text, $tokens );
-			$stripped_cand = self::strip_tokens( $cand_text, $tokens );
+			$tokens        = array_values( array_unique( array_merge( $new_title_tokens, $cand_tokens ) ) );
+			$tokens_flip   = array_flip( $tokens );
+			$stripped_new  = implode( ' ', array_values( array_filter( $new_tokens_words, function ( $w ) use ( $tokens_flip ) {
+				return ! isset( $tokens_flip[ $w ] );
+			} ) ) );
+			$stripped_cand = implode( ' ', array_values( array_filter( $cand_words, function ( $w ) use ( $tokens_flip ) {
+				return ! isset( $tokens_flip[ $w ] );
+			} ) ) );
 			$city_swap     = ( '' !== $stripped_new && $stripped_new === $stripped_cand );
 
 			if ( $city_swap && ! $best['city_swap'] ) {
@@ -681,30 +1251,80 @@ class Mcpwp_Content_Guardrails {
 	}
 
 	/**
-	 * Word count of a text, Unicode-aware (not str_word_count(), which is
-	 * ASCII-only and would undercount non-English content).
+	 * Word count of a text, Unicode-aware and CJK-aware.
+	 *
+	 * Two separate reasons str_word_count() (ASCII-only) and a naive
+	 * whitespace split both fail here:
+	 *   - Latin/Cyrillic/etc. words are whitespace-separated, so a
+	 *     `\p{L}\p{N}` token match works.
+	 *   - CJK (Chinese/Japanese/Korean-script) text is NOT
+	 *     whitespace-separated at all — a whole CJK paragraph is one
+	 *     "word" to a whitespace splitter, undercounting by 10-50x and
+	 *     wrongly flagging a substantial CJK page as thin. Each CJK
+	 *     character carries roughly the density of half a Latin word, so
+	 *     CJK characters are counted separately and divided by 2 (#957
+	 *     adversarial review: "count CJK characters ÷ 2").
 	 *
 	 * @param string $text Text.
 	 * @return int Word count.
 	 */
 	private static function word_count( $text ) {
-		$text = trim( wp_strip_all_tags( (string) $text ) );
+		$text = self::truncate_for_analysis( trim( wp_strip_all_tags( (string) $text ) ) );
 		if ( '' === $text ) {
 			return 0;
 		}
-		$matches = array();
-		preg_match_all( '/[\p{L}\p{N}]+(?:[\'’-][\p{L}\p{N}]+)*/u', $text, $matches );
-		return count( $matches[0] );
+
+		$cjk_matches = array();
+		preg_match_all( self::CJK_PATTERN, $text, $cjk_matches );
+		$cjk_count = count( $cjk_matches[0] );
+
+		// Strip CJK characters before counting Latin-style words, so a
+		// mixed-script document (e.g. a Latin brand name inside CJK body
+		// copy) does not double-count anything.
+		$non_cjk_text = preg_replace( self::CJK_PATTERN, ' ', $text );
+		$matches      = array();
+		preg_match_all( '/[\p{L}\p{N}]+(?:[\'’-][\p{L}\p{N}]+)*/u', $non_cjk_text, $matches );
+
+		return count( $matches[0] ) + (int) floor( $cjk_count / 2 );
 	}
 
 	/**
-	 * Lower-cased word list, Unicode-aware, punctuation stripped.
+	 * Unicode ranges for CJK ideographs/kana/hangul — see word_count().
+	 *
+	 * @var string
+	 */
+	const CJK_PATTERN = '/[\x{4E00}-\x{9FFF}\x{3400}-\x{4DBF}\x{3040}-\x{30FF}\x{AC00}-\x{D7A3}]/u';
+
+	/**
+	 * Truncate a document to MAX_WORDS_PER_DOCUMENT *characters worth of a
+	 * reasonable margin* before any tokenizing work — a hard, cheap ceiling
+	 * on per-document cost regardless of how long the stored content
+	 * actually is (#957 WARN-4). Truncating on a generous character bound
+	 * (average English word ~7 chars including the space) is far cheaper
+	 * than tokenizing the whole string first just to slice the word list.
 	 *
 	 * @param string $text Text.
-	 * @return string[] Words.
+	 * @return string Possibly-truncated text.
+	 */
+	private static function truncate_for_analysis( $text ) {
+		$char_limit = self::MAX_WORDS_PER_DOCUMENT * 10;
+		if ( function_exists( 'mb_substr' ) ) {
+			return mb_strlen( $text, 'UTF-8' ) > $char_limit ? mb_substr( $text, 0, $char_limit, 'UTF-8' ) : $text;
+		}
+		return strlen( $text ) > $char_limit ? substr( $text, 0, $char_limit ) : $text;
+	}
+
+	/**
+	 * Lower-cased word list, Unicode-aware, punctuation stripped, CJK
+	 * characters treated as individual tokens (shingling CJK by character
+	 * rather than by "word" still gives a meaningful overlap signal, since
+	 * CJK text has no word boundaries to begin with).
+	 *
+	 * @param string $text Text.
+	 * @return string[] Words/characters.
 	 */
 	private static function normalize_words( $text ) {
-		$text    = strtolower( wp_strip_all_tags( (string) $text ) );
+		$text    = strtolower( self::truncate_for_analysis( wp_strip_all_tags( (string) $text ) ) );
 		$matches = array();
 		preg_match_all( '/[\p{L}\p{N}]+/u', $text, $matches );
 		return $matches[0];
@@ -717,9 +1337,8 @@ class Mcpwp_Content_Guardrails {
 	 * @param int|null $n    Shingle size; defaults to SHINGLE_SIZE.
 	 * @return string[] Shingles.
 	 */
-	private static function shingles( $text, $n = null ) {
+	private static function shingles_from_tokens( array $words, $n = null ) {
 		$n     = $n ? (int) $n : self::SHINGLE_SIZE;
-		$words = self::normalize_words( $text );
 		$count = count( $words );
 
 		if ( 0 === $count ) {
@@ -737,24 +1356,50 @@ class Mcpwp_Content_Guardrails {
 	}
 
 	/**
-	 * Shingles for a post, cached per request by content hash so a bulk call
-	 * or blueprint deploy checking many new items against the same recent
-	 * posts does not re-tokenize each candidate repeatedly.
+	 * Shingles for arbitrary (non-cached) text — used for the NEW content
+	 * side of a comparison, which by construction is only ever tokenized
+	 * once per check.
+	 *
+	 * @param string   $text Text.
+	 * @param int|null $n    Shingle size; defaults to SHINGLE_SIZE.
+	 * @return string[] Shingles.
+	 */
+	private static function shingles( $text, $n = null ) {
+		return self::shingles_from_tokens( self::normalize_words( $text ), $n );
+	}
+
+	/**
+	 * Normalized word tokens for a candidate post, LRU-cached per request
+	 * by "{post_id}:{content hash}" so a bulk call or blueprint deploy
+	 * checking many new items against the same recent-posts window does not
+	 * re-tokenize each candidate repeatedly (#957: "precompute shingles
+	 * cheaply" / WARN-4: "cache normalized tokens per candidate", capped and
+	 * LRU-evicted so the cache itself cannot grow unbounded).
 	 *
 	 * @param int    $post_id Post ID (cache key component only).
 	 * @param string $text    Candidate text.
-	 * @return string[] Shingles.
+	 * @return string[] Normalized tokens.
 	 */
-	private static function cached_shingles( $post_id, $text ) {
+	private static function cached_tokens( $post_id, $text ) {
 		$key = $post_id . ':' . md5( $text );
-		if ( ! isset( self::$shingle_cache[ $key ] ) ) {
-			// Simple unbounded-growth guard for a long-lived worker process.
-			if ( count( self::$shingle_cache ) > 512 ) {
-				self::$shingle_cache = array();
-			}
-			self::$shingle_cache[ $key ] = self::shingles( $text );
+
+		if ( isset( self::$token_cache[ $key ] ) ) {
+			// Touch: move to the end (most-recently-used) without changing
+			// the value.
+			$value = self::$token_cache[ $key ];
+			unset( self::$token_cache[ $key ] );
+			self::$token_cache[ $key ] = $value;
+			return $value;
 		}
-		return self::$shingle_cache[ $key ];
+
+		if ( count( self::$token_cache ) >= self::MAX_TOKEN_CACHE_ENTRIES ) {
+			// array key order IS insertion/touch order here — evict the
+			// least-recently-used (front) entry.
+			array_shift( self::$token_cache );
+		}
+
+		self::$token_cache[ $key ] = self::normalize_words( $text );
+		return self::$token_cache[ $key ];
 	}
 
 	/**
@@ -803,32 +1448,6 @@ class Mcpwp_Content_Guardrails {
 			}
 		}
 		return array_values( array_unique( $tokens ) );
-	}
-
-	/**
-	 * Normalize a text and remove a set of tokens from it entirely — used to
-	 * test whether two bodies are identical once the location/name in the
-	 * title is discounted.
-	 *
-	 * @param string   $text   Text.
-	 * @param string[] $tokens Lower-cased tokens to remove.
-	 * @return string Normalized, token-stripped text.
-	 */
-	private static function strip_tokens( $text, array $tokens ) {
-		$words = self::normalize_words( $text );
-		if ( empty( $tokens ) ) {
-			return implode( ' ', $words );
-		}
-		$tokens_flip = array_flip( $tokens );
-		$filtered    = array_values(
-			array_filter(
-				$words,
-				function ( $w ) use ( $tokens_flip ) {
-					return ! isset( $tokens_flip[ $w ] );
-				}
-			)
-		);
-		return implode( ' ', $filtered );
 	}
 
 	// -------------------------------------------------------------------------
@@ -937,7 +1556,7 @@ class Mcpwp_Content_Guardrails {
 				'min'         => 1,
 				'max'         => 100000,
 				'step'        => 1,
-				'description' => __( 'Max new posts+pages this site will publish through MCPWP per rolling 24 hours (applies to admin keys too). Over the cap, new content is created as a draft instead of being dropped.', 'mcpwp' ),
+				'description' => __( 'Max new posts+pages this site will publish through MCPWP per UTC calendar day (applies to admin keys too). Over the cap, new content is created as a draft instead of being dropped.', 'mcpwp' ),
 			)
 		);
 
@@ -1003,7 +1622,13 @@ class Mcpwp_Content_Guardrails {
 	 */
 	public static function render_field_enabled() {
 		$settings = self::get_settings();
+		// A hidden '0' sent BEFORE the checkbox (same name) means an
+		// unchecked box still submits an explicit 'enabled' key — WordPress
+		// checkboxes send nothing at all when unchecked, which is otherwise
+		// indistinguishable from the field simply not being in this form
+		// submission (WARN-6).
 		printf(
+			'<input type="hidden" name="%1$s[enabled]" value="0" />' .
 			'<label><input type="checkbox" name="%1$s[enabled]" value="1" %2$s /> %3$s</label>',
 			esc_attr( self::OPTION_NAME ),
 			checked( $settings['enabled'], true, false ),
@@ -1034,3 +1659,11 @@ class Mcpwp_Content_Guardrails {
 		);
 	}
 }
+
+// Unconditional, idempotent (add_filter/add_action de-dupe identical
+// callbacks): every callback registered here no-ops instantly unless
+// Mcpwp_Content_Guardrails::in_context() is true, so registering it on
+// every load — production via mcpwp.php's require, or a test's own
+// require_once of this file — costs nothing on a request/test that never
+// enters context.
+Mcpwp_Content_Guardrails::register_hooks();
