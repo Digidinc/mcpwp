@@ -60,6 +60,15 @@ trait Mcpwp_Free_Tools_Media_Trait {
 					'type'        => 'string',
 					'description' => 'Alt text for images',
 				),
+			),
+			null,
+			array(
+				array(
+					'url' => 'https://example.com/images/hero-banner.jpg',
+					'filename' => 'hero-banner.jpg',
+					'title' => 'Hero Banner',
+					'alt' => 'Team collaborating around a table',
+				),
 			)
 		);
 
