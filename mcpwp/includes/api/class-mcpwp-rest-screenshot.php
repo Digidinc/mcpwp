@@ -248,21 +248,20 @@ class Mcpwp_REST_Screenshot extends Mcpwp_REST_API {
 	 * @return array{url:string,widths:array<int>,screenshots:array,succeeded:int,failed:int}|WP_Error
 	 */
 	private function capture_multi_width( $url, array $widths, $height, $save_to_media, $title, $full_page, $inline ) {
-		// #804 NIT-3: clamp each width into the same 320-1920 range a
-		// single-width call enforces BEFORE de-duplicating. Deduping first
-		// would silently collapse two different requested widths (e.g. 200
-		// and 300, both clamped to 320) into one entry with no sign to the
-		// caller that anything was dropped.
-		$widths = array_map(
-			static function ( $w ) {
-				return max( 320, min( 1920, absint( $w ) ) );
-			},
-			$widths
-		);
-		// Cap the sweep — a responsive check needs a handful of breakpoints,
-		// not an open-ended list that turns one call into dozens of outbound
-		// renders.
-		$widths = array_slice( array_values( array_unique( $widths ) ), 0, 6 );
+		// #804 NIT-3 / N-R2-2: clamp each width into the same 320-1920 range
+		// a single-width call enforces BEFORE de-duplicating and capping at
+		// 6. Deduping first would silently collapse two different
+		// requested widths (e.g. 200 and 300, both clamped to 320) into one
+		// entry with no sign to the caller that anything was dropped.
+		//
+		// This exact pipeline also has to be what Mcpwp_Operation_Weights
+		// prices (spend_weight()) — so it lives there as
+		// effective_screenshot_widths(), called from both places, instead
+		// of being duplicated here and risking the two silently disagreeing
+		// about how many renders a sweep actually does.
+		$widths = class_exists( 'Mcpwp_Operation_Weights' )
+			? Mcpwp_Operation_Weights::effective_screenshot_widths( $widths )
+			: $this->clamp_dedupe_cap_widths_fallback( $widths );
 
 		$captures = $this->screenshot->capture_many(
 			$url,
@@ -276,6 +275,7 @@ class Mcpwp_REST_Screenshot extends Mcpwp_REST_API {
 		);
 
 		$screenshots = array();
+		$wp_errors   = array();
 		$succeeded   = 0;
 		$failed      = 0;
 
@@ -286,6 +286,7 @@ class Mcpwp_REST_Screenshot extends Mcpwp_REST_API {
 
 			if ( is_wp_error( $one ) ) {
 				++$failed;
+				$wp_errors[]   = $one;
 				$screenshots[] = array(
 					'width'   => $width,
 					'success' => false,
@@ -311,6 +312,19 @@ class Mcpwp_REST_Screenshot extends Mcpwp_REST_API {
 		// asked, and an MCP client needs isError to react to that — not a
 		// 200 that a caller has to inspect screenshots[] to discover failed.
 		if ( 0 === $succeeded && $failed > 0 ) {
+			// #804 W-R2-3: when every width failed for the SAME underlying
+			// reason — most commonly the URL itself was invalid/SSRF-
+			// blocked, validated once up front by capture_many() before any
+			// width ran, so every entry carries the identical error — pass
+			// that real code/status straight through instead of masking it
+			// behind a generic screenshot_sweep_failed/502. An SSRF-blocked
+			// URL should come back as ssrf_blocked/403, not a 502 that hides
+			// why nothing ran.
+			$uniform_error = $this->uniform_error( $wp_errors );
+			if ( null !== $uniform_error ) {
+				return $uniform_error;
+			}
+
 			return new WP_Error(
 				'screenshot_sweep_failed',
 				sprintf(
@@ -333,5 +347,51 @@ class Mcpwp_REST_Screenshot extends Mcpwp_REST_API {
 			'succeeded'   => $succeeded,
 			'failed'      => $failed,
 		);
+	}
+
+	/**
+	 * When every entry in $errors carries the same error code, that one
+	 * WP_Error — with its own real status/message/data — else null (#804
+	 * W-R2-3).
+	 *
+	 * @param WP_Error[] $errors One error per failed width, same order.
+	 * @return WP_Error|null
+	 */
+	private function uniform_error( array $errors ) {
+		if ( empty( $errors ) ) {
+			return null;
+		}
+
+		$first_code = $errors[0]->get_error_code();
+
+		foreach ( $errors as $error ) {
+			if ( $error->get_error_code() !== $first_code ) {
+				return null;
+			}
+		}
+
+		return $errors[0];
+	}
+
+	/**
+	 * Fallback copy of the clamp(320-1920) -> dedupe -> cap(6) pipeline
+	 * Mcpwp_Operation_Weights::effective_screenshot_widths() implements —
+	 * used only if that class somehow isn't loaded (defensive; it always
+	 * is, in production and in the shared test bootstrap). Kept identical
+	 * to that method on purpose; a real fix belongs in one place, not two
+	 * copies that can drift.
+	 *
+	 * @param array $widths Raw widths.
+	 * @return array<int,int>
+	 */
+	private function clamp_dedupe_cap_widths_fallback( array $widths ) {
+		$clamped = array_map(
+			static function ( $w ) {
+				return max( 320, min( 1920, absint( $w ) ) );
+			},
+			$widths
+		);
+
+		return array_slice( array_values( array_unique( $clamped ) ), 0, 6 );
 	}
 }

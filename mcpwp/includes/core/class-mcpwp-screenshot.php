@@ -139,20 +139,27 @@ class Mcpwp_Screenshot {
 	 * @return array|WP_Error Screenshot data or error.
 	 */
 	public function capture( $url, $args = array() ) {
-		$url = esc_url_raw( $url );
-		if ( empty( $url ) ) {
-			return new WP_Error(
-				'invalid_url',
-				__( 'A valid URL is required.', 'mcpwp' ),
-				array( 'status' => 400 )
-			);
-		}
+		// #804 W-R2-3: capture_many() validates the URL once for the whole
+		// sweep and passes _url_validated so each width doesn't repeat a
+		// DNS lookup (Mcpwp_Security::validate_external_url() resolves the
+		// host) that already happened and already gave the same answer for
+		// this same URL.
+		if ( empty( $args['_url_validated'] ) ) {
+			$url = esc_url_raw( $url );
+			if ( empty( $url ) ) {
+				return new WP_Error(
+					'invalid_url',
+					__( 'A valid URL is required.', 'mcpwp' ),
+					array( 'status' => 400 )
+				);
+			}
 
-		// SSRF protection.
-		if ( class_exists( 'Mcpwp_Security' ) ) {
-			$ssrf_check = Mcpwp_Security::validate_external_url( $url );
-			if ( is_wp_error( $ssrf_check ) ) {
-				return $ssrf_check;
+			// SSRF protection.
+			if ( class_exists( 'Mcpwp_Security' ) ) {
+				$ssrf_check = Mcpwp_Security::validate_external_url( $url );
+				if ( is_wp_error( $ssrf_check ) ) {
+					return $ssrf_check;
+				}
 			}
 		}
 
@@ -179,14 +186,17 @@ class Mcpwp_Screenshot {
 			);
 
 			if ( ! empty( $args['full_page'] ) ) {
-				// #804 NIT-2: report what the worker actually did, not what we
-				// asked for. The worker echoes `full_page` back in its
-				// response; a worker that doesn't (an older deploy, or a
+				// #804 NIT-2/N-R2-3: report what the worker actually did, not
+				// what we asked for. The worker echoes `full_page` back in
+				// its response; a worker that doesn't (an older deploy, or a
 				// self-hosted one that doesn't echo it) leaves this
-				// genuinely unknown rather than a guessed true.
+				// genuinely unknown — null, never the string 'unknown', so
+				// the field stays a consistent tri-state (true/false/null)
+				// a caller can check with `=== true` rather than branching
+				// on type.
 				$result['full_page_honored'] = array_key_exists( 'full_page', $cf_result )
 					? (bool) $cf_result['full_page']
-					: 'unknown';
+					: null;
 			}
 
 			// Save to media library if requested.
@@ -537,13 +547,22 @@ class Mcpwp_Screenshot {
 	/**
 	 * Capture the same URL at several widths in one call.
 	 *
-	 * Probes mshots reachability at most ONCE for the whole sweep, not once
-	 * per width (#804 W2) — the probe answers "can mshots reach this server
-	 * at all", which does not vary with the requested viewport, so probing
-	 * per width was pure waste (and, on a rejection, N redundant outbound
-	 * requests that all get the same answer). Skipped entirely when the
-	 * Cloudflare worker is configured, since every width then renders
-	 * through it instead.
+	 * Validates the URL (esc_url_raw + SSRF check) exactly ONCE, before the
+	 * mshots probe and before any width runs (#804 W-R2-3) — the old code
+	 * validated only inside each per-width capture() call, so a blocked URL
+	 * (e.g. an SSRF target) still cost one outbound mshots probe request
+	 * before the first width's own validation ever ran. A blocked/invalid
+	 * URL now makes zero outbound requests: every width gets the exact same
+	 * WP_Error object, so a caller can tell the whole sweep failed for one
+	 * shared reason rather than a coincidence across N failures.
+	 *
+	 * Also probes mshots reachability at most ONCE for the whole sweep, not
+	 * once per width (#804 W2) — the probe answers "can mshots reach this
+	 * server at all", which does not vary with the requested viewport, so
+	 * probing per width was pure waste (and, on a rejection, N redundant
+	 * outbound requests that all get the same answer). Skipped entirely
+	 * when the Cloudflare worker is configured, since every width then
+	 * renders through it instead.
 	 *
 	 * @param string $url    URL to screenshot.
 	 * @param array  $widths Widths to capture. Caller is responsible for
@@ -553,6 +572,33 @@ class Mcpwp_Screenshot {
 	 * @return array<int,array|WP_Error> Keyed by width, in the order given.
 	 */
 	public function capture_many( $url, array $widths, $args = array() ) {
+		$validated_url = esc_url_raw( $url );
+		$url_error     = null;
+
+		if ( empty( $validated_url ) ) {
+			$url_error = new WP_Error(
+				'invalid_url',
+				__( 'A valid URL is required.', 'mcpwp' ),
+				array( 'status' => 400 )
+			);
+		} elseif ( class_exists( 'Mcpwp_Security' ) ) {
+			$ssrf_check = Mcpwp_Security::validate_external_url( $validated_url );
+			if ( is_wp_error( $ssrf_check ) ) {
+				$url_error = $ssrf_check;
+			}
+		}
+
+		if ( null !== $url_error ) {
+			$results = array();
+			foreach ( $widths as $width ) {
+				// The SAME WP_Error object for every width — deliberately,
+				// so a caller comparing error codes across the sweep sees
+				// one shared reason, not N coincidentally-identical ones.
+				$results[ $width ] = $url_error;
+			}
+			return $results;
+		}
+
 		$probe_status = null;
 
 		if ( ! $this->get_cf_worker_config() ) {
@@ -560,18 +606,18 @@ class Mcpwp_Screenshot {
 			$sample_height = isset( $args['height'] ) ? absint( $args['height'] ) : 960;
 			$sample_height = max( 240, min( 1440, $sample_height ) );
 
-			$probe_url    = $this->mshots_base . rawurlencode( esc_url_raw( $url ) ) . '?w=' . $sample_width . '&h=' . $sample_height;
+			$probe_url    = $this->mshots_base . rawurlencode( $validated_url ) . '?w=' . $sample_width . '&h=' . $sample_height;
 			$probe_status = $this->probe_mshots_status( $probe_url );
 		}
 
 		$results = array();
 
 		foreach ( $widths as $width ) {
-			$one_args = array_merge( $args, array( 'width' => $width ) );
+			$one_args = array_merge( $args, array( 'width' => $width, '_url_validated' => true ) );
 			if ( null !== $probe_status ) {
 				$one_args['_mshots_probe_status'] = $probe_status;
 			}
-			$results[ $width ] = $this->capture( $url, $one_args );
+			$results[ $width ] = $this->capture( $validated_url, $one_args );
 		}
 
 		return $results;

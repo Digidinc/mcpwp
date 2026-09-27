@@ -122,10 +122,35 @@ final class RestScreenshotMultiWidthTest extends TestCase {
 	// asked — it must be a whole WP_Error (so MCP dispatch sets isError),
 	// not a 200 whose "success" envelope hides an all-false screenshots
 	// array that a caller has to inspect to discover nothing worked.
-	public function test_a_sweep_where_every_width_fails_is_a_whole_error(): void {
+	//
+	// #804 W-R2-3: when every width fails with the SAME code (as it does
+	// here — capture_many() validates the URL once and every width gets
+	// the identical error), that real code/message passes straight
+	// through rather than being masked behind a generic wrapper.
+	public function test_a_sweep_where_every_width_fails_the_same_way_passes_that_code_through(): void {
 		$controller           = new Mcpwp_REST_Screenshot();
 		$spy                  = new Mcpwp_Screenshot_MultiWidth_Spy();
 		$spy->fail_all_widths = true;
+		$this->install_spy( $controller, $spy );
+
+		$resp = $controller->take_screenshot(
+			$this->request( array( 'url' => 'https://example.com', 'widths' => array( 390, 767, 1024 ) ) )
+		);
+
+		$this->assertInstanceOf( WP_Error::class, $resp );
+		$this->assertSame( 'mshots_rejected', $resp->get_error_code(), 'The real, shared failure code — not the generic screenshot_sweep_failed wrapper.' );
+	}
+
+	// A mixed-cause failure (different codes per width) has no single real
+	// reason to pass through, so the generic wrapper still applies.
+	public function test_a_sweep_where_every_width_fails_for_different_reasons_uses_the_generic_wrapper(): void {
+		$controller           = new Mcpwp_REST_Screenshot();
+		$spy                  = new Mcpwp_Screenshot_MultiWidth_Spy();
+		$spy->fail_codes      = array(
+			390  => 'mshots_rejected',
+			767  => 'mshots_unavailable',
+			1024 => 'mshots_rejected',
+		);
 		$this->install_spy( $controller, $spy );
 
 		$resp = $controller->take_screenshot(
@@ -140,6 +165,37 @@ final class RestScreenshotMultiWidthTest extends TestCase {
 		foreach ( $data['screenshots'] as $shot ) {
 			$this->assertFalse( $shot['success'] );
 		}
+	}
+
+	// #804 W-R2-3: an SSRF-blocked (or otherwise invalid) URL is validated
+	// ONCE, before any width and before the mshots probe — zero outbound
+	// requests, and the real SSRF error code, not a generic 502.
+	public function test_ssrf_blocked_url_makes_zero_outbound_requests_and_returns_the_real_code(): void {
+		$GLOBALS['mcpwp_test_filters'] = array();
+		$outbound_calls                = 0;
+		add_filter(
+			'pre_http_request',
+			static function ( $preempt, $args, $url ) use ( &$outbound_calls ) {
+				++$outbound_calls;
+				return new WP_Error( 'http_request_failed', 'should never be reached: ' . $url );
+			},
+			10,
+			3
+		);
+
+		// The REAL screenshot handler (no spy) — this exercises
+		// Mcpwp_Screenshot::capture_many()'s own validate-once logic.
+		$controller = new Mcpwp_REST_Screenshot();
+
+		$resp = $controller->take_screenshot(
+			$this->request( array( 'url' => 'http://169.254.169.254/', 'widths' => array( 390, 767, 1024 ) ) )
+		);
+
+		$this->assertInstanceOf( WP_Error::class, $resp );
+		$this->assertSame( 'ssrf_blocked', $resp->get_error_code() );
+		$this->assertSame( 0, $outbound_calls, 'A blocked URL must not cost a single outbound request — not the mshots probe, not any width.' );
+
+		$GLOBALS['mcpwp_test_filters'] = array();
 	}
 
 	public function test_widths_and_webhook_url_together_is_refused(): void {
@@ -234,10 +290,17 @@ class Mcpwp_Screenshot_MultiWidth_Spy extends Mcpwp_Screenshot {
 	/** @var bool */
 	public $fail_all_widths = false;
 
+	/** @var array<int,string> width => error code, for a mixed-failure sweep. */
+	public $fail_codes = array();
+
 	public function capture( $url, $args = array() ) {
 		$this->calls[] = $args;
 
 		$width = isset( $args['width'] ) ? (int) $args['width'] : 0;
+
+		if ( isset( $this->fail_codes[ $width ] ) ) {
+			return new WP_Error( $this->fail_codes[ $width ], 'Failed for width ' . $width . '.' );
+		}
 
 		if ( $this->fail_all_widths || ( null !== $this->fail_width && $width === $this->fail_width ) ) {
 			return new WP_Error( 'mshots_rejected', 'WordPress.com mshots refused this host (HTTP 403).' );

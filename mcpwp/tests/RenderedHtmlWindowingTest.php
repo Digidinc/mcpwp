@@ -285,4 +285,33 @@ final class RenderedHtmlWindowingTest extends TestCase {
 		$this->assertSame( strlen( $html ), strlen( $reconstructed ) );
 		$this->assertSame( $html, $reconstructed, 'Concatenated pages must equal the original document exactly, byte for byte — nothing dropped, nothing duplicated.' );
 	}
+
+	// ── #804 W-R2-1: the UTF-8 snap must be bounded, not an unbounded walk ─
+
+	public function test_invalid_utf8_run_does_not_ignore_max_bytes_or_the_ceiling(): void {
+		// 2 MB of nothing but UTF-8 continuation bytes (0x80) — not valid
+		// UTF-8 anywhere, so an unbounded "back off / walk forward until a
+		// non-continuation byte" search would walk clean across the whole
+		// 2 MB run in one direction or the other and return a window many
+		// times larger than max_bytes (this was the actual bug: 51200
+		// requested, ~2MB returned). The walk must give up after at most 3
+		// steps and use the raw position instead.
+		$html = str_repeat( "\x80", 2000000 );
+		$this->mock_remote_html( $html );
+
+		[ $controller, $request ] = $this->authed_request(
+			array( 'url' => 'https://example.com/invalid-utf8', 'offset' => 1000000, 'max_bytes' => 51200 )
+		);
+		$data = $controller->get_rendered_html( $request )->get_data();
+
+		$this->assertLessThanOrEqual(
+			51203,
+			$data['length'],
+			'A window over invalid UTF-8 must stay close to max_bytes — never a multi-megabyte response.'
+		);
+		$this->assertSame( 2000000, $data['total_bytes'] );
+		$this->assertTrue( $data['truncated'] );
+		$this->assertNotNull( $data['next_offset'], 'Must make progress — a stuck offset would page forever.' );
+		$this->assertGreaterThan( $data['offset'], $data['next_offset'], 'next_offset must move forward from the (possibly snapped) offset actually served.' );
+	}
 }

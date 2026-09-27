@@ -144,7 +144,9 @@ final class Mcpwp_Operation_Weights {
 		// renders and attachments of an ordinary screenshot for the same
 		// charge. Listing it here (checked before SPEND_EGRESS_PATTERNS)
 		// prices it per width instead; a call with no widths still resolves to
-		// max(1, 0) = 1 item, unchanged from before.
+		// max(1, 0) = 1 item, unchanged from before. '/screenshot' is priced
+		// from effective_screenshot_widths() (round 2, N-R2-2), not a raw
+		// count of whatever the caller sent — see default_spend_weight().
 		'/screenshot'             => array( 'widths' ),
 	);
 
@@ -161,20 +163,38 @@ final class Mcpwp_Operation_Weights {
 
 	/**
 	 * Routes priced by how much data one call asks for rather than by a list
-	 * of items (#804 adversarial review, W5): 1 spend unit per `unit_bytes`
-	 * of the named param's requested value, minimum 1.
+	 * of items (#804 adversarial review, W5/W-R2-2): 1 spend unit per
+	 * `unit_bytes` of the requested value CLAMPED to `ceiling` first,
+	 * minimum 1.
 	 *
 	 * /rendered-html holds its whole requested window in memory for one
 	 * response; before this it carried no list argument and so priced as an
 	 * ordinary 1-unit call regardless of max_bytes, letting a batch of
 	 * near-ceiling reads cost the same as a batch of tiny ones.
 	 *
-	 * @var array<string,array{param:string,unit_bytes:int}>
+	 * Round 2 (W-R2-2): the first pass priced 1 unit per 64KB, which put the
+	 * 512KB ceiling at only 8 units — a batch of 100 ceiling-sized reads
+	 * (800 units) still fit inside the 1000-unit budget, so the batch-level
+	 * ceiling this exists to bind never actually bound. 16KB/unit puts the
+	 * ceiling at 32 units, so that same batch (3200 units) is refused whole.
+	 * `ceiling` here must be kept equal to
+	 * Mcpwp_REST_Site_Content::RENDERED_HTML_MAX_BYTES_CEILING — an
+	 * operation-weights unit test asserts they match, since this class must
+	 * not (and, being lower-level, cannot cleanly) depend on that REST class
+	 * directly.
+	 *
+	 * Pricing clamps the requested value to `ceiling` BEFORE dividing (N-R2-1
+	 * — the other half of W-R2-2): the handler itself clamps max_bytes to the
+	 * ceiling before ever reading that many bytes, so pricing an unclamped
+	 * number would price memory the call never actually holds.
+	 *
+	 * @var array<string,array{param:string,unit_bytes:int,ceiling:int}>
 	 */
 	const SPEND_SIZE_ROUTES = array(
 		'/rendered-html' => array(
 			'param'      => 'max_bytes',
-			'unit_bytes' => 65536,
+			'unit_bytes' => 16384,
+			'ceiling'    => 524288,
 		),
 	);
 
@@ -229,14 +249,62 @@ final class Mcpwp_Operation_Weights {
 		foreach ( self::LIST_GROUPS as $group ) {
 			$largest = 0;
 			foreach ( $group as $key ) {
-				if ( isset( $arguments[ $key ] ) && is_array( $arguments[ $key ] ) ) {
+				if ( ! isset( $arguments[ $key ] ) ) {
+					continue;
+				}
+
+				if ( is_array( $arguments[ $key ] ) ) {
 					$largest = max( $largest, count( $arguments[ $key ] ) );
+					continue;
+				}
+
+				// #804 N-R2-2: some MCP clients send a widths sweep as a
+				// comma-separated string rather than an array — the exact
+				// shape id_list_count() already handles for id lists. Count
+				// it the same way, not as zero, so the weighted rate
+				// limiter sees the real fan-out here too.
+				if ( 'widths' === $key ) {
+					$largest = max( $largest, self::id_list_count( $arguments, $key ) );
 				}
 			}
 			$count += $largest;
 		}
 
 		return $count;
+	}
+
+	/**
+	 * The viewport widths a /screenshot call will actually render, after the
+	 * same pipeline Mcpwp_REST_Screenshot::capture_multi_width() applies:
+	 * clamp each to 320-1920, de-duplicate, cap at 6 (#804 N-R2-2).
+	 *
+	 * Pricing and the weighted rate limiter both call this — not their own
+	 * copy of the clamp/dedupe/cap logic — so neither can price a different
+	 * width count than what the request actually runs. Accepts a comma-
+	 * separated string the same way an id-list argument is accepted
+	 * elsewhere in this class.
+	 *
+	 * @param mixed $widths Raw widths value: an array, or a comma-separated
+	 *                       string/scalar.
+	 * @return array<int,int> Effective widths, in the order they will run.
+	 */
+	public static function effective_screenshot_widths( $widths ) {
+		if ( is_string( $widths ) || is_int( $widths ) ) {
+			$widths = array_filter( array_map( 'trim', explode( ',', (string) $widths ) ), 'strlen' );
+		}
+
+		if ( ! is_array( $widths ) ) {
+			return array();
+		}
+
+		$clamped = array_map(
+			static function ( $w ) {
+				return max( 320, min( 1920, absint( $w ) ) );
+			},
+			$widths
+		);
+
+		return array_slice( array_values( array_unique( $clamped ) ), 0, 6 );
 	}
 
 	/**
@@ -366,18 +434,39 @@ final class Mcpwp_Operation_Weights {
 		if ( array_key_exists( $path, self::SPEND_URL_ITEM_ROUTES ) ) {
 			$items = 0;
 			foreach ( self::SPEND_URL_ITEM_ROUTES[ $path ] as $key ) {
-				if ( isset( $params[ $key ] ) && is_array( $params[ $key ] ) ) {
+				if ( ! isset( $params[ $key ] ) ) {
+					continue;
+				}
+
+				// #804 N-R2-2: /screenshot's widths sweep clamps, dedupes,
+				// and caps at 6 before it runs — price that effective count,
+				// not the raw length of whatever the caller sent (which
+				// could overstate it — 20 duplicate/out-of-range widths
+				// collapse to far fewer real renders — or understate a
+				// comma-string the plain is_array() check below ignores
+				// entirely).
+				if ( '/screenshot' === $path && 'widths' === $key ) {
+					$items = max( $items, count( self::effective_screenshot_widths( $params[ $key ] ) ) );
+					continue;
+				}
+
+				if ( is_array( $params[ $key ] ) ) {
 					$items = max( $items, count( $params[ $key ] ) );
 				}
 			}
 			return max( 1, $items ) * self::SPEND_EGRESS_WEIGHT;
 		}
 
-		// Routes priced by requested size rather than by a list (#804 W5).
+		// Routes priced by requested size rather than by a list (#804 W5 /
+		// W-R2-2). Clamped to the route's own ceiling BEFORE dividing
+		// (N-R2-1): the handler never actually holds more than the ceiling
+		// in memory, so pricing an unclamped number a caller merely asked
+		// for would price memory the call never allocates.
 		if ( array_key_exists( $path, self::SPEND_SIZE_ROUTES ) ) {
 			$spec      = self::SPEND_SIZE_ROUTES[ $path ];
 			$requested = isset( $params[ $spec['param'] ] ) ? absint( $params[ $spec['param'] ] ) : 0;
-			$units     = $requested > 0 ? (int) ceil( $requested / $spec['unit_bytes'] ) : 1;
+			$clamped   = min( $requested, $spec['ceiling'] );
+			$units     = $clamped > 0 ? (int) ceil( $clamped / $spec['unit_bytes'] ) : 1;
 			return max( 1, $units );
 		}
 

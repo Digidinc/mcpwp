@@ -877,13 +877,30 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 	}
 
 	/**
-	 * The nearest whole-UTF-8-character byte position at or before $pos.
+	 * A UTF-8 character is at most 4 bytes: a lead byte plus up to this many
+	 * continuation bytes. Bounds how far either snap below may walk.
+	 */
+	const UTF8_MAX_CONTINUATION_BYTES = 3;
+
+	/**
+	 * The nearest whole-UTF-8-character byte position at or before $pos —
+	 * bounded to at most UTF8_MAX_CONTINUATION_BYTES steps back.
 	 *
 	 * A UTF-8 continuation byte always has its top two bits set to 10
 	 * (0x80-0xBF); backing off while sat on one lands on the lead byte (or a
 	 * plain single-byte/ASCII byte) that starts the character — never
 	 * mid-character (#804 W4). 0 and strlen($html) are always boundaries and
 	 * returned unchanged.
+	 *
+	 * #804 W-R2-1: the walk is capped at 3 steps. Invalid UTF-8 (or binary
+	 * content) can run continuation bytes far longer than any real
+	 * character — an uncapped walk over, say, 2 MB of stray 0x80 bytes
+	 * would back off (or, via the forward fallback below, walk forward)
+	 * across the ENTIRE run, returning a window many times larger than
+	 * max_bytes and the documented ceiling. Past the cap, this gives up on
+	 * finding a boundary nearby and returns the raw position unchanged —
+	 * still capped in width by the ceiling, at the cost of a possible
+	 * (rare, and only on invalid input) split character at that one edge.
 	 *
 	 * @param string $html Byte string.
 	 * @param int    $pos  Candidate byte position.
@@ -897,8 +914,19 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			return $pos;
 		}
 
-		while ( $pos > 0 && 0x80 === ( ord( $html[ $pos ] ) & 0xC0 ) ) {
+		$original = $pos;
+		$steps    = 0;
+
+		while ( $pos > 0 && $steps < self::UTF8_MAX_CONTINUATION_BYTES && 0x80 === ( ord( $html[ $pos ] ) & 0xC0 ) ) {
 			--$pos;
+			++$steps;
+		}
+
+		if ( 0x80 === ( ord( $html[ $pos ] ) & 0xC0 ) ) {
+			// Still on a continuation byte after the cap: not valid UTF-8
+			// (or a boundary genuinely isn't nearby). Give up rather than
+			// keep walking, and use the position as asked.
+			return $original;
 		}
 
 		return $pos;
@@ -907,7 +935,8 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 	/**
 	 * The nearest whole-UTF-8-character byte position at or after $pos —
 	 * the mirror of snap_utf8_boundary_backward(), used only as a fallback
-	 * to guarantee paging progress (see window_html_response()).
+	 * to guarantee paging progress (see window_html_response()). Bounded
+	 * the same way and for the same reason (#804 W-R2-1).
 	 *
 	 * @param string $html Byte string.
 	 * @param int    $pos  Candidate byte position.
@@ -917,8 +946,20 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 		$len = strlen( $html );
 		$pos = max( 0, min( $pos, $len ) );
 
-		while ( $pos < $len && 0x80 === ( ord( $html[ $pos ] ) & 0xC0 ) ) {
+		if ( 0 === $pos || $len === $pos ) {
+			return $pos;
+		}
+
+		$original = $pos;
+		$steps    = 0;
+
+		while ( $pos < $len && $steps < self::UTF8_MAX_CONTINUATION_BYTES && 0x80 === ( ord( $html[ $pos ] ) & 0xC0 ) ) {
 			++$pos;
+			++$steps;
+		}
+
+		if ( $pos < $len && 0x80 === ( ord( $html[ $pos ] ) & 0xC0 ) ) {
+			return $original;
 		}
 
 		return $pos;

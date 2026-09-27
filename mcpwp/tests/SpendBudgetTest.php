@@ -26,6 +26,7 @@
 use PHPUnit\Framework\TestCase;
 
 require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-batch.php';
+require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-site-content.php';
 
 final class SpendBudgetTest extends TestCase {
 
@@ -283,6 +284,104 @@ final class SpendBudgetTest extends TestCase {
 		$this->assertSame( 6, $fits['succeeded'] );
 		$this->assertSame( 900, $fits['spend_budget']['spent'] );
 		$this->assertSame( array(), $fits['spend_budget']['refused'] );
+	}
+
+	// #804 round-2 review, N-R2-2: price the widths that will ACTUALLY run
+	// (clamp 320-1920, dedupe, cap at 6) — not the raw length of whatever
+	// list the caller sent.
+	public function test_screenshot_widths_price_the_effective_count_not_the_raw_list(): void {
+		// clamp: [100,200,500,600] -> [320,320,500,600]; dedupe -> [320,500,600].
+		// Effective count 3, not the raw list's 4.
+		$cost = $this->spent( array( $this->screenshot( array( 100, 200, 500, 600 ) ) ) );
+		$this->assertSame( 75, $cost, '3 effective widths x 25 — not 4 (raw count) x 25 = 100.' );
+	}
+
+	// N-R2-2's other half: a widths sweep sent as a comma-separated string
+	// (some MCP clients encode it that way, exactly like an id list) must
+	// price the same as the equivalent array — not zero, and not skipped.
+	public function test_screenshot_widths_as_comma_string_price_the_same_as_an_array(): void {
+		$array_cost  = $this->spent( array( $this->screenshot( array( 390, 500, 600 ) ) ) );
+		$string_cost = $this->spent( array( $this->op( 'POST', '/screenshot', array( 'url' => 'https://example.com/page', 'widths' => '390,500,600' ) ) ) );
+
+		$this->assertSame( 75, $array_cost );
+		$this->assertSame( $array_cost, $string_cost );
+	}
+
+	// ---------------------------------------------------------------
+	// #804 round-2 review, W-R2-2/N-R2-1: /rendered-html's per-16KB size
+	// pricing must actually bind a batch (the first pass's 64KB/unit priced
+	// the 512KB ceiling at only 8 units — 100 ceiling reads was 800, still
+	// under the 1000 budget) and must price the CLAMPED max_bytes, not
+	// whatever oversized number a caller merely asked for.
+	// ---------------------------------------------------------------
+
+	private function rendered_html( int $max_bytes = null ): array {
+		$body = array( 'url' => 'https://example.com/page' );
+		if ( null !== $max_bytes ) {
+			$body['max_bytes'] = $max_bytes;
+		}
+		return $this->op( 'GET', '/rendered-html', $body );
+	}
+
+	public function test_rendered_html_default_cost_and_ceiling_cost(): void {
+		// No max_bytes sent at all: priced as the cheapest ordinary call —
+		// unchanged, no regression for the overwhelmingly common case of a
+		// caller who never names a size.
+		$this->assertSame( 1, $this->spent( array( $this->rendered_html() ) ) );
+
+		// Reporting the exact default cost, as asked: an explicit
+		// max_bytes=51200 (the handler's own default) costs
+		// ceil(51200/16384) = 4 units under 16KB/unit pricing. This is
+		// "4 units or fewer" — satisfied exactly at that boundary — and is
+		// a real, disclosed change from round 1's 1 unit at this size.
+		$this->assertSame( 4, $this->spent( array( $this->rendered_html( 51200 ) ) ) );
+
+		// The ceiling (512KB) costs 32 units at 16KB/unit — exactly what
+		// makes a batch of 100 ceiling reads (3200) fail to fit 1000.
+		$this->assertSame( 32, $this->spent( array( $this->rendered_html( 524288 ) ) ) );
+	}
+
+	public function test_rendered_html_price_clamps_before_dividing(): void {
+		// #804 N-R2-1: a request for far more than the ceiling is priced
+		// from the CLAMPED value the handler will actually read (the
+		// ceiling itself), not the raw, unrealistic number sent — the
+		// handler never holds more than the ceiling in memory, so pricing
+		// an unclamped number would price memory the call never allocates.
+		$this->assertSame(
+			32,
+			$this->spent( array( $this->rendered_html( 999999999 ) ) ),
+			'Priced as the 512KB ceiling (32 units), not as ~999MB/16KB (tens of thousands of units).'
+		);
+	}
+
+	public function test_a_batch_of_a_hundred_ceiling_rendered_html_reads_is_refused_whole(): void {
+		// 100 x 32 = 3200 — far over the 1000-unit budget. Round 1's 64KB/
+		// unit pricing put this same batch at 800 (8 x 100), which fit —
+		// the batch-level ceiling this pricing exists to bind never bound.
+		$refusal = $this->batch_refusal( $this->times( 100, $this->rendered_html( 524288 ) ) );
+		$data    = $refusal->get_error_data();
+
+		$this->assertSame( 413, $data['status'] );
+		$this->assertSame( 3200, $data['weight'] );
+		$this->assertSame( 1000, $data['remaining'] );
+		$this->assertSame( 1000, $data['limit'] );
+		$this->assertSame( array(), $GLOBALS['mcpwp_test_dispatched_routes'], 'Nothing ran.' );
+
+		// A batch of the same shape that fits: 31 x 32 = 992 <= 1000.
+		$fits = $this->batch( $this->times( 31, $this->rendered_html( 524288 ) ) );
+		$this->assertSame( 31, $fits['succeeded'] );
+		$this->assertSame( 992, $fits['spend_budget']['spent'] );
+		$this->assertSame( array(), $fits['spend_budget']['refused'] );
+	}
+
+	// A future edit to either ceiling in isolation is a silent price/memory
+	// mismatch — this guard makes that a failing test instead.
+	public function test_rendered_html_pricing_ceiling_matches_the_handlers_ceiling(): void {
+		$this->assertSame(
+			Mcpwp_REST_Site_Content::RENDERED_HTML_MAX_BYTES_CEILING,
+			Mcpwp_Operation_Weights::SPEND_SIZE_ROUTES['/rendered-html']['ceiling'],
+			'Mcpwp_Operation_Weights::SPEND_SIZE_ROUTES[\'/rendered-html\'][\'ceiling\'] must be kept equal to Mcpwp_REST_Site_Content::RENDERED_HTML_MAX_BYTES_CEILING by hand.'
+		);
 	}
 
 	public function test_a_refusal_says_what_the_operation_needed_and_what_was_left(): void {

@@ -17,8 +17,9 @@
  * 3. full_page was silently dropped: the REST route never accepted it even
  *    though capture_via_cloudflare() already forwarded it to the worker, and
  *    the mshots fallback has no full-page mode at all but never said so.
- *    NIT-2: full_page_honored must reflect what the WORKER echoed back, not
- *    just what was asked for — 'unknown' when it doesn't echo the field.
+ *    NIT-2/N-R2-3: full_page_honored must reflect what the WORKER echoed
+ *    back, not just what was asked for — null (never the string
+ *    'unknown') when it doesn't echo the field.
  * 4. capture_many() (used for a widths sweep) probes mshots reachability at
  *    most once for the whole sweep, not once per width.
  *
@@ -239,7 +240,11 @@ final class ScreenshotHonestyTest extends TestCase {
 		$result = ( new Mcpwp_Screenshot() )->capture( 'https://example.com/', array( 'full_page' => true ) );
 
 		$this->assertIsArray( $result );
-		$this->assertSame( 'unknown', $result['full_page_honored'] );
+		// #804 N-R2-3: full_page_honored is a tri-state true/false/null —
+		// never the string 'unknown' — so a caller can check it with a
+		// plain `=== true` instead of branching on type.
+		$this->assertNull( $result['full_page_honored'] );
+		$this->assertNotSame( 'unknown', $result['full_page_honored'] );
 	}
 
 	// A worker that echoes full_page=false (it tried, but e.g. clamped it
@@ -317,6 +322,54 @@ final class ScreenshotHonestyTest extends TestCase {
 		foreach ( $results as $width => $result ) {
 			$this->assertInstanceOf( WP_Error::class, $result, "width $width" );
 			$this->assertSame( 'mshots_rejected', $result->get_error_code() );
+		}
+	}
+
+	// ── #804 W-R2-3: URL validation runs once, before the probe and any width ──
+
+	public function test_capture_many_validates_the_url_once_before_the_probe_or_any_width(): void {
+		$outbound_calls = 0;
+		add_filter(
+			'pre_http_request',
+			static function ( $preempt, $args, $url ) use ( &$outbound_calls ) {
+				++$outbound_calls;
+				return new WP_Error( 'http_request_failed', 'should never be reached: ' . $url );
+			},
+			10,
+			3
+		);
+
+		// 169.254.169.254 is the well-known cloud-metadata / link-local
+		// address — explicitly blocked by Mcpwp_Security::is_public_ip().
+		$results = ( new Mcpwp_Screenshot() )->capture_many( 'http://169.254.169.254/', array( 390, 767, 1024 ) );
+
+		$this->assertSame( 0, $outbound_calls, 'A blocked URL must cost zero outbound requests — not the mshots probe, not any per-width capture.' );
+		$this->assertCount( 3, $results );
+
+		$codes = array();
+		foreach ( $results as $width => $result ) {
+			$this->assertInstanceOf( WP_Error::class, $result, "width $width" );
+			$codes[] = $result->get_error_code();
+		}
+		$this->assertSame( array( 'ssrf_blocked', 'ssrf_blocked', 'ssrf_blocked' ), $codes );
+
+		// The SAME object for every width, not merely the same code — a
+		// caller comparing entries sees one shared reason, not a coincidence.
+		$this->assertSame( $results[390], $results[767] );
+		$this->assertSame( $results[767], $results[1024] );
+	}
+
+	// The validate-once refactor must not change the happy path: a normal
+	// URL still succeeds for every width, exactly as before.
+	public function test_capture_many_still_succeeds_for_a_normal_url(): void {
+		$this->mock_http( $this->status_response( 200, 'placeholder' ) );
+
+		$results = ( new Mcpwp_Screenshot() )->capture_many( 'https://example.com/', array( 390, 767 ) );
+
+		$this->assertCount( 2, $results );
+		foreach ( $results as $width => $result ) {
+			$this->assertIsArray( $result, "width $width" );
+			$this->assertTrue( $result['success'], "width $width" );
 		}
 	}
 }
