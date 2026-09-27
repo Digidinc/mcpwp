@@ -3719,6 +3719,7 @@ require_once dirname(__DIR__) . '/includes/core/class-mcpwp-drafts.php';
 require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-api.php';
 require_once dirname(__DIR__) . '/includes/mcp/class-mcpwp-mcp-tool-annotations.php';
 require_once dirname(__DIR__) . '/includes/mcp/class-mcpwp-mcp-tool-registry.php';
+require_once dirname(__DIR__) . '/includes/mcp/class-mcpwp-mcp-output-schema.php';
 require_once dirname(__DIR__) . '/includes/mcp/class-mcpwp-custom-tool-registry.php';
 require_once dirname(__DIR__) . '/includes/mcp/traits/trait-mcpwp-free-tools-site.php';
 require_once dirname(__DIR__) . '/includes/mcp/traits/trait-mcpwp-free-tools-content.php';
@@ -4019,5 +4020,40 @@ if (! function_exists('wp_get_attachment_image_src')) {
     function wp_get_attachment_image_src($attachment_id, $size = 'thumbnail')
     {
         return array( 'https://example.test/media/' . (int) $attachment_id . '.jpg', 100, 100, false );
+    }
+}
+
+// Site-info surface (#906): lets Mcpwp_Core::get_site_info() — the real
+// wp_site_info result — run in-process so its declared outputSchema is
+// validated against what the code actually produces.
+if (! function_exists('wp_get_theme')) {
+    function wp_get_theme()
+    {
+        return new class {
+            public function get($header)
+            {
+                // Like WP_Theme::get(): false for a header it cannot read. A
+                // test simulates a deleted/broken active theme by setting
+                // mcpwp_test_theme_headers to array().
+                $headers = isset($GLOBALS['mcpwp_test_theme_headers'])
+                    ? $GLOBALS['mcpwp_test_theme_headers']
+                    : array( 'Name' => 'Twenty Twenty-Five', 'Version' => '1.2' );
+                return isset($headers[ $header ]) ? $headers[ $header ] : false;
+            }
+        };
+    }
+}
+
+if (! function_exists('wp_timezone_string')) {
+    function wp_timezone_string()
+    {
+        return 'UTC';
+    }
+}
+
+if (! function_exists('get_locale')) {
+    function get_locale()
+    {
+        return 'en_US';
     }
 }

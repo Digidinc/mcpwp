@@ -62,6 +62,46 @@ trait Mcpwp_Free_Tools_Content_Trait {
 					'type'        => 'string',
 					'description' => 'Comma-separated field names to return (e.g. "id,title,word_count,content"). id is always included. Use "content" or "word_count" to include full content and word counts.',
 				),
+			),
+			// #906: shape is Mcpwp_Posts::list_posts(). Same fields-filter
+			// caveat as wp_list_pages — no per-item property is `required`.
+			array(
+				'type'       => 'object',
+				'properties' => array(
+					'posts' => array(
+						'type'  => 'array',
+						'items' => array(
+							'type'                 => 'object',
+							'properties'           => array(
+								'id'             => array( 'type' => 'integer' ),
+								'title'          => array( 'type' => 'string' ),
+								'slug'           => array( 'type' => 'string' ),
+								'status'         => array( 'type' => 'string' ),
+								'date'           => array( 'type' => 'string' ),
+								'date_gmt'       => array( 'type' => 'string' ),
+								'modified'       => array( 'type' => 'string' ),
+								'modified_gmt'   => array( 'type' => 'string' ),
+								'url'            => array( 'type' => 'string' ),
+								'edit_url'       => array( 'type' => array( 'string', 'null' ) ),
+								'author'         => array( 'type' => 'object', 'additionalProperties' => true ),
+								'featured_image' => array( 'type' => array( 'object', 'null' ) ),
+								'categories'     => array( 'type' => 'array' ),
+								'tags'           => array( 'type' => 'array' ),
+								'excerpt'        => array( 'type' => 'string' ),
+							),
+							'additionalProperties' => true,
+						),
+					),
+					// Named `pages` (max_num_pages), not `pages_count` —
+					// matches list_posts()'s own key, inconsistent with
+					// list_pages() but not this issue's chokepoint to fix.
+					'total'    => array( 'type' => 'integer' ),
+					'pages'    => array( 'type' => 'integer' ),
+					'page'     => array( 'type' => 'integer' ),
+					'per_page' => array( 'type' => 'integer' ),
+				),
+				'required'             => array( 'posts', 'total', 'pages', 'page', 'per_page' ),
+				'additionalProperties' => true,
 			)
 		);
 
@@ -226,6 +266,45 @@ trait Mcpwp_Free_Tools_Content_Trait {
 					'type'        => 'string',
 					'description' => 'Comma-separated field names to return (e.g. "id,title,word_count,content"). id is always included. Use "content" or "word_count" to include full content and word counts.',
 				),
+			),
+			// #906: shape is Mcpwp_Pages::list_pages(). `fields` above can
+			// shrink each page object to a caller-chosen subset, so no
+			// per-item property is `required` — only the wrapper's own keys,
+			// which are always present regardless of `fields`.
+			array(
+				'type'       => 'object',
+				'properties' => array(
+					'pages' => array(
+						'type'  => 'array',
+						'items' => array(
+							'type'                 => 'object',
+							'properties'           => array(
+								'id'             => array( 'type' => 'integer' ),
+								'title'          => array( 'type' => 'string' ),
+								'excerpt'        => array( 'type' => 'string' ),
+								'slug'           => array( 'type' => 'string' ),
+								'status'         => array( 'type' => 'string' ),
+								'date'           => array( 'type' => 'string' ),
+								'modified'       => array( 'type' => 'string' ),
+								'url'            => array( 'type' => 'string' ),
+								'edit_url'       => array( 'type' => array( 'string', 'null' ) ),
+								'parent'         => array( 'type' => 'integer' ),
+								'menu_order'     => array( 'type' => 'integer' ),
+								'template'       => array( 'type' => 'string' ),
+								'author'         => array( 'type' => 'object', 'additionalProperties' => true ),
+								'featured_image' => array( 'type' => array( 'object', 'null' ) ),
+								'has_elementor'  => array( 'type' => 'boolean' ),
+							),
+							'additionalProperties' => true,
+						),
+					),
+					'total'       => array( 'type' => 'integer' ),
+					'pages_count' => array( 'type' => 'integer' ),
+					'page'        => array( 'type' => 'integer' ),
+					'per_page'    => array( 'type' => 'integer' ),
+				),
+				'required'             => array( 'pages', 'total', 'pages_count', 'page', 'per_page' ),
+				'additionalProperties' => true,
 			)
 		);
 
@@ -379,6 +458,33 @@ trait Mcpwp_Free_Tools_Content_Trait {
 					'description' => 'Page URL slug',
 					'required'    => true,
 				),
+			),
+			// #906: single page object, Mcpwp_Pages::get_page() with
+			// include_full=true — always carries content/word_count, unlike
+			// the fields-filterable list_pages() items above.
+			array(
+				'type'       => 'object',
+				'properties' => array(
+					'id'             => array( 'type' => 'integer' ),
+					'title'          => array( 'type' => 'string' ),
+					'excerpt'        => array( 'type' => 'string' ),
+					'slug'           => array( 'type' => 'string' ),
+					'status'         => array( 'type' => 'string' ),
+					'date'           => array( 'type' => 'string' ),
+					'modified'       => array( 'type' => 'string' ),
+					'url'            => array( 'type' => 'string' ),
+					'edit_url'       => array( 'type' => array( 'string', 'null' ) ),
+					'parent'         => array( 'type' => 'integer' ),
+					'menu_order'     => array( 'type' => 'integer' ),
+					'template'       => array( 'type' => 'string' ),
+					'author'         => array( 'type' => 'object', 'additionalProperties' => true ),
+					'featured_image' => array( 'type' => array( 'object', 'null' ) ),
+					'has_elementor'  => array( 'type' => 'boolean' ),
+					'content'        => array( 'type' => 'string' ),
+					'word_count'     => array( 'type' => 'integer' ),
+				),
+				'required'             => array( 'id', 'title', 'slug', 'status', 'url', 'content', 'word_count' ),
+				'additionalProperties' => true,
 			)
 		);
 
