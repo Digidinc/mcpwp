@@ -34,24 +34,27 @@ class Mcpwp_Core {
 			// entities already encoded ("Crumb &amp; Co") for direct
 			// echoing into a theme's markup. Nothing here changes the
 			// stored option or theme-rendered output — only this API's copy.
-			'name'         => Mcpwp_Agent_Text::decode( get_bloginfo( 'name' ) ),
-			'description'  => Mcpwp_Agent_Text::decode( get_bloginfo( 'description' ) ),
-			'url'          => home_url(),
-			'admin_url'    => admin_url(),
-			'wp_version'   => $wp_version,
+			'name'         => (string) Mcpwp_Agent_Text::decode( get_bloginfo( 'name' ) ),
+			'description'  => (string) Mcpwp_Agent_Text::decode( get_bloginfo( 'description' ) ),
+			'url'          => (string) home_url(),
+			'admin_url'    => (string) admin_url(),
+			'wp_version'   => (string) $wp_version,
 			'php_version'  => PHP_VERSION,
+			// Cast (#906): WP_Theme::get() answers false for a header it
+			// cannot read — a deleted or broken active theme — and this
+			// result is typed by wp_site_info's outputSchema.
 			'theme'        => array(
-				'name'    => $theme->get( 'Name' ),
-				'version' => $theme->get( 'Version' ),
+				'name'    => (string) $theme->get( 'Name' ),
+				'version' => (string) $theme->get( 'Version' ),
 			),
-			'timezone'     => wp_timezone_string(),
-			'language'     => get_locale(),
-			'is_rtl'       => function_exists( 'is_rtl' ) ? is_rtl() : false,
+			'timezone'     => (string) wp_timezone_string(),
+			'language'     => (string) get_locale(),
+			'is_rtl'       => function_exists( 'is_rtl' ) ? (bool) is_rtl() : false,
 			'text_direction' => ( function_exists( 'is_rtl' ) && is_rtl() ) ? 'rtl' : 'ltr',
 			'capabilities' => $this->get_capabilities(),
 			'plugin'       => array(
 				'name'    => 'MCPWP',
-				'version' => MCPWP_VERSION,
+				'version' => (string) MCPWP_VERSION,
 			),
 		);
 
@@ -64,10 +67,10 @@ class Mcpwp_Core {
 			);
 
 		$info['license'] = array(
-			'plan'   => $license_info['plan'],
-			'is_pro' => $license_info['is_pro'],
+			'plan'   => (string) $license_info['plan'],
+			'is_pro' => (bool) $license_info['is_pro'],
 			// Diagnostic only when unlicensed — never exposes the key itself (#656).
-			'reason' => $license_info['is_pro'] ? '' : ( $license_info['reason'] ?? '' ),
+			'reason' => $license_info['is_pro'] ? '' : (string) ( $license_info['reason'] ?? '' ),
 		);
 
 		// Read-only content-guardrails status (#957): current UTC-day published

@@ -154,7 +154,14 @@ abstract class Mcpwp_MCP_Tool_Registry {
 	 * @return array
 	 */
 	public static function with_error_envelope( array $schema ) {
-		$success_required = isset( $schema['required'] ) ? $schema['required'] : array();
+		// Idempotent: a schema already carrying the envelope (a tool list
+		// normalized twice, or a third party that composed it itself) is
+		// returned as-is rather than nested.
+		if ( self::has_error_envelope( $schema ) ) {
+			return $schema;
+		}
+
+		$success_required = isset( $schema['required'] ) && is_array( $schema['required'] ) ? array_values( $schema['required'] ) : array();
 		unset( $schema['required'] );
 
 		$properties          = isset( $schema['properties'] ) && is_array( $schema['properties'] ) ? $schema['properties'] : array();
@@ -169,16 +176,42 @@ abstract class Mcpwp_MCP_Tool_Registry {
 			'additionalProperties' => true,
 		);
 
-		$schema['type']       = 'object';
-		$schema['properties'] = $properties;
+		// Success branch: its own required keys, and never an `error` key —
+		// so a success-shaped result that also carries `error` is rejected
+		// instead of passing as either branch.
+		$success_branch = array( 'not' => array( 'required' => array( 'error' ) ) );
 		if ( ! empty( $success_required ) ) {
-			$schema['anyOf'] = array(
-				array( 'required' => array_values( $success_required ) ),
-				array( 'required' => array( 'error' ) ),
-			);
+			$success_branch = array_merge( array( 'required' => $success_required ), $success_branch );
 		}
 
+		$schema['type']       = 'object';
+		$schema['properties'] = $properties;
+		$schema['anyOf']      = array(
+			$success_branch,
+			array( 'required' => array( 'error' ) ),
+		);
+
 		return $schema;
+	}
+
+	/**
+	 * Whether a schema already admits the error envelope: an `error`
+	 * property and an anyOf branch requiring it. Detected structurally,
+	 * not by a vendor keyword — a strict-mode Ajv rejects unknown keywords.
+	 *
+	 * @param array $schema Output schema.
+	 * @return bool
+	 */
+	private static function has_error_envelope( array $schema ) {
+		if ( ! isset( $schema['properties']['error'], $schema['anyOf'] ) || ! is_array( $schema['anyOf'] ) ) {
+			return false;
+		}
+		foreach ( $schema['anyOf'] as $branch ) {
+			if ( is_array( $branch ) && isset( $branch['required'] ) && array( 'error' ) === $branch['required'] ) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**

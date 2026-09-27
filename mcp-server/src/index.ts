@@ -16,6 +16,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
   CallToolRequestSchema,
+  InitializeRequestSchema,
   ListToolsRequestSchema,
   ListResourcesRequestSchema,
   ReadResourceRequestSchema,
@@ -232,6 +233,7 @@ function handleWpSwitchSite(args: Record<string, unknown>): object {
     const prevKey = currentSiteKey;
     currentSiteKey = siteName;
     activeProxy = new McpProxy({ ...freshConfig.sites[siteName] }, sessionId);
+    activeProxy.setRequestedProtocolVersion(hostProtocolVersion);
     pendingSwitch = null;
     auditLog("site_switch", { from: prevKey, to: siteName });
 
@@ -279,6 +281,18 @@ const server = new Server(
   { name: serverName, version: VERSION },
   { capabilities: { tools: {}, resources: {} } }
 );
+
+// initialize → the SDK's own handshake, then remember the version the host
+// negotiated so WordPress is spoken to in the same one (#906).
+let hostProtocolVersion: string | null = null;
+server.setRequestHandler(InitializeRequestSchema, async (request) => {
+  // _oninitialize is the SDK's built-in handler (capabilities bookkeeping and
+  // version choice); wrapping it keeps that behaviour exactly.
+  const result = await (server as any)._oninitialize(request);
+  hostProtocolVersion = typeof result?.protocolVersion === "string" ? result.protocolVersion : null;
+  activeProxy.setRequestedProtocolVersion(hostProtocolVersion);
+  return result;
+});
 
 // tools/list → proxy + inject Module M tools
 server.setRequestHandler(ListToolsRequestSchema, async () => {

@@ -24,6 +24,18 @@ export class McpProxy {
   private apiKey: string;
   private sessionId: string;
 
+  /**
+   * MCP protocol version (#906). The host (Claude Desktop, Cursor…) negotiates
+   * a version with this proxy over stdio; the proxy then runs its own
+   * `initialize` against WordPress with that version, and sends the version
+   * WordPress answered as `MCP-Protocol-Version` on every later request — as
+   * the spec requires. Without it, WordPress assumes 2025-03-26 and answers
+   * without `outputSchema` / `structuredContent`.
+   */
+  private requestedProtocolVersion: string | null = null;
+  private protocolVersion: string | null = null;
+  private negotiation: Promise<void> | null = null;
+
   constructor(site: SiteConfig, sessionId = "") {
     const base = site.url.replace(/\/+$/, "");
     this.endpoint = `${base}/wp-json/mcpwp/v1/mcp`;
@@ -32,29 +44,94 @@ export class McpProxy {
   }
 
   /**
-   * Forward a JSON-RPC request to the PHP MCP endpoint.
+   * Record the version the host negotiated with this proxy. WordPress is
+   * (re)negotiated lazily, before the next forwarded request.
    */
-  async forward(request: JsonRpcRequest): Promise<JsonRpcResponse> {
+  setRequestedProtocolVersion(version: string | null): void {
+    this.requestedProtocolVersion = version;
+    this.protocolVersion = null;
+    this.negotiation = null;
+  }
+
+  /** The version WordPress agreed to, once negotiated. */
+  getProtocolVersion(): string | null {
+    return this.protocolVersion;
+  }
+
+  private negotiate(): Promise<void> {
+    if (!this.requestedProtocolVersion) return Promise.resolve();
+    if (!this.negotiation) {
+      this.negotiation = this.post({
+        jsonrpc: "2.0",
+        id: 0,
+        method: "initialize",
+        params: {
+          protocolVersion: this.requestedProtocolVersion,
+          capabilities: {},
+          clientInfo: { name: "mcpwp-proxy", version: "1" },
+        },
+      }, null)
+        .then((response) => {
+          const version = response?.result?.protocolVersion;
+          this.protocolVersion = typeof version === "string" ? version : null;
+        })
+        .catch(() => {
+          // Unreachable or a pre-#906 plugin: go on without the header and
+          // try again before the next request.
+          this.protocolVersion = null;
+          this.negotiation = null;
+        });
+    }
+    return this.negotiation;
+  }
+
+  private async post(request: JsonRpcRequest, protocolVersion: string | null): Promise<any> {
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
       "X-API-Key": this.apiKey,
     };
     if (this.sessionId) headers["X-SPAI-Session-ID"] = this.sessionId;
+    if (protocolVersion) headers["MCP-Protocol-Version"] = protocolVersion;
 
-    const response = await fetch(this.endpoint, {
+    return fetch(this.endpoint, {
       method: "POST",
       headers,
       body: JSON.stringify(request),
+    }).then(async (response) => {
+      if (!response.ok) {
+        const text = await response.text().catch(() => "");
+        const error = new Error(
+          `HTTP ${response.status} from WordPress MCP endpoint: ${text.slice(0, 200)}`
+        );
+        (error as any).status = response.status;
+        throw error;
+      }
+      return (await response.json()) as any;
     });
+  }
 
-    if (!response.ok) {
-      const text = await response.text().catch(() => "");
-      throw new Error(
-        `HTTP ${response.status} from WordPress MCP endpoint: ${text.slice(0, 200)}`
-      );
+  /**
+   * Forward a JSON-RPC request to the PHP MCP endpoint.
+   */
+  async forward(request: JsonRpcRequest): Promise<JsonRpcResponse> {
+    if (request.method === "initialize") {
+      return (await this.post(request, null)) as unknown as JsonRpcResponse;
     }
 
-    return (await response.json()) as JsonRpcResponse;
+    await this.negotiate();
+    const version = this.protocolVersion;
+    try {
+      return (await this.post(request, version)) as unknown as JsonRpcResponse;
+    } catch (error: any) {
+      // The plugin was swapped mid-session for one that no longer speaks
+      // the negotiated version: renegotiate once and retry.
+      if (version && error?.status === 400) {
+        this.setRequestedProtocolVersion(this.requestedProtocolVersion);
+        await this.negotiate();
+        return (await this.post(request, this.protocolVersion)) as unknown as JsonRpcResponse;
+      }
+      throw error;
+    }
   }
 
   /**

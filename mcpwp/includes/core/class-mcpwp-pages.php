@@ -54,10 +54,10 @@ class Mcpwp_Pages {
 
 		return array(
 			'pages'    => $pages,
-			'total'    => $query->found_posts,
-			'pages_count' => $query->max_num_pages,
-			'page'     => $args['paged'],
-			'per_page' => $args['posts_per_page'],
+			'total'    => (int) $query->found_posts,
+			'pages_count' => (int) $query->max_num_pages,
+			'page'     => (int) $args['paged'],
+			'per_page' => (int) $args['posts_per_page'],
 		);
 	}
 
@@ -432,32 +432,34 @@ class Mcpwp_Pages {
 	protected function format_page( $page, $include_full = false ) {
 		$template = get_post_meta( $page->ID, '_wp_page_template', true );
 
+		// Leaves cast to the types wp_list_pages / wp_get_page_by_slug
+		// declare in their outputSchema (#906).
 		$data = array(
-			'id'           => $page->ID,
+			'id'           => (int) $page->ID,
 			// Decoded for agents (#903) — see Mcpwp_Agent_Text. The stored
 			// value and any theme rendering are untouched.
-			'title'        => Mcpwp_Agent_Text::decode( $page->post_title ),
-			'excerpt'      => $page->post_excerpt ?? '',
-			'slug'         => $page->post_name,
-			'status'       => $page->post_status,
-			'date'         => $page->post_date,
-			'modified'     => $page->post_modified,
-			'url'          => get_permalink( $page ),
+			'title'        => (string) Mcpwp_Agent_Text::decode( $page->post_title ),
+			'excerpt'      => (string) ( $page->post_excerpt ?? '' ),
+			'slug'         => (string) $page->post_name,
+			'status'       => (string) $page->post_status,
+			'date'         => (string) $page->post_date,
+			'modified'     => (string) $page->post_modified,
+			'url'          => (string) get_permalink( $page ),
 			'edit_url'     => get_edit_post_link( $page->ID, 'raw' ),
-			'parent'       => $page->post_parent,
-			'menu_order'   => $page->menu_order,
-			'template'     => $template ?: 'default',
+			'parent'       => (int) $page->post_parent,
+			'menu_order'   => (int) $page->menu_order,
+			'template'     => is_string( $template ) && '' !== $template ? $template : 'default',
 			'author'       => array(
 				'id'   => (int) $page->post_author,
-				'name' => get_the_author_meta( 'display_name', $page->post_author ),
+				'name' => (string) get_the_author_meta( 'display_name', $page->post_author ),
 			),
 			'featured_image' => $this->get_featured_image( $page->ID ),
-			'has_elementor'  => $this->has_elementor_data( $page->ID ),
+			'has_elementor'  => (bool) $this->has_elementor_data( $page->ID ),
 		);
 
 		if ( $include_full ) {
-			$data['content']    = $page->post_content;
-			$data['word_count'] = str_word_count( wp_strip_all_tags( $page->post_content ) );
+			$data['content']    = (string) $page->post_content;
+			$data['word_count'] = (int) str_word_count( wp_strip_all_tags( $page->post_content ) );
 		}
 
 		return $data;

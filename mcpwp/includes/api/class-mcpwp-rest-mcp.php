@@ -43,6 +43,13 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	const LATEST_PROTOCOL_VERSION = '2025-11-25';
 
 	/**
+	 * Version assumed for a non-initialize request with no
+	 * MCP-Protocol-Version header — the spec's own backwards-compatibility
+	 * default (basic/transports#protocol-version-header).
+	 */
+	const HEADERLESS_PROTOCOL_VERSION = '2025-03-26';
+
+	/**
 	 * Revisions whose Tool / CallToolResult shape defines a top-level
 	 * `title`, `outputSchema`, and `structuredContent` for a tool's own
 	 * declared output (introduced 2025-06-18; unchanged in 2025-11-25). A
@@ -100,6 +107,14 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 * @var array|null
 	 */
 	private $tool_output_schemas = null;
+
+	/**
+	 * Tool names whose structuredContent failed its outputSchema in this
+	 * request — logged once each (#906).
+	 *
+	 * @var array<string,bool>
+	 */
+	private $schema_mismatches_logged = array();
 
 	/**
 	 * Forgiving-params notes from the most recently validated tools/call
@@ -482,6 +497,31 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		// (e.g. text/event-stream or text/html). This filter fires just before
 		// WordPress serves the REST response, ensuring we override at the HTTP level.
 		add_filter( 'rest_pre_serve_request', array( $this, 'force_json_content_type' ), 10, 4 );
+
+		// A browser's CORS preflight is answered by WordPress core, not by
+		// handle_options(), so the MCP request headers must also be on
+		// core's allow-list for this route (#906).
+		add_filter( 'rest_allowed_cors_headers', array( $this, 'allow_mcp_cors_headers' ), 10, 2 );
+	}
+
+	/**
+	 * Add the MCP transport headers to core's CORS allow-list, on the /mcp
+	 * route only.
+	 *
+	 * @param string[]             $headers Allowed headers.
+	 * @param WP_REST_Request|null $request Request (WordPress 6.3+ passes it).
+	 * @return string[]
+	 */
+	public function allow_mcp_cors_headers( $headers, $request = null ) {
+		if ( ! is_array( $headers ) || ! is_object( $request ) || ! method_exists( $request, 'get_route' ) || false === strpos( (string) $request->get_route(), '/mcpwp/v1/mcp' ) ) {
+			return $headers;
+		}
+		foreach ( array( 'X-API-Key', 'Mcp-Session-Id', 'MCP-Protocol-Version' ) as $header ) {
+			if ( ! in_array( $header, $headers, true ) ) {
+				$headers[] = $header;
+			}
+		}
+		return $headers;
 	}
 
 	/**
@@ -632,7 +672,28 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		// answers (#906) — resolved once, before any of them dispatch, so
 		// handle_initialize()/handle_tools_list()/handle_tools_call() never
 		// each guess differently within the same batch.
-		$this->negotiated_protocol_version = $this->resolve_protocol_version_for_request( $request, $body );
+		$resolved = $this->resolve_protocol_version_for_request( $request, $body );
+		if ( null === $resolved ) {
+			// The header value is deliberately not echoed back.
+			$rest_response = new WP_REST_Response(
+				array(
+					'jsonrpc' => '2.0',
+					'id'      => ( is_array( $body ) && ! isset( $body[0] ) && isset( $body['id'] ) ) ? $body['id'] : null,
+					'error'   => array(
+						'code'    => -32600,
+						'message' => 'Unsupported MCP-Protocol-Version header. Supported versions: ' . implode( ', ', self::SUPPORTED_PROTOCOL_VERSIONS ) . '.',
+						'data'    => array(
+							'supported' => self::SUPPORTED_PROTOCOL_VERSIONS,
+							'hint'      => 'Send the protocolVersion the initialize response returned, or omit the header.',
+						),
+					),
+				),
+				400
+			);
+			return $this->prepare_mcp_response( $rest_response );
+		}
+		$this->negotiated_protocol_version = $resolved;
+		$this->schema_mismatches_logged    = array();
 
 		// Handle batch requests (array of requests) — limit batch size to prevent abuse.
 		if ( isset( $body[0] ) ) {
@@ -1613,34 +1674,23 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	/**
 	 * Resolve the protocol version governing this whole HTTP request.
 	 *
-	 * A JSON-RPC batch answers under one version — this looks for an
-	 * `initialize` call in it first (the moment a version is actually
-	 * negotiated) and only then falls back to the transport-level signal:
-	 * the `MCP-Protocol-Version` header the spec has the client send on
-	 * every request after initialize (basic/transports#protocol-version-
-	 * header).
+	 * A JSON-RPC batch answers under one version. An `initialize` in it
+	 * wins — that is the moment a version is negotiated, and the handshake
+	 * never fails on version (negotiate_protocol_version()). Otherwise the
+	 * transport-level signal decides: the `MCP-Protocol-Version` header the
+	 * client MUST send on every request after initialize
+	 * (basic/transports#protocol-version-header):
 	 *
-	 * A client that sends neither gets LATEST_PROTOCOL_VERSION, not the
-	 * spec's own suggested backward-compat default for a version-blind
-	 * *subsequent* request in an established session (transports#protocol-
-	 * version-header names 2025-03-26 for that case). That guidance fits a
-	 * client that negotiated elsewhere and merely forgot the header; on
-	 * this endpoint, no signal at all is dominated by a different, real
-	 * case — the bundled npm proxy (mcp-server/) forwards `tools/list`/
-	 * `tools/call` straight through without ever relaying its own
-	 * stdio-side handshake with its host (Claude Desktop) as an
-	 * `initialize` call here, so this is the *only* signal this endpoint
-	 * ever gets from it. That proxy's callers already receive `title`
-	 * unconditionally today (#934 predates any version gating); answering
-	 * them with the oldest revision instead of the newest would strip a
-	 * field a live integration already relies on, which is exactly the
-	 * regression this issue exists to avoid. `outputSchema`/
-	 * `structuredContent` are new either way, and additive fields are safe
-	 * for a client that never asked for them.
+	 * - absent (or empty): assume 2025-03-26, as the spec directs for
+	 *   backwards compatibility — so a client that predates the header gets
+	 *   the shape it was written against;
+	 * - a supported version: that version;
+	 * - anything else: null — the caller answers 400 Bad Request, as the
+	 *   spec requires for an invalid or unsupported header.
 	 *
 	 * @param WP_REST_Request $request Original request (read for the header).
 	 * @param array            $body    Decoded JSON-RPC body — one message or a batch.
-	 * @return string
+	 * @return string|null Null when the header names no supported version.
 	 */
 	private function resolve_protocol_version_for_request( $request, $body ) {
 		$operations = ( is_array( $body ) && isset( $body[0] ) ) ? $body : array( $body );
@@ -1653,7 +1703,12 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		}
 
 		$header = ( $request && method_exists( $request, 'get_header' ) ) ? $request->get_header( 'MCP-Protocol-Version' ) : null;
-		return $this->negotiate_protocol_version( is_string( $header ) && '' !== $header ? $header : null );
+		$header = is_string( $header ) ? trim( $header ) : '';
+		if ( '' === $header ) {
+			return self::HEADERLESS_PROTOCOL_VERSION;
+		}
+
+		return in_array( $header, self::SUPPORTED_PROTOCOL_VERSIONS, true ) ? $header : null;
 	}
 
 	/**
@@ -1682,34 +1737,39 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	}
 
 	/**
-	 * Look up a tool's declared outputSchema, if any (#906).
+	 * Look up a tool's declared outputSchema, if any (#906), with the error
+	 * envelope admitted (Mcpwp_MCP_Tool_Registry::with_error_envelope()).
+	 *
+	 * Indexed once per controller instance — one per HTTP request — from
+	 * the registries directly rather than get_all_tools(): that filters out
+	 * tools whose category is disabled or whose plugin is inactive, but a
+	 * client keeps the schema from an earlier tools/list, so a call to a
+	 * since-disabled tool must still be shaped against it. The Pro registry
+	 * is consulted only where Pro is active (a Free site cannot run a Pro
+	 * tool, so building that list there was pure cost). Custom tools cannot
+	 * declare an outputSchema (Mcpwp_Custom_Tool_Registry::get_tools()).
 	 *
 	 * @param string $tool_name Tool name.
 	 * @return array|null
 	 */
 	private function get_tool_output_schema( $tool_name ) {
 		if ( null === $this->tool_output_schemas ) {
-			// Indexed from the built-in registries unfiltered — not from
-			// get_all_tools(), which drops tools whose category is disabled
-			// or whose plugin is inactive. A client keeps the schema it read
-			// from an earlier tools/list, so a call to a tool that has since
-			// been disabled must still be shaped against that schema (its
-			// category_disabled error included). Custom tools cannot declare
-			// an outputSchema (Mcpwp_Custom_Tool_Registry::get_tools()).
-			$registries = array( $this->free_registry, $this->pro_registry );
+			$registries = array( $this->free_registry );
+			if ( $this->is_pro_active() ) {
+				$registries[] = $this->pro_registry;
+			}
 			foreach ( Mcpwp_Integration::resolve_all() as $integration ) {
 				$registries[] = $integration;
 			}
-			$defined = array();
-			foreach ( $registries as $registry ) {
-				if ( is_object( $registry ) && method_exists( $registry, 'get_tools' ) ) {
-					$defined = array_merge( $defined, (array) $registry->get_tools() );
-				}
-			}
 			$this->tool_output_schemas = array();
-			foreach ( $defined as $tool ) {
-				if ( isset( $tool['name'], $tool['outputSchema'] ) && is_string( $tool['name'] ) ) {
-					$this->tool_output_schemas[ $tool['name'] ] = $tool['outputSchema'];
+			foreach ( $registries as $registry ) {
+				if ( ! is_object( $registry ) || ! method_exists( $registry, 'get_tools' ) ) {
+					continue;
+				}
+				foreach ( (array) $registry->get_tools() as $tool ) {
+					if ( isset( $tool['name'], $tool['outputSchema'] ) && is_string( $tool['name'] ) && is_array( $tool['outputSchema'] ) ) {
+						$this->tool_output_schemas[ $tool['name'] ] = Mcpwp_MCP_Tool_Registry::with_error_envelope( $tool['outputSchema'] );
+					}
 				}
 			}
 		}
@@ -1722,56 +1782,83 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 * answer passes through, whichever of handle_tools_call()'s many exits
 	 * or the idempotent replay path produced it (#906).
 	 *
-	 * - Pre-2025-06-18: a successful result carries no structuredContent.
-	 *   Only a replay stored under a newer version can bring one here; a
-	 *   fresh call never adds it.
-	 * - 2025-06-18+, tool declares an outputSchema, successful result:
-	 *   structuredContent MUST be present — the reference SDK client throws
-	 *   "has an output schema but did not return structured content"
-	 *   otherwise. A replay stored under an older version lacks it, so it
-	 *   is rebuilt from the text block, which carries the same data.
-	 * - An isError result is never touched: its #936 structuredContent.error
-	 *   stays under every version, and every declared outputSchema admits
-	 *   that envelope (Mcpwp_MCP_Tool_Registry::with_error_envelope()).
+	 * - Pre-2025-06-18: a successful result carries no structuredContent
+	 *   (an isError result keeps #936's structuredContent.error).
+	 * - 2025-06-18+, tool declares an outputSchema: a successful result's
+	 *   structuredContent is built here from its text block (the same data
+	 *   — it is how a replay, stored without one, gets it too). A top-level
+	 *   JSON list is wrapped as {"items": [...]}, since structuredContent is
+	 *   always an object. The candidate — or an isError result's error
+	 *   envelope — is then VALIDATED against the schema server-side before
+	 *   it is emitted, and a failure is logged once per tool per request.
+	 *   The reference SDK client throws on a mismatching structuredContent
+	 *   AND on a missing one ("has an output schema but did not return
+	 *   structured content"), so for a successful result simply omitting it
+	 *   would still end in a client exception. Instead the structured copy
+	 *   is replaced by the error envelope every schema admits —
+	 *   {error: {code: output_schema_mismatch, ...}} — while the text block
+	 *   (the full data) and isError stay exactly as they were. An isError
+	 *   result that fails (not reachable today) just loses structuredContent,
+	 *   which that client allows. Never throws.
 	 *
 	 * @param array|null $response  JSON-RPC response from the tools/call handler.
 	 * @param string     $tool_name Tool name as the client called it.
 	 * @return array|null
 	 */
 	private function conform_tool_call_result( $response, $tool_name ) {
-		if ( ! is_array( $response ) || ! isset( $response['result'] ) || ! is_array( $response['result'] ) || ! empty( $response['result']['isError'] ) ) {
+		if ( ! is_array( $response ) || ! isset( $response['result'] ) || ! is_array( $response['result'] ) ) {
 			return $response;
 		}
+
+		$is_error = ! empty( $response['result']['isError'] );
 
 		if ( ! $this->protocol_version_has_structured_output() ) {
-			unset( $response['result']['structuredContent'] );
+			if ( ! $is_error ) {
+				unset( $response['result']['structuredContent'] );
+			}
 			return $response;
 		}
 
-		if ( isset( $response['result']['structuredContent'] ) || '' === $tool_name || null === $this->get_tool_output_schema( $tool_name ) ) {
+		$schema = '' === $tool_name ? null : $this->get_tool_output_schema( $tool_name );
+		if ( null === $schema ) {
 			return $response;
 		}
 
-		$text = isset( $response['result']['content'][0]['text'] ) ? $response['result']['content'][0]['text'] : null;
-		if ( is_string( $text ) ) {
-			$decoded = json_decode( $text, true );
-			if ( is_array( $decoded ) ) {
-				$response['result']['structuredContent'] = self::as_json_object( $decoded );
+		if ( $is_error ) {
+			$candidate = isset( $response['result']['structuredContent'] ) ? json_decode( (string) wp_json_encode( $response['result']['structuredContent'] ) ) : null;
+		} else {
+			$text      = isset( $response['result']['content'][0]['text'] ) ? $response['result']['content'][0]['text'] : null;
+			$candidate = is_string( $text ) ? json_decode( $text ) : null;
+			if ( is_array( $candidate ) ) {
+				$candidate = empty( $candidate ) ? new \stdClass() : (object) array( 'items' => $candidate );
 			}
 		}
 
-		return $response;
-	}
+		$errors = $candidate instanceof \stdClass
+			? Mcpwp_MCP_Output_Schema::validate( $candidate, $schema )
+			: array( '$: result is not a JSON object' );
 
-	/**
-	 * structuredContent is a JSON object on the wire, never an array. An
-	 * empty PHP array would encode as `[]`, so it is sent as `{}` instead.
-	 *
-	 * @param array $data Result data.
-	 * @return array|object
-	 */
-	private static function as_json_object( array $data ) {
-		return empty( $data ) ? new \stdClass() : $data;
+		if ( array() === $errors ) {
+			$response['result']['structuredContent'] = $candidate;
+			return $response;
+		}
+
+		if ( $is_error ) {
+			unset( $response['result']['structuredContent'] );
+		} else {
+			$response['result']['structuredContent'] = array(
+				'error' => array(
+					'code'    => 'output_schema_mismatch',
+					'message' => 'The structured copy of this result did not match the tool\'s outputSchema and was withheld. The full result is in the text content.',
+					'path'    => (string) strtok( $errors[0], ':' ),
+				),
+			);
+		}
+		if ( ! isset( $this->schema_mismatches_logged[ $tool_name ] ) ) {
+			$this->schema_mismatches_logged[ $tool_name ] = true;
+			error_log( sprintf( 'MCPWP: %s result does not match its outputSchema; structured copy withheld (%s)', $tool_name, implode( '; ', array_slice( $errors, 0, 3 ) ) ) ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+		}
+		return $response;
 	}
 
 	/**
@@ -1904,6 +1991,20 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		// input/annotations/route surface is unchanged either way.
 		if ( ! $this->protocol_version_has_structured_output() ) {
 			$tools = array_map( array( $this, 'strip_structured_output_fields' ), $tools );
+		} else {
+			// A third-party integration may hand over a raw outputSchema; it
+			// gets the same error envelope a built-in schema gets from
+			// define_tool(), or its every isError result would fail the
+			// client's validation. Idempotent for schemas that have it.
+			$tools = array_map(
+				function ( $tool ) {
+					if ( isset( $tool['outputSchema'] ) && is_array( $tool['outputSchema'] ) ) {
+						$tool['outputSchema'] = Mcpwp_MCP_Tool_Registry::with_error_envelope( $tool['outputSchema'] );
+					}
+					return $tool;
+				},
+				$tools
+			);
 		}
 
 		return array(
@@ -2957,13 +3058,12 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		}
 		$this->fire_tool_called( $tool_name, $start, '' );
 
-		// structuredContent for a tool with a declared outputSchema (#906),
-		// only under a protocol version that defines the field. The text
-		// block below stays either way — the spec's own backward-compat
-		// recommendation for a client that only reads `content` — but is
-		// compact rather than pretty-printed when it merely duplicates the
-		// structured copy, so the result does not pay for the data twice
-		// over in whitespace.
+		// A tool with a declared outputSchema, under a protocol version that
+		// defines structuredContent (#906), gets it built and validated from
+		// this text in conform_tool_call_result(). The text block stays
+		// either way — the spec's backward-compat recommendation for a
+		// client that only reads `content` — but is compact rather than
+		// pretty-printed when it merely duplicates the structured copy.
 		$structured = $this->protocol_version_has_structured_output()
 			&& is_array( $data )
 			&& null !== $this->get_tool_output_schema( $tool_name );
@@ -2971,9 +3071,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		$encoded = wp_json_encode( $data, $structured ? JSON_UNESCAPED_SLASHES : ( JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES ) );
 		if ( false === $encoded ) {
 			// json_encode failed (non-UTF8 chars, circular refs, etc.) — return a safe error payload.
-			// structuredContent could not be serialized either, so none is sent.
-			$structured = false;
-			$encoded    = wp_json_encode(
+			$encoded = wp_json_encode(
 				array(
 					'error'   => 'Response could not be JSON-encoded.',
 					'hint'    => 'The response contained data that failed json_encode (non-UTF8 characters or an extremely large structure). Try a smaller request.',
@@ -2991,10 +3089,6 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			),
 			'isError' => false,
 		);
-
-		if ( $structured ) {
-			$result['structuredContent'] = self::as_json_object( $data );
-		}
 
 		return array(
 			'jsonrpc' => '2.0',
@@ -4329,7 +4423,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		// If origins are configured but request origin doesn't match, no CORS header is sent.
 
 		$response->header( 'Access-Control-Allow-Methods', 'POST, OPTIONS' );
-		$response->header( 'Access-Control-Allow-Headers', 'Content-Type, X-API-Key, Mcp-Session-Id, Authorization' );
+		$response->header( 'Access-Control-Allow-Headers', 'Content-Type, X-API-Key, Mcp-Session-Id, MCP-Protocol-Version, Authorization' );
 		$response->header( 'Access-Control-Max-Age', '86400' );
 	}
 
