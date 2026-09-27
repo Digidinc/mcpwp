@@ -131,7 +131,19 @@ namespace Elementor {
 
 	class Mcpwp_Fake_Documents {
 
+		/**
+		 * Real Elementor returns null for a post ID that isn't a
+		 * recognised document at all. #974/#976 review round 2, NIT-3:
+		 * modelled via a global id-list so a test can simulate "not a
+		 * theme document" and prove save_conditions() returns false for
+		 * it, matching the real Conditions_Manager::save_conditions()'s
+		 * own `if ( ! $document ) { return false; }` guard.
+		 */
 		public function get( $id, $from_cache = true ) {
+			if ( in_array( (int) $id, $GLOBALS['mcpwp_theme_test_no_document_ids'] ?? array(), true ) ) {
+				return null;
+			}
+
 			return new Mcpwp_Fake_Document( $id );
 		}
 	}
@@ -217,9 +229,25 @@ namespace ElementorPro\Modules\ThemeBuilder {
 		 * regenerate() does — would read back MCPWP's own pre-conversion
 		 * object-array shape instead and push the wrong shape into the
 		 * cache right after this method just wrote the correct one.
+		 *
+		 * #974/#976 review round 2, NIT-3: this used to call
+		 * `add($document, ...)->save()` directly, a targeted write with NO
+		 * status filter — the real method never calls `add()` itself at
+		 * all; it delegates the entire cache write to `regenerate()`,
+		 * which DOES filter by status (see that method below). Calling
+		 * `add()` directly here made this fixture more forgiving than
+		 * production, masking the exact gap
+		 * sync_custom_code_conditions_cache() exists to close. Also
+		 * returns `false` without writing anything when the id isn't a
+		 * recognised document at all, matching the real method's own
+		 * `if ( ! $document ) { return false; }` guard.
 		 */
 		public function save_conditions( $template_id, $conditions ) {
 			$document = \Elementor\Plugin::instance()->documents->get( $template_id );
+
+			if ( ! $document ) {
+				return false;
+			}
 
 			$conditions_to_save = array_map(
 				function ( $condition ) {
@@ -228,9 +256,15 @@ namespace ElementorPro\Modules\ThemeBuilder {
 				$conditions
 			);
 
-			update_post_meta( $template_id, '_elementor_conditions', $conditions_to_save );
+			if ( empty( $conditions_to_save ) ) {
+				delete_post_meta( $template_id, '_elementor_conditions' );
+			} else {
+				update_post_meta( $template_id, '_elementor_conditions', $conditions_to_save );
+			}
 
-			$this->get_cache()->add( $document, $conditions_to_save )->save();
+			$this->get_cache()->regenerate();
+
+			return true;
 		}
 
 		/**
@@ -349,17 +383,49 @@ namespace ElementorPro\Modules\ThemeBuilder {
 
 		/**
 		 * Mirrors the real regenerate(): clear the in-memory state first,
-		 * THEN rebuild it from a (here, simulated) query, then save(). A
-		 * crash anywhere in that rebuild — modelled here as happening
-		 * immediately after clear(), the worst case — leaves $conditions
-		 * empty in memory while the option on disk is untouched (save()
-		 * is never reached), exactly the staleness WARN-2 found.
+		 * THEN rebuild it from a query, then save(). A crash anywhere in
+		 * that rebuild — modelled here as happening immediately after
+		 * clear(), the worst case — leaves $conditions empty in memory
+		 * while the option on disk is untouched (save() is never
+		 * reached), exactly the staleness WARN-2 found.
+		 *
+		 * #974/#976 review round 2, NIT-3: the rebuild itself used to be
+		 * a no-op (clear(), then straight to save() — always ending
+		 * empty). The real WP_Query in Conditions_Cache::regenerate()
+		 * carries no explicit `post_status` (confirmed reading the
+		 * installed conditions-cache.php directly), so outside
+		 * `is_admin()` it matches PUBLISHED posts only — the actual root
+		 * cause of #974/#976 review W1. Rebuilding from every published
+		 * test post carrying `_elementor_conditions` meta (skipping
+		 * drafts, matching that same real behaviour) is what makes
+		 * ElementorCustomCodeConditionsCacheSyncTest.php's proof that
+		 * sync_custom_code_conditions_cache() compensates for it
+		 * meaningful, instead of vacuously true against a double that
+		 * never populated anything either way.
 		 */
 		public function regenerate() {
 			$this->clear();
 
 			if ( ! empty( $GLOBALS['mcpwp_theme_test_regenerate_throws'] ) ) {
 				throw new \RuntimeException( 'conditions cache regenerate failed (test double)' );
+			}
+
+			foreach ( $GLOBALS['_mcpwp_test_posts'] ?? array() as $post_id => $post ) {
+				if ( ! isset( $post->post_status ) || 'publish' !== $post->post_status ) {
+					continue;
+				}
+
+				$conditions = get_post_meta( $post_id, '_elementor_conditions', true );
+				if ( empty( $conditions ) || ! is_array( $conditions ) ) {
+					continue;
+				}
+
+				$document = \Elementor\Plugin::instance()->documents->get( $post_id );
+				if ( ! $document ) {
+					continue;
+				}
+
+				$this->add( $document, $conditions );
 			}
 
 			$GLOBALS['mcpwp_theme_test_cache_regenerate_calls'] = ( $GLOBALS['mcpwp_theme_test_cache_regenerate_calls'] ?? 0 ) + 1;

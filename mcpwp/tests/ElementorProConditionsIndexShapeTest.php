@@ -253,4 +253,93 @@ final class ElementorProConditionsIndexShapeTest extends TestCase {
 			'build_custom_code_condition_key() was only used by the now-deleted update_custom_code_conditions_index().'
 		);
 	}
+
+	// ---------------------------------------------------------------
+	// #974/#976 review round 2, NIT-3: the fixture's regenerate() used to
+	// be a no-op rebuild (clear(), straight to save() — always ending
+	// empty), which made every test above's use of it vacuously
+	// compatible with the real, status-filtered WP_Query behaviour
+	// without ever actually exercising that filter. These two tests pin
+	// the fixture itself, matching the real Conditions_Cache::regenerate()
+	// (publish-only) and Conditions_Manager::save_conditions() (false for
+	// a non-theme document) exactly.
+	// ---------------------------------------------------------------
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_regenerate_keeps_other_published_entries_and_drops_drafts(): void {
+		if ( ! defined( 'ELEMENTOR_VERSION' ) ) {
+			define( 'ELEMENTOR_VERSION', '4.2.4' );
+		}
+		if ( ! defined( 'ELEMENTOR_PRO_VERSION' ) ) {
+			define( 'ELEMENTOR_PRO_VERSION', '4.2.3' );
+		}
+
+		require_once __DIR__ . '/fixtures/theme-builder-elementor-doubles.php';
+
+		$this->seed_template( 10, 'publish' );
+		update_post_meta( 10, '_elementor_conditions', array( 'include/general' ) );
+
+		$this->seed_template( 11, 'draft' );
+		update_post_meta( 11, '_elementor_conditions', array( 'include/general' ) );
+
+		// Seed a stale option too, so this proves a REBUILD (not merely a
+		// first population) drops the draft — matching regenerate()'s
+		// real contract of replacing the option wholesale from a fresh
+		// query, not merging into whatever was there before.
+		update_option(
+			'elementor_pro_theme_builder_conditions',
+			array( 'header' => array( 11 => array( 'include/general' ) ) )
+		);
+
+		$conditions_manager = \ElementorPro\Modules\ThemeBuilder\Module::instance()->get_conditions_manager();
+		$conditions_manager->get_cache()->regenerate();
+
+		$option = get_option( 'elementor_pro_theme_builder_conditions', array() );
+
+		$this->assertArrayHasKey( 'header', $option );
+		$this->assertArrayHasKey(
+			10,
+			$option['header'],
+			'A published post carrying real _elementor_conditions meta must survive a rebuild.'
+		);
+		$this->assertArrayNotHasKey(
+			11,
+			$option['header'],
+			'A draft must NOT survive a rebuild — this is the real, status-filtered WP_Query behaviour that made W1 possible in production.'
+		);
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_save_conditions_returns_false_for_a_non_theme_document(): void {
+		if ( ! defined( 'ELEMENTOR_VERSION' ) ) {
+			define( 'ELEMENTOR_VERSION', '4.2.4' );
+		}
+		if ( ! defined( 'ELEMENTOR_PRO_VERSION' ) ) {
+			define( 'ELEMENTOR_PRO_VERSION', '4.2.3' );
+		}
+
+		require_once __DIR__ . '/fixtures/theme-builder-elementor-doubles.php';
+
+		$GLOBALS['mcpwp_theme_test_no_document_ids'] = array( 99 );
+
+		$conditions_manager = \ElementorPro\Modules\ThemeBuilder\Module::instance()->get_conditions_manager();
+		$result              = $conditions_manager->save_conditions(
+			99,
+			array(
+				array(
+					'type' => 'include',
+					'name' => 'general',
+				),
+			)
+		);
+
+		$this->assertFalse( $result );
+		$this->assertSame( array(), get_option( 'elementor_pro_theme_builder_conditions', array() ) );
+	}
 }

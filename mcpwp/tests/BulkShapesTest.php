@@ -444,13 +444,33 @@ final class BulkShapesTest extends TestCase {
 		$this->assertSame( 2, $seen, 'Both bulk-update handlers declare updates at the top level.' );
 	}
 
-	public function test_elementor_location_is_accepted_on_update_as_on_create(): void {
+	/**
+	 * Superseded by #974/#976 review round 2, W1: accepting
+	 * `elementor_location` here wrote the SHORT public value ("body_end")
+	 * straight into `_elementor_location`, which Elementor's own renderer
+	 * reads as its literal internal value (elementor_head/
+	 * elementor_body_start/elementor_body_end) — so the snippet kept
+	 * printing in its OLD place — and never synced Elementor Pro's real
+	 * conditions cache either, so it eventually stopped rendering there
+	 * too. This route now refuses the field outright (the same
+	 * `use_custom_code_tool` error create already used, #974/#976 review
+	 * round 1 NIT-c), pointing at wp_update_elementor_custom_code, which
+	 * does both correctly. See ElementorCustomCodeHardeningTest.php for
+	 * the full coverage of this refusal.
+	 */
+	public function test_elementor_location_on_update_is_refused_not_silently_corrupted(): void {
 		$this->seed( 30, 'elementor_snippet', 'Snip' );
+		update_post_meta( 30, '_elementor_location', 'elementor_head' );
 
 		$result = ( new Mcpwp_Posts() )->update_post( 30, array( 'elementor_location' => 'body_end' ) );
 
-		$this->assertIsArray( $result, is_wp_error( $result ) ? $result->get_error_message() : '' );
-		$this->assertSame( 'body_end', get_post_meta( 30, '_elementor_location', true ) );
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'use_custom_code_tool', $result->get_error_code() );
+		$this->assertSame(
+			'elementor_head',
+			get_post_meta( 30, '_elementor_location', true ),
+			'Untouched — no short-value corruption, no half-applied write.'
+		);
 	}
 
 	// ---------------------------------------------------------------

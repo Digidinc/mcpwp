@@ -1358,14 +1358,14 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		if ( defined( 'DISALLOW_UNFILTERED_HTML' ) && DISALLOW_UNFILTERED_HTML ) {
 			return new WP_Error(
 				'unfiltered_html_disallowed',
-				__( 'This snippet contains markup (such as <script>) that WordPress strips unless the writer holds unfiltered_html. This site defines DISALLOW_UNFILTERED_HTML, which WordPress enforces for every user without exception — no capability grant can override it, so MCPWP cannot promise this code will render as submitted. Remove DISALLOW_UNFILTERED_HTML, or use markup that survives wp_kses_post().', 'mcpwp' ),
+				__( 'kses would alter this code (it contains markup, or characters such as & or > that would be entity-encoded) unless the writer holds unfiltered_html. This site defines DISALLOW_UNFILTERED_HTML, which WordPress enforces for every user without exception — no capability grant can override it, so MCPWP cannot promise this code will render as submitted. Remove DISALLOW_UNFILTERED_HTML, or use text that survives wp_kses_post() unchanged.', 'mcpwp' ),
 				array( 'status' => 403 )
 			);
 		}
 
 		return new WP_Error(
 			'multisite_unfiltered_html_refused',
-			__( 'This snippet contains markup (such as <script>) that WordPress strips unless the writer holds unfiltered_html. On multisite that capability belongs to super admins only, and MCPWP will not grant the API user more than a site administrator holds. Add this snippet as a super admin, or use markup that survives wp_kses_post().', 'mcpwp' ),
+			__( 'kses would alter this code (it contains markup, or characters such as & or > that would be entity-encoded) unless the writer holds unfiltered_html. On multisite that capability belongs to super admins only, and MCPWP will not grant the API user more than a site administrator holds. Add this snippet as a super admin, or use text that survives wp_kses_post() unchanged.', 'mcpwp' ),
 			array( 'status' => 403 )
 		);
 	}
@@ -1735,6 +1735,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			// uses for its own API contract).
 			$conditions = get_post_meta( $post_id, '_elementor_conditions', true );
 			$conditions = is_array( $conditions ) ? $conditions : array();
+			$conditions = $this->coerce_conditions_to_strings( $conditions, $post_id );
 
 			if ( method_exists( $cache, 'update' ) ) {
 				$cache->update( $document, $conditions );
@@ -1754,6 +1755,86 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			// never fail the create/update/enable/disable that triggered
 			// it.
 		}
+	}
+
+	/**
+	 * Guarantee every entry handed to Elementor Pro's real Conditions_Cache
+	 * is a plain string (#974/#976 review round 2, NIT-4).
+	 *
+	 * Elementor's OWN `Conditions_Manager::parse_condition()` does
+	 * `explode('/', $condition)` on every entry it reads out of the cache
+	 * — a hard PHP TypeError if `$condition` is anything but a string.
+	 * `_elementor_conditions` should already be all-strings by the time
+	 * sync_custom_code_conditions_cache() reads it (Conditions_Manager::
+	 * save_conditions() overwrites the meta in exactly that form — see
+	 * save_custom_code_conditions()'s docblock), but this is the LAST
+	 * chokepoint before the value reaches Elementor's cache at all, and
+	 * trusting stored meta blindly turns a defensive read into an
+	 * offensive write: the 'fallback_meta' engine (no ThemeBuilder classes
+	 * loaded at save time) leaves the meta in MCPWP's own object-array
+	 * shape, and if those classes ARE loaded by the time this method next
+	 * runs, that stale shape would otherwise be pushed straight into
+	 * Elementor's cache and fatal the next page load that hits
+	 * get_location_templates().
+	 *
+	 * A non-string entry is stringified using the same type/name/sub_name/
+	 * sub_id join Conditions_Manager::save_conditions() itself uses, when
+	 * it carries enough shape to do that; otherwise it is dropped — a
+	 * missing condition is a wrong-but-safe outcome, a fatal front end is
+	 * not. Logged at most once per call, however many entries needed
+	 * fixing, so one bad snippet cannot flood the log.
+	 *
+	 * @param array $conditions Raw values read from `_elementor_conditions` meta.
+	 * @param int   $post_id    Snippet post ID, for the log line only.
+	 * @return string[] Condition strings only.
+	 */
+	private function coerce_conditions_to_strings( array $conditions, $post_id ) {
+		$strings = array();
+		$altered = false;
+
+		foreach ( $conditions as $condition ) {
+			if ( is_string( $condition ) ) {
+				$strings[] = $condition;
+				continue;
+			}
+
+			$altered = true;
+
+			if ( is_array( $condition ) ) {
+				$stringified = rtrim(
+					implode(
+						'/',
+						array(
+							isset( $condition['type'] ) ? (string) $condition['type'] : '',
+							isset( $condition['name'] ) ? (string) $condition['name'] : '',
+							isset( $condition['sub_name'] ) ? (string) $condition['sub_name'] : '',
+							isset( $condition['sub_id'] ) ? (string) $condition['sub_id'] : '',
+						)
+					),
+					'/'
+				);
+
+				if ( '' !== $stringified ) {
+					$strings[] = $stringified;
+				}
+			}
+
+			// Anything else (int, bool, object, an array with no usable
+			// type/name) is dropped outright — nothing here can be turned
+			// into a condition string Elementor could parse back.
+		}
+
+		if ( $altered ) {
+			// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+			error_log(
+				sprintf(
+					'MCPWP: snippet %d had a non-string _elementor_conditions entry; stringified or dropped before writing Elementor Pro\'s conditions cache.',
+					(int) $post_id
+				)
+			);
+		}
+
+		return $strings;
 	}
 
 	/**

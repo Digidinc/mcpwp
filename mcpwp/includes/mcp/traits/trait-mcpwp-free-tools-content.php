@@ -67,7 +67,7 @@ trait Mcpwp_Free_Tools_Content_Trait {
 
 		$tools[] = $this->define_tool(
 			'wp_create_post',
-			'Create a new blog post. Defaults to draft — confirm before publishing. Supports custom post types: post_type=wp_block creates a reusable block/synced pattern, post_type=elementor_snippet creates Elementor Custom Code (requires Elementor Pro). To assign categories or tags, use wp_list_categories / wp_list_tags first to get their IDs.',
+			'Create a new blog post. Defaults to draft — confirm before publishing. Supports custom post types: post_type=wp_block creates a reusable block/synced pattern. For Elementor Custom Code (requires Elementor Pro), use wp_create_elementor_custom_code instead — this generic endpoint refuses post_type=elementor_snippet outright, since it cannot write the meta Elementor\'s own renderer and conditions cache require. To assign categories or tags, use wp_list_categories / wp_list_tags first to get their IDs.',
 			array(
 				'title'              => array(
 					'type'        => 'string',
@@ -86,7 +86,7 @@ trait Mcpwp_Free_Tools_Content_Trait {
 				),
 				'post_type'          => array(
 					'type'        => 'string',
-					'description' => 'Post type. Default "post". Use "wp_block" for reusable blocks/synced patterns, "elementor_snippet" for Elementor Custom Code injection.',
+					'description' => 'Post type. Default "post". Use "wp_block" for reusable blocks/synced patterns. "elementor_snippet" is refused here — use wp_create_elementor_custom_code instead.',
 					'default'     => 'post',
 				),
 				'excerpt'            => array(
@@ -107,11 +107,6 @@ trait Mcpwp_Free_Tools_Content_Trait {
 					'type'        => 'array',
 					'description' => 'Array of tag slugs or names to assign (e.g. ["recipes", "summer"]). Creates tags that don\'t yet exist. Replaces the post\'s entire tag list.',
 					'items'       => array( 'type' => 'string' ),
-				),
-				'elementor_location' => array(
-					'type'        => 'string',
-					'description' => 'For elementor_snippet posts only: where the code injects — "head" (default, before </head>), "body_start" (after <body>), "body_end" (before </body>).',
-					'default'     => 'head',
 				),
 				'terms'      => array(
 					'type'        => 'object',

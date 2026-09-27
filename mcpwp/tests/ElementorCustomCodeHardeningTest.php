@@ -664,4 +664,111 @@ final class ElementorCustomCodeHardeningTest extends TestCase {
 		$this->assertSame( 'use_custom_code_tool', $result->get_error_code() );
 		$this->assertStringContainsString( 'wp_create_elementor_custom_code', $result->get_error_data()['hint'] );
 	}
+
+	// ---------------------------------------------------------------
+	// #974/#976 review round 2, W1: the generic /posts UPDATE path (not
+	// just create) must refuse touching `elementor_location` or `content`
+	// on an elementor_snippet — it wrote the SHORT public location value
+	// straight into `_elementor_location` (which Elementor's renderer
+	// reads as its literal internal value) and never synced the
+	// conditions cache, so the snippet kept printing in its old place and
+	// eventually stopped rendering at all.
+	// ---------------------------------------------------------------
+
+	private function seed_generic_snippet( int $id ): void {
+		$GLOBALS['_mcpwp_test_posts'][ $id ] = (object) array(
+			'ID'                => $id,
+			'post_type'         => 'elementor_snippet',
+			'post_title'        => 'Generic-route snippet',
+			'post_name'         => 'generic-route-snippet',
+			'post_status'       => 'publish',
+			'post_date'         => '2026-06-06 00:00:00',
+			'post_date_gmt'     => '2026-06-06 00:00:00',
+			'post_modified'     => '2026-06-06 00:00:00',
+			'post_modified_gmt' => '2026-06-06 00:00:00',
+			'post_parent'       => 0,
+			'menu_order'        => 0,
+			'post_author'       => 1,
+			'post_content'      => '<div>x</div>',
+			'post_excerpt'      => '',
+		);
+		update_post_meta( $id, '_elementor_location', 'elementor_head' );
+	}
+
+	public function test_generic_posts_update_refuses_elementor_location_on_a_snippet(): void {
+		$this->seed_generic_snippet( 760 );
+
+		$posts  = new Mcpwp_Posts();
+		$result = $posts->update_post( 760, array( 'elementor_location' => 'body_end' ) );
+
+		$this->assertTrue( is_wp_error( $result ) );
+		$this->assertSame( 'use_custom_code_tool', $result->get_error_code() );
+		$this->assertStringContainsString( 'wp_update_elementor_custom_code', $result->get_error_data()['hint'] );
+
+		// Untouched — no half-applied write, no short-value corruption.
+		$this->assertSame( 'elementor_head', get_post_meta( 760, '_elementor_location', true ) );
+	}
+
+	public function test_generic_posts_update_refuses_content_on_a_snippet(): void {
+		$this->seed_generic_snippet( 761 );
+
+		$posts  = new Mcpwp_Posts();
+		$result = $posts->update_post( 761, array( 'content' => '<script>never_synced()</script>' ) );
+
+		$this->assertTrue( is_wp_error( $result ) );
+		$this->assertSame( 'use_custom_code_tool', $result->get_error_code() );
+	}
+
+	public function test_generic_posts_update_title_only_still_works_on_a_snippet(): void {
+		$this->seed_generic_snippet( 762 );
+
+		$posts  = new Mcpwp_Posts();
+		$result = $posts->update_post( 762, array( 'title' => 'Renamed via generic route' ) );
+
+		$this->assertFalse( is_wp_error( $result ), 'Title-only updates must still work — only elementor_location/content are refused.' );
+		$this->assertSame( 'Renamed via generic route', get_post( 762 )->post_title );
+	}
+
+	// ---------------------------------------------------------------
+	// #974/#976 review round 2, NIT-4: sync_custom_code_conditions_cache()
+	// must never hand Elementor Pro's real Conditions_Cache anything but
+	// plain condition STRINGS — its own parse_condition() does
+	// explode('/', $condition), a hard TypeError on anything else.
+	// ---------------------------------------------------------------
+
+	public function test_coerce_conditions_to_strings_stringifies_and_drops_non_strings(): void {
+		$controller = new Mcpwp_REST_Elementor_Pro( new stdClass() );
+		$method     = new ReflectionMethod( Mcpwp_REST_Elementor_Pro::class, 'coerce_conditions_to_strings' );
+		$method->setAccessible( true );
+
+		$result = $method->invoke(
+			$controller,
+			array(
+				'include/general',
+				array(
+					'type' => 'include',
+					'name' => 'singular',
+				),
+				42,
+				array( 'nothing_usable_here' => true ),
+			),
+			999
+		);
+
+		$this->assertSame(
+			array( 'include/general', 'include/singular' ),
+			$result,
+			'A real string passes through, an array with type/name is stringified the same way Conditions_Manager::save_conditions() does, and anything with no usable shape (an int, an array with no type/name) is dropped rather than fatal Elementor\'s own parser.'
+		);
+	}
+
+	public function test_coerce_conditions_to_strings_is_a_noop_when_everything_is_already_a_string(): void {
+		$controller = new Mcpwp_REST_Elementor_Pro( new stdClass() );
+		$method     = new ReflectionMethod( Mcpwp_REST_Elementor_Pro::class, 'coerce_conditions_to_strings' );
+		$method->setAccessible( true );
+
+		$result = $method->invoke( $controller, array( 'include/general', 'exclude/singular/page' ), 999 );
+
+		$this->assertSame( array( 'include/general', 'exclude/singular/page' ), $result );
+	}
 }
