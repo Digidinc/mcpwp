@@ -5,6 +5,21 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.14.2](https://github.com/Mumega-com/mcpwp/compare/v3.14.1...v3.14.2) (2026-09-27)
+
+
+### Features
+
+* **content:** guardrails against scaled and duplicate publishing ([#957](https://github.com/Mumega-com/mcpwp/issues/957)) ([#980](https://github.com/Mumega-com/mcpwp/issues/980)) ([553499b](https://github.com/Mumega-com/mcpwp/commit/553499b08df73cf0c9769ea00762f4aeb6175854))
+* **mcp:** forgiving params — map near-miss argument keys or refuse with the fix ([#986](https://github.com/Mumega-com/mcpwp/issues/986)) ([e85b69c](https://github.com/Mumega-com/mcpwp/commit/e85b69c7c772937b4e6cbb84ec1800fba275cc88))
+* **mcp:** slim wp_onboard default to ~3k tokens, drop the tool dump ([#985](https://github.com/Mumega-com/mcpwp/issues/985)) ([1051f67](https://github.com/Mumega-com/mcpwp/commit/1051f678a60a4228053136fe4b10a07cfcefa11a))
+
+
+### Bug Fixes
+
+* **elementor-pro:** Custom Code readback/status/priority, and the wrong-axis conditions index ([#990](https://github.com/Mumega-com/mcpwp/issues/990)) ([ebc972a](https://github.com/Mumega-com/mcpwp/commit/ebc972ac333a7701cc3283624f0c9b20c283df7b))
+* **verification:** honest paging for rendered HTML, mshots rejection, full_page + widths ([#988](https://github.com/Mumega-com/mcpwp/issues/988)) ([31a8f1a](https://github.com/Mumega-com/mcpwp/commit/31a8f1a0152925747bddef1ca645ab2ea00f9197))
+
 ## [3.14.1](https://github.com/Mumega-com/mcpwp/compare/v3.14.0...v3.14.1) (2026-09-27)
 
 
