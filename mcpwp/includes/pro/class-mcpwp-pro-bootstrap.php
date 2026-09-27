@@ -22,6 +22,19 @@ class Mcpwp_Pro_Bootstrap {
 	public static function init() {
 		add_action( 'mcpwp_register_rest_routes', array( __CLASS__, 'register_routes' ) );
 		add_filter( 'mcpwp_site_capabilities', array( __CLASS__, 'add_pro_capabilities' ) );
+
+		// #952: before_delete_post must fire for EVERY elementor_library
+		// delete — wp-admin's post-delete screen, WP-CLI, another plugin —
+		// not only the ones reachable through this plugin's own REST
+		// routes. register_routes() below only runs while WordPress is
+		// actually serving a /wp-json/ request: mcpwp_register_rest_routes
+		// is fired from Mcpwp_Loader::register_rest_routes(), which is
+		// itself wired to the REST-only rest_api_init action (fired lazily
+		// from rest_get_server(), never on a plain admin/CLI/front-end
+		// request). init() itself runs on plugins_loaded, which fires on
+		// every request, so the hook has to go here instead.
+		require_once MCPWP_PLUGIN_DIR . 'includes/pro/core/class-mcpwp-theme-builder.php';
+		add_action( 'before_delete_post', array( new Mcpwp_Theme_Builder(), 'handle_before_delete_post' ), 10, 2 );
 	}
 
 	/**
@@ -79,6 +92,9 @@ class Mcpwp_Pro_Bootstrap {
 		$learnpress      = new Mcpwp_LearnPress();
 		$events          = new Mcpwp_Events();
 		$staging         = new Mcpwp_Staging();
+
+		// #952's before_delete_post hook is registered in init() above,
+		// not here — see the comment there for why.
 
 		( new Mcpwp_REST_Elementor_Pro( $elementor_pro ) )->register_routes();
 		( new Mcpwp_REST_SEO( $seo ) )->register_routes();

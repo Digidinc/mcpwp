@@ -1311,6 +1311,12 @@ class Mcpwp_Elementor_Pro {
 			return new WP_Error( 'delete_failed', __( 'Failed to delete template.', 'mcpwp' ) );
 		}
 
+		// #952: elementor_pro_theme_builder_conditions cleanup happens via
+		// Mcpwp_Theme_Builder::handle_before_delete_post(), hooked on
+		// WordPress's own before_delete_post — it fires for wp_delete_post()
+		// itself, so it also catches this template ever being deleted
+		// through a path this class does not own (wp-admin, WP-CLI, another
+		// plugin, or MCPWP's own generic /posts and /content routes).
 		return true;
 	}
 

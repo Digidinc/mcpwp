@@ -754,6 +754,12 @@ function wp_delete_post($post_id, $force_delete = false)
         $post->post_status = 'trash';
         return $post;
     }
+    // Real WordPress fires this immediately before the actual delete, with
+    // the post object as of WP 5.5 (#952: Mcpwp_Theme_Builder listens here
+    // to keep elementor_pro_theme_builder_conditions in sync with every
+    // elementor_library delete, not just the ones MCPWP's own routes know
+    // about). Never fired on the trash branch above — matches core.
+    do_action('before_delete_post', $post_id, $post);
     unset($GLOBALS['_mcpwp_test_posts'][ $post_id ], $GLOBALS['_mcpwp_test_meta'][ $post_id ]);
     return $post;
 }

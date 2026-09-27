@@ -209,6 +209,13 @@ class Mcpwp_REST_Content extends Mcpwp_REST_API {
 			);
 		}
 
+		// #952: this generic endpoint can delete an elementor_library post
+		// too (a Theme Builder template has no dedicated CPT of its own).
+		// elementor_pro_theme_builder_conditions cleanup happens via
+		// Mcpwp_Theme_Builder::handle_before_delete_post(), hooked on
+		// WordPress's own before_delete_post — it fires for the
+		// wp_delete_post() call above without this route needing to know
+		// the post type at all.
 		return $this->success_response(
 			array(
 				'success'   => true,
