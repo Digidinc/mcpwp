@@ -62,6 +62,17 @@ class Mcpwp_Approvals {
 	const PENDING_CONTENT_TTL = 2592000;
 
 	/**
+	 * Budget for the whole serialized approvals store, bytes.
+	 */
+	const STORE_MAX_BYTES = 8388608;
+
+	/**
+	 * A post body larger than this is not copied into the approval as its
+	 * rollback source; a revision is referenced instead, bytes.
+	 */
+	const MAX_ROLLBACK_INLINE_BYTES = 262144;
+
+	/**
 	 * Seconds to wait for the approvals store lock before refusing.
 	 */
 	const LOCK_TIMEOUT = 5;
@@ -130,6 +141,11 @@ class Mcpwp_Approvals {
 
 		$capped = ! self::requester_is_exempt_from_caps( $requester, $args );
 
+		$rollback = self::rollback_source( $post, $before_content );
+		if ( is_wp_error( $rollback ) ) {
+			return $rollback;
+		}
+
 		$id             = self::generate_id();
 		$now            = gmdate( 'c' );
 
@@ -162,10 +178,7 @@ class Mcpwp_Approvals {
 			'resource'    => $resource,
 			'diff'        => self::build_content_diff( $before_content, $after_content ),
 			'payload'     => $payload,
-			'rollback'    => array(
-				'before_content' => $before_content,
-				'before_hash'    => hash( 'sha256', $before_content ),
-			),
+			'rollback'    => $rollback,
 			'metadata'    => array_merge(
 				isset( $args['metadata'] ) && is_array( $args['metadata'] ) ? $args['metadata'] : array(),
 				// Remembered so the pending caps count this request the same
@@ -867,7 +880,26 @@ class Mcpwp_Approvals {
 	/**
 	 * Apply an approved request.
 	 *
-	 * @param string $id Request ID.
+	 * A claim state machine (#981 review round 3, BLOCK-1) — the payload
+	 * runs outside the store lock (it can be slow, and may itself write the
+	 * store), so the record is CLAIMED first:
+	 *
+	 *  1. under the lock: status must be `approved` → `applying` (claimant
+	 *     and time recorded). A second, parallel apply sees `applying` and
+	 *     gets 409 without running anything.
+	 *  2. apply_payload() runs.
+	 *  3. under the lock (retried): `applying` → `applied`; on a payload
+	 *     error → back to `approved` with the error recorded, or
+	 *     `apply_failed` when the payload reports it partially applied.
+	 *
+	 * If step 3 cannot be written, the answer is a 202-status WP_Error that
+	 * says the change WAS applied and the record is left `applying` —
+	 * never "nothing was changed" after the payload ran. A stale
+	 * `applying` record is flagged needs_attention (public_record()) for
+	 * a person to resolve; it is never re-applied automatically.
+	 *
+	 * @param string $id      Request ID.
+	 * @param array  $context Actor context.
 	 * @return array|WP_Error Request.
 	 */
 	public static function apply_request( $id, $context = array() ) {
@@ -883,44 +915,21 @@ class Mcpwp_Approvals {
 			}
 		}
 
-		if ( 'approved' !== $request['status'] ) {
-			return new WP_Error( 'approval_not_ready', __( 'Approval request must be approved before it can be applied.', 'mcpwp' ), array( 'status' => 409 ) );
-		}
-
-		$result = self::apply_payload( $request, 'payload', is_array( $context ) ? $context : array() );
-		if ( is_wp_error( $result ) ) {
-			return $result;
-		}
-
-		// Re-fetch: apply_payload() (e.g. Mcpwp_Content_Guardrails::
-		// apply_bulk_publish()'s record_apply_result()) may have just
-		// written metadata onto this SAME record via its own update_option()
-		// call — upserting the copy read at the top of this method, before
-		// that write happened, would silently erase it.
-		$request = self::get_private_request( $id );
-		if ( is_wp_error( $request ) ) {
-			return $request;
-		}
-
-		$request = self::transition_under_lock( $id, array( 'approved' ), 'applied', 'applied_at' );
-		if ( is_wp_error( $request ) ) {
-			return $request;
-		}
-
-		$public = self::public_record( $request );
-		self::emit_event(
-			'approval.applied',
-			$public,
+		return self::run_claimed(
+			$id,
+			array( 'approved' ),
+			'applying',
 			'applied',
-			'medium',
-			__( 'Monitor applied change and keep rollback available.', 'mcpwp' )
+			'applied_at',
+			'payload',
+			is_array( $context ) ? $context : array()
 		);
-
-		return $public;
 	}
 
 	/**
-	 * Roll back an applied request.
+	 * Roll back an applied request — the same claim state machine as
+	 * apply_request(), through `rolling_back`. A partially applied
+	 * (`apply_failed`) request can be rolled back too.
 	 *
 	 * @param string $id Request ID.
 	 * @return array|WP_Error Request.
@@ -931,36 +940,223 @@ class Mcpwp_Approvals {
 			return $request;
 		}
 
-		if ( 'applied' !== $request['status'] ) {
-			return new WP_Error( 'approval_not_applied', __( 'Only applied approval requests can be rolled back.', 'mcpwp' ), array( 'status' => 409 ) );
+		return self::run_claimed( $id, array( 'applied', 'apply_failed' ), 'rolling_back', 'rolled_back', 'rolled_back_at', 'rollback', array() );
+	}
+
+	/**
+	 * Claim → run → finalise. See apply_request().
+	 *
+	 * @param string   $id          Request id.
+	 * @param string[] $from        Statuses the claim may start from.
+	 * @param string   $claim       In-flight status (applying / rolling_back).
+	 * @param string   $done        Final status on success.
+	 * @param string   $time_field  Timestamp for the final status.
+	 * @param string   $field       apply_payload() field (payload / rollback).
+	 * @param array    $context     apply_payload() context.
+	 * @return array|WP_Error
+	 */
+	private static function run_claimed( $id, array $from, $claim, $done, $time_field, $field, array $context ) {
+		$claimant = isset( $context['actor'] ) ? (string) $context['actor'] : ( function_exists( 'get_current_user_id' ) && get_current_user_id() > 0 ? 'wp-user:' . get_current_user_id() : '' );
+
+		$claimed = self::transition_under_lock(
+			$id,
+			$from,
+			$claim,
+			$claim . '_at',
+			array( 'claimed_by' => $claimant )
+		);
+		if ( is_wp_error( $claimed ) ) {
+			return $claimed;
 		}
 
-		$result = self::apply_payload( $request, 'rollback' );
+		$result = self::apply_payload( $claimed, $field, $context );
+
+		// The payload ran completely; only its own bookkeeping write failed
+		// (e.g. bulk publish's applied_ids). Record that at finalise.
+		$finalise_extra = array();
+		if ( is_wp_error( $result ) && 'apply_result_unrecorded' === $result->get_error_code() ) {
+			$data           = $result->get_error_data();
+			$finalise_extra = is_array( $data ) && isset( $data['metadata'] ) && is_array( $data['metadata'] ) ? array( 'metadata' => $data['metadata'] ) : array();
+			$result         = true;
+		}
+
 		if ( is_wp_error( $result ) ) {
+			$data    = $result->get_error_data();
+			$data    = is_array( $data ) ? $data : array();
+			$partial = ! empty( $data['partial'] );
+			$extra   = array(
+				'last_error' => array(
+					'code'    => $result->get_error_code(),
+					'message' => $result->get_error_message(),
+					'at'      => gmdate( 'c' ),
+				),
+			);
+			if ( isset( $data['metadata'] ) && is_array( $data['metadata'] ) ) {
+				$extra['metadata'] = $data['metadata'];
+			}
+			// Nothing ran: back to where it was, retryable. Something ran:
+			// apply_failed, for a person (rollback is allowed from there).
+			$back = $partial ? 'apply_failed' : $from[0];
+			if ( 'rollback' === $field && $partial ) {
+				$back = 'apply_failed';
+			}
+			$final = self::finalise( $id, $claim, $back, $partial ? 'apply_failed_at' : 'last_error_at', $extra );
+			if ( is_wp_error( $final ) && $partial ) {
+				return self::unconfirmed_error( $field, $id );
+			}
 			return $result;
 		}
 
-		// Re-fetch for the same reason as apply_request() above.
-		$request = self::get_private_request( $id );
-		if ( is_wp_error( $request ) ) {
-			return $request;
+		$final = self::finalise( $id, $claim, $done, $time_field, $finalise_extra );
+		if ( is_wp_error( $final ) ) {
+			return self::unconfirmed_error( $field, $id );
 		}
 
-		$request = self::transition_under_lock( $id, array( 'applied' ), 'rolled_back', 'rolled_back_at' );
-		if ( is_wp_error( $request ) ) {
-			return $request;
+		$public = self::public_record( $final );
+		if ( 'payload' === $field ) {
+			self::emit_event( 'approval.applied', $public, 'applied', 'medium', __( 'Monitor applied change and keep rollback available.', 'mcpwp' ) );
+		} else {
+			self::emit_event( 'approval.rolled_back', $public, 'rolled_back', 'low', __( 'Review rollback result.', 'mcpwp' ) );
 		}
-
-		$public = self::public_record( $request );
-		self::emit_event(
-			'approval.rolled_back',
-			$public,
-			'rolled_back',
-			'low',
-			__( 'Review rollback result.', 'mcpwp' )
-		);
 
 		return $public;
+	}
+
+	/**
+	 * Write the end state of a claim, retrying a busy lock a few times.
+	 *
+	 * @param string $id         Request id.
+	 * @param string $claim      In-flight status the record must still hold.
+	 * @param string $status     End status.
+	 * @param string $time_field Timestamp field.
+	 * @param array  $extra      Extra fields (metadata is merged).
+	 * @return array|WP_Error
+	 */
+	private static function finalise( $id, $claim, $status, $time_field, array $extra ) {
+		$attempts = (int) apply_filters( 'mcpwp_approval_finalise_attempts', 3 );
+		$final    = null;
+		for ( $i = 0; $i < max( 1, $attempts ); $i++ ) {
+			$final = self::transition_under_lock( $id, array( $claim ), $status, $time_field, $extra );
+			if ( ! is_wp_error( $final ) || ! in_array( $final->get_error_code(), array( 'approvals_busy', 'approvals_store_failed' ), true ) ) {
+				return $final;
+			}
+		}
+		return $final;
+	}
+
+	/**
+	 * The change ran but its record could not be finalised.
+	 *
+	 * @param string $field payload / rollback.
+	 * @param string $id    Request id.
+	 * @return WP_Error
+	 */
+	private static function unconfirmed_error( $field, $id ) {
+		$what = 'rollback' === $field ? __( 'rolled back', 'mcpwp' ) : __( 'applied', 'mcpwp' );
+		return new WP_Error(
+			'approval_record_unconfirmed',
+			sprintf(
+				/* translators: 1: applied/rolled back, 2: request id */
+				__( 'The change WAS %1$s, but the approval record %2$s could not be updated (the approval queue was busy). It stays marked in progress and is flagged for attention in Control Room; do not apply it again.', 'mcpwp' ),
+				$what,
+				$id
+			),
+			array( 'status' => 202, 'approval_id' => $id )
+		);
+	}
+
+	/**
+	 * What a post_content_update keeps so it can be rolled back (#981
+	 * review round 3, BLOCK-2 (2)). A body up to MAX_ROLLBACK_INLINE_BYTES
+	 * is copied as before; a larger one is NOT — copying a multi-megabyte
+	 * draft into every proposal is what grew the store past memory and
+	 * max_allowed_packet. It is saved as a WordPress revision instead and
+	 * referenced by id, with its sha256 and a bounded excerpt.
+	 *
+	 * @param WP_Post $post           Target.
+	 * @param string  $before_content Its current body.
+	 * @return array|WP_Error
+	 */
+	private static function rollback_source( $post, $before_content ) {
+		$hash = hash( 'sha256', $before_content );
+		if ( strlen( $before_content ) <= self::MAX_ROLLBACK_INLINE_BYTES ) {
+			return array(
+				'before_content' => $before_content,
+				'before_hash'    => $hash,
+			);
+		}
+
+		$revision_id = 0;
+		if ( function_exists( 'wp_save_post_revision' ) ) {
+			$saved       = wp_save_post_revision( $post->ID );
+			$revision_id = is_numeric( $saved ) ? (int) $saved : 0;
+		}
+		if ( $revision_id < 1 && function_exists( 'wp_get_post_revisions' ) ) {
+			// No new revision (the latest already matches, or revisions are
+			// throttled): use the latest one if it holds exactly this body.
+			foreach ( (array) wp_get_post_revisions( $post->ID, array( 'numberposts' => 1 ) ) as $revision ) {
+				if ( $revision instanceof WP_Post && hash( 'sha256', (string) $revision->post_content ) === $hash ) {
+					$revision_id = (int) $revision->ID;
+				}
+			}
+		}
+
+		if ( $revision_id < 1 ) {
+			return new WP_Error(
+				'rollback_unavailable',
+				__( 'This post is too large to keep a rollback copy in the approval queue, and WordPress revisions are not available for it. Enable revisions for this post type, or edit the post in wp-admin.', 'mcpwp' ),
+				array( 'status' => 409 )
+			);
+		}
+
+		return array(
+			'before_revision_id' => $revision_id,
+			'before_hash'        => $hash,
+			'before_length'      => strlen( $before_content ),
+			'before_excerpt'     => function_exists( 'mb_substr' ) ? mb_substr( $before_content, 0, 1000 ) : substr( $before_content, 0, 1000 ),
+		);
+	}
+
+	/**
+	 * The body a rollback restores: the inline copy, or the referenced
+	 * revision — refused cleanly when the revision is gone or no longer
+	 * holds the exact body the approval recorded.
+	 *
+	 * @param array $request Private record.
+	 * @param int   $post_id Target.
+	 * @return string|WP_Error
+	 */
+	private static function rollback_content( array $request, $post_id ) {
+		$rollback = isset( $request['rollback'] ) && is_array( $request['rollback'] ) ? $request['rollback'] : array();
+		if ( array_key_exists( 'before_content', $rollback ) ) {
+			return (string) $rollback['before_content'];
+		}
+
+		$revision_id = isset( $rollback['before_revision_id'] ) ? (int) $rollback['before_revision_id'] : 0;
+		$revision    = $revision_id > 0 ? get_post( $revision_id ) : null;
+		$expected    = isset( $rollback['before_hash'] ) ? (string) $rollback['before_hash'] : '';
+
+		if ( ! $revision || (int) $revision->post_parent !== (int) $post_id || 'revision' !== $revision->post_type || hash( 'sha256', (string) $revision->post_content ) !== $expected ) {
+			return new WP_Error(
+				'rollback_source_missing',
+				__( 'The revision this approval would roll back to no longer exists (or has changed). Restore the post from its revision history in wp-admin instead.', 'mcpwp' ),
+				array( 'status' => 409 )
+			);
+		}
+
+		return (string) $revision->post_content;
+	}
+
+	/**
+	 * 40 words, and never more than 500 characters.
+	 *
+	 * @param string $content Content.
+	 * @return string
+	 */
+	private static function bounded_excerpt( $content ) {
+		$source  = strlen( $content ) > 65536 ? substr( $content, 0, 65536 ) : $content;
+		$excerpt = wp_trim_words( wp_strip_all_tags( $source ), 40 );
+		return function_exists( 'mb_substr' ) ? mb_substr( $excerpt, 0, 500 ) : substr( $excerpt, 0, 500 );
 	}
 
 	/**
@@ -978,8 +1174,10 @@ class Mcpwp_Approvals {
 			'after_hash'     => hash( 'sha256', $after ),
 			'before_length'  => strlen( $before ),
 			'after_length'   => strlen( $after ),
-			'before_excerpt' => wp_trim_words( wp_strip_all_tags( $before ), 40 ),
-			'after_excerpt'  => wp_trim_words( wp_strip_all_tags( $after ), 40 ),
+			// Bounded in bytes too: wp_trim_words() counts words, so a body
+			// with no spaces came through whole (#981 review round 3).
+			'before_excerpt' => self::bounded_excerpt( $before ),
+			'after_excerpt'  => self::bounded_excerpt( $after ),
 		);
 	}
 
@@ -1116,9 +1314,14 @@ class Mcpwp_Approvals {
 			return new WP_Error( 'approval_content_conflict', __( 'Post content changed after this approval request was created.', 'mcpwp' ), array( 'status' => 409 ) );
 		}
 
-		$content = 'rollback' === $field
-			? ( isset( $request['rollback']['before_content'] ) ? (string) $request['rollback']['before_content'] : '' )
-			: ( isset( $request['payload']['after_content'] ) ? (string) $request['payload']['after_content'] : '' );
+		if ( 'rollback' === $field ) {
+			$content = self::rollback_content( $request, $post_id );
+			if ( is_wp_error( $content ) ) {
+				return $content;
+			}
+		} else {
+			$content = isset( $request['payload']['after_content'] ) ? (string) $request['payload']['after_content'] : '';
+		}
 
 		$result = wp_update_post(
 			array(
@@ -1159,7 +1362,7 @@ class Mcpwp_Approvals {
 	 * @return array Public request.
 	 */
 	private static function public_record( $request ) {
-		unset( $request['payload']['after_content'], $request['rollback']['before_content'] );
+		unset( $request['payload']['after_content'], $request['rollback']['before_content'], $request['rollback']['before_excerpt'] );
 
 		// The target fingerprint is for drift(), which reads the private
 		// record. Publicly it would hand a read-scope key a private page's
@@ -1168,6 +1371,25 @@ class Mcpwp_Approvals {
 		if ( isset( $request['payload']['target'] ) && is_array( $request['payload']['target'] ) ) {
 			$target = $request['payload']['target'];
 			$request['payload']['target'] = array_intersect_key( $target, array( 'exists' => 1, 'type' => 1, 'count' => 1 ) );
+		}
+
+		// #981 review round 3: an apply/rollback that ran but could not be
+		// finalised, or that stalled, is surfaced for a person — never
+		// retried automatically.
+		$status = isset( $request['status'] ) ? (string) $request['status'] : '';
+		if ( 'apply_failed' === $status ) {
+			$request['needs_attention'] = 'partially_applied';
+		} elseif ( in_array( $status, array( 'applying', 'rolling_back' ), true ) ) {
+			$since = isset( $request[ $status . '_at' ] ) ? strtotime( (string) $request[ $status . '_at' ] ) : false;
+			/**
+			 * Seconds after which an in-flight apply/rollback is reported stale.
+			 *
+			 * @param int $seconds Default 10 minutes.
+			 */
+			$stale_after = (int) apply_filters( 'mcpwp_approval_claim_stale_after', 600 );
+			if ( false === $since || $since < time() - $stale_after ) {
+				$request['needs_attention'] = 'stale_' . $status;
+			}
 		}
 
 		return $request;
@@ -1517,6 +1739,15 @@ class Mcpwp_Approvals {
 				}
 				$current = isset( $items[ $id ]['status'] ) ? (string) $items[ $id ]['status'] : '';
 				if ( ! in_array( $current, $from, true ) ) {
+					if ( in_array( $current, array( 'applying', 'rolling_back' ), true ) ) {
+						return new WP_Error( 'approval_in_progress', __( 'This approval request is already being applied or rolled back.', 'mcpwp' ), array( 'status' => 409 ) );
+					}
+					if ( 'applying' === $status ) {
+						return new WP_Error( 'approval_not_ready', __( 'Approval request must be approved before it can be applied.', 'mcpwp' ), array( 'status' => 409 ) );
+					}
+					if ( 'rolling_back' === $status ) {
+						return new WP_Error( 'approval_not_applied', __( 'Only applied approval requests can be rolled back.', 'mcpwp' ), array( 'status' => 409 ) );
+					}
 					if ( 'applied' === $status ) {
 						return new WP_Error( 'approval_not_ready', __( 'Approval request must be approved before it can be applied.', 'mcpwp' ), array( 'status' => 409 ) );
 					}
@@ -1530,6 +1761,10 @@ class Mcpwp_Approvals {
 				$items[ $id ][ $time_field ] = $now;
 				$items[ $id ]['updated_at']  = $now;
 				foreach ( $extra as $field => $value ) {
+					if ( 'metadata' === $field && is_array( $value ) ) {
+						$items[ $id ]['metadata'] = array_merge( isset( $items[ $id ]['metadata'] ) && is_array( $items[ $id ]['metadata'] ) ? $items[ $id ]['metadata'] : array(), $value );
+						continue;
+					}
 					$items[ $id ][ $field ] = $value;
 				}
 				$updated = $items[ $id ];
@@ -1586,8 +1821,9 @@ class Mcpwp_Approvals {
 		try {
 			// Expiry first, so $change never acts on a request that has
 			// already expired (e.g. approving a 31-day-old proposal).
-			$items = self::expire_stale( self::read_fresh() );
-			$items = $change( $items );
+			$stored = self::read_fresh();
+			$before = self::expire_stale( $stored );
+			$items  = $change( $before );
 			if ( is_wp_error( $items ) ) {
 				return $items;
 			}
@@ -1598,7 +1834,38 @@ class Mcpwp_Approvals {
 			$items = self::expire_stale( $items );
 			$items = self::evict( $items );
 
-			update_option( self::OPTION_NAME, $items, false );
+			// #981 review round 3, BLOCK-2 (3): a byte budget for the whole
+			// store. A write that ADDS a request is refused once the store
+			// would exceed it — no requester is exempt from bytes. Status
+			// changes to existing requests always go through, so a full
+			// queue can still be worked down.
+			$serialized = maybe_serialize( $items );
+			if ( count( array_diff_key( $items, $before ) ) > 0 && strlen( (string) $serialized ) > self::store_max_bytes() ) {
+				return new WP_Error(
+					'approvals_store_full',
+					__( 'The approval queue is full (its storage budget is used up). Nothing was queued; review, reject or apply pending requests first.', 'mcpwp' ),
+					array( 'status' => 507 )
+				);
+			}
+
+			// Nothing changed: nothing to write (update_option() would report
+			// false for an identical value, which is not a failure).
+			if ( $serialized === maybe_serialize( $stored ) ) {
+				return true;
+			}
+
+			// #981 review round 3, BLOCK-2 (1): update_option() can fail —
+			// most visibly a value over MySQL's max_allowed_packet. A failed
+			// write must never be reported as stored. Confirm against the
+			// database before calling it a failure (update_option() also
+			// returns false in a few benign cases).
+			if ( ! update_option( self::OPTION_NAME, $items, false ) && maybe_serialize( self::read_fresh() ) !== $serialized ) {
+				return new WP_Error(
+					'approvals_store_failed',
+					__( 'The approval queue could not be saved. Nothing was changed; try again, and if it persists ask an administrator to review the approval queue.', 'mcpwp' ),
+					array( 'status' => 503 )
+				);
+			}
 			return true;
 		} finally {
 			self::release_lock();
@@ -1691,8 +1958,9 @@ class Mcpwp_Approvals {
 		);
 
 		if ( count( $items ) > self::MAX_ITEMS ) {
-			$open   = array_filter( $items, function ( $item ) { return isset( $item['status'] ) && in_array( $item['status'], array( 'pending', 'approved' ), true ); } );
-			$closed = array_filter( $items, function ( $item ) { return ! isset( $item['status'] ) || ! in_array( $item['status'], array( 'pending', 'approved' ), true ); } );
+			$open_states = array( 'pending', 'approved', 'applying', 'rolling_back', 'apply_failed' );
+			$open   = array_filter( $items, function ( $item ) use ( $open_states ) { return isset( $item['status'] ) && in_array( $item['status'], $open_states, true ); } );
+			$closed = array_filter( $items, function ( $item ) use ( $open_states ) { return ! isset( $item['status'] ) || ! in_array( $item['status'], $open_states, true ); } );
 			$closed = array_slice( $closed, 0, max( 0, self::MAX_ITEMS - count( $open ) ), true );
 			$items  = $open + $closed;
 		}
@@ -1736,6 +2004,17 @@ class Mcpwp_Approvals {
 			}
 		}
 		return $items;
+	}
+
+	/**
+	 * Byte budget for the whole serialized approvals store (#981 review
+	 * round 3, BLOCK-2). Filterable: mcpwp_approval_store_max_bytes.
+	 *
+	 * @return int
+	 */
+	public static function store_max_bytes() {
+		$bytes = (int) apply_filters( 'mcpwp_approval_store_max_bytes', self::STORE_MAX_BYTES );
+		return $bytes > 0 ? $bytes : self::STORE_MAX_BYTES;
 	}
 
 	/**

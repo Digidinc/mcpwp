@@ -224,12 +224,22 @@ trait Mcpwp_Admin_Control_Room_Trait {
 			// triage; falls back to date order on its own when none do.
 			'pending_approvals' => class_exists( 'Mcpwp_Approvals' ) ? Mcpwp_Approvals::list_requests( 'pending', 5, true, 'priority' ) : array(),
 			'approved_approvals' => class_exists( 'Mcpwp_Approvals' ) ? Mcpwp_Approvals::list_requests( 'approved', 5, true ) : array(),
+			// #981 review round 3: applies/rollbacks that ran but could not
+			// be recorded, stalled, or only partially applied.
+			'attention_approvals' => array_values(
+				array_filter(
+					$approvals,
+					function ( $approval ) {
+						return ! empty( $approval['needs_attention'] );
+					}
+				)
+			),
 			'rollback_ready'   => array_slice(
 				array_values(
 					array_filter(
 						$approvals,
 						function ( $approval ) {
-							return isset( $approval['status'] ) && 'applied' === $approval['status'];
+							return isset( $approval['status'] ) && in_array( $approval['status'], array( 'applied', 'apply_failed' ), true );
 						}
 					)
 				),

@@ -1956,7 +1956,13 @@ class Mcpwp_Content_Guardrails {
 			$published[] = $post_id;
 		}
 
-		self::record_apply_result( isset( $request['id'] ) ? (string) $request['id'] : '', $published, $skipped );
+		$recorded = self::record_apply_result( isset( $request['id'] ) ? (string) $request['id'] : '', $published, $skipped );
+		if ( is_wp_error( $recorded ) ) {
+			// The posts ARE published; only the bookkeeping failed. Hand the
+			// ids back so the approval's finalise step records them (#981
+			// review round 3) — rollback depends on applied_ids.
+			return self::unrecorded_error( $recorded, array( 'applied_ids' => $published, 'apply_summary' => array( 'published' => $published, 'skipped' => $skipped ) ) );
+		}
 
 		return true;
 	}
@@ -1995,7 +2001,10 @@ class Mcpwp_Content_Guardrails {
 			}
 		}
 
-		self::record_apply_result( isset( $request['id'] ) ? (string) $request['id'] : '', array(), array(), $reverted );
+		$recorded = self::record_apply_result( isset( $request['id'] ) ? (string) $request['id'] : '', array(), array(), $reverted );
+		if ( is_wp_error( $recorded ) ) {
+			return self::unrecorded_error( $recorded, array( 'reverted_ids' => $reverted ) );
+		}
 
 		return true;
 	}
@@ -2046,14 +2055,15 @@ class Mcpwp_Content_Guardrails {
 	 * @param int[]  $published  IDs actually flipped to publish.
 	 * @param array  $skipped    {id, reason} entries not published/reverted.
 	 * @param int[]  $reverted   IDs actually flipped back to draft (rollback).
-	 * @return void
+	 * @return true|WP_Error
 	 */
 	private static function record_apply_result( $request_id, array $published = array(), array $skipped = array(), array $reverted = array() ) {
 		if ( '' === $request_id || ! class_exists( 'Mcpwp_Approvals' ) ) {
-			return;
+			return true;
 		}
-		// Under the approvals store lock (#981 review round 2, WARN-B).
-		Mcpwp_Approvals::mutate(
+		// Under the approvals store lock (#981 review round 2, WARN-B); a
+		// failure is returned, never swallowed (round 3).
+		return Mcpwp_Approvals::mutate(
 			static function ( array $items ) use ( $request_id, $published, $skipped, $reverted ) {
 				if ( ! isset( $items[ $request_id ] ) || ! is_array( $items[ $request_id ] ) ) {
 					return new WP_Error( 'not_found', 'Approval not found.' );
@@ -2074,6 +2084,24 @@ class Mcpwp_Content_Guardrails {
 
 				return $items;
 			}
+		);
+	}
+
+	/**
+	 * The payload ran but its result could not be recorded on the approval.
+	 *
+	 * @param WP_Error $cause    Store error.
+	 * @param array    $metadata What to record at finalise instead.
+	 * @return WP_Error
+	 */
+	private static function unrecorded_error( WP_Error $cause, array $metadata ) {
+		return new WP_Error(
+			'apply_result_unrecorded',
+			$cause->get_error_message(),
+			array(
+				'status'   => 503,
+				'metadata' => $metadata,
+			)
 		);
 	}
 

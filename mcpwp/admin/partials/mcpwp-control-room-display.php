@@ -18,6 +18,7 @@ $seo_summary     = isset( $control_room['seo_summary'] ) && is_array( $control_r
 $pending_items   = isset( $control_room['pending_approvals'] ) && is_array( $control_room['pending_approvals'] ) ? $control_room['pending_approvals'] : array();
 $approved_items  = isset( $control_room['approved_approvals'] ) && is_array( $control_room['approved_approvals'] ) ? $control_room['approved_approvals'] : array();
 $rollback_items  = isset( $control_room['rollback_ready'] ) && is_array( $control_room['rollback_ready'] ) ? $control_room['rollback_ready'] : array();
+$attention_items = isset( $control_room['attention_approvals'] ) && is_array( $control_room['attention_approvals'] ) ? $control_room['attention_approvals'] : array();
 $seo_issues      = isset( $control_room['open_seo_issues'] ) && is_array( $control_room['open_seo_issues'] ) ? $control_room['open_seo_issues'] : array();
 $seo_visibility    = isset( $control_room['seo_visibility'] ) && is_array( $control_room['seo_visibility'] ) ? $control_room['seo_visibility'] : array();
 $seo_opportunities = isset( $control_room['seo_opportunities'] ) && is_array( $control_room['seo_opportunities'] ) ? $control_room['seo_opportunities'] : array();
@@ -424,6 +425,25 @@ $event_escalated_count = (int) ( $event_summary['escalated'] ?? 0 );
 				</p>
 			<?php endif; ?>
 		</div>
+
+		<?php if ( ! empty( $attention_items ) ) : ?>
+			<div class="mcpwp-card">
+				<h2>
+					<span class="dashicons dashicons-warning"></span>
+					<?php esc_html_e( 'Approvals Needing Attention', 'mcpwp' ); ?>
+				</h2>
+				<p class="description"><?php esc_html_e( 'These changes ran (or started to) but their approval record could not be completed. They are never re-applied automatically: check the content, then roll back or reject.', 'mcpwp' ); ?></p>
+				<ul class="mcpwp-control-list">
+					<?php foreach ( $attention_items as $item ) : ?>
+						<li class="mcpwp-control-list__item is-warning">
+							<span class="mcpwp-control-list__icon dashicons dashicons-warning"></span>
+							<strong><?php echo esc_html( $item['title'] ?? $item['id'] ?? '' ); ?></strong>
+							<span><?php echo esc_html( ( $item['status'] ?? '' ) . ' — ' . ( $item['needs_attention'] ?? '' ) ); ?></span>
+						</li>
+					<?php endforeach; ?>
+				</ul>
+			</div>
+		<?php endif; ?>
 
 		<div class="mcpwp-card">
 			<h2>

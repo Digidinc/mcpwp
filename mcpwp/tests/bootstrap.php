@@ -1737,6 +1737,11 @@ if (! isset($GLOBALS['wpdb'])) {
             if (preg_match('/^SELECT GET_LOCK\(/', trim((string) $query))) {
                 $GLOBALS['mcpwp_test_named_lock_calls'][] = 'get';
                 $result = $GLOBALS['mcpwp_test_get_lock_result'] ?? '1';
+                // A per-call sequence wins when set: e.g. array('1','0','0','0')
+                // grants the first lock and times out the next three.
+                if (! empty($GLOBALS['mcpwp_test_get_lock_results']) && is_array($GLOBALS['mcpwp_test_get_lock_results'])) {
+                    $result = array_shift($GLOBALS['mcpwp_test_get_lock_results']);
+                }
                 if ('1' === (string) $result && isset($GLOBALS['mcpwp_test_on_lock_granted']) && is_callable($GLOBALS['mcpwp_test_on_lock_granted'])) {
                     $hook = $GLOBALS['mcpwp_test_on_lock_granted'];
                     $GLOBALS['mcpwp_test_on_lock_granted'] = null;
@@ -3787,6 +3792,43 @@ class Mcpwp_Test_Fs_Stub
 }
 
 // ── WebMCP (#981) wp-admin stubs ─────────────────────────────────────────
+
+// Revisions (#981 review round 3: large rollback sources are referenced by
+// revision id). $GLOBALS['mcpwp_test_revisions_disabled'] makes
+// wp_save_post_revision() save nothing, like revisions being off.
+if (! function_exists('wp_save_post_revision')) {
+    function wp_save_post_revision($post_id)
+    {
+        if (! empty($GLOBALS['mcpwp_test_revisions_disabled'])) {
+            return null;
+        }
+        $post = $GLOBALS['_mcpwp_test_posts'][ (int) $post_id ] ?? null;
+        if (! $post) {
+            return null;
+        }
+        $id = 900000 + count($GLOBALS['_mcpwp_test_posts']);
+        while (isset($GLOBALS['_mcpwp_test_posts'][ $id ])) {
+            $id++;
+        }
+        $GLOBALS['_mcpwp_test_posts'][ $id ] = new WP_Post(
+            array( 'ID' => $id, 'post_type' => 'revision', 'post_status' => 'inherit', 'post_parent' => (int) $post_id, 'post_content' => $post->post_content )
+        );
+        return $id;
+    }
+}
+if (! function_exists('wp_get_post_revisions')) {
+    function wp_get_post_revisions($post_id = 0, $args = null)
+    {
+        $out = array();
+        foreach ($GLOBALS['_mcpwp_test_posts'] as $id => $post) {
+            if ('revision' === $post->post_type && (int) $post->post_parent === (int) $post_id) {
+                $out[ $id ] = $post;
+            }
+        }
+        krsort($out);
+        return $out;
+    }
+}
 
 if (! function_exists('site_url')) {
     function site_url($path = '', $scheme = null)

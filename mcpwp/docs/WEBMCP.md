@@ -109,6 +109,25 @@ These apply to every `post_content_update` approval: WebMCP proposals, `wp_set_b
   queue is read or written, and the period can be changed with `mcpwp_approval_pending_ttl`.
 - **Changing the limits:** use the `mcpwp_approval_content_limits` filter (`per_requester`,
   `total`, `max_bytes`, `max_bytes_webmcp`).
+- **Apply and roll back in steps:** applying first moves a request from `approved` to `applying`
+  under the lock, then runs the change, then marks it `applied`. Rollback does the same through
+  `rolling_back`. A second apply of the same request gets 409 `approval_in_progress` and runs
+  nothing. If the change fails before it ran, the request goes back to `approved` with the error
+  recorded. If it partly ran, the status becomes `apply_failed`, and that request can still be rolled
+  back. If the change ran but the record could not be updated, the answer is 202
+  `approval_record_unconfirmed`: the change was made, the request stays `applying`, and after 10
+  minutes (`mcpwp_approval_claim_stale_after`) it shows under "Approvals Needing Attention" in
+  Control Room. It is never re-applied automatically.
+- **Large posts:** if a post's current content is over 256 KB, the approval does not copy it.
+  WordPress saves it as a revision, and the approval keeps the revision id, a sha256 hash and a short
+  excerpt. Rollback restores from that revision. It refuses with `rollback_source_missing` if the
+  revision is gone, and a proposal is refused at creation (`rollback_unavailable`) if revisions are
+  off. Diff excerpts are capped at 500 characters.
+- **Store budget:** the approval queue has a total size budget, 8 MB serialized by default
+  (`mcpwp_approval_store_max_bytes`). Once it is full, adding any new request is refused with 507
+  `approvals_store_full`, whoever sends it, while existing requests can still be approved, applied
+  or rejected. If the database refuses a write (for example a value over `max_allowed_packet`), the
+  answer is 503 `approvals_store_failed`, never a reported success.
 - **Concurrent writes:** every write to the approval queue takes a MySQL named lock and re-reads the
   queue inside it. That covers creating a request, approve/reject/apply/rollback, the apply-result
   record, a staging push, expiry and eviction. If the lock cannot be taken within 5 seconds the

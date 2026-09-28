@@ -531,6 +531,36 @@ class Mcpwp_WebMCP {
 	 * @return bool
 	 */
 	public static function meta_key_allowed( $key, $post_type ) {
+		// meta_key is compared case-insensitively by MySQL's default
+		// collation, so "Featured_Flag" reads and overwrites the rows of a
+		// registered "featured_flag". Gate every registered key that equals
+		// this one case-insensitively, too (#981 review round 3, NIT).
+		$variants = array( $key => true, strtolower( $key ) => true );
+		if ( function_exists( 'get_registered_meta_keys' ) ) {
+			foreach ( array( $post_type, '' ) as $subtype ) {
+				foreach ( array_keys( (array) get_registered_meta_keys( 'post', $subtype ) ) as $registered ) {
+					if ( strtolower( (string) $registered ) === strtolower( $key ) ) {
+						$variants[ (string) $registered ] = true;
+					}
+				}
+			}
+		}
+		foreach ( array_keys( $variants ) as $variant ) {
+			if ( ! self::meta_key_allowed_exact( (string) $variant, $post_type ) ) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * meta_key_allowed() for one exact spelling.
+	 *
+	 * @param string $key       Meta key.
+	 * @param string $post_type Post type.
+	 * @return bool
+	 */
+	private static function meta_key_allowed_exact( $key, $post_type ) {
 		$allowed = ! ( function_exists( 'is_protected_meta' ) && is_protected_meta( $key, 'post' ) );
 		$user_id = get_current_user_id();
 
