@@ -1144,7 +1144,42 @@ class Mcpwp_Activator {
 
 		// Action log table — immutable per-tool audit trail (EU AI Act compliance)
 		$action_log_table = $wpdb->prefix . 'mcpwp_action_log';
-		$sql_action_log   = "CREATE TABLE IF NOT EXISTS $action_log_table (
+		dbDelta( self::action_log_create_sql( $action_log_table, $charset_collate ) );
+
+		self::ensure_graph_tables();
+	}
+
+	/**
+	 * The action-log table's CREATE TABLE SQL — factored out of create_tables()
+	 * so ensure_action_log_resource_post_type_column() (#1031 round 2) can
+	 * dbDelta() the SAME definition on a site that will not re-enter
+	 * create_tables() until its next version bump (see that method's own
+	 * docblock for why it runs on its own flag instead of waiting for one).
+	 * A single copy means the two can never drift into two different ideas
+	 * of what this table looks like.
+	 *
+	 * `resource_post_type` and `snapshot_skipped` (#1031 round 2, DESIGN
+	 * items 1 and 6) are both intentionally small, cheap-to-index columns —
+	 * see Mcpwp_Action_Log::list_entries()'s own docblock for why the
+	 * filtered read path must never SELECT the (potentially multi-MB)
+	 * before_snap/after_snap columns at all.
+	 *
+	 * @param string $table            Prefixed table name.
+	 * @param string $charset_collate  $wpdb->get_charset_collate().
+	 * @return string
+	 */
+	private static function action_log_create_sql( $table, $charset_collate ) {
+		// No `IF NOT EXISTS` (see ensure_graph_tables()'s own docblock, W6):
+		// dbDelta() diffs and ALTERs an existing table by parsing this exact
+		// string, and `IF NOT EXISTS` was found to make a real MySQL server
+		// silently skip the ALTER path dbDelta needed — exactly the path
+		// ensure_action_log_resource_post_type_column() below depends on to
+		// add a column to an ALREADY-EXISTING table outside the normal
+		// version-bump activate() flow. A plain `CREATE TABLE` still errors
+		// safely when the table already exists in a shape dbDelta considers
+		// final; dbDelta() itself decides CREATE vs. ALTER, this string is
+		// only its diffing input.
+		return "CREATE TABLE $table (
 			id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
 			log_id varchar(44) NOT NULL,
 			timestamp datetime NOT NULL,
@@ -1156,6 +1191,8 @@ class Mcpwp_Activator {
 			after_snap longtext DEFAULT NULL,
 			resource_type varchar(50) NOT NULL DEFAULT '',
 			resource_id varchar(255) NOT NULL DEFAULT '',
+			resource_post_type varchar(40) NOT NULL DEFAULT '',
+			snapshot_skipped varchar(20) NOT NULL DEFAULT '',
 			duration_ms int(11) DEFAULT NULL,
 			success tinyint(1) NOT NULL DEFAULT 0,
 			error_code varchar(50) NOT NULL DEFAULT '',
@@ -1168,12 +1205,169 @@ class Mcpwp_Activator {
 			KEY timestamp (timestamp),
 			KEY tool_name (tool_name),
 			KEY resource (resource_type(50), resource_id(100)),
-			KEY success (success)
+			KEY success (success),
+			KEY category_type (category, resource_post_type)
 		) $charset_collate;";
-		dbDelta( $sql_action_log );
-
-		self::ensure_graph_tables();
 	}
+
+	/**
+	 * #1031 round 2 (adversarial review, DESIGN item 1): add
+	 * resource_post_type/snapshot_skipped to an action-log table created
+	 * before this column existed. Own flag, not the mcpwp_db_version
+	 * compare in mcpwp.php — a site already on the current version when
+	 * this ships would otherwise never re-enter create_tables() at all
+	 * (same reasoning as every other "ships without a version bump"
+	 * migration in this file). Idempotent: dbDelta() on an unchanged
+	 * definition is a no-op, so a repeat call (or one racing another
+	 * process's) costs nothing beyond the flag already being set.
+	 *
+	 * @return void
+	 */
+	public static function ensure_action_log_resource_post_type_column() {
+		if ( get_option( 'mcpwp_action_log_resource_post_type_column' ) ) {
+			return;
+		}
+
+		global $wpdb;
+
+		if ( ! function_exists( 'dbDelta' ) ) {
+			require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+		}
+
+		$table = $wpdb->prefix . 'mcpwp_action_log';
+		dbDelta( self::action_log_create_sql( $table, $wpdb->get_charset_collate() ) );
+
+		update_option( 'mcpwp_action_log_resource_post_type_column', 1, false );
+	}
+
+	/**
+	 * Rows written before resource_post_type existed default to '' — treated
+	 * by Mcpwp_Action_Log::is_entry_visible_to() as "no post-type check
+	 * beyond the tool's own category" until backfilled here, so a
+	 * category-restricted key can (briefly, until this finishes) see a
+	 * pre-upgrade product/template entry it should not. #1031 round 2
+	 * (DESIGN item 1). Batched + checkpointed, same time-budgeted,
+	 * ID-keyset-cursor pattern as repair_custom_code_locations() above —
+	 * see that method's docblock for why a single unbounded pass over a
+	 * potentially large table is unsafe. Simpler than that migration in one
+	 * respect: every write here is independently idempotent (deriving
+	 * resource_post_type from data that does not change), so — unlike the
+	 * snippet repair — this does not take out its own mutex; two requests
+	 * racing into it at once redo, at worst, one batch's work rather than
+	 * corrupting anything.
+	 *
+	 * Preference order per row, matching the DESIGN's own: (1) the row's
+	 * OWN before_snap.post_type, when present — captured at write time, so
+	 * correct even if the post has since been deleted or changed type
+	 * (snapshot_post() has always stored this field); (2) a live get_post()
+	 * lookup, for a row whose snapshot never carried post_type at all
+	 * ('elementor' rows: snapshot_elementor()'s shape is only
+	 * {post_id, elementor_data}); (3) '' — the same value every
+	 * not-yet-backfilled row already has, so a row this can't resolve
+	 * either way is left exactly as before.
+	 *
+	 * @param float|null $time_budget Override for the per-call time budget,
+	 *                                in seconds. Tests use this to force an
+	 *                                interrupted run deterministically.
+	 *                                Production callers omit it.
+	 * @return void
+	 */
+	public static function backfill_action_log_resource_post_type( ?float $time_budget = null ) {
+		if ( get_option( 'mcpwp_action_log_post_type_backfilled' ) ) {
+			return;
+		}
+
+		global $wpdb;
+		if ( ! is_object( $wpdb ) || ! method_exists( $wpdb, 'get_results' ) ) {
+			return;
+		}
+
+		$table  = $wpdb->prefix . 'mcpwp_action_log';
+		$start  = microtime( true );
+		$budget = null !== $time_budget ? $time_budget : self::migration_time_budget();
+		$cursor = (int) get_option( self::ACTION_LOG_BACKFILL_CURSOR_OPTION, 0 );
+
+		do {
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared -- table name only; values placeholder-bound. before_snap is selected for exactly this bounded batch, never the whole table (#1031 round 2's own B1 finding is precisely what this pattern avoids).
+			$rows = $wpdb->get_results(
+				$wpdb->prepare(
+					"SELECT id, resource_type, resource_id, before_snap FROM $table WHERE id > %d AND resource_post_type = '' ORDER BY id ASC LIMIT %d",
+					$cursor,
+					self::ACTION_LOG_BACKFILL_BATCH_SIZE
+				),
+				ARRAY_A
+			);
+
+			if ( empty( $rows ) ) {
+				delete_option( self::ACTION_LOG_BACKFILL_CURSOR_OPTION );
+				update_option( 'mcpwp_action_log_post_type_backfilled', 1, false );
+				return;
+			}
+
+			foreach ( $rows as $row ) {
+				$row_id        = (int) $row['id'];
+				$resource_type = isset( $row['resource_type'] ) ? (string) $row['resource_type'] : '';
+				$post_type     = '';
+
+				if ( in_array( $resource_type, array( 'post', 'elementor' ), true ) ) {
+					$snap = ! empty( $row['before_snap'] ) ? json_decode( (string) $row['before_snap'], true ) : null;
+					if ( is_array( $snap ) && ! empty( $snap['post_type'] ) ) {
+						$post_type = sanitize_key( (string) $snap['post_type'] );
+					} else {
+						$post_id = isset( $row['resource_id'] ) ? (int) $row['resource_id'] : 0;
+						if ( $post_id > 0 ) {
+							$post = get_post( $post_id );
+							if ( $post instanceof WP_Post ) {
+								$post_type = (string) $post->post_type;
+							}
+						}
+					}
+				}
+
+				if ( '' !== $post_type ) {
+					// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+					$wpdb->update(
+						$table,
+						array( 'resource_post_type' => $post_type ),
+						array( 'id' => $row_id ),
+						array( '%s' ),
+						array( '%d' )
+					);
+				}
+
+				$cursor = $row_id;
+			}
+
+			// Checkpoint after every batch — the durable resume point a
+			// re-entrant call picks up from instead of rescanning already
+			// -visited rows (which, since resource_post_type = '' is part
+			// of the WHERE, would otherwise re-select any row this pass
+			// could not resolve either, on every single call, forever).
+			update_option( self::ACTION_LOG_BACKFILL_CURSOR_OPTION, $cursor, false );
+
+			if ( count( $rows ) < self::ACTION_LOG_BACKFILL_BATCH_SIZE ) {
+				delete_option( self::ACTION_LOG_BACKFILL_CURSOR_OPTION );
+				update_option( 'mcpwp_action_log_post_type_backfilled', 1, false );
+				return;
+			}
+		} while ( ( microtime( true ) - $start ) <= $budget );
+
+		// Budget exhausted mid-scan; cursor is already checkpointed above,
+		// so the next plugins_loaded call resumes at $cursor. At least one
+		// full batch always completes regardless of how small $time_budget
+		// is, for the same reason run_custom_code_repair_batches() gives.
+	}
+
+	/**
+	 * Batch size for backfill_action_log_resource_post_type() — same value
+	 * as CUSTOM_CODE_REPAIR_BATCH_SIZE, for the same reason (#1031 round 2).
+	 */
+	const ACTION_LOG_BACKFILL_BATCH_SIZE = 200;
+
+	/**
+	 * Cursor option for backfill_action_log_resource_post_type().
+	 */
+	const ACTION_LOG_BACKFILL_CURSOR_OPTION = 'mcpwp_action_log_post_type_backfill_cursor';
 
 	/**
 	 * Site graph — nodes, edges, signals, queue (#943 S1, revised post PR
