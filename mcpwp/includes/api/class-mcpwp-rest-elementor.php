@@ -737,9 +737,12 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 		// Non-public gate: a read-only key must not reach the full Elementor body
 		// of a draft/pending/private page. Return the same 404 as validate_post()
 		// for a genuinely missing/unsupported post so existence is never disclosed.
+		// Hint built by the SAME helper validate_post() uses for its own
+		// missing/unsupported branch (#1026) so the two 404s are byte-identical.
 		$denied = $this->guard_non_public_post(
 			get_post( absint( $page_id ) ),
-			__( 'Post not found or unsupported type.', 'mcpwp' )
+			__( 'Post not found or unsupported type.', 'mcpwp' ),
+			$this->elementor->not_found_hint( $page_id )
 		);
 		if ( $denied ) {
 			return $denied;
@@ -825,9 +828,12 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 		$page_id = $request->get_param( 'id' );
 
 		// Non-public gate — a read-only key must not read a draft's structure/copy.
+		// Hint built by the SAME helper validate_post() uses for its own
+		// missing/unsupported branch (#1026) so the two 404s are byte-identical.
 		$denied = $this->guard_non_public_post(
 			get_post( absint( $page_id ) ),
-			__( 'Post not found or unsupported type.', 'mcpwp' )
+			__( 'Post not found or unsupported type.', 'mcpwp' ),
+			$this->elementor->not_found_hint( $page_id )
 		);
 		if ( $denied ) {
 			return $denied;
@@ -856,9 +862,12 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 		// Non-public gate — get_rendered_content() renders the full body in-process
 		// (reaching unpublished content directly), so a read-only key must be
 		// stopped here before any render happens.
+		// Hint built by the SAME helper validate_post() uses for its own
+		// missing/unsupported branch (#1026) so the two 404s are byte-identical.
 		$denied = $this->guard_non_public_post(
 			get_post( absint( $page_id ) ),
-			__( 'Post not found or unsupported type.', 'mcpwp' )
+			__( 'Post not found or unsupported type.', 'mcpwp' ),
+			$this->elementor->not_found_hint( $page_id )
 		);
 		if ( $denied ) {
 			return $denied;

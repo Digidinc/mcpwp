@@ -86,6 +86,28 @@ trait Mcpwp_Elementor_Validator_Trait {
 	}
 
 	/**
+	 * The "not found or unsupported type" hint, keyed by post id.
+	 *
+	 * Single source of truth for validate_post()'s own missing/unsupported
+	 * branch AND Mcpwp_REST_Elementor's guard_non_public_post() calls
+	 * (get_elementor_data(), get_elementor_summary(), get_elementor_preview())
+	 * — all four MUST produce byte-identical hints for the same id, or a
+	 * non-public post (denied by the guard) becomes distinguishable from a
+	 * genuinely missing/unsupported one purely by hint text (#1026). A
+	 * category-denied post (#1024) folds into this SAME hint too — see
+	 * validate_post() below.
+	 *
+	 * @param int $post_id Post ID.
+	 * @return string
+	 */
+	public function not_found_hint( $post_id ) {
+		return sprintf(
+			'Post ID %d not found or is not a supported type (page, post, elementor_library, elementor_snippet). Use wp_list_pages or wp_list_posts to find valid IDs.',
+			absint( $post_id )
+		);
+	}
+
+	/**
 	 * Validate and return a post if it's a supported Elementor type.
 	 *
 	 * @param int $post_id Post ID.
@@ -96,16 +118,12 @@ trait Mcpwp_Elementor_Validator_Trait {
 		$allowed = array( 'page', 'post', 'elementor_library', 'elementor_snippet' );
 
 		if ( ! $post || ! in_array( $post->post_type, $allowed, true ) || $this->elementor_type_category_denied( $post->post_type ) ) {
-			$hint = sprintf(
-				'Post ID %d not found or is not a supported type (page, post, elementor_library, elementor_snippet). Use wp_list_pages or wp_list_posts to find valid IDs.',
-				absint( $post_id )
-			);
 			return new WP_Error(
 				'not_found',
 				__( 'Post not found or unsupported type.', 'mcpwp' ),
 				array(
 					'status' => 404,
-					'hint'   => $hint,
+					'hint'   => $this->not_found_hint( $post_id ),
 				)
 			);
 		}

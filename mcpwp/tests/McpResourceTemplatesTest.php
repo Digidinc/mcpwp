@@ -629,4 +629,81 @@ final class McpResourceTemplatesTest extends TestCase {
 		$this->assertTrue( $brand['elementor_globals']['unavailable'] );
 		$this->assertSame( 'scope_denied', $brand['elementor_globals']['reason'] );
 	}
+
+	// ── #1018: scheme case-sensitivity / trailing-slash consistency ───────
+	//
+	// Round-2 adversarial review of #1015 (#913) found resolve_mcp_resource()
+	// matching the "mcpwp://" scheme case-INsensitively (strncasecmp) for
+	// memory/guide while handle_resources_read()'s direct page/brand regexes
+	// were already case-sensitive — so `MCPWP://memory/identity` resolved but
+	// `MCPWP://page/5` did not. resolve_mcp_resource() also rtrim()'d a
+	// trailing slash off the key before matching memory/guide, while
+	// page/brand's own anchored (\z) regexes never tolerated one — so
+	// `mcpwp://memory/identity/` resolved but `mcpwp://page/5/` did not. Both
+	// are now decided in one place (mcp_scheme_key()): case-sensitive scheme,
+	// no trailing-slash trimming, for all four templates alike.
+
+	public function test_scheme_is_case_sensitive_for_every_template(): void {
+		Mcpwp_Site_Memory::remember( 'identity', 'k', 'v' );
+
+		$controller = new Mcpwp_REST_MCP();
+		$key        = $controller->create_scoped_api_key( 'admin', array( 'read', 'write' ), 'admin' )['key'];
+
+		$uris = array(
+			'page'   => 'MCPWP://page/' . self::PUB_PAGE_ID,
+			'brand'  => 'MCPWP://brand',
+			'memory' => 'MCPWP://memory/identity',
+			'guide'  => 'MCPWP://guide/elementor',
+		);
+
+		foreach ( $uris as $label => $uri ) {
+			$data = $this->dispatch( $controller, 'resources/read', array( 'uri' => $uri ), $key );
+			$this->assertArrayHasKey( 'error', $data, "Uppercased scheme on {$label} must not resolve." );
+			$this->assertSame( -32002, $data['error']['code'], "Uppercased scheme on {$label} must answer 'Resource not found', not resolve as if lowercase." );
+		}
+	}
+
+	public function test_trailing_slash_is_rejected_for_every_template(): void {
+		Mcpwp_Site_Memory::remember( 'identity', 'k', 'v' );
+
+		$controller = new Mcpwp_REST_MCP();
+		$key        = $controller->create_scoped_api_key( 'admin', array( 'read', 'write' ), 'admin' )['key'];
+
+		$uris = array(
+			'page'   => 'mcpwp://page/' . self::PUB_PAGE_ID . '/',
+			'brand'  => 'mcpwp://brand/',
+			'memory' => 'mcpwp://memory/identity/',
+			'guide'  => 'mcpwp://guide/elementor/',
+		);
+
+		foreach ( $uris as $label => $uri ) {
+			$data = $this->dispatch( $controller, 'resources/read', array( 'uri' => $uri ), $key );
+			$this->assertArrayHasKey( 'error', $data, "A trailing slash on {$label} must not resolve." );
+			$this->assertSame( -32002, $data['error']['code'], "A trailing slash on {$label} must answer 'Resource not found', not resolve as if it weren't there." );
+		}
+	}
+
+	/**
+	 * Same fixture, same lowercase-no-slash form as every other template
+	 * test in this file — a pure regression guard that the #1018 refactor
+	 * (mcp_scheme_key()) did not also break the happy path for memory/guide.
+	 */
+	public function test_well_formed_uris_still_resolve_for_every_template(): void {
+		Mcpwp_Site_Memory::remember( 'identity', 'k', 'v' );
+
+		$controller = new Mcpwp_REST_MCP();
+		$key        = $controller->create_scoped_api_key( 'admin', array( 'read', 'write' ), 'admin' )['key'];
+
+		$uris = array(
+			'page'   => 'mcpwp://page/' . self::PUB_PAGE_ID,
+			'brand'  => 'mcpwp://brand',
+			'memory' => 'mcpwp://memory/identity',
+			'guide'  => 'mcpwp://guide/elementor',
+		);
+
+		foreach ( $uris as $label => $uri ) {
+			$data = $this->dispatch( $controller, 'resources/read', array( 'uri' => $uri ), $key );
+			$this->assertArrayHasKey( 'result', $data, "Well-formed {$label} URI must still resolve." );
+		}
+	}
 }

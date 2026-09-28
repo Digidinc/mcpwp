@@ -2807,22 +2807,51 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	}
 
 	/**
+	 * Strip the "mcpwp://" scheme off a resource URI, the ONE place every
+	 * #913 template (page/{id}, brand, memory/{namespace}, guide/{topic})
+	 * and every fixed resource key checks for it, so all of them agree on
+	 * what counts as an mcpwp:// URI (#1018).
+	 *
+	 * The scheme token itself is matched case-sensitively and the returned
+	 * key is never trailing-slash-trimmed: `MCPWP://page/5` and `page/5/`
+	 * both fail to resolve, the same as any other scheme/path a caller got
+	 * wrong, rather than one template quietly tolerating what another
+	 * rejects. (RFC 3986 §3.1 allows a case-insensitive scheme, but a caller
+	 * that gets the plugin's own literal `mcpwp://` shorthand wrong is far
+	 * more likely typo'ing than proxy-rewriting a scheme, and every
+	 * consumer downstream — the exact `===` key comparisons, the anchored
+	 * per-template regexes — is already case-sensitive, so a case-
+	 * insensitive scheme was the one inconsistent entry point rather than a
+	 * deliberate allowance.)
+	 *
+	 * @param string $uri Client-supplied resource URI.
+	 * @return string|null The key after "mcpwp://", or null when $uri does
+	 *                      not start with that exact scheme.
+	 */
+	private function mcp_scheme_key( $uri ) {
+		if ( 0 !== strpos( $uri, 'mcpwp://' ) ) {
+			return null;
+		}
+		return substr( $uri, 8 );
+	}
+
+	/**
 	 * Whether a URI names one of the four #913 resource templates — by
 	 * prefix only, deliberately not validating the id/namespace/topic
 	 * itself (that happens where each template is actually resolved). Used
 	 * to reject a query string/fragment on all four alike before any of
-	 * them is matched (#1015 adversarial review round 1, W1). Case-sensitive,
-	 * matching the case-sensitive key comparisons every template match uses
-	 * (N2) — only the "mcpwp://" scheme token itself is case-insensitive.
+	 * them is matched (#1015 adversarial review round 1, W1). Case-sensitive
+	 * throughout, including the "mcpwp://" scheme token (#1018) — matching
+	 * the case-sensitive key comparisons every template match uses (N2).
 	 *
 	 * @param string $uri Client-supplied resource URI.
 	 * @return bool
 	 */
 	private function is_mcp_template_uri( $uri ) {
-		if ( 0 !== strncasecmp( $uri, 'mcpwp://', 8 ) ) {
+		$key = $this->mcp_scheme_key( $uri );
+		if ( null === $key ) {
 			return false;
 		}
-		$key = substr( $uri, 8 );
 		foreach ( array( 'page/', 'brand', 'memory/', 'guide/' ) as $prefix ) {
 			if ( 0 === strpos( $key, $prefix ) ) {
 				return true;
@@ -2852,9 +2881,9 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	private function resolve_mcp_resource( $uri ) {
 		$definitions = $this->mcp_resource_definitions();
 
-		if ( 0 === strncasecmp( $uri, 'mcpwp://', 8 ) ) {
-			$key = strtok( substr( $uri, 8 ), '?' );
-			$key = rtrim( (string) $key, '/' );
+		$key = $this->mcp_scheme_key( $uri );
+		if ( null !== $key ) {
+			$key = strtok( $key, '?' );
 
 			foreach ( $definitions as $definition ) {
 				if ( $definition['key'] === $key ) {
@@ -2874,12 +2903,10 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			// just before a trailing "\n", and the mcpwp://page/{id} /
 			// mcpwp://brand matching in handle_resources_read() is already
 			// both, so this keeps every template consistent with itself
-			// (#1015 adversarial review round 1, N1/N2). The "mcpwp://"
-			// scheme token itself stays case-INsensitive (resolved by the
-			// strncasecmp() a few lines up) — schemes are case-insensitive
-			// per RFC 3986 §3.1; only the path-like key after it is compared
-			// exactly, same as the exact `===` match against the six fixed
-			// resource keys just above.
+			// (#1015 adversarial review round 1, N1/N2; #1018: the "mcpwp://"
+			// scheme token above is now ALSO case-sensitive and never
+			// trailing-slash-trimmed, via the shared mcp_scheme_key() helper,
+			// so page/brand and memory/guide agree on what an mcpwp:// URI is).
 			if ( preg_match( '#^memory/([a-z0-9_-]{1,190})\z#', $key, $m ) ) {
 				$namespace = sanitize_key( $m[1] );
 				return array(
@@ -3022,16 +3049,22 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 
 		// Composed resource templates (#913): page/{id} and brand each read
 		// more than one internal route and are resolved directly, before the
-		// single-route definitions below ever see the URI. Case-sensitive
-		// and anchored with \z (not $, which also matches just before a
-		// trailing "\n") — consistent with resolve_mcp_resource()'s
-		// memory/guide matching just below (#1015 review round 1, N1/N2).
-		if ( preg_match( '#^mcpwp://page/(\d+)\z#', $uri, $m ) ) {
-			return $this->read_mcp_resource_page( $id, $uri, (int) $m[1], $request );
-		}
+		// single-route definitions below ever see the URI. Matched via the
+		// same mcp_scheme_key() helper resolve_mcp_resource() uses for
+		// memory/guide (#1018) — one case-sensitive, non-trailing-slash-
+		// trimmed scheme check for all four templates — then anchored with
+		// \z (not $, which also matches just before a trailing "\n") so
+		// none of the four tolerates a trailing slash either (#1015 review
+		// round 1, N1/N2).
+		$key = $this->mcp_scheme_key( $uri );
+		if ( null !== $key ) {
+			if ( preg_match( '#^page/(\d+)\z#', $key, $m ) ) {
+				return $this->read_mcp_resource_page( $id, $uri, (int) $m[1], $request );
+			}
 
-		if ( 'mcpwp://brand' === $uri ) {
-			return $this->read_mcp_resource_brand( $id, $uri, $request );
+			if ( 'brand' === $key ) {
+				return $this->read_mcp_resource_brand( $id, $uri, $request );
+			}
 		}
 
 		$definition = $this->resolve_mcp_resource( $uri );
