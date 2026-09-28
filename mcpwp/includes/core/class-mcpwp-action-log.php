@@ -17,6 +17,39 @@ class Mcpwp_Action_Log {
 	const TABLE = 'mcpwp_action_log';
 	const DEFAULT_RETENTION_DAYS = 90;
 
+	/**
+	 * #1031 round 2 (adversarial review, DESIGN item 6): a before_snap/
+	 * after_snap over this size is not stored — a single wp_set_elementor
+	 * save produced a 1.5MB after_snap in the field, and even a modest
+	 * number of large-page write tools makes every full-row read of this
+	 * table (get_entry(), rollback(), the pre-round-2 filtered list path)
+	 * select gigabytes of TEXT it never needed. list_entries()/export_csv()
+	 * never select these columns at all (see LIST_COLUMNS); this cap bounds
+	 * the OTHER two readers — get_entry_public() and rollback(), which do
+	 * need before_snap to restore from.
+	 *
+	 * A capped snapshot is replaced with a small `{"withheld": "..."}`
+	 * marker (see cap_snapshot()) — the same shape snapshot_option() has
+	 * always used for a credential-shaped value, and apply_snapshot() now
+	 * refuses BOTH uniformly with 'snapshot_withheld', so a caller gets one
+	 * clear, existing error code rather than a new one meaning the same
+	 * thing. `snapshot_skipped` records which read the size cap, so a
+	 * caller can tell "too large" from "nothing to snapshot" without
+	 * decoding the (possibly absent) blob itself.
+	 */
+	const SNAPSHOT_MAX_BYTES = 524288; // 512 KB.
+
+	/**
+	 * Explicit column list for the two read paths that must never load
+	 * before_snap/after_snap (#1031 round 2, DESIGN item 2 / B1): listing
+	 * and exporting only ever need the columns public_entry() actually
+	 * emits, so `SELECT *` here would load a possibly-multi-MB blob per row
+	 * for nothing, on top of paying that cost per key that reads the log —
+	 * exactly what made the round-1 fix's scan-and-filter approach fatal
+	 * at scale.
+	 */
+	const LIST_COLUMNS = 'log_id, timestamp, tool_name, category, api_key_id, resource_type, resource_id, resource_post_type, snapshot_skipped, duration_ms, success, error_code, rollback_supported, rolled_back, rolled_back_at';
+
 	private static $post_write_tools = array(
 		'wp_update_post', 'wp_update_page',
 		'wp_bulk_update_posts', 'wp_bulk_update_pages',
@@ -55,17 +88,29 @@ class Mcpwp_Action_Log {
 			return null;
 		}
 
-		$resource    = self::detect_resource( $tool_name, $arguments );
-		$before_snap = self::snapshot( $resource );
+		$resource = self::detect_resource( $tool_name, $arguments );
+
+		// #1031 round 2 (DESIGN item 1/5): resolved from the LIVE post HERE,
+		// before the tool runs — so a delete's entry keeps the real
+		// post_type even though the post is gone by the time anyone reads
+		// the log. Stored on the row (see insert()) rather than resolved
+		// again at read time, which is what let a hard-deleted target
+		// become unclassifiable (and, in round 1's design, hidden from
+		// everyone) — see resolve_resource_post_type()'s own docblock.
+		$resource_post_type = self::resolve_resource_post_type( $resource );
+
+		$before_cap  = self::cap_snapshot( self::snapshot( $resource ) );
 		$log_id      = self::generate_id();
 
 		self::$pending[ $log_id ] = array(
-			'resource'    => $resource,
-			'before_snap' => $before_snap,
-			'tool_name'   => $tool_name,
-			'arguments'   => $arguments,
-			'api_key_id'  => $api_key_id,
-			'category'    => $category,
+			'resource'            => $resource,
+			'resource_post_type'  => $resource_post_type,
+			'before_snap'         => $before_cap['value'],
+			'before_snap_skipped' => $before_cap['skipped'],
+			'tool_name'           => $tool_name,
+			'arguments'           => $arguments,
+			'api_key_id'          => $api_key_id,
+			'category'            => $category,
 		);
 
 		return $log_id;
@@ -90,7 +135,8 @@ class Mcpwp_Action_Log {
 		$tool_name = $pending['tool_name'];
 		$arguments = $pending['arguments'];
 
-		$after_snap         = $success ? self::snapshot( $resource ) : null;
+		$after_cap          = $success ? self::cap_snapshot( self::snapshot( $resource ) ) : array( 'value' => null, 'skipped' => false );
+		$snapshot_skipped   = ( $pending['before_snap_skipped'] || $after_cap['skipped'] ) ? 'too_large' : '';
 		$rollback_supported = $success && self::is_rollback_supported( $tool_name, $resource );
 
 		self::insert(
@@ -100,9 +146,11 @@ class Mcpwp_Action_Log {
 			$pending['api_key_id'],
 			$arguments,
 			$pending['before_snap'],
-			$after_snap,
+			$after_cap['value'],
 			$resource['type'],
 			(string) $resource['id'],
+			$pending['resource_post_type'],
+			$snapshot_skipped,
 			$duration_ms,
 			$success ? 1 : 0,
 			$error_code,
@@ -115,36 +163,51 @@ class Mcpwp_Action_Log {
 	/**
 	 * Rollback a logged action by restoring its before-state.
 	 *
-	 * @param string        $log_id             Log entry ID.
-	 * @param callable|null $template_ref_gate  #1032 round 2 (NIT): the SAME
-	 *                                          gate every other write path
-	 *                                          uses (Mcpwp_Api_Auth::template_ref_gate()),
-	 *                                          injected by the REST layer
-	 *                                          (which has the caller's own
-	 *                                          auth context; this class does
-	 *                                          not). A rollback restores
-	 *                                          `_elementor_data`/
-	 *                                          `post_content` bytes verbatim —
-	 *                                          without this, restoring an
-	 *                                          OLDER snapshot could
-	 *                                          reintroduce a Template Library
-	 *                                          reference the CURRENT caller
-	 *                                          cannot read, exactly the write-
-	 *                                          time hole this whole issue is
-	 *                                          about, just reached through
-	 *                                          history instead of a fresh
-	 *                                          write. null (a caller with no
-	 *                                          auth context — WP-CLI, a
-	 *                                          trusted internal call) means
-	 *                                          unrestricted, matching every
-	 *                                          other injected gate in this
-	 *                                          plugin.
+	 * @param string        $log_id            Log entry ID.
+	 * @param array|null    $visibility        #1031 round 2: optional visibility
+	 *                                         descriptor — see list_entries()'s own
+	 *                                         docblock for the shape
+	 *                                         (`categories`/`post_types`/
+	 *                                         `caller_key_id`) and
+	 *                                         is_entry_visible_to() for how it is
+	 *                                         applied to a single row. A hidden entry
+	 *                                         denies with the exact same not_found
+	 *                                         error a genuinely missing log_id
+	 *                                         returns, so a category-restricted key
+	 *                                         cannot use rollback as an existence
+	 *                                         oracle for an entry /action-log itself
+	 *                                         would not list. Null (default):
+	 *                                         unfiltered, matching every existing
+	 *                                         caller unchanged.
+	 * @param callable|null $template_ref_gate #1032 round 2 (NIT): the SAME
+	 *                                         gate every other write path
+	 *                                         uses (Mcpwp_Api_Auth::template_ref_gate()),
+	 *                                         injected by the REST layer
+	 *                                         (which has the caller's own
+	 *                                         auth context; this class does
+	 *                                         not). A rollback restores
+	 *                                         `_elementor_data`/
+	 *                                         `post_content` bytes verbatim —
+	 *                                         without this, restoring an
+	 *                                         OLDER snapshot could
+	 *                                         reintroduce a Template Library
+	 *                                         reference the CURRENT caller
+	 *                                         cannot read, exactly the write-
+	 *                                         time hole this whole issue is
+	 *                                         about, just reached through
+	 *                                         history instead of a fresh
+	 *                                         write. null (a caller with no
+	 *                                         auth context — WP-CLI, a
+	 *                                         trusted internal call) means
+	 *                                         unrestricted, matching every
+	 *                                         other injected gate in this
+	 *                                         plugin.
 	 * @return true|WP_Error
 	 */
-	public static function rollback( $log_id, $template_ref_gate = null ) {
+	public static function rollback( $log_id, $visibility = null, $template_ref_gate = null ) {
 		$entry = self::get_entry( $log_id );
 
-		if ( ! $entry ) {
+		if ( ! $entry || ( null !== $visibility && ! self::is_entry_visible_to( $entry, $visibility ) ) ) {
 			return new WP_Error( 'not_found', __( 'Log entry not found.', 'mcpwp' ), array( 'status' => 404 ) );
 		}
 
@@ -222,7 +285,58 @@ class Mcpwp_Action_Log {
 	/**
 	 * List log entries.
 	 *
-	 * @param array $args Query args: limit, offset, tool_name, success, resource_type, resource_id.
+	 * @param array $args Query args: limit, offset, tool_name, success, resource_type,
+	 *                    resource_id, and `visibility` (#1031 round 2, optional array):
+	 *                    - `categories`  (string[]|null) every tool category the
+	 *                      caller's ROLE allows (Mcpwp_Api_Auth::
+	 *                      resolve_key_tool_categories() — role only, NOT the
+	 *                      site-wide `mcpwp_disabled_tool_categories` toggle:
+	 *                      disabling a category must not erase an
+	 *                      unrestricted key's own view of its history —
+	 *                      #1031 round 2 W4).
+	 *                    - `post_types`  (string[]) every registered post type
+	 *                      whose Mcpwp_REST_API::category_for_post_type() is
+	 *                      in `categories` — computed once per request by
+	 *                      the REST controller (only it has the request's
+	 *                      key context), the same split
+	 *                      Mcpwp_Approvals::list_requests()'s own
+	 *                      `$category_allowed` docblock explains.
+	 *                    - `caller_key_id` (string) the requesting key's own
+	 *                      id — an entry THIS key wrote is always visible to
+	 *                      it regardless of category (#1031 round 2 W3/
+	 *                      DESIGN item 3: a key can otherwise lose sight of
+	 *                      its own just-completed action, e.g. an Elementor
+	 *                      save on a page that also carries a category the
+	 *                      key's role does not hold).
+	 *                    A null `visibility` (default) is unfiltered,
+	 *                    matching every existing caller (wp-admin's Activity
+	 *                    Log / Control Room, a caller with no key context)
+	 *                    unchanged.
+	 *
+	 *                    Every entry carries the category of the TOOL that
+	 *                    wrote it AND (since #1031 round 2) the real
+	 *                    post_type of the resource it names, captured once
+	 *                    at write time (see resolve_resource_post_type()).
+	 *                    A generic, post-type-agnostic write tool
+	 *                    (wp_update_post, wp_delete_post,
+	 *                    wp_bulk_update_posts, ...) used against a post
+	 *                    belonging to a DIFFERENT domain (a WooCommerce
+	 *                    product, an Elementor template) logs under its own
+	 *                    door's category, not the resource's — the same
+	 *                    additive gap #1020/#1025 closed for /post-meta and
+	 *                    /approvals. An entry is visible when EITHER the
+	 *                    caller wrote it OR it holds every category its
+	 *                    tool and resource require.
+	 *
+	 *                    Filtering happens entirely in SQL — COUNT(*) and
+	 *                    the LIMIT/OFFSET page share the exact same WHERE —
+	 *                    so `total` is always exact and a hidden entry can
+	 *                    never be counted or displace a visible one out of
+	 *                    the page (#1031 round 2 W1, replacing round 1's
+	 *                    PHP-side scan-then-filter, which both loaded
+	 *                    before_snap/after_snap for a bounded scan window
+	 *                    AND gave a wrong total/pagination past that
+	 *                    window — round-1 review B1/W1).
 	 * @return array{ entries: array[], total: int }
 	 */
 	public static function list_entries( $args = array() ) {
@@ -255,19 +369,28 @@ class Mcpwp_Action_Log {
 			$values[] = sanitize_text_field( (string) $args['resource_id'] );
 		}
 
+		if ( isset( $args['visibility'] ) && is_array( $args['visibility'] ) ) {
+			list( $visibility_sql, $visibility_values ) = self::build_visibility_sql( $args['visibility'] );
+			if ( '' !== $visibility_sql ) {
+				$where[]  = $visibility_sql;
+				$values   = array_merge( $values, $visibility_values );
+			}
+		}
+
 		$where_sql = implode( ' AND ', $where );
 
 		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-		$total = (int) $wpdb->get_var( "SELECT COUNT(*) FROM $table WHERE $where_sql" );
+		$total = (int) ( empty( $values )
+			? $wpdb->get_var( "SELECT COUNT(*) FROM $table WHERE $where_sql" )
+			: $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM $table WHERE $where_sql", $values ) ) );
 
-		if ( ! empty( $values ) ) {
-			$prepare_args = array_merge( array( "SELECT * FROM $table WHERE $where_sql ORDER BY timestamp DESC LIMIT %d OFFSET %d" ), $values, array( $limit, $offset ) );
-			// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-			$rows = $wpdb->get_results( call_user_func_array( array( $wpdb, 'prepare' ), $prepare_args ), ARRAY_A );
-		} else {
-			// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-			$rows = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM $table WHERE 1=1 ORDER BY timestamp DESC LIMIT %d OFFSET %d", $limit, $offset ), ARRAY_A );
-		}
+		$columns      = self::LIST_COLUMNS;
+		$select_args  = array_merge( $values, array( $limit, $offset ) );
+		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- never selects before_snap/after_snap (#1031 round 2 B1): $columns is the fixed LIST_COLUMNS constant, not caller input.
+		$rows = $wpdb->get_results(
+			$wpdb->prepare( "SELECT $columns FROM $table WHERE $where_sql ORDER BY timestamp DESC LIMIT %d OFFSET %d", $select_args ),
+			ARRAY_A
+		);
 
 		return array(
 			'entries' => array_map( array( __CLASS__, 'public_entry' ), $rows ? $rows : array() ),
@@ -276,14 +399,163 @@ class Mcpwp_Action_Log {
 	}
 
 	/**
+	 * Build the SQL fragment + bound values for a `visibility` descriptor
+	 * (#1031 round 2) — the SQL-side twin of is_entry_visible_to(), which
+	 * applies the exact same rule PHP-side to one already-fetched row for
+	 * get_entry_public()/rollback(). The two must stay in lock-step: a
+	 * caller who can't see an entry in the list must also 404 fetching it
+	 * directly, and vice versa.
+	 *
+	 * `null` categories means unrestricted (skip filtering, handled by the
+	 * caller of this function never invoking it at all — see
+	 * list_entries()'s own null-`visibility` fast path); this function is
+	 * only ever reached with a REAL restriction to express.
+	 *
+	 * @param array $visibility `categories` (string[]), `post_types`
+	 *                          (string[]), `caller_key_id` (string).
+	 * @return array{0:string,1:array} SQL fragment (already parenthesised,
+	 *                                 '' when nothing to filter) and its
+	 *                                 bound values, in the order the
+	 *                                 fragment's placeholders appear.
+	 */
+	private static function build_visibility_sql( array $visibility ) {
+		$categories = isset( $visibility['categories'] ) && is_array( $visibility['categories'] )
+			? array_values( array_unique( array_map( 'sanitize_key', $visibility['categories'] ) ) )
+			: null;
+
+		if ( null === $categories ) {
+			// Unrestricted — no predicate at all.
+			return array( '', array() );
+		}
+
+		$post_types = isset( $visibility['post_types'] ) && is_array( $visibility['post_types'] )
+			? array_values( array_unique( array_map( 'sanitize_key', $visibility['post_types'] ) ) )
+			: array();
+
+		$caller_key_id = isset( $visibility['caller_key_id'] ) ? (string) $visibility['caller_key_id'] : '';
+
+		$values = array();
+
+		if ( empty( $categories ) ) {
+			// resolve_key_tool_categories() only ever returns [] to mean
+			// "unrestricted" (handled by the null-categories branch above),
+			// so a REAL restricted list reaching here empty would mean the
+			// key's role allows nothing — refuse every category rather than
+			// (via an empty SQL IN()) accidentally match everything.
+			$category_predicate = '0=1';
+		} else {
+			$category_predicate = 'category IN (' . implode( ',', array_fill( 0, count( $categories ), '%s' ) ) . ')';
+			$values              = array_merge( $values, $categories );
+		}
+
+		// #1031 round 3 (adversarial review N2): a row that names a SPECIFIC
+		// post/elementor resource (resource_type in ('post','elementor') AND
+		// a resource_id that is a real, positive post id) but whose
+		// resource_post_type has not (yet) been captured or backfilled must
+		// NOT get a free pass — that would silently widen visibility for
+		// exactly the not-yet-backfilled window the migration exists to
+		// close, or any future write path that forgets to set it. Only a
+		// row that is NOT that kind of resource at all — an 'option'/'other'
+		// entry, or resource_id '0' for a create that never captured a real
+		// id — skips the post-type gate. `resource_id` is always a bare
+		// decimal string for these two resource types (see detect_resource()),
+		// never zero-padded, so this regex is exact, not approximate.
+		$identified_post = "(resource_type IN ('post','elementor') AND resource_id REGEXP '^[1-9][0-9]*$')";
+
+		if ( empty( $post_types ) ) {
+			$type_predicate = "NOT $identified_post";
+		} else {
+			$type_predicate = "(NOT $identified_post OR resource_post_type IN (" . implode( ',', array_fill( 0, count( $post_types ), '%s' ) ) . '))';
+			$values          = array_merge( $values, $post_types );
+		}
+
+		$sql = "($category_predicate AND $type_predicate)";
+
+		if ( '' !== $caller_key_id ) {
+			$sql     .= ' OR api_key_id = %s';
+			$values[] = $caller_key_id;
+		}
+
+		return array( "($sql)", $values );
+	}
+
+	/**
+	 * Whether $entry is visible to a caller described by $visibility
+	 * (#1031 round 2) — the PHP-side twin of build_visibility_sql(), used
+	 * by get_entry_public() and rollback() on a single already-fetched row
+	 * rather than a fresh query. See build_visibility_sql()'s own docblock
+	 * for why the two must agree, and list_entries()'s docblock for the
+	 * `visibility` shape.
+	 *
+	 * @param array $entry      Row (get_entry()'s ARRAY_A) or
+	 *                          public_entry() shape — both carry
+	 *                          'category', 'api_key_id' and (since round 2)
+	 *                          'resource_post_type' under those names.
+	 * @param array $visibility See build_visibility_sql().
+	 * @return bool
+	 */
+	public static function is_entry_visible_to( array $entry, array $visibility ) {
+		$caller_key_id = isset( $visibility['caller_key_id'] ) ? (string) $visibility['caller_key_id'] : '';
+		if ( '' !== $caller_key_id && isset( $entry['api_key_id'] ) && $caller_key_id === (string) $entry['api_key_id'] ) {
+			return true;
+		}
+
+		$categories = isset( $visibility['categories'] ) && is_array( $visibility['categories'] ) ? $visibility['categories'] : null;
+		if ( null === $categories ) {
+			return true; // Unrestricted.
+		}
+
+		// #1031 round 3 (N1): '' is never a free pass for a restricted
+		// caller — matches build_visibility_sql()'s `category IN (...)`,
+		// which a genuinely empty category string also never satisfies.
+		$tool_category = isset( $entry['category'] ) ? (string) $entry['category'] : '';
+		if ( ! in_array( $tool_category, $categories, true ) ) {
+			return false;
+		}
+
+		// #1031 round 3 (N2): only a row that IDENTIFIES a specific post/
+		// elementor resource (a real, positive resource_id) is subject to
+		// the post-type gate at all — see build_visibility_sql()'s own
+		// docblock for why, and why the two must agree.
+		$resource_type = isset( $entry['resource_type'] ) ? (string) $entry['resource_type'] : '';
+		$resource_id   = isset( $entry['resource_id'] ) ? (int) $entry['resource_id'] : 0;
+		if ( ! in_array( $resource_type, array( 'post', 'elementor' ), true ) || $resource_id <= 0 ) {
+			return true;
+		}
+
+		$post_type = isset( $entry['resource_post_type'] ) ? (string) $entry['resource_post_type'] : '';
+		if ( '' === $post_type ) {
+			return false; // Identified, but unresolved/not-yet-backfilled — fail closed.
+		}
+
+		$post_types = isset( $visibility['post_types'] ) ? (array) $visibility['post_types'] : array();
+		return in_array( $post_type, $post_types, true );
+	}
+
+	/**
 	 * Get one log entry (public fields).
 	 *
-	 * @param string $log_id Log entry ID.
+	 * @param string     $log_id     Log entry ID.
+	 * @param array|null $visibility #1031 round 2: optional visibility
+	 *                               descriptor — see list_entries()'s
+	 *                               docblock. A hidden entry returns null,
+	 *                               the same shape a genuinely missing
+	 *                               log_id returns, so this door cannot be
+	 *                               used to confirm an entry exists that the
+	 *                               caller could not see via the list door.
 	 * @return array|null
 	 */
-	public static function get_entry_public( $log_id ) {
+	public static function get_entry_public( $log_id, $visibility = null ) {
 		$entry = self::get_entry( $log_id );
-		return $entry ? self::public_entry( $entry ) : null;
+		if ( ! $entry ) {
+			return null;
+		}
+
+		if ( null !== $visibility && ! self::is_entry_visible_to( $entry, $visibility ) ) {
+			return null;
+		}
+
+		return self::public_entry( $entry );
 	}
 
 	/**
@@ -293,10 +565,33 @@ class Mcpwp_Action_Log {
 	 * @return string CSV content.
 	 */
 	public static function export_csv( $args = array() ) {
-		$args['limit']  = min( 1000, max( 1, (int) ( isset( $args['limit'] ) ? $args['limit'] : 1000 ) ) );
-		$args['offset'] = 0;
-		$result         = self::list_entries( $args );
-		$entries        = $result['entries'];
+		$requested_limit = min( 1000, max( 1, (int) ( isset( $args['limit'] ) ? $args['limit'] : 1000 ) ) );
+
+		// #1031 round 2 NIT-N2: list_entries() itself caps every single call
+		// at 100 (its own REST page-size ceiling) — export previously asked
+		// list_entries() for up to 1000 in one call and silently got 100
+		// back. Page through list_entries()'s own SQL LIMIT/OFFSET instead,
+		// so export can actually reach its documented ceiling.
+		$entries = array();
+		$offset  = (int) ( isset( $args['offset'] ) ? $args['offset'] : 0 );
+
+		while ( count( $entries ) < $requested_limit ) {
+			$page_args           = $args;
+			$page_args['limit']  = min( 100, $requested_limit - count( $entries ) );
+			$page_args['offset'] = $offset;
+
+			$page = self::list_entries( $page_args );
+			if ( empty( $page['entries'] ) ) {
+				break;
+			}
+
+			$entries = array_merge( $entries, $page['entries'] );
+			$offset += count( $page['entries'] );
+
+			if ( count( $page['entries'] ) < $page_args['limit'] ) {
+				break; // Last page.
+			}
+		}
 
 		$cols = array(
 			'log_id', 'timestamp', 'tool_name', 'category', 'api_key_id',
@@ -399,6 +694,71 @@ class Mcpwp_Action_Log {
 		return array( 'type' => 'other', 'id' => '' );
 	}
 
+	/**
+	 * Resolve a resource's real post_type at the moment begin() runs —
+	 * i.e. BEFORE the tool executes (#1031 round 2, DESIGN item 1/5). For a
+	 * delete, this is what makes the captured type survive the delete: by
+	 * the time anyone reads the log the post is gone, but the type was
+	 * already stored on the row at write time, never re-resolved live.
+	 *
+	 * '' for anything that isn't a post-shaped resource ('option', 'other')
+	 * or whose id didn't resolve (a create, which has no id yet when
+	 * begin() runs) — is_entry_visible_to()/build_visibility_sql() both
+	 * treat '' as "no post-type check beyond the tool's own category",
+	 * which is also the value every not-yet-backfilled pre-round-2 row
+	 * already has.
+	 *
+	 * @param array $resource detect_resource()'s result.
+	 * @return string Post type, or ''.
+	 */
+	private static function resolve_resource_post_type( array $resource ) {
+		if ( ! in_array( $resource['type'], array( 'post', 'elementor' ), true ) ) {
+			return '';
+		}
+
+		$post_id = isset( $resource['id'] ) ? (int) $resource['id'] : 0;
+		if ( $post_id <= 0 ) {
+			return '';
+		}
+
+		$post = get_post( $post_id );
+		return $post instanceof WP_Post ? (string) $post->post_type : '';
+	}
+
+	/**
+	 * Enforce SNAPSHOT_MAX_BYTES on a computed snapshot JSON string
+	 * (#1031 round 2, DESIGN item 6). Over the cap, the real snapshot is
+	 * not stored at all — replaced with a small marker carrying a
+	 * `withheld` key, the same shape snapshot_option() already uses for a
+	 * credential-shaped value, so apply_snapshot()'s existing
+	 * 'snapshot_withheld' refusal covers both uniformly (see its own
+	 * docblock).
+	 *
+	 * @param string|null $json Snapshot JSON, or null (nothing to snapshot).
+	 * @return array{value:?string,skipped:bool}
+	 */
+	private static function cap_snapshot( $json ) {
+		if ( null === $json ) {
+			return array( 'value' => null, 'skipped' => false );
+		}
+
+		if ( strlen( $json ) <= self::SNAPSHOT_MAX_BYTES ) {
+			return array( 'value' => $json, 'skipped' => false );
+		}
+
+		$marker = wp_json_encode(
+			array(
+				'withheld' => sprintf(
+					/* translators: %d: size cap in KB. */
+					__( 'Snapshot exceeded %d KB and was not stored; rollback is not available for this entry.', 'mcpwp' ),
+					(int) ( self::SNAPSHOT_MAX_BYTES / 1024 )
+				),
+			)
+		);
+
+		return array( 'value' => false === $marker ? null : $marker, 'skipped' => true );
+	}
+
 	private static function snapshot( $resource ) {
 		if ( empty( $resource['id'] ) && 'option' !== $resource['type'] ) {
 			return null;
@@ -475,6 +835,16 @@ class Mcpwp_Action_Log {
 	}
 
 	private static function apply_snapshot( $resource_type, $snap ) {
+		// #1031 round 2: a snapshot withheld for size (cap_snapshot(), any
+		// resource type) OR — pre-existing — a credential-shaped option
+		// value (snapshot_option()) both carry a `withheld` key instead of
+		// restorable data. Refuse uniformly, before any resource-type-
+		// specific parsing, so every withheld entry gets the same clear
+		// error regardless of WHY it was withheld.
+		if ( isset( $snap['withheld'] ) ) {
+			return new WP_Error( 'snapshot_withheld', (string) $snap['withheld'], array( 'status' => 409 ) );
+		}
+
 		switch ( $resource_type ) {
 			case 'post':
 				if ( empty( $snap['post_id'] ) ) {
@@ -556,6 +926,7 @@ class Mcpwp_Action_Log {
 	private static function insert(
 		$log_id, $tool_name, $category, $api_key_id, $arguments,
 		$before_snap, $after_snap, $resource_type, $resource_id,
+		$resource_post_type, $snapshot_skipped,
 		$duration_ms, $success, $error_code, $rollback_supported
 	) {
 		global $wpdb;
@@ -584,13 +955,15 @@ class Mcpwp_Action_Log {
 				'after_snap'         => $after_snap,
 				'resource_type'      => (string) $resource_type,
 				'resource_id'        => (string) $resource_id,
+				'resource_post_type' => (string) $resource_post_type,
+				'snapshot_skipped'   => (string) $snapshot_skipped,
 				'duration_ms'        => (int) $duration_ms,
 				'success'            => (int) $success,
 				'error_code'         => (string) $error_code,
 				'rollback_supported' => (int) $rollback_supported,
 				'rolled_back'        => 0,
 			),
-			array( '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%d', '%d', '%s', '%d', '%d' )
+			array( '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%d', '%d', '%s', '%d', '%d' )
 		);
 	}
 
@@ -600,7 +973,7 @@ class Mcpwp_Action_Log {
 		$table  = $wpdb->prefix . self::TABLE;
 		$log_id = sanitize_text_field( (string) $log_id );
 
-		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- single row by unique log_id; rollback needs before_snap, so this (unlike list_entries()) intentionally selects the full row.
 		$row = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM $table WHERE log_id = %s", $log_id ), ARRAY_A );
 
 		return $row ? $row : null;
@@ -624,6 +997,10 @@ class Mcpwp_Action_Log {
 			'rollback_supported' => (bool) $row['rollback_supported'],
 			'rolled_back'        => (bool) $row['rolled_back'],
 			'rolled_back_at'     => $row['rolled_back_at'],
+			// #1031 round 2, DESIGN item 6: a cheap column, safe to include
+			// in even the lean LIST_COLUMNS select — '' unless a snapshot on
+			// this row was withheld for size.
+			'snapshot_skipped'   => isset( $row['snapshot_skipped'] ) && '' !== $row['snapshot_skipped'] ? $row['snapshot_skipped'] : '',
 		);
 	}
 
