@@ -352,6 +352,25 @@ class Mcpwp_Posts {
 	}
 
 	/**
+	 * The "not found" hint for /posts/{id}, keyed by post id.
+	 *
+	 * Single source of truth for get_post()'s own missing-post branch AND
+	 * Mcpwp_REST_Posts::get_post()'s guard_non_public_post() call — the two
+	 * MUST produce byte-identical hints for the same id, or a non-public post
+	 * (denied by the guard) becomes distinguishable from a genuinely missing
+	 * one purely by hint text (#1026).
+	 *
+	 * @param int $post_id Post ID.
+	 * @return string
+	 */
+	public static function not_found_hint( $post_id ) {
+		return sprintf(
+			'Post ID %d not found. Use wp_list_posts to see available posts, or wp_search to find content by keyword. If this is a page, use wp_list_pages instead.',
+			absint( $post_id )
+		);
+	}
+
+	/**
 	 * Get a single post.
 	 *
 	 * @param int $post_id Post ID.
@@ -366,10 +385,7 @@ class Mcpwp_Posts {
 				__( 'Post not found.', 'mcpwp' ),
 				array(
 					'status' => 404,
-					'hint'   => sprintf(
-						'Post ID %d not found. Use wp_list_posts to see available posts, or wp_search to find content by keyword. If this is a page, use wp_list_pages instead.',
-						absint( $post_id )
-					),
+					'hint'   => self::not_found_hint( $post_id ),
 				)
 			);
 		}

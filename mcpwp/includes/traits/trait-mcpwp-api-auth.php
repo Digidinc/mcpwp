@@ -90,11 +90,26 @@ trait Mcpwp_Api_Auth {
 	 * private post exists. Callers pass the exact not-found message their
 	 * surface already uses so the parity is byte-for-byte.
 	 *
+	 * $hint controls the 'hint' entry of the returned error's data, and must
+	 * match whatever the caller's OWN "genuinely missing" branch produces for
+	 * the same id, or the two 404s are distinguishable by hint text alone
+	 * (#1026):
+	 *  - omitted (default `false`): the generic auto-hint (via
+	 *    Mcpwp_Error_Hints, unsubstituted `{id}`) — only correct when the
+	 *    caller's own missing-post branch also leaves hint generation to
+	 *    error_response()/enhance_error() with no context.
+	 *  - `''` (empty string): no 'hint' key at all — matches a caller whose
+	 *    own missing-post branch returns a bare WP_Error with no hint.
+	 *  - any other string: used verbatim as 'hint' — the caller is
+	 *    responsible for building it identically (id-substituted) to its own
+	 *    missing-post branch's hint.
+	 *
 	 * @param WP_Post|mixed $post    Resolved post object.
 	 * @param string        $message Surface-specific "not found" message.
+	 * @param string|false  $hint    See above. Default false (generic auto-hint).
 	 * @return WP_Error|null WP_Error(404) when blocked, null when allowed.
 	 */
-	protected function guard_non_public_post( $post, $message ) {
+	protected function guard_non_public_post( $post, $message, $hint = false ) {
 		if ( ! $post instanceof WP_Post ) {
 			return null;
 		}
@@ -103,7 +118,7 @@ trait Mcpwp_Api_Auth {
 			return null;
 		}
 
-		return $this->build_not_found_error( $message );
+		return $this->build_not_found_error( $message, $hint );
 	}
 
 	/**
@@ -112,20 +127,31 @@ trait Mcpwp_Api_Auth {
 	 * this trait (guard_non_public_post(), guard_post_type_category()) so
 	 * they cannot drift into two slightly different 404 shapes.
 	 *
-	 * @param string $message Surface-specific "not found" message.
+	 * @param string       $message Surface-specific "not found" message.
+	 * @param string|false $hint    See guard_non_public_post()'s docblock.
+	 *                              Default false (generic auto-hint).
 	 * @return WP_Error
 	 */
-	protected function build_not_found_error( $message ) {
-		// Built inline rather than via $this->error_response() so this guard
-		// has no dependency on the base REST controller — the trait is also
-		// composed into non-controller classes. Mirrors error_response()'s
-		// hint enrichment so the response is identical to a genuine not-found.
-		$error = new WP_Error( 'not_found', $message, array( 'status' => 404 ) );
-		if ( class_exists( 'Mcpwp_Error_Hints' ) ) {
-			$error = Mcpwp_Error_Hints::enhance_error( $error );
+	protected function build_not_found_error( $message, $hint = false ) {
+		if ( false === $hint ) {
+			// Built inline rather than via $this->error_response() so this guard
+			// has no dependency on the base REST controller — the trait is also
+			// composed into non-controller classes. Mirrors error_response()'s
+			// hint enrichment so the response is identical to a genuine not-found.
+			$error = new WP_Error( 'not_found', $message, array( 'status' => 404 ) );
+			if ( class_exists( 'Mcpwp_Error_Hints' ) ) {
+				$error = Mcpwp_Error_Hints::enhance_error( $error );
+			}
+
+			return $error;
 		}
 
-		return $error;
+		$data = array( 'status' => 404 );
+		if ( '' !== $hint ) {
+			$data['hint'] = $hint;
+		}
+
+		return new WP_Error( 'not_found', $message, $data );
 	}
 
 	/**
