@@ -70,7 +70,24 @@ class Mcpwp_Approvals {
 	 * A post body larger than this is not copied into the approval as its
 	 * rollback source; a revision is referenced instead, bytes.
 	 */
-	const MAX_ROLLBACK_INLINE_BYTES = 262144;
+	const MAX_ROLLBACK_INLINE_BYTES = 131072;
+
+	/**
+	 * Margin left under max_allowed_packet for the rest of the UPDATE, bytes.
+	 */
+	const PACKET_MARGIN_BYTES = 65536;
+
+	/**
+	 * How long an applied request keeps its rollback bodies, seconds.
+	 */
+	const CLOSED_RETENTION = 604800;
+
+	/**
+	 * Cached max_allowed_packet for this request.
+	 *
+	 * @var int|null
+	 */
+	private static $max_allowed_packet = null;
 
 	/**
 	 * Seconds to wait for the approvals store lock before refusing.
@@ -228,6 +245,25 @@ class Mcpwp_Approvals {
 								/* translators: %d: cap */
 								__( 'This requester already has %d content changes waiting for review. Have them approved or rejected before proposing more.', 'mcpwp' ),
 								$limits['per_requester']
+							),
+							array( 'status' => 429 )
+						);
+					}
+					// #981 review round 4: a byte quota per capped requester,
+					// so one principal cannot fill the store (1/20 of it).
+					$mine_bytes = strlen( (string) maybe_serialize( $request ) );
+					foreach ( $items as $existing ) {
+						if ( is_array( $existing ) && isset( $existing['requested_by_key_id'], $existing['status'] ) && $requester === (string) $existing['requested_by_key_id'] && in_array( (string) $existing['status'], self::open_statuses(), true ) ) {
+							$mine_bytes += strlen( (string) maybe_serialize( $existing ) );
+						}
+					}
+					if ( $mine_bytes > self::requester_byte_quota() ) {
+						return new WP_Error(
+							'requester_store_quota',
+							sprintf(
+								/* translators: %d: quota in KB */
+								__( 'This requester\'s open approval requests would exceed its share of the approval queue (%d KB). Have some reviewed first, or propose a smaller change.', 'mcpwp' ),
+								(int) ( self::requester_byte_quota() / 1024 )
 							),
 							array( 'status' => 429 )
 						);
@@ -1086,6 +1122,18 @@ class Mcpwp_Approvals {
 			);
 		}
 
+		// #981 review round 4, WARN-2: a revision kept only briefly would be
+		// pruned by the very apply that needs it for rollback. Unlimited
+		// (-1) or at least 3 kept, or no large-post proposal at all.
+		$keep = function_exists( 'wp_revisions_to_keep' ) ? (int) wp_revisions_to_keep( $post ) : -1;
+		if ( -1 !== $keep && $keep < 3 ) {
+			return new WP_Error(
+				'rollback_unavailable',
+				__( 'This post is too large to keep a rollback copy in the approval queue, and WordPress keeps too few revisions of it (fewer than 3) for a revision to survive the change. Raise WP_POST_REVISIONS, or edit the post in wp-admin.', 'mcpwp' ),
+				array( 'status' => 409 )
+			);
+		}
+
 		$revision_id = 0;
 		if ( function_exists( 'wp_save_post_revision' ) ) {
 			$saved       = wp_save_post_revision( $post->ID );
@@ -1320,6 +1368,18 @@ class Mcpwp_Approvals {
 				return $content;
 			}
 		} else {
+			// Never apply a change that could not be rolled back: the
+			// referenced revision must still be there (#981 review round 4).
+			if ( isset( $request['rollback']['before_revision_id'] ) ) {
+				$source = self::rollback_content( $request, $post_id );
+				if ( is_wp_error( $source ) ) {
+					return new WP_Error(
+						'rollback_source_missing',
+						__( 'The revision this change would be rolled back to no longer exists, so it was not applied. Reject this request and propose the change again.', 'mcpwp' ),
+						array( 'status' => 409 )
+					);
+				}
+			}
 			$content = isset( $request['payload']['after_content'] ) ? (string) $request['payload']['after_content'] : '';
 		}
 
@@ -1832,15 +1892,24 @@ class Mcpwp_Approvals {
 			}
 
 			$items = self::expire_stale( $items );
+			$items = self::compact_closed( $items );
 			$items = self::evict( $items );
 
+			// #981 review round 4: closed records are dropped oldest-first,
+			// by bytes, whenever the store passes 75% of its budget — before
+			// anything is refused. A store full of decided requests can
+			// therefore never block a new one.
+			$budget     = self::store_max_bytes();
+			$items      = self::evict_closed_by_bytes( $items, (int) floor( $budget * 0.75 ) );
+			$serialized = maybe_serialize( $items );
+
 			// #981 review round 3, BLOCK-2 (3): a byte budget for the whole
-			// store. A write that ADDS a request is refused once the store
-			// would exceed it — no requester is exempt from bytes. Status
+			// store. A write that ADDS a request is refused once the store —
+			// with every closed record already evicted if need be — would
+			// still exceed it. No requester is exempt from bytes. Status
 			// changes to existing requests always go through, so a full
 			// queue can still be worked down.
-			$serialized = maybe_serialize( $items );
-			if ( count( array_diff_key( $items, $before ) ) > 0 && strlen( (string) $serialized ) > self::store_max_bytes() ) {
+			if ( count( array_diff_key( $items, $before ) ) > 0 && strlen( (string) $serialized ) > $budget ) {
 				return new WP_Error(
 					'approvals_store_full',
 					__( 'The approval queue is full (its storage budget is used up). Nothing was queued; review, reject or apply pending requests first.', 'mcpwp' ),
@@ -1958,7 +2027,7 @@ class Mcpwp_Approvals {
 		);
 
 		if ( count( $items ) > self::MAX_ITEMS ) {
-			$open_states = array( 'pending', 'approved', 'applying', 'rolling_back', 'apply_failed' );
+			$open_states = self::open_statuses();
 			$open   = array_filter( $items, function ( $item ) use ( $open_states ) { return isset( $item['status'] ) && in_array( $item['status'], $open_states, true ); } );
 			$closed = array_filter( $items, function ( $item ) use ( $open_states ) { return ! isset( $item['status'] ) || ! in_array( $item['status'], $open_states, true ); } );
 			$closed = array_slice( $closed, 0, max( 0, self::MAX_ITEMS - count( $open ) ), true );
@@ -2014,7 +2083,258 @@ class Mcpwp_Approvals {
 	 */
 	public static function store_max_bytes() {
 		$bytes = (int) apply_filters( 'mcpwp_approval_store_max_bytes', self::STORE_MAX_BYTES );
-		return $bytes > 0 ? $bytes : self::STORE_MAX_BYTES;
+		$bytes = $bytes > 0 ? $bytes : self::STORE_MAX_BYTES;
+
+		// #981 review round 4: the store is one option row, written in one
+		// statement — it can never be larger than MySQL's max_allowed_packet
+		// (less a margin for the rest of the statement), whatever the
+		// configured budget says.
+		$packet = self::max_allowed_packet();
+		if ( $packet > 0 ) {
+			$bytes = min( $bytes, max( 65536, $packet - self::PACKET_MARGIN_BYTES ) );
+		}
+		return $bytes;
+	}
+
+	/**
+	 * MySQL's max_allowed_packet, read once per request (0 when unknown).
+	 *
+	 * @return int
+	 */
+	private static function max_allowed_packet() {
+		if ( null === self::$max_allowed_packet ) {
+			global $wpdb;
+			$value = ( isset( $wpdb ) && is_object( $wpdb ) && method_exists( $wpdb, 'get_var' ) )
+				? $wpdb->get_var( 'SELECT @@max_allowed_packet' )
+				: null;
+			self::$max_allowed_packet = is_numeric( $value ) ? (int) $value : 0;
+		}
+		return self::$max_allowed_packet;
+	}
+
+	/**
+	 * Forget the cached max_allowed_packet (tests; a long-lived process).
+	 *
+	 * @return void
+	 */
+	public static function reset_store_budget_cache() {
+		self::$max_allowed_packet = null;
+	}
+
+	/**
+	 * Bytes one capped requester (a WebMCP user, a category-restricted key)
+	 * may hold in open requests: 1/20 of the store budget (#981 review
+	 * round 4). Filterable through mcpwp_approval_content_limits
+	 * ('requester_bytes').
+	 *
+	 * @return int
+	 */
+	public static function requester_byte_quota() {
+		$limits = self::content_limits();
+		return isset( $limits['requester_bytes'] ) && $limits['requester_bytes'] > 0
+			? (int) $limits['requester_bytes']
+			: (int) floor( self::store_max_bytes() / 20 );
+	}
+
+	/**
+	 * The statuses in which a request is still open (not decided). Never
+	 * compacted or evicted.
+	 *
+	 * @return string[]
+	 */
+	public static function open_statuses() {
+		return array( 'pending', 'approved', 'applying', 'rolling_back', 'apply_failed' );
+	}
+
+	/**
+	 * Whether a record is closed AND past the point anyone still needs its
+	 * bodies: rejected, expired, rolled back — or applied more than
+	 * CLOSED_RETENTION seconds ago (its rollback window).
+	 *
+	 * @param array $item Record.
+	 * @return bool
+	 */
+	private static function is_compactable( array $item ) {
+		$status = isset( $item['status'] ) ? (string) $item['status'] : '';
+		if ( in_array( $status, array( 'rejected', 'expired', 'rolled_back' ), true ) ) {
+			return true;
+		}
+		if ( 'applied' === $status ) {
+			$applied = isset( $item['applied_at'] ) ? strtotime( (string) $item['applied_at'] ) : false;
+			/**
+			 * Seconds an applied approval keeps its rollback bodies.
+			 *
+			 * @param int $seconds Default 7 days.
+			 */
+			$retention = (int) apply_filters( 'mcpwp_approval_applied_retention', self::CLOSED_RETENTION );
+			return false !== $applied && $applied < time() - $retention;
+		}
+		return false;
+	}
+
+	/**
+	 * Shrink closed records to what an audit needs (#981 review round 4):
+	 * drop proposed and rollback bodies and any other large payload string,
+	 * keep hashes, bounded excerpts and revision references.
+	 *
+	 * @param array $items Items.
+	 * @return array
+	 */
+	private static function compact_closed( array $items ) {
+		foreach ( $items as $id => $item ) {
+			if ( ! is_array( $item ) || ! empty( $item['compacted'] ) || ! self::is_compactable( $item ) ) {
+				continue;
+			}
+			if ( isset( $item['payload'] ) && is_array( $item['payload'] ) ) {
+				unset( $item['payload']['after_content'] );
+				$item['payload'] = self::drop_large_strings( $item['payload'] );
+			}
+			if ( isset( $item['rollback'] ) && is_array( $item['rollback'] ) ) {
+				unset( $item['rollback']['before_content'] );
+				$item['rollback'] = self::drop_large_strings( $item['rollback'] );
+			}
+			$item['compacted']    = gmdate( 'c' );
+			$items[ $id ]         = $item;
+		}
+		return $items;
+	}
+
+	/**
+	 * Replace every string over 4 KB in a nested array with its sha256.
+	 *
+	 * @param array $value Array.
+	 * @return array
+	 */
+	private static function drop_large_strings( array $value ) {
+		foreach ( $value as $key => $inner ) {
+			if ( is_array( $inner ) ) {
+				$value[ $key ] = self::drop_large_strings( $inner );
+			} elseif ( is_string( $inner ) && strlen( $inner ) > 4096 ) {
+				$value[ $key ] = '[compacted sha256:' . hash( 'sha256', $inner ) . ']';
+			}
+		}
+		return $value;
+	}
+
+	/**
+	 * Drop closed records, oldest first, until the serialized store fits
+	 * $target bytes (or no closed record is left).
+	 *
+	 * @param array $items  Items.
+	 * @param int   $target Bytes.
+	 * @return array
+	 */
+	private static function evict_closed_by_bytes( array $items, $target ) {
+		if ( strlen( (string) maybe_serialize( $items ) ) <= $target ) {
+			return $items;
+		}
+
+		$closed = array();
+		foreach ( $items as $id => $item ) {
+			$status = is_array( $item ) && isset( $item['status'] ) ? (string) $item['status'] : '';
+			if ( ! in_array( $status, self::open_statuses(), true ) ) {
+				$closed[ $id ] = is_array( $item ) && isset( $item['updated_at'] ) ? (string) $item['updated_at'] : '';
+			}
+		}
+		asort( $closed ); // Oldest first.
+
+		foreach ( array_keys( $closed ) as $id ) {
+			unset( $items[ $id ] );
+			if ( strlen( (string) maybe_serialize( $items ) ) <= $target ) {
+				break;
+			}
+		}
+		return $items;
+	}
+
+	/**
+	 * Remove every closed record now (Control Room / REST "purge closed
+	 * approvals", admin only).
+	 *
+	 * @return int|WP_Error Records removed.
+	 */
+	public static function purge_closed() {
+		$removed = 0;
+		$result  = self::mutate(
+			static function ( array $items ) use ( &$removed ) {
+				foreach ( $items as $id => $item ) {
+					$status = is_array( $item ) && isset( $item['status'] ) ? (string) $item['status'] : '';
+					if ( ! in_array( $status, self::open_statuses(), true ) ) {
+						unset( $items[ $id ] );
+						$removed++;
+					}
+				}
+				return $items;
+			}
+		);
+		return is_wp_error( $result ) ? $result : $removed;
+	}
+
+	/**
+	 * Resolve an apply/rollback that is stuck in flight (#981 review round
+	 * 4, WARN-1) — admin only, and only once it is stale. A person checks
+	 * the content and says what actually happened:
+	 *
+	 *  - applying,     completed     → applied      (rollback then works)
+	 *  - applying,     not_completed → approved     (verify the content first)
+	 *  - rolling_back, completed     → rolled_back
+	 *  - rolling_back, not_completed → applied
+	 *
+	 * @param string $id      Request id.
+	 * @param string $outcome completed | not_completed.
+	 * @param array  $context {actor?: string}.
+	 * @return array|WP_Error Public record.
+	 */
+	public static function resolve_stale( $id, $outcome, $context = array() ) {
+		$request = self::get_private_request( $id );
+		if ( is_wp_error( $request ) ) {
+			return $request;
+		}
+
+		$status = isset( $request['status'] ) ? (string) $request['status'] : '';
+		$map    = array(
+			'applying'     => array( 'completed' => 'applied', 'not_completed' => 'approved' ),
+			'rolling_back' => array( 'completed' => 'rolled_back', 'not_completed' => 'applied' ),
+		);
+		if ( ! isset( $map[ $status ] ) ) {
+			return new WP_Error( 'approval_not_in_flight', __( 'Only an apply or rollback that is stuck in progress can be resolved.', 'mcpwp' ), array( 'status' => 409 ) );
+		}
+		if ( ! isset( $map[ $status ][ $outcome ] ) ) {
+			return new WP_Error( 'invalid_outcome', __( 'outcome must be "completed" or "not_completed".', 'mcpwp' ), array( 'status' => 400 ) );
+		}
+
+		$public = self::public_record( $request );
+		if ( empty( $public['needs_attention'] ) ) {
+			return new WP_Error( 'approval_in_progress', __( 'This apply or rollback is still running. It can be resolved by hand once it has been in progress for a while.', 'mcpwp' ), array( 'status' => 409 ) );
+		}
+
+		$target = $map[ $status ][ $outcome ];
+		$fields = array( 'applied' => 'applied_at', 'approved' => 'resolved_at', 'rolled_back' => 'rolled_back_at' );
+		$actor  = is_array( $context ) && isset( $context['actor'] ) ? (string) $context['actor'] : '';
+
+		$updated = self::transition_under_lock(
+			$id,
+			array( $status ),
+			$target,
+			$fields[ $target ],
+			array(
+				'resolved' => array(
+					'from'    => $status,
+					'outcome' => $outcome,
+					'by'      => $actor,
+					'at'      => gmdate( 'c' ),
+				),
+			)
+		);
+		if ( is_wp_error( $updated ) ) {
+			return $updated;
+		}
+
+		$public = self::public_record( $updated );
+		if ( 'approved' === $target ) {
+			$public['warning'] = __( 'Marked not applied. Check the post content before applying again — the change may have partly landed.', 'mcpwp' );
+		}
+		return $public;
 	}
 
 	/**

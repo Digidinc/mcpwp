@@ -3355,7 +3355,11 @@ trait Mcpwp_Api_Auth {
 		// scope so a plain write key cannot approve/apply its own pending request.
 		// Listing/reading approvals stays read; creating one (via the
 		// blocks/content-graph/staging controllers) stays at the write default.
-		if ( preg_match( '#^/mcpwp/v1/approvals/[^/]+/(approve|reject|apply|rollback)(/|$)#i', $route ) ) {
+		if ( preg_match( '#^/mcpwp/v1/approvals/[^/]+/(approve|reject|apply|rollback|resolve)(/|$)#i', $route ) ) {
+			return 'admin';
+		}
+		// #981 review round 4: purging closed approvals is an admin action.
+		if ( preg_match( '#^/mcpwp/v1/approvals/purge-closed(/|$)#i', $route ) ) {
 			return 'admin';
 		}
 

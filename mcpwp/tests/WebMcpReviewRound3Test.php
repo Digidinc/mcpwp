@@ -239,8 +239,9 @@ final class WebMcpReviewRound3Test extends TestCase {
 
 		foreach ( array( array( 'requested_by_key_id' => 'k1' ), array( 'requested_by_key_id' => 'admin', 'requester_unrestricted' => true ), array( 'requested_by_key_id' => 'wp-user:1' ) ) as $args ) {
 			$result = Mcpwp_Approvals::create_post_content_request( self::POST, str_repeat( 'x', 3000 ), $args );
-			$this->assertSame( 'approvals_store_full', $result->get_error_code(), wp_json_encode( $args ) );
-			$this->assertSame( 507, $result->get_error_data()['status'] );
+			// A capped requester now hits its own 1/20 byte quota first (round 4).
+			$this->assertContains( $result->get_error_code(), empty( $args['requester_unrestricted'] ) && 0 !== strpos( $args['requested_by_key_id'], 'wp-user:' ) ? array( 'approvals_store_full', 'requester_store_quota' ) : array( 'approvals_store_full' ), wp_json_encode( $args ) );
+			$this->assertContains( $result->get_error_data()['status'], array( 507, 429 ) );
 		}
 
 		// Existing requests can still be worked down.

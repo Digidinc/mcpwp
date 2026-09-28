@@ -432,13 +432,25 @@ $event_escalated_count = (int) ( $event_summary['escalated'] ?? 0 );
 					<span class="dashicons dashicons-warning"></span>
 					<?php esc_html_e( 'Approvals Needing Attention', 'mcpwp' ); ?>
 				</h2>
-				<p class="description"><?php esc_html_e( 'These changes ran (or started to) but their approval record could not be completed. They are never re-applied automatically: check the content, then roll back or reject.', 'mcpwp' ); ?></p>
+				<p class="description"><?php esc_html_e( 'These changes ran, or started to, but their approval record could not be completed. They are never re-applied automatically. For one stuck in progress, check the post and record what actually happened: "It completed" marks it applied (or rolled back), and rollback then works; "It did not complete" puts it back for review. A partially applied change can be rolled back from Rollback Ready.', 'mcpwp' ); ?></p>
 				<ul class="mcpwp-control-list">
 					<?php foreach ( $attention_items as $item ) : ?>
 						<li class="mcpwp-control-list__item is-warning">
 							<span class="mcpwp-control-list__icon dashicons dashicons-warning"></span>
 							<strong><?php echo esc_html( $item['title'] ?? $item['id'] ?? '' ); ?></strong>
 							<span><?php echo esc_html( ( $item['status'] ?? '' ) . ' — ' . ( $item['needs_attention'] ?? '' ) ); ?></span>
+							<?php if ( in_array( $item['status'] ?? '', array( 'applying', 'rolling_back' ), true ) ) : ?>
+								<div class="mcpwp-control-actions">
+									<?php foreach ( array( 'resolve_completed' => __( 'It completed', 'mcpwp' ), 'resolve_not_completed' => __( 'It did not complete', 'mcpwp' ) ) as $resolve_action => $resolve_label ) : ?>
+										<form method="post">
+											<?php wp_nonce_field( 'mcpwp_control_room_actions', 'mcpwp_control_room_nonce' ); ?>
+											<input type="hidden" name="mcpwp_control_room_action" value="<?php echo esc_attr( $resolve_action ); ?>">
+											<input type="hidden" name="mcpwp_approval_id" value="<?php echo esc_attr( $item['id'] ?? '' ); ?>">
+											<button type="submit" class="button"><?php echo esc_html( $resolve_label ); ?></button>
+										</form>
+									<?php endforeach; ?>
+								</div>
+							<?php endif; ?>
 						</li>
 					<?php endforeach; ?>
 				</ul>
@@ -450,6 +462,11 @@ $event_escalated_count = (int) ( $event_summary['escalated'] ?? 0 );
 				<span class="dashicons dashicons-backup"></span>
 				<?php esc_html_e( 'Rollback Ready', 'mcpwp' ); ?>
 			</h2>
+			<form method="post" class="mcpwp-control-actions">
+				<?php wp_nonce_field( 'mcpwp_control_room_actions', 'mcpwp_control_room_nonce' ); ?>
+				<input type="hidden" name="mcpwp_control_room_action" value="purge_closed_approvals">
+				<button type="submit" class="button button-link-delete"><?php esc_html_e( 'Purge closed approval requests', 'mcpwp' ); ?></button>
+			</form>
 			<?php if ( empty( $rollback_items ) ) : ?>
 				<div class="mcpwp-control-empty is-muted">
 					<span class="dashicons dashicons-shield"></span>

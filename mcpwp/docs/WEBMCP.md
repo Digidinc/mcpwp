@@ -118,16 +118,34 @@ These apply to every `post_content_update` approval: WebMCP proposals, `wp_set_b
   `approval_record_unconfirmed`: the change was made, the request stays `applying`, and after 10
   minutes (`mcpwp_approval_claim_stale_after`) it shows under "Approvals Needing Attention" in
   Control Room. It is never re-applied automatically.
-- **Large posts:** if a post's current content is over 256 KB, the approval does not copy it.
+- **Large posts:** if a post's current content is over 128 KB, the approval does not copy it.
   WordPress saves it as a revision, and the approval keeps the revision id, a sha256 hash and a short
-  excerpt. Rollback restores from that revision. It refuses with `rollback_source_missing` if the
-  revision is gone, and a proposal is refused at creation (`rollback_unavailable`) if revisions are
-  off. Diff excerpts are capped at 500 characters.
-- **Store budget:** the approval queue has a total size budget, 8 MB serialized by default
-  (`mcpwp_approval_store_max_bytes`). Once it is full, adding any new request is refused with 507
-  `approvals_store_full`, whoever sends it, while existing requests can still be approved, applied
-  or rejected. If the database refuses a write (for example a value over `max_allowed_packet`), the
-  answer is 503 `approvals_store_failed`, never a reported success.
+  excerpt. Rollback restores from that revision.
+  - A proposal is refused at creation (`rollback_unavailable`) if WordPress keeps fewer than 3
+    revisions of the post, because the apply could prune the one rollback needs.
+  - Apply checks the revision is still there first and refuses with `rollback_source_missing`
+    rather than make a change that could not be rolled back.
+  - Diff excerpts are capped at 500 characters.
+- **Keeping the queue small:** a request that is rejected, expired, rolled back, or applied more than
+  7 days ago (`mcpwp_approval_applied_retention`) is compacted. The proposed and previous content
+  are dropped, and the hashes, excerpts and revision ids are kept. Whenever the queue is over 75% of
+  its budget, the oldest closed requests are removed first, before anything new is refused.
+- **Store budget:** the budget is the smaller of 8 MB (`mcpwp_approval_store_max_bytes`) and MySQL's
+  `max_allowed_packet` minus 64 KB, read once per request.
+  - Each capped requester (WebMCP users and category-restricted keys) may hold at most 1/20 of it in
+    open requests; over that is 429 `requester_store_quota`.
+  - A new request that cannot fit even after closed requests are removed gets 507
+    `approvals_store_full`. That can only happen when the queue is full of undecided requests.
+  - Existing requests can always be approved, applied or rejected.
+  - A database write failure is 503 `approvals_store_failed`, never a reported success.
+- **Purge:** `POST /mcpwp/v1/approvals/purge-closed` (admin scope), or the "Purge closed approval
+  requests" button in Control Room, removes every closed request now.
+- **Stuck in progress:** an apply or rollback that is still in progress after 10 minutes can be
+  resolved by an administrator with `POST /mcpwp/v1/approvals/{id}/resolve` (`outcome`: `completed`
+  or `not_completed`, admin scope), or the matching Control Room buttons.
+  - `completed` marks it applied, or rolled back, and rollback then works.
+  - `not_completed` puts it back to approved, with a warning to check the content before applying
+    again.
 - **Concurrent writes:** every write to the approval queue takes a MySQL named lock and re-reads the
   queue inside it. That covers creating a request, approve/reject/apply/rollback, the apply-result
   record, a staging push, expiry and eviction. If the lock cannot be taken within 5 seconds the

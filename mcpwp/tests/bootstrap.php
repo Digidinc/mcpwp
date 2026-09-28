@@ -1749,6 +1749,9 @@ if (! isset($GLOBALS['wpdb'])) {
                 }
                 return $result;
             }
+            if ('SELECT @@max_allowed_packet' === trim((string) $query)) {
+                return $GLOBALS['mcpwp_test_max_allowed_packet'] ?? null;
+            }
             if (preg_match('/^SELECT RELEASE_LOCK\(/', trim((string) $query))) {
                 $GLOBALS['mcpwp_test_named_lock_calls'][] = 'release';
                 return '1';
@@ -3814,6 +3817,12 @@ if (! function_exists('wp_save_post_revision')) {
             array( 'ID' => $id, 'post_type' => 'revision', 'post_status' => 'inherit', 'post_parent' => (int) $post_id, 'post_content' => $post->post_content )
         );
         return $id;
+    }
+}
+if (! function_exists('wp_revisions_to_keep')) {
+    function wp_revisions_to_keep($post)
+    {
+        return (int) ($GLOBALS['mcpwp_test_revisions_to_keep'] ?? -1);
     }
 }
 if (! function_exists('wp_get_post_revisions')) {

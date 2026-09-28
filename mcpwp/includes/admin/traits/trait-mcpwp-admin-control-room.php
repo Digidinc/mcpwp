@@ -51,6 +51,13 @@ trait Mcpwp_Admin_Control_Room_Trait {
 				/* translators: %d: number of signals found */
 				$result   = sprintf( __( 'Signals refreshed: %d signal(s) found.', 'mcpwp' ), count( $computed ) );
 			}
+		} elseif ( 'purge_closed_approvals' === $action ) {
+			// #981 review round 4: drop every closed approval record now.
+			$removed = class_exists( 'Mcpwp_Approvals' ) ? Mcpwp_Approvals::purge_closed() : 0;
+			$result  = is_wp_error( $removed )
+				? $removed
+				/* translators: %d: number of records removed */
+				: sprintf( __( 'Removed %d closed approval request(s).', 'mcpwp' ), (int) $removed );
 		} elseif ( 'rollback_action_log' === $action ) {
 			$log_id = isset( $_POST['action_log_id'] ) ? sanitize_text_field( wp_unslash( $_POST['action_log_id'] ) ) : '';
 			if ( class_exists( 'Mcpwp_Action_Log' ) && $log_id ) {
@@ -118,6 +125,13 @@ trait Mcpwp_Admin_Control_Room_Trait {
 			case 'rollback':
 				$result = Mcpwp_Approvals::rollback_request( $approval_id );
 				$message = __( 'Applied change rolled back.', 'mcpwp' );
+				break;
+			case 'resolve_completed':
+			case 'resolve_not_completed':
+				$result  = Mcpwp_Approvals::resolve_stale( $approval_id, 'resolve_completed' === $action ? 'completed' : 'not_completed', array( 'actor' => 'wp-user:' . get_current_user_id() ) );
+				$message = 'resolve_completed' === $action
+					? __( 'Marked as completed.', 'mcpwp' )
+					: __( 'Marked as not completed. Check the post content before applying again.', 'mcpwp' );
 				break;
 			default:
 				return new WP_Error( 'mcpwp_unknown_control_action', __( 'Unknown control room action.', 'mcpwp' ) );
