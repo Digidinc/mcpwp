@@ -693,6 +693,47 @@ class Mcpwp_Activator {
 	 *                       false when another call already holds the lock.
 	 */
 	private static function acquire_custom_code_repair_lock() {
+		return self::acquire_migration_lock( self::CUSTOM_CODE_REPAIR_LOCK_OPTION, self::CUSTOM_CODE_REPAIR_LOCK_TTL );
+	}
+
+	/**
+	 * Release the repair mutex acquired by acquire_custom_code_repair_lock().
+	 *
+	 * @param string $token The expiry value that call returned.
+	 */
+	private static function release_custom_code_repair_lock( $token ) {
+		self::release_migration_lock( self::CUSTOM_CODE_REPAIR_LOCK_OPTION, $token );
+	}
+
+	/**
+	 * Generic non-blocking CAS mutex over a wp_options row (#1031 round 3,
+	 * adversarial review WARN-1) — the same atomic-claim primitive
+	 * acquire_custom_code_repair_lock() pioneered (see
+	 * CUSTOM_CODE_REPAIR_LOCK_OPTION's own docblock for the atomicity
+	 * argument: a plain INSERT against the UNIQUE key on option_name,
+	 * stale-lock steal via a compare-and-swap UPDATE, release via a
+	 * compare-and-swap DELETE), generalised so a SECOND, unrelated one-time
+	 * migration pair (the action-log column add + its backfill) does not
+	 * need its own copy of the same ~80 lines. That method and its
+	 * `release_...()` twin are now thin wrappers over this.
+	 *
+	 * Non-blocking: a caller that cannot acquire returns immediately rather
+	 * than waiting or retrying inline, and picks the work up on a later
+	 * request instead — see each call site's own "another call already owns
+	 * this" comment.
+	 *
+	 * @param string $lock_option wp_options row name — one per protected
+	 *                            operation, never shared between two
+	 *                            unrelated migrations, so one's hold time
+	 *                            cannot block the other's.
+	 * @param int    $ttl         Seconds a holder is trusted before another
+	 *                            caller may steal it as abandoned. Pick this
+	 *                            comfortably above the protected operation's
+	 *                            own worst-case run time (see each caller).
+	 * @return string|false The expiry token to pass to release_migration_lock(),
+	 *                       or false when another caller already holds it.
+	 */
+	private static function acquire_migration_lock( $lock_option, $ttl ) {
 		global $wpdb;
 
 		if ( ! is_object( $wpdb ) || ! method_exists( $wpdb, 'insert' ) ) {
@@ -701,18 +742,18 @@ class Mcpwp_Activator {
 		}
 
 		$now        = time();
-		$expires_at = (string) ( $now + self::CUSTOM_CODE_REPAIR_LOCK_TTL );
+		$expires_at = (string) ( $now + (int) $ttl );
 
 		// A plain INSERT against the UNIQUE KEY on option_name is the atomic
-		// claim primitive (see the constant's docblock above) — the same one
-		// Mcpwp_Idempotency_Claim::acquire() uses for #802, applied directly
-		// here via $wpdb rather than through that class.
+		// claim primitive — the same one Mcpwp_Idempotency_Claim::acquire()
+		// uses for #802, applied directly here via $wpdb rather than through
+		// that class.
 		$suppressed = method_exists( $wpdb, 'suppress_errors' ) ? $wpdb->suppress_errors( true ) : null;
 
 		$inserted = $wpdb->insert(
 			$wpdb->options,
 			array(
-				'option_name'  => self::CUSTOM_CODE_REPAIR_LOCK_OPTION,
+				'option_name'  => $lock_option,
 				'option_value' => $expires_at,
 				'autoload'     => 'no',
 			),
@@ -737,7 +778,7 @@ class Mcpwp_Activator {
 		$current = $wpdb->get_var(
 			$wpdb->prepare(
 				"SELECT option_value FROM {$wpdb->options} WHERE option_name = %s",
-				self::CUSTOM_CODE_REPAIR_LOCK_OPTION
+				$lock_option
 			)
 		);
 
@@ -749,7 +790,7 @@ class Mcpwp_Activator {
 			$wpdb->options,
 			array( 'option_value' => $expires_at ),
 			array(
-				'option_name'  => self::CUSTOM_CODE_REPAIR_LOCK_OPTION,
+				'option_name'  => $lock_option,
 				'option_value' => $current,
 			),
 			array( '%s' ),
@@ -760,11 +801,12 @@ class Mcpwp_Activator {
 	}
 
 	/**
-	 * Release the repair mutex acquired by acquire_custom_code_repair_lock().
+	 * Release a mutex acquired by acquire_migration_lock().
 	 *
-	 * @param string $token The expiry value that call returned.
+	 * @param string $lock_option Same option name passed to acquire.
+	 * @param string $token       The expiry value that acquire call returned.
 	 */
-	private static function release_custom_code_repair_lock( $token ) {
+	private static function release_migration_lock( $lock_option, $token ) {
 		global $wpdb;
 
 		if ( ! is_object( $wpdb ) || ! method_exists( $wpdb, 'delete' ) ) {
@@ -772,13 +814,13 @@ class Mcpwp_Activator {
 		}
 
 		// CAS delete: only remove the row if it still holds the value THIS
-		// call wrote. If our own run overran CUSTOM_CODE_REPAIR_LOCK_TTL and
-		// another call already stole the lock, that row belongs to them now
-		// and must not be deleted out from under them.
+		// call wrote. If our own run overran its TTL and another call
+		// already stole the lock, that row belongs to them now and must not
+		// be deleted out from under them.
 		$wpdb->delete(
 			$wpdb->options,
 			array(
-				'option_name'  => self::CUSTOM_CODE_REPAIR_LOCK_OPTION,
+				'option_name'  => $lock_option,
 				'option_value' => $token,
 			),
 			array( '%s', '%s' )
@@ -1225,7 +1267,42 @@ class Mcpwp_Activator {
 
 		// Action log table — immutable per-tool audit trail (EU AI Act compliance)
 		$action_log_table = $wpdb->prefix . 'mcpwp_action_log';
-		$sql_action_log   = "CREATE TABLE IF NOT EXISTS $action_log_table (
+		dbDelta( self::action_log_create_sql( $action_log_table, $charset_collate ) );
+
+		self::ensure_graph_tables();
+	}
+
+	/**
+	 * The action-log table's CREATE TABLE SQL — factored out of create_tables()
+	 * so ensure_action_log_resource_post_type_column() (#1031 round 2) can
+	 * dbDelta() the SAME definition on a site that will not re-enter
+	 * create_tables() until its next version bump (see that method's own
+	 * docblock for why it runs on its own flag instead of waiting for one).
+	 * A single copy means the two can never drift into two different ideas
+	 * of what this table looks like.
+	 *
+	 * `resource_post_type` and `snapshot_skipped` (#1031 round 2, DESIGN
+	 * items 1 and 6) are both intentionally small, cheap-to-index columns —
+	 * see Mcpwp_Action_Log::list_entries()'s own docblock for why the
+	 * filtered read path must never SELECT the (potentially multi-MB)
+	 * before_snap/after_snap columns at all.
+	 *
+	 * @param string $table            Prefixed table name.
+	 * @param string $charset_collate  $wpdb->get_charset_collate().
+	 * @return string
+	 */
+	private static function action_log_create_sql( $table, $charset_collate ) {
+		// No `IF NOT EXISTS` (see ensure_graph_tables()'s own docblock, W6):
+		// dbDelta() diffs and ALTERs an existing table by parsing this exact
+		// string, and `IF NOT EXISTS` was found to make a real MySQL server
+		// silently skip the ALTER path dbDelta needed — exactly the path
+		// ensure_action_log_resource_post_type_column() below depends on to
+		// add a column to an ALREADY-EXISTING table outside the normal
+		// version-bump activate() flow. A plain `CREATE TABLE` still errors
+		// safely when the table already exists in a shape dbDelta considers
+		// final; dbDelta() itself decides CREATE vs. ALTER, this string is
+		// only its diffing input.
+		return "CREATE TABLE $table (
 			id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
 			log_id varchar(44) NOT NULL,
 			timestamp datetime NOT NULL,
@@ -1237,6 +1314,8 @@ class Mcpwp_Activator {
 			after_snap longtext DEFAULT NULL,
 			resource_type varchar(50) NOT NULL DEFAULT '',
 			resource_id varchar(255) NOT NULL DEFAULT '',
+			resource_post_type varchar(40) NOT NULL DEFAULT '',
+			snapshot_skipped varchar(20) NOT NULL DEFAULT '',
 			duration_ms int(11) DEFAULT NULL,
 			success tinyint(1) NOT NULL DEFAULT 0,
 			error_code varchar(50) NOT NULL DEFAULT '',
@@ -1249,12 +1328,239 @@ class Mcpwp_Activator {
 			KEY timestamp (timestamp),
 			KEY tool_name (tool_name),
 			KEY resource (resource_type(50), resource_id(100)),
-			KEY success (success)
+			KEY success (success),
+			KEY category_type (category, resource_post_type)
 		) $charset_collate;";
-		dbDelta( $sql_action_log );
-
-		self::ensure_graph_tables();
 	}
+
+	/**
+	 * #1031 round 2 (adversarial review, DESIGN item 1): add
+	 * resource_post_type/snapshot_skipped to an action-log table created
+	 * before this column existed. Own flag, not the mcpwp_db_version
+	 * compare in mcpwp.php — a site already on the current version when
+	 * this ships would otherwise never re-enter create_tables() at all
+	 * (same reasoning as every other "ships without a version bump"
+	 * migration in this file). Idempotent: dbDelta() on an unchanged
+	 * definition is a no-op, so a repeat call (or one racing another
+	 * process's) costs nothing beyond the flag already being set.
+	 *
+	 * Locked (#1031 round 3, adversarial review WARN-1): before the flag is
+	 * set, EVERY concurrent request re-enters this on plugins_loaded — a
+	 * cold first dbDelta() run against a real table can take several
+	 * seconds, during which every other request in flight would otherwise
+	 * also call dbDelta() against the same ALTER, in parallel. A
+	 * non-blocking mutex (acquire_migration_lock()) means only one request
+	 * does the work; every other one simply skips this call for its own
+	 * request and finds the flag already set on the next one.
+	 *
+	 * @return void
+	 */
+	public static function ensure_action_log_resource_post_type_column() {
+		if ( get_option( 'mcpwp_action_log_resource_post_type_column' ) ) {
+			return;
+		}
+
+		$lock_token = self::acquire_migration_lock( self::ACTION_LOG_COLUMN_LOCK_OPTION, self::ACTION_LOG_COLUMN_LOCK_TTL );
+		if ( false === $lock_token ) {
+			// Another request already owns this; skip — the holder (or, if
+			// it died, the next call once the lock's TTL lapses) makes
+			// progress instead.
+			return;
+		}
+
+		try {
+			global $wpdb;
+
+			if ( ! function_exists( 'dbDelta' ) ) {
+				require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+			}
+
+			$table = $wpdb->prefix . 'mcpwp_action_log';
+			dbDelta( self::action_log_create_sql( $table, $wpdb->get_charset_collate() ) );
+
+			update_option( 'mcpwp_action_log_resource_post_type_column', 1, false );
+		} finally {
+			self::release_migration_lock( self::ACTION_LOG_COLUMN_LOCK_OPTION, $lock_token );
+		}
+	}
+
+	/**
+	 * Lock guarding ensure_action_log_resource_post_type_column(). TTL is
+	 * short — one dbDelta() ALTER on this table is fast even cold — but
+	 * comfortably above a slow worst case, matching the reasoning
+	 * CUSTOM_CODE_REPAIR_LOCK_TTL's own docblock gives for its ceiling.
+	 */
+	const ACTION_LOG_COLUMN_LOCK_OPTION = 'mcpwp_action_log_column_migration_lock';
+	const ACTION_LOG_COLUMN_LOCK_TTL    = 15;
+
+	/**
+	 * Rows written before resource_post_type existed default to '' — treated
+	 * by Mcpwp_Action_Log::is_entry_visible_to() as "no post-type check
+	 * beyond the tool's own category" until backfilled here, so a
+	 * category-restricted key can (briefly, until this finishes) see a
+	 * pre-upgrade product/template entry it should not. #1031 round 2
+	 * (DESIGN item 1). Batched + checkpointed, same time-budgeted,
+	 * ID-keyset-cursor pattern as repair_custom_code_locations() above —
+	 * see that method's docblock for why a single unbounded pass over a
+	 * potentially large table is unsafe. Simpler than that migration in one
+	 * respect: every write here is independently idempotent (deriving
+	 * resource_post_type from data that does not change), so — unlike the
+	 * snippet repair — this does not take out its own mutex; two requests
+	 * racing into it at once redo, at worst, one batch's work rather than
+	 * corrupting anything.
+	 *
+	 * Preference order per row, matching the DESIGN's own: (1) the row's
+	 * OWN before_snap.post_type, when present — captured at write time, so
+	 * correct even if the post has since been deleted or changed type
+	 * (snapshot_post() has always stored this field); (2) a live get_post()
+	 * lookup, for a row whose snapshot never carried post_type at all
+	 * ('elementor' rows: snapshot_elementor()'s shape is only
+	 * {post_id, elementor_data}); (3) '' — the same value every
+	 * not-yet-backfilled row already has, so a row this can't resolve
+	 * either way is left exactly as before.
+	 *
+	 * Locked (#1031 round 3, adversarial review WARN-1), same reasoning as
+	 * ensure_action_log_resource_post_type_column(): without a mutex, every
+	 * concurrent request re-enters this on plugins_loaded before the
+	 * completion flag is set, running parallel batch scans against the same
+	 * table. Non-blocking — a request that cannot acquire it skips the
+	 * backfill for itself; the holder (or, if it died mid-run, the next
+	 * request once the lock's TTL lapses) makes progress instead. Unlike
+	 * ensure_action_log_resource_post_type_column()'s short lock, this one's
+	 * TTL must clear the full per-call time budget (5-15s via
+	 * migration_time_budget()), not just a fast ALTER.
+	 *
+	 * @param float|null $time_budget Override for the per-call time budget,
+	 *                                in seconds. Tests use this to force an
+	 *                                interrupted run deterministically.
+	 *                                Production callers omit it.
+	 * @return void
+	 */
+	public static function backfill_action_log_resource_post_type( ?float $time_budget = null ) {
+		if ( get_option( 'mcpwp_action_log_post_type_backfilled' ) ) {
+			return;
+		}
+
+		$lock_token = self::acquire_migration_lock( self::ACTION_LOG_BACKFILL_LOCK_OPTION, self::ACTION_LOG_BACKFILL_LOCK_TTL );
+		if ( false === $lock_token ) {
+			return;
+		}
+
+		try {
+			self::run_action_log_backfill_batches( $time_budget );
+		} finally {
+			self::release_migration_lock( self::ACTION_LOG_BACKFILL_LOCK_OPTION, $lock_token );
+		}
+	}
+
+	/**
+	 * Lock guarding backfill_action_log_resource_post_type(). TTL is
+	 * comfortably above migration_time_budget()'s 15s ceiling — the same
+	 * margin CUSTOM_CODE_REPAIR_LOCK_TTL uses for the same reason.
+	 */
+	const ACTION_LOG_BACKFILL_LOCK_OPTION = 'mcpwp_action_log_backfill_lock';
+	const ACTION_LOG_BACKFILL_LOCK_TTL    = 30;
+
+	/**
+	 * The actual batched scan/backfill loop, run only while
+	 * backfill_action_log_resource_post_type() holds
+	 * ACTION_LOG_BACKFILL_LOCK_OPTION.
+	 *
+	 * @param float|null $time_budget Same meaning as on the public method.
+	 * @return void
+	 */
+	private static function run_action_log_backfill_batches( ?float $time_budget ) {
+		global $wpdb;
+		if ( ! is_object( $wpdb ) || ! method_exists( $wpdb, 'get_results' ) ) {
+			return;
+		}
+
+		$table  = $wpdb->prefix . 'mcpwp_action_log';
+		$start  = microtime( true );
+		$budget = null !== $time_budget ? $time_budget : self::migration_time_budget();
+		$cursor = (int) get_option( self::ACTION_LOG_BACKFILL_CURSOR_OPTION, 0 );
+
+		do {
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared -- table name only; values placeholder-bound. before_snap is selected for exactly this bounded batch, never the whole table (#1031 round 2's own B1 finding is precisely what this pattern avoids).
+			$rows = $wpdb->get_results(
+				$wpdb->prepare(
+					"SELECT id, resource_type, resource_id, before_snap FROM $table WHERE id > %d AND resource_post_type = '' ORDER BY id ASC LIMIT %d",
+					$cursor,
+					self::ACTION_LOG_BACKFILL_BATCH_SIZE
+				),
+				ARRAY_A
+			);
+
+			if ( empty( $rows ) ) {
+				delete_option( self::ACTION_LOG_BACKFILL_CURSOR_OPTION );
+				update_option( 'mcpwp_action_log_post_type_backfilled', 1, false );
+				return;
+			}
+
+			foreach ( $rows as $row ) {
+				$row_id        = (int) $row['id'];
+				$resource_type = isset( $row['resource_type'] ) ? (string) $row['resource_type'] : '';
+				$post_type     = '';
+
+				if ( in_array( $resource_type, array( 'post', 'elementor' ), true ) ) {
+					$snap = ! empty( $row['before_snap'] ) ? json_decode( (string) $row['before_snap'], true ) : null;
+					if ( is_array( $snap ) && ! empty( $snap['post_type'] ) ) {
+						$post_type = sanitize_key( (string) $snap['post_type'] );
+					} else {
+						$post_id = isset( $row['resource_id'] ) ? (int) $row['resource_id'] : 0;
+						if ( $post_id > 0 ) {
+							$post = get_post( $post_id );
+							if ( $post instanceof WP_Post ) {
+								$post_type = (string) $post->post_type;
+							}
+						}
+					}
+				}
+
+				if ( '' !== $post_type ) {
+					// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+					$wpdb->update(
+						$table,
+						array( 'resource_post_type' => $post_type ),
+						array( 'id' => $row_id ),
+						array( '%s' ),
+						array( '%d' )
+					);
+				}
+
+				$cursor = $row_id;
+			}
+
+			// Checkpoint after every batch — the durable resume point a
+			// re-entrant call picks up from instead of rescanning already
+			// -visited rows (which, since resource_post_type = '' is part
+			// of the WHERE, would otherwise re-select any row this pass
+			// could not resolve either, on every single call, forever).
+			update_option( self::ACTION_LOG_BACKFILL_CURSOR_OPTION, $cursor, false );
+
+			if ( count( $rows ) < self::ACTION_LOG_BACKFILL_BATCH_SIZE ) {
+				delete_option( self::ACTION_LOG_BACKFILL_CURSOR_OPTION );
+				update_option( 'mcpwp_action_log_post_type_backfilled', 1, false );
+				return;
+			}
+		} while ( ( microtime( true ) - $start ) <= $budget );
+
+		// Budget exhausted mid-scan; cursor is already checkpointed above,
+		// so the next plugins_loaded call resumes at $cursor. At least one
+		// full batch always completes regardless of how small $time_budget
+		// is, for the same reason run_custom_code_repair_batches() gives.
+	}
+
+	/**
+	 * Batch size for backfill_action_log_resource_post_type() — same value
+	 * as CUSTOM_CODE_REPAIR_BATCH_SIZE, for the same reason (#1031 round 2).
+	 */
+	const ACTION_LOG_BACKFILL_BATCH_SIZE = 200;
+
+	/**
+	 * Cursor option for backfill_action_log_resource_post_type().
+	 */
+	const ACTION_LOG_BACKFILL_CURSOR_OPTION = 'mcpwp_action_log_post_type_backfill_cursor';
 
 	/**
 	 * Site graph — nodes, edges, signals, queue (#943 S1, revised post PR
