@@ -157,6 +157,9 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 
 == Changelog ==
 
+= 3.14.7 =
+* fix: **auth:** route Elementor, content-graph and blocks doors through the [#1022](https://github.com/Mumega-com/mcpwp/issues/1022) category chokepoint ([#1030](https://github.com/Mumega-com/mcpwp/issues/1030))
+
 = 3.14.6 =
 * fix: **auth,mcp:** not-found parity for guard_non_public_post() and mcpwp:// scheme matching ([#1028](https://github.com/Mumega-com/mcpwp/issues/1028))
 * fix: **auth:** gate approvals/events/site-state by target category, not route ([#1029](https://github.com/Mumega-com/mcpwp/issues/1029))
