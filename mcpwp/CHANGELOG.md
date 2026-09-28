@@ -5,6 +5,13 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.14.7](https://github.com/Mumega-com/mcpwp/compare/v3.14.6...v3.14.7) (2026-09-28)
+
+
+### Bug Fixes
+
+* **auth:** route Elementor, content-graph and blocks doors through the [#1022](https://github.com/Mumega-com/mcpwp/issues/1022) category chokepoint ([#1030](https://github.com/Mumega-com/mcpwp/issues/1030)) ([bc0a9ad](https://github.com/Mumega-com/mcpwp/commit/bc0a9adee53bc958138112d0f07ab161232c58c8))
+
 ## [3.14.6](https://github.com/Mumega-com/mcpwp/compare/v3.14.5...v3.14.6) (2026-09-28)
 
 
