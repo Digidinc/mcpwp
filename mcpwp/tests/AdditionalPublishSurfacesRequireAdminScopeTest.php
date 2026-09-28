@@ -58,7 +58,13 @@ final class AdditionalPublishSurfacesRequireAdminScopeTest extends TestCase {
 	}
 
 	private function write_key( $controller ): string {
-		return $controller->create_scoped_api_key( 'write key', array( 'write' ), 'custom' )['key'];
+		// This suite is about SCOPE (write vs admin), not category — it
+		// exercises routes across several categories (webhooks, elementor,
+		// elementor-templates). role=admin keeps that orthogonal: scopes are
+		// still capped to exactly what is requested (get_required_scope_for_request()
+		// is what each test actually asserts against), and category never
+		// enters into it.
+		return $controller->create_scoped_api_key( 'write key', array( 'write' ), 'admin' )['key'];
 	}
 
 	private function admin_key( $controller ): string {

@@ -95,7 +95,19 @@ final class RestSeoContentDraftLeakTest extends TestCase {
 	 * @return WP_REST_Request Authenticated request.
 	 */
 	private function authed( $controller, string $route, array $params, array $scopes ): WP_REST_Request {
-		$created = $controller->create_scoped_api_key( 'test key', $scopes, 'custom' );
+		// This suite is about scope + non-public-status visibility, not
+		// per-key category restriction (that's PostTypeCategoryGateTest /
+		// Regression1024*CategoryGateTest / KeyCategoryRestrictionAuthPlaneTest).
+		// Several routes here gate on BOTH their own route category (e.g.
+		// 'seo') AND the resolved post's type category ('content' —
+		// guard_post_type_category(), #1024) — reconstructing that exact pair
+		// per route is exactly the kind of test-fixture noise role=admin
+		// avoids. Before #1041, role='custom' with no categories resolved to
+		// unrestricted by the very bug this suite's sibling test closes;
+		// admin is the correct, DOCUMENTED way to get that same "any
+		// category" property now (resolve_key_tool_categories() returns
+		// array() only for admin/legacy — see trait-mcpwp-api-auth.php).
+		$created = $controller->create_scoped_api_key( 'test key', $scopes, 'admin' );
 		$request = new WP_REST_Request( 'GET', $route, $params, array( 'X-API-Key' => $created['key'] ) );
 		$this->verdict = $controller->verify_api_key( $request );
 		return $request;

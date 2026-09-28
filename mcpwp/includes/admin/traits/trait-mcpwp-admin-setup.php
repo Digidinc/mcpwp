@@ -49,18 +49,33 @@ trait Mcpwp_Admin_Setup_Trait {
 
 			$new_scoped_key = $this->create_scoped_api_key( $label, $scopes, $role, $tool_categories );
 
-			$roles      = self::get_role_definitions();
-			$role_label = isset( $roles[ $role ] ) ? $roles[ $role ]['label'] : $role;
-			add_settings_error(
-				'mcpwp_messages',
-				'mcpwp_scoped_key_created',
-				sprintf(
-					/* translators: %s: role label */
-					__( 'API key created (role: %s). Copy it now — it will not be shown again.', 'mcpwp' ),
-					$role_label
-				),
-				'updated'
-			);
+			// #1041: the key editor must not be able to save a custom role with
+			// no categories — create_scoped_api_key() now refuses that and
+			// returns an error shape instead of a key record. Surface it as a
+			// form error rather than the "created" success message, and don't
+			// treat the error shape as a key (no 'key' field to display).
+			if ( is_array( $new_scoped_key ) && isset( $new_scoped_key['error'] ) ) {
+				add_settings_error(
+					'mcpwp_messages',
+					'mcpwp_scoped_key_error',
+					$new_scoped_key['message'],
+					'error'
+				);
+				$new_scoped_key = null;
+			} else {
+				$roles      = self::get_role_definitions();
+				$role_label = isset( $roles[ $role ] ) ? $roles[ $role ]['label'] : $role;
+				add_settings_error(
+					'mcpwp_messages',
+					'mcpwp_scoped_key_created',
+					sprintf(
+						/* translators: %s: role label */
+						__( 'API key created (role: %s). Copy it now — it will not be shown again.', 'mcpwp' ),
+						$role_label
+					),
+					'updated'
+				);
+			}
 		}
 
 		if ( isset( $_POST['mcpwp_revoke_scoped_key'] ) ) {

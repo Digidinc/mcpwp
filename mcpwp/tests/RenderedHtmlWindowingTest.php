@@ -65,7 +65,7 @@ final class RenderedHtmlWindowingTest extends TestCase {
 
 	private function authed_request( array $params ): array {
 		$controller = new Mcpwp_REST_Site_Content();
-		$created    = $controller->create_scoped_api_key( 'test key', array( 'read' ), 'custom' );
+		$created    = $controller->create_scoped_api_key( 'test key', array( 'read' ), 'custom', array( 'site' ) );
 
 		$request = new WP_REST_Request(
 			'GET',

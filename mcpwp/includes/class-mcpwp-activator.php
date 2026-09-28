@@ -9,10 +9,17 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
+// mcpwp_activate() (mcpwp.php) requires this file directly, without going
+// through plugins_loaded's own require order — so this file cannot assume
+// the trait is already loaded the way most of the codebase can. Idempotent.
+require_once __DIR__ . '/traits/trait-mcpwp-api-auth.php';
+
 /**
  * Fired during plugin activation.
  */
 class Mcpwp_Activator {
+
+	use Mcpwp_Api_Auth;
 
 	/**
 	 * Activate the plugin.
@@ -71,6 +78,10 @@ class Mcpwp_Activator {
 
 		// One-time: purge identity-less pending approvals (see method docblock).
 		self::migrate_identity_less_approvals();
+
+		// One-time: mark existing custom-role API keys with an empty category
+		// list as deny-all in storage (#1041, see method docblock).
+		self::migrate_empty_custom_category_keys();
 
 		// Set version
 		update_option( 'mcpwp_version', MCPWP_VERSION );
@@ -430,6 +441,76 @@ class Mcpwp_Activator {
 		}
 
 		update_option( 'mcpwp_approvals_identity_migrated', 1, false );
+	}
+
+	/**
+	 * One-time migration (#1041): mark every existing custom-role API key
+	 * whose stored tool_categories is empty (never selected, or every
+	 * selected slug had already failed sanitisation) as deny-all in storage.
+	 *
+	 * resolve_key_tool_categories() now resolves an empty custom-role
+	 * category list to the deny-all sentinel at RUNTIME regardless of what is
+	 * stored — see that method — so this migration is not what closes the
+	 * security hole; the runtime fix already does that unconditionally, for
+	 * every key, pre-existing or newly created. This migration exists so
+	 * already-affected keys are self-documenting in storage rather than
+	 * showing a blank category list that reads like a display bug (WP Admin
+	 * > mcpwp > Setup renders the sentinel as "None (all denied)"), and as
+	 * defense-in-depth for any future code that reads a key's tool_categories
+	 * directly without going through resolve_key_tool_categories(). It never
+	 * revokes or deletes a key — an admin who wants one gone still has to
+	 * revoke it explicitly.
+	 *
+	 * Covers both the current (mcpwp_api_keys) and legacy (spai_api_keys)
+	 * scoped-key stores — find_legacy_spai_key() still authenticates against
+	 * spai_api_keys directly on a site that has not been through
+	 * Mcpwp_Migrate::run() yet, so a custom-role key minted before the
+	 * spai_ → mcpwp_ rename is exposed to exactly the same #1041 bug.
+	 *
+	 * Gated on its OWN flag, not the mcpwp_db_version check in mcpwp.php's
+	 * plugins_loaded — a same-version deployment never re-enters that branch,
+	 * and this is a security-relevant data fix, same reasoning as
+	 * migrate_identity_less_approvals() above.
+	 */
+	public static function migrate_empty_custom_category_keys() {
+		if ( get_option( 'mcpwp_deny_all_categories_migrated' ) ) {
+			return;
+		}
+
+		foreach ( array( 'mcpwp_api_keys', 'spai_api_keys' ) as $option_name ) {
+			$keys = get_option( $option_name, array() );
+			if ( ! is_array( $keys ) || empty( $keys ) ) {
+				continue;
+			}
+
+			$changed = false;
+			foreach ( $keys as &$key ) {
+				if ( ! is_array( $key ) ) {
+					continue;
+				}
+
+				$role = isset( $key['role'] ) ? (string) $key['role'] : '';
+				if ( 'custom' !== $role ) {
+					continue;
+				}
+
+				$categories = ( isset( $key['tool_categories'] ) && is_array( $key['tool_categories'] ) )
+					? array_values( $key['tool_categories'] )
+					: array();
+
+				if ( empty( $categories ) ) {
+					$key['tool_categories'] = array( self::deny_all_category_marker() );
+					$changed                = true;
+				}
+			}
+			unset( $key );
+
+			if ( $changed ) {
+				update_option( $option_name, $keys );
+			}
+		}
+
+		update_option( 'mcpwp_deny_all_categories_migrated', 1, false );
 	}
 
 	/**

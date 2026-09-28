@@ -305,6 +305,7 @@ class Mcpwp_Admin {
 					'yesProceed'         => __( 'Yes, proceed', 'mcpwp' ),
 					'cancel'             => __( 'Cancel', 'mcpwp' ),
 					'allCategoriesLabel' => __( 'All categories (unrestricted)', 'mcpwp' ),
+					'noCategoriesSelected' => __( 'Select at least one tool category for a custom-role key.', 'mcpwp' ),
 				),
 			)
 		);

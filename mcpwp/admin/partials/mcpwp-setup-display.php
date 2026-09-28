@@ -359,10 +359,20 @@ $last_activity_time = ! empty( $recent_activity[0]['created_at'] ) ? $recent_act
 						$display_cats = array();
 						if ( 'admin' === $key_role ) {
 							$display_cats = array( __( 'All', 'mcpwp' ) );
+						} elseif ( 'custom' === $key_role && Mcpwp_Admin::is_deny_all_categories( isset( $key['tool_categories'] ) ? (array) $key['tool_categories'] : array() ) ) {
+							// #1041: a custom key marked deny-all (migrated, or
+							// hand-seeded with an empty list) — never render the
+							// internal sentinel slug.
+							$display_cats = array( __( 'None (all denied)', 'mcpwp' ) );
 						} elseif ( 'custom' === $key_role && ! empty( $key['tool_categories'] ) ) {
 							foreach ( $key['tool_categories'] as $cat ) {
 								$display_cats[] = isset( $all_cat_labels[ $cat ] ) ? $all_cat_labels[ $cat ] : $cat;
 							}
+						} elseif ( 'custom' === $key_role ) {
+							// Empty, not-yet-migrated stored list. Same "none" label
+							// as the sentinel case above — resolve_key_tool_categories()
+							// already treats both identically at runtime (#1041).
+							$display_cats = array( __( 'None (all denied)', 'mcpwp' ) );
 						} elseif ( ! empty( $role_def['categories'] ) ) {
 							foreach ( $role_def['categories'] as $cat ) {
 								$display_cats[] = isset( $all_cat_labels[ $cat ] ) ? $all_cat_labels[ $cat ] : $cat;

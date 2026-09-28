@@ -99,7 +99,13 @@ final class RestSiteContentTest extends TestCase {
 	 */
 	private function authed( string $route, array $params, array $scopes ): array {
 		$controller = new Mcpwp_REST_Site_Content();
-		$created    = $controller->create_scoped_api_key( 'test key', $scopes, 'custom' );
+		// #1041: a custom-role key must be granted at least one real category
+		// or creation is refused. Derive it from the route under test
+		// (falling back to 'content' for an uncategorised route, where the
+		// key's category list does not matter anyway) so this stays correct
+		// no matter which route a call site passes.
+		$route_category = Mcpwp_REST_API::get_category_for_route( $route );
+		$created         = $controller->create_scoped_api_key( 'test key', $scopes, 'custom', array( '' !== $route_category ? $route_category : 'content' ) );
 
 		$request = new WP_REST_Request(
 			'GET',

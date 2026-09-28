@@ -704,6 +704,26 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 		$from_api          = Mcpwp_Destructive_Gate::is_api_principal( $this->get_current_api_key_record() );
 		$allow_destructive = $wants_exempt && ! $from_api;
 		$created           = $this->create_scoped_api_key( $label, $scopes, $role, $tool_categories, $allow_destructive );
+
+		// #1041: create_scoped_api_key() refuses a custom-role key whose
+		// category list resolved empty, returning an error shape instead of a
+		// key record. Surface that as a 400, naming the invalid categories,
+		// rather than a 201 with no 'key' in the payload. Built directly
+		// (not via error_response()'s $context, which only feeds the generic
+		// hint map and would drop invalid_categories) so the caller gets it
+		// back as a real field.
+		if ( is_array( $created ) && isset( $created['error'] ) ) {
+			$error = new WP_Error(
+				$created['error'],
+				$created['message'],
+				array(
+					'status'             => 400,
+					'invalid_categories' => $created['invalid_categories'],
+				)
+			);
+			return class_exists( 'Mcpwp_Error_Hints' ) ? Mcpwp_Error_Hints::enhance_error( $error ) : $error;
+		}
+
 		if ( $wants_exempt && $from_api && is_array( $created ) ) {
 			$created['ignored'] = array( 'allow_destructive' => 'Exemption from the destructive-operation gate can only be granted by an administrator in wp-admin, not through the API.' );
 		}

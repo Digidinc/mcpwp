@@ -370,8 +370,13 @@ final class PostTypeCategoryGateTest extends TestCase {
 	public function test_guard_post_type_category_denies_site_wide_disable_even_for_an_unrestricted_key(): void {
 		update_option( 'mcpwp_disabled_tool_categories', array( 'woocommerce' ) );
 
-		$h       = $this->harness();
-		$created = $this->scoped_key( $h, array() ); // empty => unrestricted by role
+		$h = $this->harness();
+		// admin role is the only genuinely role-unrestricted case
+		// (resolve_key_tool_categories() returns array() ONLY for admin/legacy,
+		// #1041) — a custom role with an empty category list now resolves to
+		// deny-all, not unrestricted, which is exactly the bug this issue
+		// closes. scoped_key()'s 'custom' role is deliberately not reused here.
+		$created = $h->create_scoped_api_key( 'scoped', array( 'read', 'write' ), 'admin' );
 		$this->auth_request( $h, $created['key'], 'GET', '/mcpwp/v1/post-meta/' . self::PRODUCT_ID );
 
 		$result = $h->guard_post_type_category( $GLOBALS['_mcpwp_test_posts'][ self::PRODUCT_ID ], 'Post not found.' );

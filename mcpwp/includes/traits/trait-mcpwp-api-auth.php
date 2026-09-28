@@ -1418,10 +1418,14 @@ trait Mcpwp_Api_Auth {
 	 * Fails OPEN (allows) on an unclassified route ('' from get_category_for_route()),
 	 * matching check_disabled_category_for_route()'s own treatment of the same
 	 * cases and the documented fact that many discovery routes are deliberately
-	 * left uncategorised. Fails OPEN when the key's role carries no category
-	 * restriction (admin role, or any role/record resolve_key_tool_categories()
-	 * returns an empty array for) — see that method for the admin/custom-with-
-	 * zero-categories quirk this mirrors on purpose rather than changing.
+	 * left uncategorised. Fails OPEN only when the key's role carries NO
+	 * category restriction at all — i.e. resolve_key_tool_categories() returns
+	 * array() (admin role, or a legacy/migrated key with no 'role' field).
+	 * A custom-role key whose categories resolve to nothing
+	 * (resolve_key_tool_categories() returns the deny-all sentinel, never a
+	 * bare array()) falls through to the real category check below and is
+	 * denied there like any other restricted key (#1041) — it is no longer
+	 * indistinguishable from "unrestricted".
 	 *
 	 * Called from every authentication path that also calls
 	 * check_disabled_category_for_route() (plain X-API-Key, the batch/MCP
@@ -1442,7 +1446,10 @@ trait Mcpwp_Api_Auth {
 
 		$allowed = $this->resolve_key_tool_categories( $key_record );
 		if ( empty( $allowed ) ) {
-			// Unrestricted (admin role, unknown role, or legacy/migrated key).
+			// Unrestricted (admin role, or legacy/migrated key with no 'role'
+			// field). A custom role with nothing granted resolves to the
+			// deny-all sentinel, never a bare array(), so it never reaches
+			// this branch (#1041).
 			return true;
 		}
 
@@ -1496,7 +1503,7 @@ trait Mcpwp_Api_Auth {
 				__( 'This API key (role: %1$s) does not have access to %2$s routes. Allowed categories: %3$s.', 'mcpwp' ),
 				$role,
 				$category,
-				implode( ', ', $allowed )
+				self::describe_allowed_categories_for_message( $allowed )
 			),
 			array(
 				'status'   => 403,
@@ -1505,7 +1512,7 @@ trait Mcpwp_Api_Auth {
 					'This route is in the "%1$s" tool category, but this key (role: %2$s) only has access to: %3$s. Request an admin key or a key with the "%1$s" category enabled.',
 					$category,
 					$role,
-					implode( ', ', $allowed )
+					self::describe_allowed_categories_for_message( $allowed )
 				),
 			)
 		);
@@ -4043,7 +4050,10 @@ trait Mcpwp_Api_Auth {
 	 * @param array  $scopes          Scopes for key.
 	 * @param string $role            Role slug (admin, author, designer, editor, custom).
 	 * @param array  $tool_categories Tool category slugs (for custom role).
-	 * @return array Key creation result, including plaintext key once.
+	 * @return array Key creation result, including plaintext key once, or — for a
+	 *               custom role whose category list resolves empty (#1041) — an
+	 *               error shape: array{error:string, message:string, invalid_categories:array}.
+	 *               Callers MUST check for the 'error' key before reading 'key'.
 	 */
 	public function create_scoped_api_key( $label = '', $scopes = array(), $role = 'admin', $tool_categories = array(), $allow_destructive = false ) {
 		$plain_key = $this->generate_api_key();
@@ -4070,8 +4080,36 @@ trait Mcpwp_Api_Auth {
 		}
 
 		// Sanitize tool categories.
-		$all_cats        = array_keys( self::get_all_tool_category_labels() );
-		$tool_categories = array_values( array_intersect( array_map( 'sanitize_key', (array) $tool_categories ), $all_cats ) );
+		$all_cats             = array_keys( self::get_all_tool_category_labels() );
+		$requested_categories = array_values( array_filter( array_map( 'sanitize_key', (array) $tool_categories ), 'strlen' ) );
+		$tool_categories      = array_values( array_intersect( $requested_categories, $all_cats ) );
+
+		// #1041: a custom-role key whose resulting category list is empty —
+		// either nothing was requested, or every requested slug failed
+		// sanitisation/validation (e.g. a typo, a category the plugin has
+		// never heard of, or one this build doesn't ship) — is refused
+		// outright rather than silently stored as `tool_categories: []`.
+		// resolve_key_tool_categories() now (correctly) resolves that to
+		// deny-all rather than "every category", so minting it would produce
+		// a key that authenticates but can never do anything useful — a
+		// worse failure mode than refusing at creation with the specific
+		// invalid slugs named. Checked AFTER role validation/coercion above,
+		// so a caller who mistyped the role itself (coerced to 'admin') never
+		// hits this branch.
+		if ( 'custom' === $role && empty( $tool_categories ) ) {
+			$invalid = array_values( array_diff( $requested_categories, $all_cats ) );
+			return array(
+				'error'   => 'empty_custom_categories',
+				'message' => empty( $invalid )
+					? __( 'A custom-role API key needs at least one tool category. Select one or more categories, or choose a predefined role instead.', 'mcpwp' )
+					: sprintf(
+						/* translators: %s: comma-separated list of invalid/unrecognised category slugs supplied */
+						__( 'None of the requested tool categories are valid: %s. A custom-role API key needs at least one valid category.', 'mcpwp' ),
+						implode( ', ', $invalid )
+					),
+				'invalid_categories' => $invalid,
+			);
+		}
 
 		// Cap scopes to the role's maximum ceiling — prevents a non-admin role from
 		// claiming admin scope even if sanitize_scopes expanded it from 'admin' input.
@@ -4477,34 +4515,153 @@ trait Mcpwp_Api_Auth {
 	}
 
 	/**
+	 * Internal sentinel meaning "this key is restricted to NO category" —
+	 * distinct from the empty-array return of resolve_key_tool_categories()
+	 * itself, which means "unrestricted" (#1041).
+	 *
+	 * Before #1041, a custom-role key whose tool_categories resolved to an
+	 * empty array — either because none were ever selected, or because every
+	 * selected slug failed sanitisation (e.g. a stale/typo'd category from a
+	 * pre-#907 client) — was indistinguishable from an admin/legacy key at
+	 * every one of resolve_key_tool_categories()'s ~10 call sites, ALL of
+	 * which treat `empty($allowed)` as "no restriction". A key created that
+	 * way silently inherited every category, including ones a site had
+	 * explicitly disabled. Live evidence: such a key saw all 804 entries in
+	 * the action log.
+	 *
+	 * The fix returns array( self::deny_all_category_marker() ) instead of
+	 * array() whenever a NON-admin, NON-legacy resolution would otherwise be
+	 * empty. This sentinel can never equal a real category slug (see
+	 * get_all_tool_category_labels() — none use a leading/trailing double
+	 * underscore), so:
+	 *   - every `empty($allowed)` check downstream is FALSE (correctly: the
+	 *     key IS restricted), and
+	 *   - every `in_array($category, $allowed, true)` check is FALSE for any
+	 *     real category (correctly: nothing is allowed).
+	 * Every existing consumer therefore falls through to its own
+	 * already-correct "restricted, category not in the allowed list" branch
+	 * with ZERO code changes — this is a chokepoint fix, not a per-call-site
+	 * one. The one exception is human/machine-readable output that would
+	 * otherwise print the raw sentinel string; use
+	 * describe_allowed_categories_for_message() there.
+	 *
+	 * A key at this state can still authenticate and can still reach the
+	 * discovery allowlist (get_discovery_allowlist_routes() /
+	 * get_discovery_allowlist_tool_names() — /site-info, /onboard,
+	 * /introspect, and read-only /site-context — are checked before any
+	 * per-key category list is consulted, exactly as for every other role).
+	 *
+	 * @return string
+	 */
+	public static function deny_all_category_marker() {
+		return '__mcpwp_deny_all__';
+	}
+
+	/**
+	 * Whether a resolve_key_tool_categories() result represents "restricted
+	 * to nothing" (the deny-all sentinel) rather than a real, non-empty
+	 * category list.
+	 *
+	 * @param array $categories Return value of resolve_key_tool_categories().
+	 * @return bool
+	 */
+	public static function is_deny_all_categories( $categories ) {
+		return array( self::deny_all_category_marker() ) === array_values( (array) $categories );
+	}
+
+	/**
+	 * Render a resolve_key_tool_categories() result for a human- or
+	 * machine-readable field, never leaking the internal deny-all sentinel
+	 * (#1041) — callers that used to `implode( ', ', $allowed )` directly, or
+	 * hand $allowed to a client as-is, should go through this instead.
+	 *
+	 * @param array $categories Return value of resolve_key_tool_categories().
+	 * @return string Comma-separated category list, or '(none)' for deny-all.
+	 */
+	public static function describe_allowed_categories_for_message( $categories ) {
+		if ( self::is_deny_all_categories( $categories ) ) {
+			return __( '(none)', 'mcpwp' );
+		}
+		return implode( ', ', (array) $categories );
+	}
+
+	/**
+	 * The same rendering as describe_allowed_categories_for_message(), but as
+	 * a real (possibly empty) array rather than a string — for a structured,
+	 * client-consumed field (e.g. MCP `initialize`'s `tool_categories`)
+	 * rather than a prose message.
+	 *
+	 * @param array $categories Return value of resolve_key_tool_categories().
+	 * @return array Category slugs, or [] for deny-all.
+	 */
+	public static function present_tool_categories( $categories ) {
+		return self::is_deny_all_categories( $categories ) ? array() : (array) $categories;
+	}
+
+	/**
 	 * Resolve allowed tool categories for a key record.
 	 *
-	 * Admin role (or keys without a role) get empty array = all allowed.
+	 * Only role=admin and a legacy/migrated key (no 'role' field at all) are
+	 * unrestricted, in which case this returns array() — every caller of this
+	 * method treats an empty array as "no restriction", so array() is
+	 * reserved EXCLUSIVELY for those two cases (#1041). Every other
+	 * resolution — a predefined role, or a custom role — returns either a
+	 * real, non-empty category list or array( self::deny_all_category_marker() ),
+	 * never a bare array(). See deny_all_category_marker()'s docblock for why
+	 * that sentinel is safe to hand to every existing `empty($allowed)` /
+	 * `in_array($category, $allowed, true)` consumer unchanged.
+	 *
+	 * OAuth and broker principals (authenticate_oauth_access_token(),
+	 * authenticate_broker_bearer_token()) never carry a 'role' field either,
+	 * so they take the same "legacy" branch here and are documented as
+	 * unrestricted by category — the per-key restriction this method
+	 * expresses is scoped-API-key-only; those principals are governed by
+	 * scope (read/write/admin) instead.
 	 *
 	 * @param array $key_record Normalized key record.
-	 * @return array Allowed category slugs, or empty for unrestricted.
+	 * @return array Allowed category slugs; array() ONLY for admin/legacy
+	 *               (unrestricted); array(deny_all_category_marker()) for a
+	 *               custom (or otherwise unrecognised) role with no real
+	 *               category granted.
 	 */
 	public function resolve_key_tool_categories( $key_record ) {
 		$role = isset( $key_record['role'] ) ? (string) $key_record['role'] : 'admin';
 
-		// Admin role or legacy keys: unrestricted.
+		// Admin role, or a legacy/migrated key with no 'role' field at all:
+		// unrestricted. This is the ONLY unrestricted case.
 		if ( 'admin' === $role || '' === $role ) {
 			return array();
 		}
 
-		// Custom role: use the stored tool_categories.
+		// Custom role: use the stored tool_categories. An empty list here
+		// used to be conflated with "no restriction" (#1041) — it now means
+		// "restricted to nothing", signalled via the deny-all sentinel so
+		// every downstream `empty()`/`in_array()` check keeps working.
 		if ( 'custom' === $role ) {
-			return isset( $key_record['tool_categories'] ) ? (array) $key_record['tool_categories'] : array();
+			$categories = ( isset( $key_record['tool_categories'] ) && is_array( $key_record['tool_categories'] ) )
+				? array_values( $key_record['tool_categories'] )
+				: array();
+			return empty( $categories ) ? array( self::deny_all_category_marker() ) : $categories;
 		}
 
-		// Predefined role: look up from definitions.
+		// Predefined role: look up from definitions. Every current
+		// definition's 'categories' is non-empty; the empty() fallback is
+		// defense-in-depth for a future role definition that forgets to list
+		// any — same "only admin/legacy is unrestricted" rule, not a special
+		// case for predefined roles.
 		$roles = self::get_role_definitions();
 		if ( isset( $roles[ $role ] ) ) {
-			return $roles[ $role ]['categories'];
+			$categories = (array) $roles[ $role ]['categories'];
+			return empty( $categories ) ? array( self::deny_all_category_marker() ) : $categories;
 		}
 
-		// Unknown role fallback: unrestricted.
-		return array();
+		// Unknown role: normalize_api_key_record() coerces any role outside
+		// get_role_definitions() to 'admin' before a record is ever stored or
+		// reaches this method through the normal auth path, so this branch
+		// should be unreachable in practice. Treated as deny-all (#1041) —
+		// NOT unrestricted — because an unrecognised role is not "documented
+		// as unrestricted"; only admin and legacy (roleless) keys are.
+		return array( self::deny_all_category_marker() );
 	}
 
 	/**
@@ -4517,7 +4674,10 @@ trait Mcpwp_Api_Auth {
 	public function key_allows_category( $key_record, $category ) {
 		$allowed = $this->resolve_key_tool_categories( $key_record );
 
-		// Empty = unrestricted (admin role).
+		// Empty = unrestricted (admin role or legacy key). A restricted key —
+		// including one restricted to nothing, i.e. deny_all_category_marker()
+		// — is never empty here (#1041), so it always falls through to the
+		// in_array() check below, which is false for every real category.
 		if ( empty( $allowed ) ) {
 			return true;
 		}

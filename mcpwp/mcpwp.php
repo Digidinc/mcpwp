@@ -558,6 +558,20 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 		Mcpwp_Activator::repair_custom_code_locations();
 	}
 
+	// One-time: mark existing custom-role API keys with an empty category
+	// list as deny-all in storage (#1041). Own flag, not the mcpwp_db_version
+	// compare above — a same-version deployment never re-enters that branch,
+	// and this is a security-relevant data fix, same reasoning as the
+	// identity-less-approvals purge above. The RUNTIME fix
+	// (resolve_key_tool_categories() in trait-mcpwp-api-auth.php) already
+	// closes the hole unconditionally regardless of this migration — see
+	// Mcpwp_Activator::migrate_empty_custom_category_keys() for why this
+	// exists anyway.
+	if ( ! get_option( 'mcpwp_deny_all_categories_migrated' ) ) {
+		require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-activator.php';
+		Mcpwp_Activator::migrate_empty_custom_category_keys();
+	}
+
 	// One-time: grant edit_published_posts/edit_published_pages to the
 	// mcpwp_api_agent role on sites where it was already created without
 	// them (#861b — owner decision: agent writes to published pages are

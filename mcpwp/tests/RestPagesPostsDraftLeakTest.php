@@ -80,7 +80,7 @@ final class RestPagesPostsDraftLeakTest extends TestCase {
 
 	private function authed_pages( int $id, array $scopes ): array {
 		$controller = new Mcpwp_REST_Pages();
-		$created    = $controller->create_scoped_api_key( 'test key', $scopes, 'custom' );
+		$created    = $controller->create_scoped_api_key( 'test key', $scopes, 'custom', array( 'content' ) );
 		$request    = new WP_REST_Request( 'GET', '/mcpwp/v1/pages/' . $id, array( 'id' => $id ), array( 'X-API-Key' => $created['key'] ) );
 		$this->verdict = $controller->verify_api_key( $request );
 		return array( $controller, $request );
@@ -88,7 +88,7 @@ final class RestPagesPostsDraftLeakTest extends TestCase {
 
 	private function authed_pages_slug( string $slug, array $scopes ): array {
 		$controller = new Mcpwp_REST_Pages();
-		$created    = $controller->create_scoped_api_key( 'test key', $scopes, 'custom' );
+		$created    = $controller->create_scoped_api_key( 'test key', $scopes, 'custom', array( 'content' ) );
 		$request    = new WP_REST_Request( 'GET', '/mcpwp/v1/pages/by-slug/' . $slug, array( 'slug' => $slug ), array( 'X-API-Key' => $created['key'] ) );
 		$this->verdict = $controller->verify_api_key( $request );
 		return array( $controller, $request );
@@ -96,7 +96,7 @@ final class RestPagesPostsDraftLeakTest extends TestCase {
 
 	private function authed_posts( int $id, array $scopes ): array {
 		$controller = new Mcpwp_REST_Posts();
-		$created    = $controller->create_scoped_api_key( 'test key', $scopes, 'custom' );
+		$created    = $controller->create_scoped_api_key( 'test key', $scopes, 'custom', array( 'content' ) );
 		$request    = new WP_REST_Request( 'GET', '/mcpwp/v1/posts/' . $id, array( 'id' => $id ), array( 'X-API-Key' => $created['key'] ) );
 		$this->verdict = $controller->verify_api_key( $request );
 		return array( $controller, $request );
