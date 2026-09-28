@@ -37,6 +37,7 @@ final class SettingsCheckboxPresenceTest extends TestCase {
 		'oauth_enabled'           => false,
 		'alerts_enabled'          => false,
 		'mupot_enabled'           => false,
+		'webmcp_admin_enabled'    => false,
 		'analytics_enabled'       => null,
 	);
 

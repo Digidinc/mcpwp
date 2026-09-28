@@ -648,6 +648,17 @@ trait Mcpwp_Api_Auth {
 		// previous request's bucket.
 		$this->mcpwp_metered = null;
 
+		// WebMCP in wp-admin (#981): an in-process /mcp dispatch made by
+		// Mcpwp_REST_WebMCP for the logged-in WordPress user, and every
+		// sub-request it fans out to. The lift is a PHP static that only
+		// that controller sets, after it has verified the cookie, the
+		// wp_rest nonce, the origin and the user's capabilities; nothing a
+		// caller sends can set it. Checked first: while it is held, every
+		// MCPWP request in this process is that user and nobody else.
+		if ( class_exists( 'Mcpwp_WebMCP' ) && Mcpwp_WebMCP::dispatch_user_id() > 0 ) {
+			return $this->authenticate_webmcp_principal( $request );
+		}
+
 		// Bypass for internal server-side requests (Chat tab tool execution).
 		// Requires: admin context + activate_plugins cap + AJAX request +
 		// a valid nonce tied to a known admin action (prevents filter-hook abuse).
@@ -859,6 +870,97 @@ trait Mcpwp_Api_Auth {
 		// Per-key role/category restriction (#874) — see
 		// check_key_category_restriction_for_route() docblock for why this is a
 		// separate check from the one immediately above.
+		$key_category_check = $this->check_key_category_restriction_for_route( $request );
+		if ( is_wp_error( $key_category_check ) ) {
+			return $key_category_check;
+		}
+
+		return $this->check_post_naming_params_category( $request );
+	}
+
+	/**
+	 * Authenticate a request made under the WebMCP principal lift (#981).
+	 *
+	 * The principal is the logged-in WordPress user, identified by a
+	 * synthetic key record (Mcpwp_WebMCP::principal_record(): read + write,
+	 * never admin; role 'custom' limited to the WebMCP categories). Unlike
+	 * an API key, the current user is NOT switched to the mcpwp_bot service
+	 * account — tool handlers run as the real user, so WordPress's own
+	 * capability checks and post authorship apply to them.
+	 *
+	 * Every gate an API key passes still runs: rate limit (on the outer
+	 * /mcp request, bucket webmcp:user:<id>), scope for the route/tool,
+	 * site-disabled categories, the principal's own category restriction
+	 * and post-ref category checks. The outer /mcp body must additionally
+	 * be nothing but tools/call for allowlisted tools.
+	 *
+	 * @param WP_REST_Request $request Request.
+	 * @return true|WP_Error
+	 */
+	private function authenticate_webmcp_principal( $request ) {
+		$user_id = Mcpwp_WebMCP::dispatch_user_id();
+
+		// The lift names the user the endpoint verified; it must still be
+		// the user this request runs as, and that user must still qualify.
+		if ( get_current_user_id() !== $user_id || ! Mcpwp_WebMCP::user_may_use( $user_id ) ) {
+			return new WP_Error(
+				'webmcp_principal_mismatch',
+				__( 'WebMCP request is not running as the signed-in user.', 'mcpwp' ),
+				array( 'status' => 401 )
+			);
+		}
+
+		$is_sub_request = class_exists( 'Mcpwp_REST_Batch' ) && Mcpwp_REST_Batch::$is_batch_sub_request;
+		$route          = method_exists( $request, 'get_route' ) ? (string) $request->get_route() : '';
+
+		// The only top-level request the lift may authenticate is the /mcp
+		// tools/call envelope the WebMCP endpoint built; everything else runs
+		// as a sub-request of it (Mcpwp_REST_Batch::$is_batch_sub_request).
+		if ( ! $is_sub_request ) {
+			$body = method_exists( $request, 'get_json_params' ) ? $request->get_json_params() : null;
+			if ( '/mcpwp/v1/mcp' !== strtolower( untrailingslashit( $route ) ) || ! Mcpwp_WebMCP::mcp_body_is_allowed( $body ) ) {
+				return new WP_Error(
+					'webmcp_tool_not_allowed',
+					__( 'This tool is not available through WebMCP.', 'mcpwp' ),
+					array( 'status' => 403 )
+				);
+			}
+		}
+
+		$record = Mcpwp_WebMCP::principal_record( $user_id );
+
+		// Charged once, on the outer request — sub-requests were already
+		// counted there, same rule as API keys.
+		if ( ! $is_sub_request ) {
+			$rate_limit_check = $this->meter_request( $request, 'webmcp:user:' . $user_id, $this->rate_limit_method( $request ), $record );
+			if ( is_wp_error( $rate_limit_check ) ) {
+				return $rate_limit_check;
+			}
+		}
+
+		$required_scope = $this->get_required_scope_for_request( $request );
+		if ( ! $this->key_has_scope( $record, $required_scope ) ) {
+			return new WP_Error(
+				'insufficient_scope',
+				sprintf(
+					/* translators: %s: scope name */
+					__( 'WebMCP cannot perform this action (requires %s scope). Publishing, settings and other administrator actions are done by a person in wp-admin.', 'mcpwp' ),
+					$required_scope
+				),
+				array(
+					'status'         => 403,
+					'required_scope' => $required_scope,
+				)
+			);
+		}
+
+		$this->current_api_key_record = $record;
+
+		$category_check = $this->check_disabled_category_for_route( $request );
+		if ( is_wp_error( $category_check ) ) {
+			return $category_check;
+		}
+
 		$key_category_check = $this->check_key_category_restriction_for_route( $request );
 		if ( is_wp_error( $key_category_check ) ) {
 			return $key_category_check;

@@ -88,6 +88,7 @@ require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-broker.php';
 require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-batch.php';
 require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-integrations.php';
 require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-figma.php';
+require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-webmcp.php';
 
 require_once dirname( __DIR__ ) . '/includes/pro/api/class-mcpwp-rest-elementor-pro.php';
 require_once dirname( __DIR__ ) . '/includes/pro/api/class-mcpwp-rest-seo.php';
@@ -144,6 +145,17 @@ final class AllRegisteredRoutesCategoryTest extends TestCase {
 		// (every tool shares the one route) and is explicitly documented as
 		// out of scope in get_category_for_route()'s own docblock.
 		'/mcp',
+	);
+
+	/**
+	 * Routes authenticated by the WordPress login cookie + wp_rest nonce,
+	 * never by an API key — verify_api_key() is not their permission
+	 * callback, so there is no key category to apply. The tool they
+	 * dispatch is gated by the WebMCP allowlist and then by the /mcp
+	 * tools/call chokepoint under the WebMCP principal (#981).
+	 */
+	private const COOKIE_AUTH_ROUTES = array(
+		'/webmcp/call', // Mcpwp_REST_WebMCP.
 	);
 
 	protected function setUp(): void {
@@ -251,6 +263,7 @@ final class AllRegisteredRoutesCategoryTest extends TestCase {
 		( new Mcpwp_REST_Batch() )->register_routes();
 		( new Mcpwp_REST_Integrations() )->register_routes();
 		( new Mcpwp_REST_Figma() )->register_routes();
+		( new Mcpwp_REST_WebMCP() )->register_routes();
 
 		// Pro — registered unconditionally (see method docblock).
 		( new Mcpwp_REST_Elementor_Pro( null ) )->register_routes();
@@ -293,7 +306,8 @@ final class AllRegisteredRoutesCategoryTest extends TestCase {
 		$exempt      = array_merge(
 			$auth->get_discovery_allowlist_routes(),
 			self::PUBLIC_NO_AUTH_ROUTES,
-			self::AUTHED_BUT_UNCLASSIFIED_ROUTES
+			self::AUTHED_BUT_UNCLASSIFIED_ROUTES,
+			self::COOKIE_AUTH_ROUTES
 		);
 		$found_empty = array();
 		$failures    = array();

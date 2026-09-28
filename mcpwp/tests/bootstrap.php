@@ -360,6 +360,25 @@ class WP_REST_Request
         return $this->json_params;
     }
 
+    // Real WP_REST_Request parses a JSON body into get_json_params() when
+    // the content type is JSON; internal dispatchers (admin chat, WebMCP
+    // #981) build their /mcp request this way.
+    private $body = '';
+
+    public function set_body($body)
+    {
+        $this->body = (string) $body;
+        $decoded    = json_decode($this->body, true);
+        if (is_array($decoded)) {
+            $this->json_params = $decoded;
+        }
+    }
+
+    public function get_body()
+    {
+        return $this->body;
+    }
+
 }
 
 class WP_REST_Server
@@ -2849,6 +2868,11 @@ function get_post_type_object($post_type)
         // fallback. A test-registered private type (mcpwp_test_private_post_types)
         // defaults to false here, same as a real non-REST-exposed CPT.
         'show_in_rest' => in_array((string) $post_type, (array) ($GLOBALS['mcpwp_test_show_in_rest_post_types'] ?? array()), true),
+        // Core's default capability_type mapping for the two built-ins; a
+        // test-registered type maps like 'post'. Read by WebMCP (#981).
+        'cap'          => (object) array(
+            'create_posts' => 'page' === (string) $post_type ? 'edit_pages' : 'edit_posts',
+        ),
     );
 }
 
@@ -3738,6 +3762,40 @@ class Mcpwp_Test_Fs_Stub
     }
 }
 
+// ── WebMCP (#981) wp-admin stubs ─────────────────────────────────────────
+
+if (! function_exists('site_url')) {
+    function site_url($path = '', $scheme = null)
+    {
+        return 'https://example.com' . ('' !== (string) $path ? '/' . ltrim((string) $path, '/') : '');
+    }
+}
+
+if (! function_exists('is_network_admin')) {
+    function is_network_admin()
+    {
+        return false;
+    }
+}
+
+$GLOBALS['mcpwp_test_enqueued_scripts'] = array();
+$GLOBALS['mcpwp_test_inline_scripts']   = array();
+
+if (! function_exists('wp_enqueue_script')) {
+    function wp_enqueue_script($handle, $src = '', $deps = array(), $ver = false, $args = array())
+    {
+        $GLOBALS['mcpwp_test_enqueued_scripts'][ $handle ] = $src;
+    }
+}
+
+if (! function_exists('wp_add_inline_script')) {
+    function wp_add_inline_script($handle, $data, $position = 'after')
+    {
+        $GLOBALS['mcpwp_test_inline_scripts'][] = array( 'handle' => $handle, 'data' => $data, 'position' => $position );
+        return true;
+    }
+}
+
 // ── Admin / AJAX stubs for auth trait bypass tests ───────────────────────
 
 $GLOBALS['mcpwp_test_is_admin']             = false;
@@ -3849,6 +3907,9 @@ require_once dirname(__DIR__) . '/includes/mcp/traits/trait-mcpwp-pro-tools-stag
 require_once dirname(__DIR__) . '/includes/mcp/class-mcpwp-mcp-pro-tools.php';
 require_once dirname(__DIR__) . '/includes/mcp/class-mcpwp-integration.php';
 require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-mcp.php';
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-webmcp.php';
+require_once dirname(__DIR__) . '/includes/mcp/class-mcpwp-webmcp-integration.php';
+require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-webmcp.php';
 require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-pages.php';
 require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-site-updates.php';
 require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-media.php';
