@@ -119,7 +119,23 @@ trait Mcpwp_Admin_Control_Room_Trait {
 				$message = __( 'Approval request rejected.', 'mcpwp' );
 				break;
 			case 'apply':
-				$result = Mcpwp_Approvals::apply_request( $approval_id, array( 'admin_user' => get_current_user_id(), 'actor' => 'wp-user:' . get_current_user_id() ) );
+				// #1032 round 3: same requester-permission re-check the REST
+				// /approvals/{id}/apply door applies — see
+				// Mcpwp_Api_Auth::requester_template_ref_gate()'s docblock. The
+				// Control Room is a second door onto the same apply_request(),
+				// so it needs the same gate, not just the REST one.
+				$approval_record  = Mcpwp_Approvals::get_request( $approval_id );
+				$requester_key_id = ! is_wp_error( $approval_record ) && is_array( $approval_record ) && isset( $approval_record['requested_by_key_id'] )
+					? (string) $approval_record['requested_by_key_id']
+					: '';
+				$result = Mcpwp_Approvals::apply_request(
+					$approval_id,
+					array(
+						'admin_user'        => get_current_user_id(),
+						'actor'             => 'wp-user:' . get_current_user_id(),
+						'template_ref_gate' => $this->requester_template_ref_gate( $requester_key_id ),
+					)
+				);
 				$message = __( 'Approved change applied.', 'mcpwp' );
 				break;
 			case 'rollback':

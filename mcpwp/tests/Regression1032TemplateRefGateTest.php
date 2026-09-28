@@ -1503,4 +1503,202 @@ final class Regression1032TemplateRefGateTest extends TestCase {
 		$this->assertSame( 'payload_too_large', $auth->get_error_code() );
 		$this->assertSame( 413, $auth->get_error_data()['status'] ?? null );
 	}
+
+	// =========================================================================
+	// Adversarial review round 3 — the request-body-wide chokepoint used to
+	// run ONLY on the plain-X-API-Key path. compute_api_key_verdict() has
+	// FOUR other short-circuit returns — the WebMCP principal lift, the
+	// /batch and /mcp sub-request fast path (verify_api_key_auth_only()),
+	// the OAuth bearer path and the mumcp.com broker path — each of which
+	// used to end at check_post_naming_params_category() without ever
+	// reaching check_request_template_refs(). The fix chains the scan from
+	// INSIDE check_post_naming_params_category() itself (the one tail all
+	// five share), so these tests exercise it through each of the
+	// short-circuit paths directly, not just the main chain.
+	// =========================================================================
+
+	public function test_batch_sub_request_fast_path_runs_the_template_ref_scan(): void {
+		// verify_api_key_auth_only() is exactly what compute_api_key_verdict()
+		// dispatches to for every /batch operation and every /mcp tools/call
+		// sub-request (Mcpwp_REST_Batch::$is_batch_sub_request) — a gated
+		// reference smuggled through EITHER envelope reached this fast path
+		// and was never scanned before this fix.
+		$controller = new Mcpwp_REST_Posts();
+		$created    = $controller->create_scoped_api_key( 'test', array( 'read', 'write' ), 'custom', array( 'content' ) );
+		$request    = new WP_REST_Request(
+			'PUT',
+			'/mcpwp/v1/posts/' . self::PAGE_ID,
+			array( 'content' => '[elementor-template id="' . self::ARCHETYPE_ID . '"]' ),
+			array( 'X-API-Key' => $created['key'] )
+		);
+
+		Mcpwp_REST_Batch::$is_batch_sub_request = true;
+		try {
+			$auth = $controller->check_permission( $request );
+		} finally {
+			Mcpwp_REST_Batch::$is_batch_sub_request = false;
+		}
+
+		$this->assertInstanceOf( WP_Error::class, $auth, 'A gated reference must still be refused when dispatched as a batch/MCP sub-request.' );
+		$this->assertSame( 'not_found', $auth->get_error_code() );
+		$this->assertSame( 'A referenced template was not found.', $auth->get_error_data()['hint'] ?? null );
+	}
+
+	public function test_webmcp_dispatch_runs_the_template_ref_scan(): void {
+		// authenticate_webmcp_principal() (#981/#1038) is a SEPARATE verdict
+		// computation compute_api_key_verdict() returns directly, before its
+		// own check_request_template_refs() call is ever reached — it used
+		// to end at check_post_naming_params_category() with no further
+		// chaining, so a WebMCP-dispatched sub-request could smuggle a
+		// gated reference through untouched.
+		$user_id                                  = 55010;
+		$GLOBALS['mcpwp_test_user_caps'][ $user_id ] = array(
+			'edit_posts'        => true,
+			'edit_others_posts' => true, // Mcpwp_WebMCP::BASE_CAPABILITY.
+		);
+		$GLOBALS['mcpwp_test_current_user'] = $user_id;
+
+		$controller = new Mcpwp_REST_Posts();
+		$request    = new WP_REST_Request(
+			'PUT',
+			'/mcpwp/v1/posts/' . self::PAGE_ID,
+			array(
+				'content' => '[elementor-template id="' . self::ARCHETYPE_ID . '"]',
+				'status'  => 'draft',
+			)
+		);
+
+		$previous                                = Mcpwp_WebMCP::begin_dispatch( $user_id );
+		Mcpwp_REST_Batch::$is_batch_sub_request = true;
+		try {
+			$auth = $controller->check_permission( $request );
+		} finally {
+			Mcpwp_REST_Batch::$is_batch_sub_request = false;
+			Mcpwp_WebMCP::end_dispatch( $previous );
+		}
+
+		$this->assertInstanceOf( WP_Error::class, $auth, 'A gated reference must still be refused when dispatched under the WebMCP principal lift.' );
+		$this->assertSame( 'not_found', $auth->get_error_code() );
+		$this->assertSame( 'A referenced template was not found.', $auth->get_error_data()['hint'] ?? null );
+	}
+
+	public function test_request_scan_skips_get_requests(): void {
+		// NIT: a GET never persists anything, so scanning its query string
+		// bought no security and only risked a false-positive refusal.
+		list( $controller, $request ) = $this->authed_request(
+			new Mcpwp_REST_Posts(),
+			array( 'content' ),
+			'GET',
+			'/mcpwp/v1/search',
+			array( 'query' => '[elementor-template id="' . self::ARCHETYPE_ID . '"]' )
+		);
+		$this->assert_request_allowed( $controller, $request, 'A GET request must never be refused by the write-time template-ref scan.' );
+	}
+
+	public function test_request_scan_ignores_an_unrelated_popup_param(): void {
+		// NIT: 'popup' is an ordinary word an unrelated route could use;
+		// only the Elementor Popup dynamic tag's own sibling shape
+		// ({"action":"open","popup":"N"}) is treated as a reference.
+		list( $controller, $request ) = $this->authed_request(
+			new Mcpwp_REST_Posts(),
+			array( 'content' ),
+			'PUT',
+			'/mcpwp/v1/posts/' . self::PAGE_ID,
+			array( 'content' => 'ok', 'popup' => (string) self::ARCHETYPE_ID )
+		);
+		$this->assert_request_allowed( $controller, $request, 'A bare, unrelated "popup" param must not be treated as a template reference.' );
+	}
+
+	public function test_apply_link_does_not_exempt_via_the_read_only_target(): void {
+		// W1: apply_internal_link() writes ONLY to source_id's post_content
+		// (an anchor appended); target_id is read solely for its URL/title.
+		// Before this fix, preexisting_template_ref_ids() unioned BOTH ids'
+		// stored refs, so a gated reference already (legitimately) sitting
+		// on the READ-ONLY target exempted an attacker's anchor smuggling
+		// the SAME id into the SOURCE post the request actually writes.
+		$target_id                                  = self::PAGE_ID + 900;
+		$GLOBALS['_mcpwp_test_posts'][ $target_id ] = new WP_Post(
+			array(
+				'ID'           => $target_id,
+				'post_type'    => 'page',
+				'post_title'   => 'Target',
+				'post_name'    => 'target',
+				'post_status'  => 'publish',
+				'post_content' => '[elementor-template id="' . self::ARCHETYPE_ID . '"]',
+			)
+		);
+
+		list( $controller, $request ) = $this->authed_request(
+			new Mcpwp_REST_Posts(),
+			array( 'content' ),
+			'POST',
+			'/mcpwp/v1/content-graph/apply-link',
+			array(
+				'source_id' => self::PAGE_ID,
+				'target_id' => $target_id,
+				'anchor'    => 'see [elementor-template id="' . self::ARCHETYPE_ID . '"]',
+			)
+		);
+		$this->assert_request_refused( $controller, $request, 'A pre-existing reference on the READ-ONLY target must not exempt a brand-new one the request is writing into source.' );
+	}
+
+	public function test_approvals_apply_rechecks_against_the_requester_not_the_applier(): void {
+		// W2: apply_payload() used to write the approved after_content
+		// straight through with no template-ref check at all. Checking the
+		// APPLYING admin's own permissions would prove nothing — an admin
+		// can read every category — so requester_template_ref_gate() must
+		// judge the REQUESTER's own (restricted) categories instead.
+		$controller = new Mcpwp_REST_Posts();
+		$created    = $controller->create_scoped_api_key( 'designer', array( 'read', 'write' ), 'custom', array( 'content' ) );
+
+		$approval = Mcpwp_Approvals::create_post_content_request(
+			self::PAGE_ID,
+			'[elementor-template id="' . self::ARCHETYPE_ID . '"]',
+			array( 'requested_by_key_id' => $created['id'] )
+		);
+		$this->assertIsArray( $approval, 'Approval creation must succeed.' );
+
+		$approved = Mcpwp_Approvals::approve_request( $approval['id'] );
+		$this->assertIsArray( $approved, 'Approval transition must succeed.' );
+
+		$result = Mcpwp_Approvals::apply_request(
+			$approval['id'],
+			array(
+				'actor'             => 'wp-user:1',
+				'template_ref_gate' => $controller->requester_template_ref_gate( $created['id'] ),
+			)
+		);
+
+		$this->assertInstanceOf( WP_Error::class, $result, 'A gated reference the ORIGINAL requester could not read must refuse apply, even though an admin is applying it.' );
+		$this->assertSame( 'not_found', $result->get_error_code() );
+	}
+
+	public function test_approvals_apply_allows_a_requester_who_can_read_the_category(): void {
+		$controller = new Mcpwp_REST_Posts();
+		$created    = $controller->create_scoped_api_key(
+			'admin-designer',
+			array( 'read', 'write' ),
+			'custom',
+			array( 'content', 'elementor-theme', 'elementor-templates' )
+		);
+
+		$approval = Mcpwp_Approvals::create_post_content_request(
+			self::PAGE_ID,
+			'[elementor-template id="' . self::ARCHETYPE_ID . '"]',
+			array( 'requested_by_key_id' => $created['id'] )
+		);
+		$this->assertIsArray( $approval );
+
+		Mcpwp_Approvals::approve_request( $approval['id'] );
+
+		$result = Mcpwp_Approvals::apply_request(
+			$approval['id'],
+			array(
+				'actor'             => 'wp-user:1',
+				'template_ref_gate' => $controller->requester_template_ref_gate( $created['id'] ),
+			)
+		);
+
+		$this->assertNotInstanceOf( WP_Error::class, $result, 'A requester who CAN read the category must be able to apply.' );
+	}
 }

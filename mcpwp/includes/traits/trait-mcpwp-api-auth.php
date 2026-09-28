@@ -922,17 +922,12 @@ trait Mcpwp_Api_Auth {
 			return $key_category_check;
 		}
 
-		$declared_ref_check = $this->check_post_naming_params_category( $request );
-		if ( is_wp_error( $declared_ref_check ) ) {
-			return $declared_ref_check;
-		}
-
-		// #1032 round 2: the SAME chokepoint, one request-body-wide scan for
-		// a Template Library reference hiding ANYWHERE in the submitted
-		// payload — not just a declared post-ref param and not just an
-		// Elementor element tree. See check_request_template_refs()'s
-		// docblock.
-		return $this->check_request_template_refs( $request );
+		// check_post_naming_params_category() also runs the #1032 round-2/3
+		// request-body-wide template-ref scan (check_request_template_refs())
+		// once the declared-param check clears — see its own docblock. Every
+		// verdict path in this trait ends by returning this call directly,
+		// so the scan runs uniformly regardless of identity type.
+		return $this->check_post_naming_params_category( $request );
 	}
 
 	/**
@@ -2354,6 +2349,20 @@ trait Mcpwp_Api_Auth {
 	 *    item and gives a hidden item exactly the entry it gives a missing
 	 *    one.
 	 *
+	 * #1032 round 3: this is also the SINGLE tail every verdict-computing
+	 * path in this trait calls last and returns directly —
+	 * compute_api_key_verdict()'s own local-key path, authenticate_webmcp_principal(),
+	 * verify_api_key_auth_only() (the /batch and /mcp sub-request fast path),
+	 * authenticate_oauth_access_token() and authenticate_broker_bearer_token().
+	 * Chaining check_request_template_refs() here, rather than at each of
+	 * those five call sites, is deliberate: a sixth verdict path added later
+	 * inherits the gate for free instead of silently missing it the way
+	 * authenticate_webmcp_principal() and the batch/MCP/OAuth/broker paths
+	 * did (round-3 adversarial review — the request-body-wide template-ref
+	 * scan ran only on the plain-X-API-Key path, so every other identity
+	 * type, and every batch/MCP inner sub-request regardless of identity
+	 * type, could still smuggle a gated Template Library reference through).
+	 *
 	 * @param WP_REST_Request $request Request object.
 	 * @return true|WP_Error
 	 */
@@ -2362,17 +2371,16 @@ trait Mcpwp_Api_Auth {
 		if ( is_wp_error( $resolution ) ) {
 			return $resolution;
 		}
-		if ( null === $resolution['refs'] ) {
-			return true;
-		}
 
-		foreach ( $resolution['refs']['scalar'] as $id ) {
-			if ( ! empty( $resolution['hidden'][ $id ] ) ) {
-				return $this->post_ref_not_found_error( $request );
+		if ( null !== $resolution['refs'] ) {
+			foreach ( $resolution['refs']['scalar'] as $id ) {
+				if ( ! empty( $resolution['hidden'][ $id ] ) ) {
+					return $this->post_ref_not_found_error( $request );
+				}
 			}
 		}
 
-		return true;
+		return $this->check_request_template_refs( $request );
 	}
 
 	/**
@@ -2638,6 +2646,58 @@ trait Mcpwp_Api_Auth {
 	}
 
 	/**
+	 * template_ref_gate()'s SAME shape — function(int[] $ids): true|WP_Error —
+	 * but judged against a PAST principal's stored key id rather than the
+	 * current caller (#1032 round 3). Built for exactly one caller:
+	 * Mcpwp_REST_Approvals::apply_approval() re-scanning a post_content_update
+	 * payload at APPLY time against the identity that PROPOSED it
+	 * (`requested_by_key_id`), never the admin applying it — see
+	 * requester_may_read_category()'s own docblock for why that distinction
+	 * is the entire point.
+	 *
+	 * Deliberately narrower than post_ref_is_hidden(): it judges only the
+	 * resolved post's CATEGORY (requester_may_read_category(), which also
+	 * honours the site-wide disabled-category toggle) and whether a row
+	 * exists at all. It does not attempt to reconstruct the requester's
+	 * draft/private-post visibility the way post_ref_is_hidden() does for a
+	 * live request — there is no live request to ask, only a stored key id —
+	 * so a Template Library reference is judged purely on category here.
+	 * That is the axis #1032 is about (a category the requester's role never
+	 * had), and it is the axis get_current_api_key_record()'s replacement
+	 * would otherwise silently skip.
+	 *
+	 * @param string $requester_key_id Stored requested_by_key_id (may be '').
+	 * @return callable function(int[] $ids): true|WP_Error
+	 */
+	public function requester_template_ref_gate( $requester_key_id ) {
+		$requester_key_id = (string) $requester_key_id;
+
+		return function ( array $ids ) use ( $requester_key_id ) {
+			$ids = array_values( array_unique( array_filter( array_map( 'intval', $ids ), static function ( $id ) {
+				return $id > 0;
+			} ) ) );
+			if ( empty( $ids ) ) {
+				return true;
+			}
+
+			$rows = self::fetch_post_ref_rows( $ids );
+			foreach ( $ids as $id ) {
+				$row = $rows[ $id ] ?? null;
+				if ( ! is_array( $row ) ) {
+					return $this->template_ref_not_found_error();
+				}
+
+				$category = self::category_for_post_ref( $id, $row['post_type'], 'elementor-theme' );
+				if ( ! $this->requester_may_read_category( $requester_key_id, $category ) ) {
+					return $this->template_ref_not_found_error();
+				}
+			}
+
+			return true;
+		};
+	}
+
+	/**
 	 * refuse_if_template_refs_unreadable()'s own logic, exposed as a bare
 	 * callable for callers that inject a gate into ANOTHER object rather
 	 * than asking this one directly (Mcpwp_Elementor_Basic et al. via
@@ -2769,11 +2829,17 @@ trait Mcpwp_Api_Auth {
 	 * scanning the outer envelope too would just re-walk the same bytes
 	 * twice under a route this method cannot judge a category for anyway.
 	 *
-	 * WebMCP (#1038): when that surface lands, its own dispatch point must
-	 * call this same method (or route through verify_api_key() the way
-	 * every other surface here does) — it is the one place a reference
-	 * hiding in an arbitrary argument gets caught, and it is public for
-	 * exactly this reason.
+	 * WebMCP (#1038, merged), the /batch and /mcp sub-request fast path
+	 * (verify_api_key_auth_only()), OAuth bearer callers and mumcp.com
+	 * broker callers: none of these call this method directly. All five
+	 * verdict-computing paths in this trait share ONE tail,
+	 * check_post_naming_params_category(), and IT is what calls this method
+	 * (see that method's own docblock) — round 3's adversarial review found
+	 * that four of the five short-circuited compute_api_key_verdict() before
+	 * ever reaching this method's OWN call site there, so the scan ran only
+	 * for a plain local X-API-Key request. Chaining from the shared tail
+	 * instead means a sixth verdict path added later inherits this gate for
+	 * free rather than silently missing it the same way.
 	 *
 	 * Pre-existing-reference exemption (#1032 round 2, NIT — avoids a
 	 * designer lock-out without opening a hole): a reference already
@@ -2801,6 +2867,20 @@ trait Mcpwp_Api_Auth {
 			return true;
 		}
 
+		// #1032 round 3 NIT: a GET/HEAD request never persists anything, so
+		// there is nothing here for a NEW reference to be smuggled INTO — the
+		// read side is guarded separately (render_with_template_gate()'s
+		// nested-doc redaction, install_template_shortcode_guard()'s
+		// pre_do_shortcode_tag filter). Scanning a GET's query string bought
+		// no security and only risked a false-positive refusal on an
+		// unrelated `?search=` term that happens to look like a shortcode.
+		// The #1024 declared-param check this method is chained after
+		// (check_post_naming_params_category()) still runs for every method.
+		$http_method = method_exists( $request, 'get_method' ) ? strtoupper( (string) $request->get_method() ) : 'POST';
+		if ( in_array( $http_method, array( 'GET', 'HEAD' ), true ) ) {
+			return true;
+		}
+
 		$params = method_exists( $request, 'get_params' ) ? $request->get_params() : null;
 		if ( ! is_array( $params ) || empty( $params ) ) {
 			return true;
@@ -2815,11 +2895,9 @@ trait Mcpwp_Api_Auth {
 			);
 		}
 
-		$budget = array( 'nodes' => 0 );
-		$ids    = Mcpwp_Elementor_Template_Refs::find_ids_in_value(
+		$ids = Mcpwp_Elementor_Template_Refs::find_ids_in_value(
 			$params,
-			self::template_ref_scan_max_depth(),
-			$budget
+			self::template_ref_scan_max_depth()
 		);
 		if ( is_wp_error( $ids ) ) {
 			return $ids;
@@ -2845,6 +2923,77 @@ trait Mcpwp_Api_Auth {
 	}
 
 	/**
+	 * Per-route override for preexisting_template_ref_ids(): the subset of
+	 * get_post_ref_param_map()'s SCALAR param names, for a given route
+	 * prefix, that identify a post whose CONTENT this request is actually
+	 * about to write — as opposed to a scalar param resolved only so the
+	 * #1024 guard can confirm the caller may see it (a link target read for
+	 * its URL/title, a context post). A route absent here exempts every
+	 * declared scalar param's stored refs (unchanged behaviour); that is
+	 * correct for the overwhelming majority of routes, where the single
+	 * declared scalar IS the post being written, or (a clone's source_id)
+	 * becomes the written post's content verbatim.
+	 *
+	 * #1032 round 3 (adversarial review): /content-graph/apply-link is the
+	 * route this mattered for in practice. apply_internal_link() reads
+	 * target_id only for get_permalink()/get_the_title() — it never writes
+	 * to it — while an attacker-controlled `anchor` string (wp_strip_all_tags()
+	 * does not touch a bracket shortcode) is appended to source_id's
+	 * post_content. Exempting target_id's own stored template refs let an
+	 * unrelated, legitimately-pre-existing reference on the TARGET post
+	 * launder a brand-new `[elementor-template id="…"]` the request was
+	 * writing into the SOURCE post's content.
+	 *
+	 * @return array<string,array<string>> Route prefix => written scalar param names.
+	 */
+	protected static function written_post_ref_scalar_overrides() {
+		return array(
+			'/content-graph/apply-link'  => array( 'source_id' ),
+			'/content-graph/suggestions' => array(), // Read-only: nothing is written.
+		);
+	}
+
+	/**
+	 * The post ids this request is actually about to write to, for
+	 * preexisting_template_ref_ids()'s exemption set: every per-item id
+	 * (a bulk update touches each one) plus whichever declared scalar ids
+	 * written_post_ref_scalar_overrides() says are write targets for this
+	 * route (or, absent an override, every declared scalar id — see that
+	 * method's own docblock).
+	 *
+	 * @param WP_REST_Request $request    Request object.
+	 * @param array            $refs       collect_post_refs()'s resolved 'scalar'/'items' arrays.
+	 * @return int[]
+	 */
+	protected function written_post_ref_target_ids( $request, array $refs ) {
+		$scalar = $refs['scalar'];
+
+		if ( is_object( $request ) && method_exists( $request, 'get_route' ) ) {
+			$route = $this->normalize_route_for_authorization( (string) $request->get_route() );
+			$path  = ( 0 === strpos( $route, '/mcpwp/v1' ) ) ? substr( $route, strlen( '/mcpwp/v1' ) ) : $route;
+
+			foreach ( self::written_post_ref_scalar_overrides() as $prefix => $written_specs ) {
+				if ( $path === $prefix || 0 === strpos( $path, $prefix . '/' ) ) {
+					$params = method_exists( $request, 'get_params' ) ? $request->get_params() : array();
+					$params = is_array( $params ) ? $params : array();
+
+					$scalar = array();
+					foreach ( $written_specs as $spec ) {
+						foreach ( $this->extract_post_ref_values( $params, $spec ) as $value ) {
+							if ( is_numeric( $value ) && (int) $value > 0 ) {
+								$scalar[] = (int) $value;
+							}
+						}
+					}
+					break;
+				}
+			}
+		}
+
+		return array_values( array_unique( array_merge( $scalar, $refs['items'] ) ) );
+	}
+
+	/**
 	 * The Template Library ids already present on this request's declared
 	 * target post(s), BEFORE this write runs — the exemption set
 	 * check_request_template_refs() subtracts from what it finds in the
@@ -2858,7 +3007,8 @@ trait Mcpwp_Api_Auth {
 	 * pure create, e.g. POST /posts) has no pre-existing content to exempt
 	 * anything against, so every reference the payload introduces is new by
 	 * definition — the empty array this returns is the correct exemption
-	 * set, not a gap.
+	 * set, not a gap. written_post_ref_target_ids() narrows the target set
+	 * further, to posts this request actually writes (see its own docblock).
 	 *
 	 * @param WP_REST_Request $request Request object.
 	 * @return int[] Ids already referenced by the target post(s)' stored
@@ -2870,10 +3020,7 @@ trait Mcpwp_Api_Auth {
 			return array();
 		}
 
-		$target_ids = array_values( array_unique( array_merge(
-			$resolution['refs']['scalar'],
-			$resolution['refs']['items']
-		) ) );
+		$target_ids = $this->written_post_ref_target_ids( $request, $resolution['refs'] );
 		if ( empty( $target_ids ) ) {
 			return array();
 		}
@@ -3667,6 +3814,85 @@ trait Mcpwp_Api_Auth {
 		}
 
 		return null;
+	}
+
+	/**
+	 * Look up a scoped API key's record BY ITS STORED id — not by presenting
+	 * the credential — for the one case where a request needs a PAST
+	 * principal's current role/category, not the caller's own: replaying a
+	 * post_content_update approval against the identity that PROPOSED it
+	 * (#1032 round 3). An approval's `requested_by_key_id` is exactly the id
+	 * normalize_api_key_record() puts on this record.
+	 *
+	 * A revoked key is deliberately excluded (returns null, same as a
+	 * missing one) rather than returning its last-known role: a revoked
+	 * key's already-queued proposal must not keep whatever access it had at
+	 * request time.
+	 *
+	 * @param string $key_id Stored key id.
+	 * @return array|null Normalized key record, or null if unknown/revoked.
+	 */
+	protected function find_scoped_api_key_by_id( $key_id ) {
+		$key_id = sanitize_key( (string) $key_id );
+		if ( '' === $key_id ) {
+			return null;
+		}
+
+		foreach ( $this->get_scoped_api_keys_raw() as $key ) {
+			if ( ! is_array( $key ) || ! empty( $key['revoked_at'] ) ) {
+				continue;
+			}
+			if ( isset( $key['id'] ) && sanitize_key( (string) $key['id'] ) === $key_id ) {
+				return $this->normalize_api_key_record( $key );
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * Whether a PAST principal — identified only by the key id an approval
+	 * recorded at request time, e.g. `requested_by_key_id` — may read
+	 * $category, for re-checking a queued write against its REQUESTER
+	 * rather than whoever is applying it now (#1032 round 3). Deliberately
+	 * separate from caller_may_read_category(): that method always reads
+	 * $this->get_current_api_key_record(), which at apply time is the
+	 * APPROVING admin — using it here would let an admin's own unrestricted
+	 * visibility launder a reference a restricted requester was never
+	 * allowed to introduce, defeating the entire point of re-checking.
+	 *
+	 * Still honours the site-wide disabled-category toggle first: a
+	 * category the ADMIN disabled after the request was queued must block
+	 * the apply even if the requester's own role would have allowed it.
+	 *
+	 * An empty $key_id (legacy caller, admin-AJAX origin — no stored
+	 * identity) is treated as unrestricted, matching
+	 * caller_may_read_category()'s own null-key-record behaviour. An id
+	 * that no longer resolves to a live key (revoked since the request was
+	 * queued) fails CLOSED: nothing is left to prove that principal still
+	 * has the access it needed, so it must not be assumed.
+	 *
+	 * @param string $key_id   Stored requester key id (may be '').
+	 * @param string $category Tool category slug.
+	 * @return bool
+	 */
+	protected function requester_may_read_category( $key_id, $category ) {
+		$disabled_categories = get_option( 'mcpwp_disabled_tool_categories', array() );
+		if ( is_array( $disabled_categories ) && in_array( $category, $disabled_categories, true ) ) {
+			return false;
+		}
+
+		$key_id = (string) $key_id;
+		if ( '' === $key_id ) {
+			return true;
+		}
+
+		$key_record = $this->find_scoped_api_key_by_id( $key_id );
+		if ( ! is_array( $key_record ) ) {
+			return false;
+		}
+
+		return $this->key_allows_category( $key_record, $category );
 	}
 
 	/**

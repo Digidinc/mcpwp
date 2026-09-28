@@ -162,12 +162,36 @@ trait Mcpwp_Logging {
 	}
 
 	/**
+	 * Cap on the raw request body get_loggable_request_data() will hand to
+	 * redact_log_data()/wp_json_encode() (#1032 round 3 adversarial review —
+	 * a memory-peak crash was traced to logging a ~4.5MB request body):
+	 * redact_log_data() deep-copies the ENTIRE decoded structure and
+	 * log_activity() then wp_json_encode()s the result — two full copies of
+	 * the whole payload — before any per-field truncation runs. Checked
+	 * against the raw body BEFORE any of that work starts, so an oversized
+	 * request costs one strlen(), not two full copies of it.
+	 *
+	 * @return int Bytes.
+	 */
+	protected static function loggable_request_max_bytes() {
+		return 1 * 1024 * 1024;
+	}
+
+	/**
 	 * Get loggable request data (excluding sensitive fields).
 	 *
 	 * @param WP_REST_Request $request Request object.
 	 * @return array Loggable data.
 	 */
 	protected function get_loggable_request_data( $request ) {
+		$raw_body = method_exists( $request, 'get_body' ) ? (string) $request->get_body() : '';
+		if ( strlen( $raw_body ) > self::loggable_request_max_bytes() ) {
+			return array(
+				'truncated'      => true,
+				'original_bytes' => strlen( $raw_body ),
+			);
+		}
+
 		// Returned whole: truncation happens after redaction, in log_activity().
 		return $request->get_params();
 	}

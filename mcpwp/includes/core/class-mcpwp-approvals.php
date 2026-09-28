@@ -1392,6 +1392,34 @@ class Mcpwp_Approvals {
 			$content = isset( $request['payload']['after_content'] ) ? (string) $request['payload']['after_content'] : '';
 		}
 
+		// #1032 round 3: re-run the Template Library reference scan on the
+		// content this write is ABOUT TO PERSIST, against the REQUESTER's
+		// own permissions (the closure the REST controller built from
+		// requested_by_key_id) — never the admin applying it, whose own
+		// category access would otherwise launder a reference the
+		// requester was never allowed to introduce. Pre-existing refs
+		// already on the post right now (before THIS write lands) are
+		// exempt, same "don't re-judge what was already there" rule
+		// check_request_template_refs() applies to every other write path.
+		if ( class_exists( 'Mcpwp_Elementor_Template_Refs' ) ) {
+			$template_ref_gate = is_array( $context ) && isset( $context['template_ref_gate'] ) && is_callable( $context['template_ref_gate'] )
+				? $context['template_ref_gate']
+				: null;
+
+			if ( $template_ref_gate ) {
+				$preexisting_ids = Mcpwp_Elementor_Template_Refs::ids_in_text( (string) $post->post_content );
+				$found_ids       = Mcpwp_Elementor_Template_Refs::ids_in_text( $content );
+				$new_ids         = array_values( array_diff( $found_ids, $preexisting_ids ) );
+
+				if ( ! empty( $new_ids ) ) {
+					$gate_result = call_user_func( $template_ref_gate, $new_ids );
+					if ( is_wp_error( $gate_result ) ) {
+						return $gate_result;
+					}
+				}
+			}
+		}
+
 		$result = wp_update_post(
 			array(
 				'ID'           => $post_id,

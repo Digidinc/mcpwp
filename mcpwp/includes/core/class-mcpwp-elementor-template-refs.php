@@ -204,6 +204,37 @@ final class Mcpwp_Elementor_Template_Refs {
 	}
 
 	/**
+	 * Round-3 adversarial review NIT: every OTHER reference key
+	 * (`template_id`, `templateID`, the `_template`/`template_id` suffix
+	 * convention) is Elementor-specific enough by name that a bare match
+	 * anywhere in a request tree is a reasonable bet. `popup` is not — it is
+	 * an ordinary English word a completely unrelated route param could use
+	 * (a form field, a UI-state flag) with no Elementor involvement at all,
+	 * so treating it as a template reference unconditionally, EVERYWHERE the
+	 * request-body-wide chokepoint walks (not just inside an Elementor
+	 * `settings` object), is broader than the one real case it exists for:
+	 * Elementor Pro's Popup dynamic tag, whose `__dynamic__`-decoded settings
+	 * are shaped exactly `{"action":"open","popup":"N"}`
+	 * (`modules/popup/tag.php`). Requiring that sibling shape — an `action`
+	 * key in the SAME array equal to `'open'` — keeps the real case caught
+	 * while an unrelated `popup` param elsewhere in a request never matches.
+	 *
+	 * A no-op for every key other than the bare `'popup'` match: the suffix
+	 * and other exact-name matches stay unconditional, as they already were.
+	 *
+	 * @param string $key           The matched key.
+	 * @param array  $sibling_array The array $key was found in (siblings live here).
+	 * @return bool
+	 */
+	private static function is_reference_key_in_context( $key, array $sibling_array ) {
+		if ( 'popup' !== $key ) {
+			return true;
+		}
+
+		return isset( $sibling_array['action'] ) && 'open' === $sibling_array['action'];
+	}
+
+	/**
 	 * @param string $haystack Already-lowercased subject.
 	 * @param string $needle   Already-lowercased suffix.
 	 * @return bool
@@ -438,7 +469,7 @@ final class Mcpwp_Elementor_Template_Refs {
 				if ( $budget['exceeded'] ) {
 					return;
 				}
-				if ( is_string( $key ) && self::is_reference_key( $key ) ) {
+				if ( is_string( $key ) && self::is_reference_key( $key ) && self::is_reference_key_in_context( $key, $value ) ) {
 					$id = self::coerce_id( $sub_value );
 					if ( $id > 0 ) {
 						$found[] = $id;
