@@ -5,6 +5,20 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.14.8](https://github.com/Mumega-com/mcpwp/compare/v3.14.7...v3.14.8) (2026-09-28)
+
+
+### Features
+
+* **webmcp:** expose curated MCPWP tools to the browser agent in wp-admin ([#1038](https://github.com/Mumega-com/mcpwp/issues/1038)) ([d17d402](https://github.com/Mumega-com/mcpwp/commit/d17d4023613db7f06103a9e636326d30635d61ad))
+
+
+### Bug Fixes
+
+* **auth:** deny-all for empty-category custom-role API keys ([#1043](https://github.com/Mumega-com/mcpwp/issues/1043)) ([4e717ea](https://github.com/Mumega-com/mcpwp/commit/4e717eab158eba90c4782242526ff2791b02e84c))
+* **auth:** filter /action-log entries by tool and post-type category ([#1036](https://github.com/Mumega-com/mcpwp/issues/1036)) ([3cc8dd4](https://github.com/Mumega-com/mcpwp/commit/3cc8dd45652c44e99cb4df0688efb75c874d5f31))
+* **auth:** gate embedded Elementor Template Library references ([#1040](https://github.com/Mumega-com/mcpwp/issues/1040)) ([04b5743](https://github.com/Mumega-com/mcpwp/commit/04b5743a55fca86ede05974132213b50c2133f40))
+
 ## [3.14.7](https://github.com/Mumega-com/mcpwp/compare/v3.14.6...v3.14.7) (2026-09-28)
 
 
