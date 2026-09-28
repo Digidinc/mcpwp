@@ -5,6 +5,20 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.14.6](https://github.com/Mumega-com/mcpwp/compare/v3.14.5...v3.14.6) (2026-09-28)
+
+
+### Bug Fixes
+
+* **auth,mcp:** not-found parity for guard_non_public_post() and mcpwp:// scheme matching ([#1028](https://github.com/Mumega-com/mcpwp/issues/1028)) ([fedfe4c](https://github.com/Mumega-com/mcpwp/commit/fedfe4ccae11daa3378cfb0bad8648eae25cbf9b))
+* **auth:** gate approvals/events/site-state by target category, not route ([#1029](https://github.com/Mumega-com/mcpwp/issues/1029)) ([2298a91](https://github.com/Mumega-com/mcpwp/commit/2298a91c8583b34117c91f76696a3cf3610923ce))
+
+### Changed for existing API keys
+
+* **Approvals follow the target's category.** `/approvals`, `wp_list_approvals`, `/events`, `/site-state` and `/content-coherence` counts only show approvals whose route category and target post type the key can read (a product delete needs `woocommerce`, an Elementor template needs `elementor-templates`). Approvals whose target can't be classified are visible only to unrestricted keys ([#1025](https://github.com/Mumega-com/mcpwp/issues/1025)).
+* **Media needs `media`.** `/post-meta/{attachment}` and `/fetch?id={attachment}` now need both `content` and `media`. Built-in roles are unaffected ([#1025](https://github.com/Mumega-com/mcpwp/issues/1025)).
+* **Resource addresses match exactly.** `mcpwp://` resource URIs are case-sensitive and a trailing slash no longer resolves ([#1018](https://github.com/Mumega-com/mcpwp/issues/1018)).
+
 ## [3.14.5](https://github.com/Mumega-com/mcpwp/compare/v3.14.4...v3.14.5) (2026-09-28)
 
 
