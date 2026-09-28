@@ -341,7 +341,17 @@ class Mcpwp_REST_Content_Graph extends Mcpwp_REST_API {
 			return $source_guard;
 		}
 
-		if ( ! $target || 'publish' !== $target->post_status ) {
+		// Category-parity guard (#1024, follow-up to #1022's WARN-2): a source
+		// of a gated type (a WooCommerce product, an Elementor template) must
+		// read exactly like a missing one — the same existence-oracle concern
+		// the status guard above protects against, applied to category via
+		// Mcpwp_Api_Auth::category_for_post_type(). Checked, and refused,
+		// before anything about the source is read or an approval is queued.
+		if ( ! $this->caller_may_read_category( $this->category_for_post_type( $source->post_type ) ) ) {
+			return $this->error_response( 'not_found', 'Source post not found.', 404 );
+		}
+
+		if ( ! $target || 'publish' !== $target->post_status || ! $this->caller_may_read_category( $this->category_for_post_type( $target->post_type ) ) ) {
 			return $this->error_response( 'target_not_found', 'Target post must be an existing published graph node.', 404 );
 		}
 

@@ -36,6 +36,30 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 	}
 
 	/**
+	 * Authenticate, then wire the category check into Mcpwp_Elementor_Basic
+	 * (#1024, follow-up to #1022's WARN-2: elementor_library/elementor_snippet
+	 * read and written through the generic /elementor door needed only the
+	 * coarse 'elementor' category, bypassing their own elementor-templates/
+	 * elementor-theme category — mirrors Mcpwp_REST_Posts::check_permission()).
+	 *
+	 * @param WP_REST_Request $request Request object.
+	 * @return bool|WP_Error
+	 */
+	public function check_permission( $request ) {
+		$result = parent::check_permission( $request );
+
+		if ( true === $result ) {
+			$this->elementor->set_category_allowed_callback(
+				function ( $post_type ) {
+					return $this->caller_may_read_category( $this->category_for_post_type( $post_type ) );
+				}
+			);
+		}
+
+		return $result;
+	}
+
+	/**
 	 * Register routes.
 	 */
 	public function register_routes() {
@@ -1380,8 +1404,10 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 			$processed_ids[] = $post_id;
 
 			// The same gate the single-post route applies: never a type this
-			// plugin does not treat as Elementor content.
-			if ( ! in_array( get_post_type( $post_id ), $scope['post_types'], true ) ) {
+			// plugin does not treat as Elementor content, and never a type
+			// this caller's category cannot read (#1024).
+			$candidate_type = get_post_type( $post_id );
+			if ( ! in_array( $candidate_type, $scope['post_types'], true ) || $this->find_replace_category_denied( $candidate_type ) ) {
 				continue;
 			}
 
@@ -1465,7 +1491,11 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 				$post = get_post( $wanted );
 				if ( ! $post ) {
 					$reason = 'not_found';
-				} elseif ( ! in_array( $post->post_type, $scope['post_types'], true ) ) {
+				} elseif ( ! in_array( $post->post_type, $scope['post_types'], true ) || $this->find_replace_category_denied( $post->post_type ) ) {
+					// Category-denied reads the same as "type not supported" here
+					// (#1024) — never a distinct reason, so naming an id whose
+					// only problem is a disabled/unheld category discloses
+					// nothing beyond what the caller already knew by naming it.
 					$reason = 'type_not_supported';
 				} elseif ( empty( get_post_meta( $wanted, '_elementor_data', true ) ) ) {
 					// empty(), not a (string) cast: array-stored data is data (#845).
@@ -1524,6 +1554,29 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 		// and write. A type this plugin cannot read back through its own
 		// tools must not be rewritable through this one.
 		return array( 'page', 'post', 'elementor_library', 'elementor_snippet' );
+	}
+
+	/**
+	 * Whether $post_type needs a category the caller does not hold, ON TOP
+	 * of the /elementor/find-replace route's own 'elementor' category —
+	 * the SAME exemption Mcpwp_Elementor_Basic::validate_post() applies
+	 * (#1024, follow-up to #1022's WARN-2): page/post are this feature's
+	 * base case and need nothing more (the designer role holds 'elementor'
+	 * but deliberately not 'content'); elementor_library/elementor_snippet
+	 * are ALSO rewritable here but keep their own narrower category
+	 * (elementor-templates/elementor-theme —
+	 * Mcpwp_Api_Auth::category_for_post_type()), so a site-wide toggle that
+	 * disables just those still blocks a find/replace across them.
+	 *
+	 * @param string $post_type Candidate post type.
+	 * @return bool
+	 */
+	private function find_replace_category_denied( $post_type ) {
+		if ( in_array( $post_type, array( 'page', 'post' ), true ) ) {
+			return false;
+		}
+
+		return ! $this->caller_may_read_category( $this->category_for_post_type( $post_type ) );
 	}
 
 	/**
@@ -1626,6 +1679,19 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 					),
 					400
 				);
+			}
+
+			// Naming a whole post type up front is not an existence oracle
+			// (the caller named it, nothing about a specific record is
+			// disclosed either way) — same 403 forbidden_category shape
+			// guard_post_type_category_for_type() already uses for this
+			// exact situation elsewhere (#1024). page/post are exempt: see
+			// find_replace_category_denied()'s docblock.
+			if ( ! in_array( $type, array( 'page', 'post' ), true ) ) {
+				$category_denied = $this->guard_post_type_category_for_type( $type );
+				if ( is_wp_error( $category_denied ) ) {
+					return $category_denied;
+				}
 			}
 
 			return array(

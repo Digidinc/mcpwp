@@ -18,6 +18,34 @@ if ( ! defined( 'ABSPATH' ) ) {
 class Mcpwp_REST_Blocks extends Mcpwp_REST_API {
 
 	/**
+	 * Whether $post's type needs a category the caller does not hold, ON TOP
+	 * of the /blocks route's own 'gutenberg' category (get_route_category_map()).
+	 *
+	 * page/post are this door's base case and need nothing more — the
+	 * designer role holds 'gutenberg' but deliberately not 'content', and
+	 * must still be able to build a page's blocks (same exemption
+	 * Mcpwp_Elementor_Basic::validate_post() applies for the same reason,
+	 * #1024). get_blocks()/set_blocks()/patch_block_section() resolve ANY
+	 * post by numeric ID with no type restriction at all — unlike
+	 * /elementor, this door had no allowed-types list to begin with — so a
+	 * gutenberg-only key could read or rewrite a WooCommerce product's raw
+	 * post_content, or an Elementor template's, straight through this
+	 * generic surface. Any type other than page/post gets the SAME
+	 * category its own dedicated routes already require
+	 * (Mcpwp_Api_Auth::category_for_post_type()).
+	 *
+	 * @param WP_Post $post Resolved post.
+	 * @return bool
+	 */
+	private function blocks_post_category_denied( WP_Post $post ) {
+		if ( in_array( $post->post_type, array( 'page', 'post' ), true ) ) {
+			return false;
+		}
+
+		return ! $this->caller_may_read_category( $this->category_for_post_type( $post->post_type ) );
+	}
+
+	/**
 	 * Register routes.
 	 */
 	public function register_routes() {
@@ -196,6 +224,12 @@ class Mcpwp_REST_Blocks extends Mcpwp_REST_API {
 			return $denied;
 		}
 
+		// Category gate (#1024): same 404 for a post of a type this caller's
+		// category cannot read — see blocks_post_category_denied().
+		if ( $this->blocks_post_category_denied( $post ) ) {
+			return $this->error_response( 'not_found', 'Post not found.', 404 );
+		}
+
 		$content = $post->post_content;
 		$blocks  = parse_blocks( $content );
 
@@ -239,6 +273,13 @@ class Mcpwp_REST_Blocks extends Mcpwp_REST_API {
 		$source_guard = $this->guard_non_public_post( $post, 'Post not found.' );
 		if ( is_wp_error( $source_guard ) ) {
 			return $source_guard;
+		}
+
+		// Category gate (#1024): same 404 for a post of a type this caller's
+		// category cannot read — see blocks_post_category_denied(). Checked
+		// before any body is read or an approval is queued.
+		if ( $this->blocks_post_category_denied( $post ) ) {
+			return $this->error_response( 'not_found', 'Post not found.', 404 );
 		}
 
 		$blocks  = $request->get_param( 'blocks' );
@@ -594,6 +635,12 @@ class Mcpwp_REST_Blocks extends Mcpwp_REST_API {
 		$source_guard = $this->guard_non_public_post( $post, 'Post not found.' );
 		if ( is_wp_error( $source_guard ) ) {
 			return $source_guard;
+		}
+
+		// Category gate (#1024): same 404 for a post of a type this caller's
+		// category cannot read — see blocks_post_category_denied().
+		if ( $this->blocks_post_category_denied( $post ) ) {
+			return $this->error_response( 'not_found', 'Post not found.', 404 );
 		}
 
 		$selector = $request->get_param( 'selector' );
