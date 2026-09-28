@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Bug Fixes
 
 * **auth:** gate post-meta/content/fetch/posts by resolved post type, not route ([#1022](https://github.com/Mumega-com/mcpwp/issues/1022)) ([150f9b4](https://github.com/Mumega-com/mcpwp/commit/150f9b4377b08b03da075eb58451e7298634ee37))
+* **content:** deleting a WooCommerce product (or any custom post type) through `/posts/{id}` or `/content` without `force` now really moves it to the trash; before, it was deleted permanently with no approval while the response said "moved to trash". Permanent deletes need approval as intended ([#1023](https://github.com/Mumega-com/mcpwp/issues/1023)).
+
+### Changed for existing API keys
+
+* **Post types follow their own category.** `/post-meta`, `/posts`, `/content`, `/fetch` and featured images now check the category that owns the post type: WooCommerce products and orders need `woocommerce`, Elementor templates need `elementor-templates` or `elementor-theme`, LearnPress and Events Calendar types need their categories, and private custom types need Admin. A key without that category gets "not found". Content keys can no longer read post revisions through `/post-meta` ([#1020](https://github.com/Mumega-com/mcpwp/issues/1020)).
 
 ## [3.14.4](https://github.com/Mumega-com/mcpwp/compare/v3.14.3...v3.14.4) (2026-09-27)
 
