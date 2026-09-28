@@ -225,7 +225,7 @@ final class Regression1032TemplateRefGateTest extends TestCase {
 		$refs = Mcpwp_Elementor_Template_Refs::find( $this->tree_with_template_widget( 12 ) );
 		$this->assertCount( 1, $refs );
 		$this->assertSame( 12, $refs[0]['id'] );
-		$this->assertSame( 'template_id', $refs[0]['key'] );
+		$this->assertSame( 'settings', $refs[0]['key'] );
 	}
 
 	public function test_finds_global_widget_top_level_template_id(): void {
@@ -357,6 +357,79 @@ final class Regression1032TemplateRefGateTest extends TestCase {
 
 		$this->assertIsArray( $result, 'A readable template reference must not be refused.' );
 		$this->assertTrue( $result['success'] ?? false );
+	}
+
+	public function test_add_section_does_not_re_judge_a_preexisting_reference_on_the_same_page(): void {
+		// #1032 round 2 false-positives NIT, round 2 of the round-2 fix
+		// itself: check_template_references() (the ROUND-1 per-door check,
+		// called by save_elements_to_page()/set_elementor_data() against the
+		// FULL resulting tree — old content plus the new edit) must ALSO
+		// carry the pre-existing exemption, not just the newer request-body
+		// chokepoint — a rig run surfaced this: without it, add_section()
+		// re-scanned the WHOLE tree (the page's pre-existing gated Template
+		// widget included) and locked a designer key out of adding an
+		// unrelated, reference-free section to a page an admin had already
+		// built.
+		$GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'] = json_encode( $this->tree_with_template_widget( self::ARCHETYPE_ID ) );
+
+		$elementor = new Mcpwp_Elementor_Basic();
+		$elementor->set_category_allowed_callback( function () { return true; } );
+		$elementor->set_template_ref_gate(
+			function ( array $ids ) {
+				return in_array( self::ARCHETYPE_ID, $ids, true )
+					? new WP_Error( 'not_found', 'The requested resource was not found.', array( 'status' => 404, 'hint' => 'A referenced template was not found.' ) )
+					: true;
+			}
+		);
+
+		$unrelated_section = array(
+			'id'       => 'sec00099',
+			'elType'   => 'section',
+			'settings' => array(),
+			'elements' => array(
+				array(
+					'id'         => 'wid00099',
+					'elType'     => 'widget',
+					'widgetType' => 'heading',
+					'settings'   => array( 'title' => 'Nothing to do with any template' ),
+				),
+			),
+		);
+		$result = $elementor->add_section( self::PAGE_ID, array( 'element' => $unrelated_section ) );
+
+		$this->assertIsArray( $result, 'Adding a reference-free section to a page that already held a gated reference must not be locked out.' );
+		$this->assertTrue( $result['success'] ?? false );
+	}
+
+	public function test_add_section_still_refuses_a_new_reference_on_a_page_with_a_preexisting_one(): void {
+		// Companion to the test above: the exemption is per-id, not
+		// per-page.
+		$GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'] = json_encode( $this->tree_with_template_widget( self::ARCHETYPE_ID ) );
+
+		$second_id                                       = self::ARCHETYPE_ID + 700;
+		$GLOBALS['_mcpwp_test_posts'][ $second_id ] = new WP_Post(
+			array(
+				'ID'          => $second_id,
+				'post_type'   => 'elementor_library',
+				'post_title'  => 'Another Gated Section',
+				'post_name'   => 'another-gated-section',
+				'post_status' => 'publish',
+			)
+		);
+
+		$elementor = new Mcpwp_Elementor_Basic();
+		$elementor->set_category_allowed_callback( function () { return true; } );
+		$elementor->set_template_ref_gate(
+			function ( array $ids ) use ( $second_id ) {
+				return in_array( $second_id, $ids, true )
+					? new WP_Error( 'not_found', 'The requested resource was not found.', array( 'status' => 404, 'hint' => 'A referenced template was not found.' ) )
+					: true;
+			}
+		);
+
+		$result = $elementor->add_section( self::PAGE_ID, array( 'element' => $this->tree_with_template_widget( $second_id )[0] ) );
+
+		$this->assertInstanceOf( WP_Error::class, $result, 'A NEW reference (distinct from the one already on the page) must still be refused.' );
 	}
 
 	/**
@@ -683,14 +756,17 @@ final class Regression1032TemplateRefGateTest extends TestCase {
 			array( 'X-API-Key' => $created['key'] )
 		);
 
-		$auth = $controller->check_permission( $request );
-		$this->assertTrue( $auth, 'The route itself (elementor category) must still be reachable.' );
-
+		// #1032 round 2: check_permission() itself now refuses via the
+		// request-body-wide chokepoint (check_request_template_refs()),
+		// before the handler is ever reached — earlier than round 1's own
+		// per-door check, which stays as the second layer (find-replace and
+		// other server-side transformations the request body itself never
+		// shows).
 		$before = $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'];
-		$result = $controller->set_elementor_data( $request );
+		$auth   = $controller->check_permission( $request );
 
-		$this->assertInstanceOf( WP_Error::class, $result );
-		$this->assertSame( 'not_found', $result->get_error_code() );
+		$this->assertInstanceOf( WP_Error::class, $auth );
+		$this->assertSame( 'not_found', $auth->get_error_code() );
 		$this->assertSame( $before, $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'], 'The gated template reference must never reach storage.' );
 	}
 
@@ -884,19 +960,15 @@ final class Regression1032TemplateRefGateTest extends TestCase {
 
 		$theme_builder = new Mcpwp_Theme_Builder();
 		$controller    = new Mcpwp_REST_Theme_Builder( $theme_builder );
-		$created       = $controller->create_scoped_api_key( 'no templates', array( 'read', 'write' ), 'custom', array( 'elementor-theme' ) );
-		$request       = new WP_REST_Request(
-			'POST',
-			'/mcpwp/v1/theme-builder/templates',
-			array(
-				'title'          => 'New Header',
-				'type'           => 'header',
-				'elementor_data' => $this->tree_with_template_widget( self::ARCHETYPE_ID ),
-			),
-			array( 'X-API-Key' => $created['key'] )
-		);
+		$this->force_key_record( $controller, array( 'elementor-theme' ) );
 
-		$this->assertTrue( $controller->check_permission( $request ) );
+		// Wired directly (#1032 round 2: check_permission() would ALSO
+		// refuse this same payload itself, through the request-body
+		// chokepoint, conditionally skipping its own gate-wiring side
+		// effect — irrelevant here, since create_theme_template() is called
+		// directly, below, exercising THIS handler's own round-1 check in
+		// isolation).
+		$theme_builder->set_template_ref_gate( $controller->template_ref_gate() );
 
 		$before_count = count( $GLOBALS['_mcpwp_test_posts'] );
 		$result       = $theme_builder->create_theme_template(
@@ -920,17 +992,22 @@ final class Regression1032TemplateRefGateTest extends TestCase {
 		$GLOBALS['mcpwp_test_did_action']['elementor/loaded'] = 1;
 		$elementor_pro = new Mcpwp_Elementor_Pro();
 		$controller    = new Mcpwp_REST_Elementor_Pro( $elementor_pro );
-		$created       = $controller->create_scoped_api_key( 'no templates', array( 'read', 'write' ), 'custom', array( 'elementor', 'elementor-build' ) );
-		$request       = new WP_REST_Request(
+		$this->force_key_record( $controller, array( 'elementor', 'elementor-build' ) );
+		// Wired directly (#1032 round 2: check_permission() would ALSO
+		// refuse this same payload itself, through the request-body
+		// chokepoint, conditionally skipping its own gate-wiring side
+		// effect — irrelevant here; this test exercises W1's own round-1
+		// fix in isolation).
+		$elementor_pro->set_template_ref_gate( $controller->template_ref_gate() );
+
+		$request = new WP_REST_Request(
 			'POST',
 			'/mcpwp/v1/elementor/landing-page',
 			array(
 				'title'          => 'LP',
 				'elementor_data' => $this->tree_with_template_widget( self::ARCHETYPE_ID ),
-			),
-			array( 'X-API-Key' => $created['key'] )
+			)
 		);
-		$this->assertTrue( $controller->check_permission( $request ) );
 
 		$before_count = count( $GLOBALS['_mcpwp_test_posts'] );
 		$result       = $controller->create_landing_page( $request );
@@ -1008,7 +1085,10 @@ final class Regression1032TemplateRefGateTest extends TestCase {
 			),
 			array( 'X-API-Key' => $created['key'] )
 		);
-		$this->assertTrue( $controller->check_permission( $request ) );
+		// #1032 round 2: check_permission() may now ALSO refuse this same
+		// content via the request-body chokepoint — side effect wiring only
+		// here; the handler call below is unconditional.
+		$controller->check_permission( $request );
 
 		$result = $controller->create_post( $request );
 
@@ -1028,7 +1108,7 @@ final class Regression1032TemplateRefGateTest extends TestCase {
 			),
 			array( 'X-API-Key' => $created['key'] )
 		);
-		$this->assertTrue( $controller->check_permission( $request ) );
+		$controller->check_permission( $request );
 
 		$result = $controller->update_page( $request );
 
@@ -1149,11 +1229,278 @@ final class Regression1032TemplateRefGateTest extends TestCase {
 			),
 			array( 'X-API-Key' => $created['key'] )
 		);
-		$this->assertTrue( $controller->check_permission( $request ) );
+		// #1032 round 2: check_permission() itself now refuses this via the
+		// request-body chokepoint, earlier than the handler's own round-1
+		// check — both must agree, so asserting on check_permission()'s own
+		// verdict here proves the SAME 'elementor-theme' classification rule
+		// governs both layers.
+		$auth = $controller->check_permission( $request );
 
-		$result = $controller->set_elementor_data( $request );
+		$this->assertInstanceOf( WP_Error::class, $auth, 'An ordinary section template must still require elementor-templates.' );
+		$this->assertSame( 'not_found', $auth->get_error_code() );
+	}
 
-		$this->assertInstanceOf( WP_Error::class, $result, 'An ordinary section template must still require elementor-templates.' );
-		$this->assertSame( 'not_found', $result->get_error_code() );
+	// =========================================================================
+	// Adversarial review round 2 — the request-body-wide chokepoint
+	// (Mcpwp_Api_Auth::check_request_template_refs()). The mechanism is
+	// route-agnostic (it walks $request->get_params() regardless of which
+	// controller/handler eventually runs), so these use whichever loaded
+	// controller matches the route's own category — the SAME check_permission()
+	// every REST controller shares, not a per-controller reimplementation.
+	// =========================================================================
+
+	private function assert_request_refused( object $controller, WP_REST_Request $request, string $context = '' ): void {
+		$auth = $controller->check_permission( $request );
+		$this->assertInstanceOf( WP_Error::class, $auth, $context );
+		$this->assertSame( 'not_found', $auth->get_error_code(), $context );
+		$this->assertSame( 'A referenced template was not found.', $auth->get_error_data()['hint'] ?? null, $context );
+	}
+
+	private function assert_request_allowed( object $controller, WP_REST_Request $request, string $context = '' ): void {
+		$this->assertTrue( $controller->check_permission( $request ), $context );
+	}
+
+	/**
+	 * @return array{0:object,1:WP_REST_Request}
+	 */
+	private function authed_request( object $controller, array $categories, string $method, string $route, array $params ): array {
+		$created = $controller->create_scoped_api_key( 'test', array( 'read', 'write' ), 'custom', $categories );
+		$request = new WP_REST_Request( $method, $route, $params, array( 'X-API-Key' => $created['key'] ) );
+		return array( $controller, $request );
+	}
+
+	public function test_request_scan_catches_sidebar_text_widget_shortcode(): void {
+		// A classic sidebar's Text widget instance — no Elementor involved
+		// at all. /widgets is 'site' category.
+		list( $controller, $request ) = $this->authed_request(
+			new Mcpwp_REST_Posts(),
+			array( 'site' ), // no elementor-templates
+			'PUT',
+			'/mcpwp/v1/widgets/text-1',
+			array(
+				'instance' => array(
+					'title' => 'About',
+					'text'  => 'Welcome! [elementor-template id="' . self::ARCHETYPE_ID . '"]',
+				),
+			)
+		);
+		$this->assert_request_refused( $controller, $request, 'A sidebar Text widget instance is not Elementor data, but the shortcode inside it must still be caught.' );
+	}
+
+	public function test_request_scan_catches_pro_elementor_library_widget_template_id(): void {
+		// A classic sidebar's Elementor Pro "Elementor Library" widget —
+		// its instance settings carry template_id directly, not inside any
+		// _elementor_data tree.
+		list( $controller, $request ) = $this->authed_request(
+			new Mcpwp_REST_Posts(),
+			array( 'site' ),
+			'PUT',
+			'/mcpwp/v1/widgets/elementor-library-2',
+			array( 'instance' => array( 'template_id' => self::ARCHETYPE_ID ) )
+		);
+		$this->assert_request_refused( $controller, $request );
+	}
+
+	public function test_request_scan_catches_woocommerce_product_description(): void {
+		list( $controller, $request ) = $this->authed_request(
+			new Mcpwp_REST_Posts(),
+			array( 'woocommerce' ),
+			'POST',
+			'/mcpwp/v1/woocommerce/products',
+			array(
+				'name'              => 'Widget',
+				'description'       => 'Full desc [elementor-template id="' . self::ARCHETYPE_ID . '"]',
+				'short_description' => 'Short desc',
+			)
+		);
+		$this->assert_request_refused( $controller, $request );
+	}
+
+	public function test_request_scan_catches_blocks_queued_for_approval(): void {
+		list( $controller, $request ) = $this->authed_request(
+			new Mcpwp_REST_Posts(),
+			array( 'gutenberg' ),
+			'PUT',
+			'/mcpwp/v1/blocks/' . self::PAGE_ID,
+			array( 'blocks' => '<!-- wp:paragraph --><p>[elementor-template id="' . self::ARCHETYPE_ID . '"]</p><!-- /wp:paragraph -->' )
+		);
+		$this->assert_request_refused( $controller, $request );
+	}
+
+	public function test_request_scan_catches_content_graph_apply_link_anchor(): void {
+		list( $controller, $request ) = $this->authed_request(
+			new Mcpwp_REST_Posts(),
+			array( 'content' ),
+			'POST',
+			'/mcpwp/v1/content-graph/apply-link',
+			array(
+				'source_id' => self::PAGE_ID,
+				'target_id' => self::PAGE_ID,
+				'anchor'    => 'see [elementor-template id="' . self::ARCHETYPE_ID . '"]',
+			)
+		);
+		$this->assert_request_refused( $controller, $request );
+	}
+
+	public function test_request_scan_catches_media_description(): void {
+		list( $controller, $request ) = $this->authed_request(
+			new Mcpwp_REST_Posts(),
+			array( 'media' ),
+			'PUT',
+			'/mcpwp/v1/media/9',
+			array( 'description' => 'Photo credit [elementor-template id="' . self::ARCHETYPE_ID . '"]' )
+		);
+		$this->assert_request_refused( $controller, $request );
+	}
+
+	public function test_request_scan_catches_popup_dynamic_tag(): void {
+		$payload = urlencode( json_encode( array( 'action' => 'open', 'popup' => (string) self::ARCHETYPE_ID ) ) );
+		list( $controller, $request ) = $this->authed_request(
+			new Mcpwp_REST_Posts(),
+			array( 'site' ),
+			'PUT',
+			'/mcpwp/v1/widgets/button-1',
+			array( 'instance' => array( 'link' => '[elementor-tag id="abc1234" name="popup" settings="' . $payload . '"]' ) )
+		);
+		$this->assert_request_refused( $controller, $request, 'The Popup dynamic tag names a template via its own settings.popup key.' );
+	}
+
+	public function test_request_scan_allows_escaped_shortcode(): void {
+		// [[elementor-template ...]] is WordPress's own escape syntax — never
+		// processed, so it names no template at all.
+		list( $controller, $request ) = $this->authed_request(
+			new Mcpwp_REST_Posts(),
+			array( 'site' ),
+			'PUT',
+			'/mcpwp/v1/widgets/text-3',
+			array( 'instance' => array( 'text' => 'Example syntax: [[elementor-template id="' . self::ARCHETYPE_ID . '"]]' ) )
+		);
+		$this->assert_request_allowed( $controller, $request, 'An escaped shortcode must not be treated as a reference.' );
+	}
+
+	public function test_request_scan_allows_new_content_with_no_reference(): void {
+		list( $controller, $request ) = $this->authed_request(
+			new Mcpwp_REST_Posts(),
+			array( 'site' ),
+			'PUT',
+			'/mcpwp/v1/widgets/text-4',
+			array( 'instance' => array( 'text' => 'Nothing suspicious here.' ) )
+		);
+		$this->assert_request_allowed( $controller, $request );
+	}
+
+	public function test_request_scan_does_not_re_judge_a_preexisting_reference(): void {
+		// #1032 round 2 false-positives NIT: a page that ALREADY carries a
+		// gated reference (built by an admin, say) must not lock a designer
+		// key out of editing anything ELSE on that same page — only a NEWLY
+		// introduced reference is judged.
+		$GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'] = json_encode( $this->tree_with_template_widget( self::ARCHETYPE_ID ) );
+
+		list( $controller, $request ) = $this->authed_request(
+			new Mcpwp_REST_Elementor(),
+			array( 'elementor' ), // no elementor-templates
+			'PUT',
+			'/mcpwp/v1/elementor/' . self::PAGE_ID . '/edit-widget',
+			array(
+				'id'        => self::PAGE_ID,
+				'widget_id' => 'tpl00001',
+				// Resubmits the widget's UNCHANGED template_id (the id
+				// already stored, pre-existing) alongside a genuinely new,
+				// unrelated setting — the realistic "edit one thing, resend
+				// the widget" shape.
+				'settings'  => array(
+					'template_id'            => self::ARCHETYPE_ID,
+					'some_unrelated_setting' => 'new value',
+				),
+			)
+		);
+		$this->assert_request_allowed( $controller, $request, 'Editing something unrelated on a page that already held a gated reference before this write must not be locked out.' );
+	}
+
+	public function test_request_scan_still_refuses_a_newly_added_reference_on_a_page_with_a_preexisting_one(): void {
+		// Companion to the test above: the exemption is per-id, not
+		// per-page — adding a SECOND, different gated reference on the same
+		// page is still refused.
+		$GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'] = json_encode( $this->tree_with_template_widget( self::ARCHETYPE_ID ) );
+
+		$second_archetype_id                                   = self::ARCHETYPE_ID + 500;
+		$GLOBALS['_mcpwp_test_posts'][ $second_archetype_id ] = new WP_Post(
+			array(
+				'ID'          => $second_archetype_id,
+				'post_type'   => 'elementor_library',
+				'post_title'  => 'Second Gated Section',
+				'post_name'   => 'second-gated-section',
+				'post_status' => 'publish',
+			)
+		);
+
+		list( $controller, $request ) = $this->authed_request(
+			new Mcpwp_REST_Elementor(),
+			array( 'elementor' ),
+			'POST',
+			'/mcpwp/v1/elementor/' . self::PAGE_ID . '/add-section',
+			array(
+				'id'      => self::PAGE_ID,
+				'element' => $this->tree_with_template_widget( $second_archetype_id )[0],
+			)
+		);
+		$this->assert_request_refused( $controller, $request );
+	}
+
+	public function test_mcp_route_is_skipped_by_the_request_scan(): void {
+		// The outer /mcp envelope is never scanned directly — the
+		// re-dispatched sub-request (the real route, with the real,
+		// already-unwrapped tool arguments) runs this same check itself.
+		list( $controller, $request ) = $this->authed_request(
+			new Mcpwp_REST_Posts(),
+			array( 'content' ),
+			'POST',
+			'/mcpwp/v1/mcp',
+			array(
+				'jsonrpc' => '2.0',
+				'method'  => 'tools/call',
+				'params'  => array(
+					'name'      => 'wp_update_post',
+					'arguments' => array(
+						'id'      => self::PAGE_ID,
+						'content' => '[elementor-template id="' . self::ARCHETYPE_ID . '"]',
+					),
+				),
+			)
+		);
+		$this->assert_request_allowed( $controller, $request, 'The outer /mcp envelope must not be scanned; its re-dispatched sub-request is.' );
+	}
+
+	public function test_batch_route_is_skipped_by_the_request_scan(): void {
+		list( $controller, $request ) = $this->authed_request(
+			new Mcpwp_REST_Posts(),
+			array( 'content' ),
+			'POST',
+			'/mcpwp/v1/batch',
+			array(
+				'operations' => array(
+					array(
+						'method' => 'PUT',
+						'path'   => '/posts/' . self::PAGE_ID,
+						'body'   => array( 'content' => '[elementor-template id="' . self::ARCHETYPE_ID . '"]' ),
+					),
+				),
+			)
+		);
+		$this->assert_request_allowed( $controller, $request, 'The outer /batch envelope must not be scanned; each re-dispatched sub-request is.' );
+	}
+
+	public function test_request_scan_refuses_oversized_payload(): void {
+		list( $controller, $request ) = $this->authed_request(
+			new Mcpwp_REST_Posts(),
+			array( 'content' ),
+			'PUT',
+			'/mcpwp/v1/posts/' . self::PAGE_ID,
+			array( 'content' => str_repeat( 'a', 6 * 1024 * 1024 ) )
+		);
+		$auth = $controller->check_permission( $request );
+		$this->assertInstanceOf( WP_Error::class, $auth );
+		$this->assertSame( 'payload_too_large', $auth->get_error_code() );
+		$this->assertSame( 413, $auth->get_error_data()['status'] ?? null );
 	}
 }

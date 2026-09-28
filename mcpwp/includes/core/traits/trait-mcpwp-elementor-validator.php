@@ -99,10 +99,27 @@ trait Mcpwp_Elementor_Validator_Trait {
 	 * key record) means unrestricted, matching every other injected gate in
 	 * this trait.
 	 *
+	 * Pre-existing-reference exemption (#1032 round 2, false-positives NIT):
+	 * when $page_id names the post ALREADY being written to, a reference
+	 * already present in its CURRENT stored `_elementor_data` — before this
+	 * write touches anything — is not re-judged, only ids newly introduced
+	 * BY this write. Without this, a designer key adding an unrelated
+	 * section to a page an admin already built with a gated reference would
+	 * be locked out of the ENTIRE page, since save_elements_to_page()/
+	 * set_elementor_data() both call this against the FULL resulting tree
+	 * (old content plus the new edit), not just the new part. $page_id is
+	 * 0 for a genuinely NEW post (create_elementor_page(),
+	 * Mcpwp_Elementor_Pro's create/clone/landing-page paths, Theme Builder
+	 * template creation) — there is no "before" to exempt anything against,
+	 * so every reference the payload introduces is correctly judged in full.
+	 *
 	 * @param array $elements Element tree about to be written.
+	 * @param int   $page_id  The post this tree is being written TO, 0 for a
+	 *                        new post with no prior content to exempt
+	 *                        against.
 	 * @return true|WP_Error
 	 */
-	public function check_template_references( array $elements ) {
+	public function check_template_references( array $elements, $page_id = 0 ) {
 		if ( null === $this->template_ref_gate || ! class_exists( 'Mcpwp_Elementor_Template_Refs' ) ) {
 			return true;
 		}
@@ -110,6 +127,22 @@ trait Mcpwp_Elementor_Validator_Trait {
 		$ids = Mcpwp_Elementor_Template_Refs::find_ids( $elements );
 		if ( empty( $ids ) ) {
 			return true;
+		}
+
+		$page_id = (int) $page_id;
+		if ( $page_id > 0 ) {
+			$preexisting = array();
+			$stored_raw  = get_post_meta( $page_id, '_elementor_data', true );
+			if ( ! empty( $stored_raw ) && class_exists( 'Mcpwp_Elementor_Stored_Tree' ) ) {
+				$stored_elements = Mcpwp_Elementor_Stored_Tree::read( $stored_raw )['elements'];
+				if ( is_array( $stored_elements ) ) {
+					$preexisting = Mcpwp_Elementor_Template_Refs::find_ids( $stored_elements );
+				}
+			}
+			$ids = array_values( array_diff( $ids, $preexisting ) );
+			if ( empty( $ids ) ) {
+				return true;
+			}
 		}
 
 		return call_user_func( $this->template_ref_gate, $ids );

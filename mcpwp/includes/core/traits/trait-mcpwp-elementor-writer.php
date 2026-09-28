@@ -1411,7 +1411,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 		// Decoded once and shared by both branches below.
 		$elements_for_ref_check = json_decode( $elementor_json, true );
 		if ( is_array( $elements_for_ref_check ) ) {
-			$ref_check = $this->check_template_references( $elements_for_ref_check );
+			$ref_check = $this->check_template_references( $elements_for_ref_check, $page_id );
 			if ( is_wp_error( $ref_check ) ) {
 				return $ref_check;
 			}
@@ -2473,7 +2473,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 		// submitted tree embeds a Template Library reference (Template/
 		// Global widget, Loop Grid/Carousel, ...) this caller cannot read.
 		// Single shared check — see check_template_references()'s docblock.
-		$ref_check = $this->check_template_references( is_array( $elements ) ? $elements : array() );
+		$ref_check = $this->check_template_references( is_array( $elements ) ? $elements : array(), $page_id );
 		if ( is_wp_error( $ref_check ) ) {
 			return $ref_check;
 		}

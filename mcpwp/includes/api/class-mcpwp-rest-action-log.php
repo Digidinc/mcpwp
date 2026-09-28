@@ -135,7 +135,8 @@ class Mcpwp_REST_Action_Log extends Mcpwp_REST_API {
 		}
 
 		$log_id = sanitize_text_field( (string) $request->get_param( 'log_id' ) );
-		$result = Mcpwp_Action_Log::rollback( $log_id );
+		// #1032 round 2 (NIT): see Mcpwp_Action_Log::rollback()'s docblock.
+		$result = Mcpwp_Action_Log::rollback( $log_id, $this->template_ref_gate() );
 
 		if ( is_wp_error( $result ) ) {
 			return $result;

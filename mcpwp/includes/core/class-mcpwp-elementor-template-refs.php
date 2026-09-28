@@ -58,14 +58,33 @@
  *    cheap insurance against the next Pro module this list has not been
  *    updated for yet.
  *
- * Not covered (documented gap, not silently dropped): Elementor Pro's Popup
- * dynamic tag (`modules/popup/tag.php`) also resolves a library template id,
- * but the READ side is already covered generically — see
- * Mcpwp_REST_API::guard_elementor_template_shortcode()'s docblock — while
- * catching every dynamic tag that can name an arbitrary post id as a WRITE
- * refusal is a materially larger, open-ended surface (arbitrary dynamic tags
- * resolving arbitrary post ids of any type) that deserves its own audit
- * rather than a bolt-on here.
+ * Adversarial review round 2 findings folded in here (2026-09-28):
+ *
+ *  - The Popup dynamic tag (`modules/popup/tag.php`) IS now caught: its
+ *    `__dynamic__`-encoded settings decode to `{"action":"open","popup":"N"}`,
+ *    and `popup` is in SETTINGS_KEYS above, so find_ids_in_value()'s generic
+ *    per-key coercion catches it the same way `template_id` is caught
+ *    anywhere it appears — no dynamic-tag-specific parsing needed. Catching
+ *    every OTHER dynamic tag that can name an arbitrary post id of ANY type
+ *    (not just a Template Library one) remains out of scope — a materially
+ *    larger, open-ended surface that deserves its own audit.
+ *  - The `[elementor-template]` shortcode is now parsed with WordPress's own
+ *    `get_shortcode_regex()`/`shortcode_parse_atts()` (shortcode_ids_in_text())
+ *    instead of a hand-rolled regex — the same tokeniser Elementor's own
+ *    shortcode callback is invoked through, so `id = "5"`, `id=" 5"`,
+ *    `id="+5"`, `id="5" data-id="8"`, and an escaped `[[elementor-template]]`
+ *    (never processed, exactly like WordPress's own escape rule) are all
+ *    read exactly as WordPress/Elementor would read them. Falls back to a
+ *    bracket-tolerant regex only where the real shortcode engine is not
+ *    loaded (this plugin's own PHPUnit harness).
+ *  - find_ids_in_value() is the ONE generic recursive scanner: arrays,
+ *    objects, JSON-encoded strings, and urlencoded/base64 dynamic-tag
+ *    `settings=` payloads are all walked the same way, checking every array
+ *    key against is_reference_key() and every string against
+ *    shortcode_ids_in_text(). The Elementor element-tree walker (find()/
+ *    scan_settings()) and the request-body-wide chokepoint
+ *    (Mcpwp_Api_Auth::check_request_template_refs()) both call it, so a
+ *    reference cannot be found by one and missed by the other.
  *
  * @package MCPWP
  */
@@ -93,7 +112,15 @@ final class Mcpwp_Elementor_Template_Refs {
 	 *
 	 * @var string[]
 	 */
-	const SETTINGS_KEYS = array( 'template_id', 'additional_template_select', 'customize_dashboard_select' );
+	const SETTINGS_KEYS = array( 'template_id', 'additional_template_select', 'customize_dashboard_select', 'popup' );
+
+	/**
+	 * Cap on how many nodes ONE find_ids_in_value() call will visit,
+	 * independent of the depth cap its caller passes in — bounds a WIDE
+	 * payload (many siblings at the same shallow depth) that a depth cap
+	 * alone would not catch (#1032 round 2).
+	 */
+	const MAX_SCAN_NODES = 200000;
 
 	/**
 	 * Real Elementor/Elementor Pro controls that end in `_template` but are
@@ -210,6 +237,20 @@ final class Mcpwp_Elementor_Template_Refs {
 			return 0;
 		}
 
+		if ( is_string( $value ) ) {
+			// PHP's own (int) cast already skips leading ASCII whitespace and
+			// a leading sign ("+5"/" 5" both already resolve to 5), but NOT a
+			// non-breaking space or the other Unicode space separators a rich
+			// text editor can leave behind (" 5" casts to 0, not 5) —
+			// adversarial review round 2's own named case. Stripped here so
+			// this coercion is at least as liberal as Elementor's real one,
+			// never less.
+			$value = preg_replace( '/^[\x{00A0}\x{1680}\x{2000}-\x{200A}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}\x{FEFF}]+/u', '', $value );
+			if ( null === $value ) {
+				return 0; // Malformed UTF-8: preg_replace()'s own failure mode.
+			}
+		}
+
 		$id = (int) $value;
 
 		return $id > 0 ? $id : 0;
@@ -290,118 +331,248 @@ final class Mcpwp_Elementor_Template_Refs {
 	/**
 	 * Recursively scan a `settings` array (and any nested arrays inside it —
 	 * repeater rows, groups) for the known reference keys AND for a
-	 * `[elementor-template]` shortcode embedded in any string value.
+	 * `[elementor-template]` shortcode embedded in any string value. A thin
+	 * wrapper over find_ids_in_value() (#1032 round 2) so the element-tree
+	 * walker and the request-body-wide chokepoint share one extractor.
 	 *
 	 * @param array  $settings Settings (or a nested settings sub-array).
 	 * @param string $path     Owning element's path, for reporting.
 	 * @param array  &$found   Accumulator.
 	 */
 	private static function scan_settings( array $settings, $path, array &$found ) {
-		foreach ( $settings as $key => $value ) {
-			if ( is_array( $value ) ) {
-				self::scan_settings( $value, $path, $found );
-				continue;
+		$ids = self::find_ids_in_value( $settings );
+		if ( is_wp_error( $ids ) ) {
+			return; // Oversized settings blob — the request-level chokepoint's own byte/depth caps are what refuse this; this walker only reports what it can.
+		}
+		foreach ( $ids as $id ) {
+			$found[] = array(
+				'path' => $path,
+				'key'  => 'settings',
+				'id'   => $id,
+			);
+		}
+	}
+
+	/**
+	 * The ONE generic recursive scanner (#1032 round 2 — coordinator
+	 * decision): finds every Template Library reference in ANY nested value
+	 * tree, not just an Elementor element tree — a plain request body
+	 * (sidebar widget instance settings, a WooCommerce product's
+	 * description, a Gutenberg block queued for approval, a content-graph
+	 * anchor, a media description, or anything else a caller can put an
+	 * arbitrary string or array into). Two sources per node:
+	 *
+	 *  - Any ARRAY KEY matching is_reference_key() (template_id, templateID,
+	 *    popup, the `_template`/`template_id` suffix convention, or a
+	 *    filtered addition) — its value is coerced the way Elementor itself
+	 *    would coerce it (coerce_id()).
+	 *  - Any STRING VALUE is scanned for an `[elementor-template]` shortcode
+	 *    (shortcode_ids_in_text(), using WordPress's own shortcode
+	 *    tokeniser) and, if it decodes to JSON or a urlencoded/base64
+	 *    dynamic-tag `settings=` payload, recursed into as a nested value —
+	 *    so an elementor_data tree SENT AS A JSON STRING, or a Popup/
+	 *    Shortcode dynamic tag's `__dynamic__`-encoded settings, are walked
+	 *    exactly as if they had arrived as real nested structure.
+	 *
+	 * Bounded on two independent axes so cost cannot scale with an
+	 * attacker-controlled payload: $max_depth (nesting) and
+	 * self::MAX_SCAN_NODES (breadth — many siblings at one shallow depth).
+	 * Hitting either returns a WP_Error (413) rather than silently
+	 * truncating the scan, which could let an unscanned tail through
+	 * undetected.
+	 *
+	 * @param mixed $value     Any decoded value — array, object, scalar.
+	 * @param int   $max_depth Maximum nesting depth to walk.
+	 * @return int[]|WP_Error Distinct positive ids, or a 413 WP_Error when
+	 *                        the scan's own size/depth caps were exceeded.
+	 */
+	public static function find_ids_in_value( $value, $max_depth = 40 ) {
+		$found  = array();
+		$budget = array(
+			'nodes'    => 0,
+			'exceeded' => false,
+		);
+
+		self::walk_value( $value, $found, 0, (int) $max_depth, $budget );
+
+		if ( $budget['exceeded'] ) {
+			return new WP_Error(
+				'payload_too_complex',
+				__( 'Request body is too large or deeply nested to scan for template references.', 'mcpwp' ),
+				array( 'status' => 413 )
+			);
+		}
+
+		return array_values( array_unique( $found ) );
+	}
+
+	/**
+	 * find_ids_in_value()'s own recursion. See that method's docblock.
+	 *
+	 * @param mixed $value     Current node.
+	 * @param array &$found    Accumulator (plain int ids).
+	 * @param int   $depth     Current depth.
+	 * @param int   $max_depth Depth cap.
+	 * @param array &$budget   {nodes:int, exceeded:bool} — shared across the whole walk.
+	 */
+	private static function walk_value( $value, array &$found, $depth, $max_depth, array &$budget ) {
+		if ( $budget['exceeded'] ) {
+			return;
+		}
+		if ( $depth > $max_depth ) {
+			$budget['exceeded'] = true;
+			return;
+		}
+		++$budget['nodes'];
+		if ( $budget['nodes'] > self::MAX_SCAN_NODES ) {
+			$budget['exceeded'] = true;
+			return;
+		}
+
+		if ( is_object( $value ) ) {
+			$value = (array) $value;
+		}
+
+		if ( is_array( $value ) ) {
+			foreach ( $value as $key => $sub_value ) {
+				if ( $budget['exceeded'] ) {
+					return;
+				}
+				if ( is_string( $key ) && self::is_reference_key( $key ) ) {
+					$id = self::coerce_id( $sub_value );
+					if ( $id > 0 ) {
+						$found[] = $id;
+					}
+				}
+				self::walk_value( $sub_value, $found, $depth + 1, $max_depth, $budget );
+			}
+			return;
+		}
+
+		if ( is_string( $value ) && '' !== $value ) {
+			foreach ( self::shortcode_ids_in_text( $value ) as $id ) {
+				$found[] = $id;
 			}
 
-			if ( is_string( $key ) && self::is_reference_key( $key ) ) {
-				$id = self::coerce_id( $value );
-				if ( $id > 0 ) {
-					$found[] = array(
-						'path' => $path,
-						'key'  => $key,
-						'id'   => $id,
-					);
-					continue;
-				}
-			}
-
-			// Any string setting can carry the shortcode as free text
-			// (a Text Editor/HTML widget's own content, a link's __dynamic__
-			// hash, ...) whether or not its key is a known reference key.
-			if ( is_string( $value ) && '' !== $value ) {
-				foreach ( self::ids_in_text( $value ) as $id ) {
-					$found[] = array(
-						'path' => $path,
-						'key'  => (string) $key,
-						'id'   => $id,
-					);
-				}
+			foreach ( self::decode_nested_values( $value ) as $nested ) {
+				self::walk_value( $nested, $found, $depth + 1, $max_depth, $budget );
 			}
 		}
 	}
 
 	/**
-	 * The shared string scanner (#1032 B3): every distinct id an
-	 * `[elementor-template id="N"]` shortcode names in $text, however it got
-	 * there — typed directly, URL-encoded (Elementor's dynamic-tag encoding),
-	 * or nested inside a "Shortcode" dynamic tag's own `__dynamic__`-encoded
-	 * `settings.shortcode` string (urlencoded-JSON or base64-JSON form,
-	 * mirroring Mcpwp_Elementor_Element_Ids::decoded_forms()'s own decoding
-	 * of the same Elementor encodings).
-	 *
-	 * Used by scan_settings() above for a widget setting, and directly by
-	 * every write path that saves a post's plain post_content (posts, pages,
-	 * generic content, bulk updates) — the ONE scanner both the Elementor
-	 * tree walker and the post-content write guard call, so the two can never
-	 * disagree about what counts as a reference.
+	 * The shared string scanner (#1032 B3), kept as a public alias of
+	 * find_ids_in_value() for existing callers that scan a single string
+	 * (post_content on posts/pages/content writes) rather than an arbitrary
+	 * value tree.
 	 *
 	 * @param string $text Arbitrary text.
-	 * @return int[] Distinct positive ids named by a shortcode occurrence.
+	 * @return int[] Distinct positive ids. (A string alone can never trip
+	 *               find_ids_in_value()'s own size/depth caps in a way that
+	 *               matters here — those exist for request-body-sized
+	 *               trees — so this never returns a WP_Error.)
 	 */
 	public static function ids_in_text( $text ) {
 		if ( ! is_string( $text ) || '' === $text ) {
 			return array();
 		}
 
-		// Cheap bail-out: nothing to find unless the shortcode tag appears
-		// literally, URL-encoded (both %-encoded forms decoded_text_forms()
-		// checks), OR the text carries a `settings=` payload that might
-		// decode to a nested shortcode string (the dynamic tag case) — the
-		// %-encoded form of the tag name always contains a literal '-' and
-		// 'template' survives URL-encoding unchanged, so checking for either
-		// substring directly, without decoding first, is enough to rule out
-		// plain text that could never match.
-		if ( false === stripos( $text, self::SHORTCODE_TAG )
-			&& false === stripos( $text, 'template' ) // survives rawurlencode() unchanged
-			&& false === strpos( $text, 'settings=' )
-		) {
+		$ids = self::find_ids_in_value( $text, 10 );
+
+		return is_wp_error( $ids ) ? array() : $ids;
+	}
+
+	/**
+	 * Every `[elementor-template id="N"]` shortcode occurrence in $text,
+	 * parsed exactly the way WordPress itself would: WordPress's own
+	 * `get_shortcode_regex()` + `shortcode_parse_atts()` when the shortcode
+	 * engine is loaded (production — this is a REAL WordPress request),
+	 * handling `id = "5"`, `id=" 5"`, `id="+5"`, `id="5" data-id="8"`, and
+	 * an escaped `[[elementor-template ...]]` (never processed — WordPress's
+	 * own `do_shortcode_tag()` escape rule: `'[' === $m[1] && ']' === $m[6]`)
+	 * identically to how Elementor's own callback would see them (#1032
+	 * round 2 B1). Falls back to a bracket-tolerant regex only when the real
+	 * shortcode engine is not loaded (this plugin's own PHPUnit harness,
+	 * which does not boot WordPress's shortcode subsystem).
+	 *
+	 * @param string $text Text to scan.
+	 * @return int[] Distinct positive ids.
+	 */
+	private static function shortcode_ids_in_text( $text ) {
+		if ( false === stripos( $text, self::SHORTCODE_TAG ) && false === stripos( $text, 'template' ) ) {
 			return array();
 		}
 
 		$ids = array();
-		foreach ( self::decoded_text_forms( $text ) as $form ) {
-			if ( preg_match_all(
-				'/\[' . preg_quote( self::SHORTCODE_TAG, '/' ) . '\b[^\]]*\bid=["\']?(\d+)["\']?[^\]]*\]/i',
-				$form,
-				$matches
-			) ) {
-				foreach ( $matches[1] as $raw_id ) {
-					$id = (int) $raw_id;
+
+		if ( function_exists( 'get_shortcode_regex' ) && function_exists( 'shortcode_parse_atts' ) ) {
+			$pattern = get_shortcode_regex( array( self::SHORTCODE_TAG ) );
+			if ( preg_match_all( '/' . $pattern . '/s', $text, $matches, PREG_SET_ORDER ) ) {
+				foreach ( $matches as $m ) {
+					// WordPress's own escape rule: [[elementor-template ...]] is
+					// literal, never processed (do_shortcode_tag()).
+					if ( isset( $m[1], $m[6] ) && '[' === $m[1] && ']' === $m[6] ) {
+						continue;
+					}
+					$atts = shortcode_parse_atts( $m[3] );
+					if ( is_array( $atts ) && isset( $atts['id'] ) ) {
+						$id = self::coerce_id( $atts['id'] );
+						if ( $id > 0 ) {
+							$ids[] = $id;
+						}
+					}
+				}
+			}
+
+			return $ids;
+		}
+
+		// Fallback: no real shortcode engine loaded. Bracket-tolerant, with
+		// the same [[...]] escape rule, but a negative lookbehind (rather
+		// than shortcode_parse_atts()'s real tokenising) to tell a bare `id`
+		// attribute from a `data-id`/`xyz-id` one it must not match.
+		if ( preg_match_all(
+			'/(\[?)\[' . preg_quote( self::SHORTCODE_TAG, '/' ) . '\b([^\]]*)\](\]?)/i',
+			$text,
+			$matches,
+			PREG_SET_ORDER
+		) ) {
+			foreach ( $matches as $m ) {
+				if ( '[' === $m[1] && ']' === $m[3] ) {
+					continue; // Escaped literal.
+				}
+				if ( preg_match( '/(?<![\w-])id\s*=\s*["\']?\+?\s*(\d+)/', $m[2], $id_match ) ) {
+					$id = self::coerce_id( $id_match[1] );
 					if ( $id > 0 ) {
-						$ids[ $id ] = true;
+						$ids[] = $id;
 					}
 				}
 			}
 		}
 
-		return array_keys( $ids );
+		return $ids;
 	}
 
 	/**
-	 * $text itself, its URL-decoded forms (up to two levels — Elementor's
-	 * action-hash encoding can be doubled, same as
-	 * Mcpwp_Elementor_Element_Ids::decoded_forms()), and the "Shortcode"
-	 * dynamic tag's own nested shortcode string wherever a `settings=`
-	 * payload (urlencoded-JSON or base64-JSON, both forms Elementor's
-	 * Dynamic_Tags Manager produces) decodes to one.
+	 * Decoded candidate VALUES (arrays) hiding inside a string — a JSON blob
+	 * sent as a string (an `elementor_data` param, or any nested payload),
+	 * or a urlencoded-JSON/base64-JSON `settings=` value the way Elementor's
+	 * Dynamic_Tags Manager encodes a tag's own settings (mirrors
+	 * Mcpwp_Elementor_Element_Ids::decoded_forms()'s decoding of the same
+	 * encodings). Each returned value is walked by the caller exactly like
+	 * any other nested value — including its own further-nested strings —
+	 * so a Popup/Shortcode dynamic tag's settings are scanned by the SAME
+	 * generic key/string logic as everything else, not a dynamic-tag-
+	 * specific special case.
 	 *
 	 * @param string $text Source text.
-	 * @return string[] Forms to scan, including $text itself.
+	 * @return array<int,array> Decoded values to recurse into.
 	 */
-	private static function decoded_text_forms( $text ) {
+	private static function decode_nested_values( $text ) {
+		$out = array();
+
 		$forms   = array( $text );
 		$current = $text;
-
 		for ( $level = 0; $level < 2 && false !== strpos( $current, '%' ); $level++ ) {
 			$next = rawurldecode( $current );
 			if ( $next === $current ) {
@@ -411,30 +582,33 @@ final class Mcpwp_Elementor_Template_Refs {
 			$current = $next;
 		}
 
-		$extra = array();
 		foreach ( $forms as $form ) {
-			if ( ! preg_match_all( '/settings=["\']?([^"\'&\]\s]+)/', $form, $matches ) ) {
-				continue;
-			}
-			foreach ( $matches[1] as $candidate ) {
-				foreach ( array( rawurldecode( $candidate ), $candidate ) as $maybe_json ) {
-					$decoded = json_decode( $maybe_json, true );
-					if ( is_array( $decoded ) && isset( $decoded['shortcode'] ) && is_string( $decoded['shortcode'] ) ) {
-						$extra[] = $decoded['shortcode'];
-					}
+			$trimmed = ltrim( $form );
+			if ( '' !== $trimmed && ( '{' === $trimmed[0] || '[' === $trimmed[0] ) ) {
+				$decoded = json_decode( $form, true );
+				if ( is_array( $decoded ) ) {
+					$out[] = $decoded;
 				}
+			}
 
-				$binary = base64_decode( $candidate, true ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_decode
-				if ( false !== $binary && '' !== $binary ) {
-					$extra[] = $binary;
-					$binary_decoded = json_decode( $binary, true );
-					if ( is_array( $binary_decoded ) && isset( $binary_decoded['shortcode'] ) && is_string( $binary_decoded['shortcode'] ) ) {
-						$extra[] = $binary_decoded['shortcode'];
+			if ( preg_match_all( '/settings=["\']?([^"\'&\]\s]+)/', $form, $matches ) ) {
+				foreach ( $matches[1] as $candidate ) {
+					$decoded = json_decode( rawurldecode( $candidate ), true );
+					if ( is_array( $decoded ) ) {
+						$out[] = $decoded;
+					}
+
+					$binary = base64_decode( $candidate, true ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_decode
+					if ( false !== $binary && '' !== $binary ) {
+						$binary_decoded = json_decode( $binary, true );
+						if ( is_array( $binary_decoded ) ) {
+							$out[] = $binary_decoded;
+						}
 					}
 				}
 			}
 		}
 
-		return array_values( array_unique( array_merge( $forms, $extra ) ) );
+		return $out;
 	}
 }

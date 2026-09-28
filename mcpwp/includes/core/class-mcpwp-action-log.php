@@ -115,10 +115,33 @@ class Mcpwp_Action_Log {
 	/**
 	 * Rollback a logged action by restoring its before-state.
 	 *
-	 * @param string $log_id Log entry ID.
+	 * @param string        $log_id             Log entry ID.
+	 * @param callable|null $template_ref_gate  #1032 round 2 (NIT): the SAME
+	 *                                          gate every other write path
+	 *                                          uses (Mcpwp_Api_Auth::template_ref_gate()),
+	 *                                          injected by the REST layer
+	 *                                          (which has the caller's own
+	 *                                          auth context; this class does
+	 *                                          not). A rollback restores
+	 *                                          `_elementor_data`/
+	 *                                          `post_content` bytes verbatim —
+	 *                                          without this, restoring an
+	 *                                          OLDER snapshot could
+	 *                                          reintroduce a Template Library
+	 *                                          reference the CURRENT caller
+	 *                                          cannot read, exactly the write-
+	 *                                          time hole this whole issue is
+	 *                                          about, just reached through
+	 *                                          history instead of a fresh
+	 *                                          write. null (a caller with no
+	 *                                          auth context — WP-CLI, a
+	 *                                          trusted internal call) means
+	 *                                          unrestricted, matching every
+	 *                                          other injected gate in this
+	 *                                          plugin.
 	 * @return true|WP_Error
 	 */
-	public static function rollback( $log_id ) {
+	public static function rollback( $log_id, $template_ref_gate = null ) {
 		$entry = self::get_entry( $log_id );
 
 		if ( ! $entry ) {
@@ -140,6 +163,33 @@ class Mcpwp_Action_Log {
 		$snap = json_decode( $entry['before_snap'], true );
 		if ( ! is_array( $snap ) ) {
 			return new WP_Error( 'corrupt_snapshot', __( 'Before-snapshot is corrupt.', 'mcpwp' ), array( 'status' => 500 ) );
+		}
+
+		// #1032 round 2 (NIT): scan whichever of the two content fields THIS
+		// snapshot carries — a no-op (empty scan) for every other
+		// resource_type (option, term, menu, ...) this method also restores.
+		if ( is_callable( $template_ref_gate ) && class_exists( 'Mcpwp_Elementor_Template_Refs' ) ) {
+			$ref_ids = array();
+
+			if ( ! empty( $snap['elementor_data'] ) ) {
+				$elements = is_array( $snap['elementor_data'] )
+					? $snap['elementor_data']
+					: json_decode( (string) $snap['elementor_data'], true );
+				if ( is_array( $elements ) ) {
+					$ref_ids = array_merge( $ref_ids, Mcpwp_Elementor_Template_Refs::find_ids( $elements ) );
+				}
+			}
+
+			if ( ! empty( $snap['post_content'] ) && is_string( $snap['post_content'] ) ) {
+				$ref_ids = array_merge( $ref_ids, Mcpwp_Elementor_Template_Refs::ids_in_text( $snap['post_content'] ) );
+			}
+
+			if ( ! empty( $ref_ids ) ) {
+				$ref_check = call_user_func( $template_ref_gate, array_values( array_unique( $ref_ids ) ) );
+				if ( is_wp_error( $ref_check ) ) {
+					return $ref_check;
+				}
+			}
 		}
 
 		$result = self::apply_snapshot( $entry['resource_type'], $snap );

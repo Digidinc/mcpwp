@@ -864,7 +864,17 @@ trait Mcpwp_Api_Auth {
 			return $key_category_check;
 		}
 
-		return $this->check_post_naming_params_category( $request );
+		$declared_ref_check = $this->check_post_naming_params_category( $request );
+		if ( is_wp_error( $declared_ref_check ) ) {
+			return $declared_ref_check;
+		}
+
+		// #1032 round 2: the SAME chokepoint, one request-body-wide scan for
+		// a Template Library reference hiding ANYWHERE in the submitted
+		// payload — not just a declared post-ref param and not just an
+		// Elementor element tree. See check_request_template_refs()'s
+		// docblock.
+		return $this->check_request_template_refs( $request );
 	}
 
 	/**
@@ -2288,6 +2298,48 @@ trait Mcpwp_Api_Auth {
 	}
 
 	/**
+	 * Canonical hint for a Template Library reference specifically (#1032
+	 * round 2, false-positives NIT): the id in question is never a
+	 * DECLARED request parameter (post_ref_not_found_hint()'s own
+	 * "wp_search or wp_list_posts" advice assumes the caller can see and
+	 * fix the id they passed), so a caller reading this hint needs to know
+	 * WHAT kind of reference was refused, not how to look up an id they may
+	 * never have typed themselves — it could be embedded three encodings
+	 * deep inside a widget setting or a dynamic tag. Deliberately the SAME
+	 * fixed text whether the referenced id is missing or merely unreadable
+	 * to this caller — the existence-oracle rule post_ref_not_found_hint()
+	 * already enforces for a declared param, extended here.
+	 *
+	 * @return string
+	 */
+	public static function template_ref_not_found_hint() {
+		return __( 'A referenced template was not found.', 'mcpwp' );
+	}
+
+	/**
+	 * The canonical refusal for a Template Library reference (#1032):
+	 * post_ref_not_found_error()'s exact code/status/message — so
+	 * is_post_ref_not_found() still recognises it and no hint-injection
+	 * layer downstream overrides what is set here — with
+	 * template_ref_not_found_hint()'s own hint in place of the generic
+	 * "check the id" one. Used by template_ref_gate() and
+	 * check_request_template_refs() so every template-reference refusal,
+	 * wherever the id was found, reads identically.
+	 *
+	 * @return WP_Error
+	 */
+	protected function template_ref_not_found_error() {
+		return new WP_Error(
+			'not_found',
+			self::post_ref_not_found_message(),
+			array(
+				'status' => 404,
+				'hint'   => self::template_ref_not_found_hint(),
+			)
+		);
+	}
+
+	/**
 	 * Per-(id,category) memo for post_ref_readable() (#1032 adversarial
 	 * review round 1, NIT): a page can embed — or render through — the same
 	 * template id from more than one widget, and a request-wide scan
@@ -2411,7 +2463,7 @@ trait Mcpwp_Api_Auth {
 			$rows = self::fetch_post_ref_rows( $ids );
 			foreach ( $ids as $id ) {
 				if ( $this->post_ref_is_hidden( $id, $rows[ $id ] ?? null, 'elementor-theme' ) ) {
-					return $this->post_ref_not_found_error();
+					return $this->template_ref_not_found_error();
 				}
 			}
 
@@ -2426,10 +2478,26 @@ trait Mcpwp_Api_Auth {
 	 * set_template_ref_gate()) — see template_ref_gate()'s docblock for the
 	 * full rationale, identical here.
 	 *
-	 * @param array $elements Element tree about to be written.
+	 * Pre-existing-reference exemption (#1032 round 2, false-positives NIT —
+	 * see Mcpwp_Elementor_Validator_Trait::check_template_references()'s
+	 * matching docblock for the full rationale): find/replace scans the
+	 * WHOLE resulting tree, so a page already carrying a gated reference the
+	 * replacement never touched must not lock the caller out of a find/
+	 * replace that changes something else entirely. $preexisting_elements —
+	 * the tree as it stood BEFORE this write, which every find/replace
+	 * caller already holds in memory before running the replacement — is
+	 * scanned the same way, and its own ids are subtracted from what
+	 * $elements turns up before judging what remains.
+	 *
+	 * @param array      $elements             Element tree about to be written.
+	 * @param array|null $preexisting_elements The SAME tree as it stood
+	 *                                          before this write, or null
+	 *                                          when there is no "before" to
+	 *                                          exempt against (a brand new
+	 *                                          post).
 	 * @return true|WP_Error
 	 */
-	public function refuse_if_template_refs_unreadable( array $elements ) {
+	public function refuse_if_template_refs_unreadable( array $elements, array $preexisting_elements = null ) {
 		if ( ! class_exists( 'Mcpwp_Elementor_Template_Refs' ) ) {
 			return true;
 		}
@@ -2437,6 +2505,14 @@ trait Mcpwp_Api_Auth {
 		$ids = Mcpwp_Elementor_Template_Refs::find_ids( $elements );
 		if ( empty( $ids ) ) {
 			return true;
+		}
+
+		if ( null !== $preexisting_elements ) {
+			$preexisting = Mcpwp_Elementor_Template_Refs::find_ids( $preexisting_elements );
+			$ids         = array_values( array_diff( $ids, $preexisting ) );
+			if ( empty( $ids ) ) {
+				return true;
+			}
 		}
 
 		return call_user_func( $this->template_ref_gate(), $ids );
@@ -2482,6 +2558,183 @@ trait Mcpwp_Api_Auth {
 		return function ( $doc_post_id ) {
 			return $this->post_ref_readable( $doc_post_id, 'elementor-theme' );
 		};
+	}
+
+	/**
+	 * Byte cap on the request body check_request_template_refs() below will
+	 * scan (#1032 round 2) before refusing outright rather than let CPU cost
+	 * scale with an attacker-controlled payload. Matches the JSON payload
+	 * ceiling Mcpwp_Security::validate_json_payload() already uses for a
+	 * full Elementor tree.
+	 */
+	protected static function template_ref_scan_max_bytes() {
+		return 5 * 1024 * 1024;
+	}
+
+	/**
+	 * Depth cap for the same scan — a value nested deeper than this is
+	 * refused (413) rather than walked, the same "cost is bounded before
+	 * work starts" rule the byte cap enforces.
+	 */
+	protected static function template_ref_scan_max_depth() {
+		return 40;
+	}
+
+	/**
+	 * The request-wide chokepoint (#1032 round 2, coordinator decision): a
+	 * Template Library reference does not only show up as a declared
+	 * post-ref parameter (collect_post_refs()) or inside an Elementor
+	 * element tree (Mcpwp_Elementor_Template_Refs, the writer traits' own
+	 * check) — round-1's adversarial review found it hiding in a classic
+	 * sidebar Text widget, a WooCommerce product description, a Gutenberg
+	 * block queued for approval, a content-graph anchor, a media
+	 * description, and anywhere else a caller can put an arbitrary string.
+	 * Rather than keep enumerating doors, this walks the ENTIRE decoded
+	 * request body ONCE, for every route, the same way
+	 * check_post_naming_params_category() already does for declared params —
+	 * same chokepoint (called right after it, from the same
+	 * compute_api_key_verdict() chain), same canonical refusal.
+	 *
+	 * Skips /mcp and /batch envelopes for the same reason
+	 * collect_post_refs() does: each re-dispatches through rest_do_request(),
+	 * which runs this exact check again on the REAL route with the REAL,
+	 * already-unwrapped/normalised arguments (mcpwp_call's own unwrap and
+	 * #911's param normalisation both happen before that inner dispatch) —
+	 * scanning the outer envelope too would just re-walk the same bytes
+	 * twice under a route this method cannot judge a category for anyway.
+	 *
+	 * WebMCP (#1038): when that surface lands, its own dispatch point must
+	 * call this same method (or route through verify_api_key() the way
+	 * every other surface here does) — it is the one place a reference
+	 * hiding in an arbitrary argument gets caught, and it is public for
+	 * exactly this reason.
+	 *
+	 * Pre-existing-reference exemption (#1032 round 2, NIT — avoids a
+	 * designer lock-out without opening a hole): a reference already
+	 * present on the request's OWN declared target post(s) — before this
+	 * write touches anything — is not re-judged. Only ids newly introduced
+	 * BY this request's payload are checked. An admin-built page that
+	 * already carries a reference a designer key cannot read stays editable
+	 * by that designer for everything else on the page; the designer simply
+	 * cannot ADD a new one they cannot themselves read back.
+	 *
+	 * @param WP_REST_Request $request Request object.
+	 * @return true|WP_Error
+	 */
+	public function check_request_template_refs( $request ) {
+		if ( ! is_object( $request ) || ! method_exists( $request, 'get_route' ) ) {
+			return true;
+		}
+
+		$route = $this->normalize_route_for_authorization( (string) $request->get_route() );
+		if ( $this->route_matches( $route, '/mcpwp/v1/mcp' ) || $this->route_matches( $route, '/mcpwp/v1/batch' ) ) {
+			return true;
+		}
+
+		if ( ! class_exists( 'Mcpwp_Elementor_Template_Refs' ) ) {
+			return true;
+		}
+
+		$params = method_exists( $request, 'get_params' ) ? $request->get_params() : null;
+		if ( ! is_array( $params ) || empty( $params ) ) {
+			return true;
+		}
+
+		$size_estimate = strlen( (string) wp_json_encode( $params ) );
+		if ( $size_estimate > self::template_ref_scan_max_bytes() ) {
+			return new WP_Error(
+				'payload_too_large',
+				__( 'Request body is too large to scan for template references.', 'mcpwp' ),
+				array( 'status' => 413 )
+			);
+		}
+
+		$budget = array( 'nodes' => 0 );
+		$ids    = Mcpwp_Elementor_Template_Refs::find_ids_in_value(
+			$params,
+			self::template_ref_scan_max_depth(),
+			$budget
+		);
+		if ( is_wp_error( $ids ) ) {
+			return $ids;
+		}
+		if ( empty( $ids ) ) {
+			return true;
+		}
+
+		$preexisting = $this->preexisting_template_ref_ids( $request );
+		$new_ids     = array_values( array_diff( $ids, $preexisting ) );
+		if ( empty( $new_ids ) ) {
+			return true;
+		}
+
+		$rows = self::fetch_post_ref_rows( $new_ids );
+		foreach ( $new_ids as $id ) {
+			if ( $this->post_ref_is_hidden( $id, $rows[ $id ] ?? null, 'elementor-theme' ) ) {
+				return $this->template_ref_not_found_error();
+			}
+		}
+
+		return true;
+	}
+
+	/**
+	 * The Template Library ids already present on this request's declared
+	 * target post(s), BEFORE this write runs — the exemption set
+	 * check_request_template_refs() subtracts from what it finds in the
+	 * submitted payload (see that method's own docblock for why).
+	 *
+	 * Reuses collect_post_refs()'s own declared-param resolution (the SAME
+	 * 'id'-shaped scalar param this route already resolves for the #1024
+	 * chokepoint) rather than a second, route-specific mapping: whatever
+	 * post this request is ABOUT is exactly the post whose CURRENT content
+	 * defines "pre-existing". A route with no declared post-ref param (a
+	 * pure create, e.g. POST /posts) has no pre-existing content to exempt
+	 * anything against, so every reference the payload introduces is new by
+	 * definition — the empty array this returns is the correct exemption
+	 * set, not a gap.
+	 *
+	 * @param WP_REST_Request $request Request object.
+	 * @return int[] Ids already referenced by the target post(s)' stored
+	 *               _elementor_data and post_content.
+	 */
+	protected function preexisting_template_ref_ids( $request ) {
+		$resolution = $this->get_post_ref_resolution( $request );
+		if ( is_wp_error( $resolution ) || null === $resolution['refs'] ) {
+			return array();
+		}
+
+		$target_ids = array_values( array_unique( array_merge(
+			$resolution['refs']['scalar'],
+			$resolution['refs']['items']
+		) ) );
+		if ( empty( $target_ids ) ) {
+			return array();
+		}
+
+		$found = array();
+		foreach ( $target_ids as $target_id ) {
+			$row = $resolution['rows'][ $target_id ] ?? null;
+			if ( ! is_array( $row ) ) {
+				continue;
+			}
+
+			$elementor_raw = get_post_meta( $target_id, '_elementor_data', true );
+			if ( ! empty( $elementor_raw ) && class_exists( 'Mcpwp_Elementor_Stored_Tree' ) ) {
+				$stored   = Mcpwp_Elementor_Stored_Tree::read( $elementor_raw );
+				$elements = $stored['elements'];
+				if ( is_array( $elements ) ) {
+					$found = array_merge( $found, Mcpwp_Elementor_Template_Refs::find_ids( $elements ) );
+				}
+			}
+
+			$post = get_post( $target_id );
+			if ( $post instanceof WP_Post && is_string( $post->post_content ) && '' !== $post->post_content ) {
+				$found = array_merge( $found, Mcpwp_Elementor_Template_Refs::ids_in_text( $post->post_content ) );
+			}
+		}
+
+		return array_values( array_unique( $found ) );
 	}
 
 	/**

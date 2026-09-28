@@ -1238,7 +1238,10 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 		// value into a Template Library reference (or introduces one via the
 		// replacement text itself) must be refused exactly like any other
 		// write that embeds one this caller cannot read.
-		$ref_check = $this->refuse_if_template_refs_unreadable( is_array( $updated_decoded ) ? $updated_decoded : array() );
+		$ref_check = $this->refuse_if_template_refs_unreadable(
+			is_array( $updated_decoded ) ? $updated_decoded : array(),
+			is_array( $decoded ) ? $decoded : array()
+		);
 		if ( is_wp_error( $ref_check ) ) {
 			return $this->error_response_from_wp_error( $ref_check );
 		}
@@ -1499,7 +1502,10 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 				// #1032 B2 (adversarial review round 1): same refusal as the
 				// single-post find_replace() above, applied to THIS post's
 				// post-replacement tree before it is written.
-				$ref_check = $this->refuse_if_template_refs_unreadable( is_array( $updated ) ? $updated : array() );
+				$ref_check = $this->refuse_if_template_refs_unreadable(
+					is_array( $updated ) ? $updated : array(),
+					is_array( $decoded ) ? $decoded : array()
+				);
 				if ( is_wp_error( $ref_check ) ) {
 					$entry['written'] = false;
 					$entry['error']   = $ref_check->get_error_code();
