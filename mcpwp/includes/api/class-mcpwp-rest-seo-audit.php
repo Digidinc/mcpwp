@@ -464,20 +464,20 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 		$post = get_post( $post_id );
 
 		if ( ! $post ) {
-			return $this->error_response( 'not_found', 'Post not found.', 404 );
+			return $this->error_response_from_wp_error( $this->post_ref_not_found_error( $request ) );
 		}
 
 		// Non-public gate: this surface returns the draft's title/status/meta-
 		// description/heading signals, so a read-only key must be denied with the
 		// same 404 as a missing post before any of those are read.
-		$denied = $this->guard_non_public_post( $post, 'Post not found.' );
+		$denied = $this->guard_non_public_post( $post, __( 'The requested resource was not found.', 'mcpwp' ), __( 'Check the id with wp_search or wp_list_posts.', 'mcpwp' ) );
 		if ( $denied ) {
 			return $denied;
 		}
 
 		// Category gate (#1024 round-1 review, WARN-1): same 404 for a post of
 		// a type this caller's category cannot read.
-		$category_denied = $this->guard_post_type_category( $post, 'Post not found.' );
+		$category_denied = $this->guard_post_type_category( $post, __( 'The requested resource was not found.', 'mcpwp' ) );
 		if ( is_wp_error( $category_denied ) ) {
 			return $category_denied;
 		}
@@ -1006,20 +1006,20 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 		$post    = get_post( $post_id );
 
 		if ( ! $post ) {
-			return $this->error_response( 'not_found', 'Post not found.', 404 );
+			return $this->error_response_from_wp_error( $this->post_ref_not_found_error( $request ) );
 		}
 
 		// Non-public gate: this surface reads $post->post_content (JSON-LD/microdata)
 		// and returns draft-derived data, so a read-only key must be denied with the
 		// same 404 as a missing post before any body is read.
-		$denied = $this->guard_non_public_post( $post, 'Post not found.' );
+		$denied = $this->guard_non_public_post( $post, __( 'The requested resource was not found.', 'mcpwp' ), __( 'Check the id with wp_search or wp_list_posts.', 'mcpwp' ) );
 		if ( $denied ) {
 			return $denied;
 		}
 
 		// Category gate (#1024 round-1 review, WARN-1): same 404 for a post of
 		// a type this caller's category cannot read.
-		$category_denied = $this->guard_post_type_category( $post, 'Post not found.' );
+		$category_denied = $this->guard_post_type_category( $post, __( 'The requested resource was not found.', 'mcpwp' ) );
 		if ( is_wp_error( $category_denied ) ) {
 			return $category_denied;
 		}
@@ -1254,20 +1254,20 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 		$post    = get_post( $post_id );
 
 		if ( ! $post ) {
-			return $this->error_response( 'not_found', 'Post not found.', 404 );
+			return $this->error_response_from_wp_error( $this->post_ref_not_found_error( $request ) );
 		}
 
 		// Non-public gate: this surface reads $post->post_content (image inventory)
 		// and returns draft-derived data, so a read-only key must be denied with the
 		// same 404 as a missing post before any body is read.
-		$denied = $this->guard_non_public_post( $post, 'Post not found.' );
+		$denied = $this->guard_non_public_post( $post, __( 'The requested resource was not found.', 'mcpwp' ), __( 'Check the id with wp_search or wp_list_posts.', 'mcpwp' ) );
 		if ( $denied ) {
 			return $denied;
 		}
 
 		// Category gate (#1024 round-1 review, WARN-1): same 404 for a post of
 		// a type this caller's category cannot read.
-		$category_denied = $this->guard_post_type_category( $post, 'Post not found.' );
+		$category_denied = $this->guard_post_type_category( $post, __( 'The requested resource was not found.', 'mcpwp' ) );
 		if ( is_wp_error( $category_denied ) ) {
 			return $category_denied;
 		}

@@ -741,7 +741,9 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 		// missing/unsupported branch (#1026) so the two 404s are byte-identical.
 		$denied = $this->guard_non_public_post(
 			get_post( absint( $page_id ) ),
-			__( 'Post not found or unsupported type.', 'mcpwp' ),
+			// #1030 round-3, item 2: matches Mcpwp_Elementor_Basic::validate_post()'s
+			// own message — see not_found_hint()'s docblock for why.
+			__( 'The requested resource was not found.', 'mcpwp' ),
 			$this->elementor->not_found_hint( $page_id )
 		);
 		if ( $denied ) {
@@ -832,7 +834,9 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 		// missing/unsupported branch (#1026) so the two 404s are byte-identical.
 		$denied = $this->guard_non_public_post(
 			get_post( absint( $page_id ) ),
-			__( 'Post not found or unsupported type.', 'mcpwp' ),
+			// #1030 round-3, item 2: matches Mcpwp_Elementor_Basic::validate_post()'s
+			// own message — see not_found_hint()'s docblock for why.
+			__( 'The requested resource was not found.', 'mcpwp' ),
 			$this->elementor->not_found_hint( $page_id )
 		);
 		if ( $denied ) {
@@ -866,7 +870,9 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 		// missing/unsupported branch (#1026) so the two 404s are byte-identical.
 		$denied = $this->guard_non_public_post(
 			get_post( absint( $page_id ) ),
-			__( 'Post not found or unsupported type.', 'mcpwp' ),
+			// #1030 round-3, item 2: matches Mcpwp_Elementor_Basic::validate_post()'s
+			// own message — see not_found_hint()'s docblock for why.
+			__( 'The requested resource was not found.', 'mcpwp' ),
 			$this->elementor->not_found_hint( $page_id )
 		);
 		if ( $denied ) {

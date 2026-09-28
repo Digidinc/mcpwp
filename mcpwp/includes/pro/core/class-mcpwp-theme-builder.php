@@ -209,29 +209,6 @@ class Mcpwp_Theme_Builder {
 	}
 
 	/**
-	 * The `_elementor_template_type` values that are genuine theme-BUILDER
-	 * templates (a page/site region bound to a display condition) — the
-	 * same keys get_location_for_type()'s own map recognizes.
-	 *
-	 * #1024/#1030 round-2 review, WARN-A: elementor_library covers Pro's
-	 * whole template library — saved page templates, sections, popups,
-	 * landing pages — most of which are NOT theme-builder templates and are
-	 * gated behind the narrower 'elementor-templates' category at their own
-	 * routes (/elementor/templates/*). /theme-builder/* itself only
-	 * requires the coarser 'elementor-theme' category
-	 * (get_route_category_map()), so without this a caller holding
-	 * 'elementor-theme' but not 'elementor-templates' could read a
-	 * "section"-type template's metadata straight through
-	 * /theme-builder/templates/{id} — a type that door was never meant to
-	 * expose at all, regardless of category.
-	 *
-	 * @return array<string>
-	 */
-	private function theme_location_types() {
-		return array( 'header', 'footer', 'single', 'single-post', 'single-page', 'archive', 'search-results', 'error-404', 'loop-item' );
-	}
-
-	/**
 	 * Whether $template_id is an elementor_library post AND its own
 	 * `_elementor_template_type` is a genuine theme-location type
 	 * (#1024/#1030 round-2 review, WARN-A) — used by get_template() (the
@@ -242,6 +219,17 @@ class Mcpwp_Theme_Builder {
 	 * a template whose _elementor_template_type has not been set yet (e.g.
 	 * mid-creation) is legitimate.
 	 *
+	 * #1030 round-3 review, item 3: the "which types count as a real theme
+	 * location" definition now lives in ONE place,
+	 * Mcpwp_Api_Auth::is_theme_builder_location_type() — the chokepoint's
+	 * category_for_post_in_route() needs the identical answer (a caller
+	 * reaching a genuine theme location through this same door only needs
+	 * 'elementor-theme'; a "section" template still needs
+	 * 'elementor-templates') and a second, independently-maintained list
+	 * here could silently drift from it. This method keeps its own,
+	 * different job — TYPE validation, not category — Mcpwp_Api_Auth has no
+	 * business knowing which ids /theme-builder itself considers in scope.
+	 *
 	 * @param int $template_id Template ID.
 	 * @return WP_Post|WP_Error
 	 */
@@ -251,8 +239,13 @@ class Mcpwp_Theme_Builder {
 			return new WP_Error( 'not_found', __( 'Template not found.', 'mcpwp' ) );
 		}
 
+		// Mcpwp_Api_Auth is a trait — a static method on it is only reachable
+		// through a class that composes it (PHP resolves it identically to
+		// calling it on that class directly); Mcpwp_REST_API is the base
+		// every REST controller already uses for this same reason elsewhere
+		// in this codebase (see category_for_post_type()'s own docblock).
 		$type = get_post_meta( $template->ID, '_elementor_template_type', true );
-		if ( ! in_array( $type, $this->theme_location_types(), true ) ) {
+		if ( ! Mcpwp_REST_API::is_theme_builder_location_type( $type ) ) {
 			return new WP_Error( 'not_found', __( 'Template not found.', 'mcpwp' ) );
 		}
 

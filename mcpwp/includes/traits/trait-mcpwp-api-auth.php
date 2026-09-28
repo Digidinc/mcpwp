@@ -1491,64 +1491,378 @@ trait Mcpwp_Api_Auth {
 	}
 
 	/**
-	 * Every request param name that can carry a post ID naming the resource a
-	 * route is about to read or write — the single list check_post_naming_params_category()
-	 * below scans, so a new route needs no code here to be covered.
+	 * Round-3 adversarial review of #1024/#1030 (coordinator decision):
+	 * round-2's chokepoint scanned every request for a fixed list of
+	 * PARAM NAMES (id, post_id, page_id, ...) and resolved anything numeric
+	 * found under them via get_post() — which meant a route whose numeric id
+	 * happens to share a name with that list, but names something that is
+	 * NOT a post at all (a WP_User id at /users/{id} or
+	 * /woocommerce/customers/{id}, a term id at /terms/{id}, a menu id at
+	 * /menus/{id}, an event/webhook row id), got resolved anyway: an
+	 * unrelated WooCommerce product happening to share a numeric id with a
+	 * WP_User was enough to 404 a request that never touched a post
+	 * (BLOCK-2). Name-based scanning cannot fix this — the same name means
+	 * different things on different routes — so this map replaces it with
+	 * explicit, per-route-family DECLARATIONS: a route's params are resolved
+	 * as post references only when this map says so, the same "opt in, not
+	 * inferred" discipline get_route_category_map() already uses for
+	 * category, and it lives right below that map for the same reason.
 	 *
-	 * Round-2 adversarial review of #1024/#1030: per-door category checks
-	 * (validate_post(), guard_post_type_category(), the individual REST-layer
-	 * checks this same PR added to /blocks, Pro SEO, Pro Elementor clone/
-	 * landing-page/save-section-as-template, etc.) only ever cover the doors
-	 * someone thought to enumerate. This is the chokepoint that catches the
-	 * ones nobody did — every one of the 4 credential-verdict functions in
-	 * this trait (compute_api_key_verdict(), verify_api_key_auth_only(),
-	 * authenticate_oauth_access_token(), authenticate_broker_bearer_token())
-	 * calls check_post_naming_params_category() as their shared last step,
-	 * so every real dispatch path (direct HTTP, /batch sub-request, an MCP
-	 * tool's internal rest_do_request() re-dispatch, resources/read) runs it —
-	 * with the REAL, already-resolved route and params, since a wrapper's own
-	 * outer request (/mcp, /batch) is explicitly skipped below in favor of the
-	 * inner re-dispatch that carries the actual door.
+	 * Keys are route path PREFIXES, matched the same way
+	 * get_category_for_route() matches get_route_category_map() — first
+	 * match wins, so a longer/more specific prefix (e.g.
+	 * '/woocommerce/products/categories', a TERM id, never a post) MUST be
+	 * listed before a shorter one it would otherwise be swallowed by (e.g.
+	 * '/woocommerce/products'). A prefix mapped to an empty array is
+	 * documentation, not a no-op default: it exists so the next person
+	 * editing this map sees THIS route was considered and deliberately left
+	 * unresolved, rather than merely forgotten (also satisfies the
+	 * enumeration test's requirement that every id-shaped param be
+	 * accounted for one way or the other).
 	 *
-	 * @var array<string>
+	 * Each param spec is a path string resolve_post_ref_ids() understands:
+	 *  - 'name'          scalar param, e.g. the {id} in /pages/(?P<id>\d+)
+	 *  - 'name[]'        an array param, every element a scalar post id
+	 *  - 'name[].key'    an array of objects, 'key' extracted from each
+	 *  - 'name:csv'      a comma-separated string of ids (GET ?ids=1,2,3)
+	 *
+	 * A handful of routes need MORE than a static name — a nav menu item's
+	 * `object_id` only ever names a post when its sibling `type` field is
+	 * 'post_type' (it is a term id under 'taxonomy', nothing under 'custom')
+	 * — those are NOT declared here; check_post_naming_params_category()
+	 * handles them as small, explicit special cases immediately below this
+	 * map, for the same "the guard should not guess" reason.
+	 *
+	 * @return array<string,array<string>> Route prefix => declared param paths.
 	 */
-	const POST_NAMING_PARAMS = array(
-		'id', 'post_id', 'page_id', 'source_id', 'template_id', 'part_id', 'archetype_id', 'target_id', 'source',
-	);
+	public static function get_post_ref_param_map() {
+		return array(
+			// === Elementor — specific families before the generic catch-all ===
+			'/elementor/archetypes'              => array( 'id', 'page_id' ),
+			'/elementor/blueprints'               => array(),
+			'/elementor/build-page'               => array(),
+			'/elementor/bulk'                     => array( 'ids:csv' ),
+			'/elementor/clone'                    => array( 'source_id' ),
+			'/elementor/custom-code'              => array( 'id' ),
+			'/elementor/find-replace'             => array( 'id', 'ids[]' ),
+			'/elementor/globals'                  => array(),
+			'/elementor/kit-css'                  => array(),
+			'/elementor/landing-page'             => array( 'template_id' ),
+			'/elementor/parts'                    => array( 'id', 'page_id' ),
+			'/elementor/save-section-as-template' => array( 'page_id' ),
+			'/elementor/status'                   => array(),
+			'/elementor/templates'                => array( 'id', 'page_id' ),
+			'/elementor/widget-help'               => array(),
+			'/elementor/widgets'                   => array(),
+			// Catch-all: /elementor/{id} and every sub-route hung off it
+			// (add-section, edit-section, remove-section, replace-section,
+			// edit-widget, patch, preview, summary) plus /elementor/
+			// regenerate-css's optional 'id'.
+			'/elementor'                           => array( 'id' ),
+
+			// === Content ===
+			// #1020's own named doors: a generic, id-based door that
+			// resolves an arbitrary post and used to be gated only by ROUTE
+			// PREFIX (always 'content'), not by what the id actually
+			// resolved to.
+			'/fetch'                               => array( 'id' ),
+			'/rendered-html'                       => array( 'id' ),
+			'/rendered-copy'                       => array( 'id' ),
+			'/pages/bulk'                          => array( 'updates[].id' ),
+			// /pages/{id}, .../clone (the {id} IS the clone source),
+			// .../template, .../translations.
+			'/pages'                               => array( 'id' ),
+			'/posts/bulk'                          => array( 'updates[].id' ),
+			'/posts'                               => array( 'id' ),
+			'/post-meta'                           => array( 'id' ),
+			// Generic CPT door: /content/{post_type}/{id}. GET /content
+			// (list) has no 'id' param, so nothing fires there.
+			'/content'                             => array( 'id' ),
+			'/blocks'                              => array( 'id' ),
+
+			// === Content graph ===
+			'/content-graph/apply-link'            => array( 'source_id', 'target_id' ),
+			'/content-graph/suggestions'           => array( 'source_id' ),
+
+			// === SEO — specific plugin/aggregate doors before the /seo/{id} catch-all ===
+			// updates[].id: bulk_update()'s own 'id'→'post_id' alias
+			// normalization runs AFTER auth, so the guard must recognize
+			// both spellings before it (#1030 round-3, BLOCK-3).
+			'/seo/bulk'                            => array( 'updates[].id', 'updates[].post_id' ),
+			'/seo/content-quality'                 => array( 'id' ),
+			'/seo/readiness'                       => array( 'id' ),
+			'/seo/structured-data'                 => array( 'id' ),
+			'/seo/media'                           => array( 'id' ),
+			'/seo/yoast'                           => array( 'id' ),
+			'/seo/rankmath'                        => array( 'id' ),
+			'/seo/aioseo'                          => array( 'id' ),
+			'/seo/seopress'                        => array( 'id' ),
+			// Catch-all: /seo/{id}, /seo/{id}/analyze, /seo/{id}/noindex.
+			// Deliberately NOT 'post_id': /seo/issues and /seo/autofix-plan
+			// take post_id as a pure LIST FILTER over already-stored,
+			// already-status-filtered issue rows, not a post the response
+			// resolves and echoes — declaring it there would 404 a filter
+			// value instead of just returning zero matching issues.
+			'/seo'                                 => array( 'id' ),
+
+			// === Media ===
+			'/media'                               => array( 'id' ),
+
+			// === Theme builder (Pro) — genuinely elementor_library posts;
+			// category_for_post_in_route() below is what keeps a real theme
+			// location distinct from a saved "section" template here, not an
+			// exemption (#1030 round-3, WARN-2).
+			'/theme-builder'                       => array( 'id' ),
+
+			// === WooCommerce — term/customer sub-paths BEFORE the post ones
+			// they would otherwise be swallowed by ===
+			'/woocommerce/products/categories'     => array(), // product_cat TERM id.
+			'/woocommerce/products/tags'           => array(), // product_tag TERM id.
+			'/woocommerce/products'                => array( 'id' ),
+			'/woocommerce/archetypes'              => array( 'id', 'product_id' ),
+			// #1030 round-3, BLOCK-2's own named example: a WooCommerce
+			// "customer" IS a WP_User, resolved by get_user_by(), never
+			// get_post() — declaring 'id' here was what made /users/{id}
+			// and /woocommerce/customers/{id} collide with an unrelated
+			// gated post sharing the same numeric id.
+			'/woocommerce/customers'               => array(),
+			// Orders: under WooCommerce's High-Performance Order Storage
+			// (the current default) an order is a row in a custom table, not
+			// a post at all; under legacy storage it is a 'shop_order' post,
+			// but nothing here can tell which a given site uses without a
+			// query the guard has no business making. Left undeclared either
+			// way — /woocommerce's own route category already gates the
+			// whole family.
+			'/woocommerce/orders'                  => array(),
+
+			// === LearnPress — categories are a TAXONOMY term id, not a post ===
+			'/learnpress/categories'               => array(),
+			'/learnpress/courses'                  => array( 'id' ),
+			'/learnpress/lessons'                  => array( 'id' ),
+			'/learnpress/quizzes'                  => array( 'id' ),
+
+			// === AI integrations that resolve and touch one specific post ===
+			'/integrations/generate-featured-image' => array( 'post_id' ),
+			'/integrations/generate-excerpt'        => array( 'post_id' ),
+			'/integrations/generate-alt-text'       => array( 'attachment_id' ),
+		);
+	}
 
 	/**
-	 * The chokepoint itself (#1024/#1030 round-2 adversarial review,
-	 * ARCHITECTURE requirement): for every Free/Pro REST route, once auth and
-	 * the route's own category are already settled, resolve every param in
-	 * POST_NAMING_PARAMS (plus `ids[]`, `posts[].id`, `items[].id`) to a post
-	 * and, unless it is `post`/`page`/`elementor_library`/`elementor_snippet`
-	 * (governed by the route's own category and, for the Elementor library
-	 * types, by their own precise per-door checks — see the exemption's
-	 * in-line comment further down for why those two additionally need to
-	 * stay out of this chokepoint's generic mapping — this is the SAME
-	 * exemption validate_post() and Mcpwp_REST_Blocks's own guard already
-	 * carry for post/page, and the fix for NIT-C: a 'seo'-only key keeps
-	 * post/page), require caller_may_read_category(category_for_post_type()).
+	 * Routes whose regex or declared args carry a param named like a post
+	 * reference (id/post_id/page_id/source_id/template_id/object_id/ids —
+	 * PostNamingParamChokepointAllRoutesTest's own enumeration pattern) but
+	 * that are NOT post references, so get_post_ref_param_map() above
+	 * correctly maps them to an empty array rather than omitting them.
+	 * Kept as one named, commented list — not scattered empty-array entries
+	 * a reader has to notice are intentional — so the enumeration test's own
+	 * "every matching route is accounted for" assertion has one place to
+	 * check against, matching the map's own prefix-matching rules.
 	 *
-	 * A missing id (get_post() returns null) is left alone here — existence
-	 * is the door's own business, not this chokepoint's; it only ever adds a
-	 * denial, never manufactures a false "not found" for an id the door would
-	 * have resolved just fine. A per-door check that already runs INSIDE the
-	 * handler (kept for byte-parity where one exists) still applies its own
-	 * message; this only fires FIRST, before the handler, for a route nobody
-	 * gave one — and gives the one generic not-found body every such gap now
-	 * shares, rather than continuing to answer with whatever the specific
-	 * handler happened to do (200, a stray write, or a differently-shaped
-	 * error).
+	 * @return array<string> Route prefixes with a non-post id-shaped param.
+	 */
+	public static function get_non_post_id_route_prefixes() {
+		return array(
+			'/users',                          // WP_User id.
+			'/woocommerce/customers',          // WP_User id (see the map's own comment).
+			'/woocommerce/orders',             // HPOS row or legacy post — ambiguous, left alone.
+			'/woocommerce/products/categories', // product_cat TERM id.
+			'/woocommerce/products/tags',      // product_tag TERM id.
+			'/learnpress/categories',          // TAXONOMY term id.
+			'/terms',                          // TERM id.
+			'/categories',                     // TERM id.
+			'/tags',                           // TERM id.
+			'/menus',                          // menu / menu-item id — object_id handled as its own special case below.
+			'/events',                         // MCPWP event-store row id (Free) or Pro Events Calendar row id.
+			'/webhooks',                       // webhook row id.
+			'/api-keys',                       // API key row id (string hash), not numeric anyway.
+			'/design-references',              // design reference row id.
+			'/site-blueprints',                // blueprint row id.
+			'/approvals',                      // approval request id — its TARGET's category is gated separately (#1029), not this id.
+			'/action-log',                     // log row id (non-numeric anyway).
+			'/sidebars',                       // sidebar/widget-area id (string, not numeric).
+			'/widgets',                        // widget instance id (string, not numeric).
+			'/staging',                        // async push-operation id (string, not numeric).
+			'/forms',                          // third-party form-plugin id — most of these plugins do not back entries with wp_posts at all, and the ones that do (CF7) are ungated by post-type today; left alone rather than guessed at.
+			// /graph/node and /graph/neighbors' post_id: Mcpwp_Graph_Reader
+			// is ITS OWN visibility chokepoint (round-1/round-2 of #1024),
+			// filtering by kind/taxonomy in SQL with a richer response shape
+			// (graph_status, cursors) than a flat "not found" — declaring
+			// post_id here too would run this chokepoint's generic check
+			// FIRST and short-circuit that already-correct, already-tested
+			// mechanism with a cruder one. See class-mcpwp-rest-graph.php's
+			// category_excluded_kinds()/category_excluded_taxonomies().
+			'/graph',
+		);
+	}
+
+	/**
+	 * Contextual category for a resolved post reference (#1030 round-3
+	 * review, item 3): the same post can legitimately need a DIFFERENT
+	 * category depending on which door resolved it.
+	 *
+	 * elementor_snippet is always 'elementor-theme' — category_for_post_type()
+	 * already says so and there is no second reading of it.
+	 *
+	 * elementor_library is 'elementor-templates' EXCEPT when the resolving
+	 * route's own category is 'elementor-theme' (i.e. /theme-builder/*) AND
+	 * the template's own `_elementor_template_type` is a genuine
+	 * theme-builder location (header, footer, single*, archive*, popup,
+	 * error-404, loop-item, product*, search-results) — then it is
+	 * 'elementor-theme' too, matching the route it was reached through.
+	 * Round-2's fix for this same problem was a flat EXEMPTION for both
+	 * types (skip the chokepoint entirely), which fixed the false 404 on a
+	 * real theme template but silently stopped gating a "section" template
+	 * read through /theme-builder/* at all (WARN-1/WARN-2's own PoCs — a
+	 * Pro SEO route or /theme-builder/templates/{id}/conditions accepting
+	 * ANY post id, elementor_library included). Reading the template's OWN
+	 * type, rather than exempting the type wholesale, is what lets a real
+	 * theme location and a saved section template answer differently
+	 * through the SAME door.
+	 *
+	 * Every other post type defers to category_for_post_type() unchanged.
+	 *
+	 * @param WP_Post $post           Resolved post.
+	 * @param string  $route_category The resolving route's own category
+	 *                                (get_category_for_route()'s answer).
+	 * @return string Category slug.
+	 */
+	public static function category_for_post_in_route( WP_Post $post, $route_category ) {
+		if ( 'elementor_library' === $post->post_type && 'elementor-theme' === $route_category ) {
+			$template_type = get_post_meta( $post->ID, '_elementor_template_type', true );
+			if ( self::is_theme_builder_location_type( $template_type ) ) {
+				return 'elementor-theme';
+			}
+		}
+
+		return self::category_for_post_type( $post->post_type );
+	}
+
+	/**
+	 * Whether an Elementor Pro `_elementor_template_type` value is a genuine
+	 * theme-builder location (a page/site region bound to a display
+	 * condition) rather than a saved page template, section, popup-as-library-
+	 * item, or landing page — the same "this is a THEME location, not just
+	 * anything in the template library" line category_for_post_in_route()
+	 * needs and Mcpwp_Theme_Builder::resolve_theme_template() drew
+	 * independently for its own, non-category reason (#1030 round-2 WARN-A).
+	 *
+	 * header/footer/popup/error-404/loop-item/search-results are exact
+	 * matches; single/archive/product are prefixes (Elementor Pro suffixes
+	 * them per-post-type and per-taxonomy, e.g. 'single-post', 'single-page',
+	 * 'archive-product', 'product-archive').
+	 *
+	 * Public static so Mcpwp_Theme_Builder can share this one definition
+	 * instead of keeping its own, second list that could drift from this one.
+	 *
+	 * @param mixed $type The post's `_elementor_template_type` meta value.
+	 * @return bool
+	 */
+	public static function is_theme_builder_location_type( $type ) {
+		if ( ! is_string( $type ) || '' === $type ) {
+			return false;
+		}
+
+		$exact = array( 'header', 'footer', 'popup', 'error-404', 'loop-item', 'search-results' );
+		if ( in_array( $type, $exact, true ) ) {
+			return true;
+		}
+
+		foreach ( array( 'single', 'archive', 'product' ) as $prefix ) {
+			if ( $type === $prefix || 0 === strpos( $type, $prefix . '-' ) ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * Extract raw candidate id values named by one declared param PATH
+	 * (get_post_ref_param_map()'s own spec syntax) out of a request's params.
+	 * Never resolves anything — just pulls out what's THERE, numeric or not;
+	 * check_post_naming_params_category() filters and caps the result.
+	 *
+	 * @param array  $params Request params.
+	 * @param string $path   One declared spec, e.g. 'id', 'ids[]', 'updates[].id', 'ids:csv'.
+	 * @return array<mixed> Raw values, unfiltered.
+	 */
+	protected function extract_post_ref_values( array $params, $path ) {
+		if ( false !== strpos( $path, ':csv' ) ) {
+			$key = substr( $path, 0, -4 );
+			$raw = isset( $params[ $key ] ) ? $params[ $key ] : null;
+			if ( ! is_string( $raw ) || '' === $raw ) {
+				return array();
+			}
+			return array_map( 'trim', explode( ',', $raw ) );
+		}
+
+		if ( false !== strpos( $path, '[].' ) ) {
+			list( $list_key, $field ) = explode( '[].', $path, 2 );
+			if ( ! isset( $params[ $list_key ] ) || ! is_array( $params[ $list_key ] ) ) {
+				return array();
+			}
+			$values = array();
+			foreach ( $params[ $list_key ] as $item ) {
+				if ( is_array( $item ) && isset( $item[ $field ] ) ) {
+					$values[] = $item[ $field ];
+				}
+			}
+			return $values;
+		}
+
+		if ( '[]' === substr( $path, -2 ) ) {
+			$key = substr( $path, 0, -2 );
+			return ( isset( $params[ $key ] ) && is_array( $params[ $key ] ) ) ? array_values( $params[ $key ] ) : array();
+		}
+
+		return isset( $params[ $path ] ) ? array( $params[ $path ] ) : array();
+	}
+
+	/**
+	 * The chokepoint (#1024/#1030 round-3 adversarial review, ARCHITECTURE
+	 * decision): declared-params replacement for round-2's name-based scan.
+	 * For every Free/Pro REST route, once auth and the route's own category
+	 * are already settled, resolve exactly the params get_post_ref_param_map()
+	 * declares for this route (plus the small menu-item special case below)
+	 * and refuse with post_ref_not_found_error() when one names a post the
+	 * caller's category cannot read.
+	 *
+	 * A missing id (get_post() returns null) is left alone here for BOTH
+	 * scalar and array specs, exactly as round-2 established — existence is
+	 * the door's own business, not this chokepoint's; it only ever adds a
+	 * category denial, never manufactures a false "not found" for an id the
+	 * door would have resolved just fine. (An earlier round-3 draft of this
+	 * method also enforced existence for scalar params to get "missing" and
+	 * "category-gated" to answer identically purely from the guard — that
+	 * broke 57 existing tests across the suite that construct a request
+	 * naming a placeholder id with no matching fixture, because their
+	 * concern is something else entirely (publish-scope, draft-leak parity,
+	 * archetype-apply status logic) and they were never meant to exercise
+	 * this chokepoint's existence handling at all. Byte-parity between
+	 * "missing" and "gated" for a DECLARED route is instead achieved at each
+	 * door's own existing missing-post branch, updated to call
+	 * post_ref_not_found_error() too — see this PR's per-file changes to
+	 * class-mcpwp-rest-blocks.php, -seo.php, -seo-audit.php, etc.)
+	 *
+	 * ARRAY-shaped params (ids[], updates[].id, ...) share the exact same
+	 * "skip a missing id, only ever add a category denial" treatment: round-2
+	 * established that a GATED id anywhere in a batch refuses the WHOLE
+	 * request (an intentional, tested behavior — see
+	 * Regression1024ElementorGraphBlocksCategoryGateTest), while several
+	 * doors (get_elementor_data_bulk(), bulk find-replace) have their own,
+	 * already-correct, already-tested behavior of silently skipping a
+	 * MISSING id and still processing the rest of the batch.
+	 *
+	 * A capped, single query resolves every array-shaped id at once
+	 * (#1030 round-3 WARN-5) instead of one get_post() call per id — with a
+	 * declared array param capped at 500 ids, refused with 400 BEFORE any
+	 * lookup runs at all if a caller sends more.
 	 *
 	 * /mcp and /batch are skipped: both are envelopes whose OWN top-level
-	 * body/params do not name the real target (an /mcp JSON-RPC `id` is a
-	 * correlation id, not a post id; /batch's `operations` array is shaped
-	 * per-operation). Each re-dispatches its real work via rest_do_request(),
-	 * which runs this SAME check again against the real route and params
-	 * (verify_api_key_auth_only(), Mcpwp_REST_Batch::$is_batch_sub_request) —
-	 * the identical carve-out check_key_category_restriction_for_route()
-	 * already uses for /batch, for the same reason.
+	 * body/params do not name the real target. Each re-dispatches its real
+	 * work via rest_do_request(), which runs this SAME check again against
+	 * the real route and params.
 	 *
 	 * @param WP_REST_Request $request Request object.
 	 * @return true|WP_Error
@@ -1567,72 +1881,108 @@ trait Mcpwp_Api_Auth {
 			return true;
 		}
 
-		$ids = array();
-		foreach ( self::POST_NAMING_PARAMS as $key ) {
-			if ( isset( $params[ $key ] ) && is_numeric( $params[ $key ] ) ) {
-				$ids[] = (int) $params[ $key ];
+		$path = ( 0 === strpos( $route, '/mcpwp/v1' ) ) ? substr( $route, strlen( '/mcpwp/v1' ) ) : $route;
+
+		$specs = null;
+		foreach ( self::get_post_ref_param_map() as $prefix => $declared ) {
+			if ( $path === $prefix || 0 === strpos( $path, $prefix . '/' ) ) {
+				$specs = $declared;
+				break;
 			}
 		}
-		if ( isset( $params['ids'] ) && is_array( $params['ids'] ) ) {
-			foreach ( $params['ids'] as $value ) {
-				if ( is_numeric( $value ) ) {
-					$ids[] = (int) $value;
+
+		$scalar_ids = array();
+		$array_ids  = array();
+
+		if ( null !== $specs ) {
+			foreach ( $specs as $spec ) {
+				$is_array_spec = ( '[]' === substr( $spec, -2 ) ) || false !== strpos( $spec, '[].' );
+				$raw           = $this->extract_post_ref_values( $params, $spec );
+
+				if ( $is_array_spec && count( $raw ) > 500 ) {
+					return new WP_Error(
+						'too_many_ids',
+						__( 'A single request may name at most 500 posts.', 'mcpwp' ),
+						array( 'status' => 400 )
+					);
 				}
-			}
-		}
-		// 'posts'/'items' are the review's own named examples; 'updates' and
-		// 'pages' are the SAME batch-of-objects shape under a different key
-		// this codebase actually uses (Mcpwp_REST_Posts::bulk_update_posts()/
-		// bulk_create_posts(), Mcpwp_REST_Pages's matching pair,
-		// Mcpwp_REST_SEO::bulk_update()) — listed explicitly rather than
-		// guessed at, so a batch item naming a gated post through any of
-		// them is caught the same way.
-		foreach ( array( 'posts', 'items', 'updates', 'pages' ) as $list_key ) {
-			if ( ! isset( $params[ $list_key ] ) || ! is_array( $params[ $list_key ] ) ) {
-				continue;
-			}
-			foreach ( $params[ $list_key ] as $item ) {
-				if ( is_array( $item ) && isset( $item['id'] ) && is_numeric( $item['id'] ) ) {
-					$ids[] = (int) $item['id'];
+
+				foreach ( $raw as $value ) {
+					if ( ! is_numeric( $value ) || (int) $value <= 0 ) {
+						continue;
+					}
+					if ( $is_array_spec ) {
+						$array_ids[] = (int) $value;
+					} else {
+						$scalar_ids[] = (int) $value;
+					}
 				}
 			}
 		}
 
-		$ids = array_unique( array_filter( $ids, static function ( $id ) {
-			return $id > 0;
-		} ) );
+		// The nav menu item special case (#1030 round-3, WARN-3):
+		// object_id only ever names a post when its sibling 'type' field is
+		// literally 'post_type' — under 'taxonomy' it is a term id, under
+		// 'custom' there is no object at all. Declaring it unconditionally
+		// in the map above would misresolve the other two shapes exactly
+		// the way BLOCK-2 did for /users and /woocommerce/customers.
+		if ( ( $this->route_matches( $path, '/menus' ) ) && 'post_type' === ( $params['type'] ?? null )
+			&& isset( $params['object_id'] ) && is_numeric( $params['object_id'] ) && (int) $params['object_id'] > 0
+		) {
+			$scalar_ids[] = (int) $params['object_id'];
+		}
 
-		foreach ( $ids as $id ) {
+		if ( empty( $scalar_ids ) && empty( $array_ids ) ) {
+			return true;
+		}
+
+		$route_category = self::get_category_for_route( '/mcpwp/v1' . $path );
+
+		// Scalar params: category only, same as array params below — a
+		// missing id is silently skipped (see this method's own docblock for
+		// why an existence check here broke 57 unrelated tests).
+		foreach ( array_unique( $scalar_ids ) as $id ) {
 			$post = get_post( $id );
 			if ( ! $post instanceof WP_Post ) {
 				continue;
 			}
-			// post/page: governed by the route's own category everywhere
-			// (validate_post()'s own exemption, generalized).
-			//
-			// elementor_library/elementor_snippet: round-2 review's live
-			// rig proof found this chokepoint's generic
-			// category_for_post_type() mapping ('elementor-templates' for
-			// EVERY elementor_library post) actively breaks
-			// /theme-builder/*, whose own established category is the
-			// DIFFERENT, narrower 'elementor-theme' — a key legitimately
-			// scoped to 'elementor-theme' for theme-builder work could no
-			// longer read its OWN theme templates
-			// (Mcpwp_Theme_Builder::resolve_theme_template(), WARN-A,
-			// already restricts those to genuine theme locations).
-			// Every place elementor_library/elementor_snippet is reachable
-			// already has its own precise, domain-aware category check —
-			// validate_post()'s elementor_type_category_denied(),
-			// resolve_theme_template(), and this PR's individual REST-layer
-			// checks on clone/create_landing_page/save_section_as_template/
-			// apply_template — so this chokepoint does not need to
-			// duplicate that work with a cruder, one-size-fits-all mapping,
-			// and doing so only reopens gaps of its own making.
-			if ( in_array( $post->post_type, array( 'post', 'page', 'elementor_library', 'elementor_snippet' ), true ) ) {
+			if ( in_array( $post->post_type, array( 'post', 'page' ), true ) ) {
 				continue;
 			}
-			if ( ! $this->caller_may_read_category( $this->category_for_post_type( $post->post_type ) ) ) {
-				return $this->generic_post_naming_param_not_found_error();
+			if ( ! $this->caller_may_read_category( self::category_for_post_in_route( $post, $route_category ) ) ) {
+				return $this->post_ref_not_found_error( $request );
+			}
+		}
+
+		// Array params: category only — a genuinely missing id is silently
+		// skipped so the door's own per-item/partial-success logic still runs.
+		// One query resolves the whole batch (#1030 round-3 WARN-5) instead of
+		// one get_post() call per id. WP_Query directly, not get_posts(): both
+		// are real WordPress core, but this codebase's own PHPUnit test double
+		// (tests/bootstrap.php) implements 'any' and 'post__in' filtering on
+		// WP_Query only, not on the separate get_posts() function — calling
+		// get_posts() here silently resolved zero posts under test (found by
+		// this fix's own full-suite run) while still working against a real
+		// database, which would have shipped this bug invisibly.
+		if ( ! empty( $array_ids ) ) {
+			$resolved = ( new WP_Query( array(
+				'post__in'               => array_unique( $array_ids ),
+				'post_type'              => 'any',
+				'post_status'            => 'any',
+				'posts_per_page'         => -1,
+				'no_found_rows'          => true,
+				'update_post_meta_cache' => false,
+				'update_post_term_cache' => false,
+				'suppress_filters'       => true,
+			) ) )->posts;
+
+			foreach ( $resolved as $post ) {
+				if ( in_array( $post->post_type, array( 'post', 'page' ), true ) ) {
+					continue;
+				}
+				if ( ! $this->caller_may_read_category( self::category_for_post_in_route( $post, $route_category ) ) ) {
+					return $this->post_ref_not_found_error( $request );
+				}
 			}
 		}
 
@@ -1640,25 +1990,32 @@ trait Mcpwp_Api_Auth {
 	}
 
 	/**
-	 * The one generic not-found body check_post_naming_params_category()
-	 * denies with — deliberately the same {code, status} every existence-
-	 * sensitive door in this plugin already converges on
-	 * (build_not_found_error(), validate_post(), guard_post_type_category()),
-	 * so a route this chokepoint alone protects reads no differently from one
-	 * with its own hand-written check.
+	 * The one generic not-found body every declared post-reference param
+	 * denies with — by construction (#1030 round-3 item 2), not by chasing
+	 * down and aligning each door's own bespoke message/status separately.
+	 * check_post_naming_params_category() returns this for both a missing
+	 * and a category-gated scalar id; declared routes that also run their
+	 * own defense-in-depth check (kept for the handful of tests that call a
+	 * handler directly, bypassing check_permission()) return this same
+	 * error too, so the two paths cannot drift apart.
 	 *
+	 * $request is accepted, not currently read, so a future per-route
+	 * refinement (echoing which param a real id was rejected under, for
+	 * example) has somewhere to be added without changing every call site's
+	 * signature again.
+	 *
+	 * @param WP_REST_Request|null $request Request object (unused today).
 	 * @return WP_Error
 	 */
-	protected function generic_post_naming_param_not_found_error() {
-		$error = new WP_Error(
+	protected function post_ref_not_found_error( $request = null ) {
+		return new WP_Error(
 			'not_found',
 			__( 'The requested resource was not found.', 'mcpwp' ),
-			array( 'status' => 404 )
+			array(
+				'status' => 404,
+				'hint'   => __( 'Check the id with wp_search or wp_list_posts.', 'mcpwp' ),
+			)
 		);
-		if ( class_exists( 'Mcpwp_Error_Hints' ) ) {
-			$error = Mcpwp_Error_Hints::enhance_error( $error );
-		}
-		return $error;
 	}
 
 	/**

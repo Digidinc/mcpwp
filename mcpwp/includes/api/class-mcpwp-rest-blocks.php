@@ -213,13 +213,13 @@ class Mcpwp_REST_Blocks extends Mcpwp_REST_API {
 		$post    = get_post( $post_id );
 
 		if ( ! $post ) {
-			return $this->error_response( 'not_found', 'Post not found.', 404 );
+			return $this->error_response_from_wp_error( $this->post_ref_not_found_error( $request ) );
 		}
 
 		// Non-public gate: get_blocks returns raw_content + parsed blocks for ANY
 		// status, so a read-only key could otherwise read an unpublished body.
 		// Return the same 404 as a missing post so existence is not disclosed.
-		$denied = $this->guard_non_public_post( $post, 'Post not found.' );
+		$denied = $this->guard_non_public_post( $post, __( 'The requested resource was not found.', 'mcpwp' ), __( 'Check the id with wp_search or wp_list_posts.', 'mcpwp' ) );
 		if ( $denied ) {
 			return $denied;
 		}
@@ -227,7 +227,7 @@ class Mcpwp_REST_Blocks extends Mcpwp_REST_API {
 		// Category gate (#1024): same 404 for a post of a type this caller's
 		// category cannot read — see blocks_post_category_denied().
 		if ( $this->blocks_post_category_denied( $post ) ) {
-			return $this->error_response( 'not_found', 'Post not found.', 404 );
+			return $this->error_response_from_wp_error( $this->post_ref_not_found_error( $request ) );
 		}
 
 		$content = $post->post_content;
@@ -263,14 +263,14 @@ class Mcpwp_REST_Blocks extends Mcpwp_REST_API {
 		$post    = get_post( $post_id );
 
 		if ( ! $post ) {
-			return $this->error_response( 'not_found', 'Post not found.', 404 );
+			return $this->error_response_from_wp_error( $this->post_ref_not_found_error( $request ) );
 		}
 
 		// Status-parity guard: a read-only key must not read a draft/private post
 		// body. set_blocks queues an approval whose public_record.diff carries a
 		// before_excerpt of the existing content, so reject a non-public source
 		// with the same 404 a missing post returns before any body is read.
-		$source_guard = $this->guard_non_public_post( $post, 'Post not found.' );
+		$source_guard = $this->guard_non_public_post( $post, __( 'The requested resource was not found.', 'mcpwp' ), __( 'Check the id with wp_search or wp_list_posts.', 'mcpwp' ) );
 		if ( is_wp_error( $source_guard ) ) {
 			return $source_guard;
 		}
@@ -279,7 +279,7 @@ class Mcpwp_REST_Blocks extends Mcpwp_REST_API {
 		// category cannot read — see blocks_post_category_denied(). Checked
 		// before any body is read or an approval is queued.
 		if ( $this->blocks_post_category_denied( $post ) ) {
-			return $this->error_response( 'not_found', 'Post not found.', 404 );
+			return $this->error_response_from_wp_error( $this->post_ref_not_found_error( $request ) );
 		}
 
 		$blocks  = $request->get_param( 'blocks' );
@@ -625,14 +625,14 @@ class Mcpwp_REST_Blocks extends Mcpwp_REST_API {
 		$post    = get_post( $post_id );
 
 		if ( ! $post ) {
-			return $this->error_response( 'not_found', 'Post not found.', 404 );
+			return $this->error_response_from_wp_error( $this->post_ref_not_found_error( $request ) );
 		}
 
 		// Status-parity guard: patching a section reads the existing post body and
 		// queues an approval whose diff carries a before_excerpt of it. A read-only
 		// key must not reach a draft/private body — reject with the same 404 a
 		// missing post returns.
-		$source_guard = $this->guard_non_public_post( $post, 'Post not found.' );
+		$source_guard = $this->guard_non_public_post( $post, __( 'The requested resource was not found.', 'mcpwp' ), __( 'Check the id with wp_search or wp_list_posts.', 'mcpwp' ) );
 		if ( is_wp_error( $source_guard ) ) {
 			return $source_guard;
 		}
@@ -640,7 +640,7 @@ class Mcpwp_REST_Blocks extends Mcpwp_REST_API {
 		// Category gate (#1024): same 404 for a post of a type this caller's
 		// category cannot read — see blocks_post_category_denied().
 		if ( $this->blocks_post_category_denied( $post ) ) {
-			return $this->error_response( 'not_found', 'Post not found.', 404 );
+			return $this->error_response_from_wp_error( $this->post_ref_not_found_error( $request ) );
 		}
 
 		$selector = $request->get_param( 'selector' );

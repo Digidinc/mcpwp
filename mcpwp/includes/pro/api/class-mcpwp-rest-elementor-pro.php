@@ -2814,18 +2814,22 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		// ANY source post type with no category restriction — a designer key
 		// could clone a WooCommerce product (including its _sku and other
 		// meta) as a new product, or clone an Elementor template with
-		// elementor-templates disabled site-wide. Same shape clone_page()
-		// itself already uses for a genuinely missing source (no explicit
-		// status — error_response_from_wp_error()'s own default), so denial
-		// is byte-identical.
+		// elementor-templates disabled site-wide.
 		// #1030 round-2 review, BLOCK-C (regression): page/post are this
 		// door's base case, exempt from the category check — same exemption
 		// validate_post() and every other #1024 fix carries. Without it, a
 		// designer key (holds elementor/elementor-build, never 'content')
 		// cloning an ordinary PAGE was wrongly denied.
+		// #1030 round-3 review, item 2: 'source_id' is a declared post-ref
+		// param (Mcpwp_Api_Auth::get_post_ref_param_map()), so the chokepoint
+		// already refuses a gated source before this handler runs. This stays
+		// as defense-in-depth for a direct handler call that bypasses
+		// check_permission(), and now answers with the SAME generic body the
+		// chokepoint uses rather than this door's own former bespoke
+		// "Source page not found." text, so the two paths cannot drift apart.
 		$source = get_post( $source_id );
 		if ( $source && ! in_array( $source->post_type, array( 'page', 'post' ), true ) && ! $this->caller_may_read_category( $this->category_for_post_type( $source->post_type ) ) ) {
-			$category_denied = new WP_Error( 'not_found', __( 'Source page not found.', 'mcpwp' ) );
+			$category_denied = $this->post_ref_not_found_error( $request );
 			$this->log_activity( 'clone_page', $request, null, $this->get_wp_error_status( $category_denied ) );
 			return $this->error_response_from_wp_error( $category_denied );
 		}

@@ -86,7 +86,7 @@ trait Mcpwp_Elementor_Validator_Trait {
 	}
 
 	/**
-	 * The "not found or unsupported type" hint, keyed by post id.
+	 * The not-found hint, keyed by post id.
 	 *
 	 * Single source of truth for validate_post()'s own missing/unsupported
 	 * branch AND Mcpwp_REST_Elementor's guard_non_public_post() calls
@@ -97,14 +97,19 @@ trait Mcpwp_Elementor_Validator_Trait {
 	 * category-denied post (#1024) folds into this SAME hint too — see
 	 * validate_post() below.
 	 *
-	 * @param int $post_id Post ID.
+	 * #1030 round-3 review, item 2: matches
+	 * Mcpwp_Api_Auth::post_ref_not_found_error()'s own fixed hint exactly
+	 * (not id-substituted) — the chokepoint now answers with that SAME text
+	 * for a category-gated /elementor/{id} before this method is even
+	 * reached, so the two paths (guard-level and this in-handler
+	 * defense-in-depth check) must agree byte-for-byte, not merely in shape.
+	 *
+	 * @param int $post_id Post ID. Unused — kept so existing call sites that
+	 *                     pass an id do not need to change.
 	 * @return string
 	 */
 	public function not_found_hint( $post_id ) {
-		return sprintf(
-			'Post ID %d not found or is not a supported type (page, post, elementor_library, elementor_snippet). Use wp_list_pages or wp_list_posts to find valid IDs.',
-			absint( $post_id )
-		);
+		return __( 'Check the id with wp_search or wp_list_posts.', 'mcpwp' );
 	}
 
 	/**
@@ -120,7 +125,10 @@ trait Mcpwp_Elementor_Validator_Trait {
 		if ( ! $post || ! in_array( $post->post_type, $allowed, true ) || $this->elementor_type_category_denied( $post->post_type ) ) {
 			return new WP_Error(
 				'not_found',
-				__( 'Post not found or unsupported type.', 'mcpwp' ),
+				// #1030 round-3, item 2: matches
+				// Mcpwp_Api_Auth::post_ref_not_found_error()'s message —
+				// see not_found_hint()'s docblock for why.
+				__( 'The requested resource was not found.', 'mcpwp' ),
 				array(
 					'status' => 404,
 					'hint'   => $this->not_found_hint( $post_id ),

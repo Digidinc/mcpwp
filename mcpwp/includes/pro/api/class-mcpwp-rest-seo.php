@@ -34,28 +34,32 @@ class Mcpwp_REST_SEO extends Mcpwp_REST_API {
 
 	/**
 	 * Category-gate an id-based SEO door (#1024 round-1 review, WARN-1).
-	 * $this->seo (Mcpwp_SEO) is a plain business-logic class with no REST/
-	 * auth context of its own, and its own "post not found" shape carries
-	 * no explicit status (falls back to error_response_from_wp_error()'s
-	 * default) — so a category denial is built to match that SAME shape
-	 * byte-for-byte, rather than reusing guard_post_type_category()'s own
-	 * (differently-shaped, explicit-404) not-found error, which would make
-	 * "missing" and "category-denied" distinguishable by status code alone.
 	 *
 	 * Returns null (allowed) for an id that does not resolve at all —
 	 * $this->seo's own call produces the door's real "not found" answer for
 	 * that case; this only ever adds a denial, never removes one.
 	 *
-	 * @param int $post_id Post ID.
+	 * #1030 round-3 review, item 2: 'id' is a declared post-ref param for
+	 * every /seo/* route this is called from (Mcpwp_Api_Auth::
+	 * get_post_ref_param_map()), so the chokepoint already refuses a gated
+	 * (or missing) id with post_ref_not_found_error() before this handler
+	 * runs — this stays as defense-in-depth for a direct handler call that
+	 * bypasses check_permission(), and now answers with that SAME shared
+	 * error (previously a bespoke, no-explicit-status "Post not found."
+	 * distinguishable from a genuine miss by status code alone) so the two
+	 * paths cannot drift apart.
+	 *
+	 * @param int              $post_id Post ID.
+	 * @param WP_REST_Request  $request Request object, for the shared error.
 	 * @return WP_Error|null
 	 */
-	private function seo_category_denied( $post_id ) {
+	private function seo_category_denied( $post_id, $request = null ) {
 		$post = get_post( $post_id );
 		if ( ! $post || $this->caller_may_read_category( $this->category_for_post_type( $post->post_type ) ) ) {
 			return null;
 		}
 
-		return new WP_Error( 'not_found', __( 'Post not found.', 'mcpwp' ) );
+		return $this->post_ref_not_found_error( $request );
 	}
 
 	/**
@@ -265,7 +269,7 @@ class Mcpwp_REST_SEO extends Mcpwp_REST_API {
 		$post_id = absint( $request->get_param( 'id' ) );
 		$plugin  = $request->get_param( 'plugin' );
 
-		$category_denied = $this->seo_category_denied( $post_id );
+		$category_denied = $this->seo_category_denied( $post_id, $request );
 		if ( is_wp_error( $category_denied ) ) {
 			$this->log_activity( 'get_seo', $request, null, $this->get_wp_error_status( $category_denied ) );
 			return $this->error_response_from_wp_error( $category_denied );
@@ -294,7 +298,7 @@ class Mcpwp_REST_SEO extends Mcpwp_REST_API {
 		$post_id = absint( $request->get_param( 'id' ) );
 		$plugin  = $request->get_param( 'plugin' );
 
-		$category_denied = $this->seo_category_denied( $post_id );
+		$category_denied = $this->seo_category_denied( $post_id, $request );
 		if ( is_wp_error( $category_denied ) ) {
 			$this->log_activity( 'update_seo', $request, null, $this->get_wp_error_status( $category_denied ) );
 			return $this->error_response_from_wp_error( $category_denied );
