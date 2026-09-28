@@ -389,6 +389,15 @@ abstract class Mcpwp_REST_API {
 	 * @return WP_Error Error object with hints.
 	 */
 	protected function error_response( $code, $message, $status = 400, $context = array() ) {
+		// The canonical post-ref not-found error (Mcpwp_Api_Auth::
+		// post_ref_not_found_error()) leaves every handler exactly as the
+		// permission layer sends it: Mcpwp_Error_Hints must not swap in its
+		// id-echoing 'not_found' hint, or the same refusal reads differently
+		// depending on which layer produced it (#1030 round-4, BLOCK-1).
+		if ( self::is_post_ref_not_found( $code, $message ) ) {
+			return $this->post_ref_not_found_error();
+		}
+
 		$error = new WP_Error( $code, $message, array( 'status' => $status ) );
 
 		if ( class_exists( 'Mcpwp_Error_Hints' ) ) {
@@ -541,6 +550,33 @@ abstract class Mcpwp_REST_API {
 		// bypassed by a subclass that forgets to re-apply it.
 		$include_drafts = $include_drafts && $this->requester_can_see_non_public();
 		$statuses = $include_drafts ? array( 'publish', 'draft', 'private' ) : array( 'publish' );
+
+		// An empty $post_types means "no readable type" (parse_graph_post_types()
+		// filters to a caller's held categories, #1024) and must return an
+		// empty graph, never every post. get_posts()/WP_Query silently
+		// DEFAULTS an empty post_type array to 'post' (its own "nothing was
+		// asked for" fallback), which here would hand back exactly the data
+		// this call was trying not to.
+		if ( empty( $post_types ) ) {
+			return array(
+				'summary'  => array(
+					'node_count'   => 0,
+					'edge_count'   => 0,
+					'orphan_count' => 0,
+					'post_types'   => array(),
+					'statuses'     => $statuses,
+					'signals'      => array( 'hub_score', 'rank_score', 'freshness_score', 'orphan_severity', 'menu_depth', 'shared_taxonomy' ),
+				),
+				'nodes'    => array(),
+				'edges'    => array(),
+				'orphans'  => array(),
+				'workflow' => array(
+					'read'     => 'Use this graph before creating pages or adding internal links.',
+					'suggest'  => 'Choose candidate links from nodes and edges; do not invent internal URLs.',
+					'approval' => 'Return a link diff before applying links to page content.',
+				),
+			);
+		}
 
 		$posts = get_posts(
 			array(
@@ -722,13 +758,54 @@ abstract class Mcpwp_REST_API {
 	}
 
 	/**
-	 * Parse requested graph post types and keep only public/queryable types.
+	 * Parse requested graph post types and keep only public/queryable types
+	 * this caller's key may actually read.
+	 *
+	 * Every caller of this wrapper (content-graph, SEO audit/content-quality)
+	 * runs in a real request context, so $this->caller_may_read_category()
+	 * is always available here — unlike the static Mcpwp_Graph_Builder
+	 * method this wraps, which has no auth context and is left untouched.
+	 *
+	 * Before this, a caller who could reach /content-graph or /seo/audit at
+	 * all (route category 'content'/'seo') could request
+	 * post_types=product,elementor_library and get WooCommerce product or
+	 * Elementor template nodes — titles, excerpts, word counts — back in
+	 * the graph even with 'woocommerce'/'elementor-templates' disabled site-
+	 * wide, because the only filter here was "is this type public/
+	 * queryable", never which MCPWP tool category owns it (#1024, follow-up
+	 * to #1022's WARN-2, applying the same category_for_post_type()/
+	 * caller_may_read_category() chokepoint). page/post always resolve to
+	 * 'content' here, same as the door itself defaults to when nothing is
+	 * requested, so this is a no-op for the common case.
+	 *
+	 * A gated type is silently dropped, not refused: unknown/non-public
+	 * types are already dropped the same way one line up, and the default
+	 * fallback to page/post below covers "nothing left".
 	 *
 	 * @param string $post_types Raw comma-separated post types.
 	 * @return array Post types.
 	 */
 	protected function parse_graph_post_types( $post_types ) {
-		return Mcpwp_Graph_Builder::parse_graph_post_types( $post_types );
+		$types = Mcpwp_Graph_Builder::parse_graph_post_types( $post_types );
+
+		// No page/post fallback here on an empty result, unlike the wrapped
+		// method: THAT fallback means "nothing recognisable was asked for,
+		// default to something sane" (its own docblock) — never reachable
+		// with an empty result from this filter, since it only ever
+		// narrows an already-non-empty list. An empty result here is
+		// always a permission denial (no requested type's category is
+		// held), and defaulting to page/post would hand back 'content'
+		// data to a caller this filter just proved does not have 'content'
+		// category. build_content_graph_data() treats an empty list as "no
+		// nodes", not as WP_Query's own empty-post_type default of 'post'.
+		return array_values(
+			array_filter(
+				$types,
+				function ( $type ) {
+					return $this->caller_may_read_category( $this->category_for_post_type( $type ) );
+				}
+			)
+		);
 	}
 
 	/**

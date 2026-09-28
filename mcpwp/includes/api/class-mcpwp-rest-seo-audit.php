@@ -464,15 +464,22 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 		$post = get_post( $post_id );
 
 		if ( ! $post ) {
-			return $this->error_response( 'not_found', 'Post not found.', 404 );
+			return $this->error_response_from_wp_error( $this->post_ref_not_found_error( $request ) );
 		}
 
 		// Non-public gate: this surface returns the draft's title/status/meta-
 		// description/heading signals, so a read-only key must be denied with the
 		// same 404 as a missing post before any of those are read.
-		$denied = $this->guard_non_public_post( $post, 'Post not found.' );
+		$denied = $this->guard_non_public_post( $post, __( 'The requested resource was not found.', 'mcpwp' ), __( 'Check the id with wp_search or wp_list_posts.', 'mcpwp' ) );
 		if ( $denied ) {
 			return $denied;
+		}
+
+		// Category gate (#1024 round-1 review, WARN-1): same 404 for a post of
+		// a type this caller's category cannot read.
+		$category_denied = $this->guard_post_type_category( $post, __( 'The requested resource was not found.', 'mcpwp' ) );
+		if ( is_wp_error( $category_denied ) ) {
+			return $category_denied;
 		}
 
 		$this->log_activity( 'validate_seo_readiness', $request, array( 'post_id' => $post_id ) );
@@ -718,7 +725,15 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 		$include_drafts = rest_sanitize_boolean( $request->get_param( 'include_drafts' ) ) && $this->requester_can_see_non_public();
 		$store          = rest_sanitize_boolean( $request->get_param( 'store' ) );
 		$statuses       = $include_drafts ? array( 'publish', 'draft', 'private' ) : array( 'publish' );
-		$posts          = get_posts(
+		// #1024 round-1 review, WARN-2: an empty $post_types (every requested
+		// type filtered out by parse_graph_post_types()'s category check)
+		// means NO readable type, never "run get_posts() anyway" — WordPress
+		// silently defaults an empty post_type array to 'post', which would
+		// audit (and disclose issues about) content this caller's category
+		// just proved it cannot read. build_content_graph_data() guards the
+		// same gotcha for the content-graph door; this is the audit door's
+		// own direct get_posts() call.
+		$posts = empty( $post_types ) ? array() : get_posts(
 			array(
 				'post_type'      => $post_types,
 				'post_status'    => $statuses,
@@ -746,7 +761,25 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 		// Build the content link-graph ONCE for the whole run. It is identical
 		// across audited posts for a fixed post-type set, so rebuilding it per
 		// post (as the single-post readiness endpoint does) is pure waste.
-		$graph_post_types       = array_values( array_unique( array_merge( array( 'page', 'post' ), $post_types ) ) );
+		//
+		// page/post are added back as candidate LINK TARGETS even when the
+		// caller only asked to audit some other type (e.g. product) — an
+		// audit still needs to validate outbound links to ordinary pages.
+		// #1024 round-1 review, WARN-2: this must NOT re-add a type the
+		// caller's own category already excluded — page/post are filtered
+		// through the SAME category check $post_types already went through
+		// (parse_graph_post_types()), or a 'woocommerce'-only key auditing
+		// products could get page/post titles/excerpts back in the graph
+		// with no 'content' category at all.
+		$link_target_types = array_values(
+			array_filter(
+				array( 'page', 'post' ),
+				function ( $type ) {
+					return $this->caller_may_read_category( $this->category_for_post_type( $type ) );
+				}
+			)
+		);
+		$graph_post_types       = array_values( array_unique( array_merge( $link_target_types, $post_types ) ) );
 		$this->bulk_audit_graph = $this->build_content_graph_data( $graph_post_types, 100, $include_drafts );
 		$this->bulk_audit_mode  = true;
 
@@ -957,6 +990,7 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 					// titles/urls that a write-key audit run persisted. The model
 					// is fail-closed by default; only a privileged caller reveals.
 					'reveal_non_public' => $this->requester_can_see_non_public(),
+					'category_allowed'  => array( $this, 'caller_may_read_category' ),
 				)
 			)
 		);
@@ -973,15 +1007,22 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 		$post    = get_post( $post_id );
 
 		if ( ! $post ) {
-			return $this->error_response( 'not_found', 'Post not found.', 404 );
+			return $this->error_response_from_wp_error( $this->post_ref_not_found_error( $request ) );
 		}
 
 		// Non-public gate: this surface reads $post->post_content (JSON-LD/microdata)
 		// and returns draft-derived data, so a read-only key must be denied with the
 		// same 404 as a missing post before any body is read.
-		$denied = $this->guard_non_public_post( $post, 'Post not found.' );
+		$denied = $this->guard_non_public_post( $post, __( 'The requested resource was not found.', 'mcpwp' ), __( 'Check the id with wp_search or wp_list_posts.', 'mcpwp' ) );
 		if ( $denied ) {
 			return $denied;
+		}
+
+		// Category gate (#1024 round-1 review, WARN-1): same 404 for a post of
+		// a type this caller's category cannot read.
+		$category_denied = $this->guard_post_type_category( $post, __( 'The requested resource was not found.', 'mcpwp' ) );
+		if ( is_wp_error( $category_denied ) ) {
+			return $category_denied;
 		}
 
 		$this->log_activity( 'validate_structured_data', $request, array( 'post_id' => $post_id ) );
@@ -1214,15 +1255,22 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 		$post    = get_post( $post_id );
 
 		if ( ! $post ) {
-			return $this->error_response( 'not_found', 'Post not found.', 404 );
+			return $this->error_response_from_wp_error( $this->post_ref_not_found_error( $request ) );
 		}
 
 		// Non-public gate: this surface reads $post->post_content (image inventory)
 		// and returns draft-derived data, so a read-only key must be denied with the
 		// same 404 as a missing post before any body is read.
-		$denied = $this->guard_non_public_post( $post, 'Post not found.' );
+		$denied = $this->guard_non_public_post( $post, __( 'The requested resource was not found.', 'mcpwp' ), __( 'Check the id with wp_search or wp_list_posts.', 'mcpwp' ) );
 		if ( $denied ) {
 			return $denied;
+		}
+
+		// Category gate (#1024 round-1 review, WARN-1): same 404 for a post of
+		// a type this caller's category cannot read.
+		$category_denied = $this->guard_post_type_category( $post, __( 'The requested resource was not found.', 'mcpwp' ) );
+		if ( is_wp_error( $category_denied ) ) {
+			return $category_denied;
 		}
 
 		$this->log_activity( 'audit_media_seo', $request, array( 'post_id' => $post_id ) );
@@ -1311,6 +1359,7 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 				// A read-only key must not pull draft/private issue titles/urls
 				// into the plan's actions[]. Threaded to the fail-closed model.
 				'reveal_non_public' => $this->requester_can_see_non_public(),
+				'category_allowed'  => array( $this, 'caller_may_read_category' ),
 			)
 		) : array(
 			'schema_version' => '2026-05-20',
@@ -1437,6 +1486,16 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 	 */
 	public function get_woocommerce_seo_report( $request ) {
 		$this->log_activity( 'get_woocommerce_seo_report', $request );
+
+		// The whole report is product titles, ids and urls (#1030 round-4
+		// WARN-1): it needs the woocommerce category on top of the route's
+		// own 'seo'. Refused with the same 403 forbidden_category a caller
+		// gets for naming the product type anywhere else — naming a type is
+		// not an existence oracle.
+		$category_denied = $this->guard_post_type_category_for_type( 'product' );
+		if ( is_wp_error( $category_denied ) ) {
+			return $category_denied;
+		}
 
 		// Security clamp: a read-only key must not enumerate draft/private product
 		// titles/SEO through the report. get_report() honors a caller-supplied

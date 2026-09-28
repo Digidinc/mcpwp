@@ -719,7 +719,12 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 			$data    = $page_item;
 			unset( $data['id'] );
 
-			$result = $this->pages->update_page( $page_id, $data );
+			// One per-item resolver for every bulk door (#1030 round-5): an
+			// item that is missing or hidden from this caller gets the one
+			// answer update_page() gives a missing page, and nothing runs.
+			$result = $this->post_ref_item_visible( $request, $page_id )
+				? $this->pages->update_page( $page_id, $data )
+				: Mcpwp_Pages::update_target_not_found_error();
 
 			if ( is_wp_error( $result ) ) {
 				$errors[] = array(

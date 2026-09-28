@@ -515,8 +515,16 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 		$post_id = absint( $request->get_param( 'id' ) );
 		$post    = get_post( $post_id );
 
+		// #1030 round-3 review, item 2: 'id' is a declared post-ref param for
+		// /post-meta (Mcpwp_Api_Auth::get_post_ref_param_map()), so the
+		// chokepoint already refuses a missing OR category-gated id with
+		// post_ref_not_found_error() before this handler runs. The three
+		// checks below stay as defense-in-depth for a direct handler call
+		// that bypasses check_permission(), now sharing that SAME error so
+		// missing/non-public/category-denied cannot drift apart from each
+		// other or from the guard.
 		if ( ! $post instanceof WP_Post ) {
-			return $this->error_response( 'not_found', __( 'Post not found.', 'mcpwp' ), 404 );
+			return $this->error_response_from_wp_error( $this->post_ref_not_found_error( $request ) );
 		}
 
 		// Custom-field meta on a non-public post (draft/pending/private) can hold
@@ -524,14 +532,14 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 		// or higher, matching the fetch/search/render gates; 404 for anyone else
 		// so the hidden post is not disclosed.
 		if ( ! $this->is_public_status( $post->post_status ) && ! $this->requester_can_see_non_public() ) {
-			return $this->error_response( 'not_found', __( 'Post not found.', 'mcpwp' ), 404 );
+			return $this->error_response_from_wp_error( $this->post_ref_not_found_error( $request ) );
 		}
 
 		// #1020: this route classifies as 'content' by PREFIX, but the post
 		// it resolved may not be — a WooCommerce product's _sku, an
 		// Elementor archetype's _mcpwp_archetype_brief. Gate on what the id
 		// actually resolved to, not on what /post-meta looks like.
-		$category_denied = $this->guard_post_type_category( $post, __( 'Post not found.', 'mcpwp' ) );
+		$category_denied = $this->guard_post_type_category( $post, __( 'The requested resource was not found.', 'mcpwp' ) );
 		if ( $category_denied ) {
 			return $category_denied;
 		}
@@ -580,14 +588,17 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 		$post_id = absint( $request->get_param( 'id' ) );
 		$post    = get_post( $post_id );
 
+		// See get_post_meta_handler()'s matching comment: the chokepoint
+		// already covers this in production; kept for direct-call defense
+		// in depth, sharing the same error.
 		if ( ! $post instanceof WP_Post ) {
-			return $this->error_response( 'not_found', __( 'Post not found.', 'mcpwp' ), 404 );
+			return $this->error_response_from_wp_error( $this->post_ref_not_found_error( $request ) );
 		}
 
 		// #1020: same category guard as the read side above — a write-scope
 		// key with only 'content' must not be able to set a WooCommerce
 		// product's or an Elementor template's meta through this route.
-		$category_denied = $this->guard_post_type_category( $post, __( 'Post not found.', 'mcpwp' ) );
+		$category_denied = $this->guard_post_type_category( $post, __( 'The requested resource was not found.', 'mcpwp' ) );
 		if ( $category_denied ) {
 			return $category_denied;
 		}
@@ -770,6 +781,18 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			// response never discloses that the hidden post exists.
 			if ( ! $this->is_public_status( $post->post_status ) && ! $this->requester_can_see_non_public() ) {
 				return $this->error_response( 'not_found', __( 'Post not found.', 'mcpwp' ), 404 );
+			}
+			// #1030 round-3 review, test_every_id_shaped_route_is_declared_
+			// or_explicitly_excluded: 'id' resolves ANY post type with no
+			// category check at all — a content-only key could render a
+			// WooCommerce product's or Elementor template's rendered HTML.
+			// 'id' is now a declared post-ref param for /rendered-html
+			// (Mcpwp_Api_Auth::get_post_ref_param_map()), so the chokepoint
+			// already refuses a gated id before this handler runs; this stays
+			// as defense-in-depth for a direct handler call.
+			$category_denied = $this->guard_post_type_category( $post, __( 'The requested resource was not found.', 'mcpwp' ) );
+			if ( $category_denied ) {
+				return $category_denied;
 			}
 			if ( 'publish' === $post->post_status ) {
 				$url = get_permalink( $post_id );
@@ -1225,6 +1248,14 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			// so the response never reveals that the hidden post exists.
 			if ( ! $this->is_public_status( $post->post_status ) && ! $this->requester_can_see_non_public() ) {
 				return $this->error_response( 'not_found', __( 'Post not found.', 'mcpwp' ), 404 );
+			}
+			// #1030 round-3 review, test_every_id_shaped_route_is_declared_
+			// or_explicitly_excluded: same gap and same fix as
+			// get_rendered_html() above — 'id' is now a declared post-ref
+			// param for /rendered-copy.
+			$category_denied = $this->guard_post_type_category( $post, __( 'The requested resource was not found.', 'mcpwp' ) );
+			if ( $category_denied ) {
+				return $category_denied;
 			}
 			if ( 'publish' === $post->post_status ) {
 				$url = get_permalink( $post_id );

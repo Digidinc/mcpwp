@@ -279,13 +279,28 @@ class Mcpwp_SEO_Audit_Store {
 		// summary counts match the visible set.
 		$reveal_non_public = ! empty( $args['reveal_non_public'] );
 
+		// Caller-category clamp (#1030 round-4/5 WARN-1): an issue carries its
+		// post's title and url, so an issue about a post whose type the
+		// caller's category cannot read (a product for a key without
+		// woocommerce) is dropped here too — before summarize_issues(), so
+		// the counts describe only what the caller receives. Every reader
+		// (/seo/issues, /seo/autofix-plan, /site-state) passes the caller's
+		// category_allowed callable; the post-type → category mapping lives
+		// here, once. With none, nothing is dropped for it.
+		$category_allowed = isset( $args['category_allowed'] ) && is_callable( $args['category_allowed'] ) ? $args['category_allowed'] : null;
+
 		$issues = array_values(
 			array_filter(
 				$issues,
-				function ( $issue ) use ( $status, $severity, $category, $run_id, $post_id, $reveal_non_public ) {
+				function ( $issue ) use ( $status, $severity, $category, $run_id, $post_id, $reveal_non_public, $category_allowed ) {
 					if ( ! $reveal_non_public
 						&& (int) ( $issue['post_id'] ?? 0 ) > 0
 						&& ! self::issue_post_is_public( $issue ) ) {
+						return false;
+					}
+					if ( null !== $category_allowed
+						&& (int) ( $issue['post_id'] ?? 0 ) > 0
+						&& ! self::issue_post_category_allowed( (int) $issue['post_id'], $category_allowed ) ) {
 						return false;
 					}
 					if ( '' !== $status && ( $issue['status'] ?? '' ) !== $status ) {
@@ -324,6 +339,25 @@ class Mcpwp_SEO_Audit_Store {
 			'summary' => self::summarize_issues( $issues ),
 			'issues'  => array_slice( $issues, 0, $limit ),
 		);
+	}
+
+	/**
+	 * Whether the caller's category may read the post an issue is about.
+	 * post/page are governed by the reading route's own category, as at
+	 * every other door; a post that no longer exists is left to the
+	 * non-public rule above.
+	 *
+	 * @param int      $post_id          Issue's post id.
+	 * @param callable $category_allowed Category slug => bool, for the caller.
+	 * @return bool
+	 */
+	private static function issue_post_category_allowed( $post_id, $category_allowed ) {
+		$post = get_post( $post_id );
+		if ( ! $post || in_array( $post->post_type, array( 'post', 'page' ), true ) || ! class_exists( 'Mcpwp_REST_API' ) ) {
+			return true;
+		}
+
+		return (bool) call_user_func( $category_allowed, Mcpwp_REST_API::category_for_post_type( $post->post_type ) );
 	}
 
 	/**

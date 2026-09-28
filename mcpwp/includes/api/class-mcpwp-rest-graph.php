@@ -118,7 +118,9 @@ class Mcpwp_REST_Graph extends Mcpwp_REST_API {
 	 * @return WP_REST_Response
 	 */
 	public function get_summary( WP_REST_Request $request ) {
-		return new WP_REST_Response( Mcpwp_Graph_Reader::resource_summary( $this->requester_can_see_non_public() ), 200 );
+		$summary = Mcpwp_Graph_Reader::resource_summary( $this->requester_can_see_non_public(), $this->category_excluded_kinds(), $this->category_excluded_taxonomies() );
+
+		return new WP_REST_Response( $summary, 200 );
 	}
 
 	/**
@@ -134,13 +136,14 @@ class Mcpwp_REST_Graph extends Mcpwp_REST_API {
 		}
 
 		$can_see = $this->requester_can_see_non_public();
-		$node    = Mcpwp_Graph_Reader::get_node( Mcpwp_Graph_Reader::resolve_node_key( $identifier ), $can_see );
+		$node    = Mcpwp_Graph_Reader::get_node( Mcpwp_Graph_Reader::resolve_node_key( $identifier ), $can_see, $this->category_excluded_kinds(), $this->category_excluded_taxonomies() );
 
 		if ( $node instanceof WP_Error ) {
 			return $this->error_response_from_wp_error( $node );
 		}
-		if ( null === $node ) {
-			// A hidden node and a missing one read identically.
+		if ( null === $node || $this->graph_node_category_denied( (string) $node['node_key'] ) ) {
+			// A hidden node, a category-gated one (#1024), and a missing one
+			// read identically.
 			return $this->error_response( 'not_found', 'Node not found.', 404 );
 		}
 
@@ -170,15 +173,21 @@ class Mcpwp_REST_Graph extends Mcpwp_REST_API {
 				'limit'     => $request->get_param( 'limit' ),
 				'cursor'    => $request->get_param( 'cursor' ),
 			),
-			$can_see
+			$can_see,
+			$this->category_excluded_kinds(),
+			$this->category_excluded_taxonomies()
 		);
 
 		if ( $result instanceof WP_Error ) {
 			return $this->error_response_from_wp_error( $result );
 		}
-		if ( null === $result ) {
+		if ( null === $result || $this->graph_node_category_denied( (string) $result['center']['node_key'] ) ) {
+			// The center itself may be a category-gated node (a product,
+			// #1024) — same "missing" shape as a status-hidden or absent one.
 			return $this->error_response( 'not_found', 'Node not found.', 404 );
 		}
+
+		$result = $this->filter_graph_neighbors_by_category( $result );
 
 		$result['graph_status'] = Mcpwp_Graph_Reader::graph_status( $can_see );
 		return new WP_REST_Response( $result, 200 );
@@ -200,14 +209,174 @@ class Mcpwp_REST_Graph extends Mcpwp_REST_API {
 		}
 
 		$can_see = $this->requester_can_see_non_public();
-		$result  = Mcpwp_Graph_Reader::query( $args, $can_see );
+		$result  = Mcpwp_Graph_Reader::query( $args, $can_see, $this->category_excluded_kinds(), $this->category_excluded_taxonomies() );
 
 		if ( $result instanceof WP_Error ) {
 			return $this->error_response_from_wp_error( $result );
 		}
 
+		// Category filter (#1024): Mcpwp_Graph_Reader's own visibility is
+		// purely post-status (see its class docblock) — it has no concept of
+		// MCPWP tool categories, so a 'woocommerce'/'elementor-templates'-
+		// disabled key could otherwise read a product's or template's
+		// word_count/label straight through wp_graph_query, which only ever
+		// required the route's own 'content' category. Filtered after
+		// pagination, same tradeoff this reader already accepts elsewhere
+		// for status-hidden rows (a page can come back under its nominal
+		// limit).
+		$result['results'] = array_values(
+			array_filter(
+				$result['results'],
+				function ( $item ) {
+					return ! $this->graph_node_category_denied( (string) $item['node_key'] );
+				}
+			)
+		);
+		$result['count'] = count( $result['results'] );
+
 		$result['graph_status'] = Mcpwp_Graph_Reader::graph_status( $can_see );
 		return new WP_REST_Response( $result, 200 );
+	}
+
+	/**
+	 * Every post type this caller's tool category cannot read, among the
+	 * post types the site graph actually covers
+	 * (Mcpwp_Graph_Builder::covered_post_types()) — the set every
+	 * Mcpwp_Graph_Reader public method below takes as `$excluded_kinds`
+	 * and applies IN SQL (#1024 round-1 review, WARN-5): a page comes back
+	 * full and a cursor never advances past a row that was hidden rather
+	 * than genuinely absent, unlike a post-fetch PHP filter.
+	 *
+	 * Computed once per request (cheap: covered_post_types() is a handful
+	 * of names, not a query per name).
+	 *
+	 * @return array<string>
+	 */
+	private function category_excluded_kinds() {
+		$excluded = array();
+		foreach ( Mcpwp_Graph_Builder::covered_post_types() as $post_type ) {
+			if ( ! $this->caller_may_read_category( $this->category_for_post_type( $post_type ) ) ) {
+				$excluded[] = $post_type;
+			}
+		}
+		return $excluded;
+	}
+
+	/**
+	 * Taxonomies tool-category-gated for this caller (#1024/#1030 round-2
+	 * review, NIT-2). A TERM node's `kind` is always the literal string
+	 * 'term' (set once at ingestion, regardless of taxonomy — see
+	 * Mcpwp_Graph_Reader::node_category_excluded_sql()'s docblock), so
+	 * category_excluded_kinds() above can never hide one: a
+	 * 'woocommerce'-disabled key could otherwise read a product_cat/
+	 * product_tag term, or a product attribute (`pa_*`) term, straight
+	 * through wp_graph_query/wp_graph_node/wp_graph_neighbors.
+	 *
+	 * WooCommerce's own taxonomies are the only ones this plugin currently
+	 * maps to a non-'content' category (category_for_post_type() has no
+	 * taxonomy equivalent to delegate to, so the mapping is written here,
+	 * once, rather than duplicated at each call site) — product_cat/
+	 * product_tag/product_type/product_shipping_class/product_visibility
+	 * are WooCommerce's fixed set; `pa_*` is its dynamic per-attribute
+	 * prefix, enumerated from the taxonomies actually registered on this
+	 * site rather than guessed at.
+	 *
+	 * @return array<string>
+	 */
+	private function category_excluded_taxonomies() {
+		if ( $this->caller_may_read_category( 'woocommerce' ) ) {
+			return array();
+		}
+
+		$excluded = array( 'product_cat', 'product_tag', 'product_type', 'product_shipping_class', 'product_visibility' );
+		foreach ( get_taxonomies() as $taxonomy ) {
+			if ( 0 === strpos( $taxonomy, 'pa_' ) ) {
+				$excluded[] = $taxonomy;
+			}
+		}
+		return array_values( array_unique( $excluded ) );
+	}
+
+	/**
+	 * Drop neighbor nodes this caller's category cannot see, and the edges
+	 * that touch them — extending the "edges touching a hidden node are
+	 * omitted rather than redacted" rule Mcpwp_Graph_Reader's own status
+	 * visibility already applies (its class docblock) to tool-category
+	 * visibility too (#1024). The reader itself stays status-only; this is
+	 * the REST layer's own chokepoint on top of it.
+	 *
+	 * $excluded_kinds is now ALSO applied inside the reader's own SQL
+	 * (category_excluded_kinds(), threaded through every
+	 * Mcpwp_Graph_Reader call in this controller) so a page stays full and
+	 * the cursor stays correct (#1024 round-1 review, WARN-5) — this PHP
+	 * filter stays as the same kind of backstop
+	 * Mcpwp_Graph_Reader::filter_edges_visible()/visible_keys() already are
+	 * for status visibility: defense in depth, not the primary gate.
+	 *
+	 * @param array $result {center, nodes, edges, ...} from
+	 *                      Mcpwp_Graph_Reader::get_neighbors().
+	 * @return array Same shape, category-hidden nodes/edges removed.
+	 */
+	private function filter_graph_neighbors_by_category( array $result ) {
+		$hidden = array();
+		$kept   = array();
+		foreach ( $result['nodes'] as $node ) {
+			if ( $this->graph_node_category_denied( (string) $node['node_key'] ) ) {
+				$hidden[ (string) $node['node_key'] ] = true;
+				continue;
+			}
+			$kept[] = $node;
+		}
+		$result['nodes'] = $kept;
+
+		if ( ! empty( $hidden ) ) {
+			$result['edges'] = array_values(
+				array_filter(
+					$result['edges'],
+					function ( $edge ) use ( $hidden ) {
+						return ! isset( $hidden[ (string) $edge['from_key'] ] ) && ! isset( $hidden[ (string) $edge['to_key'] ] );
+					}
+				)
+			);
+		}
+
+		return $result;
+	}
+
+	/**
+	 * Whether $node_key's own post type belongs to a tool category this
+	 * caller does not hold — the same category_for_post_type()/
+	 * caller_may_read_category() chokepoint from #1020/#1022, applied to the
+	 * site graph read surface (wp_graph_node/neighbors/query), which has no
+	 * category concept of its own (Mcpwp_Graph_Reader's visibility is purely
+	 * post-status). Without this, a key with 'woocommerce' or
+	 * 'elementor-templates' disabled could still read a product's or
+	 * template's word_count/label/excerpt straight through the graph, which
+	 * only ever required the route's own 'content' category (#1024).
+	 *
+	 * elementor_library/elementor_snippet nodes cannot actually occur here —
+	 * Mcpwp_Graph_Builder::EXCLUDED_POST_TYPES excludes both from ingestion
+	 * entirely (page-builder internals, not content the graph tracks) — but
+	 * this stays type-driven rather than hardcoding that exclusion a second
+	 * time, so a future covered type is gated automatically. Only a
+	 * post-backed node_key ("post:{id}") carries a post type; term and media
+	 * node keys are unaffected.
+	 *
+	 * @param string $node_key Node key.
+	 * @return bool
+	 */
+	private function graph_node_category_denied( $node_key ) {
+		if ( ! Mcpwp_Graph_Reader::is_post_key( $node_key ) ) {
+			return false;
+		}
+
+		$post_id   = Mcpwp_Graph_Reader::post_id_from_key( $node_key );
+		$post_type = $post_id ? get_post_type( $post_id ) : false;
+		if ( ! $post_type ) {
+			return false;
+		}
+
+		return ! $this->caller_may_read_category( $this->category_for_post_type( $post_type ) );
 	}
 
 	/**

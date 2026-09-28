@@ -289,6 +289,13 @@ class Mcpwp_REST_Site_Manager extends Mcpwp_REST_API {
 			'name'     => $request->get_param( 'name' ),
 			'location' => $request->get_param( 'location' ),
 			'items'    => $request->get_param( 'items' ),
+			// One per-item resolver for every bulk door (#1030 round-5 WARN-2):
+			// a post_type item naming a missing post, or one hidden from this
+			// caller (a coupon for a key without woocommerce), is refused with
+			// the same item_errors entry and never created.
+			'item_object_visible' => function ( $object_id ) use ( $request ) {
+				return $this->post_ref_item_visible( $request, $object_id );
+			},
 		);
 
 		$menu = $this->manager->create_menu( $data );

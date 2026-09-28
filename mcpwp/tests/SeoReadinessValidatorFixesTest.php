@@ -119,14 +119,26 @@ final class SeoReadinessValidatorFixesTest extends TestCase {
 		$created    = $controller->create_scoped_api_key( 'test key', $scopes, 'custom' );
 
 		$request = new WP_REST_Request( 'GET', $route, $params, array( 'X-API-Key' => $created['key'] ) );
-		$this->assertTrue( $controller->verify_api_key( $request ), 'verify_api_key should succeed' );
+		$this->verdict = $controller->verify_api_key( $request );
 
 		return array( $controller, $request );
 	}
 
+	/** @var true|WP_Error Permission verdict of the last authenticated request. */
+	private $verdict = true;
+
+	/**
+	 * What a real request gets: the permission verdict when it refuses
+	 * (#1030 round-5 — the declared-post-ref guard answers a hidden or
+	 * missing id itself, before any handler), otherwise the handler's answer.
+	 */
+	private function dispatch( $controller, string $method, $request ) {
+		return true === $this->verdict ? $controller->$method( $request ) : $this->verdict;
+	}
+
 	private function readiness( int $post_id, array $scopes = array( 'read' ) ) {
 		[ $controller, $request ] = $this->authed( '/mcpwp/v1/seo/readiness/' . $post_id, array( 'id' => $post_id ), $scopes );
-		return $controller->validate_seo_readiness( $request );
+		return $this->dispatch( $controller, 'validate_seo_readiness', $request );
 	}
 
 	private function issueCodes( WP_REST_Response $resp ): array {

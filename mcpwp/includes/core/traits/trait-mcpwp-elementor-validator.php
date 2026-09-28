@@ -14,23 +14,102 @@ if ( ! defined( 'ABSPATH' ) ) {
 trait Mcpwp_Elementor_Validator_Trait {
 
 	/**
-	 * The "not found or unsupported type" hint, keyed by post id.
+	 * Optional category check injected by Mcpwp_REST_Elementor::check_permission()
+	 * (#1024, follow-up to #1022's WARN-2). Every /elementor route funnels
+	 * through validate_post() below to resolve its target post — get, set,
+	 * summary, preview, sections, widgets, patch, and single-post
+	 * find-replace all call it — so this is the ONE place a caller's key
+	 * becomes known to Mcpwp_Elementor_Basic, a plain business-logic class
+	 * with no REST/auth context of its own. Mirrors
+	 * Mcpwp_Posts::$category_allowed_callback / set_category_allowed_callback().
+	 *
+	 * Null (the default, and every context with no key record — e.g.
+	 * trusted admin-AJAX) means unrestricted, matching every other category
+	 * gate's convention in this plugin.
+	 *
+	 * @var callable|null Takes a post_type string, returns bool.
+	 */
+	private $category_allowed_callback = null;
+
+	/**
+	 * Inject the category check. Called once per request, from
+	 * Mcpwp_REST_Elementor::check_permission() right after verify_api_key()
+	 * succeeds.
+	 *
+	 * @param callable|null $callback Takes a post_type string, returns bool.
+	 * @return void
+	 */
+	public function set_category_allowed_callback( $callback ) {
+		$this->category_allowed_callback = is_callable( $callback ) ? $callback : null;
+	}
+
+	/**
+	 * Whether $post_type needs a tool category the caller does not hold, ON
+	 * TOP of the /elementor route's own 'elementor' category
+	 * (get_route_category_map()) — which every route this door registers
+	 * already requires before a handler is reached.
+	 *
+	 * page/post are this door's base case and need nothing more: they are
+	 * Elementor data by virtue of being edited here, not by post type. The
+	 * 'designer' role holds 'elementor' but deliberately not 'content' (it
+	 * builds layouts, an 'author' key writes copy) — see
+	 * KeyCategoryRestrictionAuthPlaneTest::test_designer_key_can_write_elementor_directly —
+	 * so folding category_for_post_type('page') === 'content' in here
+	 * would silently break every designer-role site.
+	 *
+	 * elementor_library (Pro's saved templates/archetypes/reusable parts)
+	 * and elementor_snippet (Pro Custom Code) are ALSO accepted by
+	 * validate_post() below so this one generic get/set/summary/patch
+	 * surface can read and write them, but each already has its OWN,
+	 * narrower category at its OWN dedicated routes — elementor-templates,
+	 * elementor-theme (Mcpwp_Api_Auth::category_for_post_type()). Without
+	 * this check, a key — or a site-wide mcpwp_disabled_tool_categories
+	 * toggle — that grants/leaves enabled only the coarser 'elementor'
+	 * category could still read or write a template/snippet post straight
+	 * through this generic door, bypassing the narrower category those
+	 * posts are otherwise gated behind everywhere else (#1024, follow-up to
+	 * #1022's WARN-2).
+	 *
+	 * @param string $post_type Resolved post's post_type.
+	 * @return bool
+	 */
+	private function elementor_type_category_denied( $post_type ) {
+		if ( in_array( $post_type, array( 'page', 'post' ), true ) ) {
+			return false;
+		}
+
+		if ( null === $this->category_allowed_callback ) {
+			return false;
+		}
+
+		return ! call_user_func( $this->category_allowed_callback, $post_type );
+	}
+
+	/**
+	 * The not-found hint, keyed by post id.
 	 *
 	 * Single source of truth for validate_post()'s own missing/unsupported
 	 * branch AND Mcpwp_REST_Elementor's guard_non_public_post() calls
 	 * (get_elementor_data(), get_elementor_summary(), get_elementor_preview())
 	 * — all four MUST produce byte-identical hints for the same id, or a
 	 * non-public post (denied by the guard) becomes distinguishable from a
-	 * genuinely missing/unsupported one purely by hint text (#1026).
+	 * genuinely missing/unsupported one purely by hint text (#1026). A
+	 * category-denied post (#1024) folds into this SAME hint too — see
+	 * validate_post() below.
 	 *
-	 * @param int $post_id Post ID.
+	 * #1030 round-3 review, item 2: matches
+	 * Mcpwp_Api_Auth::post_ref_not_found_error()'s own fixed hint exactly
+	 * (not id-substituted) — the chokepoint now answers with that SAME text
+	 * for a category-gated /elementor/{id} before this method is even
+	 * reached, so the two paths (guard-level and this in-handler
+	 * defense-in-depth check) must agree byte-for-byte, not merely in shape.
+	 *
+	 * @param int $post_id Post ID. Unused — kept so existing call sites that
+	 *                     pass an id do not need to change.
 	 * @return string
 	 */
 	public function not_found_hint( $post_id ) {
-		return sprintf(
-			'Post ID %d not found or is not a supported type (page, post, elementor_library, elementor_snippet). Use wp_list_pages or wp_list_posts to find valid IDs.',
-			absint( $post_id )
-		);
+		return __( 'Check the id with wp_search or wp_list_posts.', 'mcpwp' );
 	}
 
 	/**
@@ -43,10 +122,13 @@ trait Mcpwp_Elementor_Validator_Trait {
 		$post    = get_post( absint( $post_id ) );
 		$allowed = array( 'page', 'post', 'elementor_library', 'elementor_snippet' );
 
-		if ( ! $post || ! in_array( $post->post_type, $allowed, true ) ) {
+		if ( ! $post || ! in_array( $post->post_type, $allowed, true ) || $this->elementor_type_category_denied( $post->post_type ) ) {
 			return new WP_Error(
 				'not_found',
-				__( 'Post not found or unsupported type.', 'mcpwp' ),
+				// #1030 round-3, item 2: matches
+				// Mcpwp_Api_Auth::post_ref_not_found_error()'s message —
+				// see not_found_hint()'s docblock for why.
+				__( 'The requested resource was not found.', 'mcpwp' ),
 				array(
 					'status' => 404,
 					'hint'   => $this->not_found_hint( $post_id ),

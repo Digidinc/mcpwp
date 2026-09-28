@@ -33,6 +33,33 @@ class Mcpwp_REST_SEO extends Mcpwp_REST_API {
 	}
 
 	/**
+	 * Category-gate an id-based SEO door (#1024 round-1 review, WARN-1).
+	 *
+	 * Returns null (allowed) for an id that does not resolve at all —
+	 * $this->seo's own call produces the door's real "not found" answer for
+	 * that case; this only ever adds a denial, never removes one.
+	 *
+	 * 'id' is a declared scalar post-ref param for every /seo/* route this
+	 * is called from (Mcpwp_Api_Auth::get_post_ref_param_map()), so since
+	 * #1030 round-5 the guard answers a gated OR missing id with the
+	 * canonical post_ref_not_found_error() before this handler runs; this
+	 * stays as defense in depth for a direct handler call, with that same
+	 * error.
+	 *
+	 * @param int              $post_id Post ID.
+	 * @param WP_REST_Request  $request Request object, for the shared error.
+	 * @return WP_Error|null
+	 */
+	private function seo_category_denied( $post_id, $request = null ) {
+		$post = get_post( $post_id );
+		if ( ! $post || $this->caller_may_read_category( $this->category_for_post_type( $post->post_type ) ) ) {
+			return null;
+		}
+
+		return $this->post_ref_not_found_error( $request );
+	}
+
+	/**
 	 * Register REST routes.
 	 */
 	public function register_routes() {
@@ -239,6 +266,12 @@ class Mcpwp_REST_SEO extends Mcpwp_REST_API {
 		$post_id = absint( $request->get_param( 'id' ) );
 		$plugin  = $request->get_param( 'plugin' );
 
+		$category_denied = $this->seo_category_denied( $post_id, $request );
+		if ( is_wp_error( $category_denied ) ) {
+			$this->log_activity( 'get_seo', $request, null, $this->get_wp_error_status( $category_denied ) );
+			return $this->error_response_from_wp_error( $category_denied );
+		}
+
 		$result = $this->seo->get_post_seo( $post_id, $plugin );
 
 		if ( is_wp_error( $result ) ) {
@@ -261,6 +294,12 @@ class Mcpwp_REST_SEO extends Mcpwp_REST_API {
 	public function update_post_seo( $request ) {
 		$post_id = absint( $request->get_param( 'id' ) );
 		$plugin  = $request->get_param( 'plugin' );
+
+		$category_denied = $this->seo_category_denied( $post_id, $request );
+		if ( is_wp_error( $category_denied ) ) {
+			$this->log_activity( 'update_seo', $request, null, $this->get_wp_error_status( $category_denied ) );
+			return $this->error_response_from_wp_error( $category_denied );
+		}
 
 		$data = array(
 			'title'           => $request->get_param( 'title' ),
@@ -345,7 +384,16 @@ class Mcpwp_REST_SEO extends Mcpwp_REST_API {
 			}
 		}
 
-		$results = $this->seo->bulk_update( $updates );
+		// Every item goes through the one per-item resolver (#1030 round-5,
+		// BLOCK-2): a coupon, a trashed or auto-draft product, a template —
+		// anything this caller's category cannot read — answers exactly like
+		// a post that does not exist, and is never written.
+		$results = $this->seo->bulk_update(
+			$updates,
+			function ( $post_id ) use ( $request ) {
+				return $this->post_ref_item_visible( $request, $post_id );
+			}
+		);
 
 		$success_count = count( array_filter( $results, function( $r ) {
 			return $r['success'];
@@ -581,6 +629,13 @@ class Mcpwp_REST_SEO extends Mcpwp_REST_API {
 			return $this->error_response( 'not_found', __( 'Post not found.', 'mcpwp' ), 404 );
 		}
 
+		// Category gate (#1024 round-1 review, WARN-1): same 404 shape this
+		// door already uses above for a missing post.
+		$category_denied = $this->guard_post_type_category( $post, __( 'Post not found.', 'mcpwp' ) );
+		if ( is_wp_error( $category_denied ) ) {
+			return $category_denied;
+		}
+
 		$data = array(
 			'robots_noindex' => $noindex,
 		);
@@ -633,6 +688,19 @@ class Mcpwp_REST_SEO extends Mcpwp_REST_API {
 		$limit     = absint( $request->get_param( 'limit' ) );
 		if ( ! $limit ) {
 			$limit = 100;
+		}
+
+		// Category gate (#1024 round-1 review, WARN-1): naming a whole
+		// post_type up front is not an existence oracle — same 403
+		// forbidden_category shape guard_post_type_category_for_type()
+		// already uses for this exact situation elsewhere. A caller who
+		// names no post_type gets Mcpwp_SEO::export_report()'s own
+		// page/post default, unaffected here.
+		if ( ! empty( $post_type ) ) {
+			$category_denied = $this->guard_post_type_category_for_type( sanitize_key( (string) $post_type ) );
+			if ( is_wp_error( $category_denied ) ) {
+				return $category_denied;
+			}
 		}
 
 		$results = $this->seo->export_report( $post_type, $limit );

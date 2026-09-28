@@ -141,14 +141,14 @@ trait Mcpwp_Elementor_Css_Trait {
 
 		if ( $page_id ) {
 			$page_id = absint( $page_id );
-			$page    = get_post( $page_id );
+			// #1024 round-1 review, BLOCK-1: same chokepoint every other
+			// Elementor door funnels through — a bare get_post() existence
+			// check let this reveal/clear cache for ANY post type,
+			// including a category-gated one.
+			$page = $this->validate_post( $page_id );
 
-			if ( ! $page ) {
-				return new WP_Error(
-					'not_found',
-					__( 'Page not found.', 'mcpwp' ),
-					array( 'status' => 404 )
-				);
+			if ( is_wp_error( $page ) ) {
+				return $page;
 			}
 
 			$method = 'cache_clear';

@@ -209,6 +209,31 @@ final class PostTypeCategoryGateTest extends TestCase {
 		return $request;
 	}
 
+	/**
+	 * Same authentication as auth_request(), but tolerant of #1024/#1030's
+	 * post-naming-param chokepoint (Mcpwp_Api_Auth::check_post_naming_params_category())
+	 * denying at auth time instead of letting the handler's own category
+	 * check do it. In real dispatch, WordPress's REST framework never calls
+	 * a handler once permission_callback returns a WP_Error — so when auth
+	 * denies here, that WP_Error IS the door's real answer, and calling the
+	 * handler anyway would exercise a state (e.g. Mcpwp_REST_Posts's
+	 * category-check callback, wired only on a successful check_permission())
+	 * that production traffic never reaches.
+	 *
+	 * @param callable $call_handler Takes the authenticated WP_REST_Request, returns the handler's result.
+	 * @return mixed The handler's result, or the WP_Error auth itself produced.
+	 */
+	private function result_after_auth( object $controller, string $key, string $method, string $route, array $params, callable $call_handler ) {
+		$request = new WP_REST_Request( $method, $route, $params, array( 'X-API-Key' => $key ) );
+		$auth    = method_exists( $controller, 'check_permission' )
+			? $controller->check_permission( $request )
+			: $controller->verify_api_key( $request );
+		if ( is_wp_error( $auth ) ) {
+			return $auth;
+		}
+		return $call_handler( $request );
+	}
+
 	private function assert_not_found( $result, string $context = '' ): void {
 		$this->assertInstanceOf( WP_Error::class, $result, $context );
 		$this->assertSame( 'not_found', $result->get_error_code(), $context );
@@ -386,9 +411,11 @@ final class PostTypeCategoryGateTest extends TestCase {
 	public function test_get_post_meta_product_denied_for_content_only_key(): void {
 		$controller = new Mcpwp_REST_Site_Content();
 		$created    = $this->scoped_key( $controller, array( 'content' ) );
-		$request    = $this->auth_request( $controller, $created['key'], 'GET', '/mcpwp/v1/post-meta/' . self::PRODUCT_ID, array( 'id' => self::PRODUCT_ID ) );
+		$result     = $this->result_after_auth( $controller, $created['key'], 'GET', '/mcpwp/v1/post-meta/' . self::PRODUCT_ID, array( 'id' => self::PRODUCT_ID ), function ( $request ) use ( $controller ) {
+			return $controller->get_post_meta_handler( $request );
+		} );
 
-		$this->assert_not_found( $controller->get_post_meta_handler( $request ), '#1020 PoC: a content-only key must not read a product\'s _sku via /post-meta.' );
+		$this->assert_not_found( $result, '#1020 PoC: a content-only key must not read a product\'s _sku via /post-meta.' );
 	}
 
 	public function test_get_post_meta_product_allowed_for_woocommerce_key(): void {
@@ -409,9 +436,11 @@ final class PostTypeCategoryGateTest extends TestCase {
 
 		$controller = new Mcpwp_REST_Site_Content();
 		$created    = $controller->create_scoped_api_key( 'author', array( 'read' ), 'author' );
-		$request    = $this->auth_request( $controller, $created['key'], 'GET', '/mcpwp/v1/post-meta/' . self::ARCHETYPE_ID, array( 'id' => self::ARCHETYPE_ID ) );
+		$result     = $this->result_after_auth( $controller, $created['key'], 'GET', '/mcpwp/v1/post-meta/' . self::ARCHETYPE_ID, array( 'id' => self::ARCHETYPE_ID ), function ( $request ) use ( $controller ) {
+			return $controller->get_post_meta_handler( $request );
+		} );
 
-		$this->assert_not_found( $controller->get_post_meta_handler( $request ), '#1020 PoC: an author key must not read an Elementor archetype brief via /post-meta.' );
+		$this->assert_not_found( $result, '#1020 PoC: an author key must not read an Elementor archetype brief via /post-meta.' );
 	}
 
 	public function test_get_post_meta_elementor_archetype_allowed_for_templates_key(): void {
@@ -437,15 +466,18 @@ final class PostTypeCategoryGateTest extends TestCase {
 	public function test_set_post_meta_product_denied_for_content_only_key(): void {
 		$controller = new Mcpwp_REST_Site_Content();
 		$created    = $this->scoped_key( $controller, array( 'content' ) );
-		$request    = $this->auth_request(
+		$result     = $this->result_after_auth(
 			$controller,
 			$created['key'],
 			'POST',
 			'/mcpwp/v1/post-meta/' . self::PRODUCT_ID,
-			array( 'id' => self::PRODUCT_ID, 'key' => '_sku', 'value' => 'HACKED' )
+			array( 'id' => self::PRODUCT_ID, 'key' => '_sku', 'value' => 'HACKED' ),
+			function ( $request ) use ( $controller ) {
+				return $controller->set_post_meta_handler( $request );
+			}
 		);
 
-		$this->assert_not_found( $controller->set_post_meta_handler( $request ) );
+		$this->assert_not_found( $result );
 		$this->assertSame( 'HOODIE-001', $GLOBALS['_mcpwp_test_meta'][ self::PRODUCT_ID ]['_sku'], 'Nothing must have been written.' );
 	}
 
@@ -476,17 +508,22 @@ final class PostTypeCategoryGateTest extends TestCase {
 		$controller = new Mcpwp_REST_Site_Content();
 		$created    = $this->scoped_key( $controller, array( 'content' ) );
 
-		$get_request = $this->auth_request( $controller, $created['key'], 'GET', '/mcpwp/v1/post-meta/' . self::PRODUCT_ID, array( 'id' => self::PRODUCT_ID ) );
-		$this->assert_not_found( $controller->get_post_meta_handler( $get_request ), 'wp_get_post_meta => GET /post-meta/{id}' );
+		$get_result = $this->result_after_auth( $controller, $created['key'], 'GET', '/mcpwp/v1/post-meta/' . self::PRODUCT_ID, array( 'id' => self::PRODUCT_ID ), function ( $request ) use ( $controller ) {
+			return $controller->get_post_meta_handler( $request );
+		} );
+		$this->assert_not_found( $get_result, 'wp_get_post_meta => GET /post-meta/{id}' );
 
-		$set_request = $this->auth_request(
+		$set_result = $this->result_after_auth(
 			$controller,
 			$created['key'],
 			'POST',
 			'/mcpwp/v1/post-meta/' . self::PRODUCT_ID,
-			array( 'id' => self::PRODUCT_ID, 'key' => '_sku', 'value' => 'HACKED' )
+			array( 'id' => self::PRODUCT_ID, 'key' => '_sku', 'value' => 'HACKED' ),
+			function ( $request ) use ( $controller ) {
+				return $controller->set_post_meta_handler( $request );
+			}
 		);
-		$this->assert_not_found( $controller->set_post_meta_handler( $set_request ), 'wp_set_post_meta => POST /post-meta/{id}' );
+		$this->assert_not_found( $set_result, 'wp_set_post_meta => POST /post-meta/{id}' );
 	}
 
 	// ── Door: GET /fetch ─────────────────────────────────────────────────────
@@ -494,9 +531,11 @@ final class PostTypeCategoryGateTest extends TestCase {
 	public function test_fetch_by_id_product_denied_for_content_only_key(): void {
 		$controller = new Mcpwp_REST_Site_Content();
 		$created    = $this->scoped_key( $controller, array( 'content' ) );
-		$request    = $this->auth_request( $controller, $created['key'], 'GET', '/mcpwp/v1/fetch', array( 'id' => self::PRODUCT_ID ) );
+		$result     = $this->result_after_auth( $controller, $created['key'], 'GET', '/mcpwp/v1/fetch', array( 'id' => self::PRODUCT_ID ), function ( $request ) use ( $controller ) {
+			return $controller->fetch_content( $request );
+		} );
 
-		$this->assert_not_found( $controller->fetch_content( $request ) );
+		$this->assert_not_found( $result );
 	}
 
 	public function test_fetch_by_id_product_allowed_for_woocommerce_key(): void {
@@ -614,9 +653,11 @@ final class PostTypeCategoryGateTest extends TestCase {
 	public function test_get_post_by_id_product_denied_as_not_found(): void {
 		$controller = new Mcpwp_REST_Posts();
 		$created    = $this->scoped_key( $controller, array( 'content' ) );
-		$request    = $this->auth_request( $controller, $created['key'], 'GET', '/mcpwp/v1/posts/' . self::PRODUCT_ID, array( 'id' => self::PRODUCT_ID ) );
+		$result     = $this->result_after_auth( $controller, $created['key'], 'GET', '/mcpwp/v1/posts/' . self::PRODUCT_ID, array( 'id' => self::PRODUCT_ID ), function ( $request ) use ( $controller ) {
+			return $controller->get_post( $request );
+		} );
 
-		$this->assert_not_found( $controller->get_post( $request ), '#1020 door: GET /posts/{id} on a product id must not resolve for a content-only key.' );
+		$this->assert_not_found( $result, '#1020 door: GET /posts/{id} on a product id must not resolve for a content-only key.' );
 	}
 
 	public function test_get_post_by_id_product_allowed_for_woocommerce_key(): void {
@@ -630,15 +671,18 @@ final class PostTypeCategoryGateTest extends TestCase {
 	public function test_set_featured_image_on_product_denied_as_not_found(): void {
 		$controller = new Mcpwp_REST_Posts();
 		$created    = $this->scoped_key( $controller, array( 'content' ) );
-		$request    = $this->auth_request(
+		$result     = $this->result_after_auth(
 			$controller,
 			$created['key'],
 			'POST',
 			'/mcpwp/v1/posts/' . self::PRODUCT_ID . '/featured-image',
-			array( 'id' => self::PRODUCT_ID, 'media_id' => 999 )
+			array( 'id' => self::PRODUCT_ID, 'media_id' => 999 ),
+			function ( $request ) use ( $controller ) {
+				return $controller->set_featured_image( $request );
+			}
 		);
 
-		$this->assert_not_found( $controller->set_featured_image( $request ), '#1020 door: a content-only key must not set a product\'s featured image.' );
+		$this->assert_not_found( $result, '#1020 door: a content-only key must not set a product\'s featured image.' );
 	}
 
 	public function test_set_featured_image_on_product_allowed_for_woocommerce_key(): void {

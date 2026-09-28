@@ -1477,9 +1477,19 @@ class Mcpwp_Elementor_Pro {
 			}
 		}
 
-		// Apply template if specified.
+		// Apply template if specified. #1024/#1030 round-2 review, WARN-B:
+		// this used to ignore apply_template_to_page()'s return value
+		// entirely — a missing OR category-gated template_id still
+		// answered 201 with a real, published page, just silently without
+		// the template applied. Refuse the same way apply_template_to_page()
+		// itself would, cleaning up the page this call already created
+		// rather than leaving an orphan behind.
 		if ( ! empty( $data['template_id'] ) ) {
-			$this->apply_template_to_page( $page_id, absint( $data['template_id'] ) );
+			$template_result = $this->apply_template_to_page( $page_id, absint( $data['template_id'] ) );
+			if ( is_wp_error( $template_result ) ) {
+				wp_delete_post( $page_id, true );
+				return $template_result;
+			}
 		}
 
 		$result = array(
@@ -1561,6 +1571,22 @@ class Mcpwp_Elementor_Pro {
 	 * @return array|WP_Error Save result, or error on failure.
 	 */
 	public function apply_template_to_page( $page_id, $template_id, $page_settings_mode = 'preserve' ) {
+		// #1024/#1030 round-2 review, BLOCK-B: this used to write
+		// _elementor_edit_mode/_wp_page_template/_elementor_template_type to
+		// $page_id (below) BEFORE validating it at all — a caller reaching
+		// this with a WooCommerce product id (the #1030 round-2 review's
+		// PoC) flipped the product into Elementor canvas mode before
+		// anything refused. The REST-layer chokepoint
+		// (Mcpwp_Api_Auth::check_post_naming_params_category()) now denies a
+		// category-gated page_id before this method is even called, but a
+		// product/order/etc. is not gated BY TYPE for an ordinary key — it
+		// is simply never a valid Elementor target — so this checks the
+		// type here too, unconditionally, before any write.
+		$target = get_post( $page_id );
+		if ( ! $target || ! in_array( $target->post_type, array( 'page', 'post', 'elementor_library', 'elementor_snippet' ), true ) ) {
+			return new WP_Error( 'not_found', __( 'Target post not found or is not a supported type.', 'mcpwp' ), array( 'status' => 404 ) );
+		}
+
 		$template = get_post( $template_id );
 
 		if ( ! $template || 'elementor_library' !== $template->post_type ) {
@@ -1686,7 +1712,15 @@ class Mcpwp_Elementor_Pro {
 	 */
 	public function save_section_as_template( $page_id, $element_id, $title = '' ) {
 		$post = get_post( $page_id );
-		if ( ! $post ) {
+		// #1024/#1030 round-2 review, BLOCK-B: this core method has no type
+		// check of its own — a WooCommerce product's Elementor content
+		// could be read and copied into a brand-new, fully-readable
+		// template. The REST-layer chokepoint and this class's own
+		// save_section_as_template REST handler both gate the direct
+		// /elementor/save-section-as-template route already; this covers
+		// create_part_from_section() too, which calls this SAME core
+		// method for /elementor/parts/from-section.
+		if ( ! $post || ! in_array( $post->post_type, array( 'page', 'post', 'elementor_library', 'elementor_snippet' ), true ) ) {
 			return new WP_Error( 'invalid_page', 'Page not found.', array( 'status' => 404 ) );
 		}
 

@@ -40,6 +40,7 @@ class Mcpwp_SEO_Autofix {
 				'run_id'   => isset( $args['run_id'] ) ? sanitize_key( (string) $args['run_id'] ) : '',
 				'limit'    => isset( $args['limit'] ) ? absint( $args['limit'] ) : 50,
 				'reveal_non_public' => $reveal_non_public,
+				'category_allowed'  => $args['category_allowed'] ?? null,
 			)
 		) : array(
 			'summary' => array(),

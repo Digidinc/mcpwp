@@ -70,15 +70,24 @@ class Mcpwp_REST_Content_Quality extends Mcpwp_REST_API {
 		$post    = get_post( $post_id );
 
 		if ( ! $post ) {
-			return $this->error_response( 'not_found', 'Post not found.', 404 );
+			return $this->error_response_from_wp_error( $this->post_ref_not_found_error( $request ) );
 		}
 
 		// Non-public gate: this surface reads $post->post_content (entity/quality
 		// extraction) and returns draft-derived data, so a read-only key must be
 		// denied with the same 404 as a missing post before any body is read.
-		$denied = $this->guard_non_public_post( $post, 'Post not found.' );
+		$denied = $this->guard_non_public_post( $post, __( 'The requested resource was not found.', 'mcpwp' ), __( 'Check the id with wp_search or wp_list_posts.', 'mcpwp' ) );
 		if ( $denied ) {
 			return $denied;
+		}
+
+		// Category gate (#1024 round-1 review, WARN-1): this door resolves ANY
+		// post by numeric ID with no type restriction — a content-only key
+		// could otherwise read a WooCommerce product's body straight through
+		// /seo/content-quality. Same 404 as a missing post.
+		$category_denied = $this->guard_post_type_category( $post, __( 'The requested resource was not found.', 'mcpwp' ) );
+		if ( is_wp_error( $category_denied ) ) {
+			return $category_denied;
 		}
 
 		$this->log_activity( 'audit_content_quality', $request, array( 'post_id' => $post_id ) );
