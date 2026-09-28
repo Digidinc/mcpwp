@@ -853,7 +853,7 @@ class Mcpwp_Approvals {
 			}
 		}
 
-		return self::transition_request( $id, 'approved', 'approved_at', $note );
+		return self::transition_request( $id, 'approved', 'approved_at', $note, self::actor_from( $context ) );
 	}
 
 	/**
@@ -909,8 +909,8 @@ class Mcpwp_Approvals {
 	 * @param string $note Rejection note.
 	 * @return array|WP_Error Request.
 	 */
-	public static function reject_request( $id, $note = '' ) {
-		return self::transition_request( $id, 'rejected', 'rejected_at', $note );
+	public static function reject_request( $id, $note = '', $context = array() ) {
+		return self::transition_request( $id, 'rejected', 'rejected_at', $note, self::actor_from( $context ) );
 	}
 
 	/**
@@ -970,13 +970,13 @@ class Mcpwp_Approvals {
 	 * @param string $id Request ID.
 	 * @return array|WP_Error Request.
 	 */
-	public static function rollback_request( $id ) {
+	public static function rollback_request( $id, $context = array() ) {
 		$request = self::get_private_request( $id );
 		if ( is_wp_error( $request ) ) {
 			return $request;
 		}
 
-		return self::run_claimed( $id, array( 'applied', 'apply_failed' ), 'rolling_back', 'rolled_back', 'rolled_back_at', 'rollback', array() );
+		return self::run_claimed( $id, array( 'applied', 'apply_failed' ), 'rolling_back', 'rolled_back', 'rolled_back_at', 'rollback', is_array( $context ) ? $context : array() );
 	}
 
 	/**
@@ -1043,6 +1043,9 @@ class Mcpwp_Approvals {
 			return $result;
 		}
 
+		// Who applied / rolled back, kept separately from claimed_by (which
+		// the next claim overwrites) for the audit trail (#981 round 5).
+		$finalise_extra[ 'payload' === $field ? 'applied_by' : 'rolled_back_by' ] = $claimant;
 		$final = self::finalise( $id, $claim, $done, $time_field, $finalise_extra );
 		if ( is_wp_error( $final ) ) {
 			return self::unconfirmed_error( $field, $id );
@@ -1238,8 +1241,14 @@ class Mcpwp_Approvals {
 	 * @param string $note       Human note.
 	 * @return array|WP_Error Request.
 	 */
-	private static function transition_request( $id, $status, $time_field, $note ) {
-		$request = self::transition_under_lock( $id, array( 'pending', 'approved' ), $status, $time_field, array( 'review_note' => sanitize_textarea_field( (string) $note ) ) );
+	private static function transition_request( $id, $status, $time_field, $note, $actor = '' ) {
+		$extra = array( 'review_note' => sanitize_textarea_field( (string) $note ) );
+		if ( '' !== $actor ) {
+			// Who decided it — kept on the record and in the audit row
+			// written if the record is ever removed (#981 review round 5).
+			$extra[ 'approved' === $status ? 'approved_by' : 'rejected_by' ] = $actor;
+		}
+		$request = self::transition_under_lock( $id, array( 'pending', 'approved' ), $status, $time_field, $extra );
 		if ( is_wp_error( $request ) ) {
 			return $request;
 		}
@@ -1422,6 +1431,13 @@ class Mcpwp_Approvals {
 	 * @return array Public request.
 	 */
 	private static function public_record( $request ) {
+		// #981 review round 5: whether rollback can still work from what the
+		// record keeps (compacted away / revision gone → false). Computed
+		// from the private record, before its bodies are stripped below.
+		if ( isset( $request['status'] ) && in_array( $request['status'], array( 'applied', 'apply_failed' ), true ) ) {
+			$request['rollback_available'] = self::rollback_available( $request );
+		}
+
 		unset( $request['payload']['after_content'], $request['rollback']['before_content'], $request['rollback']['before_excerpt'] );
 
 		// The target fingerprint is for drift(), which reads the private
@@ -1776,6 +1792,19 @@ class Mcpwp_Approvals {
 	}
 
 	/**
+	 * The acting principal: context actor, else the signed-in wp-admin user.
+	 *
+	 * @param mixed $context Context.
+	 * @return string
+	 */
+	private static function actor_from( $context ) {
+		if ( is_array( $context ) && ! empty( $context['actor'] ) ) {
+			return (string) $context['actor'];
+		}
+		return function_exists( 'get_current_user_id' ) && get_current_user_id() > 0 ? 'wp-user:' . get_current_user_id() : '';
+	}
+
+	/**
 	 * Move a request from one of $from to $status, atomically: the status
 	 * check and the write happen under the store lock against a fresh read,
 	 * so two reviewers (or a reviewer and the expiry sweep) cannot both
@@ -2026,12 +2055,19 @@ class Mcpwp_Approvals {
 			}
 		);
 
+		// Over the record cap, drop the oldest EVICTABLE records only
+		// (#981 review round 5): never an open request, never one still
+		// inside its retention — and each one is written to the action log
+		// before it goes.
 		if ( count( $items ) > self::MAX_ITEMS ) {
-			$open_states = self::open_statuses();
-			$open   = array_filter( $items, function ( $item ) use ( $open_states ) { return isset( $item['status'] ) && in_array( $item['status'], $open_states, true ); } );
-			$closed = array_filter( $items, function ( $item ) use ( $open_states ) { return ! isset( $item['status'] ) || ! in_array( $item['status'], $open_states, true ); } );
-			$closed = array_slice( $closed, 0, max( 0, self::MAX_ITEMS - count( $open ) ), true );
-			$items  = $open + $closed;
+			foreach ( array_reverse( array_keys( $items ) ) as $id ) {
+				if ( count( $items ) <= self::MAX_ITEMS ) {
+					break;
+				}
+				if ( is_array( $items[ $id ] ) && self::is_evictable( $items[ $id ] ) && self::audit_removal( $items[ $id ], 'evicted_record_cap' ) ) {
+					unset( $items[ $id ] );
+				}
+			}
 		}
 
 		return $items;
@@ -2229,22 +2265,125 @@ class Mcpwp_Approvals {
 			return $items;
 		}
 
-		$closed = array();
+		// #981 review round 5: only records that are already compacted AND
+		// past retention may go — never a pending/approved/in-flight
+		// request, never one applied within its rollback window, never a
+		// fresh rejection. If that is not enough room, the NEW request is
+		// refused by the caller (507); history is never destroyed to make room.
+		$candidates = array();
 		foreach ( $items as $id => $item ) {
-			$status = is_array( $item ) && isset( $item['status'] ) ? (string) $item['status'] : '';
-			if ( ! in_array( $status, self::open_statuses(), true ) ) {
-				$closed[ $id ] = is_array( $item ) && isset( $item['updated_at'] ) ? (string) $item['updated_at'] : '';
+			if ( is_array( $item ) && self::is_evictable( $item ) ) {
+				$candidates[ $id ] = isset( $item['updated_at'] ) ? (string) $item['updated_at'] : '';
 			}
 		}
-		asort( $closed ); // Oldest first.
+		asort( $candidates ); // Oldest first.
 
-		foreach ( array_keys( $closed ) as $id ) {
+		foreach ( array_keys( $candidates ) as $id ) {
+			if ( ! self::audit_removal( $items[ $id ], 'evicted_store_bytes' ) ) {
+				continue; // No audit row, no removal.
+			}
 			unset( $items[ $id ] );
 			if ( strlen( (string) maybe_serialize( $items ) ) <= $target ) {
 				break;
 			}
 		}
 		return $items;
+	}
+
+	/**
+	 * Whether a record may be evicted automatically: closed, already
+	 * compacted, and decided more than the retention ago (#981 review
+	 * round 5).
+	 *
+	 * @param array $item Record.
+	 * @return bool
+	 */
+	private static function is_evictable( array $item ) {
+		$status = isset( $item['status'] ) ? (string) $item['status'] : '';
+		if ( in_array( $status, self::open_statuses(), true ) || empty( $item['compacted'] ) ) {
+			return false;
+		}
+		$decided = isset( $item['updated_at'] ) ? strtotime( (string) $item['updated_at'] ) : false;
+		/** This filter is documented in is_compactable(). */
+		$retention = (int) apply_filters( 'mcpwp_approval_applied_retention', self::CLOSED_RETENTION );
+		return false !== $decided && $decided < time() - $retention;
+	}
+
+	/**
+	 * Whether a record can still be rolled back from what it stores — the
+	 * inline copy, or a revision that still exists with the recorded hash
+	 * (#981 review round 5).
+	 *
+	 * @param array $item Private record.
+	 * @return bool
+	 */
+	public static function rollback_available( array $item ) {
+		$status = isset( $item['status'] ) ? (string) $item['status'] : '';
+		if ( ! in_array( $status, array( 'applied', 'apply_failed' ), true ) ) {
+			return false;
+		}
+		$action = isset( $item['action'] ) ? (string) $item['action'] : '';
+		if ( 'destructive_operation' === $action ) {
+			return false;
+		}
+		if ( 'post_content_update' === $action ) {
+			$post_id = isset( $item['resource']['id'] ) ? (int) $item['resource']['id'] : 0;
+			return $post_id > 0 && ! is_wp_error( self::rollback_content( $item, $post_id ) );
+		}
+		if ( 'bulk_content_publish' === $action ) {
+			return ! empty( $item['metadata']['applied_ids'] );
+		}
+		return true;
+	}
+
+	/**
+	 * Write one action-log row summarising an approval record that is about
+	 * to be removed from the store (#981 review round 5). Returns false when
+	 * the row could not be written — the caller then keeps the record.
+	 *
+	 * @param array  $item   Private record.
+	 * @param string $reason evicted_store_bytes | evicted_record_cap | purged.
+	 * @return bool
+	 */
+	private static function audit_removal( array $item, $reason ) {
+		if ( ! class_exists( 'Mcpwp_Action_Log' ) || ! method_exists( 'Mcpwp_Action_Log', 'record_approval_removal' ) ) {
+			return false;
+		}
+
+		$hash = '';
+		if ( isset( $item['diff']['after_hash'] ) ) {
+			$hash = (string) $item['diff']['after_hash'];
+		} elseif ( isset( $item['payload'] ) ) {
+			$hash = hash( 'sha256', (string) wp_json_encode( $item['payload'] ) );
+		}
+
+		$approvers = array();
+		foreach ( array( 'approved_by', 'rejected_by', 'applied_by', 'rolled_back_by', 'claimed_by' ) as $field ) {
+			if ( ! empty( $item[ $field ] ) ) {
+				$approvers[ $field ] = (string) $item[ $field ];
+			}
+		}
+		if ( ! empty( $item['resolved']['by'] ) ) {
+			$approvers['resolved_by'] = (string) $item['resolved']['by'];
+		}
+
+		$summary = array(
+			'approval_id'    => isset( $item['id'] ) ? (string) $item['id'] : '',
+			'action'         => isset( $item['action'] ) ? (string) $item['action'] : '',
+			'resource_type'  => isset( $item['resource']['type'] ) ? (string) $item['resource']['type'] : '',
+			'resource_id'    => isset( $item['resource']['id'] ) ? (string) $item['resource']['id'] : '',
+			'requester'      => isset( $item['requested_by_key_id'] ) ? (string) $item['requested_by_key_id'] : '',
+			'approvers'      => $approvers,
+			'final_status'   => isset( $item['status'] ) ? (string) $item['status'] : '',
+			'created_at'     => isset( $item['created_at'] ) ? $item['created_at'] : null,
+			'decided_at'     => isset( $item['approved_at'] ) && $item['approved_at'] ? $item['approved_at'] : ( isset( $item['rejected_at'] ) ? $item['rejected_at'] : ( isset( $item['expired_at'] ) ? $item['expired_at'] : null ) ),
+			'applied_at'     => isset( $item['applied_at'] ) ? $item['applied_at'] : null,
+			'rolled_back_at' => isset( $item['rolled_back_at'] ) ? $item['rolled_back_at'] : null,
+			'content_hash'   => $hash,
+			'removal_reason' => (string) $reason,
+		);
+
+		return Mcpwp_Action_Log::record_approval_removal( $summary );
 	}
 
 	/**
@@ -2259,10 +2398,19 @@ class Mcpwp_Approvals {
 			static function ( array $items ) use ( &$removed ) {
 				foreach ( $items as $id => $item ) {
 					$status = is_array( $item ) && isset( $item['status'] ) ? (string) $item['status'] : '';
-					if ( ! in_array( $status, self::open_statuses(), true ) ) {
-						unset( $items[ $id ] );
-						$removed++;
+					if ( in_array( $status, self::open_statuses(), true ) ) {
+						continue;
 					}
+					// An applied change inside its rollback window is not
+					// "done" yet — purge keeps it (#981 review round 5).
+					if ( 'applied' === $status && ! self::is_compactable( $item ) ) {
+						continue;
+					}
+					if ( ! self::audit_removal( $item, 'purged' ) ) {
+						continue;
+					}
+					unset( $items[ $id ] );
+					$removed++;
 				}
 				return $items;
 			}

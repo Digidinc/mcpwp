@@ -877,7 +877,7 @@ class Mcpwp_Action_Log {
 		$log_id, $tool_name, $category, $api_key_id, $arguments,
 		$before_snap, $after_snap, $resource_type, $resource_id,
 		$resource_post_type, $snapshot_skipped,
-		$duration_ms, $success, $error_code, $rollback_supported
+		$duration_ms, $success, $error_code, $rollback_supported, $redact = true
 	) {
 		global $wpdb;
 
@@ -887,12 +887,16 @@ class Mcpwp_Action_Log {
 		// The arguments column is display-only (rollback reads the
 		// snapshots); a credential inside them — a wp_update_option value,
 		// an integration key — must not sit in the table (#800 round 6).
-		if ( class_exists( 'Mcpwp_Option_Access' ) && method_exists( 'Mcpwp_Option_Access', 'redact_for_log' ) ) {
+		// $redact is false only for rows this class builds itself from
+		// fields that are never credentials (approval-removal audit rows:
+		// ids and sha256 hashes, which the value-shape heuristic would
+		// otherwise blank out).
+		if ( $redact && class_exists( 'Mcpwp_Option_Access' ) && method_exists( 'Mcpwp_Option_Access', 'redact_for_log' ) ) {
 			$safe_args = Mcpwp_Option_Access::redact_for_log( $safe_args, Mcpwp_Option_Access::log_redaction_keys() );
 		}
 
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
-		$wpdb->insert(
+		return $wpdb->insert(
 			$wpdb->prefix . self::TABLE,
 			array(
 				'log_id'             => (string) $log_id,
@@ -915,6 +919,49 @@ class Mcpwp_Action_Log {
 			),
 			array( '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%d', '%d', '%s', '%d', '%d' )
 		);
+	}
+
+	/**
+	 * Audit row for an approval record removed from the approvals store
+	 * (#981 review round 5): eviction or a purge. One row per record; the
+	 * summary (approval id, action, target, requester, approvers, final
+	 * status, timestamps, content hash, reason) is the row's arguments.
+	 *
+	 * @param array $summary Summary built by Mcpwp_Approvals.
+	 * @return bool Whether the row was written.
+	 */
+	public static function record_approval_removal( array $summary ) {
+		$approval_id = isset( $summary['approval_id'] ) ? (string) $summary['approval_id'] : '';
+		if ( '' === $approval_id ) {
+			return false;
+		}
+
+		// Only the known, non-credential summary fields are stored verbatim.
+		$summary = array_intersect_key(
+			$summary,
+			array_flip( array( 'approval_id', 'action', 'resource_type', 'resource_id', 'requester', 'approvers', 'final_status', 'created_at', 'decided_at', 'applied_at', 'rolled_back_at', 'content_hash', 'removal_reason' ) )
+		);
+
+		$written = self::insert(
+			self::generate_id(),
+			'approval_record_removed',
+			'admin',
+			substr( isset( $summary['requester'] ) ? (string) $summary['requester'] : '', 0, 100 ),
+			$summary,
+			null,
+			null,
+			'approval',
+			$approval_id,
+			'',
+			'',
+			0,
+			1,
+			'',
+			0,
+			false
+		);
+
+		return false !== $written && null !== $written;
 	}
 
 	private static function get_entry( $log_id ) {

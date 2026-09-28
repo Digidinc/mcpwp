@@ -334,7 +334,11 @@ class Mcpwp_REST_Approvals extends Mcpwp_REST_API {
 			return $visibility_check;
 		}
 
-		$result = Mcpwp_Approvals::rollback_request( $request->get_param( 'id' ) );
+		$record = $this->get_current_api_key_record();
+		$result = Mcpwp_Approvals::rollback_request(
+			$request->get_param( 'id' ),
+			array( 'actor' => is_array( $record ) && ! empty( $record['id'] ) ? (string) $record['id'] : '' )
+		);
 		if ( is_wp_error( $result ) ) {
 			return $result;
 		}

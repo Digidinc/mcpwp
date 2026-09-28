@@ -115,7 +115,7 @@ trait Mcpwp_Admin_Control_Room_Trait {
 				$message = __( 'Approval request approved.', 'mcpwp' );
 				break;
 			case 'reject':
-				$result = Mcpwp_Approvals::reject_request( $approval_id );
+				$result = Mcpwp_Approvals::reject_request( $approval_id, '', array( 'actor' => 'wp-user:' . get_current_user_id() ) );
 				$message = __( 'Approval request rejected.', 'mcpwp' );
 				break;
 			case 'apply':
@@ -123,7 +123,7 @@ trait Mcpwp_Admin_Control_Room_Trait {
 				$message = __( 'Approved change applied.', 'mcpwp' );
 				break;
 			case 'rollback':
-				$result = Mcpwp_Approvals::rollback_request( $approval_id );
+				$result = Mcpwp_Approvals::rollback_request( $approval_id, array( 'actor' => 'wp-user:' . get_current_user_id() ) );
 				$message = __( 'Applied change rolled back.', 'mcpwp' );
 				break;
 			case 'resolve_completed':
@@ -253,7 +253,9 @@ trait Mcpwp_Admin_Control_Room_Trait {
 					array_filter(
 						$approvals,
 						function ( $approval ) {
-							return isset( $approval['status'] ) && in_array( $approval['status'], array( 'applied', 'apply_failed' ), true );
+							// #981 review round 5: only what can still be rolled
+							// back from what the record keeps.
+							return isset( $approval['status'] ) && in_array( $approval['status'], array( 'applied', 'apply_failed' ), true ) && ! empty( $approval['rollback_available'] );
 						}
 					)
 				),

@@ -128,8 +128,16 @@ These apply to every `post_content_update` approval: WebMCP proposals, `wp_set_b
   - Diff excerpts are capped at 500 characters.
 - **Keeping the queue small:** a request that is rejected, expired, rolled back, or applied more than
   7 days ago (`mcpwp_approval_applied_retention`) is compacted. The proposed and previous content
-  are dropped, and the hashes, excerpts and revision ids are kept. Whenever the queue is over 75% of
-  its budget, the oldest closed requests are removed first, before anything new is refused.
+  are dropped, and the hashes, excerpts and revision ids are kept.
+  - Above 75% of the budget, only records that are both compacted and older than the retention are
+    removed, oldest first.
+  - Pending, approved or in-progress requests, and changes applied within the last 7 days, are never
+    removed automatically. When there is still no room, the new request gets 507.
+  - Every removal first writes an `approval_record_removed` entry to the action log: the approval
+    id, action, target, requester, who approved, applied or rolled it back, final status,
+    timestamps, content hash and reason. No log entry, no removal.
+  - Rollback Ready, and the `rollback_available` flag on records, show only changes that can still be
+    rolled back.
 - **Store budget:** the budget is the smaller of 8 MB (`mcpwp_approval_store_max_bytes`) and MySQL's
   `max_allowed_packet` minus 64 KB, read once per request.
   - Each capped requester (WebMCP users and category-restricted keys) may hold at most 1/20 of it in
@@ -139,7 +147,8 @@ These apply to every `post_content_update` approval: WebMCP proposals, `wp_set_b
   - Existing requests can always be approved, applied or rejected.
   - A database write failure is 503 `approvals_store_failed`, never a reported success.
 - **Purge:** `POST /mcpwp/v1/approvals/purge-closed` (admin scope), or the "Purge closed approval
-  requests" button in Control Room, removes every closed request now.
+  requests" button in Control Room, removes every closed request now, with an audit entry for each.
+  Changes applied within the retention are kept.
 - **Stuck in progress:** an apply or rollback that is still in progress after 10 minutes can be
   resolved by an administrator with `POST /mcpwp/v1/approvals/{id}/resolve` (`outcome`: `completed`
   or `not_completed`, admin scope), or the matching Control Room buttons.

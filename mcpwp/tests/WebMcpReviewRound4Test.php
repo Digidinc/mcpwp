@@ -17,6 +17,7 @@
 use PHPUnit\Framework\TestCase;
 
 require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-approvals.php';
+require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-action-log.php';
 
 final class WebMcpReviewRound4Test extends TestCase {
 
@@ -128,21 +129,23 @@ final class WebMcpReviewRound4Test extends TestCase {
 		unset( $GLOBALS['r4_budget'] );
 	}
 
-	public function test_closed_records_are_evicted_by_bytes_before_anything_is_refused(): void {
+	public function test_applied_records_inside_retention_are_never_evicted_the_new_request_gets_507(): void {
+		// Round 5 replaced round 4's "evict any closed record" with this:
+		// history inside its retention is never destroyed to make room.
 		$this->budget( 200000 );
-		// Closed-but-uncompactable records don't exist; fill with rejected ones
-		// whose bodies were already compacted, then pad past 75% with applied
-		// (kept 7 days) records.
+		$applied = array();
 		for ( $i = 0; $i < 8; $i++ ) {
 			$c = Mcpwp_Approvals::create_post_content_request( self::POST, str_repeat( 'q', 18000 ), array( 'requested_by_key_id' => 'admin', 'requester_unrestricted' => true ) );
 			Mcpwp_Approvals::approve_request( $c['id'] );
 			Mcpwp_Approvals::apply_request( $c['id'] );
+			$applied[] = $c['id'];
 			$GLOBALS['_mcpwp_test_posts'][ self::POST ]->post_content = 'original body';
 		}
-		$before = count( $this->store() );
-		$this->assertIsArray( Mcpwp_Approvals::create_post_content_request( self::POST, str_repeat( 'r', 40000 ), array( 'requested_by_key_id' => 'admin', 'requester_unrestricted' => true ) ) );
-		$this->assertLessThan( $before + 1, count( $this->store() ), 'Oldest closed records were evicted to make room.' );
-		$this->assertLessThanOrEqual( 200000, $this->store_bytes() );
+		$result = Mcpwp_Approvals::create_post_content_request( self::POST, str_repeat( 'r', 60000 ), array( 'requested_by_key_id' => 'admin', 'requester_unrestricted' => true ) );
+		$this->assertSame( 'approvals_store_full', $result->get_error_code() );
+		foreach ( $applied as $id ) {
+			$this->assertArrayHasKey( $id, $this->store(), 'An applied request inside its rollback window survives.' );
+		}
 	}
 
 	public function test_the_budget_never_exceeds_max_allowed_packet(): void {

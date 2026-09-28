@@ -2180,6 +2180,11 @@ if (! isset($GLOBALS['wpdb'])) {
                 $this->last_error = '';
                 return 1;
             }
+            // A test may make inserts into one table fail (e.g. the action
+            // log, #981 review round 5: no audit row → no removal).
+            if (! empty($GLOBALS['mcpwp_test_wpdb_insert_fail'][ (string) $table ])) {
+                return false;
+            }
             // Captured so a test can assert what was — and was not — persisted
             // (activity log rows, for one).
             $GLOBALS['mcpwp_test_wpdb_rows'][ (string) $table ][] = $data;
