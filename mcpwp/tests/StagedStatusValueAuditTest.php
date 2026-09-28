@@ -155,9 +155,11 @@ final class StagedStatusValueAuditTest extends TestCase {
 		'api/class-mcpwp-rest-site-info.php' => 'staged value is unrelated site-info/onboarding bookkeeping, never a post/' .
 			'product status.',
 		'api/class-mcpwp-rest-site-settings.php' => 'staged value is plugin settings bookkeeping, never a post/product status.',
-		'pro/api/class-mcpwp-rest-staging.php' => 'staged value is a staging push operation\'s progress status — the ' .
-			'entire /mcpwp/v1/staging surface is already blanket-admin-gated for every method (an $admin_routes entry), ' .
-			'so no lower-scoped path can ever stage or consume it.',
+		// pro/api/class-mcpwp-rest-staging.php left this list in #981 review
+		// round 2: it no longer calls update_option() itself — its approval
+		// record is stored through Mcpwp_Approvals::mutate() (the locked
+		// store). The disposition is unchanged: a staging push's progress
+		// status, on a surface blanket-admin-gated for every method.
 		'pro/core/class-mcpwp-theme-builder.php' => 'staged value is a theme-builder template\'s condition/assignment ' .
 			'status, not post_status — the file\'s actual post_status writes are hardcoded to \'publish\' with no caller ' .
 			'input at all (see PublishStatusHandlerAuditTest::AUDITED\'s disposition for this same file).',

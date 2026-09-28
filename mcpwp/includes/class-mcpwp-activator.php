@@ -422,12 +422,10 @@ class Mcpwp_Activator {
 		}
 
 		$option_name    = class_exists( 'Mcpwp_Approvals' ) ? Mcpwp_Approvals::OPTION_NAME : 'mcpwp_approval_requests';
-		$items          = get_option( $option_name, array() );
 		$actionable     = array( 'pending', 'approved' );
-
-		if ( is_array( $items ) && ! empty( $items ) ) {
+		$purge          = static function ( $items ) use ( $actionable ) {
 			$changed = false;
-			foreach ( $items as $id => $record ) {
+			foreach ( (array) $items as $id => $record ) {
 				$status    = is_array( $record ) && isset( $record['status'] ) ? (string) $record['status'] : '';
 				$requester = is_array( $record ) && isset( $record['requested_by_key_id'] ) ? (string) $record['requested_by_key_id'] : '';
 				if ( in_array( $status, $actionable, true ) && '' === $requester ) {
@@ -435,8 +433,23 @@ class Mcpwp_Activator {
 					$changed = true;
 				}
 			}
-			if ( $changed ) {
-				update_option( $option_name, $items, false );
+			return array( $items, $changed );
+		};
+
+		$items = get_option( $option_name, array() );
+		if ( is_array( $items ) && ! empty( $items ) && $purge( $items )[1] ) {
+			if ( class_exists( 'Mcpwp_Approvals' ) && method_exists( 'Mcpwp_Approvals', 'mutate' ) ) {
+				// Under the approvals store lock (#981 review round 2, WARN-B).
+				$result = Mcpwp_Approvals::mutate(
+					static function ( array $fresh ) use ( $purge ) {
+						return $purge( $fresh )[0];
+					}
+				);
+				if ( is_wp_error( $result ) ) {
+					return; // Retried on the next load: the flag below is not set.
+				}
+			} else {
+				update_option( $option_name, $purge( $items )[0], false );
 			}
 		}
 
