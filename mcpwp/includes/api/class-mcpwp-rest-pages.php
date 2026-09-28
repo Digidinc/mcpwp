@@ -280,9 +280,13 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 		// Non-public gate: get_page() formats the post regardless of status, so a
 		// read-only key could otherwise read a draft/pending/private body. Return
 		// the same 404 as a missing page so existence is never disclosed.
+		// Mcpwp_Pages::get_page()'s own missing-page branch carries NO 'hint' key
+		// at all (bare WP_Error) — pass '' explicitly so this guard's 404 matches
+		// byte-for-byte instead of picking up the generic auto-hint (#1026).
 		$denied = $this->guard_non_public_post(
 			get_post( absint( $page_id ) ),
-			__( 'Page not found.', 'mcpwp' )
+			__( 'Page not found.', 'mcpwp' ),
+			''
 		);
 		if ( $denied ) {
 			return $denied;
@@ -538,7 +542,15 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 
 		// Non-public gate: WordPress's get_page_by_path() resolves non-public
 		// statuses too, so a read-only key must not read a draft body via slug.
-		$denied = $this->guard_non_public_post( $page, __( 'Page not found.', 'mcpwp' ) );
+		// The genuinely-missing branch above builds its hint via error_response()
+		// with context array( 'id' => $slug ) — reuse the exact same lookup here
+		// so a hidden page's 404 is byte-identical to a missing slug's (#1026).
+		$hint = '';
+		if ( class_exists( 'Mcpwp_Error_Hints' ) ) {
+			$hint_data = Mcpwp_Error_Hints::get_hint_for_code( 'not_found', array( 'id' => $slug ) );
+			$hint      = isset( $hint_data['hint'] ) ? $hint_data['hint'] : '';
+		}
+		$denied = $this->guard_non_public_post( $page, __( 'Page not found.', 'mcpwp' ), $hint );
 		if ( $denied ) {
 			return $denied;
 		}

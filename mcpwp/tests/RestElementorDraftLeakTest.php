@@ -30,6 +30,9 @@ final class RestElementorDraftLeakTest extends TestCase {
 
 	private const PUBLISHED_ID = 301;
 	private const DRAFT_ID     = 302;
+	// Deliberately absent from $GLOBALS['_mcpwp_test_posts'] — the
+	// "genuinely missing id" side of the #1026 parity tests below.
+	private const MISSING_ID   = 399;
 
 	protected function setUp(): void {
 		$GLOBALS['mcpwp_test_options']            = array();
@@ -77,6 +80,34 @@ final class RestElementorDraftLeakTest extends TestCase {
 		$this->assertInstanceOf( WP_Error::class, $resp );
 		$this->assertSame( 'not_found', $resp->get_error_code() );
 		$this->assertSame( 404, $resp->get_error_data()['status'] );
+	}
+
+	/**
+	 * #1026 (see RestPagesPostsDraftLeakTest for the full rationale): a
+	 * guard_non_public_post()-blocked 404 for a non-public id must be
+	 * byte-identical, once digits in the hint are normalised out, to the
+	 * SAME door's own 404 for a genuinely missing/unsupported-type id —
+	 * both come from validate_post()'s not_found_hint() at different ids.
+	 */
+	private function assertSameNotFoundShape( $missing_resp, $guarded_resp ): void {
+		$this->assertInstanceOf( WP_Error::class, $missing_resp );
+		$this->assertInstanceOf( WP_Error::class, $guarded_resp );
+
+		$this->assertSame( $missing_resp->get_error_code(), $guarded_resp->get_error_code(), 'Error code must match.' );
+		$this->assertSame( $missing_resp->get_error_message(), $guarded_resp->get_error_message(), 'Error message must match.' );
+
+		$missing_data = $missing_resp->get_error_data();
+		$guarded_data = $guarded_resp->get_error_data();
+
+		$this->assertSame( array_keys( $missing_data ), array_keys( $guarded_data ), 'Error data must carry the same keys.' );
+		$this->assertSame( $missing_data['status'], $guarded_data['status'], 'HTTP status must match.' );
+
+		$normalize     = static function ( $hint ) {
+			return is_string( $hint ) ? preg_replace( '/\d+/', '#', $hint ) : $hint;
+		};
+		$missing_hint = isset( $missing_data['hint'] ) ? $normalize( $missing_data['hint'] ) : null;
+		$guarded_hint = isset( $guarded_data['hint'] ) ? $normalize( $guarded_data['hint'] ) : null;
+		$this->assertSame( $missing_hint, $guarded_hint, 'Hint (id-normalised) must match.' );
 	}
 
 	/**
@@ -149,6 +180,25 @@ final class RestElementorDraftLeakTest extends TestCase {
 		$this->assertPassedGate( $c->get_elementor_data( $r ) );
 	}
 
+	/**
+	 * #1026: a read-only key's guard_non_public_post() 404 for the draft id
+	 * must be byte-identical (id-normalised) to validate_post()'s own 404 for
+	 * a genuinely missing/unsupported-type id — both must use the same
+	 * not_found_hint(). Compared directly against validate_post() (rather
+	 * than through get_elementor_data() for the missing-id side) because
+	 * get_elementor_data() gates on is_active() BEFORE validate_post(), and
+	 * Elementor is deliberately not installable in this harness — see the
+	 * class docblock.
+	 */
+	public function test_get_data_draft_blocked_404_matches_missing_id_404(): void {
+		$missing_resp = ( new Mcpwp_Elementor_Basic() )->validate_post( self::MISSING_ID );
+
+		[ $c, $r ]  = $this->authed( '/mcpwp/v1/elementor/' . self::DRAFT_ID, array( 'id' => self::DRAFT_ID ), array( 'read' ) );
+		$draft_resp = $c->get_elementor_data( $r );
+
+		$this->assertSameNotFoundShape( $missing_resp, $draft_resp );
+	}
+
 	// ── GET /elementor/{id}/summary ──────────────────────────────────────
 
 	public function test_summary_draft_read_key_blocked_as_404(): void {
@@ -166,6 +216,16 @@ final class RestElementorDraftLeakTest extends TestCase {
 		$this->assertPassedGate( $c->get_elementor_summary( $r ) );
 	}
 
+	/** #1026 — see test_get_data_draft_blocked_404_matches_missing_id_404(). */
+	public function test_summary_draft_blocked_404_matches_missing_id_404(): void {
+		$missing_resp = ( new Mcpwp_Elementor_Basic() )->validate_post( self::MISSING_ID );
+
+		[ $c, $r ]  = $this->authed( '/mcpwp/v1/elementor/' . self::DRAFT_ID . '/summary', array( 'id' => self::DRAFT_ID ), array( 'read' ) );
+		$draft_resp = $c->get_elementor_summary( $r );
+
+		$this->assertSameNotFoundShape( $missing_resp, $draft_resp );
+	}
+
 	// ── GET /elementor/{id}/preview ──────────────────────────────────────
 
 	public function test_preview_draft_read_key_blocked_as_404(): void {
@@ -181,6 +241,16 @@ final class RestElementorDraftLeakTest extends TestCase {
 	public function test_preview_published_read_key_passes_gate(): void {
 		[ $c, $r ] = $this->authed( '/mcpwp/v1/elementor/' . self::PUBLISHED_ID . '/preview', array( 'id' => self::PUBLISHED_ID ), array( 'read' ) );
 		$this->assertPassedGate( $c->get_elementor_preview( $r ) );
+	}
+
+	/** #1026 — see test_get_data_draft_blocked_404_matches_missing_id_404(). */
+	public function test_preview_draft_blocked_404_matches_missing_id_404(): void {
+		$missing_resp = ( new Mcpwp_Elementor_Basic() )->validate_post( self::MISSING_ID );
+
+		[ $c, $r ]  = $this->authed( '/mcpwp/v1/elementor/' . self::DRAFT_ID . '/preview', array( 'id' => self::DRAFT_ID ), array( 'read' ) );
+		$draft_resp = $c->get_elementor_preview( $r );
+
+		$this->assertSameNotFoundShape( $missing_resp, $draft_resp );
 	}
 
 	// ── GET /elementor/bulk ──────────────────────────────────────────────
