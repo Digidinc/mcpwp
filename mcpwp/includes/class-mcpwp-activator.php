@@ -471,47 +471,124 @@ class Mcpwp_Activator {
 	 * plugins_loaded — a same-version deployment never re-enters that branch,
 	 * and this is a security-relevant data fix, same reasoning as
 	 * migrate_identity_less_approvals() above.
+	 *
+	 * #1041 round-2 adversarial review of PR #1043:
+	 * - NIT-2: "is this key custom-role with nothing granted" is now decided
+	 *   by running the SAME normalize_api_key_record() +
+	 *   resolve_key_tool_categories() pair the runtime auth path uses —
+	 *   instead of a raw `'custom' !== $key['role']` string-equality check
+	 *   (which missed a differently-cased/whitespaced stored value the
+	 *   runtime's own sanitize_key() would still treat as 'custom') and a raw
+	 *   `is_array($key['tool_categories'])` check (which treated a legacy
+	 *   record whose tool_categories was stored as a bare string, e.g.
+	 *   `'content'`, as EMPTY and overwrote a key that actually resolves —
+	 *   and works — as `['content']` at runtime, via normalize_api_key_record()'s
+	 *   `(array)` cast). Using the real resolver end to end means this
+	 *   migration can never mark a key that runtime auth does not also
+	 *   consider deny-all, or vice versa.
+	 * - NIT-3: locked with the shared migration mutex (#1036,
+	 *   acquire_migration_lock()/release_migration_lock()) so two concurrent
+	 *   requests cannot each read-modify-write mcpwp_api_keys and lose one
+	 *   side's change; the option is RE-READ inside the lock rather than
+	 *   reusing an earlier, now possibly-stale read; and the completion flag
+	 *   is set only once every store that needed a write has a VERIFIED one
+	 *   (update_option() returning true, or the value already matching what
+	 *   this run would have written — see the loop below) — never
+	 *   unconditionally, which used to mark the migration done even when the
+	 *   write itself silently failed.
 	 */
 	public static function migrate_empty_custom_category_keys() {
 		if ( get_option( 'mcpwp_deny_all_categories_migrated' ) ) {
 			return;
 		}
 
-		foreach ( array( 'mcpwp_api_keys', 'spai_api_keys' ) as $option_name ) {
-			$keys = get_option( $option_name, array() );
-			if ( ! is_array( $keys ) || empty( $keys ) ) {
-				continue;
-			}
-
-			$changed = false;
-			foreach ( $keys as &$key ) {
-				if ( ! is_array( $key ) ) {
-					continue;
-				}
-
-				$role = isset( $key['role'] ) ? (string) $key['role'] : '';
-				if ( 'custom' !== $role ) {
-					continue;
-				}
-
-				$categories = ( isset( $key['tool_categories'] ) && is_array( $key['tool_categories'] ) )
-					? array_values( $key['tool_categories'] )
-					: array();
-
-				if ( empty( $categories ) ) {
-					$key['tool_categories'] = array( self::deny_all_category_marker() );
-					$changed                = true;
-				}
-			}
-			unset( $key );
-
-			if ( $changed ) {
-				update_option( $option_name, $keys );
-			}
+		$lock_token = self::acquire_migration_lock( self::DENY_ALL_CATEGORIES_LOCK_OPTION, self::DENY_ALL_CATEGORIES_LOCK_TTL );
+		if ( false === $lock_token ) {
+			// Another request already owns this; skip — the holder (or, if it
+			// died, the next call once the lock's TTL lapses) makes progress.
+			return;
 		}
 
-		update_option( 'mcpwp_deny_all_categories_migrated', 1, false );
+		try {
+			// Re-check the flag now that the lock is held: another request may
+			// have finished the whole migration between our first check above
+			// and acquiring the lock.
+			if ( get_option( 'mcpwp_deny_all_categories_migrated' ) ) {
+				return;
+			}
+
+			$auth   = new self();
+			$all_ok = true;
+
+			foreach ( array( 'mcpwp_api_keys', 'spai_api_keys' ) as $option_name ) {
+				// Re-read INSIDE the lock — never reuse a read from before the
+				// lock was acquired, which could already be stale relative to a
+				// write another request made while we were waiting.
+				$keys = get_option( $option_name, array() );
+				if ( ! is_array( $keys ) || empty( $keys ) ) {
+					continue;
+				}
+
+				$changed = false;
+				foreach ( $keys as &$key ) {
+					if ( ! is_array( $key ) ) {
+						continue;
+					}
+
+					$normalized = $auth->normalize_api_key_record( $key );
+					if ( 'custom' !== $normalized['role'] ) {
+						continue;
+					}
+
+					$is_deny_all = self::is_deny_all_categories( $auth->resolve_key_tool_categories( $normalized ) );
+					$already_marked = array( self::deny_all_category_marker() ) === array_values( (array) ( $key['tool_categories'] ?? array() ) );
+
+					if ( $is_deny_all && ! $already_marked ) {
+						$key['tool_categories'] = array( self::deny_all_category_marker() );
+						$changed                = true;
+					}
+				}
+				unset( $key );
+
+				if ( ! $changed ) {
+					continue;
+				}
+
+				$written = update_option( $option_name, $keys );
+				if ( ! $written ) {
+					// update_option() returns false both on a genuine write
+					// failure AND when the new value is byte-identical to what
+					// is already stored. $changed being true here means we
+					// built a $keys array that DIFFERS from what get_option()
+					// just handed us, so a false return means the write did
+					// not happen — verify by re-reading rather than assuming
+					// either meaning.
+					$verify = get_option( $option_name, array() );
+					if ( $verify !== $keys ) {
+						$all_ok = false;
+					}
+				}
+			}
+
+			// Only declare done once every store that needed a write has a
+			// verified one (#1041 NIT-3) — an unverified partial run must be
+			// retried on the next request, not marked complete.
+			if ( $all_ok ) {
+				update_option( 'mcpwp_deny_all_categories_migrated', 1, false );
+			}
+		} finally {
+			self::release_migration_lock( self::DENY_ALL_CATEGORIES_LOCK_OPTION, $lock_token );
+		}
 	}
+
+	/**
+	 * Lock guarding migrate_empty_custom_category_keys(). TTL is short — the
+	 * work is a handful of in-memory option reads/writes, no per-row DB
+	 * queries — but comfortably above a slow worst case, same margin
+	 * ACTION_LOG_COLUMN_LOCK_TTL uses for the same reason.
+	 */
+	const DENY_ALL_CATEGORIES_LOCK_OPTION = 'mcpwp_deny_all_categories_migration_lock';
+	const DENY_ALL_CATEGORIES_LOCK_TTL    = 15;
 
 	/**
 	 * Snippets repaired per plugins_loaded call, in addition to the time

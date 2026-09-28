@@ -2303,7 +2303,10 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		);
 
 		if ( 'admin' !== $role ) {
-			$server_info['role']            = $role;
+			// describe_role_for_message() strips unknown_role_marker() (#1041
+			// WARN-1) — a malformed-role key's normalized role is an internal
+			// sentinel, never something to hand a client.
+			$server_info['role']            = self::describe_role_for_message( $role );
 			// present_tool_categories() strips the internal deny-all sentinel
 			// (#1041) — a custom-role key with nothing granted reports [], the
 			// same shape a client would expect "no categories" to have, never
@@ -3260,7 +3263,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		}
 
 		$allowed = $key_record ? $this->resolve_key_tool_categories( $key_record ) : array();
-		$role    = $key_record && isset( $key_record['role'] ) ? $key_record['role'] : 'unknown';
+		$role    = $key_record && isset( $key_record['role'] ) ? self::describe_role_for_message( $key_record['role'] ) : 'unknown';
 
 		return $this->jsonrpc_error(
 			$id,
@@ -3914,7 +3917,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		if ( $key_record ) {
 			$allowed_categories = $this->resolve_key_tool_categories( $key_record );
 			if ( ! empty( $allowed_categories ) && ! in_array( Mcpwp_MCP_Meta_Tools::CATEGORY, $allowed_categories, true ) ) {
-				$role = isset( $key_record['role'] ) ? $key_record['role'] : 'unknown';
+				$role = isset( $key_record['role'] ) ? self::describe_role_for_message( $key_record['role'] ) : 'unknown';
 				return array(
 					'code'    => 'scope_denied',
 					'message' => sprintf( 'This API key (role: %s) does not have access to %s tools. Allowed categories: %s.', $role, Mcpwp_MCP_Meta_Tools::CATEGORY, self::describe_allowed_categories_for_message( $allowed_categories ) ),
@@ -4346,7 +4349,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				// (#802 round 5).
 				$tool_category = $this->tool_category_for( $tool_name );
 				if ( '' === $tool_category || ! in_array( $tool_category, $allowed_categories, true ) ) {
-					$role = isset( $key_record['role'] ) ? $key_record['role'] : 'unknown';
+					$role = isset( $key_record['role'] ) ? self::describe_role_for_message( $key_record['role'] ) : 'unknown';
 					$this->fire_tool_called( $tool_name, $start, 'scope_denied' );
 					return $this->tool_error_result(
 						$id,

@@ -136,6 +136,22 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 							),
 							'default'     => array( 'read' ),
 						),
+						// #1041 WARN-2: an unrecognised role used to be silently
+						// coerced to 'admin' by create_scoped_api_key() — a
+						// 201 that discarded both the caller's actual role AND
+						// any tool_categories they meant to scope it to. The
+						// enum here refuses it at the schema layer for a real
+						// WordPress REST dispatch; create_scoped_api_key()'s
+						// own explicit check (400 unknown_role, naming the
+						// valid roles) is the backstop for every other caller
+						// (wp-admin's key editor, a future non-schema-validated
+						// entry point).
+						'role' => array(
+							'description' => __( 'Role slug: admin, a predefined role, or custom (with tool_categories). Defaults to admin.', 'mcpwp' ),
+							'type'        => 'string',
+							'enum'        => array_keys( self::get_role_definitions() ),
+							'default'     => 'admin',
+						),
 					),
 				),
 			)
@@ -705,21 +721,22 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 		$allow_destructive = $wants_exempt && ! $from_api;
 		$created           = $this->create_scoped_api_key( $label, $scopes, $role, $tool_categories, $allow_destructive );
 
-		// #1041: create_scoped_api_key() refuses a custom-role key whose
-		// category list resolved empty, returning an error shape instead of a
-		// key record. Surface that as a 400, naming the invalid categories,
-		// rather than a 201 with no 'key' in the payload. Built directly
-		// (not via error_response()'s $context, which only feeds the generic
-		// hint map and would drop invalid_categories) so the caller gets it
-		// back as a real field.
+		// #1041: create_scoped_api_key() refuses to mint a key it cannot
+		// honour — a custom role whose category list resolved empty
+		// ('empty_custom_categories', carrying 'invalid_categories'), or a
+		// role that isn't one of get_role_definitions()'s keys
+		// ('unknown_role' — WARN-2 — carrying 'valid_roles') — returning an
+		// error shape instead of a key record either way. Surface whichever
+		// one it was as a 400 with its own extra field intact, rather than a
+		// 201 with no 'key' in the payload. Built directly (not via
+		// error_response()'s $context, which only feeds the generic hint map
+		// and would drop the extra field) so the caller gets it back for real.
 		if ( is_array( $created ) && isset( $created['error'] ) ) {
+			$extra = array_diff_key( $created, array_flip( array( 'error', 'message' ) ) );
 			$error = new WP_Error(
 				$created['error'],
 				$created['message'],
-				array(
-					'status'             => 400,
-					'invalid_categories' => $created['invalid_categories'],
-				)
+				array_merge( array( 'status' => 400 ), $extra )
 			);
 			return class_exists( 'Mcpwp_Error_Hints' ) ? Mcpwp_Error_Hints::enhance_error( $error ) : $error;
 		}

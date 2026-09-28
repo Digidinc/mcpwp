@@ -42,6 +42,10 @@ class Mcpwp_1041_Auth_Harness {
 		return $this->resolve_key_tool_categories( $key_record );
 	}
 
+	public function normalize( array $record ): array {
+		return $this->normalize_api_key_record( $record );
+	}
+
 	public static function get_discovery_allowlist_tool_names_public(): array {
 		return self::get_discovery_allowlist_tool_names();
 	}
@@ -167,6 +171,59 @@ final class Regression1041EmptyCategoryKeyTest extends TestCase {
 		$this->assertSame( array( 'bogus' ), $result->get_error_data()['invalid_categories'] );
 	}
 
+	// ── #1041 WARN-2 (round-2 adversarial review of PR #1043) ───────────────
+
+	/**
+	 * An unrecognised, non-empty role used to be silently coerced to 'admin'
+	 * — POST /api-keys {"role":"custom-seo",...} came back 201 role:admin,
+	 * discarding both the caller's intended role AND any tool_categories they
+	 * meant to scope it to. It must be refused instead, naming the valid roles.
+	 */
+	public function test_create_scoped_api_key_refuses_an_unrecognised_role(): void {
+		$auth    = $this->harness();
+		$created = $auth->create_scoped_api_key( 'typo role', array( 'read', 'write' ), 'custom-seo', array( 'seo' ) );
+
+		$this->assertSame( 'unknown_role', $created['error'] ?? null );
+		$this->assertArrayNotHasKey( 'key', $created, 'a refused creation must not mint a usable key' );
+		$this->assertContains( 'custom', $created['valid_roles'] );
+		$this->assertContains( 'admin', $created['valid_roles'] );
+		$this->assertNotContains( 'custom-seo', $created['valid_roles'] );
+	}
+
+	public function test_create_scoped_api_key_defaults_an_empty_role_to_admin(): void {
+		// Unspecified/empty is a caller convenience, not a garbled role —
+		// must NOT be refused the same way a genuinely wrong role is.
+		$auth    = $this->harness();
+		$created = $auth->create_scoped_api_key( 'no role given', array( 'read', 'write', 'admin' ), '' );
+
+		$this->assertArrayNotHasKey( 'error', $created );
+		$this->assertSame( 'admin', $created['role'] );
+	}
+
+	public function test_rest_create_api_key_refuses_an_unrecognised_role(): void {
+		$controller   = new Mcpwp_REST_Site_Updates();
+		$admin_key    = $controller->create_scoped_api_key( 'owner', array( 'admin' ), 'admin' );
+		$auth_request = new WP_REST_Request( 'GET', '/mcpwp/v1/api-keys', array(), array( 'X-API-Key' => $admin_key['key'] ) );
+		$this->assertTrue( $controller->verify_api_key( $auth_request ) );
+
+		$request = new WP_REST_Request(
+			'POST',
+			'/mcpwp/v1/api-keys',
+			array(
+				'label'           => 'bad role',
+				'role'            => 'custom-seo',
+				'tool_categories' => array( 'seo' ),
+			)
+		);
+
+		$result = $controller->create_api_key( $request );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'unknown_role', $result->get_error_code() );
+		$this->assertSame( 400, $result->get_error_data()['status'] );
+		$this->assertContains( 'admin', $result->get_error_data()['valid_roles'] );
+	}
+
 	// ── Fix (2): resolve_key_tool_categories() semantics ────────────────────
 
 	public function test_resolve_key_tool_categories_admin_is_unrestricted(): void {
@@ -222,6 +279,161 @@ final class Regression1041EmptyCategoryKeyTest extends TestCase {
 
 		$this->assertStringNotContainsString( '__mcpwp_deny_all__', $message );
 		$this->assertSame( array(), Mcpwp_1041_Auth_Harness::present_tool_categories( $deny_all ) );
+	}
+
+	// ── #1041 WARN-1 (round-2 adversarial review of PR #1043) ───────────────
+	//
+	// normalize_api_key_record() used to coerce ANY unrecognised 'role' value
+	// — present but empty, numeric, null, or a plain typo — to 'admin' BEFORE
+	// resolve_key_tool_categories() ever saw it, making the "unknown role ->
+	// deny-all" branch dead code. Live: a hand-seeded record with role
+	// 'viewer', '', null or 5 (each carrying tool_categories:['content'], so
+	// the ONLY thing wrong with it was the role) got 200 on /action-log and
+	// the full 172-tool catalog on tools/list. These test the real path:
+	// normalize -> resolve -> a real door — not resolve() called on an
+	// already-normalized literal, which would not have caught this.
+
+	/**
+	 * @dataProvider malformedRoleProvider
+	 */
+	public function test_normalize_then_resolve_denies_a_malformed_role_through_a_real_door( $malformed_role ): void {
+		$plain = 'mcpwp_' . str_repeat( 'b', 48 );
+		update_option(
+			'mcpwp_api_keys',
+			array(
+				array(
+					'id'              => 'k-malformed-role',
+					'label'           => 'malformed role',
+					'hash'            => wp_hash_password( $plain ),
+					'scopes'          => array( 'read', 'write' ),
+					'role'            => $malformed_role,
+					'tool_categories' => array( 'content' ),
+					'created_at'      => '2026-01-01 00:00:00',
+					'revoked_at'      => null,
+				),
+			)
+		);
+
+		$controller = new Mcpwp_REST_Action_Log();
+		$request    = new WP_REST_Request( 'GET', '/mcpwp/v1/action-log', array(), array( 'X-API-Key' => $plain ) );
+		$result     = $controller->verify_api_key( $request );
+
+		$this->assertInstanceOf( WP_Error::class, $result, 'role ' . var_export( $malformed_role, true ) . ' must not reach /action-log' );
+		$this->assertSame( 'forbidden_category', $result->get_error_code() );
+		// The denial message embeds "role: %s" — must never leak the internal
+		// unknown_role_marker() sentinel (found live during round-2 review:
+		// the message read "role: __mcpwp_unknown_role__").
+		$this->assertStringNotContainsString( '__mcpwp_unknown_role__', $result->get_error_message() );
+	}
+
+	/**
+	 * @dataProvider malformedRoleProvider
+	 */
+	public function test_normalize_then_resolve_denies_a_malformed_role_on_mcp_tools_list( $malformed_role ): void {
+		$plain = 'mcpwp_' . str_repeat( 'c', 48 );
+		update_option(
+			'mcpwp_api_keys',
+			array(
+				array(
+					'id'              => 'k-malformed-role-2',
+					'label'           => 'malformed role',
+					'hash'            => wp_hash_password( $plain ),
+					'scopes'          => array( 'read', 'write' ),
+					'role'            => $malformed_role,
+					'tool_categories' => array( 'content' ),
+					'created_at'      => '2026-01-01 00:00:00',
+					'revoked_at'      => null,
+				),
+			)
+		);
+
+		$controller = new Mcpwp_REST_MCP();
+		$request    = new WP_REST_Request(
+			'POST',
+			'/mcpwp/v1/mcp',
+			array(),
+			array( 'X-API-Key' => $plain ),
+			array( 'jsonrpc' => '2.0', 'id' => 1, 'method' => 'tools/list' )
+		);
+		$this->assertTrue( $controller->verify_api_key( $request ) );
+
+		$data  = $controller->handle_mcp( $request )->get_data();
+		$tools = array_column( $data['result']['tools'], 'name' );
+
+		$discovery_names = Mcpwp_1041_Auth_Harness::get_discovery_allowlist_tool_names_public();
+		$this->assertLessThan( 50, count( $tools ), 'a malformed-role key must not get the full tool catalog' );
+		foreach ( $tools as $name ) {
+			$this->assertContains( $name, $discovery_names );
+		}
+	}
+
+	/**
+	 * The MCP `initialize` response's `role`/`tool_categories` fields are
+	 * client-facing, structured data — the same "never the raw marker"
+	 * requirement as any denial message, but here it is a JSON field a
+	 * program reads, not prose (#1041 WARN-1 round-2 adversarial review).
+	 */
+	public function test_initialize_never_reports_the_raw_unknown_role_marker(): void {
+		$plain = 'mcpwp_' . str_repeat( 'e', 48 );
+		update_option(
+			'mcpwp_api_keys',
+			array(
+				array(
+					'id'              => 'k-malformed-role-3',
+					'label'           => 'malformed role',
+					'hash'            => wp_hash_password( $plain ),
+					'scopes'          => array( 'read', 'write' ),
+					'role'            => 'viewer',
+					'tool_categories' => array( 'content' ),
+					'created_at'      => '2026-01-01 00:00:00',
+					'revoked_at'      => null,
+				),
+			)
+		);
+
+		$controller = new Mcpwp_REST_MCP();
+		$request    = new WP_REST_Request(
+			'POST',
+			'/mcpwp/v1/mcp',
+			array(),
+			array( 'X-API-Key' => $plain ),
+			array( 'jsonrpc' => '2.0', 'id' => 1, 'method' => 'initialize', 'params' => array( 'protocolVersion' => '2025-03-26' ) )
+		);
+		$this->assertTrue( $controller->verify_api_key( $request ) );
+
+		$data = $controller->handle_mcp( $request )->get_data();
+
+		$this->assertSame( 'unknown', $data['result']['serverInfo']['role'] );
+		$this->assertSame( array(), $data['result']['serverInfo']['tool_categories'] );
+		$this->assertStringNotContainsString( '__mcpwp_unknown_role__', wp_json_encode( $data ) );
+	}
+
+	public function malformedRoleProvider(): array {
+		return array(
+			'viewer (typo/unknown role name)' => array( 'viewer' ),
+			'empty string'                    => array( '' ),
+			'null'                            => array( null ),
+			'numeric'                         => array( 5 ),
+		);
+	}
+
+	public function test_normalize_api_key_record_treats_absent_role_as_legacy_admin(): void {
+		$auth       = $this->harness();
+		$normalized = $auth->normalize( array( 'id' => 'legacy', 'hash' => 'h' ) );
+
+		$this->assertSame( 'admin', $normalized['role'] );
+		$this->assertSame( array(), $auth->resolve_categories( $normalized ) );
+	}
+
+	/**
+	 * @dataProvider malformedRoleProvider
+	 */
+	public function test_normalize_api_key_record_treats_present_but_invalid_role_as_deny_all( $malformed_role ): void {
+		$auth       = $this->harness();
+		$normalized = $auth->normalize( array( 'id' => 'k', 'hash' => 'h', 'role' => $malformed_role, 'tool_categories' => array( 'content' ) ) );
+
+		$this->assertNotSame( 'admin', $normalized['role'] );
+		$this->assertTrue( Mcpwp_1041_Auth_Harness::is_deny_all_categories( $auth->resolve_categories( $normalized ) ) );
 	}
 
 	// ── Cross-surface: a hand-seeded (or pre-fix) deny-all key ──────────────
@@ -380,5 +592,59 @@ final class Regression1041EmptyCategoryKeyTest extends TestCase {
 		$body = $data->get_data();
 		$this->assertArrayHasKey( 'error', $body, 'a deny-all key must not be able to read an ordinary page resource' );
 		$this->assertStringNotContainsString( '__mcpwp_deny_all__', wp_json_encode( $body ) );
+	}
+
+	// ── #1041 NIT-1 (round-2 adversarial review of PR #1043) ────────────────
+	//
+	// list_scoped_api_keys() (GET /api-keys, wp_list_api_keys) used to return
+	// the raw internal sentinel in 'tool_categories'. It must present the
+	// resolved verdict instead: [] plus an explicit 'deny_all' flag.
+
+	public function test_list_scoped_api_keys_presents_deny_all_not_the_raw_marker(): void {
+		$this->seed_custom_key_with_empty_categories( 'k-list-deny-all' );
+
+		$auth = $this->harness();
+		$keys = $auth->list_scoped_api_keys();
+
+		$this->assertCount( 1, $keys );
+		$this->assertSame( array(), $keys[0]['tool_categories'] );
+		$this->assertTrue( $keys[0]['deny_all'] );
+		$this->assertStringNotContainsString( '__mcpwp_deny_all__', wp_json_encode( $keys ) );
+	}
+
+	public function test_list_scoped_api_keys_presents_unknown_role_not_the_raw_marker(): void {
+		$plain = 'mcpwp_' . str_repeat( 'd', 48 );
+		update_option(
+			'mcpwp_api_keys',
+			array(
+				array(
+					'id'              => 'k-unknown-role',
+					'label'           => 'malformed role',
+					'hash'            => wp_hash_password( $plain ),
+					'scopes'          => array( 'read', 'write' ),
+					'role'            => 'viewer',
+					'tool_categories' => array( 'content' ),
+					'created_at'      => '2026-01-01 00:00:00',
+					'revoked_at'      => null,
+				),
+			)
+		);
+
+		$auth = $this->harness();
+		$keys = $auth->list_scoped_api_keys();
+
+		$this->assertSame( 'unknown', $keys[0]['role'] );
+		$this->assertTrue( $keys[0]['deny_all'] );
+		$this->assertStringNotContainsString( '__mcpwp_unknown_role__', wp_json_encode( $keys ) );
+	}
+
+	public function test_list_scoped_api_keys_does_not_flag_a_real_custom_key_as_deny_all(): void {
+		$auth = $this->harness();
+		$auth->create_scoped_api_key( 'real key', array( 'read', 'write' ), 'custom', array( 'seo' ) );
+
+		$keys = $auth->list_scoped_api_keys();
+
+		$this->assertSame( array( 'seo' ), $keys[0]['tool_categories'] );
+		$this->assertFalse( $keys[0]['deny_all'] );
 	}
 }

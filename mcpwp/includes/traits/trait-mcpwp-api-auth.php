@@ -424,7 +424,7 @@ trait Mcpwp_Api_Auth {
 		}
 
 		$key_record = $this->get_current_api_key_record();
-		$role       = ( is_array( $key_record ) && isset( $key_record['role'] ) ) ? (string) $key_record['role'] : 'unknown';
+		$role       = ( is_array( $key_record ) && isset( $key_record['role'] ) ) ? self::describe_role_for_message( (string) $key_record['role'] ) : 'unknown';
 
 		return new WP_Error(
 			'forbidden_category',
@@ -1494,7 +1494,7 @@ trait Mcpwp_Api_Auth {
 			return true;
 		}
 
-		$role = isset( $key_record['role'] ) ? (string) $key_record['role'] : 'unknown';
+		$role = isset( $key_record['role'] ) ? self::describe_role_for_message( (string) $key_record['role'] ) : 'unknown';
 
 		return new WP_Error(
 			'forbidden_category',
@@ -4049,11 +4049,18 @@ trait Mcpwp_Api_Auth {
 	 * @param string $label           Human-readable key label.
 	 * @param array  $scopes          Scopes for key.
 	 * @param string $role            Role slug (admin, author, designer, editor, custom).
+	 *                                 Omitted/empty defaults to 'admin'; any
+	 *                                 other value must be one of
+	 *                                 get_role_definitions()'s keys or the
+	 *                                 call is refused (#1041 WARN-2).
 	 * @param array  $tool_categories Tool category slugs (for custom role).
-	 * @return array Key creation result, including plaintext key once, or — for a
-	 *               custom role whose category list resolves empty (#1041) — an
-	 *               error shape: array{error:string, message:string, invalid_categories:array}.
-	 *               Callers MUST check for the 'error' key before reading 'key'.
+	 * @return array Key creation result, including plaintext key once, or an
+	 *               error shape the caller MUST check for before reading 'key':
+	 *               - role unrecognised (#1041 WARN-2): array{error:'unknown_role',
+	 *                 message:string, valid_roles:array}
+	 *               - custom role whose category list resolves empty (#1041):
+	 *                 array{error:'empty_custom_categories', message:string,
+	 *                 invalid_categories:array}
 	 */
 	public function create_scoped_api_key( $label = '', $scopes = array(), $role = 'admin', $tool_categories = array(), $allow_destructive = false ) {
 		$plain_key = $this->generate_api_key();
@@ -4070,13 +4077,30 @@ trait Mcpwp_Api_Auth {
 				array( 'read', 'write', 'admin' )
 			)
 		);
-		$scopes    = $this->sanitize_scopes( $scopes );
-		$role      = sanitize_key( (string) $role );
+		$scopes = $this->sanitize_scopes( $scopes );
+		$role   = sanitize_key( (string) $role );
 
-		// Validate role.
+		// Unspecified is a caller convenience, not a garbled role — default it
+		// to 'admin' same as always. A NON-empty value that still isn't a real
+		// role, though, is refused rather than silently minted as 'admin'
+		// (#1041 WARN-2 — POST /api-keys {"role":"custom-seo",...} used to
+		// come back 201 role:admin, silently discarding the caller's actual
+		// intent and the categories they meant to scope it to).
+		if ( '' === $role ) {
+			$role = 'admin';
+		}
 		$known_roles = array_keys( self::get_role_definitions() );
 		if ( ! in_array( $role, $known_roles, true ) ) {
-			$role = 'admin';
+			return array(
+				'error'       => 'unknown_role',
+				'message'     => sprintf(
+					/* translators: 1: the invalid role supplied, 2: comma-separated list of valid roles */
+					__( 'Unknown role "%1$s". Valid roles: %2$s.', 'mcpwp' ),
+					$role,
+					implode( ', ', $known_roles )
+				),
+				'valid_roles' => $known_roles,
+			);
 		}
 
 		// Sanitize tool categories.
@@ -4169,12 +4193,25 @@ trait Mcpwp_Api_Auth {
 				continue;
 			}
 
+			// #1041 NIT-1: neither internal sentinel — deny_all_category_marker()
+			// (a migrated/hand-seeded custom key with an empty category list)
+			// nor unknown_role_marker() (a malformed 'role' field, #1041 WARN-1)
+			// — belongs in a client-facing listing. Present the resolved
+			// verdict instead: tool_categories as the real (possibly empty)
+			// list via present_tool_categories(), plus an explicit deny_all
+			// flag so a caller (the admin UI, `wp_list_api_keys`) can render
+			// "denied everything" rather than mistaking [] for admin's own
+			// "unrestricted" empty array — those are opposite meanings and
+			// this field is the only thing that tells them apart.
+			$deny_all = self::is_deny_all_categories( $this->resolve_key_tool_categories( $normalized ) );
+
 			$output[] = array(
 				'id'              => $normalized['id'],
 				'label'           => $normalized['label'],
 				'scopes'          => $normalized['scopes'],
-				'role'            => $normalized['role'],
-				'tool_categories' => $normalized['tool_categories'],
+				'role'            => self::unknown_role_marker() === $normalized['role'] ? 'unknown' : $normalized['role'],
+				'tool_categories' => $deny_all ? array() : $normalized['tool_categories'],
+				'deny_all'        => $deny_all,
 				'created_at'      => $normalized['created_at'],
 				'last_used_at'    => $normalized['last_used_at'],
 				'revoked_at'      => $normalized['revoked_at'],
@@ -4317,20 +4354,37 @@ trait Mcpwp_Api_Auth {
 	/**
 	 * Normalize key record fields.
 	 *
+	 * Role handling (#1041 WARN-1, round-2 adversarial review of PR #1043):
+	 * a record with NO 'role' field at all is genuinely legacy — created
+	 * before role-scoping existed, when every key was implicitly full-access
+	 * — and normalizes to 'admin' (unrestricted; see
+	 * resolve_key_tool_categories()). A record whose 'role' field IS present
+	 * but does not sanitize to one of get_role_definitions()'s keys (empty,
+	 * numeric, a typo, a stale role a build removed) is malformed data, not a
+	 * legacy key, and must NOT collapse to 'admin' — that was the exact
+	 * silent-grant bug this fixes: live, a hand-seeded record with role
+	 * 'viewer', '', null or 5 (any of them present-but-invalid) got full
+	 * admin access. It normalizes to unknown_role_marker() instead, which
+	 * resolve_key_tool_categories() resolves to deny-all like any other
+	 * unrecognised role — the record still authenticates (never revoked or
+	 * deleted here), it just cannot reach any real category.
+	 *
 	 * @param array $record Key record.
 	 * @return array Normalized key record.
 	 */
 	protected function normalize_api_key_record( $record ) {
 		$record = is_array( $record ) ? $record : array();
 
-		$role            = isset( $record['role'] ) ? sanitize_key( (string) $record['role'] ) : 'admin';
-		$tool_categories = isset( $record['tool_categories'] ) ? array_map( 'sanitize_key', (array) $record['tool_categories'] ) : array();
-
-		// Validate role against known definitions.
 		$known_roles = array_keys( self::get_role_definitions() );
-		if ( ! in_array( $role, $known_roles, true ) ) {
+
+		if ( ! array_key_exists( 'role', $record ) ) {
 			$role = 'admin';
+		} else {
+			$raw_role = sanitize_key( (string) $record['role'] );
+			$role     = in_array( $raw_role, $known_roles, true ) ? $raw_role : self::unknown_role_marker();
 		}
+
+		$tool_categories = isset( $record['tool_categories'] ) ? array_map( 'sanitize_key', (array) $record['tool_categories'] ) : array();
 
 		return array(
 			'id'              => isset( $record['id'] ) ? sanitize_key( (string) $record['id'] ) : '',
@@ -4357,7 +4411,12 @@ trait Mcpwp_Api_Auth {
 	 *   fail closed to array('read') via sanitize_scopes().
 	 *
 	 * @param array  $record Raw key record.
-	 * @param string $role   Already-validated role slug (normalize coerces unknown→'admin').
+	 * @param string $role   Already-resolved role slug — 'admin' for a
+	 *                       roleless legacy record, a real role, or
+	 *                       unknown_role_marker() for a present-but-invalid
+	 *                       one (#1041 WARN-1). A scopeless malformed-role
+	 *                       record therefore defaults to [read,write], not
+	 *                       the full admin grant — less privilege, fail closed.
 	 * @return array Scope list.
 	 */
 	protected function normalize_record_scopes( $record, $role ) {
@@ -4558,6 +4617,31 @@ trait Mcpwp_Api_Auth {
 	}
 
 	/**
+	 * Internal marker for a stored 'role' field that is PRESENT but does not
+	 * sanitize to one of get_role_definitions()'s keys — empty string,
+	 * numeric, a typo, a stale role name a build removed (#1041 WARN-1,
+	 * round-2 adversarial review of PR #1043).
+	 *
+	 * normalize_api_key_record() used to coerce this exact case to 'admin',
+	 * the same silent-grant shape #1041's own fix closed for empty custom
+	 * categories — live: a hand-seeded record with role 'viewer', '', null or
+	 * 5 got full admin access (200 on /action-log, all 172 tools listed).
+	 * This marker keeps that distinct from BOTH a real 'admin' role AND a
+	 * genuinely legacy pre-roles record (no 'role' field at all, still the
+	 * only unrestricted-by-absence case — see resolve_key_tool_categories()).
+	 * It is not a category slug, never returned by resolve_key_tool_categories()
+	 * itself, and never stored back into a record — it exists only as the
+	 * normalized 'role' value a malformed record resolves to, which
+	 * resolve_key_tool_categories() then maps to deny-all like any other
+	 * unrecognised role.
+	 *
+	 * @return string
+	 */
+	public static function unknown_role_marker() {
+		return '__mcpwp_unknown_role__';
+	}
+
+	/**
 	 * Whether a resolve_key_tool_categories() result represents "restricted
 	 * to nothing" (the deny-all sentinel) rather than a real, non-empty
 	 * category list.
@@ -4583,6 +4667,22 @@ trait Mcpwp_Api_Auth {
 			return __( '(none)', 'mcpwp' );
 		}
 		return implode( ', ', (array) $categories );
+	}
+
+	/**
+	 * Render a key record's 'role' field for a human- or machine-readable
+	 * surface, never leaking unknown_role_marker() (#1041 WARN-1 round-2
+	 * adversarial review of PR #1043) — every "role: %s" message and the MCP
+	 * `initialize` `role`/`tool_categories` fields read $key_record['role']
+	 * directly; a malformed-role record's normalized role is the internal
+	 * marker string, not something a client (or an admin reading a log) is
+	 * meant to see.
+	 *
+	 * @param string $role Raw 'role' value from a (normalized) key record.
+	 * @return string The role as-is, or 'unknown' for the marker.
+	 */
+	public static function describe_role_for_message( $role ) {
+		return self::unknown_role_marker() === $role ? 'unknown' : (string) $role;
 	}
 
 	/**
@@ -4625,11 +4725,25 @@ trait Mcpwp_Api_Auth {
 	 *               category granted.
 	 */
 	public function resolve_key_tool_categories( $key_record ) {
-		$role = isset( $key_record['role'] ) ? (string) $key_record['role'] : 'admin';
+		// A record with NO 'role' field at all is the ONLY unrestricted-by-
+		// absence case — a genuinely legacy, pre-roles key (#1041 WARN-1).
+		// This must be array_key_exists(), not isset(): a record could in
+		// principle carry an explicit `'role' => null`, which isset() also
+		// treats as absent but which normalize_api_key_record() resolves to
+		// unknown_role_marker() (present-but-invalid), not 'admin' — the two
+		// must not be conflated here either.
+		if ( ! array_key_exists( 'role', $key_record ) ) {
+			return array();
+		}
 
-		// Admin role, or a legacy/migrated key with no 'role' field at all:
-		// unrestricted. This is the ONLY unrestricted case.
-		if ( 'admin' === $role || '' === $role ) {
+		$role = (string) $key_record['role'];
+
+		// Admin role: unrestricted. An empty string is NOT treated as
+		// unrestricted here (#1041 WARN-1) — normalize_api_key_record() never
+		// emits '' for 'role' (a present-but-empty value resolves to
+		// unknown_role_marker()), so this stays strictly "role literally is
+		// the string 'admin'".
+		if ( 'admin' === $role ) {
 			return array();
 		}
 
