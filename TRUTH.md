@@ -4,7 +4,7 @@
 > read this before spelunking. **Truth lives once per topic; everything else links here, never copies.**
 > Drift between two docs on the same fact is a **bug** — fix it by deleting the copy and pointing at the source.
 >
-> **Last updated:** 2026-07-22 · maintained under [`Mumega-com/mcpwp#687`](https://github.com/Mumega-com/mcpwp/issues/687)
+> **Last updated:** 2026-07-29 · maintained under [`Mumega-com/mcpwp#687`](https://github.com/Mumega-com/mcpwp/issues/687)
 
 ---
 
@@ -31,6 +31,7 @@ Full map: **[`docs/PROJECT-TOPOLOGY.md`](docs/PROJECT-TOPOLOGY.md)**. The plugin
 | Architecture (extension model) | [`docs/adr/0001-extension-architecture.md`](docs/adr/0001-extension-architecture.md) |
 | Plugin internals (endpoints, hooks, options, arch) | root [`CLAUDE.md`](CLAUDE.md) |
 | Ops / tasks / who-owns-next (governance spine) | **mupot** (`mupot.mumega.com/mcp`) — not a doc |
+| MCPWP publication strategy, content graph, partnerships, cadence, and measurement | [`Mumega-com/mumega-motion-theme/TRUTH.md`](https://github.com/Mumega-com/mumega-motion-theme/blob/master/TRUTH.md) |
 | Editorial content brief (the media site) | live WP option `mcpwp_site_context` on mcpwp.net |
 | OAuth broker (mumcp.com sign-in) | [`docs/superpowers/specs/2026-07-20-mumcp-oauth-broker-design.md`](docs/superpowers/specs/2026-07-20-mumcp-oauth-broker-design.md) |
 
@@ -43,6 +44,8 @@ If a topic is not listed, it does not yet have a canonical home — **give it on
 - **Product / project** (naming, topology, strategy, architecture, decisions) → **git** (this table).
 - **Ops / tasks** (work state, ownership) → **mupot** (already canonical; do not mirror task-of-record into git or WordPress).
 - **Editorial content** (the media KB) → **WordPress** categories on mcpwp.net.
+- **MCPWP publication strategy and editorial contract** → the
+  [`mumega-motion-theme` entrypoint](https://github.com/Mumega-com/mumega-motion-theme/blob/master/TRUTH.md).
 
 Do not conflate them. A task's state belongs in mupot, not a markdown checklist. A naming fact belongs here, not in five docs.
 
