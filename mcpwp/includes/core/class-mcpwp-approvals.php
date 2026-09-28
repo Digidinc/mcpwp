@@ -915,9 +915,16 @@ class Mcpwp_Approvals {
 				return new WP_Error( 'destructive_gate_unavailable', __( 'The destructive-operation gate is not loaded.', 'mcpwp' ), array( 'status' => 500 ) );
 			}
 
+			// #1022 round-2 review NIT: the resolved post_type this record
+			// was queued against (set at defer time — see fingerprint()) so
+			// a replay failure can name the disabled category to the
+			// wp-admin principal applying it, instead of a bare HTTP status.
+			$replay_context                  = is_array( $context ) ? $context : array();
+			$replay_context['resource_type'] = isset( $request['resource']['type'] ) ? (string) $request['resource']['type'] : '';
+
 			$result = Mcpwp_Destructive_Gate::replay(
 				isset( $request['payload'] ) && is_array( $request['payload'] ) ? $request['payload'] : array(),
-				is_array( $context ) ? $context : array(),
+				$replay_context,
 				isset( $request['operation'] ) ? (string) $request['operation'] : ''
 			);
 

@@ -92,6 +92,16 @@ class Mcpwp_REST_Content extends Mcpwp_REST_API {
 			);
 		}
 
+		// #1020: this generic listing is a 'content'-classified ROUTE, but the
+		// caller names an arbitrary post type — a WooCommerce product, an
+		// Elementor archetype — that belongs to a different tool category.
+		// The caller named the type up front, so a 403 (not a 404) is the
+		// right shape here; see guard_post_type_category_for_type().
+		$category_denied = $this->guard_post_type_category_for_type( $post_type );
+		if ( $category_denied ) {
+			return $category_denied;
+		}
+
 		$per_page = min( 100, max( 1, absint( $request->get_param( 'per_page' ) ?: 10 ) ) );
 		$page     = max( 1, absint( $request->get_param( 'page' ) ?: 1 ) );
 
@@ -193,14 +203,38 @@ class Mcpwp_REST_Content extends Mcpwp_REST_API {
 			);
 		}
 
-		// A permanent delete has no undo: approval by default (#536). A custom
-		// type is never trashed by WordPress, so force=false is permanent too
-		// (#536 round 5).
-		if ( Mcpwp_Destructive_Gate::delete_is_permanent( $post_type, $force, (string) $post->post_status ) && Mcpwp_Destructive_Gate::should_gate( $this->get_current_api_key_record() ) ) {
+		// #1020: unlike list_content() above, a specific id IS being resolved
+		// here, so a denial takes the not-found shape rather than 403 — a
+		// scoped key must not be able to tell "wrong category" apart from
+		// "no such product/template exists".
+		$category_denied = $this->guard_post_type_category( $post, __( 'Content item not found.', 'mcpwp' ) );
+		if ( $category_denied ) {
+			return $category_denied;
+		}
+
+		// A permanent delete has no undo: approval by default (#536).
+		$permanent = Mcpwp_Destructive_Gate::delete_is_permanent( $post_type, $force, (string) $post->post_status );
+
+		if ( $permanent && Mcpwp_Destructive_Gate::should_gate( $this->get_current_api_key_record() ) ) {
 			return $this->defer_destructive( 'delete_content', $request, array( 'type' => $post_type, 'id' => $post_id, 'title' => get_the_title( $post_id ) ), sprintf( 'Permanently delete %s #%d', $post_type, $post_id ) );
 		}
 
-		$result = wp_delete_post( $post_id, $force );
+		// #1023 (round-1 adversarial review of #1020/#1022): wp_delete_post()
+		// with force=false only auto-trashes when the post_type is LITERALLY
+		// 'post' or 'page' — every other type (product, elementor_library, any
+		// custom CPT) is PERMANENTLY deleted regardless of $force, silently
+		// disagreeing with the $permanent decision above (and with the
+		// "moved to trash" message this response used to send anyway). Trash
+		// explicitly via wp_trash_post() — which works for any post type —
+		// whenever $permanent said this was not a permanent delete, so the
+		// actual outcome always matches what was decided and reported.
+		if ( $permanent ) {
+			$result = wp_delete_post( $post_id, true );
+		} elseif ( in_array( $post_type, array( 'post', 'page' ), true ) ) {
+			$result = wp_delete_post( $post_id, false );
+		} else {
+			$result = wp_trash_post( $post_id );
+		}
 		if ( ! $result ) {
 			return $this->error_response(
 				'delete_failed',
@@ -213,15 +247,17 @@ class Mcpwp_REST_Content extends Mcpwp_REST_API {
 		// too (a Theme Builder template has no dedicated CPT of its own).
 		// elementor_pro_theme_builder_conditions cleanup happens via
 		// Mcpwp_Theme_Builder::handle_before_delete_post(), hooked on
-		// WordPress's own before_delete_post — it fires for the
-		// wp_delete_post() call above without this route needing to know
-		// the post type at all.
+		// WordPress's own before_delete_post — it fires only for the
+		// permanent branch above (trashing a post never fires
+		// before_delete_post — the row still exists), which is correct: a
+		// trashed template can still be restored, so its conditions cache
+		// entry has nothing to clean up yet.
 		return $this->success_response(
 			array(
 				'success'   => true,
 				'post_id'   => $post_id,
 				'post_type' => $post_type,
-				'message'   => $force
+				'message'   => $permanent
 					? __( 'Content permanently deleted.', 'mcpwp' )
 					: __( 'Content moved to trash.', 'mcpwp' ),
 			)

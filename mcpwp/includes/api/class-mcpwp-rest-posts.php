@@ -37,6 +37,38 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 	}
 
 	/**
+	 * Authenticate, then wire the category check into Mcpwp_Posts (#1022
+	 * BLOCK-1, round-1 adversarial review of #1020's fix).
+	 *
+	 * Every route this controller registers shares this ONE
+	 * permission_callback, so this is the single place — not one per
+	 * write handler — where the caller's key becomes known, letting
+	 * Mcpwp_Posts::validate_post_type() enforce category on every
+	 * read/write/delete/create path (and, since bulk_update_posts()/
+	 * bulk_create_posts() call update_post()/create_post() per item,
+	 * every bulk item too) without that class needing any REST/auth
+	 * context of its own. Wired only on a successful authentication —
+	 * an insufficient-scope/disabled-category denial at the route level
+	 * never reaches a handler, so there is nothing to wire for those.
+	 *
+	 * @param WP_REST_Request $request Request object.
+	 * @return bool|WP_Error
+	 */
+	public function check_permission( $request ) {
+		$result = parent::check_permission( $request );
+
+		if ( true === $result ) {
+			$this->posts->set_category_allowed_callback(
+				function ( $post_type ) {
+					return $this->caller_may_read_category( $this->category_for_post_type( $post_type ) );
+				}
+			);
+		}
+
+		return $result;
+	}
+
+	/**
 	 * Register routes.
 	 */
 	public function register_routes() {
@@ -230,6 +262,20 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 	public function list_posts( $request ) {
 		$this->log_activity( 'list_posts', $request );
 
+		// #1020: /posts is a 'content'-classified ROUTE, but ?post_type=
+		// lets the caller name any writable type — product, elementor_library
+		// — that belongs to a different tool category. Checked against the
+		// raw param (before sanitize_query_args() folds it into $args) so an
+		// unset param (defaults to 'post' downstream) is never checked
+		// against the empty string.
+		$requested_type = $request->get_param( 'post_type' );
+		if ( null !== $requested_type && '' !== $requested_type ) {
+			$category_denied = $this->guard_post_type_category_for_type( sanitize_key( (string) $requested_type ) );
+			if ( $category_denied ) {
+				return $category_denied;
+			}
+		}
+
 		$args   = $this->sanitize_query_args( $request->get_params() );
 		$result = $this->posts->list_posts( $args );
 
@@ -258,6 +304,16 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 			return $denied;
 		}
 
+		// #1020's category guard for this door now lives INSIDE
+		// Mcpwp_Posts::get_post() (via validate_post_type(), wired through
+		// check_permission() above) rather than here as a separate check —
+		// round-1 adversarial review WARN-1: a standalone guard here built
+		// its own generic 404, which carried a DIFFERENT (and less specific)
+		// hint than get_post()'s own "post genuinely missing" branch,
+		// letting a caller distinguish "wrong category" from "no such post"
+		// by hint text alone. Folding the check into the SAME existence
+		// condition Mcpwp_Posts::get_post() already uses makes a category
+		// denial byte-identical to a missing post, by construction.
 		$result = $this->posts->get_post( $post_id );
 
 		if ( is_wp_error( $result ) ) {
@@ -320,20 +376,34 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 		$post_id = absint( $request->get_param( 'id' ) );
 		$force   = rest_sanitize_boolean( $request->get_param( 'force' ) );
 
-		// A permanent delete has no undo: approval by default (#536). Only for
-		// a post that exists — a deferral is not a way to manufacture records.
-		// Permanent is decided by the TYPE, not the flag alone: WordPress
-		// trashes only post and page (#536 round 5).
-		if ( Mcpwp_Destructive_Gate::should_gate( $this->get_current_api_key_record() ) ) {
-			$post = get_post( $post_id );
-			// The same type test the core method applies, so a type it would
-			// refuse is refused here and never queued (#536 round 8).
-			if ( ! $post || 'page' === $post->post_type || Mcpwp_Posts::is_blocked_post_type( $post->post_type ) || ( method_exists( 'Mcpwp_Posts', 'is_writable_post_type' ) && ! Mcpwp_Posts::is_writable_post_type( $post->post_type ) ) ) {
-				return $this->error_response( 'not_found', __( 'Post not found.', 'mcpwp' ), 404, array( 'id' => $post_id ) );
-			}
+		// #1022 round-2 adversarial review, BLOCK-R2-1: resolve — existence,
+		// type, AND category — unconditionally, first, before any
+		// destructive-gate decision. The two checks this replaced ran the
+		// existence/type test only when should_gate() happened to be true,
+		// and never checked category at all before deciding whether to
+		// defer to approval — so a category-denied but otherwise-writable
+		// type (an Elementor template, or literally anything with
+		// force=true, which is always "permanent") sailed past that
+		// pre-check and straight into defer_destructive(), queuing an
+		// approval request an admin could later apply and complete, for a
+		// delete the calling key was never authorized for. This call is the
+		// SAME method Mcpwp_Posts::delete_post() calls internally, so a
+		// category denial here and a genuinely missing id produce byte-
+		// identical bodies, and neither the destructive gate nor its
+		// should_gate()/off-switch state can ever see this post before the
+		// category check has already run.
+		$post = $this->posts->resolve_deletable_post( $post_id );
+		if ( is_wp_error( $post ) ) {
+			return $post;
 		}
-		if ( isset( $post ) && $post && Mcpwp_Destructive_Gate::delete_is_permanent( $post->post_type, $force, (string) $post->post_status ) && Mcpwp_Destructive_Gate::should_gate( $this->get_current_api_key_record() ) ) {
-			return $this->defer_destructive( 'delete_post', $request, array( 'type' => (string) $post->post_type, 'id' => $post_id, 'title' => (string) $post->post_title ), sprintf( 'Permanently delete post #%d', $post_id ) );
+
+		// A permanent delete has no undo: approval by default (#536).
+		// Permanent is decided by the TYPE, not the flag alone: WordPress
+		// trashes only post and page on its own (#536 round 5; #1023
+		// generalized this to every non-attachment/elementor_library/
+		// elementor_snippet type, via Mcpwp_Destructive_Gate::delete_is_permanent()).
+		if ( Mcpwp_Destructive_Gate::delete_is_permanent( $post->post_type, $force, (string) $post->post_status ) && Mcpwp_Destructive_Gate::should_gate( $this->get_current_api_key_record() ) ) {
+			return $this->defer_destructive( 'delete_post', $request, array( 'type' => (string) $post->post_type, 'id' => $post_id, 'title' => (string) $post->post_title ), sprintf( 'Permanently delete %s #%d', $post->post_type, $post_id ) );
 		}
 
 		$result = $this->posts->delete_post( $post_id, $force );
@@ -502,7 +572,15 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 		$media_id = absint( $request->get_param( 'media_id' ) );
 
 		$post = get_post( $post_id );
-		if ( ! $post || ! Mcpwp_Posts::is_writable_post_type( $post->post_type ) ) {
+		// #1020/#1022 round-1 review WARN-1: the category check is folded
+		// into this SAME condition (not a separate guard call afterward) so
+		// a category denial is byte-identical to a genuinely missing post —
+		// is_writable_post_type() above allows any public custom type
+		// (product included) plus the Elementor safe_nonpublic_types, with
+		// no idea which MCPWP tool category owns them, so without this a
+		// 'content'-only key could still set a WooCommerce product's or an
+		// Elementor template's featured image.
+		if ( ! $post || ! Mcpwp_Posts::is_writable_post_type( $post->post_type ) || ! $this->caller_may_read_category( $this->category_for_post_type( $post->post_type ) ) ) {
 			return $this->error_response(
 				'not_found',
 				__( 'Post not found.', 'mcpwp' ),

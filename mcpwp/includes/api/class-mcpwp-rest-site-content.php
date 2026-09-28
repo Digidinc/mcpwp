@@ -389,6 +389,16 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			);
 		}
 
+		// #1020: the resolved post's OWN category, not the route's — e.g. a
+		// WooCommerce product or an Elementor archetype fetched by id through
+		// this content-labeled route. Same not-found shape as every other
+		// guard on this door, so category denial cannot be told apart from a
+		// missing post.
+		$category_denied = $this->guard_post_type_category( $post, __( 'Content not found.', 'mcpwp' ) );
+		if ( $category_denied ) {
+			return $category_denied;
+		}
+
 		if ( 'any' !== $type && $type !== $post->post_type ) {
 			return $this->error_response(
 				'not_found',
@@ -517,6 +527,15 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			return $this->error_response( 'not_found', __( 'Post not found.', 'mcpwp' ), 404 );
 		}
 
+		// #1020: this route classifies as 'content' by PREFIX, but the post
+		// it resolved may not be — a WooCommerce product's _sku, an
+		// Elementor archetype's _mcpwp_archetype_brief. Gate on what the id
+		// actually resolved to, not on what /post-meta looks like.
+		$category_denied = $this->guard_post_type_category( $post, __( 'Post not found.', 'mcpwp' ) );
+		if ( $category_denied ) {
+			return $category_denied;
+		}
+
 		$key = $request->get_param( 'key' );
 
 		if ( ! empty( $key ) ) {
@@ -563,6 +582,14 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 
 		if ( ! $post instanceof WP_Post ) {
 			return $this->error_response( 'not_found', __( 'Post not found.', 'mcpwp' ), 404 );
+		}
+
+		// #1020: same category guard as the read side above — a write-scope
+		// key with only 'content' must not be able to set a WooCommerce
+		// product's or an Elementor template's meta through this route.
+		$category_denied = $this->guard_post_type_category( $post, __( 'Post not found.', 'mcpwp' ) );
+		if ( $category_denied ) {
+			return $category_denied;
 		}
 
 		$raw_key = trim( (string) $request->get_param( 'key' ) );

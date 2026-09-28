@@ -894,11 +894,27 @@ final class DestructiveGateTest extends TestCase {
 	public function test_force_false_is_gated_wherever_wordpress_would_not_trash(): void {
 		// Round-5 P0-1: wp_block, custom types, templates and media are
 		// deleted outright on force=false; the gate rested on the flag.
+		//
+		// #1023 (round-1 adversarial review of #1020/#1022) generalized this
+		// answer for every type EXCEPT elementor_library/elementor_snippet
+		// (still hardcoded permanent — their only delete door,
+		// Mcpwp_REST_Elementor_Pro::delete_template(), is an Elementor route
+		// out of scope for that fix, filed separately as #1024, and still
+		// calls wp_delete_post() directly with no explicit trash) and
+		// attachment (its own MEDIA_TRASH rule, unchanged). wp_block and a
+		// generic public custom type ('sm_team') are now trash-eligible,
+		// because their real doors — Mcpwp_Posts::delete_post() and
+		// Mcpwp_REST_Content::delete_content() — were fixed in that same
+		// round to call wp_trash_post() explicitly for a "not permanent"
+		// delete of ANY type, not just post/page.
 		$this->assertFalse( Mcpwp_Destructive_Gate::delete_is_permanent( 'post', false ) );
 		$this->assertFalse( Mcpwp_Destructive_Gate::delete_is_permanent( 'page', false ) );
 		$this->assertTrue( Mcpwp_Destructive_Gate::delete_is_permanent( 'page', true ) );
-		foreach ( array( 'wp_block', 'elementor_library', 'elementor_snippet', 'sm_team', 'attachment' ) as $type ) {
+		foreach ( array( 'elementor_library', 'elementor_snippet', 'attachment' ) as $type ) {
 			$this->assertTrue( Mcpwp_Destructive_Gate::delete_is_permanent( $type, false ), $type );
+		}
+		foreach ( array( 'wp_block', 'sm_team' ) as $type ) {
+			$this->assertFalse( Mcpwp_Destructive_Gate::delete_is_permanent( $type, false ), $type );
 		}
 
 		// Media, force omitted.
@@ -908,21 +924,23 @@ final class DestructiveGateTest extends TestCase {
 		$this->assertSame( 202, $this->authed( $media, $request )->delete_media( $request )->get_status() );
 		$this->assertArrayHasKey( 12, $GLOBALS['_mcpwp_test_posts'] );
 
-		// A block through /posts, force omitted.
+		// A block through /posts, force omitted — #1023: now actually
+		// trashed in one call (200), not deferred, and not deleted outright.
 		$this->seed( 41, 'wp_block' );
 		$posts   = new Mcpwp_REST_Posts();
 		$request = new WP_REST_Request( 'DELETE', '/mcpwp/v1/posts/41', array( 'id' => 41 ) );
-		$this->assertSame( 202, $this->authed( $posts, $request )->delete_post( $request )->get_status() );
-		$this->assertArrayHasKey( 41, $GLOBALS['_mcpwp_test_posts'] );
+		$this->assertSame( 200, $this->authed( $posts, $request )->delete_post( $request )->get_status() );
+		$this->assertSame( 'trash', $GLOBALS['_mcpwp_test_posts'][41]->post_status, 'A non-forced delete must actually land in the trash, not be silently permanent.' );
 
-		// A custom type through /content, force omitted.
+		// A custom type through /content, force omitted — same fix.
 		$GLOBALS['mcpwp_test_public_post_types'] = array( 'sm_team' );
 		$this->seed( 31, 'sm_team' );
 		$content = new Mcpwp_REST_Content();
 		$request = new WP_REST_Request( 'DELETE', '/mcpwp/v1/content/sm_team/31', array( 'post_type' => 'sm_team', 'id' => 31 ) );
 		$response = $this->authed( $content, $request )->delete_content( $request );
-		$this->assertSame( 202, $response->get_status(), is_wp_error( $response ) ? $response->get_error_message() : wp_json_encode( $response->get_data() ) );
-		$this->assertArrayHasKey( 31, $GLOBALS['_mcpwp_test_posts'] );
+		$this->assertSame( 200, $response->get_status(), is_wp_error( $response ) ? $response->get_error_message() : wp_json_encode( $response->get_data() ) );
+		$this->assertSame( 'trash', $GLOBALS['_mcpwp_test_posts'][31]->post_status );
+		$this->assertSame( __( 'Content moved to trash.', 'mcpwp' ), $response->get_data()['message'], 'The response text must match what actually happened.' );
 		unset( $GLOBALS['mcpwp_test_public_post_types'] );
 
 		// A template, force omitted (round 4 gated only force=true).
@@ -943,7 +961,10 @@ final class DestructiveGateTest extends TestCase {
 		$this->assertSame( 200, $this->authed( $posts, $request )->delete_post( $request )->get_status() );
 		$this->assertSame( 'trash', $GLOBALS['_mcpwp_test_posts'][5]->post_status );
 
-		$this->assertCount( 4, Mcpwp_Approvals::list_requests( 'pending', 50, true ) );
+		// Only media (attachment, MEDIA_TRASH off) and the Elementor template
+		// (elementor_library, carved out above) still deferred — the block
+		// and the custom type were actually trashed above instead (#1023).
+		$this->assertCount( 2, Mcpwp_Approvals::list_requests( 'pending', 50, true ) );
 	}
 
 	public function test_the_delete_doubles_mirror_core(): void {
@@ -1061,5 +1082,84 @@ final class DestructiveGateTest extends TestCase {
 		}
 		$this->assertGreaterThan( 10, $seen, 'Premise: the controllers were read.' );
 		$this->assertArrayHasKey( 'class-mcpwp-rest-users.php', array_flip( array_map( 'basename', $files ) ) );
+	}
+
+	// ── #1022 round-2 review NIT: the defer hint no longer claims custom ───
+	// types/blocks are excluded from trashing (they aren't, since #1023).
+
+	public function test_defer_hint_does_not_claim_custom_types_or_blocks_are_not_trashed(): void {
+		require_once dirname( __DIR__ ) . '/includes/pro/api/class-mcpwp-rest-elementor-pro.php';
+		$this->seed( 70, 'elementor_library' );
+		$never = new class() { public $calls = 0; public function __call( $n, $a ) { $this->calls++; return true; } };
+		$ctl   = ( new ReflectionClass( Mcpwp_REST_Elementor_Pro::class ) )->newInstanceWithoutConstructor();
+		$prop  = new ReflectionProperty( Mcpwp_REST_Elementor_Pro::class, 'elementor_pro' );
+		$prop->setAccessible( true );
+		$prop->setValue( $ctl, $never );
+		$request  = new WP_REST_Request( 'DELETE', '/mcpwp/v1/elementor/templates/70', array( 'id' => 70, 'force' => true ) );
+		$hint     = $this->authed( $ctl, $request )->delete_template( $request )->get_data()['hint'] ?? '';
+
+		$this->assertStringNotContainsString( 'custom types)', $hint, 'The hint must not lump every custom type in with the types that are never trashed — #1023 made most of them trash-eligible.' );
+		$this->assertStringContainsString( 'a WooCommerce product, a block, any other custom type', $hint, 'The hint must correctly say these ARE trashed, not gated.' );
+	}
+
+	// ── #1022 round-2 review NIT: name the disabled category on replay ────
+
+	public function test_replay_failure_names_the_disabled_category_to_the_applying_admin(): void {
+		update_option( 'mcpwp_disabled_tool_categories', array( 'woocommerce' ) );
+
+		add_filter(
+			'rest_dispatch_request',
+			function ( $result, $request, $route ) {
+				if ( '/mcpwp/v1/posts/13' !== (string) $route ) {
+					return $result;
+				}
+				return new WP_REST_Response(
+					array( 'code' => 'not_found', 'message' => 'Post not found.', 'data' => array( 'status' => 404 ) ),
+					404
+				);
+			},
+			10,
+			3
+		);
+
+		$result = Mcpwp_Destructive_Gate::replay(
+			array( 'route' => '/mcpwp/v1/posts/13', 'method' => 'DELETE', 'params' => array( 'id' => 13 ), 'target' => array() ),
+			array( 'admin_user' => 7, 'resource_type' => 'product' ),
+			'delete_post'
+		);
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'destructive_replay_failed', $result->get_error_code() );
+		$this->assertStringContainsString( 'woocommerce', $result->get_error_message(), 'A bare "HTTP 404" leaves the admin with no way to tell a disabled category apart from any other failure.' );
+		$this->assertStringContainsString( 'disabled by the site administrator', $result->get_error_message() );
+	}
+
+	public function test_replay_failure_stays_generic_when_the_category_is_not_the_cause(): void {
+		// Same 404, but the category is NOT disabled — the failure must not
+		// falsely blame a category toggle that was fine.
+		add_filter(
+			'rest_dispatch_request',
+			function ( $result, $request, $route ) {
+				if ( '/mcpwp/v1/posts/13' !== (string) $route ) {
+					return $result;
+				}
+				return new WP_REST_Response(
+					array( 'code' => 'not_found', 'message' => 'Post not found.', 'data' => array( 'status' => 404 ) ),
+					404
+				);
+			},
+			10,
+			3
+		);
+
+		$result = Mcpwp_Destructive_Gate::replay(
+			array( 'route' => '/mcpwp/v1/posts/13', 'method' => 'DELETE', 'params' => array( 'id' => 13 ), 'target' => array() ),
+			array( 'admin_user' => 7, 'resource_type' => 'product' ),
+			'delete_post'
+		);
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertStringNotContainsString( 'disabled by the site administrator', $result->get_error_message() );
+		$this->assertStringContainsString( 'HTTP 404', $result->get_error_message() );
 	}
 }

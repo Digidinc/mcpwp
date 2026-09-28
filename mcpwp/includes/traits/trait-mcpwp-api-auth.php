@@ -103,9 +103,22 @@ trait Mcpwp_Api_Auth {
 			return null;
 		}
 
-		// Build the 404 inline rather than via $this->error_response() so this
-		// guard has no dependency on the base REST controller — the trait is
-		// also composed into non-controller classes. Mirrors error_response()'s
+		return $this->build_not_found_error( $message );
+	}
+
+	/**
+	 * Build a 404 WP_Error, identical in shape to a genuinely missing
+	 * resource. Shared by every "existence must not be disclosed" guard in
+	 * this trait (guard_non_public_post(), guard_post_type_category()) so
+	 * they cannot drift into two slightly different 404 shapes.
+	 *
+	 * @param string $message Surface-specific "not found" message.
+	 * @return WP_Error
+	 */
+	protected function build_not_found_error( $message ) {
+		// Built inline rather than via $this->error_response() so this guard
+		// has no dependency on the base REST controller — the trait is also
+		// composed into non-controller classes. Mirrors error_response()'s
 		// hint enrichment so the response is identical to a genuine not-found.
 		$error = new WP_Error( 'not_found', $message, array( 'status' => 404 ) );
 		if ( class_exists( 'Mcpwp_Error_Hints' ) ) {
@@ -113,6 +126,249 @@ trait Mcpwp_Api_Auth {
 		}
 
 		return $error;
+	}
+
+	/**
+	 * Whether the current caller may read data in $category — the site-wide
+	 * disabled-category toggle (blocks every key, including admin) and the
+	 * per-key role restriction (empty for admin/legacy/no-key-record
+	 * contexts, meaning unrestricted). The identical pair
+	 * check_disabled_category_for_route()/check_key_category_restriction_for_route()
+	 * apply to a ROUTE's classified category; this applies the same pair to
+	 * an arbitrary category, for a chokepoint that a route-prefix
+	 * classification can't reach — e.g. a category a response is about to
+	 * embed data from (site-context archetype overrides, #1007 round 3) or
+	 * the category a RESOLVED POST's own type belongs to, which is exactly
+	 * what a route prefix cannot know before the post is fetched (#1020 —
+	 * see category_for_post_type() and guard_post_type_category() below).
+	 *
+	 * Promoted here from a private method of Mcpwp_REST_Site_Info (#1007
+	 * round 3) once a second, unrelated chokepoint (#1020) needed the exact
+	 * same pair of checks — a single copy every caller shares rather than
+	 * each writing its own.
+	 *
+	 * @param string $category Tool category slug.
+	 * @return bool
+	 */
+	protected function caller_may_read_category( $category ) {
+		$disabled_categories = get_option( 'mcpwp_disabled_tool_categories', array() );
+		if ( is_array( $disabled_categories ) && in_array( $category, $disabled_categories, true ) ) {
+			return false;
+		}
+
+		$key_record = $this->get_current_api_key_record();
+		if ( ! is_array( $key_record ) ) {
+			return true;
+		}
+
+		return $this->key_allows_category( $key_record, $category );
+	}
+
+	/**
+	 * Single chokepoint (#1020): map a RESOLVED post's post_type to the tool
+	 * category that governs it.
+	 *
+	 * Every generic, id-based door that resolves an arbitrary post by
+	 * numeric ID — /post-meta (read + write, and the wp_get_post_meta /
+	 * wp_set_post_meta tools, which dispatch to that same route), /content
+	 * (list + delete), /fetch, /posts (including a caller-supplied
+	 * ?post_type= override) and /posts/{id}/featured-image — used to be
+	 * gated ONLY by its ROUTE PREFIX, via get_category_for_route(): always
+	 * 'content' for every one of those. That answers "what kind of route is
+	 * this", not "what kind of DATA did it just resolve" — so an author key
+	 * whose role carries only the 'content' category, on a site with
+	 * 'woocommerce' and 'elementor-templates' both disabled, could still
+	 * read a WooCommerce product's _sku/_regular_price, or an Elementor
+	 * archetype's `_mcpwp_archetype_brief`, straight through
+	 * GET /post-meta/{id} — a route that looked like a content route even
+	 * though the post it resolved did not belong to the content domain at
+	 * all (#1020, found in the round-4 adversarial review of #1013/#1007).
+	 *
+	 * Callers combine this with caller_may_read_category() via
+	 * guard_post_type_category() (existence-sensitive, single-post doors) or
+	 * guard_post_type_category_for_type() (list-style doors where the
+	 * caller names the post type up front) rather than calling either
+	 * directly, so the "which gate shape" decision lives in one place too.
+	 *
+	 * Static (uses no instance state) so Mcpwp_Destructive_Gate::replay()
+	 * — a plain static class with no REST/auth context — can also call it
+	 * (as Mcpwp_REST_API::category_for_post_type(), since a trait's static
+	 * method is only reachable through a composing class) to name a
+	 * disabled category to the wp-admin principal applying a queued
+	 * destructive operation (#1022 round-2 review NIT), rather than every
+	 * existing `$this->category_for_post_type(...)` call site needing to
+	 * change — PHP resolves a static method called via `->` exactly like
+	 * `::`.
+	 *
+	 * @param string $post_type Resolved post's post_type (or a caller-named
+	 *                           one for a list-style door).
+	 * @return string Category slug. Falls back to 'admin' for a private,
+	 *                unmapped type — see the fallback comment below for why
+	 *                that is the safe default rather than 'content'.
+	 */
+	public static function category_for_post_type( $post_type ) {
+		$post_type = (string) $post_type;
+
+		// Ordered, explicit map for every type a domain plugin this codebase
+		// already integrates with can put in wp_posts. Add a new entry here,
+		// not a special case at each door — that is the whole point of this
+		// being one chokepoint.
+		$map = array(
+			'post'              => 'content',
+			'page'              => 'content',
+			// WooCommerce (#1020's own PoC: a product's _sku/_regular_price
+			// leaking through /post-meta). product_variation and the order/
+			// coupon/refund types share the same customer- and business-data
+			// sensitivity, so all five get the one category the dedicated
+			// /woocommerce/* routes already require.
+			'product'           => 'woocommerce',
+			'product_variation' => 'woocommerce',
+			'shop_order'        => 'woocommerce',
+			'shop_order_refund' => 'woocommerce',
+			'shop_coupon'       => 'woocommerce',
+			// Elementor. elementor_library is the CPT behind Pro's saved
+			// templates/archetypes/reusable parts — gated 'elementor-templates'
+			// at their own routes (get_route_category_map() above); an
+			// elementor_library post used as a Theme Builder condition set is
+			// classified the same way here (a coarser call than the route
+			// map's own /theme-builder => 'elementor-theme' split, accepted
+			// because the CPT itself, not the feature built on top of it, is
+			// what a post-type map can see). elementor_snippet is Elementor
+			// Pro Custom Code, gated 'elementor-theme' at /elementor/custom-code.
+			'elementor_library' => 'elementor-templates',
+			'elementor_snippet'  => 'elementor-theme',
+			// LearnPress (#1022 round-1 review, WARN-3) — the same 'learnpress'
+			// category the /learnpress/* routes already require.
+			'lp_course'         => 'learnpress',
+			'lp_lesson'         => 'learnpress',
+			'lp_quiz'           => 'learnpress',
+			'lp_question'       => 'learnpress',
+			'lp_order'          => 'learnpress',
+			// The Events Calendar — the 'events' category ("Events-plugin
+			// listings and CRUD", get_category_meta()). Distinct from the
+			// REST '/events' prefix, which is MCPWP's own webhook/event-store
+			// surface classified 'webhooks' — see get_route_category_map()'s
+			// docblock note on that split.
+			'tribe_events'      => 'events',
+			'tribe_venue'       => 'events',
+			'tribe_organizer'   => 'events',
+			// Elementor Pro's Floating Buttons widget/template.
+			'e-floating-buttons' => 'elementor-theme',
+			// Core CPTs that ARE public/show_in_rest (so the generic fallback
+			// below would otherwise bucket them as 'content') but belong to a
+			// different domain than ordinary post/page content:
+			// - nav_menu_item backs the CLASSIC menu system /menus/* already
+			//   requires 'site' for.
+			// - wp_navigation/wp_template/wp_template_part are block-editor
+			//   (FSE) data — literally sequences of blocks — closer to
+			//   Gutenberg's own domain than to 'content'; no MCPWP tool owns
+			//   them yet, but 'gutenberg' is the closer-fitting existing
+			//   category of the two candidates.
+			// - wp_global_styles (FSE theme.json overrides) is site-wide
+			//   presentation, the same bucket as /theme, /theme-builder,
+			//   /custom-css.
+			'nav_menu_item'      => 'site',
+			'wp_navigation'      => 'gutenberg',
+			'wp_template'        => 'gutenberg',
+			'wp_template_part'   => 'gutenberg',
+			'wp_global_styles'   => 'site',
+		);
+
+		if ( isset( $map[ $post_type ] ) ) {
+			return $map[ $post_type ];
+		}
+
+		// Unmapped type: a third-party plugin's CPT this list has never heard
+		// of, or one this plugin already treats as sensitive elsewhere. Give
+		// it the 'content' home ONLY when it is a type an unprivileged reader
+		// could already see some other way on this very site — publicly
+		// queryable (public) or exposed through the REST API in its own right
+		// (show_in_rest). A type that is neither of those is private by the
+		// site's own declaration (working storage, an addon's internal
+		// control records, a form-entry CPT), so it gets no category home at
+		// all here: only a key with NO category restriction (admin role, or a
+		// custom role explicitly granted 'admin' — see
+		// resolve_key_tool_categories()) reaches it, matching how every other
+		// admin-only surface in this plugin (e.g. /users) is gated.
+		$object = post_type_exists( $post_type ) ? get_post_type_object( $post_type ) : null;
+		if ( $object && ( ! empty( $object->public ) || ! empty( $object->show_in_rest ) ) ) {
+			return 'content';
+		}
+
+		return 'admin';
+	}
+
+	/**
+	 * Post-type category guard for a door that resolves ONE specific post by
+	 * ID (#1020) — /post-meta, /fetch, /content/{type}/{id}, GET /posts/{id},
+	 * POST /posts/{id}/featured-image.
+	 *
+	 * Denial returns the door's own not-found shape, never a distinct
+	 * "forbidden category" error: the existence of a specific post is the
+	 * sensitive fact on these doors (is there a product with this ID? an
+	 * Elementor archetype?), so a denial here must be indistinguishable from
+	 * the post genuinely not existing — the same existence-oracle concern
+	 * guard_non_public_post() already protects against for status, applied
+	 * here to category. Callers pass their surface's own not-found message
+	 * so the parity is byte-for-byte, exactly as guard_non_public_post()
+	 * does.
+	 *
+	 * @param WP_Post|mixed $post          Resolved post object.
+	 * @param string        $not_found_msg Surface-specific "not found" message.
+	 * @return WP_Error|null WP_Error(404) when blocked, null when allowed.
+	 */
+	protected function guard_post_type_category( $post, $not_found_msg ) {
+		if ( ! $post instanceof WP_Post ) {
+			return null;
+		}
+
+		$category = $this->category_for_post_type( $post->post_type );
+		if ( $this->caller_may_read_category( $category ) ) {
+			return null;
+		}
+
+		return $this->build_not_found_error( $not_found_msg );
+	}
+
+	/**
+	 * Post-type category guard for a LIST-style door where the caller names
+	 * the post type up front, as an explicit parameter, rather than this
+	 * guard resolving one post's existence (#1020) — GET /content
+	 * (?post_type=), GET /posts (?post_type=).
+	 *
+	 * Returns the same 403 forbidden_category shape
+	 * check_key_category_restriction_for_route() already uses for a denied
+	 * ROUTE: naming a whole post type is not an existence oracle the way a
+	 * single numeric ID is (the caller supplied the type; nothing about a
+	 * particular record is disclosed either way), and #1020's own PoC
+	 * control case (GET /elementor/archetypes → 403) is exactly this shape.
+	 *
+	 * @param string $post_type Caller-named post type.
+	 * @return WP_Error|null WP_Error(403) when blocked, null when allowed.
+	 */
+	protected function guard_post_type_category_for_type( $post_type ) {
+		$category = $this->category_for_post_type( $post_type );
+		if ( $this->caller_may_read_category( $category ) ) {
+			return null;
+		}
+
+		$key_record = $this->get_current_api_key_record();
+		$role       = ( is_array( $key_record ) && isset( $key_record['role'] ) ) ? (string) $key_record['role'] : 'unknown';
+
+		return new WP_Error(
+			'forbidden_category',
+			sprintf(
+				/* translators: 1: post type, 2: tool category, 3: role name */
+				__( 'Post type "%1$s" belongs to the "%2$s" tool category, which this API key (role: %3$s) does not have access to, or which has been disabled by the site administrator.', 'mcpwp' ),
+				$post_type,
+				$category,
+				$role
+			),
+			array(
+				'status'   => 403,
+				'category' => $category,
+			)
+		);
 	}
 
 	/**
