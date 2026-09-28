@@ -417,6 +417,63 @@ class Mcpwp_Graph_Reader {
 	// -------------------------------------------------------------------------
 
 	/**
+	 * A `<column> NOT IN (...)` fragment excluding tool-category-gated kinds
+	 * (#1024 round-1 review, WARN-5/BLOCK-2/NIT), or an always-true
+	 * no-op when nothing is excluded.
+	 *
+	 * This reader has no category concept of its own — its visibility is
+	 * purely post-status (see the class docblock) — so Mcpwp_REST_Graph
+	 * computes $excluded_kinds (post types the CALLER's tool category
+	 * cannot read, among Mcpwp_Graph_Builder::covered_post_types()) and
+	 * passes it into every public method below. Applied directly in SQL
+	 * (never as a post-fetch PHP filter) so a page comes back full and a
+	 * cursor never advances past a row that was hidden rather than genuinely
+	 * absent — the same reasoning the status-visibility SQL in this class
+	 * already follows, just for a second, orthogonal dimension.
+	 *
+	 * $column is always one of a small set of fixed strings this class
+	 * writes itself (e.g. 'n.kind', a joined post's post_type) — never
+	 * caller input — so only the VALUES in $excluded_kinds travel as bound
+	 * placeholders.
+	 *
+	 * @param string $column         Fixed column expression holding a kind
+	 *                               or post_type value.
+	 * @param array  $excluded_kinds Kind/post_type strings to exclude.
+	 * @return array{0:string,1:array}
+	 */
+	private static function kind_excluded_sql( $column, array $excluded_kinds ) {
+		if ( empty( $excluded_kinds ) ) {
+			return array( '1=1', array() );
+		}
+		return array(
+			"{$column} NOT IN (" . self::placeholders( count( $excluded_kinds ) ) . ')',
+			array_values( $excluded_kinds ),
+		);
+	}
+
+	/**
+	 * "Neither endpoint of edge alias $alias is a node of an excluded kind."
+	 * An edge carries no kind of its own — only its endpoint NODES do — so
+	 * this is a NOT EXISTS against the nodes table for each side, additive to
+	 * (never a replacement for) edge_visible_sql()'s own status-visibility
+	 * check.
+	 *
+	 * @param string $alias          Edge alias (fixed).
+	 * @param array  $excluded_kinds Kind/post_type strings to exclude.
+	 * @return array{0:string,1:array}
+	 */
+	private static function edge_endpoints_kind_excluded_sql( $alias, array $excluded_kinds ) {
+		if ( empty( $excluded_kinds ) ) {
+			return array( '1=1', array() );
+		}
+		$nodes = Mcpwp_Graph_Builder::nodes_table();
+		$in    = self::placeholders( count( $excluded_kinds ) );
+		$sql   = "NOT EXISTS (SELECT 1 FROM {$nodes} kf WHERE kf.node_key = {$alias}.from_key AND kf.kind IN ({$in}))"
+			. " AND NOT EXISTS (SELECT 1 FROM {$nodes} kt WHERE kt.node_key = {$alias}.to_key AND kt.kind IN ({$in}))";
+		return array( $sql, array_merge( $excluded_kinds, $excluded_kinds ) );
+	}
+
+	/**
 	 * `LEFT JOIN {posts} p` that attaches the live post row to node alias n.
 	 *
 	 * @return string
@@ -649,10 +706,14 @@ class Mcpwp_Graph_Reader {
 	 * same visibility rules as the tools, so a read-scope key sees counts of
 	 * public content only. Hard-capped at RESOURCE_MAX_BYTES.
 	 *
-	 * @param bool $can_see_non_public Caller privilege.
+	 * @param bool  $can_see_non_public Caller privilege.
+	 * @param array $excluded_kinds     Tool-category-gated kinds to exclude
+	 *                                  from every count and list below
+	 *                                  (#1024 round-1 review, BLOCK-2) — see
+	 *                                  kind_excluded_sql()'s docblock.
 	 * @return array
 	 */
-	public static function resource_summary( $can_see_non_public ) {
+	public static function resource_summary( $can_see_non_public, array $excluded_kinds = array() ) {
 		global $wpdb;
 
 		$status = self::graph_status( $can_see_non_public );
@@ -667,13 +728,21 @@ class Mcpwp_Graph_Reader {
 		$edges   = Mcpwp_Graph_Builder::edges_table();
 		$signals = Mcpwp_Graph_Builder::signals_table();
 
-		list( $vis_sql, $vis_params ) = self::node_visible_sql( $can_see_non_public );
-		$sql_kinds = "SELECT n.kind AS kind, COUNT(*) AS cnt FROM {$nodes} n" . self::posts_join_sql() . " WHERE {$vis_sql} GROUP BY n.kind ORDER BY cnt DESC LIMIT %d";
-		$kinds     = self::get_results( $sql_kinds, array_merge( $vis_params, array( 25 ) ) );
+		// $excluded_kinds (#1024 round-1 review, BLOCK-2): tool-category-gated
+		// kinds this reader has no concept of on its own — see
+		// kind_excluded_sql()'s docblock. Applied in SQL so `nodes_by_kind`'s
+		// per-row counts, `edges_by_type`'s counts (an edge to/from a gated
+		// node must not count either — NIT), and the orphan total/list below
+		// are never computed over data the caller cannot see.
+		list( $vis_sql, $vis_params )             = self::node_visible_sql( $can_see_non_public );
+		list( $kind_excl_sql, $kind_excl_params ) = self::kind_excluded_sql( 'n.kind', $excluded_kinds );
+		$sql_kinds = "SELECT n.kind AS kind, COUNT(*) AS cnt FROM {$nodes} n" . self::posts_join_sql() . " WHERE {$vis_sql} AND {$kind_excl_sql} GROUP BY n.kind ORDER BY cnt DESC LIMIT %d";
+		$kinds     = self::get_results( $sql_kinds, array_merge( $vis_params, $kind_excl_params, array( 25 ) ) );
 
-		list( $edge_sql, $edge_params ) = self::edge_visible_sql( 'e', $can_see_non_public );
-		$sql_types = "SELECT e.type AS type, COUNT(*) AS cnt FROM {$edges} e WHERE {$edge_sql} GROUP BY e.type ORDER BY cnt DESC LIMIT %d";
-		$types     = self::get_results( $sql_types, array_merge( $edge_params, array( 25 ) ) );
+		list( $edge_sql, $edge_params )                   = self::edge_visible_sql( 'e', $can_see_non_public );
+		list( $edge_kind_excl_sql, $edge_kind_excl_params ) = self::edge_endpoints_kind_excluded_sql( 'e', $excluded_kinds );
+		$sql_types = "SELECT e.type AS type, COUNT(*) AS cnt FROM {$edges} e WHERE {$edge_sql} AND {$edge_kind_excl_sql} GROUP BY e.type ORDER BY cnt DESC LIMIT %d";
+		$types     = self::get_results( $sql_types, array_merge( $edge_params, $edge_kind_excl_params, array( 25 ) ) );
 
 		list( $sig_vis_sql, $sig_vis_params ) = self::key_visible_sql( 's.node_key', 'sv', $can_see_non_public );
 		$sql_sources = "SELECT s.source AS source, MAX(s.period_end) AS latest_period_end, COUNT(*) AS cnt FROM {$signals} s WHERE {$sig_vis_sql} GROUP BY s.source ORDER BY cnt DESC LIMIT %d";
@@ -686,10 +755,11 @@ class Mcpwp_Graph_Reader {
 				'order_dir' => 'desc',
 				'limit'     => 10,
 			),
-			$can_see_non_public
+			$can_see_non_public,
+			$excluded_kinds
 		);
 		$orphan_rows  = is_array( $orphans ) ? $orphans['results'] : array();
-		$orphan_total = self::count_orphans( $can_see_non_public );
+		$orphan_total = self::count_orphans( $can_see_non_public, $excluded_kinds );
 
 		$summary = array(
 			'ready'          => true,
@@ -768,7 +838,7 @@ class Mcpwp_Graph_Reader {
 	 * @param int    $chars Max characters.
 	 * @return string
 	 */
-	private static function shorten( $text, $chars ) {
+	public static function shorten( $text, $chars ) {
 		$text = (string) $text;
 		if ( function_exists( 'mb_strlen' ) && mb_strlen( $text ) > $chars ) {
 			return mb_substr( $text, 0, $chars - 1 ) . '…';
@@ -782,15 +852,23 @@ class Mcpwp_Graph_Reader {
 	/**
 	 * Total published orphans visible to the caller.
 	 *
-	 * @param bool $can_see_non_public Caller privilege.
+	 * @param bool  $can_see_non_public Caller privilege.
+	 * @param array $excluded_kinds     Tool-category-gated kinds to exclude
+	 *                                  (#1024 round-1 review, BLOCK-2/WARN-5) —
+	 *                                  keeps this total in sync, by construction,
+	 *                                  with the category-filtered orphan LIST
+	 *                                  Mcpwp_REST_Graph::get_summary() builds
+	 *                                  from the same $excluded_kinds via
+	 *                                  query(), since this reader has no
+	 *                                  category concept of its own.
 	 * @return int
 	 */
-	public static function count_orphans( $can_see_non_public ) {
+	public static function count_orphans( $can_see_non_public, array $excluded_kinds = array() ) {
 		$q = self::parse_query_args( array( 'orphan' => true ), $can_see_non_public );
 		if ( is_wp_error( $q ) ) {
 			return 0;
 		}
-		list( $where_sql, $where_params ) = self::build_where( $q, $can_see_non_public );
+		list( $where_sql, $where_params ) = self::build_where( $q, $can_see_non_public, $excluded_kinds );
 		$nodes = Mcpwp_Graph_Builder::nodes_table();
 		$sql   = "SELECT COUNT(*) FROM {$nodes} n" . self::posts_join_sql() . " WHERE {$where_sql}";
 		return (int) self::get_var( $sql, $where_params );
@@ -820,20 +898,22 @@ class Mcpwp_Graph_Reader {
 	 *
 	 * @param string $node_key           Node key.
 	 * @param bool   $can_see_non_public Caller privilege.
+	 * @param array  $excluded_kinds     Tool-category-gated kinds to exclude (#1024).
 	 * @return array|null
 	 */
-	private static function fetch_visible_node_row( $node_key, $can_see_non_public ) {
+	private static function fetch_visible_node_row( $node_key, $can_see_non_public, array $excluded_kinds = array() ) {
 		$node_key = (string) $node_key;
 		if ( '' === $node_key || strlen( $node_key ) > 191 ) {
 			return null;
 		}
 		$nodes = Mcpwp_Graph_Builder::nodes_table();
-		list( $vis_sql, $vis_params ) = self::node_visible_sql( $can_see_non_public );
+		list( $vis_sql, $vis_params )             = self::node_visible_sql( $can_see_non_public );
+		list( $kind_excl_sql, $kind_excl_params ) = self::kind_excluded_sql( 'n.kind', $excluded_kinds );
 		$sql = "SELECT n.id, n.node_key, n.kind, n.ref_id, n.label, n.url, n.status, n.word_count, n.props, n.updated_at, "
 			. self::node_protected_sql() . ' AS is_protected'
 			. " FROM {$nodes} n" . self::posts_join_sql()
-			. " WHERE n.node_key = %s AND {$vis_sql} LIMIT 1";
-		$rows = self::get_results( $sql, array_merge( array( $node_key ), $vis_params ) );
+			. " WHERE n.node_key = %s AND {$vis_sql} AND {$kind_excl_sql} LIMIT 1";
+		$rows = self::get_results( $sql, array_merge( array( $node_key ), $vis_params, $kind_excl_params ) );
 		if ( empty( $rows ) ) {
 			return null;
 		}
@@ -855,13 +935,18 @@ class Mcpwp_Graph_Reader {
 	 *
 	 * @param string $node_key           Node key.
 	 * @param bool   $can_see_non_public Caller privilege.
+	 * @param array  $excluded_kinds     Tool-category-gated kinds to exclude,
+	 *                                   both for the node itself and from its
+	 *                                   own edge counts — a category-hidden
+	 *                                   neighbor must not count either (#1024
+	 *                                   round-1 review, NIT).
 	 * @return array|null|WP_Error
 	 */
-	public static function get_node( $node_key, $can_see_non_public ) {
+	public static function get_node( $node_key, $can_see_non_public, array $excluded_kinds = array() ) {
 		if ( ! Mcpwp_Graph_Builder::ready() ) {
 			return self::not_ready_error();
 		}
-		$row = self::fetch_visible_node_row( $node_key, $can_see_non_public );
+		$row = self::fetch_visible_node_row( $node_key, $can_see_non_public, $excluded_kinds );
 		if ( null === $row ) {
 			return null;
 		}
@@ -869,14 +954,15 @@ class Mcpwp_Graph_Reader {
 		$edges    = Mcpwp_Graph_Builder::edges_table();
 		$signals  = Mcpwp_Graph_Builder::signals_table();
 
-		list( $edge_sql, $edge_params ) = self::edge_visible_sql( 'e', $can_see_non_public );
+		list( $edge_sql, $edge_params )                     = self::edge_visible_sql( 'e', $can_see_non_public );
+		list( $edge_kind_excl_sql, $edge_kind_excl_params ) = self::edge_endpoints_kind_excluded_sql( 'e', $excluded_kinds );
 		$outbound = self::get_results(
-			"SELECT e.type AS type, COUNT(*) AS cnt FROM {$edges} e WHERE e.from_key = %s AND {$edge_sql} GROUP BY e.type",
-			array_merge( array( $node_key ), $edge_params )
+			"SELECT e.type AS type, COUNT(*) AS cnt FROM {$edges} e WHERE e.from_key = %s AND {$edge_sql} AND {$edge_kind_excl_sql} GROUP BY e.type",
+			array_merge( array( $node_key ), $edge_params, $edge_kind_excl_params )
 		);
 		$inbound = self::get_results(
-			"SELECT e.type AS type, COUNT(*) AS cnt FROM {$edges} e WHERE e.to_key = %s AND {$edge_sql} GROUP BY e.type",
-			array_merge( array( $node_key ), $edge_params )
+			"SELECT e.type AS type, COUNT(*) AS cnt FROM {$edges} e WHERE e.to_key = %s AND {$edge_sql} AND {$edge_kind_excl_sql} GROUP BY e.type",
+			array_merge( array( $node_key ), $edge_params, $edge_kind_excl_params )
 		);
 
 		$latest = self::get_results(
@@ -1018,9 +1104,15 @@ class Mcpwp_Graph_Reader {
 	 *
 	 * @param array $args               {node_key, direction, types[], depth, limit, cursor}.
 	 * @param bool  $can_see_non_public Caller privilege.
+	 * @param array $excluded_kinds     Tool-category-gated kinds to exclude,
+	 *                                  for the center, every edge endpoint,
+	 *                                  and every neighbor node, applied in
+	 *                                  SQL so a page stays full and the
+	 *                                  cursor never counts a hidden edge
+	 *                                  (#1024 round-1 review, WARN-5).
 	 * @return array|null|WP_Error Null when the center is missing or hidden.
 	 */
-	public static function get_neighbors( array $args, $can_see_non_public ) {
+	public static function get_neighbors( array $args, $can_see_non_public, array $excluded_kinds = array() ) {
 		if ( ! Mcpwp_Graph_Builder::ready() ) {
 			return self::not_ready_error();
 		}
@@ -1048,7 +1140,7 @@ class Mcpwp_Graph_Reader {
 			return $limit;
 		}
 
-		$center = self::fetch_visible_node_row( $node_key, $can_see_non_public );
+		$center = self::fetch_visible_node_row( $node_key, $can_see_non_public, $excluded_kinds );
 		if ( null === $center ) {
 			return null;
 		}
@@ -1092,9 +1184,12 @@ class Mcpwp_Graph_Reader {
 			$where[] = 'e.type IN (' . self::placeholders( count( $types ) ) . ')';
 			$params  = array_merge( $params, $types );
 		}
-		list( $edge_sql, $edge_params ) = self::edge_visible_sql( 'e', $can_see_non_public );
+		list( $edge_sql, $edge_params )                     = self::edge_visible_sql( 'e', $can_see_non_public );
+		list( $edge_kind_excl_sql, $edge_kind_excl_params ) = self::edge_endpoints_kind_excluded_sql( 'e', $excluded_kinds );
 		$where[] = $edge_sql;
 		$params  = array_merge( $params, $edge_params );
+		$where[] = $edge_kind_excl_sql;
+		$params  = array_merge( $params, $edge_kind_excl_params );
 		if ( $after_id > 0 ) {
 			$where[]  = 'e.id > %d';
 			$params[] = $after_id;
@@ -1139,7 +1234,7 @@ class Mcpwp_Graph_Reader {
 		// ---- Hop 2: one query over this page's neighbors. ----
 		if ( 2 === $depth && count( $node_set ) > 1 ) {
 			$hop1_keys = array_values( array_diff( array_keys( $node_set ), array( $node_key ) ) );
-			$hop2      = self::fetch_hop2_edges( $hop1_keys, $direction, $types, $can_see_non_public );
+			$hop2      = self::fetch_hop2_edges( $hop1_keys, $direction, $types, $can_see_non_public, $excluded_kinds );
 			if ( count( $hop2 ) >= self::HOP2_EDGE_SCAN_MAX ) {
 				$truncated = true;
 			}
@@ -1173,7 +1268,7 @@ class Mcpwp_Graph_Reader {
 
 		$neighbor_keys = array_values( array_diff( array_keys( $node_set ), array( $node_key ) ) );
 		$nodes         = array();
-		foreach ( self::fetch_visible_minimal_nodes( $neighbor_keys, $can_see_non_public ) as $node ) {
+		foreach ( self::fetch_visible_minimal_nodes( $neighbor_keys, $can_see_non_public, $excluded_kinds ) as $node ) {
 			$size = strlen( (string) wp_json_encode( $node ) ) + 1;
 			if ( $bytes + $size > self::MAX_RESPONSE_BYTES ) {
 				$truncated = true; // Edges stay; the remaining neighbor rows are dropped.
@@ -1201,9 +1296,10 @@ class Mcpwp_Graph_Reader {
 	 * @param string        $direction          out|in|both.
 	 * @param array<string> $types              Validated edge types.
 	 * @param bool          $can_see_non_public Caller privilege.
+	 * @param array         $excluded_kinds     Tool-category-gated kinds to exclude (#1024).
 	 * @return array<int,array>
 	 */
-	private static function fetch_hop2_edges( array $keys, $direction, array $types, $can_see_non_public ) {
+	private static function fetch_hop2_edges( array $keys, $direction, array $types, $can_see_non_public, array $excluded_kinds = array() ) {
 		$edges_table = Mcpwp_Graph_Builder::edges_table();
 		$in          = self::placeholders( count( $keys ) );
 		$params      = array();
@@ -1222,9 +1318,12 @@ class Mcpwp_Graph_Reader {
 			$where[] = 'e.type IN (' . self::placeholders( count( $types ) ) . ')';
 			$params  = array_merge( $params, $types );
 		}
-		list( $edge_sql, $edge_params ) = self::edge_visible_sql( 'e', $can_see_non_public );
+		list( $edge_sql, $edge_params )                     = self::edge_visible_sql( 'e', $can_see_non_public );
+		list( $edge_kind_excl_sql, $edge_kind_excl_params ) = self::edge_endpoints_kind_excluded_sql( 'e', $excluded_kinds );
 		$where[]  = $edge_sql;
 		$params   = array_merge( $params, $edge_params );
+		$where[]  = $edge_kind_excl_sql;
+		$params   = array_merge( $params, $edge_kind_excl_params );
 		$params[] = self::HOP2_EDGE_SCAN_MAX;
 
 		return self::get_results(
@@ -1308,19 +1407,21 @@ class Mcpwp_Graph_Reader {
 	 *
 	 * @param array<string> $keys               Node keys (<= 200).
 	 * @param bool          $can_see_non_public Caller privilege.
+	 * @param array         $excluded_kinds     Tool-category-gated kinds to exclude (#1024).
 	 * @return array<int,array>
 	 */
-	private static function fetch_visible_minimal_nodes( array $keys, $can_see_non_public ) {
+	private static function fetch_visible_minimal_nodes( array $keys, $can_see_non_public, array $excluded_kinds = array() ) {
 		$keys = array_values( array_unique( array_map( 'strval', $keys ) ) );
 		if ( empty( $keys ) ) {
 			return array();
 		}
 		$nodes = Mcpwp_Graph_Builder::nodes_table();
-		list( $vis_sql, $vis_params ) = self::node_visible_sql( $can_see_non_public );
+		list( $vis_sql, $vis_params )             = self::node_visible_sql( $can_see_non_public );
+		list( $kind_excl_sql, $kind_excl_params ) = self::kind_excluded_sql( 'n.kind', $excluded_kinds );
 		$rows = self::get_results(
 			"SELECT n.node_key AS node_key, n.kind AS kind, n.label AS label, n.url AS url, n.status AS status FROM {$nodes} n" . self::posts_join_sql()
-			. ' WHERE n.node_key IN (' . self::placeholders( count( $keys ) ) . ") AND {$vis_sql} ORDER BY n.id ASC",
-			array_merge( $keys, $vis_params )
+			. ' WHERE n.node_key IN (' . self::placeholders( count( $keys ) ) . ") AND {$vis_sql} AND {$kind_excl_sql} ORDER BY n.id ASC",
+			array_merge( $keys, $vis_params, $kind_excl_params )
 		);
 		$visible = self::visible_keys( array_column( $rows, 'node_key' ), $can_see_non_public );
 		$out     = array();
@@ -1528,14 +1629,19 @@ class Mcpwp_Graph_Reader {
 	 *
 	 * @param array $q                  Normalized query.
 	 * @param bool  $can_see_non_public Caller privilege.
+	 * @param array $excluded_kinds     Tool-category-gated kinds to exclude (#1024 WARN-5).
 	 * @return array{0:string,1:array}
 	 */
-	private static function build_where( array $q, $can_see_non_public ) {
+	private static function build_where( array $q, $can_see_non_public, array $excluded_kinds = array() ) {
 		$edges   = Mcpwp_Graph_Builder::edges_table();
 		$signals = Mcpwp_Graph_Builder::signals_table();
 
 		list( $vis_sql, $params ) = self::node_visible_sql( $can_see_non_public );
 		$where = array( $vis_sql );
+
+		list( $kind_excl_sql, $kind_excl_params ) = self::kind_excluded_sql( 'n.kind', $excluded_kinds );
+		$where[] = $kind_excl_sql;
+		$params  = array_merge( $params, $kind_excl_params );
 
 		if ( ! empty( $q['kind'] ) ) {
 			$where[] = 'n.kind IN (' . self::placeholders( count( $q['kind'] ) ) . ')';
@@ -1649,9 +1755,13 @@ class Mcpwp_Graph_Reader {
 	 *
 	 * @param array $args               Raw args (see parse_query_args()).
 	 * @param bool  $can_see_non_public Caller privilege.
+	 * @param array $excluded_kinds     Tool-category-gated kinds to exclude,
+	 *                                  applied in SQL so pages stay full and
+	 *                                  the cursor never counts a hidden row
+	 *                                  (#1024 WARN-5).
 	 * @return array|WP_Error {results, next_cursor, truncated}
 	 */
-	public static function query( array $args, $can_see_non_public ) {
+	public static function query( array $args, $can_see_non_public, array $excluded_kinds = array() ) {
 		if ( ! Mcpwp_Graph_Builder::ready() ) {
 			return self::not_ready_error();
 		}
@@ -1661,7 +1771,7 @@ class Mcpwp_Graph_Reader {
 		}
 
 		$nodes = Mcpwp_Graph_Builder::nodes_table();
-		list( $where_sql, $where_params ) = self::build_where( $q, $can_see_non_public );
+		list( $where_sql, $where_params ) = self::build_where( $q, $can_see_non_public, $excluded_kinds );
 		list( $order_sql, $order_params ) = self::order_expr( $q['order_by'] );
 		$desc = 'desc' === $q['order_dir'];
 

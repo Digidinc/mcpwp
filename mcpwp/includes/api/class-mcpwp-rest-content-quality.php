@@ -81,6 +81,15 @@ class Mcpwp_REST_Content_Quality extends Mcpwp_REST_API {
 			return $denied;
 		}
 
+		// Category gate (#1024 round-1 review, WARN-1): this door resolves ANY
+		// post by numeric ID with no type restriction — a content-only key
+		// could otherwise read a WooCommerce product's body straight through
+		// /seo/content-quality. Same 404 as a missing post.
+		$category_denied = $this->guard_post_type_category( $post, 'Post not found.' );
+		if ( is_wp_error( $category_denied ) ) {
+			return $category_denied;
+		}
+
 		$this->log_activity( 'audit_content_quality', $request, array( 'post_id' => $post_id ) );
 
 		$content          = (string) $post->post_content;

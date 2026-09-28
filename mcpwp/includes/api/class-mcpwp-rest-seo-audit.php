@@ -475,6 +475,13 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 			return $denied;
 		}
 
+		// Category gate (#1024 round-1 review, WARN-1): same 404 for a post of
+		// a type this caller's category cannot read.
+		$category_denied = $this->guard_post_type_category( $post, 'Post not found.' );
+		if ( is_wp_error( $category_denied ) ) {
+			return $category_denied;
+		}
+
 		$this->log_activity( 'validate_seo_readiness', $request, array( 'post_id' => $post_id ) );
 
 		$issues             = array();
@@ -718,7 +725,15 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 		$include_drafts = rest_sanitize_boolean( $request->get_param( 'include_drafts' ) ) && $this->requester_can_see_non_public();
 		$store          = rest_sanitize_boolean( $request->get_param( 'store' ) );
 		$statuses       = $include_drafts ? array( 'publish', 'draft', 'private' ) : array( 'publish' );
-		$posts          = get_posts(
+		// #1024 round-1 review, WARN-2: an empty $post_types (every requested
+		// type filtered out by parse_graph_post_types()'s category check)
+		// means NO readable type, never "run get_posts() anyway" — WordPress
+		// silently defaults an empty post_type array to 'post', which would
+		// audit (and disclose issues about) content this caller's category
+		// just proved it cannot read. build_content_graph_data() guards the
+		// same gotcha for the content-graph door; this is the audit door's
+		// own direct get_posts() call.
+		$posts = empty( $post_types ) ? array() : get_posts(
 			array(
 				'post_type'      => $post_types,
 				'post_status'    => $statuses,
@@ -746,7 +761,25 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 		// Build the content link-graph ONCE for the whole run. It is identical
 		// across audited posts for a fixed post-type set, so rebuilding it per
 		// post (as the single-post readiness endpoint does) is pure waste.
-		$graph_post_types       = array_values( array_unique( array_merge( array( 'page', 'post' ), $post_types ) ) );
+		//
+		// page/post are added back as candidate LINK TARGETS even when the
+		// caller only asked to audit some other type (e.g. product) — an
+		// audit still needs to validate outbound links to ordinary pages.
+		// #1024 round-1 review, WARN-2: this must NOT re-add a type the
+		// caller's own category already excluded — page/post are filtered
+		// through the SAME category check $post_types already went through
+		// (parse_graph_post_types()), or a 'woocommerce'-only key auditing
+		// products could get page/post titles/excerpts back in the graph
+		// with no 'content' category at all.
+		$link_target_types = array_values(
+			array_filter(
+				array( 'page', 'post' ),
+				function ( $type ) {
+					return $this->caller_may_read_category( $this->category_for_post_type( $type ) );
+				}
+			)
+		);
+		$graph_post_types       = array_values( array_unique( array_merge( $link_target_types, $post_types ) ) );
 		$this->bulk_audit_graph = $this->build_content_graph_data( $graph_post_types, 100, $include_drafts );
 		$this->bulk_audit_mode  = true;
 
@@ -982,6 +1015,13 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 		$denied = $this->guard_non_public_post( $post, 'Post not found.' );
 		if ( $denied ) {
 			return $denied;
+		}
+
+		// Category gate (#1024 round-1 review, WARN-1): same 404 for a post of
+		// a type this caller's category cannot read.
+		$category_denied = $this->guard_post_type_category( $post, 'Post not found.' );
+		if ( is_wp_error( $category_denied ) ) {
+			return $category_denied;
 		}
 
 		$this->log_activity( 'validate_structured_data', $request, array( 'post_id' => $post_id ) );
@@ -1223,6 +1263,13 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 		$denied = $this->guard_non_public_post( $post, 'Post not found.' );
 		if ( $denied ) {
 			return $denied;
+		}
+
+		// Category gate (#1024 round-1 review, WARN-1): same 404 for a post of
+		// a type this caller's category cannot read.
+		$category_denied = $this->guard_post_type_category( $post, 'Post not found.' );
+		if ( is_wp_error( $category_denied ) ) {
+			return $category_denied;
 		}
 
 		$this->log_activity( 'audit_media_seo', $request, array( 'post_id' => $post_id ) );

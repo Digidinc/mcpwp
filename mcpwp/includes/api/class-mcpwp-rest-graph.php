@@ -118,7 +118,9 @@ class Mcpwp_REST_Graph extends Mcpwp_REST_API {
 	 * @return WP_REST_Response
 	 */
 	public function get_summary( WP_REST_Request $request ) {
-		return new WP_REST_Response( Mcpwp_Graph_Reader::resource_summary( $this->requester_can_see_non_public() ), 200 );
+		$summary = Mcpwp_Graph_Reader::resource_summary( $this->requester_can_see_non_public(), $this->category_excluded_kinds() );
+
+		return new WP_REST_Response( $summary, 200 );
 	}
 
 	/**
@@ -134,7 +136,7 @@ class Mcpwp_REST_Graph extends Mcpwp_REST_API {
 		}
 
 		$can_see = $this->requester_can_see_non_public();
-		$node    = Mcpwp_Graph_Reader::get_node( Mcpwp_Graph_Reader::resolve_node_key( $identifier ), $can_see );
+		$node    = Mcpwp_Graph_Reader::get_node( Mcpwp_Graph_Reader::resolve_node_key( $identifier ), $can_see, $this->category_excluded_kinds() );
 
 		if ( $node instanceof WP_Error ) {
 			return $this->error_response_from_wp_error( $node );
@@ -171,7 +173,8 @@ class Mcpwp_REST_Graph extends Mcpwp_REST_API {
 				'limit'     => $request->get_param( 'limit' ),
 				'cursor'    => $request->get_param( 'cursor' ),
 			),
-			$can_see
+			$can_see,
+			$this->category_excluded_kinds()
 		);
 
 		if ( $result instanceof WP_Error ) {
@@ -205,7 +208,7 @@ class Mcpwp_REST_Graph extends Mcpwp_REST_API {
 		}
 
 		$can_see = $this->requester_can_see_non_public();
-		$result  = Mcpwp_Graph_Reader::query( $args, $can_see );
+		$result  = Mcpwp_Graph_Reader::query( $args, $can_see, $this->category_excluded_kinds() );
 
 		if ( $result instanceof WP_Error ) {
 			return $this->error_response_from_wp_error( $result );
@@ -235,12 +238,44 @@ class Mcpwp_REST_Graph extends Mcpwp_REST_API {
 	}
 
 	/**
+	 * Every post type this caller's tool category cannot read, among the
+	 * post types the site graph actually covers
+	 * (Mcpwp_Graph_Builder::covered_post_types()) — the set every
+	 * Mcpwp_Graph_Reader public method below takes as `$excluded_kinds`
+	 * and applies IN SQL (#1024 round-1 review, WARN-5): a page comes back
+	 * full and a cursor never advances past a row that was hidden rather
+	 * than genuinely absent, unlike a post-fetch PHP filter.
+	 *
+	 * Computed once per request (cheap: covered_post_types() is a handful
+	 * of names, not a query per name).
+	 *
+	 * @return array<string>
+	 */
+	private function category_excluded_kinds() {
+		$excluded = array();
+		foreach ( Mcpwp_Graph_Builder::covered_post_types() as $post_type ) {
+			if ( ! $this->caller_may_read_category( $this->category_for_post_type( $post_type ) ) ) {
+				$excluded[] = $post_type;
+			}
+		}
+		return $excluded;
+	}
+
+	/**
 	 * Drop neighbor nodes this caller's category cannot see, and the edges
 	 * that touch them — extending the "edges touching a hidden node are
 	 * omitted rather than redacted" rule Mcpwp_Graph_Reader's own status
 	 * visibility already applies (its class docblock) to tool-category
 	 * visibility too (#1024). The reader itself stays status-only; this is
 	 * the REST layer's own chokepoint on top of it.
+	 *
+	 * $excluded_kinds is now ALSO applied inside the reader's own SQL
+	 * (category_excluded_kinds(), threaded through every
+	 * Mcpwp_Graph_Reader call in this controller) so a page stays full and
+	 * the cursor stays correct (#1024 round-1 review, WARN-5) — this PHP
+	 * filter stays as the same kind of backstop
+	 * Mcpwp_Graph_Reader::filter_edges_visible()/visible_keys() already are
+	 * for status visibility: defense in depth, not the primary gate.
 	 *
 	 * @param array $result {center, nodes, edges, ...} from
 	 *                      Mcpwp_Graph_Reader::get_neighbors().

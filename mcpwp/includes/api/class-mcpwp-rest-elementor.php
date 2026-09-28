@@ -1498,13 +1498,15 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 					continue;
 				}
 				$post = get_post( $wanted );
-				if ( ! $post ) {
+				if ( ! $post || $this->find_replace_category_denied( $post->post_type ) ) {
+					// A category-denied id reads exactly like a missing one
+					// (#1024 round-1 review, NIT) — the same existence-oracle
+					// concern guard_post_type_category() already protects
+					// against elsewhere: "type_not_supported" would still
+					// disclose that the id resolves to SOMETHING, just not a
+					// supported type, which a gated post must not confirm.
 					$reason = 'not_found';
-				} elseif ( ! in_array( $post->post_type, $scope['post_types'], true ) || $this->find_replace_category_denied( $post->post_type ) ) {
-					// Category-denied reads the same as "type not supported" here
-					// (#1024) — never a distinct reason, so naming an id whose
-					// only problem is a disabled/unheld category discloses
-					// nothing beyond what the caller already knew by naming it.
+				} elseif ( ! in_array( $post->post_type, $scope['post_types'], true ) ) {
 					$reason = 'type_not_supported';
 				} elseif ( empty( get_post_meta( $wanted, '_elementor_data', true ) ) ) {
 					// empty(), not a (string) cast: array-stored data is data (#845).

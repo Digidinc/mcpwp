@@ -526,6 +526,20 @@ class Mcpwp_REST_Content_Graph extends Mcpwp_REST_API {
 
 				$target_id   = (int) $resolved['target_id'];
 				$target      = $target_id ? get_post( $target_id ) : null;
+
+				// Category gate (#1024 round-1 review, WARN-4): resolve_internal_link_for_validation()
+				// falls back to url_to_postid(), which can resolve to ANY post
+				// on the site — not just the caller's category-filtered
+				// $post_types the rest of this method otherwise stays inside.
+				// A gated target must read exactly like a missing one: never
+				// disclosing that a URL resolves to something, its status, or
+				// its canonical permalink (the 'non_canonical_url' issue below
+				// echoes the target's real URL in `canonical_url`).
+				if ( $target && ! $this->caller_may_read_category( $this->category_for_post_type( $target->post_type ) ) ) {
+					$target_id = 0;
+					$target    = null;
+				}
+
 				$is_elementor = 'elementor' === ( $link['source'] ?? '' );
 
 				// Anchor-quality checks apply to post_content links only; Elementor button

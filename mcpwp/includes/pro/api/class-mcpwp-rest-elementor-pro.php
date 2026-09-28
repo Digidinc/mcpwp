@@ -2810,6 +2810,21 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			return $this->error_response( 'missing_source_id', __( 'Source ID is required.', 'mcpwp' ), 400 );
 		}
 
+		// Category gate (#1024 round-1 review, WARN-3): clone_page() accepts
+		// ANY source post type with no category restriction — a designer key
+		// could clone a WooCommerce product (including its _sku and other
+		// meta) as a new product, or clone an Elementor template with
+		// elementor-templates disabled site-wide. Same shape clone_page()
+		// itself already uses for a genuinely missing source (no explicit
+		// status — error_response_from_wp_error()'s own default), so denial
+		// is byte-identical.
+		$source = get_post( $source_id );
+		if ( $source && ! $this->caller_may_read_category( $this->category_for_post_type( $source->post_type ) ) ) {
+			$category_denied = new WP_Error( 'not_found', __( 'Source page not found.', 'mcpwp' ) );
+			$this->log_activity( 'clone_page', $request, null, $this->get_wp_error_status( $category_denied ) );
+			return $this->error_response_from_wp_error( $category_denied );
+		}
+
 		$args = array(
 			'title'  => $request->get_param( 'title' ),
 			'status' => $request->get_param( 'status' ),
@@ -2836,6 +2851,23 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	 * @return WP_REST_Response|WP_Error Response.
 	 */
 	public function create_landing_page( $request ) {
+		$template_id = absint( $request->get_param( 'template_id' ) );
+
+		// Category gate (#1024 round-1 review, WARN-3): create_landing_page()
+		// applies template_id's Elementor data to the new page
+		// (apply_template_to_page()) with no category check of its own —
+		// unlike the dedicated /elementor/templates/{id} route, which
+		// already requires 'elementor-templates'. Checked BEFORE the page is
+		// created: apply_template_to_page() runs after wp_insert_post()
+		// inside create_landing_page(), too late to refuse without also
+		// cleaning up a half-created page.
+		if ( $template_id ) {
+			$template = get_post( $template_id );
+			if ( $template && ! $this->caller_may_read_category( $this->category_for_post_type( $template->post_type ) ) ) {
+				return $this->error_response( 'not_found', __( 'Template not found.', 'mcpwp' ), 404 );
+			}
+		}
+
 		$data = array(
 			'title'          => $request->get_param( 'title' ),
 			'status'         => $request->get_param( 'status' ),
@@ -3232,6 +3264,17 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 
 		if ( ! $page_id || ! $element_id ) {
 			return new WP_Error( 'missing_params', 'page_id and element_id are required.', array( 'status' => 400 ) );
+		}
+
+		// Category gate (#1024 round-1 review, WARN-3): save_section_as_template()
+		// reads Elementor data from ANY source post type with no category
+		// check — a gutenberg-only key could otherwise read a WooCommerce
+		// product's Elementor data (or a category-gated template's) and
+		// re-save it as a new, fully-readable template. Same shape the
+		// underlying call already uses for a genuinely missing source page.
+		$source = get_post( $page_id );
+		if ( $source && ! $this->caller_may_read_category( $this->category_for_post_type( $source->post_type ) ) ) {
+			return new WP_Error( 'invalid_page', 'Page not found.', array( 'status' => 404 ) );
 		}
 
 		$result = $this->elementor_pro->save_section_as_template( $page_id, $element_id, $title );

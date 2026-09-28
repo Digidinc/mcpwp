@@ -2785,9 +2785,18 @@ trait Mcpwp_Elementor_Writer_Trait {
 	 */
 	public function add_section( $page_id, $data ) {
 		// Validate page exists and has Elementor.
-		$post = get_post( $page_id );
-		if ( ! $post ) {
-			return new WP_Error( 'invalid_page', 'Page not found.', array( 'status' => 404 ) );
+		// #1024 (round-1 adversarial review of #1024's own fix, BLOCK-1): a
+		// bare get_post()+exists check let ANY post type through — a
+		// designer key could POST /elementor/{product_id}/add-section and
+		// write straight into a WooCommerce product's _elementor_data, and
+		// a category-gated elementor_library/elementor_snippet was equally
+		// reachable. validate_post() is the SAME chokepoint every other
+		// Elementor door already funnels through (get/set/summary/edit-
+		// section/edit-widget/find-replace); this door was the one that
+		// never called it.
+		$post = $this->validate_post( $page_id );
+		if ( is_wp_error( $post ) ) {
+			return $post;
 		}
 
 		// Get current elements, in whatever form they are stored (#845). Data
@@ -2878,9 +2887,18 @@ trait Mcpwp_Elementor_Writer_Trait {
 	 * @return array|WP_Error Result or error.
 	 */
 	public function remove_section( $page_id, $data ) {
-		$post = get_post( $page_id );
-		if ( ! $post ) {
-			return new WP_Error( 'invalid_page', 'Page not found.', array( 'status' => 404 ) );
+		// #1024 (round-1 adversarial review of #1024's own fix, BLOCK-1): a
+		// bare get_post()+exists check let ANY post type through — a
+		// designer key could POST /elementor/{product_id}/add-section and
+		// write straight into a WooCommerce product's _elementor_data, and
+		// a category-gated elementor_library/elementor_snippet was equally
+		// reachable. validate_post() is the SAME chokepoint every other
+		// Elementor door already funnels through (get/set/summary/edit-
+		// section/edit-widget/find-replace); this door was the one that
+		// never called it.
+		$post = $this->validate_post( $page_id );
+		if ( is_wp_error( $post ) ) {
+			return $post;
 		}
 
 		$element_id = isset( $data['element_id'] ) ? $data['element_id'] : '';
@@ -2987,9 +3005,18 @@ trait Mcpwp_Elementor_Writer_Trait {
 	 * @return array|WP_Error Result or error.
 	 */
 	public function replace_section( $page_id, $data ) {
-		$post = get_post( $page_id );
-		if ( ! $post ) {
-			return new WP_Error( 'invalid_page', 'Page not found.', array( 'status' => 404 ) );
+		// #1024 (round-1 adversarial review of #1024's own fix, BLOCK-1): a
+		// bare get_post()+exists check let ANY post type through — a
+		// designer key could POST /elementor/{product_id}/add-section and
+		// write straight into a WooCommerce product's _elementor_data, and
+		// a category-gated elementor_library/elementor_snippet was equally
+		// reachable. validate_post() is the SAME chokepoint every other
+		// Elementor door already funnels through (get/set/summary/edit-
+		// section/edit-widget/find-replace); this door was the one that
+		// never called it.
+		$post = $this->validate_post( $page_id );
+		if ( is_wp_error( $post ) ) {
+			return $post;
 		}
 
 		$element_id  = isset( $data['element_id'] ) ? $data['element_id'] : '';
@@ -3109,9 +3136,18 @@ trait Mcpwp_Elementor_Writer_Trait {
 	 * @return array|WP_Error Result with per-operation results, or error.
 	 */
 	public function patch_elementor( $page_id, $data ) {
-		$post = get_post( $page_id );
-		if ( ! $post ) {
-			return new WP_Error( 'invalid_page', 'Page not found.', array( 'status' => 404 ) );
+		// #1024 (round-1 adversarial review of #1024's own fix, BLOCK-1): a
+		// bare get_post()+exists check let ANY post type through — a
+		// designer key could POST /elementor/{product_id}/add-section and
+		// write straight into a WooCommerce product's _elementor_data, and
+		// a category-gated elementor_library/elementor_snippet was equally
+		// reachable. validate_post() is the SAME chokepoint every other
+		// Elementor door already funnels through (get/set/summary/edit-
+		// section/edit-widget/find-replace); this door was the one that
+		// never called it.
+		$post = $this->validate_post( $page_id );
+		if ( is_wp_error( $post ) ) {
+			return $post;
 		}
 
 		// A repair-only patch (#842) carries no operations: it rewrites the

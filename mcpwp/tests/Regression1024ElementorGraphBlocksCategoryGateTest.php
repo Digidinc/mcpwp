@@ -390,7 +390,7 @@ final class Regression1024ElementorGraphBlocksCategoryGateTest extends TestCase 
 		foreach ( $data['not_touched'] as $row ) {
 			$not_touched[ $row['id'] ] = $row['reason'];
 		}
-		$this->assertSame( 'type_not_supported', $not_touched[ self::ARCHETYPE_ID ] ?? null, 'A category denial must read as "type not supported", never a distinct reason.' );
+		$this->assertSame( 'not_found', $not_touched[ self::ARCHETYPE_ID ] ?? null, 'A category denial must read exactly like a missing id (round-1 review NIT).' );
 		$this->assertStringContainsString( 'Old Brand', $GLOBALS['_mcpwp_test_meta'][ self::ARCHETYPE_ID ]['_elementor_data'], 'The archetype must not have been written.' );
 	}
 

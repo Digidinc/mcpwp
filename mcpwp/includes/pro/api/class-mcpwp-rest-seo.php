@@ -33,6 +33,32 @@ class Mcpwp_REST_SEO extends Mcpwp_REST_API {
 	}
 
 	/**
+	 * Category-gate an id-based SEO door (#1024 round-1 review, WARN-1).
+	 * $this->seo (Mcpwp_SEO) is a plain business-logic class with no REST/
+	 * auth context of its own, and its own "post not found" shape carries
+	 * no explicit status (falls back to error_response_from_wp_error()'s
+	 * default) — so a category denial is built to match that SAME shape
+	 * byte-for-byte, rather than reusing guard_post_type_category()'s own
+	 * (differently-shaped, explicit-404) not-found error, which would make
+	 * "missing" and "category-denied" distinguishable by status code alone.
+	 *
+	 * Returns null (allowed) for an id that does not resolve at all —
+	 * $this->seo's own call produces the door's real "not found" answer for
+	 * that case; this only ever adds a denial, never removes one.
+	 *
+	 * @param int $post_id Post ID.
+	 * @return WP_Error|null
+	 */
+	private function seo_category_denied( $post_id ) {
+		$post = get_post( $post_id );
+		if ( ! $post || $this->caller_may_read_category( $this->category_for_post_type( $post->post_type ) ) ) {
+			return null;
+		}
+
+		return new WP_Error( 'not_found', __( 'Post not found.', 'mcpwp' ) );
+	}
+
+	/**
 	 * Register REST routes.
 	 */
 	public function register_routes() {
@@ -239,6 +265,12 @@ class Mcpwp_REST_SEO extends Mcpwp_REST_API {
 		$post_id = absint( $request->get_param( 'id' ) );
 		$plugin  = $request->get_param( 'plugin' );
 
+		$category_denied = $this->seo_category_denied( $post_id );
+		if ( is_wp_error( $category_denied ) ) {
+			$this->log_activity( 'get_seo', $request, null, $this->get_wp_error_status( $category_denied ) );
+			return $this->error_response_from_wp_error( $category_denied );
+		}
+
 		$result = $this->seo->get_post_seo( $post_id, $plugin );
 
 		if ( is_wp_error( $result ) ) {
@@ -261,6 +293,12 @@ class Mcpwp_REST_SEO extends Mcpwp_REST_API {
 	public function update_post_seo( $request ) {
 		$post_id = absint( $request->get_param( 'id' ) );
 		$plugin  = $request->get_param( 'plugin' );
+
+		$category_denied = $this->seo_category_denied( $post_id );
+		if ( is_wp_error( $category_denied ) ) {
+			$this->log_activity( 'update_seo', $request, null, $this->get_wp_error_status( $category_denied ) );
+			return $this->error_response_from_wp_error( $category_denied );
+		}
 
 		$data = array(
 			'title'           => $request->get_param( 'title' ),
@@ -581,6 +619,13 @@ class Mcpwp_REST_SEO extends Mcpwp_REST_API {
 			return $this->error_response( 'not_found', __( 'Post not found.', 'mcpwp' ), 404 );
 		}
 
+		// Category gate (#1024 round-1 review, WARN-1): same 404 shape this
+		// door already uses above for a missing post.
+		$category_denied = $this->guard_post_type_category( $post, __( 'Post not found.', 'mcpwp' ) );
+		if ( is_wp_error( $category_denied ) ) {
+			return $category_denied;
+		}
+
 		$data = array(
 			'robots_noindex' => $noindex,
 		);
@@ -633,6 +678,19 @@ class Mcpwp_REST_SEO extends Mcpwp_REST_API {
 		$limit     = absint( $request->get_param( 'limit' ) );
 		if ( ! $limit ) {
 			$limit = 100;
+		}
+
+		// Category gate (#1024 round-1 review, WARN-1): naming a whole
+		// post_type up front is not an existence oracle — same 403
+		// forbidden_category shape guard_post_type_category_for_type()
+		// already uses for this exact situation elsewhere. A caller who
+		// names no post_type gets Mcpwp_SEO::export_report()'s own
+		// page/post default, unaffected here.
+		if ( ! empty( $post_type ) ) {
+			$category_denied = $this->guard_post_type_category_for_type( sanitize_key( (string) $post_type ) );
+			if ( is_wp_error( $category_denied ) ) {
+				return $category_denied;
+			}
 		}
 
 		$results = $this->seo->export_report( $post_type, $limit );
