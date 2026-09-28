@@ -291,6 +291,9 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 			// rather than erroring — this validation exists so a deliberate
 			// write is caught at the door, not to be the only guard.
 			'mcp_tool_profile'        => 'enum:full,core',
+			// WebMCP in wp-admin (#981).
+			'webmcp_admin_enabled'      => 'bool',
+			'webmcp_origin_trial_token' => 'origin_trial_token',
 		);
 
 		foreach ( $allowed as $key => $rule ) {
@@ -335,6 +338,16 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 					);
 				}
 				$current[ $key ] = array_slice( array_values( array_unique( $clean ) ), 0, 200 );
+			} elseif ( 'origin_trial_token' === $rule ) {
+				$token = Mcpwp_WebMCP::sanitize_origin_trial_token( $value );
+				if ( null === $token ) {
+					return $this->error_response(
+						'invalid_' . $key,
+						__( 'webmcp_origin_trial_token must be the origin-trial token exactly as Chrome issued it (base64: letters, digits, +, / and =), or an empty string to clear it.', 'mcpwp' ),
+						400
+					);
+				}
+				$current[ $key ] = $token;
 			} elseif ( 'text' === $rule ) {
 				$current[ $key ] = sanitize_text_field( (string) $value );
 			} elseif ( 'key' === $rule ) {

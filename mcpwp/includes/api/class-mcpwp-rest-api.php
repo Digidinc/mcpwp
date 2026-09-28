@@ -278,6 +278,26 @@ abstract class Mcpwp_REST_API {
 	}
 
 	/**
+	 * Whether the current requester could make a content change directly,
+	 * with no approval: the trusted wp-admin (admin-AJAX) context, or an API
+	 * key / OAuth principal whose role is not category-restricted. Such a
+	 * requester is exempt from the pending-approval caps (#981 review round
+	 * 2, WARN-C); a category-restricted key and a WebMCP user are not.
+	 *
+	 * @return bool
+	 */
+	protected function requester_is_unrestricted() {
+		if ( $this->is_trusted_admin_ajax_request() ) {
+			return true;
+		}
+		$key_record = $this->get_current_api_key_record();
+		if ( ! is_array( $key_record ) || $this->requester_is_webmcp() ) {
+			return false;
+		}
+		return array() === $this->resolve_key_tool_categories( $key_record );
+	}
+
+	/**
 	 * Whether the current principal authenticated via an OAuth access token.
 	 *
 	 * OAuth records are tagged `type => 'oauth'` at authentication; scoped API

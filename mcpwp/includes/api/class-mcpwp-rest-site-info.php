@@ -440,6 +440,20 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 			);
 		}
 
+		// A WebMCP user (#981) lists published content only (non-public
+		// reads are per-post read_post), so the inventory counts only what
+		// every such list can show: drafts are not counted, and the total
+		// is the published count (#981 review round 2, NIT).
+		if ( $this->requester_is_webmcp() ) {
+			foreach ( array( 'posts', 'pages', 'products' ) as $type_key ) {
+				if ( isset( $inventory[ $type_key ] ) && is_array( $inventory[ $type_key ] ) ) {
+					$inventory[ $type_key ]['drafts'] = null;
+					$inventory[ $type_key ]['total']  = $inventory[ $type_key ]['published'];
+				}
+			}
+			$inventory['counts_scope'] = 'published';
+		}
+
 		// Recent updates and the design reference inventory are only needed for
 		// the full legacy briefing (#905) — skip both the query and the bytes
 		// on the slim default path.
@@ -566,6 +580,9 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 				$cat  = $tool['annotations']['category'] ?? 'site';
 				$name = $tool['name'] ?? '';
 				if ( '' === $name ) {
+					continue;
+				}
+				if ( $this->requester_is_webmcp() && ! Mcpwp_WebMCP::is_allowlisted( $name ) ) {
 					continue;
 				}
 				if ( ! isset( $tools_by_category[ $cat ] ) ) {
@@ -879,6 +896,19 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 	 * @return array Filtered list, same shape and order.
 	 */
 	private function filter_actions_by_caller_categories( array $entries ) {
+		// A WebMCP user (#981) can call the WebMCP allowlist and nothing
+		// else — so point it at nothing else.
+		if ( $this->requester_is_webmcp() ) {
+			return array_values(
+				array_filter(
+					$entries,
+					static function ( $entry ) {
+						return isset( $entry['tool'] ) && Mcpwp_WebMCP::is_allowlisted( (string) $entry['tool'] );
+					}
+				)
+			);
+		}
+
 		$key_record           = $this->get_current_api_key_record();
 		$allowed_categories   = is_array( $key_record ) ? $this->resolve_key_tool_categories( $key_record ) : array();
 		$disabled_categories  = get_option( 'mcpwp_disabled_tool_categories', array() );

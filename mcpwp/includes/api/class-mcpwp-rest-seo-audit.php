@@ -518,7 +518,7 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 		$templated_rendering = '' !== (string) get_page_template_slug( $post ) || $this->is_elementor_built( $post_id );
 
 		if ( $raw_word_count < 80 && $templated_rendering && ! $this->bulk_audit_mode
-			&& ( 'publish' === $post->post_status || $this->requester_can_see_non_public() )
+			&& ( $this->requester_is_webmcp() ? $this->requester_can_read_post( $post ) : ( 'publish' === $post->post_status || $this->requester_can_see_non_public() ) )
 		) {
 			$rendered_html = null;
 

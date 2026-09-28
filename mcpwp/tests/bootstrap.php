@@ -360,6 +360,25 @@ class WP_REST_Request
         return $this->json_params;
     }
 
+    // Real WP_REST_Request parses a JSON body into get_json_params() when
+    // the content type is JSON; internal dispatchers (admin chat, WebMCP
+    // #981) build their /mcp request this way.
+    private $body = '';
+
+    public function set_body($body)
+    {
+        $this->body = (string) $body;
+        $decoded    = json_decode($this->body, true);
+        if (is_array($decoded)) {
+            $this->json_params = $decoded;
+        }
+    }
+
+    public function get_body()
+    {
+        return $this->body;
+    }
+
 }
 
 class WP_REST_Server
@@ -1711,6 +1730,32 @@ if (! isset($GLOBALS['wpdb'])) {
                     return $answer;
                 }
             }
+            // MySQL named locks (#981 review round 2, Mcpwp_Approvals::mutate()).
+            // GET_LOCK answers $GLOBALS['mcpwp_test_get_lock_result'] (default
+            // '1'); a test may run a one-shot hook the moment the lock is
+            // granted — i.e. a writer that committed just before we got it.
+            if (preg_match('/^SELECT GET_LOCK\(/', trim((string) $query))) {
+                $GLOBALS['mcpwp_test_named_lock_calls'][] = 'get';
+                $result = $GLOBALS['mcpwp_test_get_lock_result'] ?? '1';
+                // A per-call sequence wins when set: e.g. array('1','0','0','0')
+                // grants the first lock and times out the next three.
+                if (! empty($GLOBALS['mcpwp_test_get_lock_results']) && is_array($GLOBALS['mcpwp_test_get_lock_results'])) {
+                    $result = array_shift($GLOBALS['mcpwp_test_get_lock_results']);
+                }
+                if ('1' === (string) $result && isset($GLOBALS['mcpwp_test_on_lock_granted']) && is_callable($GLOBALS['mcpwp_test_on_lock_granted'])) {
+                    $hook = $GLOBALS['mcpwp_test_on_lock_granted'];
+                    $GLOBALS['mcpwp_test_on_lock_granted'] = null;
+                    $hook();
+                }
+                return $result;
+            }
+            if ('SELECT @@max_allowed_packet' === trim((string) $query)) {
+                return $GLOBALS['mcpwp_test_max_allowed_packet'] ?? null;
+            }
+            if (preg_match('/^SELECT RELEASE_LOCK\(/', trim((string) $query))) {
+                $GLOBALS['mcpwp_test_named_lock_calls'][] = 'release';
+                return '1';
+            }
             // Site graph (#943 S1 review): read_node_hash() — the single
             // change-hash comparison BLOCK-1 collapsed the old two-field
             // check into.
@@ -2134,6 +2179,11 @@ if (! isset($GLOBALS['wpdb'])) {
                 $GLOBALS['mcpwp_test_wpdb_options'][ $name ] = (string) $data['option_value'];
                 $this->last_error = '';
                 return 1;
+            }
+            // A test may make inserts into one table fail (e.g. the action
+            // log, #981 review round 5: no audit row → no removal).
+            if (! empty($GLOBALS['mcpwp_test_wpdb_insert_fail'][ (string) $table ])) {
+                return false;
             }
             // Captured so a test can assert what was — and was not — persisted
             // (activity log rows, for one).
@@ -2849,6 +2899,17 @@ function get_post_type_object($post_type)
         // fallback. A test-registered private type (mcpwp_test_private_post_types)
         // defaults to false here, same as a real non-REST-exposed CPT.
         'show_in_rest' => in_array((string) $post_type, (array) ($GLOBALS['mcpwp_test_show_in_rest_post_types'] ?? array()), true),
+        // Core's default capability_type mapping for the two built-ins; a
+        // test-registered type maps like 'post'. Read by WebMCP (#981).
+        // A test may give a type its own capability_type via
+        // $GLOBALS['mcpwp_test_post_type_caps'][ $type ] = array( 'edit_posts' => …, 'create_posts' => … ).
+        'cap'          => (object) array_merge(
+            array(
+                'create_posts' => 'page' === (string) $post_type ? 'edit_pages' : 'edit_posts',
+                'edit_posts'   => 'page' === (string) $post_type ? 'edit_pages' : 'edit_posts',
+            ),
+            (array) ($GLOBALS['mcpwp_test_post_type_caps'][ (string) $post_type ] ?? array())
+        ),
     );
 }
 
@@ -3738,6 +3799,83 @@ class Mcpwp_Test_Fs_Stub
     }
 }
 
+// ── WebMCP (#981) wp-admin stubs ─────────────────────────────────────────
+
+// Revisions (#981 review round 3: large rollback sources are referenced by
+// revision id). $GLOBALS['mcpwp_test_revisions_disabled'] makes
+// wp_save_post_revision() save nothing, like revisions being off.
+if (! function_exists('wp_save_post_revision')) {
+    function wp_save_post_revision($post_id)
+    {
+        if (! empty($GLOBALS['mcpwp_test_revisions_disabled'])) {
+            return null;
+        }
+        $post = $GLOBALS['_mcpwp_test_posts'][ (int) $post_id ] ?? null;
+        if (! $post) {
+            return null;
+        }
+        $id = 900000 + count($GLOBALS['_mcpwp_test_posts']);
+        while (isset($GLOBALS['_mcpwp_test_posts'][ $id ])) {
+            $id++;
+        }
+        $GLOBALS['_mcpwp_test_posts'][ $id ] = new WP_Post(
+            array( 'ID' => $id, 'post_type' => 'revision', 'post_status' => 'inherit', 'post_parent' => (int) $post_id, 'post_content' => $post->post_content )
+        );
+        return $id;
+    }
+}
+if (! function_exists('wp_revisions_to_keep')) {
+    function wp_revisions_to_keep($post)
+    {
+        return (int) ($GLOBALS['mcpwp_test_revisions_to_keep'] ?? -1);
+    }
+}
+if (! function_exists('wp_get_post_revisions')) {
+    function wp_get_post_revisions($post_id = 0, $args = null)
+    {
+        $out = array();
+        foreach ($GLOBALS['_mcpwp_test_posts'] as $id => $post) {
+            if ('revision' === $post->post_type && (int) $post->post_parent === (int) $post_id) {
+                $out[ $id ] = $post;
+            }
+        }
+        krsort($out);
+        return $out;
+    }
+}
+
+if (! function_exists('site_url')) {
+    function site_url($path = '', $scheme = null)
+    {
+        return 'https://example.com' . ('' !== (string) $path ? '/' . ltrim((string) $path, '/') : '');
+    }
+}
+
+if (! function_exists('is_network_admin')) {
+    function is_network_admin()
+    {
+        return false;
+    }
+}
+
+$GLOBALS['mcpwp_test_enqueued_scripts'] = array();
+$GLOBALS['mcpwp_test_inline_scripts']   = array();
+
+if (! function_exists('wp_enqueue_script')) {
+    function wp_enqueue_script($handle, $src = '', $deps = array(), $ver = false, $args = array())
+    {
+        $GLOBALS['mcpwp_test_enqueued_scripts'][ $handle ] = $src;
+    }
+}
+
+if (! function_exists('wp_add_inline_script')) {
+    function wp_add_inline_script($handle, $data, $position = 'after')
+    {
+        $GLOBALS['mcpwp_test_inline_scripts'][] = array( 'handle' => $handle, 'data' => $data, 'position' => $position );
+        return true;
+    }
+}
+
 // ── Admin / AJAX stubs for auth trait bypass tests ───────────────────────
 
 $GLOBALS['mcpwp_test_is_admin']             = false;
@@ -3849,6 +3987,9 @@ require_once dirname(__DIR__) . '/includes/mcp/traits/trait-mcpwp-pro-tools-stag
 require_once dirname(__DIR__) . '/includes/mcp/class-mcpwp-mcp-pro-tools.php';
 require_once dirname(__DIR__) . '/includes/mcp/class-mcpwp-integration.php';
 require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-mcp.php';
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-webmcp.php';
+require_once dirname(__DIR__) . '/includes/mcp/class-mcpwp-webmcp-integration.php';
+require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-webmcp.php';
 require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-pages.php';
 require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-site-updates.php';
 require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-media.php';
@@ -3975,6 +4116,31 @@ if (! function_exists('get_post_type')) {
     {
         $post = is_object($post) ? $post : get_post((int) $post);
         return $post ? $post->post_type : false;
+    }
+}
+if (! function_exists('get_taxonomy')) {
+    // Registered via $GLOBALS['_mcpwp_test_taxonomies'][ $tax ]; 'cap' in
+    // that entry overrides core's defaults (assign_terms edit_posts,
+    // edit_terms manage_categories). Read by WebMCP (#981).
+    function get_taxonomy($taxonomy)
+    {
+        $tax = $GLOBALS['_mcpwp_test_taxonomies'][ $taxonomy ] ?? null;
+        if (null === $tax) {
+            return false;
+        }
+        return (object) array(
+            'name' => $taxonomy,
+            'cap'  => (object) array_merge(
+                array( 'assign_terms' => 'edit_posts', 'edit_terms' => 'manage_categories' ),
+                (array) ($tax['cap'] ?? array())
+            ),
+        );
+    }
+}
+if (! function_exists('term_exists')) {
+    function term_exists($term, $taxonomy = '')
+    {
+        return in_array((string) $term, (array) ($GLOBALS['_mcpwp_test_existing_terms'][ $taxonomy ] ?? array()), true) ? array( 'term_id' => 1 ) : null;
     }
 }
 if (! function_exists('taxonomy_exists')) {

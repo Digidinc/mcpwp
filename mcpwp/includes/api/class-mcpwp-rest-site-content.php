@@ -381,7 +381,7 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 		// discloses that the unpublished post exists. This one guard covers both
 		// the numeric ?id vector and the ?url resolver vector, because both
 		// resolve into $post above.
-		if ( ! $this->is_public_status( $post->post_status ) && ! $this->requester_can_see_non_public() ) {
+		if ( ! $this->requester_can_read_post( $post ) ) {
 			return $this->error_response(
 				'not_found',
 				__( 'Content not found.', 'mcpwp' ),
@@ -531,7 +531,7 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 		// unpublished data (pricing, PII, ACF fields). Restrict it to write scope
 		// or higher, matching the fetch/search/render gates; 404 for anyone else
 		// so the hidden post is not disclosed.
-		if ( ! $this->is_public_status( $post->post_status ) && ! $this->requester_can_see_non_public() ) {
+		if ( ! $this->requester_can_read_post( $post ) ) {
 			return $this->error_response_from_wp_error( $this->post_ref_not_found_error( $request ) );
 		}
 
@@ -743,6 +743,47 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 		return $value;
 	}
 
+	/**
+	 * scheme://host[:port] of a URL, lower-cased with the default port
+	 * dropped; '' when it is not an absolute http(s) URL or carries
+	 * credentials.
+	 *
+	 * @param string $url URL.
+	 * @return string
+	 */
+	public static function origin_of_url( $url ) {
+		$parts = wp_parse_url( trim( (string) $url ) );
+		if ( ! is_array( $parts ) || empty( $parts['scheme'] ) || empty( $parts['host'] ) || isset( $parts['user'] ) || isset( $parts['pass'] ) ) {
+			return '';
+		}
+		$scheme = strtolower( (string) $parts['scheme'] );
+		if ( 'http' !== $scheme && 'https' !== $scheme ) {
+			return '';
+		}
+		$port = isset( $parts['port'] ) ? (int) $parts['port'] : ( 'https' === $scheme ? 443 : 80 );
+		$default = 'https' === $scheme ? 443 : 80;
+		return $scheme . '://' . strtolower( (string) $parts['host'] ) . ( $port !== $default ? ':' . $port : '' );
+	}
+
+	/**
+	 * Whether a URL is on this site's own origin (home_url() or site_url()).
+	 *
+	 * @param string $url URL.
+	 * @return bool
+	 */
+	public static function is_same_site_origin( $url ) {
+		$origin = self::origin_of_url( $url );
+		if ( '' === $origin ) {
+			return false;
+		}
+		foreach ( array( home_url( '/' ), site_url( '/' ) ) as $own ) {
+			if ( $origin === self::origin_of_url( $own ) ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	public function get_rendered_html( $request ) {
 		$this->log_activity( 'get_rendered_html', $request );
 
@@ -779,7 +820,7 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			// without this gate a read-only key could read the full body of an
 			// unpublished page. Return the same 404 as a missing post so the
 			// response never discloses that the hidden post exists.
-			if ( ! $this->is_public_status( $post->post_status ) && ! $this->requester_can_see_non_public() ) {
+			if ( ! $this->requester_can_read_post( $post ) ) {
 				return $this->error_response( 'not_found', __( 'Post not found.', 'mcpwp' ), 404 );
 			}
 			// #1030 round-3 review, test_every_id_shaped_route_is_declared_
@@ -815,17 +856,18 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			return $this->error_response( 'missing_param', __( 'Either id or url is required.', 'mcpwp' ), 400 );
 		}
 
-		// SSRF guard: only allow same-host URLs.
-		$site_host    = wp_parse_url( home_url(), PHP_URL_HOST );
-		$request_host = wp_parse_url( $url, PHP_URL_HOST );
-
-		if ( ! $request_host || strtolower( $request_host ) !== strtolower( $site_host ) ) {
+		// SSRF guard: only this site's own origin — scheme, host AND port.
+		// Comparing the host alone let http://<site-host>:3306/ (or any other
+		// port on the same host) through: a port oracle into the server's
+		// own services (#981 review WARN-3). Credentials in the URL are
+		// refused outright.
+		if ( ! self::is_same_site_origin( (string) $url ) ) {
 			return $this->error_response(
 				'ssrf_blocked',
 				sprintf(
-					/* translators: %s: allowed host */
-					__( 'Only same-host URLs are allowed. Expected host: %s', 'mcpwp' ),
-					$site_host
+					/* translators: %s: allowed origin */
+					__( 'Only this site\'s own URLs are allowed (same scheme, host and port as %s). Pass id to render a post instead.', 'mcpwp' ),
+					self::origin_of_url( home_url( '/' ) )
 				),
 				403
 			);
@@ -1250,7 +1292,7 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			// and fetch_content: the in-process render below reads unpublished
 			// bodies directly, so a read-only key must not reach it. 404 (not 403)
 			// so the response never reveals that the hidden post exists.
-			if ( ! $this->is_public_status( $post->post_status ) && ! $this->requester_can_see_non_public() ) {
+			if ( ! $this->requester_can_read_post( $post ) ) {
 				return $this->error_response( 'not_found', __( 'Post not found.', 'mcpwp' ), 404 );
 			}
 			// #1030 round-3 review, test_every_id_shaped_route_is_declared_
@@ -1284,13 +1326,16 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			return $this->error_response( 'missing_param', __( 'Either id or url is required.', 'mcpwp' ), 400 );
 		}
 
-		// SSRF guard: same-host only.
-		$site_host    = wp_parse_url( home_url(), PHP_URL_HOST );
-		$request_host = wp_parse_url( $url, PHP_URL_HOST );
-		if ( ! $request_host || strtolower( $request_host ) !== strtolower( $site_host ) ) {
+		// SSRF guard: this site's own origin only (scheme + host + port) —
+		// the same rule as get_rendered_html() (#981 review WARN-3).
+		if ( ! self::is_same_site_origin( (string) $url ) ) {
 			return $this->error_response(
 				'ssrf_blocked',
-				sprintf( __( 'Only same-host URLs allowed. Expected: %s', 'mcpwp' ), $site_host ),
+				sprintf(
+					/* translators: %s: allowed origin */
+					__( 'Only this site\'s own URLs are allowed (same scheme, host and port as %s). Pass id to render a post instead.', 'mcpwp' ),
+					self::origin_of_url( home_url( '/' ) )
+				),
 				403
 			);
 		}

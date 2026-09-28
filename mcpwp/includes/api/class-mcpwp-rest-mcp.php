@@ -383,6 +383,35 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	}
 
 	/**
+	 * Definitions of the named tools, exactly as tools/list builds them from
+	 * the registries (required-plugin and admin-disabled-category filters
+	 * applied), in the order the names were given. A name that is not
+	 * available on this install is left out.
+	 *
+	 * Used by WebMCP (#981) so the tool definitions it registers in the
+	 * browser are single-sourced from the same registries /mcp serves.
+	 *
+	 * @param string[] $names Tool names.
+	 * @return array Tool definitions.
+	 */
+	public function get_tool_definitions( array $names ) {
+		$by_name = array();
+		foreach ( $this->get_all_tools() as $tool ) {
+			if ( isset( $tool['name'] ) && is_string( $tool['name'] ) ) {
+				$by_name[ $tool['name'] ] = $tool;
+			}
+		}
+
+		$definitions = array();
+		foreach ( $names as $name ) {
+			if ( is_string( $name ) && isset( $by_name[ $name ] ) ) {
+				$definitions[] = $by_name[ $name ];
+			}
+		}
+		return $definitions;
+	}
+
+	/**
 	 * Collect all tool category mappings from all registries.
 	 *
 	 * @return array Map of tool_name => category_slug.

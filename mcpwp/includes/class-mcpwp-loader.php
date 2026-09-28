@@ -124,6 +124,11 @@ class Mcpwp_Loader {
 		$this->add_action( 'admin_post_mcpwp_broker_connect', $broker_admin, 'handle_connect' );
 		$this->add_action( 'admin_post_mcpwp_broker_disconnect', $broker_admin, 'handle_disconnect' );
 
+		// WebMCP in wp-admin (#981): script + origin-trial meta, both no-ops
+		// unless switched on and the user qualifies.
+		$this->add_action( 'admin_enqueue_scripts', 'Mcpwp_WebMCP', 'enqueue' );
+		$this->add_action( 'admin_head', 'Mcpwp_WebMCP', 'print_origin_trial_meta' );
+
 		// Plugin action links.
 		$this->add_filter( 'plugin_action_links_' . MCPWP_PLUGIN_BASENAME, $admin, 'add_action_links', 100 );
 
@@ -140,6 +145,9 @@ class Mcpwp_Loader {
 	public function register_builtin_integrations( $integrations ) {
 		$integrations[] = new Mcpwp_MCP_AI_Integration();
 		$integrations[] = new Mcpwp_MCP_Figma_Integration();
+		// WebMCP-only tools (#981): exposed to the registries only during a
+		// WebMCP dispatch — see Mcpwp_WebMCP_Integration.
+		$integrations[] = new Mcpwp_WebMCP_Integration();
 		return $integrations;
 	}
 
@@ -402,6 +410,11 @@ class Mcpwp_Loader {
 		// Batch
 		$batch_controller = new Mcpwp_REST_Batch();
 		$batch_controller->register_routes();
+
+		// WebMCP in wp-admin (#981) — cookie + nonce only; 404 while switched off.
+		if ( class_exists( 'Mcpwp_REST_WebMCP' ) ) {
+			( new Mcpwp_REST_WebMCP() )->register_routes();
+		}
 
 		/**
 		 * Action to register additional REST routes.

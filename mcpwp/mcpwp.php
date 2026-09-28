@@ -318,6 +318,7 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-agent-playbooks.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-content-coherence.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-approvals.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-webmcp.php';
 	// Optional, opt-in, BYOK: Jev (TypeSafe) ranks the approval queue only —
 	// it routes, it never gates. Loaded after Mcpwp_Approvals and
 	// Mcpwp_Integration_Manager, which both classes depend on at call time.
@@ -380,6 +381,7 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/mcp/class-mcpwp-mcp-pro-tools.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/mcp/class-mcpwp-mcp-ai-integration.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/mcp/class-mcpwp-mcp-figma-integration.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/mcp/class-mcpwp-webmcp-integration.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/mcp/class-mcpwp-custom-tool-registry.php';
 
 	// Load Pro modules only for non-WP.org builds with an active entitlement.
@@ -429,6 +431,7 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-site-blueprints.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-mcp.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-batch.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-webmcp.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-openapi.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-integrations.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-cloudflare.php';
