@@ -1240,7 +1240,20 @@ class Mcpwp_Approvals {
 	 * Tries, in order of trust:
 	 * 1. The LIVE post (get_post() on resource.id) — authoritative, and the
 	 *    only source available at creation time (every caller here has just
-	 *    resolved the same post itself).
+	 *    resolved the same post itself). Only attempted when resource.type
+	 *    ITSELF already names a post — literally 'post' (post_content_
+	 *    update's own deliberate hardcode) or a real, currently-registered
+	 *    post type (post_type_exists()). NEVER for a non-post sentinel
+	 *    ('user', 'term', 'widget', 'drafts', 'staging', 'api_key', a
+	 *    'bulk_<type>' label): resource.id there is a USER id, a TERM id,
+	 *    a widget slug — not a post id, and can coincidentally collide with
+	 *    an unrelated post's numeric ID. #1025 round 3: a delete_user
+	 *    approval for user #11 was misclassified as ["admin","woocommerce"]
+	 *    because a product happened to exist with post ID 11 — get_post(11)
+	 *    resolved to the UNRELATED product and its category got added
+	 *    alongside the correct 'admin' one, so disabling 'woocommerce'
+	 *    site-wide hid a delete_user approval from every key, including
+	 *    ones with no reason to lose it.
 	 * 2. payload.target.type — Mcpwp_Destructive_Gate::fingerprint()'s own
 	 *    capture of the post's type at the moment a destructive call was
 	 *    deferred. Reliable for every destructive_operation record, even a
@@ -1266,8 +1279,10 @@ class Mcpwp_Approvals {
 	 * @return string Real post_type, or '' when none of the above resolves one.
 	 */
 	private static function resolve_target_post_type( $action, array $resource, array $payload ) {
-		$post_id = isset( $resource['id'] ) ? $resource['id'] : null;
-		if ( is_numeric( $post_id ) && (int) $post_id > 0 ) {
+		$post_id       = isset( $resource['id'] ) ? $resource['id'] : null;
+		$resource_type = isset( $resource['type'] ) ? (string) $resource['type'] : '';
+
+		if ( is_numeric( $post_id ) && (int) $post_id > 0 && ( 'post' === $resource_type || post_type_exists( $resource_type ) ) ) {
 			$post = get_post( (int) $post_id );
 			if ( $post instanceof WP_Post ) {
 				return (string) $post->post_type;

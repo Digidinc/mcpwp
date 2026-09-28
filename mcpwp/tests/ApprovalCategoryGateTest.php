@@ -265,6 +265,51 @@ final class ApprovalCategoryGateTest extends TestCase {
 		$this->assertSame( array( 'site' ), Mcpwp_Approvals::categories_for_approval( $record ) );
 	}
 
+	/**
+	 * Round 3 of the review: resolve_target_post_type() called get_post()
+	 * for EVERY numeric resource.id before ever looking at resource.type,
+	 * so delete_user/delete_course_category (a USER id / a TERM id) got
+	 * misclassified by whatever unrelated POST happens to share that same
+	 * numeric id — live PoC: user #11 vs. a product #11 → stored
+	 * ["admin","woocommerce"], so disabling 'woocommerce' site-wide hid the
+	 * delete_user approval from every key, including ones with no reason to
+	 * lose it. self::PRODUCT_ID (a real product fixture) is reused here
+	 * deliberately AS the colliding id.
+	 */
+	public function test_delete_user_with_a_colliding_post_id_classifies_by_route_only(): void {
+		$id = $this->seed_approval(
+			array(
+				'action'   => 'destructive_operation',
+				'operation' => 'delete_user',
+				'resource' => array( 'type' => 'user', 'id' => self::PRODUCT_ID, 'title' => 'jdoe' ),
+				'payload'  => array( 'route' => '/mcpwp/v1/users/' . self::PRODUCT_ID ),
+			)
+		);
+		$record = Mcpwp_Approvals::get_request( $id );
+		$this->assertSame(
+			array( 'admin' ),
+			Mcpwp_Approvals::categories_for_approval( $record ),
+			'a colliding product at the same numeric id must not add woocommerce to a delete_user approval'
+		);
+	}
+
+	public function test_delete_course_category_with_a_colliding_post_id_classifies_by_route_only(): void {
+		$id = $this->seed_approval(
+			array(
+				'action'    => 'destructive_operation',
+				'operation' => 'delete_course_category',
+				'resource'  => array( 'type' => 'term', 'id' => self::PRODUCT_ID, 'taxonomy' => 'course_category', 'title' => 'Beginner' ),
+				'payload'   => array( 'route' => '/mcpwp/v1/learnpress/course-categories/' . self::PRODUCT_ID ),
+			)
+		);
+		$record = Mcpwp_Approvals::get_request( $id );
+		$this->assertSame(
+			array( 'learnpress' ),
+			Mcpwp_Approvals::categories_for_approval( $record ),
+			'a colliding product at the same numeric id must not add woocommerce to a delete_course_category approval'
+		);
+	}
+
 	public function test_bulk_content_publish_classifies_by_payloads_real_post_type(): void {
 		$id = $this->seed_approval(
 			array(
