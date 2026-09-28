@@ -421,6 +421,7 @@ class Mcpwp_REST_Content_Graph extends Mcpwp_REST_API {
 					'note'                => $approval_note,
 					'tool'                => 'wp_apply_internal_link',
 					'requested_by_key_id' => $this->current_requester_key_id(),
+					'requester_unrestricted' => $this->requester_is_unrestricted(),
 					'metadata'            => array(
 						'source_id'  => $source_id,
 						'target_id'  => $target_id,

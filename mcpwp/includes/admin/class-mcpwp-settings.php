@@ -370,6 +370,39 @@ class Mcpwp_Settings {
 			)
 		);
 
+		// WebMCP in wp-admin (#981).
+		add_settings_section(
+			'mcpwp_webmcp_section',
+			__( 'WebMCP (browser agent in wp-admin)', 'mcpwp' ),
+			array( $this, 'render_webmcp_section' ),
+			'mcpwp_settings'
+		);
+
+		add_settings_field(
+			'webmcp_admin_enabled',
+			__( 'Enable WebMCP in wp-admin', 'mcpwp' ),
+			array( $this, 'render_checkbox_field' ),
+			'mcpwp_settings',
+			'mcpwp_webmcp_section',
+			array(
+				'id'          => 'webmcp_admin_enabled',
+				'description' => __( 'Offer MCPWP tools to the built-in agent of a WebMCP-capable browser while an Editor or Administrator is signed in to wp-admin.', 'mcpwp' ),
+			)
+		);
+
+		add_settings_field(
+			'webmcp_origin_trial_token',
+			__( 'Origin-trial token', 'mcpwp' ),
+			array( $this, 'render_text_field' ),
+			'mcpwp_settings',
+			'mcpwp_webmcp_section',
+			array(
+				'id'          => 'webmcp_origin_trial_token',
+				'description' => __( 'Optional. The Chrome WebMCP origin-trial token registered for this site\'s origin. Leave empty when testing with the chrome://flags/#enable-webmcp-testing flag.', 'mcpwp' ),
+				'placeholder' => '',
+			)
+		);
+
 		// Note: Screenshot Worker is now configured via Integrations page.
 
 		// Action log retention — standalone option (not in mcpwp_settings array).
@@ -639,6 +672,9 @@ class Mcpwp_Settings {
 			'environment_type'        => 'auto',
 			'mupot_enabled'           => false,
 			'mupot_instance_url'      => 'https://mupot.mumega.com',
+			// WebMCP in wp-admin (#981): off until an administrator turns it on.
+			'webmcp_admin_enabled'      => false,
+			'webmcp_origin_trial_token' => '',
 		);
 	}
 
@@ -780,6 +816,10 @@ class Mcpwp_Settings {
 			? $tool_profile
 			: 'full';
 
+		// WebMCP in wp-admin (#981).
+		$sanitized['webmcp_admin_enabled'] = $this->resolve_checkbox( $input, $present, $stored, 'webmcp_admin_enabled' ) ?? $defaults['webmcp_admin_enabled'];
+		$sanitized['webmcp_origin_trial_token'] = $this->resolve_webmcp_token( $input, $stored );
+
 		$new_secret = isset( $input['oauth_client_secret'] ) ? trim( (string) $input['oauth_client_secret'] ) : '';
 		if ( '' !== $new_secret ) {
 			$sanitized['oauth_client_secret_hash'] = wp_hash_password( $new_secret );
@@ -842,6 +882,42 @@ class Mcpwp_Settings {
 			: ( isset( $current['github_repo'] ) ? $current['github_repo'] : '' );
 
 		return $sanitized;
+	}
+
+	/**
+	 * The WebMCP origin-trial token on a write of the option (#981).
+	 *
+	 * Written only when the write names it. A well-formed token (or '' to
+	 * clear) is stored; a malformed one keeps the stored value and, on the
+	 * settings form, says so — it is printed into every wp-admin page, so it
+	 * is never stored in a shape Mcpwp_WebMCP::sanitize_origin_trial_token()
+	 * would not accept.
+	 *
+	 * @param array $input  Input values.
+	 * @param array $stored The option as stored before this write.
+	 * @return string
+	 */
+	private function resolve_webmcp_token( array $input, array $stored ) {
+		$previous = isset( $stored['webmcp_origin_trial_token'] ) ? Mcpwp_WebMCP::sanitize_origin_trial_token( $stored['webmcp_origin_trial_token'] ) : '';
+		$previous = null === $previous ? '' : $previous;
+
+		if ( ! array_key_exists( 'webmcp_origin_trial_token', $input ) ) {
+			return $previous;
+		}
+
+		$token = Mcpwp_WebMCP::sanitize_origin_trial_token( $input['webmcp_origin_trial_token'] );
+		if ( null === $token ) {
+			if ( function_exists( 'add_settings_error' ) ) {
+				add_settings_error(
+					self::OPTION_NAME,
+					'mcpwp_webmcp_token_invalid',
+					__( 'The WebMCP origin-trial token was not saved: paste the token exactly as Chrome issued it (letters, digits, +, / and =).', 'mcpwp' )
+				);
+			}
+			return $previous;
+		}
+
+		return $token;
 	}
 
 	/**
@@ -993,6 +1069,24 @@ class Mcpwp_Settings {
 	 */
 	public function render_general_section() {
 		echo '<p>' . esc_html__( 'Configure general plugin settings.', 'mcpwp' ) . '</p>';
+	}
+
+	/**
+	 * Render the WebMCP section: what it is, what it exposes, and its state.
+	 */
+	public function render_webmcp_section() {
+		echo '<p>' . esc_html__( 'WebMCP lets the AI agent built into a supporting browser (Chrome 149+ with the WebMCP origin trial or the enable-webmcp-testing flag) use MCPWP while you are signed in to wp-admin — no API key: it acts as you, through your login. It can only read content and SEO data, create drafts, and propose edits that wait for approval in Control Room. It cannot publish, delete, change settings, or manage API keys, plugins or themes. Pages it reads may contain instructions planted by someone else; the draft-and-approval limits are what keep those harmless. Authors and Contributors are not offered it.', 'mcpwp' ) . '</p>';
+
+		$enabled   = class_exists( 'Mcpwp_WebMCP' ) && Mcpwp_WebMCP::is_enabled();
+		$token_set = class_exists( 'Mcpwp_WebMCP' ) && '' !== Mcpwp_WebMCP::get_origin_trial_token();
+
+		printf(
+			'<p><strong>%1$s</strong> %2$s &middot; <strong>%3$s</strong> %4$s</p>',
+			esc_html__( 'Status:', 'mcpwp' ),
+			$enabled ? esc_html__( 'enabled', 'mcpwp' ) : esc_html__( 'disabled', 'mcpwp' ),
+			esc_html__( 'Origin-trial token:', 'mcpwp' ),
+			$token_set ? esc_html__( 'set', 'mcpwp' ) : esc_html__( 'not set', 'mcpwp' )
+		);
 	}
 
 	/**

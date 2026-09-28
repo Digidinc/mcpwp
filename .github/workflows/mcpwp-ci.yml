@@ -74,3 +74,8 @@ jobs:
       # --random-order-seed=<that value>.
       - name: Unit Tests (random order)
         run: mcpwp/vendor/bin/phpunit --configuration mcpwp/tests/phpunit.xml --order-by=random
+
+      # Browser-side scripts with a Node test (node:test, no dependencies) —
+      # e.g. the WebMCP registration script (#981).
+      - name: JS Unit Tests
+        run: node --test mcpwp/tests/js/*.test.js

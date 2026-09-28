@@ -51,6 +51,13 @@ trait Mcpwp_Admin_Control_Room_Trait {
 				/* translators: %d: number of signals found */
 				$result   = sprintf( __( 'Signals refreshed: %d signal(s) found.', 'mcpwp' ), count( $computed ) );
 			}
+		} elseif ( 'purge_closed_approvals' === $action ) {
+			// #981 review round 4: drop every closed approval record now.
+			$removed = class_exists( 'Mcpwp_Approvals' ) ? Mcpwp_Approvals::purge_closed() : 0;
+			$result  = is_wp_error( $removed )
+				? $removed
+				/* translators: %d: number of records removed */
+				: sprintf( __( 'Removed %d closed approval request(s).', 'mcpwp' ), (int) $removed );
 		} elseif ( 'rollback_action_log' === $action ) {
 			$log_id = isset( $_POST['action_log_id'] ) ? sanitize_text_field( wp_unslash( $_POST['action_log_id'] ) ) : '';
 			if ( class_exists( 'Mcpwp_Action_Log' ) && $log_id ) {
@@ -108,7 +115,7 @@ trait Mcpwp_Admin_Control_Room_Trait {
 				$message = __( 'Approval request approved.', 'mcpwp' );
 				break;
 			case 'reject':
-				$result = Mcpwp_Approvals::reject_request( $approval_id );
+				$result = Mcpwp_Approvals::reject_request( $approval_id, '', array( 'actor' => 'wp-user:' . get_current_user_id() ) );
 				$message = __( 'Approval request rejected.', 'mcpwp' );
 				break;
 			case 'apply':
@@ -116,8 +123,15 @@ trait Mcpwp_Admin_Control_Room_Trait {
 				$message = __( 'Approved change applied.', 'mcpwp' );
 				break;
 			case 'rollback':
-				$result = Mcpwp_Approvals::rollback_request( $approval_id );
+				$result = Mcpwp_Approvals::rollback_request( $approval_id, array( 'actor' => 'wp-user:' . get_current_user_id() ) );
 				$message = __( 'Applied change rolled back.', 'mcpwp' );
+				break;
+			case 'resolve_completed':
+			case 'resolve_not_completed':
+				$result  = Mcpwp_Approvals::resolve_stale( $approval_id, 'resolve_completed' === $action ? 'completed' : 'not_completed', array( 'actor' => 'wp-user:' . get_current_user_id() ) );
+				$message = 'resolve_completed' === $action
+					? __( 'Marked as completed.', 'mcpwp' )
+					: __( 'Marked as not completed. Check the post content before applying again.', 'mcpwp' );
 				break;
 			default:
 				return new WP_Error( 'mcpwp_unknown_control_action', __( 'Unknown control room action.', 'mcpwp' ) );
@@ -224,12 +238,24 @@ trait Mcpwp_Admin_Control_Room_Trait {
 			// triage; falls back to date order on its own when none do.
 			'pending_approvals' => class_exists( 'Mcpwp_Approvals' ) ? Mcpwp_Approvals::list_requests( 'pending', 5, true, 'priority' ) : array(),
 			'approved_approvals' => class_exists( 'Mcpwp_Approvals' ) ? Mcpwp_Approvals::list_requests( 'approved', 5, true ) : array(),
+			// #981 review round 3: applies/rollbacks that ran but could not
+			// be recorded, stalled, or only partially applied.
+			'attention_approvals' => array_values(
+				array_filter(
+					$approvals,
+					function ( $approval ) {
+						return ! empty( $approval['needs_attention'] );
+					}
+				)
+			),
 			'rollback_ready'   => array_slice(
 				array_values(
 					array_filter(
 						$approvals,
 						function ( $approval ) {
-							return isset( $approval['status'] ) && 'applied' === $approval['status'];
+							// #981 review round 5: only what can still be rolled
+							// back from what the record keeps.
+							return isset( $approval['status'] ) && in_array( $approval['status'], array( 'applied', 'apply_failed' ), true ) && ! empty( $approval['rollback_available'] );
 						}
 					)
 				),

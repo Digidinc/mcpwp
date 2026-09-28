@@ -81,12 +81,59 @@ trait Mcpwp_Api_Auth {
 	 * @return bool True when the caller may access non-public content.
 	 */
 	protected function requester_can_see_non_public() {
+		// A WebMCP principal (#981) is a real WordPress user, and WordPress
+		// decides per post what that user may read (read_post: private
+		// posts of a type whose read_private_* cap the user lacks, other
+		// people's drafts of a type they cannot edit …). A blanket "sees
+		// non-public" answer would override that, so this post-less gate is
+		// always false for it: every list/enumeration clamps to published
+		// content, and single-post reads go through requester_can_read_post(),
+		// which asks WordPress about that one post.
+		if ( $this->requester_is_webmcp() ) {
+			return false;
+		}
+
 		$key_record = $this->get_current_api_key_record();
 		if ( $key_record && $this->key_has_scope( $key_record, 'write' ) ) {
 			return true;
 		}
 
 		return $this->is_trusted_admin_ajax_request();
+	}
+
+	/**
+	 * Whether the current principal is a WebMCP user (#981).
+	 *
+	 * @return bool
+	 */
+	protected function requester_is_webmcp() {
+		$key_record = $this->get_current_api_key_record();
+		return is_array( $key_record ) && isset( $key_record['type'] ) && class_exists( 'Mcpwp_WebMCP' ) && Mcpwp_WebMCP::SOURCE === $key_record['type'];
+	}
+
+	/**
+	 * Whether the current caller may read ONE resolved post — the per-post
+	 * form of requester_can_see_non_public(), used by every single-post read
+	 * (guard_non_public_post(), the post-ref chokepoint, fetch/meta/render).
+	 *
+	 * For an API key / OAuth / admin-AJAX caller: unchanged — public status,
+	 * or non-public visibility by scope. For a WebMCP user: exactly what
+	 * WordPress says, current_user_can( 'read_post', $id ), whatever the
+	 * status.
+	 *
+	 * @param WP_Post|mixed $post Post.
+	 * @return bool
+	 */
+	protected function requester_can_read_post( $post ) {
+		if ( ! $post instanceof WP_Post ) {
+			return false;
+		}
+
+		if ( $this->requester_is_webmcp() ) {
+			return current_user_can( 'read_post', (int) $post->ID );
+		}
+
+		return $this->is_public_status( $post->post_status ) || $this->requester_can_see_non_public();
 	}
 
 	/**
@@ -123,7 +170,7 @@ trait Mcpwp_Api_Auth {
 			return null;
 		}
 
-		if ( $this->is_public_status( $post->post_status ) || $this->requester_can_see_non_public() ) {
+		if ( $this->requester_can_read_post( $post ) ) {
 			return null;
 		}
 
@@ -648,6 +695,17 @@ trait Mcpwp_Api_Auth {
 		// previous request's bucket.
 		$this->mcpwp_metered = null;
 
+		// WebMCP in wp-admin (#981): an in-process /mcp dispatch made by
+		// Mcpwp_REST_WebMCP for the logged-in WordPress user, and every
+		// sub-request it fans out to. The lift is a PHP static that only
+		// that controller sets, after it has verified the cookie, the
+		// wp_rest nonce, the origin and the user's capabilities; nothing a
+		// caller sends can set it. Checked first: while it is held, every
+		// MCPWP request in this process is that user and nobody else.
+		if ( class_exists( 'Mcpwp_WebMCP' ) && Mcpwp_WebMCP::dispatch_user_id() > 0 ) {
+			return $this->authenticate_webmcp_principal( $request );
+		}
+
 		// Bypass for internal server-side requests (Chat tab tool execution).
 		// Requires: admin context + activate_plugins cap + AJAX request +
 		// a valid nonce tied to a known admin action (prevents filter-hook abuse).
@@ -859,6 +917,106 @@ trait Mcpwp_Api_Auth {
 		// Per-key role/category restriction (#874) — see
 		// check_key_category_restriction_for_route() docblock for why this is a
 		// separate check from the one immediately above.
+		$key_category_check = $this->check_key_category_restriction_for_route( $request );
+		if ( is_wp_error( $key_category_check ) ) {
+			return $key_category_check;
+		}
+
+		return $this->check_post_naming_params_category( $request );
+	}
+
+	/**
+	 * Authenticate a request made under the WebMCP principal lift (#981).
+	 *
+	 * The principal is the logged-in WordPress user, identified by a
+	 * synthetic key record (Mcpwp_WebMCP::principal_record(): read + write,
+	 * never admin; role 'custom' limited to the WebMCP categories). Unlike
+	 * an API key, the current user is NOT switched to the mcpwp_bot service
+	 * account — tool handlers run as the real user, so WordPress's own
+	 * capability checks and post authorship apply to them.
+	 *
+	 * Every gate an API key passes still runs: rate limit (on the outer
+	 * /mcp request, bucket webmcp:user:<id>), scope for the route/tool,
+	 * site-disabled categories, the principal's own category restriction
+	 * and post-ref category checks. The outer /mcp body must additionally
+	 * be nothing but tools/call for allowlisted tools.
+	 *
+	 * @param WP_REST_Request $request Request.
+	 * @return true|WP_Error
+	 */
+	private function authenticate_webmcp_principal( $request ) {
+		$user_id = Mcpwp_WebMCP::dispatch_user_id();
+
+		// The lift names the user the endpoint verified; it must still be
+		// the user this request runs as, and that user must still qualify.
+		if ( get_current_user_id() !== $user_id || ! Mcpwp_WebMCP::user_may_use( $user_id ) ) {
+			return new WP_Error(
+				'webmcp_principal_mismatch',
+				__( 'WebMCP request is not running as the signed-in user.', 'mcpwp' ),
+				array( 'status' => 401 )
+			);
+		}
+
+		$is_sub_request = class_exists( 'Mcpwp_REST_Batch' ) && Mcpwp_REST_Batch::$is_batch_sub_request;
+		$route          = method_exists( $request, 'get_route' ) ? (string) $request->get_route() : '';
+
+		// The only top-level request the lift may authenticate is the /mcp
+		// tools/call envelope the WebMCP endpoint built; everything else runs
+		// as a sub-request of it (Mcpwp_REST_Batch::$is_batch_sub_request).
+		if ( ! $is_sub_request ) {
+			$body = method_exists( $request, 'get_json_params' ) ? $request->get_json_params() : null;
+			if ( '/mcpwp/v1/mcp' !== strtolower( untrailingslashit( $route ) ) || ! Mcpwp_WebMCP::mcp_body_is_allowed( $body ) ) {
+				return new WP_Error(
+					'webmcp_tool_not_allowed',
+					__( 'This tool is not available through WebMCP.', 'mcpwp' ),
+					array( 'status' => 403 )
+				);
+			}
+		}
+
+		$record = Mcpwp_WebMCP::principal_record( $user_id );
+
+		// Charged once, on the outer request — sub-requests were already
+		// counted there, same rule as API keys.
+		if ( ! $is_sub_request ) {
+			$rate_limit_check = $this->meter_request( $request, 'webmcp:user:' . $user_id, $this->rate_limit_method( $request ), $record );
+			if ( is_wp_error( $rate_limit_check ) ) {
+				return $rate_limit_check;
+			}
+		}
+
+		$required_scope = $this->get_required_scope_for_request( $request );
+		if ( ! $this->key_has_scope( $record, $required_scope ) ) {
+			return new WP_Error(
+				'insufficient_scope',
+				sprintf(
+					/* translators: %s: scope name */
+					__( 'WebMCP cannot perform this action (requires %s scope). Publishing, settings and other administrator actions are done by a person in wp-admin.', 'mcpwp' ),
+					$required_scope
+				),
+				array(
+					'status'         => 403,
+					'required_scope' => $required_scope,
+				)
+			);
+		}
+
+		$this->current_api_key_record = $record;
+
+		// WordPress's own per-user rules on the canonical arguments the
+		// handler will read (post type caps, terms, meta, draft status).
+		if ( $is_sub_request ) {
+			$wp_check = Mcpwp_WebMCP::check_sub_request( $request );
+			if ( is_wp_error( $wp_check ) ) {
+				return $wp_check;
+			}
+		}
+
+		$category_check = $this->check_disabled_category_for_route( $request );
+		if ( is_wp_error( $category_check ) ) {
+			return $category_check;
+		}
+
 		$key_category_check = $this->check_key_category_restriction_for_route( $request );
 		if ( is_wp_error( $key_category_check ) ) {
 			return $key_category_check;
@@ -2103,8 +2261,16 @@ trait Mcpwp_Api_Auth {
 			return true;
 		}
 
-		if ( 'inherit' !== $row['post_status'] && ! $this->is_public_status( $row['post_status'] ) && ! $this->requester_can_see_non_public() ) {
-			return true;
+		if ( 'inherit' !== $row['post_status'] ) {
+			if ( $this->requester_is_webmcp() ) {
+				// A WebMCP user (#981) reads what WordPress lets them read —
+				// per post, whatever the status (requester_can_read_post()).
+				if ( ! current_user_can( 'read_post', (int) $id ) ) {
+					return true;
+				}
+			} elseif ( ! $this->is_public_status( $row['post_status'] ) && ! $this->requester_can_see_non_public() ) {
+				return true;
+			}
 		}
 
 		if ( in_array( $row['post_type'], array( 'post', 'page' ), true ) ) {
@@ -3189,7 +3355,11 @@ trait Mcpwp_Api_Auth {
 		// scope so a plain write key cannot approve/apply its own pending request.
 		// Listing/reading approvals stays read; creating one (via the
 		// blocks/content-graph/staging controllers) stays at the write default.
-		if ( preg_match( '#^/mcpwp/v1/approvals/[^/]+/(approve|reject|apply|rollback)(/|$)#i', $route ) ) {
+		if ( preg_match( '#^/mcpwp/v1/approvals/[^/]+/(approve|reject|apply|rollback|resolve)(/|$)#i', $route ) ) {
+			return 'admin';
+		}
+		// #981 review round 4: purging closed approvals is an admin action.
+		if ( preg_match( '#^/mcpwp/v1/approvals/purge-closed(/|$)#i', $route ) ) {
 			return 'admin';
 		}
 

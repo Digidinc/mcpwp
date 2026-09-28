@@ -49,6 +49,43 @@ class Mcpwp_REST_Approvals extends Mcpwp_REST_API {
 			)
 		);
 
+		// #981 review round 4: drop every closed (decided) record now.
+		// Admin scope (Mcpwp_Api_Auth route table). Registered before the
+		// /approvals/{id} route so the literal path is matched first.
+		register_rest_route(
+			$this->namespace,
+			'/approvals/purge-closed',
+			array(
+				array(
+					'methods'             => WP_REST_Server::CREATABLE,
+					'callback'            => array( $this, 'purge_closed_approvals' ),
+					'permission_callback' => array( $this, 'check_permission' ),
+				),
+			)
+		);
+
+		// #981 review round 4, WARN-1: resolve an apply/rollback stuck in
+		// flight, by hand, once it is stale. Admin scope.
+		register_rest_route(
+			$this->namespace,
+			'/approvals/(?P<id>[A-Za-z0-9_-]+)/resolve',
+			array(
+				array(
+					'methods'             => WP_REST_Server::CREATABLE,
+					'callback'            => array( $this, 'resolve_approval' ),
+					'permission_callback' => array( $this, 'check_permission' ),
+					'args'                => array(
+						'outcome' => array(
+							'description' => __( 'What actually happened: "completed" or "not_completed".', 'mcpwp' ),
+							'type'        => 'string',
+							'enum'        => array( 'completed', 'not_completed' ),
+							'required'    => true,
+						),
+					),
+				),
+			)
+		);
+
 		register_rest_route(
 			$this->namespace,
 			'/approvals/(?P<id>[A-Za-z0-9_-]+)',
@@ -245,6 +282,47 @@ class Mcpwp_REST_Approvals extends Mcpwp_REST_API {
 	}
 
 	/**
+	 * Purge closed approvals (#981 review round 4).
+	 *
+	 * @param WP_REST_Request $request Request.
+	 * @return WP_REST_Response|WP_Error
+	 */
+	public function purge_closed_approvals( $request ) {
+		$removed = Mcpwp_Approvals::purge_closed();
+		if ( is_wp_error( $removed ) ) {
+			return $removed;
+		}
+		$this->log_activity( 'purge_closed_approvals', $request, array( 'removed' => $removed ) );
+		return $this->success_response( array( 'removed' => $removed ) );
+	}
+
+	/**
+	 * Resolve an apply/rollback stuck in flight (#981 review round 4, WARN-1).
+	 *
+	 * @param WP_REST_Request $request Request.
+	 * @return WP_REST_Response|WP_Error
+	 */
+	public function resolve_approval( $request ) {
+		$visibility_check = $this->resolve_visible_approval( $request->get_param( 'id' ) );
+		if ( is_wp_error( $visibility_check ) ) {
+			return $visibility_check;
+		}
+
+		$record = $this->get_current_api_key_record();
+		$result = Mcpwp_Approvals::resolve_stale(
+			$request->get_param( 'id' ),
+			(string) $request->get_param( 'outcome' ),
+			array( 'actor' => is_array( $record ) && ! empty( $record['id'] ) ? (string) $record['id'] : '' )
+		);
+		if ( is_wp_error( $result ) ) {
+			return $result;
+		}
+
+		$this->log_activity( 'resolve_approval', $request, array( 'approval_id' => $result['id'], 'outcome' => (string) $request->get_param( 'outcome' ) ) );
+		return $this->success_response( $result );
+	}
+
+	/**
 	 * Roll back request.
 	 *
 	 * @param WP_REST_Request $request Request.
@@ -256,7 +334,11 @@ class Mcpwp_REST_Approvals extends Mcpwp_REST_API {
 			return $visibility_check;
 		}
 
-		$result = Mcpwp_Approvals::rollback_request( $request->get_param( 'id' ) );
+		$record = $this->get_current_api_key_record();
+		$result = Mcpwp_Approvals::rollback_request(
+			$request->get_param( 'id' ),
+			array( 'actor' => is_array( $record ) && ! empty( $record['id'] ) ? (string) $record['id'] : '' )
+		);
 		if ( is_wp_error( $result ) ) {
 			return $result;
 		}

@@ -359,6 +359,7 @@ class Mcpwp_REST_Blocks extends Mcpwp_REST_API {
 					'note'                => $approval_note,
 					'tool'                => 'wp_set_blocks',
 					'requested_by_key_id' => $this->current_requester_key_id(),
+					'requester_unrestricted' => $this->requester_is_unrestricted(),
 					'metadata'            => array(
 						'safety' => $safety_report,
 					),
@@ -728,6 +729,7 @@ class Mcpwp_REST_Blocks extends Mcpwp_REST_API {
 					'note'                => $approval_note,
 					'tool'                => 'wp_patch_block_section',
 					'requested_by_key_id' => $this->current_requester_key_id(),
+					'requester_unrestricted' => $this->requester_is_unrestricted(),
 					'metadata'            => array(
 						'selector' => $selector,
 						'path'     => $path,
