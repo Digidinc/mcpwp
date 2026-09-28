@@ -5,6 +5,14 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.14.6](https://github.com/Mumega-com/mcpwp/compare/v3.14.5...v3.14.6) (2026-09-28)
+
+
+### Bug Fixes
+
+* **auth,mcp:** not-found parity for guard_non_public_post() and mcpwp:// scheme matching ([#1028](https://github.com/Mumega-com/mcpwp/issues/1028)) ([fedfe4c](https://github.com/Mumega-com/mcpwp/commit/fedfe4ccae11daa3378cfb0bad8648eae25cbf9b))
+* **auth:** gate approvals/events/site-state by target category, not route ([#1029](https://github.com/Mumega-com/mcpwp/issues/1029)) ([2298a91](https://github.com/Mumega-com/mcpwp/commit/2298a91c8583b34117c91f76696a3cf3610923ce))
+
 ## [3.14.5](https://github.com/Mumega-com/mcpwp/compare/v3.14.4...v3.14.5) (2026-09-28)
 
 
