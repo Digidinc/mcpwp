@@ -94,11 +94,21 @@ class Mcpwp_REST_Approvals extends Mcpwp_REST_API {
 		// Read-only keys must not harvest draft/private source bodies that a
 		// privileged key queued for review. The redaction now lives inside
 		// list_requests() (fail-closed chokepoint); we only prove privilege here.
+		//
+		// #1025: a category-restricted key must not even see that an approval
+		// targeting a category it lacks exists — /approvals itself is gated
+		// only the blanket 'admin' category, which is a different question
+		// from whether this key's role also covers the TARGET's own category
+		// (woocommerce, elementor-templates, ...). Filtering lives inside
+		// list_requests() too, ahead of its own $limit slice, so a hidden
+		// item never displaces a visible one out of the page and there is no
+		// separate total anywhere in this response for it to contradict.
 		$approvals = Mcpwp_Approvals::list_requests(
 			(string) $request->get_param( 'status' ),
 			(int) $request->get_param( 'limit' ),
 			$this->requester_can_see_non_public(),
-			(string) $request->get_param( 'order' )
+			(string) $request->get_param( 'order' ),
+			array( $this, 'caller_may_read_category' )
 		);
 
 		return $this->success_response(
@@ -115,7 +125,7 @@ class Mcpwp_REST_Approvals extends Mcpwp_REST_API {
 	 * @return WP_REST_Response|WP_Error Response.
 	 */
 	public function get_approval( $request ) {
-		$result = Mcpwp_Approvals::get_request( $request->get_param( 'id' ) );
+		$result = $this->resolve_visible_approval( $request->get_param( 'id' ) );
 		if ( is_wp_error( $result ) ) {
 			return $result;
 		}
@@ -129,12 +139,51 @@ class Mcpwp_REST_Approvals extends Mcpwp_REST_API {
 	}
 
 	/**
+	 * #1025 chokepoint every approval read/action door in this controller
+	 * calls FIRST, before any other existence-sensitive check (self-approval,
+	 * the transition's own status guard) can run on a record it must not
+	 * disclose. Fetches the approval and, if it exists, denies it — with the
+	 * exact same WP_Error a genuinely-missing id returns
+	 * (Mcpwp_Approvals::not_found_error(), byte-identical by construction) —
+	 * when this caller's key may not read the category
+	 * Mcpwp_Approvals::category_for_approval() resolves for its target. A
+	 * missing id already returns that same error from get_request() itself,
+	 * so both cases flow through one return here.
+	 *
+	 * @param string $id Approval request ID.
+	 * @return array|WP_Error Public approval record when visible; WP_Error(404) otherwise.
+	 */
+	private function resolve_visible_approval( $id ) {
+		$record = Mcpwp_Approvals::get_request( $id );
+		if ( is_wp_error( $record ) ) {
+			return $record;
+		}
+
+		if ( $this->caller_may_read_category( Mcpwp_Approvals::category_for_approval( $record ) ) ) {
+			return $record;
+		}
+
+		return Mcpwp_Approvals::not_found_error();
+	}
+
+	/**
 	 * Approve request.
 	 *
 	 * @param WP_REST_Request $request Request.
 	 * @return WP_REST_Response|WP_Error Response.
 	 */
 	public function approve_approval( $request ) {
+		// #1025: the category guard runs BEFORE check_self_approval() — that
+		// check's own "same key requested it" branch would otherwise
+		// disclose that a category-hidden approval exists (a self-approval
+		// error is only returned for a record that IS there), the exact
+		// ordering bug #1022 round 2's BLOCK-R2-1 fixed for the destructive
+		// gate's own defer/apply path, applied here to a second door.
+		$visibility_check = $this->resolve_visible_approval( $request->get_param( 'id' ) );
+		if ( is_wp_error( $visibility_check ) ) {
+			return $visibility_check;
+		}
+
 		$self_approval_check = $this->check_self_approval( $request->get_param( 'id' ) );
 		if ( is_wp_error( $self_approval_check ) ) {
 			return $self_approval_check;
@@ -150,6 +199,11 @@ class Mcpwp_REST_Approvals extends Mcpwp_REST_API {
 	 * @return WP_REST_Response|WP_Error Response.
 	 */
 	public function reject_approval( $request ) {
+		$visibility_check = $this->resolve_visible_approval( $request->get_param( 'id' ) );
+		if ( is_wp_error( $visibility_check ) ) {
+			return $visibility_check;
+		}
+
 		return $this->approval_transition_response( $request, 'reject_request', 'reject_approval' );
 	}
 
@@ -160,6 +214,13 @@ class Mcpwp_REST_Approvals extends Mcpwp_REST_API {
 	 * @return WP_REST_Response|WP_Error Response.
 	 */
 	public function apply_approval( $request ) {
+		// #1025: see approve_approval()'s comment — the category guard must
+		// run before check_self_approval() here for the same reason.
+		$visibility_check = $this->resolve_visible_approval( $request->get_param( 'id' ) );
+		if ( is_wp_error( $visibility_check ) ) {
+			return $visibility_check;
+		}
+
 		$self_approval_check = $this->check_self_approval( $request->get_param( 'id' ) );
 		if ( is_wp_error( $self_approval_check ) ) {
 			return $self_approval_check;
@@ -188,6 +249,11 @@ class Mcpwp_REST_Approvals extends Mcpwp_REST_API {
 	 * @return WP_REST_Response|WP_Error Response.
 	 */
 	public function rollback_approval( $request ) {
+		$visibility_check = $this->resolve_visible_approval( $request->get_param( 'id' ) );
+		if ( is_wp_error( $visibility_check ) ) {
+			return $visibility_check;
+		}
+
 		$result = Mcpwp_Approvals::rollback_request( $request->get_param( 'id' ) );
 		if ( is_wp_error( $result ) ) {
 			return $result;

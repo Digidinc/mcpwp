@@ -257,11 +257,18 @@ class Mcpwp_REST_Webhooks extends Mcpwp_REST_API {
 	public function list_events( $request ) {
 		$this->log_activity( 'list_events', $request );
 
+		// #1025: an approval-lifecycle event echoes its approval's own
+		// resource/payload/route verbatim — the same leak fixed on
+		// /approvals itself, reached here through a DIFFERENT category gate
+		// ('webhooks', not 'admin'), so a key that never held 'admin' could
+		// still read it. See Mcpwp_Event_Store::list_events()'s
+		// `category_allowed` docblock for why `total` is safe here too.
 		$result = class_exists( 'Mcpwp_Event_Store' )
 			? Mcpwp_Event_Store::list_events(
 				array(
-					'type'  => $request->get_param( 'type' ),
-					'limit' => $request->get_param( 'limit' ),
+					'type'             => $request->get_param( 'type' ),
+					'limit'            => $request->get_param( 'limit' ),
+					'category_allowed' => array( $this, 'caller_may_read_category' ),
 				)
 			)
 			: array(

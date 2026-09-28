@@ -147,10 +147,20 @@ trait Mcpwp_Api_Auth {
 	 * same pair of checks — a single copy every caller shares rather than
 	 * each writing its own.
 	 *
+	 * Public (not protected): #1025 needs this callable from a plain static
+	 * store class (Mcpwp_Approvals, Mcpwp_Event_Store) with no instance of
+	 * its own — passed as `array( $this, 'caller_may_read_category' )` from
+	 * the REST controller that has the request context, exactly the same
+	 * "caller decides, static store applies the verdict" split
+	 * redact_source_for_unprivileged()'s own docblock already documents for
+	 * scope. Widening this from protected to public changes no behavior:
+	 * every existing call site is still `$this->caller_may_read_category(...)`
+	 * from inside a class composing this trait.
+	 *
 	 * @param string $category Tool category slug.
 	 * @return bool
 	 */
-	protected function caller_may_read_category( $category ) {
+	public function caller_may_read_category( $category ) {
 		$disabled_categories = get_option( 'mcpwp_disabled_tool_categories', array() );
 		if ( is_array( $disabled_categories ) && in_array( $category, $disabled_categories, true ) ) {
 			return false;
@@ -965,10 +975,20 @@ trait Mcpwp_Api_Auth {
 	 * deliberate, not drift. The Pro plugin does register its own /events and /events/{id}
 	 * routes; those fall under the same '/events' prefix and are gated as 'webhooks' here.
 	 *
+	 * Public static (#1025): a plain static store class with no REST
+	 * controller instance (Mcpwp_Approvals, classifying an approval whose
+	 * target is a route rather than a resolved post — see
+	 * Mcpwp_Approvals::category_for_approval()) needs this classifier too.
+	 * Uses no instance state (neither this method nor the two maps it
+	 * reads do), so promoting it changes no behavior — every existing
+	 * `$this->get_category_for_route(...)` call site keeps working
+	 * unchanged, exactly as category_for_post_type()'s own promotion above
+	 * documents (PHP resolves a static method called via `->` like `::`).
+	 *
 	 * @param string $route Full REST route, e.g. /mcpwp/v1/pages.
 	 * @return string Category slug, or '' if not category-gated.
 	 */
-	protected function get_category_for_route( $route ) {
+	public static function get_category_for_route( $route ) {
 		$base = '/mcpwp/v1';
 		$path = ( 0 === strpos( $route, $base ) ) ? substr( $route, strlen( $base ) ) : $route;
 
@@ -988,14 +1008,14 @@ trait Mcpwp_Api_Auth {
 		}
 
 		// Path-parameter routes whose category cannot be expressed as a leading prefix.
-		foreach ( $this->get_route_pattern_map() as $pattern => $pattern_category ) {
+		foreach ( self::get_route_pattern_map() as $pattern => $pattern_category ) {
 			if ( preg_match( $pattern, $path ) ) {
 				return $pattern_category;
 			}
 		}
 
 		// Longest/most-specific prefixes first; first match wins.
-		foreach ( $this->get_route_category_map() as $prefix => $category ) {
+		foreach ( self::get_route_category_map() as $prefix => $category ) {
 			if ( 0 === strpos( $path, $prefix ) ) {
 				return $category;
 			}
@@ -1008,9 +1028,11 @@ trait Mcpwp_Api_Auth {
 	 * Regex route→category tier, checked before the prefix map. For routes whose
 	 * distinguishing segment follows a path parameter (e.g. /pages/{id}/template).
 	 *
+	 * Public static: see get_category_for_route()'s docblock above.
+	 *
 	 * @return array<string,string> Regex pattern => category slug.
 	 */
-	protected function get_route_pattern_map() {
+	public static function get_route_pattern_map() {
 		return array(
 			// wp_update_page_template is a 'site' tool (Mcpwp_MCP_Free_Tools), but its
 			// route lives under /pages/{id}/ which the prefix map would claim as 'content'.
@@ -1025,9 +1047,11 @@ trait Mcpwp_Api_Auth {
 	/**
 	 * Prefix route→category map. Ordered most-specific first.
 	 *
+	 * Public static: see get_category_for_route()'s docblock above.
+	 *
 	 * @return array<string,string> Route prefix => category slug.
 	 */
-	protected function get_route_category_map() {
+	public static function get_route_category_map() {
 		return array(
 			// Elementor info (status, widget schemas). Before generic /elementor.
 			'/elementor/status'                     => 'elementor-info',
@@ -1238,14 +1262,16 @@ trait Mcpwp_Api_Auth {
 	 * Codomain of get_category_for_route(): every category it can emit, from the same
 	 * two maps the classifier uses (single source of truth for the invariant test).
 	 *
+	 * Public static: see get_category_for_route()'s docblock above.
+	 *
 	 * @return string[] Distinct category slugs the route classifier can return.
 	 */
-	protected function get_all_route_categories() {
+	public static function get_all_route_categories() {
 		return array_values(
 			array_unique(
 				array_merge(
-					array_values( $this->get_route_pattern_map() ),
-					array_values( $this->get_route_category_map() )
+					array_values( self::get_route_pattern_map() ),
+					array_values( self::get_route_category_map() )
 				)
 			)
 		);

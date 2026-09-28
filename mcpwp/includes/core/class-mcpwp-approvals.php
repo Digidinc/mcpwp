@@ -356,9 +356,23 @@ class Mcpwp_Approvals {
 	 *                                  group the existing date order is kept. Jev
 	 *                                  never decides WHETHER a request is shown,
 	 *                                  approved, or applied — only where it sorts.
+	 * @param callable|null $category_allowed #1025: optional `function(string $category): bool`
+	 *                                  — the caller's own `caller_may_read_category()`,
+	 *                                  since only the REST controller holding the
+	 *                                  request has that context. When given, a
+	 *                                  request whose category_for_approval() this
+	 *                                  rejects is dropped BEFORE the $limit slice
+	 *                                  (so a hidden item never displaces a visible
+	 *                                  one out of the page) and before any count is
+	 *                                  derived from $items elsewhere (Mcpwp_Site_State),
+	 *                                  so a hidden approval is indistinguishable from
+	 *                                  one that was never created — no separate total
+	 *                                  exists here for a filtered-out item to
+	 *                                  contradict. Null (default): unfiltered,
+	 *                                  matching every existing caller unchanged.
 	 * @return array Requests.
 	 */
-	public static function list_requests( $status = '', $limit = 50, $reveal_non_public = false, $order = 'date' ) {
+	public static function list_requests( $status = '', $limit = 50, $reveal_non_public = false, $order = 'date', $category_allowed = null ) {
 		$items  = array_values( self::get_all() );
 		$status = sanitize_key( (string) $status );
 		$limit  = min( 100, max( 1, (int) $limit ) );
@@ -376,6 +390,17 @@ class Mcpwp_Approvals {
 					$items,
 					function ( $item ) use ( $status ) {
 						return isset( $item['status'] ) && $status === $item['status'];
+					}
+				)
+			);
+		}
+
+		if ( is_callable( $category_allowed ) ) {
+			$items = array_values(
+				array_filter(
+					$items,
+					function ( $item ) use ( $category_allowed ) {
+						return call_user_func( $category_allowed, self::category_for_approval( $item ) );
 					}
 				)
 			);
@@ -598,7 +623,7 @@ class Mcpwp_Approvals {
 		$id    = sanitize_key( (string) $id );
 
 		if ( empty( $items[ $id ] ) ) {
-			return new WP_Error( 'approval_not_found', __( 'Approval request not found.', 'mcpwp' ), array( 'status' => 404 ) );
+			return self::not_found_error();
 		}
 
 		return self::public_record( $items[ $id ] );
@@ -980,7 +1005,7 @@ class Mcpwp_Approvals {
 		$id    = sanitize_key( (string) $id );
 
 		if ( empty( $items[ $id ] ) ) {
-			return new WP_Error( 'approval_not_found', __( 'Approval request not found.', 'mcpwp' ), array( 'status' => 404 ) );
+			return self::not_found_error();
 		}
 
 		return $items[ $id ];
@@ -1073,6 +1098,105 @@ class Mcpwp_Approvals {
 		$record['redacted'] = true;
 
 		return $record;
+	}
+
+	/**
+	 * Map an approval record to the tool category that governs its TARGET
+	 * (#1025 — found in round 3 of the #1022 adversarial review, predates
+	 * that PR). /approvals is itself gated only the blanket 'admin' category
+	 * (get_route_category_map()) — a custom key holding 'admin' but not, say,
+	 * 'woocommerce' or 'elementor-templates' could list/get/approve/reject/
+	 * apply/roll back a request whose target that same key's role denies it
+	 * everywhere else (live PoC in the issue: an elementor_library "Arch T"
+	 * archetype's type, title and payload route, visible through a plain
+	 * GET /approvals to a key with no elementor-templates access at all).
+	 *
+	 * Reuses the #1020/#1022 chokepoint
+	 * (Mcpwp_REST_API::category_for_post_type() / ::get_category_for_route())
+	 * rather than inventing a second one, one branch per action shape:
+	 *
+	 * - destructive_operation: payload.route is the exact REST route
+	 *   Mcpwp_Destructive_Gate::defer() captured when the call was first
+	 *   made — the SAME classification the door itself would have applied
+	 *   before being deferred. It is the only reliable signal for a
+	 *   destructive target that is not a post at all (user, term, widget,
+	 *   the synthetic "all drafts" purge) or one category_for_post_type()'s
+	 *   bare-type fallback would get wrong — 'attachment' is public, so its
+	 *   public/show_in_rest fallback would answer 'content', not the
+	 *   'media' the real /media route requires.
+	 * - bulk_content_publish: payload.post_type is the one real post type
+	 *   every item in the batch shares; resource.type is a synthetic
+	 *   'bulk_<type>' label category_for_post_type() has no entry for.
+	 * - staging_push: only ever created from POST /staging/push.
+	 * - anything else (post_content_update, and any future action naming a
+	 *   live post by id): resolves the LIVE post_type via get_post(), not
+	 *   the stored resource.type — create_post_content_request() always
+	 *   hardcodes resource.type to 'post' regardless of the resolved post's
+	 *   real type, so a product or an Elementor template edited through
+	 *   /blocks or /content-graph (#1024) would otherwise read back here as
+	 *   ordinary 'content'.
+	 *
+	 * Falls back to 'admin' — the same fail-closed default
+	 * category_for_post_type() itself uses for a type it cannot place —
+	 * when none of the above resolves anything (the post has since been
+	 * hard-deleted, or a future action adds a resource shape this map
+	 * hasn't learned yet): hiding a queue item from a category-restricted
+	 * key is the safe direction to be wrong in, not guessing 'content'.
+	 *
+	 * Pure function of the record — no request/caller context. The caller
+	 * (a REST controller, which has the auth trait) decides whether ITS key
+	 * may read the category this returns, the same "caller decides, static
+	 * store applies the verdict" split redact_source_for_unprivileged()'s
+	 * own docblock documents for scope.
+	 *
+	 * @param array $record Public or private approval record (either shape
+	 *                       carries 'action'/'resource'/'payload').
+	 * @return string Category slug.
+	 */
+	public static function category_for_approval( array $record ) {
+		if ( ! class_exists( 'Mcpwp_REST_API' ) ) {
+			return 'admin';
+		}
+
+		$action   = isset( $record['action'] ) ? (string) $record['action'] : '';
+		$resource = isset( $record['resource'] ) && is_array( $record['resource'] ) ? $record['resource'] : array();
+		$payload  = isset( $record['payload'] ) && is_array( $record['payload'] ) ? $record['payload'] : array();
+
+		if ( 'destructive_operation' === $action && ! empty( $payload['route'] ) ) {
+			return Mcpwp_REST_API::get_category_for_route( (string) $payload['route'] );
+		}
+
+		if ( 'bulk_content_publish' === $action && ! empty( $payload['post_type'] ) ) {
+			return Mcpwp_REST_API::category_for_post_type( (string) $payload['post_type'] );
+		}
+
+		if ( 'staging_push' === $action ) {
+			return 'staging';
+		}
+
+		$post_id = isset( $resource['id'] ) ? $resource['id'] : null;
+		if ( is_numeric( $post_id ) && (int) $post_id > 0 ) {
+			$post = get_post( (int) $post_id );
+			if ( $post instanceof WP_Post ) {
+				return Mcpwp_REST_API::category_for_post_type( $post->post_type );
+			}
+		}
+
+		return 'admin';
+	}
+
+	/**
+	 * The exact WP_Error a genuinely-missing approval id returns
+	 * (get_request(), get_private_request()) — and the shape #1025's
+	 * category guard must be byte-identical to, so a hidden approval cannot
+	 * be told apart from a missing one. One construction site, not several
+	 * copies of the same literal, so "identical by construction" is actually
+	 * true rather than merely true today.
+	 *
+	 * @return WP_Error
+	 */
+	public static function not_found_error() {
+		return new WP_Error( 'approval_not_found', __( 'Approval request not found.', 'mcpwp' ), array( 'status' => 404 ) );
 	}
 
 	/**

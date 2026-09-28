@@ -92,7 +92,24 @@ class Mcpwp_Event_Store {
 	/**
 	 * List recent normalized events.
 	 *
-	 * @param array $args Query args.
+	 * @param array $args Query args. `category_allowed` (#1025, optional):
+	 *                    `function(string $category): bool` — the caller's
+	 *                    own `caller_may_read_category()`, since only the
+	 *                    REST controller holding the request has that
+	 *                    context (same split as
+	 *                    Mcpwp_Approvals::list_requests()'s own
+	 *                    `$category_allowed` param). An approval-lifecycle
+	 *                    event echoes its approval's resource/payload/route
+	 *                    verbatim (see emit_event()'s `$meta['resource']` and
+	 *                    the `payload.approval` this stores) — the exact
+	 *                    same leak #1025 closes on /approvals itself, reached
+	 *                    through a DIFFERENT category gate (/events is
+	 *                    'webhooks', not 'admin'), so a key that never held
+	 *                    'admin' at all could still read it here. Filtering
+	 *                    happens BEFORE `total` is computed, not just before
+	 *                    the returned `events` slice: an unfiltered total
+	 *                    next to a filtered list is itself the count oracle
+	 *                    this filter exists to prevent.
 	 * @return array Events and summary.
 	 */
 	public static function list_events( $args = array() ) {
@@ -111,10 +128,56 @@ class Mcpwp_Event_Store {
 			);
 		}
 
+		if ( isset( $args['category_allowed'] ) && is_callable( $args['category_allowed'] ) ) {
+			$category_allowed = $args['category_allowed'];
+			$events            = array_values(
+				array_filter(
+					$events,
+					function ( $event ) use ( $category_allowed ) {
+						$category = self::category_for_event( $event );
+						// '' (every event type that carries no approval to gate on)
+						// is always visible — matching get_category_for_route()'s own
+						// "ungated" convention. caller_may_read_category('') would
+						// otherwise deny it to any category-restricted key: no role
+						// ever lists '' among its allowed categories.
+						return '' === $category || call_user_func( $category_allowed, $category );
+					}
+				)
+			);
+		}
+
 		return array(
 			'events' => array_slice( $events, 0, $limit ),
 			'total'  => count( $events ),
 		);
+	}
+
+	/**
+	 * Which tool category governs $event's target, for a caller deciding
+	 * whether to show it (#1025). '' for every event type except the
+	 * approval lifecycle five (approval.created/approved/rejected/applied/
+	 * rolled_back), which store the full public approval record verbatim at
+	 * payload.approval (see emit_event()) — reuses
+	 * Mcpwp_Approvals::category_for_approval() (the same #1020/#1022
+	 * chokepoint) on it rather than a second copy of that classifier.
+	 *
+	 * @param array $event Stored event record.
+	 * @return string Category slug, or '' for "not gated".
+	 */
+	private static function category_for_event( array $event ) {
+		if ( ! class_exists( 'Mcpwp_Approvals' ) ) {
+			return '';
+		}
+
+		$approval = isset( $event['payload']['approval'] ) && is_array( $event['payload']['approval'] )
+			? $event['payload']['approval']
+			: null;
+
+		if ( null === $approval ) {
+			return '';
+		}
+
+		return Mcpwp_Approvals::category_for_approval( $approval );
 	}
 
 	/**
