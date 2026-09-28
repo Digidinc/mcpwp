@@ -116,7 +116,13 @@ final class SeoReadinessValidatorFixesTest extends TestCase {
 	 */
 	private function authed( string $route, array $params, array $scopes ): array {
 		$controller = new Mcpwp_REST_SEO_Audit();
-		$created    = $controller->create_scoped_api_key( 'test key', $scopes, 'custom' );
+		// This suite is about SEO readiness scoring, not per-key category
+		// restriction. /seo/readiness/{id} gates on BOTH its own route
+		// category ('seo') AND the resolved post's type category ('content'
+		// — guard_post_type_category(), #1024), so role=admin (documented
+		// unrestricted, see resolve_key_tool_categories()) is the correct
+		// fixture here rather than reconstructing that pair.
+		$created = $controller->create_scoped_api_key( 'test key', $scopes, 'admin' );
 
 		$request = new WP_REST_Request( 'GET', $route, $params, array( 'X-API-Key' => $created['key'] ) );
 		$this->verdict = $controller->verify_api_key( $request );

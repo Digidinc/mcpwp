@@ -136,6 +136,55 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 							),
 							'default'     => array( 'read' ),
 						),
+						// #1041 WARN-2: an unrecognised role used to be silently
+						// coerced to 'admin' by create_scoped_api_key() — a
+						// 201 that discarded both the caller's actual role AND
+						// any tool_categories they meant to scope it to.
+						// create_scoped_api_key()'s own explicit check (400
+						// unknown_role, naming the valid roles) is the single
+						// source of truth for "is this a real role" — every
+						// caller goes through it (wp-admin's key editor, the
+						// MCP wp_create_api_key tool, any future
+						// non-schema-validated entry point), so the schema
+						// here validates the SAME way rather than keeping a
+						// second copy of the role list that could drift.
+						//
+						// Deliberately no 'enum' (#1041 NIT-A, round-3 review):
+						// WordPress's built-in enum check is an exact-match
+						// `in_array()` against the raw value, so "Custom" or
+						// " custom " — which create_scoped_api_key() itself
+						// accepts (case-insensitive, trimmed) — would be
+						// rejected here before ever reaching it. The
+						// validate_callback below normalises the same way
+						// create_scoped_api_key() does before checking.
+						//
+						// Deliberately no 'default' either (#1041 WARN-B): a
+						// default would make get_param('role') always return
+						// 'admin', even when the caller never specified a
+						// role — indistinguishable from an explicit
+						// {"role":"admin"}. create_scoped_api_key() needs to
+						// see "nothing was specified" as '' so it can apply
+						// the "tool_categories supplied -> default to custom"
+						// rule instead of always defaulting to admin.
+						'role' => array(
+							'description'       => __( 'Role slug: admin, a predefined role, or custom (with tool_categories). Omit to default to custom when tool_categories is supplied, or admin otherwise.', 'mcpwp' ),
+							'type'              => 'string',
+							'sanitize_callback' => static function ( $value ) {
+								return sanitize_key( trim( (string) $value ) );
+							},
+							'validate_callback' => static function ( $value ) {
+								$normalized = sanitize_key( trim( (string) $value ) );
+								// Empty (omitted, or originally whitespace/null) is
+								// valid here — it means "not specified", and
+								// create_scoped_api_key() applies the WARN-B
+								// default. Only a non-empty, unrecognised role
+								// fails schema validation.
+								if ( '' === $normalized ) {
+									return true;
+								}
+								return in_array( $normalized, array_keys( self::get_role_definitions() ), true );
+							},
+						),
 					),
 				),
 			)
@@ -693,9 +742,11 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 		$tool_categories = $request->get_param( 'tool_categories' );
 		$tool_categories = is_array( $tool_categories ) ? $tool_categories : array();
 
-		if ( '' === $role ) {
-			$role = 'admin';
-		}
+		// #1041 WARN-B: do NOT default an omitted role to 'admin' here —
+		// create_scoped_api_key() itself decides that (custom, when
+		// tool_categories was supplied; admin otherwise) so a bare
+		// {"tool_categories":["seo"]} body scopes the key instead of silently
+		// minting an unrestricted admin key with the categories ignored.
 
 		// allow_destructive is an exemption from the destructive-operation gate
 		// (#536). It is honoured only from a trusted admin context — never from
@@ -704,6 +755,27 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 		$from_api          = Mcpwp_Destructive_Gate::is_api_principal( $this->get_current_api_key_record() );
 		$allow_destructive = $wants_exempt && ! $from_api;
 		$created           = $this->create_scoped_api_key( $label, $scopes, $role, $tool_categories, $allow_destructive );
+
+		// #1041: create_scoped_api_key() refuses to mint a key it cannot
+		// honour — a custom role whose category list resolved empty
+		// ('empty_custom_categories', carrying 'invalid_categories'), or a
+		// role that isn't one of get_role_definitions()'s keys
+		// ('unknown_role' — WARN-2 — carrying 'valid_roles') — returning an
+		// error shape instead of a key record either way. Surface whichever
+		// one it was as a 400 with its own extra field intact, rather than a
+		// 201 with no 'key' in the payload. Built directly (not via
+		// error_response()'s $context, which only feeds the generic hint map
+		// and would drop the extra field) so the caller gets it back for real.
+		if ( is_array( $created ) && isset( $created['error'] ) ) {
+			$extra = array_diff_key( $created, array_flip( array( 'error', 'message' ) ) );
+			$error = new WP_Error(
+				$created['error'],
+				$created['message'],
+				array_merge( array( 'status' => 400 ), $extra )
+			);
+			return class_exists( 'Mcpwp_Error_Hints' ) ? Mcpwp_Error_Hints::enhance_error( $error ) : $error;
+		}
+
 		if ( $wants_exempt && $from_api && is_array( $created ) ) {
 			$created['ignored'] = array( 'allow_destructive' => 'Exemption from the destructive-operation gate can only be granted by an administrator in wp-admin, not through the API.' );
 		}

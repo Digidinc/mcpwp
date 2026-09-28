@@ -69,7 +69,10 @@ final class RestElementorDraftLeakTest extends TestCase {
 	 */
 	private function authed( string $route, array $params, array $scopes ): array {
 		$controller = new Mcpwp_REST_Elementor();
-		$created    = $controller->create_scoped_api_key( 'test key', $scopes, 'custom' );
+		// #1041: a custom-role key must be granted at least one real category
+		// or creation is refused. Derive it from the route under test.
+		$route_category = Mcpwp_REST_API::get_category_for_route( $route );
+		$created         = $controller->create_scoped_api_key( 'test key', $scopes, 'custom', array( '' !== $route_category ? $route_category : 'elementor' ) );
 		$request    = new WP_REST_Request( 'GET', $route, $params, array( 'X-API-Key' => $created['key'] ) );
 		$this->verdict = $controller->verify_api_key( $request );
 		return array( $controller, $request );
