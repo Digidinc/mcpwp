@@ -65,6 +65,25 @@ class Mcpwp_Approvals {
 		$id             = self::generate_id();
 		$now            = gmdate( 'c' );
 
+		// #1025 WARN-1: resource.type below is ALWAYS the literal string
+		// 'post', regardless of $post's real post_type — a product or an
+		// Elementor template edited through /blocks or /content-graph (#1024)
+		// stores 'post' here too. resource.post_type is the real type,
+		// captured NOW while $post is still guaranteed to resolve, so a
+		// later reader is never forced to fall back to a guess once the
+		// target has been deleted.
+		$resource = array(
+			'type'      => 'post',
+			'post_type' => (string) $post->post_type,
+			'id'        => (int) $post_id,
+			'title'     => get_the_title( $post ),
+			'status'    => $post->post_status,
+			'url'       => get_permalink( $post ),
+		);
+		$payload  = array(
+			'after_content' => $after_content,
+		);
+
 		$request = array(
 			'id'          => $id,
 			'status'      => 'pending',
@@ -72,17 +91,9 @@ class Mcpwp_Approvals {
 			'title'       => isset( $args['title'] ) ? sanitize_text_field( (string) $args['title'] ) : sprintf( 'Update content for #%d', (int) $post_id ),
 			'note'        => isset( $args['note'] ) ? sanitize_textarea_field( (string) $args['note'] ) : '',
 			'tool'        => isset( $args['tool'] ) ? sanitize_key( (string) $args['tool'] ) : '',
-			'resource'    => array(
-				'type'   => 'post',
-				'id'     => (int) $post_id,
-				'title'  => get_the_title( $post ),
-				'status' => $post->post_status,
-				'url'    => get_permalink( $post ),
-			),
+			'resource'    => $resource,
 			'diff'        => self::build_content_diff( $before_content, $after_content ),
-			'payload'     => array(
-				'after_content' => $after_content,
-			),
+			'payload'     => $payload,
 			'rollback'    => array(
 				'before_content' => $before_content,
 				'before_hash'    => hash( 'sha256', $before_content ),
@@ -92,6 +103,10 @@ class Mcpwp_Approvals {
 			// creates an approval cannot later approve/apply it.
 			// Mirrors the field the staging-push path already stores.
 			'requested_by_key_id' => isset( $args['requested_by_key_id'] ) ? sanitize_text_field( (string) $args['requested_by_key_id'] ) : '',
+			// #1025: computed ONCE, now, while the target is guaranteed to
+			// resolve — see categories_for_approval()'s docblock for why a
+			// value stored here is preferred over recomputing at read time.
+			'visibility_categories' => self::compute_visibility_categories( 'post_content_update', $resource, $payload ),
 			'created_at'  => $now,
 			'updated_at'  => $now,
 			'approved_at' => null,
@@ -201,6 +216,12 @@ class Mcpwp_Approvals {
 		$id  = self::generate_id();
 		$now = gmdate( 'c' );
 
+		$normalized_resource = array(
+			'type'  => isset( $resource['type'] ) ? sanitize_key( (string) $resource['type'] ) : 'unknown',
+			'id'    => isset( $resource['id'] ) ? $resource['id'] : null,
+			'title' => isset( $resource['title'] ) ? sanitize_text_field( (string) $resource['title'] ) : '',
+		);
+
 		$request = array(
 			'id'                  => $id,
 			'status'              => 'pending',
@@ -209,11 +230,7 @@ class Mcpwp_Approvals {
 			'title'               => isset( $args['title'] ) ? sanitize_text_field( (string) $args['title'] ) : sprintf( 'Destructive: %s', sanitize_key( (string) $operation ) ),
 			'note'                => isset( $args['note'] ) ? sanitize_textarea_field( (string) $args['note'] ) : '',
 			'tool'                => sanitize_key( (string) $operation ),
-			'resource'            => array(
-				'type'  => isset( $resource['type'] ) ? sanitize_key( (string) $resource['type'] ) : 'unknown',
-				'id'    => isset( $resource['id'] ) ? $resource['id'] : null,
-				'title' => isset( $resource['title'] ) ? sanitize_text_field( (string) $resource['title'] ) : '',
-			),
+			'resource'            => $normalized_resource,
 			'diff'                => array(
 				'summary' => __( 'No undo. Once applied, this cannot be rolled back.', 'mcpwp' ),
 			),
@@ -221,6 +238,11 @@ class Mcpwp_Approvals {
 			'rollback'            => array(),
 			'metadata'            => array(),
 			'requested_by_key_id' => isset( $args['requested_by_key_id'] ) ? sanitize_text_field( (string) $args['requested_by_key_id'] ) : '',
+			// #1025: computed ONCE, now, from the resolved resource/payload
+			// (payload.target, just built by fingerprint() in defer(), still
+			// names the target's real post_type when it has one) — see
+			// categories_for_approval()'s docblock.
+			'visibility_categories' => self::compute_visibility_categories( 'destructive_operation', $normalized_resource, $payload ),
 			'created_at'          => $now,
 			'updated_at'          => $now,
 			'approved_at'         => null,
@@ -321,6 +343,9 @@ class Mcpwp_Approvals {
 			),
 			'metadata'            => array(),
 			'requested_by_key_id' => isset( $args['requested_by_key_id'] ) ? sanitize_text_field( (string) $args['requested_by_key_id'] ) : '',
+			// #1025: computed ONCE, now, from the real $post_type — see
+			// categories_for_approval()'s docblock.
+			'visibility_categories' => self::compute_visibility_categories( 'bulk_content_publish', array( 'type' => 'bulk_' . $post_type, 'id' => null ), array( 'post_type' => $post_type ) ),
 			'created_at'          => $now,
 			'updated_at'          => $now,
 			'approved_at'         => null,
@@ -356,9 +381,23 @@ class Mcpwp_Approvals {
 	 *                                  group the existing date order is kept. Jev
 	 *                                  never decides WHETHER a request is shown,
 	 *                                  approved, or applied — only where it sorts.
+	 * @param callable|null $category_allowed #1025: optional `function(string $category): bool`
+	 *                                  — the caller's own `caller_may_read_category()`,
+	 *                                  since only the REST controller holding the
+	 *                                  request has that context. When given, a
+	 *                                  request whose categories_for_approval() this
+	 *                                  rejects is dropped BEFORE the $limit slice
+	 *                                  (so a hidden item never displaces a visible
+	 *                                  one out of the page) and before any count is
+	 *                                  derived from $items elsewhere (Mcpwp_Site_State),
+	 *                                  so a hidden approval is indistinguishable from
+	 *                                  one that was never created — no separate total
+	 *                                  exists here for a filtered-out item to
+	 *                                  contradict. Null (default): unfiltered,
+	 *                                  matching every existing caller unchanged.
 	 * @return array Requests.
 	 */
-	public static function list_requests( $status = '', $limit = 50, $reveal_non_public = false, $order = 'date' ) {
+	public static function list_requests( $status = '', $limit = 50, $reveal_non_public = false, $order = 'date', $category_allowed = null ) {
 		$items  = array_values( self::get_all() );
 		$status = sanitize_key( (string) $status );
 		$limit  = min( 100, max( 1, (int) $limit ) );
@@ -376,6 +415,17 @@ class Mcpwp_Approvals {
 					$items,
 					function ( $item ) use ( $status ) {
 						return isset( $item['status'] ) && $status === $item['status'];
+					}
+				)
+			);
+		}
+
+		if ( is_callable( $category_allowed ) ) {
+			$items = array_values(
+				array_filter(
+					$items,
+					function ( $item ) use ( $category_allowed ) {
+						return self::is_approval_visible_to( $item, $category_allowed );
 					}
 				)
 			);
@@ -598,7 +648,7 @@ class Mcpwp_Approvals {
 		$id    = sanitize_key( (string) $id );
 
 		if ( empty( $items[ $id ] ) ) {
-			return new WP_Error( 'approval_not_found', __( 'Approval request not found.', 'mcpwp' ), array( 'status' => 404 ) );
+			return self::not_found_error();
 		}
 
 		return self::public_record( $items[ $id ] );
@@ -980,7 +1030,7 @@ class Mcpwp_Approvals {
 		$id    = sanitize_key( (string) $id );
 
 		if ( empty( $items[ $id ] ) ) {
-			return new WP_Error( 'approval_not_found', __( 'Approval request not found.', 'mcpwp' ), array( 'status' => 404 ) );
+			return self::not_found_error();
 		}
 
 		return $items[ $id ];
@@ -1073,6 +1123,258 @@ class Mcpwp_Approvals {
 		$record['redacted'] = true;
 
 		return $record;
+	}
+
+	/**
+	 * Sentinel category (#1025 round-2 WARN-1): never a real, toggleable
+	 * category — no role's category list, and no admin's disabled-categories
+	 * option, can ever legitimately name it. caller_may_read_category()'s
+	 * own rules make it behave exactly as "visible only to an UNRESTRICTED
+	 * key" without a special case at the call site: an unrestricted key
+	 * (resolve_key_tool_categories() returns empty) is allowed regardless of
+	 * the category asked; any restricted key's `in_array( $category,
+	 * $allowed, true )` is false for a slug that appears in no role's list.
+	 * Used when an approval's target category genuinely cannot be resolved —
+	 * see categories_for_approval()'s docblock.
+	 *
+	 * @var string
+	 */
+	const UNRESOLVABLE_CATEGORY = '__unresolvable__';
+
+	/**
+	 * Every tool category that must ALL be satisfied to read an approval
+	 * (#1025 round 2, BLOCK-1 — found reproducing the issue's own PoC
+	 * against round 1 of this fix). Round 1 classified a destructive
+	 * approval's target by its ROUTE alone, but the generic, id-based doors
+	 * `DELETE /posts/{id}` and `DELETE /content/{type}/{id}` defer a delete
+	 * of ANY post type through a route that itself classifies as 'content'
+	 * — so a custom [admin, content] key still saw a queued WooCommerce
+	 * product deletion and an Elementor archetype deletion in full
+	 * (`{"resource":{"type":"product","id":...,"title":"SECRET PRODUCT
+	 * Zeta"}}`), exactly reproducing the original issue through a different
+	 * pair of doors. A generic door's route can never be widened to name
+	 * every domain it might touch, so the fix is additive, not a
+	 * replacement: the ROUTE category AND, whenever the target is a
+	 * resolvable post, `category_for_post_type()`'s category — the caller
+	 * must hold BOTH. See resolve_target_post_type() for how "whenever the
+	 * target is a resolvable post" is decided.
+	 *
+	 * Computed ONCE, at creation time, by every `create_*_request()` method
+	 * (and Mcpwp_REST_Staging::create_staging_push_approval(), which builds
+	 * its own record shape) and stored on the record as
+	 * `visibility_categories` — categories_for_approval() prefers that
+	 * stored value over recomputing live (see its own docblock for why: a
+	 * value computed NOW, while the target is guaranteed to still resolve,
+	 * cannot be widened later by the target being deleted — #1025 round 2
+	 * WARN-1).
+	 *
+	 * @param string $action   Approval action ('destructive_operation',
+	 *                         'bulk_content_publish', 'staging_push',
+	 *                         'post_content_update', ...).
+	 * @param array  $resource Resource block as stored on the record.
+	 * @param array  $payload  Payload block as stored on the record.
+	 * @return string[] Every category the caller must hold; never empty —
+	 *                   falls back to array(self::UNRESOLVABLE_CATEGORY)
+	 *                   when nothing resolves.
+	 */
+	public static function compute_visibility_categories( $action, array $resource, array $payload ) {
+		if ( ! class_exists( 'Mcpwp_REST_API' ) ) {
+			return array( self::UNRESOLVABLE_CATEGORY );
+		}
+
+		$action     = (string) $action;
+		$categories = array();
+
+		// The route this call will replay (or already replayed once, for a
+		// closed record) — the classification the generic door ITSELF is
+		// gated by. Still required in addition to the post-type category
+		// below: a route-only check is what round 1 shipped and BLOCK-1
+		// broke; a post-type-only check would miss a destructive target
+		// that is not a post at all (user, term, widget, the "all drafts"
+		// purge) and that only the route names.
+		if ( 'destructive_operation' === $action && ! empty( $payload['route'] ) ) {
+			$route_category = Mcpwp_REST_API::get_category_for_route( (string) $payload['route'] );
+			if ( '' !== $route_category ) {
+				$categories[] = $route_category;
+			}
+		}
+
+		if ( 'bulk_content_publish' === $action && ! empty( $payload['post_type'] ) ) {
+			$categories[] = Mcpwp_REST_API::category_for_post_type( (string) $payload['post_type'] );
+		}
+
+		if ( 'staging_push' === $action ) {
+			$categories[] = 'staging';
+		}
+
+		// Whenever the target IS a post — independent of, and additive to,
+		// the action-shape classification above — the caller must ALSO hold
+		// its post-type category. This is what closes BLOCK-1: a product
+		// deleted through the GENERIC /posts/{id} or /content/{type}/{id}
+		// door classifies 'content' by route alone, but the record's target
+		// is unambiguously a product, so 'woocommerce' is required too.
+		$post_type = self::resolve_target_post_type( $action, $resource, $payload );
+		if ( '' !== $post_type ) {
+			$categories[] = Mcpwp_REST_API::category_for_post_type( $post_type );
+		}
+
+		if ( empty( $categories ) ) {
+			// Nothing resolved at all: no route classification applied and
+			// no post-type could be determined. Round 1's fallback here was
+			// 'admin' — the same category /approvals itself is gated by, so
+			// EVERY approvals reader could see a record in this state
+			// (#1025 round 2, WARN-1). Fall back to "visible only to an
+			// unrestricted key" instead — see UNRESOLVABLE_CATEGORY's
+			// docblock for how that's enforced with no special case.
+			return array( self::UNRESOLVABLE_CATEGORY );
+		}
+
+		return array_values( array_unique( $categories ) );
+	}
+
+	/**
+	 * Resolve the real post_type of an approval's target, for
+	 * compute_visibility_categories() — '' when the target is not a post at
+	 * all, or is one no signal here can place.
+	 *
+	 * Tries, in order of trust:
+	 * 1. The LIVE post (get_post() on resource.id) — authoritative, and the
+	 *    only source available at creation time (every caller here has just
+	 *    resolved the same post itself). Only attempted when resource.type
+	 *    ITSELF already names a post — literally 'post' (post_content_
+	 *    update's own deliberate hardcode) or a real, currently-registered
+	 *    post type (post_type_exists()). NEVER for a non-post sentinel
+	 *    ('user', 'term', 'widget', 'drafts', 'staging', 'api_key', a
+	 *    'bulk_<type>' label): resource.id there is a USER id, a TERM id,
+	 *    a widget slug — not a post id, and can coincidentally collide with
+	 *    an unrelated post's numeric ID. #1025 round 3: a delete_user
+	 *    approval for user #11 was misclassified as ["admin","woocommerce"]
+	 *    because a product happened to exist with post ID 11 — get_post(11)
+	 *    resolved to the UNRELATED product and its category got added
+	 *    alongside the correct 'admin' one, so disabling 'woocommerce'
+	 *    site-wide hid a delete_user approval from every key, including
+	 *    ones with no reason to lose it.
+	 * 2. payload.target.type — Mcpwp_Destructive_Gate::fingerprint()'s own
+	 *    capture of the post's type at the moment a destructive call was
+	 *    deferred. Reliable for every destructive_operation record, even a
+	 *    LEGACY one predating `visibility_categories` (#1025 round 2,
+	 *    WARN-1): the target's type was already being captured here before
+	 *    this fix, so a hard-deleted destructive target still classifies
+	 *    correctly without any new data.
+	 * 3. resource.post_type — the real-type field this round's creators now
+	 *    store explicitly (see e.g. create_post_content_request()).
+	 * 4. resource.type — ONLY for destructive_operation. Its callers pass
+	 *    the resolved post's real post_type deliberately (or a non-post
+	 *    sentinel — 'user', 'term', 'widget', 'drafts', 'api_key' — that
+	 *    post_type_exists() rejects here, so trusting it is safe). NEVER for
+	 *    post_content_update: create_post_content_request() hardcodes
+	 *    resource.type to the literal string 'post' regardless of the
+	 *    target's real type (WARN-1's own finding) — trusting it there
+	 *    would under-classify a legacy, target-deleted product/template
+	 *    edit as ordinary 'content' instead of falling back safely.
+	 *
+	 * @param string $action   Approval action.
+	 * @param array  $resource Resource block.
+	 * @param array  $payload  Payload block.
+	 * @return string Real post_type, or '' when none of the above resolves one.
+	 */
+	private static function resolve_target_post_type( $action, array $resource, array $payload ) {
+		$post_id       = isset( $resource['id'] ) ? $resource['id'] : null;
+		$resource_type = isset( $resource['type'] ) ? (string) $resource['type'] : '';
+
+		if ( is_numeric( $post_id ) && (int) $post_id > 0 && ( 'post' === $resource_type || post_type_exists( $resource_type ) ) ) {
+			$post = get_post( (int) $post_id );
+			if ( $post instanceof WP_Post ) {
+				return (string) $post->post_type;
+			}
+		}
+
+		if ( ! empty( $payload['target']['type'] ) && post_type_exists( (string) $payload['target']['type'] ) ) {
+			return (string) $payload['target']['type'];
+		}
+
+		if ( ! empty( $resource['post_type'] ) && post_type_exists( (string) $resource['post_type'] ) ) {
+			return (string) $resource['post_type'];
+		}
+
+		if ( 'destructive_operation' === $action && ! empty( $resource['type'] ) && post_type_exists( (string) $resource['type'] ) ) {
+			return (string) $resource['type'];
+		}
+
+		return '';
+	}
+
+	/**
+	 * Every tool category a caller must hold to read $record (#1025).
+	 *
+	 * Prefers the record's own stored `visibility_categories` — computed
+	 * ONCE at creation time by whichever `create_*_request()` method built
+	 * it, while the target was guaranteed to still resolve — over
+	 * recomputing live. This is what closes WARN-1: recomputing at READ time
+	 * against a target that has SINCE been hard-deleted can only ever do
+	 * worse than what was known at creation, never better, so a stored value
+	 * is authoritative and a live one is a fallback for a record that
+	 * predates this field (or was built by a caller not yet updated to set
+	 * it).
+	 *
+	 * @param array $record Public or private approval record.
+	 * @return string[] Every category the caller must hold; never empty.
+	 */
+	public static function categories_for_approval( array $record ) {
+		if ( ! empty( $record['visibility_categories'] ) && is_array( $record['visibility_categories'] ) ) {
+			$stored = array_values( array_unique( array_map( 'strval', $record['visibility_categories'] ) ) );
+			if ( ! empty( $stored ) ) {
+				return $stored;
+			}
+		}
+
+		$action   = isset( $record['action'] ) ? (string) $record['action'] : '';
+		$resource = isset( $record['resource'] ) && is_array( $record['resource'] ) ? $record['resource'] : array();
+		$payload  = isset( $record['payload'] ) && is_array( $record['payload'] ) ? $record['payload'] : array();
+
+		return self::compute_visibility_categories( $action, $resource, $payload );
+	}
+
+	/**
+	 * Whether $record is visible to a caller whose permission is decided by
+	 * $category_allowed — the single chokepoint every reader (list, get,
+	 * approve, reject, apply, rollback, the event store, the site-state
+	 * summary) calls, so "ALL categories must be satisfied" is enforced in
+	 * exactly one place rather than re-implemented (and potentially
+	 * mis-implemented, e.g. as OR instead of AND) at each call site.
+	 *
+	 * @param array    $record           Public or private approval record.
+	 * @param callable $category_allowed function(string $category): bool —
+	 *                                    the caller's own
+	 *                                    caller_may_read_category().
+	 * @return bool
+	 */
+	public static function is_approval_visible_to( array $record, $category_allowed ) {
+		if ( ! is_callable( $category_allowed ) ) {
+			return true;
+		}
+
+		foreach ( self::categories_for_approval( $record ) as $category ) {
+			if ( ! call_user_func( $category_allowed, $category ) ) {
+				return false;
+			}
+		}
+
+		return true;
+	}
+
+	/**
+	 * The exact WP_Error a genuinely-missing approval id returns
+	 * (get_request(), get_private_request()) — and the shape #1025's
+	 * category guard must be byte-identical to, so a hidden approval cannot
+	 * be told apart from a missing one. One construction site, not several
+	 * copies of the same literal, so "identical by construction" is actually
+	 * true rather than merely true today.
+	 *
+	 * @return WP_Error
+	 */
+	public static function not_found_error() {
+		return new WP_Error( 'approval_not_found', __( 'Approval request not found.', 'mcpwp' ), array( 'status' => 404 ) );
 	}
 
 	/**

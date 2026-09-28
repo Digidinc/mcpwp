@@ -29,6 +29,7 @@ class Mcpwp_Site_State {
 				'include_drafts'    => false,
 				'include_plugins'   => false,
 				'reveal_non_public' => false,
+				'category_allowed'  => null,
 			)
 		);
 
@@ -38,12 +39,27 @@ class Mcpwp_Site_State {
 		// so any caller that forgets to pass it (e.g. content-coherence) stays safe.
 		$reveal_non_public = ! empty( $args['reveal_non_public'] );
 
+		// #1025: same fail-closed default as reveal_non_public above, for the
+		// same reason — a caller that forgets to pass this (content-coherence)
+		// gets NO category filtering rather than an error, matching its existing,
+		// pre-#1025 behavior exactly (it never surfaces `approvals.pending_items`/
+		// `events.items` to its own response, only aggregate counts computed
+		// from them — see its class docblock). Mcpwp_REST_Site_Info::get_site_state()
+		// is the one caller that DOES pass this, since /site-state returns the
+		// full snapshot verbatim, including those item arrays.
+		$category_allowed = is_callable( $args['category_allowed'] ) ? $args['category_allowed'] : null;
+
 		$content_counts = self::get_content_counts();
 		$graph          = self::get_graph_summary( (int) $args['graph_limit'], ! empty( $args['include_drafts'] ) );
-		$approvals      = self::get_approval_summary( $reveal_non_public );
+		$approvals      = self::get_approval_summary( $reveal_non_public, $category_allowed );
 		$seo            = self::get_seo_summary( $reveal_non_public );
 		$event_result   = class_exists( 'Mcpwp_Event_Store' )
-			? Mcpwp_Event_Store::list_events( array( 'limit' => min( 50, max( 1, absint( $args['event_limit'] ) ) ) ) )
+			? Mcpwp_Event_Store::list_events(
+				array(
+					'limit'             => min( 50, max( 1, absint( $args['event_limit'] ) ) ),
+					'category_allowed'  => $category_allowed,
+				)
+			)
 			: array( 'events' => array(), 'total' => 0 );
 		$capabilities   = self::get_capabilities( ! empty( $args['include_plugins'] ) );
 		$context        = self::get_context_summary();
@@ -192,11 +208,19 @@ class Mcpwp_Site_State {
 	/**
 	 * Approval state summary.
 	 *
-	 * @param bool $reveal_non_public When true, embed full source fields; when
-	 *                                false (default) non-public sources are redacted.
+	 * @param bool          $reveal_non_public When true, embed full source fields; when
+	 *                                         false (default) non-public sources are redacted.
+	 * @param callable|null $category_allowed  #1025: `function(string $category): bool`,
+	 *                                         forwarded to Mcpwp_Approvals::list_requests()
+	 *                                         so `counts` and `rollback_ready` (both derived
+	 *                                         from THIS same filtered $items, not a second,
+	 *                                         unfiltered read) can never disagree with the
+	 *                                         `pending_items`/`approved_items` this filter
+	 *                                         hides — a count next to a filtered list is
+	 *                                         itself the oracle this exists to prevent.
 	 * @return array
 	 */
-	private static function get_approval_summary( $reveal_non_public = false ) {
+	private static function get_approval_summary( $reveal_non_public = false, $category_allowed = null ) {
 		$counts = array(
 			'pending'     => 0,
 			'approved'    => 0,
@@ -204,7 +228,7 @@ class Mcpwp_Site_State {
 			'rejected'    => 0,
 			'rolled_back' => 0,
 		);
-		$items  = class_exists( 'Mcpwp_Approvals' ) ? Mcpwp_Approvals::list_requests( '', 100, $reveal_non_public ) : array();
+		$items  = class_exists( 'Mcpwp_Approvals' ) ? Mcpwp_Approvals::list_requests( '', 100, $reveal_non_public, 'date', $category_allowed ) : array();
 
 		foreach ( $items as $item ) {
 			$status = isset( $item['status'] ) ? sanitize_key( (string) $item['status'] ) : '';
@@ -215,8 +239,8 @@ class Mcpwp_Site_State {
 
 		return array(
 			'counts'         => $counts,
-			'pending_items'  => class_exists( 'Mcpwp_Approvals' ) ? Mcpwp_Approvals::list_requests( 'pending', 5, $reveal_non_public ) : array(),
-			'approved_items' => class_exists( 'Mcpwp_Approvals' ) ? Mcpwp_Approvals::list_requests( 'approved', 5, $reveal_non_public ) : array(),
+			'pending_items'  => class_exists( 'Mcpwp_Approvals' ) ? Mcpwp_Approvals::list_requests( 'pending', 5, $reveal_non_public, 'date', $category_allowed ) : array(),
+			'approved_items' => class_exists( 'Mcpwp_Approvals' ) ? Mcpwp_Approvals::list_requests( 'approved', 5, $reveal_non_public, 'date', $category_allowed ) : array(),
 			'rollback_ready' => array_slice(
 				array_values(
 					array_filter(

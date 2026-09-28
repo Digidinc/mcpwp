@@ -338,6 +338,14 @@ class Mcpwp_REST_Staging extends Mcpwp_REST_API {
 			'metadata'                => array(
 				'before' => $before_snapshot,
 			),
+			// #1025: computed ONCE, now — see
+			// Mcpwp_Approvals::categories_for_approval()'s docblock. This
+			// creator builds its own record shape directly (it never calls a
+			// Mcpwp_Approvals::create_*_request() method), so it must set
+			// this itself rather than inheriting it from a shared creator.
+			'visibility_categories'   => class_exists( 'Mcpwp_Approvals' )
+				? Mcpwp_Approvals::compute_visibility_categories( 'staging_push', array( 'type' => 'staging' ), array() )
+				: array( 'staging' ),
 			'created_at'              => $now,
 			'updated_at'              => $now,
 			'approved_at'             => null,
