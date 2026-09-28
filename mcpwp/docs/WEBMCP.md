@@ -89,9 +89,30 @@ and similar spellings are normalised.
   `edit_post_meta` rule WordPress uses: it must not be protected, and its registered
   `auth_callback` must allow the user. One failure refuses the whole call.
 - **Proposing:** the user must be able to edit the post, and its type must be in the principal's
-  categories (content, site or seo). Proposed content is limited to 256 KB. A requester can have at
-  most 20 pending content proposals, and the site at most 100; this applies to every requester, not
-  only WebMCP.
+  categories (content, site or seo). Proposed content is limited to 256 KB.
+- **Custom fields and taxonomies:** checked under the exact names that will be written. A meta key is
+  trimmed the same way `Mcpwp_Post_Fields::validate_meta()` trims it, so `" featured_flag"` is
+  checked as `featured_flag`. A taxonomy name goes through `sanitize_key()`.
+
+## Content-approval limits (all requesters)
+
+These apply to every `post_content_update` approval: WebMCP proposals, `wp_set_blocks` and
+`wp_apply_internal_link`.
+
+- **Pending limit:** at most 20 pending per requester and 100 site-wide. The limit applies to WebMCP
+  users and to category-restricted API keys; either gets 429 `too_many_pending` or
+  `approval_queue_full` when over it. Unrestricted (admin-role) keys and wp-admin users are exempt,
+  because they could make the change directly.
+- **Size limit:** proposed content may be at most 256 KB from WebMCP and 1 MB from anything else;
+  over that is 413 `content_too_large`. The 1 MB limit protects memory; it is not a content policy.
+- **Expiry:** a pending proposal older than 30 days becomes `expired`. This is checked whenever the
+  queue is read or written, and the period can be changed with `mcpwp_approval_pending_ttl`.
+- **Changing the limits:** use the `mcpwp_approval_content_limits` filter (`per_requester`,
+  `total`, `max_bytes`, `max_bytes_webmcp`).
+- **Concurrent writes:** every write to the approval queue takes a MySQL named lock and re-reads the
+  queue inside it. That covers creating a request, approve/reject/apply/rollback, the apply-result
+  record, a staging push, expiry and eviction. If the lock cannot be taken within 5 seconds the
+  answer is 503 `approvals_busy` and nothing is stored.
 
 The one tool that fetches a URL, `wp_get_rendered_html`, only fetches this site's own origin: same
 scheme, host and port as `home_url()` or `site_url()`, with no credentials in the URL.

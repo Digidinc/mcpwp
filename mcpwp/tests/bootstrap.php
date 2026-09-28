@@ -1730,6 +1730,24 @@ if (! isset($GLOBALS['wpdb'])) {
                     return $answer;
                 }
             }
+            // MySQL named locks (#981 review round 2, Mcpwp_Approvals::mutate()).
+            // GET_LOCK answers $GLOBALS['mcpwp_test_get_lock_result'] (default
+            // '1'); a test may run a one-shot hook the moment the lock is
+            // granted — i.e. a writer that committed just before we got it.
+            if (preg_match('/^SELECT GET_LOCK\(/', trim((string) $query))) {
+                $GLOBALS['mcpwp_test_named_lock_calls'][] = 'get';
+                $result = $GLOBALS['mcpwp_test_get_lock_result'] ?? '1';
+                if ('1' === (string) $result && isset($GLOBALS['mcpwp_test_on_lock_granted']) && is_callable($GLOBALS['mcpwp_test_on_lock_granted'])) {
+                    $hook = $GLOBALS['mcpwp_test_on_lock_granted'];
+                    $GLOBALS['mcpwp_test_on_lock_granted'] = null;
+                    $hook();
+                }
+                return $result;
+            }
+            if (preg_match('/^SELECT RELEASE_LOCK\(/', trim((string) $query))) {
+                $GLOBALS['mcpwp_test_named_lock_calls'][] = 'release';
+                return '1';
+            }
             // Site graph (#943 S1 review): read_node_hash() — the single
             // change-hash comparison BLOCK-1 collapsed the old two-field
             // check into.

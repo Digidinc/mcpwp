@@ -32,18 +32,46 @@ class Mcpwp_Approvals {
 	 * Pending post_content_update requests one requester may hold (#981
 	 * review WARN-2). Every request carries its full proposed body in the
 	 * one approvals option, so an unbounded queue is an unbounded option.
+	 * Applies to category-restricted API keys and WebMCP users; an
+	 * unrestricted key or a wp-admin user could make the change directly and
+	 * is exempt (#981 review round 2, WARN-C). Filterable: see content_limits().
 	 */
 	const MAX_PENDING_CONTENT_PER_REQUESTER = 20;
 
 	/**
-	 * Pending post_content_update requests the whole site may hold.
+	 * Pending post_content_update requests the whole site may hold from
+	 * capped requesters.
 	 */
 	const MAX_PENDING_CONTENT_TOTAL = 100;
 
 	/**
-	 * Largest proposed body a post_content_update request may carry, bytes.
+	 * Largest proposed body a WebMCP user may propose, bytes.
 	 */
 	const MAX_PROPOSED_CONTENT_BYTES = 262144;
+
+	/**
+	 * Largest proposed body any other requester may propose, bytes — memory
+	 * protection for the one approvals option, not a content policy.
+	 */
+	const MAX_PROPOSED_CONTENT_BYTES_API = 1048576;
+
+	/**
+	 * A pending post_content_update older than this expires (status
+	 * 'expired'), seconds. Filterable: mcpwp_approval_pending_ttl.
+	 */
+	const PENDING_CONTENT_TTL = 2592000;
+
+	/**
+	 * Seconds to wait for the approvals store lock before refusing.
+	 */
+	const LOCK_TIMEOUT = 5;
+
+	/**
+	 * Re-entrancy depth of the approvals store lock in this process.
+	 *
+	 * @var int
+	 */
+	private static $lock_depth = 0;
 
 	/**
 	 * Allowed values for triage.priority — the single enum every writer and
@@ -80,58 +108,27 @@ class Mcpwp_Approvals {
 		$before_content = (string) $post->post_content;
 		$after_content  = (string) $after_content;
 
-		// #981 review WARN-2: each request stores the whole proposed body
-		// (plus a diff) in the one autoloaded-size approvals option. Without
+		$requester = isset( $args['requested_by_key_id'] ) ? sanitize_text_field( (string) $args['requested_by_key_id'] ) : '';
+		$limits    = self::content_limits();
+
+		// #981 review WARN-2 / round 2 WARN-C: each request stores the whole
+		// proposed body (plus a diff) in the one approvals option. Without
 		// bounds a caller could grow it until every later read of the queue
-		// ran the site out of memory — for everyone. Bounded per body, per
-		// requester and site-wide, for every caller of this method.
-		if ( strlen( $after_content ) > self::MAX_PROPOSED_CONTENT_BYTES ) {
+		// ran the site out of memory — for everyone.
+		$max_bytes = 0 === strpos( $requester, 'webmcp:' ) ? $limits['max_bytes_webmcp'] : $limits['max_bytes'];
+		if ( strlen( $after_content ) > $max_bytes ) {
 			return new WP_Error(
 				'content_too_large',
 				sprintf(
 					/* translators: %d: size limit in KB */
 					__( 'The proposed content is larger than %d KB. Split the change or edit the post in wp-admin.', 'mcpwp' ),
-					(int) ( self::MAX_PROPOSED_CONTENT_BYTES / 1024 )
+					(int) ( $max_bytes / 1024 )
 				),
 				array( 'status' => 413 )
 			);
 		}
 
-		$requester    = isset( $args['requested_by_key_id'] ) ? sanitize_text_field( (string) $args['requested_by_key_id'] ) : '';
-		$pending_mine = 0;
-		$pending_all  = 0;
-		foreach ( self::get_all() as $existing ) {
-			if ( ! isset( $existing['status'], $existing['action'] ) || 'pending' !== $existing['status'] || 'post_content_update' !== $existing['action'] ) {
-				continue;
-			}
-			$pending_all++;
-			$by = isset( $existing['requested_by_key_id'] ) ? (string) $existing['requested_by_key_id'] : '';
-			if ( $by === $requester ) {
-				$pending_mine++;
-			}
-		}
-		if ( $pending_mine >= self::MAX_PENDING_CONTENT_PER_REQUESTER ) {
-			return new WP_Error(
-				'too_many_pending',
-				sprintf(
-					/* translators: %d: cap */
-					__( 'This requester already has %d content changes waiting for review. Have them approved or rejected before proposing more.', 'mcpwp' ),
-					self::MAX_PENDING_CONTENT_PER_REQUESTER
-				),
-				array( 'status' => 429 )
-			);
-		}
-		if ( $pending_all >= self::MAX_PENDING_CONTENT_TOTAL ) {
-			return new WP_Error(
-				'approval_queue_full',
-				sprintf(
-					/* translators: %d: cap */
-					__( 'This site already has %d content changes waiting for review. Nothing was queued; have the queue reviewed first.', 'mcpwp' ),
-					self::MAX_PENDING_CONTENT_TOTAL
-				),
-				array( 'status' => 429 )
-			);
-		}
+		$capped = ! self::requester_is_exempt_from_caps( $requester, $args );
 
 		$id             = self::generate_id();
 		$now            = gmdate( 'c' );
@@ -169,7 +166,12 @@ class Mcpwp_Approvals {
 				'before_content' => $before_content,
 				'before_hash'    => hash( 'sha256', $before_content ),
 			),
-			'metadata'    => isset( $args['metadata'] ) && is_array( $args['metadata'] ) ? $args['metadata'] : array(),
+			'metadata'    => array_merge(
+				isset( $args['metadata'] ) && is_array( $args['metadata'] ) ? $args['metadata'] : array(),
+				// Remembered so the pending caps count this request the same
+				// way for its whole life (see requester_is_exempt_from_caps()).
+				$capped ? array() : array( 'cap_exempt' => true )
+			),
 			// Requester identity for separation-of-duties: the same API key that
 			// creates an approval cannot later approve/apply it.
 			// Mirrors the field the staging-push path already stores.
@@ -186,7 +188,56 @@ class Mcpwp_Approvals {
 			'rolled_back_at' => null,
 		);
 
-		self::upsert( $request );
+		// Count and insert under the store lock, so parallel proposals can
+		// neither overshoot the caps nor overwrite one another.
+		$stored = self::mutate(
+			static function ( array $items ) use ( $request, $requester, $capped, $limits ) {
+				if ( $capped ) {
+					$pending_mine = 0;
+					$pending_all  = 0;
+					foreach ( $items as $existing ) {
+						if ( ! is_array( $existing ) || ! isset( $existing['status'], $existing['action'] ) || 'pending' !== $existing['status'] || 'post_content_update' !== $existing['action'] ) {
+							continue;
+						}
+						$by = isset( $existing['requested_by_key_id'] ) ? (string) $existing['requested_by_key_id'] : '';
+						if ( self::requester_is_exempt_from_caps( $by, isset( $existing['metadata'] ) && is_array( $existing['metadata'] ) ? $existing['metadata'] : array() ) ) {
+							continue;
+						}
+						$pending_all++;
+						if ( $by === $requester ) {
+							$pending_mine++;
+						}
+					}
+					if ( $pending_mine >= $limits['per_requester'] ) {
+						return new WP_Error(
+							'too_many_pending',
+							sprintf(
+								/* translators: %d: cap */
+								__( 'This requester already has %d content changes waiting for review. Have them approved or rejected before proposing more.', 'mcpwp' ),
+								$limits['per_requester']
+							),
+							array( 'status' => 429 )
+						);
+					}
+					if ( $pending_all >= $limits['total'] ) {
+						return new WP_Error(
+							'approval_queue_full',
+							sprintf(
+								/* translators: %d: cap */
+								__( 'This site already has %d content changes waiting for review. Nothing was queued; have the queue reviewed first.', 'mcpwp' ),
+								$limits['total']
+							),
+							array( 'status' => 429 )
+						);
+					}
+				}
+				$items[ $request['id'] ] = $request;
+				return $items;
+			}
+		);
+		if ( is_wp_error( $stored ) ) {
+			return $stored;
+		}
 
 		$public = self::public_record( $request );
 		self::emit_event(
@@ -322,7 +373,10 @@ class Mcpwp_Approvals {
 			'rolled_back_at'      => null,
 		);
 
-		self::upsert( $request );
+		$stored = self::upsert( $request );
+		if ( is_wp_error( $stored ) ) {
+			return $stored;
+		}
 		$public = self::public_record( $request );
 
 		self::emit_event(
@@ -425,7 +479,10 @@ class Mcpwp_Approvals {
 			'rolled_back_at'      => null,
 		);
 
-		self::upsert( $request );
+		$stored = self::upsert( $request );
+		if ( is_wp_error( $stored ) ) {
+			return $stored;
+		}
 
 		$public = self::public_record( $request );
 		self::emit_event(
@@ -845,10 +902,10 @@ class Mcpwp_Approvals {
 			return $request;
 		}
 
-		$request['status']     = 'applied';
-		$request['applied_at'] = gmdate( 'c' );
-		$request['updated_at'] = $request['applied_at'];
-		self::upsert( $request );
+		$request = self::transition_under_lock( $id, array( 'approved' ), 'applied', 'applied_at' );
+		if ( is_wp_error( $request ) ) {
+			return $request;
+		}
 
 		$public = self::public_record( $request );
 		self::emit_event(
@@ -889,10 +946,10 @@ class Mcpwp_Approvals {
 			return $request;
 		}
 
-		$request['status']         = 'rolled_back';
-		$request['rolled_back_at'] = gmdate( 'c' );
-		$request['updated_at']     = $request['rolled_back_at'];
-		self::upsert( $request );
+		$request = self::transition_under_lock( $id, array( 'applied' ), 'rolled_back', 'rolled_back_at' );
+		if ( is_wp_error( $request ) ) {
+			return $request;
+		}
 
 		$public = self::public_record( $request );
 		self::emit_event(
@@ -936,22 +993,10 @@ class Mcpwp_Approvals {
 	 * @return array|WP_Error Request.
 	 */
 	private static function transition_request( $id, $status, $time_field, $note ) {
-		$request = self::get_private_request( $id );
+		$request = self::transition_under_lock( $id, array( 'pending', 'approved' ), $status, $time_field, array( 'review_note' => sanitize_textarea_field( (string) $note ) ) );
 		if ( is_wp_error( $request ) ) {
 			return $request;
 		}
-
-		if ( ! in_array( $request['status'], array( 'pending', 'approved' ), true ) ) {
-			return new WP_Error( 'approval_closed', __( 'Approval request is already closed.', 'mcpwp' ), array( 'status' => 409 ) );
-		}
-
-		$now                     = gmdate( 'c' );
-		$request['status']       = $status;
-		$request[ $time_field ]  = $now;
-		$request['updated_at']   = $now;
-		$request['review_note']  = sanitize_textarea_field( (string) $note );
-
-		self::upsert( $request );
 
 		$public = self::public_record( $request );
 		self::emit_event(
@@ -1449,15 +1494,195 @@ class Mcpwp_Approvals {
 	}
 
 	/**
+	 * Move a request from one of $from to $status, atomically: the status
+	 * check and the write happen under the store lock against a fresh read,
+	 * so two reviewers (or a reviewer and the expiry sweep) cannot both
+	 * "win" the same transition.
+	 *
+	 * @param string   $id         Request id.
+	 * @param string[] $from       Statuses the request may be in.
+	 * @param string   $status     New status.
+	 * @param string   $time_field Timestamp field to set.
+	 * @param array    $extra      Extra fields to set.
+	 * @return array|WP_Error The updated private record.
+	 */
+	private static function transition_under_lock( $id, array $from, $status, $time_field, array $extra = array() ) {
+		$id      = sanitize_key( (string) $id );
+		$updated = null;
+
+		$result = self::mutate(
+			static function ( array $items ) use ( $id, $from, $status, $time_field, $extra, &$updated ) {
+				if ( ! isset( $items[ $id ] ) || ! is_array( $items[ $id ] ) ) {
+					return self::not_found_error();
+				}
+				$current = isset( $items[ $id ]['status'] ) ? (string) $items[ $id ]['status'] : '';
+				if ( ! in_array( $current, $from, true ) ) {
+					if ( 'applied' === $status ) {
+						return new WP_Error( 'approval_not_ready', __( 'Approval request must be approved before it can be applied.', 'mcpwp' ), array( 'status' => 409 ) );
+					}
+					if ( 'rolled_back' === $status ) {
+						return new WP_Error( 'approval_not_applied', __( 'Only applied approval requests can be rolled back.', 'mcpwp' ), array( 'status' => 409 ) );
+					}
+					return new WP_Error( 'approval_closed', __( 'Approval request is already closed.', 'mcpwp' ), array( 'status' => 409 ) );
+				}
+				$now                        = gmdate( 'c' );
+				$items[ $id ]['status']      = $status;
+				$items[ $id ][ $time_field ] = $now;
+				$items[ $id ]['updated_at']  = $now;
+				foreach ( $extra as $field => $value ) {
+					$items[ $id ][ $field ] = $value;
+				}
+				$updated = $items[ $id ];
+				return $items;
+			}
+		);
+
+		if ( is_wp_error( $result ) ) {
+			return $result;
+		}
+		return $updated;
+	}
+
+	/**
 	 * Upsert request.
 	 *
 	 * @param array $request Request.
-	 * @return void
+	 * @return true|WP_Error
 	 */
 	private static function upsert( $request ) {
-		$items = self::get_all();
-		$items[ $request['id'] ] = $request;
+		return self::mutate(
+			static function ( array $items ) use ( $request ) {
+				$items[ $request['id'] ] = $request;
+				return $items;
+			}
+		);
+	}
 
+	/**
+	 * The one way to change the approvals store (#981 review round 2,
+	 * WARN-B). Every writer — create, every status transition, the
+	 * apply-result metadata, the staging push, eviction and expiry — used
+	 * to read the whole option, change it and write it back with nothing
+	 * in between, so two concurrent writers each wrote their own copy and
+	 * the later silently erased the earlier (10 parallel proposals, 10
+	 * distinct ids reported, 1 stored).
+	 *
+	 * Now: take a MySQL named lock, re-read the option from the database
+	 * (not a cache primed before the lock), apply $change, apply expiry and
+	 * eviction, write, release. $change gets the fresh items and returns
+	 * the new items, or a WP_Error to write nothing. If the lock cannot be
+	 * had within LOCK_TIMEOUT seconds the answer is a 503 — never a success
+	 * that was not stored. Re-entrant within one process.
+	 *
+	 * @param callable $change function( array $items ): array|WP_Error.
+	 * @return true|WP_Error
+	 */
+	public static function mutate( callable $change ) {
+		$locked = self::acquire_lock();
+		if ( is_wp_error( $locked ) ) {
+			return $locked;
+		}
+
+		try {
+			// Expiry first, so $change never acts on a request that has
+			// already expired (e.g. approving a 31-day-old proposal).
+			$items = self::expire_stale( self::read_fresh() );
+			$items = $change( $items );
+			if ( is_wp_error( $items ) ) {
+				return $items;
+			}
+			if ( ! is_array( $items ) ) {
+				return new WP_Error( 'approvals_write_failed', __( 'The approval queue could not be updated.', 'mcpwp' ), array( 'status' => 500 ) );
+			}
+
+			$items = self::expire_stale( $items );
+			$items = self::evict( $items );
+
+			update_option( self::OPTION_NAME, $items, false );
+			return true;
+		} finally {
+			self::release_lock();
+		}
+	}
+
+	/**
+	 * Take the store lock (MySQL GET_LOCK, re-entrant in-process).
+	 *
+	 * @return true|WP_Error
+	 */
+	private static function acquire_lock() {
+		if ( self::$lock_depth > 0 ) {
+			self::$lock_depth++;
+			return true;
+		}
+
+		global $wpdb;
+		$got = ( isset( $wpdb ) && is_object( $wpdb ) && method_exists( $wpdb, 'get_var' ) )
+			? $wpdb->get_var( $wpdb->prepare( 'SELECT GET_LOCK(%s, %d)', self::lock_name(), self::LOCK_TIMEOUT ) )
+			: null;
+
+		if ( '1' !== (string) $got ) {
+			return new WP_Error(
+				'approvals_busy',
+				__( 'The approval queue is busy. Nothing was changed; try again in a moment.', 'mcpwp' ),
+				array( 'status' => 503, 'retry_after' => 2 )
+			);
+		}
+
+		self::$lock_depth = 1;
+		return true;
+	}
+
+	/**
+	 * Release one level of the store lock.
+	 *
+	 * @return void
+	 */
+	private static function release_lock() {
+		if ( self::$lock_depth < 1 ) {
+			return;
+		}
+		self::$lock_depth--;
+		if ( 0 === self::$lock_depth ) {
+			global $wpdb;
+			$wpdb->get_var( $wpdb->prepare( 'SELECT RELEASE_LOCK(%s)', self::lock_name() ) );
+		}
+	}
+
+	/**
+	 * Per-site lock name (the database may be shared by several sites).
+	 *
+	 * @return string
+	 */
+	private static function lock_name() {
+		global $wpdb;
+		$prefix = ( isset( $wpdb ) && is_object( $wpdb ) && isset( $wpdb->prefix ) ) ? (string) $wpdb->prefix : '';
+		return substr( 'mcpwp_approvals_' . $prefix, 0, 64 );
+	}
+
+	/**
+	 * Read the option from the database, bypassing any value cached before
+	 * the lock was taken.
+	 *
+	 * @return array
+	 */
+	private static function read_fresh() {
+		if ( function_exists( 'wp_cache_delete' ) ) {
+			wp_cache_delete( self::OPTION_NAME, 'options' );
+			wp_cache_delete( 'notoptions', 'options' );
+		}
+		$items = get_option( self::OPTION_NAME, array() );
+		return is_array( $items ) ? $items : array();
+	}
+
+	/**
+	 * Only closed records are evicted; a pending or approved request is
+	 * someone's unfinished review and stays until it is decided.
+	 *
+	 * @param array $items Items.
+	 * @return array
+	 */
+	private static function evict( array $items ) {
 		uasort(
 			$items,
 			function ( $a, $b ) {
@@ -1465,25 +1690,108 @@ class Mcpwp_Approvals {
 			}
 		);
 
-		// Only closed records are evicted; a pending or approved request is
-		// someone's unfinished review and stays until it is decided.
 		if ( count( $items ) > self::MAX_ITEMS ) {
 			$open   = array_filter( $items, function ( $item ) { return isset( $item['status'] ) && in_array( $item['status'], array( 'pending', 'approved' ), true ); } );
 			$closed = array_filter( $items, function ( $item ) { return ! isset( $item['status'] ) || ! in_array( $item['status'], array( 'pending', 'approved' ), true ); } );
 			$closed = array_slice( $closed, 0, max( 0, self::MAX_ITEMS - count( $open ) ), true );
 			$items  = $open + $closed;
 		}
-		update_option( self::OPTION_NAME, $items, false );
+
+		return $items;
 	}
 
 	/**
-	 * Get all requests.
+	 * Expire pending post_content_update requests older than the TTL
+	 * (#981 review round 2, WARN-C). Evaluated lazily: applied to every
+	 * read (so a reader never sees a stale proposal as pending) and
+	 * persisted on the next write.
+	 *
+	 * @param array $items Items.
+	 * @return array
+	 */
+	private static function expire_stale( array $items ) {
+		/**
+		 * Seconds a pending content-change approval stays open.
+		 *
+		 * @param int $ttl Default 30 days.
+		 */
+		$ttl = (int) apply_filters( 'mcpwp_approval_pending_ttl', self::PENDING_CONTENT_TTL );
+		if ( $ttl < 1 ) {
+			return $items;
+		}
+
+		$cutoff = time() - $ttl;
+		foreach ( $items as $id => $item ) {
+			if ( ! is_array( $item ) || ! isset( $item['status'], $item['action'], $item['created_at'] ) ) {
+				continue;
+			}
+			if ( 'pending' !== $item['status'] || 'post_content_update' !== $item['action'] ) {
+				continue;
+			}
+			$created = strtotime( (string) $item['created_at'] );
+			if ( false !== $created && $created < $cutoff ) {
+				$items[ $id ]['status']     = 'expired';
+				$items[ $id ]['expired_at'] = gmdate( 'c', $created + $ttl );
+				$items[ $id ]['updated_at'] = $items[ $id ]['expired_at'];
+			}
+		}
+		return $items;
+	}
+
+	/**
+	 * Content-approval limits, filterable (#981 review round 2, WARN-C).
+	 *
+	 * @return array{per_requester:int,total:int,max_bytes:int,max_bytes_webmcp:int}
+	 */
+	public static function content_limits() {
+		$defaults = array(
+			'per_requester'    => self::MAX_PENDING_CONTENT_PER_REQUESTER,
+			'total'            => self::MAX_PENDING_CONTENT_TOTAL,
+			'max_bytes'        => self::MAX_PROPOSED_CONTENT_BYTES_API,
+			'max_bytes_webmcp' => self::MAX_PROPOSED_CONTENT_BYTES,
+		);
+		/**
+		 * Limits on pending post_content_update approvals.
+		 *
+		 * @param array $limits per_requester, total, max_bytes, max_bytes_webmcp.
+		 */
+		$limits = apply_filters( 'mcpwp_approval_content_limits', $defaults );
+		$limits = is_array( $limits ) ? $limits : array();
+		foreach ( $defaults as $key => $value ) {
+			$limits[ $key ] = isset( $limits[ $key ] ) && (int) $limits[ $key ] > 0 ? (int) $limits[ $key ] : $value;
+		}
+		return $limits;
+	}
+
+	/**
+	 * Whether a requester is exempt from the pending caps: a wp-admin user
+	 * (wp-user:<id>, or the trusted admin-AJAX context), or an API key the
+	 * caller identified as unrestricted (admin role / all categories) — each
+	 * of those could make the change directly anyway (#981 review round 2,
+	 * WARN-C). Category-restricted keys and WebMCP users are capped.
+	 *
+	 * @param string $requester requested_by_key_id.
+	 * @param array  $args      Creation args or stored metadata ('requester_unrestricted' / 'cap_exempt').
+	 * @return bool
+	 */
+	private static function requester_is_exempt_from_caps( $requester, array $args ) {
+		if ( 0 === strpos( (string) $requester, 'webmcp:' ) ) {
+			return false;
+		}
+		if ( 0 === strpos( (string) $requester, 'wp-user:' ) ) {
+			return true;
+		}
+		return ! empty( $args['requester_unrestricted'] ) || ! empty( $args['cap_exempt'] );
+	}
+
+	/**
+	 * Get all requests (with lazy expiry applied).
 	 *
 	 * @return array Requests.
 	 */
 	private static function get_all() {
 		$items = get_option( self::OPTION_NAME, array() );
-		return is_array( $items ) ? $items : array();
+		return self::expire_stale( is_array( $items ) ? $items : array() );
 	}
 
 	/**

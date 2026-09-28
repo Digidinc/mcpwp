@@ -440,6 +440,20 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 			);
 		}
 
+		// A WebMCP user (#981) lists published content only (non-public
+		// reads are per-post read_post), so the inventory counts only what
+		// every such list can show: drafts are not counted, and the total
+		// is the published count (#981 review round 2, NIT).
+		if ( $this->requester_is_webmcp() ) {
+			foreach ( array( 'posts', 'pages', 'products' ) as $type_key ) {
+				if ( isset( $inventory[ $type_key ] ) && is_array( $inventory[ $type_key ] ) ) {
+					$inventory[ $type_key ]['drafts'] = null;
+					$inventory[ $type_key ]['total']  = $inventory[ $type_key ]['published'];
+				}
+			}
+			$inventory['counts_scope'] = 'published';
+		}
+
 		// Recent updates and the design reference inventory are only needed for
 		// the full legacy briefing (#905) — skip both the query and the bytes
 		// on the slim default path.

@@ -493,9 +493,20 @@ class Mcpwp_WebMCP {
 			}
 		}
 
-		// Registered meta.
-		if ( isset( $params['meta'] ) && is_array( $params['meta'] ) ) {
-			foreach ( array_keys( $params['meta'] ) as $key ) {
+		// Registered meta — gated on exactly the keys the handler will
+		// write: Mcpwp_Post_Fields::validate_meta()'s OUTPUT, not the raw
+		// argument. validate_meta() trims keys, so gating the raw key let
+		// "featured_flag " / " featured_flag" past the auth_callback and then
+		// wrote featured_flag (#981 review round 2, WARN-A).
+		if ( array_key_exists( 'meta', $params ) && null !== $params['meta'] ) {
+			if ( ! class_exists( 'Mcpwp_Post_Fields' ) ) {
+				return self::refusal( 'webmcp_meta_forbidden', __( 'Custom fields cannot be set through WebMCP on this site.', 'mcpwp' ) );
+			}
+			$clean_meta = Mcpwp_Post_Fields::validate_meta( $params['meta'], false, '' !== $write_type ? $write_type : 'post' );
+			if ( is_wp_error( $clean_meta ) ) {
+				return $clean_meta;
+			}
+			foreach ( array_keys( $clean_meta ) as $key ) {
 				if ( ! self::meta_key_allowed( (string) $key, '' !== $write_type ? $write_type : 'post' ) ) {
 					return self::refusal(
 						'webmcp_meta_forbidden',

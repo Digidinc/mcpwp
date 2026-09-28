@@ -354,13 +354,17 @@ class Mcpwp_REST_Staging extends Mcpwp_REST_API {
 			'rolled_back_at'          => null,
 		);
 
-		// Persist into the shared approvals store.
-		$items = get_option( Mcpwp_Approvals::OPTION_NAME, array() );
-		if ( ! is_array( $items ) ) {
-			$items = array();
+		// Persist into the shared approvals store — under its lock (#981
+		// review round 2, WARN-B), never as a bare read-modify-write.
+		$stored = Mcpwp_Approvals::mutate(
+			static function ( array $items ) use ( $id, $record ) {
+				$items[ $id ] = $record;
+				return $items;
+			}
+		);
+		if ( is_wp_error( $stored ) ) {
+			return $stored;
 		}
-		$items[ $id ] = $record;
-		update_option( Mcpwp_Approvals::OPTION_NAME, $items, false );
 
 		// Emit an event so the Control Room panel shows it.
 		if ( class_exists( 'Mcpwp_Event_Store' ) ) {

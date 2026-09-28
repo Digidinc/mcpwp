@@ -2052,25 +2052,29 @@ class Mcpwp_Content_Guardrails {
 		if ( '' === $request_id || ! class_exists( 'Mcpwp_Approvals' ) ) {
 			return;
 		}
-		$items = get_option( Mcpwp_Approvals::OPTION_NAME, array() );
-		if ( ! isset( $items[ $request_id ] ) || ! is_array( $items[ $request_id ] ) ) {
-			return;
-		}
+		// Under the approvals store lock (#981 review round 2, WARN-B).
+		Mcpwp_Approvals::mutate(
+			static function ( array $items ) use ( $request_id, $published, $skipped, $reverted ) {
+				if ( ! isset( $items[ $request_id ] ) || ! is_array( $items[ $request_id ] ) ) {
+					return new WP_Error( 'not_found', 'Approval not found.' );
+				}
 
-		if ( ! empty( $published ) ) {
-			$items[ $request_id ]['metadata']['applied_ids'] = $published;
-		}
-		if ( ! empty( $published ) || ! empty( $skipped ) ) {
-			$items[ $request_id ]['metadata']['apply_summary'] = array(
-				'published' => $published,
-				'skipped'   => $skipped,
-			);
-		}
-		if ( ! empty( $reverted ) ) {
-			$items[ $request_id ]['metadata']['reverted_ids'] = $reverted;
-		}
+				if ( ! empty( $published ) ) {
+					$items[ $request_id ]['metadata']['applied_ids'] = $published;
+				}
+				if ( ! empty( $published ) || ! empty( $skipped ) ) {
+					$items[ $request_id ]['metadata']['apply_summary'] = array(
+						'published' => $published,
+						'skipped'   => $skipped,
+					);
+				}
+				if ( ! empty( $reverted ) ) {
+					$items[ $request_id ]['metadata']['reverted_ids'] = $reverted;
+				}
 
-		update_option( Mcpwp_Approvals::OPTION_NAME, $items, false );
+				return $items;
+			}
+		);
 	}
 
 	// -------------------------------------------------------------------------

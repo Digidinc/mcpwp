@@ -299,7 +299,7 @@ final class WebMcpReviewRound1Test extends TestCase {
 		$this->assertSame( 'webmcp_meta_forbidden', $flag->get_error_code() );
 
 		$protected = $this->sub_request_verdict( new WP_REST_Request( 'POST', '/mcpwp/v1/posts', array( 'title' => 'x', 'status' => 'draft', 'meta' => array( '_hidden' => '1' ) ) ) );
-		$this->assertSame( 'webmcp_meta_forbidden', $protected->get_error_code() );
+		$this->assertInstanceOf( WP_Error::class, $protected, 'A protected key is refused (by validate_meta() itself since round 2).' );
 
 		$this->assertTrue( $this->sub_request_verdict( new WP_REST_Request( 'POST', '/mcpwp/v1/posts', array( 'title' => 'x', 'status' => 'draft', 'meta' => array( 'mood' => 'ok' ) ) ) ) );
 
@@ -310,8 +310,10 @@ final class WebMcpReviewRound1Test extends TestCase {
 	// ── WARN-2 ─────────────────────────────────────────────────────────────
 
 	public function test_content_approvals_are_bounded_for_every_requester(): void {
-		$too_big = Mcpwp_Approvals::create_post_content_request( self::PUBLIC_POST, str_repeat( 'a', Mcpwp_Approvals::MAX_PROPOSED_CONTENT_BYTES + 1 ), array( 'requested_by_key_id' => 'k1' ) );
+		$too_big = Mcpwp_Approvals::create_post_content_request( self::PUBLIC_POST, str_repeat( 'a', Mcpwp_Approvals::MAX_PROPOSED_CONTENT_BYTES_API + 1 ), array( 'requested_by_key_id' => 'k1' ) );
 		$this->assertSame( 'content_too_large', $too_big->get_error_code() );
+		$webmcp_big = Mcpwp_Approvals::create_post_content_request( self::PUBLIC_POST, str_repeat( 'a', Mcpwp_Approvals::MAX_PROPOSED_CONTENT_BYTES + 1 ), array( 'requested_by_key_id' => 'webmcp:user:5' ) );
+		$this->assertSame( 'content_too_large', $webmcp_big->get_error_code() );
 		$this->assertSame( 413, $too_big->get_error_data()['status'] );
 
 		for ( $i = 0; $i < Mcpwp_Approvals::MAX_PENDING_CONTENT_PER_REQUESTER; $i++ ) {
