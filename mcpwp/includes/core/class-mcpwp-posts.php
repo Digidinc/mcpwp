@@ -521,6 +521,29 @@ class Mcpwp_Posts {
 	}
 
 	/**
+	 * update_post()'s "no such post" answer. Shared with
+	 * Mcpwp_REST_Posts::bulk_update_posts(), which gives an item the caller
+	 * may not see (#1030 round-5) exactly this answer without calling
+	 * update_post() at all.
+	 *
+	 * @param int $post_id Post id.
+	 * @return WP_Error
+	 */
+	public static function update_target_not_found_error( $post_id ) {
+		return new WP_Error(
+			'not_found',
+			__( 'Post not found.', 'mcpwp' ),
+			array(
+				'status' => 404,
+				'hint'   => sprintf(
+					'Post ID %d not found. Use wp_list_posts to see available posts. If this is a page, use wp_update_page instead.',
+					absint( $post_id )
+				),
+			)
+		);
+	}
+
+	/**
 	 * Update a post.
 	 *
 	 * @param int   $post_id Post ID.
@@ -536,17 +559,7 @@ class Mcpwp_Posts {
 		$post = get_post( absint( $post_id ) );
 
 		if ( ! $post || 'page' === $post->post_type || is_wp_error( $this->validate_post_type( $post->post_type ) ) ) {
-			return new WP_Error(
-				'not_found',
-				__( 'Post not found.', 'mcpwp' ),
-				array(
-					'status' => 404,
-					'hint'   => sprintf(
-						'Post ID %d not found. Use wp_list_posts to see available posts. If this is a page, use wp_update_page instead.',
-						absint( $post_id )
-					),
-				)
-			);
+			return self::update_target_not_found_error( $post_id );
 		}
 
 		// #974/#976 review round 2, W1: this route used to accept

@@ -82,7 +82,7 @@ final class RestPagesPostsDraftLeakTest extends TestCase {
 		$controller = new Mcpwp_REST_Pages();
 		$created    = $controller->create_scoped_api_key( 'test key', $scopes, 'custom' );
 		$request    = new WP_REST_Request( 'GET', '/mcpwp/v1/pages/' . $id, array( 'id' => $id ), array( 'X-API-Key' => $created['key'] ) );
-		$this->assertTrue( $controller->verify_api_key( $request ), 'verify_api_key should succeed' );
+		$this->verdict = $controller->verify_api_key( $request );
 		return array( $controller, $request );
 	}
 
@@ -90,7 +90,7 @@ final class RestPagesPostsDraftLeakTest extends TestCase {
 		$controller = new Mcpwp_REST_Pages();
 		$created    = $controller->create_scoped_api_key( 'test key', $scopes, 'custom' );
 		$request    = new WP_REST_Request( 'GET', '/mcpwp/v1/pages/by-slug/' . $slug, array( 'slug' => $slug ), array( 'X-API-Key' => $created['key'] ) );
-		$this->assertTrue( $controller->verify_api_key( $request ), 'verify_api_key should succeed' );
+		$this->verdict = $controller->verify_api_key( $request );
 		return array( $controller, $request );
 	}
 
@@ -98,8 +98,20 @@ final class RestPagesPostsDraftLeakTest extends TestCase {
 		$controller = new Mcpwp_REST_Posts();
 		$created    = $controller->create_scoped_api_key( 'test key', $scopes, 'custom' );
 		$request    = new WP_REST_Request( 'GET', '/mcpwp/v1/posts/' . $id, array( 'id' => $id ), array( 'X-API-Key' => $created['key'] ) );
-		$this->assertTrue( $controller->verify_api_key( $request ), 'verify_api_key should succeed' );
+		$this->verdict = $controller->verify_api_key( $request );
 		return array( $controller, $request );
+	}
+
+	/** @var true|WP_Error Permission verdict of the last authenticated request. */
+	private $verdict = true;
+
+	/**
+	 * What a real request gets: the permission verdict when it refuses
+	 * (#1030 round-5 — the declared-post-ref guard answers a hidden or
+	 * missing id itself, before any handler), otherwise the handler's answer.
+	 */
+	private function dispatch( $controller, string $method, $request ) {
+		return true === $this->verdict ? $controller->$method( $request ) : $this->verdict;
 	}
 
 	private function assert404( $resp ): void {
@@ -156,12 +168,12 @@ final class RestPagesPostsDraftLeakTest extends TestCase {
 
 	public function test_page_draft_read_key_blocked_as_404(): void {
 		[ $c, $r ] = $this->authed_pages( self::DRAFT_PAGE_ID, array( 'read' ) );
-		$this->assert404( $c->get_page( $r ) );
+		$this->assert404( $this->dispatch( $c, 'get_page', $r ) );
 	}
 
 	public function test_page_draft_write_key_returns_body(): void {
 		[ $c, $r ] = $this->authed_pages( self::DRAFT_PAGE_ID, array( 'write' ) );
-		$resp = $c->get_page( $r );
+		$resp = $this->dispatch( $c, 'get_page', $r );
 		$this->assertInstanceOf( WP_REST_Response::class, $resp );
 		$this->assertSame( 200, $resp->get_status() );
 		$this->assertSame( 'draft', $resp->get_data()['status'] );
@@ -169,7 +181,7 @@ final class RestPagesPostsDraftLeakTest extends TestCase {
 
 	public function test_page_published_read_key_returns_body(): void {
 		[ $c, $r ] = $this->authed_pages( self::PUB_PAGE_ID, array( 'read' ) );
-		$resp = $c->get_page( $r );
+		$resp = $this->dispatch( $c, 'get_page', $r );
 		$this->assertInstanceOf( WP_REST_Response::class, $resp );
 		$this->assertSame( 200, $resp->get_status() );
 		$this->assertSame( 'publish', $resp->get_data()['status'] );
@@ -177,16 +189,16 @@ final class RestPagesPostsDraftLeakTest extends TestCase {
 
 	/**
 	 * #1026: a read-only key's 404 for the draft page must be byte-identical
-	 * (id-normalised) to the same door's 404 for a page id that does not
-	 * exist at all — Mcpwp_Pages::get_page()'s own missing-page branch
-	 * carries no 'hint' key, so the guard must not add one either.
+	 * (id-normalised) to the 404 for a page id that does not exist at all.
+	 * Since #1030 round-5 both are the declared-post-ref guard's canonical
+	 * error, dispatched the way a real request is.
 	 */
 	public function test_page_draft_blocked_404_matches_missing_page_404(): void {
 		[ $missing_c, $missing_r ] = $this->authed_pages( self::MISSING_PAGE_ID, array( 'read' ) );
-		$missing_resp              = $missing_c->get_page( $missing_r );
+		$missing_resp              = $this->dispatch( $missing_c, 'get_page', $missing_r );
 
 		[ $draft_c, $draft_r ] = $this->authed_pages( self::DRAFT_PAGE_ID, array( 'read' ) );
-		$draft_resp            = $draft_c->get_page( $draft_r );
+		$draft_resp            = $this->dispatch( $draft_c, 'get_page', $draft_r );
 
 		$this->assertSameNotFoundShape( $missing_resp, $draft_resp );
 	}
@@ -198,7 +210,7 @@ final class RestPagesPostsDraftLeakTest extends TestCase {
 
 	public function test_page_by_slug_published_read_key_returns_body(): void {
 		[ $c, $r ] = $this->authed_pages_slug( 'public-page', array( 'read' ) );
-		$resp = $c->get_page_by_slug( $r );
+		$resp = $this->dispatch( $c, 'get_page_by_slug', $r );
 		$this->assertInstanceOf( WP_REST_Response::class, $resp );
 		$this->assertSame( 200, $resp->get_status() );
 		$this->assertSame( 'publish', $resp->get_data()['status'] );
@@ -208,12 +220,12 @@ final class RestPagesPostsDraftLeakTest extends TestCase {
 
 	public function test_post_draft_read_key_blocked_as_404(): void {
 		[ $c, $r ] = $this->authed_posts( self::DRAFT_POST_ID, array( 'read' ) );
-		$this->assert404( $c->get_post( $r ) );
+		$this->assert404( $this->dispatch( $c, 'get_post', $r ) );
 	}
 
 	public function test_post_draft_write_key_returns_body(): void {
 		[ $c, $r ] = $this->authed_posts( self::DRAFT_POST_ID, array( 'write' ) );
-		$resp = $c->get_post( $r );
+		$resp = $this->dispatch( $c, 'get_post', $r );
 		$this->assertInstanceOf( WP_REST_Response::class, $resp );
 		$this->assertSame( 200, $resp->get_status() );
 		$this->assertSame( 'draft', $resp->get_data()['status'] );
@@ -221,7 +233,7 @@ final class RestPagesPostsDraftLeakTest extends TestCase {
 
 	public function test_post_published_read_key_returns_body(): void {
 		[ $c, $r ] = $this->authed_posts( self::PUB_POST_ID, array( 'read' ) );
-		$resp = $c->get_post( $r );
+		$resp = $this->dispatch( $c, 'get_post', $r );
 		$this->assertInstanceOf( WP_REST_Response::class, $resp );
 		$this->assertSame( 200, $resp->get_status() );
 		$this->assertSame( 'publish', $resp->get_data()['status'] );
@@ -237,10 +249,10 @@ final class RestPagesPostsDraftLeakTest extends TestCase {
 	 */
 	public function test_post_draft_blocked_404_matches_missing_post_404(): void {
 		[ $missing_c, $missing_r ] = $this->authed_posts( self::MISSING_POST_ID, array( 'read' ) );
-		$missing_resp              = $missing_c->get_post( $missing_r );
+		$missing_resp              = $this->dispatch( $missing_c, 'get_post', $missing_r );
 
 		[ $draft_c, $draft_r ] = $this->authed_posts( self::DRAFT_POST_ID, array( 'read' ) );
-		$draft_resp            = $draft_c->get_post( $draft_r );
+		$draft_resp            = $this->dispatch( $draft_c, 'get_post', $draft_r );
 
 		$this->assertSameNotFoundShape( $missing_resp, $draft_resp );
 	}

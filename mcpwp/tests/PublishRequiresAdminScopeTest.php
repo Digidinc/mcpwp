@@ -38,6 +38,12 @@ final class PublishRequiresAdminScopeTest extends TestCase {
 		$GLOBALS['mcpwp_test_current_user']       = 0;
 		$GLOBALS['mcpwp_test_is_admin']           = false;
 		$GLOBALS['_mcpwp_test_registered_routes'] = array();
+		// The ids these requests name must exist: since #1030 round-5 the
+		// declared-post-ref guard answers a missing id itself, before scope.
+		$GLOBALS['_mcpwp_test_posts'] = array(
+			5 => new WP_Post( array( 'ID' => 5, 'post_type' => 'post', 'post_status' => 'publish' ) ),
+			9 => new WP_Post( array( 'ID' => 9, 'post_type' => 'page', 'post_status' => 'publish' ) ),
+		);
 		Mcpwp_Api_Auth_Verdict_Reset::reset();
 	}
 

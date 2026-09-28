@@ -1546,6 +1546,30 @@ if (! isset($GLOBALS['wpdb'])) {
                     return $answer;
                 }
             }
+            // #1030 round-5: Mcpwp_Api_Auth::fetch_post_ref_rows() — the
+            // declared post-reference guard's one direct lookup. Answered
+            // from the same in-memory post table get_post() reads, with no
+            // type or status filtering (that is the point of the query).
+            if (preg_match(
+                '/^SELECT ID, post_type, post_status FROM \\S*posts WHERE ID IN \\(([0-9,\\s]+)\\)$/',
+                trim((string) $query),
+                $m
+            )) {
+                $GLOBALS['mcpwp_test_post_ref_queries'][] = trim((string) $query);
+                $rows = array();
+                foreach (array_map('intval', explode(',', $m[1])) as $ref_id) {
+                    $ref_post = $GLOBALS['_mcpwp_test_posts'][ $ref_id ] ?? null;
+                    if (! is_object($ref_post)) {
+                        continue;
+                    }
+                    $rows[] = array(
+                        'ID'          => (string) $ref_id,
+                        'post_type'   => (string) ($ref_post->post_type ?? 'post'),
+                        'post_status' => (string) ($ref_post->post_status ?? 'publish'),
+                    );
+                }
+                return $rows;
+            }
             // Site graph batched link resolver (#943 S1 review, BLOCK-4
             // perf / BLOCK-2 correctness): resolve_hrefs_for_post()'s ONE
             // query for every ?p=/?page_id= id and every same-host path's

@@ -402,15 +402,10 @@ final class Regression1024ElementorGraphBlocksCategoryGateTest extends TestCase 
 	/**
 	 * find_replace_many()'s OWN per-item selective skip (page rewritten,
 	 * gated archetype quietly not_touched) — tested directly against the
-	 * handler via force_key_record(), bypassing full auth. #1030 round-2's
-	 * post-naming-param chokepoint now inspects `ids[]` too (see the next
-	 * test below): a REAL request naming this exact mixed batch is refused
-	 * WHOLESALE at auth time before ever reaching this per-item logic, since
-	 * the array contains a gated id. This test still exercises the
-	 * handler's own logic as defense in depth (a future auth path that
-	 * skips the chokepoint must still not touch a gated id) — it is not
-	 * what a real client observes any more; test_bulk_find_replace_mixed_ids_refused_wholesale_by_the_chokepoint()
-	 * below covers the real, end-to-end behavior.
+	 * handler via force_key_record(), bypassing full auth: the per-item
+	 * resolver the handler calls works without the guard in front of it
+	 * (#1030 round-5). test_bulk_find_replace_gated_id_reads_like_a_missing_id()
+	 * below covers the full permission-then-handler path.
 	 */
 	public function test_bulk_find_replace_by_ids_silently_skips_a_gated_archetype(): void {
 		$controller = new Mcpwp_REST_Elementor();
@@ -439,30 +434,46 @@ final class Regression1024ElementorGraphBlocksCategoryGateTest extends TestCase 
 
 	/**
 	 * The real, end-to-end behavior for a mixed batch naming a WooCommerce
-	 * product: #1030 round-2's chokepoint sees the gated id anywhere in
-	 * `ids[]` and refuses the WHOLE request at auth time — the page is
-	 * never touched either, since the handler is never reached at all.
-	 *
-	 * A gated ELEMENTOR_LIBRARY id in ids[] is deliberately NOT this
-	 * chokepoint's job (see check_post_naming_params_category()'s own
-	 * exemption docblock — /theme-builder's own 'elementor-theme' category
-	 * would otherwise be broken by this chokepoint's cruder
-	 * category_for_post_type() mapping); that case stays covered by
-	 * find_replace_many()'s own per-item logic, proven above.
+	 * product (#1030 round-5 design): the guard does not refuse a bulk
+	 * request for one hidden id. find_replace_many() resolves each named id
+	 * through the one per-item resolver: the page is rewritten, and the
+	 * gated product's not_touched entry is exactly a missing id's entry.
 	 */
-	public function test_bulk_find_replace_mixed_ids_refused_wholesale_by_the_chokepoint(): void {
-		$controller = new Mcpwp_REST_Elementor();
-		$created    = $controller->create_scoped_api_key( 'scoped', array( 'read', 'write' ), 'custom', array( 'elementor' ) );
-		$request    = new WP_REST_Request(
-			'POST',
-			'/mcpwp/v1/elementor/find-replace',
-			array( 'ids' => array( self::PAGE_ID, self::PRODUCT_ID ), 'search' => 'Old Brand', 'replace' => 'New Brand' ),
-			array( 'X-API-Key' => $created['key'] )
-		);
+	public function test_bulk_find_replace_gated_id_reads_like_a_missing_id(): void {
+		$missing_id = 9999991;
+		$run        = function ( int $second_id ) {
+			$controller = new Mcpwp_REST_Elementor();
+			$created    = $controller->create_scoped_api_key( 'scoped', array( 'read', 'write' ), 'custom', array( 'elementor' ) );
+			return $this->result_after_auth(
+				$controller,
+				$created['key'],
+				'POST',
+				'/mcpwp/v1/elementor/find-replace',
+				array( 'ids' => array( self::PAGE_ID, $second_id ), 'search' => 'Old Brand', 'replace' => 'New Brand', 'dry_run' => true ),
+				function ( $request ) use ( $controller ) {
+					return $controller->find_replace_many( $request );
+				}
+			);
+		};
 
-		$auth = $controller->check_permission( $request );
-		$this->assert_not_found( $auth, 'A gated id anywhere in ids[] must refuse the whole batch before the handler runs.' );
-		$this->assertStringContainsString( 'Old Brand', $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'], 'The page must not have been touched either — the handler never ran.' );
+		$gated   = $run( self::PRODUCT_ID );
+		$missing = $run( $missing_id );
+		$this->assertInstanceOf( WP_REST_Response::class, $gated, 'A gated id must not refuse the whole batch.' );
+		$this->assertInstanceOf( WP_REST_Response::class, $missing );
+
+		$gated_data   = $gated->get_data();
+		$missing_data = $missing->get_data();
+		$this->assertContains( self::PAGE_ID, array_column( $gated_data['matched'], 'id' ), 'The page is still processed.' );
+
+		$normalize = function ( array $data, int $id ) {
+			$json = wp_json_encode( $data );
+			return str_replace( (string) $id, '#ID#', $json );
+		};
+		$this->assertSame(
+			$normalize( $missing_data, $missing_id ),
+			$normalize( $gated_data, self::PRODUCT_ID ),
+			'The whole response for a gated id must equal the response for a missing id, id aside.'
+		);
 	}
 
 	// =========================================================================

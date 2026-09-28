@@ -133,6 +133,16 @@ class Mcpwp_SEO {
 	}
 
 	/**
+	 * update_post_seo()'s "no such post" answer — also what bulk_update()
+	 * gives an item its caller may not see (#1030 round-5).
+	 *
+	 * @return WP_Error
+	 */
+	public static function update_target_not_found_error() {
+		return new WP_Error( 'not_found', __( 'Post not found.', 'mcpwp' ) );
+	}
+
+	/**
 	 * Update SEO data for a post.
 	 *
 	 * @param int    $post_id Post ID.
@@ -144,7 +154,7 @@ class Mcpwp_SEO {
 		$post = get_post( $post_id );
 
 		if ( ! $post ) {
-			return new WP_Error( 'not_found', __( 'Post not found.', 'mcpwp' ) );
+			return self::update_target_not_found_error();
 		}
 
 		$plugin = $plugin ?: $this->get_active_plugin();
@@ -600,10 +610,15 @@ class Mcpwp_SEO {
 	/**
 	 * Bulk update SEO for multiple posts.
 	 *
-	 * @param array $updates Array of [ 'post_id' => ID, 'data' => SEO data ].
+	 * @param array         $updates         Array of [ 'post_id' => ID, 'data' => SEO data ].
+	 * @param callable|null $item_is_visible Optional per-item resolver (the
+	 *                                       REST layer's post_ref_item_visible()):
+	 *                                       an item it rejects gets exactly the
+	 *                                       answer a missing post gets, and is
+	 *                                       never written (#1030 round-5).
 	 * @return array Results for each post.
 	 */
-	public function bulk_update( $updates ) {
+	public function bulk_update( $updates, $item_is_visible = null ) {
 		$results = array();
 
 		// SEO fields that can appear at the top level of each update item.
@@ -640,7 +655,9 @@ class Mcpwp_SEO {
 
 			$post_id = absint( $update['post_id'] ?? 0 );
 
-			$result = $this->update_post_seo( $post_id, $data );
+			$result = ( is_callable( $item_is_visible ) && ! call_user_func( $item_is_visible, $post_id ) )
+				? self::update_target_not_found_error()
+				: $this->update_post_seo( $post_id, $data );
 
 			if ( is_wp_error( $result ) ) {
 				$results[] = array(

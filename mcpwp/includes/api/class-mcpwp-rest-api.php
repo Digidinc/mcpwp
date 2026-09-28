@@ -389,6 +389,15 @@ abstract class Mcpwp_REST_API {
 	 * @return WP_Error Error object with hints.
 	 */
 	protected function error_response( $code, $message, $status = 400, $context = array() ) {
+		// The canonical post-ref not-found error (Mcpwp_Api_Auth::
+		// post_ref_not_found_error()) leaves every handler exactly as the
+		// permission layer sends it: Mcpwp_Error_Hints must not swap in its
+		// id-echoing 'not_found' hint, or the same refusal reads differently
+		// depending on which layer produced it (#1030 round-4, BLOCK-1).
+		if ( self::is_post_ref_not_found( $code, $message ) ) {
+			return $this->post_ref_not_found_error();
+		}
+
 		$error = new WP_Error( $code, $message, array( 'status' => $status ) );
 
 		if ( class_exists( 'Mcpwp_Error_Hints' ) ) {

@@ -280,13 +280,10 @@ final class PostWriteCategoryGateTest extends TestCase {
 	 * bulk_update_posts()'s OWN per-item refusal (BLOCK-1: the product item
 	 * is refused, the ordinary post item still updates) — tested directly
 	 * against the handler, with the category callback wired manually via
-	 * reflection instead of check_permission(). #1024/#1030 round-2 review's
-	 * post-naming-param chokepoint now inspects `updates[].id` too: a REAL
-	 * request naming this exact mixed batch is refused WHOLESALE at auth
-	 * time before ever reaching this per-item logic, since the array
-	 * contains a gated id (test_bulk_update_posts_mixed_ids_refused_wholesale_by_the_chokepoint()
-	 * below covers that real, end-to-end behavior). This test still
-	 * exercises the handler's own logic as defense in depth.
+	 * reflection instead of check_permission(). The per-item resolver the
+	 * handler calls works without the guard in front of it (#1030
+	 * round-5); test_bulk_update_posts_gated_item_answers_like_a_missing_item()
+	 * below covers the full permission-then-handler path.
 	 */
 	public function test_bulk_update_posts_refuses_the_product_item_and_updates_the_rest(): void {
 		$c       = $this->controller();
@@ -331,30 +328,49 @@ final class PostWriteCategoryGateTest extends TestCase {
 	}
 
 	/**
-	 * The real, end-to-end behavior for the same mixed batch: #1030 round-2's
-	 * chokepoint sees a gated id anywhere in `updates[].id` and refuses the
-	 * WHOLE request at auth time — the ordinary post is never touched
-	 * either, since the handler is never reached at all.
+	 * The real, end-to-end behavior for the same mixed batch (#1030
+	 * round-5 design): the guard does NOT refuse a bulk request for one
+	 * hidden item. The handler's one per-item resolver answers the gated
+	 * product item exactly as it answers an id that does not exist — same
+	 * per-item entry, id aside — and the ordinary post item still runs.
 	 */
-	public function test_bulk_update_posts_mixed_ids_refused_wholesale_by_the_chokepoint(): void {
-		$c       = $this->controller();
-		$created = $this->scoped_key( $c, array( 'content' ) );
-		$request = new WP_REST_Request(
-			'POST',
-			'/mcpwp/v1/posts/bulk',
-			array(
-				'updates' => array(
-					array( 'id' => self::PRODUCT_ID, 'title' => 'HACKED' ),
-					array( 'id' => self::POST_ID, 'title' => 'Legit new title' ),
+	public function test_bulk_update_posts_gated_item_answers_like_a_missing_item(): void {
+		$missing_id = self::PRODUCT_ID + 5000;
+		$run        = function ( int $first_id ) {
+			$c       = $this->controller();
+			$created = $this->scoped_key( $c, array( 'content' ) );
+			return $this->result_after_auth(
+				$c,
+				$created['key'],
+				'POST',
+				'/mcpwp/v1/posts/bulk',
+				array(
+					'updates' => array(
+						array( 'id' => $first_id, 'title' => 'HACKED' ),
+						array( 'id' => self::POST_ID, 'title' => 'Legit new title' ),
+					),
 				),
-			),
-			array( 'X-API-Key' => $created['key'] )
-		);
+				function ( $request ) use ( $c ) {
+					return $c->bulk_update_posts( $request );
+				}
+			);
+		};
 
-		$auth = $c->check_permission( $request );
-		$this->assertInstanceOf( WP_Error::class, $auth, 'A gated id anywhere in updates[] must refuse the whole batch before the handler runs.' );
-		$this->assertSame( 'not_found', $auth->get_error_code() );
-		$this->assertSame( 'Ordinary post', $GLOBALS['_mcpwp_test_posts'][ self::POST_ID ]->post_title, 'The ordinary post must not have been touched either — the handler never ran.' );
+		$gated = $run( self::PRODUCT_ID );
+		$this->assertInstanceOf( WP_REST_Response::class, $gated, 'A gated item must not refuse the whole batch.' );
+		$this->assertSame( 'Woolly Hoodie', Mcpwp_Agent_Text::decode( $GLOBALS['_mcpwp_test_posts'][ self::PRODUCT_ID ]->post_title ), 'The gated item must not have been written.' );
+		$this->assertSame( 'Legit new title', $GLOBALS['_mcpwp_test_posts'][ self::POST_ID ]->post_title, 'The ordinary item still runs.' );
+
+		$GLOBALS['_mcpwp_test_posts'][ self::POST_ID ]->post_title = 'Ordinary post';
+		$missing = $run( $missing_id );
+		$this->assertInstanceOf( WP_REST_Response::class, $missing );
+
+		$this->assertSame(
+			str_replace( (string) $missing_id, '#ID#', wp_json_encode( $missing->get_data()['errors'] ) ),
+			str_replace( (string) self::PRODUCT_ID, '#ID#', wp_json_encode( $gated->get_data()['errors'] ) ),
+			'The gated item\'s entry must be the missing item\'s entry.'
+		);
+		$this->assertSame( count( $missing->get_data()['updated'] ), count( $gated->get_data()['updated'] ) );
 	}
 
 	public function test_bulk_create_posts_refuses_a_product_item_and_creates_the_rest(): void {
@@ -502,8 +518,11 @@ final class PostWriteCategoryGateTest extends TestCase {
 
 		$c2               = $this->controller();
 		$unrestricted     = $this->scoped_key( $c2, array( 'content', 'woocommerce' ) );
-		$missing_request  = $this->authed_request( $c2, $unrestricted['key'], 'GET', '/mcpwp/v1/posts/' . $missing_id, array( 'id' => $missing_id ) );
-		$missing_response = $c2->get_post( $missing_request );
+		// The missing id goes through the same permission-then-handler path
+		// a real request takes: since #1030 round-5 the guard answers it.
+		$missing_response = $this->result_after_auth( $c2, $unrestricted['key'], 'GET', '/mcpwp/v1/posts/' . $missing_id, array( 'id' => $missing_id ), function ( $request ) use ( $c2 ) {
+			return $c2->get_post( $request );
+		} );
 
 		$this->assert_wp_error_shape_identical( $denied_response, $missing_response, 'A category-denied product and a genuinely missing id must answer with the same not_found/404 shape on GET /posts/{id}.' );
 	}
@@ -519,8 +538,11 @@ final class PostWriteCategoryGateTest extends TestCase {
 
 		$c2               = $this->controller();
 		$unrestricted     = $this->scoped_key( $c2, array( 'content', 'woocommerce' ) );
-		$missing_request  = $this->authed_request( $c2, $unrestricted['key'], 'POST', '/mcpwp/v1/posts/' . $missing_id . '/featured-image', array( 'id' => $missing_id, 'media_id' => self::MEDIA_ID ) );
-		$missing_response = $c2->set_featured_image( $missing_request );
+		// The missing id goes through the same permission-then-handler path
+		// a real request takes: since #1030 round-5 the guard answers it.
+		$missing_response = $this->result_after_auth( $c2, $unrestricted['key'], 'POST', '/mcpwp/v1/posts/' . $missing_id . '/featured-image', array( 'id' => $missing_id, 'media_id' => self::MEDIA_ID ), function ( $request ) use ( $c2 ) {
+			return $c2->set_featured_image( $request );
+		} );
 
 		$this->assert_wp_error_shape_identical( $denied_response, $missing_response, 'A category-denied product and a genuinely missing id must answer with the same not_found/404 shape on POST /posts/{id}/featured-image.' );
 	}
@@ -536,8 +558,11 @@ final class PostWriteCategoryGateTest extends TestCase {
 
 		$c2               = $this->controller();
 		$unrestricted     = $this->scoped_key( $c2, array( 'content', 'woocommerce' ) );
-		$missing_request  = $this->authed_request( $c2, $unrestricted['key'], 'PUT', '/mcpwp/v1/posts/' . $missing_id, array( 'id' => $missing_id, 'title' => 'x' ) );
-		$missing_response = $c2->update_post( $missing_request );
+		// The missing id goes through the same permission-then-handler path
+		// a real request takes: since #1030 round-5 the guard answers it.
+		$missing_response = $this->result_after_auth( $c2, $unrestricted['key'], 'PUT', '/mcpwp/v1/posts/' . $missing_id, array( 'id' => $missing_id, 'title' => 'x' ), function ( $request ) use ( $c2 ) {
+			return $c2->update_post( $request );
+		} );
 
 		$this->assert_wp_error_shape_identical( $denied_response, $missing_response, 'A category-denied product and a genuinely missing id must answer with the same not_found/404 shape on PUT /posts/{id}.' );
 	}
@@ -567,8 +592,11 @@ final class PostWriteCategoryGateTest extends TestCase {
 
 		$c2               = $this->controller();
 		$unrestricted     = $this->scoped_key( $c2, array( 'content', 'woocommerce' ) );
-		$missing_request  = $this->authed_request( $c2, $unrestricted['key'], 'DELETE', '/mcpwp/v1/posts/' . $missing_id, array( 'id' => $missing_id ) );
-		$missing_response = $c2->delete_post( $missing_request );
+		// The missing id goes through the same permission-then-handler path
+		// a real request takes: since #1030 round-5 the guard answers it.
+		$missing_response = $this->result_after_auth( $c2, $unrestricted['key'], 'DELETE', '/mcpwp/v1/posts/' . $missing_id, array( 'id' => $missing_id ), function ( $request ) use ( $c2 ) {
+			return $c2->delete_post( $request );
+		} );
 
 		$this->assert_wp_error_shape_identical( $denied_response, $missing_response, 'BLOCK-R2-1: a category-denied product and a genuinely missing id must answer with the same not_found/404 shape on DELETE /posts/{id}.' );
 	}

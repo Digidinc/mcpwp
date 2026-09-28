@@ -32,6 +32,13 @@ final class LearnPressPublishRequiresAdminScopeTest extends TestCase {
 		$GLOBALS['mcpwp_test_current_user']       = 0;
 		$GLOBALS['mcpwp_test_is_admin']           = false;
 		$GLOBALS['_mcpwp_test_registered_routes'] = array();
+		// The ids these requests name must exist: since #1030 round-5 the
+		// declared-post-ref guard answers a missing id itself, before scope.
+		$GLOBALS['_mcpwp_test_posts'] = array(
+			5 => new WP_Post( array( 'ID' => 5, 'post_type' => 'lp_course', 'post_status' => 'publish' ) ),
+			9 => new WP_Post( array( 'ID' => 9, 'post_type' => 'lp_lesson', 'post_status' => 'publish' ) ),
+			3 => new WP_Post( array( 'ID' => 3, 'post_type' => 'lp_quiz', 'post_status' => 'publish' ) ),
+		);
 		if ( method_exists( 'Mcpwp_REST_API', 'reset_verdict_memo' ) ) {
 			Mcpwp_REST_API::reset_verdict_memo();
 		}

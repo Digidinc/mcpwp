@@ -86,6 +86,16 @@ final class DestructiveGateTest extends TestCase {
 	private function delete_page( int $id, bool $force, $key = null ) {
 		$controller = new Mcpwp_REST_Pages();
 		$request    = new WP_REST_Request( 'DELETE', '/mcpwp/v1/pages/' . $id, array( 'id' => $id, 'force' => $force ) );
+		// A missing id is answered by the declared-post-ref guard itself
+		// (#1030 round-5), so an id that is not there never reaches the
+		// handler: return what a real request gets.
+		if ( ! isset( $GLOBALS['_mcpwp_test_posts'][ $id ] ) ) {
+			$request->set_header( 'X-API-Key', $key ?: $this->key['key'] );
+			if ( method_exists( 'Mcpwp_REST_MCP', 'reset_verdict_memo' ) ) {
+				Mcpwp_REST_MCP::reset_verdict_memo();
+			}
+			return $controller->verify_api_key( $request );
+		}
 		return $this->authed( $controller, $request, $key )->delete_page( $request );
 	}
 

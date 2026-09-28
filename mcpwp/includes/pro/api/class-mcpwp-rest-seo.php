@@ -39,15 +39,12 @@ class Mcpwp_REST_SEO extends Mcpwp_REST_API {
 	 * $this->seo's own call produces the door's real "not found" answer for
 	 * that case; this only ever adds a denial, never removes one.
 	 *
-	 * #1030 round-3 review, item 2: 'id' is a declared post-ref param for
-	 * every /seo/* route this is called from (Mcpwp_Api_Auth::
-	 * get_post_ref_param_map()), so the chokepoint already refuses a gated
-	 * (or missing) id with post_ref_not_found_error() before this handler
-	 * runs — this stays as defense-in-depth for a direct handler call that
-	 * bypasses check_permission(), and now answers with that SAME shared
-	 * error (previously a bespoke, no-explicit-status "Post not found."
-	 * distinguishable from a genuine miss by status code alone) so the two
-	 * paths cannot drift apart.
+	 * 'id' is a declared scalar post-ref param for every /seo/* route this
+	 * is called from (Mcpwp_Api_Auth::get_post_ref_param_map()), so since
+	 * #1030 round-5 the guard answers a gated OR missing id with the
+	 * canonical post_ref_not_found_error() before this handler runs; this
+	 * stays as defense in depth for a direct handler call, with that same
+	 * error.
 	 *
 	 * @param int              $post_id Post ID.
 	 * @param WP_REST_Request  $request Request object, for the shared error.
@@ -387,7 +384,16 @@ class Mcpwp_REST_SEO extends Mcpwp_REST_API {
 			}
 		}
 
-		$results = $this->seo->bulk_update( $updates );
+		// Every item goes through the one per-item resolver (#1030 round-5,
+		// BLOCK-2): a coupon, a trashed or auto-draft product, a template —
+		// anything this caller's category cannot read — answers exactly like
+		// a post that does not exist, and is never written.
+		$results = $this->seo->bulk_update(
+			$updates,
+			function ( $post_id ) use ( $request ) {
+				return $this->post_ref_item_visible( $request, $post_id );
+			}
+		);
 
 		$success_count = count( array_filter( $results, function( $r ) {
 			return $r['success'];

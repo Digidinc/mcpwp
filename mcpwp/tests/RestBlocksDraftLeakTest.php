@@ -54,13 +54,25 @@ final class RestBlocksDraftLeakTest extends TestCase {
 		$controller = new Mcpwp_REST_Blocks();
 		$created    = $controller->create_scoped_api_key( 'test key', $scopes, 'custom' );
 		$request    = new WP_REST_Request( 'GET', '/mcpwp/v1/blocks/' . $id, array( 'id' => $id ), array( 'X-API-Key' => $created['key'] ) );
-		$this->assertTrue( $controller->verify_api_key( $request ), 'verify_api_key should succeed' );
+		$this->verdict = $controller->verify_api_key( $request );
 		return array( $controller, $request );
+	}
+
+	/** @var true|WP_Error Permission verdict of the last authenticated request. */
+	private $verdict = true;
+
+	/**
+	 * What a real request gets: the permission verdict when it refuses
+	 * (#1030 round-5 — the declared-post-ref guard answers a hidden or
+	 * missing id itself, before any handler), otherwise the handler's answer.
+	 */
+	private function dispatch( $controller, string $method, $request ) {
+		return true === $this->verdict ? $controller->$method( $request ) : $this->verdict;
 	}
 
 	public function test_draft_read_key_blocked_as_404(): void {
 		[ $c, $r ] = $this->authed( self::DRAFT_ID, array( 'read' ) );
-		$resp = $c->get_blocks( $r );
+		$resp = $this->dispatch( $c, 'get_blocks', $r );
 		$this->assertInstanceOf( WP_Error::class, $resp );
 		$this->assertSame( 'not_found', $resp->get_error_code() );
 		$this->assertSame( 404, $resp->get_error_data()['status'] );
@@ -68,7 +80,7 @@ final class RestBlocksDraftLeakTest extends TestCase {
 
 	public function test_draft_write_key_returns_body(): void {
 		[ $c, $r ] = $this->authed( self::DRAFT_ID, array( 'write' ) );
-		$resp = $c->get_blocks( $r );
+		$resp = $this->dispatch( $c, 'get_blocks', $r );
 		$this->assertInstanceOf( WP_REST_Response::class, $resp );
 		$this->assertSame( 200, $resp->get_status() );
 		$this->assertStringContainsString( 'SECRET', $resp->get_data()['raw_content'] );
@@ -76,7 +88,7 @@ final class RestBlocksDraftLeakTest extends TestCase {
 
 	public function test_published_read_key_returns_body(): void {
 		[ $c, $r ] = $this->authed( self::PUBLISHED_ID, array( 'read' ) );
-		$resp = $c->get_blocks( $r );
+		$resp = $this->dispatch( $c, 'get_blocks', $r );
 		$this->assertInstanceOf( WP_REST_Response::class, $resp );
 		$this->assertSame( 200, $resp->get_status() );
 		$this->assertStringContainsString( 'Public body', $resp->get_data()['raw_content'] );

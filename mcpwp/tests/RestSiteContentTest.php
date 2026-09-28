@@ -108,20 +108,31 @@ final class RestSiteContentTest extends TestCase {
 			array( 'X-API-Key' => $created['key'] )
 		);
 
-		$auth = $controller->verify_api_key( $request );
-		$this->assertTrue( $auth, 'verify_api_key should succeed for a valid key' );
+		$this->verdict = $controller->verify_api_key( $request );
 
 		return array( $controller, $request );
 	}
 
+	/** @var true|WP_Error Permission verdict of the last authenticated request. */
+	private $verdict = true;
+
+	/**
+	 * What a real request gets: the permission verdict when it refuses
+	 * (#1030 round-5 — the declared-post-ref guard answers a hidden or
+	 * missing id itself, before any handler), otherwise the handler's answer.
+	 */
+	private function dispatch( $controller, string $method, $request ) {
+		return true === $this->verdict ? $controller->$method( $request ) : $this->verdict;
+	}
+
 	private function search( array $scopes, array $params ) {
 		[ $controller, $request ] = $this->authed( '/mcpwp/v1/search', $params, $scopes );
-		return $controller->search_content( $request );
+		return $this->dispatch( $controller, 'search_content', $request );
 	}
 
 	private function fetch( array $scopes, array $params ) {
 		[ $controller, $request ] = $this->authed( '/mcpwp/v1/fetch', $params, $scopes );
-		return $controller->fetch_content( $request );
+		return $this->dispatch( $controller, 'fetch_content', $request );
 	}
 
 	// ── Case 1: read key, status=draft → clamped to publish + note ───────
@@ -264,12 +275,12 @@ final class RestSiteContentTest extends TestCase {
 
 	private function rendered_copy( array $scopes, array $params ) {
 		[ $controller, $request ] = $this->authed( '/mcpwp/v1/rendered-copy', $params, $scopes );
-		return $controller->get_rendered_copy( $request );
+		return $this->dispatch( $controller, 'get_rendered_copy', $request );
 	}
 
 	private function rendered_html( array $scopes, array $params ) {
 		[ $controller, $request ] = $this->authed( '/mcpwp/v1/rendered-html', $params, $scopes );
-		return $controller->get_rendered_html( $request );
+		return $this->dispatch( $controller, 'get_rendered_html', $request );
 	}
 
 	public function test_rendered_copy_draft_read_key_blocked_as_404(): void {
@@ -292,7 +303,7 @@ final class RestSiteContentTest extends TestCase {
 
 	private function post_meta( array $scopes, array $params ) {
 		[ $controller, $request ] = $this->authed( '/mcpwp/v1/post-meta', $params, $scopes );
-		return $controller->get_post_meta_handler( $request );
+		return $this->dispatch( $controller, 'get_post_meta_handler', $request );
 	}
 
 	public function test_post_meta_draft_read_key_blocked_as_404(): void {

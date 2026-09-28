@@ -540,7 +540,12 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 			$data    = $post_item;
 			unset( $data['id'] );
 
-			$result = $this->posts->update_post( $post_id, $data );
+			// One per-item resolver for every bulk door (#1030 round-5): an
+			// item that is missing or hidden from this caller gets the one
+			// answer update_post() gives a missing post, and nothing runs.
+			$result = $this->post_ref_item_visible( $request, $post_id )
+				? $this->posts->update_post( $post_id, $data )
+				: Mcpwp_Posts::update_target_not_found_error( $post_id );
 
 			if ( is_wp_error( $result ) ) {
 				$errors[] = array(

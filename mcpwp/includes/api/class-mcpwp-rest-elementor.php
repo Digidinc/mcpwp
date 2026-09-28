@@ -788,23 +788,21 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 			return $this->error_response( 'invalid_ids', __( 'No valid page IDs provided.', 'mcpwp' ), 400 );
 		}
 
-		// Non-public gate for the batch: a read-only key must not receive even a
-		// single draft/pending/private body. Drop the ids the caller can't see
-		// and record them in the errors map with the same message a genuinely
-		// missing id gets, so a hidden draft is indistinguishable from absent.
+		// One per-item resolver for every bulk door (#1030 round-5): an id
+		// that is missing, a draft a read-only key may not see, or a post
+		// whose category this caller cannot read is never loaded, and its
+		// errors entry is the one message a missing id gets — the same
+		// message validate_post() returns for an unsupported type.
 		$blocked = array();
-		if ( ! $this->requester_can_see_non_public() ) {
-			$visible = array();
-			foreach ( $page_ids as $pid ) {
-				$post = get_post( absint( $pid ) );
-				if ( $post instanceof WP_Post && ! $this->is_public_status( $post->post_status ) ) {
-					$blocked[ (int) $pid ] = __( 'Post not found or unsupported type.', 'mcpwp' );
-				} else {
-					$visible[] = $pid;
-				}
+		$visible = array();
+		foreach ( $page_ids as $pid ) {
+			if ( $this->post_ref_item_visible( $request, $pid ) ) {
+				$visible[] = $pid;
+			} else {
+				$blocked[ (int) $pid ] = self::post_ref_not_found_message();
 			}
-			$page_ids = $visible;
 		}
+		$page_ids = $visible;
 
 		$result = $this->elementor->get_elementor_data_bulk( $page_ids );
 
@@ -1381,12 +1379,26 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 			'meta_key'       => '_elementor_data', // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_key -- scoped to one meta key; this is the whole point of the query.
 			'no_found_rows'  => true,
 		);
+		// One per-item resolver for every bulk door (#1030 round-5): a named
+		// id that is missing or hidden from this caller is never queried,
+		// never scanned, never written — it is reported below exactly as a
+		// missing id is. A list that names only such ids scans nothing: an
+		// empty post__in would otherwise widen the query to every post.
+		$visible_ids = array();
 		if ( ! empty( $scope['ids'] ) ) {
-			$query_args['post__in'] = $scope['ids'];
+			foreach ( $scope['ids'] as $wanted_id ) {
+				if ( $this->post_ref_item_visible( $request, $wanted_id ) ) {
+					$visible_ids[] = $wanted_id;
+				}
+			}
+			$query_args['post__in'] = $visible_ids;
 		}
 
-		$query     = new WP_Query( $query_args );
-		$found     = is_array( $query->posts ) ? $query->posts : array();
+		$found = array();
+		if ( empty( $scope['ids'] ) || ! empty( $visible_ids ) ) {
+			$query = new WP_Query( $query_args );
+			$found = is_array( $query->posts ) ? $query->posts : array();
+		}
 		$truncated = count( $found ) > self::FIND_REPLACE_MAX_POSTS;
 		if ( $truncated ) {
 			$found = array_slice( $found, 0, self::FIND_REPLACE_MAX_POSTS );
@@ -1503,14 +1515,12 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 					$not_touched[] = array( 'id' => $wanted, 'reason' => 'not_processed' );
 					continue;
 				}
-				$post = get_post( $wanted );
-				if ( ! $post || $this->find_replace_category_denied( $post->post_type ) ) {
-					// A category-denied id reads exactly like a missing one
-					// (#1024 round-1 review, NIT) — the same existence-oracle
-					// concern guard_post_type_category() already protects
-					// against elsewhere: "type_not_supported" would still
-					// disclose that the id resolves to SOMETHING, just not a
-					// supported type, which a gated post must not confirm.
+				$post = in_array( $wanted, $visible_ids, true ) ? get_post( $wanted ) : null;
+				if ( ! $post ) {
+					// Missing and hidden (gated category, or a draft a
+					// read-only key may not see) are the same answer, from
+					// the same resolver (#1030 round-5) — "type_not_supported"
+					// would still disclose that the id resolves to SOMETHING.
 					$reason = 'not_found';
 				} elseif ( ! in_array( $post->post_type, $scope['post_types'], true ) ) {
 					$reason = 'type_not_supported';

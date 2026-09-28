@@ -43,6 +43,11 @@ final class WooCommerceArchetypeApplyRequiresAdminScopeTest extends TestCase {
 		$GLOBALS['mcpwp_test_current_user']       = 0;
 		$GLOBALS['mcpwp_test_is_admin']           = false;
 		$GLOBALS['_mcpwp_test_registered_routes'] = array();
+		// The ids these requests name must exist: since #1030 round-5 the
+		// declared-post-ref guard answers a missing id itself, before scope.
+		$GLOBALS['_mcpwp_test_posts'] = array(
+			42 => new WP_Post( array( 'ID' => 42, 'post_type' => 'product', 'post_status' => 'publish' ) ),
+		);
 		if ( method_exists( 'Mcpwp_REST_API', 'reset_verdict_memo' ) ) {
 			Mcpwp_REST_API::reset_verdict_memo();
 		}

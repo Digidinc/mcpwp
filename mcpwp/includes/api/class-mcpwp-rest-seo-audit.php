@@ -990,9 +990,29 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 					// titles/urls that a write-key audit run persisted. The model
 					// is fail-closed by default; only a privileged caller reveals.
 					'reveal_non_public' => $this->requester_can_see_non_public(),
+					'post_readable'     => $this->stored_issue_post_readable(),
 				)
 			)
 		);
+	}
+
+	/**
+	 * Predicate for the stored-issue readers (#1030 round-4 WARN-1): whether
+	 * this caller's category may read the post an issue is about. post/page
+	 * are governed by the route's own 'seo' category, as at every other
+	 * door; a post that no longer exists is left to the store's own
+	 * non-public rule.
+	 *
+	 * @return callable
+	 */
+	private function stored_issue_post_readable() {
+		return function ( $post_id ) {
+			$post = get_post( (int) $post_id );
+			if ( ! $post instanceof WP_Post || in_array( $post->post_type, array( 'post', 'page' ), true ) ) {
+				return true;
+			}
+			return $this->caller_may_read_category( $this->category_for_post_type( $post->post_type ) );
+		};
 	}
 
 	/**
@@ -1358,6 +1378,7 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 				// A read-only key must not pull draft/private issue titles/urls
 				// into the plan's actions[]. Threaded to the fail-closed model.
 				'reveal_non_public' => $this->requester_can_see_non_public(),
+				'post_readable'     => $this->stored_issue_post_readable(),
 			)
 		) : array(
 			'schema_version' => '2026-05-20',
@@ -1484,6 +1505,16 @@ class Mcpwp_REST_SEO_Audit extends Mcpwp_REST_API {
 	 */
 	public function get_woocommerce_seo_report( $request ) {
 		$this->log_activity( 'get_woocommerce_seo_report', $request );
+
+		// The whole report is product titles, ids and urls (#1030 round-4
+		// WARN-1): it needs the woocommerce category on top of the route's
+		// own 'seo'. Refused with the same 403 forbidden_category a caller
+		// gets for naming the product type anywhere else — naming a type is
+		// not an existence oracle.
+		$category_denied = $this->guard_post_type_category_for_type( 'product' );
+		if ( is_wp_error( $category_denied ) ) {
+			return $category_denied;
+		}
 
 		// Security clamp: a read-only key must not enumerate draft/private product
 		// titles/SEO through the report. get_report() honors a caller-supplied

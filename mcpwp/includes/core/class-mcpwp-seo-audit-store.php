@@ -279,13 +279,26 @@ class Mcpwp_SEO_Audit_Store {
 		// summary counts match the visible set.
 		$reveal_non_public = ! empty( $args['reveal_non_public'] );
 
+		// Caller-category clamp (#1030 round-4 WARN-1): an issue carries its
+		// post's title and url, so an issue about a post whose type the
+		// caller's category cannot read (a product for a key without
+		// woocommerce) is dropped here too — before summarize_issues(), so
+		// the counts describe only what the caller receives. The REST layer
+		// supplies the predicate; with none, nothing is dropped for it.
+		$post_readable = isset( $args['post_readable'] ) && is_callable( $args['post_readable'] ) ? $args['post_readable'] : null;
+
 		$issues = array_values(
 			array_filter(
 				$issues,
-				function ( $issue ) use ( $status, $severity, $category, $run_id, $post_id, $reveal_non_public ) {
+				function ( $issue ) use ( $status, $severity, $category, $run_id, $post_id, $reveal_non_public, $post_readable ) {
 					if ( ! $reveal_non_public
 						&& (int) ( $issue['post_id'] ?? 0 ) > 0
 						&& ! self::issue_post_is_public( $issue ) ) {
+						return false;
+					}
+					if ( null !== $post_readable
+						&& (int) ( $issue['post_id'] ?? 0 ) > 0
+						&& ! call_user_func( $post_readable, (int) $issue['post_id'] ) ) {
 						return false;
 					}
 					if ( '' !== $status && ( $issue['status'] ?? '' ) !== $status ) {

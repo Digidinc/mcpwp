@@ -200,6 +200,22 @@ class Mcpwp_Pages {
 	}
 
 	/**
+	 * update_page()'s "no such page" answer. Shared with
+	 * Mcpwp_REST_Pages::bulk_update_pages(), which gives an item the caller
+	 * may not see (#1030 round-5) exactly this answer without calling
+	 * update_page() at all.
+	 *
+	 * @return WP_Error
+	 */
+	public static function update_target_not_found_error() {
+		return new WP_Error(
+			'not_found',
+			__( 'Page not found.', 'mcpwp' ),
+			array( 'status' => 404 )
+		);
+	}
+
+	/**
 	 * Update a page.
 	 *
 	 * @param int   $page_id Page ID.
@@ -215,11 +231,7 @@ class Mcpwp_Pages {
 		$page = get_post( absint( $page_id ) );
 
 		if ( ! $page || 'page' !== $page->post_type ) {
-			return new WP_Error(
-				'not_found',
-				__( 'Page not found.', 'mcpwp' ),
-				array( 'status' => 404 )
-			);
+			return self::update_target_not_found_error();
 		}
 
 		// Snapshot fields that might change for before/after diff.

@@ -71,8 +71,20 @@ final class RestElementorDraftLeakTest extends TestCase {
 		$controller = new Mcpwp_REST_Elementor();
 		$created    = $controller->create_scoped_api_key( 'test key', $scopes, 'custom' );
 		$request    = new WP_REST_Request( 'GET', $route, $params, array( 'X-API-Key' => $created['key'] ) );
-		$this->assertTrue( $controller->verify_api_key( $request ), 'verify_api_key should succeed' );
+		$this->verdict = $controller->verify_api_key( $request );
 		return array( $controller, $request );
+	}
+
+	/** @var true|WP_Error Permission verdict of the last authed() request. */
+	private $verdict = true;
+
+	/**
+	 * What a real request gets: the permission verdict when it refuses
+	 * (#1030 round-5 — the declared-post-ref guard now answers a hidden
+	 * draft itself, before any handler), otherwise the handler's answer.
+	 */
+	private function dispatch( $controller, string $method, $request ) {
+		return true === $this->verdict ? $controller->$method( $request ) : $this->verdict;
 	}
 
 	/** The gate's response: a status-parity 404 not_found. */
@@ -153,7 +165,7 @@ final class RestElementorDraftLeakTest extends TestCase {
 	private function assertBulkPassedGate( array $data, int $id ): void {
 		if ( array_key_exists( $id, $data['errors'] ) ) {
 			$this->assertNotSame(
-				'Post not found or unsupported type.',
+				'The requested resource was not found.',
 				$data['errors'][ $id ],
 				'That is the gate message — this id was blocked, not processed.'
 			);
@@ -167,34 +179,31 @@ final class RestElementorDraftLeakTest extends TestCase {
 
 	public function test_get_data_draft_read_key_blocked_as_404(): void {
 		[ $c, $r ] = $this->authed( '/mcpwp/v1/elementor/' . self::DRAFT_ID, array( 'id' => self::DRAFT_ID ), array( 'read' ) );
-		$this->assertBlocked( $c->get_elementor_data( $r ) );
+		$this->assertBlocked( $this->dispatch( $c, 'get_elementor_data', $r ) );
 	}
 
 	public function test_get_data_draft_write_key_passes_gate(): void {
 		[ $c, $r ] = $this->authed( '/mcpwp/v1/elementor/' . self::DRAFT_ID, array( 'id' => self::DRAFT_ID ), array( 'write' ) );
-		$this->assertPassedGate( $c->get_elementor_data( $r ) );
+		$this->assertPassedGate( $this->dispatch( $c, 'get_elementor_data', $r ) );
 	}
 
 	public function test_get_data_published_read_key_passes_gate(): void {
 		[ $c, $r ] = $this->authed( '/mcpwp/v1/elementor/' . self::PUBLISHED_ID, array( 'id' => self::PUBLISHED_ID ), array( 'read' ) );
-		$this->assertPassedGate( $c->get_elementor_data( $r ) );
+		$this->assertPassedGate( $this->dispatch( $c, 'get_elementor_data', $r ) );
 	}
 
 	/**
-	 * #1026: a read-only key's guard_non_public_post() 404 for the draft id
-	 * must be byte-identical (id-normalised) to validate_post()'s own 404 for
-	 * a genuinely missing/unsupported-type id — both must use the same
-	 * not_found_hint(). Compared directly against validate_post() (rather
-	 * than through get_elementor_data() for the missing-id side) because
-	 * get_elementor_data() gates on is_active() BEFORE validate_post(), and
-	 * Elementor is deliberately not installable in this harness — see the
-	 * class docblock.
+	 * #1026: a read-only key's 404 for the draft id must be byte-identical
+	 * (id-normalised) to the 404 for a genuinely missing id. Since #1030
+	 * round-5 both are the declared-post-ref guard's one canonical error,
+	 * so both sides go through the same permission-then-handler path.
 	 */
 	public function test_get_data_draft_blocked_404_matches_missing_id_404(): void {
-		$missing_resp = ( new Mcpwp_Elementor_Basic() )->validate_post( self::MISSING_ID );
+		[ $c, $r ]    = $this->authed( '/mcpwp/v1/elementor/' . self::MISSING_ID, array( 'id' => self::MISSING_ID ), array( 'read' ) );
+		$missing_resp = $this->dispatch( $c, 'get_elementor_data', $r );
 
 		[ $c, $r ]  = $this->authed( '/mcpwp/v1/elementor/' . self::DRAFT_ID, array( 'id' => self::DRAFT_ID ), array( 'read' ) );
-		$draft_resp = $c->get_elementor_data( $r );
+		$draft_resp = $this->dispatch( $c, 'get_elementor_data', $r );
 
 		$this->assertSameNotFoundShape( $missing_resp, $draft_resp );
 	}
@@ -203,25 +212,26 @@ final class RestElementorDraftLeakTest extends TestCase {
 
 	public function test_summary_draft_read_key_blocked_as_404(): void {
 		[ $c, $r ] = $this->authed( '/mcpwp/v1/elementor/' . self::DRAFT_ID . '/summary', array( 'id' => self::DRAFT_ID ), array( 'read' ) );
-		$this->assertBlocked( $c->get_elementor_summary( $r ) );
+		$this->assertBlocked( $this->dispatch( $c, 'get_elementor_summary', $r ) );
 	}
 
 	public function test_summary_draft_write_key_passes_gate(): void {
 		[ $c, $r ] = $this->authed( '/mcpwp/v1/elementor/' . self::DRAFT_ID . '/summary', array( 'id' => self::DRAFT_ID ), array( 'write' ) );
-		$this->assertPassedGate( $c->get_elementor_summary( $r ) );
+		$this->assertPassedGate( $this->dispatch( $c, 'get_elementor_summary', $r ) );
 	}
 
 	public function test_summary_published_read_key_passes_gate(): void {
 		[ $c, $r ] = $this->authed( '/mcpwp/v1/elementor/' . self::PUBLISHED_ID . '/summary', array( 'id' => self::PUBLISHED_ID ), array( 'read' ) );
-		$this->assertPassedGate( $c->get_elementor_summary( $r ) );
+		$this->assertPassedGate( $this->dispatch( $c, 'get_elementor_summary', $r ) );
 	}
 
 	/** #1026 — see test_get_data_draft_blocked_404_matches_missing_id_404(). */
 	public function test_summary_draft_blocked_404_matches_missing_id_404(): void {
-		$missing_resp = ( new Mcpwp_Elementor_Basic() )->validate_post( self::MISSING_ID );
+		[ $c, $r ]    = $this->authed( '/mcpwp/v1/elementor/' . self::MISSING_ID . '/summary', array( 'id' => self::MISSING_ID ), array( 'read' ) );
+		$missing_resp = $this->dispatch( $c, 'get_elementor_summary', $r );
 
 		[ $c, $r ]  = $this->authed( '/mcpwp/v1/elementor/' . self::DRAFT_ID . '/summary', array( 'id' => self::DRAFT_ID ), array( 'read' ) );
-		$draft_resp = $c->get_elementor_summary( $r );
+		$draft_resp = $this->dispatch( $c, 'get_elementor_summary', $r );
 
 		$this->assertSameNotFoundShape( $missing_resp, $draft_resp );
 	}
@@ -230,25 +240,26 @@ final class RestElementorDraftLeakTest extends TestCase {
 
 	public function test_preview_draft_read_key_blocked_as_404(): void {
 		[ $c, $r ] = $this->authed( '/mcpwp/v1/elementor/' . self::DRAFT_ID . '/preview', array( 'id' => self::DRAFT_ID ), array( 'read' ) );
-		$this->assertBlocked( $c->get_elementor_preview( $r ) );
+		$this->assertBlocked( $this->dispatch( $c, 'get_elementor_preview', $r ) );
 	}
 
 	public function test_preview_draft_write_key_passes_gate(): void {
 		[ $c, $r ] = $this->authed( '/mcpwp/v1/elementor/' . self::DRAFT_ID . '/preview', array( 'id' => self::DRAFT_ID ), array( 'write' ) );
-		$this->assertPassedGate( $c->get_elementor_preview( $r ) );
+		$this->assertPassedGate( $this->dispatch( $c, 'get_elementor_preview', $r ) );
 	}
 
 	public function test_preview_published_read_key_passes_gate(): void {
 		[ $c, $r ] = $this->authed( '/mcpwp/v1/elementor/' . self::PUBLISHED_ID . '/preview', array( 'id' => self::PUBLISHED_ID ), array( 'read' ) );
-		$this->assertPassedGate( $c->get_elementor_preview( $r ) );
+		$this->assertPassedGate( $this->dispatch( $c, 'get_elementor_preview', $r ) );
 	}
 
 	/** #1026 — see test_get_data_draft_blocked_404_matches_missing_id_404(). */
 	public function test_preview_draft_blocked_404_matches_missing_id_404(): void {
-		$missing_resp = ( new Mcpwp_Elementor_Basic() )->validate_post( self::MISSING_ID );
+		[ $c, $r ]    = $this->authed( '/mcpwp/v1/elementor/' . self::MISSING_ID . '/preview', array( 'id' => self::MISSING_ID ), array( 'read' ) );
+		$missing_resp = $this->dispatch( $c, 'get_elementor_preview', $r );
 
 		[ $c, $r ]  = $this->authed( '/mcpwp/v1/elementor/' . self::DRAFT_ID . '/preview', array( 'id' => self::DRAFT_ID ), array( 'read' ) );
-		$draft_resp = $c->get_elementor_preview( $r );
+		$draft_resp = $this->dispatch( $c, 'get_elementor_preview', $r );
 
 		$this->assertSameNotFoundShape( $missing_resp, $draft_resp );
 	}
@@ -265,11 +276,11 @@ final class RestElementorDraftLeakTest extends TestCase {
 	public function test_bulk_read_key_blocks_only_the_draft(): void {
 		$ids       = self::PUBLISHED_ID . ',' . self::DRAFT_ID;
 		[ $c, $r ] = $this->authed( '/mcpwp/v1/elementor/bulk', array( 'ids' => $ids ), array( 'read' ) );
-		$data      = $c->get_elementor_data_bulk( $r )->get_data();
+		$data      = $this->dispatch( $c, 'get_elementor_data_bulk', $r )->get_data();
 
 		$this->assertArrayNotHasKey( self::DRAFT_ID, $data['results'] );
 		$this->assertArrayHasKey( self::DRAFT_ID, $data['errors'] );
-		$this->assertSame( 'Post not found or unsupported type.', $data['errors'][ self::DRAFT_ID ] );
+		$this->assertSame( 'The requested resource was not found.', $data['errors'][ self::DRAFT_ID ] );
 		// Published id was NOT gate-blocked: it reached normal processing.
 		$this->assertBulkPassedGate( $data, self::PUBLISHED_ID );
 	}
@@ -282,7 +293,7 @@ final class RestElementorDraftLeakTest extends TestCase {
 	public function test_bulk_write_key_blocks_nothing(): void {
 		$ids       = self::PUBLISHED_ID . ',' . self::DRAFT_ID;
 		[ $c, $r ] = $this->authed( '/mcpwp/v1/elementor/bulk', array( 'ids' => $ids ), array( 'write' ) );
-		$data      = $c->get_elementor_data_bulk( $r )->get_data();
+		$data      = $this->dispatch( $c, 'get_elementor_data_bulk', $r )->get_data();
 
 		$this->assertBulkPassedGate( $data, self::DRAFT_ID );
 	}

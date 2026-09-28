@@ -97,8 +97,20 @@ final class RestSeoContentDraftLeakTest extends TestCase {
 	private function authed( $controller, string $route, array $params, array $scopes ): WP_REST_Request {
 		$created = $controller->create_scoped_api_key( 'test key', $scopes, 'custom' );
 		$request = new WP_REST_Request( 'GET', $route, $params, array( 'X-API-Key' => $created['key'] ) );
-		$this->assertTrue( $controller->verify_api_key( $request ), 'verify_api_key should succeed' );
+		$this->verdict = $controller->verify_api_key( $request );
 		return $request;
+	}
+
+	/** @var true|WP_Error Permission verdict of the last authenticated request. */
+	private $verdict = true;
+
+	/**
+	 * What a real request gets: the permission verdict when it refuses
+	 * (#1030 round-5 — the declared-post-ref guard answers a hidden or
+	 * missing id itself, before any handler), otherwise the handler's answer.
+	 */
+	private function dispatch( $controller, string $method, $request ) {
+		return true === $this->verdict ? $controller->$method( $request ) : $this->verdict;
 	}
 
 	private function assert404( $resp ): void {
@@ -116,13 +128,13 @@ final class RestSeoContentDraftLeakTest extends TestCase {
 	public function test_structured_data_draft_read_key_blocked_as_404(): void {
 		$c = new Mcpwp_REST_SEO_Audit();
 		$r = $this->authed( $c, '/mcpwp/v1/seo/structured-data/' . self::DRAFT_ID, array( 'id' => self::DRAFT_ID ), array( 'read' ) );
-		$this->assert404( $c->validate_structured_data( $r ) );
+		$this->assert404( $this->dispatch( $c, 'validate_structured_data', $r ) );
 	}
 
 	public function test_structured_data_draft_write_key_returns_data(): void {
 		$c = new Mcpwp_REST_SEO_Audit();
 		$r = $this->authed( $c, '/mcpwp/v1/seo/structured-data/' . self::DRAFT_ID, array( 'id' => self::DRAFT_ID ), array( 'write' ) );
-		$resp = $c->validate_structured_data( $r );
+		$resp = $this->dispatch( $c, 'validate_structured_data', $r );
 		$this->assertInstanceOf( WP_REST_Response::class, $resp );
 		$this->assertSame( 200, $resp->get_status() );
 	}
@@ -130,7 +142,7 @@ final class RestSeoContentDraftLeakTest extends TestCase {
 	public function test_structured_data_published_read_key_returns_data(): void {
 		$c = new Mcpwp_REST_SEO_Audit();
 		$r = $this->authed( $c, '/mcpwp/v1/seo/structured-data/' . self::PUB_ID, array( 'id' => self::PUB_ID ), array( 'read' ) );
-		$resp = $c->validate_structured_data( $r );
+		$resp = $this->dispatch( $c, 'validate_structured_data', $r );
 		$this->assertInstanceOf( WP_REST_Response::class, $resp );
 		$this->assertSame( 200, $resp->get_status() );
 	}
@@ -140,13 +152,13 @@ final class RestSeoContentDraftLeakTest extends TestCase {
 	public function test_media_draft_read_key_blocked_as_404(): void {
 		$c = new Mcpwp_REST_SEO_Audit();
 		$r = $this->authed( $c, '/mcpwp/v1/seo/media/' . self::DRAFT_ID, array( 'id' => self::DRAFT_ID ), array( 'read' ) );
-		$this->assert404( $c->audit_media_seo( $r ) );
+		$this->assert404( $this->dispatch( $c, 'audit_media_seo', $r ) );
 	}
 
 	public function test_media_draft_write_key_returns_data(): void {
 		$c = new Mcpwp_REST_SEO_Audit();
 		$r = $this->authed( $c, '/mcpwp/v1/seo/media/' . self::DRAFT_ID, array( 'id' => self::DRAFT_ID ), array( 'write' ) );
-		$resp = $c->audit_media_seo( $r );
+		$resp = $this->dispatch( $c, 'audit_media_seo', $r );
 		$this->assertInstanceOf( WP_REST_Response::class, $resp );
 		$this->assertSame( 200, $resp->get_status() );
 	}
@@ -154,7 +166,7 @@ final class RestSeoContentDraftLeakTest extends TestCase {
 	public function test_media_published_read_key_returns_data(): void {
 		$c = new Mcpwp_REST_SEO_Audit();
 		$r = $this->authed( $c, '/mcpwp/v1/seo/media/' . self::PUB_ID, array( 'id' => self::PUB_ID ), array( 'read' ) );
-		$resp = $c->audit_media_seo( $r );
+		$resp = $this->dispatch( $c, 'audit_media_seo', $r );
 		$this->assertInstanceOf( WP_REST_Response::class, $resp );
 		$this->assertSame( 200, $resp->get_status() );
 	}
@@ -164,14 +176,14 @@ final class RestSeoContentDraftLeakTest extends TestCase {
 	public function test_readiness_draft_read_key_blocked_as_404(): void {
 		$c = new Mcpwp_REST_SEO_Audit();
 		$r = $this->authed( $c, '/mcpwp/v1/seo/readiness/' . self::DRAFT_ID, array( 'id' => self::DRAFT_ID ), array( 'read' ) );
-		$resp = $c->validate_seo_readiness( $r );
+		$resp = $this->dispatch( $c, 'validate_seo_readiness', $r );
 		$this->assert404( $resp );
 	}
 
 	public function test_readiness_draft_write_key_returns_signals(): void {
 		$c = new Mcpwp_REST_SEO_Audit();
 		$r = $this->authed( $c, '/mcpwp/v1/seo/readiness/' . self::DRAFT_ID, array( 'id' => self::DRAFT_ID ), array( 'write' ) );
-		$resp = $c->validate_seo_readiness( $r );
+		$resp = $this->dispatch( $c, 'validate_seo_readiness', $r );
 		$this->assertInstanceOf( WP_REST_Response::class, $resp );
 		$this->assertSame( 200, $resp->get_status() );
 		// A write key is entitled to the draft's signals — no secret assertion here.
@@ -180,7 +192,7 @@ final class RestSeoContentDraftLeakTest extends TestCase {
 	public function test_readiness_published_read_key_returns_signals(): void {
 		$c = new Mcpwp_REST_SEO_Audit();
 		$r = $this->authed( $c, '/mcpwp/v1/seo/readiness/' . self::PUB_ID, array( 'id' => self::PUB_ID ), array( 'read' ) );
-		$resp = $c->validate_seo_readiness( $r );
+		$resp = $this->dispatch( $c, 'validate_seo_readiness', $r );
 		$this->assertInstanceOf( WP_REST_Response::class, $resp );
 		$this->assertSame( 200, $resp->get_status() );
 	}
@@ -190,13 +202,13 @@ final class RestSeoContentDraftLeakTest extends TestCase {
 	public function test_readiness_pending_read_key_blocked_as_404(): void {
 		$c = new Mcpwp_REST_SEO_Audit();
 		$r = $this->authed( $c, '/mcpwp/v1/seo/readiness/' . self::PENDING_ID, array( 'id' => self::PENDING_ID ), array( 'read' ) );
-		$this->assert404( $c->validate_seo_readiness( $r ) );
+		$this->assert404( $this->dispatch( $c, 'validate_seo_readiness', $r ) );
 	}
 
 	public function test_readiness_private_read_key_blocked_as_404(): void {
 		$c = new Mcpwp_REST_SEO_Audit();
 		$r = $this->authed( $c, '/mcpwp/v1/seo/readiness/' . self::PRIVATE_ID, array( 'id' => self::PRIVATE_ID ), array( 'read' ) );
-		$this->assert404( $c->validate_seo_readiness( $r ) );
+		$this->assert404( $this->dispatch( $c, 'validate_seo_readiness', $r ) );
 	}
 
 	// ── GET /seo/content-quality/{id} ───────────────────────────────────────
@@ -204,13 +216,13 @@ final class RestSeoContentDraftLeakTest extends TestCase {
 	public function test_content_quality_draft_read_key_blocked_as_404(): void {
 		$c = new Mcpwp_REST_Content_Quality();
 		$r = $this->authed( $c, '/mcpwp/v1/seo/content-quality/' . self::DRAFT_ID, array( 'id' => self::DRAFT_ID ), array( 'read' ) );
-		$this->assert404( $c->audit_content_quality( $r ) );
+		$this->assert404( $this->dispatch( $c, 'audit_content_quality', $r ) );
 	}
 
 	public function test_content_quality_draft_write_key_returns_data(): void {
 		$c = new Mcpwp_REST_Content_Quality();
 		$r = $this->authed( $c, '/mcpwp/v1/seo/content-quality/' . self::DRAFT_ID, array( 'id' => self::DRAFT_ID ), array( 'write' ) );
-		$resp = $c->audit_content_quality( $r );
+		$resp = $this->dispatch( $c, 'audit_content_quality', $r );
 		$this->assertInstanceOf( WP_REST_Response::class, $resp );
 		$this->assertSame( 200, $resp->get_status() );
 		// A write key is entitled to the draft's content signals — no secret assertion here.
@@ -219,7 +231,7 @@ final class RestSeoContentDraftLeakTest extends TestCase {
 	public function test_content_quality_published_read_key_returns_data(): void {
 		$c = new Mcpwp_REST_Content_Quality();
 		$r = $this->authed( $c, '/mcpwp/v1/seo/content-quality/' . self::PUB_ID, array( 'id' => self::PUB_ID ), array( 'read' ) );
-		$resp = $c->audit_content_quality( $r );
+		$resp = $this->dispatch( $c, 'audit_content_quality', $r );
 		$this->assertInstanceOf( WP_REST_Response::class, $resp );
 		$this->assertSame( 200, $resp->get_status() );
 	}
