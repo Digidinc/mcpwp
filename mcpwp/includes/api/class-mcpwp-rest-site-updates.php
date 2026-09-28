@@ -139,18 +139,51 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 						// #1041 WARN-2: an unrecognised role used to be silently
 						// coerced to 'admin' by create_scoped_api_key() — a
 						// 201 that discarded both the caller's actual role AND
-						// any tool_categories they meant to scope it to. The
-						// enum here refuses it at the schema layer for a real
-						// WordPress REST dispatch; create_scoped_api_key()'s
-						// own explicit check (400 unknown_role, naming the
-						// valid roles) is the backstop for every other caller
-						// (wp-admin's key editor, a future non-schema-validated
-						// entry point).
+						// any tool_categories they meant to scope it to.
+						// create_scoped_api_key()'s own explicit check (400
+						// unknown_role, naming the valid roles) is the single
+						// source of truth for "is this a real role" — every
+						// caller goes through it (wp-admin's key editor, the
+						// MCP wp_create_api_key tool, any future
+						// non-schema-validated entry point), so the schema
+						// here validates the SAME way rather than keeping a
+						// second copy of the role list that could drift.
+						//
+						// Deliberately no 'enum' (#1041 NIT-A, round-3 review):
+						// WordPress's built-in enum check is an exact-match
+						// `in_array()` against the raw value, so "Custom" or
+						// " custom " — which create_scoped_api_key() itself
+						// accepts (case-insensitive, trimmed) — would be
+						// rejected here before ever reaching it. The
+						// validate_callback below normalises the same way
+						// create_scoped_api_key() does before checking.
+						//
+						// Deliberately no 'default' either (#1041 WARN-B): a
+						// default would make get_param('role') always return
+						// 'admin', even when the caller never specified a
+						// role — indistinguishable from an explicit
+						// {"role":"admin"}. create_scoped_api_key() needs to
+						// see "nothing was specified" as '' so it can apply
+						// the "tool_categories supplied -> default to custom"
+						// rule instead of always defaulting to admin.
 						'role' => array(
-							'description' => __( 'Role slug: admin, a predefined role, or custom (with tool_categories). Defaults to admin.', 'mcpwp' ),
-							'type'        => 'string',
-							'enum'        => array_keys( self::get_role_definitions() ),
-							'default'     => 'admin',
+							'description'       => __( 'Role slug: admin, a predefined role, or custom (with tool_categories). Omit to default to custom when tool_categories is supplied, or admin otherwise.', 'mcpwp' ),
+							'type'              => 'string',
+							'sanitize_callback' => static function ( $value ) {
+								return sanitize_key( trim( (string) $value ) );
+							},
+							'validate_callback' => static function ( $value ) {
+								$normalized = sanitize_key( trim( (string) $value ) );
+								// Empty (omitted, or originally whitespace/null) is
+								// valid here — it means "not specified", and
+								// create_scoped_api_key() applies the WARN-B
+								// default. Only a non-empty, unrecognised role
+								// fails schema validation.
+								if ( '' === $normalized ) {
+									return true;
+								}
+								return in_array( $normalized, array_keys( self::get_role_definitions() ), true );
+							},
 						),
 					),
 				),
@@ -709,9 +742,11 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 		$tool_categories = $request->get_param( 'tool_categories' );
 		$tool_categories = is_array( $tool_categories ) ? $tool_categories : array();
 
-		if ( '' === $role ) {
-			$role = 'admin';
-		}
+		// #1041 WARN-B: do NOT default an omitted role to 'admin' here —
+		// create_scoped_api_key() itself decides that (custom, when
+		// tool_categories was supplied; admin otherwise) so a bare
+		// {"tool_categories":["seo"]} body scopes the key instead of silently
+		// minting an unrestricted admin key with the categories ignored.
 
 		// allow_destructive is an exemption from the destructive-operation gate
 		// (#536). It is honoured only from a trusted admin context — never from

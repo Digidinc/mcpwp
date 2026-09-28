@@ -501,14 +501,19 @@ class Mcpwp_Activator {
 	 *   consider deny-all, or vice versa.
 	 * - NIT-3: locked with the shared migration mutex (#1036,
 	 *   acquire_migration_lock()/release_migration_lock()) so two concurrent
-	 *   requests cannot each read-modify-write mcpwp_api_keys and lose one
-	 *   side's change; the option is RE-READ inside the lock rather than
+	 *   MIGRATION runs cannot each read-modify-write mcpwp_api_keys and lose
+	 *   one side's change; the option is RE-READ inside the lock rather than
 	 *   reusing an earlier, now possibly-stale read; and the completion flag
 	 *   is set only once every store that needed a write has a VERIFIED one
 	 *   (update_option() returning true, or the value already matching what
 	 *   this run would have written — see the loop below) — never
 	 *   unconditionally, which used to mark the migration done even when the
-	 *   write itself silently failed.
+	 *   write itself silently failed. NIT-B: the lock only serialises against
+	 *   ANOTHER migration run — create_scoped_api_key() and
+	 *   touch_api_key_last_used() still read-modify-write mcpwp_api_keys
+	 *   without taking it, so a key created or touched while this migration
+	 *   holds the lock can still race it; that pre-existing race is not fixed
+	 *   here.
 	 */
 	public static function migrate_empty_custom_category_keys() {
 		if ( get_option( 'mcpwp_deny_all_categories_migrated' ) ) {

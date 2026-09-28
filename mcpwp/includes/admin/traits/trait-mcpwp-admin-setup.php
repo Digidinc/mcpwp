@@ -44,7 +44,12 @@ trait Mcpwp_Admin_Setup_Trait {
 				$scopes = array( 'read' ); // Least privilege — unchecking all scopes = read-only.
 			}
 
-			$role            = isset( $_POST['mcpwp_scoped_key_role'] ) ? sanitize_key( wp_unslash( $_POST['mcpwp_scoped_key_role'] ) ) : 'admin';
+			// #1041 WARN-B: '' (not 'admin') when the field is missing — lets
+			// create_scoped_api_key() apply its own default (custom, when
+			// tool_categories was supplied; admin otherwise) rather than this
+			// call site pre-empting it. The real form always submits the
+			// select's value, so this only matters for a raw/crafted POST.
+			$role            = isset( $_POST['mcpwp_scoped_key_role'] ) ? sanitize_key( wp_unslash( $_POST['mcpwp_scoped_key_role'] ) ) : '';
 			$tool_categories = isset( $_POST['mcpwp_scoped_key_categories'] ) ? array_map( 'sanitize_key', (array) wp_unslash( $_POST['mcpwp_scoped_key_categories'] ) ) : array();
 
 			$new_scoped_key = $this->create_scoped_api_key( $label, $scopes, $role, $tool_categories );
@@ -63,8 +68,13 @@ trait Mcpwp_Admin_Setup_Trait {
 				);
 				$new_scoped_key = null;
 			} else {
-				$roles      = self::get_role_definitions();
-				$role_label = isset( $roles[ $role ] ) ? $roles[ $role ]['label'] : $role;
+				// The role actually stored, not the pre-call $role variable —
+				// #1041 WARN-B means an omitted/empty $role here may have
+				// resolved to 'custom' or 'admin' inside create_scoped_api_key(),
+				// and the message must reflect what was actually minted.
+				$actual_role = isset( $new_scoped_key['role'] ) ? $new_scoped_key['role'] : $role;
+				$roles       = self::get_role_definitions();
+				$role_label  = isset( $roles[ $actual_role ] ) ? $roles[ $actual_role ]['label'] : $actual_role;
 				add_settings_error(
 					'mcpwp_messages',
 					'mcpwp_scoped_key_created',

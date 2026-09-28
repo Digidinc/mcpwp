@@ -4219,15 +4219,24 @@ trait Mcpwp_Api_Auth {
 	 * @param string $label           Human-readable key label.
 	 * @param array  $scopes          Scopes for key.
 	 * @param string $role            Role slug (admin, author, designer, editor, custom).
-	 *                                 Omitted/empty defaults to 'admin'; any
-	 *                                 other value must be one of
+	 *                                 Accepted case-insensitively and trimmed
+	 *                                 (#1041 NIT-A). Omitted (empty after
+	 *                                 normalising) defaults to 'custom' when
+	 *                                 tool_categories was supplied, or 'admin'
+	 *                                 otherwise (#1041 WARN-B). Any other
+	 *                                 value must be one of
 	 *                                 get_role_definitions()'s keys or the
 	 *                                 call is refused (#1041 WARN-2).
-	 * @param array  $tool_categories Tool category slugs (for custom role).
+	 * @param array  $tool_categories Tool category slugs (for custom role
+	 *                                 only — supplying them with any other
+	 *                                 role is refused, #1041 WARN-B).
 	 * @return array Key creation result, including plaintext key once, or an
 	 *               error shape the caller MUST check for before reading 'key':
 	 *               - role unrecognised (#1041 WARN-2): array{error:'unknown_role',
 	 *                 message:string, valid_roles:array}
+	 *               - non-custom role paired with tool_categories (#1041
+	 *                 WARN-B): array{error:'categories_require_custom_role',
+	 *                 message:string}
 	 *               - custom role whose category list resolves empty (#1041):
 	 *                 array{error:'empty_custom_categories', message:string,
 	 *                 invalid_categories:array}
@@ -4248,17 +4257,37 @@ trait Mcpwp_Api_Auth {
 			)
 		);
 		$scopes = $this->sanitize_scopes( $scopes );
-		$role   = sanitize_key( (string) $role );
 
-		// Unspecified is a caller convenience, not a garbled role — default it
-		// to 'admin' same as always. A NON-empty value that still isn't a real
-		// role, though, is refused rather than silently minted as 'admin'
-		// (#1041 WARN-2 — POST /api-keys {"role":"custom-seo",...} used to
-		// come back 201 role:admin, silently discarding the caller's actual
-		// intent and the categories they meant to scope it to).
+		// #1041 NIT-A: accept role case-insensitively and trimmed — trim()
+		// first (sanitize_key() alone would silently DROP internal/edge
+		// whitespace rather than treating it as a delimiter, e.g. turning
+		// "cus tom" into the valid-looking "custom") then lowercase+validate
+		// via sanitize_key(). A value that normalises to "" (omitted, or
+		// originally null/whitespace-only) is NOT a garbled role — it is
+		// "not specified", and the WARN-B default below decides what that
+		// means.
+		$role = sanitize_key( trim( (string) $role ) );
+
+		// #1041 WARN-B: whether the caller supplied any tool_categories at
+		// all — even an all-invalid list (['bogus']) counts as "supplied",
+		// because it is still a clear signal the caller meant to scope this
+		// key, not mint an unrestricted/predefined-role one. Computed from
+		// the RAW input, before sanitisation, so a garbage-only list still
+		// trips the "categories require custom role" refusal below rather
+		// than silently looking like "nothing was supplied".
+		$categories_supplied = ! empty( (array) $tool_categories );
+
 		if ( '' === $role ) {
-			$role = 'admin';
+			// Unspecified role: default to 'custom' when categories were
+			// supplied — the caller is clearly trying to scope the key, and
+			// defaulting to 'admin' would silently discard that intent and
+			// mint an unrestricted key instead (POST /api-keys
+			// {"tool_categories":["seo"]} used to come back role:admin with
+			// the categories stored but silently ignored). Default to
+			// 'admin' otherwise — unchanged behaviour for a bare create call.
+			$role = $categories_supplied ? 'custom' : 'admin';
 		}
+
 		$known_roles = array_keys( self::get_role_definitions() );
 		if ( ! in_array( $role, $known_roles, true ) ) {
 			return array(
@@ -4270,6 +4299,22 @@ trait Mcpwp_Api_Auth {
 					implode( ', ', $known_roles )
 				),
 				'valid_roles' => $known_roles,
+			);
+		}
+
+		// #1041 WARN-B: tool_categories only means anything for role=custom.
+		// An explicit predefined role (or 'admin') paired with a supplied
+		// tool_categories is refused rather than silently storing (and
+		// ignoring) them — accepting it would look, to the caller, like the
+		// key had been scoped down when it had not.
+		if ( 'custom' !== $role && $categories_supplied ) {
+			return array(
+				'error'   => 'categories_require_custom_role',
+				'message' => sprintf(
+					/* translators: %s: the role that was supplied alongside tool_categories */
+					__( 'tool_categories only applies to the "custom" role; role "%s" ignores it. Omit tool_categories, or set role to "custom".', 'mcpwp' ),
+					$role
+				),
 			);
 		}
 
@@ -4539,22 +4584,33 @@ trait Mcpwp_Api_Auth {
 	 * unrecognised role — the record still authenticates (never revoked or
 	 * deleted here), it just cannot reach any real category.
 	 *
+	 * #1041 WARN-A (round-3 review): "no role field" is ONLY genuinely legacy
+	 * when tool_categories is ALSO absent/empty — role-scoping and
+	 * tool_categories were introduced together, so a real pre-roles MCPWP key
+	 * never carries the latter without the former. A roleless record that
+	 * DOES carry a non-empty tool_categories is a different writer's shape
+	 * entirely (the wp.org "Mumega MCP" edition writes exactly
+	 * {scopes, tool_categories} with no role field to this same
+	 * mcpwp_api_keys option) and normalizes to 'custom' with those
+	 * categories instead of silently inheriting every category.
+	 *
 	 * @param array $record Key record.
 	 * @return array Normalized key record.
 	 */
 	protected function normalize_api_key_record( $record ) {
 		$record = is_array( $record ) ? $record : array();
 
-		$known_roles = array_keys( self::get_role_definitions() );
+		$known_roles     = array_keys( self::get_role_definitions() );
+		$raw_categories  = isset( $record['tool_categories'] ) ? (array) $record['tool_categories'] : array();
 
 		if ( ! array_key_exists( 'role', $record ) ) {
-			$role = 'admin';
+			$role = empty( $raw_categories ) ? 'admin' : 'custom';
 		} else {
 			$raw_role = sanitize_key( (string) $record['role'] );
 			$role     = in_array( $raw_role, $known_roles, true ) ? $raw_role : self::unknown_role_marker();
 		}
 
-		$tool_categories = isset( $record['tool_categories'] ) ? array_map( 'sanitize_key', (array) $record['tool_categories'] ) : array();
+		$tool_categories = array_map( 'sanitize_key', $raw_categories );
 
 		return array(
 			'id'              => isset( $record['id'] ) ? sanitize_key( (string) $record['id'] ) : '',
@@ -4903,6 +4959,23 @@ trait Mcpwp_Api_Auth {
 		// unknown_role_marker() (present-but-invalid), not 'admin' — the two
 		// must not be conflated here either.
 		if ( ! array_key_exists( 'role', $key_record ) ) {
+			// #1041 WARN-A (round-3 adversarial review): a real legacy MCPWP
+			// key predating role-scoping has no 'tool_categories' field
+			// either — the two were introduced together. A roleless record
+			// that DOES carry a non-empty tool_categories is not that shape;
+			// it is what a third-party writer to this same wp_options row
+			// produces (the wp.org "Mumega MCP" edition writes exactly
+			// {scopes, tool_categories} with no role field). Treating it as
+			// legacy-unrestricted would silently grant it every category, so
+			// it is resolved as 'custom' with those categories instead — the
+			// same outcome the 'custom' branch below gives a normalized
+			// record shaped like this.
+			$raw_categories = ( isset( $key_record['tool_categories'] ) && is_array( $key_record['tool_categories'] ) )
+				? array_values( $key_record['tool_categories'] )
+				: array();
+			if ( ! empty( $raw_categories ) ) {
+				return $raw_categories;
+			}
 			return array();
 		}
 

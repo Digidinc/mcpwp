@@ -224,6 +224,131 @@ final class Regression1041EmptyCategoryKeyTest extends TestCase {
 		$this->assertContains( 'admin', $result->get_error_data()['valid_roles'] );
 	}
 
+	// ── #1041 WARN-B (round-3 adversarial review of PR #1043) ───────────────
+	//
+	// POST /api-keys {"tool_categories":["seo"]} with no role used to default
+	// to role:admin with the categories stored but silently ignored
+	// (resolve_key_tool_categories() is unrestricted for role=admin
+	// regardless of what tool_categories holds). Rule: tool_categories
+	// supplied + role omitted -> role defaults to 'custom'; an EXPLICIT
+	// non-custom role + tool_categories supplied -> refused outright.
+
+	public function test_create_scoped_api_key_defaults_to_custom_when_categories_supplied_and_role_omitted(): void {
+		$auth    = $this->harness();
+		$created = $auth->create_scoped_api_key( 'scoped by categories alone', array( 'read', 'write' ), '', array( 'seo' ) );
+
+		$this->assertArrayNotHasKey( 'error', $created );
+		$this->assertSame( 'custom', $created['role'] );
+		$this->assertSame( array( 'seo' ), $created['tool_categories'] );
+	}
+
+	public function test_create_scoped_api_key_still_defaults_to_admin_when_no_categories_and_role_omitted(): void {
+		// Unchanged behaviour: a bare create call with neither role nor
+		// categories still mints an admin key.
+		$auth    = $this->harness();
+		$created = $auth->create_scoped_api_key( 'bare create call', array( 'read', 'write', 'admin' ) );
+
+		$this->assertArrayNotHasKey( 'error', $created );
+		$this->assertSame( 'admin', $created['role'] );
+	}
+
+	public function test_create_scoped_api_key_refuses_categories_on_an_explicit_predefined_role(): void {
+		$auth    = $this->harness();
+		$created = $auth->create_scoped_api_key( 'author with categories', array( 'read', 'write' ), 'author', array( 'seo' ) );
+
+		$this->assertSame( 'categories_require_custom_role', $created['error'] ?? null );
+		$this->assertArrayNotHasKey( 'key', $created );
+	}
+
+	public function test_create_scoped_api_key_refuses_categories_on_an_explicit_admin_role(): void {
+		$auth    = $this->harness();
+		$created = $auth->create_scoped_api_key( 'admin with categories', array( 'read', 'write', 'admin' ), 'admin', array( 'seo' ) );
+
+		$this->assertSame( 'categories_require_custom_role', $created['error'] ?? null );
+	}
+
+	public function test_create_scoped_api_key_all_invalid_categories_still_refuses_a_non_custom_role(): void {
+		// "Supplied" means the caller passed something, even if every entry
+		// is garbage — that is still a clear signal they meant to scope the
+		// key, not a no-op that should fall through to plain 'author'.
+		$auth    = $this->harness();
+		$created = $auth->create_scoped_api_key( 'author with bogus categories', array( 'read', 'write' ), 'author', array( 'bogus' ) );
+
+		$this->assertSame( 'categories_require_custom_role', $created['error'] ?? null );
+	}
+
+	public function test_rest_create_api_key_defaults_to_custom_when_only_categories_are_posted(): void {
+		$controller   = new Mcpwp_REST_Site_Updates();
+		$admin_key    = $controller->create_scoped_api_key( 'owner', array( 'admin' ), 'admin' );
+		$auth_request = new WP_REST_Request( 'GET', '/mcpwp/v1/api-keys', array(), array( 'X-API-Key' => $admin_key['key'] ) );
+		$this->assertTrue( $controller->verify_api_key( $auth_request ) );
+
+		$request = new WP_REST_Request(
+			'POST',
+			'/mcpwp/v1/api-keys',
+			array(
+				'label'           => 'categories only',
+				'tool_categories' => array( 'seo' ),
+			)
+		);
+
+		$result = $controller->create_api_key( $request );
+
+		$this->assertInstanceOf( WP_REST_Response::class, $result, 'sanity: not an error response' );
+		$this->assertSame( 201, $result->get_status() );
+		$data = $result->get_data();
+		$this->assertSame( 'custom', $data['api_key']['role'] );
+		$this->assertSame( array( 'seo' ), $data['api_key']['tool_categories'] );
+	}
+
+	public function test_rest_create_api_key_refuses_categories_paired_with_a_non_custom_role(): void {
+		$controller   = new Mcpwp_REST_Site_Updates();
+		$admin_key    = $controller->create_scoped_api_key( 'owner', array( 'admin' ), 'admin' );
+		$auth_request = new WP_REST_Request( 'GET', '/mcpwp/v1/api-keys', array(), array( 'X-API-Key' => $admin_key['key'] ) );
+		$this->assertTrue( $controller->verify_api_key( $auth_request ) );
+
+		$request = new WP_REST_Request(
+			'POST',
+			'/mcpwp/v1/api-keys',
+			array(
+				'label'           => 'author with categories',
+				'role'            => 'author',
+				'tool_categories' => array( 'seo' ),
+			)
+		);
+
+		$result = $controller->create_api_key( $request );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'categories_require_custom_role', $result->get_error_code() );
+		$this->assertSame( 400, $result->get_error_data()['status'] );
+	}
+
+	// ── #1041 NIT-A (round-3 adversarial review of PR #1043) ────────────────
+	//
+	// Role is accepted case-insensitively and trimmed; "" or null is OMITTED
+	// (WARN-B decides), not an unknown-role refusal.
+
+	public function test_create_scoped_api_key_accepts_a_differently_cased_or_padded_role(): void {
+		$auth = $this->harness();
+
+		$created_1 = $auth->create_scoped_api_key( 'k1', array( 'read', 'write' ), 'Custom', array( 'seo' ) );
+		$this->assertArrayNotHasKey( 'error', $created_1 );
+		$this->assertSame( 'custom', $created_1['role'] );
+
+		$created_2 = $auth->create_scoped_api_key( 'k2', array( 'read', 'write' ), ' custom ', array( 'seo' ) );
+		$this->assertArrayNotHasKey( 'error', $created_2 );
+		$this->assertSame( 'custom', $created_2['role'] );
+	}
+
+	public function test_create_scoped_api_key_treats_null_role_as_omitted(): void {
+		$auth    = $this->harness();
+		$created = $auth->create_scoped_api_key( 'null role', array( 'read', 'write' ), null, array( 'seo' ) );
+
+		$this->assertArrayNotHasKey( 'error', $created );
+		$this->assertSame( 'custom', $created['role'], 'null role + supplied categories must default to custom, not refuse as unknown_role' );
+	}
+
 	// ── Fix (2): resolve_key_tool_categories() semantics ────────────────────
 
 	public function test_resolve_key_tool_categories_admin_is_unrestricted(): void {
@@ -234,6 +359,82 @@ final class Regression1041EmptyCategoryKeyTest extends TestCase {
 	public function test_resolve_key_tool_categories_legacy_roleless_key_is_unrestricted(): void {
 		$auth = $this->harness();
 		$this->assertSame( array(), $auth->resolve_categories( array( 'id' => 'legacy' ) ) );
+	}
+
+	// ── #1041 WARN-A (round-3 adversarial review of PR #1043) ───────────────
+	//
+	// A real MCPWP legacy key predates role-scoping AND tool_categories —
+	// the two were introduced together, so a genuine legacy key never has
+	// tool_categories without a role. A roleless record that DOES carry a
+	// non-empty tool_categories is a different writer's shape (the wp.org
+	// "Mumega MCP" edition writes exactly {scopes, tool_categories} with no
+	// role field to the same mcpwp_api_keys option) and must resolve as
+	// 'custom' with those categories, not silently inherit every category.
+
+	public function test_resolve_key_tool_categories_roleless_with_categories_is_custom_not_unrestricted(): void {
+		$auth     = $this->harness();
+		$resolved = $auth->resolve_categories( array( 'scopes' => array( 'read', 'write' ), 'tool_categories' => array( 'content' ) ) );
+
+		$this->assertSame( array( 'content' ), $resolved );
+		$this->assertNotSame( array(), $resolved, 'must not be treated as unrestricted just because role is absent' );
+	}
+
+	public function test_resolve_key_tool_categories_roleless_with_empty_categories_stays_legacy_unrestricted(): void {
+		// The genuine legacy shape: no role AND no (or empty) tool_categories.
+		$auth = $this->harness();
+
+		$this->assertSame( array(), $auth->resolve_categories( array( 'scopes' => array( 'read', 'write' ) ) ) );
+		$this->assertSame( array(), $auth->resolve_categories( array( 'scopes' => array( 'read', 'write' ), 'tool_categories' => array() ) ) );
+	}
+
+	public function test_normalize_api_key_record_roleless_with_categories_normalizes_to_custom(): void {
+		$auth       = $this->harness();
+		$normalized = $auth->normalize( array( 'id' => 'k', 'hash' => 'h', 'scopes' => array( 'read', 'write' ), 'tool_categories' => array( 'content' ) ) );
+
+		$this->assertSame( 'custom', $normalized['role'] );
+		$this->assertSame( array( 'content' ), $normalized['tool_categories'] );
+	}
+
+	public function test_normalize_api_key_record_genuine_legacy_shape_stays_admin(): void {
+		$auth       = $this->harness();
+		$normalized = $auth->normalize( array( 'id' => 'k', 'hash' => 'h', 'scopes' => array( 'read', 'write' ) ) );
+
+		$this->assertSame( 'admin', $normalized['role'] );
+	}
+
+	/**
+	 * Through a real door: hand-seed the exact wp.org "Mumega MCP" edition
+	 * writer shape (no role field at all) directly into mcpwp_api_keys and
+	 * verify it behaves as a real custom('content')-scoped key — allowed on
+	 * /pages, denied on /action-log — never as an unrestricted admin key.
+	 */
+	public function test_roleless_with_categories_key_behaves_as_scoped_custom_through_a_real_door(): void {
+		$plain = 'mcpwp_' . str_repeat( 'f', 48 );
+		update_option(
+			'mcpwp_api_keys',
+			array(
+				array(
+					'id'              => 'k-wporg-edition',
+					'label'           => 'wp.org edition key',
+					'hash'            => wp_hash_password( $plain ),
+					'scopes'          => array( 'read', 'write' ),
+					'tool_categories' => array( 'content' ),
+					'created_at'      => '2026-01-01 00:00:00',
+					'revoked_at'      => null,
+				),
+			)
+		);
+
+		$pages_controller = new Mcpwp_REST_Pages();
+		$pages_request     = new WP_REST_Request( 'GET', '/mcpwp/v1/pages', array(), array( 'X-API-Key' => $plain ) );
+		$this->assertTrue( $pages_controller->verify_api_key( $pages_request ), 'content category must be allowed' );
+
+		$log_controller = new Mcpwp_REST_Action_Log();
+		$log_request    = new WP_REST_Request( 'GET', '/mcpwp/v1/action-log', array(), array( 'X-API-Key' => $plain ) );
+		$log_result     = $log_controller->verify_api_key( $log_request );
+
+		$this->assertInstanceOf( WP_Error::class, $log_result, 'admin category must be denied — this key is scoped, not unrestricted' );
+		$this->assertSame( 'forbidden_category', $log_result->get_error_code() );
 	}
 
 	public function test_resolve_key_tool_categories_custom_with_empty_list_is_deny_all_not_unrestricted(): void {
