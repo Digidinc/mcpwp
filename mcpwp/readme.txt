@@ -157,6 +157,10 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 
 == Changelog ==
 
+= 3.14.5 =
+* fix: **auth:** gate post-meta/content/fetch/posts by resolved post type, not route ([#1022](https://github.com/Mumega-com/mcpwp/issues/1022))
+* fix: **content:** deleting a WooCommerce product (or any custom post type) through `/posts/{id}` or `/content` without `force` now really moves it to the trash; before, it was deleted permanently with no approval while the response said "moved to trash". Permanent deletes need approval as intended ([#1023](https://github.com/Mumega-com/mcpwp/issues/1023)).
+
 = 3.14.4 =
 * feat: **mcp:** core tool profile + mcpwp_find_tools/mcpwp_call ([#1014](https://github.com/Mumega-com/mcpwp/issues/1014))
 * feat: **mcp:** resource templates (page/brand/memory/guide) + real prompt recipes ([#1015](https://github.com/Mumega-com/mcpwp/issues/1015))
