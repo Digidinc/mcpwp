@@ -139,6 +139,16 @@ trait Mcpwp_Elementor_Validator_Trait {
 	 * get_builder_content_for_display() only compares against the CURRENT
 	 * loop post anyway — this filter must not re-litigate that decision.
 	 *
+	 * Version dependency (adversarial review round 1 NIT): confirmed present
+	 * against the Elementor 4.3.2/Elementor Pro 4.1.1 rig this fix was
+	 * verified against; `elementor/frontend/builder_content_data` has existed
+	 * since Elementor 3.34 (frontend.php's own docblock: `@since` tags stayed
+	 * unbumped from that release through the current one, so this is the
+	 * floor, not a recent addition). A site on an Elementor build older than
+	 * that would not have this filter to hook — Mcpwp_Elementor_Template_Refs'
+	 * WRITE-side refusal is unaffected either way, since it never depends on
+	 * Elementor's own render pipeline at all.
+	 *
 	 * @param int      $outer_post_id The post actually being rendered.
 	 * @param callable $render        function(): string — performs the
 	 *                                actual Elementor render call.

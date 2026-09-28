@@ -41,6 +41,10 @@ require_once dirname( __DIR__ ) . '/includes/pro/core/class-mcpwp-page-builder.p
 require_once dirname( __DIR__ ) . '/includes/pro/core/class-mcpwp-theme-builder.php';
 require_once dirname( __DIR__ ) . '/includes/pro/api/class-mcpwp-rest-elementor-pro.php';
 require_once dirname( __DIR__ ) . '/includes/pro/api/class-mcpwp-rest-theme-builder.php';
+require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-posts.php';
+require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-pages.php';
+require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-posts.php';
+require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-pages.php';
 
 final class Regression1032TemplateRefGateTest extends TestCase {
 
@@ -57,6 +61,16 @@ final class Regression1032TemplateRefGateTest extends TestCase {
 		$GLOBALS['_mcpwp_test_meta']              = array();
 		$GLOBALS['_mcpwp_test_registered_routes'] = array();
 		$GLOBALS['mcpwp_test_public_post_types']  = array( 'elementor_library' );
+
+		// post_ref_readable()'s memo (adversarial review round 1 NIT) lives
+		// no longer than one request in production; this test SUITE process
+		// reuses the same ids under different forced key records across many
+		// tests, so each test starts with a clean memo on every class that
+		// composes the trait.
+		Mcpwp_REST_Elementor::reset_post_ref_readable_memo();
+		Mcpwp_REST_Elementor_Pro::reset_post_ref_readable_memo();
+		Mcpwp_REST_Theme_Builder::reset_post_ref_readable_memo();
+		Mcpwp_REST_Pages::reset_post_ref_readable_memo();
 
 		$GLOBALS['_mcpwp_test_posts'] = array(
 			self::PAGE_ID      => new WP_Post(
@@ -465,7 +479,7 @@ final class Regression1032TemplateRefGateTest extends TestCase {
 	public function test_template_ref_gate_refuses_on_first_hidden_id(): void {
 		$controller = new Mcpwp_REST_Elementor();
 		$this->force_key_record( $controller, array( 'elementor' ) ); // no elementor-templates
-		$gate   = $controller->template_ref_gate( 'elementor' );
+		$gate   = $controller->template_ref_gate();
 		$result = $gate( array( self::ARCHETYPE_ID ) );
 		$this->assert_canonical_not_found( $result );
 	}
@@ -473,20 +487,175 @@ final class Regression1032TemplateRefGateTest extends TestCase {
 	public function test_template_ref_gate_passes_when_every_id_readable(): void {
 		$controller = new Mcpwp_REST_Elementor();
 		$this->force_key_record( $controller, array( 'elementor', 'elementor-templates' ) );
-		$gate = $controller->template_ref_gate( 'elementor' );
+		$gate = $controller->template_ref_gate();
 		$this->assertTrue( $gate( array( self::ARCHETYPE_ID ) ) );
+	}
+
+	public function test_template_ref_gate_batches_one_query_for_every_id(): void {
+		// Adversarial review round 1 NIT: one query for the whole batch, not
+		// one per id.
+		$controller = new Mcpwp_REST_Elementor();
+		$this->force_key_record( $controller, array( 'elementor', 'elementor-templates' ) );
+		$gate = $controller->template_ref_gate();
+
+		$GLOBALS['mcpwp_test_post_ref_queries'] = array();
+		$this->assertTrue( $gate( array( self::ARCHETYPE_ID, self::PAGE_ID ) ) );
+		$this->assertCount( 1, $GLOBALS['mcpwp_test_post_ref_queries'] ?? array(), 'A batch of ids must resolve in one query.' );
 	}
 
 	public function test_template_render_gate_denies_hidden_and_allows_readable(): void {
 		$denied  = new Mcpwp_REST_Elementor();
 		$this->force_key_record( $denied, array( 'elementor' ) );
-		$deny_gate = $denied->template_render_gate( 'elementor' );
+		$deny_gate = $denied->template_render_gate();
 		$this->assertFalse( $deny_gate( self::ARCHETYPE_ID ) );
+
+		// post_ref_readable()'s per-(id,category) memo is correct for real
+		// usage (one caller per PHP request) but two DIFFERENT callers
+		// checking the same id in the same process — only possible here,
+		// deliberately exercising both outcomes in one test — must not share
+		// the first caller's cached verdict.
+		Mcpwp_REST_Elementor::reset_post_ref_readable_memo();
 
 		$allowed = new Mcpwp_REST_Elementor();
 		$this->force_key_record( $allowed, array( 'elementor', 'elementor-templates' ) );
-		$allow_gate = $allowed->template_render_gate( 'elementor' );
+		$allow_gate = $allowed->template_render_gate();
 		$this->assertTrue( $allow_gate( self::ARCHETYPE_ID ) );
+	}
+
+	// =========================================================================
+	// Adversarial review round 1 — B1: loose numeric coercion
+	// =========================================================================
+
+	public function test_write_refuses_template_id_with_trailing_garbage(): void {
+		// "5abc" is exactly how Elementor's own (int) cast resolves — the
+		// live exploit named in the review.
+		$elementor = new Mcpwp_Elementor_Basic();
+		$elementor->set_category_allowed_callback( function () { return true; } );
+		$elementor->set_template_ref_gate(
+			function ( array $ids ) {
+				return in_array( self::ARCHETYPE_ID, $ids, true )
+					? new WP_Error( 'not_found', 'The requested resource was not found.', array( 'status' => 404, 'hint' => 'Check the id with wp_search or wp_list_posts.' ) )
+					: true;
+			}
+		);
+
+		$tree = array(
+			array(
+				'id'       => 'sec00009',
+				'elType'   => 'section',
+				'settings' => array(),
+				'elements' => array(
+					array(
+						'id'         => 'tpl00009',
+						'elType'     => 'widget',
+						'widgetType' => 'template',
+						'settings'   => array( 'template_id' => self::ARCHETYPE_ID . 'abc' ),
+					),
+				),
+			),
+		);
+		$result = $elementor->add_section( self::PAGE_ID, array( 'element' => $tree[0] ) );
+		$this->assert_canonical_not_found( $result, '"' . self::ARCHETYPE_ID . 'abc" must resolve the same way Elementor\'s own (int) cast would.' );
+	}
+
+	public function test_write_refuses_global_widget_template_id_with_trailing_garbage(): void {
+		$elementor = new Mcpwp_Elementor_Basic();
+		$elementor->set_category_allowed_callback( function () { return true; } );
+		$elementor->set_template_ref_gate(
+			function ( array $ids ) {
+				return in_array( self::ARCHETYPE_ID, $ids, true )
+					? new WP_Error( 'not_found', 'The requested resource was not found.', array( 'status' => 404, 'hint' => 'Check the id with wp_search or wp_list_posts.' ) )
+					: true;
+			}
+		);
+
+		$element = array(
+			'id'         => 'glb00009',
+			'elType'     => 'widget',
+			'widgetType' => 'global',
+			'templateID' => self::ARCHETYPE_ID . 'x',
+			'settings'   => array(),
+		);
+		$result = $elementor->add_section( self::PAGE_ID, array( 'element' => $element ) );
+		$this->assert_canonical_not_found( $result );
+	}
+
+	// =========================================================================
+	// Adversarial review round 1 — B2: find/replace bypassed the gate
+	// =========================================================================
+
+	public function test_single_find_replace_refuses_post_replacement_gated_reference(): void {
+		$GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'] = json_encode( array(
+			array(
+				'id'       => 'sec00010',
+				'elType'   => 'section',
+				'settings' => array(),
+				'elements' => array(
+					array(
+						'id'         => 'tpl00010',
+						'elType'     => 'widget',
+						'widgetType' => 'template',
+						'settings'   => array( 'template_id' => 'PLACEHOLDER' ),
+					),
+				),
+			),
+		) );
+
+		$controller = new Mcpwp_REST_Elementor();
+		$created    = $controller->create_scoped_api_key( 'no templates', array( 'read', 'write' ), 'custom', array( 'elementor' ) );
+		$request    = new WP_REST_Request(
+			'POST',
+			'/mcpwp/v1/elementor/' . self::PAGE_ID . '/find-replace',
+			array( 'id' => self::PAGE_ID, 'search' => 'PLACEHOLDER', 'replace' => (string) self::ARCHETYPE_ID ),
+			array( 'X-API-Key' => $created['key'] )
+		);
+		$this->assertTrue( $controller->check_permission( $request ) );
+
+		$before = $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'];
+		$result = $controller->find_replace( $request );
+
+		$this->assertInstanceOf( WP_Error::class, $result, 'A replacement that turns a placeholder into a gated template id must be refused, not written.' );
+		$this->assertSame( 'not_found', $result->get_error_code() );
+		$this->assertSame( $before, $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'] );
+	}
+
+	public function test_bulk_find_replace_refuses_post_replacement_gated_reference(): void {
+		$GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'] = json_encode( array(
+			array(
+				'id'       => 'sec00011',
+				'elType'   => 'section',
+				'settings' => array(),
+				'elements' => array(
+					array(
+						'id'         => 'tpl00011',
+						'elType'     => 'widget',
+						'widgetType' => 'template',
+						'settings'   => array( 'template_id' => 'PLACEHOLDER' ),
+					),
+				),
+			),
+		) );
+
+		$controller = new Mcpwp_REST_Elementor();
+		$created    = $controller->create_scoped_api_key( 'no templates', array( 'read', 'write', 'admin' ), 'custom', array( 'elementor' ) );
+		$request    = new WP_REST_Request(
+			'POST',
+			'/mcpwp/v1/elementor/find-replace',
+			array( 'ids' => array( self::PAGE_ID ), 'search' => 'PLACEHOLDER', 'replace' => (string) self::ARCHETYPE_ID ),
+			array( 'X-API-Key' => $created['key'] )
+		);
+		$this->assertTrue( $controller->check_permission( $request ) );
+
+		$before   = $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'];
+		$response = $controller->find_replace_many( $request );
+
+		$this->assertInstanceOf( WP_REST_Response::class, $response );
+		$data    = $response->get_data();
+		$written = array_filter( $data['matched'] ?? array(), static function ( $entry ) {
+			return ! empty( $entry['written'] );
+		} );
+		$this->assertEmpty( $written, 'The matched post must not be reported as successfully written.' );
+		$this->assertSame( $before, $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'] );
 	}
 
 	// =========================================================================
@@ -741,5 +910,250 @@ final class Regression1032TemplateRefGateTest extends TestCase {
 		$this->assertInstanceOf( WP_Error::class, $result );
 		$this->assertSame( 'not_found', $result->get_error_code() );
 		$this->assertCount( $before_count, $GLOBALS['_mcpwp_test_posts'], 'No draft template post must have been left behind.' );
+	}
+
+	// =========================================================================
+	// Adversarial review round 1 — W1: landing-page orphan
+	// =========================================================================
+
+	public function test_create_landing_page_refuses_and_leaves_no_orphan_page(): void {
+		$GLOBALS['mcpwp_test_did_action']['elementor/loaded'] = 1;
+		$elementor_pro = new Mcpwp_Elementor_Pro();
+		$controller    = new Mcpwp_REST_Elementor_Pro( $elementor_pro );
+		$created       = $controller->create_scoped_api_key( 'no templates', array( 'read', 'write' ), 'custom', array( 'elementor', 'elementor-build' ) );
+		$request       = new WP_REST_Request(
+			'POST',
+			'/mcpwp/v1/elementor/landing-page',
+			array(
+				'title'          => 'LP',
+				'elementor_data' => $this->tree_with_template_widget( self::ARCHETYPE_ID ),
+			),
+			array( 'X-API-Key' => $created['key'] )
+		);
+		$this->assertTrue( $controller->check_permission( $request ) );
+
+		$before_count = count( $GLOBALS['_mcpwp_test_posts'] );
+		$result       = $controller->create_landing_page( $request );
+
+		$this->assertInstanceOf( WP_Error::class, $result, 'create_landing_page() must refuse before any page is created.' );
+		$this->assertSame( 'not_found', $result->get_error_code(), 'Must be the #1032 gate refusing, not an unrelated "Elementor inactive" error.' );
+		$this->assertCount( $before_count, $GLOBALS['_mcpwp_test_posts'], 'No orphan landing page may exist after the refusal — the #1032 W1 bug wrote it into meta_input before this gate ran.' );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_create_landing_page_succeeds_with_readable_template(): void {
+		if ( ! defined( 'ELEMENTOR_VERSION' ) ) {
+			define( 'ELEMENTOR_VERSION', '3.0' );
+		}
+		$GLOBALS['mcpwp_test_did_action']['elementor/loaded'] = 1;
+		$elementor_pro = new Mcpwp_Elementor_Pro();
+		$controller    = new Mcpwp_REST_Elementor_Pro( $elementor_pro );
+		$created       = $controller->create_scoped_api_key( 'full', array( 'read', 'write' ), 'custom', array( 'elementor', 'elementor-build', 'elementor-templates' ) );
+		$request       = new WP_REST_Request(
+			'POST',
+			'/mcpwp/v1/elementor/landing-page',
+			array(
+				'title'          => 'LP',
+				'elementor_data' => $this->tree_with_template_widget( self::ARCHETYPE_ID ),
+			),
+			array( 'X-API-Key' => $created['key'] )
+		);
+		$this->assertTrue( $controller->check_permission( $request ) );
+
+		$result = $controller->create_landing_page( $request );
+
+		$this->assertInstanceOf( WP_REST_Response::class, $result, 'A readable template reference must not be refused.' );
+	}
+
+	// =========================================================================
+	// Adversarial review round 1 — B3: `[elementor-template]` shortcode
+	// =========================================================================
+
+	public function test_guard_elementor_template_shortcode_blocks_unreadable_id(): void {
+		$controller = new Mcpwp_REST_Elementor();
+		$this->force_key_record( $controller, array( 'elementor' ) ); // no elementor-templates
+
+		$result = $controller->guard_elementor_template_shortcode( false, 'elementor-template', array( 'id' => (string) self::ARCHETYPE_ID ), array() );
+		$this->assertSame( '', $result, 'A gated template named by the shortcode must render empty.' );
+	}
+
+	public function test_guard_elementor_template_shortcode_passes_readable_id(): void {
+		$controller = new Mcpwp_REST_Elementor();
+		$this->force_key_record( $controller, array( 'elementor', 'elementor-templates' ) );
+
+		$result = $controller->guard_elementor_template_shortcode( false, 'elementor-template', array( 'id' => (string) self::ARCHETYPE_ID ), array() );
+		$this->assertFalse( $result, 'A readable template must run through normal shortcode processing (unchanged $return).' );
+	}
+
+	public function test_guard_elementor_template_shortcode_ignores_other_tags(): void {
+		$controller = new Mcpwp_REST_Elementor();
+		$this->force_key_record( $controller, array( 'elementor' ) );
+
+		$result = $controller->guard_elementor_template_shortcode( false, 'gallery', array( 'id' => self::ARCHETYPE_ID ), array() );
+		$this->assertFalse( $result, 'A non-Template-Library shortcode must be left alone entirely.' );
+	}
+
+	public function test_create_post_refuses_content_with_unreadable_template_shortcode(): void {
+		$controller = new Mcpwp_REST_Posts();
+		$created    = $controller->create_scoped_api_key( 'author, no templates', array( 'read', 'write' ), 'custom', array( 'content' ) );
+		$request    = new WP_REST_Request(
+			'POST',
+			'/mcpwp/v1/posts',
+			array(
+				'title'   => 'Post with shortcode',
+				'content' => 'Hello [elementor-template id="' . self::ARCHETYPE_ID . '"] world',
+			),
+			array( 'X-API-Key' => $created['key'] )
+		);
+		$this->assertTrue( $controller->check_permission( $request ) );
+
+		$result = $controller->create_post( $request );
+
+		$this->assertInstanceOf( WP_Error::class, $result, 'post_content naming a gated template via the shortcode must be refused — no Elementor data is involved at all.' );
+		$this->assertSame( 'not_found', $result->get_error_code() );
+	}
+
+	public function test_update_page_refuses_content_with_unreadable_template_shortcode(): void {
+		$controller = new Mcpwp_REST_Pages();
+		$created    = $controller->create_scoped_api_key( 'author, no templates', array( 'read', 'write' ), 'custom', array( 'content' ) );
+		$request    = new WP_REST_Request(
+			'PUT',
+			'/mcpwp/v1/pages/' . self::PAGE_ID,
+			array(
+				'id'      => self::PAGE_ID,
+				'content' => '[elementor-template id="' . self::ARCHETYPE_ID . '"]',
+			),
+			array( 'X-API-Key' => $created['key'] )
+		);
+		$this->assertTrue( $controller->check_permission( $request ) );
+
+		$result = $controller->update_page( $request );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'not_found', $result->get_error_code() );
+	}
+
+	public function test_create_post_allows_content_with_readable_template_shortcode(): void {
+		$controller = new Mcpwp_REST_Posts();
+		$created    = $controller->create_scoped_api_key( 'author, full', array( 'read', 'write' ), 'custom', array( 'content', 'elementor-templates' ) );
+		$request    = new WP_REST_Request(
+			'POST',
+			'/mcpwp/v1/posts',
+			array(
+				'title'   => 'Post with shortcode',
+				'content' => 'Hello [elementor-template id="' . self::ARCHETYPE_ID . '"] world',
+			),
+			array( 'X-API-Key' => $created['key'] )
+		);
+		$this->assertTrue( $controller->check_permission( $request ) );
+
+		$result = $controller->create_post( $request );
+
+		$this->assertNotInstanceOf( WP_Error::class, $result, 'A readable template named by the shortcode must not be refused.' );
+	}
+
+	public function test_write_refuses_dynamic_tag_encoded_shortcode_reference(): void {
+		// Elementor Pro's "Shortcode" dynamic tag calls do_shortcode() on an
+		// arbitrary settings.shortcode string — a widget setting can carry
+		// one WITHOUT ever naming a known reference key.
+		$elementor = new Mcpwp_Elementor_Basic();
+		$elementor->set_category_allowed_callback( function () { return true; } );
+		$elementor->set_template_ref_gate(
+			function ( array $ids ) {
+				return in_array( self::ARCHETYPE_ID, $ids, true )
+					? new WP_Error( 'not_found', 'The requested resource was not found.', array( 'status' => 404, 'hint' => 'Check the id with wp_search or wp_list_posts.' ) )
+					: true;
+			}
+		);
+
+		$payload = urlencode( json_encode( array( 'shortcode' => '[elementor-template id="' . self::ARCHETYPE_ID . '"]' ) ) );
+		$element = array(
+			'id'         => 'dyn00001',
+			'elType'     => 'widget',
+			'widgetType' => 'heading',
+			'settings'   => array(
+				'title' => '[elementor-tag id="abc1234" name="shortcode" settings="' . $payload . '"]',
+			),
+		);
+		$result = $elementor->add_section( self::PAGE_ID, array( 'element' => $element ) );
+		$this->assert_canonical_not_found( $result, 'A Shortcode dynamic tag whose own settings.shortcode names a gated template must be refused.' );
+	}
+
+	// =========================================================================
+	// Adversarial review round 1 — NIT: loop-item / elementor-theme
+	// =========================================================================
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_loop_item_template_readable_by_elementor_theme_only_key(): void {
+		if ( ! defined( 'ELEMENTOR_VERSION' ) ) {
+			define( 'ELEMENTOR_VERSION', '3.0' );
+		}
+		// A key holding elementor-theme but NOT elementor-templates must
+		// still be able to embed a loop-item (theme-builder) template via a
+		// Loop Grid on an ordinary /elementor/{id} write — loop-item is a
+		// theme-builder location, not a template-library section, regardless
+		// of which door the reference travels through.
+		$GLOBALS['_mcpwp_test_meta'][ self::ARCHETYPE_ID ]['_elementor_template_type'] = 'loop-item';
+
+		$controller = new Mcpwp_REST_Elementor();
+		$created    = $controller->create_scoped_api_key( 'theme only', array( 'read', 'write' ), 'custom', array( 'elementor', 'elementor-theme' ) );
+		$request    = new WP_REST_Request(
+			'POST',
+			'/mcpwp/v1/elementor/' . self::PAGE_ID,
+			array(
+				'id'             => self::PAGE_ID,
+				'elementor_data' => array(
+					array(
+						'id'         => 'lg000002',
+						'elType'     => 'widget',
+						'widgetType' => 'loop-grid',
+						'settings'   => array( 'template_id' => self::ARCHETYPE_ID ),
+					),
+				),
+			),
+			array( 'X-API-Key' => $created['key'] )
+		);
+		$this->assertTrue( $controller->check_permission( $request ) );
+
+		$result = $controller->set_elementor_data( $request );
+
+		$this->assertInstanceOf( WP_REST_Response::class, $result, 'A loop-item theme-builder template must be readable by an elementor-theme-only key, regardless of which route embeds the reference.' );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_ordinary_section_template_still_refused_for_elementor_theme_only_key(): void {
+		if ( ! defined( 'ELEMENTOR_VERSION' ) ) {
+			define( 'ELEMENTOR_VERSION', '3.0' );
+		}
+		// Regression guard for the NIT fix above: an ORDINARY (non-theme-
+		// location) template must still require elementor-templates, not be
+		// waved through just because template_ref_gate() now always checks
+		// under 'elementor-theme'.
+		$controller = new Mcpwp_REST_Elementor();
+		$created    = $controller->create_scoped_api_key( 'theme only', array( 'read', 'write' ), 'custom', array( 'elementor', 'elementor-theme' ) );
+		$request    = new WP_REST_Request(
+			'POST',
+			'/mcpwp/v1/elementor/' . self::PAGE_ID,
+			array(
+				'id'             => self::PAGE_ID,
+				'elementor_data' => $this->tree_with_template_widget( self::ARCHETYPE_ID ),
+			),
+			array( 'X-API-Key' => $created['key'] )
+		);
+		$this->assertTrue( $controller->check_permission( $request ) );
+
+		$result = $controller->set_elementor_data( $request );
+
+		$this->assertInstanceOf( WP_Error::class, $result, 'An ordinary section template must still require elementor-templates.' );
+		$this->assertSame( 'not_found', $result->get_error_code() );
 	}
 }

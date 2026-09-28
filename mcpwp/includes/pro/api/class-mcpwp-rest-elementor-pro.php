@@ -55,10 +55,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		$result = parent::check_permission( $request );
 
 		if ( true === $result ) {
-			$route_category = self::get_category_for_route(
-				$this->normalize_route_for_authorization( (string) $request->get_route() )
-			);
-			$this->elementor_pro->set_template_ref_gate( $this->template_ref_gate( $route_category ) );
+			$this->elementor_pro->set_template_ref_gate( $this->template_ref_gate() );
 		}
 
 		return $result;
@@ -3230,11 +3227,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		$status   = $request->get_param( 'status' ) ?: 'draft';
 
 		$builder = new Mcpwp_Page_Builder();
-		$builder->set_template_ref_gate(
-			$this->template_ref_gate(
-				self::get_category_for_route( $this->normalize_route_for_authorization( (string) $request->get_route() ) )
-			)
-		);
+		$builder->set_template_ref_gate( $this->template_ref_gate() );
 		$result = $builder->build( $title, $sections, $status );
 
 		if ( is_wp_error( $result ) ) {

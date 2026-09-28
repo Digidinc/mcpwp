@@ -58,13 +58,8 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 			// #1032: refuse a write that embeds a Template Library reference
 			// (Template/Global widget, Loop Grid/Carousel, ...) this caller
 			// cannot read, and redact one on the way out of a preview render.
-			// Judged by THIS route's own category, same as every other
-			// contextual post-ref decision (category_for_post_ref()).
-			$route_category = self::get_category_for_route(
-				$this->normalize_route_for_authorization( (string) $request->get_route() )
-			);
-			$this->elementor->set_template_ref_gate( $this->template_ref_gate( $route_category ) );
-			$this->elementor->set_nested_render_gate( $this->template_render_gate( $route_category ) );
+			$this->elementor->set_template_ref_gate( $this->template_ref_gate() );
+			$this->elementor->set_nested_render_gate( $this->template_render_gate() );
 		}
 
 		return $result;
@@ -1236,6 +1231,18 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 			);
 		}
 
+		// #1032 B2 (adversarial review round 1): find/replace writes the
+		// POST-replacement tree straight to postmeta, bypassing
+		// validate_and_fix_elements()/check_template_references() entirely —
+		// a search/replace that turns an untouched, category-exempt page/post
+		// value into a Template Library reference (or introduces one via the
+		// replacement text itself) must be refused exactly like any other
+		// write that embeds one this caller cannot read.
+		$ref_check = $this->refuse_if_template_refs_unreadable( is_array( $updated_decoded ) ? $updated_decoded : array() );
+		if ( is_wp_error( $ref_check ) ) {
+			return $this->error_response_from_wp_error( $ref_check );
+		}
+
 		// Save updated data. Normalised first: this path never reaches
 		// validate_and_fix_elements(), so a find/replace over a page still
 		// carrying `css_id` used to write it straight back (#737).
@@ -1489,6 +1496,17 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 			$total += $count;
 
 			if ( ! $dry_run ) {
+				// #1032 B2 (adversarial review round 1): same refusal as the
+				// single-post find_replace() above, applied to THIS post's
+				// post-replacement tree before it is written.
+				$ref_check = $this->refuse_if_template_refs_unreadable( is_array( $updated ) ? $updated : array() );
+				if ( is_wp_error( $ref_check ) ) {
+					$entry['written'] = false;
+					$entry['error']   = $ref_check->get_error_code();
+					$matched[]        = $entry;
+					continue;
+				}
+
 				$encoded = wp_json_encode( $updated );
 				if ( false === $encoded ) {
 					$entry['written'] = false;

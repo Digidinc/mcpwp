@@ -310,7 +310,17 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 	public function create_page( $request ) {
 		$this->log_activity( 'create_page', $request );
 
-		$data   = Mcpwp_Posts::body_fields( $request );
+		$data = Mcpwp_Posts::body_fields( $request );
+
+		// #1032 B3 (adversarial review round 1): see
+		// Mcpwp_REST_Posts::create_post()'s matching note.
+		if ( isset( $data['content'] ) ) {
+			$content_ref_check = $this->refuse_if_content_has_unreadable_template_shortcode( $data['content'] );
+			if ( is_wp_error( $content_ref_check ) ) {
+				return $content_ref_check;
+			}
+		}
+
 		$result = $this->pages->create_page( $data );
 
 		if ( is_wp_error( $result ) ) {
@@ -332,6 +342,14 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 		$page_id = $request->get_param( 'id' );
 		$data    = Mcpwp_Posts::body_fields( $request );
 		unset( $data['id'] );
+
+		// #1032 B3: see create_page()'s own note above.
+		if ( isset( $data['content'] ) ) {
+			$content_ref_check = $this->refuse_if_content_has_unreadable_template_shortcode( $data['content'] );
+			if ( is_wp_error( $content_ref_check ) ) {
+				return $content_ref_check;
+			}
+		}
 
 		$result = $this->pages->update_page( $page_id, $data );
 
@@ -455,6 +473,22 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 		$source_tree = Mcpwp_Elementor_Stored_Tree::of_post( $page_id );
 		if ( Mcpwp_Elementor_Stored_Tree::is_unusable( $source_tree ) ) {
 			return Mcpwp_Elementor_Stored_Tree::refusal( $source_tree, "The source page's Elementor data" );
+		}
+
+		// #1032 (adversarial review round 1, NIT): a clone copies
+		// _elementor_data and post_content byte for byte, bypassing every
+		// write-time template-reference check — refused before wp_insert_post()
+		// runs, so a gated reference never rides along into a new,
+		// fully-readable page (same reasoning as Mcpwp_Elementor_Pro::clone_page()).
+		if ( is_array( $source_tree['elements'] ) ) {
+			$ref_check = $this->refuse_if_template_refs_unreadable( $source_tree['elements'] );
+			if ( is_wp_error( $ref_check ) ) {
+				return $this->error_response_from_wp_error( $ref_check );
+			}
+		}
+		$content_ref_check = $this->refuse_if_content_has_unreadable_template_shortcode( (string) $page->post_content );
+		if ( is_wp_error( $content_ref_check ) ) {
+			return $this->error_response_from_wp_error( $content_ref_check );
 		}
 
 		// Create the clone.
@@ -646,6 +680,19 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 				$page_item['status'] = 'draft';
 			}
 
+			// #1032 B3: same content-shortcode check as create_page().
+			if ( isset( $page_item['content'] ) ) {
+				$content_ref_check = $this->refuse_if_content_has_unreadable_template_shortcode( $page_item['content'] );
+				if ( is_wp_error( $content_ref_check ) ) {
+					$errors[] = array(
+						'index'   => $index,
+						'title'   => $page_item['title'],
+						'message' => $content_ref_check->get_error_message(),
+					);
+					continue;
+				}
+			}
+
 			$result = $this->pages->create_page( $page_item );
 
 			if ( is_wp_error( $result ) ) {
@@ -719,12 +766,21 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 			$data    = $page_item;
 			unset( $data['id'] );
 
+			// #1032 B3: same content-shortcode check as create_page().
+			$content_ref_check = isset( $data['content'] )
+				? $this->refuse_if_content_has_unreadable_template_shortcode( $data['content'] )
+				: true;
+
 			// One per-item resolver for every bulk door (#1030 round-5): an
 			// item that is missing or hidden from this caller gets the one
 			// answer update_page() gives a missing page, and nothing runs.
-			$result = $this->post_ref_item_visible( $request, $page_id )
-				? $this->pages->update_page( $page_id, $data )
-				: Mcpwp_Pages::update_target_not_found_error();
+			if ( is_wp_error( $content_ref_check ) ) {
+				$result = $content_ref_check;
+			} else {
+				$result = $this->post_ref_item_visible( $request, $page_id )
+					? $this->pages->update_page( $page_id, $data )
+					: Mcpwp_Pages::update_target_not_found_error();
+			}
 
 			if ( is_wp_error( $result ) ) {
 				$errors[] = array(

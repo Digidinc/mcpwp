@@ -335,7 +335,19 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 	public function create_post( $request ) {
 		$this->log_activity( 'create_post', $request );
 
-		$data   = Mcpwp_Posts::body_fields( $request );
+		$data = Mcpwp_Posts::body_fields( $request );
+
+		// #1032 B3 (adversarial review round 1): a plain post's post_content
+		// is its own shortcode-processing surface — a caller never needs to
+		// touch Elementor data at all to embed `[elementor-template id="N"]`
+		// naming a template this caller cannot read.
+		if ( isset( $data['content'] ) ) {
+			$content_ref_check = $this->refuse_if_content_has_unreadable_template_shortcode( $data['content'] );
+			if ( is_wp_error( $content_ref_check ) ) {
+				return $content_ref_check;
+			}
+		}
+
 		$result = $this->posts->create_post( $data );
 
 		if ( is_wp_error( $result ) ) {
@@ -357,6 +369,14 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 		$post_id = $request->get_param( 'id' );
 		$data    = Mcpwp_Posts::body_fields( $request );
 		unset( $data['id'] );
+
+		// #1032 B3: see create_post()'s own note above.
+		if ( isset( $data['content'] ) ) {
+			$content_ref_check = $this->refuse_if_content_has_unreadable_template_shortcode( $data['content'] );
+			if ( is_wp_error( $content_ref_check ) ) {
+				return $content_ref_check;
+			}
+		}
 
 		$result = $this->posts->update_post( $post_id, $data );
 
@@ -467,6 +487,19 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 				$post_item['status'] = 'draft';
 			}
 
+			// #1032 B3: same content-shortcode check as create_post().
+			if ( isset( $post_item['content'] ) ) {
+				$content_ref_check = $this->refuse_if_content_has_unreadable_template_shortcode( $post_item['content'] );
+				if ( is_wp_error( $content_ref_check ) ) {
+					$errors[] = array(
+						'index'   => $index,
+						'title'   => $post_item['title'],
+						'message' => $content_ref_check->get_error_message(),
+					);
+					continue;
+				}
+			}
+
 			$result = $this->posts->create_post( $post_item );
 
 			if ( is_wp_error( $result ) ) {
@@ -540,12 +573,21 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 			$data    = $post_item;
 			unset( $data['id'] );
 
+			// #1032 B3: same content-shortcode check as create_post().
+			$content_ref_check = isset( $data['content'] )
+				? $this->refuse_if_content_has_unreadable_template_shortcode( $data['content'] )
+				: true;
+
 			// One per-item resolver for every bulk door (#1030 round-5): an
 			// item that is missing or hidden from this caller gets the one
 			// answer update_post() gives a missing post, and nothing runs.
-			$result = $this->post_ref_item_visible( $request, $post_id )
-				? $this->posts->update_post( $post_id, $data )
-				: Mcpwp_Posts::update_target_not_found_error( $post_id );
+			if ( is_wp_error( $content_ref_check ) ) {
+				$result = $content_ref_check;
+			} else {
+				$result = $this->post_ref_item_visible( $request, $post_id )
+					? $this->posts->update_post( $post_id, $data )
+					: Mcpwp_Posts::update_target_not_found_error( $post_id );
+			}
 
 			if ( is_wp_error( $result ) ) {
 				$errors[] = array(

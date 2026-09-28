@@ -134,6 +134,32 @@ class Mcpwp_Elementor_Pro {
 	}
 
 	/**
+	 * Shared #1032 check for the two write paths in this class that never
+	 * reach the basic handler's own check_template_references() at all:
+	 * clone_page() (copies `_elementor_data` as a raw postmeta value) and
+	 * create_landing_page() (writes the SAME way via `meta_input`, atomically
+	 * with wp_insert_post() — before save_elementor_data() runs at all, so
+	 * that later call's own refusal is too late to stop an orphan page from
+	 * existing with the gated reference already on it; adversarial review
+	 * round 1, W1).
+	 *
+	 * @param array $elements Element tree about to be written.
+	 * @return true|WP_Error
+	 */
+	private function check_template_references( array $elements ) {
+		if ( null === $this->template_ref_gate || ! class_exists( 'Mcpwp_Elementor_Template_Refs' ) ) {
+			return true;
+		}
+
+		$ids = Mcpwp_Elementor_Template_Refs::find_ids( $elements );
+		if ( empty( $ids ) ) {
+			return true;
+		}
+
+		return call_user_func( $this->template_ref_gate, $ids );
+	}
+
+	/**
 	 * Check if Elementor is active.
 	 *
 	 * @return bool
@@ -1393,16 +1419,24 @@ class Mcpwp_Elementor_Pro {
 		// template this caller cannot read would otherwise ride along into
 		// a brand-new post the caller DOES fully control (and can then read
 		// back through /elementor/{id}/preview). Same gate, same refusal, as
-		// every other write path.
-		if ( null !== $this->template_ref_gate && ! empty( $elementor_data ) && class_exists( 'Mcpwp_Elementor_Template_Refs' ) && class_exists( 'Mcpwp_Elementor_Stored_Tree' ) ) {
+		// every other write path — also scans the raw post_content string
+		// itself for an `[elementor-template]` shortcode (#1032 B3), which
+		// find_ids() alone would not see.
+		if ( ! empty( $elementor_data ) && class_exists( 'Mcpwp_Elementor_Stored_Tree' ) ) {
 			$source_elements = Mcpwp_Elementor_Stored_Tree::read( $elementor_data )['elements'];
 			if ( is_array( $source_elements ) ) {
-				$ids = Mcpwp_Elementor_Template_Refs::find_ids( $source_elements );
-				if ( ! empty( $ids ) ) {
-					$ref_check = call_user_func( $this->template_ref_gate, $ids );
-					if ( is_wp_error( $ref_check ) ) {
-						return $ref_check;
-					}
+				$ref_check = $this->check_template_references( $source_elements );
+				if ( is_wp_error( $ref_check ) ) {
+					return $ref_check;
+				}
+			}
+		}
+		if ( null !== $this->template_ref_gate && is_string( $source->post_content ) && '' !== $source->post_content ) {
+			$ids = class_exists( 'Mcpwp_Elementor_Template_Refs' ) ? Mcpwp_Elementor_Template_Refs::ids_in_text( $source->post_content ) : array();
+			if ( ! empty( $ids ) ) {
+				$ref_check = call_user_func( $this->template_ref_gate, $ids );
+				if ( is_wp_error( $ref_check ) ) {
+					return $ref_check;
 				}
 			}
 		}
@@ -1493,6 +1527,26 @@ class Mcpwp_Elementor_Pro {
 			$landing_elementor_data = $this->build_landing_page_structure( $data['sections'] );
 		} elseif ( ! empty( $data['elementor_data'] ) ) {
 			$landing_elementor_data = $data['elementor_data'];
+		}
+
+		// #1032 W1 (adversarial review round 1): $landing_elementor_data is
+		// written into meta_input BELOW, atomically with wp_insert_post() —
+		// BEFORE save_elementor_data() runs at all (it only runs afterward,
+		// on an already-existing page). That later call's own refusal
+		// (check_template_references(), wired via the basic handler) is too
+		// late: the page already exists, with the gated reference already on
+		// it, when it fires — an orphan draft the caller can then read via
+		// /elementor/{id}/preview. Gated here, before any post exists.
+		if ( null !== $landing_elementor_data ) {
+			$elements_for_ref_check = is_string( $landing_elementor_data )
+				? json_decode( $landing_elementor_data, true )
+				: $landing_elementor_data;
+			if ( is_array( $elements_for_ref_check ) ) {
+				$ref_check = $this->check_template_references( $elements_for_ref_check );
+				if ( is_wp_error( $ref_check ) ) {
+					return $ref_check;
+				}
+			}
 		}
 
 		// Create the page.

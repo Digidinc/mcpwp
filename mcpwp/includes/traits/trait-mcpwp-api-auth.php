@@ -2288,6 +2288,36 @@ trait Mcpwp_Api_Auth {
 	}
 
 	/**
+	 * Per-(id,category) memo for post_ref_readable() (#1032 adversarial
+	 * review round 1, NIT): a page can embed — or render through — the same
+	 * template id from more than one widget, and a request-wide scan
+	 * (template_ref_gate()'s own batched fetch below already answers a whole
+	 * write in one query; this catches the read side, where each nested
+	 * document is discovered one at a time as Elementor renders it). A trait
+	 * static is a separate copy per COMPOSING CLASS, not truly global — still
+	 * enough to dedupe the common case (many references to the same one or
+	 * two templates within a single controller's handling of one request)
+	 * without claiming a guarantee this data shape cannot give.
+	 *
+	 * @var array<string,bool>
+	 */
+	private static $post_ref_readable_memo = array();
+
+	/**
+	 * Clear post_ref_readable()'s memo. Production never needs this — the
+	 * memo lives no longer than one PHP request/process, exactly like
+	 * $mcpwp_verdicts above. A test SUITE process, in contrast, calls
+	 * post_ref_readable() for the SAME id under different forced key records
+	 * across many tests, so a test that needs to guarantee it is not reading
+	 * a prior test's cached verdict calls this from setUp().
+	 *
+	 * @return void
+	 */
+	public static function reset_post_ref_readable_memo() {
+		self::$post_ref_readable_memo = array();
+	}
+
+	/**
 	 * Whether $id — resolved fresh, on the spot, NOT from a declared request
 	 * param — must read to this caller exactly like a missing post (#1032).
 	 *
@@ -2298,22 +2328,20 @@ trait Mcpwp_Api_Auth {
 	 * write submits (an Elementor Template/Global widget's own
 	 * template_id/templateID, Mcpwp_Elementor_Template_Refs' whole reason
 	 * for existing) or inside a stored document Elementor is about to render
-	 * for a read (a nested template a Template/Global widget or a Loop
-	 * Grid/Carousel resolves at render time, `elementor/frontend/
-	 * builder_content_data`'s own $post_id argument). Both call sites need
-	 * the identical existence-oracle answer post_ref_is_hidden() already
-	 * gives declared params, so this is that same rule, callable for an id
-	 * discovered by a different route.
+	 * for a read (a nested template a Template/Global widget, a Loop
+	 * Grid/Carousel, or the `[elementor-template]` shortcode resolves at
+	 * render time). Both call sites need the identical existence-oracle
+	 * answer post_ref_is_hidden() already gives declared params, so this is
+	 * that same rule, callable for an id discovered by a different route.
 	 *
 	 * @param int    $id             Candidate post id.
-	 * @param string $route_category The resolving route's own category
-	 *                                (get_category_for_route()'s answer) —
-	 *                                same input category_for_post_ref()
-	 *                                takes everywhere else, so a template
-	 *                                embedded or rendered through
-	 *                                /theme-builder/* is judged by the same
-	 *                                rule as one resolved directly through
-	 *                                that route.
+	 * @param string $route_category The category to judge $id under
+	 *                                (category_for_post_ref()'s own input) —
+	 *                                callers checking an EMBEDDED template
+	 *                                reference should pass 'elementor-theme'
+	 *                                (see template_ref_gate()'s docblock for
+	 *                                why), not whatever route resolved the
+	 *                                outer request.
 	 * @return bool True when the caller may treat $id as existing and readable.
 	 */
 	public function post_ref_readable( $id, $route_category ) {
@@ -2322,36 +2350,67 @@ trait Mcpwp_Api_Auth {
 			return true; // Not a real reference — nothing to hide.
 		}
 
-		$rows = self::fetch_post_ref_rows( array( $id ) );
+		$route_category = (string) $route_category;
+		$memo_key       = $id . ':' . $route_category;
+		if ( array_key_exists( $memo_key, self::$post_ref_readable_memo ) ) {
+			return self::$post_ref_readable_memo[ $memo_key ];
+		}
 
-		return ! $this->post_ref_is_hidden( $id, $rows[ $id ] ?? null, (string) $route_category );
+		$rows                                      = self::fetch_post_ref_rows( array( $id ) );
+		$result                                    = ! $this->post_ref_is_hidden( $id, $rows[ $id ] ?? null, $route_category );
+		self::$post_ref_readable_memo[ $memo_key ] = $result;
+
+		return $result;
 	}
 
 	/**
 	 * Build a callable gate for embedded Elementor Template-Library
-	 * references (#1032): given the candidate elementor_library (or other
-	 * post-type) ids Mcpwp_Elementor_Template_Refs::find_ids() turned up in
-	 * a submitted element tree, refuse the WHOLE write with the canonical
-	 * post-ref not-found error the moment any one of them is missing or
-	 * hidden from this caller — same body for both, matching every other
-	 * declared post reference (post_ref_not_found_error()'s own rule).
+	 * references (#1032): given the candidate ids
+	 * Mcpwp_Elementor_Template_Refs::find_ids()/ids_in_text() turned up in a
+	 * submitted element tree or post_content, refuse the WHOLE write with the
+	 * canonical post-ref not-found error the moment any one of them is
+	 * missing or hidden from this caller — same body for both, matching
+	 * every other declared post reference (post_ref_not_found_error()'s own
+	 * rule). One query for every id in the batch (adversarial review round 1
+	 * NIT), not one per id.
+	 *
+	 * Always judges a referenced id under the 'elementor-theme' category,
+	 * never the resolving route's own — a Loop Grid can legitimately embed a
+	 * `loop-item` theme-builder template (Elementor Pro's own per-post-type
+	 * loop skin) through the perfectly ordinary /elementor/{id} door;
+	 * category_for_post_ref() only re-checks a referenced post's OWN
+	 * `_elementor_template_type` for a theme-location match when its
+	 * $route_category argument is already 'elementor-theme', so passing the
+	 * outer route's real category here (e.g. plain 'elementor') wrongly
+	 * classified every such reference as 'elementor-templates' and refused a
+	 * key that holds 'elementor-theme' but not 'elementor-templates'
+	 * (adversarial review round 1 NIT — a false positive, not a security
+	 * gap, but a real regression for Theme Builder-only keys). A reference to
+	 * an ordinary, non-theme-location template is unaffected either way: it
+	 * still falls through to category_for_post_type() = 'elementor-templates'.
 	 *
 	 * Injected into the business-logic write paths (Mcpwp_Elementor_Basic,
 	 * Mcpwp_Elementor_Pro, Mcpwp_Page_Builder, Mcpwp_Theme_Builder — none of
 	 * which have REST/auth context of their own) via
 	 * set_template_ref_gate(), the same "caller decides, callee applies the
 	 * verdict" split set_category_allowed_callback() already uses for the
-	 * post-type category check.
+	 * post-type category check. A REST controller with direct trait access
+	 * can instead call refuse_if_template_refs_unreadable() below.
 	 *
-	 * @param string $route_category The resolving route's own category.
 	 * @return callable function(int[] $ids): true|WP_Error
 	 */
-	public function template_ref_gate( $route_category ) {
-		$route_category = (string) $route_category;
+	public function template_ref_gate() {
+		return function ( array $ids ) {
+			$ids = array_values( array_unique( array_filter( array_map( 'intval', $ids ), static function ( $id ) {
+				return $id > 0;
+			} ) ) );
+			if ( empty( $ids ) ) {
+				return true;
+			}
 
-		return function ( array $ids ) use ( $route_category ) {
+			$rows = self::fetch_post_ref_rows( $ids );
 			foreach ( $ids as $id ) {
-				if ( ! $this->post_ref_readable( $id, $route_category ) ) {
+				if ( $this->post_ref_is_hidden( $id, $rows[ $id ] ?? null, 'elementor-theme' ) ) {
 					return $this->post_ref_not_found_error();
 				}
 			}
@@ -2361,21 +2420,67 @@ trait Mcpwp_Api_Auth {
 	}
 
 	/**
+	 * refuse_if_template_refs_unreadable()'s own logic, exposed as a bare
+	 * callable for callers that inject a gate into ANOTHER object rather
+	 * than asking this one directly (Mcpwp_Elementor_Basic et al. via
+	 * set_template_ref_gate()) — see template_ref_gate()'s docblock for the
+	 * full rationale, identical here.
+	 *
+	 * @param array $elements Element tree about to be written.
+	 * @return true|WP_Error
+	 */
+	public function refuse_if_template_refs_unreadable( array $elements ) {
+		if ( ! class_exists( 'Mcpwp_Elementor_Template_Refs' ) ) {
+			return true;
+		}
+
+		$ids = Mcpwp_Elementor_Template_Refs::find_ids( $elements );
+		if ( empty( $ids ) ) {
+			return true;
+		}
+
+		return call_user_func( $this->template_ref_gate(), $ids );
+	}
+
+	/**
+	 * Same refusal as refuse_if_template_refs_unreadable(), for a plain
+	 * string (a post's post_content, or any other free text a write can set)
+	 * rather than an Elementor element tree — the `[elementor-template
+	 * id="N"]` shortcode is reachable from EITHER (#1032 B3): a caller never
+	 * needs to touch Elementor's own data at all to embed a reference, a
+	 * classic/Gutenberg post's post_content is a shortcode-processing
+	 * surface in its own right.
+	 *
+	 * @param string $content Free text to scan.
+	 * @return true|WP_Error
+	 */
+	public function refuse_if_content_has_unreadable_template_shortcode( $content ) {
+		if ( ! is_string( $content ) || '' === $content || ! class_exists( 'Mcpwp_Elementor_Template_Refs' ) ) {
+			return true;
+		}
+
+		$ids = Mcpwp_Elementor_Template_Refs::ids_in_text( $content );
+		if ( empty( $ids ) ) {
+			return true;
+		}
+
+		return call_user_func( $this->template_ref_gate(), $ids );
+	}
+
+	/**
 	 * Build a callable gate for a NESTED document Elementor resolves while
 	 * rendering one already-authorized post (#1032's read side): true when
 	 * $doc_post_id may be expanded, false when the read must see an empty
 	 * placeholder instead — never a failed request, since the post being
 	 * READ is not itself in question, only whether one of the templates it
-	 * embeds may be shown to this caller.
+	 * embeds may be shown to this caller. Always judges $doc_post_id under
+	 * 'elementor-theme' — see template_ref_gate()'s docblock for why.
 	 *
-	 * @param string $route_category The resolving route's own category.
 	 * @return callable function(int $doc_post_id): bool
 	 */
-	public function template_render_gate( $route_category ) {
-		$route_category = (string) $route_category;
-
-		return function ( $doc_post_id ) use ( $route_category ) {
-			return $this->post_ref_readable( $doc_post_id, $route_category );
+	public function template_render_gate() {
+		return function ( $doc_post_id ) {
+			return $this->post_ref_readable( $doc_post_id, 'elementor-theme' );
 		};
 	}
 

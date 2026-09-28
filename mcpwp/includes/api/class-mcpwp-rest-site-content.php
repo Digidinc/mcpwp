@@ -804,10 +804,7 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 				// it before WordPress even runs. Render in-process instead — no
 				// network hop, so neither problem applies. Note: this returns the
 				// Elementor content only, not the surrounding theme header/footer.
-				$route_category = self::get_category_for_route(
-					$this->normalize_route_for_authorization( (string) $request->get_route() )
-				);
-				return $this->get_rendered_html_via_elementor( $post_id, $selector, $max_bytes, $offset, $route_category );
+				return $this->get_rendered_html_via_elementor( $post_id, $selector, $max_bytes, $offset );
 			} else {
 				// Draft/pending — use Elementor preview URL or plain preview.
 				$url = add_query_arg( 'elementor-preview', $post_id, get_permalink( $post_id ) );
