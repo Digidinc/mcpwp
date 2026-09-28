@@ -4522,11 +4522,17 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		}
 
 		// Capture before-state for audit log (no-op for non-write tools).
+		// #1031: `pre_path_arguments`, not `arguments` — for any {id}-routed
+		// tool, `arguments` above has already had its id moved into the
+		// route string and unset() (resolve_tool_dispatch()), so
+		// Mcpwp_Action_Log::detect_resource() would otherwise always see an
+		// empty id and log resource_id as 0. See resolve_tool_dispatch()'s
+		// own docblock note on $pre_path_arguments.
 		$audit_all_cats = $this->get_all_tool_categories();
 		$audit_category = isset( $audit_all_cats[ $tool_name ] ) ? $audit_all_cats[ $tool_name ] : 'site';
 		$audit_key_id   = isset( $key_record['id'] ) ? (string) $key_record['id'] : '';
 		$audit_log_id   = class_exists( 'Mcpwp_Action_Log' )
-			? Mcpwp_Action_Log::begin( $tool_name, $arguments, $audit_key_id, $audit_category )
+			? Mcpwp_Action_Log::begin( $tool_name, $dispatch['pre_path_arguments'], $audit_key_id, $audit_category )
 			: null;
 
 		if ( $is_callback ) {
@@ -4875,7 +4881,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 *
 	 * @param array $mapping   Tool map entry.
 	 * @param array $arguments Tool arguments.
-	 * @return array{route:string,arguments:array,bad_placeholder:?string,full_route:string,is_batch:bool}
+	 * @return array{route:string,arguments:array,pre_path_arguments:array,bad_placeholder:?string,full_route:string,is_batch:bool}
 	 */
 	private function resolve_tool_dispatch( $mapping, $arguments ) {
 		$arguments   = is_array( $arguments ) ? $arguments : array();
@@ -4890,6 +4896,24 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				unset( $arguments[ $from ] );
 			}
 		}
+
+		// #1031 (found verifying the category fix against a real rig call):
+		// snapshotted AFTER param_remap (so a key Mcpwp_Action_Log::
+		// detect_resource() looks for, e.g. 'id', has its REST name already)
+		// but BEFORE the path-substitution loop below deletes it. Every
+		// id-addressed single-post tool (wp_update_post, wp_delete_post,
+		// wp_set_featured_image, the Elementor {id} tools, ...) routes
+		// through a path placeholder, so handle_tools_call() logging the
+		// POST-substitution `arguments` (as it did before this fix) always
+		// saw resource_id as 0/empty — the id had already been moved into
+		// the route string and unset() below. That silently made the
+		// audit log's resource_id useless for exactly the tools #1031's own
+		// post-type category check (Mcpwp_Action_Log::resource_post_category())
+		// depends on to resolve a product/template hidden behind a generic
+		// content-category tool. handle_tools_call() uses THIS copy only for
+		// the audit log; dispatch, spend pricing and nested-operation
+		// counting keep using the post-substitution `arguments` unchanged.
+		$pre_path_arguments = $arguments;
 
 		// Substitute path parameters (e.g., {id})
 		//
@@ -4929,11 +4953,12 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		$full_route = isset( $mapping['rest_path'] ) ? $route : '/mcpwp/v1' . $route;
 
 		return array(
-			'route'           => $route,
-			'arguments'       => $arguments,
-			'bad_placeholder' => $bad_placeholder,
-			'full_route'      => $full_route,
-			'is_batch'        => ! $is_callback && class_exists( 'Mcpwp_Operation_Weights' ) && '/batch' === Mcpwp_Operation_Weights::normalize_route( $full_route ),
+			'route'              => $route,
+			'arguments'          => $arguments,
+			'pre_path_arguments' => $pre_path_arguments,
+			'bad_placeholder'    => $bad_placeholder,
+			'full_route'         => $full_route,
+			'is_batch'           => ! $is_callback && class_exists( 'Mcpwp_Operation_Weights' ) && '/batch' === Mcpwp_Operation_Weights::normalize_route( $full_route ),
 		);
 	}
 

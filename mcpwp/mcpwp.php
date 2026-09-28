@@ -561,6 +561,27 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 		Mcpwp_Activator::repair_custom_code_locations();
 	}
 
+	// One-time: add resource_post_type/snapshot_skipped to the action-log
+	// table (#1031 round 2, adversarial review DESIGN item 1) — own flag,
+	// not the mcpwp_db_version compare above, for the same reason as every
+	// other migration in this block: an already-current-version site would
+	// otherwise never re-enter create_tables() and the column would never
+	// appear. Must run BEFORE the backfill just below, which depends on the
+	// column already existing.
+	if ( ! get_option( 'mcpwp_action_log_resource_post_type_column' ) ) {
+		require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-activator.php';
+		Mcpwp_Activator::ensure_action_log_resource_post_type_column();
+	}
+
+	// One-time, batched: populate resource_post_type on action-log rows
+	// written before the column above existed (#1031 round 2). Own flag;
+	// see Mcpwp_Activator::backfill_action_log_resource_post_type()'s own
+	// docblock for the batching/checkpointing this needs on a large table.
+	if ( ! get_option( 'mcpwp_action_log_post_type_backfilled' ) ) {
+		require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-activator.php';
+		Mcpwp_Activator::backfill_action_log_resource_post_type();
+	}
+
 	// One-time: grant edit_published_posts/edit_published_pages to the
 	// mcpwp_api_agent role on sites where it was already created without
 	// them (#861b — owner decision: agent writes to published pages are
