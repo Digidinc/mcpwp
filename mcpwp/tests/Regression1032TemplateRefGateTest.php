@@ -1,0 +1,745 @@
+<?php
+/**
+ * Regression tests — #1032, found in the round-3 adversarial review of
+ * PR #1030 (#1024): a designer key, with the 'elementor-templates' category
+ * disabled, saved an Elementor Pro Template widget with
+ * `{"template_id":"12"}` on a page it could freely write to. Neither
+ * set_elementor_data() nor any of the surgical section/widget writers
+ * inspected the SUBMITTED TREE for a Template Library reference — only the
+ * TARGET post's own category was checked (#1024/#1030's own chokepoint) — so
+ * the widget saved cleanly, and /elementor/{id}/preview (html and summary)
+ * then rendered the gated template's content straight through, because
+ * Elementor's own in-process render expands ANY template_id/templateID it
+ * finds, with no notion of MCPWP's tool categories at all.
+ *
+ * The fix is two shared, reusable pieces (never a per-door patch):
+ *
+ *  - Mcpwp_Elementor_Template_Refs::find()/find_ids() — the one walker that
+ *    knows which widget settings embed a Template Library id (Template
+ *    widget, Global widget, Loop Grid/Carousel, ...).
+ *  - Mcpwp_Api_Auth::template_ref_gate()/post_ref_readable() — the same
+ *    existence-oracle rule post_ref_not_found_error() already enforces for
+ *    every DECLARED post-ref parameter, reused here for an id discovered a
+ *    level deeper inside a write, or resolved by Elementor mid-render for a
+ *    read.
+ *
+ * Both are injected into the business-logic classes (which have no REST/auth
+ * context of their own) the same way set_category_allowed_callback() already
+ * is — see each REST controller's check_permission() override.
+ *
+ * @package MCPWP
+ */
+
+use PHPUnit\Framework\TestCase;
+
+require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-elementor-template-refs.php';
+require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-elementor-stored-tree.php';
+require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-elementor-basic.php';
+require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-elementor.php';
+require_once dirname( __DIR__ ) . '/includes/pro/core/class-mcpwp-elementor-pro.php';
+require_once dirname( __DIR__ ) . '/includes/pro/core/class-mcpwp-page-builder.php';
+require_once dirname( __DIR__ ) . '/includes/pro/core/class-mcpwp-theme-builder.php';
+require_once dirname( __DIR__ ) . '/includes/pro/api/class-mcpwp-rest-elementor-pro.php';
+require_once dirname( __DIR__ ) . '/includes/pro/api/class-mcpwp-rest-theme-builder.php';
+
+final class Regression1032TemplateRefGateTest extends TestCase {
+
+	private const PAGE_ID      = 91101; // Ordinary page, always writable/readable.
+	private const ARCHETYPE_ID = 91102; // elementor_library — the gated template.
+	private const MISSING_ID   = 91199; // Never in _mcpwp_test_posts.
+
+	protected function setUp(): void {
+		$GLOBALS['mcpwp_test_options']            = array();
+		$GLOBALS['mcpwp_test_transients']         = array();
+		$GLOBALS['mcpwp_test_current_user']       = 0;
+		$GLOBALS['mcpwp_test_is_admin']           = false;
+		$GLOBALS['mcpwp_test_filters']            = array();
+		$GLOBALS['_mcpwp_test_meta']              = array();
+		$GLOBALS['_mcpwp_test_registered_routes'] = array();
+		$GLOBALS['mcpwp_test_public_post_types']  = array( 'elementor_library' );
+
+		$GLOBALS['_mcpwp_test_posts'] = array(
+			self::PAGE_ID      => new WP_Post(
+				array(
+					'ID'          => self::PAGE_ID,
+					'post_type'   => 'page',
+					'post_title'  => 'Landing',
+					'post_name'   => 'landing',
+					'post_status' => 'publish',
+				)
+			),
+			self::ARCHETYPE_ID => new WP_Post(
+				array(
+					'ID'          => self::ARCHETYPE_ID,
+					'post_type'   => 'elementor_library',
+					'post_title'  => 'Gated Section',
+					'post_name'   => 'gated-section',
+					'post_status' => 'publish',
+				)
+			),
+		);
+
+		$GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data']      = json_encode( $this->plain_tree() );
+		$GLOBALS['_mcpwp_test_meta'][ self::ARCHETYPE_ID ]['_elementor_data'] = json_encode( $this->plain_tree() );
+	}
+
+	protected function tearDown(): void {
+		update_option( 'mcpwp_disabled_tool_categories', array() );
+	}
+
+	private function plain_tree(): array {
+		return array(
+			array(
+				'id'       => 'sec00001',
+				'elType'   => 'section',
+				'settings' => array(),
+				'elements' => array(
+					array(
+						'id'       => 'col00001',
+						'elType'   => 'column',
+						'settings' => array( '_column_size' => 100 ),
+						'elements' => array(
+							array(
+								'id'         => 'head0001',
+								'elType'     => 'widget',
+								'widgetType' => 'heading',
+								'settings'   => array( 'title' => 'Hello' ),
+							),
+						),
+					),
+				),
+			),
+		);
+	}
+
+	private function tree_with_template_widget( int $template_id ): array {
+		return array(
+			array(
+				'id'       => 'sec00002',
+				'elType'   => 'section',
+				'settings' => array(),
+				'elements' => array(
+					array(
+						'id'       => 'col00002',
+						'elType'   => 'column',
+						'settings' => array( '_column_size' => 100 ),
+						'elements' => array(
+							array(
+								'id'         => 'tpl00001',
+								'elType'     => 'widget',
+								'widgetType' => 'template',
+								'settings'   => array( 'template_id' => (string) $template_id ),
+							),
+						),
+					),
+				),
+			),
+		);
+	}
+
+	private function tree_with_global_widget( int $template_id ): array {
+		return array(
+			array(
+				'id'       => 'sec00003',
+				'elType'   => 'section',
+				'settings' => array(),
+				'elements' => array(
+					array(
+						'id'         => 'glb00001',
+						'elType'     => 'widget',
+						'widgetType' => 'global',
+						'templateID' => $template_id,
+						'settings'   => array(),
+					),
+				),
+			),
+		);
+	}
+
+	private function tree_with_loop_grid_alternate_template( int $base_id, int $alt_id ): array {
+		return array(
+			array(
+				'id'       => 'sec00004',
+				'elType'   => 'section',
+				'settings' => array(),
+				'elements' => array(
+					array(
+						'id'         => 'lg000001',
+						'elType'     => 'widget',
+						'widgetType' => 'loop-grid',
+						'settings'   => array(
+							'template_id'         => $base_id,
+							'alternate_templates' => array(
+								array( 'template_id' => $alt_id, 'repeat_template' => 3 ),
+							),
+						),
+					),
+				),
+			),
+		);
+	}
+
+	/** Attach a key record directly, bypassing scope/route gates unrelated to this fix. */
+	private function force_key_record( object $controller, array $categories, string $role = 'custom' ): void {
+		$ref = new ReflectionProperty( get_class( $controller ), 'current_api_key_record' );
+		$ref->setAccessible( true );
+		$ref->setValue(
+			$controller,
+			array(
+				'id'              => 'forced',
+				'label'           => 'forced',
+				'scopes'          => array( 'read', 'write', 'admin' ),
+				'role'            => $role,
+				'tool_categories' => $categories,
+			)
+		);
+	}
+
+	private function assert_canonical_not_found( $result, string $context = '' ): void {
+		$this->assertInstanceOf( WP_Error::class, $result, $context );
+		$this->assertSame( 'not_found', $result->get_error_code(), $context );
+		$this->assertSame( 'The requested resource was not found.', $result->get_error_message(), $context );
+		$data = $result->get_error_data();
+		$this->assertSame( 404, $data['status'] ?? null, $context );
+	}
+
+	// =========================================================================
+	// Mcpwp_Elementor_Template_Refs — the walker itself
+	// =========================================================================
+
+	public function test_finds_template_widget_settings_template_id(): void {
+		$refs = Mcpwp_Elementor_Template_Refs::find( $this->tree_with_template_widget( 12 ) );
+		$this->assertCount( 1, $refs );
+		$this->assertSame( 12, $refs[0]['id'] );
+		$this->assertSame( 'template_id', $refs[0]['key'] );
+	}
+
+	public function test_finds_global_widget_top_level_template_id(): void {
+		$ids = Mcpwp_Elementor_Template_Refs::find_ids( $this->tree_with_global_widget( 34 ) );
+		$this->assertSame( array( 34 ), $ids );
+	}
+
+	public function test_finds_loop_grid_base_and_repeater_alternate_template(): void {
+		$ids = Mcpwp_Elementor_Template_Refs::find_ids( $this->tree_with_loop_grid_alternate_template( 55, 56 ) );
+		sort( $ids );
+		$this->assertSame( array( 55, 56 ), $ids );
+	}
+
+	public function test_finds_woocommerce_cart_and_my_account_template_settings(): void {
+		$elements = array(
+			array(
+				'id'         => 'cart0001',
+				'elType'     => 'widget',
+				'widgetType' => 'woocommerce-cart',
+				'settings'   => array( 'additional_template_select' => 77 ),
+			),
+			array(
+				'id'         => 'acct0001',
+				'elType'     => 'widget',
+				'widgetType' => 'woocommerce-my-account',
+				'settings'   => array( 'customize_dashboard_select' => 78 ),
+			),
+		);
+		$ids = Mcpwp_Elementor_Template_Refs::find_ids( $elements );
+		sort( $ids );
+		$this->assertSame( array( 77, 78 ), $ids );
+	}
+
+	public function test_ignores_zero_negative_and_non_numeric_values(): void {
+		$elements = array(
+			array(
+				'id'         => 'tpl00002',
+				'elType'     => 'widget',
+				'widgetType' => 'template',
+				'settings'   => array( 'template_id' => '' ),
+			),
+			array(
+				'id'         => 'tpl00003',
+				'elType'     => 'widget',
+				'widgetType' => 'template',
+				'settings'   => array( 'template_id' => 0 ),
+			),
+			array(
+				'id'         => 'tpl00004',
+				'elType'     => 'widget',
+				'widgetType' => 'template',
+				'settings'   => array( 'template_id' => -5 ),
+			),
+			array(
+				'id'         => 'tpl00005',
+				'elType'     => 'widget',
+				'widgetType' => 'template',
+				'settings'   => array( 'template_id' => 'not-a-number' ),
+			),
+		);
+		$this->assertSame( array(), Mcpwp_Elementor_Template_Refs::find_ids( $elements ) );
+	}
+
+	public function test_find_ids_deduplicates(): void {
+		$elements = array(
+			$this->tree_with_template_widget( 99 )[0],
+			$this->tree_with_global_widget( 99 )[0],
+		);
+		$this->assertSame( array( 99 ), Mcpwp_Elementor_Template_Refs::find_ids( $elements ) );
+	}
+
+	// =========================================================================
+	// Write side — Mcpwp_Elementor_Basic::check_template_references() and
+	// every write path that calls it
+	// =========================================================================
+
+	public function test_no_gate_injected_means_unrestricted(): void {
+		// Matches every other injected-callback convention in this trait
+		// (set_category_allowed_callback et al.): a context with no
+		// REST/auth wiring at all is not newly restricted by this fix.
+		$elementor = new Mcpwp_Elementor_Basic();
+		$this->assertTrue( $elementor->check_template_references( $this->tree_with_template_widget( self::ARCHETYPE_ID ) ) );
+	}
+
+	public function test_add_section_refuses_embedded_template_widget_caller_cannot_read(): void {
+		$elementor = new Mcpwp_Elementor_Basic();
+		$elementor->set_category_allowed_callback(
+			function ( $post_type ) {
+				return in_array( $post_type, array( 'page' ), true );
+			}
+		);
+		$elementor->set_template_ref_gate(
+			function ( array $ids ) {
+				// Only elementor-templates disabled; ARCHETYPE_ID is the only
+				// candidate this test ever submits.
+				return in_array( self::ARCHETYPE_ID, $ids, true )
+					? new WP_Error( 'not_found', 'The requested resource was not found.', array( 'status' => 404, 'hint' => 'Check the id with wp_search or wp_list_posts.' ) )
+					: true;
+			}
+		);
+
+		$before = $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'];
+		$result = $elementor->add_section(
+			self::PAGE_ID,
+			array( 'element' => $this->tree_with_template_widget( self::ARCHETYPE_ID )[0] )
+		);
+
+		$this->assert_canonical_not_found( $result, 'A Template widget referencing a gated id must refuse the whole write.' );
+		$this->assertSame( $before, $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'], 'Nothing must have been written.' );
+	}
+
+	public function test_add_section_allows_template_widget_caller_can_read(): void {
+		$elementor = new Mcpwp_Elementor_Basic();
+		$elementor->set_category_allowed_callback(
+			function ( $post_type ) {
+				return true;
+			}
+		);
+		$elementor->set_template_ref_gate(
+			function ( array $ids ) {
+				return true; // elementor-templates is enabled for this caller.
+			}
+		);
+
+		$result = $elementor->add_section(
+			self::PAGE_ID,
+			array( 'element' => $this->tree_with_template_widget( self::ARCHETYPE_ID )[0] )
+		);
+
+		$this->assertIsArray( $result, 'A readable template reference must not be refused.' );
+		$this->assertTrue( $result['success'] ?? false );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_set_elementor_data_refuses_global_widget_referencing_gated_template(): void {
+		if ( ! defined( 'ELEMENTOR_VERSION' ) ) {
+			define( 'ELEMENTOR_VERSION', '3.0' );
+		}
+		$elementor = new Mcpwp_Elementor_Basic();
+		$elementor->set_category_allowed_callback(
+			function ( $post_type ) {
+				return true;
+			}
+		);
+		$elementor->set_template_ref_gate(
+			function ( array $ids ) {
+				return new WP_Error( 'not_found', 'The requested resource was not found.', array( 'status' => 404, 'hint' => 'Check the id with wp_search or wp_list_posts.' ) );
+			}
+		);
+
+		$before = $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'];
+		$result = $elementor->set_elementor_data(
+			self::PAGE_ID,
+			array( 'elementor_data' => $this->tree_with_global_widget( self::ARCHETYPE_ID ) )
+		);
+
+		$this->assert_canonical_not_found( $result );
+		$this->assertSame( $before, $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'] );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_set_elementor_data_dry_run_also_refuses(): void {
+		if ( ! defined( 'ELEMENTOR_VERSION' ) ) {
+			define( 'ELEMENTOR_VERSION', '3.0' );
+		}
+		$elementor = new Mcpwp_Elementor_Basic();
+		$elementor->set_category_allowed_callback(
+			function ( $post_type ) {
+				return true;
+			}
+		);
+		$elementor->set_template_ref_gate(
+			function ( array $ids ) {
+				return new WP_Error( 'not_found', 'The requested resource was not found.', array( 'status' => 404, 'hint' => 'Check the id with wp_search or wp_list_posts.' ) );
+			}
+		);
+
+		$result = $elementor->set_elementor_data(
+			self::PAGE_ID,
+			array( 'elementor_data' => $this->tree_with_template_widget( self::ARCHETYPE_ID ) ),
+			true // dry_run
+		);
+
+		$this->assert_canonical_not_found( $result, 'A dry run must report the same refusal a real write would give.' );
+	}
+
+	public function test_patch_elementor_refuses_operation_that_introduces_a_gated_template(): void {
+		$elementor = new Mcpwp_Elementor_Basic();
+		$elementor->set_category_allowed_callback(
+			function ( $post_type ) {
+				return true;
+			}
+		);
+		$elementor->set_template_ref_gate(
+			function ( array $ids ) {
+				return new WP_Error( 'not_found', 'The requested resource was not found.', array( 'status' => 404, 'hint' => 'Check the id with wp_search or wp_list_posts.' ) );
+			}
+		);
+
+		$before = $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'];
+		$result = $elementor->patch_elementor(
+			self::PAGE_ID,
+			array(
+				'operations' => array(
+					array(
+						'op'      => 'add',
+						'position' => 'end',
+						'element' => $this->tree_with_template_widget( self::ARCHETYPE_ID )[0],
+					),
+				),
+			)
+		);
+
+		$this->assert_canonical_not_found( $result );
+		$this->assertSame( $before, $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'] );
+	}
+
+	// =========================================================================
+	// Auth-trait primitives — post_ref_readable() / template_ref_gate() /
+	// template_render_gate()
+	// =========================================================================
+
+	public function test_post_ref_readable_false_for_missing_id(): void {
+		$controller = new Mcpwp_REST_Elementor();
+		$this->force_key_record( $controller, array( 'elementor', 'elementor-templates' ) );
+		$this->assertFalse( $controller->post_ref_readable( self::MISSING_ID, 'elementor' ) );
+	}
+
+	public function test_post_ref_readable_false_when_category_disabled_site_wide(): void {
+		// Exact reproduction of the issue's own scenario: a fully-privileged
+		// key, but the site owner disabled elementor-templates for everyone.
+		update_option( 'mcpwp_disabled_tool_categories', array( 'elementor-templates' ) );
+
+		$controller = new Mcpwp_REST_Elementor();
+		$this->force_key_record( $controller, array(), 'admin' ); // admin: categories=[] means "all", still loses to the site-wide disable.
+		$this->assertFalse( $controller->post_ref_readable( self::ARCHETYPE_ID, 'elementor' ) );
+	}
+
+	public function test_post_ref_readable_true_when_category_held(): void {
+		$controller = new Mcpwp_REST_Elementor();
+		$this->force_key_record( $controller, array( 'elementor', 'elementor-templates' ) );
+		$this->assertTrue( $controller->post_ref_readable( self::ARCHETYPE_ID, 'elementor' ) );
+	}
+
+	public function test_template_ref_gate_refuses_on_first_hidden_id(): void {
+		$controller = new Mcpwp_REST_Elementor();
+		$this->force_key_record( $controller, array( 'elementor' ) ); // no elementor-templates
+		$gate   = $controller->template_ref_gate( 'elementor' );
+		$result = $gate( array( self::ARCHETYPE_ID ) );
+		$this->assert_canonical_not_found( $result );
+	}
+
+	public function test_template_ref_gate_passes_when_every_id_readable(): void {
+		$controller = new Mcpwp_REST_Elementor();
+		$this->force_key_record( $controller, array( 'elementor', 'elementor-templates' ) );
+		$gate = $controller->template_ref_gate( 'elementor' );
+		$this->assertTrue( $gate( array( self::ARCHETYPE_ID ) ) );
+	}
+
+	public function test_template_render_gate_denies_hidden_and_allows_readable(): void {
+		$denied  = new Mcpwp_REST_Elementor();
+		$this->force_key_record( $denied, array( 'elementor' ) );
+		$deny_gate = $denied->template_render_gate( 'elementor' );
+		$this->assertFalse( $deny_gate( self::ARCHETYPE_ID ) );
+
+		$allowed = new Mcpwp_REST_Elementor();
+		$this->force_key_record( $allowed, array( 'elementor', 'elementor-templates' ) );
+		$allow_gate = $allowed->template_render_gate( 'elementor' );
+		$this->assertTrue( $allow_gate( self::ARCHETYPE_ID ) );
+	}
+
+	// =========================================================================
+	// REST wiring — Mcpwp_REST_Elementor::check_permission() installs both
+	// gates end to end (the issue's own reproduction shape)
+	// =========================================================================
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_rest_wiring_refuses_write_embedding_gated_template_end_to_end(): void {
+		if ( ! defined( 'ELEMENTOR_VERSION' ) ) {
+			define( 'ELEMENTOR_VERSION', '3.0' );
+		}
+		$controller = new Mcpwp_REST_Elementor();
+		$created    = $controller->create_scoped_api_key( 'designer, no templates', array( 'read', 'write' ), 'custom', array( 'elementor' ) );
+		$request    = new WP_REST_Request(
+			'POST',
+			'/mcpwp/v1/elementor/' . self::PAGE_ID,
+			array(
+				'id'             => self::PAGE_ID,
+				'elementor_data' => $this->tree_with_template_widget( self::ARCHETYPE_ID ),
+			),
+			array( 'X-API-Key' => $created['key'] )
+		);
+
+		$auth = $controller->check_permission( $request );
+		$this->assertTrue( $auth, 'The route itself (elementor category) must still be reachable.' );
+
+		$before = $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'];
+		$result = $controller->set_elementor_data( $request );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'not_found', $result->get_error_code() );
+		$this->assertSame( $before, $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'], 'The gated template reference must never reach storage.' );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_rest_wiring_allows_write_when_key_holds_elementor_templates(): void {
+		if ( ! defined( 'ELEMENTOR_VERSION' ) ) {
+			define( 'ELEMENTOR_VERSION', '3.0' );
+		}
+		$controller = new Mcpwp_REST_Elementor();
+		$created    = $controller->create_scoped_api_key( 'full designer', array( 'read', 'write' ), 'custom', array( 'elementor', 'elementor-templates' ) );
+		$request    = new WP_REST_Request(
+			'POST',
+			'/mcpwp/v1/elementor/' . self::PAGE_ID,
+			array(
+				'id'             => self::PAGE_ID,
+				'elementor_data' => $this->tree_with_template_widget( self::ARCHETYPE_ID ),
+			),
+			array( 'X-API-Key' => $created['key'] )
+		);
+
+		$this->assertTrue( $controller->check_permission( $request ) );
+		$result = $controller->set_elementor_data( $request );
+
+		$this->assertInstanceOf( WP_REST_Response::class, $result, 'A key that DOES hold elementor-templates must be able to embed the reference.' );
+	}
+
+	// =========================================================================
+	// Read side — render_with_template_gate() filter mechanics (Elementor
+	// itself is not installable in this unit harness — see rig proof for the
+	// full in-process render; this proves the redaction mechanism the rig
+	// exercises end to end).
+	// =========================================================================
+
+	public function test_render_with_template_gate_blanks_a_denied_nested_document(): void {
+		$elementor = new Mcpwp_Elementor_Basic();
+		$elementor->set_nested_render_gate(
+			function ( $doc_post_id ) {
+				return (int) $doc_post_id !== self::ARCHETYPE_ID; // deny only the nested template.
+			}
+		);
+
+		$rc     = new ReflectionClass( $elementor );
+		$method = $rc->getMethod( 'render_with_template_gate' );
+		$method->setAccessible( true );
+
+		$result = $method->invoke(
+			$elementor,
+			self::PAGE_ID,
+			function () {
+				// Simulates Elementor::Frontend::get_builder_content() calling
+				// apply_filters( 'elementor/frontend/builder_content_data', ... )
+				// once for the outer page and once for the nested template it
+				// resolves via a Template/Global widget.
+				$outer  = apply_filters( 'elementor/frontend/builder_content_data', array( 'outer' => true ), self::PAGE_ID );
+				$nested = apply_filters( 'elementor/frontend/builder_content_data', array( 'secret' => 'SECRET-TPL-HEADING' ), self::ARCHETYPE_ID );
+				return array( 'outer' => $outer, 'nested' => $nested );
+			}
+		);
+
+		$this->assertSame( array( 'outer' => true ), $result['outer'], 'The outer document being read must never be redacted by this filter.' );
+		$this->assertSame( array(), $result['nested'], 'A nested document the caller cannot read must render as empty, not fail.' );
+	}
+
+	public function test_render_with_template_gate_passes_through_a_readable_nested_document(): void {
+		$elementor = new Mcpwp_Elementor_Basic();
+		$elementor->set_nested_render_gate(
+			function ( $doc_post_id ) {
+				return true; // caller holds elementor-templates.
+			}
+		);
+
+		$rc     = new ReflectionClass( $elementor );
+		$method = $rc->getMethod( 'render_with_template_gate' );
+		$method->setAccessible( true );
+
+		$result = $method->invoke(
+			$elementor,
+			self::PAGE_ID,
+			function () {
+				return apply_filters( 'elementor/frontend/builder_content_data', array( 'visible' => 'ok' ), self::ARCHETYPE_ID );
+			}
+		);
+
+		$this->assertSame( array( 'visible' => 'ok' ), $result );
+	}
+
+	public function test_render_with_template_gate_removes_its_filter_after_use(): void {
+		$elementor = new Mcpwp_Elementor_Basic();
+		$elementor->set_nested_render_gate(
+			function ( $doc_post_id ) {
+				return false; // deny everything, to make a leak obvious.
+			}
+		);
+
+		$rc     = new ReflectionClass( $elementor );
+		$method = $rc->getMethod( 'render_with_template_gate' );
+		$method->setAccessible( true );
+
+		$method->invoke( $elementor, self::PAGE_ID, function () {
+			return apply_filters( 'elementor/frontend/builder_content_data', array( 'x' => 1 ), self::ARCHETYPE_ID );
+		} );
+
+		// A later, unrelated caller (no gate involved at all) must see its
+		// own data completely unfiltered — the hook must not have leaked.
+		$after = apply_filters( 'elementor/frontend/builder_content_data', array( 'x' => 1 ), self::ARCHETYPE_ID );
+		$this->assertSame( array( 'x' => 1 ), $after );
+	}
+
+	public function test_render_with_template_gate_no_gate_injected_calls_render_directly(): void {
+		$elementor = new Mcpwp_Elementor_Basic(); // no set_nested_render_gate() at all.
+
+		$rc     = new ReflectionClass( $elementor );
+		$method = $rc->getMethod( 'render_with_template_gate' );
+		$method->setAccessible( true );
+
+		$called = false;
+		$result = $method->invoke(
+			$elementor,
+			self::PAGE_ID,
+			function () use ( &$called ) {
+				$called = true;
+				return 'rendered';
+			}
+		);
+
+		$this->assertTrue( $called );
+		$this->assertSame( 'rendered', $result );
+	}
+
+	// =========================================================================
+	// Pro write paths that bypass the shared writer trait entirely
+	// =========================================================================
+
+	public function test_pro_clone_page_refuses_when_source_embeds_gated_global_widget(): void {
+		$GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'] = json_encode( $this->tree_with_global_widget( self::ARCHETYPE_ID ) );
+
+		$elementor_pro = new Mcpwp_Elementor_Pro();
+		$controller    = new Mcpwp_REST_Elementor_Pro( $elementor_pro );
+		$created       = $controller->create_scoped_api_key( 'no templates', array( 'read', 'write' ), 'custom', array( 'elementor', 'elementor-build' ) );
+		$request       = new WP_REST_Request(
+			'POST',
+			'/mcpwp/v1/elementor/clone',
+			array( 'source_id' => self::PAGE_ID ),
+			array( 'X-API-Key' => $created['key'] )
+		);
+
+		$this->assertTrue( $controller->check_permission( $request ) );
+
+		$before_count = count( $GLOBALS['_mcpwp_test_posts'] );
+		$result       = $controller->clone_page( $request );
+
+		$this->assertInstanceOf( WP_Error::class, $result, 'clone_page() must refuse rather than materialize the gated reference on a new, fully-readable post.' );
+		$this->assertSame( 'not_found', $result->get_error_code() );
+		$this->assertCount( $before_count, $GLOBALS['_mcpwp_test_posts'], 'No new post must have been created.' );
+	}
+
+	public function test_pro_clone_page_allows_source_with_no_template_reference(): void {
+		$elementor_pro = new Mcpwp_Elementor_Pro();
+		$controller    = new Mcpwp_REST_Elementor_Pro( $elementor_pro );
+		$created       = $controller->create_scoped_api_key( 'no templates', array( 'read', 'write' ), 'custom', array( 'elementor', 'elementor-build' ) );
+		$request       = new WP_REST_Request(
+			'POST',
+			'/mcpwp/v1/elementor/clone',
+			array( 'source_id' => self::PAGE_ID ),
+			array( 'X-API-Key' => $created['key'] )
+		);
+
+		$this->assertTrue( $controller->check_permission( $request ) );
+		$result = $controller->clone_page( $request );
+
+		$this->assertInstanceOf( WP_REST_Response::class, $result, 'A plain page with no embedded template reference must clone normally.' );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_theme_builder_create_template_refuses_gated_template_reference(): void {
+		// is_available() gates create_theme_template() before this fix's own
+		// check ever runs — the fixture's namespaced class is enough to
+		// satisfy it; no working Elementor\Plugin instance is needed since
+		// the #1032 check now runs before wp_insert_post(), let alone any
+		// Document::save() call.
+		if ( ! defined( 'ELEMENTOR_PRO_VERSION' ) ) {
+			define( 'ELEMENTOR_PRO_VERSION', '4.2.3' );
+		}
+		require_once __DIR__ . '/fixtures/theme-builder-elementor-doubles.php';
+
+		$theme_builder = new Mcpwp_Theme_Builder();
+		$controller    = new Mcpwp_REST_Theme_Builder( $theme_builder );
+		$created       = $controller->create_scoped_api_key( 'no templates', array( 'read', 'write' ), 'custom', array( 'elementor-theme' ) );
+		$request       = new WP_REST_Request(
+			'POST',
+			'/mcpwp/v1/theme-builder/templates',
+			array(
+				'title'          => 'New Header',
+				'type'           => 'header',
+				'elementor_data' => $this->tree_with_template_widget( self::ARCHETYPE_ID ),
+			),
+			array( 'X-API-Key' => $created['key'] )
+		);
+
+		$this->assertTrue( $controller->check_permission( $request ) );
+
+		$before_count = count( $GLOBALS['_mcpwp_test_posts'] );
+		$result       = $theme_builder->create_theme_template(
+			array(
+				'title'          => 'New Header',
+				'type'           => 'header',
+				'elementor_data' => $this->tree_with_template_widget( self::ARCHETYPE_ID ),
+			)
+		);
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'not_found', $result->get_error_code() );
+		$this->assertCount( $before_count, $GLOBALS['_mcpwp_test_posts'], 'No draft template post must have been left behind.' );
+	}
+}

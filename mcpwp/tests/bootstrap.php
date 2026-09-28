@@ -3867,6 +3867,7 @@ require_once dirname(__DIR__) . '/includes/core/class-mcpwp-destructive-gate.php
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-registry.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-element-keys.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-element-ids.php';
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-template-refs.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-stored-tree.php';
 // Site graph (#943 S1): class-mcpwp-rest-api.php's content-graph extraction
 // helpers below delegate to these — loaded before that require so every test

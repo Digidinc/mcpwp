@@ -936,7 +936,18 @@ trait Mcpwp_Elementor_Reader_Trait {
 		$html     = '';
 
 		if ( $frontend ) {
-			$html = $frontend->get_builder_content( $post_id, true );
+			// #1032: a Template/Global widget or a Loop Grid/Carousel on this
+			// page can embed ANOTHER Elementor document by id — render it as
+			// an empty placeholder rather than expand it if this caller
+			// cannot read the category that gates it. See
+			// render_with_template_gate()'s docblock for how one filter
+			// covers every nesting shape.
+			$html = $this->render_with_template_gate(
+				$post_id,
+				static function () use ( $frontend, $post_id ) {
+					return $frontend->get_builder_content( $post_id, true );
+				}
+			);
 		}
 
 		// If rendering failed, build a fallback text from the raw JSON.

@@ -917,6 +917,55 @@ abstract class Mcpwp_REST_API {
 	}
 
 	/**
+	 * Render one post id's Elementor content in-process, redacting any
+	 * NESTED document (a Template/Global widget, a Loop Grid/Carousel's
+	 * display template, ...) this caller cannot read (#1032).
+	 *
+	 * Hooks Elementor's `elementor/frontend/builder_content_data` filter —
+	 * fired from Frontend::get_builder_content() for the outer document AND,
+	 * because Document::get_content()/print_content() route through that
+	 * exact same method, for every nested document a widget or Loop skin
+	 * resolves via Plugin::elementor()->documents->get($id) — so this one
+	 * hook covers the Template widget, the Global widget, and Loop
+	 * Grid/Carousel's per-item template alike, with no per-widget-type
+	 * special-casing. A denied nested document renders as an EMPTY page
+	 * (Frontend::get_builder_content()'s own "empty $data" branch) rather
+	 * than failing the read — the post actually being rendered is not in
+	 * question, only whether a template it embeds may be shown.
+	 *
+	 * The outer $post_id is always let through: its own visibility was
+	 * already decided by the caller before this runs (guard_non_public_post()
+	 * / guard_post_type_category()), and Elementor's own recursion guard in
+	 * get_builder_content_for_display() only compares against the current
+	 * loop post anyway.
+	 *
+	 * @param int    $post_id        Post id being rendered.
+	 * @param string $route_category The resolving route's own category
+	 *                                (get_category_for_route()'s answer) —
+	 *                                see post_ref_readable()'s docblock.
+	 * @param bool   $with_css       Whether to inline CSS/font links.
+	 * @return string Rendered HTML.
+	 */
+	protected function render_elementor_in_process( $post_id, $route_category, $with_css = true ) {
+		$post_id = (int) $post_id;
+		$filter  = function ( $data, $doc_post_id ) use ( $post_id, $route_category ) {
+			if ( (int) $doc_post_id === $post_id ) {
+				return $data;
+			}
+
+			return $this->post_ref_readable( $doc_post_id, $route_category ) ? $data : array();
+		};
+
+		add_filter( 'elementor/frontend/builder_content_data', $filter, 10, 2 );
+
+		try {
+			return \Elementor\Plugin::$instance->frontend->get_builder_content_for_display( $post_id, $with_css );
+		} finally {
+			remove_filter( 'elementor/frontend/builder_content_data', $filter, 10 );
+		}
+	}
+
+	/**
 	 * Render a post's body HTML in-process (no HTTP round trip) — the same
 	 * approach class-mcpwp-rest-site-content.php's rendered-copy surface uses
 	 * for draft/pending/private posts that a loopback fetch can't reach.
@@ -931,16 +980,19 @@ abstract class Mcpwp_REST_API {
 	 * Safe to call for any post status — callers are responsible for gating
 	 * who may see the result (see requester_can_see_non_public()).
 	 *
-	 * @param WP_Post $post Post object.
+	 * @param WP_Post $post           Post object.
+	 * @param string  $route_category The resolving route's own category, for
+	 *                                 the #1032 nested-template redaction —
+	 *                                 see render_elementor_in_process().
 	 * @return array{html: string, method: string} Rendered HTML and the render method used.
 	 */
-	protected function render_post_html_in_process( $post ) {
+	protected function render_post_html_in_process( $post, $route_category = '' ) {
 		$post_id = (int) $post->ID;
 		$html    = '';
 		$method  = 'internal_content';
 
 		if ( $this->is_elementor_built( $post_id ) && class_exists( '\Elementor\Plugin' ) ) {
-			$html   = \Elementor\Plugin::$instance->frontend->get_builder_content_for_display( $post_id, true );
+			$html   = $this->render_elementor_in_process( $post_id, $route_category, true );
 			$method = 'internal_elementor';
 		}
 

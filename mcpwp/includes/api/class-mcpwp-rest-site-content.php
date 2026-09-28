@@ -804,7 +804,10 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 				// it before WordPress even runs. Render in-process instead — no
 				// network hop, so neither problem applies. Note: this returns the
 				// Elementor content only, not the surrounding theme header/footer.
-				return $this->get_rendered_html_via_elementor( $post_id, $selector, $max_bytes, $offset );
+				$route_category = self::get_category_for_route(
+					$this->normalize_route_for_authorization( (string) $request->get_route() )
+				);
+				return $this->get_rendered_html_via_elementor( $post_id, $selector, $max_bytes, $offset, $route_category );
 			} else {
 				// Draft/pending — use Elementor preview URL or plain preview.
 				$url = add_query_arg( 'elementor-preview', $post_id, get_permalink( $post_id ) );
@@ -1127,14 +1130,18 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 	 * Bypasses the outbound loopback fetch used for published posts — see the
 	 * caller for why that fetch is unreliable for unpublished content (#613).
 	 *
-	 * @param int         $post_id   Post ID.
-	 * @param string|null $selector  Optional CSS selector to extract.
-	 * @param int         $max_bytes Window size in bytes.
-	 * @param int         $offset    Byte offset to start the window at.
+	 * @param int         $post_id        Post ID.
+	 * @param string|null $selector       Optional CSS selector to extract.
+	 * @param int         $max_bytes      Window size in bytes.
+	 * @param int         $offset         Byte offset to start the window at.
+	 * @param string      $route_category The resolving route's own category,
+	 *                                     for the #1032 nested-template
+	 *                                     redaction — see
+	 *                                     render_elementor_in_process().
 	 * @return WP_REST_Response
 	 */
-	private function get_rendered_html_via_elementor( $post_id, $selector, $max_bytes, $offset = 0 ) {
-		$html = \Elementor\Plugin::$instance->frontend->get_builder_content_for_display( $post_id, true );
+	private function get_rendered_html_via_elementor( $post_id, $selector, $max_bytes, $offset = 0, $route_category = '' ) {
+		$html = $this->render_elementor_in_process( $post_id, $route_category, true );
 
 		$selector_used  = null;
 		$selector_found = true;
@@ -1269,7 +1276,10 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 				// Render in-process instead so pre-publish copy QA works without
 				// publishing (#675). This mirrors get_rendered_html's Elementor
 				// branch, extended to classic/Gutenberg drafts.
-				return $this->get_rendered_copy_in_process( $post, $include_chrome );
+				$route_category = self::get_category_for_route(
+					$this->normalize_route_for_authorization( (string) $request->get_route() )
+				);
+				return $this->get_rendered_copy_in_process( $post, $include_chrome, $route_category );
 			}
 		}
 
@@ -1336,13 +1346,16 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 	 * Mirrors get_rendered_html_via_elementor() — bypasses the outbound
 	 * loopback fetch entirely for content that isn't publicly reachable yet.
 	 *
-	 * @param int  $post_id        Post ID.
-	 * @param bool $include_chrome Whether to include nav/header/footer text.
+	 * @param WP_Post $post           Post object.
+	 * @param bool    $include_chrome Whether to include nav/header/footer text.
+	 * @param string  $route_category The resolving route's own category, for
+	 *                                 the #1032 nested-template redaction —
+	 *                                 see render_elementor_in_process().
 	 * @return WP_REST_Response
 	 */
-	private function get_rendered_copy_in_process( $post, $include_chrome ) {
+	private function get_rendered_copy_in_process( $post, $include_chrome, $route_category = '' ) {
 		$post_id  = (int) $post->ID;
-		$rendered = $this->render_post_html_in_process( $post );
+		$rendered = $this->render_post_html_in_process( $post, $route_category );
 		$html     = $rendered['html'];
 		$method   = $rendered['method'];
 

@@ -44,6 +44,132 @@ trait Mcpwp_Elementor_Validator_Trait {
 	}
 
 	/**
+	 * Gate injected by a REST controller's check_permission() (#1032):
+	 * takes a list of candidate elementor_library ids
+	 * (Mcpwp_Elementor_Template_Refs::find_ids()'s own output) and returns
+	 * true|WP_Error. Null (no key record / trusted admin-AJAX context, or a
+	 * caller that never wired one at all) means unrestricted — same
+	 * convention as $category_allowed_callback above.
+	 *
+	 * @var callable|null
+	 */
+	private $template_ref_gate = null;
+
+	/**
+	 * Gate injected alongside the write gate above, for the READ side
+	 * (#1032): takes ONE nested document post id Elementor is about to
+	 * render and returns bool — true to let it expand, false to render it
+	 * as an empty placeholder. Distinct from $template_ref_gate because a
+	 * blocked READ never fails the request (see check_template_references()
+	 * vs redact_nested_renders()).
+	 *
+	 * @var callable|null
+	 */
+	private $nested_render_gate = null;
+
+	/**
+	 * Inject the write-side gate. Called once per request, from the owning
+	 * REST controller's check_permission() right after verify_api_key()
+	 * succeeds — mirrors set_category_allowed_callback() above.
+	 *
+	 * @param callable|null $callback function(int[] $ids): true|WP_Error.
+	 * @return void
+	 */
+	public function set_template_ref_gate( $callback ) {
+		$this->template_ref_gate = is_callable( $callback ) ? $callback : null;
+	}
+
+	/**
+	 * Inject the read-side gate. See set_template_ref_gate()'s docblock.
+	 *
+	 * @param callable|null $callback function(int $doc_post_id): bool.
+	 * @return void
+	 */
+	public function set_nested_render_gate( $callback ) {
+		$this->nested_render_gate = is_callable( $callback ) ? $callback : null;
+	}
+
+	/**
+	 * The ONE shared walker every Elementor write path calls before
+	 * persisting an element tree (#1032): finds every embedded Template
+	 * Library reference (Mcpwp_Elementor_Template_Refs) and, if a
+	 * template_ref_gate was injected, refuses the WHOLE write the moment any
+	 * one of them is missing or unreadable to this caller. No gate injected
+	 * (a context with no REST/auth wiring — e.g. WP-CLI, admin-AJAX with no
+	 * key record) means unrestricted, matching every other injected gate in
+	 * this trait.
+	 *
+	 * @param array $elements Element tree about to be written.
+	 * @return true|WP_Error
+	 */
+	public function check_template_references( array $elements ) {
+		if ( null === $this->template_ref_gate || ! class_exists( 'Mcpwp_Elementor_Template_Refs' ) ) {
+			return true;
+		}
+
+		$ids = Mcpwp_Elementor_Template_Refs::find_ids( $elements );
+		if ( empty( $ids ) ) {
+			return true;
+		}
+
+		return call_user_func( $this->template_ref_gate, $ids );
+	}
+
+	/**
+	 * Wrap an in-process Elementor render call so that every NESTED document
+	 * it resolves (a Template/Global widget, a Loop Grid/Carousel's display
+	 * template, ...) is judged against the injected nested_render_gate
+	 * before its content is allowed to expand (#1032's read side).
+	 *
+	 * Hooks Elementor's own `elementor/frontend/builder_content_data` filter
+	 * — fired from Frontend::get_builder_content() for the outer document
+	 * AND, because Document::get_content()/print_content() route through
+	 * that exact same method, for every nested document a widget or Loop
+	 * skin resolves via Plugin::elementor()->documents->get($id) — so one
+	 * hook here covers the Template widget, the Global widget, and Loop
+	 * Grid/Carousel's per-item template alike, with no per-widget-type
+	 * special-casing. A denied nested document renders as an EMPTY page
+	 * (Frontend::get_builder_content()'s own "empty $data" branch), exactly
+	 * as if that template had no content — never a request failure, since
+	 * the post actually being read is not in question.
+	 *
+	 * The OUTER post id itself is always let through: its own visibility was
+	 * already decided by the caller (guard_non_public_post()/category checks
+	 * run before rendering starts), and Elementor's own recursion guard in
+	 * get_builder_content_for_display() only compares against the CURRENT
+	 * loop post anyway — this filter must not re-litigate that decision.
+	 *
+	 * @param int      $outer_post_id The post actually being rendered.
+	 * @param callable $render        function(): string — performs the
+	 *                                actual Elementor render call.
+	 * @return string Whatever $render() returned.
+	 */
+	protected function render_with_template_gate( $outer_post_id, callable $render ) {
+		if ( null === $this->nested_render_gate ) {
+			return $render();
+		}
+
+		$gate     = $this->nested_render_gate;
+		$outer_id = (int) $outer_post_id;
+
+		$filter = function ( $data, $doc_post_id ) use ( $gate, $outer_id ) {
+			if ( (int) $doc_post_id === $outer_id ) {
+				return $data;
+			}
+
+			return call_user_func( $gate, (int) $doc_post_id ) ? $data : array();
+		};
+
+		add_filter( 'elementor/frontend/builder_content_data', $filter, 10, 2 );
+
+		try {
+			return $render();
+		} finally {
+			remove_filter( 'elementor/frontend/builder_content_data', $filter, 10 );
+		}
+	}
+
+	/**
 	 * Whether $post_type needs a tool category the caller does not hold, ON
 	 * TOP of the /elementor route's own 'elementor' category
 	 * (get_route_category_map()) — which every route this door registers

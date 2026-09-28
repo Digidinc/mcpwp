@@ -54,6 +54,17 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 					return $this->caller_may_read_category( $this->category_for_post_type( $post_type ) );
 				}
 			);
+
+			// #1032: refuse a write that embeds a Template Library reference
+			// (Template/Global widget, Loop Grid/Carousel, ...) this caller
+			// cannot read, and redact one on the way out of a preview render.
+			// Judged by THIS route's own category, same as every other
+			// contextual post-ref decision (category_for_post_ref()).
+			$route_category = self::get_category_for_route(
+				$this->normalize_route_for_authorization( (string) $request->get_route() )
+			);
+			$this->elementor->set_template_ref_gate( $this->template_ref_gate( $route_category ) );
+			$this->elementor->set_nested_render_gate( $this->template_render_gate( $route_category ) );
 		}
 
 		return $result;

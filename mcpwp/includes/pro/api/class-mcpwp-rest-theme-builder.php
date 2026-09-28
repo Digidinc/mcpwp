@@ -33,6 +33,27 @@ class Mcpwp_REST_Theme_Builder extends Mcpwp_REST_API {
 	}
 
 	/**
+	 * Authenticate, then wire the #1032 template-reference gate into
+	 * Mcpwp_Theme_Builder — see Mcpwp_REST_Elementor::check_permission()'s
+	 * docblock for the shared design.
+	 *
+	 * @param WP_REST_Request $request Request object.
+	 * @return bool|WP_Error
+	 */
+	public function check_permission( $request ) {
+		$result = parent::check_permission( $request );
+
+		if ( true === $result ) {
+			$route_category = self::get_category_for_route(
+				$this->normalize_route_for_authorization( (string) $request->get_route() )
+			);
+			$this->theme_builder->set_template_ref_gate( $this->template_ref_gate( $route_category ) );
+		}
+
+		return $result;
+	}
+
+	/**
 	 * Register REST routes.
 	 */
 	public function register_routes() {

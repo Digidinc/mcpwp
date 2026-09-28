@@ -38,6 +38,21 @@ class Mcpwp_Page_Builder {
 	);
 
 	/**
+	 * Inject the #1032 write-side gate, forwarded to the shared basic
+	 * handler — see Mcpwp_Api_Auth::template_ref_gate(). Every blueprint
+	 * section here is built server-side from a fixed catalog and never
+	 * accepts a caller-supplied template_id/templateID, so this is
+	 * defense-in-depth rather than a live path: build() still writes through
+	 * set_elementor_data(), which runs the same check regardless.
+	 *
+	 * @param callable|null $callback function(int[] $ids): true|WP_Error.
+	 * @return void
+	 */
+	public function set_template_ref_gate( $callback ) {
+		$this->get_basic_handler()->set_template_ref_gate( $callback );
+	}
+
+	/**
 	 * Get the shared basic Elementor handler.
 	 *
 	 * @return Mcpwp_Elementor_Basic

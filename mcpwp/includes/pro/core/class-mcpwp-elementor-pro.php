@@ -108,6 +108,32 @@ class Mcpwp_Elementor_Pro {
 	private $basic_handler = null;
 
 	/**
+	 * Gate injected by Mcpwp_REST_Elementor_Pro::check_permission() (#1032):
+	 * refuses a write that embeds a Template Library reference this caller
+	 * cannot read. Forwarded to the shared basic handler for every
+	 * save_elementor_data() call below (create/update template, apply
+	 * template/archetype/part, landing page, save-section-as-template), and
+	 * kept here too because clone_page() copies `_elementor_data` as a raw
+	 * postmeta value and never reaches that handler at all.
+	 *
+	 * @var callable|null
+	 */
+	private $template_ref_gate = null;
+
+	/**
+	 * Inject the #1032 write-side gate — see
+	 * Mcpwp_Api_Auth::template_ref_gate()'s docblock for what the callable
+	 * does.
+	 *
+	 * @param callable|null $callback function(int[] $ids): true|WP_Error.
+	 * @return void
+	 */
+	public function set_template_ref_gate( $callback ) {
+		$this->template_ref_gate = is_callable( $callback ) ? $callback : null;
+		$this->get_basic_handler()->set_template_ref_gate( $callback );
+	}
+
+	/**
 	 * Check if Elementor is active.
 	 *
 	 * @return bool
@@ -1360,6 +1386,26 @@ class Mcpwp_Elementor_Pro {
 		// no post ID to look postmeta up by otherwise. See that method's
 		// docblock.
 		$elementor_data = get_post_meta( $source_id, '_elementor_data', true );
+
+		// #1032: a clone copies _elementor_data verbatim, bypassing
+		// save_elementor_data()/validate_and_fix_elements() entirely — so a
+		// Template/Global widget or Loop Grid/Carousel referencing a
+		// template this caller cannot read would otherwise ride along into
+		// a brand-new post the caller DOES fully control (and can then read
+		// back through /elementor/{id}/preview). Same gate, same refusal, as
+		// every other write path.
+		if ( null !== $this->template_ref_gate && ! empty( $elementor_data ) && class_exists( 'Mcpwp_Elementor_Template_Refs' ) && class_exists( 'Mcpwp_Elementor_Stored_Tree' ) ) {
+			$source_elements = Mcpwp_Elementor_Stored_Tree::read( $elementor_data )['elements'];
+			if ( is_array( $source_elements ) ) {
+				$ids = Mcpwp_Elementor_Template_Refs::find_ids( $source_elements );
+				if ( ! empty( $ids ) ) {
+					$ref_check = call_user_func( $this->template_ref_gate, $ids );
+					if ( is_wp_error( $ref_check ) ) {
+						return $ref_check;
+					}
+				}
+			}
+		}
 
 		$new_post = array(
 			'post_title'   => $title,

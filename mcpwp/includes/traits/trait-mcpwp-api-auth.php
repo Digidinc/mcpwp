@@ -2288,6 +2288,98 @@ trait Mcpwp_Api_Auth {
 	}
 
 	/**
+	 * Whether $id — resolved fresh, on the spot, NOT from a declared request
+	 * param — must read to this caller exactly like a missing post (#1032).
+	 *
+	 * Every declared scalar/per-item post reference (collect_post_refs()'s
+	 * own param map) is judged by post_ref_is_hidden() already. This is the
+	 * same judgment for an id that never appears as a request PARAMETER at
+	 * all because it is embedded a level deeper — inside the JSON tree a
+	 * write submits (an Elementor Template/Global widget's own
+	 * template_id/templateID, Mcpwp_Elementor_Template_Refs' whole reason
+	 * for existing) or inside a stored document Elementor is about to render
+	 * for a read (a nested template a Template/Global widget or a Loop
+	 * Grid/Carousel resolves at render time, `elementor/frontend/
+	 * builder_content_data`'s own $post_id argument). Both call sites need
+	 * the identical existence-oracle answer post_ref_is_hidden() already
+	 * gives declared params, so this is that same rule, callable for an id
+	 * discovered by a different route.
+	 *
+	 * @param int    $id             Candidate post id.
+	 * @param string $route_category The resolving route's own category
+	 *                                (get_category_for_route()'s answer) —
+	 *                                same input category_for_post_ref()
+	 *                                takes everywhere else, so a template
+	 *                                embedded or rendered through
+	 *                                /theme-builder/* is judged by the same
+	 *                                rule as one resolved directly through
+	 *                                that route.
+	 * @return bool True when the caller may treat $id as existing and readable.
+	 */
+	public function post_ref_readable( $id, $route_category ) {
+		$id = (int) $id;
+		if ( $id <= 0 ) {
+			return true; // Not a real reference — nothing to hide.
+		}
+
+		$rows = self::fetch_post_ref_rows( array( $id ) );
+
+		return ! $this->post_ref_is_hidden( $id, $rows[ $id ] ?? null, (string) $route_category );
+	}
+
+	/**
+	 * Build a callable gate for embedded Elementor Template-Library
+	 * references (#1032): given the candidate elementor_library (or other
+	 * post-type) ids Mcpwp_Elementor_Template_Refs::find_ids() turned up in
+	 * a submitted element tree, refuse the WHOLE write with the canonical
+	 * post-ref not-found error the moment any one of them is missing or
+	 * hidden from this caller — same body for both, matching every other
+	 * declared post reference (post_ref_not_found_error()'s own rule).
+	 *
+	 * Injected into the business-logic write paths (Mcpwp_Elementor_Basic,
+	 * Mcpwp_Elementor_Pro, Mcpwp_Page_Builder, Mcpwp_Theme_Builder — none of
+	 * which have REST/auth context of their own) via
+	 * set_template_ref_gate(), the same "caller decides, callee applies the
+	 * verdict" split set_category_allowed_callback() already uses for the
+	 * post-type category check.
+	 *
+	 * @param string $route_category The resolving route's own category.
+	 * @return callable function(int[] $ids): true|WP_Error
+	 */
+	public function template_ref_gate( $route_category ) {
+		$route_category = (string) $route_category;
+
+		return function ( array $ids ) use ( $route_category ) {
+			foreach ( $ids as $id ) {
+				if ( ! $this->post_ref_readable( $id, $route_category ) ) {
+					return $this->post_ref_not_found_error();
+				}
+			}
+
+			return true;
+		};
+	}
+
+	/**
+	 * Build a callable gate for a NESTED document Elementor resolves while
+	 * rendering one already-authorized post (#1032's read side): true when
+	 * $doc_post_id may be expanded, false when the read must see an empty
+	 * placeholder instead — never a failed request, since the post being
+	 * READ is not itself in question, only whether one of the templates it
+	 * embeds may be shown to this caller.
+	 *
+	 * @param string $route_category The resolving route's own category.
+	 * @return callable function(int $doc_post_id): bool
+	 */
+	public function template_render_gate( $route_category ) {
+		$route_category = (string) $route_category;
+
+		return function ( $doc_post_id ) use ( $route_category ) {
+			return $this->post_ref_readable( $doc_post_id, $route_category );
+		};
+	}
+
+	/**
 	 * Verify API key without rate limiting (for batch sub-requests).
 	 *
 	 * @param WP_REST_Request $request Request object.
