@@ -612,6 +612,47 @@ class Mcpwp_Activator {
 	 *                       false when another call already holds the lock.
 	 */
 	private static function acquire_custom_code_repair_lock() {
+		return self::acquire_migration_lock( self::CUSTOM_CODE_REPAIR_LOCK_OPTION, self::CUSTOM_CODE_REPAIR_LOCK_TTL );
+	}
+
+	/**
+	 * Release the repair mutex acquired by acquire_custom_code_repair_lock().
+	 *
+	 * @param string $token The expiry value that call returned.
+	 */
+	private static function release_custom_code_repair_lock( $token ) {
+		self::release_migration_lock( self::CUSTOM_CODE_REPAIR_LOCK_OPTION, $token );
+	}
+
+	/**
+	 * Generic non-blocking CAS mutex over a wp_options row (#1031 round 3,
+	 * adversarial review WARN-1) — the same atomic-claim primitive
+	 * acquire_custom_code_repair_lock() pioneered (see
+	 * CUSTOM_CODE_REPAIR_LOCK_OPTION's own docblock for the atomicity
+	 * argument: a plain INSERT against the UNIQUE key on option_name,
+	 * stale-lock steal via a compare-and-swap UPDATE, release via a
+	 * compare-and-swap DELETE), generalised so a SECOND, unrelated one-time
+	 * migration pair (the action-log column add + its backfill) does not
+	 * need its own copy of the same ~80 lines. That method and its
+	 * `release_...()` twin are now thin wrappers over this.
+	 *
+	 * Non-blocking: a caller that cannot acquire returns immediately rather
+	 * than waiting or retrying inline, and picks the work up on a later
+	 * request instead — see each call site's own "another call already owns
+	 * this" comment.
+	 *
+	 * @param string $lock_option wp_options row name — one per protected
+	 *                            operation, never shared between two
+	 *                            unrelated migrations, so one's hold time
+	 *                            cannot block the other's.
+	 * @param int    $ttl         Seconds a holder is trusted before another
+	 *                            caller may steal it as abandoned. Pick this
+	 *                            comfortably above the protected operation's
+	 *                            own worst-case run time (see each caller).
+	 * @return string|false The expiry token to pass to release_migration_lock(),
+	 *                       or false when another caller already holds it.
+	 */
+	private static function acquire_migration_lock( $lock_option, $ttl ) {
 		global $wpdb;
 
 		if ( ! is_object( $wpdb ) || ! method_exists( $wpdb, 'insert' ) ) {
@@ -620,18 +661,18 @@ class Mcpwp_Activator {
 		}
 
 		$now        = time();
-		$expires_at = (string) ( $now + self::CUSTOM_CODE_REPAIR_LOCK_TTL );
+		$expires_at = (string) ( $now + (int) $ttl );
 
 		// A plain INSERT against the UNIQUE KEY on option_name is the atomic
-		// claim primitive (see the constant's docblock above) — the same one
-		// Mcpwp_Idempotency_Claim::acquire() uses for #802, applied directly
-		// here via $wpdb rather than through that class.
+		// claim primitive — the same one Mcpwp_Idempotency_Claim::acquire()
+		// uses for #802, applied directly here via $wpdb rather than through
+		// that class.
 		$suppressed = method_exists( $wpdb, 'suppress_errors' ) ? $wpdb->suppress_errors( true ) : null;
 
 		$inserted = $wpdb->insert(
 			$wpdb->options,
 			array(
-				'option_name'  => self::CUSTOM_CODE_REPAIR_LOCK_OPTION,
+				'option_name'  => $lock_option,
 				'option_value' => $expires_at,
 				'autoload'     => 'no',
 			),
@@ -656,7 +697,7 @@ class Mcpwp_Activator {
 		$current = $wpdb->get_var(
 			$wpdb->prepare(
 				"SELECT option_value FROM {$wpdb->options} WHERE option_name = %s",
-				self::CUSTOM_CODE_REPAIR_LOCK_OPTION
+				$lock_option
 			)
 		);
 
@@ -668,7 +709,7 @@ class Mcpwp_Activator {
 			$wpdb->options,
 			array( 'option_value' => $expires_at ),
 			array(
-				'option_name'  => self::CUSTOM_CODE_REPAIR_LOCK_OPTION,
+				'option_name'  => $lock_option,
 				'option_value' => $current,
 			),
 			array( '%s' ),
@@ -679,11 +720,12 @@ class Mcpwp_Activator {
 	}
 
 	/**
-	 * Release the repair mutex acquired by acquire_custom_code_repair_lock().
+	 * Release a mutex acquired by acquire_migration_lock().
 	 *
-	 * @param string $token The expiry value that call returned.
+	 * @param string $lock_option Same option name passed to acquire.
+	 * @param string $token       The expiry value that acquire call returned.
 	 */
-	private static function release_custom_code_repair_lock( $token ) {
+	private static function release_migration_lock( $lock_option, $token ) {
 		global $wpdb;
 
 		if ( ! is_object( $wpdb ) || ! method_exists( $wpdb, 'delete' ) ) {
@@ -691,13 +733,13 @@ class Mcpwp_Activator {
 		}
 
 		// CAS delete: only remove the row if it still holds the value THIS
-		// call wrote. If our own run overran CUSTOM_CODE_REPAIR_LOCK_TTL and
-		// another call already stole the lock, that row belongs to them now
-		// and must not be deleted out from under them.
+		// call wrote. If our own run overran its TTL and another call
+		// already stole the lock, that row belongs to them now and must not
+		// be deleted out from under them.
 		$wpdb->delete(
 			$wpdb->options,
 			array(
-				'option_name'  => self::CUSTOM_CODE_REPAIR_LOCK_OPTION,
+				'option_name'  => $lock_option,
 				'option_value' => $token,
 			),
 			array( '%s', '%s' )
@@ -1221,6 +1263,15 @@ class Mcpwp_Activator {
 	 * definition is a no-op, so a repeat call (or one racing another
 	 * process's) costs nothing beyond the flag already being set.
 	 *
+	 * Locked (#1031 round 3, adversarial review WARN-1): before the flag is
+	 * set, EVERY concurrent request re-enters this on plugins_loaded — a
+	 * cold first dbDelta() run against a real table can take several
+	 * seconds, during which every other request in flight would otherwise
+	 * also call dbDelta() against the same ALTER, in parallel. A
+	 * non-blocking mutex (acquire_migration_lock()) means only one request
+	 * does the work; every other one simply skips this call for its own
+	 * request and finds the flag already set on the next one.
+	 *
 	 * @return void
 	 */
 	public static function ensure_action_log_resource_post_type_column() {
@@ -1228,17 +1279,38 @@ class Mcpwp_Activator {
 			return;
 		}
 
-		global $wpdb;
-
-		if ( ! function_exists( 'dbDelta' ) ) {
-			require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+		$lock_token = self::acquire_migration_lock( self::ACTION_LOG_COLUMN_LOCK_OPTION, self::ACTION_LOG_COLUMN_LOCK_TTL );
+		if ( false === $lock_token ) {
+			// Another request already owns this; skip — the holder (or, if
+			// it died, the next call once the lock's TTL lapses) makes
+			// progress instead.
+			return;
 		}
 
-		$table = $wpdb->prefix . 'mcpwp_action_log';
-		dbDelta( self::action_log_create_sql( $table, $wpdb->get_charset_collate() ) );
+		try {
+			global $wpdb;
 
-		update_option( 'mcpwp_action_log_resource_post_type_column', 1, false );
+			if ( ! function_exists( 'dbDelta' ) ) {
+				require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+			}
+
+			$table = $wpdb->prefix . 'mcpwp_action_log';
+			dbDelta( self::action_log_create_sql( $table, $wpdb->get_charset_collate() ) );
+
+			update_option( 'mcpwp_action_log_resource_post_type_column', 1, false );
+		} finally {
+			self::release_migration_lock( self::ACTION_LOG_COLUMN_LOCK_OPTION, $lock_token );
+		}
 	}
+
+	/**
+	 * Lock guarding ensure_action_log_resource_post_type_column(). TTL is
+	 * short — one dbDelta() ALTER on this table is fast even cold — but
+	 * comfortably above a slow worst case, matching the reasoning
+	 * CUSTOM_CODE_REPAIR_LOCK_TTL's own docblock gives for its ceiling.
+	 */
+	const ACTION_LOG_COLUMN_LOCK_OPTION = 'mcpwp_action_log_column_migration_lock';
+	const ACTION_LOG_COLUMN_LOCK_TTL    = 15;
 
 	/**
 	 * Rows written before resource_post_type existed default to '' — treated
@@ -1266,6 +1338,17 @@ class Mcpwp_Activator {
 	 * not-yet-backfilled row already has, so a row this can't resolve
 	 * either way is left exactly as before.
 	 *
+	 * Locked (#1031 round 3, adversarial review WARN-1), same reasoning as
+	 * ensure_action_log_resource_post_type_column(): without a mutex, every
+	 * concurrent request re-enters this on plugins_loaded before the
+	 * completion flag is set, running parallel batch scans against the same
+	 * table. Non-blocking — a request that cannot acquire it skips the
+	 * backfill for itself; the holder (or, if it died mid-run, the next
+	 * request once the lock's TTL lapses) makes progress instead. Unlike
+	 * ensure_action_log_resource_post_type_column()'s short lock, this one's
+	 * TTL must clear the full per-call time budget (5-15s via
+	 * migration_time_budget()), not just a fast ALTER.
+	 *
 	 * @param float|null $time_budget Override for the per-call time budget,
 	 *                                in seconds. Tests use this to force an
 	 *                                interrupted run deterministically.
@@ -1277,6 +1360,35 @@ class Mcpwp_Activator {
 			return;
 		}
 
+		$lock_token = self::acquire_migration_lock( self::ACTION_LOG_BACKFILL_LOCK_OPTION, self::ACTION_LOG_BACKFILL_LOCK_TTL );
+		if ( false === $lock_token ) {
+			return;
+		}
+
+		try {
+			self::run_action_log_backfill_batches( $time_budget );
+		} finally {
+			self::release_migration_lock( self::ACTION_LOG_BACKFILL_LOCK_OPTION, $lock_token );
+		}
+	}
+
+	/**
+	 * Lock guarding backfill_action_log_resource_post_type(). TTL is
+	 * comfortably above migration_time_budget()'s 15s ceiling — the same
+	 * margin CUSTOM_CODE_REPAIR_LOCK_TTL uses for the same reason.
+	 */
+	const ACTION_LOG_BACKFILL_LOCK_OPTION = 'mcpwp_action_log_backfill_lock';
+	const ACTION_LOG_BACKFILL_LOCK_TTL    = 30;
+
+	/**
+	 * The actual batched scan/backfill loop, run only while
+	 * backfill_action_log_resource_post_type() holds
+	 * ACTION_LOG_BACKFILL_LOCK_OPTION.
+	 *
+	 * @param float|null $time_budget Same meaning as on the public method.
+	 * @return void
+	 */
+	private static function run_action_log_backfill_batches( ?float $time_budget ) {
 		global $wpdb;
 		if ( ! is_object( $wpdb ) || ! method_exists( $wpdb, 'get_results' ) ) {
 			return;

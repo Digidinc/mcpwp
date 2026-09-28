@@ -398,10 +398,24 @@ class Mcpwp_Action_Log {
 			$values              = array_merge( $values, $categories );
 		}
 
+		// #1031 round 3 (adversarial review N2): a row that names a SPECIFIC
+		// post/elementor resource (resource_type in ('post','elementor') AND
+		// a resource_id that is a real, positive post id) but whose
+		// resource_post_type has not (yet) been captured or backfilled must
+		// NOT get a free pass — that would silently widen visibility for
+		// exactly the not-yet-backfilled window the migration exists to
+		// close, or any future write path that forgets to set it. Only a
+		// row that is NOT that kind of resource at all — an 'option'/'other'
+		// entry, or resource_id '0' for a create that never captured a real
+		// id — skips the post-type gate. `resource_id` is always a bare
+		// decimal string for these two resource types (see detect_resource()),
+		// never zero-padded, so this regex is exact, not approximate.
+		$identified_post = "(resource_type IN ('post','elementor') AND resource_id REGEXP '^[1-9][0-9]*$')";
+
 		if ( empty( $post_types ) ) {
-			$type_predicate = "resource_post_type = ''";
+			$type_predicate = "NOT $identified_post";
 		} else {
-			$type_predicate = "(resource_post_type = '' OR resource_post_type IN (" . implode( ',', array_fill( 0, count( $post_types ), '%s' ) ) . '))';
+			$type_predicate = "(NOT $identified_post OR resource_post_type IN (" . implode( ',', array_fill( 0, count( $post_types ), '%s' ) ) . '))';
 			$values          = array_merge( $values, $post_types );
 		}
 
@@ -441,14 +455,27 @@ class Mcpwp_Action_Log {
 			return true; // Unrestricted.
 		}
 
+		// #1031 round 3 (N1): '' is never a free pass for a restricted
+		// caller — matches build_visibility_sql()'s `category IN (...)`,
+		// which a genuinely empty category string also never satisfies.
 		$tool_category = isset( $entry['category'] ) ? (string) $entry['category'] : '';
-		if ( '' !== $tool_category && ! in_array( $tool_category, $categories, true ) ) {
+		if ( ! in_array( $tool_category, $categories, true ) ) {
 			return false;
+		}
+
+		// #1031 round 3 (N2): only a row that IDENTIFIES a specific post/
+		// elementor resource (a real, positive resource_id) is subject to
+		// the post-type gate at all — see build_visibility_sql()'s own
+		// docblock for why, and why the two must agree.
+		$resource_type = isset( $entry['resource_type'] ) ? (string) $entry['resource_type'] : '';
+		$resource_id   = isset( $entry['resource_id'] ) ? (int) $entry['resource_id'] : 0;
+		if ( ! in_array( $resource_type, array( 'post', 'elementor' ), true ) || $resource_id <= 0 ) {
+			return true;
 		}
 
 		$post_type = isset( $entry['resource_post_type'] ) ? (string) $entry['resource_post_type'] : '';
 		if ( '' === $post_type ) {
-			return true;
+			return false; // Identified, but unresolved/not-yet-backfilled — fail closed.
 		}
 
 		$post_types = isset( $visibility['post_types'] ) ? (array) $visibility['post_types'] : array();

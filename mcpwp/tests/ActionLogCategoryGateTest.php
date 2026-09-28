@@ -168,11 +168,21 @@ final class ActionLogCategoryGateTest extends TestCase {
 							if ( '' !== $own_key && $r['api_key_id'] === $own_key ) {
 								return true;
 							}
+							// N1: '' is never a member of $categories in practice, so this
+							// already agrees with production without a special case.
 							if ( ! in_array( $r['category'], $categories, true ) ) {
 								return false;
 							}
-							if ( '' === $r['resource_post_type'] ) {
+							// N2: the post-type gate only applies to a row that IDENTIFIES
+							// a real post/elementor resource; anything else (option/other,
+							// or an unresolved id of '0') skips it, matching
+							// is_entry_visible_to()'s own $identified_post check.
+							$identified = in_array( $r['resource_type'], array( 'post', 'elementor' ), true ) && (int) $r['resource_id'] > 0;
+							if ( ! $identified ) {
 								return true;
+							}
+							if ( '' === $r['resource_post_type'] ) {
+								return false; // Identified but unresolved — fail closed.
 							}
 							return in_array( $r['resource_post_type'], $post_types, true );
 						}
@@ -237,6 +247,20 @@ final class ActionLogCategoryGateTest extends TestCase {
 		return $log_id;
 	}
 
+	/**
+	 * Blank a seeded row's resource_post_type back to '', simulating a row
+	 * written before the #1031 round-2 column existed and not yet visited
+	 * by the backfill migration.
+	 */
+	private function simulate_not_yet_backfilled( string $log_id ): void {
+		foreach ( $GLOBALS['mcpwp_test_wpdb_rows']['wp_mcpwp_action_log'] as &$row ) {
+			if ( $log_id === $row['log_id'] ) {
+				$row['resource_post_type'] = '';
+			}
+		}
+		unset( $row );
+	}
+
 	/** Force a row's stored timestamp, for deterministic DESC-order/offset assertions. */
 	private function set_row_timestamp( string $log_id, string $timestamp ): void {
 		foreach ( $GLOBALS['mcpwp_test_wpdb_rows']['wp_mcpwp_action_log'] as &$row ) {
@@ -250,7 +274,7 @@ final class ActionLogCategoryGateTest extends TestCase {
 	// ── Mcpwp_Action_Log::is_entry_visible_to(): the chokepoint itself ──────
 
 	public function test_tool_category_alone_hides_an_entry(): void {
-		$entry      = array( 'category' => 'woocommerce', 'resource_post_type' => '', 'api_key_id' => 'w' );
+		$entry      = array( 'category' => 'woocommerce', 'resource_type' => 'other', 'resource_id' => '', 'resource_post_type' => '', 'api_key_id' => 'w' );
 		$visibility = array( 'categories' => array( 'content', 'admin' ), 'post_types' => array(), 'caller_key_id' => 'reader' );
 
 		$this->assertFalse( Mcpwp_Action_Log::is_entry_visible_to( $entry, $visibility ) );
@@ -260,29 +284,30 @@ final class ActionLogCategoryGateTest extends TestCase {
 		// #1031's own PoC: the TOOL's category ('content') is allowed, but
 		// the entry names a product — the additive post-type check must
 		// still deny it.
-		$entry      = array( 'category' => 'content', 'resource_post_type' => 'product', 'api_key_id' => 'w' );
+		$entry      = array( 'category' => 'content', 'resource_type' => 'post', 'resource_id' => '10', 'resource_post_type' => 'product', 'api_key_id' => 'w' );
 		$visibility = array( 'categories' => array( 'content', 'admin' ), 'post_types' => array( 'post', 'page' ), 'caller_key_id' => 'reader' );
 
 		$this->assertFalse( Mcpwp_Action_Log::is_entry_visible_to( $entry, $visibility ) );
 	}
 
 	public function test_entry_visible_once_key_holds_both_tool_and_post_type_category(): void {
-		$entry      = array( 'category' => 'content', 'resource_post_type' => 'product', 'api_key_id' => 'w' );
+		$entry      = array( 'category' => 'content', 'resource_type' => 'post', 'resource_id' => '10', 'resource_post_type' => 'product', 'api_key_id' => 'w' );
 		$visibility = array( 'categories' => array( 'content', 'woocommerce' ), 'post_types' => array( 'product' ), 'caller_key_id' => 'reader' );
 
 		$this->assertTrue( Mcpwp_Action_Log::is_entry_visible_to( $entry, $visibility ) );
 	}
 
 	public function test_ordinary_post_entry_requires_only_the_tool_category(): void {
-		$entry      = array( 'category' => 'content', 'resource_post_type' => 'post', 'api_key_id' => 'w' );
+		$entry      = array( 'category' => 'content', 'resource_type' => 'post', 'resource_id' => '11', 'resource_post_type' => 'post', 'api_key_id' => 'w' );
 		$visibility = array( 'categories' => array( 'content' ), 'post_types' => array( 'post', 'page' ), 'caller_key_id' => 'reader' );
 
 		$this->assertTrue( Mcpwp_Action_Log::is_entry_visible_to( $entry, $visibility ) );
 	}
 
-	public function test_empty_resource_post_type_skips_the_post_type_check(): void {
-		// 'option'/'other' entries (and any not-yet-backfilled legacy row).
-		$entry      = array( 'category' => 'admin', 'resource_post_type' => '', 'api_key_id' => 'w' );
+	public function test_empty_resource_post_type_skips_the_post_type_check_for_a_non_post_resource(): void {
+		// 'option'/'other' entries never name a post at all — the post-type
+		// gate must not apply to them regardless of resource_post_type.
+		$entry      = array( 'category' => 'admin', 'resource_type' => 'option', 'resource_id' => 'mcpwp_settings', 'resource_post_type' => '', 'api_key_id' => 'w' );
 		$visibility = array( 'categories' => array( 'admin' ), 'post_types' => array(), 'caller_key_id' => 'reader' );
 
 		$this->assertTrue( Mcpwp_Action_Log::is_entry_visible_to( $entry, $visibility ) );
@@ -291,8 +316,52 @@ final class ActionLogCategoryGateTest extends TestCase {
 	public function test_own_entry_is_visible_even_when_its_category_is_not_held(): void {
 		// W3: a key must always see an entry IT wrote, even one whose tool
 		// or resource category its own role does not otherwise cover.
-		$entry      = array( 'category' => 'woocommerce', 'resource_post_type' => 'product', 'api_key_id' => 'writer-key' );
+		$entry      = array( 'category' => 'woocommerce', 'resource_type' => 'post', 'resource_id' => '10', 'resource_post_type' => 'product', 'api_key_id' => 'writer-key' );
 		$visibility = array( 'categories' => array( 'content' ), 'post_types' => array( 'post' ), 'caller_key_id' => 'writer-key' );
+
+		$this->assertTrue( Mcpwp_Action_Log::is_entry_visible_to( $entry, $visibility ) );
+	}
+
+	// ── N1/N2 (round-3 adversarial review): PHP must fail closed the same way SQL does ─
+
+	public function test_n1_empty_tool_category_is_not_a_free_pass_for_a_restricted_key(): void {
+		// N1: build_visibility_sql()'s `category IN (...)` never matches an
+		// empty string either — is_entry_visible_to() must agree, not treat
+		// '' as "skip the check".
+		$entry      = array( 'category' => '', 'resource_type' => 'other', 'resource_id' => '', 'resource_post_type' => '', 'api_key_id' => 'w' );
+		$visibility = array( 'categories' => array( 'content', 'admin' ), 'post_types' => array(), 'caller_key_id' => 'reader' );
+
+		$this->assertFalse( Mcpwp_Action_Log::is_entry_visible_to( $entry, $visibility ) );
+	}
+
+	public function test_n1_empty_tool_category_is_visible_only_when_unrestricted(): void {
+		$entry = array( 'category' => '', 'resource_type' => 'other', 'resource_id' => '', 'resource_post_type' => '', 'api_key_id' => 'w' );
+
+		$this->assertTrue( Mcpwp_Action_Log::is_entry_visible_to( $entry, array( 'categories' => null, 'post_types' => array(), 'caller_key_id' => '' ) ) );
+	}
+
+	public function test_n2_identified_post_with_unresolved_post_type_is_hidden_for_a_restricted_key(): void {
+		// N2: resource_id > 0 identifies a real post/elementor resource;
+		// resource_post_type '' there means unresolved/not-yet-backfilled,
+		// not "no post" — must fail closed, not get a free pass.
+		$entry      = array( 'category' => 'content', 'resource_type' => 'post', 'resource_id' => '10', 'resource_post_type' => '', 'api_key_id' => 'w' );
+		$visibility = array( 'categories' => array( 'content', 'admin' ), 'post_types' => array( 'post', 'page' ), 'caller_key_id' => 'reader' );
+
+		$this->assertFalse( Mcpwp_Action_Log::is_entry_visible_to( $entry, $visibility ) );
+	}
+
+	public function test_n2_identified_post_with_unresolved_post_type_is_visible_only_when_unrestricted(): void {
+		$entry = array( 'category' => 'content', 'resource_type' => 'post', 'resource_id' => '10', 'resource_post_type' => '', 'api_key_id' => 'w' );
+
+		$this->assertTrue( Mcpwp_Action_Log::is_entry_visible_to( $entry, array( 'categories' => null, 'post_types' => array(), 'caller_key_id' => '' ) ) );
+	}
+
+	public function test_n2_unresolved_id_zero_still_skips_the_post_type_gate(): void {
+		// An unresolved create (detect_resource() never captured a real id)
+		// stores resource_id '0' — not "identified", so N2 does not apply;
+		// this is unchanged, tool-category-only, behavior.
+		$entry      = array( 'category' => 'content', 'resource_type' => 'post', 'resource_id' => '0', 'resource_post_type' => '', 'api_key_id' => 'w' );
+		$visibility = array( 'categories' => array( 'content' ), 'post_types' => array(), 'caller_key_id' => 'reader' );
 
 		$this->assertTrue( Mcpwp_Action_Log::is_entry_visible_to( $entry, $visibility ) );
 	}
@@ -425,6 +494,37 @@ final class ActionLogCategoryGateTest extends TestCase {
 			'log_id'
 		);
 		$this->assertNotContains( $log_id, $hidden_ids, 'a key without woocommerce must still NOT see it after the delete either' );
+	}
+
+	public function test_n2_not_yet_backfilled_row_is_hidden_from_a_restricted_key_but_visible_to_unrestricted(): void {
+		// N2, door level: a row written before the round-2 column existed
+		// (resource_post_type still '', resource_id identifies a real post)
+		// must fail closed for a restricted key, and still be readable by
+		// an unrestricted one — the whole point of the backfill migration
+		// being "in progress" must never widen visibility in the meantime.
+		$log_id = $this->seed_entry( 'wp_update_post', array( 'id' => self::PRODUCT_ID, 'title' => 'x' ), 'content' );
+		$this->simulate_not_yet_backfilled( $log_id );
+
+		$restricted = new Mcpwp_REST_Action_Log();
+		$this->force_key_record( $restricted, array( 'admin', 'content', 'woocommerce' ) );
+		$restricted_ids = array_column(
+			$restricted->list_entries( new WP_REST_Request( 'GET', '/mcpwp/v1/action-log', array( 'limit' => 50, 'offset' => 0 ) ) )->get_data()['entries'],
+			'log_id'
+		);
+		$this->assertNotContains( $log_id, $restricted_ids, 'a restricted key must not get a free pass on a not-yet-backfilled row' );
+
+		$unrestricted = new Mcpwp_REST_Action_Log();
+		$this->force_key_record( $unrestricted, array(), 'unrestricted-admin', 'admin' );
+		$unrestricted_ids = array_column(
+			$unrestricted->list_entries( new WP_REST_Request( 'GET', '/mcpwp/v1/action-log', array( 'limit' => 50, 'offset' => 0 ) ) )->get_data()['entries'],
+			'log_id'
+		);
+		$this->assertContains( $log_id, $unrestricted_ids );
+
+		// And the same rule PHP-side, on the by-id door.
+		$get_result = $restricted->get_entry( new WP_REST_Request( 'GET', '/mcpwp/v1/action-log/' . $log_id, array( 'log_id' => $log_id ) ) );
+		$this->assertInstanceOf( WP_Error::class, $get_result );
+		$this->assertSame( 'not_found', $get_result->get_error_code() );
 	}
 
 	// ── Mcpwp_REST_Action_Log::get_entry() / rollback_entry() ───────────────
