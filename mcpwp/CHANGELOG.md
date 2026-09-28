@@ -5,6 +5,13 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.14.5](https://github.com/Mumega-com/mcpwp/compare/v3.14.4...v3.14.5) (2026-09-28)
+
+
+### Bug Fixes
+
+* **auth:** gate post-meta/content/fetch/posts by resolved post type, not route ([#1022](https://github.com/Mumega-com/mcpwp/issues/1022)) ([150f9b4](https://github.com/Mumega-com/mcpwp/commit/150f9b4377b08b03da075eb58451e7298634ee37))
+
 ## [3.14.4](https://github.com/Mumega-com/mcpwp/compare/v3.14.3...v3.14.4) (2026-09-27)
 
 
