@@ -674,6 +674,17 @@ class Mcpwp_SEO {
 		}
 
 		$seo_data = $this->get_post_seo( $post_id );
+		// #1024/#1030 round-2 review, BLOCK-A: get_post_seo() returns a
+		// WP_Error (no_seo_plugin) when no SEO plugin is active. Every
+		// `$seo_data['...']` access below fatals on a WP_Error (it carries
+		// no ArrayAccess) — "Post not found" vs "No SEO plugin is active"
+		// used to be the difference between a 500 and a clean answer,
+		// itself an existence-adjacent information leak. Treated as "no
+		// stored SEO data" so the analysis still runs against the post's
+		// own title/content.
+		if ( is_wp_error( $seo_data ) ) {
+			$seo_data = array();
+		}
 		$analysis = array(
 			'post_id'      => $post_id,
 			'title'        => $post->post_title,

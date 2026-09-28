@@ -843,7 +843,7 @@ trait Mcpwp_Api_Auth {
 			return $key_category_check;
 		}
 
-		return true;
+		return $this->check_post_naming_params_category( $request );
 	}
 
 	/**
@@ -1491,6 +1491,177 @@ trait Mcpwp_Api_Auth {
 	}
 
 	/**
+	 * Every request param name that can carry a post ID naming the resource a
+	 * route is about to read or write — the single list check_post_naming_params_category()
+	 * below scans, so a new route needs no code here to be covered.
+	 *
+	 * Round-2 adversarial review of #1024/#1030: per-door category checks
+	 * (validate_post(), guard_post_type_category(), the individual REST-layer
+	 * checks this same PR added to /blocks, Pro SEO, Pro Elementor clone/
+	 * landing-page/save-section-as-template, etc.) only ever cover the doors
+	 * someone thought to enumerate. This is the chokepoint that catches the
+	 * ones nobody did — every one of the 4 credential-verdict functions in
+	 * this trait (compute_api_key_verdict(), verify_api_key_auth_only(),
+	 * authenticate_oauth_access_token(), authenticate_broker_bearer_token())
+	 * calls check_post_naming_params_category() as their shared last step,
+	 * so every real dispatch path (direct HTTP, /batch sub-request, an MCP
+	 * tool's internal rest_do_request() re-dispatch, resources/read) runs it —
+	 * with the REAL, already-resolved route and params, since a wrapper's own
+	 * outer request (/mcp, /batch) is explicitly skipped below in favor of the
+	 * inner re-dispatch that carries the actual door.
+	 *
+	 * @var array<string>
+	 */
+	const POST_NAMING_PARAMS = array(
+		'id', 'post_id', 'page_id', 'source_id', 'template_id', 'part_id', 'archetype_id', 'target_id', 'source',
+	);
+
+	/**
+	 * The chokepoint itself (#1024/#1030 round-2 adversarial review,
+	 * ARCHITECTURE requirement): for every Free/Pro REST route, once auth and
+	 * the route's own category are already settled, resolve every param in
+	 * POST_NAMING_PARAMS (plus `ids[]`, `posts[].id`, `items[].id`) to a post
+	 * and, unless it is `post`/`page`/`elementor_library`/`elementor_snippet`
+	 * (governed by the route's own category and, for the Elementor library
+	 * types, by their own precise per-door checks — see the exemption's
+	 * in-line comment further down for why those two additionally need to
+	 * stay out of this chokepoint's generic mapping — this is the SAME
+	 * exemption validate_post() and Mcpwp_REST_Blocks's own guard already
+	 * carry for post/page, and the fix for NIT-C: a 'seo'-only key keeps
+	 * post/page), require caller_may_read_category(category_for_post_type()).
+	 *
+	 * A missing id (get_post() returns null) is left alone here — existence
+	 * is the door's own business, not this chokepoint's; it only ever adds a
+	 * denial, never manufactures a false "not found" for an id the door would
+	 * have resolved just fine. A per-door check that already runs INSIDE the
+	 * handler (kept for byte-parity where one exists) still applies its own
+	 * message; this only fires FIRST, before the handler, for a route nobody
+	 * gave one — and gives the one generic not-found body every such gap now
+	 * shares, rather than continuing to answer with whatever the specific
+	 * handler happened to do (200, a stray write, or a differently-shaped
+	 * error).
+	 *
+	 * /mcp and /batch are skipped: both are envelopes whose OWN top-level
+	 * body/params do not name the real target (an /mcp JSON-RPC `id` is a
+	 * correlation id, not a post id; /batch's `operations` array is shaped
+	 * per-operation). Each re-dispatches its real work via rest_do_request(),
+	 * which runs this SAME check again against the real route and params
+	 * (verify_api_key_auth_only(), Mcpwp_REST_Batch::$is_batch_sub_request) —
+	 * the identical carve-out check_key_category_restriction_for_route()
+	 * already uses for /batch, for the same reason.
+	 *
+	 * @param WP_REST_Request $request Request object.
+	 * @return true|WP_Error
+	 */
+	protected function check_post_naming_params_category( $request ) {
+		if ( ! method_exists( $request, 'get_route' ) ) {
+			return true;
+		}
+		$route = $this->normalize_route_for_authorization( (string) $request->get_route() );
+		if ( $this->route_matches( $route, '/mcpwp/v1/mcp' ) || $this->route_matches( $route, '/mcpwp/v1/batch' ) ) {
+			return true;
+		}
+
+		$params = method_exists( $request, 'get_params' ) ? $request->get_params() : null;
+		if ( ! is_array( $params ) ) {
+			return true;
+		}
+
+		$ids = array();
+		foreach ( self::POST_NAMING_PARAMS as $key ) {
+			if ( isset( $params[ $key ] ) && is_numeric( $params[ $key ] ) ) {
+				$ids[] = (int) $params[ $key ];
+			}
+		}
+		if ( isset( $params['ids'] ) && is_array( $params['ids'] ) ) {
+			foreach ( $params['ids'] as $value ) {
+				if ( is_numeric( $value ) ) {
+					$ids[] = (int) $value;
+				}
+			}
+		}
+		// 'posts'/'items' are the review's own named examples; 'updates' and
+		// 'pages' are the SAME batch-of-objects shape under a different key
+		// this codebase actually uses (Mcpwp_REST_Posts::bulk_update_posts()/
+		// bulk_create_posts(), Mcpwp_REST_Pages's matching pair,
+		// Mcpwp_REST_SEO::bulk_update()) — listed explicitly rather than
+		// guessed at, so a batch item naming a gated post through any of
+		// them is caught the same way.
+		foreach ( array( 'posts', 'items', 'updates', 'pages' ) as $list_key ) {
+			if ( ! isset( $params[ $list_key ] ) || ! is_array( $params[ $list_key ] ) ) {
+				continue;
+			}
+			foreach ( $params[ $list_key ] as $item ) {
+				if ( is_array( $item ) && isset( $item['id'] ) && is_numeric( $item['id'] ) ) {
+					$ids[] = (int) $item['id'];
+				}
+			}
+		}
+
+		$ids = array_unique( array_filter( $ids, static function ( $id ) {
+			return $id > 0;
+		} ) );
+
+		foreach ( $ids as $id ) {
+			$post = get_post( $id );
+			if ( ! $post instanceof WP_Post ) {
+				continue;
+			}
+			// post/page: governed by the route's own category everywhere
+			// (validate_post()'s own exemption, generalized).
+			//
+			// elementor_library/elementor_snippet: round-2 review's live
+			// rig proof found this chokepoint's generic
+			// category_for_post_type() mapping ('elementor-templates' for
+			// EVERY elementor_library post) actively breaks
+			// /theme-builder/*, whose own established category is the
+			// DIFFERENT, narrower 'elementor-theme' — a key legitimately
+			// scoped to 'elementor-theme' for theme-builder work could no
+			// longer read its OWN theme templates
+			// (Mcpwp_Theme_Builder::resolve_theme_template(), WARN-A,
+			// already restricts those to genuine theme locations).
+			// Every place elementor_library/elementor_snippet is reachable
+			// already has its own precise, domain-aware category check —
+			// validate_post()'s elementor_type_category_denied(),
+			// resolve_theme_template(), and this PR's individual REST-layer
+			// checks on clone/create_landing_page/save_section_as_template/
+			// apply_template — so this chokepoint does not need to
+			// duplicate that work with a cruder, one-size-fits-all mapping,
+			// and doing so only reopens gaps of its own making.
+			if ( in_array( $post->post_type, array( 'post', 'page', 'elementor_library', 'elementor_snippet' ), true ) ) {
+				continue;
+			}
+			if ( ! $this->caller_may_read_category( $this->category_for_post_type( $post->post_type ) ) ) {
+				return $this->generic_post_naming_param_not_found_error();
+			}
+		}
+
+		return true;
+	}
+
+	/**
+	 * The one generic not-found body check_post_naming_params_category()
+	 * denies with — deliberately the same {code, status} every existence-
+	 * sensitive door in this plugin already converges on
+	 * (build_not_found_error(), validate_post(), guard_post_type_category()),
+	 * so a route this chokepoint alone protects reads no differently from one
+	 * with its own hand-written check.
+	 *
+	 * @return WP_Error
+	 */
+	protected function generic_post_naming_param_not_found_error() {
+		$error = new WP_Error(
+			'not_found',
+			__( 'The requested resource was not found.', 'mcpwp' ),
+			array( 'status' => 404 )
+		);
+		if ( class_exists( 'Mcpwp_Error_Hints' ) ) {
+			$error = Mcpwp_Error_Hints::enhance_error( $error );
+		}
+		return $error;
+	}
+
+	/**
 	 * Verify API key without rate limiting (for batch sub-requests).
 	 *
 	 * @param WP_REST_Request $request Request object.
@@ -1606,7 +1777,7 @@ trait Mcpwp_Api_Auth {
 			return $key_category_check;
 		}
 
-		return true;
+		return $this->check_post_naming_params_category( $request );
 	}
 
 	/**
@@ -1922,7 +2093,7 @@ trait Mcpwp_Api_Auth {
 			return $key_category_check;
 		}
 
-		return true;
+		return $this->check_post_naming_params_category( $request );
 	}
 
 	/**
@@ -2076,7 +2247,7 @@ trait Mcpwp_Api_Auth {
 			return $key_category_check;
 		}
 
-		return true;
+		return $this->check_post_naming_params_category( $request );
 	}
 
 	/**

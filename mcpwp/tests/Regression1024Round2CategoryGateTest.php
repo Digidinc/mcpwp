@@ -67,6 +67,8 @@ require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-content-graph.
 require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-graph.php';
 require_once dirname( __DIR__ ) . '/includes/pro/api/class-mcpwp-rest-seo.php';
 require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-approvals.php';
+require_once dirname( __DIR__ ) . '/includes/pro/core/class-mcpwp-elementor-pro.php';
+require_once dirname( __DIR__ ) . '/includes/pro/core/class-mcpwp-theme-builder.php';
 
 final class Regression1024Round2CategoryGateTest extends TestCase {
 
@@ -485,6 +487,74 @@ final class Regression1024Round2CategoryGateTest extends TestCase {
 		$result = $controller->save_section_as_template( $request );
 		$this->assertInstanceOf( WP_Error::class, $result );
 		$this->assertSame( 'invalid_page', $result->get_error_code() );
+	}
+
+	// ── BLOCK-C (regression): designer role must still clone/save-section/
+	// build a part from an ORDINARY PAGE — page/post are exempt from the
+	// category check everywhere else in #1024; these three doors forgot it. ──
+
+	public function test_designer_role_can_clone_an_ordinary_page(): void {
+		$elementor_pro = new Mcpwp_Elementor_Pro();
+		$controller    = new Mcpwp_REST_Elementor_Pro( $elementor_pro );
+		$created       = $controller->create_scoped_api_key( 'designer', array( 'read', 'write' ), 'designer' );
+		$request       = new WP_REST_Request( 'POST', '/mcpwp/v1/elementor/clone', array( 'source_id' => self::PAGE_ID ), array( 'X-API-Key' => $created['key'] ) );
+
+		$auth = $controller->check_permission( $request );
+		$this->assertTrue( $auth, 'A designer key must be able to reach the clone route for an ordinary page.' );
+
+		$result = $controller->clone_page( $request );
+		$this->assertInstanceOf( WP_REST_Response::class, $result, 'A designer key (holds elementor/elementor-build, never content) must still be able to clone a plain page.' );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_designer_role_can_save_a_section_from_an_ordinary_page(): void {
+		if ( ! defined( 'ELEMENTOR_VERSION' ) ) {
+			define( 'ELEMENTOR_VERSION', '3.0' );
+		}
+		$elementor_pro = new Mcpwp_Elementor_Pro();
+		$controller    = new Mcpwp_REST_Elementor_Pro( $elementor_pro );
+		$created       = $controller->create_scoped_api_key( 'designer', array( 'read', 'write' ), 'designer' );
+		$request       = new WP_REST_Request(
+			'POST',
+			'/mcpwp/v1/elementor/save-section-as-template',
+			array( 'page_id' => self::PAGE_ID, 'element_id' => 'head0001' ),
+			array( 'X-API-Key' => $created['key'] )
+		);
+
+		$auth = $controller->check_permission( $request );
+		$this->assertTrue( $auth, 'A designer key must be able to reach save-section-as-template for an ordinary page.' );
+
+		$result = $controller->save_section_as_template( $request );
+		$this->assertInstanceOf( WP_REST_Response::class, $result, 'A designer key must still be able to save a section from a plain page as a template.' );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_designer_role_can_build_a_part_from_a_section_on_an_ordinary_page(): void {
+		if ( ! defined( 'ELEMENTOR_VERSION' ) ) {
+			define( 'ELEMENTOR_VERSION', '3.0' );
+		}
+		$GLOBALS['mcpwp_test_did_action']['elementor/loaded'] = 1; // get_part() -> get_template() checks did_action() for this.
+		$elementor_pro = new Mcpwp_Elementor_Pro();
+		$controller    = new Mcpwp_REST_Elementor_Pro( $elementor_pro );
+		$created       = $controller->create_scoped_api_key( 'designer', array( 'read', 'write' ), 'designer' );
+		$request       = new WP_REST_Request(
+			'POST',
+			'/mcpwp/v1/elementor/parts/from-section',
+			array( 'page_id' => self::PAGE_ID, 'element_id' => 'head0001' ),
+			array( 'X-API-Key' => $created['key'] )
+		);
+
+		$auth = $controller->check_permission( $request );
+		$this->assertTrue( $auth, 'A designer key must be able to reach parts/from-section for an ordinary page.' );
+
+		$result = $controller->create_part_from_section( $request );
+		$this->assertInstanceOf( WP_REST_Response::class, $result, 'A designer key must still be able to build a reusable part from a plain page section.' );
 	}
 
 	// =========================================================================

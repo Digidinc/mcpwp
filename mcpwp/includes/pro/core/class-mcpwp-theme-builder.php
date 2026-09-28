@@ -153,10 +153,9 @@ class Mcpwp_Theme_Builder {
 			return new WP_Error( 'not_available', __( 'Elementor Pro Theme Builder is not available.', 'mcpwp' ) );
 		}
 
-		$template = get_post( $template_id );
-
-		if ( ! $template || 'elementor_library' !== $template->post_type ) {
-			return new WP_Error( 'not_found', __( 'Template not found.', 'mcpwp' ) );
+		$template = $this->resolve_theme_template( $template_id );
+		if ( is_wp_error( $template ) ) {
+			return $template;
 		}
 
 		$data = $this->format_template( $template );
@@ -210,6 +209,57 @@ class Mcpwp_Theme_Builder {
 	}
 
 	/**
+	 * The `_elementor_template_type` values that are genuine theme-BUILDER
+	 * templates (a page/site region bound to a display condition) — the
+	 * same keys get_location_for_type()'s own map recognizes.
+	 *
+	 * #1024/#1030 round-2 review, WARN-A: elementor_library covers Pro's
+	 * whole template library — saved page templates, sections, popups,
+	 * landing pages — most of which are NOT theme-builder templates and are
+	 * gated behind the narrower 'elementor-templates' category at their own
+	 * routes (/elementor/templates/*). /theme-builder/* itself only
+	 * requires the coarser 'elementor-theme' category
+	 * (get_route_category_map()), so without this a caller holding
+	 * 'elementor-theme' but not 'elementor-templates' could read a
+	 * "section"-type template's metadata straight through
+	 * /theme-builder/templates/{id} — a type that door was never meant to
+	 * expose at all, regardless of category.
+	 *
+	 * @return array<string>
+	 */
+	private function theme_location_types() {
+		return array( 'header', 'footer', 'single', 'single-post', 'single-page', 'archive', 'search-results', 'error-404', 'loop-item' );
+	}
+
+	/**
+	 * Whether $template_id is an elementor_library post AND its own
+	 * `_elementor_template_type` is a genuine theme-location type
+	 * (#1024/#1030 round-2 review, WARN-A) — used by get_template() (the
+	 * READ side, where returning a "section" template's metadata through
+	 * this door — not a real theme location — is the actual leak).
+	 * set_template_conditions() applies only the looser elementor_library
+	 * type check directly, not this stricter one: assigning conditions to
+	 * a template whose _elementor_template_type has not been set yet (e.g.
+	 * mid-creation) is legitimate.
+	 *
+	 * @param int $template_id Template ID.
+	 * @return WP_Post|WP_Error
+	 */
+	private function resolve_theme_template( $template_id ) {
+		$template = get_post( $template_id );
+		if ( ! $template || 'elementor_library' !== $template->post_type ) {
+			return new WP_Error( 'not_found', __( 'Template not found.', 'mcpwp' ) );
+		}
+
+		$type = get_post_meta( $template->ID, '_elementor_template_type', true );
+		if ( ! in_array( $type, $this->theme_location_types(), true ) ) {
+			return new WP_Error( 'not_found', __( 'Template not found.', 'mcpwp' ) );
+		}
+
+		return $template;
+	}
+
+	/**
 	 * Get conditions for a template.
 	 *
 	 * @param int $template_id Template ID.
@@ -253,6 +303,21 @@ class Mcpwp_Theme_Builder {
 	public function set_template_conditions( $template_id, $conditions ) {
 		if ( ! $this->is_available() ) {
 			return new WP_Error( 'not_available', __( 'Elementor Pro Theme Builder is not available.', 'mcpwp' ) );
+		}
+
+		// #1024/#1030 round-2 review, WARN-A: this used to resolve straight
+		// through Elementor's own document manager, which answers for ANY
+		// Elementor-enabled post — a WooCommerce product included (the
+		// review's own PoC: product 13 -> 200 updated:true). Type only
+		// (elementor_library), not the stricter "is a genuine theme
+		// location" check get_template() applies: setting conditions is a
+		// legitimate operation on a template whose _elementor_template_type
+		// has not been set yet (e.g. mid-creation), unlike READING it back
+		// through /theme-builder, which is where "a section template's
+		// metadata, not a real theme location" is the actual leak.
+		$template = get_post( $template_id );
+		if ( ! $template || 'elementor_library' !== $template->post_type ) {
+			return new WP_Error( 'not_found', __( 'Template not found.', 'mcpwp' ) );
 		}
 
 		$document = \Elementor\Plugin::instance()->documents->get( $template_id );

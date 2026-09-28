@@ -118,7 +118,7 @@ class Mcpwp_REST_Graph extends Mcpwp_REST_API {
 	 * @return WP_REST_Response
 	 */
 	public function get_summary( WP_REST_Request $request ) {
-		$summary = Mcpwp_Graph_Reader::resource_summary( $this->requester_can_see_non_public(), $this->category_excluded_kinds() );
+		$summary = Mcpwp_Graph_Reader::resource_summary( $this->requester_can_see_non_public(), $this->category_excluded_kinds(), $this->category_excluded_taxonomies() );
 
 		return new WP_REST_Response( $summary, 200 );
 	}
@@ -136,7 +136,7 @@ class Mcpwp_REST_Graph extends Mcpwp_REST_API {
 		}
 
 		$can_see = $this->requester_can_see_non_public();
-		$node    = Mcpwp_Graph_Reader::get_node( Mcpwp_Graph_Reader::resolve_node_key( $identifier ), $can_see, $this->category_excluded_kinds() );
+		$node    = Mcpwp_Graph_Reader::get_node( Mcpwp_Graph_Reader::resolve_node_key( $identifier ), $can_see, $this->category_excluded_kinds(), $this->category_excluded_taxonomies() );
 
 		if ( $node instanceof WP_Error ) {
 			return $this->error_response_from_wp_error( $node );
@@ -174,7 +174,8 @@ class Mcpwp_REST_Graph extends Mcpwp_REST_API {
 				'cursor'    => $request->get_param( 'cursor' ),
 			),
 			$can_see,
-			$this->category_excluded_kinds()
+			$this->category_excluded_kinds(),
+			$this->category_excluded_taxonomies()
 		);
 
 		if ( $result instanceof WP_Error ) {
@@ -208,7 +209,7 @@ class Mcpwp_REST_Graph extends Mcpwp_REST_API {
 		}
 
 		$can_see = $this->requester_can_see_non_public();
-		$result  = Mcpwp_Graph_Reader::query( $args, $can_see, $this->category_excluded_kinds() );
+		$result  = Mcpwp_Graph_Reader::query( $args, $can_see, $this->category_excluded_kinds(), $this->category_excluded_taxonomies() );
 
 		if ( $result instanceof WP_Error ) {
 			return $this->error_response_from_wp_error( $result );
@@ -259,6 +260,41 @@ class Mcpwp_REST_Graph extends Mcpwp_REST_API {
 			}
 		}
 		return $excluded;
+	}
+
+	/**
+	 * Taxonomies tool-category-gated for this caller (#1024/#1030 round-2
+	 * review, NIT-2). A TERM node's `kind` is always the literal string
+	 * 'term' (set once at ingestion, regardless of taxonomy — see
+	 * Mcpwp_Graph_Reader::node_category_excluded_sql()'s docblock), so
+	 * category_excluded_kinds() above can never hide one: a
+	 * 'woocommerce'-disabled key could otherwise read a product_cat/
+	 * product_tag term, or a product attribute (`pa_*`) term, straight
+	 * through wp_graph_query/wp_graph_node/wp_graph_neighbors.
+	 *
+	 * WooCommerce's own taxonomies are the only ones this plugin currently
+	 * maps to a non-'content' category (category_for_post_type() has no
+	 * taxonomy equivalent to delegate to, so the mapping is written here,
+	 * once, rather than duplicated at each call site) — product_cat/
+	 * product_tag/product_type/product_shipping_class/product_visibility
+	 * are WooCommerce's fixed set; `pa_*` is its dynamic per-attribute
+	 * prefix, enumerated from the taxonomies actually registered on this
+	 * site rather than guessed at.
+	 *
+	 * @return array<string>
+	 */
+	private function category_excluded_taxonomies() {
+		if ( $this->caller_may_read_category( 'woocommerce' ) ) {
+			return array();
+		}
+
+		$excluded = array( 'product_cat', 'product_tag', 'product_type', 'product_shipping_class', 'product_visibility' );
+		foreach ( get_taxonomies() as $taxonomy ) {
+			if ( 0 === strpos( $taxonomy, 'pa_' ) ) {
+				$excluded[] = $taxonomy;
+			}
+		}
+		return array_values( array_unique( $excluded ) );
 	}
 
 	/**

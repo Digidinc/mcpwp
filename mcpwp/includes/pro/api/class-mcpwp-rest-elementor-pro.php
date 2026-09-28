@@ -2818,8 +2818,13 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		// itself already uses for a genuinely missing source (no explicit
 		// status — error_response_from_wp_error()'s own default), so denial
 		// is byte-identical.
+		// #1030 round-2 review, BLOCK-C (regression): page/post are this
+		// door's base case, exempt from the category check — same exemption
+		// validate_post() and every other #1024 fix carries. Without it, a
+		// designer key (holds elementor/elementor-build, never 'content')
+		// cloning an ordinary PAGE was wrongly denied.
 		$source = get_post( $source_id );
-		if ( $source && ! $this->caller_may_read_category( $this->category_for_post_type( $source->post_type ) ) ) {
+		if ( $source && ! in_array( $source->post_type, array( 'page', 'post' ), true ) && ! $this->caller_may_read_category( $this->category_for_post_type( $source->post_type ) ) ) {
 			$category_denied = new WP_Error( 'not_found', __( 'Source page not found.', 'mcpwp' ) );
 			$this->log_activity( 'clone_page', $request, null, $this->get_wp_error_status( $category_denied ) );
 			return $this->error_response_from_wp_error( $category_denied );
@@ -3272,8 +3277,13 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		// product's Elementor data (or a category-gated template's) and
 		// re-save it as a new, fully-readable template. Same shape the
 		// underlying call already uses for a genuinely missing source page.
+		// page/post are exempt (#1030 round-2 review, BLOCK-C regression) —
+		// same exemption every other #1024 fix carries; without it, a
+		// designer key (holds gutenberg/elementor-templates, never
+		// 'content') saving a section from an ordinary PAGE was wrongly
+		// denied.
 		$source = get_post( $page_id );
-		if ( $source && ! $this->caller_may_read_category( $this->category_for_post_type( $source->post_type ) ) ) {
+		if ( $source && ! in_array( $source->post_type, array( 'page', 'post' ), true ) && ! $this->caller_may_read_category( $this->category_for_post_type( $source->post_type ) ) ) {
 			return new WP_Error( 'invalid_page', 'Page not found.', array( 'status' => 404 ) );
 		}
 

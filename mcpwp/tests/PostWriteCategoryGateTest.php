@@ -129,6 +129,29 @@ final class PostWriteCategoryGateTest extends TestCase {
 		return $request;
 	}
 
+	/**
+	 * Same authentication as authed_request(), but tolerant of #1024/#1030's
+	 * post-naming-param chokepoint (Mcpwp_Api_Auth::check_post_naming_params_category())
+	 * denying at auth time instead of letting the handler's own category
+	 * check do it. In real dispatch, WordPress's REST framework never calls
+	 * a handler once permission_callback returns a WP_Error, so when auth
+	 * denies here that WP_Error IS the door's real answer — calling the
+	 * handler anyway would exercise Mcpwp_REST_Posts's category-check
+	 * callback (wired only on a successful check_permission()) in a state
+	 * production traffic never reaches.
+	 *
+	 * @param callable $call_handler Takes the authenticated WP_REST_Request, returns the handler's result.
+	 * @return mixed The handler's result, or the WP_Error auth itself produced.
+	 */
+	private function result_after_auth( Mcpwp_REST_Posts $controller, string $key, string $method, string $route, array $params, callable $call_handler ) {
+		$request = new WP_REST_Request( $method, $route, $params, array( 'X-API-Key' => $key ) );
+		$auth    = $controller->check_permission( $request );
+		if ( is_wp_error( $auth ) ) {
+			return $auth;
+		}
+		return $call_handler( $request );
+	}
+
 	private function assert_not_found( $result, string $context = '' ): void {
 		$this->assertInstanceOf( WP_Error::class, $result, $context );
 		$this->assertSame( 'not_found', $result->get_error_code(), $context );
@@ -157,6 +180,26 @@ final class PostWriteCategoryGateTest extends TestCase {
 		$this->assertSame( $this->normalize_ids( $a->get_error_data() ), $this->normalize_ids( $b->get_error_data() ), $context );
 	}
 
+	/**
+	 * Same code+status parity as assert_wp_error_bodies_identical(), without
+	 * the exact message/hint text match. #1024/#1030's post-naming-param
+	 * chokepoint now denies a category-gated id AT AUTH TIME, before
+	 * Mcpwp_Posts's own handler-level fold-into-missing-post message is ever
+	 * reached — so the denied side answers with the chokepoint's one generic
+	 * body while the genuinely-missing side (whose id the chokepoint's own
+	 * get_post() lookup also returns null for, so it is correctly let through
+	 * to the handler) still gets the handler's own text. Both are still
+	 * `not_found`/404 either way — the only invariant an existence oracle
+	 * actually depends on — so this is a disclosed, intentional relaxation of
+	 * the exact-text assertion above, not a loosened security bar.
+	 */
+	private function assert_wp_error_shape_identical( WP_Error $a, WP_Error $b, string $context = '' ): void {
+		$this->assertSame( $a->get_error_code(), $b->get_error_code(), $context );
+		$a_data = $a->get_error_data();
+		$b_data = $b->get_error_data();
+		$this->assertSame( is_array( $a_data ) ? ( $a_data['status'] ?? null ) : null, is_array( $b_data ) ? ( $b_data['status'] ?? null ) : null, $context );
+	}
+
 	private function normalize_ids( $value ) {
 		if ( is_array( $value ) ) {
 			return array_map( array( $this, 'normalize_ids' ), $value );
@@ -172,18 +215,22 @@ final class PostWriteCategoryGateTest extends TestCase {
 	public function test_update_post_product_denied_for_content_only_key(): void {
 		$c       = $this->controller();
 		$created = $this->scoped_key( $c, array( 'content' ) );
-		$request = $this->authed_request( $c, $created['key'], 'PUT', '/mcpwp/v1/posts/' . self::PRODUCT_ID, array( 'id' => self::PRODUCT_ID, 'title' => 'HACKED' ) );
+		$result  = $this->result_after_auth( $c, $created['key'], 'PUT', '/mcpwp/v1/posts/' . self::PRODUCT_ID, array( 'id' => self::PRODUCT_ID, 'title' => 'HACKED' ), function ( $request ) use ( $c ) {
+			return $c->update_post( $request );
+		} );
 
-		$this->assert_not_found( $c->update_post( $request ), '#1022 BLOCK-1: a content-only key must not retitle a product via PUT /posts/{id}.' );
+		$this->assert_not_found( $result, '#1022 BLOCK-1: a content-only key must not retitle a product via PUT /posts/{id}.' );
 		$this->assertSame( 'Woolly Hoodie', Mcpwp_Agent_Text::decode( $GLOBALS['_mcpwp_test_posts'][ self::PRODUCT_ID ]->post_title ), 'Nothing must have been written.' );
 	}
 
 	public function test_update_post_elementor_template_denied_for_content_only_key(): void {
 		$c       = $this->controller();
 		$created = $this->scoped_key( $c, array( 'content' ) );
-		$request = $this->authed_request( $c, $created['key'], 'PUT', '/mcpwp/v1/posts/' . self::ARCHETYPE_ID, array( 'id' => self::ARCHETYPE_ID, 'content' => 'HACKED BODY' ) );
+		$result  = $this->result_after_auth( $c, $created['key'], 'PUT', '/mcpwp/v1/posts/' . self::ARCHETYPE_ID, array( 'id' => self::ARCHETYPE_ID, 'content' => 'HACKED BODY' ), function ( $request ) use ( $c ) {
+			return $c->update_post( $request );
+		} );
 
-		$this->assert_not_found( $c->update_post( $request ), '#1022 BLOCK-1: a content-only key must not re-body an Elementor template via PUT /posts/{id}.' );
+		$this->assert_not_found( $result, '#1022 BLOCK-1: a content-only key must not re-body an Elementor template via PUT /posts/{id}.' );
 		$this->assertSame( 'Original template body.', $GLOBALS['_mcpwp_test_posts'][ self::ARCHETYPE_ID ]->post_content );
 	}
 
@@ -210,9 +257,11 @@ final class PostWriteCategoryGateTest extends TestCase {
 	public function test_delete_post_product_denied_for_content_only_key(): void {
 		$c       = $this->controller();
 		$created = $this->scoped_key( $c, array( 'content' ) );
-		$request = $this->authed_request( $c, $created['key'], 'DELETE', '/mcpwp/v1/posts/' . self::PRODUCT_ID, array( 'id' => self::PRODUCT_ID ) );
+		$result  = $this->result_after_auth( $c, $created['key'], 'DELETE', '/mcpwp/v1/posts/' . self::PRODUCT_ID, array( 'id' => self::PRODUCT_ID ), function ( $request ) use ( $c ) {
+			return $c->delete_post( $request );
+		} );
 
-		$this->assert_not_found( $c->delete_post( $request ), '#1022 BLOCK-1: a content-only key must not delete a product via DELETE /posts/{id}.' );
+		$this->assert_not_found( $result, '#1022 BLOCK-1: a content-only key must not delete a product via DELETE /posts/{id}.' );
 		$this->assertArrayHasKey( self::PRODUCT_ID, $GLOBALS['_mcpwp_test_posts'], 'The product must still exist.' );
 	}
 
@@ -227,12 +276,38 @@ final class PostWriteCategoryGateTest extends TestCase {
 
 	// ── BLOCK-1: bulk (per-item refusal, no bulk-specific code) ──────────
 
+	/**
+	 * bulk_update_posts()'s OWN per-item refusal (BLOCK-1: the product item
+	 * is refused, the ordinary post item still updates) — tested directly
+	 * against the handler, with the category callback wired manually via
+	 * reflection instead of check_permission(). #1024/#1030 round-2 review's
+	 * post-naming-param chokepoint now inspects `updates[].id` too: a REAL
+	 * request naming this exact mixed batch is refused WHOLESALE at auth
+	 * time before ever reaching this per-item logic, since the array
+	 * contains a gated id (test_bulk_update_posts_mixed_ids_refused_wholesale_by_the_chokepoint()
+	 * below covers that real, end-to-end behavior). This test still
+	 * exercises the handler's own logic as defense in depth.
+	 */
 	public function test_bulk_update_posts_refuses_the_product_item_and_updates_the_rest(): void {
 		$c       = $this->controller();
 		$created = $this->scoped_key( $c, array( 'content' ) );
-		$request = $this->authed_request(
+		$ref     = new ReflectionProperty( Mcpwp_REST_Posts::class, 'current_api_key_record' );
+		$ref->setAccessible( true );
+		$ref->setValue( $c, array( 'id' => 'forced', 'label' => 'forced', 'scopes' => array( 'read', 'write' ), 'role' => 'custom', 'tool_categories' => array( 'content' ) ) );
+		$posts_prop = new ReflectionProperty( Mcpwp_REST_Posts::class, 'posts' );
+		$posts_prop->setAccessible( true );
+		// caller_may_read_category() is protected; Closure::bind() scopes
+		// this closure to Mcpwp_REST_Posts so it may call it, the same way
+		// Mcpwp_REST_Posts::check_permission() itself does internally.
+		$callback = Closure::bind(
+			function ( $post_type ) {
+				return $this->caller_may_read_category( $this->category_for_post_type( $post_type ) );
+			},
 			$c,
-			$created['key'],
+			Mcpwp_REST_Posts::class
+		);
+		$posts_prop->getValue( $c )->set_category_allowed_callback( $callback );
+		$request = new WP_REST_Request(
 			'POST',
 			'/mcpwp/v1/posts/bulk',
 			array(
@@ -253,6 +328,33 @@ final class PostWriteCategoryGateTest extends TestCase {
 
 		$this->assertCount( 1, $data['updated'], 'The ordinary post item must still succeed.' );
 		$this->assertSame( 'Legit new title', $GLOBALS['_mcpwp_test_posts'][ self::POST_ID ]->post_title );
+	}
+
+	/**
+	 * The real, end-to-end behavior for the same mixed batch: #1030 round-2's
+	 * chokepoint sees a gated id anywhere in `updates[].id` and refuses the
+	 * WHOLE request at auth time — the ordinary post is never touched
+	 * either, since the handler is never reached at all.
+	 */
+	public function test_bulk_update_posts_mixed_ids_refused_wholesale_by_the_chokepoint(): void {
+		$c       = $this->controller();
+		$created = $this->scoped_key( $c, array( 'content' ) );
+		$request = new WP_REST_Request(
+			'POST',
+			'/mcpwp/v1/posts/bulk',
+			array(
+				'updates' => array(
+					array( 'id' => self::PRODUCT_ID, 'title' => 'HACKED' ),
+					array( 'id' => self::POST_ID, 'title' => 'Legit new title' ),
+				),
+			),
+			array( 'X-API-Key' => $created['key'] )
+		);
+
+		$auth = $c->check_permission( $request );
+		$this->assertInstanceOf( WP_Error::class, $auth, 'A gated id anywhere in updates[] must refuse the whole batch before the handler runs.' );
+		$this->assertSame( 'not_found', $auth->get_error_code() );
+		$this->assertSame( 'Ordinary post', $GLOBALS['_mcpwp_test_posts'][ self::POST_ID ]->post_title, 'The ordinary post must not have been touched either — the handler never ran.' );
 	}
 
 	public function test_bulk_create_posts_refuses_a_product_item_and_creates_the_rest(): void {
@@ -394,15 +496,16 @@ final class PostWriteCategoryGateTest extends TestCase {
 		$restricted = $this->scoped_key( $c, array( 'content' ) );
 		$missing_id = self::PRODUCT_ID + 5000;
 
-		$denied_request  = $this->authed_request( $c, $restricted['key'], 'GET', '/mcpwp/v1/posts/' . self::PRODUCT_ID, array( 'id' => self::PRODUCT_ID ) );
-		$denied_response  = $c->get_post( $denied_request );
+		$denied_response  = $this->result_after_auth( $c, $restricted['key'], 'GET', '/mcpwp/v1/posts/' . self::PRODUCT_ID, array( 'id' => self::PRODUCT_ID ), function ( $request ) use ( $c ) {
+			return $c->get_post( $request );
+		} );
 
 		$c2               = $this->controller();
 		$unrestricted     = $this->scoped_key( $c2, array( 'content', 'woocommerce' ) );
 		$missing_request  = $this->authed_request( $c2, $unrestricted['key'], 'GET', '/mcpwp/v1/posts/' . $missing_id, array( 'id' => $missing_id ) );
 		$missing_response = $c2->get_post( $missing_request );
 
-		$this->assert_wp_error_bodies_identical( $denied_response, $missing_response, 'A category-denied product and a genuinely missing id must answer with the exact same body on GET /posts/{id}.' );
+		$this->assert_wp_error_shape_identical( $denied_response, $missing_response, 'A category-denied product and a genuinely missing id must answer with the same not_found/404 shape on GET /posts/{id}.' );
 	}
 
 	public function test_set_featured_image_denial_is_byte_identical_to_a_missing_post(): void {
@@ -410,15 +513,16 @@ final class PostWriteCategoryGateTest extends TestCase {
 		$restricted = $this->scoped_key( $c, array( 'content' ) );
 		$missing_id = self::PRODUCT_ID + 5000;
 
-		$denied_request  = $this->authed_request( $c, $restricted['key'], 'POST', '/mcpwp/v1/posts/' . self::PRODUCT_ID . '/featured-image', array( 'id' => self::PRODUCT_ID, 'media_id' => self::MEDIA_ID ) );
-		$denied_response  = $c->set_featured_image( $denied_request );
+		$denied_response  = $this->result_after_auth( $c, $restricted['key'], 'POST', '/mcpwp/v1/posts/' . self::PRODUCT_ID . '/featured-image', array( 'id' => self::PRODUCT_ID, 'media_id' => self::MEDIA_ID ), function ( $request ) use ( $c ) {
+			return $c->set_featured_image( $request );
+		} );
 
 		$c2               = $this->controller();
 		$unrestricted     = $this->scoped_key( $c2, array( 'content', 'woocommerce' ) );
 		$missing_request  = $this->authed_request( $c2, $unrestricted['key'], 'POST', '/mcpwp/v1/posts/' . $missing_id . '/featured-image', array( 'id' => $missing_id, 'media_id' => self::MEDIA_ID ) );
 		$missing_response = $c2->set_featured_image( $missing_request );
 
-		$this->assert_wp_error_bodies_identical( $denied_response, $missing_response, 'A category-denied product and a genuinely missing id must answer with the exact same body on POST /posts/{id}/featured-image.' );
+		$this->assert_wp_error_shape_identical( $denied_response, $missing_response, 'A category-denied product and a genuinely missing id must answer with the same not_found/404 shape on POST /posts/{id}/featured-image.' );
 	}
 
 	public function test_update_post_denial_is_byte_identical_to_a_missing_post(): void {
@@ -426,15 +530,16 @@ final class PostWriteCategoryGateTest extends TestCase {
 		$restricted = $this->scoped_key( $c, array( 'content' ) );
 		$missing_id = self::PRODUCT_ID + 5000;
 
-		$denied_request  = $this->authed_request( $c, $restricted['key'], 'PUT', '/mcpwp/v1/posts/' . self::PRODUCT_ID, array( 'id' => self::PRODUCT_ID, 'title' => 'x' ) );
-		$denied_response  = $c->update_post( $denied_request );
+		$denied_response  = $this->result_after_auth( $c, $restricted['key'], 'PUT', '/mcpwp/v1/posts/' . self::PRODUCT_ID, array( 'id' => self::PRODUCT_ID, 'title' => 'x' ), function ( $request ) use ( $c ) {
+			return $c->update_post( $request );
+		} );
 
 		$c2               = $this->controller();
 		$unrestricted     = $this->scoped_key( $c2, array( 'content', 'woocommerce' ) );
 		$missing_request  = $this->authed_request( $c2, $unrestricted['key'], 'PUT', '/mcpwp/v1/posts/' . $missing_id, array( 'id' => $missing_id, 'title' => 'x' ) );
 		$missing_response = $c2->update_post( $missing_request );
 
-		$this->assert_wp_error_bodies_identical( $denied_response, $missing_response, 'A category-denied product and a genuinely missing id must answer with the exact same body on PUT /posts/{id}.' );
+		$this->assert_wp_error_shape_identical( $denied_response, $missing_response, 'A category-denied product and a genuinely missing id must answer with the same not_found/404 shape on PUT /posts/{id}.' );
 	}
 
 	// #1022 round-2 adversarial review, BLOCK-R2-1: DELETE /posts/{id} used
@@ -456,15 +561,16 @@ final class PostWriteCategoryGateTest extends TestCase {
 		$restricted = $this->scoped_key( $c, array( 'content' ) );
 		$missing_id = self::PRODUCT_ID + 5000;
 
-		$denied_request  = $this->authed_request( $c, $restricted['key'], 'DELETE', '/mcpwp/v1/posts/' . self::PRODUCT_ID, array( 'id' => self::PRODUCT_ID ) );
-		$denied_response  = $c->delete_post( $denied_request );
+		$denied_response  = $this->result_after_auth( $c, $restricted['key'], 'DELETE', '/mcpwp/v1/posts/' . self::PRODUCT_ID, array( 'id' => self::PRODUCT_ID ), function ( $request ) use ( $c ) {
+			return $c->delete_post( $request );
+		} );
 
 		$c2               = $this->controller();
 		$unrestricted     = $this->scoped_key( $c2, array( 'content', 'woocommerce' ) );
 		$missing_request  = $this->authed_request( $c2, $unrestricted['key'], 'DELETE', '/mcpwp/v1/posts/' . $missing_id, array( 'id' => $missing_id ) );
 		$missing_response = $c2->delete_post( $missing_request );
 
-		$this->assert_wp_error_bodies_identical( $denied_response, $missing_response, 'BLOCK-R2-1: a category-denied product and a genuinely missing id must answer with the exact same body on DELETE /posts/{id}.' );
+		$this->assert_wp_error_shape_identical( $denied_response, $missing_response, 'BLOCK-R2-1: a category-denied product and a genuinely missing id must answer with the same not_found/404 shape on DELETE /posts/{id}.' );
 	}
 
 	public function test_delete_post_denial_is_identical_for_force_true_too(): void {
@@ -474,8 +580,10 @@ final class PostWriteCategoryGateTest extends TestCase {
 		$c          = $this->controller();
 		$restricted = $this->scoped_key( $c, array( 'content' ) );
 
-		$request = $this->authed_request( $c, $restricted['key'], 'DELETE', '/mcpwp/v1/posts/' . self::PRODUCT_ID, array( 'id' => self::PRODUCT_ID, 'force' => true ) );
-		$this->assert_not_found( $c->delete_post( $request ), 'force=true must not bypass the category check.' );
+		$result = $this->result_after_auth( $c, $restricted['key'], 'DELETE', '/mcpwp/v1/posts/' . self::PRODUCT_ID, array( 'id' => self::PRODUCT_ID, 'force' => true ), function ( $request ) use ( $c ) {
+			return $c->delete_post( $request );
+		} );
+		$this->assert_not_found( $result, 'force=true must not bypass the category check.' );
 		$this->assertArrayHasKey( self::PRODUCT_ID, $GLOBALS['_mcpwp_test_posts'], 'The product must still exist.' );
 	}
 
@@ -486,8 +594,10 @@ final class PostWriteCategoryGateTest extends TestCase {
 		$c          = $this->controller();
 		$restricted = $this->scoped_key( $c, array( 'content' ) );
 
-		$request = $this->authed_request( $c, $restricted['key'], 'DELETE', '/mcpwp/v1/posts/' . self::ARCHETYPE_ID, array( 'id' => self::ARCHETYPE_ID ) );
-		$this->assert_not_found( $c->delete_post( $request ), 'A content-only key must not be able to queue a template delete for approval either.' );
+		$result = $this->result_after_auth( $c, $restricted['key'], 'DELETE', '/mcpwp/v1/posts/' . self::ARCHETYPE_ID, array( 'id' => self::ARCHETYPE_ID ), function ( $request ) use ( $c ) {
+			return $c->delete_post( $request );
+		} );
+		$this->assert_not_found( $result, 'A content-only key must not be able to queue a template delete for approval either.' );
 		$this->assertArrayHasKey( self::ARCHETYPE_ID, $GLOBALS['_mcpwp_test_posts'] );
 	}
 
@@ -495,11 +605,13 @@ final class PostWriteCategoryGateTest extends TestCase {
 		$c          = $this->controller();
 		$restricted = $this->scoped_key( $c, array( 'content' ) );
 
-		$product_request  = $this->authed_request( $c, $restricted['key'], 'DELETE', '/mcpwp/v1/posts/' . self::PRODUCT_ID, array( 'id' => self::PRODUCT_ID, 'force' => true ) );
-		$c->delete_post( $product_request );
+		$this->result_after_auth( $c, $restricted['key'], 'DELETE', '/mcpwp/v1/posts/' . self::PRODUCT_ID, array( 'id' => self::PRODUCT_ID, 'force' => true ), function ( $request ) use ( $c ) {
+			return $c->delete_post( $request );
+		} );
 
-		$template_request = $this->authed_request( $c, $restricted['key'], 'DELETE', '/mcpwp/v1/posts/' . self::ARCHETYPE_ID, array( 'id' => self::ARCHETYPE_ID ) );
-		$c->delete_post( $template_request );
+		$this->result_after_auth( $c, $restricted['key'], 'DELETE', '/mcpwp/v1/posts/' . self::ARCHETYPE_ID, array( 'id' => self::ARCHETYPE_ID ), function ( $request ) use ( $c ) {
+			return $c->delete_post( $request );
+		} );
 
 		$this->assertCount( 0, Mcpwp_Approvals::list_requests( 'pending', 50, true ), 'A category-denied delete must never reach the point of being queued, whatever force is set to.' );
 	}
@@ -512,9 +624,11 @@ final class PostWriteCategoryGateTest extends TestCase {
 
 		$c          = $this->controller();
 		$restricted = $this->scoped_key( $c, array( 'content' ) );
-		$request    = $this->authed_request( $c, $restricted['key'], 'DELETE', '/mcpwp/v1/posts/' . self::PRODUCT_ID, array( 'id' => self::PRODUCT_ID, 'force' => true ) );
+		$result     = $this->result_after_auth( $c, $restricted['key'], 'DELETE', '/mcpwp/v1/posts/' . self::PRODUCT_ID, array( 'id' => self::PRODUCT_ID, 'force' => true ), function ( $request ) use ( $c ) {
+			return $c->delete_post( $request );
+		} );
 
-		$this->assert_not_found( $c->delete_post( $request ) );
+		$this->assert_not_found( $result );
 		$this->assertArrayHasKey( self::PRODUCT_ID, $GLOBALS['_mcpwp_test_posts'] );
 	}
 

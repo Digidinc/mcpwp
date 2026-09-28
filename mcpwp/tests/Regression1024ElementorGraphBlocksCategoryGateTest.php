@@ -201,6 +201,31 @@ final class Regression1024ElementorGraphBlocksCategoryGateTest extends TestCase 
 		return $request;
 	}
 
+	/**
+	 * Same authentication as auth_request(), but tolerant of #1030 round-2
+	 * review's post-naming-param chokepoint (Mcpwp_Api_Auth::check_post_naming_params_category())
+	 * denying at auth time instead of letting the handler's own validate_post()/
+	 * find-replace check do it. In real dispatch, WordPress's REST framework
+	 * never calls a handler once permission_callback returns a WP_Error, so
+	 * when auth denies here that WP_Error IS the door's real answer —
+	 * proceeding to call the handler anyway would exercise
+	 * Mcpwp_Elementor_Basic's category callback (wired only on a successful
+	 * check_permission()) in a state production traffic never reaches.
+	 *
+	 * @param callable $call_handler Takes the authenticated WP_REST_Request, returns the handler's result.
+	 * @return mixed The handler's result, or the WP_Error auth itself produced.
+	 */
+	private function result_after_auth( object $controller, string $key, string $method, string $route, array $params, callable $call_handler ) {
+		$request = new WP_REST_Request( $method, $route, $params, array( 'X-API-Key' => $key ) );
+		$auth    = method_exists( $controller, 'check_permission' )
+			? $controller->check_permission( $request )
+			: $controller->verify_api_key( $request );
+		if ( is_wp_error( $auth ) ) {
+			return $auth;
+		}
+		return $call_handler( $request );
+	}
+
 	/** Attach a key record directly, bypassing scope/route gates unrelated to this fix. */
 	private function force_key_record( object $controller, array $categories, string $role = 'custom' ): void {
 		$ref = new ReflectionProperty( get_class( $controller ), 'current_api_key_record' );
@@ -285,9 +310,11 @@ final class Regression1024ElementorGraphBlocksCategoryGateTest extends TestCase 
 		}
 		$controller = new Mcpwp_REST_Elementor();
 		$created    = $this->scoped_key( $controller, array( 'elementor' ) ); // no elementor-templates
-		$request    = $this->auth_request( $controller, $created['key'], 'GET', '/mcpwp/v1/elementor/' . self::ARCHETYPE_ID, array( 'id' => self::ARCHETYPE_ID ) );
+		$result     = $this->result_after_auth( $controller, $created['key'], 'GET', '/mcpwp/v1/elementor/' . self::ARCHETYPE_ID, array( 'id' => self::ARCHETYPE_ID ), function ( $request ) use ( $controller ) {
+			return $controller->get_elementor_data( $request );
+		} );
 
-		$this->assert_not_found( $controller->get_elementor_data( $request ), 'wp_get_elementor => GET /elementor/{id} on an archetype.' );
+		$this->assert_not_found( $result, 'wp_get_elementor => GET /elementor/{id} on an archetype.' );
 	}
 
 	public function test_end_to_end_get_elementor_data_allows_page_for_elementor_only_key(): void {
@@ -310,9 +337,11 @@ final class Regression1024ElementorGraphBlocksCategoryGateTest extends TestCase 
 
 		$controller = new Mcpwp_REST_Elementor();
 		$created    = $controller->create_scoped_api_key( 'admin', array( 'read', 'write', 'admin' ), 'admin' );
-		$request    = $this->auth_request( $controller, $created['key'], 'GET', '/mcpwp/v1/elementor/' . self::ARCHETYPE_ID, array( 'id' => self::ARCHETYPE_ID ) );
+		$result     = $this->result_after_auth( $controller, $created['key'], 'GET', '/mcpwp/v1/elementor/' . self::ARCHETYPE_ID, array( 'id' => self::ARCHETYPE_ID ), function ( $request ) use ( $controller ) {
+			return $controller->get_elementor_data( $request );
+		} );
 
-		$this->assert_not_found( $controller->get_elementor_data( $request ), 'Site-wide toggle must block even an admin-role key.' );
+		$this->assert_not_found( $result, 'Site-wide toggle must block even an admin-role key.' );
 	}
 
 	// =========================================================================
@@ -322,15 +351,18 @@ final class Regression1024ElementorGraphBlocksCategoryGateTest extends TestCase 
 	public function test_single_find_replace_denies_archetype_for_elementor_only_key(): void {
 		$controller = new Mcpwp_REST_Elementor();
 		$created    = $this->scoped_key( $controller, array( 'elementor' ) );
-		$request    = $this->auth_request(
+		$result     = $this->result_after_auth(
 			$controller,
 			$created['key'],
 			'POST',
 			'/mcpwp/v1/elementor/' . self::ARCHETYPE_ID . '/find-replace',
-			array( 'id' => self::ARCHETYPE_ID, 'search' => 'Old Brand', 'replace' => 'New Brand' )
+			array( 'id' => self::ARCHETYPE_ID, 'search' => 'Old Brand', 'replace' => 'New Brand' ),
+			function ( $request ) use ( $controller ) {
+				return $controller->find_replace( $request );
+			}
 		);
 
-		$this->assert_not_found( $controller->find_replace( $request ) );
+		$this->assert_not_found( $result );
 		$this->assertStringContainsString( 'Old Brand', $GLOBALS['_mcpwp_test_meta'][ self::ARCHETYPE_ID ]['_elementor_data'], 'Nothing must have been written.' );
 	}
 
@@ -367,12 +399,23 @@ final class Regression1024ElementorGraphBlocksCategoryGateTest extends TestCase 
 		$this->assertInstanceOf( WP_REST_Response::class, $result, 'page must never require content category through this door.' );
 	}
 
+	/**
+	 * find_replace_many()'s OWN per-item selective skip (page rewritten,
+	 * gated archetype quietly not_touched) — tested directly against the
+	 * handler via force_key_record(), bypassing full auth. #1030 round-2's
+	 * post-naming-param chokepoint now inspects `ids[]` too (see the next
+	 * test below): a REAL request naming this exact mixed batch is refused
+	 * WHOLESALE at auth time before ever reaching this per-item logic, since
+	 * the array contains a gated id. This test still exercises the
+	 * handler's own logic as defense in depth (a future auth path that
+	 * skips the chokepoint must still not touch a gated id) — it is not
+	 * what a real client observes any more; test_bulk_find_replace_mixed_ids_refused_wholesale_by_the_chokepoint()
+	 * below covers the real, end-to-end behavior.
+	 */
 	public function test_bulk_find_replace_by_ids_silently_skips_a_gated_archetype(): void {
 		$controller = new Mcpwp_REST_Elementor();
-		$created    = $controller->create_scoped_api_key( 'scoped', array( 'read', 'write' ), 'custom', array( 'elementor' ) );
-		$request    = $this->auth_request(
-			$controller,
-			$created['key'],
+		$this->force_key_record( $controller, array( 'elementor' ) );
+		$request = new WP_REST_Request(
 			'POST',
 			'/mcpwp/v1/elementor/find-replace',
 			array( 'ids' => array( self::PAGE_ID, self::ARCHETYPE_ID ), 'search' => 'Old Brand', 'replace' => 'New Brand' )
@@ -392,6 +435,34 @@ final class Regression1024ElementorGraphBlocksCategoryGateTest extends TestCase 
 		}
 		$this->assertSame( 'not_found', $not_touched[ self::ARCHETYPE_ID ] ?? null, 'A category denial must read exactly like a missing id (round-1 review NIT).' );
 		$this->assertStringContainsString( 'Old Brand', $GLOBALS['_mcpwp_test_meta'][ self::ARCHETYPE_ID ]['_elementor_data'], 'The archetype must not have been written.' );
+	}
+
+	/**
+	 * The real, end-to-end behavior for a mixed batch naming a WooCommerce
+	 * product: #1030 round-2's chokepoint sees the gated id anywhere in
+	 * `ids[]` and refuses the WHOLE request at auth time — the page is
+	 * never touched either, since the handler is never reached at all.
+	 *
+	 * A gated ELEMENTOR_LIBRARY id in ids[] is deliberately NOT this
+	 * chokepoint's job (see check_post_naming_params_category()'s own
+	 * exemption docblock — /theme-builder's own 'elementor-theme' category
+	 * would otherwise be broken by this chokepoint's cruder
+	 * category_for_post_type() mapping); that case stays covered by
+	 * find_replace_many()'s own per-item logic, proven above.
+	 */
+	public function test_bulk_find_replace_mixed_ids_refused_wholesale_by_the_chokepoint(): void {
+		$controller = new Mcpwp_REST_Elementor();
+		$created    = $controller->create_scoped_api_key( 'scoped', array( 'read', 'write' ), 'custom', array( 'elementor' ) );
+		$request    = new WP_REST_Request(
+			'POST',
+			'/mcpwp/v1/elementor/find-replace',
+			array( 'ids' => array( self::PAGE_ID, self::PRODUCT_ID ), 'search' => 'Old Brand', 'replace' => 'New Brand' ),
+			array( 'X-API-Key' => $created['key'] )
+		);
+
+		$auth = $controller->check_permission( $request );
+		$this->assert_not_found( $auth, 'A gated id anywhere in ids[] must refuse the whole batch before the handler runs.' );
+		$this->assertStringContainsString( 'Old Brand', $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'], 'The page must not have been touched either — the handler never ran.' );
 	}
 
 	// =========================================================================
