@@ -53,7 +53,13 @@ class RenderedCopyDraftTest extends PHPUnit\Framework\TestCase {
 		// privilege the draft render requires. verify_api_key() populates the
 		// controller's current_api_key_record, which requester_can_see_non_public()
 		// reads to allow unpublished content through.
-		$created = $controller->create_scoped_api_key( 'test key', array( 'write' ), 'custom' );
+		// get_rendered_copy() gates on BOTH the route's own category ('site')
+		// AND the resolved post's type category ('content', via
+		// guard_post_type_category() — page/post has no exemption here unlike
+		// /elementor or /blocks). role=admin (documented unrestricted, see
+		// resolve_key_tool_categories()) sidesteps reconstructing that pair;
+		// this test is about the in-process draft render, not category gating.
+		$created = $controller->create_scoped_api_key( 'test key', array( 'write' ), 'admin' );
 		$request = new WP_REST_Request(
 			'GET',
 			'/mcpwp/v1/rendered-copy',

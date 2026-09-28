@@ -247,7 +247,22 @@
 		// Track scoped key creation.
 		var createBtn = document.querySelector('form [name="mcpwp_create_scoped_key"]');
 		if (createBtn) {
-			createBtn.closest('form').addEventListener('submit', function() {
+			createBtn.closest('form').addEventListener('submit', function(e) {
+				// #1041: the key editor must not be able to save a custom role
+				// with no categories — the server now refuses this outright,
+				// but catching it here avoids a round-trip for the common
+				// "picked Custom, forgot to check a box" slip.
+				if (roleSelect.value === 'custom') {
+					var anyChecked = Array.prototype.some.call(checkboxes, function(cb) {
+						return cb.checked;
+					});
+					if (!anyChecked) {
+						e.preventDefault();
+						window.alert((strings && strings.noCategoriesSelected) ||
+							'Select at least one tool category for a custom-role key.');
+						return;
+					}
+				}
 				if (window.posthog) {
 					posthog.capture('scoped_key_created', {
 						role: roleSelect ? roleSelect.value : 'unknown'

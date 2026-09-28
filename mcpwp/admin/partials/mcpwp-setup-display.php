@@ -353,11 +353,23 @@ $last_activity_time = ! empty( $recent_activity[0]['created_at'] ) ? $recent_act
 				</thead>
 				<tbody>
 					<?php foreach ( $scoped_keys as $key ) :
-						$key_role    = isset( $key['role'] ) ? $key['role'] : 'admin';
-						$role_def    = isset( $role_definitions[ $key_role ] ) ? $role_definitions[ $key_role ] : $role_definitions['admin'];
-						$badge_bg    = isset( $role_colors[ $key_role ] ) ? $role_colors[ $key_role ] : '#50575e';
+						$key_role = isset( $key['role'] ) ? $key['role'] : 'admin';
+						// #1041 NIT-1: list_scoped_api_keys() now resolves the sentinel
+						// cases itself — 'deny_all' is explicit, and 'role' is never the
+						// raw unknown_role_marker() (a malformed 'role' field, #1041
+						// WARN-1, presents as the string 'unknown', which is not a real
+						// role slug either — both need their own display branch here,
+						// not the admin fallback below, or a deny-all key would show as
+						// "Admin".
+						$is_unknown_role = 'unknown' === $key_role;
+						$role_def         = ( ! $is_unknown_role && isset( $role_definitions[ $key_role ] ) )
+							? $role_definitions[ $key_role ]
+							: array( 'label' => __( 'Unknown', 'mcpwp' ) );
+						$badge_bg = $is_unknown_role ? '#8a1f11' : ( isset( $role_colors[ $key_role ] ) ? $role_colors[ $key_role ] : '#50575e' );
 						$display_cats = array();
-						if ( 'admin' === $key_role ) {
+						if ( ! empty( $key['deny_all'] ) ) {
+							$display_cats = array( __( 'None (all denied)', 'mcpwp' ) );
+						} elseif ( 'admin' === $key_role ) {
 							$display_cats = array( __( 'All', 'mcpwp' ) );
 						} elseif ( 'custom' === $key_role && ! empty( $key['tool_categories'] ) ) {
 							foreach ( $key['tool_categories'] as $cat ) {

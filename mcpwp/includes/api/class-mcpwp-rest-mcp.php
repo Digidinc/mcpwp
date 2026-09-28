@@ -2332,8 +2332,15 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		);
 
 		if ( 'admin' !== $role ) {
-			$server_info['role']            = $role;
-			$server_info['tool_categories'] = $allowed_categories;
+			// describe_role_for_message() strips unknown_role_marker() (#1041
+			// WARN-1) — a malformed-role key's normalized role is an internal
+			// sentinel, never something to hand a client.
+			$server_info['role']            = self::describe_role_for_message( $role );
+			// present_tool_categories() strips the internal deny-all sentinel
+			// (#1041) — a custom-role key with nothing granted reports [], the
+			// same shape a client would expect "no categories" to have, never
+			// the raw marker string.
+			$server_info['tool_categories'] = self::present_tool_categories( $allowed_categories );
 		}
 
 		// What a bulk client needs before it starts (#802): the plugin version
@@ -2538,7 +2545,10 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 
 		$allowed_categories = $this->resolve_key_tool_categories( $key_record );
 
-		// Empty = unrestricted (admin role).
+		// Empty = unrestricted (admin role, or legacy/migrated key). A custom
+		// role with nothing granted resolves to the deny-all sentinel, never a
+		// bare array() (#1041), so it always falls through to the per-tool
+		// filter below, which lists only the discovery-exempt tools for it.
 		if ( empty( $allowed_categories ) ) {
 			return $tools;
 		}
@@ -3282,7 +3292,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		}
 
 		$allowed = $key_record ? $this->resolve_key_tool_categories( $key_record ) : array();
-		$role    = $key_record && isset( $key_record['role'] ) ? $key_record['role'] : 'unknown';
+		$role    = $key_record && isset( $key_record['role'] ) ? self::describe_role_for_message( $key_record['role'] ) : 'unknown';
 
 		return $this->jsonrpc_error(
 			$id,
@@ -3291,7 +3301,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				'This API key (role: %s) does not have access to %s resources. Allowed categories: %s.',
 				$role,
 				'' === $tool_category ? 'uncategorised' : $tool_category,
-				implode( ', ', $allowed )
+				self::describe_allowed_categories_for_message( $allowed )
 			),
 			array(
 				'uri'  => $uri,
@@ -3300,7 +3310,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 					'This resource mirrors tool "%s" (category "%s"), but this key only has access to: %s.',
 					$tool_name,
 					'' === $tool_category ? 'uncategorised' : $tool_category,
-					implode( ', ', $allowed )
+					self::describe_allowed_categories_for_message( $allowed )
 				),
 			)
 		);
@@ -3936,16 +3946,16 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		if ( $key_record ) {
 			$allowed_categories = $this->resolve_key_tool_categories( $key_record );
 			if ( ! empty( $allowed_categories ) && ! in_array( Mcpwp_MCP_Meta_Tools::CATEGORY, $allowed_categories, true ) ) {
-				$role = isset( $key_record['role'] ) ? $key_record['role'] : 'unknown';
+				$role = isset( $key_record['role'] ) ? self::describe_role_for_message( $key_record['role'] ) : 'unknown';
 				return array(
 					'code'    => 'scope_denied',
-					'message' => sprintf( 'This API key (role: %s) does not have access to %s tools. Allowed categories: %s.', $role, Mcpwp_MCP_Meta_Tools::CATEGORY, implode( ', ', $allowed_categories ) ),
+					'message' => sprintf( 'This API key (role: %s) does not have access to %s tools. Allowed categories: %s.', $role, Mcpwp_MCP_Meta_Tools::CATEGORY, self::describe_allowed_categories_for_message( $allowed_categories ) ),
 					'data'    => array(
 						'hint' => sprintf(
 							'Tool "%s" is in the "%s" category, but this key only has access to: %s. Request an admin key or a key with the "%s" category enabled.',
 							$meta_tool_name,
 							Mcpwp_MCP_Meta_Tools::CATEGORY,
-							implode( ', ', $allowed_categories ),
+							self::describe_allowed_categories_for_message( $allowed_categories ),
 							Mcpwp_MCP_Meta_Tools::CATEGORY
 						),
 					),
@@ -4368,7 +4378,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				// (#802 round 5).
 				$tool_category = $this->tool_category_for( $tool_name );
 				if ( '' === $tool_category || ! in_array( $tool_category, $allowed_categories, true ) ) {
-					$role = isset( $key_record['role'] ) ? $key_record['role'] : 'unknown';
+					$role = isset( $key_record['role'] ) ? self::describe_role_for_message( $key_record['role'] ) : 'unknown';
 					$this->fire_tool_called( $tool_name, $start, 'scope_denied' );
 					return $this->tool_error_result(
 						$id,
@@ -4377,14 +4387,14 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 							'This API key (role: %s) does not have access to %s tools. Allowed categories: %s.',
 							$role,
 							'' === $tool_category ? 'uncategorised' : $tool_category,
-							implode( ', ', $allowed_categories )
+							self::describe_allowed_categories_for_message( $allowed_categories )
 						),
 						array(
 							'hint' => sprintf(
 								'Tool "%s" is in the "%s" category, but this key only has access to: %s. Request an admin key or a key with the "%s" category enabled.',
 								$tool_name,
 								'' === $tool_category ? 'uncategorised' : $tool_category,
-								implode( ', ', $allowed_categories ),
+								self::describe_allowed_categories_for_message( $allowed_categories ),
 								'' === $tool_category ? 'uncategorised' : $tool_category
 							),
 						)

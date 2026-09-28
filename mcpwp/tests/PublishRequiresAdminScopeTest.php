@@ -48,7 +48,10 @@ final class PublishRequiresAdminScopeTest extends TestCase {
 	}
 
 	private function write_key( $controller ): string {
-		return $controller->create_scoped_api_key( 'write key', array( 'write' ), 'custom' )['key'];
+		// #1041: a custom-role key must be granted at least one real category.
+		// Irrelevant to what this test actually asserts (scope, not category)
+		// — verify_api_key() checks scope before category.
+		return $controller->create_scoped_api_key( 'write key', array( 'write' ), 'custom', array( 'content' ) )['key'];
 	}
 
 	private function admin_key( $controller ): string {

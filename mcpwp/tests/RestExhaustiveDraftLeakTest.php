@@ -122,7 +122,15 @@ final class RestExhaustiveDraftLeakTest extends TestCase {
 	 * @return WP_REST_Request Authenticated request.
 	 */
 	private function authed( $c, string $method, string $route, array $params, array $scopes ): WP_REST_Request {
-		$created = $c->create_scoped_api_key( 'test key', $scopes, 'custom' );
+		// This suite is about draft/private enumeration leaks, not per-key
+		// category restriction. Several routes here gate on BOTH their own
+		// route category AND the resolved post's type category
+		// (guard_post_type_category(), #1024) — reconstructing that exact
+		// pair per route/controller is exactly the fixture noise role=admin
+		// avoids. Before #1041, role='custom' with no categories resolved to
+		// unrestricted by the very bug this suite's sibling test closes;
+		// admin is the correct, DOCUMENTED way to get that same property now.
+		$created = $c->create_scoped_api_key( 'test key', $scopes, 'admin' );
 		$request = new WP_REST_Request( $method, $route, $params, array( 'X-API-Key' => $created['key'] ) );
 		$this->assertTrue( $c->verify_api_key( $request ), 'verify_api_key should succeed' );
 		return $request;
@@ -144,7 +152,10 @@ final class RestExhaustiveDraftLeakTest extends TestCase {
 	 * @param string $scope  Expected required scope.
 	 */
 	private function assertReadKeyScopeDenied( $c, string $method, string $route, string $scope ): void {
-		$created = $c->create_scoped_api_key( 'test key', array( 'read' ), 'custom' );
+		// This asserts scope denial, not category — verify_api_key() checks
+		// scope before category, so role is irrelevant here; admin keeps this
+		// test independent of any route/post-type category pairing.
+		$created = $c->create_scoped_api_key( 'test key', array( 'read' ), 'admin' );
 		$request = new WP_REST_Request( $method, $route, array(), array( 'X-API-Key' => $created['key'] ) );
 		$result  = $c->verify_api_key( $request );
 		$this->assertInstanceOf( WP_Error::class, $result, 'read key must be denied' );
