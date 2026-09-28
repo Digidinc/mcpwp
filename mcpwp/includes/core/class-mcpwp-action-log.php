@@ -17,6 +17,23 @@ class Mcpwp_Action_Log {
 	const TABLE = 'mcpwp_action_log';
 	const DEFAULT_RETENTION_DAYS = 90;
 
+	/**
+	 * #1031: when a category-restricted caller reads the log, visibility is
+	 * decided in PHP (see is_entry_visible_to()) rather than in SQL — a
+	 * resolved post's category can't be expressed as a WHERE clause the way
+	 * the table's own columns can. That means the row set has to be fetched
+	 * BEFORE the caller's requested LIMIT/OFFSET slice, or a hidden row could
+	 * displace a visible one out of the page (the same reasoning
+	 * Mcpwp_Approvals::list_requests()'s own $category_allowed docblock
+	 * gives). Unlike approvals (an in-memory option, inherently bounded),
+	 * this table has no such bound beyond the retention prune — so the
+	 * pre-slice scan is capped here rather than left open-ended. A site
+	 * whose matching row count exceeds this cap gets a correct (never
+	 * over-disclosing) but possibly under-counted `total`/page beyond the
+	 * cap window; it never shows a row the caller may not see.
+	 */
+	const CATEGORY_FILTER_SCAN_CAP = 5000;
+
 	private static $post_write_tools = array(
 		'wp_update_post', 'wp_update_page',
 		'wp_bulk_update_posts', 'wp_bulk_update_pages',
@@ -115,13 +132,27 @@ class Mcpwp_Action_Log {
 	/**
 	 * Rollback a logged action by restoring its before-state.
 	 *
-	 * @param string $log_id Log entry ID.
+	 * @param string        $log_id           Log entry ID.
+	 * @param callable|null $category_allowed #1031: optional
+	 *                                        `function(string $category): bool`
+	 *                                        — the caller's own
+	 *                                        `caller_may_read_category()`. A
+	 *                                        hidden entry denies with the
+	 *                                        exact same not_found error a
+	 *                                        genuinely missing log_id
+	 *                                        returns, so a category-
+	 *                                        restricted key cannot use
+	 *                                        rollback as an existence oracle
+	 *                                        for an entry /action-log itself
+	 *                                        would not list. Null (default):
+	 *                                        unfiltered, matching every
+	 *                                        existing caller unchanged.
 	 * @return true|WP_Error
 	 */
-	public static function rollback( $log_id ) {
+	public static function rollback( $log_id, $category_allowed = null ) {
 		$entry = self::get_entry( $log_id );
 
-		if ( ! $entry ) {
+		if ( ! $entry || ( is_callable( $category_allowed ) && ! self::is_entry_visible_to( $entry, $category_allowed ) ) ) {
 			return new WP_Error( 'not_found', __( 'Log entry not found.', 'mcpwp' ), array( 'status' => 404 ) );
 		}
 
@@ -172,15 +203,42 @@ class Mcpwp_Action_Log {
 	/**
 	 * List log entries.
 	 *
-	 * @param array $args Query args: limit, offset, tool_name, success, resource_type, resource_id.
+	 * @param array $args Query args: limit, offset, tool_name, success, resource_type,
+	 *                    resource_id, and `category_allowed` (#1031, optional):
+	 *                    `function(string $category): bool` — the caller's own
+	 *                    `caller_may_read_category()`, since only the REST
+	 *                    controller holding the request has that context
+	 *                    (same split as Mcpwp_Approvals::list_requests()'s own
+	 *                    `$category_allowed` param). Every entry carries the
+	 *                    category of the TOOL that wrote it; a generic,
+	 *                    post-type-agnostic write tool (wp_update_post,
+	 *                    wp_delete_post, wp_bulk_update_posts, ...) used
+	 *                    against a post belonging to a DIFFERENT domain
+	 *                    (a WooCommerce product, an Elementor template) logs
+	 *                    under its own door's category, not the resource's —
+	 *                    the same additive gap #1020/#1025 closed for
+	 *                    /post-meta and /approvals. When given, an entry is
+	 *                    dropped unless the caller holds BOTH the tool's own
+	 *                    category AND, when the entry names a resolvable
+	 *                    post (resource_type 'post' or 'elementor'), that
+	 *                    post's real post_type category — see
+	 *                    is_entry_visible_to(). Filtering happens BEFORE
+	 *                    `total` is computed and before the offset/limit
+	 *                    slice, so a hidden entry never displaces a visible
+	 *                    one out of the page and is indistinguishable from
+	 *                    one that was never written. Null (default):
+	 *                    unfiltered, matching every existing caller
+	 *                    (wp-admin's Activity Log / Control Room, CSV export
+	 *                    with no category context) unchanged.
 	 * @return array{ entries: array[], total: int }
 	 */
 	public static function list_entries( $args = array() ) {
 		global $wpdb;
 
-		$table  = $wpdb->prefix . self::TABLE;
-		$limit  = min( 100, max( 1, (int) ( isset( $args['limit'] ) ? $args['limit'] : 50 ) ) );
-		$offset = max( 0, (int) ( isset( $args['offset'] ) ? $args['offset'] : 0 ) );
+		$table             = $wpdb->prefix . self::TABLE;
+		$limit             = min( 100, max( 1, (int) ( isset( $args['limit'] ) ? $args['limit'] : 50 ) ) );
+		$offset            = max( 0, (int) ( isset( $args['offset'] ) ? $args['offset'] : 0 ) );
+		$category_allowed  = isset( $args['category_allowed'] ) && is_callable( $args['category_allowed'] ) ? $args['category_allowed'] : null;
 
 		$where  = array( '1=1' );
 		$values = array();
@@ -207,6 +265,35 @@ class Mcpwp_Action_Log {
 
 		$where_sql = implode( ' AND ', $where );
 
+		if ( null !== $category_allowed ) {
+			// Visibility can't be expressed in the WHERE clause (it depends
+			// on a resolved post's category, not a stored column) — fetch an
+			// ordered, bounded working set matching the caller's OWN filters
+			// first, then filter+slice in PHP. See CATEGORY_FILTER_SCAN_CAP's
+			// docblock for the bound and its tradeoff.
+			$scan_prepare_args = array_merge(
+				array( "SELECT * FROM $table WHERE $where_sql ORDER BY timestamp DESC LIMIT %d" ),
+				$values,
+				array( self::CATEGORY_FILTER_SCAN_CAP )
+			);
+			// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+			$scan_rows = $wpdb->get_results( call_user_func_array( array( $wpdb, 'prepare' ), $scan_prepare_args ), ARRAY_A );
+
+			$visible = array_values(
+				array_filter(
+					$scan_rows ? $scan_rows : array(),
+					function ( $row ) use ( $category_allowed ) {
+						return self::is_entry_visible_to( $row, $category_allowed );
+					}
+				)
+			);
+
+			return array(
+				'entries' => array_map( array( __CLASS__, 'public_entry' ), array_slice( $visible, $offset, $limit ) ),
+				'total'   => count( $visible ),
+			);
+		}
+
 		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 		$total = (int) $wpdb->get_var( "SELECT COUNT(*) FROM $table WHERE $where_sql" );
 
@@ -226,14 +313,120 @@ class Mcpwp_Action_Log {
 	}
 
 	/**
+	 * Whether $entry is visible to a caller whose permission is decided by
+	 * $category_allowed (#1031) — the single chokepoint list_entries(),
+	 * get_entry_public() and rollback() all call, so "which entries exist at
+	 * all for this key" cannot drift between the list door and the by-id
+	 * doors, the same discipline Mcpwp_Approvals::is_approval_visible_to()
+	 * already applies to approvals/events.
+	 *
+	 * Checks the tool's OWN category first — the one recorded on the row at
+	 * write time (begin()'s $category, the tool→category map entry for
+	 * whichever tool ran) — then, additively, the category of the POST the
+	 * entry names, when it names a resolvable one. Both must pass: a
+	 * WooCommerce product edited through the generic wp_update_post /
+	 * wp_bulk_update_posts / wp_delete_post doors logs under 'content' (the
+	 * door's own category), not 'woocommerce', so the tool-category check
+	 * alone would still leak the product's id and activity to an
+	 * [admin, content] key holding no woocommerce access — precisely #1031's
+	 * own PoC, and the same additive reasoning #1025 round 2 (BLOCK-1)
+	 * applied to a destructive delete queued through a generic approval
+	 * door.
+	 *
+	 * @param array    $entry            Row (get_entry()'s ARRAY_A) or
+	 *                                    public_entry() shape — both carry
+	 *                                    'category', 'resource_type' and
+	 *                                    'resource_id' under those names.
+	 * @param callable $category_allowed function(string $category): bool —
+	 *                                    the caller's own
+	 *                                    caller_may_read_category().
+	 * @return bool
+	 */
+	public static function is_entry_visible_to( array $entry, $category_allowed ) {
+		if ( ! is_callable( $category_allowed ) ) {
+			return true;
+		}
+
+		$tool_category = isset( $entry['category'] ) ? (string) $entry['category'] : '';
+		if ( '' !== $tool_category && ! call_user_func( $category_allowed, $tool_category ) ) {
+			return false;
+		}
+
+		$post_category = self::resource_post_category( $entry );
+		if ( '' !== $post_category && ! call_user_func( $category_allowed, $post_category ) ) {
+			return false;
+		}
+
+		return true;
+	}
+
+	/**
+	 * Resolve the tool-category home of the post an entry names, for
+	 * is_entry_visible_to() (#1031) — '' when the entry's resource_type
+	 * isn't a post-shaped kind ('post', 'elementor'; 'option' and 'other'
+	 * never name a post) or the entry names no resource at all, meaning no
+	 * additional check applies beyond the tool's own category.
+	 *
+	 * The action log stores only a generic resource_type ('post'/
+	 * 'elementor'/'option'/'other') and a bare numeric id — never the
+	 * post's real post_type — so, unlike Mcpwp_Approvals'
+	 * compute_visibility_categories() (which captures the real type at
+	 * creation time), this can only resolve the LIVE post. A post that has
+	 * since been hard-deleted is treated as unresolvable rather than
+	 * silently skipping the extra check — Mcpwp_Approvals::
+	 * UNRESOLVABLE_CATEGORY makes that visible only to an unrestricted key,
+	 * the same fail-closed answer #1025 round 2 gives a live approval whose
+	 * target category can't be determined, reused here rather than a second
+	 * sentinel meaning the same thing.
+	 *
+	 * @param array $entry Row or public_entry() shape.
+	 * @return string Category slug, or '' when no additional check applies.
+	 */
+	private static function resource_post_category( array $entry ) {
+		$resource_type = isset( $entry['resource_type'] ) ? (string) $entry['resource_type'] : '';
+		if ( ! in_array( $resource_type, array( 'post', 'elementor' ), true ) ) {
+			return '';
+		}
+
+		$resource_id = isset( $entry['resource_id'] ) ? (int) $entry['resource_id'] : 0;
+		if ( $resource_id <= 0 ) {
+			return '';
+		}
+
+		$post = get_post( $resource_id );
+		if ( ! $post instanceof WP_Post ) {
+			return class_exists( 'Mcpwp_Approvals' ) ? Mcpwp_Approvals::UNRESOLVABLE_CATEGORY : '';
+		}
+
+		return class_exists( 'Mcpwp_REST_API' ) ? Mcpwp_REST_API::category_for_post_type( $post->post_type ) : '';
+	}
+
+	/**
 	 * Get one log entry (public fields).
 	 *
-	 * @param string $log_id Log entry ID.
+	 * @param string        $log_id           Log entry ID.
+	 * @param callable|null $category_allowed #1031: optional
+	 *                                        `function(string $category): bool`
+	 *                                        — see list_entries()'s docblock.
+	 *                                        A hidden entry returns null, the
+	 *                                        same shape a genuinely missing
+	 *                                        log_id returns, so this door
+	 *                                        cannot be used to confirm an
+	 *                                        entry exists that the caller
+	 *                                        could not see via the list door.
 	 * @return array|null
 	 */
-	public static function get_entry_public( $log_id ) {
+	public static function get_entry_public( $log_id, $category_allowed = null ) {
 		$entry = self::get_entry( $log_id );
-		return $entry ? self::public_entry( $entry ) : null;
+		if ( ! $entry ) {
+			return null;
+		}
+
+		if ( is_callable( $category_allowed ) && ! self::is_entry_visible_to( $entry, $category_allowed ) ) {
+			return null;
+		}
+
+		return self::public_entry( $entry );
 	}
 
 	/**

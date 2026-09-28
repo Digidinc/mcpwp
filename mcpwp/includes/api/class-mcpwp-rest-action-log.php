@@ -88,14 +88,22 @@ class Mcpwp_REST_Action_Log extends Mcpwp_REST_API {
 
 		$success_param = $request->get_param( 'success' );
 
+		// #1031: a key with 'admin' but not, say, 'woocommerce' must not see
+		// a product's write-tool activity just because it reached the log
+		// through a generic, post-type-agnostic tool (wp_update_post,
+		// wp_delete_post, ...) that logged under its OWN category rather
+		// than the resource's. Filtering (and the total it produces) lives
+		// inside list_entries() itself, ahead of its own offset/limit slice
+		// — see its docblock.
 		$result = Mcpwp_Action_Log::list_entries(
 			array(
-				'limit'         => (int) $request->get_param( 'limit' ),
-				'offset'        => (int) $request->get_param( 'offset' ),
-				'tool_name'     => sanitize_key( (string) $request->get_param( 'tool_name' ) ),
-				'success'       => '' !== (string) $success_param ? (int) $success_param : '',
-				'resource_type' => sanitize_key( (string) $request->get_param( 'resource_type' ) ),
-				'resource_id'   => sanitize_text_field( (string) $request->get_param( 'resource_id' ) ),
+				'limit'            => (int) $request->get_param( 'limit' ),
+				'offset'           => (int) $request->get_param( 'offset' ),
+				'tool_name'        => sanitize_key( (string) $request->get_param( 'tool_name' ) ),
+				'success'          => '' !== (string) $success_param ? (int) $success_param : '',
+				'resource_type'    => sanitize_key( (string) $request->get_param( 'resource_type' ) ),
+				'resource_id'      => sanitize_text_field( (string) $request->get_param( 'resource_id' ) ),
+				'category_allowed' => array( $this, 'caller_may_read_category' ),
 			)
 		);
 
@@ -113,8 +121,11 @@ class Mcpwp_REST_Action_Log extends Mcpwp_REST_API {
 			return new WP_Error( 'not_found', __( 'Log entry not found.', 'mcpwp' ), array( 'status' => 404 ) );
 		}
 
+		// #1031: same category gate as the list door, so a direct log_id
+		// lookup cannot be used to read (or merely confirm the existence of)
+		// an entry the caller could not see via GET /action-log.
 		$log_id = sanitize_text_field( (string) $request->get_param( 'log_id' ) );
-		$entry  = Mcpwp_Action_Log::get_entry_public( $log_id );
+		$entry  = Mcpwp_Action_Log::get_entry_public( $log_id, array( $this, 'caller_may_read_category' ) );
 
 		if ( ! $entry ) {
 			return new WP_Error( 'not_found', __( 'Log entry not found.', 'mcpwp' ), array( 'status' => 404 ) );
@@ -134,8 +145,11 @@ class Mcpwp_REST_Action_Log extends Mcpwp_REST_API {
 			return new WP_Error( 'unavailable', __( 'Action log not available.', 'mcpwp' ), array( 'status' => 503 ) );
 		}
 
+		// #1031: same category gate — rolling back an entry the caller
+		// cannot see is refused with the same not_found shape as a genuinely
+		// missing log_id.
 		$log_id = sanitize_text_field( (string) $request->get_param( 'log_id' ) );
-		$result = Mcpwp_Action_Log::rollback( $log_id );
+		$result = Mcpwp_Action_Log::rollback( $log_id, array( $this, 'caller_may_read_category' ) );
 
 		if ( is_wp_error( $result ) ) {
 			return $result;
@@ -155,11 +169,14 @@ class Mcpwp_REST_Action_Log extends Mcpwp_REST_API {
 			return new WP_REST_Response( '', 200 );
 		}
 
+		// #1031: same category gate as the list door — an export must not be
+		// a wider door than the listing it exports.
 		$csv = Mcpwp_Action_Log::export_csv(
 			array(
-				'limit'         => (int) $request->get_param( 'limit' ),
-				'tool_name'     => sanitize_key( (string) $request->get_param( 'tool_name' ) ),
-				'resource_type' => sanitize_key( (string) $request->get_param( 'resource_type' ) ),
+				'limit'            => (int) $request->get_param( 'limit' ),
+				'tool_name'        => sanitize_key( (string) $request->get_param( 'tool_name' ) ),
+				'resource_type'    => sanitize_key( (string) $request->get_param( 'resource_type' ) ),
+				'category_allowed' => array( $this, 'caller_may_read_category' ),
 			)
 		);
 
