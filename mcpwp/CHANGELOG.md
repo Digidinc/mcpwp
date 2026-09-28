@@ -5,6 +5,20 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.14.7](https://github.com/Mumega-com/mcpwp/compare/v3.14.6...v3.14.7) (2026-09-28)
+
+
+### Bug Fixes
+
+* **auth:** route Elementor, content-graph and blocks doors through the [#1022](https://github.com/Mumega-com/mcpwp/issues/1022) category chokepoint ([#1030](https://github.com/Mumega-com/mcpwp/issues/1030)) ([bc0a9ad](https://github.com/Mumega-com/mcpwp/commit/bc0a9adee53bc958138112d0f07ab161232c58c8))
+
+### Changed for existing API keys
+
+* **Every route checks the post type it touches.** Elementor (including section edits, patch, clone, templates, parts and landing pages), blocks, content graph, site graph, SEO (including Yoast/Rank Math/AIOSEO/SEOPress routes and bulk), fetch and rendered HTML now apply the category that owns the post's type: products, coupons and orders need `woocommerce`, Elementor section templates need `elementor-templates`, theme-builder templates need `elementor-theme`, reusable blocks need `gutenberg`. Regular posts and pages still follow the route's own category, so designers keep building pages ([#1024](https://github.com/Mumega-com/mcpwp/issues/1024)).
+* **One "not found" answer.** On every route that takes a post id, a missing post, a post the key's categories don't cover, and (for read-only keys) a draft all return the same 404: `not_found`, "The requested resource was not found." Some routes that used to answer 400 or a route-specific message now return this 404. Bulk routes report a hidden item exactly like a missing one and still apply the rest ([#1024](https://github.com/Mumega-com/mcpwp/issues/1024)).
+* **Id lists are capped at 500** per request ([#1024](https://github.com/Mumega-com/mcpwp/issues/1024)).
+* **Stored SEO issues are filtered.** `/seo/issues`, `/seo/autofix-plan`, `/seo/opportunities` and `/site-state` only list issues for posts the key's categories cover; `/seo/woocommerce` needs `woocommerce` ([#1024](https://github.com/Mumega-com/mcpwp/issues/1024)).
+
 ## [3.14.6](https://github.com/Mumega-com/mcpwp/compare/v3.14.5...v3.14.6) (2026-09-28)
 
 
