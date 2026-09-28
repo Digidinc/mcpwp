@@ -157,6 +157,10 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 
 == Changelog ==
 
+= 3.14.6 =
+* fix: **auth,mcp:** not-found parity for guard_non_public_post() and mcpwp:// scheme matching ([#1028](https://github.com/Mumega-com/mcpwp/issues/1028))
+* fix: **auth:** gate approvals/events/site-state by target category, not route ([#1029](https://github.com/Mumega-com/mcpwp/issues/1029))
+
 = 3.14.5 =
 * fix: **auth:** gate post-meta/content/fetch/posts by resolved post type, not route ([#1022](https://github.com/Mumega-com/mcpwp/issues/1022))
 * fix: **content:** deleting a WooCommerce product (or any custom post type) through `/posts/{id}` or `/content` without `force` now really moves it to the trash; before, it was deleted permanently with no approval while the response said "moved to trash". Permanent deletes need approval as intended ([#1023](https://github.com/Mumega-com/mcpwp/issues/1023)).
