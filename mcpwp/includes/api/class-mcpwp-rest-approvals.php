@@ -145,10 +145,12 @@ class Mcpwp_REST_Approvals extends Mcpwp_REST_API {
 	 * disclose. Fetches the approval and, if it exists, denies it — with the
 	 * exact same WP_Error a genuinely-missing id returns
 	 * (Mcpwp_Approvals::not_found_error(), byte-identical by construction) —
-	 * when this caller's key may not read the category
-	 * Mcpwp_Approvals::category_for_approval() resolves for its target. A
-	 * missing id already returns that same error from get_request() itself,
-	 * so both cases flow through one return here.
+	 * unless this caller's key holds EVERY category
+	 * Mcpwp_Approvals::categories_for_approval() resolves for its target
+	 * (round 2, BLOCK-1: a destructive delete queued through a generic door
+	 * requires both the door's own route category AND the target's real
+	 * post-type category). A missing id already returns that same error from
+	 * get_request() itself, so both cases flow through one return here.
 	 *
 	 * @param string $id Approval request ID.
 	 * @return array|WP_Error Public approval record when visible; WP_Error(404) otherwise.
@@ -159,7 +161,7 @@ class Mcpwp_REST_Approvals extends Mcpwp_REST_API {
 			return $record;
 		}
 
-		if ( $this->caller_may_read_category( Mcpwp_Approvals::category_for_approval( $record ) ) ) {
+		if ( Mcpwp_Approvals::is_approval_visible_to( $record, array( $this, 'caller_may_read_category' ) ) ) {
 			return $record;
 		}
 

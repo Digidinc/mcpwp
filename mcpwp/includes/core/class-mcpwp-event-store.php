@@ -134,13 +134,7 @@ class Mcpwp_Event_Store {
 				array_filter(
 					$events,
 					function ( $event ) use ( $category_allowed ) {
-						$category = self::category_for_event( $event );
-						// '' (every event type that carries no approval to gate on)
-						// is always visible — matching get_category_for_route()'s own
-						// "ungated" convention. caller_may_read_category('') would
-						// otherwise deny it to any category-restricted key: no role
-						// ever lists '' among its allowed categories.
-						return '' === $category || call_user_func( $category_allowed, $category );
+						return self::event_visible_to( $event, $category_allowed );
 					}
 				)
 			);
@@ -153,20 +147,23 @@ class Mcpwp_Event_Store {
 	}
 
 	/**
-	 * Which tool category governs $event's target, for a caller deciding
-	 * whether to show it (#1025). '' for every event type except the
-	 * approval lifecycle five (approval.created/approved/rejected/applied/
-	 * rolled_back), which store the full public approval record verbatim at
-	 * payload.approval (see emit_event()) — reuses
-	 * Mcpwp_Approvals::category_for_approval() (the same #1020/#1022
-	 * chokepoint) on it rather than a second copy of that classifier.
+	 * Whether $event may be shown to a caller whose permission is decided by
+	 * $category_allowed (#1025). Every event type except the approval
+	 * lifecycle five (approval.created/approved/rejected/applied/
+	 * rolled_back) carries nothing gate-worthy and is always visible — those
+	 * five store the full public approval record verbatim at payload.approval
+	 * (see emit_event()), so this defers to
+	 * Mcpwp_Approvals::is_approval_visible_to() (the same #1020/#1022/#1025
+	 * chokepoint, including round 2's "ALL applicable categories" fix) on it
+	 * rather than a second, narrower copy of that check.
 	 *
-	 * @param array $event Stored event record.
-	 * @return string Category slug, or '' for "not gated".
+	 * @param array    $event            Stored event record.
+	 * @param callable $category_allowed function(string $category): bool.
+	 * @return bool
 	 */
-	private static function category_for_event( array $event ) {
+	private static function event_visible_to( array $event, $category_allowed ) {
 		if ( ! class_exists( 'Mcpwp_Approvals' ) ) {
-			return '';
+			return true;
 		}
 
 		$approval = isset( $event['payload']['approval'] ) && is_array( $event['payload']['approval'] )
@@ -174,10 +171,10 @@ class Mcpwp_Event_Store {
 			: null;
 
 		if ( null === $approval ) {
-			return '';
+			return true;
 		}
 
-		return Mcpwp_Approvals::category_for_approval( $approval );
+		return Mcpwp_Approvals::is_approval_visible_to( $approval, $category_allowed );
 	}
 
 	/**

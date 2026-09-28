@@ -1127,7 +1127,19 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 	public function get_content_coherence( $request ) {
 		$this->log_activity( 'get_content_coherence', $request );
 
-		$report = class_exists( 'Mcpwp_Content_Coherence' ) ? Mcpwp_Content_Coherence::get_report() : array();
+		// #1025 round 2, WARN-2: score_governance() reads
+		// $state['approvals']['counts']['pending'] and
+		// $state['events']['items'] straight from Mcpwp_Site_State::get_snapshot()
+		// — an unfiltered snapshot handed an unfiltered pending-approval count
+		// and high-risk-event count to /content-coherence (category 'seo')
+		// for ANY key holding 'seo', regardless of whether that key may read
+		// the categories the counted approvals/events actually target. Must
+		// be computed from the SAME filtered set this key is allowed to see.
+		$report = class_exists( 'Mcpwp_Content_Coherence' )
+			? Mcpwp_Content_Coherence::get_report(
+				array( 'category_allowed' => array( $this, 'caller_may_read_category' ) )
+			)
+			: array();
 
 		return $this->success_response( $report );
 	}

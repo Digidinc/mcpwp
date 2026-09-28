@@ -252,6 +252,20 @@ trait Mcpwp_Api_Auth {
 		$map = array(
 			'post'              => 'content',
 			'page'              => 'content',
+			// Media. attachment is PUBLIC (get_post_type_object('attachment')
+			// ->public is true), so the generic fallback below would
+			// otherwise bucket it as 'content' — the same "core CPTs that
+			// belong to a different domain" reasoning nav_menu_item/
+			// wp_navigation/etc. already get below, just not yet written
+			// down for this one. #1025's own additive post-type check
+			// (Mcpwp_Approvals::compute_visibility_categories()) is what
+			// surfaced the gap: a destructive attachment delete queued
+			// through /posts/{id} or /media/{id} would otherwise require
+			// 'content' in addition to the door's real 'media' category,
+			// wrongly over-restricting a media-only key. The dedicated
+			// /media/* routes already require 'media'; this just makes the
+			// post-type map agree with them.
+			'attachment'        => 'media',
 			// WooCommerce (#1020's own PoC: a product's _sku/_regular_price
 			// leaking through /post-meta). product_variation and the order/
 			// coupon/refund types share the same customer- and business-data
@@ -1004,7 +1018,7 @@ trait Mcpwp_Api_Auth {
 	 * Public static (#1025): a plain static store class with no REST
 	 * controller instance (Mcpwp_Approvals, classifying an approval whose
 	 * target is a route rather than a resolved post — see
-	 * Mcpwp_Approvals::category_for_approval()) needs this classifier too.
+	 * Mcpwp_Approvals::compute_visibility_categories()) needs this classifier too.
 	 * Uses no instance state (neither this method nor the two maps it
 	 * reads do), so promoting it changes no behavior — every existing
 	 * `$this->get_category_for_route(...)` call site keeps working
