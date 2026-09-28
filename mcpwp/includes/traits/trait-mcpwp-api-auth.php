@@ -227,6 +227,41 @@ trait Mcpwp_Api_Auth {
 			// Pro Custom Code, gated 'elementor-theme' at /elementor/custom-code.
 			'elementor_library' => 'elementor-templates',
 			'elementor_snippet'  => 'elementor-theme',
+			// LearnPress (#1022 round-1 review, WARN-3) — the same 'learnpress'
+			// category the /learnpress/* routes already require.
+			'lp_course'         => 'learnpress',
+			'lp_lesson'         => 'learnpress',
+			'lp_quiz'           => 'learnpress',
+			'lp_question'       => 'learnpress',
+			'lp_order'          => 'learnpress',
+			// The Events Calendar — the 'events' category ("Events-plugin
+			// listings and CRUD", get_category_meta()). Distinct from the
+			// REST '/events' prefix, which is MCPWP's own webhook/event-store
+			// surface classified 'webhooks' — see get_route_category_map()'s
+			// docblock note on that split.
+			'tribe_events'      => 'events',
+			'tribe_venue'       => 'events',
+			'tribe_organizer'   => 'events',
+			// Elementor Pro's Floating Buttons widget/template.
+			'e-floating-buttons' => 'elementor-theme',
+			// Core CPTs that ARE public/show_in_rest (so the generic fallback
+			// below would otherwise bucket them as 'content') but belong to a
+			// different domain than ordinary post/page content:
+			// - nav_menu_item backs the CLASSIC menu system /menus/* already
+			//   requires 'site' for.
+			// - wp_navigation/wp_template/wp_template_part are block-editor
+			//   (FSE) data — literally sequences of blocks — closer to
+			//   Gutenberg's own domain than to 'content'; no MCPWP tool owns
+			//   them yet, but 'gutenberg' is the closer-fitting existing
+			//   category of the two candidates.
+			// - wp_global_styles (FSE theme.json overrides) is site-wide
+			//   presentation, the same bucket as /theme, /theme-builder,
+			//   /custom-css.
+			'nav_menu_item'      => 'site',
+			'wp_navigation'      => 'gutenberg',
+			'wp_template'        => 'gutenberg',
+			'wp_template_part'   => 'gutenberg',
+			'wp_global_styles'   => 'site',
 		);
 
 		if ( isset( $map[ $post_type ] ) ) {

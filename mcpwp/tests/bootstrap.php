@@ -775,7 +775,27 @@ if (! function_exists('wp_delete_attachment')) {
 
 function wp_trash_post($post_id)
 {
-    return wp_delete_post($post_id, false);
+    // #1023: wp_trash_post() is a REAL, generic core function distinct from
+    // wp_delete_post() — it soft-deletes ANY post type (not just post/page),
+    // which is exactly why Mcpwp_Posts::delete_post()/Mcpwp_REST_Content::
+    // delete_content() now call it directly for a non-forced delete of a
+    // type wp_delete_post()'s own narrower built-in branch would otherwise
+    // delete outright. Aliasing this to wp_delete_post($id, false) (as this
+    // double used to) made every such call silently permanent in tests too,
+    // masking the exact bug #1023 fixed.
+    $post_id = (int) $post_id;
+    if (empty($GLOBALS['_mcpwp_test_posts'][ $post_id ])) {
+        return false;
+    }
+    if (defined('EMPTY_TRASH_DAYS') && ! EMPTY_TRASH_DAYS) {
+        return wp_delete_post($post_id, true);
+    }
+    $post = $GLOBALS['_mcpwp_test_posts'][ $post_id ];
+    if ('trash' === $post->post_status) {
+        return false;
+    }
+    $post->post_status = 'trash';
+    return $post;
 }
 
 function delete_option($name)

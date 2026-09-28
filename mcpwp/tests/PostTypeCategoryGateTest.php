@@ -194,7 +194,18 @@ final class PostTypeCategoryGateTest extends TestCase {
 
 	private function auth_request( object $controller, string $key, string $method, string $route, array $params = array() ): WP_REST_Request {
 		$request = new WP_REST_Request( $method, $route, $params, array( 'X-API-Key' => $key ) );
-		$this->assertTrue( $controller->verify_api_key( $request ), 'verify_api_key should succeed for a route-classified category the key holds' );
+		// check_permission() when the controller has one (every real REST
+		// controller does, via Mcpwp_REST_API) — NOT verify_api_key()
+		// directly — because Mcpwp_REST_Posts overrides check_permission()
+		// to wire its category-check callback into Mcpwp_Posts right after
+		// authentication (#1022 BLOCK-1); calling verify_api_key() alone
+		// would silently skip that wiring and this test's assertions would
+		// no longer be exercising it. The bare-trait harness has no
+		// check_permission() at all, so it still goes through verify_api_key().
+		$auth = method_exists( $controller, 'check_permission' )
+			? $controller->check_permission( $request )
+			: $controller->verify_api_key( $request );
+		$this->assertTrue( $auth, 'authentication should succeed for a route-classified category the key holds' );
 		return $request;
 	}
 
@@ -234,6 +245,68 @@ final class PostTypeCategoryGateTest extends TestCase {
 	public function test_unknown_public_cpt_falls_back_to_content(): void {
 		$h = $this->harness();
 		$this->assertSame( 'content', $h->category_for_post_type( 'kb_article' ) );
+	}
+
+	// ── #1022 round-1 review, WARN-3: explicit map additions ───────────────
+
+	public function test_maps_learnpress_types(): void {
+		$h = $this->harness();
+		foreach ( array( 'lp_course', 'lp_lesson', 'lp_quiz', 'lp_question', 'lp_order' ) as $type ) {
+			$this->assertSame( 'learnpress', $h->category_for_post_type( $type ), $type );
+		}
+	}
+
+	public function test_maps_events_calendar_types(): void {
+		$h = $this->harness();
+		foreach ( array( 'tribe_events', 'tribe_venue', 'tribe_organizer' ) as $type ) {
+			$this->assertSame( 'events', $h->category_for_post_type( $type ), $type );
+		}
+	}
+
+	public function test_maps_elementor_floating_buttons_to_elementor_theme(): void {
+		$h = $this->harness();
+		$this->assertSame( 'elementor-theme', $h->category_for_post_type( 'e-floating-buttons' ) );
+	}
+
+	public function test_maps_core_fse_and_menu_item_types_away_from_content(): void {
+		// These ARE public/show_in_rest (so the generic fallback would
+		// otherwise bucket them as 'content'), but each belongs to a
+		// different domain: nav_menu_item to the classic /menus surface
+		// ('site'); wp_navigation/wp_template/wp_template_part are
+		// block-editor (FSE) data ('gutenberg'); wp_global_styles is
+		// site-wide presentation ('site').
+		$h = $this->harness();
+		$this->assertSame( 'site', $h->category_for_post_type( 'nav_menu_item' ) );
+		$this->assertSame( 'gutenberg', $h->category_for_post_type( 'wp_navigation' ) );
+		$this->assertSame( 'gutenberg', $h->category_for_post_type( 'wp_template' ) );
+		$this->assertSame( 'gutenberg', $h->category_for_post_type( 'wp_template_part' ) );
+		$this->assertSame( 'site', $h->category_for_post_type( 'wp_global_styles' ) );
+	}
+
+	/**
+	 * Mirrors CategoryTaxonomyInvariantTest's own invariant, applied to THIS
+	 * map instead of the route classifier: every category
+	 * category_for_post_type() can emit must be a real, toggleable category
+	 * (Mcpwp_Tools_Admin::get_category_meta()), or a denial can never
+	 * actually be lifted by re-enabling anything in WP Admin > mcpwp > Tools.
+	 */
+	public function test_every_emitted_category_is_a_real_toggleable_category(): void {
+		require_once dirname( __DIR__ ) . '/includes/admin/class-mcpwp-tools-admin.php';
+		$h            = $this->harness();
+		$known        = array_keys( Mcpwp_Tools_Admin::get_category_meta() );
+		$post_types   = array(
+			'post', 'page', 'product', 'product_variation', 'shop_order', 'shop_order_refund', 'shop_coupon',
+			'elementor_library', 'elementor_snippet', 'lp_course', 'lp_lesson', 'lp_quiz', 'lp_question', 'lp_order',
+			'tribe_events', 'tribe_venue', 'tribe_organizer', 'e-floating-buttons',
+			'nav_menu_item', 'wp_navigation', 'wp_template', 'wp_template_part', 'wp_global_styles',
+		);
+		foreach ( $post_types as $post_type ) {
+			$this->assertContains( $h->category_for_post_type( $post_type ), $known, $post_type );
+		}
+		// The 'admin' fallback for a private/unregistered type is real too
+		// (get_category_meta() carries it), just not one this loop can
+		// exercise via a real post type name.
+		$this->assertContains( 'admin', $known );
 	}
 
 	public function test_unknown_unregistered_type_falls_back_to_admin(): void {

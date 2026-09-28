@@ -894,11 +894,27 @@ final class DestructiveGateTest extends TestCase {
 	public function test_force_false_is_gated_wherever_wordpress_would_not_trash(): void {
 		// Round-5 P0-1: wp_block, custom types, templates and media are
 		// deleted outright on force=false; the gate rested on the flag.
+		//
+		// #1023 (round-1 adversarial review of #1020/#1022) generalized this
+		// answer for every type EXCEPT elementor_library/elementor_snippet
+		// (still hardcoded permanent — their only delete door,
+		// Mcpwp_REST_Elementor_Pro::delete_template(), is an Elementor route
+		// out of scope for that fix, filed separately as #1024, and still
+		// calls wp_delete_post() directly with no explicit trash) and
+		// attachment (its own MEDIA_TRASH rule, unchanged). wp_block and a
+		// generic public custom type ('sm_team') are now trash-eligible,
+		// because their real doors — Mcpwp_Posts::delete_post() and
+		// Mcpwp_REST_Content::delete_content() — were fixed in that same
+		// round to call wp_trash_post() explicitly for a "not permanent"
+		// delete of ANY type, not just post/page.
 		$this->assertFalse( Mcpwp_Destructive_Gate::delete_is_permanent( 'post', false ) );
 		$this->assertFalse( Mcpwp_Destructive_Gate::delete_is_permanent( 'page', false ) );
 		$this->assertTrue( Mcpwp_Destructive_Gate::delete_is_permanent( 'page', true ) );
-		foreach ( array( 'wp_block', 'elementor_library', 'elementor_snippet', 'sm_team', 'attachment' ) as $type ) {
+		foreach ( array( 'elementor_library', 'elementor_snippet', 'attachment' ) as $type ) {
 			$this->assertTrue( Mcpwp_Destructive_Gate::delete_is_permanent( $type, false ), $type );
+		}
+		foreach ( array( 'wp_block', 'sm_team' ) as $type ) {
+			$this->assertFalse( Mcpwp_Destructive_Gate::delete_is_permanent( $type, false ), $type );
 		}
 
 		// Media, force omitted.
@@ -908,21 +924,23 @@ final class DestructiveGateTest extends TestCase {
 		$this->assertSame( 202, $this->authed( $media, $request )->delete_media( $request )->get_status() );
 		$this->assertArrayHasKey( 12, $GLOBALS['_mcpwp_test_posts'] );
 
-		// A block through /posts, force omitted.
+		// A block through /posts, force omitted — #1023: now actually
+		// trashed in one call (200), not deferred, and not deleted outright.
 		$this->seed( 41, 'wp_block' );
 		$posts   = new Mcpwp_REST_Posts();
 		$request = new WP_REST_Request( 'DELETE', '/mcpwp/v1/posts/41', array( 'id' => 41 ) );
-		$this->assertSame( 202, $this->authed( $posts, $request )->delete_post( $request )->get_status() );
-		$this->assertArrayHasKey( 41, $GLOBALS['_mcpwp_test_posts'] );
+		$this->assertSame( 200, $this->authed( $posts, $request )->delete_post( $request )->get_status() );
+		$this->assertSame( 'trash', $GLOBALS['_mcpwp_test_posts'][41]->post_status, 'A non-forced delete must actually land in the trash, not be silently permanent.' );
 
-		// A custom type through /content, force omitted.
+		// A custom type through /content, force omitted — same fix.
 		$GLOBALS['mcpwp_test_public_post_types'] = array( 'sm_team' );
 		$this->seed( 31, 'sm_team' );
 		$content = new Mcpwp_REST_Content();
 		$request = new WP_REST_Request( 'DELETE', '/mcpwp/v1/content/sm_team/31', array( 'post_type' => 'sm_team', 'id' => 31 ) );
 		$response = $this->authed( $content, $request )->delete_content( $request );
-		$this->assertSame( 202, $response->get_status(), is_wp_error( $response ) ? $response->get_error_message() : wp_json_encode( $response->get_data() ) );
-		$this->assertArrayHasKey( 31, $GLOBALS['_mcpwp_test_posts'] );
+		$this->assertSame( 200, $response->get_status(), is_wp_error( $response ) ? $response->get_error_message() : wp_json_encode( $response->get_data() ) );
+		$this->assertSame( 'trash', $GLOBALS['_mcpwp_test_posts'][31]->post_status );
+		$this->assertSame( __( 'Content moved to trash.', 'mcpwp' ), $response->get_data()['message'], 'The response text must match what actually happened.' );
 		unset( $GLOBALS['mcpwp_test_public_post_types'] );
 
 		// A template, force omitted (round 4 gated only force=true).
@@ -943,7 +961,10 @@ final class DestructiveGateTest extends TestCase {
 		$this->assertSame( 200, $this->authed( $posts, $request )->delete_post( $request )->get_status() );
 		$this->assertSame( 'trash', $GLOBALS['_mcpwp_test_posts'][5]->post_status );
 
-		$this->assertCount( 4, Mcpwp_Approvals::list_requests( 'pending', 50, true ) );
+		// Only media (attachment, MEDIA_TRASH off) and the Elementor template
+		// (elementor_library, carved out above) still deferred — the block
+		// and the custom type were actually trashed above instead (#1023).
+		$this->assertCount( 2, Mcpwp_Approvals::list_requests( 'pending', 50, true ) );
 	}
 
 	public function test_the_delete_doubles_mirror_core(): void {

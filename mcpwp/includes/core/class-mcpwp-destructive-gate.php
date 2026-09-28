@@ -258,11 +258,50 @@ class Mcpwp_Destructive_Gate {
 	/**
 	 * Whether a delete of this post type with this force flag is permanent.
 	 *
-	 * WordPress trashes on force=false ONLY for post and page (and only
-	 * while EMPTY_TRASH_DAYS is set); every other type is deleted outright,
-	 * so for them force=false is the same call as force=true. Gating on
-	 * the flag alone left wp_block, elementor_library, every custom type
-	 * and every attachment ungated on their default path (#536 round 5).
+	 * #1023 (round-1 adversarial review of #1020/#1022): this used to treat
+	 * every post type OTHER than post/page/product as unconditionally
+	 * permanent, on the theory that "WordPress trashes on force=false ONLY
+	 * for post and page" — true of core's wp_delete_post() when called
+	 * DIRECTLY with force=false, but the CALLERS of this method
+	 * (Mcpwp_Posts::delete_post(), Mcpwp_REST_Content::delete_content())
+	 * were STILL calling wp_delete_post( $id, $force ) directly for every
+	 * type, including the one carve-out ('product') this method claimed WAS
+	 * trashable. The result: this method said "not permanent" for a product,
+	 * so the destructive-approval gate was skipped, and the actual delete
+	 * call then permanently destroyed it anyway — while the response text
+	 * still said "moved to trash". WooCommerce's own admin UI trashes
+	 * products through ITS OWN code path (a data-store method wired to the
+	 * post-list bulk actions); calling core's wp_delete_post()/wp_trash_post()
+	 * directly, as this plugin does, never goes through that — only the
+	 * generic core behavior applies.
+	 *
+	 * The real, generic rule core actually offers via wp_trash_post() is
+	 * type-agnostic: ANY non-attachment post type can be trashed (soft
+	 * status change) regardless of what wp_delete_post()'s own narrower
+	 * built-in auto-trash branch happens to special-case. So every
+	 * non-attachment type gets the SAME EMPTY_TRASH_DAYS-gated answer here,
+	 * and it is the CALLER's job (not this method's) to actually invoke
+	 * wp_trash_post() for a "not permanent" delete on anything that isn't
+	 * literally 'post' or 'page' — the two types wp_delete_post()'s own
+	 * force=false branch already trashes correctly on its own.
+	 *
+	 * ONE type pair is still hardcoded permanent regardless: elementor_library
+	 * and elementor_snippet. Their only delete door
+	 * (Mcpwp_REST_Elementor_Pro::delete_template() -> Mcpwp_Elementor_Pro::
+	 * delete_template()) is an Elementor route, explicitly OUT OF SCOPE for
+	 * this fix (round-1 review of #1020/#1022, WARN-2 — filed separately as
+	 * #1024) and still calls wp_delete_post() directly without ever calling
+	 * wp_trash_post() for these two types. Generalizing this method's answer
+	 * for them the way every other type above was generalized would silently
+	 * turn that caller's SAFE-but-over-cautious "always defer to approval"
+	 * into an actual unapproved permanent delete — a regression on a door
+	 * this fix must not touch. Mcpwp_Posts::delete_post() and
+	 * Mcpwp_REST_Content::delete_content() (the doors this round of fixes DID
+	 * update) still admit both types (elementor_snippet/elementor_library are
+	 * in Mcpwp_Posts's $safe_nonpublic_types, and delete_content() accepts
+	 * any registered type) and would trash them correctly if reached — this
+	 * carve-out only keeps their PRE-EXISTING deferred-approval behavior
+	 * on the ONE door that would otherwise regress.
 	 *
 	 * @param string $post_type Post type.
 	 * @param bool   $force     The caller's force flag.
@@ -280,9 +319,7 @@ class Mcpwp_Destructive_Gate {
 		if ( 'attachment' === $post_type ) {
 			return ! ( defined( 'MEDIA_TRASH' ) && MEDIA_TRASH );
 		}
-		// post and page trash under EMPTY_TRASH_DAYS; WooCommerce's data
-		// store trashes a product on force=false as well.
-		if ( ! in_array( (string) $post_type, array( 'post', 'page', 'product' ), true ) ) {
+		if ( in_array( (string) $post_type, array( 'elementor_library', 'elementor_snippet' ), true ) ) {
 			return true;
 		}
 		return defined( 'EMPTY_TRASH_DAYS' ) && ! EMPTY_TRASH_DAYS;

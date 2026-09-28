@@ -169,6 +169,91 @@ class Mcpwp_Posts {
 	}
 
 
+	/**
+	 * Category check injected by Mcpwp_REST_Posts right after authentication
+	 * (#1022 BLOCK-1, round-1 adversarial review of #1020's fix).
+	 *
+	 * Mcpwp_Posts has no REST/auth context of its own — it doesn't know what
+	 * an API key or a tool category is — but every one of its callers is
+	 * that ONE controller (get_post, update_post, delete_post, create_post,
+	 * list_posts have no other call site in this codebase), so a single
+	 * injected check reached through validate_post_type() covers every
+	 * read/write/delete/create path, including each item inside
+	 * bulk_update_posts/bulk_create_posts (both call update_post()/
+	 * create_post() per item, so a category-denied item is refused there
+	 * too, with no bulk-specific code needed).
+	 *
+	 * Before this fix, is_writable_post_type()/validate_post_type() admitted
+	 * 'product' (any public custom type) and the whitelisted non-public
+	 * Elementor types with no idea which MCPWP tool category owns them — an
+	 * author key (categories: content/media/taxonomy) with 'woocommerce' and
+	 * 'elementor-templates' disabled site-wide could still PUT/DELETE a
+	 * product or an Elementor template through this generic post endpoint,
+	 * or POST a brand new one, even though #1020 had already closed the
+	 * identical gap on the READ side (GET /post-meta, /content, /fetch).
+	 *
+	 * Null (the default, and every context with no key record — e.g.
+	 * trusted admin-AJAX) means unrestricted, matching every other category
+	 * gate's convention in this plugin.
+	 *
+	 * @var callable|null Takes a post_type string, returns bool.
+	 */
+	private $category_allowed_callback = null;
+
+	/**
+	 * Inject the category check. Called once per request, from
+	 * Mcpwp_REST_Posts::check_permission() — the one permission_callback
+	 * shared by every route this controller registers — right after
+	 * verify_api_key() succeeds.
+	 *
+	 * @param callable|null $callback Takes a post_type string, returns bool.
+	 * @return void
+	 */
+	public function set_category_allowed_callback( $callback ) {
+		$this->category_allowed_callback = is_callable( $callback ) ? $callback : null;
+	}
+
+	/**
+	 * Whether the current caller's category check (if any) admits $type.
+	 *
+	 * @param string $type Post type.
+	 * @return bool
+	 */
+	private function category_allowed( $type ) {
+		if ( null === $this->category_allowed_callback ) {
+			return true;
+		}
+		return (bool) call_user_func( $this->category_allowed_callback, $type );
+	}
+
+	/**
+	 * A category-denied WP_Error. get_post()/update_post()/delete_post() use
+	 * this only as an `is_wp_error()` boolean — folded into the SAME
+	 * existence check that already builds their own uniform "not found"
+	 * response for a genuinely missing post, so a category denial is
+	 * byte-identical to that response by construction (round-1 review,
+	 * WARN-1: no existence oracle). create_post() and list_posts() DO
+	 * propagate this error's own text directly to the caller — there is no
+	 * existing post to protect the existence of on either of those paths
+	 * (create makes a new one; list's caller named the type up front), so a
+	 * plainly-worded 403 is the right shape, matching
+	 * Mcpwp_Api_Auth::guard_post_type_category_for_type()'s convention.
+	 *
+	 * @param string $type Post type.
+	 * @return WP_Error
+	 */
+	private function category_denied_error( $type ) {
+		return new WP_Error(
+			'forbidden_category',
+			sprintf(
+				/* translators: %s: post type */
+				__( 'Post type "%s" belongs to a tool category this API key does not have access to, or which has been disabled by the site administrator.', 'mcpwp' ),
+				$type
+			),
+			array( 'status' => 403 )
+		);
+	}
+
 	private function validate_post_type( $type ) {
 		$type = sanitize_key( $type );
 
@@ -189,7 +274,7 @@ class Mcpwp_Posts {
 		if ( ! in_array( $type, $this->allowed_post_types, true ) ) {
 			// Allow whitelisted non-public types.
 			if ( in_array( $type, $this->safe_nonpublic_types, true ) && post_type_exists( $type ) ) {
-				return $type;
+				return $this->category_allowed( $type ) ? $type : $this->category_denied_error( $type );
 			}
 			// Also allow any public custom post type that isn't blocked.
 			if ( ! post_type_exists( $type ) || ! get_post_type_object( $type )->public ) {
@@ -207,7 +292,7 @@ class Mcpwp_Posts {
 			}
 		}
 
-		return $type;
+		return $this->category_allowed( $type ) ? $type : $this->category_denied_error( $type );
 	}
 
 	/**
@@ -658,7 +743,28 @@ class Mcpwp_Posts {
 			);
 		}
 
-		$result = wp_delete_post( $post_id, $force );
+		// #1023 (round-1 adversarial review of #1020/#1022): wp_delete_post()
+		// with force=false only auto-trashes when post_type is LITERALLY
+		// 'post' or 'page' — every other type this method admits (product,
+		// elementor_snippet, elementor_library, any public custom type) is
+		// PERMANENTLY deleted by that same call regardless of $force, while
+		// the message below still said "moved to trash". Decide the real
+		// outcome with the same test the destructive-approval gate uses
+		// (Mcpwp_Destructive_Gate::delete_is_permanent()) and trash
+		// explicitly (wp_trash_post(), which works for any post type) when
+		// the answer is "not permanent", instead of trusting
+		// wp_delete_post()'s own narrower built-in branch.
+		$permanent = class_exists( 'Mcpwp_Destructive_Gate' )
+			? Mcpwp_Destructive_Gate::delete_is_permanent( $post->post_type, $force, (string) $post->post_status )
+			: $force;
+
+		if ( $permanent ) {
+			$result = wp_delete_post( $post_id, true );
+		} elseif ( in_array( $post->post_type, array( 'post', 'page' ), true ) ) {
+			$result = wp_delete_post( $post_id, false );
+		} else {
+			$result = wp_trash_post( $post_id );
+		}
 
 		if ( ! $result ) {
 			return new WP_Error(
@@ -670,7 +776,7 @@ class Mcpwp_Posts {
 
 		return array(
 			'success' => true,
-			'message' => $force
+			'message' => $permanent
 				? __( 'Post permanently deleted.', 'mcpwp' )
 				: __( 'Post moved to trash.', 'mcpwp' ),
 			'post_id' => $post_id,

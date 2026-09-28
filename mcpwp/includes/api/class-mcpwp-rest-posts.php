@@ -37,6 +37,38 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 	}
 
 	/**
+	 * Authenticate, then wire the category check into Mcpwp_Posts (#1022
+	 * BLOCK-1, round-1 adversarial review of #1020's fix).
+	 *
+	 * Every route this controller registers shares this ONE
+	 * permission_callback, so this is the single place — not one per
+	 * write handler — where the caller's key becomes known, letting
+	 * Mcpwp_Posts::validate_post_type() enforce category on every
+	 * read/write/delete/create path (and, since bulk_update_posts()/
+	 * bulk_create_posts() call update_post()/create_post() per item,
+	 * every bulk item too) without that class needing any REST/auth
+	 * context of its own. Wired only on a successful authentication —
+	 * an insufficient-scope/disabled-category denial at the route level
+	 * never reaches a handler, so there is nothing to wire for those.
+	 *
+	 * @param WP_REST_Request $request Request object.
+	 * @return bool|WP_Error
+	 */
+	public function check_permission( $request ) {
+		$result = parent::check_permission( $request );
+
+		if ( true === $result ) {
+			$this->posts->set_category_allowed_callback(
+				function ( $post_type ) {
+					return $this->caller_may_read_category( $this->category_for_post_type( $post_type ) );
+				}
+			);
+		}
+
+		return $result;
+	}
+
+	/**
 	 * Register routes.
 	 */
 	public function register_routes() {
@@ -272,17 +304,16 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 			return $denied;
 		}
 
-		// #1020: same not-found-shaped category guard as every other
-		// id-resolving door — a product or Elementor template id must not be
-		// readable through /posts/{id} just because the route is 'content'.
-		$category_denied = $this->guard_post_type_category(
-			get_post( absint( $post_id ) ),
-			__( 'Post not found.', 'mcpwp' )
-		);
-		if ( $category_denied ) {
-			return $category_denied;
-		}
-
+		// #1020's category guard for this door now lives INSIDE
+		// Mcpwp_Posts::get_post() (via validate_post_type(), wired through
+		// check_permission() above) rather than here as a separate check —
+		// round-1 adversarial review WARN-1: a standalone guard here built
+		// its own generic 404, which carried a DIFFERENT (and less specific)
+		// hint than get_post()'s own "post genuinely missing" branch,
+		// letting a caller distinguish "wrong category" from "no such post"
+		// by hint text alone. Folding the check into the SAME existence
+		// condition Mcpwp_Posts::get_post() already uses makes a category
+		// denial byte-identical to a missing post, by construction.
 		$result = $this->posts->get_post( $post_id );
 
 		if ( is_wp_error( $result ) ) {
@@ -527,22 +558,21 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 		$media_id = absint( $request->get_param( 'media_id' ) );
 
 		$post = get_post( $post_id );
-		if ( ! $post || ! Mcpwp_Posts::is_writable_post_type( $post->post_type ) ) {
+		// #1020/#1022 round-1 review WARN-1: the category check is folded
+		// into this SAME condition (not a separate guard call afterward) so
+		// a category denial is byte-identical to a genuinely missing post —
+		// is_writable_post_type() above allows any public custom type
+		// (product included) plus the Elementor safe_nonpublic_types, with
+		// no idea which MCPWP tool category owns them, so without this a
+		// 'content'-only key could still set a WooCommerce product's or an
+		// Elementor template's featured image.
+		if ( ! $post || ! Mcpwp_Posts::is_writable_post_type( $post->post_type ) || ! $this->caller_may_read_category( $this->category_for_post_type( $post->post_type ) ) ) {
 			return $this->error_response(
 				'not_found',
 				__( 'Post not found.', 'mcpwp' ),
 				404,
 				array( 'id' => $post_id )
 			);
-		}
-
-		// #1020: is_writable_post_type() above allows any public custom type
-		// (product included) plus the Elementor safe_nonpublic_types — so
-		// this route could set a WooCommerce product's or an Elementor
-		// template's featured image on a 'content'-only key without it.
-		$category_denied = $this->guard_post_type_category( $post, __( 'Post not found.', 'mcpwp' ) );
-		if ( $category_denied ) {
-			return $category_denied;
 		}
 
 		// Any type that declares thumbnail support, not only post and page
