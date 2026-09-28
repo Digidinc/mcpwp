@@ -4939,12 +4939,14 @@ trait Mcpwp_Api_Auth {
 			return empty( $categories ) ? array( self::deny_all_category_marker() ) : $categories;
 		}
 
-		// Unknown role: normalize_api_key_record() coerces any role outside
-		// get_role_definitions() to 'admin' before a record is ever stored or
-		// reaches this method through the normal auth path, so this branch
-		// should be unreachable in practice. Treated as deny-all (#1041) —
-		// NOT unrestricted — because an unrecognised role is not "documented
-		// as unrestricted"; only admin and legacy (roleless) keys are.
+		// Unknown role: reachable both for a raw, non-normalized record and,
+		// since #1041 WARN-1, for a NORMALIZED one too —
+		// normalize_api_key_record() now resolves a present-but-invalid role
+		// to unknown_role_marker() rather than silently coercing it to
+		// 'admin' (the exact silent-grant bug WARN-1 found and closed).
+		// Treated as deny-all — NOT unrestricted — because an unrecognised
+		// role is not "documented as unrestricted"; only admin and legacy
+		// (roleless) keys are.
 		return array( self::deny_all_category_marker() );
 	}
 

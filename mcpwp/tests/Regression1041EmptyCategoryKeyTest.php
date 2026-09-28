@@ -255,13 +255,37 @@ final class Regression1041EmptyCategoryKeyTest extends TestCase {
 	}
 
 	public function test_resolve_key_tool_categories_unknown_role_is_deny_all(): void {
-		// Unreachable through normal auth (normalize_api_key_record() coerces
-		// an unknown role to 'admin'), but a raw record could still reach the
-		// resolver directly — must fail closed, not open (#1041).
+		// A raw, non-normalized record with a role outside get_role_definitions()
+		// reaching the resolver directly (normalize_api_key_record() itself is
+		// covered separately below, #1041 WARN-1) — must fail closed, not open.
 		$auth     = $this->harness();
 		$resolved = $auth->resolve_categories( array( 'role' => 'made-up-role' ) );
 
 		$this->assertTrue( Mcpwp_1041_Auth_Harness::is_deny_all_categories( $resolved ) );
+	}
+
+	/**
+	 * #1038 (WebMCP) x #1041: Mcpwp_WebMCP::principal_record() builds its
+	 * synthetic key record directly (role 'custom', tool_categories
+	 * PRINCIPAL_CATEGORIES) — it never goes through create_scoped_api_key()
+	 * or normalize_api_key_record(). Pin that this fix's resolver still reads
+	 * it correctly: a real, non-empty category list, neither the unrestricted
+	 * array() NOR the deny-all sentinel.
+	 */
+	public function test_resolve_key_tool_categories_webmcp_principal_is_neither_unrestricted_nor_deny_all(): void {
+		$auth     = $this->harness();
+		$record   = Mcpwp_WebMCP::principal_record( 7 );
+		$resolved = $auth->resolve_categories( $record );
+
+		$this->assertSame( Mcpwp_WebMCP::PRINCIPAL_CATEGORIES, $resolved );
+		$this->assertNotSame( array(), $resolved, 'the WebMCP principal must not be treated as unrestricted' );
+		$this->assertFalse( Mcpwp_1041_Auth_Harness::is_deny_all_categories( $resolved ), 'the WebMCP principal must not be treated as deny-all' );
+
+		// And through a real door: /pages is 'content', which the principal
+		// holds — must be allowed; /action-log is 'admin', which it does not
+		// — must be denied, same as any other correctly-scoped custom key.
+		$this->assertTrue( $auth->key_allows_category( $record, 'content' ) );
+		$this->assertFalse( $auth->key_allows_category( $record, 'admin' ) );
 	}
 
 	public function test_key_allows_category_denies_every_real_category_for_deny_all(): void {
