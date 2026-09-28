@@ -52,7 +52,7 @@ class Mcpwp_Site_State {
 		$content_counts = self::get_content_counts();
 		$graph          = self::get_graph_summary( (int) $args['graph_limit'], ! empty( $args['include_drafts'] ) );
 		$approvals      = self::get_approval_summary( $reveal_non_public, $category_allowed );
-		$seo            = self::get_seo_summary( $reveal_non_public );
+		$seo            = self::get_seo_summary( $reveal_non_public, $category_allowed );
 		$event_result   = class_exists( 'Mcpwp_Event_Store' )
 			? Mcpwp_Event_Store::list_events(
 				array(
@@ -261,9 +261,11 @@ class Mcpwp_Site_State {
 	 *
 	 * @param bool $reveal_non_public When true, include non-public issues; when
 	 *                                false (default) they are excluded.
+	 * @param callable|null $category_allowed Caller's category predicate; issues
+	 *                                about posts it cannot read are dropped.
 	 * @return array
 	 */
-	private static function get_seo_summary( $reveal_non_public = false ) {
+	private static function get_seo_summary( $reveal_non_public = false, $category_allowed = null ) {
 		if ( ! class_exists( 'Mcpwp_SEO_Audit_Store' ) ) {
 			return array(
 				'summary'    => array( 'total' => 0, 'open' => 0, 'resolved' => 0, 'error' => 0, 'warning' => 0, 'info' => 0 ),
@@ -271,7 +273,16 @@ class Mcpwp_Site_State {
 			);
 		}
 
-		$issues = Mcpwp_SEO_Audit_Store::list_issues( array( 'limit' => 8, 'reveal_non_public' => $reveal_non_public ) );
+		// #1030 round-5 WARN-1: the same caller-category clamp /seo/issues
+		// applies — top_issues carry each post's title and url, and the
+		// summary counts must describe only those.
+		$issues = Mcpwp_SEO_Audit_Store::list_issues(
+			array(
+				'limit'             => 8,
+				'reveal_non_public' => $reveal_non_public,
+				'category_allowed'  => $category_allowed,
+			)
+		);
 
 		return array(
 			'summary'    => isset( $issues['summary'] ) && is_array( $issues['summary'] ) ? $issues['summary'] : array(),

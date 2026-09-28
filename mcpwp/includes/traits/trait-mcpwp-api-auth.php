@@ -333,6 +333,12 @@ trait Mcpwp_Api_Auth {
 			//   presentation, the same bucket as /theme, /theme-builder,
 			//   /custom-css.
 			'nav_menu_item'      => 'site',
+			// wp_block (reusable blocks / synced patterns) is a block
+			// sequence the /blocks door and wp_list_block_patterns manage;
+			// without this it fell back to 'content' and a designer key
+			// (gutenberg, no content) got a 404 on its own blocks (#1030
+			// round-5 WARN-3).
+			'wp_block'           => 'gutenberg',
 			'wp_navigation'      => 'gutenberg',
 			'wp_template'        => 'gutenberg',
 			'wp_template_part'   => 'gutenberg',
@@ -1971,16 +1977,38 @@ trait Mcpwp_Api_Auth {
 			}
 		}
 
-		// The nav menu item special case (#1030 round-3, WARN-3):
-		// object_id only ever names a post when its sibling 'type' field is
-		// literally 'post_type' — under 'taxonomy' it is a term id, under
-		// 'custom' there is no object at all. Declaring it unconditionally
-		// in the map above would misresolve the other two shapes exactly
-		// the way BLOCK-2 did for /users and /woocommerce/customers.
-		if ( $this->route_matches( $path, '/menus' ) && 'post_type' === ( $params['type'] ?? null )
-			&& isset( $params['object_id'] ) && is_numeric( $params['object_id'] ) && (int) $params['object_id'] > 0
-		) {
-			$scalar[] = (int) $params['object_id'];
+		// The nav menu item special case (#1030 round-3 WARN-3, round-5
+		// WARN-2): object_id only ever names a post when its sibling 'type'
+		// says so — 'post_type', or Pro's back-compat aliases 'post'/'page'
+		// (Mcpwp_Site_Manager::add_menu_item() maps both onto post_type,
+		// keeping a caller-supplied `object`). Under 'taxonomy' it is a term
+		// id, under 'custom' there is no object at all, so declaring it
+		// unconditionally in the map above would misresolve those shapes
+		// exactly the way BLOCK-2 did for /users and /woocommerce/customers.
+		// A single item (POST /menus/{id}/items) is a scalar ref; the items[]
+		// of a menu created in one call (POST /menus) are per-item refs.
+		if ( $this->route_matches( $path, '/menus' ) ) {
+			if ( self::menu_item_names_post( $params ) ) {
+				$scalar[] = (int) $params['object_id'];
+			}
+			if ( isset( $params['items'] ) && is_array( $params['items'] ) ) {
+				if ( count( $params['items'] ) > self::post_ref_batch_cap() ) {
+					return new WP_Error(
+						'too_many_ids',
+						sprintf(
+							/* translators: %d: cap */
+							__( 'A single request may name at most %d posts.', 'mcpwp' ),
+							self::post_ref_batch_cap()
+						),
+						array( 'status' => 400 )
+					);
+				}
+				foreach ( $params['items'] as $menu_item ) {
+					if ( is_array( $menu_item ) && self::menu_item_names_post( $menu_item ) ) {
+						$items[] = (int) $menu_item['object_id'];
+					}
+				}
+			}
 		}
 
 		if ( empty( $scalar ) && empty( $items ) ) {
@@ -1992,6 +2020,19 @@ trait Mcpwp_Api_Auth {
 			'scalar'         => array_values( array_unique( $scalar ) ),
 			'items'          => array_values( array_unique( $items ) ),
 		);
+	}
+
+	/**
+	 * Whether a nav-menu item payload's object_id names a post (see the
+	 * /menus special case in collect_post_refs()).
+	 *
+	 * @param array $item Item payload.
+	 * @return bool
+	 */
+	public static function menu_item_names_post( array $item ) {
+		$type = isset( $item['type'] ) && is_string( $item['type'] ) ? $item['type'] : '';
+		return in_array( $type, array( 'post_type', 'post', 'page' ), true )
+			&& isset( $item['object_id'] ) && is_numeric( $item['object_id'] ) && (int) $item['object_id'] > 0;
 	}
 
 	/**

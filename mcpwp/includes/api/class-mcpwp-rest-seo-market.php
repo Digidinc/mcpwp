@@ -160,7 +160,13 @@ class Mcpwp_REST_SEO_Market extends Mcpwp_REST_API {
 		$visibility = Mcpwp_SEO_Visibility::get_latest();
 
 		$issues = class_exists( 'Mcpwp_SEO_Audit_Store' )
-			? Mcpwp_SEO_Audit_Store::list_issues( array( 'status' => 'open' ) )
+			? Mcpwp_SEO_Audit_Store::list_issues(
+				array(
+					'status'           => 'open',
+					// Same caller-category clamp as /seo/issues (#1030 round-5).
+					'category_allowed' => array( $this, 'caller_may_read_category' ),
+				)
+			)
 			: array();
 
 		// A site that ranks for nothing has no visibility rows to score. Without

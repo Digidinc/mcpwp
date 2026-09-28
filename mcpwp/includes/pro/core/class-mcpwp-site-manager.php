@@ -119,8 +119,9 @@ class Mcpwp_Site_Manager {
 		// can detect a partially-built menu instead of a silent success.
 		$item_errors = array();
 		if ( ! empty( $data['items'] ) && is_array( $data['items'] ) ) {
+			$object_visible = isset( $data['item_object_visible'] ) && is_callable( $data['item_object_visible'] ) ? $data['item_object_visible'] : null;
 			foreach ( array_values( $data['items'] ) as $index => $item ) {
-				$result = $this->add_menu_item( $menu_id, $item );
+				$result = $this->add_menu_item( $menu_id, $item, $object_visible );
 				if ( is_wp_error( $result ) ) {
 					$item_errors[] = array(
 						'index'   => (int) $index,
@@ -207,11 +208,17 @@ class Mcpwp_Site_Manager {
 	/**
 	 * Add item to menu.
 	 *
-	 * @param int   $menu_id Menu ID.
-	 * @param array $data    Item data.
+	 * @param int           $menu_id        Menu ID.
+	 * @param array         $data           Item data.
+	 * @param callable|null $object_visible Optional per-item resolver (the REST
+	 *                                      layer's post_ref_item_visible()): a
+	 *                                      post_type item whose object it rejects
+	 *                                      — missing, or hidden from the caller —
+	 *                                      is refused with one not-found answer
+	 *                                      and never created (#1030 round-5).
 	 * @return int|WP_Error Item ID.
 	 */
-	public function add_menu_item( $menu_id, $data ) {
+	public function add_menu_item( $menu_id, $data, $object_visible = null ) {
 		$menu = wp_get_nav_menu_object( $menu_id );
 
 		if ( ! $menu ) {
@@ -254,6 +261,9 @@ class Mcpwp_Site_Manager {
 			case 'post_type':
 				if ( '' === $object || $object_id <= 0 ) {
 					return new WP_Error( 'missing_object', __( 'object and object_id are required for post_type menu items.', 'mcpwp' ) );
+				}
+				if ( is_callable( $object_visible ) && ! call_user_func( $object_visible, $object_id ) ) {
+					return new WP_Error( 'not_found', __( 'The requested resource was not found.', 'mcpwp' ) );
 				}
 				$item_data['menu-item-type']      = 'post_type';
 				$item_data['menu-item-object']    = $object;
