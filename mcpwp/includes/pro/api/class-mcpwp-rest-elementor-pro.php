@@ -41,6 +41,27 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	}
 
 	/**
+	 * Authenticate, then wire the #1032 template-reference gate into
+	 * Mcpwp_Elementor_Pro. Mirrors Mcpwp_REST_Elementor::check_permission()
+	 * — every save_elementor_data() call inside Mcpwp_Elementor_Pro
+	 * (create/update template, apply template/archetype/part, landing page,
+	 * save-section-as-template) and clone_page() (which bypasses that
+	 * method entirely) share this ONE injected callable.
+	 *
+	 * @param WP_REST_Request $request Request object.
+	 * @return bool|WP_Error
+	 */
+	public function check_permission( $request ) {
+		$result = parent::check_permission( $request );
+
+		if ( true === $result ) {
+			$this->elementor_pro->set_template_ref_gate( $this->template_ref_gate() );
+		}
+
+		return $result;
+	}
+
+	/**
 	 * Register REST routes.
 	 */
 	public function register_routes() {
@@ -3206,7 +3227,8 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		$status   = $request->get_param( 'status' ) ?: 'draft';
 
 		$builder = new Mcpwp_Page_Builder();
-		$result  = $builder->build( $title, $sections, $status );
+		$builder->set_template_ref_gate( $this->template_ref_gate() );
+		$result = $builder->build( $title, $sections, $status );
 
 		if ( is_wp_error( $result ) ) {
 			return $result;

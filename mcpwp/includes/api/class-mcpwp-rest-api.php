@@ -58,6 +58,22 @@ abstract class Mcpwp_REST_API {
 	const REASON_LOOKUP_BUDGET_EXHAUSTED = 'lookup_budget_exhausted';
 
 	/**
+	 * Whether guard_elementor_template_shortcode() has been hooked onto
+	 * `pre_do_shortcode_tag` for this PHP request (#1032 B3). Declared here,
+	 * on the base class, rather than on the Mcpwp_Api_Auth trait — a trait's
+	 * own static property is a SEPARATE copy per composing class, which
+	 * would let two different controller subclasses each install their own
+	 * listener within a single request (harmless, since post_ref_readable()
+	 * is idempotent, but not the single-install-per-request this flag is
+	 * for). A plain class static IS shared across every subclass, so
+	 * whichever controller authenticates first wins, and every request gets
+	 * exactly one listener.
+	 *
+	 * @var bool
+	 */
+	private static $template_shortcode_guard_installed = false;
+
+	/**
 	 * Register routes.
 	 */
 	abstract public function register_routes();
@@ -78,7 +94,78 @@ abstract class Mcpwp_REST_API {
 		// Mcpwp_Content_Guardrails::in_context() directly, so a second,
 		// graph-owned copy of the same flag would just be two sources of
 		// truth for one fact.
-		return $this->verify_api_key( $request );
+		$result = $this->verify_api_key( $request );
+
+		if ( true === $result ) {
+			$this->install_template_shortcode_guard();
+		}
+
+		return $result;
+	}
+
+	/**
+	 * Hook Elementor's own `[elementor-template id="N"]` shortcode (#1032
+	 * B3a): `elementor/frontend/builder_content_data`
+	 * (render_elementor_in_process()/render_with_template_gate()) only
+	 * catches a template resolved through Elementor's own DOCUMENT-level
+	 * render (a Template/Global widget, a Loop Grid/Carousel's display
+	 * template). The shortcode is a SEPARATE, site-wide-registered surface —
+	 * `modules/library/classes/shortcode.php`'s callback also ends up calling
+	 * `get_builder_content_for_display()`, but it is reachable from ANY
+	 * `do_shortcode()`/`the_content` pass over ANY text, Elementor-built or
+	 * not: a plain classic/Gutenberg post's post_content, a Text Editor/HTML
+	 * widget's own content rendered as part of an OUTER Elementor document,
+	 * or Elementor Pro's "Shortcode" dynamic tag, which calls
+	 * `do_shortcode()` on an arbitrary caller-controlled string. Hooking
+	 * `pre_do_shortcode_tag` once per request, rather than wrapping every
+	 * individual the_content/do_shortcode call site, catches all of these in
+	 * one place — including any such call site this file does not itself
+	 * know about.
+	 *
+	 * Installed only once check_permission() has authenticated the caller
+	 * (i.e. only for a request this plugin is actively serving), so a normal
+	 * front-end page load — where the SAME shortcode is the site owner's own
+	 * publishing intent and must render exactly as published — is never
+	 * touched by it.
+	 *
+	 * @return void
+	 */
+	protected function install_template_shortcode_guard() {
+		if ( self::$template_shortcode_guard_installed ) {
+			return;
+		}
+		self::$template_shortcode_guard_installed = true;
+
+		add_filter( 'pre_do_shortcode_tag', array( $this, 'guard_elementor_template_shortcode' ), 10, 4 );
+	}
+
+	/**
+	 * `pre_do_shortcode_tag` callback — see install_template_shortcode_guard().
+	 *
+	 * @param false|string $return Short-circuit value; false runs the shortcode normally.
+	 * @param string       $tag    Shortcode tag being processed.
+	 * @param array|string $attr   Shortcode attributes.
+	 * @param array        $m      Regex match array from get_shortcode_regex().
+	 * @return false|string $return unchanged when this is not the Template
+	 *                       Library shortcode or its id is readable; an empty
+	 *                       string (short-circuiting the shortcode to no
+	 *                       output) when it names a template this caller may
+	 *                       not read.
+	 */
+	public function guard_elementor_template_shortcode( $return, $tag, $attr, $m ) {
+		if ( ! class_exists( 'Mcpwp_Elementor_Template_Refs' )
+			|| Mcpwp_Elementor_Template_Refs::SHORTCODE_TAG !== $tag
+			|| ! is_array( $attr ) || empty( $attr['id'] )
+		) {
+			return $return;
+		}
+
+		$id = Mcpwp_Elementor_Template_Refs::coerce_id( $attr['id'] );
+		if ( $id <= 0 ) {
+			return $return;
+		}
+
+		return $this->post_ref_readable( $id, 'elementor-theme' ) ? $return : '';
 	}
 
 	/**
@@ -937,6 +1024,55 @@ abstract class Mcpwp_REST_API {
 	}
 
 	/**
+	 * Render one post id's Elementor content in-process, redacting any
+	 * NESTED document (a Template/Global widget, a Loop Grid/Carousel's
+	 * display template, ...) this caller cannot read (#1032).
+	 *
+	 * Hooks Elementor's `elementor/frontend/builder_content_data` filter —
+	 * fired from Frontend::get_builder_content() for the outer document AND,
+	 * because Document::get_content()/print_content() route through that
+	 * exact same method, for every nested document a widget or Loop skin
+	 * resolves via Plugin::elementor()->documents->get($id) — so this one
+	 * hook covers the Template widget, the Global widget, and Loop
+	 * Grid/Carousel's per-item template alike, with no per-widget-type
+	 * special-casing. A denied nested document renders as an EMPTY page
+	 * (Frontend::get_builder_content()'s own "empty $data" branch) rather
+	 * than failing the read — the post actually being rendered is not in
+	 * question, only whether a template it embeds may be shown.
+	 *
+	 * The outer $post_id is always let through: its own visibility was
+	 * already decided by the caller before this runs (guard_non_public_post()
+	 * / guard_post_type_category()), and Elementor's own recursion guard in
+	 * get_builder_content_for_display() only compares against the current
+	 * loop post anyway.
+	 *
+	 * @param int  $post_id  Post id being rendered.
+	 * @param bool $with_css Whether to inline CSS/font links.
+	 * @return string Rendered HTML.
+	 */
+	protected function render_elementor_in_process( $post_id, $with_css = true ) {
+		$post_id = (int) $post_id;
+		$filter  = function ( $data, $doc_post_id ) use ( $post_id ) {
+			if ( (int) $doc_post_id === $post_id ) {
+				return $data;
+			}
+
+			// 'elementor-theme': see Mcpwp_Api_Auth::template_ref_gate()'s
+			// docblock — a nested reference is judged by its OWN kind, never
+			// by whatever route resolved the outer document.
+			return $this->post_ref_readable( $doc_post_id, 'elementor-theme' ) ? $data : array();
+		};
+
+		add_filter( 'elementor/frontend/builder_content_data', $filter, 10, 2 );
+
+		try {
+			return \Elementor\Plugin::$instance->frontend->get_builder_content_for_display( $post_id, $with_css );
+		} finally {
+			remove_filter( 'elementor/frontend/builder_content_data', $filter, 10 );
+		}
+	}
+
+	/**
 	 * Render a post's body HTML in-process (no HTTP round trip) — the same
 	 * approach class-mcpwp-rest-site-content.php's rendered-copy surface uses
 	 * for draft/pending/private posts that a loopback fetch can't reach.
@@ -960,7 +1096,7 @@ abstract class Mcpwp_REST_API {
 		$method  = 'internal_content';
 
 		if ( $this->is_elementor_built( $post_id ) && class_exists( '\Elementor\Plugin' ) ) {
-			$html   = \Elementor\Plugin::$instance->frontend->get_builder_content_for_display( $post_id, true );
+			$html   = $this->render_elementor_in_process( $post_id, true );
 			$method = 'internal_elementor';
 		}
 

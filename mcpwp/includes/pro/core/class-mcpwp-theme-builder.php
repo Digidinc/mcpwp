@@ -17,6 +17,30 @@ if ( ! defined( 'ABSPATH' ) ) {
 class Mcpwp_Theme_Builder {
 
 	/**
+	 * Gate injected by Mcpwp_REST_Theme_Builder::check_permission() (#1032):
+	 * refuses a write that embeds a Template Library reference this caller
+	 * cannot read. create_theme_template() below writes _elementor_data
+	 * directly (it "never reaches validate_and_fix_elements()", per its own
+	 * long-standing #737 comment) rather than through
+	 * Mcpwp_Elementor_Basic::set_elementor_data(), so it needs this check
+	 * explicitly rather than inheriting it.
+	 *
+	 * @var callable|null
+	 */
+	private $template_ref_gate = null;
+
+	/**
+	 * Inject the #1032 write-side gate — see
+	 * Mcpwp_Api_Auth::template_ref_gate()'s docblock.
+	 *
+	 * @param callable|null $callback function(int[] $ids): true|WP_Error.
+	 * @return void
+	 */
+	public function set_template_ref_gate( $callback ) {
+		$this->template_ref_gate = is_callable( $callback ) ? $callback : null;
+	}
+
+	/**
 	 * Check if Elementor Pro Theme Builder is available.
 	 *
 	 * @return bool
@@ -747,6 +771,26 @@ class Mcpwp_Theme_Builder {
 				}
 			}
 			return $result;
+		}
+
+		// #1032: refuse the whole write, before a draft post is even
+		// created, if the submitted tree embeds a Template Library
+		// reference this caller cannot read. Same gate, same refusal, as
+		// every other Elementor write path.
+		if ( null !== $this->template_ref_gate && ! empty( $data['elementor_data'] ) && class_exists( 'Mcpwp_Elementor_Template_Refs' ) ) {
+			$ref_check_elements = $data['elementor_data'];
+			if ( is_string( $ref_check_elements ) ) {
+				$ref_check_elements = json_decode( $ref_check_elements, true );
+			}
+			if ( is_array( $ref_check_elements ) ) {
+				$ids = Mcpwp_Elementor_Template_Refs::find_ids( $ref_check_elements );
+				if ( ! empty( $ids ) ) {
+					$ref_check = call_user_func( $this->template_ref_gate, $ids );
+					if ( is_wp_error( $ref_check ) ) {
+						return $ref_check;
+					}
+				}
+			}
 		}
 
 		// Create the template post as a DRAFT, not 'publish'. A header/footer

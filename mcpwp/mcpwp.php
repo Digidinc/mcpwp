@@ -288,6 +288,10 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-elementor-element-keys.php';
 	// The single definition of a valid Elementor element id (#842).
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-elementor-element-ids.php';
+	// The single definition of which settings embed a Template Library
+	// (elementor_library) post id (#1032) — loaded before the validator
+	// trait and every write path that calls it.
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-elementor-template-refs.php';
 	// The one reader of a stored `_elementor_data` tree, whatever its form (#845).
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-elementor-stored-tree.php';
 	// Shared suspend/restore for Elementor's content-sanitizer (#828 part 2 /

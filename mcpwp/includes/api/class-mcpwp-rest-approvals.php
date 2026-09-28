@@ -266,11 +266,24 @@ class Mcpwp_REST_Approvals extends Mcpwp_REST_API {
 		}
 
 		$record = $this->get_current_api_key_record();
+
+		// #1032 round 3: re-run the Template Library reference scan on the
+		// payload apply_payload() is about to write — checked against the
+		// REQUESTER's own permissions (whoever PROPOSED this change,
+		// $visibility_check['requested_by_key_id']), never the admin who is
+		// applying it here. An admin's own unrestricted category access must
+		// not launder a reference a restricted requester was never allowed
+		// to introduce — see requester_template_ref_gate()'s own docblock.
+		$requester_key_id = is_array( $visibility_check ) && isset( $visibility_check['requested_by_key_id'] )
+			? (string) $visibility_check['requested_by_key_id']
+			: '';
+
 		$result = Mcpwp_Approvals::apply_request(
 			$request->get_param( 'id' ),
 			array(
-				'api_key' => (string) $this->get_api_key_from_request( $request ),
-				'actor'   => is_array( $record ) && ! empty( $record['id'] ) ? (string) $record['id'] : '',
+				'api_key'            => (string) $this->get_api_key_from_request( $request ),
+				'actor'              => is_array( $record ) && ! empty( $record['id'] ) ? (string) $record['id'] : '',
+				'template_ref_gate'  => $this->requester_template_ref_gate( $requester_key_id ),
 			)
 		);
 		if ( is_wp_error( $result ) ) {

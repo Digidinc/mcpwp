@@ -1406,6 +1406,17 @@ trait Mcpwp_Elementor_Writer_Trait {
 			}
 		}
 
+		// #1032: refuse the whole write (dry run or real) if the submitted
+		// tree embeds a Template Library reference this caller cannot read.
+		// Decoded once and shared by both branches below.
+		$elements_for_ref_check = json_decode( $elementor_json, true );
+		if ( is_array( $elements_for_ref_check ) ) {
+			$ref_check = $this->check_template_references( $elements_for_ref_check, $page_id );
+			if ( is_wp_error( $ref_check ) ) {
+				return $ref_check;
+			}
+		}
+
 		// --- Dry-run mode: validate only, no DB writes ---
 		if ( $dry_run ) {
 			$dry_json   = $elementor_json; // work on a copy
@@ -2458,6 +2469,15 @@ trait Mcpwp_Elementor_Writer_Trait {
 	 * @return array|WP_Error Debug info array or WP_Error on failure.
 	 */
 	protected function save_elements_to_page( $page_id, $elements, $options = array() ) {
+		// #1032: refuse the whole write before anything else runs if the
+		// submitted tree embeds a Template Library reference (Template/
+		// Global widget, Loop Grid/Carousel, ...) this caller cannot read.
+		// Single shared check — see check_template_references()'s docblock.
+		$ref_check = $this->check_template_references( is_array( $elements ) ? $elements : array(), $page_id );
+		if ( is_wp_error( $ref_check ) ) {
+			return $ref_check;
+		}
+
 		// Refuse to silently convert a page that already has non-Elementor
 		// content (#788).
 		$conversion = $this->guard_content_conversion( $page_id, $elements, $options );

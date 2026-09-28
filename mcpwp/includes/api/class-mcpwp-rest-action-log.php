@@ -191,7 +191,8 @@ class Mcpwp_REST_Action_Log extends Mcpwp_REST_API {
 		// cannot see is refused with the same not_found shape as a genuinely
 		// missing log_id.
 		$log_id = sanitize_text_field( (string) $request->get_param( 'log_id' ) );
-		$result = Mcpwp_Action_Log::rollback( $log_id, $this->action_log_visibility() );
+		// #1032 round 2 (NIT): see Mcpwp_Action_Log::rollback()'s docblock.
+		$result = Mcpwp_Action_Log::rollback( $log_id, $this->action_log_visibility(), $this->template_ref_gate() );
 
 		if ( is_wp_error( $result ) ) {
 			return $result;
