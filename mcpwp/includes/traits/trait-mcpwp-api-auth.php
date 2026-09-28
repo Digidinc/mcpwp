@@ -719,6 +719,25 @@ trait Mcpwp_Api_Auth {
 		// from wp-admin re-dispatches its route in-process. The lift is a PHP
 		// static set by the gate for that one dispatch and carries the admin
 		// user id; nothing a caller sends can set it.
+		//
+		// #1032 round 4 (adversarial review): this bypass never reaches the
+		// template-ref scan below, so it would be a sixth verdict-path gap
+		// exactly like the four round-3 closed — EXCEPT that
+		// Mcpwp_Destructive_Gate::GATED (the only operations ever replayed
+		// through this lift) is, and must stay, delete_* operations only
+		// (delete_page, delete_post, delete_content, delete_all_drafts,
+		// delete_media, delete_product, delete_course_category,
+		// delete_widget, delete_elementor_template, delete_user) — nothing
+		// that writes _elementor_data/post_content, so there is no payload
+		// here a template reference could hide in. The Elementor
+		// content-replacement tools that WOULD need this scan
+		// (wp_apply_elementor_template/archetype/part) are deliberately kept
+		// OUT of GATED (see EXEMPT_WITH_REASON) precisely because they use
+		// the action-log snapshot/rollback path instead, which the writer
+		// traits' own check_template_references() already covers. If a
+		// future GATED entry is ever a write rather than a delete, this
+		// bypass becomes exactly the gap round 3 fixed for every other
+		// path — DestructiveGateOnlyDeletesTest pins the invariant.
 		if ( class_exists( 'Mcpwp_Destructive_Gate' ) && Mcpwp_Destructive_Gate::applying_as_admin() > 0 && function_exists( 'user_can' ) && user_can( Mcpwp_Destructive_Gate::applying_as_admin(), 'activate_plugins' ) ) {
 			wp_set_current_user( Mcpwp_Destructive_Gate::applying_as_admin() );
 			return true;
@@ -3872,12 +3891,39 @@ trait Mcpwp_Api_Auth {
 	 * category the ADMIN disabled after the request was queued must block
 	 * the apply even if the requester's own role would have allowed it.
 	 *
-	 * An empty $key_id (legacy caller, admin-AJAX origin — no stored
-	 * identity) is treated as unrestricted, matching
-	 * caller_may_read_category()'s own null-key-record behaviour. An id
-	 * that no longer resolves to a live key (revoked since the request was
-	 * queued) fails CLOSED: nothing is left to prove that principal still
-	 * has the access it needed, so it must not be assumed.
+	 * $key_id's possible shapes, and how each is resolved (#1032 round 4 —
+	 * every writer of `requested_by_key_id` is enumerated here; a shape not
+	 * recognised by any branch below falls through to the scoped-key lookup
+	 * and denies, per the last paragraph):
+	 *
+	 *  - '' — current_requester_key_id()'s OWN documented contract: an
+	 *    admin-AJAX (Chat tab) or wp-admin cookie context with NO API-key
+	 *    record at all. It is the only writer of the empty string (every
+	 *    other caller — REST controllers, Mcpwp_WebMCP,
+	 *    Mcpwp_Destructive_Gate::requester_id() — stamps a real, non-empty
+	 *    principal id), so '' cannot mean anything else here and is
+	 *    unrestricted, matching caller_may_read_category()'s own
+	 *    null-key-record behaviour.
+	 *  - `oauth-user:*` / `oauth-client:*` / `oauth:*` (OAuth bearer,
+	 *    authenticate_oauth_access_token()) and `broker:*` (mumcp.com
+	 *    broker, authenticate_broker_bearer_token()) — neither principal
+	 *    type ever carries a 'role' field, and resolve_key_tool_categories()
+	 *    documents both as unrestricted BY CATEGORY, governed by scope
+	 *    instead, at authentication time itself. Looking either up in the
+	 *    scoped-key store (below) always misses — they are never written
+	 *    there — which used to fail CLOSED for a real, legitimate requester:
+	 *    a false positive that would refuse every OAuth/broker-proposed
+	 *    approval, not a security gap fixed by refusing it.
+	 *  - `webmcp:user:*` (Mcpwp_WebMCP::principal_id()) — also never in the
+	 *    scoped-key store, but WebMCP's principal_record() DOES carry a real
+	 *    category restriction (PRINCIPAL_CATEGORIES: site, content, seo) —
+	 *    resolved directly against that fixed list rather than treated as
+	 *    unrestricted like OAuth/broker.
+	 *  - anything else (a scoped API key's own id) — find_scoped_api_key_by_id().
+	 *    An id that no longer resolves to a live key (revoked since the
+	 *    request was queued, or simply unrecognised) fails CLOSED: nothing
+	 *    is left to prove that principal still has the access it needed, so
+	 *    it must not be assumed.
 	 *
 	 * @param string $key_id   Stored requester key id (may be '').
 	 * @param string $category Tool category slug.
@@ -3892,6 +3938,14 @@ trait Mcpwp_Api_Auth {
 		$key_id = (string) $key_id;
 		if ( '' === $key_id ) {
 			return true;
+		}
+
+		if ( 0 === strpos( $key_id, 'oauth-user:' ) || 0 === strpos( $key_id, 'oauth-client:' ) || 0 === strpos( $key_id, 'oauth:' ) || 0 === strpos( $key_id, 'broker:' ) ) {
+			return true;
+		}
+
+		if ( class_exists( 'Mcpwp_WebMCP' ) && 0 === strpos( $key_id, Mcpwp_WebMCP::SOURCE . ':' ) ) {
+			return in_array( $category, Mcpwp_WebMCP::PRINCIPAL_CATEGORIES, true );
 		}
 
 		$key_record = $this->find_scoped_api_key_by_id( $key_id );

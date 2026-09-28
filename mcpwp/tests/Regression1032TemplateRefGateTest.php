@@ -45,6 +45,10 @@ require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-posts.php';
 require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-pages.php';
 require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-posts.php';
 require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-pages.php';
+require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-approvals.php';
+require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-batch.php';
+require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-webmcp.php';
+require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-destructive-gate.php';
 
 final class Regression1032TemplateRefGateTest extends TestCase {
 
@@ -61,6 +65,15 @@ final class Regression1032TemplateRefGateTest extends TestCase {
 		$GLOBALS['_mcpwp_test_meta']              = array();
 		$GLOBALS['_mcpwp_test_registered_routes'] = array();
 		$GLOBALS['mcpwp_test_public_post_types']  = array( 'elementor_library' );
+
+		// Belt and braces (matches WebMcpTest.php's own setUp): a test that
+		// throws between Mcpwp_WebMCP::begin_dispatch() and its own
+		// try/finally cleanup would otherwise leave the lift held for every
+		// later test in this process.
+		Mcpwp_WebMCP::end_dispatch( 0 );
+		if ( class_exists( 'Mcpwp_REST_Batch' ) ) {
+			Mcpwp_REST_Batch::$is_batch_sub_request = false;
+		}
 
 		// post_ref_readable()'s memo (adversarial review round 1 NIT) lives
 		// no longer than one request in production; this test SUITE process
@@ -99,6 +112,10 @@ final class Regression1032TemplateRefGateTest extends TestCase {
 
 	protected function tearDown(): void {
 		update_option( 'mcpwp_disabled_tool_categories', array() );
+		Mcpwp_WebMCP::end_dispatch( 0 );
+		if ( class_exists( 'Mcpwp_REST_Batch' ) ) {
+			Mcpwp_REST_Batch::$is_batch_sub_request = false;
+		}
 	}
 
 	private function plain_tree(): array {
@@ -1595,18 +1612,22 @@ final class Regression1032TemplateRefGateTest extends TestCase {
 		$this->assert_request_allowed( $controller, $request, 'A GET request must never be refused by the write-time template-ref scan.' );
 	}
 
-	public function test_request_scan_ignores_an_unrelated_popup_param(): void {
-		// NIT: 'popup' is an ordinary word an unrelated route could use;
-		// only the Elementor Popup dynamic tag's own sibling shape
-		// ({"action":"open","popup":"N"}) is treated as a reference.
+	public function test_request_scan_ignores_a_popup_param_explicitly_closing(): void {
+		// Round-3 NIT, CORRECTED by round-4 (see
+		// Mcpwp_Elementor_Template_Refs::is_reference_key_in_context()'s
+		// docblock): a bare 'popup' key is NOT exempt just for lacking an
+		// 'action' sibling — Elementor's own tag defaults action to 'open',
+		// so a bare {"popup":"N"} IS a live reference and must be caught
+		// (see test_request_scan_catches_popup_with_no_action_key()). The
+		// only shape that is genuinely inert is an explicit "action":"close".
 		list( $controller, $request ) = $this->authed_request(
 			new Mcpwp_REST_Posts(),
 			array( 'content' ),
 			'PUT',
 			'/mcpwp/v1/posts/' . self::PAGE_ID,
-			array( 'content' => 'ok', 'popup' => (string) self::ARCHETYPE_ID )
+			array( 'content' => 'ok', 'action' => 'close', 'popup' => (string) self::ARCHETYPE_ID )
 		);
-		$this->assert_request_allowed( $controller, $request, 'A bare, unrelated "popup" param must not be treated as a template reference.' );
+		$this->assert_request_allowed( $controller, $request, 'An explicit action=close popup shape must not be treated as a template reference.' );
 	}
 
 	public function test_apply_link_does_not_exempt_via_the_read_only_target(): void {
@@ -1700,5 +1721,283 @@ final class Regression1032TemplateRefGateTest extends TestCase {
 		);
 
 		$this->assertNotInstanceOf( WP_Error::class, $result, 'A requester who CAN read the category must be able to apply.' );
+	}
+
+	// =========================================================================
+	// #1043 (#1041) merged to main: normalize_api_key_record() and
+	// resolve_key_tool_categories() now distinguish "unrestricted" (admin,
+	// or a genuinely roleless legacy key) from "restricted to nothing" (the
+	// deny-all sentinel — a custom-role key with no real category, or a
+	// present-but-invalid role) instead of conflating both into an empty
+	// array. requester_template_ref_gate()/requester_may_read_category()
+	// route through find_scoped_api_key_by_id() -> normalize_api_key_record()
+	// and key_allows_category() -> resolve_key_tool_categories() — the SAME
+	// shared methods #1043 changed — so these confirm that composition still
+	// denies correctly with no code changes of its own, and pin the
+	// revoked-key case (a key id that no longer resolves at all) as deny-all
+	// too, never "unrestricted because nothing was found".
+	// =========================================================================
+
+	public function test_approvals_apply_denies_a_revoked_requester_key(): void {
+		// The requester's key was revoked between proposing the change and
+		// an admin applying it. find_scoped_api_key_by_id() must not find it
+		// (it explicitly skips revoked_at rows) — and the ABSENCE of a
+		// resolvable requester must fail CLOSED, not be treated as
+		// "unrestricted because there is nothing left to check".
+		$controller = new Mcpwp_REST_Posts();
+		$created    = $controller->create_scoped_api_key( 'designer', array( 'read', 'write' ), 'custom', array( 'content' ) );
+
+		$approval = Mcpwp_Approvals::create_post_content_request(
+			self::PAGE_ID,
+			'[elementor-template id="' . self::ARCHETYPE_ID . '"]',
+			array( 'requested_by_key_id' => $created['id'] )
+		);
+		$this->assertIsArray( $approval );
+		Mcpwp_Approvals::approve_request( $approval['id'] );
+
+		// Revoke the requester's key in place, same option store shape
+		// revoke_scoped_api_key() writes.
+		$keys = get_option( 'mcpwp_api_keys', array() );
+		foreach ( $keys as $index => $key ) {
+			if ( isset( $key['id'] ) && $key['id'] === $created['id'] ) {
+				$keys[ $index ]['revoked_at'] = '2026-09-28 00:00:00';
+			}
+		}
+		update_option( 'mcpwp_api_keys', $keys );
+
+		$result = Mcpwp_Approvals::apply_request(
+			$approval['id'],
+			array(
+				'actor'             => 'wp-user:1',
+				'template_ref_gate' => $controller->requester_template_ref_gate( $created['id'] ),
+			)
+		);
+
+		$this->assertInstanceOf( WP_Error::class, $result, 'A revoked requester key must be treated as deny-all, not unrestricted.' );
+		$this->assertSame( 'not_found', $result->get_error_code() );
+	}
+
+	public function test_approvals_apply_denies_a_deny_all_custom_requester(): void {
+		// #1041: a custom-role key hand-seeded (or migrated) with an empty
+		// tool_categories list now resolves to the deny-all sentinel, never
+		// the "unrestricted" empty array. requester_may_read_category() must
+		// see that denial through key_allows_category().
+		$controller = new Mcpwp_REST_Posts();
+		$plain      = 'mcpwp_' . str_repeat( 'a', 48 );
+		update_option(
+			'mcpwp_api_keys',
+			array(
+				array(
+					'id'              => 'k-deny-all',
+					'label'           => 'deny-all requester',
+					'hash'            => wp_hash_password( $plain ),
+					'scopes'          => array( 'read', 'write' ),
+					'role'            => 'custom',
+					'tool_categories' => array(),
+					'created_at'      => '2026-01-01 00:00:00',
+					'revoked_at'      => null,
+				),
+			)
+		);
+
+		$approval = Mcpwp_Approvals::create_post_content_request(
+			self::PAGE_ID,
+			'[elementor-template id="' . self::ARCHETYPE_ID . '"]',
+			array( 'requested_by_key_id' => 'k-deny-all' )
+		);
+		$this->assertIsArray( $approval );
+		Mcpwp_Approvals::approve_request( $approval['id'] );
+
+		$result = Mcpwp_Approvals::apply_request(
+			$approval['id'],
+			array(
+				'actor'             => 'wp-user:1',
+				'template_ref_gate' => $controller->requester_template_ref_gate( 'k-deny-all' ),
+			)
+		);
+
+		$this->assertInstanceOf( WP_Error::class, $result, 'A deny-all custom requester must be refused, not treated as unrestricted.' );
+		$this->assertSame( 'not_found', $result->get_error_code() );
+	}
+
+	public function test_approvals_apply_denies_an_unknown_role_requester(): void {
+		// #1041 WARN-1: a stored 'role' field that is PRESENT but invalid
+		// (a typo, a stale role a build removed) normalizes to
+		// unknown_role_marker(), which resolve_key_tool_categories() treats
+		// as deny-all — never the old silent-coerce-to-admin behaviour.
+		$controller = new Mcpwp_REST_Posts();
+		$plain      = 'mcpwp_' . str_repeat( 'b', 48 );
+		update_option(
+			'mcpwp_api_keys',
+			array(
+				array(
+					'id'              => 'k-unknown-role',
+					'label'           => 'malformed role requester',
+					'hash'            => wp_hash_password( $plain ),
+					'scopes'          => array( 'read', 'write' ),
+					'role'            => 'viewer', // Not a known role.
+					'tool_categories' => array(),
+					'created_at'      => '2026-01-01 00:00:00',
+					'revoked_at'      => null,
+				),
+			)
+		);
+
+		$approval = Mcpwp_Approvals::create_post_content_request(
+			self::PAGE_ID,
+			'[elementor-template id="' . self::ARCHETYPE_ID . '"]',
+			array( 'requested_by_key_id' => 'k-unknown-role' )
+		);
+		$this->assertIsArray( $approval );
+		Mcpwp_Approvals::approve_request( $approval['id'] );
+
+		$result = Mcpwp_Approvals::apply_request(
+			$approval['id'],
+			array(
+				'actor'             => 'wp-user:1',
+				'template_ref_gate' => $controller->requester_template_ref_gate( 'k-unknown-role' ),
+			)
+		);
+
+		$this->assertInstanceOf( WP_Error::class, $result, 'An unknown/malformed-role requester must be refused, not silently coerced to admin.' );
+		$this->assertSame( 'not_found', $result->get_error_code() );
+	}
+
+	// =========================================================================
+	// Adversarial review round 4 — B1 regression in the round-3 popup
+	// narrowing, plus the applying_as_admin()/OAuth-broker/WebMCP NITs.
+	// =========================================================================
+
+	public function test_popup_reference_is_caught_regardless_of_action_except_close(): void {
+		// Elementor's own Tag::render() defaults action to 'open' (saved
+		// settings usually OMIT the key entirely) and renders for every
+		// action except 'close' (including 'toggle') — round 3 wrongly
+		// required an explicit "action":"open" sibling and missed the
+		// no-action case entirely (live finding: {"popup":"13"} alone).
+		$action_cases = array( null, 'open', 'toggle' );
+
+		foreach ( $action_cases as $action ) {
+			$value = null === $action ? array() : array( 'action' => $action );
+
+			$value['popup'] = (string) self::ARCHETYPE_ID;
+			$ids             = Mcpwp_Elementor_Template_Refs::find_ids_in_value( $value );
+			$this->assertSame( array( self::ARCHETYPE_ID ), $ids, 'string id, action=' . var_export( $action, true ) );
+
+			$value['popup'] = self::ARCHETYPE_ID;
+			$ids_int         = Mcpwp_Elementor_Template_Refs::find_ids_in_value( $value );
+			$this->assertSame( array( self::ARCHETYPE_ID ), $ids_int, 'int id, action=' . var_export( $action, true ) );
+		}
+	}
+
+	public function test_popup_reference_is_not_caught_when_action_is_close(): void {
+		$ids = Mcpwp_Elementor_Template_Refs::find_ids_in_value(
+			array( 'action' => 'close', 'popup' => (string) self::ARCHETYPE_ID )
+		);
+		$this->assertSame( array(), $ids, 'action=close is the one verb the Popup dynamic tag never renders for.' );
+	}
+
+	public function test_request_scan_catches_popup_with_no_action_key(): void {
+		// End-to-end regression for the live round-4 finding: a button's
+		// __dynamic__ link naming a popup with NO action key at all.
+		$payload = urlencode( json_encode( array( 'popup' => (string) self::ARCHETYPE_ID ) ) );
+		list( $controller, $request ) = $this->authed_request(
+			new Mcpwp_REST_Posts(),
+			array( 'site' ),
+			'PUT',
+			'/mcpwp/v1/widgets/button-2',
+			array( 'instance' => array( 'link' => '[elementor-tag id="abc1235" name="popup" settings="' . $payload . '"]' ) )
+		);
+		$this->assert_request_refused( $controller, $request, 'A Popup dynamic tag with no action key defaults to "open" and must still be caught.' );
+	}
+
+	public function test_destructive_gate_only_ever_gates_delete_operations(): void {
+		// Pins the invariant the applying_as_admin() bypass in
+		// compute_api_key_verdict() depends on for its safety: that bypass
+		// never reaches check_request_template_refs(), which is only safe
+		// because nothing GATED writes _elementor_data/post_content. If a
+		// future GATED entry is anything other than a delete, this test
+		// fails and that bypass needs the same scan every other
+		// verdict-computing path now gets.
+		foreach ( Mcpwp_Destructive_Gate::GATED as $operation ) {
+			$this->assertStringStartsWith( 'delete_', $operation, 'Every gated destructive operation must be a delete — see compute_api_key_verdict()\'s own comment on the applying_as_admin() bypass.' );
+		}
+	}
+
+	public function test_requester_template_ref_gate_allows_an_oauth_requester(): void {
+		// #1032 round 4: an OAuth-authenticated requester's stamped identity
+		// (oauth-user:*/oauth-client:*/oauth:*) is never in the scoped-key
+		// store — looking it up there used to always miss and deny, a false
+		// positive for a real requester. OAuth principals are documented as
+		// unrestricted by category (governed by scope instead), so the gate
+		// must allow, matching how they are actually authenticated.
+		$controller = new Mcpwp_REST_Posts();
+
+		$approval = Mcpwp_Approvals::create_post_content_request(
+			self::PAGE_ID,
+			'[elementor-template id="' . self::ARCHETYPE_ID . '"]',
+			array( 'requested_by_key_id' => 'oauth-user:42' )
+		);
+		$this->assertIsArray( $approval );
+		Mcpwp_Approvals::approve_request( $approval['id'] );
+
+		$result = Mcpwp_Approvals::apply_request(
+			$approval['id'],
+			array(
+				'actor'             => 'wp-user:1',
+				'template_ref_gate' => $controller->requester_template_ref_gate( 'oauth-user:42' ),
+			)
+		);
+
+		$this->assertNotInstanceOf( WP_Error::class, $result, 'An OAuth requester must not be denied purely because it is absent from the scoped-key store.' );
+	}
+
+	public function test_requester_template_ref_gate_allows_a_broker_requester(): void {
+		$controller = new Mcpwp_REST_Posts();
+
+		$approval = Mcpwp_Approvals::create_post_content_request(
+			self::PAGE_ID,
+			'[elementor-template id="' . self::ARCHETYPE_ID . '"]',
+			array( 'requested_by_key_id' => 'broker:site-abc123' )
+		);
+		$this->assertIsArray( $approval );
+		Mcpwp_Approvals::approve_request( $approval['id'] );
+
+		$result = Mcpwp_Approvals::apply_request(
+			$approval['id'],
+			array(
+				'actor'             => 'wp-user:1',
+				'template_ref_gate' => $controller->requester_template_ref_gate( 'broker:site-abc123' ),
+			)
+		);
+
+		$this->assertNotInstanceOf( WP_Error::class, $result, 'A mumcp.com broker requester must not be denied purely because it is absent from the scoped-key store.' );
+	}
+
+	public function test_requester_template_ref_gate_denies_a_webmcp_requester_for_an_elementor_category(): void {
+		// WebMCP's principal_record() DOES carry a real category
+		// restriction (PRINCIPAL_CATEGORIES: site, content, seo) — unlike
+		// OAuth/broker it must NOT be treated as unrestricted; a template
+		// reference resolves to an elementor-* category, which is outside
+		// that list.
+		$controller = new Mcpwp_REST_Posts();
+
+		$approval = Mcpwp_Approvals::create_post_content_request(
+			self::PAGE_ID,
+			'[elementor-template id="' . self::ARCHETYPE_ID . '"]',
+			array( 'requested_by_key_id' => Mcpwp_WebMCP::principal_id( 5 ) )
+		);
+		$this->assertIsArray( $approval );
+		Mcpwp_Approvals::approve_request( $approval['id'] );
+
+		$result = Mcpwp_Approvals::apply_request(
+			$approval['id'],
+			array(
+				'actor'             => 'wp-user:1',
+				'template_ref_gate' => $controller->requester_template_ref_gate( Mcpwp_WebMCP::principal_id( 5 ) ),
+			)
+		);
+
+		$this->assertInstanceOf( WP_Error::class, $result, 'A WebMCP requester must still be judged against its OWN fixed category list, not treated as unrestricted.' );
+		$this->assertSame( 'not_found', $result->get_error_code() );
 	}
 }

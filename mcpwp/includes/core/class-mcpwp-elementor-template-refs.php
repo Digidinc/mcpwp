@@ -204,20 +204,24 @@ final class Mcpwp_Elementor_Template_Refs {
 	}
 
 	/**
-	 * Round-3 adversarial review NIT: every OTHER reference key
-	 * (`template_id`, `templateID`, the `_template`/`template_id` suffix
-	 * convention) is Elementor-specific enough by name that a bare match
-	 * anywhere in a request tree is a reasonable bet. `popup` is not — it is
-	 * an ordinary English word a completely unrelated route param could use
-	 * (a form field, a UI-state flag) with no Elementor involvement at all,
-	 * so treating it as a template reference unconditionally, EVERYWHERE the
-	 * request-body-wide chokepoint walks (not just inside an Elementor
-	 * `settings` object), is broader than the one real case it exists for:
-	 * Elementor Pro's Popup dynamic tag, whose `__dynamic__`-decoded settings
-	 * are shaped exactly `{"action":"open","popup":"N"}`
-	 * (`modules/popup/tag.php`). Requiring that sibling shape — an `action`
-	 * key in the SAME array equal to `'open'` — keeps the real case caught
-	 * while an unrelated `popup` param elsewhere in a request never matches.
+	 * Round-3 adversarial review NIT, CORRECTED by round-4 (regression —
+	 * BLOCK): every OTHER reference key (`template_id`, `templateID`, the
+	 * `_template`/`template_id` suffix convention) is Elementor-specific
+	 * enough by name that a bare match anywhere in a request tree is a
+	 * reasonable bet. `popup` is not — it is an ordinary English word a
+	 * completely unrelated route param could use, so this narrows it to
+	 * Elementor Pro's Popup dynamic tag shape (`modules/popup/tag.php`),
+	 * `{"action":<verb>,"popup":"N"}`.
+	 *
+	 * Round 3 required a sibling `"action":"open"` — WRONG. Elementor's own
+	 * `Tag::render()` defaults `action` to `'open'` (line 53), so saved
+	 * settings usually OMIT the key entirely, and the tag renders the popup
+	 * for every action except `'close'` (including `'toggle'`, lines
+	 * 102-124). Requiring an explicit `'open'` missed the common no-action
+	 * case entirely — live round-4 finding: `{"popup":"13"}` with no
+	 * `action` key, saved via a button's `__dynamic__` link, rendered the
+	 * gated popup on the public page. Fixed to Elementor's own rule: `popup`
+	 * is a reference unless the sibling `action` is EXACTLY `'close'`.
 	 *
 	 * A no-op for every key other than the bare `'popup'` match: the suffix
 	 * and other exact-name matches stay unconditional, as they already were.
@@ -231,7 +235,9 @@ final class Mcpwp_Elementor_Template_Refs {
 			return true;
 		}
 
-		return isset( $sibling_array['action'] ) && 'open' === $sibling_array['action'];
+		$action = isset( $sibling_array['action'] ) ? $sibling_array['action'] : null;
+
+		return 'close' !== $action;
 	}
 
 	/**
