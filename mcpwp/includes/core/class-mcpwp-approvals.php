@@ -29,6 +29,23 @@ class Mcpwp_Approvals {
 	const MAX_ITEMS = 200;
 
 	/**
+	 * Pending post_content_update requests one requester may hold (#981
+	 * review WARN-2). Every request carries its full proposed body in the
+	 * one approvals option, so an unbounded queue is an unbounded option.
+	 */
+	const MAX_PENDING_CONTENT_PER_REQUESTER = 20;
+
+	/**
+	 * Pending post_content_update requests the whole site may hold.
+	 */
+	const MAX_PENDING_CONTENT_TOTAL = 100;
+
+	/**
+	 * Largest proposed body a post_content_update request may carry, bytes.
+	 */
+	const MAX_PROPOSED_CONTENT_BYTES = 262144;
+
+	/**
 	 * Allowed values for triage.priority — the single enum every writer and
 	 * every reader of a `triage` record must agree on. Anything else (an
 	 * injected string, a typo, a future Jev model naming levels differently)
@@ -62,6 +79,60 @@ class Mcpwp_Approvals {
 
 		$before_content = (string) $post->post_content;
 		$after_content  = (string) $after_content;
+
+		// #981 review WARN-2: each request stores the whole proposed body
+		// (plus a diff) in the one autoloaded-size approvals option. Without
+		// bounds a caller could grow it until every later read of the queue
+		// ran the site out of memory — for everyone. Bounded per body, per
+		// requester and site-wide, for every caller of this method.
+		if ( strlen( $after_content ) > self::MAX_PROPOSED_CONTENT_BYTES ) {
+			return new WP_Error(
+				'content_too_large',
+				sprintf(
+					/* translators: %d: size limit in KB */
+					__( 'The proposed content is larger than %d KB. Split the change or edit the post in wp-admin.', 'mcpwp' ),
+					(int) ( self::MAX_PROPOSED_CONTENT_BYTES / 1024 )
+				),
+				array( 'status' => 413 )
+			);
+		}
+
+		$requester    = isset( $args['requested_by_key_id'] ) ? sanitize_text_field( (string) $args['requested_by_key_id'] ) : '';
+		$pending_mine = 0;
+		$pending_all  = 0;
+		foreach ( self::get_all() as $existing ) {
+			if ( ! isset( $existing['status'], $existing['action'] ) || 'pending' !== $existing['status'] || 'post_content_update' !== $existing['action'] ) {
+				continue;
+			}
+			$pending_all++;
+			$by = isset( $existing['requested_by_key_id'] ) ? (string) $existing['requested_by_key_id'] : '';
+			if ( $by === $requester ) {
+				$pending_mine++;
+			}
+		}
+		if ( $pending_mine >= self::MAX_PENDING_CONTENT_PER_REQUESTER ) {
+			return new WP_Error(
+				'too_many_pending',
+				sprintf(
+					/* translators: %d: cap */
+					__( 'This requester already has %d content changes waiting for review. Have them approved or rejected before proposing more.', 'mcpwp' ),
+					self::MAX_PENDING_CONTENT_PER_REQUESTER
+				),
+				array( 'status' => 429 )
+			);
+		}
+		if ( $pending_all >= self::MAX_PENDING_CONTENT_TOTAL ) {
+			return new WP_Error(
+				'approval_queue_full',
+				sprintf(
+					/* translators: %d: cap */
+					__( 'This site already has %d content changes waiting for review. Nothing was queued; have the queue reviewed first.', 'mcpwp' ),
+					self::MAX_PENDING_CONTENT_TOTAL
+				),
+				array( 'status' => 429 )
+			);
+		}
+
 		$id             = self::generate_id();
 		$now            = gmdate( 'c' );
 

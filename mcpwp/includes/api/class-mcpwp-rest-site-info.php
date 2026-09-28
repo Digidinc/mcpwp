@@ -568,6 +568,9 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 				if ( '' === $name ) {
 					continue;
 				}
+				if ( $this->requester_is_webmcp() && ! Mcpwp_WebMCP::is_allowlisted( $name ) ) {
+					continue;
+				}
 				if ( ! isset( $tools_by_category[ $cat ] ) ) {
 					$tools_by_category[ $cat ] = array();
 				}
@@ -879,6 +882,19 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 	 * @return array Filtered list, same shape and order.
 	 */
 	private function filter_actions_by_caller_categories( array $entries ) {
+		// A WebMCP user (#981) can call the WebMCP allowlist and nothing
+		// else — so point it at nothing else.
+		if ( $this->requester_is_webmcp() ) {
+			return array_values(
+				array_filter(
+					$entries,
+					static function ( $entry ) {
+						return isset( $entry['tool'] ) && Mcpwp_WebMCP::is_allowlisted( (string) $entry['tool'] );
+					}
+				)
+			);
+		}
+
 		$key_record           = $this->get_current_api_key_record();
 		$allowed_categories   = is_array( $key_record ) ? $this->resolve_key_tool_categories( $key_record ) : array();
 		$disabled_categories  = get_option( 'mcpwp_disabled_tool_categories', array() );

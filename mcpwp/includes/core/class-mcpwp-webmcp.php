@@ -381,39 +381,163 @@ class Mcpwp_WebMCP {
 	}
 
 	/**
-	 * wp_create_post takes a post_type. Through WebMCP the draft is created
-	 * AS the signed-in user, so the user must be able to create that type
-	 * in WordPress itself — the tool's own public-type filter answers "may
-	 * MCPWP create this type", not "may this person".
+	 * Gate one REST sub-request dispatched under the WebMCP principal —
+	 * the request the tool's handler actually reads, so these checks see
+	 * the CANONICAL arguments: after the /mcp dispatcher's alias
+	 * resolution (#831), near-miss remapping (#911: postType, Post-Type,
+	 * POST_TYPE → post_type) and param_remap (wp_search's post_type →
+	 * type). Checking the tool arguments before dispatch instead would
+	 * check a spelling the handler never reads.
 	 *
-	 * @param string $tool_name Tool name.
-	 * @param array  $arguments Tool arguments (after enforce_draft()).
+	 * Called from Mcpwp_Api_Auth::authenticate_webmcp_principal() for every
+	 * sub-request. Brings the parts of WordPress's own authorization that
+	 * MCPWP's API-key model does not express to the signed-in user:
+	 *
+	 *  - writes: status must stay draft (belt to enforce_draft()'s braces);
+	 *  - post types: reading a type's list needs that type's edit_posts
+	 *    cap, creating one needs its create_posts cap;
+	 *  - terms / categories / tags: the taxonomy's assign_terms cap (and
+	 *    edit_terms for a tag name that would create a new term);
+	 *  - meta: each key must pass edit_post_meta's rules — not protected,
+	 *    and the registered auth_callback (auth_post_meta_{key}[_for_{type}])
+	 *    must allow this user — exactly how map_meta_cap() decides it.
+	 *
+	 * Any failure refuses the whole call.
+	 *
+	 * @param WP_REST_Request $request Sub-request.
 	 * @return true|WP_Error
 	 */
-	public static function check_create_post_type( $tool_name, array $arguments ) {
-		if ( ! in_array( $tool_name, self::DRAFT_ONLY_TOOLS, true ) ) {
+	public static function check_sub_request( $request ) {
+		$method = method_exists( $request, 'get_method' ) ? strtoupper( (string) $request->get_method() ) : 'GET';
+		$route  = method_exists( $request, 'get_route' ) ? strtolower( untrailingslashit( (string) $request->get_route() ) ) : '';
+		$params = method_exists( $request, 'get_params' ) ? (array) $request->get_params() : array();
+		$write  = ! in_array( $method, array( 'GET', 'HEAD', 'OPTIONS' ), true );
+
+		if ( $write ) {
+			$draft = self::enforce_draft( 'wp_create_post', $params );
+			if ( is_wp_error( $draft ) ) {
+				return $draft;
+			}
+		}
+
+		// The post type this request reads or writes.
+		$types = array();
+		if ( array_key_exists( 'post_type', $params ) ) {
+			$types[] = $params['post_type'];
+		}
+		if ( '/mcpwp/v1/search' === $route && array_key_exists( 'type', $params ) && 'any' !== $params['type'] ) {
+			$types[] = $params['type'];
+		}
+		if ( $write && empty( $types ) ) {
+			if ( '/mcpwp/v1/posts' === $route ) {
+				$types[] = 'post';
+			} elseif ( '/mcpwp/v1/pages' === $route ) {
+				$types[] = 'page';
+			}
+		}
+
+		$write_type = '';
+		foreach ( $types as $type ) {
+			if ( ! is_string( $type ) ) {
+				return self::refusal( 'webmcp_post_type_forbidden', __( 'post_type must be a single post type name.', 'mcpwp' ) );
+			}
+			$object = function_exists( 'get_post_type_object' ) ? get_post_type_object( sanitize_key( $type ) ) : null;
+			$cap    = null;
+			if ( $object && isset( $object->cap ) ) {
+				$cap = $write
+					? ( isset( $object->cap->create_posts ) ? $object->cap->create_posts : null )
+					: ( isset( $object->cap->edit_posts ) ? $object->cap->edit_posts : null );
+			}
+			if ( null === $cap || ! current_user_can( $cap ) ) {
+				return self::refusal( 'webmcp_post_type_forbidden', __( 'Your WordPress role cannot work with this type of content.', 'mcpwp' ) );
+			}
+			$write_type = sanitize_key( $type );
+		}
+
+		if ( ! $write ) {
 			return true;
 		}
 
-		$post_type = 'wp_create_page' === $tool_name ? 'page' : 'post';
-		if ( 'wp_create_post' === $tool_name && isset( $arguments['post_type'] ) ) {
-			if ( ! is_string( $arguments['post_type'] ) ) {
-				return new WP_Error( 'invalid_arguments', __( 'post_type must be a string.', 'mcpwp' ), array( 'status' => 400 ) );
+		// Taxonomy terms.
+		$taxonomies = array();
+		if ( isset( $params['terms'] ) && is_array( $params['terms'] ) ) {
+			foreach ( array_keys( $params['terms'] ) as $taxonomy ) {
+				$taxonomies[ sanitize_key( (string) $taxonomy ) ] = true;
 			}
-			$post_type = sanitize_key( $arguments['post_type'] );
+		}
+		if ( ! empty( $params['categories'] ) ) {
+			$taxonomies['category'] = true;
+		}
+		if ( ! empty( $params['tags'] ) ) {
+			$taxonomies['post_tag'] = true;
+		}
+		foreach ( array_keys( $taxonomies ) as $taxonomy ) {
+			$tax_object = function_exists( 'get_taxonomy' ) ? get_taxonomy( $taxonomy ) : false;
+			if ( ! $tax_object ) {
+				continue; // Unknown taxonomy: the handler refuses it by name.
+			}
+			if ( ! current_user_can( $tax_object->cap->assign_terms ) ) {
+				return self::refusal(
+					'webmcp_terms_forbidden',
+					/* translators: %s: taxonomy */
+					sprintf( __( 'Your WordPress role cannot assign "%s" terms.', 'mcpwp' ), $taxonomy )
+				);
+			}
+		}
+		// wp_set_post_tags() creates a tag it does not find by name.
+		if ( ! empty( $params['tags'] ) && function_exists( 'get_taxonomy' ) && get_taxonomy( 'post_tag' ) ) {
+			foreach ( (array) $params['tags'] as $tag ) {
+				if ( is_scalar( $tag ) && ! term_exists( (string) $tag, 'post_tag' ) && ! current_user_can( get_taxonomy( 'post_tag' )->cap->edit_terms ) ) {
+					return self::refusal( 'webmcp_terms_forbidden', __( 'Your WordPress role cannot create new tags.', 'mcpwp' ) );
+				}
+			}
 		}
 
-		$object = function_exists( 'get_post_type_object' ) ? get_post_type_object( $post_type ) : null;
-		$cap    = ( $object && isset( $object->cap->create_posts ) ) ? $object->cap->create_posts : null;
-		if ( null === $cap || ! current_user_can( $cap ) ) {
-			return new WP_Error(
-				'webmcp_post_type_forbidden',
-				__( 'Your WordPress role cannot create this type of content.', 'mcpwp' ),
-				array( 'status' => 403 )
-			);
+		// Registered meta.
+		if ( isset( $params['meta'] ) && is_array( $params['meta'] ) ) {
+			foreach ( array_keys( $params['meta'] ) as $key ) {
+				if ( ! self::meta_key_allowed( (string) $key, '' !== $write_type ? $write_type : 'post' ) ) {
+					return self::refusal(
+						'webmcp_meta_forbidden',
+						/* translators: %s: meta key */
+						sprintf( __( 'Your WordPress role cannot set the "%s" field.', 'mcpwp' ), (string) $key )
+					);
+				}
+			}
 		}
 
 		return true;
+	}
+
+	/**
+	 * map_meta_cap()'s edit_post_meta rule for a post that does not exist
+	 * yet: allowed unless the key is protected, then whatever the key's
+	 * registered auth_callback (hooked on auth_post_meta_{key}_for_{type},
+	 * or auth_post_meta_{key}) says for this user.
+	 *
+	 * @param string $key       Meta key.
+	 * @param string $post_type Post type.
+	 * @return bool
+	 */
+	public static function meta_key_allowed( $key, $post_type ) {
+		$allowed = ! ( function_exists( 'is_protected_meta' ) && is_protected_meta( $key, 'post' ) );
+		$user_id = get_current_user_id();
+
+		$subtype_tag = "auth_post_meta_{$key}_for_{$post_type}";
+		$tag         = function_exists( 'has_filter' ) && has_filter( $subtype_tag ) ? $subtype_tag : "auth_post_meta_{$key}";
+
+		return (bool) apply_filters( $tag, $allowed, $key, 0, $user_id, 'edit_post_meta', array() );
+	}
+
+	/**
+	 * A 403 refusal.
+	 *
+	 * @param string $code    Code.
+	 * @param string $message Message.
+	 * @return WP_Error
+	 */
+	private static function refusal( $code, $message ) {
+		return new WP_Error( $code, $message, array( 'status' => 403 ) );
 	}
 
 	// ── The WebMCP-only propose tool ──────────────────────────────────────
@@ -455,6 +579,15 @@ class Mcpwp_WebMCP {
 		// this tool must not confirm the existence of a post the user
 		// cannot edit.
 		if ( ! $post || ! current_user_can( 'edit_post', $post_id ) ) {
+			return new WP_Error( 'not_found', __( 'Post not found.', 'mcpwp' ), array( 'status' => 404 ) );
+		}
+
+		// Same category limit as every other WebMCP read/write: a post type
+		// outside the principal's categories (a reusable block → gutenberg,
+		// an Elementor template → elementor-templates, a product →
+		// woocommerce) is not WebMCP's to propose edits for.
+		$category = class_exists( 'Mcpwp_REST_API' ) ? Mcpwp_REST_API::category_for_post_type( $post->post_type ) : '';
+		if ( ! in_array( $category, self::PRINCIPAL_CATEGORIES, true ) ) {
 			return new WP_Error( 'not_found', __( 'Post not found.', 'mcpwp' ), array( 'status' => 404 ) );
 		}
 

@@ -333,19 +333,6 @@ final class WebMcpTest extends TestCase {
 		$this->assertSame( array(), $GLOBALS['mcpwp_test_dispatched_routes'], 'Nothing was dispatched.' );
 	}
 
-	public function test_a_post_type_the_user_cannot_create_is_refused(): void {
-		$this->enable();
-		$GLOBALS['mcpwp_test_user_caps'][9] = array( 'edit_posts' => true, 'edit_others_posts' => true, 'edit_pages' => false );
-		$this->sign_in( 9 );
-		$controller = new Mcpwp_REST_WebMCP();
-
-		foreach ( array( array( 'post_type' => 'page' ), array( 'post_type' => 'no_such_type' ), array( 'post_type' => array( 'post' ) ) ) as $args ) {
-			$result = $controller->handle_call( $this->browser_request( array( 'name' => 'wp_create_post', 'arguments' => array_merge( array( 'title' => 'x' ), $args ) ) ) );
-			$this->assertInstanceOf( WP_Error::class, $result, wp_json_encode( $args ) );
-		}
-		$this->assertSame( array(), $GLOBALS['mcpwp_test_dispatched_routes'] );
-	}
-
 	public function test_draft_create_is_forced_to_draft_and_dispatched_through_mcp_under_the_lift(): void {
 		$this->enable();
 		$this->sign_in( self::EDITOR );

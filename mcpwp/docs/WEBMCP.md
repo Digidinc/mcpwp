@@ -52,8 +52,16 @@ checks run in this order:
 3. `Origin` (or, if that is missing, `Referer`) is not this site: 403.
 4. There is no valid WordPress login cookie: 401. Application Passwords do not count.
 5. The `wp_rest` nonce is missing or invalid: 403.
+
+WordPress core runs before step 4. If a request carries a nonce but no valid cookie, or a cookie
+with a bad nonce, core refuses it with 403 `rest_cookie_invalid_nonce`. So 401 means neither a
+valid cookie nor a nonce was sent; a valid cookie without a nonce gets 403.
 6. The user is not an Editor or above, or lacks the tool's capability: 403.
 7. The tool is not on the allowlist: 403.
+
+Refusals from steps 6 and 7 count against the user's rate limit before they are logged, so repeated
+refused calls cannot flood the activity log. An optional `request_id` in the body is forwarded as
+`_meta.request_id`: sending the same id again replays the stored result instead of writing twice.
 
 The call then goes through the same `/mcp` `tools/call` path as every MCP client. Rate limiting (per
 user, bucket `webmcp:user:<id>`), the spend budget, output schemas, analytics and idempotency all
@@ -65,6 +73,28 @@ with `source: webmcp` and the user id.
 The result is an MCP `CallToolResult` (`content`, `structuredContent` when the tool has an output
 schema, and `isError`). Refusals come back to the agent as `isError` results with the reason. Only a
 cancelled call rejects.
+
+## WordPress's own permissions still apply
+
+The call runs as the signed-in user, and MCPWP applies the WordPress checks its API-key model does
+not express. They run on the arguments the handler actually reads, after `postType` / `Post-Type`
+and similar spellings are normalised.
+
+- **Reading:** lists and searches return published content only. A single post is returned only if
+  `current_user_can( 'read_post', $id )` allows it, so private posts of a type whose
+  `read_private_*` capability the user lacks stay hidden, whatever their status. Listing a post type
+  needs that type's `edit_posts` capability.
+- **Creating:** needs the type's `create_posts` capability. Terms need the taxonomy's
+  `assign_terms` capability, and a new tag also needs `edit_terms`. Each meta key must pass the
+  `edit_post_meta` rule WordPress uses: it must not be protected, and its registered
+  `auth_callback` must allow the user. One failure refuses the whole call.
+- **Proposing:** the user must be able to edit the post, and its type must be in the principal's
+  categories (content, site or seo). Proposed content is limited to 256 KB. A requester can have at
+  most 20 pending content proposals, and the site at most 100; this applies to every requester, not
+  only WebMCP.
+
+The one tool that fetches a URL, `wp_get_rendered_html`, only fetches this site's own origin: same
+scheme, host and port as `home_url()` or `site_url()`, with no credentials in the URL.
 
 ## Prompt injection
 

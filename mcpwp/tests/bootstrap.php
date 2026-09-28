@@ -2870,8 +2870,14 @@ function get_post_type_object($post_type)
         'show_in_rest' => in_array((string) $post_type, (array) ($GLOBALS['mcpwp_test_show_in_rest_post_types'] ?? array()), true),
         // Core's default capability_type mapping for the two built-ins; a
         // test-registered type maps like 'post'. Read by WebMCP (#981).
-        'cap'          => (object) array(
-            'create_posts' => 'page' === (string) $post_type ? 'edit_pages' : 'edit_posts',
+        // A test may give a type its own capability_type via
+        // $GLOBALS['mcpwp_test_post_type_caps'][ $type ] = array( 'edit_posts' => …, 'create_posts' => … ).
+        'cap'          => (object) array_merge(
+            array(
+                'create_posts' => 'page' === (string) $post_type ? 'edit_pages' : 'edit_posts',
+                'edit_posts'   => 'page' === (string) $post_type ? 'edit_pages' : 'edit_posts',
+            ),
+            (array) ($GLOBALS['mcpwp_test_post_type_caps'][ (string) $post_type ] ?? array())
         ),
     );
 }
@@ -4035,6 +4041,31 @@ if (! function_exists('get_post_type')) {
     {
         $post = is_object($post) ? $post : get_post((int) $post);
         return $post ? $post->post_type : false;
+    }
+}
+if (! function_exists('get_taxonomy')) {
+    // Registered via $GLOBALS['_mcpwp_test_taxonomies'][ $tax ]; 'cap' in
+    // that entry overrides core's defaults (assign_terms edit_posts,
+    // edit_terms manage_categories). Read by WebMCP (#981).
+    function get_taxonomy($taxonomy)
+    {
+        $tax = $GLOBALS['_mcpwp_test_taxonomies'][ $taxonomy ] ?? null;
+        if (null === $tax) {
+            return false;
+        }
+        return (object) array(
+            'name' => $taxonomy,
+            'cap'  => (object) array_merge(
+                array( 'assign_terms' => 'edit_posts', 'edit_terms' => 'manage_categories' ),
+                (array) ($tax['cap'] ?? array())
+            ),
+        );
+    }
+}
+if (! function_exists('term_exists')) {
+    function term_exists($term, $taxonomy = '')
+    {
+        return in_array((string) $term, (array) ($GLOBALS['_mcpwp_test_existing_terms'][ $taxonomy ] ?? array()), true) ? array( 'term_id' => 1 ) : null;
     }
 }
 if (! function_exists('taxonomy_exists')) {

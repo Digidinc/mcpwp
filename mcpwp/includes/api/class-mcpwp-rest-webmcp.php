@@ -52,6 +52,13 @@ class Mcpwp_REST_WebMCP extends Mcpwp_REST_API {
 						'arguments' => array(
 							'type' => 'object',
 						),
+						// Optional idempotency key, forwarded as the /mcp
+						// tools/call params._meta.request_id: a re-send with
+						// the same id replays the stored result instead of
+						// writing twice (principal webmcp:user:<id>).
+						'request_id' => array(
+							'type' => 'string',
+						),
 					),
 				),
 			)
@@ -66,8 +73,14 @@ class Mcpwp_REST_WebMCP extends Mcpwp_REST_API {
 	 *  1. WebMCP switched off            → 404 (the route does not exist)
 	 *  2. a machine credential presented → 403
 	 *  3. cross-origin / no origin proof → 403
-	 *  4. no WordPress login cookie      → 401
+	 *  4. no valid WordPress login cookie → 401
 	 *  5. missing or invalid wp_rest nonce → 403
+	 *
+	 * WordPress core runs first: a request that carries an X-WP-Nonce but
+	 * no valid login cookie (or a cookie with a bad nonce) is refused by
+	 * core itself with 403 rest_cookie_invalid_nonce before this callback
+	 * runs. So 401 is the answer only for a request with neither a valid
+	 * cookie nor a nonce; a valid cookie without a nonce is a 403 here.
 	 *  6. user lacks the base capability → 403
 	 *
 	 * @param WP_REST_Request $request Request.
@@ -276,10 +289,15 @@ class Mcpwp_REST_WebMCP extends Mcpwp_REST_API {
 			return $this->refuse( $request, $arguments->get_error_code(), $arguments->get_error_message(), 403, $tool_name );
 		}
 
-		$post_type_check = Mcpwp_WebMCP::check_create_post_type( $tool_name, $arguments );
-		if ( is_wp_error( $post_type_check ) ) {
-			$data = $post_type_check->get_error_data();
-			return $this->refuse( $request, $post_type_check->get_error_code(), $post_type_check->get_error_message(), isset( $data['status'] ) ? (int) $data['status'] : 403, $tool_name );
+		$params = array(
+			'name'      => $tool_name,
+			'arguments' => empty( $arguments ) ? new stdClass() : $arguments,
+		);
+		$request_id = $request->get_param( 'request_id' );
+		if ( null !== $request_id ) {
+			// Validated by the /mcp idempotency layer, which answers a
+			// malformed id with its own error.
+			$params['_meta'] = array( 'request_id' => is_scalar( $request_id ) ? (string) $request_id : '' );
 		}
 
 		$internal = new WP_REST_Request( 'POST', '/mcpwp/v1/mcp' );
@@ -290,10 +308,7 @@ class Mcpwp_REST_WebMCP extends Mcpwp_REST_API {
 					'jsonrpc' => '2.0',
 					'id'      => 1,
 					'method'  => 'tools/call',
-					'params'  => array(
-						'name'      => $tool_name,
-						'arguments' => empty( $arguments ) ? new stdClass() : $arguments,
-					),
+					'params'  => $params,
 				)
 			)
 		);
@@ -314,7 +329,7 @@ class Mcpwp_REST_WebMCP extends Mcpwp_REST_API {
 			$code    = is_array( $data ) && isset( $data['code'] ) ? (string) $data['code'] : 'webmcp_call_failed';
 			$message = is_array( $data ) && isset( $data['message'] ) ? (string) $data['message'] : __( 'The tool call was refused.', 'mcpwp' );
 			$extra   = is_array( $data ) && isset( $data['data'] ) && is_array( $data['data'] ) ? $data['data'] : array();
-			return $this->refuse( $request, $code, $message, $status, $tool_name, $extra );
+			return $this->refuse( $request, $code, $message, $status, $tool_name, $extra, true );
 		}
 
 		$result = $this->to_call_tool_result( $data );
@@ -370,9 +385,22 @@ class Mcpwp_REST_WebMCP extends Mcpwp_REST_API {
 	 * @param int             $status    HTTP status.
 	 * @param string          $tool_name Tool.
 	 * @param array           $extra     Extra error data.
+	 * @param bool            $already_metered Whether /mcp already charged this call.
 	 * @return WP_Error
 	 */
-	private function refuse( $request, $code, $message, $status, $tool_name, array $extra = array() ) {
+	private function refuse( $request, $code, $message, $status, $tool_name, array $extra = array(), $already_metered = false ) {
+		// A refusal the endpoint decides itself (not allowlisted, capability,
+		// draft-only) never reaches /mcp, where calls are metered — charge it
+		// here, BEFORE writing the activity-log row, so refused calls cannot
+		// be used to flood the log without limit. A refusal that came back
+		// from /mcp (rate limit, scope) was already charged there.
+		if ( ! $already_metered ) {
+			$user_id = get_current_user_id();
+			$limited = $this->check_rate_limit( 'webmcp:user:' . $user_id, 'POST', Mcpwp_WebMCP::principal_record( $user_id ) );
+			if ( is_wp_error( $limited ) ) {
+				return $limited;
+			}
+		}
 		$this->log_webmcp_call( $request, $tool_name, get_current_user_id(), array( 'error' => $code ), $status );
 		return new WP_Error( $code, $message, array_merge( $extra, array( 'status' => (int) $status ) ) );
 	}
