@@ -441,7 +441,7 @@ class Mcpwp_Destructive_Gate {
 				$operation,
 				$approval['id']
 			),
-			'hint'              => 'Approval is the default for operations with no undo: any delete that is permanent — force=true, or force=false on a type WordPress does not trash (media, blocks, templates, custom types) — and purging all drafts. A call that trashes a post or page is not gated. Exemptions (a key\'s allow_destructive, the site switch) are set by an administrator in wp-admin, not through the API.',
+			'hint'              => 'Approval is the default for operations with no undo: any delete that is permanent — force=true, or force=false on a type this plugin does not trash on its own (media without MEDIA_TRASH enabled; Elementor templates and Custom Code snippets) — and purging all drafts. A non-forced delete of anything else (a post, a page, a WooCommerce product, a block, any other custom type) trashes it instead and is not gated. Exemptions (a key\'s allow_destructive, the site switch) are set by an administrator in wp-admin, not through the API.',
 		);
 	}
 
@@ -781,13 +781,38 @@ class Mcpwp_Destructive_Gate {
 		$data   = method_exists( $response, 'get_data' ) ? $response->get_data() : null;
 
 		if ( $status >= 400 ) {
+			$message = sprintf(
+				/* translators: %d: HTTP status */
+				__( 'The approved operation failed when applied (HTTP %d).', 'mcpwp' ),
+				$status
+			);
+
+			// #1022 round-2 review NIT: name the disabled category to the
+			// wp-admin PRINCIPAL APPLYING this, rather than leaving them
+			// with a bare HTTP status. This is not the existence-oracle
+			// concern a scoped key's own denial must avoid — the applier is
+			// a trusted reviewer looking at a KNOWN target (the approval
+			// record already named its resolved post_type when it was
+			// queued; see fingerprint()), so telling them WHY a 403/404
+			// happened discloses nothing they could not already see on the
+			// record they are reviewing.
+			$resource_type = isset( $context['resource_type'] ) ? (string) $context['resource_type'] : '';
+			if ( '' !== $resource_type && in_array( $status, array( 403, 404 ), true ) && class_exists( 'Mcpwp_REST_API' ) ) {
+				$category = Mcpwp_REST_API::category_for_post_type( $resource_type );
+				$disabled = get_option( 'mcpwp_disabled_tool_categories', array() );
+				if ( is_array( $disabled ) && in_array( $category, $disabled, true ) ) {
+					$message = sprintf(
+						/* translators: 1: tool category, 2: HTTP status */
+						__( 'The approved operation could not be applied: the "%1$s" tool category is currently disabled by the site administrator (HTTP %2$d). Re-enable it in WP Admin > mcpwp > Tools, then apply again.', 'mcpwp' ),
+						$category,
+						$status
+					);
+				}
+			}
+
 			return new WP_Error(
 				'destructive_replay_failed',
-				sprintf(
-					/* translators: %d: HTTP status */
-					__( 'The approved operation failed when applied (HTTP %d).', 'mcpwp' ),
-					$status
-				),
+				$message,
 				array(
 					'status'   => $status,
 					'response' => $data,

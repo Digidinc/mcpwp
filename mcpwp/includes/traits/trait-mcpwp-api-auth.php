@@ -190,13 +190,23 @@ trait Mcpwp_Api_Auth {
 	 * caller names the post type up front) rather than calling either
 	 * directly, so the "which gate shape" decision lives in one place too.
 	 *
+	 * Static (uses no instance state) so Mcpwp_Destructive_Gate::replay()
+	 * — a plain static class with no REST/auth context — can also call it
+	 * (as Mcpwp_REST_API::category_for_post_type(), since a trait's static
+	 * method is only reachable through a composing class) to name a
+	 * disabled category to the wp-admin principal applying a queued
+	 * destructive operation (#1022 round-2 review NIT), rather than every
+	 * existing `$this->category_for_post_type(...)` call site needing to
+	 * change — PHP resolves a static method called via `->` exactly like
+	 * `::`.
+	 *
 	 * @param string $post_type Resolved post's post_type (or a caller-named
 	 *                           one for a list-style door).
 	 * @return string Category slug. Falls back to 'admin' for a private,
 	 *                unmapped type — see the fallback comment below for why
 	 *                that is the safe default rather than 'content'.
 	 */
-	protected function category_for_post_type( $post_type ) {
+	public static function category_for_post_type( $post_type ) {
 		$post_type = (string) $post_type;
 
 		// Ordered, explicit map for every type a domain plugin this codebase

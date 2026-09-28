@@ -726,7 +726,33 @@ class Mcpwp_Posts {
 	 * @param bool $force   Force delete (skip trash).
 	 * @return array|WP_Error Success or error.
 	 */
-	public function delete_post( $post_id, $force = false ) {
+	/**
+	 * Resolve a post for deletion: existence, type (blocked types refused),
+	 * and — via validate_post_type()'s injected category check — tool
+	 * category, all in ONE place and ONE error shape.
+	 *
+	 * #1022 round-2 adversarial review, BLOCK-R2-1: Mcpwp_REST_Posts::
+	 * delete_post() used to run its OWN, separate existence check ONLY when
+	 * the destructive-approval gate happened to be engaged
+	 * (Mcpwp_Destructive_Gate::should_gate()), before ever deciding whether
+	 * to defer to approval — a check that knew nothing about category. A
+	 * category-denied but otherwise-writable type (an Elementor template,
+	 * or literally anything with force=true, which is always "permanent")
+	 * sailed past that pre-check and straight into defer_destructive(),
+	 * queuing an approval request an admin could later apply — completing a
+	 * delete the calling key was never authorized for in the first place.
+	 * Making the REST handler call THIS method first, unconditionally,
+	 * before any destructive-gate decision, closes that: the same
+	 * existence+category check now always runs before an approval can even
+	 * be considered, and produces the exact same error whether called from
+	 * there or from delete_post() below — they cannot disagree because it
+	 * is the same call.
+	 *
+	 * @param int $post_id Post ID.
+	 * @return WP_Post|WP_Error The resolved post, or the not-found error
+	 *                           delete_post() has always returned for this case.
+	 */
+	public function resolve_deletable_post( $post_id ) {
 		$post = get_post( absint( $post_id ) );
 
 		if ( ! $post || 'page' === $post->post_type || is_wp_error( $this->validate_post_type( $post->post_type ) ) ) {
@@ -741,6 +767,16 @@ class Mcpwp_Posts {
 					),
 				)
 			);
+		}
+
+		return $post;
+	}
+
+	public function delete_post( $post_id, $force = false ) {
+		$post = $this->resolve_deletable_post( $post_id );
+
+		if ( is_wp_error( $post ) ) {
+			return $post;
 		}
 
 		// #1023 (round-1 adversarial review of #1020/#1022): wp_delete_post()

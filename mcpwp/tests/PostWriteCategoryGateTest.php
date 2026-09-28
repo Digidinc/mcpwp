@@ -45,6 +45,7 @@ use PHPUnit\Framework\TestCase;
 require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-posts.php';
 require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-mcp.php';
 require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-batch.php';
+require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-approvals.php';
 
 final class PostWriteCategoryGateTest extends TestCase {
 
@@ -436,17 +437,100 @@ final class PostWriteCategoryGateTest extends TestCase {
 		$this->assert_wp_error_bodies_identical( $denied_response, $missing_response, 'A category-denied product and a genuinely missing id must answer with the exact same body on PUT /posts/{id}.' );
 	}
 
-	// DELETE /posts/{id} has NO equivalent byte-identical test here.
-	// Mcpwp_REST_Posts::delete_post() has its OWN, EARLIER "does this id
-	// exist" check (ahead of the destructive-approval decision) that is
-	// entirely separate from Mcpwp_Posts::delete_post()'s internal
-	// existence+category check this fix extends — a genuinely missing id
-	// is always caught by that earlier check and never reaches the code
-	// this fix touches at all, so there is no shared condition for a
-	// category denial to piggyback on the way there is for get_post(),
-	// update_post(), and set_featured_image() above. Whether that earlier
-	// check's own wording already matches Mcpwp_Posts::delete_post()'s is a
-	// PRE-EXISTING question this fix did not create and WARN-1 did not name
-	// (it named only GET /posts/{id} and POST /posts/{id}/featured-image) —
-	// noted as a follow-up rather than fixed here.
+	// #1022 round-2 adversarial review, BLOCK-R2-1: DELETE /posts/{id} used
+	// to run its OWN, EARLIER "does this id exist" check (ahead of the
+	// destructive-approval decision), entirely separate from
+	// Mcpwp_Posts::delete_post()'s internal existence+category check — so a
+	// category-denied but otherwise-writable id (an Elementor template, or
+	// literally anything with force=true, which is always "permanent")
+	// sailed past that pre-check and straight into defer_destructive(),
+	// QUEUING AN APPROVAL an admin could later apply and complete, for a
+	// delete the calling key was never authorized for. Fixed by calling
+	// Mcpwp_Posts::resolve_deletable_post() first, unconditionally, before
+	// any destructive-gate decision — the tests below are its regression
+	// coverage, replacing the "no equivalent test" note this file used to
+	// carry for DELETE specifically.
+
+	public function test_delete_post_denial_is_now_byte_identical_to_a_missing_post(): void {
+		$c          = $this->controller();
+		$restricted = $this->scoped_key( $c, array( 'content' ) );
+		$missing_id = self::PRODUCT_ID + 5000;
+
+		$denied_request  = $this->authed_request( $c, $restricted['key'], 'DELETE', '/mcpwp/v1/posts/' . self::PRODUCT_ID, array( 'id' => self::PRODUCT_ID ) );
+		$denied_response  = $c->delete_post( $denied_request );
+
+		$c2               = $this->controller();
+		$unrestricted     = $this->scoped_key( $c2, array( 'content', 'woocommerce' ) );
+		$missing_request  = $this->authed_request( $c2, $unrestricted['key'], 'DELETE', '/mcpwp/v1/posts/' . $missing_id, array( 'id' => $missing_id ) );
+		$missing_response = $c2->delete_post( $missing_request );
+
+		$this->assert_wp_error_bodies_identical( $denied_response, $missing_response, 'BLOCK-R2-1: a category-denied product and a genuinely missing id must answer with the exact same body on DELETE /posts/{id}.' );
+	}
+
+	public function test_delete_post_denial_is_identical_for_force_true_too(): void {
+		// force=true makes delete_is_permanent() unconditionally true — the
+		// exact condition that used to let a category-denied id skip
+		// straight to defer_destructive() without ever being checked.
+		$c          = $this->controller();
+		$restricted = $this->scoped_key( $c, array( 'content' ) );
+
+		$request = $this->authed_request( $c, $restricted['key'], 'DELETE', '/mcpwp/v1/posts/' . self::PRODUCT_ID, array( 'id' => self::PRODUCT_ID, 'force' => true ) );
+		$this->assert_not_found( $c->delete_post( $request ), 'force=true must not bypass the category check.' );
+		$this->assertArrayHasKey( self::PRODUCT_ID, $GLOBALS['_mcpwp_test_posts'], 'The product must still exist.' );
+	}
+
+	public function test_delete_post_denial_of_an_elementor_template_is_not_found_not_deferred(): void {
+		// The template is the review's second live example: delete_is_permanent()
+		// is unconditionally true for elementor_library, which used to mean
+		// an automatic defer_destructive() with no category check at all.
+		$c          = $this->controller();
+		$restricted = $this->scoped_key( $c, array( 'content' ) );
+
+		$request = $this->authed_request( $c, $restricted['key'], 'DELETE', '/mcpwp/v1/posts/' . self::ARCHETYPE_ID, array( 'id' => self::ARCHETYPE_ID ) );
+		$this->assert_not_found( $c->delete_post( $request ), 'A content-only key must not be able to queue a template delete for approval either.' );
+		$this->assertArrayHasKey( self::ARCHETYPE_ID, $GLOBALS['_mcpwp_test_posts'] );
+	}
+
+	public function test_delete_post_denial_never_queues_an_approval_request(): void {
+		$c          = $this->controller();
+		$restricted = $this->scoped_key( $c, array( 'content' ) );
+
+		$product_request  = $this->authed_request( $c, $restricted['key'], 'DELETE', '/mcpwp/v1/posts/' . self::PRODUCT_ID, array( 'id' => self::PRODUCT_ID, 'force' => true ) );
+		$c->delete_post( $product_request );
+
+		$template_request = $this->authed_request( $c, $restricted['key'], 'DELETE', '/mcpwp/v1/posts/' . self::ARCHETYPE_ID, array( 'id' => self::ARCHETYPE_ID ) );
+		$c->delete_post( $template_request );
+
+		$this->assertCount( 0, Mcpwp_Approvals::list_requests( 'pending', 50, true ), 'A category-denied delete must never reach the point of being queued, whatever force is set to.' );
+	}
+
+	public function test_delete_post_denial_holds_with_the_destructive_gate_switched_off(): void {
+		// Belt-and-braces: the fix calls resolve_deletable_post()
+		// unconditionally, before should_gate() is even consulted, so the
+		// site-wide approval switch being off must not matter either.
+		update_option( 'mcpwp_settings', array( 'destructive_requires_approval' => false ) );
+
+		$c          = $this->controller();
+		$restricted = $this->scoped_key( $c, array( 'content' ) );
+		$request    = $this->authed_request( $c, $restricted['key'], 'DELETE', '/mcpwp/v1/posts/' . self::PRODUCT_ID, array( 'id' => self::PRODUCT_ID, 'force' => true ) );
+
+		$this->assert_not_found( $c->delete_post( $request ) );
+		$this->assertArrayHasKey( self::PRODUCT_ID, $GLOBALS['_mcpwp_test_posts'] );
+	}
+
+	// ── NIT: the deferred approval title now names the post type ────────
+
+	public function test_deferred_delete_title_names_the_post_type(): void {
+		$c       = $this->controller();
+		$created = $this->scoped_key( $c, array( 'content', 'woocommerce' ) );
+		$request = $this->authed_request( $c, $created['key'], 'DELETE', '/mcpwp/v1/posts/' . self::PRODUCT_ID, array( 'id' => self::PRODUCT_ID, 'force' => true ) );
+
+		$resp = $c->delete_post( $request );
+		$this->assertInstanceOf( WP_REST_Response::class, $resp );
+		$this->assertSame( 202, $resp->get_status() );
+
+		$pending = Mcpwp_Approvals::list_requests( 'pending', 50, true );
+		$this->assertCount( 1, $pending );
+		$this->assertSame( 'Permanently delete product #' . self::PRODUCT_ID, $pending[0]['title'] ?? null, 'The queued approval must name the post TYPE, not just "post".' );
+	}
 }

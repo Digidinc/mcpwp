@@ -376,20 +376,34 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 		$post_id = absint( $request->get_param( 'id' ) );
 		$force   = rest_sanitize_boolean( $request->get_param( 'force' ) );
 
-		// A permanent delete has no undo: approval by default (#536). Only for
-		// a post that exists — a deferral is not a way to manufacture records.
-		// Permanent is decided by the TYPE, not the flag alone: WordPress
-		// trashes only post and page (#536 round 5).
-		if ( Mcpwp_Destructive_Gate::should_gate( $this->get_current_api_key_record() ) ) {
-			$post = get_post( $post_id );
-			// The same type test the core method applies, so a type it would
-			// refuse is refused here and never queued (#536 round 8).
-			if ( ! $post || 'page' === $post->post_type || Mcpwp_Posts::is_blocked_post_type( $post->post_type ) || ( method_exists( 'Mcpwp_Posts', 'is_writable_post_type' ) && ! Mcpwp_Posts::is_writable_post_type( $post->post_type ) ) ) {
-				return $this->error_response( 'not_found', __( 'Post not found.', 'mcpwp' ), 404, array( 'id' => $post_id ) );
-			}
+		// #1022 round-2 adversarial review, BLOCK-R2-1: resolve — existence,
+		// type, AND category — unconditionally, first, before any
+		// destructive-gate decision. The two checks this replaced ran the
+		// existence/type test only when should_gate() happened to be true,
+		// and never checked category at all before deciding whether to
+		// defer to approval — so a category-denied but otherwise-writable
+		// type (an Elementor template, or literally anything with
+		// force=true, which is always "permanent") sailed past that
+		// pre-check and straight into defer_destructive(), queuing an
+		// approval request an admin could later apply and complete, for a
+		// delete the calling key was never authorized for. This call is the
+		// SAME method Mcpwp_Posts::delete_post() calls internally, so a
+		// category denial here and a genuinely missing id produce byte-
+		// identical bodies, and neither the destructive gate nor its
+		// should_gate()/off-switch state can ever see this post before the
+		// category check has already run.
+		$post = $this->posts->resolve_deletable_post( $post_id );
+		if ( is_wp_error( $post ) ) {
+			return $post;
 		}
-		if ( isset( $post ) && $post && Mcpwp_Destructive_Gate::delete_is_permanent( $post->post_type, $force, (string) $post->post_status ) && Mcpwp_Destructive_Gate::should_gate( $this->get_current_api_key_record() ) ) {
-			return $this->defer_destructive( 'delete_post', $request, array( 'type' => (string) $post->post_type, 'id' => $post_id, 'title' => (string) $post->post_title ), sprintf( 'Permanently delete post #%d', $post_id ) );
+
+		// A permanent delete has no undo: approval by default (#536).
+		// Permanent is decided by the TYPE, not the flag alone: WordPress
+		// trashes only post and page on its own (#536 round 5; #1023
+		// generalized this to every non-attachment/elementor_library/
+		// elementor_snippet type, via Mcpwp_Destructive_Gate::delete_is_permanent()).
+		if ( Mcpwp_Destructive_Gate::delete_is_permanent( $post->post_type, $force, (string) $post->post_status ) && Mcpwp_Destructive_Gate::should_gate( $this->get_current_api_key_record() ) ) {
+			return $this->defer_destructive( 'delete_post', $request, array( 'type' => (string) $post->post_type, 'id' => $post_id, 'title' => (string) $post->post_title ), sprintf( 'Permanently delete %s #%d', $post->post_type, $post_id ) );
 		}
 
 		$result = $this->posts->delete_post( $post_id, $force );

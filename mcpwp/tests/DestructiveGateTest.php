@@ -1083,4 +1083,83 @@ final class DestructiveGateTest extends TestCase {
 		$this->assertGreaterThan( 10, $seen, 'Premise: the controllers were read.' );
 		$this->assertArrayHasKey( 'class-mcpwp-rest-users.php', array_flip( array_map( 'basename', $files ) ) );
 	}
+
+	// ── #1022 round-2 review NIT: the defer hint no longer claims custom ───
+	// types/blocks are excluded from trashing (they aren't, since #1023).
+
+	public function test_defer_hint_does_not_claim_custom_types_or_blocks_are_not_trashed(): void {
+		require_once dirname( __DIR__ ) . '/includes/pro/api/class-mcpwp-rest-elementor-pro.php';
+		$this->seed( 70, 'elementor_library' );
+		$never = new class() { public $calls = 0; public function __call( $n, $a ) { $this->calls++; return true; } };
+		$ctl   = ( new ReflectionClass( Mcpwp_REST_Elementor_Pro::class ) )->newInstanceWithoutConstructor();
+		$prop  = new ReflectionProperty( Mcpwp_REST_Elementor_Pro::class, 'elementor_pro' );
+		$prop->setAccessible( true );
+		$prop->setValue( $ctl, $never );
+		$request  = new WP_REST_Request( 'DELETE', '/mcpwp/v1/elementor/templates/70', array( 'id' => 70, 'force' => true ) );
+		$hint     = $this->authed( $ctl, $request )->delete_template( $request )->get_data()['hint'] ?? '';
+
+		$this->assertStringNotContainsString( 'custom types)', $hint, 'The hint must not lump every custom type in with the types that are never trashed — #1023 made most of them trash-eligible.' );
+		$this->assertStringContainsString( 'a WooCommerce product, a block, any other custom type', $hint, 'The hint must correctly say these ARE trashed, not gated.' );
+	}
+
+	// ── #1022 round-2 review NIT: name the disabled category on replay ────
+
+	public function test_replay_failure_names_the_disabled_category_to_the_applying_admin(): void {
+		update_option( 'mcpwp_disabled_tool_categories', array( 'woocommerce' ) );
+
+		add_filter(
+			'rest_dispatch_request',
+			function ( $result, $request, $route ) {
+				if ( '/mcpwp/v1/posts/13' !== (string) $route ) {
+					return $result;
+				}
+				return new WP_REST_Response(
+					array( 'code' => 'not_found', 'message' => 'Post not found.', 'data' => array( 'status' => 404 ) ),
+					404
+				);
+			},
+			10,
+			3
+		);
+
+		$result = Mcpwp_Destructive_Gate::replay(
+			array( 'route' => '/mcpwp/v1/posts/13', 'method' => 'DELETE', 'params' => array( 'id' => 13 ), 'target' => array() ),
+			array( 'admin_user' => 7, 'resource_type' => 'product' ),
+			'delete_post'
+		);
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'destructive_replay_failed', $result->get_error_code() );
+		$this->assertStringContainsString( 'woocommerce', $result->get_error_message(), 'A bare "HTTP 404" leaves the admin with no way to tell a disabled category apart from any other failure.' );
+		$this->assertStringContainsString( 'disabled by the site administrator', $result->get_error_message() );
+	}
+
+	public function test_replay_failure_stays_generic_when_the_category_is_not_the_cause(): void {
+		// Same 404, but the category is NOT disabled — the failure must not
+		// falsely blame a category toggle that was fine.
+		add_filter(
+			'rest_dispatch_request',
+			function ( $result, $request, $route ) {
+				if ( '/mcpwp/v1/posts/13' !== (string) $route ) {
+					return $result;
+				}
+				return new WP_REST_Response(
+					array( 'code' => 'not_found', 'message' => 'Post not found.', 'data' => array( 'status' => 404 ) ),
+					404
+				);
+			},
+			10,
+			3
+		);
+
+		$result = Mcpwp_Destructive_Gate::replay(
+			array( 'route' => '/mcpwp/v1/posts/13', 'method' => 'DELETE', 'params' => array( 'id' => 13 ), 'target' => array() ),
+			array( 'admin_user' => 7, 'resource_type' => 'product' ),
+			'delete_post'
+		);
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertStringNotContainsString( 'disabled by the site administrator', $result->get_error_message() );
+		$this->assertStringContainsString( 'HTTP 404', $result->get_error_message() );
+	}
 }
