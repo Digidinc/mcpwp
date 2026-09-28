@@ -6,7 +6,7 @@ Requires at least: 6.1
 Tested up to: 7.0
 Requires PHP: 7.4
 <!-- x-release-please-start-version -->
-Stable tag: 3.14.5
+Stable tag: 3.14.6
 <!-- x-release-please-end -->
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -156,6 +156,10 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 4. Integrations and Chat — connected services plus safety-first agent workflow
 
 == Changelog ==
+
+= 3.14.6 =
+* fix: **auth,mcp:** not-found parity for guard_non_public_post() and mcpwp:// scheme matching ([#1028](https://github.com/Mumega-com/mcpwp/issues/1028))
+* fix: **auth:** gate approvals/events/site-state by target category, not route ([#1029](https://github.com/Mumega-com/mcpwp/issues/1029))
 
 = 3.14.5 =
 * fix: **auth:** gate post-meta/content/fetch/posts by resolved post type, not route ([#1022](https://github.com/Mumega-com/mcpwp/issues/1022))
