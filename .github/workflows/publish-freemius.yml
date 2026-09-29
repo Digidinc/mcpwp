@@ -37,6 +37,15 @@ jobs:
         with:
           ref: v${{ inputs.version }}
 
+      # Plugin code comes from the tag; release tooling comes from main, so a
+      # fix to the publish scripts reaches an older tag (3.14.8's own
+      # release_freemius.sh still packaged uninstall.php, which Freemius rejects).
+      - name: Use release scripts from main
+        run: |
+          git fetch --depth=1 origin main
+          git checkout FETCH_HEAD -- scripts/
+          git log -1 --format='release scripts from main @ %h' FETCH_HEAD
+
       - name: Publish to Freemius
         env:
           FREEMIUS_BEARER_TOKEN: ${{ secrets.FREEMIUS_BEARER_TOKEN }}
