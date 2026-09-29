@@ -27,13 +27,13 @@ Save it to a file and point the subagent at the file. Don't paste long history i
 ```markdown
 # Brief: #[N] [issue title]
 
-Read GitHub issue #[N] fully first: `env -u GITHUB_TOKEN gh issue view [N] --repo Mumega-com/mcpwp --comments`.
+Read GitHub issue #[N] fully first: `env -u GITHUB_TOKEN gh issue view [N] --repo Digidinc/mcpwp --comments`.
 If that fails with a "Projects (classic)" GraphQL error, use
-`env -u GITHUB_TOKEN gh api repos/Mumega-com/mcpwp/issues/[N]` and `.../issues/[N]/comments`.
+`env -u GITHUB_TOKEN gh api repos/Digidinc/mcpwp/issues/[N]` and `.../issues/[N]/comments`.
 
 ## Pins (literal, non-negotiable)
 - Repo root: /mnt/HC_Volume_104325311/projects/sitepilotai/wp-ai-operator (git repo; GitHub
-  Mumega-com/mcpwp). The plugin is its mcpwp/ subdirectory. mcpwp/ alone is NOT a repo.
+  Digidinc/mcpwp). The plugin is its mcpwp/ subdirectory. mcpwp/ alone is NOT a repo.
 - Base: `cd /mnt/HC_Volume_104325311/projects/sitepilotai/wp-ai-operator && git fetch origin &&
   git worktree add ../wt-[N] -b [fix|feat]/[N]-[slug] origin/main`. Work ONLY in that worktree.
 - gh: always `env -u GITHUB_TOKEN gh ...`.

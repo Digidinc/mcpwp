@@ -28,7 +28,7 @@ def make_issue(number, title, body="", labels=None, created_at="2026-09-20T00:00
         "title": title,
         "body": body,
         "labels": [{"name": label} for label in (labels or [])],
-        "url": f"https://github.com/Mumega-com/mcpwp/issues/{number}",
+        "url": f"https://github.com/Digidinc/mcpwp/issues/{number}",
         "createdAt": created_at,
     }
 

@@ -34,7 +34,7 @@ from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
-DEFAULT_REPO = "Mumega-com/mcpwp"
+DEFAULT_REPO = "Digidinc/mcpwp"
 DEFAULT_OWNER = "Mumega-com"
 DEFAULT_PROJECT = "2"
 DEFAULT_STATE_FILE = Path.home() / ".cache" / "mcpwp-intake" / "state.json"

@@ -10,12 +10,11 @@ until its "Done when" line is true and verified.
   shipped: site graph, MCP protocol 2025-11-25, tool profiles and search, WebMCP in wp-admin,
   post-type and template gating for restricted keys, trustworthy approvals, and action-log
   filtering.
-- **The paid (Freemius) fleet is stuck.** No 3.14.x has reached it, including the #1023
-  product-delete data-loss fix. mcpwp.net itself runs 3.13.0. This is the top priority (§Phase 0).
+- **Freemius caught up on 2026-09-29:** 3.14.8 published and verified. mcpwp.net itself still
+  runs 3.13.0 until someone clicks Update in its wp-admin (0.3).
 - **Almost nobody uses it yet.** mcpwp.net had 41 visitors in the 30-day baseline, with 84%
   bounce. The engineering is ahead of distribution.
-- **GitHub Actions is down** (account billing). Everything runs locally until the owner fixes
-  billing.
+- **Repo moved to `Digidinc/mcpwp`** (2026-09-29). Actions runs again; Freemius has 3.14.8.
 
 ## Principles for this plan
 
@@ -33,11 +32,12 @@ until its "Done when" line is true and verified.
 
 | # | Work | Issue | Who | Status | Done when |
 |---|---|---|---|---|---|
-| 0.1 | Fix GitHub Actions billing | none | **Owner** | waiting | A workflow run starts (any job shows "in progress") |
-| 0.2 | Publish 3.14.8 to Freemius via `publish-freemius.yml` | #1045 | Agent | blocked on 0.1 | `verify_freemius_channel.sh --expect-version 3.14.8` passes |
-| 0.3 | Update mcpwp.net to 3.14.8 through Freemius | #1045 | Agent | blocked on 0.2 | mcpwp.net `wp_site_info` says 3.14.8 |
+| 0.1 | Fix GitHub Actions billing | none | Owner + agent | **done 2026-09-29:** repo moved to Digidinc (enterprise); workflows run | A workflow run starts |
+| 0.1b | Enterprise policy: allow GitHub Actions to create pull requests (Digidinc enterprise → Policies → Actions → Workflow permissions) | none | **Owner** | waiting | release-please workflow opens the Release PR by itself |
+| 0.2 | Publish 3.14.8 to Freemius via `publish-freemius.yml` | #1045 | Agent | **done 2026-09-29** (run 36636410466, verifier OK) | `verify_freemius_channel.sh --expect-version 3.14.8` passes |
+| 0.3 | Update mcpwp.net to 3.14.8 through Freemius | #1045 | Anyone with wp-admin: Plugins → Update now (the option API blocks agents from plugin/auto-update settings by design; no server shell) | waiting | mcpwp.net `wp_site_info` says 3.14.8 |
 | 0.4 | npm republish `@mcpwp.net/mcpwp` (npm has 3.0.1; source is 3.0.3) | #939 | **Owner** runs `npm publish` in `mcp-server/` (npm login is not on this server), or gives an automation token | waiting | `npm view @mcpwp.net/mcpwp version` = source version |
-| 0.5 | Digid's exact legal name and address, for Privacy & Terms | #1050 | **Owner** | waiting | Name given; agent updates page 118 |
+| 0.5 | Legal name on Privacy & Terms | #1050 | Agent | **done 2026-09-29:** "Digid Inc., a Canadian corporation" on page 118; footer "© 2026 Mumega · Digid Inc." (Mumega is a Digid product; keep the Mumega brand) | Page 118 live |
 
 If 0.1 isn't fixed within a day, ask the owner for the other route: run the Freemius publish
 once with their own token (`FREEMIUS_BEARER_TOKEN=… bash scripts/release_freemius.sh --version
@@ -50,7 +50,7 @@ PR, one builder. All of these are in GitHub milestone **3.14.9**.
 
 | # | Work | Issue | Review | Status | Done when |
 |---|---|---|---|---|---|
-| 1.1 | Approvals store moves from one serialized option to its own table (migration, lock-free claims, keep history). **Brief ready: [briefs/1042-approvals-table.md](briefs/1042-approvals-table.md), Opus builder** | #1042 | **adversarial** (write path + auth) | **in progress:** Opus builder dispatched 2026-09-29; branch `fix/1042-approvals-table`, worktree `../wt-1042`. Next: adversarial review of its PR | Migration runs on upgrade in the smoke test; approve/apply/rollback pass; no option writes remain |
+| 1.1 | Approvals store moves from one serialized option to its own table (migration, lock-free claims, keep history). **Brief ready: [briefs/1042-approvals-table.md](briefs/1042-approvals-table.md), Opus builder** | #1042 | **adversarial** (write path + auth) | **in review:** PR #1052 (suite green, smoke 15/15); adversarial review round 1 running. Follow-up #1053 | Migration runs on upgrade in the smoke test; approve/apply/rollback pass; no option writes remain |
 | 1.2 | `wp_create_post` with `post_type=page` answers "Post not found" after creating | #1039 | normal | todo | Test plus rig: creates and returns the page |
 | 1.3 | WooCommerce write tools (`wc_*`) not recorded in the action log | #1037 | normal | todo | Every `wc_*` write appears in `/action-log` |
 | 1.4 | Woo `image_id` / `gallery_image_ids` gating and graph aggregate counts | #1034 | **adversarial** | todo | Gated key can't attach a hidden attachment; counts exclude hidden nodes |
@@ -147,9 +147,9 @@ Order: #944 provider capability registry → #945 PostHog visitor signals → #9
 
 | Item | Why only the owner |
 |---|---|
-| GitHub billing (0.1) | Payment method |
+| Enterprise policy: let Actions create PRs (0.1b) | Enterprise admin setting |
+| Click Update on mcpwp.net's wp-admin Plugins page (0.3) | wp-admin login |
 | npm publish (0.4) | npm account; not logged in on this server |
-| Digid legal name and address (0.5) | Legal fact |
 | Freemius seller entity set to Digid | Freemius dashboard account |
 | Chrome origin-trial token (3.6) | Google account sign-in |
 | Directory accounts (3.3) | Third-party sign-ins |

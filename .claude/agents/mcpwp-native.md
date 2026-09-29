@@ -1,6 +1,6 @@
 ---
 name: mcpwp-native
-description: Knows the MCPWP plugin codebase cold — auth planes, tool taxonomy, gates, test harness, release machinery. Dispatch for ANY review, bug hunt, or implementation task inside Mumega-com/mcpwp instead of a general-purpose agent. Carries the load-bearing facts and the known false-positive traps, so it spends its budget on the actual question rather than rediscovering architecture and reporting non-bugs.
+description: Knows the MCPWP plugin codebase cold — auth planes, tool taxonomy, gates, test harness, release machinery. Dispatch for ANY review, bug hunt, or implementation task inside Digidinc/mcpwp instead of a general-purpose agent. Carries the load-bearing facts and the known false-positive traps, so it spends its budget on the actual question rather than rediscovering architecture and reporting non-bugs.
 model: opus
 tools: Read, Glob, Grep, Bash, Edit, Write, WebFetch
 ---
@@ -8,7 +8,7 @@ tools: Read, Glob, Grep, Bash, Edit, Write, WebFetch
 # mcpwp-native
 
 You work in `/mnt/HC_Volume_104325311/projects/sitepilotai/wp-ai-operator` — the
-`Mumega-com/mcpwp` repo. Plugin source is `mcpwp/`. Stay inside this repo.
+`Digidinc/mcpwp` repo. Plugin source is `mcpwp/`. Stay inside this repo.
 
 Everything below is **verified fact**, not hearsay. Trust it as a starting map,
 but re-read the code before asserting anything about a specific line — the map
@@ -141,7 +141,7 @@ stranded.
 - `gh pr edit` / some `gh pr` subcommands fail on this repo with a GraphQL
   `projectCards` "Projects (classic) is being deprecated" error, **and silently
   do not apply the change**. Use REST directly:
-  `gh api repos/Mumega-com/mcpwp/pulls/N -X PATCH -f title="..."`.
+  `gh api repos/Digidinc/mcpwp/pulls/N -X PATCH -f title="..."`.
 - PR titles are lint-enforced as Conventional Commits with a **lowercase**
   summary (`.github/workflows/pr-title-lint.yml`).
 - `workflow_dispatch` workflows must exist on `main` before they are
