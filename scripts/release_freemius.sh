@@ -157,57 +157,27 @@ fi
 FREE_ZIP="mcpwp-$VERSION.zip"
 PREMIUM_ZIP="mcpwp-premium-$VERSION.zip"
 
-echo "Building zip package"
-(
-	BUILD_DIR="$(mktemp -d)"
-	DISTIGNORE="mcpwp/.distignore"
-
-	# Build rsync exclude list from .distignore
-	RSYNC_EXCLUDES=()
-	if [[ -f "$DISTIGNORE" ]]; then
-		while IFS= read -r line; do
-			line="$(echo "$line" | sed 's/#.*//' | xargs)"
-			[[ -z "$line" ]] && continue
-			# Freemius deployment REQUIRES the SDK + bootstrap in the zip
-			# (upload rejected with fs_sdk_missing otherwise). The wp.org /
-			# self-hosted .distignore strips them, so keep them for Freemius.
-			case "$line" in
-				/freemius|/freemius/*|/includes/freemius-init.php) continue ;;
-			esac
-			RSYNC_EXCLUDES+=("--exclude=$line")
-		done < "$DISTIGNORE"
-	fi
-	# Always exclude .sh files (test scripts) and hidden files
-	RSYNC_EXCLUDES+=("--exclude=*.sh" "--exclude=.git" "--exclude=.github")
-
-	rsync -a "${RSYNC_EXCLUDES[@]}" "mcpwp/" "$BUILD_DIR/mcpwp/"
-
-	# CRITICAL: without this constant, mcpwp.php's own bootstrap never
-	# requires includes/freemius-init.php even though the file (and the
-	# whole freemius/ SDK folder) is physically present in the zip above —
-	# the Freemius SDK silently never loads at runtime. This was missing
-	# here for every release this session (3.5.1-3.5.7): the zip Freemius
-	# served to real customers had the SDK files on disk but dead code,
-	# reporting unlicensed_reason=no_freemius_sdk even on a fresh install of
-	# "the Pro zip downloaded straight from Freemius's own dashboard."
-	# Mirrors build-freemius.sh's identical injection exactly.
-	python3 - "$BUILD_DIR/mcpwp/mcpwp.php" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-content = path.read_text(encoding="utf-8")
-needle = "define( 'MCPWP_VERSION'"
-replacement = "define( 'MCPWP_FREEMIUS_BUILD', true );\n" + needle
-if "define( 'MCPWP_FREEMIUS_BUILD'" not in content:
-    content = content.replace(needle, replacement, 1)
-path.write_text(content, encoding="utf-8")
-PY
-
-	cd "$BUILD_DIR"
-	zip -qr "$ROOT_DIR/$FREE_ZIP" "mcpwp"
-	rm -rf "$BUILD_DIR" || true
-)
+echo "Building zip package (mcpwp/scripts/build-freemius.sh)"
+# One Freemius packager, not two (#497). This script used to rsync its own
+# package, which drifted from build-freemius.sh: it kept uninstall.php, which
+# build-freemius.sh strips (#943 BLOCK-1c) and which the Freemius API rejects
+# outright ("uninstall_script", HTTP 400). Build with the real Freemius build
+# script and upload exactly what it produced and verified.
+bash "$ROOT_DIR/mcpwp/scripts/build-freemius.sh" --version "$VERSION"
+BUILT_ZIP="$ROOT_DIR/mcpwp/scripts/mcpwp-freemius-$VERSION.zip"
+if [[ ! -f "$BUILT_ZIP" ]]; then
+	echo "build-freemius.sh did not produce $BUILT_ZIP" >&2
+	exit 1
+fi
+if unzip -Z1 "$BUILT_ZIP" | grep -qx 'mcpwp/uninstall.php'; then
+	echo "Refusing to upload: $BUILT_ZIP contains mcpwp/uninstall.php (Freemius rejects it)" >&2
+	exit 1
+fi
+if ! unzip -p "$BUILT_ZIP" mcpwp/mcpwp.php | grep -q "define( 'MCPWP_FREEMIUS_BUILD', true );"; then
+	echo "Refusing to upload: $BUILT_ZIP lacks the MCPWP_FREEMIUS_BUILD constant" >&2
+	exit 1
+fi
+mv "$BUILT_ZIP" "$ROOT_DIR/$FREE_ZIP"
 
 if [[ "$UPLOAD_PREMIUM_ZIP" -eq 1 ]]; then
 	echo "Building premium zip package"
