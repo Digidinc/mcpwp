@@ -50,7 +50,7 @@ PR, one builder. All of these are in GitHub milestone **3.14.9**.
 
 | # | Work | Issue | Review | Status | Done when |
 |---|---|---|---|---|---|
-| 1.1 | Approvals store moves from one serialized option to its own table (migration, lock-free claims, keep history). **Brief ready: [briefs/1042-approvals-table.md](briefs/1042-approvals-table.md), Opus builder** | #1042 | **adversarial** (write path + auth) | **in review:** PR #1052 (suite green, smoke 15/15); adversarial review round 1 running. Follow-up #1053 | Migration runs on upgrade in the smoke test; approve/apply/rollback pass; no option writes remain |
+| 1.1 | Approvals store moves from one serialized option to its own table (migration, lock-free claims, keep history). **Brief ready: [briefs/1042-approvals-table.md](briefs/1042-approvals-table.md), Opus builder** | #1042 | **adversarial** (write path + auth) | **in review:** PR #1052. Round 1 found 1 BLOCK + 4 WARN (MAX_ITEMS lockout of admins, JSON-escaped quota, unencodable legacy record, late writes after migration, truncated counts); fixer on it with binding decisions, then fresh reviewer round 2. Follow-up #1053 | Migration runs on upgrade in the smoke test; approve/apply/rollback pass; no option writes remain |
 | 1.2 | `wp_create_post` with `post_type=page` answers "Post not found" after creating | #1039 | normal | todo | Test plus rig: creates and returns the page |
 | 1.3 | WooCommerce write tools (`wc_*`) not recorded in the action log | #1037 | normal | todo | Every `wc_*` write appears in `/action-log` |
 | 1.4 | Woo `image_id` / `gallery_image_ids` gating and graph aggregate counts | #1034 | **adversarial** | todo | Gated key can't attach a hidden attachment; counts exclude hidden nodes |
