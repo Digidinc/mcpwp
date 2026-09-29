@@ -208,6 +208,21 @@ trait Mcpwp_Admin_Control_Room_Trait {
 		// current_user_can( 'activate_plugins' ) — a genuine admin, not a read API
 		// key — so it legitimately reveals full non-public approval/issue data.
 		$approvals = class_exists( 'Mcpwp_Approvals' ) ? Mcpwp_Approvals::list_requests( '', 100, true ) : array();
+		$pending   = class_exists( 'Mcpwp_Approvals' ) ? Mcpwp_Approvals::list_requests( 'pending', 5, true, 'priority' ) : array();
+		$approved  = class_exists( 'Mcpwp_Approvals' ) ? Mcpwp_Approvals::list_requests( 'approved', 5, true ) : array();
+		// #1042: a failed read of the approvals store is shown as such, not
+		// as an empty queue.
+		$approvals_error = null;
+		foreach ( array( $approvals, $pending, $approved ) as $read ) {
+			if ( is_wp_error( $read ) ) {
+				$approvals_error = $read->get_error_message();
+			}
+		}
+		if ( null !== $approvals_error ) {
+			$approvals = array();
+			$pending   = array();
+			$approved  = array();
+		}
 		$seo_filters   = $this->get_control_room_seo_filters();
 		$event_filters = $this->get_control_room_event_filters();
 		$approval_counts = array(
@@ -252,8 +267,9 @@ trait Mcpwp_Admin_Control_Room_Trait {
 			'approval_counts'  => $approval_counts,
 			// Priority order when any pending request carries a validated Jev
 			// triage; falls back to date order on its own when none do.
-			'pending_approvals' => class_exists( 'Mcpwp_Approvals' ) ? Mcpwp_Approvals::list_requests( 'pending', 5, true, 'priority' ) : array(),
-			'approved_approvals' => class_exists( 'Mcpwp_Approvals' ) ? Mcpwp_Approvals::list_requests( 'approved', 5, true ) : array(),
+			'pending_approvals' => $pending,
+			'approved_approvals' => $approved,
+			'approvals_error'   => $approvals_error,
 			// #981 review round 3: applies/rollbacks that ran but could not
 			// be recorded, stalled, or only partially applied.
 			'attention_approvals' => array_values(

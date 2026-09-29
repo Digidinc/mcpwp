@@ -31,9 +31,8 @@ final class ApprovalTriageTest extends TestCase
         $GLOBALS['_mcpwp_test_posts']             = array();
         $GLOBALS['_mcpwp_test_meta']              = array();
         $GLOBALS['mcpwp_test_current_user']       = 2;
-        // Raw-row double used by Mcpwp_Approvals::set_triage()'s
-        // compare-and-swap (same mechanism as Mcpwp_Integration_Manager's
-        // #845 write_records(), exercised here for the approvals option).
+        // Raw-row option double (Jev's encrypted integration config). The
+        // approvals table double is reset per test by the bootstrap.
         $GLOBALS['mcpwp_test_wpdb_options']       = array();
         $GLOBALS['mcpwp_test_wpdb_before_update'] = null;
         $GLOBALS['mcpwp_test_wpdb_after_update']  = null;
@@ -136,9 +135,9 @@ final class ApprovalTriageTest extends TestCase
      */
     private function setCreatedAt(string $id, string $iso): void
     {
-        $items = get_option(Mcpwp_Approvals::OPTION_NAME, array());
+        $items = mcpwp_test_approvals_all();
         $items[$id]['created_at'] = $iso;
-        update_option(Mcpwp_Approvals::OPTION_NAME, $items);
+        mcpwp_test_approvals_put( $items );
     }
 
     private function makePost(string $content = 'original', string $title = 'A page'): int
@@ -585,12 +584,10 @@ final class ApprovalTriageTest extends TestCase
         $approval = Mcpwp_Approvals::create_post_content_request($post_id, 'after', array('title' => 'Race'));
         $id       = $approval['id'];
 
-        // Fires exactly once, from inside Mcpwp_Test_WPDB::update() — i.e.
-        // strictly between set_triage()'s read of the row and its
-        // compare-and-swap write of it (same mechanism
-        // IntegrationManagerConcurrentSaveTest uses for the #845 family).
-        $GLOBALS['mcpwp_test_wpdb_before_update'] = function (string $name) use ($id): void {
-            if (Mcpwp_Approvals::OPTION_NAME !== $name) {
+        // Fires exactly once, strictly between set_triage()'s read of the
+        // row and its conditional (version-checked) write of it (#1042).
+        $GLOBALS['mcpwp_test_approvals_before_update'] = function (string $row_id) use ($id): void {
+            if ($id !== $row_id) {
                 return;
             }
             Mcpwp_Approvals::approve_request($id, '', array('actor' => 'reviewer-1'));
@@ -617,21 +614,23 @@ final class ApprovalTriageTest extends TestCase
         $approval = Mcpwp_Approvals::create_post_content_request($post_id, 'after', array('title' => 'Race'));
         $id       = $approval['id'];
 
+        // Force exactly one lost race (another writer bumps the row between
+        // the read and the write), then let the retry succeed.
         $attempts = 0;
-        $GLOBALS['mcpwp_test_wpdb_update_fails'] = function (string $name) use (&$attempts): bool {
-            if (Mcpwp_Approvals::OPTION_NAME !== $name) {
-                return false;
-            }
+        $GLOBALS['mcpwp_test_approvals_before_update'] = function (string $row_id) use (&$attempts): void {
             $attempts++;
-            // Force exactly one lost race, then let the retry succeed.
-            return 1 === $attempts;
+            mcpwp_test_approvals_concurrent_write($row_id, static function (array $record): array {
+                $record['note'] = 'touched';
+                return $record;
+            });
         };
 
         $stored = Mcpwp_Approvals::set_triage($id, array('priority' => 'low', 'change_kind' => 'other'));
 
         $this->assertTrue($stored);
-        $this->assertGreaterThanOrEqual(2, $attempts, 'a forced failure must cause a retry, not a silent drop');
+        $this->assertSame(1, $attempts, 'a lost race must cause a retry, not a silent drop');
         $this->assertSame('low', Mcpwp_Approvals::get_request($id)['triage']['priority']);
+        $this->assertSame('touched', Mcpwp_Approvals::get_request($id)['note'], 'the other writer\'s change survives');
     }
 
     public function test_set_triage_gives_up_after_write_attempts_exhausted(): void
@@ -639,11 +638,18 @@ final class ApprovalTriageTest extends TestCase
         $post_id  = $this->makePost();
         $approval = Mcpwp_Approvals::create_post_content_request($post_id, 'after', array('title' => 'Race'));
 
-        $GLOBALS['mcpwp_test_wpdb_update_fails'] = function (string $name): bool {
-            return Mcpwp_Approvals::OPTION_NAME === $name; // never let the CAS land
+        // Another writer bumps the row before every attempt: never land.
+        $bump = null;
+        $bump = function (string $row_id) use (&$bump): void {
+            mcpwp_test_approvals_concurrent_write($row_id, static function (array $record): array {
+                return $record;
+            });
+            $GLOBALS['mcpwp_test_approvals_before_update'] = $bump;
         };
+        $GLOBALS['mcpwp_test_approvals_before_update'] = $bump;
 
         $stored = Mcpwp_Approvals::set_triage($approval['id'], array('priority' => 'low', 'change_kind' => 'other'));
+        $GLOBALS['mcpwp_test_approvals_before_update'] = null;
 
         $this->assertFalse($stored, 'a permanently contended row must fail, not silently overwrite');
         $this->assertArrayNotHasKey('triage', Mcpwp_Approvals::get_request($approval['id']));

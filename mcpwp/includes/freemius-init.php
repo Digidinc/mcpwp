@@ -356,4 +356,5 @@ function mcpwp_fs_uninstall_cleanup_site() {
 		require_once __DIR__ . '/class-mcpwp-uninstaller.php';
 	}
 	Mcpwp_Uninstaller::drop_graph_data_for_current_site();
+	Mcpwp_Uninstaller::drop_approvals_data_for_current_site();
 }

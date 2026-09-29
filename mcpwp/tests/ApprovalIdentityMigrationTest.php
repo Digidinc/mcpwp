@@ -6,7 +6,8 @@
  * an empty requested_by_key_id; a reconnected (now stably-identified) OAuth
  * principal could otherwise approve/apply it. Mcpwp_Activator::migrate_identity_
  * less_approvals() drops those PENDING records once, on upgrade, and leaves
- * everything else (attributed, or non-pending) intact.
+ * everything else (attributed, or non-pending) intact. Since #1042 it runs
+ * against the approvals table, after the one-time copy out of the option.
  *
  * @package MCPWP
  */
@@ -23,6 +24,7 @@ final class ApprovalIdentityMigrationTest extends TestCase {
 		$GLOBALS['mcpwp_test_options'] = array();
 	}
 
+	/** An upgrading site: the queue is still in the legacy option. */
 	private function seed( array $items ): void {
 		update_option( self::OPTION, $items );
 	}
@@ -44,7 +46,8 @@ final class ApprovalIdentityMigrationTest extends TestCase {
 
 		Mcpwp_Activator::migrate_identity_less_approvals();
 
-		$items = get_option( self::OPTION, array() );
+		$this->assertSame( 1, get_option( 'mcpwp_approvals_table_migrated' ), 'The queue was moved to the table first.' );
+		$items = mcpwp_test_approvals_all();
 
 		// Actionable (pending/approved) + empty requester are gone — both can be
 		// approved and/or applied via the empty-requester branch.
@@ -63,12 +66,12 @@ final class ApprovalIdentityMigrationTest extends TestCase {
 		// First run sets the flag.
 		$this->seed( array( 'x' => array( 'id' => 'x', 'status' => 'pending', 'requested_by_key_id' => '' ) ) );
 		Mcpwp_Activator::migrate_identity_less_approvals();
-		$this->assertArrayNotHasKey( 'x', get_option( self::OPTION, array() ) );
+		$this->assertArrayNotHasKey( 'x', mcpwp_test_approvals_all() );
 
 		// A new admin-created (empty-requester) pending approval added later must
 		// NOT be purged by a subsequent upgrade — the migration runs once only.
-		$this->seed( array( 'y' => array( 'id' => 'y', 'status' => 'pending', 'requested_by_key_id' => '' ) ) );
+		mcpwp_test_approvals_put( array( 'y' => array( 'id' => 'y', 'status' => 'pending', 'requested_by_key_id' => '' ) ) );
 		Mcpwp_Activator::migrate_identity_less_approvals();
-		$this->assertArrayHasKey( 'y', get_option( self::OPTION, array() ) );
+		$this->assertArrayHasKey( 'y', mcpwp_test_approvals_all() );
 	}
 }

@@ -505,6 +505,16 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 		}
 	}
 
+	// One-time move of the approvals store from its option to its own table
+	// (#1042) — gated on its OWN flag, not the version check above, for the
+	// same reason as the purge below. Runs before REST routes; the store also
+	// runs it lazily, and answers approvals_busy while another request holds
+	// the migration lock.
+	if ( ! get_option( 'mcpwp_approvals_table_migrated' ) ) {
+		require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-activator.php';
+		Mcpwp_Activator::migrate_approvals_to_table();
+	}
+
 	// One-time purge of identity-less pending approvals — gated on its OWN flag,
 	// not the version check above. A same-version deployment (e.g. 3.6.1 -> 3.6.1)
 	// never enters the activate() branch, so relying on the version gate alone
@@ -769,6 +779,16 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	} );
 	if ( ! wp_next_scheduled( 'mcpwp_action_log_daily_prune' ) ) {
 		wp_schedule_event( time(), 'daily', 'mcpwp_action_log_daily_prune' );
+	}
+
+	// Daily approvals retention (#1042): closed records older than 90 days
+	// are deleted (each audited first), applied ones past their rollback
+	// window compacted.
+	if ( class_exists( 'Mcpwp_Approvals' ) ) {
+		add_action( Mcpwp_Approvals::RETENTION_CRON_HOOK, array( 'Mcpwp_Approvals', 'retention_cron' ) );
+		if ( ! wp_next_scheduled( Mcpwp_Approvals::RETENTION_CRON_HOOK ) ) {
+			wp_schedule_event( time() + HOUR_IN_SECONDS, 'daily', Mcpwp_Approvals::RETENTION_CRON_HOOK );
+		}
 	}
 
 	// Self-hosted update checker (excluded from WP.org builds).

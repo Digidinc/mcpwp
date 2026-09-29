@@ -228,7 +228,26 @@ class Mcpwp_Site_State {
 			'rejected'    => 0,
 			'rolled_back' => 0,
 		);
-		$items  = class_exists( 'Mcpwp_Approvals' ) ? Mcpwp_Approvals::list_requests( '', 100, $reveal_non_public, 'date', $category_allowed ) : array();
+		$items          = class_exists( 'Mcpwp_Approvals' ) ? Mcpwp_Approvals::list_requests( '', 100, $reveal_non_public, 'date', $category_allowed ) : array();
+		$pending_items  = class_exists( 'Mcpwp_Approvals' ) ? Mcpwp_Approvals::list_requests( 'pending', 5, $reveal_non_public, 'date', $category_allowed ) : array();
+		$approved_items = class_exists( 'Mcpwp_Approvals' ) ? Mcpwp_Approvals::list_requests( 'approved', 5, $reveal_non_public, 'date', $category_allowed ) : array();
+
+		// #1042: the approvals store can fail a read. Say so — zero counts
+		// and empty lists would read as "nothing waiting for review".
+		foreach ( array( $items, $pending_items, $approved_items ) as $read ) {
+			if ( is_wp_error( $read ) ) {
+				return array(
+					'counts'         => $counts,
+					'pending_items'  => array(),
+					'approved_items' => array(),
+					'rollback_ready' => array(),
+					'error'          => array(
+						'code'    => $read->get_error_code(),
+						'message' => $read->get_error_message(),
+					),
+				);
+			}
+		}
 
 		foreach ( $items as $item ) {
 			$status = isset( $item['status'] ) ? sanitize_key( (string) $item['status'] ) : '';
@@ -239,8 +258,8 @@ class Mcpwp_Site_State {
 
 		return array(
 			'counts'         => $counts,
-			'pending_items'  => class_exists( 'Mcpwp_Approvals' ) ? Mcpwp_Approvals::list_requests( 'pending', 5, $reveal_non_public, 'date', $category_allowed ) : array(),
-			'approved_items' => class_exists( 'Mcpwp_Approvals' ) ? Mcpwp_Approvals::list_requests( 'approved', 5, $reveal_non_public, 'date', $category_allowed ) : array(),
+			'pending_items'  => $pending_items,
+			'approved_items' => $approved_items,
 			'rollback_ready' => array_slice(
 				array_values(
 					array_filter(

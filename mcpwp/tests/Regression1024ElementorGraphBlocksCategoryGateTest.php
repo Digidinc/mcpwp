@@ -526,12 +526,12 @@ final class Regression1024ElementorGraphBlocksCategoryGateTest extends TestCase 
 			array( 'source_id' => self::PRODUCT_ID, 'target_id' => self::TARGET_ID )
 		);
 
-		$before = get_option( 'mcpwp_approval_requests', array() );
+		$before = mcpwp_test_approvals_all();
 		$result = $controller->apply_internal_link( $request );
 
 		$this->assertInstanceOf( WP_Error::class, $result );
 		$this->assertSame( 'not_found', $result->get_error_code() );
-		$this->assertSame( $before, get_option( 'mcpwp_approval_requests', array() ), 'No approval may be queued for a gated source.' );
+		$this->assertSame( $before, mcpwp_test_approvals_all(), 'No approval may be queued for a gated source.' );
 	}
 
 	public function test_apply_internal_link_target_archetype_denied_as_target_not_found(): void {
@@ -543,12 +543,12 @@ final class Regression1024ElementorGraphBlocksCategoryGateTest extends TestCase 
 			array( 'source_id' => self::PAGE_ID, 'target_id' => self::ARCHETYPE_ID )
 		);
 
-		$before = get_option( 'mcpwp_approval_requests', array() );
+		$before = mcpwp_test_approvals_all();
 		$result = $controller->apply_internal_link( $request );
 
 		$this->assertInstanceOf( WP_Error::class, $result );
 		$this->assertSame( 'target_not_found', $result->get_error_code() );
-		$this->assertSame( $before, get_option( 'mcpwp_approval_requests', array() ), 'No approval may be queued for a gated target.' );
+		$this->assertSame( $before, mcpwp_test_approvals_all(), 'No approval may be queued for a gated target.' );
 	}
 
 	public function test_apply_internal_link_allowed_for_woocommerce_key(): void {

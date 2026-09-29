@@ -2,11 +2,12 @@
 /**
  * #981 adversarial review round 4 — the approvals store can't be jammed.
  *
- *  BLOCK  closed records are compacted (no bodies) and evicted by bytes,
- *         oldest first, above 75% of budget; the budget respects
- *         max_allowed_packet; a capped requester holds at most 1/20 of it;
- *         an admin can always queue once closed records are evicted;
- *         "purge closed approvals" (REST admin scope + Control Room).
+ *  BLOCK  closed records are compacted (no bodies); a capped requester
+ *         holds at most its byte quota; an admin can always queue once
+ *         open requests are decided; "purge closed approvals" (REST admin
+ *         scope + Control Room). (#1042: the whole-store byte budget and
+ *         its max_allowed_packet cap went away with the option — the one
+ *         site-wide limit left is MAX_ITEMS open requests.)
  *  WARN-1 stale applying / rolling_back can be resolved by an admin.
  *  WARN-2 large-post proposals need ≥3 kept revisions; apply re-verifies
  *         the referenced revision first.
@@ -31,34 +32,19 @@ final class WebMcpReviewRound4Test extends TestCase {
 		$GLOBALS['_mcpwp_test_posts']       = array(
 			self::POST => new WP_Post( array( 'ID' => self::POST, 'post_type' => 'post', 'post_status' => 'publish', 'post_title' => 'P', 'post_content' => 'original body' ) ),
 		);
-		unset( $GLOBALS['mcpwp_test_max_allowed_packet'], $GLOBALS['mcpwp_test_revisions_to_keep'], $GLOBALS['mcpwp_test_get_lock_results'] );
-		Mcpwp_Approvals::reset_store_budget_cache();
+		unset( $GLOBALS['mcpwp_test_revisions_to_keep'], $GLOBALS['mcpwp_test_get_lock_results'] );
 	}
 
 	protected function tearDown(): void {
-		unset( $GLOBALS['mcpwp_test_max_allowed_packet'], $GLOBALS['mcpwp_test_revisions_to_keep'], $GLOBALS['mcpwp_test_get_lock_results'] );
-		Mcpwp_Approvals::reset_store_budget_cache();
+		unset( $GLOBALS['mcpwp_test_revisions_to_keep'], $GLOBALS['mcpwp_test_get_lock_results'] );
 		$GLOBALS['mcpwp_test_options']      = array();
 		$GLOBALS['mcpwp_test_filters']      = array();
 		$GLOBALS['mcpwp_test_current_user'] = 0;
 	}
 
 	private function store(): array {
-		$items = get_option( Mcpwp_Approvals::OPTION_NAME, array() );
+		$items = mcpwp_test_approvals_all();
 		return is_array( $items ) ? $items : array();
-	}
-
-	private function store_bytes(): int {
-		return strlen( serialize( $this->store() ) );
-	}
-
-	private function budget( int $bytes ): void {
-		add_filter(
-			'mcpwp_approval_store_max_bytes',
-			static function () use ( $bytes ) {
-				return $bytes;
-			}
-		);
 	}
 
 	// ── BLOCK ──────────────────────────────────────────────────────────────
@@ -94,45 +80,29 @@ final class WebMcpReviewRound4Test extends TestCase {
 	}
 
 	public function test_the_jam_is_cleared_by_rejecting_and_an_admin_can_queue_again(): void {
-		$this->budget( 300000 );
-
-		// A store filled to the brim by several capped requesters.
-		$ids = array();
-		for ( $i = 0; $i < 60; $i++ ) {
-			$result = Mcpwp_Approvals::create_post_content_request( self::POST, str_repeat( chr( 97 + $i % 26 ), 9000 ), array( 'requested_by_key_id' => 'editor-' . $i ) );
-			if ( is_array( $result ) ) {
-				$ids[] = $result['id'];
-			}
+		// A queue at the open-request cap (MAX_ITEMS).
+		$items = array();
+		for ( $i = 0; $i < Mcpwp_Approvals::MAX_ITEMS; $i++ ) {
+			$id           = sprintf( 'apr_jam%03d', $i );
+			$items[ $id ] = array( 'id' => $id, 'status' => 'pending', 'action' => 'destructive_operation', 'requested_by_key_id' => 'editor-' . $i, 'created_at' => gmdate( 'c' ), 'updated_at' => gmdate( 'c' ) );
 		}
-		// Squeeze the budget to what is stored now plus a sliver, as in the
-		// review's live run (a sliver left).
-		$this->assertGreaterThan( 20, count( $ids ) );
-		$GLOBALS['r4_budget'] = $this->store_bytes() + 100;
-		add_filter(
-			'mcpwp_approval_store_max_bytes',
-			static function () {
-				return $GLOBALS['r4_budget'];
-			},
-			20
-		);
+		mcpwp_test_approvals_put( $items );
+
 		$full = Mcpwp_Approvals::create_destructive_request( 'delete_page', array( 'route' => '/mcpwp/v1/pages/1', 'method' => 'DELETE', 'params' => array() ), array( 'type' => 'page', 'id' => 1 ), array( 'requested_by_key_id' => 'wp-user:1' ) );
-		$this->assertInstanceOf( WP_Error::class, $full, 'budget=' . Mcpwp_Approvals::store_max_bytes() . ' store=' . $this->store_bytes() . ' n=' . count( $this->store() ) );
-		$this->assertSame( 'approvals_store_full', $full->get_error_code() );
+		$this->assertInstanceOf( WP_Error::class, $full );
+		$this->assertSame( 'approval_queue_full', $full->get_error_code() );
+		$this->assertSame( 429, $full->get_error_data()['status'] );
 
-		// The admin rejects them; the closed records shrink and make room.
-		foreach ( $ids as $id ) {
-			$this->assertIsArray( Mcpwp_Approvals::reject_request( $id ) );
-		}
+		// The admin rejects one; closed history does not count.
+		$this->assertIsArray( Mcpwp_Approvals::reject_request( 'apr_jam000' ) );
 		$ok = Mcpwp_Approvals::create_destructive_request( 'delete_page', array( 'route' => '/mcpwp/v1/pages/1', 'method' => 'DELETE', 'params' => array() ), array( 'type' => 'page', 'id' => 1 ), array( 'requested_by_key_id' => 'wp-user:1' ) );
 		$this->assertIsArray( $ok, is_wp_error( $ok ) ? $ok->get_error_code() : '' );
-		$this->assertLessThanOrEqual( $GLOBALS['r4_budget'], $this->store_bytes() );
-		unset( $GLOBALS['r4_budget'] );
 	}
 
-	public function test_applied_records_inside_retention_are_never_evicted_the_new_request_gets_507(): void {
-		// Round 5 replaced round 4's "evict any closed record" with this:
-		// history inside its retention is never destroyed to make room.
-		$this->budget( 200000 );
+	public function test_history_is_never_destroyed_to_make_room(): void {
+		// Round 5 refused a new request (507) rather than evict an applied
+		// one inside its rollback window. #1042: there is no store budget
+		// left to run out of — both are kept.
 		$applied = array();
 		for ( $i = 0; $i < 8; $i++ ) {
 			$c = Mcpwp_Approvals::create_post_content_request( self::POST, str_repeat( 'q', 18000 ), array( 'requested_by_key_id' => 'admin', 'requester_unrestricted' => true ) );
@@ -141,25 +111,22 @@ final class WebMcpReviewRound4Test extends TestCase {
 			$applied[] = $c['id'];
 			$GLOBALS['_mcpwp_test_posts'][ self::POST ]->post_content = 'original body';
 		}
-		$result = Mcpwp_Approvals::create_post_content_request( self::POST, str_repeat( 'r', 60000 ), array( 'requested_by_key_id' => 'admin', 'requester_unrestricted' => true ) );
-		$this->assertSame( 'approvals_store_full', $result->get_error_code() );
+		$result = Mcpwp_Approvals::create_post_content_request( self::POST, str_repeat( 'r', 600000 ), array( 'requested_by_key_id' => 'admin', 'requester_unrestricted' => true ) );
+		$this->assertIsArray( $result );
 		foreach ( $applied as $id ) {
-			$this->assertArrayHasKey( $id, $this->store(), 'An applied request inside its rollback window survives.' );
+			$this->assertArrayHasKey( 'before_content', $this->store()[ $id ]['rollback'], 'An applied request inside its rollback window keeps its rollback.' );
 		}
 	}
 
-	public function test_the_budget_never_exceeds_max_allowed_packet(): void {
-		$GLOBALS['mcpwp_test_max_allowed_packet'] = '1048576';
-		Mcpwp_Approvals::reset_store_budget_cache();
-		$this->assertSame( 1048576 - 65536, Mcpwp_Approvals::store_max_bytes() );
-
-		$GLOBALS['mcpwp_test_max_allowed_packet'] = '67108864';
-		Mcpwp_Approvals::reset_store_budget_cache();
-		$this->assertSame( Mcpwp_Approvals::STORE_MAX_BYTES, Mcpwp_Approvals::store_max_bytes() );
-	}
-
-	public function test_one_capped_requester_gets_at_most_a_twentieth_of_the_store(): void {
-		$this->budget( 400000 ); // Quota: 20000 bytes.
+	public function test_one_capped_requester_is_held_to_its_byte_quota(): void {
+		$this->assertSame( Mcpwp_Approvals::REQUESTER_BYTE_QUOTA, Mcpwp_Approvals::requester_byte_quota() );
+		add_filter(
+			'mcpwp_approval_content_limits',
+			static function ( $limits ) {
+				$limits['requester_bytes'] = 20000;
+				return $limits;
+			}
+		);
 		$this->assertSame( 20000, Mcpwp_Approvals::requester_byte_quota() );
 
 		$this->assertIsArray( Mcpwp_Approvals::create_post_content_request( self::POST, str_repeat( 'a', 8000 ), array( 'requested_by_key_id' => 'webmcp:user:5' ) ) );
@@ -196,10 +163,10 @@ final class WebMcpReviewRound4Test extends TestCase {
 
 	private function stuck( string $status ): string {
 		$created = Mcpwp_Approvals::create_post_content_request( self::POST, 'new body', array( 'requested_by_key_id' => 'k1' ) );
-		$items   = get_option( Mcpwp_Approvals::OPTION_NAME );
+		$items   = mcpwp_test_approvals_all();
 		$items[ $created['id'] ]['status']          = $status;
 		$items[ $created['id'] ][ $status . '_at' ] = gmdate( 'c', time() - 3600 );
-		update_option( Mcpwp_Approvals::OPTION_NAME, $items, false );
+		mcpwp_test_approvals_put( $items );
 		return $created['id'];
 	}
 
@@ -231,10 +198,10 @@ final class WebMcpReviewRound4Test extends TestCase {
 		$created = Mcpwp_Approvals::create_post_content_request( self::POST, 'x', array( 'requested_by_key_id' => 'k1' ) );
 		$this->assertSame( 'approval_not_in_flight', Mcpwp_Approvals::resolve_stale( $created['id'], 'completed' )->get_error_code() );
 
-		$items = get_option( Mcpwp_Approvals::OPTION_NAME );
+		$items = mcpwp_test_approvals_all();
 		$items[ $created['id'] ]['status']      = 'applying';
 		$items[ $created['id'] ]['applying_at'] = gmdate( 'c' );
-		update_option( Mcpwp_Approvals::OPTION_NAME, $items, false );
+		mcpwp_test_approvals_put( $items );
 		$this->assertSame( 'approval_in_progress', Mcpwp_Approvals::resolve_stale( $created['id'], 'completed' )->get_error_code() );
 		$this->assertSame( 'invalid_outcome', Mcpwp_Approvals::resolve_stale( $this->stuck( 'applying' ), 'maybe' )->get_error_code() );
 	}
@@ -259,10 +226,10 @@ final class WebMcpReviewRound4Test extends TestCase {
 		$created = Mcpwp_Approvals::create_post_content_request( self::POST, 'small', array( 'requested_by_key_id' => 'k1' ) );
 		Mcpwp_Approvals::approve_request( $created['id'] );
 
-		unset( $GLOBALS['_mcpwp_test_posts'][ get_option( Mcpwp_Approvals::OPTION_NAME )[ $created['id'] ]['rollback']['before_revision_id'] ] );
+		unset( $GLOBALS['_mcpwp_test_posts'][ mcpwp_test_approvals_all()[ $created['id'] ]['rollback']['before_revision_id'] ] );
 		$result = Mcpwp_Approvals::apply_request( $created['id'] );
 		$this->assertSame( 'rollback_source_missing', $result->get_error_code() );
 		$this->assertSame( $big, $GLOBALS['_mcpwp_test_posts'][ self::POST ]->post_content, 'Not applied.' );
-		$this->assertSame( 'approved', get_option( Mcpwp_Approvals::OPTION_NAME )[ $created['id'] ]['status'] );
+		$this->assertSame( 'approved', mcpwp_test_approvals_all()[ $created['id'] ]['status'] );
 	}
 }

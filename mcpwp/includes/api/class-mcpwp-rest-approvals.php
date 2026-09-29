@@ -147,6 +147,9 @@ class Mcpwp_REST_Approvals extends Mcpwp_REST_API {
 			(string) $request->get_param( 'order' ),
 			array( $this, 'caller_may_read_category' )
 		);
+		if ( is_wp_error( $approvals ) ) {
+			return $approvals;
+		}
 
 		return $this->success_response(
 			array(
@@ -403,25 +406,23 @@ class Mcpwp_REST_Approvals extends Mcpwp_REST_API {
 
 		$current_key_id = (string) $key_record['id'];
 
-		// Fetch the raw stored record (not public_record — we need the internal field).
-		$all_items = get_option( Mcpwp_Approvals::OPTION_NAME, array() );
-		if ( ! is_array( $all_items ) ) {
-			return true;
+		// The stored requester. A read that FAILED is refused here — never
+		// treated as "no record" and waved through (#1042: the store can
+		// now fail a read, where the option could not).
+		$requester = Mcpwp_Approvals::requester_of( $approval_id );
+		if ( is_wp_error( $requester ) ) {
+			return $requester;
 		}
-
-		$approval_id = sanitize_key( (string) $approval_id );
-		if ( empty( $all_items[ $approval_id ] ) ) {
+		if ( null === $requester ) {
 			return true; // Not found — let apply_request / approve_request return the 404.
 		}
 
-		$record = $all_items[ $approval_id ];
-
 		// Only enforce when the record carries a requester identity.
-		if ( empty( $record['requested_by_key_id'] ) ) {
+		if ( '' === $requester ) {
 			return true;
 		}
 
-		if ( $current_key_id === (string) $record['requested_by_key_id'] ) {
+		if ( $current_key_id === $requester ) {
 			return new WP_Error(
 				'self_approval_forbidden',
 				__( 'The same API key that created this request cannot approve or apply it. Use a different admin key or approve via WordPress admin.', 'mcpwp' ),

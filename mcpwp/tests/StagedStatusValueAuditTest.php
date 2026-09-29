@@ -122,14 +122,11 @@ final class StagedStatusValueAuditTest extends TestCase {
 
 		// ── A real staged/consumed value, but never a post- or product- ─
 		// visibility status, or already unconditionally admin-gated ────
-		'core/class-mcpwp-approvals.php' => 'staged value is the approval workflow\'s OWN status vocabulary ' .
-			'(pending/approved/applied/rejected/rolled_back) — a completely different field to post_status/product ' .
-			'status. Every transition away from \'pending\' (approve_request()/reject_request()/apply_request()/rollback) ' .
-			'is set by the class itself from a hardcoded literal, never from a caller-supplied REST param at creation ' .
-			'time (create_post_content_request()/create_destructive_request() both hardcode \'status\' => \'pending\'), ' .
-			'and every state-changing route is already admin-scope-gated unconditionally (get_required_scope_for_request()\'s ' .
-			'/approvals/{id}/(approve|reject|apply|rollback) regex) — there is no lower-scoped path that ever sets this ' .
-			'field to anything.',
+		// core/class-mcpwp-approvals.php left this list in #1042: the
+		// approval store is its own table now and the class no longer calls
+		// update_option() with a status at all. The disposition is unchanged:
+		// its 'status' is the approval workflow's own vocabulary, set only
+		// from hardcoded literals, on admin-scope-gated routes.
 		'core/class-mcpwp-graph-builder.php' => 'staged value is the site graph node\'s mirrored copy of the SOURCE ' .
 			'post\'s own post_status (rebuild_post_node() reads $post->post_status and stores it verbatim on the node row ' .
 			'purely for graph filtering/display) — the update_option() calls in this file are unrelated backfill-cursor/' .
@@ -157,8 +154,8 @@ final class StagedStatusValueAuditTest extends TestCase {
 		'api/class-mcpwp-rest-site-settings.php' => 'staged value is plugin settings bookkeeping, never a post/product status.',
 		// pro/api/class-mcpwp-rest-staging.php left this list in #981 review
 		// round 2: it no longer calls update_option() itself — its approval
-		// record is stored through Mcpwp_Approvals::mutate() (the locked
-		// store). The disposition is unchanged: a staging push's progress
+		// record is stored through the approvals store (Mcpwp_Approvals::
+		// insert_request() since #1042). The disposition is unchanged: a staging push's progress
 		// status, on a surface blanket-admin-gated for every method.
 		'pro/core/class-mcpwp-theme-builder.php' => 'staged value is a theme-builder template\'s condition/assignment ' .
 			'status, not post_status — the file\'s actual post_status writes are hardcoded to \'publish\' with no caller ' .

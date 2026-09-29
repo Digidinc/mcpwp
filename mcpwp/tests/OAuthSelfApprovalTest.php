@@ -57,9 +57,7 @@ final class OAuthSelfApprovalTest extends TestCase {
 	}
 
 	private function seed_approval( string $id, string $requested_by_key_id ): void {
-		update_option(
-			Mcpwp_Approvals::OPTION_NAME,
-			array(
+		mcpwp_test_approvals_put( array(
 				$id => array(
 					'id'                  => $id,
 					'status'              => 'pending',

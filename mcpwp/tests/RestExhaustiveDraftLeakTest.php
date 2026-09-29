@@ -271,9 +271,7 @@ final class RestExhaustiveDraftLeakTest extends TestCase {
 	// ── Primitive B (LIVE read-key vector): GET /approvals redaction ─────────
 
 	private function seed_draft_approval(): void {
-		update_option(
-			Mcpwp_Approvals::OPTION_NAME,
-			array(
+		mcpwp_test_approvals_put( array(
 				'apr_test1' => array(
 					'id'       => 'apr_test1',
 					'status'   => 'pending',

@@ -126,26 +126,27 @@ These apply to every `post_content_update` approval: WebMCP proposals, `wp_set_b
   - Apply checks the revision is still there first and refuses with `rollback_source_missing`
     rather than make a change that could not be rolled back.
   - Diff excerpts are capped at 500 characters.
-- **Keeping the queue small:** a request that is rejected, expired, rolled back, or applied more than
-  7 days ago (`mcpwp_approval_applied_retention`) is compacted. The proposed and previous content
-  are dropped, and the hashes, excerpts and revision ids are kept.
-  - Above 75% of the budget, only records that are both compacted and older than the retention are
-    removed, oldest first.
-  - Pending, approved or in-progress requests, and changes applied within the last 7 days, are never
-    removed automatically. When there is still no room, the new request gets 507.
+- **Storage:** the approval queue is its own table, `{prefix}mcpwp_approvals`, one row per request
+  (since #1042; it used to be one `wp_option`). There is no whole-queue size budget any more.
+- **Compaction:** a request that is rejected, expired, rolled back, or applied more than 7 days ago
+  (`mcpwp_approval_applied_retention`) is compacted. The proposed and previous content are dropped,
+  and the hashes, excerpts and revision ids are kept. Applied requests are compacted by the daily
+  retention run.
+- **Retention:** closed requests are kept 90 days after they were decided
+  (`mcpwp_approvals_closed_retention_days`), then deleted by a daily cron in batches of 500.
+  - Pending, approved or in-progress requests are never removed automatically.
   - Every removal first writes an `approval_record_removed` entry to the action log: the approval
     id, action, target, requester, who approved, applied or rolled it back, final status,
     timestamps, content hash and reason. No log entry, no removal.
   - Rollback Ready, and the `rollback_available` flag on records, show only changes that can still be
     rolled back.
-- **Store budget:** the budget is the smaller of 8 MB (`mcpwp_approval_store_max_bytes`) and MySQL's
-  `max_allowed_packet` minus 64 KB, read once per request.
-  - Each capped requester (WebMCP users and category-restricted keys) may hold at most 1/20 of it in
-    open requests; over that is 429 `requester_store_quota`.
-  - A new request that cannot fit even after closed requests are removed gets 507
-    `approvals_store_full`. That can only happen when the queue is full of undecided requests.
+- **Limits:** each capped requester (WebMCP users and category-restricted keys) may hold at most
+  about 410 KB of open requests (`requester_bytes` in `mcpwp_approval_content_limits`); over that is
+  429 `requester_store_quota`. The site holds at most 200 open requests; a new one past that is 429
+  `approval_queue_full`.
   - Existing requests can always be approved, applied or rejected.
-  - A database write failure is 503 `approvals_store_failed`, never a reported success.
+  - A database write failure is 503 `approvals_store_failed`, never a reported success, and a
+    failed read is never reported as "not found".
 - **Purge:** `POST /mcpwp/v1/approvals/purge-closed` (admin scope), or the "Purge closed approval
   requests" button in Control Room, removes every closed request now, with an audit entry for each.
   Changes applied within the retention are kept.
@@ -155,10 +156,15 @@ These apply to every `post_content_update` approval: WebMCP proposals, `wp_set_b
   - `completed` marks it applied, or rolled back, and rollback then works.
   - `not_completed` puts it back to approved, with a warning to check the content before applying
     again.
-- **Concurrent writes:** every write to the approval queue takes a MySQL named lock and re-reads the
-  queue inside it. That covers creating a request, approve/reject/apply/rollback, the apply-result
-  record, a staging push, expiry and eviction. If the lock cannot be taken within 5 seconds the
-  answer is 503 `approvals_busy` and nothing is stored.
+- **Concurrent writes:** every change to an existing request is one conditional update of its row
+  (`… WHERE id = … AND version = …`), retried on fresh data if another write landed first. Two
+  parallel applies leave one winner; the other gets 409. After 5 lost races the answer is 503
+  `approvals_busy` and nothing is stored. Creating a request takes a short MySQL named lock, only
+  for the quota check and the insert; if it cannot be had within 5 seconds the answer is 503
+  `approvals_busy`.
+- **Upgrade:** the first request after upgrading copies the old option into the table and renames
+  the option to `mcpwp_approval_requests_pre_3149` (kept for recovery). While that copy runs, other
+  approval reads and writes answer 503 `approvals_busy` with `retry_after: 2`.
 
 The one tool that fetches a URL, `wp_get_rendered_html`, only fetches this site's own origin: same
 scheme, host and port as `home_url()` or `site_url()`, with no credentials in the URL.

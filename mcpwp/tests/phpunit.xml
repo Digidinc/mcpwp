@@ -2,6 +2,7 @@
 <phpunit bootstrap="bootstrap.php" colors="true">
   <extensions>
     <extension class="Mcpwp_Test_Raw_Option_Row_Reset"/>
+    <extension class="Mcpwp_Test_Approvals_Table_Reset"/>
   </extensions>
   <testsuites>
     <testsuite name="MCPWP Tests">

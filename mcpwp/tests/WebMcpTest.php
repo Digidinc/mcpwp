@@ -596,7 +596,7 @@ final class WebMcpTest extends TestCase {
 		$this->assertSame( 'pending', $result['approval']['status'] );
 		$this->assertSame( 'post_content_update', $result['approval']['action'] );
 
-		$stored = get_option( Mcpwp_Approvals::OPTION_NAME )[ $result['approval']['id'] ];
+		$stored = mcpwp_test_approvals_all()[ $result['approval']['id'] ];
 		$this->assertSame( 'webmcp:user:5', $stored['requested_by_key_id'] );
 		$this->assertSame( 'wp_propose_content_change', $stored['tool'] );
 		$this->assertStringNotContainsString( '<script>', $stored['payload']['after_content'], 'No unfiltered HTML for a user without unfiltered_html.' );
@@ -618,7 +618,7 @@ final class WebMcpTest extends TestCase {
 		}
 		$this->assertSame( 'not_found', $denied->get_error_code() );
 		$this->assertSame( $missing->get_error_code(), $denied->get_error_code(), 'Same answer as a missing post.' );
-		$this->assertSame( array(), get_option( 'mcpwp_approval_requests', array() ) ?: array() );
+		$this->assertSame( array(), mcpwp_test_approvals_all() );
 	}
 
 	public function test_the_propose_tool_exists_only_for_webmcp(): void {

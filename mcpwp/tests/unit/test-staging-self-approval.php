@@ -126,21 +126,21 @@ final class StagingSelfApprovalTest extends TestCase {
 			'rolled_back_at'      => null,
 		);
 
-		$items        = get_option( Mcpwp_Approvals::OPTION_NAME, array() );
+		$items        = mcpwp_test_approvals_all();
 		$items[ $id ] = $record;
-		update_option( Mcpwp_Approvals::OPTION_NAME, $items, false );
+		mcpwp_test_approvals_put( $items );
 
 		return $id;
 	}
 
 	/** Promote an approval to 'approved' status so apply_approval() can run. */
 	private function mark_approved( string $approval_id ): void {
-		$items = get_option( Mcpwp_Approvals::OPTION_NAME, array() );
+		$items = mcpwp_test_approvals_all();
 		if ( isset( $items[ $approval_id ] ) ) {
 			$items[ $approval_id ]['status']      = 'approved';
 			$items[ $approval_id ]['approved_at'] = gmdate( 'c' );
 		}
-		update_option( Mcpwp_Approvals::OPTION_NAME, $items, false );
+		mcpwp_test_approvals_put( $items );
 	}
 
 	private function make_request( string $approval_id ): WP_REST_Request {
@@ -159,7 +159,7 @@ final class StagingSelfApprovalTest extends TestCase {
 		$key_id = 'key-creator-abc';
 		$apr_id = $this->insert_staging_approval( $key_id );
 
-		$items = get_option( Mcpwp_Approvals::OPTION_NAME, array() );
+		$items = mcpwp_test_approvals_all();
 
 		$this->assertArrayHasKey( $apr_id, $items );
 		$this->assertSame( $key_id, $items[ $apr_id ]['requested_by_key_id'] );
@@ -248,7 +248,7 @@ final class StagingSelfApprovalTest extends TestCase {
 		$id  = 'apr_' . bin2hex( random_bytes( 12 ) );
 		$now = gmdate( 'c' );
 
-		$items      = get_option( Mcpwp_Approvals::OPTION_NAME, array() );
+		$items      = mcpwp_test_approvals_all();
 		$items[$id] = array(
 			'id'          => $id,
 			'status'      => 'pending',
@@ -268,7 +268,7 @@ final class StagingSelfApprovalTest extends TestCase {
 			'applied_at'  => null,
 			'rejected_at' => null,
 		);
-		update_option( Mcpwp_Approvals::OPTION_NAME, $items, false );
+		mcpwp_test_approvals_put( $items );
 
 		// Use the same key for both roles — should NOT trigger self_approval_forbidden.
 		$same_key_id = 'key-same-for-both';
@@ -428,7 +428,7 @@ final class StagingSelfApprovalTest extends TestCase {
 
 		$this->assertNotInstanceOf( WP_Error::class, $public );
 
-		$items = get_option( Mcpwp_Approvals::OPTION_NAME, array() );
+		$items = mcpwp_test_approvals_all();
 		$this->assertArrayHasKey( $public['id'], $items );
 		$this->assertSame( 'key-abc', $items[ $public['id'] ]['requested_by_key_id'] );
 	}

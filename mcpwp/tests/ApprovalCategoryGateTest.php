@@ -105,7 +105,7 @@ final class ApprovalCategoryGateTest extends TestCase {
 	}
 
 	/**
-	 * Seed a raw approval record directly into the store option — same
+	 * Seed a raw approval record directly into the store — same
 	 * technique OAuthSelfApprovalTest::seed_approval() already uses — so
 	 * each test controls exactly the action/resource/payload shape it needs
 	 * without going through every creator function's own side effects
@@ -155,10 +155,10 @@ final class ApprovalCategoryGateTest extends TestCase {
 		$record = array_merge( $defaults, $overrides );
 		$record['id'] = $id;
 
-		$items       = get_option( Mcpwp_Approvals::OPTION_NAME, array() );
+		$items       = mcpwp_test_approvals_all();
 		$items       = is_array( $items ) ? $items : array();
 		$items[ $id ] = $record;
-		update_option( Mcpwp_Approvals::OPTION_NAME, $items, false );
+		mcpwp_test_approvals_put( $items );
 
 		return $id;
 	}
