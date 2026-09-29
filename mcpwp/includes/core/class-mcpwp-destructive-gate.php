@@ -235,6 +235,28 @@ class Mcpwp_Destructive_Gate {
 	}
 
 	/**
+	 * Whether a key is unrestricted by category (so exempt from the
+	 * approvals open-request cap, #1042 B1).
+	 *
+	 * @param array|null $key_record Current key record.
+	 * @return bool
+	 */
+	public static function key_is_unrestricted( $key_record ) {
+		if ( ! is_array( $key_record ) || ! trait_exists( 'Mcpwp_Api_Auth' ) ) {
+			return false;
+		}
+		static $auth = null;
+		if ( null === $auth ) {
+			$auth = new class() {
+				use Mcpwp_Api_Auth;
+			};
+		}
+		// Same test as Mcpwp_REST_API::requester_is_unrestricted(): a key
+		// whose role grants every category.
+		return array() === $auth->resolve_key_tool_categories( $key_record );
+	}
+
+	/**
 	 * Who to record as the requester of a deferred operation.
 	 *
 	 * @param array|null $key_record Current key record.
@@ -421,8 +443,11 @@ class Mcpwp_Destructive_Gate {
 			),
 			$resource,
 			array(
-				'title'               => $summary,
-				'requested_by_key_id' => self::requester_id( $key_record ),
+				'title'                  => $summary,
+				'requested_by_key_id'    => self::requester_id( $key_record ),
+				// #1042 B1: an unrestricted key is never refused by the
+				// open-request cap (a wp-user:* requester is exempt by id).
+				'requester_unrestricted' => self::key_is_unrestricted( $key_record ),
 			)
 		);
 

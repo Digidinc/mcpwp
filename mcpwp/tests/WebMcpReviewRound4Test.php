@@ -79,8 +79,8 @@ final class WebMcpReviewRound4Test extends TestCase {
 		$this->assertArrayNotHasKey( $created['id'], $this->store() );
 	}
 
-	public function test_the_jam_is_cleared_by_rejecting_and_an_admin_can_queue_again(): void {
-		// A queue at the open-request cap (MAX_ITEMS).
+	public function test_the_jam_is_cleared_by_rejecting_and_an_admin_can_always_queue(): void {
+		// A queue at the open-request cap (MAX_ITEMS), filled by capped keys.
 		$items = array();
 		for ( $i = 0; $i < Mcpwp_Approvals::MAX_ITEMS; $i++ ) {
 			$id           = sprintf( 'apr_jam%03d', $i );
@@ -88,14 +88,21 @@ final class WebMcpReviewRound4Test extends TestCase {
 		}
 		mcpwp_test_approvals_put( $items );
 
-		$full = Mcpwp_Approvals::create_destructive_request( 'delete_page', array( 'route' => '/mcpwp/v1/pages/1', 'method' => 'DELETE', 'params' => array() ), array( 'type' => 'page', 'id' => 1 ), array( 'requested_by_key_id' => 'wp-user:1' ) );
+		// Another capped key is refused by count.
+		$full = Mcpwp_Approvals::create_destructive_request( 'delete_page', array( 'route' => '/mcpwp/v1/pages/1', 'method' => 'DELETE', 'params' => array() ), array( 'type' => 'page', 'id' => 1 ), array( 'requested_by_key_id' => 'editor-new' ) );
 		$this->assertInstanceOf( WP_Error::class, $full );
 		$this->assertSame( 'approval_queue_full', $full->get_error_code() );
 		$this->assertSame( 429, $full->get_error_data()['status'] );
 
-		// The admin rejects one; closed history does not count.
+		// The site's administrator never is (#1042 review round 1, B1).
+		$this->assertIsArray( Mcpwp_Approvals::create_destructive_request( 'delete_page', array( 'route' => '/mcpwp/v1/pages/1', 'method' => 'DELETE', 'params' => array() ), array( 'type' => 'page', 'id' => 1 ), array( 'requested_by_key_id' => 'wp-user:1' ) ) );
+
+		// Rejecting frees capped room again; closed history does not count.
+		$capped = Mcpwp_Approvals::create_post_content_request( self::POST, 'x', array( 'requested_by_key_id' => 'editor-new' ) );
+		$this->assertSame( 'approval_queue_full', $capped->get_error_code() );
 		$this->assertIsArray( Mcpwp_Approvals::reject_request( 'apr_jam000' ) );
-		$ok = Mcpwp_Approvals::create_destructive_request( 'delete_page', array( 'route' => '/mcpwp/v1/pages/1', 'method' => 'DELETE', 'params' => array() ), array( 'type' => 'page', 'id' => 1 ), array( 'requested_by_key_id' => 'wp-user:1' ) );
+		$this->assertIsArray( Mcpwp_Approvals::reject_request( 'apr_jam001' ) );
+		$ok = Mcpwp_Approvals::create_post_content_request( self::POST, 'x', array( 'requested_by_key_id' => 'editor-new' ) );
 		$this->assertIsArray( $ok, is_wp_error( $ok ) ? $ok->get_error_code() : '' );
 	}
 

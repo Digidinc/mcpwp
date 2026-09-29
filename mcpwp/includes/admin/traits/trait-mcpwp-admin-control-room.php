@@ -233,11 +233,14 @@ trait Mcpwp_Admin_Control_Room_Trait {
 			'rolled_back' => 0,
 		);
 
-		foreach ( $approvals as $approval ) {
-			$status = isset( $approval['status'] ) ? sanitize_key( (string) $approval['status'] ) : '';
-			if ( isset( $approval_counts[ $status ] ) ) {
-				$approval_counts[ $status ]++;
-			}
+		// #1042 W4: exact counts from the store, not from the 100 listed.
+		$counted = ( null === $approvals_error && class_exists( 'Mcpwp_Approvals' ) ) ? Mcpwp_Approvals::count_by_status() : array( 'counts' => array() );
+		if ( is_wp_error( $counted ) ) {
+			$approvals_error = $counted->get_error_message();
+			$counted         = array( 'counts' => array() );
+		}
+		foreach ( $approval_counts as $status => $zero ) {
+			$approval_counts[ $status ] = isset( $counted['counts'][ $status ] ) ? (int) $counted['counts'][ $status ] : 0;
 		}
 
 		$seo_open = class_exists( 'Mcpwp_SEO_Audit_Store' )

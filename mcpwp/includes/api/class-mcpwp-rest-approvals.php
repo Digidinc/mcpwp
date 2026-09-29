@@ -198,6 +198,13 @@ class Mcpwp_REST_Approvals extends Mcpwp_REST_API {
 	private function resolve_visible_approval( $id ) {
 		$record = Mcpwp_Approvals::get_request( $id );
 		if ( is_wp_error( $record ) ) {
+			// #1042 NIT d: a damaged row cannot be proven visible to a
+			// category-restricted caller, so it answers exactly like a
+			// missing one. An unrestricted caller is told the truth (503).
+			$data = $record->get_error_data();
+			if ( is_array( $data ) && isset( $data['reason'] ) && 'corrupt_record' === $data['reason'] && ! $this->requester_is_unrestricted() ) {
+				return Mcpwp_Approvals::not_found_error();
+			}
 			return $record;
 		}
 

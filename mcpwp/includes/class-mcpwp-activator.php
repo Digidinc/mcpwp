@@ -452,8 +452,11 @@ class Mcpwp_Activator {
 	 *
 	 * One row per approval. `record` holds the whole record JSON-encoded,
 	 * exactly as the old option held it; status, action,
-	 * requested_by_key_id, created_at, updated_at and triage_rank are copies
-	 * for filtering, ordering and counting, derived only by
+	 * requested_by_key_id, created_at, updated_at, triage_rank, cap_exempt
+	 * (whether the requester was exempt from the pending caps) and
+	 * quota_bytes (the record's unescaped JSON size, what the per-requester
+	 * byte quota sums) are copies for filtering, ordering and counting,
+	 * derived only by
 	 * Mcpwp_Approvals::row_from_record(). `version` is the optimistic-
 	 * concurrency counter every update checks. `seq` is insertion order:
 	 * requests created in the same second list in the order they were
@@ -475,6 +478,8 @@ class Mcpwp_Activator {
 			created_at datetime NOT NULL,
 			updated_at datetime NOT NULL,
 			triage_rank tinyint(4) NOT NULL DEFAULT -1,
+			cap_exempt tinyint(1) NOT NULL DEFAULT 0,
+			quota_bytes int(10) unsigned NOT NULL DEFAULT 0,
 			version bigint(20) unsigned NOT NULL DEFAULT 0,
 			record longtext NOT NULL,
 			PRIMARY KEY  (id),
@@ -496,7 +501,9 @@ class Mcpwp_Activator {
 
 	/**
 	 * One-time move of the approvals store from the serialized option
-	 * `mcpwp_approval_requests` to `{prefix}mcpwp_approvals` (#1042).
+	 * `mcpwp_approval_requests` to `{prefix}mcpwp_approvals` (#1042), plus
+	 * the table's schema upgrades and the "late import" of a recreated
+	 * option.
 	 *
 	 * Gated on its OWN flag (`mcpwp_approvals_table_migrated`), not only on
 	 * the mcpwp_db_version compare in mcpwp.php — same reasoning as every
@@ -509,23 +516,33 @@ class Mcpwp_Activator {
 	 * this answers approvals_busy (503, retry_after 2) and so does every
 	 * approval read and write — there is no dual-read path.
 	 *
-	 * Steps, each safe to re-run after a crash: dbDelta() the table and
-	 * verify it answers; copy every record of the option with INSERT IGNORE
-	 * by id (idempotent); verify the table holds at least as many rows as
-	 * the option held records; only then rename the option to
-	 * `mcpwp_approval_requests_pre_3149` (autoload off — kept, not deleted,
-	 * so a downgrade or a bad migration can be recovered by hand; a later
-	 * release removes it) and set the flag.
+	 * Steps, each safe to re-run after a crash: dbDelta() the table (and,
+	 * below schema Mcpwp_Approvals::SCHEMA_VERSION, backfill any column it
+	 * added); copy every record of the option with INSERT IGNORE by id
+	 * (idempotent; an id already in the table wins); skip — and list in
+	 * `mcpwp_approvals_migration_skipped` — a record that is malformed or
+	 * cannot be encoded, rather than block the store forever; verify the
+	 * table holds at least as many rows as were copyable; only then merge the
+	 * option into `mcpwp_approval_requests_pre_3149` (autoload off; ids
+	 * already in the backup win) — kept, not deleted, so a downgrade or a bad
+	 * migration can be recovered by hand; a later release removes it —
+	 * delete the option and set the flag.
+	 *
+	 * Late import (#1042 review round 1, W3): if the option exists again
+	 * AFTER the flag is set — a worker still running the old code during the
+	 * upgrade, or time spent downgraded to 3.14.8 — the same copy runs again
+	 * on the next load, so those records reach the table instead of being
+	 * stranded.
 	 *
 	 * @return true|WP_Error
 	 */
 	public static function migrate_approvals_to_table() {
 		$flag = 'mcpwp_approvals_table_migrated';
-		if ( get_option( $flag ) ) {
-			return true;
-		}
 		if ( ! class_exists( 'Mcpwp_Approvals' ) ) {
 			require_once __DIR__ . '/core/class-mcpwp-approvals.php';
+		}
+		if ( self::approvals_store_current() ) {
+			return true;
 		}
 
 		$lock_token = self::acquire_migration_lock( self::APPROVALS_TABLE_LOCK_OPTION, self::APPROVALS_TABLE_LOCK_TTL );
@@ -536,23 +553,17 @@ class Mcpwp_Activator {
 		try {
 			// Another request may have finished while we waited for the lock.
 			if ( function_exists( 'wp_cache_delete' ) ) {
-				wp_cache_delete( $flag, 'options' );
-				wp_cache_delete( 'alloptions', 'options' );
-				wp_cache_delete( 'notoptions', 'options' );
-				wp_cache_delete( Mcpwp_Approvals::OPTION_NAME, 'options' );
+				foreach ( array( $flag, Mcpwp_Approvals::SCHEMA_OPTION, Mcpwp_Approvals::OPTION_NAME, Mcpwp_Approvals::LEGACY_BACKUP_OPTION, 'alloptions', 'notoptions' ) as $cached ) {
+					wp_cache_delete( $cached, 'options' );
+				}
 			}
-			if ( get_option( $flag ) ) {
+			if ( self::approvals_store_current() ) {
 				return true;
 			}
 
 			global $wpdb;
-			if ( ! function_exists( 'dbDelta' ) ) {
-				require_once ABSPATH . 'wp-admin/includes/upgrade.php';
-			}
-			$table = $wpdb->prefix . 'mcpwp_approvals';
-			dbDelta( self::approvals_create_sql( $table, $wpdb->get_charset_collate() ) );
-
-			$items = get_option( Mcpwp_Approvals::OPTION_NAME, false );
+			$migrated = (bool) get_option( $flag );
+			$items    = get_option( Mcpwp_Approvals::OPTION_NAME, false );
 
 			// A 2.8.x site whose spai_ → mcpwp_ bridge (Mcpwp_Migrate, which
 			// runs before this on every plugins_loaded, but AFTER activate()
@@ -560,32 +571,74 @@ class Mcpwp_Activator {
 			// under spai_approval_requests. Marking the table migrated now
 			// would strand that queue in an option nothing reads; wait for
 			// the bridge instead.
-			if ( false === $items && ! get_option( 'mcpwp_migrated_from_spai' ) && false !== get_option( 'spai_approval_requests', false ) ) {
+			if ( ! $migrated && false === $items && ! get_option( 'mcpwp_migrated_from_spai' ) && false !== get_option( 'spai_approval_requests', false ) ) {
 				return Mcpwp_Approvals::busy_error();
 			}
 
-			$copied = Mcpwp_Approvals::import_legacy_items( is_array( $items ) ? $items : array() );
-			if ( is_wp_error( $copied ) ) {
-				return $copied;
+			if ( (int) get_option( Mcpwp_Approvals::SCHEMA_OPTION, 0 ) < Mcpwp_Approvals::SCHEMA_VERSION ) {
+				if ( ! function_exists( 'dbDelta' ) ) {
+					require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+				}
+				dbDelta( self::approvals_create_sql( $wpdb->prefix . 'mcpwp_approvals', $wpdb->get_charset_collate() ) );
+				// A table created by an earlier schema gets its new columns
+				// filled from the records themselves.
+				$backfilled = Mcpwp_Approvals::backfill_derived_columns();
+				if ( is_wp_error( $backfilled ) ) {
+					return $backfilled;
+				}
 			}
 
 			if ( false !== $items ) {
-				update_option( Mcpwp_Approvals::LEGACY_BACKUP_OPTION, $items, false );
+				$copied = Mcpwp_Approvals::import_legacy_items( is_array( $items ) ? $items : array() );
+				if ( is_wp_error( $copied ) ) {
+					return $copied;
+				}
+
+				if ( ! empty( $copied['skipped'] ) ) {
+					$known = get_option( Mcpwp_Approvals::SKIPPED_OPTION, array() );
+					$known = is_array( $known ) ? $known : array();
+					update_option( Mcpwp_Approvals::SKIPPED_OPTION, array_values( array_unique( array_merge( $known, $copied['skipped'] ) ) ), false );
+					if ( defined( 'WP_DEBUG_LOG' ) && WP_DEBUG_LOG ) {
+						// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+						error_log( 'MCPWP approvals migration: skipped records it could not copy (kept in mcpwp_approval_requests_pre_3149): ' . implode( ', ', $copied['skipped'] ) );
+					}
+				}
+
+				// Merge into the backup; an id already there wins, so a late
+				// import never overwrites what the first migration kept.
+				$backup = get_option( Mcpwp_Approvals::LEGACY_BACKUP_OPTION, array() );
+				$backup = is_array( $backup ) ? $backup : array();
+				$merged = is_array( $items ) ? $backup + $items : ( empty( $backup ) ? $items : $backup );
+				update_option( Mcpwp_Approvals::LEGACY_BACKUP_OPTION, $merged, false );
 				if ( function_exists( 'wp_cache_delete' ) ) {
 					wp_cache_delete( Mcpwp_Approvals::LEGACY_BACKUP_OPTION, 'options' );
 				}
-				if ( get_option( Mcpwp_Approvals::LEGACY_BACKUP_OPTION, null ) !== $items ) {
+				if ( get_option( Mcpwp_Approvals::LEGACY_BACKUP_OPTION, null ) !== $merged ) {
 					return Mcpwp_Approvals::store_failed_error();
 				}
 				delete_option( Mcpwp_Approvals::OPTION_NAME );
 			}
 
+			update_option( Mcpwp_Approvals::SCHEMA_OPTION, Mcpwp_Approvals::SCHEMA_VERSION );
 			update_option( $flag, 1 );
 			return true;
 		} finally {
 			self::release_migration_lock( self::APPROVALS_TABLE_LOCK_OPTION, $lock_token );
 		}
 	}
+
+	/**
+	 * The store needs nothing: migrated, schema current, and the legacy
+	 * option has not reappeared.
+	 *
+	 * @return bool
+	 */
+	private static function approvals_store_current() {
+		return get_option( 'mcpwp_approvals_table_migrated' )
+			&& (int) get_option( Mcpwp_Approvals::SCHEMA_OPTION, 0 ) >= Mcpwp_Approvals::SCHEMA_VERSION
+			&& false === get_option( Mcpwp_Approvals::OPTION_NAME, false );
+	}
+
 	/**
 	 * One-time migration (#1041): mark every existing custom-role API key
 	 * whose stored tool_categories is empty (never selected, or every

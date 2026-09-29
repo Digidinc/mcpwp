@@ -88,6 +88,8 @@ class Mcpwp_Uninstaller {
 		'mcpwp_approval_requests',
 		'mcpwp_approvals_identity_migrated',
 		'mcpwp_approvals_table_migration_lock',
+		'mcpwp_approvals_schema_version',
+		'mcpwp_approvals_migration_skipped',
 	);
 
 	/**

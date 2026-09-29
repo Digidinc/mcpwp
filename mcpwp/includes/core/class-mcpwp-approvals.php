@@ -48,8 +48,35 @@ class Mcpwp_Approvals {
 	const LEGACY_BACKUP_OPTION = 'mcpwp_approval_requests_pre_3149';
 
 	/**
-	 * Maximum OPEN requests (open_statuses()) the site holds. A create past
-	 * it is refused (429); closed history does not count against it.
+	 * Schema of the table this code expects; below it,
+	 * Mcpwp_Activator::migrate_approvals_to_table() dbDelta()s the table and
+	 * backfills the new columns before the store answers again.
+	 *
+	 * @var int
+	 */
+	const SCHEMA_VERSION = 2;
+
+	/**
+	 * Option holding the table's schema version.
+	 *
+	 * @var string
+	 */
+	const SCHEMA_OPTION = 'mcpwp_approvals_schema_version';
+
+	/**
+	 * Ids of legacy records the migration could not copy (not an array, a
+	 * bad id, or not encodable); they stay in LEGACY_BACKUP_OPTION.
+	 *
+	 * @var string
+	 */
+	const SKIPPED_OPTION = 'mcpwp_approvals_migration_skipped';
+
+	/**
+	 * Maximum OPEN requests (open_statuses()) the site holds from capped
+	 * principals. A capped create past it is refused (429); closed history
+	 * does not count against it, and an exempt principal (a wp-admin user,
+	 * an unrestricted key — requester_is_exempt_from_caps()) is never
+	 * refused by count.
 	 *
 	 * @var int
 	 */
@@ -274,12 +301,10 @@ class Mcpwp_Approvals {
 				if ( ! $capped ) {
 					return true;
 				}
-				// A request whose requester was unrestricted when it was created
-				// carries metadata.cap_exempt and never counts (see
-				// requester_is_exempt_from_caps()). wp_json_encode() writes that
-				// key only from the metadata the creator builds here — a string
-				// value containing it is escaped (\") and cannot match.
-				$not_exempt   = array( 'record NOT LIKE', '%' . self::esc_like( '"cap_exempt":true' ) . '%' );
+				// A request whose requester was exempt when it was created (see
+				// requester_is_exempt_from_caps(); the cap_exempt column, written
+				// by row_from_record()) never counts.
+				$not_exempt   = array( 'cap_exempt =', 0 );
 				$pending_mine = self::count_where(
 					array(
 						array( 'status =', 'pending' ),
@@ -308,7 +333,7 @@ class Mcpwp_Approvals {
 				if ( is_wp_error( $held ) ) {
 					return $held;
 				}
-				$mine_bytes = strlen( (string) wp_json_encode( $request ) ) + $held;
+				$mine_bytes = (int) self::quota_size( $request ) + $held;
 				if ( $mine_bytes > self::requester_byte_quota() ) {
 					return new WP_Error(
 						'requester_store_quota',
@@ -324,7 +349,6 @@ class Mcpwp_Approvals {
 					array(
 						array( 'status =', 'pending' ),
 						array( 'action =', 'post_content_update' ),
-						array( 'requested_by_key_id NOT LIKE', self::esc_like( 'wp-user:' ) . '%' ),
 						$not_exempt,
 					)
 				);
@@ -343,7 +367,8 @@ class Mcpwp_Approvals {
 					);
 				}
 				return true;
-			}
+			},
+			! $capped
 		);
 		if ( is_wp_error( $stored ) ) {
 			return $stored;
@@ -446,9 +471,13 @@ class Mcpwp_Approvals {
 		// A flood of gated calls must not fill the queue other people review
 		// — from one principal, or from many minted for the purpose. Counted
 		// under the create lock, so parallel requests cannot all pass.
+		// Exempt principals (a wp-admin user, an unrestricted key) are never
+		// refused by a SITE-wide count (#1042 review round 1, B1); the
+		// per-principal cap below still binds everyone.
+		$exempt = self::requester_is_exempt_from_caps( $requester, is_array( $args ) ? $args : array() );
 		$stored = self::insert_new(
 			$request,
-			static function () use ( $requester ) {
+			static function () use ( $requester, $exempt ) {
 				$pending_mine = self::count_where(
 					array(
 						array( 'status =', 'pending' ),
@@ -469,7 +498,7 @@ class Mcpwp_Approvals {
 						array( 'status' => 429 )
 					);
 				}
-				if ( 0 === strpos( $requester, 'wp-user:' ) ) {
+				if ( $exempt ) {
 					return true;
 				}
 				$pending_api = self::count_where(
@@ -493,7 +522,8 @@ class Mcpwp_Approvals {
 					);
 				}
 				return true;
-			}
+			},
+			$exempt
 		);
 		if ( is_wp_error( $stored ) ) {
 			return $stored;
@@ -600,7 +630,7 @@ class Mcpwp_Approvals {
 			'rolled_back_at'      => null,
 		);
 
-		$stored = self::insert_new( $request );
+		$stored = self::insert_new( $request, null, self::requester_is_exempt_from_caps( $request['requested_by_key_id'], is_array( $args ) ? $args : array() ) );
 		if ( is_wp_error( $stored ) ) {
 			return $stored;
 		}
@@ -717,6 +747,103 @@ class Mcpwp_Approvals {
 		}
 
 		return $records;
+	}
+
+	/**
+	 * Most closed rows count_by_status() reads for a caller whose visibility
+	 * must be checked per record; past it the closed counts are marked
+	 * truncated rather than silently short.
+	 */
+	const COUNT_CLOSED_SCAN_LIMIT = 5000;
+
+	/**
+	 * Approvals per status (#1042 review round 1, W4) — every consumer of
+	 * approval counts (/site-state, content coherence, Control Room) reads
+	 * this, never a count of one listed page.
+	 *
+	 * With no $category_allowed (an unrestricted caller): exact, one SQL
+	 * `COUNT(*) … GROUP BY status`. With one: every open-status row is
+	 * checked through is_approval_visible_to() (the one visibility
+	 * chokepoint — never a second SQL version of it), and closed rows up to
+	 * COUNT_CLOSED_SCAN_LIMIT; past that the answer says truncated => true.
+	 *
+	 * @param callable|null $category_allowed See list_requests().
+	 * @return array{counts:array<string,int>,truncated:bool}|WP_Error
+	 */
+	public static function count_by_status( $category_allowed = null ) {
+		$ready = self::ensure_store();
+		if ( is_wp_error( $ready ) ) {
+			return $ready;
+		}
+		self::maybe_sweep_expired();
+
+		global $wpdb;
+		$counts = array();
+
+		if ( ! is_callable( $category_allowed ) ) {
+			$table = self::table_name();
+			// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- table name is prefix + constant.
+			$rows = $wpdb->get_results( "SELECT status, COUNT(*) AS n FROM {$table} GROUP BY status", ARRAY_A );
+			if ( ! is_array( $rows ) || '' !== (string) $wpdb->last_error ) {
+				return self::store_read_failed_error();
+			}
+			foreach ( $rows as $row ) {
+				$counts[ (string) $row['status'] ] = (int) $row['n'];
+			}
+			return array(
+				'counts'    => $counts,
+				'truncated' => false,
+			);
+		}
+
+		$truncated = false;
+		foreach ( array( 'open', 'closed' ) as $pass ) {
+			$scanned = 0;
+			$after   = '';
+			while ( true ) {
+				$rows = self::select_rows(
+					array(
+						array( 'open' === $pass ? 'status IN' : 'status NOT IN', self::open_statuses() ),
+						array( 'id >', $after ),
+					),
+					'id ASC',
+					self::LIST_BATCH
+				);
+				if ( is_wp_error( $rows ) ) {
+					return $rows;
+				}
+				if ( empty( $rows ) ) {
+					break;
+				}
+				foreach ( $rows as $row ) {
+					$after = $row['id'];
+					$item  = self::expire_stale_one( $row['record'] );
+					if ( ! self::is_approval_visible_to( $item, $category_allowed ) ) {
+						continue;
+					}
+					$status            = isset( $item['status'] ) ? (string) $item['status'] : '';
+					$counts[ $status ] = ( isset( $counts[ $status ] ) ? $counts[ $status ] : 0 ) + 1;
+				}
+				$scanned += count( $rows );
+				if ( 'closed' === $pass && $scanned >= self::COUNT_CLOSED_SCAN_LIMIT ) {
+					$more = self::select_rows(
+						array(
+							array( 'status NOT IN', self::open_statuses() ),
+							array( 'id >', $after ),
+						),
+						'id ASC',
+						1
+					);
+					$truncated = is_wp_error( $more ) || ! empty( $more );
+					break;
+				}
+			}
+		}
+
+		return array(
+			'counts'    => $counts,
+			'truncated' => $truncated,
+		);
 	}
 
 	/**
@@ -1079,7 +1206,7 @@ class Mcpwp_Approvals {
 			}
 			$final = self::finalise( $id, $claim, $back, $partial ? 'apply_failed_at' : 'last_error_at', $extra );
 			if ( is_wp_error( $final ) && $partial ) {
-				return self::unconfirmed_error( $field, $id );
+				return self::unconfirmed_error( $field, $id, $final );
 			}
 			return $result;
 		}
@@ -1089,7 +1216,7 @@ class Mcpwp_Approvals {
 		$finalise_extra[ 'payload' === $field ? 'applied_by' : 'rolled_back_by' ] = $claimant;
 		$final = self::finalise( $id, $claim, $done, $time_field, $finalise_extra );
 		if ( is_wp_error( $final ) ) {
-			return self::unconfirmed_error( $field, $id );
+			return self::unconfirmed_error( $field, $id, $final );
 		}
 
 		$public = self::public_record( $final );
@@ -1127,21 +1254,25 @@ class Mcpwp_Approvals {
 	/**
 	 * The change ran but its record could not be finalised.
 	 *
-	 * @param string $field payload / rollback.
-	 * @param string $id    Request id.
+	 * @param string        $field payload / rollback.
+	 * @param string        $id    Request id.
+	 * @param WP_Error|null $cause The finalise error, for an accurate message.
 	 * @return WP_Error
 	 */
-	private static function unconfirmed_error( $field, $id ) {
+	private static function unconfirmed_error( $field, $id, $cause = null ) {
 		$what = 'rollback' === $field ? __( 'rolled back', 'mcpwp' ) : __( 'applied', 'mcpwp' );
+		$code = $cause instanceof WP_Error ? $cause->get_error_code() : '';
+		if ( 'approvals_busy' === $code ) {
+			/* translators: 1: applied/rolled back, 2: request id */
+			$format = __( 'The change WAS %1$s, but the approval record %2$s could not be updated: other writes to it kept landing first. It stays marked in progress and is flagged for attention in Control Room; do not apply it again.', 'mcpwp' );
+		} else {
+			/* translators: 1: applied/rolled back, 2: request id */
+			$format = __( 'The change WAS %1$s, but the approval record %2$s could not be saved (a database write failed). It stays marked in progress and is flagged for attention in Control Room; do not apply it again.', 'mcpwp' );
+		}
 		return new WP_Error(
 			'approval_record_unconfirmed',
-			sprintf(
-				/* translators: 1: applied/rolled back, 2: request id */
-				__( 'The change WAS %1$s, but the approval record %2$s could not be updated (the approval queue was busy). It stays marked in progress and is flagged for attention in Control Room; do not apply it again.', 'mcpwp' ),
-				$what,
-				$id
-			),
-			array( 'status' => 202, 'approval_id' => $id )
+			sprintf( $format, $what, $id ),
+			array( 'status' => 202, 'approval_id' => $id, 'cause' => $code )
 		);
 	}
 
@@ -1964,25 +2095,34 @@ class Mcpwp_Approvals {
 	 * lock, open-request cap, verified INSERT — as every create_*_request().
 	 *
 	 * @param array $record Complete record; must carry an 'id'.
+	 * @param array $args   {requester_unrestricted?: bool} — whether the
+	 *                      requester is exempt from the open-request cap.
 	 * @return true|WP_Error
 	 */
-	public static function insert_request( array $record ) {
+	public static function insert_request( array $record, array $args = array() ) {
 		if ( empty( $record['id'] ) || sanitize_key( (string) $record['id'] ) !== (string) $record['id'] ) {
-			return new WP_Error( 'approvals_write_failed', __( 'The approval queue could not be updated.', 'mcpwp' ), array( 'status' => 500 ) );
+			return new WP_Error( 'approvals_invalid_record', __( 'The approval request has no valid id. Nothing was stored.', 'mcpwp' ), array( 'status' => 400 ) );
 		}
-		return self::insert_new( $record );
+		$requester = isset( $record['requested_by_key_id'] ) ? (string) $record['requested_by_key_id'] : '';
+		return self::insert_new( $record, null, self::requester_is_exempt_from_caps( $requester, $args ) );
 	}
 
 	/**
 	 * Copy the legacy option's records into the table — for
 	 * Mcpwp_Activator::migrate_approvals_to_table() only. INSERT IGNORE by
-	 * id, so a crashed half-migration simply re-runs; afterwards the table
-	 * must hold at least as many rows as the option held records, or this
-	 * fails and the migration is not marked done. Records go in in the
-	 * option's order, so `seq` keeps the order they listed in.
+	 * id, so a crashed half-migration simply re-runs and an id already in
+	 * the table is never overwritten; afterwards the table must hold at
+	 * least as many rows as there were copyable records, or this fails and
+	 * the migration is not marked done. Records go in in the option's order,
+	 * so `seq` keeps the order they listed in.
+	 *
+	 * A record that is not an array, has an unusable id, or cannot be
+	 * encoded (e.g. nested deeper than JSON allows) is skipped and its id
+	 * returned — one bad record must not block every approval on the site
+	 * forever (#1042 review round 1, W2). It stays in the renamed option.
 	 *
 	 * @param array $items id => record, exactly as the option held them.
-	 * @return int|WP_Error Records the option held.
+	 * @return array{records:int,skipped:string[]}|WP_Error
 	 */
 	public static function import_legacy_items( array $items ) {
 		global $wpdb;
@@ -1995,20 +2135,23 @@ class Mcpwp_Approvals {
 		}
 
 		$records = 0;
+		$skipped = array();
 		foreach ( $items as $key => $record ) {
 			$id = (string) $key;
 			if ( ! is_array( $record ) || '' === $id || strlen( $id ) > 64 ) {
-				continue; // Not a record; kept in the renamed option regardless.
+				$skipped[] = substr( $id, 0, 64 );
+				continue;
 			}
-			$records++;
 			$fields = self::row_from_record( $record );
 			if ( is_wp_error( $fields ) ) {
-				return $fields;
+				$skipped[] = $id;
+				continue;
 			}
+			$records++;
 			// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery -- table name is prefix + constant.
 			$inserted = $wpdb->query(
 				$wpdb->prepare(
-					"INSERT IGNORE INTO {$table} (id, status, action, requested_by_key_id, created_at, updated_at, triage_rank, version, record) VALUES (%s, %s, %s, %s, %s, %s, %d, 0, %s)",
+					"INSERT IGNORE INTO {$table} (id, status, action, requested_by_key_id, created_at, updated_at, triage_rank, cap_exempt, quota_bytes, version, record) VALUES (%s, %s, %s, %s, %s, %s, %d, %d, %d, 0, %s)",
 					$id,
 					$fields['status'],
 					$fields['action'],
@@ -2016,6 +2159,8 @@ class Mcpwp_Approvals {
 					$fields['created_at'],
 					$fields['updated_at'],
 					$fields['triage_rank'],
+					$fields['cap_exempt'],
+					$fields['quota_bytes'],
 					$fields['record']
 				)
 			);
@@ -2031,7 +2176,45 @@ class Mcpwp_Approvals {
 		if ( $after < $records ) {
 			return self::store_failed_error();
 		}
-		return $records;
+		return array(
+			'records' => $records,
+			'skipped' => $skipped,
+		);
+	}
+
+	/**
+	 * Recompute the derived columns of every row (schema upgrades that add
+	 * a column, e.g. cap_exempt / quota_bytes in schema 2) — for
+	 * Mcpwp_Activator::migrate_approvals_to_table() only, under its lock.
+	 * Column-only: the record and its version are untouched.
+	 *
+	 * @return true|WP_Error
+	 */
+	public static function backfill_derived_columns() {
+		global $wpdb;
+		$table = self::table_name();
+		$after = '';
+		while ( true ) {
+			$rows = self::select_rows( array( array( 'id >', $after ) ), 'id ASC', self::RETENTION_BATCH );
+			if ( is_wp_error( $rows ) ) {
+				return $rows;
+			}
+			if ( empty( $rows ) ) {
+				return true;
+			}
+			foreach ( $rows as $row ) {
+				$after  = $row['id'];
+				$fields = self::row_from_record( $row['record'] );
+				if ( is_wp_error( $fields ) ) {
+					continue;
+				}
+				// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- table name is prefix + constant.
+				$done = $wpdb->query( $wpdb->prepare( "UPDATE {$table} SET cap_exempt = %d, quota_bytes = %d, updated_at = %s WHERE id = %s", $fields['cap_exempt'], $fields['quota_bytes'], $fields['updated_at'], $row['id'] ) );
+				if ( false === $done ) {
+					return self::store_failed_error();
+				}
+			}
+		}
 	}
 
 	// ── Store (#1042): one row per approval ──────────────────────────────
@@ -2065,7 +2248,7 @@ class Mcpwp_Approvals {
 	 * @return true|WP_Error
 	 */
 	private static function ensure_store() {
-		if ( get_option( self::MIGRATED_FLAG ) ) {
+		if ( get_option( self::MIGRATED_FLAG ) && (int) get_option( self::SCHEMA_OPTION, 0 ) >= self::SCHEMA_VERSION ) {
 			return true;
 		}
 		if ( ! class_exists( 'Mcpwp_Activator' ) ) {
@@ -2088,7 +2271,7 @@ class Mcpwp_Approvals {
 	}
 
 	/**
-	 * approvals_store_failed — a database read or write failed (503).
+	 * approvals_store_failed — a database WRITE failed (503).
 	 *
 	 * @return WP_Error
 	 */
@@ -2097,6 +2280,37 @@ class Mcpwp_Approvals {
 			'approvals_store_failed',
 			__( 'The approval queue could not be saved. Nothing was changed; try again, and if it persists ask an administrator to review the approval queue.', 'mcpwp' ),
 			array( 'status' => 503 )
+		);
+	}
+
+	/**
+	 * approvals_store_failed — a database READ failed (503). Same code as a
+	 * failed write (callers retry both the same way), its own message: a
+	 * read changes nothing and saves nothing.
+	 *
+	 * @return WP_Error
+	 */
+	public static function store_read_failed_error() {
+		return new WP_Error(
+			'approvals_store_failed',
+			__( 'The approval queue could not be read. Try again in a moment; if it persists, ask an administrator to check the database.', 'mcpwp' ),
+			array( 'status' => 503 )
+		);
+	}
+
+	/**
+	 * approvals_store_failed for one row whose stored record does not
+	 * decode. Carries reason=corrupt_record so a caller that cannot prove the
+	 * record is visible to its principal answers not-found instead
+	 * (Mcpwp_REST_Approvals::resolve_visible_approval()).
+	 *
+	 * @return WP_Error
+	 */
+	public static function corrupt_record_error() {
+		return new WP_Error(
+			'approvals_store_failed',
+			__( 'This approval request is stored damaged and cannot be read. Ask an administrator to check the approvals table.', 'mcpwp' ),
+			array( 'status' => 503, 'reason' => 'corrupt_record' )
 		);
 	}
 
@@ -2115,11 +2329,11 @@ class Mcpwp_Approvals {
 		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- table name is prefix + constant; a cached read would defeat the version check.
 		$row = $wpdb->get_row( $wpdb->prepare( "SELECT version, record FROM {$table} WHERE id = %s", $id ), ARRAY_A );
 		if ( null === $row ) {
-			return '' !== (string) $wpdb->last_error ? self::store_failed_error() : null;
+			return '' !== (string) $wpdb->last_error ? self::store_read_failed_error() : null;
 		}
 		$record = json_decode( (string) $row['record'], true );
 		if ( ! is_array( $record ) ) {
-			return self::store_failed_error();
+			return self::corrupt_record_error();
 		}
 		return array(
 			'version' => (int) $row['version'],
@@ -2186,13 +2400,15 @@ class Mcpwp_Approvals {
 			// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- conditional (version-checked) write; table name is prefix + constant.
 			$affected = $wpdb->query(
 				$wpdb->prepare(
-					"UPDATE {$table} SET status = %s, action = %s, requested_by_key_id = %s, created_at = %s, updated_at = %s, triage_rank = %d, record = %s, version = version + 1 WHERE id = %s AND version = %d",
+					"UPDATE {$table} SET status = %s, action = %s, requested_by_key_id = %s, created_at = %s, updated_at = %s, triage_rank = %d, cap_exempt = %d, quota_bytes = %d, record = %s, version = version + 1 WHERE id = %s AND version = %d",
 					$fields['status'],
 					$fields['action'],
 					$fields['requested_by_key_id'],
 					$fields['created_at'],
 					$fields['updated_at'],
 					$fields['triage_rank'],
+					$fields['cap_exempt'],
+					$fields['quota_bytes'],
 					$fields['record'],
 					$id,
 					$row['version']
@@ -2212,16 +2428,22 @@ class Mcpwp_Approvals {
 
 	/**
 	 * Insert a new record under the create lock: $admit (quota checks, run
-	 * against the table with the lock held), then the open-request cap
-	 * (MAX_ITEMS), then a plain INSERT. The lock is held for exactly
-	 * check-plus-insert and nothing else — no other operation takes a
-	 * global lock.
+	 * against the table with the lock held), then — for a capped principal
+	 * only — the open-request cap (MAX_ITEMS), then a plain INSERT. The lock
+	 * is held for exactly check-plus-insert and nothing else — no other
+	 * operation takes a global lock.
+	 *
+	 * An exempt principal (requester_is_exempt_from_caps(): a wp-admin user,
+	 * an unrestricted key) is never refused by count: capped keys filling
+	 * every open slot must not lock the site's own administrators out of the
+	 * queue (#1042 review round 1, B1).
 	 *
 	 * @param array         $request Complete record.
 	 * @param callable|null $admit   function(): true|WP_Error.
+	 * @param bool          $exempt  Whether the requester is exempt from caps.
 	 * @return true|WP_Error
 	 */
-	private static function insert_new( array $request, $admit = null ) {
+	private static function insert_new( array $request, $admit = null, $exempt = false ) {
 		$ready = self::ensure_store();
 		if ( is_wp_error( $ready ) ) {
 			return $ready;
@@ -2249,11 +2471,11 @@ class Mcpwp_Approvals {
 				}
 			}
 
-			$open = self::count_where( array( array( 'status IN', self::open_statuses() ) ) );
+			$open = $exempt ? 0 : self::count_where( array( array( 'status IN', self::open_statuses() ) ) );
 			if ( is_wp_error( $open ) ) {
 				return $open;
 			}
-			if ( $open >= self::MAX_ITEMS ) {
+			if ( ! $exempt && $open >= self::MAX_ITEMS ) {
 				return new WP_Error(
 					'approval_queue_full',
 					sprintf(
@@ -2269,7 +2491,7 @@ class Mcpwp_Approvals {
 			// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery -- table name is prefix + constant.
 			$inserted = $wpdb->query(
 				$wpdb->prepare(
-					"INSERT INTO {$table} (id, status, action, requested_by_key_id, created_at, updated_at, triage_rank, version, record) VALUES (%s, %s, %s, %s, %s, %s, %d, 0, %s)",
+					"INSERT INTO {$table} (id, status, action, requested_by_key_id, created_at, updated_at, triage_rank, cap_exempt, quota_bytes, version, record) VALUES (%s, %s, %s, %s, %s, %s, %d, %d, %d, 0, %s)",
 					$fields['id'],
 					$fields['status'],
 					$fields['action'],
@@ -2277,6 +2499,8 @@ class Mcpwp_Approvals {
 					$fields['created_at'],
 					$fields['updated_at'],
 					$fields['triage_rank'],
+					$fields['cap_exempt'],
+					$fields['quota_bytes'],
 					$fields['record']
 				)
 			);
@@ -2344,13 +2568,14 @@ class Mcpwp_Approvals {
 		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- where_sql() prepares every value.
 		$count = $wpdb->get_var( "SELECT COUNT(*) FROM {$table}" . self::where_sql( $conditions ) );
 		if ( null === $count || '' !== (string) $wpdb->last_error ) {
-			return self::store_failed_error();
+			return self::store_read_failed_error();
 		}
 		return (int) $count;
 	}
 
 	/**
-	 * Bytes of the open records $requester holds.
+	 * Bytes of the open records $requester holds, measured as unescaped JSON
+	 * (the quota_bytes column) whatever the storage encoding.
 	 *
 	 * @param string $requester requested_by_key_id.
 	 * @return int|WP_Error
@@ -2365,9 +2590,9 @@ class Mcpwp_Approvals {
 			)
 		);
 		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- where_sql() prepares every value.
-		$bytes = $wpdb->get_var( "SELECT COALESCE(SUM(LENGTH(record)), 0) FROM {$table}" . $where );
+		$bytes = $wpdb->get_var( "SELECT COALESCE(SUM(quota_bytes), 0) FROM {$table}" . $where );
 		if ( null === $bytes || '' !== (string) $wpdb->last_error ) {
-			return self::store_failed_error();
+			return self::store_read_failed_error();
 		}
 		return (int) $bytes;
 	}
@@ -2388,7 +2613,7 @@ class Mcpwp_Approvals {
 		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- where_sql() prepares every value; $order_by is a fixed string.
 		$rows = $wpdb->get_results( "SELECT id, version, record FROM {$table}" . self::where_sql( $conditions ) . ' ORDER BY ' . $order_by . $wpdb->prepare( ' LIMIT %d OFFSET %d', (int) $limit, (int) $offset ), ARRAY_A );
 		if ( ! is_array( $rows ) || '' !== (string) $wpdb->last_error ) {
-			return self::store_failed_error();
+			return self::store_read_failed_error();
 		}
 		$out = array();
 		foreach ( $rows as $row ) {
@@ -2431,21 +2656,63 @@ class Mcpwp_Approvals {
 	 * @return array|WP_Error
 	 */
 	private static function row_from_record( array $record ) {
-		$json = wp_json_encode( $record );
-		if ( ! is_string( $json ) || '' === $json ) {
-			return new WP_Error( 'approvals_write_failed', __( 'The approval queue could not be updated.', 'mcpwp' ), array( 'status' => 500 ) );
+		$json = self::encode_record( $record, true );
+		$size = self::quota_size( $record );
+		if ( ! is_string( $json ) || '' === $json || false === $size ) {
+			return new WP_Error( 'approvals_record_unencodable', __( 'This approval request could not be stored: its content cannot be encoded. Nothing was changed.', 'mcpwp' ), array( 'status' => 422 ) );
 		}
-		$triage = self::sanitize_triage( isset( $record['triage'] ) ? $record['triage'] : null );
+		$triage    = self::sanitize_triage( isset( $record['triage'] ) ? $record['triage'] : null );
+		$requester = isset( $record['requested_by_key_id'] ) ? (string) $record['requested_by_key_id'] : '';
+		$metadata  = isset( $record['metadata'] ) && is_array( $record['metadata'] ) ? $record['metadata'] : array();
+		// A record with no parseable updated_at is dated by its created_at
+		// (retention reads this column); run_retention() never deletes one
+		// with neither.
+		$updated = isset( $record['updated_at'] ) && is_string( $record['updated_at'] ) && false !== strtotime( $record['updated_at'] )
+			? $record['updated_at']
+			: ( isset( $record['created_at'] ) ? $record['created_at'] : '' );
 		return array(
 			'id'                  => substr( isset( $record['id'] ) ? (string) $record['id'] : '', 0, 64 ),
 			'status'              => substr( isset( $record['status'] ) ? (string) $record['status'] : '', 0, 20 ),
 			'action'              => substr( isset( $record['action'] ) ? (string) $record['action'] : '', 0, 64 ),
 			'requested_by_key_id' => substr( isset( $record['requested_by_key_id'] ) ? (string) $record['requested_by_key_id'] : '', 0, 191 ),
 			'created_at'          => self::sql_datetime( isset( $record['created_at'] ) ? $record['created_at'] : '' ),
-			'updated_at'          => self::sql_datetime( isset( $record['updated_at'] ) ? $record['updated_at'] : '' ),
+			'updated_at'          => self::sql_datetime( $updated ),
 			'triage_rank'         => null === $triage ? -1 : self::triage_priority_rank( $triage['priority'] ),
+			'cap_exempt'          => self::requester_is_exempt_from_caps( $requester, $metadata ) ? 1 : 0,
+			'quota_bytes'         => $size,
 			'record'              => $json,
 		);
+	}
+
+	/**
+	 * JSON for a record. Stored unescaped (JSON_UNESCAPED_UNICODE |
+	 * JSON_UNESCAPED_SLASHES) on a utf8mb4 connection, so Persian or CJK text
+	 * is not stored at 2-3x its size; escaped otherwise, so a non-utf8mb4
+	 * table never receives a character it cannot hold.
+	 *
+	 * @param array $record     Record.
+	 * @param bool  $for_storage Whether this is the stored form.
+	 * @return string|false
+	 */
+	private static function encode_record( array $record, $for_storage ) {
+		global $wpdb;
+		$flags = JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES;
+		if ( $for_storage && ! ( isset( $wpdb->charset ) && 'utf8mb4' === $wpdb->charset ) ) {
+			$flags = 0;
+		}
+		return wp_json_encode( $record, $flags );
+	}
+
+	/**
+	 * Bytes a record counts against its requester's quota: always the
+	 * unescaped JSON length, whatever encoding it is stored in.
+	 *
+	 * @param array $record Record.
+	 * @return int|false
+	 */
+	private static function quota_size( array $record ) {
+		$json = self::encode_record( $record, false );
+		return is_string( $json ) ? strlen( $json ) : false;
 	}
 
 	/**
@@ -2746,10 +3013,7 @@ class Mcpwp_Approvals {
 				if ( 'applied' === $status && ! self::is_compactable( $item ) ) {
 					continue;
 				}
-				if ( ! self::audit_removal( $item, 'purged' ) ) {
-					continue;
-				}
-				$deleted = self::delete_row( $row['id'], $row['version'] );
+				$deleted = self::audited_delete( $row, 'purged' );
 				if ( is_wp_error( $deleted ) ) {
 					return $deleted;
 				}
@@ -2790,6 +3054,7 @@ class Mcpwp_Approvals {
 		 * @param int $days Default 90. Below 1 disables deletion.
 		 */
 		$days = (int) apply_filters( 'mcpwp_approvals_closed_retention_days', self::CLOSED_RETENTION_DAYS );
+		$undated = array();
 		if ( $days > 0 ) {
 			$cutoff = gmdate( 'Y-m-d H:i:s', time() - $days * DAY_IN_SECONDS );
 			$after  = '';
@@ -2808,10 +3073,17 @@ class Mcpwp_Approvals {
 				}
 				foreach ( $rows as $row ) {
 					$after = $row['id'];
-					if ( ! self::audit_removal( $row['record'], 'retention' ) ) {
-						continue; // No audit row, no removal.
+					// The column prefilter is a copy; the record decides. No
+					// usable date at all: never deleted, reported instead.
+					$decided = self::decided_time( $row['record'] );
+					if ( false === $decided ) {
+						$undated[] = $row['id'];
+						continue;
 					}
-					$deleted = self::delete_row( $row['id'], $row['version'] );
+					if ( $decided >= time() - $days * DAY_IN_SECONDS ) {
+						continue;
+					}
+					$deleted = self::audited_delete( $row, 'retention' );
 					if ( is_wp_error( $deleted ) ) {
 						return $deleted;
 					}
@@ -2823,6 +3095,10 @@ class Mcpwp_Approvals {
 					break;
 				}
 			}
+		}
+		if ( ! empty( $undated ) && defined( 'WP_DEBUG_LOG' ) && WP_DEBUG_LOG ) {
+			// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+			error_log( 'MCPWP approvals retention: kept closed records with no updated_at or created_at: ' . implode( ', ', $undated ) );
 		}
 
 		global $wpdb;
@@ -2841,7 +3117,7 @@ class Mcpwp_Approvals {
 			// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- where_sql() prepares every value.
 			$ids = $wpdb->get_col( "SELECT id FROM {$table}" . $where . ' ORDER BY id ASC LIMIT ' . self::RETENTION_BATCH );
 			if ( ! is_array( $ids ) || '' !== (string) $wpdb->last_error ) {
-				return self::store_failed_error();
+				return self::store_read_failed_error();
 			}
 			foreach ( $ids as $id ) {
 				$after = (string) $id;
@@ -2858,6 +3134,51 @@ class Mcpwp_Approvals {
 		}
 
 		return $removed;
+	}
+
+	/**
+	 * When a record was last decided: updated_at, else created_at, else
+	 * false (unknown — retention never deletes such a record).
+	 *
+	 * @param array $record Record.
+	 * @return int|false
+	 */
+	private static function decided_time( array $record ) {
+		foreach ( array( 'updated_at', 'created_at' ) as $field ) {
+			$time = isset( $record[ $field ] ) && is_string( $record[ $field ] ) && '' !== $record[ $field ] ? strtotime( $record[ $field ] ) : false;
+			if ( false !== $time ) {
+				return $time;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Remove one row, audit row first — exactly one audit row per removed
+	 * approval (#1042 review round 1, NIT c). The audit row is written
+	 * before the version-guarded DELETE (no audit, no removal); when that
+	 * DELETE then loses to a concurrent write, the row stays and a later
+	 * run retries it. That retry finds the approval_record_removed row the
+	 * first attempt already wrote and does not write a second one. A failed
+	 * check skips the row this run: "could not check" is never treated as
+	 * "not logged yet".
+	 *
+	 * @param array  $row    {id, version, record}.
+	 * @param string $reason Removal reason.
+	 * @return bool|WP_Error True when removed.
+	 */
+	private static function audited_delete( array $row, $reason ) {
+		if ( ! class_exists( 'Mcpwp_Action_Log' ) || ! method_exists( 'Mcpwp_Action_Log', 'approval_removal_logged' ) ) {
+			return false;
+		}
+		$logged = Mcpwp_Action_Log::approval_removal_logged( $row['id'] );
+		if ( null === $logged ) {
+			return false;
+		}
+		if ( ! $logged && ! self::audit_removal( $row['record'], $reason ) ) {
+			return false;
+		}
+		return self::delete_row( $row['id'], $row['version'] );
 	}
 
 	/**

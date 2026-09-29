@@ -228,7 +228,7 @@ class Mcpwp_Site_State {
 			'rejected'    => 0,
 			'rolled_back' => 0,
 		);
-		$items          = class_exists( 'Mcpwp_Approvals' ) ? Mcpwp_Approvals::list_requests( '', 100, $reveal_non_public, 'date', $category_allowed ) : array();
+		$items          = class_exists( 'Mcpwp_Approvals' ) ? Mcpwp_Approvals::list_requests( 'applied', 5, $reveal_non_public, 'date', $category_allowed ) : array();
 		$pending_items  = class_exists( 'Mcpwp_Approvals' ) ? Mcpwp_Approvals::list_requests( 'pending', 5, $reveal_non_public, 'date', $category_allowed ) : array();
 		$approved_items = class_exists( 'Mcpwp_Approvals' ) ? Mcpwp_Approvals::list_requests( 'approved', 5, $reveal_non_public, 'date', $category_allowed ) : array();
 
@@ -249,30 +249,37 @@ class Mcpwp_Site_State {
 			}
 		}
 
-		foreach ( $items as $item ) {
-			$status = isset( $item['status'] ) ? sanitize_key( (string) $item['status'] ) : '';
-			if ( isset( $counts[ $status ] ) ) {
-				$counts[ $status ]++;
-			}
+		// #1042 W4: counts come from the whole store, never from the 100
+		// newest listed records; a restricted caller's count is still
+		// filtered through the same visibility chokepoint, and says so when
+		// it had to stop short.
+		$counted = class_exists( 'Mcpwp_Approvals' ) ? Mcpwp_Approvals::count_by_status( $category_allowed ) : array( 'counts' => array(), 'truncated' => false );
+		if ( is_wp_error( $counted ) ) {
+			return array(
+				'counts'         => $counts,
+				'pending_items'  => array(),
+				'approved_items' => array(),
+				'rollback_ready' => array(),
+				'error'          => array(
+					'code'    => $counted->get_error_code(),
+					'message' => $counted->get_error_message(),
+				),
+			);
+		}
+		foreach ( $counts as $status => $zero ) {
+			$counts[ $status ] = isset( $counted['counts'][ $status ] ) ? (int) $counted['counts'][ $status ] : 0;
 		}
 
-		return array(
+		$summary = array(
 			'counts'         => $counts,
 			'pending_items'  => $pending_items,
 			'approved_items' => $approved_items,
-			'rollback_ready' => array_slice(
-				array_values(
-					array_filter(
-						$items,
-						static function ( $item ) {
-							return isset( $item['status'] ) && 'applied' === $item['status'];
-						}
-					)
-				),
-				0,
-				5
-			),
+			'rollback_ready' => $items,
 		);
+		if ( ! empty( $counted['truncated'] ) ) {
+			$summary['counts_truncated'] = true;
+		}
+		return $summary;
 	}
 
 	/**

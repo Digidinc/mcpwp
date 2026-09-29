@@ -510,7 +510,9 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	// same reason as the purge below. Runs before REST routes; the store also
 	// runs it lazily, and answers approvals_busy while another request holds
 	// the migration lock.
-	if ( ! get_option( 'mcpwp_approvals_table_migrated' ) ) {
+	// Also re-runs if the old option reappears after the flag is set (an
+	// old-code worker mid-upgrade, or a stint downgraded): a late import.
+	if ( ! get_option( 'mcpwp_approvals_table_migrated' ) || (int) get_option( 'mcpwp_approvals_schema_version', 0 ) < 2 || false !== get_option( 'mcpwp_approval_requests', false ) ) {
 		require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-activator.php';
 		Mcpwp_Activator::migrate_approvals_to_table();
 	}

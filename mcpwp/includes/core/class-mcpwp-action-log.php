@@ -972,10 +972,30 @@ class Mcpwp_Action_Log {
 	}
 
 	/**
+	 * Whether an approval_record_removed row already exists for this
+	 * approval (#1042: one audit row per removed approval, even when a
+	 * removal is retried).
+	 *
+	 * @param string $approval_id Approval id.
+	 * @return bool|null Null when the log could not be read.
+	 */
+	public static function approval_removal_logged( $approval_id ) {
+		global $wpdb;
+		$table = $wpdb->prefix . self::TABLE;
+		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- table name is prefix + constant; uses the resource index.
+		$count = $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$table} WHERE resource_type = %s AND resource_id = %s AND tool_name = %s", 'approval', (string) $approval_id, 'approval_record_removed' ) );
+		if ( null === $count || '' !== (string) $wpdb->last_error ) {
+			return null;
+		}
+		return (int) $count > 0;
+	}
+
+	/**
 	 * Audit row for an approval record removed from the approvals store
-	 * (#981 review round 5): eviction or a purge. One row per record; the
-	 * summary (approval id, action, target, requester, approvers, final
-	 * status, timestamps, content hash, reason) is the row's arguments.
+	 * (#981 review round 5; #1042: retention or a purge). One row per
+	 * record; the summary (approval id, action, target, requester,
+	 * approvers, final status, timestamps, content hash, reason) is the
+	 * row's arguments.
 	 *
 	 * @param array $summary Summary built by Mcpwp_Approvals.
 	 * @return bool Whether the row was written.

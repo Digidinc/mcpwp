@@ -1796,6 +1796,10 @@ if (! function_exists('mcpwp_test_sql_find')) {
                 $offset = isset($lm[2]) ? (int) $lm[2] : 0;
                 $rest   = substr($rest, 0, $at);
             }
+            $at = mcpwp_test_sql_find($rest, ' GROUP BY ');
+            if ($at >= 0) {
+                $rest = substr($rest, 0, $at);
+            }
             $at = mcpwp_test_sql_find($rest, ' ORDER BY ');
             if ($at >= 0) {
                 $order = substr($rest, $at + 10);
@@ -1829,12 +1833,23 @@ if (! function_exists('mcpwp_test_sql_find')) {
             if ('COUNT(*)' === $what) {
                 return (string) count($hits);
             }
-            if ('COALESCE(SUM(LENGTH(record)), 0)' === $what) {
+            if ('COALESCE(SUM(quota_bytes), 0)' === $what) {
                 $sum = 0;
                 foreach ($hits as $row) {
-                    $sum += strlen((string) $row['record']);
+                    $sum += (int) $row['quota_bytes'];
                 }
                 return (string) $sum;
+            }
+            if ('status, COUNT(*) AS n' === $what) {
+                $groups = array();
+                foreach ($hits as $row) {
+                    $groups[ (string) $row['status'] ] = ($groups[ (string) $row['status'] ] ?? 0) + 1;
+                }
+                $out = array();
+                foreach ($groups as $status => $n) {
+                    $out[] = array('status' => $status, 'n' => (string) $n);
+                }
+                return $out;
             }
 
             if (null !== $limit) {
@@ -1888,6 +1903,7 @@ if (! function_exists('mcpwp_test_sql_find')) {
         $GLOBALS['mcpwp_test_approvals_rows']         = array();
         $GLOBALS['mcpwp_test_approvals_table_exists'] = true;
         update_option('mcpwp_approvals_table_migrated', 1);
+        update_option('mcpwp_approvals_schema_version', 2);
         if (! empty($items)) {
             $copied = Mcpwp_Approvals::import_legacy_items($items);
             if (is_wp_error($copied)) {
@@ -1950,6 +1966,7 @@ if (! isset($GLOBALS['wpdb'])) {
     class Mcpwp_Test_WPDB
     {
         public $prefix   = 'wp_';
+        public $charset  = 'utf8mb4';
         public $posts    = 'wp_posts';
         public $postmeta = 'wp_postmeta';
         public $options  = 'wp_options';
@@ -2202,6 +2219,22 @@ if (! isset($GLOBALS['wpdb'])) {
                     $hook();
                 }
                 return $result;
+            }
+            // Mcpwp_Action_Log::approval_removal_logged() (#1042): counted
+            // from the rows insert() captured for the action log.
+            if (preg_match("/^SELECT COUNT\\(\\*\\) FROM (\\S*mcpwp_action_log) WHERE resource_type = 'approval' AND resource_id = '([^']*)' AND tool_name = 'approval_record_removed'$/", trim((string) $query), $m)) {
+                $this->last_error = '';
+                if (! empty($GLOBALS['mcpwp_test_action_log_read_fails'])) {
+                    $this->last_error = 'WordPress database error: Lost connection to MySQL server during query';
+                    return null;
+                }
+                $n = 0;
+                foreach ((array) ($GLOBALS['mcpwp_test_wpdb_rows'][ $m[1] ] ?? array()) as $row) {
+                    if (is_array($row) && ($row['tool_name'] ?? '') === 'approval_record_removed' && ($row['resource_type'] ?? '') === 'approval' && (string) ($row['resource_id'] ?? '') === $m[2]) {
+                        $n++;
+                    }
+                }
+                return (string) $n;
             }
             if ('SELECT @@max_allowed_packet' === trim((string) $query)) {
                 return $GLOBALS['mcpwp_test_max_allowed_packet'] ?? null;
