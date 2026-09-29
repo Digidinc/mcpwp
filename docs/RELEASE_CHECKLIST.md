@@ -27,34 +27,109 @@ go-to-market".
 
 A release is not shipped until both publish jobs are green. Each one fails the run if its channel cannot serve the new version.
 
-### When GitHub Actions can't run the release
+### Local release procedure (use this while GitHub Actions can't run)
 
-Actions billing has blocked this workflow twice (used for 3.13.1 and 3.14.0) — release-please and
-the publish jobs are `release-please@16` and shell scripts, so they run the same way from a local
-checkout:
+Actions billing has blocked every workflow since 3.13.1, so every 3.14.x release was cut this
+way. Follow the steps in order. Don't skip the smoke test or the live check. `X` means the new
+version (for example `3.14.9`). Run everything from a **fresh worktree on `origin/main`**, never
+from the shared checkout:
 
 ```bash
+cd /mnt/HC_Volume_104325311/projects/sitepilotai/wp-ai-operator && git fetch origin
+git worktree add --detach ../wt-rel origin/main && cd ../wt-rel
 T=$(env -u GITHUB_TOKEN gh auth token)
-
-npx -y release-please@16 release-pr \
-  --token="$T" --repo-url=Mumega-com/mcpwp --target-branch=main \
-  --config-file=release-please-config.json --manifest-file=.release-please-manifest.json
-
-# merge the Release PR by hand, then:
-npx -y release-please@16 github-release \
-  --token="$T" --repo-url=Mumega-com/mcpwp --target-branch=main \
-  --config-file=release-please-config.json --manifest-file=.release-please-manifest.json
-gh release edit vX --title "MCPWP vX"
-
-node scripts/sync-wporg-changelog.mjs --version X && git add -A && git commit -m "chore: sync WP.org changelog for vX" && git push
-python3 scripts/verify_release_compatibility.py --manifest version.json --plugin mcpwp/mcpwp.php --readme mcpwp/readme.txt
-bash mcpwp/scripts/build-all.sh
-# Attach only the free + freemius ZIPs to the GitHub release — never the agency ZIP (#852)
-bash scripts/publish_update_release.sh --build
-curl -sI https://updates.mcpwp.net/mcpwp-latest.zip | grep -i version
 ```
 
-Then the owner runs the Freemius publish: `FREEMIUS_BEARER_TOKEN=… bash scripts/release_freemius.sh --version X --skip-bump`.
+**1. Check what the channel serves** (the new version must be higher):
+```bash
+curl -s https://updates.mcpwp.net/version.json | jq -r .version
+```
+
+**2. Open or update the Release PR:**
+```bash
+npx -y release-please@16 release-pr --token="$T" --repo-url=Mumega-com/mcpwp --target-branch=main \
+  --config-file=release-please-config.json --manifest-file=.release-please-manifest.json
+env -u GITHUB_TOKEN gh pr list --head release-please--branches--main--components--mcpwp
+```
+
+**3. Edit the Release PR's changelog if needed** (on branch
+`release-please--branches--main--components--mcpwp`, file `mcpwp/CHANGELOG.md`):
+- If the release changes what an existing API key may do, add a `### Changed for existing API keys`
+  section with plain-language bullets (see 3.14.4 to 3.14.8 for examples).
+- If a site owner will notice a behaviour change, add `### Upgrade Notes`.
+- If a merged PR's title wasn't conventional, add its line by hand (release-please drops it).
+
+**4. Smoke-test the candidate** from the Release PR's head:
+```bash
+git fetch origin release-please--branches--main--components--mcpwp
+git checkout --detach FETCH_HEAD
+bash mcpwp/scripts/build-selfhosted.sh
+bash scripts/release_smoke.sh --candidate mcpwp/scripts/mcpwp-selfhosted-X.zip
+echo "exit=$?"     # 0 = pass. 1 = a check failed: stop and fix. 2 = could not run: NOT a pass.
+```
+Add release-specific checks for this release's changes in the script's `RELEASE_CHECKS`
+section, or run them by hand with `--keep`. Examples: a refused request for a new permission
+gate, or a new tool answering. Never merge the Release PR on a smoke result other than exit 0.
+
+**5. Merge the Release PR and tag:**
+```bash
+env -u GITHUB_TOKEN gh pr merge <release PR> --squash --admin
+git fetch origin && git checkout --detach origin/main
+npx -y release-please@16 github-release --token="$T" --repo-url=Mumega-com/mcpwp --target-branch=main \
+  --config-file=release-please-config.json --manifest-file=.release-please-manifest.json
+env -u GITHUB_TOKEN gh release edit vX --title "MCPWP vX"
+```
+
+**6. Sync the wp.org changelog, then verify version consistency:**
+```bash
+git checkout -b sync-X origin/main
+node scripts/sync-wporg-changelog.mjs --version X
+git add mcpwp/readme.txt version.json            # BOTH files, path-scoped, never -A
+git commit -m "chore: sync WP.org changelog for vX"
+git push origin HEAD:main
+python3 scripts/verify_release_compatibility.py --manifest version.json --plugin mcpwp/mcpwp.php --readme mcpwp/readme.txt
+```
+
+**7. Build and attach ZIPs** (free and freemius only, never the agency ZIP, #852):
+```bash
+bash mcpwp/scripts/build-all.sh
+env -u GITHUB_TOKEN gh release upload vX mcpwp/scripts/mcpwp-X.zip mcpwp/scripts/mcpwp-freemius-X.zip
+```
+(Check the exact output paths that `build-all.sh` prints.)
+
+**8. Publish the self-hosted channel** (fails by itself if the channel can't serve X):
+```bash
+bash scripts/publish_update_release.sh --build
+```
+
+**9. Prove the live ZIP carries the fix.** Tagging and publishing aren't shipping:
+```bash
+curl -sL https://updates.mcpwp.net/mcpwp-latest.zip -o /tmp/live-X.zip
+unzip -p /tmp/live-X.zip mcpwp/mcpwp.php | grep -E "Version:|MCPWP_VERSION"
+unzip -l /tmp/live-X.zip | grep -c agency-license.php     # must print 0
+unzip -p /tmp/live-X.zip 'mcpwp/includes/*' | grep -c '<a symbol your fix added>'   # must be > 0
+```
+
+**10. Publish to Freemius (the paid fleet).** The token is a repo secret. Dispatch the workflow;
+never read the secret:
+```bash
+env -u GITHUB_TOKEN gh workflow run publish-freemius.yml -f version=X
+env -u GITHUB_TOKEN gh run list --workflow publish-freemius.yml --limit 1
+```
+If Actions still can't run (billing), record "Freemius X pending: Actions billing" in milestone
+17's owner-blocked list, and tell the owner in your report.
+
+**11. Update the public record:**
+- mcpwp.net changelog page (page **117**, HTML widget **`cl_timeline_widget`**). Read the current
+  HTML with `wp_get_widget` (id 117, widget_id `cl_timeline_widget`), add a card for X at the top
+  of the timeline, keep the same markup style, and write it back with `wp_edit_widget` using
+  `settings.html`. The MCP endpoint and key for mcpwp.net are in
+  `/mnt/HC_Volume_104325311/projects/sitepilotai/.mcp.json`. Fetch https://mcpwp.net/changelog/
+  afterwards and confirm `>X<` appears.
+- `docs/plan/PLAN.md` status column, the milestone descriptions, and "Shipped" in `docs/ROADMAP.md`.
+
+**12. Clean up:** `cd .. && git -C wp-ai-operator worktree remove wt-rel`, and remove any smoke
+containers left over from `--keep`.
 
 ## Pinning the version
 
@@ -76,7 +151,8 @@ Then confirm the release PR's title changed to the pinned version before merging
 
 ## Pre-merge checks for the release PR
 
-- [ ] Suite green locally and on CI, in declaration and random order
+- [ ] Suite green locally (CI too when Actions runs), in declaration and random order
+- [ ] `scripts/release_smoke.sh` exit 0 on the Release PR head
 - [ ] PHP 7.4 lint clean on production files
 - [ ] Behaviour changes have Upgrade Notes
 - [ ] Auth, credential and write-path changes in this release passed adversarial review
@@ -98,8 +174,8 @@ To publish by hand (a publish job failed, or you are pushing a build outside a r
 # Self-hosted channel, needs CLOUDFLARE_API_TOKEN
 bash scripts/publish_update_release.sh --build
 
-# Freemius, needs FREEMIUS_BEARER_TOKEN
-bash scripts/release_freemius.sh --version X.Y.Z --skip-bump
+# Freemius: dispatch the workflow (token stays in repo secrets)
+env -u GITHUB_TOKEN gh workflow run publish-freemius.yml -f version=X.Y.Z
 ```
 
 `publish_update_release.sh`:

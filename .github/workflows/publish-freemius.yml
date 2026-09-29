@@ -1,0 +1,58 @@
+name: Publish Freemius (manual)
+
+# Publishes an already-tagged release to the Freemius (paid) fleet and verifies
+# Freemius serves it. Same steps as release-please.yml's publish-freemius job,
+# but dispatchable on its own, because:
+#   - a release cut while Actions was unavailable never ran that job (3.14.0 through
+#     3.14.8 were released locally while GitHub billing blocked every job), and
+#   - the token lives only in this repo's secrets, so an agent can publish by
+#     dispatching this workflow without ever reading the token.
+#
+#   env -u GITHUB_TOKEN gh workflow run publish-freemius.yml -f version=3.14.8
+#
+# Freemius and updates.mcpwp.net are separate fleets. Publishing one ships
+# nothing to the other.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Released version to publish, e.g. 3.14.8 (tag vX must exist)"
+        required: true
+        type: string
+
+jobs:
+  publish-freemius:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate version input
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::version must look like 3.14.8, got '$VERSION'"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ inputs.version }}
+
+      - name: Publish to Freemius
+        env:
+          FREEMIUS_BEARER_TOKEN: ${{ secrets.FREEMIUS_BEARER_TOKEN }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          if [ -z "$FREEMIUS_BEARER_TOKEN" ]; then
+            echo "::error::FREEMIUS_BEARER_TOKEN is not configured; the premium build cannot be published."
+            exit 1
+          fi
+          # --skip-bump: the tag already carries every version artefact.
+          bash scripts/release_freemius.sh --version "$VERSION" --skip-bump
+
+      - name: Verify Freemius serves the new version
+        env:
+          FREEMIUS_BEARER_TOKEN: ${{ secrets.FREEMIUS_BEARER_TOKEN }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          bash scripts/verify_freemius_channel.sh \
+            --expect-version "$VERSION" --retries 4 --delay 20
