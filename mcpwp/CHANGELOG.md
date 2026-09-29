@@ -5,6 +5,34 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.14.8](https://github.com/Mumega-com/mcpwp/compare/v3.14.7...v3.14.8) (2026-09-28)
+
+
+### Features
+
+* **webmcp:** expose curated MCPWP tools to the browser agent in wp-admin ([#1038](https://github.com/Mumega-com/mcpwp/issues/1038)) ([d17d402](https://github.com/Mumega-com/mcpwp/commit/d17d4023613db7f06103a9e636326d30635d61ad))
+
+
+### Bug Fixes
+
+* **auth:** deny-all for empty-category custom-role API keys ([#1043](https://github.com/Mumega-com/mcpwp/issues/1043)) ([4e717ea](https://github.com/Mumega-com/mcpwp/commit/4e717eab158eba90c4782242526ff2791b02e84c))
+* **auth:** filter /action-log entries by tool and post-type category ([#1036](https://github.com/Mumega-com/mcpwp/issues/1036)) ([3cc8dd4](https://github.com/Mumega-com/mcpwp/commit/3cc8dd45652c44e99cb4df0688efb75c874d5f31))
+* **auth:** gate embedded Elementor Template Library references ([#1040](https://github.com/Mumega-com/mcpwp/issues/1040)) ([04b5743](https://github.com/Mumega-com/mcpwp/commit/04b5743a55fca86ede05974132213b50c2133f40))
+
+
+### New: WebMCP in wp-admin
+
+* **Your browser's AI agent can work on the site from wp-admin.** Turn on WebMCP in Settings (off by default). Editors and admins using a WebMCP-capable browser (Chrome 149+ with the WebMCP flag, or the origin-trial token in Settings) get 11 MCPWP tools: read content and SEO issues, create drafts, and propose changes for approval. No API key: the WordPress login is the credential. Nothing is published or deleted without approval, and reads respect WordPress's own permissions ([#981](https://github.com/Mumega-com/mcpwp/issues/981)).
+
+### Changed for existing API keys and approvals
+
+* **Approvals are safer under load.** Changes to the approval queue are locked and never report success unless stored; an apply claims the request first so it can't run twice; a failed or interrupted apply is reported truthfully and can be resolved from Control Room ([#981](https://github.com/Mumega-com/mcpwp/issues/981)).
+* **Approval limits.** Proposed content is limited to 1 MB (256 KB from WebMCP). Category-restricted keys and WebMCP users can have 20 pending content proposals each, and 100 across the site; admin keys and wp-admin are exempt. Pending content proposals expire after 30 days. Posts over 128 KB are kept for rollback as a WordPress revision reference, so such proposals are refused when revisions are off or `WP_POST_REVISIONS` is below 3. Closed approvals are compacted and old ones removed, with a summary kept in the action log; Control Room has a purge button ([#981](https://github.com/Mumega-com/mcpwp/issues/981)).
+* **The action log follows the key's categories.** A key sees its own entries plus entries for tools and post types its categories cover. Disabling a category site-wide no longer hides its history from admin keys ([#1031](https://github.com/Mumega-com/mcpwp/issues/1031)).
+* **Rollback of post and Elementor changes now works,** including the Control Room button: id-based tools now record the real post and a snapshot (snapshots over 512 KB are not stored) ([#1031](https://github.com/Mumega-com/mcpwp/issues/1031)).
+* **API keys with no valid categories are denied, not unrestricted.** A custom-role key whose categories are empty or invalid, or a key with an unknown role, can now only reach discovery (`/site-info`, `/onboard`, `/introspect`). Existing affected keys are switched over automatically. Creating a key with an unknown role is refused; sending categories without a role creates a custom key ([#1041](https://github.com/Mumega-com/mcpwp/issues/1041)).
+* **Embedded Elementor templates follow the key's categories.** A write that embeds a Template Library item the key can't read (Template or Global widget, loop templates, the `[elementor-template]` shortcode in any content, the Shortcode or Popup dynamic tags, sidebar widgets, WooCommerce or media descriptions) is refused as "a referenced template was not found". API previews and rendered HTML blank those templates for such keys. References already on a page stay editable ([#1032](https://github.com/Mumega-com/mcpwp/issues/1032)).
+
 ## [3.14.7](https://github.com/Mumega-com/mcpwp/compare/v3.14.6...v3.14.7) (2026-09-28)
 
 
