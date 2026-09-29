@@ -42,6 +42,7 @@ Every work cycle:
 |---|---|
 | The plan and work queue | [PLAN.md](PLAN.md) |
 | How to work: rules, briefs, reviews, cleanup | [OPERATING-RULES.md](OPERATING-RULES.md) |
+| Ready-to-dispatch briefs for hard items | [briefs/](briefs/) |
 | Release procedure, step by step | [../RELEASE_CHECKLIST.md](../RELEASE_CHECKLIST.md) |
 | Release smoke test (one command) | `scripts/release_smoke.sh` |
 | Readable roadmap | [../ROADMAP.md](../ROADMAP.md) |
