@@ -49,7 +49,7 @@ Build in this order. Each item is one PR, one builder.
 
 | # | Work | Issue | Review | Status | Done when |
 |---|---|---|---|---|---|
-| 1.1 | Approvals store moves from one serialized option to its own table (migration, lock-free claims, keep history). **Brief ready: [briefs/1042-approvals-table.md](briefs/1042-approvals-table.md), Opus builder** | #1042 | **adversarial** (write path + auth) | todo | Migration runs on upgrade in the smoke test; approve/apply/rollback pass; no option writes remain |
+| 1.1 | Approvals store moves from one serialized option to its own table (migration, lock-free claims, keep history). **Brief ready: [briefs/1042-approvals-table.md](briefs/1042-approvals-table.md), Opus builder** | #1042 | **adversarial** (write path + auth) | **in progress:** Opus builder dispatched 2026-09-29; branch `fix/1042-approvals-table`, worktree `../wt-1042`. Next: adversarial review of its PR | Migration runs on upgrade in the smoke test; approve/apply/rollback pass; no option writes remain |
 | 1.2 | `wp_create_post` with `post_type=page` answers "Post not found" after creating | #1039 | normal | todo | Test plus rig: creates and returns the page |
 | 1.3 | WooCommerce write tools (`wc_*`) not recorded in the action log | #1037 | normal | todo | Every `wc_*` write appears in `/action-log` |
 | 1.4 | Woo `image_id` / `gallery_image_ids` gating and graph aggregate counts | #1034 | **adversarial** | todo | Gated key can't attach a hidden attachment; counts exclude hidden nodes |

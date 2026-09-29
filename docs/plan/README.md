@@ -24,6 +24,10 @@ that takes orders through Linear.
 
 Every work cycle:
 
+0. See what's already in flight before starting anything:
+   `env -u GITHUB_TOKEN gh pr list --repo Mumega-com/mcpwp --state open`, `git -C
+   /mnt/HC_Volume_104325311/projects/sitepilotai/wp-ai-operator worktree list`, and the
+   **Status** column in PLAN.md. Finish or review in-flight work before starting new work.
 1. Read [PLAN.md](PLAN.md) and take the top unblocked item from the work queue.
 2. Build it by dispatching a builder subagent. [OPERATING-RULES.md](OPERATING-RULES.md) has the
    brief template.
