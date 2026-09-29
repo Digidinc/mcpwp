@@ -10,7 +10,7 @@ MCPWP is a WordPress plugin that turns a site into an MCP server. An AI agent (C
 Cursor, the browser's own agent) can then read and change the site: pages, Elementor, SEO,
 WooCommerce, media and menus. Risky changes wait for the owner's approval.
 
-- Repo: `Mumega-com/mcpwp`. Local clone: `/mnt/HC_Volume_104325311/projects/sitepilotai/wp-ai-operator`.
+- Repo: `Digidinc/mcpwp`. Local clone: `/mnt/HC_Volume_104325311/projects/sitepilotai/wp-ai-operator`.
   The plugin is the `mcpwp/` subdirectory; the repo root is `wp-ai-operator/`.
   **Never trust that checkout's current HEAD:** other agents park it on arbitrary commits. Read
   main with `git show origin/main:<path>` (after `git fetch origin`), and do all work in your own
@@ -28,7 +28,7 @@ that takes orders through Linear.
 Every work cycle:
 
 0. See what's already in flight before starting anything:
-   `env -u GITHUB_TOKEN gh pr list --repo Mumega-com/mcpwp --state open`, `git -C
+   `env -u GITHUB_TOKEN gh pr list --repo Digidinc/mcpwp --state open`, `git -C
    /mnt/HC_Volume_104325311/projects/sitepilotai/wp-ai-operator worktree list`, and the
    **Status** column in PLAN.md. Finish or review in-flight work before starting new work.
 1. Read [PLAN.md](PLAN.md) and take the top unblocked item from the work queue.
@@ -53,7 +53,7 @@ Every work cycle:
 | Release procedure, step by step | [../RELEASE_CHECKLIST.md](../RELEASE_CHECKLIST.md) |
 | Release smoke test (one command) | `scripts/release_smoke.sh` |
 | Readable roadmap | [../ROADMAP.md](../ROADMAP.md) |
-| Task truth | GitHub issues and milestones on `Mumega-com/mcpwp`, org project board #2 |
+| Task truth | GitHub issues and milestones on `Digidinc/mcpwp`, org project board #2 |
 | Video and media work | Linear (the owner's video team), see PLAN.md §Media |
 | Plugin internals, endpoints, traps | `CLAUDE.md` at the repo root |
 | Release history | `mcpwp/CHANGELOG.md` (release-please writes it; never edit it by hand) |
@@ -64,9 +64,14 @@ When a document and a GitHub milestone disagree, the milestone wins. Fix the doc
 
 1. **`gh` needs `env -u GITHUB_TOKEN`.** A stale token in the environment shadows the good
    login, and every call fails with 401. Always run `env -u GITHUB_TOKEN gh ...`.
-2. **GitHub Actions can't run right now** because account billing failed. CI, release-please
-   and the publish jobs never start. Run everything locally: the release checklist has the
-   local path. Don't wait on CI; run the phpunit suite yourself.
+2. **The repo is `Digidinc/mcpwp`** (moved from `Mumega-com/mcpwp` on 2026-09-29; old URLs
+   redirect). Actions runs and bills on Digidinc now, so CI and `publish-freemius.yml` work. The
+   project board stays at Mumega-com org project #2; it holds Digidinc issues fine
+   (`gh project item-add 2 --owner Mumega-com --url <issue url>`). **One gap:** the Digidinc
+   enterprise policy stops Actions creating pull requests, so the automatic release-please
+   workflow fails ("GitHub Actions is not permitted to create or approve pull requests"). Until
+   the owner enables it, cut releases with the local release-please path in the release
+   checklist, and don't wait on the workflow.
 3. **Never touch the shared rig** (`wp-rig-*` containers, `test-rig/`, the shared checkout's
    working tree). Other agents use them. Stand up your own throwaway containers, and remove
    them by exact name with `docker rm -f -v <name>`. **Never run any `docker ... prune`.**

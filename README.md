@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Mumega-com/mcpwp/main/mcpwp/assets/banner-1544x500.png" alt="MCPWP — AI operations for WordPress" width="100%">
+  <img src="https://raw.githubusercontent.com/Digidinc/mcpwp/main/mcpwp/assets/banner-1544x500.png" alt="MCPWP — AI operations for WordPress" width="100%">
 </p>
 
 <h1 align="center">MCPWP</h1>
@@ -18,8 +18,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Mumega-com/mcpwp/stargazers"><img src="https://img.shields.io/github/stars/Mumega-com/mcpwp?style=flat-square" alt="Stars"></a>
-  <a href="https://github.com/Mumega-com/mcpwp/releases"><img src="https://img.shields.io/github/v/release/Mumega-com/mcpwp?style=flat-square" alt="Release"></a>
+  <a href="https://github.com/Digidinc/mcpwp/stargazers"><img src="https://img.shields.io/github/stars/Digidinc/mcpwp?style=flat-square" alt="Stars"></a>
+  <a href="https://github.com/Digidinc/mcpwp/releases"><img src="https://img.shields.io/github/v/release/Digidinc/mcpwp?style=flat-square" alt="Release"></a>
   <img src="https://img.shields.io/badge/tools-180%2B%20free%20%C2%B7%20290%2B%20pro-blue?style=flat-square" alt="180+ free tools, 290+ with Pro">
   <img src="https://img.shields.io/badge/MCP-compatible-brightgreen?style=flat-square" alt="MCP">
   <img src="https://img.shields.io/badge/OpenClaw-skill%20available-orange?style=flat-square" alt="OpenClaw">

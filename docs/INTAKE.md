@@ -10,7 +10,7 @@ right place. Built for #940.
 
 | # | Source | Credentials | Behaviour with none |
 |---|--------|-------------|----------------------|
-| 1 | GitHub issues on `Mumega-com/mcpwp` not yet on org project #2 | `gh auth login` (already required) | n/a — always runs |
+| 1 | GitHub issues on `Digidinc/mcpwp` not yet on org project #2 | `gh auth login` (already required) | n/a — always runs |
 | 2 | Open Dependabot alerts, counted by severity | `gh` with repo security-events read access | Reported as "unavailable", run continues |
 | 3 | Latest **Update Channel Canary** workflow conclusion | `gh` (public Actions read) | Reported as "unavailable", run continues |
 | 4 | PostHog `mcp_tool_called` error-code counts (`scope_denied`, `pro_required`, `tool_error`, last 7 days) | `POSTHOG_API_KEY` + `POSTHOG_PROJECT_ID` env (optional `POSTHOG_HOST`) | Skipped, clearly labelled — no query is attempted |

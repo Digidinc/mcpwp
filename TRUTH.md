@@ -4,7 +4,7 @@
 > read this before spelunking. **Truth lives once per topic; everything else links here, never copies.**
 > Drift between two docs on the same fact is a **bug** — fix it by deleting the copy and pointing at the source.
 >
-> **Last updated:** 2026-07-22 · maintained under [`Mumega-com/mcpwp#687`](https://github.com/Mumega-com/mcpwp/issues/687)
+> **Last updated:** 2026-07-22 · maintained under [`Digidinc/mcpwp#687`](https://github.com/Digidinc/mcpwp/issues/687)
 
 ---
 
@@ -14,7 +14,7 @@
 |---|---|---|
 | Is | the MCP **product/company** — "MCP for platforms" (WordPress first) | the **media publication** — MCP × WordPress × AI |
 | Domain | mumcp.com | mcpwp.net |
-| This repo? | **yes** (`Mumega-com/mcpwp` — the product plugin; repo rename → `mumcp` pending) | no → [`Mumega-com/mumega-motion-theme`](https://github.com/Mumega-com/mumega-motion-theme) |
+| This repo? | **yes** (`Digidinc/mcpwp` — the product plugin; repo rename → `mumcp` pending) | no → [`Mumega-com/mumega-motion-theme`](https://github.com/Mumega-com/mumega-motion-theme) |
 
 Full map: **[`docs/PROJECT-TOPOLOGY.md`](docs/PROJECT-TOPOLOGY.md)**. The plugin historically named "MCPWP" **is** mumcp.
 

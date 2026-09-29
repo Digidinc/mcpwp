@@ -11,8 +11,8 @@ Shared for every order:
 - **Existing footage and assets:** `docs/launch/video/mcpwp-demo-1080p.mp4` (the current 60s demo),
   `docs/launch/video/poster.png`, `docs/launch/gallery/01-…05-*.png`, and the Remotion source in
   `docs/launch/video/src/`. GitHub links:
-  https://github.com/Mumega-com/mcpwp/tree/main/docs/launch/video and
-  https://github.com/Mumega-com/mcpwp/tree/main/docs/launch/gallery
+  https://github.com/Digidinc/mcpwp/tree/main/docs/launch/video and
+  https://github.com/Digidinc/mcpwp/tree/main/docs/launch/gallery
 - **Deliverables:** 1920×1080 MP4 (H.264) plus a 1080×1920 vertical cut, burned-in captions,
   an SRT file, and a poster frame PNG.
 - **Approver:** the owner. **Where it goes:** mcpwp.net homepage and changelog, directory

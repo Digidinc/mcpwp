@@ -3,7 +3,7 @@
 Updated 2026-09-29, the day after 3.14.8 shipped.
 
 **The working plan with the ordered queue is [plan/PLAN.md](plan/PLAN.md).** This page is the
-readable summary. Task truth is GitHub: issues and milestones on `Mumega-com/mcpwp`, plus the org
+readable summary. Task truth is GitHub: issues and milestones on `Digidinc/mcpwp`, plus the org
 project board #2. When they disagree, the milestone wins. New to the project? Start at
 [plan/README.md](plan/README.md).
 
@@ -30,8 +30,7 @@ measured monthly ([growth/NORTH-STAR.md](growth/NORTH-STAR.md), #958).
 ## Shipped
 
 All on `updates.mcpwp.net`, each smoke-tested (upgrade from the previous live ZIP on a fresh
-WordPress + Elementor Pro), with the live ZIP checked for every fix. **None of 3.14.x has reached
-the Freemius (paid) fleet yet** (#1045).
+WordPress + Elementor Pro), with the live ZIP checked for every fix. Freemius (paid) fleet: 3.14.8 published 2026-09-29 (#1045).
 
 | version | date | what |
 |---|---|---|
@@ -56,8 +55,8 @@ the Freemius (paid) fleet yet** (#1045).
 
 ## Waiting on the owner
 
-GitHub billing; npm publish; Digid's legal name and address (Privacy & Terms, page 118); Freemius
-seller entity set to Digid; Chrome origin-trial token; directory sign-ins; Linear sign-in for the
+Enterprise policy letting Actions create PRs; one Update click in mcpwp.net's wp-admin; npm
+publish; Freemius seller entity set to Digid; Chrome origin-trial token; directory sign-ins; Linear sign-in for the
 agent; approval of the tool keep/merge list (#1047). Full list: [plan/PLAN.md](plan/PLAN.md#owner-only-list-keep-this-current-and-mirror-it-in-milestone-17s-description).
 
 ---

@@ -4,7 +4,7 @@
 parallel, repeated until clean. **Decisions below are binding.** If code contradicts one, stop
 and report rather than improvising.
 
-Read GitHub issue #1042 first: `env -u GITHUB_TOKEN gh issue view 1042 --repo Mumega-com/mcpwp`.
+Read GitHub issue #1042 first: `env -u GITHUB_TOKEN gh issue view 1042 --repo Digidinc/mcpwp`.
 
 ## Pins
 Use the pins from `docs/plan/OPERATING-RULES.md` §2 verbatim: repo root, worktree `../wt-1042`

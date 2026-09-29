@@ -47,7 +47,7 @@ curl -s https://updates.mcpwp.net/version.json | jq -r .version
 
 **2. Open or update the Release PR:**
 ```bash
-npx -y release-please@16 release-pr --token="$T" --repo-url=Mumega-com/mcpwp --target-branch=main \
+npx -y release-please@16 release-pr --token="$T" --repo-url=Digidinc/mcpwp --target-branch=main \
   --config-file=release-please-config.json --manifest-file=.release-please-manifest.json
 env -u GITHUB_TOKEN gh pr list --head release-please--branches--main--components--mcpwp
 ```
@@ -75,7 +75,7 @@ gate, or a new tool answering. Never merge the Release PR on a smoke result othe
 ```bash
 env -u GITHUB_TOKEN gh pr merge <release PR> --squash --admin
 git fetch origin && git checkout --detach origin/main
-npx -y release-please@16 github-release --token="$T" --repo-url=Mumega-com/mcpwp --target-branch=main \
+npx -y release-please@16 github-release --token="$T" --repo-url=Digidinc/mcpwp --target-branch=main \
   --config-file=release-please-config.json --manifest-file=.release-please-manifest.json
 env -u GITHUB_TOKEN gh release edit vX --title "MCPWP vX"
 ```

@@ -11,7 +11,7 @@ There are **two separate projects** that accidentally shared the name "MCPWP." T
 |---|---|---|
 | **What it is** | the MCP **product / company** — "MCP for platforms" (WordPress is the first platform; others can follow) | the **media publication** — the intersection of MCP, WordPress, and AI |
 | **Domain** | mumcp.com — product, docs, sell, OAuth broker | mcpwp.net — editorial (V2 / ASTER) |
-| **Primary repos** | `Mumega-com/mcpwp` (the product plugin — rename → `mumcp` pending), `Mumega-com/mumcp-broker`, future `mumcp-<platform>` | `Mumega-com/mumega-motion-theme` (theme) + mcpwp.net content/ops (own repo) |
+| **Primary repos** | `Digidinc/mcpwp` (the product plugin — rename → `mumcp` pending), `Mumega-com/mumcp-broker`, future `mumcp-<platform>` | `Mumega-com/mumega-motion-theme` (theme) + mcpwp.net content/ops (own repo) |
 | **GitHub** | its own repos | its own repos — **not shared with mumcp** |
 | **pot project** | existing project (slug `mumcp`) — rescope to the product line | **new** media project (pending; needs admin capability) |
 
@@ -33,7 +33,7 @@ mcpwp.net (the operated WordPress media site)
    └── mupot         → the AUTHORITY (identity, capabilities, gates, receipts)
 ```
 
-This proves both theses at once: **MCP gives WordPress new power** (the site runs itself via MCP) and **WordPress can be governed/secure** (the RBAC + approval + audit layer is visible). Architecture for the governed WordPress control-surface: [`DECISIONS.md`](DECISIONS.md) ADR-002 + [`Mumega-com/mcpwp#689`](https://github.com/Mumega-com/mcpwp/issues/689).
+This proves both theses at once: **MCP gives WordPress new power** (the site runs itself via MCP) and **WordPress can be governed/secure** (the RBAC + approval + audit layer is visible). Architecture for the governed WordPress control-surface: [`DECISIONS.md`](DECISIONS.md) ADR-002 + [`Digidinc/mcpwp#689`](https://github.com/Digidinc/mcpwp/issues/689).
 
 ## Related systems (not products)
 

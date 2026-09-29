@@ -176,12 +176,12 @@ T=$(env -u GITHUB_TOKEN gh auth token)
 
 # 1. Open/update the release PR
 npx -y release-please@16 release-pr \
-  --token="$T" --repo-url=Mumega-com/mcpwp --target-branch=main \
+  --token="$T" --repo-url=Digidinc/mcpwp --target-branch=main \
   --config-file=release-please-config.json --manifest-file=.release-please-manifest.json
 
 # 2. Merge the Release PR, then tag + create the GitHub Release
 npx -y release-please@16 github-release \
-  --token="$T" --repo-url=Mumega-com/mcpwp --target-branch=main \
+  --token="$T" --repo-url=Digidinc/mcpwp --target-branch=main \
   --config-file=release-please-config.json --manifest-file=.release-please-manifest.json
 gh release edit vX --title "MCPWP vX"
 
