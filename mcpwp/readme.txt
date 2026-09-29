@@ -157,6 +157,12 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 
 == Changelog ==
 
+= 3.14.8 =
+* feat: **webmcp:** expose curated MCPWP tools to the browser agent in wp-admin ([#1038](https://github.com/Mumega-com/mcpwp/issues/1038))
+* fix: **auth:** deny-all for empty-category custom-role API keys ([#1043](https://github.com/Mumega-com/mcpwp/issues/1043))
+* fix: **auth:** filter /action-log entries by tool and post-type category ([#1036](https://github.com/Mumega-com/mcpwp/issues/1036))
+* fix: **auth:** gate embedded Elementor Template Library references ([#1040](https://github.com/Mumega-com/mcpwp/issues/1040))
+
 = 3.14.7 =
 * fix: **auth:** route Elementor, content-graph and blocks doors through the [#1022](https://github.com/Mumega-com/mcpwp/issues/1022) category chokepoint ([#1030](https://github.com/Mumega-com/mcpwp/issues/1030))
 
