@@ -1,6 +1,8 @@
 # MCPWP - WordPress MCP Plugin
 
 > 📍 **Start at [`TRUTH.md`](TRUTH.md)** for project topology, naming, and decisions (mumcp = product · mcpwp = media). This file = plugin internals.
+>
+> 🧭 **Running the project (plan, work queue, releases, rules)?** Start at [`docs/plan/README.md`](docs/plan/README.md).
 
 ## Local Development (Primary)
 
@@ -184,7 +186,7 @@ npx -y release-please@16 github-release \
 gh release edit vX --title "MCPWP vX"
 
 # 3. Carry the changelog to the wp.org-format readme.txt, verify version consistency, build, publish
-node scripts/sync-wporg-changelog.mjs --version X && git add -A && git commit -m "chore: sync WP.org changelog for vX" && git push
+node scripts/sync-wporg-changelog.mjs --version X && git add mcpwp/readme.txt version.json && git commit -m "chore: sync WP.org changelog for vX" && git push
 python3 scripts/verify_release_compatibility.py --manifest version.json --plugin mcpwp/mcpwp.php --readme mcpwp/readme.txt
 bash mcpwp/scripts/build-all.sh
 # Attach only the free + freemius ZIPs to the GitHub release — never the agency ZIP (#852)
@@ -195,7 +197,10 @@ curl -sI https://updates.mcpwp.net/mcpwp-latest.zip | grep -i version
 curl -s https://updates.mcpwp.net/mcpwp-latest.zip -o /tmp/mcpwp-latest.zip && unzip -p /tmp/mcpwp-latest.zip mcpwp/mcpwp.php | grep -i "Version:\|MCPWP_VERSION"
 ```
 
-The owner runs the Freemius publish separately: `FREEMIUS_BEARER_TOKEN=… bash scripts/release_freemius.sh --version X --skip-bump`.
+Then publish to Freemius (the paid fleet) by dispatching `publish-freemius.yml`. The token stays
+in repo secrets; never read it: `env -u GITHUB_TOKEN gh workflow run publish-freemius.yml -f version=X`.
+The full step-by-step, including the release smoke test (`scripts/release_smoke.sh`), is in
+`docs/RELEASE_CHECKLIST.md`.
 
 Merge the release PR (`chore(main): release X.Y.Z`) → tags `vX.Y.Z`. release-please then publishes
 automatically (`publish-canonical-channel` job): it uploads `version.json` + the self-hosted ZIP +
@@ -888,4 +893,5 @@ Config stored per-provider in `mcpwp_integrations` wp_option (encrypted). Manage
 
 **Task truth is GitHub issues + the org project board**
 (https://github.com/orgs/Mumega-com/projects/2), fields `Version`, `Priority`, `Track`, `Size`.
-Linear is not used for MCPWP.
+Linear is not used for MCPWP engineering. The one exception: video and media orders to the
+owner's video team go into Linear (see `docs/plan/PLAN.md` §Media).
