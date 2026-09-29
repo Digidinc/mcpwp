@@ -12,6 +12,9 @@ WooCommerce, media and menus. Risky changes wait for the owner's approval.
 
 - Repo: `Mumega-com/mcpwp`. Local clone: `/mnt/HC_Volume_104325311/projects/sitepilotai/wp-ai-operator`.
   The plugin is the `mcpwp/` subdirectory; the repo root is `wp-ai-operator/`.
+  **Never trust that checkout's current HEAD:** other agents park it on arbitrary commits. Read
+  main with `git show origin/main:<path>` (after `git fetch origin`), and do all work in your own
+  `git worktree add … origin/main`.
 - Public site: https://mcpwp.net (itself a WordPress site running MCPWP).
 - Current version: see `curl -s https://updates.mcpwp.net/version.json | jq -r .version`.
 - Seller: **Digid** (Canadian company). Owner: Hadi.

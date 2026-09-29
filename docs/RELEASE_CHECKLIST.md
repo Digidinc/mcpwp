@@ -30,7 +30,7 @@ A release is not shipped until both publish jobs are green. Each one fails the r
 ### Local release procedure (use this while GitHub Actions can't run)
 
 Actions billing has blocked every workflow since 3.13.1, so every 3.14.x release was cut this
-way. Follow the steps in order. Don't skip the smoke test or the live check. `X` means the new
+way. Follow the steps in order. Don't skip the smoke test or the live check. If a script or workflow a step names is missing, that is "could not run", not "passed": stop, find out why (was the branch that adds it merged?), and never skip the step. `X` means the new
 version (for example `3.14.9`). Run everything from a **fresh worktree on `origin/main`**, never
 from the shared checkout:
 
@@ -121,7 +121,7 @@ If Actions still can't run (billing), record "Freemius X pending: Actions billin
 
 **11. Update the public record:**
 - mcpwp.net changelog page (page **117**, HTML widget **`cl_timeline_widget`**). Read the current
-  HTML with `wp_get_widget` (id 117, widget_id `cl_timeline_widget`), add a card for X at the top
+  HTML with `wp_get_elementor` (id 117, element_id `cl_timeline_widget`; it's an Elementor html widget, not a sidebar widget, so `wp_get_widget` 404s), add a card for X at the top
   of the timeline, keep the same markup style, and write it back with `wp_edit_widget` using
   `settings.html`. The MCP endpoint and key for mcpwp.net are in
   `/mnt/HC_Volume_104325311/projects/sitepilotai/.mcp.json`. Fetch https://mcpwp.net/changelog/
@@ -309,4 +309,4 @@ Do not roll back by leaving mismatched manifests or stale `mcpwp_update_info` on
 
 ---
 
-**Last Updated:** 2026-09-10
+**Last Updated:** 2026-09-29

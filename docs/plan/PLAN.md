@@ -45,7 +45,8 @@ once with their own token (`FREEMIUS_BEARER_TOKEN=… bash scripts/release_freem
 
 ## Phase 1: finish reliability (3.14.9 patch train)
 
-Build in this order. Each item is one PR, one builder.
+Pick in this order (priority, not strict serialization; see OPERATING-RULES §1). Each item is one
+PR, one builder. All of these are in GitHub milestone **3.14.9**.
 
 | # | Work | Issue | Review | Status | Done when |
 |---|---|---|---|---|---|

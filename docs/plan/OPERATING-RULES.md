@@ -15,8 +15,10 @@ Builders and reviewers are subagents with fresh context.
   public endpoint. Run it **in parallel** with your own correctness check, not after it.
 - **Never merge a sensitive PR on one clean review from the builder itself.** The builder's
   self-review has missed P0s every time.
-- Run at most about 4 builders at once. They share one machine, and the load shows up as flaky
-  timing tests.
+- Queue order is **priority for picking**, not strict serialization. Run up to about 4 builders
+  at once, as long as their items don't edit the same files (for example, two items both
+  touching `trait-mcpwp-api-auth.php` or `class-mcpwp-approvals.php` go one after the other).
+  They share one machine, and more load shows up as flaky timing tests.
 
 ## 2. The builder brief (copy this, fill in the brackets)
 
@@ -26,6 +28,8 @@ Save it to a file and point the subagent at the file. Don't paste long history i
 # Brief: #[N] [issue title]
 
 Read GitHub issue #[N] fully first: `env -u GITHUB_TOKEN gh issue view [N] --repo Mumega-com/mcpwp --comments`.
+If that fails with a "Projects (classic)" GraphQL error, use
+`env -u GITHUB_TOKEN gh api repos/Mumega-com/mcpwp/issues/[N]` and `.../issues/[N]/comments`.
 
 ## Pins (literal, non-negotiable)
 - Repo root: /mnt/HC_Volume_104325311/projects/sitepilotai/wp-ai-operator (git repo; GitHub
