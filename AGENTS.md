@@ -2,6 +2,10 @@
 
 This file is for AI agents (Claude, OpenClaw, Hermes, ChatGPT) contributing to MCPWP. Human contributors: see CONTRIBUTING.md.
 
+**mcpwp.net performance cast** (Cairn lead, Aster, Lumen, MUMCP — disclosed
+synthetic; Grok 4.6 directs): [`docs/cast/README.md`](docs/cast/README.md).
+That is not this file. This file is how to add a plugin tool.
+
 ## Codebase Map
 
 | File | Responsibility |

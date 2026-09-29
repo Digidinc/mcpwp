@@ -11,6 +11,8 @@
    site MCP = work), hard rules, KPIs, flight economics, roster, night-run authorization.
 2. **[SQUAD-ROSTER.md](SQUAD-ROSTER.md)** — the team: 6 standing roles (Scout, Smith, Warden, Probe,
    Herald, Ledger), mandates, dispatch triggers, gate positions, operating rules.
+   The **mcpwp.net performance cast** (Cairn lead, Aster, Lumen, MUMCP) is a
+   different plane — [`docs/cast/ROSTER.md`](../cast/ROSTER.md).
 3. **[VERSIONING-AND-ROADMAP.md](VERSIONING-AND-ROADMAP.md)** — how we version (SemVer + release trains),
    feature→version allocation (v3.1 Launch / v3.2 Economy / v4 Platform), and the dated runway to PH.
 4. **[GTM-DESIGN-THINKING.md](GTM-DESIGN-THINKING.md)** — the 5-phase pass: 4 personas (incl. the AI agent
