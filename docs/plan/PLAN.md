@@ -103,6 +103,9 @@ call.
 | 3.5 | Case studies: Viamar, Stemminds, DME, mcpwp.net's own numbers | #964 | Agent drafts; owner approves names | todo | Published |
 | 3.6 | Chrome origin-trial token for WebMCP on mcpwp.net | none | **Owner** registers at developer.chrome.com/origintrials (Google sign-in); agent pastes it into Settings → WebMCP | waiting | `<meta http-equiv="origin-trial">` present in mcpwp.net wp-admin |
 | 3.7 | North-star check: does an AI recommend MCPWP? (monthly) | #958 | Agent | monthly | Result recorded in `docs/growth/NORTH-STAR.md` |
+| 3.8 | **ChatGPT plugin directory listing** (DevDay 2026: ChatGPT recommends plugins in conversation). Highest-leverage distribution item | #1058 | Agent prepares; **owner** creates the OpenAI developer account/org (Digid Inc.) | todo | Submitted |
+| 3.9 | ChatGPT plugin extension: "Your site" sidebar, page preview panel, MCP Events automations | #1059 | Agent (design first; approve/reject slice gets **adversarial** review) | waiting on OpenAI docs | Design merged, events slice shipped |
+| 3.10 | Sign in with ChatGPT: built-in AI on the owner's ChatGPT plan (no API key) | #1060 | Agent researches; **owner** applies for access | todo | Go/no-go recorded |
 
 ### Media: ordering video in Linear
 
