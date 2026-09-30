@@ -5,6 +5,26 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.14.10](https://github.com/Digidinc/mcpwp/compare/v3.14.9...v3.14.10) (2026-09-30)
+
+
+### Features
+
+* **docs:** generate the tool and error reference from a live site ([#1072](https://github.com/Digidinc/mcpwp/issues/1072)) ([839bb0a](https://github.com/Digidinc/mcpwp/commit/839bb0a81ed96fe1e1a30d9904de46d8b92bae66))
+* **mcp:** tool weight budget, core profile by default for new connections ([#1071](https://github.com/Digidinc/mcpwp/issues/1071)) ([88a50c9](https://github.com/Digidinc/mcpwp/commit/88a50c98bdf15bd139d7e5f6a283ce286f89a8f5))
+
+### Changed for existing API keys and connections
+
+* **MCPWP is about 10× lighter for AI agents.** A new connection now loads about 25 tools (about 4,400 tokens) instead of 194–279 tools (44,000–62,000 tokens). The agent reaches every other tool it may call through `mcpwp_find_tools` and `mcpwp_call`, which go through exactly the same permission checks. This applies to sites that never chose a tool profile. Sites that saved "full" (including by any admin settings save since 3.14.4) keep the full list. Change it in MCPWP → Settings → Tool profile, or per connection with `?profile=full` / `?profile=core` on the MCP URL ([#1064](https://github.com/Digidinc/mcpwp/issues/1064)).
+* **Tool descriptions are shorter in the tool list.** Full descriptions and examples come back through `mcpwp_find_tools`, and `wp_introspect` gives a short summary unless asked for `detail=full` ([#1064](https://github.com/Digidinc/mcpwp/issues/1064)).
+* **Every key can use tool search.** `mcpwp_find_tools` and `mcpwp_call` are available to every key by name. They only find and run tools that key may already call. The per-key "Tool Search & Dispatch" category is gone, and add-on tools can no longer register in that reserved category (they count as `custom`) ([#1064](https://github.com/Digidinc/mcpwp/issues/1064)).
+* **`wp_introspect` and "Did you mean" suggestions only show tools the caller may use** ([#1064](https://github.com/Digidinc/mcpwp/issues/1064)).
+* **If an admin turns off tool search site-wide,** agents get the full tool list automatically ([#1064](https://github.com/Digidinc/mcpwp/issues/1064)).
+
+### Upgrade Notes
+
+* Agents connecting after the update see a short tool list and use `mcpwp_find_tools` to reach the rest. To give every connection the full list again, set MCPWP → Settings → Tool profile to "Full".
+
 ## [3.14.9](https://github.com/Digidinc/mcpwp/compare/v3.14.8...v3.14.9) (2026-09-30)
 
 
