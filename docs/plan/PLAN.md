@@ -1,4 +1,4 @@
-# MCPWP plan: 3.14.9 through launch
+# MCPWP plan: 3.14.x through launch
 
 Written 2026-09-29 (3.14.8 is live). Owner of this document: the operating agent. Update the
 **Status** column as work moves, and keep GitHub milestones in step. A work item isn't done
@@ -6,15 +6,18 @@ until its "Done when" line is true and verified.
 
 ## Where we are
 
-- **3.14.9 is live** on `updates.mcpwp.net` and Freemius (2026-09-30: approvals table, #1042). **3.14.8** was (self-hosted fleet). In three days, 3.14.1 to 3.14.8
+- **3.14.10 is live** on `updates.mcpwp.net` and Freemius (2026-09-30: tool weight budget, #1064;
+  3.14.9 the same day: approvals table, #1042). **3.14.11** is next: the Elementor collateral-strip
+  fix (#829, PR #1083, in adversarial review). In three days, 3.14.1 to 3.14.8
   shipped: site graph, MCP protocol 2025-11-25, tool profiles and search, WebMCP in wp-admin,
   post-type and template gating for restricted keys, trustworthy approvals, and action-log
   filtering.
-- **Freemius caught up on 2026-09-29:** 3.14.8 published and verified. mcpwp.net itself still
-  runs 3.13.0 until someone clicks Update in its wp-admin (0.3).
+- **Freemius is in step:** every release since 3.14.8 publishes to both fleets from the Release PR
+  merge. mcpwp.net runs 3.14.9 (owner updated it 2026-09-30; agents can't update it, #1070).
 - **Almost nobody uses it yet.** mcpwp.net had 41 visitors in the 30-day baseline, with 84%
   bounce. The engineering is ahead of distribution.
-- **Repo moved to `Digidinc/mcpwp`** (2026-09-29). Actions runs again; Freemius has 3.14.8.
+- **Repo moved to `Digidinc/mcpwp`** (2026-09-29). Actions runs again. One gap: the enterprise policy stops Actions
+  opening PRs, so the Release PR is opened locally (0.1b, `docs/RELEASE_CHECKLIST.md`).
 
 ## Principles for this plan
 
@@ -35,7 +38,7 @@ until its "Done when" line is true and verified.
 | 0.1 | Fix GitHub Actions billing | none | Owner + agent | **done 2026-09-29:** repo moved to Digidinc (enterprise); workflows run | A workflow run starts |
 | 0.1b | Enterprise policy: allow GitHub Actions to create pull requests (Digidinc enterprise → Policies → Actions → Workflow permissions) | none | **Owner** | waiting | release-please workflow opens the Release PR by itself |
 | 0.2 | Publish 3.14.8 to Freemius via `publish-freemius.yml` | #1045 | Agent | **done 2026-09-29** (run 36636410466, verifier OK) | `verify_freemius_channel.sh --expect-version 3.14.8` passes |
-| 0.3 | Update mcpwp.net to 3.14.8 through Freemius | #1045 | Anyone with wp-admin: Plugins → Update now (the option API blocks agents from plugin/auto-update settings by design; no server shell) | waiting | mcpwp.net `wp_site_info` says 3.14.8 |
+| 0.3 | Update mcpwp.net through Freemius | #1045, #1070 | Owner clicks Update (agents can't: `wp_trigger_update` answers `not_applicable` on a Freemius build, #1070) | **done 2026-09-30:** mcpwp.net on 3.14.9; repeat per release until #1070 ships | mcpwp.net `wp_site_info` shows the live version |
 | 0.4 | npm republish `@mcpwp.net/mcpwp` (npm has 3.0.1; source is 3.0.3) | #939 | **Owner** runs `npm publish` in `mcp-server/` (npm login is not on this server), or gives an automation token | waiting | `npm view @mcpwp.net/mcpwp version` = source version |
 | 0.5 | Legal name on Privacy & Terms | #1050 | Agent | **done 2026-09-29:** "Digid Inc., a Canadian corporation" on page 118; footer "© 2026 Mumega · Digid Inc." (Mumega is a Digid product; keep the Mumega brand) | Page 118 live |
 
@@ -43,7 +46,7 @@ If 0.1 isn't fixed within a day, ask the owner for the other route: run the Free
 once with their own token (`FREEMIUS_BEARER_TOKEN=… bash scripts/release_freemius.sh --version
 3.14.8 --skip-bump`). Never read or bypass the gated secret yourself.
 
-## Phase 1: finish reliability (3.14.9 patch train)
+## Phase 1: finish reliability (3.14.x patch train)
 
 Pick in this order (priority, not strict serialization; see OPERATING-RULES §1). Each item is one
 PR, one builder. All of these are in GitHub milestone **3.14.9**.
@@ -58,9 +61,15 @@ PR, one builder. All of these are in GitHub milestone **3.14.9**.
 | 1.6 | Provider record overwrite on `POST /integrations/providers/{id}` | #1004 | normal | todo | Multi-field provider keeps other fields |
 | 1.7 | html widget edit reports `render_verified:false` falsely | #999 | normal | todo | Correct flag on a real html widget edit |
 | 1.8 | Verification: assert the DOM, not just meta | #989 | normal | todo | render_verified fails on a real broken render in a test |
+| 1.9 | **Elementor writes strip script/style/svg from widgets nobody edited** (hit on mcpwp.net: PostHog script and logo SVG lost). One chokepoint (`Mcpwp_Elementor_Meta_Write`); unedited elements keep their stored content, anything introduced is sanitized by MCPWP itself | #829 | **adversarial** (content write path) | **in review:** PR #1083, rounds 1–2 found blockers, round-2 fixes in progress, round 3 next. Ships as 3.14.11. Until then: don't API-edit live Elementor documents that hold html widgets with script/style/svg | A round comes back clean; smoke test; live ZIP proves the fix |
+| 1.10 | Test suite fails in random order; flaky `OptionAccessTest` | #1084 | normal | in progress (builder) | Default order plus 5 random seeds green |
+| 1.11 | Updater on Freemius and agency sites: `wp_trigger_update` is `not_applicable`, `package_url` unsafe there | #1070 | **adversarial** (update channel) | todo | An agent updates mcpwp.net without wp-admin |
+| 1.12 | Custom Code read fatals after a conditions re-save; action log `resource_id` 0 | #1082 | normal | todo (owner fixes snippet 682 by hand meanwhile) | Read works on the rig repro |
+| 1.13 | `dry_run` publishes a template | #1078 | normal | todo | dry_run writes nothing |
+| 1.14 | Follow-ups: approvals (#1053, #1067), tool budget round 3 (#1079), docs reference (#1073), proxies drop server instructions (#1074) | listed | normal | todo | Each closed |
 
-**Release 3.14.9** when 1.1 lands plus whatever else is merged. Then release again each time a
-user-visible fix merges.
+**Released:** 3.14.9 (1.1), 3.14.10 (2.0a). **Next: 3.14.11** when 1.9 merges. Then release again
+each time a user-visible fix merges.
 
 ## Phase 2: make tools easier (agent-native)
 
@@ -68,9 +77,9 @@ This is the answer to "270 tools is too many". Three layers, cheapest first.
 
 | # | Work | Issue | Review | Status | Done when |
 |---|---|---|---|---|---|
-| 2.0a | **Tool weight budget** (owner priority 2026-09-30: "our MCP is heavy"). Measured: Free `full` (the default) ~44k tokens on connect, Pro ~62k, `core` ~10k. Default new connections to `core`; per-tool budgets; examples out of tools/list; a CI test enforces core ≤5k, Free full ≤25k, Pro full ≤35k | #1064 | normal (behaviour change for keys → changelog "Changed for existing API keys") | todo | Budget test green; before/after table |
-| 2.0b | **Agent-ready docs:** docs.mcpwp.net stuck at 3.11 (2026-09-10); add 3.14 coverage, a generated per-tool reference each release, concept pages (keys/roles matrix, approvals, errors), `llms.txt` + `llms-full.txt` | #1065 | normal | **content done** (PRs #1072, mcpwp-docs#1); publishing moves| 2.0c | **Stripe-like docs on mcpwp.net built with Elementor Pro via MCPWP**. Owner decision 2026-09-30: MCPWP does NOT become a docs plugin; no plugin code. Pages under /docs/ (page 113), a Theme Builder "Docs page" template (left nav menu, search, breadcrumbs, content, sticky table of contents), and a git→pages sync script using MCPWP's own tools. D1 design as drafts → D2 sync → D3 content, owner preview, publish, 301 docs.mcpwp.net | #1075 | owner approves the design before publish | in progress (D1 design, drafts only) | mcpwp.net/docs live; releases sync docs |
- to #1075 | 10-question docs eval passes from `llms.txt` alone |
+| 2.0a | **Tool weight budget** (owner priority 2026-09-30: "our MCP is heavy"). `core` is the default profile for sites that never chose one: about 23 tools, ~4,200 tokens on connect (was 194 tools, ~44k). Descriptions capped at 300 characters, examples moved to `mcpwp_find_tools`, `wp_introspect` answers a summary by default. `ToolListBudgetTest` enforces core ≤5k; `full` is pinned at measured +5% (Free 34,700, Pro 55,300) until 2.3 shrinks the catalog | #1064 | adversarial (3 rounds: meta tools, addon isolation, per-caller introspect) | **done: shipped in 3.14.10 (2026-09-30)**; PR #1071; follow-ups #1079 | Budget test green; before/after table in the PR |
+| 2.0b | **Agent-ready docs content:** 10 concept pages, a generated reference (313 tools, errors), `llms.txt` + `llms-full.txt`; `scripts/gen-docs-reference.mjs` regenerates the reference each release | #1065 | normal | **content done** (PRs #1072, mcpwp-docs#1; docs eval 10/10). Not deployed: publishing moved to 2.0c | 10-question docs eval passes from `llms.txt` alone |
+| 2.0c | **Stripe-like docs on mcpwp.net, built with Elementor Pro through MCPWP's own tools.** Owner decision 2026-09-30: MCPWP does NOT become a docs plugin; no plugin code. Pages under /docs/, a Theme Builder "Docs page" template (left nav, search, breadcrumbs, content, sticky table of contents), and a git→pages sync script. D1 design → D2 sync script (`scripts/docs-sync.mjs`) → D3 content as drafts, owner preview, publish, 301 docs.mcpwp.net | #1075 | owner approves the design before publish | **D1 done as drafts, waiting on the owner's design review** (pages 1273–1277, template 1288, menu 142; preview `https://mcpwp.net/?page_id=1273&preview=true`). D2/D3 don't start before that approval, and D3 waits for 1.9 | mcpwp.net/docs live; releases sync docs |
 | 2.1 | **Job presets** for keys and the Tools page (Content writer, Designer, SEO, Store manager, Full) | #1048 | normal | todo | Presets selectable; each maps to the tested category set |
 | 2.2 | **Semantic tool routing:** Jev re-ranks `mcpwp_find_tools`, keyword fallback; OpenAI Decisions API later as a second transport | #1046 | **adversarial** (outbound data + visibility) | todo | 10-intent before/after hit rate in the PR; no hidden-tool leak |
 | 2.3 | **Tool catalog audit:** cluster duplicates with Jev offline, keep/merge/deprecate table, owner approves, ship deprecation flags | #1047 | normal (owner approves the list) | todo | 150 or fewer visible tools in `full` |
@@ -155,7 +164,12 @@ Order: #944 provider capability registry → #945 PostHog visitor signals → #9
 | Item | Why only the owner |
 |---|---|
 | Enterprise policy: let Actions create PRs (0.1b) | Enterprise admin setting |
-| Click Update on mcpwp.net's wp-admin Plugins page (0.3) | wp-admin login |
+| Click Update on mcpwp.net's wp-admin Plugins page after each release (0.3, until #1070) | wp-admin login |
+| Review the docs design drafts (2.0c) | Design approval before anything publishes |
+| Re-enable PostHog: wp-admin → Elementor → Custom Code → 682 → Entire site → Publish | Reads of snippet 682 fatal through the API (#1082) |
+| Decide: migrate the old Hello Biz page CSS (class-scoped rules only recommended) | Design decision |
+| Decide: may agents use SSH to mcpwp.net's server (default: no) | Access decision |
+| OpenAI developer account for Digid Inc. (3.8, 3.10) | Account creation |
 | npm publish (0.4) | npm account; not logged in on this server |
 | Freemius seller entity set to Digid | Freemius dashboard account |
 | Chrome origin-trial token (3.6) | Google account sign-in |

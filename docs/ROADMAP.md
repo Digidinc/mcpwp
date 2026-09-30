@@ -21,8 +21,8 @@ checkpoints:
 | milestone | theme | state |
 |---|---|---|
 | **3.14.1: Solid ground** | fix what's broken, measure the baseline | code done; owner items open (Freemius #1045, #959, #960, #961, #904) |
-| **3.14.5: Agent-native** | agents find, understand and use MCPWP without friction | in progress: tool routing #1046, catalog audit #1047, presets #1048, wp_look #908 |
-| **3.14.9: Self-improving + go-to-market** | the site senses, decides and learns; distribution and proof | starting: approvals table #1042, mcpwp.net refresh #1050, live feed #1049 |
+| **3.14.5: Agent-native** | agents find, understand and use MCPWP without friction | in progress: tool weight budget #1064 shipped (3.14.10), docs content #1065 done; open: tool routing #1046, catalog audit #1047, presets #1048, wp_look #908 |
+| **3.14.9: Self-improving + go-to-market** | the site senses, decides and learns; distribution and proof | in progress: approvals table #1042 shipped (3.14.9); docs on mcpwp.net #1075 (design awaiting owner); mcpwp.net refresh #1050, live feed #1049 open |
 
 **North star:** any Claude or AI agent asked how to work with WordPress recommends MCPWP. It's
 measured monthly ([growth/NORTH-STAR.md](growth/NORTH-STAR.md), #958).
@@ -30,10 +30,11 @@ measured monthly ([growth/NORTH-STAR.md](growth/NORTH-STAR.md), #958).
 ## Shipped
 
 All on `updates.mcpwp.net`, each smoke-tested (upgrade from the previous live ZIP on a fresh
-WordPress + Elementor Pro), with the live ZIP checked for every fix. Freemius (paid) fleet: 3.14.8 published 2026-09-29 (#1045).
+WordPress + Elementor Pro), with the live ZIP checked for every fix. Freemius (paid) fleet: in step since 3.14.8 (2026-09-29, #1045); each release publishes to both fleets.
 
 | version | date | what |
 |---|---|---|
+| 3.14.10 | 2026-09-30 | Tool weight budget (#1064): new connections get the `core` profile, about 23 tools and ~4,200 tokens instead of 194 tools and ~44k; descriptions capped, examples moved to `mcpwp_find_tools`, `wp_introspect` summary by default; meta tools reach every key, introspect and "Did you mean" filtered per caller. **Changed for existing API keys:** sites that never chose a profile now answer `core`; pick `full` on the Tools page to keep the old list. Release workflow attaches only the Free and Freemius ZIPs (#1081). Published to both fleets |
 | 3.14.9 | 2026-09-30 | Approvals in their own table (#1042): no double apply or rollback, exact counts, 90-day history, only wp-admin admins and admin-scope keys skip the limits, a 64 MB open ceiling, visibility decided safely after upgrade. Freemius publishing fixed (#1054, #1055). Published to both fleets |
 | 3.14.8 | 2026-09-28 | WebMCP in wp-admin (#981); approvals hardened (locking, claims, limits, rollback works); action log follows key categories (#1031); deny-all for keys with no valid categories (#1041); embedded Elementor templates follow key categories (#1032) |
 | 3.14.7 | 2026-09-28 | Every route checks the post type it touches; one canonical "not found"; 500-id cap (#1024) |
@@ -47,17 +48,17 @@ WordPress + Elementor Pro), with the live ZIP checked for every fix. Freemius (p
 
 ## Next, in order
 
-1. **Unblock shipping:** GitHub billing (owner) → Freemius publish of 3.14.8 → mcpwp.net on 3.14.8 (#1045). npm republish (#939).
-2. **Finish reliability (3.14.9):** approvals table (#1042), then #1039, #1037, #1034, #1005, #1004, #999, #989. New security hardening is frozen unless it's a P0 or a real user report.
-3. **Make tools easier:** job presets (#1048), semantic tool routing with Jev / OpenAI Decisions (#1046), catalog audit toward 150 or fewer visible tools (#1047), `wp_look` (#908), per-site playbook (#812), onboarding (#955), opt-in approvals for Elementor/SEO (#930).
-4. **Go to market (in parallel):** video orders to the video team in Linear; mcpwp.net refresh (#1050, #961, #959); directories (#960, #904); live agent feed (#1049); case studies (#964); Chrome origin-trial token for WebMCP.
+1. **Ship 3.14.11:** the Elementor collateral-strip fix (#829, PR #1083, in adversarial review). Until it ships, agents don't API-edit live Elementor documents holding script/style/svg.
+2. **Finish reliability (3.14.x):** #1084 (test order), #1070 (updater on Freemius sites), #1082, #1078, then #1039, #1037, #1034, #1005, #1004, #999, #989 and the follow-ups (#1053, #1067, #1079, #1073, #1074). New security hardening is frozen unless it's a P0 or a real user report.
+3. **Make tools easier:** docs on mcpwp.net (#1075, after the owner approves the design), job presets (#1048), semantic tool routing with Jev / OpenAI Decisions (#1046), catalog audit toward 150 or fewer visible tools (#1047), `wp_look` (#908), per-site playbook (#812), onboarding (#955), opt-in approvals for Elementor/SEO (#930).
+4. **Go to market (in parallel):** video orders to the video team in Linear; mcpwp.net refresh (#1050, #959; #961 closed); directories (#960, #904); live agent feed (#1049); case studies (#964); Chrome origin-trial token for WebMCP.
 5. **Self-improving site:** #944 → #945 → #946 → #947 → #948 → #949 → #950 → #956, then SEO (#915–#922).
 6. **4.0 gates** (#661, #663) after launch traction.
 
 ## Waiting on the owner
 
-Enterprise policy letting Actions create PRs; one Update click in mcpwp.net's wp-admin; npm
-publish; Freemius seller entity set to Digid; Chrome origin-trial token; directory sign-ins; Linear sign-in for the
+Enterprise policy letting Actions create PRs; one Update click in mcpwp.net's wp-admin per release; review of the docs design drafts (#1075); re-enable PostHog (snippet 682, #1082); decide the old page CSS and agent SSH; npm
+publish; Freemius seller entity set to Digid; Chrome origin-trial token; OpenAI developer account; directory sign-ins; Linear sign-in for the
 agent; approval of the tool keep/merge list (#1047). Full list: [plan/PLAN.md](plan/PLAN.md#owner-only-list-keep-this-current-and-mirror-it-in-milestone-17s-description).
 
 ---
