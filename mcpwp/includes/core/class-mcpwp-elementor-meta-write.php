@@ -48,6 +48,11 @@ if ( ! defined( 'ABSPATH' ) ) {
  *   a template, part or clone source. A copy made by a key without
  *   `unfiltered_html` is a sanitized copy.
  *
+ * `_elementor_data` is decoded once, associatively and exactly as Elementor
+ * decodes it; a value that is not a list of elements is refused and never
+ * stored (update() answers WP_Error 400 elementor_data_not_a_tree), and keys
+ * containing a NUL byte are removed (#829 review round 3).
+ *
  * update() takes the value exactly as it is to be stored and slashes it for
  * update_post_meta() itself, so no caller can lose backslashes or have
  * `<\/style` unslashed into `</style` after a check.
@@ -88,6 +93,14 @@ final class Mcpwp_Elementor_Meta_Write {
 	 * @var array{key:string,value:mixed}|null
 	 */
 	private static $pending = null;
+
+	/**
+	 * `_elementor_data` each post held before its first MCPWP write since
+	 * forget_replaced(), by post id.
+	 *
+	 * @var array<int,mixed>
+	 */
+	private static $replaced = array();
 
 	/**
 	 * Depth of capability checks during which MCPWP's grants stand aside.
@@ -145,6 +158,32 @@ final class Mcpwp_Elementor_Meta_Write {
 	}
 
 	/**
+	 * Start recording what the next MCPWP write of this post's
+	 * `_elementor_data` replaces (Mcpwp_Action_Log::begin()).
+	 *
+	 * @param int $post_id Post ID.
+	 * @return void
+	 */
+	public static function forget_replaced( $post_id ) {
+		unset( self::$replaced[ (int) $post_id ] );
+	}
+
+	/**
+	 * What the first MCPWP write of this post's `_elementor_data` since
+	 * forget_replaced() replaced.
+	 *
+	 * @param int $post_id Post ID.
+	 * @return array{written:bool,value:mixed}
+	 */
+	public static function replaced( $post_id ) {
+		$post_id = (int) $post_id;
+
+		return array_key_exists( $post_id, self::$replaced )
+			? array( 'written' => true, 'value' => self::$replaced[ $post_id ] )
+			: array( 'written' => false, 'value' => null );
+	}
+
+	/**
 	 * update_post_meta() of an Elementor key, made by MCPWP.
 	 *
 	 * Takes the value EXACTLY as it is to be stored — never slashed — and
@@ -162,6 +201,13 @@ final class Mcpwp_Elementor_Meta_Write {
 	 * @return int|bool What update_post_meta() returned.
 	 */
 	public static function update( $post_id, $meta_key, $value, array $options = array() ) {
+		if ( '_elementor_data' === $meta_key ) {
+			$refusal = self::tree_refusal( $value );
+			if ( null !== $refusal ) {
+				return $refusal;
+			}
+		}
+
 		return self::as_writer(
 			(int) $post_id,
 			static function () use ( $post_id, $meta_key, $value ) {
@@ -269,6 +315,10 @@ final class Mcpwp_Elementor_Meta_Write {
 		if ( null === $final ) {
 			return $check;
 		}
+		if ( ! empty( $final['refused'] ) ) {
+			// Not a tree: nothing is stored (#829 review round 3).
+			return false;
+		}
 
 		$slot                  = self::slot( $object_id, $meta_key );
 		self::$bypass[ $slot ] = $final['value'];
@@ -293,6 +343,10 @@ final class Mcpwp_Elementor_Meta_Write {
 		$final = self::policy_value( $check, $object_id, $meta_key, $meta_value );
 		if ( null === $final ) {
 			return $check;
+		}
+		if ( ! empty( $final['refused'] ) ) {
+			// Not a tree: nothing is stored (#829 review round 3).
+			return false;
 		}
 
 		$slot                  = self::slot( $object_id, $meta_key );
@@ -338,7 +392,25 @@ final class Mcpwp_Elementor_Meta_Write {
 			return null;
 		}
 
+		if ( '_elementor_data' === $meta_key ) {
+			// What this write replaces, for the action log's rollback trust
+			// (#829 review round 3): the first MCPWP write per post since
+			// forget_replaced() records it.
+			if ( ! array_key_exists( $object_id, self::$replaced ) ) {
+				self::$replaced[ $object_id ] = get_post_meta( $object_id, '_elementor_data', true );
+			}
+
+			// Whoever writes, a value that is not a tree is not stored.
+			if ( null === self::as_tree( $meta_value ) ) {
+				return array( 'refused' => true );
+			}
+		}
+
 		$value = self::apply_policy( $object_id, $meta_key, $meta_value );
+
+		if ( is_array( $value ) && ! empty( $value['__mcpwp_refused'] ) ) {
+			return array( 'refused' => true );
+		}
 
 		return ( $value === $meta_value ) ? null : array( 'value' => $value );
 	}
@@ -436,30 +508,25 @@ final class Mcpwp_Elementor_Meta_Write {
 	 * @return mixed
 	 */
 	private static function police_elementor_data( $incoming, $stored, array $snapshots ) {
-		$tree = is_string( $incoming ) ? json_decode( $incoming ) : $incoming;
-
-		if ( ! is_array( $tree ) && ! is_object( $tree ) ) {
-			// Not a tree: the whole value is one string, as Elementor treats it.
-			if ( ! is_string( $incoming ) || $incoming === $stored ) {
-				return $incoming;
-			}
-			foreach ( $snapshots as $snapshot ) {
-				if ( $incoming === $snapshot ) {
-					return $incoming;
-				}
-			}
-
-			return wp_kses_post( $incoming );
-		}
-
-		$known = array();
-		self::index_elements( self::as_list( $stored ), $known );
-		foreach ( $snapshots as $snapshot ) {
-			self::index_elements( self::as_list( $snapshot ), $known );
+		// One decode, associative, as Elementor decodes (#829 review round 3):
+		// object mode returns null on a key that starts with "\u0000", which
+		// made a valid tree look like "not a tree" and sent the raw JSON text
+		// through wp_kses_post() — which cannot see JSON-escaped markup.
+		$tree = self::as_tree( $incoming );
+		if ( null === $tree ) {
+			return self::refused();
 		}
 
 		$changed = false;
-		$out     = self::police_elements( $tree, $known, $changed );
+		$tree    = self::strip_nul_keys( $tree, $changed );
+
+		$known = array();
+		self::index_elements( (array) self::as_tree( $stored ), $known );
+		foreach ( $snapshots as $snapshot ) {
+			self::index_elements( (array) self::as_tree( $snapshot ), $known );
+		}
+
+		$out = self::police_elements( $tree, $known, $changed );
 
 		if ( ! $changed ) {
 			// Nothing needed sanitizing: the caller's own bytes.
@@ -472,26 +539,102 @@ final class Mcpwp_Elementor_Meta_Write {
 
 		$encoded = self::encode_like( $out, $incoming );
 
-		// Never fall back to the unsanitized value.
-		return false === $encoded ? '[]' : $encoded;
+		// Never fall back to the unsanitized value, or to kses'd JSON text.
+		return false === $encoded ? self::refused() : $encoded;
 	}
 
 	/**
-	 * A stored `_elementor_data` value as a list of elements (assoc arrays).
-	 *
-	 * @param mixed $raw Stored value.
-	 * @return array
+	 * Decode flags for every `_elementor_data` decode here: associative, and
+	 * integers too large for PHP kept exact as strings, so two different huge
+	 * ints never compare equal.
 	 */
-	private static function as_list( $raw ) {
-		if ( class_exists( 'Mcpwp_Elementor_Stored_Tree' ) ) {
-			$read = Mcpwp_Elementor_Stored_Tree::read( $raw );
+	const DECODE_FLAGS = JSON_BIGINT_AS_STRING;
 
-			return is_array( $read['elements'] ?? null ) ? $read['elements'] : array();
+	/**
+	 * A `_elementor_data` value as a list of elements (assoc arrays), decoded
+	 * once and associatively as Elementor decodes it; null when it is not one.
+	 *
+	 * @param mixed $raw JSON text or array.
+	 * @return array|null
+	 */
+	private static function as_tree( $raw ) {
+		if ( null === $raw || '' === $raw ) {
+			return array();
 		}
 
-		$decoded = is_string( $raw ) ? json_decode( $raw, true ) : $raw;
+		if ( is_string( $raw ) ) {
+			$raw = json_decode( $raw, true, 512, self::DECODE_FLAGS );
+		}
 
-		return is_array( $decoded ) ? $decoded : array();
+		if ( ! is_array( $raw ) ) {
+			return null;
+		}
+
+		if ( class_exists( 'Mcpwp_Elementor_Stored_Tree' ) ) {
+			return Mcpwp_Elementor_Stored_Tree::element_list( $raw );
+		}
+
+		foreach ( $raw as $key => $element ) {
+			if ( ! is_int( $key ) || ! is_array( $element ) ) {
+				return null;
+			}
+		}
+
+		return array_values( $raw );
+	}
+
+	/**
+	 * Why a `_elementor_data` value cannot be stored: it does not decode, as
+	 * Elementor decodes it, to a list of elements. Null when it can.
+	 *
+	 * @param mixed $value Value to store.
+	 * @return WP_Error|null
+	 */
+	public static function tree_refusal( $value ) {
+		if ( null !== self::as_tree( $value ) ) {
+			return null;
+		}
+
+		return new WP_Error(
+			'elementor_data_not_a_tree',
+			__( 'The Elementor data is not a list of elements (JSON that decodes to an array of element objects), so nothing was stored. Send the page as an element list, e.g. [{"id":"abc1234","elType":"section","settings":{},"elements":[]}].', 'mcpwp' ),
+			array( 'status' => 400 )
+		);
+	}
+
+	/**
+	 * Marker for a value the policy refuses to store at all.
+	 *
+	 * @return array
+	 */
+	private static function refused() {
+		return array( '__mcpwp_refused' => true );
+	}
+
+	/**
+	 * Remove every array key containing a NUL byte, at any depth. No
+	 * Elementor setting has one; PHP's object-mode decode cannot represent
+	 * one, which is what made a tree look like text (#829 review round 3).
+	 *
+	 * @param mixed $value   Value.
+	 * @param bool  $changed Set when a key was removed.
+	 * @return mixed
+	 */
+	private static function strip_nul_keys( $value, &$changed ) {
+		if ( ! is_array( $value ) ) {
+			return $value;
+		}
+
+		foreach ( $value as $k => $v ) {
+			if ( is_string( $k ) && false !== strpos( $k, "\0" ) ) {
+				unset( $value[ $k ] );
+				$changed = true;
+				continue;
+			}
+			$value[ $k ] = self::strip_nul_keys( $v, $changed );
+		}
+
+		return $value;
 	}
 
 	/**
@@ -503,12 +646,18 @@ final class Mcpwp_Elementor_Meta_Write {
 	 * @return string
 	 */
 	private static function signature( $element ) {
-		$fields = json_decode( (string) wp_json_encode( $element ), true );
+		$fields = is_object( $element )
+			? json_decode( (string) wp_json_encode( $element ), true, 512, self::DECODE_FLAGS )
+			: $element;
 		if ( ! is_array( $fields ) ) {
 			return '';
 		}
 
-		unset( $fields['elements'] );
+		// Children are judged on their own; a non-list `elements` stays in the
+		// signature (and police_elements() treats it as a change).
+		if ( isset( $fields['elements'] ) && self::is_list_of_elements( $fields['elements'] ) ) {
+			unset( $fields['elements'] );
+		}
 		if ( array_key_exists( 'isInner', $fields ) && false === $fields['isInner'] ) {
 			unset( $fields['isInner'] );
 		}
@@ -524,6 +673,25 @@ final class Mcpwp_Elementor_Meta_Write {
 		};
 
 		return (string) wp_json_encode( $sort( $fields ) );
+	}
+
+	/**
+	 * Whether a value is a list of elements (integer keys, array items).
+	 *
+	 * @param mixed $value Value.
+	 * @return bool
+	 */
+	private static function is_list_of_elements( $value ) {
+		if ( ! is_array( $value ) ) {
+			return false;
+		}
+		foreach ( $value as $k => $v ) {
+			if ( ! is_int( $k ) || ! is_array( $v ) ) {
+				return false;
+			}
+		}
+
+		return true;
 	}
 
 	/**
@@ -579,16 +747,20 @@ final class Mcpwp_Elementor_Meta_Write {
 				continue;
 			}
 
-			$id        = self::element_id( $element );
-			$sig       = self::signature( $element );
-			$unchanged = '' !== $id && ! empty( $known[ $id ][ $sig ] );
+			$id       = self::element_id( $element );
+			$sig      = self::signature( $element );
+			$children = is_array( $element ) ? ( $element['elements'] ?? null ) : ( $element->elements ?? null );
+			// A present but non-list `elements` is never "unchanged" (#829
+			// review round 3): it is policed like any other value.
+			$bad_children = null !== $children && ! self::is_list_of_elements( $children );
+			$unchanged    = ! $bad_children && '' !== $id && ! empty( $known[ $id ][ $sig ] );
 			if ( $unchanged ) {
 				--$known[ $id ][ $sig ];
 			}
 
 			$fields = is_object( $element ) ? get_object_vars( $element ) : $element;
 			foreach ( $fields as $field => $value ) {
-				if ( 'elements' === $field && ( is_array( $value ) || is_object( $value ) ) ) {
+				if ( 'elements' === $field && ! $bad_children ) {
 					$fields[ $field ] = self::police_elements( $value, $known, $changed );
 				} elseif ( ! $unchanged ) {
 					$fields[ $field ] = self::police_value( $value, $changed );
@@ -645,7 +817,7 @@ final class Mcpwp_Elementor_Meta_Write {
 	 * @return string|false
 	 */
 	private static function encode_like( $tree, $intended ) {
-		$decoded = json_decode( $intended );
+		$decoded = json_decode( $intended, true, 512, self::DECODE_FLAGS );
 		$chosen  = 0;
 
 		foreach ( array( 0, JSON_UNESCAPED_SLASHES, JSON_UNESCAPED_UNICODE, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE ) as $flags ) {
@@ -687,9 +859,10 @@ final class Mcpwp_Elementor_Meta_Write {
 			return $incoming;
 		}
 
-		$stored  = is_object( $stored ) ? get_object_vars( $stored ) : $stored;
-		$stored  = is_array( $stored ) ? $stored : array();
-		$changed = false;
+		$stored   = is_object( $stored ) ? get_object_vars( $stored ) : $stored;
+		$stored   = is_array( $stored ) ? $stored : array();
+		$changed  = false;
+		$incoming = self::strip_nul_keys( $incoming, $changed );
 
 		foreach ( $incoming as $k => $v ) {
 			if ( in_array( (string) $k, $raw_paths, true ) && ! self::css_breaks_out( $v ) ) {

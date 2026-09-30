@@ -254,7 +254,7 @@ final class ElementorNoCollateralKsesTest extends TestCase {
 				if ( 'html' === ( $element['widgetType'] ?? '' ) ) {
 					$out[] = $element['settings']['html'] ?? null;
 				}
-				$walk( $element['elements'] ?? array() );
+				$walk( is_array( $element['elements'] ?? null ) ? $element['elements'] : array() );
 			}
 		};
 		$walk( $this->stored_tree( $post_id ) );
@@ -950,6 +950,243 @@ final class ElementorNoCollateralKsesTest extends TestCase {
 		Mcpwp_Elementor_Meta_Write::update( self::PAGE_ID, '_elementor_page_settings', $settings );
 
 		$this->assertSame( 'selector .i::before{content:"\\f101"}', $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_page_settings']['custom_css'] );
+	}
+
+	// ---------------------------------------------------------------------
+	// Review round 3.
+	// ---------------------------------------------------------------------
+
+	/** Every html widget's html, decoded associatively as Elementor does. */
+	private function stored_assoc_html( int $post_id ): array {
+		$out  = array();
+		$walk = static function ( array $elements ) use ( &$walk, &$out ) {
+			foreach ( $elements as $element ) {
+				if ( is_array( $element ) && 'html' === ( $element['widgetType'] ?? '' ) ) {
+					$out[ $element['id'] ] = $element['settings']['html'] ?? null;
+				}
+				if ( is_array( $element ) && is_array( $element['elements'] ?? null ) ) {
+					$walk( $element['elements'] );
+				}
+			}
+		};
+		$walk( $this->stored_tree( $post_id ) );
+
+		return $out;
+	}
+
+	private function assert_no_nul_key( int $post_id ): void {
+		$this->assertStringNotContainsString( '\u0000', $GLOBALS['_mcpwp_test_meta'][ $post_id ]['_elementor_data'], 'No NUL-prefixed key is stored.' );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_a_nul_prefixed_key_does_not_turn_the_tree_into_text_via_set_elementor(): void {
+		// Round 3, BLOCK 1: object-mode json_decode() returns null on a key
+		// starting with \u0000, so the document counted as "not a tree" and
+		// wp_kses_post() ran over the JSON text — which cannot see markup
+		// written as <...>. Elementor decodes associatively and
+		// would render the script.
+		$json = substr( wp_json_encode( self::tree() ), 0, -5 )
+			. ',{"id":"nul8291","elType":"widget","widgetType":"html","settings":{"\u0000x":"1","html":"<script>window.__nul829=1</script>"},"elements":[]}]}]}]';
+		$this->assertIsArray( json_decode( $json, true ), 'precondition: the payload is a tree to Elementor' );
+		$this->assertNull( json_decode( $json ), 'precondition: object mode cannot decode it' );
+
+		$result = ( new Mcpwp_REST_Elementor() )->set_elementor_data(
+			$this->rest_request( 'POST', '/mcpwp/v1/elementor/' . self::PAGE_ID, array( 'id' => self::PAGE_ID, 'elementor_data' => $json ) )
+		);
+		$this->assert_ok( $result, 'set_elementor' );
+
+		$html = $this->stored_assoc_html( self::PAGE_ID );
+		$this->assertArrayHasKey( 'nul8291', $html );
+		$this->assertStringNotContainsString( '<script', (string) $html['nul8291'] );
+		$this->assert_no_nul_key( self::PAGE_ID );
+		$this->assertSame( self::SCRIPT, $html['sc82901'], 'Unedited widgets are still kept.' );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_a_nul_prefixed_key_does_not_turn_the_tree_into_text_via_edit_widget(): void {
+		$this->assert_ok(
+			$this->edit_widget( self::PAGE_ID, 'hd82901', array( "\0x" => '1', 'title' => '<script>window.__nulw829=1</script>' ) ),
+			'edit_widget'
+		);
+
+		$tree  = $this->stored_tree( self::PAGE_ID );
+		$title = self::find( $tree, 'hd82901' )['settings']['title'] ?? '';
+		$this->assertStringNotContainsString( '<script', $title );
+		$this->assert_no_nul_key( self::PAGE_ID );
+		$this->assert_html_widgets_intact( self::PAGE_ID, 'an edit carrying a NUL-prefixed key' );
+	}
+
+	public static function non_trees(): array {
+		return array(
+			'object'            => array( '{"id":"sec0001","elType":"section"}' ),
+			'string'            => array( '"<script>window.__str829=1</script>"' ),
+			'number'            => array( '42' ),
+			'broken json'       => array( '[{"id":"sec0001"' ),
+			'list of scalars'   => array( '["<script>x</script>"]' ),
+			'associative array' => array( array( 'a' => array( 'id' => 'x' ) ) ),
+		);
+	}
+
+	/**
+	 * @dataProvider non_trees
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_data_that_is_not_a_tree_is_refused_and_nothing_is_stored( $value ): void {
+		$before = $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'];
+
+		$result = Mcpwp_Elementor_Meta_Write::update( self::PAGE_ID, '_elementor_data', $value );
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'elementor_data_not_a_tree', $result->get_error_code() );
+		$this->assertSame( 400, $result->get_error_data()['status'] );
+		$this->assertSame( $before, $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'] );
+
+		// The same through any other write MCPWP makes (Document::save(),
+		// meta_input): the metadata filter refuses it too.
+		$stored = Mcpwp_Elementor_Meta_Write::as_writer(
+			self::PAGE_ID,
+			static function () use ( $value ) {
+				return update_post_meta( ElementorNoCollateralKsesTest::page_id(), '_elementor_data', wp_slash( $value ) );
+			}
+		);
+		$this->assertFalse( (bool) $stored );
+		$this->assertSame( $before, $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'] );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_a_non_list_elements_field_is_never_unchanged(): void {
+		// Round 3, WARN 1: `elements` as a string on an otherwise identical
+		// element used to be dropped from the signature and kept raw.
+		$tree = self::tree();
+		$tree[0]['elements'][0]['elements'][] = array(
+			'id'         => 'el82901',
+			'elType'     => 'widget',
+			'widgetType' => 'heading',
+			'settings'   => array( 'title' => 'x' ),
+			'elements'   => '<script>window.__elm829=1</script>',
+		);
+		$this->seed( self::PAGE_ID, $tree );
+
+		Mcpwp_Elementor_Meta_Write::update( self::PAGE_ID, '_elementor_data', wp_json_encode( $tree ) );
+
+		$stored = self::find( $this->stored_tree( self::PAGE_ID ), 'el82901' );
+		$this->assertStringNotContainsString( '<script', (string) $stored['elements'] );
+		$this->assert_html_widgets_intact( self::PAGE_ID, 'a write carrying a non-list elements field' );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_huge_integers_compare_exactly(): void {
+		// Round 3, NIT 1: two integers past PHP_INT_MAX decode to the same
+		// float unless kept as strings; a changed one is a changed element.
+		$tree = self::tree();
+		$json = wp_json_encode( $tree );
+		$seed = str_replace( '"html":"<script>', '"n":12345678901234567890123,"html":"<script>', $json );
+		$next = str_replace( '"html":"<script>', '"n":12345678901234567890124,"html":"<script>', $json );
+		$this->assertNotSame( $seed, $json, 'precondition' );
+		$GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'] = $seed;
+
+		Mcpwp_Elementor_Meta_Write::update( self::PAGE_ID, '_elementor_data', $next );
+
+		$this->assertStringNotContainsString( '<script', (string) self::find( $this->stored_tree( self::PAGE_ID ), 'sc82901' )['settings']['html'] );
+
+		// And an unchanged huge integer is still unchanged.
+		$GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'] = $seed;
+		Mcpwp_Elementor_Meta_Write::update( self::PAGE_ID, '_elementor_data', $seed );
+		$this->assertSame( $seed, $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'] );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_an_admin_edit_between_begin_and_the_write_voids_rollback_trust(): void {
+		// Round 3, NIT 2: begin() snapshots the page with the script; an
+		// admin then removes it; the key's write lands. The snapshot is not
+		// what that write replaced, so a rollback may not restore it raw.
+		$with_script = wp_json_encode( self::tree() );
+		Mcpwp_Elementor_Meta_Write::forget_replaced( self::PAGE_ID ); // begin()
+		$before_snap = wp_json_encode( array( 'post_id' => self::PAGE_ID, 'elementor_data' => $with_script ) );
+
+		$admin = self::tree();
+		$admin[0]['elements'][0]['elements'][1]['settings']['html'] = '<p>removed by admin</p>';
+		$GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'] = wp_json_encode( $admin );
+
+		$keyed = $admin;
+		$keyed[0]['elements'][0]['elements'][0]['settings']['title'] = 'Key edit';
+		Mcpwp_Elementor_Meta_Write::update( self::PAGE_ID, '_elementor_data', wp_json_encode( $keyed ) );
+
+		$mark = new ReflectionMethod( Mcpwp_Action_Log::class, 'mark_raced_snapshot' );
+		$mark->setAccessible( true );
+		$snap = json_decode( $mark->invoke( null, array( 'type' => 'elementor', 'id' => self::PAGE_ID ), $before_snap ), true );
+		$this->assertTrue( $snap['raced'] );
+
+		$entry = array(
+			'resource_type' => 'elementor',
+			'after_snap'    => wp_json_encode( array( 'post_id' => self::PAGE_ID, 'elementor_data' => $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'] ) ),
+		);
+		$this->assertTrue( $this->rollback( $entry, $snap ) );
+		$this->assertStringNotContainsString( '<script', (string) self::find( $this->stored_tree( self::PAGE_ID ), 'sc82901' )['settings']['html'] );
+
+		// Without the intervening edit the snapshot is not marked.
+		$this->seed( self::PAGE_ID );
+		Mcpwp_Elementor_Meta_Write::forget_replaced( self::PAGE_ID );
+		Mcpwp_Elementor_Meta_Write::update( self::PAGE_ID, '_elementor_data', wp_json_encode( $keyed ) );
+		$clean = json_decode( $mark->invoke( null, array( 'type' => 'elementor', 'id' => self::PAGE_ID ), $before_snap ), true );
+		$this->assertArrayNotHasKey( 'raced', $clean );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_custom_code_sanitize_writes_page_settings_as_an_array(): void {
+		// Round 3, NIT 3: get_post_meta( $id ) returns page settings as a
+		// serialized string on a real site; it was stripped as text and
+		// stored back as a string.
+		require_once dirname( __DIR__ ) . '/includes/pro/api/class-mcpwp-rest-elementor-pro.php';
+		$snippet = 8295;
+		$GLOBALS['_mcpwp_test_posts'][ $snippet ] = $this->post( $snippet, 'elementor_snippet' );
+		$GLOBALS['_mcpwp_test_meta'][ $snippet ]['_elementor_page_settings'] = array(
+			'custom_css' => 'a{}',
+			'note'       => '<html><body>hello</body></html>',
+		);
+
+		$controller = new Mcpwp_REST_Elementor_Pro( new stdClass() );
+		$controller->sanitize_custom_code( $this->rest_request( 'POST', "/mcpwp/v1/elementor/custom-code/{$snippet}/sanitize", array( 'id' => $snippet ) ) );
+
+		$stored = $GLOBALS['_mcpwp_test_meta'][ $snippet ]['_elementor_page_settings'];
+		$this->assertIsArray( $stored, 'Still settings, not a serialized string.' );
+		$this->assertSame( 'a{}', $stored['custom_css'] );
+		$this->assertStringNotContainsString( '<html', $stored['note'] );
+		$this->assertStringContainsString( 'hello', $stored['note'] );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_event_handlers_javascript_urls_and_svg_introduced_by_a_key_are_sanitized(): void {
+		// Round 3, NIT 4: the kses double now removes what real kses does
+		// for these; the rig proves it against real kses.
+		$this->edit_widget( self::PAGE_ID, 'sc82901', array( 'html' => '<img src=x onerror="window.__img829=1"><a href="javascript:window.__a829=1">a</a><svg onload=x><path/></svg>t' ) );
+
+		$html = (string) self::find( $this->stored_tree( self::PAGE_ID ), 'sc82901' )['settings']['html'];
+		$this->assertStringNotContainsString( 'onerror', $html );
+		$this->assertStringNotContainsString( 'javascript:', $html );
+		$this->assertStringNotContainsString( '<svg', $html );
+		$this->assertSame( self::STYLE, self::find( $this->stored_tree( self::PAGE_ID ), 'st82901' )['settings']['html'] );
 	}
 
 	// ---------------------------------------------------------------------

@@ -442,12 +442,20 @@ final class ElementorStoredTreeConsumersTest extends TestCase {
 		$this->assertSame( self::tree(), json_decode( $this->meta( self::PAGE_ID ), true ) );
 	}
 
-	public function test_rollback_restores_an_unreadable_snapshot_exactly_as_it_was(): void {
+	public function test_rollback_refuses_an_unreadable_snapshot_and_changes_nothing(): void {
+		// #829 review round 3: `_elementor_data` that does not decode, as
+		// Elementor decodes it, to a list of elements is never stored — not
+		// by a rollback either. Stored as text it could not be sanitized
+		// (kses cannot see JSON-escaped markup) and the page could not render.
+		// Before #829 a rollback restored it exactly as it was.
 		$snapshot = '[{"id":"sec0001","settings":{"title":"a \\"b';
 		$this->page( self::PAGE_ID, '[]' );
 
-		$this->assertTrue( $this->rollback( $snapshot ) );
+		$result = $this->rollback( $snapshot );
 
-		$this->assertSame( $snapshot, $this->meta( self::PAGE_ID ), 'A rollback restores what the page held, readable or not.' );
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'elementor_data_not_a_tree', $result->get_error_code() );
+		$this->assertSame( 400, $result->get_error_data()['status'] );
+		$this->assertSame( '[]', $this->meta( self::PAGE_ID ), 'Nothing was written.' );
 	}
 }

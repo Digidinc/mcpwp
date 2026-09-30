@@ -712,6 +712,40 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	}
 
 	/**
+	 * strip_wrapper_html_tags() over every string of a value (a string, or an
+	 * array such as `_elementor_page_settings`), keeping its shape.
+	 *
+	 * @param mixed $value Value.
+	 * @return array{value:mixed,changed:bool}
+	 */
+	private function strip_wrapper_html_tags_deep( $value ) {
+		if ( is_string( $value ) ) {
+			if ( '' === $value || ! $this->contains_wrapper_html_tags( $value ) ) {
+				return array( 'value' => $value, 'changed' => false );
+			}
+			$stripped = $this->strip_wrapper_html_tags( $value );
+
+			return array(
+				'value'   => empty( $stripped['changed'] ) ? $value : $stripped['content'],
+				'changed' => ! empty( $stripped['changed'] ),
+			);
+		}
+
+		if ( ! is_array( $value ) ) {
+			return array( 'value' => $value, 'changed' => false );
+		}
+
+		$changed = false;
+		foreach ( $value as $k => $v ) {
+			$r           = $this->strip_wrapper_html_tags_deep( $v );
+			$value[ $k ] = $r['value'];
+			$changed     = $changed || $r['changed'];
+		}
+
+		return array( 'value' => $value, 'changed' => $changed );
+	}
+
+	/**
 	 * Sanitize a Custom Code snippet by stripping invalid wrapper tags.
 	 *
 	 * Scans all string post meta values and removes <html>/<head>/<body> tags.
@@ -737,6 +771,24 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 				continue;
 			}
 
+			// An Elementor key is read as its real (unserialized) value and
+			// written back through the one chokepoint (#829 review round 3):
+			// get_post_meta( $id ) returns `_elementor_page_settings` as a
+			// serialized string, which used to be stripped as text and stored
+			// back as a string — serialized twice, and no longer settings.
+			if ( in_array( $key, Mcpwp_Elementor_Meta_Write::KEYS, true ) ) {
+				$current = get_post_meta( $id, $key, true );
+				$fixed   = $this->strip_wrapper_html_tags_deep( $current );
+				if ( $fixed['changed'] ) {
+					$written = Mcpwp_Elementor_Meta_Write::update( $id, $key, $fixed['value'] );
+					if ( ! is_wp_error( $written ) ) {
+						$changed++;
+						$matches[] = $key;
+					}
+				}
+				continue;
+			}
+
 			foreach ( $values as $value ) {
 				if ( ! is_string( $value ) || '' === $value ) {
 					continue;
@@ -751,12 +803,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 					continue;
 				}
 
-				if ( in_array( $key, Mcpwp_Elementor_Meta_Write::KEYS, true ) ) {
-					// An Elementor key goes through the one chokepoint (#829).
-					Mcpwp_Elementor_Meta_Write::update( $id, $key, $sanitized['content'] );
-				} else {
-					update_post_meta( $id, $key, $sanitized['content'], $value );
-				}
+				update_post_meta( $id, $key, $sanitized['content'], $value );
 				$changed++;
 				$matches[] = $key;
 			}

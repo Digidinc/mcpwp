@@ -420,6 +420,24 @@ if (! function_exists('wp_kses_post')) {
             return $text;
         }
         $text = preg_replace('#<(script|style)\b[^>]*>.*?</\1>#is', '', $text);
+        // #829 review round 3: enough more of core's 'post' allow-list that a
+        // test can see what real kses removes. Tags outside it (svg,
+        // iframe, object, embed, math, form controls) lose the tag and keep
+        // their text; every on* event attribute is removed; a
+        // javascript:/vbscript:/data: URL in any attribute is emptied.
+        // script/style keep the block rule above, which KsesRawTextStripTest
+        // pins; a tag name must be followed by whitespace, '/' or '>', and
+        // the attribute scan stops at the next '<', so it stays linear.
+        $text = preg_replace('#</?(svg|path|g|circle|rect|use|iframe|object|embed|math|base|meta|link|input|button|textarea|select|option|form)(?=[\s/>])[^<>]*>#i', '', $text);
+        $text = preg_replace_callback(
+            '#<([a-z][a-z0-9-]*)(\s[^<>]*)>#i',
+            static function ($m) {
+                $attrs = preg_replace('#\s+on[a-z]+\s*=\s*("[^"]*"|\'[^\']*\'|[^\s>]*)#i', '', $m[2]);
+                $attrs = preg_replace('#(=\s*["\']?)\s*(javascript|vbscript|data)\s*:[^"\'\s>]*#i', '$1', $attrs);
+                return '<' . $m[1] . $attrs . '>';
+            },
+            $text
+        );
         // Core normalises a bare ampersand to an entity, which is how a
         // plain-text value run through kses comes back changed.
         return preg_replace('/&(?!#?[a-z0-9]+;)/i', '&amp;', $text);
