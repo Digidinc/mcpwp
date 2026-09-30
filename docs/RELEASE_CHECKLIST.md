@@ -27,6 +27,13 @@ go-to-market".
 
 A release is not shipped until both publish jobs are green. Each one fails the run if its channel cannot serve the new version.
 
+### Which path to use (read first)
+
+Since the move to `Digidinc/mcpwp` (2026-09-30), **GitHub Actions runs**. One thing is still blocked by the Digidinc enterprise policy: **Actions can't open pull requests**, so the Release PR must be opened locally (step 2 below). After that:
+
+- **Actions working (the normal case now):** do steps 1–4 (check the channel, open/update the Release PR locally, edit the changelog, smoke-test), then merge the Release PR (the first command of step 5 only). **Stop there.** The `Release Please` workflow on the merge commit then tags, creates the GitHub release, builds and attaches the Free and Freemius ZIPs, syncs the wp.org changelog, and publishes BOTH channels (self-hosted R2 and Freemius), each with its own verifier. Watch that run (`env -u GITHUB_TOKEN gh run list -R Digidinc/mcpwp --workflow "Release Please" --limit 1`), check every job is green, then do step 9 (prove the live ZIP) and step 11 (public record). Running steps 5 (github-release) to 10 by hand as well double-publishes; the Freemius upload then fails with `duplicate_plugin_version`, which is harmless but noisy.
+- **Actions not working:** follow every step below by hand.
+
 ### Local release procedure (use this while GitHub Actions can't run)
 
 Actions billing has blocked every workflow since 3.13.1, so every 3.14.x release was cut this

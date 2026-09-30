@@ -132,7 +132,13 @@ final class ApprovalsTableRound2Test extends TestCase {
 		};
 
 		$from = count( $GLOBALS['mcpwp_test_approvals_statements'] );
-		memory_reset_peak_usage();
+		// memory_reset_peak_usage() is PHP 8.2+. On older PHP the peak can't be
+		// reset, so the memory bound below is only asserted where it can be measured;
+		// the SQL-shape assertions still run everywhere.
+		$can_measure_peak = function_exists( 'memory_reset_peak_usage' );
+		if ( $can_measure_peak ) {
+			memory_reset_peak_usage();
+		}
 		$base = memory_get_usage();
 
 		$page = Mcpwp_Approvals::list_requests( '', 1, true, 'date', $restricted );
@@ -144,7 +150,9 @@ final class ApprovalsTableRound2Test extends TestCase {
 		$this->assertSame( 64, $summary->invoke( null, true, $restricted )['counts']['pending'] );
 		$this->assertSame( 64, Mcpwp_Approvals::count_by_status()['counts']['pending'] );
 
-		$this->assertLessThan( 12 * 1048576, memory_get_peak_usage() - $base, 'Never more than the page\'s own records in memory.' );
+		if ( $can_measure_peak ) {
+			$this->assertLessThan( 12 * 1048576, memory_get_peak_usage() - $base, 'Never more than the page\'s own records in memory.' );
+		}
 
 		$full = array_values( preg_grep( '/^SELECT [^F]*\brecord\b/', $this->statements_since( $from ) ) );
 		foreach ( $full as $sql ) {
