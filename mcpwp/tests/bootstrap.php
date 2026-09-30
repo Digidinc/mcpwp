@@ -731,6 +731,7 @@ if (interface_exists('PHPUnit\Runner\AfterTestHook')) {
      *   inspects the log resets it itself first.
      * - The Mcpwp_Rate_Limiter singleton (see mcpwp_test_reset_rate_limiter()).
      * - Fake-database rows: raw option rows, posts and post meta.
+     * - did_action() counts.
      */
     final class Mcpwp_Test_Process_State_Reset implements \PHPUnit\Runner\AfterTestHook
     {
@@ -746,6 +747,10 @@ if (interface_exists('PHPUnit\Runner\AfterTestHook')) {
             $GLOBALS['mcpwp_test_wpdb_options'] = array();
             $GLOBALS['_mcpwp_test_posts']       = array();
             $GLOBALS['_mcpwp_test_meta']        = array();
+            // did_action() counts: a test marking 'elementor/loaded' made
+            // Elementor "active" for later tests. 'init' is re-seeded before
+            // every test by Mcpwp_Test_Approvals_Table_Reset.
+            $GLOBALS['mcpwp_test_did_action'] = array();
         }
     }
 }
