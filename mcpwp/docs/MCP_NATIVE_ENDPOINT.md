@@ -116,8 +116,10 @@ then the site setting (when one was saved), then `core`. Values are trimmed and
 lowercased; an unrecognised value at either level falls back rather than failing
 the connection. If the site has disabled the "meta" category (so
 `mcpwp_find_tools`/`mcpwp_call` are not available), `core` is never applied: the
-connection gets `full`. Every API key can use the two meta tools regardless of
-its role's categories — they only find and run tools that key may already call.
+connection gets `full`. Every API key can use the two meta tools by name,
+regardless of its role's categories — they only find and run tools that key may
+already call. The `meta` category itself is reserved: no key is granted it, and a
+third-party tool registered in it is treated as `custom`.
 
 #### Tool weight budget (#1064)
 

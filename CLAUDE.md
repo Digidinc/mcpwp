@@ -702,11 +702,17 @@ tokens, any tool ≤450, default `wp_introspect` summary ≤2,000; Free/Pro `ful
 until the #1047 consolidation). A new or longer tool that breaks a budget belongs in the diet's maps
 or in #1047, not in a raised budget.
 
-Every restricted key holds the `meta` category (`Mcpwp_Api_Auth::always_granted_tool_categories()`,
-added in `resolve_key_tool_categories()`): find/call only reach tools the key can already call, and
-without them `core` stranded pre-#907 custom keys. A site that disables `meta` gets the `full`
+Every key may use `mcpwp_find_tools` and `mcpwp_call` BY NAME
+(`Mcpwp_Api_Auth::get_key_exempt_tool_names()`, applied in `key_role_permits_tool()` — the one per-key
+decision tools/list, tools/call, `mcpwp_call`'s inner call, replay and introspect all use): they only
+reach tools the key can already call, and without them `core` stranded pre-#907 custom keys. No key is
+ever granted the `meta` CATEGORY: the slug is reserved (`reserved_tool_category_slugs()`), stripped from
+stored key categories, absent from roles and the key-setup UI, and an addon tool that claims it
+(`mcpwp_register_tools` or an integration) is remapped to `custom` and logged once — otherwise it would
+ride along to every key (#1064 review round 2). A site that disables `meta` site-wide gets the `full`
 profile (`effective_tool_profile()`), and every "use mcpwp_find_tools" hint is emitted only when both
-meta tools are visible to the caller. `wp_introspect`/`/introspect` (summary, `detail=full`, `tool=`)
+meta tools are visible to the caller; a category-restricted key's `initialize` instructions name only
+tools it can call. `wp_introspect`/`/introspect` (summary, `detail=full`, `tool=`)
 and `/onboard?detail=full` list exactly the caller's pre-profile tools/list
 (`get_introspection_data_for_caller()`); a hidden `tool=` is the same 404 as a nonexistent one.
 

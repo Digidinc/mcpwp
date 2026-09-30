@@ -190,8 +190,10 @@ class Mcpwp_Custom_Tool_Registry extends Mcpwp_MCP_Tool_Registry {
 			'name'        => $name,
 			'description' => sanitize_text_field( $entry['description'] ),
 			'method'      => $method,
+			// `meta` is reserved (#1064 review round 2): remapped to `custom`,
+			// logged once — see Mcpwp_Integration::remap_reserved_category().
 			'category'    => isset( $entry['category'] ) && is_string( $entry['category'] )
-				? sanitize_key( $entry['category'] )
+				? Mcpwp_Integration::remap_reserved_category( sanitize_key( $entry['category'] ), $name, 'mcpwp_register_tools' )
 				: 'custom',
 			'tier'        => $tier,
 			'capability'  => isset( $entry['capability'] ) && is_string( $entry['capability'] )

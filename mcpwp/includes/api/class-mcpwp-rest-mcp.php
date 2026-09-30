@@ -353,7 +353,19 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			$tools = array_merge( $tools, $this->pro_registry->get_staging_pro_tools() );
 		}
 		foreach ( Mcpwp_Integration::resolve_all() as $integration ) {
-			$tools = array_merge( $tools, $integration->get_tools() );
+			// The meta tool names are this class's own (#1064 review round 2):
+			// an integration cannot list a tool under them.
+			$tools = array_merge(
+				$tools,
+				array_values(
+					array_filter(
+						$integration->get_tools(),
+						static function ( $tool ) {
+							return ! ( is_array( $tool ) && isset( $tool['name'] ) && in_array( $tool['name'], self::META_TOOL_NAMES, true ) );
+						}
+					)
+				)
+			);
 		}
 		$tools = array_merge( $tools, $this->custom_registry->get_tools() );
 		// Meta tools (#907) merge in last so a `full` profile's tools/list
@@ -447,7 +459,9 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			$cats = array_merge( $cats, $this->pro_registry->get_tool_categories() );
 		}
 		foreach ( Mcpwp_Integration::resolve_all() as $integration ) {
-			$cats = array_merge( $cats, $integration->get_tool_categories() );
+			// A reserved slug (`meta`) is remapped, never trusted
+			// (#1064 review round 2).
+			$cats = array_merge( $cats, Mcpwp_Integration::remap_reserved_categories( $integration->get_tool_categories(), get_class( $integration ) ) );
 		}
 		$cats = array_merge( $cats, $this->custom_registry->get_tool_categories() );
 		$cats = array_merge( $cats, $this->meta_registry->get_tool_categories() );
@@ -1646,14 +1660,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			return false;
 		}
 
-		if ( $key_record ) {
-			$allowed = $this->resolve_key_tool_categories( $key_record );
-			if ( ! empty( $allowed ) && ( '' === $tool_category || ! in_array( $tool_category, $allowed, true ) ) ) {
-				return false;
-			}
-		}
-
-		return true;
+		return $this->key_role_permits_tool( $tool_name, $tool_category, $key_record );
 	}
 
 	/**
@@ -2698,26 +2705,20 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			return $tools;
 		}
 
-		$all_categories   = $this->get_all_tool_categories();
-		$discovery_exempt = self::get_discovery_allowlist_tool_names();
+		$all_categories = $this->get_all_tool_categories();
 
 		return array_values(
 			array_filter(
 				$tools,
-				function ( $tool ) use ( $allowed_categories, $all_categories, $discovery_exempt ) {
+				function ( $tool ) use ( $all_categories, $key_record ) {
 					$name = isset( $tool['name'] ) ? $tool['name'] : '';
-					// #1007 WARN-2: wp_site_info/wp_onboard/wp_introspect stay
-					// listed to every role, same as they stay callable
-					// (handle_tools_call()'s matching exemption) and reachable
-					// over REST (get_discovery_allowlist_routes()).
-					if ( in_array( $name, $discovery_exempt, true ) ) {
-						return true;
-					}
-					// Same rule as the handler's per-key gate: an uncategorised
-					// tool is denied to a category-restricted key, so it is not
-					// listed to it either (#802 round 6).
+					// The single per-key decision (#1064 review round 2):
+					// the discovery allowlist (#1007 WARN-2) and the two meta
+					// tools by NAME pass; everything else needs its category
+					// granted, and an uncategorised tool is denied (#802
+					// round 6) — the handler's own gate is the same call.
 					$category = isset( $all_categories[ $name ] ) ? (string) $all_categories[ $name ] : '';
-					return '' !== $category && in_array( $category, $allowed_categories, true );
+					return $this->key_role_permits_tool( $name, $category, $key_record );
 				}
 			)
 		);
@@ -4090,7 +4091,10 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		$key_record = $this->get_current_api_key_record();
 		if ( $key_record ) {
 			$allowed_categories = $this->resolve_key_tool_categories( $key_record );
-			if ( ! empty( $allowed_categories ) && ! in_array( Mcpwp_MCP_Meta_Tools::CATEGORY, $allowed_categories, true ) ) {
+			// #1064 review round 2: the meta tools pass the per-key gate by
+			// NAME, so this refuses only if that single decision ever says
+			// otherwise.
+			if ( ! $this->key_role_permits_tool( $meta_tool_name, Mcpwp_MCP_Meta_Tools::CATEGORY, $key_record ) ) {
 				$role = isset( $key_record['role'] ) ? self::describe_role_for_message( $key_record['role'] ) : 'unknown';
 				return array(
 					'code'    => 'scope_denied',
@@ -4449,8 +4453,12 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				);
 			}
 
-			// Fuzzy-match for "did you mean?" suggestion.
-			$available = array_keys( $tool_map );
+			// Fuzzy-match for "did you mean?" suggestion — drawn only from
+			// tools this caller can see (#1064 review round 2, N3), so the
+			// hint never names a tool the key could not call. A KNOWN tool
+			// the key may not call is not "unknown": it gets scope_denied
+			// from the category gate below, unchanged.
+			$available = array_keys( $this->tool_name_lookup( $this->tools_visible_by_role_and_availability() ) );
 			$best      = null;
 			$best_pct  = 0;
 			foreach ( $available as $candidate ) {
@@ -4517,12 +4525,13 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		if ( ! $is_discovery_tool && $key_record ) {
 			$allowed_categories = $this->resolve_key_tool_categories( $key_record );
 			if ( ! empty( $allowed_categories ) ) {
-				// The same resolver as every other gate. A tool with no
-				// category is not "site" — under a category-restricted key it
-				// is denied, fail-closed, and the replay gate says the same
-				// (#802 round 5).
+				// The same decision as every other gate
+				// (key_role_permits_tool(), #1064 review round 2). A tool
+				// with no category is not "site" — under a
+				// category-restricted key it is denied, fail-closed, and the
+				// replay gate says the same (#802 round 5).
 				$tool_category = $this->tool_category_for( $tool_name );
-				if ( '' === $tool_category || ! in_array( $tool_category, $allowed_categories, true ) ) {
+				if ( ! $this->key_role_permits_tool( $tool_name, $tool_category, $key_record ) ) {
 					$role = isset( $key_record['role'] ) ? self::describe_role_for_message( $key_record['role'] ) : 'unknown';
 					$this->fire_tool_called( $tool_name, $start, 'scope_denied' );
 					return $this->tool_error_result(
@@ -5959,13 +5968,18 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		// tools/list. Say how to reach them, once, before anything else —
 		// and only when the caller can actually see both meta tools
 		// (review B1): never point at a tool the caller cannot reach.
+		$restricted = $this->caller_is_category_restricted();
 		if ( $this->meta_tools_visible_to_caller() ) {
 			$lines[] = '## Finding Tools';
 			$lines[] = '';
-			if ( 'core' === $this->effective_tool_profile() ) {
+			if ( 'core' === $this->effective_tool_profile() && $restricted ) {
+				// #1064 review round 2, W2: a restricted key reaches only its
+				// own categories — never promise it "every other tool".
+				$lines[] = 'Your tool list is the core set, not everything. `mcpwp_find_tools(query)` searches every other tool your key may call and returns its parameters and examples, and `mcpwp_call(name, arguments)` runs the one you pick.';
+			} elseif ( 'core' === $this->effective_tool_profile() ) {
 				$lines[] = 'Your tool list is the core set, not everything. Every other tool on this site (menus, templates, SEO audits, bulk edits, WooCommerce and more) is reachable: `mcpwp_find_tools(query)` searches them all and returns full parameters and examples, and `mcpwp_call(name, arguments)` runs the one you pick. If a tool named below is not in your list, find it and call it this way.';
 			} else {
-				$lines[] = 'Tool descriptions in tools/list are shortened. `mcpwp_find_tools(query)` returns any tool\'s full description, parameters and examples; `mcpwp_call(name, arguments)` runs it.';
+				$lines[] = 'Tool descriptions in tools/list are shortened. `mcpwp_find_tools(query)` returns the full description, parameters and examples of any tool ' . ( $restricted ? 'your key may call' : 'on this site' ) . '; `mcpwp_call(name, arguments)` runs it.';
 			}
 			$lines[] = '';
 		}
@@ -6076,7 +6090,69 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		$lines[] = '- **Do not forget to set featured images** — use `wp_set_featured_image` after creating posts/pages with images.';
 		$lines[] = '';
 
+		// #1064 review round 2, W2: a category-restricted key is told only
+		// about tools it can call. A line naming any other tool is dropped,
+		// then any heading left with nothing under it.
+		if ( $restricted ) {
+			$lines = $this->lines_naming_only_callable_tools( $lines );
+		}
+
 		return implode( "\n", $lines );
+	}
+
+	/**
+	 * Whether the caller's key is restricted to some tool categories (any
+	 * role but admin, and not a legacy/OAuth principal).
+	 *
+	 * @return bool
+	 */
+	private function caller_is_category_restricted() {
+		$key_record = $this->get_current_api_key_record();
+		return is_array( $key_record ) && array() !== $this->resolve_key_tool_categories( $key_record );
+	}
+
+	/**
+	 * Drop every instruction line that names (in backticks) a tool outside
+	 * the caller's visible catalog, then every heading left empty
+	 * (#1064 review round 2, W2).
+	 *
+	 * @param string[] $lines Instruction lines.
+	 * @return string[]
+	 */
+	private function lines_naming_only_callable_tools( array $lines ) {
+		$callable = $this->tool_name_lookup( $this->tools_visible_by_role_and_availability() );
+		$kept     = array();
+		foreach ( $lines as $line ) {
+			if ( preg_match_all( '/`((?:wp|wc|mcpwp)_[a-z0-9_]+)/', $line, $matches ) ) {
+				foreach ( $matches[1] as $tool ) {
+					if ( ! isset( $callable[ $tool ] ) ) {
+						continue 2;
+					}
+				}
+			}
+			$kept[] = $line;
+		}
+
+		// Remove a heading whose section is now empty (only blank lines
+		// before the next heading or the end), and collapse blank runs.
+		$out   = array();
+		$count = count( $kept );
+		for ( $i = 0; $i < $count; $i++ ) {
+			if ( 0 === strpos( $kept[ $i ], '## ' ) ) {
+				$j = $i + 1;
+				while ( $j < $count && '' === trim( $kept[ $j ] ) ) {
+					$j++;
+				}
+				if ( $j >= $count || 0 === strpos( $kept[ $j ], '## ' ) ) {
+					continue;
+				}
+			}
+			if ( '' === trim( $kept[ $i ] ) && ! empty( $out ) && '' === trim( end( $out ) ) ) {
+				continue;
+			}
+			$out[] = $kept[ $i ];
+		}
+		return $out;
 	}
 
 	/**

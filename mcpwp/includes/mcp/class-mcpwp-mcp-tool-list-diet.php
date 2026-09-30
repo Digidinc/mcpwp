@@ -661,16 +661,24 @@ class Mcpwp_MCP_Tool_List_Diet {
 			}
 		}
 
-		// 2. Word boundary, leaving room for the ellipsis.
-		for ( $i = $count - 1; $i > 0; $i-- ) {
-			if ( $ends[ $i ] > $max - 3 || ! preg_match( '/^\s+$/u', $clusters[ $i ] ) ) {
-				continue;
+		// 2. Word boundary, leaving room for the ellipsis. First pass keeps
+		// parentheses balanced; if the text itself makes that impossible
+		// (a stray ")" early on, as in "a) first step"), the second pass
+		// settles for any word boundary rather than cut inside a word.
+		foreach ( array( true, false ) as $require_balance ) {
+			for ( $i = $count - 1; $i > 0; $i-- ) {
+				if ( $ends[ $i ] > $max - 3 || ! preg_match( '/^\s+$/u', $clusters[ $i ] ) ) {
+					continue;
+				}
+				$candidate = rtrim( implode( '', array_slice( $clusters, 0, $i ) ), " \t\n\r\0\x0B,;:-(" );
+				if ( '' === $candidate || self::ends_with_abbreviation( $candidate ) ) {
+					continue;
+				}
+				if ( $require_balance && ! self::parentheses_balanced( $candidate ) ) {
+					continue;
+				}
+				return $candidate . '...';
 			}
-			$candidate = rtrim( implode( '', array_slice( $clusters, 0, $i ) ), " \t\n\r\0\x0B,;:-(" );
-			if ( '' === $candidate || ! self::parentheses_balanced( $candidate ) || self::ends_with_abbreviation( $candidate ) ) {
-				continue;
-			}
-			return $candidate . '...';
 		}
 
 		// 3. One unbroken run longer than the allowance: whole clusters only.
@@ -745,13 +753,27 @@ class Mcpwp_MCP_Tool_List_Diet {
 	}
 
 	/**
-	 * Whether every "(" in $text is closed.
+	 * Whether every "(" in $text is closed, in order: a depth counter that
+	 * never goes negative and ends at zero (#1064 review round 2, N1). A
+	 * stray ")" before any "(" is unbalanced too — ") (" is not balanced.
 	 *
 	 * @param string $text Text.
 	 * @return bool
 	 */
 	private static function parentheses_balanced( $text ) {
-		return substr_count( $text, '(' ) <= substr_count( $text, ')' );
+		$depth  = 0;
+		$length = strlen( $text );
+		for ( $i = 0; $i < $length; $i++ ) {
+			if ( '(' === $text[ $i ] ) {
+				$depth++;
+			} elseif ( ')' === $text[ $i ] ) {
+				$depth--;
+				if ( $depth < 0 ) {
+					return false;
+				}
+			}
+		}
+		return 0 === $depth;
 	}
 
 	/**

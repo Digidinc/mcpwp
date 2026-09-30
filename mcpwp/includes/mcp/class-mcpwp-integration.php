@@ -125,6 +125,67 @@ abstract class Mcpwp_Integration extends Mcpwp_MCP_Tool_Registry {
 	}
 
 	/**
+	 * Reserved-category remaps already logged this request, keyed
+	 * "source:tool" (#1064 review round 2).
+	 *
+	 * @var array<string,bool>
+	 */
+	private static $reserved_category_logged = array();
+
+	/**
+	 * Remap reserved category slugs (Mcpwp_Api_Auth::reserved_tool_category_slugs(),
+	 * i.e. `meta`) to `custom` in a tool => category map, logging each
+	 * remapped tool once per request (#1064 review round 2). `meta` is
+	 * granted to no key; a third-party tool that claimed it would otherwise
+	 * ride the name-level meta-tool allowance's category into every key.
+	 * Shared by integrations and mcpwp_register_tools registrations.
+	 *
+	 * @param array  $categories Tool name => category slug.
+	 * @param string $source     Who declared them (integration slug / "mcpwp_register_tools").
+	 * @return array
+	 */
+	public static function remap_reserved_categories( array $categories, $source ) {
+		foreach ( $categories as $tool => $category ) {
+			$categories[ $tool ] = self::remap_reserved_category( (string) $category, (string) $tool, $source );
+		}
+		return $categories;
+	}
+
+	/**
+	 * One category through remap_reserved_categories().
+	 *
+	 * @param string $category Category slug.
+	 * @param string $tool     Tool name (for the log line).
+	 * @param string $source   Declaring source (for the log line).
+	 * @return string
+	 */
+	public static function remap_reserved_category( $category, $tool, $source ) {
+		if ( ! in_array( $category, self::reserved_tool_category_slugs(), true ) ) {
+			return $category;
+		}
+		$log_key = $source . ':' . $tool;
+		if ( ! isset( self::$reserved_category_logged[ $log_key ] ) ) {
+			self::$reserved_category_logged[ $log_key ] = true;
+			if ( function_exists( 'error_log' ) ) {
+				// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+				error_log( sprintf( 'MCPWP: tool "%s" from %s declared the reserved category "%s"; it is treated as "custom".', $tool, $source, $category ) );
+			}
+		}
+		return 'custom';
+	}
+
+	/**
+	 * {@inheritDoc}
+	 *
+	 * An integration's own get_tool_categories() may claim a reserved slug;
+	 * the category every gate and annotation reads is remapped here
+	 * (#1064 review round 2).
+	 */
+	public function get_tool_category( $name ) {
+		return self::remap_reserved_category( parent::get_tool_category( $name ), (string) $name, get_class( $this ) );
+	}
+
+	/**
 	 * Resolve all registered integrations.
 	 *
 	 * Fires the mcpwp_integrations filter, instantiates class name strings,

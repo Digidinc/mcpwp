@@ -375,9 +375,7 @@ final class Regression1041EmptyCategoryKeyTest extends TestCase {
 		$auth     = $this->harness();
 		$resolved = $auth->resolve_categories( array( 'scopes' => array( 'read', 'write' ), 'tool_categories' => array( 'content' ) ) );
 
-		// #1064 review B1: `meta` (find/call) rides along with every
-		// restricted key — see always_granted_tool_categories().
-		$this->assertSame( array( 'content', 'meta' ), $resolved );
+		$this->assertSame( array( 'content' ), $resolved );
 		$this->assertNotSame( array(), $resolved, 'must not be treated as unrestricted just because role is absent' );
 	}
 
@@ -453,7 +451,7 @@ final class Regression1041EmptyCategoryKeyTest extends TestCase {
 		$auth     = $this->harness();
 		$resolved = $auth->resolve_categories( array( 'role' => 'custom', 'tool_categories' => array( 'seo' ) ) );
 
-		$this->assertSame( array( 'seo', 'meta' ), $resolved, '#1064 review B1: meta is always granted.' );
+		$this->assertSame( array( 'seo' ), $resolved );
 		$this->assertFalse( Mcpwp_1041_Auth_Harness::is_deny_all_categories( $resolved ) );
 	}
 
@@ -480,10 +478,7 @@ final class Regression1041EmptyCategoryKeyTest extends TestCase {
 		$record   = Mcpwp_WebMCP::principal_record( 7 );
 		$resolved = $auth->resolve_categories( $record );
 
-		// #1064 review B1: meta rides along; harmless here — WebMCP
-		// dispatch is gated by Mcpwp_WebMCP::is_allowlisted(), which names
-		// neither meta tool.
-		$this->assertSame( array_values( array_unique( array_merge( Mcpwp_WebMCP::PRINCIPAL_CATEGORIES, array( 'meta' ) ) ) ), $resolved );
+		$this->assertSame( Mcpwp_WebMCP::PRINCIPAL_CATEGORIES, $resolved );
 		$this->assertNotSame( array(), $resolved, 'the WebMCP principal must not be treated as unrestricted' );
 		$this->assertFalse( Mcpwp_1041_Auth_Harness::is_deny_all_categories( $resolved ), 'the WebMCP principal must not be treated as deny-all' );
 
@@ -499,12 +494,6 @@ final class Regression1041EmptyCategoryKeyTest extends TestCase {
 		$record = array( 'role' => 'custom', 'tool_categories' => array() );
 
 		foreach ( array_keys( Mcpwp_1041_Auth_Harness::get_all_tool_category_labels() ) as $category ) {
-			if ( in_array( $category, Mcpwp_1041_Auth_Harness::always_granted_tool_categories(), true ) ) {
-				// #1064 review B1: find/call only reach tools the key can
-				// already call, so every key holds `meta`.
-				$this->assertTrue( $auth->key_allows_category( $record, $category ) );
-				continue;
-			}
 			$this->assertFalse( $auth->key_allows_category( $record, $category ), "deny-all key must not be allowed '$category'" );
 		}
 	}
@@ -596,8 +585,9 @@ final class Regression1041EmptyCategoryKeyTest extends TestCase {
 		$data  = $controller->handle_mcp( $request )->get_data();
 		$tools = array_column( $data['result']['tools'], 'name' );
 
-		// #1064 review B1: plus the two meta tools, which only surface and
-		// dispatch what the key can already call.
+		// #1064: plus the two meta tools, allowed to every key BY NAME
+		// (get_key_exempt_tool_names()) — they only surface and dispatch
+		// what the key can already call.
 		$discovery_names = array_merge( Mcpwp_1041_Auth_Harness::get_discovery_allowlist_tool_names_public(), Mcpwp_REST_MCP::META_TOOL_NAMES );
 		$this->assertLessThan( 50, count( $tools ), 'a malformed-role key must not get the full tool catalog' );
 		foreach ( $tools as $name ) {
@@ -747,8 +737,8 @@ final class Regression1041EmptyCategoryKeyTest extends TestCase {
 		$data  = $controller->handle_mcp( $request )->get_data();
 		$tools = array_column( $data['result']['tools'], 'name' );
 
-		// #1064 review B1: plus the two meta tools (find returns nothing
-		// for a deny-all key; call re-runs every gate).
+		// #1064: plus the two meta tools, allowed to every key BY NAME
+		// (find returns nothing for a deny-all key; call re-runs every gate).
 		$discovery_names = array_merge( Mcpwp_1041_Auth_Harness::get_discovery_allowlist_tool_names_public(), Mcpwp_REST_MCP::META_TOOL_NAMES );
 		foreach ( $tools as $name ) {
 			$this->assertContains( $name, $discovery_names, "tools/list must not advertise '$name' to a deny-all key" );

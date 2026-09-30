@@ -814,7 +814,7 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 					$this->filter_actions_by_caller_categories(
 						array(
 							$this->caller_can_find_tools()
-								? array( 'key' => 'tools', 'tool' => '', 'text' => 'Your tools/list may show only the core tools. mcpwp_find_tools(query) finds any other tool, with its parameters and examples; mcpwp_call(name, arguments) runs it.' )
+								? array( 'key' => 'tools', 'tool' => '', 'text' => 'Your tools/list may show only the core tools. mcpwp_find_tools(query) finds any other tool your key may call, with its parameters and examples; mcpwp_call(name, arguments) runs it.' )
 								: array( 'key' => 'tools', 'tool' => '', 'text' => 'Call MCP tools/list for the tool catalog with input schemas.' ),
 							array( 'key' => 'guide', 'tool' => 'wp_get_guide', 'text' => 'Call wp_get_guide(topic="...") for a topic guide — e.g. onboarding, elementor, seo, workflows.' ),
 							array( 'key' => 'site_context', 'tool' => 'wp_get_site_context', 'text' => 'Call wp_get_site_context for the full site brief and design rules.' ),
