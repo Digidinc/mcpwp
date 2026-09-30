@@ -127,6 +127,23 @@ If Actions still can't run (billing), record "Freemius X pending: Actions billin
   `/mnt/HC_Volume_104325311/projects/sitepilotai/.mcp.json`. Fetch https://mcpwp.net/changelog/
   afterwards and confirm `>X<` appears.
 - `docs/plan/PLAN.md` status column, the milestone descriptions, and "Shipped" in `docs/ROADMAP.md`.
+- **Regenerate the docs reference** (docs.mcpwp.net tool, endpoint, error and changelog pages,
+  #1065). From the release worktree, with the docs repo (`Mumega-com/mcpwp-docs`, branch
+  `master`) checked out in its own worktree next to it:
+  ```bash
+  git -C ../mcpwp-docs fetch origin && git -C ../mcpwp-docs worktree add ../wt-docs-X -b docs/reference-X origin/master
+  bash mcpwp/scripts/build-selfhosted.sh
+  bash scripts/gen-docs-reference.sh --candidate mcpwp/scripts/mcpwp-selfhosted-X.zip --out ../wt-docs-X/src/content/docs
+  cd ../wt-docs-X && npm ci && npm run build   # also regenerates public/llms.txt, dist/llms-full.txt and the .md copies
+  ```
+  The script stands up its own throwaway site (containers `docsref-*`, port 9196) and removes it.
+  It reads the catalog with `wp_introspect {"full": true}` (`--source introspect`, the default),
+  which carries the full descriptions and schemas. Once #1064 trims `tools/list`, do not use
+  `--source tools-list`; if #1064 also moves the long descriptions out of `wp_introspect`, use
+  `--source find-tools`. Commit the regenerated pages plus `public/llms.txt`, open a PR on
+  `Mumega-com/mcpwp-docs`, and ask the owner to deploy it (docs.mcpwp.net is a Cloudflare Pages
+  direct upload, `npx wrangler pages deploy dist --project-name mcpwp-docs`; see #864). Then run
+  the eval in `docs/plan/docs-eval.md` against the deployed `llms.txt`.
 
 **12. Clean up:** `cd .. && git -C wp-ai-operator worktree remove wt-rel`, and remove any smoke
 containers left over from `--keep`.
