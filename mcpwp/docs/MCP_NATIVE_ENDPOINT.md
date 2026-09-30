@@ -84,9 +84,9 @@ hold. Cursor caps a server at 40 tools, and every extra tool in the list is
 tokens spent before the model reads a single word of the conversation. MCPWP
 answers this with two profiles:
 
-- **`full`** (default) — every tool this site has, unchanged. This is what
-  every site got before this feature and what you still get if you do nothing.
-- **`core`** — a fixed set of ~25 of the most-used tools (onboarding, pages,
+- **`full`** — every tool this site has. What every site got before #1064,
+  and what a site keeps if it explicitly saved "full".
+- **`core`** (default since #1064) — a fixed set of ~25 of the most-used tools (onboarding, pages,
   posts, search, Elementor, media, SEO, rendering/verification, menus,
   approvals) plus two meta tools:
   - **`mcpwp_find_tools`** — keyword-search the full catalog (`{"query": "...",
@@ -112,8 +112,40 @@ POST https://yoursite.com/wp-json/mcpwp/v1/mcp?profile=core
 Or set a site-wide default in WP Admin > mcpwp > Settings ("MCP Tool
 Profile"), or via `PUT /wp-json/mcpwp/v1/plugin-settings` with
 `{"mcp_tool_profile": "core"}`. Precedence: the `?profile=` query arg wins,
-then the site setting, then `full`. An unrecognised value at either level
-falls back rather than failing the connection.
+then the site setting (when one was saved), then `core`. Values are trimmed and
+lowercased; an unrecognised value at either level falls back rather than failing
+the connection. If the site has disabled the "meta" category (so
+`mcpwp_find_tools`/`mcpwp_call` are not available), `core` is never applied: the
+connection gets `full`. Every API key can use the two meta tools by name,
+regardless of its role's categories — they only find and run tools that key may
+already call. The `meta` category itself is reserved: no key is granted it, and a
+third-party tool registered in it is treated as `custom`.
+
+#### Tool weight budget (#1064)
+
+Every tool in `tools/list` is trimmed at emission, in one place
+(`Mcpwp_MCP_Tool_List_Diet`), so a connection pays less before it does
+anything:
+
+- Tool descriptions are at most 300 characters, cut at a sentence (or word)
+  boundary. A handful of the heaviest and the `core` tools carry a
+  hand-written list summary instead.
+- Parameter descriptions are at most 120 characters; ones that only restate
+  the parameter name are dropped, as are `default: ""`/`default: false`.
+- The #912 worked `examples` are not in `tools/list`. `mcpwp_find_tools`
+  returns each match's full description, full input schema and examples, and
+  an `invalid_arguments` error carries the tool's first example
+  (`structuredContent.error.example`, and in the text).
+- `annotations.title` is dropped when the top-level `title` (2025-06-18+)
+  carries the same text; `idempotentHint` is sent only when it is `true` on a
+  write tool. `readOnlyHint`, `destructiveHint` and `openWorldHint` are always
+  sent.
+
+Nothing a tool accepts changes: types, `required`, `enum`, `items` and bounds
+are emitted exactly as registered, and argument validation reads the full
+definitions. `outputSchema` is untouched. `ToolListBudgetTest` holds `core`
+under 5,000 tokens, any single tool under 450, and the default `wp_introspect`
+(now a summary; `detail="full"` for the tool list) under 2,000.
 
 ### 3. Call Tool
 

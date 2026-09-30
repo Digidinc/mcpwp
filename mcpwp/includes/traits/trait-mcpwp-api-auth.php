@@ -5167,7 +5167,7 @@ trait Mcpwp_Api_Auth {
 				'label'           => $normalized['label'],
 				'scopes'          => $normalized['scopes'],
 				'role'            => self::unknown_role_marker() === $normalized['role'] ? 'unknown' : $normalized['role'],
-				'tool_categories' => $deny_all ? array() : $normalized['tool_categories'],
+				'tool_categories' => $deny_all ? array() : self::without_reserved_tool_categories( $normalized['tool_categories'] ),
 				'deny_all'        => $deny_all,
 				'created_at'      => $normalized['created_at'],
 				'last_used_at'    => $normalized['last_used_at'],
@@ -5483,20 +5483,19 @@ trait Mcpwp_Api_Auth {
 			'author'   => array(
 				'label'       => __( 'Author', 'mcpwp' ),
 				'description' => __( 'Content writing — pages, posts, media, taxonomy.', 'mcpwp' ),
-				// 'meta' (#907): mcpwp_find_tools/mcpwp_call re-check the
-				// tool they actually dispatch against this same category
-				// list, so granting it widens discovery, never scope.
-				'categories'  => array( 'content', 'media', 'taxonomy', 'meta' ),
+				// No 'meta': mcpwp_find_tools/mcpwp_call are allowed to every
+				// key by name (get_key_exempt_tool_names(), #1064).
+				'categories'  => array( 'content', 'media', 'taxonomy' ),
 			),
 			'designer' => array(
 				'label'       => __( 'Designer', 'mcpwp' ),
 				'description' => __( 'Visual building — Elementor, Gutenberg, media, site settings.', 'mcpwp' ),
-				'categories'  => array( 'elementor', 'elementor-build', 'elementor-templates', 'elementor-theme', 'elementor-info', 'gutenberg', 'media', 'site', 'meta' ),
+				'categories'  => array( 'elementor', 'elementor-build', 'elementor-templates', 'elementor-theme', 'elementor-info', 'gutenberg', 'media', 'site' ),
 			),
 			'editor'   => array(
 				'label'       => __( 'Editor', 'mcpwp' ),
 				'description' => __( 'Content + SEO management.', 'mcpwp' ),
-				'categories'  => array( 'content', 'media', 'taxonomy', 'seo', 'elementor', 'elementor-build', 'elementor-templates', 'elementor-theme', 'elementor-info', 'meta' ),
+				'categories'  => array( 'content', 'media', 'taxonomy', 'seo', 'elementor', 'elementor-build', 'elementor-templates', 'elementor-theme', 'elementor-info' ),
 			),
 			'custom'   => array(
 				'label'       => __( 'Custom', 'mcpwp' ),
@@ -5533,11 +5532,11 @@ trait Mcpwp_Api_Auth {
 			'events'              => __( 'Events', 'mcpwp' ),
 			'multisite'           => __( 'Multisite', 'mcpwp' ),
 			'staging'             => __( 'Staging', 'mcpwp' ),
-			// mcpwp_find_tools + mcpwp_call (#907) — kept distinct from
-			// every content/capability category so a custom role can be
-			// granted (or an admin can disable) tool discovery/dispatch
-			// independently of any of them.
-			'meta'                => __( 'Tool Search & Dispatch', 'mcpwp' ),
+			// No 'meta' (#1064 review round 2): mcpwp_find_tools and
+			// mcpwp_call are allowed to every key by name, so there is no
+			// per-key "Tool Search & Dispatch" choice. The slug is reserved
+			// (reserved_tool_category_slugs()); the site-wide toggle on the
+			// Tools page can still disable it.
 		);
 	}
 
@@ -5667,6 +5666,73 @@ trait Mcpwp_Api_Auth {
 	}
 
 	/**
+	 * Category slugs no key can be granted and no addon tool may use
+	 * (#1064 review round 2). `meta` holds only mcpwp_find_tools and
+	 * mcpwp_call, which every key may use BY NAME
+	 * (get_key_exempt_tool_names()). Granting the category instead let any
+	 * addon tool registered in `meta` reach every restricted key, deny-all
+	 * included (#1041). The site-wide toggle can still disable `meta`.
+	 *
+	 * @return string[]
+	 */
+	public static function reserved_tool_category_slugs() {
+		return array( 'meta' );
+	}
+
+	/**
+	 * A stored category list without the reserved slugs.
+	 *
+	 * @param array $categories Category slugs.
+	 * @return string[]
+	 */
+	public static function without_reserved_tool_categories( $categories ) {
+		return array_values( array_diff( array_map( 'strval', (array) $categories ), self::reserved_tool_category_slugs() ) );
+	}
+
+	/**
+	 * Tool NAMES every key may use whatever its role's categories
+	 * (#1064 review B1, narrowed in round 2): the two meta tools. Neither
+	 * can reach a tool the key could not call directly — find_tools
+	 * searches the caller's own catalog and mcpwp_call re-runs every gate
+	 * on the tool it names. Without them the `core` default profile
+	 * stranded keys that were never granted `meta`. Must equal
+	 * Mcpwp_REST_MCP::META_TOOL_NAMES (ToolWeightBudgetReviewTest pins it).
+	 *
+	 * @return string[]
+	 */
+	public static function get_key_exempt_tool_names() {
+		return array( 'mcpwp_find_tools', 'mcpwp_call' );
+	}
+
+	/**
+	 * The per-key role gate for ONE tool — the single decision tools/list,
+	 * tools/call, mcpwp_call's inner call, the idempotent-replay gate and
+	 * introspection all use (#1064 review round 2). The site-wide category
+	 * toggle is separate and still applies to every tool but the discovery
+	 * allowlist.
+	 *
+	 * @param string     $tool_name     Tool name.
+	 * @param string     $tool_category The tool's enforced category ('' if none).
+	 * @param array|null $key_record    Caller's key record, or null (no key context).
+	 * @return bool
+	 */
+	public function key_role_permits_tool( $tool_name, $tool_category, $key_record ) {
+		if ( ! is_array( $key_record ) ) {
+			return true;
+		}
+		if ( in_array( $tool_name, self::get_discovery_allowlist_tool_names(), true )
+			|| in_array( $tool_name, self::get_key_exempt_tool_names(), true ) ) {
+			return true;
+		}
+		$allowed = $this->resolve_key_tool_categories( $key_record );
+		if ( empty( $allowed ) ) {
+			return true;
+		}
+		// An uncategorised tool is denied to a restricted key (#802 round 6).
+		return '' !== (string) $tool_category && in_array( (string) $tool_category, $allowed, true );
+	}
+
+	/**
 	 * Resolve allowed tool categories for a key record.
 	 *
 	 * Only role=admin and a legacy/migrated key (no 'role' field at all) are
@@ -5716,7 +5782,11 @@ trait Mcpwp_Api_Auth {
 				? array_values( $key_record['tool_categories'] )
 				: array();
 			if ( ! empty( $raw_categories ) ) {
-				return $raw_categories;
+				// A reserved slug grants nothing (#1064 review round 2). A
+				// list that held only reserved slugs was still a
+				// restriction, so it is deny-all, never unrestricted.
+				$granted = self::without_reserved_tool_categories( $raw_categories );
+				return empty( $granted ) ? array( self::deny_all_category_marker() ) : $granted;
 			}
 			return array();
 		}
@@ -5738,7 +5808,7 @@ trait Mcpwp_Api_Auth {
 		// every downstream `empty()`/`in_array()` check keeps working.
 		if ( 'custom' === $role ) {
 			$categories = ( isset( $key_record['tool_categories'] ) && is_array( $key_record['tool_categories'] ) )
-				? array_values( $key_record['tool_categories'] )
+				? self::without_reserved_tool_categories( $key_record['tool_categories'] )
 				: array();
 			return empty( $categories ) ? array( self::deny_all_category_marker() ) : $categories;
 		}

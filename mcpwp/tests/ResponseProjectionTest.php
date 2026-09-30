@@ -255,8 +255,10 @@ final class ResponseProjectionTest extends TestCase {
 		$this->stubThemeLookup();
 		$controller = new Mcpwp_REST_Site_Info();
 
-		$a = $controller->get_introspect( new WP_REST_Request( 'GET', '/mcpwp/v1/introspect' ) )->get_data();
-		$b = $controller->get_introspect( new WP_REST_Request( 'GET', '/mcpwp/v1/introspect', array( 'tool' => '' ) ) )->get_data();
+		// #1064: the compact list moved from the default to detail=full
+		// (the default is now a summary, see ToolListBudgetTest).
+		$a = $controller->get_introspect( new WP_REST_Request( 'GET', '/mcpwp/v1/introspect', array( 'detail' => 'full' ) ) )->get_data();
+		$b = $controller->get_introspect( new WP_REST_Request( 'GET', '/mcpwp/v1/introspect', array( 'tool' => '', 'detail' => 'full' ) ) )->get_data();
 
 		$this->assertArrayHasKey( 'tools', $a );
 		$this->assertArrayHasKey( 'name', $a['tools'][0], 'Compact mode is unchanged: name + description, no schema.' );

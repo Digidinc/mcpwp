@@ -337,10 +337,10 @@ class Mcpwp_Settings {
 				'id'          => 'mcp_tool_profile',
 				'label_for'   => 'mcp_tool_profile',
 				'options'     => array(
-					'full' => __( 'Full — every tool (default)', 'mcpwp' ),
-					'core' => __( 'Core — ~25 tools + search/dispatch (smaller tools/list)', 'mcpwp' ),
+					'core' => __( 'Core — ~25 tools + search/dispatch (default, under 5k tokens)', 'mcpwp' ),
+					'full' => __( 'Full — every tool listed up front (tens of thousands of tokens)', 'mcpwp' ),
 				),
-				'description' => __( 'Tools/list surface for MCP clients. "Core" trims the list to the most-used tools for a client with a small tool-count limit (e.g. Cursor\'s 40-tool cap); every other tool stays reachable via mcpwp_find_tools + mcpwp_call. A client can override this per-connection with a ?profile=core or ?profile=full query arg on its MCP endpoint URL.', 'mcpwp' ),
+				'description' => __( 'What an MCP client loads when it connects. "Core" lists the most-used tools; every other tool stays reachable through mcpwp_find_tools (search) and mcpwp_call (run). "Full" lists every tool, which costs each new connection tens of thousands of tokens before the agent does anything. A client can override this per connection with ?profile=core or ?profile=full on its MCP endpoint URL.', 'mcpwp' ),
 			)
 		);
 
@@ -656,13 +656,13 @@ class Mcpwp_Settings {
 			// staging pushes. Raising this to 'admin' is an explicit administrator
 			// choice made in WP Admin > MCPWP > Settings.
 			'oauth_client_credentials_max_scope' => 'write',
-			// MCP tool profile (#907): 'full' keeps every tool this server
-			// has always advertised. 'core' trims tools/list to ~25 tools
-			// plus mcpwp_find_tools/mcpwp_call, for a client with a small
-			// tool-count budget (Cursor's 40-tool cap, a fixed token
-			// budget). A per-connection `?profile=` query arg on the /mcp
-			// URL overrides this site-wide default.
-			'mcp_tool_profile'        => 'full',
+			// MCP tool profile (#907). 'core' (the default since #1064)
+			// lists ~25 tools plus mcpwp_find_tools/mcpwp_call, which reach
+			// every other tool; 'full' lists every tool up front. A
+			// per-connection `?profile=` query arg on the /mcp URL overrides
+			// this site-wide default. Must match
+			// Mcpwp_REST_MCP::DEFAULT_TOOL_PROFILE.
+			'mcp_tool_profile'        => 'core',
 			'alerts_enabled'          => false,
 			'alerts_window_minutes'   => 5,
 			'alerts_cooldown_minutes' => 15,
@@ -809,12 +809,21 @@ class Mcpwp_Settings {
 			? $cc_max_scope
 			: 'write';
 
-		// MCP tool profile (#907). Absent/unrecognised falls back to 'full',
-		// same as Mcpwp_REST_MCP::resolve_mcp_tool_profile()'s own fallback.
-		$tool_profile = isset( $input['mcp_tool_profile'] ) ? sanitize_key( (string) $input['mcp_tool_profile'] ) : '';
-		$sanitized['mcp_tool_profile'] = in_array( $tool_profile, array( 'full', 'core' ), true )
-			? $tool_profile
-			: 'full';
+		// MCP tool profile (#907, #1064). A value is stored only when one is
+		// chosen: the form's select, PUT /settings, or an existing stored
+		// choice. This callback runs on EVERY update_option() of the option
+		// (see the __present note above), so writing a fallback here would
+		// turn "never chose" into a stored choice on the next unrelated
+		// save — and an absent key is exactly what
+		// Mcpwp_REST_MCP::resolve_mcp_tool_profile() reads as "use the
+		// default" (core).
+		$tool_profile = isset( $input['mcp_tool_profile'] ) ? Mcpwp_REST_MCP::normalize_tool_profile( $input['mcp_tool_profile'] ) : '';
+		if ( '' === $tool_profile ) {
+			$tool_profile = isset( $stored['mcp_tool_profile'] ) ? Mcpwp_REST_MCP::normalize_tool_profile( $stored['mcp_tool_profile'] ) : '';
+		}
+		if ( '' !== $tool_profile ) {
+			$sanitized['mcp_tool_profile'] = $tool_profile;
+		}
 
 		// WebMCP in wp-admin (#981).
 		$sanitized['webmcp_admin_enabled'] = $this->resolve_checkbox( $input, $present, $stored, 'webmcp_admin_enabled' ) ?? $defaults['webmcp_admin_enabled'];

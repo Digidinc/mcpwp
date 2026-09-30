@@ -2037,7 +2037,7 @@ POST /site-context
 
 #### Site Context in Introspect
 
-When a site context is configured, the `GET /introspect` response (and `wp_introspect` MCP tool) includes a `site_context` field containing the full style guide text. AI assistants should read this first when building or editing pages.
+When a site context is configured, `GET /introspect?detail=full` (and `wp_introspect(detail="full")`) includes a `site_context` field containing the full style guide text; the default summary (#1064) carries `site_context_configured: true` and points at `wp_get_site_context`. AI assistants should read this first when building or editing pages.
 
 ---
 

@@ -585,7 +585,10 @@ final class Regression1041EmptyCategoryKeyTest extends TestCase {
 		$data  = $controller->handle_mcp( $request )->get_data();
 		$tools = array_column( $data['result']['tools'], 'name' );
 
-		$discovery_names = Mcpwp_1041_Auth_Harness::get_discovery_allowlist_tool_names_public();
+		// #1064: plus the two meta tools, allowed to every key BY NAME
+		// (get_key_exempt_tool_names()) — they only surface and dispatch
+		// what the key can already call.
+		$discovery_names = array_merge( Mcpwp_1041_Auth_Harness::get_discovery_allowlist_tool_names_public(), Mcpwp_REST_MCP::META_TOOL_NAMES );
 		$this->assertLessThan( 50, count( $tools ), 'a malformed-role key must not get the full tool catalog' );
 		foreach ( $tools as $name ) {
 			$this->assertContains( $name, $discovery_names );
@@ -734,7 +737,9 @@ final class Regression1041EmptyCategoryKeyTest extends TestCase {
 		$data  = $controller->handle_mcp( $request )->get_data();
 		$tools = array_column( $data['result']['tools'], 'name' );
 
-		$discovery_names = Mcpwp_1041_Auth_Harness::get_discovery_allowlist_tool_names_public();
+		// #1064: plus the two meta tools, allowed to every key BY NAME
+		// (find returns nothing for a deny-all key; call re-runs every gate).
+		$discovery_names = array_merge( Mcpwp_1041_Auth_Harness::get_discovery_allowlist_tool_names_public(), Mcpwp_REST_MCP::META_TOOL_NAMES );
 		foreach ( $tools as $name ) {
 			$this->assertContains( $name, $discovery_names, "tools/list must not advertise '$name' to a deny-all key" );
 		}

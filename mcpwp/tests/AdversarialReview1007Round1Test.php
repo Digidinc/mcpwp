@@ -133,6 +133,9 @@ final class AdversarialReview1007Round1Test extends TestCase {
 		$controller = $this->site_info_controller();
 		$request    = $this->authenticate( $controller, '/mcpwp/v1/introspect', 'author' );
 
+		// #1064: the site context text is in detail=full; the default
+		// summary only says whether one is configured.
+		$request->set_param( 'detail', 'full' );
 		$data = $controller->get_introspect( $request )->get_data();
 
 		$this->assertSame( 'Brand voice: warm and direct. Primary color: #1a2b3c.', $data['site_context'] ?? null );
@@ -147,6 +150,9 @@ final class AdversarialReview1007Round1Test extends TestCase {
 		$controller = $this->site_info_controller();
 		$request    = $this->authenticate( $controller, '/mcpwp/v1/introspect', 'designer' );
 
+		// #1064: the site context text is in detail=full; the default
+		// summary only says whether one is configured.
+		$request->set_param( 'detail', 'full' );
 		$data = $controller->get_introspect( $request )->get_data();
 
 		$this->assertSame( 'Brand voice: warm and direct. Primary color: #1a2b3c.', $data['site_context'] ?? null );
@@ -162,6 +168,9 @@ final class AdversarialReview1007Round1Test extends TestCase {
 		$controller = $this->site_info_controller();
 		$request    = $this->authenticate( $controller, '/mcpwp/v1/introspect', 'admin', array( 'read', 'write', 'admin' ) );
 
+		// #1064: the site context text is in detail=full; the default
+		// summary only says whether one is configured.
+		$request->set_param( 'detail', 'full' );
 		$data = $controller->get_introspect( $request )->get_data();
 
 		$this->assertSame( 'Brand voice: warm and direct. Primary color: #1a2b3c.', $data['site_context'] ?? null );
@@ -290,6 +299,10 @@ final class AdversarialReview1007Round1Test extends TestCase {
 			array( 'X-API-Key' => $created['key'] ),
 			array( 'jsonrpc' => '2.0', 'id' => 1, 'method' => 'tools/list' )
 		);
+
+		// The role filter is under test, not the `core` default (#1064),
+		// which leaves wp_introspect out for every key.
+		$request->set_query_params( array( 'profile' => 'full' ) );
 
 		$this->assertTrue( $controller->verify_api_key( $request ) );
 		$data  = $controller->handle_mcp( $request )->get_data();
