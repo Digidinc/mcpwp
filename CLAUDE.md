@@ -702,6 +702,14 @@ tokens, any tool ≤450, default `wp_introspect` summary ≤2,000; Free/Pro `ful
 until the #1047 consolidation). A new or longer tool that breaks a budget belongs in the diet's maps
 or in #1047, not in a raised budget.
 
+Every restricted key holds the `meta` category (`Mcpwp_Api_Auth::always_granted_tool_categories()`,
+added in `resolve_key_tool_categories()`): find/call only reach tools the key can already call, and
+without them `core` stranded pre-#907 custom keys. A site that disables `meta` gets the `full`
+profile (`effective_tool_profile()`), and every "use mcpwp_find_tools" hint is emitted only when both
+meta tools are visible to the caller. `wp_introspect`/`/introspect` (summary, `detail=full`, `tool=`)
+and `/onboard?detail=full` list exactly the caller's pre-profile tools/list
+(`get_introspection_data_for_caller()`); a hidden `tool=` is the same 404 as a nonexistent one.
+
 Protocol version is negotiated per the spec (#906): `initialize` echoes a supported
 `protocolVersion` (`2024-11-05`, `2025-03-26`, `2025-06-18`, `2025-11-25`) and answers the latest for
 anything else — the handshake never fails on version. Every later request follows its

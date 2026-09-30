@@ -284,12 +284,12 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 			'github_token'            => 'secret',
 			'github_repo'             => 'text',
 			'option_allowlist'        => 'allowlist',
-			// MCP tool profile (#907): 'full' (default, every tool) or
-			// 'core' (~25 tools + mcpwp_find_tools/mcpwp_call). Resolved
-			// per-request in Mcpwp_REST_MCP::resolve_mcp_tool_profile(),
-			// which falls back to 'full' for anything not in the enum below
-			// rather than erroring — this validation exists so a deliberate
-			// write is caught at the door, not to be the only guard.
+			// MCP tool profile (#907): 'core' (the default since #1064 — ~25
+			// tools + mcpwp_find_tools/mcpwp_call) or 'full' (every tool).
+			// Resolved per-request in Mcpwp_REST_MCP::resolve_mcp_tool_profile(),
+			// which falls back to the default (core) for anything not in the
+			// enum below rather than erroring — this validation exists so a
+			// deliberate write is caught at the door, not to be the only guard.
 			'mcp_tool_profile'        => 'enum:full,core',
 			// WebMCP in wp-admin (#981).
 			'webmcp_admin_enabled'      => 'bool',
@@ -368,7 +368,10 @@ class Mcpwp_REST_Site_Settings extends Mcpwp_REST_API {
 				$current[ $key ] = max( $min, min( $max, absint( $value ) ) );
 			} elseif ( 0 === strpos( $rule, 'enum:' ) ) {
 				$choices = explode( ',', substr( $rule, 5 ) );
-				$val     = sanitize_key( (string) $value );
+				// Trim + lowercase, then an exact match (#1064 review N5).
+				// sanitize_key() also deleted inner characters, so "co re"
+				// or "c.o.r.e" used to be stored as "core".
+				$val = is_scalar( $value ) ? strtolower( trim( (string) $value ) ) : '';
 				if ( ! in_array( $val, $choices, true ) ) {
 					return $this->error_response(
 						'invalid_' . $key,

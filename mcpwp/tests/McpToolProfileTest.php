@@ -399,7 +399,11 @@ final class McpToolProfileTest extends TestCase {
 		$this->assertSame( 'category_disabled', $data['result']['structuredContent']['error']['code'] );
 	}
 
-	public function test_mcpwp_call_refused_when_key_role_lacks_meta_category(): void {
+	public function test_mcpwp_call_works_for_a_key_whose_role_never_granted_meta(): void {
+		// #1064 review B1 reversed #907's per-key `meta` gate: with `core` as
+		// the default, a key without `meta` was stranded. mcpwp_call only
+		// reaches what the key can already call (every gate re-runs on the
+		// named tool), so every restricted key now holds `meta`.
 		$controller = new Mcpwp_REST_MCP();
 		// Has 'content' — the INNER tool's own category — but not 'meta'.
 		$key = $controller->create_scoped_api_key( 'no-meta', array( 'read', 'write' ), 'custom', array( 'content' ) );
@@ -419,9 +423,8 @@ final class McpToolProfileTest extends TestCase {
 		$this->assertTrue( $controller->verify_api_key( $request ) );
 		$data = $controller->handle_mcp( $request )->get_data();
 
-		$this->assertTrue( $data['result']['isError'], 'A key without "meta" must not be able to use mcpwp_call, even to reach a tool its OTHER categories already permit.' );
-		$this->assertSame( 'scope_denied', $data['result']['structuredContent']['error']['code'] );
-		$this->assertStringContainsString( 'meta', $data['result']['structuredContent']['error']['message'] );
+		$this->assertNotSame( 'scope_denied', $data['result']['structuredContent']['error']['code'] ?? null, 'A key without an explicit "meta" grant reaches its own content tool through mcpwp_call.' );
+		$this->assertContains( '/mcpwp/v1/pages', $GLOBALS['mcpwp_test_dispatched_routes'], 'It dispatched.' );
 	}
 
 	// ── Adversarial review round 1: WARN-2 — unbounded find_tools query ────

@@ -133,7 +133,7 @@ final class ToolListBudgetTest extends TestCase {
 	 * @param string|null $profile ?profile= query arg, or null for the site default.
 	 * @return array[]
 	 */
-	private function tools_list( ?string $profile ): array {
+	private function tools_list( ?string $profile, bool $assoc = true ): array {
 		$request = new WP_REST_Request(
 			'POST',
 			'/mcpwp/v1/mcp',
@@ -150,7 +150,7 @@ final class ToolListBudgetTest extends TestCase {
 		}
 		$data = $this->controller()->handle_mcp( $request )->get_data();
 		$this->assertArrayHasKey( 'result', $data, 'tools/list must answer.' );
-		return json_decode( wp_json_encode( $data['result']['tools'] ), true );
+		return json_decode( wp_json_encode( $data['result']['tools'] ), $assoc );
 	}
 
 	private static function tokens( $value ): int {
@@ -240,12 +240,19 @@ final class ToolListBudgetTest extends TestCase {
 			$emitted[ $tool['name'] ] = $tool;
 		}
 
+		// Decoded with objects preserved (#1064 review N3): `{}` and `[]`
+		// must stay distinguishable, or an emitted `[]` schema would pass.
+		$emitted_objects = array();
+		foreach ( $this->tools_list( 'full', false ) as $tool ) {
+			$emitted_objects[ $tool->name ] = $tool;
+		}
+
 		$controller = $this->controller();
 		$ref        = new ReflectionMethod( Mcpwp_REST_MCP::class, 'get_all_tools' );
 		$ref->setAccessible( true );
 		$registry = array();
 		foreach ( $ref->invoke( $controller ) as $tool ) {
-			$registry[ $tool['name'] ] = json_decode( wp_json_encode( $tool ), true );
+			$registry[ $tool['name'] ] = json_decode( wp_json_encode( $tool ) );
 		}
 
 		$this->assertSame( array_keys( $registry ), array_keys( $emitted ), 'tools/list must list the same tools in the same order.' );
@@ -260,13 +267,13 @@ final class ToolListBudgetTest extends TestCase {
 			$this->assert_property_descriptions_capped( $name, $tool['inputSchema'] );
 
 			$this->assertSame(
-				self::structure( $registry[ $name ]['inputSchema'] ),
-				self::structure( $tool['inputSchema'] ),
+				wp_json_encode( self::structure( $registry[ $name ]->inputSchema ) ),
+				wp_json_encode( self::structure( $emitted_objects[ $name ]->inputSchema ) ),
 				"$name: tools/list changed what the tool accepts."
 			);
 			$this->assertSame(
-				$registry[ $name ]['outputSchema'] ?? null,
-				$tool['outputSchema'] ?? null,
+				wp_json_encode( $registry[ $name ]->outputSchema ?? null ),
+				wp_json_encode( $emitted_objects[ $name ]->outputSchema ?? null ),
 				"$name: outputSchema (#906) must be emitted unchanged."
 			);
 		}
@@ -298,20 +305,26 @@ final class ToolListBudgetTest extends TestCase {
 	 * @return mixed
 	 */
 	private static function structure( $schema ) {
-		if ( ! is_array( $schema ) ) {
+		if ( is_array( $schema ) ) {
+			return array_map( array( __CLASS__, 'structure' ), $schema );
+		}
+		if ( ! is_object( $schema ) ) {
 			return $schema;
 		}
-		unset( $schema['description'], $schema['examples'] );
-		if ( array_key_exists( 'default', $schema ) && ( '' === $schema['default'] || false === $schema['default'] ) ) {
-			unset( $schema['default'] );
+		$schema = clone $schema;
+		unset( $schema->description, $schema->examples );
+		if ( property_exists( $schema, 'default' ) && ( '' === $schema->default || false === $schema->default ) ) {
+			unset( $schema->default );
 		}
-		foreach ( $schema as $key => $value ) {
-			if ( 'properties' === $key && is_array( $value ) ) {
-				foreach ( $value as $property => $subschema ) {
-					$schema['properties'][ $property ] = self::structure( $subschema );
+		foreach ( get_object_vars( $schema ) as $key => $value ) {
+			if ( 'properties' === $key && is_object( $value ) ) {
+				$properties = new stdClass();
+				foreach ( get_object_vars( $value ) as $property => $subschema ) {
+					$properties->$property = self::structure( $subschema );
 				}
-			} elseif ( is_array( $value ) ) {
-				$schema[ $key ] = self::structure( $value );
+				$schema->properties = $properties;
+			} elseif ( is_array( $value ) || is_object( $value ) ) {
+				$schema->$key = self::structure( $value );
 			}
 		}
 		return $schema;

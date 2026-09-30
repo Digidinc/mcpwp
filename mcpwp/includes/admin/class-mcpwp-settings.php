@@ -817,11 +817,11 @@ class Mcpwp_Settings {
 		// save — and an absent key is exactly what
 		// Mcpwp_REST_MCP::resolve_mcp_tool_profile() reads as "use the
 		// default" (core).
-		$tool_profile = isset( $input['mcp_tool_profile'] ) ? sanitize_key( (string) $input['mcp_tool_profile'] ) : '';
-		if ( ! in_array( $tool_profile, array( 'full', 'core' ), true ) ) {
-			$tool_profile = isset( $stored['mcp_tool_profile'] ) ? sanitize_key( (string) $stored['mcp_tool_profile'] ) : '';
+		$tool_profile = isset( $input['mcp_tool_profile'] ) ? Mcpwp_REST_MCP::normalize_tool_profile( $input['mcp_tool_profile'] ) : '';
+		if ( '' === $tool_profile ) {
+			$tool_profile = isset( $stored['mcp_tool_profile'] ) ? Mcpwp_REST_MCP::normalize_tool_profile( $stored['mcp_tool_profile'] ) : '';
 		}
-		if ( in_array( $tool_profile, array( 'full', 'core' ), true ) ) {
+		if ( '' !== $tool_profile ) {
 			$sanitized['mcp_tool_profile'] = $tool_profile;
 		}
 

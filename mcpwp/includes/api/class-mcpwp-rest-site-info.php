@@ -305,7 +305,13 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 			);
 		}
 
-		$data = $mcp->get_introspection_data();
+		// #1064 review W1: the caller's own catalog — the same filter as its
+		// tools/list — so counts, the compact list and tool= lookups never
+		// reveal a tool this key cannot call. A hidden tool= answers the
+		// same not-found as a nonexistent one (below).
+		$caller     = $this->get_current_api_key_record();
+		$data       = method_exists( $mcp, 'get_introspection_data_for_caller' ) ? $mcp->get_introspection_data_for_caller( $caller ) : $mcp->get_introspection_data();
+		$can_find   = method_exists( $mcp, 'meta_tools_visible_for_caller' ) && $mcp->meta_tools_visible_for_caller( $caller );
 
 		// A single-tool lookup answers the exact gap #830 reported: the compact
 		// list below has no schema, and ?full=true dumps every tool's schema to
@@ -329,7 +335,7 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 				'unknown_tool',
 				sprintf( __( 'Unknown tool "%s".', 'mcpwp' ), $tool_filter ),
 				404,
-				array( 'hint' => 'Call mcpwp_find_tools(query) to search tool names, wp_introspect(detail="full") for the compact tool list, or wp_introspect(full=true) for every tool.' )
+				array( 'hint' => ( $can_find ? 'Call mcpwp_find_tools(query) to search tool names, ' : 'Call ' ) . 'wp_introspect(detail="full") for the compact tool list, or wp_introspect(full=true) for every tool.' )
 			);
 		}
 
@@ -340,7 +346,7 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 		// to reach it; detail=full is the compact list this endpoint
 		// returned before, and full=true the legacy everything-dump.
 		if ( ! $full && 'full' !== sanitize_key( (string) $request->get_param( 'detail' ) ) ) {
-			return $this->success_response( $this->introspection_summary( $data ) );
+			return $this->success_response( $this->introspection_summary( $data, $can_find ) );
 		}
 
 		// Compact list (detail=full): the full output (every tool with its
@@ -371,7 +377,7 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 			}
 			$data['tools_count'] = count( $summary );
 			$data['tools']       = $summary;
-			$data['tools_note']  = 'Compact tool list (name + summary). Full input schemas: mcpwp_find_tools, wp_introspect(tool="wp_x"), or GET /introspect?full=true.';
+			$data['tools_note']  = 'Compact tool list (name + summary). Full input schemas: ' . ( $can_find ? 'mcpwp_find_tools, ' : '' ) . 'wp_introspect(tool="wp_x"), or GET /introspect?full=true.';
 			$data['detail']      = 'full';
 		}
 
@@ -394,14 +400,30 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 	}
 
 	/**
+	 * Whether the authenticated caller can see both mcpwp_find_tools and
+	 * mcpwp_call (#1064 review B1) — guidance names them only then.
+	 *
+	 * @return bool
+	 */
+	private function caller_can_find_tools() {
+		if ( ! class_exists( 'Mcpwp_REST_MCP' ) ) {
+			return false;
+		}
+		$mcp = new Mcpwp_REST_MCP();
+		return method_exists( $mcp, 'meta_tools_visible_for_caller' ) && $mcp->meta_tools_visible_for_caller( $this->get_current_api_key_record() );
+	}
+
+	/**
 	 * The default wp_introspect answer (#1064): everything an agent needs
 	 * to orient itself and nothing it can fetch on demand. Held under 2,000
 	 * tokens by ToolListBudgetTest.
 	 *
-	 * @param array $data Mcpwp_REST_MCP::get_introspection_data() output.
+	 * @param array $data     Mcpwp_REST_MCP::get_introspection_data_for_caller() output.
+	 * @param bool  $can_find Whether the caller can see mcpwp_find_tools and
+	 *                        mcpwp_call; the summary points at them only then.
 	 * @return array
 	 */
-	private function introspection_summary( array $data ) {
+	private function introspection_summary( array $data, $can_find ) {
 		$by_category = array();
 		$tools       = isset( $data['tools'] ) && is_array( $data['tools'] ) ? $data['tools'] : array();
 		foreach ( $tools as $tool ) {
@@ -433,7 +455,7 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 			'tools'                   => array(
 				'count'       => count( $tools ),
 				'by_category' => $by_category,
-				'find'        => 'mcpwp_find_tools(query) searches every tool and returns its full description, parameters and examples; mcpwp_call(name, arguments) runs it. wp_introspect(tool="wp_x") returns one tool\'s full entry.',
+				'find'        => ( $can_find ? 'mcpwp_find_tools(query) searches every tool and returns its full description, parameters and examples; mcpwp_call(name, arguments) runs it. ' : '' ) . 'wp_introspect(tool="wp_x") returns one tool\'s full entry.',
 			),
 			'recommended_guides'      => $data['recommended_guides'] ?? array(),
 			'operating_rules'         => $data['operating_rules'] ?? array(),
@@ -646,7 +668,7 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 		if ( $full && class_exists( 'Mcpwp_REST_MCP' ) ) {
 			$mcp       = new Mcpwp_REST_MCP();
 			$all_tools = method_exists( $mcp, 'get_introspection_data' )
-				? ( $mcp->get_introspection_data()['tools'] ?? array() )
+				? ( ( method_exists( $mcp, 'get_introspection_data_for_caller' ) ? $mcp->get_introspection_data_for_caller( $this->get_current_api_key_record() ) : $mcp->get_introspection_data() )['tools'] ?? array() )
 				: array();
 
 			foreach ( $all_tools as $tool ) {
@@ -791,7 +813,9 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 				'more'                    => array_column(
 					$this->filter_actions_by_caller_categories(
 						array(
-							array( 'key' => 'tools', 'tool' => '', 'text' => 'Your tools/list may show only the core tools. mcpwp_find_tools(query) finds any other tool, with its parameters and examples; mcpwp_call(name, arguments) runs it.' ),
+							$this->caller_can_find_tools()
+								? array( 'key' => 'tools', 'tool' => '', 'text' => 'Your tools/list may show only the core tools. mcpwp_find_tools(query) finds any other tool, with its parameters and examples; mcpwp_call(name, arguments) runs it.' )
+								: array( 'key' => 'tools', 'tool' => '', 'text' => 'Call MCP tools/list for the tool catalog with input schemas.' ),
 							array( 'key' => 'guide', 'tool' => 'wp_get_guide', 'text' => 'Call wp_get_guide(topic="...") for a topic guide — e.g. onboarding, elementor, seo, workflows.' ),
 							array( 'key' => 'site_context', 'tool' => 'wp_get_site_context', 'text' => 'Call wp_get_site_context for the full site brief and design rules.' ),
 							array( 'key' => 'full_briefing', 'tool' => '', 'text' => 'Call wp_onboard(detail="full") — or GET /onboard?detail=full — for the complete legacy briefing: full tool catalog, quick reference, suggested first tools, recent content, design references, and site context text.' ),

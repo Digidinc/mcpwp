@@ -112,8 +112,12 @@ POST https://yoursite.com/wp-json/mcpwp/v1/mcp?profile=core
 Or set a site-wide default in WP Admin > mcpwp > Settings ("MCP Tool
 Profile"), or via `PUT /wp-json/mcpwp/v1/plugin-settings` with
 `{"mcp_tool_profile": "core"}`. Precedence: the `?profile=` query arg wins,
-then the site setting (when one was saved), then `core`. An unrecognised value
-at either level falls back rather than failing the connection.
+then the site setting (when one was saved), then `core`. Values are trimmed and
+lowercased; an unrecognised value at either level falls back rather than failing
+the connection. If the site has disabled the "meta" category (so
+`mcpwp_find_tools`/`mcpwp_call` are not available), `core` is never applied: the
+connection gets `full`. Every API key can use the two meta tools regardless of
+its role's categories — they only find and run tools that key may already call.
 
 #### Tool weight budget (#1064)
 

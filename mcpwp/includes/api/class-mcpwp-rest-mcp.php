@@ -80,14 +80,25 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	private $negotiated_protocol_version = self::LATEST_PROTOCOL_VERSION;
 
 	/**
-	 * The MCP tool profile ('core' or 'full', #907) resolved for the HTTP
+	 * The MCP tool profile ('core' or 'full', #907) requested for the HTTP
 	 * request currently being answered — resolved once by
-	 * resolve_mcp_tool_profile(), read by handle_tools_list(). 'full' is the
-	 * safe default for anything that runs before resolution.
+	 * resolve_mcp_tool_profile() (whose default is DEFAULT_TOOL_PROFILE,
+	 * `core`, since #1064) and applied through effective_tool_profile().
+	 * This property's own initial 'full' only covers code that runs before
+	 * resolution (none today): it fails toward listing everything.
 	 *
 	 * @var string
 	 */
 	private $resolved_tool_profile = 'full';
+
+	/**
+	 * The profile actually applied (#1064 review B1): resolved_tool_profile,
+	 * except that `core` without both meta tools visible to this caller is
+	 * `full`. Memoized per request by effective_tool_profile().
+	 *
+	 * @var string|null
+	 */
+	private $effective_tool_profile = null;
 
 	/**
 	 * Server name.
@@ -469,6 +480,12 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 * @return Mcpwp_MCP_Tool_Registry The owning registry.
 	 */
 	private function get_registry_for_tool( $tool_name ) {
+		// The meta tools map to no REST route, so no tool map below names
+		// them; without this their introspection annotations fell back to
+		// the Free registry and lost the `meta` category (#1064 review).
+		if ( in_array( $tool_name, self::META_TOOL_NAMES, true ) ) {
+			return $this->meta_registry;
+		}
 		if ( isset( $this->free_registry->get_tool_map()[ $tool_name ] ) ) {
 			return $this->free_registry;
 		}
@@ -487,14 +504,36 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	}
 
 	/**
-	 * Return introspection data for AI clients (MCP + REST).
+	 * get_introspection_data() as a given caller sees it (#1064 review W1):
+	 * /introspect and /onboard run on Mcpwp_REST_Site_Info, which holds the
+	 * authenticated key; the tool list must be the one that key's
+	 * tools/list would show, never the whole catalog.
 	 *
 	 * This is intentionally non-sensitive. It helps clients discover tools,
 	 * capabilities, and auth requirements without guessing.
 	 *
+	 * @param array|null $key_record The caller's key record, or null (no key context).
 	 * @return array
 	 */
-	public function get_introspection_data() {
+	public function get_introspection_data_for_caller( $key_record ) {
+		$this->adopt_caller( $key_record );
+		return $this->get_introspection_data( true );
+	}
+
+	/**
+	 * Return introspection data for AI clients (MCP + REST).
+	 *
+	 * @param bool $caller_filtered When true (#1064 review W1), the tool list
+	 *                              is exactly the caller's tools/list stage
+	 *                              before the profile —
+	 *                              tools_visible_by_role_and_availability():
+	 *                              Pro, required plugins, site-disabled
+	 *                              categories AND the key's role categories.
+	 *                              False (the admin Tools page) lists every
+	 *                              available tool.
+	 * @return array
+	 */
+	public function get_introspection_data( $caller_filtered = false ) {
 		$core = class_exists( 'Mcpwp_Core' ) ? new Mcpwp_Core() : null;
 		// Figma is Pro (#564): on Free its tools are neither listed nor
 		// callable, and a stored token (allowed on every tier) must not send an
@@ -514,7 +553,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			);
 
 		// Build tools and tool map from all registries.
-		$tools    = $this->get_all_tools();
+		$tools    = $caller_filtered ? $this->tools_visible_by_role_and_availability() : $this->get_all_tools();
 		$tool_map = $this->get_all_tool_map();
 
 		// Enrich each tool with route/method + annotations.
@@ -852,6 +891,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		// version above — every tools/list in this request (including each
 		// message of a batch) answers under the same profile.
 		$this->resolved_tool_profile       = $this->resolve_mcp_tool_profile( $request );
+		$this->effective_tool_profile      = null;
 
 		// Handle batch requests (array of requests) — limit batch size to prevent abuse.
 		if ( isset( $body[0] ) ) {
@@ -1909,21 +1949,37 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 */
 	private function resolve_mcp_tool_profile( $request ) {
 		if ( is_object( $request ) && method_exists( $request, 'get_param' ) ) {
-			$query_profile = $request->get_param( 'profile' );
-			if ( is_string( $query_profile ) && in_array( $query_profile, self::TOOL_PROFILES, true ) ) {
+			$query_profile = self::normalize_tool_profile( $request->get_param( 'profile' ) );
+			if ( '' !== $query_profile ) {
 				return $query_profile;
 			}
 		}
 
 		$settings     = get_option( 'mcpwp_settings', array() );
-		$site_profile = ( is_array( $settings ) && isset( $settings['mcp_tool_profile'] ) && is_string( $settings['mcp_tool_profile'] ) )
-			? $settings['mcp_tool_profile']
-			: '';
-		if ( in_array( $site_profile, self::TOOL_PROFILES, true ) ) {
+		$site_profile = self::normalize_tool_profile( is_array( $settings ) && isset( $settings['mcp_tool_profile'] ) ? $settings['mcp_tool_profile'] : '' );
+		if ( '' !== $site_profile ) {
 			return $site_profile;
 		}
 
 		return self::DEFAULT_TOOL_PROFILE;
+	}
+
+	/**
+	 * A tool-profile value as typed by a person or a client — trimmed and
+	 * lowercased — if it names a profile, else '' (#1064 review N5). The
+	 * one normalisation the query arg, the stored setting, the settings
+	 * form and PUT /settings (wp_update_plugin_settings) all use, so " Full"
+	 * means the same everywhere and "co re" means nothing anywhere.
+	 *
+	 * @param mixed $value Raw value.
+	 * @return string 'core', 'full' or ''.
+	 */
+	public static function normalize_tool_profile( $value ) {
+		if ( ! is_string( $value ) ) {
+			return '';
+		}
+		$value = strtolower( trim( $value ) );
+		return in_array( $value, self::TOOL_PROFILES, true ) ? $value : '';
 	}
 
 	/**
@@ -2258,7 +2314,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			// already use to reach any non-core tool. `mcpwp_call` itself
 			// is always in the core set (META_TOOL_NAMES), so this branch
 			// can only fire when that wrapper is actually available too.
-			if ( 'core' === $this->resolved_tool_profile
+			if ( 'core' === $this->effective_tool_profile()
 				&& isset( $role_and_availability_visible[ $hint['tool'] ] )
 				&& isset( $profile_visible['mcpwp_call'] )
 			) {
@@ -2455,7 +2511,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	private function tools_visible_to_current_caller() {
 		$tools = $this->tools_visible_by_role_and_availability();
 
-		if ( 'core' === $this->resolved_tool_profile ) {
+		if ( 'core' === $this->effective_tool_profile() ) {
 			$tools = array_values(
 				array_filter(
 					$tools,
@@ -2469,6 +2525,70 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		}
 
 		return $tools;
+	}
+
+	/**
+	 * The tool profile this request actually applies (#1064 review B1):
+	 * the resolved one, except that `core` becomes `full` when the caller
+	 * cannot see both meta tools — the site disabled the `meta` category,
+	 * or the tools are otherwise unavailable. `core` without
+	 * mcpwp_find_tools + mcpwp_call would strand the caller with ~25 tools
+	 * and no way to reach the rest.
+	 *
+	 * @return string 'core' or 'full'.
+	 */
+	private function effective_tool_profile() {
+		if ( null === $this->effective_tool_profile ) {
+			$profile = $this->resolved_tool_profile;
+			if ( 'core' === $profile && ! $this->meta_tools_visible_to_caller() ) {
+				$profile = 'full';
+			}
+			$this->effective_tool_profile = $profile;
+		}
+		return $this->effective_tool_profile;
+	}
+
+	/**
+	 * Whether BOTH meta tools (mcpwp_find_tools, mcpwp_call) are in the
+	 * caller's role- and availability-filtered catalog — the same stage
+	 * tools/list filters on before the profile. Every piece of "use
+	 * mcpwp_find_tools" guidance is gated on this (#1064 review B1).
+	 *
+	 * @return bool
+	 */
+	private function meta_tools_visible_to_caller() {
+		$visible = $this->tool_name_lookup( $this->tools_visible_by_role_and_availability() );
+		foreach ( self::META_TOOL_NAMES as $meta_tool ) {
+			if ( ! isset( $visible[ $meta_tool ] ) ) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * meta_tools_visible_to_caller() for a key record held by another
+	 * controller (#1064 review B1) — /onboard and /introspect run on
+	 * Mcpwp_REST_Site_Info, which authenticated the request.
+	 *
+	 * @param array|null $key_record The caller's key record, or null (no key context).
+	 * @return bool
+	 */
+	public function meta_tools_visible_for_caller( $key_record ) {
+		$this->adopt_caller( $key_record );
+		return $this->meta_tools_visible_to_caller();
+	}
+
+	/**
+	 * Point this controller instance at another controller's authenticated
+	 * caller. Private: only the *_for_caller() entry points use it, on an
+	 * instance created for that one question.
+	 *
+	 * @param array|null $key_record Key record.
+	 */
+	private function adopt_caller( $key_record ) {
+		$this->current_api_key_record = is_array( $key_record ) ? $key_record : null;
+		$this->tools_cache            = null;
 	}
 
 	/**
@@ -4347,7 +4467,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				$id,
 				-32602,
 				'Unknown tool: ' . $tool_name,
-				array( 'hint' => 'Tool "' . $tool_name . '" does not exist.' . $suggestion . ' Search every tool with mcpwp_find_tools(query), or call tools/list.' )
+				array( 'hint' => 'Tool "' . $tool_name . '" does not exist.' . $suggestion . ( $this->meta_tools_visible_to_caller() ? ' Search every tool with mcpwp_find_tools(query), or call tools/list.' : ' Call tools/list to see all available tools.' ) )
 			);
 		}
 
@@ -4468,7 +4588,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			// #1064: tools/list no longer carries #912 examples or long
 			// parameter prose, so the moment a call is refused is where the
 			// worked example goes — the one place it demonstrably helps.
-			$error_data = array( 'hint' => "Retry with the missing or corrected parameter. mcpwp_find_tools(query=\"$tool_name\") returns this tool's full parameter documentation." );
+			$error_data = array( 'hint' => 'Retry with the missing or corrected parameter.' . ( $this->meta_tools_visible_to_caller() ? " mcpwp_find_tools(query=\"$tool_name\") returns this tool's full parameter documentation." : '' ) );
 			$example    = $this->get_tool_input_example( $tool_name );
 			if ( null !== $example ) {
 				$encoded_example     = wp_json_encode( $example, JSON_UNESCAPED_SLASHES );
@@ -5836,15 +5956,19 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		$lines[] = '';
 
 		// #1064: `core` is the default profile, so most tools are not in
-		// tools/list. Say how to reach them, once, before anything else.
-		$lines[] = '## Finding Tools';
-		$lines[] = '';
-		if ( 'core' === $this->resolved_tool_profile ) {
-			$lines[] = 'Your tool list is the core set, not everything. Every other tool on this site (menus, templates, SEO audits, bulk edits, WooCommerce and more) is reachable: `mcpwp_find_tools(query)` searches them all and returns full parameters and examples, and `mcpwp_call(name, arguments)` runs the one you pick. If a tool named below is not in your list, find it and call it this way.';
-		} else {
-			$lines[] = 'Tool descriptions in tools/list are shortened. `mcpwp_find_tools(query)` returns any tool\'s full description, parameters and examples; `mcpwp_call(name, arguments)` runs it.';
+		// tools/list. Say how to reach them, once, before anything else —
+		// and only when the caller can actually see both meta tools
+		// (review B1): never point at a tool the caller cannot reach.
+		if ( $this->meta_tools_visible_to_caller() ) {
+			$lines[] = '## Finding Tools';
+			$lines[] = '';
+			if ( 'core' === $this->effective_tool_profile() ) {
+				$lines[] = 'Your tool list is the core set, not everything. Every other tool on this site (menus, templates, SEO audits, bulk edits, WooCommerce and more) is reachable: `mcpwp_find_tools(query)` searches them all and returns full parameters and examples, and `mcpwp_call(name, arguments)` runs the one you pick. If a tool named below is not in your list, find it and call it this way.';
+			} else {
+				$lines[] = 'Tool descriptions in tools/list are shortened. `mcpwp_find_tools(query)` returns any tool\'s full description, parameters and examples; `mcpwp_call(name, arguments)` runs it.';
+			}
+			$lines[] = '';
 		}
-		$lines[] = '';
 
 		// --- WordPress primer ---
 		$lines[] = '## WordPress Concepts';

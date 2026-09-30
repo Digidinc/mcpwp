@@ -422,7 +422,7 @@ class Mcpwp_MCP_Tool_List_Diet {
 					if ( null !== $description ) {
 						$subschema['description'] = $description;
 					}
-					$tool['inputSchema']['properties'][ $property ] = $subschema;
+					$tool['inputSchema']['properties'][ $property ] = self::object_if_empty( $subschema );
 				}
 			}
 		}
@@ -490,19 +490,20 @@ class Mcpwp_MCP_Tool_List_Diet {
 		if ( isset( $schema['properties'] ) && is_array( $schema['properties'] ) ) {
 			foreach ( $schema['properties'] as $key => $subschema ) {
 				if ( is_array( $subschema ) ) {
-					$schema['properties'][ $key ] = self::slim_schema( $subschema );
+					$schema['properties'][ $key ] = self::object_if_empty( self::slim_schema( $subschema ) );
 				}
 			}
+			$schema['properties'] = self::object_if_empty( $schema['properties'] );
 		}
 
 		if ( isset( $schema['items'] ) && is_array( $schema['items'] ) ) {
-			$schema['items'] = self::is_list( $schema['items'] )
+			$schema['items'] = self::is_list( $schema['items'] ) && array() !== $schema['items']
 				? array_map( array( __CLASS__, 'slim_subschema' ), $schema['items'] )
-				: self::slim_schema( $schema['items'] );
+				: self::object_if_empty( self::slim_schema( $schema['items'] ) );
 		}
 
 		if ( isset( $schema['additionalProperties'] ) && is_array( $schema['additionalProperties'] ) ) {
-			$schema['additionalProperties'] = self::slim_schema( $schema['additionalProperties'] );
+			$schema['additionalProperties'] = self::object_if_empty( self::slim_schema( $schema['additionalProperties'] ) );
 		}
 
 		foreach ( array( 'anyOf', 'oneOf', 'allOf' ) as $combinator ) {
@@ -579,12 +580,12 @@ class Mcpwp_MCP_Tool_List_Diet {
 		if ( isset( $schema['properties'] ) && is_array( $schema['properties'] ) ) {
 			foreach ( $schema['properties'] as $key => $subschema ) {
 				if ( is_array( $subschema ) ) {
-					$schema['properties'][ $key ] = self::strip_descriptions( $subschema );
+					$schema['properties'][ $key ] = self::object_if_empty( self::strip_descriptions( $subschema ) );
 				}
 			}
 		}
-		if ( isset( $schema['items'] ) && is_array( $schema['items'] ) && ! self::is_list( $schema['items'] ) ) {
-			$schema['items'] = self::strip_descriptions( $schema['items'] );
+		if ( isset( $schema['items'] ) && is_array( $schema['items'] ) && array() !== $schema['items'] && ! self::is_list( $schema['items'] ) ) {
+			$schema['items'] = self::object_if_empty( self::strip_descriptions( $schema['items'] ) );
 		}
 		return $schema;
 	}
@@ -596,16 +597,35 @@ class Mcpwp_MCP_Tool_List_Diet {
 	 * @return mixed
 	 */
 	public static function slim_subschema( $subschema ) {
-		return is_array( $subschema ) ? self::slim_schema( $subschema ) : $subschema;
+		return is_array( $subschema ) ? self::object_if_empty( self::slim_schema( $subschema ) ) : $subschema;
 	}
 
 	/**
-	 * Shorten text to at most $max characters, ending at a sentence
-	 * boundary when one falls in the back half of the allowance, otherwise
-	 * at a word boundary followed by an ellipsis. Never cuts inside a word.
+	 * A schema (or property map) left empty must still be a JSON object:
+	 * PHP's array() encodes as `[]`, which is not a valid schema (#1064
+	 * review N3). stdClass encodes as `{}`.
+	 *
+	 * @param mixed $value Schema or property map.
+	 * @return mixed
+	 */
+	private static function object_if_empty( $value ) {
+		return ( is_array( $value ) && array() === $value ) ? new \stdClass() : $value;
+	}
+
+	/**
+	 * Shorten text to at most $max characters.
+	 *
+	 * Prefers the last sentence end in the back half of the allowance: `.`,
+	 * `!`, `?` followed by whitespace (not an abbreviation such as "e.g."),
+	 * `。`, `！`, `？` anywhere, `؟` and `۔` followed by whitespace or the end.
+	 * Otherwise cuts at the last whitespace and appends "...". Either way
+	 * the result never splits a grapheme cluster (a combining mark, a ZWJ
+	 * emoji sequence), never ends inside an open parenthesis, and a word cut
+	 * never ends on an abbreviation — each backs off to the previous
+	 * boundary instead.
 	 *
 	 * @param string $text Text.
-	 * @param int    $max  Maximum length in characters.
+	 * @param int    $max  Maximum length in characters (codepoints).
 	 * @return string
 	 */
 	public static function shorten( $text, $max ) {
@@ -614,39 +634,124 @@ class Mcpwp_MCP_Tool_List_Diet {
 			return $text;
 		}
 
-		$window = self::substr( $text, 0, $max );
+		$clusters = self::graphemes( $text );
+		$count    = count( $clusters );
 
-		// Last sentence end inside the window: terminal punctuation followed
-		// by whitespace (or the window's own end when the next character in
-		// the full text is whitespace).
-		$best = -1;
-		if ( preg_match_all( '/[.!?](?=\s)/u', $window . self::substr( $text, $max, 1 ), $matches, PREG_OFFSET_CAPTURE ) ) {
-			foreach ( $matches[0] as $match ) {
-				$byte_offset = $match[1];
-				$end         = self::length( substr( $window, 0, $byte_offset ) ) + 1;
-				if ( $end > $max ) {
-					continue;
-				}
-				if ( self::ends_with_abbreviation( self::substr( $text, 0, $end ) ) ) {
-					continue;
-				}
-				$best = $end;
+		// $ends[$i] = codepoint length of the first $i clusters.
+		$ends = array( 0 );
+		foreach ( $clusters as $i => $cluster ) {
+			$ends[ $i + 1 ] = $ends[ $i ] + self::length( $cluster );
+		}
+
+		// 1. Sentence end in the back half of the allowance.
+		for ( $i = $count - 1; $i >= 0; $i-- ) {
+			$length = $ends[ $i + 1 ];
+			if ( $length > $max ) {
+				continue;
+			}
+			if ( $length < (int) floor( $max / 2 ) ) {
+				break;
+			}
+			if ( ! self::is_sentence_end( $clusters, $i ) ) {
+				continue;
+			}
+			$candidate = rtrim( implode( '', array_slice( $clusters, 0, $i + 1 ) ) );
+			if ( self::parentheses_balanced( $candidate ) ) {
+				return $candidate;
 			}
 		}
 
-		if ( $best >= (int) floor( $max / 2 ) ) {
-			return rtrim( self::substr( $text, 0, $best ) );
+		// 2. Word boundary, leaving room for the ellipsis.
+		for ( $i = $count - 1; $i > 0; $i-- ) {
+			if ( $ends[ $i ] > $max - 3 || ! preg_match( '/^\s+$/u', $clusters[ $i ] ) ) {
+				continue;
+			}
+			$candidate = rtrim( implode( '', array_slice( $clusters, 0, $i ) ), " \t\n\r\0\x0B,;:-(" );
+			if ( '' === $candidate || ! self::parentheses_balanced( $candidate ) || self::ends_with_abbreviation( $candidate ) ) {
+				continue;
+			}
+			return $candidate . '...';
 		}
 
-		// No usable sentence end: cut at the last whitespace, leaving room
-		// for the ellipsis, and trim trailing punctuation that would dangle.
-		$room = self::substr( $text, 0, $max - 3 );
-		$cut  = self::last_whitespace( $room );
-		if ( $cut <= 0 ) {
-			return self::substr( $room, 0, $max - 3 ) . '...';
+		// 3. One unbroken run longer than the allowance: whole clusters only.
+		$kept = 0;
+		while ( $kept < $count && $ends[ $kept + 1 ] <= $max - 3 ) {
+			$kept++;
+		}
+		return implode( '', array_slice( $clusters, 0, $kept ) ) . '...';
+	}
+
+	/**
+	 * Whether cluster $i ends a sentence.
+	 *
+	 * @param string[] $clusters Grapheme clusters.
+	 * @param int      $i        Index.
+	 * @return bool
+	 */
+	private static function is_sentence_end( array $clusters, $i ) {
+		$cluster  = $clusters[ $i ];
+		$next     = isset( $clusters[ $i + 1 ] ) ? $clusters[ $i + 1 ] : '';
+		$next_ws  = '' === $next || preg_match( '/^\s+$/u', $next );
+
+		// CJK full stops need no following space.
+		if ( in_array( $cluster, array( '。', '！', '？' ), true ) ) {
+			return true;
+		}
+		if ( in_array( $cluster, array( '؟', '۔' ), true ) ) {
+			return (bool) $next_ws;
+		}
+		if ( in_array( $cluster, array( '.', '!', '?' ), true ) && $next_ws ) {
+			return ! ( '.' === $cluster && self::ends_with_abbreviation( implode( '', array_slice( $clusters, 0, $i + 1 ) ) ) );
+		}
+		return false;
+	}
+
+	/**
+	 * Split text into extended grapheme clusters: grapheme_str_split() or
+	 * PCRE's \X when available, else codepoints with every combining mark,
+	 * variation selector, ZWJ and the codepoint a ZWJ joins merged into the
+	 * cluster before it.
+	 *
+	 * @param string $text Text.
+	 * @return string[]
+	 */
+	private static function graphemes( $text ) {
+		if ( function_exists( 'grapheme_str_split' ) ) {
+			$split = grapheme_str_split( $text );
+			if ( is_array( $split ) ) {
+				return $split;
+			}
+		}
+		if ( preg_match_all( '/\X/u', $text, $matches ) ) {
+			return $matches[0];
 		}
 
-		return rtrim( self::substr( $room, 0, $cut ), " \t\n\r\0\x0B,;:-(" ) . '...';
+		$codepoints = preg_split( '//u', $text, -1, PREG_SPLIT_NO_EMPTY );
+		if ( ! is_array( $codepoints ) ) {
+			return str_split( $text );
+		}
+		$clusters = array();
+		$join     = false;
+		foreach ( $codepoints as $codepoint ) {
+			$extends = preg_match( '/^[\p{M}\x{200D}\x{FE0E}\x{FE0F}]$/u', $codepoint );
+			if ( ( $extends || $join ) && ! empty( $clusters ) ) {
+				$clusters[ count( $clusters ) - 1 ] .= $codepoint;
+			} else {
+				$clusters[] = $codepoint;
+			}
+			$join = ( "\u{200D}" === $codepoint );
+		}
+		return $clusters;
+	}
+
+	/**
+	 * Whether every "(" in $text is closed.
+	 *
+	 * @param string $text Text.
+	 * @return bool
+	 */
+	private static function parentheses_balanced( $text ) {
+		return substr_count( $text, '(' ) <= substr_count( $text, ')' );
 	}
 
 	/**
@@ -665,7 +770,7 @@ class Mcpwp_MCP_Tool_List_Diet {
 		'’' => "'",
 		'“' => '"',
 		'”' => '"',
-		' ' => ' ',
+		"\xC2\xA0" => ' ', // No-break space (U+00A0).
 	);
 
 	/**
@@ -699,20 +804,6 @@ class Mcpwp_MCP_Tool_List_Diet {
 	}
 
 	/**
-	 * Character offset of the last whitespace in $text, or -1.
-	 *
-	 * @param string $text Text.
-	 * @return int
-	 */
-	private static function last_whitespace( $text ) {
-		if ( ! preg_match_all( '/\s/u', $text, $matches, PREG_OFFSET_CAPTURE ) ) {
-			return -1;
-		}
-		$last = end( $matches[0] );
-		return self::length( substr( $text, 0, $last[1] ) );
-	}
-
-	/**
 	 * Whether an array is a JSON list rather than an object.
 	 *
 	 * @param array $value Array.
@@ -730,17 +821,5 @@ class Mcpwp_MCP_Tool_List_Diet {
 	 */
 	private static function length( $text ) {
 		return function_exists( 'mb_strlen' ) ? mb_strlen( $text, 'UTF-8' ) : strlen( $text );
-	}
-
-	/**
-	 * Multibyte-safe substring.
-	 *
-	 * @param string   $text   Text.
-	 * @param int      $start  Start.
-	 * @param int|null $length Length.
-	 * @return string
-	 */
-	private static function substr( $text, $start, $length = null ) {
-		return function_exists( 'mb_substr' ) ? mb_substr( $text, $start, $length, 'UTF-8' ) : substr( $text, $start, $length );
 	}
 }

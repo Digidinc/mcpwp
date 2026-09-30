@@ -5618,7 +5618,10 @@ trait Mcpwp_Api_Auth {
 	 * @return bool
 	 */
 	public static function is_deny_all_categories( $categories ) {
-		return array( self::deny_all_category_marker() ) === array_values( (array) $categories );
+		// The always-granted categories (#1064 review B1) ride along with the
+		// sentinel; a key granted nothing else is still deny-all.
+		$granted = array_values( array_diff( (array) $categories, self::always_granted_tool_categories() ) );
+		return array( self::deny_all_category_marker() ) === $granted;
 	}
 
 	/**
@@ -5693,6 +5696,61 @@ trait Mcpwp_Api_Auth {
 	 *               category granted.
 	 */
 	public function resolve_key_tool_categories( $key_record ) {
+		$categories = $this->resolve_granted_tool_categories( $key_record );
+
+		// Unrestricted stays unrestricted: array() means "every category".
+		if ( empty( $categories ) ) {
+			return $categories;
+		}
+
+		// #1064 review B1: the categories every restricted key holds
+		// whatever it was granted — see always_granted_tool_categories().
+		// Added here, the one place a key's categories are resolved, so
+		// tools/list, tools/call, the meta-tool gate, introspection and the
+		// REST route gate all agree without a special case of their own.
+		foreach ( self::always_granted_tool_categories() as $always ) {
+			if ( ! in_array( $always, $categories, true ) ) {
+				$categories[] = $always;
+			}
+		}
+
+		return $categories;
+	}
+
+	/**
+	 * Tool categories no per-key restriction can withhold (#1064 review B1).
+	 *
+	 * `meta` holds mcpwp_find_tools and mcpwp_call. Neither can reach a tool
+	 * the key could not already call directly: find_tools searches only the
+	 * caller's own visible catalog, and mcpwp_call re-runs every gate
+	 * (scope, role category, site toggle, Pro, rate/spend) against the tool
+	 * it names. Withholding them therefore protects nothing, and once
+	 * `core` became the default profile it stranded every key that was not
+	 * granted `meta` — every pre-#907 custom key and every wp.org
+	 * `{scopes, tool_categories}` record — with a few core tools and no way
+	 * to reach the rest of its own categories.
+	 *
+	 * The SITE-WIDE category toggle still applies: an administrator who
+	 * disables `meta` hides both tools from everyone (and the MCP endpoint
+	 * then answers with the `full` profile, see
+	 * Mcpwp_REST_MCP::resolve_mcp_tool_profile()).
+	 *
+	 * @return string[]
+	 */
+	public static function always_granted_tool_categories() {
+		return array( 'meta' );
+	}
+
+	/**
+	 * The categories a key record was actually granted (role definition,
+	 * custom selection, or a roleless third-party record's own list), before
+	 * always_granted_tool_categories() is added. Same return contract as
+	 * resolve_key_tool_categories().
+	 *
+	 * @param array $key_record Normalized key record.
+	 * @return array
+	 */
+	private function resolve_granted_tool_categories( $key_record ) {
 		// A record with NO 'role' field at all is the ONLY unrestricted-by-
 		// absence case — a genuinely legacy, pre-roles key (#1041 WARN-1).
 		// This must be array_key_exists(), not isset(): a record could in
