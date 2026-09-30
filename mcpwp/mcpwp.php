@@ -506,29 +506,27 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	}
 
 	// One-time move of the approvals store from its option to its own table
-	// (#1042) — gated on its OWN flag, not the version check above, for the
-	// same reason as the purge below. Runs before REST routes; the store also
-	// runs it lazily, and answers approvals_busy while another request holds
-	// the migration lock.
-	// Both options are autoloaded, so this costs no query once migrated. The
-	// late import of a reappearing old option is checked lazily by the
-	// approvals store itself, and hourly by the cron below.
-	if ( ! get_option( 'mcpwp_approvals_table_migrated' ) || (int) get_option( 'mcpwp_approvals_schema_version', 0 ) < 3 ) {
-		require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-activator.php';
-		Mcpwp_Activator::migrate_approvals_to_table();
-	}
-
-	// One-time purge of identity-less pending approvals — gated on its OWN flag,
-	// not the version check above. A same-version deployment (e.g. 3.6.1 -> 3.6.1)
-	// never enters the activate() branch, so relying on the version gate alone
-	// would skip this security migration and leave a pre-fix pending approval
-	// exploitable by a reconnected OAuth principal. Idempotent; after the first
-	// run this is a single (cached) get_option() per load. Runs on plugins_loaded,
-	// before REST routes, so the purge precedes any approve/apply request.
-	if ( ! get_option( 'mcpwp_approvals_identity_migrated' ) ) {
-		require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-activator.php';
-		Mcpwp_Activator::migrate_identity_less_approvals();
-	}
+	// (#1042), its schema upgrades, and the one-time purge of identity-less
+	// approvals: on wp_loaded, not plugins_loaded. Both derive visibility
+	// categories from post types, and a plugin's product / template types do
+	// not exist until `init` (#1042 review round 3). wp_loaded still runs
+	// before any REST, admin-AJAX or cron dispatch. Gated on their OWN flags
+	// (autoloaded, so free once done), not on the version check above.
+	add_action(
+		'wp_loaded',
+		static function () {
+			if ( ! get_option( 'mcpwp_approvals_table_migrated' ) || (int) get_option( 'mcpwp_approvals_schema_version', 0 ) < 4 ) {
+				require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-activator.php';
+				Mcpwp_Activator::migrate_approvals_to_table();
+			}
+			// A pre-fix pending approval created by a then-identity-less OAuth
+			// principal must not stay exploitable (see the method docblock).
+			if ( ! get_option( 'mcpwp_approvals_identity_migrated' ) ) {
+				require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-activator.php';
+				Mcpwp_Activator::migrate_identity_less_approvals();
+			}
+		}
+	);
 
 	// One-time reset of the destructive-approval switch. An early build of
 	// the gate exposed destructive_requires_approval through the settings

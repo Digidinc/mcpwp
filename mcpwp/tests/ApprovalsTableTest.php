@@ -94,7 +94,15 @@ final class ApprovalsTableTest extends TestCase {
 		$expected = $items;
 		ksort( $migrated );
 		ksort( $expected );
-		$this->assertSame( $expected, $migrated, 'Every record, deep-equal.' );
+		// Round 3: a record that stored no visibility_categories gets the
+		// derived ones persisted into it; every other field is verbatim.
+		foreach ( $expected as $id => $record ) {
+			if ( empty( $record['visibility_categories'] ) ) {
+				$this->assertNotEmpty( $migrated[ $id ]['visibility_categories'], $id );
+				$expected[ $id ]['visibility_categories'] = $migrated[ $id ]['visibility_categories'];
+			}
+		}
+		$this->assertSame( $expected, $migrated, 'Every record, deep-equal apart from its persisted categories.' );
 		$this->assertSame( array( 'apr_mig_staging', 'apr_mig_pending', 'apr_mig_large', 'apr_mig_rejected' ), array_keys( mcpwp_test_approvals_all() ), 'The rest in the option\'s order, after the one a crashed run had copied.' );
 		$this->assertCount( 4, $GLOBALS['mcpwp_test_approvals_rows'] );
 		$this->assertSame( 1, get_option( Mcpwp_Approvals::MIGRATED_FLAG ) );
@@ -139,21 +147,20 @@ final class ApprovalsTableTest extends TestCase {
 		$this->assertIsArray( get_option( Mcpwp_Approvals::OPTION_NAME ), 'Nothing moved while the other request holds the lock.' );
 	}
 
-	public function test_migration_waits_for_the_spai_bridge_on_a_legacy_site(): void {
-		// 2.8.x: the queue is still under spai_approval_requests and the
-		// spai_ → mcpwp_ bridge has not run (the activation hook order).
-		update_option( 'spai_approval_requests', $this->legacy_items(), false );
+	public function test_migration_takes_the_spai_queue_itself_when_the_bridge_has_not(): void {
+		// 2.8.x: the queue is still under spai_approval_requests, and the
+		// spai_ → mcpwp_ bridge never finished (it stopped on an unrelated
+		// table, so mcpwp_migrated_from_spai is unset). Round 3: the
+		// migration no longer waits on the whole bridge.
+		$items = $this->legacy_items();
+		update_option( 'spai_approval_requests', $items, false );
 
-		$waiting = Mcpwp_Activator::migrate_approvals_to_table();
-		$this->assertInstanceOf( WP_Error::class, $waiting );
-		$this->assertSame( 'approvals_busy', $waiting->get_error_code() );
-		$this->assertFalse( get_option( Mcpwp_Approvals::MIGRATED_FLAG, false ), 'Not marked migrated past a queue it has not seen.' );
-
-		// The bridge copies it across; the next call migrates it.
-		update_option( Mcpwp_Approvals::OPTION_NAME, get_option( 'spai_approval_requests' ), false );
-		update_option( 'mcpwp_migrated_from_spai', '1' );
 		$this->assertTrue( Mcpwp_Activator::migrate_approvals_to_table() );
+		$this->assertSame( 1, get_option( Mcpwp_Approvals::MIGRATED_FLAG ) );
 		$this->assertCount( 4, mcpwp_test_approvals_all() );
+		$this->assertSame( 'pending', Mcpwp_Approvals::get_request( 'apr_mig_pending' )['status'] );
+		$this->assertIsArray( Mcpwp_Approvals::list_requests() );
+		$this->assertSame( $items, get_option( Mcpwp_Approvals::LEGACY_BACKUP_OPTION ) );
 	}
 
 	// ── 2. Concurrent apply ─────────────────────────────────────────────────

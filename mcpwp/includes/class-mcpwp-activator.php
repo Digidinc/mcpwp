@@ -552,6 +552,14 @@ class Mcpwp_Activator {
 			return true;
 		}
 
+		// Every copy and backfill derives visibility categories, which needs
+		// every post type registered. Before `init` (a plugin's product or
+		// template type does not exist yet) nothing is derived or written
+		// (#1042 review round 3); mcpwp.php runs this on wp_loaded.
+		if ( ! Mcpwp_Approvals::post_types_ready() ) {
+			return Mcpwp_Approvals::busy_error();
+		}
+
 		$lock_token = self::acquire_migration_lock( self::APPROVALS_TABLE_LOCK_OPTION, self::APPROVALS_TABLE_LOCK_TTL );
 		if ( false === $lock_token ) {
 			return Mcpwp_Approvals::busy_error();
@@ -598,14 +606,17 @@ class Mcpwp_Activator {
 				}
 				$items = get_option( Mcpwp_Approvals::OPTION_NAME, false );
 
-				// A 2.8.x site whose spai_ → mcpwp_ bridge (Mcpwp_Migrate, which
-				// runs before this on every plugins_loaded, but AFTER activate()
-				// on the activation hook) has not run yet still holds its queue
-				// under spai_approval_requests. Marking the table migrated now
-				// would strand that queue in an option nothing reads; wait for
-				// the bridge instead.
-				if ( ! $migrated && false === $items && ! get_option( 'mcpwp_migrated_from_spai' ) && false !== get_option( 'spai_approval_requests', false ) ) {
-					return Mcpwp_Approvals::busy_error();
+				// A 2.8.x site whose queue is still under spai_approval_requests
+				// (the spai_ → mcpwp_ bridge has not copied it — not run yet, or
+				// stopped on an unrelated table): take that one option directly,
+				// the same mapping the bridge uses, rather than wait on the
+				// whole bridge (#1042 review round 3). Once the table is
+				// migrated, the bridge no longer copies it (Mcpwp_Migrate).
+				if ( ! $migrated && false === $items ) {
+					$spai = get_option( 'spai_approval_requests', false );
+					if ( false !== $spai ) {
+						$items = $spai;
+					}
 				}
 
 				if ( false !== $items ) {

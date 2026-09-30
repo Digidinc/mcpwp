@@ -1656,6 +1656,10 @@ if (! function_exists('mcpwp_test_sql_find')) {
             $GLOBALS['mcpwp_test_approvals_fail']          = null;
             $GLOBALS['mcpwp_test_approvals_before_update'] = null;
             $GLOBALS['mcpwp_test_approvals_statements']    = array();
+            // A booted site: post types registered, so approval visibility
+            // categories can be derived (#1042 round 3). A test that needs
+            // "before init" unsets this itself.
+            $GLOBALS['mcpwp_test_did_action']['init'] = 1;
             if (class_exists('Mcpwp_Approvals') && method_exists('Mcpwp_Approvals', 'reset_request_state')) {
                 Mcpwp_Approvals::reset_request_state();
             }
@@ -1911,7 +1915,7 @@ if (! function_exists('mcpwp_test_sql_find')) {
         $GLOBALS['mcpwp_test_approvals_rows']         = array();
         $GLOBALS['mcpwp_test_approvals_table_exists'] = true;
         update_option('mcpwp_approvals_table_migrated', 1);
-        update_option('mcpwp_approvals_schema_version', 3);
+        update_option('mcpwp_approvals_schema_version', 4);
         if (! empty($items)) {
             $copied = Mcpwp_Approvals::import_legacy_items($items);
             if (is_wp_error($copied)) {

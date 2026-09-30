@@ -54,7 +54,7 @@ class Mcpwp_Approvals {
 	 *
 	 * @var int
 	 */
-	const SCHEMA_VERSION = 3;
+	const SCHEMA_VERSION = 4;
 
 	/**
 	 * Option holding the table's schema version.
@@ -2181,6 +2181,9 @@ class Mcpwp_Approvals {
 			}
 			$fields = self::row_from_record( $record );
 			if ( is_wp_error( $fields ) ) {
+				if ( 'approvals_busy' === $fields->get_error_code() ) {
+					return $fields; // Too early to derive categories: copy nothing.
+				}
 				$skipped[] = $id;
 				continue;
 			}
@@ -2208,20 +2211,48 @@ class Mcpwp_Approvals {
 	/**
 	 * Recompute the derived columns of every row (schema upgrades that add
 	 * a column: cap_exempt / quota_bytes in schema 2, visibility_categories
-	 * in schema 3) — for Mcpwp_Activator::migrate_approvals_to_table() only,
-	 * under its lock. Column-only: the record and its version are untouched.
-	 * A damaged row keeps its columns.
+	 * in schema 3), and — schema 4 — persist the categories into every
+	 * record that did not store them, with the column, in one version-
+	 * checked write (row_from_record()). That repairs a column an earlier
+	 * candidate build derived before `init`. For
+	 * Mcpwp_Activator::migrate_approvals_to_table() only, under its lock,
+	 * after `init`. A damaged row keeps its columns.
 	 *
 	 * @return true|WP_Error
 	 */
 	public static function backfill_derived_columns() {
+		if ( ! self::post_types_ready() ) {
+			return self::busy_error();
+		}
 		global $wpdb;
 		$table = self::table_name();
 		return self::each_row(
 			array(),
 			static function ( array $row ) use ( $wpdb, $table ) {
-				$fields = self::row_from_record( $row['record'] );
+				$record = $row['record'];
+				$fields = self::row_from_record( $record );
 				if ( is_wp_error( $fields ) ) {
+					return 'approvals_busy' === $fields->get_error_code() ? $fields : true;
+				}
+				if ( $record !== $row['record'] ) {
+					// The record gained its categories: write record and columns
+					// together, version-checked; a concurrent write is retried
+					// through update_one(), which persists them the same way.
+					$written = self::update_row( $row['id'], $row['version'], $fields );
+					if ( false === $written ) {
+						return self::store_failed_error();
+					}
+					if ( 0 === (int) $written ) {
+						$retried = self::update_one(
+							$row['id'],
+							static function ( array $fresh ) {
+								return $fresh;
+							}
+						);
+						if ( is_wp_error( $retried ) && 'approval_not_found' !== $retried->get_error_code() ) {
+							return $retried;
+						}
+					}
 					return true;
 				}
 				// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- table name is prefix + constant.
@@ -2460,13 +2491,13 @@ class Mcpwp_Approvals {
 			}
 			$record = self::compact_if_due( $record );
 
-			if ( $record === $row['record'] ) {
-				return $record; // Nothing to write.
-			}
-
 			$fields = self::row_from_record( $record );
 			if ( is_wp_error( $fields ) ) {
 				return $fields;
+			}
+
+			if ( $record === $row['record'] ) {
+				return $record; // Nothing to write.
 			}
 
 			// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- conditional (version-checked) write; table name is prefix + constant.
@@ -2819,7 +2850,23 @@ class Mcpwp_Approvals {
 	 * @param array $record Record.
 	 * @return array|WP_Error
 	 */
-	private static function row_from_record( array $record ) {
+	private static function row_from_record( array &$record ) {
+		// ONE source of truth for who may see a record (#1042 review round
+		// 3): a record that carries no stored visibility_categories gets the
+		// computed ones written INTO it, in this same row write. From then on
+		// categories_for_approval() takes the stored path for it, so the
+		// light column and the full-record decision can never disagree, and
+		// nothing recomputes live later (a hard-deleted target cannot widen
+		// it). Deriving needs every post type registered: before `init` a
+		// plugin's product / template types do not exist yet and the
+		// derivation would under-classify, so it is refused, not guessed.
+		if ( empty( $record['visibility_categories'] ) || ! is_array( $record['visibility_categories'] ) ) {
+			if ( ! self::post_types_ready() ) {
+				return self::busy_error();
+			}
+			$record['visibility_categories'] = array_values( self::categories_for_approval( $record ) );
+		}
+
 		$json = self::encode_record( $record, true );
 		$size = self::quota_size( $record );
 		if ( ! is_string( $json ) || '' === $json || false === $size ) {
@@ -2850,6 +2897,16 @@ class Mcpwp_Approvals {
 			'visibility_categories' => (string) wp_json_encode( array_values( self::categories_for_approval( $record ) ) ),
 			'record'              => $json,
 		);
+	}
+
+	/**
+	 * Whether post types are registered (`init` has fired), so categories
+	 * can be derived. Everything that derives or migrates checks this.
+	 *
+	 * @return bool
+	 */
+	public static function post_types_ready() {
+		return function_exists( 'did_action' ) && did_action( 'init' ) > 0;
 	}
 
 	/**
