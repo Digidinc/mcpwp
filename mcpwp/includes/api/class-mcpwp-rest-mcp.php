@@ -254,7 +254,8 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		// wp_graph_query left `core` in #1064: at ~330 tokens it alone put a
 		// Pro site with an SEO plugin over the 5,000-token core budget
 		// (ToolListBudgetTest). It is an analysis tool, not a first-contact
-		// edit tool, and mcpwp_find_tools("orphan pages") still reaches it.
+		// edit tool, and mcpwp_find_tools("orphan") or ("site graph") still
+		// reaches it.
 	);
 
 	/**
