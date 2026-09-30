@@ -2512,6 +2512,16 @@ trait Mcpwp_Elementor_Writer_Trait {
 			return $ref_check;
 		}
 
+		// Only a list of elements with finite numbers is written (#829 review
+		// rounds 3-4): INF made wp_json_encode() below fail and the edit end
+		// in a 500. A clear 400 instead, nothing written.
+		if ( class_exists( 'Mcpwp_Elementor_Meta_Write' ) ) {
+			$tree_refusal = Mcpwp_Elementor_Meta_Write::tree_refusal( $elements );
+			if ( null !== $tree_refusal ) {
+				return $tree_refusal;
+			}
+		}
+
 		// Refuse to silently convert a page that already has non-Elementor
 		// content (#788).
 		$conversion = $this->guard_content_conversion( $page_id, $elements, $options );

@@ -201,11 +201,9 @@ final class Mcpwp_Elementor_Meta_Write {
 	 * @return int|bool What update_post_meta() returned.
 	 */
 	public static function update( $post_id, $meta_key, $value, array $options = array() ) {
-		if ( '_elementor_data' === $meta_key ) {
-			$refusal = self::tree_refusal( $value );
-			if ( null !== $refusal ) {
-				return $refusal;
-			}
+		$refusal = '_elementor_data' === $meta_key ? self::tree_refusal( $value ) : self::settings_refusal( $value );
+		if ( null !== $refusal ) {
+			return $refusal;
 		}
 
 		return self::as_writer(
@@ -290,8 +288,11 @@ final class Mcpwp_Elementor_Meta_Write {
 		// for the post id + key it was produced for.
 		if ( ! empty( self::$contexts ) || ! empty( self::$bypass ) ) {
 			self::$pending = array(
-				'key'   => (string) $key,
-				'value' => $value,
+				'key'     => (string) $key,
+				'value'   => $value,
+				'inner'   => $inner,
+				'type'    => $type,
+				'subtype' => $subtype,
 			);
 
 			return $value;
@@ -388,8 +389,23 @@ final class Mcpwp_Elementor_Meta_Write {
 		// it turns out to be for — never left unsanitized.
 		$skipped = null !== $pending && $pending['key'] === $meta_key && $pending['value'] === $meta_value;
 
-		if ( ! $skipped && ! self::is_writer_for( $object_id ) ) {
-			return null;
+		if ( ! self::is_writer_for( $object_id ) ) {
+			if ( ! $skipped ) {
+				return null;
+			}
+
+			// Not MCPWP's write — another plugin's, or core's, landing while
+			// MCPWP writes a different post. It gets exactly what Elementor's
+			// own callback gives it, never MCPWP's policy or a refusal
+			// (#829 review round 4).
+			++self::$suspend_grants;
+			try {
+				$value = call_user_func( $pending['inner'], $meta_value, $meta_key, $pending['type'], $pending['subtype'] );
+			} finally {
+				--self::$suspend_grants;
+			}
+
+			return ( $value === $meta_value ) ? null : array( 'value' => $value );
 		}
 
 		if ( '_elementor_data' === $meta_key ) {
@@ -404,6 +420,8 @@ final class Mcpwp_Elementor_Meta_Write {
 			if ( null === self::as_tree( $meta_value ) ) {
 				return array( 'refused' => true );
 			}
+		} elseif ( null !== self::settings_refusal( $meta_value ) ) {
+			return array( 'refused' => true );
 		}
 
 		$value = self::apply_policy( $object_id, $meta_key, $meta_value );
@@ -521,9 +539,9 @@ final class Mcpwp_Elementor_Meta_Write {
 		$tree    = self::strip_nul_keys( $tree, $changed );
 
 		$known = array();
-		self::index_elements( (array) self::as_tree( $stored ), $known );
+		self::index_elements( (array) self::as_tree( $stored, true ), $known );
 		foreach ( $snapshots as $snapshot ) {
-			self::index_elements( (array) self::as_tree( $snapshot ), $known );
+			self::index_elements( (array) self::as_tree( $snapshot, true ), $known );
 		}
 
 		$out = self::police_elements( $tree, $known, $changed );
@@ -557,7 +575,7 @@ final class Mcpwp_Elementor_Meta_Write {
 	 * @param mixed $raw JSON text or array.
 	 * @return array|null
 	 */
-	private static function as_tree( $raw ) {
+	private static function as_tree( $raw, $allow_non_finite = false ) {
 		if ( null === $raw || '' === $raw ) {
 			return array();
 		}
@@ -567,6 +585,14 @@ final class Mcpwp_Elementor_Meta_Write {
 		}
 
 		if ( ! is_array( $raw ) ) {
+			return null;
+		}
+
+		// INF/-INF/NAN: `1e999` decodes to INF without an error, and no JSON
+		// encoder (Elementor's included) can write one back, so no genuine
+		// document holds one (#829 review round 4). Refused on input; a stored
+		// one is read (leniently) but can never vouch for anything.
+		if ( ! $allow_non_finite && self::contains_non_finite( $raw ) ) {
 			return null;
 		}
 
@@ -584,6 +610,30 @@ final class Mcpwp_Elementor_Meta_Write {
 	}
 
 	/**
+	 * Whether a value holds INF, -INF or NAN anywhere.
+	 *
+	 * @param mixed $value Value.
+	 * @return bool
+	 */
+	public static function contains_non_finite( $value ) {
+		if ( is_float( $value ) ) {
+			return ! is_finite( $value );
+		}
+		if ( is_object( $value ) ) {
+			$value = get_object_vars( $value );
+		}
+		if ( is_array( $value ) ) {
+			foreach ( $value as $v ) {
+				if ( self::contains_non_finite( $v ) ) {
+					return true;
+				}
+			}
+		}
+
+		return false;
+	}
+
+	/**
 	 * Why a `_elementor_data` value cannot be stored: it does not decode, as
 	 * Elementor decodes it, to a list of elements. Null when it can.
 	 *
@@ -595,9 +645,36 @@ final class Mcpwp_Elementor_Meta_Write {
 			return null;
 		}
 
+		$decoded = is_string( $value ) ? json_decode( $value, true, 512, self::DECODE_FLAGS ) : $value;
+		if ( null !== self::as_tree( $value, true ) || ( is_array( $decoded ) && self::contains_non_finite( $decoded ) ) ) {
+			return self::non_finite_refusal( 'elementor_data_non_finite_number' );
+		}
+
 		return new WP_Error(
 			'elementor_data_not_a_tree',
 			__( 'The Elementor data is not a list of elements (JSON that decodes to an array of element objects), so nothing was stored. Send the page as an element list, e.g. [{"id":"abc1234","elType":"section","settings":{},"elements":[]}].', 'mcpwp' ),
+			array( 'status' => 400 )
+		);
+	}
+
+	/**
+	 * Why page settings cannot be stored; null when they can.
+	 *
+	 * @param mixed $value Settings.
+	 * @return WP_Error|null
+	 */
+	public static function settings_refusal( $value ) {
+		return self::contains_non_finite( $value ) ? self::non_finite_refusal( 'elementor_settings_non_finite_number' ) : null;
+	}
+
+	/**
+	 * @param string $code Error code.
+	 * @return WP_Error
+	 */
+	private static function non_finite_refusal( $code ) {
+		return new WP_Error(
+			$code,
+			__( 'The value holds a number JSON cannot represent (Infinity or NaN, for example from 1e999), which no Elementor document contains, so nothing was stored. Send a finite number or a string.', 'mcpwp' ),
 			array( 'status' => 400 )
 		);
 	}
@@ -638,41 +715,126 @@ final class Mcpwp_Elementor_Meta_Write {
 	}
 
 	/**
-	 * Canonical form of one element without its children: every field and
-	 * setting value exact, key order ignored, and the `isInner: false` default
-	 * Elementor's save adds treated as absent.
+	 * The fields of one element that decide what it renders: everything but
+	 * its list of children (judged on their own), with Elementor's
+	 * `isInner: false` default treated as absent. A non-list `elements` stays
+	 * in, so it can never compare equal to a list (#829 review round 3).
 	 *
-	 * @param array|object $element Element.
-	 * @return string
+	 * @param array $element Element (assoc).
+	 * @return array
 	 */
-	private static function signature( $element ) {
-		$fields = is_object( $element )
-			? json_decode( (string) wp_json_encode( $element ), true, 512, self::DECODE_FLAGS )
-			: $element;
-		if ( ! is_array( $fields ) ) {
-			return '';
+	private static function element_fields( array $element ) {
+		if ( isset( $element['elements'] ) && self::is_list_of_elements( $element['elements'] ) ) {
+			unset( $element['elements'] );
+		}
+		if ( array_key_exists( 'isInner', $element ) && false === $element['isInner'] ) {
+			unset( $element['isInner'] );
 		}
 
-		// Children are judged on their own; a non-list `elements` stays in the
-		// signature (and police_elements() treats it as a change).
-		if ( isset( $fields['elements'] ) && self::is_list_of_elements( $fields['elements'] ) ) {
-			unset( $fields['elements'] );
-		}
-		if ( array_key_exists( 'isInner', $fields ) && false === $fields['isInner'] ) {
-			unset( $fields['isInner'] );
-		}
+		return $element;
+	}
 
-		$sort = static function ( $value ) use ( &$sort ) {
-			if ( is_array( $value ) ) {
-				ksort( $value );
-				foreach ( $value as $k => $v ) {
-					$value[ $k ] = $sort( $v );
+	/**
+	 * Strict, fail-closed equality of two decoded values (#829 review round 4).
+	 *
+	 * No encoding step: an earlier signature string turned an encode failure
+	 * (INF) into '' and made every such element "equal". Here anything that is
+	 * not provably the same value Elementor would see is different:
+	 *  - types must match: 1 vs 1.0 vs "1" vs true differ; null vs "" differ;
+	 *  - floats must be finite and identical including sign (-0.0 vs 0.0);
+	 *  - a digits-only string past PHP_INT_MAX may have been a JSON number
+	 *    (JSON_BIGINT_AS_STRING) or a string — ambiguous, so different;
+	 *  - objects (only page settings hold them) must be the same class with
+	 *    strictly equal properties;
+	 *  - lists compare in order; maps compare by key set, key order ignored
+	 *    (Elementor reads settings by key). `{}` and `[]` both decode to an
+	 *    empty array, as they do for Elementor itself, so they are equal.
+	 *
+	 * @param mixed $a Value.
+	 * @param mixed $b Value.
+	 * @return bool
+	 */
+	public static function deep_equal( $a, $b ) {
+		if ( is_array( $a ) || is_array( $b ) ) {
+			if ( ! is_array( $a ) || ! is_array( $b ) || count( $a ) !== count( $b ) ) {
+				return false;
+			}
+			$a_list = self::is_list( $a );
+			if ( self::is_list( $b ) !== $a_list ) {
+				return false;
+			}
+			foreach ( $a as $k => $v ) {
+				if ( ! array_key_exists( $k, $b ) || ! self::deep_equal( $v, $b[ $k ] ) ) {
+					return false;
 				}
 			}
-			return $value;
-		};
 
-		return (string) wp_json_encode( $sort( $fields ) );
+			return true;
+		}
+
+		if ( is_object( $a ) || is_object( $b ) ) {
+			// Only page settings can hold objects (unserialized): the same
+			// class with strictly equal properties, nothing looser.
+			return is_object( $a ) && is_object( $b ) && get_class( $a ) === get_class( $b )
+				&& self::deep_equal( self::as_map( get_object_vars( $a ) ), self::as_map( get_object_vars( $b ) ) );
+		}
+
+		if ( is_float( $a ) || is_float( $b ) ) {
+			if ( ! is_float( $a ) || ! is_float( $b ) || ! is_finite( $a ) || ! is_finite( $b ) ) {
+				return false;
+			}
+
+			return var_export( $a, true ) === var_export( $b, true );
+		}
+
+		if ( is_string( $a ) && is_string( $b ) && ( self::is_big_integer_string( $a ) || self::is_big_integer_string( $b ) ) ) {
+			return false;
+		}
+
+		return $a === $b;
+	}
+
+	/**
+	 * Object properties as a map that never reads as a list, so {"0":x} on
+	 * an object is not compared as a list.
+	 *
+	 * @param array $vars Properties.
+	 * @return array
+	 */
+	private static function as_map( array $vars ) {
+		return array( '__mcpwp_object' => true ) + $vars;
+	}
+
+	/**
+	 * @param array $value Array.
+	 * @return bool Keys are exactly 0..n-1 in order.
+	 */
+	private static function is_list( array $value ) {
+		$i = 0;
+		foreach ( $value as $k => $unused ) {
+			if ( $k !== $i ) {
+				return false;
+			}
+			++$i;
+		}
+
+		return true;
+	}
+
+	/**
+	 * A digits-only string outside PHP's integer range: what
+	 * JSON_BIGINT_AS_STRING makes of a huge JSON number, and indistinguishable
+	 * after the decode from a string that looked the same.
+	 *
+	 * @param string $value String.
+	 * @return bool
+	 */
+	private static function is_big_integer_string( $value ) {
+		if ( ! preg_match( '/^-?[0-9]{19,}$/', $value ) ) {
+			return false;
+		}
+
+		return (string) (int) $value !== ltrim( $value, '+' );
 	}
 
 	/**
@@ -705,10 +867,10 @@ final class Mcpwp_Elementor_Meta_Write {
 	}
 
 	/**
-	 * Count every stored element's signature, by id.
+	 * Index every stored element's fields by id; each entry may vouch once.
 	 *
 	 * @param array $elements Elements (assoc).
-	 * @param array $known    id => signature => count, by reference.
+	 * @param array $known    id => list of array{fields:array,used:bool}, by reference.
 	 * @return void
 	 */
 	private static function index_elements( array $elements, array &$known ) {
@@ -719,14 +881,40 @@ final class Mcpwp_Elementor_Meta_Write {
 
 			$id = self::element_id( $element );
 			if ( '' !== $id ) {
-				$sig                  = self::signature( $element );
-				$known[ $id ][ $sig ] = ( $known[ $id ][ $sig ] ?? 0 ) + 1;
+				$known[ $id ][] = array(
+					'fields' => self::element_fields( $element ),
+					'used'   => false,
+				);
 			}
 
 			if ( isset( $element['elements'] ) && is_array( $element['elements'] ) ) {
 				self::index_elements( $element['elements'], $known );
 			}
 		}
+	}
+
+	/**
+	 * Consume the first unused stored element strictly equal to this one.
+	 *
+	 * @param array  $known  Index, by reference.
+	 * @param string $id     Element id.
+	 * @param array  $fields Incoming element's fields.
+	 * @return bool Whether one vouched for it.
+	 */
+	private static function vouch( array &$known, $id, array $fields ) {
+		if ( '' === $id || empty( $known[ $id ] ) ) {
+			return false;
+		}
+
+		foreach ( $known[ $id ] as $i => $candidate ) {
+			if ( ! $candidate['used'] && self::deep_equal( $fields, $candidate['fields'] ) ) {
+				$known[ $id ][ $i ]['used'] = true;
+
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 	/**
@@ -748,15 +936,12 @@ final class Mcpwp_Elementor_Meta_Write {
 			}
 
 			$id       = self::element_id( $element );
-			$sig      = self::signature( $element );
 			$children = is_array( $element ) ? ( $element['elements'] ?? null ) : ( $element->elements ?? null );
 			// A present but non-list `elements` is never "unchanged" (#829
-			// review round 3): it is policed like any other value.
+			// review round 3): it is policed like any other value. An object
+			// element is never unchanged either (the decode never makes one).
 			$bad_children = null !== $children && ! self::is_list_of_elements( $children );
-			$unchanged    = ! $bad_children && '' !== $id && ! empty( $known[ $id ][ $sig ] );
-			if ( $unchanged ) {
-				--$known[ $id ][ $sig ];
-			}
+			$unchanged    = ! $bad_children && is_array( $element ) && self::vouch( $known, $id, self::element_fields( $element ) );
 
 			$fields = is_object( $element ) ? get_object_vars( $element ) : $element;
 			foreach ( $fields as $field => $value ) {
@@ -885,7 +1070,7 @@ final class Mcpwp_Elementor_Meta_Write {
 	 * @return bool
 	 */
 	private static function same_value( $a, $b ) {
-		return self::signature( array( 'v' => $a ) ) === self::signature( array( 'v' => $b ) );
+		return self::deep_equal( $a, $b );
 	}
 
 	// ---------------------------------------------------------------------

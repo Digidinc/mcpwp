@@ -475,6 +475,13 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 			return Mcpwp_Elementor_Stored_Tree::refusal( $source_tree, "The source page's Elementor data" );
 		}
 
+		// Data the chokepoint would refuse (a non-finite number, #829 review
+		// round 4) is refused here, before a page is created without it.
+		$clone_refusal = Mcpwp_Elementor_Meta_Write::tree_refusal( get_post_meta( $page_id, '_elementor_data', true ) );
+		if ( null !== $clone_refusal ) {
+			return $this->error_response_from_wp_error( $clone_refusal );
+		}
+
 		// #1032 (adversarial review round 1, NIT): a clone copies
 		// _elementor_data and post_content byte for byte, bypassing every
 		// write-time template-reference check — refused before wp_insert_post()

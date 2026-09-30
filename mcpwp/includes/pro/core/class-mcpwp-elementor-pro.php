@@ -1413,6 +1413,16 @@ class Mcpwp_Elementor_Pro {
 		// docblock.
 		$elementor_data = get_post_meta( $source_id, '_elementor_data', true );
 
+		// Data the chokepoint would refuse to store (not a tree, a non-finite
+		// number: #829 review rounds 3-4) is refused before the copy exists,
+		// not silently left out of it.
+		if ( ! empty( $elementor_data ) ) {
+			$clone_refusal = Mcpwp_Elementor_Meta_Write::tree_refusal( $elementor_data );
+			if ( null !== $clone_refusal ) {
+				return $clone_refusal;
+			}
+		}
+
 		// #1032: a clone copies _elementor_data verbatim, bypassing
 		// save_elementor_data()/validate_and_fix_elements() entirely — so a
 		// Template/Global widget or Loop Grid/Carousel referencing a

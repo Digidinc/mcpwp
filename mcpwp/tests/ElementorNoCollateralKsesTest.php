@@ -806,7 +806,13 @@ final class ElementorNoCollateralKsesTest extends TestCase {
 		$this->set_elementor( self::PAGE_ID, $tree );
 
 		$this->assertTrue( $fired );
-		$this->assert_html_widgets_sanitized( self::TARGET_ID, 'a same-key write to another post during the re-write' );
+		// Not MCPWP's write: it gets exactly what Elementor's own callback
+		// gives it (review round 4) — never let through raw.
+		$this->assertSame(
+			array( self::kses( self::SCRIPT ), self::kses( self::STYLE ), self::kses( self::SVG ) ),
+			$this->html_widgets( self::TARGET_ID ),
+			'A same-key write to another post during the re-write gets Elementor\'s own sanitizer.'
+		);
 	}
 
 
@@ -1025,10 +1031,13 @@ final class ElementorNoCollateralKsesTest extends TestCase {
 
 		$this->assertStringNotContainsString( '<script', (string) self::find( $this->stored_tree( self::PAGE_ID ), 'sc82901' )['settings']['html'] );
 
-		// And an unchanged huge integer is still unchanged.
+		// Round 4: even an unchanged huge integer is ambiguous after the
+		// decode (a JSON number and a digits-only string both become the same
+		// PHP string), so its element counts as changed — fail closed.
 		$GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'] = $seed;
 		Mcpwp_Elementor_Meta_Write::update( self::PAGE_ID, '_elementor_data', $seed );
-		$this->assertSame( $seed, $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'] );
+		$this->assertStringNotContainsString( '<script', (string) self::find( $this->stored_tree( self::PAGE_ID ), 'sc82901' )['settings']['html'] );
+		$this->assertSame( self::STYLE, self::find( $this->stored_tree( self::PAGE_ID ), 'st82901' )['settings']['html'], 'Other elements are unaffected.' );
 	}
 
 	/**
@@ -1110,6 +1119,223 @@ final class ElementorNoCollateralKsesTest extends TestCase {
 		$this->assertStringNotContainsString( 'onerror', $html );
 		$this->assertStringNotContainsString( 'javascript:', $html );
 		$this->assertStringNotContainsString( '<svg', $html );
+		$this->assertSame( self::STYLE, self::find( $this->stored_tree( self::PAGE_ID ), 'st82901' )['settings']['html'] );
+	}
+
+	// ---------------------------------------------------------------------
+	// Review round 4: the comparison fails closed.
+	// ---------------------------------------------------------------------
+
+	/** The reviewer's stored element: benign html beside a 1e999 (INF). */
+	private function seed_inf_widget(): string {
+		$json = substr( wp_json_encode( self::tree() ), 0, -5 )
+			. ',{"id":"inf8291","elType":"widget","widgetType":"html","settings":{"html":"benign","_x":1e999},"elements":[]}]}]}]';
+		$this->assertTrue( is_infinite( json_decode( $json, true )[0]['elements'][0]['elements'][4]['settings']['_x'] ), 'precondition: 1e999 decodes to INF' );
+		$GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'] = $json;
+
+		return $json;
+	}
+
+	private function inf_payload(): string {
+		return substr( wp_json_encode( self::tree() ), 0, -5 )
+			. ',{"id":"inf8291","elType":"widget","widgetType":"html","settings":{"html":"<script>alert(document.domain)</script>","_x":1e999},"elements":[]}]}]}]';
+	}
+
+	private function assert_refused_and_unchanged( $result, string $before, string $label ): void {
+		$data = $this->data( $result );
+		$this->assertInstanceOf( WP_Error::class, $data, $label . ' is refused' );
+		$this->assertSame( 400, $data->get_error_data()['status'] ?? null, $label . ' answers 400' );
+		$this->assertSame( $before, $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'], $label . ': nothing was stored' );
+		$this->assertStringNotContainsString( 'alert(document.domain)', $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'] );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_the_inf_repro_is_refused_through_update(): void {
+		// Round 4, BLOCK 1: signature() encoded each element, INF made the
+		// encode fail, every such element signed as '' and vouched for any
+		// other — the script was stored raw and served.
+		$before = $this->seed_inf_widget();
+
+		$result = Mcpwp_Elementor_Meta_Write::update( self::PAGE_ID, '_elementor_data', $this->inf_payload() );
+
+		$this->assert_refused_and_unchanged( $result, $before, 'update()' );
+		$this->assertSame( 'elementor_data_non_finite_number', $result->get_error_code() );
+	}
+
+	public static function set_elementor_shapes(): array {
+		return array(
+			'string' => array( 'string' ),
+			'base64' => array( 'base64' ),
+			'array'  => array( 'array' ),
+		);
+	}
+
+	/**
+	 * @dataProvider set_elementor_shapes
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_the_inf_repro_is_refused_through_wp_set_elementor( string $shape ): void {
+		$before  = $this->seed_inf_widget();
+		$payload = $this->inf_payload();
+		$params  = array( 'id' => self::PAGE_ID );
+		if ( 'base64' === $shape ) {
+			$params['elementor_data_base64'] = base64_encode( $payload );
+		} elseif ( 'array' === $shape ) {
+			$params['elementor_data'] = json_decode( $payload, true );
+		} else {
+			$params['elementor_data'] = $payload;
+		}
+
+		$result = ( new Mcpwp_REST_Elementor() )->set_elementor_data( $this->rest_request( 'POST', '/mcpwp/v1/elementor/' . self::PAGE_ID, $params ) );
+
+		$this->assert_refused_and_unchanged( $result, $before, "wp_set_elementor ({$shape})" );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_the_inf_repro_is_refused_through_wp_edit_widget(): void {
+		$before = $this->seed_inf_widget();
+
+		$result = $this->edit_widget( self::PAGE_ID, 'inf8291', array( 'html' => '<script>alert(document.domain)</script>', '_x' => INF ) );
+
+		$this->assert_refused_and_unchanged( $result, $before, 'wp_edit_widget' );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_a_page_with_a_non_finite_number_is_not_cloned(): void {
+		$this->seed_inf_widget();
+		$posts = count( $GLOBALS['_mcpwp_test_posts'] );
+
+		$rest = ( new Mcpwp_REST_Pages() )->clone_page( $this->rest_request( 'POST', '/mcpwp/v1/pages/' . self::PAGE_ID . '/clone', array( 'id' => self::PAGE_ID ) ) );
+		$this->assertInstanceOf( WP_Error::class, $this->data( $rest ), '/pages/{id}/clone refuses' );
+
+		$pro = ( new Mcpwp_Elementor_Pro() )->clone_page( self::PAGE_ID, array( 'title' => 'b829 inf clone' ) );
+		$this->assertInstanceOf( WP_Error::class, $pro, 'wp_clone_elementor_page refuses' );
+		$this->assertSame( 'elementor_data_non_finite_number', $pro->get_error_code() );
+
+		$this->assertSame( $posts, count( $GLOBALS['_mcpwp_test_posts'] ), 'No copy was created.' );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_page_settings_with_a_non_finite_number_are_refused(): void {
+		$GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_page_settings'] = array( 'html' => 'benign', '_x' => INF );
+
+		$result = Mcpwp_Elementor_Meta_Write::update( self::PAGE_ID, '_elementor_page_settings', array( 'html' => '<script>x</script>', '_x' => INF ) );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'elementor_settings_non_finite_number', $result->get_error_code() );
+		$this->assertSame( 'benign', $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_page_settings']['html'] );
+
+		// The Pro custom-code sanitizer writes through the same door.
+		$snippet = 8295;
+		$GLOBALS['_mcpwp_test_posts'][ $snippet ] = $this->post( $snippet, 'elementor_snippet' );
+		$GLOBALS['_mcpwp_test_meta'][ $snippet ]['_elementor_page_settings'] = array( 'note' => '<html><body><script>x</script></body></html>', '_x' => INF );
+		require_once dirname( __DIR__ ) . '/includes/pro/api/class-mcpwp-rest-elementor-pro.php';
+		( new Mcpwp_REST_Elementor_Pro( new stdClass() ) )->sanitize_custom_code( $this->rest_request( 'POST', "/mcpwp/v1/elementor/custom-code/{$snippet}/sanitize", array( 'id' => $snippet ) ) );
+		$this->assertTrue( is_infinite( $GLOBALS['_mcpwp_test_meta'][ $snippet ]['_elementor_page_settings']['_x'] ), 'Nothing was rewritten.' );
+	}
+
+	public static function equality_cases(): array {
+		return array(
+			'1 vs 1.0'             => array( 1, 1.0, false ),
+			'"1" vs 1'             => array( '1', 1, false ),
+			'true vs 1'            => array( true, 1, false ),
+			'null vs ""'           => array( null, '', false ),
+			'false vs 0'           => array( false, 0, false ),
+			'-0.0 vs 0.0'          => array( -0.0, 0.0, false ),
+			'0.1 vs 0.1'           => array( 0.1, 0.1, true ),
+			'INF vs INF'           => array( INF, INF, false ),
+			'-INF vs -INF'         => array( -INF, -INF, false ),
+			'NAN vs NAN'           => array( NAN, NAN, false ),
+			'huge-int string'      => array( '12345678901234567890123', '12345678901234567890123', false ),
+			'in-range digits'      => array( '1234567890', '1234567890', true ),
+			'{} vs [] (as Elementor sees them)' => array( array(), array(), true ),
+			'map key order'        => array( array( 'a' => 1, 'b' => 2 ), array( 'b' => 2, 'a' => 1 ), true ),
+			'list order'           => array( array( 'x', 'y' ), array( 'y', 'x' ), false ),
+			'list vs map'          => array( array( 'x' ), array( 1 => 'x' ), false ),
+			'nested empties'       => array( array( 'a' => array() ), array( 'a' => '' ), false ),
+			'NFC vs NFD'           => array( "caf\u{00e9}", "cafe\u{0301}", false ),
+			'emoji equal'          => array( 'ok 🎉', 'ok 🎉', true ),
+			'object vs array'      => array( (object) array( 'a' => 1 ), array( 'a' => 1 ), false ),
+			'same stdClass'        => array( (object) array( 'a' => 1 ), (object) array( 'a' => 1 ), true ),
+			'object numeric prop'  => array( (object) array( '0' => 'x' ), array( 'x' ), false ),
+		);
+	}
+
+	/**
+	 * @dataProvider equality_cases
+	 */
+	public function test_equality_is_strict_and_fails_closed( $a, $b, bool $equal ): void {
+		// Round 4, design question: anything not provably the same value
+		// Elementor would see is different. Pure function, no WordPress state.
+		require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-elementor-meta-write.php';
+		$this->assertSame( $equal, Mcpwp_Elementor_Meta_Write::deep_equal( $a, $b ) );
+		$this->assertSame( $equal, Mcpwp_Elementor_Meta_Write::deep_equal( $b, $a ), 'symmetric' );
+	}
+
+	public static function odd_values(): array {
+		return array(
+			'INF'            => array( INF ),
+			'-INF'           => array( -INF ),
+			'NAN'            => array( NAN ),
+			'huge int'       => array( '99999999999999999999999' ),
+			'nested empties' => array( array( 'a' => array(), 'b' => array( array() ) ) ),
+			'unicode'        => array( "caf\u{00e9} 🎉 \u{202e}" ),
+			'-0.0'           => array( -0.0 ),
+			'null'           => array( null ),
+			'true'           => array( true ),
+		);
+	}
+
+	/**
+	 * @dataProvider odd_values
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_an_element_with_a_changed_string_is_never_stored_raw( $odd ): void {
+		// Round 4, property check: whatever odd value sits beside it, an
+		// element whose html changed is refused or sanitized — never raw.
+		$tree = self::tree();
+		$tree[0]['elements'][0]['elements'][1]['settings']['_x'] = $odd;
+		$GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'] = $tree; // array-stored: no encode needed for INF/NAN
+
+		$next = $tree;
+		$next[0]['elements'][0]['elements'][1]['settings']['html'] = '<script>window.__odd829=1</script>';
+		$result = Mcpwp_Elementor_Meta_Write::update( self::PAGE_ID, '_elementor_data', $next );
+
+		$stored = $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'];
+		$tree_now = is_string( $stored ) ? json_decode( $stored, true ) : $stored;
+		$html     = (string) ( $tree_now[0]['elements'][0]['elements'][1]['settings']['html'] ?? '' );
+		$this->assertStringNotContainsString( '__odd829', $html, is_wp_error( $result ) ? 'refused' : 'sanitized' );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_a_type_change_beside_a_script_makes_the_element_changed(): void {
+		// 1 → 1.0 (or "1") is a change: the element is judged as a whole.
+		$tree = self::tree();
+		$tree[0]['elements'][0]['elements'][1]['settings']['_x'] = 1;
+		$this->seed( self::PAGE_ID, $tree );
+
+		$json = str_replace( '"_x":1}', '"_x":1.0}', wp_json_encode( $tree ) );
+		$this->assertStringContainsString( '"_x":1.0', $json, 'precondition' );
+		Mcpwp_Elementor_Meta_Write::update( self::PAGE_ID, '_elementor_data', $json );
+
+		$this->assertStringNotContainsString( '<script', (string) self::find( $this->stored_tree( self::PAGE_ID ), 'sc82901' )['settings']['html'] );
 		$this->assertSame( self::STYLE, self::find( $this->stored_tree( self::PAGE_ID ), 'st82901' )['settings']['html'] );
 	}
 
