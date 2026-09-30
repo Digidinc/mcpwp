@@ -1062,13 +1062,16 @@ Key display settings are extracted per widget type (e.g., `title` for headings, 
 
 #### What an Elementor write stores (#829)
 
-Elementor 4.2+ registers `_elementor_data` and `_elementor_page_settings` with a sanitizer that, during a REST request by a user without `unfiltered_html` (every `mcpwp_api_agent` key), runs `wp_kses_post()` over every string in the value. Up to 3.14.10 that re-sanitized the whole document on every MCPWP write: editing one heading removed the `<style>`, `<script>` and `<svg>` of every html widget on the page.
+Elementor 4.2+ registers `_elementor_data` and `_elementor_page_settings` with a sanitizer that, for a user without `unfiltered_html` (every `mcpwp_api_agent` key), runs `wp_kses_post()` over every string in the value. It does so only for post types in `get_post_types_by_support( 'elementor' )`, and not at all below 4.2. Up to 3.14.10 that re-sanitized the whole document on every MCPWP write (editing one heading removed the `<style>`, `<script>` and `<svg>` of every html widget on the page), and on any other post type it sanitized nothing.
 
-Every MCPWP write of those keys now goes through one chokepoint (`Mcpwp_Elementor_Meta_Write`), string by string:
+Every MCPWP write of those keys now goes through one chokepoint (`Mcpwp_Elementor_Meta_Write`). MCPWP applies the policy itself, whatever the post type, Elementor version or route (REST, WebMCP, admin-AJAX chat, cron, WP-CLI):
 
-- **Anything the caller did not change** — and anything copied from content already on the site: the page being cloned, the template or part being applied, the section saved as a template, the snapshot a rollback restores — is stored byte-for-byte as it was.
-- **Anything the caller introduces** gets exactly what Elementor's sanitizer gives it for the caller's own capability, as before: for an API key, what `wp_kses_post()` keeps (a new `<script>` in an html widget is removed); for a user holding `unfiltered_html`, the bytes as sent. MCPWP's scoped `unfiltered_html` grant around `Document::save()` (#772) does not reach that decision.
-- The Kit's `custom_css` is stored as sent (`.a>.b` stays `.a>.b`) by `wp_upsert_kit_css_block`, `wp_set_kit_css` and the Pro kit settings. `storage_repaired: true` appears only when the first write still stored different bytes (another plugin's sanitizer, a host filter) and the row was rewritten directly; `storage_altered_chars` then lists the characters it had stored as HTML entities (for example `[">"]`).
+- **A principal holding `unfiltered_html`** (checked without MCPWP's own scoped grants) stores what it sends.
+- **Anyone else**, string by string:
+  - a string **unchanged in place** is stored byte-for-byte as it was. In place means the same post, the same element (id, `elType`, `widgetType`, and which occurrence of that id), the same setting path, and the same value as stored now. For page settings it means the same key path;
+  - the only other trusted source is MCPWP's own server-side **rollback snapshot of the same post**, bound the same way;
+  - everything else, whether new, edited, moved from another element, or copied from another post (clone, template/part/archetype apply, save-as-template), goes through `wp_kses_post()`. A copy made by an API key is a sanitized copy.
+- **The Kit's `custom_css`** is stored as sent (`.a>.b` stays `.a>.b`) by `wp_upsert_kit_css_block`, `wp_set_kit_css` and the Pro kit settings. No route stores `</style` in any case or spacing: the write is refused with 400 `kit_css_style_breakout` and nothing is saved. `storage_repaired: true` appears only when the first write still stored different bytes (another plugin's sanitizer, a host filter) and the row was rewritten directly; `storage_altered_chars` then lists the characters stored as HTML entities (for example `[">"]`).
 
 ---
 

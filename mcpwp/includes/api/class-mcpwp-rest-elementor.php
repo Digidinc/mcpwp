@@ -1253,7 +1253,7 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 			$updated = Mcpwp_Elementor_Element_Keys::normalize_json( $updated );
 		}
 
-		update_post_meta( $page_id, '_elementor_data', wp_slash( $updated ) );
+		Mcpwp_Elementor_Meta_Write::update( $page_id, '_elementor_data', wp_slash( $updated ) );
 
 		// Clear the same per-document caches Document::save() clears on a
 		// normal write — CSS file and element-render cache (#891). This path
@@ -1523,7 +1523,7 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 				if ( class_exists( 'Mcpwp_Elementor_Element_Keys' ) ) {
 					$encoded = Mcpwp_Elementor_Element_Keys::normalize_json( $encoded );
 				}
-				update_post_meta( $post_id, '_elementor_data', wp_slash( $encoded ) );
+				Mcpwp_Elementor_Meta_Write::update( $post_id, '_elementor_data', wp_slash( $encoded ) );
 				// Same per-document cache clear find_replace() does (#891) —
 				// this loop is the same bypass-of-Document::save() write path,
 				// once per matched post.
@@ -1838,16 +1838,17 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 			$settings['custom_css'] = $new_css;
 		}
 
+		$breakout = $this->kit_css_breakout_refusal( $settings['custom_css'] );
+		if ( null !== $breakout ) {
+			return $this->error_response_from_wp_error( $breakout );
+		}
+
 		// The Kit's custom_css is stored as sent: the same bytes a write key
 		// already stores through the blocks API below (#762), and in append
 		// mode the existing stylesheet rides in this same string — sanitizing
 		// it would escape every `>` of CSS the caller never touched (#829).
-		Mcpwp_Elementor_Meta_Write::with_sources(
-			array( $settings['custom_css'] ),
-			static function () use ( $kit_id, $settings ) {
-				update_post_meta( $kit_id, '_elementor_page_settings', $settings );
-			}
-		);
+		// What makes that safe is the refusal above: no `</style` ever.
+		Mcpwp_Elementor_Meta_Write::update( $kit_id, '_elementor_page_settings', $settings, array( 'raw_paths' => array( 'custom_css' ) ) );
 
 		// Clear Elementor CSS cache so the new kit CSS is regenerated.
 		if ( method_exists( \Elementor\Plugin::$instance->files_manager, 'clear_cache' ) ) {
@@ -1964,22 +1965,24 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 	 *
 	 * @param int    $kit_id Kit post ID.
 	 * @param string $css    Full custom_css value to store.
-	 * @return void
+	 * @return array{verified:bool,repaired:bool,altered_chars:string[]}|WP_Error
+	 *         WP_Error (400) when the CSS could end its <style> element; nothing written.
 	 */
 	private function set_kit_css_raw( $kit_id, $css ) {
+		$breakout = $this->kit_css_breakout_refusal( $css );
+		if ( null !== $breakout ) {
+			return $breakout;
+		}
+
 		$settings               = get_post_meta( $kit_id, '_elementor_page_settings', true );
 		$settings               = is_array( $settings ) ? $settings : array();
 		$settings['custom_css'] = $css;
 
 		// Stored as sent, past Elementor's REST meta sanitizer (#829): that
 		// sanitizer escaped `>` on every API write, so the repair below fired —
-		// and reported storage_repaired — on every write.
-		Mcpwp_Elementor_Meta_Write::with_sources(
-			array( $css ),
-			static function () use ( $kit_id, $settings ) {
-				update_post_meta( $kit_id, '_elementor_page_settings', $settings );
-			}
-		);
+		// and reported storage_repaired — on every write. custom_css is the one
+		// raw path; every other setting follows the caller's policy.
+		Mcpwp_Elementor_Meta_Write::update( $kit_id, '_elementor_page_settings', $settings, array( 'raw_paths' => array( 'custom_css' ) ) );
 
 		// Verify the exact bytes landed, and repair them if they did not.
 		//
@@ -2045,6 +2048,29 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 	 * @param string $stored   Bytes the row held.
 	 * @return string[] Characters, e.g. [">"]; empty when the difference was not escaping.
 	 */
+	/**
+	 * Refuse Kit CSS that could end the <style> element it is printed in.
+	 *
+	 * The Kit's custom_css is stored as sent (#762/#829) and Elementor prints
+	 * it inside a <style> element. `</style` — any case, any whitespace
+	 * between `<`, `/` and the name — ends that element, and whatever follows
+	 * is parsed as HTML: a script. CSS never needs the sequence.
+	 *
+	 * @param string $css Kit CSS as it would be stored.
+	 * @return WP_Error|null
+	 */
+	private function kit_css_breakout_refusal( $css ) {
+		if ( ! preg_match( '#<\s*/\s*style#i', (string) $css ) ) {
+			return null;
+		}
+
+		return new WP_Error(
+			'kit_css_style_breakout',
+			__( 'Kit CSS must not contain "</style" (in any letter case or spacing): the stylesheet is printed inside a <style> element, and that text would end it and let what follows run as HTML. Nothing was saved. Remove it and send the CSS again.', 'mcpwp' ),
+			array( 'status' => 400 )
+		);
+	}
+
 	private function escaped_characters( $intended, $stored ) {
 		$entities = array(
 			'>' => '&gt;',
@@ -2210,6 +2236,11 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 			);
 		}
 
+		$breakout = $this->kit_css_breakout_refusal( $css );
+		if ( null !== $breakout ) {
+			return $this->error_response_from_wp_error( $breakout );
+		}
+
 		$expected_hash = $request->get_param( 'expected_hash' );
 
 		$raw = $this->get_kit_css_raw();
@@ -2260,6 +2291,10 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 		}
 
 		$write = $this->set_kit_css_raw( $raw['kit_id'], $updated_css );
+
+		if ( is_wp_error( $write ) ) {
+			return $this->error_response_from_wp_error( $write );
+		}
 
 		if ( ! $write['verified'] ) {
 			return $this->error_response(
@@ -2333,7 +2368,10 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 		);
 		$updated_css = trim( (string) $updated_css ) . ( '' !== trim( (string) $updated_css ) ? "\n" : '' );
 
-		$this->set_kit_css_raw( $raw['kit_id'], $updated_css );
+		$write = $this->set_kit_css_raw( $raw['kit_id'], $updated_css );
+		if ( is_wp_error( $write ) ) {
+			return $this->error_response_from_wp_error( $write );
+		}
 
 		return $this->success_response(
 			array(

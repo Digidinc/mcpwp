@@ -1,34 +1,41 @@
 <?php
 /**
- * #829: an Elementor write through MCPWP must never strip what the caller did
- * not change.
+ * #829: an Elementor write by MCPWP stores what the caller did not change in
+ * place, byte-for-byte, and sanitizes what the caller introduces by MCPWP's own
+ * capability policy — whatever the post type or Elementor version.
  *
  * Production, 2026-09-30: MCPWP 3.13.0–3.14.10 wrote `_elementor_data` with
  * update_post_meta() inside a REST request. Elementor 4.2+ registers that key
- * (and `_elementor_page_settings`) for REST with a sanitize_callback that runs
- * wp_kses_post() over every string when the user lacks `unfiltered_html`, and
- * update_metadata() runs it on every write. One wp_edit_widget on the footer
- * removed the `<style>` of an unrelated html widget; an edit to the header's
- * nav removed the PostHog `<script>` and the logo's `<svg>`.
+ * (and `_elementor_page_settings`) with a sanitize_callback that runs
+ * wp_kses_post() over every string when the user lacks `unfiltered_html`, on
+ * every write. One wp_edit_widget on the footer removed the `<style>` of an
+ * unrelated html widget; an edit to the header's nav removed the PostHog
+ * `<script>` and the logo's `<svg>`. And where Elementor registers no callback
+ * (a post type without Elementor support, Elementor below 4.2) an API key's
+ * raw `<script>` was stored as sent.
  *
- * What is pinned here, through the controllers a REST request reaches, for an
- * API user without `unfiltered_html`:
- *  - three html widgets carrying `<script>`, `<style>` and `<svg>` stay
- *    byte-identical across wp_edit_widget, wp_edit_section, wp_patch_elementor,
- *    wp_set_elementor, find/replace on unrelated text, template apply, part
- *    insert, clone, save-section-as-template and a rollback;
- *  - content the caller introduces still gets exactly what Elementor's
- *    sanitizer gives it for that caller (and raw for a user who holds
- *    `unfiltered_html`) — including while MCPWP's own #772 grant is active;
- *  - outside an MCPWP request Elementor's behaviour is untouched.
+ * Pinned here, for an API user without `unfiltered_html`:
+ *  - in place: three html widgets carrying `<script>`, `<style>` and `<svg>`
+ *    stay byte-identical across wp_edit_widget, wp_edit_section, patch,
+ *    wp_set_elementor, find/replace on unrelated text, a doubly-registered
+ *    sanitizer, a writer outside any REST route, and a rollback;
+ *  - nothing is known except in place: a string stored in another element
+ *    (review round 1, BLOCK 1), in another widget type at the same id, or on
+ *    another post (clone, template apply, part insert, save-as-template) is
+ *    sanitized — including where Elementor registered no sanitizer at all
+ *    (BLOCK 2);
+ *  - a user who holds `unfiltered_html` stores raw, and MCPWP's own #772
+ *    grant never counts as holding it;
+ *  - Kit CSS: `.a>.b` stored as sent with no repair reported, and no route
+ *    stores `</style` (WARN 1).
  *
  * `elementor_sanitize_data()` below is Elementor 4.3.2's callback
- * (modules/wp-rest/classes/elementor-post-meta.php) with a kses stand-in that
- * does to these fixtures what wp_kses_post() does on a real site: removes the
- * script/style/svg/path tags, keeps their text, and escapes a bare `>`.
- *
- * Each test runs in its own process: the writer checks ELEMENTOR_VERSION,
- * and a constant cannot be undefined for the tests that run after (#757).
+ * (modules/wp-rest/classes/elementor-post-meta.php), with a kses stand-in that
+ * does to these fixtures what wp_kses_post() does on a real site. MCPWP's own
+ * policy calls wp_kses_post() (the bootstrap's double), so its output is
+ * asserted against that; the rig proves the real one. Each test
+ * runs in its own process: the writer checks ELEMENTOR_VERSION, and a constant
+ * cannot be undefined for the tests that follow (#757).
  *
  * @package MCPWP
  */
@@ -39,31 +46,22 @@ require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-elementor.php'
 require_once dirname( __DIR__ ) . '/includes/pro/core/class-mcpwp-elementor-pro.php';
 require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-action-log.php';
 
-/**
- * @runTestsInSeparateProcesses
- * @preserveGlobalState disabled
- */
 final class ElementorNoCollateralKsesTest extends TestCase {
 
 	private const PAGE_ID     = 8291;
 	private const TEMPLATE_ID = 8292;
 	private const TARGET_ID   = 8293;
+	private const POST_ID     = 8294;
+	private const KIT_ID      = 4;
 	private const API_USER    = 829;
 
 	private const SCRIPT = '<script>window.__ph829=1;</script>';
 	private const STYLE  = '<style>.ftr>.x{color:red}</style>';
 	private const SVG    = '<svg viewBox="0 0 10 10"><path d="M0 0L10 10"/></svg>';
 
-	/** @var array */
-	private $saved = array();
-
 	protected function setUp(): void {
 		if ( ! defined( 'ELEMENTOR_VERSION' ) ) {
 			define( 'ELEMENTOR_VERSION', '4.3.2' );
-		}
-
-		foreach ( array( '_mcpwp_test_meta', '_mcpwp_test_posts', '_mcpwp_test_registered_meta', 'mcpwp_test_current_user', 'mcpwp_test_user_caps', 'wp', 'mcpwp_test_filters' ) as $global ) {
-			$this->saved[ $global ] = $GLOBALS[ $global ] ?? null;
 		}
 
 		$GLOBALS['_mcpwp_test_meta']            = array();
@@ -72,39 +70,36 @@ final class ElementorNoCollateralKsesTest extends TestCase {
 			self::PAGE_ID     => $this->post( self::PAGE_ID, 'page' ),
 			self::TEMPLATE_ID => $this->post( self::TEMPLATE_ID, 'elementor_library' ),
 			self::TARGET_ID   => $this->post( self::TARGET_ID, 'page' ),
+			self::POST_ID     => $this->post( self::POST_ID, 'post' ),
 		);
 
 		// The mcpwp_api_agent user: no unfiltered_html.
 		$this->as_user( false );
 
-		// Every MCPWP call is a REST request under /mcpwp/.
+		// A REST request, though the policy no longer looks at the route.
 		$GLOBALS['wp'] = (object) array( 'query_vars' => array( 'rest_route' => '/mcpwp/v1/mcp' ) );
 
 		// The plugin boots the chokepoint at load, before rest_api_init.
-		if ( class_exists( 'Mcpwp_Elementor_Meta_Write' ) && false === has_filter( 'update_post_metadata', array( 'Mcpwp_Elementor_Meta_Write', 'on_update_post_metadata' ) ) ) {
+		if ( false === has_filter( 'update_post_metadata', array( 'Mcpwp_Elementor_Meta_Write', 'on_update_post_metadata' ) ) ) {
 			Mcpwp_Elementor_Meta_Write::boot();
 		}
 
-		// Then Elementor registers its meta on rest_api_init.
-		register_meta( 'post', '_elementor_data', array( 'object_subtype' => 'page', 'sanitize_callback' => array( self::class, 'elementor_sanitize_data' ) ) );
-		register_meta( 'post', '_elementor_page_settings', array( 'object_subtype' => 'page', 'sanitize_callback' => array( self::class, 'elementor_sanitize_settings' ) ) );
+		// Then Elementor registers its meta on rest_api_init — for pages and
+		// its library, as get_post_types_by_support( 'elementor' ) does by
+		// default; not for posts.
+		$this->elementor_registers( 'page' );
 
 		$this->seed( self::PAGE_ID );
-	}
-
-	protected function tearDown(): void {
-		foreach ( $this->saved as $global => $value ) {
-			if ( null === $value ) {
-				unset( $GLOBALS[ $global ] );
-			} else {
-				$GLOBALS[ $global ] = $value;
-			}
-		}
 	}
 
 	// ---------------------------------------------------------------------
 	// Elementor 4.3.2's sanitize callbacks, and a kses stand-in.
 	// ---------------------------------------------------------------------
+
+	private function elementor_registers( string $subtype ): void {
+		register_meta( 'post', '_elementor_data', array( 'object_subtype' => $subtype, 'sanitize_callback' => array( self::class, 'elementor_sanitize_data' ) ) );
+		register_meta( 'post', '_elementor_page_settings', array( 'object_subtype' => $subtype, 'sanitize_callback' => array( self::class, 'elementor_sanitize_settings' ) ) );
+	}
 
 	public static function elementor_sanitize_data( $value ) {
 		if ( current_user_can( 'unfiltered_html' ) ) {
@@ -173,7 +168,7 @@ final class ElementorNoCollateralKsesTest extends TestCase {
 	}
 
 	private function as_user( bool $unfiltered_html ): void {
-		$GLOBALS['mcpwp_test_current_user']                   = self::API_USER;
+		$GLOBALS['mcpwp_test_current_user']                = self::API_USER;
 		$GLOBALS['mcpwp_test_user_caps'][ self::API_USER ] = array(
 			'edit_posts'      => true,
 			'edit_pages'      => true,
@@ -192,32 +187,40 @@ final class ElementorNoCollateralKsesTest extends TestCase {
 		);
 	}
 
-	private static function tree(): array {
+	private static function section( string $id, string $column_id, array $widgets ): array {
 		return array(
-			array(
-				'id'       => 'sec8291',
-				'elType'   => 'section',
-				'settings' => array(),
-				'elements' => array(
-					array(
-						'id'       => 'col8291',
-						'elType'   => 'column',
-						'settings' => array( '_column_size' => 100 ),
-						'elements' => array(
-							self::widget( 'hd82901', 'heading', array( 'title' => 'Hello 829' ) ),
-							self::widget( 'sc82901', 'html', array( 'html' => self::SCRIPT ) ),
-							self::widget( 'st82901', 'html', array( 'html' => self::STYLE ) ),
-							self::widget( 'sv82901', 'html', array( 'html' => self::SVG ) ),
-						),
-					),
+			'id'       => $id,
+			'elType'   => 'section',
+			'settings' => array(),
+			'elements' => array(
+				array(
+					'id'       => $column_id,
+					'elType'   => 'column',
+					'settings' => array( '_column_size' => 100 ),
+					'elements' => $widgets,
 				),
 			),
 		);
 	}
 
+	private static function tree(): array {
+		return array(
+			self::section(
+				'sec8291',
+				'col8291',
+				array(
+					self::widget( 'hd82901', 'heading', array( 'title' => 'Hello 829' ) ),
+					self::widget( 'sc82901', 'html', array( 'html' => self::SCRIPT ) ),
+					self::widget( 'st82901', 'html', array( 'html' => self::STYLE ) ),
+					self::widget( 'sv82901', 'html', array( 'html' => self::SVG ) ),
+				)
+			),
+		);
+	}
+
 	/** Stored raw, as an admin in the Elementor editor leaves it. */
-	private function seed( int $post_id ): void {
-		$GLOBALS['_mcpwp_test_meta'][ $post_id ]['_elementor_data']      = wp_json_encode( self::tree() );
+	private function seed( int $post_id, ?array $tree = null ): void {
+		$GLOBALS['_mcpwp_test_meta'][ $post_id ]['_elementor_data']      = wp_json_encode( $tree ?? self::tree() );
 		$GLOBALS['_mcpwp_test_meta'][ $post_id ]['_elementor_edit_mode'] = 'builder';
 	}
 
@@ -244,7 +247,6 @@ final class ElementorNoCollateralKsesTest extends TestCase {
 		return null;
 	}
 
-	/** The html widgets, found by their html (ids may be regenerated on a copy). */
 	private function html_widgets( int $post_id ): array {
 		$out  = array();
 		$walk = static function ( array $elements ) use ( &$walk, &$out ) {
@@ -268,6 +270,14 @@ final class ElementorNoCollateralKsesTest extends TestCase {
 		);
 	}
 
+	private function assert_html_widgets_sanitized( int $post_id, string $after ): void {
+		$this->assertSame(
+			array( wp_kses_post( self::SCRIPT ), wp_kses_post( self::STYLE ), wp_kses_post( self::SVG ) ),
+			$this->html_widgets( $post_id ),
+			"After {$after}, content that is not unchanged in place is sanitized for this caller."
+		);
+	}
+
 	private function rest_request( string $method, string $route, array $params ): WP_REST_Request {
 		$request = new WP_REST_Request( $method, $route );
 		foreach ( $params as $key => $value ) {
@@ -277,29 +287,48 @@ final class ElementorNoCollateralKsesTest extends TestCase {
 		return $request;
 	}
 
+	private function data( $result ) {
+		return $result instanceof WP_REST_Response ? $result->get_data() : $result;
+	}
+
 	private function assert_ok( $result, string $label ): void {
-		$data = $result instanceof WP_REST_Response ? $result->get_data() : $result;
+		$data = $this->data( $result );
 		$this->assertNotInstanceOf( WP_Error::class, $data, $label . ': ' . ( $data instanceof WP_Error ? $data->get_error_message() : '' ) );
 	}
 
-	// ---------------------------------------------------------------------
-	// No collateral damage.
-	// ---------------------------------------------------------------------
-
-	public function test_edit_widget_on_a_heading_keeps_every_html_widget(): void {
-		$controller = new Mcpwp_REST_Elementor();
-		$result     = $controller->edit_widget(
-			$this->rest_request( 'POST', '/mcpwp/v1/elementor/' . self::PAGE_ID . '/edit-widget', array( 'id' => self::PAGE_ID, 'widget_id' => 'hd82901', 'settings' => array( 'title' => 'Edited 829' ) ) )
+	private function edit_widget( int $post_id, string $widget_id, array $settings ) {
+		return ( new Mcpwp_REST_Elementor() )->edit_widget(
+			$this->rest_request( 'POST', "/mcpwp/v1/elementor/{$post_id}/edit-widget", array( 'id' => $post_id, 'widget_id' => $widget_id, 'settings' => $settings ) )
 		);
+	}
 
-		$this->assert_ok( $result, 'edit_widget' );
+	private function set_elementor( int $post_id, array $tree ) {
+		return ( new Mcpwp_REST_Elementor() )->set_elementor_data(
+			$this->rest_request( 'POST', "/mcpwp/v1/elementor/{$post_id}", array( 'id' => $post_id, 'elementor_data' => wp_json_encode( $tree ) ) )
+		);
+	}
+
+	// ---------------------------------------------------------------------
+	// In place: no collateral damage.
+	// ---------------------------------------------------------------------
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_edit_widget_on_a_heading_keeps_every_html_widget(): void {
+		$this->assert_ok( $this->edit_widget( self::PAGE_ID, 'hd82901', array( 'title' => 'Edited 829' ) ), 'edit_widget' );
+
 		$this->assertSame( 'Edited 829', self::find( $this->stored_tree( self::PAGE_ID ), 'hd82901' )['settings']['title'] );
 		$this->assert_html_widgets_intact( self::PAGE_ID, 'wp_edit_widget on the heading' );
 	}
 
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
 	public function test_edit_section_keeps_every_html_widget(): void {
-		$controller = new Mcpwp_REST_Elementor();
-		$result     = $controller->edit_section(
+		$result = ( new Mcpwp_REST_Elementor() )->edit_section(
 			$this->rest_request( 'POST', '/mcpwp/v1/elementor/' . self::PAGE_ID . '/edit-section', array( 'id' => self::PAGE_ID, 'section_index' => 0, 'settings' => array( 'background_color' => '#eeeeee' ) ) )
 		);
 
@@ -308,6 +337,10 @@ final class ElementorNoCollateralKsesTest extends TestCase {
 		$this->assert_html_widgets_intact( self::PAGE_ID, 'wp_edit_section' );
 	}
 
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
 	public function test_patch_keeps_every_html_widget(): void {
 		// The /patch route hands its params straight to this method.
 		$result = ( new Mcpwp_Elementor_Basic() )->patch_elementor(
@@ -329,23 +362,25 @@ final class ElementorNoCollateralKsesTest extends TestCase {
 		$this->assert_html_widgets_intact( self::PAGE_ID, 'wp_patch_elementor' );
 	}
 
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
 	public function test_set_elementor_resending_the_html_widgets_keeps_them(): void {
 		$tree = self::tree();
 		$tree[0]['elements'][0]['elements'][0]['settings']['title'] = 'Set 829';
 
-		$controller = new Mcpwp_REST_Elementor();
-		$result     = $controller->set_elementor_data(
-			$this->rest_request( 'POST', '/mcpwp/v1/elementor/' . self::PAGE_ID, array( 'id' => self::PAGE_ID, 'elementor_data' => wp_json_encode( $tree ) ) )
-		);
-
-		$this->assert_ok( $result, 'set_elementor' );
+		$this->assert_ok( $this->set_elementor( self::PAGE_ID, $tree ), 'set_elementor' );
 		$this->assertSame( 'Set 829', self::find( $this->stored_tree( self::PAGE_ID ), 'hd82901' )['settings']['title'] );
 		$this->assert_html_widgets_intact( self::PAGE_ID, 'wp_set_elementor with the html widgets resent unchanged' );
 	}
 
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
 	public function test_find_replace_on_unrelated_text_keeps_every_html_widget(): void {
-		$controller = new Mcpwp_REST_Elementor();
-		$result     = $controller->find_replace(
+		$result = ( new Mcpwp_REST_Elementor() )->find_replace(
 			$this->rest_request( 'POST', '/mcpwp/v1/elementor/find-replace', array( 'id' => self::PAGE_ID, 'search' => 'Hello 829', 'replace' => 'Howdy 829' ) )
 		);
 
@@ -354,60 +389,60 @@ final class ElementorNoCollateralKsesTest extends TestCase {
 		$this->assert_html_widgets_intact( self::PAGE_ID, 'find/replace on the heading text' );
 	}
 
-	public function test_applying_a_template_stores_its_html_widgets_as_the_template_holds_them(): void {
-		$this->seed( self::TEMPLATE_ID );
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_a_key_registered_twice_still_keeps_every_html_widget(): void {
+		// Elementor registers its meta on every rest_api_init, so the sanitize
+		// hook can carry two wrapped copies of its callback.
+		$first = $GLOBALS['_mcpwp_test_registered_meta']['_elementor_data']['sanitize_callback'];
+		add_filter( 'sanitize_post_meta__elementor_data_for_page', $first, 10, 4 );
+		$this->elementor_registers( 'page' );
 
-		$result = ( new Mcpwp_Elementor_Pro() )->apply_template_to_page( self::TARGET_ID, self::TEMPLATE_ID );
+		$this->edit_widget( self::PAGE_ID, 'hd82901', array( 'title' => 'Twice 829' ) );
 
-		$this->assert_ok( $result, 'apply_template_to_page' );
-		$this->assert_html_widgets_intact( self::TARGET_ID, 'wp_apply_elementor_template' );
+		$this->assertSame( 'Twice 829', self::find( $this->stored_tree( self::PAGE_ID ), 'hd82901' )['settings']['title'] );
+		$this->assert_html_widgets_intact( self::PAGE_ID, 'a write through a doubly-registered sanitizer' );
 	}
 
-	public function test_inserting_a_part_stores_its_html_widgets_as_the_part_holds_them(): void {
-		$this->seed( self::TEMPLATE_ID );
-		$GLOBALS['_mcpwp_test_meta'][ self::TEMPLATE_ID ]['_elementor_template_type'] = 'section';
-		$GLOBALS['_mcpwp_test_meta'][ self::TEMPLATE_ID ]['_mcpwp_is_part']           = 'yes';
-		$GLOBALS['_mcpwp_test_meta'][ self::TARGET_ID ]['_elementor_data']            = '[]';
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_a_writer_outside_any_rest_route_keeps_every_html_widget(): void {
+		// Review round 1, WARN 2: WebMCP, admin-AJAX chat, cron and WP-CLI are
+		// not /mcpwp/ REST routes. The policy follows the writer, not the
+		// route — here a WebMCP-style dispatch with no REST route at all.
+		unset( $GLOBALS['wp'] );
+		$previous = class_exists( 'Mcpwp_WebMCP' ) ? Mcpwp_WebMCP::begin_dispatch( self::API_USER ) : 0;
 
-		$pro = new class() extends Mcpwp_Elementor_Pro {
-			public function get_part( $part_id ) {
-				return array(
-					'id'             => (int) $part_id,
-					'elementor_data' => get_post_meta( (int) $part_id, '_elementor_data', true ),
-				);
+		try {
+			$result = ( new Mcpwp_Elementor_Basic() )->edit_widget( self::PAGE_ID, 'hd82901', array( 'title' => 'Dispatched 829' ) );
+		} finally {
+			if ( class_exists( 'Mcpwp_WebMCP' ) ) {
+				Mcpwp_WebMCP::end_dispatch( $previous );
 			}
-		};
+		}
 
-		$result = $pro->insert_part_into_page( self::TEMPLATE_ID, self::TARGET_ID, 'end' );
-
-		$this->assert_ok( $result, 'insert_part_into_page' );
-		$this->assert_html_widgets_intact( self::TARGET_ID, 'wp_apply_elementor_part (insert)' );
+		$this->assert_ok( $result, 'edit_widget outside REST' );
+		$this->assertSame( 'Dispatched 829', self::find( $this->stored_tree( self::PAGE_ID ), 'hd82901' )['settings']['title'] );
+		$this->assert_html_widgets_intact( self::PAGE_ID, 'a write made outside any REST route' );
 	}
 
-	public function test_cloning_a_page_stores_its_html_widgets_as_the_source_holds_them(): void {
-		$result = ( new Mcpwp_Elementor_Pro() )->clone_page( self::PAGE_ID, array( 'title' => 'b829 clone' ) );
-
-		$this->assert_ok( $result, 'clone_page' );
-		$this->assert_html_widgets_intact( (int) $result['id'], 'wp_clone_elementor_page' );
-		$this->assert_html_widgets_intact( self::PAGE_ID, 'wp_clone_elementor_page (source)' );
-	}
-
-	public function test_saving_a_section_as_a_template_stores_its_html_widgets_as_the_page_holds_them(): void {
-		$result = ( new Mcpwp_Elementor_Pro() )->save_section_as_template( self::PAGE_ID, 'sec8291', 'b829 section' );
-
-		$this->assert_ok( $result, 'save_section_as_template' );
-		$this->assert_html_widgets_intact( (int) $result['template_id'], 'wp_save_section_as_template' );
-	}
-
-	public function test_a_rollback_restores_the_snapshot_as_it_was(): void {
-		// The page as a bad write left it (production, pre-fix): script body
-		// as text, style and svg gone. The snapshot holds what it was before.
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_a_rollback_restores_the_snapshot_of_the_same_post(): void {
+		// The page as a bad write left it: script body as text, style and svg
+		// gone. The server-side snapshot holds what it was before.
 		$stripped = self::tree();
 		foreach ( array( 1, 2, 3 ) as $i ) {
 			$html = $stripped[0]['elements'][0]['elements'][ $i ]['settings']['html'];
 			$stripped[0]['elements'][0]['elements'][ $i ]['settings']['html'] = self::kses( $html );
 		}
-		$GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'] = wp_json_encode( $stripped );
+		$this->seed( self::PAGE_ID, $stripped );
 
 		$method = new ReflectionMethod( Mcpwp_Action_Log::class, 'apply_snapshot' );
 		$method->setAccessible( true );
@@ -424,6 +459,10 @@ final class ElementorNoCollateralKsesTest extends TestCase {
 		$this->assert_html_widgets_intact( self::PAGE_ID, 'an action-log rollback' );
 	}
 
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
 	public function test_page_settings_the_caller_did_not_change_are_kept(): void {
 		$GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_page_settings'] = array(
 			'custom_css' => 'selector .a > .b{color:red}',
@@ -432,7 +471,7 @@ final class ElementorNoCollateralKsesTest extends TestCase {
 
 		$settings               = get_post_meta( self::PAGE_ID, '_elementor_page_settings', true );
 		$settings['hide_title'] = 'no';
-		update_post_meta( self::PAGE_ID, '_elementor_page_settings', $settings );
+		Mcpwp_Elementor_Meta_Write::update( self::PAGE_ID, '_elementor_page_settings', $settings );
 
 		$this->assertSame(
 			array(
@@ -443,35 +482,302 @@ final class ElementorNoCollateralKsesTest extends TestCase {
 		);
 	}
 
-	public function test_a_key_registered_twice_still_keeps_every_html_widget(): void {
-		// Found on the rig: Elementor registers its meta on every
-		// rest_api_init, so the sanitize hook can carry two wrapped copies of
-		// its callback. The second is handed the first's output; what the
-		// caller sent must still be what the merge compares against.
-		$first = $GLOBALS['_mcpwp_test_registered_meta']['_elementor_data']['sanitize_callback'];
-		add_filter( 'sanitize_post_meta__elementor_data_for_page', $first, 10, 4 );
-		register_meta( 'post', '_elementor_data', array( 'object_subtype' => 'page', 'sanitize_callback' => array( self::class, 'elementor_sanitize_data' ) ) );
-
-		$controller = new Mcpwp_REST_Elementor();
-		$controller->edit_widget(
-			$this->rest_request( 'POST', '/mcpwp/v1/elementor/' . self::PAGE_ID . '/edit-widget', array( 'id' => self::PAGE_ID, 'widget_id' => 'hd82901', 'settings' => array( 'title' => 'Twice 829' ) ) )
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_when_nothing_is_introduced_the_callers_bytes_are_stored(): void {
+		// Unicode, emoji, backslashes, dynamic tags and globals, all unedited:
+		// the stored text is exactly the text sent, not a re-encoding.
+		$tree   = self::tree();
+		$tree[] = self::section(
+			'sec8292',
+			'col8292',
+			array(
+				self::widget(
+					'tx82902',
+					'text-editor',
+					array(
+						'editor'      => 'Café 🎉 C:\\path\\to <b>bold</b>',
+						'__dynamic__' => array( 'link' => '[elementor-tag id="1a2b3c4" name="post-url" settings="%7B%22a%22%3A1%7D"]' ),
+						'__globals__' => array( 'text_color' => 'globals/colors?id=primary' ),
+					)
+				),
+			)
 		);
+		$json = wp_json_encode( $tree, JSON_UNESCAPED_UNICODE );
+		$GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'] = $json;
 
-		$this->assertSame( 'Twice 829', self::find( $this->stored_tree( self::PAGE_ID ), 'hd82901' )['settings']['title'] );
-		$this->assert_html_widgets_intact( self::PAGE_ID, 'a write through a doubly-registered sanitizer' );
+		Mcpwp_Elementor_Meta_Write::update( self::PAGE_ID, '_elementor_data', wp_slash( $json ) );
+
+		$this->assertSame( $json, $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'] );
+	}
+
+	/**
+	 * Every MCPWP writer of these keys goes through the chokepoint: a raw
+	 * update_post_meta()/add_post_meta() of either key anywhere else in the
+	 * plugin would store past the policy (or re-sanitize the whole document).
+	 */
+	public function test_no_writer_of_these_keys_bypasses_the_chokepoint(): void {
+		$root     = dirname( __DIR__ ) . '/includes';
+		$offences = array();
+		$files    = new RecursiveIteratorIterator( new RecursiveDirectoryIterator( $root, FilesystemIterator::SKIP_DOTS ) );
+
+		foreach ( $files as $file ) {
+			if ( 'php' !== $file->getExtension() || 'class-mcpwp-elementor-meta-write.php' === $file->getFilename() ) {
+				continue;
+			}
+			foreach ( file( $file->getPathname() ) as $n => $line ) {
+				if ( preg_match( "#\\b(update_post_meta|add_post_meta|update_metadata|add_metadata)\\s*\\([^;]*('_elementor_data'|'_elementor_page_settings'|self::META_KEY)#", $line ) ) {
+					if ( false !== strpos( $line, 'Mcpwp_Elementor_Meta_Write::' ) ) {
+						continue;
+					}
+					$offences[] = substr( $file->getPathname(), strlen( $root ) + 1 ) . ':' . ( $n + 1 ) . ': ' . trim( $line );
+				}
+			}
+		}
+
+		$this->assertSame( array(), $offences, 'Write these keys with Mcpwp_Elementor_Meta_Write::update() or inside as_writer() (#829).' );
 	}
 
 	// ---------------------------------------------------------------------
-	// Kit CSS (#761/#762): byte-for-byte, and a repair only when one happened.
+	// Nothing is known except in place.
 	// ---------------------------------------------------------------------
 
-	private const KIT_ID = 4;
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_a_stored_string_moved_into_another_element_is_sanitized(): void {
+		// Review round 1, BLOCK 1: an admin's code-highlight widget prints this
+		// script as text. The same string in an html widget executes.
+		$code = '<script>window.__rv1083move=1</script>';
+		$tree = self::tree();
+		$tree[0]['elements'][0]['elements'][] = self::widget( 'cd82901', 'code-highlight', array( 'code' => $code ) );
+		$this->seed( self::PAGE_ID, $tree );
+
+		$tree[0]['elements'][0]['elements'][] = self::widget( 'htm0001', 'html', array( 'html' => $code ) );
+		$this->set_elementor( self::PAGE_ID, $tree );
+
+		$stored = $this->stored_tree( self::PAGE_ID );
+		$this->assertSame( wp_kses_post( $code ), self::find( $stored, 'htm0001' )['settings']['html'], 'Not in place: sanitized.' );
+		$this->assertStringNotContainsString( '<script', self::find( $stored, 'htm0001' )['settings']['html'] );
+		$this->assertSame( $code, self::find( $stored, 'cd82901' )['settings']['code'], 'The admin widget itself is untouched.' );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_the_same_id_as_another_widget_type_is_not_in_place(): void {
+		// Keeping an element's id and setting path while changing what kind of
+		// widget reads it changes what the string does.
+		$code = '<script>window.__retype829=1</script>';
+		$tree = self::tree();
+		$tree[0]['elements'][0]['elements'][] = self::widget( 'rt82901', 'custom-inert', array( 'html' => $code ) );
+		$this->seed( self::PAGE_ID, $tree );
+
+		$last                                 = count( $tree[0]['elements'][0]['elements'] ) - 1;
+		$tree[0]['elements'][0]['elements'][ $last ]['widgetType'] = 'html';
+		$this->set_elementor( self::PAGE_ID, $tree );
+
+		$stored = $this->stored_tree( self::PAGE_ID );
+		$this->assertSame( wp_kses_post( $code ), self::find( $stored, 'rt82901' )['settings']['html'] );
+		$this->assertSame( self::SCRIPT, self::find( $stored, 'sc82901' )['settings']['html'] );
+		$this->assertSame( self::STYLE, self::find( $stored, 'st82901' )['settings']['html'] );
+		$this->assertSame( self::SVG, self::find( $stored, 'sv82901' )['settings']['html'] );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_a_raw_script_on_a_type_elementor_does_not_sanitize_is_sanitized(): void {
+		// Review round 1, BLOCK 2 (a hole on main): Elementor registers its
+		// sanitizer only for get_post_types_by_support( 'elementor' ), and not
+		// at all below 4.2. MCPWP applies the policy itself.
+		$this->seed( self::POST_ID, array() );
+
+		$this->assert_ok( $this->set_elementor( self::POST_ID, self::tree() ), 'set_elementor on a post' );
+
+		$this->assert_html_widgets_sanitized( self::POST_ID, 'wp_set_elementor on a post type without Elementor\'s sanitizer' );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_block_2_chain_save_as_template_then_apply_stays_sanitized(): void {
+		// The chain the review built: raw script stored on a type Elementor
+		// does not sanitize (here, as a pre-existing row), saved as a
+		// template, applied to a page. Every copy is a write by this key.
+		$this->seed( self::POST_ID );
+
+		$saved = ( new Mcpwp_Elementor_Pro() )->save_section_as_template( self::POST_ID, 'sec8291', 'b829 section' );
+		$this->assert_ok( $saved, 'save_section_as_template' );
+		$this->assert_html_widgets_sanitized( (int) $saved['template_id'], 'wp_save_section_as_template' );
+
+		$applied = ( new Mcpwp_Elementor_Pro() )->apply_template_to_page( self::TARGET_ID, (int) $saved['template_id'] );
+		$this->assert_ok( $applied, 'apply_template_to_page' );
+		$this->assert_html_widgets_sanitized( self::TARGET_ID, 'wp_apply_elementor_template of that template' );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_applying_a_template_is_a_sanitized_copy_for_a_key(): void {
+		$this->seed( self::TEMPLATE_ID );
+
+		$this->assert_ok( ( new Mcpwp_Elementor_Pro() )->apply_template_to_page( self::TARGET_ID, self::TEMPLATE_ID ), 'apply_template_to_page' );
+
+		$this->assert_html_widgets_sanitized( self::TARGET_ID, 'wp_apply_elementor_template' );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_inserting_a_part_is_a_sanitized_copy_for_a_key(): void {
+		$this->seed( self::TEMPLATE_ID );
+		$this->seed( self::TARGET_ID, array() );
+
+		$pro = new class() extends Mcpwp_Elementor_Pro {
+			public function get_part( $part_id ) {
+				return array(
+					'id'             => (int) $part_id,
+					'elementor_data' => get_post_meta( (int) $part_id, '_elementor_data', true ),
+				);
+			}
+		};
+
+		$this->assert_ok( $pro->insert_part_into_page( self::TEMPLATE_ID, self::TARGET_ID, 'end' ), 'insert_part_into_page' );
+		$this->assert_html_widgets_sanitized( self::TARGET_ID, 'wp_apply_elementor_part (insert)' );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_cloning_a_page_is_a_sanitized_copy_for_a_key(): void {
+		$result = ( new Mcpwp_Elementor_Pro() )->clone_page( self::PAGE_ID, array( 'title' => 'b829 clone' ) );
+
+		$this->assert_ok( $result, 'clone_page' );
+		$this->assert_html_widgets_sanitized( (int) $result['id'], 'wp_clone_elementor_page (the copy)' );
+		$this->assert_html_widgets_intact( self::PAGE_ID, 'wp_clone_elementor_page (the source)' );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_an_admin_clone_keeps_the_script(): void {
+		$this->as_user( true );
+
+		$result = ( new Mcpwp_Elementor_Pro() )->clone_page( self::PAGE_ID, array( 'title' => 'b829 admin clone' ) );
+
+		$this->assert_ok( $result, 'clone_page' );
+		$this->assert_html_widgets_intact( (int) $result['id'], 'a clone by a user holding unfiltered_html' );
+	}
+
+	// ---------------------------------------------------------------------
+	// Content the caller introduces.
+	// ---------------------------------------------------------------------
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_a_script_the_caller_introduces_is_sanitized(): void {
+		$this->assert_ok( $this->edit_widget( self::PAGE_ID, 'sc82901', array( 'html' => '<script>window.__new829=1;</script><p>kept</p>' ) ), 'edit_widget' );
+
+		$tree = $this->stored_tree( self::PAGE_ID );
+		$this->assertSame( wp_kses_post( '<script>window.__new829=1;</script><p>kept</p>' ), self::find( $tree, 'sc82901' )['settings']['html'] );
+		$this->assertSame( self::STYLE, self::find( $tree, 'st82901' )['settings']['html'] );
+		$this->assertSame( self::SVG, self::find( $tree, 'sv82901' )['settings']['html'] );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_a_user_with_unfiltered_html_stores_introduced_content_raw(): void {
+		$this->as_user( true );
+
+		$this->edit_widget( self::PAGE_ID, 'sc82901', array( 'html' => '<script>window.__admin829=1;</script>' ) );
+
+		$this->assertSame( '<script>window.__admin829=1;</script>', self::find( $this->stored_tree( self::PAGE_ID ), 'sc82901' )['settings']['html'] );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_the_772_grant_does_not_count_as_unfiltered_html(): void {
+		// Document::save() runs under MCPWP's scoped grant (#772) and writes
+		// _elementor_data itself. That write is judged on the caller's own
+		// capability, or the raw bytes it stored would be "in place" for the
+		// write after it.
+		add_filter( 'content_save_pre', 'wp_filter_post_kses' );
+
+		$tree = self::tree();
+		$tree[0]['elements'][0]['elements'][1]['settings']['html'] = '<script>window.__granted829=1;</script>';
+		$json = wp_json_encode( $tree );
+
+		$writer = ( new ReflectionClass( Mcpwp_Elementor_Basic::class ) )->newInstanceWithoutConstructor();
+		$call   = new ReflectionMethod( Mcpwp_Elementor_Basic::class, 'attempt_elementor_call' );
+		$call->setAccessible( true );
+		$debug = array();
+		$saw   = null;
+
+		$call->invokeArgs(
+			$writer,
+			array(
+				static function () use ( $json, &$saw ) {
+					$saw = current_user_can( 'unfiltered_html' );
+					update_post_meta( ElementorNoCollateralKsesTest::page_id(), '_elementor_data', wp_slash( $json ) );
+					return true;
+				},
+				&$debug,
+				'document_save',
+				self::PAGE_ID,
+			)
+		);
+		remove_filter( 'content_save_pre', 'wp_filter_post_kses' );
+
+		$this->assertTrue( $saw, 'The #772 grant is live around the Elementor call.' );
+		$stored = $this->stored_tree( self::PAGE_ID );
+		$this->assertStringNotContainsString( '<script', self::find( $stored, 'sc82901' )['settings']['html'], 'The grant did not reach the policy.' );
+		$this->assertSame( self::STYLE, self::find( $stored, 'st82901' )['settings']['html'] );
+	}
+
+	public static function page_id(): int {
+		return self::PAGE_ID;
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_a_write_that_is_not_mcpwps_keeps_elementors_behaviour(): void {
+		$tree = self::tree();
+		$tree[0]['elements'][0]['elements'][0]['settings']['title'] = 'Core REST';
+		update_post_meta( self::PAGE_ID, '_elementor_data', wp_slash( wp_json_encode( $tree ) ) );
+
+		$this->assertSame( self::kses( self::STYLE ), self::find( $this->stored_tree( self::PAGE_ID ), 'st82901' )['settings']['html'] );
+	}
+
+	// ---------------------------------------------------------------------
+	// Kit CSS (#761/#762): byte-for-byte, a repair only when one happened,
+	// and never `</style` (review round 1, WARN 1).
+	// ---------------------------------------------------------------------
 
 	private function install_kit(): Mcpwp_REST_Elementor {
 		require_once __DIR__ . '/fixtures/elementor-kit-doubles.php';
-		\Elementor\Plugin::$instance       = new \Elementor\Plugin();
-		$GLOBALS['mcpwp_test_kit_id']       = self::KIT_ID;
+		\Elementor\Plugin::$instance                  = new \Elementor\Plugin();
+		$GLOBALS['mcpwp_test_kit_id']                 = self::KIT_ID;
 		$GLOBALS['_mcpwp_test_posts'][ self::KIT_ID ] = $this->post( self::KIT_ID, 'elementor_library' );
+		$this->elementor_registers( 'elementor_library' );
 
 		// The Kit CSS path reads the row directly to verify it and repairs it
 		// through $wpdb; both act on the store the meta doubles use.
@@ -497,20 +803,36 @@ final class ElementorNoCollateralKsesTest extends TestCase {
 		return (string) ( $GLOBALS['_mcpwp_test_meta'][ self::KIT_ID ]['_elementor_page_settings']['custom_css'] ?? '' );
 	}
 
+	private function assert_breakout_refused( $response, string $label ): void {
+		$data = $this->data( $response );
+		$code = $data instanceof WP_Error ? $data->get_error_code() : ( $data['code'] ?? null );
+		$this->assertSame( 'kit_css_style_breakout', $code, $label );
+		$status = $response instanceof WP_REST_Response ? $response->get_status() : ( $data instanceof WP_Error ? ( $data->get_error_data()['status'] ?? null ) : null );
+		$this->assertSame( 400, $status, $label );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
 	public function test_a_kit_css_block_is_stored_as_sent_and_reports_no_repair(): void {
 		$controller = $this->install_kit();
 
-		$response = $controller->upsert_kit_css_block(
-			$this->rest_request( 'POST', '/mcpwp/v1/elementor/kit-css/blocks', array( 'name' => 'b829', 'css' => '.a>.b{color:red}' ) )
+		$data = $this->data(
+			$controller->upsert_kit_css_block(
+				$this->rest_request( 'POST', '/mcpwp/v1/elementor/kit-css/blocks', array( 'name' => 'b829', 'css' => '.a>.b{color:red}' ) )
+			)
 		);
-		$data     = $response instanceof WP_REST_Response ? $response->get_data() : $response;
 
 		$this->assertNotInstanceOf( WP_Error::class, $data );
 		$this->assertStringContainsString( '.a>.b{color:red}', $this->kit_css(), 'Stored as sent on the first write.' );
-		$this->assertStringNotContainsString( '&gt;', $this->kit_css() );
 		$this->assertArrayNotHasKey( 'storage_repaired', $data, 'A clean write is not reported as repaired.' );
 	}
 
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
 	public function test_set_kit_css_append_keeps_the_existing_stylesheet(): void {
 		$controller = $this->install_kit();
 		$GLOBALS['_mcpwp_test_meta'][ self::KIT_ID ]['_elementor_page_settings'] = array( 'custom_css' => '.old>.x{color:blue}' );
@@ -522,129 +844,88 @@ final class ElementorNoCollateralKsesTest extends TestCase {
 		$this->assertSame( ".old>.x{color:blue}\n\n.new>.y{color:red}", $this->kit_css() );
 	}
 
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
 	public function test_a_real_repair_is_reported_with_the_characters_it_fixed(): void {
 		$controller = $this->install_kit();
 		// Something other than Elementor's sanitizer (a host filter, another
 		// plugin) escapes the row: that is what the repair is still for.
-		$GLOBALS['_mcpwp_test_registered_meta']  = array();
 		$GLOBALS['mcpwp_test_meta_escapes_html'] = true;
 
 		try {
-			$response = $controller->upsert_kit_css_block(
-				$this->rest_request( 'POST', '/mcpwp/v1/elementor/kit-css/blocks', array( 'name' => 'b829r', 'css' => '.a>.b{color:red}' ) )
+			$data = $this->data(
+				$controller->upsert_kit_css_block(
+					$this->rest_request( 'POST', '/mcpwp/v1/elementor/kit-css/blocks', array( 'name' => 'b829r', 'css' => '.a>.b{color:red}' ) )
+				)
 			);
 		} finally {
 			$GLOBALS['mcpwp_test_meta_escapes_html'] = false;
 		}
-		$data = $response instanceof WP_REST_Response ? $response->get_data() : $response;
 
 		$this->assertTrue( $data['storage_repaired'] );
 		$this->assertSame( array( '>' ), $data['storage_altered_chars'] );
 		$this->assertStringContainsString( '.a>.b{color:red}', $this->kit_css() );
 	}
 
-	// ---------------------------------------------------------------------
-	// Content the caller introduces keeps the existing policy.
-	// ---------------------------------------------------------------------
-
-	public function test_a_script_the_caller_introduces_gets_what_elementor_gives_this_caller(): void {
-		$controller = new Mcpwp_REST_Elementor();
-		$result     = $controller->edit_widget(
-			$this->rest_request( 'POST', '/mcpwp/v1/elementor/' . self::PAGE_ID . '/edit-widget', array( 'id' => self::PAGE_ID, 'widget_id' => 'sc82901', 'settings' => array( 'html' => '<script>window.__new829=1;</script><p>kept</p>' ) ) )
+	public static function breakouts(): array {
+		return array(
+			'plain'      => array( '.a{color:red}</style><script>window.__kit829=1</script>' ),
+			'upper case' => array( '.a{}</STYLE><script>x()</script>' ),
+			'spaced'     => array( '.a{}</ style><script>x()</script>' ),
+			'spaced <'   => array( ".a{}< /\tStyle><script>x()</script>" ),
 		);
-
-		$this->assert_ok( $result, 'edit_widget' );
-		$tree = $this->stored_tree( self::PAGE_ID );
-		$this->assertSame( self::kses( '<script>window.__new829=1;</script><p>kept</p>' ), self::find( $tree, 'sc82901' )['settings']['html'], 'Exactly what main stores for it: Elementor\'s sanitizer output.' );
-		$this->assertStringNotContainsString( '<script', self::find( $tree, 'sc82901' )['settings']['html'] );
-		$this->assertSame( self::STYLE, self::find( $tree, 'st82901' )['settings']['html'] );
-		$this->assertSame( self::SVG, self::find( $tree, 'sv82901' )['settings']['html'] );
 	}
 
-	public function test_a_user_with_unfiltered_html_stores_introduced_content_raw(): void {
-		$this->as_user( true );
+	/**
+	 * @dataProvider breakouts
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_set_kit_css_refuses_a_style_breakout( string $css ): void {
+		$controller = $this->install_kit();
+		$GLOBALS['_mcpwp_test_meta'][ self::KIT_ID ]['_elementor_page_settings'] = array( 'custom_css' => '.old{}' );
 
-		$controller = new Mcpwp_REST_Elementor();
-		$controller->edit_widget(
-			$this->rest_request( 'POST', '/mcpwp/v1/elementor/' . self::PAGE_ID . '/edit-widget', array( 'id' => self::PAGE_ID, 'widget_id' => 'sc82901', 'settings' => array( 'html' => '<script>window.__admin829=1;</script>' ) ) )
+		foreach ( array( 'replace', 'append' ) as $mode ) {
+			$this->assert_breakout_refused(
+				$controller->set_kit_css( $this->rest_request( 'POST', '/mcpwp/v1/elementor/kit-css', array( 'css' => $css, 'mode' => $mode ) ) ),
+				"set_kit_css {$mode}"
+			);
+		}
+		$this->assertSame( '.old{}', $this->kit_css(), 'Nothing was saved.' );
+	}
+
+	/**
+	 * @dataProvider breakouts
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_upsert_kit_css_block_refuses_a_style_breakout( string $css ): void {
+		$controller = $this->install_kit();
+
+		$this->assert_breakout_refused(
+			$controller->upsert_kit_css_block( $this->rest_request( 'POST', '/mcpwp/v1/elementor/kit-css/blocks', array( 'name' => 'b829x', 'css' => $css ) ) ),
+			'wp_upsert_kit_css_block'
 		);
-
-		$this->assertSame( '<script>window.__admin829=1;</script>', self::find( $this->stored_tree( self::PAGE_ID ), 'sc82901' )['settings']['html'] );
+		$this->assertSame( '', $this->kit_css(), 'Nothing was saved.' );
 	}
 
-	public function test_a_new_element_copying_a_stored_string_is_not_new_content(): void {
-		// A new widget whose html is byte-identical to one already on the page
-		// (e.g. a section the caller read and wrote back with fresh ids):
-		// what the site already holds, not something this caller introduced.
-		$tree   = self::tree();
-		$tree[] = array(
-			'id'       => 'sec8292',
-			'elType'   => 'section',
-			'settings' => array(),
-			'elements' => array(
-				array(
-					'id'       => 'col8292',
-					'elType'   => 'column',
-					'settings' => array( '_column_size' => 100 ),
-					'elements' => array( self::widget( 'st82902', 'html', array( 'html' => self::STYLE ) ) ),
-				),
-			),
-		);
+	/**
+	 * @dataProvider breakouts
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_set_kit_css_raw_refuses_a_style_breakout( string $css ): void {
+		$controller = $this->install_kit();
 
-		update_post_meta( self::PAGE_ID, '_elementor_data', wp_slash( wp_json_encode( $tree ) ) );
+		$method = new ReflectionMethod( Mcpwp_REST_Elementor::class, 'set_kit_css_raw' );
+		$method->setAccessible( true );
+		$result = $method->invoke( $controller, self::KIT_ID, $css );
 
-		$this->assertSame( self::STYLE, self::find( $this->stored_tree( self::PAGE_ID ), 'st82902' )['settings']['html'] );
-	}
-
-	public function test_the_772_grant_does_not_reach_the_meta_sanitizer(): void {
-		// MCPWP calls Document::save() under a scoped unfiltered_html grant
-		// (#772), and Elementor's save writes _elementor_data from inside it.
-		// That write must be judged on the caller's own capability: otherwise
-		// it would store the introduced script raw, and the overwrite that
-		// follows would find it "already on the post".
-		add_filter( 'content_save_pre', 'wp_filter_post_kses' );
-
-		$tree = self::tree();
-		$tree[0]['elements'][0]['elements'][1]['settings']['html'] = '<script>window.__granted829=1;</script>';
-		$json = wp_json_encode( $tree );
-
-		$writer = ( new ReflectionClass( Mcpwp_Elementor_Basic::class ) )->newInstanceWithoutConstructor();
-		$call   = new ReflectionMethod( Mcpwp_Elementor_Basic::class, 'attempt_elementor_call' );
-		$call->setAccessible( true );
-		$debug  = array();
-		$saw    = null;
-
-		$call->invokeArgs(
-			$writer,
-			array(
-				static function () use ( $json, &$saw ) {
-					$saw = current_user_can( 'unfiltered_html' );
-					update_post_meta( ElementorNoCollateralKsesTest::page_id(), '_elementor_data', wp_slash( $json ) );
-					return true;
-				},
-				&$debug,
-				'document_save',
-			)
-		);
-		remove_filter( 'content_save_pre', 'wp_filter_post_kses' );
-
-		$this->assertTrue( $saw, 'The #772 grant is live around the Elementor call.' );
-		$stored = self::find( $this->stored_tree( self::PAGE_ID ), 'sc82901' )['settings']['html'];
-		$this->assertStringNotContainsString( '<script', $stored, 'The grant did not reach the sanitizer.' );
-		$this->assertSame( self::STYLE, self::find( $this->stored_tree( self::PAGE_ID ), 'st82901' )['settings']['html'] );
-	}
-
-	public static function page_id(): int {
-		return self::PAGE_ID;
-	}
-
-	public function test_outside_an_mcpwp_request_elementor_behaviour_is_untouched(): void {
-		$GLOBALS['wp'] = (object) array( 'query_vars' => array( 'rest_route' => '/wp/v2/pages/' . self::PAGE_ID ) );
-
-		$tree = self::tree();
-		$tree[0]['elements'][0]['elements'][0]['settings']['title'] = 'Core REST';
-		update_post_meta( self::PAGE_ID, '_elementor_data', wp_slash( wp_json_encode( $tree ) ) );
-
-		$this->assertSame( self::kses( self::STYLE ), self::find( $this->stored_tree( self::PAGE_ID ), 'st82901' )['settings']['html'] );
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'kit_css_style_breakout', $result->get_error_code() );
+		$this->assertSame( 400, $result->get_error_data()['status'] );
+		$this->assertSame( '', $this->kit_css(), 'Nothing was saved.' );
 	}
 }

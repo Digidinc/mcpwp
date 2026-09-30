@@ -3068,6 +3068,16 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 
 			if ( 'custom_css' === $key ) {
 				$value = $this->sanitize_kit_custom_css( (string) $value, $warnings );
+				// Stored as sent (#829), so nothing that can end the <style>
+				// element it is printed in: sanitize_kit_custom_css() removes
+				// `</style` but not `</ style` or `< /style`.
+				if ( preg_match( '#<\s*/\s*style#i', $value ) ) {
+					return $this->error_response(
+						'kit_css_style_breakout',
+						__( 'Kit CSS must not contain "</style" (in any letter case or spacing): the stylesheet is printed inside a <style> element, and that text would end it and let what follows run as HTML. Nothing was saved.', 'mcpwp' ),
+						400
+					);
+				}
 			} elseif ( 'string' === $expected ) {
 				$value = sanitize_text_field( $value );
 			}
@@ -3100,15 +3110,10 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			$warnings[] = __( 'custom_css was not applied: writing kit CSS requires an admin-scoped API key. Other settings were saved.', 'mcpwp' );
 		}
 
-		// custom_css (admin-scoped, already cleaned by sanitize_kit_custom_css())
-		// is stored as that cleaning left it, not HTML-escaped by Elementor's
-		// REST meta sanitizer; every other string follows the caller's policy (#829).
-		Mcpwp_Elementor_Meta_Write::with_sources(
-			isset( $updated['custom_css'] ) && is_string( $updated['custom_css'] ) ? array( $updated['custom_css'] ) : array(),
-			static function () use ( $kit_id, $updated ) {
-				update_post_meta( $kit_id, '_elementor_page_settings', $updated );
-			}
-		);
+		// custom_css (admin-scoped, already cleaned by sanitize_kit_custom_css(),
+		// which removes any `</style`) is stored as that cleaning left it, not
+		// HTML-escaped; every other string follows the caller's policy (#829).
+		Mcpwp_Elementor_Meta_Write::update( $kit_id, '_elementor_page_settings', $updated, array( 'raw_paths' => array( 'custom_css' ) ) );
 
 		// Clear Elementor caches
 		if ( method_exists( \Elementor\Plugin::$instance->files_manager, 'clear_cache' ) ) {

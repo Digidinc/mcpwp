@@ -130,13 +130,20 @@ class Mcpwp_Page_Builder {
 		// downgrades — see resolve_comparable_texts()'s docblock) but a
 		// false "word_count: 0" reported back for a page with real,
 		// multi-section visible text (#998).
-		$page_id = wp_insert_post( array(
+		// meta_input is an MCPWP write of _elementor_data (#829).
+		$page_postarr = array(
 			'post_title'  => sanitize_text_field( $title ),
 			'post_status' => $effective_status,
 			'post_type'   => 'page',
 			// Slashed, as update_post_meta() (which meta_input calls) expects (#829).
 			'meta_input'  => array( '_elementor_data' => wp_slash( $elements ) ),
-		) );
+		);
+		$page_id      = Mcpwp_Elementor_Meta_Write::as_writer(
+			0,
+			static function () use ( $page_postarr ) {
+				return wp_insert_post( $page_postarr );
+			}
+		);
 
 		if ( is_wp_error( $page_id ) ) {
 			return $page_id;

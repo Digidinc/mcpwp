@@ -4913,8 +4913,12 @@ if (! function_exists('sanitize_meta')) {
         // hooked there be observed around the callback (#829). A plain
         // function-name callback is still called with the value alone, as
         // the doubles registered by existing tests expect.
+        // Registered for one subtype (Elementor registers per post type), a
+        // callback applies to that subtype only, as in core.
         $reg      = $GLOBALS['_mcpwp_test_registered_meta'][ $meta_key ] ?? null;
-        $callback = ($reg && ! empty($reg['sanitize_callback']) && is_callable($reg['sanitize_callback'])) ? $reg['sanitize_callback'] : null;
+        $reg_sub  = (string) ($reg['object_subtype'] ?? '');
+        $applies  = $reg && ('' === $reg_sub || $reg_sub === (string) $object_subtype);
+        $callback = ($applies && ! empty($reg['sanitize_callback']) && is_callable($reg['sanitize_callback'])) ? $reg['sanitize_callback'] : null;
         $generic  = "sanitize_{$object_type}_meta_{$meta_key}";
         $subtyped = '' !== (string) $object_subtype ? "{$generic}_for_{$object_subtype}" : '';
         $hook     = '' !== $subtyped ? $subtyped : $generic;
