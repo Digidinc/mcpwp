@@ -1372,6 +1372,16 @@ trait Mcpwp_Elementor_Writer_Trait {
 			);
 		}
 
+		// #829 review round 3: only a list of elements — as Elementor decodes
+		// it — is written or policed. A JSON object here used to reach the
+		// validator and fatal (TypeError, HTTP 500) on 3.14.10.
+		if ( class_exists( 'Mcpwp_Elementor_Meta_Write' ) ) {
+			$tree_refusal = Mcpwp_Elementor_Meta_Write::tree_refusal( $elementor_json );
+			if ( null !== $tree_refusal ) {
+				return $tree_refusal;
+			}
+		}
+
 		// --- Layout-mode mismatch guard (#612) ---
 		// 'container' elements only render/persist correctly when the site's
 		// Elementor Container experiment is active. On a site still in classic

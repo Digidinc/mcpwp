@@ -967,6 +967,26 @@ final class ElementorNoCollateralKsesTest extends TestCase {
 	 * @runInSeparateProcess
 	 * @preserveGlobalState disabled
 	 */
+	public function test_wp_set_elementor_refuses_an_object_with_a_400_not_a_fatal(): void {
+		// Round 3: a JSON object reached the validator and fatalled (HTTP 500)
+		// on 3.14.10. It is refused at the writer boundary, nothing stored.
+		$before = $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'];
+
+		$result = ( new Mcpwp_Elementor_Basic() )->set_elementor_data(
+			self::PAGE_ID,
+			array( 'elementor_data' => '{"id":"x","html":"<script>window.__obj829=1</script>"}' )
+		);
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'elementor_data_not_a_tree', $result->get_error_code() );
+		$this->assertSame( 400, $result->get_error_data()['status'] );
+		$this->assertSame( $before, $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'] );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
 	public function test_a_non_list_elements_field_is_never_unchanged(): void {
 		// Round 3, WARN 1: `elements` as a string on an otherwise identical
 		// element used to be dropped from the signature and kept raw.
