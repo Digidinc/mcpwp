@@ -41,6 +41,11 @@ final class ApprovalsTableTest extends TestCase {
 
 	protected function tearDown(): void {
 		unset( $GLOBALS['mcpwp_test_wpdb_insert_fail'], $GLOBALS['mcpwp_test_on_lock_granted'] );
+		// Raw option rows: test_the_store_answers_busy_while_another_request_is_migrating
+		// leaves a live approvals migration lock (APPROVALS_TABLE_LOCK_OPTION,
+		// time()+60) here, and every approvals write in the next minute of the
+		// run answered approvals_busy (#1084).
+		$GLOBALS['mcpwp_test_wpdb_options']            = array();
 		$GLOBALS['mcpwp_test_approvals_fail']          = null;
 		$GLOBALS['mcpwp_test_approvals_before_update'] = null;
 		$GLOBALS['mcpwp_test_options']                 = array();

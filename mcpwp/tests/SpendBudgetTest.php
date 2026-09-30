@@ -83,6 +83,9 @@ final class SpendBudgetTest extends TestCase {
 		$GLOBALS['mcpwp_test_denied_routes']            = array();
 		unset( $GLOBALS['mcpwp_test_rest_response_override'] );
 		Mcpwp_REST_Batch::$is_batch_sub_request = false;
+		// setUp() configured the singleton directly (update_settings()); left
+		// in place it hands those settings to every later test (#1084).
+		mcpwp_test_reset_rate_limiter();
 	}
 
 	/**

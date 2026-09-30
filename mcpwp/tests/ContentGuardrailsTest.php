@@ -30,7 +30,14 @@ require_once dirname( __DIR__ ) . '/includes/pro/core/class-mcpwp-multilang.php'
 
 final class ContentGuardrailsTest extends TestCase {
 
+	/** @var array Hook registries as this test found them — restored in tearDown(). */
+	private $saved_hooks = array();
+
 	protected function setUp(): void {
+		$this->saved_hooks = array(
+			'filters' => $GLOBALS['mcpwp_test_filters'] ?? array(),
+			'actions' => $GLOBALS['mcpwp_test_actions'] ?? array(),
+		);
 		$GLOBALS['mcpwp_test_options']            = array();
 		$GLOBALS['mcpwp_test_wpdb_options']       = array();
 		$GLOBALS['mcpwp_test_transients']         = array();
@@ -51,6 +58,12 @@ final class ContentGuardrailsTest extends TestCase {
 		$GLOBALS['mcpwp_test_is_admin'] = false;
 		$GLOBALS['mcpwp_test_doing_ajax'] = false;
 		Mcpwp_Content_Guardrails::reset_context_for_tests();
+		// setUp() registers the guardrail hooks and several tests add their
+		// own closures (event captures by reference, filters); none of them
+		// may outlive this test (#1084). Put the registries back exactly as
+		// this test found them.
+		$GLOBALS['mcpwp_test_filters'] = $this->saved_hooks['filters'];
+		$GLOBALS['mcpwp_test_actions'] = $this->saved_hooks['actions'];
 	}
 
 	private function words( $count, $prefix = 'word' ) {

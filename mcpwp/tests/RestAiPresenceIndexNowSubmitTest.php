@@ -29,6 +29,10 @@ final class RestAiPresenceIndexNowSubmitTest extends TestCase {
 
 	protected function tearDown(): void {
 		$GLOBALS['mcpwp_test_filters'] = array();
+		// Tests here seed bare stdClass posts (no post_title). Left behind,
+		// the next get_posts() caller -- /onboard's recent_updates in
+		// AdversarialReview1007Round1Test -- read an undefined property (#1084).
+		$GLOBALS['_mcpwp_test_posts'] = array();
 		putenv( 'WP_ENVIRONMENT_TYPE' );
 	}
 
