@@ -122,6 +122,9 @@ final class StagedStatusValueAuditTest extends TestCase {
 
 		// ── A real staged/consumed value, but never a post- or product- ─
 		// visibility status, or already unconditionally admin-gated ────
+		'core/class-mcpwp-approvals.php' => 'false positive since #1042 round 4: its only update_option() stores the ' .
+			'pending re-derivation gate timestamp (mcpwp_approvals_rederive_after); the \'status\' literals are the approval ' .
+			'workflow\'s own vocabulary on its own table, set only from hardcoded literals on admin-scope-gated routes.',
 		// core/class-mcpwp-approvals.php left this list in #1042: the
 		// approval store is its own table now and the class no longer calls
 		// update_option() with a status at all. The disposition is unchanged:

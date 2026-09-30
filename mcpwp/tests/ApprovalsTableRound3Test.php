@@ -155,7 +155,7 @@ final class ApprovalsTableRound3Test extends TestCase {
 
 		$content = self::allow( array( 'admin', 'content' ) );
 		$this->assertSame( array(), Mcpwp_Approvals::list_requests( '', 50, true, 'date', $content ), 'The first read runs schema 4 first.' );
-		$this->assertSame( 4, (int) get_option( Mcpwp_Approvals::SCHEMA_OPTION ) );
+		$this->assertSame( Mcpwp_Approvals::SCHEMA_VERSION, (int) get_option( Mcpwp_Approvals::SCHEMA_OPTION ) );
 		$this->assertSame( '["content","woocommerce"]', $GLOBALS['mcpwp_test_approvals_rows']['apr_eta']['visibility_categories'] );
 		$this->assertSame( array( 'content', 'woocommerce' ), mcpwp_test_approvals_all()['apr_eta']['visibility_categories'] );
 		$this->assertSame( array(), Mcpwp_Approvals::count_by_status( $content )['counts'] );

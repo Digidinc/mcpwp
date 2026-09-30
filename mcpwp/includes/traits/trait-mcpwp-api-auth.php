@@ -306,12 +306,47 @@ trait Mcpwp_Api_Auth {
 	 */
 	public static function category_for_post_type( $post_type ) {
 		$post_type = (string) $post_type;
+		$map       = self::known_post_type_categories();
 
+		if ( isset( $map[ $post_type ] ) ) {
+			return $map[ $post_type ];
+		}
+
+		// Unmapped type: a third-party plugin's CPT this list has never heard
+		// of, or one this plugin already treats as sensitive elsewhere. Give
+		// it the 'content' home ONLY when it is a type an unprivileged reader
+		// could already see some other way on this very site — publicly
+		// queryable (public) or exposed through the REST API in its own right
+		// (show_in_rest). A type that is neither of those is private by the
+		// site's own declaration (working storage, an addon's internal
+		// control records, a form-entry CPT), so it gets no category home at
+		// all here: only a key with NO category restriction (admin role, or a
+		// custom role explicitly granted 'admin' — see
+		// resolve_key_tool_categories()) reaches it, matching how every other
+		// admin-only surface in this plugin (e.g. /users) is gated.
+		$object = post_type_exists( $post_type ) ? get_post_type_object( $post_type ) : null;
+		if ( $object && ( ! empty( $object->public ) || ! empty( $object->show_in_rest ) ) ) {
+			return 'content';
+		}
+
+		return 'admin';
+	}
+
+	/**
+	 * The explicit post type → category map category_for_post_type() reads
+	 * first. It holds whether or not the type is registered right now (its
+	 * plugin may be inactive, or `init` may not have run), which is what lets
+	 * Mcpwp_Approvals::derive_visibility() resolve a known type confidently
+	 * without registration (#1042 review round 4).
+	 *
+	 * @return array<string,string>
+	 */
+	public static function known_post_type_categories() {
 		// Ordered, explicit map for every type a domain plugin this codebase
 		// already integrates with can put in wp_posts. Add a new entry here,
 		// not a special case at each door — that is the whole point of this
 		// being one chokepoint.
-		$map = array(
+		return array(
 			'post'              => 'content',
 			'page'              => 'content',
 			// Media. attachment is PUBLIC (get_post_type_object('attachment')
@@ -391,29 +426,6 @@ trait Mcpwp_Api_Auth {
 			'wp_template_part'   => 'gutenberg',
 			'wp_global_styles'   => 'site',
 		);
-
-		if ( isset( $map[ $post_type ] ) ) {
-			return $map[ $post_type ];
-		}
-
-		// Unmapped type: a third-party plugin's CPT this list has never heard
-		// of, or one this plugin already treats as sensitive elsewhere. Give
-		// it the 'content' home ONLY when it is a type an unprivileged reader
-		// could already see some other way on this very site — publicly
-		// queryable (public) or exposed through the REST API in its own right
-		// (show_in_rest). A type that is neither of those is private by the
-		// site's own declaration (working storage, an addon's internal
-		// control records, a form-entry CPT), so it gets no category home at
-		// all here: only a key with NO category restriction (admin role, or a
-		// custom role explicitly granted 'admin' — see
-		// resolve_key_tool_categories()) reaches it, matching how every other
-		// admin-only surface in this plugin (e.g. /users) is gated.
-		$object = post_type_exists( $post_type ) ? get_post_type_object( $post_type ) : null;
-		if ( $object && ( ! empty( $object->public ) || ! empty( $object->show_in_rest ) ) ) {
-			return 'content';
-		}
-
-		return 'admin';
 	}
 
 	/**

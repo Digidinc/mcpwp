@@ -76,13 +76,13 @@ class Mcpwp_Activator {
 		// Ensure periodic log cleanup is scheduled.
 		self::schedule_log_cleanup();
 
-		// One-time: move the approvals store out of its option into its own
-		// table (#1042, see method docblock). Before the identity purge
-		// below, which runs against the table.
-		self::migrate_approvals_to_table();
-
-		// One-time: purge identity-less pending approvals (see method docblock).
-		self::migrate_identity_less_approvals();
+		// The approvals table itself is created by create_tables() above.
+		// Activation NEVER migrates into it or derives anything (#1042
+		// review round 4): an activation request runs without the plugin's
+		// REST classes loaded (plugins_loaded ran before it was active), so
+		// visibility categories derived here would be wrong and permanent.
+		// The first request's wp_loaded does the migration and the identity
+		// purge (mcpwp.php).
 
 		// One-time: mark existing custom-role API keys with an empty category
 		// list as deny-all in storage (#1041, see method docblock).
@@ -482,6 +482,7 @@ class Mcpwp_Activator {
 			cap_exempt tinyint(1) NOT NULL DEFAULT 0,
 			quota_bytes int(10) unsigned NOT NULL DEFAULT 0,
 			visibility_categories varchar(1000) NOT NULL DEFAULT '',
+			categories_pending tinyint(1) NOT NULL DEFAULT 0,
 			version bigint(20) unsigned NOT NULL DEFAULT 0,
 			record longtext NOT NULL,
 			PRIMARY KEY  (id),
@@ -489,7 +490,8 @@ class Mcpwp_Activator {
 			KEY status (status),
 			KEY requested_by_key_id (requested_by_key_id),
 			KEY created_at (created_at),
-			KEY updated_at (updated_at)
+			KEY updated_at (updated_at),
+			KEY categories_pending (categories_pending)
 		) $charset_collate;";
 	}
 

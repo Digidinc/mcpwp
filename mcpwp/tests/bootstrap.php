@@ -1915,7 +1915,7 @@ if (! function_exists('mcpwp_test_sql_find')) {
         $GLOBALS['mcpwp_test_approvals_rows']         = array();
         $GLOBALS['mcpwp_test_approvals_table_exists'] = true;
         update_option('mcpwp_approvals_table_migrated', 1);
-        update_option('mcpwp_approvals_schema_version', 4);
+        update_option('mcpwp_approvals_schema_version', 5);
         if (! empty($items)) {
             $copied = Mcpwp_Approvals::import_legacy_items($items);
             if (is_wp_error($copied)) {

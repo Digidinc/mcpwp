@@ -96,13 +96,24 @@ final class ApprovalsTableTest extends TestCase {
 		ksort( $expected );
 		// Round 3: a record that stored no visibility_categories gets the
 		// derived ones persisted into it; every other field is verbatim.
+		// Round 4: only when the derivation is confident — the destructive
+		// record targets page #3, which does not exist, so it stays pending
+		// (nothing written into it; the column is fail-closed).
 		foreach ( $expected as $id => $record ) {
-			if ( empty( $record['visibility_categories'] ) ) {
+			if ( empty( $record['visibility_categories'] ) && 'apr_mig_rejected' !== $id ) {
 				$this->assertNotEmpty( $migrated[ $id ]['visibility_categories'], $id );
 				$expected[ $id ]['visibility_categories'] = $migrated[ $id ]['visibility_categories'];
 			}
+			// The store's own bookkeeping marker is not part of the record's data.
+			unset( $migrated[ $id ]['metadata']['categories_source'] );
+			if ( ! isset( $record['metadata'] ) && array() === ( $migrated[ $id ]['metadata'] ?? null ) ) {
+				unset( $migrated[ $id ]['metadata'] );
+			}
+			$this->assertEquals( $expected[ $id ], $migrated[ $id ], $id );
 		}
-		$this->assertSame( $expected, $migrated, 'Every record, deep-equal apart from its persisted categories.' );
+		$this->assertSame( 1, (int) $this->row( 'apr_mig_rejected' )['categories_pending'] );
+		$this->assertSame( '["__unresolvable__"]', $this->row( 'apr_mig_rejected' )['visibility_categories'] );
+		$this->assertSame( array_keys( $expected ), array_keys( $migrated ) );
 		$this->assertSame( array( 'apr_mig_staging', 'apr_mig_pending', 'apr_mig_large', 'apr_mig_rejected' ), array_keys( mcpwp_test_approvals_all() ), 'The rest in the option\'s order, after the one a crashed run had copied.' );
 		$this->assertCount( 4, $GLOBALS['mcpwp_test_approvals_rows'] );
 		$this->assertSame( 1, get_option( Mcpwp_Approvals::MIGRATED_FLAG ) );

@@ -54,7 +54,7 @@ class Mcpwp_Approvals {
 	 *
 	 * @var int
 	 */
-	const SCHEMA_VERSION = 4;
+	const SCHEMA_VERSION = 5;
 
 	/**
 	 * Option holding the table's schema version.
@@ -192,6 +192,13 @@ class Mcpwp_Approvals {
 	 * @var bool
 	 */
 	private static $expiry_swept = false;
+
+	/**
+	 * Whether this request already ran the lazy pending re-derivation.
+	 *
+	 * @var bool
+	 */
+	private static $rederive_ran = false;
 
 	/**
 	 * Allowed values for triage.priority — the single enum every writer and
@@ -956,14 +963,29 @@ class Mcpwp_Approvals {
 	 * @return bool True when stored.
 	 */
 	public static function set_triage( $id, $triage ) {
+		return true === self::set_triage_result( $id, $triage );
+	}
+
+	/**
+	 * set_triage(), saying why when nothing was stored: `jev_invalid_answer`
+	 * for a triage that fails sanitize_triage(), otherwise the store's own
+	 * error (approvals_busy, approvals_store_failed, approval_not_found) —
+	 * so a caller can retry a busy store instead of calling the answer
+	 * invalid (#1042 review round 4).
+	 *
+	 * @param string $id     Approval request ID.
+	 * @param mixed  $triage Candidate triage array.
+	 * @return true|WP_Error
+	 */
+	public static function set_triage_result( $id, $triage ) {
 		$sanitized = self::sanitize_triage( $triage );
 		if ( null === $sanitized ) {
-			return false;
+			return new WP_Error( 'jev_invalid_answer', 'Jev answer failed enum validation; nothing stored.' );
 		}
 
 		$id = sanitize_key( (string) $id );
 		if ( '' === $id ) {
-			return false;
+			return self::not_found_error();
 		}
 
 		$result = self::update_one(
@@ -974,8 +996,9 @@ class Mcpwp_Approvals {
 			}
 		);
 
-		return ! is_wp_error( $result );
+		return is_wp_error( $result ) ? $result : true;
 	}
+
 
 	/**
 	 * Schedule async Jev triage for a just-created approval — never blocks
@@ -1690,6 +1713,10 @@ class Mcpwp_Approvals {
 		}
 
 		unset( $request['payload']['after_content'], $request['rollback']['before_content'], $request['rollback']['before_excerpt'] );
+		// Store bookkeeping (#1042), not part of the approval's public shape.
+		if ( isset( $request['metadata'] ) && is_array( $request['metadata'] ) ) {
+			unset( $request['metadata']['categories_source'], $request['metadata']['categories_unverified'] );
+		}
 
 		// The target fingerprint is for drift(), which reads the private
 		// record. Publicly it would hand a read-scope key a private page's
@@ -1843,20 +1870,40 @@ class Mcpwp_Approvals {
 	 *                   when nothing resolves.
 	 */
 	public static function compute_visibility_categories( $action, array $resource, array $payload ) {
-		if ( ! class_exists( 'Mcpwp_REST_API' ) ) {
-			return array( self::UNRESOLVABLE_CATEGORY );
+		return self::compute_categories( $action, $resource, $payload )['categories'];
+	}
+
+	/**
+	 * The one implementation behind compute_visibility_categories() and
+	 * derive_visibility(): the categories, and whether every input they
+	 * depend on could actually be resolved (#1042 review round 4). The
+	 * route category (for the door a destructive call replays), the
+	 * bulk-publish post type's category, 'staging' for a staging push, and —
+	 * additively — the category of the target post's type. Not confident
+	 * when the REST classes are not loaded, when a type is neither registered
+	 * nor in the explicit known-type map (its plugin may be inactive), or when
+	 * the target is a post that no longer exists.
+	 *
+	 * @param string $action   Approval action.
+	 * @param array  $resource Resource block.
+	 * @param array  $payload  Payload block.
+	 * @return array{categories:string[],confident:bool}
+	 */
+	private static function compute_categories( $action, array $resource, array $payload ) {
+		if ( ! self::visibility_dependencies_loaded() ) {
+			return array(
+				'categories' => array( self::UNRESOLVABLE_CATEGORY ),
+				'confident'  => false,
+			);
 		}
 
 		$action     = (string) $action;
 		$categories = array();
+		$confident  = true;
 
-		// The route this call will replay (or already replayed once, for a
-		// closed record) — the classification the generic door ITSELF is
-		// gated by. Still required in addition to the post-type category
-		// below: a route-only check is what round 1 shipped and BLOCK-1
-		// broke; a post-type-only check would miss a destructive target
-		// that is not a post at all (user, term, widget, the "all drafts"
-		// purge) and that only the route names.
+		// The route this call will replay: the classification the generic
+		// door itself is gated by (#1025 round 2 BLOCK-1: required in
+		// addition to the post-type category below, never instead of it).
 		if ( 'destructive_operation' === $action && ! empty( $payload['route'] ) ) {
 			$route_category = Mcpwp_REST_API::get_category_for_route( (string) $payload['route'] );
 			if ( '' !== $route_category ) {
@@ -1865,139 +1912,207 @@ class Mcpwp_Approvals {
 		}
 
 		if ( 'bulk_content_publish' === $action && ! empty( $payload['post_type'] ) ) {
-			$categories[] = Mcpwp_REST_API::category_for_post_type( (string) $payload['post_type'] );
+			$type = (string) $payload['post_type'];
+			if ( ! self::post_type_known( $type ) ) {
+				$confident = false;
+			}
+			$categories[] = Mcpwp_REST_API::category_for_post_type( $type );
 		}
 
 		if ( 'staging_push' === $action ) {
 			$categories[] = 'staging';
 		}
 
-		// Whenever the target IS a post — independent of, and additive to,
-		// the action-shape classification above — the caller must ALSO hold
-		// its post-type category. This is what closes BLOCK-1: a product
-		// deleted through the GENERIC /posts/{id} or /content/{type}/{id}
-		// door classifies 'content' by route alone, but the record's target
-		// is unambiguously a product, so 'woocommerce' is required too.
-		$post_type = self::resolve_target_post_type( $action, $resource, $payload );
-		if ( '' !== $post_type ) {
-			$categories[] = Mcpwp_REST_API::category_for_post_type( $post_type );
+		$target = self::resolve_target_post_type( $action, $resource, $payload );
+		if ( ! $target['confident'] ) {
+			$confident = false;
+		}
+		if ( '' !== $target['post_type'] ) {
+			$categories[] = Mcpwp_REST_API::category_for_post_type( $target['post_type'] );
 		}
 
 		if ( empty( $categories ) ) {
-			// Nothing resolved at all: no route classification applied and
-			// no post-type could be determined. Round 1's fallback here was
-			// 'admin' — the same category /approvals itself is gated by, so
-			// EVERY approvals reader could see a record in this state
-			// (#1025 round 2, WARN-1). Fall back to "visible only to an
-			// unrestricted key" instead — see UNRESOLVABLE_CATEGORY's
-			// docblock for how that's enforced with no special case.
-			return array( self::UNRESOLVABLE_CATEGORY );
+			// Nothing resolved: visible only to an unrestricted key (see
+			// UNRESOLVABLE_CATEGORY), never the 'admin' fallback (#1025 WARN-1).
+			$categories = array( self::UNRESOLVABLE_CATEGORY );
 		}
 
-		return array_values( array_unique( $categories ) );
+		return array(
+			'categories' => array_values( array_unique( $categories ) ),
+			'confident'  => $confident,
+		);
 	}
 
 	/**
-	 * Resolve the real post_type of an approval's target, for
-	 * compute_visibility_categories() — '' when the target is not a post at
-	 * all, or is one no signal here can place.
+	 * Whether every class compute_categories() needs is loaded — checked
+	 * explicitly, never inferred from a fallback (#1042 review round 4: an
+	 * activation request runs without them). The filter only ever narrows
+	 * (a test seam for "not loaded"); it cannot claim a missing class.
 	 *
-	 * Tries, in order of trust:
-	 * 1. The LIVE post (get_post() on resource.id) — authoritative, and the
-	 *    only source available at creation time (every caller here has just
-	 *    resolved the same post itself). Only attempted when resource.type
-	 *    ITSELF already names a post — literally 'post' (post_content_
-	 *    update's own deliberate hardcode) or a real, currently-registered
-	 *    post type (post_type_exists()). NEVER for a non-post sentinel
-	 *    ('user', 'term', 'widget', 'drafts', 'staging', 'api_key', a
-	 *    'bulk_<type>' label): resource.id there is a USER id, a TERM id,
-	 *    a widget slug — not a post id, and can coincidentally collide with
-	 *    an unrelated post's numeric ID. #1025 round 3: a delete_user
-	 *    approval for user #11 was misclassified as ["admin","woocommerce"]
-	 *    because a product happened to exist with post ID 11 — get_post(11)
-	 *    resolved to the UNRELATED product and its category got added
-	 *    alongside the correct 'admin' one, so disabling 'woocommerce'
-	 *    site-wide hid a delete_user approval from every key, including
-	 *    ones with no reason to lose it.
-	 * 2. payload.target.type — Mcpwp_Destructive_Gate::fingerprint()'s own
-	 *    capture of the post's type at the moment a destructive call was
-	 *    deferred. Reliable for every destructive_operation record, even a
-	 *    LEGACY one predating `visibility_categories` (#1025 round 2,
-	 *    WARN-1): the target's type was already being captured here before
-	 *    this fix, so a hard-deleted destructive target still classifies
-	 *    correctly without any new data.
-	 * 3. resource.post_type — the real-type field this round's creators now
-	 *    store explicitly (see e.g. create_post_content_request()).
-	 * 4. resource.type — ONLY for destructive_operation. Its callers pass
-	 *    the resolved post's real post_type deliberately (or a non-post
-	 *    sentinel — 'user', 'term', 'widget', 'drafts', 'api_key' — that
-	 *    post_type_exists() rejects here, so trusting it is safe). NEVER for
-	 *    post_content_update: create_post_content_request() hardcodes
-	 *    resource.type to the literal string 'post' regardless of the
-	 *    target's real type (WARN-1's own finding) — trusting it there
-	 *    would under-classify a legacy, target-deleted product/template
-	 *    edit as ordinary 'content' instead of falling back safely.
+	 * @return bool
+	 */
+	private static function visibility_dependencies_loaded() {
+		$loaded = class_exists( 'Mcpwp_REST_API' )
+			&& method_exists( 'Mcpwp_REST_API', 'get_category_for_route' )
+			&& method_exists( 'Mcpwp_REST_API', 'category_for_post_type' )
+			&& method_exists( 'Mcpwp_REST_API', 'known_post_type_categories' );
+		return $loaded && (bool) apply_filters( 'mcpwp_approvals_visibility_dependencies_loaded', true );
+	}
+
+	/**
+	 * A post type whose category is known: registered right now, or in the
+	 * explicit map (which holds whether or not its plugin is active).
+	 *
+	 * @param string $type Post type.
+	 * @return bool
+	 */
+	private static function post_type_known( $type ) {
+		$type = (string) $type;
+		if ( '' === $type ) {
+			return false;
+		}
+		$map = Mcpwp_REST_API::known_post_type_categories();
+		return isset( $map[ $type ] ) || post_type_exists( $type );
+	}
+
+	/**
+	 * Non-post resource types a destructive request can name (a user, a
+	 * term, a widget, the drafts purge, an API key, a staging push): never a
+	 * post type, so never an unresolved one.
+	 */
+	const NON_POST_RESOURCE_TYPES = array( 'user', 'term', 'widget', 'drafts', 'api_key', 'staging', 'unknown' );
+
+	/**
+	 * Resolve the real post_type of an approval's target, and whether that
+	 * could be done with confidence.
+	 *
+	 * 1. The LIVE post (get_post() on resource.id), only when resource.type
+	 *    itself names a post: literally 'post' (post_content_update's
+	 *    hardcode) or a known post type (registered, or in the explicit map)
+	 *    — never a user/term/widget id that could collide with a post id
+	 *    (#1025 round 3). Found: authoritative, confident when its type is
+	 *    known. Not found: the target is a missing post, not confident.
+	 * 2. The stored hints: payload.target.type (fingerprint()'s capture at
+	 *    defer time), resource.post_type, and — for destructive_operation
+	 *    only — resource.type. A known type resolves; a non-post sentinel is
+	 *    skipped; any other type (a plugin's CPT, plugin inactive right now)
+	 *    makes the answer not confident.
 	 *
 	 * @param string $action   Approval action.
 	 * @param array  $resource Resource block.
 	 * @param array  $payload  Payload block.
-	 * @return string Real post_type, or '' when none of the above resolves one.
+	 * @return array{post_type:string,confident:bool}
 	 */
 	private static function resolve_target_post_type( $action, array $resource, array $payload ) {
 		$post_id       = isset( $resource['id'] ) ? $resource['id'] : null;
 		$resource_type = isset( $resource['type'] ) ? (string) $resource['type'] : '';
+		$missing       = false;
 
-		if ( is_numeric( $post_id ) && (int) $post_id > 0 && ( 'post' === $resource_type || post_type_exists( $resource_type ) ) ) {
+		if ( is_numeric( $post_id ) && (int) $post_id > 0 && ( 'post' === $resource_type || self::post_type_known( $resource_type ) ) ) {
 			$post = get_post( (int) $post_id );
 			if ( $post instanceof WP_Post ) {
-				return (string) $post->post_type;
+				// The live post's type still has to be one whose category is
+				// known: an unregistered, unmapped type (its plugin inactive)
+				// would fall back to a guess.
+				return array(
+					'post_type' => (string) $post->post_type,
+					'confident' => self::post_type_known( (string) $post->post_type ),
+				);
 			}
+			$missing = true;
 		}
 
-		if ( ! empty( $payload['target']['type'] ) && post_type_exists( (string) $payload['target']['type'] ) ) {
-			return (string) $payload['target']['type'];
+		$hints = array(
+			isset( $payload['target']['type'] ) ? (string) $payload['target']['type'] : '',
+			isset( $resource['post_type'] ) ? (string) $resource['post_type'] : '',
+			'destructive_operation' === $action ? $resource_type : '',
+		);
+		foreach ( $hints as $hint ) {
+			if ( '' === $hint || in_array( $hint, self::NON_POST_RESOURCE_TYPES, true ) || 0 === strpos( $hint, 'bulk_' ) ) {
+				continue;
+			}
+			if ( self::post_type_known( $hint ) ) {
+				return array(
+					'post_type' => $hint,
+					'confident' => ! $missing,
+				);
+			}
+			return array(
+				'post_type' => '',
+				'confident' => false,
+			);
 		}
 
-		if ( ! empty( $resource['post_type'] ) && post_type_exists( (string) $resource['post_type'] ) ) {
-			return (string) $resource['post_type'];
-		}
-
-		if ( 'destructive_operation' === $action && ! empty( $resource['type'] ) && post_type_exists( (string) $resource['type'] ) ) {
-			return (string) $resource['type'];
-		}
-
-		return '';
+		return array(
+			'post_type' => '',
+			'confident' => ! $missing,
+		);
 	}
 
 	/**
-	 * Every tool category a caller must hold to read $record (#1025).
+	 * THE derivation of an approval's visibility categories for persistence
+	 * (#1042 review round 4). Stored categories (computed at creation) are
+	 * returned as they are, confident. Otherwise the categories are computed
+	 * and `confident` is true only when `init` has fired, every dependency is
+	 * loaded, every target type resolved (registered or in the explicit map)
+	 * and the target is not a missing post. A record whose categories were
+	 * set aside as unverified by the schema-5 repair only ever gains
+	 * categories here (their union) — a re-derivation never widens.
 	 *
-	 * Prefers the record's own stored `visibility_categories` — computed
-	 * ONCE at creation time by whichever `create_*_request()` method built
-	 * it, while the target was guaranteed to still resolve — over
-	 * recomputing live. This is what closes WARN-1: recomputing at READ time
-	 * against a target that has SINCE been hard-deleted can only ever do
-	 * worse than what was known at creation, never better, so a stored value
-	 * is authoritative and a live one is a fallback for a record that
-	 * predates this field (or was built by a caller not yet updated to set
-	 * it).
+	 * @param array $record Record.
+	 * @return array{categories:string[],confident:bool}
+	 */
+	public static function derive_visibility( array $record ) {
+		if ( ! empty( $record['visibility_categories'] ) && is_array( $record['visibility_categories'] ) ) {
+			$stored = array_values( array_unique( array_map( 'strval', $record['visibility_categories'] ) ) );
+			if ( ! empty( $stored ) ) {
+				return array(
+					'categories' => $stored,
+					'confident'  => true,
+				);
+			}
+		}
+
+		if ( ! self::post_types_ready() ) {
+			return array(
+				'categories' => array( self::UNRESOLVABLE_CATEGORY ),
+				'confident'  => false,
+			);
+		}
+
+		$computed = self::compute_categories(
+			isset( $record['action'] ) ? (string) $record['action'] : '',
+			isset( $record['resource'] ) && is_array( $record['resource'] ) ? $record['resource'] : array(),
+			isset( $record['payload'] ) && is_array( $record['payload'] ) ? $record['payload'] : array()
+		);
+
+		$unverified = isset( $record['metadata']['categories_unverified'] ) && is_array( $record['metadata']['categories_unverified'] )
+			? array_map( 'strval', $record['metadata']['categories_unverified'] )
+			: array();
+		if ( ! empty( $unverified ) ) {
+			$computed['categories'] = array_values( array_unique( array_merge( $unverified, $computed['categories'] ) ) );
+			// UNRESOLVABLE alongside real categories would add nothing an
+			// unrestricted key lacks, and hide it from everyone else: keep it
+			// only when it is all there is.
+			if ( count( $computed['categories'] ) > 1 ) {
+				$computed['categories'] = array_values( array_diff( $computed['categories'], array( self::UNRESOLVABLE_CATEGORY ) ) );
+			}
+		}
+		return $computed;
+	}
+
+	/**
+	 * Every tool category a caller must hold to read $record (#1025) — the
+	 * record's stored categories, else a confident derive_visibility(), else
+	 * the fail-closed UNRESOLVABLE_CATEGORY. The same function the light
+	 * column is written from, so list, count and get always agree.
 	 *
 	 * @param array $record Public or private approval record.
 	 * @return string[] Every category the caller must hold; never empty.
 	 */
 	public static function categories_for_approval( array $record ) {
-		if ( ! empty( $record['visibility_categories'] ) && is_array( $record['visibility_categories'] ) ) {
-			$stored = array_values( array_unique( array_map( 'strval', $record['visibility_categories'] ) ) );
-			if ( ! empty( $stored ) ) {
-				return $stored;
-			}
-		}
-
-		$action   = isset( $record['action'] ) ? (string) $record['action'] : '';
-		$resource = isset( $record['resource'] ) && is_array( $record['resource'] ) ? $record['resource'] : array();
-		$payload  = isset( $record['payload'] ) && is_array( $record['payload'] ) ? $record['payload'] : array();
-
-		return self::compute_visibility_categories( $action, $resource, $payload );
+		$derived = self::derive_visibility( $record );
+		return $derived['confident'] ? $derived['categories'] : array( self::UNRESOLVABLE_CATEGORY );
 	}
 
 	/**
@@ -2209,14 +2324,20 @@ class Mcpwp_Approvals {
 	}
 
 	/**
-	 * Recompute the derived columns of every row (schema upgrades that add
-	 * a column: cap_exempt / quota_bytes in schema 2, visibility_categories
-	 * in schema 3), and — schema 4 — persist the categories into every
-	 * record that did not store them, with the column, in one version-
-	 * checked write (row_from_record()). That repairs a column an earlier
-	 * candidate build derived before `init`. For
-	 * Mcpwp_Activator::migrate_approvals_to_table() only, under its lock,
-	 * after `init`. A damaged row keeps its columns.
+	 * Recompute the derived columns of every row, one full record at a time,
+	 * for Mcpwp_Activator::migrate_approvals_to_table() only, under its lock,
+	 * after `init`. Schema 2/3 added columns (cap_exempt, quota_bytes,
+	 * visibility_categories); schema 4 persisted categories into records
+	 * that lacked them.
+	 *
+	 * Schema 5 (#1042 review round 4) repairs what candidate builds may have
+	 * persisted in an incomplete environment: any record whose categories
+	 * were not stored at creation (no metadata.categories_source = 'create')
+	 * is re-derived through derive_visibility(). An `["__unresolvable__"]`
+	 * written during an activation request is dropped; any other stored set
+	 * is kept aside as `categories_unverified`, and the confident derivation
+	 * is UNIONED with it — a repair never widens visibility. Not confident:
+	 * the row goes fail-closed and pending, and is retried later.
 	 *
 	 * @return true|WP_Error
 	 */
@@ -2229,15 +2350,14 @@ class Mcpwp_Approvals {
 		return self::each_row(
 			array(),
 			static function ( array $row ) use ( $wpdb, $table ) {
-				$record = $row['record'];
+				$record = self::unverify_derived_categories( $row['record'] );
 				$fields = self::row_from_record( $record );
 				if ( is_wp_error( $fields ) ) {
-					return 'approvals_busy' === $fields->get_error_code() ? $fields : true;
+					return true;
 				}
 				if ( $record !== $row['record'] ) {
-					// The record gained its categories: write record and columns
-					// together, version-checked; a concurrent write is retried
-					// through update_one(), which persists them the same way.
+					// Record and columns together, version-checked; a concurrent
+					// write is retried through update_one().
 					$written = self::update_row( $row['id'], $row['version'], $fields );
 					if ( false === $written ) {
 						return self::store_failed_error();
@@ -2246,7 +2366,7 @@ class Mcpwp_Approvals {
 						$retried = self::update_one(
 							$row['id'],
 							static function ( array $fresh ) {
-								return $fresh;
+								return self::unverify_derived_categories( $fresh );
 							}
 						);
 						if ( is_wp_error( $retried ) && 'approval_not_found' !== $retried->get_error_code() ) {
@@ -2256,10 +2376,88 @@ class Mcpwp_Approvals {
 					return true;
 				}
 				// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- table name is prefix + constant.
-				$done = $wpdb->query( $wpdb->prepare( "UPDATE {$table} SET cap_exempt = %d, quota_bytes = %d, updated_at = %s, visibility_categories = %s WHERE id = %s", $fields['cap_exempt'], $fields['quota_bytes'], $fields['updated_at'], $fields['visibility_categories'], $row['id'] ) );
+				$done = $wpdb->query( $wpdb->prepare( "UPDATE {$table} SET cap_exempt = %d, quota_bytes = %d, updated_at = %s, visibility_categories = %s, categories_pending = %d WHERE id = %s", $fields['cap_exempt'], $fields['quota_bytes'], $fields['updated_at'], $fields['visibility_categories'], $fields['categories_pending'], $row['id'] ) );
 				return false === $done ? self::store_failed_error() : true;
 			}
 		);
+	}
+
+	/**
+	 * Schema-5 repair of one record (see backfill_derived_columns()):
+	 * categories not stored at creation are taken out of the record so
+	 * derive_visibility() runs again — `["__unresolvable__"]` dropped, any
+	 * other set kept as categories_unverified, which the derivation unions
+	 * with (never widening).
+	 *
+	 * @param array $record Record.
+	 * @return array
+	 */
+	private static function unverify_derived_categories( array $record ) {
+		$source = isset( $record['metadata']['categories_source'] ) ? (string) $record['metadata']['categories_source'] : '';
+		if ( 'create' === $source || empty( $record['visibility_categories'] ) || ! is_array( $record['visibility_categories'] ) ) {
+			return $record;
+		}
+		$stored = array_values( array_unique( array_map( 'strval', $record['visibility_categories'] ) ) );
+		unset( $record['visibility_categories'] );
+		if ( ! isset( $record['metadata'] ) || ! is_array( $record['metadata'] ) ) {
+			$record['metadata'] = array();
+		}
+		if ( array( self::UNRESOLVABLE_CATEGORY ) !== $stored ) {
+			$record['metadata']['categories_unverified'] = $stored;
+		}
+		return $record;
+	}
+
+	/**
+	 * Retry the derivation for rows whose categories are still pending
+	 * (categories_pending = 1): the lazy pass on approvals paths and the
+	 * hourly cron. A row persists once derive_visibility() is confident; one
+	 * that never becomes confident (target deleted, plugin uninstalled) stays
+	 * fail-closed.
+	 *
+	 * @param int $limit Rows per pass.
+	 * @return int|WP_Error Rows whose categories were persisted.
+	 */
+	public static function rederive_pending( $limit = 50 ) {
+		if ( ! self::post_types_ready() ) {
+			return 0;
+		}
+		$rows = self::select_light( array( array( 'categories_pending =', 1 ) ), 'id ASC', max( 1, (int) $limit ) );
+		if ( is_wp_error( $rows ) ) {
+			return $rows;
+		}
+		$persisted = 0;
+		foreach ( $rows as $row ) {
+			$result = self::update_one(
+				(string) $row['id'],
+				static function ( array $record ) {
+					return $record; // row_from_record() re-derives it.
+				}
+			);
+			if ( is_array( $result ) && ! empty( $result['visibility_categories'] ) ) {
+				$persisted++;
+			}
+		}
+		return $persisted;
+	}
+
+	/**
+	 * The lazy re-derivation on approvals paths: at most once per request,
+	 * and at most every five minutes across requests (an autoloaded
+	 * timestamp, so the gate costs no query).
+	 *
+	 * @return void
+	 */
+	private static function maybe_rederive_pending() {
+		if ( self::$rederive_ran || ! self::post_types_ready() ) {
+			return;
+		}
+		self::$rederive_ran = true;
+		if ( (int) get_option( 'mcpwp_approvals_rederive_after', 0 ) > time() ) {
+			return;
+		}
+		update_option( 'mcpwp_approvals_rederive_after', time() + 300 );
+		self::rederive_pending();
 	}
 
 	/**
@@ -2352,6 +2550,7 @@ class Mcpwp_Approvals {
 		// downgraded) is checked here, lazily, on approvals paths only — not
 		// on every request (#1042 review round 2) — plus an hourly cron.
 		if ( get_option( self::MIGRATED_FLAG ) && (int) get_option( self::SCHEMA_OPTION, 0 ) >= self::SCHEMA_VERSION && false === get_option( self::OPTION_NAME, false ) ) {
+			self::maybe_rederive_pending();
 			return true;
 		}
 		if ( ! class_exists( 'Mcpwp_Activator' ) ) {
@@ -2536,6 +2735,14 @@ class Mcpwp_Approvals {
 		if ( is_wp_error( $ready ) ) {
 			return $ready;
 		}
+		// Categories computed by the creator, at creation: marked so later
+		// repairs can tell them from ones a migration derived.
+		if ( ! empty( $request['visibility_categories'] ) ) {
+			if ( ! isset( $request['metadata'] ) || ! is_array( $request['metadata'] ) ) {
+				$request['metadata'] = array();
+			}
+			$request['metadata']['categories_source'] = 'create';
+		}
 		$fields = self::row_from_record( $request );
 		if ( is_wp_error( $fields ) ) {
 			return $fields;
@@ -2620,6 +2827,7 @@ class Mcpwp_Approvals {
 			'cap_exempt'            => '%d',
 			'quota_bytes'           => '%d',
 			'visibility_categories' => '%s',
+			'categories_pending'    => '%d',
 			'record'                => '%s',
 		);
 	}
@@ -2851,20 +3059,30 @@ class Mcpwp_Approvals {
 	 * @return array|WP_Error
 	 */
 	private static function row_from_record( array &$record ) {
-		// ONE source of truth for who may see a record (#1042 review round
-		// 3): a record that carries no stored visibility_categories gets the
-		// computed ones written INTO it, in this same row write. From then on
-		// categories_for_approval() takes the stored path for it, so the
-		// light column and the full-record decision can never disagree, and
-		// nothing recomputes live later (a hard-deleted target cannot widen
-		// it). Deriving needs every post type registered: before `init` a
-		// plugin's product / template types do not exist yet and the
-		// derivation would under-classify, so it is refused, not guessed.
+		// ONE source of truth for who may see a record (#1042 review rounds
+		// 3-4). Stored categories (set at creation) are used as they are.
+		// Otherwise derive_visibility() runs, and its answer is persisted
+		// into the record — in this same row write, marked
+		// metadata.categories_source = 'derived' — ONLY when it is
+		// confident. When it is not (before init, the REST classes not
+		// loaded, a type no one can resolve, a missing target post), nothing
+		// is written into the record: the column gets the fail-closed
+		// UNRESOLVABLE_CATEGORY and categories_pending = 1, and the
+		// re-derivation pass retries it later. categories_for_approval()
+		// answers the same, so list, count and get agree either way.
+		$pending = 0;
 		if ( empty( $record['visibility_categories'] ) || ! is_array( $record['visibility_categories'] ) ) {
-			if ( ! self::post_types_ready() ) {
-				return self::busy_error();
+			$derived = self::derive_visibility( $record );
+			if ( $derived['confident'] ) {
+				$record['visibility_categories'] = $derived['categories'];
+				if ( ! isset( $record['metadata'] ) || ! is_array( $record['metadata'] ) ) {
+					$record['metadata'] = array();
+				}
+				unset( $record['metadata']['categories_unverified'] );
+				$record['metadata']['categories_source'] = 'derived';
+			} else {
+				$pending = 1;
 			}
-			$record['visibility_categories'] = array_values( self::categories_for_approval( $record ) );
 		}
 
 		$json = self::encode_record( $record, true );
@@ -2894,7 +3112,8 @@ class Mcpwp_Approvals {
 			// The categories a reader must hold (categories_for_approval()),
 			// so visibility is decided from this light column without
 			// decoding `record` (#1042 review round 2).
-			'visibility_categories' => (string) wp_json_encode( array_values( self::categories_for_approval( $record ) ) ),
+			'visibility_categories' => (string) wp_json_encode( $pending ? array( self::UNRESOLVABLE_CATEGORY ) : array_values( self::categories_for_approval( $record ) ) ),
+			'categories_pending'    => $pending,
 			'record'              => $json,
 		);
 	}
@@ -3031,6 +3250,7 @@ class Mcpwp_Approvals {
 	 */
 	public static function reset_request_state() {
 		self::$expiry_swept = false;
+		self::$rederive_ran = false;
 	}
 
 	/**

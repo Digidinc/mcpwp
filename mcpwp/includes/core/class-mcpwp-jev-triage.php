@@ -64,10 +64,12 @@ class Mcpwp_Jev_Triage {
 	 * (per the brief: "On failure store nothing and log").
 	 *
 	 * @param string $approval_id Approval request ID.
+	 * @param int    $attempt     Attempt number (a busy store reschedules).
 	 * @return void
 	 */
-	public static function run( $approval_id ) {
+	public static function run( $approval_id, $attempt = 1 ) {
 		$approval_id = sanitize_key( (string) $approval_id );
+		$attempt     = max( 1, (int) $attempt );
 		if ( '' === $approval_id || ! class_exists( 'Mcpwp_Approvals' ) || ! class_exists( 'Mcpwp_Jev' ) ) {
 			return;
 		}
@@ -80,6 +82,10 @@ class Mcpwp_Jev_Triage {
 		}
 
 		$record = Mcpwp_Approvals::get_request( $approval_id );
+		if ( is_wp_error( $record ) && 'approvals_busy' === $record->get_error_code() ) {
+			self::retry_when_busy( $approval_id, $attempt, $record );
+			return;
+		}
 		if ( is_wp_error( $record ) || ! is_array( $record ) ) {
 			return;
 		}
@@ -106,9 +112,40 @@ class Mcpwp_Jev_Triage {
 		}
 
 		$triage = self::extract_triage( is_array( $result ) ? $result : array() );
-		if ( ! Mcpwp_Approvals::set_triage( $approval_id, $triage ) ) {
-			self::log_failure( $approval_id, new WP_Error( 'jev_invalid_answer', 'Jev answer failed enum validation; nothing stored.' ) );
+		$stored = Mcpwp_Approvals::set_triage_result( $approval_id, $triage );
+		if ( is_wp_error( $stored ) && 'approvals_busy' === $stored->get_error_code() ) {
+			self::retry_when_busy( $approval_id, $attempt, $stored );
+			return;
 		}
+		if ( is_wp_error( $stored ) ) {
+			self::log_failure( $approval_id, $stored );
+		}
+	}
+
+	/**
+	 * Attempts at triaging one approval while the approvals store answers
+	 * approvals_busy (#1042 review round 4).
+	 */
+	const MAX_BUSY_ATTEMPTS = 5;
+
+	/**
+	 * The approvals store was busy (its one-time migration, or a lost race
+	 * too many times): the one-shot event must not be lost. Reschedule it 60
+	 * seconds later, up to MAX_BUSY_ATTEMPTS attempts, and log the real
+	 * reason.
+	 *
+	 * @param string   $approval_id Approval id.
+	 * @param int      $attempt     This attempt (1-based).
+	 * @param WP_Error $error       The busy error.
+	 * @return void
+	 */
+	private static function retry_when_busy( $approval_id, $attempt, WP_Error $error ) {
+		if ( $attempt < self::MAX_BUSY_ATTEMPTS && function_exists( 'wp_schedule_single_event' ) ) {
+			wp_schedule_single_event( time() + 60, self::HOOK, array( $approval_id, $attempt + 1 ) );
+			self::log_failure( $approval_id, new WP_Error( 'approvals_busy', sprintf( 'approvals_busy: the approval queue was busy; retrying in 60 s (attempt %d of %d).', $attempt, self::MAX_BUSY_ATTEMPTS ) ) );
+			return;
+		}
+		self::log_failure( $approval_id, new WP_Error( 'approvals_busy', sprintf( 'approvals_busy: the approval queue was still busy after %d attempts; gave up.', self::MAX_BUSY_ATTEMPTS ) ) );
 	}
 
 	/**

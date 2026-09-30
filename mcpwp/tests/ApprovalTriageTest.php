@@ -7,6 +7,7 @@ require_once dirname(__DIR__) . '/includes/core/class-mcpwp-integration-manager.
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-approvals.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-jev.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-jev-triage.php';
+require_once dirname(__DIR__) . '/includes/class-mcpwp-activator.php';
 
 /**
  * Jev-powered approval-queue triage.
@@ -299,6 +300,91 @@ final class ApprovalTriageTest extends TestCase
 
         $stored = Mcpwp_Approvals::get_request($approval['id']);
         $this->assertArrayNotHasKey('triage', $stored);
+    }
+
+    // -- #1042 round 4: a busy approvals store is retried, not lost -----------------
+
+    /** Runs $fn with error_log() captured; returns what was logged. */
+    private function captureErrorLog(callable $fn): string
+    {
+        $file = tempnam(sys_get_temp_dir(), 'mcpwp-log');
+        $prev = ini_set('error_log', $file);
+        try {
+            $fn();
+        } finally {
+            ini_set('error_log', (string) $prev);
+        }
+        $log = (string) file_get_contents($file);
+        @unlink($file);
+        return $log;
+    }
+
+    public function test_run_reschedules_when_the_approvals_store_is_busy_on_read(): void
+    {
+        $this->configureJev();
+        $approval = Mcpwp_Approvals::create_post_content_request($this->makePost(), 'updated content', array('title' => 'Edit'));
+        $calls    = $this->spyOutbound();
+
+        // Another request holds the approvals migration: every read is busy.
+        delete_option(Mcpwp_Approvals::MIGRATED_FLAG);
+        $GLOBALS['mcpwp_test_wpdb_options'][ Mcpwp_Activator::APPROVALS_TABLE_LOCK_OPTION ] = (string) (time() + 60);
+        $GLOBALS['mcpwp_test_single_cron'] = array();
+
+        $log = $this->captureErrorLog(function () use ($approval) {
+            Mcpwp_Jev_Triage::run($approval['id']);
+        });
+
+        $this->assertSame(0, count($calls), 'Jev was not called for a record it could not read.');
+        $this->assertCount(1, $GLOBALS['mcpwp_test_single_cron']);
+        $event = $GLOBALS['mcpwp_test_single_cron'][0];
+        $this->assertSame(Mcpwp_Jev_Triage::HOOK, $event['hook']);
+        $this->assertSame(array($approval['id'], 2), $event['args']);
+        $this->assertGreaterThanOrEqual(time() + 59, $event['timestamp']);
+        $this->assertStringContainsString('approvals_busy', $log);
+        $this->assertStringNotContainsString('jev_invalid_answer', $log);
+
+        // The fifth attempt gives up (logged), and schedules nothing more.
+        $GLOBALS['mcpwp_test_single_cron'] = array();
+        $log = $this->captureErrorLog(function () use ($approval) {
+            Mcpwp_Jev_Triage::run($approval['id'], Mcpwp_Jev_Triage::MAX_BUSY_ATTEMPTS);
+        });
+        $this->assertSame(array(), $GLOBALS['mcpwp_test_single_cron']);
+        $this->assertStringContainsString('gave up', $log);
+    }
+
+    public function test_run_reschedules_when_storing_the_triage_is_busy(): void
+    {
+        $this->configureJev();
+        $approval = Mcpwp_Approvals::create_post_content_request($this->makePost(), 'updated content', array('title' => 'Edit'));
+        $this->mockJevAnswer(array(
+            'review_priority' => array('type' => 'score', 'score' => 3, 'confidence' => 0.99, 'legend' => 'urgent'),
+            'change_kind'     => array('type' => 'choice', 'choice' => 'content_edit'),
+        ));
+        $GLOBALS['mcpwp_test_single_cron'] = array();
+
+        // Every write loses its race: update_one() answers approvals_busy.
+        $bump = null;
+        $bump = function (string $row_id) use (&$bump): void {
+            mcpwp_test_approvals_concurrent_write($row_id, static function (array $record): array {
+                return $record;
+            });
+            $GLOBALS['mcpwp_test_approvals_before_update'] = $bump;
+        };
+        $GLOBALS['mcpwp_test_approvals_before_update'] = $bump;
+
+        $log = $this->captureErrorLog(function () use ($approval) {
+            Mcpwp_Jev_Triage::run($approval['id']);
+        });
+        $GLOBALS['mcpwp_test_approvals_before_update'] = null;
+
+        $this->assertSame(array($approval['id'], 2), $GLOBALS['mcpwp_test_single_cron'][0]['args']);
+        $this->assertStringContainsString('approvals_busy', $log);
+        $this->assertStringNotContainsString('jev_invalid_answer', $log);
+        $this->assertArrayNotHasKey('triage', Mcpwp_Approvals::get_request($approval['id']));
+
+        // The retry, with the store free again, stores it.
+        Mcpwp_Jev_Triage::run($approval['id'], 2);
+        $this->assertSame('urgent', Mcpwp_Approvals::get_request($approval['id'])['triage']['priority']);
     }
 
     public function test_run_drops_the_whole_triage_when_change_kind_is_an_invalid_or_injected_value(): void
