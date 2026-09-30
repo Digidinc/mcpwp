@@ -5,6 +5,32 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.14.9](https://github.com/Digidinc/mcpwp/compare/v3.14.8...v3.14.9) (2026-09-30)
+
+
+### Bug Fixes
+
+* **approvals:** move the approvals store to its own table ([#1052](https://github.com/Digidinc/mcpwp/issues/1052)) ([31761ad](https://github.com/Digidinc/mcpwp/commit/31761ad46efaeba37da0bca25ba60cbebe5ca920))
+* **release:** build the Freemius upload with build-freemius.sh (one packager) ([#1054](https://github.com/Digidinc/mcpwp/issues/1054)) ([ec066d0](https://github.com/Digidinc/mcpwp/commit/ec066d0a9f0fb529ba87371048907e6f8870096b))
+* **release:** publish-freemius takes release scripts from main, plugin code from the tag ([#1055](https://github.com/Digidinc/mcpwp/issues/1055)) ([9bd98ff](https://github.com/Digidinc/mcpwp/commit/9bd98ff6e77213c957a1ac74f37f8bca58918098))
+
+### Changed for existing API keys and approvals
+
+* **Approvals have their own database table.** The whole queue used to live in one WordPress option that was rewritten on every change. Each approval is now its own row: applies and rollbacks can't run twice, counts are exact, and a large queue no longer blocks new requests. Existing approvals move over automatically on the first page load after the update ([#1042](https://github.com/Digidinc/mcpwp/issues/1042)).
+* **Only people and admin-scope keys skip the approval limits.** An administrator working in wp-admin, and API keys with **admin scope**, are exempt. Every other principal is limited: write-scope keys of any role (including admin-role keys with write scope), every OAuth sign-in (Claude, ChatGPT) and WebMCP users. The limits are 20 pending content proposals each, 100 across the site, and about 410 KB of open requests each ([#1042](https://github.com/Digidinc/mcpwp/issues/1042)).
+* **One ceiling for everyone:** all open approvals together can hold up to 64 MB of proposed content (filter `mcpwp_approvals_open_bytes_max`). Past it, new requests are refused with `approvals_store_full`. Approving, rejecting, applying and rolling back are never refused ([#1042](https://github.com/Digidinc/mcpwp/issues/1042)).
+* **Limited keys have at most 200 open requests in total** (`approval_queue_full`). Before, that limit only removed old records and never refused anything. Closed history doesn't count toward it ([#1042](https://github.com/Digidinc/mcpwp/issues/1042)).
+* **Closed approvals are kept for 90 days** (was 7) and then removed, with a summary in the action log ([#1042](https://github.com/Digidinc/mcpwp/issues/1042)).
+* **Persian, Arabic, Chinese and other non-Latin proposals count at their real size** toward the per-key limit ([#1042](https://github.com/Digidinc/mcpwp/issues/1042)).
+* **Who can see an old approval is decided once, safely.** Approvals created before 3.14.6 get their visibility worked out after the update. When it can't be worked out yet (for example, a post-type plugin is switched off), the approval is shown only to admins and is re-checked hourly until it can. In `/approvals` output such records now include `visibility_categories`. Approval events for deleted or not-yet-checked approvals are shown to admins only ([#1042](https://github.com/Digidinc/mcpwp/issues/1042)).
+* **Store problems are reported, not hidden.** If the approvals table can't be read, `/approvals` answers 503 instead of an empty list, and the Control Room shows an error ([#1042](https://github.com/Digidinc/mcpwp/issues/1042)).
+
+### Upgrade Notes
+
+* Existing approvals move to a new database table on the first page load after updating. While that runs, approval requests briefly answer "busy" (503, retry after 2 seconds).
+* Downgrading below 3.14.9 shows an empty approval queue. The approvals come back when you update again, including any created while downgraded.
+* Write-scope API keys and Claude/ChatGPT sign-ins now have the same approval limits as other limited keys. Use an admin-scope key for bulk approval work.
+
 ## [3.14.8](https://github.com/Mumega-com/mcpwp/compare/v3.14.7...v3.14.8) (2026-09-28)
 
 
