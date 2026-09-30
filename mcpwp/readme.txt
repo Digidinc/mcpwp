@@ -157,6 +157,10 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 
 == Changelog ==
 
+= 3.14.10 =
+* feat: **docs:** generate the tool and error reference from a live site ([#1072](https://github.com/Digidinc/mcpwp/issues/1072))
+* feat: **mcp:** tool weight budget, core profile by default for new connections ([#1071](https://github.com/Digidinc/mcpwp/issues/1071))
+
 = 3.14.9 =
 * fix: **approvals:** move the approvals store to its own table ([#1052](https://github.com/Digidinc/mcpwp/issues/1052))
 * fix: **release:** build the Freemius upload with build-freemius.sh (one packager) ([#1054](https://github.com/Digidinc/mcpwp/issues/1054))
@@ -927,6 +931,9 @@ Now admin-scoped: /posts, /pages and their clone and translation paths; /woocomm
 * Fix SQL escaping in activity log for WordPress.org scanner.
 
 == Upgrade Notice ==
+
+= 3.14.10 =
+Agents connecting after the update see a short tool list and use `mcpwp_find_tools` to reach the rest. To give every connection the full list again, set MCPWP → Settings → Tool profile to "Full".
 
 = 3.14.9 =
 Existing approvals move to a new database table on the first page load after updating. While that runs, approval requests briefly answer "busy" (503, retry after 2 seconds). Downgrading below 3.14.9 shows an empty approval queue. The approvals come back when you update again, including any created while downgraded. Write-scope API keys and Claude/ChatGPT sign-ins now have the same approval limits as other limited keys. Use an admin-scope key for bulk approval work.
