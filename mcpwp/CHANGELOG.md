@@ -5,6 +5,14 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.14.10](https://github.com/Digidinc/mcpwp/compare/v3.14.9...v3.14.10) (2026-09-30)
+
+
+### Features
+
+* **docs:** generate the tool and error reference from a live site ([#1072](https://github.com/Digidinc/mcpwp/issues/1072)) ([839bb0a](https://github.com/Digidinc/mcpwp/commit/839bb0a81ed96fe1e1a30d9904de46d8b92bae66))
+* **mcp:** tool weight budget, core profile by default for new connections ([#1071](https://github.com/Digidinc/mcpwp/issues/1071)) ([88a50c9](https://github.com/Digidinc/mcpwp/commit/88a50c98bdf15bd139d7e5f6a283ce286f89a8f5))
+
 ## [3.14.9](https://github.com/Digidinc/mcpwp/compare/v3.14.8...v3.14.9) (2026-09-30)
 
 
