@@ -106,6 +106,7 @@ call.
 | 3.8 | **ChatGPT plugin directory listing** (DevDay 2026: ChatGPT recommends plugins in conversation). Highest-leverage distribution item | #1058 | Agent prepares; **owner** creates the OpenAI developer account/org (Digid Inc.) | todo | Submitted |
 | 3.9 | ChatGPT plugin extension: "Your site" sidebar, page preview panel, MCP Events automations | #1059 | Agent (design first; approve/reject slice gets **adversarial** review) | waiting on OpenAI docs | Design merged, events slice shipped |
 | 3.10 | Sign in with ChatGPT: built-in AI on the owner's ChatGPT plan (no API key) | #1060 | Agent researches; **owner** applies for access | todo | Go/no-go recorded |
+| 3.11 | **Multi-site hub:** one connection for many sites; per-project site pinning (`?site=alias` / `X-Mcpwp-Site`), session switching, every result stamped with its site, cross-site write guard, site switcher in the ChatGPT/Codex extension. Slices S1–S5 in the epic; S1 first | #1062 (with #549, #1059) | Agent (S1–S3 **adversarial**) | todo | 10 sites, one connection, each Codex project pinned, wrong-site write refused |
 
 ### Media: ordering video in Linear
 
