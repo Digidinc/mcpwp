@@ -505,17 +505,28 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 		}
 	}
 
-	// One-time purge of identity-less pending approvals — gated on its OWN flag,
-	// not the version check above. A same-version deployment (e.g. 3.6.1 -> 3.6.1)
-	// never enters the activate() branch, so relying on the version gate alone
-	// would skip this security migration and leave a pre-fix pending approval
-	// exploitable by a reconnected OAuth principal. Idempotent; after the first
-	// run this is a single (cached) get_option() per load. Runs on plugins_loaded,
-	// before REST routes, so the purge precedes any approve/apply request.
-	if ( ! get_option( 'mcpwp_approvals_identity_migrated' ) ) {
-		require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-activator.php';
-		Mcpwp_Activator::migrate_identity_less_approvals();
-	}
+	// One-time move of the approvals store from its option to its own table
+	// (#1042), its schema upgrades, and the one-time purge of identity-less
+	// approvals: on wp_loaded, not plugins_loaded. Both derive visibility
+	// categories from post types, and a plugin's product / template types do
+	// not exist until `init` (#1042 review round 3). wp_loaded still runs
+	// before any REST, admin-AJAX or cron dispatch. Gated on their OWN flags
+	// (autoloaded, so free once done), not on the version check above.
+	add_action(
+		'wp_loaded',
+		static function () {
+			if ( ! get_option( 'mcpwp_approvals_table_migrated' ) || (int) get_option( 'mcpwp_approvals_schema_version', 0 ) < 6 ) {
+				require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-activator.php';
+				Mcpwp_Activator::migrate_approvals_to_table();
+			}
+			// A pre-fix pending approval created by a then-identity-less OAuth
+			// principal must not stay exploitable (see the method docblock).
+			if ( ! get_option( 'mcpwp_approvals_identity_migrated' ) ) {
+				require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-activator.php';
+				Mcpwp_Activator::migrate_identity_less_approvals();
+			}
+		}
+	);
 
 	// One-time reset of the destructive-approval switch. An early build of
 	// the gate exposed destructive_requires_approval through the settings
@@ -769,6 +780,29 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	} );
 	if ( ! wp_next_scheduled( 'mcpwp_action_log_daily_prune' ) ) {
 		wp_schedule_event( time(), 'daily', 'mcpwp_action_log_daily_prune' );
+	}
+
+	// Daily approvals retention (#1042): closed records older than 90 days
+	// are deleted (each audited first), applied ones past their rollback
+	// window compacted.
+	if ( class_exists( 'Mcpwp_Approvals' ) ) {
+		add_action( Mcpwp_Approvals::RETENTION_CRON_HOOK, array( 'Mcpwp_Approvals', 'retention_cron' ) );
+		if ( ! wp_next_scheduled( Mcpwp_Approvals::RETENTION_CRON_HOOK ) ) {
+			wp_schedule_event( time() + HOUR_IN_SECONDS, 'daily', Mcpwp_Approvals::RETENTION_CRON_HOOK );
+		}
+		// Hourly late import of a recreated legacy option (#1042).
+		add_action(
+			Mcpwp_Approvals::LATE_IMPORT_CRON_HOOK,
+			static function () {
+				require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-activator.php';
+				Mcpwp_Activator::migrate_approvals_to_table();
+				// And retry any visibility categories still pending (#1042).
+				Mcpwp_Approvals::rederive_pending( 500 );
+			}
+		);
+		if ( ! wp_next_scheduled( Mcpwp_Approvals::LATE_IMPORT_CRON_HOOK ) ) {
+			wp_schedule_event( time() + HOUR_IN_SECONDS, 'hourly', Mcpwp_Approvals::LATE_IMPORT_CRON_HOOK );
+		}
 	}
 
 	// Self-hosted update checker (excluded from WP.org builds).

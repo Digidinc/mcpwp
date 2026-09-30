@@ -56,6 +56,13 @@ $event_escalated_count = (int) ( $event_summary['escalated'] ?? 0 );
 
 	<?php settings_errors( 'mcpwp_messages' ); ?>
 
+	<?php if ( ! empty( $control_room['approvals_error'] ) ) : ?>
+		<div class="notice notice-error"><p>
+			<?php esc_html_e( 'The approval queue could not be read, so approval counts and lists below are empty. Reload the page; if it persists, check the database.', 'mcpwp' ); ?>
+			<?php echo esc_html( (string) $control_room['approvals_error'] ); ?>
+		</p></div>
+	<?php endif; ?>
+
 	<div class="mcpwp-control-summary">
 		<div class="mcpwp-library-stat mcpwp-control-stat <?php echo esc_attr( $pending_count > 0 ? 'is-warning' : 'is-good' ); ?>">
 			<span class="mcpwp-control-stat__icon dashicons <?php echo esc_attr( $pending_count > 0 ? 'dashicons-clock' : 'dashicons-yes-alt' ); ?>"></span>

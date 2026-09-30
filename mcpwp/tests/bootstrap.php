@@ -1501,6 +1501,484 @@ if (! function_exists('mcpwp_test_split_value_tuples')) {
     }
 }
 
+// ── Approvals table double (#1042) ──────────────────────────────────────
+//
+// {prefix}mcpwp_approvals is emulated in memory with real SQL semantics
+// for the statement shapes Mcpwp_Approvals / Mcpwp_Activator issue: a WHERE
+// of ANDed `col op 'lit'`, `col [NOT] IN (...)`, `col [NOT] LIKE 'pat'`;
+// ORDER BY on any column list; LIMIT/OFFSET; COUNT(*); SUM(LENGTH(record));
+// the conditional `UPDATE … version = version + 1 WHERE id = … AND version
+// = …` (0 rows when the version moved, like MySQL); INSERT (a duplicate id
+// is an error) and INSERT IGNORE (a duplicate is skipped, 0 rows);
+// DELETE; DROP TABLE. A query against the table before dbDelta() created
+// it fails, as it does on MySQL.
+//
+// Test controls:
+//   $GLOBALS['mcpwp_test_approvals_fail']          true, or fn(string $kind, string $sql): bool —
+//                                                   the statement fails (false / null + last_error).
+//                                                   $kind: select | count | update | insert | delete.
+//   $GLOBALS['mcpwp_test_approvals_before_update'] one-shot fn(string $id) run before an UPDATE
+//                                                   is evaluated — a concurrent writer landing
+//                                                   between a read and its conditional write.
+if (! function_exists('mcpwp_test_sql_find')) {
+    /** Offset of $needle in $sql outside single-quoted literals, or -1. */
+    function mcpwp_test_sql_find($sql, $needle, $from = 0)
+    {
+        $len = strlen($sql);
+        $nl  = strlen($needle);
+        $in  = false;
+        for ($i = $from; $i < $len; $i++) {
+            $ch = $sql[ $i ];
+            if ($in) {
+                if ('\\' === $ch && $i + 1 < $len && "'" === $sql[ $i + 1 ]) {
+                    $i++;
+                    continue;
+                }
+                if ("'" === $ch) {
+                    $in = false;
+                }
+                continue;
+            }
+            if ("'" === $ch) {
+                $in = true;
+                continue;
+            }
+            if (0 === substr_compare($sql, $needle, $i, $nl, true)) {
+                return $i;
+            }
+        }
+        return -1;
+    }
+
+    /** Split on $sep outside literals. */
+    function mcpwp_test_sql_split($sql, $sep)
+    {
+        $parts = array();
+        $start = 0;
+        while (true) {
+            $at = mcpwp_test_sql_find($sql, $sep, $start);
+            if ($at < 0) {
+                $parts[] = trim(substr($sql, $start));
+                return $parts;
+            }
+            $parts[] = trim(substr($sql, $start, $at - $start));
+            $start   = $at + strlen($sep);
+        }
+    }
+
+    /** A literal token: 'quoted' (the double's prepare() escapes only ') or a number. */
+    function mcpwp_test_sql_literal($token)
+    {
+        $token = trim($token);
+        if ('' !== $token && "'" === $token[0]) {
+            return str_replace("\\'", "'", substr($token, 1, -1));
+        }
+        if ('NULL' === strtoupper($token)) {
+            return null;
+        }
+        return is_numeric($token) ? $token + 0 : $token;
+    }
+
+    /** MySQL LIKE (default ESCAPE '\'), case-insensitive like the table collation. */
+    function mcpwp_test_sql_like($value, $pattern)
+    {
+        $regex = '';
+        for ($i = 0, $n = strlen($pattern); $i < $n; $i++) {
+            $ch = $pattern[ $i ];
+            if ('\\' === $ch && $i + 1 < $n) {
+                $regex .= preg_quote($pattern[ ++$i ], '/');
+            } elseif ('%' === $ch) {
+                $regex .= '.*';
+            } elseif ('_' === $ch) {
+                $regex .= '.';
+            } else {
+                $regex .= preg_quote($ch, '/');
+            }
+        }
+        return 1 === preg_match('/^' . $regex . '$/is', (string) $value);
+    }
+
+    function mcpwp_test_sql_compare($a, $b)
+    {
+        if (is_int($a) || is_int($b)) {
+            return (int) $a <=> (int) $b;
+        }
+        return strcmp((string) $a, (string) $b);
+    }
+
+    /** Evaluate an ANDed WHERE against one row. */
+    function mcpwp_test_sql_where($row, $where)
+    {
+        if ('' === trim($where)) {
+            return true;
+        }
+        foreach (mcpwp_test_sql_split($where, ' AND ') as $cond) {
+            if (preg_match('/^(\w+) (NOT )?IN \((.*)\)$/s', $cond, $m)) {
+                $list = array_map('mcpwp_test_sql_literal', mcpwp_test_sql_split($m[3], ','));
+                $hit  = in_array((string) $row[ $m[1] ], array_map('strval', $list), true);
+                if ($hit === ('' !== $m[2])) {
+                    return false;
+                }
+                continue;
+            }
+            if (preg_match('/^(\w+) (NOT )?LIKE (.*)$/s', $cond, $m)) {
+                $hit = mcpwp_test_sql_like($row[ $m[1] ], mcpwp_test_sql_literal($m[3]));
+                if ($hit === ('' !== $m[2])) {
+                    return false;
+                }
+                continue;
+            }
+            if (preg_match('/^(\w+) (=|!=|<>|<=|>=|<|>) (.*)$/s', $cond, $m)) {
+                $cmp = mcpwp_test_sql_compare($row[ $m[1] ], mcpwp_test_sql_literal($m[3]));
+                $ok  = array(
+                    '='  => 0 === $cmp,
+                    '!=' => 0 !== $cmp,
+                    '<>' => 0 !== $cmp,
+                    '<'  => $cmp < 0,
+                    '>'  => $cmp > 0,
+                    '<=' => $cmp <= 0,
+                    '>=' => $cmp >= 0,
+                );
+                if (! $ok[ $m[2] ]) {
+                    return false;
+                }
+                continue;
+            }
+            throw new RuntimeException('Approvals table double: unsupported condition: ' . $cond);
+        }
+        return true;
+    }
+
+    final class Mcpwp_Test_Approvals_Table
+    {
+        public static function reset()
+        {
+            $GLOBALS['mcpwp_test_approvals_rows']          = array();
+            $GLOBALS['mcpwp_test_approvals_seq']           = 0;
+            $GLOBALS['mcpwp_test_approvals_table_exists']  = false;
+            $GLOBALS['mcpwp_test_approvals_fail']          = null;
+            $GLOBALS['mcpwp_test_approvals_before_update'] = null;
+            $GLOBALS['mcpwp_test_approvals_statements']    = array();
+            // A booted site: post types registered, so approval visibility
+            // categories can be derived (#1042 round 3). A test that needs
+            // "before init" unsets this itself.
+            $GLOBALS['mcpwp_test_did_action']['init'] = 1;
+            if (class_exists('Mcpwp_Approvals') && method_exists('Mcpwp_Approvals', 'reset_request_state')) {
+                Mcpwp_Approvals::reset_request_state();
+            }
+        }
+
+        private static function fails($kind, $sql)
+        {
+            $fail = $GLOBALS['mcpwp_test_approvals_fail'] ?? null;
+            return is_callable($fail) ? (bool) $fail($kind, $sql) : true === $fail;
+        }
+
+        /**
+         * Answer $sql when it targets the approvals table.
+         *
+         * @return array{0:bool,1:mixed} [handled, result]
+         */
+        public static function run($method, $sql, $wpdb)
+        {
+            $sql = trim((string) $sql);
+            if (! preg_match('/^(SELECT .+? FROM|UPDATE|INSERT(?: IGNORE)? INTO|DELETE FROM|DROP TABLE IF EXISTS) (\S*mcpwp_approvals)\b/s', $sql, $m)) {
+                return array(false, null);
+            }
+            $GLOBALS['mcpwp_test_approvals_statements'][] = $sql;
+            $wpdb->last_error = '';
+            $none = in_array($method, array('get_results', 'get_col'), true) ? array() : ('query' === $method ? false : null);
+
+            if (0 === strpos($sql, 'DROP TABLE')) {
+                $GLOBALS['mcpwp_test_approvals_table_exists'] = false;
+                $GLOBALS['mcpwp_test_approvals_rows']         = array();
+                return array(true, true);
+            }
+            if (empty($GLOBALS['mcpwp_test_approvals_table_exists'])) {
+                $wpdb->last_error = "Table '" . $m[2] . "' doesn't exist";
+                return array(true, $none);
+            }
+
+            $rows = &$GLOBALS['mcpwp_test_approvals_rows'];
+
+            if (0 === strpos($sql, 'SELECT')) {
+                $kind = preg_match('/^SELECT (COUNT|COALESCE)/', $sql) ? 'count' : 'select';
+                if (self::fails($kind, $sql)) {
+                    $wpdb->last_error = 'WordPress database error: Lost connection to MySQL server during query';
+                    return array(true, $none);
+                }
+                return array(true, self::select($method, $sql, $rows));
+            }
+
+            if (0 === strpos($sql, 'INSERT')) {
+                if (self::fails('insert', $sql)) {
+                    $wpdb->last_error = 'WordPress database error: Lost connection to MySQL server during query';
+                    return array(true, false);
+                }
+                preg_match('/^INSERT( IGNORE)? INTO \S+ \(([^)]*)\) VALUES \((.*)\)$/s', $sql, $im);
+                $cols = array_map('trim', explode(',', $im[2]));
+                $vals = array_map('mcpwp_test_sql_literal', mcpwp_test_sql_split($im[3], ','));
+                $row  = array_combine($cols, $vals);
+                $id   = (string) $row['id'];
+                if (isset($rows[ $id ])) {
+                    if ('' !== $im[1]) {
+                        return array(true, 0);
+                    }
+                    $wpdb->last_error = "Duplicate entry '" . $id . "' for key 'PRIMARY'";
+                    return array(true, false);
+                }
+                $row['id']          = $id;
+                $row['seq']         = ++$GLOBALS['mcpwp_test_approvals_seq'];
+                $row['version']     = (int) $row['version'];
+                $row['triage_rank'] = (int) $row['triage_rank'];
+                $rows[ $id ]        = $row;
+                return array(true, 1);
+            }
+
+            if (0 === strpos($sql, 'UPDATE')) {
+                $set_at   = mcpwp_test_sql_find($sql, ' SET ');
+                $where_at = mcpwp_test_sql_find($sql, ' WHERE ');
+                $where    = substr($sql, $where_at + 7);
+                if (preg_match("/^id = '([^']*)'/", $where, $idm) && isset($GLOBALS['mcpwp_test_approvals_before_update']) && is_callable($GLOBALS['mcpwp_test_approvals_before_update'])) {
+                    $hook = $GLOBALS['mcpwp_test_approvals_before_update'];
+                    $GLOBALS['mcpwp_test_approvals_before_update'] = null;
+                    $hook($idm[1]);
+                }
+                if (self::fails('update', $sql)) {
+                    $wpdb->last_error = 'WordPress database error: Lock wait timeout exceeded';
+                    return array(true, false);
+                }
+                $assign = array();
+                foreach (mcpwp_test_sql_split(substr($sql, $set_at + 5, $where_at - $set_at - 5), ', ') as $pair) {
+                    list($col, $val) = array_map('trim', explode(' = ', $pair, 2));
+                    $assign[ $col ]   = $val;
+                }
+                $affected = 0;
+                foreach ($rows as $id => $row) {
+                    if (! mcpwp_test_sql_where($row, $where)) {
+                        continue;
+                    }
+                    foreach ($assign as $col => $val) {
+                        $row[ $col ] = 'version + 1' === $val ? (int) $row['version'] + 1 : mcpwp_test_sql_literal($val);
+                    }
+                    $rows[ $id ] = $row;
+                    $affected++;
+                }
+                return array(true, $affected);
+            }
+
+            if (0 === strpos($sql, 'DELETE')) {
+                if (self::fails('delete', $sql)) {
+                    $wpdb->last_error = 'WordPress database error: Lock wait timeout exceeded';
+                    return array(true, false);
+                }
+                $at      = mcpwp_test_sql_find($sql, ' WHERE ');
+                $where   = $at < 0 ? '' : substr($sql, $at + 7);
+                $deleted = 0;
+                foreach ($rows as $id => $row) {
+                    if (mcpwp_test_sql_where($row, $where)) {
+                        unset($rows[ $id ]);
+                        $deleted++;
+                    }
+                }
+                return array(true, $deleted);
+            }
+
+            return array(false, null);
+        }
+
+        private static function select($method, $sql, $rows)
+        {
+            preg_match('/^SELECT (.+?) FROM \S+/s', $sql, $m);
+            $what  = $m[1];
+            $rest  = substr($sql, strlen($m[0]));
+            $limit = null;
+            $offset = 0;
+            $order = '';
+            $where = '';
+            $at = mcpwp_test_sql_find($rest, ' LIMIT ');
+            if ($at >= 0) {
+                preg_match('/LIMIT (\d+)(?: OFFSET (\d+))?/', substr($rest, $at), $lm);
+                $limit  = (int) $lm[1];
+                $offset = isset($lm[2]) ? (int) $lm[2] : 0;
+                $rest   = substr($rest, 0, $at);
+            }
+            $at = mcpwp_test_sql_find($rest, ' GROUP BY ');
+            if ($at >= 0) {
+                $rest = substr($rest, 0, $at);
+            }
+            $at = mcpwp_test_sql_find($rest, ' ORDER BY ');
+            if ($at >= 0) {
+                $order = substr($rest, $at + 10);
+                $rest  = substr($rest, 0, $at);
+            }
+            $at = mcpwp_test_sql_find($rest, ' WHERE ');
+            if ($at >= 0) {
+                $where = substr($rest, $at + 7);
+            }
+
+            $hits = array_values(array_filter($rows, function ($row) use ($where) {
+                return mcpwp_test_sql_where($row, $where);
+            }));
+            if ('' !== $order) {
+                $keys = array();
+                foreach (explode(',', $order) as $part) {
+                    $bits   = preg_split('/\s+/', trim($part));
+                    $keys[] = array($bits[0], isset($bits[1]) && 'DESC' === strtoupper($bits[1]) ? -1 : 1);
+                }
+                usort($hits, function ($a, $b) use ($keys) {
+                    foreach ($keys as $key) {
+                        $c = mcpwp_test_sql_compare($a[ $key[0] ] ?? null, $b[ $key[0] ] ?? null);
+                        if (0 !== $c) {
+                            return $c * $key[1];
+                        }
+                    }
+                    return 0;
+                });
+            }
+
+            if ('COUNT(*)' === $what) {
+                return (string) count($hits);
+            }
+            if ('COALESCE(SUM(quota_bytes), 0)' === $what) {
+                $sum = 0;
+                foreach ($hits as $row) {
+                    $sum += (int) $row['quota_bytes'];
+                }
+                return (string) $sum;
+            }
+            if (preg_match('/^(.*), COUNT\(\*\) AS n$/', $what, $gm)) {
+                $gcols  = array_map('trim', explode(',', $gm[1]));
+                $groups = array();
+                foreach ($hits as $row) {
+                    $key = array();
+                    foreach ($gcols as $col) {
+                        $key[ $col ] = (string) $row[ $col ];
+                    }
+                    $hash = json_encode($key);
+                    if (! isset($groups[ $hash ])) {
+                        $groups[ $hash ] = $key + array('n' => 0);
+                    }
+                    $groups[ $hash ]['n']++;
+                }
+                return array_map(function ($g) {
+                    $g['n'] = (string) $g['n'];
+                    return $g;
+                }, array_values($groups));
+            }
+
+            if (null !== $limit) {
+                $hits = array_slice($hits, $offset, $limit);
+            }
+            $cols = array_map('trim', explode(',', $what));
+            $out  = array();
+            foreach ($hits as $row) {
+                $one = array();
+                foreach ($cols as $col) {
+                    $one[ $col ] = is_int($row[ $col ]) ? (string) $row[ $col ] : $row[ $col ];
+                }
+                $out[] = $one;
+            }
+            if ('get_col' === $method) {
+                return array_map(function ($one) {
+                    return reset($one);
+                }, $out);
+            }
+            if ('get_row' === $method) {
+                return $out ? $out[0] : null;
+            }
+            if ('get_var' === $method) {
+                return $out ? reset($out[0]) : null;
+            }
+            return $out;
+        }
+    }
+
+    /** Every stored approval record, id => record, in insertion order. */
+    function mcpwp_test_approvals_all()
+    {
+        $rows = $GLOBALS['mcpwp_test_approvals_rows'] ?? array();
+        uasort($rows, function ($a, $b) {
+            return $a['seq'] <=> $b['seq'];
+        });
+        $out = array();
+        foreach ($rows as $id => $row) {
+            $out[ $id ] = json_decode((string) $row['record'], true);
+        }
+        return $out;
+    }
+
+    /**
+     * Replace the whole store with $items (id => record), the way a test
+     * used to seed the option — through the same column derivation the
+     * plugin uses, and marked migrated.
+     */
+    function mcpwp_test_approvals_put(array $items)
+    {
+        $GLOBALS['mcpwp_test_approvals_rows']         = array();
+        $GLOBALS['mcpwp_test_approvals_table_exists'] = true;
+        update_option('mcpwp_approvals_table_migrated', 1);
+        update_option('mcpwp_approvals_schema_version', 6);
+        if (! empty($items)) {
+            $copied = Mcpwp_Approvals::import_legacy_items($items);
+            if (is_wp_error($copied)) {
+                throw new RuntimeException('mcpwp_test_approvals_put: ' . $copied->get_error_code());
+            }
+        }
+    }
+
+    /**
+     * Another writer commits a change to $id right now — its record changes
+     * and its version moves, exactly what a concurrent update_one() does.
+     */
+    function mcpwp_test_approvals_concurrent_write($id, callable $change)
+    {
+        $row    = $GLOBALS['mcpwp_test_approvals_rows'][ $id ];
+        $record = $change(json_decode((string) $row['record'], true));
+        $row['record']  = wp_json_encode($record);
+        $row['status']  = (string) ($record['status'] ?? '');
+        $row['version'] = (int) $row['version'] + 1;
+        $GLOBALS['mcpwp_test_approvals_rows'][ $id ] = $row;
+    }
+
+    /** An API key record with scope admin — exempt from the approval caps. */
+    function mcpwp_test_admin_key($id = 'admin-key')
+    {
+        return array('id' => $id, 'role' => 'admin', 'scopes' => array('read', 'write', 'admin'));
+    }
+
+    /** Store one record (insert or overwrite), keeping its row's position. */
+    function mcpwp_test_approvals_set($id, array $record)
+    {
+        $all        = mcpwp_test_approvals_all();
+        $all[ $id ] = $record;
+        mcpwp_test_approvals_put($all);
+    }
+}
+
+if (! function_exists('dbDelta')) {
+    function dbDelta($queries = '', $execute = true)
+    {
+        $GLOBALS['mcpwp_test_dbdelta'][] = $queries;
+        if (is_string($queries) && preg_match('/CREATE TABLE \S*mcpwp_approvals\b/', $queries)) {
+            $GLOBALS['mcpwp_test_approvals_table_exists'] = true;
+        }
+        return array();
+    }
+}
+
+if (interface_exists('PHPUnit\Runner\BeforeTestHook')) {
+    /** Every test starts with no approvals table and no approval rows (#1042). */
+    final class Mcpwp_Test_Approvals_Table_Reset implements \PHPUnit\Runner\BeforeTestHook
+    {
+        public function executeBeforeTest(string $test): void
+        {
+            Mcpwp_Test_Approvals_Table::reset();
+        }
+    }
+}
+Mcpwp_Test_Approvals_Table::reset();
+
 if (! defined('MCPWP_TEST_WPDB_PASS')) {
     define('MCPWP_TEST_WPDB_PASS', '__mcpwp_test_wpdb_pass__');
 }
@@ -1509,6 +1987,7 @@ if (! isset($GLOBALS['wpdb'])) {
     class Mcpwp_Test_WPDB
     {
         public $prefix   = 'wp_';
+        public $charset  = 'utf8mb4';
         public $posts    = 'wp_posts';
         public $postmeta = 'wp_postmeta';
         public $options  = 'wp_options';
@@ -1555,6 +2034,10 @@ if (! isset($GLOBALS['wpdb'])) {
         }
         public function get_results($query = '', $output = ARRAY_A)
         {
+            $approvals = Mcpwp_Test_Approvals_Table::run('get_results', $query, $this);
+            if ($approvals[0]) {
+                return $approvals[1];
+            }
             // Test-scoped interceptor (#943 S2 graph read surface): a test may
             // install a callable that sees every query and either answers it
             // (any value other than MCPWP_TEST_WPDB_PASS) or lets it fall
@@ -1652,6 +2135,10 @@ if (! isset($GLOBALS['wpdb'])) {
         }
         public function get_row($query = '', $output = OBJECT, $y = 0)
         {
+            $approvals = Mcpwp_Test_Approvals_Table::run('get_row', $query, $this);
+            if ($approvals[0]) {
+                return $approvals[1];
+            }
             // Test-scoped interceptor (#943 S2 graph read surface): a test may
             // install a callable that sees every query and either answers it
             // (any value other than MCPWP_TEST_WPDB_PASS) or lets it fall
@@ -1720,6 +2207,10 @@ if (! isset($GLOBALS['wpdb'])) {
         }
         public function get_var($query = '', $x = 0, $y = 0)
         {
+            $approvals = Mcpwp_Test_Approvals_Table::run('get_var', $query, $this);
+            if ($approvals[0]) {
+                return $approvals[1];
+            }
             // Test-scoped interceptor (#943 S2 graph read surface): a test may
             // install a callable that sees every query and either answers it
             // (any value other than MCPWP_TEST_WPDB_PASS) or lets it fall
@@ -1730,12 +2221,16 @@ if (! isset($GLOBALS['wpdb'])) {
                     return $answer;
                 }
             }
-            // MySQL named locks (#981 review round 2, Mcpwp_Approvals::mutate()).
+            // MySQL named locks (#981 review round 2; since #1042 only the
+            // approvals create path, Mcpwp_Approvals::insert_new(), takes one).
             // GET_LOCK answers $GLOBALS['mcpwp_test_get_lock_result'] (default
             // '1'); a test may run a one-shot hook the moment the lock is
             // granted — i.e. a writer that committed just before we got it.
             if (preg_match('/^SELECT GET_LOCK\(/', trim((string) $query))) {
                 $GLOBALS['mcpwp_test_named_lock_calls'][] = 'get';
+                if (preg_match("/^SELECT GET_LOCK\\('([^']*)'/", trim((string) $query), $lm)) {
+                    $GLOBALS['mcpwp_test_named_lock_names'][] = $lm[1];
+                }
                 $result = $GLOBALS['mcpwp_test_get_lock_result'] ?? '1';
                 // A per-call sequence wins when set: e.g. array('1','0','0','0')
                 // grants the first lock and times out the next three.
@@ -1748,6 +2243,22 @@ if (! isset($GLOBALS['wpdb'])) {
                     $hook();
                 }
                 return $result;
+            }
+            // Mcpwp_Action_Log::approval_removal_logged() (#1042): counted
+            // from the rows insert() captured for the action log.
+            if (preg_match("/^SELECT COUNT\\(\\*\\) FROM (\\S*mcpwp_action_log) WHERE resource_type = 'approval' AND resource_id = '([^']*)' AND tool_name = 'approval_record_removed'$/", trim((string) $query), $m)) {
+                $this->last_error = '';
+                if (! empty($GLOBALS['mcpwp_test_action_log_read_fails'])) {
+                    $this->last_error = 'WordPress database error: Lost connection to MySQL server during query';
+                    return null;
+                }
+                $n = 0;
+                foreach ((array) ($GLOBALS['mcpwp_test_wpdb_rows'][ $m[1] ] ?? array()) as $row) {
+                    if (is_array($row) && ($row['tool_name'] ?? '') === 'approval_record_removed' && ($row['resource_type'] ?? '') === 'approval' && (string) ($row['resource_id'] ?? '') === $m[2]) {
+                        $n++;
+                    }
+                }
+                return (string) $n;
             }
             if ('SELECT @@max_allowed_packet' === trim((string) $query)) {
                 return $GLOBALS['mcpwp_test_max_allowed_packet'] ?? null;
@@ -1799,6 +2310,10 @@ if (! isset($GLOBALS['wpdb'])) {
         }
         public function get_col($query = '', $x = 0)
         {
+            $approvals = Mcpwp_Test_Approvals_Table::run('get_col', $query, $this);
+            if ($approvals[0]) {
+                return $approvals[1];
+            }
             // Test-scoped interceptor (#943 S2 graph read surface): a test may
             // install a callable that sees every query and either answers it
             // (any value other than MCPWP_TEST_WPDB_PASS) or lets it fall
@@ -1918,6 +2433,10 @@ if (! isset($GLOBALS['wpdb'])) {
         public function query($query)
         {
             $this->queries[] = (string) $query;
+            $approvals = Mcpwp_Test_Approvals_Table::run('query', $query, $this);
+            if ($approvals[0]) {
+                return $approvals[1];
+            }
             $trimmed         = trim((string) $query);
 
             // ---------------------------------------------------------------
@@ -2270,6 +2789,10 @@ if (! isset($GLOBALS['wpdb'])) {
                 $GLOBALS['mcpwp_test_wpdb_options'][ (string) $data['option_name'] ] = (string) $data['option_value'];
             }
             return 1;
+        }
+        public function get_charset_collate()
+        {
+            return 'DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_520_ci';
         }
         public function esc_like($text)
         {

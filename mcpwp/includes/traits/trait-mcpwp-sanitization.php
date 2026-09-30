@@ -856,8 +856,11 @@ trait Mcpwp_Sanitization {
 			$post_ids,
 			$post_type,
 			array(
-				'tool'                => sanitize_key( (string) $tool ),
-				'requested_by_key_id' => method_exists( $this, 'current_requester_key_id' ) ? $this->current_requester_key_id() : '',
+				'tool'                   => sanitize_key( (string) $tool ),
+				'requested_by_key_id'    => method_exists( $this, 'current_requester_key_id' ) ? $this->current_requester_key_id() : '',
+				// #1042 B1: exempt principals are never refused by the open-request cap.
+				'key_record'             => method_exists( $this, 'get_current_api_key_record' ) ? $this->get_current_api_key_record() : null,
+				'wp_user_id'             => method_exists( $this, 'approval_admin_user_id' ) ? $this->approval_admin_user_id() : 0,
 			)
 		);
 

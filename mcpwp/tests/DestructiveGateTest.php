@@ -376,11 +376,11 @@ final class DestructiveGateTest extends TestCase {
 		$approval_id = $this->delete_page( 10, true )->get_data()['approval_id'];
 
 		// Bury it under closed records.
-		$items = get_option( Mcpwp_Approvals::OPTION_NAME, array() );
+		$items = mcpwp_test_approvals_all();
 		for ( $i = 0; $i < Mcpwp_Approvals::MAX_ITEMS + 10; $i++ ) {
 			$items[ 'apr_closed_' . $i ] = array( 'id' => 'apr_closed_' . $i, 'status' => 'rejected', 'created_at' => '2099-01-01T00:00:00+00:00' );
 		}
-		update_option( Mcpwp_Approvals::OPTION_NAME, $items );
+		mcpwp_test_approvals_put( $items );
 		$this->seed( 11 );
 		$this->delete_page( 11, true ); // triggers upsert → eviction
 
@@ -427,7 +427,7 @@ final class DestructiveGateTest extends TestCase {
 			'created_at'          => '2026-09-10T00:00:00+00:00',
 			'updated_at'          => '2026-09-10T00:00:00+00:00',
 		);
-		update_option( Mcpwp_Approvals::OPTION_NAME, array( 'apr_forged' => $forged ) );
+		mcpwp_test_approvals_put( array( 'apr_forged' => $forged ) );
 
 		$refused = Mcpwp_Approvals::apply_request( 'apr_forged', array( 'admin_user' => 7, 'actor' => 'wp-user:7' ) );
 		$this->assertInstanceOf( WP_Error::class, $refused );
@@ -452,7 +452,7 @@ final class DestructiveGateTest extends TestCase {
 		$this->assertSame( 'unidentified_requester', $refused->get_error_code() );
 
 		$orphan = array( 'id' => 'apr_orphan', 'status' => 'pending', 'action' => 'destructive_operation', 'operation' => 'delete_page', 'resource' => array( 'type' => 'page', 'id' => 1 ), 'payload' => array( 'route' => '/mcpwp/v1/pages/1', 'method' => 'DELETE', 'params' => array(), 'target' => array() ), 'requested_by_key_id' => '', 'created_at' => '2026-09-10T00:00:00+00:00', 'updated_at' => '2026-09-10T00:00:00+00:00' );
-		update_option( Mcpwp_Approvals::OPTION_NAME, array( 'apr_orphan' => $orphan ) );
+		mcpwp_test_approvals_put( array( 'apr_orphan' => $orphan ) );
 		$this->assertSame( 'unidentified_requester', Mcpwp_Approvals::approve_request( 'apr_orphan', '', array( 'actor' => 'reviewer' ) )->get_error_code() );
 		$this->assertSame( 'unidentified_requester', Mcpwp_Approvals::apply_request( 'apr_orphan', array( 'actor' => 'reviewer', 'api_key' => 'x' ) )->get_error_code() );
 	}
@@ -730,6 +730,7 @@ final class DestructiveGateTest extends TestCase {
 	public function test_minted_keys_cannot_close_the_destructive_path_to_administrators(): void {
 		// Round-3 P1-2: one pool of 100 let five minted keys lock every
 		// principal out, including the reviewers.
+		$GLOBALS['mcpwp_test_user_caps'][2] = array( 'manage_options' => true ); // #1042: an administrator.
 		for ( $i = 1; $i <= Mcpwp_Destructive_Gate::MAX_PENDING_TOTAL; $i++ ) {
 			Mcpwp_Approvals::create_destructive_request( 'delete_page', array( 'route' => '/mcpwp/v1/pages/' . $i, 'method' => 'DELETE', 'params' => array(), 'target' => array() ), array( 'type' => 'page', 'id' => $i, 'title' => 'p' ), array( 'requested_by_key_id' => 'minted-' . (int) ceil( $i / 20 ) ) );
 		}

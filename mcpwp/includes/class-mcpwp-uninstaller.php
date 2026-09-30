@@ -81,6 +81,60 @@ class Mcpwp_Uninstaller {
 		self::drop_graph_data_for_current_site();
 	}
 
+	/** @var array<string> Approvals options (#1042). */
+	const APPROVALS_OPTIONS = array(
+		'mcpwp_approvals_table_migrated',
+		'mcpwp_approval_requests_pre_3149',
+		'mcpwp_approval_requests',
+		'mcpwp_approvals_identity_migrated',
+		'mcpwp_approvals_table_migration_lock',
+		'mcpwp_approvals_schema_version',
+		'mcpwp_approvals_migration_skipped',
+		'mcpwp_approvals_rederive_after',
+	);
+
+	/**
+	 * Drop the approvals table (#1042), its options and its cron for every
+	 * site — the current site on single-site, every site in the network on
+	 * multisite (same looping as drop_graph_data()).
+	 */
+	public static function drop_approvals_data() {
+		if ( is_multisite() ) {
+			$site_ids = get_sites(
+				array(
+					'fields' => 'ids',
+					'number' => 0,
+				)
+			);
+			foreach ( $site_ids as $site_id ) {
+				switch_to_blog( $site_id );
+				self::drop_approvals_data_for_current_site();
+				restore_current_blog();
+			}
+			return;
+		}
+
+		self::drop_approvals_data_for_current_site();
+	}
+
+	/**
+	 * Drop the approvals table, options and cron for ONLY the current site.
+	 */
+	public static function drop_approvals_data_for_current_site() {
+		global $wpdb;
+
+		$table = $wpdb->prefix . 'mcpwp_approvals';
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- $wpdb->prefix is safe; the suffix is fixed.
+		$wpdb->query( "DROP TABLE IF EXISTS {$table}" );
+
+		foreach ( self::APPROVALS_OPTIONS as $option ) {
+			delete_option( $option );
+		}
+
+		wp_clear_scheduled_hook( 'mcpwp_approvals_retention' );
+		wp_clear_scheduled_hook( 'mcpwp_approvals_late_import' );
+	}
+
 	/**
 	 * Drop the graph tables/options/schedules for ONLY the current site —
 	 * no multisite looping. Use this when the caller is already inside its

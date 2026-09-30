@@ -21,8 +21,9 @@
  * mechanism available to them.
  *
  * Scope: the site graph tables — nodes, edges, signals, queue — plus their
- * options and cron/Action-Scheduler schedules, for single site and, on
- * multisite, every blog in the network. The plugin's OLDER tables (activity
+ * options and cron/Action-Scheduler schedules, and the approvals table
+ * (#1042) with its options and cron, for single site and, on multisite,
+ * every blog in the network. The plugin's OLDER tables (activity
  * log, webhooks, webhook logs, feedback, action log) are deliberately left
  * untouched here: on a self-hosted/agency install those were previously
  * cleaned up only via the Freemius `after_uninstall` action, which — see
@@ -39,3 +40,6 @@ if ( ! defined( 'WP_UNINSTALL_PLUGIN' ) ) {
 require_once __DIR__ . '/includes/class-mcpwp-uninstaller.php';
 
 Mcpwp_Uninstaller::drop_graph_data();
+
+// The approvals table (#1042) and its options.
+Mcpwp_Uninstaller::drop_approvals_data();

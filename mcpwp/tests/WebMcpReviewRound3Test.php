@@ -5,13 +5,14 @@
  *  BLOCK-1 apply/rollback are a claim state machine: approved → applying →
  *          applied (rolling_back → rolled_back). A parallel apply sees the
  *          claim and runs nothing; a payload failure returns the record to
- *          approved; a finalise that cannot get the lock never reports
+ *          approved; a finalise that cannot be written never reports
  *          "nothing changed" — 202 approval_record_unconfirmed, record left
  *          in flight and flagged needs_attention. record_apply_result()
  *          failures propagate.
- *  BLOCK-2 a failed update_option() is a failure, not a success; a body
- *          over 256 KB is referenced by revision, not copied; the whole
- *          store has a byte budget for new requests.
+ *  BLOCK-2 a failed write is a failure, not a success; a body over 256 KB
+ *          is referenced by revision, not copied. (#1042 removed the
+ *          whole-store byte budget with the option; per-record and
+ *          per-requester limits stay.)
  *  NIT     meta keys gated case-insensitively against registered keys.
  *
  * @package MCPWP
@@ -37,10 +38,12 @@ final class WebMcpReviewRound3Test extends TestCase {
 		$GLOBALS['_mcpwp_test_posts']           = array(
 			self::POST => new WP_Post( array( 'ID' => self::POST, 'post_type' => 'post', 'post_status' => 'publish', 'post_title' => 'P', 'post_content' => 'original body' ) ),
 		);
+		$GLOBALS['mcpwp_test_approvals_fail'] = null;
 		unset( $GLOBALS['mcpwp_test_get_lock_result'], $GLOBALS['mcpwp_test_get_lock_results'], $GLOBALS['mcpwp_test_on_lock_granted'], $GLOBALS['mcpwp_test_update_option_fail'], $GLOBALS['mcpwp_test_revisions_disabled'], $GLOBALS['_mcpwp_test_registered_meta'] );
 	}
 
 	protected function tearDown(): void {
+		$GLOBALS['mcpwp_test_approvals_fail'] = null;
 		unset( $GLOBALS['mcpwp_test_get_lock_result'], $GLOBALS['mcpwp_test_get_lock_results'], $GLOBALS['mcpwp_test_on_lock_granted'], $GLOBALS['mcpwp_test_update_option_fail'], $GLOBALS['mcpwp_test_revisions_disabled'], $GLOBALS['_mcpwp_test_registered_meta'] );
 		$GLOBALS['mcpwp_test_options']      = array();
 		$GLOBALS['mcpwp_test_filters']      = array();
@@ -57,7 +60,7 @@ final class WebMcpReviewRound3Test extends TestCase {
 	}
 
 	private function stored( string $id ): array {
-		return get_option( Mcpwp_Approvals::OPTION_NAME )[ $id ];
+		return mcpwp_test_approvals_all()[ $id ];
 	}
 
 	private function body(): string {
@@ -83,10 +86,10 @@ final class WebMcpReviewRound3Test extends TestCase {
 		$id = $this->approved_request();
 
 		// Another request has claimed it (status applying) and is mid-payload.
-		$items                  = get_option( Mcpwp_Approvals::OPTION_NAME );
+		$items                  = mcpwp_test_approvals_all();
 		$items[ $id ]['status'] = 'applying';
 		$items[ $id ]['applying_at'] = gmdate( 'c' );
-		update_option( Mcpwp_Approvals::OPTION_NAME, $items, false );
+		mcpwp_test_approvals_put( $items );
 
 		$second = Mcpwp_Approvals::apply_request( $id );
 		$this->assertSame( 'approval_in_progress', $second->get_error_code() );
@@ -94,14 +97,20 @@ final class WebMcpReviewRound3Test extends TestCase {
 		$this->assertSame( 'original body', $this->body(), 'The payload did not run a second time.' );
 	}
 
-	public function test_the_claim_is_taken_under_the_lock_against_a_fresh_read(): void {
+	public function test_the_claim_is_checked_against_the_row_as_written(): void {
 		$id = $this->approved_request();
 
-		// A parallel apply claims it just before ours gets the lock.
-		$GLOBALS['mcpwp_test_on_lock_granted'] = static function () use ( $id ) {
-			$items                  = get_option( Mcpwp_Approvals::OPTION_NAME );
-			$items[ $id ]['status'] = 'applying';
-			update_option( Mcpwp_Approvals::OPTION_NAME, $items, false );
+		// A parallel apply claims it between our read and our write: our
+		// conditional UPDATE matches nothing, the re-read sees the claim.
+		$GLOBALS['mcpwp_test_approvals_before_update'] = static function ( $row_id ) {
+			mcpwp_test_approvals_concurrent_write(
+				$row_id,
+				static function ( array $record ) {
+					$record['status']      = 'applying';
+					$record['applying_at'] = gmdate( 'c' );
+					return $record;
+				}
+			);
 		};
 		$this->assertSame( 'approval_in_progress', Mcpwp_Approvals::apply_request( $id )->get_error_code() );
 		$this->assertSame( 'original body', $this->body() );
@@ -119,11 +128,25 @@ final class WebMcpReviewRound3Test extends TestCase {
 		$this->assertSame( 'approval_content_conflict', $stored['last_error']['code'] );
 	}
 
-	public function test_a_finalise_lock_timeout_never_claims_nothing_changed(): void {
+	/**
+	 * Fail every approvals UPDATE after the first $allowed ones.
+	 */
+	private function fail_updates_after( int $allowed, int $failures = PHP_INT_MAX ): void {
+		$seen = 0;
+		$GLOBALS['mcpwp_test_approvals_fail'] = static function ( $kind ) use ( $allowed, $failures, &$seen ) {
+			if ( 'update' !== $kind ) {
+				return false;
+			}
+			$seen++;
+			return $seen > $allowed && $seen <= $allowed + $failures;
+		};
+	}
+
+	public function test_a_finalise_write_failure_never_claims_nothing_changed(): void {
 		$id = $this->approved_request();
 
-		// Claim gets the lock; every finalise attempt times out.
-		$GLOBALS['mcpwp_test_get_lock_results'] = array( '1', '0', '0', '0', '0' );
+		// The claim is written; every finalise attempt fails.
+		$this->fail_updates_after( 1 );
 		$result = Mcpwp_Approvals::apply_request( $id );
 
 		$this->assertInstanceOf( WP_Error::class, $result );
@@ -133,7 +156,7 @@ final class WebMcpReviewRound3Test extends TestCase {
 		$this->assertStringNotContainsString( 'Nothing was changed', $result->get_error_message() );
 		$this->assertSame( 'new body', $this->body(), 'The change did happen.' );
 
-		unset( $GLOBALS['mcpwp_test_get_lock_results'] );
+		$GLOBALS['mcpwp_test_approvals_fail'] = null;
 		$this->assertSame( 'applying', $this->stored( $id )['status'], 'Left in flight for a person.' );
 
 		// Not re-applied by a retry; surfaced once stale.
@@ -147,9 +170,9 @@ final class WebMcpReviewRound3Test extends TestCase {
 		$this->assertSame( 'stale_applying', Mcpwp_Approvals::get_request( $id )['needs_attention'] );
 	}
 
-	public function test_a_finalise_retry_recovers_from_a_brief_lock_timeout(): void {
+	public function test_a_finalise_retry_recovers_from_a_brief_write_failure(): void {
 		$id = $this->approved_request();
-		$GLOBALS['mcpwp_test_get_lock_results'] = array( '1', '0', '1' );
+		$this->fail_updates_after( 1, 1 );
 		$this->assertSame( 'applied', Mcpwp_Approvals::apply_request( $id )['status'] );
 	}
 
@@ -158,29 +181,35 @@ final class WebMcpReviewRound3Test extends TestCase {
 		$method->setAccessible( true );
 
 		$id = $this->approved_request();
-		$GLOBALS['mcpwp_test_get_lock_result'] = '0';
+		$GLOBALS['mcpwp_test_approvals_fail'] = true;
 		$result = $method->invoke( null, $id, array( 1, 2 ), array() );
 		$this->assertInstanceOf( WP_Error::class, $result );
-		$this->assertSame( 'approvals_busy', $result->get_error_code() );
+		$this->assertSame( 'approvals_store_failed', $result->get_error_code() );
 
-		unset( $GLOBALS['mcpwp_test_get_lock_result'] );
+		$GLOBALS['mcpwp_test_approvals_fail'] = null;
 		$this->assertTrue( $method->invoke( null, $id, array( 1, 2 ), array() ) );
 		$this->assertSame( array( 1, 2 ), $this->stored( $id )['metadata']['applied_ids'] );
 	}
 
 	// ── BLOCK-2 ────────────────────────────────────────────────────────────
 
-	public function test_a_failed_update_option_is_reported_as_a_failure(): void {
-		$GLOBALS['mcpwp_test_update_option_fail'][ Mcpwp_Approvals::OPTION_NAME ] = true;
+	public function test_a_failed_write_is_reported_as_a_failure(): void {
+		$GLOBALS['mcpwp_test_approvals_fail'] = static function ( $kind ) {
+			return 'insert' === $kind;
+		};
 		$result = Mcpwp_Approvals::create_post_content_request( self::POST, 'x', array( 'requested_by_key_id' => 'k1' ) );
 		$this->assertInstanceOf( WP_Error::class, $result );
 		$this->assertSame( 'approvals_store_failed', $result->get_error_code() );
 		$this->assertSame( 503, $result->get_error_data()['status'] );
+		$this->assertSame( array(), mcpwp_test_approvals_all() );
 
-		unset( $GLOBALS['mcpwp_test_update_option_fail'] );
+		$GLOBALS['mcpwp_test_approvals_fail'] = null;
 		$id = $this->approved_request();
-		$GLOBALS['mcpwp_test_update_option_fail'][ Mcpwp_Approvals::OPTION_NAME ] = true;
+		$GLOBALS['mcpwp_test_approvals_fail'] = static function ( $kind ) {
+			return 'update' === $kind;
+		};
 		$this->assertSame( 'approvals_store_failed', Mcpwp_Approvals::reject_request( $id )->get_error_code() );
+		$GLOBALS['mcpwp_test_approvals_fail'] = null;
 		$this->assertSame( 'approved', $this->stored( $id )['status'] );
 	}
 
@@ -195,7 +224,7 @@ final class WebMcpReviewRound3Test extends TestCase {
 		$this->assertGreaterThan( 0, $stored['rollback']['before_revision_id'] );
 		$this->assertSame( hash( 'sha256', $big ), $stored['rollback']['before_hash'] );
 		$this->assertLessThanOrEqual( 1000, strlen( $stored['rollback']['before_excerpt'] ) );
-		$this->assertLessThan( 20000, strlen( serialize( get_option( Mcpwp_Approvals::OPTION_NAME ) ) ), 'The store does not carry the big body.' );
+		$this->assertLessThan( 20000, strlen( serialize( mcpwp_test_approvals_all() ) ), 'The store does not carry the big body.' );
 		$this->assertArrayNotHasKey( 'before_excerpt', $created['rollback'] ?? array(), 'Not in the public record.' );
 
 		// Apply, then roll back from the revision.
@@ -225,24 +254,21 @@ final class WebMcpReviewRound3Test extends TestCase {
 		$GLOBALS['_mcpwp_test_posts'][ self::POST ]->post_content = str_repeat( 'D', Mcpwp_Approvals::MAX_ROLLBACK_INLINE_BYTES + 1 );
 		$result = Mcpwp_Approvals::create_post_content_request( self::POST, 'x', array( 'requested_by_key_id' => 'k1' ) );
 		$this->assertSame( 'rollback_unavailable', $result->get_error_code() );
-		$this->assertFalse( get_option( Mcpwp_Approvals::OPTION_NAME, false ) );
+		$this->assertSame( array(), mcpwp_test_approvals_all() );
 	}
 
-	public function test_the_store_has_a_byte_budget_for_new_requests_only(): void {
+	public function test_store_size_never_refuses_a_request_only_its_own_limits_do(): void {
+		// #1042: no whole-store budget. Twenty large proposals from twenty
+		// capped requesters (each inside its own byte quota) all queue, and
+		// the next per-requester one is still refused by the requester's own
+		// quota, not by the size of the store.
 		$id = $this->approved_request();
-		add_filter(
-			'mcpwp_approval_store_max_bytes',
-			static function () {
-				return 2000;
-			}
-		);
-
-		foreach ( array( array( 'requested_by_key_id' => 'k1' ), array( 'requested_by_key_id' => 'admin', 'requester_unrestricted' => true ), array( 'requested_by_key_id' => 'wp-user:1' ) ) as $args ) {
-			$result = Mcpwp_Approvals::create_post_content_request( self::POST, str_repeat( 'x', 3000 ), $args );
-			// A capped requester now hits its own 1/20 byte quota first (round 4).
-			$this->assertContains( $result->get_error_code(), empty( $args['requester_unrestricted'] ) && 0 !== strpos( $args['requested_by_key_id'], 'wp-user:' ) ? array( 'approvals_store_full', 'requester_store_quota' ) : array( 'approvals_store_full' ), wp_json_encode( $args ) );
-			$this->assertContains( $result->get_error_data()['status'], array( 507, 429 ) );
+		for ( $i = 0; $i < 20; $i++ ) {
+			$this->assertIsArray( Mcpwp_Approvals::create_post_content_request( self::POST, str_repeat( 'x', 200000 ), array( 'requested_by_key_id' => 'k-' . $i ) ), "requester $i" );
 		}
+		$over = Mcpwp_Approvals::create_post_content_request( self::POST, str_repeat( 'y', 300000 ), array( 'requested_by_key_id' => 'k-0' ) );
+		$this->assertSame( 'requester_store_quota', $over->get_error_code() );
+		$this->assertSame( 429, $over->get_error_data()['status'] );
 
 		// Existing requests can still be worked down.
 		$this->assertSame( 'rejected', Mcpwp_Approvals::reject_request( $id )['status'] );

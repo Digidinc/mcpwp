@@ -1,11 +1,12 @@
 <?php
 /**
- * #981 adversarial review round 5 — eviction never destroys live history.
+ * #981 adversarial review round 5 — removal never destroys live history.
  *
- *  - Only records that are compacted AND past retention are evicted;
- *    pending/approved/in-flight and applied-within-retention never are. If
- *    there is still no room, the NEW request gets 507.
- *  - Every removal (eviction or purge) first writes an action-log audit row;
+ *  - #1042: there is no store budget to evict for. The daily retention
+ *    removes only closed records decided more than 90 days ago;
+ *    pending/approved/in-flight never are, applied-within-rollback-window
+ *    records keep their bodies.
+ *  - Every removal (retention or purge) first writes an action-log audit row;
  *    no row, no removal.
  *  - Rollback Ready lists only what can still be rolled back.
  *
@@ -33,33 +34,22 @@ final class WebMcpReviewRound5Test extends TestCase {
 			self::POST_B => new WP_Post( array( 'ID' => self::POST_B, 'post_type' => 'post', 'post_status' => 'publish', 'post_title' => 'B', 'post_content' => 'B original' ) ),
 		);
 		unset( $GLOBALS['mcpwp_test_wpdb_insert_fail'] );
-		Mcpwp_Approvals::reset_store_budget_cache();
 	}
 
 	protected function tearDown(): void {
-		unset( $GLOBALS['mcpwp_test_wpdb_insert_fail'], $GLOBALS['r5_budget'] );
+		unset( $GLOBALS['mcpwp_test_wpdb_insert_fail'] );
 		$GLOBALS['mcpwp_test_options']      = array();
 		$GLOBALS['mcpwp_test_filters']      = array();
 		$GLOBALS['mcpwp_test_current_user'] = 0;
 	}
 
 	private function store(): array {
-		$items = get_option( Mcpwp_Approvals::OPTION_NAME, array() );
+		$items = mcpwp_test_approvals_all();
 		return is_array( $items ) ? $items : array();
 	}
 
-	private function budget( int $bytes ): void {
-		$GLOBALS['r5_budget'] = $bytes;
-		add_filter(
-			'mcpwp_approval_store_max_bytes',
-			static function () {
-				return $GLOBALS['r5_budget'];
-			}
-		);
-	}
-
 	private function apply( int $post, string $content ): string {
-		$c = Mcpwp_Approvals::create_post_content_request( $post, $content, array( 'requested_by_key_id' => 'admin', 'requester_unrestricted' => true ) );
+		$c = Mcpwp_Approvals::create_post_content_request( $post, $content, array( 'requested_by_key_id' => 'admin', 'key_record' => mcpwp_test_admin_key() ) );
 		Mcpwp_Approvals::approve_request( $c['id'], '', array( 'actor' => 'admin-2' ) );
 		$this->assertSame( 'applied', Mcpwp_Approvals::apply_request( $c['id'] )['status'] );
 		return $c['id'];
@@ -67,12 +57,12 @@ final class WebMcpReviewRound5Test extends TestCase {
 
 	/** Age a record's decision past retention. */
 	private function age( string $id, int $days ): void {
-		$items                             = get_option( Mcpwp_Approvals::OPTION_NAME );
+		$items                             = mcpwp_test_approvals_all();
 		$items[ $id ]['updated_at']        = gmdate( 'c', time() - $days * DAY_IN_SECONDS );
 		if ( ! empty( $items[ $id ]['applied_at'] ) ) {
 			$items[ $id ]['applied_at'] = $items[ $id ]['updated_at'];
 		}
-		update_option( Mcpwp_Approvals::OPTION_NAME, $items, false );
+		mcpwp_test_approvals_put( $items );
 	}
 
 	private function audit_rows(): array {
@@ -87,12 +77,10 @@ final class WebMcpReviewRound5Test extends TestCase {
 		return $rows;
 	}
 
-	public function test_reviewer_scenario_recently_applied_approvals_survive_a_store_past_75_percent(): void {
+	public function test_reviewer_scenario_recently_applied_approvals_survive_new_proposals(): void {
 		$a = $this->apply( self::POST_A, str_repeat( 'a', 30000 ) );
 		$b = $this->apply( self::POST_B, str_repeat( 'b', 30000 ) );
 
-		// A budget where the next proposal lands the store well past 75%.
-		$this->budget( (int) ( strlen( serialize( $this->store() ) ) * 2.0 ) );
 		add_filter(
 			'mcpwp_approval_content_limits',
 			static function ( $limits ) {
@@ -100,9 +88,10 @@ final class WebMcpReviewRound5Test extends TestCase {
 				return $limits;
 			}
 		);
-		$third = Mcpwp_Approvals::create_post_content_request( self::POST_A, str_repeat( 'c', 20000 ), array( 'requested_by_key_id' => 'webmcp:user:3' ) );
-		$this->assertIsArray( $third );
-		$this->assertGreaterThan( 0.75 * $GLOBALS['r5_budget'], strlen( serialize( $this->store() ) ), 'Premise: the store is past 75% of its budget.' );
+		for ( $i = 0; $i < 5; $i++ ) {
+			$this->assertIsArray( Mcpwp_Approvals::create_post_content_request( self::POST_A, str_repeat( 'c', 200000 ), array( 'requested_by_key_id' => 'webmcp:user:' . ( 3 + $i ) ) ) );
+		}
+		Mcpwp_Approvals::run_retention();
 
 		$this->assertArrayHasKey( $a, $this->store() );
 		$this->assertArrayHasKey( $b, $this->store() );
@@ -114,28 +103,21 @@ final class WebMcpReviewRound5Test extends TestCase {
 		$this->assertSame( 'admin-2', $this->store()[ $b ]['approved_by'] );
 		$this->assertArrayHasKey( 'applied_by', $this->store()[ $b ] );
 		$this->assertSame( 'B original', $GLOBALS['_mcpwp_test_posts'][ self::POST_B ]->post_content );
-
-		// And when there is no room at all, the NEW request is refused.
-		$GLOBALS['r5_budget'] = strlen( serialize( $this->store() ) ) + 100;
-		$refused = Mcpwp_Approvals::create_post_content_request( self::POST_B, str_repeat( 'd', 5000 ), array( 'requested_by_key_id' => 'admin', 'requester_unrestricted' => true ) );
-		$this->assertSame( 'approvals_store_full', $refused->get_error_code() );
-		$this->assertArrayHasKey( $a, $this->store() );
 	}
 
-	public function test_only_compacted_records_past_retention_are_evicted_and_each_is_audited(): void {
+	public function test_only_closed_records_past_retention_are_removed_and_each_is_audited(): void {
 		$old     = Mcpwp_Approvals::create_post_content_request( self::POST_A, str_repeat( 'x', 20000 ), array( 'requested_by_key_id' => 'k-old' ) );
 		$fresh   = Mcpwp_Approvals::create_post_content_request( self::POST_B, str_repeat( 'y', 20000 ), array( 'requested_by_key_id' => 'k-fresh' ) );
 		$pending = Mcpwp_Approvals::create_post_content_request( self::POST_A, str_repeat( 'z', 20000 ), array( 'requested_by_key_id' => 'k-pend' ) );
 		Mcpwp_Approvals::reject_request( $old['id'], '', array( 'actor' => 'reviewer-1' ) );
 		Mcpwp_Approvals::reject_request( $fresh['id'], '', array( 'actor' => 'reviewer-1' ) );
-		$this->age( $old['id'], 10 );
+		$this->age( $old['id'], 91 );
+		$this->age( $fresh['id'], 10 );
 
-		// Push the store over 75%: only the old, compacted rejection may go.
-		$this->budget( strlen( serialize( $this->store() ) ) + 38000 );
-		$this->assertIsArray( Mcpwp_Approvals::create_post_content_request( self::POST_B, str_repeat( 'w', 30000 ), array( 'requested_by_key_id' => 'admin', 'requester_unrestricted' => true ) ) );
+		$this->assertSame( 1, Mcpwp_Approvals::run_retention() );
 
 		$this->assertArrayNotHasKey( $old['id'], $this->store() );
-		$this->assertArrayHasKey( $fresh['id'], $this->store(), 'A fresh rejection stays for its retention.' );
+		$this->assertArrayHasKey( $fresh['id'], $this->store(), 'A recent rejection stays for its retention.' );
 		$this->assertArrayHasKey( $pending['id'], $this->store() );
 
 		$rows = $this->audit_rows();
@@ -151,7 +133,7 @@ final class WebMcpReviewRound5Test extends TestCase {
 		$this->assertNotEmpty( $summary['created_at'] );
 		$this->assertNotEmpty( $summary['decided_at'] );
 		$this->assertSame( hash( 'sha256', str_repeat( 'x', 20000 ) ), $summary['content_hash'] );
-		$this->assertSame( 'evicted_store_bytes', $summary['removal_reason'] );
+		$this->assertSame( 'retention', $summary['removal_reason'] );
 		$this->assertSame( 'approval', $rows[0]['resource_type'] );
 		$this->assertSame( $old['id'], $rows[0]['resource_id'] );
 	}
@@ -194,9 +176,10 @@ final class WebMcpReviewRound5Test extends TestCase {
 		$id = $this->apply( self::POST_A, 'applied body' );
 		$this->assertTrue( Mcpwp_Approvals::get_request( $id )['rollback_available'] );
 
-		// Past retention: compacted on the next write, inline copy gone.
+		// Past its rollback window: compacted by the daily retention run,
+		// inline copy gone.
 		$this->age( $id, 10 );
-		Mcpwp_Approvals::create_post_content_request( self::POST_B, 'nudge', array( 'requested_by_key_id' => 'k1' ) );
+		Mcpwp_Approvals::run_retention();
 		$record = Mcpwp_Approvals::get_request( $id );
 		$this->assertNotEmpty( $this->store()[ $id ]['compacted'] );
 		$this->assertFalse( $record['rollback_available'] );

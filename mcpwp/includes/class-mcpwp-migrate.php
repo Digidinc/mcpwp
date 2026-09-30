@@ -238,6 +238,15 @@ class Mcpwp_Migrate {
 		unset( $main_map['spai_settings'] );
 
 		foreach ( $main_map as $legacy_key => $new_key ) {
+			// #1042: once the approvals queue lives in its own table, the
+			// table migration has already consumed the legacy queue. Copying
+			// spai_approval_requests again would feed the late import and
+			// resurrect records deleted since.
+			if ( 'mcpwp_approval_requests' === $new_key && get_option( 'mcpwp_approvals_table_migrated' ) ) {
+				$log['skipped_existing'][] = $new_key . ' (approvals table already migrated)';
+				continue;
+			}
+
 			$legacy_value = get_option( $legacy_key, '__NOT_SET__' );
 
 			// Legacy option does not exist on this site.

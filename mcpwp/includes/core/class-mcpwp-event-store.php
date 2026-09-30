@@ -174,7 +174,15 @@ class Mcpwp_Event_Store {
 			return true;
 		}
 
-		return Mcpwp_Approvals::is_approval_visible_to( $approval, $category_allowed );
+		// #1042 round 5: decided from the approvals TABLE row at read time,
+		// through the same decision as list, count and GET — never from the
+		// copy frozen into the event. A pending, missing or unreadable row is
+		// fail-closed.
+		$id = isset( $approval['id'] ) ? (string) $approval['id'] : '';
+		return Mcpwp_Approvals::is_approval_visible_to(
+			array( 'visibility_categories' => Mcpwp_Approvals::categories_for_id( $id ) ),
+			$category_allowed
+		);
 	}
 
 	/**

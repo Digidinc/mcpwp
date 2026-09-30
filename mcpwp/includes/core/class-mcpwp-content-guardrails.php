@@ -2047,9 +2047,8 @@ class Mcpwp_Content_Guardrails {
 	 * Persist what an apply/rollback actually did onto the approval record
 	 * itself, so a subsequent rollback knows which IDs are its to touch
 	 * (WARN-2) and a human reviewing the record later can see what
-	 * happened. Reaches directly into Mcpwp_Approvals's option store —
-	 * the same pattern includes/pro/api/class-mcpwp-rest-staging.php
-	 * already uses via the public Mcpwp_Approvals::OPTION_NAME constant.
+	 * happened. Through Mcpwp_Approvals::update_request() — one row, an
+	 * optimistic read-modify-write that is retried on a lost race (#1042).
 	 *
 	 * @param string $request_id Approval ID.
 	 * @param int[]  $published  IDs actually flipped to publish.
@@ -2061,30 +2060,30 @@ class Mcpwp_Content_Guardrails {
 		if ( '' === $request_id || ! class_exists( 'Mcpwp_Approvals' ) ) {
 			return true;
 		}
-		// Under the approvals store lock (#981 review round 2, WARN-B); a
-		// failure is returned, never swallowed (round 3).
-		return Mcpwp_Approvals::mutate(
-			static function ( array $items ) use ( $request_id, $published, $skipped, $reverted ) {
-				if ( ! isset( $items[ $request_id ] ) || ! is_array( $items[ $request_id ] ) ) {
-					return new WP_Error( 'not_found', 'Approval not found.' );
+		// A failure is returned, never swallowed (#981 round 3).
+		$result = Mcpwp_Approvals::update_request(
+			$request_id,
+			static function ( array $record ) use ( $published, $skipped, $reverted ) {
+				if ( ! isset( $record['metadata'] ) || ! is_array( $record['metadata'] ) ) {
+					$record['metadata'] = array();
 				}
-
 				if ( ! empty( $published ) ) {
-					$items[ $request_id ]['metadata']['applied_ids'] = $published;
+					$record['metadata']['applied_ids'] = $published;
 				}
 				if ( ! empty( $published ) || ! empty( $skipped ) ) {
-					$items[ $request_id ]['metadata']['apply_summary'] = array(
+					$record['metadata']['apply_summary'] = array(
 						'published' => $published,
 						'skipped'   => $skipped,
 					);
 				}
 				if ( ! empty( $reverted ) ) {
-					$items[ $request_id ]['metadata']['reverted_ids'] = $reverted;
+					$record['metadata']['reverted_ids'] = $reverted;
 				}
 
-				return $items;
+				return $record;
 			}
 		);
+		return is_wp_error( $result ) ? $result : true;
 	}
 
 	/**

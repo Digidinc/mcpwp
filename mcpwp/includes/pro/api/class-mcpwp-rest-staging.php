@@ -354,14 +354,9 @@ class Mcpwp_REST_Staging extends Mcpwp_REST_API {
 			'rolled_back_at'          => null,
 		);
 
-		// Persist into the shared approvals store — under its lock (#981
-		// review round 2, WARN-B), never as a bare read-modify-write.
-		$stored = Mcpwp_Approvals::mutate(
-			static function ( array $items ) use ( $id, $record ) {
-				$items[ $id ] = $record;
-				return $items;
-			}
-		);
+		// Persist through the approvals store's own create path (#1042):
+		// create lock, open-request cap, verified INSERT.
+		$stored = Mcpwp_Approvals::insert_request( $record, array( 'key_record' => $this->get_current_api_key_record(), 'wp_user_id' => $this->approval_admin_user_id() ) );
 		if ( is_wp_error( $stored ) ) {
 			return $stored;
 		}

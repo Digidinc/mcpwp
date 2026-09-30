@@ -235,6 +235,21 @@ class Mcpwp_Destructive_Gate {
 	}
 
 	/**
+	 * Whether this principal is exempt from the approval caps — derived from
+	 * Mcpwp_Approvals::requester_is_exempt_from_caps(), the one place that
+	 * decides it (#1042 review round 2).
+	 *
+	 * @param array|null $key_record Current key record.
+	 * @return bool
+	 */
+	public static function key_is_unrestricted( $key_record ) {
+		if ( ! class_exists( 'Mcpwp_Approvals' ) ) {
+			return false;
+		}
+		return Mcpwp_Approvals::requester_is_exempt_from_caps( self::requester_id( $key_record ), array( 'key_record' => $key_record ) );
+	}
+
+	/**
 	 * Who to record as the requester of a deferred operation.
 	 *
 	 * @param array|null $key_record Current key record.
@@ -421,8 +436,11 @@ class Mcpwp_Destructive_Gate {
 			),
 			$resource,
 			array(
-				'title'               => $summary,
-				'requested_by_key_id' => self::requester_id( $key_record ),
+				'title'                  => $summary,
+				'requested_by_key_id'    => self::requester_id( $key_record ),
+				// #1042: exemption from the approval caps is decided by
+				// Mcpwp_Approvals::requester_is_exempt_from_caps() alone.
+				'key_record'             => $key_record,
 			)
 		);
 

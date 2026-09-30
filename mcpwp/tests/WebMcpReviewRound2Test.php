@@ -4,8 +4,9 @@
  *
  *  WARN-A  meta/taxonomy gates run on the keys the handler will write
  *          (validate_meta() trims; sanitize_key() normalises taxonomies).
- *  WARN-B  every approvals-store write is a read-modify-write under a MySQL
- *          named lock with a fresh re-read; no lock → 503, nothing stored.
+ *  WARN-B  no approvals-store write can lose another (#1042: creates count
+ *          and insert under a MySQL named lock, no lock → 503, nothing
+ *          stored; every other write is an optimistic per-row update).
  *  WARN-C  unrestricted keys / wp-admin exempt from the pending caps; 30-day
  *          lazy expiry of pending content approvals; 1 MB API / 256 KB
  *          WebMCP body cap; limits and TTL filterable.
@@ -71,7 +72,7 @@ final class WebMcpReviewRound2Test extends TestCase {
 	}
 
 	private function stored(): array {
-		$items = get_option( Mcpwp_Approvals::OPTION_NAME, array() );
+		$items = mcpwp_test_approvals_all();
 		return is_array( $items ) ? $items : array();
 	}
 
@@ -110,12 +111,15 @@ final class WebMcpReviewRound2Test extends TestCase {
 
 	// ── WARN-B ─────────────────────────────────────────────────────────────
 
-	public function test_every_write_takes_and_releases_the_named_lock(): void {
+	public function test_only_a_create_takes_the_named_lock(): void {
+		mcpwp_test_approvals_put( array() ); // Migrated already: the one-time copy takes its own locks.
 		$created = Mcpwp_Approvals::create_post_content_request( self::POST, 'v1', array( 'requested_by_key_id' => 'k1' ) );
 		$this->assertIsArray( $created );
 		Mcpwp_Approvals::approve_request( $created['id'] );
 
-		$this->assertSame( array( 'get', 'release', 'get', 'release' ), $GLOBALS['mcpwp_test_named_lock_calls'] );
+		// #1042: the create is locked (quota check + insert); the approve is
+		// a per-row conditional update and takes no global lock.
+		$this->assertSame( array( 'get', 'release' ), $GLOBALS['mcpwp_test_named_lock_calls'] );
 	}
 
 	public function test_a_writer_that_committed_before_we_got_the_lock_is_not_overwritten(): void {
@@ -125,9 +129,9 @@ final class WebMcpReviewRound2Test extends TestCase {
 		// stores its record between our read and our write. With the fix our
 		// read happens only after the lock is granted, so it sees that record.
 		$GLOBALS['mcpwp_test_on_lock_granted'] = static function () {
-			$items                 = get_option( Mcpwp_Approvals::OPTION_NAME, array() );
+			$items                 = mcpwp_test_approvals_all();
 			$items['apr_parallel'] = array( 'id' => 'apr_parallel', 'status' => 'pending', 'action' => 'post_content_update', 'requested_by_key_id' => 'k2', 'created_at' => gmdate( 'c' ) );
-			update_option( Mcpwp_Approvals::OPTION_NAME, $items, false );
+			mcpwp_test_approvals_put( $items );
 		};
 		$second = Mcpwp_Approvals::create_post_content_request( self::POST, 'second', array( 'requested_by_key_id' => 'k1' ) );
 
@@ -137,14 +141,20 @@ final class WebMcpReviewRound2Test extends TestCase {
 		$this->assertArrayHasKey( $second['id'], $stored );
 	}
 
-	public function test_transitions_are_checked_and_written_under_the_lock(): void {
+	public function test_transitions_are_checked_against_the_row_as_written(): void {
 		$created = Mcpwp_Approvals::create_post_content_request( self::POST, 'v', array( 'requested_by_key_id' => 'k1' ) );
 
-		// A concurrent reviewer rejects it just before our approve gets the lock.
-		$GLOBALS['mcpwp_test_on_lock_granted'] = static function () use ( $created ) {
-			$items                              = get_option( Mcpwp_Approvals::OPTION_NAME, array() );
-			$items[ $created['id'] ]['status']  = 'rejected';
-			update_option( Mcpwp_Approvals::OPTION_NAME, $items, false );
+		// A concurrent reviewer rejects it between our read and our write.
+		// Our conditional UPDATE matches no row (the version moved); the
+		// re-read sees the rejection and the approve is refused.
+		$GLOBALS['mcpwp_test_approvals_before_update'] = static function ( $id ) {
+			mcpwp_test_approvals_concurrent_write(
+				$id,
+				static function ( array $record ) {
+					$record['status'] = 'rejected';
+					return $record;
+				}
+			);
 		};
 		$approve = Mcpwp_Approvals::approve_request( $created['id'] );
 
@@ -174,27 +184,41 @@ final class WebMcpReviewRound2Test extends TestCase {
 		$this->assertSame( 'approvals_busy', $proposal->get_error_code() );
 	}
 
-	public function test_nested_writes_take_the_lock_once(): void {
-		$result = Mcpwp_Approvals::mutate(
-			static function ( array $items ) {
-				Mcpwp_Approvals::mutate(
-					static function ( array $inner ) {
-						$inner['apr_inner'] = array( 'id' => 'apr_inner', 'status' => 'rejected', 'created_at' => gmdate( 'c' ) );
-						return $inner;
-					}
-				);
-				return $items;
-			}
-		);
-		$this->assertTrue( $result );
-		$this->assertSame( array( 'get', 'release' ), $GLOBALS['mcpwp_test_named_lock_calls'] );
+	public function test_a_write_that_keeps_losing_the_race_answers_busy_and_changes_nothing(): void {
+		$created = Mcpwp_Approvals::create_post_content_request( self::POST, 'v', array( 'requested_by_key_id' => 'k1' ) );
+		$id      = $created['id'];
+
+		// Another writer bumps the row before every one of our attempts.
+		$bumps = 0;
+		$bump  = static function ( $row_id ) use ( &$bump, &$bumps ) {
+			$bumps++;
+			mcpwp_test_approvals_concurrent_write(
+				$row_id,
+				static function ( array $record ) use ( $bumps ) {
+					$record['note'] = 'touched ' . $bumps;
+					return $record;
+				}
+			);
+			$GLOBALS['mcpwp_test_approvals_before_update'] = $bump;
+		};
+		$GLOBALS['mcpwp_test_approvals_before_update'] = $bump;
+
+		$result = Mcpwp_Approvals::approve_request( $id );
+		$GLOBALS['mcpwp_test_approvals_before_update'] = null;
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'approvals_busy', $result->get_error_code() );
+		$this->assertSame( 503, $result->get_error_data()['status'] );
+		$this->assertSame( Mcpwp_Approvals::UPDATE_ATTEMPTS, $bumps );
+		$this->assertSame( 'pending', $this->stored()[ $id ]['status'], 'Never reported busy after writing.' );
 	}
 
 	// ── WARN-C ─────────────────────────────────────────────────────────────
 
 	public function test_unrestricted_keys_and_wp_admin_are_exempt_from_the_pending_caps(): void {
+		$GLOBALS['mcpwp_test_user_caps'][1] = array( 'manage_options' => true ); // #1042: wp-user:1 is an administrator.
 		for ( $i = 0; $i < 25; $i++ ) {
-			$this->assertIsArray( Mcpwp_Approvals::create_post_content_request( self::POST, "a$i", array( 'requested_by_key_id' => 'admin-key', 'requester_unrestricted' => true ) ), "unrestricted #$i" );
+			$this->assertIsArray( Mcpwp_Approvals::create_post_content_request( self::POST, "a$i", array( 'requested_by_key_id' => 'admin-key', 'key_record' => mcpwp_test_admin_key() ) ), "unrestricted #$i" );
 			$this->assertIsArray( Mcpwp_Approvals::create_post_content_request( self::POST, "w$i", array( 'requested_by_key_id' => 'wp-user:1' ) ), "wp-admin #$i" );
 		}
 
@@ -206,9 +230,9 @@ final class WebMcpReviewRound2Test extends TestCase {
 
 		// A WebMCP user is always capped, even if a caller claimed otherwise.
 		for ( $i = 0; $i < Mcpwp_Approvals::MAX_PENDING_CONTENT_PER_REQUESTER; $i++ ) {
-			Mcpwp_Approvals::create_post_content_request( self::POST, "m$i", array( 'requested_by_key_id' => 'webmcp:user:5', 'requester_unrestricted' => true ) );
+			Mcpwp_Approvals::create_post_content_request( self::POST, "m$i", array( 'requested_by_key_id' => 'webmcp:user:5', 'key_record' => mcpwp_test_admin_key() ) );
 		}
-		$this->assertSame( 'too_many_pending', Mcpwp_Approvals::create_post_content_request( self::POST, 'm-over', array( 'requested_by_key_id' => 'webmcp:user:5', 'requester_unrestricted' => true ) )->get_error_code() );
+		$this->assertSame( 'too_many_pending', Mcpwp_Approvals::create_post_content_request( self::POST, 'm-over', array( 'requested_by_key_id' => 'webmcp:user:5', 'key_record' => mcpwp_test_admin_key() ) )->get_error_code() );
 	}
 
 	public function test_size_caps_differ_for_webmcp_and_api_keys_and_are_filterable(): void {
@@ -232,13 +256,11 @@ final class WebMcpReviewRound2Test extends TestCase {
 
 	public function test_pending_content_approvals_expire_after_the_ttl(): void {
 		$old = gmdate( 'c', time() - 31 * DAY_IN_SECONDS );
-		update_option(
-			Mcpwp_Approvals::OPTION_NAME,
+		mcpwp_test_approvals_put(
 			array(
 				'apr_old'   => array( 'id' => 'apr_old', 'status' => 'pending', 'action' => 'post_content_update', 'requested_by_key_id' => 'k1', 'created_at' => $old, 'resource' => array( 'type' => 'post', 'id' => self::POST ) ),
 				'apr_other' => array( 'id' => 'apr_other', 'status' => 'pending', 'action' => 'destructive_operation', 'requested_by_key_id' => 'k1', 'created_at' => $old ),
-			),
-			false
+			)
 		);
 
 		// Read: already expired, before anything is written.
@@ -262,7 +284,7 @@ final class WebMcpReviewRound2Test extends TestCase {
 				return 60 * DAY_IN_SECONDS;
 			}
 		);
-		update_option( Mcpwp_Approvals::OPTION_NAME, array( 'apr_40' => array( 'id' => 'apr_40', 'status' => 'pending', 'action' => 'post_content_update', 'created_at' => gmdate( 'c', time() - 40 * DAY_IN_SECONDS ) ) ), false );
+		mcpwp_test_approvals_put( array( 'apr_40' => array( 'id' => 'apr_40', 'status' => 'pending', 'action' => 'post_content_update', 'created_at' => gmdate( 'c', time() - 40 * DAY_IN_SECONDS ) ) ) );
 		$this->assertSame( 'pending', Mcpwp_Approvals::get_request( 'apr_40' )['status'] );
 	}
 
