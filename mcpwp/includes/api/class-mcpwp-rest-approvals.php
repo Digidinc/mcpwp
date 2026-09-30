@@ -145,7 +145,8 @@ class Mcpwp_REST_Approvals extends Mcpwp_REST_API {
 			(int) $request->get_param( 'limit' ),
 			$this->requester_can_see_non_public(),
 			(string) $request->get_param( 'order' ),
-			array( $this, 'caller_may_read_category' )
+			array( $this, 'caller_may_read_category' ),
+			$this->requester_is_unrestricted()
 		);
 		if ( is_wp_error( $approvals ) ) {
 			return $approvals;

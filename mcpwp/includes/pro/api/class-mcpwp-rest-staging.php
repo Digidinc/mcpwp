@@ -356,7 +356,7 @@ class Mcpwp_REST_Staging extends Mcpwp_REST_API {
 
 		// Persist through the approvals store's own create path (#1042):
 		// create lock, open-request cap, verified INSERT.
-		$stored = Mcpwp_Approvals::insert_request( $record, array( 'requester_unrestricted' => $this->requester_is_unrestricted() ) );
+		$stored = Mcpwp_Approvals::insert_request( $record, array( 'key_record' => $this->get_current_api_key_record(), 'wp_user_id' => $this->approval_admin_user_id() ) );
 		if ( is_wp_error( $stored ) ) {
 			return $stored;
 		}

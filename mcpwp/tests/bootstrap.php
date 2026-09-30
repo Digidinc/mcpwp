@@ -1840,16 +1840,24 @@ if (! function_exists('mcpwp_test_sql_find')) {
                 }
                 return (string) $sum;
             }
-            if ('status, COUNT(*) AS n' === $what) {
+            if (preg_match('/^(.*), COUNT\(\*\) AS n$/', $what, $gm)) {
+                $gcols  = array_map('trim', explode(',', $gm[1]));
                 $groups = array();
                 foreach ($hits as $row) {
-                    $groups[ (string) $row['status'] ] = ($groups[ (string) $row['status'] ] ?? 0) + 1;
+                    $key = array();
+                    foreach ($gcols as $col) {
+                        $key[ $col ] = (string) $row[ $col ];
+                    }
+                    $hash = json_encode($key);
+                    if (! isset($groups[ $hash ])) {
+                        $groups[ $hash ] = $key + array('n' => 0);
+                    }
+                    $groups[ $hash ]['n']++;
                 }
-                $out = array();
-                foreach ($groups as $status => $n) {
-                    $out[] = array('status' => $status, 'n' => (string) $n);
-                }
-                return $out;
+                return array_map(function ($g) {
+                    $g['n'] = (string) $g['n'];
+                    return $g;
+                }, array_values($groups));
             }
 
             if (null !== $limit) {
@@ -1903,7 +1911,7 @@ if (! function_exists('mcpwp_test_sql_find')) {
         $GLOBALS['mcpwp_test_approvals_rows']         = array();
         $GLOBALS['mcpwp_test_approvals_table_exists'] = true;
         update_option('mcpwp_approvals_table_migrated', 1);
-        update_option('mcpwp_approvals_schema_version', 2);
+        update_option('mcpwp_approvals_schema_version', 3);
         if (! empty($items)) {
             $copied = Mcpwp_Approvals::import_legacy_items($items);
             if (is_wp_error($copied)) {
@@ -1924,6 +1932,12 @@ if (! function_exists('mcpwp_test_sql_find')) {
         $row['status']  = (string) ($record['status'] ?? '');
         $row['version'] = (int) $row['version'] + 1;
         $GLOBALS['mcpwp_test_approvals_rows'][ $id ] = $row;
+    }
+
+    /** An API key record with scope admin — exempt from the approval caps. */
+    function mcpwp_test_admin_key($id = 'admin-key')
+    {
+        return array('id' => $id, 'role' => 'admin', 'scopes' => array('read', 'write', 'admin'));
     }
 
     /** Store one record (insert or overwrite), keeping its row's position. */
@@ -2207,6 +2221,9 @@ if (! isset($GLOBALS['wpdb'])) {
             // granted — i.e. a writer that committed just before we got it.
             if (preg_match('/^SELECT GET_LOCK\(/', trim((string) $query))) {
                 $GLOBALS['mcpwp_test_named_lock_calls'][] = 'get';
+                if (preg_match("/^SELECT GET_LOCK\\('([^']*)'/", trim((string) $query), $lm)) {
+                    $GLOBALS['mcpwp_test_named_lock_names'][] = $lm[1];
+                }
                 $result = $GLOBALS['mcpwp_test_get_lock_result'] ?? '1';
                 // A per-call sequence wins when set: e.g. array('1','0','0','0')
                 // grants the first lock and times out the next three.

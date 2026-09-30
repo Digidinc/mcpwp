@@ -235,25 +235,18 @@ class Mcpwp_Destructive_Gate {
 	}
 
 	/**
-	 * Whether a key is unrestricted by category (so exempt from the
-	 * approvals open-request cap, #1042 B1).
+	 * Whether this principal is exempt from the approval caps — derived from
+	 * Mcpwp_Approvals::requester_is_exempt_from_caps(), the one place that
+	 * decides it (#1042 review round 2).
 	 *
 	 * @param array|null $key_record Current key record.
 	 * @return bool
 	 */
 	public static function key_is_unrestricted( $key_record ) {
-		if ( ! is_array( $key_record ) || ! trait_exists( 'Mcpwp_Api_Auth' ) ) {
+		if ( ! class_exists( 'Mcpwp_Approvals' ) ) {
 			return false;
 		}
-		static $auth = null;
-		if ( null === $auth ) {
-			$auth = new class() {
-				use Mcpwp_Api_Auth;
-			};
-		}
-		// Same test as Mcpwp_REST_API::requester_is_unrestricted(): a key
-		// whose role grants every category.
-		return array() === $auth->resolve_key_tool_categories( $key_record );
+		return Mcpwp_Approvals::requester_is_exempt_from_caps( self::requester_id( $key_record ), array( 'key_record' => $key_record ) );
 	}
 
 	/**
@@ -445,9 +438,9 @@ class Mcpwp_Destructive_Gate {
 			array(
 				'title'                  => $summary,
 				'requested_by_key_id'    => self::requester_id( $key_record ),
-				// #1042 B1: an unrestricted key is never refused by the
-				// open-request cap (a wp-user:* requester is exempt by id).
-				'requester_unrestricted' => self::key_is_unrestricted( $key_record ),
+				// #1042: exemption from the approval caps is decided by
+				// Mcpwp_Approvals::requester_is_exempt_from_caps() alone.
+				'key_record'             => $key_record,
 			)
 		);
 

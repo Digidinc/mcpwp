@@ -54,7 +54,7 @@ class Mcpwp_Approvals {
 	 *
 	 * @var int
 	 */
-	const SCHEMA_VERSION = 2;
+	const SCHEMA_VERSION = 3;
 
 	/**
 	 * Option holding the table's schema version.
@@ -135,11 +135,29 @@ class Mcpwp_Approvals {
 	const CLOSED_RETENTION = 604800;
 
 	/**
+	 * Most bytes of OPEN records the queue holds, for every principal
+	 * (#1042 review round 2): a create past it is 507 approvals_store_full.
+	 * Status changes are never refused by it.
+	 */
+	const OPEN_BYTES_MAX = 67108864;
+
+	/**
+	 * A page of list_requests() stops loading full records once their
+	 * summed quota_bytes passes this (it always returns at least one).
+	 */
+	const LIST_PAGE_BYTES_MAX = 8388608;
+
+	/**
 	 * Days a closed record is kept before the daily retention cron deletes
 	 * it (each deletion audited first). Filterable:
 	 * mcpwp_approvals_closed_retention_days.
 	 */
 	const CLOSED_RETENTION_DAYS = 90;
+
+	/**
+	 * Hourly cron hook for the late import of a recreated legacy option.
+	 */
+	const LATE_IMPORT_CRON_HOOK = 'mcpwp_approvals_late_import';
 
 	/**
 	 * Daily cron hook for retention and compaction.
@@ -674,13 +692,23 @@ class Mcpwp_Approvals {
 	 *                                  exists here for a filtered-out item to
 	 *                                  contradict. Null (default): unfiltered,
 	 *                                  matching every existing caller unchanged.
+	 * @param bool|null     $show_damaged Whether a damaged row appears as a
+	 *                                  stub {id, status, error: corrupt_record}.
+	 *                                  Default: only when there is no
+	 *                                  $category_allowed. A category-restricted
+	 *                                  caller never sees one (its visibility
+	 *                                  cannot be proven).
 	 * @return array|WP_Error Requests; a WP_Error (503) when the store cannot
 	 *                        be read — never an empty list that would look
 	 *                        like "no approvals".
 	 */
-	public static function list_requests( $status = '', $limit = 50, $reveal_non_public = false, $order = 'date', $category_allowed = null ) {
+	public static function list_requests( $status = '', $limit = 50, $reveal_non_public = false, $order = 'date', $category_allowed = null, $show_damaged = null ) {
 		$status = sanitize_key( (string) $status );
 		$limit  = min( 100, max( 1, (int) $limit ) );
+		// A damaged row is shown (as a stub) only to a caller whose visibility
+		// needs no proof: no category filter, or one the caller says is
+		// unrestricted. Hidden otherwise.
+		$show_damaged = null === $show_damaged ? ! is_callable( $category_allowed ) : (bool) $show_damaged;
 
 		$ready = self::ensure_store();
 		if ( is_wp_error( $ready ) ) {
@@ -689,13 +717,13 @@ class Mcpwp_Approvals {
 
 		self::maybe_sweep_expired();
 
-		// Status filter, order and paging run in SQL (#1042). Visibility does
-		// NOT: is_approval_visible_to() stays the one chokepoint (a second,
-		// SQL implementation of the category rules is how #1025-class leaks
-		// happen). Because it runs after the fetch, rows are read in batches
-		// until $limit VISIBLE records are collected or rows run out — a
-		// restricted key still gets full pages, and a hidden item never
-		// displaces a visible one.
+		// Status filter, order and paging run in SQL over LIGHT columns only
+		// (#1042 review round 2): the page's ids are found without decoding a
+		// single `record`, and visibility is decided by is_approval_visible_to()
+		// — still the one chokepoint — on a light record built from the
+		// visibility_categories column. Only the page's own records are then
+		// loaded, and loading stops once their bytes pass LIST_PAGE_BYTES_MAX.
+		// Paging counts SQL rows, so a damaged row never ends a page early.
 		//
 		// Ties on created_at keep insertion order (seq ascending), the order
 		// the old option held them in — so a migrated queue lists exactly as
@@ -705,70 +733,110 @@ class Mcpwp_Approvals {
 			: 'created_at DESC, seq ASC';
 		$where    = '' !== $status ? array( array( 'status =', $status ) ) : array();
 
-		$items  = array();
-		$seen   = array();
-		$offset = 0;
-		$batch  = self::LIST_BATCH;
-		while ( count( $items ) < $limit ) {
-			$rows = self::select_rows( $where, $order_by, $batch, $offset );
+		$records = array();
+		$seen    = array();
+		$bytes   = 0;
+		$offset  = 0;
+		$batch   = self::LIST_BATCH;
+		$done    = false;
+		while ( ! $done && count( $records ) < $limit ) {
+			$rows = self::select_light( $where, $order_by, $batch, $offset );
 			if ( is_wp_error( $rows ) ) {
 				return $rows;
 			}
+			$offset += $batch;
+			if ( count( $rows ) < $batch ) {
+				$done = true;
+			}
+
+			// Walk this batch in page order; load the picked records in
+			// small groups (never more than the page still needs), so a row
+			// that turns out damaged and hidden is simply replaced by the next
+			// visible one.
+			$pending = array();
+			$flush   = function () use ( &$pending, &$records, $status, $reveal_non_public, $show_damaged ) {
+				$loaded = self::load_records( array_keys( $pending ) );
+				if ( is_wp_error( $loaded ) ) {
+					return $loaded;
+				}
+				foreach ( $pending as $id => $row ) {
+					if ( ! array_key_exists( $id, $loaded ) ) {
+						continue; // Deleted since the light read.
+					}
+					if ( null === $loaded[ $id ] ) {
+						if ( $show_damaged ) {
+							$records[] = array(
+								'id'     => (string) $id,
+								'status' => (string) $row['status'],
+								'error'  => 'corrupt_record',
+							);
+						}
+						continue;
+					}
+					$item = self::expire_stale_one( $loaded[ $id ] );
+					if ( '' !== $status && ( ! isset( $item['status'] ) || $status !== $item['status'] ) ) {
+						continue;
+					}
+					$item = self::public_record( $item );
+					if ( ! $reveal_non_public ) {
+						$item = self::redact_source_for_unprivileged( $item );
+					}
+					$records[] = $item;
+				}
+				$pending = array();
+				return true;
+			};
+
 			foreach ( $rows as $row ) {
+				if ( count( $records ) + count( $pending ) >= $limit ) {
+					$flushed = $flush();
+					if ( is_wp_error( $flushed ) ) {
+						return $flushed;
+					}
+					if ( count( $records ) >= $limit ) {
+						$done = true;
+						break;
+					}
+				}
 				// A row inserted above the window between two batches shifts
 				// the next one down by one: never list the same record twice.
 				if ( isset( $seen[ $row['id'] ] ) ) {
 					continue;
 				}
 				$seen[ $row['id'] ] = true;
-
-				$item = self::expire_stale_one( $row['record'] );
-				if ( '' !== $status && ( ! isset( $item['status'] ) || $status !== $item['status'] ) ) {
+				if ( is_callable( $category_allowed ) && ! self::is_approval_visible_to( self::light_record( $row ), $category_allowed ) ) {
 					continue;
 				}
-				if ( is_callable( $category_allowed ) && ! self::is_approval_visible_to( $item, $category_allowed ) ) {
-					continue;
-				}
-				$items[] = $item;
-				if ( count( $items ) >= $limit ) {
+				if ( ( ! empty( $records ) || ! empty( $pending ) ) && $bytes + (int) $row['quota_bytes'] > self::LIST_PAGE_BYTES_MAX ) {
+					$done = true;
 					break;
 				}
+				$pending[ $row['id'] ] = $row;
+				$bytes                += (int) $row['quota_bytes'];
 			}
-			if ( count( $rows ) < $batch ) {
-				break;
+			if ( ! empty( $pending ) ) {
+				$flushed = $flush();
+				if ( is_wp_error( $flushed ) ) {
+					return $flushed;
+				}
 			}
-			$offset += $batch;
 		}
 
-		$records = array_map( array( __CLASS__, 'public_record' ), $items );
-
-		if ( ! $reveal_non_public ) {
-			$records = array_map( array( __CLASS__, 'redact_source_for_unprivileged' ), $records );
-		}
-
-		return $records;
+		return array_slice( $records, 0, $limit );
 	}
 
-	/**
-	 * Most closed rows count_by_status() reads for a caller whose visibility
-	 * must be checked per record; past it the closed counts are marked
-	 * truncated rather than silently short.
-	 */
-	const COUNT_CLOSED_SCAN_LIMIT = 5000;
 
 	/**
-	 * Approvals per status (#1042 review round 1, W4) — every consumer of
+	 * Approvals per status (#1042 review rounds 1-2) — every consumer of
 	 * approval counts (/site-state, content coherence, Control Room) reads
-	 * this, never a count of one listed page.
-	 *
-	 * With no $category_allowed (an unrestricted caller): exact, one SQL
-	 * `COUNT(*) … GROUP BY status`. With one: every open-status row is
-	 * checked through is_approval_visible_to() (the one visibility
-	 * chokepoint — never a second SQL version of it), and closed rows up to
-	 * COUNT_CLOSED_SCAN_LIMIT; past that the answer says truncated => true.
+	 * this, never a count of one listed page. Light columns only: one
+	 * `COUNT(*) … GROUP BY status, visibility_categories`; with a
+	 * $category_allowed, each group is kept or dropped by
+	 * is_approval_visible_to() on a light record. Exact for every caller; a
+	 * damaged row counts under its status column.
 	 *
 	 * @param callable|null $category_allowed See list_requests().
-	 * @return array{counts:array<string,int>,truncated:bool}|WP_Error
+	 * @return array{counts:array<string,int>}|WP_Error
 	 */
 	public static function count_by_status( $category_allowed = null ) {
 		$ready = self::ensure_store();
@@ -778,71 +846,40 @@ class Mcpwp_Approvals {
 		self::maybe_sweep_expired();
 
 		global $wpdb;
+		$table = self::table_name();
+		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- table name is prefix + constant.
+		$groups = $wpdb->get_results( "SELECT status, visibility_categories, COUNT(*) AS n FROM {$table} GROUP BY status, visibility_categories", ARRAY_A );
+		if ( ! is_array( $groups ) || '' !== (string) $wpdb->last_error ) {
+			return self::store_read_failed_error();
+		}
+
 		$counts = array();
-
-		if ( ! is_callable( $category_allowed ) ) {
-			$table = self::table_name();
-			// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- table name is prefix + constant.
-			$rows = $wpdb->get_results( "SELECT status, COUNT(*) AS n FROM {$table} GROUP BY status", ARRAY_A );
-			if ( ! is_array( $rows ) || '' !== (string) $wpdb->last_error ) {
-				return self::store_read_failed_error();
+		foreach ( $groups as $group ) {
+			if ( is_callable( $category_allowed ) && ! self::is_approval_visible_to( self::light_record( $group ), $category_allowed ) ) {
+				continue;
 			}
-			foreach ( $rows as $row ) {
-				$counts[ (string) $row['status'] ] = (int) $row['n'];
-			}
-			return array(
-				'counts'    => $counts,
-				'truncated' => false,
-			);
+			$status            = (string) $group['status'];
+			$counts[ $status ] = ( isset( $counts[ $status ] ) ? $counts[ $status ] : 0 ) + (int) $group['n'];
 		}
+		return array( 'counts' => $counts );
+	}
 
-		$truncated = false;
-		foreach ( array( 'open', 'closed' ) as $pass ) {
-			$scanned = 0;
-			$after   = '';
-			while ( true ) {
-				$rows = self::select_rows(
-					array(
-						array( 'open' === $pass ? 'status IN' : 'status NOT IN', self::open_statuses() ),
-						array( 'id >', $after ),
-					),
-					'id ASC',
-					self::LIST_BATCH
-				);
-				if ( is_wp_error( $rows ) ) {
-					return $rows;
-				}
-				if ( empty( $rows ) ) {
-					break;
-				}
-				foreach ( $rows as $row ) {
-					$after = $row['id'];
-					$item  = self::expire_stale_one( $row['record'] );
-					if ( ! self::is_approval_visible_to( $item, $category_allowed ) ) {
-						continue;
-					}
-					$status            = isset( $item['status'] ) ? (string) $item['status'] : '';
-					$counts[ $status ] = ( isset( $counts[ $status ] ) ? $counts[ $status ] : 0 ) + 1;
-				}
-				$scanned += count( $rows );
-				if ( 'closed' === $pass && $scanned >= self::COUNT_CLOSED_SCAN_LIMIT ) {
-					$more = self::select_rows(
-						array(
-							array( 'status NOT IN', self::open_statuses() ),
-							array( 'id >', $after ),
-						),
-						'id ASC',
-						1
-					);
-					$truncated = is_wp_error( $more ) || ! empty( $more );
-					break;
-				}
-			}
-		}
-
+	/**
+	 * The record is_approval_visible_to() judges when only the light
+	 * columns were read: the status and the stored visibility categories. A
+	 * row whose column is empty or unreadable falls back to
+	 * categories_for_approval()'s own fail-closed default (visible only to
+	 * an unrestricted caller).
+	 *
+	 * @param array $row Light row (status, visibility_categories[, id]).
+	 * @return array
+	 */
+	private static function light_record( array $row ) {
+		$categories = isset( $row['visibility_categories'] ) ? json_decode( (string) $row['visibility_categories'], true ) : null;
 		return array(
-			'counts'    => $counts,
-			'truncated' => $truncated,
+			'id'                    => isset( $row['id'] ) ? (string) $row['id'] : '',
+			'status'                => isset( $row['status'] ) ? (string) $row['status'] : '',
+			'visibility_categories' => is_array( $categories ) ? array_values( array_filter( array_map( 'strval', $categories ) ) ) : array(),
 		);
 	}
 
@@ -2095,8 +2132,8 @@ class Mcpwp_Approvals {
 	 * lock, open-request cap, verified INSERT — as every create_*_request().
 	 *
 	 * @param array $record Complete record; must carry an 'id'.
-	 * @param array $args   {requester_unrestricted?: bool} — whether the
-	 *                      requester is exempt from the open-request cap.
+	 * @param array $args   {key_record?, wp_user_id?} — see
+	 *                      requester_is_exempt_from_caps().
 	 * @return true|WP_Error
 	 */
 	public static function insert_request( array $record, array $args = array() ) {
@@ -2148,22 +2185,8 @@ class Mcpwp_Approvals {
 				continue;
 			}
 			$records++;
-			// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery -- table name is prefix + constant.
-			$inserted = $wpdb->query(
-				$wpdb->prepare(
-					"INSERT IGNORE INTO {$table} (id, status, action, requested_by_key_id, created_at, updated_at, triage_rank, cap_exempt, quota_bytes, version, record) VALUES (%s, %s, %s, %s, %s, %s, %d, %d, %d, 0, %s)",
-					$id,
-					$fields['status'],
-					$fields['action'],
-					$fields['requested_by_key_id'],
-					$fields['created_at'],
-					$fields['updated_at'],
-					$fields['triage_rank'],
-					$fields['cap_exempt'],
-					$fields['quota_bytes'],
-					$fields['record']
-				)
-			);
+			$fields['id'] = $id;
+			$inserted     = self::insert_row( $fields, true );
 			if ( false === $inserted ) {
 				return self::store_failed_error();
 			}
@@ -2184,37 +2207,83 @@ class Mcpwp_Approvals {
 
 	/**
 	 * Recompute the derived columns of every row (schema upgrades that add
-	 * a column, e.g. cap_exempt / quota_bytes in schema 2) — for
-	 * Mcpwp_Activator::migrate_approvals_to_table() only, under its lock.
-	 * Column-only: the record and its version are untouched.
+	 * a column: cap_exempt / quota_bytes in schema 2, visibility_categories
+	 * in schema 3) — for Mcpwp_Activator::migrate_approvals_to_table() only,
+	 * under its lock. Column-only: the record and its version are untouched.
+	 * A damaged row keeps its columns.
 	 *
 	 * @return true|WP_Error
 	 */
 	public static function backfill_derived_columns() {
 		global $wpdb;
 		$table = self::table_name();
-		$after = '';
-		while ( true ) {
-			$rows = self::select_rows( array( array( 'id >', $after ) ), 'id ASC', self::RETENTION_BATCH );
-			if ( is_wp_error( $rows ) ) {
-				return $rows;
-			}
-			if ( empty( $rows ) ) {
-				return true;
-			}
-			foreach ( $rows as $row ) {
-				$after  = $row['id'];
+		return self::each_row(
+			array(),
+			static function ( array $row ) use ( $wpdb, $table ) {
 				$fields = self::row_from_record( $row['record'] );
 				if ( is_wp_error( $fields ) ) {
-					continue;
+					return true;
 				}
 				// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- table name is prefix + constant.
-				$done = $wpdb->query( $wpdb->prepare( "UPDATE {$table} SET cap_exempt = %d, quota_bytes = %d, updated_at = %s WHERE id = %s", $fields['cap_exempt'], $fields['quota_bytes'], $fields['updated_at'], $row['id'] ) );
-				if ( false === $done ) {
-					return self::store_failed_error();
+				$done = $wpdb->query( $wpdb->prepare( "UPDATE {$table} SET cap_exempt = %d, quota_bytes = %d, updated_at = %s, visibility_categories = %s WHERE id = %s", $fields['cap_exempt'], $fields['quota_bytes'], $fields['updated_at'], $fields['visibility_categories'], $row['id'] ) );
+				return false === $done ? self::store_failed_error() : true;
+			}
+		);
+	}
+
+	/**
+	 * Visit every row matching $conditions, one full record at a time:
+	 * ids come from light columns in batches, and each record is read on
+	 * its own, so memory never holds more than one (#1042 review round 2).
+	 * $visit gets {id, version, record} and returns true to continue, false
+	 * to stop, or a WP_Error to abort with it. Damaged rows are skipped.
+	 *
+	 * @param array      $conditions See where_sql().
+	 * @param callable   $visit      function( array $row ): bool|WP_Error.
+	 * @param float|null $deadline   microtime(true) to stop at.
+	 * @return true|WP_Error
+	 */
+	private static function each_row( array $conditions, callable $visit, $deadline = null ) {
+		$after = '';
+		while ( null === $deadline || microtime( true ) < $deadline ) {
+			$ids = self::select_light( array_merge( $conditions, array( array( 'id >', $after ) ) ), 'id ASC', self::RETENTION_BATCH );
+			if ( is_wp_error( $ids ) ) {
+				return $ids;
+			}
+			foreach ( $ids as $light ) {
+				$after = (string) $light['id'];
+				$row   = self::read_row( $after );
+				if ( is_wp_error( $row ) ) {
+					if ( 'corrupt_record' === ( $row->get_error_data()['reason'] ?? '' ) ) {
+						continue;
+					}
+					return $row;
+				}
+				if ( null === $row ) {
+					continue;
+				}
+				$result = $visit(
+					array(
+						'id'      => $after,
+						'version' => $row['version'],
+						'record'  => $row['record'],
+					)
+				);
+				if ( is_wp_error( $result ) ) {
+					return $result;
+				}
+				if ( false === $result ) {
+					return true;
+				}
+				if ( null !== $deadline && microtime( true ) >= $deadline ) {
+					return true;
 				}
 			}
+			if ( count( $ids ) < self::RETENTION_BATCH ) {
+				return true;
+			}
 		}
+		return true;
 	}
 
 	// ── Store (#1042): one row per approval ──────────────────────────────
@@ -2248,7 +2317,10 @@ class Mcpwp_Approvals {
 	 * @return true|WP_Error
 	 */
 	private static function ensure_store() {
-		if ( get_option( self::MIGRATED_FLAG ) && (int) get_option( self::SCHEMA_OPTION, 0 ) >= self::SCHEMA_VERSION ) {
+		// The legacy option reappearing (an old-code worker, a stint
+		// downgraded) is checked here, lazily, on approvals paths only — not
+		// on every request (#1042 review round 2) — plus an hourly cron.
+		if ( get_option( self::MIGRATED_FLAG ) && (int) get_option( self::SCHEMA_OPTION, 0 ) >= self::SCHEMA_VERSION && false === get_option( self::OPTION_NAME, false ) ) {
 			return true;
 		}
 		if ( ! class_exists( 'Mcpwp_Activator' ) ) {
@@ -2398,22 +2470,7 @@ class Mcpwp_Approvals {
 			}
 
 			// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- conditional (version-checked) write; table name is prefix + constant.
-			$affected = $wpdb->query(
-				$wpdb->prepare(
-					"UPDATE {$table} SET status = %s, action = %s, requested_by_key_id = %s, created_at = %s, updated_at = %s, triage_rank = %d, cap_exempt = %d, quota_bytes = %d, record = %s, version = version + 1 WHERE id = %s AND version = %d",
-					$fields['status'],
-					$fields['action'],
-					$fields['requested_by_key_id'],
-					$fields['created_at'],
-					$fields['updated_at'],
-					$fields['triage_rank'],
-					$fields['cap_exempt'],
-					$fields['quota_bytes'],
-					$fields['record'],
-					$id,
-					$row['version']
-				)
-			);
+			$affected = self::update_row( $id, $row['version'], $fields );
 			if ( false === $affected ) {
 				return self::store_failed_error();
 			}
@@ -2471,6 +2528,24 @@ class Mcpwp_Approvals {
 				}
 			}
 
+			// Defence in depth for everyone, exempt principals included: the
+			// open queue never holds more than OPEN_BYTES_MAX of records.
+			$held = self::open_bytes_total();
+			if ( is_wp_error( $held ) ) {
+				return $held;
+			}
+			if ( $held + (int) $fields['quota_bytes'] > self::open_bytes_max() ) {
+				return new WP_Error(
+					'approvals_store_full',
+					sprintf(
+						/* translators: %d: size in MB */
+						__( 'The approval queue already holds %d MB of open requests. Nothing was queued; have pending requests reviewed first.', 'mcpwp' ),
+						(int) ( self::open_bytes_max() / 1048576 )
+					),
+					array( 'status' => 507 )
+				);
+			}
+
 			$open = $exempt ? 0 : self::count_where( array( array( 'status IN', self::open_statuses() ) ) );
 			if ( is_wp_error( $open ) ) {
 				return $open;
@@ -2487,23 +2562,7 @@ class Mcpwp_Approvals {
 				);
 			}
 
-			$table = self::table_name();
-			// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery -- table name is prefix + constant.
-			$inserted = $wpdb->query(
-				$wpdb->prepare(
-					"INSERT INTO {$table} (id, status, action, requested_by_key_id, created_at, updated_at, triage_rank, cap_exempt, quota_bytes, version, record) VALUES (%s, %s, %s, %s, %s, %s, %d, %d, %d, 0, %s)",
-					$fields['id'],
-					$fields['status'],
-					$fields['action'],
-					$fields['requested_by_key_id'],
-					$fields['created_at'],
-					$fields['updated_at'],
-					$fields['triage_rank'],
-					$fields['cap_exempt'],
-					$fields['quota_bytes'],
-					$fields['record']
-				)
-			);
+			$inserted = self::insert_row( $fields, false );
 			if ( 1 !== (int) $inserted ) {
 				return self::store_failed_error();
 			}
@@ -2511,6 +2570,98 @@ class Mcpwp_Approvals {
 		} finally {
 			$wpdb->get_var( $wpdb->prepare( 'SELECT RELEASE_LOCK(%s)', $lock ) );
 		}
+	}
+
+	/**
+	 * The column copies every write sets, with their placeholders — one
+	 * list, so INSERT, UPDATE and the backfill cannot disagree.
+	 *
+	 * @return array<string,string>
+	 */
+	private static function column_formats() {
+		return array(
+			'status'                => '%s',
+			'action'                => '%s',
+			'requested_by_key_id'   => '%s',
+			'created_at'            => '%s',
+			'updated_at'            => '%s',
+			'triage_rank'           => '%d',
+			'cap_exempt'            => '%d',
+			'quota_bytes'           => '%d',
+			'visibility_categories' => '%s',
+			'record'                => '%s',
+		);
+	}
+
+	/**
+	 * INSERT (or INSERT IGNORE) one row from row_from_record() fields.
+	 *
+	 * @param array $fields Fields (with 'id').
+	 * @param bool  $ignore INSERT IGNORE (skip an existing id).
+	 * @return int|false Rows inserted.
+	 */
+	private static function insert_row( array $fields, $ignore ) {
+		global $wpdb;
+		$cols = self::column_formats();
+		$sql  = ( $ignore ? 'INSERT IGNORE INTO ' : 'INSERT INTO ' ) . self::table_name()
+			. ' (id, ' . implode( ', ', array_keys( $cols ) ) . ', version) VALUES (%s, ' . implode( ', ', $cols ) . ', 0)';
+		$args = array( $fields['id'] );
+		foreach ( array_keys( $cols ) as $col ) {
+			$args[] = $fields[ $col ];
+		}
+		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery -- built from fixed column names and placeholders only.
+		return $wpdb->query( $wpdb->prepare( $sql, $args ) );
+	}
+
+	/**
+	 * The version-checked UPDATE of one row: every column copy, the record,
+	 * version + 1, WHERE id = %s AND version = %d.
+	 *
+	 * @param string $id      Approval id.
+	 * @param int    $version Version read.
+	 * @param array  $fields  row_from_record() fields.
+	 * @return int|false Rows affected.
+	 */
+	private static function update_row( $id, $version, array $fields ) {
+		global $wpdb;
+		$sets = array();
+		$args = array();
+		foreach ( self::column_formats() as $col => $format ) {
+			$sets[] = $col . ' = ' . $format;
+			$args[] = $fields[ $col ];
+		}
+		$args[] = $id;
+		$args[] = (int) $version;
+		$sql    = 'UPDATE ' . self::table_name() . ' SET ' . implode( ', ', $sets ) . ', version = version + 1 WHERE id = %s AND version = %d';
+		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- built from fixed column names and placeholders only.
+		return $wpdb->query( $wpdb->prepare( $sql, $args ) );
+	}
+
+	/**
+	 * Bytes of every open record (quota_bytes).
+	 *
+	 * @return int|WP_Error
+	 */
+	private static function open_bytes_total() {
+		global $wpdb;
+		$table = self::table_name();
+		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- where_sql() prepares every value.
+		$bytes = $wpdb->get_var( "SELECT COALESCE(SUM(quota_bytes), 0) FROM {$table}" . self::where_sql( array( array( 'status IN', self::open_statuses() ) ) ) );
+		if ( null === $bytes || '' !== (string) $wpdb->last_error ) {
+			return self::store_read_failed_error();
+		}
+		return (int) $bytes;
+	}
+
+	/**
+	 * Ceiling on the open queue's bytes, for everyone (filter
+	 * mcpwp_approvals_open_bytes_max).
+	 *
+	 * @return int
+	 */
+	public static function open_bytes_max() {
+		$max = (int) apply_filters( 'mcpwp_approvals_open_bytes_max', self::OPEN_BYTES_MAX );
+		return $max > 0 ? $max : self::OPEN_BYTES_MAX;
 	}
 
 	/**
@@ -2598,34 +2749,47 @@ class Mcpwp_Approvals {
 	}
 
 	/**
-	 * A page of rows, decoded. Rows whose record does not decode are
-	 * skipped here (they can be neither shown nor acted on).
+	 * A page of LIGHT rows — never the `record` column.
 	 *
 	 * @param array  $conditions See where_sql().
 	 * @param string $order_by   Fixed ORDER BY list (never input).
 	 * @param int    $limit      Rows.
 	 * @param int    $offset     Offset.
-	 * @return array<int,array{id:string,version:int,record:array}>|WP_Error
+	 * @return array<int,array>|WP_Error
 	 */
-	private static function select_rows( array $conditions, $order_by, $limit, $offset = 0 ) {
+	private static function select_light( array $conditions, $order_by, $limit, $offset = 0 ) {
 		global $wpdb;
 		$table = self::table_name();
 		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- where_sql() prepares every value; $order_by is a fixed string.
-		$rows = $wpdb->get_results( "SELECT id, version, record FROM {$table}" . self::where_sql( $conditions ) . ' ORDER BY ' . $order_by . $wpdb->prepare( ' LIMIT %d OFFSET %d', (int) $limit, (int) $offset ), ARRAY_A );
+		$rows = $wpdb->get_results( "SELECT id, version, status, created_at, updated_at, seq, triage_rank, requested_by_key_id, visibility_categories, quota_bytes FROM {$table}" . self::where_sql( $conditions ) . ' ORDER BY ' . $order_by . $wpdb->prepare( ' LIMIT %d OFFSET %d', (int) $limit, (int) $offset ), ARRAY_A );
+		if ( ! is_array( $rows ) || '' !== (string) $wpdb->last_error ) {
+			return self::store_read_failed_error();
+		}
+		return $rows;
+	}
+
+	/**
+	 * Full records for $ids: id => record, or id => null for a row whose
+	 * record does not decode (damaged). An id with no row is absent.
+	 *
+	 * @param string[] $ids Ids.
+	 * @return array|WP_Error
+	 */
+	private static function load_records( array $ids ) {
+		if ( empty( $ids ) ) {
+			return array();
+		}
+		global $wpdb;
+		$table = self::table_name();
+		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- where_sql() prepares every value.
+		$rows = $wpdb->get_results( "SELECT id, record FROM {$table}" . self::where_sql( array( array( 'id IN', array_values( $ids ) ) ) ), ARRAY_A );
 		if ( ! is_array( $rows ) || '' !== (string) $wpdb->last_error ) {
 			return self::store_read_failed_error();
 		}
 		$out = array();
 		foreach ( $rows as $row ) {
-			$record = json_decode( (string) $row['record'], true );
-			if ( ! is_array( $record ) ) {
-				continue;
-			}
-			$out[] = array(
-				'id'      => (string) $row['id'],
-				'version' => (int) $row['version'],
-				'record'  => $record,
-			);
+			$record                     = json_decode( (string) $row['record'], true );
+			$out[ (string) $row['id'] ] = is_array( $record ) ? $record : null;
 		}
 		return $out;
 	}
@@ -2680,6 +2844,10 @@ class Mcpwp_Approvals {
 			'triage_rank'         => null === $triage ? -1 : self::triage_priority_rank( $triage['priority'] ),
 			'cap_exempt'          => self::requester_is_exempt_from_caps( $requester, $metadata ) ? 1 : 0,
 			'quota_bytes'         => $size,
+			// The categories a reader must hold (categories_for_approval()),
+			// so visibility is decided from this light column without
+			// decoding `record` (#1042 review round 2).
+			'visibility_categories' => (string) wp_json_encode( array_values( self::categories_for_approval( $record ) ) ),
 			'record'              => $json,
 		);
 	}
@@ -2990,28 +3158,13 @@ class Mcpwp_Approvals {
 		}
 
 		$removed = 0;
-		$after   = '';
-		while ( true ) {
-			$rows = self::select_rows(
-				array(
-					array( 'status NOT IN', self::open_statuses() ),
-					array( 'id >', $after ),
-				),
-				'id ASC',
-				self::RETENTION_BATCH
-			);
-			if ( is_wp_error( $rows ) ) {
-				return $rows;
-			}
-			if ( empty( $rows ) ) {
-				break;
-			}
-			foreach ( $rows as $row ) {
-				$after  = $row['id'];
+		$done    = self::each_row(
+			array( array( 'status NOT IN', self::open_statuses() ) ),
+			static function ( array $row ) use ( &$removed ) {
 				$item   = $row['record'];
 				$status = isset( $item['status'] ) ? (string) $item['status'] : '';
 				if ( 'applied' === $status && ! self::is_compactable( $item ) ) {
-					continue;
+					return true;
 				}
 				$deleted = self::audited_delete( $row, 'purged' );
 				if ( is_wp_error( $deleted ) ) {
@@ -3020,9 +3173,10 @@ class Mcpwp_Approvals {
 				if ( $deleted ) {
 					$removed++;
 				}
+				return true;
 			}
-		}
-		return $removed;
+		);
+		return is_wp_error( $done ) ? $done : $removed;
 	}
 
 	/**
@@ -3057,31 +3211,21 @@ class Mcpwp_Approvals {
 		$undated = array();
 		if ( $days > 0 ) {
 			$cutoff = gmdate( 'Y-m-d H:i:s', time() - $days * DAY_IN_SECONDS );
-			$after  = '';
-			while ( microtime( true ) < $deadline ) {
-				$rows = self::select_rows(
-					array(
-						array( 'status NOT IN', self::open_statuses() ),
-						array( 'updated_at <', $cutoff ),
-						array( 'id >', $after ),
-					),
-					'id ASC',
-					self::RETENTION_BATCH
-				);
-				if ( is_wp_error( $rows ) ) {
-					return $rows;
-				}
-				foreach ( $rows as $row ) {
-					$after = $row['id'];
+			$done   = self::each_row(
+				array(
+					array( 'status NOT IN', self::open_statuses() ),
+					array( 'updated_at <', $cutoff ),
+				),
+				static function ( array $row ) use ( $days, &$undated, &$removed ) {
 					// The column prefilter is a copy; the record decides. No
 					// usable date at all: never deleted, reported instead.
 					$decided = self::decided_time( $row['record'] );
 					if ( false === $decided ) {
 						$undated[] = $row['id'];
-						continue;
+						return true;
 					}
 					if ( $decided >= time() - $days * DAY_IN_SECONDS ) {
-						continue;
+						return true;
 					}
 					$deleted = self::audited_delete( $row, 'retention' );
 					if ( is_wp_error( $deleted ) ) {
@@ -3090,10 +3234,12 @@ class Mcpwp_Approvals {
 					if ( $deleted ) {
 						$removed++;
 					}
-				}
-				if ( count( $rows ) < self::RETENTION_BATCH ) {
-					break;
-				}
+					return true;
+				},
+				$deadline
+			);
+			if ( is_wp_error( $done ) ) {
+				return $done;
 			}
 		}
 		if ( ! empty( $undated ) && defined( 'WP_DEBUG_LOG' ) && WP_DEBUG_LOG ) {
@@ -3282,24 +3428,54 @@ class Mcpwp_Approvals {
 	}
 
 	/**
-	 * Whether a requester is exempt from the pending caps: a wp-admin user
-	 * (wp-user:<id>, or the trusted admin-AJAX context), or an API key the
-	 * caller identified as unrestricted (admin role / all categories) — each
-	 * of those could make the change directly anyway (#981 review round 2,
-	 * WARN-C). Category-restricted keys and WebMCP users are capped.
+	 * THE decision on who is exempt from the approval caps (#1042 review
+	 * round 2) — the per-requester and site-wide pending caps, the byte
+	 * quota and the open-request cap. Everything else (the `cap_exempt`
+	 * column, Mcpwp_Destructive_Gate::key_is_unrestricted()) derives from
+	 * this one function.
+	 *
+	 * Exempt: (a) a human acting in wp-admin — `wp-user:<id>`, or the
+	 * trusted admin-AJAX context passing its user as `wp_user_id` — whose
+	 * user has `manage_options`; (b) an API key with scope `admin`.
+	 * Everything else is capped: write-scope keys of any role, every OAuth
+	 * and broker principal, WebMCP. Anyone whose writes are routed through
+	 * approval is an agent, and an agent is capped.
+	 *
+	 * A stored record carries the verdict made when it was created
+	 * (`metadata.cap_exempt`), which is honoured when the record is counted.
 	 *
 	 * @param string $requester requested_by_key_id.
-	 * @param array  $args      Creation args or stored metadata ('requester_unrestricted' / 'cap_exempt').
+	 * @param array  $args      {key_record?: array, wp_user_id?: int, cap_exempt?: bool}.
 	 * @return bool
 	 */
-	private static function requester_is_exempt_from_caps( $requester, array $args ) {
-		if ( 0 === strpos( (string) $requester, 'webmcp:' ) ) {
+	public static function requester_is_exempt_from_caps( $requester, array $args = array() ) {
+		$requester = (string) $requester;
+		if ( 0 === strpos( $requester, 'webmcp:' ) ) {
 			return false;
 		}
-		if ( 0 === strpos( (string) $requester, 'wp-user:' ) ) {
+		if ( ! empty( $args['cap_exempt'] ) ) {
 			return true;
 		}
-		return ! empty( $args['requester_unrestricted'] ) || ! empty( $args['cap_exempt'] );
+
+		$user_id = 0;
+		if ( 0 === strpos( $requester, 'wp-user:' ) ) {
+			$user_id = (int) substr( $requester, 8 );
+		} elseif ( ! empty( $args['wp_user_id'] ) ) {
+			$user_id = (int) $args['wp_user_id'];
+		}
+		if ( $user_id > 0 ) {
+			return function_exists( 'user_can' ) && user_can( $user_id, 'manage_options' );
+		}
+
+		$key = isset( $args['key_record'] ) ? $args['key_record'] : null;
+		if ( ! is_array( $key ) ) {
+			return false;
+		}
+		$type = isset( $key['type'] ) ? (string) $key['type'] : '';
+		if ( in_array( $type, array( 'oauth', 'broker' ), true ) ) {
+			return false;
+		}
+		return in_array( 'admin', array_map( 'strval', (array) ( isset( $key['scopes'] ) ? $key['scopes'] : array() ) ), true );
 	}
 
 	/**

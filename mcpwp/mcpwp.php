@@ -510,9 +510,10 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	// same reason as the purge below. Runs before REST routes; the store also
 	// runs it lazily, and answers approvals_busy while another request holds
 	// the migration lock.
-	// Also re-runs if the old option reappears after the flag is set (an
-	// old-code worker mid-upgrade, or a stint downgraded): a late import.
-	if ( ! get_option( 'mcpwp_approvals_table_migrated' ) || (int) get_option( 'mcpwp_approvals_schema_version', 0 ) < 2 || false !== get_option( 'mcpwp_approval_requests', false ) ) {
+	// Both options are autoloaded, so this costs no query once migrated. The
+	// late import of a reappearing old option is checked lazily by the
+	// approvals store itself, and hourly by the cron below.
+	if ( ! get_option( 'mcpwp_approvals_table_migrated' ) || (int) get_option( 'mcpwp_approvals_schema_version', 0 ) < 3 ) {
 		require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-activator.php';
 		Mcpwp_Activator::migrate_approvals_to_table();
 	}
@@ -790,6 +791,17 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 		add_action( Mcpwp_Approvals::RETENTION_CRON_HOOK, array( 'Mcpwp_Approvals', 'retention_cron' ) );
 		if ( ! wp_next_scheduled( Mcpwp_Approvals::RETENTION_CRON_HOOK ) ) {
 			wp_schedule_event( time() + HOUR_IN_SECONDS, 'daily', Mcpwp_Approvals::RETENTION_CRON_HOOK );
+		}
+		// Hourly late import of a recreated legacy option (#1042).
+		add_action(
+			Mcpwp_Approvals::LATE_IMPORT_CRON_HOOK,
+			static function () {
+				require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-activator.php';
+				Mcpwp_Activator::migrate_approvals_to_table();
+			}
+		);
+		if ( ! wp_next_scheduled( Mcpwp_Approvals::LATE_IMPORT_CRON_HOOK ) ) {
+			wp_schedule_event( time() + HOUR_IN_SECONDS, 'hourly', Mcpwp_Approvals::LATE_IMPORT_CRON_HOOK );
 		}
 	}
 

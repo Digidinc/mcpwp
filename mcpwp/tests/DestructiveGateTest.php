@@ -730,6 +730,7 @@ final class DestructiveGateTest extends TestCase {
 	public function test_minted_keys_cannot_close_the_destructive_path_to_administrators(): void {
 		// Round-3 P1-2: one pool of 100 let five minted keys lock every
 		// principal out, including the reviewers.
+		$GLOBALS['mcpwp_test_user_caps'][2] = array( 'manage_options' => true ); // #1042: an administrator.
 		for ( $i = 1; $i <= Mcpwp_Destructive_Gate::MAX_PENDING_TOTAL; $i++ ) {
 			Mcpwp_Approvals::create_destructive_request( 'delete_page', array( 'route' => '/mcpwp/v1/pages/' . $i, 'method' => 'DELETE', 'params' => array(), 'target' => array() ), array( 'type' => 'page', 'id' => $i, 'title' => 'p' ), array( 'requested_by_key_id' => 'minted-' . (int) ceil( $i / 20 ) ) );
 		}

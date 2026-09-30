@@ -112,6 +112,7 @@ final class WebMcpReviewRound2Test extends TestCase {
 	// ── WARN-B ─────────────────────────────────────────────────────────────
 
 	public function test_only_a_create_takes_the_named_lock(): void {
+		mcpwp_test_approvals_put( array() ); // Migrated already: the one-time copy takes its own locks.
 		$created = Mcpwp_Approvals::create_post_content_request( self::POST, 'v1', array( 'requested_by_key_id' => 'k1' ) );
 		$this->assertIsArray( $created );
 		Mcpwp_Approvals::approve_request( $created['id'] );
@@ -215,8 +216,9 @@ final class WebMcpReviewRound2Test extends TestCase {
 	// ── WARN-C ─────────────────────────────────────────────────────────────
 
 	public function test_unrestricted_keys_and_wp_admin_are_exempt_from_the_pending_caps(): void {
+		$GLOBALS['mcpwp_test_user_caps'][1] = array( 'manage_options' => true ); // #1042: wp-user:1 is an administrator.
 		for ( $i = 0; $i < 25; $i++ ) {
-			$this->assertIsArray( Mcpwp_Approvals::create_post_content_request( self::POST, "a$i", array( 'requested_by_key_id' => 'admin-key', 'requester_unrestricted' => true ) ), "unrestricted #$i" );
+			$this->assertIsArray( Mcpwp_Approvals::create_post_content_request( self::POST, "a$i", array( 'requested_by_key_id' => 'admin-key', 'key_record' => mcpwp_test_admin_key() ) ), "unrestricted #$i" );
 			$this->assertIsArray( Mcpwp_Approvals::create_post_content_request( self::POST, "w$i", array( 'requested_by_key_id' => 'wp-user:1' ) ), "wp-admin #$i" );
 		}
 
@@ -228,9 +230,9 @@ final class WebMcpReviewRound2Test extends TestCase {
 
 		// A WebMCP user is always capped, even if a caller claimed otherwise.
 		for ( $i = 0; $i < Mcpwp_Approvals::MAX_PENDING_CONTENT_PER_REQUESTER; $i++ ) {
-			Mcpwp_Approvals::create_post_content_request( self::POST, "m$i", array( 'requested_by_key_id' => 'webmcp:user:5', 'requester_unrestricted' => true ) );
+			Mcpwp_Approvals::create_post_content_request( self::POST, "m$i", array( 'requested_by_key_id' => 'webmcp:user:5', 'key_record' => mcpwp_test_admin_key() ) );
 		}
-		$this->assertSame( 'too_many_pending', Mcpwp_Approvals::create_post_content_request( self::POST, 'm-over', array( 'requested_by_key_id' => 'webmcp:user:5', 'requester_unrestricted' => true ) )->get_error_code() );
+		$this->assertSame( 'too_many_pending', Mcpwp_Approvals::create_post_content_request( self::POST, 'm-over', array( 'requested_by_key_id' => 'webmcp:user:5', 'key_record' => mcpwp_test_admin_key() ) )->get_error_code() );
 	}
 
 	public function test_size_caps_differ_for_webmcp_and_api_keys_and_are_filterable(): void {

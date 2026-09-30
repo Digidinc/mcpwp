@@ -31,6 +31,7 @@ final class ApprovalsTableTest extends TestCase {
 		$GLOBALS['mcpwp_test_actions']          = array();
 		$GLOBALS['mcpwp_test_wpdb_rows']        = array();
 		$GLOBALS['mcpwp_test_named_lock_calls'] = array();
+		$GLOBALS['mcpwp_test_user_caps']        = array( 1 => array( 'manage_options' => true ) ); // wp-user:1 is an administrator.
 		$GLOBALS['mcpwp_test_current_user']     = 1;
 		$GLOBALS['_mcpwp_test_posts']           = array(
 			self::POST => new WP_Post( array( 'ID' => self::POST, 'post_type' => 'post', 'post_status' => 'publish', 'post_title' => 'P', 'post_content' => 'original body' ) ),
@@ -191,6 +192,7 @@ final class ApprovalsTableTest extends TestCase {
 	public function test_ten_interleaved_creates_store_ten_rows(): void {
 		// Every other create commits while the first holds the create lock
 		// between its grant and its insert.
+		mcpwp_test_approvals_put( array() ); // Migrated already: the one-time copy takes its own locks.
 		$ids = array();
 		$GLOBALS['mcpwp_test_on_lock_granted'] = static function () use ( &$ids ) {
 			for ( $i = 1; $i < 10; $i++ ) {
@@ -219,7 +221,7 @@ final class ApprovalsTableTest extends TestCase {
 		$this->assertSame( 429, $refused->get_error_data()['status'] );
 
 		// Exempt requesters never count toward the site total.
-		$this->assertIsArray( Mcpwp_Approvals::create_post_content_request( self::POST, 'admin', array( 'requested_by_key_id' => 'admin-key', 'requester_unrestricted' => true ) ) );
+		$this->assertIsArray( Mcpwp_Approvals::create_post_content_request( self::POST, 'admin', array( 'requested_by_key_id' => 'admin-key', 'key_record' => mcpwp_test_admin_key() ) ) );
 		$this->assertIsArray( Mcpwp_Approvals::create_post_content_request( self::POST, 'wp', array( 'requested_by_key_id' => 'wp-user:1' ) ) );
 
 		// Fill the site total (100) from capped requesters.

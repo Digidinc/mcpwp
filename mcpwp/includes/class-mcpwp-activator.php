@@ -455,7 +455,8 @@ class Mcpwp_Activator {
 	 * requested_by_key_id, created_at, updated_at, triage_rank, cap_exempt
 	 * (whether the requester was exempt from the pending caps) and
 	 * quota_bytes (the record's unescaped JSON size, what the per-requester
-	 * byte quota sums) are copies for filtering, ordering and counting,
+	 * byte quota sums) and visibility_categories (a small JSON array, so
+	 * visibility is decided without decoding `record`) are copies for filtering, ordering and counting,
 	 * derived only by
 	 * Mcpwp_Approvals::row_from_record(). `version` is the optimistic-
 	 * concurrency counter every update checks. `seq` is insertion order:
@@ -480,6 +481,7 @@ class Mcpwp_Activator {
 			triage_rank tinyint(4) NOT NULL DEFAULT -1,
 			cap_exempt tinyint(1) NOT NULL DEFAULT 0,
 			quota_bytes int(10) unsigned NOT NULL DEFAULT 0,
+			visibility_categories varchar(1000) NOT NULL DEFAULT '',
 			version bigint(20) unsigned NOT NULL DEFAULT 0,
 			record longtext NOT NULL,
 			PRIMARY KEY  (id),
@@ -531,8 +533,13 @@ class Mcpwp_Activator {
 	 * Late import (#1042 review round 1, W3): if the option exists again
 	 * AFTER the flag is set — a worker still running the old code during the
 	 * upgrade, or time spent downgraded to 3.14.8 — the same copy runs again
-	 * on the next load, so those records reach the table instead of being
-	 * stranded.
+	 * (lazily, on the next approvals read/write, or from the hourly cron),
+	 * so those records reach the table instead of being stranded. Only ids
+	 * never imported before enter the table (the backup is the tombstone),
+	 * and identity-less pending/approved ones are dropped.
+	 *
+	 * Held under 3.14.8's own store lock as well as the migration lock, from
+	 * reading the option to deleting it.
 	 *
 	 * @return true|WP_Error
 	 */
@@ -563,17 +570,6 @@ class Mcpwp_Activator {
 
 			global $wpdb;
 			$migrated = (bool) get_option( $flag );
-			$items    = get_option( Mcpwp_Approvals::OPTION_NAME, false );
-
-			// A 2.8.x site whose spai_ → mcpwp_ bridge (Mcpwp_Migrate, which
-			// runs before this on every plugins_loaded, but AFTER activate()
-			// on the activation hook) has not run yet still holds its queue
-			// under spai_approval_requests. Marking the table migrated now
-			// would strand that queue in an option nothing reads; wait for
-			// the bridge instead.
-			if ( ! $migrated && false === $items && ! get_option( 'mcpwp_migrated_from_spai' ) && false !== get_option( 'spai_approval_requests', false ) ) {
-				return Mcpwp_Approvals::busy_error();
-			}
 
 			if ( (int) get_option( Mcpwp_Approvals::SCHEMA_OPTION, 0 ) < Mcpwp_Approvals::SCHEMA_VERSION ) {
 				if ( ! function_exists( 'dbDelta' ) ) {
@@ -588,35 +584,82 @@ class Mcpwp_Activator {
 				}
 			}
 
-			if ( false !== $items ) {
-				$copied = Mcpwp_Approvals::import_legacy_items( is_array( $items ) ? $items : array() );
-				if ( is_wp_error( $copied ) ) {
-					return $copied;
-				}
-
-				if ( ! empty( $copied['skipped'] ) ) {
-					$known = get_option( Mcpwp_Approvals::SKIPPED_OPTION, array() );
-					$known = is_array( $known ) ? $known : array();
-					update_option( Mcpwp_Approvals::SKIPPED_OPTION, array_values( array_unique( array_merge( $known, $copied['skipped'] ) ) ), false );
-					if ( defined( 'WP_DEBUG_LOG' ) && WP_DEBUG_LOG ) {
-						// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
-						error_log( 'MCPWP approvals migration: skipped records it could not copy (kept in mcpwp_approval_requests_pre_3149): ' . implode( ', ', $copied['skipped'] ) );
-					}
-				}
-
-				// Merge into the backup; an id already there wins, so a late
-				// import never overwrites what the first migration kept.
-				$backup = get_option( Mcpwp_Approvals::LEGACY_BACKUP_OPTION, array() );
-				$backup = is_array( $backup ) ? $backup : array();
-				$merged = is_array( $items ) ? $backup + $items : ( empty( $backup ) ? $items : $backup );
-				update_option( Mcpwp_Approvals::LEGACY_BACKUP_OPTION, $merged, false );
+			// 3.14.8 wrote the option under its own named lock. Hold that
+			// lock too from reading the option to deleting it, so an old-code
+			// worker still running mid-upgrade cannot write into the gap
+			// (#1042 review round 2, WARN 2).
+			$old_lock = substr( 'mcpwp_approvals_' . $wpdb->prefix, 0, 64 );
+			if ( '1' !== (string) $wpdb->get_var( $wpdb->prepare( 'SELECT GET_LOCK(%s, %d)', $old_lock, 5 ) ) ) {
+				return Mcpwp_Approvals::busy_error();
+			}
+			try {
 				if ( function_exists( 'wp_cache_delete' ) ) {
-					wp_cache_delete( Mcpwp_Approvals::LEGACY_BACKUP_OPTION, 'options' );
+					wp_cache_delete( Mcpwp_Approvals::OPTION_NAME, 'options' );
 				}
-				if ( get_option( Mcpwp_Approvals::LEGACY_BACKUP_OPTION, null ) !== $merged ) {
-					return Mcpwp_Approvals::store_failed_error();
+				$items = get_option( Mcpwp_Approvals::OPTION_NAME, false );
+
+				// A 2.8.x site whose spai_ → mcpwp_ bridge (Mcpwp_Migrate, which
+				// runs before this on every plugins_loaded, but AFTER activate()
+				// on the activation hook) has not run yet still holds its queue
+				// under spai_approval_requests. Marking the table migrated now
+				// would strand that queue in an option nothing reads; wait for
+				// the bridge instead.
+				if ( ! $migrated && false === $items && ! get_option( 'mcpwp_migrated_from_spai' ) && false !== get_option( 'spai_approval_requests', false ) ) {
+					return Mcpwp_Approvals::busy_error();
 				}
-				delete_option( Mcpwp_Approvals::OPTION_NAME );
+
+				if ( false !== $items ) {
+					$backup = get_option( Mcpwp_Approvals::LEGACY_BACKUP_OPTION, array() );
+					$backup = is_array( $backup ) ? $backup : array();
+					$copy   = is_array( $items ) ? $items : array();
+
+					if ( $migrated ) {
+						// Late import. An id already in the backup was imported
+						// before — it may since have been decided, purged or
+						// deleted; re-inserting it would resurrect it (#1042
+						// review round 2, WARN 1). The backup is the tombstone:
+						// only genuinely new ids enter the table. And a new
+						// record gets the same identity check the first upgrade
+						// ran: an identity-less pending/approved one is dropped
+						// (migrate_identity_less_approvals()).
+						foreach ( $copy as $id => $record ) {
+							$status    = is_array( $record ) && isset( $record['status'] ) ? (string) $record['status'] : '';
+							$requester = is_array( $record ) && isset( $record['requested_by_key_id'] ) ? (string) $record['requested_by_key_id'] : '';
+							if ( array_key_exists( $id, $backup ) || ( in_array( $status, array( 'pending', 'approved' ), true ) && '' === $requester ) ) {
+								unset( $copy[ $id ] );
+							}
+						}
+					}
+
+					$copied = Mcpwp_Approvals::import_legacy_items( $copy );
+					if ( is_wp_error( $copied ) ) {
+						return $copied;
+					}
+
+					if ( ! empty( $copied['skipped'] ) ) {
+						$known = get_option( Mcpwp_Approvals::SKIPPED_OPTION, array() );
+						$known = is_array( $known ) ? $known : array();
+						update_option( Mcpwp_Approvals::SKIPPED_OPTION, array_values( array_unique( array_merge( $known, $copied['skipped'] ) ) ), false );
+						if ( defined( 'WP_DEBUG_LOG' ) && WP_DEBUG_LOG ) {
+							// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+							error_log( 'MCPWP approvals migration: skipped records it could not copy (kept in mcpwp_approval_requests_pre_3149): ' . implode( ', ', $copied['skipped'] ) );
+						}
+					}
+
+					// Merge into the backup; an id already there wins, so a late
+					// import never overwrites what the first migration kept.
+					$merged = is_array( $items ) ? $backup + $items : ( empty( $backup ) ? $items : $backup );
+					update_option( Mcpwp_Approvals::LEGACY_BACKUP_OPTION, $merged, false );
+					if ( function_exists( 'wp_cache_delete' ) ) {
+						wp_cache_delete( Mcpwp_Approvals::LEGACY_BACKUP_OPTION, 'options' );
+					}
+					if ( get_option( Mcpwp_Approvals::LEGACY_BACKUP_OPTION, null ) !== $merged ) {
+						return Mcpwp_Approvals::store_failed_error();
+					}
+					delete_option( Mcpwp_Approvals::OPTION_NAME );
+				}
+			} finally {
+				$wpdb->get_var( $wpdb->prepare( 'SELECT RELEASE_LOCK(%s)', $old_lock ) );
 			}
 
 			update_option( Mcpwp_Approvals::SCHEMA_OPTION, Mcpwp_Approvals::SCHEMA_VERSION );

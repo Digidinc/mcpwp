@@ -29,6 +29,7 @@ class Mcpwp_Deactivator {
 		wp_clear_scheduled_hook( 'mcpwp_figma_sync_design_tokens' );
 		// Approvals retention (#1042); the table itself is kept.
 		wp_clear_scheduled_hook( 'mcpwp_approvals_retention' );
+		wp_clear_scheduled_hook( 'mcpwp_approvals_late_import' );
 
 		// Site graph schedules (#943 S1 review, W7): worker, backfill,
 		// signals prune, and the table-creation retry. The queue/backfill/

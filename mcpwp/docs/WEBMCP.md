@@ -140,12 +140,16 @@ These apply to every `post_content_update` approval: WebMCP proposals, `wp_set_b
     timestamps, content hash and reason. No log entry, no removal.
   - Rollback Ready, and the `rollback_available` flag on records, show only changes that can still be
     rolled back.
-- **Limits:** each capped requester (WebMCP users and category-restricted keys) may hold at most
-  about 410 KB of open requests, measured as unescaped UTF-8 JSON, so Persian or CJK text counts at
-  its real size (`requester_bytes` in `mcpwp_approval_content_limits`); over that is 429
-  `requester_store_quota`. Capped requesters share at most 200 open requests; a new one past that is
-  429 `approval_queue_full`. Administrators in wp-admin and unrestricted keys are never refused by a
-  site-wide count.
+- **Limits:** each capped requester may hold at most about 410 KB of open requests, measured as
+  unescaped UTF-8 JSON, so Persian or CJK text counts at its real size (`requester_bytes` in
+  `mcpwp_approval_content_limits`); over that is 429 `requester_store_quota`. Capped requesters share
+  at most 200 open requests; a new one past that is 429 `approval_queue_full`.
+  - **Exempt from those caps:** only a wp-admin user with `manage_options`, and an API key with the
+    `admin` scope. Everything else is capped: write-scope keys of any role, every OAuth and broker
+    principal, and WebMCP users. Anyone whose writes are routed through approval is an agent.
+  - **For everyone, exempt or not:** the open queue holds at most 64 MB
+    (`mcpwp_approvals_open_bytes_max`); a new request past it is 507 `approvals_store_full`.
+    Approving, rejecting, applying and rolling back are never refused by it.
   - Existing requests can always be approved, applied or rejected.
   - A database write failure is 503 `approvals_store_failed`, never a reported success, and a
     failed read is never reported as "not found".
@@ -169,7 +173,9 @@ These apply to every `post_content_update` approval: WebMCP proposals, `wp_set_b
   approval reads and writes answer 503 `approvals_busy` with `retry_after: 2`. A record that cannot be
   copied (malformed, or not encodable) is skipped, listed in `mcpwp_approvals_migration_skipped`, and
   kept in the renamed option. If the old option reappears later (a worker still running the old code,
-  or a downgrade), its records are imported on the next page load.
+  or a downgrade), its new records are imported the next time the approval queue is used, or by an
+  hourly cron. An id imported before is never imported again (the renamed option is the record of
+  what was), so nothing deleted since comes back, and a new request with no requester is dropped.
 - **Downgrade:** a version before the table shows an empty approval queue; the records come back on
   re-upgrade, together with anything created while downgraded.
 

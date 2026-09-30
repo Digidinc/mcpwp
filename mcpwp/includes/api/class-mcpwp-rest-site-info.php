@@ -1147,6 +1147,9 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 					// /approvals and /events themselves, reached through yet another
 					// category gate (/site-state is 'site').
 					'category_allowed'  => array( $this, 'caller_may_read_category' ),
+					// #1042: a damaged approval row shows as a stub only to an
+					// unrestricted caller.
+					'caller_unrestricted' => $this->requester_is_unrestricted(),
 				)
 			)
 			: array();

@@ -49,7 +49,7 @@ final class WebMcpReviewRound5Test extends TestCase {
 	}
 
 	private function apply( int $post, string $content ): string {
-		$c = Mcpwp_Approvals::create_post_content_request( $post, $content, array( 'requested_by_key_id' => 'admin', 'requester_unrestricted' => true ) );
+		$c = Mcpwp_Approvals::create_post_content_request( $post, $content, array( 'requested_by_key_id' => 'admin', 'key_record' => mcpwp_test_admin_key() ) );
 		Mcpwp_Approvals::approve_request( $c['id'], '', array( 'actor' => 'admin-2' ) );
 		$this->assertSame( 'applied', Mcpwp_Approvals::apply_request( $c['id'] )['status'] );
 		return $c['id'];

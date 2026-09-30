@@ -131,6 +131,7 @@ class Mcpwp_Uninstaller {
 		}
 
 		wp_clear_scheduled_hook( 'mcpwp_approvals_retention' );
+		wp_clear_scheduled_hook( 'mcpwp_approvals_late_import' );
 	}
 
 	/**

@@ -28,6 +28,7 @@ final class WebMcpReviewRound4Test extends TestCase {
 		$GLOBALS['mcpwp_test_options']      = array();
 		$GLOBALS['mcpwp_test_transients']   = array();
 		$GLOBALS['mcpwp_test_filters']      = array();
+		$GLOBALS['mcpwp_test_user_caps']        = array( 1 => array( 'manage_options' => true ) ); // wp-user:1 is an administrator.
 		$GLOBALS['mcpwp_test_current_user'] = 1;
 		$GLOBALS['_mcpwp_test_posts']       = array(
 			self::POST => new WP_Post( array( 'ID' => self::POST, 'post_type' => 'post', 'post_status' => 'publish', 'post_title' => 'P', 'post_content' => 'original body' ) ),
@@ -50,7 +51,7 @@ final class WebMcpReviewRound4Test extends TestCase {
 	// ── BLOCK ──────────────────────────────────────────────────────────────
 
 	public function test_closed_records_are_compacted_to_hashes_and_excerpts(): void {
-		$created = Mcpwp_Approvals::create_post_content_request( self::POST, str_repeat( 'n', 50000 ), array( 'requested_by_key_id' => 'admin', 'requester_unrestricted' => true ) );
+		$created = Mcpwp_Approvals::create_post_content_request( self::POST, str_repeat( 'n', 50000 ), array( 'requested_by_key_id' => 'admin', 'key_record' => mcpwp_test_admin_key() ) );
 		$this->assertArrayHasKey( 'after_content', $this->store()[ $created['id'] ]['payload'] );
 
 		Mcpwp_Approvals::reject_request( $created['id'] );
@@ -64,7 +65,7 @@ final class WebMcpReviewRound4Test extends TestCase {
 	}
 
 	public function test_applied_records_keep_their_rollback_until_the_retention_passes(): void {
-		$created = Mcpwp_Approvals::create_post_content_request( self::POST, 'new body', array( 'requested_by_key_id' => 'admin', 'requester_unrestricted' => true ) );
+		$created = Mcpwp_Approvals::create_post_content_request( self::POST, 'new body', array( 'requested_by_key_id' => 'admin', 'key_record' => mcpwp_test_admin_key() ) );
 		Mcpwp_Approvals::approve_request( $created['id'] );
 		Mcpwp_Approvals::apply_request( $created['id'] );
 		$this->assertArrayHasKey( 'before_content', $this->store()[ $created['id'] ]['rollback'], 'Rollback still possible.' );
@@ -112,13 +113,13 @@ final class WebMcpReviewRound4Test extends TestCase {
 		// left to run out of — both are kept.
 		$applied = array();
 		for ( $i = 0; $i < 8; $i++ ) {
-			$c = Mcpwp_Approvals::create_post_content_request( self::POST, str_repeat( 'q', 18000 ), array( 'requested_by_key_id' => 'admin', 'requester_unrestricted' => true ) );
+			$c = Mcpwp_Approvals::create_post_content_request( self::POST, str_repeat( 'q', 18000 ), array( 'requested_by_key_id' => 'admin', 'key_record' => mcpwp_test_admin_key() ) );
 			Mcpwp_Approvals::approve_request( $c['id'] );
 			Mcpwp_Approvals::apply_request( $c['id'] );
 			$applied[] = $c['id'];
 			$GLOBALS['_mcpwp_test_posts'][ self::POST ]->post_content = 'original body';
 		}
-		$result = Mcpwp_Approvals::create_post_content_request( self::POST, str_repeat( 'r', 600000 ), array( 'requested_by_key_id' => 'admin', 'requester_unrestricted' => true ) );
+		$result = Mcpwp_Approvals::create_post_content_request( self::POST, str_repeat( 'r', 600000 ), array( 'requested_by_key_id' => 'admin', 'key_record' => mcpwp_test_admin_key() ) );
 		$this->assertIsArray( $result );
 		foreach ( $applied as $id ) {
 			$this->assertArrayHasKey( 'before_content', $this->store()[ $id ]['rollback'], 'An applied request inside its rollback window keeps its rollback.' );
@@ -143,7 +144,7 @@ final class WebMcpReviewRound4Test extends TestCase {
 
 		// Someone else, and an unrestricted key, are unaffected.
 		$this->assertIsArray( Mcpwp_Approvals::create_post_content_request( self::POST, str_repeat( 'c', 12000 ), array( 'requested_by_key_id' => 'webmcp:user:6' ) ) );
-		$this->assertIsArray( Mcpwp_Approvals::create_post_content_request( self::POST, str_repeat( 'd', 30000 ), array( 'requested_by_key_id' => 'admin', 'requester_unrestricted' => true ) ) );
+		$this->assertIsArray( Mcpwp_Approvals::create_post_content_request( self::POST, str_repeat( 'd', 30000 ), array( 'requested_by_key_id' => 'admin', 'key_record' => mcpwp_test_admin_key() ) ) );
 	}
 
 	public function test_purge_closed_removes_only_decided_requests(): void {

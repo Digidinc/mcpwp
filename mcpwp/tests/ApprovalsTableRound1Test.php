@@ -34,6 +34,7 @@ final class ApprovalsTableRound1Test extends TestCase {
 		$GLOBALS['mcpwp_test_filters']          = array();
 		$GLOBALS['mcpwp_test_actions']          = array();
 		$GLOBALS['mcpwp_test_wpdb_rows']        = array();
+		$GLOBALS['mcpwp_test_user_caps']        = array( 1 => array( 'manage_options' => true ) ); // wp-user:1 is an administrator.
 		$GLOBALS['mcpwp_test_current_user']     = 1;
 		$GLOBALS['_mcpwp_test_posts']           = array(
 			self::POST => new WP_Post( array( 'ID' => self::POST, 'post_type' => 'post', 'post_status' => 'publish', 'post_title' => 'P', 'post_content' => 'original body' ) ),
@@ -83,14 +84,15 @@ final class ApprovalsTableRound1Test extends TestCase {
 		$this->assertSame( 'approval_queue_full', $capped->get_error_code() );
 
 		$this->assertIsArray( Mcpwp_Approvals::create_destructive_request( 'delete_page', array( 'route' => '/mcpwp/v1/pages/1', 'method' => 'DELETE', 'params' => array() ), array( 'type' => 'page', 'id' => 1 ), array( 'requested_by_key_id' => 'wp-user:1' ) ) );
-		$this->assertIsArray( Mcpwp_Approvals::create_destructive_request( 'delete_page', array( 'route' => '/mcpwp/v1/pages/2', 'method' => 'DELETE', 'params' => array() ), array( 'type' => 'page', 'id' => 2 ), array( 'requested_by_key_id' => 'admin-key', 'requester_unrestricted' => true ) ) );
-		$this->assertIsArray( Mcpwp_Approvals::create_post_content_request( self::POST, 'admin edit', array( 'requested_by_key_id' => 'admin-key', 'requester_unrestricted' => true ) ) );
+		$this->assertIsArray( Mcpwp_Approvals::create_destructive_request( 'delete_page', array( 'route' => '/mcpwp/v1/pages/2', 'method' => 'DELETE', 'params' => array() ), array( 'type' => 'page', 'id' => 2 ), array( 'requested_by_key_id' => 'admin-key', 'key_record' => mcpwp_test_admin_key() ) ) );
+		$this->assertIsArray( Mcpwp_Approvals::create_post_content_request( self::POST, 'admin edit', array( 'requested_by_key_id' => 'admin-key', 'key_record' => mcpwp_test_admin_key() ) ) );
 		$this->assertIsArray( Mcpwp_Approvals::create_post_content_request( self::POST, 'wp-admin edit', array( 'requested_by_key_id' => 'wp-user:1' ) ) );
-		$this->assertTrue( Mcpwp_Approvals::insert_request( array( 'id' => 'apr_stg_admin', 'status' => 'pending', 'action' => 'staging_push', 'requested_by_key_id' => 'admin-key', 'created_at' => gmdate( 'c' ), 'updated_at' => gmdate( 'c' ) ), array( 'requester_unrestricted' => true ) ) );
+		$this->assertTrue( Mcpwp_Approvals::insert_request( array( 'id' => 'apr_stg_admin', 'status' => 'pending', 'action' => 'staging_push', 'requested_by_key_id' => 'admin-key', 'created_at' => gmdate( 'c' ), 'updated_at' => gmdate( 'c' ) ), array( 'key_record' => mcpwp_test_admin_key() ) ) );
 
-		// The gate names an unrestricted key as such; a custom-role key is not.
-		$this->assertTrue( Mcpwp_Destructive_Gate::key_is_unrestricted( array( 'id' => 'k1', 'role' => 'admin', 'tool_categories' => array() ) ) );
-		$this->assertFalse( Mcpwp_Destructive_Gate::key_is_unrestricted( array( 'id' => 'k2', 'role' => 'custom', 'tool_categories' => array( 'content' ) ) ) );
+		// The gate derives the verdict from the one decision function:
+		// admin scope, not role or categories (round 2).
+		$this->assertTrue( Mcpwp_Destructive_Gate::key_is_unrestricted( mcpwp_test_admin_key( 'k1' ) ) );
+		$this->assertFalse( Mcpwp_Destructive_Gate::key_is_unrestricted( array( 'id' => 'k2', 'role' => 'admin', 'scopes' => array( 'read', 'write' ) ) ) );
 		$this->assertFalse( Mcpwp_Destructive_Gate::key_is_unrestricted( null ) );
 	}
 
@@ -217,13 +219,14 @@ final class ApprovalsTableRound1Test extends TestCase {
 
 		$this->assertSame( 255, $summary->invoke( null, true, null )['counts']['pending'] );
 		$this->assertSame( 255, $summary->invoke( null, true, $restricted )['counts']['pending'] );
-		$this->assertArrayNotHasKey( 'counts_truncated', $summary->invoke( null, true, $restricted ) );
 		$this->assertSame( 255, Mcpwp_Approvals::count_by_status()['counts']['pending'] );
 	}
 
-	public function test_a_restricted_count_past_the_scan_limit_says_truncated(): void {
+	public function test_a_restricted_count_is_exact_over_many_closed_rows(): void {
+		// Round 2 dropped the 5000-row scan cap: counts read light columns
+		// only, so they are exact for every caller.
 		$items = array();
-		for ( $i = 0; $i < Mcpwp_Approvals::COUNT_CLOSED_SCAN_LIMIT + 10; $i++ ) {
+		for ( $i = 0; $i < 5010; $i++ ) {
 			$id           = sprintf( 'apr_c%05d', $i );
 			$items[ $id ] = array( 'id' => $id, 'status' => 'rejected', 'action' => 'destructive_operation', 'visibility_categories' => array( 'content' ), 'created_at' => '2026-09-01T00:00:00+00:00', 'updated_at' => '2026-09-01T00:00:00+00:00' );
 		}
@@ -234,9 +237,9 @@ final class ApprovalsTableRound1Test extends TestCase {
 				return true;
 			}
 		);
-		$this->assertTrue( $counted['truncated'] );
-		$this->assertSame( Mcpwp_Approvals::COUNT_CLOSED_SCAN_LIMIT, $counted['counts']['rejected'] );
-		$this->assertSame( Mcpwp_Approvals::COUNT_CLOSED_SCAN_LIMIT + 10, Mcpwp_Approvals::count_by_status()['counts']['rejected'], 'Unrestricted: exact.' );
+		$this->assertArrayNotHasKey( 'truncated', $counted );
+		$this->assertSame( 5010, $counted['counts']['rejected'] );
+		$this->assertSame( 5010, Mcpwp_Approvals::count_by_status()['counts']['rejected'], 'Unrestricted: exact.' );
 	}
 
 	// ── NIT a ──────────────────────────────────────────────────────────────
@@ -349,7 +352,7 @@ final class ApprovalsTableRound1Test extends TestCase {
 	// ── NIT e ──────────────────────────────────────────────────────────────
 
 	public function test_cap_exemption_is_a_real_column_filled_everywhere(): void {
-		$exempt = Mcpwp_Approvals::create_post_content_request( self::POST, 'a', array( 'requested_by_key_id' => 'admin-key', 'requester_unrestricted' => true ) );
+		$exempt = Mcpwp_Approvals::create_post_content_request( self::POST, 'a', array( 'requested_by_key_id' => 'admin-key', 'key_record' => mcpwp_test_admin_key() ) );
 		$capped = Mcpwp_Approvals::create_post_content_request( self::POST, 'b', array( 'requested_by_key_id' => 'webmcp:user:5' ) );
 		$wpuser = Mcpwp_Approvals::create_post_content_request( self::POST, 'c', array( 'requested_by_key_id' => 'wp-user:1' ) );
 		$this->assertSame( 1, (int) $GLOBALS['mcpwp_test_approvals_rows'][ $exempt['id'] ]['cap_exempt'] );
