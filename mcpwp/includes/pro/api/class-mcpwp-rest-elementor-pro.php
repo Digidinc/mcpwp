@@ -751,7 +751,12 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 					continue;
 				}
 
-				update_post_meta( $id, $key, $sanitized['content'], $value );
+				if ( in_array( $key, Mcpwp_Elementor_Meta_Write::KEYS, true ) ) {
+					// An Elementor key goes through the one chokepoint (#829).
+					Mcpwp_Elementor_Meta_Write::update( $id, $key, $sanitized['content'] );
+				} else {
+					update_post_meta( $id, $key, $sanitized['content'], $value );
+				}
 				$changed++;
 				$matches[] = $key;
 			}
@@ -3071,7 +3076,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 				// Stored as sent (#829), so nothing that can end the <style>
 				// element it is printed in: sanitize_kit_custom_css() removes
 				// `</style` but not `</ style` or `< /style`.
-				if ( preg_match( '#<\s*/\s*style#i', $value ) ) {
+				if ( Mcpwp_Elementor_Meta_Write::css_breaks_out( $value ) ) {
 					return $this->error_response(
 						'kit_css_style_breakout',
 						__( 'Kit CSS must not contain "</style" (in any letter case or spacing): the stylesheet is printed inside a <style> element, and that text would end it and let what follows run as HTML. Nothing was saved.', 'mcpwp' ),

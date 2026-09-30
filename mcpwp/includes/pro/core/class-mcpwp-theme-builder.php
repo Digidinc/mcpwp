@@ -893,7 +893,7 @@ class Mcpwp_Theme_Builder {
 
 				// Always overwrite raw meta — Document::save() may silently fail or
 				// write to revision cache instead of post meta (#198).
-				Mcpwp_Elementor_Meta_Write::update( $template_id, '_elementor_data', wp_slash( $json ) );
+				Mcpwp_Elementor_Meta_Write::update( $template_id, '_elementor_data', $json );
 
 				// Clear post_content so Elementor owns the rendering.
 				$content_cleared = wp_update_post(

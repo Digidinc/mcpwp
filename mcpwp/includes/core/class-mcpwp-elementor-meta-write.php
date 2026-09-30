@@ -30,20 +30,27 @@ if ( ! defined( 'ABSPATH' ) ) {
  *
  * - The acting principal holds `unfiltered_html` (checked with MCPWP's own
  *   scoped grants suspended): the value is stored as sent.
- * - Otherwise, string by string:
- *     - a string that is unchanged IN PLACE — same post, same element (id,
- *       elType, widgetType, and which occurrence of that id it is), same
- *       setting path, same value as stored now — is stored byte-for-byte as it
- *       was. For page settings: same post, same key path, same value;
+ * - Otherwise, per element, all or nothing:
+ *     - an element whose every field and setting (`__dynamic__`, `__globals__`,
+ *       repeater items included) is identical to an element of the same id,
+ *       elType and widgetType stored on this post keeps its raw strings. Each
+ *       stored element vouches for one copy: it may move within the post, not
+ *       be duplicated raw. Page settings: per top-level key, the whole value;
  *     - the one other trusted source is a rollback snapshot of the same post,
- *       taken server-side by MCPWP, bound the same way (snapshot option);
+ *       and only while that post still holds exactly what the logged write
+ *       left (snapshot option; see Mcpwp_Action_Log::snapshot_is_trusted());
  *     - a path a caller explicitly declares raw (raw_paths option: the Kit's
- *       custom_css, which its routes validate themselves) is stored as sent;
- *     - every other string goes through wp_kses_post(), as Elementor's own
- *       callback does.
+ *       custom_css, which its routes validate) is stored as sent, unless it
+ *       could end its <style> element (css_breaks_out());
+ *     - every string of every other element goes through wp_kses_post(), as
+ *       Elementor's own callback does.
  *   Nothing else counts as known: not another element, not another post, not
  *   a template, part or clone source. A copy made by a key without
  *   `unfiltered_html` is a sanitized copy.
+ *
+ * update() takes the value exactly as it is to be stored and slashes it for
+ * update_post_meta() itself, so no caller can lose backslashes or have
+ * `<\/style` unslashed into `</style` after a check.
  *
  * "MCPWP is the writer" is a context its own write functions set around the
  * write (update(), as_writer()), scoped to a post ID — not the REST route, so
@@ -116,20 +123,49 @@ final class Mcpwp_Elementor_Meta_Write {
 	}
 
 	/**
+	 * Whether stylesheet text could end the <style> element it is printed in.
+	 *
+	 * Checked on the exact text that will be stored, canonicalised first: every
+	 * whitespace character and backslash is dropped before looking for
+	 * `</style`, so `</STYLE`, `</ style`, `< /style`, `<\/style` and
+	 * `<\\/style` are all caught (#829 review rounds 1-2). CSS never needs any
+	 * of them.
+	 *
+	 * @param mixed $css Stylesheet text.
+	 * @return bool
+	 */
+	public static function css_breaks_out( $css ) {
+		if ( ! is_string( $css ) || '' === $css ) {
+			return false;
+		}
+
+		$canonical = preg_replace( '#[\s\\\\]+#', '', $css );
+
+		return false !== stripos( (string) $canonical, '</style' );
+	}
+
+	/**
 	 * update_post_meta() of an Elementor key, made by MCPWP.
+	 *
+	 * Takes the value EXACTLY as it is to be stored — never slashed — and
+	 * slashes it itself for update_post_meta(), which unslashes (#829 review
+	 * round 2). A caller that forgot wp_slash() on an array lost every
+	 * backslash (`content:"\f101"` stored as `"f101"`) and turned `<\/style`
+	 * into `</style` after the Kit CSS check had passed; the slashing
+	 * contract now lives here, where no caller can get it wrong.
 	 *
 	 * @param int    $post_id  Post ID.
 	 * @param string $meta_key Meta key.
-	 * @param mixed  $value    Value, slashed as update_post_meta() expects.
+	 * @param mixed  $value    Value to store, unslashed.
 	 * @param array  $options  raw_paths (page settings keys stored as sent) and
-	 *                         snapshot (a server-side rollback snapshot of this post).
+	 *                         snapshot (a trusted rollback snapshot of this post).
 	 * @return int|bool What update_post_meta() returned.
 	 */
 	public static function update( $post_id, $meta_key, $value, array $options = array() ) {
 		return self::as_writer(
 			(int) $post_id,
 			static function () use ( $post_id, $meta_key, $value ) {
-				return update_post_meta( (int) $post_id, $meta_key, $value );
+				return update_post_meta( (int) $post_id, $meta_key, wp_slash( $value ) );
 			},
 			$options
 		);
@@ -202,16 +238,11 @@ final class Mcpwp_Elementor_Meta_Write {
 	 * @return mixed
 	 */
 	public static function sanitize( $inner, $value, $key = '', $type = '', $subtype = '' ) {
-		// This class's own re-write of a value its policy already produced.
-		foreach ( self::$bypass as $slot => $bypassed ) {
-			if ( self::slot_key( $slot ) === (string) $key && $bypassed === $value ) {
-				return $value;
-			}
-		}
-
-		// MCPWP is writing: the policy runs in the metadata filter, which
-		// knows the post. The sanitize filter does not.
-		if ( ! empty( self::$contexts ) ) {
+		// MCPWP is writing, or re-writing a value its policy produced: the
+		// policy runs in the metadata filter, which knows the post (the
+		// sanitize filter does not), and which lets a re-write through only
+		// for the post id + key it was produced for.
+		if ( ! empty( self::$contexts ) || ! empty( self::$bypass ) ) {
 			self::$pending = array(
 				'key'   => (string) $key,
 				'value' => $value,
@@ -292,8 +323,10 @@ final class Mcpwp_Elementor_Meta_Write {
 
 		$object_id = (int) $object_id;
 
-		// Our own re-write of this post's key: store it.
-		if ( array_key_exists( self::slot( $object_id, $meta_key ), self::$bypass ) ) {
+		// Our own re-write of this post's key with the value the policy
+		// produced for it: store it. Any other post, key or value is not.
+		$slot = self::slot( $object_id, $meta_key );
+		if ( array_key_exists( $slot, self::$bypass ) && self::$bypass[ $slot ] === $meta_value ) {
 			return null;
 		}
 
@@ -379,13 +412,27 @@ final class Mcpwp_Elementor_Meta_Write {
 	}
 
 	// ---------------------------------------------------------------------
-	// _elementor_data.
+	// _elementor_data: per element, all or nothing.
 	// ---------------------------------------------------------------------
 
 	/**
+	 * An element's raw strings are kept only when the WHOLE element is
+	 * unchanged: the same id, elType and widgetType and every setting —
+	 * `__dynamic__`, `__globals__`, repeater items included — identical to an
+	 * element of the same id stored on this post (or in its trusted snapshot).
+	 * Anything else in the element changed, and every string in it is
+	 * sanitized: whether a string executes can depend on a neighbouring
+	 * setting (a form field's field_type flipped to html activates its stale
+	 * field_html; a removed `__dynamic__` override exposes the static value),
+	 * so a string is never judged apart from its element (#829 review round 2).
+	 *
+	 * Children are judged as elements of their own. Each stored element can
+	 * vouch for one incoming element only, so an unchanged element may move
+	 * within the post but not be duplicated into a raw second copy.
+	 *
 	 * @param mixed $incoming  Tree as JSON text or array.
 	 * @param mixed $stored    What the post holds now.
-	 * @param array $snapshots Rollback snapshots of the same post.
+	 * @param array $snapshots Trusted rollback snapshots of the same post.
 	 * @return mixed
 	 */
 	private static function police_elementor_data( $incoming, $stored, array $snapshots ) {
@@ -411,9 +458,8 @@ final class Mcpwp_Elementor_Meta_Write {
 			self::index_elements( self::as_list( $snapshot ), $known );
 		}
 
-		$changed     = false;
-		$occurrences = array();
-		$out         = self::police_elements( $tree, $known, $occurrences, $changed );
+		$changed = false;
+		$out     = self::police_elements( $tree, $known, $changed );
 
 		if ( ! $changed ) {
 			// Nothing needed sanitizing: the caller's own bytes.
@@ -449,74 +495,68 @@ final class Mcpwp_Elementor_Meta_Write {
 	}
 
 	/**
-	 * Identity of an element: id, type, widget type, and which occurrence of
-	 * that identity it is in document order (a duplicated id cannot lend its
-	 * content to its twin).
+	 * Canonical form of one element without its children: every field and
+	 * setting value exact, key order ignored, and the `isInner: false` default
+	 * Elementor's save adds treated as absent.
 	 *
-	 * @param array|object $element     Element.
-	 * @param array        $occurrences Counters, by reference.
+	 * @param array|object $element Element.
 	 * @return string
 	 */
-	private static function element_key( $element, array &$occurrences ) {
-		$get  = static function ( $field ) use ( $element ) {
-			$value = is_array( $element ) ? ( $element[ $field ] ?? '' ) : ( $element->{$field} ?? '' );
+	private static function signature( $element ) {
+		$fields = json_decode( (string) wp_json_encode( $element ), true );
+		if ( ! is_array( $fields ) ) {
+			return '';
+		}
 
-			return is_scalar( $value ) ? (string) $value : '';
+		unset( $fields['elements'] );
+		if ( array_key_exists( 'isInner', $fields ) && false === $fields['isInner'] ) {
+			unset( $fields['isInner'] );
+		}
+
+		$sort = static function ( $value ) use ( &$sort ) {
+			if ( is_array( $value ) ) {
+				ksort( $value );
+				foreach ( $value as $k => $v ) {
+					$value[ $k ] = $sort( $v );
+				}
+			}
+			return $value;
 		};
-		$base = $get( 'id' ) . "\x1f" . $get( 'elType' ) . "\x1f" . $get( 'widgetType' );
 
-		$occurrences[ $base ] = isset( $occurrences[ $base ] ) ? $occurrences[ $base ] + 1 : 0;
-
-		return $base . "\x1f" . $occurrences[ $base ];
+		return (string) wp_json_encode( $sort( $fields ) );
 	}
 
 	/**
-	 * Record every string of every stored element under element key + path.
+	 * @param array|object $element Element.
+	 * @return string Its id ('' when it has none).
+	 */
+	private static function element_id( $element ) {
+		$id = is_array( $element ) ? ( $element['id'] ?? '' ) : ( $element->id ?? '' );
+
+		return is_scalar( $id ) ? (string) $id : '';
+	}
+
+	/**
+	 * Count every stored element's signature, by id.
 	 *
 	 * @param array $elements Elements (assoc).
-	 * @param array $known    Index, by reference.
+	 * @param array $known    id => signature => count, by reference.
 	 * @return void
 	 */
 	private static function index_elements( array $elements, array &$known ) {
-		$occurrences = array();
-		$walk        = static function ( array $list ) use ( &$walk, &$known, &$occurrences ) {
-			foreach ( $list as $element ) {
-				if ( ! is_array( $element ) ) {
-					continue;
-				}
-				$key = self::element_key( $element, $occurrences );
-				foreach ( $element as $field => $value ) {
-					if ( 'elements' === $field ) {
-						continue;
-					}
-					self::index_value( $value, (string) $field, $key, $known );
-				}
-				if ( isset( $element['elements'] ) && is_array( $element['elements'] ) ) {
-					$walk( $element['elements'] );
-				}
+		foreach ( $elements as $element ) {
+			if ( ! is_array( $element ) ) {
+				continue;
 			}
-		};
-		$walk( $elements );
-	}
 
-	/**
-	 * @param mixed  $value Value.
-	 * @param string $path  Path within the element.
-	 * @param string $key   Element key.
-	 * @param array  $known Index, by reference.
-	 * @return void
-	 */
-	private static function index_value( $value, $path, $key, array &$known ) {
-		if ( is_string( $value ) ) {
-			$known[ $key ][ $path ][ $value ] = true;
-			return;
-		}
-		if ( is_object( $value ) ) {
-			$value = get_object_vars( $value );
-		}
-		if ( is_array( $value ) ) {
-			foreach ( $value as $k => $v ) {
-				self::index_value( $v, $path . "\x1f" . $k, $key, $known );
+			$id = self::element_id( $element );
+			if ( '' !== $id ) {
+				$sig                  = self::signature( $element );
+				$known[ $id ][ $sig ] = ( $known[ $id ][ $sig ] ?? 0 ) + 1;
+			}
+
+			if ( isset( $element['elements'] ) && is_array( $element['elements'] ) ) {
+				self::index_elements( $element['elements'], $known );
 			}
 		}
 	}
@@ -524,30 +564,34 @@ final class Mcpwp_Elementor_Meta_Write {
 	/**
 	 * Apply the policy to a list of elements (objects or arrays).
 	 *
-	 * @param array|object $elements    Elements.
-	 * @param array        $known       Index of what is stored in place.
-	 * @param array        $occurrences Counters, by reference.
-	 * @param bool         $changed     Set when a string was sanitized.
+	 * @param array|object $elements Elements.
+	 * @param array        $known    Stored signatures, consumed as matched.
+	 * @param bool         $changed  Set when a string was sanitized.
 	 * @return array|object
 	 */
-	private static function police_elements( $elements, array $known, array &$occurrences, &$changed ) {
+	private static function police_elements( $elements, array &$known, &$changed ) {
 		$is_object = is_object( $elements );
 		$items     = $is_object ? get_object_vars( $elements ) : $elements;
 
 		foreach ( $items as $index => $element ) {
 			if ( ! is_array( $element ) && ! is_object( $element ) ) {
-				$items[ $index ] = self::police_value( $element, '', '', $known, $changed );
+				$items[ $index ] = self::police_value( $element, $changed );
 				continue;
 			}
 
-			$key    = self::element_key( $element, $occurrences );
-			$fields = is_object( $element ) ? get_object_vars( $element ) : $element;
+			$id        = self::element_id( $element );
+			$sig       = self::signature( $element );
+			$unchanged = '' !== $id && ! empty( $known[ $id ][ $sig ] );
+			if ( $unchanged ) {
+				--$known[ $id ][ $sig ];
+			}
 
+			$fields = is_object( $element ) ? get_object_vars( $element ) : $element;
 			foreach ( $fields as $field => $value ) {
 				if ( 'elements' === $field && ( is_array( $value ) || is_object( $value ) ) ) {
-					$fields[ $field ] = self::police_elements( $value, $known, $occurrences, $changed );
-				} else {
-					$fields[ $field ] = self::police_value( $value, (string) $field, $key, $known, $changed );
+					$fields[ $field ] = self::police_elements( $value, $known, $changed );
+				} elseif ( ! $unchanged ) {
+					$fields[ $field ] = self::police_value( $value, $changed );
 				}
 			}
 
@@ -558,21 +602,14 @@ final class Mcpwp_Elementor_Meta_Write {
 	}
 
 	/**
-	 * Apply the policy to one value inside an element.
+	 * Sanitize every string in a value (arrays and objects walked).
 	 *
-	 * @param mixed  $value   Value.
-	 * @param string $path    Path within the element.
-	 * @param string $key     Element key ('' outside any element).
-	 * @param array  $known   Index of what is stored in place.
-	 * @param bool   $changed Set when a string was sanitized.
+	 * @param mixed $value   Value.
+	 * @param bool  $changed Set when a string was sanitized.
 	 * @return mixed
 	 */
-	private static function police_value( $value, $path, $key, array $known, &$changed ) {
+	private static function police_value( $value, &$changed ) {
 		if ( is_string( $value ) ) {
-			if ( '' !== $key && isset( $known[ $key ][ $path ][ $value ] ) ) {
-				return $value;
-			}
-
 			$clean = wp_kses_post( $value );
 			if ( $clean !== $value ) {
 				$changed = true;
@@ -584,7 +621,7 @@ final class Mcpwp_Elementor_Meta_Write {
 		if ( is_object( $value ) ) {
 			$fields = get_object_vars( $value );
 			foreach ( $fields as $k => $v ) {
-				$fields[ $k ] = self::police_value( $v, $path . "\x1f" . $k, $key, $known, $changed );
+				$fields[ $k ] = self::police_value( $v, $changed );
 			}
 
 			return (object) $fields;
@@ -592,7 +629,7 @@ final class Mcpwp_Elementor_Meta_Write {
 
 		if ( is_array( $value ) ) {
 			foreach ( $value as $k => $v ) {
-				$value[ $k ] = self::police_value( $v, $path . "\x1f" . $k, $key, $known, $changed );
+				$value[ $k ] = self::police_value( $v, $changed );
 			}
 		}
 
@@ -622,10 +659,15 @@ final class Mcpwp_Elementor_Meta_Write {
 	}
 
 	// ---------------------------------------------------------------------
-	// _elementor_page_settings.
+	// _elementor_page_settings: per top-level key, all or nothing.
 	// ---------------------------------------------------------------------
 
 	/**
+	 * A top-level setting keeps its raw strings only when its whole value is
+	 * identical to what the post stores under that key; otherwise every string
+	 * in it is sanitized. A declared raw path (the Kit's custom_css) is stored
+	 * as sent unless it could end its <style> element.
+	 *
 	 * @param mixed    $incoming  Settings to store.
 	 * @param mixed    $stored    What the post holds now.
 	 * @param string[] $raw_paths Top-level keys stored as sent.
@@ -636,50 +678,41 @@ final class Mcpwp_Elementor_Meta_Write {
 			return ( $incoming === $stored ) ? $incoming : wp_kses_post( $incoming );
 		}
 
+		$was_object = is_object( $incoming );
+		if ( $was_object ) {
+			$incoming = get_object_vars( $incoming );
+		}
+
 		if ( ! is_array( $incoming ) ) {
 			return $incoming;
 		}
 
-		$known = array();
-		self::index_value( is_array( $stored ) ? $stored : array(), '', 'settings', $known );
-		$known = $known['settings'] ?? array();
-
+		$stored  = is_object( $stored ) ? get_object_vars( $stored ) : $stored;
+		$stored  = is_array( $stored ) ? $stored : array();
 		$changed = false;
+
 		foreach ( $incoming as $k => $v ) {
-			if ( in_array( (string) $k, $raw_paths, true ) ) {
+			if ( in_array( (string) $k, $raw_paths, true ) && ! self::css_breaks_out( $v ) ) {
 				continue;
 			}
-			$incoming[ $k ] = self::police_setting( $v, "\x1f" . $k, $known, $changed );
+			if ( array_key_exists( $k, $stored ) && self::same_value( $v, $stored[ $k ] ) ) {
+				continue;
+			}
+			$incoming[ $k ] = self::police_value( $v, $changed );
 		}
 
-		return $incoming;
+		return $was_object ? (object) $incoming : $incoming;
 	}
 
 	/**
-	 * @param mixed  $value   Value.
-	 * @param string $path    Key path.
-	 * @param array  $known   Stored strings by path.
-	 * @param bool   $changed Set when a string was sanitized.
-	 * @return mixed
+	 * Exact equality of two values, objects and arrays alike, key order ignored.
+	 *
+	 * @param mixed $a Value.
+	 * @param mixed $b Value.
+	 * @return bool
 	 */
-	private static function police_setting( $value, $path, array $known, &$changed ) {
-		if ( is_string( $value ) ) {
-			if ( isset( $known[ $path ][ $value ] ) ) {
-				return $value;
-			}
-			$clean   = wp_kses_post( $value );
-			$changed = $changed || $clean !== $value;
-
-			return $clean;
-		}
-
-		if ( is_array( $value ) ) {
-			foreach ( $value as $k => $v ) {
-				$value[ $k ] = self::police_setting( $v, $path . "\x1f" . $k, $known, $changed );
-			}
-		}
-
-		return $value;
+	private static function same_value( $a, $b ) {
+		return self::signature( array( 'v' => $a ) ) === self::signature( array( 'v' => $b ) );
 	}
 
 	// ---------------------------------------------------------------------
@@ -693,15 +726,5 @@ final class Mcpwp_Elementor_Meta_Write {
 	 */
 	private static function slot( $object_id, $meta_key ) {
 		return (int) $object_id . '|' . (string) $meta_key;
-	}
-
-	/**
-	 * @param string $slot Slot.
-	 * @return string The meta key.
-	 */
-	private static function slot_key( $slot ) {
-		$pos = strpos( $slot, '|' );
-
-		return false === $pos ? '' : substr( $slot, $pos + 1 );
 	}
 }

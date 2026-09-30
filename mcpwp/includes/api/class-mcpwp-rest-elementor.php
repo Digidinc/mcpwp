@@ -1253,7 +1253,7 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 			$updated = Mcpwp_Elementor_Element_Keys::normalize_json( $updated );
 		}
 
-		Mcpwp_Elementor_Meta_Write::update( $page_id, '_elementor_data', wp_slash( $updated ) );
+		Mcpwp_Elementor_Meta_Write::update( $page_id, '_elementor_data', $updated );
 
 		// Clear the same per-document caches Document::save() clears on a
 		// normal write — CSS file and element-render cache (#891). This path
@@ -1523,7 +1523,7 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 				if ( class_exists( 'Mcpwp_Elementor_Element_Keys' ) ) {
 					$encoded = Mcpwp_Elementor_Element_Keys::normalize_json( $encoded );
 				}
-				Mcpwp_Elementor_Meta_Write::update( $post_id, '_elementor_data', wp_slash( $encoded ) );
+				Mcpwp_Elementor_Meta_Write::update( $post_id, '_elementor_data', $encoded );
 				// Same per-document cache clear find_replace() does (#891) —
 				// this loop is the same bypass-of-Document::save() write path,
 				// once per matched post.
@@ -2052,21 +2052,22 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 	 * Refuse Kit CSS that could end the <style> element it is printed in.
 	 *
 	 * The Kit's custom_css is stored as sent (#762/#829) and Elementor prints
-	 * it inside a <style> element. `</style` — any case, any whitespace
-	 * between `<`, `/` and the name — ends that element, and whatever follows
-	 * is parsed as HTML: a script. CSS never needs the sequence.
+	 * it inside a <style> element. Checked on the exact text that is stored —
+	 * Mcpwp_Elementor_Meta_Write::update() slashes for update_post_meta(), so
+	 * nothing is unslashed after this check — and canonicalised by
+	 * Mcpwp_Elementor_Meta_Write::css_breaks_out().
 	 *
 	 * @param string $css Kit CSS as it would be stored.
 	 * @return WP_Error|null
 	 */
 	private function kit_css_breakout_refusal( $css ) {
-		if ( ! preg_match( '#<\s*/\s*style#i', (string) $css ) ) {
+		if ( ! Mcpwp_Elementor_Meta_Write::css_breaks_out( (string) $css ) ) {
 			return null;
 		}
 
 		return new WP_Error(
 			'kit_css_style_breakout',
-			__( 'Kit CSS must not contain "</style" (in any letter case or spacing): the stylesheet is printed inside a <style> element, and that text would end it and let what follows run as HTML. Nothing was saved. Remove it and send the CSS again.', 'mcpwp' ),
+			__( 'Kit CSS must not contain "</style" (in any letter case, spacing, or with backslashes such as <\\/style): the stylesheet is printed inside a <style> element, and that text could end it and let what follows run as HTML. Nothing was saved. Remove it and send the CSS again.', 'mcpwp' ),
 			array( 'status' => 400 )
 		);
 	}

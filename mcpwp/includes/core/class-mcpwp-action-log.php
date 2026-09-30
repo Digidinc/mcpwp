@@ -255,7 +255,7 @@ class Mcpwp_Action_Log {
 			}
 		}
 
-		$result = self::apply_snapshot( $entry['resource_type'], $snap );
+		$result = self::apply_snapshot( $entry['resource_type'], $snap, self::snapshot_is_trusted( $entry, $snap ) );
 		if ( is_wp_error( $result ) ) {
 			return $result;
 		}
@@ -834,7 +834,7 @@ class Mcpwp_Action_Log {
 		);
 	}
 
-	private static function apply_snapshot( $resource_type, $snap ) {
+	private static function apply_snapshot( $resource_type, $snap, $trusted = false ) {
 		// #1031 round 2: a snapshot withheld for size (cap_snapshot(), any
 		// resource type) OR — pre-existing — a credential-shaped option
 		// value (snapshot_option()) both carry a `withheld` key instead of
@@ -902,14 +902,17 @@ class Mcpwp_Action_Log {
 				// unslashed, the page could not be decoded (#845).
 				//
 				// The snapshot is what this same post held before the write
-				// being rolled back, taken server-side by MCPWP: its strings are
-				// trusted in place — same post, same element, same setting path
-				// — and nothing else is (#829).
+				// being rolled back, taken server-side by MCPWP. Its elements
+				// are trusted as stored content only when nothing has changed
+				// the post since that write ($trusted, see rollback()): an
+				// admin who removed a script afterwards must not see a key's
+				// rollback put it back. Otherwise the restore is sanitized
+				// like any content the caller introduces (#829).
 				Mcpwp_Elementor_Meta_Write::update(
 					(int) $snap['post_id'],
 					'_elementor_data',
-					wp_slash( $snap_data ),
-					array( 'snapshot' => $snap_data )
+					$snap_data,
+					$trusted ? array( 'snapshot' => $snap_data ) : array()
 				);
 				delete_post_meta( (int) $snap['post_id'], '_elementor_css' );
 				return true;
@@ -931,6 +934,35 @@ class Mcpwp_Action_Log {
 			default:
 				return new WP_Error( 'unsupported_type', __( 'Rollback not supported for this resource type.', 'mcpwp' ), array( 'status' => 400 ) );
 		}
+	}
+
+	/**
+	 * Whether a rollback's before-snapshot may be trusted as stored content
+	 * (#829 review round 2): only an Elementor snapshot of the same post, and
+	 * only while that post still holds exactly what the logged write left
+	 * (its after_snap). Once anything else has written the post — an admin
+	 * removing a script — the snapshot is just old content, and restoring it
+	 * goes through the capability sanitizer like anything a caller sends.
+	 *
+	 * @param array $entry Log entry.
+	 * @param array $snap  Decoded before_snap.
+	 * @return bool
+	 */
+	private static function snapshot_is_trusted( array $entry, array $snap ) {
+		if ( 'elementor' !== ( $entry['resource_type'] ?? '' ) || empty( $snap['post_id'] ) || empty( $entry['after_snap'] ) ) {
+			return false;
+		}
+
+		$after = json_decode( (string) $entry['after_snap'], true );
+		if ( ! is_array( $after ) || ! array_key_exists( 'elementor_data', $after ) || isset( $after['withheld'] ) ) {
+			return false;
+		}
+
+		if ( (int) ( $after['post_id'] ?? 0 ) !== (int) $snap['post_id'] ) {
+			return false;
+		}
+
+		return get_post_meta( (int) $snap['post_id'], '_elementor_data', true ) === $after['elementor_data'];
 	}
 
 	private static function insert(

@@ -553,6 +553,18 @@ function is_email($value)
 
 function wp_unslash($value)
 {
+    // Core: stripslashes_deep() — map_deep() over arrays and objects. A
+    // strings-only double hid that update_post_meta() strips every backslash
+    // from an array value passed unslashed (#829 review round 2).
+    if (is_array($value)) {
+        return array_map('wp_unslash', $value);
+    }
+    if (is_object($value)) {
+        foreach (get_object_vars($value) as $k => $v) {
+            $value->{$k} = wp_unslash($v);
+        }
+        return $value;
+    }
     return is_string($value) ? stripslashes($value) : $value;
 }
 
@@ -4376,6 +4388,10 @@ if (! function_exists('add_query_arg')) {
 
 function wp_slash($value)
 {
+    // Core: arrays recursively, strings addslashes(), anything else as is.
+    if (is_array($value)) {
+        return array_map('wp_slash', $value);
+    }
     return is_string($value) ? addslashes($value) : $value;
 }
 

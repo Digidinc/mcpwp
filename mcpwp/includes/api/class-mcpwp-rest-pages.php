@@ -530,7 +530,7 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 
 			// An MCPWP write of the copy (#829): a principal without
 			// unfiltered_html gets a sanitized copy, whatever the post type.
-			Mcpwp_Elementor_Meta_Write::update( $new_page_id, '_elementor_data', wp_slash( $elementor_data ) );
+			Mcpwp_Elementor_Meta_Write::update( $new_page_id, '_elementor_data', $elementor_data );
 			update_post_meta( $new_page_id, '_elementor_edit_mode', 'builder' );
 
 			$template_type = get_post_meta( $page_id, '_elementor_template_type', true );

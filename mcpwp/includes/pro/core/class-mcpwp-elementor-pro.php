@@ -1485,7 +1485,9 @@ class Mcpwp_Elementor_Pro {
 						continue;
 					}
 					foreach ( $values as $value ) {
-						add_post_meta( $new_id, $key, maybe_unserialize( $value ) );
+						// Slashed: add_post_meta() unslashes, which stripped every
+						// backslash from the copy (#829 review round 2).
+						add_post_meta( $new_id, $key, wp_slash( maybe_unserialize( $value ) ) );
 					}
 				}
 			}

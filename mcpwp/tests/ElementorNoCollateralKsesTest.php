@@ -436,7 +436,8 @@ final class ElementorNoCollateralKsesTest extends TestCase {
 	 */
 	public function test_a_rollback_restores_the_snapshot_of_the_same_post(): void {
 		// The page as a bad write left it: script body as text, style and svg
-		// gone. The server-side snapshot holds what it was before.
+		// gone. The server-side snapshot holds what it was before, and nothing
+		// has written the page since the logged write.
 		$stripped = self::tree();
 		foreach ( array( 1, 2, 3 ) as $i ) {
 			$html = $stripped[0]['elements'][0]['elements'][ $i ]['settings']['html'];
@@ -444,19 +445,62 @@ final class ElementorNoCollateralKsesTest extends TestCase {
 		}
 		$this->seed( self::PAGE_ID, $stripped );
 
-		$method = new ReflectionMethod( Mcpwp_Action_Log::class, 'apply_snapshot' );
-		$method->setAccessible( true );
-		$result = $method->invoke(
-			null,
-			'elementor',
-			array(
-				'post_id'        => self::PAGE_ID,
-				'elementor_data' => wp_json_encode( self::tree() ),
-			)
+		$snap  = array(
+			'post_id'        => self::PAGE_ID,
+			'elementor_data' => wp_json_encode( self::tree() ),
+		);
+		$entry = array(
+			'resource_type' => 'elementor',
+			'after_snap'    => wp_json_encode( array( 'post_id' => self::PAGE_ID, 'elementor_data' => wp_json_encode( $stripped ) ) ),
 		);
 
-		$this->assertTrue( $result );
-		$this->assert_html_widgets_intact( self::PAGE_ID, 'an action-log rollback' );
+		$this->assertTrue( $this->rollback( $entry, $snap ) );
+		$this->assert_html_widgets_intact( self::PAGE_ID, 'a rollback of a post nothing has changed since' );
+	}
+
+	/**
+	 * Restore a before-snapshot exactly as Mcpwp_Action_Log::rollback() does:
+	 * trusted only when the post still holds the logged write's after_snap.
+	 */
+	private function rollback( array $entry, array $snap ) {
+		$trusted = new ReflectionMethod( Mcpwp_Action_Log::class, 'snapshot_is_trusted' );
+		$trusted->setAccessible( true );
+		$apply = new ReflectionMethod( Mcpwp_Action_Log::class, 'apply_snapshot' );
+		$apply->setAccessible( true );
+
+		return $apply->invoke( null, 'elementor', $snap, $trusted->invoke( null, $entry, $snap ) );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_a_rollback_does_not_restore_a_script_an_admin_has_since_removed(): void {
+		// Review round 2, WARN 1. The key's logged write left the page with
+		// the script (after_snap). An admin then removed it. The key rolls
+		// back: the snapshot is no longer "what this write replaced" on a
+		// post nothing else touched, so it is sanitized like new content.
+		$logged_after = self::tree();
+		$logged_after[0]['elements'][0]['elements'][0]['settings']['title'] = 'Key edit';
+
+		$admin_removed = $logged_after;
+		$admin_removed[0]['elements'][0]['elements'][1]['settings']['html'] = '<p>removed by admin</p>';
+		$this->seed( self::PAGE_ID, $admin_removed );
+
+		$entry = array(
+			'resource_type' => 'elementor',
+			'after_snap'    => wp_json_encode( array( 'post_id' => self::PAGE_ID, 'elementor_data' => wp_json_encode( $logged_after ) ) ),
+		);
+		$snap  = array(
+			'post_id'        => self::PAGE_ID,
+			'elementor_data' => wp_json_encode( self::tree() ),
+		);
+
+		$this->assertTrue( $this->rollback( $entry, $snap ) );
+
+		$stored = self::find( $this->stored_tree( self::PAGE_ID ), 'sc82901' )['settings']['html'];
+		$this->assertStringNotContainsString( '<script', $stored, 'The script the admin removed is not restored.' );
+		$this->assertSame( wp_kses_post( self::SCRIPT ), $stored );
 	}
 
 	/**
@@ -508,36 +552,94 @@ final class ElementorNoCollateralKsesTest extends TestCase {
 		$json = wp_json_encode( $tree, JSON_UNESCAPED_UNICODE );
 		$GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'] = $json;
 
-		Mcpwp_Elementor_Meta_Write::update( self::PAGE_ID, '_elementor_data', wp_slash( $json ) );
+		// update() takes the value as it is to be stored and slashes it itself.
+		Mcpwp_Elementor_Meta_Write::update( self::PAGE_ID, '_elementor_data', $json );
 
 		$this->assertSame( $json, $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'] );
 	}
 
 	/**
-	 * Every MCPWP writer of these keys goes through the chokepoint: a raw
-	 * update_post_meta()/add_post_meta() of either key anywhere else in the
-	 * plugin would store past the policy (or re-sanitize the whole document).
+	 * Every MCPWP writer of these keys goes through the chokepoint. Scans whole
+	 * statements (multi-line calls included) for: a meta write naming either
+	 * key; a meta write whose key is a variable; a `meta_input` array naming
+	 * either key; and a direct `$wpdb` write to postmeta. Each known-safe one
+	 * is allowlisted below with the reason it is safe (review round 2, NIT).
 	 */
 	public function test_no_writer_of_these_keys_bypasses_the_chokepoint(): void {
+		$allow = array(
+			// Keys from a fixed map of non-Elementor keys in the same function.
+			'pro/core/class-mcpwp-events.php|update_post_meta( $post_id, $meta_key,'                         => 'tp_event_* map',
+			'pro/core/class-mcpwp-learnpress.php|update_post_meta( $post_id, $meta_key,'                     => '_lp_* maps',
+			'pro/core/class-mcpwp-seo.php|update_post_meta( $post_id, $meta_map[ $key ],'                    => 'SEO plugin key maps',
+			'pro/core/class-mcpwp-elementor-pro.php|update_post_meta( $template_id, $this->part_'            => 'part flag/tags keys',
+			'pro/core/class-mcpwp-elementor-pro.php|update_post_meta( $template_id, $this->archetype_'       => 'archetype flag key',
+			'pro/core/class-mcpwp-elementor-pro.php|update_post_meta( $template_id, $meta_key, $value )'     => 'part/archetype metadata maps',
+			// Caller-named keys, refused for every `_elementor*` prefix by $blocked_prefixes.
+			'core/class-mcpwp-post-fields.php|update_post_meta( $post_id, $key, $value )'                    => 'blocked _elementor prefix',
+			// Elementor keys take the chokepoint branch just above this call.
+			'pro/api/class-mcpwp-rest-elementor-pro.php|update_post_meta( $id, $key, $sanitized[\'content\'], $value )' => 'KEYS routed to update()',
+			// Inside Mcpwp_Elementor_Meta_Write::as_writer( $new_id ).
+			'pro/core/class-mcpwp-elementor-pro.php|add_post_meta( $new_id, $key,'                            => 'clone copy loop in as_writer',
+			// meta_input arrays, each passed to a wp_insert_post() inside as_writer( 0 ).
+			'pro/core/class-mcpwp-elementor-pro.php|$new_post[\'meta_input\'] = array( \'_elementor_data\''    => 'clone insert in as_writer',
+			'pro/core/class-mcpwp-elementor-pro.php|$page_data[\'meta_input\'] = array( \'_elementor_data\''   => 'landing insert in as_writer',
+			'pro/core/class-mcpwp-page-builder.php|\'meta_input\'  => array( \'_elementor_data\''              => 'page builder insert in as_writer',
+			// The Kit CSS byte repair: writes the exact bytes the route already
+			// validated (no `</style`), and only when the first write was altered.
+			'api/class-mcpwp-rest-elementor.php|$wpdb->update(\n\t\t\t\t$wpdb->postmeta'                     => 'Kit CSS repair',
+		);
+
 		$root     = dirname( __DIR__ ) . '/includes';
 		$offences = array();
 		$files    = new RecursiveIteratorIterator( new RecursiveDirectoryIterator( $root, FilesystemIterator::SKIP_DOTS ) );
+		$keys     = "('_elementor_data'|'_elementor_page_settings'|self::META_KEY|Mcpwp_Elementor_Page_Settings::META_KEY)";
 
 		foreach ( $files as $file ) {
 			if ( 'php' !== $file->getExtension() || 'class-mcpwp-elementor-meta-write.php' === $file->getFilename() ) {
 				continue;
 			}
-			foreach ( file( $file->getPathname() ) as $n => $line ) {
-				if ( preg_match( "#\\b(update_post_meta|add_post_meta|update_metadata|add_metadata)\\s*\\([^;]*('_elementor_data'|'_elementor_page_settings'|self::META_KEY)#", $line ) ) {
-					if ( false !== strpos( $line, 'Mcpwp_Elementor_Meta_Write::' ) ) {
+			$rel  = substr( $file->getPathname(), strlen( $root ) + 1 );
+			$code = self::code_without_comments( (string) file_get_contents( $file->getPathname() ) );
+
+			$patterns = array(
+				// A meta write naming either key, or with a variable key.
+				'#(?<!::)\b(update_post_meta|add_post_meta|update_metadata|add_metadata)\s*\((?:[^;]*?' . $keys . '|\s*[^,;]+,\s*\$)[^;]*;#s',
+				// A meta_input array naming either key (an assignment, not a read).
+				"#[^\\n;]*('meta_input'\\s*=>|\\['meta_input'\\]\\s*=(?!=))[^\\n;]*" . $keys . '[^\n;]*#',
+				// A direct write to postmeta.
+				'#\$wpdb->(update|insert|replace|query)\s*\([^;]*postmeta[^;]*;#s',
+			);
+
+			foreach ( $patterns as $pattern ) {
+				if ( ! preg_match_all( $pattern, $code, $m, PREG_OFFSET_CAPTURE ) ) {
+					continue;
+				}
+				foreach ( $m[0] as list( $statement, $offset ) ) {
+					if ( false !== strpos( $statement, 'Mcpwp_Elementor_Meta_Write::' ) || false !== strpos( substr( $code, max( 0, $offset - 30 ), 30 ), 'Mcpwp_Elementor_Meta_Write::' ) ) {
 						continue;
 					}
-					$offences[] = substr( $file->getPathname(), strlen( $root ) + 1 ) . ':' . ( $n + 1 ) . ': ' . trim( $line );
+					// Only the options/term/user meta of other plugins' tables are
+					// out of scope: a postmeta $wpdb write must name one of our keys.
+					if ( 0 === strpos( ltrim( $statement ), '$wpdb' ) && ! preg_match( '#_elementor_page_settings|_elementor_data|meta_key#', $statement ) ) {
+						continue;
+					}
+					$allowed = false;
+					foreach ( $allow as $sig => $why ) {
+						list( $f, $needle ) = explode( '|', $sig, 2 );
+						if ( $f === $rel && false !== strpos( $statement, stripcslashes( $needle ) ) ) {
+							$allowed = true;
+							break;
+						}
+					}
+					if ( ! $allowed ) {
+						$line       = substr_count( substr( $code, 0, $offset ), "\n" ) + 1;
+						$offences[] = "{$rel}:{$line}: " . preg_replace( '#\s+#', ' ', trim( $statement ) );
+					}
 				}
 			}
 		}
 
-		$this->assertSame( array(), $offences, 'Write these keys with Mcpwp_Elementor_Meta_Write::update() or inside as_writer() (#829).' );
+		$this->assertSame( array(), $offences, 'Write these keys with Mcpwp_Elementor_Meta_Write::update() or inside as_writer() — or allowlist a proven-safe writer with its reason (#829).' );
 	}
 
 	// ---------------------------------------------------------------------
@@ -678,6 +780,176 @@ final class ElementorNoCollateralKsesTest extends TestCase {
 
 		$this->assert_ok( $result, 'clone_page' );
 		$this->assert_html_widgets_intact( (int) $result['id'], 'a clone by a user holding unfiltered_html' );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_flipping_a_form_field_to_html_sanitizes_its_stale_field_html(): void {
+		// Review round 2, WARN 2: in place is per element, all or nothing. A
+		// form field stored as text carries an inert field_html; flipping its
+		// field_type to html would activate it.
+		$form = self::widget(
+			'fm82901',
+			'form',
+			array(
+				'form_fields' => array(
+					array( '_id' => 'fld0001', 'field_type' => 'text', 'field_label' => 'Name', 'field_html' => '<script>window.__form829=1</script>' ),
+				),
+			)
+		);
+		$tree = self::tree();
+		$tree[0]['elements'][0]['elements'][] = $form;
+		$this->seed( self::PAGE_ID, $tree );
+
+		$last = count( $tree[0]['elements'][0]['elements'] ) - 1;
+		$tree[0]['elements'][0]['elements'][ $last ]['settings']['form_fields'][0]['field_type'] = 'html';
+		$this->set_elementor( self::PAGE_ID, $tree );
+
+		$stored = $this->stored_tree( self::PAGE_ID );
+		$this->assertSame( wp_kses_post( '<script>window.__form829=1</script>' ), self::find( $stored, 'fm82901' )['settings']['form_fields'][0]['field_html'] );
+		$this->assertSame( 'html', self::find( $stored, 'fm82901' )['settings']['form_fields'][0]['field_type'] );
+		$this->assert_html_widgets_intact( self::PAGE_ID, 'changing one element\'s neighbouring setting' );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_removing_a_dynamic_override_sanitizes_the_static_value_it_exposes(): void {
+		// Review round 2, WARN 2: with a __dynamic__ override the static html
+		// never rendered; removing the override exposes it.
+		$tree = self::tree();
+		$tree[0]['elements'][0]['elements'][] = self::widget(
+			'dy82901',
+			'html',
+			array(
+				'html'        => '<script>window.__dyn829=1</script>',
+				'__dynamic__' => array( 'html' => '[elementor-tag id="d1e2f3a" name="post-title" settings="%7B%7D"]' ),
+			)
+		);
+		$this->seed( self::PAGE_ID, $tree );
+
+		$last = count( $tree[0]['elements'][0]['elements'] ) - 1;
+		unset( $tree[0]['elements'][0]['elements'][ $last ]['settings']['__dynamic__'] );
+		$this->set_elementor( self::PAGE_ID, $tree );
+
+		$stored = $this->stored_tree( self::PAGE_ID );
+		$this->assertSame( wp_kses_post( '<script>window.__dyn829=1</script>' ), self::find( $stored, 'dy82901' )['settings']['html'] );
+		$this->assertSame( self::SCRIPT, self::find( $stored, 'sc82901' )['settings']['html'] );
+		$this->assertSame( self::STYLE, self::find( $stored, 'st82901' )['settings']['html'] );
+		$this->assertSame( self::SVG, self::find( $stored, 'sv82901' )['settings']['html'] );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_an_unchanged_element_may_move_but_not_be_duplicated_raw(): void {
+		// Accepted: moving an unchanged element within the same post keeps it.
+		// Each stored element vouches for one copy, so a duplicate is sanitized.
+		$tree    = self::tree();
+		$widgets = $tree[0]['elements'][0]['elements'];
+		$moved   = array( $widgets[0], $widgets[3], $widgets[2], $widgets[1], $widgets[1] );
+		$tree[0]['elements'][0]['elements'] = $moved;
+
+		$this->set_elementor( self::PAGE_ID, $tree );
+
+		$this->assertSame(
+			array( self::SVG, self::STYLE, self::SCRIPT, wp_kses_post( self::SCRIPT ) ),
+			$this->html_widgets( self::PAGE_ID )
+		);
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_the_bypass_is_bound_to_the_post_it_was_produced_for(): void {
+		// Review round 2, NIT: while the policy re-writes post A, a write of
+		// the same key and value to post B is not let through.
+		$json = wp_json_encode( self::tree() );
+		$fired = false;
+		add_action(
+			'updated_post_meta',
+			static function ( $meta_id, $object_id, $key ) use ( $json, &$fired ) {
+				if ( ! $fired && ElementorNoCollateralKsesTest::page_id() === (int) $object_id && '_elementor_data' === $key ) {
+					$fired = true;
+					update_post_meta( ElementorNoCollateralKsesTest::target_id(), '_elementor_data', wp_slash( $json ) );
+				}
+			},
+			10,
+			3
+		);
+
+		$tree = self::tree();
+		$tree[0]['elements'][0]['elements'][0]['settings']['title'] = 'Bound 829';
+		$tree[0]['elements'][0]['elements'][1]['settings']['html']  = self::SCRIPT . '<p>changed</p>';
+		$this->set_elementor( self::PAGE_ID, $tree );
+
+		$this->assertTrue( $fired );
+		$this->assert_html_widgets_sanitized( self::TARGET_ID, 'a same-key write to another post during the re-write' );
+	}
+
+	/** PHP source with comments blanked (newlines kept, so line numbers hold). */
+	private static function code_without_comments( string $source ): string {
+		$out = '';
+		foreach ( token_get_all( $source ) as $token ) {
+			if ( is_array( $token ) && in_array( $token[0], array( T_COMMENT, T_DOC_COMMENT ), true ) ) {
+				$out .= str_repeat( "\n", substr_count( $token[1], "\n" ) );
+				continue;
+			}
+			$out .= is_array( $token ) ? $token[1] : $token;
+		}
+
+		return $out;
+	}
+
+	public static function target_id(): int {
+		return self::TARGET_ID;
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_page_settings_objects_are_policed(): void {
+		// Review round 2, NIT: objects, and objects nested in arrays.
+		$GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_page_settings'] = array(
+			'kept' => (object) array( 'html' => self::SCRIPT ),
+		);
+
+		$settings = array(
+			'kept'   => (object) array( 'html' => self::SCRIPT ),
+			'nested' => array( (object) array( 'html' => '<script>window.__obj829=1</script>' ) ),
+			'object' => (object) array( 'deep' => (object) array( 'html' => '<script>window.__obj829b=1</script>' ) ),
+		);
+		Mcpwp_Elementor_Meta_Write::update( self::PAGE_ID, '_elementor_page_settings', $settings );
+
+		$stored = $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_page_settings'];
+		$this->assertSame( self::SCRIPT, $stored['kept']->html, 'An unchanged key is kept.' );
+		$this->assertSame( wp_kses_post( '<script>window.__obj829=1</script>' ), $stored['nested'][0]->html );
+		$this->assertSame( wp_kses_post( '<script>window.__obj829b=1</script>' ), $stored['object']->deep->html );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_page_settings_keep_their_backslashes(): void {
+		// Review round 2, BLOCK: arrays reached update_post_meta() unslashed,
+		// so every backslash was lost.
+		$settings = array(
+			'custom_css' => 'selector .i::before{content:"\\f101"}',
+			'hide_title' => 'yes',
+		);
+		$GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_page_settings'] = $settings;
+
+		$settings['hide_title'] = 'no';
+		Mcpwp_Elementor_Meta_Write::update( self::PAGE_ID, '_elementor_page_settings', $settings );
+
+		$this->assertSame( 'selector .i::before{content:"\\f101"}', $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_page_settings']['custom_css'] );
 	}
 
 	// ---------------------------------------------------------------------
@@ -869,12 +1141,37 @@ final class ElementorNoCollateralKsesTest extends TestCase {
 		$this->assertStringContainsString( '.a>.b{color:red}', $this->kit_css() );
 	}
 
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_a_backslash_escape_round_trips_on_replace_and_upsert(): void {
+		// Review round 2, BLOCK: `content:"\f101"` was stored as `"f101"`.
+		$controller = $this->install_kit();
+		$css        = '.i::before{content:"\\f101"}';
+
+		$controller->set_kit_css( $this->rest_request( 'POST', '/mcpwp/v1/elementor/kit-css', array( 'css' => $css, 'mode' => 'replace' ) ) );
+		$this->assertSame( $css, $this->kit_css(), 'wp_set_kit_css replace stores the backslash.' );
+
+		$data = $this->data(
+			$controller->upsert_kit_css_block( $this->rest_request( 'POST', '/mcpwp/v1/elementor/kit-css/blocks', array( 'name' => 'b829bs', 'css' => $css ) ) )
+		);
+		$this->assertStringContainsString( "\n" . $css . "\n", $this->kit_css(), 'The upserted block stores the backslash.' );
+		$this->assertTrue( $data['verified'] );
+		$this->assertArrayNotHasKey( 'storage_repaired', $data, 'A clean backslash write is not a repair.' );
+	}
+
 	public static function breakouts(): array {
 		return array(
 			'plain'      => array( '.a{color:red}</style><script>window.__kit829=1</script>' ),
 			'upper case' => array( '.a{}</STYLE><script>x()</script>' ),
 			'spaced'     => array( '.a{}</ style><script>x()</script>' ),
 			'spaced <'   => array( ".a{}< /\tStyle><script>x()</script>" ),
+			// Review round 2, BLOCK: backslash spellings, which update_post_meta()
+			// used to unslash into a real `</style` after the check had passed.
+			'<\\/style'   => array( 'a{}<\\/style><script>window.w1=1</script>' ),
+			'<\\\\/style'  => array( 'a{}<\\\\/style><script>window.w1=1</script>' ),
+			'mixed \\'    => array( "a{}< \\/ StYlE ><script>x()</script>" ),
 		);
 	}
 
