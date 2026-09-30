@@ -34,6 +34,7 @@ WordPress + Elementor Pro), with the live ZIP checked for every fix. Freemius (p
 
 | version | date | what |
 |---|---|---|
+| 3.14.9 | 2026-09-30 | Approvals in their own table (#1042): no double apply or rollback, exact counts, 90-day history, only wp-admin admins and admin-scope keys skip the limits, a 64 MB open ceiling, visibility decided safely after upgrade. Freemius publishing fixed (#1054, #1055). Published to both fleets |
 | 3.14.8 | 2026-09-28 | WebMCP in wp-admin (#981); approvals hardened (locking, claims, limits, rollback works); action log follows key categories (#1031); deny-all for keys with no valid categories (#1041); embedded Elementor templates follow key categories (#1032) |
 | 3.14.7 | 2026-09-28 | Every route checks the post type it touches; one canonical "not found"; 500-id cap (#1024) |
 | 3.14.6 | 2026-09-28 | Approvals, events and site-state follow the target's category (#1025); not-found parity (#1026); exact `mcpwp://` URIs (#1018) |
