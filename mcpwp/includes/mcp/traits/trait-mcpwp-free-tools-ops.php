@@ -154,7 +154,7 @@ trait Mcpwp_Free_Tools_Ops_Trait {
 
 		$tools[] = $this->define_tool(
 			'wp_update_plugin_settings',
-			'Update MCPWP plugin settings. Pass only the keys you want to change. Allowed keys: enable_logging (bool), log_retention_days (1-365), log_store_response_data (bool), allowed_origins (comma-separated URLs), oauth_enabled (bool), oauth_client_id, oauth_client_secret, oauth_token_ttl (60-86400 seconds), alerts_enabled (bool), alerts_window_minutes (1-60), alerts_cooldown_minutes (1-1440), alerts_5xx_threshold (1-10000), alerts_auth_threshold (1-10000), github_token, github_repo (owner/repo).',
+			'Update MCPWP plugin settings. Pass only the keys you want to change. Allowed keys: enable_logging (bool), log_retention_days (1-365), log_store_response_data (bool), allowed_origins (comma-separated URLs), oauth_enabled (bool), oauth_client_id, oauth_client_secret, oauth_token_ttl (60-86400 seconds), alerts_enabled (bool), alerts_window_minutes (1-60), alerts_cooldown_minutes (1-1440), alerts_5xx_threshold (1-10000), alerts_auth_threshold (1-10000), github_token, github_repo (owner/repo), mcp_tool_profile (core|full).',
 			array(
 				'enable_logging' => array(
 					'type'        => 'boolean',
@@ -215,6 +215,11 @@ trait Mcpwp_Free_Tools_Ops_Trait {
 				'github_repo' => array(
 					'type'        => 'string',
 					'description' => 'GitHub repository in owner/repo format',
+				),
+				'mcp_tool_profile' => array(
+					'type'        => 'string',
+					'description' => 'Site default tools/list profile for MCP connections (#907, #1064): "core" (the default — ~25 tools plus mcpwp_find_tools/mcpwp_call) or "full" (every tool). A ?profile= query arg on the MCP URL overrides it per connection.',
+					'enum'        => array( 'core', 'full' ),
 				),
 			)
 		);

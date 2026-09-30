@@ -328,6 +328,8 @@ final class McpEndpointTest extends TestCase {
 			)
 		);
 
+		$request->set_query_params( array( 'profile' => 'full' ) ); // Every tool, not the `core` default (#1064).
+
 		$response = $controller->handle_mcp( $request );
 		$data     = $response->get_data();
 		$tools    = $data['result']['tools'];

@@ -77,8 +77,13 @@ trait Mcpwp_Free_Tools_Site_Trait {
 
 		$tools[] = $this->define_tool(
 			'wp_introspect',
-			'Get a machine-readable description of this plugin (auth, endpoints, tools, capabilities) so AI clients can self-configure instead of guessing. Compact tool list by default (name + one-line description, no schema). Pass tool="wp_x" to get that one tool\'s full inputSchema, or full=true to dump every tool\'s schema (200KB+).',
+			'Get a machine-readable description of this plugin (auth, endpoints, tool counts by category, capabilities) so AI clients can self-configure instead of guessing. A short summary by default. Pass detail="full" for the compact tool list (name + one-line description), tool="wp_x" for that one tool\'s full inputSchema, or full=true to dump every tool\'s schema (200KB+).',
 			array(
+				'detail' => array(
+					'type'        => 'string',
+					'description' => 'Default "summary" (under 2k tokens). "full" adds the compact tool list, workflows, capabilities and the site context text.',
+					'enum'        => array( 'summary', 'full' ),
+				),
 				'tool' => array(
 					'type'        => 'string',
 					'description' => 'Return only this tool\'s full entry (description, inputSchema, annotations, route) instead of the compact list. Takes precedence over full.',

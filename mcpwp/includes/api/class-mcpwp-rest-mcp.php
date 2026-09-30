@@ -183,6 +183,16 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	const TOOL_PROFILES = array( 'core', 'full' );
 
 	/**
+	 * Profile for a connection whose site never saved `mcp_tool_profile`
+	 * and whose URL carries no valid `?profile=` (#1064). `full` costs a new
+	 * connection ~33-53k tokens before the agent does anything; `core`
+	 * stays under 5k (ToolListBudgetTest).
+	 *
+	 * @var string
+	 */
+	const DEFAULT_TOOL_PROFILE = 'core';
+
+	/**
 	 * Tool names always dispatched in-process by this class rather than
 	 * mapped to a REST route (#907) — neither appears in get_all_tool_map().
 	 *
@@ -239,9 +249,12 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		'wp_set_seo',                // Pro.
 		'wp_get_rendered_html',      // Verify what was actually published.
 		'wp_screenshot_url',         // Visual verification.
-		'wp_graph_query',            // Internal-link/orphan discovery.
 		'wp_list_menus',
 		'wp_list_approvals',         // Safety loop: see what needs a human.
+		// wp_graph_query left `core` in #1064: at ~330 tokens it alone put a
+		// Pro site with an SEO plugin over the 5,000-token core budget
+		// (ToolListBudgetTest). It is an analysis tool, not a first-contact
+		// edit tool, and mcpwp_find_tools("orphan pages") still reaches it.
 	);
 
 	/**
@@ -1880,8 +1893,10 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 *    puts it directly in the endpoint URL it connects with, so it can
 	 *    pick a profile per-connection without a site-wide setting.
 	 * 2. The site's `mcp_tool_profile` setting (`mcpwp_settings` option,
-	 *    WP Admin > mcpwp > Settings or PUT /settings).
-	 * 3. `full` — every profile this server spoke before #907, unchanged.
+	 *    WP Admin > mcpwp > Settings or PUT /settings), when one was saved.
+	 * 3. `core` (#1064) — a site that never chose gets the small list. Every
+	 *    other tool stays reachable through mcpwp_find_tools + mcpwp_call,
+	 *    and a site that explicitly saved `full` keeps it (step 2).
 	 *
 	 * An unrecognised value at any level falls through to the next one
 	 * rather than erroring — a typo'd query arg or a hand-edited option must
@@ -1907,7 +1922,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			return $site_profile;
 		}
 
-		return 'full';
+		return self::DEFAULT_TOOL_PROFILE;
 	}
 
 	/**
@@ -2521,6 +2536,15 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				$tools
 			);
 		}
+
+		// Weight budget (#1064): the one place tools/list is slimmed —
+		// descriptions capped, #912 examples and long property prose left
+		// to mcpwp_find_tools / error hints, duplicate annotations.title
+		// dropped. Runs after the protocol-version strip so a pre-2025-06-18
+		// client, which has no top-level title, keeps annotations.title.
+		// Emission only: validation, forgiving params and find_tools read
+		// the registries' full definitions from tools_cache.
+		$tools = Mcpwp_MCP_Tool_List_Diet::slim_tools( $tools );
 
 		return array(
 			'jsonrpc' => '2.0',
@@ -4322,7 +4346,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				$id,
 				-32602,
 				'Unknown tool: ' . $tool_name,
-				array( 'hint' => 'Tool "' . $tool_name . '" does not exist.' . $suggestion . ' Call tools/list to see all available tools.' )
+				array( 'hint' => 'Tool "' . $tool_name . '" does not exist.' . $suggestion . ' Search every tool with mcpwp_find_tools(query), or call tools/list.' )
 			);
 		}
 
@@ -4440,11 +4464,23 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		$this->last_param_fixes = $validation['fixes'];
 		if ( $validation['error'] ) {
 			$this->fire_tool_called( $tool_name, $start, 'invalid_params' );
+			// #1064: tools/list no longer carries #912 examples or long
+			// parameter prose, so the moment a call is refused is where the
+			// worked example goes — the one place it demonstrably helps.
+			$error_data = array( 'hint' => "Retry with the missing or corrected parameter. mcpwp_find_tools(query=\"$tool_name\") returns this tool's full parameter documentation." );
+			$example    = $this->get_tool_input_example( $tool_name );
+			if ( null !== $example ) {
+				$encoded_example     = wp_json_encode( $example, JSON_UNESCAPED_SLASHES );
+				$error_data['example'] = $example;
+				if ( false !== $encoded_example ) {
+					$error_data['hint'] .= ' Example arguments: ' . $encoded_example;
+				}
+			}
 			return $this->tool_error_result(
 				$id,
 				'invalid_arguments',
 				$validation['error'],
-				array( 'hint' => "Call tools/list to see \"$tool_name\"'s required and optional parameters, then retry with the missing or corrected parameter." )
+				$error_data
 			);
 		}
 
@@ -5687,6 +5723,23 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	}
 
 	/**
+	 * The first #912 input example a tool's registry definition carries, or
+	 * null. Read from the full definitions (tools_cache), never from the
+	 * slimmed tools/list copy, which no longer carries examples (#1064).
+	 *
+	 * @param string $tool_name Tool name.
+	 * @return array|null
+	 */
+	private function get_tool_input_example( $tool_name ) {
+		$schema = $this->get_tool_input_schema( $tool_name );
+		if ( ! is_array( $schema ) || empty( $schema['examples'] ) || ! is_array( $schema['examples'] ) ) {
+			return null;
+		}
+		$first = reset( $schema['examples'] );
+		return is_array( $first ) ? $first : null;
+	}
+
+	/**
 	 * The arguments a tools/call for $tool_name will actually dispatch with,
 	 * once #831's deprecated-alias table and #911's forgiving-params remap
 	 * both run — the identical transform handle_tools_call() applies before
@@ -5776,9 +5829,20 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		// --- Best practices ---
 		$lines[] = '## Getting Started';
 		$lines[] = '';
-		$lines[] = '1. **Always call `wp_onboard` first** — it returns a short briefing: site identity, builder mode, connected services, content summary and the top next actions. Pass `detail=full` for the complete inventory; use tools/list for the tool catalog.';
+		$lines[] = '1. **Always call `wp_onboard` first** — it returns a short briefing: site identity, builder mode, connected services, content summary and the top next actions. Pass `detail=full` for the complete inventory.';
 		$lines[] = '2. Call `wp_get_site_context` to read the site style guide and design rules (if configured).';
 		$lines[] = '3. Use `wp_detect_plugins` to confirm which integrations are available before using plugin-specific tools.';
+		$lines[] = '';
+
+		// #1064: `core` is the default profile, so most tools are not in
+		// tools/list. Say how to reach them, once, before anything else.
+		$lines[] = '## Finding Tools';
+		$lines[] = '';
+		if ( 'core' === $this->resolved_tool_profile ) {
+			$lines[] = 'Your tool list is the core set, not everything. Every other tool on this site (menus, templates, SEO audits, bulk edits, WooCommerce and more) is reachable: `mcpwp_find_tools(query)` searches them all and returns full parameters and examples, and `mcpwp_call(name, arguments)` runs the one you pick. If a tool named below is not in your list, find it and call it this way.';
+		} else {
+			$lines[] = 'Tool descriptions in tools/list are shortened. `mcpwp_find_tools(query)` returns any tool\'s full description, parameters and examples; `mcpwp_call(name, arguments)` runs it.';
+		}
 		$lines[] = '';
 
 		// --- WordPress primer ---

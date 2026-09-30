@@ -29,6 +29,9 @@ final class McpProtocolVersionTest extends TestCase {
 
 	protected function setUp(): void {
 		$GLOBALS['mcpwp_test_options']           = array();
+		// Protocol shaping is under test across the whole catalog, not the
+		// `core` default profile (#1064).
+		$GLOBALS['mcpwp_test_options']['mcpwp_settings'] = array( 'mcp_tool_profile' => 'full' );
 		$GLOBALS['mcpwp_test_transients']        = array();
 		$GLOBALS['mcpwp_test_current_user']      = 2;
 		$GLOBALS['mcpwp_test_filters']           = array();
@@ -376,7 +379,10 @@ final class McpProtocolVersionTest extends TestCase {
 			$tools = $this->tools_list( $version );
 			foreach ( $tools as $name => $tool ) {
 				$this->assertNotEmpty( $tool['title'], "$label: $name has a top-level title." );
-				$this->assertNotEmpty( $tool['annotations']['title'], "$label: $name keeps annotations.title." );
+				// #1064: the top-level title carries the display name here;
+				// the duplicate annotations.title is dropped from tools/list.
+				// A pre-2025-06-18 client still gets it (see below).
+				$this->assertArrayNotHasKey( 'title', $tool['annotations'], "$label: $name does not repeat its title in annotations." );
 			}
 			foreach ( $this->schema_tool_names() as $name ) {
 				$this->assertArrayHasKey( $name, $tools );

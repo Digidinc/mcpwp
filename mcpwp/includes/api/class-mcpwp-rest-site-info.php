@@ -61,6 +61,13 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 							'description' => __( 'Return only this tool\'s full entry (name, description, inputSchema, annotations, route) instead of the tool list. Takes precedence over full.', 'mcpwp' ),
 							'type'        => 'string',
 						),
+						'detail' => array(
+							'description'       => __( 'Response detail level. Default "summary" (under 2k tokens): plugin, site, auth, endpoints, tool counts by category and how to reach any tool. "full" adds the compact tool list, workflows, capabilities and the site context text.', 'mcpwp' ),
+							'type'              => 'string',
+							'enum'              => array( 'summary', 'full' ),
+							'default'           => 'summary',
+							'sanitize_callback' => 'sanitize_key',
+						),
 					),
 				),
 			)
@@ -322,17 +329,26 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 				'unknown_tool',
 				sprintf( __( 'Unknown tool "%s".', 'mcpwp' ), $tool_filter ),
 				404,
-				array( 'hint' => 'Call wp_introspect with no arguments for the compact tool list, or wp_introspect(full=true) for every tool.' )
+				array( 'hint' => 'Call mcpwp_find_tools(query) to search tool names, wp_introspect(detail="full") for the compact tool list, or wp_introspect(full=true) for every tool.' )
 			);
 		}
 
-		// Compact by default: the full output (every tool with its input
-		// schema and route map) exceeds 200KB / 5,000+ lines, which overflows
-		// AI-client contexts. Summarize tools to name + one-line description;
-		// schemas stay available via MCP tools/list (with Tool Search), a
+		$full = rest_sanitize_boolean( $request->get_param( 'full' ) );
+
+		// #1064: a summary by default — the compact list below was still
+		// ~14k tokens on a Pro site. The summary names what exists and how
+		// to reach it; detail=full is the compact list this endpoint
+		// returned before, and full=true the legacy everything-dump.
+		if ( ! $full && 'full' !== sanitize_key( (string) $request->get_param( 'detail' ) ) ) {
+			return $this->success_response( $this->introspection_summary( $data ) );
+		}
+
+		// Compact list (detail=full): the full output (every tool with its
+		// input schema and route map) exceeds 200KB / 5,000+ lines, which
+		// overflows AI-client contexts. Summarize tools to name + one-line
+		// description; schemas stay available via mcpwp_find_tools, a
 		// single-tool lookup (?tool=<name>, above), or ?full=true for the
 		// legacy payload.
-		$full = rest_sanitize_boolean( $request->get_param( 'full' ) );
 		if ( ! $full && isset( $data['tools'] ) && is_array( $data['tools'] ) ) {
 			$summary = array();
 			foreach ( $data['tools'] as $tool ) {
@@ -355,7 +371,8 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 			}
 			$data['tools_count'] = count( $summary );
 			$data['tools']       = $summary;
-			$data['tools_note']  = 'Compact tool list (name + summary). Full input schemas: MCP tools/list, or GET /introspect?full=true.';
+			$data['tools_note']  = 'Compact tool list (name + summary). Full input schemas: mcpwp_find_tools, wp_introspect(tool="wp_x"), or GET /introspect?full=true.';
+			$data['detail']      = 'full';
 		}
 
 		// Include site context if set. #1007 review round 2 owner decision:
@@ -374,6 +391,62 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 		}
 
 		return $this->success_response( $data );
+	}
+
+	/**
+	 * The default wp_introspect answer (#1064): everything an agent needs
+	 * to orient itself and nothing it can fetch on demand. Held under 2,000
+	 * tokens by ToolListBudgetTest.
+	 *
+	 * @param array $data Mcpwp_REST_MCP::get_introspection_data() output.
+	 * @return array
+	 */
+	private function introspection_summary( array $data ) {
+		$by_category = array();
+		$tools       = isset( $data['tools'] ) && is_array( $data['tools'] ) ? $data['tools'] : array();
+		foreach ( $tools as $tool ) {
+			$category                 = isset( $tool['annotations']['category'] ) && '' !== (string) $tool['annotations']['category'] ? (string) $tool['annotations']['category'] : 'other';
+			$by_category[ $category ] = isset( $by_category[ $category ] ) ? $by_category[ $category ] + 1 : 1;
+		}
+		arsort( $by_category );
+
+		$capabilities = isset( $data['capabilities'] ) && is_array( $data['capabilities'] ) ? $data['capabilities'] : array();
+		$active       = array();
+		foreach ( $capabilities as $key => $value ) {
+			if ( true === $value ) {
+				$active[] = (string) $key;
+			}
+		}
+
+		$license = isset( $data['license'] ) && is_array( $data['license'] ) ? $data['license'] : array();
+
+		$summary = array(
+			'plugin'                  => $data['plugin'] ?? array(),
+			'site'                    => $data['site'] ?? array(),
+			'license'                 => array(
+				'plan'   => $license['plan'] ?? null,
+				'is_pro' => $license['is_pro'] ?? null,
+			),
+			'active_capabilities'     => $active,
+			'auth'                    => $data['auth'] ?? array(),
+			'endpoints'               => $data['endpoints'] ?? array(),
+			'tools'                   => array(
+				'count'       => count( $tools ),
+				'by_category' => $by_category,
+				'find'        => 'mcpwp_find_tools(query) searches every tool and returns its full description, parameters and examples; mcpwp_call(name, arguments) runs it. wp_introspect(tool="wp_x") returns one tool\'s full entry.',
+			),
+			'recommended_guides'      => $data['recommended_guides'] ?? array(),
+			'operating_rules'         => $data['operating_rules'] ?? array(),
+			'site_context_configured' => '' !== (string) get_option( 'mcpwp_site_context', '' ),
+			'detail'                  => 'summary',
+			'more'                    => 'wp_introspect(detail="full") adds the tool list, workflows, capabilities and the site context text. wp_get_site_context returns the site brief.',
+		);
+
+		if ( ! empty( $capabilities['elementor'] ) && isset( $capabilities['elementor_layout_mode'] ) ) {
+			$summary['elementor_layout_mode'] = $capabilities['elementor_layout_mode'];
+		}
+
+		return $summary;
 	}
 
 	public function get_onboard( $request ) {
@@ -718,7 +791,7 @@ class Mcpwp_REST_Site_Info extends Mcpwp_REST_API {
 				'more'                    => array_column(
 					$this->filter_actions_by_caller_categories(
 						array(
-							array( 'key' => 'tools', 'tool' => '', 'text' => 'Call MCP tools/list (or GET /introspect) for the full tool catalog with input schemas.' ),
+							array( 'key' => 'tools', 'tool' => '', 'text' => 'Your tools/list may show only the core tools. mcpwp_find_tools(query) finds any other tool, with its parameters and examples; mcpwp_call(name, arguments) runs it.' ),
 							array( 'key' => 'guide', 'tool' => 'wp_get_guide', 'text' => 'Call wp_get_guide(topic="...") for a topic guide — e.g. onboarding, elementor, seo, workflows.' ),
 							array( 'key' => 'site_context', 'tool' => 'wp_get_site_context', 'text' => 'Call wp_get_site_context for the full site brief and design rules.' ),
 							array( 'key' => 'full_briefing', 'tool' => '', 'text' => 'Call wp_onboard(detail="full") — or GET /onboard?detail=full — for the complete legacy briefing: full tool catalog, quick reference, suggested first tools, recent content, design references, and site context text.' ),

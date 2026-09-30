@@ -682,15 +682,25 @@ Every tool also carries a top-level `title` and `readOnlyHint`/`destructiveHint`
 `mcpwp/includes/mcp/class-mcpwp-mcp-tool-annotations.php` and the generated audit table at
 `mcpwp/docs/mcp-tool-annotations.md`.
 
-`tools/list` answers under one of two profiles (#907): `full` (default, every tool, unchanged) or
-`core` (~25 most-used tools, from `Mcpwp_REST_MCP::CORE_TOOL_PROFILE_TOOLS`, plus the meta tools
+`tools/list` answers under one of two profiles (#907): `core` (the default since #1064) or `full`
+(every tool). `core` is ~25 most-used tools, from `Mcpwp_REST_MCP::CORE_TOOL_PROFILE_TOOLS`, plus the meta tools
 `mcpwp_find_tools` — keyword search the full catalog, filtered to what the caller can currently
 call — and `mcpwp_call` — dispatch any tool by name through the exact same gates as calling it
 directly). For a client with a small tool-count budget (Cursor's 40-tool cap; a fixed token
 budget). Precedence: `?profile=core|full` query arg on the `/mcp` URL > site setting
-(`mcpwp_settings.mcp_tool_profile`, WP Admin > mcpwp > Settings) > `full`; an unrecognised value at
-either level falls through rather than failing the handshake. See
-`mcpwp/docs/MCP_NATIVE_ENDPOINT.md` for the client-facing writeup.
+(`mcpwp_settings.mcp_tool_profile`, WP Admin > mcpwp > Settings, stored only when chosen) > `core`
+(`Mcpwp_REST_MCP::DEFAULT_TOOL_PROFILE`); an unrecognised value at either level falls through rather
+than failing the handshake. See `mcpwp/docs/MCP_NATIVE_ENDPOINT.md` for the client-facing writeup.
+
+Tool weight budget (#1064): `tools/list` is slimmed at emission in one place,
+`Mcpwp_MCP_Tool_List_Diet` (called from `handle_tools_list()`): descriptions ≤300 chars, property
+descriptions ≤120, no #912 `examples`, no duplicate `annotations.title` under 2025-06-18+, plus
+hand-written list texts for `core` and the heaviest tools. Registries keep the full definitions —
+`mcpwp_find_tools` returns them (with examples), `invalid_arguments` errors carry the first example,
+and validation/forgiving params read them. `ToolListBudgetTest` enforces the budgets (core ≤5,000
+tokens, any tool ≤450, default `wp_introspect` summary ≤2,000; Free/Pro `full` pinned at measured +5%
+until the #1047 consolidation). A new or longer tool that breaks a budget belongs in the diet's maps
+or in #1047, not in a raised budget.
 
 Protocol version is negotiated per the spec (#906): `initialize` echoes a supported
 `protocolVersion` (`2024-11-05`, `2025-03-26`, `2025-06-18`, `2025-11-25`) and answers the latest for

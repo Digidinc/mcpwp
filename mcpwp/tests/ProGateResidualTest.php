@@ -200,6 +200,9 @@ final class ProGateResidualTest extends TestCase
             array(),
             array('jsonrpc' => '2.0', 'id' => 1, 'method' => 'tools/list', 'params' => array())
         );
+        // Every tool, not the `core` default (#1064) — this asserts what the
+        // tier lets a client see at all.
+        $request->set_query_params(array('profile' => 'full'));
 
         return array_column($controller->handle_mcp($request)->get_data()['result']['tools'], 'name');
     }

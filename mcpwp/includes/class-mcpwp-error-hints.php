@@ -221,7 +221,7 @@ class Mcpwp_Error_Hints {
 				'guide' => '',
 			),
 			'missing_params'       => array(
-				'hint'  => sprintf( 'Required parameter \'%s\' is missing. Call wp_introspect to see full parameter documentation for each tool.', $param ),
+				'hint'  => sprintf( 'Required parameter \'%s\' is missing. Call mcpwp_find_tools with the tool name for its full parameter documentation and an example.', $param ),
 				'guide' => '',
 			),
 			'invalid_media'        => array(
@@ -289,7 +289,7 @@ class Mcpwp_Error_Hints {
 
 			// Validation errors.
 			'missing_required_param' => array(
-				'hint'  => sprintf( 'Required parameter \'%s\' is missing. Call wp_introspect for full parameter documentation.', $param ),
+				'hint'  => sprintf( 'Required parameter \'%s\' is missing. Call mcpwp_find_tools with the tool name for its full parameter documentation and an example.', $param ),
 				'guide' => '',
 			),
 			'invalid_pages'          => array(
@@ -315,7 +315,7 @@ class Mcpwp_Error_Hints {
 
 			// Generic validation.
 			'missing_param'          => array(
-				'hint'  => sprintf( 'Required parameter \'%s\' is missing. Call wp_introspect for full parameter documentation.', $param ),
+				'hint'  => sprintf( 'Required parameter \'%s\' is missing. Call mcpwp_find_tools with the tool name for its full parameter documentation and an example.', $param ),
 				'guide' => '',
 			),
 

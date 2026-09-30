@@ -6,7 +6,7 @@
  *
  * Covers:
  *   - profile resolution precedence: `?profile=` query arg > site setting
- *     (`mcpwp_settings.mcp_tool_profile`) > `full` default, with an
+ *     (`mcpwp_settings.mcp_tool_profile`) > `core` default (#1064), with an
  *     unrecognised value at any level falling through rather than erroring.
  *   - the `core` list is exactly the CORE_TOOL_PROFILE_TOOLS/META_TOOL_NAMES
  *     intersection with what `full` actually advertises — never more.
@@ -78,10 +78,35 @@ final class McpToolProfileTest extends TestCase {
 
 	// ── Profile resolution precedence ───────────────────────────────────────
 
-	public function test_default_profile_is_full(): void {
+	public function test_default_profile_is_core_when_the_site_never_chose(): void {
+		// #1064: a site whose mcp_tool_profile was never saved gets `core`.
 		$names = $this->list_tools();
-		// A tool nowhere near the core list must still be advertised.
-		$this->assertContains( 'wp_delete_all_drafts', $names, 'Default profile must be full.' );
+		$this->assertNotContains( 'wp_delete_all_drafts', $names, 'Default profile must be core.' );
+		$this->assertContains( 'wp_onboard', $names );
+		$this->assertContains( 'mcpwp_find_tools', $names );
+		$this->assertContains( 'mcpwp_call', $names );
+		$this->assertSame( $this->list_tools( 'core' ), $names );
+	}
+
+	public function test_a_saved_full_setting_stays_full(): void {
+		update_option( 'mcpwp_settings', array( 'mcp_tool_profile' => 'full' ) );
+		$this->assertContains( 'wp_delete_all_drafts', $this->list_tools(), 'An explicit saved "full" must keep every tool.' );
+	}
+
+	public function test_settings_other_than_the_profile_never_store_a_profile(): void {
+		require_once dirname( __DIR__ ) . '/includes/admin/class-mcpwp-settings.php';
+		$settings = new Mcpwp_Settings();
+
+		// sanitize_settings() runs on EVERY update_option() of the option. An
+		// unrelated save must not turn "never chose" into a stored choice.
+		$this->assertArrayNotHasKey( 'mcp_tool_profile', $settings->sanitize_settings( array( 'enable_logging' => '1' ) ) );
+
+		update_option( 'mcpwp_settings', array( 'mcp_tool_profile' => 'full' ) );
+		$this->assertSame( 'full', $settings->sanitize_settings( array( 'enable_logging' => '1' ) )['mcp_tool_profile'], 'A stored choice survives an unrelated save.' );
+		$this->assertSame( 'core', $settings->sanitize_settings( array( 'mcp_tool_profile' => 'core' ) )['mcp_tool_profile'], 'A chosen value is stored.' );
+		$this->assertSame( 'full', $settings->sanitize_settings( array( 'mcp_tool_profile' => 'bogus' ) )['mcp_tool_profile'], 'A bad value keeps the stored choice.' );
+		$this->assertSame( 'core', $settings->get_defaults()['mcp_tool_profile'] );
+		$this->assertSame( Mcpwp_REST_MCP::DEFAULT_TOOL_PROFILE, $settings->get_defaults()['mcp_tool_profile'], 'The settings UI default and the resolver default must agree.' );
 	}
 
 	public function test_site_setting_selects_core_profile(): void {
@@ -119,12 +144,12 @@ final class McpToolProfileTest extends TestCase {
 		$this->assertNotContains( 'wp_delete_all_drafts', $names, 'An unrecognised ?profile= must fall through to the site setting, not error.' );
 	}
 
-	public function test_unrecognised_site_setting_falls_back_to_full(): void {
+	public function test_unrecognised_site_setting_falls_back_to_the_default(): void {
 		update_option( 'mcpwp_settings', array( 'mcp_tool_profile' => 'nonsense' ) );
 
 		$names = $this->list_tools();
 
-		$this->assertContains( 'wp_delete_all_drafts', $names, 'An unrecognised stored value must fall back to full, never error the handshake.' );
+		$this->assertSame( $this->list_tools( 'core' ), $names, 'An unrecognised stored value must fall back to the default (core), never error the handshake.' );
 	}
 
 	// ── `core` list contents ────────────────────────────────────────────────
