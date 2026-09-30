@@ -1253,7 +1253,10 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 			$updated = Mcpwp_Elementor_Element_Keys::normalize_json( $updated );
 		}
 
-		Mcpwp_Elementor_Meta_Write::update( $page_id, '_elementor_data', $updated );
+		$written = Mcpwp_Elementor_Meta_Write::update( $page_id, '_elementor_data', $updated );
+		if ( is_wp_error( $written ) ) {
+			return $this->error_response_from_wp_error( $written );
+		}
 
 		// Clear the same per-document caches Document::save() clears on a
 		// normal write — CSS file and element-render cache (#891). This path
@@ -1523,7 +1526,13 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 				if ( class_exists( 'Mcpwp_Elementor_Element_Keys' ) ) {
 					$encoded = Mcpwp_Elementor_Element_Keys::normalize_json( $encoded );
 				}
-				Mcpwp_Elementor_Meta_Write::update( $post_id, '_elementor_data', $encoded );
+				$written = Mcpwp_Elementor_Meta_Write::update( $post_id, '_elementor_data', $encoded );
+				if ( is_wp_error( $written ) ) {
+					$entry['written'] = false;
+					$entry['error']   = $written->get_error_code();
+					$matched[]        = $entry;
+					continue;
+				}
 				// Same per-document cache clear find_replace() does (#891) —
 				// this loop is the same bypass-of-Document::save() write path,
 				// once per matched post.
@@ -1848,7 +1857,10 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 		// mode the existing stylesheet rides in this same string — sanitizing
 		// it would escape every `>` of CSS the caller never touched (#829).
 		// What makes that safe is the refusal above: no `</style` ever.
-		Mcpwp_Elementor_Meta_Write::update( $kit_id, '_elementor_page_settings', $settings, array( 'raw_paths' => array( 'custom_css' ) ) );
+		$written = Mcpwp_Elementor_Meta_Write::update( $kit_id, '_elementor_page_settings', $settings, array( 'raw_paths' => array( 'custom_css' ) ) );
+		if ( is_wp_error( $written ) ) {
+			return $this->error_response_from_wp_error( $written );
+		}
 
 		// Clear Elementor CSS cache so the new kit CSS is regenerated.
 		if ( method_exists( \Elementor\Plugin::$instance->files_manager, 'clear_cache' ) ) {
@@ -1982,7 +1994,10 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 		// sanitizer escaped `>` on every API write, so the repair below fired —
 		// and reported storage_repaired — on every write. custom_css is the one
 		// raw path; every other setting follows the caller's policy.
-		Mcpwp_Elementor_Meta_Write::update( $kit_id, '_elementor_page_settings', $settings, array( 'raw_paths' => array( 'custom_css' ) ) );
+		$written = Mcpwp_Elementor_Meta_Write::update( $kit_id, '_elementor_page_settings', $settings, array( 'raw_paths' => array( 'custom_css' ) ) );
+		if ( is_wp_error( $written ) ) {
+			return $written;
+		}
 
 		// Verify the exact bytes landed, and repair them if they did not.
 		//

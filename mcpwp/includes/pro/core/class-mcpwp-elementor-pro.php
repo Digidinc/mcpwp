@@ -1484,14 +1484,15 @@ class Mcpwp_Elementor_Pro {
 			return $new_id;
 		}
 
-		// Copy every OTHER post meta — _elementor_data was already written
-		// above, atomically with the insert.
+		// Copy source metadata, excluding Elementor's derived render caches.
+		// They were built from the source's raw data; the clone's data has
+		// passed through the acting principal's content policy and may differ.
 		$meta = get_post_meta( $source_id );
 		Mcpwp_Elementor_Meta_Write::as_writer(
 			(int) $new_id,
 			static function () use ( $meta, $new_id ) {
 				foreach ( $meta as $key => $values ) {
-					if ( '_elementor_data' === $key ) {
+					if ( in_array( $key, array( '_elementor_data', '_elementor_element_cache', '_elementor_css' ), true ) ) {
 						continue;
 					}
 					foreach ( $values as $value ) {

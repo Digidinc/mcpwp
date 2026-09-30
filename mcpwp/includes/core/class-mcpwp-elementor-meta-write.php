@@ -87,6 +87,9 @@ final class Mcpwp_Elementor_Meta_Write {
 	 */
 	private static $bypass = array();
 
+	/** Metadata-filter refusals by post/key, for update() to report explicitly. */
+	private static $refusals = array();
+
 	/**
 	 * A sanitize run this class skipped, awaiting the metadata filter.
 	 *
@@ -198,7 +201,7 @@ final class Mcpwp_Elementor_Meta_Write {
 	 * @param mixed  $value    Value to store, unslashed.
 	 * @param array  $options  raw_paths (page settings keys stored as sent) and
 	 *                         snapshot (a trusted rollback snapshot of this post).
-	 * @return int|bool What update_post_meta() returned.
+	 * @return int|bool|WP_Error The write result or an explicit refusal.
 	 */
 	public static function update( $post_id, $meta_key, $value, array $options = array() ) {
 		$refusal = '_elementor_data' === $meta_key ? self::tree_refusal( $value ) : self::settings_refusal( $value );
@@ -206,13 +209,24 @@ final class Mcpwp_Elementor_Meta_Write {
 			return $refusal;
 		}
 
-		return self::as_writer(
+		$slot   = self::slot( $post_id, $meta_key );
+		$before = self::$refusals[ $slot ] ?? 0;
+		$result = self::as_writer(
 			(int) $post_id,
 			static function () use ( $post_id, $meta_key, $value ) {
 				return update_post_meta( (int) $post_id, $meta_key, wp_slash( $value ) );
 			},
 			$options
 		);
+		if ( ( self::$refusals[ $slot ] ?? 0 ) > $before ) {
+			return new WP_Error(
+				'elementor_meta_write_refused',
+				__( 'An Elementor meta filter changed or refused the approved value, so nothing was stored.', 'mcpwp' ),
+				array( 'status' => 409 )
+			);
+		}
+
+		return $result;
 	}
 
 	/**
@@ -317,7 +331,8 @@ final class Mcpwp_Elementor_Meta_Write {
 			return $check;
 		}
 		if ( ! empty( $final['refused'] ) ) {
-			// Not a tree: nothing is stored (#829 review round 3).
+			// The policy or a later meta filter refused this write.
+			self::record_refusal( $object_id, $meta_key );
 			return false;
 		}
 
@@ -346,7 +361,8 @@ final class Mcpwp_Elementor_Meta_Write {
 			return $check;
 		}
 		if ( ! empty( $final['refused'] ) ) {
-			// Not a tree: nothing is stored (#829 review round 3).
+			// The policy or a later meta filter refused this write.
+			self::record_refusal( $object_id, $meta_key );
 			return false;
 		}
 
@@ -381,13 +397,19 @@ final class Mcpwp_Elementor_Meta_Write {
 		// Our own re-write of this post's key with the value the policy
 		// produced for it: store it. Any other post, key or value is not.
 		$slot = self::slot( $object_id, $meta_key );
-		if ( array_key_exists( $slot, self::$bypass ) && self::$bypass[ $slot ] === $meta_value ) {
-			return null;
+		if ( array_key_exists( $slot, self::$bypass ) ) {
+			// A later sanitizer changed our already-policed value. Retrying
+			// would recurse through that same filter without a bound, and the
+			// altered value is not the one our policy approved.
+			return self::$bypass[ $slot ] === $meta_value ? null : array( 'refused' => true );
 		}
 
 		// A sanitize run we skipped is always finished here, whichever post
 		// it turns out to be for — never left unsanitized.
-		$skipped = null !== $pending && $pending['key'] === $meta_key && $pending['value'] === $meta_value;
+		// A later plugin may change the value after our wrapped Elementor
+		// callback skipped it. The callback still needs to run for that other
+		// post, on the final value the metadata filter is about to store.
+		$skipped = null !== $pending && $pending['key'] === $meta_key;
 
 		if ( ! self::is_writer_for( $object_id ) ) {
 			if ( ! $skipped ) {
@@ -1084,5 +1106,11 @@ final class Mcpwp_Elementor_Meta_Write {
 	 */
 	private static function slot( $object_id, $meta_key ) {
 		return (int) $object_id . '|' . (string) $meta_key;
+	}
+
+	/** Record a refusal without conflating it with update_post_meta()'s unchanged false. */
+	private static function record_refusal( $object_id, $meta_key ) {
+		$slot = self::slot( $object_id, $meta_key );
+		self::$refusals[ $slot ] = ( self::$refusals[ $slot ] ?? 0 ) + 1;
 	}
 }

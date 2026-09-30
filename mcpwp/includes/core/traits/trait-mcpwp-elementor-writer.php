@@ -1380,6 +1380,17 @@ trait Mcpwp_Elementor_Writer_Trait {
 			if ( null !== $tree_refusal ) {
 				return $tree_refusal;
 			}
+			if ( ! empty( $data['page_settings'] ) && is_array( $data['page_settings'] ) ) {
+				$stored_settings  = get_post_meta( $page_id, '_elementor_page_settings', true );
+				$merged_settings  = array_merge(
+					is_array( $stored_settings ) ? $stored_settings : array(),
+					array_intersect_key( $data['page_settings'], array_flip( array( 'custom_css', 'background_background', 'background_color', 'padding', 'hide_title' ) ) )
+				);
+				$settings_refusal = Mcpwp_Elementor_Meta_Write::settings_refusal( $merged_settings );
+				if ( null !== $settings_refusal ) {
+					return $settings_refusal;
+				}
+			}
 		}
 
 		// --- Layout-mode mismatch guard (#612) ---
@@ -1658,7 +1669,10 @@ trait Mcpwp_Elementor_Writer_Trait {
 					if ( $attempt['ok'] && ! is_wp_error( $save_result ) ) {
 						// (#198) Always overwrite raw meta after Document::save() to
 						// prevent revision/cache divergence on subsequent reads.
-						Mcpwp_Elementor_Meta_Write::update( $page_id, '_elementor_data', $elementor_json );
+						$meta_write = Mcpwp_Elementor_Meta_Write::update( $page_id, '_elementor_data', $elementor_json );
+						if ( is_wp_error( $meta_write ) ) {
+							return $meta_write;
+						}
 
 						wp_cache_delete( $page_id, 'post_meta' );
 						clean_post_cache( $page_id );
@@ -1701,7 +1715,10 @@ trait Mcpwp_Elementor_Writer_Trait {
 		// Fallback: direct meta write if Document::save() is unavailable or failed.
 		if ( ! $document_saved ) {
 			global $wpdb;
-			Mcpwp_Elementor_Meta_Write::update( $page_id, '_elementor_data', $elementor_json );
+			$meta_write = Mcpwp_Elementor_Meta_Write::update( $page_id, '_elementor_data', $elementor_json );
+			if ( is_wp_error( $meta_write ) ) {
+				return $meta_write;
+			}
 			$save_debug['meta_written'] = true;
 			if ( $wpdb->last_error ) {
 				// (#612) update_post_meta() swallows $wpdb errors — a query that fails
@@ -1828,7 +1845,10 @@ trait Mcpwp_Elementor_Writer_Trait {
 						if ( ! $rebuild['ok'] ) {
 							// Elementor may have partially written before throwing. Restore
 							// our known-good bytes, exactly as the corruption guard below does.
-							Mcpwp_Elementor_Meta_Write::update( $page_id, '_elementor_data', $elementor_json );
+							$meta_write = Mcpwp_Elementor_Meta_Write::update( $page_id, '_elementor_data', $elementor_json );
+							if ( is_wp_error( $meta_write ) ) {
+								return $meta_write;
+							}
 							wp_cache_delete( $page_id, 'post_meta' );
 						}
 
@@ -1848,7 +1868,10 @@ trait Mcpwp_Elementor_Writer_Trait {
 						$post_rebuild_decoded = $post_rebuild ? json_decode( $post_rebuild, true ) : null;
 						$post_rebuild_total    = is_array( $post_rebuild_decoded ) ? $this->count_elements_recursive( $post_rebuild_decoded ) : 0;
 						if ( ! $this->elementor_values_match( $fresh_elements, $post_rebuild_decoded ) ) {
-							Mcpwp_Elementor_Meta_Write::update( $page_id, '_elementor_data', $elementor_json );
+							$meta_write = Mcpwp_Elementor_Meta_Write::update( $page_id, '_elementor_data', $elementor_json );
+							if ( is_wp_error( $meta_write ) ) {
+								return $meta_write;
+							}
 							wp_cache_delete( $page_id, 'post_meta' );
 							$save_debug['html_rebuild_corrupted_data'] = true;
 							$save_debug['html_rebuild_elements_before'] = $pre_rebuild_total;
@@ -1978,7 +2001,10 @@ trait Mcpwp_Elementor_Writer_Trait {
 					$page_settings[ $key ] = $value;
 				}
 			}
-			Mcpwp_Elementor_Meta_Write::update( $page_id, '_elementor_page_settings', $page_settings );
+			$settings_written = Mcpwp_Elementor_Meta_Write::update( $page_id, '_elementor_page_settings', $page_settings );
+			if ( is_wp_error( $settings_written ) ) {
+				return $settings_written;
+			}
 			$save_debug['page_settings_updated'] = array_keys( $data['page_settings'] );
 		}
 
@@ -2100,7 +2126,11 @@ trait Mcpwp_Elementor_Writer_Trait {
 			}
 		} else {
 			// Set empty Elementor data
-			Mcpwp_Elementor_Meta_Write::update( $page_id, '_elementor_data', '[]' );
+			$empty_write = Mcpwp_Elementor_Meta_Write::update( $page_id, '_elementor_data', '[]' );
+			if ( is_wp_error( $empty_write ) ) {
+				wp_delete_post( $page_id, true );
+				return $empty_write;
+			}
 		}
 
 		$response = array(
@@ -2593,7 +2623,10 @@ trait Mcpwp_Elementor_Writer_Trait {
 						// to guarantee the raw _elementor_data meta matches what we sent.
 						// Document::save() may create revisions or write to internal caches
 						// that diverge from the post meta on subsequent reads.
-						Mcpwp_Elementor_Meta_Write::update( $page_id, '_elementor_data', $elementor_json );
+						$meta_write = Mcpwp_Elementor_Meta_Write::update( $page_id, '_elementor_data', $elementor_json );
+						if ( is_wp_error( $meta_write ) ) {
+							return $meta_write;
+						}
 
 						wp_cache_delete( $page_id, 'post_meta' );
 						clean_post_cache( $page_id );
@@ -2634,7 +2667,10 @@ trait Mcpwp_Elementor_Writer_Trait {
 
 		// Fallback: direct meta write.
 		if ( ! $document_saved ) {
-			Mcpwp_Elementor_Meta_Write::update( $page_id, '_elementor_data', $elementor_json );
+			$meta_write = Mcpwp_Elementor_Meta_Write::update( $page_id, '_elementor_data', $elementor_json );
+			if ( is_wp_error( $meta_write ) ) {
+				return $meta_write;
+			}
 			$debug['save_method'] = 'meta_direct';
 
 			// (#187) Update post_content so front-end renderer doesn't short-circuit.
@@ -2707,7 +2743,10 @@ trait Mcpwp_Elementor_Writer_Trait {
 						);
 						$debug['html_cache_rebuilt'] = $rebuild['ok'];
 						if ( ! $rebuild['ok'] ) {
-							Mcpwp_Elementor_Meta_Write::update( $page_id, '_elementor_data', $elementor_json );
+							$meta_write = Mcpwp_Elementor_Meta_Write::update( $page_id, '_elementor_data', $elementor_json );
+							if ( is_wp_error( $meta_write ) ) {
+								return $meta_write;
+							}
 							wp_cache_delete( $page_id, 'post_meta' );
 						}
 
@@ -2724,7 +2763,10 @@ trait Mcpwp_Elementor_Writer_Trait {
 						$post_rebuild_decoded = $post_rebuild ? json_decode( $post_rebuild, true ) : null;
 						$post_rebuild_total    = is_array( $post_rebuild_decoded ) ? $this->count_elements_recursive( $post_rebuild_decoded ) : 0;
 						if ( ! $this->elementor_values_match( $fresh_elements, $post_rebuild_decoded ) ) {
-							Mcpwp_Elementor_Meta_Write::update( $page_id, '_elementor_data', $elementor_json );
+							$meta_write = Mcpwp_Elementor_Meta_Write::update( $page_id, '_elementor_data', $elementor_json );
+							if ( is_wp_error( $meta_write ) ) {
+								return $meta_write;
+							}
 							wp_cache_delete( $page_id, 'post_meta' );
 							$debug['html_rebuild_corrupted_data'] = true;
 							$debug['html_rebuild_elements_before'] = $pre_rebuild_total;

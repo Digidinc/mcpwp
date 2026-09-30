@@ -92,6 +92,15 @@ final class ElementorNoCollateralKsesTest extends TestCase {
 		$this->seed( self::PAGE_ID );
 	}
 
+	protected function tearDown(): void {
+		// This fixture registers closure-backed meta sanitizers. Clear every
+		// registration it owns before PHPUnit captures global state.
+		$GLOBALS['_mcpwp_test_registered_meta'] = array();
+		unset( $GLOBALS['mcpwp_test_filters']['sanitize_post_meta__elementor_data_for_page'] );
+		unset( $GLOBALS['mcpwp_test_filters']['sanitize_post_meta__elementor_page_settings_for_page'] );
+		parent::tearDown();
+	}
+
 	// ---------------------------------------------------------------------
 	// Elementor 4.3.2's sanitize callbacks, and a kses stand-in.
 	// ---------------------------------------------------------------------
@@ -679,10 +688,14 @@ final class ElementorNoCollateralKsesTest extends TestCase {
 	 * @preserveGlobalState disabled
 	 */
 	public function test_cloning_a_page_is_a_sanitized_copy_for_a_key(): void {
+		$GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_element_cache'] = array( 'sc82901' => self::SCRIPT );
+		$GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_css'] = array( 'data' => self::STYLE );
 		$result = ( new Mcpwp_Elementor_Pro() )->clone_page( self::PAGE_ID, array( 'title' => 'b829 clone' ) );
 
 		$this->assert_ok( $result, 'clone_page' );
 		$this->assert_html_widgets_sanitized( (int) $result['id'], 'wp_clone_elementor_page (the copy)' );
+		$this->assertSame( '', get_post_meta( (int) $result['id'], '_elementor_element_cache', true ), 'The clone must render from its sanitized data.' );
+		$this->assertSame( '', get_post_meta( (int) $result['id'], '_elementor_css', true ), 'The clone must regenerate derived CSS.' );
 		$this->assert_html_widgets_intact( self::PAGE_ID, 'wp_clone_elementor_page (the source)' );
 	}
 
@@ -771,7 +784,9 @@ final class ElementorNoCollateralKsesTest extends TestCase {
 		$moved   = array( $widgets[0], $widgets[3], $widgets[2], $widgets[1], $widgets[1] );
 		$tree[0]['elements'][0]['elements'] = $moved;
 
-		$this->set_elementor( self::PAGE_ID, $tree );
+		// Exercise the policy directly. The public writer repairs duplicate
+		// IDs first, which would make this pass even if vouch() allowed reuse.
+		Mcpwp_Elementor_Meta_Write::update( self::PAGE_ID, '_elementor_data', wp_json_encode( $tree ) );
 
 		$this->assertSame(
 			array( self::SVG, self::STYLE, self::SCRIPT, wp_kses_post( self::SCRIPT ) ),
@@ -813,6 +828,126 @@ final class ElementorNoCollateralKsesTest extends TestCase {
 			$this->html_widgets( self::TARGET_ID ),
 			'A same-key write to another post during the re-write gets Elementor\'s own sanitizer.'
 		);
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_another_plugins_changed_value_still_gets_elementors_sanitizer(): void {
+		// A later sanitize filter changes the value after Elementor's wrapper
+		// skipped it. The pending value no longer equals the metadata value.
+		add_filter(
+			'sanitize_post_meta__elementor_data_for_page',
+			static function ( $value ) {
+				return str_replace( 'window.__ph829=1;', 'window.__other829=1;', $value );
+			},
+			20
+		);
+		$json = wp_json_encode( self::tree() );
+		Mcpwp_Elementor_Meta_Write::as_writer(
+			self::PAGE_ID,
+			static function () use ( $json ) {
+				update_post_meta( ElementorNoCollateralKsesTest::target_id(), '_elementor_data', wp_slash( $json ) );
+			}
+		);
+		$this->assertStringNotContainsString( '<script', (string) self::find( $this->stored_tree( self::TARGET_ID ), 'sc82901' )['settings']['html'] );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_a_repeated_late_filter_change_stops_the_recursive_rewrite(): void {
+		$calls = 0;
+		add_filter(
+			'sanitize_post_meta__elementor_data_for_page',
+			static function ( $value ) use ( &$calls ) {
+				++$calls;
+				return $calls <= 3 ? $value . '<script>window.__late829=1</script>' : $value;
+			},
+			20
+		);
+		$json = wp_json_encode( self::tree() );
+		$written = Mcpwp_Elementor_Meta_Write::as_writer(
+			self::PAGE_ID,
+			static function () use ( $json ) {
+				return update_post_meta( ElementorNoCollateralKsesTest::target_id(), '_elementor_data', wp_slash( $json ) );
+			}
+		);
+		$this->assertFalse( $written, 'The changed bypass value must be refused.' );
+		$this->assertSame( 2, $calls, 'The sanitizer may run once more, then stop.' );
+		$this->assertSame( '', get_post_meta( self::TARGET_ID, '_elementor_data', true ) );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_an_altered_policy_rewrite_is_reported_as_a_refusal(): void {
+		$before = $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'];
+		$calls = 0;
+		add_filter(
+			'sanitize_post_meta__elementor_data_for_page',
+			static function ( $value ) use ( &$calls ) {
+				++$calls;
+				$tree = json_decode( $value, true );
+				$tree[0]['elements'][0]['elements'][0]['settings']['_late'] = '<script>window.__latewrite829=' . $calls . '</script>';
+				return wp_json_encode( $tree );
+			},
+			20
+		);
+		$tree = self::tree();
+		$tree[0]['elements'][0]['elements'][0]['settings']['title'] = 'new title';
+		$result = Mcpwp_Elementor_Meta_Write::update( self::PAGE_ID, '_elementor_data', wp_json_encode( $tree ) );
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'elementor_meta_write_refused', $result->get_error_code() );
+		$this->assertSame( $before, $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'] );
+		$this->assertSame( 2, $calls );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_set_elementor_reports_a_late_filter_refusal(): void {
+		$before = $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'];
+		$calls = 0;
+		add_filter(
+			'sanitize_post_meta__elementor_data_for_page',
+			static function ( $value ) use ( &$calls ) {
+				++$calls;
+				$tree = json_decode( $value, true );
+				$tree[0]['elements'][0]['elements'][0]['settings']['_late'] = '<script>window.__late829=' . $calls . '</script>';
+				return wp_json_encode( $tree );
+			},
+			20
+		);
+		$tree = self::tree();
+		$tree[0]['elements'][0]['elements'][0]['settings']['title'] = 'new title';
+		$result = ( new Mcpwp_Elementor_Basic() )->set_elementor_data( self::PAGE_ID, array( 'elementor_data' => wp_json_encode( $tree ) ) );
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'elementor_meta_write_refused', $result->get_error_code() );
+		$this->assertSame( $before, $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'] );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_empty_page_create_reports_a_meta_refusal_and_removes_the_page(): void {
+		add_filter(
+			'sanitize_post_meta__elementor_data_for_page',
+			static function ( $value ) {
+				return $value . '<script>window.__create829=1</script>';
+			},
+			20
+		);
+		$before_count = count( $GLOBALS['_mcpwp_test_posts'] );
+		$result = ( new Mcpwp_Elementor_Basic() )->create_elementor_page( array( 'title' => 'Refused create' ) );
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'elementor_meta_write_refused', $result->get_error_code() );
+		$this->assertCount( $before_count, $GLOBALS['_mcpwp_test_posts'] );
 	}
 
 
@@ -1247,43 +1382,37 @@ final class ElementorNoCollateralKsesTest extends TestCase {
 		$this->assertTrue( is_infinite( $GLOBALS['_mcpwp_test_meta'][ $snippet ]['_elementor_page_settings']['_x'] ), 'Nothing was rewritten.' );
 	}
 
-	public static function equality_cases(): array {
-		return array(
-			'1 vs 1.0'             => array( 1, 1.0, false ),
-			'"1" vs 1'             => array( '1', 1, false ),
-			'true vs 1'            => array( true, 1, false ),
-			'null vs ""'           => array( null, '', false ),
-			'false vs 0'           => array( false, 0, false ),
-			'-0.0 vs 0.0'          => array( -0.0, 0.0, false ),
-			'0.1 vs 0.1'           => array( 0.1, 0.1, true ),
-			'INF vs INF'           => array( INF, INF, false ),
-			'-INF vs -INF'         => array( -INF, -INF, false ),
-			'NAN vs NAN'           => array( NAN, NAN, false ),
-			'huge-int string'      => array( '12345678901234567890123', '12345678901234567890123', false ),
-			'in-range digits'      => array( '1234567890', '1234567890', true ),
-			'{} vs [] (as Elementor sees them)' => array( array(), array(), true ),
-			'map key order'        => array( array( 'a' => 1, 'b' => 2 ), array( 'b' => 2, 'a' => 1 ), true ),
-			'list order'           => array( array( 'x', 'y' ), array( 'y', 'x' ), false ),
-			'list vs map'          => array( array( 'x' ), array( 1 => 'x' ), false ),
-			'nested empties'       => array( array( 'a' => array() ), array( 'a' => '' ), false ),
-			'NFC vs NFD'           => array( "caf\u{00e9}", "cafe\u{0301}", false ),
-			'emoji equal'          => array( 'ok 🎉', 'ok 🎉', true ),
-			'object vs array'      => array( (object) array( 'a' => 1 ), array( 'a' => 1 ), false ),
-			'same stdClass'        => array( (object) array( 'a' => 1 ), (object) array( 'a' => 1 ), true ),
-			'object numeric prop'  => array( (object) array( '0' => 'x' ), array( 'x' ), false ),
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_set_elementor_reports_page_settings_refusal(): void {
+		$result = ( new Mcpwp_Elementor_Basic() )->set_elementor_data(
+			self::PAGE_ID,
+			array( 'elementor_data' => wp_json_encode( self::tree() ), 'page_settings' => array( 'hide_title' => INF ) )
 		);
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'elementor_settings_non_finite_number', $result->get_error_code() );
 	}
 
 	/**
-	 * @dataProvider equality_cases
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
 	 */
-	public function test_equality_is_strict_and_fails_closed( $a, $b, bool $equal ): void {
-		// Round 4, design question: anything not provably the same value
-		// Elementor would see is different. Pure function, no WordPress state.
-		require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-elementor-meta-write.php';
-		$this->assertSame( $equal, Mcpwp_Elementor_Meta_Write::deep_equal( $a, $b ) );
-		$this->assertSame( $equal, Mcpwp_Elementor_Meta_Write::deep_equal( $b, $a ), 'symmetric' );
+	public function test_set_elementor_refuses_inherited_non_finite_settings_before_data_write(): void {
+		$before = $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'];
+		$GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_page_settings'] = array( '_x' => INF );
+		$tree = self::tree();
+		$tree[0]['elements'][0]['elements'][0]['settings']['title'] = 'new title';
+		$result = ( new Mcpwp_Elementor_Basic() )->set_elementor_data(
+			self::PAGE_ID,
+			array( 'elementor_data' => wp_json_encode( $tree ), 'page_settings' => array( 'hide_title' => 'yes' ) )
+		);
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'elementor_settings_non_finite_number', $result->get_error_code() );
+		$this->assertSame( $before, $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'] );
 	}
+
 
 	public static function odd_values(): array {
 		return array(
@@ -1460,6 +1589,19 @@ final class ElementorNoCollateralKsesTest extends TestCase {
 
 	private function kit_css(): string {
 		return (string) ( $GLOBALS['_mcpwp_test_meta'][ self::KIT_ID ]['_elementor_page_settings']['custom_css'] ?? '' );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_kit_css_route_reports_a_meta_refusal(): void {
+		$controller = $this->install_kit();
+		$GLOBALS['_mcpwp_test_meta'][ self::KIT_ID ]['_elementor_page_settings'] = array( 'custom_css' => '.old{}', '_x' => INF );
+		$result = $this->data( $controller->upsert_kit_css_block( $this->rest_request( 'POST', '/mcpwp/v1/elementor/kit-css/blocks', array( 'name' => 'r5', 'css' => '.new{}' ) ) ) );
+		$code = $result instanceof WP_Error ? $result->get_error_code() : ( $result['code'] ?? '' );
+		$this->assertSame( 'elementor_settings_non_finite_number', $code );
+		$this->assertSame( '.old{}', $this->kit_css() );
 	}
 
 	private function assert_breakout_refused( $response, string $label ): void {

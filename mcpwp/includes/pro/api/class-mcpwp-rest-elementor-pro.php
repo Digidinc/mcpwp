@@ -3165,7 +3165,10 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		// custom_css (admin-scoped, already cleaned by sanitize_kit_custom_css(),
 		// which removes any `</style`) is stored as that cleaning left it, not
 		// HTML-escaped; every other string follows the caller's policy (#829).
-		Mcpwp_Elementor_Meta_Write::update( $kit_id, '_elementor_page_settings', $updated, array( 'raw_paths' => array( 'custom_css' ) ) );
+		$written = Mcpwp_Elementor_Meta_Write::update( $kit_id, '_elementor_page_settings', $updated, array( 'raw_paths' => array( 'custom_css' ) ) );
+		if ( is_wp_error( $written ) ) {
+			return $this->error_response_from_wp_error( $written );
+		}
 
 		// Clear Elementor caches
 		if ( method_exists( \Elementor\Plugin::$instance->files_manager, 'clear_cache' ) ) {
