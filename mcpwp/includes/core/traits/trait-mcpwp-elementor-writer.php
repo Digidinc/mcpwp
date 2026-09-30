@@ -333,6 +333,14 @@ trait Mcpwp_Elementor_Writer_Trait {
 			return $allcaps;
 		}
 
+		// Not while a meta sanitizer decides what this write may store (#829):
+		// Document::save() writes _elementor_data inside this grant, and that
+		// write must be judged on the caller's own capability, or the raw bytes
+		// it stored would read as "already on the post" to the write after it.
+		if ( class_exists( 'Mcpwp_Elementor_Meta_Write', false ) && Mcpwp_Elementor_Meta_Write::grants_suspended() ) {
+			return $allcaps;
+		}
+
 		$user_id = ( $user instanceof \WP_User ) ? (int) $user->ID : 0;
 
 		if ( $user_id < 1 || $user_id !== self::$unfiltered_html_user ) {
@@ -457,6 +465,11 @@ trait Mcpwp_Elementor_Writer_Trait {
 	 */
 	public static function map_unfiltered_html_cap( $caps, $cap = '', $user_id = 0 ) {
 		if ( self::$unfiltered_html_depth < 1 || 'unfiltered_html' !== $cap ) {
+			return $caps;
+		}
+
+		// See grant_unfiltered_html_cap() (#829).
+		if ( class_exists( 'Mcpwp_Elementor_Meta_Write', false ) && Mcpwp_Elementor_Meta_Write::grants_suspended() ) {
 			return $caps;
 		}
 

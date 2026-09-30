@@ -857,7 +857,8 @@ class Mcpwp_Content_Guardrails {
 			$elementor_text = self::extract_text_from_elementor( $elementor_raw );
 			$edit_mode      = (string) get_post_meta( $post_id, '_elementor_edit_mode', true );
 		} else {
-			$elementor_raw  = isset( $postarr['meta_input']['_elementor_data'] ) ? $postarr['meta_input']['_elementor_data'] : null;
+			// meta_input is slashed, as update_post_meta() expects it (#829).
+			$elementor_raw  = isset( $postarr['meta_input']['_elementor_data'] ) ? wp_unslash( $postarr['meta_input']['_elementor_data'] ) : null;
 			$elementor_text = null !== $elementor_raw ? self::extract_text_from_elementor( $elementor_raw ) : '';
 			$edit_mode      = isset( $postarr['meta_input']['_elementor_edit_mode'] )
 				? (string) $postarr['meta_input']['_elementor_edit_mode']

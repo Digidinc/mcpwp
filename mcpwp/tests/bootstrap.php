@@ -4103,6 +4103,19 @@ function get_post_meta($post_id, $key = '', $single = false)
 
 function update_post_meta($post_id, $key, $value)
 {
+    return mcpwp_test_write_post_meta((int) $post_id, $key, $value, 'update');
+}
+
+/**
+ * The meta write shared by update_post_meta() / add_post_meta() and the
+ * update_metadata() / add_metadata() doubles, in core's order (#829):
+ * unslash, sanitize_meta(), the update_/add_post_metadata short-circuit
+ * filter, then the row. A first update of a key is delegated to the add path,
+ * as core's update_metadata() delegates to add_metadata() — which sanitizes
+ * the passed value again and runs add_post_metadata.
+ */
+function mcpwp_test_write_post_meta($post_id, $key, $value, $mode)
+{
     // A seeded failure, so #873 can prove its `finally` releases the scoped
     // unfiltered_html grant when the write throws rather than returns. Off
     // unless a test asks for it.
@@ -4110,24 +4123,32 @@ function update_post_meta($post_id, $key, $value)
         throw new \RuntimeException('seeded meta failure');
     }
 
-    // Mirror WP core, which unslashes on write (update_metadata() calls
-    // wp_unslash on the value) so get_post_meta() returns clean data.
+    $post_id_int = (int) $post_id;
+    $passed      = $value;
+    $existed     = isset($GLOBALS['_mcpwp_test_meta'][ $post_id_int ][ $key ]);
+
+    // Mirror WP core, which unslashes BEFORE sanitize_meta() (update_metadata()
+    // and add_metadata() both call wp_unslash on the value first), so a
+    // sanitizer sees the value the caller meant, not its slashed transport
+    // form, and get_post_meta() returns clean data.
     //
     // Storing the slashed value verbatim meant every _elementor_data write in
     // tests read back as un-decodable JSON, so set_elementor_data()'s
     // readback verification always failed with meta_write_truncated. Nothing
     // caught it because the one test file covering that path was itself never
     // registered in phpunit.xml.
-    // A host that HTML-escapes meta on write can be simulated for tests that
-    // need it (see KitCssChildCombinatorTest). Off by default so no existing
-    // test changes behaviour.
+    $value = wp_unslash($value);
+
     // Core's update_metadata() runs sanitize_meta(), which applies a
     // registered key's sanitize_callback. Without this the harness could not
     // tell whether a callback ran.
     if (function_exists('sanitize_meta')) {
-        $post = get_post((int) $post_id);
+        $post = get_post($post_id_int);
         $value = sanitize_meta($key, $value, 'post', ($post && isset($post->post_type)) ? $post->post_type : '');
     }
+    // A host that HTML-escapes meta on write can be simulated for tests that
+    // need it (see KitCssChildCombinatorTest). Off by default so no existing
+    // test changes behaviour.
     if (! empty($GLOBALS['mcpwp_test_meta_escapes_html'])) {
         $value = mcpwp_test_escape_meta_deep($value);
     }
@@ -4138,6 +4159,22 @@ function update_post_meta($post_id, $key, $value)
     if (! empty($GLOBALS['mcpwp_test_meta_write_fails'])
         && in_array($key, (array) $GLOBALS['mcpwp_test_meta_write_fails'], true)) {
         return false;
+    }
+
+    // Core's short-circuit filters, after sanitize_meta(), with the post ID.
+    if ('update' === $mode) {
+        $check = apply_filters('update_post_metadata', null, $post_id_int, $key, $value, '');
+        if (null !== $check) {
+            return (bool) $check;
+        }
+        if (! $existed) {
+            return false !== mcpwp_test_write_post_meta($post_id_int, $key, $passed, 'add');
+        }
+    } else {
+        $check = apply_filters('add_post_metadata', null, $post_id_int, $key, $value, false);
+        if (null !== $check) {
+            return $check;
+        }
     }
 
     // Mirror WP core's update_metadata(): a key that has no existing row
@@ -4151,17 +4188,36 @@ function update_post_meta($post_id, $key, $value)
     // Mcpwp_Graph_Builder::on_post_meta_changed() (#943 S1 review, W3)
     // listens for, so both consumers are exercised by firing all four real
     // core actions rather than a synthetic subset of either one's needs.
-    $post_id_int = (int) $post_id;
-    $existed     = isset($GLOBALS['_mcpwp_test_meta'][ $post_id_int ][ $key ]);
-    $meta_id     = 1;
+    $meta_id = 1;
 
     do_action($existed ? 'update_post_meta' : 'add_post_meta', $meta_id, $post_id_int, $key, $value);
 
-    $GLOBALS['_mcpwp_test_meta'][ $post_id_int ][ $key ] = wp_unslash($value);
+    $GLOBALS['_mcpwp_test_meta'][ $post_id_int ][ $key ] = $value;
 
     do_action($existed ? 'updated_post_meta' : 'added_post_meta', $meta_id, $post_id_int, $key, $value);
 
-    return true;
+    return 'add' === $mode ? $meta_id : true;
+}
+
+if (! function_exists('add_post_meta')) {
+    function add_post_meta($post_id, $key, $value, $unique = false)
+    {
+        return mcpwp_test_write_post_meta((int) $post_id, $key, $value, 'add');
+    }
+}
+
+if (! function_exists('update_metadata')) {
+    function update_metadata($meta_type, $object_id, $meta_key, $meta_value, $prev_value = '')
+    {
+        return 'post' === $meta_type ? mcpwp_test_write_post_meta((int) $object_id, $meta_key, $meta_value, 'update') : false;
+    }
+}
+
+if (! function_exists('add_metadata')) {
+    function add_metadata($meta_type, $object_id, $meta_key, $meta_value, $unique = false)
+    {
+        return 'post' === $meta_type ? mcpwp_test_write_post_meta((int) $object_id, $meta_key, $meta_value, 'add') : false;
+    }
 }
 
 function mcpwp_test_escape_meta_deep($value)
@@ -4588,6 +4644,7 @@ require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-element-ke
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-element-ids.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-template-refs.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-stored-tree.php';
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-meta-write.php';
 // Site graph (#943 S1): class-mcpwp-rest-api.php's content-graph extraction
 // helpers below delegate to these — loaded before that require so every test
 // exercising them (build_content_graph_data() and friends) has a real target.
@@ -4849,11 +4906,48 @@ if (! function_exists('is_protected_meta')) {
 if (! function_exists('sanitize_meta')) {
     function sanitize_meta($meta_key, $meta_value, $object_type, $object_subtype = '')
     {
-        $reg = $GLOBALS['_mcpwp_test_registered_meta'][ $meta_key ] ?? null;
-        if ($reg && ! empty($reg['sanitize_callback']) && is_callable($reg['sanitize_callback'])) {
-            return call_user_func($reg['sanitize_callback'], $meta_value);
+        // Core's register_meta() hooks a sanitize_callback onto
+        // "sanitize_{type}_meta_{key}_for_{subtype}" at priority 10 with four
+        // arguments, and sanitize_meta() applies that filter (or the
+        // subtype-less one). Going through the filter lets anything else
+        // hooked there be observed around the callback (#829). A plain
+        // function-name callback is still called with the value alone, as
+        // the doubles registered by existing tests expect.
+        $reg      = $GLOBALS['_mcpwp_test_registered_meta'][ $meta_key ] ?? null;
+        $callback = ($reg && ! empty($reg['sanitize_callback']) && is_callable($reg['sanitize_callback'])) ? $reg['sanitize_callback'] : null;
+        $generic  = "sanitize_{$object_type}_meta_{$meta_key}";
+        $subtyped = '' !== (string) $object_subtype ? "{$generic}_for_{$object_subtype}" : '';
+        $hook     = '' !== $subtyped ? $subtyped : $generic;
+        $args     = ($callback instanceof \Closure) ? 4 : 1;
+
+        if (null !== $callback) {
+            add_filter($hook, $callback, 10, $args);
         }
-        return $meta_value;
+
+        try {
+            if ('' !== $subtyped && has_filter($subtyped)) {
+                return apply_filters($subtyped, $meta_value, $meta_key, $object_type, $object_subtype);
+            }
+            return apply_filters($generic, $meta_value, $meta_key, $object_type, $object_subtype);
+        } finally {
+            if (null !== $callback) {
+                remove_filter($hook, $callback, 10);
+            }
+        }
+    }
+}
+if (! function_exists('register_meta')) {
+    // Core applies `register_meta_args` before it stores the registration
+    // and hooks the sanitize_callback; Mcpwp_Elementor_Meta_Write wraps
+    // Elementor's callback there (#829).
+    function register_meta($object_type, $meta_key, $args, $deprecated = null)
+    {
+        $args = apply_filters('register_meta_args', $args, array(), $object_type, $meta_key);
+        $GLOBALS['_mcpwp_test_registered_meta'][ $meta_key ] = array(
+            'object_subtype'    => $args['object_subtype'] ?? '',
+            'sanitize_callback' => $args['sanitize_callback'] ?? null,
+        );
+        return true;
     }
 }
 if (! function_exists('set_post_thumbnail')) {

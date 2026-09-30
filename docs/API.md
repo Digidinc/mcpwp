@@ -1060,6 +1060,16 @@ GET /elementor/{id}/summary
 
 Key display settings are extracted per widget type (e.g., `title` for headings, `url` for images, `text` for buttons). Full settings are not included — use `GET /elementor/{id}` when you need the complete data.
 
+#### What an Elementor write stores (#829)
+
+Elementor 4.2+ registers `_elementor_data` and `_elementor_page_settings` with a sanitizer that, during a REST request by a user without `unfiltered_html` (every `mcpwp_api_agent` key), runs `wp_kses_post()` over every string in the value. Up to 3.14.10 that re-sanitized the whole document on every MCPWP write: editing one heading removed the `<style>`, `<script>` and `<svg>` of every html widget on the page.
+
+Every MCPWP write of those keys now goes through one chokepoint (`Mcpwp_Elementor_Meta_Write`), string by string:
+
+- **Anything the caller did not change** — and anything copied from content already on the site: the page being cloned, the template or part being applied, the section saved as a template, the snapshot a rollback restores — is stored byte-for-byte as it was.
+- **Anything the caller introduces** gets exactly what Elementor's sanitizer gives it for the caller's own capability, as before: for an API key, what `wp_kses_post()` keeps (a new `<script>` in an html widget is removed); for a user holding `unfiltered_html`, the bytes as sent. MCPWP's scoped `unfiltered_html` grant around `Document::save()` (#772) does not reach that decision.
+- The Kit's `custom_css` is stored as sent (`.a>.b` stays `.a>.b`) by `wp_upsert_kit_css_block`, `wp_set_kit_css` and the Pro kit settings. `storage_repaired: true` appears only when the first write still stored different bytes (another plugin's sanitizer, a host filter) and the row was rewritten directly; `storage_altered_chars` then lists the characters it had stored as HTML entities (for example `[">"]`).
+
 ---
 
 ### Elementor Pro

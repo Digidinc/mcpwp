@@ -134,7 +134,8 @@ class Mcpwp_Page_Builder {
 			'post_title'  => sanitize_text_field( $title ),
 			'post_status' => $effective_status,
 			'post_type'   => 'page',
-			'meta_input'  => array( '_elementor_data' => $elements ),
+			// Slashed, as update_post_meta() (which meta_input calls) expects (#829).
+			'meta_input'  => array( '_elementor_data' => wp_slash( $elements ) ),
 		) );
 
 		if ( is_wp_error( $page_id ) ) {

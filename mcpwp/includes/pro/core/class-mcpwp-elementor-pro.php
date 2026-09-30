@@ -1149,21 +1149,34 @@ class Mcpwp_Elementor_Pro {
 		$basic   = $this->get_basic_handler();
 		$results = array();
 
-		foreach ( array_values( $elements ) as $index => $element ) {
-			$current_position = ( 0 === $index ) ? $position : 'end';
-			$result           = $basic->add_section(
-				$page_id,
-				array(
-					'element'  => $element,
-					'position' => $current_position,
-				)
-			);
+		// The part's sections are already on this site: inserted as the part
+		// holds them, not re-sanitized as new content from this caller (#829).
+		$failed = Mcpwp_Elementor_Meta_Write::with_sources(
+			array( (int) $part_id ),
+			static function () use ( $basic, $elements, $page_id, $position, &$results ) {
+				foreach ( array_values( $elements ) as $index => $element ) {
+					$current_position = ( 0 === $index ) ? $position : 'end';
+					$result           = $basic->add_section(
+						$page_id,
+						array(
+							'element'  => $element,
+							'position' => $current_position,
+						)
+					);
 
-			if ( is_wp_error( $result ) ) {
-				return $result;
+					if ( is_wp_error( $result ) ) {
+						return $result;
+					}
+
+					$results[] = $result;
+				}
+
+				return null;
 			}
+		);
 
-			$results[] = $result;
+		if ( is_wp_error( $failed ) ) {
+			return $failed;
 		}
 
 		return array(
@@ -1450,14 +1463,24 @@ class Mcpwp_Elementor_Pro {
 			'post_author'  => get_current_user_id(),
 		);
 		if ( ! empty( $elementor_data ) ) {
-			$new_post['meta_input'] = array( '_elementor_data' => $elementor_data );
+			// Slashed, as update_post_meta() (which meta_input calls) expects:
+			// unslashed, every `\"` in the JSON lost its backslash and the
+			// clone's data could not be decoded (#829).
+			$new_post['meta_input'] = array( '_elementor_data' => wp_slash( $elementor_data ) );
 		}
 
 		if ( ! empty( $args['parent'] ) ) {
 			$new_post['post_parent'] = absint( $args['parent'] );
 		}
 
-		$new_id = wp_insert_post( $new_post );
+		// The copy is what the source already holds, not new content from this
+		// caller: stored as it was, never re-sanitized on the way over (#829).
+		$new_id = Mcpwp_Elementor_Meta_Write::with_sources(
+			array( (int) $source_id ),
+			static function () use ( $new_post ) {
+				return wp_insert_post( $new_post );
+			}
+		);
 
 		if ( is_wp_error( $new_id ) ) {
 			return $new_id;
@@ -1466,14 +1489,19 @@ class Mcpwp_Elementor_Pro {
 		// Copy every OTHER post meta — _elementor_data was already written
 		// above, atomically with the insert.
 		$meta = get_post_meta( $source_id );
-		foreach ( $meta as $key => $values ) {
-			if ( '_elementor_data' === $key ) {
-				continue;
+		Mcpwp_Elementor_Meta_Write::with_sources(
+			array( (int) $source_id ),
+			static function () use ( $meta, $new_id ) {
+				foreach ( $meta as $key => $values ) {
+					if ( '_elementor_data' === $key ) {
+						continue;
+					}
+					foreach ( $values as $value ) {
+						add_post_meta( $new_id, $key, maybe_unserialize( $value ) );
+					}
+				}
 			}
-			foreach ( $values as $value ) {
-				add_post_meta( $new_id, $key, maybe_unserialize( $value ) );
-			}
-		}
+		);
 
 		// The guardrails filter above may have downgraded post_status —
 		// read back what actually landed, not what was requested.
@@ -1557,7 +1585,8 @@ class Mcpwp_Elementor_Pro {
 			'post_author' => get_current_user_id(),
 		);
 		if ( null !== $landing_elementor_data ) {
-			$page_data['meta_input'] = array( '_elementor_data' => $landing_elementor_data );
+			// Slashed, as update_post_meta() (which meta_input calls) expects (#829).
+			$page_data['meta_input'] = array( '_elementor_data' => wp_slash( $landing_elementor_data ) );
 		}
 
 		$page_id = wp_insert_post( $page_data );
@@ -1728,8 +1757,18 @@ class Mcpwp_Elementor_Pro {
 			update_post_meta( $page_id, '_elementor_pro_version', ELEMENTOR_PRO_VERSION );
 		}
 
+		// The template's content is already on this site: it is stored on the
+		// page as the template holds it, not re-sanitized as if this caller had
+		// just written it (#829). Its layout and its document settings both.
+		$template_source = array( (int) $template_id );
+
 		// Save via Document::save() for proper frontend rendering.
-		$save_result = $this->save_elementor_data( $page_id, $template_data );
+		$save_result = Mcpwp_Elementor_Meta_Write::with_sources(
+			$template_source,
+			function () use ( $page_id, $template_data ) {
+				return $this->save_elementor_data( $page_id, $template_data );
+			}
+		);
 		if ( is_wp_error( $save_result ) ) {
 			return $save_result;
 		}
@@ -1741,10 +1780,15 @@ class Mcpwp_Elementor_Pro {
 		// `preserve` is the default on purpose: applying a template should not
 		// silently restyle a page's canvas, title visibility or page CSS. A
 		// caller who does want the whole document says so.
-		$settings_report = Mcpwp_Elementor_Page_Settings::apply(
-			$page_id,
-			Mcpwp_Elementor_Page_Settings::read( $template_id ),
-			$page_settings_mode
+		$settings_report = Mcpwp_Elementor_Meta_Write::with_sources(
+			$template_source,
+			static function () use ( $page_id, $template_id, $page_settings_mode ) {
+				return Mcpwp_Elementor_Page_Settings::apply(
+					$page_id,
+					Mcpwp_Elementor_Page_Settings::read( $template_id ),
+					$page_settings_mode
+				);
+			}
 		);
 
 		if ( is_array( $save_result ) ) {
@@ -1870,9 +1914,15 @@ class Mcpwp_Elementor_Pro {
 			update_post_meta( $template_id, '_elementor_version', ELEMENTOR_VERSION );
 		}
 
-		// Save the element data (wrapped in array).
+		// Save the element data (wrapped in array). It is the page's own
+		// content, stored in the template as the page holds it (#829).
 		$template_data = array( $found );
-		$save_result = $this->save_elementor_data( $template_id, $template_data );
+		$save_result   = Mcpwp_Elementor_Meta_Write::with_sources(
+			array( (int) $page_id ),
+			function () use ( $template_id, $template_data ) {
+				return $this->save_elementor_data( $template_id, $template_data );
+			}
+		);
 		if ( is_wp_error( $save_result ) ) {
 			return $save_result;
 		}

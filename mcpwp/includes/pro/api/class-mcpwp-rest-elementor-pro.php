@@ -3100,7 +3100,15 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			$warnings[] = __( 'custom_css was not applied: writing kit CSS requires an admin-scoped API key. Other settings were saved.', 'mcpwp' );
 		}
 
-		update_post_meta( $kit_id, '_elementor_page_settings', $updated );
+		// custom_css (admin-scoped, already cleaned by sanitize_kit_custom_css())
+		// is stored as that cleaning left it, not HTML-escaped by Elementor's
+		// REST meta sanitizer; every other string follows the caller's policy (#829).
+		Mcpwp_Elementor_Meta_Write::with_sources(
+			isset( $updated['custom_css'] ) && is_string( $updated['custom_css'] ) ? array( $updated['custom_css'] ) : array(),
+			static function () use ( $kit_id, $updated ) {
+				update_post_meta( $kit_id, '_elementor_page_settings', $updated );
+			}
+		);
 
 		// Clear Elementor caches
 		if ( method_exists( \Elementor\Plugin::$instance->files_manager, 'clear_cache' ) ) {
