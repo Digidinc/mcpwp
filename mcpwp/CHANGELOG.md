@@ -5,6 +5,15 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.14.9](https://github.com/Digidinc/mcpwp/compare/v3.14.8...v3.14.9) (2026-09-30)
+
+
+### Bug Fixes
+
+* **approvals:** move the approvals store to its own table ([#1052](https://github.com/Digidinc/mcpwp/issues/1052)) ([31761ad](https://github.com/Digidinc/mcpwp/commit/31761ad46efaeba37da0bca25ba60cbebe5ca920))
+* **release:** build the Freemius upload with build-freemius.sh (one packager) ([#1054](https://github.com/Digidinc/mcpwp/issues/1054)) ([ec066d0](https://github.com/Digidinc/mcpwp/commit/ec066d0a9f0fb529ba87371048907e6f8870096b))
+* **release:** publish-freemius takes release scripts from main, plugin code from the tag ([#1055](https://github.com/Digidinc/mcpwp/issues/1055)) ([9bd98ff](https://github.com/Digidinc/mcpwp/commit/9bd98ff6e77213c957a1ac74f37f8bca58918098))
+
 ## [3.14.8](https://github.com/Mumega-com/mcpwp/compare/v3.14.7...v3.14.8) (2026-09-28)
 
 
