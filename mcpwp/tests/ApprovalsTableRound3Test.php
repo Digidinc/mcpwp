@@ -237,7 +237,12 @@ final class ApprovalsTableRound3Test extends TestCase {
 			$by_full     = array();
 			$by_get      = array();
 			foreach ( $legacy as $id => $original ) {
-				if ( Mcpwp_Approvals::is_approval_visible_to( $original, $allowed ) ) {
+				// The decision on the original record after init: its confident
+				// derivation, or fail-closed (round 4-5: nothing is derived live
+				// at read time).
+				$derived = Mcpwp_Approvals::derive_visibility( $original );
+				$cats    = $derived['confident'] ? $derived['categories'] : array( Mcpwp_Approvals::UNRESOLVABLE_CATEGORY );
+				if ( Mcpwp_Approvals::is_approval_visible_to( array( 'visibility_categories' => $cats ), $allowed ) ) {
 					$by_original[] = $id;
 				}
 				$stored = mcpwp_test_approvals_all()[ $id ];

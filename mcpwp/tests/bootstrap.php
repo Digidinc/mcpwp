@@ -1573,6 +1573,9 @@ if (! function_exists('mcpwp_test_sql_find')) {
         if ('' !== $token && "'" === $token[0]) {
             return str_replace("\\'", "'", substr($token, 1, -1));
         }
+        if ('NULL' === strtoupper($token)) {
+            return null;
+        }
         return is_numeric($token) ? $token + 0 : $token;
     }
 
@@ -1825,7 +1828,7 @@ if (! function_exists('mcpwp_test_sql_find')) {
                 }
                 usort($hits, function ($a, $b) use ($keys) {
                     foreach ($keys as $key) {
-                        $c = mcpwp_test_sql_compare($a[ $key[0] ], $b[ $key[0] ]);
+                        $c = mcpwp_test_sql_compare($a[ $key[0] ] ?? null, $b[ $key[0] ] ?? null);
                         if (0 !== $c) {
                             return $c * $key[1];
                         }
@@ -1915,7 +1918,7 @@ if (! function_exists('mcpwp_test_sql_find')) {
         $GLOBALS['mcpwp_test_approvals_rows']         = array();
         $GLOBALS['mcpwp_test_approvals_table_exists'] = true;
         update_option('mcpwp_approvals_table_migrated', 1);
-        update_option('mcpwp_approvals_schema_version', 5);
+        update_option('mcpwp_approvals_schema_version', 6);
         if (! empty($items)) {
             $copied = Mcpwp_Approvals::import_legacy_items($items);
             if (is_wp_error($copied)) {

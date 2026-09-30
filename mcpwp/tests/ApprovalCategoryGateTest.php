@@ -198,8 +198,9 @@ final class ApprovalCategoryGateTest extends TestCase {
 	public function test_destructive_operation_classifies_by_its_stored_route(): void {
 		$id = $this->seed_approval(
 			array(
-				'action'   => 'destructive_operation',
-				'resource' => array( 'type' => 'user', 'id' => 1, 'title' => 'jdoe' ),
+				'action'    => 'destructive_operation',
+				'operation' => 'delete_user', // #1042 round 5: the operation names the resource kind.
+				'resource'  => array( 'type' => 'user', 'id' => 1, 'title' => 'jdoe' ),
 				'payload'  => array( 'route' => '/mcpwp/v1/users/1' ),
 			)
 		);

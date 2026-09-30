@@ -483,6 +483,7 @@ class Mcpwp_Activator {
 			quota_bytes int(10) unsigned NOT NULL DEFAULT 0,
 			visibility_categories varchar(1000) NOT NULL DEFAULT '',
 			categories_pending tinyint(1) NOT NULL DEFAULT 0,
+			rederive_attempted_at datetime DEFAULT NULL,
 			version bigint(20) unsigned NOT NULL DEFAULT 0,
 			record longtext NOT NULL,
 			PRIMARY KEY  (id),
@@ -588,7 +589,7 @@ class Mcpwp_Activator {
 				dbDelta( self::approvals_create_sql( $wpdb->prefix . 'mcpwp_approvals', $wpdb->get_charset_collate() ) );
 				// A table created by an earlier schema gets its new columns
 				// filled from the records themselves.
-				$backfilled = Mcpwp_Approvals::backfill_derived_columns();
+				$backfilled = Mcpwp_Approvals::backfill_derived_columns( (int) get_option( Mcpwp_Approvals::SCHEMA_OPTION, 0 ) );
 				if ( is_wp_error( $backfilled ) ) {
 					return $backfilled;
 				}

@@ -54,7 +54,7 @@ class Mcpwp_Approvals {
 	 *
 	 * @var int
 	 */
-	const SCHEMA_VERSION = 5;
+	const SCHEMA_VERSION = 6;
 
 	/**
 	 * Option holding the table's schema version.
@@ -484,7 +484,7 @@ class Mcpwp_Approvals {
 			// (payload.target, just built by fingerprint() in defer(), still
 			// names the target's real post_type when it has one) — see
 			// categories_for_approval()'s docblock.
-			'visibility_categories' => self::compute_visibility_categories( 'destructive_operation', $normalized_resource, $payload ),
+			'visibility_categories' => self::compute_visibility_categories( 'destructive_operation', $normalized_resource, $payload, sanitize_key( (string) $operation ) ),
 			'created_at'          => $now,
 			'updated_at'          => $now,
 			'approved_at'         => null,
@@ -1869,8 +1869,8 @@ class Mcpwp_Approvals {
 	 *                   falls back to array(self::UNRESOLVABLE_CATEGORY)
 	 *                   when nothing resolves.
 	 */
-	public static function compute_visibility_categories( $action, array $resource, array $payload ) {
-		return self::compute_categories( $action, $resource, $payload )['categories'];
+	public static function compute_visibility_categories( $action, array $resource, array $payload, $operation = '' ) {
+		return self::compute_categories( $action, $resource, $payload, $operation )['categories'];
 	}
 
 	/**
@@ -1889,7 +1889,7 @@ class Mcpwp_Approvals {
 	 * @param array  $payload  Payload block.
 	 * @return array{categories:string[],confident:bool}
 	 */
-	private static function compute_categories( $action, array $resource, array $payload ) {
+	private static function compute_categories( $action, array $resource, array $payload, $operation = '' ) {
 		if ( ! self::visibility_dependencies_loaded() ) {
 			return array(
 				'categories' => array( self::UNRESOLVABLE_CATEGORY ),
@@ -1923,7 +1923,7 @@ class Mcpwp_Approvals {
 			$categories[] = 'staging';
 		}
 
-		$target = self::resolve_target_post_type( $action, $resource, $payload );
+		$target = self::resolve_target_post_type( $action, $resource, $payload, $operation );
 		if ( ! $target['confident'] ) {
 			$confident = false;
 		}
@@ -1983,63 +1983,107 @@ class Mcpwp_Approvals {
 	const NON_POST_RESOURCE_TYPES = array( 'user', 'term', 'widget', 'drafts', 'api_key', 'staging', 'unknown' );
 
 	/**
+	 * Destructive operations whose target is not a post (see
+	 * Mcpwp_Destructive_Gate::GATED).
+	 */
+	const NON_POST_OPERATIONS = array( 'delete_user', 'delete_widget', 'delete_course_category', 'delete_all_drafts' );
+
+	/**
 	 * Resolve the real post_type of an approval's target, and whether that
-	 * could be done with confidence.
+	 * could be done with confidence (#1042 review rounds 4-5).
 	 *
-	 * 1. The LIVE post (get_post() on resource.id), only when resource.type
-	 *    itself names a post: literally 'post' (post_content_update's
-	 *    hardcode) or a known post type (registered, or in the explicit map)
-	 *    — never a user/term/widget id that could collide with a post id
-	 *    (#1025 round 3). Found: authoritative, confident when its type is
-	 *    known. Not found: the target is a missing post, not confident.
-	 * 2. The stored hints: payload.target.type (fingerprint()'s capture at
-	 *    defer time), resource.post_type, and — for destructive_operation
-	 *    only — resource.type. A known type resolves; a non-post sentinel is
-	 *    skipped; any other type (a plugin's CPT, plugin inactive right now)
-	 *    makes the answer not confident.
+	 * resource.type is the record's semantic resource KIND. When it names a
+	 * non-post kind (a user, a term, a widget, the drafts purge, an API key,
+	 * a staging push, a bulk batch), the record has no single post target:
+	 * payload.target.type repeating that kind is skipped, and a drafts
+	 * purge's scope ("all" / "any") in resource.post_type is not a type. In
+	 * every other case payload.target.type and resource.post_type are
+	 * post-TYPE fields: any value there — including one that happens to be
+	 * spelled "widget" or "user" — must resolve as a real type (registered,
+	 * or in the explicit map), or the answer is not confident.
+	 *
+	 * With a live post (resource.type 'post' or a known type, a numeric id):
+	 * its type is authoritative only when every stored type hint agrees with
+	 * it. A hint that differs means the id was reused by an unrelated post
+	 * (the target was deleted, then another post took its id): not
+	 * confident, never resolved in the live post's favour. No post at that
+	 * id: a missing target, not confident.
 	 *
 	 * @param string $action   Approval action.
 	 * @param array  $resource Resource block.
 	 * @param array  $payload  Payload block.
 	 * @return array{post_type:string,confident:bool}
 	 */
-	private static function resolve_target_post_type( $action, array $resource, array $payload ) {
+	private static function resolve_target_post_type( $action, array $resource, array $payload, $operation = '' ) {
 		$post_id       = isset( $resource['id'] ) ? $resource['id'] : null;
 		$resource_type = isset( $resource['type'] ) ? (string) $resource['type'] : '';
-		$missing       = false;
+		// The semantic resource kind: for a destructive record, its
+		// operation says whether the target is a post at all (a CPT may well
+		// be named "widget" or "user"); only a record without an operation
+		// falls back to recognising resource.type's non-post spellings.
+		if ( 'destructive_operation' === (string) $action && '' !== (string) $operation ) {
+			$non_post_kind = in_array( (string) $operation, self::NON_POST_OPERATIONS, true );
+		} else {
+			$non_post_kind = in_array( $resource_type, self::NON_POST_RESOURCE_TYPES, true ) || 0 === strpos( $resource_type, 'bulk_' );
+		}
 
-		if ( is_numeric( $post_id ) && (int) $post_id > 0 && ( 'post' === $resource_type || self::post_type_known( $resource_type ) ) ) {
+		// The stored type hints, as post types.
+		$hints = array();
+		$fields = array(
+			'target'    => isset( $payload['target']['type'] ) ? (string) $payload['target']['type'] : '',
+			'post_type' => isset( $resource['post_type'] ) ? (string) $resource['post_type'] : '',
+		);
+		foreach ( $fields as $field => $value ) {
+			if ( '' === $value ) {
+				continue;
+			}
+			if ( $non_post_kind && $value === $resource_type ) {
+				continue; // The fingerprint repeating the non-post kind.
+			}
+			if ( 'drafts' === $resource_type && 'post_type' === $field && in_array( $value, array( 'all', 'any' ), true ) ) {
+				continue; // A drafts purge's scope, not a post type.
+			}
+			$hints[] = $value;
+		}
+		if ( 'destructive_operation' === (string) $action && '' !== $resource_type && ! $non_post_kind ) {
+			// A destructive record names its target's real post type here.
+			$hints[] = $resource_type;
+		}
+		$hints = array_values( array_unique( $hints ) );
+
+		$missing = false;
+		if ( ! $non_post_kind && is_numeric( $post_id ) && (int) $post_id > 0 && ( 'post' === $resource_type || self::post_type_known( $resource_type ) ) ) {
 			$post = get_post( (int) $post_id );
 			if ( $post instanceof WP_Post ) {
-				// The live post's type still has to be one whose category is
-				// known: an unregistered, unmapped type (its plugin inactive)
-				// would fall back to a guess.
+				$live = (string) $post->post_type;
+				foreach ( $hints as $hint ) {
+					if ( $hint !== $live ) {
+						return array(
+							'post_type' => '',
+							'confident' => false,
+						);
+					}
+				}
 				return array(
-					'post_type' => (string) $post->post_type,
-					'confident' => self::post_type_known( (string) $post->post_type ),
+					'post_type' => $live,
+					'confident' => self::post_type_known( $live ),
 				);
 			}
 			$missing = true;
 		}
 
-		$hints = array(
-			isset( $payload['target']['type'] ) ? (string) $payload['target']['type'] : '',
-			isset( $resource['post_type'] ) ? (string) $resource['post_type'] : '',
-			'destructive_operation' === $action ? $resource_type : '',
-		);
 		foreach ( $hints as $hint ) {
-			if ( '' === $hint || in_array( $hint, self::NON_POST_RESOURCE_TYPES, true ) || 0 === strpos( $hint, 'bulk_' ) ) {
-				continue;
-			}
-			if ( self::post_type_known( $hint ) ) {
+			if ( ! self::post_type_known( $hint ) ) {
 				return array(
-					'post_type' => $hint,
-					'confident' => ! $missing,
+					'post_type' => '',
+					'confident' => false,
 				);
 			}
+		}
+		if ( ! empty( $hints ) ) {
 			return array(
-				'post_type' => '',
-				'confident' => false,
+				'post_type' => $hints[0],
+				'confident' => ! $missing && 1 === count( $hints ),
 			);
 		}
 
@@ -2083,18 +2127,20 @@ class Mcpwp_Approvals {
 		$computed = self::compute_categories(
 			isset( $record['action'] ) ? (string) $record['action'] : '',
 			isset( $record['resource'] ) && is_array( $record['resource'] ) ? $record['resource'] : array(),
-			isset( $record['payload'] ) && is_array( $record['payload'] ) ? $record['payload'] : array()
+			isset( $record['payload'] ) && is_array( $record['payload'] ) ? $record['payload'] : array(),
+			isset( $record['operation'] ) ? (string) $record['operation'] : ''
 		);
 
 		$unverified = isset( $record['metadata']['categories_unverified'] ) && is_array( $record['metadata']['categories_unverified'] )
 			? array_map( 'strval', $record['metadata']['categories_unverified'] )
 			: array();
 		if ( ! empty( $unverified ) ) {
+			$derived_marker         = in_array( self::UNRESOLVABLE_CATEGORY, $computed['categories'], true );
 			$computed['categories'] = array_values( array_unique( array_merge( $unverified, $computed['categories'] ) ) );
-			// UNRESOLVABLE alongside real categories would add nothing an
-			// unrestricted key lacks, and hide it from everyone else: keep it
-			// only when it is all there is.
-			if ( count( $computed['categories'] ) > 1 ) {
+			// The union only ever adds. A marker the confident derivation
+			// itself produced stays; only one carried in from the unverified
+			// set alongside real categories is redundant (#1042 round 5).
+			if ( ! $derived_marker && count( $computed['categories'] ) > 1 ) {
 				$computed['categories'] = array_values( array_diff( $computed['categories'], array( self::UNRESOLVABLE_CATEGORY ) ) );
 			}
 		}
@@ -2102,17 +2148,47 @@ class Mcpwp_Approvals {
 	}
 
 	/**
-	 * Every tool category a caller must hold to read $record (#1025) — the
-	 * record's stored categories, else a confident derive_visibility(), else
-	 * the fail-closed UNRESOLVABLE_CATEGORY. The same function the light
-	 * column is written from, so list, count and get always agree.
+	 * Every tool category a caller must hold to read $record (#1025) — THE
+	 * visibility decision for every door (#1042 review round 5): a record's
+	 * stored categories, else the fail-closed UNRESOLVABLE_CATEGORY. A table
+	 * row's record carries stored categories exactly when its
+	 * categories_pending column is 0 (row_from_record() writes both), so
+	 * GET, approve/reject/apply/rollback, events and site-state decide
+	 * exactly as the light column that list and count read. Nothing is
+	 * derived live here: derivation happens only in row_from_record().
 	 *
 	 * @param array $record Public or private approval record.
 	 * @return string[] Every category the caller must hold; never empty.
 	 */
 	public static function categories_for_approval( array $record ) {
-		$derived = self::derive_visibility( $record );
-		return $derived['confident'] ? $derived['categories'] : array( self::UNRESOLVABLE_CATEGORY );
+		if ( ! empty( $record['visibility_categories'] ) && is_array( $record['visibility_categories'] ) ) {
+			$stored = array_values( array_unique( array_map( 'strval', $record['visibility_categories'] ) ) );
+			if ( ! empty( $stored ) ) {
+				return $stored;
+			}
+		}
+		return array( self::UNRESOLVABLE_CATEGORY );
+	}
+
+	/**
+	 * The categories the table holds for an approval id, from its light
+	 * columns: fail-closed UNRESOLVABLE_CATEGORY when the row is pending,
+	 * missing, or cannot be read. For readers that hold only a copy of a
+	 * record (the event store), so they decide from the row at read time.
+	 *
+	 * @param string $id Approval id.
+	 * @return string[]
+	 */
+	public static function categories_for_id( $id ) {
+		$id = sanitize_key( (string) $id );
+		if ( '' === $id || is_wp_error( self::ensure_store() ) ) {
+			return array( self::UNRESOLVABLE_CATEGORY );
+		}
+		$rows = self::select_light( array( array( 'id =', $id ) ), 'id ASC', 1 );
+		if ( is_wp_error( $rows ) || empty( $rows ) || ! empty( $rows[0]['categories_pending'] ) ) {
+			return array( self::UNRESOLVABLE_CATEGORY );
+		}
+		return self::categories_for_approval( self::light_record( $rows[0] ) );
 	}
 
 	/**
@@ -2341,16 +2417,17 @@ class Mcpwp_Approvals {
 	 *
 	 * @return true|WP_Error
 	 */
-	public static function backfill_derived_columns() {
+	public static function backfill_derived_columns( $from_schema = 0 ) {
 		if ( ! self::post_types_ready() ) {
 			return self::busy_error();
 		}
 		global $wpdb;
-		$table = self::table_name();
+		$table  = self::table_name();
+		$repair = (int) $from_schema < 5; // The schema-5 repair runs once.
 		return self::each_row(
 			array(),
-			static function ( array $row ) use ( $wpdb, $table ) {
-				$record = self::unverify_derived_categories( $row['record'] );
+			static function ( array $row ) use ( $wpdb, $table, $repair ) {
+				$record = $repair ? self::unverify_derived_categories( $row['record'] ) : $row['record'];
 				$fields = self::row_from_record( $record );
 				if ( is_wp_error( $fields ) ) {
 					return true;
@@ -2365,8 +2442,8 @@ class Mcpwp_Approvals {
 					if ( 0 === (int) $written ) {
 						$retried = self::update_one(
 							$row['id'],
-							static function ( array $fresh ) {
-								return self::unverify_derived_categories( $fresh );
+							static function ( array $fresh ) use ( $repair ) {
+								return $repair ? self::unverify_derived_categories( $fresh ) : $fresh;
 							}
 						);
 						if ( is_wp_error( $retried ) && 'approval_not_found' !== $retried->get_error_code() ) {
@@ -2422,12 +2499,18 @@ class Mcpwp_Approvals {
 		if ( ! self::post_types_ready() ) {
 			return 0;
 		}
-		$rows = self::select_light( array( array( 'categories_pending =', 1 ) ), 'id ASC', max( 1, (int) $limit ) );
+		// Oldest attempt first (never attempted first of all), and every
+		// attempt stamped: rows that never resolve cannot starve the rest.
+		$rows = self::select_light( array( array( 'categories_pending =', 1 ) ), 'rederive_attempted_at ASC, id ASC', max( 1, (int) $limit ) );
 		if ( is_wp_error( $rows ) ) {
 			return $rows;
 		}
+		global $wpdb;
+		$table     = self::table_name();
 		$persisted = 0;
 		foreach ( $rows as $row ) {
+			// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- table name is prefix + constant; column-only stamp.
+			$wpdb->query( $wpdb->prepare( "UPDATE {$table} SET rederive_attempted_at = %s WHERE id = %s", gmdate( 'Y-m-d H:i:s' ), (string) $row['id'] ) );
 			$result = self::update_one(
 				(string) $row['id'],
 				static function ( array $record ) {
@@ -2629,13 +2712,17 @@ class Mcpwp_Approvals {
 		global $wpdb;
 		$table = self::table_name();
 		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- table name is prefix + constant; a cached read would defeat the version check.
-		$row = $wpdb->get_row( $wpdb->prepare( "SELECT version, record FROM {$table} WHERE id = %s", $id ), ARRAY_A );
+		$row = $wpdb->get_row( $wpdb->prepare( "SELECT version, categories_pending, record FROM {$table} WHERE id = %s", $id ), ARRAY_A );
 		if ( null === $row ) {
 			return '' !== (string) $wpdb->last_error ? self::store_read_failed_error() : null;
 		}
 		$record = json_decode( (string) $row['record'], true );
 		if ( ! is_array( $record ) ) {
 			return self::corrupt_record_error();
+		}
+		if ( ! empty( $row['categories_pending'] ) ) {
+			// Pending: fail-closed on every door, whatever the record says.
+			unset( $record['visibility_categories'] );
 		}
 		return array(
 			'version' => (int) $row['version'],
@@ -3000,7 +3087,7 @@ class Mcpwp_Approvals {
 		global $wpdb;
 		$table = self::table_name();
 		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- where_sql() prepares every value; $order_by is a fixed string.
-		$rows = $wpdb->get_results( "SELECT id, version, status, created_at, updated_at, seq, triage_rank, requested_by_key_id, visibility_categories, quota_bytes FROM {$table}" . self::where_sql( $conditions ) . ' ORDER BY ' . $order_by . $wpdb->prepare( ' LIMIT %d OFFSET %d', (int) $limit, (int) $offset ), ARRAY_A );
+		$rows = $wpdb->get_results( "SELECT id, version, status, created_at, updated_at, seq, triage_rank, requested_by_key_id, visibility_categories, categories_pending, quota_bytes FROM {$table}" . self::where_sql( $conditions ) . ' ORDER BY ' . $order_by . $wpdb->prepare( ' LIMIT %d OFFSET %d', (int) $limit, (int) $offset ), ARRAY_A );
 		if ( ! is_array( $rows ) || '' !== (string) $wpdb->last_error ) {
 			return self::store_read_failed_error();
 		}

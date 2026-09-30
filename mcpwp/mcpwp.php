@@ -515,7 +515,7 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	add_action(
 		'wp_loaded',
 		static function () {
-			if ( ! get_option( 'mcpwp_approvals_table_migrated' ) || (int) get_option( 'mcpwp_approvals_schema_version', 0 ) < 5 ) {
+			if ( ! get_option( 'mcpwp_approvals_table_migrated' ) || (int) get_option( 'mcpwp_approvals_schema_version', 0 ) < 6 ) {
 				require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-activator.php';
 				Mcpwp_Activator::migrate_approvals_to_table();
 			}
