@@ -54,10 +54,21 @@ jobs:
         run: bash mcpwp/scripts/build-all.sh
       - name: Attach zips to the release
         run: |
-          gh release upload "${{ needs.release-please.outputs.tag_name }}" \
-            mcpwp/scripts/mcpwp-*.zip --clobber
+          # Only the Free and Freemius ZIPs. Never the agency build: it has every
+          # Pro feature on with no licence (#852). A glob here attached it to
+          # v3.14.10 (removed by hand).
+          VERSION="${TAG#v}"
+          for z in "mcpwp/scripts/mcpwp-$VERSION.zip" "mcpwp/scripts/mcpwp-freemius-$VERSION.zip"; do
+            test -f "$z" || { echo "::error::missing $z"; exit 1; }
+          done
+          gh release upload "$TAG" \
+            "mcpwp/scripts/mcpwp-$VERSION.zip" "mcpwp/scripts/mcpwp-freemius-$VERSION.zip" --clobber
+          if gh release view "$TAG" --json assets --jq '.assets[].name' | grep -q agency; then
+            echo "::error::an agency ZIP is attached to $TAG; remove it"; exit 1
+          fi
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release-please.outputs.tag_name }}
 
   sync-wporg-changelog:
     needs: release-please

@@ -294,26 +294,7 @@ final class WebMcpReviewRound2Test extends TestCase {
 	 * @runInSeparateProcess
 	 */
 	public function test_onboard_inventory_counts_only_published_for_webmcp(): void {
-		foreach ( array(
-			'wp_timezone_string'   => 'UTC',
-			'get_locale'           => 'en_US',
-		) as $fn => $value ) {
-			if ( ! function_exists( $fn ) ) {
-				eval( "function $fn() { return '$value'; }" ); // phpcs:ignore Squiz.PHP.Eval
-			}
-		}
-		if ( ! function_exists( 'is_plugin_active' ) ) {
-			eval( 'function is_plugin_active( $p ) { return false; }' ); // phpcs:ignore Squiz.PHP.Eval
-		}
-		if ( ! function_exists( 'wp_get_theme' ) ) {
-			eval( 'function wp_get_theme() { return new class() { public function get( $h ) { return "Stub"; } }; }' ); // phpcs:ignore Squiz.PHP.Eval
-		}
-		if ( ! function_exists( 'wp_count_attachments' ) ) {
-			eval( 'function wp_count_attachments() { return (object) array( "image/jpeg" => 0 ); }' ); // phpcs:ignore Squiz.PHP.Eval
-		}
-		if ( ! function_exists( 'wp_count_terms' ) ) {
-			eval( 'function wp_count_terms( $t ) { return 0; }' ); // phpcs:ignore Squiz.PHP.Eval
-		}
+		require_once __DIR__ . '/fixtures/onboard-inventory-stubs.php';
 		require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-core.php';
 		require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-site-info.php';
 
