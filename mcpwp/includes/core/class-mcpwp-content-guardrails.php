@@ -1442,7 +1442,9 @@ class Mcpwp_Content_Guardrails {
 		unset( self::$pending_elementor_old_text[ $object_id ] );
 
 		$post = get_post( $object_id );
-		if ( ! $post || 'publish' !== $post->post_status || ! in_array( $post->post_type, self::COVERED_POST_TYPES, true ) ) {
+		// A post object without the usual fields (a filtered post, a stub) is
+		// not one this advisory can judge: skip it rather than warn or fatal.
+		if ( ! $post || ! isset( $post->post_status, $post->post_type ) || 'publish' !== $post->post_status || ! in_array( $post->post_type, self::COVERED_POST_TYPES, true ) ) {
 			return;
 		}
 
