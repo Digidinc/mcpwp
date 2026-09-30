@@ -235,6 +235,12 @@ final class McpNextStepHintsTest extends TestCase {
 	 * directly must never see it change shape because a hint was added.
 	 */
 	public function test_content_zero_json_decodes_identically_with_and_without_a_hint(): void {
+		// A hint only fires for a target the caller can see (#1017). This
+		// test used to get one only because a sibling had already defined
+		// ELEMENTOR_VERSION in this process, so it failed whenever it ran
+		// first (#1084). The SEO filter is reset with mcpwp_test_filters and
+		// leaks nothing; a constant could not be undefined again.
+		$this->force_seo_capability_active();
 		$data = array( 'id' => 55, 'title' => 'About', 'status' => 'draft' );
 
 		$without_hint = $this->invoke_apply_next_step_hints( $this->success_response( $data ), 'wp_list_pages', array() );

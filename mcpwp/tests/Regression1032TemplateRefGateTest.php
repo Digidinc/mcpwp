@@ -112,6 +112,10 @@ final class Regression1032TemplateRefGateTest extends TestCase {
 
 	protected function tearDown(): void {
 		update_option( 'mcpwp_disabled_tool_categories', array() );
+		// test_create_landing_page_refuses_and_leaves_no_orphan_page runs
+		// in-process and marks Elementor loaded; left set, a later test that
+		// relies on "Elementor is not active" got past that check (#1084).
+		unset( $GLOBALS['mcpwp_test_did_action']['elementor/loaded'] );
 		Mcpwp_WebMCP::end_dispatch( 0 );
 		if ( class_exists( 'Mcpwp_REST_Batch' ) ) {
 			Mcpwp_REST_Batch::$is_batch_sub_request = false;

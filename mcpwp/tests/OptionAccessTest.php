@@ -1329,9 +1329,16 @@ final class OptionAccessTest extends TestCase {
 			require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-action-log.php';
 		}
 		$GLOBALS['mcpwp_test_wpdb_rows'] = array();
-		$log_id = Mcpwp_Action_Log::begin( 'wp_update_option', array( 'key' => 'elementor_probe', 'value' => array( 'customer_pin' => '4242' ) ), 'k1', 'site' );
+		// The secret is a sentinel no generated value can contain: '4242' was
+		// flaky, because the random log id / timestamps in the same rows could
+		// hold those digits by chance (#1084). Letters outside hex and digits
+		// cannot appear in an id, a hash or a timestamp.
+		$secret = 'PIN-sentinel-xyzzy';
+		$log_id = Mcpwp_Action_Log::begin( 'wp_update_option', array( 'key' => 'elementor_probe', 'value' => array( 'customer_pin' => $secret ) ), 'k1', 'site' );
 		Mcpwp_Action_Log::complete( $log_id, 1, true, '' );
-		$this->assertStringNotContainsString( '4242', wp_json_encode( $GLOBALS['mcpwp_test_wpdb_rows'] ) );
+		$rows = wp_json_encode( $GLOBALS['mcpwp_test_wpdb_rows'] );
+		$this->assertStringContainsString( 'elementor_probe', $rows, 'Test premise: the log row was written.' );
+		$this->assertStringNotContainsString( $secret, $rows );
 	}
 
 	// ---------------------------------------------------------------

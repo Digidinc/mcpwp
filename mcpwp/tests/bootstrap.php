@@ -701,6 +701,60 @@ if (interface_exists('PHPUnit\Runner\AfterTestHook')) {
     }
 }
 
+/**
+ * Drop the Mcpwp_Rate_Limiter singleton. It reads mcpwp_rate_limit_settings
+ * once, in its constructor, so an instance left behind by one test carries
+ * that test's settings (enabled=false, a whitelist, raised limits) into every
+ * later test regardless of what the later test stores in the option (#1084).
+ */
+function mcpwp_test_reset_rate_limiter()
+{
+    if (! class_exists('Mcpwp_Rate_Limiter', false)) {
+        return;
+    }
+    $instance = (new ReflectionClass('Mcpwp_Rate_Limiter'))->getProperty('instance');
+    $instance->setAccessible(true);
+    $instance->setValue(null, null);
+}
+
+if (interface_exists('PHPUnit\Runner\AfterTestHook')) {
+    /**
+     * Process state that outlives a test in one PHPUnit process (#1084):
+     *
+     * - $wpdb->queries is a log the WPDB double appends every query to and
+     *   nothing trimmed. Over a full run it reached ~100 MB (mostly approvals
+     *   INSERTs), and PHPUnit serialises every global into the script of each
+     *   @runInSeparateProcess child — so whichever separate-process test ran
+     *   late in a random order spawned a 100 MB child script that died at
+     *   compile time on the child's default 128M memory_limit, with no output:
+     *   "Test was run in child process and ended unexpectedly". A test that
+     *   inspects the log resets it itself first.
+     * - The Mcpwp_Rate_Limiter singleton (see mcpwp_test_reset_rate_limiter()).
+     * - Fake-database rows: raw option rows, posts and post meta.
+     * - did_action() counts.
+     */
+    final class Mcpwp_Test_Process_State_Reset implements \PHPUnit\Runner\AfterTestHook
+    {
+        public function executeAfterTest(string $test, float $time): void
+        {
+            if (isset($GLOBALS['wpdb']) && is_object($GLOBALS['wpdb']) && property_exists($GLOBALS['wpdb'], 'queries')) {
+                $GLOBALS['wpdb']->queries = array();
+            }
+            mcpwp_test_reset_rate_limiter();
+            // The fake database: raw option rows (a lock, a first-writer-wins
+            // record) and posts/meta. Every test that needs rows seeds them;
+            // one left behind decided another test's outcome by run order.
+            $GLOBALS['mcpwp_test_wpdb_options'] = array();
+            $GLOBALS['_mcpwp_test_posts']       = array();
+            $GLOBALS['_mcpwp_test_meta']        = array();
+            // did_action() counts: a test marking 'elementor/loaded' made
+            // Elementor "active" for later tests. 'init' is re-seeded before
+            // every test by Mcpwp_Test_Approvals_Table_Reset.
+            $GLOBALS['mcpwp_test_did_action'] = array();
+        }
+    }
+}
+
 function update_option($name, $value, $autoload = null)
 {
     // Test-only: mimic WordPress's sanitize_option() — a hook may alter the

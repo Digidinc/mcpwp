@@ -54,6 +54,9 @@ final class ToolOperationWeightTest extends TestCase {
 		$GLOBALS['mcpwp_test_options']    = array();
 		$GLOBALS['mcpwp_test_transients'] = array();
 		$GLOBALS['mcpwp_test_filters']    = array();
+		// setUp() configured the singleton directly (update_settings()); left
+		// in place it hands those settings to every later test (#1084).
+		mcpwp_test_reset_rate_limiter();
 	}
 
 	private function weight( string $tool, array $arguments ): int {
