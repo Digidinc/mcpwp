@@ -125,7 +125,7 @@ abstract class Mcpwp_Integration extends Mcpwp_MCP_Tool_Registry {
 	}
 
 	/**
-	 * Reserved-category remaps already logged this request, keyed
+	 * Reserved-category remaps already logged in this request, keyed
 	 * "source:tool" (#1064 review round 2).
 	 *
 	 * @var array<string,bool>
@@ -135,7 +135,7 @@ abstract class Mcpwp_Integration extends Mcpwp_MCP_Tool_Registry {
 	/**
 	 * Remap reserved category slugs (Mcpwp_Api_Auth::reserved_tool_category_slugs(),
 	 * i.e. `meta`) to `custom` in a tool => category map, logging each
-	 * remapped tool once per request (#1064 review round 2). `meta` is
+	 * remapped tool once a day (#1064 review round 2). `meta` is
 	 * granted to no key; a third-party tool that claimed it would otherwise
 	 * ride the name-level meta-tool allowance's category into every key.
 	 * Shared by integrations and mcpwp_register_tools registrations.
@@ -163,9 +163,13 @@ abstract class Mcpwp_Integration extends Mcpwp_MCP_Tool_Registry {
 		if ( ! in_array( $category, self::reserved_tool_category_slugs(), true ) ) {
 			return $category;
 		}
-		$log_key = $source . ':' . $tool;
-		if ( ! isset( self::$reserved_category_logged[ $log_key ] ) ) {
+		// Logged once a day per tool, not on every request: the static map
+		// covers one request, the transient the rest of the day.
+		$log_key   = $source . ':' . $tool;
+		$transient = 'mcpwp_reserved_cat_' . md5( $log_key );
+		if ( ! isset( self::$reserved_category_logged[ $log_key ] ) && false === get_transient( $transient ) ) {
 			self::$reserved_category_logged[ $log_key ] = true;
+			set_transient( $transient, 1, DAY_IN_SECONDS );
 			if ( function_exists( 'error_log' ) ) {
 				// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
 				error_log( sprintf( 'MCPWP: tool "%s" from %s declared the reserved category "%s"; it is treated as "custom".', $tool, $source, $category ) );

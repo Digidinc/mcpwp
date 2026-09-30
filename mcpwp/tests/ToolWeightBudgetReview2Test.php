@@ -185,6 +185,19 @@ final class ToolWeightBudgetReview2Test extends TestCase {
 		$this->assertSame( 1, $GLOBALS['b1064_acme_calls'] );
 	}
 
+	public function test_a_reserved_category_claim_is_logged_once_not_every_request(): void {
+		$log = tempnam( sys_get_temp_dir(), 'b1064' );
+		$old = ini_set( 'error_log', $log );
+		Mcpwp_Integration::remap_reserved_category( 'meta', 'zz_once_tool', 'test' );
+		$ref = new ReflectionProperty( Mcpwp_Integration::class, 'reserved_category_logged' );
+		$ref->setAccessible( true );
+		$ref->setValue( null, array() ); // A new request.
+		Mcpwp_Integration::remap_reserved_category( 'meta', 'zz_once_tool', 'test' );
+		ini_set( 'error_log', $old );
+		$this->assertSame( 1, substr_count( (string) file_get_contents( $log ), 'zz_once_tool' ) );
+		unlink( $log );
+	}
+
 	public function test_an_integration_claiming_meta_is_remapped_too(): void {
 		$this->assertSame(
 			array( 'x_tool' => 'custom', 'y_tool' => 'seo' ),
