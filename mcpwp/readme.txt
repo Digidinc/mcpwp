@@ -157,6 +157,11 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 
 == Changelog ==
 
+= 3.14.9 =
+* fix: **approvals:** move the approvals store to its own table ([#1052](https://github.com/Digidinc/mcpwp/issues/1052))
+* fix: **release:** build the Freemius upload with build-freemius.sh (one packager) ([#1054](https://github.com/Digidinc/mcpwp/issues/1054))
+* fix: **release:** publish-freemius takes release scripts from main, plugin code from the tag ([#1055](https://github.com/Digidinc/mcpwp/issues/1055))
+
 = 3.14.8 =
 * feat: **webmcp:** expose curated MCPWP tools to the browser agent in wp-admin ([#1038](https://github.com/Mumega-com/mcpwp/issues/1038))
 * fix: **auth:** deny-all for empty-category custom-role API keys ([#1043](https://github.com/Mumega-com/mcpwp/issues/1043))
@@ -922,6 +927,9 @@ Now admin-scoped: /posts, /pages and their clone and translation paths; /woocomm
 * Fix SQL escaping in activity log for WordPress.org scanner.
 
 == Upgrade Notice ==
+
+= 3.14.9 =
+Existing approvals move to a new database table on the first page load after updating. While that runs, approval requests briefly answer "busy" (503, retry after 2 seconds). Downgrading below 3.14.9 shows an empty approval queue. The approvals come back when you update again, including any created while downgraded. Write-scope API keys and Claude/ChatGPT sign-ins now have the same approval limits as other limited keys. Use an admin-scope key for bulk approval work.
 
 = 3.11.1 =
 **Stored provider keys use a new format.** Keys saved or re-saved by 3.11.1 cannot be read by 3.11.0 or earlier. If you downgrade, re-enter your provider keys in MCPWP Integrations. **A weak `MCPWP_ENCRYPTION_KEY` is now refused.** If wp-config.php defines it as empty, very short or trivially repetitive, encryption stops and an admin notice explains why. Set a strong value (32 random bytes or a long passphrase) and re-enter the affected keys. **Figma and SEO market data are Pro everywhere.** The Figma design-token sync no longer runs on Free sites, including self-hosted installs; a companion theme keeps the last tokens it received. The DataForSEO visibility and opportunities routes now require Pro over REST as well as MCP. **Element ids are 7 characters.** Elementor Pro's live search, taxonomy filter and loop widgets only accept 7-character ids. MCPWP now generates 7-character ids and warns about other lengths on save; pass `repair_ids: true` to `wp_patch_elementor` or `wp_set_elementor` to rewrite them. Update any custom CSS that names an old id. **Batches have a spend budget.** One request, including everything it fans out to, may spend 1000 units: an ordinary operation costs 1, a route that spends a site credential or reaches a caller-chosen URL costs 25 per item. A batch priced over the budget is refused whole with `spend_budget_exceeded` before anything runs; split it. `wp_bulk_find_replace` and `wp_delete_all_drafts` now count as 10 operations against the rate limit. **Analytics on Free needs an explicit choice.** A Free site that opted in before 3.11.1 stops sending anonymous usage data until an administrator confirms the setting under MCPWP Settings; a one-time notice asks. Paid sites are unchanged.
